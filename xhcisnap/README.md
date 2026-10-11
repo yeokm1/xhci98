@@ -433,6 +433,16 @@ default IDs are on, the placements refused for want of an ID and those
 given the default ID, and the Slot IDs holding such a device (the slots
 list's speed column decodes their speed by the same rule). A block shorter
 than 167 words is a driver from before it, and the section is not printed.
+Task 36.54's six follow (167 to 172, `StreamRetryResets`,
+`StreamRingRestarts`, `QemuStreamQuirk`, `QemuStreamResyncs`,
+`QemuStreamResyncFailed`, `QemuStreamRestops`; design record 17 section
+4.12), with a section of their own, **"stream endpoints"**: the soft
+retries on a UAS stream, the stream rings a port reset restarted at their
+base, and whether the QEMU stream-context quirk is armed - on QEMU's xHCI,
+PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
+the resyncs that could not finish and the extra stops QEMU's own restart
+of an endpoint cost. A block shorter than 173 words is a driver from
+before it, and the section is not printed.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

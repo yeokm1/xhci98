@@ -149,11 +149,20 @@ ULONG XhciTolAvgTrbLength(ULONG avgMode, ULONG isInterrupt,
 /* 35-T.2. 1 when the controller is on Linux's XHCI_NO_SOFT_RETRY list. */
 ULONG XhciTolNoSoftRetry(ULONG vendorDevice);
 
-/* 1 when a pipe is in the soft retry's scope: tolerance on, bulk or
- * interrupt (bulkOrInt), no streams, not behind a TT, the controller not
- * listed. */
+/* 1 when a queue is in the soft retry's scope: tolerance on, bulk or
+ * interrupt (bulkOrInt), not behind a TT, the controller not listed. A
+ * pipe's own queue and, since 36.54 (record 17 section 4.12.2), a stream's
+ * own queue alike; an endpoint's own queue never holds a TD while its
+ * streams are open. */
 ULONG XhciTolRetryScope(ULONG tolerance, ULONG vendorDevice, ULONG bulkOrInt,
-                        ULONG streams, ULONG behindTt);
+                        ULONG behindTt);
+
+/* 36.54 (record 17 section 4.12.4). 1 for QEMU's xHCI, PCI 1B36:000D
+ * exactly (vendorDevice as XHCI_EXTENSION.PciVendorDevice holds it, device
+ * << 16 | vendor), whose stream contexts are re-read with CCS forced to 1
+ * after a stop or reset; 0 for every other ID. */
+#define XHCI_TOL_QEMU_XHCI_ID       0x000D1B36UL
+ULONG XhciTolQemuStreamQuirk(ULONG vendorDevice);
 
 /* 1 when a matched event is diverted: a Transaction Error on the queue's
  * head, the TD's retries not spent, the pipe in scope. */

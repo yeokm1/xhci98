@@ -330,9 +330,24 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG TopoBehindHubNoSpeed;
     ULONG Usb2HubSpeedFallbacks;
     ULONG Usb2HubSpeedFallbackSlots;
+    /* Stream endpoints (task 36.54; design record 17 section 4.12),
+     * appended at word 167: the soft retry's Reset Endpoints for a stream's
+     * TD; stream rings a port reset or a recycle restarted at their base;
+     * whether QEMU's stream-context quirk is armed on this controller (1 on
+     * PCI 1B36:000D alone, set at each start); the Set TR Dequeue commands
+     * that quirk completed; its resyncs that could not finish, each failing the
+     * Stop or Reset Endpoint it followed; and the extra Stop Endpoints QEMU's
+     * own device wakeup cost by restarting a stopped endpoint. The thread's
+     * plain writes. */
+    ULONG StreamRetryResets;
+    ULONG StreamRingRestarts;
+    ULONG QemuStreamQuirk;
+    ULONG QemuStreamResyncs;
+    ULONG QemuStreamResyncFailed;
+    ULONG QemuStreamRestops;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 167 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

@@ -615,6 +615,15 @@ ULONG XhciXferRetryReplay(PXHCI_TRANSFER_QUEUE queue,
 ULONG XhciXferRetryClear(PXHCI_TRANSFER_QUEUE queue, ULONG gen);
 
 /*
+ * 36.54 (design record 17 section 4.12.3): an empty queue whose ring is about
+ * to restart at its base (XhciRingRestart) forgets the ring positions it
+ * still remembers - the mid-TD tails it waits for, which would otherwise be
+ * matched against the new lap's TRB indices. Returns 0, changing nothing,
+ * when the queue still holds a TD. Pure.
+ */
+ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue);
+
+/*
  * Task 9-0.2. Settle one transfer whose TD ended on a mid-TD Short Packet Event
  * and whose promised tail (4.10.1.1.2 p.175) never arrived.
  *

@@ -1052,14 +1052,15 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pipe->Queue = &pipe->OwnQueue;
     XhciXferQueueInit(&pipe->OwnQueue);
     /* The soft retry's scope (35-T.2, design record 17 section 4.2), fixed
-     * for the pipe's life: a pipe opens with no streams, and a stream's own
-     * queue, made in hcdCfgStreamsOpen, keeps XhciXferQueueInit's 0. The
-     * tolerance value is the start's latch, so a pipe never outlives it. */
+     * for the pipe's life; a stream's own queue takes the same scope when
+     * hcdCfgStreamsBuild makes it (36.54, section 4.12.2), and this queue
+     * holds no TD while the endpoint's streams are open. The tolerance
+     * value is the start's latch, so a pipe never outlives it. */
     pipe->OwnQueue.RetryScope = XhciTolRetryScope(
         ext->Tol.Stats.Tolerance, ext->PciVendorDevice,
         (ep->TransferType == XHCI_PIPE_XFER_BULK ||
          ep->TransferType == XHCI_PIPE_XFER_INTERRUPT) ? 1UL : 0UL,
-        0, dev->TtSlot != 0 ? 1UL : 0UL);
+        dev->TtSlot != 0 ? 1UL : 0UL);
     if (ep->TransferType == XHCI_PIPE_XFER_ISOCH) {
         pipe->Iso = (PHCD_ISO_BLOCK)HcdPoolAlloc(
             (ULONG)(HCD_PIPE_XFERS * sizeof(HCD_ISO_BLOCK)));
@@ -2442,11 +2443,29 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* ABORT_PIPE and RESET_PIPE                                                */
 /* ----------------------------------------------------------------------- */
 
+/* A stream's failure record (StreamFault, and the Halted its event set)
+ * discharged once a Set TR Dequeue or a new context has moved it: only a
+ * stream with a failure not yet moved past may be moved again by the
+ * endpoint's next recovery (hcdCfgRecoverDequeue), which would otherwise
+ * discard the progress the stream saved since (36.54, record 17 section
+ * 4.12.1). Thread only, controller lock not held. */
+static VOID hcdCfgStreamFaultClear(PHCD_CONTROLLER hc, PHCD_PIPE p)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    p->StreamFault = 0;
+    p->Halted = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 /* Set TR Dequeue to one ring's software dequeue after a stop or reset: the
  * pipe's own, or for a stream's pipe its stream's - the command then names
- * the Stream ID, with SCT Primary TR (xHCI 6.4.3.9; 31-A.1). */
-static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                 PHCD_PIPE pipe)
+ * the Stream ID, with SCT Primary TR (xHCI 6.4.3.9; 31-A.1). The position is
+ * read as the command is built. Returns the completion code (0: not
+ * built). */
+static ULONG hcdCfgSetDequeueCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  PHCD_PIPE pipe)
 {
     XHCI_TRB trb;
     KIRQL oldIrql;
@@ -2468,7 +2487,43 @@ static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         built = XhciTrbSetTrDequeue(&trb, dev->SlotId, pipe->Dci, pa, dcs) ==
                 XHCI_RING_OK;
     }
-    return built && hcdCfgCommand(hc, dev, &trb, &control) == XHCI_CC_SUCCESS;
+    return built ? hcdCfgCommand(hc, dev, &trb, &control) : 0UL;
+}
+
+/*
+ * hcdCfgSetDequeueCode as success or failure. On QEMU's xHCI alone (36.54,
+ * design record 17 section 4.12.4), a stream's command refused with Context
+ * State Error by an endpoint that reads Running again is QEMU's own device
+ * wakeup having restarted the stopped endpoint (xhci_wakeup_endpoint kicks
+ * it, where a real controller restarts a Stopped endpoint only for a
+ * doorbell): one more Stop Endpoint - whose stream resync runs as for any -
+ * and the command once more, its position read again. Thread only.
+ */
+static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 PHCD_PIPE pipe)
+{
+    XHCI_TRB trb;
+    ULONG control;
+    ULONG code;
+
+    code = hcdCfgSetDequeueCode(hc, dev, pipe);
+    if (code == XHCI_CC_CONTEXT_STATE_ERROR && hc->QemuStreamQuirk &&
+        pipe->StreamId != 0 &&
+        hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_RUNNING) {
+        hc->Counters.QemuStreamRestops++;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==
+                XHCI_RING_OK &&
+            hcdCfgCommand(hc, dev, &trb, &control) == XHCI_CC_SUCCESS) {
+            code = hcdCfgSetDequeueCode(hc, dev, pipe);
+        }
+    }
+    if (code == XHCI_CC_SUCCESS && pipe->StreamId != 0) {
+        /* The stream's own failure, if it had one, is discharged: a later
+         * halt of another stream must not move it again (36.54, record 17
+         * section 4.12.1). */
+        hcdCfgStreamFaultClear(hc, pipe);
+    }
+    return code == XHCI_CC_SUCCESS;
 }
 
 /* Set TR Dequeue for what `pipe` stands for: a stream its stream; an
@@ -2522,6 +2577,168 @@ static VOID hcdCfgRingsEmpty(PHCD_PIPE pipe)
         (VOID)XhciRingSetDequeue(p->Ring,
                                  XhciRingTrbPA(p->Ring, p->Ring->Enqueue));
     }
+}
+
+/*
+ * 36.54 (design record 17 section 4.12.3): every stream ring of `pipe`'s
+ * endpoint, emptied already, restarted at its base with cycle 1 - and its
+ * queue's remembered positions forgotten - for a Configure Endpoint about to
+ * give the endpoint a new context: after a Reset Device (RESET_PORT) or for
+ * a Drop and Add (hcdCfgRecycleCode). A ring or queue still holding a TD is
+ * left at its position, as before this revision. No stream is rung before
+ * the Configure. Thread only, the endpoint paused and drained, controller
+ * lock not held (one ring at a time under it).
+ */
+static VOID hcdCfgStreamsRestart(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+{
+    PHCD_PIPE p;
+    KIRQL oldIrql;
+    ULONG id;
+
+    for (id = 1; pipe->Streams != NULL && id <= pipe->Streams->Count; id++) {
+        p = pipe->Streams->Pipe[id];
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        /* A ring at its base with cycle 1 already (a new one) needs
+         * nothing and is not counted. */
+        if (p->Queue->Count == 0 &&
+            (p->Ring->Enqueue != 0 || p->Ring->Cycle != 1) &&
+            XhciRingRestart(p->Ring) == XHCI_RING_OK) {
+            (VOID)XhciXferQueueRestart(p->Queue);
+            hc->Counters.StreamRingRestarts++;
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+    }
+}
+
+/* The extra Stop Endpoints one resync may spend on QEMU's own restart of
+ * the endpoint (xhci_wakeup_endpoint) before it gives up. */
+#define HCD_CFG_QEMU_RESTOPS    2UL
+
+/*
+ * 36.54 (design record 17 section 4.12.4): QEMU's xHCI re-reads every
+ * Stream Context of an endpoint after a Stop or Reset Endpoint with its
+ * consumer cycle forced to 1 (hcd-xhci.c, xhci_find_stream calling
+ * xhci_ring_init, read at QEMU 11.1.0), so a stream whose restart point
+ * needs DCS 0 would be invisible to it. After such a command succeeded
+ * (HcdThreadCommand), on QEMU alone (QemuStreamQuirk, PCI 1B36:000D), on an
+ * endpoint with streams open that its caller holds - paused, or its
+ * doorbells withheld by the qemu flavour's injection - Set TR Dequeue for
+ * every stream that owes one (XhciRingResyncOwed): at QEMU's own restart
+ * point, with the cycle the driver wrote there. All of them complete before
+ * the caller can resume the endpoint and ring a stream.
+ *
+ * Containment: the endpoint must read Stopped before each command. QEMU's
+ * own device wakeup can restart a Stopped endpoint behind every pause
+ * (xhci_wakeup_endpoint kicks it): Running again, before a command or as
+ * the reason a command was refused with Context State Error, costs one more
+ * Stop Endpoint and the whole resync again, at most HCD_CFG_QEMU_RESTOPS
+ * times. Anything else - another refusal, a command with no completion, a
+ * third restart, an endpoint neither Stopped nor Running - is treated as a
+ * command that never completed: the controller reset requested
+ * (HcdSvcRequestReset, as hcdCommand requests it), and HCD_RESYNC_FAILED,
+ * on which HcdThreadCommand reports no completion (0) for the Stop or Reset
+ * Endpoint it followed, so every caller contains it as it contains a timed
+ * out command. An endpoint without streams, or nobody's to hold, or Halted
+ * (the injection's answer) is left alone (HCD_RESYNC_CLEAN). Returns
+ * HCD_RESYNC_RESTOPPED when it finished only after stopping the endpoint
+ * again (the injection then abandons: QEMU may have moved the TD its
+ * verdict read). QEMU keeps no partial TD state across its stop or reset;
+ * on a real controller the command would discard it, which is why the gate
+ * is the ID. Thread only, powered, controller lock not held.
+ */
+ULONG HcdCfgQemuStreamResync(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE ep;
+    PHCD_PIPE p;
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG restops;
+    ULONG state;
+    ULONG owed;
+    ULONG code;
+    ULONG dw0;
+    ULONG held;
+    ULONG pa;
+    ULONG dcs;
+    ULONG id;
+
+    if (!hc->QemuStreamQuirk || slotId < 1 || slotId > XHCI_MAX_SLOTS ||
+        dci < 2 || dci > 31) {
+        return HCD_RESYNC_CLEAN;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev = hc->SlotDevice[slotId];
+    ep = (dev != NULL && !dev->Gone) ? dev->Pipes[dci] : NULL;
+    held = (ep != NULL && ep->Streams != NULL && ep->Paused != 0) ? 1UL
+                                                                    : 0UL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (ep == NULL || ep->Streams == NULL) {
+        return HCD_RESYNC_CLEAN;
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (!held) {
+        held = HcdInjWithholds(hc, slotId, dci);
+    }
+#endif
+    if (!held) {
+        return HCD_RESYNC_CLEAN;
+    }
+    restops = 0;
+    id = 1;
+    while (ep->Streams != NULL && id <= ep->Streams->Count) {
+        state = hcdCfgEpState(hc, dev, dci);
+        code = XHCI_CC_SUCCESS;
+        if (state == XHCI_EP_STATE_STOPPED) {
+            p = ep->Streams->Pipe[id];
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            dw0 = ((volatile ULONG *)((PUCHAR)ep->Streams->Va +
+                                      id * XHCI_STREAM_CONTEXT_BYTES))[0];
+            owed = XhciRingResyncOwed(p->Ring, dw0, &pa, &dcs);
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            if (owed) {
+                code = 0;
+                if (XhciStreamSetDequeueTrb(&trb, slotId, dci, id, pa, dcs,
+                                            XHCI_STREAM_SCT_PRIMARY_TR) ==
+                    XHCI_STREAM_OK) {
+                    code = HcdThreadCommandRaw(hc, &trb, &control);
+                }
+                if (code == XHCI_CC_SUCCESS) {
+                    hc->Counters.QemuStreamResyncs++;
+                } else if (code == XHCI_CC_CONTEXT_STATE_ERROR) {
+                    state = hcdCfgEpState(hc, dev, dci);
+                }
+            }
+            if (code == XHCI_CC_SUCCESS) {
+                id++;
+                continue;
+            }
+        } else if (state == XHCI_EP_STATE_HALTED && id == 1 && restops == 0) {
+            return HCD_RESYNC_CLEAN;
+        }
+        /* Not Stopped, or a command refused: QEMU's own restart is the one
+         * case another Stop and a fresh pass can mend. */
+        if (state != XHCI_EP_STATE_RUNNING ||
+            restops >= HCD_CFG_QEMU_RESTOPS ||
+            (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR)) {
+            break;
+        }
+        restops++;
+        hc->Counters.QemuStreamRestops++;
+        if (XhciTrbStopEndpoint(&trb, slotId, dci, 0) != XHCI_RING_OK ||
+            HcdThreadCommandRaw(hc, &trb, &control) != XHCI_CC_SUCCESS) {
+            break;
+        }
+        id = 1;
+    }
+    if (ep->Streams != NULL && id <= ep->Streams->Count) {
+        /* Given up: as a command that never completed. */
+        hc->Counters.QemuStreamResyncFailed++;
+        HcdSvcRequestReset(&hc->Hc);
+        return HCD_RESYNC_FAILED;
+    }
+    return (restops == 0) ? HCD_RESYNC_CLEAN : HCD_RESYNC_RESTOPPED;
 }
 
 /*
@@ -2699,6 +2916,25 @@ static VOID hcdCfgRetrySettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     }
 }
 
+/* The same for everything a Reset Endpoint of `pipe`'s endpoint resets:
+ * with streams open, every stream's deferred outcome, whichever stream the
+ * caller was asked for (36.54, record 17 section 4.12.2); otherwise the
+ * pipe's. Thread only, the endpoint paused, controller lock not held. */
+static VOID hcdCfgRetrySettleAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+{
+    PHCD_PIPE ep;
+    ULONG id;
+
+    ep = hcdCfgEndpointOf(pipe);
+    if (ep->Streams == NULL) {
+        hcdCfgRetrySettle(hc, pipe);
+        return;
+    }
+    for (id = 1; ep->Streams != NULL && id <= ep->Streams->Count; id++) {
+        hcdCfgRetrySettle(hc, ep->Streams->Pipe[id]);
+    }
+}
+
 /*
  * Bring an endpoint to a state in which its ring may be edited, by the state
  * it is in (Codex review of batch (c), round 2, finding 6): Running is
@@ -2767,8 +3003,9 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * the software dequeue the Set TR Dequeue below programs is past the
          * failed TD, as today's path left it; programmed on the TD it would
          * clear the controller's saved progress in it (4.6.8) and restart it
-         * from its first TRB (review round 1, finding 1). */
-        hcdCfgRetrySettle(hc, pipe);
+         * from its first TRB (review round 1, finding 1). With streams
+         * open, every stream's (36.54): the reset was the endpoint's. */
+        hcdCfgRetrySettleAll(hc, pipe);
         if (!hcdCfgRecoverDequeue(hc, dev, pipe, 0)) {
             (VOID)hcdCfgFault(hc, dev);
             return XHCI_EP_STATE_RUNNING;
@@ -2872,11 +3109,15 @@ static ULONG hcdCfgRecycleCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PHCD_PIPE add[32];
     XHCI_PIPE_PLAN plan;
     KIRQL oldIrql;
+    ULONG code;
     ULONG dci;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hcdCfgRingsEmpty(pipe);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* 36.54: the Drop and Add gives the endpoint a new context (record 17
+     * section 4.12.3). */
+    hcdCfgStreamsRestart(hc, pipe);
     for (dci = 0; dci < 32; dci++) {
         add[dci] = NULL;
     }
@@ -2890,7 +3131,15 @@ static ULONG hcdCfgRecycleCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
     }
     plan.Enabled = 0;
-    return hcdCfgConfigureAdd(hc, dev, &plan, add, 0);
+    code = hcdCfgConfigureAdd(hc, dev, &plan, add, 0);
+    /* A new context discharges every stream's failure record (36.54,
+     * record 17 section 4.12.1). */
+    for (dci = 1; code == XHCI_CC_SUCCESS && pipe->Streams != NULL &&
+                  dci <= pipe->Streams->Count;
+         dci++) {
+        hcdCfgStreamFaultClear(hc, pipe->Streams->Pipe[dci]);
+    }
+    return code;
 }
 
 /* The same, as success or failure. An endpoint with streams open is added
@@ -3537,6 +3786,14 @@ static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * and so no context names a retired stream array any more. */
     dev->Stale = 0;
     hcdCfgRetiredReclaim(hc, dev, XHCI_PIPE_ENDPOINT_MASK);
+    /* 36.54: nor any position on a stream ring, which the Configure below
+     * gives a new context: each restarts at its base, cycle 1, so every
+     * Stream Context it builds carries DCS 1 (record 17 section 4.12.3). */
+    for (dci = 2; dci < 32; dci++) {
+        if (add[dci] != NULL && add[dci]->Streams != NULL) {
+            hcdCfgStreamsRestart(hc, add[dci]);
+        }
+    }
 
     s = (PUCHAR)hc->ScratchVa;
     if (!HcdThreadControl(hc, dev, 0x80, 6, 0x0100, 0, 18, &bytes) ||
@@ -3773,6 +4030,12 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
         p->Ring = &p->OwnRing;
         p->Queue = &p->OwnQueue;
         XhciXferQueueInit(&p->OwnQueue);
+        /* 36.54: the stream's queue in the soft retry's scope on the
+         * endpoint's terms (record 17 section 4.12.2). */
+        p->OwnQueue.RetryScope = XhciTolRetryScope(
+            ext->Tol.Stats.Tolerance, ext->PciVendorDevice,
+            (pipe->TransferType == XHCI_PIPE_XFER_BULK) ? 1UL : 0UL,
+            dev->TtSlot != 0 ? 1UL : 0UL);
         offset = XhciStreamRingOffset(&st->Layout, id);
         if (XhciRingInit(&p->OwnRing, (volatile XHCI_TRB *)(va + offset),
                          st->Pa.LowPart + offset, st->RingTrbs,
@@ -4268,6 +4531,35 @@ static ULONG hcdCfgRetryContended(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 }
 
 /*
+ * The same for a stream's retry (36.54, design record 17 section 4.12.2),
+ * at the endpoint's scope, since its Reset Endpoint resets every stream:
+ * whatever contends with the endpoint pipe, the stream itself cancelled,
+ * paused or closed, a cancel pending on any stream of the endpoint, whose
+ * Stop Endpoint would stop this one too, or a drain pending on the
+ * endpoint (a Prime Pipe STALL's) or any of its streams (a refused
+ * retire's), which needs the whole endpoint at rest. Controller lock held.
+ */
+static ULONG hcdCfgRetryStreamContended(PHCD_CONTROLLER hc,
+                                        PHCD_USB_DEVICE dev, PHCD_PIPE pipe)
+{
+    PHCD_PIPE ep;
+    ULONG id;
+
+    ep = hcdCfgEndpointOf(pipe);
+    if (ep->Streams == NULL || hcdCfgRetryContended(hc, dev, ep) ||
+        ep->DrainPending || pipe->Paused || pipe->Closed) {
+        return 1;
+    }
+    for (id = 1; id <= ep->Streams->Count; id++) {
+        if (ep->Streams->Pipe[id]->CancelPending ||
+            ep->Streams->Pipe[id]->DrainPending) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
  * The soft retry's one command: Reset Endpoint with TSP 1 (xHCI 1.2c
  * 4.6.8.1), which keeps the host's sequence state, so the device's data
  * toggle stays aligned with no CLEAR_FEATURE, and leaves the endpoint
@@ -4297,13 +4589,23 @@ static ULONG hcdCfgRetryResetEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * second ring is harmless - and the request cleared; past G a newer
  * divert's request is left for the next visit; a failed command goes to
  * hcdCfgFault, as any recovery command does, the TD left for the teardown
- * that follows since the endpoint's state is then unknown. Thread only,
- * powered.
+ * that follows since the endpoint's state is then unknown.
+ *
+ * A stream's retry (36.54, design record 17 section 4.12.2) is the
+ * endpoint's: contended at the endpoint's scope, the endpoint paused - every
+ * stream with it - across its Reset Endpoint, so that on QEMU the stream
+ * resync the command path runs (HcdThreadCommand) completes before any
+ * stream is rung; at G the pause given back and every stream with a TD
+ * rung by its Stream ID (hcdCfgStreamKick), the failed one's included,
+ * since every stream halted with the endpoint; past G given back alone; a
+ * failed command leaves it paused, as an abort's does, for the recovery
+ * hcdCfgFault requested. Thread only, powered.
  */
 static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            PHCD_PIPE pipe)
 {
     PXHCI_TOL_STATS stats;
+    PHCD_PIPE ep;
     KIRQL oldIrql;
     ULONG token;
     ULONG gen;
@@ -4312,8 +4614,11 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG action;
     ULONG live;
     ULONG ok;
+    ULONG stream;
 
     stats = &hc->Hc.Tol.Stats;
+    ep = hcdCfgEndpointOf(pipe);
+    stream = (pipe->StreamId != 0) ? 1UL : 0UL;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     live = XhciXferRetryPending(pipe->Queue, NULL, NULL);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -4344,8 +4649,9 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     decision = XhciTolRetryDecide(
         stats->Tolerance,
-        hcdCfgRetryContended(hc, dev, pipe) || pipe->Streams != NULL ||
-            pipe->StreamId != 0,
+        stream ? hcdCfgRetryStreamContended(hc, dev, pipe)
+               : (hcdCfgRetryContended(hc, dev, pipe) ||
+                  pipe->Streams != NULL),
         pipe->DrainPending, XhciXferRetryHeadIs(pipe->Queue, token));
     applied = 0;
     if (decision == XHCI_TOL_RETRY_REPLAY) {
@@ -4353,6 +4659,9 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         (VOID)XhciXferRetryClear(pipe->Queue, gen);
     } else {
         stats->RetryResets++;
+        if (stream) {
+            hc->Counters.StreamRetryResets++;
+        }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (decision == XHCI_TOL_RETRY_REPLAY) {
@@ -4362,12 +4671,15 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return;
     }
 
+    if (stream) {
+        HcdIoPipePause(hc, ep);
+    }
     ok = hcdCfgRetryResetEndpoint(hc, dev, pipe);
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     action = XhciTolRetryAfterReset(ok, pipe->Queue->RetryGen, gen);
     if (action == XHCI_TOL_RETRY_RING) {
-        if (!pipe->Paused && !pipe->Closed && !dev->Gone) {
+        if (!stream && !pipe->Paused && !pipe->Closed && !dev->Gone) {
             /* The surviving TD restarts the sequence's use. */
             pipe->SeqUsed = 1;
             XhciWriteDoorbell(&hc->Hc, dev->SlotId, pipe->Dci);
@@ -4382,21 +4694,35 @@ static VOID hcdCfgRetryOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         XHCI_DBG_VALUE("hcd: soft retry's Reset Endpoint failed, slot/dci",
                        (dev->SlotId << 8) | pipe->Dci);
         (VOID)hcdCfgFault(hc, dev);
+        return;                 /* a stream's endpoint left paused */
+    }
+    if (stream) {
+        /* What waited on the pause is published and rung; then every
+         * stream with a TD, the failed one's included, with its Stream ID
+         * - the endpoint's doorbell was disabled while it was Halted. */
+        HcdIoPipeResume(hc, ep);
+        if (action == XHCI_TOL_RETRY_RING) {
+            hcdCfgStreamKick(hc, dev, pipe);
+        }
     }
 }
 
 /* Every pipe with a soft retry owed, after an event diverted one (hcd_dev.c,
- * RetryWork). Bulk and interrupt endpoints only: EP0's queue and a stream's
- * are never in scope. A controller that failed meanwhile leaves the rest for
- * its recovery, whose invalidation drains them. Thread only, powered, the
- * controller not halted. */
+ * RetryWork): bulk and interrupt endpoints, and since 36.54 every stream of
+ * a streams endpoint (record 17 section 4.12.2); EP0's queue is never in
+ * scope. The endpoint's stream set is read again for each stream: a failed
+ * retry's recovery may have taken it. A controller that failed meanwhile
+ * leaves the rest for its recovery, whose invalidation drains them. Thread
+ * only, powered, the controller not halted. */
 VOID HcdCfgRetryService(PHCD_CONTROLLER hc)
 {
     PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
     KIRQL oldIrql;
     ULONG work;
     ULONG slot;
     ULONG dci;
+    ULONG id;
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     work = hc->RetryWork;
@@ -4414,8 +4740,19 @@ VOID HcdCfgRetryService(PHCD_CONTROLLER hc)
             continue;
         }
         for (dci = 2; dci < 32; dci++) {
-            if (dev->Pipes[dci] != NULL) {
-                hcdCfgRetryOne(hc, dev, dev->Pipes[dci]);
+            pipe = dev->Pipes[dci];
+            if (pipe == NULL) {
+                continue;
+            }
+            hcdCfgRetryOne(hc, dev, pipe);
+            for (id = 1; dev->Pipes[dci] == pipe && pipe->Streams != NULL &&
+                         id <= pipe->Streams->Count;
+                 id++) {
+                if (hc->Hc.ControllerFailed || hc->ScratchTainted ||
+                    dev->Gone) {
+                    break;
+                }
+                hcdCfgRetryOne(hc, dev, pipe->Streams->Pipe[id]);
             }
         }
     }
