@@ -297,6 +297,22 @@ try {
         Assert-True (Test-Path -LiteralPath (Join-Path $pswBareOut $name)) `
             "-PswScriptPath given as a bare file name did not stage $name."
     }
+    # And a root-relative one, "\dir\portsw.vbs" (review round 2). The child
+    # starts with its process directory at this location, so this does not
+    # reproduce a process directory on another drive; it holds that such a
+    # path is resolved on the location's drive and its batch files found.
+    $pswRootRel = (Join-Path $pswBareDir "portsw.vbs").Substring([System.IO.Path]::GetPathRoot($pswBareDir).Length - 1)
+    $pswRootRelOut = Join-Path $script:work "pkg-psw-rootrel"
+    Push-Location -LiteralPath $script:work
+    try {
+        $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+            "-PswScriptPath", $pswRootRel, "-OutDir", $pswRootRelOut)
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($r.ExitCode -eq 0) ("-PswScriptPath given root-relative ('$pswRootRel') was rejected:`n" + $r.Output)
+    Assert-True (Test-Path -LiteralPath (Join-Path $pswRootRelOut "portsw-off.bat")) `
+        "-PswScriptPath given root-relative did not stage portsw-off.bat."
 
     # The files themselves. Every line is held to a short list of the commands
     # both interpreters run, rather than searched for constructs one of them
@@ -342,7 +358,7 @@ try {
             if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
                 $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
             }
-            if ($line -cmatch '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+            if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
             if ($line -cmatch '^:([a-z]+)$') {
                 if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
                 $labels[$Matches[1]] = $i
@@ -377,7 +393,9 @@ try {
             Assert-True $false "src\$($bat.Name) is missing."
             continue
         }
-        $batText = [System.IO.File]::ReadAllText($batSrc, [System.Text.Encoding]::GetEncoding(28591))
+        # Bytes, then Latin-1: ReadAllText would consume a BOM, or decode a
+        # UTF-16 file into clean text (review round 2).
+        $batText = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($batSrc))
         $faults = @(Get-PswBatchFaults -Text $batText -Value $bat.Value)
         Assert-True ($faults.Count -eq 0) ("src\$($bat.Name):`n  " + ($faults -join "`n  "))
         $batLineCounts += @($batText -split "`r`n").Count
@@ -388,17 +406,22 @@ try {
 
     # Controls on the checker itself: each of these must be refused, and the
     # last, harmless echo text that names a cmd.exe word, must not be.
-    $onText = [System.IO.File]::ReadAllText((Join-Path $repo "src\portsw-on.bat"), [System.Text.Encoding]::GetEncoding(28591))
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $onBytes = [System.IO.File]::ReadAllBytes((Join-Path $repo "src\portsw-on.bat"))
+    $onText = $latin1.GetString($onBytes)
     $anchor = "`r`necho Now:`r`n"
     Assert-True ($onText.Contains($anchor)) "src\portsw-on.bat has no 'echo Now:' line for the checker's controls to replace."
     foreach ($bad in @('goto nt', '@echo example > stray.txt', ' rem example > stray.txt', 'echo x | more',
                        'for /f %%i in (a.txt) do echo %%i', 'setlocal', 'if /i errorlevel 1 goto end',
                        'cd /d "%~dp0"', 'goto eof', 'cscript //nologo "portsw.vbs" 2', 'cscript //nologo portsw.vbs 2',
-                       'echo off', 'call :run')) {
+                       'echo off', 'echo ON', 'echo Off', 'call :run', ':run', ('echo ' + ('x' * 130)))) {
         $mutant = $onText.Replace($anchor, "`r`n" + $bad + "`r`n")
         Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted the line: $bad"
     }
     foreach ($mutant in @($onText.Replace("goto run`r`n:nt`r`n", ":nt`r`n"),
+                          $onText.Replace($anchor, "`r`necho caf" + [char]0xE9 + "`r`n"),
+                          $latin1.GetString([byte[]](@(0xEF, 0xBB, 0xBF) + $onBytes)),
+                          $latin1.GetString([byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($onText))),
                           $onText.Replace("`r`n", "`n"),
                           $onText.Substring(0, $onText.Length - 2),
                           $onText.Replace("cscript //nologo portsw.vbs 1", "cscript //nologo portsw.vbs 0"))) {

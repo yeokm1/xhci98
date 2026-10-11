@@ -402,14 +402,15 @@ the safety notes, and how to read each result.
 
 ## Installing
 
-Each x64 flavour directory of the package holds eight files: `xhci98.inf`
-and `xhci98.sys`, the host controller driver, `xhciuas.inf` and
-`xhciuas.sys`, the UAS driver, `txtsetup.oem`, which only Windows 2000 and
-XP Setup read (below), `portsw.vbs`, the Intel port switchover's script,
-and `portsw-on.bat` and `portsw-off.bat`, which turn the switchover on or
-off through it in one double-click. Each x86 flavour directory holds a
-ninth, `xhcimsi.sys`, the MSI
-helper the INF installs on 32-bit Vista and 7 only. `release-x86\` is the one to install on 32-bit
+Each flavour directory of the package holds nine files. Eight are in every
+one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
+`xhciuas.inf` and `xhciuas.sys`, the UAS driver, `txtsetup.oem`, which
+only Windows 2000 and XP Setup read (below), `portsw.vbs`, the Intel port
+switchover's script, and `portsw-on.bat` and `portsw-off.bat`, which turn
+the switchover on or off through it in one double-click. The ninth is
+`xhcimsi.sys` in the x86 directories, the MSI helper the INF installs on
+32-bit Vista and 7 only, and `xhci98-test.cer` in the x64 directories, the
+public half of the certificate the x64 drivers are test-signed with. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 

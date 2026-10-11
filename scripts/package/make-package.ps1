@@ -290,12 +290,12 @@ if ($OemPath -eq "") {
 $stagePsw = ($DriverPath -eq "") -or ($PswScriptPath -ne "")
 if ($PswScriptPath -eq "") { $PswScriptPath = Join-Path $repo "src\portsw.vbs" }
 # Its two batch files (task 36.56) travel with it, from its own directory -
-# which a bare file name does not name, so the path is anchored first, to
-# PowerShell's location as -OutDir is below.
-if (-not [System.IO.Path]::IsPathRooted($PswScriptPath)) {
-    $PswScriptPath = Join-Path $PWD.ProviderPath $PswScriptPath
-}
-$PswScriptPath = [System.IO.Path]::GetFullPath($PswScriptPath)
+# which a bare file name does not name, so the path is resolved first, by
+# PowerShell against its own location and drive: [Path]::GetFullPath would
+# take the process directory, and a root-relative "\dir\portsw.vbs" the
+# process's drive (review round 2). It need not exist yet; the copy below
+# refuses a missing one.
+$PswScriptPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PswScriptPath)
 $pswBatchNames = @("portsw-on.bat", "portsw-off.bat")
 # The NT 6 x86 MSI helper (design record 18), the x86 package's alone.
 if ($Arch -eq "amd64" -and $MsiDriverPath -ne "") {
