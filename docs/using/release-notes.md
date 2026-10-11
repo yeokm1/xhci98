@@ -1985,9 +1985,9 @@ or says it was found by reading the code.
 - **After an update, the root hub's Driver tab still shows the old
   version** until the root hub is updated too, although it runs the new
   file (read again after an update from `2.2.0.0` on Windows 2000, XP and
-  XP x64). After an update from `2.0.0.0`, Windows 98 SE and ME also keep
-  running `2.0.0.0` until the next restart, which they do not ask for. Same
-  section.
+  XP x64). On Windows 98 SE and ME the old driver also keeps running until
+  the next restart, which they do not ask for (read again after an update
+  from `2.2.0.0`). Same section.
 - **Windows Vista and 7: deleting the driver keeps the older packages.**
   "Delete the driver software for this device" removes only the package in
   use, and Windows may install an older one the next time it finds the
