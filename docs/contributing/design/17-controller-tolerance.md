@@ -1349,20 +1349,20 @@ caller's resume can ring a stream:
   the Stream Context, and its reload starts there (`xhci_set_ep_state`
   with no stream context, then `xhci_find_stream`). Where that address
   names a TRB of the TDs the driver still holds (from its software dequeue
-  to its enqueue), the quirk keeps it. On the Link TRB, which a correct
-  QEMU would follow, toggling its cycle, it names the ring's base with the
-  toggled cycle instead, the same position, since a Set TR Dequeue is to
-  name the first TRB of a TD (4.6.10). Anywhere else the address is stale
+  to its enqueue), the quirk keeps it. An address on the Link TRB, which a
+  correct QEMU would follow, is first taken as the ring's base - the same
+  position, named as the first TRB of a TD, as a Set TR Dequeue is to name
+  one (4.6.10) - and judged as any other. Anywhere else the address is stale
   and is replaced by the software dequeue: behind it every TRB's completion
   was reported and retired - QEMU can leave such an address when a stream
   completes a TD while a sibling has halted the endpoint (its kick then
-  returns before rewriting the context), and a failed TD's context names
+  returns before rewriting the context, on the Link TRB too when that TD was
+  at the base), and a failed TD's context names
   its first TRB until the recovery moves it - and past the enqueue nothing
   was written.
 - **The DCS is the cycle the driver wrote at that position**: the TRB's own
   cycle bit inside the TDs it holds, the producer cycle at the enqueue, the
-  Link TRB's cycle toggled at the base, the software dequeue's DCS when the
-  address was replaced.
+  software dequeue's DCS when the address was replaced.
 - **The command is owed** when that DCS is 0, which QEMU's forced 1 gets
   wrong, or when the address is not the one the context holds; a stream at
   its own address wanting DCS 1 is left alone.
@@ -1381,8 +1381,11 @@ caller's resume can ring a stream:
   or Reset Endpoint it followed reports no completion (0). Every caller
   already contains that answer, as it contains a timed-out command: the
   quiesce and RESET_PORT's quiet fault and leave the endpoint paused, the
-  soft retry faults and leaves it paused, selective suspend finds the
-  controller failed and ends its step, and the injection abandons. The
+  soft retry faults and leaves it paused, and selective suspend finds the
+  controller failed and ends its step. The injection, whose own stop runs
+  the resync itself, gives the attempt up with nothing rung (abandon note
+  `44`) - not its ordinary abandon, which rings every stream - and leaves
+  the endpoint to the recovery. The
   same re-stop applies to the driver's own stream Set TR Dequeue on QEMU
   (`hcdCfgSetDequeueOne`), which meets the same wakeup.
 The hook is in the thread's command path (`HcdThreadCommand`), run once by
@@ -1400,7 +1403,8 @@ hook does not run for the injection's own commands, and the injection runs
 the resync itself once it has read that evidence and before it rings or
 delivers anything - and abandons the injection, as it does any it cannot
 place, when that resync had to stop the endpoint again, since QEMU may
-then have moved the TD its verdict found untouched, or could not finish.
+then have moved the TD its verdict found untouched (note `43`), and gives it
+up with nothing rung when the resync could not finish.
 
 On a real controller a Set TR Dequeue here would be wrong: it discards the
 state a stopped stream saved in its context even when it names the same
