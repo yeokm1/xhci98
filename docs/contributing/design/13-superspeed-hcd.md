@@ -1653,7 +1653,8 @@ cleanly at 44.1 and 48 kHz; `iso.fid1` for DCI 7 at leads 34 and then 32,
 feedback endpoint answered about half its reads with a USB Transaction
 Error (202 in some 415), reported per packet and skipped by the class
 driver, with nothing escalated; why is not established (issue 14, section
-7). The flow tracking of review round 2 (`IsoFlowFresh`) came after that
+7). A listen of some 4.75 minutes stayed clean and read the same steady
+half (4,441 of 8,922 reads, 49.8 %), not growing. The flow tracking of review round 2 (`IsoFlowFresh`) came after that
 build; on this device it gives the same Frame IDs, since every feedback
 read follows a `RESET_PIPE`'s new context.
 

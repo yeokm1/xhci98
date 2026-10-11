@@ -194,6 +194,16 @@ reading here separates. Nothing escalated (no tolerance location charged,
 no containment), so it is judged harmless; it is recorded here to be
 compared on a controller with CFC.
 
+A long listen the same evening (`p2long`, 48 kHz, some 4.75 minutes of
+playing in a dump taken 1,847 s after the controller started) was clean
+throughout - no clicks, dropouts or wobble - and read `IsoPacketsAnswered`
+296,075, 8,922 feedback reads and 4,441 Transaction Errors: 49.8 %, against
+about 48 % in the short reading, steady rather than growing, all on the
+feedback endpoint and none on the data endpoint, with no recovery and no
+containment. A steady half fits a device that answers every other
+feedback read as well as a fixed timing offset in where the read lands; the
+cause stays open.
+
 The first attempt at this reading ran the old driver: the test package's
 INF was byte-identical to the installed `2.3.0.0`'s, and Windows 7's
 "Have Disk" update kept the driver store's existing package, so the new
