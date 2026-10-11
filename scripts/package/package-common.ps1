@@ -185,47 +185,63 @@ function Read-DerTlv {
     return @{ Tag = $tag; ValueAt = $p; Length = $l; End = $p + $l }
 }
 
-function Assert-DerElements {
-    # Every byte from $At to $End is a sequence of well-formed DER elements,
-    # each read in full (constructed ones recursively), with nothing left
-    # over. Used for the parts of SpcIndirectDataContent whose content this
-    # project does not interpret, so that they are validated, not skipped.
-    # The universal primitives whose DER content has rules are held to them
-    # (review round 3): BOOLEAN one byte 00 or FF, INTEGER minimal, BIT
-    # STRING an unused-bit count 0 to 7 (0 when empty), NULL empty, OID
-    # through ConvertFrom-DerOid, BMPString an even length; other primitives
-    # (strings, context-specific IMPLICIT values such as SpcPeImageData's
-    # SpcString) are octets with no rule of their own. Nesting is bounded.
-    param([byte[]]$B, [int]$At, [int]$End, [int]$Depth = 0)
-    if ($Depth -gt 16) { throw "DER: nesting deeper than 16" }
-    $p = $At
-    while ($p -lt $End) {
-        $e = Read-DerTlv -B $B -At $p -Limit $End
-        if ($e.Tag -band 0x20) {
-            Assert-DerElements -B $B -At $e.ValueAt -End $e.End -Depth ($Depth + 1)
-        } else {
-            switch ([int]$e.Tag) {
-                0x01 { if ($e.Length -ne 1 -or ($B[$e.ValueAt] -ne 0x00 -and $B[$e.ValueAt] -ne 0xFF)) { throw "DER: malformed BOOLEAN at $p" } }
-                0x02 {
-                    if ($e.Length -lt 1) { throw "DER: empty INTEGER at $p" }
-                    if ($e.Length -gt 1 -and (($B[$e.ValueAt] -eq 0x00 -and ($B[$e.ValueAt + 1] -band 0x80) -eq 0) -or
-                                              ($B[$e.ValueAt] -eq 0xFF -and ($B[$e.ValueAt + 1] -band 0x80) -ne 0))) {
-                        throw "DER: non-minimal INTEGER at $p"
-                    }
-                }
-                0x03 {
-                    if ($e.Length -lt 1 -or $B[$e.ValueAt] -gt 7 -or ($e.Length -eq 1 -and $B[$e.ValueAt] -ne 0)) {
-                        throw "DER: malformed BIT STRING at $p"
-                    }
-                }
-                0x05 { if ($e.Length -ne 0) { throw "DER: NULL with content at $p" } }
-                0x06 { [void](ConvertFrom-DerOid -B $B -At $e.ValueAt -Length $e.Length) }
-                0x1E { if ($e.Length % 2 -ne 0) { throw "DER: BMPString of odd length at $p" } }
-            }
+function Assert-SpcPeImageData {
+    # The data value of a PE-image Authenticode signature, parsed against its
+    # own schema rather than walked as generic DER (review rounds 2 to 4):
+    #   SpcPeImageData ::= SEQUENCE { flags BIT STRING OPTIONAL,
+    #                                 file [0] EXPLICIT SpcLink OPTIONAL }
+    #   SpcLink   ::= CHOICE { url [0] IMPLICIT IA5String,
+    #                          moniker [1] IMPLICIT SEQUENCE { OCTET STRING, OCTET STRING },
+    #                          file [2] EXPLICIT SpcString }
+    #   SpcString ::= CHOICE { unicode [0] IMPLICIT BMPString, ascii [1] IMPLICIT IA5String }
+    # Every element in its place, in its form, with DER contents (a BIT
+    # STRING's unused bits 0 to 7 and zero, a BMPString of even length, IA5
+    # bytes below 0x80), and nothing else anywhere.
+    param([byte[]]$B, [int]$At, [int]$End)
+    $seq = Read-DerTlv -B $B -At $At -Limit $End
+    if ($seq.Tag -ne 0x30 -or $seq.End -ne $End) { throw "SpcPeImageData is not one SEQUENCE" }
+    $p = $seq.ValueAt
+    if ($p -lt $seq.End -and $B[$p] -eq 0x03) {
+        $bits = Read-DerTlv -B $B -At $p -Limit $seq.End
+        $unused = if ($bits.Length -ge 1) { [int]$B[$bits.ValueAt] } else { -1 }
+        if ($bits.Length -lt 1 -or $unused -gt 7 -or ($bits.Length -eq 1 -and $unused -ne 0) -or
+            ($bits.Length -gt 1 -and ([int]$B[$bits.End - 1] -band ((1 -shl $unused) - 1)) -ne 0)) {
+            throw "SpcPeImageData.flags is not a DER BIT STRING"
         }
-        $p = $e.End
+        $p = $bits.End
     }
-    if ($p -ne $End) { throw "DER: elements overrun their container" }
+    if ($p -lt $seq.End) {
+        $file = Read-DerTlv -B $B -At $p -Limit $seq.End
+        if ($file.Tag -ne 0xA0 -or $file.End -ne $seq.End) { throw "SpcPeImageData has something other than flags and [0] file" }
+        $link = Read-DerTlv -B $B -At $file.ValueAt -Limit $file.End
+        if ($link.End -ne $file.End) { throw "SpcPeImageData.file holds more than one SpcLink" }
+        switch ([int]$link.Tag) {
+            0x80 { Assert-Ia5 -B $B -At $link.ValueAt -End $link.End }
+            0xA1 {
+                $c1 = Read-DerTlv -B $B -At $link.ValueAt -Limit $link.End
+                if ($c1.Tag -ne 0x04) { throw "SpcSerializedObject.classId is not an OCTET STRING" }
+                $c2 = Read-DerTlv -B $B -At $c1.End -Limit $link.End
+                if ($c2.Tag -ne 0x04 -or $c2.End -ne $link.End) { throw "SpcSerializedObject is not two OCTET STRINGs" }
+            }
+            0xA2 {
+                $str = Read-DerTlv -B $B -At $link.ValueAt -Limit $link.End
+                if ($str.End -ne $link.End) { throw "SpcLink.file holds more than one SpcString" }
+                if ($str.Tag -eq 0x80) {
+                    if ($str.Length % 2 -ne 0) { throw "SpcString.unicode is a BMPString of odd length" }
+                } elseif ($str.Tag -eq 0x81) {
+                    Assert-Ia5 -B $B -At $str.ValueAt -End $str.End
+                } else {
+                    throw "SpcLink.file is not an SpcString"
+                }
+            }
+            default { throw ("SpcLink has the tag 0x{0:X2}, which is none of its three choices" -f $link.Tag) }
+        }
+    }
+}
+
+function Assert-Ia5 {
+    param([byte[]]$B, [int]$At, [int]$End)
+    for ($i = $At; $i -lt $End; $i++) { if ($B[$i] -ge 0x80) { throw "IA5String byte 0x{0:X2} is not ASCII" -f $B[$i] } }
 }
 
 function ConvertFrom-DerOid {
@@ -256,8 +272,8 @@ function ConvertFrom-SpcIndirectData {
     # SpcIndirectDataContent ::= SEQUENCE { data SEQUENCE { type OID, value
     # ANY OPTIONAL }, messageDigest SEQUENCE { digestAlgorithm SEQUENCE { OID,
     # parameters NULL OPTIONAL }, digest OCTET STRING } }, parsed strictly:
-    # every element where it belongs, the optional value well-formed DER and
-    # alone, the parameters absent or exactly NULL, and nothing after
+    # every element where it belongs, the optional value an SpcPeImageData by
+    # its schema, the parameters absent or exactly NULL, and nothing after
     # anything (review rounds 1 and 2). Returns the data type's OID, the
     # digest algorithm's OID and the digest as hex.
     param([byte[]]$Content)
@@ -271,7 +287,7 @@ function ConvertFrom-SpcIndirectData {
     if ($dataType.End -lt $data.End) {
         $value = Read-DerTlv -B $Content -At $dataType.End -Limit $data.End
         if ($value.End -ne $data.End) { throw "SpcIndirectDataContent.data has more than a type and a value" }
-        Assert-DerElements -B $Content -At $dataType.End -End $data.End
+        Assert-SpcPeImageData -B $Content -At $dataType.End -End $data.End
     }
     $digestInfo = Read-DerTlv -B $Content -At $data.End -Limit $outer.End
     if ($digestInfo.Tag -ne 0x30 -or $digestInfo.End -ne $outer.End) { throw "SpcIndirectDataContent.messageDigest is not the last SEQUENCE" }
