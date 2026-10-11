@@ -562,8 +562,10 @@ $oemPublishable = @("txtsetup.oem")
 # the root of every flavour directory a cut writes, beside the INF the user
 # installed from. Not an INF-declared file: it is a text file the user runs
 # and the setup engine never reads. A version published before 2.3.0.0 has
-# none, so it is accepted where present and not required of one.
-$pswPublishable = @("portsw.vbs")
+# none, so it is accepted where present and not required of one. Its two
+# batch files (task 36.56), which set 1 or 0 through it in one double-click,
+# go wherever it goes, under the same terms.
+$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
@@ -2970,6 +2972,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
+        $contents += "      portsw-on.bat, portsw-off.bat (the same in one double-click)"
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
         } else {
@@ -3413,7 +3416,9 @@ The package's own files are in:
                              Setup read when F6 is pressed (section 4)
   portsw.vbs                 shows and sets the Intel port switchover
                              (section 9, XhciIntelPortSwitch)
-  xhcimsi.sys                in the -X86 directories only: the helper that
+  portsw-on.bat,             turn it on or off through portsw.vbs in one
+  portsw-off.bat             double-click (section 9)
+  xhcimsi.sys               in the -X86 directories only: the helper that
                              gives 32-bit Vista and 7 a message-signalled
                              interrupt. The install puts it on those two
                              systems and no other
@@ -4193,6 +4198,16 @@ A value that is absent means the default each one states.
   WINDOWS after changing it. A stop gives back only the registers the
   driver itself wrote. Read on a Lenovo B490 (1E31) under Windows 98 SE
   with NUSB; standby and the other five ids are untested.
+
+  PORTSW-ON.BAT and PORTSW-OFF.BAT, beside it, do the same in one
+  double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
+  says to restart. On Vista and 7, right-click one and choose Run as
+  administrator. Then RESTART WINDOWS.
+
+  On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
+  only at USB 2.0 speed on a blue connector is most likely still on the
+  USB 2.0 controller, because the switchover is off by default. Run
+  PORTSW-ON.BAT and restart Windows.
 
   Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
   or not, for a chipset with these connectors that the list misses (on a

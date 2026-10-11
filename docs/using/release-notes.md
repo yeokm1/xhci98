@@ -172,7 +172,8 @@ detail, and what each rests on.
 - **Two transfer pieces at once, off by default** (`XhciWideMap`; Windows
   2000 and later only; "XhciWideMap: two transfer pieces at once").
 - **The Intel port switchover is off by default** (`XhciIntelPortSwitch`
-  `0`); `portsw.vbs` turns it on or off, then a restart ("Intel 7-, 8- and
+  `0`); `portsw.vbs`, or `portsw-on.bat` and `portsw-off.bat` in one
+  double-click, turns it on or off, then a restart ("Intel 7-, 8- and
   9-series chipsets: the port switchover").
 - **Selective suspend, off by default** (`XhciSelectiveSuspend`; USB 2.0
   and SuperSpeed devices; "XhciSelectiveSuspend: putting idle devices to
@@ -411,12 +412,15 @@ the safety notes, and how to read each result.
 
 ## Installing
 
-Each x64 flavour directory of the package holds six files: `xhci98.inf`
-and `xhci98.sys`, the host controller driver, `xhciuas.inf` and
-`xhciuas.sys`, the UAS driver, `txtsetup.oem`, which only Windows 2000 and
-XP Setup read (below), and `portsw.vbs`, the Intel port switchover's
-script. Each x86 flavour directory holds a seventh, `xhcimsi.sys`, the MSI
-helper the INF installs on 32-bit Vista and 7 only. `release-x86\` is the one to install on 32-bit
+Each flavour directory of the package holds nine files. Eight are in every
+one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
+`xhciuas.inf` and `xhciuas.sys`, the UAS driver, `txtsetup.oem`, which
+only Windows 2000 and XP Setup read (below), `portsw.vbs`, the Intel port
+switchover's script, and `portsw-on.bat` and `portsw-off.bat`, which turn
+the switchover on or off through it in one double-click. The ninth is
+`xhcimsi.sys` in the x86 directories, the MSI helper the INF installs on
+32-bit Vista and 7 only, and `xhci98-test.cer` in the x64 directories, the
+public half of the certificate the x64 drivers are test-signed with. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 
@@ -653,7 +657,8 @@ hidusbf's polling rate, has to be applied again on the new entry.
 new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
 `2.2.0.0` wrote `1`, and an update never overwrites a value that is already
 there, so a machine updated from either keeps the switchover on. To take the
-new default, run `portsw.vbs 0` from the package and restart Windows
+new default, run `portsw-off.bat` (or `portsw.vbs 0`) from the package and
+restart Windows
 ("Intel 7-, 8- and 9-series chipsets: the port switchover").
 
 **An update from `2.2.0.0` adds the eight values new in `2.3.0.0`** at
@@ -922,6 +927,22 @@ controller. A standby or hibernate keeps them where they are.
   and Windows 7 x64, where it showed, set and cleared the value; QEMU's
   controller is not an Intel one, so the switchover itself was not exercised
   there.
+- **In one double-click: `portsw-on.bat` and `portsw-off.bat`.** Beside
+  `portsw.vbs` in each package directory, each shows the value, sets `1` or
+  `0` through the script and says to restart Windows. On Windows 98 SE and
+  ME double-click it; on 2000 and XP run it as an administrator; on Vista
+  and 7 right-click it and choose Run as administrator. **Then restart
+  Windows.** Neither sets `2`. Read in virtual machines on Windows 98 SE,
+  ME, 2000, XP and Windows 7 x64 (run as administrator, and not, where the
+  script asks for the rights itself), each setting and clearing the value.
+- **A USB 3 stick at USB 2.0 speed.** On one of these chipsets, a USB 3
+  stick or drive on a switchable connector that copies only at USB 2.0
+  speed is most likely still on the USB 2.0 controller, because the
+  switchover is off by default. Run `portsw-on.bat` and restart Windows.
+  (A USB 2.0 hub or cable in between gives the same speed, and the
+  switchover does not change that.) This is what the owner's Dell
+  Latitude E7250 showed on 2026-10-11 with the switchover at its default
+  `0`.
 - **What it logs.** With `XhciLogVerbosity` at `2` or above, `XHCISNAP`'s
   report carries `psw.` records: `psw.gate` (`1` on a listed controller),
   `psw.value` with `psw.value.found` (`psw.value.found` 0 means the value
