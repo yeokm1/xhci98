@@ -401,15 +401,15 @@ All three are read when the controller starts, so restart after changing one.
 
 ## What is tested, and what is not
 
-Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has also run on real hardware, the ThinkPad E460 and the ThinkPad P14s Gen 1; every other target, Windows 2000 included, has run in QEMU virtual machines only. The [release notes](docs/using/release-notes.md)' "Targets and their standing" has the full detail per system.
+Windows 98 SE and Windows 2000 SP4 are the primary targets. Real hardware: Windows 98 SE on the ThinkPad E460 and the ThinkPad P14s Gen 1, and Windows XP x64 and 7 x64 on the Dell Latitude E7250. Every other target, Windows 2000 included, has run in QEMU virtual machines only. The [release notes](docs/using/release-notes.md)' "Targets and their standing" has the full detail per system.
 
 | Target | State |
 |---|---|
 | Windows 98 SE | VMs under NUSB and SweetLow's stack: HID, storage, composite audio, the ASIX Ethernet adapter, hubs to five tiers, plug soaks, SuperSpeed storage and UAS. A stock install runs HID and audio, with no storage driver. Real hardware: the E460 and the P14s Gen 1. |
 | Windows 2000 SP4 | VMs only, under Driver Verifier and on a multiprocessor guest: the same as Windows 98 SE, including UAS and forced Bulk-Only. SuperSpeed hubs untested. |
 | Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. |
-| Windows XP, 32-bit and x64 | VMs only: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. |
-| Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs only: the same, on four virtual processors. On the x64 systems, in test-signing mode or with driver signature enforcement disabled (F8). |
+| Windows XP, 32-bit and x64 | VMs: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. Real hardware: XP x64 on the E7250. |
+| Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs: the same, on four virtual processors. On the x64 systems, in test-signing mode or with driver signature enforcement disabled (F8). Real hardware: 7 x64 on the E7250. |
 | The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. |
 
 | Machine | Controller | Tested by |
