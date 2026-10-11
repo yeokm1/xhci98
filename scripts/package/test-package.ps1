@@ -380,7 +380,7 @@ try {
             $at = [Array]::IndexOf($lines, $pin)
             if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
         }
-        foreach ($needle in @('RESTART WINDOWS', 'right-click it and choose Run as administrator')) {
+        foreach ($needle in @('RESTART WINDOWS', 'Vista and 7: right-click it', 'choose Run as administrator')) {
             if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
         }
         return $faults

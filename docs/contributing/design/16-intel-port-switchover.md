@@ -319,8 +319,10 @@ From `:run` both interpreters run the same lines, every one of them
 `if errorlevel` tests on what `portsw.vbs` returned, `echo` and `pause`.
 After the set, exit code 3 means the script handed the write to an
 elevated copy of itself (Vista and 7 without the administrator token): the
-batch file says the result is in the window that opened, and that next
-time it should be started with right-click, Run as administrator. Exit
+batch file says that if the prompt was allowed the result is in the window
+that opened, that if it was not nothing changed (the script's exit code is
+3 either way), and that next time it should be started with right-click,
+Run as administrator. Exit
 code 1 means a write was refused, possibly after other controllers' keys
 were written (the script names them): the batch file says the change did
 not complete and to read the lines above, and on the NT systems alone (a
