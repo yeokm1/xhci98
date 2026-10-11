@@ -396,7 +396,7 @@ interrupt not delivered". Mode 1 (the line, forced) never moves, so it
 reads as today. Mode 2 polls from the start. A message delivery is not
 watched.
 
-**Who looks** (Codex review of `7567dec`; decided by the owner,
+**Who looks** (review of `7567dec`; decided by the owner,
 2026-10-09). `hcdBackstop` runs on `hcdThread`, and `hcdCommand` blocks
 that thread in a command wait for the very completion a dead line never
 delivers (issue 12 section 2), so the backstop cannot be the observer. The
@@ -473,7 +473,7 @@ the same controller-lock hold as the look that proved the line dead:
    delivery and reason (section 8).
 2. `XHCI_EXT_FLAG_INTERRUPTS` is cleared, so no drain, resume or recovery
    re-arms.
-3. **The line is retired, with the ISR excluded** (Codex review of
+3. **The line is retired, with the ISR excluded** (review of
    revision 5, rounds 1 to 3). `LineMoved` is set to 1 in the extension
    first: the delivery was a line, and its retirement is now owed. Masking
    forbids new interrupts, but the INTx a pin controller has already
@@ -806,7 +806,7 @@ pure function over the configuration bytes, host-tested (`test_msi`).
 **The ISR.** `hcdMsgIsr(Interrupt, Context, MessageId)` does what the line
 ISR does - `XhciIsr`: EINT then IP acknowledged and `IE` written 0, on a
 claim - and returns `XhciIsr`'s answer, queueing the drain only on a claim
-(Codex review of revision 5, round 1). Windows permits shared message
+(review of revision 5, round 1). Windows permits shared message
 interrupts and may call a message ISR for an interrupt this controller did
 not raise, so its contract is the line ISR's: FALSE for an interrupt not
 handled. `XhciIsr` claims on `USBSTS.EINT`, which the xHC sets on each
@@ -887,7 +887,7 @@ under `PollLock`:
 | CLOSING | the DPC | as FIRING, but close has been asked; the DPC ends it |
 | CLOSED | nobody | closed; nothing touches the poller until a start reopens it |
 
-**The role** (2026-10-09; Codex review of `6cac234`) is not a state. The
+**The role** (2026-10-09; review of `6cac234`) is not a state. The
 states say who owns the timer; the role, `PollRole` under `PollLock`, says
 what the DPC does while it owns it:
 
@@ -949,7 +949,7 @@ promoted and never peeked for.
   decision under the controller lock again.
 - **The DPC gives it up** as it ends, under `PollLock`: CLOSING becomes
   CLOSED; otherwise it arms and the state becomes ARMED. **The arm is the
-  role's** (Codex review of revision 5, round 1): a watcher arms
+  role's** (review of revision 5, round 1): a watcher arms
   `XHCI_POLL_WATCH_MS` exactly, with no deadline, no `PollOwed` and no
   conversion, since nothing promotes a watcher and the registry periods do
   not govern it; a server arms at the earlier of its own decision and
@@ -993,7 +993,7 @@ core's own flags. `INITIALIZED` is published before the controller is run
 run bit is written, so neither proves the controller runs.
 
 - **Set** by the HCD alone, once everything the poller's admission reads
-  is published, in one controller-lock hold that also kicks (Codex review
+  is published, in one controller-lock hold that also kicks (review
   of revision 5, round 1: `hcd_power.c` calls `XhciResumeController`
   before it publishes `Common.DevicePower = PowerDeviceD0`, so a kick from
   inside the core's resume could arm a DPC that runs first, fails the D0
@@ -1144,7 +1144,7 @@ then handed to the pure `XhciPollDecidePeriod`):
   the event path and the submissions write under the same lock; it is
   bounded by `MaxSlots` x 31 pipes and stops at the first ACTIVE input.
 - **A port in reset or enumeration:** `PollPortsBusy`, a count the
-  controller thread publishes under the controller lock (Codex review of
+  controller thread publishes under the controller lock (review of
   revision 5, round 1: the port machines and the hub records are the
   thread's, written without the lock, so the DPC cannot scan them). The
   thread recounts it at the end of each enumeration service pass (the
@@ -1579,7 +1579,7 @@ and that flavour is never published.
   with its expected evidence stated for the drains that compete:
   - **N = 0, a line dead from the first No Op**, a device present at
     boot. For N = 0 the latch is set before the interrupt is connected
-    (Codex review of revision 5, round 2: the No Op is submitted and the
+    (review of revision 5, round 2: the No Op is submitted and the
     enables raised before the grant, so a latch set at the grant would let
     its completion be claimed and drained normally); the watcher's timing
     still begins at the grant, and the leg reads `qemu.inj.deadline.isr`

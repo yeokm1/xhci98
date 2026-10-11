@@ -216,7 +216,7 @@ REMOVE when it was a stick's and never sent it when it was a mouse's.**
 
 What `2.0.0.0` does, as a static reading of this project's own code (the
 read-only diagnosis of 2026-10-04 ~17:43 on `e0cc62f`, whose `src` is
-`417199e`'s, kept at `out\phase28\me-reenable\codex-diagnosis.md`, checked
+`417199e`'s, kept in `out\phase28\me-reenable\`, checked
 against the tree):
 
 - The controller FDO's `IRP_MN_STOP_DEVICE` arm (`src/hcd_pnp.c`) calls
@@ -349,7 +349,7 @@ not get past. Neither is right while the stop is treated as a departure.
 Commit `fa2af9b` (`src/hcd.h`, `src/hcd_pnp.c`, `src/hcd_enum.c`,
 `src/hcd_pdo.c`; 289 lines added, none removed), written first as `5b554f4`
 on `e0cc62f` and rebased onto `main` with its `src` unchanged but for the
-version stamps, reviewed by Codex and found clean in one round, merged into
+version stamps, reviewed and found clean in one round, merged into
 the release branch at `a9a7577`:
 
 - **The controller's orderly PnP STOP marks itself.** The FDO's
@@ -548,8 +548,8 @@ Evidence, git-ignored, all on development host A:
 - `out\phase28\me-reenable\` - the reproduction: `kit\launch.ps1`,
   `xfer\xhci98.sys` (Package B `qemu` x86), `r1\` to `r5\` (debug consoles,
   screenshots, and for `r1` to `r3` `hang-1.txt` and
-  `hang-1-debugcon-tail60.txt`), and `codex-diagnosis.md` (the read-only
-  diagnosis on `e0cc62f`).
+  `hang-1-debugcon-tail60.txt`), and the read-only
+  diagnosis on `e0cc62f`.
 - `out\phase28\me-control\enable\` - the control under ME's own UHCI stack.
 - `out\phase28\v1b\me\report.md` - Package B's ME leg, clause 8, with
   `debugcon-m1-2.log`, `c8-evidence-1.txt`, `c8-evidence-2.txt` and
