@@ -371,7 +371,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 | Stand by on Windows 98 SE | Read only in QEMU virtual machines, where Windows 98 SE itself does not resume reliably, with or without a USB controller. With a USB disk attached the resume stopped before the desktop under this driver and under NUSB's EHCI driver alike; with a USB mouse alone, or behind a hub, it completed and the mouse worked. Untested on real hardware: remove USB disks before Stand by. See the release notes' "Known limitations". |
-| The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. Built after Linux's handling of the same chipsets. |
+| The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. |
 
 ## Toolchain and building
 
