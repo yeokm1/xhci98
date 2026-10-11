@@ -64,7 +64,9 @@ $trees = @("src", "test", "scripts", "xhcisnap", "xhciqual")
 
 # File kinds the 1998-era toolchain reads. All three rules apply to these.
 # `.oem` is txtsetup.oem, which text-mode Setup reads (task 33.3); `.vbs` is
-# src\portsw.vbs, which Windows 98's Script Host reads (roadmap-hcd 36.42).
+# src\portsw.vbs, which Windows 98's Script Host reads (roadmap-hcd 36.42);
+# `.bat` covers src\portsw-on.bat and portsw-off.bat, which COMMAND.COM runs
+# on Windows 98 SE and ME (roadmap-hcd 36.56).
 $toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd", ".oem", ".vbs")
 $toolchainName = @("makefile", "sources")
 

@@ -104,6 +104,7 @@ In each driver directory:
 - `xhcimsi.sys` (32-bit only): the MSI helper. 32-bit Vista and 7 need this small second driver to give the controller a message-signalled interrupt. The INF installs it on those two systems only, as a service that starts at boot, which is why they ask for a restart. Every other system ignores it.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
 - `portsw.vbs`: the switch for the Intel port switchover.
+- `portsw-on.bat` and `portsw-off.bat`: turn that switchover on or off in one double-click.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
 
 `release-x86\` or `release-x64\` is the one to install.
@@ -280,6 +281,8 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors start on the USB 2.0 controller.
 
+On these machines, a USB 3 stick or drive that copies only at USB 2.0 speed on a blue connector is most likely still on the USB 2.0 controller, because the switchover is off by default. Run `portsw-on.bat` and restart Windows.
+
 `XhciIntelPortSwitch` lets the driver move them to the xHCI controller at each start and resume, and hand them back when the controller is disabled or removed, or the machine shuts down. The hand-back writes only the registers the driver itself wrote.
 
 - `0` (default): off.
@@ -305,6 +308,8 @@ cscript //nologo portsw.vbs 0
 - `0`: turns it off.
 
 Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
+
+`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. Then restart Windows.
 
 ### The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)
 
