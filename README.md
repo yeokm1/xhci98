@@ -317,6 +317,8 @@ The release notes' "Windows Vista and 7: message-signalled interrupts" and "Xhci
 
 A UAS command moves up to 1 MiB by default. Restart after changing either value below.
 
+On Windows 98 SE and ME the practical maximum is 64 KiB: Windows' storage layer there never sends a request larger than that, so a larger setting makes no difference.
+
 - `XhciMaxTransferKB`: the largest UAS command for every UAS drive on the controller, `64` to `2048` KiB in multiples of `4`. Default `1024`.
 - `XhciWideMap`: `1` keeps two pieces of a large bulk transfer on the controller at once, on Windows 2000 to 7. **Off by default** (`0`), because a regression would show as wrong data rather than an error.
 
