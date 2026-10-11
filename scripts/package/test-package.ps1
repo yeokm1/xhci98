@@ -2352,6 +2352,8 @@ try {
     Write-Step "x64 test signature: the verdict on a parsed signature (mocks)"
     $tsThumb = "00112233445566778899AABBCCDDEEFF00112233"
     $tsGood = [pscustomobject]@{ Thumbprint = $tsThumb; Subject = "CN=x"; DigestOid = "1.3.14.3.2.26";
+                                 ContentType = "1.3.6.1.4.1.311.2.1.4"; DataOid = "1.3.6.1.4.1.311.2.1.15";
+                                 IndirectDigestOid = "1.3.14.3.2.26";
                                  VouchedDigest = "AB"; ImageDigest = "AB"; SignatureValid = $true; Timestamped = $false }
     Assert-True ((Test-ProjectTestSignature -Signature $tsGood -Thumbprint $tsThumb) -eq "") `
         "Test-ProjectTestSignature refused the signature record 19 prescribes."
@@ -2359,6 +2361,9 @@ try {
         @{ Name = "unsigned";    Set = $null;                                 Says = "no embedded signature" },
         @{ Name = "other cert";  Set = @{ Thumbprint = "FF" + $tsThumb.Substring(2) }; Says = "not by the project test certificate" },
         @{ Name = "SHA-256";     Set = @{ DigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "SHA-256 file"; Set = @{ IndirectDigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "plain CMS";   Set = @{ ContentType = "1.2.840.113549.1.7.1" }; Says = "not an Authenticode PE-image signature" },
+        @{ Name = "not a PE";    Set = @{ DataOid = "1.3.6.1.4.1.311.2.1.25" }; Says = "not an Authenticode PE-image signature" },
         @{ Name = "bad PKCS #7"; Set = @{ SignatureValid = $false };          Says = "does not verify" },
         @{ Name = "stale digest"; Set = @{ ImageDigest = "CD" };              Says = "is not the image's" },
         @{ Name = "no digest";   Set = @{ VouchedDigest = ""; ImageDigest = "" }; Says = "is not the image's" },
@@ -2374,6 +2379,48 @@ try {
         Assert-True ($why -match [regex]::Escape($c.Says)) `
             ("Test-ProjectTestSignature on the '{0}' mock said '{1}', expected '{2}'." -f $c.Name, $why, $c.Says)
     }
+
+    Write-Step "x64 test signature: the SpcIndirectDataContent parser (encoded bytes)"
+    # A real encoding of the structure SignTool writes: data { SPC_PE_IMAGE_DATA },
+    # messageDigest { { sha1, NULL }, OCTET STRING of 20 bytes }.
+    $spcDigest = [byte[]](1..20)
+    $spcAlg = [byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00)
+    $spcData = [byte[]](0x30, 0x0C, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F)
+    $spcDigestInfo = [byte[]](@(0x30, 0x21) + $spcAlg + @(0x04, 0x14) + $spcDigest)
+    $spcBody = [byte[]]($spcData + $spcDigestInfo)
+    $spcGood = [byte[]](@(0x30, $spcBody.Length) + $spcBody)
+    $spc = ConvertFrom-SpcIndirectData -Content $spcGood
+    Assert-True ($spc.DataOid -eq "1.3.6.1.4.1.311.2.1.15" -and $spc.DigestOid -eq "1.3.14.3.2.26" -and
+                 $spc.Digest -eq "0102030405060708090A0B0C0D0E0F1011121314") `
+        ("ConvertFrom-SpcIndirectData misread a well-formed encoding: {0} {1} {2}" -f $spc.DataOid, $spc.DigestOid, $spc.Digest)
+    $spcBad = @(
+        @{ Name = "trailing byte";   Bytes = [byte[]]($spcGood + @(0x00)) },
+        @{ Name = "not a SEQUENCE";  Bytes = [byte[]](@(0x31, $spcBody.Length) + $spcBody) },
+        @{ Name = "digest only";     Bytes = [byte[]](@(0x30, 0x16, 0x04, 0x14) + $spcDigest) },
+        @{ Name = "digest not last"; Bytes = [byte[]](@(0x30, ($spcBody.Length + 2)) + $spcBody + @(0x05, 0x00)) },
+        @{ Name = "truncated";       Bytes = [byte[]]($spcGood[0..($spcGood.Length - 2)]) }
+    )
+    foreach ($c in $spcBad) {
+        $threw = $false
+        try { [void](ConvertFrom-SpcIndirectData -Content $c.Bytes) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-SpcIndirectData accepted the '{0}' encoding, so a CMS message ending in the right digest could pass as Authenticode." -f $c.Name)
+    }
+
+    # The pinned thumbprint is the one design record 19 records, and the
+    # packager signs only after the import gates have read the build, whose
+    # SITES rule needs the objects beside the image (review round 1).
+    $rec19 = [System.IO.File]::ReadAllText((Join-Path $repo "docs\contributing\design\19-x64-test-signing.md"))
+    Assert-True ($rec19.Contains($script:TestSignThumbprint)) `
+        "package-common.ps1's pinned thumbprint $($script:TestSignThumbprint) is not the one design record 19 records."
+    $tsPkgText = [System.IO.File]::ReadAllText($packager)
+    $tsSignAt = $tsPkgText.IndexOf('Write-Step "x64 test signature (design record 19)"')
+    $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
+    $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
+    $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
+    Assert-True ($tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0) `
+        "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
+    Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
+        "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."
 
     Write-Step "x64 test signature: the packager's and the cut's refusals"
     $tsMissing = Join-Path $script:work "no-such-key.pfx"

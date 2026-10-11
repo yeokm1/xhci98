@@ -2890,10 +2890,13 @@ What the signature costs and what it does not: the embedded signature appends
 1,024 bytes to the amd64 `release` binary (94,720 to 95,744) and changes
 nothing else. `SignTool verify /pa` then **fails** on the host with "A
 certificate chain processed, but terminated in a root certificate which is not
-trusted by the trust provider" - which is the expected result and is precisely
-the guest-side cost: the test root has to be imported into the guest's
+trusted by the trust provider" - which is the expected result. This probe
+went on to say that the test root had to be imported into the guest's
 **Trusted Root Certification Authorities and Trusted Publishers** stores, both,
-before `bcdedit -set TESTSIGNING ON` buys anything. Nothing from this probe was
+before `bcdedit -set TESTSIGNING ON` bought anything; that was an
+expectation, never read on a guest, and design record 19's route imports
+nothing (its guest legs read whether test-signing mode loads the driver
+without it). Nothing from this probe was
 left behind: the certificate was removed from the host store afterwards, and no
 file in the repository was changed by it.
 
@@ -2966,7 +2969,8 @@ binaries are never signed.
 - **How a cut signs.** `make-release.ps1 -TestSignPfx <path>` (releases
   `README.md`, "Cutting a release"); the password from
   `XHCI98_TESTSIGN_PW` or a prompt. Each x64 leg's `make-package.ps1` signs
-  copies of the two binaries before its gates, checks each signature
+  copies of the two binaries after its import gates have read the build,
+  checks each signature
   (thumbprint, SHA-1, digest, no timestamp) and that the copy is the build
   plus the signature and nothing else, and stages `xhci98-test.cer`. The
   cut repeats both checks on the published copies. **A cut that publishes

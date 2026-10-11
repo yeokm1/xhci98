@@ -154,6 +154,79 @@ $script:TestSignSubject = "CN=xhci98 project test signing (not trusted)"
 $script:TestSignCerName = "xhci98-test.cer"
 $script:TestSignPasswordVariable = "XHCI98_TESTSIGN_PW"
 $script:Sha1Oid = "1.3.14.3.2.26"
+$script:SpcIndirectDataOid = "1.3.6.1.4.1.311.2.1.4"
+$script:SpcPeImageDataOid = "1.3.6.1.4.1.311.2.1.15"
+# The project test certificate's SHA-1 thumbprint (record 19 section 10):
+# the one key a published x64 binary may be signed with. A new key is a
+# decision recorded there first, and then this line.
+$script:TestSignThumbprint = "A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF"
+
+function Read-DerTlv {
+    # One DER tag-length-value at $At: the tag, where the value starts and
+    # where the element ends. Definite lengths only (DER has no other).
+    param([byte[]]$B, [int]$At, [int]$Limit)
+    if ($At + 2 -gt $Limit) { throw "DER: element at $At runs past its container" }
+    $tag = $B[$At]
+    $l = [int]$B[$At + 1]
+    $p = $At + 2
+    if ($l -band 0x80) {
+        $n = $l -band 0x7F
+        if ($n -lt 1 -or $n -gt 3 -or $p + $n -gt $Limit) { throw "DER: unsupported length form at $At" }
+        $l = 0
+        for ($i = 0; $i -lt $n; $i++) { $l = ($l -shl 8) -bor [int]$B[$p + $i] }
+        $p += $n
+    }
+    if ($p + $l -gt $Limit) { throw "DER: element at $At runs past its container" }
+    return @{ Tag = $tag; ValueAt = $p; Length = $l; End = $p + $l }
+}
+
+function ConvertFrom-DerOid {
+    param([byte[]]$B, [int]$At, [int]$Length)
+    if ($Length -lt 1) { throw "DER: empty OID" }
+    $parts = New-Object System.Collections.ArrayList
+    $first = [int]$B[$At]
+    [void]$parts.Add([math]::Min([math]::Floor($first / 40), 2))
+    [void]$parts.Add($first - 40 * $parts[0])
+    $v = [int64]0
+    for ($i = $At + 1; $i -lt $At + $Length; $i++) {
+        $v = ($v -shl 7) -bor ([int64]$B[$i] -band 0x7F)
+        if (($B[$i] -band 0x80) -eq 0) { [void]$parts.Add($v); $v = 0 }
+    }
+    return ($parts -join ".")
+}
+
+function ConvertFrom-SpcIndirectData {
+    # SpcIndirectDataContent ::= SEQUENCE { data SEQUENCE { type OID, value
+    # ANY OPTIONAL }, messageDigest SEQUENCE { digestAlgorithm SEQUENCE { OID,
+    # parameters ANY OPTIONAL }, digest OCTET STRING } }, parsed strictly:
+    # every element where it belongs and nothing after it. Returns the data
+    # type's OID, the digest algorithm's OID and the digest as hex.
+    param([byte[]]$Content)
+    if ($null -eq $Content -or $Content.Length -lt 2) { throw "no SpcIndirectDataContent" }
+    $outer = Read-DerTlv -B $Content -At 0 -Limit $Content.Length
+    if ($outer.Tag -ne 0x30 -or $outer.End -ne $Content.Length) { throw "SpcIndirectDataContent is not one SEQUENCE" }
+    $data = Read-DerTlv -B $Content -At $outer.ValueAt -Limit $outer.End
+    if ($data.Tag -ne 0x30) { throw "SpcIndirectDataContent.data is not a SEQUENCE" }
+    $dataType = Read-DerTlv -B $Content -At $data.ValueAt -Limit $data.End
+    if ($dataType.Tag -ne 0x06) { throw "SpcIndirectDataContent.data.type is not an OID" }
+    $digestInfo = Read-DerTlv -B $Content -At $data.End -Limit $outer.End
+    if ($digestInfo.Tag -ne 0x30 -or $digestInfo.End -ne $outer.End) { throw "SpcIndirectDataContent.messageDigest is not the last SEQUENCE" }
+    $alg = Read-DerTlv -B $Content -At $digestInfo.ValueAt -Limit $digestInfo.End
+    if ($alg.Tag -ne 0x30) { throw "DigestInfo.digestAlgorithm is not a SEQUENCE" }
+    $algOid = Read-DerTlv -B $Content -At $alg.ValueAt -Limit $alg.End
+    if ($algOid.Tag -ne 0x06) { throw "DigestInfo.digestAlgorithm.algorithm is not an OID" }
+    $octets = Read-DerTlv -B $Content -At $alg.End -Limit $digestInfo.End
+    if ($octets.Tag -ne 0x04 -or $octets.End -ne $digestInfo.End) { throw "DigestInfo.digest is not the last OCTET STRING" }
+    $hex = ""
+    if ($octets.Length -gt 0) {
+        $hex = (($Content[$octets.ValueAt..($octets.End - 1)] | ForEach-Object { $_.ToString("X2") }) -join "")
+    }
+    return [pscustomobject]@{
+        DataOid   = ConvertFrom-DerOid -B $Content -At $dataType.ValueAt -Length $dataType.Length
+        DigestOid = ConvertFrom-DerOid -B $Content -At $algOid.ValueAt -Length $algOid.Length
+        Digest    = $hex
+    }
+}
 
 function Get-PeSecurityLayout {
     # Where a PE image keeps its checksum and its certificate-table directory
@@ -265,16 +338,12 @@ function Get-EmbeddedSignature {
     $valid = $true
     try { $cms.CheckSignature($true) } catch { $valid = $false }
 
-    # SpcIndirectDataContent ends with the DigestInfo's OCTET STRING, so the
-    # digest it vouches for is the content's last bytes: 20 for SHA-1.
-    $content = $cms.ContentInfo.Content
-    $digestLen = if ($signer.DigestAlgorithm.Value -eq $script:Sha1Oid) { 20 } else { 32 }
-    $vouched = ""
-    if ($content.Length -ge $digestLen + 2 -and $content[$content.Length - $digestLen - 2] -eq 0x04 -and
-        $content[$content.Length - $digestLen - 1] -eq $digestLen) {
-        $vouched = (($content[($content.Length - $digestLen)..($content.Length - 1)] |
-                     ForEach-Object { $_.ToString("X2") }) -join "")
-    }
+    # What the signature vouches for is the SpcIndirectDataContent it signs:
+    # parsed in full, so that only an Authenticode PE-image signature, with
+    # its own digest algorithm and digest, can pass the verdict - not any
+    # CMS message by the right certificate that happens to end in the right
+    # bytes (review round 1).
+    $indirect = ConvertFrom-SpcIndirectData -Content $cms.ContentInfo.Content
 
     $sha1 = [System.Security.Cryptography.SHA1]::Create()
     try {
@@ -293,7 +362,10 @@ function Get-EmbeddedSignature {
         Thumbprint     = $(if ($null -ne $signer.Certificate) { $signer.Certificate.Thumbprint } else { "" })
         Subject        = $(if ($null -ne $signer.Certificate) { $signer.Certificate.Subject } else { "" })
         DigestOid      = $signer.DigestAlgorithm.Value
-        VouchedDigest  = $vouched
+        ContentType    = $cms.ContentInfo.ContentType.Value
+        DataOid        = $indirect.DataOid
+        IndirectDigestOid = $indirect.DigestOid
+        VouchedDigest  = $indirect.Digest
         ImageDigest    = $actual
         SignatureValid = $valid
         Timestamped    = ($signer.UnsignedAttributes.Count -gt 0)
@@ -310,8 +382,12 @@ function Test-ProjectTestSignature {
     if ($Signature.Thumbprint -ne $Thumbprint) {
         return ("it is signed by certificate {0}, not by the project test certificate {1}" -f $Signature.Thumbprint, $Thumbprint)
     }
-    if ($Signature.DigestOid -ne $script:Sha1Oid) {
-        return ("its file digest is {0}, not SHA-1 ({1}), which Vista x64 cannot verify" -f $Signature.DigestOid, $script:Sha1Oid)
+    if ($Signature.ContentType -ne $script:SpcIndirectDataOid -or $Signature.DataOid -ne $script:SpcPeImageDataOid) {
+        return ("it is not an Authenticode PE-image signature (content {0}, data {1})" -f $Signature.ContentType, $Signature.DataOid)
+    }
+    if ($Signature.DigestOid -ne $script:Sha1Oid -or $Signature.IndirectDigestOid -ne $script:Sha1Oid) {
+        return ("its digests are {0} (signer) and {1} (file), not SHA-1 ({2}), which Vista x64 cannot verify" -f `
+            $Signature.DigestOid, $Signature.IndirectDigestOid, $script:Sha1Oid)
     }
     if (-not $Signature.SignatureValid) { return "its PKCS #7 signature does not verify" }
     if ($Signature.VouchedDigest -eq "" -or $Signature.VouchedDigest -ne $Signature.ImageDigest) {
@@ -344,6 +420,12 @@ function Get-TestSignCertificate {
     if (-not (Test-Path -LiteralPath $PfxPath -PathType Leaf)) {
         throw "no test-signing key at '$PfxPath'."
     }
+    # EphemeralKeySet keeps the key out of every key store; it exists from
+    # .NET Framework 4.7.2. Refused rather than replaced by a flag that
+    # would persist the private key in the user's profile.
+    if (-not [Enum]::IsDefined([System.Security.Cryptography.X509Certificates.X509KeyStorageFlags], "EphemeralKeySet")) {
+        throw "opening the test-signing key needs .NET Framework 4.7.2 or later (X509KeyStorageFlags.EphemeralKeySet), which this host lacks."
+    }
     $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
     try {
         $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($PfxPath, $Password, $flags)
@@ -356,6 +438,9 @@ function Get-TestSignCertificate {
         }
         if ($cert.Subject -ne $script:TestSignSubject) {
             throw "'$PfxPath' is the certificate '$($cert.Subject)', not the project test certificate '$($script:TestSignSubject)' (design record 19)."
+        }
+        if ($cert.Thumbprint -ne $script:TestSignThumbprint) {
+            throw "'$PfxPath' holds the certificate $($cert.Thumbprint), not the project test certificate $($script:TestSignThumbprint) that design record 19 section 10 records. A new key is recorded there before it signs anything."
         }
         return [pscustomobject]@{
             Thumbprint = $cert.Thumbprint

@@ -105,7 +105,7 @@ try {
     try {
         $s1 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b1)
         $s2 = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($b2)
-        if ($s1 -ne $s2) { throw "the two passwords differ - nothing written beyond the .pvk and .cer; delete them and run again." }
+        if (-not [string]::Equals($s1, $s2, [System.StringComparison]::Ordinal)) { throw "the two passwords differ - nothing written beyond the .pvk and .cer; delete them and run again." }
         if ($s1.Length -eq 0) { throw "an empty password is refused." }
         Write-Host "pvk2pfx (a dialog asks for the private-key password from step 1)..."
         & $pvk2pfx -pvk xhci98-test.pvk -spc xhci98-test.cer -pfx xhci98-test.pfx -po $s1

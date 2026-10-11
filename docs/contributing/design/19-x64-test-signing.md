@@ -99,7 +99,8 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 ## 4. The certificate and the key
 
 **The certificate is the project's own, made once by the maintainer who
-holds the key**, with WDK 7.1's MakeCert and pvk2pfx, both in
+holds the key** (the owner made it on 2026-10-11; section 10 records it),
+with WDK 7.1's MakeCert and pvk2pfx, both in
 `tools\WinDDK71\bin\x86` (used in place, never redistributed;
 `legal-provenance.md`). `scripts\package\make-testcert.ps1` runs exactly
 the commands below with guards around them (it refuses to overwrite an
@@ -172,16 +173,28 @@ password are not.
 ## 5. Where it happens: the packager
 
 - **`make-package.ps1 -TestSignPfx <path>`** (amd64 only) opens the .pfx
-  (refusing a wrong password, a file with no private key, or a subject
-  other than the project's), then signs **copies** of `xhci98.sys` and
-  `xhciuas.sys` in a temporary folder *before* the import gates and
-  version checks run, so every gate reads the signed bytes that are
-  staged. Each copy is held to two checks before it is used: its parsed
-  signature is the project certificate's by thumbprint, with a SHA-1
-  digest that matches the image, a PKCS #7 signature that verifies and no
-  countersignature (`Test-ProjectTestSignature`); and it is the build byte
-  for byte apart from the checksum, the directory entry, the padding and
-  the table (`Test-SignedImageOf`). An input that is already signed is
+  (refusing a wrong password, a file with no private key, a subject other
+  than the project's, or any certificate but the one whose thumbprint
+  section 10 records - `$script:TestSignThumbprint` in
+  `package-common.ps1`), lets the import gates read the build where it was
+  linked (their `SITES` rule needs the objects, or for LTCG objects the
+  sources, beside the image), and then signs **copies** of `xhci98.sys`
+  and `xhciuas.sys` in a temporary folder before staging. Each copy is
+  held to two checks before it is used: its parsed signature is the
+  project certificate's by thumbprint, an Authenticode PE-image signature
+  (content `SPC_INDIRECT_DATA`, data `SPC_PE_IMAGE_DATA`, the
+  `SpcIndirectDataContent` parsed in full) with SHA-1 as both the signer's
+  and the file digest, the vouched digest equal to the image's, a PKCS #7
+  signature that verifies and no countersignature
+  (`Test-ProjectTestSignature`); and it is the build byte for byte apart
+  from the checksum, the directory entry, the padding and the table
+  (`Test-SignedImageOf`). So what the import gates read is what ships, and
+  the version check against the INF, and every check `make-release.ps1`
+  makes, read the signed copy itself. The image digest is computed over the
+  file in order less the checksum, the directory entry and the table, which
+  equals Authenticode's for a linker-produced image (checked 2026-10-11 on
+  three Microsoft-signed Windows 11 drivers, whose SHA-256 vouched digests
+  it reproduced); an image laid out otherwise fails as a mismatch. An input that is already signed is
   refused: nothing is signed by hand. The certificate's public half is
   staged at the package root as `xhci98-test.cer`. Without `-TestSignPfx`
   the package is staged unsigned, exactly as before - enough for a guest
@@ -191,8 +204,8 @@ password are not.
   directory and was not given `-TestSignPfx` stops with a message naming
   this record. With the key, it opens the .pfx once (so a wrong password
   costs a prompt, not two builds), hands the password to each x64 leg's
-  `make-package.ps1` through `XHCI98_TESTSIGN_PW` in its own process
-  environment, and then holds each published x64 `xhci98.sys` and
+  `make-package.ps1` through `XHCI98_TESTSIGN_PW`, set in its own process
+  environment around that one call and restored after it, and then holds each published x64 `xhci98.sys` and
   `xhciuas.sys` to the same two checks against the build output beside its
   source stamp (`Assert-TestSigned`), and the published `xhci98-test.cer`
   to the key's public half byte for byte. The x86 legs are held, as
@@ -247,13 +260,17 @@ before the boot setting is changed, or the next start asks for the
 recovery key. Secure Boot does not arise: Vista and 7 do not support it.
 32-bit Vista and 7 and XP x64 need none of this.
 
-**Importing `xhci98-test.cer` is optional and not recommended.** It is not
-needed for test-signing mode; imported into Trusted Root Certification
-Authorities and Trusted Publishers it would only quiet the install prompt,
-at the price of the machine trusting a certificate this project made -
-which is the user's decision, and the docs advise against it. The user
-docs (`README.md`, `docs\using\release-notes.md`, the release readme) carry
-this procedure in those words.
+**Importing `xhci98-test.cer` is not needed and not recommended.** Test-
+signing mode loads the driver without it, and it does not quiet the install
+prompt either: Plug and Play judges the driver package by its catalog, and
+this package deliberately has none (section 3), so trusting the binaries'
+signer does not sign the package (review round 1, which corrected an
+earlier draft of this record). Imported into a trusted store it would only
+make the machine trust a certificate this project made - which is the
+user's decision, and the docs advise against it. The `.cer` is shipped so
+that anyone can compare a signed binary's signer with the thumbprint of
+section 10. The user docs (`README.md`, `docs\using\release-notes.md`, the
+release readme) carry this procedure in those words.
 
 ## 8. What it is not
 
@@ -288,11 +305,18 @@ points here.
   is not timestamped" and the untrusted-root failure; two runs give
   identical bytes; `Get-EmbeddedSignature` parses the signature as SHA-1
   (`1.3.14.3.2.26`) by that certificate's thumbprint.
-- **The project certificate's thumbprint**, the signed `2.2.0.3` re-cut,
-  and the guest legs - Vista x64 and Windows 7 x64 in test-signing mode
-  with no F8, twice; the same without test-signing mode (the Code shown);
-  XP x64 unaffected - are read after the owner's key is in hand, and are
-  recorded here and in `runs/run-36.md`.
+- **The project certificate**, made by the owner on 2026-10-11 with the
+  commands of section 4 (`scripts\local\testsign\xhci98-test.pfx`, public
+  half `scripts\local\testsign\xhci98-test.cer`): subject `CN=xhci98
+  project test signing (not trusted)`, valid 2000-01-01 to 2039-12-31,
+  `sha1RSA`, RSA 2048, **SHA-1 thumbprint
+  `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`**. This is the value the
+  packager checks every signature against and the only key a published x64
+  binary may carry.
+- The signed `2.2.0.3` re-cut and the guest legs - Vista x64 and Windows 7
+  x64 in test-signing mode with no F8, twice; the same without test-signing
+  mode (the Code shown); XP x64 unaffected - are read at the first signed
+  cut and recorded here and in `runs/run-36.md`.
 - Unread, and not planned: real hardware under test-signing mode; a
   Windows 7 x64 with the SHA-2 update; Server 2003 x64 (identity with XP
   x64, which ignores signatures).

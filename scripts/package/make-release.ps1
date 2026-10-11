@@ -568,7 +568,7 @@ $pswPublishable = @("portsw.vbs")
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.2.0.3, beside the
 # binaries it signed. Not an INF-declared file: the setup engine never reads
-# it, and a user may inspect or import it. A version published before 2.2.0.3
+# it, and it is there to check a signer's thumbprint against. A version published before 2.2.0.3
 # has none, so it is accepted where present and not required of one. Never
 # the .pfx, which holds the private key and is never staged.
 $certPublishable = @("xhci98-test.cer")
@@ -1933,13 +1933,13 @@ under the git-ignored out\, holding a history.md that carries the build's entry.
             throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
         }
         $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
-        # Asked once here and handed to each make-package.ps1 child through
-        # XHCI98_TESTSIGN_PW in this process's environment only, which ends
-        # with the run; never printed, never written to a file.
+        # Asked once here and held in this script's memory; each x64
+        # make-package.ps1 child gets it through XHCI98_TESTSIGN_PW, set in
+        # this process's environment only around that one call and restored
+        # after it (review round 1: a script run from an open session must
+        # not leave the password in it). Never printed, never written.
         $testSignPassword = Get-TestSignPassword
         $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
-        [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
-        $testSignPassword = $null
         Write-Ok ("x64 binaries will be signed by the project test certificate {0}" -f $testSignCert.Thumbprint)
     } elseif (-not $UploadSetOnly -and $Arch -contains "x64") {
         throw @"
@@ -2399,9 +2399,16 @@ the result in place of the marker, then cut again. The first:
         # never showed it.
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
+        $savedPw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
         try {
+            if ($legSigned) {
+                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
+            }
             & powershell.exe @pkgArgs
         } finally {
+            if ($legSigned) {
+                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $savedPw, "Process")
+            }
             $ErrorActionPreference = $savedEap
         }
         if ($LASTEXITCODE -ne 0) {
@@ -3120,8 +3127,9 @@ other.
       - This is not Microsoft signing: the certificate is this project's
         own test certificate, which no Windows trusts by itself.
       - The X64 directories carry xhci98-test.cer, its public half.
-        Test-signing mode does not need it imported; importing it only
-        quiets the install prompt, and is not recommended.
+        Importing it is not needed: test-signing mode works without it,
+        and it does not remove the install prompt either. It is not
+        recommended.
       - F8 -> Disable Driver Signature Enforcement still works as before,
         for one start, without test mode.
       - 32-bit Vista and 7, and XP x64, need neither.

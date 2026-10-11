@@ -132,12 +132,15 @@ the driver in test-signing mode instead of only on an F8 start. The password
 comes from the XHCI98_TESTSIGN_PW environment variable or, where that is
 unset, a prompt; it is never printed.
 
-The binaries are signed in a temporary copy before any gate runs, so the
-import gates and every check below read the signed bytes that are staged.
-Each signed copy is held to two things before it is used: the signature is
-the project certificate's, with a SHA-1 digest that matches the image and no
-timestamp; and the copy is the build byte for byte apart from the checksum,
-the certificate-table entry and the appended table. Refused for the x86
+The binaries are signed in temporary copies after the import gates have read
+the build (their SITES rule needs the objects beside the image) and before
+staging. Each signed copy is held to two things before it is used: the
+signature is the project certificate's, an Authenticode PE-image signature
+with SHA-1 digests that match the image and no timestamp; and the copy is
+the build byte for byte apart from the checksum, the certificate-table entry
+and the appended table - so what the gates read is what ships, and the
+version check below reads the signed copy itself. The .pfx must hold the
+project certificate whose thumbprint record 19 section 10 records. Refused for the x86
 package (32-bit Windows does not enforce kernel-mode signing, and the x86
 binaries are never signed) and for a binary that is already signed (the
 packager signs; nothing is signed by hand). Without it the package is staged
@@ -694,38 +697,6 @@ Clear XHCI_EXTRA_DEFINES and rebuild:
 "@
     }
 
-    # --- the x64 test signature (design record 19) ----------------------------
-    #
-    # Before the gates rather than after them, so that what the import gates
-    # and the version checks read is what is staged: the signed copies take
-    # the place of the build's paths from here on. A signed copy is held to
-    # the build's bytes (Invoke-TestSign), so nothing the gates say about the
-    # build stops being true of it.
-    $testSignCert = $null
-    if ($TestSignPfx -ne "") {
-        Write-Step "x64 test signature (design record 19)"
-        $signTool = Join-Path $repo "tools\WinDDK71\bin\x86\SignTool.exe"
-        if (-not (Test-Path -LiteralPath $signTool)) {
-            throw "no SignTool at '$signTool'. It is WDK 7.1's (tools\WinDDK71, docs\contributing\build-and-test.md)."
-        }
-        $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
-        $testSignPassword = Get-TestSignPassword
-        $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
-        $signDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-sign-" + [System.IO.Path]::GetRandomFileName())
-        Ensure-Directory $signDir
-        $signedDriver = Join-Path $signDir "xhci98.sys"
-        Invoke-TestSign -Source $DriverPath -Dest $signedDriver -Pfx $TestSignPfx -Password $testSignPassword `
-                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys"
-        $DriverPath = $signedDriver
-        if ($stageUas -and (Test-Path -LiteralPath $UasDriverPath)) {
-            $signedUas = Join-Path $signDir "xhciuas.sys"
-            Invoke-TestSign -Source $UasDriverPath -Dest $signedUas -Pfx $TestSignPfx -Password $testSignPassword `
-                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys"
-            $UasDriverPath = $signedUas
-        }
-        $testSignPassword = $null
-    }
-
     # --- the two gates that must have passed before a VM sees the binary -----
     #
     # build-driver.cmd runs both, but it is not the only way a .sys can appear
@@ -875,6 +846,43 @@ The x86 package carries the NT 6 x86 MSI helper its INF names. Build it first
         }
     }
 
+    # --- the x64 test signature (design record 19) ----------------------------
+    #
+    # After the import gates and before staging. The import gates read the
+    # build where it was linked, because their SITES rule needs the objects
+    # (or, for LTCG objects, the sources) beside the image, which a copy in
+    # a temporary folder does not have (review round 1). What the gates read
+    # is nevertheless what ships: each signed copy is held to the build byte
+    # for byte apart from the checksum, the certificate-table entry and the
+    # appended table (Invoke-TestSign), none of which the import table, the
+    # sections or the flavour marker lives in. From here on the signed copies
+    # take the place of the build's paths, so the version check against the
+    # INF below, and every check make-release.ps1 makes, read signed bytes.
+    $testSignCert = $null
+    if ($TestSignPfx -ne "") {
+        Write-Step "x64 test signature (design record 19)"
+        $signTool = Join-Path $repo "tools\WinDDK71\bin\x86\SignTool.exe"
+        if (-not (Test-Path -LiteralPath $signTool)) {
+            throw "no SignTool at '$signTool'. It is WDK 7.1's (tools\WinDDK71, docs\contributing\build-and-test.md)."
+        }
+        $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
+        $testSignPassword = Get-TestSignPassword
+        $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
+        $signDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-sign-" + [System.IO.Path]::GetRandomFileName())
+        Ensure-Directory $signDir
+        $signedDriver = Join-Path $signDir "xhci98.sys"
+        Invoke-TestSign -Source $DriverPath -Dest $signedDriver -Pfx $TestSignPfx -Password $testSignPassword `
+                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys"
+        $DriverPath = $signedDriver
+        if ($stageUas -and (Test-Path -LiteralPath $UasDriverPath)) {
+            $signedUas = Join-Path $signDir "xhciuas.sys"
+            Invoke-TestSign -Source $UasDriverPath -Dest $signedUas -Pfx $TestSignPfx -Password $testSignPassword `
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys"
+            $UasDriverPath = $signedUas
+        }
+        $testSignPassword = $null
+    }
+
     # --- where each file goes, from the gate's own parse ---------------------
     Write-Step "INF gate, and the media layout it derives"
 
@@ -955,8 +963,9 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $PswScriptPath -Destination (Join-Path $stageDir "portsw.vbs") -Force
     }
     # The signing certificate's public half at the root, beside the signed
-    # binaries (design record 19): what a user may inspect, or import to
-    # quiet the install prompt. Never the .pfx.
+    # binaries (design record 19): what a user or a reviewer checks the
+    # signer's thumbprint against. Importing it is not needed and does not
+    # sign the package. Never the .pfx.
     if ($null -ne $testSignCert) {
         [System.IO.File]::WriteAllBytes((Join-Path $stageDir $script:TestSignCerName), $testSignCert.CerBytes)
     }

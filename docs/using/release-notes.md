@@ -97,9 +97,9 @@ included.
   boot setting, or the next boot asks for the recovery key.
 - This is not Microsoft signing: the certificate is the project's own test
   certificate, which no Windows trusts by itself.
-- Importing the `xhci98-test.cer` in the `-x64` directories is not needed
-  for test-signing mode (it only affects the install prompt) and is not
-  recommended.
+- Importing the `xhci98-test.cer` in the `-x64` directories is not needed:
+  test-signing mode works without it, and it does not remove the install
+  prompt either. It is not recommended.
 - F8 -> "Disable Driver Signature Enforcement" still works as before, for
   one boot, without test mode. After an install on such a start the Program
   Compatibility Assistant may say "Windows requires a digitally signed

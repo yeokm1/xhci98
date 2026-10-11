@@ -128,7 +128,7 @@ Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off: `bcdedit 
 
 - With BitLocker on the system drive, suspend BitLocker before changing the boot setting, or the next boot asks for the recovery key.
 - This is not Microsoft signing: the certificate is the project's own test certificate, which no Windows trusts by itself.
-- Importing the `xhci98-test.cer` in the `-x64` directories is not needed for test-signing mode (it only affects the install prompt) and is not recommended.
+- Importing the `xhci98-test.cer` in the `-x64` directories is not needed: test-signing mode works without it, and it does not remove the install prompt either. It is not recommended.
 - F8 -> "Disable Driver Signature Enforcement" still works as before, for one boot, without test mode.
 - 32-bit Vista and 7, and XP x64, need neither.
 
@@ -368,7 +368,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 | Windows 2000 SP4 | VMs only, under Driver Verifier and on a multiprocessor guest: the same as Windows 98 SE, including UAS and forced Bulk-Only. SuperSpeed hubs untested. |
 | Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. The `2.0.0.0` hang on re-enabling the controller with a mouse attached is fixed in `2.1.0.0`. |
 | Windows XP, 32-bit and x64 | VMs only: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. |
-| Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs only: the same, on four virtual processors. On the x64 systems, in test-signing mode or with driver signature enforcement disabled. |
+| Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs only: the same, on four virtual processors. On the x64 systems, driver signature enforcement disabled. |
 | The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. |
 
 | Machine | Controller | Tested by |
