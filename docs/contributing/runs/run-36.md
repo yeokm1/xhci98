@@ -2819,3 +2819,128 @@ Result cell in bold.
 | 7 x64 | RM-7x64 mode 3 | rel | PASS | setv 0000 XhciInterruptMode 3 (rm3-set.txt), shutdown /r, F8 DSE (rm3-f8sel); rm3.txt: intr.mode.read 3, intr.mode 3, intr.delivery 5 -> 4, ... |
 | 7 x64 | RM-7x64 mode 0 (and the end state) | rel | PASS | setv 0000 XhciInterruptMode 0 (rm0-set.txt), shutdown /r, F8 DSE (rm0-f8sel); rm0.txt: intr.mode.read 0, intr.mode 0, intr.delivery 5 -> 4, ... |
 | 7 x64 | RS5 | rel | PASS | run 1 (n=2, after RS4 resume + RM modes, mode 0, with stick, mouse, usb-audio a3, hub h3 + tablet tb3 attached; rs5-start2/rs5-hover2): clic... |
+
+## The owner's bench, 2026-10-11
+
+The owner's real-hardware bench for `2.3.0.0`, read after the cut on the
+owner's own machines. The orchestrator recorded the readings as they came
+in. Raw files: the `XHCISNAP` reports in `temp\2300bench\` (`.TXT`, `.BIN`,
+`.PSC`; git-ignored, kept on development host A) and the `XHCIQUAL` logs
+in `xhciqual\results\e7250-2026-10-11\` (git-ignored; its `README.md` has
+the commands). The bench plan is roadmap 36.final's checkpoint and 36.14.
+
+**The packages.**
+- The first signed cut, `DriverVer` 10/11/2026 (`out\p36-stamp3`, zip
+  SHA-256 `879768458F92...2265E`).
+- The 36.57 test build, `dad964f`, test-signed, its `xhci98.sys` put in
+  place by hand on the E7250 under Windows 7 x64.
+- The final signed re-cut, `DriverVer` 10/12/2026 (`out\p36-stamp4`, zip
+  1,057,739 bytes, SHA-256 `025EA20C...1A1EE3`; `verify-cut.ps1` 84 PASS,
+  0 FAIL), now `releases\2.3.0.0\`.
+
+**Dell Latitude E7250** (Intel Wildcat Point-LP, `8086:9CB1`, subsystem
+`1028:062D`, xHCI 1.0, with the EHCI beside it; BIOS A17).
+- **Windows 7 x64, first cut.** A fresh install with test-signing on: the
+  install asked about the publisher, as documented, and the driver loaded
+  with no F8.
+  - **Default** (`e7250-w7-msi`): a message (MSI) delivery, reason 10.
+    The routing repair decided `12 MESSAGE` with no `D20IR` write.
+    BackstopDrains 0 (no tolerance counter non-zero).
+  - **The switchover.** At its default `0` the USB 3 stick ran at USB 2.0
+    speed on the EHCI, as designed (that reading led to 36.56).
+    The switchover turned on (`XhciIntelPortSwitch` `1`) and a restart gave SuperSpeed on port 13 (speed ID 4,
+    5000 Mbit/s).
+  - **Port 2**, an empty switchable USB 2.0 port, logged one failed reset
+    at the start (`enum.port.fail`, PLS 5) and nothing after. Harmless.
+  - **`XhciInterruptMode` `1`** (`e7250-w7-line`, and
+    `e7250-w7-line-noehci` with the EHCI disabled in Device Manager): the
+    line, reason 5, the filter's outcome 10. The routing repair wrote
+    `D20IR` `3210` -> `3215` (INTA from PIRQA to PIRQF, IRQ 21) and read it
+    back. Transfers completed on the line with the EHCI disabled, and no
+    tolerance counter moved.
+  - **USB audio.** The C-Media (`0D8C:0014`, adaptive) played
+    (`cm`: IsoPacketsAnswered 6492). The Creative Sound Blaster Play! 2
+    (`041E:323D`, asynchronous with a feedback endpoint) played only hiss
+    (`e7250-w7-play2-hiss`: IsoSubmits 0, 1882 Stopped - Length Invalid):
+    task 36.57, `docs/issues/14-async-audio-explicit-startframe-no-cfc.md`. Each showed as a composite devnode
+    (CompositeParents 1). USBView read both devices' strings (`play2.txt`,
+    `cmedia.txt`).
+- **Windows 7 x64, the 36.57 test build `dad964f`.** The Play! 2 played
+  cleanly at 44.1 and 48 kHz (`pfix2`: IsoPacketsAnswered 13462), and over a
+  listen of about 4.75 minutes at 48 kHz (`p2long`: IsoPacketsAnswered
+  296075). The feedback endpoint (DCI 7) completes about half its reads
+  with a USB Transaction Error (4441 of 8922 in `p2long`), steadily; the
+  data endpoint is clean and nothing recovers. Harmless; cause open (issue
+  14). A `p2fix` capture of an earlier test build stayed silent.
+  - **Have Disk did not take the test build.** Its INF was byte-identical
+    to the installed one, so Windows 7 reused the package in its driver
+    store. The `.sys` was replaced by hand, and the re-cut took a new
+    `DriverVer` (10/12/2026) for that reason.
+- **Windows 7 x64, the final re-cut.** Installed over the first cut with
+  Have Disk; the Play! 2 plays well.
+- **Windows XP x64, first cut.**
+  - **Default** (`e7520-xp-default`): the routing repair wrote `D20IR`
+    `3210` -> `3215` (INTA from PIRQA to PIRQF, IRQ 21) and read it back;
+    delivery by the line, reason 1, no tolerance counter non-zero.
+  - **`XhciIntelIrqRoute` `0`** (`e7520-xp-route0`): the repair decided
+    `20 OFF` and wrote nothing, so the line was dead. Automatic mode moved
+    to polling at run time (delivery 2, reason 9; LineMoves 1). The line's
+    retirement was proven by a masked acknowledgement (LineMoveMasked 1).
+    A SuperSpeed stick on port 13 worked: copies compared clean with `fc`,
+    with no transfer error.
+  - **Polling on XP runs at the timer's granularity**, not at 1 ms:
+    PollIntervalMinMs 15 and PollIntervalMaxMs 62 over 3558 runs.
+- **XHCIQUAL `2.3.0.0` under MS-DOS 6.22**, booted from a USB 2.0 stick
+  left on the EHCI (`PROBE.LOG`, `POLL.LOG`, `IRQ.LOG`).
+  - `--probe-only --gsi 21`: no disqualifiers; `--gsi 21` **MISMATCH** (the
+    pin reaches PIRQA, GSI 16; 21 is PIRQF). This is right, and it is the
+    first real-hardware reading of `--gsi`.
+  - `--poll-only`: C1 to C3 PASS (PROVISIONAL, as designed).
+  - `--irq-selftest`: C4 PASS on IRQ 11. In PIC mode the BIOS routes PIRQA
+    to IRQ 11 and the Interrupt Line agrees, so under DOS the line works.
+    The E7250's fault is on the APIC side only. A dead line under DOS
+    cannot be read on this machine.
+- **Not read on the E7250:** standby (Windows 7 x64 has no graphics
+  driver there, so no S3), selective suspend and SuperSpeed remote wake
+  (the owner skipped them), and Windows 98 SE (not installed).
+
+**ThinkPad E460** (Intel Sunrise Point-LP, `8086:9D2F`), Windows 98 SE, the
+first cut.
+- **`XhciInterruptMode` `0`** (`e460def`): the line (delivery 1, reason 1),
+  with no dead-line move. About 18 GB through a SuperSpeed stick on port
+  14 (bulk data URBs 18,143,002,498 bytes; 607,199 commands), with no
+  transfer error, timeout or reset on the stick. The control endpoint
+  took two STALLs. The owner replugged the stick four times.
+- **`XhciInterruptMode` `2`** (`e460pol`): polling (delivery 2, reason
+  8), about 4 GB through the same stick (81,473 commands), with no error.
+- `fc /b` compared clean in both modes; the fastest copies ran at about
+  200 MB/s (the owner's reading).
+- A Low-Speed mouse worked on port 3. Ports 6 to 8, the machine's internal
+  devices, were addressed only, since Windows 98 SE has no drivers for
+  them.
+- **Not read:** standby. That Windows 98 SE install offers no Stand by.
+
+**ThinkPad P14s Gen 1**, Windows 98 SE: the owner's brief checks only,
+"driver works". No snapshot and no figure. The short list in the bench
+plan (an `fc`-checked copy, ATTO with the MSSU10 against the 36.21
+baseline, `XhciInterruptMode` `2`, a standby) was not run.
+
+**Not read on this bench** (the release notes' and README's "Untested
+ground"; roadmap "Planned - bench follow-up after `2.3.0.0`"):
+- standby (S3) on any real machine;
+- 36.40's SuperSpeed remote wake, at a root port and behind a USB 3 hub,
+  and 36.36's remote-wake HID device;
+- MSI-X on a real controller, and BackstopDrains under it;
+- a dead line under DOS;
+- Windows 98 SE on the E7250;
+- `XhciWideMap` on an updated 32-bit Windows 7, and `XhciWideMap` `1`
+  with a real UAS drive;
+- a real UAS drive under a transaction error or a stop;
+- the ATTO and MSSU10 speed comparison against 36.21's baseline (36.27).
+  The E460's about 200 MB/s is the only real-hardware speed reading.
+
+**Roadmap tasks whose bench clauses this reads:** 36.14 (the E460's mode
+2 and the E7250's dead-line move), 36.16 (MSI on the E7250 under 7 x64),
+36.43 (two composite audio devices on the E7250), 36.45 (USBView strings
+on the E7250), 36.57, and 36.final's E7250 check, but for S3 and Windows 98
+SE.

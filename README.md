@@ -165,6 +165,7 @@ Install the new version over the old one with Update Driver on "xHCI98 USB 3.x e
 - **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
 - **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory, and pick "xHCI98 USB 3.x eXtensible Host Controller", the first of the three models listed.
 - **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where it asks for a restart, for the MSI helper `xhcimsi.sys`. On Vista x64 and 7 x64 the new driver, like the first install, runs in test-signing mode or on a start with driver signature enforcement disabled.
+- **Vista and 7: a build with the same `DriverVer` is not taken.** If the new INF is identical to the installed one, Have Disk reuses the package already in Windows' driver store and keeps the old `xhci98.sys`. Replace the `.sys` by hand, or use a build with a newer `DriverVer`.
 
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
@@ -343,7 +344,7 @@ Under `1`, Vista and 7 are asked for the line, and a controller that is given a 
 Two more values set the polling periods, in ms:
 
 - `XhciPollIdleMs` (default `50`): with nothing outstanding.
-- `XhciPollActiveMs` (default `1`): with transfers outstanding.
+- `XhciPollActiveMs` (default `1`): with transfers outstanding. Windows runs the timer no faster than its clock allows: on the E7250 under XP x64, every 15 to 62 ms.
 
 The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
 
@@ -415,7 +416,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Real hardware: Windo
 | Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. |
 | Windows XP, 32-bit and x64 | VMs: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. Real hardware: XP x64 on the E7250. |
 | Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs: the same, on four virtual processors. On the x64 systems, in test-signing mode or with driver signature enforcement disabled (F8). Real hardware: 7 x64 on the E7250. |
-| The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. |
+| The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. `2.3.0.0` installed from its package on every system in VMs, and on the E7250 and the E460. |
 
 | Machine | Controller | Tested by |
 |---|---|---|
@@ -475,7 +476,15 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 | Stand by on Windows 98 SE | Read only in QEMU virtual machines, where Windows 98 SE itself does not resume reliably, with or without a USB controller. A USB disk attached when the computer started (Windows uses it in MS-DOS compatibility mode) stopped the resume before the desktop, under this driver and under NUSB's EHCI driver alike. A disk plugged in after Windows started, or a USB mouse alone or behind a hub, resumed and kept working. Untested on real hardware: remove USB disks before Stand by. See the release notes' "Known limitations". |
-| The Intel port switchover beyond the B490 | Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, systems other than Windows 98 SE, and standby. |
+| The Intel port switchover beyond the B490 and the E7250 | Device ids `8C31`, `9C31`, `8CB1` and `8D31`, systems other than Windows 98 SE and 7 x64, and standby. |
+| Standby (S3) on real hardware | Not read on any real machine: the E460's Windows 98 SE offers no Stand by, the E7250's Windows 7 x64 has no graphics driver, and the P14s Gen 1 was not read. |
+| Remote wake on real hardware | Selective suspend's remote wake, for a USB 2.0 HID device and for a SuperSpeed device at a root port or behind a USB 3 hub, was read only in QEMU. |
+| MSI-X on real hardware | Read only on QEMU's controller. MSI was read on the E7250. |
+| `XHCIQUAL` on a line that is dead under DOS | Read only in QEMU. The E7250's line is dead only under Windows' routing; under DOS its interrupt test passes. |
+| Windows 98 SE on the E7250 | The interrupt routing repair under Windows 98 SE has run on no machine. |
+| `XhciWideMap` on real hardware | Not read on an updated 32-bit Windows 7, nor at `1` with a real UAS drive. |
+| A real UAS drive after a transfer error or a stop | The retry in place on a UAS stream was read only with the error made on purpose in QEMU. |
+| UAS speed at 1 MiB on real hardware | ATTO with the MSSU10 was not repeated for `2.3.0.0`. The E460's copies at about 200 MB/s are the only real-hardware figure. |
 
 ## Toolchain and building
 

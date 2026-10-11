@@ -12,8 +12,10 @@ each change was read. Where this file and
 copy to fix.
 
 `2.3.0.0`'s changes were read in QEMU virtual machines, or rest on host
-tests where QEMU models no such device or controller; none has been read
-on real hardware yet. "What `2.3.0.0` changes", below, lists them.
+tests where QEMU models no such device or controller. The owner's bench of
+2026-10-11 then read several on real hardware: a Dell Latitude E7250 under
+Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
+`2.3.0.0` changes", below, lists them and says which.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
@@ -122,8 +124,10 @@ included.
   owner's ThinkPad E460 under Windows 98 SE, and the handling of
   transfer, port and controller faults by making each fault it answers on
   purpose in QEMU virtual machines under Windows 98 SE and Windows 2000;
-  no real controller has raised one under this driver yet. None of
-  `2.3.0.0`'s changes has been read on real hardware yet.
+  no real controller has raised one under this driver yet. Of
+  `2.3.0.0`'s, the owner's bench of 2026-10-11 read polling, MSI, the
+  interrupt routing repair, the port switchover, composite devices and the
+  asynchronous-audio fix on real hardware ("What `2.3.0.0` changes").
   "Targets and their standing"
   says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
@@ -148,23 +152,29 @@ included.
 
 ## What `2.3.0.0` changes
 
-Apart from the asynchronous-audio fix, none of these has been read on
-real hardware yet. Most were read in QEMU virtual machines on development host
-A; the Low-Speed mouse fix rests on host tests of that mouse's descriptors
-alone, since QEMU models no such device. The sections named give the
+Most were read in QEMU virtual machines on development host A; the
+Low-Speed mouse fix rests on host tests of that mouse's descriptors alone,
+since QEMU models no such device. Where the owner's bench of 2026-10-11 read
+a change on real hardware, its item says so. The sections named give the
 detail, and what each rests on.
 
 - **A controller with no working interrupt is polled, not refused.** A
   controller with no interrupt pin, or whose line the driver sees raised
   and never delivered, has its events read on a timer instead (`XhciInterruptMode`, `XhciPollIdleMs`,
   `XhciPollActiveMs`; "XhciInterruptMode, XhciPollIdleMs and
-  XhciPollActiveMs: how the controller's events arrive").
+  XhciPollActiveMs: how the controller's events arrive"). Read on real
+  hardware: polling by choice on a ThinkPad E460 under Windows 98 SE, and
+  the move to polling of a dead line on a Dell Latitude E7250 under XP
+  x64.
 - **Message-signalled interrupts on Windows Vista and 7**: on x64 directly,
   on 32-bit through the package's helper `xhcimsi.sys`. The 32-bit Vista
   and 7 install asks for a restart ("Windows Vista and 7: message-signalled
-  interrupts").
+  interrupts"). Read on real hardware: MSI on a Dell Latitude E7250 under
+  Windows 7 x64.
 - **The Intel interrupt routing repair**, for firmware that routes the
-  controller's interrupt to the wrong line (`XhciIntelIrqRoute`).
+  controller's interrupt to the wrong line (`XhciIntelIrqRoute`). Read on
+  real hardware: on the Dell Latitude E7250 under XP x64, and under
+  Windows 7 x64 with the line asked for.
 - **UAS commands of 1 MiB** where `2.2.0.0` sent 64 KiB
   (`XhciMaxTransferKB`, default `1024`), and one drive model set apart with
   Microsoft's per-device `MaximumTransferLength` (`65535` to `2097152`
@@ -174,15 +184,19 @@ detail, and what each rests on.
 - **The Intel port switchover is off by default** (`XhciIntelPortSwitch`
   `0`); `portsw.vbs`, or `portsw-on.bat` and `portsw-off.bat` in one
   double-click, turns it on or off, then a restart ("Intel 7-, 8- and
-  9-series chipsets: the port switchover").
+  9-series chipsets: the port switchover"). Read on real hardware: the
+  Dell Latitude E7250 (`9CB1`) under Windows 7 x64.
 - **Selective suspend, off by default** (`XhciSelectiveSuspend`; USB 2.0
   and SuperSpeed devices; "XhciSelectiveSuspend: putting idle devices to
   sleep").
 - **A composite device has an entry of its own**, and every device has
-  the USB device interface ("Devices and hubs in Device Manager").
+  the USB device interface ("Devices and hubs in Device Manager"). Read on
+  real hardware with two USB audio devices on the Dell Latitude E7250
+  under Windows 7 x64.
 - **USBView shows a device's strings.** The manufacturer, product, serial
   number and interface names, and any other descriptor a tool asks for, are
-  read from the device ("Devices and hubs in Device Manager").
+  read from the device ("Devices and hubs in Device Manager"). Read on real
+  hardware on the Dell Latitude E7250 under Windows 7 x64.
 - **A Low-Speed mouse that carries more endpoints than it declares
   works.** A mouse (`VID_073A&PID_2230`, GitHub issue 17) whose interface
   declares one endpoint and carries two was never configured under
@@ -202,7 +216,9 @@ detail, and what each rests on.
   feedback endpoint, such as C-Media's, were never affected. Read in host
   tests and in Windows 7's audio driver's own code, and on a Dell
   Latitude E7250 under Windows 7 x64, where a Sound Blaster Play! 2 played
-  cleanly at 44.1 and 48 kHz on a test build of the fix.
+  cleanly at 44.1 and 48 kHz on a test build of the fix, and again on this
+  release. About half the reads of its feedback endpoint end in a USB
+  Transaction Error; the sound is unaffected, and the cause is open.
 - **A device's speed in USBView** on Windows 98 SE and ME: the newer
   connection query that tools such as SweetLow's USBView send reads
   SuperSpeed where it is; Windows' own hub pages are unchanged ("A
@@ -210,7 +226,9 @@ detail, and what each rests on.
   `XhciFastPollFsLs` `4` polls at the rate the client asks for.
 - **`XHCIQUAL` passes a controller with no working interrupt as
   `QUALIFIED WITH CAVEATS`**, exit code 3 ("Before you install: check the
-  machine").
+  machine"). Its `--gsi` check was read on real hardware: on the Dell
+  Latitude E7250 under MS-DOS 6.22 it reported the routing mismatch the
+  repair fixes.
 - **`XHCISNAP`'s and `XHCIQUAL`'s reports name the system** they were
   taken on, with no serial numbers or names; `XHCISNAP -nosysinfo` and
   `XHCIQUAL --no-sysinfo` skip it ("The log, and how to send one", and
@@ -296,7 +314,7 @@ release asset itself after the cut.
 | What `2.1.0.0` changed | | All in QEMU on development host A, on the `2.1.0.0` integration build unless the `release` flavour is named. The controller re-enable with devices kept: Windows ME with a mouse (three of three), with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; Windows 98 SE and 2000 disable and enable with a stick behind a hub and a file compare after, and a 10-cycle soak on each; 32-bit XP disable and enable with no USB keyboard attached (XP refuses the disable while one is). Instance ids from the serial number: a stick moved between root ports kept its one entry and was not found again as new hardware on Windows 98 SE, ME, 2000 and 32-bit XP, and on Vista and 7 in both architectures; moved behind a hub as well on Windows 98 SE, 2000, 32-bit XP and 32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two sticks with different serial numbers had two entries, and of two with the same one the second was known by its port (Windows 98 SE, 2000 and XP). External hubs as entries of their own, on QEMU's hub, which is a USB 1.1 Full-Speed hub: a mouse and a stick behind it, the tree by connection, the hub unplugged and plugged in again, a device unplugged behind it, and a two-tier chain, on Windows 98 SE, 2000 and 32-bit XP; the tree and the hub unplugged and plugged in again on Vista and 7 in both architectures, the tree on ME and XP x64, and USBView walking into the hub on XP, XP x64, Vista and 7; the hub disabled and enabled in Device Manager with the devices behind it coming back, on Windows 98 SE, and on Windows 2000 and XP with the fix for the defect the first reading found (two disable and enable cycles each in QEMU, the same instance ids and the stick's files intact). A High-Speed hub, its transaction translators, and a USB 3 hub's SuperSpeed half were read in no virtual machine; the owner read a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" on real hardware after the cut, and both work. The Power tab: figures in mA on the root hub's and the hub's Power tabs on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard 100 mA, a stick and the hub 0 mA; QEMU's stick and hub ask for 0 mA in their own descriptors), and a hub's Power tab on 32-bit 7. The Advanced tab's figure while audio plays was not read: Windows 98 SE's `USBAUDIO.VXD` fails on playing in QEMU ("Known limitations"). Device names: where a Windows class INF names the device, its name is shown, on every system read; the device's own product name was read in Windows 98 SE's "New Hardware Found" box, for devices no INF names on Windows 98 SE, 2000 and XP, and as Windows 7's "Bus reported device description" in both architectures. hidusbf: 1000, 500 and 250 Hz at a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME, at a root port on 32-bit XP, the filter loaded and its setting reaching the controller on a stock Windows 98 SE (`release`), and behind a hub on 32-bit XP with the fix for the defect the first reading found (Setup read the mouse's speed, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5). Fast polling: not read. The F6 floppy, on the `release` flavour: Windows 2000 SP4 and 32-bit XP SP3 text-mode Setup with a USB keyboard and a USB stick, and the Recovery Console on both; see that section |
 | What `2.1.1.0` changed | | The registry values: in QEMU on development host A, on the `release` flavour before `XhciIntelPortSwitch` was added, a fresh install on Windows 98 SE and 2000 writing the seven at their defaults, and an update over `2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7 keeping two values set by hand and adding the missing three ("Registry settings"). The Power tab: on the owner's ThinkPad P14s Gen 1, a SuperSpeed drive declaring 896 mA reading 510 mA and `XHCISNAP` giving its exact figure, a USB 2.0 device reading as before ("The controller's Advanced tab and the root hub's Power tab"). The Intel port switchover: on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto, and its gate staying closed on the P14s Gen 1 and in QEMU ("Intel 7-, 8- and 9-series chipsets: the port switchover") |
 | What `2.2.0.0` changed | | The SuperSpeed fix for Intel Sunrise Point-LP: on the owner's ThinkPad E460 (`8086:9D2F`) under Windows 98 SE, on the `release` flavour of a build taken before the cut with the fix and the enumeration notes in it, a UAS-capable USB 3 stick seen at SuperSpeed from power-on, after two unplug and replug cycles and behind a USB 3 hub, a large file copied there and back and compared clean, and ATTO Disk Benchmark at 242 MB/s writing and 245 MB/s reading at 8 MB transfers; the hub's SuperSpeed and USB 2.0 halves both present after a hot-plug, a replug and a cold boot; `XHCISNAP`'s report naming the port's speed ID 4 as SuperSpeed by its default meaning ("SuperSpeed and UAS"). No Bulk-Only SuperSpeed device was to hand. The speed tables of the ThinkPad P14s Gen 1, the Lenovo B490 and a tester's HP EliteBook 850 G5 were read with `XHCIQUAL`: the first two list ID 4, which is why they never failed, and the HP's Sunrise Point controller publishes the E460's table word for word. In QEMU on development host A, which publishes no speed table, on Windows 98 SE and on Windows 2000 SP4 at two processors under Driver Verifier: a SuperSpeed stick at a root port, a stick behind QEMU's Full-Speed hub, and a SuperSpeed unplug and replug, each with a file compare, read as `2.1.1.0` read beside them, on the integration build and, on Windows 98 SE, the `release` flavour, and again on the final code; with the E460's speed table put in QEMU's place by a test aid, the stick read at SuperSpeed by the default meaning. A SuperSpeed device behind a SuperSpeed hub was not read in QEMU, which models no SuperSpeed hub; the E460 reading above has it. `XhciIntelPortSwitch` 2: on QEMU's controller, which is not Intel, on Windows 98 SE on the `release` flavour, no switchover write and the devices working. The controller tolerance, on the `qemu` flavour with each fault made on purpose, on the same two guests: every fault design record 17 section 5 lists - a lost interrupt, a root port disabled, an over-current, the controller halted, all ones with and without the proof the controller stopped, a transaction error, the retry's failed reset and its two races, the reports nothing owns, and the control endpoint's - each made once on both guests, against a USB mouse with a Bulk-Only copy running on a SuperSpeed stick, and each made to persist on Windows 98 SE and on Windows 2000 but for three not run there (the stale context's and the retry's two races persisting); each transient fault answered with no replug, each persistent one ending in its stated state, and the counters and terminal text read in `XHCISNAP`; at `XhciTolerance` `0`, on both guests, the root port disabled, the over-current, the controller halted, the transaction error and a report nothing owns, each handled as `2.1.1.0` handles it and still counted (the others were not read at `0`). A copy running across a controller recovery fails, since every device is re-enumerated, and on Windows 2000 a mounted drive can come back at Code 31 ("Known limitations"). The three new registry values: written at `1`, `1` and `0` by the install into a driver key that had never had them on Windows 2000 and by an update on Windows 98 SE (a fresh install on Windows 98 SE was not read), and a user's `0` kept by an update on Windows 2000; `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub and `XhciAvgTrbEsit` `1` left the devices working, on Windows 98 SE on the `release` flavour |
-| What `2.3.0.0` changes | | All in QEMU on development host A, on the integration builds before the cut; each item's section says what was read and on which systems, and what is still owed. No change has been read on real hardware yet: the owner's machines, the Low-Speed mouse of GitHub issue 17, a remote-wake device and the Intel switchover at `0` and `1` are still to be read |
+| What `2.3.0.0` changes | | In QEMU on development host A, on the integration builds before the cut; each item's section says what was read and on which systems. Then the owner's bench of 2026-10-11, on the signed release package. On a Dell Latitude E7250 (`8086:9CB1`) under Windows 7 x64, in test-signing mode: MSI with the routing repair writing nothing, and BackstopDrains 0; the line under `XhciInterruptMode` `1`, with the repair rewriting the route, also with the EHCI disabled; the switchover at `0` leaving a USB 3 stick at USB 2.0 speed and at `1` giving SuperSpeed; two USB audio devices, each under its composite entry, with USBView showing their strings, and the asynchronous one playing on the fix. Under XP x64: the repair rewriting the route at the default, and with it off, the dead line moved to polling and a SuperSpeed stick copying clean. On a ThinkPad E460 under Windows 98 SE: about 18 GB through a SuperSpeed stick on the line and about 4 GB under polling, every copy compared clean. On a ThinkPad P14s Gen 1 under Windows 98 SE, brief checks only. Not read: standby, remote wake, MSI-X, Windows 98 SE on the E7250, and the Low-Speed mouse of GitHub issue 17 ("Untested ground") |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -395,6 +413,15 @@ takes a message interrupt, where the controller offers one (Windows Vista and
 7: x64 directly, 32-bit with the `xhcimsi.sys` helper). The verdict prints
 which applies. Its exit code is 3 (0 qualified, 1 not qualified, 2 a usage
 error or no controller).
+
+A passing interrupt test under DOS proves the line in the routing DOS
+uses, which is not always the routing Windows uses. On the Dell Latitude
+E7250 the test passed on IRQ 11, while under Windows XP x64 and 7 the same
+line never reached the interrupt Windows assigned. `--gsi N`, beside
+`--quick` or `--probe-only`, compares the Intel chipset's routing with N,
+the interrupt Windows reports for the controller (Device Manager,
+Resources tab), and on the E7250 it reported the mismatch ("XhciIntelIrqRoute: the Intel interrupt routing
+repair").
 
 Since `2.3.0.0` the report's header also names the machine it ran on: the
 make, model and BIOS from the firmware's SMBIOS table, the processor, the
@@ -655,6 +682,12 @@ asked for the Windows 98 SE CD again for `hidclass.sys`, and Windows ME
 found each once as well. Nothing was
 found again after that. A setting kept on such a device's own entry, such as
 hidusbf's polling rate, has to be applied again on the new entry.
+
+**On Vista and 7, Have Disk does not take a build whose INF is identical
+to the installed one** (the same `DriverVer`): Windows reuses the package
+already in its driver store and keeps the old `xhci98.sys`. Replace the
+`.sys` by hand, or use a build with a newer `DriverVer` (read on the
+E7250 under Windows 7 x64).
 
 **An update keeps the Intel port switchover as it was.** Since `2.3.0.0` a
 new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
@@ -945,7 +978,7 @@ controller. A standby or hibernate keeps them where they are.
   (A USB 2.0 hub or cable in between gives the same speed, and the
   switchover does not change that.) This is what the owner's Dell
   Latitude E7250 showed on 2026-10-11 with the switchover at its default
-  `0`.
+  `0`; at `1`, after a restart, the stick linked at SuperSpeed.
 - **What it logs.** With `XhciLogVerbosity` at `2` or above, `XHCISNAP`'s
   report carries `psw.` records: `psw.gate` (`1` on a listed controller),
   `psw.value` with `psw.value.found` (`psw.value.found` 0 means the value
@@ -1005,7 +1038,8 @@ worked as before. These are the owner's readings, clause by clause; the
 B490's logs stayed on the B490.
 
 Not read: a standby and resume (Windows 98 SE offers none on the B490); any
-system but Windows 98 SE; the other five device ids, which rest on Linux's
+system but Windows 98 SE, until the E7250 (`9CB1`) under Windows 7 x64 at
+the `2.3.0.0` bench; the other four device ids, which rest on Linux's
 handling of the same chipsets; and value `2` on any unlisted Intel
 controller (see "Untested ground"). The readings above were taken on
 `2.1.1.0`; `2.2.0.0`'s change to the hand-back and value `2` rest on host
@@ -1214,13 +1248,18 @@ no message-signalled interrupts and are unchanged.
   software for this device" ticked, or set `MSISupported` to `0` first.
   The tick removes only the package in use; older ones stay in the driver
   store ("Updating from 2.y.y.y", "Deleting the driver keeps the older
-  packages"). The downgrade itself has not been read yet.
+  packages"). The downgrade was read once, in a 32-bit Windows 7 virtual
+  machine with an earlier test build: it ran on the line, and the
+  `xhcimsi` service stayed.
 - **Removing the 32-bit helper** after uninstalling the driver: it stays
   installed as a service and does nothing on its own; `sc delete xhcimsi`
   from an administrator's prompt, then a restart, removes it.
 
-`XHCISNAP` shows which delivery the controller uses. These behaviours have
-been read in QEMU guests only (the readings are listed in the run record).
+`XHCISNAP` shows which delivery the controller uses. These behaviours were
+read in QEMU guests (the readings are listed in the run record), and on
+real hardware on the owner's Dell Latitude E7250 under Windows 7 x64: MSI
+by default, with nothing for the backstop to drain, and the line under
+`XhciInterruptMode` `1`. MSI-X has not been read on real hardware.
 
 ## Registry settings
 
@@ -1321,7 +1360,13 @@ copy from a stick and the guest's idle processor load showed no step
 change between the line and polling; audio played without a gap under
 polling on 2000, XP x64 and 7 in both architectures, and with two gaps of
 about 20 ms on Vista x64. The move to polling when a line never arrives
-was read on Windows 98 SE and 2000; on the 64-bit systems it is owed.
+was read in QEMU on every system, and on real hardware on the Dell
+Latitude E7250 under XP x64 with `XhciIntelIrqRoute` `0`, where the line
+is dead: the driver moved to polling and a SuperSpeed stick copied clean.
+There Windows ran the poll every 15 to 62 ms, its timer's granularity on
+that machine, not every 1 ms. Polling by choice (`2`) was read on a
+ThinkPad E460 under Windows 98 SE: about 4 GB through a SuperSpeed stick,
+compared clean.
 `XHCISNAP`'s report says
 which delivery the controller uses, and why. `XHCIQUAL` passes a
 controller with no working interrupt as `QUALIFIED WITH CAVEATS` ("Before
@@ -1534,8 +1579,12 @@ records. Send them with any report from one of these machines.
 
 What it rests on. On the owner's E7250 under Windows XP x64, the same
 register written by hand to the value this setting writes fixed the
-mouse at once and let a USB stick work. The driver's own write has not yet
-been read on any machine, and nor has any system but that one.
+mouse at once and let a USB stick work. The driver's own write was then
+read there at the `2.3.0.0` bench: under XP x64 at the default, and under
+Windows 7 x64 with the line asked for (`XhciInterruptMode` `1`, also with
+the EHCI disabled), it moved INTA from PIRQA to PIRQF (`D20IR` `3210` to
+`3215`, IRQ 21) and read it back; under Windows 7's default MSI it wrote
+nothing, as designed. No other machine has been read.
 
 ### XhciTolerance: the controller-fault handling, all together
 
@@ -1736,14 +1785,12 @@ that cannot signal a remote wake is offered to Windows as able to sleep
 but not to wake.
 
 Read in QEMU virtual machines with the project's own test driver bound to
-a device: on 32-bit Windows 7 a SuperSpeed stick's link suspended and
-resumed on request, and on 64-bit Windows 7 the value at `0` read as the
-build before it. Windows' own drivers' idle (HID on XP, Vista and 7),
-standby and hibernate with a device suspended, the full set of virtual
-machine legs, and real hardware with a remote-wake device are still to be
-read. The virtual machine legs on Windows 98 SE, 2000 and XP found faults
-after a device's own remote wake; fixes are in this build or being made,
-and their reread is pending. So leave it off unless you are testing it.
+a device, on Windows 98 SE, ME, 2000, XP and 32-bit Windows 7 (there is no
+64-bit test driver; the run record has the legs), and with the value at `0`
+reading as the build before it on every system. Windows' own drivers' idle was not
+read: Windows' HID driver never idles QEMU's mouse. No real machine has
+been read with it on, and no real remote-wake device ("Untested ground").
+So leave it off unless you are testing it.
 If a device misbehaves
 with it on, set `0`, restart and report whether that changed it.
 
@@ -2135,10 +2182,18 @@ information.
 | Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
-| The Intel port switchover beyond one machine | Read on one `1E31` machine under Windows 98 SE ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
+| The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
+| Standby (S3) on real hardware | Read only in virtual machines. At the `2.3.0.0` bench the ThinkPad E460's Windows 98 SE offered no Stand by, the Dell Latitude E7250's Windows 7 x64 had no graphics driver, and the ThinkPad P14s Gen 1 was not read |
+| Selective suspend and remote wake on real hardware | Read only in QEMU, which makes no SuperSpeed function wake and has no SuperSpeed hub. No real remote-wake device has been read: a USB 2.0 HID device waking a sleeping machine's bus, or a SuperSpeed device waking from a root port or from behind a USB 3 hub |
+| MSI-X on real hardware | Read only on QEMU's controller, whose MSI-X loses an interrupt now and then, which the driver's 100 ms check then picks up (`XHCISNAP`'s BackstopDrains). On a real MSI-X controller BackstopDrains should stay near 0; not read. MSI was read on the Dell Latitude E7250 |
+| `XHCIQUAL` on a line that is dead under DOS | Read only in QEMU. The Dell Latitude E7250's line is dead only under Windows' interrupt routing; under DOS it works, so its interrupt test passes there |
+| Windows 98 SE on the Dell Latitude E7250 | The interrupt routing repair under Windows 98 SE (PIC mode) has run on no machine: the E7250, the one machine read with that fault, runs XP x64 and 7 x64 |
+| `XhciWideMap` on real hardware | Not read on an updated 32-bit Windows 7, nor at `1` with a real UAS drive. In QEMU the UAS device holds one piece per stream, so a UAS drive at `1` could not be read there either |
+| A real UAS drive after a transfer error or a stop | The retry in place on a UAS stream was read only with the error made on purpose in QEMU. No real drive has met one under this driver |
+| UAS speed at 1 MiB on real hardware | The 1 MiB default rests on readings in QEMU. ATTO with the MSSU10, compared with `2.2.0.0` on the same machine, was not read at the `2.3.0.0` bench; the E460's copies at about 200 MB/s are the only real-hardware figure |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing
