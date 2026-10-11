@@ -221,6 +221,20 @@ detail, and what each rests on.
   Full-Speed device on such a controller fails; set
   `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
   Low- and Full-Speed IDs behind a hub").
+- **A lost interrupt can no longer stop Windows 98 SE.** In `2.2.0.0`
+  and the test build `2.2.0.3`, an interrupt the controller raised and Windows never
+  delivered was picked up by the driver's own thread. Windows 98 SE could
+  leave that thread waiting while a copy to a USB drive in MS-DOS
+  compatibility mode waited for the very transfer the thread would pick
+  up. Such a drive is one the computer's BIOS presented at start, the "E:"
+  of a stick plugged in at power-on. Both waited for ever, and the
+  computer stopped. One lost interrupt in the middle of such a copy was
+  enough, in the default `XhciInterruptMode` `0`. On a controller whose
+  interrupt never arrives at all, with `XhciInterruptMode` `1`, it
+  happened on the first copy. The pickup now runs from the driver's
+  100 ms timer instead, which kept running when the thread did not. Read
+  in QEMU on Windows 98 SE, with lost interrupts made on purpose ("Controller
+  faults: what the driver does about them").
 - **Every registry value the driver reads is in its key after an
   install.** The install writes all nineteen, now including `XhciWideMap`
   `0`, `XhciSelectiveSuspend` `0` and `XhciUsb2HubSpeedFallback` `1`, each
@@ -961,9 +975,9 @@ interrupt, whose pickup keeps delivering, it does so a few times at most,
 and then stops in a stated state rather than try for ever:
 
 - **A lost interrupt.** An event the controller has written and no
-  interrupt has delivered is picked up by the driver's own thread once it
-  has waited 100 ms, which in practice is about a third of a second after
-  it was first seen.
+  interrupt has delivered is picked up by the driver's own 100 ms timer
+  once it has waited 100 ms, which in practice is about a third of a
+  second after it was first seen.
 - **A transfer error on a bulk or interrupt endpoint** (a USB Transaction
   Error: the device did not answer cleanly) is retried in place, up to three
   times for the same transfer, before the transfer fails as it did up to
@@ -1060,7 +1074,7 @@ list, for a machine where it does more harm than good.
 `XHCISNAP`'s report counts what happened, with `XhciLogVerbosity` at `1`
 or above: the transfer errors, unknown codes and unmatched events, summed
 over the controller, a count of every completion code, the retries, each
-re-enumeration and why, the lost interrupts the thread delivered, each
+re-enumeration and why, the lost interrupts the driver picked up, each
 port's budget and hold, and the controller's recoveries and any
 closing-off. At `XhciLogVerbosity` `2` the log also names the device and
 endpoint of the first few of each error code. At `XhciTolerance` `0` the

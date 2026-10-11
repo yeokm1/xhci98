@@ -413,7 +413,9 @@ further. Windows 98 SE was seen to leave `hcdThread` unscheduled
 altogether while a copy waited on a dead line under mode 1. So the
 backstop's own step, which is mode 1's only delivery on such a line, now
 runs in the tolerance clock's DPC as well (record 17 section 4.1,
-"Amended"). The watcher is still the only observer of a dead line. The
+"Amended"). The same starvation was reached in mode 0 on a working line
+by one lost interrupt during a copy to a drive in MS-DOS compatibility
+mode, so the move is not about the dead line alone. The watcher is still the only observer of a dead line. The
 backstop drains and decides nothing about the line.
 
 **A look**, every `XHCI_POLL_WATCH_MS` (100 ms) - a fixed period of the

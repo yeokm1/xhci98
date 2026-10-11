@@ -267,8 +267,23 @@ drain, the request waited for a completion that only the unscheduled
 thread would queue. That is a deadlock. What in the VMM holds the thread
 off was not identified. Every instruction sampled was in the VMM's ring
 0, none in this driver. What was read is that a DPC still runs where the
-thread does not. The step therefore moves to the place that was seen to
-run:
+thread does not.
+
+It is not confined to mode 1 or to the qemu flavour's dead line. In the
+default mode 0, on a working line, the qemu flavour's lost-interrupt
+injection (section 5, code 01) was made during the same copy. The thread
+stopped at the same place mid-pass after it had delivered 117 of the lost
+interrupts, and the copy stopped with an event pending. One lost
+interrupt during a copy to such a drive is enough on Windows 98 SE. Every
+release with this backstop, `2.2.0.0` onwards, ran it on the thread
+(`v2.2.0.0`'s `hcd_ctl.c`, `hcdPoll`), so every one has the exposure.
+Releases before `2.2.0.0` had no backstop, and there a lost interrupt
+waited for the next interrupt. The trigger, as read, needs a drive in
+MS-DOS compatibility mode: the BIOS-mapped view of a stick attached at
+power-on (the run record's E:). The same stick's protected-mode letter
+(G:) copied and compared clean under mode 1 on the dead line, 3661
+transfers, with the thread running throughout. The step therefore moves
+to the place that was seen to run:
 
 - **Where.** `hcdTolDpc`, first, before it takes `TimerLock` to count the
   tick and arm the timer again. The DPC never holds both locks. The order
