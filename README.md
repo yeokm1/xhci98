@@ -37,16 +37,15 @@ This project attempts to fill that gap.
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, on `2.0.0.0`: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`. Device Manager shows the controller, its root hub and the UAS storage device, and the drive is listed under Unplug or Eject Hardware.
+My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`. Device Manager shows the controller, its root hub and the UAS storage device, and the drive is listed under Unplug or Eject Hardware.
 
-ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward. `1.2.0.0` managed about 34 MB/s at High Speed on the same drive.
+ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward.
 
 Some things to know:
 
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
-- Device Manager and the other Windows tools on these systems show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
+- Device Manager and the other Windows tools on these systems may show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
 - On Windows 98 SE storage of any kind, UAS included, needs NUSB's mass-storage component (see "Installation Steps").
-- Before `2.2.0.0`, SuperSpeed devices did not work on Intel Sunrise Point-LP (`8086:9D2F`: ThinkPad E460, HP EliteBook 850 G5) - a USB 3 stick was not seen and a USB 3 hub showed only its USB 2.0 half. Fixed in `2.2.0.0`; on my E460 a UAS stick now runs at about 242 MB/s write and 245 MB/s read. See [issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md).
 
 ## Installation Steps
 
@@ -148,18 +147,14 @@ Install the new version over the old one with Update Driver on "xHCI98 USB 3.x e
 
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
-- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry. Searching does not always find it.
-- Elsewhere, Have Disk.
-
-From `2.0.0.0` only, each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
-
-- On the NT systems this needs no answer.
-- On Windows 98 SE the wizard runs for each and may ask for the CD for `hidclass.sys`.
+- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry.
 - A hidusbf setting on such a device has to be applied again.
 
 ### Updating xhciuas.sys over an older one
 
-When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF. Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
+When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF.
+
+Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
 
 ## Tuning
 
@@ -252,11 +247,9 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 ### The Intel 7/8/9-series port switchover
 
-On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
+On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller.
 
-Since `2.1.1.0` the driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
-
-**Since `2.3.0.0` it is off unless you turn it on.** A connector left on the USB 2.0 controller works there whenever a USB 2.0 driver is loaded (NUSB's or SweetLow's on Windows 98 SE and ME, Windows' own elsewhere), only at USB 2.0 speed, so the driver no longer takes the connectors by default. `2.1.1.0` and `2.2.0.0` installed it at `1`, and an update keeps the value already there, so a machine updated from either stays on until you change it.
+The driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
 - `XhciIntelPortSwitch` set to `1` turns it on; `0`, absent or not a `DWORD` is off. It is read when the controller starts, so restart after changing it.
@@ -269,7 +262,7 @@ Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel U
 
 On the same Intel chipsets, two chipset registers decide which interrupt line the xHCI controller's interrupt reaches. Some firmware points them at a different line from the one it tells Windows: the Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so the driver never hears from the controller and every USB device on it is slow or stops ([issue 12](docs/issues/12-e7250-xp64-boot-enable-slot-refused.md)).
 
-Since `2.3.0.0` the driver reads those registers at each start and resume and, where `XhciIntelIrqRoute` allows it, points the interrupt at the line Windows assigned:
+The driver reads those registers at each start and resume and, where `XhciIntelIrqRoute` allows it, points the interrupt at the line Windows assigned:
 
 - `1`, the default (also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
 - `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
