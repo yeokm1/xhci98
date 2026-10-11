@@ -148,8 +148,8 @@ included.
 
 ## What `2.3.0.0` changes
 
-None of these has been read on real
-hardware yet. Most were read in QEMU virtual machines on development host
+Apart from the asynchronous-audio fix, none of these has been read on
+real hardware yet. Most were read in QEMU virtual machines on development host
 A; the Low-Speed mouse fix rests on host tests of that mouse's descriptors
 alone, since QEMU models no such device. The sections named give the
 detail, and what each rests on.
@@ -200,8 +200,9 @@ detail, and what each rests on.
   first request after the endpoint falls idle) and otherwise sends the
   request at the controller's next opportunity. Devices without a
   feedback endpoint, such as C-Media's, were never affected. Read in host
-  tests and in Windows 7's audio driver's own code; whether the device
-  plays on this build has not yet been read.
+  tests and in Windows 7's audio driver's own code, and on a Dell
+  Latitude E7250 under Windows 7 x64, where a Sound Blaster Play! 2 played
+  cleanly at 44.1 and 48 kHz on a test build of the fix.
 - **A device's speed in USBView** on Windows 98 SE and ME: the newer
   connection query that tools such as SweetLow's USBView send reads
   SuperSpeed where it is; Windows' own hub pages are unchanged ("A
