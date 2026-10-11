@@ -385,7 +385,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_FOUND_ACTIVE      0x4UL
 #define SNAP_POLL_DELIVERY_POLL     2UL
 #define SNAP_POLL_DELIVERIES        6UL
-#define SNAP_POLL_REASONS           14UL
+#define SNAP_POLL_REASONS           19UL
 #define SNAP_POLL_PIN_READ          1UL
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
@@ -406,7 +406,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_MSI_STATES             5UL
 #define SNAP_MSI_REFUSALS           5UL
 #define SNAP_MSI_CLASSES            7UL
-#define SNAP_MSI_OUTCOMES           12UL
+#define SNAP_MSI_OUTCOMES           13UL
 /*
  * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
  * 4.8). Its state stays in the extension, and the HCD region's header grew
@@ -3977,10 +3977,20 @@ static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
     "forced polling (XhciInterruptMode 2)",
     "automatic: the line interrupt went dead; moved to polling at run time",
     "automatic: a message interrupt was granted",
-    "the line asked for (XhciInterruptMode 1), a message granted",
+    "the line asked for (XhciInterruptMode 1), a message granted and run "
+    "(an earlier 2.3.0.0 build)",
     "a message granted but not connected, so polled",
     "forced line, a message granted, no helper and no line offered: the "
-    "start fails"
+    "start fails (an earlier 2.3.0.0 build)",
+    "forced line (XhciInterruptMode 1), but a message was granted: the "
+    "start fails",
+    "forced message (XhciInterruptMode 3): a message interrupt",
+    "forced message (XhciInterruptMode 3), but no message was granted: the "
+    "start fails",
+    "forced message (XhciInterruptMode 3), but the message could not be "
+    "connected (32-bit: is xhcimsi.sys bound?): the start fails",
+    "forced message (XhciInterruptMode 3), but this Windows has no message "
+    "interrupts: the start fails"
 };
 
 static const char *const poll_role_text[3] = {
@@ -4006,6 +4016,16 @@ static const char *poll_code(const char *const *table, unsigned long n,
     return (v < n) ? table[v] : "unknown code";
 }
 
+/* The reason's name, out of line as hcd_counter_name (the MSVC 6.0 /O2
+ * lookup lesson): the table grew by appending, so every code reads by its
+ * own index whatever the optimizer does at the caller. */
+#pragma auto_inline(off)
+static const char *poll_reason_name(unsigned long v)
+{
+    return poll_code(poll_reason_text, SNAP_POLL_REASONS, v);
+}
+#pragma auto_inline(on)
+
 /*
  * The three values as write_companion_imod reports the moderation interval:
  * found or not, the value as read, the value in effect, and the rule that
@@ -4014,8 +4034,9 @@ static const char *poll_code(const char *const *table, unsigned long n,
  */
 static void print_intr_values(const unsigned char *k)
 {
-    static const char *const mode_text[3] = {
-        "automatic", "the line interrupt", "polling"
+    static const char *const mode_text[4] = {
+        "automatic", "the line interrupt only", "polling",
+        "a message interrupt only"
     };
     unsigned long found;
     unsigned long read;
@@ -4027,13 +4048,11 @@ static void print_intr_values(const unsigned char *k)
     used = get32(k, 1 * 4);
     if ((found & SNAP_POLL_FOUND_MODE) == 0) {
         comp("  XhciInterruptMode      not found; in effect %lu (%s), the "
-             "default\n", used, poll_code(mode_text, 3, used));
+             "default\n", used, poll_code(mode_text, 4, used));
     } else {
         comp("  XhciInterruptMode      value %lu; in effect %lu (%s)\n",
-             read, used, poll_code(mode_text, 3, used));
-        if (read == 3) {
-            comp("        ^ 3 is the same as 0.\n");
-        } else if (read > 3) {
+             read, used, poll_code(mode_text, 4, used));
+        if (read > 3) {
             comp("        ^ %lu is reserved, so it runs as 0.\n", read);
         }
     }
@@ -4129,7 +4148,7 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
     comp("  delivery in effect     %s\n",
          poll_code(poll_delivery_text, SNAP_POLL_DELIVERIES, delivery));
     comp("    reason               %s\n",
-         poll_code(poll_reason_text, SNAP_POLL_REASONS, get32(k, 3 * 4)));
+         poll_reason_name(get32(k, 3 * 4)));
     status = get32(k, 4 * 4);
     pin = get32(k, 5 * 4);
     if (status == SNAP_POLL_PIN_READ) {
@@ -4349,6 +4368,33 @@ static int selftest_intr(void)
     intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
     print_intr(hcd, bytes, NULL, 0);
 
+    /* 7 x64 forced to the line (mode 1) with a message granted: the start
+     * fails (reason 14, record 15 revision 7). */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, 1);
+    intr_word(hcd, H, 1, 1);
+    intr_word(hcd, H, 2, 0);
+    intr_word(hcd, H, 3, 14);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
+    print_intr(hcd, bytes, NULL, 0);
+
+    /* Mode 3: on MSI-X (15); none granted (16); 7 x86 with no helper
+     * (17); XP (18). */
+    intr_image(hcd, H, SNAP_HCD_COUNTER_WORDS);
+    intr_word(hcd, H, 0, 3);
+    intr_word(hcd, H, 1, 3);
+    intr_word(hcd, H, 2, 4);
+    intr_word(hcd, H, 3, 15);
+    intr_word(hcd, H, 32, SNAP_POLL_FOUND_MODE);
+    print_intr(hcd, bytes, NULL, 0);
+    intr_word(hcd, H, 2, 0);
+    intr_word(hcd, H, 3, 16);
+    print_intr(hcd, bytes, NULL, 0);
+    intr_word(hcd, H, 3, 17);
+    print_intr(hcd, bytes, NULL, 0);
+    intr_word(hcd, H, 3, 18);
+    print_intr(hcd, bytes, NULL, 0);
+
     /* A reserved mode run as 0 on the line; the active period held to
      * the idle one; a header from 36.21 that places no extension words. */
     intr_image(hcd, 202, SNAP_HCD_COUNTER_WORDS);
@@ -4437,15 +4483,24 @@ static const char *const msi_outcome_text[SNAP_MSI_OUTCOMES] = {
     "kept: the lower driver failed it",
     "kept: no list",
     "kept: inconsistent",
-    "not asked (helper bound, or 64-bit, and mode not 1): left alone",
+    "not asked (helper bound, or 64-bit, and mode not 1 or 3): left alone",
     "kept: the strip switched off (XhciMsi86NoStrip)",
     "kept: no usable line-only configuration offered",
     "kept: no interrupt",
     "kept: no message to strip",
     "kept: a shape not admitted",
     "REPLACED: the message choices stripped, the line left",
-    "kept: no memory for the replacement"
+    "kept: no memory for the replacement",
+    "REPLACED: the line choices stripped, the message left (mode 3)"
 };
+
+/* Out of line, as poll_reason_name. */
+#pragma auto_inline(off)
+static const char *msi_outcome_name(unsigned long v)
+{
+    return poll_code(msi_outcome_text, SNAP_MSI_OUTCOMES, v);
+}
+#pragma auto_inline(on)
 
 /* A capability word: 0 not read, else a delivery code. */
 static const char *msi_capability(unsigned long v)
@@ -4528,7 +4583,7 @@ static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
     comp("  requirements filter    #%lu: %s\n", get32(k, 10 * 4),
          poll_code(msi_class_text, SNAP_MSI_CLASSES, get32(k, 11 * 4)));
     comp("    outcome              %s\n",
-         poll_code(msi_outcome_text, SNAP_MSI_OUTCOMES, get32(k, 12 * 4)));
+         msi_outcome_name(get32(k, 12 * 4)));
     v = get32(k, 13 * 4);
     if (v == SNAP_POLL_NOT_FOUND) {
         comp("    mode as read         not set (mode 0's default)\n");
@@ -4611,6 +4666,23 @@ static int selftest_msi(void)
     msi_word(hcd, H, 10, 1);
     msi_word(hcd, H, 11, 3);
     msi_word(hcd, H, 12, 10);
+    print_msi(hcd, bytes);
+
+    /* 7 x64 under mode 3: the line choices stripped, the message left. */
+    memset(hcd, 0, sizeof(hcd));
+    intr_image(hcd, H, W);
+    msi_word(hcd, H, 0, 1);
+    msi_word(hcd, H, 1, 1);
+    msi_word(hcd, H, 2, 3);
+    msi_word(hcd, H, 4, 1);
+    msi_word(hcd, H, 10, 1);
+    msi_word(hcd, H, 11, 3);
+    msi_word(hcd, H, 12, 12);
+    msi_word(hcd, H, 13, 3);
+    msi_word(hcd, H, 14, 1);
+    msi_word(hcd, H, 15, 1);
+    msi_word(hcd, H, 16, 1);
+    msi_word(hcd, H, 17, 1);
     print_msi(hcd, bytes);
 
     /* 98 SE: no filter ever, the mode word FFFFFFFF. */

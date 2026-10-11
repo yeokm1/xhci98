@@ -12,8 +12,8 @@
 /* ------------------------------------------------------------------ */
 
 /*
- * The effective mode is 0 for 0, 3 and every value above 2, else the
- * value; a period of 0 is its default, the idle period is held to 5000 and
+ * The effective mode is 0 for 0 and every value above 3, else the value
+ * (3 read as 0 until record 15 revision 7); a period of 0 is its default, the idle period is held to 5000 and
  * the active one to the idle one in effect. A value not found is the
  * default and is recorded as XHCI_POLL_NOT_FOUND.
  */
@@ -26,7 +26,8 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
                (activeFound ? XHCI_POLL_FOUND_ACTIVE : 0UL);
     v->ModeRead = modeFound ? mode : XHCI_POLL_NOT_FOUND;
     v->Mode = (modeFound &&
-               (mode == XHCI_POLL_MODE_LINE || mode == XHCI_POLL_MODE_POLL))
+               (mode == XHCI_POLL_MODE_LINE || mode == XHCI_POLL_MODE_POLL ||
+                mode == XHCI_POLL_MODE_MESSAGE))
                   ? mode
                   : XHCI_POLL_MODE_AUTO;
 
@@ -51,15 +52,19 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
 }
 
 /*
- * Section 4's tables. `mode` is the effective mode. A message resource
- * (Vista and 7 only) takes the message where it was connected, and polls
- * where it was not; the pin plays no part under it. Returns the delivery,
- * XHCI_POLL_DELIVERY_NONE for mode 1 with no usable line (the start fails
- * as it always did), and the reason through `reason`.
+ * Section 4's tables. `mode` is the effective mode; `messageConnected` is
+ * whether the message's routines were found (a connection that then fails
+ * is the caller's to settle, hcdConnect); `messageSystem` is whether the
+ * system can grant a message at all (NT 6). A message resource takes the
+ * message where it was connected, and polls where it was not, under mode
+ * 0; the pin plays no part under it. Mode 1 is the line only and mode 3 a
+ * message only (revision 7): each returns XHCI_POLL_DELIVERY_NONE - the
+ * start fails - without its delivery. Returns the delivery, and the
+ * reason through `reason`.
  */
 ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
-                     ULONG noLineOffered, PULONG reason)
+                     ULONG messageSystem, PULONG reason)
 {
     ULONG unreadable;
 
@@ -68,23 +73,29 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
         *reason = XHCI_POLL_R_FORCED_POLL;
         return XHCI_POLL_DELIVERY_POLL;
     }
+    if (mode == XHCI_POLL_MODE_MESSAGE) {
+        if (!messageSystem) {
+            *reason = XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM;
+        } else if (!haveInterrupt || !message) {
+            *reason = XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED;
+        } else if (!messageConnected) {
+            *reason = XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED;
+        } else {
+            *reason = XHCI_POLL_R_FORCED_MESSAGE;
+            return XHCI_POLL_DELIVERY_MESSAGE;
+        }
+        return XHCI_POLL_DELIVERY_NONE;
+    }
     if (haveInterrupt && message) {
+        if (mode == XHCI_POLL_MODE_LINE) {
+            *reason = XHCI_POLL_R_FORCED_LINE_MESSAGE;
+            return XHCI_POLL_DELIVERY_NONE;
+        }
         if (!messageConnected) {
-            /* Design record 18 section 4.3: mode 1, the message not
-             * connectable and no line offered fails as XP's forced line
-             * with no line does. The caller sets noLineOffered on x86
-             * alone, with no helper bound; a bound helper whose
-             * connection fails is never here with it set. */
-            if (mode == XHCI_POLL_MODE_LINE && noLineOffered) {
-                *reason = XHCI_POLL_R_FORCED_NO_LINE_OFFERED;
-                return XHCI_POLL_DELIVERY_NONE;
-            }
             *reason = XHCI_POLL_R_MESSAGE_NOT_CONNECTED;
             return XHCI_POLL_DELIVERY_POLL;
         }
-        *reason = (mode == XHCI_POLL_MODE_LINE)
-                      ? XHCI_POLL_R_MESSAGE_LINE_ASKED
-                      : XHCI_POLL_R_AUTO_MESSAGE;
+        *reason = XHCI_POLL_R_AUTO_MESSAGE;
         return XHCI_POLL_DELIVERY_MESSAGE;
     }
     if (mode == XHCI_POLL_MODE_LINE) {
@@ -110,6 +121,32 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
     }
     *reason = XHCI_POLL_R_AUTO;
     return XHCI_POLL_DELIVERY_LINE;
+}
+
+/*
+ * A message decided at start meets its connection (section 4.3):
+ * `connected` whether IoConnectInterruptEx succeeded, `lineBased` whether
+ * Windows connected the line instead. Under mode 3 anything but the
+ * message is a refusal (revision 7); otherwise a failure polls and a line
+ * fallback is the line, automatic. Returns the delivery - MESSAGE with
+ * `reason` left as the start set it - and the reason through `reason`.
+ */
+ULONG XhciPollConnected(ULONG mode, ULONG connected, ULONG lineBased,
+                        PULONG reason)
+{
+    if (mode == XHCI_POLL_MODE_MESSAGE && (!connected || lineBased)) {
+        *reason = XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED;
+        return XHCI_POLL_DELIVERY_NONE;
+    }
+    if (!connected) {
+        *reason = XHCI_POLL_R_MESSAGE_NOT_CONNECTED;
+        return XHCI_POLL_DELIVERY_POLL;
+    }
+    if (lineBased) {
+        *reason = XHCI_POLL_R_AUTO;
+        return XHCI_POLL_DELIVERY_LINE;
+    }
+    return XHCI_POLL_DELIVERY_MESSAGE;
 }
 
 /* ------------------------------------------------------------------ */

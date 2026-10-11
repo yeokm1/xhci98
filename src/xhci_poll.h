@@ -30,11 +30,13 @@
 
 #include "xhci_compat.h"
 
-/* The three values (record 15 section 3). */
+/* The three values (record 15 section 3). Modes 1 and 3 name one
+ * delivery each and fail the start without it (revision 7, owner
+ * 2026-10-11); 4 and above run as 0. */
 #define XHCI_POLL_MODE_AUTO             0UL
-#define XHCI_POLL_MODE_LINE             1UL
+#define XHCI_POLL_MODE_LINE             1UL     /* the line only           */
 #define XHCI_POLL_MODE_POLL             2UL
-#define XHCI_POLL_MODE_AS_AUTO          3UL     /* the same as 0           */
+#define XHCI_POLL_MODE_MESSAGE          3UL     /* a message only          */
 #define XHCI_POLL_IDLE_DEFAULT_MS       50UL
 #define XHCI_POLL_IDLE_MAX_MS           5000UL
 #define XHCI_POLL_ACTIVE_DEFAULT_MS     1UL
@@ -72,9 +74,17 @@
 #define XHCI_POLL_R_MESSAGE_LINE_ASKED          11UL
 #define XHCI_POLL_R_MESSAGE_NOT_CONNECTED       12UL
 /* Mode 1 on Vista or 7 x86 with a message granted, no helper bound and the
- * filter's list offering no line: the start fails as XP's forced-line start
- * with no line (design record 18 section 4.3). */
+ * filter's list offering no line: the start failed (design record 18
+ * section 4.3). 11 and 13 are revision 6's and no longer produced (record
+ * 15 revision 7); kept so a reader names an earlier build's. */
 #define XHCI_POLL_R_FORCED_NO_LINE_OFFERED      13UL
+/* Revision 7 (owner, 2026-10-11): mode 1 the line only, mode 3 a message
+ * only. Each but 15 fails the start. */
+#define XHCI_POLL_R_FORCED_LINE_MESSAGE         14UL    /* 1, a message    */
+#define XHCI_POLL_R_FORCED_MESSAGE              15UL    /* 3, connected    */
+#define XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED  16UL    /* 3, none granted */
+#define XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED 17UL   /* 3, not connected */
+#define XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM    18UL    /* 3, before NT 6  */
 
 /* The pin's read. */
 #define XHCI_POLL_PIN_NOT_READ          0UL
@@ -117,7 +127,7 @@
 
 typedef struct _XHCI_POLL_VALUES {
     ULONG ModeRead;         /* as read, XHCI_POLL_NOT_FOUND if not          */
-    ULONG Mode;             /* the effective mode: 0, 1 or 2                */
+    ULONG Mode;             /* the effective mode: 0, 1, 2 or 3             */
     ULONG IdleRead;
     ULONG IdleMs;
     ULONG ActiveRead;
@@ -175,7 +185,9 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
                     ULONG active);
 ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
-                     ULONG noLineOffered, PULONG reason);
+                     ULONG messageSystem, PULONG reason);
+ULONG XhciPollConnected(ULONG mode, ULONG connected, ULONG lineBased,
+                        PULONG reason);
 
 ULONG XhciPollEarlier(ULONG a, ULONG b);
 ULONG XhciPollArmMs(ULONG due, ULONG now, ULONG activeMs, ULONG idleMs,

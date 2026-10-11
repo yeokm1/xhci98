@@ -11,7 +11,9 @@
  *   - The helper's binding per controller FDO (record 18 section 4.1).
  *   - IRP_MN_FILTER_RESOURCE_REQUIREMENTS (record 18 section 4.2): the
  *     checked walk, the class, and the strip that keeps only the line
- *     configurations when x86 has no helper bound or the mode is 1.
+ *     configurations when x86 has no helper bound or the mode is 1 - or,
+ *     under mode 3, the rewrite that keeps only the message (revision
+ *     12).
  *   - The mode cache the filter reads, filled at AddDevice and at each
  *     start, both system-thread contexts (section 4.2).
  *   - The qemu flavour's checksummed trace (record 18 section 9).
@@ -499,8 +501,16 @@ ULONG HcdMsiRoutines(PHCD_CONTROLLER hc, PVOID *connect, PVOID *disconnect)
 #endif
 }
 
-/* XhciPollDecide's noLineOffered (record 18 section 4.3): x86 alone, no
- * helper bound, and this FDO's latest filter classified its list NO_LINE. */
+/* Whether this system can grant a message-signalled interrupt at all: NT 6
+ * (record 15 section 4, XhciPollDecide's messageSystem). */
+ULONG HcdMsiSystem(VOID)
+{
+    return hcdMsiNt6();
+}
+
+/* x86 alone, no helper bound, and this FDO's latest filter classified its
+ * list NO_LINE (record 18 section 4.3). Revision 6's mode-1 input; since
+ * revision 12 a recorded fact only, in the routines' L record. */
 ULONG HcdMsiNoLineOffered(PHCD_CONTROLLER hc)
 {
 #if !defined(_WIN64)
@@ -552,10 +562,15 @@ static VOID hcdMsiSnap(PHCD_CONTROLLER hc, const UCHAR *list,
     }
 }
 
-/* Replaces the list at Information with `size` bytes `write` fills; the
+/* The rewrites hcdMsiReplace writes. */
+#define HCD_MSI_REWRITE_INJ_NO_LINE 0UL     /* the qemu switch (H1a)      */
+#define HCD_MSI_REWRITE_STRIP       1UL     /* the line kept              */
+#define HCD_MSI_REWRITE_MESSAGE     2UL     /* mode 3: the message kept   */
+
+/* Replaces the list at Information with `size` bytes the rewrite fills; the
  * old list freed. Returns the new list, NULL when no memory. */
-static PUCHAR hcdMsiReplace(PIRP irp, PUCHAR list, ULONG size, ULONG strip,
-                            const XHCI_MSI_WALK *walk,
+static PUCHAR hcdMsiReplace(PIRP irp, PUCHAR list, ULONG size,
+                            ULONG rewrite, const XHCI_MSI_WALK *walk,
                             const XHCI_MSI_CLASSIFY *classify)
 {
     PUCHAR fresh;
@@ -565,8 +580,13 @@ static PUCHAR hcdMsiReplace(PIRP irp, PUCHAR list, ULONG size, ULONG strip,
     if (fresh == NULL) {
         return NULL;
     }
-    written = strip ? XhciMsiStrip(list, walk, classify, fresh, size)
-                    : XhciMsiInjNoLine(list, walk, fresh, size);
+    if (rewrite == HCD_MSI_REWRITE_STRIP) {
+        written = XhciMsiStrip(list, walk, classify, fresh, size);
+    } else if (rewrite == HCD_MSI_REWRITE_MESSAGE) {
+        written = XhciMsiKeepMessage(list, walk, classify, fresh, size);
+    } else {
+        written = XhciMsiInjNoLine(list, walk, fresh, size);
+    }
     if (written != size) {
         HcdPoolFreeForeign(fresh);
         return NULL;
@@ -583,6 +603,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     PUCHAR fresh;
     XHCI_POLL_VALUES values;
     ULONG asked;
+    ULONG keepMessage;
     ULONG enabled;
     ULONG outcome;
     ULONG size;
@@ -643,8 +664,9 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     if (hc->QemuInjNoLine) {
         size = XhciMsiInjNoLine(list, &hc->FilterWalk, NULL, 0);
         if (size != 0) {
-            fresh = hcdMsiReplace(irp, list, size, 0, &hc->FilterWalk,
-                                  &hc->FilterClassify);
+            fresh = hcdMsiReplace(irp, list, size,
+                                  HCD_MSI_REWRITE_INJ_NO_LINE,
+                                  &hc->FilterWalk, &hc->FilterClassify);
             if (fresh != NULL) {
                 list = fresh;
                 replaced = 1;
@@ -657,10 +679,14 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     }
 #endif
 
+    /* Mode 3 asks for the message kept, on both images and whatever the
+     * helper's state, and for nothing else (revision 12). */
+    keepMessage = (hc->FilterMode == XHCI_POLL_MODE_MESSAGE) ? 1UL : 0UL;
 #if defined(_WIN64)
-    asked = (hc->FilterMode == XHCI_POLL_MODE_LINE) ? 1UL : 0UL;
+    asked = (keepMessage || hc->FilterMode == XHCI_POLL_MODE_LINE) ? 1UL
+                                                                   : 0UL;
 #else
-    asked = (hc->FilterMode == XHCI_POLL_MODE_LINE ||
+    asked = (keepMessage || hc->FilterMode == XHCI_POLL_MODE_LINE ||
              hc->Msi86Bind.State != XHCI_MSI86_STATE_BOUND)
                 ? 1UL
                 : 0UL;
@@ -680,12 +706,29 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
             !XhciMsiAdmitted(list, &hc->FilterWalk)) {
             outcome = XHCI_MSI_OUT_UNSUPPORTED;
         }
-        if (outcome == XHCI_MSI_OUT_REPLACED) {
+        if (outcome == XHCI_MSI_OUT_REPLACED && keepMessage) {
+            size = XhciMsiKeepMessage(list, &hc->FilterWalk,
+                                      &hc->FilterClassify, NULL, 0);
+            fresh = (size != 0)
+                        ? hcdMsiReplace(irp, list, size,
+                                        HCD_MSI_REWRITE_MESSAGE,
+                                        &hc->FilterWalk, &hc->FilterClassify)
+                        : NULL;
+            if (fresh == NULL) {
+                outcome = XHCI_MSI_OUT_NO_MEMORY;
+            } else {
+                outcome = XHCI_MSI_OUT_REPLACED_MESSAGE;
+                hc->FilterStripped = hc->FilterClassify.LineMembers;
+                list = fresh;
+                replaced = 1;
+            }
+        } else if (outcome == XHCI_MSI_OUT_REPLACED) {
             size = XhciMsiStrip(list, &hc->FilterWalk, &hc->FilterClassify,
                                 NULL, 0);
             fresh = (size != 0)
-                        ? hcdMsiReplace(irp, list, size, 1, &hc->FilterWalk,
-                                        &hc->FilterClassify)
+                        ? hcdMsiReplace(irp, list, size,
+                                        HCD_MSI_REWRITE_STRIP,
+                                        &hc->FilterWalk, &hc->FilterClassify)
                         : NULL;
             if (fresh == NULL) {
                 outcome = XHCI_MSI_OUT_NO_MEMORY;

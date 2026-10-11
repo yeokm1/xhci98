@@ -410,6 +410,17 @@ ULONG XhciMsiStrip(const UCHAR *list, const XHCI_MSI_WALK *walk,
     return xhciMsiRewrite(list, walk, 0, out, capacity);
 }
 
+ULONG XhciMsiKeepMessage(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                         const XHCI_MSI_CLASSIFY *classify, PUCHAR out,
+                         ULONG capacity)
+{
+    if (walk->Verdict != XHCI_MSI_WALK_OK ||
+        classify->Class != XHCI_MSI_CLASS_REPLACEABLE) {
+        return 0;
+    }
+    return xhciMsiRewrite(list, walk, 1, out, capacity);
+}
+
 ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
                        PUCHAR out, ULONG capacity)
 {
