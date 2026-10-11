@@ -1467,3 +1467,828 @@ rather than MSI-X under mode 3 (`msi=on,msix=off`), 64-bit Vista, ME,
 reads an XP or 98 SE capture's `S` record and then refuses the capture
 for having no requirements list, since those systems never send one.
 Raw texts: `out\p36-imode\legs\<guest>\notes.txt` and the files it names.
+
+## Matrix (final, stamped 2.2.0.3)
+
+The full combined VM matrix, run on the stamped `2.2.0.3` TEST build: every checklist row on every guest, on
+the packages the owner will bench. It is also the install-from-zip evidence. It supersedes the early-warning
+pass above for every row it read again. Development host A, QEMU 11.1.0 (TCG), 2026-10-11 06:15 to 17:16
+(per-guest times in the summary table). Coordinator branch `p36-final`. Kit, checklist, brief and evidence:
+`out\p36-final\` (`kit\`, `checklist.md` with this run's section 12, `brief-legs.txt`, `assign.txt`, per-guest
+`legs\<guest>\notes.txt` with every RESULT line, texts, traces and shots; `suspect.txt` is the suspected-failure
+log with each follow-up).
+
+**The packages.**
+- `release` and `debug`: installed FROM `out\xhci98-2.2.0.3.zip` (1,031,267 bytes, SHA-256
+  `a6d91ec43cf91ea7007922e3b67140c64670e296bf5519fa279d020069affaa8`), unpacked to `out\p36-final\zip`. Every
+  binary matched `out\p36-stamp\hashes.txt`.
+  - `release` x86: `xhci98.sys` `427b9d98...`, `xhcimsi.sys` `abb1319c...`, `xhciuas.sys` `2d60ce46...`.
+  - `release` x64: `xhci98.sys` `fe1cf7b3...`, `xhciuas.sys` `7f3bfd95...`.
+  - `debug` x86 `xhci98.sys` `b108c28f...`; x64 `38269385...`.
+  - `XHCISNAP.EXE` `79fe8faa...` (all flavours); `XHCIQUAL.EXE` `d5ab9fd6...`.
+  - Version 2.2.0.3, DriverVer 10/10/2026. The source is `2.3.0.0` at `20f08ee`, with the driver binaries
+    built at `0d57571`.
+- `qemu` flavour (fault injection and traces only, never in the zip): `out\p36-stamp\pkg-qemu-x86` `xhci98.sys`
+  `db0c4847...` and `pkg-qemu-amd64` `35845597...`.
+- The zip's INFs write no `XhciWideMap` line, so every guest read it absent: the driver default, promotion off.
+
+**The harness.**
+- The kit is `out\p36-final\kit`, a copy of `out\p36-aud\kit` with the following settings:
+  - locks `<guest>-fin`, QEMU name `p36fin`, HMP 57100+idx, QMP 57130+idx, overlays `vm\t36fin`;
+  - flavours `rel`/`dbg` (the zip) and `qemu`;
+  - `-Rtc base=2026-09-20T12:00:00` on Windows 7 (activation);
+  - `-Display none` for every audio or timed isochronous leg.
+- Seven leg agents ran in parallel under the global admission lock: 98 SE; ME with the two clean 98 SE bases;
+  2000, 2000 SMP and the clean 2000; XP and XP x64; Vista x86/x64; 7 x86/x64; the XHCIQUAL DOS matrix plus the
+  36.41 re-measure. Up to 16 of the run's guests ran at once; other workers' guests shared the host from about
+  10:50.
+- **Host power throttling (harness).** The host left Modern Standby at 08:03:34 (Kernel-Power 507). From then
+  on, Windows power-throttled the windowless QEMU processes, and the guests' clocks ran at about 1/7 of real
+  time.
+  - Fixed at about 08:33: every QEMU process was opted out with `SetProcessInformation(ProcessPowerThrottling,
+    ControlMask 0x5, StateMask 0)` (`kit\nothrottle.ps1`), and the launcher now does this on every launch.
+  - Every timed row read in that window was read again (ME T8, XP T8, the Vista plays).
+  - Lesson: keep the host awake during a VM matrix, or opt QEMU out of power throttling.
+
+**Summary per guest** (rows = RESULT lines, including attribution and follow-up rows; "other" = INFO,
+superseded, bisect, NOT HIT or RECORDED rows):
+
+| Guest | Date/time (2026-10-11) | Rows | PASS | FAIL | NOT MAKEABLE | NOT RUN | other |
+|---|---|---|---|---|---|---|---|
+| 98 SE | 06:27-15:40 | 63 | 57 | 4 | 1 | 0 | 1 |
+| ME | 06:28-14:18 | 67 | 45 | 2 | 1 | 1 | 18 |
+| 98 SE NUSB clean | 06:28-08:47 | 11 | 10 | 0 | 1 | 0 | 0 |
+| 98 SE SweetLow clean | 06:28-08:53 | 11 | 11 | 0 | 0 | 0 | 0 |
+| 2000 SP4 | 06:28-15:32 | 37 | 32 | 2 | 2 | 0 | 1 |
+| 2000 SMP + Verifier | 06:28-15:32 | 30 | 28 | 0 | 1 | 1 | 0 |
+| 2000 clean | 06:28-07:18 | 13 | 13 | 0 | 0 | 0 | 0 |
+| XP SP3 | 06:27-15:55 | 55 | 54 | 1 | 0 | 0 | 0 |
+| XP x64 | 06:27-13:56 | 50 | 38 | 4 | 3 | 1 | 4 |
+| Vista x86 | 06:28-17:16 | 45 | 43 | 2 | 0 | 0 | 0 |
+| Vista x64 | 06:28-16:32 | 43 | 38 | 4 | 0 | 0 | 1 |
+| 7 x86 | 06:27-15:40 | 48 | 45 | 1 | 0 | 0 | 2 |
+| 7 x64 | 06:27-14:06 | 53 | 46 | 0 | 4 | 0 | 3 |
+| XHCIQUAL (DOS) | 06:15-06:33 | 2 | 2 | 0 | 0 | 0 | 0 |
+| 98 SE 36.41 | 06:25-07:37 | 8 | 8 | 0 | 0 | 0 | 0 |
+
+**What passed, by area.** Every guest that reached the area passed these.
+- **Install and readings.**
+  - Install from the zip: the 10 install legs of section 9, plus I1 on every regression guest.
+  - The INF values with `XhciSelectiveSuspend` absent; the Driver tab reads 2.2.0.3.
+  - bc against the zip's binaries.
+  - Counter alignment I4 on every guest and flavour.
+  - The 36.47 header on every guest (K6/K6x). XP x64 now prints the `System\BIOS` strings (M-3 fixed). No
+    computer name, user, serial or UUID appears in any file.
+- **Polling and interrupts.**
+  - 36.13 polling: P1 mode 2, P2 modes 0 and 1, the qemu dead-line legs E-1/E-2/P3/P4 on NT, P5 and P9 through
+    DebugView, P8/Q2 forced recovery (M-2: the park is not required).
+  - MSI and MSI-X on Vista and 7 (M1-M4, F, H, U1/U2): see the MSI-X note below.
+- **Devices and tools.**
+  - 36.17-36.19 (G1-G3).
+  - 36.43 composite parent (K2) and K3, the update from 2.2.0.0: values preserved, the composite re-detected
+    once, nothing after a reboot.
+  - 36.45 strings with the usbview hammer (K4), 36.46 (K5).
+  - 36.42 `portsw.vbs` (K1).
+  - Issue 18 regression I18, on 98 SE, XP and 7 x64: a Full Speed device behind a usb-hub hot-added after the
+    desktop. hub.speed.fallback reads 1, and 0 with the switch off.
+- **Transfer sizes.**
+  - 36.22/36.24/36.26: T1-T8 and B1-B3, B5-B7, B11 (XP x64 with `Control\usbstor`: 2 MiB commands, source 5),
+    B13.
+  - 98 SE and ME: nothing above 64 KiB, "not run (Windows 98 or ME)" as designed.
+- **Selective suspend.**
+  - Stage B: SB1-SB7. SB4's mid-D2 window cannot be hit in QEMU.
+  - Stage A 36.35 rest:
+    - 98 SE: shutdown with the XHCIPM client in D0 completes in 4.5 s (was the hang); S3-S5, A3-A6.
+    - ME: A0-A3, client STOP/START x2, shutdown with the client D0 in 7 s. ME's WAIT_WAKE completion and
+      callback both ran.
+    - 2000 and 2000 SMP + Verifier: B0-B5, shutdown with a read pending.
+    - XP: S4/S5 reread with reads resuming after the wake, C3-C5.
+    - Vista x86 and 7 x86: C0/C1.
+  - 36.28 part 2: ME D1/D2/D4, XP D5, 7 x86 D6.
+- **Power and Verifier.**
+  - CP1 composite-parent and hub power under S4 on 2000, 2000 SMP, XP, XP x64, Vista x86/x64 and 7 x86/x64,
+    and under ME standby and hibernate.
+  - The qemu traces read `00000404`/`00000504` on sleep and `00000101` on wake, one line per parent FDO.
+  - Driver Verifier V1 on 7 x86 (with `xhcimsi.sys`), 7 x64 and Vista x86/x64; B5 on 7 x64; the 2000 SMP
+    Verifier (0x1B) leg throughout. No Verifier stop or bugcheck anywhere, and AllocationsFailed 0.
+- **Debug package (D1)** on 98 SE, XP and 7 x64: installs, works, no assert.
+- **L5r.** 98 SE 36.46 L5 rerun with every wizard finished first: the re-attach behind the hub binds (M-1's
+  reading confirmed), and L6 passes.
+- **Audio.** Audio on NT with `-Display none` plays a 20 s tone in 20.2-22.0 s (E-3 7 x64 20.3-20.8 s; P7/T8
+  7 x86 20.3-22.0 s).
+- **XHCIQUAL 36.48 QEMU matrix (QM): 50 of 50.** The three `-smbios` header and quick cases name the make,
+  model, board and BIOS, and none of the 13 identifiers (serial, UUID, SKU, asset, part). `--no-sysinfo` prints
+  "System: not read - skipped by --no-sysinfo" and nothing of the machine. Evidence:
+  `legs\xhciqual\matrix.txt`, `smbios\`.
+
+**36.41 re-measure (W41)** on this build, method of "36.41's qualifying re-measure", `-display none`, the zip's
+`release` x86 driver (verified in each base by size, version and hash).
+- The stage A bases predate 36.43's composite parent, so attaching the audio device raised Add New Hardware
+  there. New bases with the parent installed from the zip were made: `vm\t36fin\aud\w98-audio-fin-base0/1`.
+
+| Attach after t0 | switch 0 | switch 1 | stage A switch 0 | stage A switch 1 |
+|---|---|---|---|---|
+| 120 s | 3 of 6 wedged | 2 of 6 | 6 of 9 | 5 of 9 |
+| 300 s | 2 of 2 | 2 of 2 | 3 of 3 | 2 of 2 |
+
+- Two 120 s repetitions the judge called MIXED (the Start menu opened at every read, but the tray clock did not
+  change) are counted live. Counted as wedges, the 120 s cells read 4 of 6 and 3 of 6.
+- The wedge state is 36.41's: VMM code, no bugcheck. The verdict is unchanged: Windows 98 SE's own, and the
+  switch makes no visible difference.
+- On 98 SE every re-attach of an already-installed usb-audio wedged the guest ("Msgsrv32 [Not responding]",
+  5 of 5), while first installs did not (3 of 3). Audio present at boot faulted in `USBAUDIO(01)+2ED4` (36.44
+  verdict 4). That is why 98 SE's T8, the audio part of CP1 and the playback of K3/section 9 are NOT MAKEABLE.
+- Evidence: `legs\w41\notes.txt`, `reps.txt`, `final-verdicts.txt`, `out\p36-final\audio\`.
+
+**Failures and findings, with attribution** (each was raised to the orchestrator as it came in):
+- **UAS stream fault recovery: FAIL, sent to task 36.54** (owner: fix before 2.3.0.0, worker `p36-ste`).
+  - What happens: a fault the qemu flavour injects on a UAS data-in stream TD (`XhciQemuInject` bulk codes 14
+    timeout, 15 stop, 16 error, 17 short) leaves the device taking no further command until it is removed or the
+    controller restarts. Its class timeouts climb, or never fire at all (B9(b) at 2048).
+  - Where:
+    - XP x64: 16 and 17, 2 of 2, and B9(b) = 15 at 2048 with WideMap 0 and 1;
+    - 2000: 16 and 17;
+    - XP: 14 and 15;
+    - Vista x64: 14-17; Vista x86: 14 and 17;
+    - 7 x86: 15;
+    - 98 SE: 16, 1 of 2 (the failing boot had a controller disable/enable and the UAS first install before
+      the injection).
+    - 7 x64 recovered from all four.
+  - Not a regression: the pre-stage-2 build `90c625c` (36.22 stage 1) reproduces it.
+  - The BOT stick recovers from the same fault through the HCD's soft retry, from which stream pipes are
+    excluded by design (record 17).
+  - The QEMU trace of a run that did recover shows the reset path working: Stop Endpoint, Set TR Dequeue for
+    the stream, port reset (`usb_uas_reset`), re-address, then doorbells with the stream ID.
+  - The stuck runs rest on the injection model: a Transaction Error for a TD QEMU never started, while usb-uas
+    still holds that tag's data phase. No stuck run was traced: tracing slowed QEMU, and that run recovered.
+  - Evidence: `legs\xp64\q3-16*.txt`, `q3-16x-a.txt`, `q16x-b2.txt`, `qemu-stderr-6.log`, `o16a2.txt`,
+    `o16b2.txt`, `b9-15*.txt`; `legs\w2k\q3-1[67]-*.txt`; `legs\xp\xq3-1[45]*.txt`; `legs\vx64\q3-14*.txt`, `legs\vx86\q3-*.txt`;
+    `legs\w7x86\q3-hang.txt`; `legs\w98\q3e-trace.txt`.
+- **98 SE E-4: FAIL, sent to task 36.55** (worker `p36-dl98`). This is the qemu dead-line leg:
+  `XhciQemuDeadLine 1` under `XhciInterruptMode 1`.
+  - Reproduced 2 of 2: after the desktop the first Bulk-Only copy never progresses. A true stop, not backstop
+    pace:
+    - `info blockstats` is unchanged 60 s apart, and the disks idle for 16+ min;
+    - the trace is silent, with no drain or backstop lines;
+    - all EIP samples are in VMM, none in a WDM image.
+  - The 824a6c7 reread instead copied at backstop pace (95 min for 4 MB).
+  - Evidence: `legs\w98\e4-regs.txt`, `e4r-regs.txt`, `e4r-blockstats.txt`, `e4r1.txt`, `e4r2.txt`,
+    `debugcon-29.log`, `debugcon-30.log`.
+- **ME P3 (the same leg on ME): PASS, backstop pace by design** (orchestrator ruling). Every transfer completes
+  through the backstop drain at about 2.3 transfers/s: Transfers 778 -> 1261 in 3.5 min, BackstopDrains equal,
+  no timeouts. The "freeze" is ME's system VM waiting on that slow disk. The line-alive control is clean.
+  Evidence: `legs\me\notes.txt` P3-x, `p3x0-2.txt`.
+- **ME S5 shutdown hang: not the driver** (Windows ME, pre-existing).
+  - The trigger is a USB mass-storage volume mounted but never accessed since boot. One boot-present disk that
+    had been accessed also hung once, so access is not a guaranteed workaround.
+  - It hangs the same way on the published 2.2.0.0, and on ME's own UHCI + USBSTOR stack with no xhci98 device.
+  - The xhci98 trace shows SET_POWER S5, D3 and halt, with every transfer completed. ME's storage stack then
+    issues I/O after the D3, and VMM loops at `c00138xx`. The hub, interrupt mode, transfer size and open files
+    make no difference.
+  - Candidate release-notes limitation. Evidence: `legs\me\notes.txt` S5-a to S5-f, `s5c-prev-regs.txt`,
+    `s5e-uhci-regs.txt`, `s5d-q-trace.txt`, `s5e-dir-trace.txt`.
+- **A-98 and A-2000 fault legs (qemu): KNOWN, the documented limitation.** Inject 07 is an all-ones USBSTS
+  with no proof that the controller stopped, so containment is PINNED and its transfers are kept for DMA safety.
+  A controller disable then hangs: 2000 4 of 4, and the client's state makes no difference. On 2000 the HID
+  mouse's REMOVE waits on its kept interrupt-IN read, the CPU idles in the HAL, and IdleAbandoned/Quarantined
+  read 0. On 98 SE the hang needs the suspended client; with no client, disable and enable complete.
+  Release notes, Known limitations: "disabling the controller hangs after the driver closes off a controller it
+  could not prove stopped (since 2.2.0.0)". Evidence: `legs\w2k\f-b-*.txt`, `r2*-*`; `legs\w98\qf2.txt`,
+  `qf-trace-tail.txt`, `qj1.txt`, `qj2.txt`.
+- **MSI-X BackstopDrains (NT6): attributed to QEMU, no driver change** (orchestrator decision; owner to confirm).
+  - Under `msi=off,msix=on` every NT6 snapshot counts BackstopDrains: 7 x86/x64 3-20, Vista x86 127 and 288,
+    Vista x64 115. Under MSI, line and polling it reads 0. Function is clean (fc/VERIFY 0 bad). Plays under
+    MSI-X took 21.5-22.9 s against 20.3-21.0 s under MSI.
+  - The traced MSI-X play (`qmsixaud-times.txt`, 26.059 s, with tracing on) is a separate reading. No claim is
+    made that the mechanism explains every throughput difference.
+  - It is not new: `533e721` counts it too (`basemsix.txt`, 4). That reading does not show the same frequency.
+  - The attribution is source-backed and consistent with the trace (`qtrace-msix.log` near line 2521: IMAN=1,
+    unuse, ERDP, IMAN=2, use):
+    - qemu-xhci un-uses and re-uses the MSI-X vector on every IMAN.IE toggle;
+    - it raises the interrupt before marking the vector used;
+    - `msix_notify` returns on an unused vector before any mask or PBA check, so nothing is pended.
+    The trace does not record a dropped `msix_notify` directly.
+  - The driver's IE=0 write in the ISR is deliberate (record 05, "The DIRQL exception"). EHB covers the window
+    on real hardware.
+  - BackstopDrains counts drains queued when the same pending position and generation persist across
+    observations. It is not a count of lost messages: scheduling delay can also trip it.
+  - MSI-X rows are PASS with this note. Evidence: `legs\w7x64\basemsix.txt`, `qtrace-msix.log`, `qmsix.txt`,
+    `msix-rate.txt`; `legs\vx86\m2x0.txt`, `m2x3.txt`; `legs\vx64\m2x0.txt`.
+- **B8 with XhciWideMap 1 (qemu, XP x64 and 7 x64): NOT MAKEABLE (QEMU).** The QEMU process aborts:
+  `hw/usb/dev-uas.c:895 usb_uas_handle_data: assertion failed: (uas->data3[p->stream] == NULL)`.
+  - usb-uas holds one data packet per stream, while the driver legally queues two TDs of one URB on a stream
+    ring. B9(a) needs the same, so it is NOT MAKEABLE too.
+  - BigRefuse with WideMap 0 passes. WideMap is off by default, so the shipped default is unaffected.
+  - Evidence: `legs\xp64\qemu-stderr-4.log`, `qemu-stderr-5.log`, `b8a.txt`.
+- **2000 SMP warm restart under mode 2 (WR): NOT RUN, OWED.** No quiet window existed: other workers' guests
+  held the host from about 10:50. Moved to the post-rebuild re-read on the re-stamped 2.2.0.3, which needs a
+  quiet host anyway.
+- **Known or settled, recorded only.**
+  - 2000 Code 31 on the BOT stick after S4 resume and after mode-2 recovery.
+  - 98 SE Stand by: the console fails after resume (36.28 part 2, Windows 98 SE/QEMU).
+  - ME-1 reproduced (one try).
+  - S3 not offered on 2000 (`acpi=off`) or 2000 SMP (the Cirrus driver vetoes it).
+  - QEMU wedged once on a 2000 qemu-flavour resume (process at 0 CPU).
+  - C1: XP's and 7's hidusb never idles QEMU's mouse (Windows).
+  - A3/SB4/C4 mid-transition windows cannot be hit in QEMU.
+  - U2: installing 2.2.0.2 over this build leaves `xhcimsi` running while Windows deletes the MSI properties
+    key, so the older driver runs on the line.
+  - An update from 2.2.0.0 keeps `XhciIntelPortSwitch` at 1 (NOCLOBBER over 2.2.0.0's value).
+  - Harness: the UAS disk number moves across controller restarts (stale VERIFYs discarded); the Win7 hibernate
+    resume needs the boot's device set (0xc0000411 otherwise); one misdirected XFERTEST WRITE damaged a VVFAT
+    boot stick (replaced).
+  - QEMU aborted once on Vista x86 while a UAS device was re-added after Q3 code 15
+    (`dev-uas.c:864`, `status3[stream] == NULL`; `legs\vx86\qemu-stderr-16.log`).
+  - Vista/7 hibernate resume sometimes rejected the image with 0xc0000411 before any driver loads; a later
+    attempt resumed. Vista hibernates again ~2 min after an unattended resume.
+  - One unexplained Vista x64 QEMU exit at 08:15 (no stderr, no crash record).
+- **Not run.** ME A4 (time went to the S5 attribution). ME Q4 is NOT MAKEABLE (ME never sends more than
+  64 KiB). XP x64 B10 is NOT MAKEABLE (no amd64 test client), as is 7 x64 B10 (no storage suspend requester).
+  B12 is NOT MAKEABLE on QEMU.
+
+**Owner bench items added by this run:**
+- **BackstopDrains under MSI-X** on a real MSI-X machine. 0 is the expected clean result, not a hardware
+  invariant. Confirm that MSI-X is actually in use, then read the counter deltas under sustained audio plus
+  storage, across idle-to-active transitions, and across lifecycle cycles.
+- **`XhciWideMap 1` with a real UAS drive:** a stage-2 TD on a stream ring, with fc-verified copies of 1 MiB and
+  more.
+- **A UAS drive under a real transaction error** (a marginal cable or hub): does it recover without a replug?
+  (after 36.54).
+
+**Roadmap tasks whose VM legs this run completes** (not ticked here; the orchestrator ticks):
+- 36.13 (the owed amd64 and NT dead-line legs; 98 SE's E-4 goes to 36.55);
+- 36.16 (M1-M4, F3, H2/H3, U1/U2 on the stamped build);
+- 36.17-36.19; 36.22, 36.24 and 36.26 (sections 5 and 5b; B8/B9(a)/B12 NOT MAKEABLE);
+- 36.35 (stage A's rest on ME, 2000 SMP + Verifier and 98 SE; bench clause 36.36 stays the owner's);
+- 36.39 (stage B SB1-SB7);
+- 36.41 (re-measured on the stamped build);
+- 36.42, 36.43 (K2, K3);
+- 36.45; 36.46 (L5/L6 rerun);
+- 36.47 (K6 incl. XP x64);
+- 36.48 (QEMU matrix 50/50);
+- 36.49 (I18 regression);
+- the comppwr / D4 checks (CP1, V1);
+- 36.final's install legs from the zip.
+Not complete:
+- 36.28 part 2: ME and NT read; 98 SE standby settled as Windows 98 SE's.
+- The 2000 SMP mode-2 warm-restart timing: owed.
+- Q3 on UAS streams: 36.54.
+- 98 SE E-4: 36.55.
+
+**Owed to the post-rebuild re-read** on the re-stamped 2.2.0.3. Since this run, `2.3.0.0` has merged 36.53
+(`XhciInterruptMode` 1 = line only, 3 = message only), 36.54 (UAS stream fault recovery) and the INF changes
+of the install/update legs.
+- The 36.54 rows: Q3 bulk codes 14-17 on UAS streams on XP x64, 2000, XP, Vista x64, 7 x86 and 98 SE, and B9(b)
+  at 2048 on XP x64.
+- 98 SE E-4 (36.55).
+- The 2000 SMP warm restart under mode 2 (WR), on a quiet host.
+- The rows that depend on what changed:
+  - P2 modes 0/1 and M1/F (mode 1 = line);
+  - M2 mode 3 under MSI and MSI-X;
+  - the qemu dead-line legs E-1/E-2/P3/P4 (mode 1);
+  - I2 (the INF values);
+  - K3, the update from 2.2.0.0 (values preserved).
+- A smoke on each guest of install, CP1 S4 and shutdown with a USB disk and the stage A client on 98 SE and
+  ME. These are the power and shutdown paths read above.
+
+The full table follows. Results are the leg agents' verdicts. Where the final attribution differs, it is
+appended in bold.
+
+| Guest | Check | Package | Result | Observed (abridged; full line in `legs\<guest>\notes.txt`) |
+|---|---|---|---|---|
+| 98 SE | I1 | rel | PASS (TMP noted) | Update Driver from D:\XHCI98.INF (zip release-x86 427b9d98...): only the documented usbd.sys/usbui.dll prompts, no resta... |
+| 98 SE | I2 | rel | PASS | reg-inst.txt USB\0002: XhciIntelPortSwitch 0, XhciMaxTransferKB 0x400, XhciInterruptMode 0, XhciPollIdleMs 0x32, XhciPol... |
+| 98 SE | I3 | rel | PASS | i3.txt: 'verbosity tier read 3, APPLIED 3' (3 covers level 2); intr.mode 0, intr.delivery 1, intr.reason 1, intr.pin 1; ... |
+| 98 SE | I4 | rel | PASS | xhci98.sys 427b9d98... (zip release-x86) + XHCISNAP 79fe8faa... (zip xhcisnap) - same zip; tool 'xhcisnap 2.2.0.3, built... |
+| 98 SE | M5 (down-level 98 SE) | rel | PASS | i3.txt: intr.mode 0 delivery 1 reason 1 (63/64 0 omitted, 65 1, 66 1), msi.* notes all 0, no MSI counter 96-108 nonzero,... |
+| 98 SE | K6 | rel | PASS | k6x.txt: 'Windows 98 SE: platform 1, version 4.10, build 2222, A', 'x86 (32-bit Windows)', make/model 'not available on ... |
+| 98 SE | SB1 | rel | PASS | i3.txt (-verbosity 3): susp.switch.value FFFFFFFF (absent), susp.switch 0; 'DNCTRL not read (selective suspend off, or n... |
+| 98 SE | T1 | rel | PASS (98 SE cap 60 KiB as expected) | C:\BIG.BAT: H:\BIG.BIN -> C: fc clean, C: -> H:\B2.BIN fc clean (t1d.png); C:\BIG.BIN -> E:\B3.BIN (BOT) fc clean (t1e.p... |
+| 98 SE | G2 | rel | PASS | g1.txt usbif hubs: port 1 stick 46f4:0001 _EX speed 3, V2 proto 4 flags 3; port 3 UAS 46f4:0003 _EX speed 3; port 6 HS m... |
+| 98 SE | P2 mode 0 | rel | PASS (mode 1 below) | i3.txt/t1.txt: intr.mode 0, IntrDelivery 1, IntrReason 1 (63/64 0), PollRole 1, PollPeriodLast 100; mouse moves (m9.png)... |
+| 98 SE | B6 (256 MB part) | rel | PASS (256 MB; 98 clause + 64 MB below) | t1.txt stage 2: 'XhciWideMap not set (the default)', 'promotion off; the register-free check not run (XhciWideMap off)',... |
+| 98 SE | K2 | rel | PASS (playback: T8) | a1 port 3 (12 Mb/s): parent 'xHCI98 USB Composite Device' installed silently (XHCI98\COMPOSITE&VID_46F4&PID_0002\1-0000:... |
+| 98 SE | G1 (part) | rel | PASS (hub part below) | g1.txt: 3 interfaces (stick 46F4:0001, mouse 0627:0001, UAS 46F4:0003); k2if.txt with usb-audio: XHCI98\COMPOSITE&VID_46... |
+| 98 SE | I18 (switch default) | rel | PASS (fallback 0 leg after the restart batch) | i18a.txt: slot 3 hub port 8 FS, slot 4 port 8 route 00001 tier 1 FS configured; hub.speed.value=FFFFFFFF, hub.speed.fall... |
+| 98 SE | G1 (hub) | rel | PASS | g1hub.txt: 4 interfaces: stick, root mouse, XHCI98\HUB&VID_0409&PID_55AA\314159-0000:00:03.0-4 (the external hub), USB\V... |
+| 98 SE | K4 (36.45 L1-L5) | rel | PASS | UV32: stick 'QEMU'/'QEMU USB HARDDRIVE'/'1-0000:00:03.0-1', Device Bus Speed Super (uv2/uv4.png); HS mouse 'QEMU'/'QEMU ... |
+| 98 SE | K5 | rel | PASS (kbd works on this build, unlike wave 3's no-second-wizard hold) | HS mouse port 2 + FS mouse behind hub move the pointer (m9/h5.png); tablet 4.2 bound (HIDDEV), its reports move the poin... |
+| 98 SE | S1 | rel | PASS | s1.txt after a 2-minute untouched idle (HS mouse, FS mouse behind the hub, stick attached): susp.switch.value FFFFFFFF, ... |
+| 98 SE | P1 mode 2 | rel | PASS | r1.txt (after BIG.BIN UAS copy+fc (r1b.png), E: F.BAT fc x2 (r1c.png), both mice moving (r1m1/r1m2.png), then 60 s idle)... |
+| 98 SE | T2 64 | rel | PASS | r1.txt: xfer.max.value 0x40, xfer.max.why 1, xfer.max.bytes 0x10000; 'command size in effect 65536 bytes; asked 1 times'... |
+| 98 SE | B6 (98 clause) | rel | PASS (64 MB part on -Tag m) | with XhciWideMap 1 set for this boot: r1.txt 'XhciWideMap 1', xfer.wide.value 1 / switch 1, xfer.wide.check 7, enabled 0... |
+| 98 SE | K1 portsw.vbs | rel | PASS (final 0 read below) | 'start D:\portsw.vbs': '0 - off' (k1a.png) -> 1 'now 1 on every xhci98 controller ... RESTART WINDOWS' (k1b.png); after ... |
+| 98 SE | G3 FastPoll 1 | rel | PASS (2/3/4 below) | r1.txt: fastpoll.value 1, fastpoll.mode 1, no other fastpoll.* note, no FastPoll counter; FS mouse behind the hub moves ... |
+| 98 SE | T8 | rel | NOT MAKEABLE (Windows 98 SE 36.41 audio wedge; attribution Windows, settled) | not reached: the usb-audio hot-add itself wedged 98 SE's UI (Msgsrv32 not responding, VMM EIPs C000A881/C0003621/C005340... |
+| 98 SE | K1 (final) | rel | PASS | launch 4 (after the restart): 'start D:\portsw.vbs' reads '0 - off' (k1e.png), Cancel = no change |
+| 98 SE | P2 mode 1 | rel | PASS | r2.txt: IntrModeRead 1, IntrMode 1, IntrDelivery 1, IntrReason 5, intr.pin 1, no PollRole/poll activity (promotions 0, p... |
+| 98 SE | T2 2048 | rel | PASS (98 cap as expected) | r2.txt: xfer.max.value 0x800, why 1, bytes 0x200000; 'command size in effect 2097152 bytes'; UAS send 65 command size 20... |
+| 98 SE | I18 (fallback 0) | rel | PASS | r2.txt: hub.speed.value 0, hub.speed.fallback 0, Usb2HubSpeedSwitchRead 1, 'XhciUsb2HubSpeedFallback read; the default I... |
+| 98 SE | G3 FastPoll 2 | rel | PASS | r2.txt: fastpoll.value 2, fastpoll.mode 2, no device-level fastpoll note or counter for the (unpatched) QEMU mice; both ... |
+| 98 SE | T2 4096 | rel | PASS | r3.txt: xfer.max.value 0x1000, xfer.max.why 4, xfer.max.bytes 0x100000; 'command size in effect 1048576 bytes'; UAS send... |
+| 98 SE | G3 FastPoll 3 | rel | PASS | r3.txt: fastpoll.value 3, fastpoll.mode 3, no device-level fastpoll note/counter; both mice move; mode 0 back: IntrDeliv... |
+| 98 SE | T2 0 | rel | PASS | r4.txt: xfer.max.value 0, xfer.max.why 4, xfer.max.bytes 0x100000; command size in effect 1048576; UAS send 61 command s... |
+| 98 SE | G3 (FastPoll 0-3 + mode 4) | rel | PASS | i3/r1/r2/r3/r4.txt: fastpoll.value/mode 0/0, 1/1, 2/2, 3/3, 4/4; no fastpoll.open / fastpoll.fallback note and FastPollO... |
+| 98 SE | CP1 Stand by | rel | PASS (hub/mouse) / NOT MAKEABLE (composite: Windows 98 SE 36.41 + usbaudio.sys) | hub + mouse part: standby entered, resume reached the desktop, the hub's mouse works after the wake (cp1b-cp1e.png); con... |
+| 98 SE | A-98 S1/S2 | rel | PASS | S1.txt 'dev D0 sys S0 started 1 ... config 1 attr 0xA0 in 0x81 status 0'; s1snap.txt susp.switch.value 1, susp.switch 1,... |
+| 98 SE | A-98 shutdown with the client in D0 (READS ON) | rel | PASS (4.5 s) | client D0, reads on 1 ok 8 (S2b.txt), DOS box open; ret on 'Shut down' (a98shut-dlg.png) -> QEMU 'paused (shutdown)' aft... |
+| 98 SE | A-98 S3 (WW + D2) | rel | PASS | S3a.txt wake req 1 held 1; S3b.txt dev D2, power req 1 cb 1 D2; s3snap1/s3snap2 (~45 s apart): susp.seq=00102110, PORTSC... |
+| 98 SE | A-98 S4 reread (remote wake; the 9x WAIT_WAKE read) | rel | PASS | S4a.txt after 2 moves: 'wake req 1 cb 1 last 0x00000000 / irp done 1 last 0x00000000 held 0' (WakeRequests 1, WakeIrpCom... |
+| 98 SE | A-98 S5 reread (host resume) | rel | PASS | S5a dev D2 req 3 cb 3; s5snap1 susp.seq 00102110 (third), PORTSC 6 0E63 U3, SuspSuspended 2, no new SuspArms (unarmed); ... |
+| 98 SE | A-98 A3 unplug at each state | rel | PASS (c/d: mid-transition not reachable by timing, recorded) | (a) ACTIVE + READS ON: device_del pm1 -> PMCTL 'cannot open \\.\XHCIPM0, error 2' (client gone), port 6 PORTSC 02A0 empt... |
+| 98 SE | A-98 A4 controller disable/enable while SUSPENDED | rel | PASS | pm5 WW + D2 (A4d2.txt dev D2, wake held 1); DM controller 'Disable in this hardware profile' -> controller Code 22, clie... |
+| 98 SE | A-98 A4 reboot with the device suspended | rel | PASS | WW + D2 (A4r-d2.txt dev D2; a4r-snap.txt susp.seq 00502110, PORTSC 6 0E63 U3) -> Shut down -> 'paused (shutdown)' after ... |
+| 98 SE | A-98 A5 behind the hub | rel | PASS | pm1 removed; h1 usb-hub hot-added port 4 (this overlay had no hub driver: 'xHCI98 USB Hub' wizard from D:\XHCI98.INF fin... |
+| 98 SE | D-part2 98 SE Stand by (mouse + client only, no disk) | rel | RECORDED (entry no hang; resume to the desktop; post-wake console = Windows 98 SE/QEMU, settled) | h1/pm2 removed, pm3 client on root port 2 in D0 with READS ON (ok 6, D2s1.txt), DOS box open, nothing else on the bus; S... |
+| 98 SE | A-98 A6 XhciInterruptMode 2 | rel | PASS | SETV 0002 XhciInterruptMode 2 + restart (launch 17): a6-s3snap1: intr.mode 2, delivery 2, reason 8, PollRole 2; S1 confi... |
+| 98 SE | L5r (36.46 L5, every wizard finished before the next removal) | rel | PASS (M-1 resolved: with the wizard finished first, the re-attach behind the hub binds) | h1 usb-hub port 4: 'xHCI98 USB Hub' wizard from D:\ finished (l-h1..l-h4.png); m1 usb-mouse at 4.1: HID wizard (HIDDEV, ... |
+| 98 SE | L6 | rel | PASS | l5r.txt (verbosity 3 APPLIED): no cfg.* note, SelectEndpointsRequested 2 = EndpointsOpened 2, SelectEndpointsRefused abs... |
+| 98 SE | T6 (98 SE at -Mem 64) | rel | PASS | 1024: UAS H: -> C: -> H:\M1.BIN fc clean (m-t1.png), BOT C: -> E:\M2.BIN fc clean (m-t3.png), m1024.txt command size 104... |
+| 98 SE | B6 (64 MB part) | rel | PASS | m1024.txt / m2048.txt vs t1.txt (256 MB): identical stage-2/3 block - XhciWideMap not set, 'promotion off; the register-... |
+| 98 SE | K3 update from 2.2.0.0 with usb-audio | prev->rel | PASS (re-detection/values) ; audio function use NOT MAKEABLE (36.41 wedge) | prev install + audio (function directly under the bus, k3-enum-prev.txt); update from the zip package (F:\XHCI98.INF) no... |
+| 98 SE | D1 debug package | dbg | PASS | -Tag d (fresh over gold, package-dbg.txt xhci98.sys b108c28f... 273,512 B = zip debug-x86): Update Driver from D:\ with ... |
+| 98 SE | Q3 code 16 (bulk Error on the UAS data-in pipe during a copy) | qemu | FAIL SUSPECT-DRIVER (attribution open: the HCD's UAS stream recovery after RESET_PORT on 98 SE, or the qemu layer still withholding the endp...; **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | after the injection xhciuas reset the port (RESET_PORT done, endpoint mask 1A4) and no UAS transfer completed again: can... |
+| 98 SE | E-4 (mode 1 + XhciQemuDeadLine 1) | qemu | FAIL SUSPECT-DRIVER (BOT stick I/O stops under the mode-1 dead line on 98 SE, then a ring-0 VMM loop - same shape as ME's 2/2; earlier p36-p...; **final: FAIL -> 36.55 (98 SE dead-line stop)** | desktop reached 13:02, BC clean (e4-d1.png); 'F E' (BOT stick, 4 MB copy + fc x2) listed E: and then never progressed (e... |
+| 98 SE | E-4 follow-up (slow progress or true stop?) | qemu | FAIL SUSPECT-DRIVER (true stop under the mode-1 dead line on 98 SE; the 824a6c7 reread's 95-min backstop pace is not what happens here); **final: FAIL -> 36.55 (98 SE dead-line stop)** | TRUE STOP, not backstop pace: QEMU 'info blockstats' for the stick drive (bstk) 60 s apart at ~13:35: Read 142,848 B / 4... |
+| 98 SE | Q3 code 15 (bulk Stop on the UAS data-in pipe) | qemu | PASS | launch 32 (mode 0): 02150083 armed before the copy (qemu.inj.bulk.armed 00150207 = slot 2 DCI 7), fired on the copy's TD... |
+| 98 SE | Q3 code 17 (bulk Short on the UAS data-in pipe) | qemu | PASS | launch 33 (fresh boot, first uncached BIG.BIN read): 07170083 -> qemu.inj.bulk.armed 00170207, qemu.inj.bulk=17020207 (s... |
+| 98 SE | Q3 code 14 (bulk Timeout = lost completion on the UAS data-in pipe) | qemu | PASS | launch 34: 08140083 -> qemu.inj.bulk.armed 00140207, qemu.inj.bulk.lost=0FE10870 (the TD's first TRB), qemu.inj.bulk.rel... |
+| 98 SE | Q3 code 16 REPRODUCTION (fresh boot, no DM disable/enable in that boot) | qemu | PASS - the 12:42 failure did NOT reproduce (1 fail of 2). Difference noted: the failing run (launch 27) fired in the boot where the controll... | launch 35: 09160083 -> qemu.inj.bulk=16020207, qemu.inj.ended 16, qemu.inj.done 16; trace: cancelled 1, 'reset port 0003... |
+| 98 SE | Q4 XhciQemuMapGrant constrained grant during a UAS read | qemu | PASS | launch 36 (XhciQemuMapGrant 4 + XhciInterruptMode 2): qemu.mapgrant 4, mapgrant.applied 4, 'map grant 4 registers; a chu... |
+| 98 SE | Q2 / P8 forced recovery under mode 2 (XhciQemuInject 01050000 form) | qemu | PASS (81 = 1, 82 = 1 -> 2) | launch 36 (mode 2), mouse m1 + BOT stick + UAS attached; q2a.txt before: PollKicks 1, PollParks 0, recovery window 0 of ... |
+| 98 SE | CP1 trace (Stand by) | qemu | PASS (4 on sleep / 1 on wake, one parent = the hub; audio parent not makeable) | Dx: 00000404 on sleep, 00000101 on wake; resume finishes; devices work after / launch 37 (qemu, defaults, NO USB disk, n... |
+| 98 SE | A-98 qemu fault-injection leg (client SUSPENDED, inject 07 pinned branch, then DM disable + enable) | qemu | FAIL SUSPECT-DRIVER (the configuration manager hangs after QUERY_STOP on a pinned/contained controller with a suspended client; no-injection...; **final: KNOWN - documented limitation (disable after a pinned containment hangs; transfers kept for DMA safety)** | pinned branch reached with the client suspended (qf2.txt, IdleAbandoned/IdleQuarantined 0); DM controller 'Disable in th... |
+| 98 SE | A-98 qemu leg CONTROL (same injection, NO client device) | qemu | PASS - the 15:20 hang needs the suspended client (pinned controller + SUSPENDED XHCIPM device + disable), attribution still open (driver's Q... | launch 40 (switch 1, no client attached): 0C070000 -> CONTAINED/PINNED as before (qj1.txt); DM disable: trace teardown, ... |
+| ME | I1 | rel | PASS | Found New Hardware -> D:\XHCI98.INF; restart asked (wizard + boot pass): XHCI98.TMP + WININIT [rename] until the restart... |
+| ME | I2 | rel | PASS (WideMap: absent, not 0 - recorded for the coordinator) | reg-inst.txt USB\0000: LogVerbosity 0, LogDebugView 0, ForceBulkOnly 0, FastPollFsLs 0, FirstEnumWaitMs 0x1388, FirstEnu... |
+| ME | I3 | rel | PASS | i3.txt: tool xhcisnap 2.2.0.3, driver file 2.2.0.3; verbosity read 3 APPLIED 3; intr.mode 0 delivery 1 reason 1 pin 1; p... |
+| ME | I4 | rel | PASS (poll block) | xhci98.sys 427b9d98... (zip release-x86) + XHCISNAP 79fe8faa... (zip xhcisnap), both 2.2.0.3 (snapshot header 'tool xhci... |
+| ME | SB1 | rel | PASS | i3.txt (-verbosity 3): susp.switch.value FFFFFFFF, susp.switch 0; 'DNCTRL not read (selective suspend off, or no MMIO)',... |
+| ME | K6 | rel | PASS | k6x.txt: 'Windows ME: platform 1, version 4.90, build 3000', 'x86 (32-bit Windows)', make/model 'not available on this O... |
+| ME | T1 | rel | PASS (64 KiB ceiling on ME recorded, USBNTMAP) | C:\T1 batch: G:\BIG.BIN (UAS) -> C: fc clean; C: -> F:\B2.BIN (BOT) fc clean; C: -> G:\B3.BIN (UAS write) fc clean (me-t... |
+| ME | B6 | rel | PASS (the 9x reason is read with WideMap 1 in the T2 reboot cycle below) | fc clean (T1); b6.txt: 'promotion off; the register-free check not run (XhciWideMap off)' - the reason printed is WideMa... |
+| ME | K2 | rel | PASS | a1 port 3 (12 Mb/s): ME wizard 'Audio Device' -> 'USB Audio Device' automatic (WDMA_USB); DM by connection: 'xHCI98 USB ... |
+| ME | G2 | rel | PASS | usbif hubs (k2if.txt): port 1 vid 46f4 pid 0001 '_EX speed 3' (V2 proto 4 flags 3), mouse port 6 speed 2, audio port 7 s... |
+| ME | G1 | rel | PASS | k2if.txt (audio attached): stick, mouse, XHCI98\COMPOSITE&VID_46F4&PID_0002 parent; g1if.txt (hub set): stick, mouse, XH... |
+| ME | K4 36.45 L1-L5 | rel | PASS | UV32: stick QEMU / QEMU USB HARDDRIVE / 1-0000:00:03.0-1 (me-uv-p1.png), UAS QEMU / USB Attached SCSI HBA / 27842-...-3 ... |
+| ME | T8 | rel | PASS (function) - the slow time base recorded as harness/QEMU | a2 usb-audio port 3 + hub h2 port 4 (stick s3 4.2, tablet t2 4.1) bound silently; C:\T8: C:\BIG.BIN -> F:\B6.BIN (root S... |
+| ME | K1 portsw.vbs (part 1) | rel | (continued) | 'XhciIntelPortSwitch ... USB\0000 0 - off' (me-k1a.png); 'portsw.vbs 1' -> '1 - on, on the listed Intel chipsets ... now... |
+| ME | T2 64 | rel | PASS | p1a.txt: xfer.max.value 0x40 why 1 bytes 0x10000; 'XhciMaxTransferKB used as set (64)', 'command size in effect 65536 by... |
+| ME | P1 mode 2 | rel | PASS | p1a.txt intr.mode.read 2, intr.mode 2, delivery 2, reason 8; IntrDelivery 2 IntrReason 8 PollRole 2 PollPeriodLast 8; US... |
+| ME | K1 portsw.vbs | rel | (continued) | after Restart A: 'XhciIntelPortSwitch ... 1 - on, on the listed Intel chipsets' (me-k1c.png); psw.gate 0 (QEMU not Intel... |
+| ME | S5 shutdown (every boot) | rel | FAIL SUSPECT-DRIVER; **final: not the driver - Windows ME (a never-accessed USB disk at shutdown; same on 2.2.0.0 and on ME's own UHCI)** | ME shutdown hangs: black screen, vCPU 100 % in ring-0 VMM loop EIP c00138c1/c00138c2/c00511e1/c000b61c, HLT 0, never pow... |
+| ME | T2 2048 | rel | PASS | p2b.txt xfer.max.value 0x800 bytes 0x200000, 'used as set (2048)', 'command size in effect 2097152', UAS 'command size 2... |
+| ME | P2 mode 1 | rel | PASS | p2b.txt intr.mode.read 1, intr.mode 1, delivery 1, reason 5; IntrDelivery 1 IntrReason 5, no role/watcher counters, no c... |
+| ME | P2 mode 0 | rel | PASS | i3.txt (default boot): intr.mode.read 0, mode 0, delivery 1, reason 1, PollRole 1 |
+| ME | K1 portsw.vbs | rel | PASS | me-k1a (0 - off), me-k1b (set 1), me-k1c (1 after restart), me-k1d (set 0), me-k1e '0 - off' after the next restart; scr... |
+| ME | B6 (9x reason) | rel | PASS | p2b.txt: 'XhciWideMap 1', xfer.wide.check 7, xfer.wide.enabled 0, 'promotion off; the register-free check not run (Windo... |
+| ME | M5 | rel | PASS | i3.txt: delivery line (INTx), 0 0 1 1, no counter 96-108 nonzero, MsiFilterMode (109) 4294967295 = FFFFFFFF, 'message in... |
+| ME | S1 | rel | PASS | i3/k2a/k4/p1b/p2b.txt: susp.switch.value FFFFFFFF, susp.switch 0, no Susp*/Idle* counter nonzero; idle stretches > 2 min... |
+| ME | S5-x0 | rel | PASS (no hang without the hub set) | powered off: 2 s shot shows the shutdown screen (s5x0-2s.png), paused (shutdown) at 7 s |
+| ME | S5-a | rel | HANG - mode/size values not involved | hangs: not off after 150 s, black, 12 samples EIP c00138xx/c005xxxx/c000bxxx ring 0 HLT 0 (s5a-regs.txt, s5a-pre.png, s5... |
+| ME | S5-b hub set | rel | HANG - the hub set alone is enough (S5-x0: stick+mouse+UAS without the hub powered off) | hangs: black at 2 s, not off after 150 s, ring-0 loop (s5b-hub-regs.txt, s5b-hub-pre.png, s5b-hub-2s.png) |
+| ME | S5-b hub only | rel | NO HANG - a device behind the hub is needed | powered off in 7 s (s5b-hubonly-2s.png) |
+| ME | S5-b hub+tablet | rel | NO HANG | powered off in 7 s (s5b-hubtab-2s.png) |
+| ME | S5-b hub+stick (also S5-e) | rel | HANG - trigger = a Bulk-Only stick behind the hub; no I/O or open file needed. Root SuperSpeed stick + UAS + mouse (S5-x0), hub alone, hub+t... | hangs: black, not off after 150 s, 12 samples ring-0 VMM loop (s5b-hubstk-regs.txt, s5b-hubstk-2s.png) |
+| ME | S5-d qemu | qemu | (trace) | HANG reproduced (s5d-q-regs.txt 12 samples ring-0 VMM loop c00138xx/c005xxxx). Trace s5d-q-trace.txt (debugcon-12.log): ... |
+| ME | S5-d qemu control | qemu | (bisect) | HANG as well (s5d-qctl-regs.txt; s5d-qctl-trace.txt ends identically: SET_POWER S5, D3, halted, save declined, transfers... |
+| ME | S5-e | qemu | NO HANG when the disk was accessed | powered off in 7 s (s5e-dir-2s.png). Trace s5e-dir-trace.txt: transfers 0x31 -> 0xB8 -> 0xBA all BEFORE the S5 power IRP... |
+| ME | S5-c prev | prev | PRE-EXISTING (2.2.0.0 hangs the same way; not new in 2.2.0.3) | HANG, same ring-0 loop (s5c-prev-regs.txt, s5c-prev-2s.png); the next boot with the stick accessed (F.BAT fc clean, p-fc... |
+| ME | S5-e ME own stack | rel | HANG on Windows ME's own USB stack - not xhci98 | HANG: not off after 150 s, the SAME ring-0 VMM loop (EIP c00138c1/c0013740/c000b5xx-b6xx/c0052563; s5e-uhci-regs.txt, s5... |
+| ME | S5 attribution | rel/qemu/prev | NOT DRIVER (Windows ME) | Trigger: a USB mass-storage volume mounted but never accessed since boot, at Start > Shut Down. Not needed: the hub, int... |
+| ME | T8 (re-read, supersedes the 08:05 line read under host throttling) | rel | PASS | launch 13 (unthrottled, 10:40): set s1, m1, a1 usb-audio port 3, hub h1 + stick 4.2 + tablet 4.1; C:\T8 C:\BIG.BIN -> F:... |
+| ME | CP1 Stand by | rel | PASS | launch 19 set (s1, m1, a1 port 3, hub h1 + stick 4.2 + tablet 4.1, all disks accessed by T8): Stand by (cp1s-dlg.png) ->... |
+| ME | CP1 Hibernate | rel | PASS | Hibernate (cp1h-dlg.png) -> image written, 'paused (shutdown)' after 32 s (cp1h-off.png); relaunch 20 on the same overla... |
+| ME | K5 | rel | PASS | mouse port 2 moves the pointer (me-hid.png), tablet behind the hub moves it (me-tab.png, cp1h-tab.png), sticks fc clean;... |
+| ME | A-ME A0 | rel | PASS | BC clean, F: F.BAT fc clean (s-a0fc.png), USB mouse moves (s-a0m.png); a0.txt susp.switch.value FFFFFFFF, susp.switch 0,... |
+| ME | A-ME A1 | rel | PASS | s1.txt 'dev D0 sys S0 started 1 ... config 1 attr 0xA0 in 0x81 status 0'; s1snap.txt susp.switch.value 1, susp.switch 1,... |
+| ME | A-ME A2 S1-S6 | rel | PASS | S2 READS ON + tablet reports: ok 0 -> 8 (s2b). S3 WW (wake req 1 held 1) + D2 (dev D2, power req 1 cb 1): susp.seq 00102... |
+| ME | A-ME A3 | rel | PASS ((d) could not land before the D0 under QEMU's instant wake - recorded) | (a) del during reads: PMCTL 'cannot open \\.\XHCIPM0' (device object gone), re-plug binds silently, READS ON + reports o... |
+| ME | A-ME client STOP/START x2 | rel | PASS | cycle 1: Disable -> Code 22 (ss-dis1.png), Enable -> 'working properly' (ss-en1.png); the pending read was cancelled at ... |
+| ME | A-ME shutdown with the client in D0 (READS ON) | rel | PASS (7 s) | switch 1, client D0 with READS ON (reads 15), stick s1 attached (accessed): Start > Shut Down -> shutdown screen at 2 s ... |
+| ME | D-part2 D1 | rel | PASS | before: d1d2 dev D2 held WW, d1snap susp.seq 00102110 SuspSuspended 1, stick F: fc clean; Stand by -> 'paused (suspended... |
+| ME | D-part2 D2 | rel | PASS | WW + D2 (d2d2: dev D2, held WW; d2snap 00402110 SuspSuspended 4), stick accessed; Hibernate -> 'paused (shutdown)' in 16... |
+| ME | D-part2 D3 | rel | NOT HIT (window not provably hit in 2 tries; no hang) | try 1 void (COM1 'Write fault' after the hibernate resume ate the keys - harness); try 2 (delay 6 s) and try 3 (delay 4 ... |
+| ME | D-part2 D4 | rel | PASS | SETV InterruptMode 2 + restart: d4a.txt intr.mode 2, delivery 2, reason 8; Stand by -> suspended 4 s, wake: F: F.BAT fc ... |
+| ME | ME-1 (one try) | rel | REPRODUCED - known open defect ME-1 (Windows ME storage path above the bus per 36.28 part 1), recorded only | C:\LOOP copying D:\RAND.BIN -> F:\R3.BIN (me1-loop.png), Stand by -> suspended in 4 s; system_wakeup + key: the screen s... |
+| ME | CP1 trace | qemu | PASS | D3 shape) per parent on sleep, 00000101 on wake (00000100 on ME = by design) / usb-audio a1 port 3 (composite parent) + ... |
+| ME | Q1 no-interrupt start, mode 0 | qemu | PASS | q1m0.txt intr.mode.read 0, mode 0, delivery 2, reason 4, pin 0, qemu.inj.nointerrupt 1; IntrDelivery 2 IntrReason 4 Poll... |
+| ME | Q1 no-interrupt start, mode 1 | qemu | PASS (fails as designed; reason-7 channel NOT MAKEABLE on 9x) | DM controller 'not working properly (Code 10)' (q1b-dm.png); XHCISNAP 'cannot open \\.\HCD0, error 2' (no started FDO, q... |
+| ME | P3 dead line under mode 1 | qemu | FAIL SUSPECT-DRIVER; **final: PASS - backstop pace (~2.3 transfers/s) by design under mode 1 + dead line** | run 1 (-BootStick, mouse hot-added): desktop froze within ~1 min of the mouse add, vCPU in the ring-0 VMM loop (p3-hang-... |
+| ME | P3-d control | qemu | PASS (control) | the same leg works with the line alive |
+| ME | S5-f (follow-up) | qemu | HANG recorded | HANG: not off after 100 s, black, VMM loop (s5f-regs.txt, q2-sd.png) - so 'accessed' does not always prevent it (this st... |
+| ME | P3-x attribution | qemu | RE-ATTRIBUTED: no driver hang; backstop pace (coordinator to rule PASS/FAIL against 'devices work') | (a) the backstop runs: p3x0 BackstopDrains 1 at idle; after the stick's enumeration p3x1 Transfers 49/49, BackstopDrains... |
+| ME | P4 dead line under mode 0 | qemu | PASS | -Tag q2, XhciInterruptMode 0 + XhciQemuDeadLine 1: p4.txt intr.moved 3, qemu.inj.deadline.isr 1, intr.retired 1, intr.mo... |
+| ME | Q2 forced recovery | qemu | PASS | the value present at the start (01050000) is latched unfired by design (q2rec.txt qemu.inj.latched 01050000, window 0 of... |
+| ME | T2 4096 | rel | PASS | t2c4096.txt xfer.max.value 0x1000, why 4, bytes 0x100000; 'XhciMaxTransferKB out of 64-2048: the default (4096)', comman... |
+| ME | T2 0 (and T2 summary) | rel | PASS | 0: t2d0.txt xfer.max.value 0, why 4, 'out of 64-2048: the default (0)', command size 1048576, UAS fc x2 clean (t2d-fc.pn... |
+| ME | Q3 bulk faults 14-17 hex under a UAS copy | qemu | PARTIAL: 0x14 PASS, 0x15 fired/no completion note, 0x16/0x17 refused by the injector (harness sequencing) - no driver failure seen | UAS u1 (-Big, F:) on -Tag q2, C:\Q3 = copy F:\BIG.BIN C:\Q.BIN + fc /b, the fault fired at run time before each copy: q3... |
+| ME | Q4 XhciQemuMapGrant during a 1 MiB / 2 MiB UAS read | qemu | NOT MAKEABLE (9x request size) | ME's USBNTMAP never sends more than 64 KiB (bulk URBs longest 61440 at every XhciMaxTransferKB, b6/p2b/t2c4096), so a 1-... |
+| ME | A-ME A4 (if time) | rel | NOT RUN (time) | not run: the S5 and P3 attributions requested by the coordinator took the time |
+| ME | watch XHCI98.TMP / WININIT | rel | PASS (ledger behaviour) | every ME install this run (-Tag r, q, p, s, q2) asked for the restart; -Tag r showed XHCI98.TMP + WININIT.INI [rename] b... |
+| 98 SE NUSB clean | 9 install (I1/I2) | rel | PASS | Add New Hardware -> D:\XHCI98.INF (+ the 98 SE CD for USBD.SYS); WININIT rename on the restart (ledger); reg-inst.txt US... |
+| 98 SE NUSB clean | 9 bc | rel | PASS | BC 'FC: no differences encountered' after the restart (w98n-e6.png) |
+| 98 SE NUSB clean | 9 storage fc + unplug, SuperSpeed BOT fc | rel | PASS | stick s1 port 1 (5000): Add New Hardware 'USB Mass Storage Device' -> C:\WINDOWS\INF\USBSTOR.INF (NUSB) -> Finish; F: F.... |
+| 98 SE NUSB clean | 9 HID | rel | PASS | m1 port 2 (480): Add New Hardware 'USB Human Interface Device' -> HIDDEV.INF (+ CD for files) -> Finish; QEMU 'HID Mouse... |
+| 98 SE NUSB clean | 9 UAS SuperSpeed fc | rel | PASS | u1 port 3 (5000): wizard 'USB Attached SCSI HBA' -> D:\XHCIUAS.INF 'xHCI98 USB Attached SCSI Storage' -> Finish, 'USB Di... |
+| 98 SE NUSB clean | 9 audio bound (composite parent) | rel | PASS (play re-read after the relaunch below) | a1 port 3 (12): wizard 'USB Audio Device' -> C:\WINDOWS\INF\WDMA_USB.INF -> Finish; DM by connection 'xHCI98 USB Composi... |
+| 98 SE NUSB clean | 9 controller disable/enable with a mouse | rel | PASS | DM controller Disable -> red X on controller and children (n-c6dis.png); enable -> 'working properly' (n-c6p2.png; the t... |
+| 98 SE NUSB clean | 9 hub disable/enable with devices behind | rel | PASS | hub h1 port 4 bound silently ('xHCI98 USB Hub'); tablet t1 4.1 (HID wizard + CD) and stick s2 4.2 (USBSTOR wizard) behin... |
+| 98 SE NUSB clean | 9 UAS High Speed fc | rel | PASS | u1 port 3 enumerated at 480 Mb/s (info usb), bound silently (driver already installed), F: F.BAT copy + fc x2 'no differ... |
+| 98 SE NUSB clean | 9 audio play (re-read after relaunch) | rel | NOT MAKEABLE (98 SE usbaudio vehicle fault, Windows/QEMU - not the driver; binding PASS above) | a1 on port 4 (new devnode -> wizard; this time the 98 SE CD was asked for ksclockf.ax - the first install at 07:16 never... |
+| 98 SE NUSB clean | 9 shutdown | rel | PASS | stick s1 + mouse m1 attached: 'Windows is shutting down' at 2 s (sd-2s.png), QEMU 'paused (shutdown)' after 7 s; quit |
+| 98 SE SweetLow clean | 9 install (I1/I2) | rel | PASS | reg-inst.txt USB\0002: all 16 INF values as w98n (IntelPortSwitch 0, MaxTransferKB 0x400, InterruptMode 0, PollIdleMs 0x... |
+| 98 SE SweetLow clean | 9 bc | rel | PASS | sl-i1b.png 'FC: no differences encountered' |
+| 98 SE SweetLow clean | 9 storage fc + unplug, SuperSpeed BOT fc | rel | PASS | s1 port 1 (5000): wizard USB Mass Storage -> C:\WINDOWS\INF\USBSTOR.INF -> Finish (sl-s1..s4); F: F.BAT copy + fc x2 cle... |
+| 98 SE SweetLow clean | 9 HID | rel | PASS | m1 port 2 (480): wizard USB Human Interface Device (+ CD) -> Finish (sl-m1..m4); USB mouse moves the pointer 320,248 -> ... |
+| 98 SE SweetLow clean | 9 UAS SuperSpeed fc | rel | PASS | u1 port 3 (5000): wizard -> D:\XHCIUAS.INF 'xHCI98 USB Attached SCSI Storage' -> Finish (sl-u1..u5); F: F.BAT fc x2 clea... |
+| 98 SE SweetLow clean | 9 audio bound (composite parent) | rel | PASS | a1 port 3 (12): wizard USB Audio Device -> WDMA_USB.INF (+ CD) -> Finish (sl-a1/a2); DM by connection 'xHCI98 USB Compos... |
+| 98 SE SweetLow clean | 9 controller disable/enable with a mouse | rel | PASS | Disable -> red X on controller and children (sl-c6dis2.png); Enable (sl-c6p.png Code 22 before) -> all back after Refres... |
+| 98 SE SweetLow clean | 9 hub disable/enable with devices behind | rel | PASS | hub h1 port 4 bound silently ('xHCI98 USB Hub'), tablet t1 4.1 and stick s2 4.2 behind it (wizards, sl-h1..h4); hub Disa... |
+| 98 SE SweetLow clean | 9 shutdown | rel | PASS | mouse m1, audio a1, hub h1 (tablet 4.1, stick 4.2) attached: 'Windows is shutting down' at 2 s (sd-2s.png), QEMU 'paused... |
+| 98 SE SweetLow clean | 9 UAS High Speed fc | rel | PASS | u1 port 3 at 480 Mb/s (info usb), bound silently, F: F.BAT copy + fc x2 clean (sl-hsfc.png) |
+| 98 SE SweetLow clean | 9 shutdown (HS launch) | rel | PASS | UAS attached: 'Windows is shutting down' at 2 s (sd-2s.png), paused (shutdown) after 7 s |
+| 2000 SP4 | I1 | rel | PASS | adv.bat > Driver (1.99.0.0) > Update Driver > Display a list > Have Disk E:\ > xHCI98 USB 3.x eXtensible Host Controller... |
+| 2000 SP4 | I2 | rel | PASS | key 0000 (rk1.txt): DriverVersion 2.2.0.3, XhciIntelPortSwitch 0, XhciMaxTransferKB 0x400, XhciInterruptMode 0, XhciPoll... |
+| 2000 SP4 | I3 | rel | PASS | verb3.txt key 0000 0->3; dc1/ec1.txt problem 22 -> started; s0.txt (verbosity APPLIED 3): intr.mode.read 0 mode 0 delive... |
+| 2000 SP4 | SB1 | rel | PASS | s0.txt: susp.switch.value=FFFFFFFF susp.switch=0; "DNCTRL not read (selective suspend off, or no MMIO)", DnctrlEnables 0... |
+| 2000 SP4 | M5 | rel | PASS | s0.txt: delivery the line interrupt (INTA), 0 0 1 1; no MSI counter among the nonzero; MsiFilterMode 4294967295 (=FFFFFF... |
+| 2000 SP4 | K6 | rel | PASS | k6-xy.txt: X "Windows 2000: platform 2, version 5.0, build 2195, Service Pack 4", "x86 (32-bit Windows)", make/model "no... |
+| 2000 SP4 | P1 | rel | PASS | setv 0000 XhciInterruptMode 2 + dc/ec (p1-setv/p1-dc/p1-ec.txt); f.bat F: copy + both fc no differences (p1-fc.txt); poi... |
+| 2000 SP4 | P2 | rel | PASS | mode 1 (p2m1.txt): intr.mode.read 1 mode 1 delivery 1 reason 5 "forced line (XhciInterruptMode 1)", tolerance 0; mode 0 ... |
+| 2000 SP4 | S1 | rel | PASS | rk1.txt value absent; s1.txt (controller started ~07:11 at the P2 mode-0 dc/ec, read 07:19 after ~8 min idle with HID mo... |
+| 2000 SP4 | T1 | rel | PASS | UAS G:\BIG.BIN->C: + C:->G:\B2.BIN, BOT F:\BIG.BIN->C:\BIG2.BIN + back: 4x "FC: no differences encountered" (t1-fc.txt);... |
+| 2000 SP4 | T2 | rel | PASS | t2.ps1 per value (setv + dc/ec + VERIFY 2048 KiB 64 MiB on the raw disk, now \.\PhysicalDrive2 after the restart, 0 bad ... |
+| 2000 SP4 | T3 | rel | PASS | t3.ps1 per value: regedit /s (t3?-reg.txt), device_del r4 + re-add on port 4 (new device start reads the key), VERIFY 20... |
+| 2000 SP4 | G1 | rel | PASS | g1-usbif.txt "usbif list": 6 interfaces = tablet 4.1, mouse 2, BOT stick 1, BOT stick 4.2, UAS 3, XHCI98\HUB port 4; non... |
+| 2000 SP4 | G2 | rel | PASS | g1-usbif.txt "usbif hubs": root port 1 (BOT SS) _EX speed 2, V2 proto 4 flags 3 (operating at + capable of SuperSpeed); ... |
+| 2000 SP4 | K4 | rel | PASS | UV32.EXE (SweetLow usbview; UVMS does not run on 2000, wave 3): stick "QEMU"/"QEMU USB HARDDRIVE"/"1-0000:00:03.0-1", Bu... |
+| 2000 SP4 | K2 | rel | PASS | k2-ls.txt: XHCI98\COMPOSITE&VID_46F4&PID_0002\1-0000:00:03.0-4 "xHCI98 USB Composite Device" started + USB\VID_46F4&PID_... |
+| 2000 SP4 | I4 | rel | PASS | xhci98.sys 427b9d985d1e0c96154075aaee3d7319b302c43ad58eff90c7b05679c4bb41df + XHCISNAP.EXE 79fe8faae71cee6505d603af0765f... |
+| 2000 SP4 | T8 | rel | PASS | HAM.BAT x2 (F:\BIG.BIN BOT SS -> C: + fc) started minimized, TONE.WAV via sndrec32, HS USB mouse moved every 0.2 s for 4... |
+| 2000 SP4 | K1 | rel | PASS (read only) | cscript //nologo E:\portsw.vbs: "XhciIntelPortSwitch on each xhci98 controller ... 0 - off" (shot k1a), Cancel, exit=0 (... |
+| 2000 SP4 | CP1 S3 | rel | NOT MAKEABLE (no standby on the gold acpi=off guest) | Power Options (acpi=off gold): Power Schemes without a standby setting, Hibernate/APM/UPS tabs (shot pw1); Shut Down dia... |
+| 2000 SP4 | CP1 S4 | rel | PASS (composite + hub + audio); stick Code 31 after S4 = the known Windows 2000 limitation (brief: record) | Hibernate support enabled (shot pw2); Hibernate 11:12:42 (shot hib1) -> "It is now safe to turn off your computer" (acpi... |
+| 2000 SP4 | K5 | rel | PASS | HS usb-mouse port 2 drove the pointer throughout; usb-tablet 4.1 HID started, strings read (K4), reports counted (CP1 re... |
+| 2000 SP4 | shutdown (tag r) | rel | PASS | Start > Shut Down > Shut down (shot sd1) -> 'It is now safe to turn off your computer' (shot sd2), quit 11:36 |
+| 2000 SP4 | K3 | prev->rel | PASS | prev: Update Driver > Have Disk E:\ (2.2.0.0 INF lists no composite model) > Driver tab 2.2.0.0 (shots p-u1..p-u6), bc v... |
+| 2000 SP4 | A-2000 B0 | rel | PASS | dc/ec; bm2 usb-mouse port 2 -> USB Human Interface Device + HID-compliant mouse started, pointer moved (shot s-b0-mouse)... |
+| 2000 SP4 | A-2000 B1 | rel | PASS | setv 0000 XhciSelectiveSuspend 1 + XHCIPM.INF copied to C:\WINNT\INF + dc/ec (s-b1/s-b1-ec.txt); bm2 removed, pm1 usb-mo... |
+| 2000 SP4 | A-2000 B2 (S1-S6 + IDLE 9; = the S4/S5 reread) | rel | PASS | S2 READS ON + moves -> ok 0 -> 10; S3 WW + D2: s-s3a/s3b port 7 PORTSC 00000E63 PLS 3 in both (>= 5 s apart), susp.seq=0... |
+| 2000 SP4 | A-2000 B3 | rel | PASS ((c) NOT HIT) | b3u.ps1: (a) ACTIVE READS ON: device_del pm1 -> gone ("0 matching", w-b3a-gone), controller running; re-add -> client ba... |
+| 2000 SP4 | A-2000 B5 | rel | PASS | setv 0000 XhciInterruptMode 2 + dc/ec; IntrDelivery 2 IntrReason 8 PollRole 2 (w-b5-s2a); S2 reads ok 8; S3 WW+D2: port ... |
+| 2000 SP4 | P8 / Q2 | qemu | PASS (Code 31 on the BOT stick after a recovery = the known Windows 2000 limitation, recorded; 81 = 0 / 82 unchanged = M-2, park not require... | setv XhciInterruptMode 2 + dc/ec: p8pre.txt 2/8, PollRole 2, PollKicks 1, PollParks 0; setv XhciQemuInject 01050000 at 1... |
+| 2000 SP4 | Q3 | qemu | FAIL SUSPECT-DRIVER (17 and 16 leave the UAS stream device dead until re-plug; same family as the xp64/w98 fault-16 suspects - stream-TD err...; **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | 14 (05140083, 13:29): armed while one VERIFY ran clean (229 MB/s, 0 bad); its lost completion landed on the next run: cl... |
+| 2000 SP4 | Q4 | qemu | PASS | setv XhciQemuMapGrant 0x10 + dc/ec: q4.txt "map grant 16 registers; a chunk spans at most 16 pages", chunks a URB 9-16: ... |
+| 2000 SP4 | CP1 trace | qemu | PASS | Dx per parent FDO, 00000504 on sleep, 00000101 on wake / sleep (debugcon-5.log tail, cp1-sleep-trace.txt): 2 lines =0000... |
+| 2000 SP4 | CP1 resume (tag q, launch 6) | qemu | NOT MAKEABLE on this launch (QEMU process wedge, harness/QEMU); trace row above PASS | the resume's enumeration ran (debugcon-6.log ends with a composite select/configure, "thread URB done"), then the QEMU P... |
+| 2000 SP4 | A-2000 fault leg (IDLE 1 + XhciQemuInject 07 + disable/enable/remove) | qemu | FAIL SUSPECT-DRIVER (attribution open: the pinned all-ones containment keeps transfers, and a device PDO's REMOVE then waits forever - drive...; **final: KNOWN - documented limitation (disable after a pinned containment hangs; transfers kept for DMA safety)** | try 1 (f-a*): "PMCTL IDLE 1 & setv XhciQemuInject 0A070000 & dc.bat" on one line: debugcon "idle notification held for s... |
+| 2000 SP4 | P5 | qemu | PASS (channel: DebugView / debugcon "M86 S" start line; XHCISNAP cannot reach a failed controller) | setv XhciSelectiveSuspend 0, XhciInterruptMode 1, XhciQemuNoInterrupt 1, XhciLogDebugView 1 (p5-setv.txt); DBGVIEW /f /l... |
+| 2000 SP4 | A-2000 fault-leg follow-up (coordinator: R, i, ii; each from a fresh boot, then the controller disable) | qemu | 15:30 | FAIL SUSPECT-DRIVER (pinned-containment removal: outstanding URBs not completed at stop/remove; 4/4 reproduce, R/i/ii id... |
+| 2000 SMP + Verifier | verifier /query at start | rel | PASS | 06:33: Level 0000001B, xhci98.sys loads 1 unloads 0 (base's old driver), AllocationsFailed 0 (verifier-start.txt) |
+| 2000 SMP + Verifier | check-smp-parallelism.ps1 -MonitorPort 57109 | rel | PASS | 2 vCPUs, distinct thread ids 43144/27020, affinity 0xFFFFFFFF (32 of 32), exit 0 (parallelism-check.txt) |
+| 2000 SMP + Verifier | I1 | rel | PASS | adv.bat (Driver tab "xHCI USB 2.0 Host Controller (xhci98)") > Update Driver > list > Have Disk E:\ (manufacturers xHCI9... |
+| 2000 SMP + Verifier | I2 | rel | PASS | key 0002 (rk1.txt): DriverVersion 2.2.0.3, IntelPortSwitch 0, MaxTransferKB 0x400, InterruptMode 0, PollIdleMs 0x32, Pol... |
+| 2000 SMP + Verifier | I3 | rel | PASS | verb3.txt keys 0002 0->3 and 0005 unset->3; dc/ec; s0.txt (APPLIED 3, "2 processor(s)"): intr.mode.read 0 mode 0 deliver... |
+| 2000 SMP + Verifier | SB1 | rel | PASS | s0.txt: susp.switch.value=FFFFFFFF susp.switch=0; DNCTRL not read, DnctrlEnables/Readback 0x0000; no Susp*/Ss*/FuncWake*... |
+| 2000 SMP + Verifier | T5 (1024) | rel | PASS | UAS G:\BIG.BIN->C: fc clean, C:->G:\B2.BIN fc clean (t5-uas1024.txt); BOT F:\BIG.BIN->C:\BIG2.BIN fc clean, C:->F:\B3.BI... |
+| 2000 SMP + Verifier | B4 (1024) | rel | PASS (check not run / Enabled 0 / big blocks 0 = default WideMap off) | XFERTEST WRITE \.\PhysicalDrive4 1024 64 then VERIFY 64/1024/2048 KiB blocks: 0 sectors bad each (b4-xf1024.txt; host ra... |
+| 2000 SMP + Verifier | T5 (2048) + B4 (2048) | rel | PASS | setv 0002 XhciMaxTransferKB 0x800 + dc/ec (t5-setv/t5-dc.txt; all devnodes back started, t5-late.txt); UAS G: and BOT F:... |
+| 2000 SMP + Verifier | M6 | rel | PASS | verifier-t5.txt (07:55): Level 1B, xhci98.sys loads 4 unloads 3 (install + 2 dc/ec... ), AllocationsAttempted 396 = Succ... |
+| 2000 SMP + Verifier | I4 | rel | PASS | xhci98.sys 427b9d985d1e0c96154075aaee3d7319b302c43ad58eff90c7b05679c4bb41df + XHCISNAP.EXE 79fe8faae71cee6505d603af0765f... |
+| 2000 SMP + Verifier | SB3 | rel | PASS | WW: wake req 1 cb 1 last 0xC00000BB (STATUS_NOT_SUPPORTED) (sb3-ww.txt); D2: dev D2, power req 1 cb 1 (sb3-d2.txt); sb3a... |
+| 2000 SMP + Verifier | SB4 | rel | PASS (ACTIVE + SUSPENDED); mid-D2 NOT HIT (timing; p36-mtx2 hit it on the integration build with SuspGone 1) | ACTIVE: device_del sb1 after SB3 -> sb4a: port 1 000002A0 empty, slot freed, no new sequence, controller running; SUSPEN... |
+| 2000 SMP + Verifier | SB5 | rel | PASS | re-add s1j, D2 -> sb5s: PLS 3, slot 1 SUSPENDED, susp.seq=00D02110, SuspSuspended 6; dc.bat + ec.bat: controller, root h... |
+| 2000 SMP + Verifier | SB6 | rel | PASS | setv 0002 XhciInterruptMode 2 + dc/ec (sb6-setv.txt), client rebound; WW refused 0xC00000BB, D2 (sb6-pre.txt) -> sb6a (+... |
+| 2000 SMP + Verifier | SB7 | rel | PASS (as expected on QEMU; bench-owed) | no FuncWake*/SsSuspArms/SsSuspHub* counter nonzero in any switch-1 snapshot (sw1-ec, sb3a-c, sb4a/b/bs/c..c5, sb5s, sb5,... |
+| 2000 SMP + Verifier | CP1 S3 | rel | NOT MAKEABLE (Cirrus VGA vetoes standby; QEMU/Windows video, as in the early-warning run) | Shut Down dialog offers Log off / Shut down / Restart / Stand by / Hibernate (shot sby1); Stand by -> "System Standby Fa... |
+| 2000 SMP + Verifier | CP1 S4 | rel | PASS | Hibernate 09:21:14 (shot hb1) -> VM paused (shutdown) at 09:21:38 (shot hb2); launch 2 (pid 27020, 09:22, same overlay, ... |
+| 2000 SMP + Verifier | verifier /query at the end | rel | PASS | verifier-end.txt (09:30, boot of launch 1 continued through the hibernate): Level 1B, xhci98.sys loads 8 unloads 7, Allo... |
+| 2000 SMP + Verifier | shutdown (tag r) | rel | PASS | Start > Shut Down > Shut down (shot sd1): VM paused (shutdown) 09:32:23 (ACPI power-off), quit through the monitor |
+| 2000 SMP + Verifier | A-SMP verifier /query at start (tag s) | rel | PASS | 09:35 s-verifier-start.txt: Level 0000001B, xhci98.sys loads 1 unloads 0 (base's old driver), AllocationsFailed 0 |
+| 2000 SMP + Verifier | A-SMP I1 (tag s) | rel | PASS | Update Driver > list > Have Disk E:\ > xHCI98 USB 3.x eXtensible Host Controller > Finish (shots s-u5..s-u9; a first try... |
+| 2000 SMP + Verifier | A-SMP B1 | rel | PASS | XHCISNAP -verbosity 3 + setv 0002 XhciSelectiveSuspend 1 + copy E:\XHCIPM.INF C:\WINNT\INF (s-b1.txt), dc/ec (s-b1-ec.tx... |
+| 2000 SMP + Verifier | A-SMP B2 (S1-S6 + IDLE 9) | rel | PASS | S2: READS ON + 5 move pairs -> ReadsCompleted 0 -> 10 (s-s2a/b-st.txt); S3: WW + D2 -> dev D2, wake req 1 held 1; s-s3a ... |
+| 2000 SMP + Verifier | A-SMP B3 | rel | PASS ((c) NOT HIT) | b3u.ps1: (a) ACTIVE with READS ON: device_del pm1 -> devnode gone (s-b3a-gone.txt "0 matching"), controller running, no ... |
+| 2000 SMP + Verifier | A-SMP B5 | rel | PASS | setv 0002 XhciInterruptMode 2 + dc/ec; s-b5-s1: IntrDelivery 2 IntrReason 8 PollRole 2; S2 READS ON + moves -> ok 8; S3 ... |
+| 2000 SMP + Verifier | A-SMP S4 with the client D0 (offered: Stand by is vetoed by Cirrus - tag r CP1 - so S4 only) | rel | PASS (Code 31 on the BOT stick = known limitation, recorded) | Hibernate 10:55:02 -> powered off 10:55:15 (shot s-hb1); launch 4 (pid 35976, same overlay, -BootStick, pm1 hot-added at... |
+| 2000 SMP + Verifier | A-SMP verifier /query at the end (tag s) | rel | PASS | s-verifier-end.txt 11:07: Level 1B, xhci98.sys loads 7 unloads 6, AllocationsAttempted 288 = Succeeded 288 = SpecialPool... |
+| 2000 SMP + Verifier | A-SMP shutdown (S5) with the client D0 | rel | PASS | s-sdpre-st.txt: dev D0, reads on 1; Start > Shut Down > Shut down 11:09:19 (shot s-sd1) -> VM paused (shutdown) 11:09:41... |
+| 2000 SMP + Verifier | WR (warm restart timing, mode 2 vs mode 0 vs cold boot) | rel | NOT RUN (OWED: no quiet host; moves to the post-rebuild re-read on the re-stamped 2.2.0.3). Side reading: the plain 2000 guest (w2k tag p, 1... | budget.ps1 at 15:32: 11 guests, 18/32 vCPUs (other workers' priority runs); per the coordinator's ruling: not waited for |
+| 2000 clean | 9-install | rel | PASS | wizard shots boot1, fi1-fi6 ("Completing ... xHCI98 USB 3.x eXtensible Host Controller"); root hub installed silently; n... |
+| 2000 clean | 9-values | rel | PASS | key 0000 (rk1.txt): LogVerbosity 0, LogDebugView 0, ForceBulkOnly 0, FastPollFsLs 0, FirstEnumWaitMs 0x1388, FirstEnumPo... |
+| 2000 clean | 9-bc | rel | PASS | bc1.txt: xhci98.sys "FC: no differences encountered" (xhcimsi absent on 2000, expected) |
+| 2000 clean | 9-HID | rel | PASS | m2: USB Human Interface Device + HID-compliant mouse started problem=0, no wizard (hid-ls.txt); pointer driven by m2 for... |
+| 2000 clean | 9-BOT-SS | rel | PASS | s1 port 1 "5000 Mb/s QEMU USB MSD", USB Mass Storage + USBSTOR disk started (hid-ls.txt); f.bat F: copy + both fc "no di... |
+| 2000 clean | 9-storage-unplug | rel | PASS | device_del s1: no dialog (shot unplug1), ls: only root hub + mouse left, no stale USBSTOR node (unplug-ls.txt) |
+| 2000 clean | 9-audio | rel | PASS | a3 port 3 (12 Mb/s), no wizard: XHCI98\COMPOSITE&VID_46F4&PID_0002\1-0000:00:03.0-3 "xHCI98 USB Composite Device" starte... |
+| 2000 clean | 9-UAS-SS | rel | PASS | u3 port 3 "5000 Mb/s USB Attached SCSI HBA"; Found New Hardware > Search > Specify location E:\ > e:\xhciuas.inf > Finis... |
+| 2000 clean | 9-dc/ec with mouse | rel | PASS | dc: problem 22 (dc1.txt); ec: controller + root hub started (ec1.txt), mouse m2 HID started problem=0 (ec-ls.txt), point... |
+| 2000 clean | 9-hub | rel | PASS | h4 port 4 (xHCI98 USB Hub, silent install), hm1 mouse 4.1, hs1 stick 4.2 all started (hub-ls.txt); hub stick fc clean (h... |
+| 2000 clean | 9-shutdown | rel | PASS | Start > Shut Down > OK (shot sd1) -> "It is now safe to turn off your computer." (shot sd2), VM status running (acpi=off... |
+| 2000 clean | 9-UAS-HS | rel | PASS | uh1 port 1 "480 Mb/s USB Attached SCSI HBA"; Found New Hardware wizard again (new devnode at a new port, as on 2.2.0.0's... |
+| 2000 clean | 9-shutdown (2) | rel | PASS | "It is now safe to turn off your computer." (shot sd3); quit |
+| XP SP3 | I1 | rel | PASS | launch 1 (-Tag r -BootStick -BootMouse -AudioWav, pid 43428): FNH cancelled, i.bat -> Logo alt-i -> 'update E:\xhci98.in... |
+| XP SP3 | I2 | rel | PASS | rk-r.txt key 0000: 16 values: XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, XhciFirst... |
+| XP SP3 | I3 | rel | PASS | v3.txt (0000 was 0 -> 3; dc problem 22, ec started, root hub started); i3.txt: intr.mode.read 0 intr.mode 0 intr.deliver... |
+| XP SP3 | I4 | rel | PASS | xhci98.sys 427b9d98..41df (269400) and XHCISNAP 79fe8faa..5112 both in out\p36-stamp\hashes.txt (2.2.0.3, zip a6d91ec4);... |
+| XP SP3 | M5 | rel | PASS | i3.txt: IntrModeRead/IntrMode 0 (zero, omitted), IntrDelivery 1, IntrReason 1; no MSI word 96-113 among the 27 nonzero; ... |
+| XP SP3 | SB1 | rel | PASS | i3.txt (verbosity 3, read before any value changed): susp.switch.value=FFFFFFFF susp.switch=00000000; 'DNCTRL not read (... |
+| XP SP3 | K6 | rel | PASS | k6.txt (X then Y): X 'Windows XP: platform 2, version 5.1, build 2600, Service Pack 3', 'x86 (32-bit Windows)', 'make/mo... |
+| XP SP3 | S1 | rel | PASS | s1f.txt f.bat F copy + fc x2 no differences at 06:43:44; s1.txt at 06:46:10 (~2.5 min untouched): susp.switch.value FFFF... |
+| XP SP3 | T1 (copy part) | rel | PASS | boot stick swapped for the BIG stick (sb1 port 1, 5000) + UAS u3 port 3 (5000; FNH cancelled, u.bat + Logo alt-i -> 'xHC... |
+| XP SP3 | G1 (root-port part) | rel | PASS | g1.txt usbif list: 4 interfaces = mouse USB\VID_0627&PID_0001, BOT USB\VID_46F4&PID_0001, UAS USB\VID_46F4&PID_0003, XHC... |
+| XP SP3 | G2 | rel | PASS | g1.txt usbif hubs: port 1 BOT 46f4:0001 _EX speed 2, V2 proto 4 flags 3; port 3 UAS _EX speed 2 V2 flags 3; mouse port 6... |
+| XP SP3 | K2 (structure) | rel | PASS | a4 port 4: FNH 'xHCI98 USB Composite Device' + Logo alt-i + Finish (shots k2w-1/2), USB Audio Device installed silently;... |
+| XP SP3 | K4 | rel | PASS | usbview UV32: stick 'QEMU' / 'QEMU USB HARDDRIVE' / serial '1-0000:00:03.0-1' (uv-p1), mouse 'QEMU' / 'QEMU USB Mouse' /... |
+| XP SP3 | I18 | rel | PASS | hub h4 hot-added on root port 4 at the desktop (FNH 'xHCI98 USB Hub' + Logo, shots h4w-1/2), usb-mouse m41 at 4.1 + usb-... |
+| XP SP3 | G1 (hub part) | rel | PASS | k5.txt usbif list = 6 interfaces: tablet 4.2, kbd 4.3, mouse 2, mouse 4.1, UAS 3, XHCI98\HUB&VID_0409&PID_55AA (one on t... |
+| XP SP3 | K5 | rel | PASS | stick BOT SS + UAS (T1 fc clean), usb-mouse root port 2 (HS) and 4.1 (FS) moved the pointer, usb-tablet 4.2 positioned i... |
+| XP SP3 | T2 (64) | rel | PASS | setv 40 + shutdown, relaunch 2 (-Display none -BootStick -BootMouse -AudioWav, pid 28680; cold boot = restart); uasraw u... |
+| XP SP3 | K1 | rel | PASS (1 leg) | cscript //nologo E:\portsw.vbs: dialog 'XhciIntelPortSwitch on each xhci98 controller ... 0 - off', typed 1 (k1a) -> con... |
+| XP SP3 | K2 (audio after) | rel | PASS | relaunch 2: a4 port 4 bound silently, pnpctl disable/enable COMPOSITE -> both started (t8w2 shot), TONE.WAV alone afterw... |
+| XP SP3 | T2 (2048) | rel | PASS | setv 800 + shutdown -r (in-guest restart); reg 0x800 (k1e.txt); uasraw PhysicalDrive2 (diskpart after the restart); t2-2... |
+| XP SP3 | K1 (0 leg) | rel | PASS | 'cscript //nologo E:\portsw.vbs 0' -> '0 - off', 'now 0 on every xhci98 controller', RESTART note, errorlevel 0 (k1d.txt... |
+| XP SP3 | T2 (4096) | rel | PASS | setv 1000 + shutdown -r; reg 0x1000; t2-4096.txt VERIFY 1M + 2M -skew 512 0 bad, READ 1M/2M 79.7/89.0 MB/s; t2s4096.txt ... |
+| XP SP3 | T2 (0) | rel | PASS | setv 0 + shutdown -r; reg 0x0; t2-0.txt VERIFY 1M + 2M -skew 512 0 bad, READ 1M/2M 88.0/87.1 MB/s; t2s0.txt xfer.max.val... |
+| XP SP3 | B3 | rel | PASS | default (1024, uasraw u1 PhysicalDrive2): b11.txt (the 1024 default reads after the restart: VERIFY 1M + 2M -skew 512 0 ... |
+| XP SP3 | T1 (XFERTEST part) | rel | PASS | uasraw u1: t2-2048.txt READ 64K 26.1 / 1M 166.6 / 2M 199.7 / 2M -skew 512 133.5 MB/s, VERIFY 1M + 2M -skew 512 0 sectors... |
+| XP SP3 | P1 | rel | PASS | setv XhciInterruptMode 2 + dc/ec (p1set.txt); f.bat F copy + fc x2 no differences (p1f.txt); mouse moved the pointer (p1... |
+| XP SP3 | P2 | rel | PASS | mode 1 (setv + dc/ec, p2set.txt): p2m1.txt IntrModeRead 1, IntrMode 1, IntrDelivery 1, IntrReason 5, no PollRole/WatchLo... |
+| XP SP3 | P9 (rel part) | rel | PASS | setv XhciLogDebugView 1; DebugView 4.x ('/accepteula' and '/k' not switches of this version: EULA pre-accepted by HKCU\S... |
+| XP SP3 | SB2 | rel | PASS | setv XhciLogDebugView 0 + XhciSelectiveSuspend 1 + dc/ec (sb2set.txt, all started); sb2.txt: susp.switch.value 1 switch ... |
+| XP SP3 | SB3 | rel | PASS | client bound by 'pnpctl update E:\XHCIPM.INF USB\VID_46F4&PID_0001' + Logo alt-i (sb3a shot): 'xHCI98 selective suspend ... |
+| XP SP3 | SB4 | rel | PASS (ACTIVE, SUSPENDED); mid-D2 NOT MAKEABLE (QEMU finishes U3 entry before a device_del lands; 1 try here, 4 in the early-warning run) | SUSPENDED (sb4b0/sb4b.txt): PMCTL D2 (seq 00102110, SuspSuspended 2) then device_del bs1 -> port 1 000002A0 Empty, every... |
+| XP SP3 | SB5 | rel | PASS | s4 re-added (client rebound), PMCTL D2 -> dev D2; dc (problem 22) / ec (started) with the device suspended, no hang; aft... |
+| XP SP3 | SB6 | rel | PASS | setv XhciInterruptMode 2 + dc/ec (sb6set.txt): intr.delivery 2 intr.reason 8, PollRole 2; PMCTL WW -> 0xC00000BB; D2 -> ... |
+| XP SP3 | SB7 | rel | PASS (as expected on QEMU; bench-owed) | sb2.txt, sb3c.txt, sb5a.txt, sb6b.txt: none of FuncWake*/SsSuspArms/SsSuspHub* among the nonzero counters (46 of 167 non... |
+| XP SP3 | CP1 S4 | rel | PASS | overlay vm\t36fin\mtx-xp-h.qcow2, launch 3 (-Vga cirrus-vga -BootMouse -AudioWav -Display none): install from the zip (i... |
+| XP SP3 | D5 (SUSPENDED) | rel | PASS | -Tag h, XhciSelectiveSuspend 1 + dc/ec (d5set.txt), usb-mouse bm1 removed, the -PmMouse client bound to the usb-tablet t... |
+| XP SP3 | D5 (mode 2) | rel | PASS | -Tag h: usb-storage s1 on port 1, setv XhciInterruptMode 2 + dc/ec (d5m2.txt: IntrDelivery 2 IntrReason 8 PollRole 2, f.... |
+| XP SP3 | A-XP C1 | rel | PASS (reading recorded: hidusb's own idle does not run on XP SP3 with QEMU's mouse even with the PM checkbox, 30 min - Windows XP behaviour,... | usb-mouse m1 port 2 (HidUsb, HID-compliant mouse); reg add ...\Enum\USB\VID_0627&PID_0001\89126-0000:00:03.0-2\Device Pa... |
+| XP SP3 | A-XP S4/S5 reread | rel | PASS | s1/s2.txt READS ON + 3 presses ok 0 -> 6; s3a/s3b.txt (6 s apart) WW + D2: dev D2, wake held 1, SuspSuspendsBegun/SuspSu... |
+| XP SP3 | A-XP C3 | rel | PASS | (QEMU's mouse, tablet and kbd all carry 0627:0001 = the client's ID, so the 'other device' is a BOT stick.) Composite: u... |
+| XP SP3 | A-XP C4 | rel | PASS (callback-running unplug window NOT MAKEABLE in QEMU, recorded) | (legs\xp\h\c4.ps1) ACTIVE: client behind the hub with reads on, device_del -> c4a.txt client gone, others started, no ne... |
+| XP SP3 | A-XP C5 | rel | PASS | setv XhciInterruptMode 2 + dc/ec (c5set.txt; c5d.txt IntrDelivery 2 IntrReason 8 PollRole 2); READS ON + WW + D2: dev D2... |
+| XP SP3 | K3 | prev->rel | PASS | -Tag p overlay, launch 9 (pid 8052, -Flav prev = releases\2.2.0.0\release-x86, xhci98.sys 98f1fb1d...b88a, package-prev.... |
+| XP SP3 | T6 | rel | PASS | -Tag m overlay, launch 10 (pid 47824, -Mem 256 -Display none): install from the zip (inst-m.txt bc clean), BIG stick sb1... |
+| XP SP3 | B7 | rel | PASS | b7set.txt (XhciWideMap 1 + dc/ec): check 1 enabled 1, 'wide entries 8, 0 in use', big stream blocks built 3 refused 0; 5... |
+| XP SP3 | D1 | dbg | PASS | -Tag d overlay, launch 11 (pid 48016, -Flav dbg = zip debug-x86, xhci98.sys b108c28f...1a2c 273512 B, package-dbg.txt): ... |
+| XP SP3 | E-1 / P3 | qemu | PASS | setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc/ec (e1set.txt: BOT stick + boot mouse started problem=0); usb-mouse m... |
+| XP SP3 | E-2 / P4 | qemu | PASS | setv XhciInterruptMode 0 (DeadLine 1 kept) + dc/ec (e2set.txt): IntrDelivery 2, IntrReason 9, 'delivery in effect POLLIN... |
+| XP SP3 | Q2 | qemu | PASS | in the polled start: setv XhciQemuInject 01050000 (q2.txt): HchRecoveries 1, 'recovery window 1 of 3 begun inside ten mi... |
+| XP SP3 | P5 | qemu | PASS | setv XhciQemuDeadLine 0, XhciInterruptMode 1, XhciQemuNoInterrupt 1 + dc/ec (p5.txt): controller 'not started HAS_PROBLE... |
+| XP SP3 | P9 (qemu part) | qemu | PASS | DebugView C:\dv.log across this overlay's starts (e1dc.txt / p5.txt): mode 1 starts 'intr.delivery=1 intr.reason=5' + qe... |
+| XP SP3 | Q3 | qemu | FAIL -> 36.54 (UAS stream fault recovery; coordinator ruling - evidence legs\xp\xq3-15*.txt, xq3-14*.txt, C:\dv.log slices in them); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | uasraw u1 on port 3 (xhciuas via u.bat, PhysicalDrive3), legs\xp\h\inj.ps1 VERIFY 1M x128 MiB loops; 15 stop (fire 02150... |
+| XP SP3 | Q4 | qemu | PASS | setv XhciQemuMapGrant 0x10 + dc/ec, fresh uasraw q3 (PhysicalDrive3): q4.txt 'map grant 16 registers; a chunk spans at m... |
+| XP SP3 | CP1 trace | qemu | PASS | -Tag h overlay relaunched -Flav qemu (launch 13, pid 50636, cirrus, -Display none): sw.bat copied the qemu xhci98.sys + ... |
+| XP SP3 | T8 | rel | PASS | final reading (launch 15, -Tag r, pid 49720, after resetting mode 0 / switch absent; the BOT stick on this overlay is ow... |
+| XP x64 | I1 | rel | PASS | launch 1 (-Tag r -BootStick -BootMouse -AudioWav, pid 41772): FNH cancelled, i.bat -> Logo alt-i -> 'update ... OK (err ... |
+| XP x64 | I2 | rel | PASS | rk-r.txt key 0000: the same 16 values as x86 (XhciIntelPortSwitch 0, XhciIntelIrqRoute 1, XhciMaxTransferKB 0x400, XhciI... |
+| XP x64 | I3 | rel | PASS | v3.txt (0000 was 0 -> 3; dc problem 22, ec started, root hub started); i3.txt: intr.mode.read 0 intr.mode 0 intr.deliver... |
+| XP x64 | I4 | rel | PASS | xhci98.sys fe1cf7b3..cdb9 (309248) and XHCISNAP 79fe8faa..5112 both in out\p36-stamp\hashes.txt (2.2.0.3, zip a6d91ec4);... |
+| XP x64 | M5 | rel | PASS | i3.txt: IntrModeRead/IntrMode 0 (zero, omitted), IntrDelivery 1, IntrReason 1; no MSI word 96-113 among the 27 nonzero; ... |
+| XP x64 | SB1 | rel | PASS | i3.txt (verbosity 3, read before any value changed): susp.switch.value=FFFFFFFF susp.switch=00000000; 'DNCTRL not read (... |
+| XP x64 | K6 + K6x | rel | PASS | k6.txt: X 'Windows XP x64: platform 2, version 5.2, build 3790, Service Pack 2', '64-bit Windows (x64); this x86 tool ra... |
+| XP x64 | S1 | rel | PASS | s1f.txt f.bat F fc x2 clean 06:43:44; s1.txt 06:46:10: susp.switch.value FFFFFFFF switch 0, no Susp*/Idle* among 27 nonz... |
+| XP x64 | T1 (copy part) | rel | PASS | boot stick swapped for the BIG stick (sb1 port 1, 5000) + UAS u3 port 3 (5000; FNH cancelled, u.bat + Logo alt-i -> 'xHC... |
+| XP x64 | G1 (root-port part) | rel | PASS | g1.txt usbif list: 4 interfaces = mouse USB\VID_0627&PID_0001, BOT USB\VID_46F4&PID_0001, UAS USB\VID_46F4&PID_0003, XHC... |
+| XP x64 | G2 | rel | PASS | g1.txt usbif hubs: port 1 BOT 46f4:0001 _EX speed 2, V2 proto 4 flags 3; port 3 UAS _EX speed 2 V2 flags 3; mouse port 6... |
+| XP x64 | K2 (structure) | rel | PASS | a4 port 4: FNH 'xHCI98 USB Composite Device' + Logo alt-i + Finish (shots k2w-1/2), USB Audio Device installed silently;... |
+| XP x64 | K4 | rel | PASS | usbview UV64: stick 'QEMU' / 'QEMU USB HARDDRIVE' / serial '1-0000:00:03.0-1' (uv-p1), mouse 'QEMU' / 'QEMU USB Mouse' /... |
+| XP x64 | I18 | rel | PASS | hub h4 hot-added on root port 4 at the desktop (FNH 'xHCI98 USB Hub' + Logo, shots h4w-1/2), usb-mouse m41 at 4.1 + usb-... |
+| XP x64 | G1 (hub part) | rel | PASS | k5.txt usbif list = 6 interfaces: tablet 4.2, kbd 4.3, mouse 2, mouse 4.1, UAS 3, XHCI98\HUB&VID_0409&PID_55AA (one on t... |
+| XP x64 | K5 | rel | PASS | stick BOT SS + UAS (T1 fc clean), usb-mouse root port 2 (HS) and 4.1 (FS) moved the pointer, usb-tablet 4.2 positioned i... |
+| XP x64 | T2/B2 (64) | rel | PASS | setv 40 + shutdown, relaunch 2 (-Display none, pid 43068); uasraw u1 port 3 (xp64-u1.raw, PhysicalDrive3, disks.txt scru... |
+| XP x64 | K1 | rel | PASS (1 leg) | dialog '... 0 - off' (k1a), typed 1 -> 'now 1 on every xhci98 controller' + RESTART note (k1b); after the Windows restar... |
+| XP x64 | T8 | rel | PASS | relaunch 2 -Display none, budget 21 vCPUs at the first play; play 1 (after parent disable/enable, with BIG.BIN C:->F: (B... |
+| XP x64 | K2 (audio after) | rel | PASS | relaunch 2: usb-audio a4 port 4 bound silently, pnpctl disable/enable COMPOSITE -> both started, then TONE.WAV played wh... |
+| XP x64 | T2/B2 (2048) | rel | PASS | setv 800 + shutdown -r (in-guest restart); reg 0x800 (k1e.txt); uasraw PhysicalDrive2 (diskpart after the restart); t2-2... |
+| XP x64 | K1 (0 leg) | rel | PASS | 'cscript //nologo E:\portsw.vbs 0' -> '0 - off', 'now 0 on every xhci98 controller', RESTART note, errorlevel 0 (k1d.txt... |
+| XP x64 | B1 | rel | PASS | stamped build: promotion is OFF by default (XhciWideMap absent), so at 2048 alone TDs 512/513 = 0 (t2s2048.txt); B1 read... |
+| XP x64 | T2/B2 (4096) | rel | PASS | setv 1000 + shutdown -r; reg 0x1000; t2-4096.txt VERIFY 1M + 2M -skew 512 0 bad, READ 1M/2M 543.4/563.1 MB/s; t2s4096.tx... |
+| XP x64 | T2/B2 (0) | rel | PASS | setv 0 + shutdown -r; reg 0x0; t2-0.txt VERIFY 1M + 2M -skew 512 0 bad, READ 1M/2M 620.1/658.6 MB/s; t2s0.txt xfer.max.v... |
+| XP x64 | B11 | rel | PASS | b11set.txt: setv 400, reg add Control\usbstor\46F40003 MaximumTransferLength REG_DWORD 0x200000 (Services\usbstor has no... |
+| XP x64 | B3 | rel | PASS | default (1024, uasraw u1 PhysicalDrive2): b3w0x.txt (usbstor key deleted + dc/ec): VERIFY 1M + 2M -skew 512 0 bad, READ ... |
+| XP x64 | B13 | rel | PASS | WideMap removed + dc/ec (defaults); bs1/bm1 removed, usb-mouse m1 on port 1 (HS), uasraw u2 on port 2 (xp64-u2.raw, FNH ... |
+| XP x64 | P1 | rel | PASS | setv XhciInterruptMode 2 + dc/ec (p1set.txt); UAS raw VERIFY 1M x256 on PhysicalDrive2 and 3, 0 sectors bad (p1f.txt; BO... |
+| XP x64 | P2 | rel | PASS | mode 1 (setv + dc/ec, p2set.txt): p2m1.txt IntrModeRead 1, IntrMode 1, IntrDelivery 1, IntrReason 5, no PollRole/WatchLo... |
+| XP x64 | CP1 S4 | rel | PASS | std VGA (XP x64 offers hibernate; -Tag h not needed): powercfg /hibernate on, 'System hibernates (DC) After 15 mins' (cp... |
+| XP x64 | E-1 / P3 | qemu | PASS | setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc/ec (e1set.txt): stick bs1 (port 1) + mouse bm1 started; usb-mouse m3 ... |
+| XP x64 | E-2 / P4 | qemu | PASS | setv XhciInterruptMode 0 (DeadLine 1 kept) + dc/ec (e2set.txt; a first try was refused 'OK REBOOT-NEEDED' while the mode... |
+| XP x64 | Q2 | qemu | PASS | in the moved (polling) start: reg add XhciQemuInject 0x01050000 (q2.txt): tolerance HchRecoveries 1, 'recovery window 1 ... |
+| XP x64 | B8 | qemu | FAIL (QEMU abort; attribution QEMU usb-uas, not the driver - 2/2; stage-2 stream fallback bench-owed); **final: NOT MAKEABLE - QEMU usb-uas aborts (dev-uas.c:895, one packet per stream)** | (WideMap 1 needed: blocks are attempted only with promotion on.) Try 1 (launch 4): setv XhciWideMap 1 + BigRefuse 1 + Ma... |
+| XP x64 | Q3 (15 stop) | qemu | PASS | q3-15.txt: qemu.inj.bulk.armed 00150307, fire 02150083, qemu.inj.bulk=150D0307 (stream 0x0D, slot 3, DCI 7), bulk.stoppe... |
+| XP x64 | Q3 (16 error) | qemu | FAIL SUSPECT-DRIVER (2/2; attribution open: xhciuas/HCD recovery of a UAS stream after a halted data TD, or QEMU usb-uas state after the emu...; **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | q3-16.txt: fire 03160083, qemu.inj.bulk=160F0307, xfer.error=00030704, qemu.inj.ended 16, done 16; Transaction Error 1, ... |
+| XP x64 | Q3 (17 short) | qemu | NOT RUN (cleanly: the device was already stuck; re-run below) | fired 04170083 (q3-17.txt: qemu.inj.bulk=17010307, done 17) on the device already stuck by 16 - no reading of its own |
+| XP x64 | Q3 (17 short, rerun) | qemu | FAIL SUSPECT-DRIVER (same family as 16; attribution: see Q3-16x); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | fresh uasraw q3 (q3re2.txt VERIFY clean), fire 06170083 (q3-17b.txt: qemu.inj.bulk=17090307, qemu.inj.abandon=00030705, ... |
+| XP x64 | Q3-16x (a) | qemu | PASS (non-stream path recovers in the HCD) | fire 07160181 (root port 1, the BOT stick's bulk-in 0x81) during 6x RAND.BIN F:->C: + fc (q3-16x-a.txt): qemu.inj.bulk=1... |
+| XP x64 | Q3-16x (b) | qemu | (reading) | fresh uasraw q4, fire 08160083 (q16x-b.txt: qemu.inj.bulk=16050307 = stream 5, slot 3, DCI 7 = data-in 0x83). Trace (qem... |
+| XP x64 | Q3-16x (e) | qemu(old) | (attribution reading) | fresh overlay vm\t36fin\mtx-xp64-o.qcow2, the old package staged into xfer-u1 (kit flavour slot u1 reused, contents = ou... |
+| XP x64 | Q3-16x (c) | qemu |  | src\hcd_cfg.c ~4345: the soft retry's decision is forced away from replay for 'pipe->Streams != NULL |
+| XP x64 | Q3 (16/17) ATTRIBUTION | qemu | (attribution) | Pre-existing (reproduced on the pre-stage-2 build 90c625c), not a 2.2.0.3 regression. Driver-side: a stream TD error has... |
+| XP x64 | Q3 (14 timeout) | qemu | PASS (recovers through the class driver's ~160 s timeout - the same timeout that ends the fault-16 stall when it recovers) | launch 8 (pid 28048), fresh uasraw q5 (PhysicalDrive3), fire 09140083 (q3-14.txt: qemu.inj.bulk.armed 00140307, qemu.inj... |
+| XP x64 | Q4 | qemu | PASS | setv XhciQemuMapGrant 0x10 + dc/ec (q4set.txt): qemu.mapgrant 10, applied 10, 'map grant 16 registers; a chunk spans at ... |
+| XP x64 | B9 (a) | qemu | NOT MAKEABLE (QEMU usb-uas abort on the stage-2 stream path; see B8) | the BigRefuse 1 + WideMap 1 stage-2 stream path aborts QEMU itself (B8: usb-uas data3 assertion, 2/2) before any fault c... |
+| XP x64 | B9 (b) | qemu | FAIL SUSPECT-DRIVER (attribution open: not specific to the big-TD path - WideMap 0 stalls too; 2048 vs 1024 differs; one try each); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | setv XhciWideMap 1 + XhciMaxTransferKB 0x800 + dc/ec (b9set.txt), VERIFY 2M loop on the UAS, fire 0A150083 (stop) -> b9-... |
+| XP x64 | B10 | qemu | NOT MAKEABLE (no amd64 client; the x86 SB3-SB5 legs on xp cover suspend + unplug + dc/ec of a stick) | on XP x64 nothing can suspend the UAS/BOT device: the stage A/B test client (XHCIPM.SYS) exists for x86 only (stage.ps1 ... |
+| XP x64 | B12 | qemu | NOT MAKEABLE (bench / host suite) | suspend: not makeable on x64 (B10); recovery: XhciQemuInject 05 invalidates every slot and re-enumerates the devices, so... |
+| Vista x86 | I1 | rel | PASS | elevated cmd (alt-i), pnputil -i -a E:\xhci98.inf -> unsigned box (i1-unsigned.png) Install anyway -> oem3.inf 'Successf... |
+| Vista x86 | I2 | rel | PASS (note: INF does not write WideMap 0 explicitly; default off holds) | key 0000 (i2-rk.txt, read before any change): IntelPortSwitch 0, IntelIrqRoute 1, MaxTransferKB 0x400, InterruptMode 0, ... |
+| Vista x86 | I3 | rel | PASS | XHCISNAP -verbosity 2 (0000 0->2, i3-verb.txt), dc Code 22 / ec started (i3-de.txt); i3.txt: intr.mode 0, intr.delivery ... |
+| Vista x86 | I4 | rel | PASS | package-rel.txt: xhci98.sys 427b9d98.. (zip release-x86) + XHCISNAP 79fe8faa.. (zip xhcisnap), both from out\xhci98-2.2.... |
+| Vista x86 | K6 | rel | PASS | k6-xy.txt (ts.bat) X: 'Windows Vista: platform 2, version 6.0, build 6002, Service Pack 2', 'bitness x86 (32-bit Windows... |
+| Vista x86 | SB1 | rel | PASS | read BEFORE any value changed: XHCISNAP -verbosity 3 (sb1-verb), dc/ec (sb1-de); sb1.txt: susp.switch.value=FFFFFFFF sus... |
+| Vista x86 | S1 | rel | PASS | sb1.txt taken after 2 min 10 s idle with stick port 1 + USB mouse port 2 attached: only susp.switch.value FFFFFFFF / sus... |
+| Vista x86 | P1 | rel | PASS | setv 0000 XhciInterruptMode 2 + dc/ec (p1-de.txt); stick fc clean (p1-stick.txt), mouse moved (mp1 x 398-510 y 298-386);... |
+| Vista x86 | P7 | rel | PASS | budget at start: 16 qemu guests, 23/32 vCPUs. mode 2 (2 2 2 8), usb-audio a1 root port 3 (12 Mb/s), TONE.WAV via WMPlaye... |
+| Vista x86 | P2 | rel | PASS | mode 1 (setv + dc/ec, p2m1-de.txt): p2m1.txt IntrModeRead 1 IntrMode 1 IntrDelivery 1 IntrReason 5 'forced line', watche... |
+| Vista x86 | G1 | rel | PASS | g1-usbif.txt (USBIF list): 5 GUID_DEVINTERFACE_USB_DEVICE: tablet 4.1, mouse 2, stick 1, XHCI98\COMPOSITE&VID_46F4&PID_0... |
+| Vista x86 | G2 | rel | PASS | g1-usbif.txt hubs: root port 1 vid 46f4 _EX speed 2 / V2 proto 4 flags 3 (SuperSpeed operating), HS mouse speed 2 proto ... |
+| Vista x86 | K4 | rel | PASS | L1 set: stick port 1 (Super), mouse port 2, usb-audio port 3, hub port 4 + tablet 4.1. L2 UV32: stick QEMU / QEMU USB HA... |
+| Vista x86 | T8 | rel | PASS | (after the throttling fix; earlier t8/t8b void) usb-audio a1 port 3, BOT stick s3 port 1 (stickbig, 5000), USB mouse m1 ... |
+| Vista x86 | T1 (BOT part) | rel | PASS (UAS part below) | stickbig BOT s3 port 1 SuperSpeed: 3 round trips of BIG.BIN (32 MB) in t8c + 2 in t8b + 1 in t8: every fc 'no difference... |
+| Vista x86 | K2 | rel | PASS | see (K2 part 1) above: one XHCI98\COMPOSITE&VID_46F4&PID_0002 parent on port 3 + MI_00 Audio Device beneath (k2-ls.txt),... |
+| Vista x86 | T1 | rel | PASS | UAS u1 (usb-uas on stickbig, port 3, 5000) bound xhciuas after the unsigned box (u.bat; x64 also the PCA box closed), dr... |
+| Vista x86 | M2 (MSI-X launch) | rel | PASS | mode 0 (m2x0.txt): intr.delivery 5 then 4, IntrDelivery 4 IntrReason 10, 'delivery in effect MSI-X', 'messages connected... |
+| Vista x86 | T2 (64) | rel | PASS | m2x0.txt: xfer.max.value 0x40, xfer.max.why 1, xfer.max.bytes 0x10000; 'XhciMaxTransferKB used as set (64)', 'command si... |
+| Vista x86 | M3 (MSI-X) | rel | PASS (devices back only after the restart the INF asks for) | dc/ec x2 under MSI-X (m2x3-de.txt, m3x-de.txt: Code 22 -> started, composite back); remove + rescan (m3x-rr.txt): reinst... |
+| Vista x86 | T2 (2048) | rel | PASS | (set 0x800 before the restart; the remove+rescan had reset the key so verbosity/portsw were set again) t2k.txt: xfer.max... |
+| Vista x86 | K1 (1) | rel | PASS (part 1; part 2 below) | before: dialog '0 - off' (k1r.png); typed 1 -> 'XhciIntelPortSwitch is now 1 on every xhci98 controller. RESTART WINDOWS... |
+| Vista x86 | K1 | rel | PASS | part 1 above (1 after restart); then typed 0 in the elevated dialog -> 'XhciIntelPortSwitch is now 0 on every xhci98 con... |
+| Vista x86 | T2 (4096) | rel | PASS | m2m0.txt: xfer.max.value 0x1000, xfer.max.why 4, xfer.max.bytes 0x100000; 'XhciMaxTransferKB out of 64-2048: the default... |
+| Vista x86 | M2 | rel | PASS | MSI-X launch: see 'M2 (MSI-X launch)' above (delivery 4, 'MSI-X', capability MSI-X; modes 0 and 3 all devices + tone). M... |
+| Vista x86 | T2 (0) | rel | PASS | t20.txt: xfer.max.value 0, why 4, bytes 0x100000; 'XhciMaxTransferKB out of 64-2048: the default (0)', 'command size in ... |
+| Vista x86 | M3 (MSI) | rel | PASS (devices back after the INF-requested restart) | MSI launch n=3: dc/ec (m2m3-de.txt, m3m-de.txt) back started; pnpctl remove + rescan (m3m-rr.txt): reinstalled, Code 1 u... |
+| Vista x86 | P7 (re-read, supersedes nothing - confirms) | rel | PASS | relaunch n=3 MSI, hub+mouse 4.1 also attached: setv mode 2 + dc/ec (p7r-de.txt); TONE twice: p7r-audio.wav span 20.030 s... |
+| Vista x86 | CP1 S4 | rel | PASS (attempt 1 failure recorded, attempt 3 below) | attempt 2 PASS as above. Attempt 1 (same device set but the stickbig BOT stick, a TONE played just before, after a long ... |
+| Vista x86 | K5 | rel | PASS | after the CP1 resume: stick port 1 fc clean (k5-ls.txt), usb-mouse port 2 moved (mk5m / earlier rows), usb-tablet at hub... |
+| Vista x86 | H2 | rel | PASS | (on -Tag r, MSI launch n=8) takeown/icacls/del C:\Windows\System32\drivers\xhcimsi.sys (h2-set.txt, computer name scrubb... |
+| Vista x86 | H3 | rel | PASS | (H2's file restored first: copy E:\xhcimsi.sys back, fc clean) + sc delete xhcimsi 'DeleteService SUCCESS' (h3-set.txt);... |
+| Vista x86 | A-NT6 C0 | rel | PASS | stick s1 port 1 fc clean, USB mouse m1 port 2 moved (mc0 x 400-512 y 300-388) (c0-ls.txt); c0.txt susp.switch.value FFFF... |
+| Vista x86 | A-NT6 C1 | rel | PASS (reading recorded: hidusb sends no idle request on QEMU; the idle path itself is exercised by the test client legs elsewhere) | set: SelectiveSuspendEnabled REG_BINARY 01 in Enum\USB\VID_0627&PID_0001\89126-0000:00:03.0-2\Device Parameters (c1-reg.... |
+| Vista x86 | U1 | u1 | PASS | i.bat (pnpctl update E:\xhci98.inf PCI\CC_0C0330) -> unsigned box Install anyway (u1-unsigned.png) -> 'OK REBOOT-NEEDED'... |
+| Vista x86 | V1 | rel | PASS | Verifier boot -> desktop (display had blanked; v-boot2.png), no bugcheck; v-q1.txt Level 9BB, xhci98.sys loads 1, xhcims... |
+| Vista x86 | CP1 trace (S4) | qemu | PASS (trace as expected; first-image resume failure recorded) | hibernate 1 (debugcon-13.log -> q-sleep-trace.txt): 00030005, parent FDO ...=00000504 twice, 00020005/00020104, quiesce ... |
+| Vista x86 | Q2 | qemu | PASS | q2-fire.txt; q2.txt qemu.inj.fire=01050000, ctrl.hch 1, ctrl.failed.here 1 (the injected HCH), ctrl.recover.begin 1, ctr... |
+| Vista x86 | Q4 | qemu | PASS | UAS raw disk (uasraw port 3, 256 MB) bound xhciuas (unsigned box); XFERTEST WRITE 1M x128 MB + VERIFY 0 bad on PhysicalD... |
+| Vista x86 | Q3 (code 14 timeout) | qemu | FAIL -> 36.54 (UAS stream fault recovery); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | XhciQemuInject 02140083 beside VERIFY 1M x128 MB -reps 40 on PhysicalDrive2: qemu.inj.bulk.armed 00140207, lost 7F0D2F60... |
+| Vista x86 | Q3 (code 15 stop) | qemu | PASS | (UAS device_del + re-add after the code 14 wedge) XhciQemuInject 03150083 beside VERIFY 1M x128 MB -reps 40 on PhysicalD... |
+| Vista x86 | Q3 (code 16 error) | qemu | PASS | (relaunch n=17; first try garbled by a still-running background typing job of the previous QEMU - cancelled, no write is... |
+| Vista x86 | Q3 (code 17 short) | qemu | FAIL -> 36.54 (UAS stream fault recovery); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | XhciQemuInject 06170083: qemu.inj.bulk.armed 00170107, qemu.inj.bulk 17050107 (stream 5), done 17 (q3-17.txt); then time... |
+| Vista x86 | P3 | qemu | PASS | (UAS device_del'd first) setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc/ec (p3-set3.txt; the enable took minutes, ba... |
+| Vista x86 | P4 | qemu | PASS | MSISupported 0 in the controller's hardware key + XhciInterruptMode 0 (DeadLine 1 kept), shutdown /r (p4-set.txt); p4.tx... |
+| Vista x64 | I1 | rel | PASS | elevated cmd (alt-i), pnputil -i -a E:\xhci98.inf -> unsigned box Install anyway -> oem3.inf (i1-unsigned/i1-done.png), ... |
+| Vista x64 | I2 | rel | PASS (INF does not write WideMap 0 explicitly; default off holds) | key 0000 (i2-rk.txt, before any change): IntelPortSwitch 0, IntelIrqRoute 1, MaxTransferKB 0x400, InterruptMode 0, PollI... |
+| Vista x64 | I3 | rel | PASS | -verbosity 2 (0000 0->2, i3-verb.txt), dc Code 22 / ec started (i3-de.txt); i3.txt intr.mode 0, intr.delivery 5 then 3 (... |
+| Vista x64 | I4 | rel | PASS | package-rel.txt: amd64 xhci98.sys fe1cf7b3.. (zip release-x64) + XHCISNAP 79fe8faa.. (zip, x86 tool under WOW64); i3.txt... |
+| Vista x64 | K6 | rel | PASS | k6-xy.txt (ts.bat) X: 'Windows Vista: platform 2, version 6.0, build 6002, Service Pack 2', 'bitness 64-bit Windows (x64... |
+| Vista x64 | SB1 | rel | PASS | read BEFORE any value changed: XHCISNAP -verbosity 3 (sb1-verb), dc/ec (sb1-de); sb1.txt: susp.switch.value=FFFFFFFF sus... |
+| Vista x64 | S1 | rel | PASS | sb1.txt taken after 2 min 10 s idle with stick port 1 + USB mouse port 2 attached: only susp.switch.value FFFFFFFF / sus... |
+| Vista x64 | P1 | rel | PASS | setv mode 2 + dc/ec (p1-de.txt); stick fc clean (p1-stick.txt), mouse moved (mp1); after 1 min idle p1.txt: IntrModeRead... |
+| Vista x64 | M1/F1 (+P2 mode 1) | rel | PASS | setv 0000 XhciInterruptMode 1 + dc/ec (p2m1-de.txt); p2m1.txt IntrModeRead 1 IntrMode 1 IntrDelivery 1 IntrReason 5 (for... |
+| Vista x64 | M1/F4 (+P2 mode 0) | rel | PASS | setv mode 0 + dc/ec (p2m0-de.txt); p2m0.txt intr.delivery 5 then 3 (MSI) reason 0A, IntrDelivery 3 IntrReason 10, MsiRou... |
+| Vista x64 | M1/F0,F1r | rel | PASS | F0 = this overlay's install from the zip (I1: pnputil, F8 DSE, mode 0 default MSI delivery 3, 108 = 4); the assignment p... |
+| Vista x64 | P2 | rel | PASS | mode 1 = 1 1 1 5 (p2m1.txt), mode 0 = 0 0 3 10 MSI by design (p2m0.txt); mouse + stick fc each |
+| Vista x64 | G1 | rel | PASS | g1-usbif.txt (USBIF list): 5 GUID_DEVINTERFACE_USB_DEVICE: tablet 4.1, mouse 2, stick 1, XHCI98\COMPOSITE&VID_46F4&PID_0... |
+| Vista x64 | G2 | rel | PASS | g1-usbif.txt hubs: root port 1 vid 46f4 _EX speed 2 / V2 proto 4 flags 3 (SuperSpeed operating), HS mouse speed 2 proto ... |
+| Vista x64 | K4 | rel | PASS | L1 set: stick port 1 (Super), mouse port 2, usb-audio port 3, hub port 4 + tablet 4.1. L2 UV64: stick QEMU / QEMU USB HA... |
+| Vista x64 | T8 | rel | PASS | (after the throttling fix; earlier t8/t8b void) usb-audio a1 port 3, BOT stick s3 port 1 (stickbig, 5000), USB mouse m1 ... |
+| Vista x64 | T1 (BOT part) | rel | PASS (UAS part below) | stickbig BOT s3 port 1 SuperSpeed: 3 round trips of BIG.BIN (32 MB) in t8c + 2 in t8b + 1 in t8: every fc 'no difference... |
+| Vista x64 | K2 | rel | PASS | see (K2 part 1) above: one XHCI98\COMPOSITE&VID_46F4&PID_0002 parent on port 3 + MI_00 Audio Device beneath (k2-ls.txt),... |
+| Vista x64 | T1 | rel | PASS | UAS u1 (usb-uas on stickbig, port 3, 5000) bound xhciuas after the unsigned box (u.bat; x64 also the PCA box closed), dr... |
+| Vista x64 | M2 (MSI-X launch) | rel | PASS | mode 0 (m2x0.txt): intr.delivery 5 then 4, IntrDelivery 4 IntrReason 10, 'delivery in effect MSI-X', 'messages connected... |
+| Vista x64 | T2 (64) | rel | PASS | m2x0.txt: xfer.max.value 0x40, xfer.max.why 1, xfer.max.bytes 0x10000; 'XhciMaxTransferKB used as set (64)', 'command si... |
+| Vista x64 | M3 (MSI-X) | rel | PASS | dc/ec x2 under MSI-X (m2x3-de, m3x-de: Code 22 -> started, composite back); pnpctl remove PCI\VEN_1B36&DEV_000D + rescan... |
+| Vista x64 | T2 (2048) | rel | PASS | relaunch n=4 MSI (msi=on,msix=off) with 0x800 set before: m2m0.txt xfer.max.value 0x800, 'used as set (2048)', 'command ... |
+| Vista x64 | K1 (1) | rel | PASS (part 1) | dialog before '0 - off'; typed 1 -> 'is now 1 ... RESTART WINDOWS', rc 0 (k1-set1.txt, again k1-set1b.txt after the rein... |
+| Vista x64 | M2 (MSI launch) | rel | PASS | mode 0 (m2m0.txt): delivery 5 then 3, 'delivery in effect MSI', MsiRoutines 1, CompositeParents 1; BOT F: + UAS G: BIG.B... |
+| Vista x64 | K1 | rel | PASS | part 1 above (1 after restart); then typed 0 in the elevated dialog -> 'XhciIntelPortSwitch is now 0 on every xhci98 con... |
+| Vista x64 | T2 (4096) | rel | PASS | t24k.txt: xfer.max.value 0x1000, xfer.max.why 4, xfer.max.bytes 0x100000; 'XhciMaxTransferKB out of 64-2048: the default... |
+| Vista x64 | T2 (0) | rel | PASS | t20.txt: xfer.max.value 0, why 4, bytes 0x100000; 'XhciMaxTransferKB out of 64-2048: the default (0)', 'command size in ... |
+| Vista x64 | M3 (MSI) | rel | PASS | MSI launch n=4: dc/ec x3 (m2m3-de, m3m-de) back started; pnpctl remove + rescan (m3m-rr.txt): all devices started proble... |
+| Vista x64 | CP1 S4 | rel | PASS (attempt 1 failure recorded, attempt 3 below) | attempt 2 PASS as above. Attempt 1 (same device set but the stickbig BOT stick, a TONE played just before, after a long ... |
+| Vista x64 | K5 | rel | PASS | after the CP1 resume: stick port 1 fc clean (k5-ls.txt), usb-mouse port 2 moved (mk5m / earlier rows), usb-tablet at hub... |
+| Vista x64 | V1 | rel | PASS | Verifier boot (F8 DSE) -> desktop, no bugcheck (v-boot.png); v-q1.txt: Level 9BB, xhci98.sys loads 1 unloads 0, Allocati... |
+| Vista x64 | CP1 trace (S4) | qemu | PASS | devices s1/m1/a1 (usb-audio port 3)/h1 hub port 4 + hm1 4.1 started, fc clean (q-ls.txt); shutdown /h (paused in 24 s); ... |
+| Vista x64 | Q2 | qemu | PASS | setv 0000 XhciQemuInject 01050000 (q2-fire.txt); q2.txt qemu.inj.fire=01050000, ctrl.hch=1, ctrl.failed.here=1 (the inje... |
+| Vista x64 | Q4 | qemu | PASS | UAS raw disk u1 (uasraw port 3, 256 MB, out\p36-final\disks\vx64-u1.raw) bound xhciuas (unsigned box + PCA); XFERTEST WR... |
+| Vista x64 | Q3 (code 14 timeout) | qemu | FAIL SUSPECT-DRIVER (storage stack does not recover from an injected bulk timeout on Vista x64 UAS; recovered only by a controller restart); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | UAS raw disk (PhysicalDrive2 after renumbering), qemu flavour amd64 35845597, XhciWideMap default 0, XhciQemuInject 0214... |
+| Vista x64 | Q3 (code 15 stop) | qemu | FAIL -> 36.54 (UAS stream fault recovery); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | (after a guest restart) XhciQemuInject 04150083 beside VERIFY 1M x128 MB -reps 40 on PhysicalDrive2: qemu.inj.bulk.armed... |
+| Vista x64 | Q3 (code 16 error) | qemu | FAIL -> 36.54 (UAS stream fault recovery); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | (after a restart) XhciQemuInject 05160083: qemu.inj.bulk.armed 00160207, qemu.inj.bulk 16090207 (stream 9), xfer.error 0... |
+| Vista x64 | Q3 (code 17 short) | qemu | FAIL -> 36.54 (UAS stream fault recovery); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | (after a restart) XhciQemuInject 06170083: qemu.inj.bulk.armed 00170207, qemu.inj.bulk 17100207 (stream 16), done 17 (q3... |
+| Vista x64 | P3 | qemu | PASS | (UAS u1 device_del'd first: that cleared the Q3 wedge, XFERTEST gone) setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc... |
+| Vista x64 | F3 | qemu | PASS | setv XhciQemuDeadLine 0 + XhciMsi86InjNoLine 1 (mode 1 kept), reboot + F8 (f3-set.txt); check-msi86-trace.ps1 on the boo... |
+| Vista x64 | P4 | qemu | PASS | on the MSI grant mode 0 never uses the dead line, so (as agent E on w7x64) MSISupported 0 in the controller's hardware k... |
+| Vista x64 | Q3 (code 14 timeout) - supersedes the line above per the coordinator's ruling | qemu | 16:32 | FAIL -> 36.54 (UAS stream fault recovery) |
+| 7 x86 | I1 | rel | PASS | pnputil -i -a e:\xhci98.inf: unsigned box Install anyway (i1a) -> oem2.inf "Successfully installed the driver on a devic... |
+| 7 x86 | I2 | rel | PASS | i1-post.txt key 0000 (reg query): XhciIntelPortSwitch 0, XhciMaxTransferKB 0x400, XhciInterruptMode 0, XhciPollIdleMs 0x... |
+| 7 x86 | I3 | rel | PASS | XHCISNAP -verbosity 3 set before the install restart (i1-pre2.txt); i3-run.txt: intr.mode 0, intr.delivery 5 -> 3 MSI, r... |
+| 7 x86 | I4 | rel | PASS | package-rel.txt xhci98.sys 427b9d98.. xhcimsi abb1319c.. XHCISNAP 79fe8faa.. all from the zip; i3-run.txt "xhcisnap 2.2.... |
+| 7 x86 | SB1 | rel | PASS | i3-run.txt (verbosity 3): susp.switch.value FFFFFFFF, susp.switch 0, "DNCTRL not read", DnctrlEnables 0x0000, DnctrlRead... |
+| 7 x86 | K6 | rel | PASS | k6xy.txt X: "Windows 7: platform 2, version 6.1, build 7601, Service Pack 1", "x86 (32-bit Windows)", SystemManufacturer... |
+| 7 x86 | S1 | rel | PASS | s1b.txt after ~2 min 15 s with the USB mouse untouched (s1.txt an earlier read): susp.switch.value FFFFFFFF, susp.switch... |
+| 7 x86 | G1 | rel | PASS | g1.txt usbif list: 5 interfaces: tablet 4.1, mouse 2, stick 1, XHCI98\COMPOSITE&VID_46F4&PID_0002 (parent; none on MI_00... |
+| 7 x86 | G2 | rel | PASS | g1.txt usbif hubs: port 1 46f4:0001 _EX speed 2, V2 proto 4 flags 3; mouse port 6 speed 2; audio 7 / hub 8 speed 1; V2 n... |
+| 7 x86 | K2 | rel | PASS | g1.txt: XHCI98\COMPOSITE&VID_46F4&PID_0002\1-0000:00:03.0-3 'xHCI98 USB Composite Device' + USB\VID_46F4&PID_0002&MI_00 ... |
+| 7 x86 | K4 | rel | PASS | UV32: stick 'QEMU'/'QEMU USB HARDDRIVE'/'1-0000:00:03.0-1' Bus Speed Super (uv-p1); mouse 'QEMU'/'QEMU USB Mouse'/'89126... |
+| 7 x86 | T1 | rel | PASS | t1-big.txt: BOT G: (SS port 4) BIG.BIN->C: fc clean, C:->G: fc clean; UAS H: (SS port 3, xhciuas bound via u.bat, Instal... |
+| 7 x86 | T8 | rel | PASS | usb-audio a2 on port 4 (-Display none; budget 23/32 vCPUs, 16 guests, host CPU 76%): 6x (UAS H:\BIG.BIN -> C: + fc, C: -... |
+| 7 x86 | P1 | rel | superseded (verdict lost to a quoting slip; corrected line follows) | setv XhciInterruptMode 2 + dc/ec OK (p1-set.txt); p1.txt IntrModeRead 2 IntrMode 2 IntrDelivery 2 IntrReason 8, "POLLING... |
+| 7 x86 | P7 | rel | PASS | mode 2 (P1 state), usb-audio a2 port 4, -Display none, budget 21/32 vCPUs (14 guests, host CPU 27%): PlaySync 21.05 / 20... |
+| 7 x86 | P2 | rel | PASS | mode 1 (p2m1-set/p2m1.txt): IntrModeRead 1 IntrMode 1 IntrDelivery 1 IntrReason 5 "the line interrupt, forced line", Msi... |
+| 7 x86 | M2 (MSI, modes 0 and 3) | rel | PASS | mode 0: p2m0.txt delivery 3 "MSI", reason 10, MsiCapability 3 "capability MSI", MsiMessages 1; mouse moved; BOT fc clean... |
+| 7 x86 | M3 (MSI) | rel | PASS (Code 1 needs the documented restart) | dc/ec x6 (P1/P2/M2 legs) devices back each time; pnpctl remove VEN_1B36&DEV_000D + rescan (m3-msi.txt): controller "not ... |
+| 7 x86 | P1 (corrected line; the 07:31 P1 line lost its tail to a quoting slip) | rel | PASS | setv XhciInterruptMode 2 + dc/ec OK (p1-set.txt); p1.txt IntrModeRead 2 IntrMode 2 IntrDelivery 2 IntrReason 8, "POLLING... |
+| 7 x86 | G3 | rel | PASS | two passes, each value set + dc/ec + XHCISNAP: (a) HS mouse root port 2 only (g3-0..4.txt), (b) + usb-hub port 4 with a ... |
+| 7 x86 | K5 | rel | PASS | L1 usb-mouse root port 2 (HS) + fm1 behind usb-hub 4.1 (FS) moved the pointer (i3m, i18am); L2 usb-tablet tb2 at 4.2 "QE... |
+| 7 x86 | T3 | rel | PASS | each value by reg add/delete then UAS raw disk re-plugged (device_del + uasraw re-add on port 3) and XFERTEST VERIFY 2M ... |
+| 7 x86 | T2 | rel | PASS | each value setv + shutdown /r (x64 F8 DSE), UAS raw disk VERIFY 2M aligned / 2M -skew 512 / 64K, 0 bad each: 2048 (t2-20... |
+| 7 x86 | K1 | rel | PASS | elevated cscript //nologo E:\portsw.vbs show: "...\0000  0 - off" (k1a.txt); portsw.vbs 1: "now 1 on every xhci98 contro... |
+| 7 x86 | CP1 S4 | rel | PASS (the 0xc0000411 attempts = harness, not driver) | powercfg /a: Hibernate only (VGAPNP blocks S1-S3) (cp1-pre.txt); set: stick port 1, mouse port 2, usb-audio a3 port 3 (c... |
+| 7 x86 | D6 | rel | PASS | setv XhciInterruptMode 2 + dc/ec (d6pre.txt: IntrDelivery 2 / reason 8); shutdown /h (paused after 12 s), quit, relaunch... |
+| 7 x86 | M2 (MSI-X, modes 0 and 3) | rel | PASS functionally; FINDING (MSI-X lost/late interrupts -> backstop, attribution open) | clean shutdown, relaunch -Xhci p2=4,p3=4,msi=off,msix=on (+UAS raw port 3, audio port 4); msix0: delivery 4 "MSI-X", rea... |
+| 7 x86 | M3 (MSI-X) | rel | PASS (Code 1 needs the documented restart) | dc/ec x2 (mode 3 and back) devices back; pnpctl remove + rescan (m3x.txt): problem=1 (x86 INF reboot flag) -> shutdown /... |
+| 7 x86 | SB3 (WW step) | rel | PASS (step) | setv XhciSelectiveSuspend 1 + dc/ec (sb3-set.txt; bc no differences); pnpctl update E:\XHCIPM.INF "USB\VID_46F4&PID_0001... |
+| 7 x86 | SB3 | rel | PASS | sb3-ww.txt WW 0xC00000BB; PMCTL D2 -> dev D2 (sb3a.txt); sb3a + sb3b (~30 s apart): susp.seq=00102110, SuspSuspendsBegun... |
+| 7 x86 | SB4 | rel | PASS (no hang; SuspGone window not hit) | ACTIVE: device_del bs1 -> client devnode gone, controller started (sb4a.txt); SUSPENDED: re-add s1 (client rebinds), PMC... |
+| 7 x86 | SB5 | rel | PASS | stick s5 re-added (client bound), PMCTL D2 -> dev D2; dc/ec OK (sb5.txt): controller, root hub back started; the stick r... |
+| 7 x86 | SB6 | rel | PASS | setv mode 2 + dc/ec (sb6-set.txt); sb6a/sb6b (~30 s apart): IntrModeRead 2, IntrDelivery 2, IntrReason 8, susp.seq=00102... |
+| 7 x86 | SB7 | rel | PASS (as expected; bench-owed) | none of FuncWake*/SsSuspArms/SsSuspHub* printed in sb3c, sb4, sb6c (all 0); QEMU makes no Function Wake and has no Super... |
+| 7 x86 | A-NT6 C0 | rel | PASS | fresh -Tag s overlay, rel from the zip (pnputil + restart, bc no differences, s-inst.txt); c0.txt: susp.switch.value FFF... |
+| 7 x86 | A-NT6 C1 | rel | PASS (reading recorded: hidusb did not idle - Windows behaviour, not the driver) | setv XhciSelectiveSuspend 1, Enum\USB\VID_0627&PID_0001\89126-0000:00:03.0-2\Device Parameters SelectiveSuspendEnabled R... |
+| 7 x86 | T6 | rel | PASS | fresh -Tag m overlay, launch -Mem 512 (XHCISNAP RAM 511 MB), rel from the zip (pnputil + restart, bc no differences, m-i... |
+| 7 x86 | U2 (downgrade, part 1) | rel->p202 | PASS (downgrade works on the line; Windows drops the MSI key, keeps the xhcimsi service) | fresh -Tag u overlay: rel from the zip, restart: u2-rel.txt delivery 3 MSI reason 10, Msi86State 3, helper 0x02020003, x... |
+| 7 x86 | U2 (recovery ii) | rel->p202 | PASS | u2b-inst.txt rel oem2.inf, bc clean, restart; u2b-uninst.txt: hardware key MessageSignaledInterruptProperties MSISupport... |
+| 7 x86 | V1 | rel | PASS | fresh -Tag v overlay: rel from the zip (pnputil, bc no differences xhci98 + xhcimsi), verifier /standard on both (v1-set... |
+| 7 x86 | Q2 / M4 | qemu | PASS | fresh -Tag q, qemu flavour db0c4847 (pnputil, restart, bc no differences xhci98 + xhcimsi, q-inst.txt); q0.txt delivery ... |
+| 7 x86 | Q3 | qemu | FAIL -> 36.54 (UAS stream fault recovery); **final: FAIL -> 36.54 (pre-existing UAS stream fault recovery gap)** | UAS raw PhysicalDrive2, XFERTEST VERIFY 1M x32 MB -seed 3 -reps 2 per fault, data-in pipe 0x83 (q3y pass): 14 timeout: b... |
+| 7 x86 | Q3 (cont.) | qemu | INFO | device_del r1 ended the stuck XFERTEST and its cmd chain returned to the prompt (shot q3del.png; the chain's output was ... |
+| 7 x86 | Q4 | qemu | PASS | fresh UAS re-plug r2 after Q3; setv XhciQemuMapGrant 0x10 + dc/ec (q4.txt): qemu.mapgrant 10 applied 10, "map grant 16 r... |
+| 7 x86 | CP1 trace (S4) | qemu | PASS | overlay q (MSI): stick 1, mouse 2, usb-audio a3 port 3, usb-hub h3 port 4 + tablet tb3 4.1 (qcp1-pre.txt; the tablet HID... |
+| 7 x86 | P3 | qemu | PASS | setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc/ec (p3.txt): intr.mode 1, delivery 1 line, reason 5, qemu.inj.deadlin... |
+| 7 x86 | P4 | qemu | PASS | MSISupported 0 in the hardware key (so mode 0 takes the line; with the MSI grant the stand-in dead line is never used, a... |
+| 7 x86 | M4 | qemu | PASS | see Q2 / M4 line (q2.txt): HCH recovery 1, delivery 3 MSI after; D3 and back = controller disable/enable (dc/ec) through... |
+| 7 x64 | I1 | rel | PASS | pnputil oem2.inf "Successfully installed the driver on a device", unsigned box Install anyway (i1a), then PCA "Windows r... |
+| 7 x64 | I2 | rel | PASS | rk1.txt key 0000 (reg query): XhciIntelPortSwitch 0, XhciMaxTransferKB 0x400, XhciInterruptMode 0, XhciPollIdleMs 0x32, ... |
+| 7 x64 | I3 | rel | PASS | XHCISNAP -verbosity 3 (v3pre.txt) + dc/ec OK (i3-dcec.txt); i3-run.txt: intr.mode 0, intr.delivery 5 -> 3 MSI, reason 0A... |
+| 7 x64 | I4 | rel | PASS | package-rel.txt xhci98.sys fe1cf7b3.. + XHCISNAP 79fe8faa.. both from the zip (2.2.0.3; times normalised 2026-10-10 12:0... |
+| 7 x64 | SB1 | rel | PASS | i3-run.txt (verbosity 3): susp.switch.value FFFFFFFF, susp.switch 0, "DNCTRL not read (selective suspend off, or no MMIO... |
+| 7 x64 | K6 | rel | PASS | k6xy.txt X: "Windows 7: platform 2, version 6.1, build 7601, Service Pack 1", "64-bit Windows (x64); this x86 tool ran u... |
+| 7 x64 | S1 | rel | PASS | s1.txt after ~6 min with the USB mouse untouched: susp.switch.value FFFFFFFF, susp.switch 0, no other susp.* note, no Su... |
+| 7 x64 | G1 | rel | PASS | g1.txt usbif list: 5 GUID_DEVINTERFACE_USB_DEVICE: tablet 4.1, mouse 2, stick 1, XHCI98\COMPOSITE&VID_46F4&PID_0002 (par... |
+| 7 x64 | G2 | rel | PASS | g1.txt usbif hubs: root port 1 46f4:0001 _EX speed 2, V2 proto 4 flags 3 (SuperSpeed operating + capable); mouse port 6 ... |
+| 7 x64 | K2 | rel | PASS | g1.txt: XHCI98\COMPOSITE&VID_46F4&PID_0002\1-0000:00:03.0-3 'xHCI98 USB Composite Device' + USB\VID_46F4&PID_0002&MI_00 ... |
+| 7 x64 | K4 | rel | PASS | UV64: stick 'QEMU'/'QEMU USB HARDDRIVE'/'1-0000:00:03.0-1' Bus Speed Super (uv-p1); mouse 'QEMU'/'QEMU USB Mouse'/'89126... |
+| 7 x64 | T1 | rel | PASS | t1-big.txt: BOT G: (SS port 4) + UAS H: (SS port 3, xhciuas via u.bat, Install anyway + PCA box closed) BIG.BIN both way... |
+| 7 x64 | T8 | rel | PASS | same method (budget 23/32): PlaySync 20.7 s (IsoPacketsAnswered +20110, Ring Underrun +1) during 6x UAS BIG.BIN copies b... |
+| 7 x64 | P1 | rel | superseded (verdict lost to a quoting slip; corrected line follows) | setv XhciInterruptMode 2 + dc/ec OK (p1-set.txt); p1.txt IntrModeRead 2 IntrMode 2 IntrDelivery 2 IntrReason 8, "POLLING... |
+| 7 x64 | E-3 | rel | PASS | mode 0 (MSI): k2aud-times.txt 20.83 / 20.26 s (+20090/+20100 packets), budget 22/32; mode 2 (P1 state): e3m2-times.txt 2... |
+| 7 x64 | P2 | rel | PASS | mode 1 (p2m1-set/p2m1.txt): IntrModeRead 1 IntrMode 1 IntrDelivery 1 IntrReason 5 "the line interrupt, forced line", Msi... |
+| 7 x64 | M1/F | rel | PASS | F0 = I1 (mode 0 default: delivery 3 MSI, 108 = 4, i3-run.txt); F1 p2m1.txt: 65 1, 66 5, 108 10 (MsiFilterOutcome 10 repl... |
+| 7 x64 | M2 (MSI, modes 0 and 3) | rel | PASS | mode 0: p2m0.txt delivery 3 "MSI", reason 10, MsiCapability 3 "capability MSI", MsiMessages 1; mouse moved; BOT fc clean... |
+| 7 x64 | M3 | rel | PASS | dc/ec x6 devices back; pnpctl remove + rescan (m3-msi.txt): controller started problem=0 at once (x64 asks no restart), ... |
+| 7 x64 | P1 (corrected line; the 07:31 P1 line lost its tail to a quoting slip) | rel | PASS | setv XhciInterruptMode 2 + dc/ec OK (p1-set.txt); p1.txt IntrModeRead 2 IntrMode 2 IntrDelivery 2 IntrReason 8, POLLING,... |
+| 7 x64 | G3 | rel | PASS | two passes, each value set + dc/ec + XHCISNAP: (a) HS mouse root port 2 only (g3-0..4.txt), (b) + usb-hub port 4 with a ... |
+| 7 x64 | K5 | rel | PASS | L1 usb-mouse root port 2 (HS) + fm1 behind usb-hub 4.1 (FS) moved the pointer (i3m, i18am); L2 usb-tablet tb2 at 4.2 "QE... |
+| 7 x64 | I18 | rel | PASS | usb-hub h2 hot-added on port 4 at the desktop, usb-mouse fm1 (12 Mb/s) at 4.1: USB\VID_0627&PID_0001\...-4.1 + HID mouse... |
+| 7 x64 | B3 | rel | PASS | default (absent = 0): t1x.txt "XhciWideMap not set (the default)", promotion off, check not run, promoted 0, big blocks ... |
+| 7 x64 | T2 | rel | PASS | each value setv + shutdown /r (x64 F8 DSE), UAS raw disk VERIFY 2M aligned / 2M -skew 512 / 64K, 0 bad each: 2048 (t2-20... |
+| 7 x64 | K1 | rel | PASS | elevated cscript //nologo E:\portsw.vbs show: "...\0000  0 - off" (k1a.txt); portsw.vbs 1: "now 1 on every xhci98 contro... |
+| 7 x64 | B1 | rel | PASS | MaxTransferKB 2048 by reboot, XhciWideMap 1 still set from B3 (promotion on): t2-2048.txt VERIFY 2M aligned 160.3 MB/s a... |
+| 7 x64 | B2 | rel | PASS | see T2 (t2-64/-2048/-4096/-0.txt): 64 -> command size 65536; 2048 -> 2097152; 4096 -> "out of 64-2048: the default (4096... |
+| 7 x64 | CP1 S4 | rel | PASS (the 0xc0000411 attempts = harness, not driver) | powercfg /a: Hibernate only (VGAPNP blocks S1-S3) (cp1-pre.txt); set: stick port 1, mouse port 2, usb-audio a3 port 3 (c... |
+| 7 x64 | SB2 | rel | PASS | setv XhciSelectiveSuspend 1 + dc/ec (sb2.txt, verbosity 3): susp.switch.value 1, susp.switch 1, DNCTRL 0x0002 (N1, FUNCT... |
+| 7 x64 | I4 (stage A word) | rel | PASS | sb2.txt: SuspSwitchRead 1 and SuspSwitch 1 printed by name = susp.switch.value 1 / susp.switch 1; the value deleted afte... |
+| 7 x64 | B13 | rel | PASS (drain length not exposed by the release XHCISNAP) | set: usb-mouse port 1, UAS raw ua port 2 (u1) + ub port 3 (u2), usb-audio a4 port 4 (budget 17/32); both disks WRITE 128... |
+| 7 x64 | M2 (MSI-X, modes 0 and 3) | rel | PASS functionally; FINDING (MSI-X lost/late interrupts -> backstop, attribution open) | clean shutdown, relaunch -Xhci p2=4,p3=4,msi=off,msix=on (+UAS raw port 3, audio port 4); msix0: delivery 4 MSI-X, reaso... |
+| 7 x64 | M3 (MSI-X) | rel | PASS | pnpctl remove + rescan: started problem=0 at once (m3x.txt); driver key recreated -> -verbosity 3 + dc/ec (m3x-after.txt... |
+| 7 x64 | MSIX-ATTR (1) new? | base | INFO (pre-existing) | msi=off,msix=on, stick port 1, usb-audio port 4, pnputil install (F8), verbosity 2 + dc/ec (b-inst.txt); 3 x TONE.WAV 21... |
+| 7 x64 | MSIX-ATTR (2) QEMU side | qemu | ATTRIBUTED: QEMU (MSI-X emulation), exposed by the driver's spec-legal IE toggling; pre-existing | qtrace-msix.log: every interrupt service is IMAN(off 0x20) write 0x00000001 (W1C IP, IE=0) -> usb_xhci_irq_msix_unuse nr... |
+| 7 x64 | Q2 / M4 | qemu | PASS | fresh -Tag q overlay, qemu flavour 35845597 (pnputil, F8; bc no differences, q-inst.txt), msi=on,msix=off relaunch: q0.t... |
+| 7 x64 | E-1 | qemu | PASS (stop-dump counter notes not read: DebugView not run) | setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc/ec (e1-set.txt); e1.txt: intr.mode 1, delivery 1 (line), reason 5, qe... |
+| 7 x64 | P3 | qemu | PASS (stop-dump counter notes not read: DebugView not run) | setv XhciInterruptMode 1 + XhciQemuDeadLine 1 + dc/ec (e1-set.txt); e1.txt: intr.mode 1, delivery 1 (line), reason 5, qe... |
+| 7 x64 | E-2 | qemu | PASS | on the MSI grant mode 0 delivers MSI and the stand-in dead LINE is never used (e2.txt/e2b.txt: delivery 3 MSI, no move, ... |
+| 7 x64 | P4 | qemu | PASS | on the MSI grant mode 0 delivers MSI and the stand-in dead LINE is never used (e2.txt/e2b.txt: delivery 3 MSI, no move, ... |
+| 7 x64 | F3 | qemu | PASS | MSISupported 1, XhciInterruptMode 1, XhciMsi86InjNoLine 1, reboot (F8): f3-trace.txt (check-msi86-trace.ps1 on f3-debugc... |
+| 7 x64 | B8 | qemu | NOT MAKEABLE (QEMU usb-uas assertion; harness/QEMU, not the driver) | setv XhciWideMap 1 + XhciQemuBigRefuse 1 + dc/ec, XFERTEST VERIFY on the UAS raw disk: QEMU ABORTED (qemu-stderr-9.log: ... |
+| 7 x64 | B9 (a) | qemu | NOT MAKEABLE (QEMU usb-uas) | needs two TDs of one URB on a UAS stream ring = the B8 configuration, which aborts QEMU's usb-uas (data3 assertion) befo... |
+| 7 x64 | Q3 | qemu | PASS | XhciWideMap 1 (BigRefuse 0: stage-3 big blocks built 3, one-TD URBs 1540, 256-TRB TDs), UAS raw disk (PhysicalDrive2), X... |
+| 7 x64 | B9 (b) | qemu | PASS | XhciWideMap 1 (BigRefuse 0: stage-3 big blocks built 3, one-TD URBs 1540, 256-TRB TDs), UAS raw disk (PhysicalDrive2), X... |
+| 7 x64 | Q4 | qemu | PASS | setv XhciQemuMapGrant 0x10 (16 registers) + dc/ec (q4.txt): qemu.mapgrant 10, applied 10, "map grant 16 registers; a chu... |
+| 7 x64 | B10 | qemu | NOT MAKEABLE (no storage-class suspend requester in QEMU/Windows 7) | not makeable on this guest: nothing in Windows 7 selectively suspends a UAS / BOT storage device (usbstor and xhciuas ne... |
+| 7 x64 | B12 | qemu | NOT MAKEABLE (QEMU usb-uas; no pause-with-queue in QEMU) | needs a pause with a mix of an older single-TD URB and a promoted two-TD URB queued on one bulk pipe: promotion (stage 2... |
+| 7 x64 | CP1 trace (S4) | qemu | PASS | Dx: 00000504 per parent FDO on hibernate, 00000101 on wake; resume finishes; function + hub devices work / qemu flavour ... |
+| 7 x64 | V1 | rel | PASS | fresh -Tag v overlay, rel from the zip (pnputil, F8, bc no differences; v1-set.txt "No drivers are currently verified" t... |
+| 7 x64 | B5 | rel | PASS (promotion refused at the check; handed 0 - the check gate, not the per-map guard) | V1 overlay (verifier /standard Level 000009BB incl. DMA checking): setv XhciWideMap 1 + dc/ec, UAS raw disk port 3: b5.t... |
+| 7 x64 | D1 | dbg | PASS | fresh -Tag d overlay, package-dbg.txt xhci98.sys 38269385.. (= hashes.txt debug-x64); pnputil (F8; the first try hit "Do... |
+| XHCIQUAL (DOS) | QM | zip XHCIQUAL.EXE | PASS | QEMU matrix: 50 passed, 0 failed (matrix.txt; exit 0; XHCIQUAL.EXE SHA-256 d5ab9fd6079b0157031998c69cbadb6fbf7e3a5c3cc05... |
+| XHCIQUAL (DOS) | QM harness note | - | PASS | no junction made (would replace a tracked dir); main repo tools\w98se.img (92d9b862...) copied to legs\xhciqual\w98se.im... |
+| 98 SE 36.41 | W41 binary sw0 | rel (zip) | PASS | AUTOEXEC.BAT copies D:\XHCI98.SYS to C:\WINDOWS\SYSTEM32\DRIVERS before Windows loads (shots vfy0-ae2); file Properties ... |
+| 98 SE 36.41 | W41 binary sw1 | rel (zip) | PASS | Properties 269,400 bytes, version 2.2.0.3 (vfy1-prop, vfy1-ver); offline extract SHA-256 427b9d98...41df; SYSTEM.DAT hol... |
+| 98 SE 36.41 | W41 vehicle | rel (zip) | PASS (vehicle rebuilt) | on 2.2.0.3 the hot-add raised Add New Hardware for "QEMU USB Audio" = 36.43's XHCI98\COMPOSITE parent, which the stage A... |
+| 98 SE 36.41 | W41 120 s switch 0 | rel (zip) | PASS (Windows 98 SE wedge, as 36.41) | 3 of 6 wedged (f0a120-1, -2, -6: frame frozen l2a->l3b diff 0, menu 0/0/0, clock 0); live f0a120-3, -4, -5 (Start menu e... |
+| 98 SE 36.41 | W41 120 s switch 1 | rel (zip) | PASS (Windows 98 SE wedge, as 36.41) | 2 of 6 wedged (f1a120-3, -5); live f1a120-1, -2, -4, -6 (-6 judge MIXED: menu x3, tray clock 7:30 unchanged through l3-b... |
+| 98 SE 36.41 | W41 300 s switch 0 | rel (zip) | PASS (as 36.41) | 2 of 2 wedged (f0a300-1, -2) |
+| 98 SE 36.41 | W41 300 s switch 1 | rel (zip) | PASS (as 36.41) | 2 of 2 wedged (f1a300-1, -2) |
+| 98 SE 36.41 | W41 wedge state | rel (zip) | PASS - no SUSPECT-DRIVER | every wedge: desktop frozen, no Start menu, clock frozen, no blue screen in any shot; 12 register samples each in VMM co... |
