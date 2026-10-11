@@ -2333,3 +2333,82 @@ appended in bold.
 | 98 SE 36.41 | W41 300 s switch 0 | rel (zip) | PASS (as 36.41) | 2 of 2 wedged (f0a300-1, -2) |
 | 98 SE 36.41 | W41 300 s switch 1 | rel (zip) | PASS (as 36.41) | 2 of 2 wedged (f1a300-1, -2) |
 | 98 SE 36.41 | W41 wedge state | rel (zip) | PASS - no SUSPECT-DRIVER | every wedge: desktop frozen, no Start menu, clock frozen, no blue screen in any shot; 12 register samples each in VMM co... |
+
+## 36.55 - the lost-interrupt backstop starved on Windows 98 SE (2026-10-11)
+
+**The finding.** The final matrix's E-4 leg stopped on 98 SE, 2 of 2:
+the `qemu` flavour of the stamped `2.2.0.3`, `XhciInterruptMode` 1 with
+`XhciQemuDeadLine` 1, and an MS-DOS prompt copy (`F.BAT`) to the stick's
+E:. The stick's block counters were unchanged 60 s apart and the UI was
+frozen. ME's same leg ran at backstop pace (P3-x). The `XhciQemuInject`
+`01160083` left in that key from the Q3 row named endpoint `0x83`.
+Neither QEMU's Bulk-Only stick (`0x81`/`0x02`) nor its mouse has it, and
+the dumps show it latched and never fired. The matrix trace's last
+transfer line, `0x1F`, is that trace site's 32-line budget, not where the
+transfers stopped.
+
+**Traced** with a temporary patch, never committed. The tolerance clock's
+DPC printed a heartbeat every 2 s: the clock, the controller thread's
+loop count and position, the power gate's holders and waiters, the drain
+count, backstop drains, transfers submitted and completed, URBs in, and
+whether an event stood at the dequeue. Development host A, QEMU, fresh
+overlays of the 98 SE gold image, `-display none` with the power-throttle
+opt-out, `XhciQemuInject` absent (`qemu.inj.latched` `FFFFFFFF`).
+98 SE presents a stick attached at power-on twice: as E:, the BIOS's
+INT 13h disk in MS-DOS compatibility mode, and as G:, the protected-mode
+drive. Both are the same volume.
+
+| Run | Build | Setup | What happened | Reading |
+|---|---|---|---|---|
+| A | `4973770` + trace | mode 1, dead line, no mouse, `F E` | about 2 transfers/s for 20 min (2883), then the thread's loop count froze inside its 100 ms timed wait. The DPC heartbeat went on, an event stood at the dequeue, completed = submitted - 1, the gate was free. 60 EIPs, all in the VMM's ring 0 (`C0003xxx`, `C00534xx`). IRQ0 at about 240/s, no interrupt storm | stop |
+| B | the same | mode 1, dead line, a HID mouse installed first, `F E` | stopped within 2 min (174 transfers), the thread frozen mid-pass between two steps (runnable code, not a wait), the rest as A | stop |
+| C | the same | mode 1, dead line, `F G` | copy and `fc` x2 clean in about 32 min, 3661 transfers; the thread ran throughout. G: wrote 32 KB a request, E: 4 KB | no stop |
+| D | the same | mode 0, a working line, 254 lost interrupts injected (`010100FE`), `F E` | 117 lost interrupts picked up by the thread, then the thread froze mid-pass as in B, and the copy stopped | stop |
+| E | the same | as D on G: (`020100FE`), then a Win32 `XCOPY32` to E: (`030100FE`) | both clean, all 254 lost interrupts picked up each time | no stop |
+| F | + the step from the DPC (experiment) | as B | copy and `fc` x2 clean, 6322 transfers, every drain queued by the DPC; the mouse moves after | pass |
+
+So on 98 SE the controller thread can be left unscheduled while an MS-DOS
+prompt's request to a drive in MS-DOS compatibility mode waits. The timer
+DPC is not, and it keeps running. Which part of the VMM holds the thread
+off was not identified. The backstop ran only on the thread. On a delivery
+where it is the only drain, the request therefore waited for a completion
+nothing would queue, and the computer stopped. This is the dead line under
+mode 1, and also a single lost interrupt in the default mode 0. Every
+release since `2.2.0.0` (`v2.2.0.0`'s `hcdPoll` calls `hcdBackstop`) has
+the exposure. The `824a6c7` reread's mode 1 copy passed because it went
+to that run's protected-mode letter G: (`out\p36-pollv\legs\w98\notes-E2.txt`).
+
+**The fix** (design record 17 section 4.1, "Amended"; records 15 and 13
+follow): the step runs first in the tolerance clock's DPC on every tick,
+before its re-arm, with no power gate. It is the same admission,
+observation and queueing as before. The release closes the event DPC with
+an interlocked exchange. Commits `7debbe0` (design), `2ad2b0d` (code),
+`5d96e69` (review round 1's one wording point), `b7c2b55` (mode 0 and the
+release notes), merged with `2.3.0.0` at `e9d25b9` in `2c74b47`. Review
+thread `01a129d5`: round 1, no P1 or P2 and one wording P3; round 2, the
+confirmation, nothing; round 3, the merge, nothing. Built x86 and `-amd64`
+all, every gate and the host suites, on `2ad2b0d`/`5d96e69` and again on
+the merge.
+
+**Legs on the fix**, the `qemu` and `release` packages of `5d96e69`
+(`xhci98.sys` x86 `qemu` `daaed75f...`, `release` `b9318092...`):
+
+| Guest | Leg | Reading | Verdict |
+|---|---|---|---|
+| 98 SE | E-4 run 1: mode 1, dead line, `F E`, no mouse | copy and `fc` x2 clean in about 56 min. `XHCISNAP`: intr.mode 1, deadline 1, latched `FFFFFFFF`, TransfersCompleted 6322 = BackstopDrains 6322 | PASS |
+| 98 SE | E-4 run 2: the same after a HID mouse is hot-added and its driver installed (the case that stopped within 2 min) | copy and `fc` x2 clean in about 53 min; TransfersCompleted 6326, BackstopDrains 6327; the mouse moves before and after | PASS |
+| 98 SE | mode 0, a working line, 254 lost interrupts during `F E` | copy and `fc` x2 clean in about 2.5 min; BackstopDrains 254 | PASS |
+| 98 SE | the same during `F G` | clean; BackstopDrains 508 | PASS |
+| 2000 | mode 1, dead line, the stick at boot: 4 MB copy and `fc` x2, then a hot-added mouse | clean in 6 min 14 s; transfers 359 to 1184, BackstopDrains 360 to 1170; the mouse moves; no `cmd.timeout`, recovery window 0 of 3 | PASS |
+| 2000 SMP, Driver Verifier `0x1B` | the same, both vCPUs on separate host threads | clean in 7 min 05 s; transfers 350 to 1307, drains 351 to 1234; the mouse moves; `verifier /query` AllocationsFailed 0, no stop | PASS |
+| XP | the same | clean in 10 min 30 s; transfers 547 to 2158, drains 547 to 2124; the mouse moves | PASS |
+| ME | P3: mode 1, dead line, `F E` | copy and `fc` x2 clean (16:03 to 16:54); transfers 187 to 6349, BackstopDrains 188 to 6350, about 2 a second; the stick's block counters rose every minute; a hot-added mouse moves and clicks | PASS |
+| 98 SE | `release`, mode 0 | delivery 1 (the line); `F.BAT` clean on E: and on G:; the mouse moves and clicks; BackstopDrains 0 | PASS |
+| 98 SE | `release`, mode 2 | delivery 2, reason 8; `F.BAT` clean on E: and G:; the mouse moves and clicks; BackstopDrains 0 | PASS |
+| 7 x64 | `release`, modes 0 and 2 | mode 0: MSI-X (delivery 4), mode 2: polling (delivery 2, reason 8); stick `fc` x2 clean and the mouse moves in both; BackstopDrains 0 | PASS |
+| 98 SE | `release`, mode 0, a stick attached at power-on: Stand by and wake (36.28 part 2's stop) | after `system_wakeup` the screen kept the Shut Down dialog and took no input for 2+ minutes; EIPs in the VMM's ring 0 | unchanged: 36.28 part 2's limitation stands; this fix does not reach it |
+| 98 SE | the merge with `2.3.0.0` (`2c74b47`, `qemu`, `xhci98.sys` `a30ee7f3...`): E-4 run 1 again | copy and `fc` x2 clean (17:00 to 17:53); the stick's block counters rose every half minute throughout | PASS |
+
+Raw texts: `out\p36-dl98\legs\notes-dl98.txt` and each guest's
+`out\p36-dl98\legs\<guest>\notes.txt`, with the debugcon logs, register
+samples and screenshots they name.

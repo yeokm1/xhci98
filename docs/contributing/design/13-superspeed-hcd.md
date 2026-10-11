@@ -488,6 +488,17 @@ changing the three layers:
 - **The door's descriptor reads** (36.45, section 8.11): a request pended
   on the controller's door list under its cancel-safe rules and served by
   the enum thread on the default endpoint.
+- **The lost-interrupt backstop in a timer DPC** (36.55, design record 17
+  section 4.1). The tolerance clock's DPC first takes the controller lock
+  for the backstop's peek and releases it. Only then does it take
+  `TimerLock` to count the tick and re-arm, or to refuse the re-arm once
+  the timers are closed. It never holds the two together, and because the
+  controller work comes before the re-arm, `HcdTimersDrain` waiting out
+  the re-arm also waits out that work. It queues the event DPC through the
+  ISR's admission and never drains inline. Because
+  this DPC runs until the timers are drained, after the event DPC is
+  closed, the release raises `DpcClosed` with an interlocked exchange
+  (the ISR and the enum thread are gone by then).
 
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
 the topology only through its own device object, whose lifetime 5.2 pins to
