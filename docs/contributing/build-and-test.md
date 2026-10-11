@@ -2580,9 +2580,9 @@ only on a boot where F8 -> Disable Driver Signature Enforcement was chosen,
 the choice lasts that one boot, and without it the device sits at Code 39
 with nothing loaded (read on Vista x64, item 3 below) - so the machine can never boot unattended into working
 USB. The release notes carry that beside the tier. **That was true of every
-package up to the unsigned `2.2.0.3` cut. Since the owner's decision of
+package up to the unsigned `2.2.0.3` test build. Since the owner's decision of
 2026-10-11 the published x64 binaries are test-signed** (design record 19;
-"Since 2.2.0.3 the x64 package is test-signed" below), so a user can instead
+"Since 2.3.0.0 the x64 package is test-signed" below), so a user can instead
 turn on test-signing mode once and start unattended; F8 still works without
 it, and an unsigned package staged for a guest still needs it. **Every clause was taken
 on the `qemu` build**; the `release` flavour was read on 2026-09-18 as
@@ -2665,7 +2665,7 @@ was never tried on either guest and was removed from the roadmap by the owner
 on 2026-09-16: test-signing mode loads a test-signed driver, and the package
 was not signed. **Since 2026-10-11 it is the route for a signed package**
 (task 36.50, design record 19): `bcdedit /set testsigning on` once, elevated,
-and a restart - see "Since 2.2.0.3 the x64 package is test-signed" below.
+and a restart - see "Since 2.3.0.0 the x64 package is test-signed" below.
 What follows is the F8 route, which an unsigned package staged for a guest
 still needs. **A single QEMU
 monitor `sendkey f8` is too late on these guests' boot path**, and a
@@ -2792,7 +2792,7 @@ possible is no longer available in practice. So an unsigned `xhci98.sys`
 loads on these systems only on a boot with driver signature enforcement
 disabled (F8). Test-signing mode was not a route for the published package
 while it was unsigned (next section); **since 2026-10-11 the published x64
-binaries are test-signed and it is** ("Since 2.2.0.3 the x64 package is
+binaries are test-signed and it is** ("Since 2.3.0.0 the x64 package is
 test-signed", below). Design record 11 section 6 and design record 19 are
 the record; the requirement belongs in the release notes beside any tier
 that is claimed, not in a footnote.
@@ -2900,7 +2900,7 @@ without it). Nothing from this probe was
 left behind: the certificate was removed from the host store afterwards, and no
 file in the repository was changed by it.
 
-#### Until 2.2.0.3 this project did not sign its package
+#### Until 2.3.0.0 this project did not sign its package
 
 **Superseded for the x64 package by the owner on 2026-10-11** (design
 record 19, and the next section): the published x64 binaries are now
@@ -2947,7 +2947,7 @@ each guest. If the driver loads, the INF line is never needed. If it does not,
 the catalog question reopens - and then the line is added to a *staged* copy of
 the INF and measured there, before anyone proposes it for the shipping package.
 
-#### Since 2.2.0.3 the x64 package is test-signed
+#### Since 2.3.0.0 the x64 package is test-signed
 
 **Owner, 2026-10-11; design record 19 is the authority** (roadmap-hcd task
 36.50). Every published x64 directory carries `xhci98.sys` and
@@ -2995,6 +2995,14 @@ binaries are never signed.
   loads, and "Test Mode" shows at the desktop's corner. The install still
   raises the publisher prompt. `bcdedit /set testsigning off` and a restart
   undo it. The readings are record 19 section 10's and `runs/run-36.md`'s.
+  Read on 2026-10-11 (36.50's rehearsal): both guests load the signed
+  driver this way with no F8; without test-signing mode and without F8 the
+  controller shows Code 39 on Vista x64 and Code 52 on Windows 7 x64; the
+  Driver tab says "Not digitally signed" either way (no catalog). Two
+  harness traps: the guest bases carry `advancedoptions`, which has to go
+  for an ordinary start, and Vista x64 shows its "Test Mode" text only while
+  its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
+  expired the not-genuine watermark replaces it and the mode is still on.
 
 #### And the install path is not the one the INF was written for
 

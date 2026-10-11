@@ -367,7 +367,7 @@ as deliberate an act as changing it forwards was.
 **Read the x64 half of a cut as narrowly as its evidence is**: three guests
 (Windows XP x64, Vista x64 and Windows 7 x64), all virtual machines, never
 real hardware, the two NT 6.x ones loading the driver only on an F8 boot with
-driver signature enforcement disabled (from `2.2.0.3` the x64 binaries are
+driver signature enforcement disabled (from `2.3.0.0` the x64 binaries are
 test-signed so that they also load in test-signing mode; design record 19
 section 10 holds what has been read of that), against the x86 half's install legs
 (Windows 98 on both USB 2.0 stacks, Windows ME, Windows 2000, 32-bit Windows

@@ -144,7 +144,7 @@ project certificate whose thumbprint record 19 section 10 records. Refused for t
 package (32-bit Windows does not enforce kernel-mode signing, and the x86
 binaries are never signed) and for a binary that is already signed (the
 packager signs; nothing is signed by hand). Without it the package is staged
-unsigned, as every package before 2.2.0.3 was: enough for a guest started
+unsigned, as every package before 2.3.0.0 was: enough for a guest started
 with F8, and make-release.ps1 refuses to publish it.
 
 .PARAMETER SkipPackageGate
@@ -458,8 +458,15 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
     $after = Get-UserKeyContainers
     $left = @($after.Names | Where-Object { $before.Names -notcontains $_ })
     if ($left.Count -gt 0) {
-        Write-Warn ("SignTool left {0} new key container(s) in {1} while signing {2}: {3}. One may be a copy of the private key; design record 19 says what to do." -f `
-            $left.Count, $after.Dir, $Label, ($left -join ", "))
+        # Warned, not deleted (design record 19 section 5): nothing here can
+        # prove another process did not create one of them in the same moment.
+        Write-Warn ("SignTool left {0} new key container file(s) while signing {1}; each may be a copy of the private key. They are hidden system files, so list them with -Force, and delete each one named here yourself (design record 19 section 5):" -f `
+            $left.Count, $Label)
+        foreach ($n in $left) {
+            # Apostrophes doubled, so the printed line pastes as written
+            # whatever the profile path holds (review round 8).
+            Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n).Replace("'", "''"))
+        }
     }
     if ($signRc -ne 0) {
         throw "SignTool could not sign $Label (exit $signRc):`n$signOut"
