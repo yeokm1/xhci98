@@ -1302,6 +1302,21 @@ try {
     # A 0 is refused too. The old SUSP-VALUE rule existed because present-and-0
     # was a silently disabled fix; the same reasoning inverted says the value's
     # data is not what makes it unwanted - its being here at all is.
+    # Quoted names and a quoted subkey: setup reads them as the same value,
+    # so each of the three OS names is refused quoted too (Codex review of
+    # task 36.51, round 1).
+    Assert-RuleFires "susp-global-quoted" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKLM,`"System\CurrentControlSet\Services\USB`",`"DisableSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    }
+    Assert-RuleFires "susp-hc-quoted" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,`"HcDisableSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    }
+    Assert-RuleFires "susp-hc-all-quoted" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,`"HcDisableAllSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    }
     Assert-RuleFires "susp-global-zero" "SUSP-GLOBAL" {
         param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
                              "[Xhci.AddReg.NT]`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,0`r`nHKR,,XhciLogVerbosity")
@@ -1486,7 +1501,7 @@ try {
     # writes the driver's own XhciSelectiveSuspend at 0 (owner, 2026-10-11),
     # a switch the HCD reads and usbport never did, which this pin is not
     # about. That row is asserted present instead, on all three paths.
-    $suspRows = @($fp | Where-Object { $_ -match "\|(Hc)?Disable(All)?SelectiveSuspend\|" })
+    $suspRows = @($fp | Where-Object { $_ -match '\|"?(Hc)?Disable(All)?SelectiveSuspend"?\|' })
     Assert-True (@($fp | Where-Object { $_ -match "\|XhciSelectiveSuspend\|0x00010003\|0\|keep\s*$" }).Count -eq 3) (
         "src\xhci98.inf's footprint must write XhciSelectiveSuspend at 0, kept, on its three install paths (task 36.51). Rows:`n" + ($fp -join "`n"))
     Assert-True ($suspRows.Count -eq 0) (

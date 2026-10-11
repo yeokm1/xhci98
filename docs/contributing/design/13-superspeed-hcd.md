@@ -859,7 +859,8 @@ invalidation its PDO's creation makes.
 and **2 s per port**, both on the controller's driver key as REG_DWORDs in
 milliseconds read at every start: `XhciFirstEnumWaitMs` (0 turns the wait
 off; held to 30,000) and `XhciFirstEnumPortMs` (0 for no per-port budget;
-held to the total). No INF writes either. **Text-mode Setup writes no
+held to the total). No INF wrote either until task 34.1; since then every
+INF writes 5000 and 2000 under the don't-overwrite flag. **Text-mode Setup writes no
 driver-key value, so the defaults are what F6 Setup gets**, and they are
 chosen to be right on their own. Their scale is documentation, not a
 binary reading: Microsoft's account of its own hub driver's enumeration
@@ -5751,7 +5752,9 @@ polls at its own rate, starves other periodic traffic, or worse - which
 no QEMU run can rule out.
 
 - **The value**: `XhciFastPollFsLs`, a REG_DWORD on the controller's driver
-  key, read at each controller start (`hcd_ctl.c`), written by no INF.
+  key, read at each controller start (`hcd_ctl.c`), written by no INF
+  until task 34.1 and at 0 by every INF since, under the don't-overwrite
+  flag.
   `XhciPipeFastMode`: 1, 2 and 3 are themselves, anything else - absent, 0,
   a value of another type, 4 and up - is off. (Since task 36.19, 4 is
   itself too, section 13.7, and 5 and up are off.) Logged as `fastpoll.value`

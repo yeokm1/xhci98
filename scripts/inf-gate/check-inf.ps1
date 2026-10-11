@@ -2218,13 +2218,15 @@ foreach ($secName in @($inf.SectionOrder)) {
     $entries = Get-Section $inf $secName
     if ($null -eq $entries) { continue }
     foreach ($e in $entries) {
-        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,' -f [regex]::Escape($suspValue))) {
-            if ($matches[1].Trim() -ieq $suspKey) {
+        # A value name and a subkey may be quoted; setup reads both forms as
+        # one, so the rules take either (Codex review of task 36.51, round 1).
+        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($suspValue))) {
+            if ($matches[1].Trim().Trim('"') -ieq $suspKey) {
                 Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD, which replaces usbport, owns its idle policy itself (docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings)." -f $secName, $e.Line, $suspKey, $suspValue)
             }
         }
         foreach ($hcName in $suspHcValues) {
-            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*{0}\s*,' -f [regex]::Escape($hcName))) {
+            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($hcName))) {
                 Add-Failure "SUSP-HCVALUE" ("[{0}] line {1} writes {2}. The per-controller values are not this package's mechanism: usbport's own USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend back, and on Vista usbhub calls it from a power-setting callback - measured 2026-09-17, the Balanced plan rewrote it to 0 and suspended the controller at once, and Balanced defaults that setting to Enabled on battery. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD owns its idle policy itself." -f $secName, $e.Line, $hcName)
             }
         }

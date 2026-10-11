@@ -6210,7 +6210,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciFirstEnumWaitMs` | each start | 5000 | 0-30000 | 5000 | yes |
 | `XhciFirstEnumPortMs` | each start | 2000 | 0 to the wait | 2000 | yes |
 | `XhciIntelPortSwitch` | each start, Intel controllers only | 0 | 0 off, 1 listed controllers, an exact 2 any Intel | 0 | yes |
-| `XhciIntelIrqRoute` | each start and return to D0 | 1 | 0-2; another number, 1 | 1 | yes |
+| `XhciIntelIrqRoute` | each start; a return to D0 reapplies the start's reading | 1 | 0-2; another number, 1 | 1 | yes |
 | `XhciTolerance` | each start | 1 | 0 off, any other 1 | 1 | yes |
 | `XhciIntervalCap` | each start | 1 | 0-2 | 1 | yes |
 | `XhciAvgTrbEsit` | each start | 0 | 0-1 | 0 | yes |
