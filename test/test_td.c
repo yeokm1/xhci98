@@ -902,6 +902,7 @@ static void iso_request(XHCI_ISO_REQUEST *req, ULONG interval, ULONG mps,
     req->Frames.Allowed = allowed;
     req->Frames.CurrentFrame = now;
     req->Frames.IstFrames = 2;
+    req->Frames.FirstOnly = 0;
 }
 
 /* The TDs of a built block: one per packet, each carrying its packet's bytes
@@ -1099,8 +1100,8 @@ static void test_iso_frame_decision(void)
     CHECK_EQ(iso_fill(0, 4, 192, 4, 1010, 4, &sg, &length), 1, "filled");
     iso_request(&req, 4, 192, 1, 1000);
     CHECK_EQ(XhciXferIsoUsesFrameIds(&req), 0,
-             "PacketsPerFrame 0: no Frame IDs, so hcdIsoPublish sends an "
-             "explicit StartFrame with SIA (36.57)");
+             "PacketsPerFrame 0: no Frame IDs on a CFC controller, so "
+             "hcdIsoPublish sends an explicit StartFrame with SIA (36.57)");
 
     /* The request shapes BuildIso refuses are refused here too, before a
      * packet is read (src\xhci_xfer.c, task 26-A.9's fix). */
@@ -1126,15 +1127,60 @@ static void test_iso_frame_decision(void)
  * Task 36.57: how hcdIsoPublish schedules usbaudio.sys's asynchronous
  * stream (design record 13 section 6.10). Windows 7 gives the feedback
  * read - one 3-byte packet at the current frame + 2^bRefresh + 2 - and
- * every data URB an explicit StartFrame. Without CFC, or with a start the
- * window cannot name, the request goes out with SIA instead of being
- * refused, and the TRBs say so.
+ * every data URB an explicit StartFrame, and reads the feedback again as
+ * soon as a read completes. Each vector derives Allowed and FirstOnly as
+ * hcdIsoPublish does (XhciXferIsoFramePolicy), asks the plan, then builds
+ * the same request unchanged and checks the TRBs say what the plan said.
  */
+
+/* The first TRB of TD `td` in the last build. */
+static ULONG iso_td_first(ULONG td)
+{
+    ULONG i;
+    ULONG at;
+
+    at = 0;
+    for (i = 0; i < td; i++) {
+        at += iso_layout.TdLengths[i];
+    }
+    return at;
+}
+
+/* Plan, build and check: every TD SIA (`fid` 0), the first TD alone a
+ * Frame ID (`fid` 1), or every TD a Frame ID (`fid` 2). */
+static void iso_plan_case(XHCI_ISO_REQUEST *req, ULONG asap, ULONG cfc,
+                          ULONG sampled, ULONG idle, ULONG plan, ULONG fid,
+                          const char *what)
+{
+    ULONG td;
+    ULONG at;
+    ULONG want;
+
+    XhciXferIsoFramePolicy(req, asap, cfc, sampled, idle);
+    CHECK_EQ(XhciXferIsoStartPlan(req, asap, cfc, sampled, idle), plan, what);
+    CHECK_EQ(XhciXferBuildIso(req, req->DirectionIn, iso_out,
+                              XHCI_XFER_MAX_ISO_TRBS, &iso_layout),
+             XHCI_XFER_OK, what);
+    CHECK_EQ(iso_layout.FrameIdsUsed, fid != 0 ? 1UL : 0UL, what);
+    for (td = 0; td < iso_layout.TdCount; td++) {
+        at = iso_td_first(td);
+        want = (fid == 2 || (fid == 1 && td == 0)) ? 0UL : XHCI_TRB_SIA;
+        CHECK_EQ(iso_out[at].Control & XHCI_TRB_SIA, want, what);
+        if (want == 0) {
+            CHECK_EQ(XHCI_TRB_GET_FRAME_ID(iso_out[at].Control),
+                     iso_block.Block.Packet[td].FrameNumber & 0x7FFUL, what);
+        }
+    }
+}
+
 static void test_iso_start_plan(void)
 {
     XHCI_ISO_REQUEST req;
     TD_SG sg;
     ULONG length;
+    ULONG start;
+    ULONG now;
+    ULONG lead;
     ULONG i;
 
     layout_contiguous(0x00300000UL, "contiguous from 0x00300000");
@@ -1145,67 +1191,107 @@ static void test_iso_start_plan(void)
     CHECK_EQ(iso_block.Block.Packet[0].Length, 3, "packet 0 is 3 bytes");
     iso_request(&req, 3, 3, 0, 1000);
     req.DirectionIn = 1;
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 1, 1, 1), XHCI_ISO_START_ASAP,
-             "ASAP is ASAP whatever the controller");
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 0, 1), XHCI_ISO_START_SIA_NO_CFC,
-             "the E7250's 9CB1: no CFC, SIA");
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 0, 0), XHCI_ISO_START_SIA_NO_CFC,
-             "no CFC comes first, before the sample");
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 1, 0),
-             XHCI_ISO_START_SIA_NO_SAMPLE, "CFC, no frame sample: SIA");
-    req.Frames.Allowed = 1;
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 1, 1), XHCI_ISO_START_FRAME_IDS,
-             "CFC and a sample: now + 34 is in the window");
-    CHECK_EQ(XhciXferBuildIso(&req, 1, iso_out, XHCI_XFER_MAX_ISO_TRBS,
-                              &iso_layout), XHCI_XFER_OK, "built with an ID");
-    CHECK_EQ(iso_layout.FrameIdsUsed, 1, "Frame IDs used");
-    CHECK_EQ(iso_out[0].Control & XHCI_TRB_SIA, 0, "no SIA");
-    CHECK_EQ(XHCI_TRB_GET_FRAME_ID(iso_out[0].Control), 1034UL & 0x7FF,
-             "the client's frame");
+    XhciXferIsoFramePolicy(&req, 0, 0, 1, 1);
+    CHECK_EQ(req.Frames.Allowed, 1, "no CFC, a new flow: allowed");
+    CHECK_EQ(req.Frames.FirstOnly, 1, "on the first TD alone");
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
+                  "E7250 (no CFC), idle ring: the read at its frame");
     CHECK_EQ(iso_out[0].Status & 0x1FFFFUL, 3, "TRB Transfer Length 3");
+    iso_plan_case(&req, 1, 0, 1, 1, XHCI_ISO_START_ASAP, 0, "ASAP: SIA");
+    iso_plan_case(&req, 0, 0, 0, 1, XHCI_ISO_START_SIA_NO_SAMPLE, 0,
+                  "no frame sample: SIA");
+    iso_plan_case(&req, 0, 0, 1, 0, XHCI_ISO_START_SIA_NO_CFC, 0,
+                  "no CFC, a flow under way: SIA");
+    iso_plan_case(&req, 0, 1, 1, 0, XHCI_ISO_START_FRAME_IDS, 2,
+                  "CFC: a Frame ID, idle or not");
+    iso_plan_case(&req, 0, 1, 0, 1, XHCI_ISO_START_SIA_NO_SAMPLE, 0,
+                  "CFC, no frame sample: SIA");
 
-    /* The same read built as hcdIsoPublish builds it without CFC. */
-    req.Frames.Allowed = 0;
-    CHECK_EQ(XhciXferBuildIso(&req, 1, iso_out, XHCI_XFER_MAX_ISO_TRBS,
-                              &iso_layout), XHCI_XFER_OK, "built with SIA");
-    CHECK_EQ(iso_layout.FrameIdsUsed, 0, "no Frame IDs");
-    CHECK_EQ(iso_layout.TdCount, 1, "one TD");
-    CHECK_EQ(iso_out[0].Control & XHCI_TRB_SIA, XHCI_TRB_SIA, "SIA set");
-    CHECK_EQ(iso_out[0].Status & 0x1FFFFUL, 3, "still 3 bytes");
-
-    /* The first data URB: ten packets of 192 at now + 2, which IST + 1
-     * (3 frames here) does not reach. Refused before 36.57; SIA now. */
-    CHECK_EQ(iso_fill(0, 10, 192, 10, 1002, 3, &sg, &length), 1, "filled");
-    iso_request(&req, 3, 200, 1, 1000);
-    req.MaxEsitPayload = 200;
-    CHECK_EQ(XhciXferIsoUsesFrameIds(&req), 0, "inside the IST");
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 1, 1),
-             XHCI_ISO_START_SIA_UNUSABLE, "CFC, but inside the IST: SIA");
-    req.Frames.Allowed = 0;
-    CHECK_EQ(XhciXferBuildIso(&req, 0, iso_out, XHCI_XFER_MAX_ISO_TRBS,
-                              &iso_layout), XHCI_XFER_OK, "built");
-    CHECK_EQ(iso_layout.TdCount, 10, "ten TDs");
-    for (i = 0; i < iso_layout.TrbCount; i++) {
-        if ((iso_out[i].Control & XHCI_TRB_SIA) == 0 &&
-            XHCI_TRB_GET_TYPE(iso_out[i].Control) == XHCI_TRB_TYPE_ISOCH) {
+    /*
+     * The pacing. usbaudio.sys reads the feedback, and on the read's
+     * completion advances its frame by the refresh period (32) and reads
+     * again at once, through a RESET_PIPE that leaves the ring empty. With
+     * the read run at its Frame ID the lead stays put, inside the window,
+     * read after read; run as SIA it completes a frame or two after the
+     * submission and the lead grows by about 30 a read until hcdIsoAdmit
+     * refuses it past 895 frames.
+     */
+    now = 1000;
+    start = now + 32 + 2;
+    for (i = 0; i < 300; i++) {
+        CHECK_EQ(iso_fill(0, 1, 3, 1, start, 3, &sg, &length), 1, "filled");
+        iso_request(&req, 3, 3, 0, now);
+        req.DirectionIn = 1;
+        XhciXferIsoFramePolicy(&req, 0, 0, 1, 1);
+        if (XhciXferIsoStartPlan(&req, 0, 0, 1, 1) !=
+            XHCI_ISO_START_FIRST_FRAME_ID) {
             break;
         }
+        /* Completed at its frame, seen a frame later, the reset and the
+         * next submission a frame after that. */
+        now = start + 2;
+        start += 32;
     }
-    CHECK_EQ(i, iso_layout.TrbCount, "every Isoch TRB carries SIA");
+    CHECK_EQ(i, 300, "300 paced reads, every one at its Frame ID");
+    CHECK_EQ(start - now, 30, "the lead steady, inside the window");
+    now = 1000;
+    start = now + 32 + 2;
+    for (i = 0; i < 300; i++) {
+        lead = start - now;
+        if (lead > XHCI_FRAME_ID_WINDOW_END) {
+            break;
+        }
+        now += 2;               /* SIA: done two frames after submission */
+        start += 32;
+    }
+    CHECK_EQ(i < 40, 1, "unpaced, the lead leaves the window within 40 reads");
 
-    /* A later data URB: contiguous, ten frames on, inside the window. */
-    CHECK_EQ(iso_fill(0, 10, 192, 10, 1012, 3, &sg, &length), 1, "filled");
-    iso_request(&req, 3, 200, 1, 1000);
+    /* The first data URB: ten packets of 192 at now + 2, which IST + 1
+     * (3 frames here) does not reach: SIA, not a refusal. */
+    CHECK_EQ(iso_fill(0, 10, 192, 10, 1002, 3, &sg, &length), 1, "filled");
+    iso_request(&req, 3, 200, 0, 1000);
     req.MaxEsitPayload = 200;
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 1, 1), XHCI_ISO_START_FRAME_IDS,
-             "with CFC, Frame IDs as before");
-    CHECK_EQ(XhciXferIsoStartPlan(&req, 0, 0, 1), XHCI_ISO_START_SIA_NO_CFC,
-             "without, SIA");
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
+                  "no CFC, idle, inside the IST: SIA");
+    iso_plan_case(&req, 0, 1, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
+                  "CFC, inside the IST: SIA from the unchanged request");
+    /* One frame later it is reachable: the first TD names its frame. */
+    CHECK_EQ(iso_fill(0, 10, 192, 10, 1003, 3, &sg, &length), 1, "filled");
+    iso_request(&req, 3, 200, 0, 1000);
+    req.MaxEsitPayload = 200;
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
+                  "no CFC, idle: TD 0 at 1003, nine SIA TDs");
+    iso_plan_case(&req, 0, 1, 1, 1, XHCI_ISO_START_FRAME_IDS, 2,
+                  "CFC: ten Frame IDs");
+    /* A later data URB continues the flow. */
+    CHECK_EQ(iso_fill(0, 10, 192, 10, 1013, 3, &sg, &length), 1, "filled");
+    iso_request(&req, 3, 200, 0, 1005);
+    req.MaxEsitPayload = 200;
+    iso_plan_case(&req, 0, 0, 1, 0, XHCI_ISO_START_SIA_NO_CFC, 0,
+                  "no CFC, the flow under way: SIA after the last TD");
+    iso_plan_case(&req, 0, 1, 1, 0, XHCI_ISO_START_FRAME_IDS, 2,
+                  "CFC: Frame IDs as before");
+    /* A start a lap stale: unusable, SIA, never a stale Frame ID. */
+    CHECK_EQ(iso_fill(0, 10, 192, 10, 1013 - 2048, 3, &sg, &length), 1,
+             "filled");
+    iso_request(&req, 3, 200, 0, 1005);
+    req.MaxEsitPayload = 200;
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
+                  "a stale start: SIA");
+    /* FirstOnly asks only packet 0: a cadence the Interval does not share
+     * (Interval 4 stamps) still gives the first TD its frame. */
+    CHECK_EQ(iso_fill(0, 4, 192, 4, 1010, 4, &sg, &length), 1, "filled");
+    iso_request(&req, 4, 192, 0, 1000);
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
+                  "no CFC, Interval 4: the first TD's frame");
+    iso_plan_case(&req, 0, 1, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
+                  "CFC, Interval 4: no cadence to state, SIA");
 
-    /* The note: slot 2, DCI 7, no CFC, 34 frames ahead; and a start behind
-     * the frame keeps its low 12 bits of the negative distance. */
-    CHECK_EQ(XhciXferIsoSiaNote(2, 7, XHCI_ISO_START_SIA_NO_CFC, 1034, 1000),
-             0x02072022UL, "iso.sia 02072022");
+    /* The note: slot 2, DCI 7, a first-TD Frame ID, 34 frames ahead; and a
+     * start behind the frame keeps the low 12 bits of the distance. */
+    CHECK_EQ(XhciXferIsoSiaNote(2, 7, XHCI_ISO_START_FIRST_FRAME_ID, 1034,
+                                1000),
+             0x02075022UL, "iso.fid1 02075022");
     CHECK_EQ(XhciXferIsoSiaNote(2, 2, XHCI_ISO_START_SIA_UNUSABLE, 999, 1000),
              0x02024FFFUL, "one frame behind: FFF");
     CHECK_EQ(XhciXferIsoSiaNote(0x102, 0x107, 0x12, 0, 0), 0x02072000UL,

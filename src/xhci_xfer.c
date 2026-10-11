@@ -3356,6 +3356,11 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
         iso->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS) {
         return 0;
     }
+    /* 36.57: the first TD alone names a frame; the rest are SIA. */
+    if (request->Frames.FirstOnly) {
+        return XhciXferFrameIdUsable(&request->Frames,
+                                     iso->Packet[0].FrameNumber, &frameId);
+    }
     if (!xhciXferIsoCadenceAgrees(iso, iso->NumberOfPackets,
                                   request->PacketsPerFrame)) {
         return 0;
@@ -3370,26 +3375,42 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
 }
 
 /*
- * Task 36.57: Frame IDs only when the client gave a start, the controller
- * can be told one (CFC), the axis was sampled and every packet has one;
- * SIA in every other case, the reason kept for the log. The order of the
- * three SIA reasons is the order a reader can act on them in: a controller
- * without CFC never uses a Frame ID, whatever the sample or the window.
+ * Task 36.57. A Frame ID needs a start from the client and a sample of the
+ * frame axis; with CFC it may be on every TD, without it only on the first
+ * TD of a data flow (xHCI 4.11.2.5 p.200), which this driver takes to be a
+ * request published with nothing of the pipe's on the ring. The ring may
+ * not yet have run dry at an ESIT when the last TD has just completed, so
+ * the controller may still count the flow as running and ignore the Frame
+ * ID (the same paragraph's "may ... ignore"); the request then runs as SIA
+ * would have, which is the fallback anyway.
  */
+VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
+                            ULONG cfc, ULONG sampled, ULONG idle)
+{
+    if (request == NULL) {
+        return;
+    }
+    request->Frames.Allowed =
+        (!asap && sampled && (cfc || idle)) ? 1UL : 0UL;
+    request->Frames.FirstOnly = cfc ? 0UL : 1UL;
+}
+
 ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
-                           ULONG cfc, ULONG sampled)
+                           ULONG cfc, ULONG sampled, ULONG idle)
 {
     if (asap) {
         return XHCI_ISO_START_ASAP;
     }
-    if (!cfc) {
-        return XHCI_ISO_START_SIA_NO_CFC;
-    }
     if (!sampled) {
         return XHCI_ISO_START_SIA_NO_SAMPLE;
     }
-    return XhciXferIsoUsesFrameIds(request) ? XHCI_ISO_START_FRAME_IDS
-                                            : XHCI_ISO_START_SIA_UNUSABLE;
+    if (!cfc && !idle) {
+        return XHCI_ISO_START_SIA_NO_CFC;
+    }
+    if (!XhciXferIsoUsesFrameIds(request)) {
+        return XHCI_ISO_START_SIA_UNUSABLE;
+    }
+    return cfc ? XHCI_ISO_START_FRAME_IDS : XHCI_ISO_START_FIRST_FRAME_ID;
 }
 
 ULONG XhciXferIsoSiaNote(ULONG slotId, ULONG dci, ULONG plan,
@@ -3511,8 +3532,11 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
     state.IsochControl = 0;
 
     for (i = 0; i < packets; i++) {
-        status = xhciXferBuildIsoPacket(&state, &iso->Packet[i], request,
-                                        useFrameId, &layout->TdLengths[i]);
+        status = xhciXferBuildIsoPacket(
+            &state, &iso->Packet[i], request,
+            (useFrameId && (!request->Frames.FirstOnly || i == 0)) ? 1UL
+                                                                    : 0UL,
+            &layout->TdLengths[i]);
         if (status != XHCI_XFER_OK) {
             /*
              * **Running out of scratch is a size refusal, not a malformed

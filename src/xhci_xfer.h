@@ -816,6 +816,17 @@ typedef struct _XHCI_ISO_FRAME_POLICY {
     ULONG CurrentFrame;
     /* HCSPARAMS2's IST, already in frames (XHCI_HC_INFO.IstFrames). */
     ULONG IstFrames;
+    /*
+     * Task 36.57: a Frame ID on the request's first TD alone, SIA on the rest
+     * - what a controller without Contiguous Frame ID allows at the start of
+     * an Isoch data flow ("software may set the Frame ID (that is, SIA =
+     * '0') only in the first Isoch TD of an Isoch data flow, and shall set
+     * SIA = '1' in all subsequent Isoch TDs", xHCI 4.11.2.5 p.200). Only the
+     * first packet's frame is then asked of the window, and the cadence
+     * check is not made: the TDs after it run one Interval apart whatever
+     * they are stamped. Meaningful only under `Allowed`.
+     */
+    ULONG FirstOnly;
 } XHCI_ISO_FRAME_POLICY, *PXHCI_ISO_FRAME_POLICY;
 
 /*
@@ -888,27 +899,38 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
 
 /*
  * How hcdIsoPublish schedules a request (task 36.57, design record 13
- * section 6.10). An explicit StartFrame whose packets cannot all have Frame
- * IDs is published with Start Isoch ASAP rather than refused: a controller
- * without Contiguous Frame ID (xHCI 4.11.2.5) can never use one, and
- * Windows 7's usbaudio.sys gives every URB of an asynchronous stream an
- * explicit StartFrame. `asap` is the client's flag, `cfc` HCCPARAMS1.CFC and
- * `sampled` whether the frame axis was read; the request's Frames.Allowed
- * is the caller's `cfc && !asap && sampled`. Pure.
+ * section 6.10). An explicit StartFrame is never refused for want of Frame
+ * IDs. With CFC every packet carries one where all can, as before. Without
+ * CFC, a request that starts a data flow - nothing of the pipe's on the
+ * ring - carries one on its first TD, so a client that paces itself by
+ * completions (usbaudio.sys's feedback read) is served at the frame it
+ * asked for; a request that continues a flow, or whose first frame the
+ * window cannot name, goes out with Start Isoch ASAP.
+ *
+ * XhciXferIsoFramePolicy sets the request's Allowed and FirstOnly from
+ * `asap` (the client's flag), `cfc` (HCCPARAMS1.CFC), `sampled` (the frame
+ * axis was read) and `idle` (the pipe has nothing on its ring);
+ * XhciXferIsoStartPlan then says which of the cases below the builder will
+ * take, from the same inputs, and must be asked after it. Both pure.
  */
 #define XHCI_ISO_START_ASAP             0UL /* the client asked for ASAP  */
-#define XHCI_ISO_START_FRAME_IDS        1UL /* every packet a Frame ID    */
-#define XHCI_ISO_START_SIA_NO_CFC       2UL /* explicit, no CFC: SIA      */
-#define XHCI_ISO_START_SIA_NO_SAMPLE    3UL /* explicit, no frame sample  */
-#define XHCI_ISO_START_SIA_UNUSABLE     4UL /* explicit, a packet outside
-                                             * the window or a cadence the
+#define XHCI_ISO_START_FRAME_IDS        1UL /* CFC: every TD a Frame ID   */
+#define XHCI_ISO_START_SIA_NO_CFC       2UL /* no CFC, a flow under way:
+                                             * SIA                        */
+#define XHCI_ISO_START_SIA_NO_SAMPLE    3UL /* no frame sample: SIA       */
+#define XHCI_ISO_START_SIA_UNUSABLE     4UL /* a packet outside the window
+                                             * or (CFC) a cadence the
                                              * Interval does not share    */
+#define XHCI_ISO_START_FIRST_FRAME_ID   5UL /* no CFC, a new flow: the
+                                             * first TD a Frame ID        */
 
+VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
+                            ULONG cfc, ULONG sampled, ULONG idle);
 ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
-                           ULONG cfc, ULONG sampled);
+                           ULONG cfc, ULONG sampled, ULONG idle);
 
-/* The `iso.sia` note's value: slot 31:24, DCI 23:16, plan 15:12, and the
- * low 12 bits of StartFrame - now. Pure. */
+/* The `iso.sia` and `iso.fid1` notes' value: slot 31:24, DCI 23:16, plan
+ * 15:12, and the low 12 bits of StartFrame - now. Pure. */
 ULONG XhciXferIsoSiaNote(ULONG slotId, ULONG dci, ULONG plan,
                          ULONG startFrame, ULONG now);
 
