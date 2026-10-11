@@ -1859,13 +1859,17 @@ or says it was found by reading the code.
 - **Windows 98 SE: Stand by is untested on real hardware; remove USB disks
   before Stand by.** It has been read only in QEMU virtual machines, where
   Windows 98 SE itself does not resume reliably: after the wake, a program
-  run at an MS-DOS prompt, or Ctrl+Alt+Del, can stop with a fatal exception
-  0E in `KERNEL32` even with no USB controller in the machine, and with a USB
-  disk attached the resume stops before the desktop returns, under this
-  driver and under NUSB's USB 2.0 (EHCI) driver alike; Windows 98 SE's own
-  UHCI driver did not resume at all there. With only a USB mouse attached,
-  at a root port or behind a hub, the resume completed and the mouse
-  worked through this driver.
+  started, or Ctrl+Alt+Del, can stop with a fatal exception 0E in
+  `KERNEL32` even with no USB controller in the machine. With a USB disk
+  that was attached when the computer started, the resume stops before the
+  desktop returns, under this driver and under NUSB's USB 2.0 (EHCI) driver
+  alike. The BIOS presents such a disk to Windows, and Windows 98 SE then
+  uses it in MS-DOS compatibility mode (System Properties, Performance
+  tab). A disk plugged in after Windows started did not stop the resume,
+  and it was still attached afterwards. Windows 98 SE's own UHCI driver did
+  not resume at all there. With only a USB mouse attached, at a root port
+  or behind a hub, the resume completed and the mouse worked through this
+  driver.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
@@ -1985,7 +1989,7 @@ what `2.3.0.0` adds:
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
-| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and stopped with a USB disk attached, as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
+| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and with a USB disk plugged in after Windows started, and stopped with a USB disk attached when the computer started (the BIOS presents it, and Windows uses it in MS-DOS compatibility mode), as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
 | The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground
