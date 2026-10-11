@@ -1524,3 +1524,32 @@ Status: not opened, unnumbered and unversioned.
   ERDP write or a blind second ERDP write. Legs: 7 x64 and Vista x64 under
   MSI-X (`BackstopDrains` 0, TONE and UAS timings against MSI), and the
   line and MSI rows unchanged.
+
+## Planned - Transaction Error recovery on a stream endpoint
+
+Goal: a UAS drive whose data stream takes a Transaction Error moves data
+again promptly, without a replug. Design record 17 left stream endpoints
+out of the soft retry (EP0, isochronous and stream endpoints keep their
+handling); the failed command is left to `xhciuas`'s class timeout, abort,
+LUN reset and port reset. Phase 36's matrix (XP x64, `qemu` flavour,
+`XhciQemuInject` fault 16 on a UAS data-in stream TD) read the failed read
+completing cleanly, then every later command timing out until the device
+was removed and added again (2 of 3; the third recovered after 266.6 s).
+The 36.22 stage-1 build behaves the same, so this predates stages 2 and 3,
+and a Bulk-Only stick under the same fault is recovered by the soft retry
+with its copies `fc` clean. The injection delivers the error for a TD
+QEMU's `usb-uas` never started while it still holds that tag's data phase,
+which a real error, from a transaction the device took part in, would not
+do; whether a real one strands the stream is the owner's bench item
+(orchestrator, 2026-10-11; owner to confirm).
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] STE.1 decide, from the bench and a reviewed design (record 17 gains
+  a section), between a soft retry for stream TDs (Reset Endpoint and Set
+  TR Dequeue for the halted stream, the stream's doorbell rung with its
+  stream ID, bounded as the Bulk-Only retry is) and a prompt `xhciuas`
+  reset in place of the class timeout; host vectors for the stream ring's
+  dequeue and DCS after the reset; legs: the fault 16 injection on XP x64,
+  2000 and 7 x64, a UAS copy `fc` clean after it with no replug, and the
+  Bulk-Only control unchanged.
