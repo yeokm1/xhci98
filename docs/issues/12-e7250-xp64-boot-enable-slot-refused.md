@@ -106,8 +106,8 @@ fault was in `xhci98.sys`, not `xhciuas`.
   `CLEAR_FEATURE(ENDPOINT_HALT)` before Reset Endpoint and Set TR Dequeue.
   xHCI 4.6.8 (p.116) puts it between them: Reset Endpoint, then
   `CLEAR_TT_BUFFER` behind a TT for control and bulk, then the device's
-  clear, then Set TR Dequeue, then the doorbell. Codex and a Claude
-  subagent each suspected the order. But the dumps below showed every
+  clear, then Set TR Dequeue, then the doorbell. Two independent
+  reviews each suspected the order. But the dumps below showed every
   stall recovered. It is a spec fix to
   make on its own (task 36.12), not this hang.
 
@@ -217,7 +217,7 @@ This is a routing quirk behind a registry value, `XhciIntelIrqRoute`, a
 REG_DWORD on the controller's software key. It is modelled on
 `XhciIntelPortSwitch`: its strict DWORD reader is reused, but not its
 meaning of 2. The policy was the owner's choice on 2026-10-08, after two
-Codex reviews.
+reviews.
 
 | Value | Meaning |
 |---|---|
@@ -238,7 +238,7 @@ The reviewed xHCI/LPC pairs, all vendor `8086`. Where a PCH datasheet is in
 
 | xHCI | Chipset | LPC device IDs | Register source |
 |---|---|---|---|
-| `1E31` | 7 series (Panther Point) | `1E40`-`1E5F` (Linux `pci_ids.h` range); Codex's list `1E44 1E46 1E47 1E48 1E49 1E4A 1E53 1E55 1E56 1E57 1E58 1E59 1E5B` | 326776-003: `D20IP` 10.1.25 p.406, `D20IR` 10.1.33 p.414, RCBA 13.1.40 p.493. Device IDs are in its specification update, not fetched |
+| `1E31` | 7 series (Panther Point) | `1E40`-`1E5F` (Linux `pci_ids.h` range); a second opinion's list `1E44 1E46 1E47 1E48 1E49 1E4A 1E53 1E55 1E56 1E57 1E58 1E59 1E5B` | 326776-003: `D20IP` 10.1.25 p.406, `D20IR` 10.1.33 p.414, RCBA 13.1.40 p.493. Device IDs are in its specification update, not fetched |
 | `8C31` | 8 series (Lynx Point, C220) | `8C44 8C46 8C49 8C4A 8C4B 8C4C 8C4E 8C4F 8C50 8C52 8C54 8C56 8C5C` (Table 1-2; `8C41`/`8C42` are engineering samples, not admitted) | 328904-003: `D20IP` 10.1.25 p.343, `D20IR` 10.1.34 p.350, RCBA 12.1.40 p.400 |
 | `9C31` | 8 series LP (Lynx Point-LP) | `9C43 9C45` (`9C41` is an engineering sample, not admitted; `9C47` is from coreboot only, not in the datasheet, and not admitted) | 329003-003: `D20IP` 8.1.23 p.335, `D20IR` 8.1.31 p.342, RCBA 10.1.40 p.403 |
 | `8CB1` | 9 series (Wildcat Point) | `8CC3 8CC4 8CC6` (`8CC1`/`8CC2` are engineering samples, not admitted) | 330550-002: `D20IP` 10.1.25 p.336, `D20IR` 10.1.34 p.343, RCBA 12.1.40 p.393 |
