@@ -1982,10 +1982,12 @@ or says it was found by reading the code.
   floppy".
 - **After an update from `2.0.0.0`, some devices are found once more as new
   hardware**, one time each. See "Updating from 2.y.y.y".
-- **After an update from `2.0.0.0`, the root hub's Driver tab still shows
-  `2.0.0.0`** until the root hub is updated too, although it runs the new
-  file; and Windows 98 SE and ME keep running `2.0.0.0` until the next
-  restart, which they do not ask for. Same section.
+- **After an update, the root hub's Driver tab still shows the old
+  version** until the root hub is updated too, although it runs the new
+  file (read again after an update from `2.2.0.0` on Windows 2000, XP and
+  XP x64). After an update from `2.0.0.0`, Windows 98 SE and ME also keep
+  running `2.0.0.0` until the next restart, which they do not ask for. Same
+  section.
 - **Windows Vista and 7: deleting the driver keeps the older packages.**
   "Delete the driver software for this device" removes only the package in
   use, and Windows may install an older one the next time it finds the
