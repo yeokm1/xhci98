@@ -113,6 +113,14 @@ out/
 !releases/**/*.exe
 !releases/**/*.map
 
+# The project test-signing key (design record 19): a .pfx or .pvk is a private
+# key and is never tracked, anywhere, whatever directory it is put in. It is
+# held in scripts\local\testsign\ (ignored above as part of scripts/local/) or
+# outside the tree. The public half, xhci98-test.cer, is published in every
+# x64 release directory and is tracked there like the binaries it signed.
+*.pfx
+*.pvk
+
 # make-release.ps1's two working directories, which exist only while a release
 # is being cut: `.staging-<version>` is the tree under construction, and
 # `.replaced-<version>` is the previous release held aside so a failed publish

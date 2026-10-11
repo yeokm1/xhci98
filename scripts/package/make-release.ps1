@@ -254,6 +254,20 @@ and `-UploadDir` under the git-ignored `out\`. Refused with `-UploadSetOnly`,
 which renders no readme. Empty (the default) cuts an ordinary release and
 renders no banner.
 
+.PARAMETER TestSignPfx
+The project test certificate's .pfx (design record 19; owner, 2026-10-11).
+**Required of every cut that publishes an x64 directory**, and refused with no
+switch past it when absent: each x64 leg's make-package.ps1 run is passed it,
+signs xhci98.sys and xhciuas.sys at staging (SHA-1 file digest, no timestamp,
+no catalog, the INFs unchanged) and stages xhci98-test.cer, the certificate's
+public half, beside them. This script then holds each published x64 binary to
+that signature by this key's thumbprint and to the build's bytes, and the
+published certificate to this key's. The password is read from
+XHCI98_TESTSIGN_PW or, where that is unset, a prompt that does not echo, once,
+before anything is built. Refused with -UploadSetOnly, which stages nothing,
+and with an -Arch that has no x64. The x86 binaries are never signed. Where
+the key is held and how it was made: design record 19.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 
@@ -283,7 +297,8 @@ param(
     [switch]$Force,
     [switch]$NoTargetEvidence,
     [switch]$AllowUnstampedDriver,
-    [string]$TestLabel = ""
+    [string]$TestLabel = "",
+    [string]$TestSignPfx = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -549,6 +564,14 @@ $oemPublishable = @("txtsetup.oem")
 # and the setup engine never reads. A version published before 2.3.0.0 has
 # none, so it is accepted where present and not required of one.
 $pswPublishable = @("portsw.vbs")
+
+# The project test certificate's public half (design record 19), published at
+# the root of every x64 directory a cut writes since 2.2.0.3, beside the
+# binaries it signed. Not an INF-declared file: the setup engine never reads
+# it, and it is there to check a signer's thumbprint against. A version published before 2.2.0.3
+# has none, so it is accepted where present and not required of one. Never
+# the .pfx, which holds the private key and is never staged.
+$certPublishable = @("xhci98-test.cer")
 
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
@@ -1224,6 +1247,41 @@ stages every file the INF declares and gates the result.
     }
 }
 
+function Assert-TestSigned {
+    # A published x64 binary (design record 19): signed by the project test
+    # certificate this cut was given, as record 19 prescribes
+    # (Test-ProjectTestSignature), and otherwise exactly the build beside its
+    # source stamp (Test-SignedImageOf), so the stamp still speaks for it.
+    # make-package.ps1 made both checks as it signed; they are made again
+    # here on the copy that is published, because that is the one that ships.
+    param([string]$Sys, [string]$BuiltSys, [string]$Label)
+
+    $why = ""
+    try {
+        $why = Test-ProjectTestSignature -Signature (Get-EmbeddedSignature -Path $Sys) -Thumbprint $testSignCert.Thumbprint
+    } catch {
+        $why = "its signature cannot be read: $($_.Exception.Message)"
+    }
+    if ($why -ne "") {
+        throw @"
+$Label is not signed as every published x64 binary must be: $why.
+Design record 19 (owner, 2026-10-11): make-package.ps1 -TestSignPfx signs it
+at staging, with the project test certificate, a SHA-1 digest and no
+timestamp. Re-run the cut with the key; never sign a binary by hand.
+"@
+    }
+    if (-not (Test-SignedImageOf -Signed ([System.IO.File]::ReadAllBytes($Sys)) `
+                                 -Unsigned ([System.IO.File]::ReadAllBytes($BuiltSys)))) {
+        throw @"
+$Label is not the build at $BuiltSys plus a signature: it differs by more than
+the checksum, the certificate-table entry and the appended table, so the
+source stamp beside that build says nothing about the bytes being shipped.
+Rebuild, and re-run the cut so the packager signs what was built.
+"@
+    }
+    Write-Ok ("{0} is the build, signed by the project test certificate {1}" -f $Label, $testSignCert.Thumbprint)
+}
+
 function Assert-UasPublished {
     # xhciuas.sys, the UAS class driver (roadmap task 31-A.2), held to the
     # refusals the build loop makes of xhci98.sys, in the same order and for
@@ -1231,7 +1289,7 @@ function Assert-UasPublished {
     # VS_FF_DEBUG, the flavour marker, the staged bytes being the built ones,
     # and the source stamp beside the build (scripts\source-stamp.ps1
     # -Driver xhciuas), unstamped only under -AllowUnstampedDriver.
-    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot, [switch]$Signed)
 
     $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
     if (-not (Test-Path -LiteralPath $Sys)) {
@@ -1253,7 +1311,9 @@ function Assert-UasPublished {
     if (-not (Test-Path -LiteralPath $builtSys)) {
         throw "the $($Leg.Id) UAS binary about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\uas. Rebuild: $rebuild"
     }
-    if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+    if ($Signed) {
+        Assert-TestSigned -Sys $Sys -BuiltSys $builtSys -Label "$($Leg.Dir)\xhciuas.sys"
+    } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
         throw "the UAS binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
@@ -1576,7 +1636,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable + $pswPublishable)
+                                               -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1849,6 +1909,50 @@ under the git-ignored out\, holding a history.md that carries the build's entry.
 "@
         }
         Write-Warn ("TEST build ('{0}'): the readme opens with the TEST banner; this cut is not a release" -f $TestLabel)
+    }
+
+    # --- the x64 test signature: required of every x64 cut ------------------
+    #
+    # Design record 19 (owner, 2026-10-11): every published x64 directory
+    # carries xhci98.sys and xhciuas.sys signed by the project test
+    # certificate, applied by make-package.ps1 -TestSignPfx at staging. So a
+    # cut that publishes an x64 directory and was given no key is refused
+    # here, before anything is built, and there is no switch past it: a clone
+    # without the key stages unsigned packages for its own guests with
+    # make-package.ps1, or cuts -Arch x86. The key is opened now too, so a
+    # wrong password costs a prompt and not two builds.
+    $testSignCert = $null
+    if ($TestSignPfx -ne "") {
+        if ($UploadSetOnly) {
+            throw "-TestSignPfx signs what a cut stages, and -UploadSetOnly stages nothing: it re-assembles an already published tree, signed or not as it was cut."
+        }
+        if ($Arch -notcontains "x64") {
+            throw "-TestSignPfx signs the x64 directories, and this cut publishes none (-Arch $($Arch -join ',')). The x86 binaries are never signed (design record 19)."
+        }
+        if (-not (Test-Path -LiteralPath $TestSignPfx -PathType Leaf)) {
+            throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
+        }
+        $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
+        # Asked once here and held in this script's memory; each x64
+        # make-package.ps1 child gets it through XHCI98_TESTSIGN_PW, set in
+        # this process's environment only around that one call and restored
+        # after it (review round 1: a script run from an open session must
+        # not leave the password in it). Never printed, never written.
+        $testSignPassword = Get-TestSignPassword
+        $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
+        Write-Ok ("x64 binaries will be signed by the project test certificate {0}" -f $testSignCert.Thumbprint)
+    } elseif (-not $UploadSetOnly -and $Arch -contains "x64") {
+        throw @"
+this cut publishes x64 directories and was given no test-signing key.
+Every published x64 directory carries xhci98.sys and xhciuas.sys with an
+embedded signature by the project test certificate, applied at staging
+(design record 19; owner, 2026-10-11), so that Vista x64 and Windows 7 x64
+load the driver in test-signing mode. Pass the key:
+      scripts\package\make-release.ps1 ... -TestSignPfx <path to the .pfx>
+with its password in XHCI98_TESTSIGN_PW or typed at the prompt. Without the
+key, cut -Arch x86 only, or stage an unsigned x64 package for a guest with
+scripts\package\make-package.ps1 -Arch amd64, which is never published.
+"@
     }
 
     # --- the version, from the INF ------------------------------------------
@@ -2273,6 +2377,18 @@ the result in place of the marker, then cut again. The first:
                      $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
                      "-OutDir", $pkgDirForBuild)
         if ($NoTargetEvidence) { $pkgArgs += "-NoTargetEvidence" }
+        # The x64 legs are signed at staging (design record 19); the password
+        # reaches the child through XHCI98_TESTSIGN_PW, set above.
+        $legSigned = ($leg.Arch -eq "x64")
+        if ($legSigned) {
+            if ($null -eq $testSignCert) {
+                # Not reachable: an x64 cut without a key is refused before
+                # anything is built. Checked so that no edit above can make
+                # an unsigned x64 leg publishable by omission.
+                throw "the $($leg.Id) leg would be published unsigned; every x64 directory is signed (design record 19)."
+            }
+            $pkgArgs += @("-TestSignPfx", $TestSignPfx)
+        }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the 2026-09-07
         # audit's H17. In Windows PowerShell 5.1 a native command's stderr line
@@ -2283,9 +2399,16 @@ the result in place of the marker, then cut again. The first:
         # never showed it.
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
+        $savedPw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
         try {
+            if ($legSigned) {
+                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
+            }
             & powershell.exe @pkgArgs
         } finally {
+            if ($legSigned) {
+                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $savedPw, "Process")
+            }
             $ErrorActionPreference = $savedEap
         }
         if ($LASTEXITCODE -ne 0) {
@@ -2302,7 +2425,9 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in ($declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable)) {
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable
+        if ($legSigned) { $legCopy += $certPublishable }
+        foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -2319,8 +2444,16 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable + $pswPublishable)
+                                           -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
+        # The certificate beside a signed leg's binaries must be this key's
+        # public half, byte for byte - the one a user would inspect or import.
+        if ($legSigned) {
+            $pubCer = [System.IO.File]::ReadAllBytes((Join-Path $destDir $certPublishable[0]))
+            if ([Convert]::ToBase64String($pubCer) -ne [Convert]::ToBase64String($testSignCert.CerBytes)) {
+                throw "the $($certPublishable[0]) staged for $($leg.Dir)\ is not the public half of the key given by -TestSignPfx."
+            }
+        }
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -2428,7 +2561,12 @@ meant: scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" })
         }
         $builtHash = (Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash
         $stagedHash = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
-        if ($builtHash -ne $stagedHash) {
+        if ($legSigned) {
+            # A signed leg's bytes are the build's plus the signature and
+            # nothing else (design record 19), and the signature is the
+            # project certificate's by this cut's key.
+            Assert-TestSigned -Sys $sys -BuiltSys $builtSys -Label "$($leg.Dir)\xhci98.sys"
+        } elseif ($builtHash -ne $stagedHash) {
             throw @"
 the binary about to be published as $($leg.Dir)\ is not the one in
 $builtSys ($stagedHash vs $builtHash), so the source stamp beside that build
@@ -2488,7 +2626,8 @@ invalidate readings already taken on these exact bytes - say so:
         # The UAS class driver beside it, held to the same refusals.
         $uasSys = Join-Path $destDir "xhciuas.sys"
         Assert-UasPublished -Sys $uasSys -Leg $leg -Flavor $f -Version $Version `
-                            -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch]))
+                            -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
+                            -Signed:$legSigned
 
         # The NT 6 x86 MSI helper, where this leg's INF declares it (design
         # record 18), held to the same refusals.
@@ -2833,6 +2972,9 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
+        } else {
+            $contents += "      xhci98-test.cer (the test certificate both .sys files are"
+            $contents += "                   signed with; you need not import it; section 4)"
         }
         $contents += ""
     }
@@ -2942,8 +3084,8 @@ other.
         $readmeArchOs = @"
 
   - Windows XP, Vista and 7, x64, through separate 64-bit drivers. On Vista
-    x64 and 7 x64 they are unsigned, so driver signature enforcement must be
-    disabled (section 4).
+    x64 and 7 x64 they carry a test signature only, so Windows must be in
+    test-signing mode, or driver signature enforcement disabled (section 4).
 "@
         $readmeArchOsReq = @"
 
@@ -2956,14 +3098,41 @@ other.
 
   64-BIT WINDOWS
       The same route as the 32-bit edition of the same Windows, pointed at
-      RELEASE-X64\. On Windows Vista x64 and Windows 7 x64 the install works
-      on an ordinary start, but the drivers run only while driver signature
-      enforcement is disabled, at every start, as they are unsigned;
-      otherwise the controller shows Code 39 and nothing on it works.
-      After each install the Program Compatibility Assistant may say
-      "Windows requires a digitally signed driver"; the driver still loads
-      on a start with enforcement disabled. Windows XP x64 needs none of
-      that.
+      RELEASE-X64\. Windows XP x64 needs nothing more.
+
+      WINDOWS VISTA X64 AND WINDOWS 7 X64: TEST-SIGNING MODE
+      The 64-bit xhci98.sys and xhciuas.sys are test-signed, so on these
+      two systems the driver can run in test-signing mode instead of
+      disabling driver signature enforcement with F8 at every start. Once:
+
+        1. Open an elevated Command Prompt: Start, type cmd, right-click
+           it, Run as administrator.
+        2. Type:   bcdedit /set testsigning on
+           This is a boot setting of the current Windows entry, so it stays
+           on for every start until it is turned off; no F8 is needed.
+        3. Restart. "Test Mode" (with the Windows version and build)
+           appears in a corner of the desktop while it is on.
+        4. Install the driver as above. Windows still says it cannot
+           verify the publisher; choose "Install this driver software
+           anyway".
+
+      To check: bcdedit /enum {current} shows "testsigning Yes".
+      To turn it off: bcdedit /set testsigning off, and restart. The
+      driver then needs F8 again, or it does not load and the controller
+      shows Code 39.
+
+      - With BitLocker on the system drive, suspend BitLocker before
+        changing the boot setting, or the next start asks for the
+        recovery key.
+      - This is not Microsoft signing: the certificate is this project's
+        own test certificate, which no Windows trusts by itself.
+      - The X64 directories carry xhci98-test.cer, its public half.
+        Importing it is not needed: test-signing mode works without it,
+        and it does not remove the install prompt either. It is not
+        recommended.
+      - F8 -> Disable Driver Signature Enforcement still works as before,
+        for one start, without test mode.
+      - 32-bit Vista and 7, and XP x64, need neither.
 "@
         $readmeArchFiles = @"
 
@@ -3699,9 +3868,12 @@ being unsigned, and no change to this driver can remove them:
     NUSB's usbport.sys crashes the machine as it stops the old driver,
     before this release runs. Follow section 4, which avoids it.
 
-  * WINDOWS VISTA X64 AND 7 X64 NEED DRIVER SIGNATURE ENFORCEMENT DISABLED.
-    The driver is not signed. Driver signature enforcement must be disabled
-    at every start, or the controller sits at Code 39.
+  * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE, OR DRIVER
+    SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
+    own test signature, not Microsoft's. Turn on test-signing mode once
+    (section 4), which shows "Test Mode" on the desktop, or disable driver
+    signature enforcement at every start (F8); otherwise the controller
+    sits at Code 39.
 
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still

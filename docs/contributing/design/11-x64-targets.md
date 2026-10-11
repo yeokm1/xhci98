@@ -708,6 +708,22 @@ these readings, and both belong in the record before anyone builds a guest:
   declined** on 2026-09-10 (decision 9): it buys the claimed tier nothing,
   since that tier does not enforce, and it is not what would rescue these two
   anyway.
+
+  **Amended by the owner on 2026-10-11 (design record 19), for the x64
+  package only:** every published x64 directory now carries `xhci98.sys`
+  and `xhciuas.sys` with an embedded Authenticode signature by the project's
+  own test certificate - SHA-1 file digest, no timestamp, no catalog, both
+  INFs byte-identical - applied by the packager at staging, and
+  `make-release.ps1` refuses an x64 cut without it. Why: since 2026-09-16
+  Vista x64 and Windows 7 x64 are inside the tier, and an unsigned package
+  costs their users the F8 start at every start; a test-signed one loads in
+  test-signing mode, which a user turns on once (`bcdedit /set testsigning
+  on` and a restart, after which Windows shows "Test Mode"). The embedded
+  signature alone is enough because both services are demand-start (decision
+  9's own analysis); the install-time publisher prompt stays. F8 still works
+  without test mode. It is not Microsoft signing and no Windows trusts the
+  certificate by itself. The x86 binaries are never signed. Record 19 is the
+  authority for the procedure, the key and the rule.
 - **The install path is different.** The INF's `LayoutFile=layout.inf` route,
   which is how the media carries no Microsoft file, is a Windows 2000 and XP
   mechanism. Vista and later stage a driver package into the driver store before
@@ -2094,6 +2110,20 @@ publishes:
    reading and not a measurement**; task 21.8 tries the embedded-only route
    first, and only a failure there reopens the catalog question, on a staged
    copy before anything is proposed for the shipping INF.
+
+   **Reversed for the x64 package by the owner on 2026-10-11 (design record
+   19; roadmap-hcd task 36.50).** The first half - "the package is not
+   signed" - no longer holds for x64: every published x64 directory carries
+   `xhci98.sys` and `xhciuas.sys` with an embedded Authenticode signature by
+   the project test certificate (SHA-1 file digest, no timestamp), applied
+   at staging by `make-package.ps1 -TestSignPfx`, and `make-release.ps1`
+   refuses an x64 cut without it. Its ground went when Vista x64 and Windows
+   7 x64 joined the tier, and what the decision then cost was the F8 start,
+   every start; test-signing mode removes that cost for a user who turns it
+   on once. The second half stands: no catalog, no `CatalogFile.NTamd64`
+   line, `src\xhci98-amd64.inf` byte-identical, exactly the embedded-only
+   route analysed above. The x86 package stays unsigned. Record 19 carries
+   the procedure, the key's custody, the checks and the readings.
 10. ~~Whether the amd64 build passes the NT 6.x fourth argument to
     `USBPORT_RegisterUSBPortDriver` unconditionally, or selects the arity at
     run time.~~ **Decided 2026-09-10: select it at run time.** Unconditional
