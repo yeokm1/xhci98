@@ -1984,6 +1984,32 @@ try {
         }
     }
 
+    # The rendered readme's own leftover-placeholder check must be case
+    # sensitive. The x64 test-signing text carries bcdedit's {current}, and
+    # the 2.3.0.0 cut first failed on it ("readme template left an
+    # unsubstituted placeholder: {current}") while the check was -match, which
+    # ignores case. The check is read from the renderer, then applied to a
+    # lower-case brace (which must pass) and an upper-case one (which must not).
+    Write-Step "the leftover-placeholder check passes lower-case braces such as {current}"
+    $leftoverCheck = [regex]::Match($releaserText, "if \(\`$readme -(c?match) '([^']+)'\) \{\s*throw `"readme template left an unsubstituted placeholder")
+    Assert-True $leftoverCheck.Success "make-release.ps1 no longer has a leftover-placeholder check on the rendered readme that this test can find."
+    if ($leftoverCheck.Success) {
+        Assert-True ($leftoverCheck.Groups[1].Value -ceq "cmatch") (
+            "make-release.ps1 checks the rendered readme with -" + $leftoverCheck.Groups[1].Value +
+            "; it must be -cmatch, or bcdedit's {current} is refused as a placeholder.")
+        $leftoverPattern = $leftoverCheck.Groups[2].Value
+        $lowerSample = "Run: bcdedit /set {current} testsigning on, then restart."
+        $upperSample = "Install from the {RELEASEDIR}\ directory."
+        Assert-True (-not ($lowerSample -cmatch $leftoverPattern)) (
+            "the leftover-placeholder check '" + $leftoverPattern + "' refuses a readme carrying {current}.")
+        Assert-True ($upperSample -cmatch $leftoverPattern) (
+            "the leftover-placeholder check '" + $leftoverPattern + "' no longer catches {RELEASEDIR}.")
+    }
+    if ($tplStart -ge 0 -and $tplEnd -gt $tplStart) {
+        Assert-True ($tplText.Contains("{current}") -or $releaserText.Contains("{current}")) `
+            "make-release.ps1 no longer carries bcdedit's {current}; this test's lower-case case has lost its subject, so revisit it."
+    }
+
     Write-Step "the readme template carries neither of the two forbidden claims"
     foreach ($forbidden in @("WINDOWS 98 ONLY", "redistributes nothing")) {
         Assert-True ($releaserText -notmatch [regex]::Escape($forbidden)) `

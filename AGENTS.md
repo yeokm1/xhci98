@@ -57,7 +57,9 @@ The tier paragraphs below record how each further target was admitted and
 what the miniport was observed doing there. What the HCD has been observed
 doing on each is `docs/using/release-notes.md`, "Targets and their standing",
 and `roadmap-hcd.md` Phase 28; for `2.0.0.0` every target but Windows 98 SE
-is virtual-machine only, 32-bit Windows 7 included (owner, 2026-10-04).
+is virtual-machine only, 32-bit Windows 7 included (owner, 2026-10-04), and
+for `2.3.0.0` Windows XP x64 and 7 x64 also ran on the owner's Dell Latitude
+E7250 (the bench of 2026-10-11, `runs/run-36.md`).
 
 Windows ME is a third target of that same standing, supported in virtual
 machines, since the owner's decision of 2026-09-02: one QEMU guest, under
@@ -95,8 +97,11 @@ started its controller, passed its No Op self-test, answered the root-hub
 family, bound a HID mouse, a mass-storage device and a composite audio
 device, and survived the Device Manager disable, enable, remove and rescan
 sequence - taken on the `qemu` flavour and then read again on the `release`
-flavour, on the same guest, the same evening. It carries no checkpoint tax,
-and it has never run on real hardware.
+flavour, on the same guest, the same evening. It carries no checkpoint tax.
+Its first real hardware was the owner's Dell Latitude E7250 (Intel
+`8086:9CB1`) at the `2.3.0.0` bench of 2026-10-11: the interrupt routing
+repair, the dead-line move to polling and a SuperSpeed stick under XP x64
+(`runs/run-36.md`, "The owner's bench, 2026-10-11").
 
 Read that tier narrowly, because three things about it are narrower than the
 paragraphs above. The binary is a separate amd64 build from a separate
@@ -129,11 +134,13 @@ guests the second, both through the `Xhci.Dev6` install path, which copies
 `xhci98.sys` alone because every install of those systems already carries the
 four OS-supplied files. It carries no checkpoint tax, and the standing rule
 holds: accommodate them where the change is small and low-risk, never at a
-primary target's expense. Of the four, only 32-bit Windows 7 has run on real
-hardware, once (the E460, 2026-09-19, roadmap task 22.9: the install and
+primary target's expense. Of the four, 32-bit Windows 7 has run on real
+hardware once (the E460, 2026-09-19, roadmap task 22.9: the install and
 devices at a root port and behind USB 2.0 hubs passed, and the first disable
-of the controller hung - release notes, "Known limitations"); Vista and 64-bit
-Windows 7 never have.
+of the controller hung - release notes, "Known limitations"), and 64-bit
+Windows 7 on the owner's Dell Latitude E7250 at the `2.3.0.0` bench of
+2026-10-11, test-signed in test-signing mode (MSI, the line, the port
+switchover and USB audio; `runs/run-36.md`); Vista never has.
 
 Read that tier narrowly too, because four things about it are narrower than
 the XP tiers. **It is not the NT 5.x code path.** No Version 200 miniport can
@@ -183,7 +190,7 @@ driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is the release notes' "Targets and their standing", every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads in test-signing mode (the binaries are test-signed, design record 19) or on an F8 boot with signature enforcement disabled**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
+| Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is the release notes' "Targets and their standing", every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), on metal once, the Dell Latitude E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19) and 64-bit Windows 7 on the E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads in test-signing mode (the binaries are test-signed, design record 19) or on an F8 boot with signature enforcement disabled**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
 | USB scope | SuperSpeed (5 Gbit/s) and USB 2.0 (HS/FS/LS) devices and hubs, and UAS; HID, mass storage, USB Ethernet, and USB Audio validation targets. SuperSpeedPlus links are accepted at their trained rate and are untested ground, as is SuperSpeed isochronous (`roadmap-hcd.md`, decisions table; the release notes, "Untested ground"). The frozen miniport was USB 2.0 only |
 | Integration model | A monolithic bus driver (design record 13): `xhci98.sys` is the controller's FDO and its root hub's FDO, runs hubs and composite splitting inside the bus, and presents device PDOs to each target's own class drivers; since `2.1.0.0` each external hub also has a PDO under a project-owned id, bound to `xhci98.sys` again as a hub FDO (design record 13 section 10.11). It replaces `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbccgp.sys`; `xhciuas.sys` is the UAS class driver above it. The miniport's model, a `usbport.sys` miniport (Option A), is the `1.2.0.0` branch's |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64. One x86 binary is the other exception: `xhcimsi.sys`, the NT 6 x86 MSI helper (design record 18), which `build-driver.cmd` builds with WDK 7.1 for x86, Vista target, in every x86 run, because only that kit declares `IoConnectInterruptEx`; an x86 build therefore needs `tools/WinDDK71` too. `xhci98.sys` and `xhciuas.sys` x86 stay on MSVC 6.0 |
@@ -538,8 +545,9 @@ until roadmap task 21.5 passed - an amd64 binary installing and running
 through every checkpoint clause on a Windows XP x64 guest, and then the
 release flavour installed and read separately on the same guest, because the
 clauses had been taken on the `qemu` build. **The x64 half of a cut carries
-exactly that standing: virtual machines only, never real hardware** - the XP
-x64 guest, and the Vista x64 and Windows 7 x64 guests from `1.1.0.0` - against
+exactly that standing: virtual machines** - the XP x64 guest, and the Vista
+x64 and Windows 7 x64 guests from `1.1.0.0` - **and, from `2.3.0.0`, one real
+machine**, the owner's Dell Latitude E7250 under XP x64 and 7 x64, against
 the x86 half's four install legs. `-UploadSetOnly` is the one mode
 that does not follow the default - it derives the architectures from the
 published tree, since every version published before `1.1.0.0` is x86-only.
