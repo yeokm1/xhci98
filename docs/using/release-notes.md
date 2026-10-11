@@ -1,8 +1,9 @@
 # xhci98 - Release Notes
 
-This file describes package version `2.2.0.0`, the eleventh release and the
-fourth of the host controller driver, released on 2026-10-07 (`DriverVer`
-`10/07/2026,2.2.0.0`, in all four INFs). What `2.2.0.0` changed from
+This file describes package version `2.3.0.0`, the twelfth release and the
+fifth of the host controller driver, dated 2026-10-11 (`DriverVer`
+`10/11/2026,2.3.0.0`, in all four INFs). What `2.3.0.0` changes from
+`2.2.0.0` is "What `2.3.0.0` changes", below; what `2.2.0.0` changed from
 `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and `2.1.0.0` from `2.0.0.0`, are
 their entries in `releases/history.md`, and the sections below say where
 each change was read. Where this file and
@@ -10,15 +11,9 @@ each change was read. Where this file and
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
 
-**TEST 2.2.0.3, bench pending.** The text marked "new in `2.3.0.0`"
-describes the next release, and `2.2.0.3` (`DriverVer`
-`10/10/2026,2.2.0.3`) is a local test build of it for the owner's bench,
-not a release: it is not published, and `releases/history.md` has no entry
-for it. Its changes were read in QEMU virtual machines, or rest on host
+`2.3.0.0`'s changes were read in QEMU virtual machines, or rest on host
 tests where QEMU models no such device or controller; none has been read
-on real hardware. The bench readings are pending, and `2.3.0.0` is cut
-after them.
-"What `2.3.0.0` changes", below, lists them.
+on real hardware yet. "What `2.3.0.0` changes", below, lists them.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
@@ -115,10 +110,11 @@ included.
 - It is not tested evenly. Every Windows 2000 result comes from virtual
   machines: Windows 2000 Setup bugchecked on both physical machines this
   project tried, so the driver has never run on Windows 2000 on real silicon.
-  Windows ME, both Windows XP builds, Windows Vista and Windows 7 are
-  supported in virtual machines only for `2.2.0.0`. Windows 98 SE is the one
-  target read on real hardware, at a bench session before the `2.0.0.0`
-  release, on a ThinkPad E460 and a ThinkPad P14s Gen 1. `2.1.0.0`'s own
+  Windows ME, 32-bit Windows XP, Windows Vista and 32-bit Windows 7 are
+  supported in virtual machines only for `2.3.0.0`. Real hardware: Windows
+  98 SE, at a bench session before the `2.0.0.0` release, on a ThinkPad
+  E460 and a ThinkPad P14s Gen 1, and Windows XP x64 and 7 x64 on the
+  owner's Dell Latitude E7250. `2.1.0.0`'s own
   changes were read in virtual machines only; of `2.1.1.0`'s, the Power tab
   and the Intel port switchover were read on the owner's real hardware under
   Windows 98 SE, and the registry values in virtual machines; of
@@ -126,7 +122,8 @@ included.
   owner's ThinkPad E460 under Windows 98 SE, and the handling of
   transfer, port and controller faults by making each fault it answers on
   purpose in QEMU virtual machines under Windows 98 SE and Windows 2000;
-  no real controller has raised one under this driver yet.
+  no real controller has raised one under this driver yet. None of
+  `2.3.0.0`'s changes has been read on real hardware yet.
   "Targets and their standing"
   says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
@@ -146,12 +143,12 @@ included.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
-  of it is in this package. A `2.2.0.0` install replaces it, because both are
+  of it is in this package. A `2.3.0.0` install replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
 
-## What `2.3.0.0` changes (test build `2.2.0.3`)
+## What `2.3.0.0` changes
 
-**TEST 2.2.0.3, bench pending.** None of these has been read on real
+None of these has been read on real
 hardware yet. Most were read in QEMU virtual machines on development host
 A; the Low-Speed mouse fix rests on host tests of that mouse's descriptors
 alone, since QEMU models no such device. The sections named give the
@@ -190,8 +187,8 @@ detail, and what each rests on.
   declares one endpoint and carries two was never configured under
   `2.2.0.0` and did not move. The driver now takes the endpoints the
   interface declares and ignores the rest, as Microsoft's stack does. Read
-  with that mouse's descriptors in the host tests; the mouse itself is on
-  the bench.
+  with that mouse's descriptors in the host tests; the mouse itself has
+  not yet been read on real hardware.
 - **A device's speed in USBView** on Windows 98 SE and ME: the newer
   connection query that tools such as SweetLow's USBView send reads
   SuperSpeed where it is; Windows' own hub pages are unchanged ("A
@@ -234,7 +231,8 @@ detail, and what each rests on.
   what the driver does about them"); before, the read or write failed and
   the drive was reset. And after a reset of the drive, the driver starts
   each of its streams afresh. Read in QEMU on development host A with the
-  error made on purpose; a real drive's error is on the bench.
+  error made on purpose; a real drive's error has not yet been read on
+  real hardware.
 - **UAS in QEMU: a workaround for an emulator defect.** QEMU's xHCI (read
   at QEMU 11.1.0, `hw/usb/hcd-xhci.c`: `xhci_find_stream` calls
   `xhci_ring_init`, which forces the consumer cycle to 1) ignores the cycle
@@ -249,10 +247,10 @@ detail, and what each rests on.
 ## Targets and their standing
 
 Each target's row says what the `2.0.0.0` drivers were observed doing on
-that system, and where; `2.1.0.0`, `2.1.1.0` and `2.2.0.0` carry that code
-with the changes their history entries list, and the rows "What `2.1.0.0`
-changed", "What `2.1.1.0` changed" and "What `2.2.0.0` changed" say where
-each change was read. "The integration build" is the merged build of a release's
+that system, and where; `2.1.0.0`, `2.1.1.0`, `2.2.0.0` and `2.3.0.0`
+carry that code with the changes their history entries list, and the rows
+"What `2.1.0.0` changed", "What `2.1.1.0` changed", "What `2.2.0.0`
+changed" and "What `2.3.0.0` changes" say where each change was read. "The integration build" is the merged build of a release's
 code before its cut, in the never-published `qemu` flavour. The ten install
 legs are read on the `release` flavour of that build, and again from the
 release asset itself after the cut.
@@ -263,14 +261,14 @@ release asset itself after the cut.
 | Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: untested, as no virtual machine models one; built from the specification. Never run on real hardware |
 | Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a USB mouse attached hung Windows ME under `2.0.0.0` (a keyboard was never tried); `2.1.0.0` fixes it: the devices are kept across the controller's stop and revived on the re-enable, as Microsoft's hub driver does. Read on the `2.1.0.0` integration build: the re-enable with a mouse three times of three, with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; and on the `release` flavour once more after the update from `2.0.0.0` |
 | 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. A 10-cycle soak per device class (HID, a hub with a mouse, storage) |
-| Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak |
+| Windows XP x64 SP2 | Virtual machines, and real hardware on the Dell Latitude E7250; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak. Real hardware: XP x64 on the owner's Dell Latitude E7250 |
 | Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then; the test-signed x64 drivers of `2.3.0.0` were read in test-signing mode, with no F8. The same soak |
-| Windows 7 SP1, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then, and the test-signed x64 drivers of `2.3.0.0` in test-signing mode, with no F8; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0` |
+| Windows 7 SP1, 32-bit and x64 | Virtual machines; x64 also on real hardware, the Dell Latitude E7250 | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then, and the test-signed x64 drivers of `2.3.0.0` in test-signing mode, with no F8; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0`. Real hardware: 7 x64 on the owner's Dell Latitude E7250 |
 | Every target, from the release package | | For `2.0.0.0`: the `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect was Windows ME's controller re-enable, which `2.1.0.0` fixes (the Windows ME row). For `2.1.0.0`: the `release` flavour of its integration build, installed over `2.0.0.0` on eleven virtual machines (the ten legs' systems and a stock Windows 98 SE) and read on the same clauses less SuperSpeed storage and UAS, all passing, the file compare skipped on the stock Windows 98 SE, which has no storage driver (see "Updating from 2.y.y.y"); and the ten install legs from the `2.1.0.0` release package, read after the cut, all passed: the same clauses with SuperSpeed storage and UAS at SuperSpeed and at High Speed, Windows ME's controller re-enable with a mouse attached, a hub disabled and enabled with a mouse and a stick behind it on the seven NT systems, and hidusbf Setup reading the mouse behind a hub on 32-bit XP. For `2.1.1.0`: the ten install legs from the `2.1.1.0` release package, read after the cut, all passed, on the same clauses as for `2.1.0.0` |
 | What `2.1.0.0` changed | | All in QEMU on development host A, on the `2.1.0.0` integration build unless the `release` flavour is named. The controller re-enable with devices kept: Windows ME with a mouse (three of three), with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; Windows 98 SE and 2000 disable and enable with a stick behind a hub and a file compare after, and a 10-cycle soak on each; 32-bit XP disable and enable with no USB keyboard attached (XP refuses the disable while one is). Instance ids from the serial number: a stick moved between root ports kept its one entry and was not found again as new hardware on Windows 98 SE, ME, 2000 and 32-bit XP, and on Vista and 7 in both architectures; moved behind a hub as well on Windows 98 SE, 2000, 32-bit XP and 32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two sticks with different serial numbers had two entries, and of two with the same one the second was known by its port (Windows 98 SE, 2000 and XP). External hubs as entries of their own, on QEMU's hub, which is a USB 1.1 Full-Speed hub: a mouse and a stick behind it, the tree by connection, the hub unplugged and plugged in again, a device unplugged behind it, and a two-tier chain, on Windows 98 SE, 2000 and 32-bit XP; the tree and the hub unplugged and plugged in again on Vista and 7 in both architectures, the tree on ME and XP x64, and USBView walking into the hub on XP, XP x64, Vista and 7; the hub disabled and enabled in Device Manager with the devices behind it coming back, on Windows 98 SE, and on Windows 2000 and XP with the fix for the defect the first reading found (two disable and enable cycles each in QEMU, the same instance ids and the stick's files intact). A High-Speed hub, its transaction translators, and a USB 3 hub's SuperSpeed half were read in no virtual machine; the owner read a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" on real hardware after the cut, and both work. The Power tab: figures in mA on the root hub's and the hub's Power tabs on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard 100 mA, a stick and the hub 0 mA; QEMU's stick and hub ask for 0 mA in their own descriptors), and a hub's Power tab on 32-bit 7. The Advanced tab's figure while audio plays was not read: Windows 98 SE's `USBAUDIO.VXD` fails on playing in QEMU ("Known limitations"). Device names: where a Windows class INF names the device, its name is shown, on every system read; the device's own product name was read in Windows 98 SE's "New Hardware Found" box, for devices no INF names on Windows 98 SE, 2000 and XP, and as Windows 7's "Bus reported device description" in both architectures. hidusbf: 1000, 500 and 250 Hz at a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME, at a root port on 32-bit XP, the filter loaded and its setting reaching the controller on a stock Windows 98 SE (`release`), and behind a hub on 32-bit XP with the fix for the defect the first reading found (Setup read the mouse's speed, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5). Fast polling: not read. The F6 floppy, on the `release` flavour: Windows 2000 SP4 and 32-bit XP SP3 text-mode Setup with a USB keyboard and a USB stick, and the Recovery Console on both; see that section |
 | What `2.1.1.0` changed | | The registry values: in QEMU on development host A, on the `release` flavour before `XhciIntelPortSwitch` was added, a fresh install on Windows 98 SE and 2000 writing the seven at their defaults, and an update over `2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7 keeping two values set by hand and adding the missing three ("Registry settings"). The Power tab: on the owner's ThinkPad P14s Gen 1, a SuperSpeed drive declaring 896 mA reading 510 mA and `XHCISNAP` giving its exact figure, a USB 2.0 device reading as before ("The controller's Advanced tab and the root hub's Power tab"). The Intel port switchover: on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto, and its gate staying closed on the P14s Gen 1 and in QEMU ("Intel 7-, 8- and 9-series chipsets: the port switchover") |
 | What `2.2.0.0` changed | | The SuperSpeed fix for Intel Sunrise Point-LP: on the owner's ThinkPad E460 (`8086:9D2F`) under Windows 98 SE, on the `release` flavour of a build taken before the cut with the fix and the enumeration notes in it, a UAS-capable USB 3 stick seen at SuperSpeed from power-on, after two unplug and replug cycles and behind a USB 3 hub, a large file copied there and back and compared clean, and ATTO Disk Benchmark at 242 MB/s writing and 245 MB/s reading at 8 MB transfers; the hub's SuperSpeed and USB 2.0 halves both present after a hot-plug, a replug and a cold boot; `XHCISNAP`'s report naming the port's speed ID 4 as SuperSpeed by its default meaning ("SuperSpeed and UAS"). No Bulk-Only SuperSpeed device was to hand. The speed tables of the ThinkPad P14s Gen 1, the Lenovo B490 and a tester's HP EliteBook 850 G5 were read with `XHCIQUAL`: the first two list ID 4, which is why they never failed, and the HP's Sunrise Point controller publishes the E460's table word for word. In QEMU on development host A, which publishes no speed table, on Windows 98 SE and on Windows 2000 SP4 at two processors under Driver Verifier: a SuperSpeed stick at a root port, a stick behind QEMU's Full-Speed hub, and a SuperSpeed unplug and replug, each with a file compare, read as `2.1.1.0` read beside them, on the integration build and, on Windows 98 SE, the `release` flavour, and again on the final code; with the E460's speed table put in QEMU's place by a test aid, the stick read at SuperSpeed by the default meaning. A SuperSpeed device behind a SuperSpeed hub was not read in QEMU, which models no SuperSpeed hub; the E460 reading above has it. `XhciIntelPortSwitch` 2: on QEMU's controller, which is not Intel, on Windows 98 SE on the `release` flavour, no switchover write and the devices working. The controller tolerance, on the `qemu` flavour with each fault made on purpose, on the same two guests: every fault design record 17 section 5 lists - a lost interrupt, a root port disabled, an over-current, the controller halted, all ones with and without the proof the controller stopped, a transaction error, the retry's failed reset and its two races, the reports nothing owns, and the control endpoint's - each made once on both guests, against a USB mouse with a Bulk-Only copy running on a SuperSpeed stick, and each made to persist on Windows 98 SE and on Windows 2000 but for three not run there (the stale context's and the retry's two races persisting); each transient fault answered with no replug, each persistent one ending in its stated state, and the counters and terminal text read in `XHCISNAP`; at `XhciTolerance` `0`, on both guests, the root port disabled, the over-current, the controller halted, the transaction error and a report nothing owns, each handled as `2.1.1.0` handles it and still counted (the others were not read at `0`). A copy running across a controller recovery fails, since every device is re-enumerated, and on Windows 2000 a mounted drive can come back at Code 31 ("Known limitations"). The three new registry values: written at `1`, `1` and `0` by the install into a driver key that had never had them on Windows 2000 and by an update on Windows 98 SE (a fresh install on Windows 98 SE was not read), and a user's `0` kept by an update on Windows 2000; `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub and `XhciAvgTrbEsit` `1` left the devices working, on Windows 98 SE on the `release` flavour |
-| What `2.3.0.0` changes (test build `2.2.0.3`) | | **TEST 2.2.0.3, bench pending.** All in QEMU on development host A, on the integration builds before the cut; each item's section says what was read and on which systems, and what is still owed. No change has been read on real hardware yet: the bench (the owner's machines, the Low-Speed mouse of GitHub issue 17, a remote-wake device, the Intel switchover at `0` and `1`) is pending |
+| What `2.3.0.0` changes | | All in QEMU on development host A, on the integration builds before the cut; each item's section says what was read and on which systems, and what is still owed. No change has been read on real hardware yet: the owner's machines, the Low-Speed mouse of GitHub issue 17, a remote-wake device and the Intel switchover at `0` and `1` are still to be read |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -280,7 +278,7 @@ those need is the bench's, or is untested ground.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only. Vista x64 and Windows 7 x64 load the drivers in test-signing mode or while driver signature enforcement is disabled (F8). Nothing after Windows 7 |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only, but for Windows XP x64 and Windows 7 x64, which have also run on the owner's Dell Latitude E7250. Vista x64 and Windows 7 x64 load the drivers in test-signing mode or while driver signature enforcement is disabled (F8). Nothing after Windows 7 |
 | USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: every Windows ME reading was taken under SweetLow's USB 2.0 stack; Windows ME without it has not been tested under the host controller driver. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB. Since `2.3.0.0` an interrupt pin is no longer required: a controller reporting `Interrupt Pin = 0` is polled, as is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 a controller may use a message-signalled interrupt instead of its pin ("XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"). Up to `2.2.0.0` such a controller could not be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the disk. The NT targets take what they need from their own driver cache and ask for nothing |
@@ -357,7 +355,7 @@ criterion, no USB 2.0 protocol ports, is the miniport's; see the Controller
 row of "Requirements".
 
 The full active run (`xhciqual/hardware-testing.md`) ends on `QUALIFIED`,
-`NOT QUALIFIED`, or, since `2.2.0.3`, **`QUALIFIED WITH CAVEATS`**: a
+`NOT QUALIFIED`, or, since `2.3.0.0`, **`QUALIFIED WITH CAVEATS`**: a
 controller with no working interrupt - no interrupt pin, or an interrupt that
 never arrives while the controller's events reach memory - that passes the
 rest when polled. It is not refused, because the driver polls such a
@@ -370,7 +368,7 @@ takes a message interrupt, where the controller offers one (Windows Vista and
 which applies. Its exit code is 3 (0 qualified, 1 not qualified, 2 a usage
 error or no controller).
 
-Since `2.2.0.3` the report's header also names the machine it ran on: the
+Since `2.3.0.0` the report's header also names the machine it ran on: the
 make, model and BIOS from the firmware's SMBIOS table, the processor, the
 memory and the DOS version. It never prints a serial number, a UUID, an
 asset tag, a SKU or a part number, and withholds any other string that repeats one, so a
@@ -525,7 +523,7 @@ hardware:
 
 ### Upgrading from 1.2.0.0
 
-`2.2.0.0`, like every `2.x` release before it, replaces the `1.2.0.0`
+`2.3.0.0`, like every `2.x` release before it, replaces the `1.2.0.0`
 driver: both are called `xhci98.sys`, and the install overwrites the file.
 Going back is a reinstall of the `1.2.0.0` package from its own download.
 The steps below were measured with `2.0.0.0`; nothing `2.1.0.0`, `2.1.1.0`
@@ -634,7 +632,7 @@ there, so a machine updated from either keeps the switchover on. To take the
 new default, run `portsw.vbs 0` from the package and restart Windows
 ("Intel 7-, 8- and 9-series chipsets: the port switchover").
 
-**An update from `2.2.0.0` adds the five values new in `2.3.0.0`** at
+**An update from `2.2.0.0` adds the eight values new in `2.3.0.0`** at
 their defaults and keeps the rest ("Registry settings"). On 32-bit Vista
 and 7 it also installs `xhcimsi.sys` and asks for a restart ("Windows
 Vista and 7: message-signalled interrupts").

@@ -3091,7 +3091,8 @@ other.
 
                      64-bit: Windows XP x64 (SP2), Windows Vista x64 (SP2)
                      or Windows 7 x64 (SP1), in
-                     virtual machines only as well.
+                     virtual machines; XP x64 and 7 x64 also on one real
+                     machine, a Dell Latitude E7250.
 "@
         $readmeArchInstall = @"
 
