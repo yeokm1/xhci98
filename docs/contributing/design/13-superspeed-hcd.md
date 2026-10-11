@@ -4235,11 +4235,11 @@ the idle batches (record 14 section 6.2, "as the composite parent does")
 stays the bus's, over the same children.
 
 **The parent stays D0 in S0 while stage A suspends its device (owner
-decision, 2026-10-10, accepting Codex's assessment of `2d0de39`).** The
+decision, 2026-10-10, accepting a review's assessment of `2d0de39`).** The
 composite FDO requests no D-IRP for the parent in S0; the parent's devnode
 therefore reads D0 in Vista's and 7's power data while its device is
 suspended, and `XHCISNAP`'s link state is the reading. The question put to
-Codex was whether the parent should mirror its device (Dx once every
+the review was whether the parent should mirror its device (Dx once every
 function is Dx, D0 before a function's D0). Its findings: Microsoft's
 `usbccgp` does request D2 for its own parent stack once its functions have
 idled (static disassembly of XP 5.1.2600.5585, Vista 6.0.6000.16386 and 7
@@ -4286,8 +4286,8 @@ the switch at 0 too) at a hub's or a composite's PDO. The decision is the
 pure `XhciSuspParentWant` (`xhci_susp.c`; `test_susp`): no request after a
 failed system IRP or before a start; on 98 and ME none for the state the
 stack already has, while on NT that state is requested again, as WDM asks
-of a policy owner (an S0 reasserted after a sleep that failed; Codex
-review, round 1, P3 1). **Why the stack follows the capabilities and not
+of a policy owner (an S0 reasserted after a sleep that failed;
+review round 1, P3 1). **Why the stack follows the capabilities and not
 the reverse:** the existing D3 mapping is the conservative one - a
 suspended USB device keeps no working state across a sleep, whether or not
 its port keeps VBUS (it may in S1 and S3) - and it is what `usbhub`
@@ -4729,9 +4729,8 @@ text answers all three: stage 2 never asks for more registers than stage
    **Promotion is off by default (owner, 2026-10-10, for `2.2.0.3` and
    `2.3.0.0`); `XhciWideMap` 1 opts in.** It was off until the HAL
    readings were recorded and briefly on by default after them (11.6.1's
-   verdict); the owner turned the default back off after a focused Codex
-   review (session `01a124ef-74e0-73f1-a0b3-5c6f8e74e569`,
-   `.claude/codex-widemap-default-q1-result.txt` in the main checkout):
+   verdict); the owner turned the default back off after a focused
+   review:
    a regression is unlikely but unquantified - the HALs after the read
    service packs are unread, and the gates (a NULL base, the grant
    `0x80001`) are correlated outputs of one adapter implementation, not

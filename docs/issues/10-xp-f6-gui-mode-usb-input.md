@@ -85,7 +85,7 @@ entered the repository, `out\` or a package.
   that disk (a familiar file name is still read from it), and `[Config.*]`
   writes values under the OEM service's key. No documented line makes an
   OEM component depend on an inbox one (Microsoft's `txtsetup.oem`
-  reference; a Codex second opinion, 2026-10-04, found none either).
+  reference; a second opinion, 2026-10-04, found none either).
 - The prompts are XP's "Warn" driver-signing policy meeting an unsigned
   driver; silencing them needs a signed driver (WHQL), which this project
   cannot obtain.

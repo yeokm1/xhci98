@@ -1498,3 +1498,29 @@ owner to confirm).
   lock model, IRQL tags, stage A PowerDown and 36.35's no-thread-creation
   rule. Legs: shutdown with devices on ME, 98 SE (the 36.35 case), 2000,
   XP and 7 x64.
+
+## Planned - an event ring check after the re-arm
+
+Goal: an event stranded while IMAN.IE was clear is served without waiting
+for the 100 ms backstop, on an emulator or a controller that loses the
+interrupt the re-arm should raise. Phase 36's matrix found QEMU's MSI-X
+does: on Vista and 7 under `msix=on`, `BackstopDrains` counted 3 to 288
+a session, 0 under MSI, the line and polling. The cause, from the source
+and consistent with the trace: `xhci_intr_update` raises before it marks
+the vector used again, and `msix_notify` returns on an unused vector before
+its mask and PBA check, so the message is neither sent nor pended. Codex
+(2026-10-11) read no lost-interrupt window on compliant hardware, so this
+is a QEMU defect, and `2.3.0.0` ships unchanged (orchestrator, owner to
+confirm). The owner's bench reads `BackstopDrains` under MSI-X on real
+hardware, where 0 is the expected clean result, not an invariant.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] RRC.1 after the DPC's re-arm, read the next event's cycle bit and,
+  if an event is pending, queue one more bounded drain through the existing
+  admission and accounting (`hcd_ctl.c`), never a loop under the
+  controller lock. IE stays 0 in the ISR, so record 05's DIRQL exception
+  is untouched. Codex's preferred option over re-arming before the final
+  ERDP write or a blind second ERDP write. Legs: 7 x64 and Vista x64 under
+  MSI-X (`BackstopDrains` 0, TONE and UAS timings against MSI), and the
+  line and MSI rows unchanged.
