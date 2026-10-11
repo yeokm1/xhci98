@@ -350,11 +350,23 @@ A fault the driver cannot tie to a transfer re-enumerates the device, as if it h
 
 Each is tried a few times at most; then the port or the controller is held until the device is unplugged or the controller is restarted. None of it acts unless a fault is reported.
 
-- `XhciTolerance`: `0` turns most of it off; `1` (default) on.
-- `XhciIntervalCap`: interrupt endpoints polled at least every 32 ms. `0` off, `1` (default) on AMD controllers, `2` on every controller.
-- `XhciAvgTrbEsit`: a comparison switch for interrupt endpoints. Leave it at `0` (default).
+`XhciTolerance` switches all of it together.
 
-If a USB device stops working on your machine, send two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL`. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", and the package's `readme.txt` have the details, including the exceptions.
+- `0`: most of it off.
+- `1` (default): on.
+
+`XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms instead, as Linux does on some AMD controllers.
+
+- `0`: off.
+- `1` (default): on AMD controllers.
+- `2`: on every controller.
+
+`XhciAvgTrbEsit` changes one figure the controller is told for each interrupt endpoint: its average transfer size, which the controller uses in its own bandwidth reckoning. It is a switch for comparison: if your devices misbehave, try `1` and see whether anything changes. Only interrupt endpoints are affected.
+
+- `0` (default): 1024 bytes, the figure the xHCI specification suggests.
+- `1`: the endpoint's largest transfer per service interval, as Linux does.
+
+All three are read when the controller starts, so restart after changing one.
 
 ## What is tested, and what is not
 
