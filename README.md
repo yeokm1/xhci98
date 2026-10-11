@@ -210,11 +210,9 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-The install writes every value in the table, at the number in its last column. Each one is already in the key, ready to change.
+The install writes every value in the table, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
-- An install or update writes a value only where it is missing, so a value you changed stays as you set it.
-- To go back to the table's value, set it again, or delete the value and update the driver.
-- Restart Windows after changing a value. `XhciForceBulkOnly` is the exception: it is read as each device is enumerated (see below).
+Restart Windows after changing a value. `XhciForceBulkOnly` is the exception: it is read as each device is enumerated (see below).
 
 The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below, and all of them in the release notes' "Registry settings".
 
