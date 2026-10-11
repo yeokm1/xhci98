@@ -462,12 +462,17 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
      * trade. The xHC set EHB when it set IP - EHB "shall be set to '1' when the
      * IP bit is set to '1'" (5.5.2.3.3, p.394) - and IP cannot be set again
      * while EHB is set: "when IMODC transitions to '0': if EHB = '0' and IPE =
-     * '1', then IP shall be set to '1'" (4.17.5, p.270). So throughout the
-     * window this write opens, no interrupt can be generated whatever IE holds.
-     * The one thing that clears EHB is the DPC's final ERDP write, and the DPC
-     * re-arms IE immediately after it, under the controller lock and only while
-     * usbport still wants interrupts. IE clear is therefore this driver's
-     * *normal* state between an interrupt and its DPC, not an error state.
+     * '1', then IP shall be set to '1'" (4.17.5, p.270). So from this write
+     * until the DPC's final ERDP write, the one thing that clears EHB, no
+     * interrupt can be generated whatever IE holds. EHB's cover ends there,
+     * not at the re-arm: a non-blocking event in the short window between that
+     * ERDP write and the re-arm sets IPE. The re-arm preserves a pending IP
+     * and lets the interrupt be delivered once the moderation conditions are
+     * met, with no further event needed (4.17.5, 5.5.2.1; the re-arm's own
+     * comment in the DPC). The DPC re-arms IE under the controller lock and
+     * only while usbport still wants interrupts. IE clear is therefore this
+     * driver's *normal* state between an interrupt and its DPC, not an error
+     * state.
      *
      * **The operand is validated first, like every other IMAN read-modify-write
      * in this driver** (`XhciMaskInterrupts`, `XhciUnmaskInterrupts` and
