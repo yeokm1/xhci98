@@ -2,7 +2,7 @@
 
 This project xHCI98 is a USB host controller driver (HCD) for xHCI host controllers. It supports Windows 98 SE, ME, 2000, XP (x86/x64), Vista (x86/x64) and 7 (x86/x64).
 
-Since `2.0.0.0` the driver replaces Windows' own USB port and hub drivers with its own, so it is no longer limited to USB 2.0. It drives:
+The driver replaces Windows' own USB port and hub drivers with its own, so it is not limited to USB 2.0. It drives:
 
 - SuperSpeed (USB 3.x) devices on the root ports
 - SuperSpeed hubs
@@ -37,16 +37,15 @@ This project attempts to fill that gap.
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, on `2.0.0.0`: the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`. Device Manager shows the controller, its root hub and the UAS storage device, and the drive is listed under Unplug or Eject Hardware.
+My ThinkPad P14s Gen 1 under Windows 98 SE with NUSB, the MSSU10-128GSR flash drive at SuperSpeed through `xhciuas.sys`. Device Manager shows the controller, its root hub and the UAS storage device, and the drive is listed under Unplug or Eject Hardware.
 
-ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward. `1.2.0.0` managed about 34 MB/s at High Speed on the same drive.
+ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 221 MB/s read from 512 KB transfers upward.
 
 Some things to know:
 
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
-- Device Manager and the other Windows tools on these systems show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
+- Device Manager and the other Windows tools on these systems may show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
 - On Windows 98 SE storage of any kind, UAS included, needs NUSB's mass-storage component (see "Installation Steps").
-- Before `2.2.0.0`, SuperSpeed devices did not work on Intel Sunrise Point-LP (`8086:9D2F`: ThinkPad E460, HP EliteBook 850 G5) - a USB 3 stick was not seen and a USB 3 hub showed only its USB 2.0 half. Fixed in `2.2.0.0`; on my E460 a UAS stick now runs at about 242 MB/s write and 245 MB/s read. See [issue 11](docs/issues/11-sunrise-point-ssic-psi-table.md).
 
 ## Installation Steps
 
@@ -65,7 +64,7 @@ On Windows 98 SE, storage of any kind, UAS included, needs NUSB's mass-storage c
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
-Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. It says whether the driver can work on the machine before you install anything. Since `2.3.0.0` a controller reporting no legacy interrupt pin is no longer refused: the driver polls it, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports it as `QUALIFIED WITH CAVEATS`.
+Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. It says whether the driver can work on the machine before you install anything. A controller reporting no legacy interrupt pin is not refused: the driver polls it, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports it as `QUALIFIED WITH CAVEATS`.
 
 <img src="images/xhci98-xhciqual-basic.jpg" width="800">
 
@@ -137,29 +136,26 @@ The [release notes](docs/using/release-notes.md) have the limits.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
-The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
+The controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
 
 ### Upgrading the driver
 Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory.
 
 - **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
 - **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory, and pick "xHCI98 USB 3.x eXtensible Host Controller", the first of the three models listed.
-- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where an update to `2.3.0.0` or later asks for a restart, for the MSI helper `xhcimsi.sys`.
+- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where it asks for a restart, for the MSI helper `xhcimsi.sys`.
 
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
-- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry. Searching does not always find it.
-- Elsewhere, Have Disk.
+- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry.
 
-From `2.0.0.0` only, each device is found once more as new hardware, exactly once: a stick under its serial number, the other devices under a new id. Let Windows install them.
-
-- On the NT systems this needs no answer.
-- On Windows 98 SE the wizard runs for each and may ask for the CD for `hidclass.sys`.
-- A hidusbf setting on such a device has to be applied again.
+If Windows finds a device again as new hardware after the upgrade, apply its hidusbf setting again.
 
 ### Updating xhciuas.sys over an older one
 
-When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF. Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
+When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF.
+
+Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
 
 ## Tuning
 
@@ -194,7 +190,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver. A machine updated straight from `1.2.0.0` keeps that release's `XhciImodInterval250ns` of `500`; set it to `160` by hand.
+An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it by hand, or delete the value and update the driver.
 
 The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". `XhciWideMap`, `XhciSelectiveSuspend` and `XhciUsb2HubSpeedFallback` are written by no install: add them by hand in the same key. Each value but `XhciForceBulkOnly` (read as each device is enumerated; see below) is read when the controller starts, so restart Windows after changing one. The others are described below, and all of them in the release notes' "Registry settings".
 
@@ -212,7 +208,7 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 
 `160` is the value Linux uses, and every install path writes it. On my P14s with the MSSU10 over UAS (Windows 98 SE, one command at a time), at 8 MB transfers:
 
-- `500`, the value `1.2.0.0` shipped, gave about 181 MB/s.
+- `500` gave about 181 MB/s.
 - `160` gave 211 MB/s write and 221 MB/s read.
 - `40` added only 1 to 3% more.
 
@@ -226,7 +222,7 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 ### Polling a Low- or Full-Speed mouse above 1000 Hz
 
-`XhciFastPollFsLs`, new in `2.1.0.0`, is off by default; the install writes `0`. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
+`XhciFastPollFsLs` is off by default; the install writes `0`. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
 
 | Value | "31 Hz" becomes | "62 Hz" becomes |
 |---|---|---|
@@ -252,16 +248,14 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 ### The Intel 7/8/9-series port switchover
 
-On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller, so up to `2.1.0.0` this driver saw nothing on them.
+On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller.
 
-Since `2.1.1.0` the driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). Since `2.2.0.0` the hand-back writes only the registers the driver itself wrote.
-
-**Since `2.3.0.0` it is off unless you turn it on.** A connector left on the USB 2.0 controller works there whenever a USB 2.0 driver is loaded (NUSB's or SweetLow's on Windows 98 SE and ME, Windows' own elsewhere), only at USB 2.0 speed, so the driver no longer takes the connectors by default. `2.1.1.0` and `2.2.0.0` installed it at `1`, and an update keeps the value already there, so a machine updated from either stays on until you change it.
+The driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). The hand-back writes only the registers the driver itself wrote.
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
 - `XhciIntelPortSwitch` set to `1` turns it on; `0`, absent or not a `DWORD` is off. It is read when the controller starts, so restart after changing it.
 - `portsw.vbs`, beside the INF in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`, on every Windows this driver runs on with nothing to install: double-click it, or run `cscript //nologo portsw.vbs show` (or `1`, or `0`) as an administrator, then restart Windows.
-- Since `2.2.0.0`, `XhciIntelPortSwitch` set to `2` does the switchover on any Intel xHCI controller, listed or not, for a chipset with the same switchable connectors that the list misses. On a listed controller `2` is the same as `1`.
+- `XhciIntelPortSwitch` set to `2` does the switchover on any Intel xHCI controller, listed or not, for a chipset with the same switchable connectors that the list misses. On a listed controller `2` is the same as `1`.
 
 Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel USB 3 controller. On one without them (every Intel chipset from the 100-series on, and any not yet read) it writes registers of unknown meaning, with unknown results. Use 2 only, at your own risk, for an unlisted Intel chipset with both EHCI and xHCI; everyone else should use 0 or 1.
 
@@ -269,7 +263,7 @@ Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel U
 
 On the same Intel chipsets, two chipset registers decide which interrupt line the xHCI controller's interrupt reaches. Some firmware points them at a different line from the one it tells Windows: the Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so the driver never hears from the controller and every USB device on it is slow or stops ([issue 12](docs/issues/12-e7250-xp64-boot-enable-slot-refused.md)).
 
-Since `2.3.0.0` the driver reads those registers at each start and resume and, where `XhciIntelIrqRoute` allows it, points the interrupt at the line Windows assigned:
+The driver reads those registers at each start and resume and, where `XhciIntelIrqRoute` allows it, points the interrupt at the line Windows assigned:
 
 - `1`, the default (also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
 - `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
@@ -279,19 +273,25 @@ It writes nothing on any other controller, nothing when the interrupt is a messa
 
 ### Polling and message-signalled interrupts
 
-Since `2.3.0.0` a controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through a small helper driver in the package, `xhcimsi.sys`. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` `0` (automatic) chooses; `1` asks for the line (a controller with none then fails to start, Code 10, on 98 SE to XP and on 32-bit Vista and 7 without the helper), `2` forces polling. `XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
+A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through a small helper driver in the package, `xhcimsi.sys`. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` `0` (automatic) chooses; `1` asks for the line (a controller with none then fails to start, Code 10, on 98 SE to XP and on 32-bit Vista and 7 without the helper), `2` forces polling. `XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
 
 ### UAS command size and two transfer pieces at once
 
-Since `2.3.0.0` a UAS command moves up to 1 MiB, where earlier releases sent 64 KiB: `XhciMaxTransferKB`, `64` to `2048`, sets it for every UAS drive on the controller, and Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets it for one drive model. Restart after changing either. `XhciWideMap` set to `1` lets the driver keep two pieces of a large bulk transfer on the controller at once on Windows 2000 to 7; it is **off by default** in `2.3.0.0`, because a regression would show as wrong data rather than an error. See the release notes, "XhciMaxTransferKB" and "XhciWideMap".
+A UAS command moves up to 1 MiB by default: `XhciMaxTransferKB`, `64` to `2048`, sets it for every UAS drive on the controller, and Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets it for one drive model. Restart after changing either. `XhciWideMap` set to `1` lets the driver keep two pieces of a large bulk transfer on the controller at once on Windows 2000 to 7; it is **off by default**, because a regression would show as wrong data rather than an error. See the release notes, "XhciMaxTransferKB" and "XhciWideMap".
+
+### Low- and Full-Speed devices behind a built-in hub
+
+Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub. The driver gives such a device the standard speed ID (Full Speed `1`, Low Speed `2`) when the table names neither speed and does not use that number for another. A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback.
+
+It is **on by default**; `XhciUsb2HubSpeedFallback` set to `0` turns it off, then restart, and such devices are then refused again. In `XHCISNAP`, `Usb2HubSpeedFallbacks` counts the devices given a standard ID and `TopoBehindHubNoSpeed` the ones still refused; the `hub.speed.place` and `hub.speed.route` notes name each one, and on the VL805 the `pci.vl805.fw` note records the card's firmware version. See [issue 13](docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md).
 
 ### Selective suspend
 
-Since `2.3.0.0` the driver can suspend an idle device when Windows asks, and wake it on Windows' request or the device's own remote wake: USB 2.0 and SuperSpeed devices, never hubs or the controller. It is **off by default**; `XhciSelectiveSuspend` set to `1` turns it on, then restart. It has been read only in virtual machines, so leave it off unless you are testing it. See the release notes, "XhciSelectiveSuspend: putting idle devices to sleep".
+The driver can suspend an idle device when Windows asks, and wake it on Windows' request or the device's own remote wake: USB 2.0 and SuperSpeed devices, never hubs or the controller. It is **off by default**; `XhciSelectiveSuspend` set to `1` turns it on, then restart. See the release notes, "XhciSelectiveSuspend: putting idle devices to sleep".
 
 ### Controller faults
 
-Since `2.2.0.0` the driver no longer leaves a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. In short:
+The driver does not leave a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report from an AMD AM5 board of a mouse that stops at random. In short:
 
 - A missed interrupt is picked up by the driver itself.
 - A USB transaction error is retried up to three times before the transfer fails.
@@ -303,10 +303,6 @@ Each is tried a few times at most, then the driver stops and holds the port or t
 
 If a USB device stops working on your machine, send two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL`. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", and the package's `readme.txt` have the details, including the exceptions.
 
-### The 1.2.0.0 virtual-hub values
-
-`XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` have no effect under `2.y.y.y`. The driver reports every device at its true speed with no virtual hub in the way, so there is nothing for them to switch.
-
 ## What is tested, and what is not
 
 Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has also run on real hardware, the ThinkPad E460 and the ThinkPad P14s Gen 1; every other target, Windows 2000 included, has run in QEMU virtual machines only. The [release notes](docs/using/release-notes.md)' "Targets and their standing" has the full detail per system.
@@ -315,7 +311,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Windows 98 SE has al
 |---|---|
 | Windows 98 SE | VMs under NUSB and SweetLow's stack: HID, storage, composite audio, the ASIX Ethernet adapter, hubs to five tiers, plug soaks, SuperSpeed storage and UAS. A stock install runs HID and audio, with no storage driver. Real hardware: the E460 and the P14s Gen 1. |
 | Windows 2000 SP4 | VMs only, under Driver Verifier and on a multiprocessor guest: the same as Windows 98 SE, including UAS and forced Bulk-Only. SuperSpeed hubs untested. |
-| Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. The `2.0.0.0` hang on re-enabling the controller with a mouse attached is fixed in `2.1.0.0`. |
+| Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. |
 | Windows XP, 32-bit and x64 | VMs only: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. |
 | Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs only: the same, on four virtual processors. On the x64 systems, driver signature enforcement must be disabled. |
 | The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. |
@@ -363,7 +359,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 
 | Limitation | Detail |
 |---|---|
-| Selective suspend is off by default, and hubs are never suspended | With `XhciSelectiveSuspend` at its default `0`, idle devices are never suspended to save power, as in earlier releases. At `1` a device is suspended when Windows asks; hubs, the root hub and the controller never are. See "Selective suspend" above. |
+| Selective suspend is off by default, and hubs are never suspended | With `XhciSelectiveSuspend` at its default `0`, idle devices are never suspended to save power. At `1` a device is suspended when Windows asks; hubs, the root hub and the controller never are. See "Selective suspend" above. |
 | Windows 2000: a mounted USB drive may come back at Code 31 after a controller recovery or a resume from hibernation | After the driver recovers the controller in place (a halted controller, or a failed endpoint reset), a USB drive whose volume was mounted may stay at Code 31 until it is unplugged and plugged in again, or the controller is disabled and enabled. Other devices come back. Seen in a virtual machine; not on Windows 98 SE. The path predates `2.2.0.0`, which recovers on more faults. In `2.3.0.0`'s virtual-machine tests it was seen again after a recovery with the controller polled, and after a resume from hibernation on a controller that lost its state (QEMU's does), where the driver finds every device again; a restart of the drive's own device cleared it. |
 | A UAS drive as the first USB storage device on Windows ME | On a fresh Windows ME installation whose first USB storage device is a UAS drive, the drive shows Code 2 (NTKERN.VXD device loader(s) could not load). ME has not yet copied its own `USBNTMAP.SYS` and `USBMPHLP.PDR`, which it installs only when its first ordinary USB stick is plugged in. To recover, plug in any ordinary USB stick once, then unplug the UAS drive and plug it back in. No Remove and no restart are needed. |
 
