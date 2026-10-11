@@ -181,7 +181,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciMaxTransferKB` | The largest UAS command, in KiB (a multiple of `4`) | `64` | `2048` | `1024` | `1024` |
-| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` ask for the interrupt line (on Vista and 7 a message Windows grants anyway is still used), `2` polling | `0` | `2` | `0` | `0` |
+| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only (on Vista and 7, if Windows still assigns a message-signalled interrupt, for example because the controller has no line, the driver uses it rather than fail to start), `2` polling | `0` | `2` | `0` | `0` |
 | `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
 | `XhciPollActiveMs` | While polling, the shortest period with transfers outstanding, in ms (with only a mouse's or keyboard's periodic transfers outstanding, the endpoint's interval is used, held between this and the idle period) | `1` | `XhciPollIdleMs` | `1` | `1` |
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | not written |
