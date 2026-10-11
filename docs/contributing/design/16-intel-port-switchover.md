@@ -37,6 +37,14 @@ section 14. Nothing else in this record changes: the gate, the Sony
 exemption, the sequence, the lifetime and value 2 are as revision 3 left
 them.
 
+Revision 5, 2026-10-11, for roadmap-hcd task 36.56 (a re-cut of release
+`2.3.0.0`, its driver binaries unchanged): two batch files beside the
+script, `portsw-on.bat` and `portsw-off.bat`, which set 1 or 0 through it
+in one double-click (section 5a, "The batch files"). The owner asked for
+them at the E7250 bench, where a USB 3 stick copied at USB 2.0 speed with
+the switchover at its default 0. Its decision is section 11's twelfth, its
+documents section 15. Nothing in the driver changes.
+
 ## 1. What is asked, and what is not
 
 A tester reported Ivy Bridge machines on which `xhci98.sys` started cleanly
@@ -275,6 +283,54 @@ The packaging gates hold it: `make-package.ps1` stages it, `make-release.ps1`
 publishes it in every flavour directory, the packager's self-tests check it
 is staged byte for byte, ASCII with CRLF, and looks for both INFs' `XhciDesc`,
 and the source charset gate reads it as a file the 1998-era tools read.
+
+### The batch files (revision 5)
+
+`src\portsw-on.bat` and `src\portsw-off.bat` are staged wherever
+`portsw.vbs` is, at the root of every package directory. Each shows the
+value (`cscript //nologo portsw.vbs show`), stops there if that found no
+controller, sets 1 or 0 (`cscript //nologo portsw.vbs 1` or `0`), says
+that Windows must be restarted, and ends with `pause`, so a double-clicked
+window stays open to be read. Neither sets 2.
+
+One file serves both command interpreters, so it is written to the
+smaller one. Windows 98 SE and ME run it under `COMMAND.COM`, which has no
+`%~dp0`, no `cd /d`, no `setlocal`, no `if /i` and no `goto :eof`, and
+which reads `<`, `>` and `|` as redirection even on a `rem` or `echo`
+line. The split is the first command after `@echo off`:
+
+    if "%OS%"=="Windows_NT" goto nt
+    goto run
+    :nt
+    cd /d "%~dp0"
+    :run
+
+On 98 and ME `OS` is not set, the test is false, and `goto run` jumps over
+the one line that needs `cmd.exe`, so `COMMAND.COM` never executes it.
+`cd /d "%~dp0"` is there because Run as administrator on Vista and 7
+starts a batch file in `System32`; 2000 and XP take the same line. On 98
+and ME the working directory is the batch file's own when it is
+double-clicked in Explorer or typed at a prompt in its directory, which is
+how it is meant to be run; started from anywhere else it does not find
+`portsw.vbs` and says where to run it from.
+
+From `:run` both interpreters run the same lines, every one of them
+`COMMAND.COM` syntax: `if not exist portsw.vbs`, the two `cscript` calls,
+`if errorlevel` tests on what `portsw.vbs` returned, `echo` and `pause`.
+After the set, exit code 3 means the script handed the write to an
+elevated copy of itself (Vista and 7 without the administrator token): the
+batch file says the result is in the window that opened, and that next
+time it should be started with right-click, Run as administrator. Exit
+code 1 means the write was refused, and it says to run it as an
+administrator, by right-click on Vista and 7. Only exit code 0 is followed
+by the restart line.
+
+They are ASCII with CRLF endings, held by the source charset gate (`.bat`
+is one of its 1998-era kinds) and by the packager's self-tests, which also
+pin the split: `goto run` before `:nt`, `%~` and `cd /d` on no line but
+the one after `:nt`, no `cmd.exe`-only construct on any line
+`COMMAND.COM` runs, no redirection character on an `echo` or `rem` line,
+and no line longer than `COMMAND.COM`'s 127 characters.
 
 ## 6. When
 
@@ -628,6 +684,14 @@ issue 17 comment 6082858626):
 Taken in this revision: the script is Windows Script Host VBScript and
 finds the key by `DriverDesc` (section 5a); it never writes 2.
 
+Revision 5 (owner, 2026-10-11, roadmap-hcd task 36.56, at the E7250
+bench):
+
+12. `portsw-on.bat` and `portsw-off.bat` ship beside `portsw.vbs` in every
+    package directory and set 1 or 0 through it, in the re-cut of
+    `2.3.0.0`, with no change to a driver binary. There is no batch file
+    for 2: it stays a hand edit.
+
 ## 12. What changes in the documents (task 34.4)
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
@@ -682,3 +746,15 @@ row 7; `source-files.md`.
   Intel section; design record 13's value rows; `source-files.md` for
   `portsw.vbs`; `build-and-test.md` for the package's new file and the
   script's legs.
+
+## 15. What changes in the documents (revision 5, task 36.56)
+
+- The README's switchover section and package listing: the two batch files,
+  Run as administrator on Vista and 7, and the symptom that sends a user to
+  them - a USB 3 stick that copies at USB 2.0 speed on a 7-, 8- or 9-series
+  machine.
+- The release notes' switchover section and package contents, the same.
+- The readme template (`make-release.ps1`): the same in section 9, and the
+  two files in section 3 and in each directory's contents.
+- `source-files.md` for the two files; `build-and-test.md` for the
+  package's new files and their legs.
