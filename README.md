@@ -260,9 +260,9 @@ It applies to a Low- or Full-Speed device on a root port, and to a High-Speed or
 
 - A device that itself asks for 128 to 130 ms is polled at 2000 to 8000 Hz while the value is `4`.
 - A filter that writes one of those codes while the value is not `4` gets what the number means without it: a Low- or Full-Speed device is polled every 128 ms, and a High-Speed or SuperSpeed one every 4.096 s.
-- A controller that refuses a code is caught and counted as `fastpoll.fallbacks`, and the device is then polled every 1 ms.
+- A controller that refuses a code is caught, and the device is then polled every 1 ms.
 
-This is outside the xHCI specification. A controller that refuses it is caught: the device runs at its normal rate and `XHCISNAP` counts it as `fastpoll.fallbacks`. A controller that accepts it and then misbehaves cannot be caught. It is untested ground.
+This is outside the xHCI specification. A controller that refuses it is caught: the device runs at its normal rate. A controller that accepts it and then misbehaves cannot be caught. It is untested ground.
 
 ### The first report's wait
 
