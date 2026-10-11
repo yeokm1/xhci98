@@ -226,8 +226,23 @@ that private key outside the key folder. `make-package.ps1` therefore
 compares that folder before and after each signing and warns, naming any
 new container; it does not delete them, since it cannot prove another
 process did not create one in the same moment. After a cut that warns,
-the maintainer deletes the named files. Whether the owner's key leaves the
-same is read at the first signed cut (section 10).
+the maintainer deletes the named files. The warning prints each one's
+full path as a ready `Remove-Item` line. The files are hidden and system,
+inside the `<user SID>` subfolder, so a plain `Get-ChildItem` shows
+nothing; list the newest with
+
+```powershell
+Get-ChildItem "$env:APPDATA\Microsoft\Crypto\RSA" -Recurse -Force -File | Sort-Object LastWriteTime -Descending | Select-Object -First 5 FullName, LastWriteTime
+```
+
+then, for each file the warning named and only those,
+
+```powershell
+Remove-Item -LiteralPath "<path the warning named>" -Force
+```
+
+and list again to see them gone. The owner's key leaves them too (section
+10).
 
 ## 6. Verifying a signed binary
 
@@ -313,10 +328,27 @@ points here.
   `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`**. This is the value the
   packager checks every signature against and the only key a published x64
   binary may carry.
-- The signed `2.2.0.3` re-cut and the guest legs - Vista x64 and Windows 7
+- **The signing rehearsal**, 2026-10-11, development host A: the owner ran
+  `make-package.ps1 -Flavor release -Arch amd64 -TestSignPfx ...` on branch
+  `p36-tsign` at `e8b1b09` (the `2.3.0.0` code before its stamp, version
+  still `2.2.0.3`), into `out\p36-tsign\rehearsal\pkg-release-amd64`. Both
+  binaries carry the signature this record prescribes: signer
+  `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`, an Authenticode PE-image
+  signature with SHA-1 as both digests, the vouched digest equal to the
+  image's, no timestamp; each is the build plus the signature and nothing
+  else (`xhci98.sys` 310,272 to 311,768 bytes, `xhciuas.sys` 36,352 to
+  37,848); `SignTool verify /pa /v` shows the chain with that thumbprint,
+  "File is not timestamped" and the expected untrusted-root failure. The
+  INFs, `txtsetup.oem` and `portsw.vbs` are byte-identical to an unsigned
+  package of the same build. **SignTool printed the key-container warning
+  with the owner's key too**, so every signing run leaves them; the owner
+  deleted the named files himself (section 5).
+- The signed `2.2.0.3` re-cut was cancelled (owner, 2026-10-11); the first
+  signed cut is `2.3.0.0`. The guest legs - Vista x64 and Windows 7
   x64 in test-signing mode with no F8, twice; the same without test-signing
-  mode (the Code shown); XP x64 unaffected - are read at the first signed
-  cut and recorded here and in `runs/run-36.md`.
+  mode (the Code shown); XP x64 unaffected - are read on the rehearsal
+  package and recorded below and in `runs/run-36.md`; the `2.3.0.0` cut's
+  own signature check follows it.
 - Unread, and not planned: real hardware under test-signing mode; a
   Windows 7 x64 with the SHA-2 update; Server 2003 x64 (identity with XP
   x64, which ignores signatures).

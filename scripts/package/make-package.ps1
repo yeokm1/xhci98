@@ -458,8 +458,13 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
     $after = Get-UserKeyContainers
     $left = @($after.Names | Where-Object { $before.Names -notcontains $_ })
     if ($left.Count -gt 0) {
-        Write-Warn ("SignTool left {0} new key container(s) in {1} while signing {2}: {3}. One may be a copy of the private key; design record 19 says what to do." -f `
-            $left.Count, $after.Dir, $Label, ($left -join ", "))
+        # Warned, not deleted (design record 19 section 5): nothing here can
+        # prove another process did not create one of them in the same moment.
+        Write-Warn ("SignTool left {0} new key container file(s) while signing {1}; each may be a copy of the private key. They are hidden system files, so list them with -Force, and delete each one named here yourself (design record 19 section 5):" -f `
+            $left.Count, $Label)
+        foreach ($n in $left) {
+            Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n))
+        }
     }
     if ($signRc -ne 0) {
         throw "SignTool could not sign $Label (exit $signRc):`n$signOut"
