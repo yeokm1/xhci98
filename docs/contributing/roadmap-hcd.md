@@ -1378,6 +1378,7 @@ polling both touch the controller's power and teardown paths.
   - **Done 2026-10-10** (`e7d4243` the code and host vectors, `d213f62` the docs, `2fddc57` round 1's fix; Codex thread `01a12643`: round 1 no P1/P2, its P3 fixed; round 2, the confirmation of that fix, returned nothing). Built x86 and `-amd64` all, every gate, the host suites, `XHCISNAP` and its self-test. QEMU on development host A, Windows 98 SE, the `qemu` flavour: QEMU's Full-Speed hub hot-added on a root port with a mouse and a keyboard behind it, both enumerated at Full Speed (route `00001`, tier 1), the mouse moving the pointer, `XHCISNAP` showing the switch on and no fallback taken (QEMU publishes no speed table); QEMU models no Low-Speed device. Not observed on hardware before release.
 - [ ] 36.50 the x64 binaries test-signed - **a prerequisite of the `2.3.0.0` cut** (owner, 2026-10-11; design record 19, reversing design record 11 decision 9 for the x64 package only). Done when all of these are: the packager option and the `make-release.ps1` refusal; the certificate made by the owner (`scripts\local\testsign\xhci98-test.pfx`, thumbprint `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`); the `2.2.0.3` re-cut signed; the Vista x64 and Windows 7 x64 test-signing legs, on and off, and XP x64; the procedure in `README.md`, the release readme and the release notes. Every published x64 directory carries `xhci98.sys` and `xhciuas.sys` with an embedded Authenticode signature by the project's own test certificate - SHA-1 file digest, no timestamp, no catalog, both INFs byte-identical - applied by `make-package.ps1 -TestSignPfx` at staging, with `xhci98-test.cer` beside them, and `make-release.ps1` refuses an x64 cut without it; the x86 binaries are never signed. So Vista x64 and Windows 7 x64 load the driver in test-signing mode (`bcdedit /set testsigning on`, once) instead of only on an F8 start. The key is made by the owner (`scripts\package\make-testcert.ps1`) and held only in the git-ignored `scripts\local\testsign\` or outside the tree. Into the `2.2.0.3` TEST build at once (re-cut, same version and date, the x86 halves byte-identical to the unsigned cut's) and every cut after it. Legs: Vista x64 and Windows 7 x64 in test-signing mode, installed from the signed zip and started with no F8, twice, the controller and devices working and "Test Mode" shown; the same without test-signing mode (the Code recorded); XP x64 installing and loading the signed binary as before.
 - [x] 36.51 every registry value the driver reads written by the INFs at the driver's own default (owner, 2026-10-11; the decisions table, "Every registry value written by the INFs"): the inventory from the code (`build-and-test.md`, "The registry values the driver reads"), `XhciWideMap` 0, `XhciSelectiveSuspend` 0 and `XhciUsb2HubSpeedFallback` 1 added to `[Xhci.AddReg]` and `[Xhci.AddReg.NT]` of `src\xhci98.inf` and `[Xhci.AddReg.NT]` of `src\xhci98-amd64.inf` with the same `0x00010003` flags as the sixteen, the INF gate's `VAL-*` table, self-tests and footprints, the README, release notes, release readme template and records; fresh install and update over `2.2.0.0` on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x64 - done (p36-regall, merged at `8e74422`): review converged in two rounds; both builds, the INF self-tests (1118), the packager (471) and the host suites pass; legs on development host A, every guest PASS: a fresh install wrote all nineteen at their defaults and `XHCISNAP` read the three new ones as set; an update over `2.2.0.0` (whose INFs wrote eleven) kept the user's values and added the eight missing at their defaults. `XhciIntelPortSwitch` stays at `2.2.0.0`'s `1` on update, as 36.42 documents; the root hub's Driver tab keeps the old version, and 98 SE and ME keep the old driver until a restart they do not ask for, both already documented and now worded for any update
+- [ ] 36.54 Transaction Error recovery on a stream endpoint (owner, 2026-10-11: fixed before the `2.3.0.0` cut; was the planned item STE.1). A UAS drive whose data stream takes a Transaction Error moves data again promptly, without a replug. Design record 17 left stream endpoints out of the soft retry (EP0, isochronous and stream endpoints keep their handling), so the failed command was left to `xhciuas`'s class timeout, abort, LUN reset and port reset. Phase 36's matrix (XP x64, `qemu` flavour, `XhciQemuInject` fault 16 on a UAS data-in stream TD) read the failed read completing cleanly, then every later command timing out until the device was removed and added again (2 of 3; the third recovered after 266.6 s); the 36.22 stage-1 build behaves the same, so this predates stages 2 and 3, and a Bulk-Only stick under the same fault is recovered by the soft retry with its copies `fc` clean. Done when: the stuck runs' failure to converge is diagnosed from traces; record 17 gains a reviewed section choosing between a soft retry for stream TDs (Reset Endpoint and Set TR Dequeue for the halted stream, the stream's doorbell rung with its stream ID, bounded as the Bulk-Only retry is), a prompt `xhciuas` recovery in place of the class timeout, or a fix of whatever keeps the existing recovery from converging; host vectors for the stream ring's dequeue and DCS after the reset; legs: the fault 16 injection on XP x64, 2000 and 7 x64, a UAS copy `fc` clean after it with no replug, the Bulk-Only control unchanged, faults 15 and 17 on UAS still recovering, and a plain UAS copy and VERIFY on 98 SE and 7 x64 (`release`) unchanged.
 - [ ] 36.final the `2.3.0.0` builds, x86 and `-amd64`, after every task above:
   - the stamp, and the x64 binaries test-signed by the project certificate (design record 19; `make-release.ps1` refuses otherwise);
   - the host suites and every gate;
@@ -1524,32 +1525,3 @@ Status: not opened, unnumbered and unversioned.
   ERDP write or a blind second ERDP write. Legs: 7 x64 and Vista x64 under
   MSI-X (`BackstopDrains` 0, TONE and UAS timings against MSI), and the
   line and MSI rows unchanged.
-
-## Planned - Transaction Error recovery on a stream endpoint
-
-Goal: a UAS drive whose data stream takes a Transaction Error moves data
-again promptly, without a replug. Design record 17 left stream endpoints
-out of the soft retry (EP0, isochronous and stream endpoints keep their
-handling); the failed command is left to `xhciuas`'s class timeout, abort,
-LUN reset and port reset. Phase 36's matrix (XP x64, `qemu` flavour,
-`XhciQemuInject` fault 16 on a UAS data-in stream TD) read the failed read
-completing cleanly, then every later command timing out until the device
-was removed and added again (2 of 3; the third recovered after 266.6 s).
-The 36.22 stage-1 build behaves the same, so this predates stages 2 and 3,
-and a Bulk-Only stick under the same fault is recovered by the soft retry
-with its copies `fc` clean. The injection delivers the error for a TD
-QEMU's `usb-uas` never started while it still holds that tag's data phase,
-which a real error, from a transaction the device took part in, would not
-do; whether a real one strands the stream is the owner's bench item
-(orchestrator, 2026-10-11; owner to confirm).
-
-Status: not opened, unnumbered and unversioned.
-
-- [ ] STE.1 decide, from the bench and a reviewed design (record 17 gains
-  a section), between a soft retry for stream TDs (Reset Endpoint and Set
-  TR Dequeue for the halted stream, the stream's doorbell rung with its
-  stream ID, bounded as the Bulk-Only retry is) and a prompt `xhciuas`
-  reset in place of the class timeout; host vectors for the stream ring's
-  dequeue and DCS after the reset; legs: the fault 16 injection on XP x64,
-  2000 and 7 x64, a UAS copy `fc` clean after it with no replug, and the
-  Bulk-Only control unchanged.
