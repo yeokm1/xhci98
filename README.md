@@ -44,8 +44,7 @@ ATTO Disk Benchmark (Direct I/O) reads about 201 to 215 MB/s write and 196 to 22
 Some things to know:
 
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
-- Device Manager and the other Windows tools on these systems may show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed, so that display says nothing about the real link speed.
-- On Windows 98 SE storage of any kind, UAS included, needs NUSB's mass-storage component (see "Installation Steps").
+- Device Manager and the other Windows tools on these systems may show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed.
 
 ## Installation Steps
 
@@ -53,14 +52,14 @@ The prerequisites per OS:
 
 - **Windows 98 SE**:
   - Install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) if you want USB storage, UAS included.
-  - [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage half: unzip, right-click the `USB2.INF` at its root then install. With it alone, a USB stick shows Code 28 and a UAS drive Code 2, so storage still needs NUSB's storage files (below).
+  - [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage driver. Unzip, right-click the `USB2.INF` at its root then install. With it alone, a USB stick shows Code 28 and a UAS drive Code 2, so storage still needs NUSB's storage files (below).
   - With neither, HID and audio devices work but storage has no driver.
   - Reboot if requested after installing either.
-- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). ME uses its own storage files, not NUSB's. It copies them from its own installation files, with no prompt, the first time an ordinary USB stick is installed. Until then a UAS drive shows Code 2 (see "Known limitations/issues").
+- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). ME has its own storage files. An ordinary USB stick needs to be plugged for the first time to copy the drivers before a UAS drive will be recognised.
 - **Windows 2000 SP4, XP SP3 x86**: Nothing to install.
-- **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install either. On **Vista x64 and 7 x64** the driver is test-signed (not by Microsoft), so Windows has to be in test-signing mode, or driver signature enforcement disabled at every boot; see "Windows Vista x64 and 7 x64: test-signing mode" below.
+- **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install. On **Vista x64 and 7 x64** the driver is test-signed by me, so Windows has to be in test-signing mode, or driver signature enforcement disabled at every boot; see "Windows Vista x64 and 7 x64: test-signing mode" below.
 
-On Windows 98 SE, storage of any kind, UAS included, needs NUSB's mass-storage component: `USBSTOR.INF`/`USBSTOR.SYS`, `USBNTMAP.INF`/`USBNTMAP.SYS` and `USBMPHLP.PDR`, which NUSB 3.3 and 3.6 install. SweetLow's stack alone has no storage half. On Windows ME those files are ME's own.
+On Windows 98 SE, storage of any kind, UAS included, needs NUSB's mass-storage component: `USBSTOR.INF`/`USBSTOR.SYS`, `USBNTMAP.INF`/`USBNTMAP.SYS` and `USBMPHLP.PDR`, which NUSB 3.3 and 3.6 install. SweetLow's stack alone has no storage half. 
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
@@ -110,7 +109,7 @@ readme.txt     the release notes in plain text
 3. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
 4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release-x86\` or `release-x64\` directory.
 5. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98 USB 3.x Root Hub" underneath it. Windows 98 SE may ask for its CD for `usbd.sys`.
-6. Reboot if requested: Windows 98 SE asks, and so do 32-bit Vista and 7 (for the MSI helper `xhcimsi.sys`; the controller waits for the restart). After it, neither entry should carry a warning mark.
+6. Reboot if requested.
 7. Plug in a UAS disk, and when the wizard asks for "xHCI98 USB Attached SCSI Storage", point it at the same directory. No restart is needed for `xhciuas.sys`.
 8. An external hub installs as "xHCI98 USB Hub" from the driver already installed. On Windows 98 SE and 2000 it installs with nothing to answer. On Windows XP every newly plugged hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
 
@@ -127,9 +126,7 @@ Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off: `bcdedit 
 
 - With BitLocker on the system drive, suspend BitLocker before changing the boot setting, or the next boot asks for the recovery key.
 - This is not Microsoft signing: the certificate is the project's own test certificate, which no Windows trusts by itself.
-- Importing the `xhci98-test.cer` in the `-x64` directories is not needed: test-signing mode works without it, and it does not remove the install prompt either. It is not recommended.
 - F8 -> "Disable Driver Signature Enforcement" still works as before, for one boot, without test mode.
-- 32-bit Vista and 7, and XP x64, need neither.
 
 ### Installing Windows 2000 or XP, or using the Recovery Console
 
