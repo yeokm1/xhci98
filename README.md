@@ -222,7 +222,9 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 ### Polling a Low- or Full-Speed mouse above 1000 Hz
 
-`XhciFastPollFsLs` is off by default; the install writes `0`. It works with SweetLow's hidusbf setting a mouse on a **root port** to its "31 Hz" or "62 Hz" rate:
+`XhciFastPollFsLs` is off by default; the install writes `0`. It works with SweetLow's hidusbf in one of two ways, and is read when the controller starts, so restart after changing it.
+
+**`2` and `3`: faster "31 Hz" and "62 Hz".** Set a mouse on a **root port** in hidusbf to its "31 Hz" or "62 Hz" rate:
 
 | Value | "31 Hz" becomes | "62 Hz" becomes |
 |---|---|---|
@@ -231,7 +233,12 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 
 - A device behind a hub keeps its normal rate.
 - While it is set, any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too.
-- It is read when the controller starts, so restart after changing it.
+
+**`4`: the rate the client chooses.** An interrupt endpoint whose polling interval is `128`, `129` or `130` is polled at 2000, 4000 or 8000 Hz; every other interval is polled as the specification reads it, so `4` does not speed up 16 to 63 ms the way `2` and `3` do. It applies to a Low- or Full-Speed device on a root port, and to a High-Speed or SuperSpeed device at a root port or behind a hub. Set the value to `4` and restart first, then set hidusbf (or another filter) to write `128`, `129` or `130`.
+
+- A device that itself asks for 128 to 130 ms is polled at 2000 to 8000 Hz while the value is `4`.
+- A filter that writes one of those codes while the value is not `4` gets what the number means without it: a Low- or Full-Speed device is polled every 128 ms, and a High-Speed or SuperSpeed one every 4.096 s.
+- A controller that refuses a code is caught and counted as `fastpoll.fallbacks`, and the device is then polled every 1 ms.
 
 This is outside the xHCI specification. A controller that refuses it is caught: the device runs at its normal rate and `XHCISNAP` counts it as `fastpoll.fallbacks`. A controller that accepts it and then misbehaves cannot be caught. It is untested ground.
 
