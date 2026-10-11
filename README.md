@@ -284,7 +284,7 @@ When the root hub or an external hub first reports its devices, the driver waits
 
 ### The Intel 7/8/9-series interrupt routing repair
 
-`XhciIntelIrqRoute`: fixes firmware that sends the xHCI controller's interrupt to a different line from the one it tells Windows. The Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so every USB device on it is slow or stops ([issue 12](docs/issues/12-e7250-xp64-boot-enable-slot-refused.md)).
+`XhciIntelIrqRoute`: fixes firmware that sends the xHCI controller's interrupt to a different line from the one it tells Windows. The Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so every USB device on it is slow or stops.
 
 - At each start and resume the driver reads the chipset's two routing registers and, where the value allows, points the interrupt at the line Windows assigned.
 - `1` (default; also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
@@ -322,7 +322,6 @@ When the root hub or an external hub first reports its devices, the driver waits
 - `1` (default): a Low- or Full-Speed device behind a hub gets the standard speed ID (Full Speed `1`, Low Speed `2`), when the table names neither speed and does not use that number for another.
 - `0`: off; such devices are refused. Restart after changing it.
 - No effect on a controller whose table lists Low and Full Speed or has no table, or on a device on a root port of its own.
-- See [issue 13](docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md).
 
 ### Selective suspend
 
