@@ -1482,6 +1482,114 @@ stick on 98 SE and 7 x64); the device itself is a bench clause: the owner or
 SweetLow retests that mouse on `2.2.0.3`, expecting Current Config Value 1,
 one open pipe `0x81`, a moving pointer and the two log records.
 
+### 6.10 An explicit StartFrame on a controller without Contiguous Frame ID (task 36.57, 2026-10-11)
+
+**The report** (owner, the E7250 bench, 2026-10-11): a Creative Sound
+Blaster Play! 2 (VID `041E` PID `323D`, Full Speed, audio and HID) played
+only hiss through `2.3.0.0` on Windows 7 x64, at 44.1 and 48 kHz alike,
+from the moment playback started until it stopped. The same device played
+correctly on Windows' own USB 2.0 stack, and a C-Media audio device
+(`0D8C:0014`) played correctly through this bus on the same machine. The
+Play 2's playback endpoint `0x01` is isochronous OUT, 200 bytes, `bInterval`
+1, asynchronous, and its 9-byte audio-class endpoint descriptor names a
+feedback endpoint in `bSynchAddress`: `0x83`, isochronous IN, 3 bytes (the
+10.14 format), `bInterval` 1, `bRefresh` 5. Interface 2 alternate 1 carries
+both. The C-Media's playback endpoint names none.
+
+**What the snapshot showed.** `XHCISNAP` at verbosity 3 during the hiss,
+the `.BIN` read against `XHCI_EXTENSION`'s layout (its amd64 size,
+132,944 bytes, is the dump's `ExtensionBytes`): `IsoSubmits` 0 and
+`IsoPacketsAnswered` 0 - no isochronous TD had ever been on a ring - with
+`TransfersSubmitted` 42 (control and interrupt), `TransfersCancelled` 0,
+`CommandsIssued` 4,420 (10 in a capture of the same machine without the
+device), 1,882 completions of code 27 (Stopped - Length Invalid), and
+`HcInfo.Cfc` 0: this controller (`8086:9CB1`) does not report Contiguous
+Frame ID capability (HCCPARAMS1 CFC, xHCI 4.11.2.5).
+
+**What `usbaudio.sys` sends** (static: Windows 7 SP1 `USBAUDIO.sys` x86 and
+x64, symbol names from the public symbols in `tools\symbols`;
+`legal-provenance.md` section 4):
+
+- `USBType1BuildIsochUrbRequest` gives a stream's data URB an explicit
+  `StartFrame` from a running frame counter, with no
+  `USBD_START_ISO_TRANSFER_ASAP`, when the stream has a feedback endpoint;
+  otherwise it sets `TransferFlags` to 4 (ASAP). The counter starts at the
+  current frame + 2 and advances by one a packet.
+- `USBType1AsyncEndpointPoll` reads the feedback endpoint every refresh
+  period (2^`bRefresh` frames, 32 here): `RESET_PIPE` (URB function 0x1E)
+  on the feedback pipe, then a one-packet, 3-byte isochronous IN URB at an
+  explicit `StartFrame` - the current frame + the refresh period + 2 at the
+  start, then advanced by the refresh period each poll.
+
+So every isochronous URB of an asynchronous Type I stream carries an
+explicit `StartFrame` on Windows 7, and every URB of an adaptive or
+synchronous one (the C-Media, QEMU's `usb-audio`) is ASAP - which is why
+no virtual machine and no other device had reached this path.
+
+**Why it failed.** Since batch (c)'s review (round 16, finding 2, and round
+17), `hcdIsoPublish` refused an explicit `StartFrame` whose packets could
+not all be given xHCI Frame IDs - no CFC, no frame sample, a packet outside
+the IST+1 to 895 frame window, or a cadence the Interval does not share -
+as `USBD_STATUS_BAD_START_FRAME`, rather than let the engine fall back to
+Start Isoch ASAP (SIA), which moves the start. On a controller without CFC
+no Frame ID is ever usable, so every one of these URBs was refused before a
+TRB was built: the device was put in its streaming alternate setting and
+sent nothing, and its output stage hissed. The command storm is
+`usbaudio.sys`'s own reading of the feedback endpoint: each `RESET_PIPE` on
+the running, idle isochronous endpoint is a Stop Endpoint (whose event is
+the code 27) and a Configure Endpoint that drops and adds it (`hcd_cfg.c`'s
+`RESET_PIPE`, unchanged), every 32 ms, with each refused data URB's
+abort and reset beside it. Neither was the fault.
+
+**The rule now.** An explicit `StartFrame` that `hcdIsoAdmit` accepted - no
+further ahead than a Frame ID can name (895 frames) and no further behind
+than usbdi's start-frame range - is never refused for want of Frame IDs. It
+is published with Frame IDs where all of its packets can have them, as
+before, and otherwise with SIA. That is Linux's rule
+(`external/linux/xhci-ring.c`, `xhci_queue_isoc_tx`: SIA by default, a
+Frame ID only when the controller has CFC and the frame is valid; reference
+source), and it is what this stream needs, because SIA means "one Interval
+after the last TD the endpoint ran": a stream whose URBs follow each other
+(the data pipe's contiguous counter) loses nothing, and a one-packet read
+at a refresh boundary (the feedback pipe) is read as soon as the
+controller can. What SIA cannot keep is the client's exact frame for a
+stream's first URB on an idle endpoint: it runs a few frames early or late.
+usbport would have scheduled it at its frame; this bus cannot on a
+controller without CFC, and Linux makes the same trade there. The
+URB's `StartFrame` is left as the client gave it, and the per-packet
+`Length` and `Status` are written as for any other request (section 6.5;
+for an IN packet, the bytes received).
+
+**What stays refused:** a `StartFrame` more than 895 frames ahead, or
+further behind than the range, still `BAD_START_FRAME` at admission; every
+other isochronous refusal is unchanged.
+
+**The rest of the device's path was checked and needs no change.** The
+9-byte endpoint descriptors parse as 7-byte ones (`bRefresh` and
+`bSynchAddress` are not read); `0x83` gets Interval 3 (1 ms), Max Packet
+Size and Max ESIT Payload 3, type Isoch IN; `0x01` Interval 3 and Max ESIT
+Payload 200; interface 2 alternate 1's two endpoints, with the class-specific
+descriptors between them, are both opened, in order; a 3-byte packet at
+offset 0 of a 3-byte buffer passes `XhciPipeIsoCheck` against Max ESIT
+Payload 3, and one byte more is refused. Host vectors in `test_pipe` and
+`test_td`.
+
+**The log.** Each of the first four such publications since the driver
+loaded for the controller records `iso.sia` in the note ring (verbosity 2
+or above; the count is `HCD_CONTROLLER.IsoStartsSia`): the slot in bits
+31:24, the DCI in 23:16, the reason in 15:12 (2 no CFC, 3 no frame sample,
+4 a packet outside the window or a cadence the Interval does not share)
+and the low 12 bits of `StartFrame` minus the current frame. A dump also
+shows it as `IsoSubmits` above `IsoSubmitsWithFrameId`.
+
+**Owed.** QEMU has no asynchronous audio device with a feedback endpoint,
+and its xHCI reports no CFC either, so the virtual-machine legs are
+regression legs only (QEMU's `usb-audio`, adaptive and ASAP, on 98 SE and
+7 x64 playing at the same timing; a stick copy). The device itself is a
+bench clause: on the E7250 the Play 2 plays a tone without hiss at 44.1 and
+48 kHz, `iso.sia` records with reason 2 for slot 2's DCIs 2 and 7, and
+`IsoSubmits` grows while `IsoSubmitsWithFrameId` stays 0.
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the

@@ -3369,6 +3369,36 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
     return 1;
 }
 
+/*
+ * Task 36.57: Frame IDs only when the client gave a start, the controller
+ * can be told one (CFC), the axis was sampled and every packet has one;
+ * SIA in every other case, the reason kept for the log. The order of the
+ * three SIA reasons is the order a reader can act on them in: a controller
+ * without CFC never uses a Frame ID, whatever the sample or the window.
+ */
+ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
+                           ULONG cfc, ULONG sampled)
+{
+    if (asap) {
+        return XHCI_ISO_START_ASAP;
+    }
+    if (!cfc) {
+        return XHCI_ISO_START_SIA_NO_CFC;
+    }
+    if (!sampled) {
+        return XHCI_ISO_START_SIA_NO_SAMPLE;
+    }
+    return XhciXferIsoUsesFrameIds(request) ? XHCI_ISO_START_FRAME_IDS
+                                            : XHCI_ISO_START_SIA_UNUSABLE;
+}
+
+ULONG XhciXferIsoSiaNote(ULONG slotId, ULONG dci, ULONG plan,
+                         ULONG startFrame, ULONG now)
+{
+    return ((slotId & 0xFFUL) << 24) | ((dci & 0xFFUL) << 16) |
+           ((plan & 0xFUL) << 12) | ((startFrame - now) & 0xFFFUL);
+}
+
 ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
                        ULONG transferFlagsIn,
                        XHCI_TRB *out,

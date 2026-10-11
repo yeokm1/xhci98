@@ -1119,6 +1119,11 @@ static PHCD_PIPE hcdPipeFromHandle(PHCD_USB_DEVICE dev, PVOID handle)
 /* Isochronous transfers                                                    */
 /* ----------------------------------------------------------------------- */
 
+/* How many SIA publications of an explicit StartFrame a start notes as
+ * `iso.sia` (36.57): the first few say which pipes and why; the rest are
+ * the same stream's. */
+#define HCD_ISO_SIA_NOTES 4UL
+
 static PUSBPORT_ISO_TRANSFER hcdIsoBlock(PHCD_XFER x)
 {
     return &x->Pipe->Iso[x - x->Pipe->Xfers].Block;
@@ -1264,9 +1269,13 @@ static ULONG hcdIsoFill(PHCD_XFER x)
  * the stream's position would open a gap or miss a service whenever the
  * estimate is off by one. An explicit StartFrame gets Frame IDs only when
  * the controller has CFC (4.11.2.5 p.200) and the frame axis is congruent;
- * the engine decides the rest, all or nothing. The extension's IsoScratch
- * and IsoLayout are shared by every isochronous pipe, which the controller
- * lock makes sound. Controller lock held.
+ * the engine decides the rest, all or nothing. An explicit StartFrame whose
+ * packets cannot all have Frame IDs goes out with SIA rather than being
+ * refused (task 36.57, design record 13 section 6.10): on a controller
+ * without CFC that is every one, and Windows 7's usbaudio.sys gives every
+ * URB of an asynchronous stream an explicit StartFrame. The extension's
+ * IsoScratch and IsoLayout are shared by every isochronous pipe, which the
+ * controller lock makes sound. Controller lock held.
  */
 static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
 {
@@ -1276,6 +1285,8 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     XHCI_ISO_REQUEST req;
     ULONG interval;
     ULONG answer;
+    ULONG sampled;
+    ULONG plan;
     ULONG start;
     ULONG now;
     ULONG i;
@@ -1294,7 +1305,8 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     req.MaxEsitPayload = pipe->Ep.MaxEsitPayload;
     req.PacketsPerFrame = (interval <= 3UL) ? (8UL >> interval) : 0UL;
     req.Frames.IstFrames = ext->HcInfo.IstFrames;
-    if (XhciFrameIdNow(ext, &now)) {
+    sampled = XhciFrameIdNow(ext, &now);
+    if (sampled) {
         req.Frames.CurrentFrame = now;
         req.Frames.Allowed = (ext->HcInfo.Cfc && !x->Asap) ? 1UL : 0UL;
     } else {
@@ -1310,20 +1322,16 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     for (i = 0; i < blk->NumberOfPackets; i++) {
         blk->Packet[i].FrameNumber = start + XhciPipeIsoFrameOf(i, interval);
     }
-    if (!x->Asap) {
-        /* The engine falls back to SIA for a group whose Frame IDs it cannot
-         * use, which would move an explicit StartFrame to "now" (Codex review
-         * of batch (c), round 16, finding 2). A start the controller cannot
-         * be told - no CFC, no frame sample, a packet cadence the endpoint's
-         * Interval does not share, or a packet outside the IST+1 to 895
-         * frame window - is refused as BAD_START_FRAME instead; the engine's
-         * own decision is asked, so the two cannot drift (round 17). */
-        if (!XhciXferIsoUsesFrameIds(&req)) {
-            hc->IsoBadStartFrames++;
-            x->Status = HCD_USBD_BAD_START_FRAME;
-            return XHCI_XFER_BAD_PARAM;
-        }
-    }
+    /* The engine falls back to SIA for a group whose Frame IDs it cannot
+     * use, which moves an explicit StartFrame to the controller's next
+     * service (batch (c) review, round 16, finding 2, refused it instead).
+     * Since 36.57 that is taken: a start the controller cannot be told - no
+     * CFC, no frame sample, a packet cadence the endpoint's Interval does
+     * not share, or a packet outside the IST+1 to 895 frame window - is
+     * published with SIA, as Linux publishes it, and noted. The plan asks
+     * the engine's own decision, so the two cannot drift (round 17). A start
+     * beyond what a Frame ID can name is still refused, by hcdIsoAdmit. */
+    plan = XhciXferIsoStartPlan(&req, x->Asap, ext->HcInfo.Cfc, sampled);
     answer = XhciXferSubmitIso(pipe->Queue, pipe->Ring, &req,
                                req.DirectionIn, &x->Xfer, x, ext->IsoScratch,
                                XHCI_XFER_MAX_ISO_TRBS, &ext->IsoLayout);
@@ -1340,6 +1348,15 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
         }
         if (ext->IsoLayout.CadenceMismatch && req.PacketsPerFrame != 0) {
             ext->IsoCadenceMismatches++;
+        }
+        if (plan >= XHCI_ISO_START_SIA_NO_CFC) {
+            hc->IsoStartsSia++;
+            if (hc->IsoStartsSia <= HCD_ISO_SIA_NOTES) {
+                XhciLogNoteLocked(ext, "iso.sia",
+                                  XhciXferIsoSiaNote(pipe->Device->SlotId,
+                                                     pipe->Dci, plan, start,
+                                                     now));
+            }
         }
         XHCI_DBG_VALUE_CHANGED(
             "hcd: isoch published, TRBs << 16 | Frame IDs << 8 | packets",

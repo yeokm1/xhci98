@@ -887,6 +887,32 @@ typedef struct _XHCI_ISO_REQUEST {
 ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
 
 /*
+ * How hcdIsoPublish schedules a request (task 36.57, design record 13
+ * section 6.10). An explicit StartFrame whose packets cannot all have Frame
+ * IDs is published with Start Isoch ASAP rather than refused: a controller
+ * without Contiguous Frame ID (xHCI 4.11.2.5) can never use one, and
+ * Windows 7's usbaudio.sys gives every URB of an asynchronous stream an
+ * explicit StartFrame. `asap` is the client's flag, `cfc` HCCPARAMS1.CFC and
+ * `sampled` whether the frame axis was read; the request's Frames.Allowed
+ * is the caller's `cfc && !asap && sampled`. Pure.
+ */
+#define XHCI_ISO_START_ASAP             0UL /* the client asked for ASAP  */
+#define XHCI_ISO_START_FRAME_IDS        1UL /* every packet a Frame ID    */
+#define XHCI_ISO_START_SIA_NO_CFC       2UL /* explicit, no CFC: SIA      */
+#define XHCI_ISO_START_SIA_NO_SAMPLE    3UL /* explicit, no frame sample  */
+#define XHCI_ISO_START_SIA_UNUSABLE     4UL /* explicit, a packet outside
+                                             * the window or a cadence the
+                                             * Interval does not share    */
+
+ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
+                           ULONG cfc, ULONG sampled);
+
+/* The `iso.sia` note's value: slot 31:24, DCI 23:16, plan 15:12, and the
+ * low 12 bits of StartFrame - now. Pure. */
+ULONG XhciXferIsoSiaNote(ULONG slotId, ULONG dci, ULONG plan,
+                         ULONG startFrame, ULONG now);
+
+/*
  * Decode one Transfer Event completion code **on an isochronous ring**.
  *
  * A separate entry point from `XhciXferCodeInfo` rather than three more cases

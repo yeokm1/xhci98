@@ -1258,7 +1258,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbsGone;
     ULONG UrbsWaited;               /* parked on a pipe's Waiting list   */
     ULONG UrbsMdlShort;             /* length past the MDL: refused      */
-    ULONG IsoBadStartFrames;        /* explicit StartFrame not schedulable */
+    ULONG IsoStartsSia;             /* explicit StartFrame sent as SIA     */
     ULONG WaitingKicks;             /* a waiter started by admission or a
                                      * cancel, not by a record's release  */
     ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */
