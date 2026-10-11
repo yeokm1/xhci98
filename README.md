@@ -459,7 +459,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 |---|---|---|
 | Windows 2000: a mounted USB drive comes back at Code 31 after a controller recovery or hibernation | Possible after hibernating with a USB drive mounted; otherwise rare | Other devices come back. Unplug and replug the drive, or disable and enable it. |
 | Windows ME: a UAS drive as the first USB storage device shows Code 2 | Rare: once per installation, only if a UAS drive is plugged in before any ordinary stick | ME has not yet copied its own USB storage files. Plug in any ordinary USB stick once, then replug the UAS drive. |
-| Disabling a controller the driver closed off hangs | Very rare: the controller must fail in a way the driver cannot recover from | The driver keeps every transfer in flight so the controller cannot write into freed memory, and the disable waits on them. Restart instead. A later release is planned to fix this. |
+| Disabling a controller the driver closed off hangs | Very rare: the controller must fail in a way the driver cannot recover from | The driver keeps every transfer in flight so the controller cannot write into freed memory, and the disable waits on them. Restart instead. |
 
 ### Untested ground
 
