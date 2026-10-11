@@ -156,46 +156,12 @@ The [release notes](docs/using/release-notes.md) have the limits.
 
 The `2.0.0.0` controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
 
-### Upgrading from 1.x.x.x to 2.y.y.y
-
-A `2.y.y.y` release replaces the `1.x.x.x` driver file, which has the same name; `1.2.0.0` was the last `1.x.x.x` release.
-
-On every system, update the "USB 2.0 eXtensible Host Controller (xhci98)" entry in Device Manager, and always pick the driver from a list rather than let Windows search: searching can reinstall the old driver from Windows' own copy instead.
-
-- **Windows 98 SE with NUSB**: do not use Update Driver while `1.x.x.x` is running: NUSB's `usbport.sys` crashes the machine with a blue screen as it stops the old driver. Instead:
-  1. Open an MS-DOS Prompt and type `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`.
-  2. Shut the machine down and switch it on again. The controller now shows a yellow mark.
-  3. In Device Manager open the controller, Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory.
-  4. Pick "xHCI98 USB 3.x eXtensible Host Controller", give it the Windows 98 SE CD when it asks for `usbd.sys`, and restart when asked.
-  5. Each USB device is found once more as new hardware; let Windows install it. It may ask for the CD again.
-
-  If you already updated in place and got the blue screen, restart: the `2.y.y.y` driver comes up on its own.
-- **Windows 98 SE with SweetLow's stack**: Update Driver, "Display a list of all the drivers in a specific location", Have Disk -> the `release-x86\` directory, pick "xHCI98 USB 3.x eXtensible Host Controller".
-
-  Windows does not ask you to restart, but you must: shut down and switch on again straight away. Until you do, USB devices stop working and Windows may respond slowly. After the restart each USB device is found once more as new hardware.
-- **Windows ME**: ME runs the same USB 2.0 stack as Windows 98 SE with SweetLow's, so follow that route above, restart included.
-- **Windows 2000**: Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory.
-
-  Windows lists three models: pick "xHCI98 USB 3.x eXtensible Host Controller", the first, not the Root Hub or the storage entry. It starts at once with no restart. At your next restart Windows may ask for one more; say Yes.
-- **Windows XP**: Driver -> Update Driver: "No, not this time", "Install from a list or specific location", "Don't search. I will choose the driver to install", Have Disk -> the package directory, "xHCI98 USB 3.x eXtensible Host Controller", Continue Anyway.
-
-  A second wizard follows for "xHCI98 USB 3.x Root Hub": "No, not this time", "Install the software automatically", Continue Anyway, Finish. No restart.
-- **Windows Vista and 7**: Update Driver Software -> "Browse my computer for driver software" -> "Let me pick from a list of device drivers on my computer" -> Have Disk -> the package directory -> "xHCI98 USB 3.x eXtensible Host Controller" -> "Install this driver software anyway". No restart on x64; on 32-bit Vista and 7 it asks for one, for the MSI helper `xhcimsi.sys`; restart when asked.
-
-  Do not just type the folder into the search box: Windows answers that the best driver is already installed and keeps the old one.
-
-On XP x64, Vista x64 and 7 x64 the same steps apply, pointed at `release-x64\`.
-
-After upgrading you can delete the `1.2.0.0` virtual-hub values `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` from the controller's driver key (see "Tuning" below for where it is). They have no effect under `2.y.y.y`, so leaving them is harmless too.
-
-After the upgrade every device is a new Device Manager entry, so a setting kept on a device's own entry, such as SweetLow's hidusbf polling rate, has to be applied again.
-
-### Updating from 2.y.y.y
-Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory. No file needs renaming, since neither `2.x` release uses NUSB's `usbport.sys`.
+### Upgrading the driver
+Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory.
 
 - **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
-- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use "Display a list of the known drivers" -> Have Disk, as in the steps above.
-- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where an update to `2.3.0.0` or later asks for a restart, for the MSI helper `xhcimsi.sys`.
+- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory, and pick "xHCI98 USB 3.x eXtensible Host Controller", the first of the three models listed.
+- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where an update to `2.3.0.0` or later asks for a restart, for the MSI helper `xhcimsi.sys`. On Vista x64 and 7 x64 the new driver, like the first install, runs in test-signing mode or on a start with driver signature enforcement disabled.
 
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
@@ -405,7 +371,6 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 
 | Limitation | Detail |
 |---|---|
-| Upgrading in place over a running `1.x.x.x` under NUSB blue-screens | NUSB's `usbport.sys` crashes the machine as it stops `1.x.x.x`, before `2.y.y.y` runs. Follow "Upgrading from 1.x.x.x to 2.y.y.y" above, which avoids it. |
 | Vista x64 and 7 x64 need test-signing mode | The 64-bit drivers carry the project's own test signature, not a Microsoft one. Turn on test-signing mode once ("Windows Vista x64 and 7 x64: test-signing mode" above), or disable driver signature enforcement with F8 at every start; otherwise the controller shows Code 52 or Code 39. |
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | Windows XP installed with the F6 floppy needs a PS/2 or built-in laptop keyboard | Setup copies Windows' own HID and USB helper files only with Microsoft's own USB controller drivers, so in GUI-mode Setup the USB keyboard and mouse wait for its device install, which first asks about the unsigned driver (default No). A USB-only keyboard cannot answer it; a PS/2 or built-in laptop keyboard can. Windows 2000 does not ask. |
