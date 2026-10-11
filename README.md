@@ -148,7 +148,8 @@ Install the new version over the old one with Update Driver on "xHCI98 USB 3.x e
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
 
 - On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry.
-- A hidusbf setting on such a device has to be applied again.
+
+If Windows finds a device again as new hardware after the upgrade, apply its hidusbf setting again.
 
 ### Updating xhciuas.sys over an older one
 
