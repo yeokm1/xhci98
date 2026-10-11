@@ -134,3 +134,235 @@ function Test-DriverVersionMatches {
     }
     return $true
 }
+
+# ------------------------------------------------------------------
+# The x64 test signature (design record 19; owner, 2026-10-11)
+# ------------------------------------------------------------------
+#
+# Every published x64 directory carries xhci98.sys and xhciuas.sys with an
+# embedded Authenticode signature by the project test certificate: SHA-1
+# file digest, no timestamp, no catalog. make-package.ps1 -TestSignPfx
+# applies it at staging and make-release.ps1 refuses an x64 cut without it.
+# What follows is the part both scripts and test-package.ps1 share: reading
+# a PE image's certificate table, deciding whether a signed image is exactly
+# a given unsigned one plus a signature, and judging a parsed signature
+# against the certificate the cut was given. The judgements are pure
+# functions of their inputs so that test-package.ps1 can drive them with
+# synthetic images and mock signatures - no key is ever needed to test them.
+
+$script:TestSignSubject = "CN=xhci98 project test signing (not trusted)"
+$script:TestSignCerName = "xhci98-test.cer"
+$script:TestSignPasswordVariable = "XHCI98_TESTSIGN_PW"
+$script:Sha1Oid = "1.3.14.3.2.26"
+
+function Get-PeSecurityLayout {
+    # Where a PE image keeps its checksum and its certificate-table directory
+    # entry, and what that entry says. Throws on anything that is not a PE
+    # image, so a stand-in text file is never mistaken for an unsigned driver.
+    param([byte[]]$Bytes)
+
+    if ($null -eq $Bytes -or $Bytes.Length -lt 0x40 -or $Bytes[0] -ne 0x4D -or $Bytes[1] -ne 0x5A) {
+        throw "not a PE image (no MZ header)"
+    }
+    $pe = [BitConverter]::ToInt32($Bytes, 0x3C)
+    if ($pe -lt 0x40 -or $pe + 24 + 2 -gt $Bytes.Length -or
+        [BitConverter]::ToUInt32($Bytes, $pe) -ne 0x00004550) {
+        throw "not a PE image (no PE signature at e_lfanew)"
+    }
+    $opt = $pe + 24
+    $magic = [BitConverter]::ToUInt16($Bytes, $opt)
+    $dirBase = switch ($magic) {
+        0x10b { $opt + 96 }
+        0x20b { $opt + 112 }
+        default { throw ("not a PE image (optional header magic 0x{0:X})" -f $magic) }
+    }
+    $numDirs = [BitConverter]::ToUInt32($Bytes, $dirBase - 4)
+    $secEntry = $dirBase + 4 * 8
+    if ($numDirs -lt 5 -or $secEntry + 8 -gt $Bytes.Length) {
+        throw "PE image has no certificate-table directory entry"
+    }
+    return [pscustomobject]@{
+        ChecksumOffset = $opt + 64
+        EntryOffset    = $secEntry
+        TableOffset    = [BitConverter]::ToUInt32($Bytes, $secEntry)
+        TableSize      = [BitConverter]::ToUInt32($Bytes, $secEntry + 4)
+        Magic          = $magic
+    }
+}
+
+function Test-SignedImageOf {
+    # Is $Signed exactly $Unsigned with an embedded signature appended? That
+    # is what signing changes and all it changes: the optional header's
+    # checksum, the certificate-table entry, up to seven bytes of zero
+    # padding to the table's 8-byte alignment, and the table itself at the
+    # end of the file. Everything else must be byte-for-byte the build, which
+    # is what lets make-release.ps1 keep tying the published bytes to the
+    # source stamp beside the build output.
+    param([byte[]]$Signed, [byte[]]$Unsigned)
+
+    try {
+        $u = Get-PeSecurityLayout -Bytes $Unsigned
+        $s = Get-PeSecurityLayout -Bytes $Signed
+    } catch {
+        return $false
+    }
+    if ($u.TableOffset -ne 0 -or $u.TableSize -ne 0) { return $false }
+    if ($s.TableOffset -eq 0 -or $s.TableSize -eq 0) { return $false }
+    if ($s.ChecksumOffset -ne $u.ChecksumOffset -or $s.EntryOffset -ne $u.EntryOffset) { return $false }
+    if ($s.TableOffset -lt $Unsigned.Length -or $s.TableOffset - $Unsigned.Length -gt 7) { return $false }
+    if ($s.TableOffset % 8 -ne 0) { return $false }
+    if ([int64]$s.TableOffset + [int64]$s.TableSize -ne [int64]$Signed.Length) { return $false }
+    for ($i = 0; $i -lt $Unsigned.Length; $i++) {
+        if ($i -ge $s.ChecksumOffset -and $i -lt $s.ChecksumOffset + 4) { continue }
+        if ($i -ge $s.EntryOffset -and $i -lt $s.EntryOffset + 8) { continue }
+        if ($Signed[$i] -ne $Unsigned[$i]) { return $false }
+    }
+    for ($i = $Unsigned.Length; $i -lt $s.TableOffset; $i++) {
+        if ($Signed[$i] -ne 0) { return $false }
+    }
+    return $true
+}
+
+function Get-EmbeddedSignature {
+    # The embedded Authenticode signature of a PE image, parsed: $null when
+    # the image carries none, otherwise the signer's thumbprint and subject,
+    # the digest algorithm, the digest the signature vouches for, the SHA-1
+    # digest of the image as it is now, and whether the PKCS #7 signature
+    # verifies over its own content. No chain is built: the project
+    # certificate is self-signed and trusted nowhere by design (record 19),
+    # so a chain verdict would say nothing this does not.
+    #
+    # The image digest is taken over the whole file in order, less the
+    # checksum, the certificate-table entry and the table - Authenticode's
+    # hash for an image whose sections lie in file order with nothing after
+    # them but the table, which is what the linker writes. An image laid out
+    # otherwise reads as a digest mismatch and is refused, never passed.
+    param([string]$Path)
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $layout = Get-PeSecurityLayout -Bytes $bytes
+    if ($layout.TableOffset -eq 0 -and $layout.TableSize -eq 0) { return $null }
+    if ([int64]$layout.TableOffset + [int64]$layout.TableSize -gt [int64]$bytes.Length -or $layout.TableSize -lt 8) {
+        throw "the certificate table runs past the end of the image"
+    }
+    $off = [int]$layout.TableOffset
+    $wlen = [BitConverter]::ToInt32($bytes, $off)
+    $wrev = [BitConverter]::ToUInt16($bytes, $off + 4)
+    $wtype = [BitConverter]::ToUInt16($bytes, $off + 6)
+    if ($wlen -lt 8 -or $wlen -gt $layout.TableSize -or $wrev -ne 0x0200 -or $wtype -ne 0x0002) {
+        throw ("the certificate table is not one PKCS #7 WIN_CERTIFICATE (length {0}, revision 0x{1:X4}, type 0x{2:X4})" -f $wlen, $wrev, $wtype)
+    }
+    $pkcs7 = New-Object byte[] ($wlen - 8)
+    [Array]::Copy($bytes, $off + 8, $pkcs7, 0, $wlen - 8)
+
+    Add-Type -AssemblyName System.Security
+    $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms
+    $cms.Decode($pkcs7)
+    if ($cms.SignerInfos.Count -ne 1) {
+        throw ("the signature has {0} signers, not one" -f $cms.SignerInfos.Count)
+    }
+    $signer = $cms.SignerInfos[0]
+    $valid = $true
+    try { $cms.CheckSignature($true) } catch { $valid = $false }
+
+    # SpcIndirectDataContent ends with the DigestInfo's OCTET STRING, so the
+    # digest it vouches for is the content's last bytes: 20 for SHA-1.
+    $content = $cms.ContentInfo.Content
+    $digestLen = if ($signer.DigestAlgorithm.Value -eq $script:Sha1Oid) { 20 } else { 32 }
+    $vouched = ""
+    if ($content.Length -ge $digestLen + 2 -and $content[$content.Length - $digestLen - 2] -eq 0x04 -and
+        $content[$content.Length - $digestLen - 1] -eq $digestLen) {
+        $vouched = (($content[($content.Length - $digestLen)..($content.Length - 1)] |
+                     ForEach-Object { $_.ToString("X2") }) -join "")
+    }
+
+    $sha1 = [System.Security.Cryptography.SHA1]::Create()
+    try {
+        $ck = [int]$layout.ChecksumOffset
+        $en = [int]$layout.EntryOffset
+        [void]$sha1.TransformBlock($bytes, 0, $ck, $null, 0)
+        [void]$sha1.TransformBlock($bytes, $ck + 4, $en - ($ck + 4), $null, 0)
+        [void]$sha1.TransformBlock($bytes, $en + 8, $off - ($en + 8), $null, 0)
+        [void]$sha1.TransformFinalBlock($bytes, 0, 0)
+        $actual = (($sha1.Hash | ForEach-Object { $_.ToString("X2") }) -join "")
+    } finally {
+        $sha1.Dispose()
+    }
+
+    return [pscustomobject]@{
+        Thumbprint     = $(if ($null -ne $signer.Certificate) { $signer.Certificate.Thumbprint } else { "" })
+        Subject        = $(if ($null -ne $signer.Certificate) { $signer.Certificate.Subject } else { "" })
+        DigestOid      = $signer.DigestAlgorithm.Value
+        VouchedDigest  = $vouched
+        ImageDigest    = $actual
+        SignatureValid = $valid
+        Timestamped    = ($signer.UnsignedAttributes.Count -gt 0)
+    }
+}
+
+function Test-ProjectTestSignature {
+    # The verdict on a parsed signature (Get-EmbeddedSignature's object, or a
+    # mock of one): "" when it is the signature record 19 prescribes, by the
+    # certificate whose thumbprint is given, otherwise the reason it is not.
+    param($Signature, [string]$Thumbprint)
+
+    if ($null -eq $Signature) { return "it carries no embedded signature" }
+    if ($Signature.Thumbprint -ne $Thumbprint) {
+        return ("it is signed by certificate {0}, not by the project test certificate {1}" -f $Signature.Thumbprint, $Thumbprint)
+    }
+    if ($Signature.DigestOid -ne $script:Sha1Oid) {
+        return ("its file digest is {0}, not SHA-1 ({1}), which Vista x64 cannot verify" -f $Signature.DigestOid, $script:Sha1Oid)
+    }
+    if (-not $Signature.SignatureValid) { return "its PKCS #7 signature does not verify" }
+    if ($Signature.VouchedDigest -eq "" -or $Signature.VouchedDigest -ne $Signature.ImageDigest) {
+        return ("the digest it vouches for ({0}) is not the image's ({1})" -f $Signature.VouchedDigest, $Signature.ImageDigest)
+    }
+    if ($Signature.Timestamped) { return "it carries a countersignature (timestamp), which record 19 does not take" }
+    return ""
+}
+
+function Get-TestSignPassword {
+    # The .pfx password, from XHCI98_TESTSIGN_PW or, where that is unset, a
+    # prompt that does not echo. Never printed and never written anywhere;
+    # make-release.ps1 hands it to its make-package.ps1 children through the
+    # same variable, in its own process environment only.
+    $pw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
+    if ($null -ne $pw) { return $pw }
+    $secure = Read-Host -AsSecureString "Password of the test-signing .pfx (input hidden)"
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+
+function Get-TestSignCertificate {
+    # Opens the .pfx with its password and returns what the scripts need from
+    # it: the thumbprint and the public certificate's DER bytes (the
+    # xhci98-test.cer the x64 directories carry). The private key is loaded
+    # only to prove it is there, as an ephemeral key, and released at once.
+    param([string]$PfxPath, [string]$Password)
+
+    if (-not (Test-Path -LiteralPath $PfxPath -PathType Leaf)) {
+        throw "no test-signing key at '$PfxPath'."
+    }
+    $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+    try {
+        $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($PfxPath, $Password, $flags)
+    } catch {
+        throw "the test-signing key '$PfxPath' cannot be opened with the password given (XHCI98_TESTSIGN_PW or the prompt): $($_.Exception.Message)"
+    }
+    try {
+        if (-not $cert.HasPrivateKey) {
+            throw "'$PfxPath' holds no private key, so nothing can be signed with it."
+        }
+        if ($cert.Subject -ne $script:TestSignSubject) {
+            throw "'$PfxPath' is the certificate '$($cert.Subject)', not the project test certificate '$($script:TestSignSubject)' (design record 19)."
+        }
+        return [pscustomobject]@{
+            Thumbprint = $cert.Thumbprint
+            Subject    = $cert.Subject
+            CerBytes   = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+        }
+    } finally {
+        $cert.Reset()
+    }
+}

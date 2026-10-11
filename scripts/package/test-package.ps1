@@ -2118,8 +2118,10 @@ try {
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
-        @{ Find = 'foreach ($name in ($declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable)) {';
+        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable';
            Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
+        @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
+           Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
         @{ Find = '$pswPublishable = @("portsw.vbs")';
            Why  = "the port switchover's user script is no longer one of the files a flavour directory may carry" }
     )) {
@@ -2280,6 +2282,133 @@ try {
     Assert-True ($releaserText.Contains('Assert-NoTestClient -Root $uploadRoot')) `
         "make-release.ps1's upload assembly no longer refuses the test client."
 
+
+    # --- the x64 test signature (design record 19) --------------------------
+    #
+    # No key is needed or used here. The judgements are pure functions in
+    # package-common.ps1, driven with synthetic PE images and mock parsed
+    # signatures; the refusals are reached through the scripts' arguments
+    # before any key would be opened. The one thing these cannot reach is
+    # SignTool itself, which the cut's own checks read on the signed bytes.
+    Write-Step "x64 test signature: the signed-image comparison"
+    function New-SyntheticPe {
+        # A minimal PE32+ header in $Size bytes: MZ, e_lfanew 0x80, the PE
+        # signature, optional-header magic 0x20B, 16 data directories, and a
+        # body of non-zero filler so a stray difference is visible.
+        param([int]$Size)
+        $b = New-Object byte[] $Size
+        for ($i = 0x200; $i -lt $Size; $i++) { $b[$i] = [byte](($i * 7 + 3) % 251 + 1) }
+        $b[0] = 0x4D; $b[1] = 0x5A
+        [BitConverter]::GetBytes([int]0x80).CopyTo($b, 0x3C)
+        [BitConverter]::GetBytes([uint32]0x00004550).CopyTo($b, 0x80)
+        $opt = 0x80 + 24
+        [BitConverter]::GetBytes([uint16]0x20B).CopyTo($b, $opt)
+        [BitConverter]::GetBytes([uint32]16).CopyTo($b, $opt + 108)
+        [BitConverter]::GetBytes([uint32]0x1234).CopyTo($b, $opt + 64)
+        return ,$b
+    }
+    function New-SyntheticSigned {
+        # $Unsigned plus a table of $TableLen bytes at the next 8-byte
+        # boundary, the checksum changed and the directory entry pointing at it.
+        param([byte[]]$Unsigned, [int]$TableLen, [byte]$Pad = 0)
+        $at = [int]([math]::Ceiling($Unsigned.Length / 8.0) * 8)
+        $s = New-Object byte[] ($at + $TableLen)
+        [Array]::Copy($Unsigned, $s, $Unsigned.Length)
+        for ($i = $Unsigned.Length; $i -lt $at; $i++) { $s[$i] = $Pad }
+        for ($i = $at; $i -lt $s.Length; $i++) { $s[$i] = 0xC3 }
+        $opt = 0x80 + 24
+        [BitConverter]::GetBytes([uint32]0x9999).CopyTo($s, $opt + 64)
+        [BitConverter]::GetBytes([uint32]$at).CopyTo($s, $opt + 112 + 32)
+        [BitConverter]::GetBytes([uint32]$TableLen).CopyTo($s, $opt + 112 + 36)
+        return ,$s
+    }
+    $peU = New-SyntheticPe -Size 1021
+    $peS = New-SyntheticSigned -Unsigned $peU -TableLen 64
+    Assert-True (Test-SignedImageOf -Signed $peS -Unsigned $peU) `
+        "Test-SignedImageOf refused an image that is the build plus a signature and nothing else."
+    $peBody = [byte[]]$peS.Clone(); $peBody[0x300] = [byte]($peBody[0x300] -bxor 1)
+    Assert-True (-not (Test-SignedImageOf -Signed $peBody -Unsigned $peU)) `
+        "Test-SignedImageOf accepted a signed image whose body differs from the build."
+    $pePad = New-SyntheticSigned -Unsigned $peU -TableLen 64 -Pad 1
+    Assert-True (-not (Test-SignedImageOf -Signed $pePad -Unsigned $peU)) `
+        "Test-SignedImageOf accepted non-zero bytes in the alignment padding before the signature."
+    $peTail = New-Object byte[] ($peS.Length + 8); [Array]::Copy($peS, $peTail, $peS.Length)
+    Assert-True (-not (Test-SignedImageOf -Signed $peTail -Unsigned $peU)) `
+        "Test-SignedImageOf accepted bytes after the certificate table."
+    Assert-True (-not (Test-SignedImageOf -Signed $peS -Unsigned $peS)) `
+        "Test-SignedImageOf accepted an already-signed image as the build."
+    Assert-True (-not (Test-SignedImageOf -Signed $peU -Unsigned $peU)) `
+        "Test-SignedImageOf accepted an unsigned image as the signed one."
+    Assert-True (-not (Test-SignedImageOf -Signed ([System.Text.Encoding]::ASCII.GetBytes("MZ not a driver")) -Unsigned $peU)) `
+        "Test-SignedImageOf accepted a stand-in that is not a PE image."
+    $peFile = Join-Path $script:work "synthetic-unsigned.sys"
+    [System.IO.File]::WriteAllBytes($peFile, $peU)
+    Assert-True ($null -eq (Get-EmbeddedSignature -Path $peFile)) `
+        "Get-EmbeddedSignature read a signature out of an image with an empty certificate-table entry."
+    $threw = $false
+    try { [void](Get-EmbeddedSignature -Path $driver) } catch { $threw = $true }
+    Assert-True $threw "Get-EmbeddedSignature did not refuse a text stand-in as a PE image, so it could pass one as unsigned."
+
+    Write-Step "x64 test signature: the verdict on a parsed signature (mocks)"
+    $tsThumb = "00112233445566778899AABBCCDDEEFF00112233"
+    $tsGood = [pscustomobject]@{ Thumbprint = $tsThumb; Subject = "CN=x"; DigestOid = "1.3.14.3.2.26";
+                                 VouchedDigest = "AB"; ImageDigest = "AB"; SignatureValid = $true; Timestamped = $false }
+    Assert-True ((Test-ProjectTestSignature -Signature $tsGood -Thumbprint $tsThumb) -eq "") `
+        "Test-ProjectTestSignature refused the signature record 19 prescribes."
+    $tsCases = @(
+        @{ Name = "unsigned";    Set = $null;                                 Says = "no embedded signature" },
+        @{ Name = "other cert";  Set = @{ Thumbprint = "FF" + $tsThumb.Substring(2) }; Says = "not by the project test certificate" },
+        @{ Name = "SHA-256";     Set = @{ DigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "bad PKCS #7"; Set = @{ SignatureValid = $false };          Says = "does not verify" },
+        @{ Name = "stale digest"; Set = @{ ImageDigest = "CD" };              Says = "is not the image's" },
+        @{ Name = "no digest";   Set = @{ VouchedDigest = ""; ImageDigest = "" }; Says = "is not the image's" },
+        @{ Name = "timestamped"; Set = @{ Timestamped = $true };              Says = "countersignature" }
+    )
+    foreach ($c in $tsCases) {
+        $mock = $null
+        if ($null -ne $c.Set) {
+            $mock = $tsGood.PSObject.Copy()
+            foreach ($k in $c.Set.Keys) { $mock.$k = $c.Set[$k] }
+        }
+        $why = Test-ProjectTestSignature -Signature $mock -Thumbprint $tsThumb
+        Assert-True ($why -match [regex]::Escape($c.Says)) `
+            ("Test-ProjectTestSignature on the '{0}' mock said '{1}', expected '{2}'." -f $c.Name, $why, $c.Says)
+    }
+
+    Write-Step "x64 test signature: the packager's and the cut's refusals"
+    $tsMissing = Join-Path $script:work "no-such-key.pfx"
+    $r = Invoke-Packager @("-InfPath", $prodInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-ts-x86"),
+                           "-TestSignPfx", $tsMissing)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "never signed") `
+        ("make-package.ps1 did not refuse -TestSignPfx on the x86 package. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
+                           "-OutDir", (Join-Path $script:work "pkg-ts-nokey"), "-TestSignPfx", $tsMissing)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "no test-signing key at") `
+        ("make-package.ps1 did not refuse a -TestSignPfx naming no file. Output:`n" + $r.Output)
+    $tsRel = Join-Path $script:work "rel-ts"
+    New-Item -ItemType Directory -Force -Path $tsRel | Out-Null
+    foreach ($bad in @(
+        @{ Args = @("-ReleasesDir", $tsRel);                                            Says = "was given no test-signing key" },
+        @{ Args = @("-ReleasesDir", $tsRel, "-Arch", "x86", "-TestSignPfx", $tsMissing); Says = "publishes none" },
+        @{ Args = @("-ReleasesDir", $tsRel, "-TestSignPfx", $tsMissing);                Says = "no test-signing key at" },
+        @{ Args = @("-UploadSetOnly", "-ReleasesDir", $tsRel, "-TestSignPfx", $tsMissing); Says = "stages nothing" }
+    )) {
+        $r = Invoke-Releaser $bad.Args
+        Assert-True ($r.ExitCode -ne 0) "make-release.ps1 accepted $($bad.Args -join ' ')."
+        Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
+            ("expected '$($bad.Says)' in the test-signing refusal. Output:`n" + $r.Output)
+    }
+    # And where the cut applies it: the x64 legs' packager runs are given the
+    # key, and both published x64 binaries are held to the signature.
+    foreach ($anchor in @(
+        @{ Find = '$pkgArgs += @("-TestSignPfx", $TestSignPfx)'; Why = "the x64 legs are no longer signed at staging" },
+        @{ Find = 'Assert-TestSigned -Sys $sys -BuiltSys $builtSys'; Why = "the published x64 xhci98.sys is no longer held to the signature" },
+        @{ Find = 'Assert-TestSigned -Sys $Sys -BuiltSys $builtSys'; Why = "the published x64 xhciuas.sys is no longer held to the signature" },
+        @{ Find = '-Signed:$legSigned'; Why = "the UAS check no longer knows the leg is signed" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
