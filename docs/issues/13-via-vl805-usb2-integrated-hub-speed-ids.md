@@ -220,7 +220,8 @@ Decoding", the downstream exception):
   `XhciPortRateFor`, so a device addressed at ID 2 is read as Low Speed
   everywhere and never as unknown. The Slot Context receives the raw ID.
 - **The switch.** `XhciUsb2HubSpeedFallback`, a REG_DWORD in the
-  controller's driver key, written by no INF: only `0` turns it off; read at
+  controller's driver key, written by every INF at 1 since roadmap-hcd 36.51
+  (owner, 2026-10-11; by no INF before): only `0` turns it off; read at
   each start (`hub.speed.value`, `hub.speed.fallback`).
 - **Diagnostics, ungated.** Counters appended at words 162 to 166 of the
   counter block: the switch as read and in effect, `TopoBehindHubNoSpeed`

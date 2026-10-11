@@ -1115,8 +1115,11 @@ round 2's advice of 0): 0 is today's behaviour bit for bit (capabilities,
 WAIT_WAKE refused, idle callbacks never called, Dx recorded only), so the
 release that carries sections 3 to 6 changes nothing for a user who does
 not set the value, and 1 turns them on - what the release notes tell a user
-who wants it. The INF writes nothing; the
-INF gate's SUSP-* rules stand. Built in 36.33: read in the start's value
+who wants it. The INF wrote nothing until the owner's decision of
+2026-10-11 (roadmap-hcd 36.51): since then every INF writes the 0, under
+the don't-overwrite flag, so the value is where a user looks for it and a
+user's 1 survives an update. The INF gate's SUSP-* rules, which refuse the
+OS's `DisableSelectiveSuspend` names, stand. Built in 36.33: read in the start's value
 pass, before `XhciInitController`, so stage B's controller setup (DNCTRL)
 follows it as well; only a REG_DWORD of 1 is on, and it turns stages A and
 B on together; absent, 0, any other number or another type is off. The

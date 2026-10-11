@@ -556,11 +556,16 @@ values under the same rule and flag: the eight above; `XhciTolerance`,
 `XhciIntervalCap` and `XhciAvgTrbEsit` (Phase 35, `2.2.0.0`);
 `XhciIntelIrqRoute` (36.3, at 1); `XhciMaxTransferKB` (36.22, at 1024);
 and `XhciInterruptMode`, `XhciPollIdleMs` and `XhciPollActiveMs` (36.8,
-at 0, 50 and 1; design record 15 section 3). Two more are read and
-written by no INF, so absent is their default: `XhciWideMap` (36.24,
-section 11.6; off when absent or 0, any other number on, owner 2026-10-10) and `XhciSelectiveSuspend`
-(36.33, design record 14 section 7; on only for a `REG_DWORD` of exactly 1). `txtsetup.oem` still
-writes none, so F6 Setup runs at the code defaults.
+at 0, 50 and 1; design record 15 section 3). Three more were read and
+written by no INF, so absent was their default: `XhciWideMap` (36.24,
+section 11.6; off when absent or 0, any other number on, owner 2026-10-10), `XhciSelectiveSuspend`
+(36.33, design record 14 section 7; on only for a `REG_DWORD` of exactly 1) and
+`XhciUsb2HubSpeedFallback` (36.49, issue 13; off only for a `REG_DWORD` 0).
+**Amended 2026-10-11 (roadmap-hcd 36.51; owner decision of that day):**
+every value the driver reads is written by the INFs with the driver's own
+default, so the INFs write nineteen, these three at 0, 0 and 1 - each the
+value that reads as an absent one does - under the same rule and flag.
+`txtsetup.oem` still writes none, so F6 Setup runs at the code defaults.
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by
@@ -4756,7 +4761,8 @@ text answers all three: stage 2 never asks for more registers than stage
      and every HAL or verifier that has real registers hands over a
      non-NULL base; the default's scope is 11.6.1's verdict);
    - the switch is `XhciWideMap`, a `DWORD` in the controller's key, read
-     at every start and not written by the INFs: absent or of another
+     at every start and written by the INFs at 0 (since roadmap-hcd 36.51,
+     owner, 2026-10-11; by no INF before): absent or of another
      type it is off (`HCD_WIDE_MAP_DEFAULT`, `hcd.h`, the one constant that
      sets the default; owner, 2026-10-10), 0 is off and any other number
      on. With it off every URB is sequential, exactly stage 1; the release

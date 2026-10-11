@@ -70,18 +70,19 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * its storage stack at the next reboot. */
 #define HCD_VALUE_MAX_TRANSFER  L"XhciMaxTransferKB"
 /* Task 36.33: selective suspend, stages A and B (design record 14 section
- * 7). Default 0; the INF writes nothing. */
+ * 7). Default 0; the INFs write the 0 (task 36.51). */
 #define HCD_VALUE_SELECTIVE_SUSPEND L"XhciSelectiveSuspend"
 /* Task 36.24: stage 2's whole-URB mapping (design record 13 section 11.6,
- * point 2), written by no INF: a DWORD, 0 off and anything else on;
- * absent or of another type is HCD_WIDE_MAP_DEFAULT. Read at every start;
- * on Windows 2000 and later only, and only past the start's register-free
- * check (hcd_dma.c, HcdDmaWideOpen). */
+ * point 2), written by the INFs at 0 (task 36.51): a DWORD, 0 off and
+ * anything else on; absent or of another type is HCD_WIDE_MAP_DEFAULT.
+ * Read at every start; on Windows 2000 and later only, and only past the
+ * start's register-free check (hcd_dma.c, HcdDmaWideOpen). */
 #define HCD_VALUE_WIDE_MAP      L"XhciWideMap"
 /* Issue 18: the default speed IDs for a Full- or Low-Speed device behind a
  * hub on a USB 2.0 root port whose speed table names no such speed
- * (XhciPortPsivForHubChild), written by no INF: only a DWORD 0 turns it
- * off; absent, another number or another type is on. Read at every start. */
+ * (XhciPortPsivForHubChild), written by the INFs at 1 (task 36.51): only a
+ * DWORD 0 turns it off; absent, another number or another type is on.
+ * Read at every start. */
 #define HCD_VALUE_HUB_SPEED     L"XhciUsb2HubSpeedFallback"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
@@ -292,7 +293,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
      * read here, before XhciInitController, so stage B's DNCTRL follows
      * it too. Only a DWORD 1 turns stages A and B on; absent, 0, another
      * value or another type is off - today's behaviour bit for bit. The
-     * INF writes nothing. */
+     * INFs write the 0 (task 36.51). */
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_SELECTIVE_SUSPEND, &value);
     hc->Counters.SuspSwitchRead =
