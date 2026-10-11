@@ -4308,12 +4308,14 @@ A value that is absent means the default each one states.
   works; a controller with no interrupt pin, or whose line the driver sees
   raised and never delivered, is polled - the driver reads its events on a
   timer. On Vista and 7 a message-signalled interrupt is used where Windows
-  grants one. 1 asks for the line: on Vista and 7 a message Windows grants
-  anyway is still used, and one that cannot be connected is polled; a
-  controller with no line fails to start (Code 10) on 98 SE to XP, and on
-  32-bit Vista and 7 when no line is offered and xhcimsi.sys is not
-  running. 2 polls always, at the cost of more processor wake-ups. Any
-  other value is 0.
+  grants one. 1 is the interrupt line only: a controller given no line -
+  on Vista and 7 also one given a message instead - fails to start (Code
+  10). 2 polls always, at the cost of more processor wake-ups. 3 is a
+  message-signalled interrupt only: on Vista and 7 the driver asks for the
+  message, and the controller fails to start (Code 10) if none is granted
+  or it cannot be connected (on 32-bit, when xhcimsi.sys is not running);
+  on 98 SE, ME, 2000 and XP, which have none, 3 always fails the start.
+  Any other value is 0.
   Read when the controller starts: disable and enable it, or restart.
 
   While polling, XhciPollIdleMs (default 50, held to 5000; 0 is 50) is how

@@ -201,7 +201,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciMaxTransferKB` | The largest UAS command, in KiB (a multiple of `4`) | `64` | `2048` | `1024` | `1024` |
-| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line where Windows assigns one (see "Polling and message-signalled interrupts"), `2` polling | `0` | `2` | `0` | `0` |
+| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling, `3` a message-signalled interrupt only (see "Polling and message-signalled interrupts") | `0` | `3` | `0` | `0` |
 | `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
 | `XhciPollActiveMs` | While polling, the shortest period with transfers outstanding, in ms (with only a mouse's or keyboard's periodic transfers outstanding, the endpoint's interval is used, held between this and the idle period) | `1` | `XhciPollIdleMs` | `1` | `1` |
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | not written |
@@ -315,10 +315,11 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
   2. The controller's interrupt line, where it has one and Windows assigned it.
   3. Polling: no interrupt pin, none assigned, or a granted message that could not connect.
   4. After the start, a line the driver sees raised that never reaches it switches to polling by itself.
-- `1`: the interrupt line.
-  - No line at all: the controller fails to start (Code 10).
-  - On Vista and 7, a message-signalled interrupt instead (for example because the controller has no line): the driver uses it. If it cannot be connected, the driver polls; on 32-bit Vista and 7 without the helper and with no line offered, the start fails (Code 10).
+- `1`: the interrupt line only. With no line, the controller fails to start (Code 10).
 - `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers.
+- `3`: a message-signalled interrupt only (Vista and 7). With no message, the controller fails to start (Code 10).
+
+Under `1`, Vista and 7 are asked for the line, and a controller that is given a message instead (for example because it has no line) fails to start. Under `3`, Vista and 7 are asked for the message; it fails to start when none is granted or it cannot be connected, which on 32-bit means `xhcimsi.sys` is not running. Windows 98 SE, ME, 2000 and XP have no message-signalled interrupts, so `3` always fails there.
 
 Two more values set the polling periods, in ms:
 

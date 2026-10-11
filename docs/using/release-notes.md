@@ -1120,16 +1120,22 @@ no message-signalled interrupts and are unchanged.
   waiting for the restart: code 28 on 7, code 1 on Vista), so its USB 3
   ports work from the next start of Windows on, with the message. If
   `xhcimsi.sys` is missing or does not load, the controller keeps its
-  interrupt line.
+  interrupt line under `XhciInterruptMode` `0`.
 - **Asking for the interrupt line** on Vista and 7: set `XhciInterruptMode`
-  to `1` and disable and enable the controller (a message Windows grants
-  anyway is still used, and one that cannot be connected polls; see
-  "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"), or set `MSISupported` to `0`
-  under `Interrupt Management\MessageSignaledInterruptProperties` in the
-  controller's hardware key (Device Parameters) and restart. On 32-bit
-  Vista and 7 with no `xhcimsi.sys` running, a controller that offers no
-  interrupt line at all then fails to start under `XhciInterruptMode`
-  `1` (Device Manager shows Code 10), as it does on XP; set `0` again.
+  to `1` and disable and enable the controller, or set `MSISupported` to
+  `0` under `Interrupt Management\MessageSignaledInterruptProperties` in
+  the controller's hardware key (Device Parameters) and restart. Under `1`
+  the driver asks Windows for the line; if Windows grants a message anyway
+  (a controller that offers no line), the controller fails to start
+  (Device Manager shows Code 10), on both architectures. Set `0` again.
+- **Asking for a message-signalled interrupt** on Vista and 7: set
+  `XhciInterruptMode` to `3` and disable and enable the controller. The
+  driver asks Windows for the message alone and uses it; if Windows
+  grants none (for instance with `MSISupported` `0`), or the message
+  cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not
+  running), the controller fails to start (Code 10), with no fallback to
+  the line or to polling. On Windows 98 SE, ME, 2000 and XP, which have no
+  message-signalled interrupts, `3` always fails the start.
 - **Going back to an earlier version** on Vista or 7: the request for a
   message stays in the hardware key, and releases before `2.3.0.0` do not
   know what to do with a message. Before installing an older package,
@@ -1219,14 +1225,21 @@ Vista and 7: message-signalled interrupts").
 
 | `XhciInterruptMode` | Effect |
 |---|---|
-| `0`, absent, not a `DWORD`, `3`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
-| `1` | The interrupt line, as `2.2.0.0`. On Vista and 7 the driver asks Windows for the line rather than a message; if Windows grants a message anyway it is used, and if a message cannot be connected the controller is polled. A controller with no line fails to start (Device Manager: Code 10): on Windows 98 SE to XP, and on 32-bit Vista and 7 when no line is offered and `xhcimsi.sys` is not running |
+| `0`, absent, not a `DWORD`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
+| `1` | The interrupt line only, as `2.2.0.0`, on every system. On Vista and 7 the driver asks Windows for the line rather than a message. A controller given no line - no interrupt, no interrupt pin, or on Vista and 7 a message Windows grants anyway - fails to start (Device Manager: Code 10) |
 | `2` | Polling always, even where the line works. For a controller whose interrupt misbehaves; it costs more processor wake-ups |
+| `3` | A message-signalled interrupt (MSI or MSI-X) only. On Vista and 7 the driver asks Windows for the message alone; if none is granted, or it cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not running), the controller fails to start (Code 10), with no fallback to the line or to polling. On Windows 98 SE, ME, 2000 and XP (32- and 64-bit), which have no message-signalled interrupts, `3` fails the start |
 
 | Value | Default | Effect |
 |---|---|---|
 | `XhciPollIdleMs` | `50` | While polling, how often (in ms) the driver looks when nothing is outstanding. `0` runs as `50`; above `5000` is held to `5000`. A device plugged in waits at most this long to be seen |
 | `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
+
+A start that `1` or `3` refuses records why: with `XhciLogDebugView` set,
+DebugView shows the start's `intr.reason` and `start.refused.delivery`
+lines (14: a message granted under `1`; 16: no message granted under
+`3`; 17: the message not connected; 18: a system with no
+message-signalled interrupts) beside the Code 10.
 
 Neither period matters while the controller has a working interrupt line
 or a message. Polling adds up to one period of delay to each completed
