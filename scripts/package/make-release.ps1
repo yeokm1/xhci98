@@ -4019,11 +4019,10 @@ debug throughout, in its build scripts and its documentation alike.)
 ==============================================================================
 
 Every value this driver reads from the controller's driver key. There are
-nineteen, all DWORDs. The install writes sixteen, each at the default it
-states below except XhciImodInterval250ns, which it writes as 160;
-XhciWideMap, XhciSelectiveSuspend and XhciUsb2HubSpeedFallback are written
-by no install, and are read only when you add them yourself. The install
-writes each only where it is missing, so a value you changed survives an
+nineteen, all DWORDs, and the install writes all nineteen, each at the
+default it states below except XhciImodInterval250ns, which it writes as
+160, so every one is already in the key to change. The install writes
+each only where it is missing, so a value you changed survives an
 install or update; to go back to the default, set it by hand, or delete
 the value and update the driver. If an earlier install left
 XhciImodInterval250ns at 500, the update keeps it; set it to 160 by hand.
@@ -4353,7 +4352,7 @@ A value that is absent means the default each one states.
   XhciWideMap  -  two transfer pieces at once
   ...........................................
 
-  NOT WRITTEN BY THE INSTALL; absent or 0 is off. Set to 1 and restart
+  Written as 0 by the install; 0 or absent is off. Set to 1 and restart
   Windows, and on Windows 2000 and later the driver gives a large bulk
   write on any device, and a large bulk read on a UAS drive's streams, to
   the controller two pieces at a time; a UAS drive at SuperSpeed may also
@@ -4368,7 +4367,7 @@ A value that is absent means the default each one states.
   XhciSelectiveSuspend  -  putting idle devices to sleep
   ......................................................
 
-  NOT WRITTEN BY THE INSTALL; absent, 0 or any number but 1 is off, and
+  Written as 0 by the install; 0, absent or any number but 1 is off, and
   the driver then suspends no device. Set to 1 and restart, and a USB 2.0
   or SuperSpeed device is suspended when Windows asks and woken when
   Windows asks again or the device signals a remote wake. Hubs, the root
@@ -4379,13 +4378,23 @@ A value that is absent means the default each one states.
   XhciUsb2HubSpeedFallback  -  Low- and Full-Speed IDs behind a hub
   .................................................................
 
-  NOT WRITTEN BY THE INSTALL; absent, 1 or any number but 0 is on. Some
-  controllers - the VIA VL805 is one - list only High Speed in the speed
-  table of the USB 2.0 port their built-in hub hangs from. With this on, a
-  Low- or Full-Speed device behind such a hub gets the standard speed ID
-  where the table names neither that speed nor that ID; a table that names
-  them is followed. Set 0 and restart to refuse such a device instead. It
-  has never run on a VL805.
+  Written as 1 by the install; 1, absent or any number but 0 is on.
+
+  Some controllers reach Low- and Full-Speed devices only through a USB
+  2.0 hub built into the chip, and the speed table of the USB 2.0 port
+  that hub hangs from names High Speed alone; the VIA VL805 (1106:3483) is
+  one. Every mouse, keyboard and other Low- or Full-Speed device on such a
+  controller sits behind that hub, and the driver must write a speed ID
+  for each of them from that table. With this on, such a device gets the
+  standard speed ID (Full Speed 1, Low Speed 2) when the table names
+  neither that speed nor that number; a table that names them is
+  followed, a controller with no table or one that lists Low and Full
+  Speed is not affected, and a device on a root port of its own is never
+  given one. It is on by default because without it every such device on
+  such a controller is refused. Set 0 and restart to refuse them again.
+  XHCISNAP shows whether it is on and counts the devices given an ID
+  (Usb2HubSpeedFallbacks) and those still refused (TopoBehindHubNoSpeed).
+  It was built without the hardware and has never run on a VL805.
 
   THOSE NINETEEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in

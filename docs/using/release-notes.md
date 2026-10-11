@@ -221,6 +221,11 @@ detail, and what each rests on.
   Full-Speed device on such a controller fails; set
   `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
   Low- and Full-Speed IDs behind a hub").
+- **Every registry value the driver reads is in its key after an
+  install.** The install writes all nineteen, now including `XhciWideMap`
+  `0`, `XhciSelectiveSuspend` `0` and `XhciUsb2HubSpeedFallback` `1`, each
+  the value a missing one reads as, so nothing behaves differently; an
+  update keeps a value you set ("Registry settings").
 
 ## Targets and their standing
 
@@ -1153,10 +1158,8 @@ been read in QEMU guests only (the readings are listed in the run record).
 
 ## Registry settings
 
-Each value is a `DWORD` in the controller's driver (software) key. The
-install writes sixteen; three more, `XhciWideMap`, `XhciSelectiveSuspend`
-and `XhciUsb2HubSpeedFallback`, are read only when you add them yourself,
-in the same key:
+Each value is a `DWORD` in the controller's driver (software) key, and
+the install writes every value the driver reads, nineteen, in this key:
 
 | Windows | Key |
 |---|---|
@@ -1175,7 +1178,7 @@ that say so, disable and enable the controller in Device Manager).
 `XhciForceBulkOnly` is the exception: it is read as each device is
 enumerated ("XhciForceBulkOnly").
 
-The install writes all sixteen: each at the driver's own default, except
+The install writes all nineteen: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
@@ -1183,7 +1186,10 @@ default, set it by hand, or delete the value and update the driver.
 `2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute`,
 `XhciMaxTransferKB`, `XhciInterruptMode`, `XhciPollIdleMs` and
 `XhciPollActiveMs` are new in `2.3.0.0`, and an update over `2.2.0.0` adds
-them. Since `2.3.0.0` the
+them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
+`XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
+install too, at the value that reads as a missing one; an update keeps any
+of them you had already added. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written
@@ -1606,7 +1612,7 @@ time, and file reads no faster than at `64`.
 On Windows 2000 and later the controller driver gives a large bulk
 transfer to the controller two pieces at a time, the next one queued
 before the current one ends, where `2.2.0.0` and earlier gave one piece and waited -
-when this value turns it on. It is **off unless you set it**. It applies to
+when this value turns it on. It is **off unless you set it to `1`**. It applies to
 large bulk writes on any device, and to large bulk reads only on a UAS
 drive's streams. It does so only where the machine's DMA needs no
 translation - the check is made at every start, and again for each
@@ -1615,9 +1621,9 @@ transfer:
 | | |
 |---|---|
 | Key | the controller's driver key, where the install writes the other `Xhci` values ("Registry settings", above): on 2000, XP, Vista and 7 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`, the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller" (on Vista and 7 Device Manager's Details tab gives it as the "Driver key") |
-| Value | `XhciWideMap`, a `DWORD`; add it with `regedit` (New, DWORD Value) or a `.reg` file |
-| Default | off in `2.2.0.3` and `2.3.0.0`: no install writes it, and a missing value means off |
-| On | `1`, then **restart Windows**; `0`, or deleting the value, and a restart turn it off again |
+| Value | `XhciWideMap`, a `DWORD`; change it with `regedit` (Modify) or a `.reg` file |
+| Default | off: the install writes `0`, and a missing value means off too |
+| On | `1`, then **restart Windows**; `0` and a restart turn it off again |
 
 The decision rests on a reading of every Windows 2000, XP, Vista and 7 HAL
 of the service packs these notes name, x86 and x64. Later HAL hotfixes were
@@ -1637,7 +1643,7 @@ changed it.
 
 ### XhciSelectiveSuspend: putting idle devices to sleep
 
-New in `2.3.0.0`, and **off unless you set it**. Up to `2.2.0.0` the
+New in `2.3.0.0`, and **off unless you set it to `1`**. Up to `2.2.0.0` the
 driver never suspended a device: it answered Windows' power requests for
 a device by recording them, so an idle device kept drawing power. With
 this value at `1` the driver suspends a device when Windows asks it to -
@@ -1651,7 +1657,7 @@ Windows.
 | | |
 |---|---|
 | Key | the controller's driver key ("Registry settings", above) |
-| Value | `XhciSelectiveSuspend`, a `DWORD`; no install writes it |
+| Value | `XhciSelectiveSuspend`, a `DWORD`; the install writes `0` |
 | `0`, absent, any other number or not a `DWORD` | Off, the default: the driver behaves as `2.2.0.0` did, bit for bit |
 | `1` | On, for USB 2.0 devices (High, Full and Low Speed, at a root port or behind a hub) and SuperSpeed devices alike |
 
@@ -1691,7 +1697,7 @@ controller's own ports are not affected.
 | | |
 |---|---|
 | Key | the controller's driver key ("Registry settings", above) |
-| Value | `XhciUsb2HubSpeedFallback`, a `DWORD`; no install writes it |
+| Value | `XhciUsb2HubSpeedFallback`, a `DWORD`; the install writes `1` |
 | Absent, `1`, any other number or not a `DWORD` | On, the default |
 | `0` | Off: such a device is refused, as in `2.2.0.0` |
 
@@ -1996,10 +2002,12 @@ or says it was found by reading the code.
   floppy".
 - **After an update from `2.0.0.0`, some devices are found once more as new
   hardware**, one time each. See "Updating from 2.y.y.y".
-- **After an update from `2.0.0.0`, the root hub's Driver tab still shows
-  `2.0.0.0`** until the root hub is updated too, although it runs the new
-  file; and Windows 98 SE and ME keep running `2.0.0.0` until the next
-  restart, which they do not ask for. Same section.
+- **After an update, the root hub's Driver tab still shows the old
+  version** until the root hub is updated too, although it runs the new
+  file (read again after an update from `2.2.0.0` on Windows 2000, XP and
+  XP x64). On Windows 98 SE and ME the old driver also keeps running until
+  the next restart, which they do not ask for (read again after an update
+  from `2.2.0.0`). Same section.
 - **Windows Vista and 7: deleting the driver keeps the older packages.**
   "Delete the driver software for this device" removes only the package in
   use, and Windows may install an older one the next time it finds the
