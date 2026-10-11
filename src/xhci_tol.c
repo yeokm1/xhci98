@@ -87,12 +87,17 @@ ULONG XhciTolNoSoftRetry(ULONG vendorDevice)
 }
 
 ULONG XhciTolRetryScope(ULONG tolerance, ULONG vendorDevice, ULONG bulkOrInt,
-                        ULONG streams, ULONG behindTt)
+                        ULONG behindTt)
 {
-    if (!tolerance || !bulkOrInt || streams || behindTt) {
+    if (!tolerance || !bulkOrInt || behindTt) {
         return 0;
     }
     return XhciTolNoSoftRetry(vendorDevice) ? 0UL : 1UL;
+}
+
+ULONG XhciTolQemuStreamQuirk(ULONG vendorDevice)
+{
+    return (vendorDevice == XHCI_TOL_QEMU_XHCI_ID) ? 1UL : 0UL;
 }
 
 ULONG XhciTolRetryDivert(ULONG inScope, ULONG code, ULONG isHead,

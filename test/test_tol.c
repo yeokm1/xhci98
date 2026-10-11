@@ -18,6 +18,7 @@
 
 #define AMD_ID      0x15B61022UL
 #define AMD_NOSR    0x43B91022UL
+#define QEMU_XHCI   0x000D1B36UL
 #define ETRON_NOSR  0x70521B6FUL
 #define INTEL_ID    0x9D2F8086UL
 
@@ -215,22 +216,24 @@ static void test_retry(void)
     CHECK_EQ(XhciTolNoSoftRetry(ETRON_NOSR), 1, "7052 listed");
     CHECK_EQ(XhciTolNoSoftRetry(AMD_ID), 0, "other AMD not");
 
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0, 0), 1,
+    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0), 1,
              "bulk in scope");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0, 0),
+    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0),
              1, "interrupt in scope");
-    CHECK_EQ(XhciTolRetryScope(0, AMD_ID, 1, 0, 0), 0,
+    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0), 1,
+             "36.54: a stream's own queue in scope on the same terms");
+    CHECK_EQ(XhciTolRetryScope(0, AMD_ID, 1, 0), 0,
              "tolerance 0");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 0, 0, 0), 0,
+    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 0, 0), 0,
              "EP0 not");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 0, 0, 0), 0,
+    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 0, 0), 0,
              "isochronous not");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 1, 0), 0,
-             "streams not");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 0, 1), 0,
+    CHECK_EQ(XhciTolRetryScope(1, AMD_ID, 1, 1), 0,
              "behind a TT not");
-    CHECK_EQ(XhciTolRetryScope(1, AMD_NOSR, 1, 0, 0), 0,
+    CHECK_EQ(XhciTolRetryScope(1, AMD_NOSR, 1, 0), 0,
              "listed controller not");
+    CHECK_EQ(XhciTolRetryScope(1, QEMU_XHCI, 1, 0), 1,
+             "QEMU's xHCI in scope");
 
     CHECK_EQ(XhciTolRetryDivert(1, XHCI_CC_USB_TRANSACTION_ERROR, 1, 0), 1,
              "first error diverted");
@@ -255,7 +258,7 @@ static void test_retry(void)
              0, "out of scope: not the retry's");
     CHECK_EQ(XhciTolRetryExhausted(1, XHCI_CC_STALL, 1, 3), 0,
              "a stall not");
-    CHECK_EQ(XhciTolRetryExhausted(XhciTolRetryScope(0, AMD_ID, 1, 0, 0),
+    CHECK_EQ(XhciTolRetryExhausted(XhciTolRetryScope(0, AMD_ID, 1, 0),
                                    XHCI_CC_USB_TRANSACTION_ERROR, 1, 3),
              0, "tolerance 0 counts no exhaustion");
 
@@ -1435,9 +1438,50 @@ static void test_start(void)
              "an even number of ULONGs");
 }
 
+/*
+ * 36.54 (design record 17 section 4.12.4): QEMU's stream-context quirk is
+ * armed on QEMU's xHCI, PCI 1B36:000D, and on no other ID - not another
+ * Red Hat / QEMU device, not the halves swapped or one bit off, not any real
+ * controller this driver knows of, not an unread ID.
+ */
+static void test_qemu_stream_quirk(void)
+{
+    static const ULONG others[] = {
+        0x00000000UL,   /* the ID not read                               */
+        0xFFFFFFFFUL,   /* a config space that answered all-ones         */
+        0x1B36000DUL,   /* vendor and device swapped                     */
+        0x000D1B37UL,   /* vendor one off                                */
+        0x000C1B36UL,   /* device one off                                */
+        0x000E1B36UL,   /* device one off the other way                  */
+        0x00011B36UL,   /* another Red Hat / QEMU PCI device             */
+        0x800D1B36UL,   /* a high device bit                             */
+        0x000D0000UL,   /* the device with no vendor                     */
+        0x00001B36UL,   /* the vendor with no device                     */
+        0x15B61022UL,   /* AMD                                           */
+        0x43B91022UL,   /* AMD, XHCI_NO_SOFT_RETRY                       */
+        0xA12F8086UL,   /* Intel Sunrise Point                           */
+        0x9CB18086UL,   /* Intel Wildcat Point-LP                        */
+        0x34831106UL,   /* VIA VL805                                     */
+        0x11421B21UL,   /* ASMedia ASM1042A                              */
+        0x01941033UL,   /* Renesas uPD720200                             */
+        0x70521B6FUL,   /* Etron                                         */
+        0x11001B73UL    /* Fresco Logic                                  */
+    };
+    ULONG i;
+
+    CHECK_EQ(XHCI_TOL_QEMU_XHCI_ID, 0x000D1B36UL,
+             "the gate is device 000D << 16 | vendor 1B36");
+    CHECK_EQ(XhciTolQemuStreamQuirk(QEMU_XHCI), 1, "QEMU's xHCI: armed");
+    for (i = 0; i < sizeof(others) / sizeof(others[0]); i++) {
+        CHECK_EQ(XhciTolQemuStreamQuirk(others[i]), 0,
+                 "any other ID: never armed");
+    }
+}
+
 int main(void)
 {
     test_values();
+    test_qemu_stream_quirk();
     test_clock();
     test_cap();
     test_cap_fastpoll();

@@ -3309,6 +3309,40 @@ ULONG XhciRingDequeuePA(const XHCI_RING *ring);
  */
 ULONG XhciRingDequeueCycle(const XHCI_RING *ring);
 
+/*
+ * 36.54 (design record 17 section 4.12.3): an EMPTY ring (dequeue at the
+ * enqueue) started again at its base, in place, as XhciRingInit leaves a
+ * new one - every TRB zeroed, the Link TRB rewritten with Toggle Cycle,
+ * enqueue and dequeue 0, producer cycle 1 - for a caller that is about to
+ * give its endpoint a new context (a Configure Endpoint after a Reset
+ * Device, or a Drop and Add), so no position on the ring is owed to the
+ * controller. A ring still holding TRBs is refused (XHCI_RING_NOT_COMPLETE)
+ * and left as it was. IRQL: any; the caller owns the ring.
+ */
+ULONG XhciRingRestart(PXHCI_RING ring);
+
+/*
+ * 36.54 (design record 17 section 4.12.4): the Set TR Dequeue a stream's
+ * ring owes after a Stop or Reset Endpoint on QEMU's xHCI, which re-reads
+ * every Stream Context with its consumer cycle forced to 1 and ignores the
+ * DCS it holds. `contextDw0` is the stream's Stream Context dword 0 as the
+ * controller left it: QEMU's own restart point. Inside the TDs the ring
+ * still holds (from its software dequeue to its enqueue) that address is
+ * kept, with the cycle the producer wrote there - the TRB's own cycle bit,
+ * the producer cycle at the enqueue; an address on the Link TRB is first
+ * taken as the base, the same position named as a TD's first TRB, and then
+ * judged as any other; anywhere else - behind the software dequeue, where
+ * every TRB's completion
+ * was reported and retired, past the enqueue, where none was written, or
+ * off the ring - it is replaced by the software dequeue with its DCS
+ * (XhciRingDequeueCycle). The result in *dequeuePA and *dcs. Returns 1 when
+ * the command is owed - the DCS is 0, which QEMU's forced 1 gets wrong, or
+ * the address differs from the context's - and 0 when the forced 1 at
+ * QEMU's own address is right. Pure.
+ */
+ULONG XhciRingResyncOwed(const XHCI_RING *ring, ULONG contextDw0,
+                         PULONG dequeuePA, PULONG dcs);
+
 ULONG XhciEventRingInit(PXHCI_EVENT_RING ring,
                         volatile XHCI_TRB *base,
                         ULONG basePA,
@@ -8835,7 +8869,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 167UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 173UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 

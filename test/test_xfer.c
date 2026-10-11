@@ -4242,6 +4242,73 @@ static void test_retry_settle_moves_dequeue(void)
     CHECK_EQ(fix.queue.Head, second, "and the failed TD is off the queue");
 }
 
+/*
+ * 36.54 (design record 17 section 4.12.2): a stream's queue, in scope as a
+ * bulk pipe's is, diverting a Transaction Error on a TD of a cycle-0 lap -
+ * the stream ring's dequeue and DCS across the soft retry. Diverted, the
+ * software dequeue stays on the TD with that TD's own cycle, so no Set TR
+ * Dequeue is owed and the controller's saved state is the one that counts;
+ * replayed (today's path), it moves past the TD on the producer's cycle.
+ * And a queue that restarts with its ring (section 4.12.3) forgets its
+ * mid-TD tails only when it holds no TD.
+ */
+static void test_retry_stream_wrap(void)
+{
+    XFER_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER t;
+    ULONG token;
+    ULONG gen;
+    ULONG i;
+
+    fixture_init(&fix, 8);
+    fix.queue.RetryScope = 1;
+    for (i = 0; i < 7; i++) {
+        CHECK_EQ(fixture_submit_interrupt(&fix, 0, 8), XHCI_XFER_OK,
+                 "filler");
+        CHECK_EQ(deliver(&fix, fix.transfers[0].FirstIndex, XHCI_CC_SUCCESS,
+                         0, &result),
+                 XHCI_XFER_OK, "filler retired");
+    }
+    CHECK_EQ(fix.ring.Cycle, 0, "the stream ring on its cycle-0 lap");
+    CHECK_EQ(fixture_submit_interrupt(&fix, 1, 8), XHCI_XFER_OK, "the TD");
+    t = &fix.transfers[1];
+    CHECK_EQ(fix.mem[t->FirstIndex].Control & XHCI_TRB_CYCLE, 0,
+             "written with cycle 0");
+
+    CHECK_EQ(deliver(&fix, t->FirstIndex, XHCI_CC_USB_TRANSACTION_ERROR, 8,
+                     &result),
+             XHCI_XFER_OK, "a Transaction Error on it");
+    CHECK_EQ(result.RetryDiverted, 1, "diverted, as on a bulk pipe");
+    CHECK_EQ(result.NeedsRecovery, 0, "no StreamFault or Halted to set");
+    CHECK_EQ(fix.ring.Dequeue, t->FirstIndex,
+             "the stream's software dequeue still on the TD");
+    CHECK_EQ(XhciRingDequeuePA(&fix.ring),
+             XhciRingTrbPA(&fix.ring, t->FirstIndex), "its address");
+    CHECK_EQ(XhciRingDequeueCycle(&fix.ring), 0,
+             "and its DCS the TD's own cycle, 0");
+    CHECK_EQ(XhciXferQueueRestart(&fix.queue), 0,
+             "a queue holding the TD does not restart");
+
+    CHECK_EQ(XhciXferRetryPending(&fix.queue, &token, &gen), 1, "pending");
+    CHECK_EQ(XhciXferRetryReplay(&fix.queue, &fix.ring, FIX_SLOT, FIX_DCI,
+                                 token, &result), 1, "replayed");
+    CHECK_EQ(result.NeedsRecovery, 1, "today's path: recovery asked");
+    CHECK_EQ(fix.queue.Count, 0, "the TD gone");
+    CHECK_EQ(fix.ring.Dequeue, fix.ring.Enqueue, "the dequeue past it");
+    CHECK_EQ(XhciRingDequeueCycle(&fix.ring), fix.ring.Cycle,
+             "on the producer's cycle");
+
+    fix.queue.MidTdTailIndex[0] = 3;
+    fix.queue.MidTdTailCount = 1;
+    CHECK_EQ(XhciXferQueueRestart(&fix.queue), 1, "an empty queue restarts");
+    CHECK_EQ(fix.queue.MidTdTailCount, 0, "its tails forgotten");
+    CHECK_EQ(fix.queue.MidTdTailIndex[0], XHCI_XFER_NO_INDEX, "every one");
+    CHECK_EQ(fix.queue.RetryScope, 1, "its scope kept");
+    CHECK_EQ(fix.queue.RetryDiverts, 1, "its counters kept");
+    CHECK_EQ(XhciXferQueueRestart(NULL), 0, "no queue");
+}
+
 /* Review round 1 of 35-T.2, finding 3: an event whose pointer's low dword
  * aliases a queued TD's TRB but whose high dword is nonzero names no TRB of
  * this driver. It is refused as foreign before the engine sees it, so it
@@ -4884,6 +4951,7 @@ int main(void)
     test_retry_generation();
     test_retry_recovered_short();
     test_retry_settle_moves_dequeue();
+    test_retry_stream_wrap();
     test_event_high_pointer_refused();
 
     printf("\n%d checks, %d failures\n", checks, failures);

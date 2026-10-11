@@ -396,8 +396,8 @@ NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
 }
 #endif
 
-/* The interval cap's controller test, once XhciInitController has read the
- * PCI id. IRQL: PASSIVE_LEVEL. */
+/* The interval cap's controller test, and QEMU's stream-context quirk's,
+ * once XhciInitController has read the PCI id. IRQL: PASSIVE_LEVEL. */
 static VOID hcdTolApplies(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
@@ -406,6 +406,10 @@ static VOID hcdTolApplies(PHCD_CONTROLLER hc)
     ext->Tol.Stats.CapApplied = XhciTolCapApplies(ext->Tol.Stats.CapMode,
                                                   ext->PciVendorDevice);
     XhciLogNote(ext, "tol.cap.applied", ext->Tol.Stats.CapApplied);
+    /* 36.54: QEMU's stream-context quirk, on its PCI id alone (record 17
+     * section 4.12.4); no setting reaches it. */
+    hc->QemuStreamQuirk = XhciTolQemuStreamQuirk(ext->PciVendorDevice);
+    hc->Counters.QemuStreamQuirk = hc->QemuStreamQuirk;
 }
 
 /* Issue 18: a controller's own firmware version where its configuration
