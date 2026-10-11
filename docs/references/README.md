@@ -361,8 +361,10 @@ documents are fetched per machine, never tracked.
 Cited by issue 13 (`docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md`)
 for the VL805's architecture and one register. No official download URL is
 recorded: the owner's copy was placed on the maintainer's disk on
-2026-10-10, outside this directory, and it is not redistributed. Its text
-was extracted with `pdftotext -layout`; the extract is not authoritative.
+2026-10-10 and copied into this directory on 2026-10-11 (git-ignored,
+like every PDF here); it is not redistributed. Its text was extracted
+with `pdftotext -layout` into `DS_VLI_VL805_093-dump.txt` beside it; the
+extract is not authoritative.
 
 | Name | Version | SHA-256 | What it settles |
 |---|---|---|---|
