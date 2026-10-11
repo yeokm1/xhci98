@@ -335,7 +335,7 @@ typedef struct _XHCIHC_COUNTERS {
      * TD; stream rings a port reset or a recycle restarted at their base;
      * whether QEMU's stream-context quirk is armed on this controller (1 on
      * PCI 1B36:000D alone, set at each start); the Set TR Dequeue commands
-     * that quirk issued; its resyncs that could not finish, each failing the
+     * that quirk completed; its resyncs that could not finish, each failing the
      * Stop or Reset Endpoint it followed; and the extra Stop Endpoints QEMU's
      * own device wakeup cost by restarting a stopped endpoint. The thread's
      * plain writes. */

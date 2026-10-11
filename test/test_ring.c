@@ -3059,6 +3059,20 @@ static void test_ring_resync_owed(void)
     CHECK_EQ(pa, RING_PA + 16UL, "at the software dequeue past A");
     CHECK_EQ(dcs, 0, "on the cycle-0 lap");
 
+    /* A segment ending at 4 GB, where its base plus its size wraps to 0:
+     * an address inside it is still inside it. */
+    CHECK_EQ(XhciRingInit(&ring, mem, 0xFFFFFF80UL, 8,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a ring ending at 4 GB");
+    for (i = 0; i < 2; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pas[i]), XHCI_RING_OK, "TD");
+    }
+    CHECK_EQ(XhciRingResyncOwed(&ring, pas[1] | 2UL | 1UL, &pa, &dcs), 0,
+             "QEMU's address past the head, at 4 GB's edge: kept");
+    CHECK_EQ(pa, pas[1], "not taken for off the ring");
+    CHECK_EQ(XhciRingResyncOwed(&ring, 0xFFFFFF70UL | 2UL, &pa, &dcs), 1,
+             "below the base: off the ring, the software dequeue");
+    CHECK_EQ(pa, pas[0], "the head");
     /* QEMU's pointer past a TD it fetched and then discarded, or one whose
      * completion was lost: QEMU's own restart point, kept - the quirk moves
      * no stream anywhere QEMU would not start it - with that TRB's cycle. */

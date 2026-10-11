@@ -1323,8 +1323,10 @@ ULONG XhciRingResyncOwed(const XHCI_RING *ring, ULONG contextDw0,
     }
     saved = contextDw0 & XHCI_EP_DEQUEUE_MASK;
     index = ring->Trbs;
+    /* By difference: a segment may end at 4 GB, where BasePA plus its size
+     * wraps to 0. */
     if (saved >= ring->BasePA &&
-        saved < ring->BasePA + ring->Trbs * XHCI_TRB_BYTES) {
+        saved - ring->BasePA < ring->Trbs * XHCI_TRB_BYTES) {
         index = (saved - ring->BasePA) / XHCI_TRB_BYTES;
     }
     if (index == ring->Trbs - 1) {

@@ -414,15 +414,26 @@ ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 }
 
 /* The same command with no resync: the resync's own Stop Endpoint and Set
- * TR Dequeue commands (hcd_cfg.c). Thread only. */
+ * TR Dequeue commands (hcd_cfg.c). In the qemu flavour they are the
+ * injection's own as well, so its command hook lets them through without
+ * reading them as the driver's - a resync inside the injection's own stop
+ * must not end the withholding it is still carrying out. Thread only. */
 ULONG HcdThreadCommandRaw(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
                           PULONG control)
 {
     ULONG code;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG own;
 
+    own = hc->InjOwnCmd;
+    hc->InjOwnCmd = 1;
+#endif
     hc->ThreadCommandDepth++;
     code = hcdCommand(hc, trb, control);
     hc->ThreadCommandDepth--;
+#if defined(XHCI_FLAVOUR_QEMU)
+    hc->InjOwnCmd = own;
+#endif
     return code;
 }
 
