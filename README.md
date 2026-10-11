@@ -276,7 +276,21 @@ With `2`, on a chipset without these registers (every Intel chipset from the 100
 
 A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts, and comes back under it, so do not have a drive busy on a blue connector at that moment.
 
-The value is read when the controller starts, so restart Windows after changing it. `portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`: double-click it, or run `cscript //nologo portsw.vbs show` (or `1`, or `0`) as an administrator.
+The value is read when the controller starts, so restart Windows after changing it.
+
+`portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in the package directory:
+
+```
+cscript //nologo portsw.vbs show
+cscript //nologo portsw.vbs 1
+cscript //nologo portsw.vbs 0
+```
+
+- `show`: the value on every xhci98 controller.
+- `1`: turns the switchover on.
+- `0`: turns it off.
+
+Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
 ### The Intel 7/8/9-series interrupt routing repair
 
