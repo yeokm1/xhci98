@@ -1,8 +1,8 @@
 # xhci98 - Release Notes
 
 This file describes package version `2.3.0.0`, the twelfth release and the
-fifth of the host controller driver, dated 2026-10-11 (`DriverVer`
-`10/11/2026,2.3.0.0`, in all four INFs). What `2.3.0.0` changes from
+fifth of the host controller driver, dated 2026-10-12 (`DriverVer`
+`10/12/2026,2.3.0.0`, in all four INFs). What `2.3.0.0` changes from
 `2.2.0.0` is "What `2.3.0.0` changes", below; what `2.2.0.0` changed from
 `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and `2.1.0.0` from `2.0.0.0`, are
 their entries in `releases/history.md`, and the sections below say where
