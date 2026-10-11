@@ -2897,6 +2897,210 @@ static void test_two_halves(void)
     CHECK(wraps >= 10, "the refills wrapped the ring many times");
 }
 
+/*
+ * 36.54 (design record 17 section 4.12.3): an emptied stream ring restarted
+ * at its base for a new context - the stream ring's dequeue and DCS after a
+ * port reset. Taken from a ring on a cycle-0 lap, whose DCS would otherwise
+ * be 0 at the enqueue; a ring still holding a TD is refused and untouched.
+ */
+static void test_ring_restart(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB one;
+    XHCI_RING ring;
+    ULONG pa;
+    ULONG i;
+    ULONG zero;
+
+    XhciTrbNoOpCommand(&one);
+    CHECK_EQ(XhciRingRestart(NULL), XHCI_RING_BAD_PARAM, "no ring");
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    /* Nine TRBs through a seven-slot ring: one wrap, the producer on cycle
+     * 0, two TRBs of the new lap written. */
+    for (i = 0; i < 9; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "enqueued");
+        CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+    }
+    CHECK_EQ(ring.Cycle, 0, "on the cycle-0 lap");
+    CHECK_EQ(ring.Enqueue, 2, "two TRBs into it");
+    CHECK_EQ(XhciRingDequeueCycle(&ring), 0,
+             "an emptied ring here would need DCS 0, which QEMU ignores");
+
+    /* Not empty: refused, nothing changed. */
+    CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "one held");
+    CHECK_EQ(XhciRingRestart(&ring), XHCI_RING_NOT_COMPLETE,
+             "a ring holding a TD is refused");
+    CHECK_EQ(ring.Enqueue, 3, "enqueue kept");
+    CHECK_EQ(ring.Dequeue, 2, "dequeue kept");
+    CHECK_EQ(ring.Cycle, 0, "cycle kept");
+    CHECK_EQ(mem[2].Control & XHCI_TRB_CYCLE, 0, "the held TRB untouched");
+    CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+
+    /* Empty: restarted at its base. */
+    CHECK_EQ(XhciRingRestart(&ring), XHCI_RING_OK, "restarted");
+    CHECK_EQ(ring.Enqueue, 0, "enqueue at the base");
+    CHECK_EQ(ring.Dequeue, 0, "dequeue at the base");
+    CHECK_EQ(ring.Cycle, 1, "producer cycle 1");
+    CHECK_EQ(XhciRingDequeuePA(&ring), RING_PA,
+             "the stream context's dequeue: the base");
+    CHECK_EQ(XhciRingDequeueCycle(&ring), 1, "and its DCS: 1");
+    CHECK_EQ(ring.BasePA, RING_PA, "the same allocation");
+    CHECK_EQ(ring.Trbs, 8, "the same size");
+    CHECK_EQ(ring.Kind, XHCI_RING_KIND_ENDPOINT, "the same kind");
+    zero = 1;
+    for (i = 0; i < 7; i++) {
+        if (mem[i].Param0 != 0 || mem[i].Param1 != 0 || mem[i].Status != 0 ||
+            mem[i].Control != 0) {
+            zero = 0;
+        }
+    }
+    CHECK_EQ(zero, 1, "every TRB of the old laps zeroed");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(mem[7].Control), XHCI_TRB_TYPE_LINK,
+             "the Link TRB rewritten");
+    CHECK_EQ(mem[7].Param0, RING_PA, "pointing at the base");
+    CHECK_EQ((mem[7].Control & XHCI_TRB_LINK_TC) != 0, 1, "with Toggle Cycle");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CYCLE, 0,
+             "and the cycle no TRB of the new lap carries");
+    CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK,
+             "the next TD after the Configure");
+    CHECK_EQ(pa, RING_PA, "lands at the base");
+    CHECK_EQ(mem[0].Control & XHCI_TRB_CYCLE, 1, "with cycle 1, the DCS");
+}
+
+/*
+ * 36.54 (design record 17 section 4.12.4): the Set TR Dequeue a stream owes
+ * on QEMU's xHCI after a stop or reset, which re-reads the Stream Context
+ * with CCS forced to 1. The position is the software dequeue (the oldest TD
+ * not retired), its DCS the ring's; owed on DCS 0 or when the context
+ * names another address.
+ */
+static void test_ring_resync_owed(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB one;
+    XHCI_RING ring;
+    ULONG pas[3];
+    ULONG pa;
+    ULONG dcs;
+    ULONG i;
+
+    XhciTrbNoOpCommand(&one);
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    CHECK_EQ(XhciRingResyncOwed(NULL, 0, &pa, &dcs), 0, "no ring");
+    CHECK_EQ(XhciRingResyncOwed(&ring, 0, NULL, &dcs), 0, "no output");
+    CHECK_EQ(XhciRingResyncOwed(&ring, 0x1000UL, &pa, &dcs), 1,
+             "an address off the ring: owed");
+    CHECK_EQ(pa, RING_PA, "at the software dequeue");
+    CHECK_EQ(dcs, 1, "with its DCS");
+
+    /* A new ring, the context naming its base with DCS 1: nothing owed. */
+    CHECK_EQ(XhciRingResyncOwed(&ring, RING_PA | 2UL | 1UL, &pa, &dcs), 0,
+             "base, DCS 1, the context agreeing: QEMU's forced 1 is right");
+    CHECK_EQ(pa, RING_PA, "position the base");
+    CHECK_EQ(dcs, 1, "DCS 1");
+    /* The same with QEMU having written DCS 0 back: the address is what is
+     * compared, and DCS 1 is what QEMU forces. */
+    CHECK_EQ(XhciRingResyncOwed(&ring, RING_PA | 2UL, &pa, &dcs), 0,
+             "the context's own DCS bit is not what QEMU reads");
+
+    /* A TD held on the cycle-0 lap: owed, at the TD, DCS 0. */
+    for (i = 0; i < 9; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "filler");
+        CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+    }
+    CHECK_EQ(XhciRingEnqueue(&ring, &one, &pas[0]), XHCI_RING_OK, "a TD");
+    CHECK_EQ(XhciRingResyncOwed(&ring, pas[0] | 2UL | 1UL, &pa, &dcs), 1,
+             "a cycle-0 TD: owed although the context names it");
+    CHECK_EQ(pa, pas[0], "at the TD");
+    CHECK_EQ(dcs, 0, "with DCS 0");
+    CHECK_EQ(retire_success(&ring, pas[0]), XHCI_RING_OK, "retired");
+    CHECK_EQ(XhciRingResyncOwed(&ring,
+                                (RING_PA + ring.Enqueue * 16UL) | 2UL | 1UL,
+                                &pa, &dcs),
+             1, "an empty cycle-0 ring: owed at the enqueue");
+    CHECK_EQ(dcs, 0, "the producer's 0");
+
+    /* The Link-to-base case: QEMU's pointer left on the Link TRB after it
+     * finished a lap; the driver has crossed to index 0, cycle 1. DCS 1,
+     * but the address must move: owed. */
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    for (i = 0; i < 14; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "filler");
+        CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+    }
+    CHECK_EQ(ring.Enqueue, 0, "two laps: back at the base");
+    CHECK_EQ(ring.Cycle, 1, "on cycle 1");
+    CHECK_EQ(XhciRingResyncOwed(&ring, (RING_PA + 7UL * 16UL) | 2UL, &pa,
+                                &dcs),
+             1, "QEMU's pointer on the Link TRB: owed although DCS is 1");
+    CHECK_EQ(pa, RING_PA, "to the base");
+    CHECK_EQ(dcs, 1, "with DCS 1");
+
+    /* A stale Link pointer: QEMU followed the Link and completed a TD at
+     * the base, which the driver retired, but its context still names the
+     * Link (its completion's kick returned at a sibling's halt). The base
+     * is behind the software dequeue now: not the base, the dequeue. */
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    for (i = 0; i < 7; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pa), XHCI_RING_OK, "filler");
+        CHECK_EQ(retire_success(&ring, pa), XHCI_RING_OK, "retired");
+    }
+    CHECK_EQ(XhciRingEnqueue(&ring, &one, &pas[0]), XHCI_RING_OK,
+             "TD A at the base");
+    CHECK_EQ(pas[0], RING_PA, "at the base");
+    CHECK_EQ(retire_success(&ring, pas[0]), XHCI_RING_OK, "A retired");
+    CHECK_EQ(XhciRingResyncOwed(&ring, (RING_PA + 7UL * 16UL) | 2UL | 1UL,
+                                &pa, &dcs),
+             1, "a stale Link pointer: owed");
+    CHECK_EQ(pa, RING_PA + 16UL, "at the software dequeue past A");
+    CHECK_EQ(dcs, 0, "on the cycle-0 lap");
+
+    /* A segment ending at 4 GB, where its base plus its size wraps to 0:
+     * an address inside it is still inside it. */
+    CHECK_EQ(XhciRingInit(&ring, mem, 0xFFFFFF80UL, 8,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "a ring ending at 4 GB");
+    for (i = 0; i < 2; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pas[i]), XHCI_RING_OK, "TD");
+    }
+    CHECK_EQ(XhciRingResyncOwed(&ring, pas[1] | 2UL | 1UL, &pa, &dcs), 0,
+             "QEMU's address past the head, at 4 GB's edge: kept");
+    CHECK_EQ(pa, pas[1], "not taken for off the ring");
+    CHECK_EQ(XhciRingResyncOwed(&ring, 0xFFFFFF70UL | 2UL, &pa, &dcs), 1,
+             "below the base: off the ring, the software dequeue");
+    CHECK_EQ(pa, pas[0], "the head");
+    /* QEMU's pointer past a TD it fetched and then discarded, or one whose
+     * completion was lost: QEMU's own restart point, kept - the quirk moves
+     * no stream anywhere QEMU would not start it - with that TRB's cycle. */
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    for (i = 0; i < 2; i++) {
+        CHECK_EQ(XhciRingEnqueue(&ring, &one, &pas[i]), XHCI_RING_OK, "TD");
+    }
+    CHECK_EQ(XhciRingResyncOwed(&ring, pas[1] | 2UL, &pa, &dcs), 0,
+             "the context past the head, DCS 1: kept, nothing owed");
+    CHECK_EQ(pa, pas[1], "at QEMU's own address");
+    CHECK_EQ(dcs, 1, "with that TRB's cycle");
+    /* QEMU's pointer behind the software dequeue: a TD it completed and the
+     * driver retired, its context not rewritten (its kick returned at a
+     * sibling's halt), or a failed TD whose recovery has yet to move it.
+     * Every TRB there had its completion reported: the software dequeue. */
+    CHECK_EQ(retire_success(&ring, pas[0]), XHCI_RING_OK, "head retired");
+    CHECK_EQ(XhciRingResyncOwed(&ring, pas[0] | 2UL | 1UL, &pa, &dcs), 1,
+             "an address behind the software dequeue: owed");
+    CHECK_EQ(pa, pas[1], "moved to the software dequeue");
+    CHECK_EQ(dcs, 1, "with its DCS");
+    CHECK_EQ(XhciRingResyncOwed(&ring, (RING_PA + 5UL * 16UL) | 2UL, &pa,
+                                &dcs),
+             1, "an address past the enqueue, where nothing was written");
+    CHECK_EQ(pa, pas[1], "moved to the software dequeue too");
+
+}
+
 int main(void)
 {
     test_two_halves();
@@ -2928,6 +3132,8 @@ int main(void)
     test_set_dequeue();
     test_set_dequeue_wrapped();
     test_dequeue_cycle();
+    test_ring_restart();
+    test_ring_resync_owed();
     test_td_chain_validation();
     test_event_data_flag();
     test_event_ring();

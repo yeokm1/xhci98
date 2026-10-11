@@ -373,11 +373,68 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     return 0;
 }
 
-/* A command from the thread for the configuration code (hcd_cfg.c). */
+/* A command from the thread for the configuration code (hcd_cfg.c), the
+ * suspend machine, the hubs and the qemu flavour's injection. On QEMU's xHCI
+ * a Stop or Reset Endpoint that succeeded is followed, before it returns,
+ * by the stream resync of record 17 section 4.12.4 (HcdCfgQemuStreamResync
+ * decides whether the endpoint has streams and is held) - once, by the
+ * outermost call: the injection's command hook sends a command it lets
+ * through by a nested call. Not for the injection's own commands, whose
+ * verdict reads the Stream Context as QEMU left it; the injection resyncs
+ * once it has read it (hcd_inj.c, hcdInjBulkStop). The command's own
+ * completion and control are returned, except after a resync that could
+ * not finish: it has requested the controller reset, as hcdCommand does
+ * for a command that never completes, and the answer is the same 0 - no
+ * usable completion - which every caller already contains. Thread only. */
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
                        PULONG control)
 {
-    return hcdCommand(hc, trb, control);
+    ULONG code;
+    ULONG type;
+    ULONG own;
+
+    hc->ThreadCommandDepth++;
+    code = hcdCommand(hc, trb, control);
+    hc->ThreadCommandDepth--;
+#if defined(XHCI_FLAVOUR_QEMU)
+    own = hc->InjOwnCmd;
+#else
+    own = 0;
+#endif
+    type = XHCI_TRB_GET_TYPE(trb->Control);
+    if (hc->QemuStreamQuirk && hc->ThreadCommandDepth == 0 && !own &&
+        code == XHCI_CC_SUCCESS &&
+        (type == XHCI_TRB_TYPE_STOP_EP || type == XHCI_TRB_TYPE_RESET_EP) &&
+        HcdCfgQemuStreamResync(hc, XHCI_TRB_GET_SLOT_ID(trb->Control),
+                               XHCI_TRB_GET_EP_ID(trb->Control)) ==
+            HCD_RESYNC_FAILED) {
+        return 0;
+    }
+    return code;
+}
+
+/* The same command with no resync: the resync's own Stop Endpoint and Set
+ * TR Dequeue commands (hcd_cfg.c). In the qemu flavour they are the
+ * injection's own as well, so its command hook lets them through without
+ * reading them as the driver's - a resync inside the injection's own stop
+ * must not end the withholding it is still carrying out. Thread only. */
+ULONG HcdThreadCommandRaw(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                          PULONG control)
+{
+    ULONG code;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG own;
+
+    own = hc->InjOwnCmd;
+    hc->InjOwnCmd = 1;
+#endif
+    hc->ThreadCommandDepth++;
+    code = hcdCommand(hc, trb, control);
+    hc->ThreadCommandDepth--;
+#if defined(XHCI_FLAVOUR_QEMU)
+    hc->InjOwnCmd = own;
+#endif
+    return code;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1803,12 +1860,14 @@ static VOID hcdConnectGen(PHCD_CONTROLLER hc, PHCD_PORT p)
 static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PXHCI_EXTENSION ext;
+    PHCD_PIPE stream;
     KIRQL oldIrql;
     ULONG halted;
     ULONG reason;
     ULONG retryHead;
     ULONG token;
     ULONG dci;
+    ULONG sid;
 
     ext = &hc->Hc;
     XhciControllerLockAcquire(ext, &oldIrql);
@@ -1825,11 +1884,21 @@ static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         /* Halted beside a live soft retry whose deferred TD is still the
          * head (35-T.2) is that TD's Transaction Error, the retry's to
          * recover; Error, or a retry request that outlived its TD, is not
-         * (XhciTolHaltOwner). */
+         * (XhciTolHaltOwner). With streams open, a live retry on any
+         * stream of the endpoint (36.54, record 17 section 4.12.2). */
         retryHead = 0;
         if (dci >= 2 && dev->Pipes[dci] != NULL &&
             XhciXferRetryPending(dev->Pipes[dci]->Queue, &token, NULL)) {
             retryHead = XhciXferRetryHeadIs(dev->Pipes[dci]->Queue, token);
+        }
+        for (sid = 1; dci >= 2 && dev->Pipes[dci] != NULL &&
+                      dev->Pipes[dci]->Streams != NULL &&
+                      sid <= dev->Pipes[dci]->Streams->Count && !retryHead;
+             sid++) {
+            stream = dev->Pipes[dci]->Streams->Pipe[sid];
+            if (XhciXferRetryPending(stream->Queue, &token, NULL)) {
+                retryHead = XhciXferRetryHeadIs(stream->Queue, token);
+            }
         }
         if (XhciTolHaltOwner(hcdEpState(hc, dev, dci), retryHead) ==
             XHCI_TOL_HALT_CONFIRMED) {

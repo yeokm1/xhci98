@@ -2638,6 +2638,20 @@ ULONG XhciXferRetryClear(PXHCI_TRANSFER_QUEUE queue, ULONG gen)
     return 1;
 }
 
+ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue)
+{
+    ULONG i;
+
+    if (queue == NULL || queue->Count != 0 || queue->Head != NULL) {
+        return 0;
+    }
+    queue->MidTdTailCount = 0;
+    for (i = 0; i < XHCI_XFER_MID_TD_TAIL; i++) {
+        queue->MidTdTailIndex[i] = XHCI_XFER_NO_INDEX;
+    }
+    return 1;
+}
+
 /*
  * Task 9-0.2. A drain pass has emptied the event ring; settle the head-most
  * transfer still waiting for a tail that will now never come.

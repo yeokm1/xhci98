@@ -2810,6 +2810,16 @@ static const char *const hubspeed_counter_names[SNAP_HUBSPEED_WORDS] = {
     "Usb2HubSpeedFallbackSlots"
 };
 
+/* Task 36.54's six (stream endpoints, design record 17 section 4.12)
+ * follow at 167; the third is whether QEMU's stream-context quirk is armed
+ * (1 on QEMU's xHCI, PCI 1B36:000D, alone), shown by print_hcd_streams. */
+#define SNAP_STREAMS_AT             167UL
+#define SNAP_STREAMS_WORDS          6UL
+static const char *const streams_counter_names[SNAP_STREAMS_WORDS] = {
+    "StreamRetryResets", "StreamRingRestarts", "QemuStreamQuirk",
+    "QemuStreamResyncs", "QemuStreamResyncFailed", "QemuStreamRestops"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -2890,7 +2900,40 @@ static const char *hcd_counter_name(unsigned long i)
         i - SNAP_HUBSPEED_AT < SNAP_HUBSPEED_WORDS) {
         return hubspeed_counter_names[i - SNAP_HUBSPEED_AT];
     }
+    if (i >= SNAP_STREAMS_AT && i - SNAP_STREAMS_AT < SNAP_STREAMS_WORDS) {
+        return streams_counter_names[i - SNAP_STREAMS_AT];
+    }
     return NULL;
+}
+
+/*
+ * Task 36.54's stream recovery, from the counter block when it is long
+ * enough (a driver before 36.54 sends fewer words, and nothing is printed):
+ * the soft retry on a stream, the port reset's ring restarts, and QEMU's
+ * stream-context quirk - armed or not, and what it did. Out of line, as
+ * hcd_counter_name.
+ */
+static void print_hcd_streams(const unsigned char *image,
+                              unsigned long countersAt,
+                              unsigned long counters)
+{
+    if (counters < SNAP_STREAMS_AT + SNAP_STREAMS_WORDS) {
+        return;
+    }
+    comp("\nstream endpoints (task 36.54, design record 17 section 4.12):\n");
+    comp("  soft retries on a stream %lu; stream rings restarted at base "
+         "%lu\n",
+         get32(image, countersAt + SNAP_STREAMS_AT * 4),
+         get32(image, countersAt + (SNAP_STREAMS_AT + 1) * 4));
+    if (get32(image, countersAt + (SNAP_STREAMS_AT + 2) * 4) == 0) {
+        comp("  QEMU stream-context quirk  not armed (not QEMU's xHCI)\n");
+        return;
+    }
+    comp("  QEMU stream-context quirk  ARMED (QEMU's xHCI, 1B36:000D): Set "
+         "TR Dequeues %lu,\n    resyncs failed %lu, extra stops %lu\n",
+         get32(image, countersAt + (SNAP_STREAMS_AT + 3) * 4),
+         get32(image, countersAt + (SNAP_STREAMS_AT + 4) * 4),
+         get32(image, countersAt + (SNAP_STREAMS_AT + 5) * 4));
 }
 
 /*
@@ -3058,6 +3101,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
 
     print_hcd_counters(image, countersAt, counters);
     print_hcd_hubspeed(image, countersAt, counters);
+    print_hcd_streams(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -4842,13 +4886,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 166 and two words
+ * word is nonzero and its value names its place): 0 to 172 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_HUBSPEED_AT + SNAP_HUBSPEED_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STREAMS_AT + SNAP_STREAMS_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];

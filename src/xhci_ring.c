@@ -1299,6 +1299,57 @@ ULONG XhciRingDequeueCycle(const XHCI_RING *ring)
     return ring->Cycle;
 }
 
+ULONG XhciRingRestart(PXHCI_RING ring)
+{
+    if (ring == NULL || ring->Base == NULL) {
+        return XHCI_RING_BAD_PARAM;
+    }
+    if (ring->Dequeue != ring->Enqueue) {
+        return XHCI_RING_NOT_COMPLETE;
+    }
+    return XhciRingInit(ring, ring->Base, ring->BasePA, ring->Trbs,
+                        ring->Kind);
+}
+
+ULONG XhciRingResyncOwed(const XHCI_RING *ring, ULONG contextDw0,
+                         PULONG dequeuePA, PULONG dcs)
+{
+    ULONG saved;
+    ULONG index;
+
+    if (ring == NULL || ring->Base == NULL || dequeuePA == NULL ||
+        dcs == NULL || ring->Trbs < 2) {
+        return 0;
+    }
+    saved = contextDw0 & XHCI_EP_DEQUEUE_MASK;
+    index = ring->Trbs;
+    /* By difference: a segment may end at 4 GB, where BasePA plus its size
+     * wraps to 0. */
+    if (saved >= ring->BasePA &&
+        saved - ring->BasePA < ring->Trbs * XHCI_TRB_BYTES) {
+        index = (saved - ring->BasePA) / XHCI_TRB_BYTES;
+    }
+    if (index == ring->Trbs - 1) {
+        /* On the Link TRB, which execution follows to the base: the same
+         * position, named as a TD's first TRB, and judged as one below. */
+        index = 0;
+    }
+    if (index == ring->Enqueue) {
+        *dequeuePA = ring->BasePA + index * XHCI_TRB_BYTES;
+        *dcs = ring->Cycle & 1UL;
+    } else if (index < ring->Trbs && xhciRingIsOutstanding(ring, index)) {
+        *dequeuePA = ring->BasePA + index * XHCI_TRB_BYTES;
+        *dcs = ring->Base[index].Control & XHCI_TRB_CYCLE;
+    } else {
+        /* Off the TDs the ring holds: behind the software dequeue every TRB
+         * has had its completion reported and been retired, past the
+         * enqueue none was written. The only restart point is the software
+         * dequeue. */
+        *dequeuePA = XhciRingDequeuePA(ring);
+        *dcs = XhciRingDequeueCycle(ring);
+    }
+    return (*dcs == 0 || *dequeuePA != saved) ? 1UL : 0UL;
+}
 ULONG XhciEventRingInit(PXHCI_EVENT_RING ring,
                         volatile XHCI_TRB *base,
                         ULONG basePA,

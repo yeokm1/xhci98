@@ -350,6 +350,23 @@ ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state)
     return answer;
 }
 
+/* 36.54: whether the layer withholds this endpoint's doorbells (its own
+ * stop, a bulk fault's watch or an answered halt), which holds the
+ * endpoint as a pause would for the QEMU stream resync (hcd_cfg.c,
+ * HcdCfgQemuStreamResync; record 17 section 4.12.4). IRQL: PASSIVE_LEVEL,
+ * no lock held. */
+ULONG HcdInjWithholds(PHCD_CONTROLLER hc, ULONG slot, ULONG dci)
+{
+    KIRQL oldIrql;
+    ULONG held;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    held = (hc->InjEp.Block && hc->InjEp.Slot != 0 &&
+            hc->InjEp.Slot == slot && hc->InjEp.Dci == dci) ? 1UL : 0UL;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return held;
+}
+
 /* The drain queued through the ISR's admission, as the backstop queues it
  * (hcd_ctl.c): counted before the insertion, rolled back on a refusal,
  * nothing once the DPC is closed. IRQL: <= DISPATCH_LEVEL. */
@@ -1405,6 +1422,23 @@ static VOID hcdInjBulkAbandon(PHCD_CONTROLLER hc, ULONG why)
     hcdInjBulkRelease(hc);
 }
 
+/* 36.54: the attempt given up after the QEMU stream resync could not finish
+ * (record 17 section 4.12.4): counted and noted as an abandon (0x44), the
+ * withholding ended - and nothing rung, since a stream may still be
+ * unrepaired; the controller reset the resync requested invalidates the
+ * endpoint. IRQL: PASSIVE_LEVEL, powered. */
+static VOID hcdInjBulkGiveUp(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    hc->InjEp.Abandoned++;
+    XhciInjEpEnd(&hc->InjEp);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciLogNote(&hc->Hc, "qemu.inj.abandon",
+                (hc->InjSlot << 16) | (hc->InjDci << 8) | 0x44UL);
+}
+
 /* `index` within the TD [first, last] of one ring, the TD wrapping past
  * the Link when last precedes first; the Link itself is never a TD's. */
 static ULONG hcdInjInTd(const XHCI_RING *ring, ULONG index, ULONG first,
@@ -1681,6 +1715,7 @@ static ULONG hcdInjBulkStop(PHCD_CONTROLLER hc, ULONG stream, ULONG token,
     ULONG len;
     ULONG dcs;
     ULONG deq;
+    ULONG resync;
 
     KeAcquireSpinLock(&hc->InjLock, &oldIrql);
     XhciInjEpWatch(&hc->InjEp, hc->InjSlot, hc->InjDci);
@@ -1737,6 +1772,24 @@ static ULONG hcdInjBulkStop(PHCD_CONTROLLER hc, ULONG stream, ULONG token,
             KeReleaseSpinLock(&hc->InjLock, oldIrql);
             verdict = XHCI_INJ_STOP_OK;
         }
+    }
+    /* 36.54: the stream resync QEMU's xHCI owes after this stop (record 17
+     * section 4.12.4), which the command path leaves to the layer's own
+     * stop so the verdict above read the Stream Context as QEMU left it;
+     * before anything is rung or delivered, the doorbells still withheld.
+     * One that had to stop the endpoint again - QEMU restarted it on its
+     * own, and may have moved the TD the verdict found untouched - or gave
+     * up ends the attempt: abandoned (0x43) after a re-stop, given up with
+     * nothing rung (0x44) when the resync failed and requested the
+     * controller reset. */
+    resync = HcdCfgQemuStreamResync(hc, hc->InjSlot, hc->InjDci);
+    if (resync == HCD_RESYNC_FAILED) {
+        hcdInjBulkGiveUp(hc);
+        return 0;
+    }
+    if (resync != HCD_RESYNC_CLEAN) {
+        hcdInjBulkAbandon(hc, 0x43UL);
+        return 0;
     }
     if (verdict != XHCI_INJ_STOP_OK || !same) {
         /* Already fetched or moved on - QEMU's device wakeup can start a

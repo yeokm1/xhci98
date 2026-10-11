@@ -6773,6 +6773,22 @@ queued (`qemu.inj.bulk.cleared`).
 | `16` | Error | `08`'s path on this TD: a real stop, its dequeue confirmed (the stream's Stream Context for a stream), Halted answered and a Transaction Error delivered for the TD's first TRB, the driver's Reset Endpoint answered. Streams too |
 | `17` | Short | a real stop, the dequeue confirmed, a real Set TR Dequeue past the TD (the stream's, for a stream), then a Short Packet for the TD's last TRB with half that TRB's length left - one event, its IOC TRB, so no trailing event follows - tried three times, and every stream with a TD rung. An event that never reached the driver is not rewound (`qemu.inj.undelivered`): the TD is then a lost completion, as `14`'s. Streams too |
 
+Since task 36.54 (design record 17 section 4.12) a Transaction Error on a
+stream is soft-retried as on any bulk endpoint, so `16` on a UAS data
+stream is answered by the HCD itself: the diverted error counted
+(`RetryDiverts`), the endpoint paused, the Reset Endpoint answered by the
+layer, every stream with a TD rung, the TD completed (`RetryRecovered`),
+and `StreamRetryResets` moves; `xhciuas` sees no timeout, abort or reset
+for it. On QEMU's xHCI the layer's own stop is followed, once its verdict
+has read the Stream Context, by the driver's stream resync (record 17
+section 4.12.4: Set TR Dequeue for every stream QEMU's forced cycle would
+hide, `QemuStreamResyncs`); a resync that had to stop the endpoint again,
+because QEMU restarted it on its own, abandons the attempt with
+`qemu.inj.abandon` low byte `43` and rings every stream as any abandon
+does, and one that could not finish gives it up with `44` and rings
+nothing, the controller reset then requested. Each is a run that did not
+place the fault: fire again.
+
 `0F` and `10` need a control transfer of the thread's own to happen after
 they are armed: for `0F`, disable and enable the device in Device Manager
 (its `SELECT_CONFIGURATION` is the thread's `SET_CONFIGURATION`); for `10`,
