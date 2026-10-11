@@ -3356,6 +3356,16 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
         iso->NumberOfPackets > XHCI_XFER_MAX_ISO_PACKETS) {
         return 0;
     }
+    /* 36.57: the first TD alone names a frame; the rest are SIA. An ESIT
+     * longer than a frame would need that frame on an ESIT boundary
+     * (4.11.2.5.1), which is not computed here: SIA (review, round 2). */
+    if (request->Frames.FirstOnly) {
+        if (request->PacketsPerFrame == 0) {
+            return 0;
+        }
+        return XhciXferFrameIdUsable(&request->Frames,
+                                     iso->Packet[0].FrameNumber, &frameId);
+    }
     if (!xhciXferIsoCadenceAgrees(iso, iso->NumberOfPackets,
                                   request->PacketsPerFrame)) {
         return 0;
@@ -3367,6 +3377,75 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
         }
     }
     return 1;
+}
+
+/*
+ * Task 36.57. A Frame ID needs a start from the client and a sample of the
+ * frame axis; with CFC it may be on every TD, without it only on the first
+ * TD of a data flow (xHCI 4.11.2.5 p.200), which `fresh` says this is: the
+ * endpoint's context is new, or its ring ran dry at a service interval
+ * (an Underrun or Overrun handled with nothing queued) and nothing has
+ * been published since. The flow rules are XhciXferIsoFlowNext's.
+ */
+VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
+                            ULONG cfc, ULONG sampled, ULONG fresh)
+{
+    if (request == NULL) {
+        return;
+    }
+    request->Frames.Allowed =
+        (!asap && sampled && (cfc || fresh)) ? 1UL : 0UL;
+    request->Frames.FirstOnly = cfc ? 0UL : 1UL;
+}
+
+/*
+ * A flow ends where the controller found the ring empty at a service
+ * interval, which it reports as a Ring Underrun (OUT) or Overrun (IN). One
+ * handled while something is queued is either an old event - a request
+ * published after the controller posted it is still queued when it is
+ * handled, its completion being later on the same event ring - or a
+ * restart the caller makes with a doorbell; neither starts a flow this
+ * driver can name a frame for. A completion that empties the queue is not
+ * an event here at all: the controller may not yet have reached the empty
+ * ring.
+ */
+ULONG XhciXferIsoFlowNext(ULONG fresh, ULONG event, ULONG queued)
+{
+    switch (event) {
+    case XHCI_ISO_FLOW_CONTEXT:
+        return 1;
+    case XHCI_ISO_FLOW_PUBLISHED:
+        return 0;
+    case XHCI_ISO_FLOW_DRY:
+        return queued == 0 ? 1UL : fresh;
+    default:
+        return fresh;
+    }
+}
+
+ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
+                           ULONG cfc, ULONG sampled, ULONG fresh)
+{
+    if (asap) {
+        return XHCI_ISO_START_ASAP;
+    }
+    if (!sampled) {
+        return XHCI_ISO_START_SIA_NO_SAMPLE;
+    }
+    if (!cfc && !fresh) {
+        return XHCI_ISO_START_SIA_NO_CFC;
+    }
+    if (!XhciXferIsoUsesFrameIds(request)) {
+        return XHCI_ISO_START_SIA_UNUSABLE;
+    }
+    return cfc ? XHCI_ISO_START_FRAME_IDS : XHCI_ISO_START_FIRST_FRAME_ID;
+}
+
+ULONG XhciXferIsoSiaNote(ULONG slotId, ULONG dci, ULONG plan,
+                         ULONG startFrame, ULONG now)
+{
+    return ((slotId & 0xFFUL) << 24) | ((dci & 0xFFUL) << 16) |
+           ((plan & 0xFUL) << 12) | ((startFrame - now) & 0xFFFUL);
 }
 
 ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
@@ -3481,8 +3560,11 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
     state.IsochControl = 0;
 
     for (i = 0; i < packets; i++) {
-        status = xhciXferBuildIsoPacket(&state, &iso->Packet[i], request,
-                                        useFrameId, &layout->TdLengths[i]);
+        status = xhciXferBuildIsoPacket(
+            &state, &iso->Packet[i], request,
+            (useFrameId && (!request->Frames.FirstOnly || i == 0)) ? 1UL
+                                                                    : 0UL,
+            &layout->TdLengths[i]);
         if (status != XHCI_XFER_OK) {
             /*
              * **Running out of scratch is a size refusal, not a malformed

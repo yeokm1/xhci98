@@ -415,6 +415,12 @@ typedef struct _HCD_PIPE {
     PHCD_ISO_BLOCK Iso;             /* isochronous: HCD_PIPE_XFERS blocks  */
     ULONG IsoNext;                  /* the frame after the last queued
                                      * packet's; controller lock          */
+    ULONG IsoFlowFresh;             /* 36.57: the next isochronous request
+                                     * starts a data flow (a new context, or
+                                     * the ring ran dry), so may carry a
+                                     * first-TD Frame ID without CFC
+                                     * (XhciXferIsoFlowNext); controller
+                                     * lock                               */
     ULONG RingWait;                 /* a record waits for ring room;
                                      * controller lock                    */
     /* 36.21: the stamp at which software found this ring empty with a URB
@@ -1258,7 +1264,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG UrbsGone;
     ULONG UrbsWaited;               /* parked on a pipe's Waiting list   */
     ULONG UrbsMdlShort;             /* length past the MDL: refused      */
-    ULONG IsoBadStartFrames;        /* explicit StartFrame not schedulable */
+    ULONG IsoStartsSia;             /* explicit StartFrame sent as SIA     */
+    ULONG IsoStartsFirstFrameId;    /* no CFC: a flow's first TD's Frame ID */
     ULONG WaitingKicks;             /* a waiter started by admission or a
                                      * cancel, not by a record's release  */
     ULONG DevicesKept;              /* freed with URBs left: DMA not stopped */

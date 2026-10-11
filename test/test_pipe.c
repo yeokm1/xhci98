@@ -2806,6 +2806,109 @@ static void test_walk_surplus(void)
     CHECK_EQ(ep.MaxBurstSize, 15, "its own companion's burst");
 }
 
+/*
+ * Task 36.57: the Sound Blaster Play! 2 (041E:323D, Full Speed), from the
+ * owner's usbview reading - its interface 2 and the HID interface after
+ * it. Alternate 1 carries the asynchronous playback endpoint 0x01 and its
+ * feedback endpoint 0x83 in 9-byte audio-class endpoint descriptors
+ * (bRefresh, bSynchAddress), with the class-specific descriptors between
+ * them; the walk opens both, in order, and reads neither extra byte.
+ */
+static void test_play2_async(void)
+{
+    static const UCHAR cfg[] = {
+        0x09, 0x02, 0x62, 0x00, 0x02, 0x01, 0x00, 0x80, 0x32,
+        /* interface 2, alternate 0: no endpoint */
+        0x09, 0x04, 0x02, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00,
+        /* interface 2, alternate 1: two endpoints */
+        0x09, 0x04, 0x02, 0x01, 0x02, 0x01, 0x02, 0x00, 0x00,
+        0x07, 0x24, 0x01, 0x02, 0x01, 0x01, 0x00,
+        0x0E, 0x24, 0x02, 0x01, 0x02, 0x02, 0x10, 0x02,
+        0x44, 0xAC, 0x00, 0x80, 0xBB, 0x00,
+        /* 0x01 OUT isochronous asynchronous, 200 bytes, bInterval 1,
+         * bRefresh 0, bSynchAddress 0x83 (offset 48) */
+        0x09, 0x05, 0x01, 0x05, 0xC8, 0x00, 0x01, 0x00, 0x83,
+        0x07, 0x25, 0x01, 0x01, 0x00, 0x00, 0x00,
+        /* 0x83 IN isochronous, usage "feedback", 3 bytes, bInterval 1,
+         * bRefresh 5, bSynchAddress 0 (offset 64) */
+        0x09, 0x05, 0x83, 0x11, 0x03, 0x00, 0x01, 0x05, 0x00,
+        /* interface 3: HID, one interrupt IN */
+        0x09, 0x04, 0x03, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00,
+        0x09, 0x21, 0x00, 0x01, 0x00, 0x01, 0x22, 0x6D, 0x00,
+        0x07, 0x05, 0x84, 0x03, 0x04, 0x00, 0x0A
+    };
+    XHCI_PIPE_IFACE f;
+    XHCI_PIPE_PLAN plan;
+    XHCI_PIPE_EP out;
+    XHCI_PIPE_EP fb;
+    XHCI_PIPE_ISO_PACKET p[10];
+    ULONG off;
+    ULONG i;
+
+    CHECK_EQ(sizeof(cfg), 0x62, "wTotalLength");
+    CHECK_EQ(XhciPipeFindInterface(cfg, sizeof(cfg), 2, 0, &f), XHCI_PIPE_OK,
+             "alternate 0");
+    CHECK_EQ(f.EndpointCount, 0, "alternate 0 has none");
+    CHECK_EQ(XhciPipeFindInterface(cfg, sizeof(cfg), 2, 1, &f), XHCI_PIPE_OK,
+             "alternate 1");
+    CHECK_EQ(f.EndpointCount, 2, "both endpoints counted");
+    CHECK_EQ(f.EndpointSurplus, 0, "none surplus");
+    CHECK_EQ(f.EndpointOffset[0], 48, "0x01 first, past the CS descriptors");
+    CHECK_EQ(f.EndpointOffset[1], 64, "0x83 second, past the CS endpoint");
+
+    CHECK_EQ(XhciPipeEndpointParamsAt(cfg, sizeof(cfg), f.EndpointOffset[0],
+                                      XHCI_PIPE_SPEED_FULL, 0, &out),
+             XHCI_PIPE_OK, "0x01 at Full Speed");
+    CHECK_EQ(out.Dci, 2, "0x01 DCI 2");
+    CHECK_EQ(out.EpType, XHCI_PIPE_EPT_ISOCH_OUT, "Isoch OUT");
+    CHECK_EQ(out.MaxPacketSize, 200, "MPS 200");
+    CHECK_EQ(out.Interval, 3, "FS isochronous bInterval 1 -> Interval 3");
+    CHECK_EQ(out.MaxEsitPayload, 200, "Max ESIT Payload 200");
+    CHECK_EQ(out.ErrorCount, 0, "CErr 0 on isochronous");
+
+    CHECK_EQ(XhciPipeEndpointParamsAt(cfg, sizeof(cfg), f.EndpointOffset[1],
+                                      XHCI_PIPE_SPEED_FULL, 0, &fb),
+             XHCI_PIPE_OK, "0x83 at Full Speed");
+    CHECK_EQ(fb.Dci, 7, "0x83 DCI 7");
+    CHECK_EQ(fb.TransferType, XHCI_PIPE_XFER_ISOCH,
+             "the usage bits 5:4 do not change the type");
+    CHECK_EQ(fb.EpType, XHCI_PIPE_EPT_ISOCH_IN, "Isoch IN");
+    CHECK_EQ(fb.MaxPacketSize, 3, "MPS 3, the 10.14 format");
+    CHECK_EQ(fb.BInterval, 1, "bInterval, not bRefresh");
+    CHECK_EQ(fb.Interval, 3, "1 ms, not 2^5 ms");
+    CHECK_EQ(fb.MaxEsitPayload, 3, "Max ESIT Payload 3");
+
+    CHECK_EQ(XhciPipeConfigurePlan(0, 0, B(out.Dci) | B(fb.Dci), &plan),
+             XHCI_PIPE_OK, "alternate 1's plan");
+    CHECK_EQ(plan.AddFlags, 0x85, "A0 + A2 + A7");
+    CHECK_EQ(plan.ContextEntries, 7, "Context Entries 7");
+
+    /* usbaudio's feedback read: one packet at offset 0 of a 3-byte buffer.
+     * Three bytes is the endpoint's Max ESIT Payload; four is refused. */
+    p[0].Offset = 0;
+    CHECK_EQ(XhciPipeIsoCheck(p, 1, 3, 62, fb.MaxEsitPayload), XHCI_PIPE_OK,
+             "a 3-byte feedback read");
+    CHECK_EQ(XhciPipeIsoLength(p, 1, 3, 0), 3, "its length 3");
+    CHECK_EQ(XhciPipeIsoCheck(p, 1, 4, 62, fb.MaxEsitPayload),
+             XHCI_PIPE_BAD_PARAM, "4 bytes over Max ESIT Payload 3");
+
+    /* An asynchronous stream's packets follow the feedback: 48 kHz stereo
+     * 16-bit is 192 bytes a frame, with a 196-byte packet now and then. */
+    off = 0;
+    for (i = 0; i < 10; i++) {
+        p[i].Offset = off;
+        off += (i == 4) ? 196 : 192;
+    }
+    CHECK_EQ(off, 1924, "ten packets, one of them 196");
+    CHECK_EQ(XhciPipeIsoCheck(p, 10, off, 62, out.MaxEsitPayload),
+             XHCI_PIPE_OK, "every packet within 200");
+    CHECK_EQ(XhciPipeIsoLength(p, 10, off, 3), 192, "packet 3 is 192");
+    CHECK_EQ(XhciPipeIsoLength(p, 10, off, 4), 196, "packet 4 is 196");
+    CHECK_EQ(XhciPipeIsoLength(p, 10, off, 9), 192,
+             "the last packet runs to the buffer's end");
+    CHECK_EQ(p[5].Offset, 964, "packet 5 after the 196");
+}
+
 int main(void)
 {
     test_seq();
@@ -2838,6 +2941,7 @@ int main(void)
     test_rebase();
     test_caller_interval();
     test_walk_surplus();
+    test_play2_async();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
