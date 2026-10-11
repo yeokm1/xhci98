@@ -17,6 +17,17 @@ and amd64, through the same filter (section 4.2). Revision 8 takes
 review round 6, revision 9 round 7, and revision 10 round 8, which
 converged.
 
+**Revision 12, 2026-10-11** records the owner's decision of that day
+(section 12, decision 8; roadmap task 36.53; record 15 revision 7), which
+amends decisions 6 and 7: `XhciInterruptMode` 1 is the line only, so a
+message granted under mode 1 fails the start on x86 and amd64, helper or
+not, and no longer runs as mode 0; and 3, which read as 0, is the
+message only - the filter keeps only the message configurations (section
+4.2), and a message not granted or not connected (x86 with no helper
+bound included) fails the start. Sections 4.2 to 4.4 are amended in
+place, each change marked; the decisions, readings and reviews below
+stay as taken.
+
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
 `IoConnectInterruptEx` and `IoDisconnectInterruptEx` by each
@@ -360,7 +371,29 @@ replaces, and returns the replacement in `Information` with
 
 **Where it runs** (revision 7): on both images, NT 6 only
 (`IoIsWdmVersionAvailable(6, 0)`), never on 98, ME, 2000, XP or XP x64.
-**The strip is asked for** when either holds:
+
+**Mode 3 asks the opposite** (revision 12, decision 8): when the
+effective mode is 3, on x86 or amd64 and whether or not the helper is
+bound, the filter asks to **keep the message**, not the line, and asks
+for nothing else. On a REPLACEABLE list of the admitted shape (below) it
+removes every line member of an interrupt run that also holds a message,
+and drops every configuration whose interrupt runs are all line-only -
+the same rewrite as the `qemu` switch `XhciMsi86InjNoLine` (section 10,
+H1a), now a shipped path under mode 3 alone - and returns the result as
+the strip's replacement is returned, with the outcome **replaced: the
+message kept**. Every other class keeps the list as it is, with the
+outcome the strip would record (a NO-LINE list is already the message
+only; NO-MESSAGE or NO-INTERRUPT has no message to keep, so the start
+fails under record 15's mode-3 rows; an unadmitted shape is
+"unsupported shape"), and `XhciMsi86NoStrip` turns it off ("disabled")
+as it turns off the strip. On x86 with no helper bound the list is still
+rewritten for the message: mode 3 without the helper fails the start
+either way, and keeping the message keeps mode 3 one rule on both
+images. The two rewrites are one function, `xhciMsiRewrite` in
+`xhci_msi.c`, reached by `XhciMsiStrip` for the line and
+`XhciMsiKeepMessage` for the message.
+
+Otherwise **the strip is asked for** when either holds:
 
 - **x86, the helper not bound** after this filter's look (the helper's
   purpose, sections 1 and 4); or
@@ -373,9 +406,11 @@ replaces, and returns the replacement in `Information` with
   between the filter and the start, the start's own reading governs and
   meets whatever was granted under record 15's tables and section 4.3:
   1 then 0 starts on the granted line in automatic mode, watcher and
-  all; 0 then 1 may receive a message and takes section 4.3a's fallback;
-  1 then 2 polls despite the line. Vectors for these three in
-  `test_poll`'s decision table and the record's transitions.
+  all; 0 then 1 may receive a message and, since revision 12, fails the
+  start (section 4.3a's fallback until then); 1 then 2 polls despite the
+  line; 3 then 0 starts on the granted message; 0 then 3 may receive a
+  line and fails the start. Vectors for these in `test_poll`'s decision
+  table and the record's transitions.
 
 **The filter-time mode read.** The start's reader, `hcdReadDword`, calls
 `IoOpenDeviceRegistryKey`, which the WDK requires in a system thread.
@@ -414,9 +449,10 @@ meet a rebalance's filter with the previous mode, and the start's own
 fresh reading then governs as above. That is recorded (`FilterModeRaw`
 beside the start's value), not prevented.
 
-Otherwise (amd64 in modes 0, 2 and 3; x86 with the helper bound in those
+Otherwise (amd64 in modes 0 and 2; x86 with the helper bound in those
 modes) the filter walks, classifies and records the list (steps 1 to 5)
-and changes nothing: outcome "not asked". This is the same code in
+and changes nothing: outcome "not asked". Mode 3 asks for the message keep above, never for
+the strip. This is the same code in
 `xhci98.sys` on both images, and it does not depend on the helper. The
 helper look (step 2) is x86's alone.
 
@@ -471,7 +507,8 @@ may grant the message); **disabled** (the strip is switched off,
 below); **no line offered**, **no interrupt**,
 **unsupported shape**, **inconsistent** (each: kept as is, below);
 **no message** (nothing to strip: kept); **replaced**; **kept: no
-memory**.
+memory**; and, under mode 3 alone (revision 12), **replaced: the message
+kept**.
 
 **The resource-choice rule, used everywhere in this record:** a
 "replaced" outcome leaves only line interrupt choices, so, if resource
@@ -540,13 +577,12 @@ and the outcome is:
   would turn a message grant the start cannot connect into no interrupt
   at all, or delete a requirement; an empty list is never returned.
   Kept as is. The list's class, **NO-LINE** (message members and no
-  STRIPPABLE configuration), is what the start reads (section 4.3): a
+  STRIPPABLE configuration), is recorded for the start (section 4.3): a
   message grant with the helper not bound polls with "message not
-  connected" under modes 0 and 3, as record 15 has it, and under **mode
-  1 on x86 the start fails**, as XP fails a forced-line start on a
-  controller with no line (owner, 2026-10-09). On amd64, and on x86 with
-  the helper bound, mode 1 with a NO-LINE list runs the message and logs
-  that the line was asked for (record 15's row).
+  connected" under mode 0, as record 15 has it, and under **mode 1 the
+  start fails**, as XP fails a forced-line start on a controller with no
+  line - since revision 12 on amd64 and with the helper bound too, where
+  revision 6 ran the message and logged that the line was asked for.
 - **no interrupt**, when no configuration has an interrupt descriptor:
   kept as is; record 15's no-interrupt rows apply, as on XP.
 - **unsupported shape**, when some configuration has a message member and
@@ -615,8 +651,14 @@ x86 image:
   shape", "inconsistent", "disabled", "kept: no memory", "no list",
   "lower failed") or from a filter that never came; the record says which
   (section 9).
-- **Mode 1, no line, no helper: the start fails** (owner, 2026-10-09).
-  When the image is x86, the effective mode is 1, the resource is a
+- **Mode 1, no line, no helper: the start fails** (owner, 2026-10-09;
+  **widened by revision 12**: since 2026-10-11 mode 1 fails the start
+  under every message grant, on x86 and amd64, helper bound or not, with
+  the reason "forced line, a message granted" - record 15 section 4's
+  table - and the narrow condition below, with its reason "forced, no
+  line offered", is no longer the decision's input; `HcdMsiNoLineOffered`
+  still computes it for the `L` record of the routines). As decided on
+  2026-10-09: when the image is x86, the effective mode is 1, the resource is a
   message, the helper is not bound after the start's look, and this FDO's
   latest filter classified its list NO-LINE (section 4.2: not UNKNOWN, and
   published by that filter), the start fails as a forced-line start with no
@@ -660,6 +702,12 @@ x86 image:
 
 ### 4.3a Mode 1 forces the line (owner, 2026-10-09)
 
+**Amended by revision 12 (owner, 2026-10-11).** Mode 1 asks for the line
+as below, and where a message is granted anyway the start fails - there
+is no fallback to the message on any image. The paragraph below is the
+2026-10-09 text, whose fallback this replaces. Mode 3 is the mirror:
+it asks for the message (section 4.2) and fails the start without one.
+
 With the strip enabled, mode 1 on Vista and 7 (x86 and amd64) asks the
 filter for the line, so the start under mode 1 normally receives a line
 resource and runs it with record 15's forced-line rows (the routing
@@ -686,8 +734,9 @@ offset checks ("for both architectures").
   `MmGetSystemRoutineAddress` (record 15). Since revision 7 it runs the
   filter, and strips only under mode 1 (section 4.2).
 - `XhciInterruptMode` keeps record 15's meaning, with section 4.3a's
-  mode 1. Mode 2 polls even with a message granted. The filter consults
-  the mode for 1 alone. The supported way to change it is a disable and
+  mode 1 and, since revision 12, mode 3 as the message only. Mode 2
+  polls even with a message granted. The filter consults the mode for 1
+  (the line kept) and 3 (the message kept) alone. The supported way to change it is a disable and
   enable, whose new FDO reads the value at `AddDevice` before its first
   filter; a same-FDO rebalance's filter uses the previous start's reading
   (section 4.2), and in either case the start's tables meet whatever was
@@ -1306,6 +1355,18 @@ revision 5 put them as "orchestrator decision, owner to confirm".
    message; it never leaves an empty list; where no line is offered mode
    1 falls back to record 15's rule (the message runs, with the log
    note), except x86 with no helper bound, which fails (decision 6).
+8. **Owner decision (2026-10-11), amending decisions 6 and 7 and
+   record 15's 2026-10-09 mode rules:** `XhciInterruptMode` 1 is the
+   interrupt line only, on every system; on Vista and 7 a message granted
+   under mode 1 fails the start (Code 10), on x86 and amd64, helper bound
+   or not. `XhciInterruptMode` 3 is a message-signalled interrupt (MSI or
+   MSI-X) only: on Vista and 7 the requirements filter keeps only the
+   message configurations (section 4.2); a granted message that connects
+   runs; no message granted, or one that cannot be connected (x86 with no
+   helper bound included), fails the start (Code 10), with no fallback
+   to the line or to polling; on Windows 98 SE, ME, 2000 and XP, 32- and
+   64-bit, mode 3 fails the start. 0 and 2 are unchanged; 4 and above
+   still run as 0 (revision 12; record 15 revision 7; task 36.53).
 
 **For the orchestrator, to reconcile at merge** (this record does not
 edit them):
