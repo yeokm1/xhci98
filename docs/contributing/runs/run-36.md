@@ -2476,3 +2476,346 @@ On every target a success prints two restart lines, the script's and the
 batch file's. The refusal text (exit code 1) cannot be reached as an
 administrator on these guests, and is held by the self-tests alone. Raw
 notes and shots: `out\p36-pswbat\legs\<guest>\`.
+
+## Re-read on the stamped 2.3.0.0 (2026-10-11)
+
+The post-rebuild re-read that the final matrix left owed ("Owed to the post-rebuild re-read" above), on the first
+stamped `2.3.0.0` cut. Development host A, QEMU 11.1.0 (TCG), 2026-10-11 18:32 to 22:53. Coordinator branch
+`p36-reread`. Checklist, kit and evidence: `out\p36-reread\` (`checklist.md` with rows R1 to R6, `brief-legs.txt`,
+`kit\`, per-guest `legs\<guest>\notes.txt` with every RESULT line and the files it names, and `suspect.txt`).
+
+**What these readings cover.** The first stamped cut, `DriverVer` 10/11/2026: branch `p36-stamp3` at `c1097f4`,
+binaries built at `f09c6aa`, the unsigned packages `out\p36-stamp3\pkg-{release,qemu}-{x86,amd64}`, hashes
+`out\p36-stamp3\hashes.txt`.
+- `release` x86: `xhci98.sys` `64c6e8fd...`, `xhcimsi.sys` `a36a5007...`, `xhciuas.sys` `65439153...`.
+- `release` amd64: `xhci98.sys` `10400ec5...`, `xhciuas.sys` `7579e2ed...`.
+- `qemu` (fault injection and traces only): x86 `681fb72d...`, amd64 `e55a8bc5...`.
+- `XHCISNAP.EXE` `25a0342d...`, the same build.
+- The owner's signed zip of that cut has the same x86 binaries; its x64 binaries are these plus the test signature.
+  The packages here are unsigned, so Vista x64 and 7 x64 ran with F8's signature enforcement disabled at every boot.
+- They do not cover the re-cut. That is restamped `DriverVer` 10/12/2026 and rebuilt with 36.57 (the Play 2
+  async-audio fix: a first-TD Frame ID without CFC, then SIA; issue 14). Its own VM legs are `p36-play2`'s: smoke,
+  HID, Bulk-Only, UAS, usb-audio and the isochronous notes on 98 SE, ME, 2000, XP, 7 x86 and 7 x64.
+
+**The harness.**
+- The kit is a copy of the final matrix's: locks `<guest>-rr`, QEMU name `p36rr`, overlays `vm\t36rr`.
+  - Flavours `rel` and `qemu` from the packages above, `prev` the published `2.2.0.0`.
+  - `q203` is the stamped `2.2.0.3` `qemu` build, the build before 36.54, used for one control.
+- Every guest ran with `-display none` and the power-throttle opt-out. `-rtc` was the matrix's:
+  `base=2026-09-20T12:00:00` on Windows 7, `localtime` elsewhere, 98 SE and ME included.
+- Eight leg agents ran under the global admission lock, at most about 22 vCPUs in all; other workers' guests
+  shared the host.
+- The 2000 SMP warm-restart timing ran last, with the host at 4 vCPUs in all.
+- `XhciSelectiveSuspend` is no longer read as absent: since 36.51 every INF path writes all 19 values.
+
+**Summary per guest** (rows = RESULT lines, the attribution and control rows included; "other" = INFO, RECORDED or
+QEMU-defect rows):
+
+| Guest | Time (2026-10-11) | Rows | PASS | FAIL | NOT MAKEABLE | NOT RUN | other |
+|---|---|---|---|---|---|---|---|
+| 98 SE (E-4 alone) | 18:32-19:49 | 1 | 1 | 0 | 0 | 0 | 0 |
+| 98 SE (E-4 + mouse) | 18:32-19:49 | 1 | 1 | 0 | 0 | 0 | 0 |
+| 98 SE (lost interrupts, mode 3) | 18:32-19:20 | 3 | 3 | 0 | 0 | 0 | 0 |
+| 98 SE | 18:32-19:33 | 13 | 12 | 0 | 0 | 0 | 1 |
+| ME | 18:32-19:31 | 8 | 8 | 0 | 0 | 0 | 0 |
+| 98 SE NUSB clean | 18:32-20:02 | 4 | 4 | 0 | 0 | 0 | 0 |
+| 2000 SP4 | 18:33-19:25 | 10 | 10 | 0 | 0 | 0 | 0 |
+| 2000 clean | 18:33-19:11 | 6 | 6 | 0 | 0 | 0 | 0 |
+| 2000 SMP + Verifier | 20:07-22:53 | 8 | 5 | 0 | 0 | 0 | 3 |
+| XP SP3 | 18:32-19:38 | 9 | 9 | 0 | 0 | 0 | 0 |
+| XP x64 (qemu) | 18:32-19:51 | 10 | 10 | 0 | 0 | 0 | 0 |
+| XP x64 (release) | 18:32-19:08 | 6 | 6 | 0 | 0 | 0 | 0 |
+| Vista x86 | 18:33-20:02 | 11 | 11 | 0 | 0 | 0 | 0 |
+| Vista x64 | 18:33-20:02 | 11 | 11 | 0 | 0 | 0 | 0 |
+| 7 x86 | 18:33-22:12 | 20 | 14 | 0 | 0 | 0 | 6 |
+| 7 x64 | 18:33-19:27 | 9 | 9 | 0 | 0 | 0 | 0 |
+
+**36.54, UAS stream fault recovery: PASS everywhere it was owed.** These are the `qemu` flavour's `XhciQemuInject` bulk
+faults on a UAS data-in stream (`0x83`). Every run used a fresh UAS device, with the stream rings wrapped by 64 MiB
+to 512 MiB of traffic first.
+- Coverage:
+  - Faults 14 to 17 on XP x64, 2000, Vista x64, 7 x86 and 98 SE.
+  - Fault 16 three times on XP x64 and on 98 SE.
+  - As extra rows, the matrix's other failures: XP 14 and 15, Vista x86 14 and 17.
+- **Fault 16** recovers in place on every guest: the copy or VERIFY loop runs through it with no stall.
+  StreamRetryResets and RetryDiverts/Resets/Recovered rise by 1 a run, and xhciuas's timeouts, aborts, LUN resets
+  and port resets stay 0.
+- **Faults 14 and 17** recover after one class-timeout stall, then run clean:
+  - about 160 s on 2000, XP and XP x64;
+  - 62 to 63 s on Vista and 7;
+  - about 15 s on 98 SE.
+  Each stall is one timeout and one abort, with no LUN or port reset.
+- **Fault 15** recovers with no stall. The one exception is 7 x86, below.
+- QemuStreamQuirk read 1 and QemuStreamResyncFailed 0 throughout. No run left an abandon note, and no run needed a
+  replug or a controller restart.
+- **B9(b) on XP x64** (fault 15 on a big TD at `XhciMaxTransferKB` 2048): no stall with `XhciWideMap` 0 or 1. With 1,
+  1344 promotions and TDs of up to 512 TRBs. The matrix's stall did not recur.
+- **The Bulk-Only control on XP x64** (fault 16 on the stick's bulk-in `0x81`): the soft retry recovered it, the retry
+  counters rose, and StreamRetryResets did not move.
+
+**7 x86 Q3 fault 15: a QEMU abort, PASS with that note** (orchestrator ruling).
+- **What happened.** The first run killed the QEMU process with
+  `hw/usb/core.c:574: usb_packet_check_state: assertion failed`, right after the injection's Stop Endpoint. Five
+  more runs without a throttle passed: one under a full QEMU trace, four under a light one.
+- **The trace of the abort.** Throttling the UAS drive's reads (`block_set_io_throttle`, 20 MB/s, then 3 MB/s) parks
+  data-in packets async, and that reproduced it twice. QEMU's own trace (`legs\w7x86\qtrace-q15-tail.txt`,
+  `qtrace-qa2-tail.txt`) reads:
+  1. `usb_xhci_ep_stop slotid 2, epid 7`;
+  2. `running -> stopped`;
+  3. the driver's re-ring (`stopped -> running`; in the MSI-X run after one Set TR Dequeue for the stream);
+  4. `usb_packet_state_fault ... ep 3 ... state setup, expected async`;
+  5. the abort.
+  The faulting packet is the data-in packet that was async at the stop. It happened under MSI and under MSI-X alike.
+- **The cause** (QEMU 11.1, `hw/usb/dev-uas.c`):
+  - `usb_uas_cancel_io()` unlinks a cancelled data packet (`req->data = NULL`) but leaves `req->data_async` set.
+  - When the stopped TD is fetched again, `usb_uas_handle_data()` fills the new packet at once from the data that
+    arrived meanwhile.
+  - `usb_uas_complete_data_packet()` then sees the stale flag and calls `usb_packet_complete()` on a packet still in
+    SETUP.
+- **The driver's sequence is legal xHCI:** Stop Endpoint on a running endpoint, Set TR Dequeue per stream on the
+  stopped endpoint, then the doorbell that restarts it (sections 4.6.9 and 4.6.10). QEMU must not abort on it.
+- **Why only since 36.54.** The build before 36.54 (`q203`), under the same throttle, did not abort in 2 of 2 runs.
+  QEMU never fetched the stopped TD again: the old ignored-DCS problem left the stream ring invisible. The class
+  driver's abort recovered it about 60 s later. So 36.54's correct refetch is what reaches QEMU's stale flag.
+- No completed rep read a bad sector.
+- Evidence: `legs\w7x86\notes.txt`, `qemu-stderr-2.log`, `-5.log`, `-6.log` and `-7.log`, `qtrace-cq2-stop.txt`.
+
+**36.55, the backstop in the tolerance DPC (98 SE, `qemu`): PASS.**
+- **E-4 alone:** `XhciInterruptMode` 1 and `XhciQemuDeadLine` 1 on the 98 SE gold image, a stick present at power-on,
+  an MS-DOS prompt `F E` to the BIOS-mapped E:.
+  - The copy and `fc` x2 were clean in about 53.5 min, and the stick's block counters rose at every 30 s reading.
+  - TransfersSubmitted = TransfersCompleted = BackstopDrains = 6316.
+- **E-4 after a hot-added mouse and its driver:** clean in about 53 min. The mouse moves and clicks before and after.
+- **Mode 0 with 254 lost interrupts** (`XhciQemuInject` `020100FE`, set while the guest ran) during `F E`: clean in
+  about 3 min, BackstopDrains 254. A first try with the value set before the restart did not fire: a value present
+  at start is held unfired. That was the harness; it is recorded and not counted.
+
+**36.53, interrupt modes 1 and 3: PASS.**
+- **Mode 3 = Code 10:**
+  - 98 SE: debugcon's `M86 S` record shows reason 18 and `C0000182`.
+  - XP: DebugView shows `intr.reason` and `start.refused.delivery` 18.
+  - Mode 0 afterwards starts on the line, with reason 1.
+- **7 x64 and Vista x86 under QEMU's default MSI-X** (Vista x86 with the helper bound):
+  - mode 0: MSI-X, reason 10;
+  - mode 1: the line, reason 5, filter outcome 10;
+  - mode 3: MSI-X, reason 15, outcome 12;
+  - the mouse and a stick `fc` work in each.
+
+**The INF rows: PASS.**
+- **I2.** Every fresh install wrote all 19 values at the driver's defaults: ME, XP, XP x64, Vista x86/x64, 7 x86/x64,
+  and the clean 98 SE and 2000 bases.
+- **The 98 SE and 2000 gold images** are updates over an older driver. Both kept that driver's
+  `XhciImodInterval250ns` 500 and its log values, which is NOCLOBBER's rule, and added the other 16.
+- **K3, the update from 2.2.0.0, on the clean 98 SE NUSB and 2000 bases.**
+  - `XhciIntelIrqRoute` 0, `XhciInterruptMode` 2 and `XhciMaxTransferKB` 2048 were preserved.
+  - The five values 2.2.0.0 neither wrote nor had set by hand were added at their defaults, 19 in all.
+  - `XhciIntelPortSwitch` stays 1, 2.2.0.0's value, as the release notes say.
+  - The composite was re-detected once and nothing more after a reboot. XHCISNAP reads delivery 2, reason 8.
+
+**The smoke on every regular guest (`release`): PASS.**
+- **Each guest.** Install from the package with only the documented prompts; `bc` clean; the Driver tab reads
+  2.3.0.0; XHCISNAP's counters land on their named words. Then the mouse, and a stick copy with `fc`.
+- **Sleep and resume** with the CP1 device set attached: usb-audio, and a usb-hub on port 4 with a tablet behind it.
+  After the resume every device worked again: the mouse, the stick's `fc`, the tablet behind the hub, the audio
+  function, and on XP, XP x64 and 2000 a tone played.
+  - ME: Stand by and Hibernate.
+  - 2000, XP, XP x64, Vista x86/x64 and 7 x86/x64: hibernate. Vista and 7 resumed on the first try.
+  - 2000's Bulk-Only stick came back at Code 31, the known limitation.
+  - XP x64 has no Cirrus driver, so it hibernated on standard VGA, as in the matrix.
+  - 98 SE has no hibernate. One Stand by with the mouse only and no USB disk entered and resumed. Stand by with a
+    USB disk is 36.28 part 2's settled limitation and was not run.
+- **Start > Shut Down powered off** on every guest:
+  - 98 SE 3.5 s, ME 5 s, 2000 3.8 s (to "safe to turn off", with `acpi=off`);
+  - XP 17 s or less, XP x64 11.8 s;
+  - Vista x64 9.6 s, Vista x86 15.7 s;
+  - 7 x86 10.8 s, 7 x64 11 s on a fresh boot and 51.6 s after a long session.
+- **The XHCIPM test client** in D0 with reads on: shutdown completed on 98 SE in 5.1 s (4.5 s in the matrix) and on
+  ME in 5 s (7 s).
+
+**The 2000 SMP warm restart under mode 2 (WR):** mode 2 is no slower than mode 0. The time goes to QEMU TCG and the Windows 2000 HAL, not to the driver and not to Driver Verifier.
+- **The setup.** Release package on a fresh overlay, Driver Verifier `0x1B`, both vCPUs on separate host threads,
+  4 vCPUs on the host in all. Times run from OK on Restart to the desktop and to the mouse moving.
+
+  | Boot | Mode 0 | Mode 2 |
+  |---|---|---|
+  | warm restart 1 | 4:10 (mouse 3:53) | 2:57 (mouse by 2:57) |
+  | warm restart 2 | 6:00 (by 6:17) | 5:00 (by 5:17) |
+  | warm restart 3 | 8:11 (by 8:28) | 6:54 (by 7:11) |
+  | cold boot | 0:59 (by 1:16) | 0:59 (by 1:16; stick listed by 2:06) |
+
+- **Every boot read as expected.** Mode 2 gave delivery 2, reason 8, PollRole 2; mode 0 gave the line, reason 1.
+  There was no recovery (0 of 3), and the stick and the HID mouse started. `verifier /query` read AllocationsFailed 0,
+  with no stop and no bugcheck.
+- **Each warm restart is slower than the one before, in both modes.** The time is lost on the 640x480 "Starting up"
+  bar, held at three blocks, before the xHCI controller starts; the controller starts about 10 s before the bar
+  ends.
+- **The cause.** During the hold one CPU spins in the HAL's `KeStallExecutionProcessor`, an `rdtsc` loop scaled by
+  the KPCR's StallScaleFactor.
+  - After three warm restarts that factor read `0x00508055` and `0x0050AF1D`, about 5.27 million ticks a microsecond.
+  - From a cold boot it read `0x000051AB` and `0x00008073` on a quiet host, and the same within 0.2% under load.
+  - So after warm restarts every boot-time stall runs about 160 to 250 times longer.
+  - Guest time itself runs at host rate.
+- **The early warning's 10.5-14+ min** fits this effect after several resets.
+- Evidence: `legs\smp\notes.txt`, `timing-log.txt`, `tw-*.txt`, the per-boot snapshots, `verifier-*.txt`.
+
+**Recorded, not the driver.**
+- **Slow UAS under QEMU's MSI-X.** On 7 x86 and Vista x64, UAS VERIFY ran at 4-10 MB/s under QEMU's default MSI-X,
+  with BackstopDrains rising, against 160-230 MB/s under MSI. This is the matrix's MSI-X note, attributed to QEMU.
+  On 7 x86 the driver takes MSI-X by default since 36.53. The fault rows ran with `msi=on,msix=off`, as 36.54's own
+  legs did.
+- **The 98 SE audio wedge.** The K3 update leg on 98 SE hit the audio-load wedge right after the composite was
+  re-attached, and `USBAUDIO(01)+2ED4` at a boot with usb-audio attached (36.41 and 36.44, Windows 98 SE's).
+- **ME's restart rename.** ME's install asked for the documented restart twice. A second `WININIT.INI` with the same
+  rename line appeared after the first boot and was consumed harmlessly at the next.
+
+**Roadmap tasks whose legs this re-read completes** (not ticked here):
+- 36.51 (I2, K3);
+- 36.53 (modes 1 and 3);
+- 36.54 (Q3 and B9(b) on the guests the matrix failed, with the Bulk-Only control);
+- 36.55 (98 SE E-4 twice, and the mode-0 lost interrupts);
+- 36.13's 98 SE E-4 leg;
+- 36.final's QEMU regression smoke and the install and update legs on the first stamped cut;
+- 36.final's 2000 SMP warm-restart timing, attributed above.
+The 36.57 re-cut's legs are `p36-play2`'s.
+
+**Owed to the bench:**
+- a real UAS drive under a real transaction error or stop;
+- `XhciWideMap` 1 with a real UAS drive;
+- BackstopDrains under a real MSI-X controller.
+Each is as the matrix listed it.
+
+The full table follows. Results are the leg agents' verdicts; where the final attribution differs it is given in the
+Result cell in bold.
+
+| Guest | Check | Package | Result | Observed (abridged; full line in `legs\<guest>\notes.txt`) |
+|---|---|---|---|---|
+| 98 SE (E-4 alone) | RE4a | qemu | PASS | F E typed 18:46:20; copy + fc R2.BIN and RAND.BIN "FC: no differences encountered" (e4a-end2.png; e4a-end.png = the monitor power-off blank,... |
+| 98 SE (E-4 + mouse) | RE4m | qemu | PASS | usb-mouse m1 port 2 hot-added 18:46 after the DOS prompt: HID wizard (HIDDEV.INF, hidclass.sys from F:\WIN98) finished (m1-m6.png); info mic... |
+| 98 SE (lost interrupts, mode 3) | RLI0 | qemu | PASS | XhciInterruptMode 0 (s1.txt mode.read 0, delivery 1, reason 1); XhciQemuInject 020100FE set at run time 18:52:40 (the 010100FE present at st... |
+| 98 SE (lost interrupts, mode 3) | RM3-98 | qemu | PASS | Device Manager: xHCI98 USB 3.x eXtensible Host Controller with the yellow "!" under Universal Serial Bus controllers, no root hub (m3dm3.png... |
+| 98 SE (lost interrupts, mode 3) | RM3-98 (mode 0 again) | qemu | PASS | debugcon-5.log "M86 S 0001 0000 0001 00000000 00000001 00000000 00000000 00000000 00000001 00000001 00000000 cD3" (delivery 1, reason 1, sta... |
+| 98 SE | RQ3-16 run 1 (u2 fresh, fault 16 on UAS data-in 0x83, rings wrapped) | qemu | PASS | 01160083 armed 18:44:03 -> qemu.inj.bulk.armed 00160107, qemu.inj.fire 01160083, qemu.inj.bulk 16030107 (stream 3), answer 0E010701, ended 1... |
+| 98 SE | RQ3-16 run 2 (u3 fresh after device_del u2, same) | qemu | PASS | 02160083 armed 18:47:05 -> qemu.inj.bulk 16030107 (stream 3), answer 0E010701, ended 16, done 16, no abandon; warm-ups 13/14 s; copy complet... |
+| 98 SE | RQ3-16 run 3 (u4 fresh after device_del u3, same) | qemu | PASS | 03160083 armed 18:49:48 -> qemu.inj.bulk 16030107 (stream 3), answer 0E010701, ended 16, done 16, no abandon; warm-ups 14/12 s; copy complet... |
+| 98 SE | RQ3-15 (u5 fresh after device_del u4, fault 15 = bulk Stop on UAS data... | qemu | PASS | 04150083 armed 18:52:27 -> qemu.inj.bulk.armed 00150107, fire 04150083, qemu.inj.bulk 15030107 (stream 3), bulk.stopped 0, done 15, no aband... |
+| 98 SE | RQ3-17 (u6 fresh after device_del u5, fault 17 = bulk Short on UAS dat... | qemu | PASS | 05170083 armed 18:55:15 -> qemu.inj.bulk.armed 00170107, fire 05170083, qemu.inj.bulk 17030107 (stream 3), done 17, no abandon; copy complet... |
+| 98 SE | RQ3-14 (u7 fresh after device_del u6, fault 14 = lost completion on UA... | qemu | PASS | 06140083 armed 18:58:05 -> qemu.inj.bulk.armed 00140107, fire 06140083, qemu.inj.bulk.lost 085F0CE0 (the TD's TRB), qemu.inj.bulk.released 0... |
+| 98 SE | RI1 | rel | PASS (XHCI98.TMP noted) | DM > xHCI98 controller > Driver > Update Driver > search > Specify a location D:\ -> 'D:\XHCI98.INF' (up-1..up-5.png); Insert Disk 'Windows ... |
+| 98 SE | RI2 (98 SE gold base = an UPDATE over the older gold driver; RK3's rul... | rel | PASS (update: 16 added, 3 preserved, Imod 500 kept as RK3's rule) | reg-inst.txt USB\0002 after the update: all 19 present - XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, Xh... |
+| 98 SE | RI4 | rel | PASS | package-rel.txt xhci98.sys 64c6e8fd... 272,281 B (= checklist release x86), xhcimsi.sys a36a5007..., xhciuas.sys 65439153..., XHCISNAP 25a03... |
+| 98 SE | RS1 | rel | PASS | 'F E' (boot stick, E:): RAND.BIN 4 MB copied to E:\R2.BIN, 'FC: no differences encountered' x2 (rs1-f.png); m1 usb-mouse hot-added on port 2... |
+| 98 SE | RS5 | rel | PASS (3.5 s) | launch 4 with the boot stick (E:) + m1 usb-mouse attached, DOS box exited: Shut Down Windows 'Shut down' (rs5-dlg.png), Enter at 19:19:50 ->... |
+| 98 SE | RS4 (98 SE: no hibernate; Stand by with a USB disk = settled 36.28 par... | rel | RECORDED (mouse-only Stand by: entry 2.0 s, resume to the desktop, mouse works, shutdown after 3.6 s) | launch 5 (-Tag r, NO boot stick, no disk): m1 usb-mouse hot-added port 2 (bound, no wizard), pointer moves (sb-0.png); Start > Shut Down > S... |
+| 98 SE | RPM (98 SE, stage.ps1 -PmMouse, XhciSelectiveSuspend 1) | rel | PASS (5.1 s) | PS1.txt 'dev D0 sys S0 started 1 ... config 1 attr 0xA0 in 0x81 status 0'; READS ON + 4 moves of mouse #3 -> 'reads on 1 ok 8 failed 0' (PS2... |
+| ME | RI2 | rel | PASS | reg-inst-pre.txt key USB\0000: XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, XhciFirstEnumWaitMs 0x1388 (... |
+| ME | RI1 | rel | PASS | Found New Hardware -> D:\XHCI98.INF, only the documented ME restart (asked twice: wizard + boot pass, r08/r09); before the restart XHCI98.TM... |
+| ME | RI4 | rel | PASS | package-rel.txt: xhci98.sys 64c6e8fd... 272,281 (= hashes.txt release x86), XHCISNAP 25a0342d...; ri4.txt (verbosity 2, after a restart): to... |
+| ME | RS1 | rel | PASS | stick s1 port 1 (5000) hot-added: 'New Hardware Found: USB Disk' automatic (r36), F:; F.BAT F: dir + copy D:\RAND.BIN F:\R2.BIN + fc /b x2 '... |
+| ME | RS4 Stand by | rel | PASS | Start > Shut Down > Stand by (r59-sb): QEMU 'paused (suspended)' 2 s after OK; system_wakeup + a key: 'running', CPU idle in HLT (EIP ff03a3... |
+| ME | RS4 Hibernate (offered) | rel | PASS | the set as above, stick accessed; Start > Shut Down > Hibernate (r71-hibmenu, r72-hib): image written, 'paused (shutdown)' 13 s after OK; qu... |
+| ME | RS5 | rel | PASS (5 s) | the RS4 set still attached after the hibernate resume (s1 accessed by F.BAT, m1, a1, hub h1 + tablet 4.1); DOS box exited, Start > Shut Down... |
+| ME | RPM | rel | PASS (5 s) | PMCTL STATUS 'dev D0 sys S0 started 1', READS ON -> 'reads on 1 ok 4 failed 0 ... config 1 attr 0xA0 in 0x81' (p15-st, p16-st; tablet report... |
+| 98 SE NUSB clean | RI2 | rel | PASS | reg-inst-pre.txt key USB\0002: XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, XhciFirstEnumWaitMs 0x1388, ... |
+| 98 SE NUSB clean | RI1 bits | rel | PASS | BC 'FC: no differences encountered' after the restart (i22); Driver tab Provider Yeo Kheng Meng, Date 10-11-2026 (i28-drv); Driver File Deta... |
+| 98 SE NUSB clean | RS1 (quick) | rel | PASS | stick s1 port 1 (5000): F.BAT F: copy + fc /b x2 'no differences encountered' (i43-f); usb-mouse m1 port 2 (480): Add New Hardware 'USB Huma... |
+| 98 SE NUSB clean | RK3 | prev->rel | PASS (values, composite once, nothing new, mode 2); the wedge + fault recorded as KNOWN 36.41/36.44 | reg-upd.txt (2nd block, after the update + the restart) key USB\0002: user values KEPT XhciIntelIrqRoute 0, XhciInterruptMode 2, XhciMaxTran... |
+| 2000 SP4 | RQ3-16 | qemu | PASS | q16.txt: qemu.inj.bulk.armed 00160107, fire 01160083, qemu.inj.bulk=160F0107 (stream 0x0F, slot 1, DCI 7), xfer.error=00010704, answer 0E010... |
+| 2000 SP4 | RQ3-14 | qemu | PASS | q14b.txt (VERIFY 1M x256 MiB -reps 8, started 18:48:29): notes bulk.armed 00140107, fire 02140083, qemu.inj.bulk.lost=015111A0, bulk.release... |
+| 2000 SP4 | RQ3-17 | qemu | PASS | q17b.txt (VERIFY 1M x256 MiB -reps 8, started 18:55:26): notes bulk.armed 00170107, fire 03170083, qemu.inj.bulk=17040107 (stream 0x04, slot... |
+| 2000 SP4 | RQ3-15 | qemu | PASS | q15.txt (VERIFY 1M x256 MiB -reps 8, 19:05:03): notes bulk.armed 00150107, fire 04150083, qemu.inj.bulk=15040107 (stream 0x04, slot 1, DCI 7... |
+| 2000 SP4 | RI1 | rel | PASS | adv.bat > Driver > Update Driver > Display a list > Have Disk E:\ > 'xHCI98 USB 3.x eXtensible Host Controller' > Next > Next > Finish (r-u3... |
+| 2000 SP4 | RI2 (gold = update over 1.99.0.0) | rel | PASS (recorded: update rule) | r-inst.txt key 0000: DriverVersion 2.3.0.0, InfPath oem1.inf, 19 values: kept from the old driver XhciLogVerbosity 0, XhciLogDebugView 0, Xh... |
+| 2000 SP4 | RI4 | rel | PASS | package-rel.txt xhci98.sys 64c6e8fd31c4249d... (= hashes.txt release x86), XHCISNAP 25a0342d...; XHCISNAP -verbosity 2 + dc/ec (r-verb.txt),... |
+| 2000 SP4 | RS1 | rel | PASS | the HS usb-mouse (port 2) moved the pointer to the properties dialog's Close and clicked it (r-u7 -> r-u8), moved (298,447) -> (548,297) by ... |
+| 2000 SP4 | RS4 | rel | PASS (stick Code 31 after S4 = known Windows 2000 limitation, recorded) | Start > Shut Down > Hibernate (r-hib1) 19:18:08 -> 'It is now safe to turn off your computer' (r-hib2, acpi=off), quit; launch 3 19:19 (pid ... |
+| 2000 SP4 | RS5 | rel | PASS | after RS4 (CP1 set + mouse + stick attached): Start > Shut Down > Shut down (r-sd1) -> 'It is now safe to turn off your computer' (r-sdp/r-s... |
+| 2000 clean | install (fresh) | rel | PASS | shots boot1, fi1-fi6 ('Completing ... xHCI98 USB 3.x eXtensible Host Controller'), no restart asked; then the known Explorer 'E:\ is not acc... |
+| 2000 clean | RI2 | rel | PASS | i-rk.txt key 0000: XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, XhciFirstEnumWaitMs 0x1388 (5000), XhciF... |
+| 2000 clean | RI1 bc | rel | PASS | i-rk.txt: 'Comparing files C:\WINNT\SYSTEM32\DRIVERS\xhci98.sys and E:\XHCI98.SYS / FC: no differences encountered' (xhcimsi absent on 2000,... |
+| 2000 clean | RI1 Driver tab | rel | PASS | adv.bat > Driver tab: Provider (the INF's ProviderName), Date Not available, Version 2.3.0.0, Not digitally signed (shot drv2); General: wor... |
+| 2000 clean | RS1 (quick) | rel | PASS | m2 usb-mouse port 2 (480) + s1 usb-storage port 1 (5000) hot-added, no wizard: HID mouse + HID-compliant mouse + USB Mass Storage + USBSTOR ... |
+| 2000 clean | RK3 | prev->rel | PASS | prev: FNH > Specify a location E:\ > e:\xhci98.inf > Finish (shots k-fi3..k-fi6, then the Explorer 'E:\ is not accessible' box k-fi7, OK'd);... |
+| 2000 SMP + Verifier | R6 check-smp-parallelism.ps1 -MonitorPort 55109 | rel | PASS | 2 vCPUs, distinct thread ids 17840/54828, affinity 0xFFFFFFFF (32 of 32), exit 0 (parallelism-check.txt) |
+| 2000 SMP + Verifier | R6 verifier /query at start | rel | PASS | 20:41 verifier-start.txt: Level 0000001B, xhci98.sys loads 1 unloads 0 (the base's old 1.0.0.0 driver), AllocationsFailed 0 |
+| 2000 SMP + Verifier | R6 install (as I1) | rel | PASS | adv.bat > Driver tab (1.0.0.0) > Update Driver > list > Have Disk E:\ > xHCI98 USB 3.x eXtensible Host Controller > Next > Finish: Found New... |
+| 2000 SMP + Verifier | R6 WR mode 0 warm restart x3 | rel | BENCH (works every time; slow and growing per warm restart in mode 0 too) | vCPU total incl. ours 4 at each (smp 2 + p36rr w7x86 2; timing-log.txt): m0a desk 4:10 / mouse 3:53 / stick listed by 5:23; m0b desk 6:00 / ... |
+| 2000 SMP + Verifier | R6 WR mode 2 warm restart x3 | rel | BENCH (works; same growth as mode 0) | vCPU total 4 at each: m2a desk 2:57 / mouse <=2:57; m2b desk 5:00 / mouse <=5:17 / stick by 6:15; m2c desk 6:54 / mouse <=7:11 / stick by 8:... |
+| 2000 SMP + Verifier | R6 WR cold boot (quit + relaunch) | rel | BENCH (cold 0:59 both modes vs warm 3-8 min) | c0a mode 0, total 4: desk 0:59 / mouse <=1:16 / stick listed (c0a-ls.txt); c2a mode 2, total 3 (22:49, p36p2 w98 1 + ours 2): desk 0:59 / mo... |
+| 2000 SMP + Verifier | R6 WR attribution | rel | PASS (no driver fault; finding: QEMU TCG warm reset miscalibrates the 2000 MP HAL stall factor) | QEMU TCG + the 2000 HAL, not xhci98: (1) the time goes to the 640x480 "Starting up" bar stuck at 3 blocks BEFORE the xHCI controller starts ... |
+| 2000 SMP + Verifier | R6 verifier /query at the end | rel | PASS | verifier-end.txt (22:46, launch 3 boot): Level 1B, xhci98.sys loads 1 unloads 0, AllocationsAttempted 33 = Succeeded 33 = SpecialPool 33, Al... |
+| XP SP3 | RI1 | rel | PASS | controller FNH cancelled, h\inst.ps1: i.bat -> Logo 'xHCI98 USB 3.x eXtensible Host Controller' alt-i (inst-r-1); the root hub FNH opened un... |
+| XP SP3 | RI2 | rel | PASS | rk-r.txt (UTF-16 as sent; rk-r-a.txt de-nulled) key 0000: XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, X... |
+| XP SP3 | RI4 | rel | PASS | package-rel.txt xhci98.sys 64c6e8fd... 272281 B (= hashes.txt), XHCISNAP 25a0342d...; first t.bat: 'request was refused: 6 (DRIVER DECLINED)... |
+| XP SP3 | RS1 | rel | PASS | usb-mouse bm1 (port 2, HS): pointer moved 513,393 -> 680,500 (rs1mv0 -> rs1mv1), right click opened the desktop menu (rs1clk), left click fo... |
+| XP SP3 | RS4 | rel | PASS | launch 1 cirrus: 'System does not support hibernation' before a restart (hw.txt); shutdown -r, then powercfg /hibernate on accepted + every ... |
+| XP SP3 | RS5 | rel | PASS | launch 2 after RS4 (CP1 set + stick + mouse attached): ctrl-esc, Turn Off Computer, Turn Off (sd1) at 19:04:46 -> HMP 'VM status: paused (sh... |
+| XP SP3 | RM3-XP | rel | PASS | launch 3 (-Tag r, pid 41436, cirrus, -BootStick -BootMouse): setv XhciLogDebugView 1 + dc/ec (m3set0.txt); DebugView 'DBGVIEW /f /l C:\dv.lo... |
+| XP SP3 | RQ3-15 (extra; the matrix's XP Q3-15 FAIL) | qemu | PASS | x15a.txt / x15a-meta.txt / x15a-run.log: device_del u1 + uasraw u2 port 3 (same disk, PhysicalDrive2, x15a-disks.txt computer name scrubbed)... |
+| XP SP3 | RQ3-14 (extra; the matrix's XP Q3-14 FAIL) | qemu | PASS | x14a.txt / x14a-meta.txt / x14a-run.log: device_del u2 + uasraw u3 port 3 (PhysicalDrive2), warm-up VERIFY 300 MiB 85.5 MB/s 0 bad; armed 00... |
+| XP x64 (qemu) | RQ3-16 run 1 | qemu | PASS | r16a.txt: armed 00160207, fire 01160083, qemu.inj.bulk=16040207 (stream 4, slot 2, DCI 7), xfer.error=00020704, answer 0E020701, ended/done ... |
+| XP x64 (qemu) | RQ3-16 run 2 | qemu | PASS | r16b.txt: fire 02160083, qemu.inj.bulk=160F0207 (stream 15, slot 2, DCI 7), xfer.error 00020704, answer 0E020701, ended/done 16, no abandon;... |
+| XP x64 (qemu) | RQ3-16 run 3 | qemu | PASS | r16c.txt: fire 03160083, qemu.inj.bulk=16090207 (stream 9, slot 2, DCI 7), xfer.error 00020704, answer 0E020701, ended/done 16, no abandon; ... |
+| XP x64 (qemu) | RQ3-14 | qemu | PASS | r14.txt: armed 00140207, fire 04140083, qemu.inj.bulk.lost=066C6990, bulk.released=00010207, done 14 (no abandon); rep 3 162501 ms (the one ... |
+| XP x64 (qemu) | RQ3-15 | qemu | PASS | r15.txt: armed 00150207, fire 05150083, qemu.inj.bulk=15060207 (stream 6, slot 2, DCI 7), bulk.stopped 0, done 15 (no abandon); reps 1-8 141... |
+| XP x64 (qemu) | RQ3-17 | qemu | PASS | r17.txt: armed 00170207, fire 06170083, qemu.inj.bulk=17070207 (stream 7, slot 2, DCI 7), done 17 (no abandon); rep 2 162839 ms (the one sta... |
+| XP x64 (qemu) | RBOT16 | qemu | PASS | BOT stick s1 (usb-storage on VVFAT legs\stickbig, F:, BIG.BIN 32 MiB) hot-added on root port 1 (botdrv.txt USBSTOR started); h\bot.ps1: inje... |
+| XP x64 (qemu) | RQ3-15t | qemu | PASS | q15t.txt: armed 00150207, fire 08150083, qemu.inj.bulk=150B0207 (stream 11, slot 2, DCI 7), bulk.stopped 0, done 15, no abandon; reps 1-8 21... |
+| XP x64 (qemu) | RB9b (WideMap 0) | qemu | PASS | b9set.txt setv XhciMaxTransferKB 0x800 (getv: WideMap 0, 19 values), trace events switched off (HMP), shutdown -r (in-guest restart, QEMU pr... |
+| XP x64 (qemu) | RB9b (WideMap 1) | qemu | PASS | b9set1.txt setv XhciWideMap 1 + dc/ec (2048 kept); fresh device u10 after 320 MiB: b9w1.txt xfer.wide value/switch/check/enabled 1, 'promoti... |
+| XP x64 (release) | RI1 | rel | PASS | launch 1 (pid 43904, -Tag r fresh overlay, -Vga cirrus-vga -BootStick -BootMouse -AudioWav -Display none): controller FNH cancelled, i.bat -... |
+| XP x64 (release) | RI2 | rel | PASS | rk.txt key 0000: XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, XhciFirstEnumWaitMs 0x1388 (5000), XhciFir... |
+| XP x64 (release) | RI4 | rel | PASS | package-rel.txt xhci98.sys 10400ec5...cadab 313344 B, xhciuas.sys 7579e2ed...461c, XHCISNAP 25a0342d...; after XHCISNAP -verbosity 2 + dc/ec... |
+| XP x64 (release) | RS1 | rel | PASS | rs1f.txt f.bat F: RAND.BIN -> F:\R2.BIN '1 file(s) copied', fc /b E:\RAND.BIN vs F:\R2.BIN and vs F:\RAND.BIN 'FC: no differences encountere... |
+| XP x64 (release) | RS4 | rel | PASS | relaunch 2 (pid 18428, std VGA, -BootStick -BootMouse -AudioWav -Display none): pwr1.txt powercfg /hibernate on accepted, timers Never ('Sys... |
+| XP x64 (release) | RS5 | rel | PASS | after RS4 with the CP1 set + stick + mouse attached: Start (sd0) -> Turn Off Computer -> dialog 'Hibernate / Turn Off / Restart' (sd1, Hiber... |
+| Vista x86 | RI2 | rel | PASS | r-i2-rk.txt (read right after pnputil, before any change): XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, ... |
+| Vista x86 | RI1 | rel | PASS | pnputil -i -a E:\xhci98.inf -> unsigned box Install anyway (r-i1a.png) -> oem3.inf 'Successfully installed' (r-i1c.png); before the restart:... |
+| Vista x86 | RI4 | rel | PASS | package-rel.txt: xhci98.sys 64c6e8fd.. (272281), xhcimsi.sys a36a5007.. (13312), XHCISNAP 25a0342d..; (XHCISNAP -verbosity 2 + dc/ec, r-i1-p... |
+| Vista x86 | RS1 | rel | PASS | stick s1 port 1 (5000) + usb-mouse m1 port 2 hot-added (r-i1-post.txt: USB Mass Storage, HID-compliant mouse, USBSTOR disk started); info mi... |
+| Vista x86 | RS4 | rel | PASS | before: stick s1 port 1, mouse m1 port 2, usb-audio a1 port 3, hub h1 port 4 + tablet t1 4.1 all started (r-cp-ls.txt: composite + MI_00 Aud... |
+| Vista x86 | RM-vx86 mode 0 | rel | PASS | first boot after install (r-i4.txt) and again at the end after setv 0 + shutdown /r (rm0.txt): intr.mode.read 0, intr.delivery 5 then 4, int... |
+| Vista x86 | RM-vx86 mode 1 | rel | PASS | r-m1-set.txt, shutdown /r, Activation 'Activate later'; rm1.txt: intr.mode.read 1, intr.delivery 1, intr.reason 5; IntrDelivery 1, IntrReaso... |
+| Vista x86 | RM-vx86 mode 3 | rel | PASS | r-m3-set.txt, shutdown /r, Activation 'Activate later' (the first elevated-cmd attempt typed into Start search - closed, redone, rm3b-cmd.pn... |
+| Vista x86 | RS5 | rel | PASS | (devices attached: stick, mouse, usb-audio, hub + tablet) cmd closed, desktop focused, Alt-F4 -> 'Shut Down Windows' dialog with Shut Down s... |
+| Vista x86 | RQ3-14 (extra; the matrix's Vista x86 failure) | qemu | PASS | u1 (fresh, first UAS device of launch n=3, 1 GiB WRITE/VERIFY + 512 MiB VERIFY before), 01140083 (xq14-pre/-fire/-post.txt, xq14-run.log): q... |
+| Vista x86 | RQ3-17 (extra; the matrix's Vista x86 failure) | qemu | PASS | u2 (device_del u1 + fresh uasraw u2), 02170083 (xq17-pre/-fire/-post.txt, xq17-run.log): qemu.inj.bulk.armed 00170107, qemu.inj.fire 0217008... |
+| Vista x64 | RQ3-14 | qemu | PASS | u2 (fresh, first UAS device of launch n=2), 01140083 (rq14-pre/-fire/-post.txt, rq14-run.log): pre VERIFY 2x256 MiB 126/132 MB/s 0 bad; qemu... |
+| Vista x64 | RQ3-15 | qemu | PASS | u3 (device_del u2 + fresh uasraw u3, port 3), 02150083 (rq15-pre/-fire/-post.txt, rq15-run.log): pre VERIFY 2x256 MiB 174/178 MB/s 0 bad; qe... |
+| Vista x64 | RQ3-16 | qemu | PASS | u4 (device_del u3 + fresh uasraw u4), 03160083 (rq16-pre/-fire/-post.txt, rq16-run.log): pre VERIFY 2x256 MiB 152/162 MB/s 0 bad; qemu.inj.b... |
+| Vista x64 | RQ3-17 | qemu | PASS | u5 (device_del u4 + fresh uasraw u5), 04170083 (rq17-pre/-fire/-post.txt, rq17-run.log): pre VERIFY 2x256 MiB 134/136 MB/s 0 bad; qemu.inj.b... |
+| Vista x64 | RQ3-15c | qemu | PASS | u6 (first UAS device of launch n=3), 05150083 (rq15c-pre/-fire/-post.txt, rq15c-run.log): qemu.inj.latched 04170083 (rq17's value latched at... |
+| Vista x64 | RI1 | rel | PASS | pnputil -i -a E:\xhci98.inf -> unsigned box Install anyway (r-i1a.png) -> oem3.inf, PCA 'requires a digitally signed driver' box closed (r-i... |
+| Vista x64 | RI2 | rel | PASS | r-i2-rk.txt (read right after pnputil, before any change): XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFastPollFsLs 0, ... |
+| Vista x64 | RI4 | rel | PASS | package-rel.txt: amd64 xhci98.sys 10400ec5.. (313344), xhciuas.sys 7579e2ed.., XHCISNAP 25a0342d.. (x86 tool under WOW64); XHCISNAP -verbosi... |
+| Vista x64 | RS1 | rel | PASS | stick s1 port 1 + usb-mouse m1 port 2 started (r-i4pre.txt); info mice '* Mouse #3: QEMU HID Mouse': pointer 513,393 -> 382,285 (r-rs1-mb/ma... |
+| Vista x64 | RS4 | rel | PASS | before: stick s1, mouse m1, usb-audio a1 port 3, hub h1 port 4 + tablet t1 4.1 all started (r-cp-ls.txt: composite + Audio Device, hub, 2 HI... |
+| Vista x64 | RS5 | rel | PASS | (stick, mouse, usb-audio, hub + tablet attached) cmd closed, desktop focused, Alt-F4 -> 'Shut Down Windows' dialog with Shut Down selected (... |
+| 7 x86 | RQ3-14 | qemu | PASS | u3 (fresh), pre 164.2/173.4 MB/s (q14-pre.txt); fire 01140083 (q14-fire.txt): qemu.inj.bulk.armed 00140207, qemu.inj.bulk.lost 7FAC75E0, qem... |
+| 7 x86 | RQ3-15 (run 1) | qemu | QEMU abort (core.c:574); **ruling: PASS with the QEMU note - usb-uas stale data_async, legal Stop EP + re-ring (5 of 6 unthrottled runs clean)** | pre 161.0/135.3 MB/s, QemuStreamQuirk 1, Resyncs 16, failed 0 (q15-pre.txt); fire 02150083 typed 19:15:57; debugcon-2.log last line 'xhci98:... |
+| 7 x86 | RQ3-15 (run 2, TRACED repro) | qemu | PASS (this run) - the abort did not reproduce under the full trace | clean shutdown of the aborted overlay (chkdsk ran once at the next boot, q3-boot), relaunch n=4 -Tag q msi=on,msix=off + trace; u5 fresh, pr... |
+| 7 x86 | RQ3-15 (run 3, light trace) | qemu | PASS (this run) | 04150083 (q15c-pre/-fire/-post.txt, q15c-run.log): armed 00150207, qemu.inj.bulk 150E0207 (stream 14, slot 2, DCI 7), bulk.stopped 0, done 1... |
+| 7 x86 | RQ3-15 (run 4, light trace) | qemu | PASS (this run) | 05150083 (q15d-*.txt, q15d-run.log): qemu.inj.bulk 150B0207 (stream 11), done 15; reps 1.31-1.79 s all 0 bad, loop-exit 0; further VERIFY 17... |
+| 7 x86 | RQ3-14 (2nd run, light trace; sets up run 1's sequence) | qemu | PASS | 06140083 (q14b-*.txt): reps 1.25-1.48 s except rep 3 62.59 s (one class timeout), all 0 bad, loop-exit 0; further VERIFY 206.8 MB/s 0 bad; x... |
+| 7 x86 | RQ3-15 (run 5, light trace, right after a fault 14 = run 1's order) | qemu | PASS (this run) | 07150083 (q15e-*.txt): pre Resyncs 36; reps 1.28-1.40 s all 0 bad, loop-exit 0 (no stall); further VERIFY 208.2 MB/s 0 bad; xhciuas 0/0/0/0;... |
+| 7 x86 | RQ3-15 (throttle runs qt1/qt2, n=5 untraced launch, trace enabled at r... | qemu | INFO | qt1: block_set_io_throttle iops_rd 40 on fresh t1 (2.5 MB/s with the stderr trace on), the fire line lost one ')' while typing (cmd 'More?' ... |
+| 7 x86 | RQ3-15 (run qt3, REPRODUCED) | qemu | QEMU abort reproduced under a read throttle; **ruling: QEMU defect (dev-uas.c usb_uas_cancel_io), not the driver** | fresh t3 (n=5), pre 2 x 256 MiB 20.1/20.0 MB/s 0 bad (qt3-pre.txt = XHCISNAP just before the injection); fire 0A150083 typed 20:36:44 (debug... |
+| 7 x86 | RQ3-15 control (a): the matrix's interrupt config (QEMU default msi+ms... | qemu | QEMU abort reproduced under MSI-X too; **ruling: QEMU defect, independent of the interrupt config** | qa1: fresh a1, bps_rd 20 MB/s (above MSI-X's own ~4 MB/s, so no effect), fire 0B150083 (qemu.inj.bulk 150E0207): the stop met no async data-... |
+| 7 x86 | RQ3-15 control (b): the PRE-36.54 qemu build (stamped 2.2.0.3, out\p36... | q203 | no abort on the pre-36.54 build: QEMU never refetches the stopped TD (DCS ignored), class abort recovers after ~60 s; **ruling: the abort is reachable only thro... | INFO (control: no abort on 2.2.0.3 = the old stall instead) |
+| 7 x86 | RQ3-16 | qemu | PASS | relaunch n=8 -Tag q msi=on,msix=off untraced, no throttle; v1 fresh, pre 183.9/209.1 MB/s (q16-pre.txt: StreamRetryResets 0, no Retry* count... |
+| 7 x86 | RQ3-17 | qemu | PASS | v2 fresh (device_del v1), pre 226.7/228.1 MB/s; fire 0E170083 (q17-fire.txt): armed 00170207, qemu.inj.bulk 170C0207 (stream 12, slot 2, DCI... |
+| 7 x86 | RQ3-15 (verdict) | qemu | agent: FAIL (QEMU defect); **ruling (orchestrator): PASS with the QEMU note - QEMU usb-uas stale data_async on a legal Stop EP + re-ring, reachable since 36.54 ... | 5 runs without a read throttle passed (q15b/c/d/e and qt2 with no async data-in at the stop); run 1 (19:17, untraced) and the targeted repro... |
+| 7 x86 | RI1 | rel | PASS | launch n=9 -Tag r (fresh) -BootStick, default xHCI (msi+msix); elevated cmd, ShellHWDetection stopped (r-hw.txt: no xHCI devices before); pn... |
+| 7 x86 | RI2 | rel | PASS | r-inst.txt (reg query key 0000 right after pnputil, before any change): XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, XhciFas... |
+| 7 x86 | RI4 | rel | PASS | package-rel.txt xhci98.sys 64c6e8fd.. (272281), xhcimsi.sys a36a5007.., xhciuas.sys 65439153.., XHCISNAP 25a0342d.. (no stage warning); XHCI... |
+| 7 x86 | RS1 | rel | PASS | usb-mouse m1 hot-added port 2 (HID mouse started, r-post.txt): pointer ~400,308 -> ~263,447 (rs1-m-b/-a), a right-click opened the desktop c... |
+| 7 x86 | RS4 | rel | PASS | rs4-pre.txt: powercfg /a Hibernate only (VGAPNP blocks S1-S3); stick port 1, mouse m1 port 2, usb-audio a3 port 3 (XHCI98\COMPOSITE parent +... |
+| 7 x86 | RS5 | rel | PASS | n=10 after RS4 (stick, mouse, usb-audio, hub + tablet attached): Start menu opened with the usb-mouse (rs5-start2; a first click landed on t... |
+| 7 x64 | RI1 | rel | PASS | launch n=1 -Tag r (fresh) -BootStick, F8 DSE (f8sel); elevated cmd, ShellHWDetection stopped (r-hw.txt); pnputil -i -a E:\xhci98.inf -> unsi... |
+| 7 x64 | RI2 | rel | PASS | r-inst.txt (reg query key 0000 right after the install, before any change): XhciLogVerbosity 0, XhciLogDebugView 0, XhciForceBulkOnly 0, Xhc... |
+| 7 x64 | RI4 | rel | PASS | package-rel.txt xhci98.sys 10400ec5.. (313344), xhciuas.sys 7579e2ed.., XHCISNAP 25a0342d.. (built 18:17:57 / 18:19:12, no stage warning); X... |
+| 7 x64 | RS1 | rel | PASS | usb-mouse m1 hot-added port 2 (480 Mb/s): pointer moved ~400,308 -> ~575,420 (rs1-m-b/-a), a click opened the Start menu (rs1-click2); f.bat... |
+| 7 x64 | RS4 | rel | PASS | rs4-pre.txt: powercfg /a Hibernate only (VGAPNP blocks S1-S3); stick port 1, mouse m1 port 2, usb-audio a3 port 3 (XHCI98\COMPOSITE parent +... |
+| 7 x64 | RM-7x64 mode 1 | rel | PASS | setv 0000 XhciInterruptMode 1 (rm1-set.txt), shutdown /r, F8 DSE (rm1-f8sel); rm1.txt: intr.mode.read 1, intr.mode 1, intr.delivery 1, intr.... |
+| 7 x64 | RM-7x64 mode 3 | rel | PASS | setv 0000 XhciInterruptMode 3 (rm3-set.txt), shutdown /r, F8 DSE (rm3-f8sel); rm3.txt: intr.mode.read 3, intr.mode 3, intr.delivery 5 -> 4, ... |
+| 7 x64 | RM-7x64 mode 0 (and the end state) | rel | PASS | setv 0000 XhciInterruptMode 0 (rm0-set.txt), shutdown /r, F8 DSE (rm0-f8sel); rm0.txt: intr.mode.read 0, intr.mode 0, intr.delivery 5 -> 4, ... |
+| 7 x64 | RS5 | rel | PASS | run 1 (n=2, after RS4 resume + RM modes, mode 0, with stick, mouse, usb-audio a3, hub h3 + tablet tb3 attached; rs5-start2/rs5-hover2): clic... |
