@@ -218,9 +218,9 @@ The two log values are described in the [release notes](docs/using/release-notes
 
 `XhciImodInterval250ns` sets the shortest gap the controller leaves between two interrupts, in units of 250 ns. A shorter gap makes USB storage faster at the cost of more interrupts.
 
-- `160` (written by the install): 40 us, at most 25,000 interrupts a second. Linux uses the same value.
 - `10` (the lowest accepted): 2.5 us.
-- `4000`: 1 ms, the controller's own power-on value. It is also used when the value is missing, unreadable or outside `10`-`4000`.
+- `160` (written by the install): 40 us, at most 25,000 interrupts a second. Linux uses the same value.
+- `4000`: 1 ms, the controller's own power-on value.
 
 A value out of range is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. If you get audio stutter or instability under load, raise it towards `4000` or delete it.
 
@@ -268,7 +268,7 @@ On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, ea
 
 `XhciIntelPortSwitch` lets the driver move them to the xHCI controller at each start and resume, and hand them back when the controller is disabled or removed, or the machine shuts down. The hand-back writes only the registers the driver itself wrote.
 
-- `0` (default; also absent or not a `DWORD`): off.
+- `0` (default): off.
 - `1`: on, for Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`.
 - `2`: on any Intel xHCI controller, listed or not; on a listed one it is the same as `1`. **At your own risk**: see below.
 
@@ -276,7 +276,21 @@ With `2`, on a chipset without these registers (every Intel chipset from the 100
 
 A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts, and comes back under it, so do not have a drive busy on a blue connector at that moment.
 
-The value is read when the controller starts, so restart Windows after changing it. `portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`: double-click it, or run `cscript //nologo portsw.vbs show` (or `1`, or `0`) as an administrator.
+The value is read when the controller starts, so restart Windows after changing it.
+
+`portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in the package directory:
+
+```
+cscript //nologo portsw.vbs show
+cscript //nologo portsw.vbs 1
+cscript //nologo portsw.vbs 0
+```
+
+- `show`: the value on every xhci98 controller.
+- `1`: turns the switchover on.
+- `0`: turns it off.
+
+Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
 ### The Intel 7/8/9-series interrupt routing repair
 
@@ -284,9 +298,9 @@ On the same Intel chipsets, two chipset registers decide which interrupt line th
 
 `XhciIntelIrqRoute` lets the driver read those registers at each start and resume and point the interrupt at the line Windows assigned.
 
-- `1` (default; also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
-- `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
 - `0`: read and report only.
+- `1` (default): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
+- `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
 
 It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16.
 
@@ -317,6 +331,8 @@ The release notes' "Windows Vista and 7: message-signalled interrupts" and "Xhci
 
 A UAS command moves up to 1 MiB by default. Restart after changing either value below.
 
+On Windows 98 SE and ME the practical maximum is 64 KiB: Windows' storage layer there never sends a request larger than that, so a larger setting makes no difference.
+
 - `XhciMaxTransferKB`: the largest UAS command for every UAS drive on the controller, `64` to `2048` KiB in multiples of `4`. Default `1024`.
 - `XhciWideMap`: `1` keeps two pieces of a large bulk transfer on the controller at once, on Windows 2000 to 7. **Off by default** (`0`), because a regression would show as wrong data rather than an error.
 
@@ -326,10 +342,10 @@ Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControl
 
 Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub.
 
-`XhciUsb2HubSpeedFallback` lets the driver give such a device the standard speed ID, Full Speed `1` or Low Speed `2`, when the table names neither speed and does not use that number for another.
+`XhciUsb2HubSpeedFallback` lets the driver assume such a controller handles Low and Full Speed behind a hub as well, even though its table names only High Speed. The driver then uses the standard speed ID for the device, Full Speed `1` or Low Speed `2`, unless the table already uses that number for another speed.
 
-- `1` (default): on.
 - `0`: off; such devices are refused.
+- `1` (default): on.
 
 A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback. Restart after changing it.
 
@@ -350,11 +366,23 @@ A fault the driver cannot tie to a transfer re-enumerates the device, as if it h
 
 Each is tried a few times at most; then the port or the controller is held until the device is unplugged or the controller is restarted. None of it acts unless a fault is reported.
 
-- `XhciTolerance` `1` (default): on. `0` turns most of it off.
-- `XhciIntervalCap`: interrupt endpoints polled at least every 32 ms. `1` (default) on AMD controllers, `2` on every controller, `0` off.
-- `XhciAvgTrbEsit`: a comparison switch for interrupt endpoints. Leave it at `0` (default).
+`XhciTolerance` switches all of it together.
 
-If a USB device stops working on your machine, send two `XHCISNAP` captures (one while it works, one after it stops) and the controller's id from `XHCIQUAL`. The [release notes](docs/using/release-notes.md), "Controller faults: what the driver does about them", and the package's `readme.txt` have the details, including the exceptions.
+- `0`: most of it off.
+- `1` (default): on.
+
+`XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms instead, as Linux does on some AMD controllers.
+
+- `0`: off.
+- `1` (default): on AMD controllers.
+- `2`: on every controller.
+
+`XhciAvgTrbEsit` changes one figure the controller is told for each interrupt endpoint: its average transfer size, which the controller uses in its own bandwidth reckoning. It is a switch for comparison: if your devices misbehave, try `1` and see whether anything changes. Only interrupt endpoints are affected.
+
+- `0` (default): 1024 bytes, the figure the xHCI specification suggests.
+- `1`: the endpoint's largest transfer per service interval, as Linux does.
+
+All three are read when the controller starts, so restart after changing one.
 
 ## What is tested, and what is not
 
@@ -407,6 +435,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | Windows XP installed with the F6 floppy needs a PS/2 or built-in laptop keyboard | Setup copies Windows' own HID and USB helper files only with Microsoft's own USB controller drivers, so in GUI-mode Setup the USB keyboard and mouse wait for its device install, which first asks about the unsigned driver (default No). A USB-only keyboard cannot answer it; a PS/2 or built-in laptop keyboard can. Windows 2000 does not ask. |
 | Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
+| Windows ME: Shut Down with an unopened USB disk | Shut Down can hang if a USB disk is attached but has not been opened since Windows started. ME does the same on Microsoft's own USB stack. Open the disk once (a `dir` of it is enough), or remove it, before shutting down. |
 
 ### Not planned, though a later release might address them
 
