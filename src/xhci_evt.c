@@ -50,6 +50,7 @@
 #if defined(XHCI_FLAVOUR_QEMU)
 #include "hcd_svc.h"
 #endif
+#include "xhci_poll.h"
 
 /* XHCI_ISR_IMAN_READ_ATTEMPTS is in src/xhci_hw.h, with the contract it is part
  * of - the host vector for the literal fallback counts exactly that many reads. */
@@ -96,10 +97,11 @@ static VOID xhciPublishErdp(PXHCI_EXTENSION ext, ULONG ehb)
  * MiniportInterruptsSpinLock and the driver-image controller lock - a handler
  * that could block or spin would hold both while it did.
  *
- * **Four arms act**: Command Completion (task 7), Port Status Change, Transfer
- * Event and Host Controller Event. Every other one counts its type and says
- * which task or phase owns acting on it. *(Command Completion was the only one
- * that acted when this comment was written, and the sentence stayed as the
+ * **Five arms act**: Command Completion (task 7), Port Status Change, Transfer
+ * Event, Host Controller Event and, since roadmap-hcd 36.38, Device
+ * Notification (selective suspend's hook). Every other one counts its type and
+ * says which task or phase owns acting on it. *(Command Completion was the only
+ * one that acted when this comment was written, and the sentence stayed as the
  * other three were built out - the 2026-09-16 audit's B10. Counting each type
  * and naming the port is still what the Phase 4 checkpoint reads.)*
  *
@@ -197,6 +199,17 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
                                XHCI_TRB_GET_COMPLETION(trb->Status));
         return XhciSlotTransferEvent(ext, trb);
 
+    case XHCI_TRB_TYPE_DEVICE_NOTIFICATION:
+        /*
+         * Roadmap-hcd 36.38 (design record 14 section 8.7): raised only for
+         * a type DNCTRL enables, which is FUNCTION_WAKE with
+         * XhciSelectiveSuspend 1 and none otherwise. Counted by type above
+         * as before; the hook latches it for the device's suspension, or
+         * returns at once with the switch at 0.
+         */
+        XhciDeviceNotificationEvent(ext, trb);
+        break;
+
     case XHCI_TRB_TYPE_HOST_CONTROLLER:
         /*
          * A controller-wide error - Event Ring Full is the one this driver can
@@ -263,7 +276,7 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
 
     default:
         /*
-         * Doorbell, Device Notification, MFINDEX Wrap: all legal, none of them
+         * Doorbell and MFINDEX Wrap: legal, neither of them
          * produced by anything this driver does. The per-type counter above is
          * the record; this is the trace.
          *
@@ -352,6 +365,18 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
     }
 
     /*
+     * **A line moved to polling and retired** (design record 15 section
+     * 4.2): further assertion is proven prevented - by a masked
+     * acknowledgement, a verified PCI Interrupt Disable or a completed
+     * HCRST - so this controller cannot be the source, and declining is
+     * free. Before the USBSTS read, so a shared line's other devices cost
+     * this controller no register access.
+     */
+    if (ext->LineRetired) {
+        return FALSE;
+    }
+
+    /*
      * **Is this driver admitted**, and the answer is conditional on something
      * the gates themselves do not know. Declining is only free once this
      * controller can no longer be asserting the shared level-triggered line -
@@ -370,9 +395,15 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
      * declined below anyway, so this cannot claim an interrupt for a controller
      * that is gone.
      */
+    /*
+     * While a moved line's retirement is owed (LineMoved, not LineRetired),
+     * this gate stays shut: a suspend's or a recovery's own mask would
+     * otherwise open it with the standing assertion unacknowledged (record
+     * 15 section 4.2).
+     */
     if (((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0 ||
          ext->ControllerFailed) &&
-        ext->InterruptDeliverySuppressed) {
+        ext->InterruptDeliverySuppressed && !ext->LineMoved) {
         return FALSE;
     }
 
@@ -431,12 +462,17 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext)
      * trade. The xHC set EHB when it set IP - EHB "shall be set to '1' when the
      * IP bit is set to '1'" (5.5.2.3.3, p.394) - and IP cannot be set again
      * while EHB is set: "when IMODC transitions to '0': if EHB = '0' and IPE =
-     * '1', then IP shall be set to '1'" (4.17.5, p.270). So throughout the
-     * window this write opens, no interrupt can be generated whatever IE holds.
-     * The one thing that clears EHB is the DPC's final ERDP write, and the DPC
-     * re-arms IE immediately after it, under the controller lock and only while
-     * usbport still wants interrupts. IE clear is therefore this driver's
-     * *normal* state between an interrupt and its DPC, not an error state.
+     * '1', then IP shall be set to '1'" (4.17.5, p.270). So from this write
+     * until the DPC's final ERDP write, the one thing that clears EHB, no
+     * interrupt can be generated whatever IE holds. EHB's cover ends there,
+     * not at the re-arm: a non-blocking event in the short window between that
+     * ERDP write and the re-arm sets IPE. The re-arm preserves a pending IP
+     * and lets the interrupt be delivered once the moderation conditions are
+     * met, with no further event needed (4.17.5, 5.5.2.1; the re-arm's own
+     * comment in the DPC). The DPC re-arms IE under the controller lock and
+     * only while usbport still wants interrupts. IE clear is therefore this
+     * driver's *normal* state between an interrupt and its DPC, not an error
+     * state.
      *
      * **The operand is validated first, like every other IMAN read-modify-write
      * in this driver** (`XhciMaskInterrupts`, `XhciUnmaskInterrupts` and
@@ -743,7 +779,28 @@ ULONG XhciEventDiscardStale(PXHCI_EXTENSION ext, PULONG fatalEvent)
  * interrupt enable/disable, and terminal failure while this bounded pass owns
  * the event and command-ring state.
  */
+static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                            PULONG drainedOut);
+
 ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
+{
+    return xhciEventDrain(ext, enableInterrupts, NULL);
+}
+
+/*
+ * XhciEventDpc, also saying how many events this pass consumed, for the
+ * poller's own count (design record 15 section 8): another drain on
+ * another processor can move EventsTotal meanwhile. *drained is 0 when the
+ * pass was refused. IRQL: DISPATCH_LEVEL.
+ */
+ULONG XhciEventDpcDrained(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                          PULONG drained)
+{
+    return xhciEventDrain(ext, enableInterrupts, drained);
+}
+
+static ULONG xhciEventDrain(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts,
+                            PULONG drainedOut)
 {
     XHCI_TRB trb;
     ULONG drained;
@@ -754,6 +811,9 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
     ULONG report;
     KIRQL oldIrql;
 
+    if (drainedOut != NULL) {
+        *drainedOut = 0;
+    }
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return 0;
     }
@@ -770,6 +830,15 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
         return 0;
     }
     if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
+        XhciControllerLockRelease(ext, oldIrql);
+        return 0;
+    }
+    /*
+     * Under a poll delivery the poller's own admission, in this same hold
+     * (design record 15 section 5.3): INITIALIZED is published before the
+     * controller runs, PollService only after the HCD has seen it running.
+     */
+    if (ext->EventDelivery == XHCI_POLL_DELIVERY_POLL && !ext->PollService) {
         XhciControllerLockRelease(ext, oldIrql);
         return 0;
     }
@@ -880,6 +949,9 @@ ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * instead would strand them permanently.
      */
     xhciPublishErdp(ext, 1);
+    if (drainedOut != NULL) {
+        *drainedOut = drained;
+    }
 
     if (bounded) {
         ext->DrainBoundHits++;

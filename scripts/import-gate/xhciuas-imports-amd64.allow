@@ -49,6 +49,10 @@ ntoskrnl.exe!KeSetTimer                    all    required  nt52-amd64-export; t
 ntoskrnl.exe!KeCancelTimer                 all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ExQueueWorkItem               all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoCancelIrp                   all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=uas_fdo.obj nt52-amd64-export; twin of the x86 row (task 36.22)
+ntoskrnl.exe!ZwSetValueKey                 all    required  SITES=uas_fdo.obj nt52-amd64-export; twin of the x86 row (task 36.22)
+ntoskrnl.exe!ZwClose                       all    required  SITES=uas_fdo.obj nt52-amd64-export; twin of the x86 row (task 36.22)
+ntoskrnl.exe!RtlQueryRegistryValues      all    required  SITES=uas_fdo.obj nt52-amd64-export; twin of the x86 row (task 36.22)
 
 # --- Pool, MDLs and transfer-IRP memory: uas_mem.obj only ---
 ntoskrnl.exe!ExAllocatePoolWithTag         all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row

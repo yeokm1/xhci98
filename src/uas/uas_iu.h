@@ -185,4 +185,76 @@ ULONG UasCdbDirection(UCHAR opcode);
 ULONG UasBuildId(ULONG kind, const UCHAR *inquiry, ULONG inquiryLength,
                  const char *serial, ULONG lun, char *out, ULONG size);
 
+/*
+ * Task 36.21's telemetry (xhci98_xfer.h): the bucket of a command's data
+ * length - up to 4 KiB, 16, 64, 128, 256, 512 KiB, 1 MiB, 2 MiB, above -
+ * and of the commands in flight as one starts - 1, 2, 3-4, 5-8, 9-16, 17
+ * and more (0 reads as 1). The bus's own buckets are the same
+ * (xhci_xstat.c). And a sum's carry by hand.
+ */
+#define UAS_TELE_BUCKETS        9UL
+#define UAS_TELE_DEPTHS         6UL
+
+ULONG UasTeleBucket(ULONG bytes);
+ULONG UasTeleDepthBucket(ULONG active);
+VOID UasTeleAdd64(PULONG lo, PULONG hi, ULONG v);
+
+/*
+ * Task 36.22: the command size from the bus's answer to
+ * IOCTL_XHCI98_TRANSFER_POLICY (xhci98_xfer.h). `sent` says how the
+ * request itself went; `reply` is the request structure as it came back
+ * (read only when sent is UAS_POLICY_SENT_OK). Returns the size in bytes
+ * - the bus's when its reply keeps the contract, 64 KiB otherwise - and
+ * sets *source to the XHCI98_TELE_SRC_* that says which.
+ */
+#define UAS_POLICY_SENT_OK          0UL /* the IRP succeeded              */
+#define UAS_POLICY_SENT_UNSUPPORTED 1UL /* NOT_SUPPORTED, INVALID_DEVICE_
+                                         * REQUEST: an older bus          */
+#define UAS_POLICY_SENT_REFUSED     2UL /* INVALID_PARAMETER: the bus
+                                         * refused the request's header  */
+#define UAS_POLICY_SENT_FAILED      3UL /* anything else: removal, no
+                                         * memory, no IRP                 */
+#define UAS_POLICY_FALLBACK_BYTES   0x10000UL
+
+struct _XHCI98_TRANSFER_POLICY;
+ULONG UasPolicyValue(ULONG sent, const struct _XHCI98_TRANSFER_POLICY *reply,
+                     PULONG source);
+
+/*
+ * Task 36.22, owner 2026-10-09: Microsoft's per-device limit, the
+ * MaximumTransferLength value (bytes) under
+ * HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP (KB 2581464),
+ * honoured for this one device over the bus's answer. `busBytes` and
+ * `busSource` are what UasPolicyValue gave; `found` says whether the value
+ * exists, `type` and `length` what it is, `value` its four bytes. Returns
+ * the command size and sets *source (XHCI98_TELE_SRC_DEVICE when the value
+ * was taken, else busSource) and *why (UAS_DEVLIM_*). A value is taken only
+ * when it is a four-byte REG_DWORD from 65535 to 2097152 - KB 2581464's
+ * range, 65535 to 2097120, with its top widened to 2097152, which is what
+ * the existing tools write for 2 MiB (owner, 2026-10-10) - and only when
+ * the bus answered (XHCI98_TELE_SRC_BUS): an older
+ * bus, or a question that failed, keeps 64 KiB whatever the value says. A
+ * taken value is rounded to the nearest 4 KiB, ties up, so it lands on the
+ * contract's grid of 64 KiB to 2 MiB in 4 KiB steps: nearest moves a value
+ * least (never by more than 2048 bytes, a tie going up), and takes
+ * 65535 and 2097120 - Microsoft's spellings of 64 KiB and 2 MiB - and
+ * 2097152 to 64 KiB and 2 MiB. It is a normalisation onto the grid, not a
+ * byte ceiling: the size taken can exceed the value by up to 2048 bytes.
+ * The bridge caps in use - 64 KiB, 120 KiB (240 sectors), 512 KiB, 1 MiB -
+ * are on the grid already and do not move.
+ */
+#define UAS_DEVLIM_ABSENT           0UL /* no value: the bus's answer     */
+#define UAS_DEVLIM_USED             1UL /* taken for this device          */
+#define UAS_DEVLIM_TYPE             2UL /* not a four-byte REG_DWORD      */
+#define UAS_DEVLIM_RANGE            3UL /* outside 65535 to 2097152       */
+#define UAS_DEVLIM_NO_BUS           4UL /* valid, but the bus did not
+                                         * answer: 64 KiB stands          */
+#define UAS_DEVLIM_MIN_BYTES        65535UL
+#define UAS_DEVLIM_MAX_BYTES        2097152UL
+#define UAS_DEVLIM_REG_DWORD        4UL /* REG_DWORD, for the pure core   */
+
+ULONG UasDeviceLimit(ULONG busBytes, ULONG busSource, ULONG found,
+                     ULONG type, ULONG length, ULONG value, PULONG source,
+                     PULONG why);
+
 #endif /* UAS_IU_H */

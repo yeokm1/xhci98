@@ -55,6 +55,9 @@ XHCISNAP -help           the long help; bare XHCISNAP prints the short one
 XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
                          modifier on -verbosity / -disable only: on its own it
                          asks for nothing and is refused with exit 2
+XHCISNAP -nosysinfo -o C:\MYDUMP   a dump whose header skips reading the
+                         system details (from 2.3.0.0; see "The machine it was
+                         captured on"). A modifier on a dump only
 ```
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
@@ -123,6 +126,78 @@ published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
 
+### The machine it was captured on (2.3.0.0)
+
+From 2.3.0.0 (roadmap-hcd.md task 36.47) the `.TXT`'s header block, which
+is written at every level and is the part users paste into an issue, also
+names the system the dump was taken on, under "captured on":
+
+- **OS**: `GetVersionEx`'s platform, version, build and service pack
+  (`szCSDVersion`), with a name: Windows 95, 98, 98 SE, ME, 2000, XP,
+  XP x64 or Server 2003 (told apart by the product type and the native
+  processor), Vista or Server 2008, 7 or Server 2008 R2, "Windows 8 or
+  later" (every later Windows reports 6.2 to a program with no
+  compatibility manifest), or "unknown".
+- **Bitness**: x86, or 64-bit Windows with this x86 tool under WOW64
+  (`IsWow64Process` and `GetNativeSystemInfo`, looked up at run time so the
+  EXE still loads on 98 SE, ME and 2000). The tool is x86 on every target.
+- **The machine**, only where the OS records it in the registry: on Vista
+  SP1 and later `HKLM\HARDWARE\DESCRIPTION\System\BIOS`'s
+  `SystemManufacturer`, `SystemProductName`, `SystemFamily`, `SystemVersion`,
+  `BaseBoardManufacturer`, `BaseBoardProduct`, `BIOSVendor`, `BIOSVersion`
+  and `BIOSReleaseDate`; on 2000 and XP (and a Vista without that key)
+  `HKLM\HARDWARE\DESCRIPTION\System`'s `SystemBiosVersion` and
+  `SystemBiosDate`, with "make/model: not available on this OS"; on XP x64,
+  which has neither of those two values and keeps the SMBIOS strings in the
+  `BIOS` key as Vista SP1 does (2026-10-10 matrix guest export), that key's
+  values through the same allow list - 2000, XP and XP x64 read the `BIOS`
+  key only when `SystemBiosVersion` and `SystemBiosDate` are both absent; on
+  98 SE and ME `HKLM\Enum\Root\*PNP0C01\0000`'s `BIOSName`, `BIOSVersion` and
+  `BIOSDate`, which is what the system board's devnode carries there. Each
+  value is printed only where it exists: on QEMU's SeaBIOS, ME's devnode
+  holds `BIOSVersion` and `BIOSDate` and no `BIOSName`, and 2000's key holds
+  `SystemBiosDate` and no `SystemBiosVersion` (2026-10-10 guest exports).
+- **CPU**: `ProcessorNameString`, else `Identifier`, from
+  `HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0`, and the processor
+  count (`GetSystemInfo`).
+- **RAM**: the physical memory, from `GlobalMemoryStatusEx` where it exists
+  and `GlobalMemoryStatus` before it.
+
+**It never prints the computer name, the user name or the domain as a
+field, and never reads a serial number, UUID, asset tag or SKU value.** The
+values printed are a fixed allow list named in the source, never a key's
+whole contents, and each one names a make, a model, a firmware or a
+processor rather than one machine. Those are still the firmware's free text,
+which an integrator (or QEMU's `-smbios`) can fill with anything, so a
+second guard stands behind the list: the tool reads the computer name, the
+user's name, the domain (`USERDOMAIN`, the domain or workgroup joined, the
+DNS domain) and on 98 SE and ME the workgroup, for this comparison only,
+and prints any registry string that contains one of them (without case,
+before and after cleaning) as "withheld". A name of one or two characters is
+not compared, so it is not withheld. What no tool can catch is
+an identifier that is none of those, typed into a product string; on a
+machine whose firmware strings were customised, read the block before
+posting it. Registry text is printed as plain ASCII (any other byte becomes
+`?`) and cut at 96 characters with `...`. `-selftest-sysinfo` drives the
+withholding over canned names.
+
+`-nosysinfo` beside a dump (`XHCISNAP -nosysinfo -o C:\MYDUMP`) skips all
+of it, for a machine on which the reading itself causes a problem: no
+`GetVersionEx`, no registry read for the BIOS, the CPU or the names, no
+processor or memory query. The header then says "captured on - not read:
+the system details were skipped by -nosysinfo", and the rest of the report
+is unchanged. Reading is on unless the option is given; on its own, or
+beside `-probe`, `-verbosity` or `-disable`, the option is refused with
+exit 2.
+
+It is read from the running machine when the dump is taken, never from the
+dump: the driver does not record it and the `.BIN` does not carry it. This
+tool does not decode a saved `.BIN` (that is the maintainer's offset-table
+route), so the block always describes the machine the driver answered on.
+`-selftest-sysinfo` prints the names over canned `GetVersionEx` answers, the
+NT source choice above over canned source-presence combinations, and then
+the block for the machine it runs on.
+
 The `.TXT` also carries, from a 2.0.0.0 driver and at every level, one line per
 device the driver holds a slot for: its Slot ID, root port, Route String and
 tier, the Output Slot Context's state and Speed field (the raw PSIV, xHCI
@@ -140,8 +215,8 @@ Neither is in the extension, so neither is in the `.BIN`: each root port's
 enumeration machine - its state, why it failed, the attempts it used, its slot,
 the raw speed ID its last reset read with the class and meaning the driver
 gave it, its USB 3 link's warm resets and give-up, and its enumeration notes'
-budget and refusals - and `XHCIHC_COUNTERS`, the 63 counters the device matrix
-reads. A port is printed only when it has something to say, the counters only
+budget and refusals - and `XHCIHC_COUNTERS`, the counters the device matrix
+reads (63 words up to 2.2.0.2, 96 from 2.2.0.3). A port is printed only when it has something to say, the counters only
 when nonzero, by name. A driver before 2.2.0.0 does not serve the region and
 the report says so. `-selftest-hcd` prints the decode over a canned image.
 
@@ -233,6 +308,163 @@ does not serve the tolerance state; an extension image that came back short
 or another size than the driver declared is not decoded, and only the
 terminal reason is printed. `-selftest-tol` prints the decode over a canned
 image.
+
+From 2.3.0.0 the HCD region's header carries the interrupt routing quirk's
+record (`XhciIntelIrqRoute`, roadmap task 36.3) after the terminal reason,
+and the report names it in a section of its own, "interrupt routing":
+
+- **The value** as found, or "not set", and how the driver took it: 0 reports
+  and writes nothing, 1 writes on the verified E7250 only, 2 on any reviewed
+  xHCI and LPC pair.
+- **The counts** since the driver loaded: runs, D20IR writes, and writes
+  that failed (the write refused, its read-back failed, or the read-back
+  disagreed).
+- **The last run**: at the start or at a return to D0, its decision by name
+  and meaning (the run stops at the first check that fails), the delivery
+  (a line, a message interrupt, polled, none), and the raw interrupt
+  resource the OS gave (descriptors, level, vector, flags, share).
+- **What it read**, each "not read" past the check that ended the run: the
+  xHCI's id, subsystem and pin; 00:14.0's id; the LPC bridge's id, RCBA and
+  `PIRQA-H_ROUT` routes; D20IP's pin; D20IR before, the PIRQ that delivers
+  the IRQ the OS assigned, and D20IR read back after a write.
+
+A header from before 2.3.0.0 is reported as not serving the record, and a
+record count the header cannot hold is not decoded. `-selftest-pirq` prints
+the decode over canned headers.
+
+From the same release the header also carries the transfer-size readings
+(roadmap task 36.21) after the routing record, in a section of their own,
+"transfer size", since the controller's start:
+
+- **The value** `XhciMaxTransferKB` as the start took it (task 36.22), the
+  command size in effect and how often a class driver asked for it, and the
+  map grant (registers, and the pages one chunk may span).
+- **Bulk data URBs** by length, and the chunks each became.
+- **The gap between two chunks of one URB**, in two parts: software's time
+  from a chunk's retirement to the next one's publication, and the time the
+  ring stood empty in software's view with the URB unfinished; and the
+  processor time a publication, a completion pass and a next chunk's
+  mapping take. These are time-stamp counter readings converted with the
+  rate the start's and the dump's (counter, system time) pairs give, so a
+  dump under a second after the start prints counts only; an interval
+  whose two readings came from two processors is not measured but counted
+  ("across two processors"), and on a machine whose processors' counters
+  disagree the rate and ages are approximate. Hardware starvation itself
+  is not measured.
+- **Each class driver record** (`xhciuas.sys` sends one at most once a
+  second, when anything in it changed): whether its device is present or
+  departed, the command size it advertises and where it came from,
+  streamed or not, its queue depth and the most commands in flight, its
+  commands by length and by the number in flight as each started, its
+  counters, how often its size question fell back to 64 KiB, and how old
+  the record is. A record slot nothing has written reads "none has come",
+  never zeros.
+
+A header from before 36.21 is reported as not measuring it. `-selftest-xstat`
+prints the decode over canned headers.
+
+From 2.2.0.3 (roadmap tasks 36.6 to 36.9, design record 15) the controller
+may take its events by polling instead of the line interrupt, and the report
+says which, in a section of its own, "event delivery", read from the counter
+block's words 63 to 95 (named in the counter list too):
+
+- **The three values** `XhciInterruptMode`, `XhciPollIdleMs` and
+  `XhciPollActiveMs`, as `XhciImodInterval250ns` is reported: found or not,
+  the value as read, the value in effect, and in words the rule that made
+  them differ (a reserved mode run as 0, a period of 0 replaced by its
+  default, an idle period above 5000 ms held to it, an active period held to
+  the idle one).
+- **The delivery in effect and its reason**: the line interrupt, polling,
+  MSI or MSI-X; and why - automatic with the line there, automatic with
+  Interrupt Pin 0 or no interrupt resource, forced line, forced polling, or
+  the line gone dead at run time and moved to polling; or why a start
+  failed: `XhciInterruptMode` 1 given a message, or 3 given no message, a
+  message not connected, or a Windows with no message interrupts (design
+  record 15 revision 7). So a machine that
+  polls automatically and one forced to poll read apart. Under polling the
+  report says that `XhciImodInterval250ns` has no effect.
+- **The Interrupt Pin** and whether it could be read.
+- **The poller**: its role (watching the line, or serving the event ring),
+  the period it last armed and the bus state that chose it, its runs and the
+  runs that found an event, the opportunistic peeks and their hits,
+  promotions, parks, kicks, arms displaced, and the shortest and longest
+  interval observed between two runs.
+- **The watcher and the dead-line move**: looks, asserted looks, stale pairs;
+  whether the line was moved and whether the interrupter's mask was proven
+  down; the line's retirement and its attempts; and a start that found PCI
+  Interrupt Disable set and cleared it.
+- **The extension's six delivery words** (`EventDelivery` to
+  `LineRetireState`), which the HCD header's words 202 and 203 place in the
+  extension image as the tolerance words place `Tol`; a mismatch between
+  the extension's delivery and the counter block's is said, since the two
+  regions are read at different times.
+
+A counter block of 63 words is a driver from before polling, reported as
+taking the line interrupt; a header shorter than 204 words places no
+extension words. `-selftest-intr` prints the decode over canned images.
+
+**Message interrupts** (2.2.0.3 on, task 36.15; design records 15 section
+4.3 and 18 section 9). Counter words 96 to 113 are named
+(`MsiRoutines` to `MsiFilterStripped`) and decoded in their own section:
+where the `IoConnectInterruptEx` pair came from (the 64-bit
+`MmGetSystemRoutineAddress`, the 32-bit helper `xhcimsi.sys`, or not
+found), the messages connected and granted, the capability (MSI or MSI-X)
+and the connection's status; the 32-bit helper's state (ABSENT, REFUSED
+with the check that failed, BOUND with its version); and the last
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS`'s record: the list's class, the
+outcome ("not asked", "REPLACED" when the message choices were stripped so
+the line is granted, "REPLACED ... the message left" when `XhciInterruptMode`
+3 stripped the line choices, or why the list was kept), the `XhciInterruptMode`
+it read, and the list's members. The filter runs on Vista and 7 only, so on
+Windows 98, ME, 2000 and XP its sequence is 0 and the section says "not
+applicable" (the raw `MsiFilterMode` word there reads FFFFFFFF, no value).
+A block of 96 words is a driver from before MSI. `-selftest-msi` prints
+the decode over canned images.
+
+After the MSI words come selective suspend's (114 to 141, `SuspSwitchRead`
+to `SuspNotesSuppressed`), its stage B's eighteen (142 to 159,
+`SsSuspArms` to `SsSuspCapSettled`, reserved and unprinted before task
+36.38 filled them), the composite parent's two (160 and 161,
+`CompositeParents` and `CompositeRepresented`) and issue 18's five (162 to
+166, `Usb2HubSpeedSwitchRead` to `Usb2HubSpeedFallbackSlots`; roadmap-hcd
+36.49). Those five also get a section of their own, **"USB 2.0 speed IDs
+behind a hub"**: whether `XhciUsb2HubSpeedFallback` was read and the
+default IDs are on, the placements refused for want of an ID and those
+given the default ID, and the Slot IDs holding such a device (the slots
+list's speed column decodes their speed by the same rule). A block shorter
+than 167 words is a driver from before it, and the section is not printed.
+Task 36.54's six follow (167 to 172, `StreamRetryResets`,
+`StreamRingRestarts`, `QemuStreamQuirk`, `QemuStreamResyncs`,
+`QemuStreamResyncFailed`, `QemuStreamRestops`; design record 17 section
+4.12), with a section of their own, **"stream endpoints"**: the soft
+retries on a UAS stream, the stream rings a port reset restarted at their
+base, and whether the QEMU stream-context quirk is armed - on QEMU's xHCI,
+PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
+the resyncs that could not finish and the extra stops QEMU's own restart
+of an endpoint cost. A block shorter than 173 words is a driver from
+before it, and the section is not printed.
+`-selftest-counters`
+prints every word of a canned block whose word i holds i + 1, and
+`selftest.cmd` checks it word by word against `src\xhci_counters.h`
+(`check-counter-names.ps1`), on the built EXE: an inline lookup over two
+of these tables was once compiled by MSVC 6.0 to name the selective
+suspend words 18 places off.
+
+Two more sections come from the HCD header of a `2.3.0.0` driver (amended
+in roadmap-hcd 36.20). **"stage 2, two TDs of one URB on the ring"**
+(task 36.24, design record 13 section 11.6; `-selftest-xpipe`):
+`XhciWideMap` as read ("not set (the default)" when absent), whether
+promotion is on and what the register-free check found (or why it did not
+run: the value off, Windows 98 or ME, a grant that is not register-free),
+and the wide mapper's and the pipelined record's counts; with task 36.25,
+stage 3's big stream blocks and their TD sizes. A driver from before it
+says "not in this driver". **"selective suspend, stage B"** (task 36.38,
+design record 14 section 8.10): `DNCTRL` as read when the window was cut
+("not read" unless `XhciSelectiveSuspend` is 1), the enables written and
+read back, and the records of the first eight devices in slot order, of
+any speed (a USB 2.0 device takes a record too, so a later SuperSpeed
+device can be left out; the `Ss` column marks SuperSpeed) - slot, link state,
+the window, armed functions and the last step's outcome.
 
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
@@ -364,7 +596,7 @@ It is windowed, so it can tear. usbport refuses `ParameterLength > 0x10000`
 before the miniport is ever reached, and the extension is larger than that
 (over 90,000 bytes; the `SIZEOF` line of a regenerated `offsets.txt` is the
 exact figure), so a dump is several IOCTLs and the driver runs between them. Every window carries a tear detector, the sum of
-`CheckCallbacks`, `DpcCount` and both halves of the log's producer accounting,
+`CheckCallbacks`, `DpcCount` (every event drain, interrupt or polled) and both halves of the log's producer accounting,
 read inside the driver's lock, and the tool reports whether they all agreed. A
 torn dump is not wrong, but any counter in it may be a mixture, and the last
 line of output says which you have. A torn one prints the pair, `first ->
@@ -481,6 +713,10 @@ xhcisnap\selftest.cmd
 The second runs the report path four times with no controller present (no
 fault, a failing write, a failing close, a `.TXT` that cannot be created) and
 checks the exit codes and summary lines; see "Three files" above.
+
+It also drives every `-selftest-*` decode over canned data, and from 2.3.0.0
+`-selftest-sysinfo`, which withholds canned names, and the report path with
+and without `-nosysinfo`.
 
 MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
 `MSVC6` overrides the location. `/Za` is not used here even though the driver

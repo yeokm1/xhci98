@@ -204,7 +204,7 @@ try {
     # root-hub installs are exempt from the controller's VAL-*/PROP-*/OS-*
     # rules: [RootHub.AddReg] and [RootHub.AddReg.NT] write none of the log or
     # moderation values and copy no OS file.
-    Assert-True ($baseline.Output -match "models: 8\b") ("src\xhci98.inf: expected the gate to gather eight models (controller, root hub and the two external-hub ids of task 33.4, in the undecorated section and NTx86.6.0). Output:`n" + $baseline.Output)
+    Assert-True ($baseline.Output -match "models: 10\b") ("src\xhci98.inf: expected the gate to gather ten models (controller, root hub, the two external-hub ids of task 33.4 and the composite parent of task 36.43, in the undecorated section and NTx86.6.0). Output:`n" + $baseline.Output)
 
     Write-Step "file format"
     Assert-RuleFires "utf16" "FILE-ENCODING" { param($t) $t } -Utf16
@@ -617,30 +617,36 @@ try {
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
     }
 
-    # Roadmap-hcd task 34.3's opt-out, anchored on the interval after it on
-    # each path. **Its default is 1, not 0**: shipping 0 would be an INF edit
-    # that turns the switchover off on every machine it exists for, and the
-    # unconditional DWORD would write a user's 0 back to 1 at an update.
-    # Task 35-T.7's three rows sit between it and the interval, so the anchor
-    # carries them; $tailFor9x and $tailForNt are the same block ending in
-    # each path's own successor line, which keeps the two paths apart.
-    $tolRows   = "HKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`n"
+    # Roadmap-hcd task 34.3's switch, anchored on the interval after it on
+    # each path. **Its default is 0 since task 36.42** (owner, 2026-10-09):
+    # shipping 1 again would be an INF edit that moves every switchable
+    # connector off a working USB 2.0 controller on install, and the
+    # unconditional DWORD would write a user's 1 back to 0 at an update.
+    # Task 36.3's routing row and task 35-T.7's three rows sit between it and
+    # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
+    # the same block ending in each path's own successor line, which keeps
+    # the two paths apart.
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
-    Write-Step "the Intel port switchover's opt-out, on both paths"
+    Write-Step "the Intel port switchover's switch, on both paths"
     Assert-RuleFires "portswitch-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x, $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x, $tailFor9x)
     }
     Assert-RuleFires "portswitch-no-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt, $tailForNt)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt, $tailForNt)
     }
-    Assert-RuleFires "portswitch-default-off" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt,
-                             "HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt)
+    Assert-RuleFires "portswitch-default-on-nt" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailForNt,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailForNt)
+    }
+    Assert-RuleFires "portswitch-default-on-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x)
     }
     Assert-RuleFires "portswitch-clobber" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,1`r`n" + $tailFor9x,
-                             "HKR,,XhciIntelPortSwitch,0x00010001,1`r`n" + $tailFor9x)
+        param($t) $t.Replace("HKR,,XhciIntelPortSwitch,0x00010003,0`r`n" + $tailFor9x,
+                             "HKR,,XhciIntelPortSwitch,0x00010001,0`r`n" + $tailFor9x)
     }
 
     # Roadmap-hcd task 35-T.7's three values (design record 17 sections 4.7
@@ -648,11 +654,25 @@ try {
     # written without the don't-overwrite flag that keeps a user's choice
     # across an update. XhciTolerance and XhciIntervalCap ship at 1, so their
     # wrong default is 0; XhciAvgTrbEsit ships at 0, so its wrong one is 1.
-    Write-Step "the tolerance switch, the interval cap and the Average TRB Length switch, on both paths"
+    # Task 36.3's XhciIntelIrqRoute ships at 1 like the first two, the same
+    # four cases; task 36.22's XhciMaxTransferKB ships at 1024, so its wrong
+    # one is 64, today's size. Task 36.51 (owner, 2026-10-11: every value
+    # the driver reads is written with its default) adds XhciWideMap and
+    # XhciSelectiveSuspend at 0, whose wrong one is 1, and
+    # XhciUsb2HubSpeedFallback at 1, whose wrong one is 0.
+    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the wide mapping, selective suspend and the hub speed fallback, on both paths"
     foreach ($tv in @(
+        @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n"; Clob = "HKR,,XhciMaxTransferKB,0x00010001,1024`r`n" },
+        @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n";   Clob = "HKR,,XhciTolerance,0x00010001,1`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n"; Clob = "HKR,,XhciIntervalCap,0x00010001,1`r`n" },
-        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" }
+        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n";  Clob = "HKR,,XhciAvgTrbEsit,0x00010001,0`r`n" },
+        @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n"; Clob = "HKR,,XhciInterruptMode,0x00010001,0`r`n" },
+        @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n"; Clob = "HKR,,XhciPollIdleMs,0x00010001,50`r`n" },
+        @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n"; Clob = "HKR,,XhciPollActiveMs,0x00010001,1`r`n" },
+        @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n"; Clob = "HKR,,XhciWideMap,0x00010001,0`r`n" },
+        @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n"; Clob = "HKR,,XhciSelectiveSuspend,0x00010001,0`r`n" },
+        @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" }
     )) {
         Assert-RuleFires ($tv.Key + "-no-9x") "VAL-MISSING" {
             param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, ""))
@@ -904,6 +924,58 @@ try {
     }
     Assert-RuleFires "hcd-hub-copies-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
         param($t) $t.Replace("[Hub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`n", "[Hub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+
+    # ---- HCD-COMP, HCD-COMPPAGE: composite devices as devnodes (36.43) ----
+    #
+    # Every models section carries the composite model under the project's
+    # own id only; no line names USB\COMPOSITE; a composite install copies
+    # nothing, loads only the controller's driver and registers no page.
+    Write-Step "the composite parents' models, copies and pages"
+    Assert-RuleFires "hcd-no-composite-9x" "HCD-COMP" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev,XHCI98\COMPOSITE`r`n", "")
+    }
+    Assert-RuleFires "hcd-no-composite-nt6" "HCD-COMP" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n", "")
+    }
+    Assert-RuleFires "hcd-composite-os-id" "HCD-COMP" {
+        param($t) $t.Replace("Comp.Dev,XHCI98\COMPOSITE`r`n", "Comp.Dev,XHCI98\COMPOSITE,USB\COMPOSITE`r`n")
+    }
+    Assert-RuleFires "hcd-composite-vidpid-id" "HCD-COMP" {
+        param($t) $t.Replace("Comp.Dev6,XHCI98\COMPOSITE`r`n", "Comp.Dev6,XHCI98\COMPOSITE,USB\VID_0D8C&PID_0014`r`n")
+    }
+    Assert-RuleFires "hcd-composite-on-controller" "HCD-COMP" {
+        param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330", "Xhci.Dev,PCI\CC_0C0330,USB\COMPOSITE")
+    }
+    Assert-RuleFires "hcd-composite-copies-9x" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.Dev]`r`nAddReg=Comp.AddReg`r`n", "[Comp.Dev]`r`nAddReg=Comp.AddReg`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-composite-copies-nt" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-composite-needs" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.Dev6.NTx86]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev6.NTx86]`r`nDelReg=Comp.DelReg.NT`r`nInclude=usb.inf`r`nNeeds=Comp.Dev.NT`r`n")
+    }
+    Assert-RuleFires "hcd-composite-other-driver" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,usbccgp.sys")
+    }
+    Assert-RuleFires "hcd-composite-hubpage-9x" "HCD-COMPPAGE" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys`r`n", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"`r`n")
+    }
+    Assert-RuleFires "hcd-composite-hubpage-nt" "HCD-COMPPAGE" {
+        param($t) $t.Replace("[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTx86]`r`nDelReg=Comp.DelReg.NT`r`nAddReg=RootHub.AddReg.NT`r`n")
+    }
+    Assert-RuleFires "hcd-composite-no-service-nt" "PATH-NT" {
+        param($t) $t.Replace("[Comp.Dev.NTx86.Services]", "[Comp.Dev.NTx86.Svc]")
+    }
+    Assert-RuleFires "hcd-no-composite-amd64" "HCD-COMP" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n", "")
+    }
+    Assert-RuleFires "hcd-composite-copies-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("[Comp.Dev.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-composite-hubpage-amd64" "HCD-COMPPAGE" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("[Comp.Dev6.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev6.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`nAddReg=RootHub.AddReg.NT`r`n")
     }
 
     Write-Step "the two install paths"
@@ -1230,6 +1302,21 @@ try {
     # A 0 is refused too. The old SUSP-VALUE rule existed because present-and-0
     # was a silently disabled fix; the same reasoning inverted says the value's
     # data is not what makes it unwanted - its being here at all is.
+    # Quoted names and a quoted subkey: setup reads them as the same value,
+    # so each of the three OS names is refused quoted too (Codex review of
+    # task 36.51, round 1).
+    Assert-RuleFires "susp-global-quoted" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKLM,`"System\CurrentControlSet\Services\USB`",`"DisableSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    }
+    Assert-RuleFires "susp-hc-quoted" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,`"HcDisableSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    }
+    Assert-RuleFires "susp-hc-all-quoted" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,`"HcDisableAllSelectiveSuspend`",0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    }
     Assert-RuleFires "susp-global-zero" "SUSP-GLOBAL" {
         param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
                              "[Xhci.AddReg.NT]`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,0`r`nHKR,,XhciLogVerbosity")
@@ -1263,7 +1350,7 @@ try {
     # plus "emove" and split the header into a line that was not a comment and
     # was not a row. This check is what noticed. It is also the net over any
     # future row type added to the emitter and not to the legend.
-    $knownRowTypes = @("path", "file", "reg", "service", "servicevalue", "unmodelled")
+    $knownRowTypes = @("path", "file", "reg", "hwreg", "directive", "service", "servicevalue", "unmodelled")
     $prodRows = Get-Footprint -Path $prodInf
     Assert-True ($null -ne $prodRows) "-EmitFootprint wrote no file for the production INF."
     foreach ($row in @($prodRows)) {
@@ -1379,16 +1466,16 @@ try {
         @{ Name = "ServiceBinary";  Value = "%12%\xhci98.sys" },
         @{ Name = "LoadOrderGroup"; Value = "Base" }
     )) {
-        # Four times: the controller's install, the root hub's and the two
-        # external hubs' (task 33.4) all name the one service (one binary,
-        # three device roles).
+        # Five times: the controller's install, the root hub's, the two
+        # external hubs' (task 33.4) and the composite parent's (task 36.43)
+        # all name the one service (one binary, four device roles).
         $want = "servicevalue|Windows 2000|xhci98|Xhci.AddService|" + $v.Name + "|" + $v.Value
-        Assert-True (@($fp | Where-Object { $_ -eq $want }).Count -eq 4) (
+        Assert-True (@($fp | Where-Object { $_ -eq $want }).Count -eq 5) (
             "expected footprint row '$want'. Rows:`n" + ($fp -join "`n"))
     }
 
     # AddService's own flags field was dropped entirely by the first two drafts.
-    Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 4) (
+    Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 5) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
 
     # Task 11-V.6's fix, asserted against the production INF - and inverted
@@ -1408,7 +1495,15 @@ try {
     # reappearing under any section name, on any route, with any data, shows
     # up here. The gate's SUSP-* rules say the same thing about a mutated INF;
     # this is the production file.
-    $suspRows = @($fp | Where-Object { $_ -match "SelectiveSuspend" })
+    #
+    # The match is on the OS's names, DisableSelectiveSuspend and its two
+    # Hc* forms, not on "SelectiveSuspend": since task 36.51 every path
+    # writes the driver's own XhciSelectiveSuspend at 0 (owner, 2026-10-11),
+    # a switch the HCD reads and usbport never did, which this pin is not
+    # about. That row is asserted present instead, on all three paths.
+    $suspRows = @($fp | Where-Object { $_ -match '\|"?(Hc)?Disable(All)?SelectiveSuspend"?\|' })
+    Assert-True (@($fp | Where-Object { $_ -match "\|XhciSelectiveSuspend\|0x00010003\|0\|keep\s*$" }).Count -eq 3) (
+        "src\xhci98.inf's footprint must write XhciSelectiveSuspend at 0, kept, on its three install paths (task 36.51). Rows:`n" + ($fp -join "`n"))
     Assert-True ($suspRows.Count -eq 0) (
         "src\xhci98.inf's footprint still carries a selective-suspend registry row. Since 1.1.0.0 this package writes none - the driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the machine-wide value it used to write reached every controller usbport drives and outlived the devnode. Rows:`n" + ($suspRows -join "`n"))
 
@@ -1525,6 +1620,8 @@ try {
         New-Item -ItemType Directory -Path $dir | Out-Null
         Copy-Item -LiteralPath $prodInf -Destination (Join-Path $dir "xhci98.inf")
         Set-Content -LiteralPath (Join-Path $dir "xhci98.sys") -Value "not a real driver" -Encoding ASCII
+        # The 32-bit media carries the x86 MSI helper since task 36.15.
+        Set-Content -LiteralPath (Join-Path $dir "xhcimsi.sys") -Value "not a real helper" -Encoding ASCII
         foreach ($e in $Extra) {
             Set-Content -LiteralPath (Join-Path $dir $e) -Value "stand-in $e" -Encoding ASCII
         }
@@ -1585,7 +1682,7 @@ try {
     # whole install path behind it - never checked: "models: 1" over a file with
     # two. Passing says nothing about a path the rules did not walk.
     #
-    Assert-True ($baseline64.Output -match "models: 8\b") ("src\xhci98-amd64.inf: expected the gate to gather eight models (controller, root hub and the two external-hub ids of task 33.4, in NT 5.2's section and NT 6.x's). Output:`n" + $baseline64.Output)
+    Assert-True ($baseline64.Output -match "models: 10\b") ("src\xhci98-amd64.inf: expected the gate to gather ten models (controller, root hub, the two external-hub ids of task 33.4 and the composite parent of task 36.43, in NT 5.2's section and NT 6.x's). Output:`n" + $baseline64.Output)
 
     #
     # **Each file must be REFUSED under the other's profile**, and this is the
@@ -1644,17 +1741,85 @@ try {
     Assert-RuleFires "x86-nt6-no-services" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTx86.Services]", "[Xhci.Dev6.NTx86.Svc]")
     }
+    # Since task 36.15 the 32-bit Vista and 7 controller section also copies
+    # the x86 MSI helper (design record 18), so these mutations start from
+    # that line.
     Assert-RuleFires "x86-nt6-no-driver-copy" "PATH-NT" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=XhciMsi.CopyFiles`r`n")
     }
     Assert-RuleFires "x86-nt6-copies-usbd" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles,Xhci.CopyOS`r`n")
     }
     Assert-RuleFires "x86-nt6-copies-usbui" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles,Xhci.CopyUI`r`n")
+    }
+
+    # ---- MSI-* and MSIHLP-* (task 36.15; design records 15 and 18) ----
+    Assert-RuleFires "x86-msihlp-no-copy" "MSIHLP-SVC" {
+        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n", "CopyFiles=Xhci.CopyFiles`r`n")
+    }
+    # The helper is no function driver, so BOTH-DESTDIR's driver walk never
+    # saw its destination (whole-branch review, 2026-10-10).
+    Assert-RuleFires "x86-msihlp-wrong-dir" "MSIHLP-SVC" {
+        param($t) $t.Replace("XhciMsi.CopyFiles=10,System32\Drivers", "XhciMsi.CopyFiles=10,System32")
+    }
+    Assert-RuleFires "x86-msihlp-wrong-dirid" "MSIHLP-SVC" {
+        param($t) $t.Replace("XhciMsi.CopyFiles=10,System32\Drivers", "XhciMsi.CopyFiles=11")
+    }
+    Assert-RuleFires "x86-msihlp-wrong-subdir" "MSIHLP-SVC" {
+        param($t) $t.Replace("XhciMsi.CopyFiles=10,System32\Drivers", "XhciMsi.CopyFiles=10,System32\Drivers\Msi")
+    }
+    Assert-RuleFires "x86-msihlp-on-2000" "MSIHLP-ONLYNT6" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=XhciMsi.CopyFiles,Xhci.CopyFiles,")
+    }
+    Assert-RuleFires "x86-msihlp-on-98" "MSIHLP-ONLYNT6" {
+        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,", "[DefaultInstall]`r`nCopyFiles=XhciMsi.CopyFiles,Inf.CopyFiles,")
+    }
+    Assert-RuleFires "x86-msihlp-svc-on-roothub" "MSIHLP-SVC" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`n",
+                             "[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`nAddService=xhcimsi,,XhciMsi.AddService`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-demand-start" "MSIHLP-SVC" {
+        param($t) $t.Replace("StartType=0                         ; SERVICE_BOOT_START", "StartType=3                         ; SERVICE_DEMAND_START")
+    }
+    Assert-RuleFires "x86-msihlp-assocservice" "MSIHLP-SVC" {
+        param($t) $t.Replace("AddService=xhcimsi,,XhciMsi.AddService", "AddService=xhcimsi,0x00000002,XhciMsi.AddService")
+    }
+    Assert-RuleFires "x86-msihlp-twice" "MSIHLP-SVC" {
+        param($t) $t.Replace("AddService=xhcimsi,,XhciMsi.AddService`r`n", "AddService=xhcimsi,,XhciMsi.AddService`r`nAddService=xhcimsi,,XhciMsi.AddService`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-hw-without-helper" "MSIHLP-HW" {
+        param($t) $t.Replace("AddService=xhcimsi,,XhciMsi.AddService`r`n", "")
+    }
+    Assert-RuleFires "x86-msi-hw-on-roothub" "MSI-PLACE" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86.HW]", "[RootHub.Dev6.NTx86.HW]")
+    }
+    Assert-RuleFires "x86-msi-addreg-in-install" "MSI-PLACE" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n", "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.Msi.AddReg`r`n")
+    }
+    Assert-RuleFires "x86-msi-clobbers" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x00010001,1")
+    }
+    Assert-RuleFires "x86-msi-not-dword" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x00010002,1")
+    }
+    Assert-RuleFires "x86-msi-extra-modifier" "MSI-VALUES" {
+        param($t) $t.Replace("MSISupported,0x00010003,1", "MSISupported,0x0001000B,1")
+    }
+    Assert-RuleFires "x86-msi-no-limit" "MSI-VALUES" {
+        param($t) $t.Replace("HKR,""Interrupt Management\MessageSignaledInterruptProperties"",MessageNumberLimit,0x00010003,1`r`n", "")
+    }
+    Assert-RuleFires "x86-msihlp-no-reboot" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`nReboot`r`n", "CopyFiles=Xhci.CopyFiles,XhciMsi.CopyFiles`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-reboot-on-roothub" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nReboot`r`n")
+    }
+    Assert-RuleFires "x86-msihlp-reboot-on-2000" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`n", "[Xhci.Dev.NTx86]`r`nReboot`r`n")
     }
     # There is no NT 6.x SUSP case here any more, and its absence is the point.
     # Until 1.0.2.0 "x86-nt6-no-susp" checked that [Xhci.Dev6.NTx86] delivered
@@ -1789,6 +1954,18 @@ try {
     Assert-RuleFires "amd64-nt6-no-install-section" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`n", "[Xhci.Dev6.NTamd65]`r`n")
     } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msihlp-copied" "MSIHLP-AMD64" {
+        param($t) $t.Replace("[Xhci.CopyFiles]`r`nxhci98.sys`r`n", "[Xhci.CopyFiles]`r`nxhci98.sys`r`nxhcimsi.sys`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msihlp-reboot" "MSIHLP-REBOOT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`n", "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nReboot`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msi-hw-on-xp64" "MSI-PLACE" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64.HW]", "[Xhci.Dev.NTamd64.HW]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-msi-clobbers" "MSI-VALUES" {
+        param($t) $t.Replace("MessageNumberLimit,0x00010003,1", "MessageNumberLimit,0x00010001,1")
+    } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-no-driver-copy" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
                              "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`n")
@@ -1877,12 +2054,20 @@ try {
     Assert-RuleFires "amd64-imod-default-old" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160", "HKR,,XhciImodInterval250ns,0x00010003,500")
     } -Source $prodInfAmd64 -Arch amd64
-    # Task 35-T.7's three values on the 64-bit file: its one AddReg section
-    # serves both of its paths, so missing and wrong-default once each.
+    # Task 35-T.7's three values and the later ones on the 64-bit file: its
+    # one AddReg section serves both of its paths, so missing and
+    # wrong-default once each.
     foreach ($tv in @(
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n" },
-        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n" }
+        @{ Key = "avgtrb";    Row = "HKR,,XhciAvgTrbEsit,0x00010003,0`r`n";  Wrong = "HKR,,XhciAvgTrbEsit,0x00010003,1`r`n" },
+        @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n" },
+        @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n" },
+        @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n" },
+        @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n" },
+        @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n" },
+        @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n" },
+        @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" }
     )) {
         Assert-RuleFires ("amd64-" + $tv.Key + "-missing") "VAL-MISSING" {
             param($t) $t.Replace($tv.Row, "")
@@ -1964,9 +2149,14 @@ try {
     }
 
     function Assert-InfsAgree {
-        param([string]$Section, [string]$Why, [string[]]$Only = @())
+        param([string]$Section, [string]$Why, [string[]]$Only = @(), [string[]]$Except = @())
         $a = @(Get-InfSection -Path $prodInf -Name $Section)
         $b = @(Get-InfSection -Path $prodInfAmd64 -Name $Section)
+        if ($Except.Count -gt 0) {
+            $drop = { param($rows) @($rows | Where-Object { $r = $_; @($Except | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -eq 0 }) }
+            $a = & $drop $a
+            $b = & $drop $b
+        }
         if ($Only.Count -gt 0) {
             $keep = { param($rows) @($rows | Where-Object { $r = $_; @($Only | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -gt 0 }) }
             $a = & $keep $a
@@ -1998,8 +2188,17 @@ try {
         -Why "The NT 5.x paths of both packages fetch usbd.sys from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
     Assert-InfsAgree -Section "Xhci.CopyUI" `
         -Why "usbui.dll is on every install path of both packages since 1.0.2.0, to dirid 11, with flag 16."
-    Assert-InfsAgree -Section "SourceDisksFiles" `
-        -Why "Both media carry this project's two files and nothing else. A Microsoft file appearing on one of them is legal-provenance section 5's withdrawal being undone on one architecture."
+    # **One difference admitted, by name** (task 36.15; design record 18
+    # section 8.2): the 32-bit media also carries xhcimsi.sys, the NT 6 x86
+    # MSI helper, which the 64-bit package has no use for. Every other line
+    # must still agree.
+    Assert-InfsAgree -Section "SourceDisksFiles" -Except @("xhcimsi.sys") `
+        -Why "Both media carry this project's own files and nothing else, the x86 helper excepted. A Microsoft file appearing on one of them is legal-provenance section 5's withdrawal being undone on one architecture."
+    $sdf86 = @(Get-InfSection -Path $prodInf -Name "SourceDisksFiles")
+    $sdf64 = @(Get-InfSection -Path $prodInfAmd64 -Name "SourceDisksFiles")
+    Assert-True (@($sdf86 | Where-Object { $_ -imatch '^\s*xhcimsi\.sys\s*=' }).Count -eq 1) "INF-SYNC: the 32-bit media must declare xhcimsi.sys once."
+    Assert-True (@($sdf64 | Where-Object { $_ -imatch '^\s*xhcimsi\.sys\s*=' }).Count -eq 0) "INF-SYNC: the 64-bit media must not declare xhcimsi.sys."
+
     Assert-InfsAgree -Section "SourceDisksNames" `
         -Why "One disk, described the same way."
 
@@ -2012,7 +2211,7 @@ try {
     # match is what the engine binds on and the install section it binds to.
     $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels")
     $id64  = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64")
-    Assert-True ($idX86.Count -eq 4 -and $id64.Count -eq 4) "INF-SYNC: each file's NT 5.x / 9x models section must have exactly four lines (controller, root hub, and the two external-hub ids of task 33.4)."
+    Assert-True ($idX86.Count -eq 5 -and $id64.Count -eq 5) "INF-SYNC: each file's NT 5.x / 9x models section must have exactly five lines (controller, root hub, the two external-hub ids of task 33.4, and the composite parent of task 36.43)."
     Assert-True ((($idX86 -join "`n")) -eq (($id64 -join "`n"))) (
         "INF-SYNC: the two INFs bind different hardware. One package, one controller id and one root-hub id." +
         "`n  src\xhci98.inf        $($idX86 -join ' | ')" +
@@ -2022,8 +2221,8 @@ try {
     # own - and they must be the same ones, or Vista and Windows 7 bind
     # something no other target does.
     $id64nt6 = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64.6.0")
-    Assert-True ($id64nt6.Count -eq 4) "INF-SYNC: src\xhci98-amd64.inf must have exactly four NT 6.x models lines."
-    if ($id64nt6.Count -eq 4 -and $idX86.Count -eq 4) {
+    Assert-True ($id64nt6.Count -eq 5) "INF-SYNC: src\xhci98-amd64.inf must have exactly five NT 6.x models lines."
+    if ($id64nt6.Count -eq 5 -and $idX86.Count -eq 5) {
         $hwOf = { param($rows) @($rows | ForEach-Object { (($_ -split '=', 2)[1] -split ',', 2)[1].Trim() }) -join "," }
         Assert-True ((& $hwOf $idX86) -eq (& $hwOf $id64nt6)) (
             "INF-SYNC: the NT 6.x models lines bind different hardware from every other target." +
@@ -2033,8 +2232,8 @@ try {
     # And the two NT 6.x models sections agree with each other whole, because
     # they are one path on two architectures.
     $idX86nt6 = @(Get-InfSection -Path $prodInf -Name "XhciModels.NTx86.6.0")
-    Assert-True ($idX86nt6.Count -eq 4) "INF-SYNC: src\xhci98.inf must have exactly four NT 6.x models lines."
-    if ($idX86nt6.Count -eq 4 -and $id64nt6.Count -eq 4) {
+    Assert-True ($idX86nt6.Count -eq 5) "INF-SYNC: src\xhci98.inf must have exactly five NT 6.x models lines."
+    if ($idX86nt6.Count -eq 5 -and $id64nt6.Count -eq 5) {
         Assert-True ((($idX86nt6 -join "`n")) -eq (($id64nt6 -join "`n"))) (
             "INF-SYNC: the two INFs' NT 6.x models sections differ." +
             "`n  src\xhci98.inf        (NTx86.6.0)     $($idX86nt6 -join ' | ')" +

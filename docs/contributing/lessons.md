@@ -9764,3 +9764,102 @@ Rule. **When a pure helper's host vectors pass and the guest disagrees, read
 the driver build's disassembly of that helper before anything else**; and
 prefer a loop whose control variable is the shifted value itself over a
 count-down whose bound the compiler derives.
+## MSVC 6.0 inline `__asm` CPUID clobbers EBX: save it, or the caller's locals go wrong
+
+Task 36.21 (integration branch `p36-int`), 2026-10-10, development host A,
+QEMU guests. `hcdCpuId` ran `CPUID` in an MSVC 6.0 `__asm` block without
+saving EBX, which `CPUID` overwrites and which MSVC 6.0 treats as
+callee-saved (as it does ESI, EDI and EBP). On Windows 2000 the first
+Windows 2000 smoke leg stopped with STOP 0xB8. On Windows 98 SE and ME,
+uniprocessor, the clobbered register held the caller's `raised` flag, so
+`HcdTscStamp` called `KeLowerIrql` while the controller lock was held and
+the event DPC ran inside `HcdIoMapped`'s locked section: seen first as an
+undercounted URB counter, really a lock violation. Host tests could not see
+it, and nor could the XP x64 legs (the amd64 build has no inline asm); only
+an x86 guest leg did. Fixed in `f22a42b`: `hcdCpuId` saves and restores
+EBX around `CPUID`.
+
+Rule. **Every MSVC 6.0 `__asm` block saves and restores each of EBX, ESI,
+EDI and EBP it touches, an instruction's implicit outputs included; the
+review is asked to check clobbers, and an x86 98 SE and 2000 leg runs
+before any counter of that build is trusted.**
+
+## MSVC 6.0 /O2 compiled an inline two-table lookup in XHCISNAP against the wrong table's base
+
+Task 36.33 (branch `p36-susp`), 2026-10-10, development host A, the
+selective suspend legs. `XHCISNAP` named the selective suspend counters 18
+words off. `print_hcd` picked a counter's name inline with
+`i < 96 ? hcd_counter_names[i] : hcd_susp_counter_names[i - 114]`; MSVC 6.0
+at /O2 indexed the second table off the first table's base. The driver's
+layout was right, and the source-level host tests passed. Reproduced in a
+host harness on the real /O2 binary. Fixed in `abf5ee9`: one out-of-line
+`hcd_counter_name()` under `#pragma auto_inline(off)`, `test_snap` pinning
+each block's first word, and `xhcisnap\check-counter-names.ps1` guarding
+the names. The second MSVC 6.0 optimiser miscompile in this repo, after the
+count-down loop above.
+
+Rule. **Every multi-table name lookup in `XHCISNAP` goes through
+`hcd_counter_name()`; check name tables against the real /O2 binary
+(`check-counter-names.ps1`), not only at source level.**
+
+## A hub FDO must pass IRP_MJ_SYSTEM_CONTROL down: Driver Verifier stops with C9 0x220 otherwise
+
+Task 36.16 (finding D4, branch `p36-d4`), 2026-10-10, development host A,
+32-bit Windows 7 in QEMU under Driver Verifier. The guest seemed to hang at
+"Starting Windows" with interrupts off; a kernel debugger over the guest's
+serial port showed bugcheck C9 {0x220, ...}. Verifier's started-stack WMI
+test sends an `IRP_MJ_SYSTEM_CONTROL` down the root hub's stack, and the
+root-hub FDO completed it with `STATUS_NOT_SUPPORTED` instead of passing it
+to the PDO below. Not new: the published `2.2.0.0` under
+`verifier /standard /driver xhci98.sys` stops the same way, line interrupt
+and all; Verifier on `xhcimsi.sys` alone boots clean. Fixed in `32c4cf4`:
+the root-hub FDO and the hub FDO pass `IRP_MJ_SYSTEM_CONTROL` down inside
+their I/O count, and the PDOs complete it with the status it came with.
+
+Rule. **An FDO passes down every major function it does not own, WMI
+included; a PDO completes one it does not handle with the status it came
+with. Run a boot under Driver Verifier on an NT 6 guest before a cut.**
+
+## Windows 98 SE does not resume reliably from Stand by in QEMU: read a 98 SE standby against a guest with no USB controller first
+
+Task 36.28 part 2, 2026-10-11, development host A, QEMU 11.1.0. Three
+readings had put a 98 SE standby failure on this driver's open list: USB
+dead after the wake, a black screen, and a fatal exception 0E at
+`016F:BFF9DFFF` when a console program or Ctrl+Alt+Del followed. A trace
+of every power IRP the driver received showed each one completed and the
+bus idle afterwards, and the controls placed the rest outside it: with no
+USB controller in the guest at all, a standby and a console program still
+end in fatal exception 0E in KERNEL32 (`0167:BFF87EDE`, then
+`0167:BFF9DB34` at Ctrl+Alt+Del) and an MS-DOS prompt reports too little
+memory to display; 98 SE's own UHCI driver does not come back from the
+wake even with only a mouse; and with a USB stick attached Windows stops
+after the stick's D0 under NUSB's EHCI stack as it does under this one,
+the HCD owing nothing. With mice and hubs alone the resume completes
+through this driver. Two more vehicle traps: a Windows restarted from
+MS-DOS mode comes back from standby to a black screen with no USB at all,
+and one `system_wakeup` in a few resets the guest before any driver code
+runs. The Shut Down dialog remembers its last choice and its radio buttons
+wrap, so a fixed number of arrow presses can pick Restart in MS-DOS mode;
+`Alt+S` selects Shut down, and one Up from there is Stand by.
+
+Rule. **On Windows 98 SE in QEMU, a standby defect is the driver's only
+when the same steps pass with no USB controller and with the class of
+device removed; read the power IRPs the driver received, and whether any
+request is still held, before attributing a hang that follows the wake.**
+
+## QEMU's SDL display stalls the whole device model on this host, and an isochronous stream pays for every stall
+
+Early-warning matrix of Phase 36, 2026-10-11, development host A, QEMU
+11.1.0, Windows 7 guests. A 20 s tone over `usb-audio` played in 26 to 63 s
+on some runs and 20 s on others, on every driver build tried, and was first
+booked as a driver regression. QEMU's main loop was blocking for 160 to
+490 ms about once a second whenever the guest's screen changed, with the SDL
+display; with `-display none` it never did. During a stall no timer, doorbell
+or event of any device runs, and QEMU schedules each Start Isoch ASAP TD one
+Interval after the last one it ran, with no catch-up, so the stream lengthens
+by the stalls' sum (run-36, "Windows 7 slow audio in the early-warning
+matrix").
+
+Rule. **Time isochronous streams with `-display none` (screenshots through
+`screendump`). Before blaming a build for a timing reading, probe the
+emulator's main loop (an HMP round trip every 50 ms) and A/B the same build.**

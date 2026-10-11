@@ -41,10 +41,17 @@
  * and no compatible id, and on a companion-paired root port is offered to
  * 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
  *
- * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets no
- * PDO of its own: one function PDO per function, each an HCD_DEVICE_PDO with
- * Function set, its ids carrying &MI_nn (xhci_func.c), all sharing the one
- * device record and created, listed and unlisted together (the Group).
+ * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets one
+ * function PDO per function, each an HCD_DEVICE_PDO with Function set, its
+ * ids carrying &MI_nn (xhci_func.c), all sharing the one device record and
+ * created, listed and unlisted together (the Group). Since task 36.43
+ * (section 10.12) the group starts with the device's own PDO, Composite set,
+ * under the project-owned XHCI98\COMPOSITE, bound to this driver as a
+ * composite FDO (hcd_hubfdo.c) whose BusRelations are the functions: their
+ * ParentSerial is its Serial, as a hub's children's is the hub PDO's, and
+ * every parent rule above reads "a hub or a composite" (HcdPdoIsParent).
+ * Its disable and enable re-present the functions in place
+ * (HcdDevicePdoRepresentFunctions) rather than cycle the port.
  *
  * The URB contract is 26-A.5's, in hcd_urb.c: IRP_MJ_INTERNAL_DEVICE_CONTROL
  * reaches it, and until the transfer path lands every URB is refused, so a
@@ -273,6 +280,47 @@ static NTSTATUS hcdHubQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)out);
 }
 
+/* A composite-parent PDO's device and hardware ids (task 36.43; design
+ * record 13 section 10.12): XHCI98\COMPOSITE with the device's VID, PID and
+ * REV, project-owned so no OS composite parent or vendor whole-device INF
+ * matches, and no compatible id - the query keeps the status it arrived
+ * with. Its instance id is any PDO's (hcdInstanceQueryId). */
+static NTSTATUS hcdCompositeQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
+                                    BUS_QUERY_ID_TYPE type)
+{
+    char text[128];
+    WCHAR buf[128];
+    PWCHAR out;
+    ULONG which;
+    ULONG used;
+    ULONG i;
+
+    switch (type) {
+    case BusQueryDeviceID:
+        which = XHCI_FUNC_ID_DEVICE;
+        break;
+    case BusQueryHardwareIDs:
+        which = XHCI_FUNC_ID_HARDWARE;
+        break;
+    default:
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+    }
+    used = 0;
+    if (XhciFuncParentId(pdo->DeviceDesc, which, text, sizeof(text), &used) !=
+        XHCI_FUNC_OK) {
+        return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+    }
+    for (i = 0; i < used; i++) {
+        buf[i] = (WCHAR)(UCHAR)text[i];
+    }
+    out = hcdHandOff(buf, used);
+    if (out == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)out);
+}
+
 /* Any PDO's instance id (task 33.2; xhci_func.c): its serial id, a
  * function's with &nn, or the location form - "303" for port 3's MI_03. */
 static NTSTATUS hcdInstanceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp)
@@ -319,6 +367,9 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     }
     if (pdo->Hub) {
         return hcdHubQueryId(pdo, irp, type);
+    }
+    if (pdo->Composite) {
+        return hcdCompositeQueryId(pdo, irp, type);
     }
     if (pdo->Xport.Transport != XHCI_XPORT_NONE) {
         if (type == BusQueryHardwareIDs) {
@@ -503,18 +554,30 @@ static VOID hcdPortNotify(PHCD_CONTROLLER hc, PULONG bits, ULONG port)
  * and touches no controller (Codex review of batch (b), round 2, finding 1). */
 static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
 {
+    ULONG keep;
+
     /* Its refusal timer and DPC live in the extension (hcd_io.c), as do
      * the IRPs a departed device left held. */
     pdo->Closing = 1;
     (VOID)HcdIoParkedRelease(pdo, 0);
     HcdIoRefusedDrain(pdo);
     HcdUrbIdleDrain(pdo);
+    /* The idle rundown, never waiting on a callback here (design record
+     * 14 section 4.4; hcd_susp.c): one still owed is the quarantine, and
+     * the object is kept with its records. */
+    keep = !HcdSuspIdleRundown(pdo, 0);
     /* Its interface context forgets it before the extension goes, and no
      * interface call is inside it then (Codex review of 28-A.1, round 1,
      * finding 3). */
     HcdUrbBusifRelease(pdo);
+    /* Its USB device interface off and its link freed (task 36.17): the
+     * one place every deletion passes, before the object goes. */
+    HcdDoorDeviceStop(pdo, 1);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
+    if (keep) {
+        return;
+    }
     HcdPoolFree(pdo->Config);
     pdo->Config = NULL;
     IoDeleteDevice(pdo->Common.Self);
@@ -737,15 +800,18 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     pdo->Common.SystemPower = PowerSystemWorking;
     pdo->Controller = hc;
     pdo->Device = dev;
+    /* Selective suspend's slot (design record 14 section 4.1): D0 asked
+     * and acted on; the rest of it zero with the extension. */
+    pdo->PwrWanted = XHCI_SUSP_D0;
+    pdo->PwrState = XHCI_SUSP_D0;
+    pdo->PwrSwitch = hc->SuspOn;
     pdo->Serial = serial;
     pdo->Port = dev->Location;
     pdo->InstanceKey = XhciHubInstanceKey(dev->Port, dev->Route);
     pdo->RootPort = dev->Port;
     pdo->Route = dev->Route;
     pdo->Speed = dev->Speed;
-    pdo->SpeedClass = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed,
-                             &pdo->SpeedClass);
+    pdo->SpeedClass = HcdDeviceSpeedClass(hc, dev);
     for (i = 0; i < sizeof(pdo->DeviceDesc); i++) {
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
     }
@@ -786,24 +852,25 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* Parents: the root hub, or a hub's own PDO (task 33.4)                    */
 /* ----------------------------------------------------------------------- */
 
-/* The hub PDO named `serial`, on any of the three lists, or NULL once it is
- * deleted. PdoListLock held. */
+/* The parent PDO - a hub's, or a composite device's (task 36.43) - named
+ * `serial`, on any of the three lists, or NULL once it is deleted.
+ * PdoListLock held. */
 static PHCD_DEVICE_PDO hcdHubFindLocked(PHCD_CONTROLLER hc, ULONG serial)
 {
     PHCD_DEVICE_PDO pdo;
 
     for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
-        if (pdo->Hub && pdo->Serial == serial) {
+        if (HcdPdoIsParent(pdo) && pdo->Serial == serial) {
             return pdo;
         }
     }
     for (pdo = hc->GonePdos; pdo != NULL; pdo = pdo->Next) {
-        if (pdo->Hub && pdo->Serial == serial) {
+        if (HcdPdoIsParent(pdo) && pdo->Serial == serial) {
             return pdo;
         }
     }
     for (pdo = hc->RemovedPdos; pdo != NULL; pdo = pdo->Next) {
-        if (pdo->Hub && pdo->Serial == serial) {
+        if (HcdPdoIsParent(pdo) && pdo->Serial == serial) {
             return pdo;
         }
     }
@@ -856,7 +923,7 @@ static VOID hcdInvalidateFor(PHCD_CONTROLLER hc, ULONG serial)
     if (serial != 0) {
         KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
         for (hub = hc->DevicePdos; hub != NULL; hub = hub->Next) {
-            if (hub->Hub && hub->Serial == serial) {
+            if (HcdPdoIsParent(hub) && hub->Serial == serial) {
                 break;
             }
         }
@@ -896,10 +963,15 @@ static ULONG hcdBytesEqual(const UCHAR *a, const UCHAR *b, ULONG n)
 /* Whether PDO `old` stands for the same device as the freshly built `nu`,
  * its instance id aside (hcdDormantFindLocked weighs that): the device
  * descriptor, the (filtered) configuration, the function, the speed and
- * the transport decision. PdoListLock held. */
+ * the transport decision. The parent too - except a function's, which is
+ * its own group's composite parent (task 36.43): the old one names the
+ * dormant parent, which a revival keeps, the new one a parent never
+ * listed, so the chains' first PDOs compare it for the group. PdoListLock
+ * held. */
 static ULONG hcdDormantSame(PHCD_DEVICE_PDO old, PHCD_DEVICE_PDO nu)
 {
-    return old->ParentSerial == nu->ParentSerial && old->Hub == nu->Hub &&
+    return (old->Function || old->ParentSerial == nu->ParentSerial) &&
+           old->Hub == nu->Hub && old->Composite == nu->Composite &&
            old->HubUsb3 == nu->HubUsb3 &&
            old->Function == nu->Function &&
            old->InterfaceMask == nu->InterfaceMask &&
@@ -944,8 +1016,11 @@ static VOID hcdDormantKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
              * it waits - nor may the PDO be taken for absent, since PnP
              * still holds it present (Codex review of 33.4, round 2,
              * findings 1 and 2). Under the root hub the root's own answer
-             * settles it, as before 33.4. */
-            if (first->ParentSerial == 0) {
+             * settles it, as before 33.4. A function's parent is its
+             * composite parent (task 36.43), dormant with it, so a disabled
+             * function is kept as behind a hub; the parent itself disabled
+             * under the root hub is not. */
+            if (pdo->ParentSerial == 0) {
                 keep = 0;
             }
         } else if (pdo->Common.PnpState != HCD_PNP_STOPPED) {
@@ -964,6 +1039,11 @@ static VOID hcdDormantKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
             pdo->Device = NULL;
             pdo->Dormant = 1;
+            /* Stage B's wake enable did not survive the device (design
+             * record 14 section 8.5): the enum thread has exited, so
+             * nothing else writes these. */
+            pdo->FwArmed = 0;
+            pdo->ArmNow = 0;
         }
         dev->Pdo = NULL;
     }
@@ -1048,7 +1128,9 @@ static ULONG hcdDormantRetireLocked(PHCD_CONTROLLER hc,
     }
     /* A dormant group behind a hub whose own dormant PDO has just gone
      * goes with it (task 33.4): no device can revive it under a parent
-     * PnP is removing. Repeated for each tier below. */
+     * PnP is removing. Repeated for each tier below. A composite's
+     * functions (task 36.43) are retired with their parent this way when
+     * they are not of the group retired above. */
     for (;;) {
         at = &hc->DevicePdos;
         while (*at != NULL) {
@@ -1057,7 +1139,8 @@ static ULONG hcdDormantRetireLocked(PHCD_CONTROLLER hc,
                 PHCD_DEVICE_PDO up;
 
                 for (up = hc->DevicePdos; up != NULL; up = up->Next) {
-                    if (up->Hub && up->Serial == pdo->ParentSerial) {
+                    if (HcdPdoIsParent(up) &&
+                        up->Serial == pdo->ParentSerial) {
                         break;
                     }
                 }
@@ -1099,8 +1182,12 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
 {
     PHCD_DEVICE_PDO other;
 
+    /* A group's first PDO holds its serial id (task 36.43): a function's
+     * ParentSerial names its own composite parent, new at each plug, so a
+     * function compared under "another parent" below would take every
+     * quickly moved composite device for a duplicate. */
     for (other = hc->DevicePdos; other != NULL; other = other->Next) {
-        if (!hcdSameVidPid(other, pdo) ||
+        if (other->Group != other->Serial || !hcdSameVidPid(other, pdo) ||
             !XhciFuncSerialSame(other->SerialId, pdo->SerialId)) {
             continue;
         }
@@ -1118,7 +1205,7 @@ static ULONG hcdSerialTakenLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
      * round, finding 1). Under the same parent one answer does both, as
      * the move between root ports above relies on. */
     for (other = hc->GonePdos; other != NULL; other = other->Next) {
-        if (!other->MissingReported &&
+        if (!other->MissingReported && other->Group == other->Serial &&
             other->ParentSerial != pdo->ParentSerial &&
             hcdSameVidPid(other, pdo) &&
             XhciFuncSerialSame(other->SerialId, pdo->SerialId)) {
@@ -1290,7 +1377,7 @@ static PHCD_DEVICE_PDO hcdDormantFindLocked(PHCD_CONTROLLER hc,
         same = 1;
         for (a = old, b = first; a != NULL || b != NULL;
              a = a->Sibling, b = b->Sibling) {
-            if (a == NULL || b == NULL || !a->Dormant ||
+            if (a == NULL || b == NULL || !a->Dormant || a->IdleQuarantined ||
                 !hcdDormantSame(a, b)) {
                 same = 0;
                 break;
@@ -1382,6 +1469,11 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             a->HubIndex = b->HubIndex;
             a->HubDesc = b->HubDesc;
             a->HubMttOn = b->HubMttOn;
+            /* Zero since hcdDormantKeep (design record 14 section 8.5);
+             * made so again rather than trusted, so a revived PDO never
+             * carries an old device's arm into the new one. */
+            a->FwArmed = 0;
+            a->ArmNow = 0;
             a->Dormant = 0;
         }
         dev->Pdo = old->Common.Self;
@@ -1391,22 +1483,45 @@ static ULONG hcdDormantRevive(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return same;
 }
 
+/* The parent `pdo`'s group is presented under: its first PDO's (task
+ * 36.43). A function's own ParentSerial names its composite parent, which
+ * a retirement of the group takes away with it, so the answer that reports
+ * the group missing is the first PDO's parent's. PdoListLock held, before
+ * the group is retired (the first PDO is still listed). IRQL:
+ * DISPATCH_LEVEL (the lock's). */
+static ULONG hcdGroupParentLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    PHCD_DEVICE_PDO head;
+
+    if (pdo->Group == pdo->Serial) {
+        return pdo->ParentSerial;
+    }
+    for (head = hc->DevicePdos; head != NULL; head = head->Next) {
+        if (head->Serial == pdo->Group) {
+            return head->ParentSerial;
+        }
+    }
+    return pdo->ParentSerial;
+}
+
 /* REMOVE on a dormant PDO: its group reported gone. IRQL: PASSIVE_LEVEL. */
 static VOID hcdDormantRemoved(PHCD_DEVICE_PDO pdo)
 {
     PHCD_CONTROLLER hc;
     KIRQL oldIrql;
     ULONG retired;
+    ULONG parent;
 
     hc = pdo->Controller;
     if (hc == NULL) {
         return;
     }
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    parent = hcdGroupParentLocked(hc, pdo);
     retired = pdo->Dormant ? hcdDormantRetireLocked(hc, NULL, pdo->Group) : 0;
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (retired != 0) {
-        hcdInvalidateFor(hc, pdo->ParentSerial);
+        hcdInvalidateFor(hc, parent);
     }
 }
 
@@ -1427,6 +1542,7 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
     KIRQL oldIrql;
     ULONG waited;
     ULONG retired;
+    ULONG parent;
 
     hc = pdo->Controller;
     if (hc == NULL) {
@@ -1445,6 +1561,7 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
         return;
     }
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    parent = hcdGroupParentLocked(hc, pdo);
     if (pdo->Dormant) {
         retired = hcdDormantRetireLocked(hc, NULL, pdo->Group);
     }
@@ -1452,19 +1569,39 @@ static VOID hcdDormantWait(PHCD_DEVICE_PDO pdo)
     if (retired != 0) {
         XHCI_DBG_VALUE("hcd: dormant PDO not revived, reported gone, port",
                        pdo->Port);
-        hcdInvalidateFor(hc, pdo->ParentSerial);
+        hcdInvalidateFor(hc, parent);
     }
+}
+
+/* The transport inputs that are the controller's (31-A.3): whether it
+ * streams, and the force value, read at each PDO's creation so a change
+ * takes effect at the next enumeration. Thread only. */
+static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
+{
+    ULONG xportFlags;
+
+    xportFlags = 0;
+    if (XhciStreamHcEntries(XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)) !=
+        0) {
+        xportFlags |= XHCI_XPORT_F_HC_STREAMS;
+    }
+    if (HcdCtlForceBulkOnly(hc)) {
+        xportFlags |= XHCI_XPORT_F_FORCE_BOT;
+    }
+    return xportFlags;
 }
 
 /*
  * The PDO(s) for an enumerated device: one device PDO, or - for a device the
  * bus splits (xhci_func.c, design record 13 section 10.8) - the device
- * configured by the bus and one function PDO per function, all created
- * before any is listed, listed in one hold of PdoListLock, and announced by
- * one relations invalidation, so PnP meets them together. On a failure
- * nothing is listed and the port's machine fails; a device the bus already
- * configured stays so until the slot is disabled. Thread only (the bus's
- * configure is a thread control transfer).
+ * configured by the bus, its composite-parent PDO (task 36.43, section
+ * 10.12) and one function PDO per function beneath it, the parent first on
+ * the chain, all created before any is listed, listed in one hold of
+ * PdoListLock, and announced by one relations invalidation of the parent's
+ * own parent, so PnP meets them together. On a failure nothing is listed
+ * and the port's machine fails; a device the bus already configured stays
+ * so until the slot is disabled. Thread only (the bus's configure is a
+ * thread control transfer).
  */
 NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
@@ -1504,18 +1641,10 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         XHCI_DBG_VALUE("hcd: split device not configured, port", dev->Port);
         return STATUS_UNSUCCESSFUL;
     }
-    /* The transport inputs that are the controller's (31-A.3): whether it
-     * streams, and the force value, read here so a change takes effect at
-     * the next enumeration. */
-    xportFlags = 0;
-    if (XhciStreamHcEntries(XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)) !=
-        0) {
-        xportFlags |= XHCI_XPORT_F_HC_STREAMS;
-    }
-    if (HcdCtlForceBulkOnly(hc)) {
-        xportFlags |= XHCI_XPORT_F_FORCE_BOT;
-    }
-    count = (set.Count != 0) ? set.Count : 1;
+    xportFlags = hcdXportFlags(hc);
+    /* A split device's PDOs are its parent and then its functions (task
+     * 36.43): position 0 the parent, position i the function i - 1. */
+    count = (set.Count != 0) ? set.Count + 1 : 1;
     first = NULL;
     last = NULL;
     status = STATUS_SUCCESS;
@@ -1529,15 +1658,21 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * passes any (design record 13 section 10.7). */
     textFlags = IoIsWdmVersionAvailable(1, 0x10) ? 0 : XHCI_TEXT_FOLD_ASCII;
     for (i = 0; i < count; i++) {
-        status = hcdPdoNew(hc, dev, (set.Count != 0) ? &set.Func[i] : NULL,
+        status = hcdPdoNew(hc, dev,
+                           (set.Count != 0 && i != 0) ? &set.Func[i - 1]
+                                                      : NULL,
                            xportFlags, &pdo);
         if (!NT_SUCCESS(status)) {
             goto cleanup;
         }
         if (first == NULL) {
             first = pdo;
+            pdo->Composite = (set.Count != 0) ? 1UL : 0UL;
         } else {
+            /* A function: its parent is the group's own first PDO, the
+             * composite parent, wherever that is presented. */
             pdo->Group = first->Group;
+            pdo->ParentSerial = first->Serial;
             last->Sibling = pdo;
         }
         last = pdo;
@@ -1565,10 +1700,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         KeReleaseSpinLock(&hcdSerialLock, serialIrql);
     }
-    for (pdo = first, i = 0; pdo != NULL && !skipText;
-         pdo = pdo->Sibling, i++) {
+    /* Each PDO's strings by its own function, none for a device PDO or a
+     * composite parent (task 36.43), never by its place on the chain. */
+    for (pdo = first; pdo != NULL && !skipText; pdo = pdo->Sibling) {
         picks = XhciFuncTextIndexes(dev->DeviceDesc,
-                                    (set.Count != 0) ? &set.Func[i] : NULL,
+                                    pdo->Function ? &pdo->Func : NULL,
                                     dev->Config, dev->ConfigLength, indexes);
         if (!HcdDeviceReadText(hc, dev, indexes, picks, textFlags, &textRead,
                                pdo->Text)) {
@@ -1638,6 +1774,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     XHCI_DBG_VALUE("hcd: device PDOs created, port/count",
                    (dev->Port << 16) | count);
+    if (first->Composite) {
+        hc->Counters.CompositeParents++;
+        XHCI_DBG_VALUE("hcd: composite parent PDO, port/functions",
+                       (dev->Port << 16) | set.Count);
+    }
     /* The first guest run reads the grouping off these (design record 13
      * section 10.10: the real units' interface numbering is unread). */
     for (i = 0; i < set.Count; i++) {
@@ -1692,14 +1833,20 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO pdo;
     PHCD_DEVICE_PDO next;
     PHCD_DEVICE_PDO doomed;
+    /* A split device's chain is its composite parent (task 36.43) and up
+     * to XHCI_FUNC_MAX functions. */
+    HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX + 1];
     KIRQL oldIrql;
+    ULONG settles;
     ULONG waits;
     ULONG group;
     ULONG parent;
+    ULONG i;
 
     if (dev == NULL || dev->Pdo == NULL) {
         return 0;
     }
+    settles = 0;
     pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
     dev->Pdo = NULL;
     group = pdo->Group;
@@ -1713,6 +1860,12 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
     for (; pdo != NULL; pdo = next) {
         next = pdo->Sibling;
+        /* Selective suspend's slot settled at the unlink, never at a
+         * REMOVE (design record 14 section 4.4). */
+        if (settles < XHCI_FUNC_MAX + 1 &&
+            HcdSuspUnlinkLocked(hc, pdo, &settle[settles])) {
+            settles++;
+        }
         pdo->Sibling = NULL;
         hcdUnlinkLocked(&hc->DevicePdos, pdo);
         pdo->Listed = 0;
@@ -1742,6 +1895,9 @@ ULONG HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (i = 0; i < settles; i++) {
+        HcdSuspUnlinkFinish(hc, &settle[i]);
+    }
 
     while (doomed != NULL) {
         pdo = doomed;
@@ -2097,6 +2253,238 @@ ULONG HcdDevicePdoRepresent(PHCD_CONTROLLER hc, ULONG hubSerial)
 }
 
 /*
+ * A composite FDO starts on the parent PDO `parentSerial` (hcd_hubfdo.c;
+ * task 36.43, design record 13 section 10.12 item 3): when PnP let go of any
+ * of its functions with an earlier FDO (HcdDevicePdoLetGo), the thread is
+ * asked to re-present them in place (HcdEnumRepresent, by the parent's port
+ * and its group, so a request that outlives its device does nothing), not
+ * to cycle the port, which would take the parent PnP has just started
+ * away. Called before the start asks its settle generation, so the first
+ * answer waits for the re-presentation. Returns how many functions were
+ * let go. IRQL: <= DISPATCH_LEVEL.
+ */
+ULONG HcdDevicePdoRepresentAsk(PHCD_CONTROLLER hc, ULONG parentSerial)
+{
+    PHCD_DEVICE_PDO parent;
+    PHCD_DEVICE_PDO pdo;
+    KIRQL oldIrql;
+    ULONG port;
+    ULONG group;
+    ULONG n;
+
+    if (parentSerial == 0) {
+        return 0;
+    }
+    n = 0;
+    port = 0;
+    group = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (parent = hc->DevicePdos; parent != NULL; parent = parent->Next) {
+        if (parent->Composite && parent->Serial == parentSerial) {
+            break;
+        }
+    }
+    if (parent != NULL) {
+        port = parent->Port;
+        group = parent->Group;
+        for (pdo = hc->DevicePdos; pdo != NULL; pdo = pdo->Next) {
+            if (pdo->ParentSerial == parentSerial && pdo->ParentLetGo) {
+                n++;
+            }
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (n != 0) {
+        HcdEnumRepresent(hc, port, group);
+        XHCI_DBG_VALUE("hcd: composite FDO started, let-go functions, "
+                       "serial/count", (parentSerial << 16) | (n & 0xFFFFUL));
+    }
+    return n;
+}
+
+/*
+ * The thread's half of HcdDevicePdoRepresentAsk (hcd_enum.c, the represent
+ * service; task 36.43): each function PDO of `dev`'s composite parent that
+ * PnP let go of with the parent's removed FDO is replaced by a new function
+ * PDO for the same function - the same ids, text, serial id, instance key,
+ * Address, transport and parent - so PnP, which forgot the old object with
+ * the parent's devnode and would never start it again (10.11 item 4), finds
+ * the instance id it had on a new one. The device is not touched: still
+ * configured, each old function's REMOVE having queued the release of its
+ * endpoints and alternates (HcdCfgReleaseFunction, 10.9), which the
+ * release-before-reconfigure order of HcdCfgService runs ahead of the new
+ * function's select when its driver loads. The new
+ * PDOs are built first, outside the lock; then, in one hold of PdoListLock,
+ * each takes its old PDO's place on the group's chain and the list, and
+ * the old one - removed by PnP already - is missing at once and goes to
+ * RemovedPdos, deleted inside the next relations answer before PnP
+ * receives it, though that answer may be the first to carry its
+ * successor. A function whose new PDO cannot be made stays let
+ * go, absent until the next composite FDO start on the parent (a disable
+ * and enable) or the device's next plug, and is traced. Returns how
+ * many were re-presented. Thread only (the chain's writer), PASSIVE_LEVEL.
+ */
+ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_FUNC_SET set;
+    PHCD_DEVICE_PDO olds[XHCI_FUNC_MAX];
+    PHCD_DEVICE_PDO made[XHCI_FUNC_MAX];
+    HCD_SUSP_SETTLE settle[XHCI_FUNC_MAX];
+    PHCD_DEVICE_PDO parent;
+    PHCD_DEVICE_PDO prev;
+    PHCD_DEVICE_PDO pdo;
+    PHCD_DEVICE_PDO nu;
+    NTSTATUS status;
+    KIRQL oldIrql;
+    KIRQL ctlIrql;
+    ULONG xportFlags;
+    ULONG settles;
+    ULONG done;
+    ULONG n;
+    ULONG i;
+    ULONG k;
+
+    if (dev == NULL || dev->Pdo == NULL || dev->Config == NULL ||
+        dev->Gone) {
+        return 0;
+    }
+    parent = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
+    if (!parent->Composite ||
+        XhciFuncSplit(dev->DeviceDesc, dev->Config, dev->ConfigLength,
+                      &set) != XHCI_FUNC_OK) {
+        return 0;
+    }
+    n = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (pdo = parent->Sibling; pdo != NULL && n < XHCI_FUNC_MAX;
+         pdo = pdo->Sibling) {
+        if (pdo->Listed && pdo->ParentLetGo) {
+            olds[n++] = pdo;
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    if (n == 0) {
+        return 0;
+    }
+    xportFlags = hcdXportFlags(hc);
+    for (i = 0; i < n; i++) {
+        made[i] = NULL;
+        for (k = 0; k < set.Count; k++) {
+            if (set.Func[k].FirstInterface == olds[i]->Func.FirstInterface &&
+                set.Func[k].InterfaceMask == olds[i]->InterfaceMask) {
+                break;
+            }
+        }
+        if (k == set.Count) {
+            continue;
+        }
+        status = hcdPdoNew(hc, dev, &set.Func[k], xportFlags, &nu);
+        if (!NT_SUCCESS(status)) {
+            continue;
+        }
+        /* Its identity is the old PDO's, field for field, so every query
+         * answers as PnP knew the devnode. */
+        nu->Group = olds[i]->Group;
+        nu->ParentSerial = olds[i]->ParentSerial;
+        nu->Address = olds[i]->Address;
+        nu->InstanceKey = olds[i]->InstanceKey;
+        nu->SerialUnread = olds[i]->SerialUnread;
+        nu->Xport = olds[i]->Xport;
+        for (k = 0; k < sizeof(nu->SerialId); k++) {
+            nu->SerialId[k] = olds[i]->SerialId[k];
+            nu->ReadSerialId[k] = olds[i]->ReadSerialId[k];
+        }
+        for (k = 0; k < XHCI_TEXT_WCHARS; k++) {
+            nu->Text[k] = olds[i]->Text[k];
+        }
+        /* The device is kept, and selective suspend may hold its link
+         * down: hcdPdoNew's D0 would then be a function in D0 on a
+         * suspended device, and its START (HcdSuspPdoReopen) leaves the
+         * state alone off ACTIVE, so no resume would ever be asked and
+         * its first request would wait in SlowDeferred for good. Off
+         * ACTIVE it starts at D3 with D0 wanted, so the decision resumes
+         * the link and writes D0 at ACTIVE (XhciSuspDecide's WantD0;
+         * Codex review of p36-int3, round 1). The thread is the link
+         * machine's, so the state cannot move under this read. */
+        if (!HcdSuspLinkActive(dev)) {
+            nu->PwrState = XHCI_SUSP_D3;
+            nu->PwrWanted = XHCI_SUSP_D0;
+        }
+        made[i] = nu;
+    }
+    done = 0;
+    settles = 0;
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    for (i = 0; i < n; i++) {
+        nu = made[i];
+        pdo = olds[i];
+        if (nu == NULL || !pdo->Listed || !pdo->ParentLetGo) {
+            continue;
+        }
+        for (prev = parent; prev->Sibling != NULL && prev->Sibling != pdo;
+             prev = prev->Sibling) {
+        }
+        if (prev->Sibling != pdo) {
+            continue;
+        }
+        /* Off the chain, so selective suspend's slot is settled now, as
+         * HcdDevicePdoGone settles it (design record 14 section 4.4); the
+         * old PDO had its REMOVE, so normally nothing is owed. Stage B's
+         * armed functions (FwArmed, record 14 section 8.5) go to the
+         * replacement first: the device stays configured, so a function
+         * the device took FUNCTION_SUSPEND options 03h for is still
+         * armed, and the resume's DISARM must still see it; the unlink
+         * clears only the old PDO's copy (Codex review of p36-int4,
+         * round 1, finding 1). Same interface mask, so the same
+         * ownership. */
+        XhciControllerLockAcquire(&hc->Hc, &ctlIrql);
+        nu->FwArmed = pdo->FwArmed;
+        XhciControllerLockRelease(&hc->Hc, ctlIrql);
+        if (settles < XHCI_FUNC_MAX &&
+            HcdSuspUnlinkLocked(hc, pdo, &settle[settles])) {
+            settles++;
+        }
+        nu->Sibling = pdo->Sibling;
+        prev->Sibling = nu;
+        pdo->Sibling = NULL;
+        hcdUnlinkLocked(&hc->DevicePdos, pdo);
+        pdo->Listed = 0;
+        pdo->Device = NULL;
+        pdo->MissingReported = 1;
+        if (pdo->RemoveReceived) {
+            pdo->DeletePending = 1;
+            pdo->Next = hc->RemovedPdos;
+            hc->RemovedPdos = pdo;
+        } else {
+            pdo->Next = hc->GonePdos;
+            hc->GonePdos = pdo;
+        }
+        nu->Next = hc->DevicePdos;
+        hc->DevicePdos = nu;
+        nu->Listed = 1;
+        made[i] = NULL;
+        done++;
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    for (i = 0; i < settles; i++) {
+        HcdSuspUnlinkFinish(hc, &settle[i]);
+    }
+    for (i = 0; i < n; i++) {
+        if (made[i] != NULL) {
+            hcdDeletePdo(made[i]);
+        }
+    }
+    hc->Counters.CompositeRepresented += done;
+    XHCI_DBG_VALUE("hcd: composite functions re-presented, port/done/let-go",
+                   (dev->Port << 16) | ((done & 0xFFUL) << 8) |
+                       (n & 0xFFUL));
+    if (done != 0) {
+        hcdInvalidateFor(hc, parent->Serial);
+    }
+    return done;
+}
+
+/*
  * The parent is going (the root hub's remove, or the controller's): every
  * PDO left on either list is settled - deleted when PnP has removed it or
  * never knew it, orphaned when it still awaits its REMOVE (round 1, finding
@@ -2190,15 +2578,20 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* Selective suspend's admission closed and the slot's IRPs settled
+     * (design record 14 section 4.4 (a), (c)). */
+    HcdSuspPdoClose(pdo, removing || pdo->Surprised);
     /* A held idle notification (hcd_urb.c, task 28-A.1) is no URB: it
-     * completes here, and its completion has returned, before the
-     * client's stop or removal goes on (Codex review of 28-A.1, round 1,
-     * finding 2). */
+     * completes here (stage A's with the slot, above: 4.4 (d)), and its
+     * completion has returned, before the client's stop or removal goes
+     * on (Codex review of 28-A.1, round 1, finding 2) - waited for after
+     * the URBs below, since a callback may wait on them (4.4 (b), (e)). */
     HcdUrbIdleDrain(pdo);
     /* What a departed device left held here completes now, CANCELED; with
      * Closing set nothing more is held (hcd_io.c, HcdIoPark). */
     (VOID)HcdIoParkedRelease(pdo, 0);
     if (pdo->UrbsPending == 0) {
+        (VOID)HcdSuspIdleRundown(pdo, 1);
         hcdPdoRefusalsWait(pdo, removing);
         return;
     }
@@ -2214,6 +2607,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         }
         KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
         if (dev != NULL) {
+            /* 4.4 (b): what selective suspend deferred for this PDO
+             * behind a suspended link (hcd_cfg.c). */
+            HcdCfgFlushPdoDeferred(hc, dev, pdo);
             if (pdo->Function) {
                 /* Its own requests only, EP0's included: its siblings
                  * share the device and keep running (design record 13
@@ -2236,6 +2632,9 @@ static VOID hcdPdoQuiesce(PHCD_DEVICE_PDO pdo, ULONG removing)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
+    /* 4.4 (e): the idle rundown, or the quarantine without the DMA-halt
+     * proof (hcd_susp.c). */
+    (VOID)HcdSuspIdleRundown(pdo, 1);
     hcdPdoRefusalsWait(pdo, removing);
 }
 
@@ -2302,6 +2701,11 @@ static ULONG hcdPdoStarted(PHCD_DEVICE_PDO pdo)
     }
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     if (!listed) {
+        return 0;
+    }
+    /* Selective suspend's admission reopened (design record 14 section
+     * 4.4, START), unless the device left since the check above. */
+    if (!HcdSuspPdoReopen(hc, pdo)) {
         return 0;
     }
     pdo->Closing = 0;
@@ -2433,8 +2837,10 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     caps->SurpriseRemovalOK = pdo->Function ? TRUE : FALSE;
     /* A hub too (task 33.4), so the hot-plug applet offers the devices
      * behind it rather than the hub itself; the applet's rule is unread
-     * (design record 13 section 10.11). */
-    if (pdo->Hub) {
+     * (design record 13 section 10.11). And a composite parent (task
+     * 36.43, section 10.12; orchestrator decision, owner to confirm), so
+     * the applet lists no composite device, as before its parent existed. */
+    if (HcdPdoIsParent(pdo)) {
         caps->SurpriseRemovalOK = TRUE;
     }
     /* The port on the parent it is presented under, as usbhub reports
@@ -2452,6 +2858,9 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
     caps->SystemWake = PowerSystemUnspecified;
     caps->DeviceWake = PowerDeviceUnspecified;
+    /* A stage A PDO's power capabilities, with the switch on (design
+     * record 14 section 5.2); today's values otherwise. */
+    HcdSuspPdoCaps(pdo, caps);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 }
 
@@ -2539,6 +2948,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
         }
         pdo->Common.PnpState = HCD_PNP_STARTED;
+        HcdDoorDeviceStart(pdo);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
     case IRP_MN_QUERY_STOP_DEVICE:
@@ -2553,6 +2963,7 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             pdo->Surprised = 1;
         }
         pdo->Common.PnpState = HCD_PNP_STOPPED;
+        HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 0);
         return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
 
@@ -2564,7 +2975,9 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
             hcdDormantRemoved(pdo);
         }
         pdo->Common.PnpState = HCD_PNP_REMOVED;
+        HcdDoorDeviceStop(pdo, 0);
         hcdPdoQuiesce(pdo, 1);
+        HcdSuspPdoRundown(pdo);
         hcdPdoFunctionRelease(pdo);
         HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
         hcdPdoRemoved(pdo);
@@ -2581,8 +2994,14 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
              * before 2.1.0.0. */
             for (n = 0; n < XHCI_TEXT_CHARS && pdo->Text[n] != 0; n++) {
             }
-            text = (n != 0) ? hcdHandOff(pdo->Text, n + 1)
-                            : hcdHandOff(L"USB Device", 11);
+            if (n != 0) {
+                text = hcdHandOff(pdo->Text, n + 1);
+            } else if (pdo->Composite) {
+                /* The name Microsoft's own INFs give the parent (36.43). */
+                text = hcdHandOff(L"USB Composite Device", 21);
+            } else {
+                text = hcdHandOff(L"USB Device", 11);
+            }
             if (text == NULL) {
                 return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
             }
@@ -2615,7 +3034,10 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
                               irp->IoStatus.Information);
 
     case IRP_MN_QUERY_INTERFACE:
-        if (HcdUrbIsUsbdiQuery(
+        /* A composite parent is not on the data path (task 36.43): no
+         * client sits above its FDO to call the bus interface. */
+        if (!pdo->Composite &&
+            HcdUrbIsUsbdiQuery(
                 stack->Parameters.QueryInterface.InterfaceType)) {
             return HcdUrbQueryInterface(pdo, irp);
         }
@@ -2629,13 +3051,41 @@ NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp)
     }
 }
 
+/* The dispatch under the PDO's Busy count, raised before its Controller is
+ * read and dropped once the IRP is completed or pended: the controller's
+ * release and the PDO's STOP and REMOVE wait it out (design record 14
+ * section 4.2). IRQL: PASSIVE_LEVEL. */
+static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp);
+
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    NTSTATUS status;
+
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    status = hcdDevicePdoPowerBusy(pdo, irp);
+    (VOID)InterlockedDecrement(&pdo->Busy);
+    return status;
+}
+
+static NTSTATUS hcdDevicePdoPowerBusy(PHCD_DEVICE_PDO pdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     NTSTATUS status;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     status = irp->IoStatus.Status;
+    /* Selective suspend (design record 14 sections 4 and 5; hcd_susp.c):
+     * a stage A PDO's D-IRP and WAIT_WAKE, with the switch on. Otherwise
+     * today's answers below. */
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == DevicePowerState &&
+        HcdSuspPdoSetPower(pdo, irp, &status)) {
+        return status;
+    }
+    if (stack->MinorFunction == IRP_MN_WAIT_WAKE &&
+        HcdSuspPdoWaitWake(pdo, irp, &status)) {
+        return status;
+    }
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
         if (stack->Parameters.Power.Type == DevicePowerState) {
             pdo->Common.DevicePower =
@@ -2643,8 +3093,14 @@ NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp)
             (VOID)PoSetPowerState(pdo->Common.Self, DevicePowerState,
                                   stack->Parameters.Power.State);
         } else {
-            pdo->Common.SystemPower =
-                stack->Parameters.Power.State.SystemState;
+            /* 6.5: a system state other than S0 settles a stage A idle
+             * IRP and ends its episode; the state is published in the
+             * same controller-lock hold (hcd_susp.c). */
+            if (!HcdSuspIdleSystem(pdo,
+                                   stack->Parameters.Power.State.SystemState)) {
+                pdo->Common.SystemPower =
+                    stack->Parameters.Power.State.SystemState;
+            }
         }
         status = STATUS_SUCCESS;
     } else if (stack->MinorFunction == IRP_MN_QUERY_POWER) {

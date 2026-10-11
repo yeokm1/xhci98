@@ -628,9 +628,12 @@ static ULONG xhciDefaultKilobits(ULONG psiv, ULONG major)
  * nothing - except IDs 4 to 7 on a USB 3.x group, which take their default
  * meaning (task 35.1, issue 11): Sunrise Point-LP (8086:9D2F) publishes a USB
  * 3 table of three SSIC rates at IDs 1 to 3 and reports a 5 Gbit/s link as 4.
+ * And, with `hubFallback` only - a device the caller placed behind a hub by
+ * XhciPortPsivForHubChild's fallback, never a root port's PORTSC - an
+ * unlisted 1 or 2 on a USB 2.0 group (issue 18).
  */
-static ULONG xhciProtocolRate(const XHCI_PROTOCOL *proto, ULONG psiv,
-                              ULONG *kbps, ULONG *lp)
+static ULONG xhciProtocolRateFor(const XHCI_PROTOCOL *proto, ULONG psiv,
+                                 ULONG hubFallback, ULONG *kbps, ULONG *lp)
 {
     ULONG i;
 
@@ -655,7 +658,23 @@ static ULONG xhciProtocolRate(const XHCI_PROTOCOL *proto, ULONG psiv,
         *kbps = xhciDefaultKilobits(psiv, proto->Major);
         return XHCI_PSI_SOURCE_FALLBACK;
     }
+    /* Issue 18: only for a device the caller placed behind a hub by the
+     * downstream fallback (XhciPortPsivForHubChild), and only for the two
+     * IDs that fallback writes - so a PSIV the table lists never reaches
+     * here and a root port's PORTSC (hubFallback 0) never takes it. */
+    if (hubFallback && proto->Major == 2 &&
+        (psiv == XHCI_PSIV_FS || psiv == XHCI_PSIV_LS)) {
+        *kbps = xhciDefaultKilobits(psiv, proto->Major);
+        return XHCI_PSI_SOURCE_HUB_FALLBACK;
+    }
     return XHCI_PSI_SOURCE_NONE;
+}
+
+/* The root-port rule: no downstream fallback. */
+static ULONG xhciProtocolRate(const XHCI_PROTOCOL *proto, ULONG psiv,
+                              ULONG *kbps, ULONG *lp)
+{
+    return xhciProtocolRateFor(proto, psiv, 0, kbps, lp);
 }
 
 /* The group owning `port`, or NULL for a port no group claims. */
@@ -683,10 +702,11 @@ ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv)
     return xhciProtocolRate(proto, psiv, &kbps, &lp);
 }
 
-ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
-                         ULONG port,
-                         ULONG psiv,
-                         ULONG *speedClass)
+ULONG XhciPortSpeedClassFor(const XHCI_PORT_MAP *map,
+                            ULONG port,
+                            ULONG psiv,
+                            ULONG hubFallback,
+                            ULONG *speedClass)
 {
     const XHCI_PROTOCOL *proto;
     ULONG kbps;
@@ -699,9 +719,17 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
     if (proto == NULL) {
         return XHCI_CAPS_NOT_FOUND;
     }
-    (VOID)xhciProtocolRate(proto, psiv, &kbps, &lp);
+    (VOID)xhciProtocolRateFor(proto, psiv, hubFallback, &kbps, &lp);
     *speedClass = xhciSpeedClassFromKilobits(kbps);
     return XHCI_CAPS_OK;
+}
+
+ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
+                         ULONG port,
+                         ULONG psiv,
+                         ULONG *speedClass)
+{
+    return XhciPortSpeedClassFor(map, port, psiv, 0, speedClass);
 }
 
 static ULONG xhciDefaultPsiv(ULONG speedClass)
@@ -796,6 +824,80 @@ ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
 }
 
 /*
+ * Issue 18 (docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md): a
+ * USB 2.0 root port's table describes that port's own link, and xHCI 1.2c
+ * 7.2.1 (note, p.482-483) lets an xHC whose integrated hub provides Full and
+ * Low Speed list only High Speed there - the VIA VL805 does. So a Full- or
+ * Low-Speed device behind a hub on such a port takes the default ID (Table
+ * 7-13), but only when the table neither names that speed nor lists the
+ * default ID as anything else: an explicit entry always wins.
+ */
+ULONG XhciPortPsivForHubChild(const XHCI_PORT_MAP *map,
+                              ULONG port,
+                              ULONG speedClass,
+                              ULONG allowFallback,
+                              ULONG *psiv,
+                              ULONG *outcome)
+{
+    const XHCI_PROTOCOL *proto;
+    ULONG value;
+    ULONG status;
+    ULONG i;
+
+    if (psiv == NULL || outcome == NULL) {
+        return XHCI_CAPS_BAD_PARAM;
+    }
+    *outcome = XHCI_HUB_SPEED_NO_MAPPING;
+    status = XhciPortPsivForSpeed(map, port, speedClass, psiv);
+    if (status == XHCI_CAPS_OK) {
+        *outcome = XHCI_HUB_SPEED_TABLE;
+        return XHCI_CAPS_OK;
+    }
+    if (status != XHCI_CAPS_NOT_FOUND ||
+        (speedClass != XHCI_SPEED_FULL && speedClass != XHCI_SPEED_LOW)) {
+        return status;
+    }
+    proto = xhciPortProtocol(map, port);
+    if (proto == NULL || proto->Major != 2 || proto->PsiCount == 0) {
+        return XHCI_CAPS_NOT_FOUND;
+    }
+    value = xhciDefaultPsiv(speedClass);
+    for (i = 0; i < proto->PsiCount; i++) {
+        if (XHCI_PSI_PSIV(proto->Psi[i]) == value) {
+            *outcome = XHCI_HUB_SPEED_CONFLICT;
+            return XHCI_CAPS_NOT_FOUND;
+        }
+    }
+    if (!allowFallback) {
+        *outcome = XHCI_HUB_SPEED_DISABLED;
+        return XHCI_CAPS_NOT_FOUND;
+    }
+    *psiv = value;
+    *outcome = XHCI_HUB_SPEED_FALLBACK;
+    return XHCI_CAPS_OK;
+}
+
+ULONG XhciHubSpeedNotePlace(ULONG rootPort, ULONG parentSlot, ULONG hubPort,
+                            ULONG speedClass, ULONG outcome)
+{
+    return ((rootPort & 0xFFUL) << 24) | ((parentSlot & 0xFFUL) << 16) |
+           ((hubPort & 0xFFUL) << 8) | ((speedClass & 0xFUL) << 4) |
+           (outcome & 0xFUL);
+}
+
+ULONG XhciHubSpeedNoteRoute(ULONG psiv, ULONG route)
+{
+    return ((psiv & 0xFUL) << 28) | (route & 0xFFFFFUL);
+}
+
+ULONG XhciPciFirmwareOffset(ULONG pciVendorDevice)
+{
+    return pciVendorDevice == XHCI_PCI_ID_VIA_VL805
+               ? XHCI_PCI_VL805_FW_VERSION
+               : 0UL;
+}
+
+/*
  * The rate kept apart from the class (task 29-A.1): the one place a PSIV is
  * read as a number of kbit/s, so a 10 Gbit/s link is told from a 5 Gbit/s one
  * although both are XHCI_SPEED_SUPER.
@@ -813,6 +915,16 @@ ULONG XhciPortRate(const XHCI_PORT_MAP *map,
                    ULONG *kbps,
                    ULONG *plus)
 {
+    return XhciPortRateFor(map, port, psiv, 0, kbps, plus);
+}
+
+ULONG XhciPortRateFor(const XHCI_PORT_MAP *map,
+                      ULONG port,
+                      ULONG psiv,
+                      ULONG hubFallback,
+                      ULONG *kbps,
+                      ULONG *plus)
+{
     const XHCI_PROTOCOL *proto;
     ULONG rate;
     ULONG lp;
@@ -826,7 +938,7 @@ ULONG XhciPortRate(const XHCI_PORT_MAP *map,
     if (proto == NULL) {
         return XHCI_CAPS_NOT_FOUND;
     }
-    (VOID)xhciProtocolRate(proto, psiv, &rate, &lp);
+    (VOID)xhciProtocolRateFor(proto, psiv, hubFallback, &rate, &lp);
     if (rate == 0) {
         return XHCI_CAPS_NOT_FOUND;
     }

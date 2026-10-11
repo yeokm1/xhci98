@@ -135,9 +135,175 @@ static ULONG hcdHalted(PHCD_CONTROLLER hc)
 }
 
 /*
+ * The waiter's marks cleared in the same controller-lock hold that reads
+ * the command engine idle, and only then. The completion and loss paths
+ * publish the marks under that lock, and an idle engine has no command left
+ * to complete or lose, so whatever the waiter sees after the submit is its
+ * own command's: a loss published between a clear outside the lock and the
+ * submit - an earlier command's abort ending - would otherwise be taken for
+ * the new command's (review of 36.4, round 2; it predates 36.4). An
+ * invalidation in between is the controller's failure or stop, which the
+ * submit then refuses. Returns whether the engine read idle. Thread only.
+ */
+static ULONG hcdCommandArm(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG idle;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    idle = (hc->Hc.CommandState == XHCI_CMD_STATE_IDLE) ? 1UL : 0UL;
+    if (idle) {
+        KeClearEvent(&hc->CmdDoneEvent);
+        hc->CmdDoneLost = 0;
+        hc->CmdDonePA = 0;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return idle;
+}
+
+/*
+ * Task 36.4 (issue 12, Finding 1): the engine answered XHCI_CMD_BUSY, so an
+ * earlier command is outstanding or an abort is in progress - the start's
+ * asynchronous No Op, whose completion on the E7250 came with no interrupt
+ * and which the backstop cannot drain while this thread waits here. A drain
+ * is asked for (HcdCommandDrain, only when an event stands), a completion
+ * waited for a slice at a time, and the engine looked at again, under one
+ * deadline of HCD_COMMAND_WAIT_MS for the whole episode; the command is
+ * submitted again only once the engine reads idle under the controller
+ * lock, and never once the controller has failed or the start generation
+ * has moved (XhciEnumBusyStep). The idle read is hcdCommandArm's, which
+ * clears the waiter's marks in the same hold, so only this command's own
+ * TRB counts afterwards. Returns the last submit's answer; *trbPA its TRB. Thread
+ * only. It drains; it does not decide that a line is dead, which is the
+ * dead-line rule's (task 36.7).
+ */
+static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                            PULONG trbPA)
+{
+    KTIMER deadline;
+    LARGE_INTEGER due;
+    LARGE_INTEGER zero;
+    ULONG answer;
+    ULONG expired;
+    ULONG idle;
+    ULONG gen;
+    ULONG looks;
+    ULONG step;
+
+    hc->EnumCommandsBusy++;
+    gen = hc->TolStartGen;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The test aid has done its work: this episode's own completion is
+     * drained as ever. */
+    HcdInjStartRelease(hc);
+#endif
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, HCD_COMMAND_WAIT_MS);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    zero.QuadPart = 0;
+    answer = XHCI_CMD_BUSY;
+    looks = 0;
+    for (;;) {
+        expired = KeWaitForSingleObject(&deadline, Executive, KernelMode,
+                                        FALSE, &zero) == STATUS_SUCCESS;
+        idle = hcdCommandArm(hc);
+        looks++;
+        step = XhciEnumBusyStep(hcdHalted(hc), hc->TolStartGen != gen,
+                                expired, idle);
+        if (step == XHCI_ENUM_BUSY_STOP) {
+            break;
+        }
+        if (step == XHCI_ENUM_BUSY_SUBMIT) {
+            *trbPA = 0;
+            answer = XhciCommandSubmit(&hc->Hc, trb, trbPA,
+                                       XHCI_ARM_UNLOCKED);
+            if (answer != XHCI_CMD_BUSY) {
+                break;
+            }
+        }
+        (VOID)HcdCommandDrain(hc);
+        (VOID)hcdWaitEvent(&hc->CmdDoneEvent, XHCI_ENUM_BUSY_SLICE_MS);
+    }
+    (VOID)KeCancelTimer(&deadline);
+    if (answer == XHCI_CMD_OK) {
+        hc->EnumCommandsBusyCleared++;
+    }
+    XhciLogNote(&hc->Hc, "enum.cmd.busy.end",
+                XhciEnumNoteBusy(XHCI_TRB_GET_TYPE(trb->Control), answer,
+                                 looks));
+    return answer;
+}
+
+/*
+ * Task 36.13 (record 15 section 11, the dead line under mode 1): the
+ * backstop then ran on this thread and could not drain while the thread
+ * waited for a completion of its own (issue 12 section 2), so on a line
+ * that delivers nothing - mode 1, which never moves to polling, or mode 0
+ * before its move - a command's or an EP0 transfer's completion stood
+ * undrained until the wait expired and the controller was reset. Since
+ * task 36.55 the backstop is the tolerance clock's DPC's
+ * (HcdCtlBackstopTick) and drains such a completion within its interval;
+ * this drain stays because it is quicker, at each slice rather than after
+ * the interval. Between the slices of such a wait the thread asks for a drain
+ * itself: only when an event stands at the dequeue and the drain is
+ * admitted (HcdDrainPending), and only at XhciTolerance 1; at 0 nothing
+ * but the ISR and the poller drains, as before. On a working line the
+ * ISR's drain has normally taken the event before a slice ends, and an
+ * extra queued drain finds the ring empty. Counts the drains queued (not
+ * the events they took): enum.wait.drains. Thread only.
+ */
+static VOID hcdThreadWaitDrain(PHCD_CONTROLLER hc)
+{
+    if (hc->Hc.Tol.Stats.Tolerance != 0 && HcdDrainPending(hc)) {
+        hc->EnumWaitDrains++;
+    }
+}
+
+/*
+ * The wait for a submitted command's completion event, HCD_COMMAND_WAIT_MS,
+ * a slice at a time, a drain asked for between slices (hcdThreadWaitDrain).
+ * A deadline found passed is followed by one more zero-time look at the
+ * event, so a completion signalled before the deadline is never taken for
+ * a timeout because the thread ran late (Codex review of 5bca7bd, round 1,
+ * finding 1). Returns whether the event was signalled. Thread only.
+ */
+static ULONG hcdCommandWaitDone(PHCD_CONTROLLER hc)
+{
+    KTIMER deadline;
+    LARGE_INTEGER due;
+    LARGE_INTEGER zero;
+    ULONG done;
+
+    KeInitializeTimer(&deadline);
+    HcdRelativeMs(&due, HCD_COMMAND_WAIT_MS);
+    (VOID)KeSetTimer(&deadline, due, NULL);
+    zero.QuadPart = 0;
+    done = 0;
+    for (;;) {
+        if (hcdWaitEvent(&hc->CmdDoneEvent, XHCI_ENUM_BUSY_SLICE_MS)) {
+            done = 1;
+            break;
+        }
+        if (KeWaitForSingleObject(&deadline, Executive, KernelMode, FALSE,
+                                  &zero) == STATUS_SUCCESS) {
+            done = KeWaitForSingleObject(&hc->CmdDoneEvent, Executive,
+                                         KernelMode, FALSE, &zero) ==
+                           STATUS_SUCCESS
+                       ? 1UL
+                       : 0UL;
+            break;
+        }
+        hcdThreadWaitDrain(hc);
+    }
+    (VOID)KeCancelTimer(&deadline);
+    return done;
+}
+
+/*
  * Submit one command and wait for its own completion. Returns the completion
  * code, or 0 when it never completed (lost, refused or timed out); *control
- * receives the Command Completion Event's DW3.
+ * receives the Command Completion Event's DW3. A busy engine is waited out
+ * first (hcdCommandBusy, task 36.4).
  *
  * A completion counts only when its TRB is the one this submit placed
  * (CmdDonePA, from hcd_dev.c): a completion of an earlier command, the
@@ -173,11 +339,14 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     /* Read before the doorbell: the completion rewrites the contexts. */
     HcdStrictBefore(hc, trb, &strict);
 #endif
-    KeClearEvent(&hc->CmdDoneEvent);
-    hc->CmdDoneLost = 0;
-    hc->CmdDonePA = 0;
     trbPA = 0;
-    answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+    answer = XHCI_CMD_BUSY;
+    if (hcdCommandArm(hc)) {
+        answer = XhciCommandSubmit(&hc->Hc, trb, &trbPA, XHCI_ARM_UNLOCKED);
+    }
+    if (answer == XHCI_CMD_BUSY) {
+        answer = hcdCommandBusy(hc, trb, &trbPA);
+    }
     if (answer != XHCI_CMD_OK) {
         hc->EnumCommandsRefused++;
         return 0;
@@ -197,7 +366,7 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 #endif
             return hc->CmdDoneCode;
         }
-        if (!hcdWaitEvent(&hc->CmdDoneEvent, HCD_COMMAND_WAIT_MS)) {
+        if (!hcdCommandWaitDone(hc)) {
             break;
         }
     }
@@ -207,11 +376,68 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     return 0;
 }
 
-/* A command from the thread for the configuration code (hcd_cfg.c). */
+/* A command from the thread for the configuration code (hcd_cfg.c), the
+ * suspend machine, the hubs and the qemu flavour's injection. On QEMU's xHCI
+ * a Stop or Reset Endpoint that succeeded is followed, before it returns,
+ * by the stream resync of record 17 section 4.12.4 (HcdCfgQemuStreamResync
+ * decides whether the endpoint has streams and is held) - once, by the
+ * outermost call: the injection's command hook sends a command it lets
+ * through by a nested call. Not for the injection's own commands, whose
+ * verdict reads the Stream Context as QEMU left it; the injection resyncs
+ * once it has read it (hcd_inj.c, hcdInjBulkStop). The command's own
+ * completion and control are returned, except after a resync that could
+ * not finish: it has requested the controller reset, as hcdCommand does
+ * for a command that never completes, and the answer is the same 0 - no
+ * usable completion - which every caller already contains. Thread only. */
 ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
                        PULONG control)
 {
-    return hcdCommand(hc, trb, control);
+    ULONG code;
+    ULONG type;
+    ULONG own;
+
+    hc->ThreadCommandDepth++;
+    code = hcdCommand(hc, trb, control);
+    hc->ThreadCommandDepth--;
+#if defined(XHCI_FLAVOUR_QEMU)
+    own = hc->InjOwnCmd;
+#else
+    own = 0;
+#endif
+    type = XHCI_TRB_GET_TYPE(trb->Control);
+    if (hc->QemuStreamQuirk && hc->ThreadCommandDepth == 0 && !own &&
+        code == XHCI_CC_SUCCESS &&
+        (type == XHCI_TRB_TYPE_STOP_EP || type == XHCI_TRB_TYPE_RESET_EP) &&
+        HcdCfgQemuStreamResync(hc, XHCI_TRB_GET_SLOT_ID(trb->Control),
+                               XHCI_TRB_GET_EP_ID(trb->Control)) ==
+            HCD_RESYNC_FAILED) {
+        return 0;
+    }
+    return code;
+}
+
+/* The same command with no resync: the resync's own Stop Endpoint and Set
+ * TR Dequeue commands (hcd_cfg.c). In the qemu flavour they are the
+ * injection's own as well, so its command hook lets them through without
+ * reading them as the driver's - a resync inside the injection's own stop
+ * must not end the withholding it is still carrying out. Thread only. */
+ULONG HcdThreadCommandRaw(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
+                          PULONG control)
+{
+    ULONG code;
+#if defined(XHCI_FLAVOUR_QEMU)
+    ULONG own;
+
+    own = hc->InjOwnCmd;
+    hc->InjOwnCmd = 1;
+#endif
+    hc->ThreadCommandDepth++;
+    code = hcdCommand(hc, trb, control);
+    hc->ThreadCommandDepth--;
+#if defined(XHCI_FLAVOUR_QEMU)
+    hc->InjOwnCmd = own;
+#endif
+    return code;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -241,6 +467,7 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, PHCD_PORT port,
     dev->Location = port->PortId;
     dev->SlotId = slotId;
     dev->Speed = speed;
+    HcdSuspDeviceInit(dev, port);
     XhciXferQueueInit(&dev->Ep0Queue);
     HcdIoPipeInitEp0(dev);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -462,7 +689,13 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     /* Not for a device being torn down: its freeze set Gone under this
      * lock (Codex review of d54eef0, finding 1). */
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (waiting && !dev->Gone) {
+    if (waiting && !dev->Gone && dev->Susp.State != XHCI_SUSP_SUSPENDED &&
+        dev->Susp.State != XHCI_SUSP_RECOVERING &&
+        dev->Susp.State != XHCI_SUSP_GONE) {
+        /* Not on a suspended link, one whose state is unknown, or one
+         * the machine saw leave: the survivors wait for selective
+         * suspend's restart, or go with the device (design record 14
+         * section 3.2; Codex review of 36.30, rounds 1 and 2). */
         XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -470,6 +703,82 @@ static ULONG hcdResetEp0(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XHCI_DBG_VALUE("hcd: EP0 recovered, slot/state",
                    (dev->SlotId << 8) | state);
     return 1;
+}
+
+/* What hcdEp0Withdraw did with the thread's own transfer. */
+#define HCD_EP0_NOT_WITHDRAWN   0UL /* left to the controller recovery    */
+#define HCD_EP0_WITHDRAWN       1UL /* off the ring, the scratch free     */
+#define HCD_EP0_COMPLETED       2UL /* it completed before the stop       */
+
+/*
+ * A door transfer (task 36.45, design record 13 section 8.11) the device
+ * has not ended by its deadline, taken back without the controller
+ * recovery the thread's other transfers fall to: EP0 stopped (Stop
+ * Endpoint), and once it reads Stopped with the thread's record the only
+ * one queued - the quiet wait let every client transfer finish and EP0's
+ * gate holds the rest - the record leaves the engine's queue and the
+ * dequeue moves to the enqueue position (Set TR Dequeue). A stopped TD is
+ * not processed again (xHCI 4.6.9), so the scratch is free; the device
+ * drops the unfinished control transfer at the next SETUP. A Stop
+ * Endpoint's own Transfer Event completes nothing (hcd_dev.c), so an
+ * Ep0Done read after it is a real completion. A device behind a TT is not
+ * withdrawn: its stopped split may hold the hub's TT buffer, and the clear
+ * that frees it reports no failure (HcdHubClearTt), so the withdrawal could
+ * not be finished checked. That, and anything else - a command failing,
+ * EP0 Halted or in Error, another record queued - is left to the caller's
+ * recovery, EP0 still paused. Thread only, powered, EP0 paused.
+ */
+static ULONG hcdEp0Withdraw(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG control;
+    ULONG code;
+    ULONG state;
+    ULONG pa;
+    ULONG dcs;
+    ULONG ok;
+
+    if (dev->TtSlot != 0) {
+        return HCD_EP0_NOT_WITHDRAWN;
+    }
+    state = hcdEp0State(hc, dev);
+    if (state == XHCI_EP_STATE_RUNNING) {
+        code = 0;
+        if (XhciTrbStopEndpoint(&trb, dev->SlotId, 1, 0) == XHCI_RING_OK) {
+            code = hcdCommand(hc, &trb, &control);
+        }
+        if (code != XHCI_CC_SUCCESS && code != XHCI_CC_CONTEXT_STATE_ERROR) {
+            return HCD_EP0_NOT_WITHDRAWN;
+        }
+        state = hcdEp0State(hc, dev);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Done) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return HCD_EP0_COMPLETED;
+    }
+    ok = state == XHCI_EP_STATE_STOPPED && !dev->Gone &&
+         dev->Ep0Queue.Head == &dev->Ep0Xfer && dev->Ep0Xfer.Next == NULL &&
+         XhciXferQueueRemove(&dev->Ep0Queue, &dev->Ep0Xfer) &&
+         XhciRingSetDequeue(&dev->Ep0, XhciRingTrbPA(&dev->Ep0,
+                                                     dev->Ep0.Enqueue)) ==
+             XHCI_RING_OK;
+    pa = XhciRingDequeuePA(&dev->Ep0);
+    dcs = XhciRingDequeueCycle(&dev->Ep0);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (!ok) {
+        return HCD_EP0_NOT_WITHDRAWN;
+    }
+    if (XhciTrbSetTrDequeue(&trb, dev->SlotId, 1, pa, dcs) != XHCI_RING_OK ||
+        hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
+        /* Off the queue but not repositioned: the controller keeps the old
+         * dequeue, which the recovery's HCRST settles. */
+        return HCD_EP0_NOT_WITHDRAWN;
+    }
+    hc->DoorWithdrawn++;
+    XhciLogNote(&hc->Hc, "door.ep0.withdrawn", dev->SlotId);
+    return HCD_EP0_WITHDRAWN;
 }
 
 /*
@@ -617,16 +926,15 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ext = &hc->Hc;
     c = &hc->Counters;
     c->DevicesAddressed++;
-    portClass = XHCI_SPEED_UNKNOWN;
     slotClass = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port, dev->Speed,
-                             &portClass);
+    /* By the device's provenance both (issue 18): a default ID given
+     * behind a hub reads as the class it was given for. */
+    portClass = HcdDeviceSpeedClass(hc, dev);
     if (XhciInputSlotContextOffset(&ext->Layout, &isc) == XHCI_LAYOUT_OK) {
         slot = XhciCommonAt(ext, isc);
-        (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port,
-                                 (slot[0] & XHCI_SLOT_SPEED_MASK) >>
-                                     XHCI_SLOT_SPEED_SHIFT,
-                                 &slotClass);
+        slotClass = HcdDeviceSpeedClassOf(hc, dev,
+                                          (slot[0] & XHCI_SLOT_SPEED_MASK) >>
+                                              XHCI_SLOT_SPEED_SHIFT);
     }
     hcdCountSpeed(portClass, &c->PortSpeedSuper, &c->PortSpeedHigh,
                   &c->PortSpeedFull, &c->PortSpeedLow);
@@ -639,8 +947,8 @@ static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
      * accepted at its trained rate and counted by it. */
     dev->RateKbps = 0;
     dev->Plus = 0;
-    (VOID)XhciPortRate(&ext->PortMap, dev->Port, dev->Speed, &dev->RateKbps,
-                       &dev->Plus);
+    (VOID)XhciPortRateFor(&ext->PortMap, dev->Port, dev->Speed,
+                          dev->SpeedFallback, &dev->RateKbps, &dev->Plus);
     if (portClass == XHCI_SPEED_SUPER && dev->Plus) {
         c->PortSpeedSuperPlus++;
     }
@@ -829,6 +1137,7 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         HcdIoDeferred(hc);
+        hcdThreadWaitDrain(hc);
     }
     (VOID)KeCancelTimer(&deadline);
     return ok;
@@ -837,7 +1146,11 @@ static ULONG hcdEp0Quiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes);
+                                   ULONG soft, PULONG bytes);
+static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 UCHAR requestType, UCHAR request,
+                                 USHORT value, USHORT index, ULONG length,
+                                 ULONG soft, PULONG bytes);
 
 ULONG HcdThreadControl(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        UCHAR requestType, UCHAR request, USHORT value,
@@ -876,6 +1189,27 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               USHORT value, USHORT index, ULONG length,
                               PULONG bytes)
 {
+    return hcdThreadControlAny(hc, dev, requestType, request, value, index,
+                               length, 0, bytes);
+}
+
+/* The door's GET_DESCRIPTOR (task 36.45): the same, and a transfer past its
+ * deadline is withdrawn from EP0 (hcdEp0Withdraw) rather than recovered
+ * with the controller, where that can be done; NOT_SENT either way. Thread
+ * only. */
+ULONG HcdThreadControlDoor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           USHORT value, USHORT index, ULONG length,
+                           PULONG bytes)
+{
+    return hcdThreadControlAny(hc, dev, 0x80, 6, value, index, length, 1,
+                               bytes);
+}
+
+static ULONG hcdThreadControlAny(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 UCHAR requestType, UCHAR request,
+                                 USHORT value, USHORT index, ULONG length,
+                                 ULONG soft, PULONG bytes)
+{
     ULONG outcome;
 
     *bytes = 0;
@@ -888,6 +1222,14 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
          * relink the engine's queue (round 2, finding 10). Or another
          * device's abandoned TD may still write the scratch until that
          * slot is taken back (35-T.3). */
+        return HCD_CTL_NOT_SENT;
+    }
+    if (dev->Susp.State == XHCI_SUSP_SUSPENDED ||
+        dev->Susp.State == XHCI_SUSP_RECOVERING ||
+        dev->Susp.State == XHCI_SUSP_GONE) {
+        /* No control traffic on a suspended link, on one whose state is
+         * unknown, or on one the machine saw leave and whose cycle is
+         * owed, whoever asks (design record 14 sections 3.5, 3.10). */
         return HCD_CTL_NOT_SENT;
     }
     if (length > HCD_SCRATCH_CONTROL_BYTES ||
@@ -921,7 +1263,7 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_CTL_NOT_SENT;
     }
     outcome = hcdThreadControlQuiet(hc, dev, requestType, request, value,
-                                    index, length, bytes);
+                                    index, length, soft, bytes);
     if (!dev->Ep0Stuck) {
         /* A timed-out one leaves EP0 paused for the reset it requested. */
         HcdIoPipeResume(hc, &dev->Ep0Pipe);
@@ -929,11 +1271,13 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return outcome;
 }
 
-/* The transfer itself, on a quiet EP0; HCD_CTL_*. Thread only. */
+/* The transfer itself, on a quiet EP0; HCD_CTL_*. `soft`: a door transfer,
+ * withdrawn at its deadline where it can be (hcdEp0Withdraw). Thread
+ * only. */
 static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                    UCHAR requestType, UCHAR request,
                                    USHORT value, USHORT index, ULONG length,
-                                   PULONG bytes)
+                                   ULONG soft, PULONG bytes)
 {
     XHCI_CONTROL_REQUEST req;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
@@ -1083,7 +1427,9 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             }
             continue;
         }
-        (VOID)hcdWaitEvent(&hc->XferDoneEvent, HCD_WAIT_SLICE_MS);
+        if (!hcdWaitEvent(&hc->XferDoneEvent, HCD_WAIT_SLICE_MS)) {
+            hcdThreadWaitDrain(hc);
+        }
     }
     (VOID)KeCancelTimer(&deadline);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -1100,6 +1446,17 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hc->ScratchHeld = dev->SlotId;
         XhciLogNote(&hc->Hc, "tol.cycle.wait", dev->SlotId);
         return HCD_CTL_ABANDONED;
+    }
+    if (!done && soft) {
+        switch (hcdEp0Withdraw(hc, dev)) {
+        case HCD_EP0_WITHDRAWN:
+            return HCD_CTL_NOT_SENT;
+        case HCD_EP0_COMPLETED:
+            done = 1;
+            break;
+        default:
+            break;
+        }
     }
     if (!done) {
         /* The TD is still on the ring and may yet DMA into the scratch:
@@ -1362,8 +1719,7 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     ext = &hc->Hc;
     layout = &ext->Layout;
     speed = XHCI_SPEED_UNKNOWN;
-    was = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port, dev->Speed, &was);
+    was = HcdDeviceSpeedClass(hc, dev);
     if (hcdHalted(hc) || dev->Ep0Stuck || dev->Location == 0 ||
         dev->Location > HCD_PORT_COUNT ||
         !hcdPortReset(hc, &hc->Ports[dev->Location - 1], &speed) ||
@@ -1444,6 +1800,22 @@ VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
     HcdThreadWake(hc);
 }
 
+/* hcd.h (task 36.43): CYCLE_PORT's request shape, taken by
+ * hcdRepresentService. IRQL: <= DISPATCH_LEVEL. */
+VOID HcdEnumRepresent(PHCD_CONTROLLER hc, ULONG port, ULONG serial)
+{
+    KIRQL oldIrql;
+
+    if (port == 0 || port > HCD_PORT_COUNT || serial == 0) {
+        return;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->PortRepresent[(port - 1) / 32UL] |= 1UL << ((port - 1) % 32UL);
+    hc->PortRepresentSerial[port - 1] = serial;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdThreadWake(hc);
+}
+
 /* hcd.h. The generation is read here, under the lock its writer takes
  * (hcdConnectGen), so the thread can tell a mark made for this device at
  * this location from one that outlived a connect or a disconnect. */
@@ -1491,12 +1863,14 @@ static VOID hcdConnectGen(PHCD_CONTROLLER hc, PHCD_PORT p)
 static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PXHCI_EXTENSION ext;
+    PHCD_PIPE stream;
     KIRQL oldIrql;
     ULONG halted;
     ULONG reason;
     ULONG retryHead;
     ULONG token;
     ULONG dci;
+    ULONG sid;
 
     ext = &hc->Hc;
     XhciControllerLockAcquire(ext, &oldIrql);
@@ -1513,11 +1887,21 @@ static ULONG hcdCycleResolve(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         /* Halted beside a live soft retry whose deferred TD is still the
          * head (35-T.2) is that TD's Transaction Error, the retry's to
          * recover; Error, or a retry request that outlived its TD, is not
-         * (XhciTolHaltOwner). */
+         * (XhciTolHaltOwner). With streams open, a live retry on any
+         * stream of the endpoint (36.54, record 17 section 4.12.2). */
         retryHead = 0;
         if (dci >= 2 && dev->Pipes[dci] != NULL &&
             XhciXferRetryPending(dev->Pipes[dci]->Queue, &token, NULL)) {
             retryHead = XhciXferRetryHeadIs(dev->Pipes[dci]->Queue, token);
+        }
+        for (sid = 1; dci >= 2 && dev->Pipes[dci] != NULL &&
+                      dev->Pipes[dci]->Streams != NULL &&
+                      sid <= dev->Pipes[dci]->Streams->Count && !retryHead;
+             sid++) {
+            stream = dev->Pipes[dci]->Streams->Pipe[sid];
+            if (XhciXferRetryPending(stream->Queue, &token, NULL)) {
+                retryHead = XhciXferRetryHeadIs(stream->Queue, token);
+            }
         }
         if (XhciTolHaltOwner(hcdEpState(hc, dev, dci), retryHead) ==
             XHCI_TOL_HALT_CONFIRMED) {
@@ -2010,6 +2394,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
     ULONG after;
     ULONG ok;
     PUCHAR s;
+    KIRQL oldIrql;
 
     s = (PUCHAR)hc->ScratchVa;
     switch (act->Kind) {
@@ -2025,6 +2410,12 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 1;
 
     case XHCI_ENUM_ACT_RESET:
+        /* A reset's end is a Port Status Change Event with no doorbell
+         * before it: the poller is brought to its active period (design
+         * record 15 section 6.1). */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        HcdPollPromoteLocked(hc, 0);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
         speed = 0;
         if (p->Hub != NULL) {
             /* The machine takes the default ID of the class the hub
@@ -2155,9 +2546,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             /* Task 34.2: the Power tab cannot show a SuperSpeed device's
              * current above 510 mA, so XHCISNAP's log carries the exact
              * one, after the device's ids. */
-            speedClass = XHCI_SPEED_UNKNOWN;
-            (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->Device->Port,
-                                     p->Device->Speed, &speedClass);
+            speedClass = HcdDeviceSpeedClass(hc, p->Device);
             if (speedClass == XHCI_SPEED_SUPER &&
                 bytes > XHCI_DESC_OFF_MAX_POWER) {
                 XhciLogNote(&hc->Hc, "dev.ss.vidpid",
@@ -3051,6 +3440,10 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         XhciWritePortsc(ext, p->PortId,
                         XhciPortscClearChanges(portsc, changes));
     }
+    /* The whole sample to selective suspend's machine for a device it
+     * holds (design record 14 section 3.7); connection processing below
+     * is unchanged. */
+    HcdSuspRootSample(hc, p, portsc, changes);
     if ((portsc & XHCI_PORTSC_CCS) == 0 ||
         (changes & XHCI_PORTSC_CSC) != 0) {
         /* Physically empty, or a connection change the hardware reported
@@ -3567,6 +3960,7 @@ static VOID hcdDeviceFreeze(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Gone = 1;
+    HcdSuspDeviceGone(dev);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
@@ -4041,6 +4435,7 @@ static VOID hcdDetach(PHCD_CONTROLLER hc, ULONG powered)
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortRepresent[i] = 0;
     }
     hc->EnumDetachRequested = 0;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -4467,6 +4862,43 @@ static VOID hcdCycleService(PHCD_CONTROLLER hc)
 }
 
 /*
+ * A composite FDO's start (task 36.43; HcdEnumRepresent): the let-go
+ * function PDOs of each marked port's device re-presented in place, when
+ * that device is still the one the request's group serial stands for
+ * (hcdCycleOwns, CYCLE_PORT's own test). Before this pass's settle check,
+ * so a start that asked before its settle generation finds them listed in
+ * its first answer. Thread only, powered, root hub started.
+ */
+static VOID hcdRepresentService(PHCD_CONTROLLER hc)
+{
+    ULONG bits[HCD_PORT_WORDS];
+    KIRQL oldIrql;
+    ULONG serial;
+    ULONG port;
+    ULONG i;
+    PHCD_PORT p;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < HCD_PORT_WORDS; i++) {
+        bits[i] = hc->PortRepresent[i];
+        hc->PortRepresent[i] = 0;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    for (port = 1; port <= HCD_PORT_COUNT && !hcdHalted(hc); port++) {
+        if ((bits[(port - 1) / 32UL] & (1UL << ((port - 1) % 32UL))) == 0) {
+            continue;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        serial = hc->PortRepresentSerial[port - 1];
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        p = &hc->Ports[port - 1];
+        if (hcdCycleOwns(p, serial)) {
+            (VOID)HcdDevicePdoRepresentFunctions(hc, p->Device);
+        }
+    }
+}
+
+/*
  * The thread's port service, under the power gate; `powered` is the
  * controller's state read under it (Codex review of batch (b), round 1,
  * finding 5). In order: an invalidation HCRST left, a detach the root hub
@@ -4477,6 +4909,29 @@ static VOID hcdCycleService(PHCD_CONTROLLER hc)
  * ports. Unpowered, only a detach runs; the rest stays marked. Only the
  * controller thread calls it.
  */
+/*
+ * The ports in reset or enumeration, counted by the thread that owns the
+ * machines and published under the controller lock for the poller's
+ * period (design record 15 section 6.1). IRQL: PASSIVE_LEVEL (the thread).
+ */
+static VOID hcdPollPortsPublish(PHCD_CONTROLLER hc)
+{
+    ULONG busy;
+    ULONG state;
+    ULONG i;
+
+    busy = 0;
+    for (i = 0; i < HCD_PORT_COUNT; i++) {
+        state = hc->Ports[i].Enum.State;
+        if ((state >= XHCI_ENUM_DEBOUNCE &&
+             state <= XHCI_ENUM_CONFIG_FULL) ||
+            state == XHCI_ENUM_BOS5 || state == XHCI_ENUM_BOS_FULL) {
+            busy++;
+        }
+    }
+    HcdPollPortsBusy(hc, busy);
+}
+
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
 {
     PXHCI_EXTENSION ext;
@@ -4554,8 +5009,13 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         hcdDetach(hc, powered);
     }
     if (!powered) {
+        /* Task 36.45: a diagnostic read is not held across D3. */
+        HcdDoorService(hc, 0);
         return;
     }
+    /* Selective suspend's admission back to normal (design record 14
+     * section 4.4): the controller is served powered again. */
+    HcdSuspControllerUp(hc);
     if (!outstanding) {
         hcdSettleUndefer(hc);
     }
@@ -4579,6 +5039,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         HcdCfgCancelService(hc);
         /* The URBs that need commands (hcd_cfg.c). */
         HcdCfgService(hc);
+        /* Then the door's descriptor reads (task 36.45). */
+        HcdDoorService(hc, 1);
+    }
+    if (hcdHalted(hc)) {
+        HcdDoorService(hc, 0);
     }
     if (!hcdHalted(hc)) {
         /* 29-A.5's send-backs, after the URBs that may have asked for
@@ -4591,6 +5056,8 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
          * cycle runs in this pass. */
         hcdSlotFatalService(hc);
         hcdCycleService(hc);
+        /* Task 36.43: a composite FDO's start re-presents its functions. */
+        hcdRepresentService(hc);
     }
 
     XhciControllerLockAcquire(ext, &oldIrql);
@@ -4673,6 +5140,12 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     if (outstanding && !hcdHalted(hc)) {
         hcdSettleCheck(hc, asked);
     }
+    if (!hcdHalted(hc)) {
+        /* Selective suspend's pass, after every port's evidence of this
+         * pass was handed over (design record 14 section 3.10). */
+        HcdSuspService(hc);
+    }
+    hcdPollPortsPublish(hc);
 }
 
 /*
@@ -4952,6 +5425,7 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortRepresent[i] = 0;
     }
     hc->SlotsInvalidated = 0;
     hc->SlotsUnproven = 0;

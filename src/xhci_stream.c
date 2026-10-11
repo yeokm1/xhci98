@@ -162,6 +162,47 @@ ULONG XhciStreamRingOffset(const XHCI_STREAM_LAYOUT *layout, ULONG streamId)
     return layout->RingBase + (streamId - 1UL) * layout->RingBytes;
 }
 
+ULONG XhciStreamBigBytes(ULONG entries, ULONG streams, PULONG bytes)
+{
+    if (bytes == NULL || !xhciStreamIsPow2(entries) ||
+        entries < XHCI_STREAM_MIN_ENTRIES ||
+        entries > XHCI_STREAM_MAX_ENTRIES || streams == 0 ||
+        streams >= entries) {
+        return XHCI_STREAM_BAD_PARAM;
+    }
+    /* The array (at most 512 bytes) and the padding to the first aligned
+     * ring fit XHCI_STREAM_BIG_ALIGN: for a page-aligned base that ring is
+     * 4, 8, 12 or 16 KiB in. */
+    *bytes = XHCI_STREAM_BIG_ALIGN +
+             streams * XHCI_STREAM_BIG_RING_TRBS * XHCI_TRB_BYTES;
+    return XHCI_STREAM_OK;
+}
+
+ULONG XhciStreamLayoutPlaced(ULONG entries, ULONG streams, ULONG paLow,
+                             ULONG paHigh, PXHCI_STREAM_LAYOUT layout)
+{
+    ULONG bytes;
+    ULONG first;
+
+    if (layout == NULL ||
+        XhciStreamBigBytes(entries, streams, &bytes) != XHCI_STREAM_OK ||
+        paHigh != 0 || (paLow % XHCI_STREAM_PAGE_BYTES) != 0 ||
+        paLow > 0xFFFFFFFFUL - (bytes - 1UL)) {
+        return XHCI_STREAM_BAD_PARAM;
+    }
+    layout->ArrayBytes = entries * XHCI_STREAM_CONTEXT_BYTES;
+    layout->RingBytes = XHCI_STREAM_BIG_RING_TRBS * XHCI_TRB_BYTES;
+    first = (paLow + layout->ArrayBytes + XHCI_STREAM_BIG_ALIGN - 1UL) &
+            ~(XHCI_STREAM_BIG_ALIGN - 1UL);
+    layout->RingBase = first - paLow;
+    layout->TotalBytes = bytes;
+    if (layout->RingBase > XHCI_STREAM_BIG_ALIGN ||
+        layout->RingBase + streams * layout->RingBytes > bytes) {
+        return XHCI_STREAM_BAD_PARAM;
+    }
+    return XHCI_STREAM_OK;
+}
+
 ULONG XhciStreamContextBuild(volatile ULONG *context, ULONG ringPA,
                              ULONG dcs, ULONG sct)
 {

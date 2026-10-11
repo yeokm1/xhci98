@@ -72,6 +72,14 @@
  *                 that never answers - and a refused code delivered for it
  *   EP0_PREPDO    the same for a device whose PDO does not exist yet
  *
+ * Task 36.22's bulk faults (BULK_TIMEOUT, _STOP, _ERROR, _SHORT): the
+ * doorbells of one bulk endpoint (`arg` its address, 0 the first bulk IN)
+ * of a published device withheld, so the next TD sits unstarted - QEMU
+ * finishes a bulk TD inside the doorbell write - and then nothing (the
+ * driver's own stop ends it), a real stop the driver sees, TRANSACTION's
+ * path on it, or a stop, a Set TR Dequeue past it and a Short Packet on
+ * its last TRB (hcdInjArmBulk, hcdInjBulkFire).
+ *
  * A port the guest names in bits 15:8 must be a managed USB 2.0 root port
  * with a device enabled on it for PED and OC, and the root port a device is
  * under for the endpoint faults; 0 takes the first such. A command that
@@ -90,6 +98,17 @@
 #if defined(XHCI_FLAVOUR_QEMU)
 
 #define HCD_VALUE_QEMU_INJECT L"XhciQemuInject"
+/* Task 36.4: milliseconds after a start for which the ISR's drains and the
+ * backstop's are held back, so the No Op self-test's completion stands
+ * undrained and the command engine busy into the first enumeration, as the
+ * E7250's lost interrupt left it (issue 12, Finding 1), on a line that
+ * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX: a nominal
+ * margin inside the No Op's own watchdog (XHCI_COMMAND_TIMEOUT_MS, 5000),
+ * not a guarantee - the watchdog runs from the No Op's submit, the hold
+ * from a later point of the start, and it ends at a thread pass - which
+ * the leg confirms; absent or 0 holds nothing. */
+#define HCD_VALUE_QEMU_START_HOLD L"XhciQemuStartHold"
+#define HCD_QEMU_START_HOLD_MAX   3000UL
 
 /* The trigger is read once per ten tolerance ticks, about a second. */
 #define HCD_INJ_READ_TICKS 10UL
@@ -99,6 +118,14 @@
 #define HCD_INJ_PHASE_ANSWERING 1UL  /* until the answers end              */
 #define HCD_INJ_PHASE_STALE     2UL  /* until the stale halt is read       */
 #define HCD_INJ_PHASE_GONE      3UL  /* until the device leaves            */
+#define HCD_INJ_PHASE_BULK_WAIT 4UL  /* 36.22: a bulk doorbell withheld,
+                                      * until a TD sits behind it          */
+#define HCD_INJ_PHASE_BULK_HELD 5UL  /* BULK_TIMEOUT: until the driver's
+                                      * own stop ends the withholding      */
+#define HCD_INJ_PHASE_BULK_CLEAR 6UL /* CLEAR met a withholding: the next
+                                      * pass gives the doorbells back      */
+#define HCD_INJ_PHASE_BULK_LOSE 7UL  /* BULK_TIMEOUT: until a TD's
+                                      * completion is lost                 */
 
 /* How long the thread waits for the drain to take an injected event, and
  * for the driver's answer to a stale halt or a refused code (ticks, at
@@ -129,6 +156,27 @@ ULONG HcdInjIsrDrop(PHCD_CONTROLLER hc)
     }
     (VOID)InterlockedIncrement((PLONG)&hc->InjIrqDropped);
     return 1;
+}
+
+/* Task 36.4: whether XhciQemuStartHold still holds this start's drains
+ * back. Reads only. IRQL: any. */
+ULONG HcdInjStartHeld(PHCD_CONTROLLER hc)
+{
+    ULONG end;
+
+    end = (ULONG)hc->InjStartHoldTicks;
+    return (end != 0 && HcdTolNow(hc) < end) ? 1UL : 0UL;
+}
+
+/* The hold has done its work once the bus's command path met the busy
+ * engine: ended before that path's first drain, so the resubmitted
+ * command's own completion interrupt is drained as ever. IRQL:
+ * <= DISPATCH_LEVEL. */
+VOID HcdInjStartRelease(PHCD_CONTROLLER hc)
+{
+    if (InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0) != 0) {
+        XhciLogNote(&hc->Hc, "qemu.inj.starthold.released", HcdTolNow(hc));
+    }
 }
 
 /* IRQL: any. Above DISPATCH_LEVEL nothing is answered: InjLock cannot be
@@ -206,6 +254,8 @@ ULONG HcdInjHealthUsbsts(PXHCI_EXTENSION ext, ULONG usbsts)
  * never sees it. IRQL: DISPATCH_LEVEL, controller lock held. Watch is set
  * by the thread before its Stop goes out, so an unlocked look that misses
  * it is a look at an event that cannot be the watched one. */
+static ULONG hcdInjBulkLoseEvent(PHCD_CONTROLLER hc, const XHCI_TRB *ev);
+
 ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev)
 {
     PHCD_CONTROLLER hc;
@@ -213,6 +263,10 @@ ULONG HcdInjEventSwallow(PXHCI_EXTENSION ext, const XHCI_TRB *ev)
     ULONG swallowed;
 
     hc = HcdControllerFromExt(ext);
+    /* 36.22's BULK_TIMEOUT: a completion the driver never sees. */
+    if (hc->InjBulkLose && hcdInjBulkLoseEvent(hc, ev)) {
+        return 1;
+    }
     if (!hc->InjEp.Watch) {
         return 0;
     }
@@ -294,6 +348,23 @@ ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state)
     answer = XhciInjEpState(&hc->InjEp, slot, dci, state);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     return answer;
+}
+
+/* 36.54: whether the layer withholds this endpoint's doorbells (its own
+ * stop, a bulk fault's watch or an answered halt), which holds the
+ * endpoint as a pause would for the QEMU stream resync (hcd_cfg.c,
+ * HcdCfgQemuStreamResync; record 17 section 4.12.4). IRQL: PASSIVE_LEVEL,
+ * no lock held. */
+ULONG HcdInjWithholds(PHCD_CONTROLLER hc, ULONG slot, ULONG dci)
+{
+    KIRQL oldIrql;
+    ULONG held;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    held = (hc->InjEp.Block && hc->InjEp.Slot != 0 &&
+            hc->InjEp.Slot == slot && hc->InjEp.Dci == dci) ? 1UL : 0UL;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    return held;
 }
 
 /* The drain queued through the ISR's admission, as the backstop queues it
@@ -384,6 +455,30 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     XhciInjRegsClear(&hc->InjRegs);
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     hcdInjIrqArm(hc, 0, 0);
+    hc->InjClearHalt = 0;
+}
+
+/*
+ * Task 36.12: fault 13. The next CLEAR_FEATURE(ENDPOINT_HALT) the thread
+ * sends a device (hcd_cfg.c, hcdCfgDeviceClearHalt: a RESET_PIPE, a
+ * SYNC_CLEAR_STALL, a streams open or close) is answered with the armed
+ * outcome and never sent, once; the device's halt and toggle stay as they
+ * were, which is what a refused clear leaves. Returns 1 with *outcome
+ * (HCD_CTL_*) when it answered. IRQL: PASSIVE_LEVEL, the thread.
+ */
+ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
+                      PULONG outcome)
+{
+    if (hc->InjClearHalt == 0) {
+        return 0;
+    }
+    *outcome = hc->InjClearHalt - 1;
+    hc->InjClearHalt = 0;
+    XHCI_DBG_VALUE("qemu inject: device clear answered, slot/dci/outcome",
+                   (slot << 24) | (dci << 16) | *outcome);
+    XhciLogNote(&hc->Hc, "qemu.inj.clearhalt",
+                (slot << 24) | (dci << 16) | *outcome);
+    return 1;
 }
 
 /*
@@ -419,6 +514,22 @@ VOID HcdInjStart(PHCD_CONTROLLER hc)
     XhciInjTriggerStart(&hc->InjTrigger, found, value);
     hc->InjReadAt = HcdTolNow(hc);
     XhciLogNote(&hc->Hc, "qemu.inj.latched", found ? value : 0xFFFFFFFFUL);
+    value = 0;
+    if (!NT_SUCCESS(HcdCtlQemuReadDword(hc, HCD_VALUE_QEMU_START_HOLD,
+                                        &value))) {
+        value = 0;
+    }
+    if (value > HCD_QEMU_START_HOLD_MAX) {
+        value = HCD_QEMU_START_HOLD_MAX;
+    }
+    /* An end on the tolerance clock, never 0 while a hold is asked for. */
+    (VOID)InterlockedExchange(
+        (PLONG)&hc->InjStartHoldTicks,
+        (value == 0) ? 0L
+                     : (LONG)(HcdTolNow(hc) +
+                              (value + XHCI_TOL_TICK_MS - 1UL) /
+                                  XHCI_TOL_TICK_MS));
+    XhciLogNote(&hc->Hc, "qemu.inj.starthold", value);
 }
 
 /*
@@ -861,6 +972,7 @@ ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
     ULONG icAdd;
     ULONG survives;
     ULONG type;
+    ULONG ended;
 
     if (hc->InjOwnCmd || hc->InjEp.Slot == 0) {
         return 0;
@@ -891,7 +1003,15 @@ ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
         KeAcquireSpinLock(&hc->InjLock, &oldIrql);
         XhciInjCommandSent(&hc->InjEp, XHCI_TRB_GET_SLOT_ID(trb->Control),
                            answer);
+        ended = (hc->InjEp.Slot == 0) ? 1UL : 0UL;
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        if (ended) {
+            /* 36.22: the losing ends with the command that ended the
+             * fault, before the recovery that sent it goes on. */
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            hc->InjBulkLose = 0;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+        }
         *code = answer;
         return 1;
     case XHCI_INJ_CMD_ANSWER:
@@ -1067,12 +1187,17 @@ static VOID hcdInjPipeFire(PHCD_CONTROLLER hc)
  * brings - and then the next injection while one is left. IRQL:
  * PASSIVE_LEVEL, the power gate held, powered, the controller not halted.
  */
+static ULONG hcdInjBulkFire(PHCD_CONTROLLER hc);
+static VOID hcdInjBulkRelease(PHCD_CONTROLLER hc);
+
 VOID HcdInjService(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
     ULONG now;
     ULONG same;
     ULONG marked;
+    ULONG phase;
+    ULONG lost;
 
     if (hc->InjFault == 0 && hc->InjPhase == HCD_INJ_PHASE_IDLE &&
         hc->InjEp.Slot == 0) {
@@ -1112,6 +1237,77 @@ VOID HcdInjService(PHCD_CONTROLLER hc)
             return;
         }
         break;
+    case HCD_INJ_PHASE_BULK_WAIT:
+        /* 36.22: the withholding ended before any TD met it - its
+         * device left, or the driver stopped the endpoint - or the fault
+         * is carried out now on the TD it holds. */
+        if (hc->InjEp.Slot == 0) {
+            XhciLogNote(&hc->Hc, "qemu.inj.bulk.ended", hc->InjFault);
+            break;
+        }
+        phase = hcdInjBulkFire(hc);
+        if (phase != HCD_INJ_PHASE_IDLE) {
+            hc->InjPhase = phase;
+            hc->InjSince = now;
+            return;
+        }
+        break;
+    case HCD_INJ_PHASE_BULK_LOSE:
+        /* BULK_TIMEOUT armed: ended unmet - its device left, or the
+         * driver's own stop, reset or dequeue move came first - or met,
+         * a TD's completion lost, then held until the driver recovers. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        lost = hc->InjBulkLost;
+        if (hc->InjEp.Slot == 0) {
+            hc->InjBulkLose = 0;
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (hc->InjEp.Slot == 0) {
+            XhciLogNote(&hc->Hc, "qemu.inj.bulk.ended", hc->InjFault);
+            break;
+        }
+        if (!lost) {
+            return;
+        }
+        (VOID)XhciInjSpend(&hc->InjLeft);
+        XhciLogNote(&hc->Hc, "qemu.inj.bulk.lost", hc->InjBulkLostFirst);
+        hc->InjPhase = HCD_INJ_PHASE_BULK_HELD;
+        hc->InjSince = now;
+        return;
+    case HCD_INJ_PHASE_BULK_CLEAR:
+        if (hc->InjEp.Slot != 0 && hc->InjEp.Bulk && !hc->InjEp.Block) {
+            /* Nothing withheld: the losing ends; a completion already
+             * lost stays the driver's to recover. */
+            KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+            XhciInjEpEnd(&hc->InjEp);
+            KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        } else if (hc->InjEp.Slot != 0 && hc->InjEp.Bulk &&
+                   hc->InjEp.State == 0) {
+            hcdInjBulkRelease(hc);
+        }
+        XhciLogNote(&hc->Hc, "qemu.inj.bulk.cleared", hc->InjBulkStream);
+        break;
+    case HCD_INJ_PHASE_BULK_HELD:
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        lost = hc->InjBulkLose;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (hc->InjEp.Slot != 0 && lost) {
+            return;
+        }
+        /* Ended: the driver's own command, the device's departure, or the
+         * lost TD leaving the queue (hcdInjBulkLoseEvent). */
+        if (hc->InjEp.Slot != 0) {
+            KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+            XhciInjEpEnd(&hc->InjEp);
+            KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->InjBulkLose = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        XhciLogNote(&hc->Hc, "qemu.inj.bulk.released",
+                    (hc->InjBulkLostEvents << 16) | (hc->InjSlot << 8) |
+                        hc->InjDci);
+        break;
     default:
         break;
     }
@@ -1119,12 +1315,603 @@ VOID HcdInjService(PHCD_CONTROLLER hc)
     if (hc->InjFault == 0) {
         return;
     }
-    if (hc->InjLeft == 0) {
+    if (hc->InjLeft == 0 || XhciInjKind(hc->InjFault) == XHCI_INJ_KIND_BULK) {
         XhciLogNote(&hc->Hc, "qemu.inj.done", hc->InjFault);
         hc->InjFault = 0;
         return;
     }
     hcdInjPipeFire(hc);
+}
+
+/* ----------------------------------------------------------------------- */
+/* The bulk faults (task 36.22)                                            */
+/* ----------------------------------------------------------------------- */
+
+/* The target endpoint's pipe while its device is still the one the slot
+ * names, else NULL. Controller lock held. */
+static PHCD_PIPE hcdInjBulkPipe(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+
+    dev = hc->SlotDevice[hc->InjSlot];
+    if (dev == NULL || dev != hc->InjDev || dev->Gone) {
+        return NULL;
+    }
+    return dev->Pipes[hc->InjDci];
+}
+
+/* The ring a stream (0: the endpoint itself) runs on, its pipe in *p.
+ * Controller lock held. */
+static PXHCI_RING hcdInjBulkRing(PHCD_PIPE pipe, ULONG stream,
+                                 PHCD_PIPE *p)
+{
+    *p = NULL;
+    if (pipe == NULL) {
+        return NULL;
+    }
+    if (stream == 0) {
+        if (pipe->Streams != NULL) {
+            return NULL;
+        }
+        *p = pipe;
+        return pipe->Ring;
+    }
+    if (pipe->Streams == NULL || stream > pipe->Streams->Count ||
+        pipe->Streams->Pipe[stream] == NULL) {
+        return NULL;
+    }
+    *p = pipe->Streams->Pipe[stream];
+    return pipe->Streams->Ring[stream];
+}
+
+/* Every TD the withholding held back started: the endpoint rung, or each
+ * of its streams with one queued, by hcdCfgStreamKick's checks (review
+ * round 3). Controller lock taken. IRQL: PASSIVE_LEVEL, powered. */
+static VOID hcdInjBulkKick(PHCD_CONTROLLER hc)
+{
+    PHCD_PIPE pipe;
+    PHCD_PIPE p;
+    KIRQL oldIrql;
+    ULONG id;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe = hcdInjBulkPipe(hc);
+    if (pipe != NULL && !pipe->Closed) {
+        if (pipe->Streams == NULL) {
+            if (pipe->Queue->Count != 0 && !pipe->Paused) {
+                XhciWriteDoorbell(&hc->Hc, hc->InjSlot, hc->InjDci);
+            }
+        } else {
+            for (id = 1; id <= pipe->Streams->Count; id++) {
+                p = pipe->Streams->Pipe[id];
+                if (p != NULL && p->Queue->Count != 0 && !p->Paused &&
+                    !p->Closed) {
+                    XhciWriteDoorbell(&hc->Hc, hc->InjSlot,
+                                      XhciStreamDoorbell(hc->InjDci, id));
+                }
+            }
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
+/* The withholding ended by the layer itself, and every TD it held
+ * started. IRQL: PASSIVE_LEVEL, powered. */
+static VOID hcdInjBulkRelease(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    XhciInjEpEnd(&hc->InjEp);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    hcdInjBulkKick(hc);
+}
+
+/* hcdInjAbandon for a bulk fault: counted and noted the same, and every
+ * stream rung, not stream 0 alone (review round 4). IRQL: PASSIVE_LEVEL,
+ * powered. */
+static VOID hcdInjBulkAbandon(PHCD_CONTROLLER hc, ULONG why)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    hc->InjEp.Abandoned++;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciLogNote(&hc->Hc, "qemu.inj.abandon",
+                (hc->InjSlot << 16) | (hc->InjDci << 8) | why);
+    hcdInjBulkRelease(hc);
+}
+
+/* 36.54: the attempt given up after the QEMU stream resync could not finish
+ * (record 17 section 4.12.4): counted and noted as an abandon (0x44), the
+ * withholding ended - and nothing rung, since a stream may still be
+ * unrepaired; the controller reset the resync requested invalidates the
+ * endpoint. IRQL: PASSIVE_LEVEL, powered. */
+static VOID hcdInjBulkGiveUp(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    hc->InjEp.Abandoned++;
+    XhciInjEpEnd(&hc->InjEp);
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    XhciLogNote(&hc->Hc, "qemu.inj.abandon",
+                (hc->InjSlot << 16) | (hc->InjDci << 8) | 0x44UL);
+}
+
+/* `index` within the TD [first, last] of one ring, the TD wrapping past
+ * the Link when last precedes first; the Link itself is never a TD's. */
+static ULONG hcdInjInTd(const XHCI_RING *ring, ULONG index, ULONG first,
+                        ULONG last)
+{
+    if (index + 1UL == ring->Trbs) {
+        return 0;
+    }
+    if (first <= last) {
+        return index >= first && index <= last;
+    }
+    return index >= first || index <= last;
+}
+
+/* The transfer with `token` still on the queue, or NULL. Controller lock
+ * held. */
+static PXHCI_TRANSFER hcdInjTdOf(PHCD_PIPE p, ULONG token)
+{
+    PXHCI_TRANSFER t;
+
+    for (t = p->Queue->Head; t != NULL; t = t->Next) {
+        if (t->Token == token) {
+            return t;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * BULK_TIMEOUT's hook in the drain, with the controller lock held. Armed,
+ * the first Transfer Event of the target endpoint whose pointer - its high
+ * word 0 - lies on the endpoint's ring, or one stream's, inside the TD at
+ * that ring's head is lost, and that TD (by its ring and token) becomes
+ * the lost one. From then every Transfer Event on that one ring is lost
+ * too, so neither a short's tail nor a successor's completion reaches the
+ * engine, which would otherwise sweep the lost TD as failed (review round
+ * 6): the TD stays outstanding, with the controller past it, until the
+ * driver's own stop, reset or dequeue move ends the losing as it is sent
+ * (HcdInjCommand) or the TD leaves the queue - then nothing more is lost.
+ * Events of other rings pass. Returns 1 to swallow the event. IRQL:
+ * DISPATCH_LEVEL.
+ */
+static ULONG hcdInjBulkLoseEvent(PHCD_CONTROLLER hc, const XHCI_TRB *ev)
+{
+    PHCD_PIPE pipe;
+    PHCD_PIPE p;
+    PXHCI_RING ring;
+    PXHCI_TRANSFER head;
+    ULONG index;
+    ULONG id;
+    ULONG lo;
+    ULONG hi;
+
+    if (XHCI_TRB_GET_TYPE(ev->Control) != XHCI_TRB_TYPE_TRANSFER_EVENT ||
+        XHCI_TRB_GET_SLOT_ID(ev->Control) != hc->InjSlot ||
+        XHCI_TRB_GET_EP_ID(ev->Control) != hc->InjDci ||
+        XHCI_EVENT_IS_EVENT_DATA(ev->Control) || ev->Param1 != 0) {
+        return 0;
+    }
+    pipe = hcdInjBulkPipe(hc);
+    if (pipe == NULL) {
+        hc->InjBulkLose = 0;
+        return 0;
+    }
+    if (hc->InjBulkLost) {
+        ring = hcdInjBulkRing(pipe, hc->InjBulkStream, &p);
+        if (ring == NULL || hcdInjTdOf(p, hc->InjBulkLostToken) == NULL) {
+            /* The lost TD has left the queue: the fault is over. */
+            hc->InjBulkLose = 0;
+            return 0;
+        }
+        if (XhciRingIndexFromPA(ring, ev->Param0, &index) != XHCI_RING_OK) {
+            return 0;
+        }
+        hc->InjBulkLostEvents++;
+        return 1;
+    }
+    lo = (pipe->Streams != NULL) ? 1UL : 0UL;
+    hi = (pipe->Streams != NULL) ? pipe->Streams->Count : 0UL;
+    for (id = lo; id <= hi; id++) {
+        ring = hcdInjBulkRing(pipe, id, &p);
+        if (ring == NULL || p->Queue->Head == NULL ||
+            XhciRingIndexFromPA(ring, ev->Param0, &index) != XHCI_RING_OK) {
+            continue;
+        }
+        head = p->Queue->Head;
+        if (!hcdInjInTd(ring, index, head->FirstIndex, head->LastIndex)) {
+            return 0;
+        }
+        hc->InjBulkLost = 1;
+        hc->InjBulkLostToken = head->Token;
+        hc->InjBulkLostFirst = XhciRingTrbPA(ring, head->FirstIndex);
+        hc->InjBulkStream = id;
+        hc->InjBulkLostEvents = 1;
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * A bulk fault armed: the first bulk endpoint of a published device at the
+ * port (0 any) whose address is `address` (0: the first bulk IN) has its
+ * doorbells withheld from now. Refused when another fault is armed or in
+ * flight or no endpoint fits. Returns 1 when armed. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdInjArmBulk(PHCD_CONTROLLER hc, ULONG fault, ULONG port,
+                           ULONG address)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    KIRQL injIrql;
+    ULONG slot;
+    ULONG dci;
+    ULONG found;
+
+    found = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    KeAcquireSpinLock(&hc->InjLock, &injIrql);
+    if (hc->InjFault != 0 || hc->InjPhase != HCD_INJ_PHASE_IDLE ||
+        hc->InjEp.Slot != 0 || hc->InjEp.Ep0Want != 0) {
+        KeReleaseSpinLock(&hc->InjLock, injIrql);
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        return 0;
+    }
+    for (slot = 1; slot <= XHCI_MAX_SLOTS && !found; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL || dev->Gone || dev->Pdo == NULL || dev->Hub != NULL ||
+            (port != 0 && dev->Port != port)) {
+            continue;
+        }
+        for (dci = 2; dci < 32 && !found; dci++) {
+            pipe = dev->Pipes[dci];
+            if (pipe == NULL || pipe->Closed ||
+                pipe->TransferType != XHCI_PIPE_XFER_BULK) {
+                continue;
+            }
+            if (address != 0 ? pipe->EndpointAddress != address
+                             : (pipe->EndpointAddress & 0x80UL) == 0) {
+                continue;
+            }
+            hc->InjDev = dev;
+            hc->InjSlot = slot;
+            hc->InjDci = dci;
+            hc->InjEp.Slot = slot;
+            hc->InjEp.Dci = dci;
+            hc->InjEp.State = 0;
+            hc->InjEp.Bulk = 1;
+            hc->InjFault = fault;
+            hc->InjLeft = 1;
+            hc->InjBulkStream = 0;
+            if (fault == XHCI_INJ_BULK_TIMEOUT) {
+                /* No doorbell withheld: QEMU runs the TD and its
+                 * completion is lost on the way to the driver (review
+                 * round 5). */
+                hc->InjEp.Block = 0;
+                hc->InjBulkLose = 1;
+                hc->InjBulkLost = 0;
+                hc->InjBulkLostEvents = 0;
+                hc->InjPhase = HCD_INJ_PHASE_BULK_LOSE;
+            } else {
+                hc->InjEp.Block = 1;
+                hc->InjPhase = HCD_INJ_PHASE_BULK_WAIT;
+            }
+            found = 1;
+        }
+    }
+    KeReleaseSpinLock(&hc->InjLock, injIrql);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (found) {
+        hc->InjSince = HcdTolNow(hc);
+        XhciLogNote(&hc->Hc, "qemu.inj.bulk.armed",
+                    (fault << 16) | (hc->InjSlot << 8) | hc->InjDci);
+    }
+    return found;
+}
+
+/* The TD the withheld doorbell left on a ring - the endpoint's, or the
+ * lowest stream's that has one: its token, stream, last TRB and that
+ * TRB's length, and the ring position after the TD with the cycle that
+ * position carries or will carry (one Link crossing separates it from the
+ * producer when it lies past the enqueue: XhciRingDequeueCycle's rule, at
+ * that index). 0 when no TD waits yet. Controller lock taken. IRQL:
+ * PASSIVE_LEVEL. */
+static ULONG hcdInjBulkHead(PHCD_CONTROLLER hc, PULONG token, PULONG stream,
+                            PULONG lastPA, PULONG lastLen, PULONG afterPA,
+                            PULONG afterCycle)
+{
+    PHCD_PIPE pipe;
+    PHCD_PIPE p;
+    PXHCI_RING ring;
+    PXHCI_TRANSFER head;
+    KIRQL oldIrql;
+    ULONG id;
+    ULONG first;
+    ULONG last;
+    ULONG after;
+    ULONG found;
+
+    found = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe = hcdInjBulkPipe(hc);
+    first = 0;
+    last = (pipe != NULL && pipe->Streams != NULL) ? pipe->Streams->Count : 0;
+    if (pipe != NULL && pipe->Streams != NULL) {
+        first = 1;
+    }
+    for (id = first; pipe != NULL && id <= last && !found; id++) {
+        ring = hcdInjBulkRing(pipe, id, &p);
+        if (ring == NULL || p->Queue->Head == NULL) {
+            continue;
+        }
+        head = p->Queue->Head;
+        *token = head->Token;
+        *stream = id;
+        *lastPA = XhciRingTrbPA(ring, head->LastIndex);
+        *lastLen = XHCI_TRB_GET_LENGTH(ring->Base[head->LastIndex].Status);
+        after = XhciRingNextIndex(ring, head->LastIndex);
+        *afterPA = XhciRingTrbPA(ring, after);
+        *afterCycle = (after > ring->Enqueue) ? (ring->Cycle ^ 1UL)
+                                              : ring->Cycle;
+        found = 1;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    return found;
+}
+
+/* A dequeue move on one stream (0: the endpoint), the layer's own command.
+ * Returns its completion code. IRQL: PASSIVE_LEVEL, powered. */
+static ULONG hcdInjBulkSetDequeue(PHCD_CONTROLLER hc, ULONG stream, ULONG pa,
+                                  ULONG cycle)
+{
+    XHCI_TRB trb;
+    ULONG built;
+
+    if (stream == 0) {
+        built = XhciTrbSetTrDequeue(&trb, hc->InjSlot, hc->InjDci, pa,
+                                    cycle) == XHCI_RING_OK;
+    } else {
+        built = XhciStreamSetDequeueTrb(&trb, hc->InjSlot, hc->InjDci,
+                                        stream, pa, cycle,
+                                        XHCI_STREAM_SCT_PRIMARY_TR) ==
+                XHCI_STREAM_OK;
+    }
+    return built ? hcdInjOwnCommand(hc, &trb) : XHCI_CC_INVALID;
+}
+
+/*
+ * hcdInjStop for a bulk TD on the endpoint or one of its streams: the
+ * layer's Stop Endpoint with its Stopped event swallowed, and the TD named
+ * by `token` confirmed at the dequeue - the Endpoint Context's, or the
+ * stream's Stream Context's - and put back with a dequeue move when the
+ * controller fetched it ahead with nothing moved. Returns 1 with the TD's
+ * first TRB and length and the swallowed event's code, pointer and
+ * residual (*seen 0 when none came); otherwise the attempt is abandoned.
+ * The doorbells stay withheld. IRQL: PASSIVE_LEVEL, powered.
+ */
+static ULONG hcdInjBulkStop(PHCD_CONTROLLER hc, ULONG stream, ULONG token,
+                            PULONG firstPA, PULONG firstLen,
+                            PULONG firstCycle, PULONG seen,
+                            PULONG seenCode, PULONG seenPA,
+                            PULONG seenResidual)
+{
+    PHCD_PIPE pipe;
+    PHCD_PIPE p;
+    PXHCI_RING ring;
+    PXHCI_TRANSFER head;
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    ULONG code;
+    ULONG verdict;
+    ULONG same;
+    ULONG first;
+    ULONG len;
+    ULONG dcs;
+    ULONG deq;
+    ULONG resync;
+
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    XhciInjEpWatch(&hc->InjEp, hc->InjSlot, hc->InjDci);
+    hc->InjEp.Bulk = 1;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    code = 0;
+    if (XhciTrbStopEndpoint(&trb, hc->InjSlot, hc->InjDci, 0) ==
+        XHCI_RING_OK) {
+        code = hcdInjOwnCommand(hc, &trb);
+    }
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    hc->InjEp.Watch = 0;
+    *seen = hc->InjEp.StopSeen;
+    *seenPA = hc->InjEp.StopPA;
+    *seenCode = hc->InjEp.StopCode;
+    *seenResidual = hc->InjEp.StopResidual;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    if (code != XHCI_CC_SUCCESS) {
+        hcdInjBulkAbandon(hc, 0x80UL | (code & 0x7FUL));
+        return 0;
+    }
+
+    verdict = XHCI_INJ_STOP_BROKEN;
+    same = 0;
+    first = 0;
+    len = 0;
+    dcs = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe = hcdInjBulkPipe(hc);
+    ring = hcdInjBulkRing(pipe, stream, &p);
+    head = (ring != NULL) ? p->Queue->Head : NULL;
+    if (head != NULL) {
+        same = (head->Token == token) ? 1UL : 0UL;
+        first = XhciRingTrbPA(ring, head->FirstIndex);
+        len = XHCI_TRB_GET_LENGTH(ring->Base[head->FirstIndex].Status);
+        dcs = ring->Base[head->FirstIndex].Control & XHCI_TRB_CYCLE;
+        deq = (stream == 0)
+                  ? hcdInjCtxDequeue(hc, hc->InjSlot, hc->InjDci)
+                  : (((volatile ULONG *)((PUCHAR)pipe->Streams->Va +
+                                         stream * 16UL))[0] &
+                     XHCI_EP_DEQUEUE_MASK);
+        verdict = XhciInjStopVerdict(
+            deq, first, XhciInjAfterPA(ring->BasePA, head->LastIndex),
+            head->TrbCount == 1, len, *seen, *seenPA, *seenCode,
+            *seenResidual);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+
+    if (verdict == XHCI_INJ_STOP_REPOINT) {
+        verdict = XHCI_INJ_STOP_BROKEN;
+        if (hcdInjBulkSetDequeue(hc, stream, first, dcs) == XHCI_CC_SUCCESS) {
+            KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+            hc->InjEp.Repointed++;
+            KeReleaseSpinLock(&hc->InjLock, oldIrql);
+            verdict = XHCI_INJ_STOP_OK;
+        }
+    }
+    /* 36.54: the stream resync QEMU's xHCI owes after this stop (record 17
+     * section 4.12.4), which the command path leaves to the layer's own
+     * stop so the verdict above read the Stream Context as QEMU left it;
+     * before anything is rung or delivered, the doorbells still withheld.
+     * One that had to stop the endpoint again - QEMU restarted it on its
+     * own, and may have moved the TD the verdict found untouched - or gave
+     * up ends the attempt: abandoned (0x43) after a re-stop, given up with
+     * nothing rung (0x44) when the resync failed and requested the
+     * controller reset. */
+    resync = HcdCfgQemuStreamResync(hc, hc->InjSlot, hc->InjDci);
+    if (resync == HCD_RESYNC_FAILED) {
+        hcdInjBulkGiveUp(hc);
+        return 0;
+    }
+    if (resync != HCD_RESYNC_CLEAN) {
+        hcdInjBulkAbandon(hc, 0x43UL);
+        return 0;
+    }
+    if (verdict != XHCI_INJ_STOP_OK || !same) {
+        /* Already fetched or moved on - QEMU's device wakeup can start a
+         * stream behind a withheld doorbell: refused, not reported as
+         * held (review round 4). */
+        hcdInjBulkAbandon(hc, (verdict << 1) | same);
+        return 0;
+    }
+    *firstPA = first;
+    *firstLen = len;
+    *firstCycle = dcs ? 1UL : 0UL;
+    return 1;
+}
+
+
+/*
+ * BULK_WAIT's step: once a TD waits behind the withheld doorbell, the
+ * armed fault is carried out on it. Returns the phase to go on in.
+ * IRQL: PASSIVE_LEVEL, powered.
+ */
+static ULONG hcdInjBulkFire(PHCD_CONTROLLER hc)
+{
+    XHCI_TRB ev;
+    KIRQL oldIrql;
+    ULONG token;
+    ULONG stream;
+    ULONG lastPA;
+    ULONG lastLen;
+    ULONG afterPA;
+    ULONG afterCycle;
+    ULONG first;
+    ULONG len;
+    ULONG cycle;
+    ULONG seen;
+    ULONG seenCode;
+    ULONG seenPA;
+    ULONG seenResidual;
+    ULONG fault;
+    ULONG tries;
+    ULONG delivered;
+
+    fault = hc->InjFault;
+    if (!hcdInjBulkHead(hc, &token, &stream, &lastPA, &lastLen, &afterPA,
+                        &afterCycle)) {
+        return HCD_INJ_PHASE_BULK_WAIT;
+    }
+    hc->InjBulkStream = stream;
+    (VOID)XhciInjSpend(&hc->InjLeft);
+    XhciLogNote(&hc->Hc, "qemu.inj.bulk",
+                (fault << 24) | (stream << 16) | (hc->InjSlot << 8) |
+                    hc->InjDci);
+    if (fault == XHCI_INJ_BULK_SHORT && lastLen < 2) {
+        hcdInjBulkAbandon(hc, 0x41UL);
+        return HCD_INJ_PHASE_IDLE;
+    }
+    if (!hcdInjBulkStop(hc, stream, token, &first, &len, &cycle, &seen,
+                        &seenCode, &seenPA, &seenResidual)) {
+        return HCD_INJ_PHASE_IDLE;
+    }
+    UNREFERENCED_PARAMETER(cycle);
+    switch (fault) {
+    case XHCI_INJ_BULK_STOP:
+        /* The stop the controller reported for the TD, handed to the
+         * driver as it came; QEMU reports none for a TD it never fetched
+         * (review round 3), so then the event a stop at a TD's start
+         * gives: its first TRB, nothing moved. */
+        if (seen && seenPA == first) {
+            XhciInjTransferEvent(&ev, seenPA, seenResidual, seenCode,
+                                 hc->InjSlot, hc->InjDci);
+        } else {
+            XhciInjTransferEvent(&ev, first, len, XHCI_CC_STOPPED,
+                                 hc->InjSlot, hc->InjDci);
+        }
+        XhciLogNote(&hc->Hc, "qemu.inj.bulk.stopped",
+                    (seen << 8) | (seen ? seenCode : 0UL));
+        if (!hcdInjDeliver(hc, &ev)) {
+            XhciLogNote(&hc->Hc, "qemu.inj.undelivered", fault);
+        }
+        hcdInjBulkRelease(hc);
+        return HCD_INJ_PHASE_IDLE;
+    case XHCI_INJ_BULK_ERROR:
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        hc->InjEp.State = XHCI_EP_STATE_HALTED;
+        hc->InjEp.Hold = XHCI_INJ_HOLD_NONE;
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+        XhciInjTransferEvent(&ev, first, len, XHCI_CC_USB_TRANSACTION_ERROR,
+                             hc->InjSlot, hc->InjDci);
+        if (!hcdInjDeliver(hc, &ev)) {
+            hcdInjBulkAbandon(hc, 0x40UL);
+            return HCD_INJ_PHASE_IDLE;
+        }
+        return HCD_INJ_PHASE_ANSWERING;
+    case XHCI_INJ_BULK_SHORT:
+        /* The controller past the TD before the driver retires it, so the
+         * next doorbell starts the next TD and never this one again. */
+        if (hcdInjBulkSetDequeue(hc, stream, afterPA, afterCycle) !=
+            XHCI_CC_SUCCESS) {
+            hcdInjBulkAbandon(hc, 0x42UL);
+            return HCD_INJ_PHASE_IDLE;
+        }
+        /* On the TD's last TRB, which carries its IOC: one event ends it,
+         * with no trailing event to follow (xHCI 4.10.1.1). The dequeue is
+         * past the TD already, so the event must reach the driver: tried
+         * again. */
+        XhciInjTransferEvent(&ev, lastPA, lastLen / 2, XHCI_CC_SHORT_PACKET,
+                             hc->InjSlot, hc->InjDci);
+        delivered = 0;
+        for (tries = 0; tries < 3 && !delivered; tries++) {
+            delivered = hcdInjDeliver(hc, &ev);
+        }
+        if (!delivered) {
+            /* Never rewound: a successor may have run meanwhile (review
+             * round 6). The TD is then a lost completion, as code 14's,
+             * for the driver's own timeout. */
+            XhciLogNote(&hc->Hc, "qemu.inj.undelivered", fault);
+        }
+        hcdInjBulkRelease(hc);
+        return HCD_INJ_PHASE_IDLE;
+    default:
+        hcdInjBulkRelease(hc);
+        return HCD_INJ_PHASE_IDLE;
+    }
 }
 
 /* An endpoint fault armed: refused while another is armed or in flight, so
@@ -1168,6 +1955,19 @@ static VOID hcdInjDisarmEndpoint(PHCD_CONTROLLER hc)
     XhciInjEp0Arm(&hc->InjEp, 0, 0, 0);
     hc->InjEp.EvPending = 0;
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    /* 36.22: a bulk doorbell still withheld with nothing emulated is
+     * given back by the next thread pass, under the power gate with the
+     * controller running (HcdInjService), never from here (review round
+     * 3). */
+    if (hc->InjPhase == HCD_INJ_PHASE_BULK_WAIT ||
+        hc->InjPhase == HCD_INJ_PHASE_BULK_HELD ||
+        hc->InjPhase == HCD_INJ_PHASE_BULK_LOSE) {
+        hc->InjPhase = HCD_INJ_PHASE_BULK_CLEAR;
+    }
+    /* Nothing more is lost from now (review round 6). */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->InjBulkLose = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
 /* One command the trigger fired. IRQL: PASSIVE_LEVEL. */
@@ -1218,6 +2018,16 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         XhciInjReleaseOc(&hc->InjRegs);
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
         break;
+    case XHCI_INJ_CLEAR_HALT:
+        /* arg 0 STALL, 1 another failure, 2 never sent. */
+        if (arg <= 2) {
+            hc->InjClearHalt = (arg == 0   ? HCD_CTL_STALLED
+                                : arg == 1 ? HCD_CTL_FAILED
+                                           : HCD_CTL_NOT_SENT) + 1;
+        } else {
+            done = 0;
+        }
+        break;
     case XHCI_INJ_DEAD:
     case XHCI_INJ_DEAD_NOPROOF:
         KeAcquireSpinLock(&hc->InjLock, &oldIrql);
@@ -1225,7 +2035,9 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         KeReleaseSpinLock(&hc->InjLock, oldIrql);
         break;
     default:
-        if (XhciInjKind(fault) != XHCI_INJ_KIND_OTHER) {
+        if (XhciInjKind(fault) == XHCI_INJ_KIND_BULK) {
+            done = hcdInjArmBulk(hc, fault, XHCI_INJ_GET_PORT(value), arg);
+        } else if (XhciInjKind(fault) != XHCI_INJ_KIND_OTHER) {
             done = hcdInjArmEndpoint(hc, fault, XHCI_INJ_GET_PORT(value),
                                      arg);
         } else {
@@ -1260,6 +2072,19 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
     KIRQL oldIrql;
 
     ext = &hc->Hc;
+    /* Task 36.4: a hold that ran out with no command meeting the busy
+     * engine has swallowed an interrupt whose acknowledgement cleared
+     * IMAN.IE, and nothing else may drain it (the backstop is off at
+     * XhciTolerance 0): one drain of its own, under the power gate and the
+     * drain's admission, apart from the busy retry's count (Codex review of
+     * 36.4, round 1). */
+    if (hc->InjStartHoldTicks != 0 && !HcdInjStartHeld(hc) &&
+        InterlockedExchange((PLONG)&hc->InjStartHoldTicks, 0) != 0) {
+        HcdPowerGateEnter(hc);
+        found = HcdDrainPending(hc);
+        HcdPowerGateLeave(hc);
+        XhciLogNote(ext, "qemu.inj.starthold.expired", found);
+    }
     /* The all-ones snapshot for this pass, before the health poll and the
      * containment step read it: spent here whether or not either reads,
      * so a finite fault ends on a failed controller too. */

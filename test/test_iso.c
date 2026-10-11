@@ -186,6 +186,7 @@ static void iso_request(XHCI_ISO_REQUEST *req,
     req->Frames.Allowed = 0;
     req->Frames.CurrentFrame = 0;
     req->Frames.IstFrames = 0;
+    req->Frames.FirstOnly = 0;
 }
 
 static ULONG event_dw2(ULONG completionCode, ULONG residual)

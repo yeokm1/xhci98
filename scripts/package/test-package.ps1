@@ -51,11 +51,30 @@ function Get-StandInSha {
 }
 
 function Invoke-Packager {
-    param([string[]]$Arguments, [switch]$WithBinaryGates)
+    param([string[]]$Arguments, [switch]$WithBinaryGates, [switch]$NoMsiStandIn)
     # The stand-in "driver" is a text file, so the packager's pre-staging host
     # test suite and import gate are skipped for every case except the one
     # that is about them.
     if (-not $WithBinaryGates) { $Arguments = $Arguments + @("-SkipBinaryGates") }
+    #
+    # The 32-bit INF names xhcimsi.sys, the NT 6 x86 MSI helper, since task
+    # 36.15 (design record 18), so an x86 stand-in package needs a stand-in
+    # helper too, carrying the flavour the run asks for. Every case gets one
+    # unless it names its own or is about the helper's absence; the amd64
+    # package carries none.
+    $isAmd64 = $false
+    $flavour = "debug"
+    for ($i = 0; $i -lt $Arguments.Count; $i++) {
+        if ($Arguments[$i] -eq "-Arch" -and $i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -eq "amd64") { $isAmd64 = $true }
+        if ($Arguments[$i] -eq "-Flavor" -and $i + 1 -lt $Arguments.Count) { $flavour = $Arguments[$i + 1] }
+    }
+    if (-not $NoMsiStandIn -and -not $isAmd64 -and ($Arguments -notcontains "-MsiDriverPath")) {
+        $standIn = Join-Path $script:work ("xhcimsi-" + $flavour + ".sys")
+        if (-not (Test-Path -LiteralPath $standIn)) {
+            Set-Content -LiteralPath $standIn -Value ("not a real helper XHCI98_FLAVOUR_" + $flavour.ToUpperInvariant()) -Encoding ASCII
+        }
+        $Arguments = $Arguments + @("-MsiDriverPath", $standIn)
+    }
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packager) + $Arguments
     # ErrorActionPreference relaxed across the call, as
     # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (repo audit
@@ -131,9 +150,24 @@ try {
     $flatOut = Join-Path $script:work "pkg-flat"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $flatOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys", "xhcimsi.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
+
+    # --- the NT 6 x86 MSI helper (task 36.15, design record 18) -------------
+    Write-Step "the x86 package carries the MSI helper its INF names, of its own flavour"
+    $r = Invoke-Packager -NoMsiStandIn -Arguments @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OutDir", (Join-Path $script:work "pkg-no-helper"))
+    Assert-True ($r.ExitCode -ne 0) "an x86 package was built with no xhcimsi.sys for its INF's entry."
+    Assert-True ($r.Output -match "xhcimsi\.sys") ("expected the refusal to name xhcimsi.sys. Output:`n" + $r.Output)
+    $wrongHelper = Join-Path $script:work "xhcimsi-wrong.sys"
+    Set-Content -LiteralPath $wrongHelper -Value "not a real helper XHCI98_FLAVOUR_QEMU" -Encoding ASCII
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper,
+        "-OutDir", (Join-Path $script:work "pkg-wrong-helper"))
+    Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a debug package."
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
+        "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
+    Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -MsiDriverPath."
 
     # --- txtsetup.oem (roadmap task 33.3) -----------------------------------
     #
@@ -160,6 +194,242 @@ try {
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
     Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
+
+    # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
+    #
+    # The port switchover's user script: staged at the package root, byte
+    # for byte, when named (and always from the default paths); a stand-in
+    # package that does not name it does not carry it; a missing one is
+    # refused. The script finds the controller's key by DriverDesc, so the
+    # string it matches is held to both INFs' XhciDesc, and the text a
+    # Windows 98 WSH reads is held to ASCII with CRLF line endings.
+    Write-Step "portsw.vbs is staged at the root and matches the INFs"
+    $pswSrc = Join-Path $repo "src\portsw.vbs"
+    $pswOut = Join-Path $script:work "pkg-psw"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", $pswSrc, "-OutDir", $pswOut)
+    Assert-True ($r.ExitCode -eq 0) ("a package with portsw.vbs was rejected:`n" + $r.Output)
+    $pswStaged = Join-Path $pswOut "portsw.vbs"
+    Assert-True (Test-Path -LiteralPath $pswStaged) "portsw.vbs is not at the package root."
+    if (Test-Path -LiteralPath $pswStaged) {
+        Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($pswStaged))) -eq
+                     (Get-StandInSha ([System.IO.File]::ReadAllBytes($pswSrc)))) `
+            "the staged portsw.vbs differs from src\portsw.vbs."
+    }
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "portsw.vbs"))) `
+        "a stand-in package that did not name -PswScriptPath carries portsw.vbs."
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", (Join-Path $script:work "no-such.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-missing"))
+    Assert-True ($r.ExitCode -ne 0) "a missing portsw.vbs was not refused."
+    $pswBytes = [System.IO.File]::ReadAllBytes($pswSrc)
+    $pswBad = @($pswBytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) })
+    Assert-True ($pswBad.Count -eq 0) "src\portsw.vbs holds a byte outside printable ASCII, TAB, CR and LF."
+    $pswText = [System.IO.File]::ReadAllText($pswSrc)
+    Assert-True (-not ($pswText -match "(?<!`r)`n")) "src\portsw.vbs has a line not ended by CRLF."
+    foreach ($infName in @("src\xhci98.inf", "src\xhci98-amd64.inf")) {
+        $infText = [System.IO.File]::ReadAllText((Join-Path $repo $infName))
+        $descMatch = [regex]::Match($infText, '(?m)^XhciDesc="([^"]*)"')
+        Assert-True $descMatch.Success "$infName has no XhciDesc string this test can read."
+        if ($descMatch.Success) {
+            Assert-True ($pswText.Contains('Const XHCI_DESC = "' + $descMatch.Groups[1].Value + '"')) `
+                "src\portsw.vbs does not look for $infName's XhciDesc, so it would find no controller."
+        }
+    }
+    foreach ($needle in @('"XhciIntelPortSwitch"', '"REG_DWORD"',
+                          'HKLM\System\CurrentControlSet\Services\Class\USB\',
+                          'HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\',
+                          'RESTART WINDOWS')) {
+        Assert-True ($pswText.Contains($needle)) "src\portsw.vbs no longer contains $needle."
+    }
+
+    # --- portsw-on.bat and portsw-off.bat (roadmap-hcd task 36.56) ----------
+    #
+    # Staged beside portsw.vbs from its directory, byte for byte; absent from
+    # a stand-in package that did not name the script; a script whose
+    # directory lacks them is refused. Each file is run by COMMAND.COM on
+    # Windows 98 SE and ME and by cmd.exe elsewhere (design record 16 section
+    # 5a), so the split is pinned: COMMAND.COM must reach no line it cannot
+    # parse, and the one cmd.exe line must sit where only cmd.exe goes.
+    Write-Step "portsw-on.bat and portsw-off.bat are staged and COMMAND.COM-safe"
+    $pswBatches = @(
+        @{ Name = "portsw-on.bat";  Value = "1"; Others = @("0", "2") },
+        @{ Name = "portsw-off.bat"; Value = "0"; Others = @("1", "2") }
+    )
+    foreach ($bat in $pswBatches) {
+        $batSrc = Join-Path $repo ("src\" + $bat.Name)
+        $batStaged = Join-Path $pswOut $bat.Name
+        Assert-True (Test-Path -LiteralPath $batStaged) "$($bat.Name) is not at the package root beside portsw.vbs."
+        if ((Test-Path -LiteralPath $batStaged) -and (Test-Path -LiteralPath $batSrc)) {
+            Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($batStaged))) -eq
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($batSrc)))) `
+                "the staged $($bat.Name) differs from src\$($bat.Name)."
+        }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $bat.Name))) `
+            "a stand-in package that did not name -PswScriptPath carries $($bat.Name)."
+    }
+    $pswLoneDir = Join-Path $script:work "psw-lone"
+    New-Item -ItemType Directory -Path $pswLoneDir -Force | Out-Null
+    Copy-Item -LiteralPath $pswSrc -Destination (Join-Path $pswLoneDir "portsw.vbs") -Force
+    Copy-Item -LiteralPath (Join-Path $repo "src\portsw-on.bat") -Destination (Join-Path $pswLoneDir "portsw-on.bat") -Force
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-PswScriptPath", (Join-Path $pswLoneDir "portsw.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-lone"))
+    Assert-True ($r.ExitCode -ne 0) "a portsw.vbs with no portsw-off.bat beside it was staged."
+    Assert-True ($r.Output -match "portsw-off\.bat") `
+        ("expected the refusal to name portsw-off.bat. Output:`n" + $r.Output)
+
+    # A bare file name for the script (review round 1): its directory is the
+    # caller's location, and the batch files are found there.
+    $pswBareDir = Join-Path $script:work "psw-bare"
+    New-Item -ItemType Directory -Path $pswBareDir -Force | Out-Null
+    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+        Copy-Item -LiteralPath (Join-Path $repo ("src\" + $name)) -Destination (Join-Path $pswBareDir $name) -Force
+    }
+    $pswBareOut = Join-Path $script:work "pkg-psw-bare"
+    Push-Location -LiteralPath $pswBareDir
+    try {
+        $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+            "-PswScriptPath", "portsw.vbs", "-OutDir", $pswBareOut)
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($r.ExitCode -eq 0) ("-PswScriptPath given as a bare file name was rejected:`n" + $r.Output)
+    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $pswBareOut $name)) `
+            "-PswScriptPath given as a bare file name did not stage $name."
+    }
+    # And a root-relative one, "\dir\portsw.vbs" (review round 2). The child
+    # starts with its process directory at this location, so this does not
+    # reproduce a process directory on another drive; it holds that such a
+    # path is resolved on the location's drive and its batch files found.
+    $pswRootRel = (Join-Path $pswBareDir "portsw.vbs").Substring([System.IO.Path]::GetPathRoot($pswBareDir).Length - 1)
+    $pswRootRelOut = Join-Path $script:work "pkg-psw-rootrel"
+    Push-Location -LiteralPath $script:work
+    try {
+        $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+            "-PswScriptPath", $pswRootRel, "-OutDir", $pswRootRelOut)
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($r.ExitCode -eq 0) ("-PswScriptPath given root-relative ('$pswRootRel') was rejected:`n" + $r.Output)
+    Assert-True (Test-Path -LiteralPath (Join-Path $pswRootRelOut "portsw-off.bat")) `
+        "-PswScriptPath given root-relative did not stage portsw-off.bat."
+
+    # The files themselves. Every line is held to a short list of the commands
+    # both interpreters run, rather than searched for constructs one of them
+    # lacks: a list of forbidden words misses the one nobody listed (review
+    # round 1 found four such escapes). The only lines outside that list are
+    # the split's: the OS test, and the cd /d that only cmd.exe reaches.
+    function Get-PswBatchFaults {
+        param([string]$Text, [string]$Value)
+        $faults = @()
+        if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+        if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+        if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+        $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+        if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+        if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+        $code = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+        }
+        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+        for ($k = 0; $k -lt $split.Count; $k++) {
+            if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
+                $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+            }
+        }
+        $osLine = -1
+        $ntLine = -1
+        if ($code.Count -gt 0) { $osLine = $code[0] }
+        if ($code.Count -gt 3) { $ntLine = $code[3] }
+        $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                     '^if not exist portsw\.vbs goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
+                     '^if not "%OS%"=="Windows_NT" goto [a-z]+$', '^cscript //nologo portsw\.vbs (show|[0-9])$')
+        $labels = @{}
+        $gotos = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+            if ($i -ne $osLine -and $i -ne $ntLine) {
+                $ok = $false
+                foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+                if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+            }
+            if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
+                $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+            }
+            if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+            if ($line -cmatch '^:([a-z]+)$') {
+                if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+                $labels[$Matches[1]] = $i
+            }
+            if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+        }
+        foreach ($g in $gotos) {
+            if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+            if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+        }
+        $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo portsw\.vbs [0-9]$' })
+        if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo portsw.vbs ' + $Value)) {
+            $faults += "it does not set exactly one value, $Value (2 is a hand edit)"
+        }
+        $last = -1
+        foreach ($pin in @('if not exist portsw.vbs goto nofile', 'cscript //nologo portsw.vbs show',
+                           'if errorlevel 1 goto end', ('cscript //nologo portsw.vbs ' + $Value),
+                           'if errorlevel 3 goto elevate', 'if errorlevel 1 goto refused')) {
+            $at = [Array]::IndexOf($lines, $pin)
+            if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
+        }
+        foreach ($needle in @('RESTART WINDOWS', 'Vista and 7: right-click it', 'choose Run as administrator')) {
+            if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
+        }
+        return $faults
+    }
+
+    $batLineCounts = @()
+    foreach ($bat in $pswBatches) {
+        $batSrc = Join-Path $repo ("src\" + $bat.Name)
+        if (-not (Test-Path -LiteralPath $batSrc)) {
+            Assert-True $false "src\$($bat.Name) is missing."
+            continue
+        }
+        # Bytes, then Latin-1: ReadAllText would consume a BOM, or decode a
+        # UTF-16 file into clean text (review round 2).
+        $batText = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($batSrc))
+        $faults = @(Get-PswBatchFaults -Text $batText -Value $bat.Value)
+        Assert-True ($faults.Count -eq 0) ("src\$($bat.Name):`n  " + ($faults -join "`n  "))
+        $batLineCounts += @($batText -split "`r`n").Count
+    }
+    if ($batLineCounts.Count -eq 2) {
+        Assert-True ($batLineCounts[0] -eq $batLineCounts[1]) "portsw-on.bat and portsw-off.bat no longer have the same number of lines; they are one file but for the value."
+    }
+
+    # Controls on the checker itself: each of these must be refused, and the
+    # last, harmless echo text that names a cmd.exe word, must not be.
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $onBytes = [System.IO.File]::ReadAllBytes((Join-Path $repo "src\portsw-on.bat"))
+    $onText = $latin1.GetString($onBytes)
+    $anchor = "`r`necho Now:`r`n"
+    Assert-True ($onText.Contains($anchor)) "src\portsw-on.bat has no 'echo Now:' line for the checker's controls to replace."
+    foreach ($bad in @('goto nt', '@echo example > stray.txt', ' rem example > stray.txt', 'echo x | more',
+                       'for /f %%i in (a.txt) do echo %%i', 'setlocal', 'if /i errorlevel 1 goto end',
+                       'cd /d "%~dp0"', 'goto eof', 'cscript //nologo "portsw.vbs" 2', 'cscript //nologo portsw.vbs 2',
+                       'echo off', 'echo ON', 'echo Off', 'call :run', ':run', ('echo ' + ('x' * 130)))) {
+        $mutant = $onText.Replace($anchor, "`r`n" + $bad + "`r`n")
+        Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted the line: $bad"
+    }
+    foreach ($mutant in @($onText.Replace("goto run`r`n:nt`r`n", ":nt`r`n"),
+                          $onText.Replace($anchor, "`r`necho caf" + [char]0xE9 + "`r`n"),
+                          $latin1.GetString([byte[]](@(0xEF, 0xBB, 0xBF) + $onBytes)),
+                          $latin1.GetString([byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($onText))),
+                          $onText.Replace("`r`n", "`n"),
+                          $onText.Substring(0, $onText.Length - 2),
+                          $onText.Replace("cscript //nologo portsw.vbs 1", "cscript //nologo portsw.vbs 0"))) {
+        Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted a broken whole-file control."
+    }
+    $harmless = $onText.Replace($anchor, "`r`necho setlocal is not used here.`r`n")
+    $harmlessFaults = @(Get-PswBatchFaults -Text $harmless -Value "1")
+    Assert-True ($harmlessFaults.Count -eq 0) ("the batch-file checker refused harmless echo text:`n  " + ($harmlessFaults -join "`n  "))
 
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
@@ -727,9 +997,11 @@ try {
     Write-Step "a relative -OutDir resolves against the caller's location"
     $cwd = Join-Path $script:work "cwd"
     New-Item -ItemType Directory -Path $cwd | Out-Null
+    $msiStandInDebug = Join-Path $script:work "xhcimsi-relpkg.sys"
+    Set-Content -LiteralPath $msiStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
-        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
+        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -MsiDriverPath '$msiStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
         "exit `$LASTEXITCODE"
     ) -join "; "
     $savedEap = $ErrorActionPreference
@@ -792,6 +1064,10 @@ try {
             Ensure-Directory $pubFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pubFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
+            # The x86 media's third file of this project's own since task
+            # 36.15 (design record 18), published beside xhci98.sys.
+            Set-Content -LiteralPath (Join-Path $pubFlavour "xhcimsi.sys") -Encoding ASCII `
+                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
 
             # The gated package: the same two files byte for byte, and since
             # 1.0.0.1 nothing else.
@@ -799,6 +1075,8 @@ try {
             Ensure-Directory $pkgFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
+            Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcimsi.sys") -Encoding ASCII `
+                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
         }
         Set-Content -LiteralPath (Join-Path $pubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -829,7 +1107,7 @@ try {
         # The files the INF names, in one directory, per flavour. This is the
         # assertion the malformed asset would have failed.
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhci98.sys", "xhci98.inf")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcimsi.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
             }
@@ -1068,6 +1346,11 @@ try {
             # it is is said by the directory, which is the whole reason the
             # architecture has to be carried alongside the name.
             Copy-Item -LiteralPath $leg.Inf -Destination (Join-Path $d "xhci98.inf") -Force
+            # The x86 media's helper (design record 18); the x64 media has none.
+            if ($leg.Dir -like "*-x86") {
+                Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
+                            -Value "stand-in xhcimsi.sys, $($leg.Dir), $relVersion"
+            }
         }
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -1107,6 +1390,25 @@ try {
             # The diagnostic, not just the exit code - see finding 6 above.
             Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
                 ("expected $($bad.Switch) to be refused on its own terms. Output:`n" + $r.Output)
+        }
+
+        # --- a TEST build (-TestLabel, 36.final's 2.2.0.3) ------------------
+        #
+        # Refused before anything is built, so these run on the stand-ins: a
+        # test build is never cut into the repository's own releases\ (the
+        # default -ReleasesDir), a label must fit the readme's banner, and
+        # -UploadSetOnly renders no readme to label.
+        Write-Step "-TestLabel refuses releases\, an unprintable or long label, and -UploadSetOnly"
+        foreach ($bad in @(
+            @{ Args = @("-TestLabel", "bench pending");                            Says = "never published" },
+            @{ Args = @("-TestLabel", ("x" * 51), "-ReleasesDir", $relRoot);       Says = "printable ASCII" },
+            @{ Args = @("-TestLabel", "bench`tpending", "-ReleasesDir", $relRoot); Says = "printable ASCII" },
+            @{ Args = ($relArgs + @("-TestLabel", "bench pending"));               Says = "renders none" }
+        )) {
+            $r = Invoke-Releaser $bad.Args
+            Assert-True ($r.ExitCode -ne 0) "make-release.ps1 accepted $($bad.Args -join ' ')."
+            Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
+                ("expected '$($bad.Says)' in the -TestLabel refusal. Output:`n" + $r.Output)
         }
 
         # --- a flavour the run was not asked to complete ---------------------
@@ -1682,6 +1984,32 @@ try {
         }
     }
 
+    # The rendered readme's own leftover-placeholder check must be case
+    # sensitive. The x64 test-signing text carries bcdedit's {current}, and
+    # the 2.3.0.0 cut first failed on it ("readme template left an
+    # unsubstituted placeholder: {current}") while the check was -match, which
+    # ignores case. The check is read from the renderer, then applied to a
+    # lower-case brace (which must pass) and an upper-case one (which must not).
+    Write-Step "the leftover-placeholder check passes lower-case braces such as {current}"
+    $leftoverCheck = [regex]::Match($releaserText, "if \(\`$readme -(c?match) '([^']+)'\) \{\s*throw `"readme template left an unsubstituted placeholder")
+    Assert-True $leftoverCheck.Success "make-release.ps1 no longer has a leftover-placeholder check on the rendered readme that this test can find."
+    if ($leftoverCheck.Success) {
+        Assert-True ($leftoverCheck.Groups[1].Value -ceq "cmatch") (
+            "make-release.ps1 checks the rendered readme with -" + $leftoverCheck.Groups[1].Value +
+            "; it must be -cmatch, or bcdedit's {current} is refused as a placeholder.")
+        $leftoverPattern = $leftoverCheck.Groups[2].Value
+        $lowerSample = "Run: bcdedit /set {current} testsigning on, then restart."
+        $upperSample = "Install from the {RELEASEDIR}\ directory."
+        Assert-True (-not ($lowerSample -cmatch $leftoverPattern)) (
+            "the leftover-placeholder check '" + $leftoverPattern + "' refuses a readme carrying {current}.")
+        Assert-True ($upperSample -cmatch $leftoverPattern) (
+            "the leftover-placeholder check '" + $leftoverPattern + "' no longer catches {RELEASEDIR}.")
+    }
+    if ($tplStart -ge 0 -and $tplEnd -gt $tplStart) {
+        Assert-True ($tplText.Contains("{current}") -or $releaserText.Contains("{current}")) `
+            "make-release.ps1 no longer carries bcdedit's {current}; this test's lower-case case has lost its subject, so revisit it."
+    }
+
     Write-Step "the readme template carries neither of the two forbidden claims"
     foreach ($forbidden in @("WINDOWS 98 ONLY", "redistributes nothing")) {
         Assert-True ($releaserText -notmatch [regex]::Escape($forbidden)) `
@@ -1888,6 +2216,8 @@ try {
             [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
                 [System.Text.Encoding]::ASCII.GetBytes("stand-in xhci98.sys, $fl, $newVersion"))
             Copy-Item -LiteralPath $newInf -Destination (Join-Path $d "xhci98.inf") -Force
+            Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
+                        -Value "stand-in xhcimsi.sys, $fl, $newVersion"
         }
         Set-Content -LiteralPath (Join-Path $newPubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -2002,7 +2332,13 @@ try {
         @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
-           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" }
+           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
+        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable';
+           Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
+        @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
+           Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
+        @{ Find = '$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")';
+           Why  = "the port switchover's user script and its two batch files (roadmap-hcd task 36.56) are no longer the files a flavour directory carries beside the INF" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
@@ -2039,7 +2375,7 @@ try {
         "make-release.ps1's Get-DeclaredMediaLayout no longer passes -Arch to the INF gate, so the amd64 INF would be parsed under the gate's x86 profile and refuse the cut."
     Assert-True ($releaserText -match [regex]::Escape('Get-DeclaredMediaLayout -InfPath $archInf -Arch $archPkgName[$a]')) `
         "make-release.ps1's pre-build layout loop no longer tells Get-DeclaredMediaLayout which architecture each INF is, so both legs would be gated as x86."
-    Assert-True ($releaserText -match [regex]::Escape('-Arch $LegArches[$Flavors[0]]')) `
+    Assert-True ($releaserText -match [regex]::Escape('-Arch $LegArches[$legDir]')) `
         "make-release.ps1's upload assembly no longer derives the media layout under the published directory's own architecture."
     Assert-True ($releaserText -match [regex]::Escape('"-InfPath", $flavorInf, "-Arch", $LegArches[$f],')) `
         "make-release.ps1 no longer passes -Arch to the per-directory INF gate in the upload assembly, so an assembled release-x64\ would be gated as x86 - after the publish swap."
@@ -2082,6 +2418,307 @@ try {
                 $c.Reported, $c.Declared, $got, $c.Want, $c.Why)
     }
 
+    # --- selective suspend's test client is refused in a release (36.34) ----
+    #
+    # Design record 14 section 11: the test client under test\pmclient is
+    # never shipped, and the packaging gate refuses it. The matcher is
+    # EXECUTED, loaded from make-release.ps1's text and driven with fixture
+    # directories: clean media passes; the client's binary, its INF or its
+    # tool by name, and a copy renamed but still carrying the marker, are
+    # each refused (the negative tests). Then both call sites are held to
+    # their places before the publish swap.
+    Write-Step "selective suspend's test client is refused in a release"
+    $tcAt = $releaserText.IndexOf('function Find-TestClientFiles')
+    $tcAssertAt = $releaserText.IndexOf('function Assert-NoTestClient')
+    Assert-True ($tcAt -ge 0 -and $tcAssertAt -ge 0) "make-release.ps1 no longer has Find-TestClientFiles / Assert-NoTestClient, so a release can carry the test client."
+    if ($tcAt -ge 0 -and $tcAssertAt -ge 0) {
+        $fnEnd = $releaserText.IndexOf("`n}", $tcAt)
+        Invoke-Expression $releaserText.Substring($tcAt, $fnEnd - $tcAt + 2)
+        $fnEnd = $releaserText.IndexOf("`n}", $tcAssertAt)
+        Invoke-Expression $releaserText.Substring($tcAssertAt, $fnEnd - $tcAssertAt + 2)
+        $tcRoot = Join-Path $script:work "testclient"
+        $tcCases = @(
+            @{ Name = "clean";    File = $null;                          Bytes = $null;                                         Want = 0 },
+            @{ Name = "sys";      File = "release\XHCIPM.SYS";            Bytes = "MZ";                                          Want = 1 },
+            @{ Name = "inf";      File = "xhcipm.inf";                    Bytes = "; inf";                                       Want = 1 },
+            @{ Name = "tool";     File = "xhcisnap\PmCtl.exe";            Bytes = "MZ";                                          Want = 1 },
+            @{ Name = "renamed";  File = "release\usbhelp.sys";           Bytes = "MZ..XHCI98_TEST_CLIENT_DO_NOT_SHIP..";         Want = 1 },
+            @{ Name = "nearmiss"; File = "release\notes.txt";             Bytes = "XHCI98_TEST_CLIENT_DO_NOT_SHI";                Want = 0 }
+        )
+        foreach ($c in $tcCases) {
+            $dir = Join-Path $tcRoot $c.Name
+            New-Item -ItemType Directory -Force -Path (Join-Path $dir "release") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $dir "release\xhci98.sys"), "MZ this project's driver")
+            [System.IO.File]::WriteAllText((Join-Path $dir "release\xhci98.inf"), "; this project's INF")
+            if ($null -ne $c.File) {
+                $path = Join-Path $dir $c.File
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+                [System.IO.File]::WriteAllText($path, $c.Bytes)
+            }
+            $hits = @(Find-TestClientFiles -Root $dir)
+            Assert-True ($hits.Count -eq $c.Want) ("Find-TestClientFiles found {0} file(s) in the '{1}' fixture, not {2}: {3}" -f $hits.Count, $c.Name, $c.Want, ($hits -join ' | '))
+            $refused = $false
+            try { Assert-NoTestClient -Root $dir -What "fixture $($c.Name)" } catch { $refused = $true }
+            Assert-True ($refused -eq ($c.Want -ne 0)) ("Assert-NoTestClient on the '{0}' fixture: refused={1}, expected {2}." -f $c.Name, $refused, ($c.Want -ne 0))
+        }
+    }
+    $tcMarks = @(
+        @{ Name = "the package's test-client check";    Find = 'Assert-NoTestClient -Root $pkgDir' },
+        @{ Name = "the staged release's test-client check"; Find = 'Assert-NoTestClient -Root $destRoot' },
+        @{ Name = "the -Force aside";                   Find = 'Move-Item -LiteralPath $finalRoot -Destination $asideRoot' },
+        @{ Name = "the publish swap";                   Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+    )
+    $tcAt2 = @()
+    foreach ($m in $tcMarks) {
+        $i = $releaserText.IndexOf($m.Find)
+        Assert-True ($i -ge 0) ("make-release.ps1 no longer contains " + $m.Name + " as this test recognises it.")
+        $tcAt2 += $i
+    }
+    if (@($tcAt2 | Where-Object { $_ -lt 0 }).Count -eq 0) {
+        for ($i = 1; $i -lt $tcMarks.Count; $i++) {
+            Assert-True ($tcAt2[$i - 1] -lt $tcAt2[$i]) `
+                ("$($tcMarks[$i - 1].Name) must come before $($tcMarks[$i].Name) in make-release.ps1.")
+        }
+        # Not inside the -SkipUploadSet branch: the staged-release check
+        # runs on every cut (round 1, finding 6). Its line is not indented
+        # under an `if (-not $SkipUploadSet)`.
+        $line = ($releaserText.Substring(0, $tcAt2[1]) -split "`n")[-1]
+        Assert-True ($line.TrimEnd("`r") -eq '    ') "the staged release's test-client check is not at the publish step's own level."
+    }
+    # A renamed tool carrying the marker in a tools directory is refused.
+    if ($tcAt -ge 0 -and $tcAssertAt -ge 0) {
+        $dir = Join-Path $tcRoot "renamedtool"
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir "xhcisnap") | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dir "xhcisnap\XHCISNAP.EXE"), "MZ XHCI98_TEST_CLIENT_DO_NOT_SHIP")
+        $refused = $false
+        try { Assert-NoTestClient -Root $dir -What "fixture renamedtool" } catch { $refused = $true }
+        Assert-True $refused "a test tool renamed XHCISNAP.EXE in a staged release's tools directory is not refused."
+    }
+    Assert-True ($releaserText.Contains('Assert-NoTestClient -Root $uploadRoot')) `
+        "make-release.ps1's upload assembly no longer refuses the test client."
+
+
+    # --- the x64 test signature (design record 19) --------------------------
+    #
+    # No key is needed or used here. The judgements are pure functions in
+    # package-common.ps1, driven with synthetic PE images and mock parsed
+    # signatures; the refusals are reached through the scripts' arguments
+    # before any key would be opened. The one thing these cannot reach is
+    # SignTool itself, which the cut's own checks read on the signed bytes.
+    Write-Step "x64 test signature: the signed-image comparison"
+    function New-SyntheticPe {
+        # A minimal PE32+ header in $Size bytes: MZ, e_lfanew 0x80, the PE
+        # signature, optional-header magic 0x20B, 16 data directories, and a
+        # body of non-zero filler so a stray difference is visible.
+        param([int]$Size)
+        $b = New-Object byte[] $Size
+        for ($i = 0x200; $i -lt $Size; $i++) { $b[$i] = [byte](($i * 7 + 3) % 251 + 1) }
+        $b[0] = 0x4D; $b[1] = 0x5A
+        [BitConverter]::GetBytes([int]0x80).CopyTo($b, 0x3C)
+        [BitConverter]::GetBytes([uint32]0x00004550).CopyTo($b, 0x80)
+        $opt = 0x80 + 24
+        [BitConverter]::GetBytes([uint16]0x20B).CopyTo($b, $opt)
+        [BitConverter]::GetBytes([uint32]16).CopyTo($b, $opt + 108)
+        [BitConverter]::GetBytes([uint32]0x1234).CopyTo($b, $opt + 64)
+        return ,$b
+    }
+    function New-SyntheticSigned {
+        # $Unsigned plus a table of $TableLen bytes at the next 8-byte
+        # boundary, the checksum changed and the directory entry pointing at it.
+        param([byte[]]$Unsigned, [int]$TableLen, [byte]$Pad = 0)
+        $at = [int]([math]::Ceiling($Unsigned.Length / 8.0) * 8)
+        $s = New-Object byte[] ($at + $TableLen)
+        [Array]::Copy($Unsigned, $s, $Unsigned.Length)
+        for ($i = $Unsigned.Length; $i -lt $at; $i++) { $s[$i] = $Pad }
+        for ($i = $at; $i -lt $s.Length; $i++) { $s[$i] = 0xC3 }
+        $opt = 0x80 + 24
+        [BitConverter]::GetBytes([uint32]0x9999).CopyTo($s, $opt + 64)
+        [BitConverter]::GetBytes([uint32]$at).CopyTo($s, $opt + 112 + 32)
+        [BitConverter]::GetBytes([uint32]$TableLen).CopyTo($s, $opt + 112 + 36)
+        return ,$s
+    }
+    $peU = New-SyntheticPe -Size 1021
+    $peS = New-SyntheticSigned -Unsigned $peU -TableLen 64
+    Assert-True (Test-SignedImageOf -Signed $peS -Unsigned $peU) `
+        "Test-SignedImageOf refused an image that is the build plus a signature and nothing else."
+    $peBody = [byte[]]$peS.Clone(); $peBody[0x300] = [byte]($peBody[0x300] -bxor 1)
+    Assert-True (-not (Test-SignedImageOf -Signed $peBody -Unsigned $peU)) `
+        "Test-SignedImageOf accepted a signed image whose body differs from the build."
+    $pePad = New-SyntheticSigned -Unsigned $peU -TableLen 64 -Pad 1
+    Assert-True (-not (Test-SignedImageOf -Signed $pePad -Unsigned $peU)) `
+        "Test-SignedImageOf accepted non-zero bytes in the alignment padding before the signature."
+    $peTail = New-Object byte[] ($peS.Length + 8); [Array]::Copy($peS, $peTail, $peS.Length)
+    Assert-True (-not (Test-SignedImageOf -Signed $peTail -Unsigned $peU)) `
+        "Test-SignedImageOf accepted bytes after the certificate table."
+    Assert-True (-not (Test-SignedImageOf -Signed $peS -Unsigned $peS)) `
+        "Test-SignedImageOf accepted an already-signed image as the build."
+    Assert-True (-not (Test-SignedImageOf -Signed $peU -Unsigned $peU)) `
+        "Test-SignedImageOf accepted an unsigned image as the signed one."
+    Assert-True (-not (Test-SignedImageOf -Signed ([System.Text.Encoding]::ASCII.GetBytes("MZ not a driver")) -Unsigned $peU)) `
+        "Test-SignedImageOf accepted a stand-in that is not a PE image."
+    $peFile = Join-Path $script:work "synthetic-unsigned.sys"
+    [System.IO.File]::WriteAllBytes($peFile, $peU)
+    Assert-True ($null -eq (Get-EmbeddedSignature -Path $peFile)) `
+        "Get-EmbeddedSignature read a signature out of an image with an empty certificate-table entry."
+    $threw = $false
+    try { [void](Get-EmbeddedSignature -Path $driver) } catch { $threw = $true }
+    Assert-True $threw "Get-EmbeddedSignature did not refuse a text stand-in as a PE image, so it could pass one as unsigned."
+
+    Write-Step "x64 test signature: the verdict on a parsed signature (mocks)"
+    $tsThumb = "00112233445566778899AABBCCDDEEFF00112233"
+    $tsGood = [pscustomobject]@{ Thumbprint = $tsThumb; Subject = "CN=x"; DigestOid = "1.3.14.3.2.26";
+                                 ContentType = "1.3.6.1.4.1.311.2.1.4"; DataOid = "1.3.6.1.4.1.311.2.1.15";
+                                 IndirectDigestOid = "1.3.14.3.2.26";
+                                 VouchedDigest = "AB"; ImageDigest = "AB"; SignatureValid = $true; Timestamped = $false }
+    Assert-True ((Test-ProjectTestSignature -Signature $tsGood -Thumbprint $tsThumb) -eq "") `
+        "Test-ProjectTestSignature refused the signature record 19 prescribes."
+    $tsCases = @(
+        @{ Name = "unsigned";    Set = $null;                                 Says = "no embedded signature" },
+        @{ Name = "other cert";  Set = @{ Thumbprint = "FF" + $tsThumb.Substring(2) }; Says = "not by the project test certificate" },
+        @{ Name = "SHA-256";     Set = @{ DigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "SHA-256 file"; Set = @{ IndirectDigestOid = "2.16.840.1.101.3.4.2.1" }; Says = "not SHA-1" },
+        @{ Name = "plain CMS";   Set = @{ ContentType = "1.2.840.113549.1.7.1" }; Says = "not an Authenticode PE-image signature" },
+        @{ Name = "not a PE";    Set = @{ DataOid = "1.3.6.1.4.1.311.2.1.25" }; Says = "not an Authenticode PE-image signature" },
+        @{ Name = "bad PKCS #7"; Set = @{ SignatureValid = $false };          Says = "does not verify" },
+        @{ Name = "stale digest"; Set = @{ ImageDigest = "CD" };              Says = "is not the image's" },
+        @{ Name = "no digest";   Set = @{ VouchedDigest = ""; ImageDigest = "" }; Says = "is not the image's" },
+        @{ Name = "timestamped"; Set = @{ Timestamped = $true };              Says = "countersignature" }
+    )
+    foreach ($c in $tsCases) {
+        $mock = $null
+        if ($null -ne $c.Set) {
+            $mock = $tsGood.PSObject.Copy()
+            foreach ($k in $c.Set.Keys) { $mock.$k = $c.Set[$k] }
+        }
+        $why = Test-ProjectTestSignature -Signature $mock -Thumbprint $tsThumb
+        Assert-True ($why -match [regex]::Escape($c.Says)) `
+            ("Test-ProjectTestSignature on the '{0}' mock said '{1}', expected '{2}'." -f $c.Name, $why, $c.Says)
+    }
+
+    Write-Step "x64 test signature: the SpcIndirectDataContent parser (encoded bytes)"
+    # A real encoding of the structure SignTool writes: data { SPC_PE_IMAGE_DATA },
+    # messageDigest { { sha1, NULL }, OCTET STRING of 20 bytes }.
+    $spcDigest = [byte[]](1..20)
+    $spcAlg = [byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00)
+    $spcData = [byte[]](0x30, 0x0C, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F)
+    $spcDigestInfo = [byte[]](@(0x30, 0x21) + $spcAlg + @(0x04, 0x14) + $spcDigest)
+    $spcBody = [byte[]]($spcData + $spcDigestInfo)
+    $spcGood = [byte[]](@(0x30, $spcBody.Length) + $spcBody)
+    $spc = ConvertFrom-SpcIndirectData -Content $spcGood
+    Assert-True ($spc.DataOid -eq "1.3.6.1.4.1.311.2.1.15" -and $spc.DigestOid -eq "1.3.14.3.2.26" -and
+                 $spc.Digest -eq "0102030405060708090A0B0C0D0E0F1011121314") `
+        ("ConvertFrom-SpcIndirectData misread a well-formed encoding: {0} {1} {2}" -f $spc.DataOid, $spc.DigestOid, $spc.Digest)
+    $spcBad = @(
+        @{ Name = "trailing byte";   Bytes = [byte[]]($spcGood + @(0x00)) },
+        @{ Name = "not a SEQUENCE";  Bytes = [byte[]](@(0x31, $spcBody.Length) + $spcBody) },
+        @{ Name = "digest only";     Bytes = [byte[]](@(0x30, 0x16, 0x04, 0x14) + $spcDigest) },
+        @{ Name = "digest not last"; Bytes = [byte[]](@(0x30, ($spcBody.Length + 2)) + $spcBody + @(0x05, 0x00)) },
+        @{ Name = "truncated";       Bytes = [byte[]]($spcGood[0..($spcGood.Length - 2)]) }
+    )
+    # Review round 2: what the parser does not interpret is still validated.
+    # Each variant below is the good encoding with one element changed.
+    function New-SpcVariant {
+        param([byte[]]$Data, [byte[]]$Alg)
+        $di = [byte[]](@(0x30, ($Alg.Length + 22)) + $Alg + @(0x04, 0x14) + $spcDigest)
+        $body = [byte[]]($Data + $di)
+        return ,[byte[]](@(0x30, $body.Length) + $body)
+    }
+    $spcOkValue = New-SpcVariant -Data ([byte[]](0x30, 0x0E, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                 0x30, 0x00)) -Alg $spcAlg
+    $spcOk2 = ConvertFrom-SpcIndirectData -Content $spcOkValue
+    Assert-True ($spcOk2.DataOid -eq "1.3.6.1.4.1.311.2.1.15") `
+        "ConvertFrom-SpcIndirectData refused an empty SpcPeImageData, which its schema allows (both fields optional)."
+    # SpcPeImageData as SignTool writes it: { flags BIT STRING (empty),
+    # file [0] { [2] { [0] IMPLICIT BMPString } } }.
+    $spcPeImage = New-SpcVariant -Data ([byte[]](0x30, 0x17, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                 0x30, 0x09, 0x03, 0x01, 0x00, 0xA0, 0x04, 0xA2, 0x02, 0x80, 0x00)) -Alg $spcAlg
+    Assert-True ((ConvertFrom-SpcIndirectData -Content $spcPeImage).DataOid -eq "1.3.6.1.4.1.311.2.1.15") `
+        "ConvertFrom-SpcIndirectData refused an SpcPeImageData value of the shape SignTool writes."
+    $spcAlgNoParams = [byte[]](0x30, 0x07, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A)
+    Assert-True ((ConvertFrom-SpcIndirectData -Content (New-SpcVariant -Data $spcData -Alg $spcAlgNoParams)).DigestOid -eq "1.3.14.3.2.26") `
+        "ConvertFrom-SpcIndirectData refused a digest algorithm with its parameters absent, which DER allows."
+    $spcBad += @(
+        @{ Name = "params 05 FF";      Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0xFF))) },
+        @{ Name = "params not NULL";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x04, 0x00))) },
+        @{ Name = "params then more";  Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0B, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00, 0x05, 0x00))) },
+        @{ Name = "OID unterminated";  Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x81, 0x05, 0x00))) },
+        @{ Name = "OID trailing 0x80"; Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x80, 0x05, 0x00))) },
+        @{ Name = "nested NULL 05 01"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x11, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x03, 0x05, 0x01, 0x00)) -Alg $spcAlg) },
+        @{ Name = "nested BIT STRING"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x11, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x03, 0x03, 0x01, 0x08)) -Alg $spcAlg) },
+        @{ Name = "constructed NULL";  Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x10, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x02, 0x25, 0x00)) -Alg $spcAlg) },
+        @{ Name = "BIT STRING pad";    Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x12, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x04, 0x03, 0x02, 0x07, 0xFF)) -Alg $spcAlg) },
+        @{ Name = "SpcString odd";     Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x18, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x0A, 0x03, 0x01, 0x00, 0xA0, 0x05, 0xA2, 0x03, 0x80, 0x01, 0x41)) -Alg $spcAlg) },        @{ Name = "primitive value";   Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x0F, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x05, 0x01, 0x00)) -Alg $spcAlg) },
+        @{ Name = "OID non-minimal";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x80, 0x02, 0x1A, 0x05, 0x00))) },
+        @{ Name = "data value broken"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x10, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x02, 0x05, 0x05)) -Alg $spcAlg) },
+        @{ Name = "data two values";   Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x12, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x05, 0x00, 0x05, 0x00, 0x05, 0x00)) -Alg $spcAlg) },
+        @{ Name = "long form for 9";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x81, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00))) }
+    )
+    foreach ($c in $spcBad) {
+        $threw = $false
+        try { [void](ConvertFrom-SpcIndirectData -Content $c.Bytes) } catch { $threw = $true }
+        Assert-True $threw ("ConvertFrom-SpcIndirectData accepted the '{0}' encoding, so a CMS message ending in the right digest could pass as Authenticode." -f $c.Name)
+    }
+
+    # The pinned thumbprint is the one design record 19 records, and the
+    # packager signs only after the import gates have read the build, whose
+    # SITES rule needs the objects beside the image (review round 1).
+    $rec19 = [System.IO.File]::ReadAllText((Join-Path $repo "docs\contributing\design\19-x64-test-signing.md"))
+    Assert-True ($rec19.Contains($script:TestSignThumbprint)) `
+        "package-common.ps1's pinned thumbprint $($script:TestSignThumbprint) is not the one design record 19 records."
+    $tsPkgText = [System.IO.File]::ReadAllText($packager)
+    $tsSignAt = $tsPkgText.IndexOf('Invoke-TestSign -Source $DriverPath')
+    $tsHcdAt = $tsPkgText.IndexOf('& powershell.exe @gateArgs')
+    $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
+    $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
+    $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
+    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0 -and
+                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt) `
+        "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
+    Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
+        "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."
+
+    Write-Step "x64 test signature: the packager's and the cut's refusals"
+    $tsMissing = Join-Path $script:work "no-such-key.pfx"
+    $r = Invoke-Packager @("-InfPath", $prodInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-ts-x86"),
+                           "-TestSignPfx", $tsMissing)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "never signed") `
+        ("make-package.ps1 did not refuse -TestSignPfx on the x86 package. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
+                           "-OutDir", (Join-Path $script:work "pkg-ts-nokey"), "-TestSignPfx", $tsMissing)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "no test-signing key at") `
+        ("make-package.ps1 did not refuse a -TestSignPfx naming no file. Output:`n" + $r.Output)
+    $tsRel = Join-Path $script:work "rel-ts"
+    New-Item -ItemType Directory -Force -Path $tsRel | Out-Null
+    foreach ($bad in @(
+        @{ Args = @("-ReleasesDir", $tsRel);                                            Says = "was given no test-signing key" },
+        @{ Args = @("-ReleasesDir", $tsRel, "-Arch", "x86", "-TestSignPfx", $tsMissing); Says = "publishes none" },
+        @{ Args = @("-ReleasesDir", $tsRel, "-TestSignPfx", $tsMissing);                Says = "no test-signing key at" },
+        @{ Args = @("-UploadSetOnly", "-ReleasesDir", $tsRel, "-TestSignPfx", $tsMissing); Says = "stages nothing" }
+    )) {
+        $r = Invoke-Releaser $bad.Args
+        Assert-True ($r.ExitCode -ne 0) "make-release.ps1 accepted $($bad.Args -join ' ')."
+        Assert-True ($r.Output -match [regex]::Escape($bad.Says)) `
+            ("expected '$($bad.Says)' in the test-signing refusal. Output:`n" + $r.Output)
+    }
+    # And where the cut applies it: the x64 legs' packager runs are given the
+    # key, and both published x64 binaries are held to the signature.
+    foreach ($anchor in @(
+        @{ Find = '$pkgArgs += @("-TestSignPfx", $TestSignPfx)'; Why = "the x64 legs are no longer signed at staging" },
+        @{ Find = 'Assert-TestSigned -Sys $sys -BuiltSys $builtSys'; Why = "the published x64 xhci98.sys is no longer held to the signature" },
+        @{ Find = 'Assert-TestSigned -Sys $Sys -BuiltSys $builtSys'; Why = "the published x64 xhciuas.sys is no longer held to the signature" },
+        @{ Find = '-Signed:$legSigned'; Why = "the UAS check no longer knows the leg is signed" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue

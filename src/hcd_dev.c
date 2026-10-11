@@ -199,6 +199,7 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 HcdIoRetired(hc, t);
             }
         }
+        HcdIoRefillFlush(hc);
     }
     return 0;
 }
@@ -248,6 +249,9 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
             hc->Counters.TransfersCompleted++;
             HcdIoRetired(hc, t);
         }
+        /* 36.24: refills after the walk, never inside it (record 13
+         * section 11.6, point 6). */
+        HcdIoRefillFlush(hc);
     }
     return 0;
 }
@@ -280,6 +284,11 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
         } else {
             hc->Hc.IsoRingOverruns++;
         }
+        /* 36.57: nothing queued, the ring ran dry at a service interval
+         * and the data flow has ended (xHCI 4.11.2.5 p.200). */
+        pipe->IsoFlowFresh = XhciXferIsoFlowNext(pipe->IsoFlowFresh,
+                                                 XHCI_ISO_FLOW_DRY,
+                                                 pipe->Queue->Count);
         if (pipe->Queue->Count == 0) {
             hc->Hc.IsoEventsUnattributed++;
         } else if (pipe->Paused || pipe->Closed || pipe->DrainPending ||
@@ -346,6 +355,36 @@ static PHCD_PIPE hcdEventStream(PHCD_PIPE pipe, ULONG trbPA)
     return id == 0 ? NULL : s->Pipe[id];
 }
 
+/* Whether a Stopped event shows the pipe's head TD untouched: a bulk or
+ * interrupt TD with nothing latched, the event at its first TRB, with that
+ * TRB's whole length left or the length invalid. Controller lock held. */
+static ULONG hcdDevStopUntouched(PHCD_PIPE pipe, const XHCI_TRB *event,
+                                 ULONG cc)
+{
+    PXHCI_TRANSFER head;
+    ULONG index;
+    ULONG length;
+
+    head = pipe->Queue->Head;
+    if (head == NULL ||
+        (pipe->TransferType != XHCI_PIPE_XFER_BULK &&
+         pipe->TransferType != XHCI_PIPE_XFER_INTERRUPT) ||
+        (head->Flags & (XHCI_XFER_FLAG_LENGTH_FIXED |
+                        XHCI_XFER_FLAG_ISOCH)) != 0 ||
+        XhciRingIndexFromPA(pipe->Ring, event->Param0 & ~0xFUL, &index) !=
+            XHCI_RING_OK ||
+        index != head->FirstIndex) {
+        return 0;
+    }
+    if (cc == XHCI_CC_STOPPED_LENGTH_INVALID) {
+        return 1;
+    }
+    return (cc == XHCI_CC_STOPPED &&
+            XhciRingSumTrbLengths(pipe->Ring, index, index, &length) ==
+                XHCI_RING_OK &&
+            XHCI_TRB_GET_RESIDUAL(event->Status) == length) ? 1UL : 0UL;
+}
+
 /*
  * Controller tolerance's counting of one Transfer Event (35-T.8, design
  * record 17 section 4.8): every completion code into the histogram, and an
@@ -410,6 +449,31 @@ static VOID hcdTolCycleEvent(PHCD_CONTROLLER hc, ULONG slotId, ULONG dci,
         HcdTolCycleMark(hc, dev, reason, dci);
     }
 }
+
+/*
+ * The Device Notification Event's hook (xhci_hw.h; design record 14 section
+ * 8.7, roadmap-hcd 36.38): with XhciSelectiveSuspend 0 nothing - DNCTRL
+ * enables no type then, and an event a controller raised anyway stays only
+ * in its per-type count, as before. Otherwise decoded and handed to the
+ * suspend machine's latch (HcdSuspNotificationLocked). IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+VOID XhciDeviceNotificationEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
+{
+    PHCD_CONTROLLER hc;
+    ULONG slotId;
+    ULONG type;
+    ULONG iface;
+
+    hc = HcdControllerFromExt(ext);
+    if (!hc->SuspOn) {
+        return;
+    }
+    (VOID)XhciSuspDnDecode(event->Param0, event->Control, &slotId, &type,
+                           &iface);
+    HcdSuspNotificationLocked(hc, slotId, type, iface);
+}
+
 /*
  * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
  * queue of the pipe its slot and endpoint name - EP0's, or one the
@@ -514,6 +578,14 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * for the abort or cancel that follows (round 2, finding 12). */
         (VOID)XhciXferQueueStopped(pipe->Queue, pipe->Ring, event->Param0,
                                    event->Status);
+        /* Selective suspend's stop (36.35): positive evidence that the
+         * head TD moved nothing - the event names its first TRB with the
+         * whole of that TRB left (Stopped) or no length (Stopped - Length
+         * Invalid) - is what alone lets the suspend rewind it
+         * (hcd_susp.c, hcdSuspRewind). */
+        if (pipe->SuspStopWatch) {
+            pipe->SuspStopUntouched = hcdDevStopUntouched(pipe, event, cc);
+        }
         return 0;
     }
     errors = pipe->Queue->Errors;

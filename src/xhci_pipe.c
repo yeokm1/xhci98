@@ -111,6 +111,7 @@ ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
     inTarget = 0;
     matched = 0;
     found.EndpointCount = 0;
+    found.EndpointSurplus = 0;
     offset = (ULONG)config[0];
     while (offset < total) {
         /* A one-byte tail cannot even hold bDescriptorType. */
@@ -148,10 +149,10 @@ ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
             if (bLength < XHCI_PIPE_ENDPOINT_BYTES) {
                 return XHCI_PIPE_MALFORMED;
             }
-            if (inTarget) {
-                if (found.EndpointCount >= declared) {
-                    return XHCI_PIPE_MALFORMED;
-                }
+            if (inTarget && found.EndpointCount >= declared) {
+                /* Past bNumEndpoints: usbport never reads it (header). */
+                found.EndpointSurplus++;
+            } else if (inTarget) {
                 dci = XhciPipeDci((ULONG)config[offset + 2]);
                 if (dci == 0 || (seen & XHCI_PIPE_DCI_BIT(dci)) != 0) {
                     return XHCI_PIPE_MALFORMED;
@@ -407,6 +408,7 @@ ULONG XhciPipeEndpointParams(const UCHAR *endpoint, ULONG speed,
 
     out.FastPoll = 0;
     out.SpecInterval = out.Interval;
+    out.FallbackInterval = out.Interval;
     out.Capped = 0;
 
     out.ErrorCount = out.TransferType == XHCI_PIPE_XFER_ISOCH
@@ -666,6 +668,7 @@ static ULONG xhciPipeSuperSpeed(const UCHAR *config, ULONG total,
 
     out.FastPoll = 0;
     out.SpecInterval = out.Interval;
+    out.FallbackInterval = out.Interval;
     out.Capped = 0;
     *ep = out;
     return XHCI_PIPE_OK;
@@ -744,16 +747,48 @@ ULONG XhciPipeCallerInterval(const UCHAR *config, ULONG length, ULONG offset,
  * an Interval below 3 is outside the range, which a controller may refuse
  * at Configure Endpoint ("Not all Input Endpoint Contexts identified by Add
  * Context flag fields = '1' are valid", p.112: Parameter Error) or run.
- * Opt-in only (XhciFastPollFsLs), and the caller retries at the Table 6-12
- * Interval on a refusal (XhciPipeFastRetry).
+ * Opt-in only (XhciFastPollFsLs), and the caller retries on a refusal at
+ * the fallback Interval (XhciPipeFastRetry): Table 6-12's under modes 2
+ * and 3, Interval 3 (1 ms) under mode 4.
  */
 ULONG XhciPipeFastMode(ULONG value)
 {
     if (value == XHCI_PIPE_FAST_1K || value == XHCI_PIPE_FAST_2K4K ||
-        value == XHCI_PIPE_FAST_4K8K) {
+        value == XHCI_PIPE_FAST_4K8K || value == XHCI_PIPE_FAST_CODES) {
         return value;
     }
     return XHCI_PIPE_FAST_OFF;
+}
+
+/*
+ * Mode 4 (task 36.19, design record 13 section 13.7): keyed on the
+ * descriptor's byte, never on the Interval Table 6-12 derives from it, which
+ * for a code is 10 at Full and Low Speed and 15 at High Speed and SuperSpeed
+ * - values an ordinary device gives too. 128 to 255 ms are legal Full- and
+ * Low-Speed values, which is why it is a mode a user sets. The fallback is
+ * Interval 3 (1 ms), inside every speed's interrupt range, not the code's
+ * Table 6-12 reading of 128 ms or more.
+ */
+static ULONG xhciPipeFastCodes(ULONG speed, ULONG route, PXHCI_PIPE_EP ep)
+{
+    if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT ||
+        ep->BInterval < XHCI_PIPE_FAST_CODE_LOW ||
+        ep->BInterval > XHCI_PIPE_FAST_CODE_HIGH) {
+        return 0;
+    }
+    if (speed == XHCI_PIPE_SPEED_LOW || speed == XHCI_PIPE_SPEED_FULL) {
+        if (route != 0) {
+            return 0;
+        }
+    } else if (speed != XHCI_PIPE_SPEED_HIGH &&
+               speed != XHCI_PIPE_SPEED_SUPER &&
+               speed != XHCI_PIPE_SPEED_SUPER_PLUS) {
+        return 0;
+    }
+    ep->Interval = XHCI_PIPE_FAST_CODE_HIGH - ep->BInterval;
+    ep->FallbackInterval = XHCI_PIPE_FAST_CODE_FALLBACK;
+    ep->FastPoll = 1;
+    return 1;
 }
 
 ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
@@ -761,7 +796,13 @@ ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
 {
     ULONG fast;
 
-    if (ep == NULL || ep->FastPoll ||
+    if (ep == NULL || ep->FastPoll) {
+        return 0;
+    }
+    if (mode == XHCI_PIPE_FAST_CODES) {
+        return xhciPipeFastCodes(speed, route, ep);
+    }
+    if (
         (mode != XHCI_PIPE_FAST_2K4K && mode != XHCI_PIPE_FAST_4K8K) ||
         (speed != XHCI_PIPE_SPEED_LOW && speed != XHCI_PIPE_SPEED_FULL) ||
         route != 0 || ep->TransferType != XHCI_PIPE_XFER_INTERRUPT) {
@@ -775,6 +816,7 @@ ULONG XhciPipeFastPoll(ULONG mode, ULONG speed, ULONG route,
         return 0;
     }
     ep->SpecInterval = ep->Interval;
+    ep->FallbackInterval = ep->Interval;
     ep->Interval = fast;
     ep->FastPoll = 1;
     return 1;
@@ -785,9 +827,88 @@ ULONG XhciPipeFastRevert(PXHCI_PIPE_EP ep)
     if (ep == NULL || !ep->FastPoll) {
         return 0;
     }
-    ep->Interval = ep->SpecInterval;
+    ep->Interval = ep->FallbackInterval;
     ep->FastPoll = 0;
     return 1;
+}
+
+/* The parser's Table 6-12 rule for the Interval (XhciPipeEndpointParams,
+ * xhciPipeSuperSpeed), from one bInterval. */
+ULONG XhciPipeRebaseInterval(PXHCI_PIPE_EP ep, ULONG speed, ULONG bInterval)
+{
+    ULONG clamped;
+    ULONG interval;
+    ULONG b;
+
+    if (ep == NULL || ep->FastPoll || ep->Capped ||
+        (speed != XHCI_PIPE_SPEED_FULL && speed != XHCI_PIPE_SPEED_LOW &&
+         speed != XHCI_PIPE_SPEED_HIGH && speed != XHCI_PIPE_SPEED_SUPER &&
+         speed != XHCI_PIPE_SPEED_SUPER_PLUS)) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    clamped = 0;
+    if (ep->TransferType == XHCI_PIPE_XFER_BULK ||
+        ep->TransferType == XHCI_PIPE_XFER_CONTROL) {
+        interval = 0;
+    } else if (speed == XHCI_PIPE_SPEED_FULL || speed == XHCI_PIPE_SPEED_LOW) {
+        if (ep->TransferType == XHCI_PIPE_XFER_ISOCH) {
+            interval = xhciPipeExponent(bInterval, &clamped) + 2UL;
+        } else {
+            b = bInterval;
+            if (b < 1UL) {
+                b = 1UL;
+                clamped = 1;
+            }
+            interval = xhciPipeLog2(b * 8UL);
+        }
+    } else {
+        interval = xhciPipeExponent(bInterval, &clamped) - 1UL;
+    }
+    ep->BInterval = bInterval;
+    ep->IntervalClamped = clamped;
+    ep->Interval = interval;
+    ep->SpecInterval = interval;
+    ep->FallbackInterval = interval;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
+                               ULONG offset, const UCHAR *caller,
+                               ULONG interfaceNumber, ULONG alternate,
+                               ULONG speed, ULONG lec, PXHCI_PIPE_EP ep)
+{
+    UCHAR copy[XHCI_PIPE_ENDPOINT_BYTES];
+    ULONG answer;
+    ULONG super;
+    ULONG b;
+    ULONG i;
+
+    if (config == NULL || ep == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    super = speed == XHCI_PIPE_SPEED_SUPER ||
+            speed == XHCI_PIPE_SPEED_SUPER_PLUS;
+    if (caller == NULL ||
+        XhciPipeCallerInterval(config, length, offset, caller,
+                               (ULONG)caller[2] | ((ULONG)caller[3] << 8),
+                               interfaceNumber, alternate, &b) !=
+            XHCI_PIPE_OK ||
+        b == (ULONG)config[offset + 6]) {
+        return XhciPipeEndpointParamsAt(config, length, offset, speed, lec,
+                                        ep);
+    }
+    if (!super) {
+        for (i = 0; i < XHCI_PIPE_ENDPOINT_BYTES; i++) {
+            copy[i] = config[offset + i];
+        }
+        copy[6] = (UCHAR)b;
+        return XhciPipeEndpointParams(copy, speed, ep);
+    }
+    answer = XhciPipeEndpointParamsAt(config, length, offset, speed, lec, ep);
+    if (answer != XHCI_PIPE_OK) {
+        return answer;
+    }
+    return XhciPipeRebaseInterval(ep, speed, b);
 }
 
 ULONG XhciPipeFastRetry(ULONG completionCode)
@@ -1380,6 +1501,52 @@ ULONG XhciPipeResetParts(ULONG function)
     default:
         return 0;
     }
+}
+
+ULONG XhciPipeResetSteps(ULONG parts, ULONG state, ULONG owed, ULONG type)
+{
+    ULONG tt;
+    ULONG device;
+
+    /* Behind a TT only a control or bulk endpoint's buffer can hold the
+     * halted transaction (4.6.8 p.116); a control endpoint's halt is ended
+     * by its next SETUP, and an isochronous one has none. */
+    tt = (type == XHCI_PIPE_XFER_CONTROL || type == XHCI_PIPE_XFER_BULK)
+             ? XHCI_PIPE_STEP_CLEAR_TT
+             : 0;
+    device = (type == XHCI_PIPE_XFER_BULK || type == XHCI_PIPE_XFER_INTERRUPT)
+                 ? XHCI_PIPE_STEP_DEVICE
+                 : 0;
+    if ((parts & XHCI_PIPE_RESET_DEVICE) == 0) {
+        return 0;
+    }
+    if (owed && state == XHCI_EP_STATE_STOPPED) {
+        return tt | device | XHCI_PIPE_STEP_SET_DEQUEUE;
+    }
+    if ((parts & XHCI_PIPE_RESET_HOST) == 0) {
+        return type != XHCI_PIPE_XFER_ISOCH ? XHCI_PIPE_STEP_DEVICE_FIRST : 0;
+    }
+    if (state == XHCI_EP_STATE_HALTED) {
+        return XHCI_PIPE_STEP_RESET_EP | tt | device |
+               XHCI_PIPE_STEP_SET_DEQUEUE;
+    }
+    return (type != XHCI_PIPE_XFER_ISOCH ? XHCI_PIPE_STEP_DEVICE_FIRST : 0) |
+           XHCI_PIPE_STEP_RECYCLE;
+}
+
+ULONG XhciPipeClearVerdict(ULONG step, ULONG taken, ULONG stuck)
+{
+    if (taken) {
+        return XHCI_PIPE_CLEAR_GO;
+    }
+    if (stuck) {
+        return XHCI_PIPE_CLEAR_HELD;
+    }
+    /* After Reset Endpoint the host's toggle is restarted and the endpoint
+     * Stopped; resuming over a device that kept its own leaves the
+     * endpoint's behaviour undefined (4.6.8), so the pipe stays paused. */
+    return step == XHCI_PIPE_STEP_DEVICE ? XHCI_PIPE_CLEAR_OWED
+                                         : XHCI_PIPE_CLEAR_RESUME;
 }
 
 ULONG XhciPipeUsbdiSize(ULONG version, ULONG pointerBytes)

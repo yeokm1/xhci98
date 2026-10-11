@@ -57,6 +57,20 @@ rem                  XhciIntelPortSwitch rule, and the route and release over
 rem                  a modelled config space - write order, values, refusals;
 rem                  value 2's bypass, the accepted-write set and the
 rem                  lifetime that releases only it (task 35.5)
+rem   test_poll    - polled event delivery (src\xhci_poll.c, tasks 36.6 to
+rem                  36.8): the three values, the delivery and its reason,
+rem                  the deadlines, the poller's ownership machine and roles,
+rem                  the watcher's verdict, the period and the retirement
+rem   test_msi     - message-signalled interrupts (src\xhci_msi.c and
+rem                  src\xhci_msi86.c, task 36.15, design records 15 and
+rem                  18): the capability read, the requirements list's
+rem                  checked walk, class, strip and no-line rewrite, the
+rem                  filter record, the helper binding, the channel's two
+rem                  halves and the trace record
+rem   test_pirq    - the Intel PCH interrupt routing quirk (src\xhci_pirq.c,
+rem                  task 36.3): the XhciIntelIrqRoute rule, the reviewed
+rem                  pairs, the target PIRQ in APIC and PIC mode, the
+rem                  delivery, and the run over a modelled machine
 rem   test_snap    - the snapshot's HCD region (src\xhci_snap.c, task 35.3):
 rem                  every word of the image located once, in order, and the
 rem                  header's sizes and offsets agreeing with it
@@ -105,6 +119,15 @@ rem                  9-A.2): which EP0 setup packets are worth capturing, the
 rem                  descriptor walk fed at every chunk size, the isochronous
 rem                  bInterval table with its alternate-setting conflicts, and
 rem                  the Table 6-12 conversion in src\xhci_ctx.c
+rem   test_susp    - selective suspend's pure half (src\xhci_susp.c, task
+rem                  36.29, design record 14): the switch and capabilities,
+rem                  D-IRP admission, the device's decision (composite
+rem                  last Dx, D0 during SUSPENDING, epoch-stamped Dx, the
+rem                  latch, START's reopening), the suspend and resume
+rem                  steps and every outcome, root and hub wake evidence,
+rem                  the claim by stamp, WAIT_WAKE, the idle notification's
+rem                  claim and settlement, and exhaustive interleavings of
+rem                  the cancel handshake and the callback phases
 rem   test_log     - the optional log ring (src\xhci_log.c, tasks 11-V.7 and
 rem                  11-V.9): the record shape byte for byte, the switch gating
 rem                  the append itself, the record cap, the wrap and which byte
@@ -117,6 +140,9 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
+rem                  TDs of at most 31 elements cut from one wide
+rem                  mapping of a URB, packet-aligned but the last
 rem   test_uas     - the pure core of xhciuas.sys, the UAS class driver
 rem                  (src\uas\uas_iu.c, task 31-A.2): the COMMAND and TASK
 rem                  MANAGEMENT IU encoders and the SENSE, RESPONSE and READY
@@ -239,13 +265,13 @@ rem produce TRBs and then read completion events back off the ring it wrote
 rem them to, so testing it against a stub ring would test neither half.
 rem It links xhci_tol.c as well, whose soft-retry decision (35-T.2) the
 rem engine's interception asks; so do the two suites below.
-call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
+call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c ..\src\xhci_xpipe.c"
 rem test_iso links the same three files and for the same reason.
 call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_tol.c"
 rem test_td links xhci_pipe.c as well: hcd_io.c fills the isochronous block
 rem with its packet-length and fragment helpers, so the block the engine is
 rem given here is built by the same code that builds it in the driver.
-call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c ..\src\xhci_tol.c"
+call :run test_td "test_td.c ..\src\xhci_xfer.c ..\src\xhci_ring.c ..\src\xhci_pipe.c ..\src\xhci_tol.c ..\src\xhci_xpipe.c"
 rem test_enum links nothing else: the enumeration machine of design record 13
 rem section 5.3 is a pure transition function, driven here with no controller
 rem (task 26-A.9).
@@ -280,9 +306,17 @@ rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).
 call :run test_psw "test_psw.c ..\src\xhci_psw.c"
-rem test_snap links nothing else: the snapshot's HCD region layout - where
-rem each word lies and what the header says - is pure (task 35.3).
-call :run test_snap "test_snap.c ..\src\xhci_snap.c"
+rem test_pirq links nothing else: the value rule, the pair table, the
+rem target PIRQ and the run are pure, driven over a modelled PCH (36.3).
+call :run test_pirq "test_pirq.c ..\src\xhci_pirq.c"
+rem test_msi links nothing else: the capability read, the requirements
+rem list's walk, class and strip, the binding and both halves of the x86
+rem helper's channel are pure (36.15, design records 15 and 18).
+call :run test_msi "test_msi.c ..\src\xhci_msi.c ..\src\xhci_msi86.c"
+rem test_snap links xhci_xstat.c beside it: the snapshot's HCD region layout -
+rem where each word lies and what the header says - is pure (task 35.3), and
+rem so is the arithmetic of the transfer-size readings it carries (36.21).
+call :run test_snap "test_snap.c ..\src\xhci_snap.c ..\src\xhci_xstat.c"
 rem test_tol links xhci_pipe.c for fast polling's composition with the
 rem interval cap; the rest of controller tolerance's decisions, the clock's
 rem arithmetic and the budgets are pure (35-T.9, design record 17).
@@ -295,6 +329,11 @@ rem test_inj links xhci_caps.c for the port map a PED or over-current is
 rem aimed by; the trigger and every register answer of the qemu flavour's
 rem fault injection are pure (35-T.9, design record 17 section 5).
 call :run test_inj "test_inj.c ..\src\xhci_inj.c ..\src\xhci_caps.c"
+rem test_susp links nothing else: selective suspend's decisions - the
+rem device's want, the sequences as steps, wake evidence, the idle
+rem notification's claim and settlement, the callback context's phases -
+rem are pure, and its interleavings are explored over small models (36.29).
+call :run test_susp "test_susp.c ..\src\xhci_susp.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
@@ -312,6 +351,10 @@ call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhc
 rem test_uas links nothing else: the UAS driver's information units, tags,
 rem descriptor walk and ids are pure computations over bytes (task 31-A.2).
 call :run test_uas "test_uas.c ..\src\uas\uas_iu.c"
+rem test_xpipe links nothing else: stage 2's TD planner over a URB's wide
+rem mapping (task 36.24, design record 13 section 11.6) is pure.
+call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
+call :run test_poll "test_poll.c ..\src\xhci_poll.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

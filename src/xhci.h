@@ -476,6 +476,28 @@ XHCI_C_ASSERT(usbcmd_named_bits_are_defined,
  */
 #define XHCI_DNCTRL_DEFINED_MASK 0x0000FFFFUL
 #define XHCI_DNCTRL_RSVDP_MASK   0xFFFF0000UL
+/*
+ * N1, FUNCTION_WAKE's enable (5.4.4, p.366-367: "only under debug conditions
+ * would software write the DNCTRL register with a value other than 0002h").
+ * Selective suspend's stage B writes it, and only with XhciSelectiveSuspend
+ * 1 (design record 14 section 8.7, XHCI_EXTENSION.DnctrlEnables); with the
+ * switch at 0 DNCTRL keeps its reset value 0, as before.
+ */
+#define XHCI_DNCTRL_FUNCTION_WAKE 0x00000002UL
+
+/*
+ * A Device Notification Event TRB (6.4.2.7, p.447-448): the Notification
+ * Type in DW0 7:4, and bits 63:8 of the 64-bit parameter field (DW1:DW0)
+ * hold bytes 05h to 0Bh of the Device Notification TP, so DW0 15:8 is the TP's
+ * byte 05h - a FUNCTION_WAKE TP's Interface,
+ * "the first interface in the function that caused the device to perform a
+ * remote wake" (USB 3.2 8.5.6.1, Table 8-19, p.238; 8.5.6.4, p.239). The
+ * Slot ID is DW3 31:24 (XHCI_TRB_GET_SLOT_ID) and the completion code is
+ * always Success. Type 1 is FUNCTION_WAKE (USB 3.2 Table 8-18).
+ */
+#define XHCI_DN_GET_TYPE(dw0)       ((((ULONG)(dw0)) >> 4) & 0xFUL)
+#define XHCI_DN_GET_INTERFACE(dw0)  ((((ULONG)(dw0)) >> 8) & 0xFFUL)
+#define XHCI_DN_TYPE_FUNCTION_WAKE  1UL
 
 #define XHCI_CRCR_RCS           0x00000001UL
 #define XHCI_CRCR_CS            0x00000002UL    /* RW1S */
@@ -2116,12 +2138,25 @@ ULONG XhciPortSlotType(const XHCI_PORT_MAP *map, ULONG port, ULONG *slotType);
  * the port. A listed entry wins; the default IDs apply when the group
  * advertises no PSI table, and on a USB 3.x group to an unlisted ID 4 to 7
  * (task 35.1, issue 11); any other PSIV absent from a non-empty table decodes
- * as XHCI_SPEED_UNKNOWN. IRQL: any.
+ * as XHCI_SPEED_UNKNOWN. This is the root-port rule. IRQL: any.
  */
 ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
                          ULONG port,
                          ULONG psiv,
                          ULONG *speedClass);
+
+/*
+ * The same decode for a device's own PSIV, with its provenance (issue 18):
+ * `hubFallback` nonzero only for a device XhciPortPsivForHubChild placed by
+ * XHCI_HUB_SPEED_FALLBACK, and then an unlisted 1 or 2 on a USB 2.0 group
+ * with a table decodes as Full or Low Speed. 0 is XhciPortSpeedClass.
+ * IRQL: any.
+ */
+ULONG XhciPortSpeedClassFor(const XHCI_PORT_MAP *map,
+                            ULONG port,
+                            ULONG psiv,
+                            ULONG hubFallback,
+                            ULONG *speedClass);
 
 /*
  * Where a PSIV's meaning on this port comes from (task 35.1): NONE when this
@@ -2135,6 +2170,9 @@ ULONG XhciPortSpeedClass(const XHCI_PORT_MAP *map,
 #define XHCI_PSI_SOURCE_LISTED      1
 #define XHCI_PSI_SOURCE_DEFAULT     2
 #define XHCI_PSI_SOURCE_FALLBACK    3
+/* Issue 18's downstream fallback; only the device-aware decodes (the For
+ * forms) ever name it, never XhciPortSpeedSource. */
+#define XHCI_PSI_SOURCE_HUB_FALLBACK 4
 ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv);
 
 /*
@@ -2155,12 +2193,63 @@ ULONG XhciPortSpeedSource(const XHCI_PORT_MAP *map, ULONG port, ULONG psiv);
  * reason the decode direction has one. Falls back to the default IDs when the
  * group advertises no table at all, and for SuperSpeed to ID 4 when a USB 3.x
  * group's table lists no 5 Gbit/s entry and does not list 4 (task 35.1).
- * IRQL: any.
+ * A USB 2.0 device behind a hub is placed by XhciPortPsivForHubChild, which
+ * asks this first. IRQL: any.
  */
 ULONG XhciPortPsivForSpeed(const XHCI_PORT_MAP *map,
                            ULONG port,
                            ULONG speedClass,
                            ULONG *psiv);
+
+/*
+ * The PSIV for a device behind a hub (issue 18;
+ * docs/contributing/implementation-invariants.md, "Port Speed Decoding",
+ * the downstream exception). XhciPortPsivForSpeed's answer when it has one
+ * (*outcome TABLE). Otherwise, for Full or Low Speed on a USB 2.0 group whose
+ * PSI table (PSIC > 0) has no entry of that speed: the default ID (1 Full, 2
+ * Low; xHCI 1.2c Table 7-13) when the table does not list that ID and
+ * `allowFallback` is nonzero (FALLBACK, XHCI_CAPS_OK); a refusal naming why
+ * when the table lists the ID as something else (CONFLICT) or the switch is
+ * off (DISABLED); NO_MAPPING for every other refusal. *psiv is written only
+ * on XHCI_CAPS_OK. The table is never changed. IRQL: any.
+ */
+#define XHCI_HUB_SPEED_TABLE        0
+#define XHCI_HUB_SPEED_FALLBACK     1
+#define XHCI_HUB_SPEED_DISABLED     2
+#define XHCI_HUB_SPEED_CONFLICT     3
+#define XHCI_HUB_SPEED_NO_MAPPING   4
+ULONG XhciPortPsivForHubChild(const XHCI_PORT_MAP *map,
+                              ULONG port,
+                              ULONG speedClass,
+                              ULONG allowFallback,
+                              ULONG *psiv,
+                              ULONG *outcome);
+
+/*
+ * Issue 18's two log notes, packed here so the host suite checks the
+ * layouts. Every field is masked to its width.
+ *   hub.speed.place  31:24 root port   23:16 parent hub's Slot ID
+ *                    15:8  hub port    7:4 requested class (XHCI_SPEED_*)
+ *                    3:0   outcome (XHCI_HUB_SPEED_*)
+ *   hub.speed.route  31:28 the PSIV given (0 none)   27:20 0
+ *                    19:0  Route String
+ * IRQL: any.
+ */
+ULONG XhciHubSpeedNotePlace(ULONG rootPort, ULONG parentSlot, ULONG hubPort,
+                            ULONG speedClass, ULONG outcome);
+ULONG XhciHubSpeedNoteRoute(ULONG psiv, ULONG route);
+
+/*
+ * The configuration-space offset of a controller's firmware version, for the
+ * one controller this driver knows to publish one there: the VIA VL805
+ * (1106:3483), dword 50h, "XHCI MCU Firmware Version" (the VL805 datasheet,
+ * docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md). 0 for every
+ * other `pciVendorDevice` (Device ID 31:16, Vendor ID 15:0). Read and noted
+ * at start (pci.vl805.fw), never written. IRQL: any.
+ */
+#define XHCI_PCI_ID_VIA_VL805       0x34831106UL
+#define XHCI_PCI_VL805_FW_VERSION   0x50UL
+ULONG XhciPciFirmwareOffset(ULONG pciVendorDevice);
 
 /*
  * The rate a raw Port Speed value means on this port, kept apart from the
@@ -2180,6 +2269,15 @@ ULONG XhciPortRate(const XHCI_PORT_MAP *map,
                    ULONG psiv,
                    ULONG *kbps,
                    ULONG *plus);
+
+/* The same with a device's provenance, as XhciPortSpeedClassFor (issue 18).
+ * IRQL: any. */
+ULONG XhciPortRateFor(const XHCI_PORT_MAP *map,
+                      ULONG port,
+                      ULONG psiv,
+                      ULONG hubFallback,
+                      ULONG *kbps,
+                      ULONG *plus);
 
 /* Whether a port is one of a USB 3.x protocol group (a SuperSpeed link). */
 ULONG XhciPortIsUsb3(const XHCI_PORT_MAP *map, ULONG port);
@@ -3210,6 +3308,40 @@ ULONG XhciRingDequeuePA(const XHCI_RING *ring);
  * flush to the enqueue position needs.
  */
 ULONG XhciRingDequeueCycle(const XHCI_RING *ring);
+
+/*
+ * 36.54 (design record 17 section 4.12.3): an EMPTY ring (dequeue at the
+ * enqueue) started again at its base, in place, as XhciRingInit leaves a
+ * new one - every TRB zeroed, the Link TRB rewritten with Toggle Cycle,
+ * enqueue and dequeue 0, producer cycle 1 - for a caller that is about to
+ * give its endpoint a new context (a Configure Endpoint after a Reset
+ * Device, or a Drop and Add), so no position on the ring is owed to the
+ * controller. A ring still holding TRBs is refused (XHCI_RING_NOT_COMPLETE)
+ * and left as it was. IRQL: any; the caller owns the ring.
+ */
+ULONG XhciRingRestart(PXHCI_RING ring);
+
+/*
+ * 36.54 (design record 17 section 4.12.4): the Set TR Dequeue a stream's
+ * ring owes after a Stop or Reset Endpoint on QEMU's xHCI, which re-reads
+ * every Stream Context with its consumer cycle forced to 1 and ignores the
+ * DCS it holds. `contextDw0` is the stream's Stream Context dword 0 as the
+ * controller left it: QEMU's own restart point. Inside the TDs the ring
+ * still holds (from its software dequeue to its enqueue) that address is
+ * kept, with the cycle the producer wrote there - the TRB's own cycle bit,
+ * the producer cycle at the enqueue; an address on the Link TRB is first
+ * taken as the base, the same position named as a TD's first TRB, and then
+ * judged as any other; anywhere else - behind the software dequeue, where
+ * every TRB's completion
+ * was reported and retired, past the enqueue, where none was written, or
+ * off the ring - it is replaced by the software dequeue with its DCS
+ * (XhciRingDequeueCycle). The result in *dequeuePA and *dcs. Returns 1 when
+ * the command is owed - the DCS is 0, which QEMU's forced 1 gets wrong, or
+ * the address differs from the context's - and 0 when the forced 1 at
+ * QEMU's own address is right. Pure.
+ */
+ULONG XhciRingResyncOwed(const XHCI_RING *ring, ULONG contextDw0,
+                         PULONG dequeuePA, PULONG dcs);
 
 ULONG XhciEventRingInit(PXHCI_EVENT_RING ring,
                         volatile XHCI_TRB *base,
@@ -8326,6 +8458,42 @@ typedef struct _XHCI_EXTENSION {
      * delete this word then, and put it back on the next single addition.
      * On x86 it costs 4 bytes and changes nothing else.
      */
+    /*
+     * Event delivery (design record 15, roadmap-hcd.md 36.7), appended after
+     * Tol so no offset the harness reads moves; six ULONGs, so the parity
+     * TrailingPad keeps is unchanged. `EventDelivery` is the start's (or the
+     * dead-line move's) XHCI_POLL_DELIVERY_*, copied from the controller
+     * after the start zeroes the extension. `PollService` is the poller's
+     * admission to the hardware and `PollServiceGen` advances at every
+     * grant and revocation (record 15 section 5.3), both under the
+     * controller lock. `LineMoved` and `LineRetired` belong to the move
+     * (section 4.2): the ISR reads them at DIRQL, and they are published
+     * inside KeSynchronizeExecution or under the controller lock before any
+     * interrupt can reach the ISR. `LineRetireState` is the counter block's
+     * retirement state (XHCI_POLL_RETIRED_*).
+     */
+    ULONG EventDelivery;
+    ULONG PollService;
+    ULONG PollServiceGen;
+    volatile ULONG LineMoved;
+    volatile ULONG LineRetired;
+    ULONG LineRetireState;
+
+    /*
+     * Selective suspend's stage B (design record 14 section 8.7; roadmap-hcd
+     * 36.38): the Device Notification types DNCTRL enables, 0 unless
+     * XhciSelectiveSuspend is 1, when the controller's start sets it to
+     * XHCI_DNCTRL_FUNCTION_WAKE before XhciInitController. The init path
+     * writes it after the HCRST only when it is not 0 (0 is the reset value,
+     * so the switch at 0 adds no write) and the restore path writes it in
+     * place of its 0. DnctrlReadback: DNCTRL's defined half as read after
+     * that write, or after the HCRST when nothing was written, so a dump
+     * shows what the controller holds. Appended after the delivery words,
+     * two ULONGs, so the parity TrailingPad keeps is unchanged.
+     */
+    ULONG DnctrlEnables;
+    ULONG DnctrlReadback;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -8571,7 +8739,109 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_LOCS  17  /* XHCI_TOL_HUB_LOCS             */
 #define XHCI_SNAPSHOT_HCD_TOL_HUB_PORTS 18  /* HubLoc entries per hub object */
 #define XHCI_SNAPSHOT_HCD_TERMINAL      19  /* XHCI_TOL_TERMINAL_*           */
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    20UL
+/*
+ * Appended by task 36.3, version unchanged: the interrupt routing quirk's
+ * record (XHCI_PIRQ_STATE, xhci_pirq.h), which lives in the HCD's
+ * controller object rather than the extension, copied whole - a count of
+ * its words, then the words in the structure's order, all ULONGs. A header
+ * shorter than this is an earlier driver's, which has no quirk.
+ */
+#define XHCI_SNAPSHOT_HCD_PIRQ_WORDS    20  /* XHCI_PIRQ_STATE, in words     */
+#define XHCI_SNAPSHOT_HCD_PIRQ_AT       21  /* its first word                */
+#define XHCI_SNAPSHOT_HCD_PIRQ_COUNT    27UL
+/*
+ * Appended by task 36.21, version unchanged: the transfer-size readings.
+ * Three counts, then the controller's XHCI_XSTAT (xhci_xstat.h) whole,
+ * then the class driver records the bus holds (HCD_UAS_TELE, hcd.h): per
+ * record the Slot ID it last came from, the sends taken since its device
+ * took it, the time-stamp count at the last one (a reader ages it against
+ * XHCI_XSTAT's TscNow), its state - none has come, its device live, or
+ * departed - and the record itself (xhci98_xfer.h, XHCI98_TELEMETRY), all
+ * of which read 0 until a send arrives. A header shorter than this is an
+ * earlier driver's, which measured none of it.
+ */
+#define XHCI_SNAPSHOT_HCD_XSTAT_WORDS   48  /* XHCI_XSTAT, in words          */
+#define XHCI_SNAPSHOT_HCD_TELE_RECORDS  49  /* class driver records          */
+#define XHCI_SNAPSHOT_HCD_TELE_WORDS    50  /* one record, in words          */
+#define XHCI_SNAPSHOT_HCD_XSTAT_AT      51  /* XHCI_XSTAT's first word       */
+#define XHCI_SNAPSHOT_HCD_XSTAT_COUNT   59UL
+#define XHCI_SNAPSHOT_HCD_TELE_AT       110 /* the first record's first word */
+#define XHCI_SNAPSHOT_HCD_TELE_COUNT    2UL
+#define XHCI_SNAPSHOT_HCD_TELE_SLOT     0   /* a record's words              */
+#define XHCI_SNAPSHOT_HCD_TELE_TAKEN    1
+#define XHCI_SNAPSHOT_HCD_TELE_TSC_LO   2
+#define XHCI_SNAPSHOT_HCD_TELE_TSC_HI   3
+#define XHCI_SNAPSHOT_HCD_TELE_STATE    4   /* XHCI_SNAPSHOT_HCD_TELE_S_*    */
+#define XHCI_SNAPSHOT_HCD_TELE_BODY     5   /* XHCI98_TELEMETRY's words      */
+#define XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS 41UL
+#define XHCI_SNAPSHOT_HCD_TELE_RECORD_WORDS                                  \
+    (XHCI_SNAPSHOT_HCD_TELE_BODY + XHCI_SNAPSHOT_HCD_TELE_BODY_WORDS)
+#define XHCI_SNAPSHOT_HCD_TELE_END      202 /* the records' end            */
+/*
+ * Appended by task 36.9, version unchanged: where the event delivery's six
+ * extension words lie (XHCI_EXTENSION.EventDelivery to LineRetireState,
+ * design record 15 section 9), in bytes from the extension's start, and
+ * how many there are, so XHCISNAP names them from the .BIN's own bytes as
+ * it does the tolerance state. A header shorter than this is an earlier
+ * driver's, which places no extension words; whether a driver has the
+ * polling counters is the counter block's size to say (63 words or 96).
+ */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_AT   202 /* XHCI_EXTENSION.EventDelivery  */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_WORDS 203 /* its words, in order          */
+#define XHCI_SNAPSHOT_HCD_DELIVERY_COUNT 6UL
+/*
+ * Appended by task 36.24, version unchanged, after 36.9's pair: stage 2's
+ * counters (design record 13 section 11.6, point 7; xhci_xpipe.h,
+ * XHCI_XPIPE_STATS) - their count, then the words in the structure's
+ * order. A header shorter than this is an earlier driver's, which has no
+ * stage 2.
+ */
+#define XHCI_SNAPSHOT_HCD_XPIPE_WORDS   204 /* XHCI_XPIPE_STATS, in words    */
+#define XHCI_SNAPSHOT_HCD_XPIPE_AT      205 /* its first word                */
+#define XHCI_SNAPSHOT_HCD_XPIPE_COUNT   32UL /* 24 to 36.24, 36.25's eight after */
+/*
+ * Appended by task 36.38, version unchanged, after 36.24's stage 2
+ * counters: selective suspend's stage B
+ * (design record 14 section 8.10). DNCTRL's defined half as the door reads
+ * it when the window is cut - only with XhciSelectiveSuspend 1, so the
+ * switch at 0 adds no register access: XHCI_SNAPSHOT_HCD_NOT_READ then -
+ * the extension's DnctrlEnables and DnctrlReadback, then up to eight
+ * device records, the first eight devices in Slot ID order, each the
+ * words below, all 0 past the last device. A header shorter than this is
+ * an earlier driver's, which enabled no notification.
+ */
+#define XHCI_SNAPSHOT_HCD_DNCTRL_LIVE   237 /* DNCTRL 15:0, or NOT_READ      */
+#define XHCI_SNAPSHOT_HCD_DNCTRL_ENABLES 238 /* XHCI_EXTENSION.DnctrlEnables */
+#define XHCI_SNAPSHOT_HCD_DNCTRL_READBACK 239 /* ...DnctrlReadback           */
+#define XHCI_SNAPSHOT_HCD_SUSP_RECORDS  240 /* device records               */
+#define XHCI_SNAPSHOT_HCD_SUSP_WORDS    241 /* one record, in words         */
+#define XHCI_SNAPSHOT_HCD_SUSP_AT       242 /* the first record's first word */
+#define XHCI_SNAPSHOT_HCD_SUSP_COUNT    8UL
+#define XHCI_SNAPSHOT_HCD_SUSP_SLOT     0   /* Slot ID, 0: no record         */
+#define XHCI_SNAPSHOT_HCD_SUSP_LINK     1   /* XHCI_SNAPSHOT_HCD_SL_*       */
+#define XHCI_SNAPSHOT_HCD_SUSP_FIRSTS   2   /* dev->FwFirsts                 */
+#define XHCI_SNAPSHOT_HCD_SUSP_CAPABLE  3   /* dev->FwCapable                */
+#define XHCI_SNAPSHOT_HCD_SUSP_PENDING  4   /* the latch, FwPending          */
+#define XHCI_SNAPSHOT_HCD_SUSP_FAR      5   /* FwPendingFar                  */
+#define XHCI_SNAPSHOT_HCD_SUSP_ARMED    6   /* the union of its PDOs' FwArmed */
+#define XHCI_SNAPSHOT_HCD_SUSP_LAST     7   /* XHCI_SNAPSHOT_HCD_SL_LAST_*  */
+#define XHCI_SNAPSHOT_HCD_SUSP_RECORD_WORDS 8UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    306UL /* the records end the header */
+#define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
+
+/* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
+ * 8, the window in 9, Armed in 10, Root in 11, the running step
+ * (XHCI_SUSP_STEP_*, 0 none) in 23:16. Its last word: the last sequence's
+ * outcome (XHCI_SUSP_OUT_*) in 7:0, its reason (XHCI_SUSP_WHY_*) in 15:8,
+ * its kind (XHCI_SUSP_RUN_*) in 23:16. */
+#define XHCI_SNAPSHOT_HCD_SL_SS         0x00000100UL
+#define XHCI_SNAPSHOT_HCD_SL_WINDOW     0x00000200UL
+#define XHCI_SNAPSHOT_HCD_SL_ARMED      0x00000400UL
+#define XHCI_SNAPSHOT_HCD_SL_ROOT       0x00000800UL
+
+#define XHCI_SNAPSHOT_HCD_TELE_S_NONE     0UL /* no send has come          */
+#define XHCI_SNAPSHOT_HCD_TELE_S_LIVE     1UL /* its device is present     */
+#define XHCI_SNAPSHOT_HCD_TELE_S_DEPARTED 2UL /* its device left: history  */
 
 /* One root port's record. The machine's fields are XHCI_ENUM_PORT's; the
  * speed ID is the one the port's last reset read (0 none), decoded on its
@@ -8599,7 +8869,9 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 63UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 173UL
+/* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
+#define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 
 /* Where a word of the image lies (XhciSnapHcdLocate). */
 #define XHCI_SNAPSHOT_HCD_IN_HEAD       0UL

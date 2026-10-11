@@ -6,7 +6,9 @@
  * See docs/contributing/design/01-hardware-qualification-tool.md.
  *
  * Exit codes: 0 = all controllers qualified, 1 = at least one not
- * qualified (or probe-only), 2 = no selected controller / usage error.
+ * qualified (or probe-only), 2 = no selected controller / usage error,
+ * 3 = none not qualified and at least one QUALIFIED WITH CAVEATS (no
+ * working interrupt: the driver polls it - task 36.10).
  */
 
 #include <stdio.h>
@@ -16,6 +18,8 @@
 static PCIINFO pcis[MAX_CONTROLLERS];
 static CTRL ctrls[MAX_CONTROLLERS];
 static LEGACY_CTRL legacy_ctrls[MAX_CONTROLLERS];
+/* Task 36.48: the machine, named in the header (never a serial or UUID). */
+static SYSINFO sysinfo;
 
 /*
  * Task 11-V.8. Running XHCIQUAL with no arguments used to start the **most
@@ -41,6 +45,8 @@ static int opt_irq_selftest = 0;
 static int opt_set_intel   = 0;
 static int opt_serial      = 0;
 static int opt_no_devid    = 0;
+/* Task 36.48 (owner): skip the system description's probing entirely. */
+static int opt_no_sysinfo  = 0;
 static int opt_no_page     = 0;
 static int opt_help        = 0;
 static const char *opt_done_flag = 0;
@@ -48,6 +54,8 @@ static int opt_wait_secs   = 15;
 static int opt_family_mask = HC_MASK_ALL;
 static int opt_family_seen = 0;
 static const char *opt_log_name = 0;
+/* Task 36.11: the GSI to compare the Intel PCH routing against, -1 none. */
+static long opt_gsi         = -1;
 
 static int is_family_word(const char *name)
 {
@@ -92,7 +100,10 @@ static void prescan_done_flag(int argc, char **argv)
         const char *a = argv[i];
         while (*a == '-' || *a == '/')
             a++;
-        if (strcmp(a, "scan") == 0 || strcmp(a, "controller") == 0) {
+        /* --gsi takes the next token whatever it is, as parse_args does, so
+         * an operand spelled like an option is never read as one here. */
+        if (strcmp(a, "scan") == 0 || strcmp(a, "controller") == 0 ||
+            strcmp(a, "gsi") == 0) {
             if (i + 1 < argc)
                 i++;
         } else if (strcmp(a, "log") == 0) {
@@ -150,10 +161,13 @@ static void print_usage(void)
            "  --set-intel-ports  xHCI C7: try USB2 routing; verify readback\n"
            "  --no-wait          do not wait for a device plug in C6\n"
            "  --no-devid         skip xHCI C8 device identification\n"
+           "  --no-sysinfo       do not read SMBIOS, CPUID, memory or DOS\n"
            "  --no-page          do not pause the screen every page\n"
            "  --serial           mirror output to COM1 115200 8N1\n"
            "  --log [filename]   save output (default: XHCIQUAL.LOG)\n"
            "  --done-flag FILE   create FILE only on normal completion\n"
+           "  --gsi N            with --quick or --probe-only: compare the\n"
+           "                     Intel PCH routing against GSI/IRQ N\n"
            "  --help, -h, /?     detailed standalone help\n",
            TOOL_VERSION);
 }
@@ -245,20 +259,54 @@ static void print_help(void)
             "                    reported as success or failure)\n"
             "  --no-wait         do not wait 15 seconds for a C6 plug\n"
             "  --no-devid        skip informational xHCI C8 identification\n"
+            "  --no-sysinfo      do not read the system description (SMBIOS,\n"
+            "                    CPUID, E820, DOS) - for a machine where that\n"
+            "                    probing itself misbehaves\n"
             "  --no-page         disable screen pagination\n"
             "  --serial          mirror output to COM1 115200 8N1\n"
             "  --log [FILE]      save report; default XHCIQUAL.LOG\n"
             "  --done-flag FILE  delete FILE at start, recreate it only if\n"
             "                    the run finishes normally (crash-safe check\n"
             "                    for batch wrappers; no FIND.EXE needed)\n"
+            "  --gsi N           with --quick or --probe-only only: compare\n"
+            "                    the xHCI's Intel PCH interrupt routing\n"
+            "                    (D20IR, PIRQx_ROUT) against N, the GSI or\n"
+            "                    IRQ Windows reports for the controller\n"
+            "                    (16-23 an APIC input; below 16 a PIC IRQ,\n"
+            "                    compared with the routing DOS found only).\n"
+            "                    The routing itself is reported on every\n"
+            "                    run, read only, on the reviewed Intel\n"
+            "                    7/8/9-series and C610 xHCIs alone\n"
             "  --help, -h, /?    show this help and return success\n\n");
     qprintf("OUTPUT AND EXIT CODES\n"
             "  FACT lines describe controllers; xHCI DEV lines describe USB.\n"
             "  0 = active criteria met (OHCI may have documented C4 WARN)\n"
             "  1 = not qualified, or probe-only run\n"
-            "  2 = usage error, or no selected controller found\n\n"
+            "  2 = usage error, or no selected controller found\n"
+            "  3 = QUALIFIED WITH CAVEATS: no working interrupt, so\n"
+            "      xhci98.sys polls it (or an MSI-capable OS)\n\n"
             "Keep all LOG files, BIOS settings, device model/speed, and a\n"
             "photo plus last printed line for any fault or freeze.\n");
+}
+
+/* A decimal GSI, 0 to 255; anything else is a usage error. */
+static int parse_gsi(const char *s)
+{
+    long v;
+
+    if (s == 0 || *s == '\0')
+        return 0;
+    v = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s - '0');
+        if (v > 255)
+            return 0;
+        s++;
+    }
+    if (*s != '\0')
+        return 0;
+    opt_gsi = v;
+    return 1;
 }
 
 static int parse_args(int argc, char **argv)
@@ -333,8 +381,20 @@ static int parse_args(int argc, char **argv)
             opt_done_flag = argv[++i];
         } else if (strncmp(a, "done-flag=", 10) == 0 && a[10] != '\0') {
             opt_done_flag = a + 10;
+        } else if (strcmp(a, "gsi") == 0) {
+            if (i + 1 >= argc || !parse_gsi(argv[++i])) {
+                print_usage();
+                return 0;
+            }
+        } else if (strncmp(a, "gsi=", 4) == 0) {
+            if (!parse_gsi(a + 4)) {
+                print_usage();
+                return 0;
+            }
         } else if (strcmp(a, "no-devid") == 0) {
             opt_no_devid = 1;
+        } else if (strcmp(a, "no-sysinfo") == 0) {
+            opt_no_sysinfo = 1;
         } else if (strcmp(a, "no-page") == 0) {
             opt_no_page = 1;
         } else if (strcmp(a, "no-wait") == 0) {
@@ -358,6 +418,14 @@ static int parse_args(int argc, char **argv)
      * other (the 2026-09-17 audit's C5). */
     if (opt_quick && (opt_probe_only || opt_poll_only || opt_irq_selftest ||
                       opt_set_intel)) {
+        print_usage();
+        return 0;
+    }
+    /* Task 36.11: the comparison is read-only work, and naming it must
+     * never be what starts an active run - `XHCIQUAL --gsi 21` alone would
+     * otherwise take the full run, since only no arguments at all means
+     * the quick scan. So it is refused unless a read-only mode is named. */
+    if (opt_gsi >= 0 && !opt_quick && !opt_probe_only) {
         print_usage();
         return 0;
     }
@@ -400,6 +468,8 @@ static const char *quick_word(int outcome)
         return "DISQUALIFIED";
     if (outcome == QUICK_CANNOT_SAY)
         return "CANNOT SAY";
+    if (outcome == QUICK_CAVEATS)
+        return "LOOKS QUALIFIED WITH CAVEATS";
     return "LOOKS QUALIFIED";
 }
 
@@ -420,6 +490,14 @@ static int run_quick_scan(void)
     int worst;
 
     qprintf("XHCIQUAL %s - quick scan (read-only)\n", TOOL_VERSION);
+    /* Task 36.48: two lines on the screen, the full block in the log and
+     * on the serial line. Reads only, like everything in this pass. */
+    if (opt_no_sysinfo)
+        sysinfo_skip(&sysinfo);
+    else
+        sysinfo_probe(&sysinfo);
+    report_sysinfo_short(&sysinfo, qconprintf);
+    report_sysinfo(&sysinfo, qlogprintf);
 
     n = pci_scan_usb(pcis, MAX_CONTROLLERS, HC_MASK_ALL);
     if (n == 0) {
@@ -497,6 +575,7 @@ static int run_quick_scan(void)
             memset(c, 0, sizeof(*c));
             c->pci = *p;
             c->quirk = quirk_find(p->vid, p->did);
+            route_read(p, &c->route);
             if (xhci_map(c)) {
                 xhci_read_caps(c);
                 mmio_ok = c->mmio_ok;
@@ -534,7 +613,7 @@ static int run_quick_scan(void)
         }
 
         outcome = quick_classify(p, mmio_ok, usb2_ports, 0);
-        if (outcome > worst)
+        if (quick_rank(outcome) > quick_rank(worst))
             worst = outcome;
 
         {
@@ -569,6 +648,14 @@ static int run_quick_scan(void)
         if (p->hctype == HC_XHCI && mmio_ok) {
             report_protocols(&ctrls[0], qlogprintf);
             report_xcap_dump(&ctrls[0], qlogprintf);
+        }
+        /* Task 36.11: the routing block in the log and on the serial line;
+         * the screen gets one phrase, and only when a GSI was asked about
+         * and the controller's own line is on it. */
+        if (p->hctype == HC_XHCI) {
+            report_route(&ctrls[0].route, opt_gsi, qlogprintf);
+            if (opt_gsi >= 0 && hidden == 0)
+                qprintf("     %s\n", route_summary(&ctrls[0].route, opt_gsi));
         }
     }
 
@@ -605,6 +692,13 @@ static int run_quick_scan(void)
     } else if (worst == QUICK_CANNOT_SAY) {
         qprintf("Verdict: CANNOT SAY - a state this read-only pass may not "
                 "change is in the way.\n");
+    } else if (worst == QUICK_CAVEATS) {
+        /* Task 36.10: a controller with no line interrupt is not refused;
+         * the driver polls it. The active run says the rest. */
+        qprintf("Verdict: LOOKS QUALIFIED WITH CAVEATS, subject to the "
+                "active tests (C2/C3/C4):\n"
+                "  no line interrupt, so xhci98.sys polls (or an "
+                "MSI-capable OS).\n");
     } else {
         qprintf("Verdict: LOOKS QUALIFIED, subject to the active tests "
                 "(C2/C3/C4), which this\n"
@@ -644,7 +738,7 @@ static void enable_pci(PCIINFO *p, int active)
 
 int main(int argc, char **argv)
 {
-    int n, i, nx, nl, all_qualified, active;
+    int n, i, nx, nl, all_qualified, any_caveats, active;
     const char *mode;
 
     prescan_done_flag(argc, argv);
@@ -698,6 +792,13 @@ int main(int argc, char **argv)
 
     qprintf("XHCIQUAL %s (build %s) - USB host controller qualification\n",
             TOOL_VERSION, TOOL_BUILD);
+    /* Task 36.48: which machine this report came from. Reads only (the
+     * BIOS area, CPUID, E820, DOS), before any controller is touched. */
+    if (opt_no_sysinfo)
+        sysinfo_skip(&sysinfo);
+    else
+        sysinfo_probe(&sysinfo);
+    report_sysinfo(&sysinfo, qprintf);
     if (!active)
         mode = "PROBE-ONLY (read-only)";
     else if (opt_poll_only)
@@ -721,6 +822,7 @@ int main(int argc, char **argv)
     qprintf("Found %d selected USB host controller(s).\n", n);
 
     all_qualified = 1;
+    any_caveats = 0;
     nx = 0;
     nl = 0;
     for (i = 0; i < n; i++) {
@@ -738,6 +840,9 @@ int main(int argc, char **argv)
             }
             pci_read_static(&c->pci);
             c->quirk = quirk_find(c->pci.vid, c->pci.did);
+            /* Before anything active: reads only (task 36.11). */
+            route_read(&c->pci, &c->route);
+            c->route_gsi = opt_gsi;
             enable_pci(&c->pci, active);
             if (!xhci_map(c)) {
                 qprintf("\n%s controller %04X:%04X at %02X:%02X.%X: "
@@ -783,7 +888,7 @@ int main(int argc, char **argv)
                         report_flush();
                         if (opt_irq_selftest) {
                             qprintf("  C6 ports:   SKIP  %s\n", c->port_note);
-                        } else if (opt_poll_only || c->v_irq == V_PASS) {
+                        } else if (c4_lets_ports(c->v_irq, opt_poll_only)) {
                             qual_intel_ports(c, opt_set_intel);
                             qual_ports(c, opt_wait_secs);
                             qprintf("  C6 ports:   %-4s  %s\n",
@@ -825,8 +930,14 @@ int main(int argc, char **argv)
                             c->pci.cmd_orig);
             }
             report_controller(c, active && c->mmio_ok);
-            if (!final_verdict(c, active))
-                all_qualified = 0;
+            {
+                int v = final_verdict(c, active);
+
+                if (v == VERDICT_NOT)
+                    all_qualified = 0;
+                else if (v == VERDICT_CAVEATS)
+                    any_caveats = 1;
+            }
         } else {
             LEGACY_CTRL *c;
 
@@ -874,5 +985,5 @@ int main(int argc, char **argv)
         qprintf("\nDone.\n");
     report_close();
 
-    return finish_normally(all_qualified ? 0 : 1);
+    return finish_normally(run_exit_code(!all_qualified, any_caveats));
 }

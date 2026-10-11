@@ -79,10 +79,21 @@ What it checks, grouped by the failure each rule prevents:
            XhciFirstEnumPortMs at 2000, each the driver's own default, written
            so every value the driver reads is where a user looks for it
            (owner, 2026-10-05). Task 34.3 made it eight:
-           XhciIntelPortSwitch at 1, the Intel port switchover's opt-out
-           (owner, 2026-10-05). Task 35-T.7 made it eleven: XhciTolerance
+           XhciIntelPortSwitch, the Intel port switchover's switch, at 1
+           (owner, 2026-10-05) and at 0 since task 36.42 (owner,
+           2026-10-09). Task 35-T.7 made it eleven: XhciTolerance
            at 1, XhciIntervalCap at 1 and XhciAvgTrbEsit at 0 (design
-           record 17 sections 4.7 and 4.11).
+           record 17 sections 4.7 and 4.11). Task 36.3 made it twelve:
+           XhciIntelIrqRoute at 1, the Intel interrupt routing quirk
+           (owner, 2026-10-08). Task 36.22 made it thirteen:
+           XhciMaxTransferKB at 1024, the UAS command size (owner,
+           2026-10-09). Task 36.6 made it sixteen:
+           XhciInterruptMode at 0, XhciPollIdleMs at 50 and
+           XhciPollActiveMs at 1 (design record 15 section 3). Task 36.51
+           made it nineteen: XhciWideMap at 0, XhciSelectiveSuspend at 0 and
+           XhciUsb2HubSpeedFallback at 1, the three a user had set by hand
+           until the owner's decision of 2026-10-11 that every value the
+           driver reads is written with its own default.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -254,10 +265,17 @@ $ErrorActionPreference = "Stop"
 #                          record 13 section 10.11): a model with one is a
 #                          HUB install, which copies nothing (HCD-HUBCOPY),
 #                          and the controller-only rules do not apply to it.
+#   CompositeId            the hardware id of the composite-parent devnode the
+#                          HCD presents for every device it splits, since
+#                          task 36.43 (design record 13 section 10.12): a
+#                          model with it is a COMPOSITE install, which copies
+#                          nothing either (HCD-HUBCOPY) and registers no
+#                          property page (HCD-COMPPAGE).
 #
 $prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";
            Binary = "xhci98.sys"; RootHubId = "XHCI98\ROOT_HUB";
-           HubIds = @("XHCI98\HUB", "XHCI98\HUB30") }
+           HubIds = @("XHCI98\HUB", "XHCI98\HUB30");
+           CompositeId = "XHCI98\COMPOSITE" }
 
 $script:failures = @()
 $script:warnings = @()
@@ -777,6 +795,7 @@ foreach ($ms in $modelSections) {
         $role = "controller"
         if ($prod.RootHubId -ne "" -and $fields[1] -ieq $prod.RootHubId) { $role = "roothub" }
         foreach ($hid in $prod.HubIds) { if ($fields[1] -ieq $hid) { $role = "hub" } }
+        if ($fields[1] -ieq $prod.CompositeId) { $role = "composite" }
         [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line; Decoration = $ms.Decoration; Role = $role; Ids = @($fields | Select-Object -Skip 1) })
     }
 }
@@ -850,6 +869,37 @@ foreach ($m in $models) {
 }
 
 #
+# ---- HCD-COMP: composite devices as devnodes (task 36.43) ---------------
+#
+# Since task 36.43 the bus presents every composite device it splits as a
+# devnode of its own under the project-owned XHCI98\COMPOSITE, bound to
+# xhci98.sys again, with the function PDOs beneath it (design record 13
+# section 10.12). A models section without that model leaves every composite
+# device a devnode with no driver on its path - and its functions, which only
+# a started parent reports, absent. Every id on the line is the project's
+# own, and no line anywhere may name USB\COMPOSITE: that id brings the OS's
+# own composite parent (usbccgp.sys, or Windows 98's usbhub.sys), which the
+# bus replaces, and a model for it would compete for every other stack's
+# composite devices on the machine.
+#
+foreach ($ms in $modelSections) {
+    $here = @($models | Where-Object { $_.Decoration -eq $ms.Decoration })
+    if (@($here | Where-Object { $_.Role -eq "composite" }).Count -eq 0) {
+        Add-Failure "HCD-COMP" ("models section [{0}] has no composite model under '{1}'. The HCD presents each composite device it splits as a devnode under that id and binds it to itself through this INF; without the model that devnode has no driver on this path and its functions never appear." -f $ms.Section, $prod.CompositeId)
+    }
+}
+foreach ($m in $models) {
+    foreach ($id in $m.Ids) {
+        if ($id -match '^USB\\COMPOSITE$') {
+            Add-Failure "HCD-COMP" ("models line {0} matches '{1}', which brings the OS composite parent the HCD replaces. The HCD's composite parent is '{2}'." -f $m.Line, $id, $prod.CompositeId)
+        }
+        if ($m.Role -eq "composite" -and $id -notmatch '^XHCI98\\') {
+            Add-Failure "HCD-COMP" ("composite models line {0} carries '{1}'. A composite parent's ids are the project's own, under XHCI98\, so no OS or vendor INF can match the devnode." -f $m.Line, $id)
+        }
+    }
+}
+
+#
 # ---- HCD-HUBCOPY: a hub install copies nothing (task 33.4) --------------
 #
 # A hub devnode exists only under a running xhci98.sys, so the binary is on
@@ -860,9 +910,10 @@ foreach ($m in $models) {
 # install section, on every path, has no CopyFiles at all, and the loader
 # value or service binary it writes names the driver the controller's own
 # install delivers - which is why PATH-W98's and PATH-NT's "its own
-# CopyFiles delivers it" checks stand aside for this role.
+# CopyFiles delivers it" checks stand aside for this role. A composite
+# parent's install (task 36.43) is held the same way, for the same reason.
 #
-foreach ($m in @($models | Where-Object { $_.Role -eq "hub" })) {
+foreach ($m in @($models | Where-Object { $_.Role -eq "hub" -or $_.Role -eq "composite" })) {
     foreach ($ap in @(Get-ModelPaths $m)) {
         $install = $m.Section + $ap.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -875,12 +926,12 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "hub" })) {
         foreach ($hs in $hubSections) {
             $hubCopy = @(Get-Directive $inf $hs "CopyFiles")
             if ($hubCopy.Count -gt 0) {
-                Add-Failure "HCD-HUBCOPY" ("the {0} hub install's [{1}] has CopyFiles={2}. A hub section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs a hub in later for the original media." -f $ap.Os, $hs, ($hubCopy -join ','), $prod.Binary)
+                Add-Failure "HCD-HUBCOPY" ("the {0} {4} install's [{1}] has CopyFiles={2}. A {4} section copies nothing: its devnode exists only under a running {3}, and a copy would ask a user who plugs the device in later for the original media." -f $ap.Os, $hs, ($hubCopy -join ','), $prod.Binary, $m.Role)
             }
             foreach ($ind in @("Include", "Needs")) {
                 $hubInd = @(Get-Directive $inf $hs $ind)
                 if ($hubInd.Count -gt 0) {
-                    Add-Failure "HCD-HUBCOPY" ("the {0} hub install's [{1}] has {2}={3}. A hub install is this INF's sections alone, so this gate can hold it to copying nothing." -f $ap.Os, $hs, $ind, ($hubInd -join ','))
+                    Add-Failure "HCD-HUBCOPY" ("the {0} {4} install's [{1}] has {2}={3}. A {4} install is this INF's sections alone, so this gate can hold it to copying nothing." -f $ap.Os, $hs, $ind, ($hubInd -join ','), $m.Role)
                 }
             }
         }
@@ -971,11 +1022,12 @@ foreach ($m in $models) {
                     }
                 }
                 foreach ($d in $ntmpFiles) {
-                    if ($m.Role -eq "hub") {
-                        # HCD-HUBCOPY: a hub copies nothing and loads the
-                        # driver the controller's install delivered.
+                    if ($m.Role -eq "hub" -or $m.Role -eq "composite") {
+                        # HCD-HUBCOPY: a hub (or a composite parent, task
+                        # 36.43) copies nothing and loads the driver the
+                        # controller's install delivered.
                         if ($d -ine $prod.Binary) {
-                            Add-Failure "HCD-HUBCOPY" ("[{0}] sets NTMPDriver to '{1}'. A hub section copies nothing, so it may name only {2}, which the controller's install delivers." -f $base, $d, $prod.Binary)
+                            Add-Failure "HCD-HUBCOPY" ("[{0}] sets NTMPDriver to '{1}'. A {3} section copies nothing, so it may name only {2}, which the controller's install delivers." -f $base, $d, $prod.Binary, $m.Role)
                         }
                         continue
                     }
@@ -1052,7 +1104,11 @@ foreach ($m in $models) {
             Add-Failure "PATH-NT" ("[{0}] has no [{1}]. On Win2000 the device installs with no service: Device Manager shows it present and the driver never loads." -f $nt, $svcSection)
             continue
         }
-        $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService")
+        # The x86 MSI helper's own AddService on the Vista and 7 controller
+        # section is MSIHLP-SVC's (below), not this rule's: the function
+        # driver's line is still exactly one.
+        $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService" | Where-Object {
+            (($_.Value -split ',')[0].Trim()) -ine "xhcimsi" })
         if ($addSvc.Count -ne 1) {
             Add-Failure "PATH-NT" ("[{0}] must contain exactly one AddService; found {1}." -f $svcSection, $addSvc.Count)
             continue
@@ -1090,11 +1146,12 @@ foreach ($m in $models) {
                         if ($dst -ne "") { [void]$delivered.Add($dst.ToLowerInvariant()) }
                     }
                 }
-                if ($m.Role -eq "hub") {
-                    # HCD-HUBCOPY: a hub copies nothing and runs the
-                    # controller's service binary.
+                if ($m.Role -eq "hub" -or $m.Role -eq "composite") {
+                    # HCD-HUBCOPY: a hub (or a composite parent, task 36.43)
+                    # copies nothing and runs the controller's service
+                    # binary.
                     if ($svcFile -ine $prod.Binary) {
-                        Add-Failure "HCD-HUBCOPY" ("[{0}] ServiceBinary is '{1}'. A hub section copies nothing, so its service may run only {2}, which the controller's install delivers." -f $svcInstall, $svcFile, $prod.Binary)
+                        Add-Failure "HCD-HUBCOPY" ("[{0}] ServiceBinary is '{1}'. A {3} section copies nothing, so its service may run only {2}, which the controller's install delivers." -f $svcInstall, $svcFile, $prod.Binary, $m.Role)
                     }
                 } elseif (-not $delivered.Contains($svcFile.ToLowerInvariant())) {
                     Add-Failure "PATH-NT" ("[{0}] ServiceBinary is '{1}' but the CopyFiles of [{2}] delivers ({3}). Win2000 would create a service pointing at a file the install never copied." -f $svcInstall, $svcFile, $nt, ($delivered -join ', '))
@@ -1214,9 +1271,16 @@ $requiredValues = @(
     @{
         Name    = "XhciIntelPortSwitch"
         Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5): 1 routes on a listed controller, an exact 2 also on an unlisted one at the user's own risk, 0 leaves the routing as firmware set it. The INF writes the 0 so the switch is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-05; the default 0 since task 36.42, owner, 2026-10-09)"
+        DefaultWhy = "0 is the driver's own default since task 36.42 - absent, of another type or 0 is off (owner, 2026-10-09, after SweetLow's issue 17 comment: a connector left on EHCI works there); shipping 1 would move every switchable connector off a working USB 2.0 controller on an install nobody asked to"
+    },
+    @{
+        Name    = "XhciIntelIrqRoute"
+        Type    = "0x00010003"
         Default = "1"
-        Why     = "roadmap-hcd task 34.3's Intel EHCI-to-xHCI port switchover on the 7-, 8- and 9-series and C610 PCH, read at start on every Intel controller (roadmap-hcd task 35.5), where an exact 2 also routes on an unlisted one at the user's own risk; 0 leaves the routing as firmware set it. The INF writes the 1 so the opt-out is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-05)"
-        DefaultWhy = "1 is the driver's own default - absent, of another type or any number but 0 is on (owner, 2026-10-05); shipping 0 would leave the machines the task exists for with nothing on their switchable connectors"
+        Why     = "roadmap-hcd task 36.3's Intel PCH interrupt routing quirk (issue 12 section 5.1), read at each start and return to D0: on a reviewed 7-, 8- or 9-series or Wellsburg xHCI with a line interrupt it routes D20IR's INTA to the PIRQ that delivers the IRQ the OS assigned. 0 reports and writes nothing, 1 writes on the verified E7250 only, 2 on any reviewed xHCI/LPC pair. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-08)"
+        DefaultWhy = "1 is the driver's own default - absent, of another type or out of range reads as 1 (owner, 2026-10-08); 0 would leave the E7250 the task exists for without its interrupt, and 2 widens the write past the one verified machine, a new decision"
     },
     @{
         Name    = "XhciTolerance"
@@ -1238,6 +1302,55 @@ $requiredValues = @(
         Default = "0"
         Why     = "roadmap-hcd task 35-T.7's Average TRB Length switch (design record 17 section 4.7), read at each start: 0 keeps 1024, 1 programs an interrupt endpoint's Average TRB Length as its Max ESIT Payload. The INF writes the 0 so the value is where a tester looks for it, under 34.1's don't-overwrite rule"
         DefaultWhy = "0 is the driver's own default and keeps what a healthy controller is told today; 1 changes the controller's bandwidth admission input and is a tester's comparison, not a default (owner, 2026-10-06)"
+    },
+    @{
+        Name    = "XhciMaxTransferKB"
+        Type    = "0x00010003"
+        Default = "1024"
+        Why     = "roadmap-hcd task 36.22's command size, the size xhciuas.sys advertises to the storage class driver, in KiB: 64 to 2048 in steps of 4, read at each start and asked of the bus by xhciuas.sys at its own start; it takes effect at the next reboot. The INF writes the 1024 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-10-09)"
+        DefaultWhy = "1024 is the driver's own default - absent, of another type, out of range or off a step reads as 1024 (owner, 2026-10-09); the roadmap's checkpoint keeps 1 MiB only if the bench measures it no slower, and a different default is that measurement's to decide, not this gate's"
+    },
+    @{
+        Name    = "XhciInterruptMode"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 36.6's event delivery (design record 15 section 3), read at each start: 0 automatic (the line where it works, polling where there is none or the line is proven dead), 1 the line, 2 polling, 3 and above as 0. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule"
+        DefaultWhy = "0 is the driver's own default (owner, 2026-10-05): on a controller whose line works it reads as the release before it"
+    },
+    @{
+        Name    = "XhciPollIdleMs"
+        Type    = "0x00010003"
+        Default = "50"
+        Why     = "roadmap-hcd task 36.6's idle poll period in ms (design record 15 section 3), 0 as 50, held to 5000. The INF writes the 50 under 34.1's don't-overwrite rule"
+        DefaultWhy = "50 is the driver's own default (owner, 2026-10-05)"
+    },
+    @{
+        Name    = "XhciPollActiveMs"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 36.6's active poll period in ms (design record 15 section 3), 0 as 1, held to the idle period. The INF writes the 1 under 34.1's don't-overwrite rule"
+        DefaultWhy = "1 is the driver's own default (owner, 2026-10-05)"
+    },
+    @{
+        Name    = "XhciWideMap"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 36.24's whole-URB mapping (design record 13 section 11.6, point 2), read at each start on Windows 2000 and later: 0 keeps every bulk URB sequential, anything else lets two pieces of one URB onto the ring at once. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
+        DefaultWhy = "0 is the driver's own default - absent, of another type or 0 is off (HCD_WIDE_MAP_DEFAULT; owner, 2026-10-10); 1 is the bench's to decide, not this gate's"
+    },
+    @{
+        Name    = "XhciSelectiveSuspend"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 36.33's selective suspend, stages A and B (design record 14 section 7), read at each start: only a DWORD 1 turns it on. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
+        DefaultWhy = "0 is the driver's own default - absent, 0, another number or another type is off, the release before it bit for bit (design record 14 section 7); shipping 1 would be a new decision"
+    },
+    @{
+        Name    = "XhciUsb2HubSpeedFallback"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "issue 18's default speed IDs for a Full- or Low-Speed device behind a hub on a USB 2.0 root port whose speed table names no such speed (roadmap-hcd task 36.49), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on (implementation-invariants.md, Port Speed); 0 would refuse such a device again, a new decision"
     },
     @{
         Name    = "XhciVirtualHSHub"
@@ -1528,6 +1641,31 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq 
             }
             if ($v.Data -ine $want.Data) {
                 Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes '{2}' as {3}, not {4}." -f $p.Os, $install, $want.Name, $v.Data, $want.Data)
+            }
+        }
+    }
+}
+
+# ---- HCD-COMPPAGE: a composite parent registers no page (task 36.43) ----
+#
+# A composite device is not a hub: its parent devnode has no Power tab, and
+# neither the 9x nor the NT hub page provider may be registered for it - the
+# provider would open a hub door the composite FDO does not have. XP's own
+# usb.inf deletes EnumPropPages32 for its composite parent; this INF does the
+# same, and may write neither value on any composite path, through any AddReg
+# section the install or a section beside it names.
+#
+foreach ($m in @($models | Where-Object { $_.Role -eq "composite" })) {
+    foreach ($p in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $p.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        $compSections = @($install) + @($inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith(($install + ".").ToLowerInvariant()) })
+        foreach ($cs in $compSections) {
+            foreach ($name in @("EnumPropPages", "EnumPropPages32")) {
+                $vals = @(Get-AddRegValues $inf @(Get-Directive $inf $cs "AddReg") $name)
+                foreach ($v in $vals) {
+                    Add-Failure "HCD-COMPPAGE" ("the {0} composite install's [{1}] writes '{2}' ([{3}] line {4}). A composite parent is not a hub and has no page; the provider would open a door its FDO does not have." -f $p.Os, $cs, $name, $v.Section, $v.Line)
+                }
             }
         }
     }
@@ -2013,7 +2151,7 @@ foreach ($m in $models) {
 # the self-test probed it a root-hub section fetching usbhub.sys passed - and
 # that is the likeliest place for an editor to put the hub driver back.
 #
-foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" })) {
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" -or $_.Role -eq "composite" })) {
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -2080,16 +2218,213 @@ foreach ($secName in @($inf.SectionOrder)) {
     $entries = Get-Section $inf $secName
     if ($null -eq $entries) { continue }
     foreach ($e in $entries) {
-        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,' -f [regex]::Escape($suspValue))) {
-            if ($matches[1].Trim() -ieq $suspKey) {
+        # A value name and a subkey may be quoted; setup reads both forms as
+        # one, so the rules take either (Codex review of task 36.51, round 1).
+        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($suspValue))) {
+            if ($matches[1].Trim().Trim('"') -ieq $suspKey) {
                 Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD, which replaces usbport, owns its idle policy itself (docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings)." -f $secName, $e.Line, $suspKey, $suspValue)
             }
         }
         foreach ($hcName in $suspHcValues) {
-            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*{0}\s*,' -f [regex]::Escape($hcName))) {
+            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($hcName))) {
                 Add-Failure "SUSP-HCVALUE" ("[{0}] line {1} writes {2}. The per-controller values are not this package's mechanism: usbport's own USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend back, and on Vista usbhub calls it from a power-setting callback - measured 2026-09-17, the Balanced plan rewrote it to 0 and suspended the controller at once, and Balanced defaults that setting to Enabled on battery. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD owns its idle policy itself." -f $secName, $e.Line, $hcName)
             }
         }
+    }
+}
+
+# ---- MSI-* and MSIHLP-* : message-signalled interrupts on Vista and 7 ------
+#
+# Design record 15 section 4.3 and design record 18 (task 36.15). The
+# controller's hardware key asks Windows for one message - the four lines of
+# [Xhci.Msi.AddReg] - on the Vista and 7 controller path of each file and
+# nowhere else; and on the 32-bit file that path alone also installs
+# xhcimsi.sys, the NT 6 x86 MSI helper, as a boot-start service, and asks
+# for a restart (owner, 2026-10-09), because the one x86 xhci98.sys cannot
+# reach IoConnectInterruptEx without it.
+#
+#   MSI-PLACE     an AddReg section writing MessageSignaledInterruptProperties
+#                 is reached from anything but the Vista and 7 controller's
+#                 .HW section, or a .HW section other than that one exists.
+#   MSI-VALUES    MSISupported and MessageNumberLimit are not both written,
+#                 REG_DWORD 1, with FLG_ADDREG_NOCLOBBER (a user's
+#                 MSISupported 0 must survive an update, 34.1's rule).
+#   MSIHLP-AMD64  the 64-bit file names the helper anywhere: the amd64 HCD
+#                 has none.
+#   MSIHLP-SVC    the helper's AddService is not exactly one line in the
+#                 Vista and 7 controller's .Services, flags 0, to an install
+#                 section with ServiceType 1, StartType 0 (boot), ErrorControl
+#                 1 and ServiceBinary %12%\xhcimsi.sys copied by that same
+#                 controller section, to 10,System32\Drivers (the helper is
+#                 not a function driver, so BOTH-DESTDIR's driver-binary
+#                 walk does not see it; whole-branch review, 2026-10-10).
+#   MSIHLP-ONLYNT6 a CopyFiles section that delivers xhcimsi.sys is named by
+#                 any section but the Vista and 7 controller's.
+#   MSIHLP-HW     the 32-bit file asks for a message without installing the
+#                 helper on the same section.
+#   MSIHLP-REBOOT a Reboot or Restart directive anywhere but the 32-bit Vista
+#                 and 7 controller section, or that section without one while
+#                 it installs the helper.
+#
+$msiHelperBinary = "xhcimsi.sys"
+$msiHelperService = "xhcimsi"
+$msiController = if ($Arch -eq "amd64") { "Xhci.Dev6.NTamd64" } else { "Xhci.Dev6.NTx86" }
+$msiHw = $msiController + ".HW"
+$msiAddRegSections = New-Object System.Collections.ArrayList
+foreach ($secName in @($inf.SectionOrder)) {
+    foreach ($e in @(Get-Section $inf $secName)) {
+        if ($null -eq $e) { continue }
+        if ($e.Text -match '(?i)MessageSignaledInterruptProperties') {
+            if (-not $msiAddRegSections.Contains($secName)) { [void]$msiAddRegSections.Add($secName) }
+        }
+    }
+}
+foreach ($secName in @($inf.SectionOrder)) {
+    if ($secName -match '(?i)\.HW$' -and $secName -ine $msiHw) {
+        Add-Failure "MSI-PLACE" ("[{0}] exists. The only hardware-key section this file may carry is [{1}], the Vista and 7 controller's (design record 15 section 4.3)." -f $secName, $msiHw)
+    }
+    foreach ($ar in @(Get-Directive $inf $secName "AddReg")) {
+        if ($msiAddRegSections -contains $ar -and $secName -ine $msiHw) {
+            Add-Failure "MSI-PLACE" ("[{0}] reaches [{1}], which asks for message-signalled interrupts. Only [{2}] may: the controller's hardware key on the Vista and 7 path alone (design record 15 section 4.3)." -f $secName, $ar, $msiHw)
+        }
+    }
+}
+$msiAsked = $false
+if (Test-SectionExists $inf $msiHw) {
+    foreach ($ar in @(Get-Directive $inf $msiHw "AddReg")) {
+        if (-not ($msiAddRegSections -contains $ar)) { continue }
+        $msiAsked = $true
+        foreach ($want in @("MSISupported", "MessageNumberLimit")) {
+            $rows = @(Get-Section $inf $ar | Where-Object {
+                $_.Text -match ('(?i)^\s*HKR\s*,\s*"?Interrupt Management\\MessageSignaledInterruptProperties"?\s*,\s*' + $want + '\s*,')
+            })
+            if ($rows.Count -ne 1) {
+                Add-Failure "MSI-VALUES" ("[{0}] must write {1} exactly once; found {2}." -f $ar, $want, $rows.Count)
+                continue
+            }
+            $f = @($rows[0].Text -split ',' | ForEach-Object { $_.Trim() })
+            $flags = ConvertTo-CopyFlags $f[3]
+            if ($null -eq $flags -or $flags -ne 0x00010003 -or $f.Count -ne 5 -or $f[4] -ne "1") {
+                Add-Failure "MSI-VALUES" ("[{0}] line {1}: {2} must be REG_DWORD 1 with FLG_ADDREG_NOCLOBBER (0x00010003), so a user's MSISupported 0 survives an update; found '{3}'." -f $ar, $rows[0].Line, $want, $rows[0].Text.Trim())
+            }
+        }
+    }
+}
+
+$msiHelperNamed = New-Object System.Collections.ArrayList
+foreach ($secName in @($inf.SectionOrder)) {
+    foreach ($e in @(Get-Section $inf $secName)) {
+        if ($null -eq $e) { continue }
+        if ($e.Text -match ('(?i)\b' + [regex]::Escape($msiHelperService) + '\b')) {
+            [void]$msiHelperNamed.Add(@{ Section = $secName; Line = $e.Line })
+        }
+    }
+}
+if ($Arch -eq "amd64") {
+    foreach ($n in $msiHelperNamed) {
+        Add-Failure "MSIHLP-AMD64" ("[{0}] line {1} names the x86 MSI helper. The amd64 HCD reaches IoConnectInterruptEx through MmGetSystemRoutineAddress and has no helper (design record 18)." -f $n.Section, $n.Line)
+    }
+} else {
+    $msiServices = "$msiController.Services"
+    $helperRows = @()
+    foreach ($secName in @($inf.SectionOrder)) {
+        foreach ($row in @(Get-DirectiveRaw $inf $secName "AddService")) {
+            $svc = ($row.Value -split ',')[0].Trim()
+            if ($svc -ieq $msiHelperService) {
+                if ($secName -ine $msiServices) {
+                    Add-Failure "MSIHLP-SVC" ("[{0}] line {1} installs the x86 MSI helper. Only [{2}] may: the helper is for 32-bit Vista and 7 alone (design record 18 section 7)." -f $secName, $row.Line, $msiServices)
+                } else {
+                    $helperRows += $row
+                }
+            }
+        }
+    }
+    if ($helperRows.Count -gt 1) {
+        Add-Failure "MSIHLP-SVC" ("[{0}] installs the x86 MSI helper {1} times; once." -f $msiServices, $helperRows.Count)
+    }
+    $helperInstalled = $false
+    if ($helperRows.Count -eq 1) {
+        $f = @($helperRows[0].Value -split ',' | ForEach-Object { $_.Trim() })
+        $hFlags = if ($f.Count -gt 1) { $f[1] } else { "" }
+        $hInstall = if ($f.Count -gt 2) { $f[2] } else { "" }
+        if ($hFlags -ne "" -and $hFlags -notmatch '^(0x0*0|0)$') {
+            Add-Failure "MSIHLP-SVC" ("the helper's AddService in [{0}] must pass no flags: it is not the device's function driver; found '{1}'." -f $msiServices, $hFlags)
+        }
+        if ($hInstall -eq "" -or -not (Test-SectionExists $inf $hInstall)) {
+            Add-Failure "MSIHLP-SVC" ("the helper's AddService in [{0}] names install section '{1}', which does not exist." -f $msiServices, $hInstall)
+        } else {
+            $helperInstalled = $true
+            foreach ($req in @(
+                @{ Name = "ServiceType"; Expected = 1; Meaning = "SERVICE_KERNEL_DRIVER" },
+                @{ Name = "StartType"; Expected = 0; Meaning = "SERVICE_BOOT_START, so it is loaded before the controller's AddDevice (design record 18 section 5)" },
+                @{ Name = "ErrorControl"; Expected = 1; Meaning = "SERVICE_ERROR_NORMAL" }
+            )) {
+                $value = @(Get-Directive $inf $hInstall $req.Name)
+                if ($value.Count -ne 1 -or $value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
+                    Add-Failure "MSIHLP-SVC" ("[{0}] {1} must be {2} ({3})." -f $hInstall, $req.Name, $req.Expected, $req.Meaning)
+                }
+            }
+            $bin = @(Get-Directive $inf $hInstall "ServiceBinary")
+            if ($bin.Count -ne 1 -or $bin[0] -ine ('%12%\' + $msiHelperBinary)) {
+                Add-Failure "MSIHLP-SVC" ("[{0}] ServiceBinary must be %12%\{1}." -f $hInstall, $msiHelperBinary)
+            }
+            $deliveredBy = New-Object System.Collections.ArrayList
+            foreach ($cf in @(Get-Directive $inf $msiController "CopyFiles")) {
+                foreach ($e in @(Get-Section $inf $cf)) {
+                    if ($null -eq $e) { continue }
+                    if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { [void]$deliveredBy.Add($cf) }
+                }
+            }
+            foreach ($cf in $deliveredBy) {
+                $destKey = $cf.ToLowerInvariant()
+                if (-not $destDirs.ContainsKey($destKey)) { continue }   # BOTH-DESTDIR reports it
+                $hd = $destDirs[$destKey]
+                if ($hd.Dirid -ne "10" -or $hd.Subdir -ine "System32\Drivers") {
+                    Add-Failure "MSIHLP-SVC" ("[{0}] delivers {1} to '{2},{3}', not '10,System32\Drivers', where its ServiceBinary %12%\{1} loads it from." -f $cf, $msiHelperBinary, $hd.Dirid, $hd.Subdir)
+                }
+            }
+            if ($deliveredBy.Count -eq 0) {
+                Add-Failure "MSIHLP-SVC" ("[{0}] installs the helper's service but its CopyFiles does not deliver {1}." -f $msiController, $msiHelperBinary)
+            }
+        }
+    }
+    foreach ($secName in @($inf.SectionOrder)) {
+        foreach ($cf in @(Get-Directive $inf $secName "CopyFiles")) {
+            $carries = $false
+            if ($cf.StartsWith('@')) {
+                $carries = ($cf.Substring(1).Trim() -ieq $msiHelperBinary)
+            } else {
+                foreach ($e in @(Get-Section $inf $cf)) {
+                    if ($null -eq $e) { continue }
+                    if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { $carries = $true }
+                }
+            }
+            if ($carries -and $secName -ine $msiController) {
+                Add-Failure "MSIHLP-ONLYNT6" ("[{0}] copies {1}. Only [{2}] may: Windows 98, ME, 2000 and XP, the root hub and the hubs never get the helper (design record 18 section 7)." -f $secName, $msiHelperBinary, $msiController)
+            }
+        }
+    }
+    if ($msiAsked -and -not $helperInstalled) {
+        Add-Failure "MSIHLP-HW" ("[{0}] asks for a message on the 32-bit file without the helper installed on [{1}]: the x86 HCD could not connect it (design record 18 section 7)." -f $msiHw, $msiServices)
+    }
+}
+
+foreach ($secName in @($inf.SectionOrder)) {
+    foreach ($e in @(Get-Section $inf $secName)) {
+        if ($null -eq $e) { continue }
+        if ($e.Text -match '^\s*(Reboot|Restart)\s*$') {
+            if ($Arch -eq "amd64" -or $secName -ine $msiController) {
+                Add-Failure "MSIHLP-REBOOT" ("[{0}] line {1} asks for a restart. Only the 32-bit Vista and 7 controller section [Xhci.Dev6.NTx86] does, because the boot-start helper it installs starts at the next boot (design record 18 section 5); no other install of either file may." -f $secName, $e.Line)
+            }
+        }
+    }
+}
+if ($Arch -ne "amd64" -and (Test-SectionExists $inf $msiController)) {
+    $rebootRows = @(Get-Section $inf $msiController | Where-Object { $null -ne $_ -and $_.Text -match '^\s*Reboot\s*$' })
+    $installsHelper = @(Get-DirectiveRaw $inf "$msiController.Services" "AddService" | Where-Object {
+        (($_.Value -split ',')[0].Trim()) -ieq $msiHelperService }).Count -gt 0
+    if ($installsHelper -and $rebootRows.Count -ne 1) {
+        Add-Failure "MSIHLP-REBOOT" ("[{0}] installs the boot-start helper and must carry exactly one Reboot directive, so the helper is active from the next boot (owner, 2026-10-09; design record 18 section 5); found {1}." -f $msiController, $rebootRows.Count)
     }
 }
 
@@ -2182,6 +2517,9 @@ if ($EmitFootprint -ne "") {
         "# path|<os>|<kind>|<install section>",
         "# file|<os>|<copyfiles section>|<dirid>|<subdir>|<destination>|<media source>|<temp name>|<flags>|<verdict>",
         "# reg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>",
+        "# hwreg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>",
+        "#   (the same fields, written to the DEVICE's hardware key by <install>.HW)",
+        "# directive|<os>|<install section>|<bare directive, e.g. Reboot>",
         "# service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>",
         "# servicevalue|<os>|<service name>|<service install section>|<directive>|<value>",
         "# unmodelled|<os>|<section>|<directive>",
@@ -2547,6 +2885,52 @@ if ($EmitFootprint -ne "") {
             }
         }
 
+        # The hardware key (design record 15 section 4.3, design record 18):
+        # a .HW section's AddReg writes the DEVICE's hardware key, not the
+        # driver's software key an install section's HKR names, so its rows
+        # are hwreg, not reg, with the same fields and verdicts.
+        $hwSection = $p.Install + ".HW"
+        if (Test-SectionExists $inf $hwSection) {
+            foreach ($ar in @(Get-Directive $inf $hwSection "AddReg")) {
+                $entries = Get-Section $inf $ar
+                if ($null -eq $entries) { continue }
+                foreach ($e in $entries) {
+                    $f = @($e.Text -split ',')
+                    $root = $f[0].Trim()
+                    $subkey = ""
+                    $value = ""
+                    $flags = ""
+                    $data = ""
+                    if ($f.Count -gt 1) { $subkey = $f[1].Trim() }
+                    if ($f.Count -gt 2) { $value = $f[2].Trim() }
+                    if ($f.Count -gt 3) { $flags = $f[3].Trim() }
+                    if ($f.Count -gt 4) { $data = (($f[4..($f.Count - 1)]) -join ',').Trim() }
+                    $verdict = Get-FootprintRegVerdict $root $flags
+                    $fpLines += ("hwreg|{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}" -f `
+                        $p.Os, $ar, $root, $subkey, $value, $flags, $data, $verdict)
+                    $fpRegRows++
+                }
+            }
+            foreach ($e in @(Get-Section $inf $hwSection)) {
+                if ($null -eq $e) { continue }
+                if ($e.Text -notmatch '^\s*([^=]+?)\s*=') { continue }
+                if ($matches[1].Trim() -ieq "AddReg") { continue }
+                $fpLines += ("unmodelled|{0}|{1}|{2}" -f $p.Os, $hwSection, $matches[1].Trim())
+            }
+        }
+
+        # A bare directive (no '=') the install section carries - Reboot on the
+        # 32-bit Vista and 7 controller section (design record 18 section 5)
+        # - is a claim about the install, so it is a row too.
+        $bareEntries = Get-Section $inf $p.Install
+        if ($null -ne $bareEntries) {
+            foreach ($e in $bareEntries) {
+                if ($e.Text -match '^\s*([A-Za-z]+)\s*$') {
+                    $fpLines += ("directive|{0}|{1}|{2}" -f $p.Os, $p.Install, $matches[1])
+                }
+            }
+        }
+
         # Anything else the install section directs. Emitted rather than
         # ignored: a DelReg or DelFiles added later would otherwise vanish from
         # a document whose entire job is to be complete. Include= and Needs=
@@ -2574,7 +2958,7 @@ if ($EmitFootprint -ne "") {
             if (-not $lower.StartsWith($installPrefix)) { continue }
             $suffix = $secName.Substring($installPrefix.Length)
             if ($suffix -eq "" -or $suffix.Contains(".")) { continue }
-            if ($suffix -ieq "Services" -or $suffix -match '^(?i)NT') { continue }
+            if ($suffix -ieq "Services" -or $suffix -ieq "HW" -or $suffix -match '^(?i)NT') { continue }
             $fpLines += ("unmodelled|{0}|{1}|{2}" -f $p.Os, $secName, "engine-implied sub-section")
         }
     }

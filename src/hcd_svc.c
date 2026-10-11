@@ -184,6 +184,8 @@ static VOID hcdFrameDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     hc = (PHCD_CONTROLLER)context;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     XhciFrameSample(&hc->Hc);
+    /* Design record 15 section 7.1: a peek, under a poll delivery only. */
+    HcdPollPeekLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     if (hc->TimersClosed) {
@@ -216,7 +218,14 @@ VOID HcdFrameTimerStart(PHCD_CONTROLLER hc)
  * count advances and the timer is armed again, relative, so a change of the
  * system time does not move it. A tick may come up to one clock period
  * early, which is why xhci_tol.h credits it at 45 ms. Only this DPC writes
- * the count; readers take one aligned ULONG. IRQL: DISPATCH_LEVEL.
+ * the count; readers take one aligned ULONG.
+ *
+ * Task 36.55: the lost-interrupt backstop's step runs here first, on every
+ * tick, before TimerLock is taken - the two locks are never held together -
+ * and before the re-arm, as the frame sampler's controller work comes
+ * before its own: HcdTimersDrain waits for the re-arm or its refusal, so
+ * nothing of this DPC touches the controller after the drain returns.
+ * IRQL: DISPATCH_LEVEL.
  */
 static VOID hcdTolDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
 {
@@ -228,6 +237,7 @@ static VOID hcdTolDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
     UNREFERENCED_PARAMETER(arg1);
     UNREFERENCED_PARAMETER(arg2);
     hc = (PHCD_CONTROLLER)context;
+    HcdCtlBackstopTick(hc);
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     if (hc->TimersClosed) {
         hc->TolArmed = 0;

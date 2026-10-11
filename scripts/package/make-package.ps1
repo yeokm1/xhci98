@@ -16,6 +16,11 @@ is this project's two files and nothing else:
                    33.3; src\txtsetup-amd64.oem under this name for amd64),
                    read from A:\ when F6 is pressed in Windows 2000 and XP
                    text-mode Setup, so it sits at the root with xhci98.sys
+    portsw.vbs     the user's switch for XhciIntelPortSwitch (roadmap-hcd
+                   task 36.42), a Windows Script Host script: shows the
+                   value on every xhci98 controller and sets it to 0 or 1
+    portsw-on.bat  sets it to 1 through portsw.vbs, in one double-click
+    portsw-off.bat sets it to 0 the same way (roadmap-hcd task 36.56)
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -93,6 +98,16 @@ self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
 in src\uas.
 
+.PARAMETER MsiDriverPath
+The NT 6 x86 MSI helper to stage (design record 18; task 36.15), overriding
+`src\msi86\obj<flavour>\i386\xhcimsi.sys`. The 32-bit INF names it in
+[SourceDisksFiles], so the x86 package carries it whenever it is built from
+the default paths and a missing one is a refusal; a caller that names
+-DriverPath (the self-tests' stand-ins) names this too, or the INF's entry
+has no source. It is held to the flavour marker and, unless
+-SkipBinaryGates, to the import gate's nt6x86 profile. The amd64 package has
+no helper, and this parameter is refused there.
+
 .PARAMETER OemPath
 The text-mode Setup driver description to stage (task 33.3), overriding
 `src\txtsetup.oem` (x86) or `src\txtsetup-amd64.oem` (amd64). Staged as
@@ -101,6 +116,40 @@ scripts\inf-gate\check-txtsetup-oem.ps1 against the staged INF and package.
 Staged whenever the package is built from the default paths; a caller that
 names -DriverPath (the self-tests' stand-ins) stages it only when it names
 -OemPath too, as for the UAS pair.
+
+.PARAMETER PswScriptPath
+The port switchover's user script to stage (roadmap-hcd task 36.42),
+overriding `src\portsw.vbs`. Staged as `portsw.vbs` at the package root, the
+same file for both architectures. Staged whenever the package is built from
+the default paths; a caller that names -DriverPath stages it only when it
+names -PswScriptPath too, as for -OemPath. Wherever it is staged,
+`portsw-on.bat` and `portsw-off.bat` (task 36.56) are staged beside it from
+the script's own directory, and a missing one is refused as the script is.
+
+.PARAMETER TestSignPfx
+The project test certificate's .pfx (design record 19; owner, 2026-10-11):
+sign the staged xhci98.sys and xhciuas.sys of an amd64 package with an
+embedded Authenticode signature - SHA-1 file digest, no timestamp, no
+catalog, the INFs unchanged - and stage the certificate's public half beside
+them as xhci98-test.cer. That is what lets Vista x64 and Windows 7 x64 load
+the driver in test-signing mode instead of only on an F8 start. The password
+comes from the XHCI98_TESTSIGN_PW environment variable or, where that is
+unset, a prompt; it is never printed.
+
+The binaries are signed in temporary copies after the import gates have read
+the build (their SITES rule needs the objects beside the image) and before
+staging. Each signed copy is held to two things before it is used: the
+signature is the project certificate's, an Authenticode PE-image signature
+with SHA-1 digests that match the image and no timestamp; and the copy is
+the build byte for byte apart from the checksum, the certificate-table entry
+and the appended table - so what the gates read is what ships, and the
+version check below reads the signed copy itself. The .pfx must hold the
+project certificate whose thumbprint record 19 section 10 records. Refused for the x86
+package (32-bit Windows does not enforce kernel-mode signing, and the x86
+binaries are never signed) and for a binary that is already signed (the
+packager signs; nothing is signed by hand). Without it the package is staged
+unsigned, as every package before 2.3.0.0 was: enough for a guest started
+with F8, and make-release.ps1 refuses to publish it.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -201,7 +250,10 @@ param(
     [string]$DriverPath = "",
     [string]$UasInfPath = "",
     [string]$UasDriverPath = "",
+    [string]$MsiDriverPath = "",
     [string]$OemPath = "",
+    [string]$PswScriptPath = "",
+    [string]$TestSignPfx = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -233,6 +285,30 @@ $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
+}
+# The port switchover's user script (task 36.42), decided the same way.
+$stagePsw = ($DriverPath -eq "") -or ($PswScriptPath -ne "")
+if ($PswScriptPath -eq "") { $PswScriptPath = Join-Path $repo "src\portsw.vbs" }
+# Its two batch files (task 36.56) travel with it, from its own directory -
+# which a bare file name does not name, so the path is resolved first, by
+# PowerShell against its own location and drive: [Path]::GetFullPath would
+# take the process directory, and a root-relative "\dir\portsw.vbs" the
+# process's drive (review round 2). It need not exist yet; the copy below
+# refuses a missing one.
+$PswScriptPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PswScriptPath)
+$pswBatchNames = @("portsw-on.bat", "portsw-off.bat")
+# The NT 6 x86 MSI helper (design record 18), the x86 package's alone.
+if ($Arch -eq "amd64" -and $MsiDriverPath -ne "") {
+    throw "-MsiDriverPath names the NT 6 x86 MSI helper, which the amd64 package does not carry: the amd64 HCD has no helper (design record 18)."
+}
+$stageMsi = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($MsiDriverPath -ne ""))
+if ($Arch -eq "x86" -and $MsiDriverPath -eq "") {
+    $msiObjDir = switch ($Flavor) {
+        "debug"   { "objchk" }
+        "qemu"    { "objchk_qemu" }
+        default   { "objfre" }
+    }
+    $MsiDriverPath = Join-Path $repo "src\msi86\$msiObjDir\i386\xhcimsi.sys"
 }
 $uasInfName = if ($Arch -eq "amd64") { "xhciuas-amd64.inf" } else { "xhciuas.inf" }
 $uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhciuas-imports.allow" }
@@ -349,6 +425,75 @@ function Test-FailStartMarker {
     return Test-ImageMarker -Path $Path -Marker "XHCI98_FAILSTART_ARTIFACT_TASK_12_3"
 }
 
+function Get-UserKeyContainers {
+    # The current user's CryptoAPI RSA key files. SignTool /f imports the
+    # .pfx's private key into a container of its own to sign with, and what
+    # is new here after a signing run is reported (design record 19), since
+    # it may be a copy of the private key left on disk.
+    $dir = Join-Path $env:APPDATA ("Microsoft\Crypto\RSA\" +
+        [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    if (-not (Test-Path -LiteralPath $dir)) { return @{ Dir = $dir; Names = @() } }
+    return @{ Dir = $dir; Names = @(Get-ChildItem -LiteralPath $dir -File -Force | ForEach-Object { $_.Name }) }
+}
+
+function Invoke-TestSign {
+    # Signs a copy of $Source at $Dest with the project test certificate and
+    # holds the result to record 19's signature and to the build's bytes.
+    # Returns nothing; every failure throws. The password reaches SignTool on
+    # its command line, the only way WDK 7.1's SignTool takes one, and is
+    # never echoed: the command is not printed and SignTool's own output
+    # does not repeat it.
+    param([string]$Source, [string]$Dest, [string]$Pfx, [string]$Password,
+          [string]$Thumbprint, [string]$SignTool, [string]$Label)
+
+    if ($null -ne (Get-EmbeddedSignature -Path $Source)) {
+        throw @"
+'$Source' already carries an embedded signature. The packager signs the
+build's output at staging and nothing is signed by hand (design record 19), so
+a signed input is a binary nobody can tie to a build. Rebuild it:
+  scripts\build-driver.cmd <flavour> -amd64
+"@
+    }
+    Copy-Item -LiteralPath $Source -Destination $Dest -Force
+    $before = Get-UserKeyContainers
+    $signArgs = @("sign", "/q", "/f", $Pfx)
+    if ($Password -ne "") { $signArgs += @("/p", $Password) }
+    $signArgs += @("/fd", "sha1", "/nph", $Dest)
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $signOut = & $SignTool @signArgs 2>&1 | Out-String
+        $signRc = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    $after = Get-UserKeyContainers
+    $left = @($after.Names | Where-Object { $before.Names -notcontains $_ })
+    if ($left.Count -gt 0) {
+        # Warned, not deleted (design record 19 section 5): nothing here can
+        # prove another process did not create one of them in the same moment.
+        Write-Warn ("SignTool left {0} new key container file(s) while signing {1}; each may be a copy of the private key. They are hidden system files, so list them with -Force, and delete each one named here yourself (design record 19 section 5):" -f `
+            $left.Count, $Label)
+        foreach ($n in $left) {
+            # Apostrophes doubled, so the printed line pastes as written
+            # whatever the profile path holds (review round 8).
+            Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n).Replace("'", "''"))
+        }
+    }
+    if ($signRc -ne 0) {
+        throw "SignTool could not sign $Label (exit $signRc):`n$signOut"
+    }
+    $why = Test-ProjectTestSignature -Signature (Get-EmbeddedSignature -Path $Dest) -Thumbprint $Thumbprint
+    if ($why -ne "") {
+        throw "the signed $Label is not what design record 19 prescribes: $why."
+    }
+    if (-not (Test-SignedImageOf -Signed ([System.IO.File]::ReadAllBytes($Dest)) `
+                                 -Unsigned ([System.IO.File]::ReadAllBytes($Source)))) {
+        throw "the signed $Label differs from '$Source' by more than the checksum, the certificate-table entry and the appended signature."
+    }
+    Write-Ok ("{0} signed by the project test certificate {1} (SHA-1, no timestamp)" -f $Label, $Thumbprint)
+}
+
 
 $gateExtra = @()
 $variantDir = ""
@@ -364,6 +509,7 @@ $variantDir = ""
 # to be in to be worth having.
 #
 $stageDir = ""
+$signDir = ""
 
 try {
     Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
@@ -384,6 +530,18 @@ StartController (task 12.3), or an unpadded DriverVer date (task 12.4) - and a
 package carrying both varies two, which measures neither. Build them one at a
 time; they land in different directories on purpose.
 "@
+    }
+
+    # The x64 test signature (design record 19) is the amd64 package's alone.
+    if ($TestSignPfx -ne "" -and $Arch -ne "amd64") {
+        throw @"
+-TestSignPfx signs the amd64 package, and this is the $Arch one. The x86
+binaries are never signed (design record 19): 32-bit Windows does not enforce
+kernel-mode code signing, and the published x86 bytes stay those of the build.
+"@
+    }
+    if ($TestSignPfx -ne "" -and -not (Test-Path -LiteralPath $TestSignPfx -PathType Leaf)) {
+        throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
     }
 
     if (-not (Test-Path -LiteralPath $InfPath)) {
@@ -672,6 +830,78 @@ The package carries the UAS class driver. Build it first:
         Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
     }
 
+    # --- the NT 6 x86 MSI helper, held to its own gates (design record 18) ---
+    if ($stageMsi) {
+        Write-Step ("NT 6 x86 MSI helper ({0})" -f $Flavor)
+        if (-not (Test-Path -LiteralPath $MsiDriverPath)) {
+            throw @"
+no $Flavor xhcimsi.sys at '$MsiDriverPath'.
+The x86 package carries the NT 6 x86 MSI helper its INF names. Build it first
+(it needs tools\WinDDK71):
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        $msiFlavour = Get-ImageFlavourMarker -Path $MsiDriverPath
+        if ($msiFlavour -ne $Flavor) {
+            throw "'$MsiDriverPath' carries the flavour marker '$msiFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        }
+        if (-not $SkipBinaryGates) {
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $msiGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                 (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                 "-Image", $MsiDriverPath, "-Flavor", $Flavor, "-Arch", "x86",
+                                 "-GateProfile", "nt6x86",
+                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "xhcimsi-imports.allow"))
+                if ($NoTargetEvidence) { $msiGateArgs += "-NoTargetEvidence" }
+                & powershell.exe @msiGateArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$MsiDriverPath' failed the import gate's nt6x86 profile against xhcimsi-imports.allow."
+                }
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+        }
+    }
+
+    # --- the x64 test signature (design record 19) ----------------------------
+    #
+    # After the import gates and before staging. The import gates read the
+    # build where it was linked, because their SITES rule needs the objects
+    # (or, for LTCG objects, the sources) beside the image, which a copy in
+    # a temporary folder does not have (review round 1). What the gates read
+    # is nevertheless what ships: each signed copy is held to the build byte
+    # for byte apart from the checksum, the certificate-table entry and the
+    # appended table (Invoke-TestSign), none of which the import table, the
+    # sections or the flavour marker lives in. From here on the signed copies
+    # take the place of the build's paths, so the version check against the
+    # INF below, and every check make-release.ps1 makes, read signed bytes.
+    $testSignCert = $null
+    if ($TestSignPfx -ne "") {
+        Write-Step "x64 test signature (design record 19)"
+        $signTool = Join-Path $repo "tools\WinDDK71\bin\x86\SignTool.exe"
+        if (-not (Test-Path -LiteralPath $signTool)) {
+            throw "no SignTool at '$signTool'. It is WDK 7.1's (tools\WinDDK71, docs\contributing\build-and-test.md)."
+        }
+        $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
+        $testSignPassword = Get-TestSignPassword
+        $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
+        $signDir = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-sign-" + [System.IO.Path]::GetRandomFileName())
+        Ensure-Directory $signDir
+        $signedDriver = Join-Path $signDir "xhci98.sys"
+        Invoke-TestSign -Source $DriverPath -Dest $signedDriver -Pfx $TestSignPfx -Password $testSignPassword `
+                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys"
+        $DriverPath = $signedDriver
+        if ($stageUas -and (Test-Path -LiteralPath $UasDriverPath)) {
+            $signedUas = Join-Path $signDir "xhciuas.sys"
+            Invoke-TestSign -Source $UasDriverPath -Dest $signedUas -Pfx $TestSignPfx -Password $testSignPassword `
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys"
+            $UasDriverPath = $signedUas
+        }
+        $testSignPassword = $null
+    }
+
     # --- where each file goes, from the gate's own parse ---------------------
     Write-Step "INF gate, and the media layout it derives"
 
@@ -701,6 +931,9 @@ The package carries the UAS class driver. Build it first:
     # for a file the package cannot contain. xhci98.inf is also staged at the
     # package root unconditionally - that is the file the user points setup at.
     $staging = @{ "xhci98.inf" = $InfPath; "xhci98.sys" = $DriverPath }
+    if ($stageMsi) {
+        $staging["xhcimsi.sys"] = $MsiDriverPath
+    }
 
     $unsourced = @($layout.Keys | Where-Object { -not $staging.ContainsKey($_) })
     if ($unsourced.Count -gt 0) {
@@ -740,6 +973,27 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
             throw "no text-mode Setup description at '$OemPath'."
         }
         Copy-Item -LiteralPath $OemPath -Destination (Join-Path $stageDir "txtsetup.oem") -Force
+    }
+    # portsw.vbs at the root, beside the INF the user installs from.
+    if ($stagePsw) {
+        if (-not (Test-Path -LiteralPath $PswScriptPath)) {
+            throw "no port switchover script at '$PswScriptPath'."
+        }
+        Copy-Item -LiteralPath $PswScriptPath -Destination (Join-Path $stageDir "portsw.vbs") -Force
+        foreach ($batchName in $pswBatchNames) {
+            $batchSrc = Join-Path (Split-Path -Parent $PswScriptPath) $batchName
+            if (-not (Test-Path -LiteralPath $batchSrc -PathType Leaf)) {
+                throw "no $batchName beside the port switchover script at '$batchSrc'."
+            }
+            Copy-Item -LiteralPath $batchSrc -Destination (Join-Path $stageDir $batchName) -Force
+        }
+    }
+    # The signing certificate's public half at the root, beside the signed
+    # binaries (design record 19): what a user or a reviewer checks the
+    # signer's thumbprint against. Importing it is not needed and does not
+    # sign the package. Never the .pfx.
+    if ($null -ne $testSignCert) {
+        [System.IO.File]::WriteAllBytes((Join-Path $stageDir $script:TestSignCerName), $testSignCert.CerBytes)
     }
     $rootInf = Join-Path $stageDir "xhci98.inf"
     if (-not (Test-Path -LiteralPath $rootInf)) {
@@ -981,23 +1235,34 @@ that does not exist, or clear that one yourself.
         #
         Write-Host "  XP x64   Device Manager -> the xHCI device -> Update Driver -> Have Disk"
         Write-Host "  2003 x64 the same; both are NT 5.2.3790 and one binary serves them"
-        Write-Host "  Vista x64 / 7 x64  boot with F8 -> Disable Driver Signature Enforcement"
-        Write-Host "           (every boot), then Device Manager -> Update Driver -> this directory"
+        if ($null -ne $testSignCert) {
+            Write-Host "  Vista x64 / 7 x64  test-signed: bcdedit /set testsigning on and restart"
+            Write-Host "           once (or F8 -> Disable Driver Signature Enforcement, every boot),"
+            Write-Host "           then Device Manager -> Update Driver -> this directory"
+        } else {
+            Write-Host "  Vista x64 / 7 x64  UNSIGNED: boot with F8 -> Disable Driver Signature"
+            Write-Host "           Enforcement (every boot), then Device Manager -> Update Driver"
+        }
         Write-Host ""
         #
         # Until 2026-10-04 this warning named the three guests the miniport's
         # amd64 build ran on (tasks 21.5, 21.8 and 22.5). That standing was the
-        # miniport's and left the tree with it: the HCD is a different driver,
-        # and its amd64 build has its first guest leg in task 28-A.2 (XP x64)
-        # and the rest in 28-V.1. Restate this when those legs are read.
+        # miniport's and left the tree with it. Until 2026-10-11 it said no
+        # amd64 build of the HCD had run on real hardware; the owner's 2.3.0.0
+        # bench ran the test-signed x64 drivers under XP x64 and 7 x64 on one
+        # Dell Latitude E7250 (runs/run-36.md, "The owner's bench, 2026-10-11").
         #
-        Write-Warn "This is the successor HCD, not the 1.2.0.0 miniport, and the guests the"
-        Write-Warn "miniport's amd64 build ran on say nothing about it. Its amd64 build is read"
-        Write-Warn "in QEMU guests only (roadmap-hcd.md tasks 28-A.2 and 28-V.1), XP x64 first."
+        Write-Warn "This is the successor HCD, not the 1.2.0.0 miniport. Its amd64 build is read"
+        Write-Warn "in QEMU guests (XP x64, Vista x64, 7 x64) and on one real machine, a Dell"
+        Write-Warn "Latitude E7250 under XP x64 and 7 x64 (the 2.3.0.0 bench)."
         Write-Warn "Windows Server 2003 x64 rests on being the same operating system as XP x64."
-        Write-Warn "On Vista x64 and 7 x64 the driver loads only on a boot with signature"
-        Write-Warn "enforcement disabled from F8. No amd64 build has ever run on real hardware."
-        Write-Warn "Treat a guest booted from this media as the experiment it is."
+        if ($null -ne $testSignCert) {
+            Write-Warn "On Vista x64 and 7 x64 the test-signed driver loads in test-signing mode or"
+            Write-Warn "on an F8 start (design record 19)."
+        } else {
+            Write-Warn "On Vista x64 and 7 x64 this UNSIGNED driver loads only on a boot with"
+            Write-Warn "signature enforcement disabled from F8; a published x64 package is test-signed."
+        }
     } else {
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
@@ -1008,6 +1273,9 @@ that does not exist, or clear that one yourself.
 } finally {
     if ($variantDir -ne "" -and (Test-Path -LiteralPath $variantDir)) {
         Remove-Item -LiteralPath $variantDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($signDir -ne "" -and (Test-Path -LiteralPath $signDir)) {
+        Remove-Item -LiteralPath $signDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     # A run that threw after staging leaves this behind and $OutDir untouched.
     if ($stageDir -ne "" -and (Test-Path -LiteralPath $stageDir)) {

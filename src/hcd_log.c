@@ -183,6 +183,12 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "urb.unknown", hc->UrbUnknown, 1);
     XhciLogAppend(log, "ioctl.unknown", hc->IoctlUnknown, 1);
     XhciLogAppend(log, "enum.cmd.timedout", hc->EnumCommandsTimedOut, 1);
+    XhciLogAppend(log, "enum.cmd.refused", hc->EnumCommandsRefused, 1);
+    XhciLogAppend(log, "enum.cmd.busy", hc->EnumCommandsBusy, 1);
+    XhciLogAppend(log, "enum.cmd.busy.cleared", hc->EnumCommandsBusyCleared,
+                  1);
+    XhciLogAppend(log, "enum.cmd.busy.drains", hc->EnumCommandBusyDrains, 1);
+    XhciLogAppend(log, "enum.wait.drains", hc->EnumWaitDrains, 1);
     XhciLogAppend(log, "enum.xfer.timedout", hc->EnumTransfersTimedOut, 1);
     XhciLogAppend(log, "serial.ids", hc->SerialIdsTaken, 1);
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
@@ -198,6 +204,112 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "log.appends", log->Appends, 1);
     XhciLogAppend(log, "log.suppressed", log->Suppressed, 1);
     XhciLogAppend(log, "log.emits", log->DebugViewEmits, 1);
+    /* Event delivery (design record 15 section 8). */
+    XhciLogAppend(log, "intr.mode.read", hc->Counters.IntrModeRead, 1);
+    XhciLogAppend(log, "intr.mode", hc->Counters.IntrMode, 1);
+    XhciLogAppend(log, "intr.delivery", hc->Counters.IntrDelivery, 1);
+    XhciLogAppend(log, "intr.reason", hc->Counters.IntrReason, 1);
+    XhciLogAppend(log, "intr.pin.status", hc->Counters.IntrPinStatus, 1);
+    XhciLogAppend(log, "intr.pin", hc->Counters.IntrPin, 1);
+    XhciLogAppend(log, "poll.idle.ms", hc->Counters.PollIdleMs, 1);
+    XhciLogAppend(log, "poll.active.ms", hc->Counters.PollActiveMs, 1);
+    XhciLogAppend(log, "poll.role", hc->Counters.PollRole, 1);
+    XhciLogAppend(log, "poll.period.last", hc->Counters.PollPeriodLast, 1);
+    XhciLogAppend(log, "poll.state.last", hc->Counters.PollStateLast, 1);
+    XhciLogAppend(log, "poll.runs", hc->Counters.PollRuns, 1);
+    XhciLogAppend(log, "poll.runs.events", hc->Counters.PollRunsWithEvents,
+                  1);
+    XhciLogAppend(log, "poll.peeks", hc->Counters.PollPeeks, 1);
+    XhciLogAppend(log, "poll.peek.hits", hc->Counters.PollPeekHits, 1);
+    XhciLogAppend(log, "poll.promotions", hc->Counters.PollPromotions, 1);
+    XhciLogAppend(log, "poll.parks", hc->Counters.PollParks, 1);
+    XhciLogAppend(log, "poll.kicks", hc->Counters.PollKicks, 1);
+    XhciLogAppend(log, "poll.displaced", hc->Counters.PollArmsDisplaced, 1);
+    XhciLogAppend(log, "poll.interval.min", hc->Counters.PollIntervalMinMs,
+                  1);
+    XhciLogAppend(log, "poll.interval.max", hc->Counters.PollIntervalMaxMs,
+                  1);
+    XhciLogAppend(log, "poll.interval.discarded",
+                  hc->Counters.PollIntervalsDiscarded, 1);
+    XhciLogAppend(log, "watch.looks", hc->Counters.WatchLooks, 1);
+    XhciLogAppend(log, "watch.asserted", hc->Counters.WatchAsserted, 1);
+    XhciLogAppend(log, "watch.stale", hc->Counters.WatchStalePairs, 1);
+    XhciLogAppend(log, "intr.moves", hc->Counters.LineMoves, 1);
+    XhciLogAppend(log, "intr.retire.attempts",
+                  hc->Counters.LineRetireAttempts, 1);
+    XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
+    XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
+    XhciLogAppend(log, "intr.values.found", hc->Counters.IntrValuesFound, 1);
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* The stand-in dead line's withheld claims (record 15 section 11), at
+     * every stop: mode 1 under the latch has no move to note them at. */
+    XhciLogAppend(log, "qemu.inj.deadline.isr", (ULONG)hc->QemuDeadClaims,
+                  1);
+#endif
+    /* Selective suspend (design record 14; 36.33). */
+    XhciLogAppend(log, "susp.switch.read", hc->Counters.SuspSwitchRead, 1);
+    XhciLogAppend(log, "susp.switch", hc->Counters.SuspSwitch, 1);
+    XhciLogAppend(log, "susp.suspends", hc->Counters.SuspSuspendsBegun, 1);
+    XhciLogAppend(log, "susp.resumes", hc->Counters.SuspResumesBegun, 1);
+    XhciLogAppend(log, "susp.wakes", hc->Counters.SuspWakesBegun, 1);
+    XhciLogAppend(log, "susp.out.suspended", hc->Counters.SuspSuspended, 1);
+    XhciLogAppend(log, "susp.out.active", hc->Counters.SuspActive, 1);
+    XhciLogAppend(log, "susp.out.refused", hc->Counters.SuspRefused, 1);
+    XhciLogAppend(log, "susp.refused.reason", hc->Counters.SuspRefusedReason, 1);
+    XhciLogAppend(log, "susp.out.uncertain", hc->Counters.SuspUncertain, 1);
+    XhciLogAppend(log, "susp.out.gone", hc->Counters.SuspGone, 1);
+    XhciLogAppend(log, "susp.arms", hc->Counters.SuspArms, 1);
+    XhciLogAppend(log, "susp.disarms", hc->Counters.SuspDisarms, 1);
+    XhciLogAppend(log, "susp.wake.events", hc->Counters.SuspWakeEvents, 1);
+    XhciLogAppend(log, "susp.wake.unclaimed", hc->Counters.SuspWakeUnclaimed, 1);
+    XhciLogAppend(log, "susp.waitwake.done", hc->Counters.SuspWaitWakesCompleted, 1);
+    XhciLogAppend(log, "susp.stale", hc->Counters.SuspStaleSamples, 1);
+    XhciLogAppend(log, "susp.dirp.pended", hc->Counters.SuspDxPended, 1);
+    XhciLogAppend(log, "susp.dx.stale", hc->Counters.SuspDxStale, 1);
+    XhciLogAppend(log, "susp.slow.deferred", hc->Counters.SuspSlowDeferred, 1);
+    XhciLogAppend(log, "idle.batches", hc->Counters.IdleBatches, 1);
+    XhciLogAppend(log, "idle.calls", hc->Counters.IdleCalls, 1);
+    XhciLogAppend(log, "idle.returns", hc->Counters.IdleReturns, 1);
+    XhciLogAppend(log, "idle.skips", hc->Counters.IdleSkips, 1);
+    XhciLogAppend(log, "idle.cancels", hc->Counters.IdleCancels, 1);
+    XhciLogAppend(log, "idle.abandoned", hc->Counters.IdleAbandoned, 1);
+    XhciLogAppend(log, "idle.quarantined", hc->Counters.IdleQuarantined, 1);
+    XhciLogAppend(log, "susp.notes.suppressed", hc->Counters.SuspNotesSuppressed, 1);
+    /* Stage B (36.38; design record 14 section 8.10). */
+    XhciLogAppend(log, "susp.ss.arms", hc->Counters.SsSuspArms, 1);
+    XhciLogAppend(log, "susp.ss.arm.refused",
+                  hc->Counters.SsSuspArmRefused, 1);
+    XhciLogAppend(log, "susp.ss.disarms", hc->Counters.SsSuspDisarms, 1);
+    XhciLogAppend(log, "susp.ss.disarm.failed",
+                  hc->Counters.SsSuspDisarmFailed, 1);
+    XhciLogAppend(log, "susp.ss.hub.u3", hc->Counters.SsSuspHubU3, 1);
+    XhciLogAppend(log, "susp.ss.hub.resumes",
+                  hc->Counters.SsSuspHubResumes, 1);
+    XhciLogAppend(log, "susp.ss.cap.reads", hc->Counters.SsSuspCapReads, 1);
+    XhciLogAppend(log, "susp.ss.cap.failed", hc->Counters.SsSuspCapFailed, 1);
+    XhciLogAppend(log, "susp.ss.capable", hc->Counters.SsSuspCapable, 1);
+    XhciLogAppend(log, "susp.ss.far", hc->Counters.SsSuspFarInterfaces, 1);
+    XhciLogAppend(log, "susp.fw.events", hc->Counters.FuncWakeEvents, 1);
+    XhciLogAppend(log, "susp.fw.closed", hc->Counters.FuncWakeClosed, 1);
+    XhciLogAppend(log, "susp.fw.as.event", hc->Counters.FuncWakeAsEvent, 1);
+    XhciLogAppend(log, "susp.fw.in.sequence",
+                  hc->Counters.FuncWakeInSequence, 1);
+    XhciLogAppend(log, "susp.fw.ignored", hc->Counters.FuncWakeIgnored, 1);
+    XhciLogAppend(log, "susp.fw.unattributed",
+                  hc->Counters.FuncWakeUnattributed, 1);
+    XhciLogAppend(log, "susp.dn.dropped", hc->Counters.DevNotifyDropped, 1);
+    XhciLogAppend(log, "susp.ss.cap.settled",
+                  hc->Counters.SsSuspCapSettled, 1);
+    /* Composite devices as devnodes (task 36.43). */
+    XhciLogAppend(log, "composite.parents", hc->Counters.CompositeParents,
+                  1);
+    XhciLogAppend(log, "composite.represented",
+                  hc->Counters.CompositeRepresented, 1);
+    /* Issue 18's behind-hub speed IDs. */
+    XhciLogAppend(log, "hub.speed.nospeed",
+                  hc->Counters.TopoBehindHubNoSpeed, 1);
+    XhciLogAppend(log, "hub.speed.fallbacks",
+                  hc->Counters.Usb2HubSpeedFallbacks, 1);
     hcdLogTolLocked(ext, log);
 }
 
@@ -456,6 +568,9 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->Counters.FatalStatus = hc->Hc.FatalStatusDetected;
     hc->Counters.InterruptMaskFailures = hc->Hc.InterruptMaskFailures;
+    /* The core sets it at an HCRST that retired a moved line (record 15
+     * section 4.2); the HCD's own proofs set both. */
+    hc->Counters.LineRetireState = hc->Hc.LineRetireState;
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 #ifdef XHCI_DBG_TRACE
     hcdCountersTrace(&hc->Counters);

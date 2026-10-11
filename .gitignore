@@ -63,6 +63,7 @@ objfre/
 !xhciqual/build.cmd
 !xhcisnap/build.cmd
 !xhcisnap/selftest.cmd
+!test/xfertest/build.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd
 !test/*.cmd
@@ -111,6 +112,14 @@ out/
 !releases/**/*.sys
 !releases/**/*.exe
 !releases/**/*.map
+
+# The project test-signing key (design record 19): a .pfx or .pvk is a private
+# key and is never tracked, anywhere, whatever directory it is put in. It is
+# held in scripts\local\testsign\ (ignored above as part of scripts/local/) or
+# outside the tree. The public half, xhci98-test.cer, is published in every
+# x64 release directory and is tracked there like the binaries it signed.
+*.pfx
+*.pvk
 
 # make-release.ps1's two working directories, which exist only while a release
 # is being cut: `.staging-<version>` is the tree under construction, and
@@ -183,12 +192,12 @@ xhciqual/test/*.ppm
 # them.
 temp/*
 
-# Archived bare-metal qualification runs are evidence, not build output:
-# keep them despite the global *.log rule (case-insensitive on Windows).
-# The linker MAP archived beside them is what turns a photographed DOS/32A
-# fault EIP back into a symbol, so it is evidence too - keep it despite *.map.
-!xhciqual/results/**/*.LOG
-!xhciqual/results/**/*.MAP
+# Archived bare-metal qualification runs are evidence, but they identify the
+# machines they were taken on, so they are kept on the maintainer's disk and
+# not published (owner, 2026-10-07, for privacy; untracked then, and earlier
+# commits still hold the copies tracked until that day). Documents cite them by
+# path as a record of where the evidence is held, not as files in a clone.
+xhciqual/results/
 
 # macOS / OneDrive cruft
 .DS_Store

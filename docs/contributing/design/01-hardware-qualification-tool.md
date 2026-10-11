@@ -64,7 +64,7 @@ C4 proves two separable things: that the controller asserts INTx at all (spec 4.
 The last two rows are the real gap, and the ACPI multiprocessor row is the likely configuration: a modern multi-core machine installing Win2000 gets the multiprocessor ACPI HAL. Consequences to keep straight:
 
 - A C4 PASS says the controller asserts INTx and the PIC path works. For Win2000 on any APIC HAL (`halaacpi`, `halmacpi`, `halapic`, or `halmps`), treat the assertion as proven and the routing as unproven until the driver runs there.
-- A C4 FAIL is disqualifying as stated in section 8, but read the note. If the controller never asserts INTx (Interrupt Pin = 0, MSI-only) the machine is dead for both targets, because neither has an MSI path (NT gained MSI in Vista; see [`../implementation-invariants.md`](../implementation-invariants.md), "Interrupt Delivery"). If instead the assertion happens but PIC routing is broken on this firmware, that is Win98-fatal and only suspicious for Win2000 under an APIC HAL.
+- A C4 FAIL is disqualifying as stated in section 8, but read the note. Since `2.2.0.3` (roadmap-hcd task 36.10, design record 15 section 10) a controller with no working interrupt is not refused: the driver polls it. C4 reads POLL, "needs polling", when there is no line to arm (Interrupt Pin = 0, an Interrupt Line DOS cannot use, PCI Interrupt Disable stuck) or the No-Op's completion reaches the event ring while no interrupt arrives, and the command completes polled; such a controller, passing the rest, is QUALIFIED WITH CAVEATS (exit 3), and the verdict says whether an MSI-capable OS (Vista and 7) could take a message interrupt instead. A PIC-routing failure of that shape was Win98-fatal before polling; it is now the caveat. What stays a FAIL is the tool's own DPMI failure, an ISR entry the controller did not own, an ISR with no completion, and a command that never completes even polled.
 - Nothing in the tool distinguishes those two failure modes beyond the Interrupt Pin value and the C4 note. Record both from the log.
 
 ## 4. Environment and toolchain
@@ -99,14 +99,29 @@ tool source/
   irq.c        IVT hook, 8259 mask/EOI, ISR, poll-vs-interrupt differential   [needs extender]
   irqasm.asm   The ISR entry itself, in assembly - the one thing that cannot
                be written in C because it owns the interrupt frame
-  report.c     Per-controller fact sheet + PASS/FAIL verdict; console pager
+  report.c     Per-controller fact sheet; console pager
+  verdict.c    Task 36.10: C4's outcome (PASS, POLL "needs polling", FAIL),
+               the C6/C8 gate, the per-controller verdict with QUALIFIED
+               WITH CAVEATS, and the exit code; pure                [host-testable]
   mmiodiag.c   Pure PCIINFO -> report-text: the PM block and the two dead-MMIO
                classifiers. A translation unit of its own precisely so the host
                suite below can reach it                                [host-testable]
+  route.c      Task 36.11: the Intel PCH interrupt routing report (D20IP,
+               D20IR, PIRQx_ROUT) on the reviewed chipsets, and the
+               comparison against --gsi; pure, read by pci.c's
+               route_read                                              [host-testable]
+  sysinfo.c    Task 36.48: the system description in the header - SMBIOS
+               entry point and structure table (types 0, 1, 2, 4, 17, 19),
+               CPUID text, the RAM and DOS lines; never a serial, UUID,
+               asset tag, SKU or part number; pure                     [host-testable]
+  sysprobe.c   Its DOS half: the F-segment scan, one DPMI 0800h mapping of
+               the table, CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh
+               1600h through DPMI 0300h; reads only                    [needs extender]
+  sysasm.asm   CPUID and the EFLAGS.ID test, every register but EAX saved
   main.c       Sequencing, family selection (default all), CLI flags
                (--probe-only/--no-active, --poll-only, --irq-selftest, --set-intel-ports,
                --no-wait, --no-devid, --no-page, --serial, --log [filename],
-               --done-flag FILE)
+               --done-flag FILE, --gsi N, --no-sysinfo)
 ```
 
 `--probe-only` runs Tier A and any Tier B reads the firmware's existing PCI state permits. It is read-only: it never enables MSE, clears INTx Disable, writes PMCSR, or takes ownership. If MSE is clear, the report records that Tier B was unavailable and leaves the bit unchanged. The default runs the full suite.
@@ -123,9 +138,9 @@ Register offsets below are relative to BAR0 unless noted. Capability regs at BAR
 
 The detailed matrix below is the xHCI matrix. EHCI/OHCI reuse its C1/C2/C3/C4/C5/C6 meanings with the family-specific mechanisms described in section 2. C7 and C8 remain xHCI-only.
 
-### Automated QEMU regression matrix (40 cases)
+### Automated QEMU regression matrix (50 cases)
 
-`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stands at 40 cases as of v0.11 (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
+`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, and at 50 since task 36.48's four `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (one with `--no-sysinfo`, which must print none of the machine) (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
 
 The cases are: standalone help, an isolated locked xHCI IRQ self-test, two `--probe-only` cases, and the controller/device cases. Controller presence is exhaustive across the requested families: none, xHCI, EHCI, OHCI, xHCI+EHCI, xHCI+OHCI, EHCI+OHCI, and all three. Empty and attached-device variants cover xHCI HS storage, FS HID, a hub with downstream HID, and an unmanaged SuperSpeed-only placement; EHCI HS storage and FS HID; OHCI HID and storage; pairwise mixed attachments; and all-three mixed attachments. It also covers default-all scanning, combined selectors, selecting an absent family, and --log ohci log-name/selector disambiguation.
 
@@ -138,6 +153,12 @@ The QEMU matrix is not the whole of what runs per build. `xhciqual/build.cmd` ru
 ### Host-side unit tests
 
 `xhciqual/test/run-host-tests.cmd` builds and runs `xhciqual/test/test_mmiodiag.c` on the Windows build host in seconds, with no VM and no DOS. It covers `xhciqual/mmiodiag.c`, the pure `PCIINFO` -> report-text logic behind the PCI Power Management block and the two dead-MMIO classifiers.
+
+Since task 36.11 it also builds `xhciqual/test/test_route.c`, over `xhciqual/route.c` and the driver's `src/xhci_pirq.c`: the routing report on the reviewed Intel chipsets, which no QEMU controller has.
+
+Since task 36.48 it also builds `xhciqual/test/test_sysinfo.c`, over `xhciqual/sysinfo.c`: SMBIOS entry points (2.x, 3.0, legacy DMI, bad checksums, a table above 4 GB) and tables (valid, truncated at every length, garbled, strings missing), CPUID text and the no-SMBIOS fallback, with every identifier planted and checked absent from the output.
+
+Since task 36.10 it also builds `xhciqual/test/test_verdict.c`, over `xhciqual/verdict.c` and `mmiodiag.c`: C4's outcome, the C6/C8 gate, the verdict through each C4 outcome and the exit code. The matrix reaches the "needs polling" outcome only through two test programs that rewrite the Interrupt Line before the run.
 
 That code is a separate translation unit so it can be tested here, because the QEMU matrix cannot reach any of it. SeaBIOS always leaves Memory Space Enable set and the BAR assigned, so `mmio_ok` is always true and neither classifier runs, and no emulated USB controller exposes a PM capability, so only the "capability absent" branch executes. Without the host runner, every other branch would first execute on a field machine.
 
@@ -193,6 +214,8 @@ During development, enabling OHCI SOF at the protected-mode vector caused a repe
 
 Emit a per-controller qualification report: the overall verdict plus every fact gathered (CSZ, slot/port counts, scratchpad count, USB2 topology, IRQ, quirks, and PASS/FAIL for handoff/reset/DMA/IRQ). This is not only go/no-go; it is the seed for the Phase 4 quirk and parameter tables.
 
+Since task 36.48 the report header names the machine it came from, read in every mode before any controller is touched and with no PCI write: SMBIOS Type 0 (BIOS vendor, version, date, and the SMBIOS version), Type 1 (maker, product, version, family), Type 2 (board maker and product) and Type 4 (socket; its version where CPUID has no brand string); CPUID's vendor, brand, family, model and stepping; the RAM from INT 15h E820, else SMBIOS Type 17, else Type 19, saying which; and the DOS version with whether it runs in a Windows DOS box. With no SMBIOS it prints the ROM date (F000:FFF5) and model byte (F000:FFFE). It never prints an identifier of the unit: SMBIOS serial numbers, UUIDs, asset tags, SKU and part numbers are not read out of the table at all. Every length and string is bounds-checked, so a broken table ends the walk rather than the run. The quick scan keeps its one screen with a two-line summary there and the full block in the log. `--no-sysinfo` (owner, 2026-10-10) skips all of it - no SMBIOS scan or mapping, no CPUID, no E820, no DOS query - for a machine where the probing itself misbehaves; the header then says so in one line, and the verdict and exit code are unchanged. `xhciqual/README.md`, "The system description in the header", is the full statement.
+
 ## 7. Silent-death gates (why Phase 0 pays for itself)
 
 Four steps fail with no useful error if the hardware/firmware misbehaves; the driver would just hang or see nothing. Phase 0 exercises each in isolation, on bare metal:
@@ -210,7 +233,7 @@ C1 is not a hard gate. Some firmware never clears the BIOS-Owned semaphore yet s
 
 A machine is disqualified if any of the following hold, regardless of other results:
 
-- Interrupt Pin = 0 / MSI-only, or C4 never fires -> neither target's line-based stack gets interrupts. Interrupt Pin = 0 disqualifies for both; a PIC-routing failure with a non-zero pin is Win98-fatal and unproven for Win2000 under an APIC HAL (section 3).
+- C4 FAIL (section 3's note): the No-Op never completed, even polled, or the interrupt test failed in a way polling does not answer. Until `2.2.0.3` Interrupt Pin = 0 and a C4 that never fired disqualified too; with polling (roadmap-hcd task 36.10) they read "needs polling" and the verdict QUALIFIED WITH CAVEATS (exit 3) when the command completes polled.
 - C3 never completes -> DMA/bus-mastering is broken.
 - BAR0 above 4 GB with no 32-bit alias -> incompatible with the driver's 32-bit addressing on both targets.
 - C2 halt/reset fails, or the controller reports no USB2 protocol ports.

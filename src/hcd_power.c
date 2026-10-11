@@ -35,8 +35,12 @@
  *
  * Neither primary's test guest sleeps (Windows 2000's runs acpi=off). What has
  * run is a shutdown on both (runs/run-26.md): the system IRP, the D3 it
- * requested, the suspend. A D0 resume, the work-item route and the
- * direct transition have not run on a guest.
+ * requested, the suspend. The D0 resume first ran on QEMU guests in task
+ * 36.28's part 1 (2026-10-09/10): XP and Vista hibernate, Windows ME
+ * standby and hibernate, each through XhciResumeController's
+ * reinitialization (QEMU's xHCI has no Force Save Context). Not yet
+ * distinguished: the work-item route against the inline one; never run:
+ * the direct transition.
  *
  * IRQL: dispatch at PASSIVE_LEVEL (the FDO is DO_POWER_PAGABLE); the
  * completion routines and the request callback at <= DISPATCH_LEVEL; the
@@ -84,6 +88,25 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
     return 1;
 }
 
+/*
+ * The controller suspended: selective suspend's epoch moves and PowerDown
+ * is set first, under the controller lock (from then until the thread
+ * serves the controller powered again, admission completes every Dx at
+ * once), then XhciSuspendController, then a Dx pended before it is settled
+ * (design record 14 section 4.4).
+ * The power gate held; IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    HcdSuspControllerDownLocked(hc);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    XhciSuspendController(&hc->Hc);
+    HcdSuspSettleStale(hc);
+}
+
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 {
@@ -97,6 +120,8 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         /* Task 34.3: firmware may have put the connectors back on EHCI
          * across the sleep; route them before the ports are resumed. */
         HcdPswRoute(hc);
+        /* Task 36.3: and may have put the xHCI's interrupt route back. */
+        HcdPirqResume(hc);
         hc->TolStartGen++;
         if (!hcdResumeContained(hc) &&
             XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
@@ -105,6 +130,12 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         }
     }
     hc->Common.DevicePower = PowerDeviceD0;
+    /* The poller's service, once D0 is published and inside the gate
+     * (design record 15 section 5.3); its own admission refuses a resume
+     * that failed or was contained. */
+    if (hc->ControllerStarted) {
+        HcdPollGrant(hc);
+    }
     HcdPowerGateLeave(hc);
     (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                           stack->Parameters.Power.State);
@@ -145,7 +176,11 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
 {
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
-            XhciSuspendController(&hc->Hc);
+            /* Record 15 section 4.2: revoke, then contain an owed
+             * retirement, before the controller is suspended. */
+            HcdPollRevoke(hc);
+            (VOID)HcdPollContain(hc);
+            hcdSuspendSettled(hc);
             hc->SuspendedInD0 = 1;
         }
         if (hc->Common.SystemPower == PowerSystemShutdown) {
@@ -156,12 +191,14 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     if (hc->SuspendedInD0) {
         hc->SuspendedInD0 = 0;
         HcdPswRoute(hc);
+        HcdPirqResume(hc);
         hc->TolStartGen++;
         if (!hcdResumeContained(hc) &&
             XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }
+        HcdPollGrant(hc);
         return;
     }
     hc->WakesWithoutPower++;
@@ -343,7 +380,11 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         HcdPowerGateEnter(hc);
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
-            XhciSuspendController(&hc->Hc);
+            /* Record 15 section 4.2: revoke, then contain an owed
+             * retirement, before the controller is suspended. */
+            HcdPollRevoke(hc);
+            (VOID)HcdPollContain(hc);
+            hcdSuspendSettled(hc);
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
          * as Linux's xhci_shutdown does on these chipsets; a sleep keeps

@@ -152,9 +152,202 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG SsHubConfigErrors;
     ULONG SsHubDevicesPlus;
     ULONG SsHubRateUnmatched;
+
+    /* Event delivery (design record 15 section 8; roadmap-hcd.md 36.6 to
+     * 36.8), appended. The three values as read (XHCI_POLL_NOT_FOUND when
+     * not found) and in effect; the delivery and its reason
+     * (XHCI_POLL_DELIVERY_*, XHCI_POLL_R_*), set at start and again at the
+     * dead-line move; the pin's read status and value; the poller's role,
+     * the period it last armed and the bus state that chose it
+     * (XHCI_POLL_BUS_*); its runs and the runs that drained an event; the
+     * opportunistic peeks and their hits; promotions, parks and kicks; arms
+     * replaced as displaced; the shortest and longest interval between two
+     * runs (XHCI_POLL_NOT_FOUND until one) and the intervals discarded; the
+     * watcher's looks, asserted looks and stale pairs; the move (0 or 1);
+     * the attempts to retire the line and the retirement's state
+     * (XHCI_POLL_RETIRED_*); and a start that cleared a leftover PCI
+     * Interrupt Disable. Written at start before the poller runs, then
+     * under the controller lock or PollLock (the poller's own words). */
+    ULONG IntrModeRead;
+    ULONG IntrMode;
+    ULONG IntrDelivery;
+    ULONG IntrReason;
+    ULONG IntrPinStatus;
+    ULONG IntrPin;
+    ULONG PollIdleMsRead;
+    ULONG PollIdleMs;
+    ULONG PollActiveMsRead;
+    ULONG PollActiveMs;
+    ULONG PollRole;
+    ULONG PollPeriodLast;
+    ULONG PollStateLast;
+    ULONG PollRuns;
+    ULONG PollRunsWithEvents;
+    ULONG PollPeeks;
+    ULONG PollPeekHits;
+    ULONG PollPromotions;
+    ULONG PollParks;
+    ULONG PollKicks;
+    ULONG PollArmsDisplaced;
+    ULONG PollIntervalMinMs;
+    ULONG PollIntervalMaxMs;
+    ULONG PollIntervalsDiscarded;
+    ULONG WatchLooks;
+    ULONG WatchAsserted;
+    ULONG WatchStalePairs;
+    ULONG LineMoves;
+    ULONG LineRetireAttempts;
+    ULONG LineRetireState;
+    ULONG IntxDisableCleared;
+    /* The move's mask (record 15 section 8): 1 when both enables read back
+     * down at the move's retirement attempt, whatever its IP step did. */
+    ULONG LineMoveMasked;
+    /* The three values' read status apart from their values (record 15
+     * section 3): XHCI_POLL_FOUND_* bits. */
+    ULONG IntrValuesFound;
+
+    /* Message-signalled interrupts on Vista and 7 (design records 15
+     * section 4.3 and 18; roadmap-hcd.md 36.15), appended: where the
+     * IoConnectInterruptEx pair came from (HCD_MSI_ROUTINES_*); the
+     * messages connected and the capability read (XHCI_POLL_DELIVERY_*);
+     * the connection's NTSTATUS; the raw list's message descriptors; the
+     * x86 helper's binding (XHCI_MSI86_STATE_*), its looks, the last
+     * look's NTSTATUS and refusal (XHCI_MSI86_REFUSE_*) and the helper's
+     * version; the last requirements filter's sequence, the list's class
+     * (XHCI_MSI_CLASS_*), the outcome (XHCI_MSI_OUT_*), the mode it used
+     * as read (XHCI_POLL_NOT_FOUND when not found), its configurations,
+     * message and line members, and the descriptors a strip removed.
+     * Written at each start, after the counters are zeroed, from the
+     * controller's own record, and at each later filter. */
+    ULONG MsiRoutines;
+    ULONG MsiMessages;
+    ULONG MsiCapability;
+    ULONG MsiConnectStatus;
+    ULONG MsiDescriptors;
+    ULONG Msi86State;
+    ULONG Msi86Looks;
+    ULONG Msi86Status;
+    ULONG Msi86Refusal;
+    ULONG Msi86HelperVersion;
+    ULONG MsiFilterSeq;
+    ULONG MsiFilterClass;
+    ULONG MsiFilterOutcome;
+    ULONG MsiFilterMode;
+    ULONG MsiFilterLists;
+    ULONG MsiFilterMessages;
+    ULONG MsiFilterLines;
+    ULONG MsiFilterStripped;
+    /* Selective suspend, stage A (design record 14; roadmap-hcd.md 36.33),
+     * appended contiguous at word 114, after the MSI words, so stage B's (record 14 section 8.10)
+     * follow them: the switch as read (0 absent, 1 a DWORD, 2 another
+     * type) and in effect; the sequences begun by kind and how they ended,
+     * the last refusal's reason (XHCI_SUSP_WHY_*); the remote-wake feature
+     * set and cleared; wake events, those that claimed nothing and the
+     * WAIT_WAKEs they completed; samples of another device generation;
+     * D-IRPs pended, stale-epoch Dx completed and slow IRPs deferred; the
+     * idle notification's batches, callbacks called and returned, entries
+     * skipped, client cancels, callbacks abandoned and PDOs quarantined;
+     * and log lines past the start's budget (hcd_susp.c). Thread plainly,
+     * dispatch interlocked or under the controller lock, as above. */
+    ULONG SuspSwitchRead;
+    ULONG SuspSwitch;
+    ULONG SuspSuspendsBegun;
+    ULONG SuspResumesBegun;
+    ULONG SuspWakesBegun;
+    ULONG SuspSuspended;
+    ULONG SuspActive;
+    ULONG SuspRefused;
+    ULONG SuspRefusedReason;
+    ULONG SuspUncertain;
+    ULONG SuspGone;
+    ULONG SuspArms;
+    ULONG SuspDisarms;
+    ULONG SuspWakeEvents;
+    ULONG SuspWakeUnclaimed;
+    ULONG SuspWaitWakesCompleted;
+    ULONG SuspStaleSamples;
+    ULONG SuspDxPended;
+    ULONG SuspDxStale;
+    ULONG SuspSlowDeferred;
+    ULONG IdleBatches;
+    ULONG IdleCalls;
+    ULONG IdleReturns;
+    ULONG IdleSkips;
+    ULONG IdleCancels;
+    ULONG IdleAbandoned;
+    ULONG IdleQuarantined;
+    ULONG SuspNotesSuppressed;
+    /* Selective suspend, stage B (design record 14 section 8.10; roadmap-hcd
+     * 36.38), appended contiguous at word 142: FUNCTION_SUSPEND with options
+     * 03h the device took and arm steps whose request was not taken; options
+     * 0 taken and disarms not taken (the device cycled); SuperSpeed hub
+     * ports observed in U3 and verified back in U0; GetStatus(interface)
+     * answered, failed (a STALL, failure or short answer) and the capable
+     * bits they found; configurations with a function past interface 31;
+     * FUNCTION_WAKE notifications received for a device, dropped at receipt
+     * with the window closed, taken as a suspension's wake, taken by a hub
+     * port's observation or a refusal's end, emptied by a closing window or
+     * taken for a device not suspended, and naming no PDO's first interface
+     * or one past 31; Device Notifications dropped with the switch on (another
+     * type, or a slot with no device); and WAIT_WAKEs a configuration left
+     * without a wake function. The DPC's under the controller lock, the
+     * thread's plainly or under it. */
+    ULONG SsSuspArms;
+    ULONG SsSuspArmRefused;
+    ULONG SsSuspDisarms;
+    ULONG SsSuspDisarmFailed;
+    ULONG SsSuspHubU3;
+    ULONG SsSuspHubResumes;
+    ULONG SsSuspCapReads;
+    ULONG SsSuspCapFailed;
+    ULONG SsSuspCapable;
+    ULONG SsSuspFarInterfaces;
+    ULONG FuncWakeEvents;
+    ULONG FuncWakeClosed;
+    ULONG FuncWakeAsEvent;
+    ULONG FuncWakeInSequence;
+    ULONG FuncWakeIgnored;
+    ULONG FuncWakeUnattributed;
+    ULONG DevNotifyDropped;
+    ULONG SsSuspCapSettled;
+    /* Composite devices as devnodes (task 36.43; design record 13 section
+     * 10.12), appended at word 160: composite-parent PDOs created, and
+     * function PDOs re-presented in place at a composite FDO's start. The
+     * thread's plain writes. */
+    ULONG CompositeParents;
+    ULONG CompositeRepresented;
+    /* USB 2.0 speed IDs behind a hub (issue 18; implementation-invariants
+     * "Port Speed Decoding", the downstream exception), appended at word
+     * 162: XhciUsb2HubSpeedFallback as read (0 absent, 1 a DWORD, 2 another
+     * type) and the policy in effect (1 on); every behind-hub placement
+     * refused for want of a speed ID, USB 2.0 or SuperSpeed hub alike; each
+     * placement that took the default ID; and the Slot IDs that hold a
+     * device placed so, bit (Slot ID - 1) - not kept here (this word stays
+     * 0) but computed by the door from the live records as it copies the
+     * block (hcd_door.c). The start's writes and the thread's plain ones. */
+    ULONG Usb2HubSpeedSwitchRead;
+    ULONG Usb2HubSpeedFallbackOn;
+    ULONG TopoBehindHubNoSpeed;
+    ULONG Usb2HubSpeedFallbacks;
+    ULONG Usb2HubSpeedFallbackSlots;
+    /* Stream endpoints (task 36.54; design record 17 section 4.12),
+     * appended at word 167: the soft retry's Reset Endpoints for a stream's
+     * TD; stream rings a port reset or a recycle restarted at their base;
+     * whether QEMU's stream-context quirk is armed on this controller (1 on
+     * PCI 1B36:000D alone, set at each start); the Set TR Dequeue commands
+     * that quirk completed; its resyncs that could not finish, each failing the
+     * Stop or Reset Endpoint it followed; and the extra Stop Endpoints QEMU's
+     * own device wakeup cost by restarting a stopped endpoint. The thread's
+     * plain writes. */
+    ULONG StreamRetryResets;
+    ULONG StreamRingRestarts;
+    ULONG QemuStreamQuirk;
+    ULONG QemuStreamResyncs;
+    ULONG QemuStreamResyncFailed;
+    ULONG QemuStreamRestops;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 63 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

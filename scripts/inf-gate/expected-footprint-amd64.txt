@@ -6,6 +6,9 @@
 # path|<os>|<kind>|<install section>
 # file|<os>|<copyfiles section>|<dirid>|<subdir>|<destination>|<media source>|<temp name>|<flags>|<verdict>
 # reg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>
+# hwreg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>
+#   (the same fields, written to the DEVICE's hardware key by <install>.HW)
+# directive|<os>|<install section>|<bare directive, e.g. Reboot>
 # service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>
 # servicevalue|<os>|<service name>|<service install section>|<directive>|<value>
 # unmodelled|<os>|<section>|<directive>
@@ -89,10 +92,18 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
-reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
@@ -131,6 +142,15 @@ servicevalue|Windows XP x64|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows XP x64|device install|Comp.Dev.NTamd64
+service|Windows XP x64|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows XP x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+unmodelled|Windows XP x64|Comp.Dev.NTamd64|DelReg
 path|Windows Vista and 7 x64|device install|Xhci.Dev6.NTamd64
 file|Windows Vista and 7 x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
@@ -139,10 +159,18 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|k
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFastPollFsLs|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumWaitMs|0x00010003|5000|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciFirstEnumPortMs|0x00010003|2000|keep
-reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelPortSwitch|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntelIrqRoute|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciTolerance|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciIntervalCap|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciAvgTrbEsit|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010003|160|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
@@ -153,6 +181,10 @@ servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+hwreg|Windows Vista and 7 x64|Xhci.Msi.AddReg|HKR|"Interrupt Management"||0x00000010||review
+hwreg|Windows Vista and 7 x64|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageSignaledInterruptProperties"||0x00000010||review
+hwreg|Windows Vista and 7 x64|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageSignaledInterruptProperties"|MSISupported|0x00010003|1|keep
+hwreg|Windows Vista and 7 x64|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageSignaledInterruptProperties"|MessageNumberLimit|0x00010003|1|keep
 path|Windows Vista and 7 x64|device install|RootHub.Dev6.NTamd64
 file|Windows Vista and 7 x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
 reg|Windows Vista and 7 x64|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
@@ -181,6 +213,15 @@ servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows Vista and 7 x64|device install|Comp.Dev6.NTamd64
+service|Windows Vista and 7 x64|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|LoadOrderGroup|Base
+unmodelled|Windows Vista and 7 x64|Comp.Dev6.NTamd64|DelReg
 path|Windows XP x64|right-click Install|DefaultInstall.NTamd64
 file|Windows XP x64|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys||0|remove
 file|Windows XP x64|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep

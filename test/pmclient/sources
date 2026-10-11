@@ -1,0 +1,14 @@
+#
+# sources - Windows 2000 DDK build description for XHCIPM.SYS, selective
+# suspend's test client (roadmap-hcd.md task 36.34; pmclient.c). TEST ONLY,
+# NEVER SHIPPED: scripts\package\make-release.ps1 refuses it. Built by
+# build.cmd in this directory, x86 only.
+#
+
+TARGETNAME=xhcipm
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
+
+SOURCES=pmclient.c

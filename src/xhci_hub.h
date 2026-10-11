@@ -449,4 +449,102 @@ VOID XhciHubNodeInfo(const XHCI_HUB_DESC *desc, ULONG busPowered,
  * capable (bDeviceProtocol 2) and with its multi-TT interface selected. */
 ULONG XhciHubCapsEx(ULONG speedClass, ULONG multiTtCapable, ULONG multiTtOn);
 
+/*
+ * The device's real speed on a hub door (task 36.18; design record 13
+ * section 8.4). The _EX form's UCHAR Speed (byte 23) for a connection of
+ * `speedClass` (XHCI_SPEED_*), SuperSpeedPlus when `plus`: 0 Low, 1 Full,
+ * 2 High; a SuperSpeed connection 3 and a SuperSpeedPlus one 4 on Windows
+ * 98 and ME (`win9x`), as Intel's USB 3 drivers for Windows 9x report it,
+ * and 2 on every NT target, whose usbui reads anything but 2 as Full Speed
+ * (static, legal-provenance.md section 4). An unknown class reads 2, as
+ * before; a connection not `connected` reads 0.
+ */
+ULONG XhciHubExSpeed(ULONG connected, ULONG speedClass, ULONG plus,
+                     ULONG win9x);
+
+/*
+ * IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 (0x0022045C). Microsoft's
+ * usbioctl.h pages (documentation, read 2026-10-09): ULONG ConnectionIndex,
+ * ULONG Length, USB_PROTOCOLS SupportedUsbProtocols (Usb110 bit 0, Usb200
+ * bit 1, Usb300 bit 2) and the _EX_V2_FLAGS union
+ * (DeviceIsOperatingAtSuperSpeedOrHigher bit 0,
+ * DeviceIsSuperSpeedCapableOrHigher bit 1,
+ * DeviceIsOperatingAtSuperSpeedPlusOrHigher bit 2,
+ * DeviceIsSuperSpeedPlusCapableOrHigher bit 3): 16 bytes.
+ */
+#define XHCI_HUB_EXV2_BYTES             16UL
+#define XHCI_HUB_PROTO_USB110           0x1UL
+#define XHCI_HUB_PROTO_USB200           0x2UL
+#define XHCI_HUB_PROTO_USB300           0x4UL
+#define XHCI_HUB_EXV2_SS_OPERATING      0x1UL
+#define XHCI_HUB_EXV2_SS_CAPABLE        0x2UL
+#define XHCI_HUB_EXV2_SSP_OPERATING     0x4UL
+#define XHCI_HUB_EXV2_SSP_CAPABLE       0x8UL
+
+/* The request's own checks, before its port is looked at: TOO_SMALL for an
+ * input or an output buffer, each checked apart, shorter than the
+ * structure; INVALID for an input longer than it, a Length that is not the
+ * structure's, or a request
+ * whose SupportedUsbProtocols does not ask about Usb300 (Windows 8 refuses
+ * it so, by Microsoft's IOCTL page); else OK. */
+#define XHCI_HUB_EXV2_OK                0UL
+#define XHCI_HUB_EXV2_TOO_SMALL         1UL
+#define XHCI_HUB_EXV2_INVALID           2UL
+
+ULONG XhciHubExV2Check(const UCHAR *buf, ULONG inLen, ULONG outLen);
+
+/* The port's own signalling protocols, not the device's: a root port by its
+ * XHCI_PORT_CLASS_* (a USB 2.0 port Usb110 and Usb200, a USB 3 logical port
+ * Usb300 alone, its USB 2.0 companion being a port of its own; a port no
+ * protocol names, none), and a port of an external hub by the hub's speed
+ * class (a SuperSpeed hub's Usb300, a High-Speed hub's Usb110 and Usb200, a
+ * Full-Speed hub's Usb110). */
+ULONG XhciHubRootPortProtocols(ULONG portClass);
+ULONG XhciHubHubPortProtocols(ULONG hubSpeedClass);
+
+/* The flags: the operating ones from the connection's negotiated speed,
+ * the capable ones from the device's BOS (`bosSs`, `bosSsp`: a SuperSpeed
+ * or SuperSpeedPlus capability descriptor) or from operating at that
+ * speed, which proves it. 0 for a connection not `connected`. */
+ULONG XhciHubExV2Flags(ULONG connected, ULONG speedClass, ULONG plus,
+                       ULONG bosSs, ULONG bosSsp);
+
+/* The answer written over the request in `buf`, byte by byte:
+ * ConnectionIndex kept, Length the structure's, then the two words. */
+VOID XhciHubExV2Fill(UCHAR *buf, ULONG protocols, ULONG flags);
+
+/*
+ * IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION (0x00220410; task 36.45,
+ * design record 13 section 8.11): the 12-byte USB_DESCRIPTOR_REQUEST -
+ * ULONG ConnectionIndex, then bmRequest, bRequest, wValue, wIndex, wLength
+ * (usbioctl.h, #pragma pack(1)) - and Data after it. usbhub's checks
+ * (static, legal-provenance.md section 4): TOO_SMALL for an input or an
+ * output shorter than the request, or a wLength above the output's room;
+ * bmRequest and bRequest are not read, the request is always GET_DESCRIPTOR.
+ * Then DEVICE for the device descriptor (wValue 0100h) and CONFIG for
+ * configuration 0 (0200h), which the bus's copies answer, and FORWARD for
+ * anything else, sent to the device. The plan's Send is the setup's
+ * wLength: Length, held to `cap` - the bus's EP0 scratch - when forwarded.
+ */
+#define XHCI_HUB_DR_REQUEST_BYTES     12UL
+#define XHCI_HUB_DR_TOO_SMALL         1UL
+#define XHCI_HUB_DR_DEVICE            2UL
+#define XHCI_HUB_DR_CONFIG            3UL
+#define XHCI_HUB_DR_FORWARD           4UL
+
+typedef struct _XHCI_HUB_DESC_PLAN {
+    ULONG Port;                     /* ConnectionIndex                   */
+    ULONG Value;                    /* wValue: type << 8 | index         */
+    ULONG Index;                    /* wIndex: a string's language id    */
+    ULONG Length;                   /* wLength, within the output's room */
+    ULONG Send;                     /* the setup's wLength               */
+} XHCI_HUB_DESC_PLAN;
+
+ULONG XhciHubDescPlan(const UCHAR *buf, ULONG inLen, ULONG outLen, ULONG cap,
+                      XHCI_HUB_DESC_PLAN *plan);
+
+/* IoStatus.Information for a request answered with `received` bytes: the
+ * request and the bytes, never more than the setup asked for. */
+ULONG XhciHubDescInfo(const XHCI_HUB_DESC_PLAN *plan, ULONG received);
+
 #endif /* XHCI_HUB_H */

@@ -1,14 +1,21 @@
 # xhci98 - Release Notes
 
-This file describes package version `2.2.0.0`, the eleventh release and the
-fourth of the host controller driver, released on 2026-10-07 (`DriverVer`
-`10/07/2026,2.2.0.0`, in all four INFs). What `2.2.0.0` changed from
+This file describes package version `2.3.0.0`, the twelfth release and the
+fifth of the host controller driver, dated 2026-10-12 (`DriverVer`
+`10/12/2026,2.3.0.0`, in all four INFs). What `2.3.0.0` changes from
+`2.2.0.0` is "What `2.3.0.0` changes", below; what `2.2.0.0` changed from
 `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and `2.1.0.0` from `2.0.0.0`, are
 their entries in `releases/history.md`, and the sections below say where
 each change was read. Where this file and
 `docs/contributing/roadmap-hcd.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
+
+`2.3.0.0`'s changes were read in QEMU virtual machines, or rest on host
+tests where QEMU models no such device or controller. The owner's bench of
+2026-10-11 then read several on real hardware: a Dell Latitude E7250 under
+Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
+`2.3.0.0` changes", below, lists them and says which.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
@@ -60,26 +67,56 @@ separate build from a separate toolchain, in their own directories with their
 own INFs, for Windows XP x64, Vista x64 and Windows 7 x64. Picking the wrong
 directory is harmless: Windows finds no driver in it and says so.
 
-**On Windows Vista x64 and Windows 7 x64 driver signature enforcement must be
-disabled for the drivers to load, at every start.** Those systems refuse an
-unsigned kernel-mode driver, and these are not signed. On a start where
-enforcement is in force the controller shows Code 39 and nothing plugged into
-it works inside Windows, a USB keyboard or mouse included. The install itself
-can be done on an ordinary start. After each install, the Program
-Compatibility Assistant may say "Windows requires a digitally signed
-driver"; the driver still loads on a start with enforcement disabled (read
-on both systems for the `2.1.1.0` package). 32-bit Vista and Windows 7, and
-Windows XP x64, do not refuse unsigned drivers.
+**From `2.3.0.0` the 64-bit `xhci98.sys` and `xhciuas.sys` are
+test-signed, so on Windows Vista x64 and Windows 7 x64 the driver can run
+in test-signing mode instead of disabling driver signature enforcement with
+F8 at every boot.** Those systems refuse a kernel-mode driver without a
+signature they accept; up to `2.2.0.0` the drivers were not signed, and
+enforcement had to be disabled at every start. Once:
+
+1. Open an elevated Command Prompt: Start, type `cmd`, right-click it, Run
+   as administrator.
+2. `bcdedit /set testsigning on` - a boot setting of the current Windows
+   entry, so it stays on for every boot until it is turned off; no F8 is
+   needed.
+3. Restart. "Test Mode" shows on the desktop while it is on: at the bottom
+   right on 7, with the version and build, and in the corners on Vista.
+4. Install the driver as usual. Windows still says it cannot verify the
+   publisher; choose "Install this driver software anyway". Afterwards the
+   Driver tab says "Not digitally signed". Both are expected: the driver is
+   test-signed, not signed by Microsoft, and the package has no catalog.
+
+Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off:
+`bcdedit /set testsigning off` and restart; the driver then needs F8 again,
+or it does not load and the controller shows Code 39 on Vista, Code 52 on
+7, with nothing plugged into it working inside Windows, a USB keyboard or mouse
+included.
+
+- With BitLocker on the system drive, suspend BitLocker before changing the
+  boot setting, or the next boot asks for the recovery key.
+- This is not Microsoft signing: the certificate is the project's own test
+  certificate, which no Windows trusts by itself.
+- Importing the `xhci98-test.cer` in the `-x64` directories is not needed:
+  test-signing mode works without it, and it does not remove the install
+  prompt either. It is not recommended.
+- F8 -> "Disable Driver Signature Enforcement" still works as before, for
+  one boot, without test mode. After an install on such a start the Program
+  Compatibility Assistant may say "Windows requires a digitally signed
+  driver"; the driver still loads on a start with enforcement disabled
+  (read on both systems for the `2.1.1.0` package).
+- 32-bit Vista and 7, and XP x64, need neither: they do not refuse unsigned
+  drivers.
 
 ## What this is not
 
 - It is not tested evenly. Every Windows 2000 result comes from virtual
   machines: Windows 2000 Setup bugchecked on both physical machines this
   project tried, so the driver has never run on Windows 2000 on real silicon.
-  Windows ME, both Windows XP builds, Windows Vista and Windows 7 are
-  supported in virtual machines only for `2.2.0.0`. Windows 98 SE is the one
-  target read on real hardware, at a bench session before the `2.0.0.0`
-  release, on a ThinkPad E460 and a ThinkPad P14s Gen 1. `2.1.0.0`'s own
+  Windows ME, 32-bit Windows XP, Windows Vista and 32-bit Windows 7 are
+  supported in virtual machines only for `2.3.0.0`. Real hardware: Windows
+  98 SE, at a bench session before the `2.0.0.0` release, on a ThinkPad
+  E460 and a ThinkPad P14s Gen 1, and Windows XP x64 and 7 x64 on the
+  owner's Dell Latitude E7250. `2.1.0.0`'s own
   changes were read in virtual machines only; of `2.1.1.0`'s, the Power tab
   and the Intel port switchover were read on the owner's real hardware under
   Windows 98 SE, and the registry values in virtual machines; of
@@ -87,32 +124,179 @@ Windows XP x64, do not refuse unsigned drivers.
   owner's ThinkPad E460 under Windows 98 SE, and the handling of
   transfer, port and controller faults by making each fault it answers on
   purpose in QEMU virtual machines under Windows 98 SE and Windows 2000;
-  no real controller has raised one under this driver yet.
+  no real controller has raised one under this driver yet. Of
+  `2.3.0.0`'s, the owner's bench of 2026-10-11 read polling, MSI, the
+  interrupt routing repair, the port switchover, composite devices and the
+  asynchronous-audio fix on real hardware ("What `2.3.0.0` changes").
   "Targets and their standing"
   says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
   SE, Bulk-Only and UAS alike, needs NUSB's mass-storage component; see
   "Windows 98 SE and ME: the stock install, and storage".
-- It is not signed. Windows 98 SE and ME do not check; Windows 2000 and XP
-  warn and install; 32-bit Vista and 7 warn and install; Vista x64 and
-  Windows 7 x64 load it only while driver signature enforcement is disabled
-  (above). No 64-bit Windows after Windows 7 is supported.
-- It does not put idle devices to sleep. The driver never initiates
-  selective suspend, of a device or of a hub port; see "Known limitations".
+- It is not signed by Microsoft. The 32-bit drivers are not signed at all:
+  Windows 98 SE and ME do not check; Windows 2000 and XP warn and install;
+  32-bit Vista and 7 warn and install. From `2.3.0.0` the 64-bit drivers
+  carry the project's own test signature, which Vista x64 and Windows 7 x64
+  accept only in test-signing mode, and otherwise load only while driver
+  signature enforcement is disabled (above). No 64-bit Windows after
+  Windows 7 is supported.
+- It does not put idle devices to sleep unless you turn that on. Selective
+  suspend is new in `2.3.0.0` and off by default; see
+  "XhciSelectiveSuspend: putting idle devices to sleep".
 - It does not write to your disk. The driver creates no file. Its log is read
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
-  of it is in this package. A `2.2.0.0` install replaces it, because both are
+  of it is in this package. A `2.3.0.0` install replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
+
+## What `2.3.0.0` changes
+
+Most were read in QEMU virtual machines on development host A; the
+Low-Speed mouse fix rests on host tests of that mouse's descriptors alone,
+since QEMU models no such device. Where the owner's bench of 2026-10-11 read
+a change on real hardware, its item says so. The sections named give the
+detail, and what each rests on.
+
+- **A controller with no working interrupt is polled, not refused.** A
+  controller with no interrupt pin, or whose line the driver sees raised
+  and never delivered, has its events read on a timer instead (`XhciInterruptMode`, `XhciPollIdleMs`,
+  `XhciPollActiveMs`; "XhciInterruptMode, XhciPollIdleMs and
+  XhciPollActiveMs: how the controller's events arrive"). Read on real
+  hardware: polling by choice on a ThinkPad E460 under Windows 98 SE, and
+  the move to polling of a dead line on a Dell Latitude E7250 under XP
+  x64.
+- **Message-signalled interrupts on Windows Vista and 7**: on x64 directly,
+  on 32-bit through the package's helper `xhcimsi.sys`. The 32-bit Vista
+  and 7 install asks for a restart ("Windows Vista and 7: message-signalled
+  interrupts"). Read on real hardware: MSI on a Dell Latitude E7250 under
+  Windows 7 x64.
+- **The Intel interrupt routing repair**, for firmware that routes the
+  controller's interrupt to the wrong line (`XhciIntelIrqRoute`). Read on
+  real hardware: on the Dell Latitude E7250 under XP x64, and under
+  Windows 7 x64 with the line asked for.
+- **UAS commands of 1 MiB** where `2.2.0.0` sent 64 KiB
+  (`XhciMaxTransferKB`, default `1024`), and one drive model set apart with
+  Microsoft's per-device `MaximumTransferLength` (`65535` to `2097152`
+  bytes) ("XhciMaxTransferKB: the UAS command size").
+- **Two transfer pieces at once, off by default** (`XhciWideMap`; Windows
+  2000 and later only; "XhciWideMap: two transfer pieces at once").
+- **The Intel port switchover is off by default** (`XhciIntelPortSwitch`
+  `0`); `portsw.vbs`, or `portsw-on.bat` and `portsw-off.bat` in one
+  double-click, turns it on or off, then a restart ("Intel 7-, 8- and
+  9-series chipsets: the port switchover"). Read on real hardware: the
+  Dell Latitude E7250 (`9CB1`) under Windows 7 x64.
+- **Selective suspend, off by default** (`XhciSelectiveSuspend`; USB 2.0
+  and SuperSpeed devices; "XhciSelectiveSuspend: putting idle devices to
+  sleep").
+- **A composite device has an entry of its own**, and every device has
+  the USB device interface ("Devices and hubs in Device Manager"). Read on
+  real hardware with two USB audio devices on the Dell Latitude E7250
+  under Windows 7 x64.
+- **USBView shows a device's strings.** The manufacturer, product, serial
+  number and interface names, and any other descriptor a tool asks for, are
+  read from the device ("Devices and hubs in Device Manager"). Read on real
+  hardware on the Dell Latitude E7250 under Windows 7 x64.
+- **A Low-Speed mouse that carries more endpoints than it declares
+  works.** A mouse (`VID_073A&PID_2230`, GitHub issue 17) whose interface
+  declares one endpoint and carries two was never configured under
+  `2.2.0.0` and did not move. The driver now takes the endpoints the
+  interface declares and ignores the rest, as Microsoft's stack does. Read
+  with that mouse's descriptors in the host tests; the mouse itself has
+  not yet been read on real hardware.
+- **USB audio devices with a feedback endpoint are no longer refused on
+  Windows 7.** Windows 7's audio driver asks for every packet of such a
+  device (an asynchronous one, such as Creative's Sound Blaster Play! 2)
+  at a frame it names. On a controller without the xHCI feature that lets
+  every request name a frame, such as the Intel one in a Dell Latitude
+  E7250, `2.2.0.0` refused every one of those requests, so the device was sent no sound and played only hiss.
+  The driver now names the frame where the controller allows it (the
+  first request after the endpoint falls idle) and otherwise sends the
+  request at the controller's next opportunity. Devices without a
+  feedback endpoint, such as C-Media's, were never affected. Read in host
+  tests and in Windows 7's audio driver's own code, and on a Dell
+  Latitude E7250 under Windows 7 x64, where a Sound Blaster Play! 2 played
+  cleanly at 44.1 and 48 kHz on a test build of the fix, and again on this
+  release. About half the reads of its feedback endpoint end in a USB
+  Transaction Error; the sound is unaffected, and the cause is open.
+- **A device's speed in USBView** on Windows 98 SE and ME: the newer
+  connection query that tools such as SweetLow's USBView send reads
+  SuperSpeed where it is; Windows' own hub pages are unchanged ("A
+  device's speed on the hub pages"), and
+  `XhciFastPollFsLs` `4` polls at the rate the client asks for.
+- **`XHCIQUAL` passes a controller with no working interrupt as
+  `QUALIFIED WITH CAVEATS`**, exit code 3 ("Before you install: check the
+  machine"). Its `--gsi` check was read on real hardware: on the Dell
+  Latitude E7250 under MS-DOS 6.22 it reported the routing mismatch the
+  repair fixes.
+- **`XHCISNAP`'s and `XHCIQUAL`'s reports name the system** they were
+  taken on, with no serial numbers or names; `XHCISNAP -nosysinfo` and
+  `XHCIQUAL --no-sysinfo` skip it ("The log, and how to send one", and
+  "Before you install: check the machine").
+- **Driver Verifier no longer stops the machine at boot.** On 32-bit
+  Windows 7 under `verifier /standard /driver xhci98.sys`, `2.2.0.0`
+  stopped Windows with bugcheck C9 (0x220) as the root hub started,
+  because the root hub answered a WMI request itself instead of passing it
+  on; with no debugger it looked like a hang at "Starting Windows". The
+  hubs now pass it on. Read on 32-bit Windows 7 under Driver Verifier on
+  both drivers; 32-bit Vista and 7 x64 are still to be read.
+- **Low- and Full-Speed devices behind the VIA VL805's built-in hub**
+  (`1106:3483`, GitHub issue 18). The card's USB 2.0 port lists only High
+  Speed in its speed table, which the xHCI specification allows for a
+  controller whose built-in hub serves the slower speeds, and `2.2.0.0`
+  refused every mouse, keyboard or other Low- or Full-Speed device behind
+  that hub. Such a device now gets the standard speed ID. The fix was built
+  without the hardware: it rests on the specification, the reporter's logs
+  and what Linux, FreeBSD and Haiku do, and it has never run on a VL805. It
+  is on by default, on any controller, because without it every Low- and
+  Full-Speed device on such a controller fails; set
+  `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
+  Low- and Full-Speed IDs behind a hub").
+- **A lost interrupt can no longer stop Windows 98 SE.** In `2.2.0.0`, an
+  interrupt the controller raised and Windows never delivered was picked
+  up by the driver's own thread. Windows 98 SE could leave that thread
+  waiting while a copy to a USB drive in MS-DOS
+  compatibility mode waited for the very transfer the thread would pick
+  up. Such a drive is one the computer's BIOS presented at start, the "E:"
+  of a stick plugged in at power-on. Both waited for ever, and the
+  computer stopped. One lost interrupt in the middle of such a copy was
+  enough, in the default `XhciInterruptMode` `0`. On a controller whose
+  interrupt never arrives at all, with `XhciInterruptMode` `1`, it
+  happened on the first copy. The pickup now runs from the driver's
+  100 ms timer instead, which kept running when the thread did not. Read
+  in QEMU on Windows 98 SE, with lost interrupts made on purpose ("Controller
+  faults: what the driver does about them").
+- **Every registry value the driver reads is in its key after an
+  install.** The install writes all nineteen, now including `XhciWideMap`
+  `0`, `XhciSelectiveSuspend` `0` and `XhciUsb2HubSpeedFallback` `1`, each
+  the value a missing one reads as, so nothing behaves differently; an
+  update keeps a value you set ("Registry settings").
+- **A UAS drive keeps working after a transfer error on its data.** A
+  USB Transaction Error on a UAS drive's data or status stream is now
+  retried in place, as on any other bulk endpoint ("Controller faults:
+  what the driver does about them"); before, the read or write failed and
+  the drive was reset. And after a reset of the drive, the driver starts
+  each of its streams afresh. Read in QEMU on development host A with the
+  error made on purpose; a real drive's error has not yet been read on
+  real hardware.
+- **UAS in QEMU: a workaround for an emulator defect.** QEMU's xHCI (read
+  at QEMU 11.1.0, `hw/usb/hcd-xhci.c`: `xhci_find_stream` calls
+  `xhci_ring_init`, which forces the consumer cycle to 1) ignores the cycle
+  bit a UAS stream's context carries whenever an endpoint is stopped, reset
+  or reconfigured, so a stream whose ring had wrapped an odd number of
+  times stopped moving data: a UAS disk in a QEMU guest could then hang
+  after any transfer error, cancel or reset until it was removed and added
+  again. On QEMU's xHCI alone (PCI ID `1B36:000D`) the driver now gives
+  each stream its cycle back after such a command. Real controllers read
+  that bit and never take this path.
 
 ## Targets and their standing
 
 Each target's row says what the `2.0.0.0` drivers were observed doing on
-that system, and where; `2.1.0.0`, `2.1.1.0` and `2.2.0.0` carry that code
-with the changes their history entries list, and the rows "What `2.1.0.0`
-changed", "What `2.1.1.0` changed" and "What `2.2.0.0` changed" say where
-each change was read. "The integration build" is the merged build of a release's
+that system, and where; `2.1.0.0`, `2.1.1.0`, `2.2.0.0` and `2.3.0.0`
+carry that code with the changes their history entries list, and the rows
+"What `2.1.0.0` changed", "What `2.1.1.0` changed", "What `2.2.0.0`
+changed" and "What `2.3.0.0` changes" say where each change was read. "The integration build" is the merged build of a release's
 code before its cut, in the never-published `qemu` flavour. The ten install
 legs are read on the `release` flavour of that build, and again from the
 release asset itself after the cut.
@@ -123,13 +307,14 @@ release asset itself after the cut.
 | Windows 2000 SP4 | Primary, virtual machines only | The same device, hub and Device Manager rows as Windows 98 SE, under Driver Verifier, plus a multiprocessor guest. SuperSpeed storage, and UAS at SuperSpeed and at High Speed, on the integration build. UAS, forced Bulk-Only and the switch between them on a passed-through dual-transport bridge, each with a verified round trip. SuperSpeed hubs: untested, as no virtual machine models one; built from the specification. Never run on real hardware |
 | Windows ME | Virtual machines only | Under SweetLow's stack, on the integration build: the install, HID, storage with a verified file compare, unplug and replug, a hub with a mouse and a stick behind it, a composite audio device bound at a root port and behind a hub, the root hub's disable and enable, a 10-cycle soak per device class, SuperSpeed storage, and UAS at SuperSpeed (streams) and at High Speed. Bulk-Only storage works on Windows ME's own mass-storage files, and UAS once those are present (next section). Re-enabling the controller with a USB mouse attached hung Windows ME under `2.0.0.0` (a keyboard was never tried); `2.1.0.0` fixes it: the devices are kept across the controller's stop and revived on the re-enable, as Microsoft's hub driver does. Read on the `2.1.0.0` integration build: the re-enable with a mouse three times of three, with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; and on the `release` flavour once more after the update from `2.0.0.0` |
 | 32-bit Windows XP SP3 | Virtual machines only | On the integration build: install, HID, storage with a verified file compare, unplug and replug, a hub with devices behind it, composite audio bound, the root hub's and the controller's disable and enable, shutdown; SuperSpeed storage, and UAS at SuperSpeed and at High Speed. A 10-cycle soak per device class (HID, a hub with a mouse, storage) |
-| Windows XP x64 SP2 | Virtual machines only; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak |
-| Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled. The same soak |
-| Windows 7 SP1, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0` |
+| Windows XP x64 SP2 | Virtual machines, and real hardware on the Dell Latitude E7250; the 64-bit drivers | The same clauses as 32-bit XP, with the 64-bit `xhciuas.sys` at SuperSpeed and at High Speed, and the same soak. Real hardware: XP x64 on the owner's Dell Latitude E7250 |
+| Windows Vista SP2, 32-bit and x64 | Virtual machines only | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then; the test-signed x64 drivers of `2.3.0.0` were read in test-signing mode, with no F8. The same soak |
+| Windows 7 SP1, 32-bit and x64 | Virtual machines; x64 also on real hardware, the Dell Latitude E7250 | The same clauses, at four virtual processors; x64 on starts with driver signature enforcement disabled, the drivers being unsigned then, and the test-signed x64 drivers of `2.3.0.0` in test-signing mode, with no F8; five controller disable and enable cycles on each. The same soak. Windows 7 is not read on real hardware for `2.0.0.0`. Real hardware: 7 x64 on the owner's Dell Latitude E7250 |
 | Every target, from the release package | | For `2.0.0.0`: the `release` flavour of the integration build, on the ten install legs (Windows 98 SE under NUSB and under SweetLow's stack, ME, 2000, XP, XP x64, and Vista and 7 in both architectures): installed, controller and root hub started, HID, storage with a verified file compare, composite audio bound, the controller's disable and enable, and shutdown, with SuperSpeed storage and UAS at SuperSpeed and at High Speed on most legs. The one defect was Windows ME's controller re-enable, which `2.1.0.0` fixes (the Windows ME row). For `2.1.0.0`: the `release` flavour of its integration build, installed over `2.0.0.0` on eleven virtual machines (the ten legs' systems and a stock Windows 98 SE) and read on the same clauses less SuperSpeed storage and UAS, all passing, the file compare skipped on the stock Windows 98 SE, which has no storage driver (see "Updating from 2.y.y.y"); and the ten install legs from the `2.1.0.0` release package, read after the cut, all passed: the same clauses with SuperSpeed storage and UAS at SuperSpeed and at High Speed, Windows ME's controller re-enable with a mouse attached, a hub disabled and enabled with a mouse and a stick behind it on the seven NT systems, and hidusbf Setup reading the mouse behind a hub on 32-bit XP. For `2.1.1.0`: the ten install legs from the `2.1.1.0` release package, read after the cut, all passed, on the same clauses as for `2.1.0.0` |
 | What `2.1.0.0` changed | | All in QEMU on development host A, on the `2.1.0.0` integration build unless the `release` flavour is named. The controller re-enable with devices kept: Windows ME with a mouse (three of three), with a mouse and a stick, with a USB keyboard alone, and with a hub holding a mouse and a stick, every device back and working; Windows 98 SE and 2000 disable and enable with a stick behind a hub and a file compare after, and a 10-cycle soak on each; 32-bit XP disable and enable with no USB keyboard attached (XP refuses the disable while one is). Instance ids from the serial number: a stick moved between root ports kept its one entry and was not found again as new hardware on Windows 98 SE, ME, 2000 and 32-bit XP, and on Vista and 7 in both architectures; moved behind a hub as well on Windows 98 SE, 2000, 32-bit XP and 32-bit Vista, and to a SuperSpeed port on Windows 98 SE. Two sticks with different serial numbers had two entries, and of two with the same one the second was known by its port (Windows 98 SE, 2000 and XP). External hubs as entries of their own, on QEMU's hub, which is a USB 1.1 Full-Speed hub: a mouse and a stick behind it, the tree by connection, the hub unplugged and plugged in again, a device unplugged behind it, and a two-tier chain, on Windows 98 SE, 2000 and 32-bit XP; the tree and the hub unplugged and plugged in again on Vista and 7 in both architectures, the tree on ME and XP x64, and USBView walking into the hub on XP, XP x64, Vista and 7; the hub disabled and enabled in Device Manager with the devices behind it coming back, on Windows 98 SE, and on Windows 2000 and XP with the fix for the defect the first reading found (two disable and enable cycles each in QEMU, the same instance ids and the stick's files intact). A High-Speed hub, its transaction translators, and a USB 3 hub's SuperSpeed half were read in no virtual machine; the owner read a High-Speed hub's entry and a USB 3 hub's "xHCI98 USB 3.x Hub" on real hardware after the cut, and both work. The Power tab: figures in mA on the root hub's and the hub's Power tabs on Windows 98 SE and 2000 (a mouse, a keyboard and an audio device 100 mA, a stick 0 mA), on 32-bit XP, and on XP x64 (a mouse and a keyboard 100 mA, a stick and the hub 0 mA; QEMU's stick and hub ask for 0 mA in their own descriptors), and a hub's Power tab on 32-bit 7. The Advanced tab's figure while audio plays was not read: Windows 98 SE's `USBAUDIO.VXD` fails on playing in QEMU ("Known limitations"). Device names: where a Windows class INF names the device, its name is shown, on every system read; the device's own product name was read in Windows 98 SE's "New Hardware Found" box, for devices no INF names on Windows 98 SE, 2000 and XP, and as Windows 7's "Bus reported device description" in both architectures. hidusbf: 1000, 500 and 250 Hz at a root port and behind a hub on Windows 98 SE under NUSB 3.6 and on ME, at a root port on 32-bit XP, the filter loaded and its setting reaching the controller on a stock Windows 98 SE (`release`), and behind a hub on 32-bit XP with the fix for the defect the first reading found (Setup read the mouse's speed, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5). Fast polling: not read. The F6 floppy, on the `release` flavour: Windows 2000 SP4 and 32-bit XP SP3 text-mode Setup with a USB keyboard and a USB stick, and the Recovery Console on both; see that section |
 | What `2.1.1.0` changed | | The registry values: in QEMU on development host A, on the `release` flavour before `XhciIntelPortSwitch` was added, a fresh install on Windows 98 SE and 2000 writing the seven at their defaults, and an update over `2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7 keeping two values set by hand and adding the missing three ("Registry settings"). The Power tab: on the owner's ThinkPad P14s Gen 1, a SuperSpeed drive declaring 896 mA reading 510 mA and `XHCISNAP` giving its exact figure, a USB 2.0 device reading as before ("The controller's Advanced tab and the root hub's Power tab"). The Intel port switchover: on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto, and its gate staying closed on the P14s Gen 1 and in QEMU ("Intel 7-, 8- and 9-series chipsets: the port switchover") |
 | What `2.2.0.0` changed | | The SuperSpeed fix for Intel Sunrise Point-LP: on the owner's ThinkPad E460 (`8086:9D2F`) under Windows 98 SE, on the `release` flavour of a build taken before the cut with the fix and the enumeration notes in it, a UAS-capable USB 3 stick seen at SuperSpeed from power-on, after two unplug and replug cycles and behind a USB 3 hub, a large file copied there and back and compared clean, and ATTO Disk Benchmark at 242 MB/s writing and 245 MB/s reading at 8 MB transfers; the hub's SuperSpeed and USB 2.0 halves both present after a hot-plug, a replug and a cold boot; `XHCISNAP`'s report naming the port's speed ID 4 as SuperSpeed by its default meaning ("SuperSpeed and UAS"). No Bulk-Only SuperSpeed device was to hand. The speed tables of the ThinkPad P14s Gen 1, the Lenovo B490 and a tester's HP EliteBook 850 G5 were read with `XHCIQUAL`: the first two list ID 4, which is why they never failed, and the HP's Sunrise Point controller publishes the E460's table word for word. In QEMU on development host A, which publishes no speed table, on Windows 98 SE and on Windows 2000 SP4 at two processors under Driver Verifier: a SuperSpeed stick at a root port, a stick behind QEMU's Full-Speed hub, and a SuperSpeed unplug and replug, each with a file compare, read as `2.1.1.0` read beside them, on the integration build and, on Windows 98 SE, the `release` flavour, and again on the final code; with the E460's speed table put in QEMU's place by a test aid, the stick read at SuperSpeed by the default meaning. A SuperSpeed device behind a SuperSpeed hub was not read in QEMU, which models no SuperSpeed hub; the E460 reading above has it. `XhciIntelPortSwitch` 2: on QEMU's controller, which is not Intel, on Windows 98 SE on the `release` flavour, no switchover write and the devices working. The controller tolerance, on the `qemu` flavour with each fault made on purpose, on the same two guests: every fault design record 17 section 5 lists - a lost interrupt, a root port disabled, an over-current, the controller halted, all ones with and without the proof the controller stopped, a transaction error, the retry's failed reset and its two races, the reports nothing owns, and the control endpoint's - each made once on both guests, against a USB mouse with a Bulk-Only copy running on a SuperSpeed stick, and each made to persist on Windows 98 SE and on Windows 2000 but for three not run there (the stale context's and the retry's two races persisting); each transient fault answered with no replug, each persistent one ending in its stated state, and the counters and terminal text read in `XHCISNAP`; at `XhciTolerance` `0`, on both guests, the root port disabled, the over-current, the controller halted, the transaction error and a report nothing owns, each handled as `2.1.1.0` handles it and still counted (the others were not read at `0`). A copy running across a controller recovery fails, since every device is re-enumerated, and on Windows 2000 a mounted drive can come back at Code 31 ("Known limitations"). The three new registry values: written at `1`, `1` and `0` by the install into a driver key that had never had them on Windows 2000 and by an update on Windows 98 SE (a fresh install on Windows 98 SE was not read), and a user's `0` kept by an update on Windows 2000; `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub and `XhciAvgTrbEsit` `1` left the devices working, on Windows 98 SE on the `release` flavour |
+| What `2.3.0.0` changes | | In QEMU on development host A, on the integration builds before the cut; each item's section says what was read and on which systems. Then the owner's bench of 2026-10-11, on the signed release package. On a Dell Latitude E7250 (`8086:9CB1`) under Windows 7 x64, in test-signing mode: MSI with the routing repair writing nothing, and BackstopDrains 0; the line under `XhciInterruptMode` `1`, with the repair rewriting the route, also with the EHCI disabled; the switchover at `0` leaving a USB 3 stick at USB 2.0 speed and at `1` giving SuperSpeed; two USB audio devices, each under its composite entry, with USBView showing their strings, and the asynchronous one playing on the fix. Under XP x64: the repair rewriting the route at the default, and with it off, the dead line moved to polling and a SuperSpeed stick copying clean. On a ThinkPad E460 under Windows 98 SE: about 18 GB through a SuperSpeed stick on the line and about 4 GB under polling, every copy compared clean. On a ThinkPad P14s Gen 1 under Windows 98 SE, brief checks only. Not read: standby, remote wake, MSI-X, Windows 98 SE on the E7250, and the Low-Speed mouse of GitHub issue 17 ("Untested ground") |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
@@ -139,9 +324,9 @@ those need is the bench's, or is untested ground.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only. Vista x64 and Windows 7 x64 load the drivers only while driver signature enforcement is disabled. Nothing after Windows 7 |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only, but for Windows XP x64 and Windows 7 x64, which have also run on the owner's Dell Latitude E7250. Vista x64 and Windows 7 x64 load the drivers in test-signing mode or while driver signature enforcement is disabled (F8). Nothing after Windows 7 |
 | USB stack | None. The driver replaces the port and hub drivers on every target. Windows 98 SE needs no USB 2.0 stack for the controller, hubs, HID or audio; **storage needs NUSB's mass-storage component** (next section). Windows ME: every Windows ME reading was taken under SweetLow's USB 2.0 stack; Windows ME without it has not been tested under the host controller driver. Do not install NUSB on Windows ME, 2000, XP, Vista or 7 |
-| Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB and a legacy interrupt pin: the driver has no MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
+| Controller | An xHCI controller presenting PCI class code `0C0330`, with a BAR0 mapped below 4 GB. Since `2.3.0.0` an interrupt pin is no longer required: a controller reporting `Interrupt Pin = 0` is polled, as is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 a controller may use a message-signalled interrupt instead of its pin ("XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"). Up to `2.2.0.0` such a controller could not be driven at all. A controller with no USB 2.0 protocol port at all is accepted, built from the specification and untested: no such controller has been held |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the disk. The NT targets take what they need from their own driver cache and ask for nothing |
 
 Run the qualifier before installing anything; it answers the controller
@@ -201,18 +386,51 @@ copies no file in use, so the first UAS device installs and works at once.
 
 `XHCIQUAL.EXE` is a DOS tool that reads the machine's xHCI controller and says
 whether the driver can work on it. Run it with no arguments for a read-only
-quick scan. It writes no PCI configuration register and prints one of three
+quick scan. It writes no PCI configuration register and prints one of four
 verdicts:
 
 | Verdict | Means |
 |---|---|
 | `LOOKS QUALIFIED` | nothing a read-only pass can see disqualifies this machine; the active tests still decide |
-| `DISQUALIFIED` | something a read-only pass genuinely sees: no `CC_0C0330` function, `Interrupt Pin = 0`, BAR0 unusable or above 4 GB, or no USB 2.0 protocol ports |
+| `LOOKS QUALIFIED WITH CAVEATS` | the same, but the controller has no line interrupt (`Interrupt Pin = 0`): the driver polls it, or an MSI-capable OS takes a message interrupt instead; the line says whether it offers MSI |
+| `DISQUALIFIED` | something a read-only pass genuinely sees: no `CC_0C0330` function, BAR0 unusable or above 4 GB, or no USB 2.0 protocol ports |
 | `CANNOT SAY` | a state this pass may not change is in the way: the controller is not in D0, or Memory Space Enable is clear |
 
 The qualifier is the same program the `1.x` releases carried, and its last
 criterion, no USB 2.0 protocol ports, is the miniport's; see the Controller
 row of "Requirements".
+
+The full active run (`xhciqual/hardware-testing.md`) ends on `QUALIFIED`,
+`NOT QUALIFIED`, or, since `2.3.0.0`, **`QUALIFIED WITH CAVEATS`**: a
+controller with no working interrupt - no interrupt pin, or an interrupt that
+never arrives while the controller's events reach memory - that passes the
+rest when polled. It is not refused, because the driver polls such a
+controller: with no pin under `XhciInterruptMode` 0, automatic; with an
+interrupt that never arrives under `0` only where the driver sees the
+controller raise it, otherwise under `2`, which the verdict names; at the cost of more CPU
+wake-ups and up to the poll period of event latency; or an MSI-capable OS
+takes a message interrupt, where the controller offers one (Windows Vista and
+7: x64 directly, 32-bit with the `xhcimsi.sys` helper). The verdict prints
+which applies. Its exit code is 3 (0 qualified, 1 not qualified, 2 a usage
+error or no controller).
+
+A passing interrupt test under DOS proves the line in the routing DOS
+uses, which is not always the routing Windows uses. On the Dell Latitude
+E7250 the test passed on IRQ 11, while under Windows XP x64 and 7 the same
+line never reached the interrupt Windows assigned. `--gsi N`, beside
+`--quick` or `--probe-only`, compares the Intel chipset's routing with N,
+the interrupt Windows reports for the controller (Device Manager,
+Resources tab), and on the E7250 it reported the mismatch ("XhciIntelIrqRoute: the Intel interrupt routing
+repair").
+
+Since `2.3.0.0` the report's header also names the machine it ran on: the
+make, model and BIOS from the firmware's SMBIOS table, the processor, the
+memory and the DOS version. It never prints a serial number, a UUID, an
+asset tag, a SKU or a part number, and withholds any other string that repeats one, so a
+report can be pasted into a public issue as it is. The quick scan shows
+two summary lines on the screen and the whole block in its log. If reading
+these details causes trouble on a machine, add `--no-sysinfo`: the header
+then says they were skipped, and the verdict and every test are the same.
 
 It is in the download's `xhciqual\` directory. **It must be run from real
 DOS**, not a DOS box inside Windows, booted without EMM386 or any other V86 or
@@ -224,10 +442,15 @@ the safety notes, and how to read each result.
 
 ## Installing
 
-Each flavour directory of the package holds five files: `xhci98.inf` and
-`xhci98.sys`, the host controller driver, `xhciuas.inf` and `xhciuas.sys`,
-the UAS driver, and `txtsetup.oem`, which only Windows 2000 and XP Setup read
-(below). `release-x86\` is the one to install on 32-bit
+Each flavour directory of the package holds nine files. Eight are in every
+one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
+`xhciuas.inf` and `xhciuas.sys`, the UAS driver, `txtsetup.oem`, which
+only Windows 2000 and XP Setup read (below), `portsw.vbs`, the Intel port
+switchover's script, and `portsw-on.bat` and `portsw-off.bat`, which turn
+the switchover on or off through it in one double-click. The ninth is
+`xhcimsi.sys` in the x86 directories, the MSI helper the INF installs on
+32-bit Vista and 7 only, and `xhci98-test.cer` in the x64 directories, the
+public half of the certificate the x64 drivers are test-signed with. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 
@@ -246,8 +469,11 @@ same drivers built for troubleshooting. No Microsoft file is in the package.
      install the driver anyway. Use Device Manager rather than right-clicking
      the INF.
 3. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98
-   USB 3.x Root Hub" beneath it, and neither should carry a warning mark.
-   Restart if asked: Windows 98 SE asks once, after the controller's install.
+   USB 3.x Root Hub" beneath it. Restart if asked: Windows 98 SE asks once,
+   after the controller's install, and 32-bit Vista and 7 ask, for the MSI
+   helper, holding the controller (Code 28 on 7, Code 1 on Vista) until
+   the restart. After any restart asked for, neither entry should carry a
+   warning mark.
 4. The first UAS device brings the Found New Hardware wizard for "xHCI98 USB
    Attached SCSI Storage"; point it at the same directory.
 5. An external hub installs as "xHCI98 USB Hub" from the driver already
@@ -355,7 +581,7 @@ hardware:
 
 ### Upgrading from 1.2.0.0
 
-`2.2.0.0`, like every `2.x` release before it, replaces the `1.2.0.0`
+`2.3.0.0`, like every `2.x` release before it, replaces the `1.2.0.0`
 driver: both are called `xhci98.sys`, and the install overwrites the file.
 Going back is a reinstall of the `1.2.0.0` package from its own download.
 The steps below were measured with `2.0.0.0`; nothing `2.1.0.0`, `2.1.1.0`
@@ -457,6 +683,37 @@ found each once as well. Nothing was
 found again after that. A setting kept on such a device's own entry, such as
 hidusbf's polling rate, has to be applied again on the new entry.
 
+**On Vista and 7, Have Disk does not take a build whose INF is identical
+to the installed one** (the same `DriverVer`): Windows reuses the package
+already in its driver store and keeps the old `xhci98.sys`. Replace the
+`.sys` by hand, or use a build with a newer `DriverVer` (read on the
+E7250 under Windows 7 x64).
+
+**An update keeps the Intel port switchover as it was.** Since `2.3.0.0` a
+new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
+`2.2.0.0` wrote `1`, and an update never overwrites a value that is already
+there, so a machine updated from either keeps the switchover on. To take the
+new default, run `portsw-off.bat` (or `portsw.vbs 0`) from the package and
+restart Windows
+("Intel 7-, 8- and 9-series chipsets: the port switchover").
+
+**An update from `2.2.0.0` adds the eight values new in `2.3.0.0`** at
+their defaults and keeps the rest ("Registry settings"). On 32-bit Vista
+and 7 it also installs `xhcimsi.sys` and asks for a restart ("Windows
+Vista and 7: message-signalled interrupts").
+
+**Deleting the driver keeps the older packages.** On Vista and 7,
+uninstalling the controller in Device Manager with "Delete the driver
+software for this device" ticked removes only the package in use. Every
+older `xhci98` package installed on that machine stays in Windows' driver
+store, and the next time Windows finds the controller it may install one
+of them (read on 32-bit Windows 7). To remove them all, list the store
+from an administrator's prompt with `pnputil -e`, and remove each
+`oemNN.inf` it lists with the provider "Yeo Kheng Meng" and the class
+"Universal Serial Bus controllers" with `pnputil -d oemNN.inf`. The same
+applies before going back to an older version
+("Windows Vista and 7: message-signalled interrupts").
+
 ### Updating xhciuas.sys over an older one
 
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one
@@ -520,6 +777,51 @@ under "Targets and their standing" lists them per system.
   systems would convert it has not been read; the NT systems show the name
   as the device sends it. A name with characters outside plain ASCII was
   not read on any system.
+- **Every device has the USB device interface** (new in `2.3.0.0`; GitHub
+  issue 17). Each device and each external hub registers
+  `GUID_DEVINTERFACE_USB_DEVICE`, as under Microsoft's own hub driver, so
+  a program that finds USB devices through it (`SetupDiGetClassDevs` with
+  that interface, or `RegisterDeviceNotification` for its arrivals and
+  removals) finds them. The root hub has none, as under Microsoft's stack.
+  A composite device has it on its own entry (below), not on its parts, as
+  under Microsoft's stack.
+- **A composite device has an entry of its own** (new in `2.3.0.0`; GitHub
+  issue 17). A device the driver splits into parts - a headset's audio and
+  its buttons, a keyboard with media keys, a mouse with a second interface,
+  and QEMU's own audio device - appears as "xHCI98 USB Composite Device"
+  beneath the port it is plugged into, with its parts beneath it, so each
+  port of a hub has one entry, as on Microsoft's own stacks (there the
+  entry is "USB Composite Device"). USBView and the hub pages name that
+  entry for the port. The driver still splits, configures and drives the
+  device itself; Windows' own composite driver is not used. The entry
+  installs from the driver already installed: on Windows 98 SE, 2000 and
+  32-bit Vista with nothing to answer, and on Windows XP with the Found New
+  Hardware wizard and the unsigned-driver warning, the parts then
+  installing silently (read in QEMU with its audio device; the other
+  systems are being read). Disabling it in Device Manager stops
+  every part, and enabling it brings them back without the device being
+  plugged again; disabling one part leaves the others working. **After an
+  update from an earlier `2.y.y.y` each composite device is found once more
+  as new hardware**, exactly once: its own entry is new, and on the NT
+  systems a part that the device has no usable serial number for is found
+  again too, under its new parent; Windows installs each from the drivers
+  it used before. The update from `2.2.0.0` has not been read on any
+  system yet; a setting made on a part's own entry (such as a sound
+  device's default) may need to be made again.
+- **USBView shows a device's strings** (new in `2.3.0.0`; GitHub issue
+  17). Up to `2.2.0.0` a tool that asked the hub for a descriptor the
+  driver had not kept - a string such as the manufacturer, product or
+  serial number, another language, another configuration, the BOS - got
+  nothing. The driver now reads it from the device, with the same length
+  rules as Microsoft's hub driver, so SweetLow's USBView shows each
+  device's and hub's strings. Read in QEMU on Windows 2000, XP, and Vista
+  and 7 in both architectures, with a stick, a mouse, a tablet and a hub,
+  with stick copies compared clean and the mouse moving while USBView
+  refreshed every two seconds, and devices unplugged in the middle;
+  Windows 98 SE and ME are being read. The WDK 7.1 USBView showed only the
+  string numbers on 32-bit Vista, and does not run on 2000.
+  A device that is suspended (`XhciSelectiveSuspend` `1`) is not asked:
+  the request fails until it wakes.
 
 ## SweetLow's hidusbf: a mouse's polling rate
 
@@ -611,7 +913,14 @@ with no error and saw nothing on those connectors, and a SuperSpeed drive
 there ran at High Speed under the USB 2.0 controller, where a driver for
 that was loaded.
 
-Since `2.1.1.0` the driver moves them itself, in the order Linux does: each
+Since `2.1.1.0` the driver can move them itself, and since `2.3.0.0` it does
+so only when `XhciIntelPortSwitch` is `1` (or `2`, below): **it is off by
+default.** A connector left on the USB 2.0 controller is not lost - it works
+there, at USB 2.0 speed, wherever a driver for that controller is loaded
+(NUSB's or SweetLow's on Windows 98 SE and ME, Windows' own on 2000 and
+later) - so the driver no longer takes the connectors from it unasked
+(owner, 2026-10-09; `2.1.1.0` and `2.2.0.0` installed it at `1`). Turned on,
+it works in the order Linux does: each
 time the controller starts, and again each time it resumes from standby, it
 turns on the SuperSpeed side of every connector firmware lets it switch,
 then moves the USB 2.0 side of each to the xHCI controller. When the
@@ -638,13 +947,42 @@ controller. A standby or hibernate keeps them where they are.
   driver or enabling its controller. The reverse happens when the
   controller stops: the devices on those connectors go back to the USB 2.0
   controller, and work there if a driver for it is loaded.
-- **Turning it off.** Set `XhciIntelPortSwitch` to `0` ("Registry
-  settings") on a machine whose switchable connectors must stay with the
-  USB 2.0 controller, for example for a device that works better there.
+- **Turning it on, or off again: `portsw.vbs`.** Each package directory
+  (`release-x86\` and the others) carries `portsw.vbs`, a Windows Script Host
+  script that runs with nothing to install on every Windows this driver
+  supports. Double-click it: it shows `XhciIntelPortSwitch` on every xhci98
+  controller on the machine and asks for `1` (on) or `0` (off). From a
+  command prompt, `cscript //nologo portsw.vbs show`, `... portsw.vbs 1`
+  or `... portsw.vbs 0` does the same. Setting a value needs an
+  administrator (on Vista and 7 the script asks Windows for that itself).
+  **Restart Windows afterwards**: the value is read when the controller
+  starts. Turn it on for a machine whose blue connectors should run at
+  SuperSpeed under this driver; leave it off where the USB 2.0 controller
+  should keep them. The script never sets `2` (below); that is set by hand
+  ("Registry settings"). Read in virtual machines on Windows 98 SE, 2000
+  and Windows 7 x64, where it showed, set and cleared the value; QEMU's
+  controller is not an Intel one, so the switchover itself was not exercised
+  there.
+- **In one double-click: `portsw-on.bat` and `portsw-off.bat`.** Beside
+  `portsw.vbs` in each package directory, each shows the value, sets `1` or
+  `0` through the script and says to restart Windows. On Windows 98 SE and
+  ME double-click it; on 2000 and XP run it as an administrator; on Vista
+  and 7 right-click it and choose Run as administrator. **Then restart
+  Windows.** Neither sets `2`. Read in virtual machines on Windows 98 SE,
+  ME, 2000, XP and Windows 7 x64 (run as administrator, and not, where the
+  script asks for the rights itself), each setting and clearing the value.
+- **A USB 3 stick at USB 2.0 speed.** On one of these chipsets, a USB 3
+  stick or drive on a switchable connector that copies only at USB 2.0
+  speed is most likely still on the USB 2.0 controller, because the
+  switchover is off by default. Run `portsw-on.bat` and restart Windows.
+  (A USB 2.0 hub or cable in between gives the same speed, and the
+  switchover does not change that.) This is what the owner's Dell
+  Latitude E7250 showed on 2026-10-11 with the switchover at its default
+  `0`; at `1`, after a restart, the stick linked at SuperSpeed.
 - **What it logs.** With `XhciLogVerbosity` at `2` or above, `XHCISNAP`'s
   report carries `psw.` records: `psw.gate` (`1` on a listed controller),
-  `psw.value` with `psw.value.found` (`psw.value` 0 means turned off only
-  when `psw.value.found` is 1), the two masks firmware allows and what each register read
+  `psw.value` with `psw.value.found` (`psw.value.found` 0 means the value
+  is absent or not a `DWORD`, which is off since `2.3.0.0`), the two masks firmware allows and what each register read
   back after the write, and `psw.route.step`, `0` when every step was
   accepted. Since `2.2.0.0` an Intel controller's report also carries
   `psw.mode`, the setting in effect (`0` off, `1` on a listed controller,
@@ -674,8 +1012,8 @@ registers are there:
 > not been read - it writes registers of unknown meaning, at every start,
 > resume, stop and shutdown, and the result is unknown. Use 2 only for an
 > Intel chipset that has both an EHCI and an xHCI controller and that this
-> driver does not list, and at your own risk. Everyone else should leave the
-> value at 1.**
+> driver does not list, and at your own risk. Everyone else should use 0
+> or 1.**
 
 On a listed controller `2` does the same as `1`.
 
@@ -700,7 +1038,8 @@ worked as before. These are the owner's readings, clause by clause; the
 B490's logs stayed on the B490.
 
 Not read: a standby and resume (Windows 98 SE offers none on the B490); any
-system but Windows 98 SE; the other five device ids, which rest on Linux's
+system but Windows 98 SE, until the E7250 (`9CB1`) under Windows 7 x64 at
+the `2.3.0.0` bench; the other four device ids, which rest on Linux's
 handling of the same chipsets; and value `2` on any unlisted Intel
 controller (see "Untested ground"). The readings above were taken on
 `2.1.1.0`; `2.2.0.0`'s change to the hand-back and value `2` rest on host
@@ -721,13 +1060,14 @@ interrupt, whose pickup keeps delivering, it does so a few times at most,
 and then stops in a stated state rather than try for ever:
 
 - **A lost interrupt.** An event the controller has written and no
-  interrupt has delivered is picked up by the driver's own thread once it
-  has waited 100 ms, which in practice is about a third of a second after
-  it was first seen.
+  interrupt has delivered is picked up by the driver's own 100 ms timer
+  once it has waited 100 ms, which in practice is about a third of a
+  second after it was first seen.
 - **A transfer error on a bulk or interrupt endpoint** (a USB Transaction
   Error: the device did not answer cleanly) is retried in place, up to three
   times for the same transfer, before the transfer fails as it did up to
-  `2.1.1.0`. Not on the control endpoint, isochronous (audio) or UAS stream
+  `2.1.1.0`. Since `2.3.0.0` that includes a UAS drive's data and status
+  streams. Not on the control endpoint or isochronous (audio)
   endpoints, not for a Low- or Full-Speed device behind a High-Speed hub's
   transaction translator (a mouse or a keyboard plugged into a USB 2.0 hub
   running at High Speed; one behind a Full-Speed-only hub plugged into the
@@ -820,7 +1160,7 @@ list, for a machine where it does more harm than good.
 `XHCISNAP`'s report counts what happened, with `XhciLogVerbosity` at `1`
 or above: the transfer errors, unknown codes and unmatched events, summed
 over the controller, a count of every completion code, the retries, each
-re-enumeration and why, the lost interrupts the thread delivered, each
+re-enumeration and why, the lost interrupts the driver picked up, each
 port's budget and hold, and the controller's recoveries and any
 closing-off. At `XhciLogVerbosity` `2` the log also names the device and
 endpoint of the first few of each error code. At `XhciTolerance` `0` the
@@ -863,9 +1203,68 @@ The behaviours have not been seen to act on real hardware: no real
 controller has raised one of these faults under this driver yet, and the
 AM5 tester's machine has not run this release.
 
+## Windows Vista and 7: message-signalled interrupts (new in `2.3.0.0`)
+
+On Windows Vista and 7 the controller may now use a message-signalled
+interrupt (MSI or MSI-X) instead of its interrupt line, the way Windows'
+own drivers for newer controllers do. A message does not travel through
+the chipset's interrupt routing, so a BIOS routing fault such as the Dell
+E7250's cannot lose it. Windows 98, ME, 2000 and XP (32- and 64-bit) have
+no message-signalled interrupts and are unchanged.
+
+- **64-bit Vista and 7**: the driver asks Windows for one message in the
+  controller's hardware key, and connects it when Windows grants it.
+- **32-bit Vista and 7**: the one 32-bit `xhci98.sys` also runs on Windows
+  98, so it cannot itself use the Vista routine that connects a message.
+  The 32-bit package therefore carries a small second driver for these two
+  systems alone, `xhcimsi.sys`, which the INF installs as a service that
+  starts with Windows and which hands `xhci98.sys` that routine. **The
+  install and every update on 32-bit Vista and 7 ask you to restart**,
+  because that service starts only at boot. After a first install the
+  controller does not start until you restart (Device Manager shows it
+  waiting for the restart: code 28 on 7, code 1 on Vista), so its USB 3
+  ports work from the next start of Windows on, with the message. If
+  `xhcimsi.sys` is missing or does not load, the controller keeps its
+  interrupt line under `XhciInterruptMode` `0`.
+- **Asking for the interrupt line** on Vista and 7: set `XhciInterruptMode`
+  to `1` and disable and enable the controller, or set `MSISupported` to
+  `0` under `Interrupt Management\MessageSignaledInterruptProperties` in
+  the controller's hardware key (Device Parameters) and restart. Under `1`
+  the driver asks Windows for the line; if Windows grants a message anyway
+  (a controller that offers no line), the controller fails to start
+  (Device Manager shows Code 10), on both architectures. Set `0` again.
+- **Asking for a message-signalled interrupt** on Vista and 7: set
+  `XhciInterruptMode` to `3` and disable and enable the controller. The
+  driver asks Windows for the message alone and uses it; if Windows
+  grants none (for instance with `MSISupported` `0`), or the message
+  cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not
+  running), the controller fails to start (Code 10), with no fallback to
+  the line or to polling. On Windows 98 SE, ME, 2000 and XP, which have no
+  message-signalled interrupts, `3` always fails the start.
+- **Going back to an earlier version** on Vista or 7: the request for a
+  message stays in the hardware key, and releases before `2.3.0.0` do not
+  know what to do with a message. Before installing an older package,
+  uninstall the controller in Device Manager with "Delete the driver
+  software for this device" ticked, or set `MSISupported` to `0` first.
+  The tick removes only the package in use; older ones stay in the driver
+  store ("Updating from 2.y.y.y", "Deleting the driver keeps the older
+  packages"). The downgrade was read once, in a 32-bit Windows 7 virtual
+  machine with an earlier test build: it ran on the line, and the
+  `xhcimsi` service stayed.
+- **Removing the 32-bit helper** after uninstalling the driver: it stays
+  installed as a service and does nothing on its own; `sc delete xhcimsi`
+  from an administrator's prompt, then a restart, removes it.
+
+`XHCISNAP` shows which delivery the controller uses. These behaviours were
+read in QEMU guests (the readings are listed in the run record), and on
+real hardware on the owner's Dell Latitude E7250 under Windows 7 x64: MSI
+by default, with nothing for the backstop to drain, and the line under
+`XhciInterruptMode` `1`. MSI-X has not been read on real hardware.
+
 ## Registry settings
 
-Eleven values, each a `DWORD` in the controller's driver (software) key:
+Each value is a `DWORD` in the controller's driver (software) key, and
+the install writes every value the driver reads, nineteen, in this key:
 
 | Windows | Key |
 |---|---|
@@ -876,14 +1275,29 @@ Eleven values, each a `DWORD` in the controller's driver (software) key:
 Controller". The number varies from machine to machine, and a machine whose
 controller was ever enumerated at another PCI slot can have more than one
 such key: the device's own `Driver` value, under `Enum\PCI`, names the one in
-use. `XHCISNAP -verbosity` finds it for you.
+use. `XHCISNAP -verbosity` finds it for you. On Vista and 7 Device
+Manager also shows it: the controller's Properties, Details tab, the
+"Driver key" property, whose value ends in that `NNNN`. A change takes
+effect when the driver next starts: restart Windows (or, for the values
+that say so, disable and enable the controller in Device Manager).
+`XhciForceBulkOnly` is the exception: it is read as each device is
+enumerated ("XhciForceBulkOnly").
 
-The install writes all eleven: each at the driver's own default, except
+The install writes all nineteen: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
 `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` are new in
-`2.2.0.0`, and an update over `2.1.1.0` adds them. The install has written
+`2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute`,
+`XhciMaxTransferKB`, `XhciInterruptMode`, `XhciPollIdleMs` and
+`XhciPollActiveMs` are new in `2.3.0.0`, and an update over `2.2.0.0` adds
+them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
+`XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
+install too, at the value that reads as a missing one; an update keeps any
+of them you had already added. Since `2.3.0.0` the
+install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
+wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
+("XhciIntelPortSwitch", below). The install has written
 every value since `2.1.1.0`, which added `XhciIntelPortSwitch`. Of the
 seven before it, the
 `2.1.0.0` install wrote three, the two log values and
@@ -909,6 +1323,54 @@ an update with `XhciTolerance` set to `0` by hand kept the `0`; on Windows
 98 SE an update over a driver key that never had them wrote all three. A
 fresh install on Windows 98 SE, and a value kept by an update there, were
 not read.
+
+### XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs: how the controller's events arrive
+
+New in `2.3.0.0`; the install writes `0`, `50` and `1`. Read at each start
+of the controller: disable and enable it in Device Manager, or restart
+Windows. Up to `2.2.0.0` the driver took only the controller's interrupt
+line and refused to start a controller without one. Since `2.3.0.0` it
+can also read the controller's events on a timer of its own (polling),
+and on Windows Vista and 7 take a message-signalled interrupt ("Windows
+Vista and 7: message-signalled interrupts").
+
+| `XhciInterruptMode` | Effect |
+|---|---|
+| `0`, absent, not a `DWORD`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
+| `1` | The interrupt line only, as `2.2.0.0`, on every system. On Vista and 7 the driver asks Windows for the line rather than a message. A controller given no line - no interrupt, no interrupt pin, or on Vista and 7 a message Windows grants anyway - fails to start (Device Manager: Code 10) |
+| `2` | Polling always, even where the line works. For a controller whose interrupt misbehaves; it costs more processor wake-ups |
+| `3` | A message-signalled interrupt (MSI or MSI-X) only. On Vista and 7 the driver asks Windows for the message alone; if none is granted, or it cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not running), the controller fails to start (Code 10), with no fallback to the line or to polling. On Windows 98 SE, ME, 2000 and XP (32- and 64-bit), which have no message-signalled interrupts, `3` fails the start |
+
+| Value | Default | Effect |
+|---|---|---|
+| `XhciPollIdleMs` | `50` | While polling, how often (in ms) the driver looks when nothing is outstanding. `0` runs as `50`; above `5000` is held to `5000`. A device plugged in waits at most this long to be seen |
+| `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
+
+A start that `1` or `3` refuses records why: with `XhciLogDebugView` set,
+DebugView shows the counter dump's `intr.reason` line (14: a message
+granted under `1`; 16: no message granted under `3`; 17: the message not
+connected; 18: a system with no message-signalled interrupts) beside the
+Code 10, and with `XhciLogVerbosity` `2` or above also the start's notes
+and a `start.refused.delivery` line.
+
+Neither period matters while the controller has a working interrupt line
+or a message. Polling adds up to one period of delay to each completed
+transfer. Read in QEMU on every system, modes `0`, `1` and `2`: a file
+copy from a stick and the guest's idle processor load showed no step
+change between the line and polling; audio played without a gap under
+polling on 2000, XP x64 and 7 in both architectures, and with two gaps of
+about 20 ms on Vista x64. The move to polling when a line never arrives
+was read in QEMU on every system, and on real hardware on the Dell
+Latitude E7250 under XP x64 with `XhciIntelIrqRoute` `0`, where the line
+is dead: the driver moved to polling and a SuperSpeed stick copied clean.
+There Windows ran the poll every 15 to 62 ms, its timer's granularity on
+that machine, not every 1 ms. Polling by choice (`2`) was read on a
+ThinkPad E460 under Windows 98 SE: about 4 GB through a SuperSpeed stick,
+compared clean.
+`XHCISNAP`'s report says
+which delivery the controller uses, and why. `XHCIQUAL` passes a
+controller with no working interrupt as `QUALIFIED WITH CAVEATS` ("Before
+you install: check the machine").
 
 ### XhciImodInterval250ns: the interrupt moderation interval
 
@@ -967,6 +1429,9 @@ turns those two settings into fast ones.
 | absent, `0`, `1` or anything else | 31 Hz | 62 Hz |
 | `2` | 2000 Hz | 4000 Hz |
 | `3` | 4000 Hz | 8000 Hz |
+| `4` | 31 Hz | 62 Hz (the codes below instead) |
+
+With `2` or `3`:
 
 - **Root ports only.** A device behind a hub keeps its ordinary rate.
 - **Outside the xHCI specification.** The specification's shortest interval
@@ -979,12 +1444,49 @@ turns those two settings into fast ones.
 - **It applies to every device that asks for 16 to 63 ms.** While it is set,
   any Low- or Full-Speed device on a root port whose own polling interval is
   16 to 63 ms is polled faster too, hidusbf or not.
-- It is read when the controller starts, so a change takes effect after a
-  restart.
 
-**Untested ground**: it has been read on no real controller and in no
-virtual machine. The bench reading on the ThinkPad E460 and P14s Gen 1 was
-not taken for this release.
+**`4`: the rate the client chooses** (new in `2.3.0.0`; GitHub issue 17).
+An interrupt endpoint whose polling interval in the configuration Windows
+selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz; every other
+interval is polled as the specification reads it, so value `4` does not do
+`2`'s and `3`'s speeding up of 16 to 63 ms, and `2` and `3` do not honour
+the codes. It applies to a Low- or Full-Speed device on a root port only,
+and to a High-Speed or SuperSpeed device at a root port or behind a hub.
+The procedure is the value first, then the client: set `XhciFastPollFsLs`
+to `4` and restart, then set hidusbf (or another filter) to write 128, 129
+or 130. Two cautions:
+
+- 128 to 255 ms are legal polling intervals for a Low- or Full-Speed
+  device, so a device that itself asks for 128, 129 or 130 ms is polled at
+  2000 to 8000 Hz while the value is `4`.
+- A filter that writes a code while the value is not `4` gets what the
+  number means without it: a Low- or Full-Speed device is polled every
+  128 ms, and a High-Speed or SuperSpeed one, for which the number is out
+  of range, every 4.096 s; on a controller where `XhciIntervalCap` applies,
+  either is polled every 32 ms instead.
+
+A controller that refuses a code is caught as for `2` and `3` and counted
+in `fastpoll.fallbacks`, and the device is then polled every 1 ms
+(1000 Hz), not at the code's ordinary reading. A controller that accepts
+it and misbehaves cannot be caught; delete the value and restart. At High
+Speed and SuperSpeed the programmed polling interval is inside the
+specification's range; at Low and Full Speed it is outside it, as `2`'s
+and `3`'s are. On an AMD controller
+the code is applied before `XhciIntervalCap`, which leaves it alone. A
+part of a composite device keeps the code only until its class driver
+issues a later select of its interface (`SELECT_INTERFACE`), even of the
+same alternate setting, as with `2` and `3`; HID class drivers do not.
+
+The value is read when the controller starts, so a change takes effect
+after a restart.
+
+**Untested ground on real controllers**: it has been read on none. In
+QEMU (since `2.3.0.0`, on 32-bit Windows 7 and Windows 98 SE) value `4`
+programmed the intervals the codes ask for, `2` and `3` ignored the
+codes, a mouse behind a hub kept its rate and the mouse moved
+throughout; that shows what the driver asks of the controller, not how
+a real controller and device behave at those rates. The bench reading on
+the ThinkPad E460 and P14s Gen 1 was not taken for this release.
 
 ### XhciFirstEnumWaitMs and XhciFirstEnumPortMs: the first report's wait
 
@@ -1012,19 +1514,22 @@ the driver's. Neither value was read set to anything but its default.
 
 ### XhciIntelPortSwitch: the Intel port switchover
 
-New in `2.1.1.0`; the install writes `1`. It matters only on the Intel
-chipsets listed in "Intel 7-, 8- and 9-series chipsets: the port
-switchover", unless it is `2`. Since `2.2.0.0` it is read on every Intel
-controller, and still on no other vendor's.
+New in `2.1.1.0`; since `2.3.0.0` the install writes `0` (`2.1.1.0` and
+`2.2.0.0` wrote `1`, and an update keeps a value already there). It matters
+only on the Intel chipsets listed in "Intel 7-, 8- and 9-series chipsets:
+the port switchover", unless it is `2`. Since `2.2.0.0` it is read on every
+Intel controller, and still on no other vendor's. `portsw.vbs`, in each
+package directory, shows it and sets it to `0` or `1` on every xhci98
+controller ("Turning it on, or off again" in that section).
 
 | Value | Effect |
 |---|---|
-| `0` | Off: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did |
-| `1`, any other number but `2`, absent, or not a `DWORD` | On, on a listed controller: the driver moves the connectors to itself at each start and hands them back at each stop |
-| `2` (since `2.2.0.0`) | On, on every Intel controller, listed or not. **At your own risk**: on an Intel controller without the switch registers - every Intel chipset from the 100-series (Skylake) on, and any whose layout has not been read - it writes registers of unknown meaning at every start, resume, stop and shutdown, and the result is unknown. Use it only for an Intel chipset with both an EHCI and an xHCI controller that the list misses; everyone else should leave the value at `1`. See "Value 2" in that section |
+| `0`, absent, or not a `DWORD` | Off, the default since `2.3.0.0`: the driver leaves the connectors where they are, as every release up to `2.1.0.0` did. Up to `2.2.0.0` absent or not a `DWORD` was on |
+| `1`, or any other number but `2` | On, on a listed controller: the driver moves the connectors to itself at each start and hands them back at each stop |
+| `2` (since `2.2.0.0`) | On, on every Intel controller, listed or not. **At your own risk**: on an Intel controller without the switch registers - every Intel chipset from the 100-series (Skylake) on, and any whose layout has not been read - it writes registers of unknown meaning at every start, resume, stop and shutdown, and the result is unknown. Use it only for an Intel chipset with both an EHCI and an xHCI controller that the list misses; everyone else should use `0` or `1`. See "Value 2" in that section |
 
-Only an explicit `0` turns it off, and only an exact `2` goes past the
-list, so a mistyped value does neither. It is read
+Only a `DWORD` that is not `0` turns it on, and only an exact `2` goes past
+the list. It is read
 when the controller starts, so a change takes effect at the next restart or
 at a disable and enable of the controller in Device Manager. Setting `0`
 does not give the connectors back by itself: after a restart they are where
@@ -1032,6 +1537,54 @@ firmware puts them, and after a disable and enable they stay where the
 disable left them, with the USB 2.0 controller. Read on a Lenovo B490 under
 Windows 98 SE: at `0` and after a restart, a device on a blue connector
 stayed with the USB 2.0 controller.
+
+### XhciIntelIrqRoute: the Intel interrupt routing repair
+
+New in `2.3.0.0`; the install writes `1`. On the Intel 7-, 8- and 9-series
+and C610/X99 chipsets, two chipset registers decide which interrupt line the
+xHCI controller's interrupt reaches. Some firmware leaves them pointing at a
+different line from the one it tells Windows: the Dell Latitude E7250's
+sends the interrupt to IRQ 16 while Windows listens on IRQ 21, so the
+driver never hears from the controller and every device on it is slow or
+stops (docs/issues/12). At each start and each return from standby the
+driver reads those registers and, where the value allows it, points the
+controller's interrupt at the line Windows assigned. It changes nothing else.
+
+| Value | Effect |
+|---|---|
+| `0` | Off: the driver reads and reports, and writes nothing |
+| `1`, absent, any other number, or not a `DWORD` | On the Dell Latitude E7250 only (controller `8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`); elsewhere it reads and reports |
+| `2` | On any of the six reviewed controller and chipset pairs: controller `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` or `8D31` with one of its own chipset ids (docs/issues/12 section 5.1) |
+
+**It does nothing on every other machine**, at any value: another vendor's
+controller, an Intel controller not in that list (every chipset from the
+100-series on included), a chipset id that does not match its controller,
+or a check of an id, a register or the interrupt Windows gave that
+fails. **It also does nothing
+when the controller's interrupt is a message (MSI) rather than a line**, as
+it can be on Windows Vista and 7, **and nothing when the driver is polling
+the controller instead of taking its interrupt**: neither goes through the
+line it would repair. On Windows 2000, XP, Vista and 7 it also writes
+nothing when Windows gave the controller an interrupt below 16, since
+which route an I/O APIC system then uses is not proven; it reports what it
+would have done. It decides again at each start and return from standby,
+so a change takes effect at the next restart or at a disable and enable of
+the controller.
+
+What it logs. `XHCISNAP`'s report has a section "interrupt routing" with
+the value in effect, how many times it ran and wrote, and the last run's
+decision, what it read and, after a write, what the register read back;
+with `XhciLogVerbosity` at `2` or above the report also carries `pirq.`
+records. Send them with any report from one of these machines.
+
+What it rests on. On the owner's E7250 under Windows XP x64, the same
+register written by hand to the value this setting writes fixed the
+mouse at once and let a USB stick work. The driver's own write was then
+read there at the `2.3.0.0` bench: under XP x64 at the default, and under
+Windows 7 x64 with the line asked for (`XhciInterruptMode` `1`, also with
+the EHCI disabled), it moved INTA from PIRQA to PIRQF (`D20IR` `3210` to
+`3215`, IRQ 21) and read it back; under Windows 7's default MSI it wrote
+nothing, as designed. No other machine has been read.
 
 ### XhciTolerance: the controller-fault handling, all together
 
@@ -1074,8 +1627,9 @@ within USB 2.0 and costs a few polls a second for such a device.
 | `2` | The cap on every controller |
 
 It is applied after a polling rate a setting such as hidusbf's asked for
-and does not change which mouse `XhciFastPollFsLs` speeds up. It is read
-when the controller starts.
+and does not change which mouse `XhciFastPollFsLs` speeds up; under
+`XhciFastPollFsLs` `4` a code is applied first, and the cap leaves it
+alone. It is read when the controller starts.
 
 ### XhciAvgTrbEsit: a comparison switch
 
@@ -1089,6 +1643,184 @@ bandwidth reckoning, so it is not changed by default; the switch exists so
 that a machine whose devices misbehave can be compared with it set, and
 nothing ties it to the AMD report. Leave it at `0` unless you are
 comparing. It is read when the controller starts.
+
+### XhciMaxTransferKB: the UAS command size
+
+New in `2.3.0.0`; the install writes `1024`. In **KiB**: the most one UAS
+command asks the drive to move, which the UAS driver tells Windows' storage
+class driver as the largest request it takes. `2.2.0.0` and earlier always
+said 64 KiB. Fewer, larger commands mean fewer command and status
+exchanges per megabyte; the controller still moves each command in pieces
+of at most 128 KiB, one after another.
+
+| Value | Effect |
+|---|---|
+| `1024`, absent, not a `DWORD`, outside `64`-`2048`, or not a multiple of `4` | 1 MiB commands (`XHCISNAP`'s report notes why a value was not used) |
+| `64` | 64 KiB commands, as `2.2.0.0` and earlier |
+| `2048` | 2 MiB commands, the largest |
+| any multiple of `4` from `64` to `2048` | that size |
+
+It applies to every UAS device on that controller; Bulk-Only devices keep
+Windows' own `usbstor.sys` limits whatever it says. Windows reads the size
+when the storage device starts and keeps it, so **a change takes effect at
+the next restart of Windows**. `XHCISNAP`'s report shows the value read and
+the command size in effect, and each UAS device's hardware key records the
+size it took (`XhciUasCommandBytes`, in bytes).
+
+**Trying `2048` by hand.** Set `XhciMaxTransferKB` to `2048` (decimal; `800`
+hex) in the driver key above, with `regedit` or a `.reg` file, and restart
+Windows. To go back, set `1024`, or `64` for a drive that misbehaves at
+large commands, and restart again. Linux's UAS driver sends commands of up
+to 512 KiB, and its Bulk-Only driver 120 KiB, or 1 MiB at SuperSpeed, with
+64 KiB or 120 KiB for drives known to misbehave; Windows 7's Bulk-Only
+driver sends 64 KiB, raised per device up to 2 MiB by Microsoft's KB 2581464.
+So `1024` is within what drives already see elsewhere, and `2048` beyond
+most of it. A drive that fails at a larger size usually fails at its first
+large read or write: if copies fail or the drive drops off after raising
+the value, set `64`.
+
+**A later release with another default.** The install writes the value
+only where it is missing, like every value here, so an update keeps the
+number already in the key - the old default included. To take a new
+release's default, delete `XhciMaxTransferKB` before updating the driver,
+or set the new number by hand, and restart.
+
+**One model only: Microsoft's per-device value.** On Windows 2000 and
+later the UAS driver also honours the value Windows' own Bulk-Only driver
+uses for one kind of device, so a drive model can be set apart from the
+rest:
+
+| | |
+|---|---|
+| Key | `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP`, where `VVVV` and `PPPP` are the drive's vendor and product IDs as four uppercase hex digits each (`VID_0BDA&PID_9210` is `0BDA9210`) |
+| Value | `MaximumTransferLength`, a `DWORD`, in **bytes** |
+| Accepted | `65535` to `2097152`: the range Microsoft's KB 2581464 gives, `65535` to `2097120`, with `2097152` - what tools write for 2 MiB - taken as 2 MiB as well |
+
+A value in range replaces `XhciMaxTransferKB`, larger or smaller, for
+every drive with those vendor and product IDs - the key is per model, for
+the whole machine, not per physical drive - and every other drive keeps
+the controller's value. It is rounded to the nearest 4 KiB (at most 2048
+bytes either way), so `65535` is 64 KiB, `2097120` and `2097152` are both 2 MiB, and `131072`
+(`20000` hex) is 128 KiB exactly. A value that is missing, not a `DWORD` or
+out of range is ignored. Restart Windows after setting it. It is the same
+key Windows' `usbstor.sys` reads for a Bulk-Only drive, so tools and
+guides written for that - Uwe Sieber's pages on `uwe-sieber.de` cover it -
+set it for a UAS drive too, 2 MiB included. The UAS device's hardware key (under
+`Enum\USB`, on Windows 2000 and later in its `Device Parameters`) shows
+what was taken: `XhciUasCommandBytes` the size in bytes,
+`XhciUasCommandSource` `1` for the controller's value and `5` for the
+drive's own, `XhciUasDeviceLimit` the value read and
+`XhciUasDeviceLimitWhy` `0` absent, `1` used, `2` not a `DWORD`, `3` out of
+range. Behind a controller driver that does not answer the transfer-size
+query (`2.2.0.0` and earlier) the UAS driver keeps 64 KiB and the drive's
+value is not used (`XhciUasDeviceLimitWhy` `4`).
+
+**Windows 98 SE and ME.** Both values are read, and neither changes what
+reaches the drive: Windows' mapping layer, `USBNTMAP.SYS`, sends at most
+64 KiB at a time whatever the UAS driver offers. Read in QEMU virtual
+machines on development host A, Windows 98 SE with NUSB and Windows ME,
+with `XhciMaxTransferKB` at `1024`: no command above 64 KiB, one at a
+time, and file reads no faster than at `64`.
+
+### XhciWideMap: two transfer pieces at once
+
+On Windows 2000 and later the controller driver gives a large bulk
+transfer to the controller two pieces at a time, the next one queued
+before the current one ends, where `2.2.0.0` and earlier gave one piece and waited -
+when this value turns it on. It is **off unless you set it to `1`**. It applies to
+large bulk writes on any device, and to large bulk reads only on a UAS
+drive's streams. It does so only where the machine's DMA needs no
+translation - the check is made at every start, and again for each
+transfer:
+
+| | |
+|---|---|
+| Key | the controller's driver key, where the install writes the other `Xhci` values ("Registry settings", above): on 2000, XP, Vista and 7 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`, the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller" (on Vista and 7 Device Manager's Details tab gives it as the "Driver key") |
+| Value | `XhciWideMap`, a `DWORD`; change it with `regedit` (Modify) or a `.reg` file |
+| Default | off: the install writes `0`, and a missing value means off too |
+| On | `1`, then **restart Windows**; `0` and a restart turn it off again |
+
+The decision rests on a reading of every Windows 2000, XP, Vista and 7 HAL
+of the service packs these notes name, x86 and x64. Later HAL hotfixes were
+not read; the checks made at each start and each transfer stand for them.
+Under Driver Verifier's DMA checks, and on a machine whose DMA does need
+translation (Windows 2000 running its PAE kernel; 32-bit Vista and 7, and
+every x64 system, where memory may lie above 4 GB), nothing changes: every transfer goes one piece at a time, as in `2.2.0.0`.
+Windows 98 SE and ME never send a transfer large enough for it to matter.
+On a UAS drive at SuperSpeed the same switch also lets one command's
+data go to the controller as a single piece of up to 2 MiB, on rings the
+driver makes larger for that drive's streams (about 1.5 MiB of memory per
+drive while it is attached; if that memory cannot be had the drive works
+as before). It is off by default because a regression, though unlikely,
+would show as silently wrong data rather than an error. If you turn it on
+and a large copy misbehaves, set `0`, restart and report whether that
+changed it.
+
+### XhciSelectiveSuspend: putting idle devices to sleep
+
+New in `2.3.0.0`, and **off unless you set it to `1`**. Up to `2.2.0.0` the
+driver never suspended a device: it answered Windows' power requests for
+a device by recording them, so an idle device kept drawing power. With
+this value at `1` the driver suspends a device when Windows asks it to -
+when a device's driver puts it in a low-power state while the machine
+runs, or, on XP and later, when a driver uses Windows' idle notification -
+and wakes it when Windows asks again or the device signals a remote wake.
+It never suspends a device on a timer of its own; whether and when a
+device is put to sleep is the choice of that device's driver and of
+Windows.
+
+| | |
+|---|---|
+| Key | the controller's driver key ("Registry settings", above) |
+| Value | `XhciSelectiveSuspend`, a `DWORD`; the install writes `0` |
+| `0`, absent, any other number or not a `DWORD` | Off, the default: the driver behaves as `2.2.0.0` did, bit for bit |
+| `1` | On, for USB 2.0 devices (High, Full and Low Speed, at a root port or behind a hub) and SuperSpeed devices alike |
+
+Read at each start of the controller: restart Windows after changing it.
+Hubs, the root hub, a composite device's own entry and the controller are
+never suspended, so the hubs above a sleeping device stay awake; a
+composite device's parts are suspended together, when all of them are
+idle (their own entry stays in D0 in Device Manager meanwhile). A device
+that cannot signal a remote wake is offered to Windows as able to sleep
+but not to wake.
+
+Read in QEMU virtual machines with the project's own test driver bound to
+a device, on Windows 98 SE, ME, 2000, XP and 32-bit Windows 7 (there is no
+64-bit test driver; the run record has the legs), and with the value at `0`
+reading as the build before it on every system. Windows' own drivers' idle was not
+read: Windows' HID driver never idles QEMU's mouse. No real machine has
+been read with it on, and no real remote-wake device ("Untested ground").
+So leave it off unless you are testing it.
+If a device misbehaves
+with it on, set `0`, restart and report whether that changed it.
+
+### XhciUsb2HubSpeedFallback: Low- and Full-Speed IDs behind a hub
+
+New in `2.3.0.0`, and **on unless you set it to `0`**. A device behind a hub
+has no port of the controller's own to report its speed, so the driver
+writes a speed ID for it, looked up in the controller's speed table for the
+USB 2.0 port the hub hangs from. Some controllers - the VIA VL805
+(`1106:3483`) is one - list only High Speed there, the link to their own
+built-in hub, and `2.2.0.0` refused every Low- or Full-Speed device behind
+that hub. With this value on, such a device gets the standard ID (1 for
+Full Speed, 2 for Low Speed) where the table names neither that speed nor
+that ID; a table that names them is followed as before, and devices on the
+controller's own ports are not affected.
+
+| | |
+|---|---|
+| Key | the controller's driver key ("Registry settings", above) |
+| Value | `XhciUsb2HubSpeedFallback`, a `DWORD`; the install writes `1` |
+| Absent, `1`, any other number or not a `DWORD` | On, the default |
+| `0` | Off: such a device is refused, as in `2.2.0.0` |
+
+Read at each start of the controller: restart Windows after changing it.
+Built without the hardware and never run on a VL805; in QEMU virtual
+machines, whose controller lists no speed table, devices behind a hub read
+as before. `XHCISNAP`'s report says whether it is on, how many devices it
+gave an ID and which slots hold one, and on the VL805 the card's firmware
+version (`pci.vl805.fw`). If a Low- or Full-Speed device behind such a hub
+misbehaves with it on, set `0`, restart and report whether that changed it.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
@@ -1154,6 +1886,24 @@ own arithmetic:
   it did. A SuperSpeed device declaring less than 510 mA has not been read
   on hardware.
 
+### A device's speed on the hub pages (new in `2.3.0.0`)
+
+On Windows 98 SE and ME the newer form of the connection information
+(`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX`, which tools such as
+SweetLow's USBView ask for) reads 3 for a SuperSpeed device and 4 for a
+SuperSpeedPlus one, as Intel's USB 3 drivers for those systems report it;
+up to `2.2.0.0` both read High Speed. Windows' own pages on those systems
+send the older form, which says only whether a device is Low Speed, and
+are unchanged. On the NT systems the newer form still reads High Speed,
+because Vista's and 7's hub page would list any other value among the
+Full-Speed devices. Every system also answers the request Windows 8
+introduced (`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`), which tools
+use to tell SuperSpeed and SuperSpeedPlus apart: it gives the port's
+protocols and whether the device runs at, and can run at, SuperSpeed or
+SuperSpeedPlus. A USB 3 device running at High Speed is not reported as
+SuperSpeed-capable, since the driver does not read that part of its
+descriptors at High Speed.
+
 ## The log, and how to send one
 
 The driver keeps a small log of what happened on the bus, inside itself, and
@@ -1175,6 +1925,19 @@ controller the machine has. Step 2 is not optional: the driver reads these
 settings when it starts. **Use the `XHCISNAP.EXE` from this download**, not
 a copy kept from an earlier release: one from before `2.2.0.0` neither
 decodes the enumeration records nor reads the per-port section below.
+
+From `2.3.0.0` the top of `MYDUMP.TXT` also says which system it came from:
+the Windows version, build and service pack, 32-bit or 64-bit, the
+processor, the memory, and the make, model and BIOS where that Windows
+records them (on Vista and 7 the make and model; on 2000 and XP, 98 SE and
+ME the BIOS only). It does not print the computer's name, your user name or
+the domain, and does not read any serial number; it reads those names only
+to withhold a firmware string that contains one (a name of three characters
+or more). The file is meant to be pasted into a public issue as it is, but
+if your machine's firmware strings were customised, read the top of the
+file first. If reading those details causes a problem on your machine, add
+`-nosysinfo` to step 4 (`XHCISNAP -nosysinfo -o C:\MYDUMP`): the report
+then says they were skipped and is otherwise the same.
 
 | Value | What it does |
 |---|---|
@@ -1212,23 +1975,37 @@ for anything to read.
 Each was measured, in a virtual machine unless it names a physical machine,
 or says it was found by reading the code.
 
-- **The driver never initiates selective suspend.** Idle devices and idle hub
-  ports are never suspended to save power, on any target; the driver handles
-  a suspend or resume it is asked for, or that a hub reports, and starts
-  none. A later release may add selective suspend.
+- **Selective suspend is off unless you turn it on, and hubs are never
+  suspended.** With `XhciSelectiveSuspend` at its default `0` no device is
+  suspended to save power, as up to `2.2.0.0`. At `1` a device is
+  suspended when Windows asks, but a hub, the root hub and the controller
+  never are, and the driver never suspends anything on a timer of its own.
+  See "XhciSelectiveSuspend: putting idle devices to sleep".
 - **No USB storage on a stock Windows 98 SE.** Storage needs NUSB's
   mass-storage component; see "Windows 98 SE and ME: the stock install, and
   storage".
-- **Windows Vista x64 and Windows 7 x64: driver signature enforcement must be
-  disabled** at every start, or the controller sits at Code 39 and nothing on
-  it works. See "What this is".
-- **Windows 98 SE: a USB audio device can wedge the machine as it loads.**
-  After a cold boot, attaching a USB audio device about 40 seconds after the
-  boot wedged the guest in 5 of 6 tries, with the taskbar clock
-  stopped; after a 120-second wait it wedged in none of 20. Every request
-  the driver was given had been answered: the wait is above it, in Windows
-  98's configuration manager, and `1.2.0.0` showed the same intermittent
-  wedge. Plug a USB audio device in once the machine has settled.
+- **Windows Vista x64 and Windows 7 x64 need test-signing mode, or driver
+  signature enforcement disabled.** The x64 drivers carry the project's own
+  test signature, not Microsoft's. Turn on test-signing mode once (see
+  "What this is"), or disable driver signature enforcement at every start
+  (F8); otherwise the controller sits at Code 39 on Vista, Code 52 on 7, and
+  nothing on it works.
+- **Windows 98 SE: a USB audio device can wedge the machine as it loads,
+  and it is not this driver's doing.** After a cold boot, attaching a USB
+  audio device wedges the guest often, with the taskbar clock stopped and
+  "Msgsrv32" not responding. Every request the driver was given had been
+  answered: the wait is above it, in Windows 98's configuration manager.
+  Windows 98 SE's own USB stack on a UHCI controller, with this driver not
+  loaded, wedges the same way at about the same rate (14 of 30 tries,
+  against 23 of 39 under this driver, attaching 40, 120 and 300 seconds
+  after the boot, with selective suspend on or off), and `1.2.0.0` and
+  `2.2.0.0` showed it too. Waiting after the boot did not avoid it in
+  these readings, though an earlier reading had suggested two minutes
+  would. Only a restart ends it.
+  Likewise, USBView walked and closed while a USB audio device was
+  attached froze the machine, or stopped it with a fatal exception in
+  `USBAUDIO`, about half the time, on Windows' own stack as well; with no
+  audio device, or no USBView, it never did.
 - **Windows 98 SE in a virtual machine cannot play USB audio** through
   Windows 98's own `USBAUDIO.VXD`; that is QEMU's emulated device and the
   VxD, through this driver and through a UHCI controller alike. On real
@@ -1236,13 +2013,39 @@ or says it was found by reading the code.
   hub.
 - **Windows 98 SE: a device at a location the system has not seen before
   raises the Add New Hardware Wizard, and holds that port until it is
-  answered.** That is per port and by design of Windows 98.
+  answered.** While the device stays plugged in, that hold is per port and
+  by design of Windows 98. **Finish the
+  wizard before unplugging the device.** A device unplugged while its
+  wizard is open holds more than its port: Windows asks the bus about no
+  port again until the wizard is closed, so neither that device plugged
+  back in nor a device plugged in, at any port, where another was
+  unplugged meanwhile is seen until then; closing the wizard brings them
+  all at once. Keys typed into the abandoned wizard wedged the machine.
+  The same happens on Windows 98 SE's own USB stack and under `2.2.0.0`.
+- **Windows 98 SE: Stand by is untested on real hardware; remove USB disks
+  before Stand by.** It has been read only in QEMU virtual machines, where
+  Windows 98 SE itself does not resume reliably: after the wake, a program
+  started, or Ctrl+Alt+Del, can stop with a fatal exception 0E in
+  `KERNEL32` even with no USB controller in the machine. With a USB disk
+  that was attached when the computer started, the resume stops before the
+  desktop returns, under this driver and under NUSB's USB 2.0 (EHCI) driver
+  alike. The BIOS presents such a disk to Windows, and Windows 98 SE then
+  uses it in MS-DOS compatibility mode (System Properties, Performance
+  tab). A disk plugged in after Windows started did not stop the resume,
+  and it was still attached afterwards. Windows 98 SE's own UHCI driver did
+  not resume at all there. With only a USB mouse attached, at a root port
+  or behind a hub, the resume completed and the mouse worked through this
+  driver.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
+- **Windows ME: Shut Down can hang with a USB disk that has not been opened
+  since the start.** Open the disk once (a `dir` of it is enough), or
+  remove it, before shutting down. ME does the same on Microsoft's own USB
+  stack, and `2.2.0.0` did too.
 - **Windows ME: a UAS drive as the first USB storage device shows Code 2.**
   On a fresh Windows ME, ME has not yet copied its own `USBNTMAP.SYS` and
   `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is
@@ -1256,7 +2059,8 @@ or says it was found by reading the code.
   Power tab, on every system: the value the page reads cannot count past
   510 mA. `XHCISNAP`'s report gives the exact figure. Same section. (Under
   `2.1.0.0` every SuperSpeed device read a quarter of its draw there.)
-- **Intel 7-, 8- and 9-series chipsets: a device on a blue connector moves
+- **Intel 7-, 8- and 9-series chipsets, with the switchover turned on
+  (`XhciIntelPortSwitch` `1` or `2`; off by default since `2.3.0.0`): a device on a blue connector moves
   between the USB 2.0 controller and this driver when the controller starts
   or stops**: it is disconnected on one side and found again on the other.
   Read on a Lenovo B490 under Windows 98 SE with NUSB, with a mouse plugged
@@ -1286,15 +2090,24 @@ or says it was found by reading the code.
   driver - waits for ever on the transfers kept, and only restarting the
   machine ends it. Seen in virtual machines on Windows 98 SE and 2000 with
   the fault made on purpose. Restart the machine instead of disabling the
-  controller. A later release may release what is kept at the stop.
-- **Windows 2000: after the driver recovers the controller, a USB drive
-  whose volume was mounted may come back at Code 31** (same section). The
+  controller. A later release is planned to hand back what is kept at the
+  stop, once the driver can prove the controller has left the bus or has
+  stopped writing to memory.
+- **Windows 2000: after the driver recovers the controller, or after a
+  resume from hibernation, a USB drive whose volume was mounted may come
+  back at Code 31** (same section). The
   mouse and other devices come back; the drive stays at Code 31 until it
   is unplugged and plugged in again, or the controller is disabled and
   enabled in Device Manager. Seen in a virtual machine (five times of five
   with the volume mounted); Windows 98 SE did not show it. The recovery
   path is the one `2.1.1.0` has, but `2.2.0.0` recovers the controller on
-  more faults.
+  more faults. Seen again in `2.3.0.0`'s virtual-machine tests on Windows
+  2000: after a recovery with the controller polled (`XhciInterruptMode`
+  `2`), and after a resume from hibernation. A controller that lost its
+  state across the hibernation, as QEMU's does, is started afresh, and the
+  driver then finds every device again as on a recovery. Each time, a
+  restart of the drive's own device cleared it (read with a command-line
+  device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
   shows them as `?`.** See "Devices and hubs in Device Manager".
 - **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks
@@ -1309,10 +2122,20 @@ or says it was found by reading the code.
   floppy".
 - **After an update from `2.0.0.0`, some devices are found once more as new
   hardware**, one time each. See "Updating from 2.y.y.y".
-- **After an update from `2.0.0.0`, the root hub's Driver tab still shows
-  `2.0.0.0`** until the root hub is updated too, although it runs the new
-  file; and Windows 98 SE and ME keep running `2.0.0.0` until the next
-  restart, which they do not ask for. Same section.
+- **After an update, the root hub's Driver tab still shows the old
+  version** until the root hub is updated too, although it runs the new
+  file (read again after an update from `2.2.0.0` on Windows 2000, XP and
+  XP x64). On Windows 98 SE and ME the old driver also keeps running until
+  the next restart, which they do not ask for (read again after an update
+  from `2.2.0.0`). Same section.
+- **Windows Vista and 7: deleting the driver keeps the older packages.**
+  "Delete the driver software for this device" removes only the package in
+  use, and Windows may install an older one the next time it finds the
+  controller; `pnputil -d` removes them. Same section.
+- **32-bit Windows Vista and 7: the install asks for a restart**, and the
+  controller does not start until it is done, because the helper
+  `xhcimsi.sys` starts only at boot ("Windows Vista and 7:
+  message-signalled interrupts").
 
 `2.0.0.0`'s list also had "a device moved to a different port is found
 again as new hardware", which `2.1.0.0` answers for every device with a
@@ -1326,7 +2149,8 @@ next section.
 
 `1.2.0.0`'s own notes (linked at the top) list its limitations. Each was
 re-measured, or answered by the design, under `2.0.0.0`. No change since
-`2.0.0.0` answers a row differently:
+`2.0.0.0` answers a row differently, except the standby row, which says
+what `2.3.0.0` adds:
 
 | `1.2.0.0` limitation | Under `2.0.0.0` |
 |---|---|
@@ -1339,7 +2163,7 @@ re-measured, or answered by the design, under `2.0.0.0`. No change since
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
-| On a controller without Force Save Context, a wake from standby rebuilt the bus | Untested: the power handlers have not run |
+| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and with a USB disk plugged in after Windows started, and stopped with a USB disk attached when the computer started (the BIOS presents it, and Windows uses it in MS-DOS compatibility mode), as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
 | The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground
@@ -1355,12 +2179,21 @@ information.
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
+| Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
-| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller and in no virtual machine |
-| The Intel port switchover beyond one machine | Read on one `1E31` machine under Windows 98 SE ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
+| Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
+| The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
+| Standby (S3) on real hardware | Read only in virtual machines. At the `2.3.0.0` bench the ThinkPad E460's Windows 98 SE offered no Stand by, the Dell Latitude E7250's Windows 7 x64 had no graphics driver, and the ThinkPad P14s Gen 1 was not read |
+| Selective suspend and remote wake on real hardware | Read only in QEMU, which makes no SuperSpeed function wake and has no SuperSpeed hub. No real remote-wake device has been read: a USB 2.0 HID device waking a sleeping machine's bus, or a SuperSpeed device waking from a root port or from behind a USB 3 hub |
+| MSI-X on real hardware | Read only on QEMU's controller, whose MSI-X loses an interrupt now and then, which the driver's 100 ms check then picks up (`XHCISNAP`'s BackstopDrains). On a real MSI-X controller BackstopDrains should stay near 0; not read. MSI was read on the Dell Latitude E7250 |
+| `XHCIQUAL` on a line that is dead under DOS | Read only in QEMU. The Dell Latitude E7250's line is dead only under Windows' interrupt routing; under DOS it works, so its interrupt test passes there |
+| Windows 98 SE on the Dell Latitude E7250 | The interrupt routing repair under Windows 98 SE (PIC mode) has run on no machine: the E7250, the one machine read with that fault, runs XP x64 and 7 x64 |
+| `XhciWideMap` on real hardware | Not read on an updated 32-bit Windows 7, nor at `1` with a real UAS drive. In QEMU the UAS device holds one piece per stream, so a UAS drive at `1` could not be read there either |
+| A real UAS drive after a transfer error or a stop | The retry in place on a UAS stream was read only with the error made on purpose in QEMU. No real drive has met one under this driver |
+| UAS speed at 1 MiB on real hardware | The 1 MiB default rests on readings in QEMU. ATTO with the MSSU10, compared with `2.2.0.0` on the same machine, was not read at the `2.3.0.0` bench; the E460's copies at about 200 MB/s are the only real-hardware figure |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing

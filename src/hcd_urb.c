@@ -116,7 +116,8 @@ XHCI_C_ASSERT(ioctl_topology_value,
 #endif
 
 /* USB_IDLE_CALLBACK_INFO (WDK 7.1 usbioctl.h): the callback and its
- * context. Only read for NULL here: the bus never calls the callback. */
+ * context. Today's hold reads it only for NULL; stage A copies both at
+ * submission and calls the callback on its own thread (hcd_susp.c). */
 typedef struct _HCD_IDLE_CALLBACK_INFO {
     PVOID IdleCallback;
     PVOID IdleContext;
@@ -985,6 +986,7 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
                               PIRP irp, PHCD_IDLE_CALLBACK_INFO info)
 {
     KIRQL cancelIrql;
+    NTSTATUS status;
 
     if (hc == NULL || !pdo->Listed) {
         return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
@@ -992,8 +994,16 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (info == NULL || info->IdleCallback == NULL) {
         return HcdCompleteIrp(irp, STATUS_NO_CALLBACK_ACTIVE, 0);
     }
+    /* Selective suspend's stage A (design record 14 section 6, task
+     * 36.32; hcd_susp.c): a USB 2.0 device PDO with the switch on has its
+     * callback called on the bus's callback thread. Otherwise today's
+     * hold below. */
+    if (HcdSuspIdleSubmit(pdo, hc, irp, info->IdleCallback,
+                          info->IdleContext, &status)) {
+        return status;
+    }
     IoAcquireCancelSpinLock(&cancelIrql);
-    if (pdo->IdleIrp != NULL) {
+    if (pdo->IdleIrp != NULL || pdo->IdleSlot != NULL) {
         IoReleaseCancelSpinLock(cancelIrql);
         return HcdCompleteIrp(irp, STATUS_DEVICE_BUSY, 0);
     }
@@ -1014,17 +1024,18 @@ static NTSTATUS hcdIdleSubmit(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /*
- * The held idle request, completed STATUS_CANCELLED, and then every
- * completion of one waited out: at a stop, surprise removal or removal of
- * the PDO (hcd_pdo.c, after the dispatches inside it are waited out, so
- * none can hold another), and at its deletion. A cancel routine already
- * called has taken the IRP under the lock; its completion is counted in
- * IdlePending until it has returned, and this waits for that too (Codex
- * review of 28-A.1, round 1, finding 2). IRQL: PASSIVE_LEVEL.
+ * Today's held idle request, completed STATUS_CANCELLED: at a stop,
+ * surprise removal or removal of the PDO (hcd_pdo.c, after the dispatches
+ * inside it are waited out, so none can hold another), and at its
+ * deletion. A cancel routine already called has taken the IRP under the
+ * lock; its completion is counted in IdlePending until it has returned,
+ * and the caller's rundown (hcd_susp.c, HcdSuspIdleRundown, design record
+ * 14 section 4.4 (e)) waits for that too, after the PDO's URBs are
+ * drained (Codex review of 28-A.1, round 1, finding 2). IRQL:
+ * PASSIVE_LEVEL.
  */
 VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
 {
-    LARGE_INTEGER due;
     KIRQL cancelIrql;
     PIRP irp;
 
@@ -1039,10 +1050,6 @@ VOID HcdUrbIdleDrain(PHCD_DEVICE_PDO pdo)
     if (irp != NULL) {
         (VOID)HcdCompleteIrp(irp, STATUS_CANCELLED, 0);
         (VOID)InterlockedDecrement(&pdo->IdlePending);
-    }
-    while (pdo->IdlePending != 0) {
-        HcdRelativeMs(&due, 1);
-        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
 }
 
@@ -1543,6 +1550,141 @@ static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     return HcdCfgQueue(hc, dev, pdo, irp);
 }
 
+/*
+ * IOCTL_XHCI98_TELEMETRY (xhci98_xfer.h, task 36.21): the class driver's
+ * record, its signature, version and size checked, copied whole into the
+ * record its device owns - or, the first time, into a free one, else into
+ * one whose device has departed (HcdIoDeviceGone), its count started
+ * afresh - under the controller lock, and the IRP completed before this
+ * returns, so nothing here holds the caller's memory. The device record is
+ * the owner's identity, compared and never followed; while two live
+ * devices hold both records a third is refused and counted. IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdTelemetryIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                  PIRP irp, PXHCI98_TELEMETRY rq)
+{
+    PHCD_UAS_TELE t;
+    PHCD_USB_DEVICE dev;
+    PVOID owner;
+    KIRQL oldIrql;
+    ULONG i;
+    ULONG lo;
+    ULONG hi;
+
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    /* A reference, so the device record cannot be freed - and its record
+     * said departed (HcdIoDeviceGone, which waits references out) - while
+     * this send is taken; Gone is read under the controller lock with the
+     * update, so a leaving device publishes nothing (review round 2). */
+    dev = hcdDeviceRef(hc, pdo);
+    if (dev == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    owner = (PVOID)dev;
+    HcdTscRead(&lo, &hi);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (rq == NULL || rq->Word[XHCI98_TELE_SIG] != XHCI98_TELE_SIGNATURE ||
+        rq->Word[XHCI98_TELE_VER] != XHCI98_TELE_VERSION ||
+        rq->Word[XHCI98_TELE_SIZE] != sizeof(XHCI98_TELEMETRY) ||
+        dev->Gone) {
+        hc->Xstat.TeleRefused++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    t = NULL;
+    for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+        if (hc->UasTele[i].Owner == owner) {
+            t = &hc->UasTele[i];
+        }
+    }
+    for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+        if (hc->UasTele[i].State == XHCI_SNAPSHOT_HCD_TELE_S_NONE) {
+            t = &hc->UasTele[i];
+        }
+    }
+    for (i = 0; i < HCD_UAS_TELE_RECORDS && t == NULL; i++) {
+        if (hc->UasTele[i].State == XHCI_SNAPSHOT_HCD_TELE_S_DEPARTED) {
+            t = &hc->UasTele[i];
+        }
+    }
+    if (t == NULL) {
+        hc->Xstat.TeleRefused++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    if (t->Owner != owner) {
+        t->Owner = owner;
+        t->State = XHCI_SNAPSHOT_HCD_TELE_S_LIVE;
+        t->Taken = 0;
+    }
+    t->Slot = dev->SlotId;
+    t->Taken++;
+    t->TscLo = lo;
+    t->TscHi = hi;
+    for (i = 0; i < XHCI98_TELE_WORDS; i++) {
+        t->Word[i] = rq->Word[i];
+    }
+    hc->Xstat.TeleTaken++;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
+ * IOCTL_XHCI98_TRANSFER_POLICY (xhci98_xfer.h, task 36.22): the command
+ * size this controller's start latched from XhciMaxTransferKB, with the
+ * contract's range and step, answered at once. The reply depends on
+ * nothing but the start's read - not the device, its streams or the map
+ * registers of the moment. A request whose header is wrong is refused
+ * STATUS_INVALID_PARAMETER with Status saying so when its Size covers
+ * the field. IRQL: <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdPolicyIoctl(PHCD_CONTROLLER hc, PIRP irp,
+                               PXHCI98_TRANSFER_POLICY rq)
+{
+    KIRQL oldIrql;
+    ULONG bytes;
+    ULONG i;
+
+    if (rq == NULL || rq->Size < sizeof(XHCI98_TRANSFER_POLICY)) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    rq->CommandBytes = 0;
+    rq->MinBytes = 0;
+    rq->MaxBytes = 0;
+    rq->StepBytes = 0;
+    for (i = 0; i < 4; i++) {
+        rq->Reserved[i] = 0;
+    }
+    if (rq->Signature != XHCI98_POLICY_SIGNATURE ||
+        rq->Version != XHCI98_POLICY_VERSION) {
+        rq->Status = XHCI98_POLICY_INVALID;
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    bytes = hc->Xstat.CommandBytes;
+    hc->Xstat.PolicyQueries++;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (bytes == 0) {
+        /* No start has read the value: the default, as the start would. */
+        bytes = XHCI98_POLICY_DEFAULT_BYTES;
+    }
+    rq->CommandBytes = bytes;
+    rq->MinBytes = XHCI98_POLICY_MIN_BYTES;
+    rq->MaxBytes = XHCI98_POLICY_MAX_BYTES;
+    rq->StepBytes = XHCI98_POLICY_STEP_BYTES;
+    rq->Status = XHCI98_POLICY_SUCCESS;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
 /* The slot an internal IOCTL is traced under once: its function number, the
  * internal range (USB_IOCTL_INTERNAL_INDEX, 0) at 0..0x1F and the
  * USB_IOCTL_INDEX range (0xFF) above it, everything else in the last. */
@@ -1664,6 +1806,18 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         status = hcdStreamsIoctl(pdo, hc, irp,
                                  (PXHCI98_STREAMS_REQUEST)
                                      stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_TRANSFER_POLICY:
+        status = hcdPolicyIoctl(hc, irp,
+                                (PXHCI98_TRANSFER_POLICY)
+                                    stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_TELEMETRY:
+        status = hcdTelemetryIoctl(pdo, hc, irp,
+                                   (PXHCI98_TELEMETRY)
+                                       stack->Parameters.Others.Argument1);
         break;
 
     default:

@@ -1967,6 +1967,225 @@ static void test_replay_b490(void)
     CHECK_EQ(speed, XHCI_SPEED_HIGH, "High Speed");
 }
 
+/*
+ * Issue 18: the VIA VL805 (1106:3483 rev 01), its capabilities as the
+ * reporter's XHCIQUAL probe printed them (temp\via\PROBE.LOG 87-90 and
+ * 100-104, held off-tree): a USB 2.0 group, port 1, PSIC 1 with DW2
+ * 10060101 (HSO and IHI set) and the single PSI 01E00023 (ID 3, High
+ * Speed) - the integrated hub's link, as xHCI 1.2c 7.2.1's note allows -
+ * and a USB 3.0 group, ports 2 to 5, PSIC 1, PSI 00050134 (ID 4).
+ */
+static void test_replay_vl805(void)
+{
+    static const ULONG psi2[1] = { 0x01E00023UL };
+    static const ULONG psi3[1] = { 0x00050134UL };
+    XHCI_PORT_MAP map;
+    ULONG speed;
+    ULONG psiv;
+    ULONG outcome;
+    ULONG kbps;
+    ULONG plus;
+
+    bar_reset(0x800);
+    put_protocol(0x2C, 8, 2, 0, 1, 1, 0, psi2, 1);
+    bar[0x2C + 2] = 0x10060101UL;
+    put_protocol(0x34, 0, 3, 0, 2, 4, 0, psi3, 1);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x2C, 0x800, 5, &map),
+             XHCI_CAPS_OK, "VL805 chain parsed");
+    CHECK_EQ(map.Protocols[0].PsiCount, 1, "USB 2.0 group: PSIC 1");
+    CHECK_EQ(map.Protocols[0].Psi[0], 0x01E00023UL, "kept verbatim");
+    CHECK_EQ(XhciPortIsUsb3(&map, 1), 0, "port 1 is USB 2.0");
+    CHECK_EQ(XhciPortIsUsb3(&map, 5), 1, "port 5 is USB 3");
+
+    /* The root port: unchanged, the hub at ID 3 and nothing else named. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 3, &speed), XHCI_CAPS_OK, "ID 3");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH, "the integrated hub, High Speed");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 1, &speed), XHCI_CAPS_OK, "ID 1");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "a root PORTSC 1 stays unknown");
+    CHECK_EQ(XhciPortSpeedClass(&map, 1, 2, &speed), XHCI_CAPS_OK, "ID 2");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "a root PORTSC 2 stays unknown");
+    CHECK_EQ(XhciPortSpeedSource(&map, 1, 2), XHCI_PSI_SOURCE_NONE,
+             "and its source is none");
+    CHECK_EQ(XhciPortPsivForSpeed(&map, 1, XHCI_SPEED_LOW, &psiv),
+             XHCI_CAPS_NOT_FOUND, "the strict lookup still refuses LS");
+
+    /* Behind the hub, switch on: the defaults, and the round trip. */
+    psiv = 0;
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "a Low-Speed mouse behind the hub is placed");
+    CHECK_EQ(psiv, XHCI_PSIV_LS, "at ID 2");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_FALLBACK, "by the fallback");
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 1, psiv, 1, &speed), XHCI_CAPS_OK,
+             "decoded with its provenance");
+    CHECK_EQ(speed, XHCI_SPEED_LOW, "as Low Speed again");
+    CHECK_EQ(XhciPortRateFor(&map, 1, psiv, 1, &kbps, &plus), XHCI_CAPS_OK,
+             "its rate");
+    CHECK_EQ(kbps, 1500, "1.5 Mbit/s");
+    CHECK_EQ(plus, 0, "not SuperSpeedPlus");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_FULL, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "a Full-Speed device behind the hub is placed");
+    CHECK_EQ(psiv, XHCI_PSIV_FS, "at ID 1");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_FALLBACK, "by the fallback");
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 1, psiv, 1, &speed), XHCI_CAPS_OK,
+             "decoded with its provenance");
+    CHECK_EQ(speed, XHCI_SPEED_FULL, "as Full Speed again");
+    CHECK_EQ(XhciPortRateFor(&map, 1, psiv, 1, &kbps, &plus), XHCI_CAPS_OK,
+             "its rate");
+    CHECK_EQ(kbps, 12000, "12 Mbit/s");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_HIGH, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "a High-Speed device behind the hub");
+    CHECK_EQ(psiv, 3, "the listed 3");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_TABLE, "by the table, not the fallback");
+
+    /* Without provenance the same IDs are what they always were. */
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 1, 2, 0, &speed), XHCI_CAPS_OK,
+             "no provenance");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "unknown");
+    CHECK_EQ(XhciPortRateFor(&map, 1, 2, 0, &kbps, &plus),
+             XHCI_CAPS_NOT_FOUND, "and no rate");
+
+    /* Switch off: the refusal of 2.2.0.0 and before, now named. */
+    psiv = 0xEEEEUL;
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 0, &psiv,
+                                     &outcome),
+             XHCI_CAPS_NOT_FOUND, "switch off: refused");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_DISABLED, "because it is off");
+    CHECK_EQ(psiv, 0xEEEEUL, "the output untouched");
+
+    /* The USB 3.0 group, unchanged. */
+    CHECK_EQ(XhciPortSpeedClass(&map, 2, 4, &speed), XHCI_CAPS_OK, "ID 4");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "SuperSpeed");
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 2, 4, 1, &speed), XHCI_CAPS_OK,
+             "with provenance");
+    CHECK_EQ(speed, XHCI_SPEED_SUPER, "SuperSpeed still");
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 2, 1, 1, &speed), XHCI_CAPS_OK,
+             "ID 1 on the USB 3 group with provenance");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "never a USB 2.0 default there");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 2, XHCI_SPEED_FULL, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_NOT_FOUND, "no Full Speed on a USB 3 group");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_NO_MAPPING, "no mapping");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 2, XHCI_SPEED_SUPER, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "SuperSpeed by the table");
+    CHECK_EQ(psiv, 4, "the listed 4");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_TABLE, "table");
+
+    /* The firmware note's offset, for this controller and no other. */
+    CHECK_EQ(XhciPciFirmwareOffset(0x34831106UL), 0x50,
+             "the VL805's firmware dword");
+    CHECK_EQ(XhciPciFirmwareOffset(0x34821106UL), 0, "another VIA id: none");
+    CHECK_EQ(XhciPciFirmwareOffset(0x9D2F8086UL), 0, "Intel: none");
+    CHECK_EQ(XhciPciFirmwareOffset(0), 0, "no id: none");
+}
+
+/*
+ * Issue 18's eligibility on tables other than the VL805's: an explicit
+ * entry always wins, a default ID the table lists as something else is a
+ * refusal (CONFLICT), PSIC 0 keeps its defaults, and the decode never
+ * borrows the fallback for an ID the table lists.
+ */
+static void test_hub_child_fallback(void)
+{
+    /* ID 1 is High Speed, Full Speed missing: no fallback to 1. */
+    static const ULONG conflict[2] = { 0x01E00021UL, 0x05DC0012UL };
+    /* Full Speed at ID 5, Low missing, 2 unlisted. */
+    static const ULONG moved[2] = { 0x000C0025UL, 0x01E00023UL };
+    /* An undecodable entry at ID 2 (PSIM 0): listed, so it wins. */
+    static const ULONG odd[2] = { 0x00000012UL, 0x01E00023UL };
+    XHCI_PORT_MAP map;
+    ULONG speed;
+    ULONG psiv;
+    ULONG outcome;
+
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 2, 0, 1, 2, 0, conflict, 2);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "conflicting table parsed");
+    psiv = 0xEEEEUL;
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_FULL, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_NOT_FOUND, "Full Speed refused: 1 means High here");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_CONFLICT, "named a conflict");
+    CHECK_EQ(psiv, 0xEEEEUL, "the output untouched");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "Low Speed is listed");
+    CHECK_EQ(psiv, 2, "at 2");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_TABLE, "by the table");
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 1, 1, 1, &speed), XHCI_CAPS_OK,
+             "1 with provenance");
+    CHECK_EQ(speed, XHCI_SPEED_HIGH, "still High Speed: the entry wins");
+
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 2, 0, 1, 2, 0, moved, 2);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "moved table parsed");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_FULL, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "Full Speed by its listed entry");
+    CHECK_EQ(psiv, 5, "at 5, never the default 1");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_TABLE, "table");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "Low Speed by the fallback");
+    CHECK_EQ(psiv, 2, "at 2");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_FALLBACK, "fallback");
+
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 2, 0, 1, 2, 0, odd, 2);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "table with an undecodable 2 parsed");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_NOT_FOUND, "Low Speed refused: 2 is listed");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_CONFLICT, "a conflict");
+    CHECK_EQ(XhciPortSpeedClassFor(&map, 1, 2, 1, &speed), XHCI_CAPS_OK,
+             "2 with provenance");
+    CHECK_EQ(speed, XHCI_SPEED_UNKNOWN, "its listed meaning, unknown");
+
+    /* PSIC 0: the defaults by the table rule, never the fallback. */
+    bar_reset(0x800);
+    put_protocol(0x100, 0, 2, 0, 1, 2, 0, NULL, 0);
+    CHECK_EQ(XhciParseExtendedCaps(bar_read, NULL, 0x100, 0x800, 2, &map),
+             XHCI_CAPS_OK, "no table parsed");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 0, &psiv,
+                                     &outcome),
+             XHCI_CAPS_OK, "PSIC 0, switch off: the default");
+    CHECK_EQ(psiv, 2, "ID 2");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_TABLE, "the table rule, not the fallback");
+
+    /* Refusals the fallback does not touch, and bad parameters. */
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_UNKNOWN, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_NOT_FOUND, "unknown class refused");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_NO_MAPPING, "no mapping");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 9, XHCI_SPEED_LOW, 1, &psiv,
+                                     &outcome),
+             XHCI_CAPS_NOT_FOUND, "a port no group claims");
+    CHECK_EQ(outcome, XHCI_HUB_SPEED_NO_MAPPING, "no mapping");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 1, NULL,
+                                     &outcome),
+             XHCI_CAPS_BAD_PARAM, "NULL psiv");
+    CHECK_EQ(XhciPortPsivForHubChild(&map, 1, XHCI_SPEED_LOW, 1, &psiv,
+                                     NULL),
+             XHCI_CAPS_BAD_PARAM, "NULL outcome");
+
+    /* The notes' layouts. */
+    CHECK_EQ(XhciHubSpeedNotePlace(1, 1, 3, XHCI_SPEED_LOW,
+                                   XHCI_HUB_SPEED_FALLBACK),
+             0x01010311UL, "place: port 1, hub slot 1, port 3, LS, fallback");
+    CHECK_EQ(XhciHubSpeedNotePlace(0x1FF, 0x1FF, 0x1FF, 0x1F, 0x1F),
+             0xFFFFFFFFUL, "every field masked");
+    CHECK_EQ(XhciHubSpeedNoteRoute(2, 0x00003), 0x20000003UL,
+             "route: PSIV 2, route 3");
+    CHECK_EQ(XhciHubSpeedNoteRoute(0x1F, 0xFFFFFFFFUL), 0xF00FFFFFUL,
+             "masked");
+}
+
 int main(void)
 {
     test_field_macros();
@@ -1989,6 +2208,8 @@ int main(void)
     test_replay_p14s();
     test_replay_b490();
     test_capability_loop_refused();
+    test_replay_vl805();
+    test_hub_child_fallback();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

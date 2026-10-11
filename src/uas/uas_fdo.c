@@ -147,6 +147,190 @@ static VOID uasReadSerial(PUAS_FDO fdo, UCHAR index)
     UasFree(buf);
 }
 
+/*
+ * Task 36.22: the command size, asked of the bus at every start before the
+ * pipes are selected and before any LUN is exposed, separate from the
+ * streams (a High-Speed device opens none). 64 KiB first, on this and every
+ * path; then the bus's answer if it keeps the contract (UasPolicyValue).
+ * An older bus, a reply out of contract and a request that failed each
+ * fall back to 64 KiB, counted apart, and the start goes on: its own
+ * failures (selection, streams) still fail it. The descriptor and the
+ * pipes read the one value stored here. PASSIVE_LEVEL, no lock held.
+ */
+static VOID uasNoteDword(HANDLE key, PCWSTR name, ULONG value)
+{
+    UNICODE_STRING n;
+
+    RtlInitUnicodeString(&n, name);
+    (VOID)ZwSetValueKey(key, &n, 0, REG_DWORD, &value, sizeof(value));
+}
+
+/*
+ * The question's outcome as a note of its own, in the UAS device's
+ * hardware key (on NT its Device Parameters key): the size taken, where
+ * from (XHCI98_TELE_SRC_*), and the request's NTSTATUS - written whatever
+ * the outcome, so an older bus, a reply out of contract or a failed
+ * request reads in the registry even when no telemetry can reach the bus
+ * and the start fails later. A key that will not open writes nothing.
+ * PASSIVE_LEVEL.
+ */
+static VOID uasNotePolicy(PUAS_FDO fdo, ULONG bytes, ULONG source,
+                          NTSTATUS status, ULONG limit, ULONG why)
+{
+    HANDLE key;
+
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(fdo->Pdo, PLUGPLAY_REGKEY_DEVICE,
+                                            KEY_WRITE, &key))) {
+        return;
+    }
+    uasNoteDword(key, L"XhciUasCommandBytes", bytes);
+    uasNoteDword(key, L"XhciUasCommandSource", source);
+    uasNoteDword(key, L"XhciUasCommandStatus", (ULONG)status);
+    /* The device's own usbstor value as read (0 when absent or not four
+     * bytes) and what became of it (UAS_DEVLIM_*). */
+    uasNoteDword(key, L"XhciUasDeviceLimit", limit);
+    uasNoteDword(key, L"XhciUasDeviceLimitWhy", why);
+    ZwClose(key);
+}
+
+/* What the query routine saw of the one value it was given: whether it
+ * ran, the value's type and length and, when four bytes long, those bytes. */
+typedef struct _UAS_DEVLIM_READ {
+    ULONG Found;
+    ULONG Type;
+    ULONG Length;
+    ULONG Value;
+} UAS_DEVLIM_READ;
+
+/* RtlQueryRegistryValues' routine: records the value whatever its type -
+ * UasDeviceLimit judges it - with NOEXPAND set, so a string is seen as the
+ * string it is. PASSIVE_LEVEL. */
+static NTSTATUS NTAPI uasTakeLimit(PWSTR ValueName, ULONG ValueType,
+                                   PVOID ValueData, ULONG ValueLength,
+                                   PVOID Context, PVOID EntryContext)
+{
+    UAS_DEVLIM_READ *r;
+    PUCHAR from;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+    r = (UAS_DEVLIM_READ *)EntryContext;
+    r->Found = 1;
+    r->Type = ValueType;
+    r->Length = ValueLength;
+    r->Value = 0;
+    if (ValueLength == 4 && ValueData != NULL) {
+        from = (PUCHAR)ValueData;
+        r->Value = (ULONG)from[0] | ((ULONG)from[1] << 8) |
+                   ((ULONG)from[2] << 16) | ((ULONG)from[3] << 24);
+    }
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Task 36.22 (owner, 2026-10-09): Microsoft's per-device
+ * MaximumTransferLength, from
+ * HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP (KB 2581464; the
+ * device's idVendor and idProduct, four uppercase hex digits each) - the
+ * key Windows' own usbstor.sys reads and the tools that set it write. On
+ * Windows 98 and ME nothing larger than 64 KiB is sent whatever it says
+ * (USBNTMAP), and the read is harmless there. *r stays all zero when the
+ * key or the value is absent. PASSIVE_LEVEL.
+ */
+static VOID uasReadLimit(USHORT vid, USHORT pid, UAS_DEVLIM_READ *r)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    static const char head[] = "usbstor\\";
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    WCHAR path[20];
+    ULONG ids;
+    ULONG i;
+    PUCHAR p;
+
+    UasZero(r, sizeof(*r));
+    for (i = 0; i < 8; i++) {
+        path[i] = (WCHAR)head[i];
+    }
+    ids = ((ULONG)vid << 16) | (ULONG)pid;
+    for (i = 0; i < 8; i++) {
+        path[8 + i] = (WCHAR)hex[(ids >> (28 - 4 * i)) & 0xFUL];
+    }
+    path[16] = 0;
+    p = (PUCHAR)table;
+    for (i = 0; i < sizeof(table); i++) {
+        p[i] = 0;
+    }
+    table[0].QueryRoutine = uasTakeLimit;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = L"MaximumTransferLength";
+    table[0].EntryContext = r;
+    if (!NT_SUCCESS(RtlQueryRegistryValues(RTL_REGISTRY_CONTROL, path, table,
+                                           NULL, NULL)) &&
+        !r->Found) {
+        UasZero(r, sizeof(*r));
+    }
+}
+
+static VOID uasAskPolicy(PUAS_FDO fdo, USHORT vid, USHORT pid)
+{
+    UAS_DEVLIM_READ limit;
+    ULONG why;
+    PXHCI98_TRANSFER_POLICY rq;
+    NTSTATUS status;
+    ULONG sent;
+    ULONG source;
+    ULONG bytes;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->CommandBytes = UAS_MAX_TRANSFER;
+    fdo->PolicySource = XHCI98_TELE_SRC_UNASKED;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+
+    rq = (PXHCI98_TRANSFER_POLICY)UasAlloc(sizeof(XHCI98_TRANSFER_POLICY));
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    if (rq == NULL) {
+        sent = UAS_POLICY_SENT_FAILED;
+    } else {
+        UasZero(rq, sizeof(*rq));
+        rq->Signature = XHCI98_POLICY_SIGNATURE;
+        rq->Version = XHCI98_POLICY_VERSION;
+        rq->Size = sizeof(XHCI98_TRANSFER_POLICY);
+        status = uasInternalIoctl(fdo, IOCTL_XHCI98_TRANSFER_POLICY, rq);
+        if (NT_SUCCESS(status)) {
+            sent = UAS_POLICY_SENT_OK;
+        } else if (status == STATUS_NOT_SUPPORTED ||
+                   status == STATUS_INVALID_DEVICE_REQUEST) {
+            sent = UAS_POLICY_SENT_UNSUPPORTED;
+        } else if (status == STATUS_INVALID_PARAMETER) {
+            sent = UAS_POLICY_SENT_REFUSED;
+        } else {
+            sent = UAS_POLICY_SENT_FAILED;
+        }
+    }
+    bytes = UasPolicyValue(sent, rq, &source);
+    UasFree(rq);
+    /* The device's own limit over the bus's answer, for this device only
+     * (UasDeviceLimit). */
+    uasReadLimit(vid, pid, &limit);
+    bytes = UasDeviceLimit(bytes, source, limit.Found, limit.Type,
+                           limit.Length, limit.Value, &source, &why);
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->CommandBytes = bytes;
+    fdo->PolicySource = source;
+    if (source == XHCI98_TELE_SRC_UNSUPPORTED) {
+        fdo->PolicyUnsupported++;
+    } else if (source == XHCI98_TELE_SRC_MALFORMED) {
+        fdo->PolicyMalformed++;
+    } else if (source == XHCI98_TELE_SRC_TRANSPORT) {
+        fdo->PolicyTransport++;
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasNotePolicy(fdo, bytes, source, status,
+                  (limit.Found && limit.Length == 4) ? limit.Value : 0, why);
+}
+
 /* SELECT_CONFIGURATION with the UAS alternate setting, and the four pipe
  * handles matched to the Pipe Usage descriptors by endpoint address. */
 static NTSTATUS uasSelect(PUAS_FDO fdo)
@@ -183,7 +367,7 @@ static NTSTATUS uasSelect(PUAS_FDO fdo)
     ii->AlternateSetting = (UCHAR)fdo->Info.AlternateSetting;
     ii->NumberOfPipes = pipes;
     for (i = 0; i < pipes; i++) {
-        ii->Pipes[i].MaximumTransferSize = UAS_MAX_TRANSFER;
+        ii->Pipes[i].MaximumTransferSize = fdo->CommandBytes;
         ii->Pipes[i].PipeFlags = 0;
     }
     status = UasSyncUrb(fdo, (PURB)sc);
@@ -302,6 +486,8 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     BOOLEAN known;
     PUAS_PDO pdo;
     UCHAR serialIndex;
+    USHORT vid;
+    USHORT pid;
     NTSTATUS status;
 
     desc = (PUCHAR)UasAlloc(18);
@@ -311,6 +497,10 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     status = uasGetDescriptor(fdo, USB_DEVICE_DESCRIPTOR_TYPE, 0, 0, desc,
                               18, &got);
     serialIndex = (NT_SUCCESS(status) && got >= 17) ? desc[16] : 0;
+    vid = (NT_SUCCESS(status) && got >= 12)
+              ? (USHORT)(desc[8] | (desc[9] << 8)) : (USHORT)0;
+    pid = (NT_SUCCESS(status) && got >= 12)
+              ? (USHORT)(desc[10] | (desc[11] << 8)) : (USHORT)0;
     UasFree(desc);
     if (!NT_SUCCESS(status)) {
         return status;
@@ -350,6 +540,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         }
     }
 
+    uasAskPolicy(fdo, vid, pid);
     status = uasSelect(fdo);
     if (!NT_SUCCESS(status)) {
         return status;

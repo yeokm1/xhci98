@@ -5,6 +5,9 @@
  */
 
 #include "uas_iu.h"
+/* For its structure and numbers alone; its IOCTL codes need the DDK and are
+ * not expanded here. */
+#include "../xhci98_xfer.h"
 
 /* ------------------------------------------------------------------ */
 /* Tags                                                               */
@@ -253,7 +256,10 @@ ULONG UasIuParse(const UCHAR *buf, ULONG length, PUAS_IU_INFO info)
  * Pipe Usage descriptor, which follows the endpoint (after its SuperSpeed
  * companion, when there is one). A companion's bmAttributes bits 4:0 are
  * MaxStreams, the exponent of the streams the endpoint supports. The walk
- * stops at the next interface descriptor.
+ * stops at the next interface descriptor. Only the first bNumEndpoints
+ * endpoint descriptors are the setting's, as the bus opens them (task
+ * 36.46, XhciPipeFindInterface): one past them, and the companion and Pipe
+ * Usage descriptors that follow it, describe no pipe and are ignored.
  */
 ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
 {
@@ -261,6 +267,7 @@ ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
     ULONG len;
     ULONG type;
     ULONG found;
+    ULONG endpoints;
     ULONG lastEp;
     ULONG lastPacket;
     ULONG lastStreams;
@@ -275,6 +282,7 @@ ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
     }
     at = cfg[0];
     found = 0;
+    endpoints = 0;
     haveEp = 0;
     lastEp = 0;
     lastPacket = 0;
@@ -297,7 +305,11 @@ ULONG UasParseConfig(const UCHAR *cfg, ULONG length, PUAS_CONFIG_INFO info)
                 info->AlternateSetting = cfg[at + 3];
                 info->EndpointCount = cfg[at + 4];
             }
+        } else if (found && type == UAS_DESC_ENDPOINT && len >= 7 &&
+                   endpoints >= info->EndpointCount) {
+            haveEp = 0;
         } else if (found && type == UAS_DESC_ENDPOINT && len >= 7) {
+            endpoints++;
             haveEp = 1;
             lastEp = cfg[at + 2];
             lastPacket = ((ULONG)cfg[at + 5] << 8 | cfg[at + 4]) & 0x7FF;
@@ -659,4 +671,130 @@ ULONG UasBuildId(ULONG kind, const UCHAR *inquiry, ULONG inquiryLength,
         return 0;
     }
     return o.Overflow ? 0 : o.Used;
+}
+
+/* ------------------------------------------------------------------ */
+/* Telemetry (task 36.21)                                             */
+/* ------------------------------------------------------------------ */
+
+ULONG UasTeleBucket(ULONG bytes)
+{
+    ULONG limit;
+    ULONG i;
+
+    limit = 0x1000UL;
+    for (i = 0; i < UAS_TELE_BUCKETS - 1; i++) {
+        if (bytes <= limit) {
+            return i;
+        }
+        limit = (i < 2) ? limit * 4UL : limit * 2UL;
+    }
+    return UAS_TELE_BUCKETS - 1;
+}
+
+ULONG UasTeleDepthBucket(ULONG active)
+{
+    ULONG limit;
+    ULONG i;
+
+    limit = 1;
+    for (i = 0; i < UAS_TELE_DEPTHS - 1; i++) {
+        if (active <= limit) {
+            return i;
+        }
+        limit *= 2UL;
+    }
+    return UAS_TELE_DEPTHS - 1;
+}
+
+VOID UasTeleAdd64(PULONG lo, PULONG hi, ULONG v)
+{
+    ULONG before;
+
+    before = *lo;
+    *lo = before + v;
+    if (*lo < before) {
+        *hi += 1UL;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* The transfer policy (task 36.22)                                   */
+/* ------------------------------------------------------------------ */
+
+ULONG UasPolicyValue(ULONG sent, const XHCI98_TRANSFER_POLICY *reply,
+                     PULONG source)
+{
+    ULONG i;
+
+    if (sent == UAS_POLICY_SENT_UNSUPPORTED) {
+        *source = XHCI98_TELE_SRC_UNSUPPORTED;
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    if (sent == UAS_POLICY_SENT_REFUSED) {
+        *source = XHCI98_TELE_SRC_MALFORMED;
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    if (sent != UAS_POLICY_SENT_OK || reply == NULL) {
+        *source = XHCI98_TELE_SRC_TRANSPORT;
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    *source = XHCI98_TELE_SRC_MALFORMED;
+    if (reply->Signature != XHCI98_POLICY_SIGNATURE ||
+        reply->Version != XHCI98_POLICY_VERSION ||
+        reply->Size != sizeof(XHCI98_TRANSFER_POLICY) ||
+        reply->Status != XHCI98_POLICY_SUCCESS ||
+        reply->MinBytes != XHCI98_POLICY_MIN_BYTES ||
+        reply->MaxBytes != XHCI98_POLICY_MAX_BYTES ||
+        reply->StepBytes != XHCI98_POLICY_STEP_BYTES ||
+        reply->CommandBytes < XHCI98_POLICY_MIN_BYTES ||
+        reply->CommandBytes > XHCI98_POLICY_MAX_BYTES ||
+        (reply->CommandBytes % XHCI98_POLICY_STEP_BYTES) != 0) {
+        return UAS_POLICY_FALLBACK_BYTES;
+    }
+    for (i = 0; i < 4; i++) {
+        if (reply->Reserved[i] != 0) {
+            return UAS_POLICY_FALLBACK_BYTES;
+        }
+    }
+    *source = XHCI98_TELE_SRC_BUS;
+    return reply->CommandBytes;
+}
+
+ULONG UasDeviceLimit(ULONG busBytes, ULONG busSource, ULONG found,
+                     ULONG type, ULONG length, ULONG value, PULONG source,
+                     PULONG why)
+{
+    ULONG bytes;
+
+    *source = busSource;
+    if (!found) {
+        *why = UAS_DEVLIM_ABSENT;
+        return busBytes;
+    }
+    if (type != UAS_DEVLIM_REG_DWORD || length != 4UL) {
+        *why = UAS_DEVLIM_TYPE;
+        return busBytes;
+    }
+    if (value < UAS_DEVLIM_MIN_BYTES || value > UAS_DEVLIM_MAX_BYTES) {
+        *why = UAS_DEVLIM_RANGE;
+        return busBytes;
+    }
+    if (busSource != XHCI98_TELE_SRC_BUS) {
+        *why = UAS_DEVLIM_NO_BUS;
+        return busBytes;
+    }
+    /* Nearest 4 KiB, ties up; inside the range no overflow is possible
+     * and the result is 64 KiB to 2 MiB already (uas_iu.h). */
+    bytes = (value + XHCI98_POLICY_STEP_BYTES / 2UL) &
+            ~(XHCI98_POLICY_STEP_BYTES - 1UL);
+    if (bytes < XHCI98_POLICY_MIN_BYTES) {
+        bytes = XHCI98_POLICY_MIN_BYTES;
+    }
+    if (bytes > XHCI98_POLICY_MAX_BYTES) {
+        bytes = XHCI98_POLICY_MAX_BYTES;
+    }
+    *why = UAS_DEVLIM_USED;
+    *source = XHCI98_TELE_SRC_DEVICE;
+    return bytes;
 }

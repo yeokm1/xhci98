@@ -12,6 +12,104 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.3.0.0 - 2026-10-12
+
+Every system `2.2.0.0` supports is supported, from the same four
+directories. Read on real hardware: Windows 98 SE on a ThinkPad E460,
+and Windows XP x64 and 7 x64 on a Dell Latitude E7250. The rest was read
+in QEMU virtual machines, or rests on host tests where QEMU models no
+such device or controller. The release notes say what was read on which
+system.
+
+### What changed
+
+- A controller with no working interrupt is polled instead of refused: one
+  with no interrupt pin, or whose line the driver sees raised and never
+  delivered, has its events read on a timer. New values
+  `XhciInterruptMode` (`0` automatic; `1` the line only, `2` polling
+  always, `3` a message-signalled interrupt only, each failing the start
+  with Code 10 where it cannot be had), `XhciPollIdleMs` and
+  `XhciPollActiveMs`. `XHCIQUAL` now passes such a controller as
+  `QUALIFIED WITH CAVEATS` (exit code 3).
+- Message-signalled interrupts on Windows Vista and 7: on x64 directly,
+  on 32-bit through a small helper driver in the package, `xhcimsi.sys`.
+  The 32-bit Vista and 7 install, and an update there, ask for a restart.
+- On Windows Vista x64 and 7 x64 the 64-bit drivers are test-signed with
+  the project's own certificate, not Microsoft's, so they load in
+  test-signing mode (`bcdedit /set testsigning on` once, then a restart)
+  instead of with F8 at every start; F8 still works. The install still
+  asks about the publisher. The 32-bit drivers are unchanged and unsigned.
+- On the Dell Latitude E7250, whose firmware sends the controller's
+  interrupt to a different line from the one it tells Windows, every
+  device was slow or stopped; the driver now points the interrupt at the
+  line Windows assigned (new value `XhciIntelIrqRoute`; on the E7250
+  only by default, `2` for the other reviewed Intel 7-, 8- and 9-series
+  chipsets). Read on the E7250 under Windows XP x64.
+- UAS commands of up to 1 MiB, where `2.2.0.0` sent 64 KiB (new value
+  `XhciMaxTransferKB`, default `1024`).
+- Two transfer pieces at once on Windows 2000 and later, and a single
+  piece of up to 2 MiB on a UAS drive at SuperSpeed: off unless you set
+  `XhciWideMap` to `1`.
+- Selective suspend: off unless you set `XhciSelectiveSuspend` to `1`;
+  then a device is suspended when Windows asks. Hubs, the root hub and
+  the controller are never suspended.
+- The Intel 7-, 8- and 9-series port switchover is off by default: a new
+  install writes `XhciIntelPortSwitch` `0`. An update keeps the `1` that
+  `2.1.1.0` and `2.2.0.0` wrote; `portsw.vbs` in the package changes it,
+  and `portsw-on.bat` and `portsw-off.bat` beside it set `1` or `0` in
+  one double-click.
+- A composite device has an entry of its own in Device Manager, and every
+  device has the USB device interface. USBView shows a device's
+  manufacturer, product, serial number and interface names.
+- A UAS drive keeps working after a USB Transaction Error on its data or
+  status stream: the transfer is retried in place, as on any other bulk
+  endpoint, where before the read or write failed and the drive was
+  reset. In QEMU, whose xHCI loses a stream's cycle bit, a UAS disk no
+  longer hangs after a transfer error, cancel or reset.
+- Fixed: a Low-Speed mouse whose interface carries more endpoints than it
+  declares (`VID_073A&PID_2230`, GitHub issue 17) was never configured
+  and did not move. The driver now takes the endpoints the interface
+  declares, as Microsoft's stack does.
+- Fixed: on a controller whose USB 2.0 speed table lists only High Speed,
+  as on the VIA VL805 (`1106:3483`, GitHub issue 18), every Low- or
+  Full-Speed device behind its built-in hub was refused. Such a device now
+  gets the standard speed ID. Built without the hardware and never run on
+  a VL805; new value `XhciUsb2HubSpeedFallback` (`1` on, `0` off).
+- Fixed: on Windows 98 SE, an interrupt Windows never delivered, met
+  during a copy to a USB drive in MS-DOS compatibility mode (the "E:" of a
+  stick plugged in at power-on), could stop the computer; with
+  `XhciInterruptMode` `1` on a controller whose interrupt never arrives,
+  the first such copy did. The driver now picks a lost interrupt up from
+  its 100 ms timer instead of its own thread.
+- Fixed: on 32-bit Windows 7 under Driver Verifier, `2.2.0.0` stopped the
+  machine at boot with bugcheck C9 as the root hub started.
+- Fixed: on Windows 7, a USB audio device with a feedback endpoint (an
+  asynchronous one, such as Creative's Sound Blaster Play! 2) played
+  only hiss on a controller that cannot name a frame for every request,
+  such as the Dell Latitude E7250's. The driver now names the frame
+  where the controller allows it and otherwise sends the request at the
+  controller's next opportunity. Read on the E7250 under Windows 7 x64,
+  where a Play! 2 played cleanly at 44.1 and 48 kHz on a test build of
+  the fix.
+- On Windows 98 SE and ME, tools such as SweetLow's USBView read a
+  SuperSpeed device's speed. `XhciFastPollFsLs` `4` polls a Low- or
+  Full-Speed device on a root port at the rate its client driver asks
+  for (GitHub issue 17).
+- `XHCISNAP`'s and `XHCIQUAL`'s reports name the system they were taken
+  on, with no serial numbers or names; `XHCISNAP -nosysinfo` and
+  `XHCIQUAL --no-sysinfo` leave it out.
+- The install writes every registry value the driver reads, nineteen, each
+  at the value a missing one reads as, so nothing behaves differently.
+  Updating from `2.2.0.0`: the same steps as before (the release notes,
+  "Updating from 2.y.y.y"); the values already there are kept and the
+  eight new ones are added.
+- Known limitations: those of `2.2.0.0`, plus: Stand by on Windows 98 SE
+  is untested on real hardware (remove USB disks first; in QEMU Windows
+  98 SE does not resume reliably even with no USB controller); on Windows
+  2000 a mounted USB drive can also come back at Code 31 after a resume
+  from hibernation; and on Vista and 7 deleting the driver keeps older
+  packages in the driver store. The release notes have the full list.
+
 ## 2.2.0.0 - 2026-10-07
 
 SuperSpeed on Intel Sunrise Point-LP, a switchover for any Intel chipset at

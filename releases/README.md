@@ -57,9 +57,13 @@ systems; the log request asks for `FULL.LOG`, and for `PROBE.LOG` only if the
 full run did not finish; the reporting text is an unnumbered "ISSUE REPORTING"
 section ahead of CONTENTS, and there is no section on what the version number
 means. **Windows Server 2003 is not named** in the readme or in the
-`history.md` entry it embeds, and **F8 is not named** either: the x64 NT 6.x
-requirement is written as "driver signature enforcement must be disabled",
-since F8 is not the only way to do it. The release notes and `README.md`
+`history.md` entry it embeds. **F8 was not named either** until the x64
+binaries were test-signed: the x64 NT 6.x requirement was written as "driver
+signature enforcement must be disabled", since F8 is not the only way to do
+it. Since the owner's decision of 2026-10-11 (design record 19) the readme,
+the release notes and `README.md` give the test-signing procedure first and
+name F8 as the one-start alternative, in the words the owner set for all
+three. The release notes and `README.md`
 follow both rules too: the owner had Server 2003 x64 taken out of them, and
 out of the two issue templates, on 2026-09-21. A change to the readme after a cut is a re-cut with
 `-Force`, and the asset size recorded in the roadmap and the run sheet
@@ -363,7 +367,9 @@ as deliberate an act as changing it forwards was.
 **Read the x64 half of a cut as narrowly as its evidence is**: three guests
 (Windows XP x64, Vista x64 and Windows 7 x64), all virtual machines, never
 real hardware, the two NT 6.x ones loading the driver only on an F8 boot with
-driver signature enforcement disabled, against the x86 half's install legs
+driver signature enforcement disabled (from `2.3.0.0` the x64 binaries are
+test-signed so that they also load in test-signing mode; design record 19
+section 10 holds what has been read of that), against the x86 half's install legs
 (Windows 98 on both USB 2.0 stacks, Windows ME, Windows 2000, 32-bit Windows
 XP, and from `1.1.0.0` 32-bit Vista and Windows 7). Publishing it by default
 is what claiming the target means, not a claim that the two halves are
@@ -408,8 +414,23 @@ Read it before installing anything.
 ## Cutting a release
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
+powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <path to xhci98-test.pfx>
 ```
+
+**The x64 legs are signed as they are staged, and a cut without the key is
+refused** (design record 19; owner, 2026-10-11). `-TestSignPfx` names the
+project test certificate's `.pfx`, held only on the maintainer's disk
+(`scripts\local\testsign\`, git-ignored, or a folder outside the tree); its
+password comes from the `XHCI98_TESTSIGN_PW` environment variable or a
+prompt that does not echo, once per cut, and is never stored. Each x64 leg's
+`make-package.ps1` run signs `xhci98.sys` and `xhciuas.sys` (SHA-1 file
+digest, no timestamp, no catalog) and stages `xhci98-test.cer` beside them;
+the cut then holds each published x64 binary to that signature by the key's
+thumbprint and to the build's bytes. The x86 legs are never signed. A clone
+without the key can cut `-Arch x86` only. Record 19 section 4 has the
+commands that made the certificate and `scripts\package\make-testcert.ps1`,
+which runs them; section 6 how to verify a signed binary. After the cut,
+delete any key container the packager's warning names (record 19 section 5).
 
 It takes the version from the INF's `DriverVer`, packages every
 flavour/architecture leg through `make-package.ps1` (the binaries come from a
@@ -431,3 +452,12 @@ and both print their version into what a user sends back, and
 `make-release.ps1` throws on a staged tool older than the header or on a tool
 source that has stopped expanding it. `docs/contributing/build-and-test.md`,
 "Versioning the driver", is the authority.
+
+A TEST build is cut by the same script with `-TestLabel`, for example
+`-TestLabel "bench pending"`: the generated `readme.txt` then opens with a
+banner reading "TEST <version>, bench pending." and saying the build is not
+published. A test build never goes under this directory: the script refuses
+`-TestLabel` unless `-ReleasesDir` points elsewhere (under the git-ignored
+`out\`, with a `history.md` copy carrying the build's entry), because this
+`history.md` holds published versions only. Roadmap-hcd Phase 36's 36.final
+cut `2.2.0.3` that way.

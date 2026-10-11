@@ -89,6 +89,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     HcdDriverObject = DriverObject;
     HcdUrbInit();
     HcdPdoRetireInit();
+    HcdSuspDriverInit();
     HcdSerialInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = hcdDispatchOther;
@@ -103,6 +104,9 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
 static VOID NTAPI hcdUnload(PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
+    /* An idle callback thread a stop abandoned leaves the image only
+     * after its callback has returned (design record 14 section 4.4). */
+    HcdSuspDriverUnload();
 }
 
 static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
@@ -122,7 +126,8 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     /* A PDO of this driver's own is the root hub's: the second role
      * (design record 13 section 5.2). */
     if (Pdo->DriverObject == DriverObject) {
-        /* Or an external hub's (task 33.4): the third role. */
+        /* Or an external hub's (task 33.4): the third role; or a
+         * composite device's (task 36.43): the fourth. */
         if (((PHCD_COMMON)Pdo->DeviceExtension)->Kind == HCD_KIND_DEVICE_PDO) {
             return HcdHubAddDevice(DriverObject, Pdo);
         }
@@ -165,6 +170,9 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     hc->OutstandingIo = 1;
     KeInitializeEvent(&hc->RemoveEvent, NotificationEvent, FALSE);
     HcdControllerInitObjects(hc);
+    /* The requirements filter's mode, read here in AddDevice's system
+     * thread for this FDO's first filter (design record 18 section 4.2). */
+    HcdMsiAddDevice(hc);
 
     hc->LowerDevice = IoAttachDeviceToDeviceStack(fdo, Pdo);
     if (hc->LowerDevice == NULL) {
@@ -195,7 +203,9 @@ static NTSTATUS NTAPI hcdDispatchPnp(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO) {
         return HcdDevicePdoPnp((PHCD_DEVICE_PDO)common, Irp);
     }
-    if (common->Kind == HCD_KIND_HUB_FDO) {
+    /* A composite device's FDO is the hub FDO's code (task 36.43). */
+    if (common->Kind == HCD_KIND_HUB_FDO ||
+        common->Kind == HCD_KIND_COMPOSITE_FDO) {
         return HcdHubFdoPnp((PHCD_HUB_FDO)common, Irp);
     }
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
@@ -218,7 +228,8 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO) {
         return HcdDevicePdoPower((PHCD_DEVICE_PDO)common, Irp);
     }
-    if (common->Kind == HCD_KIND_HUB_FDO) {
+    if (common->Kind == HCD_KIND_HUB_FDO ||
+        common->Kind == HCD_KIND_COMPOSITE_FDO) {
         return HcdHubFdoPower((PHCD_HUB_FDO)common, Irp);
     }
     PoStartNextPowerIrp(Irp);
@@ -228,7 +239,8 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 /* Everything that is neither PnP nor power. The door (hcd_door.c, 26-A.8)
  * takes CREATE, CLOSE, CLEANUP and DEVICE_CONTROL on both FDOs; the
  * controller FDO forwards the rest to the PCI stack (IRP_MJ_SYSTEM_CONTROL is
- * the one that arrives there). */
+ * the one that arrives there); IRP_MJ_SYSTEM_CONTROL on the other kinds is
+ * passed down by an FDO and completed untouched by a PDO. */
 static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PHCD_COMMON common;
@@ -241,12 +253,22 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO &&
         major == IRP_MJ_INTERNAL_DEVICE_CONTROL) {
         /* A hub's PDO takes no URB: the bus owns the hub, and nothing
-         * above its FDO sends one (task 33.4). */
-        if (((PHCD_DEVICE_PDO)common)->Hub) {
+         * above its FDO sends one (task 33.4). Nor does a composite
+         * parent's: its functions' PDOs carry the device's traffic, and
+         * the parent is presentation only (task 36.43). */
+        if (HcdPdoIsParent((PHCD_DEVICE_PDO)common)) {
             return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);
         }
         /* The function-driver contract (hcd_urb.c, 26-A.5). */
         return HcdDevicePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
+    }
+    /* A hub door's CLEANUP cancels what its closing handle has queued
+     * (task 36.45). */
+    if (common->Kind == HCD_KIND_ROOTHUB_FDO && major == IRP_MJ_CLEANUP) {
+        return HcdRootHubFdoCleanup((PHCD_ROOTHUB_FDO)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_HUB_FDO && major == IRP_MJ_CLEANUP) {
+        return HcdHubFdoCleanup((PHCD_HUB_FDO)common, Irp);
     }
     if ((common->Kind == HCD_KIND_CONTROLLER_FDO ||
          common->Kind == HCD_KIND_ROOTHUB_FDO ||
@@ -254,6 +276,27 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         (major == IRP_MJ_CREATE || major == IRP_MJ_CLOSE ||
          major == IRP_MJ_CLEANUP)) {
         return HcdDoorCreateClose(Irp);
+    }
+    /* WMI (finding D4): this driver registers no WMI provider, so its FDOs
+     * pass IRP_MJ_SYSTEM_CONTROL down - the controller's below, with the
+     * rest - and its PDOs complete it with the status it came with. Driver
+     * Verifier's started-stack WMI test stops with C9 0x220 when an FDO
+     * completes it instead. */
+    if (major == IRP_MJ_SYSTEM_CONTROL) {
+        if (common->Kind == HCD_KIND_ROOTHUB_FDO) {
+            return HcdRootHubFdoSystemControl((PHCD_ROOTHUB_FDO)common, Irp);
+        }
+        /* A composite FDO (task 36.43) is hcd_hubfdo.c's code too and no
+         * WMI provider either: down to the composite parent's PDO. */
+        if (common->Kind == HCD_KIND_HUB_FDO ||
+            common->Kind == HCD_KIND_COMPOSITE_FDO) {
+            return HcdHubFdoSystemControl((PHCD_HUB_FDO)common, Irp);
+        }
+        if (common->Kind == HCD_KIND_ROOTHUB_PDO ||
+            common->Kind == HCD_KIND_DEVICE_PDO) {
+            return HcdCompleteIrp(Irp, Irp->IoStatus.Status,
+                                  Irp->IoStatus.Information);
+        }
     }
     if (common->Kind == HCD_KIND_ROOTHUB_FDO &&
         major == IRP_MJ_DEVICE_CONTROL) {

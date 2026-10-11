@@ -313,6 +313,55 @@ static void test_no_split(void)
              "one interface: whole");
 }
 
+/* Task 36.46 (GitHub issue 17 item 7): SweetLow's low-speed mouse, VID 073A
+ * PID 2230, whose interface 0 declares one endpoint and carries two. One
+ * interface, so it is presented whole and its select reads its own
+ * descriptor (test_pipe's test_walk_surplus); as a composite's function the
+ * filtered descriptor carries the surplus through unchanged, for the same
+ * walk to ignore. */
+static void test_ls_mouse_surplus(void)
+{
+    static const UCHAR lsDev[18] = {
+        0x12, 0x01, 0x10, 0x01, 0x00, 0x00, 0x00, 0x08,
+        0x3A, 0x07, 0x30, 0x22, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01
+    };
+    static const UCHAR lsCfg[41] = {
+        0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0xEF, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x01, 0x03, 0x08, 0x00, 0x0A
+    };
+    /* The same, with a keyboard interface 1 after it. */
+    static const UCHAR lsTwo[57] = {
+        0x09, 0x02, 0x39, 0x00, 0x02, 0x01, 0x00, 0xA0, 0x32,
+        0x09, 0x04, 0x00, 0x00, 0x01, 0x03, 0x01, 0x02, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0xEF, 0x00,
+        0x07, 0x05, 0x81, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x01, 0x03, 0x08, 0x00, 0x0A,
+        0x09, 0x04, 0x01, 0x00, 0x01, 0x03, 0x01, 0x01, 0x00,
+        0x07, 0x05, 0x82, 0x03, 0x08, 0x00, 0x0A
+    };
+    XHCI_FUNC_SET set;
+
+    copy_dev(lsDev);
+    CHECK_EQ(XhciFuncSplit(dev, lsCfg, sizeof(lsCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "36.46: the LS mouse is one device");
+    CHECK_EQ(set.Count, 0, "no functions");
+
+    CHECK_EQ(XhciFuncSplit(dev, lsTwo, sizeof(lsTwo), &set), XHCI_FUNC_OK,
+             "36.46: with a second interface it splits");
+    CHECK_EQ(set.Count, 2, "two functions");
+    check_func(&set.Func[0], 0, 0x1, 1, 3, 1, 2, 0, "the mouse function",
+               __LINE__);
+    check_func(&set.Func[1], 1, 0x2, 1, 3, 1, 1, 0, "the keyboard function",
+               __LINE__);
+    check_filtered(lsTwo, sizeof(lsTwo), &set.Func[0], 41, 1, 9, 32,
+                   "the mouse's run, surplus endpoint included", __LINE__);
+    check_filtered(lsTwo, sizeof(lsTwo), &set.Func[1], 25, 1, 41, 16,
+                   "the keyboard's run, no surplus of the mouse's", __LINE__);
+}
+
 /* A 9-byte header and `n` interface descriptors (no endpoints), each class
  * cls[i] / subclass sub[i], numbered 0..n-1. */
 static ULONG build_ifaces(UCHAR *out, ULONG n, const UCHAR *cls,
@@ -1174,6 +1223,203 @@ static void test_text(void)
              XHCI_FUNC_BAD_PARAM, "text: no count");
 }
 
+/*
+ * A composite-parent PDO's ids (task 36.43; design record 13 section
+ * 10.12): XHCI98\COMPOSITE with the device's VID, PID and REV, upper-case
+ * hex, no compatible id and no instance id of its own (any PDO's rule);
+ * the size query, a buffer one byte short written to its end and not past,
+ * and the parameter refusals.
+ */
+static void parent_id_is(ULONG which, const char *want, ULONG wantLength,
+                         const char *what)
+{
+    char out[160];
+    ULONG used;
+
+    memset(out, 'x', sizeof(out));
+    used = 0;
+    CHECK_EQ(XhciFuncParentId(dev, which, out, sizeof(out), &used),
+             XHCI_FUNC_OK, what);
+    CHECK_EQ(used, wantLength, what);
+    CHECK_EQ(memcmp(out, want, wantLength), 0, what);
+    CHECK_EQ(out[wantLength], 'x', what);
+}
+
+static void test_parent_ids(void)
+{
+    static const char devId[] = "XHCI98\\COMPOSITE&VID_0D8C&PID_0014";
+    static const char hwIds[] =
+        "XHCI98\\COMPOSITE&VID_0D8C&PID_0014&REV_0100\0"
+        "XHCI98\\COMPOSITE&VID_0D8C&PID_0014\0"
+        "XHCI98\\COMPOSITE\0";
+    static const char hexIds[] =
+        "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01&REV_A2B3\0"
+        "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01\0"
+        "XHCI98\\COMPOSITE\0";
+    char small[40];
+    ULONG used;
+
+    copy_dev(cmDev);
+    parent_id_is(XHCI_FUNC_ID_DEVICE, devId, sizeof(devId),
+                 "parent device id, its NUL included");
+    CHECK_EQ(sizeof(devId), 35, "parent device id: 35 with its NUL");
+    parent_id_is(XHCI_FUNC_ID_HARDWARE, hwIds, sizeof(hwIds),
+                 "parent hardware ids, the multi-string's NUL included");
+    CHECK_EQ(sizeof(hwIds), 97, "parent hardware ids: 97 with both NULs");
+
+    dev[8] = 0xCD;
+    dev[9] = 0xAB;
+    dev[10] = 0x01;
+    dev[11] = 0xEF;
+    dev[12] = 0xB3;
+    dev[13] = 0xA2;
+    parent_id_is(XHCI_FUNC_ID_HARDWARE, hexIds, sizeof(hexIds),
+                 "parent hardware ids: hex A-F in every field");
+
+    used = 0;
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_HARDWARE, NULL, 0, &used),
+             XHCI_FUNC_TOO_SMALL, "parent hardware ids: size query");
+    CHECK_EQ(used, sizeof(hexIds), "parent hardware ids: size needed");
+    memset(small, 'x', sizeof(small));
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, small, 34, &used),
+             XHCI_FUNC_TOO_SMALL, "parent device id one byte short");
+    CHECK_EQ(used, 35, "parent device id: 35 needed");
+    CHECK_EQ(memcmp(small, "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01", 34), 0,
+             "parent device id: written up to the end of the buffer");
+    CHECK_EQ(small[34], 'x', "parent device id: nothing past the buffer");
+
+    used = 7;
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_COMPATIBLE, small,
+                              sizeof(small), &used),
+             XHCI_FUNC_BAD_PARAM, "parent: no compatible id");
+    CHECK_EQ(used, 0, "parent: no compatible id, nothing used");
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_INSTANCE, small,
+                              sizeof(small), &used),
+             XHCI_FUNC_BAD_PARAM, "parent: the instance id is any PDO's");
+    CHECK_EQ(XhciFuncParentId(NULL, XHCI_FUNC_ID_DEVICE, small,
+                              sizeof(small), &used),
+             XHCI_FUNC_BAD_PARAM, "parent: no device descriptor");
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, NULL, 9, &used),
+             XHCI_FUNC_BAD_PARAM, "parent: a capacity with no buffer");
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, small,
+                              sizeof(small), NULL),
+             XHCI_FUNC_BAD_PARAM, "parent: no length out");
+}
+
+/* Task 36.38 (design record 14 section 8.3): the first interface of each
+ * USB 3 function, and the ownership mask with its mapping. */
+static void test_firsts(void)
+{
+    UCHAR cfg[160];
+    ULONG firsts;
+    ULONG beyond;
+    ULONG masks[3];
+    ULONG at;
+
+    CHECK_EQ(XhciFuncFirsts(iadCfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "IADs and a lone interface");
+    CHECK_EQ(firsts, 0x15, "if0 (CDC IAD), if2 (UAC IAD), if4 (alone)");
+    CHECK_EQ(beyond, 0, "nothing past 31");
+    CHECK_EQ(XhciFuncFirsts(kbCfg, sizeof(kbCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "two lone interfaces");
+    CHECK_EQ(firsts, 0x3, "each its own function");
+    CHECK_EQ(XhciFuncFirsts(cmCfg, sizeof(cmCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "alternates: alternate 0 counts once");
+    CHECK_EQ(firsts, 0xF, "four single-interface functions, no IAD");
+    CHECK_EQ(XhciFuncFirsts(iadAudioCfg, sizeof(iadAudioCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an IAD over audio");
+
+    /* Interface numbers 31 and 32: the first named, the second far. */
+    at = 0;
+    cfg[at++] = 0x09; cfg[at++] = 0x02; cfg[at++] = 9 + 9 + 9; cfg[at++] = 0;
+    cfg[at++] = 2; cfg[at++] = 1; cfg[at++] = 0; cfg[at++] = 0xA0;
+    cfg[at++] = 0x32;
+    cfg[at++] = 0x09; cfg[at++] = 0x04; cfg[at++] = 31; cfg[at++] = 0;
+    cfg[at++] = 0; cfg[at++] = 0xFF; cfg[at++] = 0; cfg[at++] = 0;
+    cfg[at++] = 0;
+    cfg[at++] = 0x09; cfg[at++] = 0x04; cfg[at++] = 32; cfg[at++] = 0;
+    cfg[at++] = 0; cfg[at++] = 0xFF; cfg[at++] = 0; cfg[at++] = 0;
+    cfg[at++] = 0;
+    CHECK_EQ(XhciFuncFirsts(cfg, at, &firsts, &beyond), XHCI_FUNC_OK,
+             "31 and 32");
+    CHECK_EQ(firsts, 0x80000000UL, "31 named");
+    CHECK_EQ(beyond, 1, "32 cannot be: far");
+
+    /* An IAD naming an absent first interface is ignored. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[66 + 2] = 9;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "a stray IAD");
+    CHECK_EQ(firsts, 0x1D, "if2 and if3 alone again");
+
+    /* An IAD overlapping an earlier one is ignored. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[66 + 2] = 1;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an overlapping IAD");
+    CHECK_EQ(firsts, 0x1D, "the second IAD ignored: if2, if3 lone");
+
+    /* Whole-branch review (area 1 confirmation): an IAD whose first
+     * interface is absent still takes its present interfaces, as
+     * XhciFuncSplit takes them, so a later overlapping IAD is ignored and
+     * no function straddles two PDOs. Interface 0 renumbered 5, the CDC
+     * IAD widened to 0-2: it takes 1 and 2 (first 1); the UAC IAD (2-3)
+     * overlaps and is ignored; 3, 4 and 5 are alone. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[17 + 2] = 5;
+    cfg[9 + 3] = 3;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(iadCfg), &firsts, &beyond),
+             XHCI_FUNC_OK, "an absent-first IAD");
+    CHECK_EQ(firsts, 0x3A, "if1 (its lowest), if3, if4, if5");
+    {
+        XHCI_FUNC_SET set;
+        ULONG i;
+        ULONG lows;
+
+        copy_dev(iadDev);
+        CHECK_EQ(XhciFuncSplit(dev, cfg, sizeof(iadCfg), &set), XHCI_FUNC_OK,
+                 "an absent-first IAD: the split");
+        lows = 0;
+        for (i = 0; i < set.Count; i++) {
+            lows |= set.Func[i].InterfaceMask &
+                    (~set.Func[i].InterfaceMask + 1);
+        }
+        CHECK_EQ(lows, firsts, "the split's functions are Firsts' functions");
+    }
+
+    /* Malformed: as XhciFuncSplit. */
+    memcpy(cfg, kbCfg, sizeof(kbCfg));
+    cfg[18] = 0;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(kbCfg), &firsts, &beyond),
+             XHCI_FUNC_MALFORMED, "a bLength of 0");
+    CHECK_EQ(firsts, 0, "nothing named");
+    memcpy(cfg, kbCfg, sizeof(kbCfg));
+    cfg[36] = 0x00;
+    CHECK_EQ(XhciFuncFirsts(cfg, sizeof(kbCfg), &firsts, &beyond),
+             XHCI_FUNC_MALFORMED, "two alternate-0 descriptors");
+    CHECK_EQ(XhciFuncFirsts(NULL, 9, &firsts, &beyond), XHCI_FUNC_BAD_PARAM,
+             "no descriptor");
+
+    /* The ownership mask and the mapping. */
+    CHECK_EQ(XhciFuncOwnership(1, 0x0C), 0x0C, "a function PDO: its mask");
+    CHECK_EQ(XhciFuncOwnership(0, 0), 0xFFFFFFFFUL,
+             "an unsplit PDO: every interface");
+    masks[0] = 0x03;
+    masks[1] = 0x0C;
+    masks[2] = 0x10;
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 2), 1, "if2: the UAC PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 0), 0, "if0: the CDC PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 4), 2, "if4: the HID PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 5), 3, "if5: no PDO");
+    CHECK_EQ(XhciFuncOwnerOf(masks, 3, 32), 3, "past 31: no PDO");
+    /* A positional-audio PDO owning several single-interface functions. */
+    masks[0] = 0x07;
+    masks[1] = 0x08;
+    CHECK_EQ(XhciFuncOwnerOf(masks, 2, 1), 0, "if1 in the audio group");
+    masks[0] = XhciFuncOwnership(0, 0);
+    CHECK_EQ(XhciFuncOwnerOf(masks, 1, 31), 0, "unsplit: owns 31 too");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -1182,16 +1428,19 @@ int main(void)
     test_iad_audio();
     test_iad_ids();
     test_no_split();
+    test_ls_mouse_surplus();
     test_positional();
     test_malformed();
     test_setup();
     test_ids();
     test_id_edges();
+    test_parent_ids();
     test_serial_ids();
     test_instance_ids();
     test_revive();
     test_text_picks();
     test_text();
+    test_firsts();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -247,6 +247,10 @@ ULONG XhciXferSlotFatal(ULONG completionCode);
  * is 128 KB, comfortably above the 4 KB usbport uses for the default pipe.
  */
 #define XHCI_XFER_MAX_DATA_TRBS     32
+/* Task 36.25 (design record 13 section 11.7, point 4): the most data TRBs
+ * a normal request may ask for through MaxDataTrbs - a 2 MiB URB at any
+ * alignment, one TD of page elements. */
+#define XHCI_XFER_MAX_WIDE_DATA_TRBS 513
 #define XHCI_XFER_MAX_CONTROL_TRBS  (XHCI_XFER_MAX_DATA_TRBS + 2)
 
 /*
@@ -352,6 +356,15 @@ typedef struct _XHCI_NORMAL_REQUEST {
      * zero-length transfer, which is why it is consulted only when
      * TransferLength is nonzero (batch 6-0). */
     const USBPORT_SCATTER_GATHER_LIST *SgList;
+    /*
+     * Task 36.25: the cap on data TRBs, for the element count checked before
+     * any element is read and for the TRBs emitted alike. 0 is
+     * XHCI_XFER_MAX_DATA_TRBS, today's 32, so a caller that zeroes the
+     * request keeps today's behaviour; above XHCI_XFER_MAX_WIDE_DATA_TRBS is
+     * refused before the list is touched. The output capacity stays the
+     * caller's scratch count, apart from it.
+     */
+    ULONG MaxDataTrbs;
 } XHCI_NORMAL_REQUEST, *PXHCI_NORMAL_REQUEST;
 
 /*
@@ -602,6 +615,15 @@ ULONG XhciXferRetryReplay(PXHCI_TRANSFER_QUEUE queue,
 ULONG XhciXferRetryClear(PXHCI_TRANSFER_QUEUE queue, ULONG gen);
 
 /*
+ * 36.54 (design record 17 section 4.12.3): an empty queue whose ring is about
+ * to restart at its base (XhciRingRestart) forgets the ring positions it
+ * still remembers - the mid-TD tails it waits for, which would otherwise be
+ * matched against the new lap's TRB indices. Returns 0, changing nothing,
+ * when the queue still holds a TD. Pure.
+ */
+ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue);
+
+/*
  * Task 9-0.2. Settle one transfer whose TD ended on a mid-TD Short Packet Event
  * and whose promised tail (4.10.1.1.2 p.175) never arrived.
  *
@@ -794,6 +816,20 @@ typedef struct _XHCI_ISO_FRAME_POLICY {
     ULONG CurrentFrame;
     /* HCSPARAMS2's IST, already in frames (XHCI_HC_INFO.IstFrames). */
     ULONG IstFrames;
+    /*
+     * Task 36.57: a Frame ID on the request's first TD alone, SIA on the rest
+     * - what a controller without Contiguous Frame ID allows at the start of
+     * an Isoch data flow ("software may set the Frame ID (that is, SIA =
+     * '0') only in the first Isoch TD of an Isoch data flow, and shall set
+     * SIA = '1' in all subsequent Isoch TDs", xHCI 4.11.2.5 p.200). Only the
+     * first packet's frame is then asked of the window, and the cadence
+     * check is not made: the TDs after it run one Interval apart whatever
+     * they are stamped, but the Interval must be one frame or less
+     * (PacketsPerFrame nonzero): a longer ESIT needs its Frame ID on an ESIT
+     * boundary (4.11.2.5.1), which this driver does not compute, so such a
+     * request stays SIA. Meaningful only under `Allowed`.
+     */
+    ULONG FirstOnly;
 } XHCI_ISO_FRAME_POLICY, *PXHCI_ISO_FRAME_POLICY;
 
 /*
@@ -863,6 +899,58 @@ typedef struct _XHCI_ISO_REQUEST {
 } XHCI_ISO_REQUEST, *PXHCI_ISO_REQUEST;
 
 ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
+
+/*
+ * How hcdIsoPublish schedules a request (task 36.57, design record 13
+ * section 6.10). An explicit StartFrame is never refused for want of Frame
+ * IDs. With CFC every packet carries one where all can, as before. Without
+ * CFC, a request that starts a data flow carries one on its first TD, so a
+ * client that paces itself by completions (usbaudio.sys's feedback read)
+ * is served at the frame it asked for; a request that continues a flow, or
+ * whose first frame the window cannot name, goes out with Start Isoch ASAP.
+ *
+ * "Starts a data flow" is `fresh`, which the caller keeps per pipe with
+ * XhciXferIsoFlowNext: set when the endpoint's context is created (a
+ * Configure Endpoint that adds it) and when a Ring Underrun or Overrun is
+ * handled with nothing of the pipe's queued, cleared by every publication.
+ * An empty queue alone is not enough: the last TD's completion can be seen
+ * before the controller reaches the empty ring at the next service
+ * interval, and until then the flow is still running (review of 36.57,
+ * round 2).
+ *
+ * XhciXferIsoFramePolicy sets the request's Allowed and FirstOnly from
+ * `asap` (the client's flag), `cfc` (HCCPARAMS1.CFC), `sampled` (the frame
+ * axis was read) and `fresh`; XhciXferIsoStartPlan then says which of the
+ * cases below the builder will take, from the same inputs, and must be
+ * asked after it. All three pure.
+ */
+#define XHCI_ISO_START_ASAP             0UL /* the client asked for ASAP  */
+#define XHCI_ISO_START_FRAME_IDS        1UL /* CFC: every TD a Frame ID   */
+#define XHCI_ISO_START_SIA_NO_CFC       2UL /* no CFC, a flow under way:
+                                             * SIA                        */
+#define XHCI_ISO_START_SIA_NO_SAMPLE    3UL /* no frame sample: SIA       */
+#define XHCI_ISO_START_SIA_UNUSABLE     4UL /* a packet outside the window
+                                             * or (CFC) a cadence the
+                                             * Interval does not share    */
+#define XHCI_ISO_START_FIRST_FRAME_ID   5UL /* no CFC, a new flow: the
+                                             * first TD a Frame ID        */
+
+#define XHCI_ISO_FLOW_CONTEXT           0UL /* the context was created    */
+#define XHCI_ISO_FLOW_PUBLISHED         1UL /* a request went on the ring */
+#define XHCI_ISO_FLOW_DRY               2UL /* an Underrun/Overrun handled */
+
+VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
+                            ULONG cfc, ULONG sampled, ULONG fresh);
+ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
+                           ULONG cfc, ULONG sampled, ULONG fresh);
+/* The pipe's `fresh` after `event`; `queued` is the pipe's queue count when
+ * a DRY event is handled. Pure. */
+ULONG XhciXferIsoFlowNext(ULONG fresh, ULONG event, ULONG queued);
+
+/* The `iso.sia` and `iso.fid1` notes' value: slot 31:24, DCI 23:16, plan
+ * 15:12, and the low 12 bits of StartFrame - now. Pure. */
+ULONG XhciXferIsoSiaNote(ULONG slotId, ULONG dci, ULONG plan,
+                         ULONG startFrame, ULONG now);
 
 /*
  * Decode one Transfer Event completion code **on an isochronous ring**.

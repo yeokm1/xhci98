@@ -80,7 +80,32 @@
 #define XHCI_INJ_RACE_RING       17UL /* TRANSACTION, a ring during the held
                                        * Reset Endpoint                      */
 #define XHCI_INJ_RACE_SECOND     18UL /* the same, then a second error       */
-#define XHCI_INJ_LAST_BUILT      18UL
+#define XHCI_INJ_CLEAR_HALT      19UL /* 36.12: the next CLEAR_FEATURE(ENDPOINT_
+                                       * HALT) answered, not sent: arg 0
+                                       * STALL, 1 failed, 2 never sent      */
+/* Task 36.22's, on a bulk TD (a stream's too) of a published device at
+ * root port bits 15:8 (0 any): `arg` is the endpoint address (0: the first
+ * bulk IN), one injection per command. 21 to 23 first withhold the next
+ * doorbell of that endpoint, so a TD sits on its ring unstarted - QEMU
+ * otherwise finishes a bulk TD inside the doorbell write - then. They
+ * follow 36.12's 19 (merged first), so their hex codes are 14 to 17: */
+#define XHCI_INJ_BULK_TIMEOUT    20UL /* no doorbell withheld: the next TD's
+                                       * completion events are lost until the
+                                       * driver's own stop, reset or dequeue
+                                       * move, or a slot command; streams
+                                       * too                                 */
+#define XHCI_INJ_BULK_STOP       21UL /* a real Stop Endpoint whose events
+                                       * reach the driver, then the doorbell
+                                       * rung; streams too                   */
+#define XHCI_INJ_BULK_ERROR      22UL /* TRANSACTION's stop and emulated
+                                       * Halted with a Transaction Error for
+                                       * the TD; streams too                 */
+#define XHCI_INJ_BULK_SHORT      23UL /* a stop, the dequeue moved past the
+                                       * TD, a Short Packet on its last TRB
+                                       * with half that TRB's length left,
+                                       * then the doorbells rung; streams
+                                       * too                                 */
+#define XHCI_INJ_LAST_BUILT      23UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */
@@ -94,6 +119,7 @@
 #define XHCI_INJ_KIND_HALT       2UL  /* a stop, a Stall naming no TD        */
 #define XHCI_INJ_KIND_REFUSED    3UL  /* a refused code, no stop             */
 #define XHCI_INJ_KIND_EP0        4UL  /* at the thread's EP0 doorbell        */
+#define XHCI_INJ_KIND_BULK       5UL  /* a withheld bulk doorbell (36.22)    */
 
 /* What the answered endpoint's next Reset Endpoint meets (XHCI_INJ_EP.Hold). */
 #define XHCI_INJ_HOLD_NONE       0UL  /* Success, the answers ended          */
@@ -158,6 +184,9 @@ typedef struct _XHCI_INJ_EP {
     ULONG Ep0Left;
     ULONG Abandoned;
     ULONG Repointed;
+    /* 36.22: the endpoint's doorbells withheld for a bulk fault; the
+     * driver's Stop Endpoint for it ends the withholding once sent. */
+    ULONG Bulk;
 } XHCI_INJ_EP, *PXHCI_INJ_EP;
 
 /* The trigger's memory: the last sequence seen, and whether one was. */

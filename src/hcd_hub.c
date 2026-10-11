@@ -155,8 +155,7 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     ULONG cls;
 
-    cls = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    cls = HcdDeviceSpeedClass(hc, dev);
     if (cls == XHCI_SPEED_SUPER) {
         /* The class alone cannot tell SuperSpeedPlus from SuperSpeed
          * (XhciPipeSpeedFromClass answers neither): the trained rate
@@ -164,6 +163,54 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return dev->Plus ? XHCI_PIPE_SPEED_SUPER_PLUS : XHCI_PIPE_SPEED_SUPER;
     }
     return XhciPipeSpeedFromClass(cls);
+}
+
+/*
+ * A PSIV of this device's decoded as XHCI_SPEED_* - its own (dev->Speed) or
+ * one its Slot Context reads back - with its provenance: a device HcdHubPlace
+ * gave issue 18's default ID is read by that rule, every other one by the
+ * root port's table as before (implementation-invariants.md, "Port Speed
+ * Decoding"). Every decode of a device's speed asks this, never the bare
+ * XhciPortSpeedClass, so the ID it was given and the class it is read as
+ * agree. IRQL: any.
+ */
+ULONG HcdDeviceSpeedClassOf(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            ULONG psiv)
+{
+    ULONG cls;
+
+    cls = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClassFor(&hc->Hc.PortMap, dev->Port, psiv,
+                                dev->SpeedFallback, &cls);
+    return cls;
+}
+
+/* IRQL: any. */
+ULONG HcdDeviceSpeedClass(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    return HcdDeviceSpeedClassOf(hc, dev, dev->Speed);
+}
+
+/*
+ * Issue 18's notes for one behind-hub placement that did not take the
+ * table's own answer: at most HCD_HUB_SPEED_NOTE_BUDGET pairs a start, the
+ * counters counting every one. Thread only.
+ */
+#define HCD_HUB_SPEED_NOTE_BUDGET   16UL
+
+static VOID hcdHubSpeedNote(PHCD_CONTROLLER hc, PHCD_HUB hub, PHCD_PORT p,
+                            const XHCI_TOPO_CHILD *child, ULONG speedClass,
+                            ULONG psiv, ULONG outcome)
+{
+    if (hc->HubSpeedNotes >= HCD_HUB_SPEED_NOTE_BUDGET) {
+        return;
+    }
+    hc->HubSpeedNotes++;
+    XhciLogNote(&hc->Hc, "hub.speed.place",
+                XhciHubSpeedNotePlace(child->RootPort, hub->SlotId,
+                                      p->Number, speedClass, outcome));
+    XhciLogNote(&hc->Hc, "hub.speed.route",
+                XhciHubSpeedNoteRoute(psiv, child->Route));
 }
 
 /*
@@ -175,8 +222,12 @@ ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * its subtree hangs from (XhciTopoTtFor). An all-Full-Speed path has no TT
  * and every TT field stays 0. Returns 0 when the place cannot be given -
  * a parent the graph does not hold, a path past the Route String's five
- * tiers (counted), a speed the root port's protocol has no ID for - and the
- * caller gives the slot back. Counts the open of a behind-hub position.
+ * tiers (counted), a speed the root port's protocol has no ID for (counted,
+ * TopoBehindHubNoSpeed) - and the caller gives the slot back. A Full- or
+ * Low-Speed device on a USB 2.0 root port whose table names no such speed
+ * takes the default ID by issue 18's rule (XhciPortPsivForHubChild), with
+ * the switch on, and carries that in dev->SpeedFallback. Counts the open of
+ * a behind-hub position.
  */
 ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
                   PHCD_USB_DEVICE dev)
@@ -186,6 +237,8 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
     XHCI_TOPO_TT tt;
     PHCD_HUB hub;
     ULONG psiv;
+    ULONG outcome;
+    ULONG ok;
 
     hub = p->Hub;
     topo = &hc->Hc.Topology;
@@ -201,11 +254,29 @@ ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
         return 0;
     }
     psiv = 0;
-    if (hub->Usb3 ? !HcdSsHubPsiv(hc, p, child.RootPort, &psiv)
-                  : XhciPortPsivForSpeed(&hc->Hc.PortMap, child.RootPort,
-                                         speedClass, &psiv) != XHCI_CAPS_OK) {
-        XHCI_DBG_VALUE("hcd: no speed ID behind hub, class", speedClass);
+    outcome = XHCI_HUB_SPEED_TABLE;
+    if (hub->Usb3) {
+        ok = HcdSsHubPsiv(hc, p, child.RootPort, &psiv);
+        if (!ok) {
+            outcome = XHCI_HUB_SPEED_NO_MAPPING;
+        }
+    } else {
+        ok = XhciPortPsivForHubChild(&hc->Hc.PortMap, child.RootPort,
+                                     speedClass, hc->HubSpeedFallback,
+                                     &psiv, &outcome) == XHCI_CAPS_OK;
+    }
+    if (!ok) {
+        hc->Counters.TopoBehindHubNoSpeed++;
+        hcdHubSpeedNote(hc, hub, p, &child, speedClass, 0, outcome);
+        XHCI_DBG_VALUE("hcd: no speed ID behind hub, class/outcome",
+                       (speedClass << 8) | outcome);
         return 0;
+    }
+    dev->SpeedFallback = 0;
+    if (outcome == XHCI_HUB_SPEED_FALLBACK) {
+        dev->SpeedFallback = 1;
+        hc->Counters.Usb2HubSpeedFallbacks++;
+        hcdHubSpeedNote(hc, hub, p, &child, speedClass, psiv, outcome);
     }
     dev->Port = child.RootPort;
     dev->Route = child.Route;
@@ -298,6 +369,14 @@ static ULONG hcdHubFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
                          (UCHAR)(set ? XHCI_HUB_REQ_SET_FEATURE
                                      : XHCI_HUB_REQ_CLEAR_FEATURE),
                          (USHORT)selector, (USHORT)n, 0, &bytes, &stalled);
+}
+
+/* SetPortFeature or ClearPortFeature(selector) on port n, for selective
+ * suspend's executor (hcd_susp.c). Thread only. */
+ULONG HcdHubPortFeature(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
+                        ULONG set, ULONG selector)
+{
+    return hcdHubFeature(hc, hub, n, set, selector);
 }
 
 /* GET_STATUS(port n): wPortStatus and wPortChange. */
@@ -547,7 +626,11 @@ static VOID hcdHubReleaseBelow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE *devs,
             }
             state = hcdHubEpState(hc, dev, dci);
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED) {
+            if (!dev->Gone && state == XHCI_EP_STATE_STOPPED &&
+                !pipe->SuspendPause) {
+                /* Not a device selective suspend holds: its own restart
+                 * rings it (design record 14 section 3.2; Codex review of
+                 * 36.30, round 1, finding 5). */
                 if (pipe->Queue->Count != 0) {
                     pipe->SeqUsed = 1;
                     XhciWriteDoorbell(&hc->Hc, dev->SlotId, dci);
@@ -774,6 +857,7 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG change;
     ULONG bit;
     ULONG selector;
+    ULONG acked;
 
     q = HcdHubPort(hc, hub, n);
     if (hub->Usb3) {
@@ -813,10 +897,12 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
         HcdTolLocObserve(hc, q, (status & XHCI_HUB_PORT_CONNECTION) != 0,
                          (status & XHCI_HUB_PORT_POWER) != 0,
                          (change & XHCI_HUB_C_PORT_CONNECTION) != 0);
+        acked = 0;
         for (bit = 1; bit <= XHCI_HUB_C_PORT_RESET; bit <<= 1) {
             selector = XhciHubClearSelector(bit);
-            if ((d->Clear & bit) != 0 && selector != 0) {
-                (VOID)hcdHubFeature(hc, hub, n, 0, selector);
+            if ((d->Clear & bit) != 0 && selector != 0 &&
+                hcdHubFeature(hc, hub, n, 0, selector)) {
+                acked |= bit;
             }
         }
         if (d->OverCurrent) {
@@ -829,6 +915,23 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
              * not re-arm a spent budget or release a hold (35-T.5). */
             HcdTolLocRecovery(hc, q);
             (VOID)hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_POWER);
+        }
+        if (HcdSuspOwnsPort(hc, q)) {
+            /* A device selective suspend holds (design record 14 section
+             * 3.8): not resumed here, and a finished resume is the
+             * machine's evidence, not this look's to quiesce and release.
+             * Connection processing is unchanged. */
+            d->Resume = 0;
+            if (d->Suspended) {
+                /* Only the changes the hub took back are evidence: a
+                 * clear that failed leaves the transport uncertain, and
+                 * C_PORT_SUSPEND without its clear is no wake (Codex
+                 * review of 36.30, round 2, finding 4). */
+                d->Suspended = 0;
+                HcdSuspHubSample(hc, q, status, acked,
+                                 (d->Clear & XHCI_HUB_C_PORT_SUSPEND) != 0 &&
+                                     (acked & XHCI_HUB_C_PORT_SUSPEND) == 0);
+            }
         }
     }
     if (!d->Resume) {
@@ -1633,8 +1736,7 @@ ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev)
     ULONG i;
 
     topo = &hc->Hc.Topology;
-    cls = XHCI_SPEED_UNKNOWN;
-    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    cls = HcdDeviceSpeedClass(hc, dev);
     dropped = topo->Dropped;
     if (p->Hub == NULL) {
         ok = XhciTopoAttachRoot(topo, dev->SlotId, dev->Port, 0, cls);

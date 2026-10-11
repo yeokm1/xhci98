@@ -73,7 +73,7 @@ Both take the directory, not the file: the stamp is written beside
 param(
     [string]$Write = "",
     [string]$Check = "",
-    [ValidateSet("xhci98", "xhciuas")]
+    [ValidateSet("xhci98", "xhciuas", "xhcimsi")]
     [string]$Driver = "xhci98"
 )
 
@@ -92,6 +92,16 @@ if ($Driver -eq "xhciuas") {
     $binaryName = "xhciuas.sys"
     $parentHeaders = $true
 }
+# The NT 6 x86 MSI helper (design record 18 section 8.2): src\msi86, whose
+# SOURCES names the shared ..\xhci_msi86.c - hashed itself, through the
+# path-keeping parse below - and which includes src\xhci_msi86.h and
+# src\xhci_version.h.
+if ($Driver -eq "xhcimsi") {
+    $srcDir = Join-Path $repo "src\msi86"
+    $stampName = "xhcimsi.srcstamp"
+    $binaryName = "xhcimsi.sys"
+    $parentHeaders = $true
+}
 # Prefixed rather than listed like a source file, so the source comparison
 # below cannot mistake it for a file that appeared in src\.
 $binaryTag = "BINARY"
@@ -105,7 +115,13 @@ function Get-SourceFiles {
     if (-not $m.Success) {
         throw "src\sources has no SOURCES= list this script can read."
     }
-    foreach ($tok in ($m.Groups[1].Value -split '[\s\\]+')) {
+    # Line continuations removed first, then split on whitespace alone, so a
+    # path a SOURCES entry carries - src\msi86's ..\xhci_msi86.c - stays one
+    # token (design record 18 section 8.2). Splitting on every backslash, as
+    # this did until then, gave the same list for src\ and src\uas, which
+    # name no path, and broke that entry into two.
+    $list = [regex]::Replace($m.Groups[1].Value, '\\[ \t]*\r?\n', ' ')
+    foreach ($tok in ($list -split '\s+')) {
         $t = $tok.Trim()
         if ($t -eq "") { continue }
         $wanted.Add($t)

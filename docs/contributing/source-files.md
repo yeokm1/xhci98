@@ -45,7 +45,12 @@
 > (an external hub's FDO, the third PnP role: each hub the bus serves is a
 > devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
 > and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
-> node information; host suite `test_hub`). Task 34.3 adds the pure
+> node information; host suite `test_hub`). Task 36.43 gives `hcd_hubfdo.c` a
+> fourth PnP role, a composite device's FDO over its composite-parent PDO
+> (`XHCI98\COMPOSITE`, design record 13 section 10.12), with the parent's ids
+> in the pure `xhci_func.c` (`XhciFuncParentId`, host suite `test_func`) and
+> the parent, its functions and their in-place re-presentation in
+> `hcd_pdo.c`. Task 34.3 adds the pure
 > `xhci_psw.c` / `xhci_psw.h` (the Intel EHCI-to-xHCI port switchover: the
 > device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, and the
 > route and release sequences over two caller-supplied configuration-space
@@ -122,7 +127,198 @@
 > enumeration service) and `hcd_ctl.c`'s `hcdRestoreBusMaster`; the
 > configuration's charged fallback `hcdCfgCycle` in `hcd_cfg.c`; and in
 > `xhci_tol.c` `XhciTolLocActive`, `XhciTolLocHeld`, the once-per-cycle
-> charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`). The tables below are the
+> charge `XhciTolCycleCharge` and the terminal reason 5 (`test_tol`).
+> **Withdrawn 2026-10-07 with `2.2.0.1`; the code below is reverted and
+> `xhci98_report.h` removed (issue 12 section 3.2).**
+> Phase 36 (issue 12) adds one file, `xhci98_report.h`, the private
+> client-report interface `xhciuas.sys` includes beside `xhci98_streams.h`,
+> answered in `hcd_urb.c` (`hcdClientReport`) and kept for the snapshot by
+> the pure `XhciSnapClientPick` and `XhciSnapClientStore` in `xhci_snap.c`
+> (the HCD region's header grown to 23 words; `test_snap`), filled by
+> `hcd_door.c`. Task 36w.1 adds `HcdQueueDrain` to `hcd_ctl.c` (the drain at
+> interrupt enable, and the backstop's and the injector's queueing) and the
+> busy engine's wait to `hcd_enum.c`'s `hcdCommand`, its slices the pure
+> `XhciEnumBusyWait` in `xhci_enum.c` (`test_enum`); task 36w.2 the counter
+> block's six appended counters (`xhci_counters.h`), the client port resets
+> counted in `hcd_cfg.c`, and in `src\uas\` the report itself (`UasReport`
+> in `uas_fdo.c`, the transfer failures in `uas_xport.c`, the sense word
+> `UasSenseWord` in `uas_iu.c`; `test_uas`); task 36w.3 the qemu flavour's
+> `XhciQemuStartHold` in `hcd_inj.c`. `xhcisnap\xhcisnap.c` names the new
+> counters and decodes the reports (`print_hcd_clients`).
+> **Reverted 2026-10-08 (owner): `hcd_diag.c` is removed, and the code below,
+> `XHCISNAP`'s `print_diag` included, is restored to `2.2.0.0`'s (issue 12
+> section 3.3).**
+> The diagnostic build `2.2.0.2` (task 36.1, issue 12 section 3.3) adds one
+> file, `hcd_diag.c`: the recovery timeline (each slow request from
+> `HcdCfgQueue` to its completion in `HcdCfgService`, with the
+> CLEAR_FEATURE outcome and the commands `hcd_enum.c`'s `hcdCommand` issued
+> for it; each transfer cancel routine's run in `hcd_io.c`; the thread's
+> cancel, drain and removal aborts in `hcd_cfg.c`) and the backstop samples
+> `hcd_ctl.c`'s `hcdBackstop` takes, with the ISR's, DPC's and thread's
+> stamps beside them. `hcd_door.c` reads them, and each open pipe's oldest
+> transfer and Output Endpoint Context, into four parts appended to the HCD
+> region (the header grown to 31 words, version unchanged); the layout and
+> the pure `XhciSnapMs`, `XhciSnapOldest`, `XhciSnapRingNext`,
+> `XhciSnapRingFind`, `XhciSnapRecCommand`, `XhciSnapIrqClass`,
+> `XhciSnapPipeClass`, `XhciSnapPipeBefore` and `XhciSnapClearOf` are
+> `xhci_snap.c`'s (`test_snap`). `hcd_urb.c` and `hcd_io.c` keep each
+> transfer's URB function, flags and claim and publish ticks for it;
+> `xhcisnap\xhcisnap.c` decodes all of it (`print_diag`). It records and
+> decides nothing.
+> Task 36.3 (issue 12 section 5.1) adds the pure `xhci_pirq.c` /
+> `xhci_pirq.h` (the Intel PCH interrupt routing quirk: the
+> `XhciIntelIrqRoute` rule, the six reviewed xHCI/LPC pairs and the verified
+> E7250, the PIRQ that delivers the assigned IRQ in APIC and PIC mode, and
+> `XhciPirqRun`, which checks in order over caller-supplied configuration,
+> bus-data and register accessors and keeps `XHCI_PIRQ_STATE`; host suite
+> `test_pirq`), executed from `hcd_ctl.c` (`hcdPirqStart` at start, the
+> raw interrupt resource kept by the parser, the `HalGetBusData` and RCBA
+> accessors, the qemu flavour's `hcdPirqQemuProbe`) and from `hcd_power.c`
+> at each return to D0 (`HcdPirqResume`). The record is copied whole into
+> the HCD region's header (words 20 to 47, version unchanged; `xhci.h`'s
+> `XHCI_SNAPSHOT_HCD_PIRQ_*`, `test_snap`) by `hcd_door.c`, and
+> `xhcisnap\xhcisnap.c` names it (`print_pirq`, `-selftest-pirq`).
+> Task 36.4 adds no file: the bounded BUSY retry is `hcd_enum.c`'s
+> `hcdCommandBusy`, its look the pure `XhciEnumBusyStep` and its note
+> `XhciEnumNoteBusy` in `xhci_enum.c` (`test_enum`), its drain
+> `hcd_ctl.c`'s `HcdCommandDrain` under the backstop's admission
+> (`hcdDrainAdmitted`), and the qemu flavour's `XhciQemuStartHold` in
+> `hcd_inj.c` (`HcdInjStartHeld`, `HcdInjStartRelease`). Task 36.11 adds
+> `xhciqual\route.c` (the routing report's pure half, built with this
+> tree's `xhci_pirq.c` for its reviewed-pair table; host suite
+> `xhciqual\test\test_route.c`) and its reader, `xhciqual\pci.c`'s
+> `route_read`. Task 36.12 adds no file: RESET_PIPE in xHCI 4.6.8 order is
+> `hcd_cfg.c`'s `hcdCfgReset` (the device's half owed after a refused clear,
+> `HCD_PIPE.ClearOwed`, ended by `hcdCfgOwedEnd`), its steps and verdict the
+> pure `XhciPipeResetSteps` and `XhciPipeClearVerdict` in `xhci_pipe.c`
+> (`test_pipe`), and the qemu flavour's fault 13 in `hcd_inj.c`
+> (`HcdInjClearHalt`; `xhci_inj.h`, `test_inj`). Task 36.9 adds no file: the
+> HCD header's two delivery words are `xhci_snap.c`'s (`test_snap`) and
+> `XHCISNAP`'s decode is `xhcisnap.c`'s `print_intr`. Task 36.10 adds
+> `xhciqual\verdict.c` (C4's outcome, the C6/C8 gate, the verdict with
+> QUALIFIED WITH CAVEATS and the exit code, moved out of `report.c`; host
+> suite `xhciqual\test\test_verdict.c`).
+> Task 36.21 adds three files: the pure `xhci_xstat.c` / `xhci_xstat.h`
+> (the transfer-size readings `XHCI_XSTAT`: length, chunk and depth
+> buckets, the hand-carried 64-bit sums, the interval rule over the
+> processor's time-stamp counter; host suite `test_snap`), and
+> `xhci98_xfer.h`, the private transfer-size interface `xhciuas.sys`
+> includes beside `xhci98_streams.h` (`IOCTL_XHCI98_TELEMETRY`, the class
+> driver's bounded record). `hcd_io.c` reads the counter (`HcdTscRead`,
+> `HcdTscStamp`) and stamps a chunk's retirement, publication and the
+> deferred pass (`hcdChunkPublished`); `hcd_ctl.c` starts the readings
+> (`hcdXstatStart`, `hcdXstatGrant`); `hcd_urb.c` takes the record
+> (`hcdTelemetryIoctl`); `hcd_door.c` copies both into the HCD region's
+> header (words 48 to 201, version unchanged); in `src\uas\`,
+> `uas_xport.c` counts each command (`uasTeleCount`) and sends the record
+> from its timer (`uasTeleBuild`, `uasTeleSend`), its buckets
+> `UasTeleBucket` and `UasTeleDepthBucket` in `uas_iu.c` (`test_uas`).
+> `xhcisnap\xhcisnap.c` decodes them (`print_xstat`, `-selftest-xstat`).
+> The guest-side client `test\xfertest\` (`XFERTEST.EXE`, built by its own
+> `build.cmd`, in no package) moves data in requests of a given size and
+> times them. Task 36.22 adds no file: `XhciMaxTransferKB` is read in
+> `hcd_ctl.c` (`hcdReadValues`, the rule `XhciXpolValue` in `xhci_xstat.c`)
+> and answered through `xhci98_xfer.h`'s `IOCTL_XHCI98_TRANSFER_POLICY` in
+> `hcd_urb.c` (`hcdPolicyIoctl`); `xhciuas.sys` asks at its start
+> (`uasAskPolicy`, `uas_fdo.c`; the reply check `UasPolicyValue`,
+> `uas_iu.c`, `test_uas`) and its descriptor (`uas_pdo.c`) and pipes read
+> the answer; the qemu flavour's `XhciQemuMapGrant` constrains the grant
+> (`hcdXstatGrant`, `hcd_ctl.c`).
+> Task 36.24 adds the pure `xhci_xpipe.c` / `xhci_xpipe.h` (stage 2,
+> design record 13 section 11.6: the TD planner over a URB's wide list,
+> eligibility, the promotion gate, the wide mapper's run append, the
+> register-free check's comparison, the pipelined record's machine and
+> the `XHCI_XPIPE_STATS` counters; host suite `test_xpipe`, with
+> `test_td`, `test_xfer`, `test_ring` and `test_snap`). The driver half:
+> `hcd_dma.c` (`hcdMapWide`, the promotion in `hcdMapExecute`, the check
+> `hcdWideCheck` and the pool, `HcdDmaWideOpen` / `HcdDmaWideClose`),
+> `hcd_io.c` (`hcdWideClaim`, `hcdWidePump`, `hcdWideRetired`,
+> `HcdIoRefillFlush`, `HcdIoWideStop`), `hcd_cfg.c` (the cancel walk's
+> wider predicate and the doorbell gates), `hcd_ctl.c` (`XhciWideMap`),
+> `hcd_door.c` and `xhcisnap.c` (`print_xpipe`, `-selftest-xpipe`).
+> Task 36.25 (record 13 section 11.7) adds no file: the big stream layout
+> is `xhci_stream.c` (`XhciStreamBigBytes`, `XhciStreamLayoutPlaced`,
+> `test_stream`), its build and fallback `hcd_cfg.c`
+> (`hcdCfgStreamsBuild`, `hcdCfgBigWanted`), the one-TD publication
+> `hcd_io.c` (`hcdWideBigOne`) into the pool's scratch (`hcd_dma.c`), and
+> the engine's per-request cap and ordered-list path `xhci_xfer.c`
+> (`XHCI_NORMAL_REQUEST.MaxDataTrbs`, `xhciXferEmitSgList`; `test_xfer`,
+> `test_td`).
+> Tasks 36.6 to 36.8 (design record 15) add the pure `xhci_poll.c` /
+> `xhci_poll.h` (the three values, the delivery and its reason, the
+> poller's ownership machine and roles, promotion, park and kick, the
+> watcher's dead-line verdict, the adaptive period, the interval
+> observation and the line's retirement over register callbacks; host suite
+> `test_poll`) and the driver half `hcd_poll.c` (the poll timer and its DPC,
+> `PollLock`, the watcher's look and the move, the retirement under
+> `KeSynchronizeExecution`, `HcdPollContain`'s PCI Interrupt Disable, the
+> grant and revocation, the peeks and the doorbell hook `HcdSvcDoorbell`).
+> `hcd_ctl.c` settles the delivery at start (`hcdSettleDelivery`,
+> `hcdConnect`, the seam 36.15's MSI joins), and the counters are appended
+> to `XHCIHC_COUNTERS`.
+> Task 36.15 (design records 15 section 4.3 and 18) adds MSI on Vista and 7:
+> the pure `xhci_msi.c` / `xhci_msi.h` (the MSI/MSI-X capability read, the
+> requirements list's checked walk, class, strip and qemu no-line rewrite,
+> the filter record, the x86 helper's binding state machine and the `M86`
+> trace record) and `xhci_msi86.c` / `xhci_msi86.h` (both ends of the x86
+> helper's channel, compiled into `xhci98.sys`, the helper and `test_msi`);
+> the driver half `hcd_msi86.c` (the mode cache, the requirements filter,
+> the helper's look and reference, the routines per architecture, the
+> counters and the trace); in `hcd_ctl.c` the seam `hcdMsgConnect`, the
+> message ISR and the capability read; and `src/msi86/` - `msi86_entry.c`,
+> `xhcimsi.rc`, `sources` and `makefile` - the NT 6 x86 helper
+> `xhcimsi.sys`, built with WDK 7.1 for x86.
+> Tasks 36.28 to 36.40 (design record 14) add selective suspend: the pure
+> `xhci_susp.c` / `xhci_susp.h` (the switch, eligibility and capabilities,
+> the device's link machine, each function's power slot, the wake episode,
+> the idle notification's batches and claims, and stage B's Function
+> Suspend, wake arming and SuperSpeed hub port decisions; host suite
+> `test_susp`) and the driver half `hcd_susp.c` (the enum thread's
+> executor: the admission gate on a device's pipes, the suspend and resume
+> sequences at a root port and a hub port, U3 and Function Suspend at
+> SuperSpeed, the decision pass and the wake evidence). Dispatch's half
+> (D-IRPs, WAIT_WAKE, the idle notification) is in `hcd_pdo.c` and
+> `hcd_urb.c`; `XhciSelectiveSuspend` is read in `hcd_ctl.c`; all of it is
+> inert while the value is not 1. Task 36.45 adds no file: an uncached
+> descriptor is read from the device through the door (`hcd_door.c`, its
+> request's checks the pure half in `xhci_hub.c`, `test_hub`; the EP0 path
+> in `hcd_enum.c`; record 13 section 8.11). Task 36.46 adds no file: a
+> select honours `bNumEndpoints` and ignores surplus endpoint descriptors
+> (`xhci_pipe.c`, `test_pipe`, applied in `hcd_cfg.c`; `uas_iu.c`'s
+> `UasParseConfig` keeps the same boundary). Task 36.47 adds no file: `XHCISNAP`'s "captured on" header
+> and `-nosysinfo` are `xhcisnap\xhcisnap.c`'s. Task 36.48 adds
+> `xhciqual\sysinfo.c` (the system description's pure half: the SMBIOS
+> entry point and table walk with its identifiers never copied, CPUID
+> text, the printer; host suite `xhciqual\test\test_sysinfo.c`),
+> `xhciqual\sysprobe.c` (its DOS half: the BIOS area, the DPMI mapping,
+> E820 and the DOS version) and `xhciqual\sysasm.asm` (CPUID, every
+> register it touches saved). Task 36.33's fix adds
+> `xhcisnap\check-counter-names.ps1`, which checks the built `XHCISNAP`'s
+> counter names against `xhci_counters.h` word by word.
+> Two groups from before Phase 36 that this map did not name (added in
+> 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
+> command precondition table: would a conforming controller accept this
+> command in this Slot and EP state; pure, host suite `test_strict`) and
+> its driver half `hcd_strict.c` (before each command `hcd_enum.c`'s
+> `hcdCommand` submits, it reads the states from the Output Device Context,
+> counts and traces a violation and still sends the command; it only
+> observes), compiled into the debug and `qemu` flavours and none of it
+> into `release`; and `src\uas\`, the UAS class driver `xhciuas.sys` (task
+> 31-A.2), built by its own `sources` and `makefile`: `uas.h` (the stack
+> and the transports), `uas_iu.c` / `uas_iu.h` (its pure core: the
+> information units, LUN encoding, tags, the configuration walk for the
+> UAS setting, REPORT LUNS, the status fold and the storage ids; host suite
+> `test_uas`), `uas_mem.c` (every pool, MDL and IRP-memory call, the import
+> allowlist's one site), `uas_streams.c` / `uas_streams.h` (the one
+> adapter to the bus's `IOCTL_XHCI98_OPEN_STREAMS` and `CLOSE_STREAMS`),
+> `uas_entry.c` (`DriverEntry`, `AddDevice`, the dispatch table),
+> `uas_fdo.c` (the FDO: PnP, the configuration and four pipes, the
+> transport choice, LUN discovery), `uas_pdo.c` (one PDO per logical unit:
+> its ids, SRBs and the storage IOCTLs), `uas_xport.c` (the transport
+> engine: queue, tags, the IUs streamed and streamless, timeouts, task
+> management, reset recovery), `xhciuas.rc` (the version resource) and the
+> two INFs, `xhciuas.inf` (32-bit) and `xhciuas-amd64.inf` (staged as
+> `xhciuas.inf` in the 64-bit package). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
@@ -194,6 +390,8 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci98.rc` | The file version resource (task 8-A.4), so a binary recovered from a user's machine can be identified. Takes its fields from `xhci_version.h`; adds no import. |
 | `xhci98.inf` | The **32-bit** INF: one file for two setup engines. Windows 98 SE reads the undecorated sections and loads the driver through `NTKERN`; Windows 2000 SP4 reads the `.NTx86` sections and loads it as a kernel service. Both install sections copy the project's two files through the shared `Xhci.CopyFiles`, and each adds its own OS-supplied list (`Xhci.CopyW98`: `usbd.sys` and `usbhub.sys`; `Xhci.CopyNT`: those plus `usbport.sys`) that `LayoutFile` has the OS fetch from its own install source. Both also copy `usbui.dll` through `Xhci.CopyUI`, to dirid 11 rather than 10, since 1.0.2.0. Since 1.1.0.0 it carries a third install path for Windows Vista and Windows 7: `%Mfg%=XhciModels,NTx86.6.0` in `[Manufacturer]` leads NT 6.x to `[XhciModels.NTx86.6.0]` and `[Xhci.Dev6.NTx86]`, which copies `xhci98.sys` alone (those systems already carry the four OS-supplied files, and their file queue aborts on a `LayoutFile` copy). |
 | `xhci98-amd64.inf` | The **64-bit package's** INF, and it is a second file rather than a third path in the first (design record 11 section 12, decision 2): no Windows 98 path, a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`, and two install paths - `[Xhci.Dev.NTamd64]` for Windows XP x64 and Server 2003 x64, which fetches the OS-supplied files from `Driver Cache\amd64`, and `[Xhci.Dev6.NTamd64]` for Vista x64 and Windows 7 x64, which copies `xhci98.sys` alone. Neither file may grow the other's sections - an undecorated or `.NT*` section here is one a 32-bit engine reaches, which would put an amd64 binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`, `PATH-MFGDEC`, `OS-DEFAULT`). The two are checked against each other by `scripts\inf-gate\test-inf-checks.ps1`, because the accepted cost of two files is that they can drift. |
+| `portsw.vbs` | The Intel port switchover's user script (roadmap-hcd task 36.42, design record 16 section 5a): Windows Script Host VBScript that shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1, then says a restart is needed. Finds the controller's driver key among the `NNNN` subkeys of the USB class key (listed by WMI on NT, by a `regedit /e` export on 98 and ME, probed `0000` to `9999` only if neither answers) for this driver's `DriverDesc`; on Vista and 7 asks for elevation itself. Staged at every package root by `make-package.ps1`, published by `make-release.ps1`, held by the packager's self-tests and the source charset gate. |
+| `portsw-on.bat`, `portsw-off.bat` | The script's two batch files (roadmap-hcd task 36.56, design record 16 section 5a, "The batch files"): each shows the value, sets 1 or 0 through `cscript //nologo portsw.vbs`, says a restart is needed and pauses. One file for `COMMAND.COM` (98 SE, ME) and `cmd.exe` (2000 to 7): `if "%OS%"=="Windows_NT" goto nt`, then `goto run`, so only `cmd.exe` reaches `cd /d "%~dp0"`. Staged beside `portsw.vbs` by `make-package.ps1` from its directory, published by `make-release.ps1`, held by the packager's self-tests (the split, the calls, ASCII and CRLF), the source charset gate and the batch-file line-ending gate. |
 | `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330` and `XHCI98\ROOT_HUB`. Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them and to each other. |
 
 ## Generated, not tracked

@@ -109,6 +109,18 @@ ntoskrnl.exe!IoSetDeviceInterfaceState     all  required  nt52-amd64-export; twi
 ntoskrnl.exe!IoGetDeviceProperty           all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 ntoskrnl.exe!ZwSetValueKey                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.8)
 
+# Task 36.3: the routing quirk's LPC and 00:14.0 reads. The register
+# accessors are inlines on amd64 and import nothing.
+HAL.dll!HalGetBusData                     all  required  nt52-amd64-export; twin of the x86 row (task 36.3); also in WDK 7.1's wlh and win7 amd64 hal.lib
+ntoskrnl.exe!KeSynchronizeExecution      all  required  nt52-amd64-export; twin of the x86 row (task 36.7)
+
+# Task 36.15 (design record 15 section 4.3): IoConnectInterruptEx and
+# IoDisconnectInterruptEx looked up on Vista and 7 x64 alone
+# (IoIsWdmVersionAvailable(6, 0)); XP x64 exports the routine and answers
+# NULL for both names. The x86 image has no such row - Windows 98 lacks it
+# - and takes the pair from the helper (design record 18).
+ntoskrnl.exe!MmGetSystemRoutineAddress   all  required  SITES=hcd_msi86.obj nt52-amd64-export; task 36.15, the amd64 caller of the MSI seam
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.

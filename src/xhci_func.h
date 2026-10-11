@@ -12,7 +12,8 @@
  *     GET_DESCRIPTOR(CONFIGURATION) (section 10.9);
  *   - whether a SETUP packet may leave a function PDO (an interface
  *     recipient must be one of its interfaces);
- *   - the function PDO's ids (section 10.7), as ASCII multi-strings;
+ *   - the function PDO's ids (section 10.7), and its composite parent's
+ *     (section 10.12), as ASCII multi-strings;
  *   - every PDO's instance id: the serial number string when it is
  *     usable, else the location (task 33.2);
  *   - and every PDO's device text: which string it is named by, and that
@@ -91,6 +92,32 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
 ULONG XhciFuncConfig(const UCHAR *config, ULONG length, const XHCI_FUNC *func,
                      UCHAR *out, ULONG capacity, PULONG total);
 
+/*
+ * Selective suspend's stage B (roadmap-hcd.md 36.38; design record 14
+ * section 8.3). The first interface of every USB 3 function of the whole
+ * configuration `config` of `length` bytes - each IAD's bFirstInterface,
+ * and every interface (alternate 0) no IAD covers (USB 3.2 9.6.4) - as a
+ * mask in *firsts (bit n: bInterfaceNumber n). A first interface above 31
+ * cannot be named there, so its function is never armed: *beyond is then 1.
+ * IADs are taken as XhciFuncSplit takes them (the present interfaces of
+ * the range; one overlapping an earlier IAD ignored), so a function never
+ * straddles two PDOs; an IAD whose bFirstInterface is absent names its
+ * lowest present interface. XHCI_FUNC_OK, or
+ * XHCI_FUNC_MALFORMED (both 0) for XhciFuncSplit's malformations,
+ * XHCI_FUNC_BAD_PARAM.
+ */
+ULONG XhciFuncFirsts(const UCHAR *config, ULONG length, PULONG firsts,
+                     PULONG beyond);
+
+/* A PDO's ownership mask (8.3): a function PDO's InterfaceMask, every
+ * interface (all 32 bits) for the one PDO of an unsplit device. */
+ULONG XhciFuncOwnership(ULONG function, ULONG interfaceMask);
+
+/* The index in masks[0..count-1] of the first ownership mask holding
+ * interface `iface`, or `count` when none does or iface is past 31: the
+ * interface-to-function mapping of a Function Wake notification (8.7). */
+ULONG XhciFuncOwnerOf(const ULONG *masks, ULONG count, ULONG iface);
+
 /* 1 when the 8-byte SETUP may go to the device from the function whose
  * interfaces are `interfaceMask`, of the device's `deviceMask`: a standard
  * or class request with interface recipient may not name a sibling's
@@ -110,6 +137,18 @@ ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
  * whole answer's length, NULs included, even when it did not fit. */
 ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
                  ULONG which, char *out, ULONG capacity, PULONG used);
+
+/*
+ * A composite-parent PDO's ids (task 36.43; design record 13 section
+ * 10.12), project-owned so no OS INF matches: XHCI_FUNC_ID_DEVICE
+ * XHCI98\COMPOSITE&VID_vvvv&PID_pppp; XHCI_FUNC_ID_HARDWARE that with
+ * &REV_rrrr, then without, then XHCI98\COMPOSITE alone, as a multi-string.
+ * No compatible id (XHCI_FUNC_BAD_PARAM, *used 0); the instance id is
+ * XhciFuncInstanceId's with XHCI_INSTANCE_NO_MI. As XhciFuncId: upper-case
+ * hex, *used the whole length even when it did not fit.
+ */
+ULONG XhciFuncParentId(const UCHAR *device, ULONG which, char *out,
+                       ULONG capacity, PULONG used);
 
 /*
  * Instance ids from the serial number (roadmap-hcd.md task 33.2; design

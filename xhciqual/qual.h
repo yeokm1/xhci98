@@ -71,7 +71,7 @@ typedef struct {
     u8  bus, dev, fn;
     u16 vid, did;
     u8  rev;
-    u8  ipin;           /* config 0x3D - 0 means MSI-only: disqualifying */
+    u8  ipin;           /* config 0x3D - 0: no INTx, needs polling (36.10) */
     u8  iline;          /* config 0x3C - legacy 8259 IRQ */
     u16 cmd_orig;       /* PCI Command as found (restored on exit) */
     u16 cmd_effective;  /* after active enable; unchanged in probe-only */
@@ -81,6 +81,7 @@ typedef struct {
     int bar_is64, bar_pref;
     int has_pm, has_msi, has_msix, has_pcie;
     int msi_enabled;
+    int msix_enabled;       /* MSI-X Message Control bit 15, as found */
     /* PCI Power Management capability (valid if has_pm). Read-only: the
      * qualifier never writes PMCSR - transitioning a D3 device back to D0 is
      * the driver's job, and --probe-only must take no ownership. */
@@ -141,6 +142,37 @@ void pci_recheck_status(PCIINFO *p);     /* re-read 0x06 after active tests */
 int  pci_disable_bus_master(PCIINFO *p); /* restore original bits, BME clear */
 const char *hc_name(int hctype);
 
+/*
+ * Task 36.11: the Intel PCH interrupt routing, read only (route.c and
+ * pci.c's route_read). Filled for an xHCI before anything active runs; the
+ * registers exist only on the reviewed RCBA chipsets (the driver's table,
+ * src/xhci_pirq.c), and elsewhere nothing past the xHCI's own header is
+ * read. `state` says how far the read went.
+ */
+#define ROUTE_NOT_READ      0   /* not looked at                          */
+#define ROUTE_NA_XHCI       1   /* not a reviewed xHCI: nothing read      */
+#define ROUTE_NA_SLOT       2   /* a reviewed id, not at 00:14.0          */
+#define ROUTE_NA_LPC        3   /* 00:1F.0 not this xHCI's LPC: id only   */
+#define ROUTE_RCBA_INVALID  4   /* LPC read; RCBA disabled or invalid     */
+#define ROUTE_MAP_FAILED    5   /* the RCBA page not mapped               */
+#define ROUTE_READ          6   /* D20IP and D20IR read                   */
+
+typedef struct {
+    int state;
+    u32 xhci_id;        /* the xHCI's 00h: vendor 15:0, device 31:16      */
+    u8  xhci_pin;       /* its 3Dh                                        */
+    u32 lpc_id;         /* 00:1F.0's 00h                                  */
+    u32 rcba;           /* its F0h                                        */
+    u32 pirq_ad;        /* its 60h-63h, PIRQA-D_ROUT                      */
+    u32 pirq_eh;        /* its 68h-6Bh, PIRQE-H_ROUT                      */
+    u32 d20ip;          /* RCBA+3128h                                     */
+    u16 d20ir;          /* RCBA+3160h                                     */
+} ROUTEINFO;
+
+/* Reads only: configuration space through 0xCF8/0xCFC and one DPMI mapping
+ * of the RCBA page; no write of any kind. */
+void route_read(const PCIINFO *p, ROUTEINFO *r);
+
 /* ------------------------------------------------------------------ */
 /* Quirk table (quirks.c)                                             */
 /* ------------------------------------------------------------------ */
@@ -155,7 +187,7 @@ const char *hc_name(int hctype);
 #define QF_BULK64K    0x0080  /* keep bulk TRB chains under 64 KB */
 #define QF_AVOID      0x0100  /* known-unreliable silicon */
 #define QF_CMD_RETRY  0x0200  /* retry TRB Error command completions once */
-#define QF_BROKEN_MSI 0x0400  /* broken MSI (INTx anyway - harmless for us) */
+#define QF_BROKEN_MSI 0x0400  /* broken MSI (Linux XHCI_BROKEN_MSI)    */
 
 typedef struct {
     u16 vid, did;
@@ -426,6 +458,7 @@ typedef struct {
 #define V_PASS 1
 #define V_WARN 2
 #define V_FAIL 3
+#define V_POLL 4   /* C4: no working interrupt, completed polled (36.10) */
 
 const char *verdict_name(int v);
 
@@ -518,6 +551,10 @@ typedef struct {
     int v_dev;       /* C8 - informational, never disqualifying */
     int cleanup_failed;
     int irq_selftest;
+    int irq_no_event;        /* C4: the No-Op never completed, even polled */
+    int irq_force_poll;      /* C4: POLL with IP never raised: mode 2 only */
+    ROUTEINFO route;         /* task 36.11, read before any active test */
+    long route_gsi;          /* --gsi N, or -1                           */
     char irq_note[80];
     char port_note[80];
     char handoff_note[80];
@@ -686,7 +723,36 @@ void qlogprintf(const char *fmt, ...);
 int  report_logging(void);             /* is any durable sink open? */
 void report_flush(void);               /* force log+console out to durable */
 void report_controller(CTRL *c, int active_ran);
-int  final_verdict(CTRL *c, int active_ran);   /* 1 qualified, 0 not */
+/* ------------------------------------------------------------------ */
+/* verdict.c - the xHCI verdict, pure (test/test_verdict.c)           */
+/* ------------------------------------------------------------------ */
+
+/* What C4 saw (task 36.10). no_line: nothing could be armed - Interrupt
+ * Pin 0, no usable IRQ, or PCI Interrupt Disable stuck set. tool_failed: a
+ * DPMI step failed. ip_seen: IP and EINT came up with the line masked.
+ * event_seen: the No-Op's completion was found in the event ring. */
+typedef struct {
+    int no_line;
+    int tool_failed;
+    int ip_seen;
+    int isr_fired;
+    int foreign;
+    int event_seen;
+} C4_SEEN;
+
+int  c4_verdict(const C4_SEEN *s);             /* V_PASS, V_POLL or V_FAIL */
+int  c4_lets_ports(int v_irq, int poll_only);  /* may C6 and C8 run */
+const char *msi_route_text(const PCIINFO *p, int broken_msi);
+                                               /* the message route, words */
+void report_caveats(const CTRL *c);             /* the caveats, in full */
+
+#define VERDICT_NOT        0
+#define VERDICT_QUALIFIED  1
+#define VERDICT_CAVEATS    2   /* QUALIFIED WITH CAVEATS: needs polling */
+
+int  final_verdict(CTRL *c, int active_ran);   /* VERDICT_* */
+/* 0 all qualified, 3 any with caveats and none not, 1 otherwise. */
+int  run_exit_code(int any_not, int any_caveats);
 /* ------------------------------------------------------------------ */
 /* mmiodiag.c - pure PCIINFO -> text diagnosis, host-testable (no MMIO,  */
 /* no port I/O, no DOS services; see xhciqual/test/test_mmiodiag.c)   */
@@ -738,6 +804,11 @@ void xcap_walk(CTRL *c, u32 xecp_off, u32 window, XCAP_RD_FN rd, void *ctx);
 #define QUICK_LOOKS_OK      0   /* subject to the active tests               */
 #define QUICK_DISQUALIFIED  1   /* a read-only pass genuinely sees this      */
 #define QUICK_CANNOT_SAY    2   /* a state this pass may not change          */
+#define QUICK_CAVEATS       3   /* needs polling: no line interrupt (36.10)  */
+
+/* Which of two outcomes the quick scan's verdict takes: LOOKS_OK, then
+ * CAVEATS, then DISQUALIFIED, then CANNOT_SAY. */
+int quick_rank(int outcome);
 
 int quick_classify(const PCIINFO *p, int mmio_ok, int usb2_ports,
                    int active_requested);
@@ -762,5 +833,141 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
 #define XUSB2PR_UNDETERMINED  2    /* the words cannot answer the question */
 
 int  report_xusb2pr(const PCIINFO *p);         /* C7: prints, then verdicts */
+
+/* ------------------------------------------------------------------ */
+/* route.c - the routing report's pure half (task 36.11), host-tested */
+/* by xhciqual/test/test_route.c                                      */
+/* ------------------------------------------------------------------ */
+
+#define ROUTE_CMP_NONE          0   /* no GSI given                       */
+#define ROUTE_CMP_MATCH         1
+#define ROUTE_CMP_MISMATCH      2
+#define ROUTE_CMP_NOT_COMPARED  3   /* no PIRQ, or a GSI in neither range */
+
+/* ROUTE_READ to go on to the LPC, or ROUTE_NA_XHCI / ROUTE_NA_SLOT. */
+int  route_scope(u32 xhci_id, u8 bus, u8 dev, u8 fn);
+int  route_lpc_listed(u32 xhci_id, u32 lpc_id);
+int  route_rcba_valid(u32 rcba);
+/* The PIRQ (0-7) D20IR routes D20IP's pin to, or -1. */
+int  route_pirq(const ROUTEINFO *r);
+/* Against a GSI given separately: 16-23 the I/O APIC input PIRQA-H is,
+ * below 16 an 8259 IRQ the PIRQ's PIRQx_ROUT must be enabled for and name.
+ * gsi -1 is none. */
+int  route_compare(const ROUTEINFO *r, long gsi);
+void report_route(const ROUTEINFO *r, long gsi, QPRINTF_FN pf);
+/* One phrase for the quick scan's screen. Never NULL. */
+const char *route_summary(const ROUTEINFO *r, long gsi);
+
+/* ------------------------------------------------------------------ */
+/* sysinfo.c (pure, host-tested) and sysprobe.c (DOS): the system     */
+/* description in the report header (roadmap-hcd.md task 36.48)      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * **NO IDENTIFIERS.** The header names the machine - maker, model, board,
+ * BIOS, CPU, memory, DOS - so a pasted report says what it came from. It
+ * never names the unit: SMBIOS serial numbers, UUIDs, asset tags, SKU and
+ * part numbers (Type 1 serial/UUID/SKU, Type 2 serial/asset, Type 3
+ * serial/asset, Type 4 serial/asset/part) are not read into SYSINFO at
+ * all, so no printer can leak them; and a printed string that repeats one
+ * of them (the same string index, or the same text) is withheld. Keep it
+ * that way: a field added here is a field every pasted report publishes.
+ */
+#define SI_STR 65               /* 64 characters and the terminator      */
+
+#define SMB_NONE        0       /* no entry point found                  */
+#define SMB_OK          1       /* entry point valid, table read         */
+#define SMB_ABOVE_4G    2       /* table above 4 GB: not mappable here   */
+#define SMB_MAP_FAILED  3       /* DPMI would not map the table          */
+#define SMB_EMPTY       4       /* entry point names an empty table      */
+
+#define SMB_EP_DMI      1       /* legacy "_DMI_" alone (DMI 2.0)        */
+#define SMB_EP_32       2       /* "_SM_" 32-bit entry point (2.1+)      */
+#define SMB_EP_64       3       /* "_SM3_" 64-bit entry point (3.0+)     */
+
+typedef struct {
+    int skipped;                /* --no-sysinfo: nothing was read        */
+    /* SMBIOS entry point (smb_scan) */
+    int smb_state;
+    int smb_kind;
+    u32 smb_ep_phys;            /* where the anchor was found            */
+    u8  smb_major, smb_minor;
+    u32 table_lo, table_hi;     /* structure table physical address      */
+    u32 table_len;              /* as the entry point gives it           */
+    u16 table_count;            /* 2.x structure count; 0 for 3.0        */
+    int other_ep_bad;           /* an anchor whose checksum failed       */
+    /* the structure table (smb_parse_table) */
+    u32 used_len;               /* bytes walked (capped at SMB_TABLE_MAX) */
+    int nstructs;
+    int broken;                 /* the walk stopped on a malformed entry  */
+    u32 broken_at;              /* its offset in the table               */
+    int ids_unchecked;          /* walk incomplete: strings withheld     */
+    char bios_vendor[SI_STR], bios_version[SI_STR], bios_date[SI_STR];
+    char sys_mfr[SI_STR], sys_product[SI_STR], sys_version[SI_STR];
+    char sys_family[SI_STR];
+    char board_mfr[SI_STR], board_product[SI_STR];
+    char cpu_socket[SI_STR], cpu_version[SI_STR];
+    int seen_t0, seen_t1, seen_t2, seen_t4;
+    u32 mem17_kb;  int mem17_n;  /* summed module sizes                   */
+    u32 mem19_kb;  int mem19_n;  /* summed mapped ranges                  */
+    /* no SMBIOS: the ROM's own date (F000:FFF5) and model byte (FFFE) */
+    char rom_date[9];
+    u8  rom_model;
+    int rom_read;
+    /* CPUID */
+    int has_cpuid;
+    char cpu_vendor[13];
+    char cpu_brand[49];
+    u32 cpu_sig;                /* leaf 1 EAX                            */
+    u32 cpu_family, cpu_model, cpu_stepping;
+    /* memory */
+    u32 e820_kb;  int e820_n;   /* usable ranges and their count         */
+    /* DOS */
+    int dos_read;
+    u8  dos_major, dos_minor, dos_oem;
+    int dos_true;               /* AX=3306h answered (DOS 5+)            */
+    u8  dos_true_major, dos_true_minor;
+    int win_state;              /* 0 none, 1 Windows/386 2.x, 2 version  */
+    u8  win_major, win_minor;
+} SYSINFO;
+
+#define SMB_TABLE_MAX 0x10000UL /* bytes of structure table walked       */
+
+/* Pure: the F0000h-FFFFFh image (or any window) at `area`, physical base
+ * `area_phys`. Fills the entry-point fields of `si`; returns smb_kind or 0.
+ * A valid "_SM3_" with a table below 4 GB wins; else "_SM_"; else "_DMI_". */
+int  smb_scan(const u8 *area, u32 len, u32 area_phys, SYSINFO *si);
+/* Pure: walk `len` bytes of structure table. Every length and string is
+ * bounds-checked; a malformed entry ends the walk (si->broken) and keeps
+ * what was read before it. */
+void smb_parse_table(const u8 *t, u32 len, u16 count, SYSINFO *si);
+/* Pure: CPUID results to text. Registers in the order EAX, EBX, ECX, EDX. */
+void cpu_fill_vendor(SYSINFO *si, const u32 leaf0[4]);
+void cpu_fill_signature(SYSINFO *si, u32 eax1);
+void cpu_fill_brand(SYSINFO *si, const u32 brand[12]);
+/* Pure: the ROM date bytes (8) and model byte, for the no-SMBIOS line. */
+void rom_fill(SYSINFO *si, const u8 *date8, u8 model);
+/* The header block (one line per item), and the quick scan's two lines,
+ * each at most 79 characters. */
+void report_sysinfo(const SYSINFO *si, QPRINTF_FN pf);
+/* Once every field is filled, before any report: both reports checked as
+ * printed against the identifiers smb_parse_table held, then wiped. */
+void sysinfo_seal(SYSINFO *si);
+void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf);
+
+/* sysprobe.c: reads only - the BIOS area, one DPMI mapping of the table,
+ * CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh 1600h. */
+void sysinfo_probe(SYSINFO *si);
+/* sysinfo.c, pure: the --no-sysinfo state (owner, 2026-10-10) - nothing
+ * read, and the header says the option skipped it. */
+void sysinfo_skip(SYSINFO *si);
+/* sysasm.asm: EFLAGS.ID toggles (1) or not; CPUID with every register but
+ * EAX saved and restored (lesson-cpuid-ebx: CPUID clobbers EBX, which
+ * Watcom's register convention, like MSVC's, expects preserved). */
+int  sys_has_cpuid(void);
+void sys_cpuid(u32 leaf, u32 *out4);
+/* report.c: the console alone (paged), for the quick scan's screen lines
+ * whose full form goes to the log and serial line through qlogprintf. */
+void qconprintf(const char *fmt, ...);
 
 #endif /* QUAL_H */

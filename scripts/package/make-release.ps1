@@ -140,8 +140,9 @@ four directories. It defaulted to `x86` alone until then, because until then no
 amd64 binary of this driver had ever executed.
 
 Read the x64 half of a cut as narrowly as its evidence is: three guests - one
-Windows XP x64 and, from 1.1.0.0, one Vista x64 and one Windows 7 x64 - virtual
-machines only, never real hardware, against the x86 half's install legs.
+Windows XP x64 and, from 1.1.0.0, one Vista x64 and one Windows 7 x64 - and,
+from 2.3.0.0, one real machine, a Dell Latitude E7250 under XP x64 and 7 x64
+(the owner's bench, 2026-10-11), against the x86 half's install legs.
 Publishing it by default is what claiming the target means, not a
 claim that the two halves are equally attested.
 
@@ -242,6 +243,32 @@ Where the gated `pkg-<flavour>\` directories are read from and written to by an
 ordinary cut. Defaults to `out\` in the repository, which is where
 `make-package.ps1` writes them. Not read under `-UploadSetOnly`.
 
+.PARAMETER TestLabel
+Cut a TEST build rather than a release: the generated readme.txt opens with a
+banner reading "TEST <version>, <label>." and saying the build is not
+published, so the person who unpacks it sees that before anything else. The
+label is the build's state in a few words, for example `bench pending` (roadmap
+Phase 36's 36.final cut 2.2.0.3 as "TEST 2.2.0.3, bench pending"). Printable
+ASCII, at most 50 characters. A test build is never published, so the cut
+refuses to write it under the repository's own `releases\`: pass `-ReleasesDir`
+and `-UploadDir` under the git-ignored `out\`. Refused with `-UploadSetOnly`,
+which renders no readme. Empty (the default) cuts an ordinary release and
+renders no banner.
+
+.PARAMETER TestSignPfx
+The project test certificate's .pfx (design record 19; owner, 2026-10-11).
+**Required of every cut that publishes an x64 directory**, and refused with no
+switch past it when absent: each x64 leg's make-package.ps1 run is passed it,
+signs xhci98.sys and xhciuas.sys at staging (SHA-1 file digest, no timestamp,
+no catalog, the INFs unchanged) and stages xhci98-test.cer, the certificate's
+public half, beside them. This script then holds each published x64 binary to
+that signature by this key's thumbprint and to the build's bytes, and the
+published certificate to this key's. The password is read from
+XHCI98_TESTSIGN_PW or, where that is unset, a prompt that does not echo, once,
+before anything is built. Refused with -UploadSetOnly, which stages nothing,
+and with an -Arch that has no x64. The x86 binaries are never signed. Where
+the key is held and how it was made: design record 19.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 
@@ -270,7 +297,9 @@ param(
     [string]$PackageRoot = "",
     [switch]$Force,
     [switch]$NoTargetEvidence,
-    [switch]$AllowUnstampedDriver
+    [switch]$AllowUnstampedDriver,
+    [string]$TestLabel = "",
+    [string]$TestSignPfx = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -493,6 +522,25 @@ $archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
 # two [SourceDisksFiles] names - see releases\README.md.
 $publishable = @("xhci98.inf", "xhci98.sys")
 
+# **A leg may publish a third file of this project's own, when its INF
+# declares it** (task 36.15; design record 18 section 8.2): xhcimsi.sys, the
+# NT 6 x86 MSI helper, which the 32-bit INF names and the 64-bit one does not.
+# So the publishable set is per leg - the two above plus whichever of these
+# that leg's own INF declares - and a release cut before 2.3.0.0, whose INFs
+# declare none, is published and reconstructed exactly as before.
+$legPublishableExtra = @("xhcimsi.sys")
+
+function Get-LegPublishable {
+    # The publishable set of one leg, from the media layout its own INF
+    # declares (Get-DeclaredMediaLayout).
+    param([hashtable]$Layout, [string[]]$Base)
+    $out = @($Base)
+    foreach ($extra in $legPublishableExtra) {
+        if ($Layout.ContainsKey($extra.ToLowerInvariant())) { $out += $extra }
+    }
+    return $out
+}
+
 # The UAS class driver's pair (roadmap task 31-A.2), published beside them in
 # every flavour directory a cut writes. Not in $publishable, which is the
 # controller INF's declared media and what tells a flavour directory from any
@@ -510,6 +558,23 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # the INF beside it. A version published before 2.1.0.0 has none, so
 # -UploadSetOnly gates it where it is present and does not require it.
 $oemPublishable = @("txtsetup.oem")
+
+# The port switchover's user script (roadmap-hcd task 36.42), published at
+# the root of every flavour directory a cut writes, beside the INF the user
+# installed from. Not an INF-declared file: it is a text file the user runs
+# and the setup engine never reads. A version published before 2.3.0.0 has
+# none, so it is accepted where present and not required of one. Its two
+# batch files (task 36.56), which set 1 or 0 through it in one double-click,
+# go wherever it goes, under the same terms.
+$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
+
+# The project test certificate's public half (design record 19), published at
+# the root of every x64 directory a cut writes since 2.3.0.0, beside the
+# binaries it signed. Not an INF-declared file: the setup engine never reads
+# it, and it is there to check a signer's thumbprint against. A version published before 2.3.0.0
+# has none, so it is accepted where present and not required of one. Never
+# the .pfx, which holds the private key and is never staged.
+$certPublishable = @("xhci98-test.cer")
 
 # The DDK's obj directory is the one place its vocabulary is still read; the
 # published directory name is built from the flavour and the architecture
@@ -1070,6 +1135,55 @@ git-ignored and outside releases\; out\ is the default.
     }
 }
 
+function Find-TestClientFiles {
+    # Selective suspend's test client (roadmap-hcd.md task 36.34; design
+    # record 14 section 11: tracked under test\, never shipped, and this gate
+    # refuses it in a release). Every file under $Root whose name is one of
+    # the client's - XHCIPM.SYS, XHCIPM.INF, PMCTL.EXE - or whose bytes carry
+    # its marker XHCI98_TEST_CLIENT_DO_NOT_SHIP, wherever it sits and
+    # whatever it is renamed to: the names catch the ordinary mistake, the
+    # marker a renamed copy. Returns the relative paths; empty when clean.
+    param([string]$Root)
+
+    $names = @('xhcipm.sys', 'xhcipm.inf', 'pmctl.exe')
+    $marker = [System.Text.Encoding]::ASCII.GetBytes('XHCI98_TEST_CLIENT_DO_NOT_SHIP')
+    $hits = @()
+    foreach ($item in (Get-ChildItem -LiteralPath $Root -File -Recurse)) {
+        $relative = $item.FullName.Substring($Root.TrimEnd('\').Length).TrimStart('\')
+        if ($item.Name.ToLowerInvariant() -in $names) {
+            $hits += $relative
+            continue
+        }
+        $bytes = [System.IO.File]::ReadAllBytes($item.FullName)
+        $last = $bytes.Length - $marker.Length
+        for ($i = 0; $i -le $last; $i++) {
+            if ($bytes[$i] -ne $marker[0]) { continue }
+            $j = 1
+            while ($j -lt $marker.Length -and $bytes[$i + $j] -eq $marker[$j]) { $j++ }
+            if ($j -eq $marker.Length) {
+                $hits += $relative
+                break
+            }
+        }
+    }
+    return $hits
+}
+
+function Assert-NoTestClient {
+    param([string]$Root, [string]$What)
+
+    $hits = @(Find-TestClientFiles -Root $Root)
+    if ($hits.Count -gt 0) {
+        throw @"
+$What holds selective suspend's test client (test\pmclient, roadmap-hcd.md
+task 36.34), which is never shipped:
+  - $($hits -join "`n  - ")
+It is a test driver for the VM legs only. Take it out; a release carries
+this project's own files and nothing from test\.
+"@
+    }
+}
+
 function Assert-PackageMatchesDeclaredMedia {
     # Nothing in the package may be unaccounted for. Both halves matter: a file
     # the INF does not name must not be published, and a declared file must not
@@ -1136,6 +1250,41 @@ stages every file the INF declares and gates the result.
     }
 }
 
+function Assert-TestSigned {
+    # A published x64 binary (design record 19): signed by the project test
+    # certificate this cut was given, as record 19 prescribes
+    # (Test-ProjectTestSignature), and otherwise exactly the build beside its
+    # source stamp (Test-SignedImageOf), so the stamp still speaks for it.
+    # make-package.ps1 made both checks as it signed; they are made again
+    # here on the copy that is published, because that is the one that ships.
+    param([string]$Sys, [string]$BuiltSys, [string]$Label)
+
+    $why = ""
+    try {
+        $why = Test-ProjectTestSignature -Signature (Get-EmbeddedSignature -Path $Sys) -Thumbprint $testSignCert.Thumbprint
+    } catch {
+        $why = "its signature cannot be read: $($_.Exception.Message)"
+    }
+    if ($why -ne "") {
+        throw @"
+$Label is not signed as every published x64 binary must be: $why.
+Design record 19 (owner, 2026-10-11): make-package.ps1 -TestSignPfx signs it
+at staging, with the project test certificate, a SHA-1 digest and no
+timestamp. Re-run the cut with the key; never sign a binary by hand.
+"@
+    }
+    if (-not (Test-SignedImageOf -Signed ([System.IO.File]::ReadAllBytes($Sys)) `
+                                 -Unsigned ([System.IO.File]::ReadAllBytes($BuiltSys)))) {
+        throw @"
+$Label is not the build at $BuiltSys plus a signature: it differs by more than
+the checksum, the certificate-table entry and the appended table, so the
+source stamp beside that build says nothing about the bytes being shipped.
+Rebuild, and re-run the cut so the packager signs what was built.
+"@
+    }
+    Write-Ok ("{0} is the build, signed by the project test certificate {1}" -f $Label, $testSignCert.Thumbprint)
+}
+
 function Assert-UasPublished {
     # xhciuas.sys, the UAS class driver (roadmap task 31-A.2), held to the
     # refusals the build loop makes of xhci98.sys, in the same order and for
@@ -1143,7 +1292,7 @@ function Assert-UasPublished {
     # VS_FF_DEBUG, the flavour marker, the staged bytes being the built ones,
     # and the source stamp beside the build (scripts\source-stamp.ps1
     # -Driver xhciuas), unstamped only under -AllowUnstampedDriver.
-    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot, [switch]$Signed)
 
     $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
     if (-not (Test-Path -LiteralPath $Sys)) {
@@ -1165,7 +1314,9 @@ function Assert-UasPublished {
     if (-not (Test-Path -LiteralPath $builtSys)) {
         throw "the $($Leg.Id) UAS binary about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\uas. Rebuild: $rebuild"
     }
-    if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+    if ($Signed) {
+        Assert-TestSigned -Sys $Sys -BuiltSys $builtSys -Label "$($Leg.Dir)\xhciuas.sys"
+    } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
         throw "the UAS binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
@@ -1200,6 +1351,74 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
         throw "scripts\source-stamp.ps1 -Driver xhciuas -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
         Write-Ok "$($Leg.Id) UAS binary matches the sources in src\uas"
+    }
+}
+
+function Assert-MsiHelperPublished {
+    # xhcimsi.sys, the NT 6 x86 MSI helper (design record 18; task 36.15),
+    # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
+    # the build loop's of xhci98.sys: the release FileVersion, VS_FF_DEBUG,
+    # the flavour marker, the staged bytes being the built ones, and the
+    # source stamp beside the build (scripts\source-stamp.ps1 -Driver
+    # xhcimsi), unstamped only under -AllowUnstampedDriver. x86 legs only:
+    # the caller publishes it where that leg's INF declares it.
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor"
+    if (-not (Test-Path -LiteralPath $Sys)) {
+        throw "the $($Leg.Id) leg has no xhcimsi.sys to publish. Rebuild: $rebuild"
+    }
+    $info = (Get-Item -LiteralPath $Sys).VersionInfo
+    if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+        throw "the MSI helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+    }
+    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
+        throw "the MSI helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    }
+    $marker = Get-ImageFlavourMarker -Path $Sys
+    if ($marker -ne $Flavor) {
+        $found = if ($marker -eq "") { "none" } else { $marker }
+        throw "the MSI helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+    }
+    $builtSys = Join-Path $ObjRoot "xhcimsi.sys"
+    if (-not (Test-Path -LiteralPath $builtSys)) {
+        throw "the $($Leg.Id) MSI helper about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\msi86. Rebuild: $rebuild"
+    }
+    if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
+        throw "the MSI helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+    }
+    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $stampScript -Driver xhcimsi -Check $ObjRoot 2>&1
+        $stampCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($stampCode -eq 1) {
+        throw @"
+the MSI helper about to be published as $($Leg.Dir)\ was built from sources this
+tree no longer holds:
+$($stampOut -join "`n")
+Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
+"@
+    } elseif ($stampCode -eq 2) {
+        if (-not $AllowUnstampedDriver) {
+            throw @"
+no source stamp beside the $Flavor MSI helper in $ObjRoot, so this script
+cannot tell whether src\msi86 still reproduces it. Rebuild it ($rebuild), which
+writes the stamp as it goes; or, for a binary that must ship unstamped, pass
+-AllowUnstampedDriver, as for xhci98.sys.
+"@
+        }
+        Write-Warn "no source stamp beside the $Flavor MSI helper, and -AllowUnstampedDriver was passed."
+    } elseif ($stampCode -ne 0) {
+        throw "scripts\source-stamp.ps1 -Driver xhcimsi -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+    } else {
+        Write-Ok "$($Leg.Id) MSI helper matches the sources in src\msi86"
     }
 }
 
@@ -1358,10 +1577,19 @@ their defaults.
     # fails if they ever stop agreeing. Each directory is still checked against
     # the layout individually below; this is where the layout comes from, not a
     # substitute for checking.
-    $mediaLayout = Get-DeclaredMediaLayout `
-        -InfPath (Join-Path $PublishedRoot (Join-Path $Flavors[0] $infName)) `
-        -Arch $LegArches[$Flavors[0]] `
-        -Label "the published $infName"
+    # **Per leg since task 36.15** (design record 18 section 8.2): the two
+    # INFs no longer declare the same media - the 32-bit one adds the x86 MSI
+    # helper - so each directory's layout comes from its own INF, and the
+    # first leg's is no longer made to answer for the others. The comment
+    # above describes the arrangement this replaced.
+    $legLayouts = @{}
+    foreach ($legDir in $Flavors) {
+        $legLayouts[$legDir] = Get-DeclaredMediaLayout `
+            -InfPath (Join-Path $PublishedRoot (Join-Path $legDir $infName)) `
+            -Arch $LegArches[$legDir] `
+            -Label "the published $legDir\$infName"
+    }
+    $mediaLayout = $legLayouts[$Flavors[0]]
 
     # Source name -> where the INF puts it, lower-cased on both sides, split
     # into the files this assembly adds and the two a release directory already
@@ -1373,24 +1601,33 @@ their defaults.
     # produces - look like a file nobody declared (review round 3).
     # The path is the thing everything else here is checked against, so it is
     # what these are checked against too.
-    $expected = @{}
-    $publishedPaths = @{}
-    foreach ($name in $mediaLayout.Keys) {
-        if ($name -in $publishableKeys) {
-            $publishedPaths[$name] = $mediaLayout[$name]
-        } else {
-            $expected[$name] = $mediaLayout[$name]
-        }
-    }
-
-    # The backstop for the same rule the ordinary cut now checks before it
-    # builds anything - see Assert-PublishableAtMediaRoot. It is repeated here
-    # because -UploadSetOnly reaches this function without passing through that
-    # check, and reads its INF from the published tree rather than from src\.
-    Assert-PublishableAtMediaRoot -Layout $mediaLayout -PublishableKeys $publishableKeys `
-                                  -InfName $infName -Label "the published $infName"
-
     foreach ($f in $Flavors) {
+        $mediaLayout = $legLayouts[$f]
+        $legKeys = @((Get-LegPublishable -Layout $mediaLayout -Base $Publishable) |
+                     ForEach-Object { $_.ToLowerInvariant() })
+        $expected = @{}
+        $publishedPaths = @{}
+        foreach ($name in $mediaLayout.Keys) {
+            if ($name -in $legKeys) {
+                $publishedPaths[$name] = $mediaLayout[$name]
+            } else {
+                $expected[$name] = $mediaLayout[$name]
+            }
+        }
+        foreach ($name in $legKeys) {
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $uploadRoot $f) $name))) {
+                throw "'$f' in the published tree has no '$name', which its own $infName declares."
+            }
+        }
+
+        # The backstop for the same rule the ordinary cut now checks before it
+        # builds anything - see Assert-PublishableAtMediaRoot. It is repeated
+        # here because -UploadSetOnly reaches this function without passing
+        # through that check, and reads its INF from the published tree rather
+        # than from src\.
+        Assert-PublishableAtMediaRoot -Layout $mediaLayout -PublishableKeys $legKeys `
+                                      -InfName $infName -Label "the published $f\$infName"
+
         $pkgDir = $null
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
@@ -1402,7 +1639,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable)
+                                               -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1556,6 +1793,9 @@ $gateOut
     # every published release declares once, so -UploadSetOnly dates an old
     # release by that release; noon keeps the day whatever an unpacker makes
     # of the archive's zoneless times. The bytes are untouched.
+    # The test client (task 36.34) anywhere in the asset, the tools'
+    # directories included, before anything is dated or zipped.
+    Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -1641,6 +1881,80 @@ try {
 -UploadSetOnly exists so that rebuilding a release asset never needs -Force: it
 does not write to releases\ at all, so there is nothing for -Force to overwrite.
 If what you want really is to re-cut the published version, drop -UploadSetOnly.
+"@
+    }
+
+    # --- a TEST build: labelled in the readme, never under releases\ --------
+    #
+    # A test build (36.final's 2.2.0.3) is cut through this same script so that
+    # every gate runs, but it is not a release: its readme says so in its
+    # first lines, and it is never written where a release lives. The check is
+    # on the arguments alone, so it refuses before anything is built.
+    if ($TestLabel -ne "") {
+        if ($UploadSetOnly) {
+            throw "-TestLabel labels the readme a cut renders, and -UploadSetOnly renders none: it re-assembles an already published tree."
+        }
+        if ($TestLabel -notmatch '^[\x20-\x7E]{1,50}$' -or $TestLabel -ne $TestLabel.Trim()) {
+            throw "-TestLabel '$TestLabel' must be 1 to 50 printable ASCII characters with no leading or trailing space; it is printed in a 78-column plain-text readme."
+        }
+        # $ReleasesDir is already absolute and separator-normalised
+        # (Resolve-DirectoryArgument), and defaults to releases\ itself. The
+        # upload directory needs no check of its own: the assembly refuses one
+        # inside any releases\ already, and its default is out\.
+        $repoReleases = (Join-Path $repo "releases").TrimEnd('\')
+        $rd = $ReleasesDir.TrimEnd('\')
+        if ($rd -eq $repoReleases -or
+            $rd.StartsWith($repoReleases + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw @"
+a TEST build (-TestLabel) is never published, so it is not cut into the
+repository's own releases\ ('$ReleasesDir'): pass -ReleasesDir at a directory
+under the git-ignored out\, holding a history.md that carries the build's entry.
+"@
+        }
+        Write-Warn ("TEST build ('{0}'): the readme opens with the TEST banner; this cut is not a release" -f $TestLabel)
+    }
+
+    # --- the x64 test signature: required of every x64 cut ------------------
+    #
+    # Design record 19 (owner, 2026-10-11): every published x64 directory
+    # carries xhci98.sys and xhciuas.sys signed by the project test
+    # certificate, applied by make-package.ps1 -TestSignPfx at staging. So a
+    # cut that publishes an x64 directory and was given no key is refused
+    # here, before anything is built, and there is no switch past it: a clone
+    # without the key stages unsigned packages for its own guests with
+    # make-package.ps1, or cuts -Arch x86. The key is opened now too, so a
+    # wrong password costs a prompt and not two builds.
+    $testSignCert = $null
+    if ($TestSignPfx -ne "") {
+        if ($UploadSetOnly) {
+            throw "-TestSignPfx signs what a cut stages, and -UploadSetOnly stages nothing: it re-assembles an already published tree, signed or not as it was cut."
+        }
+        if ($Arch -notcontains "x64") {
+            throw "-TestSignPfx signs the x64 directories, and this cut publishes none (-Arch $($Arch -join ',')). The x86 binaries are never signed (design record 19)."
+        }
+        if (-not (Test-Path -LiteralPath $TestSignPfx -PathType Leaf)) {
+            throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
+        }
+        $TestSignPfx = (Resolve-Path -LiteralPath $TestSignPfx).ProviderPath
+        # Asked once here and held in this script's memory; each x64
+        # make-package.ps1 child gets it through XHCI98_TESTSIGN_PW, set in
+        # this process's environment only around that one call and restored
+        # after it (review round 1: a script run from an open session must
+        # not leave the password in it). Never printed, never written.
+        $testSignPassword = Get-TestSignPassword
+        $testSignCert = Get-TestSignCertificate -PfxPath $TestSignPfx -Password $testSignPassword
+        Write-Ok ("x64 binaries will be signed by the project test certificate {0}" -f $testSignCert.Thumbprint)
+    } elseif (-not $UploadSetOnly -and $Arch -contains "x64") {
+        throw @"
+this cut publishes x64 directories and was given no test-signing key.
+Every published x64 directory carries xhci98.sys and xhciuas.sys with an
+embedded signature by the project test certificate, applied at staging
+(design record 19; owner, 2026-10-11), so that Vista x64 and Windows 7 x64
+load the driver in test-signing mode. Pass the key:
+      scripts\package\make-release.ps1 ... -TestSignPfx <path to the .pfx>
+with its password in XHCI98_TESTSIGN_PW or typed at the prompt. Without the
+key, cut -Arch x86 only, or stage an unsigned x64 package for a guest with
+scripts\package\make-package.ps1 -Arch amd64, which is never published.
 "@
     }
 
@@ -1783,6 +2097,8 @@ To cut one, run this script without it.
                     throw "'$finalRoot' has no $($leg.Dir)\ directory, so $Version was not published with that flavour and architecture."
                 }
             }
+            # The two every version publishes; a leg whose INF declares the
+            # x86 helper is held to it inside New-UploadSet, from that INF.
             foreach ($name in $publishable) {
                 if (-not (Test-Path -LiteralPath (Join-Path $pubDir $name))) {
                     throw "'$pubDir' has no '$name', so it is not a published flavour directory of $Version."
@@ -2003,6 +2319,7 @@ the result in place of the marker, then cut again. The first:
     $publishableKeys = @($publishable | ForEach-Object { $_.ToLowerInvariant() })
     $declaredExpected = @{}
     $declaredPublished = @{}
+    $declaredPublishable = @{}
     foreach ($a in $Arch) {
         $archInf = Join-Path $repo $archInfPath[$a]
         $layoutA = Get-DeclaredMediaLayout -InfPath $archInf -Arch $archPkgName[$a] -Label $archInfPath[$a]
@@ -2013,14 +2330,21 @@ the result in place of the marker, then cut again. The first:
         # The same split the assembly makes, made once per architecture here so
         # the build loop below can hold each package to it as soon as
         # make-package.ps1 returns.
+        # The leg's own publishable set (task 36.15): the x86 INF's helper
+        # is published beside xhci98.sys.
+        $legPublishable = @(Get-LegPublishable -Layout $layoutA -Base $publishable)
+        $legKeysA = @($legPublishable | ForEach-Object { $_.ToLowerInvariant() })
+        Assert-PublishableAtMediaRoot -Layout $layoutA -PublishableKeys $legKeysA `
+                                      -InfName "xhci98.inf" -Label $archInfPath[$a]
         $expectedA = @{}
         $publishedA = @{}
         foreach ($name in $layoutA.Keys) {
-            if ($name -in $publishableKeys) { $publishedA[$name] = $layoutA[$name] }
-            else                            { $expectedA[$name] = $layoutA[$name] }
+            if ($name -in $legKeysA) { $publishedA[$name] = $layoutA[$name] }
+            else                     { $expectedA[$name] = $layoutA[$name] }
         }
         $declaredExpected[$a] = $expectedA
         $declaredPublished[$a] = $publishedA
+        $declaredPublishable[$a] = $legPublishable
     }
 
     # **And where the upload set would land, which is knowable now.** Checked
@@ -2056,6 +2380,18 @@ the result in place of the marker, then cut again. The first:
                      $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
                      "-OutDir", $pkgDirForBuild)
         if ($NoTargetEvidence) { $pkgArgs += "-NoTargetEvidence" }
+        # The x64 legs are signed at staging (design record 19); the password
+        # reaches the child through XHCI98_TESTSIGN_PW, set above.
+        $legSigned = ($leg.Arch -eq "x64")
+        if ($legSigned) {
+            if ($null -eq $testSignCert) {
+                # Not reachable: an x64 cut without a key is refused before
+                # anything is built. Checked so that no edit above can make
+                # an unsigned x64 leg publishable by omission.
+                throw "the $($leg.Id) leg would be published unsigned; every x64 directory is signed (design record 19)."
+            }
+            $pkgArgs += @("-TestSignPfx", $TestSignPfx)
+        }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the 2026-09-07
         # audit's H17. In Windows PowerShell 5.1 a native command's stderr line
@@ -2066,9 +2402,16 @@ the result in place of the marker, then cut again. The first:
         # never showed it.
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
+        $savedPw = [Environment]::GetEnvironmentVariable($script:TestSignPasswordVariable, "Process")
         try {
+            if ($legSigned) {
+                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $testSignPassword, "Process")
+            }
             & powershell.exe @pkgArgs
         } finally {
+            if ($legSigned) {
+                [Environment]::SetEnvironmentVariable($script:TestSignPasswordVariable, $savedPw, "Process")
+            }
             $ErrorActionPreference = $savedEap
         }
         if ($LASTEXITCODE -ne 0) {
@@ -2085,7 +2428,9 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        foreach ($name in ($publishable + $uasPublishable + $oemPublishable)) {
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable
+        if ($legSigned) { $legCopy += $certPublishable }
+        foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
@@ -2102,7 +2447,16 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable)
+                                           -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
+        Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
+        # The certificate beside a signed leg's binaries must be this key's
+        # public half, byte for byte - the one a user would inspect or import.
+        if ($legSigned) {
+            $pubCer = [System.IO.File]::ReadAllBytes((Join-Path $destDir $certPublishable[0]))
+            if ([Convert]::ToBase64String($pubCer) -ne [Convert]::ToBase64String($testSignCert.CerBytes)) {
+                throw "the $($certPublishable[0]) staged for $($leg.Dir)\ is not the public half of the key given by -TestSignPfx."
+            }
+        }
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -2210,7 +2564,12 @@ meant: scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" })
         }
         $builtHash = (Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash
         $stagedHash = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
-        if ($builtHash -ne $stagedHash) {
+        if ($legSigned) {
+            # A signed leg's bytes are the build's plus the signature and
+            # nothing else (design record 19), and the signature is the
+            # project certificate's by this cut's key.
+            Assert-TestSigned -Sys $sys -BuiltSys $builtSys -Label "$($leg.Dir)\xhci98.sys"
+        } elseif ($builtHash -ne $stagedHash) {
             throw @"
 the binary about to be published as $($leg.Dir)\ is not the one in
 $builtSys ($stagedHash vs $builtHash), so the source stamp beside that build
@@ -2270,7 +2629,15 @@ invalidate readings already taken on these exact bytes - say so:
         # The UAS class driver beside it, held to the same refusals.
         $uasSys = Join-Path $destDir "xhciuas.sys"
         Assert-UasPublished -Sys $uasSys -Leg $leg -Flavor $f -Version $Version `
-                            -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch]))
+                            -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
+                            -Signed:$legSigned
+
+        # The NT 6 x86 MSI helper, where this leg's INF declares it (design
+        # record 18), held to the same refusals.
+        if ($declaredPublishable[$leg.Arch] -contains "xhcimsi.sys") {
+            Assert-MsiHelperPublished -Sys (Join-Path $destDir "xhcimsi.sys") -Leg $leg -Flavor $f -Version $Version `
+                                      -ObjRoot (Join-Path $repo ("src\msi86\" + $objDirName[$f] + "\i386"))
+        }
 
         $staged[$leg.Id] = [pscustomobject]@{
             Flavor    = $f
@@ -2605,6 +2972,14 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
+        $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
+        $contents += "      portsw-on.bat, portsw-off.bat (the same in one double-click)"
+        if ($leg.Arch -eq "x86") {
+            $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
+        } else {
+            $contents += "      xhci98-test.cer (the test certificate both .sys files are"
+            $contents += "                   signed with; you need not import it; section 4)"
+        }
         $contents += ""
     }
     if ($multiArch) {
@@ -2713,28 +3088,59 @@ other.
         $readmeArchOs = @"
 
   - Windows XP, Vista and 7, x64, through separate 64-bit drivers. On Vista
-    x64 and 7 x64 they are unsigned, so driver signature enforcement must be
-    disabled (section 4).
+    x64 and 7 x64 they carry a test signature only, so Windows must be in
+    test-signing mode, or driver signature enforcement disabled (section 4).
 "@
         $readmeArchOsReq = @"
 
                      64-bit: Windows XP x64 (SP2), Windows Vista x64 (SP2)
                      or Windows 7 x64 (SP1), in
-                     virtual machines only as well.
+                     virtual machines; XP x64 and 7 x64 also on one real
+                     machine, a Dell Latitude E7250.
 "@
         $readmeArchInstall = @"
 
 
   64-BIT WINDOWS
       The same route as the 32-bit edition of the same Windows, pointed at
-      RELEASE-X64\. On Windows Vista x64 and Windows 7 x64 the install works
-      on an ordinary start, but the drivers run only while driver signature
-      enforcement is disabled, at every start, as they are unsigned;
-      otherwise the controller shows Code 39 and nothing on it works.
-      After each install the Program Compatibility Assistant may say
-      "Windows requires a digitally signed driver"; the driver still loads
-      on a start with enforcement disabled. Windows XP x64 needs none of
-      that.
+      RELEASE-X64\. Windows XP x64 needs nothing more.
+
+      WINDOWS VISTA X64 AND WINDOWS 7 X64: TEST-SIGNING MODE
+      The 64-bit xhci98.sys and xhciuas.sys are test-signed, so on these
+      two systems the driver can run in test-signing mode instead of
+      disabling driver signature enforcement with F8 at every start. Once:
+
+        1. Open an elevated Command Prompt: Start, type cmd, right-click
+           it, Run as administrator.
+        2. Type:   bcdedit /set testsigning on
+           This is a boot setting of the current Windows entry, so it stays
+           on for every start until it is turned off; no F8 is needed.
+        3. Restart. "Test Mode" shows on the desktop while it is on:
+           at the bottom right on 7, with the version and build, and in
+           the corners on Vista.
+        4. Install the driver as above. Windows still says it cannot
+           verify the publisher; choose "Install this driver software
+           anyway". Afterwards the Driver tab says "Not digitally
+           signed". Both are expected: the driver is test-signed, not
+           signed by Microsoft.
+
+      To check: bcdedit /enum {current} shows "testsigning Yes".
+      To turn it off: bcdedit /set testsigning off, and restart. The
+      driver then needs F8 again, or it does not load and the controller
+      shows Code 39 on Vista, Code 52 on 7.
+
+      - With BitLocker on the system drive, suspend BitLocker before
+        changing the boot setting, or the next start asks for the
+        recovery key.
+      - This is not Microsoft signing: the certificate is this project's
+        own test certificate, which no Windows trusts by itself.
+      - The X64 directories carry xhci98-test.cer, its public half.
+        Importing it is not needed: test-signing mode works without it,
+        and it does not remove the install prompt either. It is not
+        recommended.
+      - F8 -> Disable Driver Signature Enforcement still works as before,
+        for one start, without test mode.
+      - 32-bit Vista and 7, and XP x64, need neither.
 "@
         $readmeArchFiles = @"
 
@@ -2752,7 +3158,7 @@ other.
                               x h c i 9 8   {VERSION}
     USB 3.x for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI machines
 ==============================================================================
-
+{TESTBANNER}
 Released {DATE}.{INCOMPLETE}
 
 Most PCs made from the mid 2010s onward have only USB 3.x (xHCI)
@@ -2815,15 +3221,21 @@ disk, and run ONE command:
       XHCIQUAL
 
 That is it - no arguments. It is read-only: it takes ownership of nothing and
-writes no PCI configuration register. It prints one of three verdicts:
+writes no PCI configuration register. It prints one of four verdicts:
 
   LOOKS QUALIFIED   nothing a read-only pass can see disqualifies this
                     machine. Go ahead and install.
 
+  LOOKS QUALIFIED WITH CAVEATS
+                    the same, but the controller has no interrupt pin. The
+                    driver reads its events on a timer instead (polling),
+                    or on Vista and 7 may take a message-signalled
+                    interrupt; the line says whether the controller offers
+                    one. Go ahead and install.
+
   DISQUALIFIED      something it can see rules the machine out: no xHCI
-                    controller, NO LEGACY INTERRUPT PIN, the controller's
-                    memory window is unusable or sits above 4 GB, or there
-                    are no USB 2.0 ports.
+                    controller, the controller's memory window is unusable
+                    or sits above 4 GB, or there are no USB 2.0 ports.
 
   CANNOT SAY        something it is not allowed to change is in the way -
                     the controller is powered down, or its memory access is
@@ -2859,6 +3271,11 @@ the safety notes spelled out.
                         has already switched it on, and switches nothing on
                         itself
       --no-active       another name for --probe-only
+      --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
+                        chipset's interrupt routing against N, the IRQ
+                        Device Manager shows for the controller under the
+                        system in question. Accepted only beside --quick or
+                        --probe-only; alone it is a usage error
 
   MODIFIERS - these say what to do with the report, not what to run.
   ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
@@ -2874,6 +3291,9 @@ the safety notes spelled out.
                         both
       --done-flag FILE  create FILE only if the run finishes normally, so a
                         batch file can tell a crash apart from a bad verdict
+      --no-sysinfo      do not read the machine's description (SMBIOS,
+                        processor, memory, DOS version) for the report's
+                        header; the header then says it was skipped
       --help, -h, /?    a longer help text, printed by the program itself
 
   ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER, reset it, and reset its
@@ -2904,12 +3324,16 @@ being tested:
       XHCIQUAL --log FULL.LOG
 
 Send FULL.LOG if the full run finished; only if it did not, send PROBE.LOG.
+The report's header names the machine it ran on - make, model and BIOS,
+processor, memory and DOS version - and never a serial number, a UUID or an
+asset tag, so a log can be posted publicly as it is.
 
 It returns 0 if the active tests passed, 1 if the machine is not qualified or
 the run was read-only - which cannot pass tests it does not run, so 1 is the
-normal result of every read-only command above - and 2 if the command line was
-wrong or no controller of that kind is here. The verdict on screen is what to
-read; those codes are for batch files.
+normal result of every read-only command above - 2 if the command line was
+wrong or no controller of that kind is here, and 3 if the full run passed a
+controller only WITH CAVEATS (no working interrupt, so the driver polls
+it). The verdict on screen is what to read; those codes are for batch files.
 
 >> IT MUST BE RUN FROM REAL DOS, NOT A DOS WINDOW INSIDE WINDOWS. <<
 
@@ -2938,10 +3362,11 @@ read; those codes are for batch files.
    controller being tested can stop responding mid-run; and do not boot or
    write a log through that same controller.
 
-A controller reporting no interrupt pin cannot be driven at all, on any of
-these systems. There is no software workaround: the driver uses the legacy
-interrupt pin and has no path for the newer mechanism (MSI) that such a
-controller would require.
+A controller reporting no interrupt pin is still driven: the driver reads
+its events on a timer instead (polling, XhciInterruptMode in section 9),
+and on Windows Vista and 7 it may use a message-signalled interrupt (MSI)
+in place of the pin. A controller whose interrupt line the driver sees
+raised and never delivered is polled the same way.
 
 The checker's last criterion, "no USB 2.0 ports", dates from the earlier,
 USB 2.0-only releases. This driver accepts a controller with no USB 2.0
@@ -2973,15 +3398,16 @@ tested.
   On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
   XP, Vista and 7
 
-  Controller         xHCI, PCI class code 0C0330, a memory window below
-                     4 GB, and a legacy interrupt pin.
+  Controller         xHCI, PCI class code 0C0330, and a memory window
+                     below 4 GB. No interrupt pin is needed: a controller
+                     without one is polled (section 9, XhciInterruptMode).
 
 
 ==============================================================================
  3. THE FILES WINDOWS SUPPLIES, AND USB STORAGE ON WINDOWS 98 SE
 ==============================================================================
 
-The package's own files are five, and they are in:
+The package's own files are in:
 
       {DIRLIST}
 
@@ -2989,6 +3415,14 @@ The package's own files are five, and they are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
+  portsw.vbs                 shows and sets the Intel port switchover
+                             (section 9, XhciIntelPortSwitch)
+  portsw-on.bat,             turn it on or off through portsw.vbs in one
+  portsw-off.bat             double-click (section 9)
+  xhcimsi.sys               in the -X86 directories only: the helper that
+                             gives 32-bit Vista and 7 a message-signalled
+                             interrupt. The install puts it on those two
+                             systems and no other
 
 Nothing else is in the package, and there is nothing to complete.
 
@@ -3115,8 +3549,11 @@ CD, a shared folder - then:
           Update Driver Software -> Browse my computer for driver software
       and point it at the RELEASE-X86\ directory. If Windows warns that it
       cannot verify the publisher, install the driver anyway. Use Device
-      Manager, not a right-click on the INF. Both have only been run in
-      virtual machines.{ARCHINSTALL}
+      Manager, not a right-click on the INF. RESTART WHEN ASKED: the install
+      and every update ask for one, for xhcimsi.sys, and after a first
+      install the controller does not start until then (Device Manager
+      shows code 28 on 7, code 1 on Vista meanwhile). Both have only been
+      run in virtual machines.{ARCHINSTALL}
 
 It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
 USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
@@ -3196,9 +3633,26 @@ virtual machines:
   suitable driver is already installed and keeps the earlier release. Use
   "Display a list of the known drivers" -> Have Disk, as below.
 
-  WINDOWS XP, XP X64, VISTA AND 7: the update took effect at once, with no
-  restart. (Read with a command-line driver update rather than Device
-  Manager.)
+  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update took effect at
+  once, with no restart. (Read with a command-line driver update rather
+  than Device Manager.)
+
+  32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
+  one, for the helper xhcimsi.sys (above).
+
+  GOING BACK TO AN OLDER RELEASE ON VISTA OR 7: the controller's request
+  for a message-signalled interrupt stays in its hardware key, and an
+  older driver does not know what to do with one. First uninstall the
+  controller in Device Manager with "Delete the driver software for this
+  device" ticked, or set MSISupported to 0 in its hardware key, under
+  Device Parameters, Interrupt Management,
+  MessageSignaledInterruptProperties. That tick removes only the package
+  in use: older xhci98 packages stay in the driver store, and Windows may
+  install one of them the next time it finds the controller. From an
+  administrator's prompt pnputil -e lists the store; remove each
+  oemNN.inf whose provider is "Yeo Kheng Meng" and class "Universal Serial
+  Bus controllers" with pnputil -d oemNN.inf. The downgrade itself has not
+  been read.
 
   THE ROOT HUB'S DRIVER TAB STILL SHOWS THE EARLIER VERSION (on 98 SE and
   ME, its date), although it runs the new file. To change it, run Update
@@ -3318,9 +3772,15 @@ Things specific to this driver, worth knowing in advance:
     kept on the device's Device Manager entry, so it has to be applied
     again whenever the device is found as new hardware.
 
-  * IDLE DEVICES ARE NEVER PUT TO SLEEP. The driver never starts selective
-    suspend, of a device or of a hub port, so an idle device draws its
-    normal power. There is no switch for it.
+  * IDLE DEVICES ARE NOT PUT TO SLEEP UNLESS YOU TURN IT ON. With
+    XhciSelectiveSuspend at 1 (section 9) a device is suspended when
+    Windows asks; hubs, the root hub and the controller never are, and the
+    driver never suspends anything on a timer of its own. Off, the
+    default, an idle device draws its normal power.
+
+  * A COMPOSITE DEVICE HAS AN ENTRY OF ITS OWN in Device Manager, with its
+    functions beneath it, and USBView shows a device's manufacturer,
+    product, serial number and interface names.
 
   UPDATING xhciuas.sys OVER AN OLDER COPY
   .......................................
@@ -3418,9 +3878,12 @@ being unsigned, and no change to this driver can remove them:
     NUSB's usbport.sys crashes the machine as it stops the old driver,
     before this release runs. Follow section 4, which avoids it.
 
-  * WINDOWS VISTA X64 AND 7 X64 NEED DRIVER SIGNATURE ENFORCEMENT DISABLED.
-    The driver is not signed. Driver signature enforcement must be disabled
-    at every start, or the controller sits at Code 39.
+  * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE, OR DRIVER
+    SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
+    own test signature, not Microsoft's. Turn on test-signing mode once
+    (section 4), which shows "Test Mode" on the desktop, or disable driver
+    signature enforcement at every start (F8); otherwise the controller
+    sits at Code 39 on Vista, Code 52 on 7.
 
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still
@@ -3438,18 +3901,28 @@ being unsigned, and no change to this driver can remove them:
 
   * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
     BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
-    controller starts or stops, so a drive busy there is disconnected
-    (XhciIntelPortSwitch, section 9).
+    controller starts or stops, so a drive busy there is disconnected.
+    Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
+    by default (section 9).
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
     keyboard answers it (section 4).
 
+  * WINDOWS VISTA AND 7: DELETING THE DRIVER KEEPS THE OLDER PACKAGES.
+    "Delete the driver software for this device" removes only the package
+    in use, and Windows may install an older one the next time it finds
+    the controller. Section 4, "Going back to an older release", says how
+    to remove them with pnputil.
+
 May be addressed in a later release:
 
-  * THE DRIVER NEVER STARTS SELECTIVE SUSPEND (section 5). Idle devices and
-    hub ports are never suspended to save power. A suspend or resume a hub
-    reports is handled.
+  * SELECTIVE SUSPEND IS OFF UNLESS YOU TURN IT ON, AND HUBS ARE NEVER
+    SUSPENDED (sections 5 and 9).
+
+  * 32-BIT WINDOWS VISTA AND 7: THE INSTALL ASKS FOR A RESTART, and the
+    controller does not start until it is done, because the helper
+    xhcimsi.sys starts only at boot (section 4).
 
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
@@ -3483,13 +3956,15 @@ May be addressed in a later release:
     instead.
 
   * WINDOWS 2000: A MOUNTED USB DRIVE MAY COME BACK AT CODE 31 AFTER A
-    CONTROLLER RECOVERY. After the driver recovers the controller in place
-    (a halted controller, or a failed endpoint reset), a USB drive whose
+    CONTROLLER RECOVERY OR A RESUME FROM HIBERNATION. After the driver
+    recovers the controller in place (a halted controller, or a failed
+    endpoint reset), or after a hibernation on a controller that lost its
+    state, where the driver finds every device again, a USB drive whose
     volume was mounted may stay at Code 31 until it is unplugged and
     plugged in again, or the controller is disabled and enabled in Device
-    Manager. Other devices come back. Seen in a virtual machine; not on
-    Windows 98 SE. The path is older than this release, which recovers on
-    more faults.
+    Manager; a restart of the drive's own device also cleared it. Other
+    devices come back. Seen in virtual machines, with the controller
+    polled as well; not on Windows 98 SE.
 
 Untested ground:
 
@@ -3506,8 +3981,20 @@ Untested ground:
     controller has been held.
 
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
-    specification, and read on no real controller and in no virtual
-    machine.
+    specification, and read on no real controller; value 4's programming
+    was read in virtual machines only.
+
+  * STAND BY ON WINDOWS 98 SE. Read only in QEMU virtual machines, where
+    Windows 98 SE itself does not resume reliably, with no USB controller
+    as well. With a USB disk attached the resume stopped before the
+    desktop under this driver and under NUSB's EHCI driver alike; with a
+    USB mouse alone, or behind a hub, it completed and the mouse worked.
+    Untested on real hardware: REMOVE USB DISKS BEFORE STAND BY.
+
+  * LOW- AND FULL-SPEED DEVICES BEHIND A BUILT-IN HUB WHOSE USB 2.0 SPEED
+    TABLE LISTS ONLY HIGH SPEED, as on the VIA VL805
+    (XhciUsb2HubSpeedFallback, section 9). Built from the specification
+    and never run on such a controller.
 
   * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
     controller, and at your own risk.
@@ -3525,9 +4012,11 @@ Untested ground:
 ==============================================================================
 
 {CONTENTS}
-Every driver binary in this download is called xhci98.sys or xhciuas.sys
-and every one carries driver version {VERSION}, so a copy taken out of its
-directory cannot be identified by name or by version.
+Both drivers are called xhci98.sys and xhciuas.sys in every directory, and
+every copy carries driver version {VERSION}, so a copy taken out of its
+directory cannot be identified by name or by version. (The -X86 directories
+also hold xhcimsi.sys, the 32-bit Vista and 7 helper, which has no 64-bit
+twin.)
 {TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
@@ -3539,14 +4028,15 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are eleven, all DWORDs. The
-install writes all eleven, each at the default it states below except
-XhciImodInterval250ns, which it writes as 160. It writes each only where it is
-missing, so a value you changed survives an install or update; to go back to
-the default, set it by hand, or delete the value and update the driver. If
-an earlier install left XhciImodInterval250ns at 500, the update keeps it;
-set it to 160 by hand. A value that is absent
-means the default each one states.
+Every value this driver reads from the controller's driver key. There are
+nineteen, all DWORDs, and the install writes all nineteen, each at the
+default it states below except XhciImodInterval250ns, which it writes as
+160, so every one is already in the key to change. The install writes
+each only where it is missing, so a value you changed survives an
+install or update; to go back to the default, set it by hand, or delete
+the value and update the driver. If an earlier install left
+XhciImodInterval250ns at 500, the update keeps it; set it to 160 by hand.
+A value that is absent means the default each one states.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
@@ -3629,17 +4119,34 @@ means the default each one states.
       2      "31 Hz" becomes 2000 Hz, "62 Hz" becomes 4000 Hz
       3      "31 Hz" becomes 4000 Hz, "62 Hz" becomes 8000 Hz
 
-  Any other value is off. A device behind a hub keeps its normal rate.
+  4 is described below; any other value is off. With 2 or 3 a device
+  behind a hub keeps its normal rate.
 
   THIS IS OUTSIDE THE xHCI SPECIFICATION, which sets 1 ms as the shortest
-  interval for these devices. A controller that refuses it is caught: the
-  device runs at its normal rate, and XHCISNAP's report counts it as
-  fastpoll.fallbacks. A controller that accepts it and then misbehaves
+  interval for these devices. With 2 or 3, a controller that refuses it is
+  caught: the device runs at its normal rate, and XHCISNAP's report counts
+  it as fastpoll.fallbacks. A controller that accepts it and then misbehaves
   cannot be caught; if anything misbehaves, delete the value and restart.
-  While it is set, ANY Low- or Full-Speed device on a root port that asks
-  for 16 to 63 ms is polled faster too. Read when the controller starts, so
-  restart after changing it. It has been read on no real controller and
-  in no virtual machine yet.
+  While 2 or 3 is set, ANY Low- or Full-Speed device on a root port that
+  asks for 16 to 63 ms is polled faster too. Read when the controller
+  starts, so restart after changing it. The faster rates of 2 and 3 have
+  been measured on no real controller and in no virtual machine; in
+  virtual machines 2 and 3 were read only ignoring value 4's codes.
+
+  Set to 4, it does something else: the rate the client driver chooses.
+  An interrupt endpoint whose polling interval in the configuration
+  Windows selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz;
+  every other interval is polled as the specification reads it, so 4 does
+  not speed up 16 to 63 ms, and 2 and 3 do not honour these codes. It
+  applies to a Low- or Full-Speed device on a root port only, and to a
+  High- or SuperSpeed device at a root port or behind a hub. Set the value
+  first and restart, then have hidusbf (or another filter) write 128, 129
+  or 130. A device that itself asks for 128 to 130 ms is polled that fast
+  too while it is 4; a code written while the value is not 4 means what
+  the number says (128 ms, or 4.096 s at High Speed and SuperSpeed; 32 ms
+  instead where XhciIntervalCap applies). A controller that refuses a code
+  is caught and the device polled every 1 ms. Value 4's programming was
+  read in virtual machines only.
 
   XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
   ....................................................................
@@ -3664,13 +4171,14 @@ means the default each one states.
   XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
   ..............................................................
 
-  Default 1: on, for an Intel xHCI with PCI device id 1E31, 8C31, 9C31,
-  8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy Bridge to
-  Broadwell, and C610/X99). It is read on every Intel controller and on no
-  other vendor's. On those chipsets each switchable
+  Default 0: off. Set to 1, it is on for an Intel xHCI with PCI device id
+  1E31, 8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy
+  Bridge to Broadwell, and C610/X99). It is read on every Intel controller
+  and on no other vendor's. On those chipsets each switchable
   connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and
   the xHCI controller, and firmware on "Auto", or with no setting,
-  typically leaves it on the USB 2.0 one. This driver moves
+  typically leaves it on the USB 2.0 one, where it works if a USB 2.0
+  driver is loaded. At 1 this driver moves
   those connectors to itself at each start and resume, and hands them back
   when its controller stops and at shutdown.
 
@@ -3678,11 +4186,29 @@ means the default each one states.
   connector is disconnected there when this driver starts and comes back
   under it, and the reverse at a stop: do not have a drive busy there then.
 
-  Set it to 0 to leave the connectors where firmware put them. ONLY 0
-  TURNS IT OFF; absent or any other number is on. Read when the controller
-  starts, so restart after changing it. A stop gives back only the
-  registers the driver itself wrote. Read on a Lenovo B490 (1E31) under
-  Windows 98 SE with NUSB; standby and the other five ids are untested.
+  At 0, absent or not a DWORD, the driver leaves the connectors where
+  firmware put them; 1 or any other number but 2 is on. Earlier releases
+  wrote 1, and an update KEEPS the value already there, so a machine
+  updated from one of them stays at 1 until it is changed.
+
+  PORTSW.VBS, beside the INF in each RELEASE and DEBUG directory, shows
+  and sets it on every xhci98 controller, with nothing to install, on
+  every Windows this driver runs on. Double-click it, or run
+      cscript //nologo portsw.vbs show     (or 1, or 0)
+  as an administrator. Read when the controller starts, so RESTART
+  WINDOWS after changing it. A stop gives back only the registers the
+  driver itself wrote. Read on a Lenovo B490 (1E31) under Windows 98 SE
+  with NUSB; standby and the other five ids are untested.
+
+  PORTSW-ON.BAT and PORTSW-OFF.BAT, beside it, do the same in one
+  double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
+  says to restart. On Vista and 7, right-click one and choose Run as
+  administrator. Then RESTART WINDOWS.
+
+  On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
+  only at USB 2.0 speed on a blue connector is most likely still on the
+  USB 2.0 controller, because the switchover is off by default. Run
+  PORTSW-ON.BAT and restart Windows.
 
   Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
   or not, for a chipset with these connectors that the list misses (on a
@@ -3697,10 +4223,38 @@ means the default each one states.
       registers of unknown meaning, at every start, resume, stop and
       shutdown, and the result is unknown. Use 2 only for an Intel chipset
       that has both an EHCI and an xHCI controller and that this driver
-      does not list, and at your own risk. Everyone else should leave the
-      value at 1.
+      does not list, and at your own risk. Everyone else should use 0
+      or 1.
 
   Value 2 has been read on no unlisted Intel controller.
+
+  XhciIntelIrqRoute  -  the Intel interrupt routing repair
+  ..............................................................
+
+  On the same Intel chipsets two chipset registers decide
+  which interrupt line the xHCI controller's interrupt reaches, and some
+  firmware points them at a different line from the one it tells Windows.
+  The Dell Latitude E7250's sends it to IRQ 16 while Windows listens on IRQ
+  21, so the driver never hears from the controller and every USB device
+  on it is slow or stops. At each start and resume the driver reads those
+  registers and, where this value allows it, points the interrupt at the
+  line Windows assigned. It changes nothing else.
+
+      1   the default, and the meaning of absent or any other value: only
+          on the E7250 (controller 8086:9CB1, subsystem 1028:062D, chipset
+          9CC3); elsewhere it reads and reports.
+      2   on any of the six controllers listed under XhciIntelPortSwitch,
+          each with one of its own chipset ids.
+      0   reads and reports, writes nothing.
+
+  IT DOES NOTHING on any other controller, NOTHING when the interrupt is a
+  message (MSI) rather than a line, as it can be on Vista and 7, and
+  NOTHING while the driver is polling the controller. On 2000, XP, Vista
+  and 7 it also writes nothing when Windows gave the controller an
+  interrupt below 16. XHCISNAP's report
+  has an "interrupt routing" section saying what it found and did. The
+  same register written by hand fixed the E7250 under XP x64; the
+  driver's own write has not yet been read on any machine.
 
   XhciTolerance  -  the controller tolerance, all together
   ........................................................
@@ -3766,7 +4320,103 @@ means the default each one states.
   machine whose USB devices misbehave can be compared both ways; leave it
   at 0 otherwise. Read when the controller starts.
 
-  THOSE ELEVEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciInterruptMode, XhciPollIdleMs, XhciPollActiveMs  -  how events arrive
+  .........................................................................
+
+  XhciInterruptMode, default 0: automatic. The interrupt line where it
+  works; a controller with no interrupt pin, or whose line the driver sees
+  raised and never delivered, is polled - the driver reads its events on a
+  timer. On Vista and 7 a message-signalled interrupt is used where Windows
+  grants one. 1 is the interrupt line only: a controller given no line -
+  on Vista and 7 also one given a message instead - fails to start (Code
+  10). 2 polls always, at the cost of more processor wake-ups. 3 is a
+  message-signalled interrupt only: on Vista and 7 the driver asks for the
+  message, and the controller fails to start (Code 10) if none is granted
+  or it cannot be connected (on 32-bit, when xhcimsi.sys is not running);
+  on 98 SE, ME, 2000 and XP, which have none, 3 always fails the start.
+  Any other value is 0.
+  Read when the controller starts: disable and enable it, or restart.
+
+  While polling, XhciPollIdleMs (default 50, held to 5000; 0 is 50) is how
+  often in ms the driver looks with nothing outstanding, and
+  XhciPollActiveMs (default 1, held to the idle period; 0 is 1) how often
+  with transfers outstanding - except that when only a mouse's or
+  keyboard's periodic transfers are outstanding it looks at that
+  endpoint's interval, held between the two. Windows runs the timer no
+  faster than its clock tick, so 1 means as often as Windows allows.
+  Polling adds up to one period to each transfer's completion. Neither
+  value matters while the interrupt works.
+
+  XhciMaxTransferKB  -  the UAS command size
+  ..........................................
+
+  Default 1024: the most one UAS command asks the drive to move, in KiB.
+  Any multiple of 4 from 64 to 2048 is taken; anything else is 1024. 64 is
+  what earlier releases always used - set it for a drive that misbehaves
+  at large commands. Bulk-Only devices keep Windows' own limits, and on
+  Windows 98 SE and ME Windows' mapping layer sends at most 64 KiB at a
+  time whatever this says. Windows reads the size when the drive starts,
+  so RESTART WINDOWS after changing it. An update keeps the number already
+  in the key.
+
+  ONE DRIVE MODEL CAN BE SET APART, on Windows 2000 and later, with the
+  value Windows' own Bulk-Only driver reads: MaximumTransferLength, a
+  DWORD in BYTES, under
+    HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP
+  (the drive's vendor and product IDs, four uppercase hex digits each).
+  65535 to 2097152 is taken, rounded to 4 KiB, and REPLACES
+  XhciMaxTransferKB for every drive of that model - so if you lower
+  XhciMaxTransferKB to test a drive, change or delete that value too.
+  Restart after setting it.
+
+  XhciWideMap  -  two transfer pieces at once
+  ...........................................
+
+  Written as 0 by the install; 0 or absent is off. Set to 1 and restart
+  Windows, and on Windows 2000 and later the driver gives a large bulk
+  write on any device, and a large bulk read on a UAS drive's streams, to
+  the controller two pieces at a time; a UAS drive at SuperSpeed may also
+  take one command's data as a single piece of up to 2 MiB. It does so
+  only where the machine's DMA needs no translation, which it checks at
+  every start and for each transfer; under Driver Verifier's DMA checks,
+  or where the DMA does need translation, every transfer goes one piece
+  at a time as before. It is off by default because a fault, though
+  unlikely, would show as wrong data rather than an error: if a large
+  copy misbehaves with it on, set 0 and restart.
+
+  XhciSelectiveSuspend  -  putting idle devices to sleep
+  ......................................................
+
+  Written as 0 by the install; 0, absent or any number but 1 is off, and
+  the driver then suspends no device. Set to 1 and restart, and a USB 2.0
+  or SuperSpeed device is suspended when Windows asks and woken when
+  Windows asks again or the device signals a remote wake. Hubs, the root
+  hub, a composite device's own entry and the controller are never
+  suspended. Read in virtual machines only so far; leave it off unless
+  you are testing it, and if a device misbehaves with it on, set 0.
+
+  XhciUsb2HubSpeedFallback  -  Low- and Full-Speed IDs behind a hub
+  .................................................................
+
+  Written as 1 by the install; 1, absent or any number but 0 is on.
+
+  Some controllers reach Low- and Full-Speed devices only through a USB
+  2.0 hub built into the chip, and the speed table of the USB 2.0 port
+  that hub hangs from names High Speed alone; the VIA VL805 (1106:3483) is
+  one. Every mouse, keyboard and other Low- or Full-Speed device on such a
+  controller sits behind that hub, and the driver must write a speed ID
+  for each of them from that table. With this on, such a device gets the
+  standard speed ID (Full Speed 1, Low Speed 2) when the table names
+  neither that speed nor that number; a table that names them is
+  followed, a controller with no table or one that lists Low and Full
+  Speed is not affected, and a device on a root port of its own is never
+  given one. It is on by default because without it every such device on
+  such a controller is refused. Set 0 and restart to refuse them again.
+  XHCISNAP shows whether it is on and counts the devices given an ID
+  (Usb2HubSpeedFallbacks) and those still refused (TopoBehindHubNoSpeed).
+  It was built without the hardware and has never run on a VL805.
+
+  THOSE NINETEEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete
@@ -3821,8 +4471,12 @@ means the default each one states.
 ==============================================================================
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
-applies to xhci98.sys, xhciuas.sys and their INFs, which are this project's
-own work.
+applies to this project's own code in xhci98.sys, xhciuas.sys and the 32-bit
+helper xhcimsi.sys, and to their INFs. The 64-bit xhci98.sys and xhcimsi.sys
+also carry a few small support routines that Microsoft's driver kit links in
+(a stack-cookie check, and in xhcimsi.sys a device-security helper), which
+are not this project's work; docs/contributing/legal-provenance.md, in the
+project's source repository, records them.
 
 No Microsoft file is in this download. The usbd.sys and usbui.dll the
 install needs are copied by Windows from your own Windows installation
@@ -3925,7 +4579,26 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 "@
     }
 
+    # **A TEST build says so in the readme's first lines** (-TestLabel). The
+    # placeholder sits alone on the blank line under the title box, so an
+    # ordinary cut renders that blank line exactly as before; a test cut puts
+    # the banner there, between two blank lines.
+    $testBanner = ""
+    if ($TestLabel -ne "") {
+        $testBanner = @"
+
+******************************************************************************
+ TEST $Version, $TestLabel.
+ This is a test build, not a release. It is not published, and a later
+ release replaces it. Section 10, its release history entry, says what it
+ is for and what it changes.
+******************************************************************************
+
+"@
+    }
+
     $readme = $template.
+        Replace("{TESTBANNER}", $testBanner).
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
         Replace("{RELEASEDIR}", $readmeReleaseDir).
@@ -3943,7 +4616,10 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 
     # Nothing may reach the reader still carrying a placeholder: a typo in one
     # would otherwise ship as literal braces in a file nobody re-reads.
-    if ($readme -match '\{[A-Z]+\}') {
+    # Case-sensitive (-cmatch): every placeholder is upper case, and the
+    # readme legitimately carries lower-case braces, such as bcdedit's
+    # {current} in the x64 test-signing text; -match ignores case.
+    if ($readme -cmatch '\{[A-Z]+\}') {
         throw "readme template left an unsubstituted placeholder: $($Matches[0])"
     }
 
@@ -4042,13 +4718,16 @@ WHAT THE VERDICT MEANS
       controller is being hidden from you - it is a limit of testing from
       DOS, and the same limit applies to every machine.
 
+  LOOKS QUALIFIED WITH CAVEATS
+      The same, but the controller has no interrupt pin. The driver reads
+      its events on a timer instead (polling), or on Windows Vista and 7
+      may take a message-signalled interrupt; the line says whether the
+      controller offers one. Go ahead and install.
+
   DISQUALIFIED
       Something it can see rules the machine out. It will say which:
 
         - no xHCI controller present
-        - NO LEGACY INTERRUPT PIN. This is the one that cannot be worked
-          around. Neither Windows 98 nor Windows 2000 can use the modern
-          interrupt mechanism such a controller would need.
         - the controller's memory window is unusable, or sits above 4 GB
         - no USB 2.0 ports on the controller
 
@@ -4093,6 +4772,11 @@ READ-ONLY MODES - these change nothing on the machine
                     controller's memory window only if the firmware has
                     already switched it on, and switches nothing on itself
   --no-active       another name for --probe-only
+  --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
+                    chipset's interrupt routing against N, the IRQ Device
+                    Manager shows for the controller under the system in
+                    question. Accepted only beside --quick or --probe-only;
+                    alone it is a usage error
 
 
 MODIFIERS - these say what to do with the report, not what to run
@@ -4109,6 +4793,9 @@ MODIFIERS - these say what to do with the report, not what to run
                     name the file explicitly if you pass both
   --done-flag FILE  create FILE only if the run finishes normally, so a
                     batch file can tell a crash apart from a bad verdict
+  --no-sysinfo      do not read the machine's description (SMBIOS,
+                    processor, memory, DOS version) for the report's
+                    header; the header then says it was skipped
   --help, -h, /?    a longer help text, printed by the program itself
 
 
@@ -4152,8 +4839,14 @@ WHAT IT RETURNS TO DOS
   1   not qualified, or a read-only run - which cannot pass tests it does
       not run, so 1 is the normal result of the commands above
   2   the command line was wrong, or no controller of that kind is here
+  3   a full active run whose controllers all qualified, at least one only
+      WITH CAVEATS (no working interrupt, so the driver polls it)
 
   The verdict on screen is what to read. These are for batch files.
+
+  The report's header names the machine it ran on - make, model and BIOS,
+  processor, memory and DOS version - and never a serial number, a UUID
+  or an asset tag, so a log can be posted publicly as it is.
 
 
 THE .MAP FILE
@@ -4386,6 +5079,11 @@ Level 2 is the one to use. The others exist and a maintainer may ask for one:
                it as an attachment if asked.
   MYDUMP.PSC   The raw port register values, for the same audience.
 
+The report's header names the system it was taken on - the Windows
+version, BIOS, processor and memory - and never a serial number or a
+name. If reading those details causes a problem on your machine, add
+-nosysinfo to step 4; the header then says they were skipped.
+
 
  IF NOTHING COMES BACK
 ------------------------------------------------------------------------------
@@ -4585,6 +5283,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # transaction: `Move-Item` within one volume is a rename, and `releases\` is
     # one directory, so the aside and the staging tree are both on the same
     # volume as the destination by construction.
+    # The whole staged release, the tools' directories included, whatever
+    # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
+    # before -Force moves an existing release aside (round 2, finding 4),
+    # so a refusal leaves releases\ as it was.
+    Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
         Write-Warn ("-Force: replacing the existing {0}" -f $finalRoot)

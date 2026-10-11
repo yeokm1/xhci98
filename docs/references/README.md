@@ -323,3 +323,49 @@ sections 10 and 11 were verified against it on 2026-10-04.
   Cite the printed number, as `USB 3.2 p.N`, and check it the way the xHCI
   section above checks its own: the number sits in the running head as
   `- N -`, after "Revision 1.1 June 2022".
+
+## Intel PCH datasheets (issue 12, the `D20IR` routing quirk)
+
+These are fetched for issue 12 and roadmap task 36.3, the
+`XhciIntelIrqRoute` quirk. They are the authority for:
+- the RCBA register (LPC `D31:F0`, offset `F0h`);
+- `D20IP` (RCBA+`3128h`, bits 3:0 = the xHCI's pin) and `D20IR`
+  (RCBA+`3160h`, 16-bit, bits 2:0 = the INTA route, 0-7 = PIRQA#-H#);
+- the APIC-mode mapping of PIRQA#-H# to IRQ16-23.
+
+Intel's servers refuse scripted downloads (HTTP 403), so fetch these in a
+browser. The owner fetched them on 2026-10-08. Their text dumps
+(`<name>-dump.txt`, made with `pdftotext -layout`) sit beside them, and the
+dumps are not authoritative.
+
+| Save as | Version | SHA-256 | What it settles |
+|---|---|---|---|
+| `7-series-chipset-pch-datasheet.pdf` | 7 Series / C216 PCH datasheet, order no. 326776-003, June 2012 | `558cbf7e82b9f5ae2dfd366ce9e26b1edb646bc93e3a102be4a6d3799e60fded` | `D20IP` 10.1.25 p.406, `D20IR` 10.1.33 p.414, RCBA 13.1.40 p.493. The device IDs are not in it; it defers to its specification update |
+| `8-series-chipset-pch-datasheet.pdf` | 8 Series / C220 PCH datasheet, order no. 328904-003, May 2014 | `1239037e57bcfa9b753c0e0c799a32f09e9705670cd2890f183c0bed7f19ec98` | `D20IP` 10.1.25 p.343, `D20IR` 10.1.34 p.350, RCBA 12.1.40 p.400. LPC device IDs `8C44`-`8C5C` in Table 1-2 |
+| `4th-gen-core-family-mobile-i-o-datasheet.pdf` | Mobile 4th Gen Core Processor Family I/O datasheet (Lynx Point-LP), document no. 329003-003, February 2015 | `74ee3eb507145bd47fa173221580d405455364f0c62cf5b5e1432051ff8f595a` | `D20IP` 8.1.23 p.335, `D20IR` 8.1.31 p.342 (its summary table labels the `3160h` row "Device 22"; the register page is right), RCBA 10.1.40 p.403. xHCI `9C31`, LPC `9C41` (engineering sample), `9C43` (Premium) and `9C45` (Base) in the ID table, p.63 |
+| `9-series-chipset-pch-datasheet.pdf` | 9 Series PCH datasheet, order no. 330550-002, June 2015 | `45ea509e826e451fe289e7f4c03eb28c4c28fb3a7f69dc1131266a547d3ec50e` | `D20IP` 10.1.25 p.336, `D20IR` 10.1.34 p.343, RCBA 12.1.40 p.393. xHCI `8CB1`, LPC `8CC1`/`8CC2` (engineering samples), `8CC3`, `8CC4` and `8CC6` |
+| `core-m-processor-platform-i-o-datasheet.pdf` | Intel Core M Processor Family I/O datasheet (Wildcat Point-LP), document no. 330837-002, October 2014 | `99fd244d6830a1d6cc54c4d7e7ed34dafc1184d3695765bb335fdf06f1281c51` | `D20IP` 8.1.23 p.337, `D20IR` 8.1.31 p.344 (its summary table labels the `3160h` row "Device 22"; the register page is right), RCBA 10.1.40 p.405. xHCI `9CB1` at revision 03, matching the E7250, in Table 1-4 p.61. Its LPC rows are for the Y-processor line (`9CC1`, `9CC6`, `9CC7`, `9CC9`). The E7250's U-line LPC `9CC3` is not in it; it was read from the machine itself (issue 12, `lpc.jpg`) |
+| `x99-chipset-pch-datasheet.pdf` | C610 Series / X99 PCH datasheet, order no. 330788-003, October 2015 | `7168d555962ad39a74fd780cb0cf1500427c023bc185b4ce922819dc9e9f7860` | `D20IP` 10.1.34 p.288, `D20IR` 10.1.43 p.294, RCBA 12.1.40 p.350. xHCI `8D31` in Table 1-3. **Erratum:** Table 10-1's rows from `3110h` are misaligned (it lists `D20IP` at `3140h` and `D20IR` at `31FEh`). The register pages give `3128h` and `3160h`, as the other datasheets do |
+| `pci_ids.h` | Linux `include/linux/pci_ids.h`, master as fetched 2026-10-08 ([GitHub](https://github.com/torvalds/linux/blob/master/include/linux/pci_ids.h)) | `020fac001871c0f8441c1294f787231fb6cfbf2c55915ca8f918262e2db4487c` | `PANTHERPOINT_XHCI` `1E31` and the 7-series LPC range `1E40`-`1E5F`. It has no entries for the 8/9-series or C610 xHCI. GPL-2.0; kept here as a reference copy, not used by the build |
+
+Every chipset the quirk lists is covered above. Only the 7 Series
+specification update is not fetched; it would give the `1E31` LPC device
+IDs, which the 7 Series datasheet leaves to it. Linux's `pci_ids.h` range
+stands in for it.
+
+The Licence limits section above applies to these as well: Intel's
+documents are fetched per machine, never tracked.
+
+## VIA Labs VL805 datasheet (issue 13, GitHub issue 18)
+
+Cited by issue 13 (`docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md`)
+for the VL805's architecture and one register. No official download URL is
+recorded: the owner's copy was placed on the maintainer's disk on
+2026-10-10 and copied into this directory on 2026-10-11 (git-ignored,
+like every PDF here); it is not redistributed. Its text was extracted
+with `pdftotext -layout` into `DS_VLI_VL805_093-dump.txt` beside it; the
+extract is not authoritative.
+
+| Name | Version | SHA-256 | What it settles |
+|---|---|---|---|
+| `DS_VLI_VL805_093.pdf` | VIA Labs, "VL805 4-Port USB 3.0 Host Controller" datasheet, Revision 0.93, Sep. 4, 2014 (28 pages) | `be2d93a38e80331596da351dbb9a70c34ee61afa252fb4e0608d4cbf991bf305` | Four downstream ports of every speed, section 1 p.4; the four USB 2.0 pin pairs `USB2D1`-`USB2D4`, section 4 p.8; PCI configuration `50-53h` "XHCI MCU Firmware Version" (`FW_VERSION`, RO), section 6 p.14; `HCSPARAMS1` default `05000420h`, section 7 p.18; `HCCPARAMS` default `002841EBh`, p.20. It says nothing about speed tables |

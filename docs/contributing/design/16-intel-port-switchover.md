@@ -24,6 +24,27 @@ convergence after the code; the documents of section 13 were changed at
 task 35.6 (2026-10-07). It ships in `2.2.0.0`, read so far on host tests
 alone (section 10).
 
+Revision 4, 2026-10-09, for roadmap-hcd task 36.42 (Phase 36, release
+`2.3.0.0`): **the switchover is off by default.** `XhciIntelPortSwitch`
+absent, of another type or unreadable now means off, as 0 does, and both
+INFs write it at 0 (section 5); 1 and 2 mean what they meant. The owner
+took SweetLow's argument (issue 17, comment 6082858626): a connector the
+driver does not route stays on EHCI and works there under the EHCI driver,
+at High Speed, so routing it unasked trades a working connector for one
+under this driver. A user script, `portsw.vbs`, shows and sets the value
+(section 5a). Its decisions are section 11's third list, its documents
+section 14. Nothing else in this record changes: the gate, the Sony
+exemption, the sequence, the lifetime and value 2 are as revision 3 left
+them.
+
+Revision 5, 2026-10-11, for roadmap-hcd task 36.56 (a re-cut of release
+`2.3.0.0`, its driver binaries unchanged): two batch files beside the
+script, `portsw-on.bat` and `portsw-off.bat`, which set 1 or 0 through it
+in one double-click (section 5a, "The batch files"). The owner asked for
+them at the E7250 bench, where a USB 3 stick copied at USB 2.0 speed with
+the switchover at its default 0. Its decision is section 11's twelfth, its
+documents section 15. Nothing in the driver changes.
+
 ## 1. What is asked, and what is not
 
 A tester reported Ivy Bridge machines on which `xhci98.sys` started cleanly
@@ -170,30 +191,36 @@ only check, as at 1. The README and the release notes say so in these words:
 > not been read - it writes registers of unknown meaning, at every start,
 > resume, stop and shutdown, and the result is unknown. Use 2 only for an Intel chipset that
 > has both an EHCI and an xHCI controller and that this driver does not
-> list, and at your own risk. Everyone else should leave the value at 1.
+> list, and at your own risk. Everyone else should use 0 or 1.
 
 ## 5. The switch: `XhciIntelPortSwitch`
 
-A REG_DWORD in the controller's driver key (owner, 2026-10-05):
+A REG_DWORD in the controller's driver key (owner, 2026-10-05; the default
+reversed 2026-10-09, revision 4):
 
 | Value | Effect |
 |---|---|
-| absent, or not a DWORD | on, on a listed controller: the default |
+| absent, not a DWORD, or unreadable | off: the default since revision 4 (on, on a listed controller, until then) |
 | 0 | off: this start reads PCI offset 0 and the value, and makes no switchover write, as every release to `2.1.0.0` made none |
 | 1, or any other number but 2 | on, on a listed controller |
 | 2 (revision 3) | on, on every Intel controller, listed or not: section 4a, at the user's own risk |
 
-Only an explicit 0 turns it off, so a mistyped value cannot disable the
-feature. Until revision 3, 2 was "any other number"; it now means the
+Only a DWORD that is not 0 turns it on. Until revision 4 it was the
+reverse - only an explicit 0 turned it off, so that a mistyped value could
+not disable the feature - and revision 4 keeps the meaning of every DWORD
+and changes only what a missing or unusable value means. Until revision 3,
+2 was "any other number"; it now means the
 bypass, and only an exact 2 does - so the one value that reaches unlisted
 silicon has to be typed on purpose, and a stray number keeps the gated
 meaning. On a listed controller 2 and 1 do the same thing, and the log
 says the gate was not bypassed (section 8). Absent is the case after text-mode Setup's F6 install, since
-`txtsetup.oem` writes no values. Both INFs write it at 1 on every controller
-install path with `0x00010003` (FLG_ADDREG_NOCLOBBER), under task 34.1's
-rule: an install writes it only when it is missing, so a user's 0 survives
-an update. The INF gate's `VAL-*` table requires it and its default, and the
-footprints carry it.
+`txtsetup.oem` writes no values; it is off there too. Both INFs write it at 0
+on every controller install path with `0x00010003` (FLG_ADDREG_NOCLOBBER),
+under task 34.1's rule: an install writes it only when it is missing, so a
+user's 1 survives an update - and so does the 1 that `2.1.1.0` and `2.2.0.0`
+wrote, so a machine updated from either stays on until the user changes it
+(the release notes say so, and how). The INF gate's `VAL-*` table requires
+it and its default, and the footprints carry it.
 
 It is read at each start, on every Intel controller since revision 3 (on a
 listed one only before it), and never on another vendor's, so a change takes
@@ -202,10 +229,119 @@ restart). It exists for a machine whose switchable connectors must stay
 EHCI's: a device that works better under that machine's EHCI driver, or
 another system on the same disk that expects firmware's routing.
 
+Why off by default (revision 4): on these chipsets the connectors firmware
+leaves on EHCI work there under any EHCI driver - NUSB's or SweetLow's on
+Windows 98 SE and ME, the system's own on 2000 and later - at High Speed.
+Routing them by default moves a working connector to this driver at every
+start and back at every stop, disconnecting whatever was on it, on machines
+whose owners did not ask for SuperSpeed there. The user who wants SuperSpeed
+on the blue connectors turns it on.
+
 Setting 0 does not restore firmware's routing; it only stops this driver
 writing. After a restart firmware sets the routing again. But a disable and
 enable in Device Manager after setting 0 leaves the connectors where the
 disable's release put them, on EHCI, whatever firmware had chosen at boot.
+
+## 5a. The user script: `portsw.vbs` (revision 4)
+
+`src\portsw.vbs`, staged at the root of every package directory beside the
+INF, shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0
+or 1, then says a restart is needed. It is Windows Script Host VBScript,
+because that is the one way to read and write a REG_DWORD that every target
+has with nothing installed: Windows 98 SE ships Script Host 1.0 and ME 2.0,
+and neither has `reg.exe`; Windows 2000 has no `reg.exe` until its Support
+Tools are installed; XP to 7 have both. A batch file driving `regedit /s`
+could write a `.reg` file on every target but cannot read a value back
+without `regedit /e` and text parsing that differs between the 9x and NT
+export formats, and a console tool built with MSVC 6 would need its own
+gates and packaging for what is one value. Script Host's `RegRead` and
+`RegWrite` take a REG_DWORD on all of them.
+
+Which key: the controller's driver key is
+`HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` on 98 and ME and
+`HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`
+on the NT systems, with NNNN varying. Script Host cannot list subkeys, so
+the script asks WMI's registry provider (`StdRegProv.EnumKey`) on the NT
+systems, and on 98 and ME, where WMI is not part of a stock install, has
+`regedit /e` export the class key to a temporary file and reads its section
+headers; only if neither answers does it probe every number from `0000` to
+`9999`, which takes minutes (a gap in the numbers says nothing about the keys
+after it, so no shorter probe is complete). A key is this driver's controller when its `DriverDesc` is the
+INFs' `XhciDesc` ("xHCI98 USB 3.x eXtensible Host Controller", which
+neither the root hub nor a hub carries), and on 98 and ME also when its
+`NTMPDriver` is `xhci98.sys`. Every such key is set, so a key left from an
+earlier PCI position is set too, harmlessly. It never writes 2: that value
+is the user's own risk (section 4a) and is set by hand.
+
+On Vista and 7 a write without the administrator token fails; the script
+then starts itself once more through `ShellExecute` with the `runas` verb,
+which raises the elevation prompt, and exits with 3, since it cannot know
+the elevated copy's result. Elsewhere a refused write is reported, with the
+keys already set named, and the advice to run it as an administrator.
+
+The packaging gates hold it: `make-package.ps1` stages it, `make-release.ps1`
+publishes it in every flavour directory, the packager's self-tests check it
+is staged byte for byte, ASCII with CRLF, and looks for both INFs' `XhciDesc`,
+and the source charset gate reads it as a file the 1998-era tools read.
+
+### The batch files (revision 5)
+
+`src\portsw-on.bat` and `src\portsw-off.bat` are staged wherever
+`portsw.vbs` is, at the root of every package directory. Each shows the
+value (`cscript //nologo portsw.vbs show`), stops there if that found no
+controller, sets 1 or 0 (`cscript //nologo portsw.vbs 1` or `0`), says
+that Windows must be restarted, and ends with `pause`, so a double-clicked
+window stays open to be read. Neither sets 2.
+
+One file serves both command interpreters, so it is written to the
+smaller one. Windows 98 SE and ME run it under `COMMAND.COM`, which has no
+`%~dp0`, no `cd /d`, no `setlocal`, no `if /i` and no `goto :eof`, and
+which reads `<`, `>` and `|` as redirection even on a `rem` or `echo`
+line. The split is the first command after `@echo off`:
+
+    if "%OS%"=="Windows_NT" goto nt
+    goto run
+    :nt
+    cd /d "%~dp0"
+    :run
+
+On 98 and ME `OS` is not set, the test is false, and `goto run` jumps over
+the one line that needs `cmd.exe`, so `COMMAND.COM` never executes it.
+`cd /d "%~dp0"` is there because Run as administrator on Vista and 7
+starts a batch file in `System32`; 2000 and XP take the same line. On 98
+and ME the working directory is the batch file's own when it is
+double-clicked in Explorer or typed at a prompt in its directory, which is
+how it is meant to be run; started from anywhere else it does not find
+`portsw.vbs` and says where to run it from.
+
+From `:run` both interpreters run the same lines, every one of them
+`COMMAND.COM` syntax: `if not exist portsw.vbs`, the two `cscript` calls,
+`if errorlevel` tests on what `portsw.vbs` returned, `echo` and `pause`.
+After the set, exit code 3 means the script handed the write to an
+elevated copy of itself (Vista and 7 without the administrator token): the
+batch file says that if the prompt was allowed the result is in the window
+that opened, that if it was not nothing changed (the script's exit code is
+3 either way), and that next time it should be started with right-click,
+Run as administrator. Exit
+code 1 means a write was refused, possibly after other controllers' keys
+were written (the script names them): the batch file says the change did
+not complete and to read the lines above, and on the NT systems alone (a
+second `if not "%OS%"=="Windows_NT"` test) to run it as an administrator,
+by right-click on Vista and 7. Only exit code 0 is followed by the restart
+line.
+
+They are ASCII with CRLF endings, held by the source charset gate (`.bat`
+is one of its 1998-era kinds), the batch-file line-ending gate, and the
+packager's self-tests. Those hold every line to a short list of what both
+interpreters run - `rem`, `echo`, a label, `goto`, `if not exist
+portsw.vbs`, `if errorlevel`, `if not "%OS%"=="Windows_NT"`, the
+`cscript //nologo portsw.vbs` calls and `pause` - rather than search for
+constructs one of them lacks, and exempt only the split's OS test and its
+`cd /d` line. They also pin the split itself, no `goto nt` but the first,
+no redirection, pipe or percent character on an `echo` or `rem` line, no
+line longer than `COMMAND.COM`'s 127 characters, exactly one value set,
+and the order of the calls and their tests; a set of broken controls
+proves the checker refuses each.
 
 ## 6. When
 
@@ -328,7 +464,8 @@ not reached. The gate (`XhciPswGate`), the board exemption
 (`XhciPswBoardRefused`) and the value rule are pure too. Revision 3 replaces
 `XhciPswEnabled(found, value)` with `XhciPswMode(vendorDevice, found, value)`,
 which returns `XHCI_PSW_MODE_OFF` (0), `XHCI_PSW_MODE_GATED` (1: a listed
-controller, the value not an explicit 0) or `XHCI_PSW_MODE_BYPASS` (2: an
+controller, the value found and not 0 since revision 4, not an explicit 0
+before it) or `XHCI_PSW_MODE_BYPASS` (2: an
 Intel controller the list does not name, the value found and exactly 2);
 `XhciPswIntel(vendorDevice)` says whether the value is read at all.
 
@@ -544,6 +681,28 @@ Taken in this revision, for the review to test: only an exact 2 bypasses;
 a write not confirmed accepted is not in the set; a release does not empty the
 set; the decision and the set move into the pure core (section 7a).
 
+Revision 4 (owner, 2026-10-09, roadmap-hcd task 36.42, after SweetLow's
+issue 17 comment 6082858626):
+
+10. The default is off: both INFs write 0, and the driver reads absent, a
+    value of another type or an unreadable one as 0. This reverses decision
+    3's default; 1 and 2 keep their meanings.
+11. A user script sets 0 or 1 on every xhci98 controller and says a restart
+    is needed (section 5a). An existing install keeps its value under the
+    don't-overwrite flag, and the release notes tell such a user how to use
+    the script.
+
+Taken in this revision: the script is Windows Script Host VBScript and
+finds the key by `DriverDesc` (section 5a); it never writes 2.
+
+Revision 5 (owner, 2026-10-11, roadmap-hcd task 36.56, at the E7250
+bench):
+
+12. `portsw-on.bat` and `portsw-off.bat` ship beside `portsw.vbs` in every
+    package directory and set 1 or 0 through it, in the re-cut of
+    `2.3.0.0`, with no change to a driver binary. There is no batch file
+    for 2: it stays a hand edit.
+
 ## 12. What changes in the documents (task 34.4)
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
@@ -582,3 +741,31 @@ and switchover subsection and the release notes' switchover section and
 say a stop gives back only what a route wrote; the readme template's
 section 9 the same; `hardware-testing.md`'s Intel section; `failure-diagnosis.md`
 row 7; `source-files.md`.
+
+## 14. What changes in the documents (revision 4, task 36.42)
+
+- The README's registry table and switchover subsection, and its package
+  listing: the default 0, the script, and the update that keeps a 1.
+- The release notes: the switchover section (off by default, "Turning it
+  on, or off again: `portsw.vbs`"), the update section, the registry
+  settings' introduction and the `XhciIntelPortSwitch` table, the known
+  limitation on a blue connector's device, and section 4a's last sentence.
+- The readme template (`make-release.ps1`): the same in section 9, the
+  limitation, and `portsw.vbs` in each directory's contents.
+- `xhci-programming.md`'s `XUSB2PR` section; `failure-diagnosis.md` row 7;
+  `release-acceptance-test.md` 1.2 and 8.7; `xhciqual/hardware-testing.md`'s
+  Intel section; design record 13's value rows; `source-files.md` for
+  `portsw.vbs`; `build-and-test.md` for the package's new file and the
+  script's legs.
+
+## 15. What changes in the documents (revision 5, task 36.56)
+
+- The README's switchover section and package listing: the two batch files,
+  Run as administrator on Vista and 7, and the symptom that sends a user to
+  them - a USB 3 stick that copies at USB 2.0 speed on a 7-, 8- or 9-series
+  machine.
+- The release notes' switchover section and package contents, the same.
+- The readme template (`make-release.ps1`): the same in section 9, and the
+  two files in section 3 and in each directory's contents.
+- `source-files.md` for the two files; `build-and-test.md` for the
+  package's new files and their legs.

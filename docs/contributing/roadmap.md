@@ -126,6 +126,22 @@ on branch `1.2.0.0`), and the successor's one cut is `2.0.0.0` after Phase 31. I
 `design/13-superspeed-hcd.md`, grown from the future-plans page that moved
 there the same day.
 
+**Since then** (2026-10-12): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
+`2.1.1.0` (Phase 34), `2.2.0.0` (Phase 35) and `2.3.0.0` (Phase 36) are
+cut. **Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
+routing, polled event delivery, MSI on Vista and 7, three items of
+GitHub issue 17, UAS commands of 1 MiB (36.21 to 36.27, a plan
+reviewed clean at `86db9a3`), and selective suspend, off by default
+(36.28 to 36.41, joined 2026-10-09), and 36.42 to 36.48 taken in during
+the phase (the port switchover off by default, composite devices as
+devnodes, the 98 SE hot-plug hangs, string descriptors, a surplus-endpoint
+mouse, and the system named in the tools' reports). Its plan was reviewed
+to a clean round at `ef7fbac`. It was cut as `2.3.0.0` (`DriverVer`
+`10/12/2026`) after the owner's bench of 2026-10-11, and the bench work
+that could not be read moved to planned work, "Bench follow-up after
+`2.3.0.0`". No phase is open.
+[`roadmap-hcd.md`](roadmap-hcd.md), "Phase 36", is the record.
+
 ---
 
 ## Batching Convention
