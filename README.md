@@ -278,7 +278,21 @@ With `2`, on a chipset without these registers (every Intel chipset from the 100
 
 A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts, and comes back under it, so do not have a drive busy on a blue connector at that moment.
 
-The value is read when the controller starts, so restart Windows after changing it. `portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`: double-click it, or run `cscript //nologo portsw.vbs show` (or `1`, or `0`) as an administrator.
+The value is read when the controller starts, so restart Windows after changing it.
+
+`portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in the package directory:
+
+```
+cscript //nologo portsw.vbs show
+cscript //nologo portsw.vbs 1
+cscript //nologo portsw.vbs 0
+```
+
+- `show`: the value on every xhci98 controller.
+- `1`: turns the switchover on.
+- `0`: turns it off.
+
+Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
 ### The Intel 7/8/9-series interrupt routing repair
 
@@ -423,6 +437,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | Windows XP installed with the F6 floppy needs a PS/2 or built-in laptop keyboard | Setup copies Windows' own HID and USB helper files only with Microsoft's own USB controller drivers, so in GUI-mode Setup the USB keyboard and mouse wait for its device install, which first asks about the unsigned driver (default No). A USB-only keyboard cannot answer it; a PS/2 or built-in laptop keyboard can. Windows 2000 does not ask. |
 | Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |
+| Windows ME: Shut Down with an unopened USB disk | Shut Down can hang if a USB disk is attached but has not been opened since Windows started. ME does the same on Microsoft's own USB stack. Open the disk once (a `dir` of it is enough), or remove it, before shutting down. |
 
 ### Not planned, though a later release might address them
 

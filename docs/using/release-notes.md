@@ -1910,6 +1910,10 @@ or says it was found by reading the code.
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
+- **Windows ME: Shut Down can hang with a USB disk that has not been opened
+  since the start.** Open the disk once (a `dir` of it is enough), or
+  remove it, before shutting down. ME does the same on Microsoft's own USB
+  stack, and `2.2.0.0` did too.
 - **Windows ME: a UAS drive as the first USB storage device shows Code 2.**
   On a fresh Windows ME, ME has not yet copied its own `USBNTMAP.SYS` and
   `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is

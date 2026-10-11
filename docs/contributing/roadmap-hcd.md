@@ -1470,3 +1470,31 @@ its own; it joins the phase the owner opens it in.
   is set, and what it reads. Code offered for it is taken only under
   `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
   from Microsoft's binaries.
+
+## Planned - S5 shutdown latch
+
+Goal: no transfer, command or port request can wait forever after the
+controller's D3 at shutdown (S5). Hardening, not tied to an observed hang:
+Phase 36's matrix traced Windows ME's Shut Down hang with an unopened USB
+disk to ME itself (the same hang on ME's own UHCI + USBSTOR stack and on
+`2.2.0.0`; the xhci98 trace shows nothing sent to the driver after the
+D3). Reading the code found the gap (`2.2.0.0` has it too): after the D3 a
+transfer URB is published to the halted ring and waits for a resume
+(`hcd_io.c`, HcdIoMapped); command URBs and RESET_PORT wait on
+HcdCfgService, skipped while the controller is unpowered (`hcd_enum.c`);
+nothing times out, and at S5 no resume comes.
+
+Status: not opened, unnumbered and unversioned (orchestrator, 2026-10-11;
+owner to confirm).
+
+- [ ] S5L.1 the latch: at a controller Dx whose system state is
+  PowerSystemShutdown, including the direct-transition path, set it before
+  the halt; after it, refuse new transfer and command URBs with
+  `USBD_STATUS_DEVICE_NOT_RESPONDING` through HcdIoRefuseLater (never
+  DEVICE_GONE, which HcdIoDeferred parks), complete RESET_PORT inline (its
+  IRP carries no URB, and the refusal DPC reads Argument1 as one), and
+  after the halt flush what is already queued with the same status. S3 and
+  S4 keep hold-until-resume. A full Codex loop under record 13 section 5's
+  lock model, IRQL tags, stage A PowerDown and 36.35's no-thread-creation
+  rule. Legs: shutdown with devices on ME, 98 SE (the 36.35 case), 2000,
+  XP and 7 x64.
