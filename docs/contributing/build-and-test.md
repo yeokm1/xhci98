@@ -6138,10 +6138,14 @@ Rule ids are grouped by the failure they prevent:
   21.8) and which finds all four on disk (task 22.3). The
   `TGT-*` family and the `usbd-sources.expected` manifest they checked went
   with the packaged Microsoft files in 1.0.0.1.
-- `SUSP-*`: no idle-suspend registry value anywhere in either file, machine-wide
-  or per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
-- `VAL-*`: the per-device registry values the miniport reads, present on
-  both paths with the required type and default.
+- `SUSP-*`: none of the OS's idle-suspend registry values
+  (`DisableSelectiveSuspend`, `HcDisableSelectiveSuspend`,
+  `HcDisableAllSelectiveSuspend`) anywhere in either file, machine-wide or
+  per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
+  The driver's own `XhciSelectiveSuspend` is a `VAL-*` row, not one of these.
+- `VAL-*`: every registry value the driver reads, nineteen since task 36.51,
+  present on every install path with the required type, flags and default
+  ("The registry values the driver reads", below).
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
 
 `-PackageDir` checks a staged media directory against
@@ -6175,6 +6179,77 @@ derivation that mixes in measurements is neither. The output is tracked as
 `scripts\inf-gate\expected-footprint.txt` and compared by the gate's own
 self-tests, so an INF change that moves the footprint fails the build rather
 than being discovered on a guest.
+
+#### The registry values the driver reads, and what the INFs write (task 36.51)
+
+**Every value the shipping driver reads is written by every install path of
+both INFs, at the driver's own default** (owner, 2026-10-11, superseding the
+rule that `XhciWideMap`, `XhciSelectiveSuspend` and
+`XhciUsb2HubSpeedFallback` were set by hand and written by no INF). The rows
+are taken from the code (`src\hcd_ctl.c`'s value pass, `HcdCtlForceBulkOnly`,
+the routing quirk's and the polling's reads, `src\hcd_msi86.c`'s mode
+cache), not from other documents. Each is a `REG_DWORD` in the controller's
+driver (software) key (`IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER)`),
+read in every flavour on every target, and taken only as a four-byte
+`REG_DWORD` - another type reads as absent. Every INF row is
+`HKR,,<name>,0x00010003,<data>` (`FLG_ADDREG_TYPE_DWORD` with
+`FLG_ADDREG_NOCLOBBER`), so an install writes only a missing value and an
+update keeps one a user set; the INF gate's `VAL-*` rows hold name, flags
+and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
+`[Xhci.AddReg.NT]` for 2000, XP and 32-bit Vista and 7 in
+`src\xhci98.inf`, and for XP x64 and Vista and 7 x64 in
+`src\xhci98-amd64.inf`), and the footprints list them as `keep`.
+
+| Value | Read | When absent | Range the code takes | Written | Absent reads as the written value? |
+|---|---|---|---|---|---|
+| `XhciLogVerbosity` | each start | 0 | 0-4; above 4 refused, 0 | 0 | yes |
+| `XhciLogDebugView` | each start | 0 | 0 off, any other on | 0 | yes |
+| `XhciImodInterval250ns` | each start | 4000 | 10-4000; outside, 4000 | 160 | no, by design: 160 is the owner's shipped interval (2026-10-04) and 4000 only the fallback; a written 4000 reads as absent does |
+| `XhciForceBulkOnly` | each enumeration | 0 | 0 off, any other on | 0 | yes |
+| `XhciFastPollFsLs` | each start | 0 | 0-4 (`XhciPipeFastMode`) | 0 | yes |
+| `XhciFirstEnumWaitMs` | each start | 5000 | 0-30000 | 5000 | yes |
+| `XhciFirstEnumPortMs` | each start | 2000 | 0 to the wait | 2000 | yes |
+| `XhciIntelPortSwitch` | each start, Intel controllers only | 0 | 0 off, 1 listed controllers, an exact 2 any Intel | 0 | yes |
+| `XhciIntelIrqRoute` | each start; a return to D0 reapplies the start's reading | 1 | 0-2; another number, 1 | 1 | yes |
+| `XhciTolerance` | each start | 1 | 0 off, any other 1 | 1 | yes |
+| `XhciIntervalCap` | each start | 1 | 0-2 | 1 | yes |
+| `XhciAvgTrbEsit` | each start | 0 | 0-1 | 0 | yes |
+| `XhciMaxTransferKB` | each start | 1024 | 64-2048 in steps of 4; else 1024 | 1024 | yes |
+| `XhciInterruptMode` | each start; on NT 6 also at AddDevice (record 18's mode cache) | 0 | 0 automatic, 1 line, 2 polling, 3 and above as 0 | 0 | yes |
+| `XhciPollIdleMs` | each start | 50 | 1-5000; 0 as 50 | 50 | yes |
+| `XhciPollActiveMs` | each start | 1 | 1 to the idle period; 0 as 1 | 1 | yes |
+| `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
+| `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
+| `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
+
+Nineteen, all written: sixteen before task 36.51, the last three by it. **No
+value is a tri-state** whose absence means something no written number
+does, so none is left unwritten. What a written default changes is
+diagnostic only: the "was it read" markers - `XHCISNAP`'s
+`XhciWideMap` line (the number instead of "not set (the default)"),
+`SuspSwitchRead` and `susp.switch.value`, `Usb2HubSpeedSwitchRead` and
+`hub.speed.value`, and the like for the older sixteen - show the written
+value instead of "absent". `txtsetup.oem` is not an INF and writes none: F6
+Setup's first boot runs at the code defaults, which are the same numbers
+except the moderation interval's.
+
+Not in the table, and written by no INF on purpose:
+
+- the `qemu` flavour's test hooks, compiled into no other flavour:
+  `XhciQemuInject`, `XhciQemuStartHold`, `XhciQemuMapGrant`,
+  `XhciQemuBigRefuse`, `XhciQemuPsiE460`, `XhciQemuNoInterrupt`,
+  `XhciQemuPinUnreadable`, `XhciQemuDeadLine`, `XhciQemuMsgConnectFail`,
+  `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, and `xhcimsi.sys`'s
+  `XhciMsiInject` (its service key's `Parameters` subkey);
+- values the OS owns: `MSISupported` (the `.HW` section's interrupt
+  management request, which the 32-bit Vista and 7 path and the x64 NT 6
+  path write for the OS, not for the driver), and usbstor's per-device
+  `MaximumTransferLength`, which `xhciuas.sys` reads and never writes;
+  `xhciuas.sys` reads no value of its own (its `XhciUas*` values are status
+  it writes into the storage device's key), so the UAS INFs gain nothing;
+- the `1.2.0.0` miniport's `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and
+  `XhciVirtualHSHubPid`, which this driver does not read (`VAL-HCDVHUB`
+  refuses them).
 
 #### Why the INF must carry both install paths
 
@@ -6475,7 +6550,8 @@ TRBs. A change takes effect at the next start.
 
 **`XhciWideMap`** (roadmap-hcd task 36.24, design record 13 section 11.6;
 every flavour, not only qemu). A REG_DWORD in the controller's key, read at
-every start and written by no INF: 0 keeps every bulk URB sequential (stage
+every start and written by every INF at 0 (task 36.51; by no INF before
+the owner's decision of 2026-10-11): 0 keeps every bulk URB sequential (stage
 1), anything else allows a whole-URB mapping and two TDs of one URB on the
 ring - every qualifying bulk OUT URB, and bulk IN only on a stream; absent
 or of another type it is off (`HCD_WIDE_MAP_DEFAULT`; owner, 2026-10-10:
@@ -6718,7 +6794,8 @@ with a HID device and a Bulk-Only copy running.
 controller's driver key (the keys above), read at every start before the
 controller is initialized: exactly 1 turns selective suspend on - stage A,
 and stage B once it is built - and absent, 0, any other number or another
-type is off, today's behaviour bit for bit. No INF writes it. A change takes
+type is off, today's behaviour bit for bit. Every INF writes it at 0 (task
+36.51, owner, 2026-10-11; no INF wrote it before). A change takes
 effect at the next start. The log ring notes `susp.switch.value` (the value
 read, `FFFFFFFF` when absent) and `susp.switch`.
 
@@ -6816,8 +6893,9 @@ drive.
 **`XhciUsb2HubSpeedFallback`** (`implementation-invariants.md`, "Port Speed
 Decoding", the downstream exception; issue 13). A REG_DWORD in the
 controller's driver key, read at every start: only a DWORD 0 turns the
-fallback off; absent, 1, any other number or another type is on. No INF
-writes it. The log ring notes `hub.speed.value` (the value read,
+fallback off; absent, 1, any other number or another type is on. Every INF
+writes it at 1 (task 36.51, owner, 2026-10-11; no INF wrote it before). The
+log ring notes `hub.speed.value` (the value read,
 `FFFFFFFF` when absent) and `hub.speed.fallback` (1 on).
 
 **Counters.** Words 162 to 166 of the counter block, named by `XHCISNAP`,

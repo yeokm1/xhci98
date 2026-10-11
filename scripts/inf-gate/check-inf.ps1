@@ -89,7 +89,11 @@ What it checks, grouped by the failure each rule prevents:
            XhciMaxTransferKB at 1024, the UAS command size (owner,
            2026-10-09). Task 36.6 made it sixteen:
            XhciInterruptMode at 0, XhciPollIdleMs at 50 and
-           XhciPollActiveMs at 1 (design record 15 section 3).
+           XhciPollActiveMs at 1 (design record 15 section 3). Task 36.51
+           made it nineteen: XhciWideMap at 0, XhciSelectiveSuspend at 0 and
+           XhciUsb2HubSpeedFallback at 1, the three a user had set by hand
+           until the owner's decision of 2026-10-11 that every value the
+           driver reads is written with its own default.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1328,6 +1332,27 @@ $requiredValues = @(
         DefaultWhy = "1 is the driver's own default (owner, 2026-10-05)"
     },
     @{
+        Name    = "XhciWideMap"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 36.24's whole-URB mapping (design record 13 section 11.6, point 2), read at each start on Windows 2000 and later: 0 keeps every bulk URB sequential, anything else lets two pieces of one URB onto the ring at once. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
+        DefaultWhy = "0 is the driver's own default - absent, of another type or 0 is off (HCD_WIDE_MAP_DEFAULT; owner, 2026-10-10); 1 is the bench's to decide, not this gate's"
+    },
+    @{
+        Name    = "XhciSelectiveSuspend"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 36.33's selective suspend, stages A and B (design record 14 section 7), read at each start: only a DWORD 1 turns it on. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
+        DefaultWhy = "0 is the driver's own default - absent, 0, another number or another type is off, the release before it bit for bit (design record 14 section 7); shipping 1 would be a new decision"
+    },
+    @{
+        Name    = "XhciUsb2HubSpeedFallback"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "issue 18's default speed IDs for a Full- or Low-Speed device behind a hub on a USB 2.0 root port whose speed table names no such speed (roadmap-hcd task 36.49), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on (implementation-invariants.md, Port Speed); 0 would refuse such a device again, a new decision"
+    },
+    @{
         Name    = "XhciVirtualHSHub"
         Type    = "0x00010001"
         Default = "0"
@@ -2193,13 +2218,15 @@ foreach ($secName in @($inf.SectionOrder)) {
     $entries = Get-Section $inf $secName
     if ($null -eq $entries) { continue }
     foreach ($e in $entries) {
-        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,' -f [regex]::Escape($suspValue))) {
-            if ($matches[1].Trim() -ieq $suspKey) {
+        # A value name and a subkey may be quoted; setup reads both forms as
+        # one, so the rules take either (Codex review of task 36.51, round 1).
+        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($suspValue))) {
+            if ($matches[1].Trim().Trim('"') -ieq $suspKey) {
                 Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD, which replaces usbport, owns its idle policy itself (docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings)." -f $secName, $e.Line, $suspKey, $suspValue)
             }
         }
         foreach ($hcName in $suspHcValues) {
-            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*{0}\s*,' -f [regex]::Escape($hcName))) {
+            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*"?{0}"?\s*,' -f [regex]::Escape($hcName))) {
                 Add-Failure "SUSP-HCVALUE" ("[{0}] line {1} writes {2}. The per-controller values are not this package's mechanism: usbport's own USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend back, and on Vista usbhub calls it from a power-setting callback - measured 2026-09-17, the Balanced plan rewrote it to 0 and suspended the controller at once, and Balanced defaults that setting to Enabled on battery. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD owns its idle policy itself." -f $secName, $e.Line, $hcName)
             }
         }

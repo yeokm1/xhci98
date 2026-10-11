@@ -160,6 +160,9 @@ HKR,,XhciMaxTransferKB,0x00010003,1024
 HKR,,XhciInterruptMode,0x00010003,0
 HKR,,XhciPollIdleMs,0x00010003,50
 HKR,,XhciPollActiveMs,0x00010003,1
+HKR,,XhciWideMap,0x00010003,0
+HKR,,XhciSelectiveSuspend,0x00010003,0
+HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
