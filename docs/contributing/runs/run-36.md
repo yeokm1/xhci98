@@ -1467,3 +1467,44 @@ rather than MSI-X under mode 3 (`msi=on,msix=off`), 64-bit Vista, ME,
 reads an XP or 98 SE capture's `S` record and then refuses the capture
 for having no requirements list, since those systems never send one.
 Raw texts: `out\p36-imode\legs\<guest>\notes.txt` and the files it names.
+
+## 36.50 - the x64 test signature: the rehearsal (2026-10-11)
+
+Design record 19 (owner, 2026-10-11): the published x64 `xhci98.sys` and
+`xhciuas.sys` carry an embedded Authenticode test signature by the
+project's own certificate (thumbprint
+`A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`; SHA-1 file digest, no
+timestamp, no catalog). The signed `2.2.0.3` re-cut was cancelled; the
+first signed cut is `2.3.0.0`. Before it, a rehearsal on the same code:
+branch `p36-tsign` at `e8b1b09` (the `2.3.0.0` code before its stamp,
+version still `2.2.0.3`), amd64 `release` built with every gate, and the
+owner ran `make-package.ps1 -Flavor release -Arch amd64 -TestSignPfx ...`
+himself into `out\p36-tsign\rehearsal\pkg-release-amd64`.
+
+**The signature** (`out\p36-tsign\rehearsal\verify.txt`): both binaries
+signed by that thumbprint, an Authenticode PE-image signature with SHA-1 as
+both digests, the vouched digest equal to the image's, no timestamp; each
+exactly the build plus the signature (`xhci98.sys` 310,272 to 311,768
+bytes, `xhciuas.sys` 36,352 to 37,848); `SignTool verify /pa /v` shows the
+chain and "File is not timestamped", then the expected untrusted-root
+failure. The INFs, `txtsetup.oem` and `portsw.vbs` are byte-identical to an
+unsigned package of the same build. SignTool left key containers behind
+with the owner's key too; the owner deleted them (record 19 section 5).
+
+**The legs** (QEMU on development host A, the signed `release` package,
+`out\p36-tsign\legs\<guest>\notes.txt`):
+
+| Guest | Row | Reading | Verdict |
+|---|---|---|---|
+| Vista x64 | test-signing on, no F8 | `bcdedit /set testsigning on`, ordinary starts: install after "Windows can't verify the publisher of this driver software" (Install anyway), no Program Compatibility Assistant box; controller started, mouse, stick copy + `fc`, `XHCISNAP` release build; UAS disk on `xhciuas`; a second restart the same | PASS |
+| Vista x64 | test-signing off, no F8 | Code 39: "Windows cannot load the device driver for this hardware. The driver may be corrupted or missing. (Code 39)"; `xhci98`, `xhciuas` STOPPED, exit 1077; Code Integrity event 3004 for `xhci98.sys`; no notification | PASS |
+| Vista x64 | watermark | "Test Mode" in all four corners while activation is in grace; with it expired the not-genuine watermark replaces it (the mode still on) | read |
+| Windows 7 x64 | test-signing on, no F8 | as Vista: same prompt, no PCA box, devices and UAS working, a second restart the same; watermark "Test Mode / Windows 7 / Build 7601" bottom right | PASS |
+| Windows 7 x64 | test-signing off, no F8 | Code 52: "Windows cannot verify the digital signature for the drivers required for this device. ... (Code 52)"; `xhci98`, `xhciuas` STOPPED, exit 1077 | PASS |
+| XP x64 | install, restart | the usual Logo-testing box, Continue Anyway; controller, stick, mouse working across a restart, as unsigned | PASS |
+
+On all three the Driver tab's Digital Signer reads "Not digitally signed",
+in both modes: expected for a package with no catalog. Harness: the Vista
+x64 and Windows 7 x64 bases carry `advancedoptions`, removed so the starts
+were ordinary. Not read: real hardware; a Windows 7 with the SHA-2 update.
+36.50 is ticked after the `2.3.0.0` cut's own signature check.

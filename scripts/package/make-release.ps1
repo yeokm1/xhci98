@@ -566,9 +566,9 @@ $oemPublishable = @("txtsetup.oem")
 $pswPublishable = @("portsw.vbs")
 
 # The project test certificate's public half (design record 19), published at
-# the root of every x64 directory a cut writes since 2.2.0.3, beside the
+# the root of every x64 directory a cut writes since 2.3.0.0, beside the
 # binaries it signed. Not an INF-declared file: the setup engine never reads
-# it, and it is there to check a signer's thumbprint against. A version published before 2.2.0.3
+# it, and it is there to check a signer's thumbprint against. A version published before 2.3.0.0
 # has none, so it is accepted where present and not required of one. Never
 # the .pfx, which holds the private key and is never staged.
 $certPublishable = @("xhci98-test.cer")
@@ -3110,16 +3110,19 @@ other.
         2. Type:   bcdedit /set testsigning on
            This is a boot setting of the current Windows entry, so it stays
            on for every start until it is turned off; no F8 is needed.
-        3. Restart. "Test Mode" (with the Windows version and build)
-           appears in a corner of the desktop while it is on.
+        3. Restart. "Test Mode" shows on the desktop while it is on:
+           at the bottom right on 7, with the version and build, and in
+           the corners on Vista.
         4. Install the driver as above. Windows still says it cannot
            verify the publisher; choose "Install this driver software
-           anyway".
+           anyway". Afterwards the Driver tab says "Not digitally
+           signed". Both are expected: the driver is test-signed, not
+           signed by Microsoft.
 
       To check: bcdedit /enum {current} shows "testsigning Yes".
       To turn it off: bcdedit /set testsigning off, and restart. The
       driver then needs F8 again, or it does not load and the controller
-      shows Code 39.
+      shows Code 39 on Vista, Code 52 on 7.
 
       - With BitLocker on the system drive, suspend BitLocker before
         changing the boot setting, or the next start asks for the
@@ -3873,7 +3876,7 @@ being unsigned, and no change to this driver can remove them:
     own test signature, not Microsoft's. Turn on test-signing mode once
     (section 4), which shows "Test Mode" on the desktop, or disable driver
     signature enforcement at every start (F8); otherwise the controller
-    sits at Code 39.
+    sits at Code 39 on Vista, Code 52 on 7.
 
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still

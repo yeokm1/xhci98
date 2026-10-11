@@ -125,10 +125,10 @@ The 64-bit `xhci98.sys` and `xhciuas.sys` are test-signed, so on Windows Vista x
 
 1. Open an elevated Command Prompt: Start, type `cmd`, right-click it, Run as administrator.
 2. `bcdedit /set testsigning on` - a boot setting of the current Windows entry, so it stays on for every boot until it is turned off; no F8 is needed.
-3. Restart. "Test Mode" (with the Windows version and build) appears in a corner of the desktop while it is on.
-4. Install the driver as above. Windows still says it cannot verify the publisher; choose "Install this driver software anyway".
+3. Restart. "Test Mode" shows on the desktop while it is on: at the bottom right on 7, with the version and build, and in the corners on Vista.
+4. Install the driver as above. Windows still says it cannot verify the publisher; choose "Install this driver software anyway". Afterwards the Driver tab says "Not digitally signed". Both are expected: the driver is test-signed, not signed by Microsoft.
 
-Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off: `bcdedit /set testsigning off` and restart; the driver then needs F8 again, or it does not load and the controller shows Code 39.
+Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off: `bcdedit /set testsigning off` and restart; the driver then needs F8 again, or it does not load and the controller shows Code 39 on Vista, Code 52 on 7.
 
 - With BitLocker on the system drive, suspend BitLocker before changing the boot setting, or the next boot asks for the recovery key.
 - This is not Microsoft signing: the certificate is the project's own test certificate, which no Windows trusts by itself.
@@ -446,7 +446,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 
 | Limitation | Detail |
 |---|---|
-| Vista x64 and 7 x64 need test-signing mode, or driver signature enforcement disabled | The x64 drivers carry the project's own test signature, not Microsoft's. Turn on test-signing mode once (see "Windows Vista x64 and 7 x64: test-signing mode"), or disable driver signature enforcement at every start (F8); otherwise the controller sits at Code 39. |
+| Vista x64 and 7 x64 need test-signing mode, or driver signature enforcement disabled | The x64 drivers carry the project's own test signature, not Microsoft's. Turn on test-signing mode once (see "Windows Vista x64 and 7 x64: test-signing mode"), or disable driver signature enforcement at every start (F8); otherwise the controller sits at Code 39 on Vista, Code 52 on 7. |
 | No USB storage on a stock Windows 98 SE | With no NUSB installed there is no mass-storage driver at all. HID and audio still work. |
 | Windows XP installed with the F6 floppy needs a PS/2 or built-in laptop keyboard | Setup copies Windows' own HID and USB helper files only with Microsoft's own USB controller drivers, so in GUI-mode Setup the USB keyboard and mouse wait for its device install, which first asks about the unsigned driver (default No). A USB-only keyboard cannot answer it; a PS/2 or built-in laptop keyboard can. Windows 2000 does not ask. |
 | Windows ME: unplugging a device while Windows installs it | ME's own device manager stops responding if a device is unplugged while Windows is still installing its driver. ME does the same on Microsoft's own USB stack. Wait for the install to finish before unplugging. |

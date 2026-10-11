@@ -38,9 +38,10 @@ without signing the driver themselves.
 (`release-x64`, `debug-x64`) carries `xhci98.sys` and `xhciuas.sys` with an
 embedded Authenticode signature by the project test certificate - SHA-1
 file digest, no timestamp, no catalog, both INFs unchanged - applied by the
-packager at staging and never by hand. It goes into the `2.2.0.3` TEST
-build at once (re-cut with the same version and date) and every cut after
-it.
+packager at staging and never by hand. It was to go into the `2.2.0.3` TEST
+build at once (re-cut with the same version and date); that re-cut was
+cancelled the same day, so the first signed cut is `2.3.0.0`, and every cut
+after it.
 
 What it reverses, and how far. Design record 11 section 12, **decision 9**
 (2026-09-10) decided "the package is not signed, and the line is not
@@ -93,8 +94,8 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
   to an 8-byte boundary, and the appended `WIN_CERTIFICATE` holding the
   PKCS #7 signature (about 1.5 KB with a 2048-bit key). Nothing else. That
   is the property the packager checks (section 5), and it is why every
-  reading taken on the unsigned bytes - the whole `2.2.0.3` matrix - speaks
-  for the signed ones.
+  reading taken on the unsigned bytes - every matrix reading on the same
+  build - speaks for the signed ones.
 
 ## 4. The certificate and the key
 
@@ -268,7 +269,9 @@ version and build then shows in a corner of the desktop, and the driver
 loads at every start with nothing pressed. The install still asks about
 the publisher ("Install this driver software anyway"). `bcdedit /enum
 {current}` shows `testsigning Yes`; `bcdedit /set testsigning off` and a
-restart leave it, after which the driver needs F8 again or does not load.
+restart leave it, after which the driver needs F8 again or does not load
+(Code 39 on Vista, Code 52 on 7). The Driver tab says "Not digitally
+signed" in either mode, which is expected (section 10).
 F8 -> Disable Driver Signature Enforcement still works, without test mode,
 for one start. With BitLocker on the system drive, BitLocker is suspended
 before the boot setting is changed, or the next start asks for the
@@ -349,6 +352,50 @@ points here.
   mode (the Code shown); XP x64 unaffected - are read on the rehearsal
   package and recorded below and in `runs/run-36.md`; the `2.3.0.0` cut's
   own signature check follows it.
+- **The guest legs on the rehearsal package**, 2026-10-11, development
+  host A, QEMU guests, the `release` flavour; every row passed
+  (`out\p36-tsign\legs\{vx64,w7x64,xp64}\notes.txt`):
+  - **Test-signing mode loads the driver with no F8, on both NT 6.x x64
+    systems, and keeps loading across a restart.** `bcdedit /set
+    testsigning on`, a restart, and every later start ordinary - no F8, no
+    boot menu: controller and root hub started, `xhci98` running, the
+    installed file `fc`-identical to the signed one, a USB mouse moving the
+    pointer, a stick copy compared clean, `XHCISNAP` reading the release
+    build; a second plain restart the same. `xhciuas.sys` loaded too, on a
+    QEMU UAS disk, after the same install prompt. Nothing was imported into
+    any certificate store.
+  - **The install prompt stays**: "Windows can't verify the publisher of
+    this driver software", answered with "Install this driver software
+    anyway", as section 3 predicted for a package with no catalog. No
+    Program Compatibility Assistant box appeared on either.
+  - **The Driver tab says "Not digitally signed"** on both, in both modes.
+    Expected for a package with no catalog: the field reports how the
+    driver package was signed at install, while the loader checks the
+    embedded signature of the binary.
+  - **The watermark**: Windows 7 x64 shows "Test Mode / Windows 7 / Build
+    7601" at the bottom right; Vista x64 shows "Test Mode" in all four
+    corners (with the build line at the top) - read on an overlay whose
+    activation was in grace; with Vista's activation expired, the
+    not-genuine watermark takes that place and no "Test Mode" text shows,
+    though the mode is on (`SystemStartOptions` `/TESTSIGNING`) and the
+    driver loads.
+  - **Without test-signing mode and without F8, the driver does not load,
+    and the Code differs**: Vista x64 shows **Code 39**, "Windows cannot
+    load the device driver for this hardware. The driver may be corrupted
+    or missing. (Code 39)"; Windows 7 x64 shows **Code 52**, "Windows
+    cannot verify the digital signature for the drivers required for this
+    device. ... (Code 52)". On both `xhci98` and `xhciuas` are STOPPED
+    with exit code 1077, and Code Integrity logs event 3004 for
+    `xhci98.sys`; no notification is shown to the user.
+  - **XP x64 ignores the signature**: the signed package installs after
+    the usual Logo-testing box ("has not passed Windows Logo testing",
+    Continue Anyway), the Driver tab says "Not digitally signed", and the
+    controller, stick and mouse work across a restart, exactly as the
+    unsigned package did.
+  - Harness notes, not user facts: the Vista x64 and Windows 7 x64 base
+    images carry `advancedoptions` on `{current}`, removed first so that
+    the starts were ordinary; Vista's activation grace needs the launcher's
+    `-Rtc base=...` for the "Test Mode" text to show.
 - Unread, and not planned: real hardware under test-signing mode; a
   Windows 7 x64 with the SHA-2 update; Server 2003 x64 (identity with XP
   x64, which ignores signatures).

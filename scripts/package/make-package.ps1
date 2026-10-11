@@ -144,7 +144,7 @@ project certificate whose thumbprint record 19 section 10 records. Refused for t
 package (32-bit Windows does not enforce kernel-mode signing, and the x86
 binaries are never signed) and for a binary that is already signed (the
 packager signs; nothing is signed by hand). Without it the package is staged
-unsigned, as every package before 2.2.0.3 was: enough for a guest started
+unsigned, as every package before 2.3.0.0 was: enough for a guest started
 with F8, and make-release.ps1 refuses to publish it.
 
 .PARAMETER SkipPackageGate
