@@ -7,8 +7,9 @@
  *
  *   - which capability Windows enabled, from the controller's
  *     configuration bytes (record 15 section 4.3, "MSI or MSI-X");
- *   - the IO_RESOURCE_REQUIREMENTS_LIST's checked walk, its classification
- *     and the strip that keeps only the configurations offering a line
+ *   - the IO_RESOURCE_REQUIREMENTS_LIST's checked walk, its classification,
+ *     the strip that keeps only the configurations offering a line, and
+ *     under XhciInterruptMode 3 the rewrite that keeps only the message
  *     (record 18 section 4.2), over the list's bytes;
  *   - the qemu flavour's no-line rewrite (record 18 section 10, H1a);
  *   - the helper binding's per-FDO state machine (record 18 sections 4.1
@@ -115,6 +116,17 @@ ULONG XhciMsiStrip(const UCHAR *list, const XHCI_MSI_WALK *walk,
                    ULONG capacity);
 
 /*
+ * XhciInterruptMode 3's rewrite of a REPLACEABLE list (record 18 section
+ * 4.2, revision 12): every line member of an interrupt run that also holds
+ * a message removed, every configuration whose interrupt runs are all
+ * line-only dropped - the no-line rewrite below, as a shipped path. Sizing
+ * and writing as XhciMsiStrip; 0 for a list of any other class.
+ */
+ULONG XhciMsiKeepMessage(const UCHAR *list, const XHCI_MSI_WALK *walk,
+                         const XHCI_MSI_CLASSIFY *classify, PUCHAR out,
+                         ULONG capacity);
+
+/*
  * The qemu flavour's no-line rewrite (record 18 section 10, H1a): every
  * line member of an interrupt run that also has a message member removed,
  * and every configuration whose interrupt runs are all line-only dropped;
@@ -137,6 +149,7 @@ ULONG XhciMsiInjNoLine(const UCHAR *list, const XHCI_MSI_WALK *walk,
 #define XHCI_MSI_OUT_UNSUPPORTED    9UL
 #define XHCI_MSI_OUT_REPLACED       10UL
 #define XHCI_MSI_OUT_NO_MEMORY      11UL
+#define XHCI_MSI_OUT_REPLACED_MESSAGE 12UL  /* mode 3: the message kept   */
 
 /* The outcome for a classified list when the strip is asked for and
  * enabled: REPLACED for a REPLACEABLE list, else the kept outcome. */

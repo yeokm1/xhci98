@@ -260,7 +260,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-intr exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line offered: the start fails") do (
+for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line offered: the start fails (an earlier 2.3.0.0 build)" "but a message was granted: the start fails" "value 3; in effect 3 (a message interrupt only)" "forced message (XhciInterruptMode 3): a message interrupt" "but no message was granted: the start fails" "is xhcimsi.sys bound?): the start fails" "this Windows has no message interrupts: the start fails") do (
     findstr /C:%%S "%BASE%.intr.log" > nul
     if errorlevel 1 (
         echo FAIL: the event delivery decode does not say %%S
@@ -277,7 +277,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-msi exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
+for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1 or 3)" "REPLACED: the line choices stripped, the message left (mode 3)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
     findstr /C:%%S "%BASE%.msi.log" > nul
     if errorlevel 1 (
         echo FAIL: the message interrupt decode does not say %%S
@@ -285,7 +285,8 @@ for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is
     )
 )
 rem The 63-word block and the truncated block print nothing of their own:
-rem six sections in all (four decoded, the pre-MSI line, the refused shape).
+rem seven sections in all (five decoded, the pre-MSI line, the refused
+rem shape).
 findstr /C:"[end]" "%BASE%.msi.log" > nul
 if errorlevel 1 (
     echo FAIL: the message interrupt selftest did not run to its end
@@ -293,8 +294,8 @@ if errorlevel 1 (
 )
 set MSICOUNT=0
 for /f %%N in ('findstr /C:"message interrupts" "%BASE%.msi.log" ^| find /c /v ""') do set MSICOUNT=%%N
-if not "%MSICOUNT%"=="6" (
-    echo FAIL: expected 6 message interrupt sections, got %MSICOUNT%
+if not "%MSICOUNT%"=="7" (
+    echo FAIL: expected 7 message interrupt sections, got %MSICOUNT%
     set FAILED=1
 )
 
