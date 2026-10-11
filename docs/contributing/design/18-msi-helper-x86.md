@@ -502,8 +502,8 @@ The filter:
    memory".
 
 Outcomes, recorded by name: **not asked** (the helper is bound and the
-mode is not 1, or amd64 in a mode other than 1: nothing changes, Windows
-may grant the message); **disabled** (the strip is switched off,
+mode is neither 1 nor 3, or amd64 in mode 0 or 2: nothing changes,
+Windows may grant the message); **disabled** (the strip is switched off,
 below); **no line offered**, **no interrupt**,
 **unsupported shape**, **inconsistent** (each: kept as is, below);
 **no message** (nothing to strip: kept); **replaced**; **kept: no
@@ -512,18 +512,25 @@ kept**.
 
 **The resource-choice rule, used everywhere in this record:** a
 "replaced" outcome leaves only line interrupt choices, so, if resource
-assignment succeeds, the controller is granted a line. Every other
-outcome leaves the list's choices as Windows built them. Either way the
-filter decides only what Windows may grant; the delivery is then settled
-at the start by record 15's tables (section 4 and 4.3) from the effective
-mode, the resource actually granted, the pin and the connection's
-result - forced polling, a line, a message connected through the bound
-helper's routines, the connection's own fallback to the line, a message
-with no routines ("message not connected", polling - except under mode
-1 on x86 with no line offered, which fails the start, section 4.3), a
-message under mode 1 where no line was offered or the list was not
-replaced (record 15's "line asked for, message granted", logged), or no
-interrupt resource at all (mode 1 failing its start as today).
+assignment succeeds, the controller is granted a line; "replaced: the
+message kept" (mode 3, revision 12) leaves only message choices, so the
+controller is granted a message. Every other outcome leaves the list's
+choices as Windows built them. Either way the filter decides only what
+Windows may grant; the delivery is then settled at the start by record
+15's tables (section 4 and 4.3) from the effective mode, the resource
+actually granted, the pin and the connection's result. Under mode 0:
+a line, a message connected through the bound helper's routines (or
+amd64's), the connection's own fallback to the line, a message with no
+routines or a refused connection ("message not connected", polling), or
+polling with no interrupt resource. Under mode 2: polling. Under mode 1
+(revision 12): a line, and every other grant - a message, or no
+interrupt resource - fails the start. Under mode 3 (revision 12): a
+message connected, and every other outcome - a line, no interrupt, no
+routines, a refused connection, a fallback to the line - fails the
+start. (Until revision 12, mode 1 ran a message where no line was
+offered or the list was not replaced, logged as record 15's "line asked
+for, message granted", and failed only on x86 with no helper and no line
+offered.)
 
 **The allocation** is one new named site, `HcdPoolAllocRequirements` in
 `hcd_pool.c`, the HCD's only `PagedPool` allocation: the IRP's contract

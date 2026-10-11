@@ -1357,7 +1357,9 @@ log switches are read, the start's notes above are written with
 counter dump through `HcdLogFlush` - the stop's own flush, from the same
 PASSIVE_LEVEL PnP thread, adding no `DbgPrint` site - before the start
 returns its failure. With `XhciLogDebugView` set a user therefore reads
-the reason in DebugView beside the Code 10; the `qemu` flavour's
+the reason in DebugView beside the Code 10 - in the counter dump's
+`intr.reason` at every verbosity, and from verbosity 2, where notes are
+recorded, in the start's notes and `start.refused.delivery` too; the `qemu` flavour's
 start-decision event (record 18 section 9) carries it too.
 
 **The delivery in effect must be capturable** (owner, 2026-10-05): a user

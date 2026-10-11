@@ -6570,9 +6570,11 @@ capability was not read; reason 13 "forced, no line offered" (an earlier
 7; task 36.53). Mode 1 is the line only and mode 3 a message only; without
 it the start fails with Code 10 and records why before it returns: the
 counter block's delivery 0 and reason, the `qemu` flavour's `M86 S` record,
-and - with `XhciLogDebugView` 1 - the start's notes (`intr.mode` 1 or 3,
-`intr.delivery` 0, `intr.reason`) with `start.refused.delivery` (the
-reason) and the counter dump, flushed to DebugView by the start itself.
+and - with `XhciLogDebugView` 1 - the counter dump (its `intr.delivery` 0
+and `intr.reason`), flushed to DebugView by the start itself; with
+`XhciLogVerbosity` 2 or above the flush also carries the start's notes
+(`intr.mode` 1 or 3, `intr.delivery`, `intr.reason`) and
+`start.refused.delivery` (the reason).
 Reasons: 7 mode 1 with no interrupt or pin 0, 14 mode 1 given a message,
 16 mode 3 given no message (a line, or nothing), 17 mode 3's message not
 connected (no routines - 32-bit with `xhcimsi.sys` not bound - a refused

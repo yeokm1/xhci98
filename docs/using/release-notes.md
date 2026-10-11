@@ -1236,10 +1236,11 @@ Vista and 7: message-signalled interrupts").
 | `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
 
 A start that `1` or `3` refuses records why: with `XhciLogDebugView` set,
-DebugView shows the start's `intr.reason` and `start.refused.delivery`
-lines (14: a message granted under `1`; 16: no message granted under
-`3`; 17: the message not connected; 18: a system with no
-message-signalled interrupts) beside the Code 10.
+DebugView shows the counter dump's `intr.reason` line (14: a message
+granted under `1`; 16: no message granted under `3`; 17: the message not
+connected; 18: a system with no message-signalled interrupts) beside the
+Code 10, and with `XhciLogVerbosity` `2` or above also the start's notes
+and a `start.refused.delivery` line.
 
 Neither period matters while the controller has a working interrupt line
 or a message. Polling adds up to one period of delay to each completed
