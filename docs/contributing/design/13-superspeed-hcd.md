@@ -1542,7 +1542,10 @@ command storm is `usbaudio.sys`'s own reading of the feedback endpoint:
 each `RESET_PIPE` on the running, idle isochronous endpoint is a Stop
 Endpoint (whose event is the code 27) and a Configure Endpoint that drops
 and adds it (`hcd_cfg.c`'s `RESET_PIPE`, unchanged), with each refused
-data URB's abort and reset beside it. Neither was the fault.
+data URB's abort and reset beside it. The sequence is normal - one reset
+a read, every 32 ms when the reads complete at their frames - but with
+every read refused nothing paced it except how soon each refusal
+completed. It was not the fault.
 
 **Why plain SIA is not enough.** The feedback read paces itself by its own
 completion. Run as SIA, a read completes a frame or two after it is sent;

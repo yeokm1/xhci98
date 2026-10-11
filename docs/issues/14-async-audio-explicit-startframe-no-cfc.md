@@ -66,8 +66,9 @@ asked were whether the driver issued a Stop Endpoint per request, whether a
 late start frame led to cancellations, and whether a wrong feedback value
 made the class driver reset its stream. `TransfersCancelled` 0 and
 `IsoSubmits` 0 turned the question round: nothing had ever been on a ring to
-stop. The storm was a symptom of something else, and in the end (section 4)
-not a symptom of the fault at all.
+stop. The storm was a symptom of something else: in the end (section 4) the
+class driver's normal reading of its feedback endpoint, run at whatever pace
+the refusals set.
 
 ## 4. What `usbaudio.sys` sends
 
@@ -95,8 +96,10 @@ and every request of an adaptive or synchronous one is ASAP. And the
 `RESET_PIPE` before every feedback read is the class driver's own design:
 in this driver each one is a Stop Endpoint on the running, idle feedback
 endpoint, whose Transfer Event is the code 27, and a Configure Endpoint that
-drops and adds it - two commands every 32 ms. **The storm was expected; it
-was never the fault.**
+drops and adds it - two commands every 32 ms when each read completes at
+the frame it named. **The reset and read sequence is normal; it was not the
+fault.** With every read refused, though, nothing paced it but how soon
+each refusal completed, so the dump's totals say nothing about its rate.
 
 ## 5. The cause
 
