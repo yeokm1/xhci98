@@ -188,6 +188,8 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 `NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller". The number varies from machine to machine.
 
+**The driver's own settings**
+
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
 | `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
@@ -195,22 +197,32 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `4` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`) | `0` | `2` | `0` | `0` |
-| `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
 | `XhciTolerance` | The handling of controller faults, all together; `0` turns most of it off (see "Controller faults") | `0` | `1` | `1` | `1` |
-| `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
-| `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciMaxTransferKB` | The largest UAS command, in KiB (a multiple of `4`) | `64` | `2048` | `1024` | `1024` |
 | `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling, `3` a message-signalled interrupt only (see "Polling and message-signalled interrupts") | `0` | `3` | `0` | `0` |
 | `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
 | `XhciPollActiveMs` | While polling, the shortest period with transfers outstanding, in ms (with only a mouse's or keyboard's periodic transfers outstanding, the endpoint's interval is used, held between this and the idle period) | `1` | `XhciPollIdleMs` | `1` | `1` |
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | `0` |
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | `0` |
+
+**Hardware quirks**, each for a particular controller or chipset
+
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`) | `0` | `2` | `0` | `0` |
+| `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
+| `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
+| `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciUsb2HubSpeedFallback` | The standard speed ID for a Low- or Full-Speed device behind a hub where the controller's USB 2.0 speed table names neither (the VIA VL805); `0` turns it off | `0` | `1` | `1` | `1` |
+
+**The driver's log**
+
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-The install writes every value in the table, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value. `XhciForceBulkOnly` is the exception: it is read as each device is enumerated (see below).
 
