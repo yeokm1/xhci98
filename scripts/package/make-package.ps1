@@ -463,7 +463,9 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
         Write-Warn ("SignTool left {0} new key container file(s) while signing {1}; each may be a copy of the private key. They are hidden system files, so list them with -Force, and delete each one named here yourself (design record 19 section 5):" -f `
             $left.Count, $Label)
         foreach ($n in $left) {
-            Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n))
+            # Apostrophes doubled, so the printed line pastes as written
+            # whatever the profile path holds (review round 8).
+            Write-Warn ("  Remove-Item -LiteralPath '{0}' -Force" -f (Join-Path $after.Dir $n).Replace("'", "''"))
         }
     }
     if ($signRc -ne 0) {
