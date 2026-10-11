@@ -1342,27 +1342,30 @@ in the `qemu` flavour, its doorbells withheld by the injection) and the
 endpoint reads Stopped, the driver gives each stream back the one thing
 QEMU discarded, its consumer cycle, with Set TR Dequeue Pointer (SCT
 Primary Transfer Ring), and every such command completes before the
-caller's resume can ring a stream. It moves no stream anywhere QEMU would
-not start it itself:
+caller's resume can ring a stream:
 
-- **The position is QEMU's own.** QEMU's stop and reset do not rewind a
-  stream: they leave the address it last wrote in the Stream Context, and
-  its reload starts there (`xhci_set_ep_state` with no stream context,
-  then `xhci_find_stream`). The quirk keeps that address. The one
-  exception is that address naming the Link TRB, which a correct QEMU would
-  follow, toggling its cycle: the quirk names the ring's base with the
+- **The position is QEMU's own where QEMU's own is sound.** QEMU's stop and
+  reset do not rewind a stream: they leave the address it last wrote in
+  the Stream Context, and its reload starts there (`xhci_set_ep_state`
+  with no stream context, then `xhci_find_stream`). Where that address
+  names a TRB of the TDs the driver still holds (from its software dequeue
+  to its enqueue), the quirk keeps it. On the Link TRB, which a correct
+  QEMU would follow, toggling its cycle, it names the ring's base with the
   toggled cycle instead, the same position, since a Set TR Dequeue is to
-  name the first TRB of a TD (4.6.10).
-- **The DCS is the cycle the driver wrote at that address**: the TRB's own
-  cycle bit inside the TDs the driver still holds (from its software
-  dequeue to its enqueue), the producer cycle at the enqueue, and the Link
-  TRB's cycle, toggled, at the base. QEMU's pointer never lies elsewhere -
-  behind the software dequeue would mean QEMU had not reached TRBs whose
-  completion the driver retired, past the enqueue that it read TRBs never
-  written - and a stream whose pointer does is left alone.
+  name the first TRB of a TD (4.6.10). Anywhere else the address is stale
+  and is replaced by the software dequeue: behind it every TRB's completion
+  was reported and retired - QEMU can leave such an address when a stream
+  completes a TD while a sibling has halted the endpoint (its kick then
+  returns before rewriting the context), and a failed TD's context names
+  its first TRB until the recovery moves it - and past the enqueue nothing
+  was written.
+- **The DCS is the cycle the driver wrote at that position**: the TRB's own
+  cycle bit inside the TDs it holds, the producer cycle at the enqueue, the
+  Link TRB's cycle toggled at the base, the software dequeue's DCS when the
+  address was replaced.
 - **The command is owed** when that DCS is 0, which QEMU's forced 1 gets
-  wrong, or when the address had to move off the Link TRB; a stream whose
-  own address wants DCS 1 is left alone.
+  wrong, or when the address is not the one the context holds; a stream at
+  its own address wanting DCS 1 is left alone.
 - **Containment.** Before each command the endpoint must still read
   Stopped. QEMU's device wakeup can restart a Stopped endpoint on its own
   (`xhci_wakeup_endpoint` calls `xhci_kick_ep`; a real controller restarts
@@ -1371,21 +1374,22 @@ not start it itself:
   as the reason one was refused with Context State Error, gets one more
   Stop Endpoint and the whole resync from the start, at most twice
   (`QemuStreamRestops`). A resync that still cannot finish - any other
-  refusal, a command that never completed, a third restart - requests the
-  device's recovery itself, as a failed recovery command does
-  (`hcdCfgFault`: the controller's recovery, charged to the recovery
-  window, or the location's cycle for a device that is leaving), and
-  counts `QemuStreamResyncFailed`; the Stop or Reset Endpoint it followed
-  still reports its own completion, so no caller's handling changes. Until
-  the recovery runs, a stream left invisible to QEMU moves nothing; the
-  recovery's invalidation completes what is outstanding. The same re-stop
-  applies to the driver's own stream Set TR Dequeue on QEMU
+  refusal, a command that never completed, a third restart - is treated as
+  a command that never completed: the controller reset is requested
+  (`HcdSvcRequestReset`, as the command path requests it for a command
+  with no completion), `QemuStreamResyncFailed` is counted, and the Stop
+  or Reset Endpoint it followed reports no completion (0). Every caller
+  already contains that answer, as it contains a timed-out command: the
+  quiesce and RESET_PORT's quiet fault and leave the endpoint paused, the
+  soft retry faults and leaves it paused, selective suspend finds the
+  controller failed and ends its step, and the injection abandons. The
+  same re-stop applies to the driver's own stream Set TR Dequeue on QEMU
   (`hcdCfgSetDequeueOne`), which meets the same wakeup.
-
 The hook is in the thread's command path (`HcdThreadCommand`), run once by
 the outermost call (the injection's command hook sends a command it lets
 through by a nested call), never for the commands it issues itself, and it
-returns the original command's completion and control unchanged. It covers
+returns the original command's completion and control unchanged unless the
+resync could not finish. It covers
 the quiesce (each of whose callers pauses the endpoint), the soft retry's
 reset, RESET_PORT's quiet, selective suspend's stop and the client's
 resets alike; the caller's own ring edits and Set TR Dequeue follow as
@@ -1396,15 +1400,15 @@ hook does not run for the injection's own commands, and the injection runs
 the resync itself once it has read that evidence and before it rings or
 delivers anything - and abandons the injection, as it does any it cannot
 place, when that resync had to stop the endpoint again, since QEMU may
-then have moved the TD its verdict found untouched.
+then have moved the TD its verdict found untouched, or could not finish.
 
 On a real controller a Set TR Dequeue here would be wrong: it discards the
 state a stopped stream saved in its context even when it names the same
 TRB (4.6.9, 4.6.10), so a stream the device left in mid-TD would restart
 that TRB from its beginning. QEMU saves no such state - its Stop Endpoint
 and Reset Endpoint drop every transfer in flight, and its `xhci_reset_ep`
-ignores TSP - and the quirk changes no address QEMU would use, so it adds
-no replay and no skip of its own; whatever QEMU's discarding of a TD in
+ignores TSP - and the quirk keeps every address QEMU could soundly restart
+from, so it adds no replay and no skip of its own; whatever QEMU's discarding of a TD in
 mid-transfer costs, it costs with or without the quirk. That is why the
 gate is the exact ID and not a heuristic, and also why the `qemu`
 flavour's injection cannot show that a real controller's partial progress
