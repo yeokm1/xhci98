@@ -3091,7 +3091,8 @@ other.
 
                      64-bit: Windows XP x64 (SP2), Windows Vista x64 (SP2)
                      or Windows 7 x64 (SP1), in
-                     virtual machines only as well.
+                     virtual machines; XP x64 and 7 x64 also on one real
+                     machine, a Dell Latitude E7250.
 "@
         $readmeArchInstall = @"
 
@@ -4599,7 +4600,10 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 
     # Nothing may reach the reader still carrying a placeholder: a typo in one
     # would otherwise ship as literal braces in a file nobody re-reads.
-    if ($readme -match '\{[A-Z]+\}') {
+    # Case-sensitive (-cmatch): every placeholder is upper case, and the
+    # readme legitimately carries lower-case braces, such as bcdedit's
+    # {current} in the x64 test-signing text; -match ignores case.
+    if ($readme -cmatch '\{[A-Z]+\}') {
         throw "readme template left an unsubstituted placeholder: $($Matches[0])"
     }
 

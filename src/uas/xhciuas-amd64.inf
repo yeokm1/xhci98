@@ -23,7 +23,7 @@ Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/10/2026,2.2.0.3
+DriverVer=10/11/2026,2.3.0.0
 
 [Manufacturer]
 %Mfg%=UasModels,NTamd64
