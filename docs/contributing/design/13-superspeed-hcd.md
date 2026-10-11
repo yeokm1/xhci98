@@ -5457,7 +5457,7 @@ TRBs (design record 04's layout, untouched - so no isochronous decoupling,
 no stride or pool change, no `test_membuf` change), EP0's and the command
 ring's 64, and the event ring's 256 entries.
 
-**Scope left out, and why (orchestrator decision, owner to confirm).**
+**Scope left out, and why (orchestrator decision, owner confirmed 2026-10-10).**
 Bulk-Only and High-Speed UAS keep stage 2 (OUT pipelined in 31-element
 TDs, IN sequential). Their rings are pool rings in the controller's block;
 a large ring for one of them is an allocation of its own per pipe with the

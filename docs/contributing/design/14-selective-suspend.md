@@ -953,7 +953,7 @@ active; the devices behind them, and a composite parent's functions, are
 not excluded. A composite parent's D-IRPs are recorded and completed at
 once; nothing above its FDO asks one, so its devnode reads D0 while its
 device is suspended (the batches stay the bus's - orchestrator decision,
-owner to confirm).
+owner confirmed 2026-10-10).
 
 ### 5.2 Capabilities
 
@@ -1219,7 +1219,7 @@ excluded (5.1), so every ancestor stays in U0.
 ### 8.2 Eligibility and the switch
 
 `XhciSelectiveSuspend` 1 turns on both stages; there is no separate
-SuperSpeed value (orchestrator decision, owner to confirm, 8.13). With the
+SuperSpeed value (orchestrator decision, owner confirmed 2026-10-10, 8.13). With the
 switch at 0 nothing of this section runs: capabilities and WAIT_WAKE are
 today's, DNCTRL keeps its reset value 0 (the restore writes 0, as today),
 no GetStatus(interface) is sent, and a Device Notification Event, should
@@ -1606,7 +1606,7 @@ Stage A's composite rules (4.3, 5.4, 6.2) hold unchanged; at SuperSpeed:
   ACTIVE link, as in stage A: the bus does not put that one function into
   Function Suspend while the device runs, so it cannot signal a wake until
   its siblings are idle too and the device suspends (orchestrator decision,
-  owner to confirm, 8.13: per-function suspend of a running device is left
+  owner confirmed 2026-10-10, 8.13: per-function suspend of a running device is left
   to a later phase).
 - **Arming is per function**: 5.4's armed intent is computed per PDO - a
   WAIT_WAKE held, `PwrState` D1 or D2, and at least one wake function
@@ -1622,7 +1622,7 @@ Stage A's composite rules (4.3, 5.4, 6.2) hold unchanged; at SuperSpeed:
 - **One wake completes every armed function's WAIT_WAKE**, as in stage A
   (5.4: every WAIT_WAKE stamped before the watermark whose PDO is D1 or
   D2), not only the function the notification names (orchestrator
-  decision, owner to confirm, 8.13). At a root port the event is the PLC,
+  decision, owner confirmed 2026-10-10, 8.13). At a root port the event is the PLC,
   which names no function; using the notification only behind hubs would
   make the claim depend on the topology. A function woken this way
   without having signalled sends its D0, finds its device awake and idles
@@ -1866,7 +1866,7 @@ disarm and traffic resumed; and a composite or multi-function SuperSpeed
 device if one is at hand. Owed until the owner reads it; never claimed
 from a guest.
 
-### 8.13 Decisions taken here (orchestrator decision, owner to confirm)
+### 8.13 Decisions taken here (orchestrator decision, owner confirmed 2026-10-10)
 
 - `XhciSelectiveSuspend` 1 turns on stages A and B together; there is no
   value for stage A alone. The default stays 0 (owner, 2026-10-09), and 0
