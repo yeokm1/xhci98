@@ -163,44 +163,75 @@ $script:TestSignThumbprint = "A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF"
 
 function Read-DerTlv {
     # One DER tag-length-value at $At: the tag, where the value starts and
-    # where the element ends. Definite lengths only (DER has no other).
+    # where the element ends. DER only: definite lengths, in their minimal
+    # form (a long form for a length under 128, or with a leading zero
+    # byte, is refused - review round 2).
     param([byte[]]$B, [int]$At, [int]$Limit)
     if ($At + 2 -gt $Limit) { throw "DER: element at $At runs past its container" }
     $tag = $B[$At]
+    if (($tag -band 0x1F) -eq 0x1F) { throw "DER: multi-byte tag at $At" }
     $l = [int]$B[$At + 1]
     $p = $At + 2
     if ($l -band 0x80) {
         $n = $l -band 0x7F
         if ($n -lt 1 -or $n -gt 3 -or $p + $n -gt $Limit) { throw "DER: unsupported length form at $At" }
+        if ($B[$p] -eq 0) { throw "DER: non-minimal length at $At" }
         $l = 0
         for ($i = 0; $i -lt $n; $i++) { $l = ($l -shl 8) -bor [int]$B[$p + $i] }
+        if ($l -lt 0x80) { throw "DER: non-minimal length at $At" }
         $p += $n
     }
     if ($p + $l -gt $Limit) { throw "DER: element at $At runs past its container" }
     return @{ Tag = $tag; ValueAt = $p; Length = $l; End = $p + $l }
 }
 
+function Assert-DerElements {
+    # Every byte from $At to $End is a sequence of well-formed DER elements,
+    # each read in full (constructed ones recursively), with nothing left
+    # over. Used for the parts of SpcIndirectDataContent whose content this
+    # project does not interpret, so that they are validated, not skipped.
+    param([byte[]]$B, [int]$At, [int]$End)
+    $p = $At
+    while ($p -lt $End) {
+        $e = Read-DerTlv -B $B -At $p -Limit $End
+        if ($e.Tag -band 0x20) { Assert-DerElements -B $B -At $e.ValueAt -End $e.End }
+        $p = $e.End
+    }
+    if ($p -ne $End) { throw "DER: elements overrun their container" }
+}
+
 function ConvertFrom-DerOid {
+    # An OBJECT IDENTIFIER's value, decoded strictly: every subidentifier
+    # terminated, minimally encoded (no leading 0x80 byte) and below 2^31,
+    # the first split into the first two arcs per X.690 8.19.4.
     param([byte[]]$B, [int]$At, [int]$Length)
     if ($Length -lt 1) { throw "DER: empty OID" }
-    $parts = New-Object System.Collections.ArrayList
-    $first = [int]$B[$At]
-    [void]$parts.Add([math]::Min([math]::Floor($first / 40), 2))
-    [void]$parts.Add($first - 40 * $parts[0])
+    $subs = New-Object System.Collections.ArrayList
     $v = [int64]0
-    for ($i = $At + 1; $i -lt $At + $Length; $i++) {
-        $v = ($v -shl 7) -bor ([int64]$B[$i] -band 0x7F)
-        if (($B[$i] -band 0x80) -eq 0) { [void]$parts.Add($v); $v = 0 }
+    $open = $false
+    for ($i = $At; $i -lt $At + $Length; $i++) {
+        $byte = [int]$B[$i]
+        if (-not $open -and $byte -eq 0x80) { throw "DER: non-minimal OID subidentifier" }
+        $v = ($v -shl 7) -bor ($byte -band 0x7F)
+        if ($v -gt 0x7FFFFFFF) { throw "DER: OID subidentifier too large" }
+        if (($byte -band 0x80) -eq 0) { [void]$subs.Add($v); $v = 0; $open = $false } else { $open = $true }
     }
-    return ($parts -join ".")
+    if ($open) { throw "DER: unterminated OID subidentifier" }
+    $first = [int64]$subs[0]
+    $arcs = @()
+    if ($first -lt 40) { $arcs = @(0, $first) } elseif ($first -lt 80) { $arcs = @(1, ($first - 40)) } else { $arcs = @(2, ($first - 80)) }
+    for ($i = 1; $i -lt $subs.Count; $i++) { $arcs += $subs[$i] }
+    return ($arcs -join ".")
 }
 
 function ConvertFrom-SpcIndirectData {
     # SpcIndirectDataContent ::= SEQUENCE { data SEQUENCE { type OID, value
     # ANY OPTIONAL }, messageDigest SEQUENCE { digestAlgorithm SEQUENCE { OID,
-    # parameters ANY OPTIONAL }, digest OCTET STRING } }, parsed strictly:
-    # every element where it belongs and nothing after it. Returns the data
-    # type's OID, the digest algorithm's OID and the digest as hex.
+    # parameters NULL OPTIONAL }, digest OCTET STRING } }, parsed strictly:
+    # every element where it belongs, the optional value well-formed DER and
+    # alone, the parameters absent or exactly NULL, and nothing after
+    # anything (review rounds 1 and 2). Returns the data type's OID, the
+    # digest algorithm's OID and the digest as hex.
     param([byte[]]$Content)
     if ($null -eq $Content -or $Content.Length -lt 2) { throw "no SpcIndirectDataContent" }
     $outer = Read-DerTlv -B $Content -At 0 -Limit $Content.Length
@@ -209,12 +240,23 @@ function ConvertFrom-SpcIndirectData {
     if ($data.Tag -ne 0x30) { throw "SpcIndirectDataContent.data is not a SEQUENCE" }
     $dataType = Read-DerTlv -B $Content -At $data.ValueAt -Limit $data.End
     if ($dataType.Tag -ne 0x06) { throw "SpcIndirectDataContent.data.type is not an OID" }
+    if ($dataType.End -lt $data.End) {
+        $value = Read-DerTlv -B $Content -At $dataType.End -Limit $data.End
+        if ($value.End -ne $data.End) { throw "SpcIndirectDataContent.data has more than a type and a value" }
+        if ($value.Tag -band 0x20) { Assert-DerElements -B $Content -At $value.ValueAt -End $value.End }
+    }
     $digestInfo = Read-DerTlv -B $Content -At $data.End -Limit $outer.End
     if ($digestInfo.Tag -ne 0x30 -or $digestInfo.End -ne $outer.End) { throw "SpcIndirectDataContent.messageDigest is not the last SEQUENCE" }
     $alg = Read-DerTlv -B $Content -At $digestInfo.ValueAt -Limit $digestInfo.End
     if ($alg.Tag -ne 0x30) { throw "DigestInfo.digestAlgorithm is not a SEQUENCE" }
     $algOid = Read-DerTlv -B $Content -At $alg.ValueAt -Limit $alg.End
     if ($algOid.Tag -ne 0x06) { throw "DigestInfo.digestAlgorithm.algorithm is not an OID" }
+    if ($algOid.End -lt $alg.End) {
+        $params = Read-DerTlv -B $Content -At $algOid.End -Limit $alg.End
+        if ($params.Tag -ne 0x05 -or $params.Length -ne 0 -or $params.End -ne $alg.End) {
+            throw "DigestInfo.digestAlgorithm.parameters are not absent or exactly NULL"
+        }
+    }
     $octets = Read-DerTlv -B $Content -At $alg.End -Limit $digestInfo.End
     if ($octets.Tag -ne 0x04 -or $octets.End -ne $digestInfo.End) { throw "DigestInfo.digest is not the last OCTET STRING" }
     $hex = ""

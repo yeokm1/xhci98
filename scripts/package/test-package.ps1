@@ -2400,6 +2400,34 @@ try {
         @{ Name = "digest not last"; Bytes = [byte[]](@(0x30, ($spcBody.Length + 2)) + $spcBody + @(0x05, 0x00)) },
         @{ Name = "truncated";       Bytes = [byte[]]($spcGood[0..($spcGood.Length - 2)]) }
     )
+    # Review round 2: what the parser does not interpret is still validated.
+    # Each variant below is the good encoding with one element changed.
+    function New-SpcVariant {
+        param([byte[]]$Data, [byte[]]$Alg)
+        $di = [byte[]](@(0x30, ($Alg.Length + 22)) + $Alg + @(0x04, 0x14) + $spcDigest)
+        $body = [byte[]]($Data + $di)
+        return ,[byte[]](@(0x30, $body.Length) + $body)
+    }
+    $spcOkValue = New-SpcVariant -Data ([byte[]](0x30, 0x10, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                 0x30, 0x02, 0x05, 0x00)) -Alg $spcAlg
+    $spcOk2 = ConvertFrom-SpcIndirectData -Content $spcOkValue
+    Assert-True ($spcOk2.DataOid -eq "1.3.6.1.4.1.311.2.1.15") `
+        "ConvertFrom-SpcIndirectData refused a data value that is one well-formed element, which SignTool writes."
+    $spcAlgNoParams = [byte[]](0x30, 0x07, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A)
+    Assert-True ((ConvertFrom-SpcIndirectData -Content (New-SpcVariant -Data $spcData -Alg $spcAlgNoParams)).DigestOid -eq "1.3.14.3.2.26") `
+        "ConvertFrom-SpcIndirectData refused a digest algorithm with its parameters absent, which DER allows."
+    $spcBad += @(
+        @{ Name = "params 05 FF";      Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0xFF))) },
+        @{ Name = "params not NULL";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x04, 0x00))) },
+        @{ Name = "params then more";  Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0B, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00, 0x05, 0x00))) },
+        @{ Name = "OID unterminated";  Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x80, 0x05, 0x00))) },
+        @{ Name = "OID non-minimal";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x0A, 0x06, 0x06, 0x2B, 0x0E, 0x03, 0x80, 0x02, 0x1A, 0x05, 0x00))) },
+        @{ Name = "data value broken"; Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x10, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x30, 0x02, 0x05, 0x05)) -Alg $spcAlg) },
+        @{ Name = "data two values";   Bytes = (New-SpcVariant -Data ([byte[]](0x30, 0x12, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F,
+                                                                           0x05, 0x00, 0x05, 0x00, 0x05, 0x00)) -Alg $spcAlg) },
+        @{ Name = "long form for 9";   Bytes = (New-SpcVariant -Data $spcData -Alg ([byte[]](0x30, 0x81, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00))) }
+    )
     foreach ($c in $spcBad) {
         $threw = $false
         try { [void](ConvertFrom-SpcIndirectData -Content $c.Bytes) } catch { $threw = $true }
@@ -2413,11 +2441,13 @@ try {
     Assert-True ($rec19.Contains($script:TestSignThumbprint)) `
         "package-common.ps1's pinned thumbprint $($script:TestSignThumbprint) is not the one design record 19 records."
     $tsPkgText = [System.IO.File]::ReadAllText($packager)
-    $tsSignAt = $tsPkgText.IndexOf('Write-Step "x64 test signature (design record 19)"')
+    $tsSignAt = $tsPkgText.IndexOf('Invoke-TestSign -Source $DriverPath')
+    $tsHcdAt = $tsPkgText.IndexOf('& powershell.exe @gateArgs')
     $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
     $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
     $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
-    Assert-True ($tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0) `
+    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0 -and
+                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt) `
         "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
     Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
         "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."
