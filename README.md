@@ -9,7 +9,9 @@ The driver replaces Windows' own USB port and hub drivers with its own, so it is
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
 
-This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors, although best effort has been made to ensure compatibility. [Omores](https://www.youtube.com/@O_mores) has also [tested 1.x](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
+This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far.
+
+No guarantees have been made on xHCI implementations from other vendors, although best effort has been made to ensure compatibility. [Omores](https://www.youtube.com/@O_mores) has also [tested 1.x](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
@@ -86,21 +88,25 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 
 ### The package
 
-```
-release-x86\   xhci98.sys, xhci98.inf, xhciuas.sys, xhciuas.inf - 32-bit Windows
-               (98 SE, ME, 2000, XP, Vista, 7) - txtsetup.oem, for F6,
-               portsw.vbs, the Intel port switchover's switch, and
-               xhcimsi.sys, the MSI helper for 32-bit Vista and 7 only
-debug-x86\     the same seven files, built for troubleshooting
-release-x64\   the same files but xhcimsi.sys, for 64-bit Windows (XP x64,
-               Vista x64, 7 x64)
-debug-x64\     the same, built for troubleshooting
-xhciqual\      XHCIQUAL.EXE, the DOS qualifier
-xhcisnap\      XHCISNAP.EXE, the log snapshot reader
-readme.txt     the release notes in plain text
-```
+| Directory | For | Contents |
+|---|---|---|
+| `release-x86\` | 32-bit Windows: 98 SE, ME, 2000, XP, Vista, 7 | the drivers, the helper and the extras below |
+| `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcimsi.sys`, plus `xhci98-test.cer` |
+| `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
+| `xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier |
+| `xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader |
+| `readme.txt` | | the release notes in plain text |
 
-`release-x86\` or `release-x64\` is the one to install. The `debug-` directories hold the same drivers built for troubleshooting, only install if asked. Each directory carries both drivers, each with its own INF.
+In each driver directory:
+
+- `xhci98.sys` and `xhci98.inf`: the controller driver.
+- `xhciuas.sys` and `xhciuas.inf`: the UAS storage driver.
+- `xhcimsi.sys` (32-bit only): the MSI helper. 32-bit Vista and 7 need this small second driver to give the controller a message-signalled interrupt. The INF installs it on those two systems only, as a service that starts at boot, which is why they ask for a restart. Every other system ignores it.
+- `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
+- `portsw.vbs`: the switch for the Intel port switchover.
+- `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
+
+`release-x86\` or `release-x64\` is the one to install.
 
 ### Install
 
@@ -248,7 +254,9 @@ It is read each time a device enumerates, so unplug and replug the drive after c
 - A device behind a hub keeps its normal rate.
 - While it is set, any root-port Low- or Full-Speed device that asks for 16 to 63 ms is polled faster too.
 
-**`4`: the rate the client chooses.** An interrupt endpoint whose polling interval is `128`, `129` or `130` is polled at 2000, 4000 or 8000 Hz; every other interval is polled as the specification reads it, so `4` does not speed up 16 to 63 ms the way `2` and `3` do. It applies to a Low- or Full-Speed device on a root port, and to a High-Speed or SuperSpeed device at a root port or behind a hub. Set the value to `4` and restart first, then set hidusbf (or another filter) to write `128`, `129` or `130`.
+**`4`: the rate the client chooses.** An interrupt endpoint whose polling interval is `128`, `129` or `130` is polled at 2000, 4000 or 8000 Hz; every other interval is polled as the specification reads it, so `4` does not speed up 16 to 63 ms the way `2` and `3` do.
+
+It applies to a Low- or Full-Speed device on a root port, and to a High-Speed or SuperSpeed device at a root port or behind a hub. Set the value to `4` and restart first, then set hidusbf (or another filter) to write `128`, `129` or `130`.
 
 - A device that itself asks for 128 to 130 ms is polled at 2000 to 8000 Hz while the value is `4`.
 - A filter that writes one of those codes while the value is not `4` gets what the number means without it: a Low- or Full-Speed device is polled every 128 ms, and a High-Speed or SuperSpeed one every 4.096 s.
@@ -271,7 +279,9 @@ With the defaults, the root hub's first report typically comes 20 to 30 ms after
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors typically start on the USB 2.0 controller.
 
-The driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down. It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). The hand-back writes only the registers the driver itself wrote.
+The driver can move them to the xHCI controller at each start and resume, and hand them back to the USB 2.0 controller when its controller is disabled, removed or the machine shuts down.
+
+It does this only on Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`; every other controller is left alone unless `XhciIntelPortSwitch` is `2` (below). The hand-back writes only the registers the driver itself wrote.
 
 - A device on a switchable connector under a running USB 2.0 driver (NUSB's, for example) is disconnected there when this driver starts and comes back under it. Do not have a drive busy on a blue connector at that moment.
 - `XhciIntelPortSwitch` set to `1` turns it on; `0`, absent or not a `DWORD` is off. It is read when the controller starts, so restart after changing it.
@@ -282,7 +292,9 @@ Setting `XhciIntelPortSwitch` to 2 writes Intel chipset registers on any Intel U
 
 ### The Intel 7/8/9-series interrupt routing repair
 
-On the same Intel chipsets, two chipset registers decide which interrupt line the xHCI controller's interrupt reaches. Some firmware points them at a different line from the one it tells Windows: the Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so the driver never hears from the controller and every USB device on it is slow or stops ([issue 12](docs/issues/12-e7250-xp64-boot-enable-slot-refused.md)).
+On the same Intel chipsets, two chipset registers decide which interrupt line the xHCI controller's interrupt reaches.
+
+Some firmware points them at a different line from the one it tells Windows. The Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so the driver never hears from the controller and every USB device on it is slow or stops ([issue 12](docs/issues/12-e7250-xp64-boot-enable-slot-refused.md)).
 
 The driver reads those registers at each start and resume and, where `XhciIntelIrqRoute` allows it, points the interrupt at the line Windows assigned:
 
@@ -294,24 +306,51 @@ It writes nothing on any other controller, nothing when the interrupt is a messa
 
 ### Polling and message-signalled interrupts
 
-A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through a small helper driver in the package, `xhcimsi.sys`. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` `0` (automatic, the default) chooses, in this order:
+How the controller's events reach the driver:
+
+- A controller with no interrupt pin is polled instead of refused.
+- So is one whose line the driver sees raised and never delivered. Another kind of dead interrupt needs `XhciInterruptMode` `2`.
+- On Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through the helper driver `xhcimsi.sys` in the package. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot.
+
+`XhciInterruptMode` `0` (automatic, the default) chooses, in this order:
 
 1. On Vista and 7, a message-signalled interrupt, where Windows grants one and it connects.
 2. The controller's interrupt line, where it has one (interrupt pin not `0`) and Windows assigned it.
 3. Polling, for a controller with no interrupt pin, or none assigned by Windows, or a message Windows granted that could not be connected.
 4. After the start, a line the driver sees the controller raise that never reaches it moves the controller to polling by itself. A failure the driver cannot see in the controller's registers is not caught; set `2` for that.
 
-`1` asks for the line (a controller with none then fails to start, Code 10, on 98 SE to XP and on 32-bit Vista and 7 without the helper), `2` forces polling. `XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
+The other values:
+
+- `1` asks for the line. A controller with none then fails to start (Code 10) on 98 SE to XP, and on 32-bit Vista and 7 without the helper.
+- `2` forces polling.
+
+`XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods, and `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
 
 ### UAS command size and two transfer pieces at once
 
-A UAS command moves up to 1 MiB by default: `XhciMaxTransferKB`, `64` to `2048`, sets it for every UAS drive on the controller, and Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets it for one drive model. Restart after changing either. `XhciWideMap` set to `1` lets the driver keep two pieces of a large bulk transfer on the controller at once on Windows 2000 to 7; it is **off by default**, because a regression would show as wrong data rather than an error. See the release notes, "XhciMaxTransferKB" and "XhciWideMap".
+A UAS command moves up to 1 MiB by default.
+
+- `XhciMaxTransferKB`, `64` to `2048`, sets it for every UAS drive on the controller.
+- Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets it for one drive model.
+- Restart after changing either.
+
+`XhciWideMap` set to `1` lets the driver keep two pieces of a large bulk transfer on the controller at once on Windows 2000 to 7. It is **off by default**, because a regression would show as wrong data rather than an error. See the release notes, "XhciMaxTransferKB" and "XhciWideMap".
 
 ### Low- and Full-Speed devices behind a built-in hub
 
-Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub. The driver gives such a device the standard speed ID (Full Speed `1`, Low Speed `2`) when the table names neither speed and does not use that number for another. A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback.
+Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub.
 
-It is **on by default**; `XhciUsb2HubSpeedFallback` set to `0` turns it off, then restart, and such devices are then refused again. In `XHCISNAP`, `Usb2HubSpeedFallbacks` counts the devices given a standard ID and `TopoBehindHubNoSpeed` the ones still refused; the `hub.speed.place` and `hub.speed.route` notes name each one, and on the VL805 the `pci.vl805.fw` note records the card's firmware version. See [issue 13](docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md).
+The driver gives such a device the standard speed ID (Full Speed `1`, Low Speed `2`) when the table names neither speed and does not use that number for another. A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback.
+
+It is **on by default**; `XhciUsb2HubSpeedFallback` set to `0` turns it off, then restart, and such devices are then refused again.
+
+In `XHCISNAP`:
+
+- `Usb2HubSpeedFallbacks` counts the devices given a standard ID, and `TopoBehindHubNoSpeed` the ones still refused.
+- The `hub.speed.place` and `hub.speed.route` notes name each one.
+- On the VL805, the `pci.vl805.fw` note records the card's firmware version.
+
+See [issue 13](docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md).
 
 ### Selective suspend
 
@@ -449,7 +488,9 @@ The drivers are C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64
 
    `-NoTargetEvidence` skips the import gate's target-file evidence steps on a clone that has no target files staged.
 
-4. Build the two tools that ship beside the drivers. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the drivers never use it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
+4. Build the two tools that ship beside the drivers:
+   - `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier. It needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points), the only tool installed normally on the host; the drivers never use it.
+   - `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
 5. Make install media. A `.sys` on its own is not install media; each INF travels with its driver, and nothing else does, because the controller's INF has Windows supply its own `usbd.sys` and `usbui.dll`.
 
