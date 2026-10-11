@@ -1515,11 +1515,14 @@ x64, symbol names from the public symbols in `tools\symbols`;
   `USBD_START_ISO_TRANSFER_ASAP`, when the stream has a feedback endpoint;
   otherwise it sets `TransferFlags` to 4 (ASAP). The counter starts at the
   current frame + 2 and advances by one a packet.
-- `USBType1AsyncEndpointPoll` reads the feedback endpoint every refresh
-  period (2^`bRefresh` frames, 32 here): `RESET_PIPE` (URB function 0x1E)
-  on the feedback pipe, then a one-packet, 3-byte isochronous IN URB at an
-  explicit `StartFrame` - the current frame + the refresh period + 2 at the
-  start, then advanced by the refresh period each poll.
+- `USBType1AsyncEndpointPoll` reads the feedback endpoint: `RESET_PIPE`
+  (URB function 0x1E) on the feedback pipe, then a one-packet, 3-byte
+  isochronous IN URB at an explicit `StartFrame` - the current frame + the
+  refresh period (2^`bRefresh` frames, 32 here) + 2 at the start. The
+  read's completion routine advances that frame by the refresh period and
+  queues the next poll at once (`IoQueueWorkItem`, no timer), whether the
+  read succeeded or failed: what spaces the reads 32 ms apart is the bus
+  completing each one at the frame it named.
 
 So every isochronous URB of an asynchronous Type I stream carries an
 explicit `StartFrame` on Windows 7, and every URB of an adaptive or
@@ -1531,34 +1534,69 @@ no virtual machine and no other device had reached this path.
 not all be given xHCI Frame IDs - no CFC, no frame sample, a packet outside
 the IST+1 to 895 frame window, or a cadence the Interval does not share -
 as `USBD_STATUS_BAD_START_FRAME`, rather than let the engine fall back to
-Start Isoch ASAP (SIA), which moves the start. On a controller without CFC
-no Frame ID is ever usable, so every one of these URBs was refused before a
-TRB was built: the device was put in its streaming alternate setting and
-sent nothing, and its output stage hissed. The command storm is
-`usbaudio.sys`'s own reading of the feedback endpoint: each `RESET_PIPE` on
-the running, idle isochronous endpoint is a Stop Endpoint (whose event is
-the code 27) and a Configure Endpoint that drops and adds it (`hcd_cfg.c`'s
-`RESET_PIPE`, unchanged), every 32 ms, with each refused data URB's
-abort and reset beside it. Neither was the fault.
+Start Isoch ASAP (SIA), which moves the start. Its policy then was to give
+a controller without CFC no Frame ID at all, so every one of these URBs was
+refused before a TRB was built: the device was put in its streaming
+alternate setting and sent nothing, and its output stage hissed. The
+command storm is `usbaudio.sys`'s own reading of the feedback endpoint:
+each `RESET_PIPE` on the running, idle isochronous endpoint is a Stop
+Endpoint (whose event is the code 27) and a Configure Endpoint that drops
+and adds it (`hcd_cfg.c`'s `RESET_PIPE`, unchanged), with each refused
+data URB's abort and reset beside it. Neither was the fault.
+
+**Why plain SIA is not enough.** The feedback read paces itself by its own
+completion. Run as SIA, a read completes a frame or two after it is sent;
+`usbaudio.sys` then asks for the next one 32 frames further on and sends
+it at once, so the requested frame runs ahead of the bus by about 30
+frames a read, and within some 28 reads it is further ahead than a Frame
+ID can name and `hcdIsoAdmit` refuses it - each refusal one more reset,
+with the reads no longer paced at all. A read must therefore run at the
+frame it names, which needs a Frame ID.
 
 **The rule now.** An explicit `StartFrame` that `hcdIsoAdmit` accepted - no
 further ahead than a Frame ID can name (895 frames) and no further behind
-than usbdi's start-frame range - is never refused for want of Frame IDs. It
-is published with Frame IDs where all of its packets can have them, as
-before, and otherwise with SIA. That is Linux's rule
+than usbdi's start-frame range - is never refused for want of Frame IDs:
+
+- With CFC, as before: a Frame ID on every TD where every packet can have
+  one; otherwise SIA.
+- Without CFC, a request that starts a data flow - nothing of the pipe's
+  on the ring - carries a Frame ID on its first TD and SIA on the rest,
+  which is what xHCI 4.11.2.5 (p.200) allows on such a controller:
+  "software may set the Frame ID (that is, SIA = '0') only in the first
+  Isoch TD of an Isoch data flow, and shall set SIA = '1' in all
+  subsequent Isoch TDs of the data flow". Only the first packet's frame is
+  then asked of the window. The feedback read is such a request every
+  time, because the `RESET_PIPE` before it leaves its endpoint new and its
+  ring empty; so is a data stream's first URB once its frame is at least
+  IST+1 frames away.
+- Without CFC, a request that continues a flow - something of the pipe's
+  still on the ring - goes out with SIA, "one Interval after the last TD
+  the endpoint ran", which for the data pipe's contiguous frame counter is
+  the frame it asked for.
+- Any request whose Frame ID the window cannot name (a first frame inside
+  IST+1, or behind the current frame), or with no frame sample, goes out
+  with SIA.
+
+A data flow ends when the ring runs dry at a service interval (Ring
+Underrun or Overrun); "nothing on the ring" is taken as that, and when the
+last TD has only just completed the controller may not yet have seen the
+empty ring and may still count the flow as running. It "may ... ignore the
+Frame ID fields in subsequent Isoch TDs until the data flow is terminated"
+(the same paragraph), so such a request then runs as SIA would have, which
+is the fallback anyway. Linux takes no Frame ID at all without CFC
 (`external/linux/xhci-ring.c`, `xhci_queue_isoc_tx`: SIA by default, a
-Frame ID only when the controller has CFC and the frame is valid; reference
-source), and it is what this stream needs, because SIA means "one Interval
-after the last TD the endpoint ran": a stream whose URBs follow each other
-(the data pipe's contiguous counter) loses nothing, and a one-packet read
-at a refresh boundary (the feedback pipe) is read as soon as the
-controller can. What SIA cannot keep is the client's exact frame for a
-stream's first URB on an idle endpoint: it runs a few frames early or late.
-usbport would have scheduled it at its frame; this bus cannot on a
-controller without CFC, and Linux makes the same trade there. The
-URB's `StartFrame` is left as the client gave it, and the per-packet
-`Length` and `Status` are written as for any other request (section 6.5;
-for an IN packet, the bytes received).
+Frame ID only when the controller has CFC; reference source), which does
+not pace a client that waits for its read to complete at the frame it
+named.
+
+What SIA does not keep, wherever it is taken, is the client's frame: a
+request runs at the controller's next service after the last TD the
+endpoint ran - early by as much as its start was ahead (up to 895 frames),
+late by as much as it was behind, and with any gap the client left between
+two requests closed. That is the cost of every SIA case above, not only of
+a stream's first request. The URB's `StartFrame` is left as the client gave
+it, and the per-packet `Length` and `Status` are written as for any other
+request (section 6.5; for an IN packet, the bytes received).
 
 **What stays refused:** a `StartFrame` more than 895 frames ahead, or
 further behind than the range, still `BAD_START_FRAME` at admission; every
@@ -1572,23 +1610,30 @@ Payload 200; interface 2 alternate 1's two endpoints, with the class-specific
 descriptors between them, are both opened, in order; a 3-byte packet at
 offset 0 of a 3-byte buffer passes `XhciPipeIsoCheck` against Max ESIT
 Payload 3, and one byte more is refused. Host vectors in `test_pipe` and
-`test_td`.
+`test_td`, the latter with 300 feedback reads in a row each at its Frame ID
+and the lead steady inside the window.
 
-**The log.** Each of the first four such publications since the driver
-loaded for the controller records `iso.sia` in the note ring (verbosity 2
-or above; the count is `HCD_CONTROLLER.IsoStartsSia`): the slot in bits
-31:24, the DCI in 23:16, the reason in 15:12 (2 no CFC, 3 no frame sample,
-4 a packet outside the window or a cadence the Interval does not share)
-and the low 12 bits of `StartFrame` minus the current frame. A dump also
-shows it as `IsoSubmits` above `IsoSubmitsWithFrameId`.
+**The log.** In the note ring (verbosity 2 or above), the first four
+first-TD Frame IDs given on a controller without CFC since the driver
+loaded for the controller record `iso.fid1`, and the first four SIA
+publications of an explicit `StartFrame` record `iso.sia`
+(`HCD_CONTROLLER.IsoStartsFirstFrameId` and `IsoStartsSia` count them all).
+Both carry the slot in bits 31:24, the DCI in 23:16, the case in 15:12 (5
+a first-TD Frame ID; 2 no CFC and a flow under way, 3 no frame sample, 4 a
+frame the window cannot name or, with CFC, a cadence the Interval does not
+share) and the low 12 bits of `StartFrame` minus the current frame. A dump
+counts a request with any Frame ID in `IsoSubmitsWithFrameId`.
 
 **Owed.** QEMU has no asynchronous audio device with a feedback endpoint,
 and its xHCI reports no CFC either, so the virtual-machine legs are
 regression legs only (QEMU's `usb-audio`, adaptive and ASAP, on 98 SE and
 7 x64 playing at the same timing; a stick copy). The device itself is a
-bench clause: on the E7250 the Play 2 plays a tone without hiss at 44.1 and
-48 kHz, `iso.sia` records with reason 2 for slot 2's DCIs 2 and 7, and
-`IsoSubmits` grows while `IsoSubmitsWithFrameId` stays 0.
+bench clause, and so is the controller's honouring of a first-TD Frame ID
+without CFC, which no reference driver exercises: on the E7250 the Play 2
+plays a tone without hiss at 44.1 and 48 kHz, `iso.fid1` records for the
+feedback endpoint's DCI 7 with a lead near 34, and Stopped events grow at
+about 31 a second and commands at about twice that - one `RESET_PIPE` a
+32 ms read, not faster.
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
