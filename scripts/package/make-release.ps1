@@ -3119,7 +3119,7 @@ other.
       To check: bcdedit /enum {current} shows "testsigning Yes".
       To turn it off: bcdedit /set testsigning off, and restart. The
       driver then needs F8 again, or it does not load and the controller
-      shows Code 52 or Code 39.
+      shows Code 39.
 
       - With BitLocker on the system drive, suspend BitLocker before
         changing the boot setting, or the next start asks for the
@@ -3868,11 +3868,12 @@ being unsigned, and no change to this driver can remove them:
     NUSB's usbport.sys crashes the machine as it stops the old driver,
     before this release runs. Follow section 4, which avoids it.
 
-  * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE. The 64-bit drivers
-    carry this project's own test signature, not a Microsoft one. Turn on
-    test-signing mode once (section 4), which shows "Test Mode" on the
-    desktop, or disable driver signature enforcement with F8 at every
-    start; otherwise the controller shows Code 52 or Code 39.
+  * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE, OR DRIVER
+    SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
+    own test signature, not Microsoft's. Turn on test-signing mode once
+    (section 4), which shows "Test Mode" on the desktop, or disable driver
+    signature enforcement at every start (F8); otherwise the controller
+    sits at Code 39.
 
   * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
     installed there is no mass-storage driver at all. HID and audio still
