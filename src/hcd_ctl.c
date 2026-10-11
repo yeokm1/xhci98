@@ -1855,17 +1855,26 @@ static ULONG hcdQueueDrain(PHCD_CONTROLLER hc)
 }
 
 /*
- * The lost-interrupt backstop (35-T.1, design record 17 section 4.1): a
- * step of its own after hcdRecover, under the power gate as that is, admitted
- * by hcdDrainAdmitted. Under the controller lock it peeks at the event TRB
- * at the software dequeue; an event pending at the same index, cycle, drain
- * pass (DpcCount, bumped under this lock by every admitted drain) and start
- * generation for the backstop interval was written and never drained, and
- * the drain is queued through the ISR's own admission. It writes no
- * register: ERDP, EHB and IE stay the drain's. A refused admission drops
- * the observation, so timing starts afresh. IRQL: PASSIVE_LEVEL.
+ * The lost-interrupt backstop (35-T.1, design record 17 section 4.1),
+ * admitted by hcdDrainAdmitted. Under the controller lock it peeks at the
+ * event TRB at the software dequeue; an event pending at the same index,
+ * cycle, drain pass (DpcCount, bumped under this lock by every admitted
+ * drain) and start generation for the backstop interval was written and
+ * never drained, and the drain is queued through the ISR's own admission.
+ * It writes no register: ERDP, EHB and IE stay the drain's. A refused
+ * admission drops the observation, so timing starts afresh.
+ *
+ * Task 36.55: called from the tolerance clock's DPC on every tick, no
+ * longer from the controller thread, which Windows 98 SE was seen to leave
+ * unscheduled while a disk request waited on this very drain (record 17
+ * section 4.1, "Amended"). No power gate: what it queues is the ISR's own
+ * DPC, which admits itself under the controller lock as an interrupt's
+ * does at any point of a transition. One peek and at most one insertion;
+ * never a drain inline. The caller runs it before it re-arms its timer, so
+ * HcdTimersDrain, which waits for that re-arm or its refusal, waits for
+ * this too. IRQL: DISPATCH_LEVEL, no lock held.
  */
-static VOID hcdBackstop(PHCD_CONTROLLER hc)
+VOID HcdCtlBackstopTick(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     KIRQL oldIrql;
@@ -1881,7 +1890,6 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
         return;
     }
 #endif
-    HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     admitted = hcdDrainAdmitted(hc);
     pending = admitted ? XhciEventRingPending(&ext->EventRing) : 0UL;
@@ -1889,7 +1897,6 @@ static VOID hcdBackstop(PHCD_CONTROLLER hc)
                             ext->EventRing.Dequeue, ext->EventRing.Ccs,
                             ext->DpcCount, hc->TolStartGen, HcdTolNow(hc));
     XhciControllerLockRelease(ext, oldIrql);
-    HcdPowerGateLeave(hc);
     if (!queue || !hcdQueueDrain(hc)) {
         return;
     }
@@ -2128,9 +2135,9 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
      * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
     hcdTerminalRelease(hc);
-    hcdBackstop(hc);
-    /* Record 15 sections 4.2 and 7.1: a moved line's containment, and a
-     * peek under a poll delivery. */
+    /* The lost-interrupt backstop is the tolerance clock's DPC's since task
+     * 36.55 (HcdCtlBackstopTick). Record 15 sections 4.2 and 7.1: a moved
+     * line's containment, and a peek under a poll delivery. */
     HcdPollThreadPass(hc);
     hcdContain(hc);
 }
@@ -2305,9 +2312,16 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
      * does nothing but retire its count - rather than dequeued:
      * KeRemoveQueueDpc's TRUE does not promise, before Vista SP1, that the
      * DPC will not run, and retiring its count here as well would retire it
-     * twice (Codex review of 26-A.2, round 2, finding 1). */
+     * twice (Codex review of 26-A.2, round 2, finding 1).
+     *
+     * The tolerance clock's DPC still queues it until HcdTimersDrain below
+     * (HcdCtlBackstopTick, task 36.55): it counts DpcsInFlight with an
+     * interlocked increment and then reads DpcClosed (hcdQueueDrain), so
+     * the close is an interlocked exchange before DpcsInFlight is read.
+     * Each side orders its write before its read; either the producer sees
+     * the close and rolls back, or this wait sees its count. */
     XHCI_DBG_TEXT("hcd: release: DPC");
-    hc->DpcClosed = 1;
+    (VOID)InterlockedExchange((PLONG)&hc->DpcClosed, 1);
     while (hc->DpcsInFlight != 0) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);

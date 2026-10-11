@@ -2179,6 +2179,8 @@ VOID HcdTimersOpen(PHCD_CONTROLLER hc);
 VOID HcdFrameTimerStart(PHCD_CONTROLLER hc);
 VOID HcdTolClockStart(PHCD_CONTROLLER hc);
 ULONG HcdTolNow(PHCD_CONTROLLER hc);
+/* hcd_ctl.c, for the tolerance clock's DPC (task 36.55) */
+VOID HcdCtlBackstopTick(PHCD_CONTROLLER hc);
 
 /* hcd_door.c */
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);

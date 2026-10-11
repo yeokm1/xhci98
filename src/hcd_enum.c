@@ -236,12 +236,15 @@ static ULONG hcdCommandBusy(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 
 /*
  * Task 36.13 (record 15 section 11, the dead line under mode 1): the
- * backstop runs on this thread (hcdBackstop) and cannot drain while the
- * thread waits for a completion of its own (issue 12 section 2), so on a
- * line that delivers nothing - mode 1, which never moves to polling, or
- * mode 0 before its move - a command's or an EP0 transfer's completion
- * would stand undrained until the wait expired and the controller was
- * reset. Between the slices of such a wait the thread asks for a drain
+ * backstop then ran on this thread and could not drain while the thread
+ * waited for a completion of its own (issue 12 section 2), so on a line
+ * that delivers nothing - mode 1, which never moves to polling, or mode 0
+ * before its move - a command's or an EP0 transfer's completion stood
+ * undrained until the wait expired and the controller was reset. Since
+ * task 36.55 the backstop is the tolerance clock's DPC's
+ * (HcdCtlBackstopTick) and drains such a completion within its interval;
+ * this drain stays because it is quicker, at each slice rather than after
+ * the interval. Between the slices of such a wait the thread asks for a drain
  * itself: only when an event stands at the dequeue and the drain is
  * admitted (HcdDrainPending), and only at XhciTolerance 1; at 0 nothing
  * but the ISR and the poller drains, as before. On a working line the
