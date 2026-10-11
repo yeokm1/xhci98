@@ -188,7 +188,7 @@ And four ways to gate B: on the PCI id; on the observed pattern (USB 2.0
 group, HSO and IHI set, an HS-only table); on the PCI id and the pattern;
 or generally, for any controller, restricted to devices behind a hub with a
 collision check. **The last was taken** (orchestrator decision on the second
-opinion's recommendation, owner to confirm; the owner asked for the fix to
+opinion's recommendation, owner confirmed 2026-10-11; the owner asked for the fix to
 be in the
 `2.2.0.3` test build): HSO and IHI describe the root port, not the numeric
 IDs of downstream speeds, and the actual topology - a device behind a hub -

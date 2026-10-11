@@ -348,7 +348,7 @@ to the place that was seen to run:
 
 Moving the step off the thread revises this section's first paragraph,
 the owner's design of 2026-10-06 ("a step of its own on each
-controller-thread pass"). Orchestrator decision, owner to confirm.
+controller-thread pass"). Orchestrator decision, owner confirmed 2026-10-11.
 
 ### 4.2 The soft retry (35-T.2, unconditional but for an exclusion list)
 

@@ -1696,7 +1696,7 @@ superseded, bisect, NOT HIT or RECORDED rows):
   Release notes, Known limitations: "disabling the controller hangs after the driver closes off a controller it
   could not prove stopped (since 2.2.0.0)". Evidence: `legs\w2k\f-b-*.txt`, `r2*-*`; `legs\w98\qf2.txt`,
   `qf-trace-tail.txt`, `qj1.txt`, `qj2.txt`.
-- **MSI-X BackstopDrains (NT6): attributed to QEMU, no driver change** (orchestrator decision; owner to confirm).
+- **MSI-X BackstopDrains (NT6): attributed to QEMU, no driver change** (orchestrator decision; owner confirmed 2026-10-11).
   - Under `msi=off,msix=on` every NT6 snapshot counts BackstopDrains: 7 x86/x64 3-20, Vista x86 127 and 288,
     Vista x64 115. Under MSI, line and polling it reads 0. Function is clean (fc/VERIFY 0 bad). Plays under
     MSI-X took 21.5-22.9 s against 20.3-21.0 s under MSI.
