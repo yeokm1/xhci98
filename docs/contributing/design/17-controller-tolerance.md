@@ -57,6 +57,14 @@ section 4.11's note on what acts at 0 a line for each; section 5's PED row
 says the layer answers PED clear on QEMU, which ignores the PED write, and
 section 5 notes QEMU's dequeue left on the Link TRB.
 
+Revision 12, 2026-10-11, for roadmap-hcd task 36.54, written before code:
+section 4.12 brings stream endpoints into the soft retry, restarts a
+stream ring at its base when a port reset rebuilds its endpoint, and adds a
+quirk for QEMU's xHCI alone, which ignores a Stream Context's DCS bit; it
+records the diagnosis of the UAS drive that stayed dead after a
+Transaction Error on its data stream. Section 4.2's scope line points to
+it.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -258,6 +266,7 @@ cached memory read per poll.
 no streams, whose device is not behind a TT, on a controller not on Linux's
 `XHCI_NO_SOFT_RETRY` list (`1022:43B9`, `1022:43BB`, `1B6F:7023`,
 `1B6F:7052`). EP0, isochronous and stream endpoints keep today's handling.
+(Since revision 12 a stream's own queue is in scope too: section 4.12.)
 
 **The engine intercepts first.** In `XhciXferEvent`, once the event is
 matched to its TD and before any of the TD's terminal mutations - the
@@ -1149,6 +1158,225 @@ save gate that counts every transfer from submission to completion and
 spoils a save a late mapping publishes into. At 0 the refused resume of
 a spent run of failures is a change from `2.1.1.0`, where that resume
 brought the controller back.
+
+### 4.12 Stream endpoints (36.54, revision 12)
+
+Section 4.2 left stream endpoints out of the soft retry. Phase 36's matrix
+then found a UAS drive that never moved data again after an injected
+Transaction Error on a data stream (XP x64, the `qemu` flavour, fault 16;
+2 runs of 3 stuck until the device was removed and added again, and the
+36.22 stage-1 build the same), while a Bulk-Only stick under the same fault
+was recovered by the soft retry. The same matrix recorded a stuck device
+after fault 17 (a short packet) and after fault 15 (a stop) at 2 MiB
+commands, each with `xhciuas` showing no timeout, and on Windows 98 SE a
+stuck device whose `XHCISNAP` run hung. This section is the diagnosis
+(4.12.1, 4.12.6, 4.12.7) and its three answers: the soft retry on a stream
+(4.12.2), stream rings that restart at their base when a port reset
+rebuilds their endpoint (4.12.3), and a quirk for QEMU's xHCI alone
+(4.12.4).
+
+#### 4.12.1 What the traces show
+
+The record of 4.2 implied that a stream's failure waits for `xhciuas`'s
+class timeout. It does not: a data transfer that fails starts `xhciuas`'s
+recovery at once (`uas_xport.c`, `uasXferDone` marks the slot Failed, and
+the recovery worker resets the device), so the RESET_PORT follows the fault
+within a second. That reset is what then fails to converge, and only on
+QEMU.
+
+QEMU's xHCI (`hw/usb/hcd-xhci.c`, read at QEMU 11.1.0) ignores a Stream
+Context's DCS bit. `xhci_find_stream`, the first time a stream is used
+after its endpoint was configured, stopped or reset (a fresh endpoint
+context, or `xhci_reset_streams`, sets every stream's `sct` to -1), reads
+the Stream Context and initialises the stream's ring with `xhci_ring_init`,
+which sets the consumer cycle state to 1 and never reads bit 0 of the
+context. The Endpoint Context's own path reads its DCS, and a Set TR
+Dequeue Pointer for a stream takes the DCS it is given, for that stream,
+until the next stop or reset. A stream whose ring the driver has wrapped an
+odd number of times, so that its producer cycle is 0, is then invisible to
+QEMU: a doorbell for it gives `usb_xhci_ep_kick` and no transfer, and no
+event. QEMU's kick then writes its own CCS back into the Stream Context.
+
+Traced on XP x64 (QEMU's own trace events, and the guest's memory read
+through the monitor; development host A): after the RESET_PORT the driver
+had written every Stream Context with the DCS of its ring (0 where the ring
+was on a cycle-0 lap), every data-in and status stream on such a lap stayed
+dead, and the contexts read DCS 1 over TRBs whose cycle bit was 0. Each
+later timeout, ABORT TASK, LOGICAL UNIT RESET and port reset stopped or
+reconfigured the endpoints and forced CCS 1 again, so the loop never
+converged; the run that recovered was the one whose next tag landed on
+rings on an even lap. The driver's Stream Contexts, its Set TR Dequeue
+pointers and DCS, and its per-stream doorbells were correct throughout. A
+real controller reads DCS (xHCI 1.2c 6.2.4.1 and 4.12; 4.6.9 for a Stop
+Endpoint), so the reset path as it stands is correct there. On QEMU the
+same defect reaches every stop or reset of a streams endpoint - a cancel,
+an abort, selective suspend's stop, the injection's own stop - not only
+this fault.
+
+The injection adds nothing of its own to that: it delivers the error for a
+TD QEMU never started, while QEMU's `usb-uas` still holds that tag's data
+phase, which a real error would not leave; the dead streams come from the
+stops and the reconfiguration, which a real error's recovery runs too.
+
+#### 4.12.2 The soft retry on a stream
+
+Linux soft-retries a Transaction Error on a stream ring exactly as on any
+bulk ring (`xhci-ring.c`, `process_bulk_intr_td`, whose ring is the
+stream's; after the Reset Endpoint with TSP set, `xhci_handle_cmd_reset_ep`
+rings every stream with TDs, `ring_doorbell_for_active_rings`), and xHCI
+1.2c 4.6.8.1 excludes isochronous endpoints and devices behind a TT, not
+streams. This design follows, at the endpoint's scope, since a Reset
+Endpoint acts on every stream of it:
+
+- **Scope.** A stream's own queue is in scope on the terms of 4.2:
+  tolerance on, a bulk endpoint, not behind a TT, the controller not on the
+  `XHCI_NO_SOFT_RETRY` list; set when the stream's pipe is built
+  (`hcdCfgStreamsBuild`). The endpoint's own queue never holds a TD while
+  its streams are open and stays out of scope.
+- **Interception** is 4.2's, unchanged: the engine diverts a Transaction
+  Error on the head of the stream's queue, keeps the event on the TD - its
+  record, its mapping and its place on the ring untouched - and sets that
+  queue's `RetryWanted` with its own generation.
+- **The thread** visits every stream of every streams endpoint as it visits
+  a pipe (`HcdCfgRetryService`). It replays (4.2's today's path) when an
+  operation is pending anywhere on the endpoint: on the endpoint pipe
+  (paused, closed, a queued ABORT_PIPE, RESET_PIPE or SYNC_RESET_PIPE on any
+  of its handles, a queued RESET_PORT, the PDO removing), on the stream (a
+  cancel, paused, closed), or a cancel pending on any other stream of the
+  endpoint, whose Stop Endpoint would stop this stream too.
+- **The command.** The endpoint is paused (`HcdIoPipePause` on the
+  endpoint, which holds every stream), and Reset Endpoint with TSP 1 is
+  issued on the endpoint: the streams share its sequence, and every one of
+  them halted with it (4.6.8 disables the endpoint's doorbell). No Set TR
+  Dequeue: the failed stream's context keeps its dequeue and any partial
+  progress (4.12: the Stream Contexts reflect the forward progress before
+  the endpoint enters Halted; 4.6.8 keeps the state across the Reset
+  Endpoint), and so does every other stream's. On QEMU alone 4.12.4's
+  quirk runs here, while the endpoint is still paused.
+- **After it**, under 4.2's generation rule, the pause is released and the
+  doorbell of every stream of the endpoint with a TD on its ring and not
+  paused or closed is rung, the failed stream's included, each with its
+  Stream ID (`hcdCfgStreamKick`): a doorbell rung for another stream while
+  the endpoint was Halted was ignored, and a stopped stream endpoint
+  restarts only for the streams rung. The pause, which 4.2 does without for
+  an endpoint with one ring, holds submissions for one command's time; it is
+  taken on every controller so the path is one.
+- **A quiesce** that meets the endpoint Halted (a cancel, an abort, a
+  RESET_PIPE) settles every stream's deferred outcome after its Reset
+  Endpoint, not only the pipe it was asked for, before
+  `hcdCfgRecoverDequeue` moves the failed streams past their TDs; the cycle
+  service's halt check (`hcdCycleResolve`) reads a live retry on any stream
+  of the endpoint as the halt's owner.
+- **The bound** is 4.2's: three per TD, the fourth taking today's path, so
+  the class driver then sees the failure it sees today and `xhciuas` resets
+  the device. Counted as 4.2 counts (`RetryDiverts`, `RetryResets`,
+  `RetryRecovered`, `RetryExhausted`, `RetryReplayed`), and the Reset
+  Endpoints a stream's retry issued in `StreamRetryResets` (counter word
+  167).
+
+What `xhciuas` sees of a recovered error is nothing: its data URB stays
+pending and completes when the retried TD does.
+
+#### 4.12.3 A port reset restarts the stream rings at their base
+
+RESET_PORT drains every pipe and leaves each ring empty at its enqueue
+position for the Configure Endpoint that re-adds it (`hcdCfgResetQuiet`).
+From this revision, once the whole reset has let go of the old rings -
+every request cancelled and completed, the drain waited for, and the
+Reset Device done, which leaves every endpoint but EP0 Disabled (4.6.11) -
+each stream ring of an endpoint the reset restores is reinitialised in
+place before the Configure Endpoint builds its Stream Contexts: its TRBs
+zeroed, the Link TRB rewritten with Toggle Cycle, enqueue and dequeue 0,
+producer cycle 1 (`XhciRingRestart`, refused for a ring that is not empty,
+which then keeps its position as today). The Configure gives the endpoint a
+new context (4.6.6), so no position on the ring is owed to anything, and
+every Stream Context it builds carries DCS 1. The Drop-and-Add that recycles
+one streams endpoint (`hcdCfgRecycleCode`) does the same before its
+Configure. Legal on every controller, and it makes a port reset converge on
+QEMU, whose forced CCS 1 is then the truth. Rings without streams keep
+today's handling: QEMU reads an Endpoint Context's DCS. Counted in
+`StreamRingRestarts` (word 168).
+
+#### 4.12.4 The QEMU stream-context quirk
+
+The remaining reach of the defect is every Stop Endpoint and Reset Endpoint
+on a streams endpoint whose streams keep their TDs. For QEMU's xHCI alone -
+PCI vendor and device ID `1B36:000D` exactly, latched at the start (pure
+`XhciTolQemuStreamQuirk`); no other ID, no registry value - after a Stop
+Endpoint or a Reset Endpoint that completes successfully on an endpoint
+with streams open, while the whole endpoint is paused by the caller (or,
+in the `qemu` flavour, its doorbells withheld by the injection) and the
+endpoint reads Stopped, the driver issues Set TR Dequeue Pointer, SCT
+Primary Transfer Ring, for every stream whose position needs DCS 0, and
+all of them complete before the caller's resume can ring a stream:
+
+- **The position** is the controller's own saved one: the Stream Context's
+  TR Dequeue Pointer, which QEMU writes as it starts and completes the
+  stream's TDs - taken when it names a TRB from the software dequeue to the
+  enqueue at a TD's start, else the software dequeue.
+- **The DCS** is the cycle the driver wrote there: the TRB's cycle bit
+  inside the ring's outstanding TDs, the producer cycle at the enqueue.
+- A stream whose position needs DCS 1 is left alone: QEMU's forced value is
+  right for it.
+
+The hook is in the thread's command path (`HcdThreadCommand`), so it
+covers the quiesce (each of whose callers pauses the endpoint), the soft
+retry's reset, RESET_PORT's quiet, selective suspend's stop and the
+injection's own stop alike; the caller's own ring edits and Set TR Dequeue
+follow as before. A Stop or Reset on an endpoint nobody paused (the
+teardown of a device that is leaving) is left alone.
+
+On a real controller this would be wrong: a Set TR Dequeue discards the
+state a stopped stream saved in its context even when it names the same
+TRB (4.6.9, 4.6.10), so a stream the device left in mid-TD would restart
+that TRB from its beginning. QEMU keeps no such state - its Stop Endpoint
+and Reset Endpoint drop every transfer in flight (`xhci_ep_nuke_xfers`;
+its `xhci_reset_ep` ignores TSP) and it restarts each TD from the pointer
+it last wrote - so nothing is lost there. That is why the gate is the
+exact ID and not a heuristic, and also why the `qemu` flavour's injection
+cannot show that a real controller's partial progress survives the soft
+retry: that half rests on the specification (4.6.8.1) and on Linux's
+practice, and is a bench item. Counted: `QemuStreamQuirk` (word 169, 1 when
+the quirk is armed on this controller), `QemuStreamResyncs` (word 170, the
+Set TR Dequeue commands it issued) and `QemuStreamResyncFailed` (word 171,
+those refused; nothing else is done about one, and the next stop tries
+again).
+
+This works around a defect of QEMU, the emulator, in `hcd-xhci.c`
+(`xhci_find_stream` calling `xhci_ring_init`, which forces CCS 1), read at
+QEMU 11.1.0; real controllers never take this path.
+
+#### 4.12.5 What does not change
+
+`xhciuas`'s recovery is unchanged: it already acts at once on a failed
+transfer, and with 4.12.3 and 4.12.4 its port reset and its aborts
+converge on QEMU as they do on a real controller. EP0, isochronous
+endpoints and endpoints behind a TT keep 4.2's exclusions. The soft
+retry's injection (fault 16 on a stream) is answered as section 5 answers
+it on a bulk endpoint: the Reset Endpoint emulated, the real endpoint
+already Stopped by the injection's own stop.
+
+#### 4.12.6 "No timeout" after faults 17 and 15
+
+Each of those dumps was taken before the stuck command's own timeout. The
+class driver above `xhciuas` gives a read or write a timeout in proportion
+to its length - read in the traces as 10 s for an 8-byte command and 160 s
+for a 1 MiB read, the ABORT TASK following each on time (10 s per 64 KiB,
+so 320 s for a 2 MiB command) - and `xhciuas` arms each command's timer
+from the SRB (`uasSlotPrepare`) and fires it each second (`uasTick`). The
+fault-17 dump was taken 145.7 s after the last command, the 2 MiB fault-15
+dumps at 281 s and 291 s. `xhciuas`'s timer neither failed to arm nor
+failed to fire. What kept the device stuck was 4.12.1's defect: fault 15's
+stop, fault 17's stop and Set TR Dequeue, and every later abort's stop
+re-forced CCS 1. Fault 17's model has one cost of its own: QEMU's
+`usb-uas` still waits for the rest of the data the injection cut short, so
+that command can end only by its timeout and ABORT TASK; with 4.12.4 the
+device then recovers.
+
+#### 4.12.7 Windows 98 SE
+
+(The diagnosis of the `XHCISNAP` hang on Windows 98 SE is recorded here
+once it is read.)
 
 ## 5. Injection
 
