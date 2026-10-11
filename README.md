@@ -228,7 +228,7 @@ Restart Windows after changing a value. `XhciForceBulkOnly` is the exception: it
 
 The two log values are described in the [release notes](docs/using/release-notes.md), "The log, and how to send one". The others are described below, and all of them in the release notes' "Registry settings".
 
-### The interrupt moderation interval
+### The interrupt moderation interval (`XhciImodInterval250ns`)
 
 `XhciImodInterval250ns` sets the shortest gap the controller leaves between two interrupts, in units of 250 ns. A shorter gap makes USB storage faster at the cost of more interrupts.
 
@@ -240,7 +240,7 @@ A value out of range is replaced by `4000`, not rounded to the nearest limit, so
 
 On my P14s with the MSSU10 over UAS (Windows 98 SE, 8 MB transfers), `500` gave about 181 MB/s, `160` gave 211 MB/s write and 221 MB/s read, and `40` added only 1 to 3% more.
 
-### Forcing Bulk-Only instead of UAS
+### Forcing Bulk-Only instead of UAS (`XhciForceBulkOnly`)
 
 `XhciForceBulkOnly` decides which transport a storage device that offers both uses.
 
@@ -249,7 +249,7 @@ On my P14s with the MSSU10 over UAS (Windows 98 SE, 8 MB transfers), `500` gave 
 
 A UAS-only device stays on UAS either way. The value is read each time a device enumerates, so unplug and replug the drive after changing it. On Windows 2000 and later, a drive already installed keeps its driver until you uninstall it in Device Manager and replug it.
 
-### Polling a Low- or Full-Speed mouse above 1000 Hz
+### Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)
 
 `XhciFastPollFsLs` polls a mouse faster than 1000 Hz, together with SweetLow's hidusbf. It is read when the controller starts, so restart after changing it.
 
@@ -267,7 +267,7 @@ With `4`, set the value and restart first, then set hidusbf (or another filter) 
 
 This is outside the xHCI specification, and untested ground. A controller that refuses it is caught, and the device falls back to its normal rate (every 1 ms for a `4` code). A controller that accepts it and then misbehaves cannot be caught.
 
-### The first report's wait
+### The first report's wait (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)
 
 When the root hub or an external hub first reports its devices, the driver waits for the devices already plugged in to be ready, so Windows 2000's text-mode Setup sees them.
 
@@ -276,7 +276,7 @@ When the root hub or an external hub first reports its devices, the driver waits
 
 With the defaults, the root hub's first report typically comes 20 to 30 ms after its start with nothing plugged in, and 0.3 to 0.9 s after it with a mouse and a stick.
 
-### The Intel 7/8/9-series port switchover
+### The Intel 7/8/9-series port switchover (`XhciIntelPortSwitch`)
 
 On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, each switchable connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and the xHCI controller. With the firmware's USB 3.0 setting on Auto, or no setting at all, those connectors start on the USB 2.0 controller.
 
@@ -306,7 +306,7 @@ cscript //nologo portsw.vbs 0
 
 Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
-### The Intel 7/8/9-series interrupt routing repair
+### The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)
 
 On the same Intel chipsets, two chipset registers decide which interrupt line the xHCI controller's interrupt reaches. Some firmware points them at a different line from the one it tells Windows: the Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so every USB device on it is slow or stops.
 
@@ -318,7 +318,7 @@ On the same Intel chipsets, two chipset registers decide which interrupt line th
 
 It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16.
 
-### Polling and message-signalled interrupts
+### Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`)
 
 A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered. On Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through the helper driver `xhcimsi.sys` in the package.
 
@@ -342,7 +342,7 @@ Two more values set the polling periods, in ms:
 
 The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
 
-### UAS command size and two transfer pieces at once
+### UAS command size and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)
 
 A UAS command moves up to 1 MiB by default. Restart after changing either value below.
 
@@ -353,7 +353,7 @@ On Windows 98 SE and ME the practical maximum is 64 KiB: Windows' storage layer 
 
 Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets the command size for one drive model instead. The release notes, "XhciMaxTransferKB" and "XhciWideMap", have the details.
 
-### Low- and Full-Speed devices behind a built-in hub
+### Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)
 
 Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub.
 
@@ -364,7 +364,7 @@ Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub bu
 
 A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback. Restart after changing it.
 
-### Selective suspend
+### Selective suspend (`XhciSelectiveSuspend`)
 
 The driver can suspend an idle USB 2.0 or SuperSpeed device when Windows asks, and wake it on Windows' request or the device's own remote wake. Hubs, the root hub and the controller are never suspended.
 
@@ -373,7 +373,7 @@ The driver can suspend an idle USB 2.0 or SuperSpeed device when Windows asks, a
 
 Restart after changing it. The release notes' "XhciSelectiveSuspend: putting idle devices to sleep" has the details.
 
-### Controller faults
+### Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)
 
 The driver does not leave a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report of a mouse that stopped at random on an AMD AM5 board. A missed interrupt is picked up by the driver itself, and a USB transaction error is retried up to three times before the transfer fails.
 
