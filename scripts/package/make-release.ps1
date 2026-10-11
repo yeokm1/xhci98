@@ -4600,7 +4600,10 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 
     # Nothing may reach the reader still carrying a placeholder: a typo in one
     # would otherwise ship as literal braces in a file nobody re-reads.
-    if ($readme -match '\{[A-Z]+\}') {
+    # Case-sensitive (-cmatch): every placeholder is upper case, and the
+    # readme legitimately carries lower-case braces, such as bcdedit's
+    # {current} in the x64 test-signing text; -match ignores case.
+    if ($readme -cmatch '\{[A-Z]+\}') {
         throw "readme template left an unsubstituted placeholder: $($Matches[0])"
     }
 
