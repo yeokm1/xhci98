@@ -289,7 +289,13 @@ if ($OemPath -eq "") {
 # The port switchover's user script (task 36.42), decided the same way.
 $stagePsw = ($DriverPath -eq "") -or ($PswScriptPath -ne "")
 if ($PswScriptPath -eq "") { $PswScriptPath = Join-Path $repo "src\portsw.vbs" }
-# Its two batch files (task 36.56) travel with it, from its own directory.
+# Its two batch files (task 36.56) travel with it, from its own directory -
+# which a bare file name does not name, so the path is anchored first, to
+# PowerShell's location as -OutDir is below.
+if (-not [System.IO.Path]::IsPathRooted($PswScriptPath)) {
+    $PswScriptPath = Join-Path $PWD.ProviderPath $PswScriptPath
+}
+$PswScriptPath = [System.IO.Path]::GetFullPath($PswScriptPath)
 $pswBatchNames = @("portsw-on.bat", "portsw-off.bat")
 # The NT 6 x86 MSI helper (design record 18), the x86 package's alone.
 if ($Arch -eq "amd64" -and $MsiDriverPath -ne "") {

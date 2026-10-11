@@ -277,7 +277,99 @@ try {
     Assert-True ($r.Output -match "portsw-off\.bat") `
         ("expected the refusal to name portsw-off.bat. Output:`n" + $r.Output)
 
-    $cmdOnly = '(?i)%~|\bcd\s+/d\b|\bsetlocal\b|\bendlocal\b|\bif\s+/i\b|\bgoto\s+:eof\b|\bpushd\b|\bpopd\b|\bcall\s+:|&&|\|\||\bexit\s+/b\b|%\*|^\s*if\b.*\(|^\s*[()]'
+    # A bare file name for the script (review round 1): its directory is the
+    # caller's location, and the batch files are found there.
+    $pswBareDir = Join-Path $script:work "psw-bare"
+    New-Item -ItemType Directory -Path $pswBareDir -Force | Out-Null
+    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+        Copy-Item -LiteralPath (Join-Path $repo ("src\" + $name)) -Destination (Join-Path $pswBareDir $name) -Force
+    }
+    $pswBareOut = Join-Path $script:work "pkg-psw-bare"
+    Push-Location -LiteralPath $pswBareDir
+    try {
+        $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+            "-PswScriptPath", "portsw.vbs", "-OutDir", $pswBareOut)
+    } finally {
+        Pop-Location
+    }
+    Assert-True ($r.ExitCode -eq 0) ("-PswScriptPath given as a bare file name was rejected:`n" + $r.Output)
+    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $pswBareOut $name)) `
+            "-PswScriptPath given as a bare file name did not stage $name."
+    }
+
+    # The files themselves. Every line is held to a short list of the commands
+    # both interpreters run, rather than searched for constructs one of them
+    # lacks: a list of forbidden words misses the one nobody listed (review
+    # round 1 found four such escapes). The only lines outside that list are
+    # the split's: the OS test, and the cd /d that only cmd.exe reaches.
+    function Get-PswBatchFaults {
+        param([string]$Text, [string]$Value)
+        $faults = @()
+        if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+        if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+        if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+        $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+        if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+        if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+        $code = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+        }
+        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+        for ($k = 0; $k -lt $split.Count; $k++) {
+            if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
+                $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+            }
+        }
+        $osLine = -1
+        $ntLine = -1
+        if ($code.Count -gt 0) { $osLine = $code[0] }
+        if ($code.Count -gt 3) { $ntLine = $code[3] }
+        $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                     '^if not exist portsw\.vbs goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
+                     '^if not "%OS%"=="Windows_NT" goto [a-z]+$', '^cscript //nologo portsw\.vbs (show|[0-9])$')
+        $labels = @{}
+        $gotos = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+            if ($i -ne $osLine -and $i -ne $ntLine) {
+                $ok = $false
+                foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+                if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+            }
+            if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
+                $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+            }
+            if ($line -cmatch '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+            if ($line -cmatch '^:([a-z]+)$') {
+                if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+                $labels[$Matches[1]] = $i
+            }
+            if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+        }
+        foreach ($g in $gotos) {
+            if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+            if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+        }
+        $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo portsw\.vbs [0-9]$' })
+        if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo portsw.vbs ' + $Value)) {
+            $faults += "it does not set exactly one value, $Value (2 is a hand edit)"
+        }
+        $last = -1
+        foreach ($pin in @('if not exist portsw.vbs goto nofile', 'cscript //nologo portsw.vbs show',
+                           'if errorlevel 1 goto end', ('cscript //nologo portsw.vbs ' + $Value),
+                           'if errorlevel 3 goto elevate', 'if errorlevel 1 goto refused')) {
+            $at = [Array]::IndexOf($lines, $pin)
+            if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
+        }
+        foreach ($needle in @('RESTART WINDOWS', 'right-click it and choose Run as administrator')) {
+            if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
+        }
+        return $faults
+    }
+
     $batLineCounts = @()
     foreach ($bat in $pswBatches) {
         $batSrc = Join-Path $repo ("src\" + $bat.Name)
@@ -285,71 +377,36 @@ try {
             Assert-True $false "src\$($bat.Name) is missing."
             continue
         }
-        $batBytes = [System.IO.File]::ReadAllBytes($batSrc)
-        $batBad = @($batBytes | Where-Object { $_ -ge 0x7F -or ($_ -lt 0x20 -and $_ -ne 10 -and $_ -ne 13) })
-        Assert-True ($batBad.Count -eq 0) "src\$($bat.Name) holds a byte outside printable ASCII, CR and LF."
-        $batText = [System.IO.File]::ReadAllText($batSrc)
-        Assert-True (-not ($batText -match "(?<!`r)`n")) "src\$($bat.Name) has a line not ended by CRLF."
-        Assert-True (-not ($batText -match "`r(?!`n)")) "src\$($bat.Name) has a CR not followed by LF."
-        Assert-True ($batText.EndsWith("`r`n")) "src\$($bat.Name) does not end with CRLF, so COMMAND.COM may not run its last line."
-        $lines = @($batText.Substring(0, $batText.Length - 2) -split "`r`n")
-        $batLineCounts += $lines.Count
-        foreach ($line in $lines) {
-            Assert-True ($line.Length -le 127) "src\$($bat.Name) has a line past COMMAND.COM's 127 characters: $line"
-        }
-        Assert-True ($lines[0] -ceq "@echo off") "src\$($bat.Name) does not start with @echo off."
-        Assert-True ($lines[$lines.Count - 1] -ceq "pause") "src\$($bat.Name) does not end with pause."
-        $code = @()
-        for ($i = 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -notmatch '(?i)^rem(\s|$)') { $code += , @($i, $lines[$i]) }
-        }
-        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
-        for ($k = 0; $k -lt $split.Count; $k++) {
-            Assert-True ($code.Count -gt $k -and $code[$k][1] -ceq $split[$k]) `
-                ("src\$($bat.Name)'s command " + ($k + 1) + " after @echo off is not '" + $split[$k] +
-                 "', so COMMAND.COM could reach a cmd.exe line, or Run as administrator would start in System32.")
-        }
-        $ntLine = -1
-        if ($code.Count -gt 3) { $ntLine = $code[3][0] }
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($i -eq $ntLine) { continue }
-            Assert-True (-not ($lines[$i] -match $cmdOnly)) `
-                "src\$($bat.Name) line $($i + 1) uses cmd.exe syntax where COMMAND.COM runs it: $($lines[$i])"
-            if ($lines[$i] -match '(?i)^(rem|echo)\b') {
-                Assert-True (-not ($lines[$i] -match '[<>|&%]')) `
-                    "src\$($bat.Name) line $($i + 1) carries a redirection or percent character on an echo or rem line: $($lines[$i])"
-            }
-            Assert-True (-not ($lines[$i] -match '(?i)^echo\s+o(n|ff)\s*$')) `
-                "src\$($bat.Name) line $($i + 1) is an echo that COMMAND.COM reads as a switch: $($lines[$i])"
-        }
-        $labels = @($lines | Where-Object { $_ -match '^:' } | ForEach-Object { $_.Substring(1).ToLowerInvariant() })
-        Assert-True ((@($labels | Sort-Object -Unique)).Count -eq $labels.Count) "src\$($bat.Name) has a label twice."
-        foreach ($line in $lines) {
-            if ($line -match '(?i)\bgoto\s+(\S+)\s*$') {
-                Assert-True ($labels -contains $Matches[1].ToLowerInvariant()) `
-                    "src\$($bat.Name) jumps to a label it does not have: $line"
-            }
-        }
-        $pins = @('if not exist portsw.vbs goto nofile', 'cscript //nologo portsw.vbs show',
-                  'if errorlevel 1 goto end', ('cscript //nologo portsw.vbs ' + $bat.Value),
-                  'if errorlevel 3 goto elevate', 'if errorlevel 1 goto refused')
-        $last = -1
-        foreach ($pin in $pins) {
-            $at = [Array]::IndexOf($lines, $pin)
-            Assert-True ($at -gt $last) "src\$($bat.Name) no longer has '$pin' in its place."
-            if ($at -gt $last) { $last = $at }
-        }
-        foreach ($other in $bat.Others) {
-            Assert-True (-not ($batText -match ('(?i)portsw\.vbs\s+' + $other + '\b'))) `
-                "src\$($bat.Name) sets XhciIntelPortSwitch to $other; it sets only $($bat.Value), and 2 is a hand edit."
-        }
-        foreach ($needle in @('RESTART WINDOWS', 'right-click it and choose Run as administrator')) {
-            Assert-True ($batText.Contains($needle)) "src\$($bat.Name) no longer says '$needle'."
-        }
+        $batText = [System.IO.File]::ReadAllText($batSrc, [System.Text.Encoding]::GetEncoding(28591))
+        $faults = @(Get-PswBatchFaults -Text $batText -Value $bat.Value)
+        Assert-True ($faults.Count -eq 0) ("src\$($bat.Name):`n  " + ($faults -join "`n  "))
+        $batLineCounts += @($batText -split "`r`n").Count
     }
     if ($batLineCounts.Count -eq 2) {
         Assert-True ($batLineCounts[0] -eq $batLineCounts[1]) "portsw-on.bat and portsw-off.bat no longer have the same number of lines; they are one file but for the value."
     }
+
+    # Controls on the checker itself: each of these must be refused, and the
+    # last, harmless echo text that names a cmd.exe word, must not be.
+    $onText = [System.IO.File]::ReadAllText((Join-Path $repo "src\portsw-on.bat"), [System.Text.Encoding]::GetEncoding(28591))
+    $anchor = "`r`necho Now:`r`n"
+    Assert-True ($onText.Contains($anchor)) "src\portsw-on.bat has no 'echo Now:' line for the checker's controls to replace."
+    foreach ($bad in @('goto nt', '@echo example > stray.txt', ' rem example > stray.txt', 'echo x | more',
+                       'for /f %%i in (a.txt) do echo %%i', 'setlocal', 'if /i errorlevel 1 goto end',
+                       'cd /d "%~dp0"', 'goto eof', 'cscript //nologo "portsw.vbs" 2', 'cscript //nologo portsw.vbs 2',
+                       'echo off', 'call :run')) {
+        $mutant = $onText.Replace($anchor, "`r`n" + $bad + "`r`n")
+        Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted the line: $bad"
+    }
+    foreach ($mutant in @($onText.Replace("goto run`r`n:nt`r`n", ":nt`r`n"),
+                          $onText.Replace("`r`n", "`n"),
+                          $onText.Substring(0, $onText.Length - 2),
+                          $onText.Replace("cscript //nologo portsw.vbs 1", "cscript //nologo portsw.vbs 0"))) {
+        Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted a broken whole-file control."
+    }
+    $harmless = $onText.Replace($anchor, "`r`necho setlocal is not used here.`r`n")
+    $harmlessFaults = @(Get-PswBatchFaults -Text $harmless -Value "1")
+    Assert-True ($harmlessFaults.Count -eq 0) ("the batch-file checker refused harmless echo text:`n  " + ($harmlessFaults -join "`n  "))
 
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"

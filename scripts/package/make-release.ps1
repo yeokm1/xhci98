@@ -4205,8 +4205,9 @@ A value that is absent means the default each one states.
   administrator. Then RESTART WINDOWS.
 
   On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
-  only at USB 2.0 speed is still on the USB 2.0 controller, because the
-  switchover is off by default. Run PORTSW-ON.BAT and restart Windows.
+  only at USB 2.0 speed on a blue connector is most likely still on the
+  USB 2.0 controller, because the switchover is off by default. Run
+  PORTSW-ON.BAT and restart Windows.
 
   Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
   or not, for a chipset with these connectors that the list misses (on a

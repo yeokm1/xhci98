@@ -15,7 +15,8 @@ goto run
 :nt
 cd /d "%~dp0"
 :run
-echo portsw-off.bat turns the Intel port switchover off (XhciIntelPortSwitch 0).
+echo portsw-off.bat turns the Intel port switchover off: it sets
+echo XhciIntelPortSwitch to 0 on every xhci98 controller.
 echo Windows 2000 and later: run it as an administrator. Vista and 7:
 echo right-click it and choose Run as administrator.
 echo.
@@ -36,8 +37,11 @@ echo Windows. Next time, right-click portsw-off.bat and choose Run as
 echo administrator.
 goto end
 :refused
-echo Nothing was set. Run portsw-off.bat as an administrator: on Vista
-echo and 7, right-click it and choose Run as administrator.
+echo The change did not complete. Read the lines above: some controllers
+echo may already have been changed.
+if not "%OS%"=="Windows_NT" goto end
+echo Run portsw-off.bat as an administrator: on Vista and 7, right-click
+echo it and choose Run as administrator.
 goto end
 :nofile
 echo portsw.vbs was not found in this directory. Run portsw-off.bat from

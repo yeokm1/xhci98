@@ -321,16 +321,25 @@ After the set, exit code 3 means the script handed the write to an
 elevated copy of itself (Vista and 7 without the administrator token): the
 batch file says the result is in the window that opened, and that next
 time it should be started with right-click, Run as administrator. Exit
-code 1 means the write was refused, and it says to run it as an
-administrator, by right-click on Vista and 7. Only exit code 0 is followed
-by the restart line.
+code 1 means a write was refused, possibly after other controllers' keys
+were written (the script names them): the batch file says the change did
+not complete and to read the lines above, and on the NT systems alone (a
+second `if not "%OS%"=="Windows_NT"` test) to run it as an administrator,
+by right-click on Vista and 7. Only exit code 0 is followed by the restart
+line.
 
 They are ASCII with CRLF endings, held by the source charset gate (`.bat`
-is one of its 1998-era kinds) and by the packager's self-tests, which also
-pin the split: `goto run` before `:nt`, `%~` and `cd /d` on no line but
-the one after `:nt`, no `cmd.exe`-only construct on any line
-`COMMAND.COM` runs, no redirection character on an `echo` or `rem` line,
-and no line longer than `COMMAND.COM`'s 127 characters.
+is one of its 1998-era kinds), the batch-file line-ending gate, and the
+packager's self-tests. Those hold every line to a short list of what both
+interpreters run - `rem`, `echo`, a label, `goto`, `if not exist
+portsw.vbs`, `if errorlevel`, `if not "%OS%"=="Windows_NT"`, the
+`cscript //nologo portsw.vbs` calls and `pause` - rather than search for
+constructs one of them lacks, and exempt only the split's OS test and its
+`cd /d` line. They also pin the split itself, no `goto nt` but the first,
+no redirection, pipe or percent character on an `echo` or `rem` line, no
+line longer than `COMMAND.COM`'s 127 characters, exactly one value set,
+and the order of the calls and their tests; a set of broken controls
+proves the checker refuses each.
 
 ## 6. When
 
