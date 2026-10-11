@@ -1271,8 +1271,8 @@ static ULONG hcdIsoFill(PHCD_XFER x)
  * estimate is off by one. An explicit StartFrame gets Frame IDs only when
  * the controller has CFC (4.11.2.5 p.200) and the frame axis is congruent;
  * the engine decides the rest, all or nothing. Without CFC, an explicit
- * StartFrame that starts a data flow (nothing of the pipe's on the ring)
- * gets a Frame ID on its first TD alone. An explicit StartFrame that can
+ * StartFrame that starts a data flow (HCD_PIPE.IsoFlowFresh) gets a Frame
+ * ID on its first TD alone. An explicit StartFrame that can
  * have no Frame ID goes out with SIA rather than being refused (task 36.57,
  * design record 13 section 6.10): Windows 7's usbaudio.sys gives every URB
  * of an asynchronous stream an explicit StartFrame, and paces its feedback
@@ -1289,7 +1289,7 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     ULONG interval;
     ULONG answer;
     ULONG sampled;
-    ULONG idle;
+    ULONG fresh;
     ULONG plan;
     ULONG start;
     ULONG now;
@@ -1315,8 +1315,8 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     } else {
         now = ext->FrameNumber;
     }
-    idle = (pipe->Queue->Count == 0) ? 1UL : 0UL;
-    XhciXferIsoFramePolicy(&req, x->Asap, ext->HcInfo.Cfc, sampled, idle);
+    fresh = pipe->IsoFlowFresh;
+    XhciXferIsoFramePolicy(&req, x->Asap, ext->HcInfo.Cfc, sampled, fresh);
     if (!x->Asap) {
         start = it->StartFrame;
     } else if (pipe->Queue->Count != 0) {
@@ -1338,11 +1338,13 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
      * decision, so the two cannot drift (round 17). A start beyond what a
      * Frame ID can name is still refused, by hcdIsoAdmit. */
     plan = XhciXferIsoStartPlan(&req, x->Asap, ext->HcInfo.Cfc, sampled,
-                                idle);
+                                fresh);
     answer = XhciXferSubmitIso(pipe->Queue, pipe->Ring, &req,
                                req.DirectionIn, &x->Xfer, x, ext->IsoScratch,
                                XHCI_XFER_MAX_ISO_TRBS, &ext->IsoLayout);
     if (answer == XHCI_XFER_OK) {
+        pipe->IsoFlowFresh = XhciXferIsoFlowNext(pipe->IsoFlowFresh,
+                                                 XHCI_ISO_FLOW_PUBLISHED, 0);
         if (x->Asap) {
             it->StartFrame = start;
         }

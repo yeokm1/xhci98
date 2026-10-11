@@ -140,10 +140,14 @@ flow". As built:
 
 - **With CFC**, as before: a Frame ID on every TD where every packet can have
   one.
-- **Without CFC, a request that starts a data flow** - nothing of the pipe's
-  on the ring - carries a Frame ID on its first TD and SIA on the rest. The
-  feedback read is such a request every time, because the `RESET_PIPE` before
-  it leaves its endpoint new and its ring empty.
+- **Without CFC, a request that starts a data flow** carries a Frame ID on
+  its first TD and SIA on the rest. A flow starts when the endpoint's
+  context is created and when the controller reports finding its ring empty
+  (a Ring Underrun or Overrun with nothing queued); an empty queue alone is
+  not taken as one, because the controller may not yet have reached the
+  empty ring. The feedback read starts a flow every time, because the
+  `RESET_PIPE` before it gives its endpoint a new context. An endpoint whose
+  service interval is longer than a frame stays SIA.
 - **Without CFC, a request that continues a flow** goes out with SIA, one
   Interval after the last TD, which for the data stream's contiguous frame
   counter is the frame it asked for.

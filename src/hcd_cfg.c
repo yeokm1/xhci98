@@ -939,6 +939,7 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PXHCI_EXTENSION ext;
     XHCI_TRB trb;
     ULONG control;
+    KIRQL oldIrql;
     ULONG code;
     ULONG fast;
     ULONG pass;
@@ -994,6 +995,17 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 hcdCfgOwedEnd(hc, dev, add[dci], HCD_CFG_OWED_CONTEXT);
             }
         }
+        /* 36.57: an added context starts a new isochronous data flow, so
+         * its first request may name its frame without CFC. */
+        XhciControllerLockAcquire(ext, &oldIrql);
+        for (dci = 2; dci < 32; dci++) {
+            if (add[dci] != NULL) {
+                add[dci]->IsoFlowFresh =
+                    XhciXferIsoFlowNext(add[dci]->IsoFlowFresh,
+                                        XHCI_ISO_FLOW_CONTEXT, 0);
+            }
+        }
+        XhciControllerLockRelease(ext, oldIrql);
     }
     return code;
 }

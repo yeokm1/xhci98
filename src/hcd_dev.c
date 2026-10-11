@@ -284,6 +284,11 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
         } else {
             hc->Hc.IsoRingOverruns++;
         }
+        /* 36.57: nothing queued, the ring ran dry at a service interval
+         * and the data flow has ended (xHCI 4.11.2.5 p.200). */
+        pipe->IsoFlowFresh = XhciXferIsoFlowNext(pipe->IsoFlowFresh,
+                                                 XHCI_ISO_FLOW_DRY,
+                                                 pipe->Queue->Count);
         if (pipe->Queue->Count == 0) {
             hc->Hc.IsoEventsUnattributed++;
         } else if (pipe->Paused || pipe->Closed || pipe->DrainPending ||

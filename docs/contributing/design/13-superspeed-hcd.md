@@ -1559,31 +1559,39 @@ than usbdi's start-frame range - is never refused for want of Frame IDs:
 
 - With CFC, as before: a Frame ID on every TD where every packet can have
   one; otherwise SIA.
-- Without CFC, a request that starts a data flow - nothing of the pipe's
-  on the ring - carries a Frame ID on its first TD and SIA on the rest,
-  which is what xHCI 4.11.2.5 (p.200) allows on such a controller:
-  "software may set the Frame ID (that is, SIA = '0') only in the first
-  Isoch TD of an Isoch data flow, and shall set SIA = '1' in all
-  subsequent Isoch TDs of the data flow". Only the first packet's frame is
-  then asked of the window. The feedback read is such a request every
-  time, because the `RESET_PIPE` before it leaves its endpoint new and its
-  ring empty; so is a data stream's first URB once its frame is at least
-  IST+1 frames away.
-- Without CFC, a request that continues a flow - something of the pipe's
-  still on the ring - goes out with SIA, "one Interval after the last TD
-  the endpoint ran", which for the data pipe's contiguous frame counter is
-  the frame it asked for.
+- Without CFC, a request that starts a data flow carries a Frame ID on its
+  first TD and SIA on the rest, which is what xHCI 4.11.2.5 (p.200) allows
+  on such a controller: "software may set the Frame ID (that is, SIA =
+  '0') only in the first Isoch TD of an Isoch data flow, and shall set SIA
+  = '1' in all subsequent Isoch TDs of the data flow". Only the first
+  packet's frame is then asked of the window, and only on an endpoint
+  whose Interval is one frame or less: a longer service interval needs
+  that frame on an interval boundary (4.11.2.5.1), which this driver does
+  not compute, so such a request stays SIA. The feedback read starts a
+  flow every time, because the `RESET_PIPE` before it gives its endpoint a
+  new context; so does a data stream's first URB after its alternate
+  setting is selected, once its frame is at least IST+1 frames away.
+- Without CFC, a request that continues a flow goes out with SIA, "one
+  Interval after the last TD the endpoint ran", which for the data pipe's
+  contiguous frame counter is the frame it asked for.
 - Any request whose Frame ID the window cannot name (a first frame inside
   IST+1, or behind the current frame), or with no frame sample, goes out
   with SIA.
 
-A data flow ends when the ring runs dry at a service interval (Ring
-Underrun or Overrun); "nothing on the ring" is taken as that, and when the
-last TD has only just completed the controller may not yet have seen the
-empty ring and may still count the flow as running. It "may ... ignore the
-Frame ID fields in subsequent Isoch TDs until the data flow is terminated"
-(the same paragraph), so such a request then runs as SIA would have, which
-is the fallback anyway. Linux takes no Frame ID at all without CFC
+**When a flow starts** is kept per pipe (`HCD_PIPE.IsoFlowFresh`, its rules
+`XhciXferIsoFlowNext`): set when a Configure Endpoint adds the endpoint's
+context (a select, or a `RESET_PIPE`'s drop and add), and when a Ring
+Underrun or Overrun - the controller finding the ring empty at a service
+interval, which ends the flow - is handled with nothing of the pipe's
+queued; cleared by every publication. An empty queue alone is not taken
+as the end of a flow: the last TD's completion can be handled before the
+controller reaches the empty ring, and until then the flow is running and
+a Frame ID would be one the paragraph above forbids. An Underrun handled
+with something queued is either old - a request published after the
+controller posted it is still queued when it is handled, since its
+completion comes later on the same event ring - or a restart the doorbell
+makes; it starts nothing. An abort's drained queue is not taken as one
+either. Linux takes no Frame ID at all without CFC
 (`external/linux/xhci-ring.c`, `xhci_queue_isoc_tx`: SIA by default, a
 Frame ID only when the controller has CFC; reference source), which does
 not pace a client that waits for its read to complete at the frame it
@@ -1620,8 +1628,8 @@ publications of an explicit `StartFrame` record `iso.sia`
 (`HCD_CONTROLLER.IsoStartsFirstFrameId` and `IsoStartsSia` count them all).
 Both carry the slot in bits 31:24, the DCI in 23:16, the case in 15:12 (5
 a first-TD Frame ID; 2 no CFC and a flow under way, 3 no frame sample, 4 a
-frame the window cannot name or, with CFC, a cadence the Interval does not
-share) and the low 12 bits of `StartFrame` minus the current frame. A dump
+frame the window cannot name, a cadence the Interval does not share with
+CFC, or an Interval longer than a frame without it) and the low 12 bits of `StartFrame` minus the current frame. A dump
 counts a request with any Frame ID in `IsoSubmitsWithFrameId`.
 
 **Owed.** QEMU has no asynchronous audio device with a feedback endpoint,

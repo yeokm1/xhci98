@@ -1149,15 +1149,15 @@ static ULONG iso_td_first(ULONG td)
 /* Plan, build and check: every TD SIA (`fid` 0), the first TD alone a
  * Frame ID (`fid` 1), or every TD a Frame ID (`fid` 2). */
 static void iso_plan_case(XHCI_ISO_REQUEST *req, ULONG asap, ULONG cfc,
-                          ULONG sampled, ULONG idle, ULONG plan, ULONG fid,
+                          ULONG sampled, ULONG fresh, ULONG plan, ULONG fid,
                           const char *what)
 {
     ULONG td;
     ULONG at;
     ULONG want;
 
-    XhciXferIsoFramePolicy(req, asap, cfc, sampled, idle);
-    CHECK_EQ(XhciXferIsoStartPlan(req, asap, cfc, sampled, idle), plan, what);
+    XhciXferIsoFramePolicy(req, asap, cfc, sampled, fresh);
+    CHECK_EQ(XhciXferIsoStartPlan(req, asap, cfc, sampled, fresh), plan, what);
     CHECK_EQ(XhciXferBuildIso(req, req->DirectionIn, iso_out,
                               XHCI_XFER_MAX_ISO_TRBS, &iso_layout),
              XHCI_XFER_OK, what);
@@ -1195,7 +1195,7 @@ static void test_iso_start_plan(void)
     CHECK_EQ(req.Frames.Allowed, 1, "no CFC, a new flow: allowed");
     CHECK_EQ(req.Frames.FirstOnly, 1, "on the first TD alone");
     iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
-                  "E7250 (no CFC), idle ring: the read at its frame");
+                  "E7250 (no CFC), a new flow: the read at its frame");
     CHECK_EQ(iso_out[0].Status & 0x1FFFFUL, 3, "TRB Transfer Length 3");
     iso_plan_case(&req, 1, 0, 1, 1, XHCI_ISO_START_ASAP, 0, "ASAP: SIA");
     iso_plan_case(&req, 0, 0, 0, 1, XHCI_ISO_START_SIA_NO_SAMPLE, 0,
@@ -1203,7 +1203,7 @@ static void test_iso_start_plan(void)
     iso_plan_case(&req, 0, 0, 1, 0, XHCI_ISO_START_SIA_NO_CFC, 0,
                   "no CFC, a flow under way: SIA");
     iso_plan_case(&req, 0, 1, 1, 0, XHCI_ISO_START_FRAME_IDS, 2,
-                  "CFC: a Frame ID, idle or not");
+                  "CFC: a Frame ID, a new flow or not");
     iso_plan_case(&req, 0, 1, 0, 1, XHCI_ISO_START_SIA_NO_SAMPLE, 0,
                   "CFC, no frame sample: SIA");
 
@@ -1252,7 +1252,7 @@ static void test_iso_start_plan(void)
     iso_request(&req, 3, 200, 0, 1000);
     req.MaxEsitPayload = 200;
     iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
-                  "no CFC, idle, inside the IST: SIA");
+                  "no CFC, a new flow, inside the IST: SIA");
     iso_plan_case(&req, 0, 1, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
                   "CFC, inside the IST: SIA from the unchanged request");
     /* One frame later it is reachable: the first TD names its frame. */
@@ -1260,7 +1260,7 @@ static void test_iso_start_plan(void)
     iso_request(&req, 3, 200, 0, 1000);
     req.MaxEsitPayload = 200;
     iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
-                  "no CFC, idle: TD 0 at 1003, nine SIA TDs");
+                  "no CFC, a new flow: TD 0 at 1003, nine SIA TDs");
     iso_plan_case(&req, 0, 1, 1, 1, XHCI_ISO_START_FRAME_IDS, 2,
                   "CFC: ten Frame IDs");
     /* A later data URB continues the flow. */
@@ -1278,14 +1278,50 @@ static void test_iso_start_plan(void)
     req.MaxEsitPayload = 200;
     iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
                   "a stale start: SIA");
-    /* FirstOnly asks only packet 0: a cadence the Interval does not share
-     * (Interval 4 stamps) still gives the first TD its frame. */
+    /* FirstOnly asks only packet 0, but an ESIT longer than a frame
+     * (Interval 4, 2 ms) would need that frame on an ESIT boundary
+     * (4.11.2.5.1): SIA, an even start or an odd one (review, round 2). */
     CHECK_EQ(iso_fill(0, 4, 192, 4, 1010, 4, &sg, &length), 1, "filled");
     iso_request(&req, 4, 192, 0, 1000);
-    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
-                  "no CFC, Interval 4: the first TD's frame");
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
+                  "no CFC, Interval 4: an ESIT boundary not computed, SIA");
     iso_plan_case(&req, 0, 1, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
                   "CFC, Interval 4: no cadence to state, SIA");
+    CHECK_EQ(iso_fill(0, 4, 192, 4, 1011, 4, &sg, &length), 1, "filled");
+    iso_request(&req, 4, 192, 0, 1000);
+    iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_SIA_UNUSABLE, 0,
+                  "no CFC, Interval 4, an odd start: SIA");
+
+    /*
+     * When a request starts a data flow (round 2): a new context, or the
+     * ring found dry at a service interval with nothing queued - never an
+     * empty queue alone. The feedback read at now + 34, no CFC.
+     */
+    CHECK_EQ(XhciXferIsoFlowNext(0, XHCI_ISO_FLOW_CONTEXT, 0), 1,
+             "a Configure Endpoint that adds the context: a new flow");
+    CHECK_EQ(XhciXferIsoFlowNext(1, XHCI_ISO_FLOW_PUBLISHED, 0), 0,
+             "a publication continues it");
+    CHECK_EQ(XhciXferIsoFlowNext(0, XHCI_ISO_FLOW_DRY, 0), 1,
+             "an Underrun handled with nothing queued ends it");
+    CHECK_EQ(XhciXferIsoFlowNext(0, XHCI_ISO_FLOW_DRY, 1), 0,
+             "one handled with a request queued does not");
+    CHECK_EQ(XhciXferIsoFlowNext(1, XHCI_ISO_FLOW_DRY, 1), 1,
+             "nor does it take a new context's away");
+    CHECK_EQ(XhciXferIsoFlowNext(1, 7, 0), 1, "an unknown event: unchanged");
+    CHECK_EQ(iso_fill(0, 1, 3, 1, 1034, 3, &sg, &length), 1, "filled");
+    iso_request(&req, 3, 3, 0, 1000);
+    req.DirectionIn = 1;
+    i = XhciXferIsoFlowNext(0, XHCI_ISO_FLOW_CONTEXT, 0);
+    iso_plan_case(&req, 0, 0, 1, i, XHCI_ISO_START_FIRST_FRAME_ID, 1,
+                  "after the RESET_PIPE's drop and add: the frame named");
+    i = XhciXferIsoFlowNext(i, XHCI_ISO_FLOW_PUBLISHED, 0);
+    /* Its completion empties the queue, but no Underrun has been handled:
+     * the next request, or a held one released now, continues the flow. */
+    iso_plan_case(&req, 0, 0, 1, i, XHCI_ISO_START_SIA_NO_CFC, 0,
+                  "the queue empty, the flow not yet ended: SIA");
+    i = XhciXferIsoFlowNext(i, XHCI_ISO_FLOW_DRY, 0);
+    iso_plan_case(&req, 0, 0, 1, i, XHCI_ISO_START_FIRST_FRAME_ID, 1,
+                  "after the Overrun with nothing queued: the frame named");
 
     /* The note: slot 2, DCI 7, a first-TD Frame ID, 34 frames ahead; and a
      * start behind the frame keeps the low 12 bits of the distance. */

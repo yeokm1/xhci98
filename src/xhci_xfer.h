@@ -824,7 +824,10 @@ typedef struct _XHCI_ISO_FRAME_POLICY {
      * SIA = '1' in all subsequent Isoch TDs", xHCI 4.11.2.5 p.200). Only the
      * first packet's frame is then asked of the window, and the cadence
      * check is not made: the TDs after it run one Interval apart whatever
-     * they are stamped. Meaningful only under `Allowed`.
+     * they are stamped, but the Interval must be one frame or less
+     * (PacketsPerFrame nonzero): a longer ESIT needs its Frame ID on an ESIT
+     * boundary (4.11.2.5.1), which this driver does not compute, so such a
+     * request stays SIA. Meaningful only under `Allowed`.
      */
     ULONG FirstOnly;
 } XHCI_ISO_FRAME_POLICY, *PXHCI_ISO_FRAME_POLICY;
@@ -901,17 +904,25 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
  * How hcdIsoPublish schedules a request (task 36.57, design record 13
  * section 6.10). An explicit StartFrame is never refused for want of Frame
  * IDs. With CFC every packet carries one where all can, as before. Without
- * CFC, a request that starts a data flow - nothing of the pipe's on the
- * ring - carries one on its first TD, so a client that paces itself by
- * completions (usbaudio.sys's feedback read) is served at the frame it
- * asked for; a request that continues a flow, or whose first frame the
- * window cannot name, goes out with Start Isoch ASAP.
+ * CFC, a request that starts a data flow carries one on its first TD, so a
+ * client that paces itself by completions (usbaudio.sys's feedback read)
+ * is served at the frame it asked for; a request that continues a flow, or
+ * whose first frame the window cannot name, goes out with Start Isoch ASAP.
+ *
+ * "Starts a data flow" is `fresh`, which the caller keeps per pipe with
+ * XhciXferIsoFlowNext: set when the endpoint's context is created (a
+ * Configure Endpoint that adds it) and when a Ring Underrun or Overrun is
+ * handled with nothing of the pipe's queued, cleared by every publication.
+ * An empty queue alone is not enough: the last TD's completion can be seen
+ * before the controller reaches the empty ring at the next service
+ * interval, and until then the flow is still running (review of 36.57,
+ * round 2).
  *
  * XhciXferIsoFramePolicy sets the request's Allowed and FirstOnly from
  * `asap` (the client's flag), `cfc` (HCCPARAMS1.CFC), `sampled` (the frame
- * axis was read) and `idle` (the pipe has nothing on its ring);
- * XhciXferIsoStartPlan then says which of the cases below the builder will
- * take, from the same inputs, and must be asked after it. Both pure.
+ * axis was read) and `fresh`; XhciXferIsoStartPlan then says which of the
+ * cases below the builder will take, from the same inputs, and must be
+ * asked after it. All three pure.
  */
 #define XHCI_ISO_START_ASAP             0UL /* the client asked for ASAP  */
 #define XHCI_ISO_START_FRAME_IDS        1UL /* CFC: every TD a Frame ID   */
@@ -924,10 +935,17 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
 #define XHCI_ISO_START_FIRST_FRAME_ID   5UL /* no CFC, a new flow: the
                                              * first TD a Frame ID        */
 
+#define XHCI_ISO_FLOW_CONTEXT           0UL /* the context was created    */
+#define XHCI_ISO_FLOW_PUBLISHED         1UL /* a request went on the ring */
+#define XHCI_ISO_FLOW_DRY               2UL /* an Underrun/Overrun handled */
+
 VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
-                            ULONG cfc, ULONG sampled, ULONG idle);
+                            ULONG cfc, ULONG sampled, ULONG fresh);
 ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
-                           ULONG cfc, ULONG sampled, ULONG idle);
+                           ULONG cfc, ULONG sampled, ULONG fresh);
+/* The pipe's `fresh` after `event`; `queued` is the pipe's queue count when
+ * a DRY event is handled. Pure. */
+ULONG XhciXferIsoFlowNext(ULONG fresh, ULONG event, ULONG queued);
 
 /* The `iso.sia` and `iso.fid1` notes' value: slot 31:24, DCI 23:16, plan
  * 15:12, and the low 12 bits of StartFrame - now. Pure. */
