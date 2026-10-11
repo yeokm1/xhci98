@@ -220,7 +220,7 @@ The two log values are described in the [release notes](docs/using/release-notes
 
 - `10` (the lowest accepted): 2.5 us.
 - `160` (written by the install): 40 us, at most 25,000 interrupts a second. Linux uses the same value.
-- `4000`: 1 ms, the controller's own power-on value. It is also used when the value is missing, unreadable or outside `10`-`4000`.
+- `4000`: 1 ms, the controller's own power-on value.
 
 A value out of range is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. If you get audio stutter or instability under load, raise it towards `4000` or delete it.
 
@@ -268,7 +268,7 @@ On Intel 7-, 8- and 9-series chipsets (Ivy Bridge to Broadwell) and C610/X99, ea
 
 `XhciIntelPortSwitch` lets the driver move them to the xHCI controller at each start and resume, and hand them back when the controller is disabled or removed, or the machine shuts down. The hand-back writes only the registers the driver itself wrote.
 
-- `0` (default; also absent or not a `DWORD`): off.
+- `0` (default): off.
 - `1`: on, for Intel xHCI device ids `1E31`, `8C31`, `9C31`, `8CB1`, `9CB1` and `8D31`.
 - `2`: on any Intel xHCI controller, listed or not; on a listed one it is the same as `1`. **At your own risk**: see below.
 
@@ -285,7 +285,7 @@ On the same Intel chipsets, two chipset registers decide which interrupt line th
 `XhciIntelIrqRoute` lets the driver read those registers at each start and resume and point the interrupt at the line Windows assigned.
 
 - `0`: read and report only.
-- `1` (default; also absent or any other value): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
+- `1` (default): only on the E7250 (`8086:9CB1`, subsystem `1028:062D`, chipset `9CC3`).
 - `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
 
 It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16.
