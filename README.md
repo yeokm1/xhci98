@@ -279,6 +279,12 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
 
 A UAS command moves up to 1 MiB by default: `XhciMaxTransferKB`, `64` to `2048`, sets it for every UAS drive on the controller, and Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets it for one drive model. Restart after changing either. `XhciWideMap` set to `1` lets the driver keep two pieces of a large bulk transfer on the controller at once on Windows 2000 to 7; it is **off by default**, because a regression would show as wrong data rather than an error. See the release notes, "XhciMaxTransferKB" and "XhciWideMap".
 
+### Low- and Full-Speed devices behind a built-in hub
+
+Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub built into the chip, and their USB 2.0 port's speed table names High Speed alone; the VIA VL805 (`1106:3483`) is one. Every mouse, keyboard and other Low- or Full-Speed device on such a controller sits behind that hub. The driver gives such a device the standard speed ID (Full Speed `1`, Low Speed `2`) when the table names neither speed and does not use that number for another. A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback.
+
+It is **on by default**; `XhciUsb2HubSpeedFallback` set to `0` turns it off, then restart, and such devices are then refused again. In `XHCISNAP`, `Usb2HubSpeedFallbacks` counts the devices given a standard ID and `TopoBehindHubNoSpeed` the ones still refused; the `hub.speed.place` and `hub.speed.route` notes name each one, and on the VL805 the `pci.vl805.fw` note records the card's firmware version. See [issue 13](docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md).
+
 ### Selective suspend
 
 The driver can suspend an idle device when Windows asks, and wake it on Windows' request or the device's own remote wake: USB 2.0 and SuperSpeed devices, never hubs or the controller. It is **off by default**; `XhciSelectiveSuspend` set to `1` turns it on, then restart. See the release notes, "XhciSelectiveSuspend: putting idle devices to sleep".
