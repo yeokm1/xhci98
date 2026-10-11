@@ -70,18 +70,19 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * its storage stack at the next reboot. */
 #define HCD_VALUE_MAX_TRANSFER  L"XhciMaxTransferKB"
 /* Task 36.33: selective suspend, stages A and B (design record 14 section
- * 7). Default 0; the INF writes nothing. */
+ * 7). Default 0; the INFs write the 0 (task 36.51). */
 #define HCD_VALUE_SELECTIVE_SUSPEND L"XhciSelectiveSuspend"
 /* Task 36.24: stage 2's whole-URB mapping (design record 13 section 11.6,
- * point 2), written by no INF: a DWORD, 0 off and anything else on;
- * absent or of another type is HCD_WIDE_MAP_DEFAULT. Read at every start;
- * on Windows 2000 and later only, and only past the start's register-free
- * check (hcd_dma.c, HcdDmaWideOpen). */
+ * point 2), written by the INFs at 0 (task 36.51): a DWORD, 0 off and
+ * anything else on; absent or of another type is HCD_WIDE_MAP_DEFAULT.
+ * Read at every start; on Windows 2000 and later only, and only past the
+ * start's register-free check (hcd_dma.c, HcdDmaWideOpen). */
 #define HCD_VALUE_WIDE_MAP      L"XhciWideMap"
 /* Issue 18: the default speed IDs for a Full- or Low-Speed device behind a
  * hub on a USB 2.0 root port whose speed table names no such speed
- * (XhciPortPsivForHubChild), written by no INF: only a DWORD 0 turns it
- * off; absent, another number or another type is on. Read at every start. */
+ * (XhciPortPsivForHubChild), written by the INFs at 1 (task 36.51): only a
+ * DWORD 0 turns it off; absent, another number or another type is on.
+ * Read at every start. */
 #define HCD_VALUE_HUB_SPEED     L"XhciUsb2HubSpeedFallback"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
@@ -200,12 +201,39 @@ NTSTATUS HcdReadValueDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
     return hcdReadDword(hc, name, value);
 }
 
-/* IRQL: PASSIVE_LEVEL. */
-static VOID hcdReadValues(PHCD_CONTROLLER hc)
+/* The log's two switches, first of the start's values: a start the delivery
+ * refuses reads these alone, to record its refusal (hcdLogRefused).
+ * IRQL: PASSIVE_LEVEL. */
+static VOID hcdReadLogSwitches(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     ULONG verbosity;
     ULONG debugView;
+    NTSTATUS status;
+
+    ext = &hc->Hc;
+    verbosity = 0;
+    debugView = 0;
+    /* The read statuses travel in XHCISNAP's header (schema 5), so a reader
+     * tells a zero somebody set from a value never found. */
+    ext->Log.SwitchRead = 1;
+    status = hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
+    ext->Log.SwitchStatusVerbosity = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
+                                                        : MP_STATUS_FAILURE;
+    status = hcdReadDword(hc, HCD_VALUE_LOG_DEBUGVIEW, &debugView);
+    ext->Log.SwitchStatusDebugView = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
+                                                        : MP_STATUS_FAILURE;
+    (VOID)XhciLogApplySwitches(&ext->Log, verbosity, debugView);
+    XhciLogNote(ext, "log.verbosity", ext->Log.Verbosity);
+    XhciLogNote(ext, "log.verbosity.read", ext->Log.VerbosityRead);
+    XhciLogNote(ext, "log.verbosity.refused", ext->Log.VerbosityRefused);
+    XhciLogNote(ext, "log.debugview", ext->Log.DebugViewEnabled);
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+static VOID hcdReadValues(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
     ULONG imod;
     ULONG fast;
     ULONG value;
@@ -223,22 +251,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
 
     ext = &hc->Hc;
 
-    verbosity = 0;
-    debugView = 0;
-    /* The read statuses travel in XHCISNAP's header (schema 5), so a reader
-     * tells a zero somebody set from a value never found. */
-    ext->Log.SwitchRead = 1;
-    status = hcdReadDword(hc, HCD_VALUE_LOG_VERBOSITY, &verbosity);
-    ext->Log.SwitchStatusVerbosity = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
-                                                        : MP_STATUS_FAILURE;
-    status = hcdReadDword(hc, HCD_VALUE_LOG_DEBUGVIEW, &debugView);
-    ext->Log.SwitchStatusDebugView = NT_SUCCESS(status) ? MP_STATUS_SUCCESS
-                                                        : MP_STATUS_FAILURE;
-    (VOID)XhciLogApplySwitches(&ext->Log, verbosity, debugView);
-    XhciLogNote(ext, "log.verbosity", ext->Log.Verbosity);
-    XhciLogNote(ext, "log.verbosity.read", ext->Log.VerbosityRead);
-    XhciLogNote(ext, "log.verbosity.refused", ext->Log.VerbosityRefused);
-    XhciLogNote(ext, "log.debugview", ext->Log.DebugViewEnabled);
+    hcdReadLogSwitches(hc);
 
     imod = 0;
     status = hcdReadDword(hc, HCD_VALUE_IMOD, &imod);
@@ -292,7 +305,7 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
      * read here, before XhciInitController, so stage B's DNCTRL follows
      * it too. Only a DWORD 1 turns stages A and B on; absent, 0, another
      * value or another type is off - today's behaviour bit for bit. The
-     * INF writes nothing. */
+     * INFs write the 0 (task 36.51). */
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_SELECTIVE_SUSPEND, &value);
     hc->Counters.SuspSwitchRead =
@@ -1023,11 +1036,12 @@ static NTSTATUS hcdParseResources(PHCD_CONTROLLER hc, PIRP irp)
  * The delivery and its reason (design record 15 section 4), settled once
  * per start before anything is connected: the three values, the resource,
  * the message flag and the pin, read here from configuration space with
- * its status kept apart from its value. Returns STATUS_INSUFFICIENT_RESOURCES
- * where the start always failed - mode 1 with no interrupt resource; mode 1
- * with a resource and pin 0 runs as a line and the core refuses it, as it
- * always did. Logged later, once the log's switches are read
- * (hcdLogDelivery). IRQL: PASSIVE_LEVEL.
+ * its status kept apart from its value. Returns a failure where the
+ * delivery the mode names cannot be had (XhciPollDecide's NONE): mode 1
+ * with no line - no interrupt resource, pin 0, or a message granted - and
+ * mode 3 with no message to connect (record 15 revision 7). Logged later,
+ * once the log's switches are read (hcdLogDelivery), or by hcdLogRefused
+ * for a refusal. IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
 {
@@ -1113,7 +1127,8 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
 #endif
     /* Record 15 section 4.3: the IoConnectInterruptEx pair for a message
      * grant - amd64's from MmGetSystemRoutineAddress, x86's from the
-     * helper - and whether no line was offered to an unbound x86. */
+     * helper - and, for the routines' record alone, whether no line was
+     * offered to an unbound x86 (record 18 section 4.3). */
     noLine = 0;
     if (message) {
         hc->MsgRoutines = HcdMsiRoutines(hc, &hc->MsgConnectEx,
@@ -1142,10 +1157,11 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
 
     reason = XHCI_POLL_R_NONE;
     /* A message whose routines were found is decided as connected; a
-     * connection that then fails turns it to a poll (hcdConnect). */
+     * connection that then fails turns it to a poll, or under mode 3 fails
+     * the start (hcdConnect). */
     delivery = XhciPollDecide(hc->PollValues.Mode, haveInterrupt, message,
                               (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
-                              hc->PollPinStatus, hc->PollPin, noLine,
+                              hc->PollPinStatus, hc->PollPin, HcdMsiSystem(),
                               &reason);
     hc->PollDelivery = delivery;
     hc->PollReason = reason;
@@ -1162,12 +1178,13 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     hc->Counters.PollIntervalMinMs = XHCI_POLL_NOT_FOUND;
     hc->Counters.IntrValuesFound = hc->PollValues.Found;
     HcdMsiCountersStart(hc);
-    /* Mode 1 with no usable line fails here, before anything is connected,
-     * with the status a start always gave it: no resource, the resources
-     * refused; a resource on pin 0, or a message no helper can connect and
-     * no line offered (record 18 section 4.3), the controller's
-     * configuration refused (record 15 section 4). The start-decision
-     * event goes first (record 18 section 9). */
+    /* Mode 1 with no usable line, and mode 3 with no message to connect,
+     * fail here, before anything is connected, with the status a forced
+     * line with no line always gave: no resource, the resources refused; a
+     * resource (on pin 0, a message under mode 1, a line under mode 3, or
+     * on a system with no message interrupts), the controller's
+     * configuration refused (record 15 section 4). hcdStartBody records the
+     * refusal; the start-decision event follows (record 18 section 9). */
     if (delivery == XHCI_POLL_DELIVERY_NONE) {
         status = haveInterrupt ? STATUS_DEVICE_CONFIGURATION_ERROR
                                : STATUS_INSUFFICIENT_RESOURCES;
@@ -1217,6 +1234,29 @@ static VOID hcdLogDelivery(PHCD_CONTROLLER hc)
         XhciLogNote(ext, "qemu.inj.deadline", 1);
     }
 #endif
+}
+
+/*
+ * A start the delivery refuses (record 15 section 8, revision 7): never
+ * stopped, and its FDO removed next, so it records itself - the log's
+ * switches and the start's notes where the start had not reached them, the
+ * refusal's reason, and the ring flushed with the counter dump through the
+ * stop's own flush (HcdLogFlush, no new DbgPrint site). From hcdStartBody,
+ * on the PnP manager's start thread. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdLogRefused(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    if (ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        ext->Signature = XHCI_EXTENSION_SIGNATURE;
+        ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
+        hcdReadLogSwitches(hc);
+        hcdLogDelivery(hc);
+    }
+    XhciLogNote(ext, "start.refused.delivery", hc->PollReason);
+    HcdLogFlush(hc, XHCI_LOG_REASON_FAILURE, 1);
 }
 
 /*
@@ -1390,7 +1430,10 @@ static ULONG hcdMsgCapability(PHCD_CONTROLLER hc)
  * a message through the seam, hcdMsgConnect. A message connection's
  * failure turns the delivery to a poll ("message not connected") before
  * anything else reads it; a line Windows fell back to is a line delivery
- * with the reason "automatic". IRQL: PASSIVE_LEVEL.
+ * with the reason "automatic". Under mode 3 either is a refusal (record 15
+ * revision 7): the delivery none, "forced message, not connected", and
+ * STATUS_DEVICE_CONFIGURATION_ERROR, whatever was connected left for the
+ * caller's release to disconnect. IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS hcdConnect(PHCD_CONTROLLER hc)
 {
@@ -1413,13 +1456,13 @@ static NTSTATUS hcdConnect(PHCD_CONTROLLER hc)
     status = hcdMsgConnect(hc, hc->MsgConnectEx, hc->MsgDisconnectEx);
 #endif
     hc->MsgConnectStatus = status;
-    if (!NT_SUCCESS(status)) {
-        hc->PollDelivery = XHCI_POLL_DELIVERY_POLL;
-        hc->PollReason = XHCI_POLL_R_MESSAGE_NOT_CONNECTED;
-    } else if (hc->MsgVersion == HCD_CONNECT_LINE_BASED) {
-        hc->PollDelivery = XHCI_POLL_DELIVERY_LINE;
-        hc->PollReason = XHCI_POLL_R_AUTO;
-    } else {
+    hc->PollDelivery = XhciPollConnected(
+        hc->PollValues.Mode, NT_SUCCESS(status) ? 1UL : 0UL,
+        (NT_SUCCESS(status) && hc->MsgVersion != HCD_CONNECT_MESSAGE_BASED)
+            ? 1UL
+            : 0UL,
+        &hc->PollReason);
+    if (hc->PollDelivery == XHCI_POLL_DELIVERY_MESSAGE) {
         hc->MsgCapability = hcdMsgCapability(hc);
         hc->PollDelivery = hc->MsgCapability;
     }
@@ -1432,6 +1475,9 @@ static NTSTATUS hcdConnect(PHCD_CONTROLLER hc)
     XhciLogNote(&hc->Hc, "msi.connected", hc->MsgConnected);
     XhciLogNote(&hc->Hc, "intr.delivery", hc->PollDelivery);
     XhciLogNote(&hc->Hc, "intr.reason", hc->PollReason);
+    if (hc->PollDelivery == XHCI_POLL_DELIVERY_NONE) {
+        return STATUS_DEVICE_CONFIGURATION_ERROR;
+    }
     return STATUS_SUCCESS;
 }
 
@@ -2385,6 +2431,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * or connected. */
     status = hcdSettleDelivery(hc);
     if (!NT_SUCCESS(status)) {
+        hcdLogRefused(hc);
         return status;
     }
 
@@ -2463,7 +2510,14 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * (hcdConnect), so what reads the delivery follows it. */
     status = hcdConnect(hc);
     if (!NT_SUCCESS(status)) {
-        hc->Interrupt = NULL;
+        /* Mode 3's message not connected (record 15 revision 7) is
+         * recorded first; a line connection's own failure is as before. */
+        if (hc->PollDelivery == XHCI_POLL_DELIVERY_NONE) {
+            hcdLogRefused(hc);
+        }
+        if (hc->MsgVersion == 0) {
+            hc->Interrupt = NULL;
+        }
         hcdRelease(hc);
         return status;
     }

@@ -42,7 +42,7 @@ static void test_values(void)
     CHECK_EQ(v.ActiveRead, 7000, "active as read");
 
     XhciPollValues(&v, 1, 3, 1, 20, 1, 30);
-    CHECK_EQ(v.Mode, 0, "3 runs as 0");
+    CHECK_EQ(v.Mode, XHCI_POLL_MODE_MESSAGE, "3 is the message only");
     CHECK_EQ(v.ModeRead, 3, "3 recorded");
     CHECK_EQ(v.ActiveMs, 20, "active above idle held to it");
 
@@ -61,96 +61,180 @@ static void test_values(void)
     CHECK_EQ(v.ActiveMs, 1, "active 1 kept");
 }
 
-static void decide_nl(ULONG mode, ULONG have, ULONG msg, ULONG conn,
-                      ULONG pinStatus, ULONG pin, ULONG noLine, ULONG wantD,
+/* The OS families XhciPollDecide tells apart: whether a message can be
+ * granted at all (record 15 section 4, revision 7). */
+#define DOWN 0UL    /* 98 SE, ME, 2000, XP, XP x64 */
+#define NT6  1UL    /* Vista and 7, x86 and x64    */
+
+static void decide_os(ULONG os, ULONG mode, ULONG have, ULONG msg,
+                      ULONG conn, ULONG pinStatus, ULONG pin, ULONG wantD,
+                      ULONG wantR, const char *what, int line)
+{
+    ULONG reason;
+    ULONG d;
+
+    reason = 0xEEEEEEEEUL;
+    d = XhciPollDecide(mode, have, msg, conn, pinStatus, pin, os, &reason);
+    check_eq_impl(d, wantD, what, __FILE__, line);
+    check_eq_impl(reason, wantR, what, __FILE__, line);
+}
+
+/* A line resource reads the same on every family under modes 0, 1 and 2. */
+static void decide(ULONG mode, ULONG have, ULONG msg, ULONG conn,
+                   ULONG pinStatus, ULONG pin, ULONG wantD, ULONG wantR,
+                   const char *what)
+{
+    decide_os(DOWN, mode, have, msg, conn, pinStatus, pin, wantD, wantR, what,
+              __LINE__);
+    decide_os(NT6, mode, have, msg, conn, pinStatus, pin, wantD, wantR, what,
+              __LINE__);
+}
+
+#define RD XHCI_POLL_PIN_READ
+#define RU XHCI_POLL_PIN_UNREADABLE
+#define D_NONE XHCI_POLL_DELIVERY_NONE
+#define D_LINE XHCI_POLL_DELIVERY_LINE
+#define D_POLL XHCI_POLL_DELIVERY_POLL
+#define D_MSG XHCI_POLL_DELIVERY_MESSAGE
+
+static void test_decide(void)
+{
+    /* Section 4's line table, modes 0 to 2, both families. */
+    decide(0, 1, 0, 0, RD, 1, D_LINE, XHCI_POLL_R_AUTO, "0, resource, pin 1");
+    decide(0, 1, 0, 0, RU, 0, D_LINE, XHCI_POLL_R_AUTO_PIN_UNREADABLE,
+           "0, resource, pin unreadable");
+    decide(0, 1, 0, 0, XHCI_POLL_PIN_NOT_READ, 0, D_LINE,
+           XHCI_POLL_R_AUTO_PIN_UNREADABLE, "0, resource, pin not read");
+    decide(0, 1, 0, 0, RD, 0, D_POLL, XHCI_POLL_R_AUTO_PIN0,
+           "0, resource, pin 0");
+    decide(0, 0, 0, 0, RD, 1, D_POLL, XHCI_POLL_R_AUTO_NO_INTERRUPT,
+           "0, no resource, pin 1");
+    decide(0, 0, 0, 0, RD, 0, D_POLL, XHCI_POLL_R_AUTO_NO_INTERRUPT,
+           "0, no resource, pin 0");
+    decide(1, 1, 0, 0, RD, 2, D_LINE, XHCI_POLL_R_FORCED_LINE,
+           "1, resource, pin 2");
+    decide(1, 1, 0, 0, RU, 0, D_LINE, XHCI_POLL_R_FORCED_LINE_PIN_UNREADABLE,
+           "1, pin unreadable");
+    decide(1, 1, 0, 0, RD, 0, D_NONE, XHCI_POLL_R_FORCED_NO_INTERRUPT,
+           "1, resource, pin 0");
+    decide(1, 0, 0, 0, RD, 1, D_NONE, XHCI_POLL_R_FORCED_NO_INTERRUPT,
+           "1, no resource");
+    decide(2, 1, 0, 0, RD, 1, D_POLL, XHCI_POLL_R_FORCED_POLL, "2, resource");
+    decide(2, 0, 0, 0, RD, 0, D_POLL, XHCI_POLL_R_FORCED_POLL, "2, nothing");
+
+    /* Mode 3 on a family with no message interrupts: every resource fails
+     * (revision 7). */
+    decide_os(DOWN, 3, 1, 0, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM, "98-XP, 3, line, pin 1",
+              __LINE__);
+    decide_os(DOWN, 3, 1, 0, 0, RU, 0, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM,
+              "98-XP, 3, line, pin unreadable", __LINE__);
+    decide_os(DOWN, 3, 1, 0, 0, RD, 0, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM, "98-XP, 3, line, pin 0",
+              __LINE__);
+    decide_os(DOWN, 3, 0, 0, 0, RD, 0, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM, "98-XP, 3, no resource",
+              __LINE__);
+    /* Mode 3 on Vista and 7 without a message: the line or nothing. */
+    decide_os(NT6, 3, 1, 0, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED,
+              "NT6, 3, a line granted (MSISupported 0, or kept list)",
+              __LINE__);
+    decide_os(NT6, 3, 1, 0, 1, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED,
+              "NT6, 3, a line, routines found: still no message", __LINE__);
+    decide_os(NT6, 3, 0, 0, 0, RD, 0, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED,
+              "NT6, 3, no interrupt resource", __LINE__);
+    /* Mode 3 on Vista and 7 with a message. */
+    decide_os(NT6, 3, 1, 1, 1, RD, 1, D_MSG, XHCI_POLL_R_FORCED_MESSAGE,
+              "NT6, 3, message, routines found (x64, or x86 helper bound)",
+              __LINE__);
+    decide_os(NT6, 3, 1, 1, 1, RD, 0, D_MSG, XHCI_POLL_R_FORCED_MESSAGE,
+              "NT6, 3, message, pin 0: the pin plays no part", __LINE__);
+    decide_os(NT6, 3, 1, 1, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED,
+              "NT6, 3, message, x86 with no helper bound", __LINE__);
+    decide_os(NT6, 3, 1, 1, 0, RD, 0, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED,
+              "NT6, 3, message, routines not found, pin 0", __LINE__);
+
+    /* The message table, Vista and 7. */
+    decide_os(NT6, 0, 1, 1, 1, RD, 0, D_MSG, XHCI_POLL_R_AUTO_MESSAGE,
+              "NT6, 0, message connected, pin 0", __LINE__);
+    decide_os(NT6, 0, 1, 1, 0, RD, 1, D_POLL,
+              XHCI_POLL_R_MESSAGE_NOT_CONNECTED,
+              "NT6, 0, message, no routines (x86 unbound): polls", __LINE__);
+    decide_os(NT6, 1, 1, 1, 1, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_LINE_MESSAGE,
+              "NT6, 1, message, routines found: fails (revision 7)",
+              __LINE__);
+    decide_os(NT6, 1, 1, 1, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_LINE_MESSAGE,
+              "NT6, 1, message, no routines: fails", __LINE__);
+    decide_os(NT6, 1, 1, 1, 0, RD, 0, D_NONE,
+              XHCI_POLL_R_FORCED_LINE_MESSAGE,
+              "NT6, 1, message, pin 0 (no line offered): fails", __LINE__);
+    decide_os(NT6, 2, 1, 1, 1, RD, 1, D_POLL, XHCI_POLL_R_FORCED_POLL,
+              "NT6, 2, message: forced poll", __LINE__);
+    decide_os(NT6, 2, 1, 1, 0, RD, 0, D_POLL, XHCI_POLL_R_FORCED_POLL,
+              "NT6, 2, message, no routines: forced poll", __LINE__);
+    /* A message flag on a family that grants none is never given; were
+     * it, modes 0 to 2 read it as on NT 6 and 3 still fails. */
+    decide_os(DOWN, 1, 1, 1, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_LINE_MESSAGE, "98-XP, 1, a message flag",
+              __LINE__);
+    decide_os(DOWN, 3, 1, 1, 1, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM,
+              "98-XP, 3, a message flag", __LINE__);
+
+    /* The mode moving between the filter and the start (record 18
+     * section 4.2): the start's own mode decides what was granted. */
+    decide(0, 1, 0, 0, RD, 1, D_LINE, XHCI_POLL_R_AUTO,
+           "1 then 0: the granted line, automatic");
+    decide_os(NT6, 1, 1, 1, 1, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_LINE_MESSAGE,
+              "0 then 1: a message granted fails", __LINE__);
+    decide(2, 1, 0, 0, RD, 1, D_POLL, XHCI_POLL_R_FORCED_POLL,
+           "1 then 2: polls despite the line");
+    decide_os(NT6, 0, 1, 1, 1, RD, 1, D_MSG, XHCI_POLL_R_AUTO_MESSAGE,
+              "3 then 0: the granted message, automatic", __LINE__);
+    decide_os(NT6, 3, 1, 0, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED,
+              "0 then 3: a line granted fails", __LINE__);
+    decide_os(NT6, 1, 1, 0, 0, RD, 1, D_LINE, XHCI_POLL_R_FORCED_LINE,
+              "3 then 1: a line granted runs", __LINE__);
+    decide_os(NT6, 3, 1, 0, 0, RD, 1, D_NONE,
+              XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED,
+              "1 then 3: the stripped list's line fails", __LINE__);
+}
+
+static void connected(ULONG mode, ULONG ok, ULONG lineBased, ULONG wantD,
                       ULONG wantR, const char *what)
 {
     ULONG reason;
     ULONG d;
 
-    reason = 0xEEEEEEEEUL;
-    d = XhciPollDecide(mode, have, msg, conn, pinStatus, pin, noLine,
-                       &reason);
-    check_eq_impl(d, wantD, what, __FILE__, __LINE__);
-    check_eq_impl(reason, wantR, what, __FILE__, __LINE__);
+    reason = 0x1234UL;
+    d = XhciPollConnected(mode, ok, lineBased, &reason);
+    CHECK_EQ(d, wantD, what);
+    CHECK_EQ(reason, wantR, what);
 }
 
-static void decide(ULONG mode, ULONG have, ULONG msg, ULONG conn,
-                   ULONG pinStatus, ULONG pin, ULONG wantD, ULONG wantR,
-                   const char *what)
+/* The connection's answer for a message decided at start (section 4.3;
+ * hcdConnect). Reached only with a message decided, so modes 0 and 3. */
+static void test_connected(void)
 {
-    ULONG reason;
-    ULONG d;
-
-    reason = 0xEEEEEEEEUL;
-    d = XhciPollDecide(mode, have, msg, conn, pinStatus, pin, 0, &reason);
-    check_eq_impl(d, wantD, what, __FILE__, __LINE__);
-    check_eq_impl(reason, wantR, what, __FILE__, __LINE__);
-}
-
-static void test_decide(void)
-{
-    /* Section 4's line table. */
-    decide(0, 1, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_LINE,
-           XHCI_POLL_R_AUTO, "0, resource, pin 1");
-    decide(0, 1, 0, 0, XHCI_POLL_PIN_UNREADABLE, 0, XHCI_POLL_DELIVERY_LINE,
-           XHCI_POLL_R_AUTO_PIN_UNREADABLE, "0, resource, pin unreadable");
-    decide(0, 1, 0, 0, XHCI_POLL_PIN_NOT_READ, 0, XHCI_POLL_DELIVERY_LINE,
-           XHCI_POLL_R_AUTO_PIN_UNREADABLE, "0, resource, pin not read");
-    decide(0, 1, 0, 0, XHCI_POLL_PIN_READ, 0, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_AUTO_PIN0, "0, resource, pin 0");
-    decide(0, 0, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_AUTO_NO_INTERRUPT, "0, no resource, pin 1");
-    decide(0, 0, 0, 0, XHCI_POLL_PIN_READ, 0, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_AUTO_NO_INTERRUPT, "0, no resource, pin 0");
-    decide(1, 1, 0, 0, XHCI_POLL_PIN_READ, 2, XHCI_POLL_DELIVERY_LINE,
-           XHCI_POLL_R_FORCED_LINE, "1, resource, pin 2");
-    decide(1, 1, 0, 0, XHCI_POLL_PIN_UNREADABLE, 0, XHCI_POLL_DELIVERY_LINE,
-           XHCI_POLL_R_FORCED_LINE_PIN_UNREADABLE, "1, pin unreadable");
-    decide(1, 1, 0, 0, XHCI_POLL_PIN_READ, 0, XHCI_POLL_DELIVERY_NONE,
-           XHCI_POLL_R_FORCED_NO_INTERRUPT, "1, resource, pin 0");
-    decide(1, 0, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_NONE,
-           XHCI_POLL_R_FORCED_NO_INTERRUPT, "1, no resource");
-    decide(2, 1, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_FORCED_POLL, "2, resource");
-    decide(2, 0, 0, 0, XHCI_POLL_PIN_READ, 0, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_FORCED_POLL, "2, nothing");
-    /* The message table. */
-    decide(0, 1, 1, 1, XHCI_POLL_PIN_READ, 0, XHCI_POLL_DELIVERY_MESSAGE,
-           XHCI_POLL_R_AUTO_MESSAGE, "0, message connected, pin 0");
-    decide(1, 1, 1, 1, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_MESSAGE,
-           XHCI_POLL_R_MESSAGE_LINE_ASKED, "1, message connected");
-    decide(0, 1, 1, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "0, message not connected");
-    decide(1, 1, 1, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "1, message not connected");
-    decide(2, 1, 1, 1, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_FORCED_POLL, "2, message");
-    /* Design record 18 section 4.3: no line offered and no helper. */
-    decide_nl(1, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_NONE,
-              XHCI_POLL_R_FORCED_NO_LINE_OFFERED,
-              "1, message not connected, no line offered: fails");
-    decide_nl(0, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_POLL,
-              XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "0, the same: polls");
-    decide_nl(3, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_POLL,
-              XHCI_POLL_R_MESSAGE_NOT_CONNECTED, "3, the same: polls");
-    decide_nl(2, 1, 1, 0, XHCI_POLL_PIN_READ, 0, 1, XHCI_POLL_DELIVERY_POLL,
-              XHCI_POLL_R_FORCED_POLL, "2, the same: forced poll");
-    decide_nl(1, 1, 1, 0, XHCI_POLL_PIN_READ, 1, 0, XHCI_POLL_DELIVERY_POLL,
-              XHCI_POLL_R_MESSAGE_NOT_CONNECTED,
-              "1, not connected, a line offered: polls as before");
-    decide_nl(1, 1, 1, 1, XHCI_POLL_PIN_READ, 0, 1,
-              XHCI_POLL_DELIVERY_MESSAGE, XHCI_POLL_R_MESSAGE_LINE_ASKED,
-              "1, connected: the message whatever the input");
-    /* The mode moving between the filter and the start (record 18
-     * section 4.2): the start's own mode decides what was granted. */
-    decide(0, 1, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_LINE,
-           XHCI_POLL_R_AUTO, "1 then 0: the granted line, automatic");
-    decide(1, 1, 1, 1, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_MESSAGE,
-           XHCI_POLL_R_MESSAGE_LINE_ASKED,
-           "0 then 1: a message granted, the fallback");
-    decide(2, 1, 0, 0, XHCI_POLL_PIN_READ, 1, XHCI_POLL_DELIVERY_POLL,
-           XHCI_POLL_R_FORCED_POLL, "1 then 2: polls despite the line");
+    connected(0, 1, 0, D_MSG, 0x1234UL, "0, the message: the start's reason");
+    connected(0, 0, 0, D_POLL, XHCI_POLL_R_MESSAGE_NOT_CONNECTED,
+              "0, refused: polls");
+    connected(0, 1, 1, D_LINE, XHCI_POLL_R_AUTO, "0, a line fallback");
+    connected(3, 1, 0, D_MSG, 0x1234UL, "3, the message: the start's reason");
+    connected(3, 0, 0, D_NONE, XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED,
+              "3, refused: fails");
+    connected(3, 1, 1, D_NONE, XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED,
+              "3, a line fallback: fails");
 }
 
 /* ------------------------------------------------------------------ */
@@ -761,6 +845,7 @@ int main(void)
 {
     test_values();
     test_decide();
+    test_connected();
     test_deadlines();
     test_open_close();
     test_dpc_and_promotion();

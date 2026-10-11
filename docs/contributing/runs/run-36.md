@@ -1295,7 +1295,64 @@ controller in the machine, and with a USB disk attached the resume stops
 before the desktop returns under this driver and under NUSB's EHCI
 driver alike. With only USB mice, keyboards and hubs attached, the
 resume completed and the devices worked. On real hardware Stand by is
-untested; remove USB disks before Stand by."
+untested; remove USB disks before Stand by." (The release notes and
+README now carry the refined wording from the SweetLow control below.)
+
+**SweetLow's stack control (2026-10-11, branch `p36-swl`).** The same
+vehicle and procedure (development host A, QEMU 11.1.0, `-display none`,
+power throttling opted out), on 98 SE with NUSB removed and SweetLow's
+XP-SP2-derived USB 2.0 stack installed (`vm\t26\win98-sweetlow-base`).
+`A` = SweetLow's EHCI on QEMU's `usb-ehci`, no xHCI. Because SweetLow's
+stack alone has no `usbd.sys`, it was extracted from the 98 SE CD (root hub
+Code 2 before that). `B` = the stamped 2.2.0.3 `release` on the same
+system, as the final matrix installed it. `N` = the same release on the
+NUSB 3.3 gold system (installed file byte-identical). Mass storage is the
+same class driver on all three: SweetLow's package has no `usbstor`, and
+NUSB 3.3's `USBSTOR.SYS` (21,040 B) stays behind. Evidence:
+`out\p36-swl\legs\notes.txt` (RESULT lines), `legs\sla`, `legs\slx`,
+`legs\nsx` (shots, EIP samples, traces).
+
+The stick result turns on whether the BIOS saw the stick. SeaBIOS
+presents a boot-attached stick as an INT 13h disk, and Windows 98 SE
+then runs that drive in MS-DOS compatibility mode ("Drive E is using
+MS-DOS compatibility mode file system" on the Performance tab). With such
+a drive, this driver's resume stopped every time: 4 of 4 on the SweetLow
+system (one on the `qemu` flavour), including a run where the stick was removed during standby, and
+1 on NUSB. With a stick the BIOS never saw (hot-plugged, or added after
+POST while the Windows logo showed), it resumed 6 of 6 (one on the
+`qemu` flavour) and the stick
+stayed attached. A `qemu`-flavour 2.2.0.3 trace shows the difference is
+above the bus. In both cases the controller's D0 arrives alone, the
+reinitialization runs, every device is dropped and the No Op self-test
+completes. In the passing case Windows then sends S0 and the root hub's
+QUERY_DEVICE_RELATIONS, and the stick is re-enumerated and configured.
+In the stopping case Windows sends nothing more: no S0, no relations
+query, and no transfer is outstanding. SweetLow's EHCI resumes with a
+BIOS-mapped stick, but it does not re-present the stick (the tray icon is
+gone and the drive's window has closed). So this driver returning the
+device is the one visible difference. It is not a defect of the bus: the
+stop needs neither the stick's return nor any request to the stick, and
+NUSB's EHCI stopped the same way with a boot-attached stick (EHCI 12 above).
+The `KERNEL32` 0E appears on every system after any wake: any program
+started (Explorer included), MS-DOS prompts and Ctrl+Alt+Del.
+
+| Run | Devices | What happened after `system_wakeup` | Reading |
+|---|---|---|---|
+| SweetLow EHCI (A1) | a stick hot-plugged at the desktop | desktop back, Start menu; the stick not re-presented; My Computer, then Ctrl+Alt+Del: 0E at `016F:BFF9DFFF` | resume passes, stick lost (SweetLow's stack) |
+| SweetLow EHCI (A1b) | a boot-attached stick, drive E in MS-DOS compatibility mode | desktop back, Start menu; stick not re-presented | resume passes, stick lost |
+| SweetLow EHCI (A2) | a mouse alone | standby refused 2 of 2 ("a device driver or program won't allow it"); with the mouse then removed, standby entry hung (EIPs `FF05xxxx`) | not makeable on SweetLow's EHCI |
+| SweetLow EHCI (A3) | a hub, a mouse behind it | QEMU's hub is Full Speed only and cannot attach to an EHCI port; with ICH9 UHCI companions the hub ran on 98 SE's `uhcd`: hang at `C002F1B0` | not makeable; the companion is the UHCI hang above |
+| xHCI 2.2.0.3, SweetLow system (B1) | a stick hot-plugged, or added after POST | 3 of 3: desktop back, the stick stays; a new program, then Ctrl+Alt+Del: 0E at `BFF9DFFF` | resume passes |
+| xHCI 2.2.0.3, SweetLow system (B1b) | a boot-attached stick (compatibility mode), once removed during standby | 4 of 4: the pre-standby frame stays, VMM EIPs as xHCI 5/6; traced: the bus idle after D0, no S0 | Windows stops above the bus |
+| xHCI 2.2.0.3, SweetLow system (B2) | a mouse alone | desktop back, the pointer moves; MS-DOS prompt "not enough memory"; Ctrl+Alt+Del: 0E | resume passes |
+| xHCI 2.2.0.3, NUSB system (N) | a stick added after POST / hot-plugged; then boot-attached (compatibility mode) | 2 of 2 pass; boot-attached: stop (one more boot-attached run passed, but its compatibility mode was not confirmed) | as on SweetLow's system |
+
+**Verdict unchanged: not this driver.** The USB-disk stop is Windows 98
+SE stopping after a resume while it holds a BIOS-mapped
+compatibility-mode drive. A disk plugged in after Windows started
+resumes. The release-notes limitation and the README row now name the
+"attached when the computer started" case. Remove USB disks before Stand
+by stays the advice.
 
 **Owed.** 36.28's part 2 on the bench (E460, P14s Gen 1: standby with a
 stick); the stage A, pended-D0 and `XhciInterruptMode` 2 resumes of
@@ -1372,3 +1429,41 @@ Raw texts: `out\p36-aud\legs\w7x64\*-times.txt`, `legs\w7x86\x86-h5r-times.txt`,
 traces `legs\w7x64\qtrace-{2,3,4}.log` and the local temp directory's
 `qtrace-8.log`; harness `out\p36-aud\kit` (`probe.ps1`, `stall.ps1`,
 `stallplay.ps1`, `launch.ps1 -Display`).
+
+## 36.53 - XhciInterruptMode 1 the line only, 3 a message only (2026-10-11)
+
+Branch `p36-imode` at `4e11974` (2.3.0.0 merged, with 36.51's INFs), the
+`release` and `qemu` packages of that tree, QEMU `qemu-xhci` with its
+default INTx, MSI and MSI-X, development host A. The reason of a refused
+start was read from the `qemu` flavour's `M86 S` record (debugcon) and,
+on XP, also from DebugView on `release`.
+
+| Guest | Mode | Flavour | Result |
+|---|---|---|---|
+| 7 x64 | 0 | release | MSI-X (delivery 4), reason 10; mouse, stick copy fc-clean: PASS |
+| 7 x64 | 3 | release | MSI-X, reason 15, filter outcome 12 (the line choices stripped); mouse, stick: PASS |
+| 7 x64 | 1 | release | the line, reason 5, filter outcome 10; mouse: PASS |
+| 7 x64 | 1, `XhciMsi86InjNoLine` 1 (only a message offered) | qemu | Code 10; `M86 S` grant 2, outcome 6, delivery 0, reason 14, status `C0000182`: PASS |
+| 7 x64 | 3, `XhciQemuMsgConnectFail` 1 | qemu | Code 10; reason 17: PASS |
+| 7 x64 | 3, `MSISupported` 0 and a restart | qemu | Code 10; grant 1, outcome 8, reason 16: PASS |
+| 7 x86, helper bound | 0 | release | MSI-X, reason 10, routines from `xhcimsi.sys`; mouse, stick: PASS |
+| 7 x86, helper disabled | 0 | release | helper ABSENT (`C0000034`); the line, reason 1; mouse, stick: PASS |
+| 7 x86, helper disabled | 3 | release, qemu | Code 10 on both; `M86 S` grant 2, bind 1, outcome 12, reason 17: PASS |
+| Vista x86, helper bound | 0 / 3 / 1 / 2 | release | MSI-X reason 10 / MSI-X reason 15, outcome 12 / line reason 5, outcome 10 / poll reason 8; mouse (and stick under 0 and 3): PASS |
+| Vista x86 | 1, `XhciMsi86InjNoLine` 1 | qemu | Code 10; reason 14 (the trace validator accepted the capture): PASS |
+| Vista x86 | 3, `XhciQemuMsgConnectFail` 1 | qemu | Code 10; outcome 12, reason 17: PASS |
+| XP | 0 | release | the line, reason 1; mouse, stick: PASS |
+| XP | 3 | release, qemu | Code 10 on both; DebugView `intr.reason` and `start.refused.delivery` 18; `M86 S` reason 18, status `C0000182`: PASS |
+| XP | 1 / 2 / 0 again | qemu | line reason 5 / poll reason 8 / line reason 1: PASS |
+| 98 SE | 0 | release | the line, reason 1; mouse, stick: PASS |
+| 98 SE | 3 | qemu | Device Manager: "This device is either not present, not working properly, or does not have all the drivers installed. (Code 10.)"; `M86 S` reason 18: PASS |
+| 98 SE | 1 / 0 again | qemu / release | line reason 5 / line reason 1: PASS |
+
+Every refused start returned `STATUS_DEVICE_CONFIGURATION_ERROR`
+(`C0000182`). Not read: a controller that really offers no line (QEMU's
+always has one; `XhciMsi86InjNoLine` made the list message-only), MSI
+rather than MSI-X under mode 3 (`msi=on,msix=off`), 64-bit Vista, ME,
+2000, XP x64, and `XhciLogDebugView` on 98 SE. `check-msi86-trace.ps1`
+reads an XP or 98 SE capture's `S` record and then refuses the capture
+for having no requirements list, since those systems never send one.
+Raw texts: `out\p36-imode\legs\<guest>\notes.txt` and the files it names.

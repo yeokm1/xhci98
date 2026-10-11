@@ -221,6 +221,11 @@ detail, and what each rests on.
   Full-Speed device on such a controller fails; set
   `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
   Low- and Full-Speed IDs behind a hub").
+- **Every registry value the driver reads is in its key after an
+  install.** The install writes all nineteen, now including `XhciWideMap`
+  `0`, `XhciSelectiveSuspend` `0` and `XhciUsb2HubSpeedFallback` `1`, each
+  the value a missing one reads as, so nothing behaves differently; an
+  update keeps a value you set ("Registry settings").
 
 ## Targets and their standing
 
@@ -1120,16 +1125,22 @@ no message-signalled interrupts and are unchanged.
   waiting for the restart: code 28 on 7, code 1 on Vista), so its USB 3
   ports work from the next start of Windows on, with the message. If
   `xhcimsi.sys` is missing or does not load, the controller keeps its
-  interrupt line.
+  interrupt line under `XhciInterruptMode` `0`.
 - **Asking for the interrupt line** on Vista and 7: set `XhciInterruptMode`
-  to `1` and disable and enable the controller (a message Windows grants
-  anyway is still used, and one that cannot be connected polls; see
-  "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs"), or set `MSISupported` to `0`
-  under `Interrupt Management\MessageSignaledInterruptProperties` in the
-  controller's hardware key (Device Parameters) and restart. On 32-bit
-  Vista and 7 with no `xhcimsi.sys` running, a controller that offers no
-  interrupt line at all then fails to start under `XhciInterruptMode`
-  `1` (Device Manager shows Code 10), as it does on XP; set `0` again.
+  to `1` and disable and enable the controller, or set `MSISupported` to
+  `0` under `Interrupt Management\MessageSignaledInterruptProperties` in
+  the controller's hardware key (Device Parameters) and restart. Under `1`
+  the driver asks Windows for the line; if Windows grants a message anyway
+  (a controller that offers no line), the controller fails to start
+  (Device Manager shows Code 10), on both architectures. Set `0` again.
+- **Asking for a message-signalled interrupt** on Vista and 7: set
+  `XhciInterruptMode` to `3` and disable and enable the controller. The
+  driver asks Windows for the message alone and uses it; if Windows
+  grants none (for instance with `MSISupported` `0`), or the message
+  cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not
+  running), the controller fails to start (Code 10), with no fallback to
+  the line or to polling. On Windows 98 SE, ME, 2000 and XP, which have no
+  message-signalled interrupts, `3` always fails the start.
 - **Going back to an earlier version** on Vista or 7: the request for a
   message stays in the hardware key, and releases before `2.3.0.0` do not
   know what to do with a message. Before installing an older package,
@@ -1147,10 +1158,8 @@ been read in QEMU guests only (the readings are listed in the run record).
 
 ## Registry settings
 
-Each value is a `DWORD` in the controller's driver (software) key. The
-install writes sixteen; three more, `XhciWideMap`, `XhciSelectiveSuspend`
-and `XhciUsb2HubSpeedFallback`, are read only when you add them yourself,
-in the same key:
+Each value is a `DWORD` in the controller's driver (software) key, and
+the install writes every value the driver reads, nineteen, in this key:
 
 | Windows | Key |
 |---|---|
@@ -1169,7 +1178,7 @@ that say so, disable and enable the controller in Device Manager).
 `XhciForceBulkOnly` is the exception: it is read as each device is
 enumerated ("XhciForceBulkOnly").
 
-The install writes all sixteen: each at the driver's own default, except
+The install writes all nineteen: each at the driver's own default, except
 `XhciImodInterval250ns` at `160`. Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
@@ -1177,7 +1186,10 @@ default, set it by hand, or delete the value and update the driver.
 `2.2.0.0`, and an update over `2.1.1.0` adds them; `XhciIntelIrqRoute`,
 `XhciMaxTransferKB`, `XhciInterruptMode`, `XhciPollIdleMs` and
 `XhciPollActiveMs` are new in `2.3.0.0`, and an update over `2.2.0.0` adds
-them. Since `2.3.0.0` the
+them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
+`XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
+install too, at the value that reads as a missing one; an update keeps any
+of them you had already added. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written
@@ -1219,14 +1231,22 @@ Vista and 7: message-signalled interrupts").
 
 | `XhciInterruptMode` | Effect |
 |---|---|
-| `0`, absent, not a `DWORD`, `3`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
-| `1` | The interrupt line, as `2.2.0.0`. On Vista and 7 the driver asks Windows for the line rather than a message; if Windows grants a message anyway it is used, and if a message cannot be connected the controller is polled. A controller with no line fails to start (Device Manager: Code 10): on Windows 98 SE to XP, and on 32-bit Vista and 7 when no line is offered and `xhcimsi.sys` is not running |
+| `0`, absent, not a `DWORD`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
+| `1` | The interrupt line only, as `2.2.0.0`, on every system. On Vista and 7 the driver asks Windows for the line rather than a message. A controller given no line - no interrupt, no interrupt pin, or on Vista and 7 a message Windows grants anyway - fails to start (Device Manager: Code 10) |
 | `2` | Polling always, even where the line works. For a controller whose interrupt misbehaves; it costs more processor wake-ups |
+| `3` | A message-signalled interrupt (MSI or MSI-X) only. On Vista and 7 the driver asks Windows for the message alone; if none is granted, or it cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not running), the controller fails to start (Code 10), with no fallback to the line or to polling. On Windows 98 SE, ME, 2000 and XP (32- and 64-bit), which have no message-signalled interrupts, `3` fails the start |
 
 | Value | Default | Effect |
 |---|---|---|
 | `XhciPollIdleMs` | `50` | While polling, how often (in ms) the driver looks when nothing is outstanding. `0` runs as `50`; above `5000` is held to `5000`. A device plugged in waits at most this long to be seen |
 | `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
+
+A start that `1` or `3` refuses records why: with `XhciLogDebugView` set,
+DebugView shows the counter dump's `intr.reason` line (14: a message
+granted under `1`; 16: no message granted under `3`; 17: the message not
+connected; 18: a system with no message-signalled interrupts) beside the
+Code 10, and with `XhciLogVerbosity` `2` or above also the start's notes
+and a `start.refused.delivery` line.
 
 Neither period matters while the controller has a working interrupt line
 or a message. Polling adds up to one period of delay to each completed
@@ -1592,7 +1612,7 @@ time, and file reads no faster than at `64`.
 On Windows 2000 and later the controller driver gives a large bulk
 transfer to the controller two pieces at a time, the next one queued
 before the current one ends, where `2.2.0.0` and earlier gave one piece and waited -
-when this value turns it on. It is **off unless you set it**. It applies to
+when this value turns it on. It is **off unless you set it to `1`**. It applies to
 large bulk writes on any device, and to large bulk reads only on a UAS
 drive's streams. It does so only where the machine's DMA needs no
 translation - the check is made at every start, and again for each
@@ -1601,9 +1621,9 @@ transfer:
 | | |
 |---|---|
 | Key | the controller's driver key, where the install writes the other `Xhci` values ("Registry settings", above): on 2000, XP, Vista and 7 `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN`, the subkey whose `DriverDesc` is "xHCI98 USB 3.x eXtensible Host Controller" (on Vista and 7 Device Manager's Details tab gives it as the "Driver key") |
-| Value | `XhciWideMap`, a `DWORD`; add it with `regedit` (New, DWORD Value) or a `.reg` file |
-| Default | off in `2.2.0.3` and `2.3.0.0`: no install writes it, and a missing value means off |
-| On | `1`, then **restart Windows**; `0`, or deleting the value, and a restart turn it off again |
+| Value | `XhciWideMap`, a `DWORD`; change it with `regedit` (Modify) or a `.reg` file |
+| Default | off: the install writes `0`, and a missing value means off too |
+| On | `1`, then **restart Windows**; `0` and a restart turn it off again |
 
 The decision rests on a reading of every Windows 2000, XP, Vista and 7 HAL
 of the service packs these notes name, x86 and x64. Later HAL hotfixes were
@@ -1623,7 +1643,7 @@ changed it.
 
 ### XhciSelectiveSuspend: putting idle devices to sleep
 
-New in `2.3.0.0`, and **off unless you set it**. Up to `2.2.0.0` the
+New in `2.3.0.0`, and **off unless you set it to `1`**. Up to `2.2.0.0` the
 driver never suspended a device: it answered Windows' power requests for
 a device by recording them, so an idle device kept drawing power. With
 this value at `1` the driver suspends a device when Windows asks it to -
@@ -1637,7 +1657,7 @@ Windows.
 | | |
 |---|---|
 | Key | the controller's driver key ("Registry settings", above) |
-| Value | `XhciSelectiveSuspend`, a `DWORD`; no install writes it |
+| Value | `XhciSelectiveSuspend`, a `DWORD`; the install writes `0` |
 | `0`, absent, any other number or not a `DWORD` | Off, the default: the driver behaves as `2.2.0.0` did, bit for bit |
 | `1` | On, for USB 2.0 devices (High, Full and Low Speed, at a root port or behind a hub) and SuperSpeed devices alike |
 
@@ -1677,7 +1697,7 @@ controller's own ports are not affected.
 | | |
 |---|---|
 | Key | the controller's driver key ("Registry settings", above) |
-| Value | `XhciUsb2HubSpeedFallback`, a `DWORD`; no install writes it |
+| Value | `XhciUsb2HubSpeedFallback`, a `DWORD`; the install writes `1` |
 | Absent, `1`, any other number or not a `DWORD` | On, the default |
 | `0` | Off: such a device is refused, as in `2.2.0.0` |
 
@@ -1891,19 +1911,27 @@ or says it was found by reading the code.
 - **Windows 98 SE: Stand by is untested on real hardware; remove USB disks
   before Stand by.** It has been read only in QEMU virtual machines, where
   Windows 98 SE itself does not resume reliably: after the wake, a program
-  run at an MS-DOS prompt, or Ctrl+Alt+Del, can stop with a fatal exception
-  0E in `KERNEL32` even with no USB controller in the machine, and with a USB
-  disk attached the resume stops before the desktop returns, under this
-  driver and under NUSB's USB 2.0 (EHCI) driver alike; Windows 98 SE's own
-  UHCI driver did not resume at all there. With only a USB mouse attached,
-  at a root port or behind a hub, the resume completed and the mouse
-  worked through this driver.
+  started, or Ctrl+Alt+Del, can stop with a fatal exception 0E in
+  `KERNEL32` even with no USB controller in the machine. With a USB disk
+  that was attached when the computer started, the resume stops before the
+  desktop returns, under this driver and under NUSB's USB 2.0 (EHCI) driver
+  alike. The BIOS presents such a disk to Windows, and Windows 98 SE then
+  uses it in MS-DOS compatibility mode (System Properties, Performance
+  tab). A disk plugged in after Windows started did not stop the resume,
+  and it was still attached afterwards. Windows 98 SE's own UHCI driver did
+  not resume at all there. With only a USB mouse attached, at a root port
+  or behind a hub, the resume completed and the mouse worked through this
+  driver.
 - **Windows 98 shows no driver version on the Driver tab**, only the file
   date; the four-part version is under Driver File Details, which also lists
   `xhci98.tmp`, a leftover of the install's temporary copy (cosmetic).
 - **Windows ME: do not unplug a device while Windows is installing it.**
   ME's own device manager stops responding; it does the same on Microsoft's
   own USB stack.
+- **Windows ME: Shut Down can hang with a USB disk that has not been opened
+  since the start.** Open the disk once (a `dir` of it is enough), or
+  remove it, before shutting down. ME does the same on Microsoft's own USB
+  stack, and `2.2.0.0` did too.
 - **Windows ME: a UAS drive as the first USB storage device shows Code 2.**
   On a fresh Windows ME, ME has not yet copied its own `USBNTMAP.SYS` and
   `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is
@@ -1978,10 +2006,12 @@ or says it was found by reading the code.
   floppy".
 - **After an update from `2.0.0.0`, some devices are found once more as new
   hardware**, one time each. See "Updating from 2.y.y.y".
-- **After an update from `2.0.0.0`, the root hub's Driver tab still shows
-  `2.0.0.0`** until the root hub is updated too, although it runs the new
-  file; and Windows 98 SE and ME keep running `2.0.0.0` until the next
-  restart, which they do not ask for. Same section.
+- **After an update, the root hub's Driver tab still shows the old
+  version** until the root hub is updated too, although it runs the new
+  file (read again after an update from `2.2.0.0` on Windows 2000, XP and
+  XP x64). On Windows 98 SE and ME the old driver also keeps running until
+  the next restart, which they do not ask for (read again after an update
+  from `2.2.0.0`). Same section.
 - **Windows Vista and 7: deleting the driver keeps the older packages.**
   "Delete the driver software for this device" removes only the package in
   use, and Windows may install an older one the next time it finds the
@@ -2017,7 +2047,7 @@ what `2.3.0.0` adds:
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
-| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and stopped with a USB disk attached, as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
+| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and with a USB disk plugged in after Windows started, and stopped with a USB disk attached when the computer started (the BIOS presents it, and Windows uses it in MS-DOS compatibility mode), as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
 | The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground

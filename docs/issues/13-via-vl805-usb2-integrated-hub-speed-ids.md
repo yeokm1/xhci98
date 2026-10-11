@@ -64,8 +64,8 @@ maintainer's copy; no serial numbers are transcribed here):
   with the device plugged, 41 after removal (`freshboot.TXT` 147,
   `lowspeedin.TXT` 147, `lowspeedout.TXT` 147) - the hub's own transfers.
 - **The extension images say more.** Decoded from the `.BIN` files against
-  an offset table for the `2.2.0.0` tree (Codex, 2026-10-10, session
-  `01a1261e`; offsets 10668/10672 and 79156): commands issued and completed
+  an offset table for the `2.2.0.0` tree (2026-10-10; offsets 10668/10672
+  and 79156): commands issued and completed
   4/4 at boot and 10/10 once the device is plugged, through to its removal;
   hub port resets requested 0, then 3. Three resets and six more commands
   fit three Enable Slot and Disable Slot pairs, one per enumeration attempt,
@@ -91,7 +91,8 @@ which only the `qemu` flavour emits. `1.2.0.0` had the same refusal in its
 own slot code, which is why it showed "Unknown Device".
 
 The diagnosis is a static reading of the logs and the code (about 95 %
-confident, Codex concurring); the refusal itself was not observed, because
+confident, a second opinion concurring); the refusal itself was not
+observed, because
 nothing on a shipping build recorded it. The residual alternative is a
 failure elsewhere in placement (allocation, topology), which would also give
 Enable/Disable pairs but is not speed-specific.
@@ -101,7 +102,7 @@ Enable/Disable pairs but is not speed-specific.
 The investigation first read the VL805's table as incomplete, since a
 non-empty table replaces the defaults (xHCI 1.2c Table 7-8 and footnote
 120, p.481 and p.485; transcribed in `xhci-data-structures.md` section
-10.1). Codex's second opinion corrected it, and the specification bears it
+10.1). A second opinion corrected it, and the specification bears it
 out:
 
 - xHCI 1.2c 7.2.1, the note under Table 7-10 (p.482-483): "An xHC
@@ -168,8 +169,8 @@ Interface facts only, cited by place:
 
 ## 6. The fix (roadmap 36.49)
 
-The options considered (`out/via18/report.md`, held off-tree, and Codex's
-two answers, session `01a1261e`):
+The options considered (`out/via18/report.md`, held off-tree, and a second
+opinion's two answers):
 
 - **A**: append PSI DWORDs for IDs 1 and 2 (`000C0021`, `05DC0012`) to the
   USB 2.0 group's captured table, for `1106:3483` only. Workable, but it
@@ -186,8 +187,9 @@ two answers, session `01a1261e`):
 And four ways to gate B: on the PCI id; on the observed pattern (USB 2.0
 group, HSO and IHI set, an HS-only table); on the PCI id and the pattern;
 or generally, for any controller, restricted to devices behind a hub with a
-collision check. **The last was taken** (orchestrator decision on Codex's
-recommendation, owner to confirm; the owner asked for the fix to be in the
+collision check. **The last was taken** (orchestrator decision on the second
+opinion's recommendation, owner to confirm; the owner asked for the fix to
+be in the
 `2.2.0.3` test build): HSO and IHI describe the root port, not the numeric
 IDs of downstream speeds, and the actual topology - a device behind a hub -
 is the stronger evidence. On by default, because without it every Full- and
@@ -220,7 +222,8 @@ Decoding", the downstream exception):
   `XhciPortRateFor`, so a device addressed at ID 2 is read as Low Speed
   everywhere and never as unknown. The Slot Context receives the raw ID.
 - **The switch.** `XhciUsb2HubSpeedFallback`, a REG_DWORD in the
-  controller's driver key, written by no INF: only `0` turns it off; read at
+  controller's driver key, written by every INF at 1 since roadmap-hcd 36.51
+  (owner, 2026-10-11; by no INF before): only `0` turns it off; read at
   each start (`hub.speed.value`, `hub.speed.fallback`).
 - **Diagnostics, ungated.** Counters appended at words 162 to 166 of the
   counter block: the switch as read and in effect, `TopoBehindHubNoSpeed`
@@ -273,8 +276,6 @@ Decoding", the downstream exception):
   `PROBE.LOG`, `LOWSPEED.LOG`, `freshboot`, `lowspeedin`, `lowspeed5`,
   `lowspeed30`, `lowspeedout` (`.TXT`, `.BIN`, `.PSC`).
 - `out/via18/report.md` (held off-tree): the investigation and the options.
-- Codex, session `01a1261e` (2026-10-10): the second opinion and the
-  generalisation answer.
 - `docs/references/spec-1.2c-dump.txt` (per-machine, git-ignored): 4.5.2
   p.84, 4.24.2.1 p.328, 7.2.1 p.482-483, Table 7-13 p.485, Table 7-15 p.488.
 - The VL805 datasheet, Revision 0.93 (section 4 above; held by the

@@ -76,7 +76,7 @@ table is the index.
 | Polled event delivery | Planned, unnumbered (`POLL`; drawn up as Phase 35) (owner, 2026-10-05, first added as Phase 34's stage C; design record 15): a switch, `XhciInterruptMode`, chooses automatic (0, the default: the line interrupt where the controller has one, an adaptive poll of the event ring where it has none), the line interrupt (1, failing as today without one) or polling (2), with 3 and above reserved (MSI, not scheduled) and run as 0, so an MSI- or MSI-X-only controller, which neither primary target can serve by interrupt, can be driven; the idle period `XhciPollIdleMs` defaults to 50 ms and the active period `XhciPollActiveMs` to 1 ms, neither may be 0, the idle period is held to 5000 ms and the active to the idle, and all three join 34.1's install rule. The delivery in effect and its reason are captured by `XHCISNAP` and the DebugView log. Each taken from options with a recommendation; the numbering replaced the same day's "0 line, 1 polling, 2 MSI" |
 | Polled event delivery joins Phase 36 | Owner, 2026-10-08, after issue 12: the `POLL.*` tasks become 36.5 to 36.10, 36.13 and 36.14. Record 15 is amended (section 4.2, decision 6): automatic mode also moves to polling when a line interrupt is proven dead at run time, which replaces 36.4's stalled-event watchdog. 36.4 keeps the BUSY retry |
 | Selective suspend joins Phase 36, off by default | Owner, 2026-10-09: the planned selective suspend work (`SUSP.*`) becomes 36.28 to 36.41, its docs join 36.20 and its cut and install legs 36.final. `XhciSelectiveSuspend` defaults to **0**, replacing the default 1 of 2026-10-05 (design record 14 sections 7 and 11): off, it is today's behaviour bit for bit, so the work can ride in `2.3.0.0`; a user turns it on with 1. Stage B still ships with stage A, so `2.3.0.0` waits for both |
-| MSI on Vista and 7 | Owner, 2026-10-08: added to Phase 36 for both architectures (36.15, 36.16), designed as a record 15 amendment. Owner, 2026-10-09, after 36.5's review found no safe way for the x86 binary alone: amd64 through `MmGetSystemRoutineAddress`; x86 through `xhcimsi.sys`, a small NT 6-only helper driver installed only by the Vista and 7 x86 INF section, which imports `IoConnectInterruptEx` and hands it to `xhci98.sys` over a named device and a versioned internal device control (design record 18). `xhci98.sys`'s x86 image gains one import, `IoGetDeviceObjectPointer`, with stock Windows 98 SE precedent, and none Windows 98 lacks (owner, 2026-10-09). Without the helper, the requirements filter keeps only the line configurations, so x86 keeps the line, the routing quirk and polling; the same filter makes `XhciInterruptMode` 1 force the line on Vista and 7, x86 and amd64 (owner, 2026-10-09), and mode 1 with no line offered and no helper fails the start as on XP. The Vista and 7 x86 install asks for a restart, so the boot-start helper is active at once (owner, 2026-10-09) |
+| MSI on Vista and 7 | Owner, 2026-10-08: added to Phase 36 for both architectures (36.15, 36.16), designed as a record 15 amendment. Owner, 2026-10-09, after 36.5's review found no safe way for the x86 binary alone: amd64 through `MmGetSystemRoutineAddress`; x86 through `xhcimsi.sys`, a small NT 6-only helper driver installed only by the Vista and 7 x86 INF section, which imports `IoConnectInterruptEx` and hands it to `xhci98.sys` over a named device and a versioned internal device control (design record 18). `xhci98.sys`'s x86 image gains one import, `IoGetDeviceObjectPointer`, with stock Windows 98 SE precedent, and none Windows 98 lacks (owner, 2026-10-09). Without the helper, the requirements filter keeps only the line configurations, so x86 keeps the line, the routing quirk and polling; the same filter makes `XhciInterruptMode` 1 force the line on Vista and 7, x86 and amd64 (owner, 2026-10-09), and mode 1 with no line offered and no helper fails the start as on XP. The Vista and 7 x86 install asks for a restart, so the boot-start helper is active at once (owner, 2026-10-09). **Amended by 36.53 (owner, 2026-10-11):** `XhciInterruptMode` 1 is the line only on every system, failing the start (Code 10) when only a message is offered; 3 is a message only on Vista and 7, failing the start when none is granted or it does not connect, and on 98 SE to XP; 36.6-36.8's and 36.15's lines, which read 3 as 0, are kept as history (design records 15 and 18, decision 8) |
 | Phase 36 is `2.3.0.0` | Owner, 2026-10-08: the routing quirk, polled event delivery and MSI make Phase 36 a minor release, so the branch `2.2.1.0` is renamed `2.3.0.0`, and that is the target version. Commits before the rename were made on `2.2.1.0` |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
@@ -95,7 +95,8 @@ table is the index.
 | Cut before the bench | The `2.0.0.0` cut was taken before the combined bench session, not after it (owner, 2026-10-04, about 16:40: "I will do the bench session after the cut; if it works we release that, otherwise change and recut"); supersedes "One bench session before the cut" (above). The documents were written as if the bench passes, and 28-E.1, 29-E.1, 30-E.1 and 31-E.1 were read by the owner on real hardware after the cut, on the ThinkPad E460 and the ThinkPad P14s Gen 1 under Windows 98 SE (the README's photos are the P14s); the owner reports no issue beyond the known limitations. Windows 7 was not benched ("Windows 7 on the bench", above) |
 | SuperSpeed hubs on Windows 2000, revisited | Released untested (owner, 2026-10-04, with the cut), revisiting the 2026-10-02 row that required a vehicle: no vehicle exists, so the Windows 2000 half of Phase 30's checkpoint is untested ground, built from the specification, and the release notes say so |
 | Gaps dropped from `2.0.0.0` | Two task gaps ticked with the gap recorded rather than closed (owner, 2026-10-04): 29-A.1's registry value restoring the SuperSpeedPlus refusal (SuperSpeedPlus is accepted at its trained rate; `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused), and 31-0's unread sources - the xHCI 4.12 streams rows marked "to verify", NT `disk.inf`'s `GenDisk` binding and QEMU's `hw/usb/dev-uas.c` - not needed for `2.0.0.0` since UAS passed on every target. Neither is scheduled |
-| Issue 18: USB 2.0 speed IDs behind a hub | Orchestrator decision, 2026-10-10, on Codex's recommendation (session `01a1261e`), owner to confirm; the owner asked for the fix in the `2.2.0.3` test build (task 36.49, issue 13): a general rule for any controller, on by default, rather than a VL805 gate - a Full- or Low-Speed device behind a hub on a USB 2.0 group with a speed table takes the default ID where the table names neither that speed nor that ID. The PCI-id and capability-pattern gates were set aside because HSO and IHI describe the root port, not downstream IDs, and the topology is the stronger evidence; the collision check keeps a listed ID winning. `XhciUsb2HubSpeedFallback` `0` restores the refusal; no INF writes it |
+| Issue 18: USB 2.0 speed IDs behind a hub | Orchestrator decision, 2026-10-10, on Codex's recommendation (session `01a1261e`), owner to confirm; the owner asked for the fix in the `2.2.0.3` test build (task 36.49, issue 13): a general rule for any controller, on by default, rather than a VL805 gate - a Full- or Low-Speed device behind a hub on a USB 2.0 group with a speed table takes the default ID where the table names neither that speed nor that ID. The PCI-id and capability-pattern gates were set aside because HSO and IHI describe the root port, not downstream IDs, and the topology is the stronger evidence; the collision check keeps a listed ID winning. `XhciUsb2HubSpeedFallback` `0` restores the refusal; every INF writes it at 1 since 36.51 (owner, 2026-10-11), no INF before |
+| Every registry value written by the INFs | Owner, 2026-10-11: every registry value the shipping driver reads is written by every install path of both INFs, at the driver's own default and under 34.1's don't-overwrite flag, so every setting is visible to a user and behaviour is unchanged. Supersedes the rule that `XhciWideMap`, `XhciSelectiveSuspend` and `XhciUsb2HubSpeedFallback` were set by hand and written by no INF; they are written at 0, 0 and 1 (task 36.51). A value whose absence meant something no written number does would be listed and left unwritten; none exists |
 
 ## The shape of the successor
 
@@ -1376,6 +1377,9 @@ polling both touch the controller's power and teardown paths.
 - [x] 36.49 Low- and Full-Speed devices behind a hub on a USB 2.0 root port whose speed table names neither (GitHub issue 18, SweetLow; `docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md`): on the VIA VL805 (`1106:3483`) the USB 2.0 port lists only its integrated hub's High Speed, as xHCI 1.2c 7.2.1 allows, and `HcdHubPlace` refused every Full- and Low-Speed device behind that hub. A general rule, on by default (orchestrator decision on Codex's advice, owner to confirm): such a device takes the default ID (1 Full, 2 Low) where the table has no entry of that speed and does not list the ID; an explicit entry always wins; root-port decoding and task 35.1 unchanged; the provenance on the device record for every later decode; `XhciUsb2HubSpeedFallback` `0` turns it off; counters at words 162 to 166, bounded notes, `XHCISNAP`, the VL805's firmware dword noted at start; `implementation-invariants.md`, "Port Speed Decoding", amended. Host vectors on the VL805's table and on conflicting ones, the Codex loop, x86 and `-amd64` all with every gate; a QEMU regression leg (QEMU publishes no USB 2.0 table). The hardware result is not observed before release: the fix has never run on a VL805, and it does not block the cut.
   - **Done 2026-10-10** (`e7d4243` the code and host vectors, `d213f62` the docs, `2fddc57` round 1's fix; Codex thread `01a12643`: round 1 no P1/P2, its P3 fixed; round 2, the confirmation of that fix, returned nothing). Built x86 and `-amd64` all, every gate, the host suites, `XHCISNAP` and its self-test. QEMU on development host A, Windows 98 SE, the `qemu` flavour: QEMU's Full-Speed hub hot-added on a root port with a mouse and a keyboard behind it, both enumerated at Full Speed (route `00001`, tier 1), the mouse moving the pointer, `XHCISNAP` showing the switch on and no fallback taken (QEMU publishes no speed table); QEMU models no Low-Speed device. Not observed on hardware before release.
 - [ ] 36.50 the x64 binaries test-signed - **a prerequisite of the `2.3.0.0` cut** (owner, 2026-10-11; design record 19, reversing design record 11 decision 9 for the x64 package only). Done when all of these are: the packager option and the `make-release.ps1` refusal; the certificate made by the owner (`scripts\local\testsign\xhci98-test.pfx`, thumbprint `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`); the `2.2.0.3` re-cut signed; the Vista x64 and Windows 7 x64 test-signing legs, on and off, and XP x64; the procedure in `README.md`, the release readme and the release notes. Every published x64 directory carries `xhci98.sys` and `xhciuas.sys` with an embedded Authenticode signature by the project's own test certificate - SHA-1 file digest, no timestamp, no catalog, both INFs byte-identical - applied by `make-package.ps1 -TestSignPfx` at staging, with `xhci98-test.cer` beside them, and `make-release.ps1` refuses an x64 cut without it; the x86 binaries are never signed. So Vista x64 and Windows 7 x64 load the driver in test-signing mode (`bcdedit /set testsigning on`, once) instead of only on an F8 start. The key is made by the owner (`scripts\package\make-testcert.ps1`) and held only in the git-ignored `scripts\local\testsign\` or outside the tree. Into the `2.2.0.3` TEST build at once (re-cut, same version and date, the x86 halves byte-identical to the unsigned cut's) and every cut after it. Legs: Vista x64 and Windows 7 x64 in test-signing mode, installed from the signed zip and started with no F8, twice, the controller and devices working and "Test Mode" shown; the same without test-signing mode (the Code recorded); XP x64 installing and loading the signed binary as before.
+- [x] 36.51 every registry value the driver reads written by the INFs at the driver's own default (owner, 2026-10-11; the decisions table, "Every registry value written by the INFs"): the inventory from the code (`build-and-test.md`, "The registry values the driver reads"), `XhciWideMap` 0, `XhciSelectiveSuspend` 0 and `XhciUsb2HubSpeedFallback` 1 added to `[Xhci.AddReg]` and `[Xhci.AddReg.NT]` of `src\xhci98.inf` and `[Xhci.AddReg.NT]` of `src\xhci98-amd64.inf` with the same `0x00010003` flags as the sixteen, the INF gate's `VAL-*` table, self-tests and footprints, the README, release notes, release readme template and records; fresh install and update over `2.2.0.0` on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x64 - done (p36-regall, merged at `8e74422`): review converged in two rounds; both builds, the INF self-tests (1118), the packager (471) and the host suites pass; legs on development host A, every guest PASS: a fresh install wrote all nineteen at their defaults and `XHCISNAP` read the three new ones as set; an update over `2.2.0.0` (whose INFs wrote eleven) kept the user's values and added the eight missing at their defaults. `XhciIntelPortSwitch` stays at `2.2.0.0`'s `1` on update, as 36.42 documents; the root hub's Driver tab keeps the old version, and 98 SE and ME keep the old driver until a restart they do not ask for, both already documented and now worded for any update
+- [x] 36.53 `XhciInterruptMode` 1 the interrupt line only and 3 a message-signalled interrupt only (owner, 2026-10-11; design record 15 revision 7 and decision 8, design record 18 revision 12 and decision 8, amending the 2026-10-09 mode rules of 36.5, 36.15 and record 18 sections 4.2 to 4.3a). Mode 1 on every system: on Vista and 7 a message Windows grants anyway fails the start (Code 10) on x86 and amd64, helper bound or not - it no longer runs as 0, and reasons 11 and 13 are no longer produced. Mode 3, which read as 0: on Vista and 7 the requirements filter keeps only the message configurations (outcome 12, `XhciMsiKeepMessage`), the message runs where granted and connected (reason 15), and the start fails (Code 10) with no message granted (16), the message not connected - 32-bit without `xhcimsi.sys` bound, a refused connection, or Windows connecting the line instead (17) - or on Windows 98 SE, ME, 2000 and XP, 32- and 64-bit (18). 0 and 2 unchanged; 4 and above still run as 0. A start the delivery refuses records itself before it returns: the counter block, the `qemu` flavour's `M86 S` record, and the start's notes with `start.refused.delivery`, flushed to DebugView through `HcdLogFlush` when `XhciLogDebugView` is set. Host vectors in `test_poll` for every row by OS family, mode, grant, routines and pin, and `XhciPollConnected`; `test_msi` for the message keep; `XHCISNAP` names reasons 14 to 18 and outcome 12. Legs: 7 x64 and Vista x86 with the helper under modes 0 to 3 with MSI offered; 7 x86 without the helper under mode 3; XP and 98 SE under mode 3 and modes 0 to 2.
+  - **Done 2026-10-11** (`5b6ddfc` design, `4856baa` code, `943f551` docs, `a2d5837` round 1's documentation fixes; review round 1 no P1/P2, round 2, the confirmation of that fix, returned nothing). Built x86 and `-amd64` all, every gate, the host suites, `XHCISNAP` and its self-test, on `4e11974` (2.3.0.0 merged). QEMU on development host A, every row passed (`docs/contributing/runs/run-36.md`, "36.53"): 7 x64 and Vista x86 with the helper ran a message under 0 and 3 (outcome 12 under 3) and the line under 1; mode 1 with only a message offered, mode 3 with a failed connection, with `MSISupported` 0, and on 7 x86 with the helper disabled each failed with Code 10 and reasons 14, 17, 16 and 17; XP and 98 SE failed mode 3 with Code 10 and reason 18 and kept modes 0, 1 and 2. Not read: a controller with no line, mode 3 on MSI rather than MSI-X, 64-bit Vista, ME, 2000, XP x64.
 - [ ] 36.final the `2.3.0.0` builds, x86 and `-amd64`, after every task above:
   - the stamp, and the x64 binaries test-signed by the project certificate (design record 19; `make-release.ps1` refuses otherwise);
   - the host suites and every gate;
@@ -1468,3 +1472,86 @@ its own; it joins the phase the owner opens it in.
   is set, and what it reads. Code offered for it is taken only under
   `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
   from Microsoft's binaries.
+
+## Planned - S5 shutdown latch
+
+Goal: no transfer, command or port request can wait forever after the
+controller's D3 at shutdown (S5). Hardening, not tied to an observed hang:
+Phase 36's matrix traced Windows ME's Shut Down hang with an unopened USB
+disk to ME itself (the same hang on ME's own UHCI + USBSTOR stack and on
+`2.2.0.0`; the xhci98 trace shows nothing sent to the driver after the
+D3). Reading the code found the gap (`2.2.0.0` has it too): after the D3 a
+transfer URB is published to the halted ring and waits for a resume
+(`hcd_io.c`, HcdIoMapped); command URBs and RESET_PORT wait on
+HcdCfgService, skipped while the controller is unpowered (`hcd_enum.c`);
+nothing times out, and at S5 no resume comes.
+
+Status: not opened, unnumbered and unversioned (orchestrator, 2026-10-11;
+owner to confirm).
+
+- [ ] S5L.1 the latch: at a controller Dx whose system state is
+  PowerSystemShutdown, including the direct-transition path, set it before
+  the halt; after it, refuse new transfer and command URBs with
+  `USBD_STATUS_DEVICE_NOT_RESPONDING` through HcdIoRefuseLater (never
+  DEVICE_GONE, which HcdIoDeferred parks), complete RESET_PORT inline (its
+  IRP carries no URB, and the refusal DPC reads Argument1 as one), and
+  after the halt flush what is already queued with the same status. S3 and
+  S4 keep hold-until-resume. A full Codex loop under record 13 section 5's
+  lock model, IRQL tags, stage A PowerDown and 36.35's no-thread-creation
+  rule. Legs: shutdown with devices on ME, 98 SE (the 36.35 case), 2000,
+  XP and 7 x64.
+
+## Planned - an event ring check after the re-arm
+
+Goal: an event stranded while IMAN.IE was clear is served without waiting
+for the 100 ms backstop, on an emulator or a controller that loses the
+interrupt the re-arm should raise. Phase 36's matrix found QEMU's MSI-X
+does: on Vista and 7 under `msix=on`, `BackstopDrains` counted 3 to 288
+a session, 0 under MSI, the line and polling. The cause, from the source
+and consistent with the trace: `xhci_intr_update` raises before it marks
+the vector used again, and `msix_notify` returns on an unused vector before
+its mask and PBA check, so the message is neither sent nor pended. Codex
+(2026-10-11) read no lost-interrupt window on compliant hardware, so this
+is a QEMU defect, and `2.3.0.0` ships unchanged (orchestrator, owner to
+confirm). The owner's bench reads `BackstopDrains` under MSI-X on real
+hardware, where 0 is the expected clean result, not an invariant.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] RRC.1 after the DPC's re-arm, read the next event's cycle bit and,
+  if an event is pending, queue one more bounded drain through the existing
+  admission and accounting (`hcd_ctl.c`), never a loop under the
+  controller lock. IE stays 0 in the ISR, so record 05's DIRQL exception
+  is untouched. Codex's preferred option over re-arming before the final
+  ERDP write or a blind second ERDP write. Legs: 7 x64 and Vista x64 under
+  MSI-X (`BackstopDrains` 0, TONE and UAS timings against MSI), and the
+  line and MSI rows unchanged.
+
+## Planned - Transaction Error recovery on a stream endpoint
+
+Goal: a UAS drive whose data stream takes a Transaction Error moves data
+again promptly, without a replug. Design record 17 left stream endpoints
+out of the soft retry (EP0, isochronous and stream endpoints keep their
+handling); the failed command is left to `xhciuas`'s class timeout, abort,
+LUN reset and port reset. Phase 36's matrix (XP x64, `qemu` flavour,
+`XhciQemuInject` fault 16 on a UAS data-in stream TD) read the failed read
+completing cleanly, then every later command timing out until the device
+was removed and added again (2 of 3; the third recovered after 266.6 s).
+The 36.22 stage-1 build behaves the same, so this predates stages 2 and 3,
+and a Bulk-Only stick under the same fault is recovered by the soft retry
+with its copies `fc` clean. The injection delivers the error for a TD
+QEMU's `usb-uas` never started while it still holds that tag's data phase,
+which a real error, from a transaction the device took part in, would not
+do; whether a real one strands the stream is the owner's bench item
+(orchestrator, 2026-10-11; owner to confirm).
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] STE.1 decide, from the bench and a reviewed design (record 17 gains
+  a section), between a soft retry for stream TDs (Reset Endpoint and Set
+  TR Dequeue for the halted stream, the stream's doorbell rung with its
+  stream ID, bounded as the Bulk-Only retry is) and a prompt `xhciuas`
+  reset in place of the class timeout; host vectors for the stream ring's
+  dequeue and DCS after the reset; legs: the fault 16 injection on XP x64,
+  2000 and 7 x64, a UAS copy `fc` clean after it with no replug, and the
+  Bulk-Only control unchanged.

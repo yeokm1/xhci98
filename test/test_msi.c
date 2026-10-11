@@ -585,6 +585,76 @@ static void test_inj(void)
              "a no-line list is not rewritten again");
 }
 
+/* XhciInterruptMode 3's rewrite (record 18 section 4.2, revision 12): R1's
+ * list becomes the message alone; any other class is not rewritten. */
+static void test_keep(void)
+{
+    static const int lineOnly[] = { D_B, D_L, D_END };
+    static const int msgOnly[] = { D_B, D_M, D_END };
+    static const int none[] = { D_B, D_END };
+    XHCI_MSI_WALK w;
+    XHCI_MSI_CLASSIFY c;
+    ULONG size;
+    ULONG i;
+    ULONG same;
+
+    (void)r1_build(in, r1Mixed, 5);
+    XhciMsiWalk(in, &w);
+    XhciMsiClassify(in, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_REPLACEABLE, "R1 replaceable");
+    size = XhciMsiKeepMessage(in, &w, &c, NULL, 0);
+    CHECK_EQ(size, 0xA8, "sized: R1 less its line member");
+    for (i = 0; i < BUF; i++) {
+        out[i] = 0xCC;
+    }
+    CHECK_EQ(XhciMsiKeepMessage(in, &w, &c, out, BUF), 0xA8, "written");
+    CHECK_EQ(out[0xA8], 0xCC, "nothing written past it");
+    CHECK_EQ(XhciMsiKeepMessage(in, &w, &c, out, 0xA7), 0,
+             "a capacity one short refused");
+    (void)XhciMsiKeepMessage(in, &w, &c, out, BUF);
+    /* R1's line member is its last descriptor, so the four kept are R1's
+     * first four, byte for byte. */
+    same = 1;
+    for (i = 0x28; i < 0xA8; i++) {
+        if (out[i] != in[i]) {
+            same = 0;
+        }
+    }
+    CHECK(same, "the kept descriptors copied unchanged");
+    CHECK_EQ(count_at(out, 0), 4, "four descriptors kept");
+    XhciMsiWalk(out, &w);
+    CHECK_EQ(w.Verdict, XHCI_MSI_WALK_OK, "the result walks");
+    CHECK_EQ(w.ListSize, 0xA8, "ListSize rewritten");
+    XhciMsiClassify(out, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_NO_LINE, "the message alone");
+    CHECK_EQ(c.MessageMembers, 1, "the message member kept");
+    CHECK_EQ(c.LineMembers, 0, "the line member gone");
+    CHECK_EQ(c.DevicePrivate, 1, "the device-private kept");
+
+    (void)build(lineOnly);
+    XhciMsiWalk(in, &w);
+    XhciMsiClassify(in, &w, &c);
+    CHECK_EQ(XhciMsiKeepMessage(in, &w, &c, out, BUF), 0,
+             "no message: not rewritten");
+    (void)build(msgOnly);
+    XhciMsiWalk(in, &w);
+    XhciMsiClassify(in, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_NO_LINE, "message only is NO_LINE");
+    CHECK_EQ(XhciMsiKeepMessage(in, &w, &c, out, BUF), 0,
+             "already the message alone: not rewritten");
+    (void)build(none);
+    XhciMsiWalk(in, &w);
+    XhciMsiClassify(in, &w, &c);
+    CHECK_EQ(XhciMsiKeepMessage(in, &w, &c, out, BUF), 0,
+             "no interrupt: not rewritten");
+    (void)r1_build(in, r1Mixed, 5);
+    XhciMsiWalk(in, &w);
+    XhciMsiClassify(in, &w, &c);
+    w.Verdict = XHCI_MSI_WALK_COUNT;
+    CHECK_EQ(XhciMsiKeepMessage(in, &w, &c, out, BUF), 0,
+             "a list the walk refused");
+}
+
 /* ---- the filter record and the binding ---------------------------------- */
 
 static void test_record(void)
@@ -842,6 +912,7 @@ int main(void)
     test_r1();
     test_admit();
     test_inj();
+    test_keep();
     test_record();
     test_bind();
     test_channel();

@@ -377,7 +377,10 @@ block's words 63 to 95 (named in the counter list too):
 - **The delivery in effect and its reason**: the line interrupt, polling,
   MSI or MSI-X; and why - automatic with the line there, automatic with
   Interrupt Pin 0 or no interrupt resource, forced line, forced polling, or
-  the line gone dead at run time and moved to polling. So a machine that
+  the line gone dead at run time and moved to polling; or why a start
+  failed: `XhciInterruptMode` 1 given a message, or 3 given no message, a
+  message not connected, or a Windows with no message interrupts (design
+  record 15 revision 7). So a machine that
   polls automatically and one forced to poll read apart. Under polling the
   report says that `XhciImodInterval250ns` has no effect.
 - **The Interrupt Pin** and whether it could be read.
@@ -410,7 +413,8 @@ and the connection's status; the 32-bit helper's state (ABSENT, REFUSED
 with the check that failed, BOUND with its version); and the last
 `IRP_MN_FILTER_RESOURCE_REQUIREMENTS`'s record: the list's class, the
 outcome ("not asked", "REPLACED" when the message choices were stripped so
-the line is granted, or why the list was kept), the `XhciInterruptMode`
+the line is granted, "REPLACED ... the message left" when `XhciInterruptMode`
+3 stripped the line choices, or why the list was kept), the `XhciInterruptMode`
 it read, and the list's members. The filter runs on Vista and 7 only, so on
 Windows 98, ME, 2000 and XP its sequence is 0 and the section says "not
 applicable" (the raw `MsiFilterMode` word there reads FFFFFFFF, no value).
