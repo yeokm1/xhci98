@@ -1419,7 +1419,7 @@ flavour's injection cannot show that a real controller's partial progress
 survives the soft retry: that half rests on the specification (4.6.8.1)
 and on Linux's practice, and is a bench item. Counted: `QemuStreamQuirk`
 (word 169, 1 when the quirk is armed on this controller),
-`QemuStreamResyncs` (word 170, the Set TR Dequeue commands it issued),
+`QemuStreamResyncs` (word 170, the Set TR Dequeue commands it completed),
 `QemuStreamResyncFailed` (word 171, resyncs that could not finish and
 asked for the recovery) and `QemuStreamRestops` (word 172, the extra Stop
 Endpoints QEMU's own restart of an endpoint cost).
@@ -1460,8 +1460,36 @@ device then recovers.
 
 #### 4.12.7 Windows 98 SE
 
-(The diagnosis of the `XHCISNAP` hang on Windows 98 SE is recorded here
-once it is read.)
+The matrix's Windows 98 SE run (fault 16 during a copy from a UAS disk)
+showed the same dead disk, and two more things: XHCISNAP hung at
+"extension:", and the desktop froze after about seven minutes. Traced on
+development host A with the stamped 2.2.0.3 qemu build:
+
+- **The dead disk is 4.12.1's defect.** A fault on rings still on their
+  first lap recovered (the copy finished, c clean); one after the rings
+  had wrapped once left every status stream on a cycle-0 lap dead (kicked,
+  never started, contexts reading DCS 1 over cycle-0 TRBs), while the
+  data-in streams, all on cycle-1 laps there, still moved data. Each
+  ABORT TASK and LOGICAL UNIT RESET was answered by QEMU on a dead status
+  stream and so never seen; each port reset reconfigured the endpoints
+  and forced CCS 1 again. That is the "transfers cancelled" every 15 s.
+- **The door was not involved.** XHCISNAP -probe, which sends the same
+  door request and writes no file, returned at once while the disk was
+  stuck, and so did dir C:\; the driver's PowerGate read free in every
+  sample of guest memory, and the controller thread kept completing its
+  passes (its debug log grew every 30 s). What hung was the first file
+  XHCISNAP creates (<name>.BIN.TMP, created before the first door
+  request): its directory entry was never written. The same hang followed
+  a plain echo x > C:\T1.TXT with neither the driver nor XHCISNAP
+  involved. Windows 98's file system queues behind the read the copy is
+  stuck in; that is not a lock or queue of the driver's.
+- **The freeze** is Windows 98's own: every sampled instruction pointer
+  in ring-0 VMM (C000A881, C0003621, C005340E and their
+  neighbours), none in a driver, the signature the matrix had already
+  read for 98 SE's own wedges.
+
+With 4.12.2 to 4.12.4 the disk does not stay stuck, so nothing waits on
+it.
 
 ## 5. Injection
 
