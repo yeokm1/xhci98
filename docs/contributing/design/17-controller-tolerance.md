@@ -1461,30 +1461,31 @@ device then recovers.
 #### 4.12.7 Windows 98 SE
 
 The matrix's Windows 98 SE run (fault 16 during a copy from a UAS disk)
-showed the same dead disk, and two more things: XHCISNAP hung at
+showed the same dead disk, and two more things: `XHCISNAP` hung at
 "extension:", and the desktop froze after about seven minutes. Traced on
-development host A with the stamped 2.2.0.3 qemu build:
+development host A with the stamped `2.2.0.3` `qemu` build:
 
 - **The dead disk is 4.12.1's defect.** A fault on rings still on their
-  first lap recovered (the copy finished, c clean); one after the rings
+  first lap recovered (the copy finished, `fc` clean); one after the rings
   had wrapped once left every status stream on a cycle-0 lap dead (kicked,
   never started, contexts reading DCS 1 over cycle-0 TRBs), while the
   data-in streams, all on cycle-1 laps there, still moved data. Each
   ABORT TASK and LOGICAL UNIT RESET was answered by QEMU on a dead status
   stream and so never seen; each port reset reconfigured the endpoints
   and forced CCS 1 again. That is the "transfers cancelled" every 15 s.
-- **The door was not involved.** XHCISNAP -probe, which sends the same
+- **The door was not involved.** `XHCISNAP -probe`, which sends the same
   door request and writes no file, returned at once while the disk was
-  stuck, and so did dir C:\; the driver's PowerGate read free in every
-  sample of guest memory, and the controller thread kept completing its
-  passes (its debug log grew every 30 s). What hung was the first file
-  XHCISNAP creates (<name>.BIN.TMP, created before the first door
-  request): its directory entry was never written. The same hang followed
-  a plain echo x > C:\T1.TXT with neither the driver nor XHCISNAP
-  involved. Windows 98's file system queues behind the read the copy is
-  stuck in; that is not a lock or queue of the driver's.
+  stuck, and so did `dir C:\`; the driver's `PowerGate` read free in 119
+  of 120 samples of guest memory (the other held, with no waiter), and
+  the controller thread kept completing its passes (its debug log grew
+  every 30 s). What hung was the first file `XHCISNAP` creates
+  (`<name>.BIN.TMP`, created before the first door request): its
+  directory entry was never written. The same hang followed a plain
+  `echo x > C:\T1.TXT`, with neither the driver nor `XHCISNAP` involved.
+  Windows 98's file system queues behind the read the copy is stuck in;
+  that is not a lock or queue of the driver's.
 - **The freeze** is Windows 98's own: every sampled instruction pointer
-  in ring-0 VMM (C000A881, C0003621, C005340E and their
+  in ring-0 VMM (`C000A881`, `C0003621`, `C005340E` and their
   neighbours), none in a driver, the signature the matrix had already
   read for 98 SE's own wedges.
 
