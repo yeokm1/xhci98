@@ -302,7 +302,7 @@ The driver reads those registers at each start and resume and, where `XhciIntelI
 - `2`: on any of the six Intel controllers listed above, each with one of its own chipset ids.
 - `0`: reads and reports only.
 
-It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, as it can be on Vista and 7, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16. `XHCISNAP`'s report has an "interrupt routing" section that says what it found and did.
+It writes nothing on any other controller, nothing when the interrupt is a message (MSI) rather than a line, as it can be on Vista and 7, nothing while the driver is polling the controller, and on 2000 to 7 nothing when Windows gave the controller an interrupt below 16.
 
 ### Polling and message-signalled interrupts
 
@@ -324,7 +324,7 @@ The other values:
 - `1` asks for the line. A controller with none then fails to start (Code 10) on 98 SE to XP, and on 32-bit Vista and 7 without the helper.
 - `2` forces polling.
 
-`XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods, and `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
+`XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
 
 ### UAS command size and two transfer pieces at once
 
@@ -343,12 +343,6 @@ Some controllers reach Low- and Full-Speed devices only through a USB 2.0 hub bu
 The driver gives such a device the standard speed ID (Full Speed `1`, Low Speed `2`) when the table names neither speed and does not use that number for another. A controller whose table lists Low and Full Speed, or has no table, is not affected, and a device on a root port of its own is never given a fallback.
 
 It is **on by default**; `XhciUsb2HubSpeedFallback` set to `0` turns it off, then restart, and such devices are then refused again.
-
-In `XHCISNAP`:
-
-- `Usb2HubSpeedFallbacks` counts the devices given a standard ID, and `TopoBehindHubNoSpeed` the ones still refused.
-- The `hub.speed.place` and `hub.speed.route` notes name each one.
-- On the VL805, the `pci.vl805.fw` note records the card's firmware version.
 
 See [issue 13](docs/issues/13-via-vl805-usb2-integrated-hub-speed-ids.md).
 
