@@ -220,10 +220,10 @@ detail, and what each rests on.
   Full-Speed device on such a controller fails; set
   `XhciUsb2HubSpeedFallback` to `0` to turn it off ("XhciUsb2HubSpeedFallback:
   Low- and Full-Speed IDs behind a hub").
-- **A lost interrupt can no longer stop Windows 98 SE.** In `2.2.0.0`
-  and the test build `2.2.0.3`, an interrupt the controller raised and Windows never
-  delivered was picked up by the driver's own thread. Windows 98 SE could
-  leave that thread waiting while a copy to a USB drive in MS-DOS
+- **A lost interrupt can no longer stop Windows 98 SE.** In `2.2.0.0`, an
+  interrupt the controller raised and Windows never delivered was picked
+  up by the driver's own thread. Windows 98 SE could leave that thread
+  waiting while a copy to a USB drive in MS-DOS
   compatibility mode waited for the very transfer the thread would pick
   up. Such a drive is one the computer's BIOS presented at start, the "E:"
   of a stick plugged in at power-on. Both waited for ever, and the
