@@ -280,7 +280,14 @@ It writes nothing on any other controller, nothing when the interrupt is a messa
 
 ### Polling and message-signalled interrupts
 
-A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through a small helper driver in the package, `xhcimsi.sys`. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` `0` (automatic) chooses; `1` asks for the line (a controller with none then fails to start, Code 10, on 98 SE to XP and on 32-bit Vista and 7 without the helper), `2` forces polling. `XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
+A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered (another kind of dead interrupt needs `XhciInterruptMode` `2`), and on Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through a small helper driver in the package, `xhcimsi.sys`. **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` `0` (automatic, the default) chooses, in this order:
+
+1. On Vista and 7, a message-signalled interrupt, where Windows grants one and it connects.
+2. The controller's interrupt line, where it has one (interrupt pin not `0`) and Windows assigned it.
+3. Polling, for a controller with no interrupt pin, or none assigned by Windows, or a message Windows granted that could not be connected.
+4. After the start, a line the driver sees the controller raise that never reaches it moves the controller to polling by itself. A failure the driver cannot see in the controller's registers is not caught; set `2` for that.
+
+`1` asks for the line (a controller with none then fails to start, Code 10, on 98 SE to XP and on 32-bit Vista and 7 without the helper), `2` forces polling. `XhciPollIdleMs` and `XhciPollActiveMs` set the polling periods. `XHCISNAP`'s report says which delivery is in use. The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
 
 ### UAS command size and two transfer pieces at once
 
