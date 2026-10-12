@@ -351,7 +351,9 @@ controller quirk population, which is the stated authority for
 `xhciqual/quirks.c`.
 
 One exception to the do-not-copy rule, for Linux's xHCI quirk table only
-(owner, 2026-10-12; roadmap-hcd task 37.17). The facts: this project is
+(owner, 2026-10-12; made for roadmap-hcd task 37.17, which was removed
+from Phase 37 the same day, so nothing has been copied under it). The
+facts: this project is
 GPL-2.0-only (`LICENSE`), and Linux's xHCI host driver files carry a GPL-2.0
 SPDX identifier. The owner's decision: the table that says which vendor,
 device and revision ids carry which quirk, with the comments that name the

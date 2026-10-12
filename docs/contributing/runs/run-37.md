@@ -117,5 +117,6 @@ disk. Vista's autoplay window on the stick vetoed one controller disable.
 The repository's untracked `xhcisnap\XHCISNAP.EXE` was a stale `2.2.0.0`
 build and failed the build's self-test gate until rebuilt.
 
-**Not read:** a real MSI-X controller (37.14 keeps that bench item), and
-Windows 7 and Vista x86, whose MSI-X goes through `xhcimsi.sys`.
+**Not read:** a real MSI-X controller (37.14 kept that bench item; it is
+BF.6 in "Planned work" since 2026-10-12), and Windows 7 and Vista x86,
+whose MSI-X goes through `xhcimsi.sys`.
