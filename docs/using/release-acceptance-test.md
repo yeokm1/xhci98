@@ -149,11 +149,12 @@ Controller Deviations This Driver Acts On".
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`), `xhciqual\` and `xhcisnap\` come out directly |
+| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`), `xhciqual\`, `xhcisnap\` and `portsw\` come out directly (`portsw\` since roadmap-hcd task 37.5; the `2.3.0.0` asset has none) |
 | 2.2 | Check that `xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
 | 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names: `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`. Read the list off that file rather than from memory |
 | 2.4 | Look for a version directory nested inside another | None |
 | 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports |
+| 2.6 | List `portsw\`, then look for `portsw.vbs` in each flavour directory | `portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd task 37.5). The `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
 
 The `release` directory for the machine's architecture is the one to install.
 The `debug` directory beside it is the same drivers built for diagnosis, for a
@@ -231,8 +232,8 @@ run sheets cite them.
 | # | Target | Do | Expected reading |
 |---|---|---|---|
 | 4.1 | Windows 98 SE | NUSB 3.3 or 3.6 first if the storage clauses are to be taken (none is needed for the controller, hubs, HID or audio), then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE-X86\` | On an xHCI-only machine, "Insert Disk" asks for the Windows 98 Second Edition CD-ROM, then reports that `usbd.sys` cannot be found and asks where to copy from; give it the CD's `WIN98` folder. Then a request to restart. A machine that already has the file is not asked. Record which it was |
-| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\` | Completes with no prompt |
-| 4.5 | Windows ME | SweetLow's USB 2.0 stack first (every Windows ME reading was taken under it); then the Windows 98 SE route of 4.1 | Completes, with a request to restart. In the virtual machines no CD was asked for. This target is supported in virtual machines only |
+| 4.2 | Windows 2000 SP4 | Device Manager, the controller (under "Other devices" while it has no driver), Properties -> Driver -> Update Driver -> Search for a suitable driver -> Specify a location -> `RELEASE-X86\`. Over an installed xhci98 the list route also works: Display a list of the known drivers -> Have Disk -> `RELEASE-X86\` | Completes with no prompt. On a controller with no driver yet the list route fails: it asks for a hardware type first, Windows 2000 does not offer USB controllers there, and Have Disk then answers "The specified location does not contain information about your hardware", since the INF names only the USB class (read on a clean 2000 SP4 guest, 2026-10-13, `docs/contributing/runs/run-37.md`, "37.final") |
+| 4.5 | Windows ME | No USB 2.0 stack is needed (a stock ME was read on `2.3.0.0`; SweetLow's stack, if present, also works); the Windows 98 SE route of 4.1 | Completes, with a request to restart. In the virtual machines no CD was asked for. This target is supported in virtual machines only |
 | 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no file prompt. This target is supported in virtual machines only |
 | 4.8 | Windows XP x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with Windows' signature and Logo prompts only, no file prompt and no restart. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like. This target is supported in virtual machines only |
 | 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking an INF. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` and, since `2.3.0.0`, the MSI helper `xhcimsi.sys`. Since `2.3.0.0` it then asks for a restart, and until the restart the controller shows Code 28 (Windows 7) or Code 1 (Vista); 4.3 is read after it. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only |
@@ -386,7 +387,7 @@ Windows ME (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.7 | Record the USB stack installed, if any | SweetLow's USB 2.0 stack, under which every Windows ME reading was taken |
+| 7.7 | Record the USB stack installed, if any | None (stock ME) or SweetLow's USB 2.0 stack; both have been read |
 | 7.8 | Plug in one composite device, as 7.3 | Each function loads under the root hub, as 7.3; read on the integration build with QEMU's `usb-audio` at a root port and behind a hub |
 | 7.9 | With a USB mouse attached, disable the controller in Device Manager, then re-enable it | It goes and comes back with no hang, and the mouse moves. Against `2.0.0.0` do not run it: re-enabling with a mouse or keyboard attached hangs Windows ME there, a known limitation fixed in `2.1.0.0` |
 

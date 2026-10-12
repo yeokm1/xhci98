@@ -36,9 +36,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* The device-key values the HCD reads (design record 13 section 5.5).
  * The miniport's three XhciVirtualHSHub* values are not read. The fourth,
  * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
- * start: absent is 0, UAS where the device offers it. XhciFastPollFsLs
- * (33.8) is read at start: absent is 0, every interval by Table 6-12. Since
- * 34.1 the INFs write both, and the two below, at those defaults. */
+ * start: absent is 1 since 37.2, Bulk-Only where the device offers it, for
+ * text-mode Setup (HcdCtlForceBulkOnly); the INFs' 0 keeps UAS.
+ * XhciFastPollFsLs (33.8) is read at start: absent is 0, every interval by
+ * Table 6-12. Since 34.1 the INFs write both, and the two below; the first
+ * at 0, not at its absent value, since 37.2. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
@@ -438,11 +440,18 @@ static VOID hcdFirmwareNote(PHCD_CONTROLLER hc)
 /*
  * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
  * is a nonzero REG_DWORD in the controller's driver key, the key every other
- * value of this driver lives in; 0 when it is zero, absent or of another
- * type. One value for every device on this controller, read per enumeration
- * so a change takes effect at the next one (a devnode already installed on
- * NT keeps its service until it is uninstalled and re-plugged).
- * IRQL: PASSIVE_LEVEL.
+ * value of this driver lives in; 0 when it is zero. When it cannot be read -
+ * absent, of another type, or no driver key at all - it is 1 (roadmap-hcd
+ * 37.2; issue 15). Every INF install path writes 0, so on an installed
+ * system the value is unread only when it was deleted or mistyped by hand,
+ * or a binary was copied over an install older than 34.1 - the conservative
+ * transport is the right answer there too - and in text-mode Setup, before
+ * any INF has run, it is always unread: there only usbstor's Bulk-Only ids
+ * have a driver and xhciuas.sys is not loaded, so a PDO given UAS's ids is no
+ * disk, and a boot stick behind it is STOP 0x7B. One value for every device
+ * on this controller, read per enumeration so a change takes effect at the
+ * next one (a devnode already installed on NT keeps its service until it is
+ * uninstalled and re-plugged). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 {
@@ -450,7 +459,7 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 
     value = 0;
     if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_FORCE_BOT, &value))) {
-        return 0;
+        return 1;
     }
     return value != 0;
 }
@@ -1485,6 +1494,12 @@ static NTSTATUS hcdConnect(PHCD_CONTROLLER hc)
     return STATUS_SUCCESS;
 }
 
+/* IsrDpc's SystemArgument1 when hcdRearmPeek queued it; every other
+ * insertion passes NULL. */
+#define HCD_DRAIN_FROM_PEEK ((PVOID)(ULONG_PTR)1)
+
+static VOID hcdRearmPeek(PHCD_CONTROLLER hc);
+
 /* IRQL: DISPATCH_LEVEL. The event drain, with the interrupter re-armed as
  * usbport's InterruptDpc(ext, TRUE) asked. A port change wakes the thread,
  * which owns the ports from task 26-A.3. */
@@ -1495,7 +1510,6 @@ static VOID NTAPI hcdIsrDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     KIRQL oldIrql;
 
     UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(Arg1);
     UNREFERENCED_PARAMETER(Arg2);
 
     hc = (PHCD_CONTROLLER)Context;
@@ -1517,6 +1531,8 @@ static VOID NTAPI hcdIsrDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
             XhciControllerLockAcquire(&hc->Hc, &oldIrql);
             HcdPollPeekLocked(hc);
             XhciControllerLockRelease(&hc->Hc, oldIrql);
+        } else if (Arg1 != HCD_DRAIN_FROM_PEEK) {
+            hcdRearmPeek(hc);
         }
     }
     (VOID)InterlockedDecrement(&hc->DpcsInFlight);
@@ -1856,6 +1872,61 @@ static ULONG hcdQueueDrain(PHCD_CONTROLLER hc)
         return 0;
     }
     return 1;
+}
+
+/*
+ * The event ring check after the re-arm (roadmap-hcd 37.4, design record 17
+ * section 4.1, "Amended for 37.4"): hcdIsrDpc's, after an interrupt-
+ * delivered drain released EHB and set IMAN.IE. An event the controller
+ * wrote while IE was clear raised IP, which a compliant interrupter delivers
+ * once IE is back; QEMU's MSI-X instead drops that message, since it raises
+ * it while the vector is unused across the IE toggle, and the event waited
+ * for the backstop. One peek under the controller lock, with the backstop's
+ * admission and the re-arm's own condition (XHCI_EXT_FLAG_INTERRUPTS, the
+ * flag the drain re-armed on), and at most one insertion through the ISR's
+ * admission (hcdQueueDrain's, with HCD_DRAIN_FROM_PEEK) - never a drain
+ * inline and never a chain: the drain this queues does not peek, so each
+ * further drain waits for a moderated interrupt and no run of DPCs can hold
+ * a processor at DISPATCH_LEVEL under sustained completions (Codex, 37.4
+ * round 1). An event the second drain's own window strands waits for the
+ * backstop, as before. An insertion while IsrDpc is still queued is
+ * refused and counted as pending only. No register is written, so the
+ * ISR's IE=0 (record 05, "The DIRQL exception") is untouched. IRQL:
+ * DISPATCH_LEVEL, no lock held.
+ */
+static VOID hcdRearmPeek(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+    ULONG pending;
+
+    ext = &hc->Hc;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Task 36.4's start hold keeps the start's No Op undrained. */
+    if (HcdInjStartHeld(hc)) {
+        return;
+    }
+#endif
+    XhciControllerLockAcquire(ext, &oldIrql);
+    pending = (hcdDrainAdmitted(hc) &&
+               (ext->Flags & XHCI_EXT_FLAG_INTERRUPTS) != 0 &&
+               XhciEventRingPending(&ext->EventRing)) ? 1UL : 0UL;
+    if (pending) {
+        ext->RearmPeekPending++;
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    if (!pending) {
+        return;
+    }
+    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
+    if (hc->DpcClosed ||
+        !KeInsertQueueDpc(&hc->IsrDpc, HCD_DRAIN_FROM_PEEK, NULL)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+        return;
+    }
+    XhciControllerLockAcquire(ext, &oldIrql);
+    ext->RearmPeekDrains++;
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /*
@@ -2428,6 +2499,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
+    /* And the shutdown latch (37.3): a new lifetime serves its requests
+     * (Codex review of 4de0f999, round 2, finding 2). Before the start
+     * admits anything, so no lock is needed against an admission. */
+    hc->ShutLatched = 0;
     /* Task 36.3's record was reset when the START_DEVICE arrived, before
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);

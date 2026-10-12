@@ -57,7 +57,7 @@ The prerequisites per OS:
   - [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works but has no storage driver. Unzip, right-click the `USB2.INF` at its root then install. With it alone, a USB stick shows Code 28 and a UAS drive Code 2, so storage still needs NUSB's storage files (below).
   - With neither, HID and audio devices work but storage has no driver.
   - Reboot if requested after installing either.
-- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). ME has its own storage files. An ordinary USB stick needs to be plugged for the first time to copy the drivers before a UAS drive will be recognised.
+- **Windows ME**: Nothing to install; a stock ME works. [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) also works if it is already there. ME has its own storage files. An ordinary USB stick needs to be plugged for the first time to copy the drivers before a UAS drive will be recognised.
 - **Windows 2000 SP4, XP SP3 x86**: Nothing to install.
 - **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install. On **Vista x64 and 7 x64** the driver is test-signed by me, so Windows has to be in test-signing mode, or driver signature enforcement disabled at every boot; see "Windows Vista x64 and 7 x64: test-signing mode" below.
 
@@ -95,6 +95,7 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
 | `xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier |
 | `xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader |
+| `portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `readme.txt` | | the release notes in plain text |
 
 In each driver directory:
@@ -103,8 +104,6 @@ In each driver directory:
 - `xhciuas.sys` and `xhciuas.inf`: the UAS storage driver.
 - `xhcimsi.sys` (32-bit only): the MSI helper. 32-bit Vista and 7 need this small second driver to give the controller a message-signalled interrupt. The INF installs it on those two systems only, as a service that starts at boot, which is why they ask for a restart. Every other system ignores it.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
-- `portsw.vbs`: the switch for the Intel port switchover.
-- `portsw-on.bat` and `portsw-off.bat`: turn that switchover on or off in one double-click.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
 
 `release-x86\` or `release-x64\` is the one to install.
@@ -148,7 +147,7 @@ The same floppy serves the Recovery Console of Windows 2000 and XP. Press F6 as 
 Things to know:
 
 - Pressing F6 needs the BIOS's own USB keyboard support.
-- A UAS disk is not usable until GUI-mode Setup; a plain USB flash stick is.
+- A disk that offers only UAS is not usable until GUI-mode Setup; a plain USB flash stick is, and so, since `2.3.1.0`, is a UAS disk that also offers Bulk-Only, as most do.
 - A USB drive present at the partition screen takes `C:`. Unplug the USB drives you do not need, or Windows installs to the next letter.
 - On Windows 2000, plug the USB keyboard and stick in before Setup starts.
 - To install Windows XP and XP x64, have a PS/2 keyboard or a laptop's built-in keyboard at hand. Later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver (see "Known limitations/issues"). The Recovery Console runs in text mode throughout and is not affected.
@@ -195,7 +194,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
 | `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
-| `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `0` | `0` |
+| `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `1` | `0` |
 | `XhciFastPollFsLs` | A root-port Low- or Full-Speed mouse polled above 1000 Hz | `0` | `4` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
@@ -246,8 +245,9 @@ On my P14s with the MSSU10 over UAS (Windows 98 SE, 8 MB transfers), `500` gave 
 
 `XhciForceBulkOnly` decides which transport a storage device that offers both uses.
 
-- `0` (default): UAS wherever the device offers it.
+- `0` (what the install writes): UAS wherever the device offers it.
 - `1`: Bulk-Only (Windows' own `usbstor.sys`) on every such device on the controller.
+- Absent: as `1`. That is how text-mode Setup sees it, before any INF has run, and Setup has only Windows' own `usbstor` for storage.
 
 A UAS-only device stays on UAS either way. The value is read each time a device enumerates, so unplug and replug the drive after changing it. On Windows 2000 and later, a drive already installed keeps its driver until you uninstall it in Device Manager and replug it.
 
@@ -296,7 +296,7 @@ A device on a switchable connector under a running USB 2.0 driver (NUSB's, for e
 
 The value is read when the controller starts, so restart Windows after changing it.
 
-`portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in the package directory:
+`portsw.vbs`, in the download's `portsw\` directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in that directory:
 
 ```
 cscript //nologo portsw.vbs show
@@ -310,7 +310,9 @@ cscript //nologo portsw.vbs 0
 
 Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
-`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. Then restart Windows.
+`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. At a prompt on 98 SE and ME, change to `portsw\` first. Then restart Windows.
+
+The `2.3.0.0` download has these three files in each driver directory instead; they work the same from there.
 
 ### The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)
 
@@ -413,7 +415,7 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Real hardware: Windo
 |---|---|
 | Windows 98 SE | VMs under NUSB and SweetLow's stack: HID, storage, composite audio, the ASIX Ethernet adapter, hubs to five tiers, plug soaks, SuperSpeed storage and UAS. A stock install runs HID and audio, with no storage driver. Real hardware: the E460 and the P14s Gen 1. |
 | Windows 2000 SP4 | VMs only, under Driver Verifier and on a multiprocessor guest: the same as Windows 98 SE, including UAS and forced Bulk-Only. SuperSpeed hubs untested. |
-| Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. |
+| Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. A stock install with no USB 2.0 stack: HID, a hub, composite audio, storage and UAS, disable, enable, remove and rescan. |
 | Windows XP, 32-bit and x64 | VMs: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. Real hardware: XP x64 on the E7250. |
 | Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs: the same, on four virtual processors. On the x64 systems, in test-signing mode or with driver signature enforcement disabled (F8). Real hardware: 7 x64 on the E7250. |
 | The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. `2.3.0.0` installed from its package on every system in VMs, and on the E7250 and the E460. |

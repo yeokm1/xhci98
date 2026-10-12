@@ -139,7 +139,11 @@ mouse, and the system named in the tools' reports). Its plan was reviewed
 to a clean round at `ef7fbac`. It was cut as `2.3.0.0` (`DriverVer`
 `10/12/2026`) after the owner's bench of 2026-10-11, and the bench work
 that could not be read moved to planned work, "Bench follow-up after
-`2.3.0.0`". No phase is open.
+`2.3.0.0`". **Phase 37 is open** (2026-10-12), release `2.3.1.0` on
+branch `2.3.1.0`, a fix release: the X230's and E7250's STOP 0x7B in
+Windows XP x64 Setup from a USB stick (issue 15), Windows ME read on its
+stock USB stack, the shutdown latch, the event ring check after the
+re-arm and the port switchover's scripts in `portsw\`.
 [`roadmap-hcd.md`](roadmap-hcd.md), "Phase 36", is the record.
 
 ---

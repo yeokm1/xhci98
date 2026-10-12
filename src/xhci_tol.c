@@ -720,6 +720,23 @@ ULONG XhciTolResumeRefused(ULONG terminal)
                : 0UL;
 }
 
+ULONG XhciTolShutLatch(ULONG systemPower)
+{
+    return (systemPower == XHCI_TOL_SYSTEM_SHUTDOWN) ? 1UL : 0UL;
+}
+
+ULONG XhciTolShutFlush(ULONG latched, ULONG halted, ULONG pinned,
+                       ULONG unreadable)
+{
+    if (!latched || unreadable) {
+        return 0;
+    }
+    if (!halted || pinned) {
+        return XHCI_TOL_SHUT_CMDS;
+    }
+    return XHCI_TOL_SHUT_CMDS | XHCI_TOL_SHUT_XFERS;
+}
+
 ULONG XhciTolHaltProven(ULONG usbsts)
 {
     return (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_HCH) != 0)

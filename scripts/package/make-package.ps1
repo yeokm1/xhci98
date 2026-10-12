@@ -16,11 +16,13 @@ is this project's two files and nothing else:
                    33.3; src\txtsetup-amd64.oem under this name for amd64),
                    read from A:\ when F6 is pressed in Windows 2000 and XP
                    text-mode Setup, so it sits at the root with xhci98.sys
-    portsw.vbs     the user's switch for XhciIntelPortSwitch (roadmap-hcd
-                   task 36.42), a Windows Script Host script: shows the
-                   value on every xhci98 controller and sets it to 0 or 1
-    portsw-on.bat  sets it to 1 through portsw.vbs, in one double-click
-    portsw-off.bat sets it to 0 the same way (roadmap-hcd task 36.56)
+
+The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
+portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
+since task 37.5: make-release.ps1 publishes them once, in a portsw\
+directory at the version root, because they are the same for every
+architecture and flavour and the setup engine never reads them. A guest leg
+that needs them copies them from src\ or from a cut's portsw\.
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
@@ -116,15 +118,6 @@ scripts\inf-gate\check-txtsetup-oem.ps1 against the staged INF and package.
 Staged whenever the package is built from the default paths; a caller that
 names -DriverPath (the self-tests' stand-ins) stages it only when it names
 -OemPath too, as for the UAS pair.
-
-.PARAMETER PswScriptPath
-The port switchover's user script to stage (roadmap-hcd task 36.42),
-overriding `src\portsw.vbs`. Staged as `portsw.vbs` at the package root, the
-same file for both architectures. Staged whenever the package is built from
-the default paths; a caller that names -DriverPath stages it only when it
-names -PswScriptPath too, as for -OemPath. Wherever it is staged,
-`portsw-on.bat` and `portsw-off.bat` (task 36.56) are staged beside it from
-the script's own directory, and a missing one is refused as the script is.
 
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
@@ -252,7 +245,6 @@ param(
     [string]$UasDriverPath = "",
     [string]$MsiDriverPath = "",
     [string]$OemPath = "",
-    [string]$PswScriptPath = "",
     [string]$TestSignPfx = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
@@ -286,17 +278,6 @@ $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
 }
-# The port switchover's user script (task 36.42), decided the same way.
-$stagePsw = ($DriverPath -eq "") -or ($PswScriptPath -ne "")
-if ($PswScriptPath -eq "") { $PswScriptPath = Join-Path $repo "src\portsw.vbs" }
-# Its two batch files (task 36.56) travel with it, from its own directory -
-# which a bare file name does not name, so the path is resolved first, by
-# PowerShell against its own location and drive: [Path]::GetFullPath would
-# take the process directory, and a root-relative "\dir\portsw.vbs" the
-# process's drive (review round 2). It need not exist yet; the copy below
-# refuses a missing one.
-$PswScriptPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PswScriptPath)
-$pswBatchNames = @("portsw-on.bat", "portsw-off.bat")
 # The NT 6 x86 MSI helper (design record 18), the x86 package's alone.
 if ($Arch -eq "amd64" -and $MsiDriverPath -ne "") {
     throw "-MsiDriverPath names the NT 6 x86 MSI helper, which the amd64 package does not carry: the amd64 HCD has no helper (design record 18)."
@@ -973,20 +954,6 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
             throw "no text-mode Setup description at '$OemPath'."
         }
         Copy-Item -LiteralPath $OemPath -Destination (Join-Path $stageDir "txtsetup.oem") -Force
-    }
-    # portsw.vbs at the root, beside the INF the user installs from.
-    if ($stagePsw) {
-        if (-not (Test-Path -LiteralPath $PswScriptPath)) {
-            throw "no port switchover script at '$PswScriptPath'."
-        }
-        Copy-Item -LiteralPath $PswScriptPath -Destination (Join-Path $stageDir "portsw.vbs") -Force
-        foreach ($batchName in $pswBatchNames) {
-            $batchSrc = Join-Path (Split-Path -Parent $PswScriptPath) $batchName
-            if (-not (Test-Path -LiteralPath $batchSrc -PathType Leaf)) {
-                throw "no $batchName beside the port switchover script at '$batchSrc'."
-            }
-            Copy-Item -LiteralPath $batchSrc -Destination (Join-Path $stageDir $batchName) -Force
-        }
     }
     # The signing certificate's public half at the root, beside the signed
     # binaries (design record 19): what a user or a reviewer checks the

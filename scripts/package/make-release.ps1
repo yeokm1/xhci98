@@ -37,6 +37,12 @@ file on it setup never touches - but a release directory is not install media,
 so a sibling subdirectory is exactly where it belongs. It is also built by a
 different toolchain (Open Watcom), so it is copied from `xhciqual\` rather than
 built here; the freshness check below is what stops a stale one shipping.
+`xhcisnap\`, the log reader, sits beside it on the same terms, and since
+roadmap-hcd task 37.5 so does **`portsw\`**: the Intel port switchover's
+`portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, copied once from `src\`
+rather than into every flavour directory, since they are the same for every
+architecture and flavour and the setup engine never reads them. It carries
+no `readme.txt` of its own: the top-level readme's section 9 explains them.
 
 **Only the executable and its MAP go out**, not the numbered `.BAT` wrappers.
 Those drive the staged active tests - which take ownership of the controller,
@@ -559,14 +565,100 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # -UploadSetOnly gates it where it is present and does not require it.
 $oemPublishable = @("txtsetup.oem")
 
-# The port switchover's user script (roadmap-hcd task 36.42), published at
-# the root of every flavour directory a cut writes, beside the INF the user
-# installed from. Not an INF-declared file: it is a text file the user runs
-# and the setup engine never reads. A version published before 2.3.0.0 has
-# none, so it is accepted where present and not required of one. Its two
-# batch files (task 36.56), which set 1 or 0 through it in one double-click,
-# go wherever it goes, under the same terms.
+# The port switchover's user script (roadmap-hcd task 36.42) and its two
+# batch files (task 36.56), which set 1 or 0 through it in one double-click.
+# Not INF-declared files: text files the user runs, the same for every
+# architecture and flavour, which the setup engine never reads. Since task
+# 37.5 a cut publishes them once, from src\, into portsw\ at the version
+# root beside xhciqual\ and xhcisnap\, and into no flavour directory; the
+# packages no longer carry them. A version published before 2.3.0.0 has
+# none and 2.3.0.0 has them at the root of each flavour directory, and a
+# published release is never rewritten, so the upload assembly accepts a
+# tree with no portsw\ in the layout its version was published with
+# (Assert-PortSwitchLayout -PublishedVersion).
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
+$pswDirName = "portsw"
+
+function Publish-PortSwitchScripts {
+    # Copies the scripts from SourceDir into <DestRoot>\<DirName>\ and returns
+    # that directory. Together or not at all: a missing one is refused before
+    # anything is copied, as make-package.ps1 refused it when it staged them.
+    param([string]$SourceDir, [string]$DestRoot, [string[]]$Names, [string]$DirName)
+    $missing = @($Names | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+    if ($missing.Count -gt 0) {
+        throw ("'{0}' has no {1}: the port switchover's scripts are published together or not at all (roadmap-hcd tasks 36.42, 36.56 and 37.5)." -f `
+               $SourceDir, ($missing -join ", "))
+    }
+    $dir = Join-Path $DestRoot $DirName
+    Ensure-Directory $dir
+    foreach ($name in $Names) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $name) -Destination (Join-Path $dir $name) -Force
+    }
+    return $dir
+}
+
+function Assert-PortSwitchLayout {
+    # The layout of task 37.5 in a version tree: <Root>\<DirName>\ holds the
+    # scripts and nothing else, and no other directory of the tree, a flavour
+    # directory above all, holds a copy of any of them.
+    #
+    # Without -PublishedVersion (the cut) that is the only layout accepted.
+    # With it (the upload assembly, which -UploadSetOnly also reaches with a
+    # tree published before this task) a tree that has <DirName>\ is still
+    # held to it, and one that has not is accepted only in the layout its
+    # version was published with, checked as strictly: before 2.3.0.0 none of
+    # the scripts anywhere; 2.3.0.0 all three at the root of every flavour
+    # directory (one holding <InfName>) and nowhere else; after 2.3.0.0 no
+    # other layout at all, since every such version is cut by this script.
+    param([string]$Root, [string[]]$Names, [string]$DirName, [string]$What,
+          [string]$PublishedVersion = "", [string]$InfName = "xhci98.inf")
+    $keys = @($Names | ForEach-Object { $_.ToLowerInvariant() })
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $dir = Join-Path $rootFull $DirName
+    $copies = @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force |
+                Where-Object { $_.Name.ToLowerInvariant() -in $keys })
+    $faults = @()
+    if (Test-Path -LiteralPath $dir -PathType Container) {
+        foreach ($name in $Names) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { $faults += "$DirName\$name is missing" }
+        }
+        foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force)) {
+            if ($item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $keys) {
+                $faults += "$DirName\$($item.Name) is not one of the scripts"
+            }
+        }
+        $allowedDirs = @($dir)
+        $layout = "in $DirName\ alone"
+    } elseif ($PublishedVersion -eq "" -or ([version]$PublishedVersion -gt [version]"2.3.0.0") -or
+              (Test-Path -LiteralPath $dir)) {
+        throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.5)."
+    } elseif ([version]$PublishedVersion -eq [version]"2.3.0.0") {
+        $allowedDirs = @(Get-ChildItem -LiteralPath $rootFull -Directory -Force |
+                         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName $InfName) -PathType Leaf } |
+                         ForEach-Object { $_.FullName })
+        foreach ($flavourDir in $allowedDirs) {
+            foreach ($name in $Names) {
+                if (-not (Test-Path -LiteralPath (Join-Path $flavourDir $name) -PathType Leaf)) {
+                    $faults += ("{0}\{1} is missing" -f (Split-Path -Leaf $flavourDir), $name)
+                }
+            }
+        }
+        $layout = "as 2.3.0.0 published them, at the root of each flavour directory"
+    } else {
+        $allowedDirs = @()
+        $layout = "absent, as a version before 2.3.0.0 has them"
+    }
+    foreach ($item in $copies) {
+        if ($item.DirectoryName.TrimEnd('\') -notin $allowedDirs) {
+            $faults += ("{0} is a copy outside where they belong" -f $item.FullName.Substring($rootFull.Length + 1))
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.5):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
 
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
@@ -1639,7 +1731,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
+                                               -Also ($uasPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1796,6 +1888,11 @@ $gateOut
     # The test client (task 36.34) anywhere in the asset, the tools'
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
+    # And the port switchover's scripts in portsw\ alone where the tree has
+    # that directory (task 37.5); a version cut before it is accepted with
+    # the layout it was published with.
+    Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable -DirName $pswDirName `
+                            -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -2428,7 +2525,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable
         if ($legSigned) { $legCopy += $certPublishable }
         foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
@@ -2447,7 +2544,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
+                                           -Also ($uasPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
         # The certificate beside a signed leg's binaries must be this key's
         # public half, byte for byte - the one a user would inspect or import.
@@ -2865,6 +2962,20 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
                    "beside it and than that header") -f $snapVersion, $snapSchemaTool)
     }
 
+    # --- the port switchover's scripts ---------------------------------------
+    #
+    # Once, into portsw\ beside the tools' directories (roadmap-hcd task
+    # 37.5), from src\ rather than from a package: the packages no longer
+    # carry them, and the four flavour directories once held four
+    # byte-identical copies of files that are neither architecture- nor
+    # flavour-specific. No readme.txt of their own: section 9 of the
+    # top-level readme is where they are explained, and each script says
+    # what it does when run.
+    Write-Step "port switchover scripts"
+    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot `
+                                          -Names $pswPublishable -DirName $pswDirName
+    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), $pswDirName)
+
     #
     # Two flavours that hash the same are one binary published twice. The
     # VS_FF_DEBUG check above already makes that nearly impossible, which is the
@@ -2972,8 +3083,6 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
-        $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
-        $contents += "      portsw-on.bat, portsw-off.bat (the same in one double-click)"
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
         } else {
@@ -3020,6 +3129,17 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ""
         $contents += "      Then send C:\MYDUMP.TXT, and attach"
         $contents += "      C:\MYDUMP.BIN if you are asked for it."
+        $contents += ""
+    }
+    if ($null -ne $pswStaged) {
+        $contents += "  PORTSW\  - the Intel port switchover's switch (section 9)"
+        $contents += ""
+        $contents += "      portsw.vbs     shows XhciIntelPortSwitch, and sets it on or off"
+        $contents += "      portsw-on.bat  turns it on in one double-click"
+        $contents += "      portsw-off.bat turns it off in one double-click"
+        $contents += ""
+        $contents += "      One copy for every directory above. Run them from this"
+        $contents += "      directory."
         $contents += ""
     }
 
@@ -3185,8 +3305,7 @@ Please report what you find, on the project's GitHub page:
 
       https://github.com/yeokm1/xhci98/issues
 
-The form there asks for what a report needs. Section 7 says what is known
-already, so read that first.
+The form there asks for what a report needs.
 
 
 CONTENTS OF THIS FILE
@@ -3389,11 +3508,10 @@ tested.
                      (section 3). SweetLow's USB 2.0 stack alone has no
                      storage part.
 
-  On Windows ME      SweetLow's USB 2.0 stack: every Windows ME test ran
-                     under it. Windows ME carries its own USB storage
-                     files. DO NOT
-                     install NUSB on Windows ME: it is a Windows 98 SE
-                     package.
+  On Windows ME      Nothing to install: no USB 2.0 stack is needed, and
+                     SweetLow's, if already there, also works. Windows ME
+                     carries its own USB storage files. DO NOT install
+                     NUSB on Windows ME: it is a Windows 98 SE package.
 
   On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
   XP, Vista and 7
@@ -3415,16 +3533,15 @@ The package's own files are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
-  portsw.vbs                 shows and sets the Intel port switchover
-                             (section 9, XhciIntelPortSwitch)
-  portsw-on.bat,             turn it on or off through portsw.vbs in one
-  portsw-off.bat             double-click (section 9)
   xhcimsi.sys               in the -X86 directories only: the helper that
                              gives 32-bit Vista and 7 a message-signalled
                              interrupt. The install puts it on those two
                              systems and no other
 
-Nothing else is in the package, and there is nothing to complete.
+Nothing else is in the package, and there is nothing to complete. The
+Intel port switchover's scripts (section 9, XhciIntelPortSwitch) are not
+part of it: they are in the PORTSW directory beside these, one copy for
+all of them.
 
 Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
@@ -3582,10 +3699,10 @@ does not touch it.
 
   - Pressing F6 itself needs the firmware's own USB keyboard support.
   - The floppy must be drive A: as the firmware sees it.
-  - A USB disk that supports UAS (most USB 3 enclosures and SSDs) is
-    usually not usable during Setup, even if it also supports the older
-    Bulk-Only mode. Most USB flash sticks are Bulk-Only only and always
-    work; use one of those.
+  - A USB disk that supports ONLY UAS is not usable during Setup. One
+    that also supports the older Bulk-Only mode, as most USB 3
+    enclosures, SSDs and sticks do, runs as Bulk-Only during Setup and
+    works, as do Bulk-Only flash sticks.
   - Installing Windows ONTO a USB disk is not supported.
   - A USB DRIVE PRESENT AT THE PARTITION SCREEN TAKES THE LETTER C:.
     Unplug the USB drives you do not need, or Windows installs to the next
@@ -3607,13 +3724,16 @@ does not touch it.
     any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
     work. This package cannot carry those files. Windows 2000 does not ask.
 
-  What has run, in virtual machines only: text mode with a USB keyboard
-  and a USB stick on Windows 2000 and XP, and the Recovery Console on both,
-  logged in and running commands with the USB keyboard alone, on this
-  release's code; and Windows XP and XP x64 installed to the desktop this
-  way on the build before it. Nothing of this has run on real hardware. A
-  repair install, Windows 2000's Emergency Repair Disk and Windows XP's
-  Automated System Recovery were not tried.
+  What has run in virtual machines: text mode with a USB keyboard and a
+  USB stick on Windows 2000 and XP, and the Recovery Console on both,
+  logged in and running commands with the USB keyboard alone; and
+  Windows XP and XP x64 installed to the desktop this way. On real
+  hardware: Windows XP x64 Setup started from a USB stick on a Dell
+  Latitude E7250's xHCI controller, with this driver integrated into the
+  install, ran to the desktop on this release's code. Nothing else of
+  this has run on real hardware. A repair install, Windows 2000's
+  Emergency Repair Disk and Windows XP's Automated System Recovery were
+  not tried.
 
 UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
@@ -3666,56 +3786,6 @@ virtual machines:
   Windows 98 SE the wizard runs for each and may ask for the CD for
   hidclass.sys. Let Windows install them. A hidusbf setting on such a
   device has to be applied again (section 5).
-
-UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
-.......................................................
-
-This driver replaces the 1.x driver, which has the same file name,
-xhci98.sys. Going back is a reinstall of a 1.x package from its own
-download.
-
-  On every system, update the "USB 2.0 eXtensible Host Controller
-  (xhci98)" entry in Device Manager and pick the driver from a list with
-  Have Disk. Do not let Windows search: it can reinstall the old driver
-  from its own copy.
-
-  WINDOWS 98 SE WITH NUSB: DO NOT UPDATE WHILE THE 1.x DRIVER IS RUNNING.
-  NUSB's usbport.sys crashes the machine with a blue screen as it stops the
-  old driver. Instead:
-    1. Open an MS-DOS Prompt and type
-           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
-    2. Shut the machine down and switch it on again. The controller now
-       shows a yellow mark.
-    3. Device Manager -> the controller -> Update Driver -> "Display a list
-       of all the drivers in a specific location" -> Have Disk -> the
-       RELEASE-X86\ directory.
-    4. Pick "xHCI98 USB 3.x eXtensible Host Controller", give it the
-       Windows 98 SE CD when it asks for usbd.sys, and restart when asked.
-    5. Each USB device is found once more as new hardware.
-  If you already updated in place and got the blue screen, restart: this
-  driver comes up on its own.
-
-  On every system each USB device is a new entry in Device Manager after
-  the upgrade, so a hidusbf polling rate set under 1.x has to be set again
-  (section 5).
-
-  WINDOWS 98 SE WITH SWEETLOW'S STACK, AND WINDOWS ME: the same Update
-  Driver route, in place. Windows does not ask you to restart, but you
-  must: shut down and switch on again straight away. Until then USB
-  devices stop working. (Windows ME has not been tested as an upgrade.)
-
-  WINDOWS 2000: Update Driver -> "Display a list of the known drivers" ->
-  Have Disk. Pick "xHCI98 USB 3.x eXtensible Host Controller", the first
-  of three. It starts at once; at the next restart Windows may ask for
-  one more.
-
-  WINDOWS XP: Update Driver -> "Install from a list or specific location"
-  -> "Don't search. I will choose the driver to install" -> Have Disk ->
-  Continue Anyway. A second wizard follows for the root hub. No restart.
-
-  WINDOWS VISTA AND 7: Update Driver Software -> "Browse my computer" ->
-  "Let me pick from a list of device drivers on my computer" -> Have
-  Disk. Typing the folder into the search box keeps the old driver.
 
 
 ==============================================================================
@@ -3874,10 +3944,6 @@ it anyway if it is not there - the reports are what fix it:
 Outside this driver's control - these come from Windows, NUSB or the driver
 being unsigned, and no change to this driver can remove them:
 
-  * UPGRADING IN PLACE OVER A RUNNING 1.X DRIVER UNDER NUSB BLUE-SCREENS.
-    NUSB's usbport.sys crashes the machine as it stops the old driver,
-    before this release runs. Follow section 4, which avoids it.
-
   * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE, OR DRIVER
     SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
     own test signature, not Microsoft's. Turn on test-signing mode once
@@ -4031,7 +4097,8 @@ debug throughout, in its build scripts and its documentation alike.)
 Every value this driver reads from the controller's driver key. There are
 nineteen, all DWORDs, and the install writes all nineteen, each at the
 default it states below except XhciImodInterval250ns, which it writes as
-160, so every one is already in the key to change. The install writes
+160, and XhciForceBulkOnly, which it writes as 0 where absent counts as
+1, so every one is already in the key to change. The install writes
 each only where it is missing, so a value you changed survives an
 install or update; to go back to the default, set it by hand, or delete
 the value and update the driver. If an earlier install left
@@ -4100,10 +4167,12 @@ A value that is absent means the default each one states.
   XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
   ..............................................................
 
-  Default 0 (absent): a disk that offers UAS gets UAS. Set it to 1 and every
-  disk on that controller that offers BOTH transports gets Bulk-Only,
-  Windows' own storage driver, instead. A UAS-only disk stays on UAS
-  whatever this says.
+  The install writes 0: a disk that offers UAS gets UAS. Set it to 1 and
+  every disk on that controller that offers BOTH transports gets
+  Bulk-Only, Windows' own storage driver, instead. Absent counts as 1:
+  that is text-mode Setup, before the INF has run, where Windows' own
+  storage driver is the only one. A UAS-only disk stays on UAS whatever
+  this says.
 
   It is read each time a device is plugged in, so unplug the disk and plug
   it back in after changing it. On Windows 2000 and later a disk already
@@ -4191,9 +4260,10 @@ A value that is absent means the default each one states.
   wrote 1, and an update KEEPS the value already there, so a machine
   updated from one of them stays at 1 until it is changed.
 
-  PORTSW.VBS, beside the INF in each RELEASE and DEBUG directory, shows
-  and sets it on every xhci98 controller, with nothing to install, on
-  every Windows this driver runs on. Double-click it, or run
+  PORTSW.VBS, in the PORTSW directory beside the RELEASE and DEBUG ones,
+  shows and sets it on every xhci98 controller, with nothing to install,
+  on every Windows this driver runs on. Double-click it, or, at a prompt
+  in the PORTSW directory, run
       cscript //nologo portsw.vbs show     (or 1, or 0)
   as an administrator. Read when the controller starts, so RESTART
   WINDOWS after changing it. A stop gives back only the registers the
@@ -4203,7 +4273,8 @@ A value that is absent means the default each one states.
   PORTSW-ON.BAT and PORTSW-OFF.BAT, beside it, do the same in one
   double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
   says to restart. On Vista and 7, right-click one and choose Run as
-  administrator. Then RESTART WINDOWS.
+  administrator. At a prompt on Windows 98 SE and ME, change to the
+  PORTSW directory first. Then RESTART WINDOWS.
 
   On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
   only at USB 2.0 speed on a blue connector is most likely still on the
@@ -5286,7 +5357,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # The whole staged release, the tools' directories included, whatever
     # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
     # before -Force moves an existing release aside (round 2, finding 4),
-    # so a refusal leaves releases\ as it was.
+    # so a refusal leaves releases\ as it was. The port switchover's scripts
+    # in portsw\ and nowhere else (task 37.5), at the same point and for the
+    # same reason.
+    Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName `
+                            -What "the staged release '$destRoot'"
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {

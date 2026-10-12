@@ -12,6 +12,48 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.3.1.0 - 2026-10-13
+
+A fix release. Every system `2.3.0.0` supports is supported, from the
+same four directories. The Setup fix was read on real hardware, a Dell
+Latitude E7250 under Windows XP x64 Setup; the rest in QEMU virtual
+machines. The release notes say what was read on which system.
+
+### What changed
+
+- Fixed: Windows XP x64 Setup started from a USB stick on the xHCI
+  controller stopped with STOP 0x0000007B (INACCESSIBLE_BOOT_DEVICE),
+  reported on a ThinkPad X230 and reproduced on a Dell Latitude E7250.
+  The firmware was still resetting the stick's port when Windows took the
+  controller over, and `2.3.0.0` gave the port up instead of waiting, so
+  Setup never found the stick it had started from. The driver now waits
+  up to one second for such a reset to end. Read on the E7250 with USB
+  3.0 on: Setup ran from the stick to the desktop, with no device in
+  Device Manager marked with a problem.
+- In text-mode Setup a USB disk that offers both UAS and Bulk-Only now
+  runs as Bulk-Only, so Setup's own storage driver sees it: a missing
+  `XhciForceBulkOnly` reads as `1`. Every install writes `0`, so an
+  installed system keeps UAS as before.
+- Windows ME needs no USB 2.0 stack: the `2.3.0.0` package was read on a
+  stock Windows ME with none installed, and the documents now say so.
+- At shutdown, after the controller is powered off, a new transfer,
+  command or port reset is refused at once instead of waiting for a
+  resume that never comes, and what was queued is failed once the
+  controller is proven halted. Hardening; no hang was traced to it.
+- An event left waiting when the interrupt is re-armed is served at once
+  by one more bounded pass, instead of at the driver's 100 ms check,
+  which still catches one left during that pass. Seen only on QEMU's
+  MSI-X,
+  where a UAS disk on Vista x64 and 7 x64 went from about 4 MB/s to about
+  100 MB/s.
+- `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` are in one `portsw\`
+  directory at the top of the download instead of in each driver
+  directory. On Windows 98 SE and ME, change into it before running a
+  batch file from a command prompt.
+- Updating from `2.3.0.0`: the same steps as before (the release notes,
+  "Updating from 2.y.y.y"). Known limitations: those of `2.3.0.0`; a
+  disk that offers only UAS is still not usable in text-mode Setup.
+
 ## 2.3.0.0 - 2026-10-12
 
 Every system `2.2.0.0` supports is supported, from the same four

@@ -19,7 +19,8 @@
  *     PED = 1 so its link goes to SS.Disabled, held there while the device
  *     runs on the USB 2.0 side, and released - PLS = RxDetect with LWS, never
  *     a warm reset - only by the rules of future-plans/superspeed-storage-
- *     behind-a-switch.md section 6.1 as the roadmap tightened them: on the
+ *     behind-a-switch.md section 6.1 (removed 2026-10-12; in git history at
+ *     00a3b9e) as the roadmap tightened them: on the
  *     companion's disconnect, after a companion connect seen since the hold
  *     began, of the very device held (vendor id, product id and serial
  *     string). A hold with no identity, and an orphan's, last until the

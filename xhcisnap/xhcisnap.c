@@ -2305,6 +2305,11 @@ static void enum_note_line(const char *line)
              (v & 0x00800000UL) != 0 ? "came back enabled" : "FAILED",
              v & 0xFFFFUL, (v >> 10) & 0xF, (v >> 5) & 0xF,
              (v & 2UL) != 0 ? ", PED" : "", (v & 1UL) != 0 ? ", CCS" : "");
+    } else if (n == 6 && strncmp(kind, "prwait", 6) == 0) {
+        comp("  port %2lu prwait: a reset already running %s after %lu ms\n",
+             port,
+             (v & 0x00800000UL) != 0 ? "NEVER ENDED, given up" : "ended",
+             v & 0xFFFFUL);
     } else if (n == 5 && strncmp(kind, "speed", 5) == 0) {
         comp("  port %2lu speed: ID %lu is %s, by %s\n", port,
              (v >> 16) & 0xFF, enum_class_name((v >> 8) & 0xFF),
@@ -5518,7 +5523,8 @@ static int selftest_tol(void)
 /* `-selftest-notes`: task 35.3's enumeration-note decode over a canned ring,
  * on the screen, for xhcisnap\selftest.cmd. Port 13 replays 35.0's E460
  * failure as 2.1.1.0 met it (speed ID 4 unknown, one retry, then Failed and
- * a change storm noted once); port 14 the same link with 35.1's fallback;
+ * a change storm noted once); port 14 the same link with 35.1's fallback,
+ * after a running reset waited out (37.2);
  * port 15 a spent budget. The ring starts mid-record, as a wrapped one does. */
 static int selftest_notes(void)
 {
@@ -5536,6 +5542,7 @@ static int selftest_notes(void)
         "enum.port.fail=0D070101\r\n"
         "enum.port.end=0D0D0701\r\n"
         "enum.port.look=0DD00003\r\n"
+        "enum.port.prwait=0E000046\r\n"
         "enum.port.reset=0E801203\r\n"
         "enum.port.speed=0E040403\r\n"
         "enum.port.rate=0E00C350\r\n"

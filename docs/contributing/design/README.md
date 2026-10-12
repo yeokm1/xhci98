@@ -8,11 +8,11 @@ design is for. Do not put a phase number in the filename, since a design doc
 may span or outlive a phase; note any phase association in the doc's title or
 body instead. Add each new doc to the index below.
 
-A design record describes work that is scheduled or built. A proposal the
-project has not taken up lives in [`../../future-plans/`](../../future-plans/README.md)
-instead, and moves here with the next free number when its work is
-scheduled. Record 10, the SuperSpeed storage proposal, moved there on
-2026-09-07; its number is not reused. Record 11 came the other way, from
+A design record describes work that is scheduled or built. Proposals the
+project had not taken up lived in `docs/future-plans/` until the owner
+removed that folder on 2026-10-12; its last page is in git history at
+`00a3b9e`. Record 10, the SuperSpeed storage proposal, moved there on
+2026-09-07 and went with it; its number is not reused. Record 11 came the other way, from
 `future-plans/x64-targets.md` on 2026-09-08, record 12 from
 `future-plans/virtual-hub-per-root-port.md` on 2026-09-25, and record 13 from
 `future-plans/superspeed-hcd-reimplementation.md` on 2026-10-02. The next

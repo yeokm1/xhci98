@@ -1724,6 +1724,12 @@ typedef struct _HCD_CONTROLLER {
     XHCI_XSTAT Xstat;
     XHCI_XPIPE_STATS Xpipe;         /* 36.24; controller lock            */
     HCD_UAS_TELE UasTele[HCD_UAS_TELE_RECORDS];
+    /* The shutdown latch (roadmap-hcd 37.3, design record 13 section 5.8):
+     * set in the controller-lock hold that sets PowerDown at a D3 whose
+     * system state is PowerSystemShutdown, before the halt, and cleared by
+     * a D0; read under the controller lock by every admission that would
+     * otherwise leave a request waiting for a D0 (hcd_io.c, hcd_cfg.c). */
+    ULONG ShutLatched;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -2079,6 +2085,10 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 VOID HcdCfgReleaseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ULONG interfaceMask);
 VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* The shutdown latch's flush of the queued commands (37.3, record 13
+ * section 5.8); returns how many it completed. IRQL: PASSIVE_LEVEL, the
+ * power gate held. */
+ULONG HcdCfgShutFlush(PHCD_CONTROLLER hc);
 VOID HcdCfgService(PHCD_CONTROLLER hc);
 VOID HcdCfgCancelService(PHCD_CONTROLLER hc);
 VOID HcdCfgRetryService(PHCD_CONTROLLER hc);
@@ -2156,6 +2166,10 @@ VOID HcdIoRefillFlush(PHCD_CONTROLLER hc);
 VOID HcdIoWideStop(PHCD_CONTROLLER hc, PHCD_XFER x, LONG usbd);
 ULONG HcdIoTruncating(PXHCI_TRANSFER t);
 ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* The shutdown latch's flush of every device's transfers, the halt proven
+ * (37.3, record 13 section 5.8). IRQL: PASSIVE_LEVEL, the power gate
+ * held. */
+VOID HcdIoShutFlush(PHCD_CONTROLLER hc);
 NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);

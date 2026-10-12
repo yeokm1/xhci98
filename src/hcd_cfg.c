@@ -37,7 +37,8 @@
  * (HcdCfgReleaseFunction), and RESET_PORT restores the whole device.
  *
  * IRQL: PASSIVE_LEVEL (the controller thread), except HcdCfgQueue,
- * HcdCfgReleaseFunction and HcdCfgPipe (<= DISPATCH_LEVEL).
+ * HcdCfgReleaseFunction and HcdCfgPipe (<= DISPATCH_LEVEL) and
+ * HcdCfgShutFlush (PASSIVE_LEVEL, the power path under the power gate).
  */
 
 #include <ntddk.h>
@@ -167,6 +168,21 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
         }
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
+    }
+    if (hc->ShutLatched) {
+        /* 37.3: past the shutdown latch no D0 comes to serve it (record 13
+         * section 5.8). A URB is refused DEVICE_NOT_RESPONDING at the next
+         * tick - never DEVICE_GONE, which a completion would park; a
+         * request without one (RESET_PORT, the streams requests) is
+         * completed now, as hcdCfgComplete would complete it, since the
+         * refusal's DPC reads Argument1 as a URB. */
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement(&dev->Refs);
+        if (urb == NULL) {
+            return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+        }
+        return HcdIoRefuseLater(pdo, irp, urb,
+                                XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
     }
     /* The dispatch stamp (HcdIoStamp) moves to DriverContext[1], unused
      * while queued, so a hold of it (hcdCfgHoldUnreadable) is measured
@@ -450,6 +466,50 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         hcdCfgComplete(dev, irp, hcdCfgUrbOf(irp), HCD_USBD_DEVICE_GONE);
     }
+}
+
+/*
+ * The shutdown latch's command flush (37.3, record 13 section 5.8): on the
+ * power path after the shutdown's D3, every slow IRP - SlowIrps whole, and
+ * each device's selective-suspend deferrals but those a cancel routine
+ * owns - taken off under the controller lock and completed after it
+ * DEVICE_NOT_RESPONDING (a request without a URB STATUS_UNSUCCESSFUL).
+ * They hold no DMA, so no halt proof is asked. Nothing is in the thread's
+ * service: the power gate keeps it out of its pass, and SlotDevice is
+ * written under this lock. Returns how many were completed. IRQL:
+ * PASSIVE_LEVEL, the power gate held, no lock held.
+ */
+ULONG HcdCfgShutFlush(PHCD_CONTROLLER hc)
+{
+    LIST_ENTRY mine;
+    PLIST_ENTRY entry;
+    PIRP irp;
+    KIRQL oldIrql;
+    ULONG count;
+    ULONG slot;
+
+    InitializeListHead(&mine);
+    count = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        if (hc->SlotDevice[slot] != NULL) {
+            (VOID)hcdCfgDeferredTake(hc->SlotDevice[slot], &mine, 0);
+        }
+    }
+    while (!IsListEmpty(&hc->SlowIrps)) {
+        entry = RemoveHeadList(&hc->SlowIrps);
+        InsertTailList(&mine, entry);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    while (!IsListEmpty(&mine)) {
+        entry = RemoveHeadList(&mine);
+        irp = CONTAINING_RECORD(entry, IRP, Tail.Overlay.ListEntry);
+        hcdCfgComplete((PHCD_USB_DEVICE)irp->Tail.Overlay.DriverContext[0],
+                       irp, hcdCfgUrbOf(irp),
+                       XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+        count++;
+    }
+    return count;
 }
 
 /* ----------------------------------------------------------------------- */

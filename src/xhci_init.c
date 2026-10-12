@@ -2248,7 +2248,8 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
      * port that reports itself unpowered
      * (docs/future-plans/superspeed-storage-behind-a-switch.md section 4.2
      * records the earlier claim that this number built the hub; that document
-     * was design record 10 when this comment was written, and the second
+     * was design record 10 when this comment was written, was removed on
+     * 2026-10-12 and is in git history at 00a3b9e, and the second
      * section it cited, 14.4, does not exist in it - the 2026-09-16 audit's
      * B10).
      */

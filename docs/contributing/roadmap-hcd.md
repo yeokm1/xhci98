@@ -13,7 +13,7 @@ convention of theirs holds here: the batching convention and the task-id
 rules, "observed on both" as `AGENTS.md` qualifies it, and the rule that no
 phase advances past an unobserved checkpoint.
 
-**Status: `2.2.0.0` is cut and benched.** Phases 25 to 35 are closed. `2.0.0.0` was
+**Status: `2.3.0.0` is cut, and Phase 37 is open.** Phases 25 to 36 are closed. `2.0.0.0` was
 cut on 2026-10-04 and squash-merged to `main` as `4038447` ("2.0.0.0
 (#13)"); the owner benched it after the cut and reports no issue beyond the
 known limitations (Phase 28, 28-E.1). `2.1.0.0`, the first update, was cut
@@ -24,11 +24,13 @@ SuperSpeed devices falling back to USB 2.0 on Intel Sunrise Point,
 (owner, 2026-10-06; it was the interim `2.1.2.0` until the tolerance work
 joined it), cut on 2026-10-07 and closed the same day on the owner's bench (35-E). Phase 36,
 opened 2026-10-07 from a user's Dell E7250 under Windows XP x64 (issue 12),
-is open on branch `2.3.0.0`, its target version. Its root cause was found on 2026-10-08: the
+was cut as `2.3.0.0` and closed on 2026-10-12. Its root cause was found on 2026-10-08: the
 BIOS's `D20IR` interrupt routing. The fix is task 36.3. Polled event
 delivery joined Phase 36 on 2026-10-08 and selective suspend, off by
-default, on 2026-10-09 (owner); what remains in "Planned work" below
-carries no phase number and no version until the owner opens it.
+default, on 2026-10-09 (owner). Phase 37, opened on 2026-10-12 (owner)
+and cut back the same day, carries Windows ME without SweetLow's stack,
+and the X230's XP x64 setup stop; the rest of its first plan is "Planned
+work" again. It is `2.3.1.0` (owner, 2026-10-12), on branch `2.3.1.0`.
 
 **The miniport is frozen.** `1.2.0.0` is the last release of the miniport
 (owner, 2026-10-02): no further miniport cut, and a defect reported against
@@ -78,6 +80,7 @@ table is the index.
 | Selective suspend joins Phase 36, off by default | Owner, 2026-10-09: the planned selective suspend work (`SUSP.*`) becomes 36.28 to 36.41, its docs join 36.20 and its cut and install legs 36.final. `XhciSelectiveSuspend` defaults to **0**, replacing the default 1 of 2026-10-05 (design record 14 sections 7 and 11): off, it is today's behaviour bit for bit, so the work can ride in `2.3.0.0`; a user turns it on with 1. Stage B still ships with stage A, so `2.3.0.0` waits for both |
 | MSI on Vista and 7 | Owner, 2026-10-08: added to Phase 36 for both architectures (36.15, 36.16), designed as a record 15 amendment. Owner, 2026-10-09, after 36.5's review found no safe way for the x86 binary alone: amd64 through `MmGetSystemRoutineAddress`; x86 through `xhcimsi.sys`, a small NT 6-only helper driver installed only by the Vista and 7 x86 INF section, which imports `IoConnectInterruptEx` and hands it to `xhci98.sys` over a named device and a versioned internal device control (design record 18). `xhci98.sys`'s x86 image gains one import, `IoGetDeviceObjectPointer`, with stock Windows 98 SE precedent, and none Windows 98 lacks (owner, 2026-10-09). Without the helper, the requirements filter keeps only the line configurations, so x86 keeps the line, the routing quirk and polling; the same filter makes `XhciInterruptMode` 1 force the line on Vista and 7, x86 and amd64 (owner, 2026-10-09), and mode 1 with no line offered and no helper fails the start as on XP. The Vista and 7 x86 install asks for a restart, so the boot-start helper is active at once (owner, 2026-10-09). **Amended by 36.53 (owner, 2026-10-11):** `XhciInterruptMode` 1 is the line only on every system, failing the start (Code 10) when only a message is offered; 3 is a message only on Vista and 7, failing the start when none is granted or it does not connect, and on 98 SE to XP; 36.6-36.8's and 36.15's lines, which read 3 as 0, are kept as history (design records 15 and 18, decision 8) |
 | Phase 36 is `2.3.0.0` | Owner, 2026-10-08: the routing quirk, polled event delivery and MSI make Phase 36 a minor release, so the branch `2.2.1.0` is renamed `2.3.0.0`, and that is the target version. Commits before the rename were made on `2.2.1.0` |
+| Phase 37 is `2.3.1.0` | Owner, 2026-10-12, with the phase cut back to the X230's setup stop and the work already done: a fix release, so the branch `next-release` is renamed `2.3.1.0`, and that is the target version. Commits before the rename were made on `next-release`; the owed VM legs of 37.3 and 37.5 and the install legs are run before the cut |
 | The other `1.2.0.0` limitations (28.3) | The NUSB stop crash, the Windows 98 churn wedge and the Windows 7 disable hang are each re-measured under the HCD and recorded as gone, carried or new (owner, 2026-10-04). A survivor is carried in the release notes and does not block the cut |
 | 28-E.1's Full-Speed hub clause | Taken at the bench, not recorded as untested ground (owner, 2026-10-04): a USB 2.0 hub forced to Full Speed by an ADuM full/low-speed isolator in front of it, in place of a USB 1.1 hub (owner, the same day, superseding the plan to buy one) |
 | Checkpoints of Phases 28 to 31 | Pre-approved (owner, 2026-10-04): each closes once its review is clean, the x86 and amd64 builds, gates and host tests pass, every roadmap VM leg passes with its package hash recorded, and no regression is open on an earlier phase. Scope rulings, waivers, push, tag and the cut stay the owner's |
@@ -96,9 +99,10 @@ table is the index.
 | SuperSpeed hubs on Windows 2000, revisited | Released untested (owner, 2026-10-04, with the cut), revisiting the 2026-10-02 row that required a vehicle: no vehicle exists, so the Windows 2000 half of Phase 30's checkpoint is untested ground, built from the specification, and the release notes say so |
 | Gaps dropped from `2.0.0.0` | Two task gaps ticked with the gap recorded rather than closed (owner, 2026-10-04): 29-A.1's registry value restoring the SuperSpeedPlus refusal (SuperSpeedPlus is accepted at its trained rate; `HCD_HOLD_REASON_SSP_REFUSED` in `src\hcd.h` is unused), and 31-0's unread sources - the xHCI 4.12 streams rows marked "to verify", NT `disk.inf`'s `GenDisk` binding and QEMU's `hw/usb/dev-uas.c` - not needed for `2.0.0.0` since UAS passed on every target. Neither is scheduled |
 | Issue 18: USB 2.0 speed IDs behind a hub | Orchestrator decision, 2026-10-10, on Codex's recommendation (session `01a1261e`), owner confirmed 2026-10-11; the owner asked for the fix in the `2.2.0.3` test build (task 36.49, issue 13): a general rule for any controller, on by default, rather than a VL805 gate - a Full- or Low-Speed device behind a hub on a USB 2.0 group with a speed table takes the default ID where the table names neither that speed nor that ID. The PCI-id and capability-pattern gates were set aside because HSO and IHI describe the root port, not downstream IDs, and the topology is the stronger evidence; the collision check keeps a listed ID winning. `XhciUsb2HubSpeedFallback` `0` restores the refusal; every INF writes it at 1 since 36.51 (owner, 2026-10-11), no INF before |
-| Every registry value written by the INFs | Owner, 2026-10-11: every registry value the shipping driver reads is written by every install path of both INFs, at the driver's own default and under 34.1's don't-overwrite flag, so every setting is visible to a user and behaviour is unchanged. Supersedes the rule that `XhciWideMap`, `XhciSelectiveSuspend` and `XhciUsb2HubSpeedFallback` were set by hand and written by no INF; they are written at 0, 0 and 1 (task 36.51). A value whose absence meant something no written number does would be listed and left unwritten; none exists |
+| Every registry value written by the INFs | Owner, 2026-10-11: every registry value the shipping driver reads is written by every install path of both INFs, at the driver's own default and under 34.1's don't-overwrite flag, so every setting is visible to a user and behaviour is unchanged. Supersedes the rule that `XhciWideMap`, `XhciSelectiveSuspend` and `XhciUsb2HubSpeedFallback` were set by hand and written by no INF; they are written at 0, 0 and 1 (task 36.51). A value whose absence meant something no written number does would be listed and left unwritten; none exists. Amended by 37.2 (2026-10-12): `XhciForceBulkOnly` is still written 0, but an absent value reads as 1, so text-mode Setup selects Bulk-Only (issue 15); it is the one value whose written number is not its absent reading |
 | The x64 binaries test-signed | Owner, 2026-10-11, reversing design record 11 decision 9 for the x64 package only: every published x64 directory carries `xhci98.sys` and `xhciuas.sys` with an embedded Authenticode signature by the project's own test certificate (SHA-1, no timestamp, no catalog, the INFs unchanged), applied by the packager alone; `make-release.ps1` refuses a cut that would publish an unsigned x64 directory. The private key never enters the tree. Not Microsoft signing. Design record 19 is the authority (36.50) |
 | `2.3.0.0`: cut before the bench, re-cut with a later date | Owner, 2026-10-11: the bench zip is cut directly as `2.3.0.0` (the TEST `2.2.0.3` re-stamp dropped), kept under `out\` until the bench is good. A defect the bench finds is fixed in a re-cut of the same version with `DriverVer` moved to the re-cut's date, so Windows ranks it newer and Have Disk takes it on Vista and 7 (an unchanged INF is not taken). Taken once: `10/12/2026` for 36.56 and 36.57. The bench items not read move to "Planned - bench follow-up after `2.3.0.0`" and to "Untested ground" in the README and release notes |
+| Phase 37: the planned work and the reports after `2.3.0.0` | Owner, 2026-10-12: one phase takes Windows ME without SweetLow's stack (37.1), the three field reports received after `2.3.0.0` - the E7250's USB in text-mode setup, the X230's bugcheck in text-mode install, and the 2570p's resources under XP x64 with Windows 7 x64 working (37.2 to 37.4), with more information to come - and every "Planned work" section, whose placeholder ids I17, S5L, RRC, PCR and BF became 37.5 to 37.14. No version or branch until the owner chooses them. The same day `docs/future-plans/` was removed (owner); its last page, the superspeed-storage proposal for the frozen miniport, is in git history at `00a3b9e`. Later the same day (owner) the phase was cut back and renumbered: the 2570p's report (37.4) and the Linux quirk population (37.17) removed; every other open task except the X230's setup stop moved back to "Planned work" under its earlier placeholder id or a new one (37.2 is FR.1, 37.5 I17.1, 37.8 PCR.1, 37.9 to 37.14 BF.1 to BF.6, 37.15 TMR.1, 37.16 FR.2 - the batch files last, so the release goes out sooner - and 37.19 UAS.1); and the tasks left numbered in order, old to new: 37.1 stays, 37.3 is 37.2, 37.6 is 37.3, 37.7 is 37.4, 37.18 is 37.5. Commit messages and Codex notes from before the renumbering use the old numbers |
 
 ## The shape of the successor
 
@@ -149,8 +153,9 @@ polled event delivery, which joined it on 2026-10-08, MSI on Vista and 7,
 three of issue 17's items (2026-10-09), selective suspend, off by default
 (36.28 to 36.41, 2026-10-09; its planned ids were `SUSP.n`), 1 MiB UAS
 commands and test-signed x64 binaries; it closed with the cut on
-2026-10-12, and the bench work it could not read is planned work
-("Planned - bench follow-up after `2.3.0.0`").
+2026-10-12, and the bench work it could not read is in "Planned work"
+(BF.1 to BF.6). Phase 37 (2026-10-12, `2.3.1.0`) is Windows ME
+without SweetLow's stack and the X230's XP x64 setup stop.
 The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
@@ -399,7 +404,7 @@ machine of its own, and enumeration changes shape at the first packet.
 - [x] 29-A.2 the link state machine. Done 2026-10-04 (`runs/run-29.md`, "29-A.1 to 29-A.6 - what was built"; `cd65bda`, merged at `5d67641`, then `81d3942` and `2943dfe`): `xhci_link.c` (host suite `test_link`) - hot and warm reset with the hot-to-warm conversion, SS.Inactive, Compliance and CAS recovery within a bounded warm-reset budget, U3 resume; QEMU's links trained to U0 on every guest
 - [x] 29-A.3 SuperSpeed enumeration. Done 2026-10-04 (same section; `cd65bda`, merged at `5d67641`; zero-bandwidth isochronous endpoints `4cef6d3`, merged at `9077edf`): EP0 at 512 bytes, the BOS at SuperSpeed only, burst, Mult and Max ESIT Payload from the companion, the xHC's Configure Endpoint verdict as the URB status; storage and UAS at 5000 Mb/s on all ten install legs
 - [x] 29-A.4 transfers at SuperSpeed. Done 2026-10-04 (same section; `cd65bda`, merged at `5d67641`): bulk, interrupt and isochronous TDs with burst, 1024-byte endpoints and the TD Size rule; bulk read on every install leg; SuperSpeed isochronous built from the specification on host vectors, untested ground in the release notes
-- [x] 29-A.5 fallback in both directions, and the active hold that sends a trained device back to USB 2.0 under the release rules of `future-plans/superspeed-storage-behind-a-switch.md` section 6.1, tightened to the held device's identity. Done 2026-10-04 (same section; `cd65bda`, `6fceeec`, review fixes in `017048c` and the integration's rounds to `c0f9ad6`): `HcdHoldRequestUsb2`, paired, unidentified and orphan holds, release only when the held device is seen on the companion and leaves, re-armed with `PLS` = RxDetect and `LWS`; seven counters; host vectors only, since no guest has a non-streaming controller or a link that fails to train
+- [x] 29-A.5 fallback in both directions, and the active hold that sends a trained device back to USB 2.0 under the release rules of `future-plans/superspeed-storage-behind-a-switch.md` section 6.1 (removed 2026-10-12, in git history at `00a3b9e`), tightened to the held device's identity. Done 2026-10-04 (same section; `cd65bda`, `6fceeec`, review fixes in `017048c` and the integration's rounds to `c0f9ad6`): `HcdHoldRequestUsb2`, paired, unidentified and orphan holds, release only when the held device is seen on the companion and leaves, re-armed with `PLS` = RxDetect and `LWS`; seven counters; host vectors only, since no guest has a non-streaming controller or a link that fails to train
 - [x] 29-A.6 SuperSpeedPlus at Gen 2, Gen 1x2 and Gen 2x2. Done 2026-10-04 (same section; `cd65bda`, merged at `5d67641`; the parent-hub fields `b6e569e` to `f7abde2`, merged at `9077edf`): the SuperSpeedPlus isochronous companion under `HCCPARAMS2.LEC`, refused with a counter where the fields cannot hold it, `XHCISNAP` decoding rate and lanes; host vectors only, every mode untested ground in the release notes
 - [x] 29-V.1 QEMU's `usb-storage` at SuperSpeed on both primaries. Done 2026-10-04 (`runs/run-29.md`, "The reading on the merged build"; `c0d8a51`): on Windows 98 SE under NUSB 3.3 and on Windows 2000 SP4, 5000 Mb/s, each target's `usbstor.sys`, `fc /b` clean, the USB 2.0 row unchanged, disable, enable and shutdown clean; again on Package B, and on all ten install legs (28-V.1 clause 14)
 - [x] 29-E.1 the bench: the two SuperSpeed drives of `test-equipment.md` at rig position D on Windows 98 SE, round trips and throughput. Done 2026-10-04 (`runs/run-29.md`, "29-E.1 - the bench"): read by the owner on real hardware after the cut (owner's decision of 2026-10-04 to cut before the bench), on the ThinkPad E460 and the ThinkPad P14s Gen 1 under Windows 98 SE; the owner reports no issue beyond the known limitations. No per-device reading is recorded; the Windows 7 half was dropped (decisions table)
@@ -781,149 +786,38 @@ Records: `runs/run-36.md`; `design/14-selective-suspend.md`;
 
 ---
 
-# Planned work
+## Phase 37 - Release `2.3.1.0`: Windows ME Without SweetLow's Stack and the X230's XP x64 Setup Stop
 
-Not phases yet: each takes the next free phase number when the owner opens
-it, and its placeholder ids take that number then (owner, 2026-10-06; the
-decisions table), and a version only then too: `2.2.0.0` is Phase 35's
-(owner, 2026-10-06). Polled event delivery moved into Phase 36 on
-2026-10-08 and selective suspend on 2026-10-09 (owner), so the cut that
-ships it is `2.3.0.0`'s.
-Issue 17's follow-up is not a release of its own: it joins whichever phase
-the owner opens it in. The 1 MB transfers, planned here on 2026-10-09, moved
-into Phase 36 the same day (owner).
+Goal: Windows ME read under the HCD with no USB 2.0 stack installed; the
+ThinkPad X230's STOP 0x7B in Windows XP x64 text-mode setup explained and
+fixed where the driver is at fault; released as `2.3.1.0`.
 
-## Planned - Issue 17 follow-up
+Status: open. Opened 2026-10-12 (owner), the day Phase 36 closed, with
+every item then in "Planned work" and three field reports; on branch
+`2.3.1.0` (named `next-release` until the owner chose the version the same
+day). Cut back the same day (owner) to the work done and the X230's stop:
+the 2570p's report and the Linux quirk population were removed, the rest
+moved to "Planned work", and the tasks left were numbered in order (the
+decisions table's Phase 37 row maps old to new). Stamped `2.3.1.0`,
+`DriverVer` `10/13/2026` (`905ccf53`). The task text before it was
+condensed, with every reading, decision and review pointer, is
+`runs/run-37.md`, "The roadmap entry before it was condensed".
 
-Goal: the one item of SweetLow's `2.x` testing (GitHub issue 17) that
-Phase 36 did not take (owner, 2026-10-09), waiting on something before it
-can be designed.
+Why a phase: the Windows ME reading changes a documented requirement, the
+setup fix changes how every root port's reset is handled, and it ends in a
+release.
 
-Status: not opened, unnumbered and unversioned. It is not a release of
-its own; it joins the phase the owner opens it in.
+- [x] 37.1 Windows ME on its stock USB stack, no SweetLow (owner). Done 2026-10-12 (`f01cfed4`; run-37, "37.1"): the `2.3.0.0` asset on a stock ME passed every clause, and the documents say ME needs no USB 2.0 stack. Not read: an update from an earlier xhci98 on a stock ME
+- [x] 37.2 the X230's STOP 0x7B in XP x64 text-mode setup from a USB stick (a user report; issue 15). Done 2026-10-12: reproduced on the owner's E7250 with the reporter's ISO, and fixed: the firmware left a port reset running at the handoff and the driver gave the stick's port up, so `hcdAwaitRunningReset` waits it out (`2072d222`, log note `enum.port.prwait`); and an unread `XhciForceBulkOnly` is 1, so a stick offering both transports meets Setup's own `usbstor` (`dfb56bb4`). Codex: no code findings at round 2, documents only at round 3. Read on the E7250: the partition screen, then the release build's install to the desktop with Device Manager clean. The X230 itself was not read, and is not owed (owner, 2026-10-12)
+- [x] 37.3 (was S5L.1) the S5 shutdown latch, so no transfer, command or port request waits for ever on a controller halted for shutdown (record 13 section 5.8). Done 2026-10-12 (`232f9fef`..`e5b24e9f`, Codex clean at round 3); smoke leg on Windows 98 SE. Legs read 2026-10-13 from the `2.3.1.0` asset (run-37, "37.final"): ME, 98 SE (the 36.35 case), 2000, XP and 7 x64, two shutdowns each with devices attached, each off (2000 to its safe screen) and the devices back
+- [x] 37.4 (was RRC.1) an event ring check after the re-arm, for the event QEMU's MSI-X strands. Done 2026-10-12 (`f808e22`, Codex clean at round 3; run-37, "37.4"): BackstopDrains 0 on 7 x64 and Vista x64 under MSI-X, UAS about 100 MB/s against 4. Not read: a real MSI-X controller (BF.6)
+- [x] 37.5 the port switchover's scripts published once, in `portsw\` at the version root (owner). Done 2026-10-12 (`bc003002`, `92a20bb1`, Codex clean at round 2; record 16 revision 6). Legs read 2026-10-13 from the asset (run-37, "37.final"): the scripts from `portsw\` on 98 SE, ME, 2000, XP, XP x64 and 7 x64, the value 0, 1, 0; the two-architecture cut's tree read at `ffdc02f1`
+- [ ] 37.final the builds, cut and check of `2.3.1.0`. Built and gated, x86 and amd64, all three flavours each (`905ccf53`); cut by the owner and published to the tree at `ffdc02f1` (zip SHA-256 `F835E1DC...7AC6`); the ten install legs from the asset passed 2026-10-13 (run-37, "37.final", with its open items). Left: publishing
 
-- [ ] I17.1 the Windows 98 SE silent install (issue 17 item 4): the
-  `SilentInstall` capability, today FALSE on every PDO
-  (`hcd_pdo.c`, `hcd_rh.c`, `uas_pdo.c`), reported TRUE where 98 SE's
-  `usbhub.sys` and SweetLow's `usbhub20.sys` report it, so a device
-  already installed does not bring back the New Hardware wizard on
-  another port. **Waits on** SweetLow's description of the rule: when it
-  is set, and what it reads. Code offered for it is taken only under
-  `legal-provenance.md`'s rules: GPL-2.0-compatible, and not derived
-  from Microsoft's binaries.
+Checkpoint: 37.3's and 37.5's owed legs read; the bench work in
+"Planned work" still listed under "Untested ground" in the README and
+the release notes; and the install legs read from the asset.
 
-## Planned - S5 shutdown latch
-
-Goal: no transfer, command or port request can wait forever after the
-controller's D3 at shutdown (S5). Hardening, not tied to an observed hang:
-Phase 36's matrix traced Windows ME's Shut Down hang with an unopened USB
-disk to ME itself (the same hang on ME's own UHCI + USBSTOR stack and on
-`2.2.0.0`; the xhci98 trace shows nothing sent to the driver after the
-D3). Reading the code found the gap (`2.2.0.0` has it too): after the D3 a
-transfer URB is published to the halted ring and waits for a resume
-(`hcd_io.c`, HcdIoMapped); command URBs and RESET_PORT wait on
-HcdCfgService, skipped while the controller is unpowered (`hcd_enum.c`);
-nothing times out, and at S5 no resume comes.
-
-Status: not opened, unnumbered and unversioned (orchestrator, 2026-10-11;
-owner confirmed 2026-10-11).
-
-- [ ] S5L.1 the latch: at a controller Dx whose system state is
-  PowerSystemShutdown, including the direct-transition path, set it before
-  the halt; after it, refuse new transfer and command URBs with
-  `USBD_STATUS_DEVICE_NOT_RESPONDING` through HcdIoRefuseLater (never
-  DEVICE_GONE, which HcdIoDeferred parks), complete RESET_PORT inline (its
-  IRP carries no URB, and the refusal DPC reads Argument1 as one), and
-  after the halt flush what is already queued with the same status. S3 and
-  S4 keep hold-until-resume. A full Codex loop under record 13 section 5's
-  lock model, IRQL tags, stage A PowerDown and 36.35's no-thread-creation
-  rule. Legs: shutdown with devices on ME, 98 SE (the 36.35 case), 2000,
-  XP and 7 x64.
-
-## Planned - an event ring check after the re-arm
-
-Goal: an event stranded while IMAN.IE was clear is served without waiting
-for the 100 ms backstop, on an emulator or a controller that loses the
-interrupt the re-arm should raise. Phase 36's matrix found QEMU's MSI-X
-does: on Vista and 7 under `msix=on`, `BackstopDrains` counted 3 to 288
-a session, 0 under MSI, the line and polling. The cause, from the source
-and consistent with the trace: `xhci_intr_update` raises before it marks
-the vector used again, and `msix_notify` returns on an unused vector before
-its mask and PBA check, so the message is neither sent nor pended. Codex
-(2026-10-11) read no lost-interrupt window on compliant hardware, so this
-is a QEMU defect, and `2.3.0.0` ships unchanged (orchestrator, owner to
-confirm). The owner's bench reads `BackstopDrains` under MSI-X on real
-hardware, where 0 is the expected clean result, not an invariant.
-
-Status: not opened, unnumbered and unversioned.
-
-- [ ] RRC.1 after the DPC's re-arm, read the next event's cycle bit and,
-  if an event is pending, queue one more bounded drain through the existing
-  admission and accounting (`hcd_ctl.c`), never a loop under the
-  controller lock. IE stays 0 in the ISR, so record 05's DIRQL exception
-  is untouched. Codex's preferred option over re-arming before the final
-  ERDP write or a blind second ERDP write. Legs: 7 x64 and Vista x64 under
-  MSI-X (`BackstopDrains` 0, TONE and UAS timings against MSI), and the
-  line and MSI rows unchanged.
-## Planned - releasing the transfers kept by a pinned containment
-
-Goal: disabling, updating or removing a controller the driver closed off
-without proof that DMA stopped (record 17's containment, `XHCISNAP`
-"CONTAINED" and "PINNED") completes instead of waiting for ever on the
-transfers kept. Since `2.2.0.0` the driver keeps every transfer the
-controller might still write into, by design, and the release notes list
-the hang under "Known limitations". Phase 36's matrix read it again on
-Windows 2000 (4 of 4 from fresh boots, with selective suspend on and off:
-hidusb's interrupt-IN read kept, its REMOVE waiting) and on Windows 98 SE
-(owner, 2026-10-11: planned after `2.3.0.0`, documented as a limitation).
-
-Status: not opened, unnumbered and unversioned.
-
-- [ ] PCR.1 at the controller's stop or remove, look for proof that it can
-  no longer write to memory, and only then complete the kept transfers as
-  failed: (a) the device has left the bus (its PCI configuration space,
-  the vendor id included, reads all ones), or (b) the device entered D3hot
-  through its PCI power management capability and reads back D3hot, where
-  it may not master (PCI Bus Power Management 1.2). With neither proof the
-  transfers stay kept, as today: a buffer the controller might still write
-  into is never handed back. Record 17 gains the section first, a full
-  review loop on the DMA-safety path, host vectors for each proof, and
-  legs: the all-ones injection then a disable on 98 SE, ME, 2000, XP and
-  7 x64, with and without a client read pending, and the unproven case
-  still holding.
-
-## Planned - bench follow-up after `2.3.0.0`
-
-Goal: read on real hardware what the owner's bench of 2026-10-11 could not
-(`runs/run-36.md`, "The owner's bench, 2026-10-11"). Phase 36 closed with
-these moved here (owner, 2026-10-11); each is listed under "Untested
-ground" in the README and the release notes until it is read.
-
-Status: not opened, unnumbered and unversioned (owner, 2026-10-11).
-
-- [ ] BF.1 (was 36.27) the speed bench: ATTO and a large copy with the
-  MSSU10 over UAS and Bulk-Only, against 36.21's baseline, on the same
-  machines and settings. The E460's copies at about 200 MB/s are the only
-  real-hardware reading so far. The 1 MiB default stays only if it is no
-  slower than 64 KiB beyond the readings' spread (36.final's checkpoint
-  rule, in `runs/run-36.md`, "Moved from the roadmap at the phase's
-  close").
-- [ ] BF.2 (was 36.36) stage A's remote-wake HID device on a real Windows
-  98 SE machine and on Windows 7.
-- [ ] BF.3 (was 36.40) stage B's SuperSpeed remote wake, on a root port and
-  behind a USB 3 hub (the AX88179 behind its own hub, with ASIX's driver).
-- [ ] BF.4 (was 36.14's DOS half) `XHCIQUAL` on a controller whose line is
-  dead under DOS, read as `QUALIFIED WITH CAVEATS`. The E7250's line works
-  in PIC mode, so it cannot serve.
-- [ ] BF.5 (was 36.28's bench half) standby (S3) and resume on real
-  hardware. At the bench the E460's Windows 98 SE offered no Stand by, the
-  E7250's Windows 7 x64 had no graphics driver, and the P14s Gen 1 was not
-  run.
-- [ ] BF.6 the rest of the bench items the Phase 36 VM runs raised: MSI-X
-  on a real MSI-X controller, with BackstopDrains read under sustained
-  audio and storage, across idle-to-active transitions and lifecycle
-  cycles (0 expected, not an invariant); `XhciWideMap` 1 with a real UAS
-  drive (fc-verified copies of 1 MiB and more) and `XhciWideMap` on an
-  updated 32-bit Windows 7; a real UAS drive under a transaction error or
-  a stop (a marginal cable or hub), recovering without a replug; Windows
-  98 SE on the E7250, the routing repair in PIC mode.
+Records: `runs/run-37.md`; design records 13 (section 5.8) and 16;
+`docs/issues/15-xp64-setup-usb-stick-running-port-reset.md`;
+`docs/using/release-notes.md`.

@@ -77,11 +77,12 @@ keeps both facts, since they describe the shipping driver.
 One case does not need any of section 1 or 2's generality: a bulk device on a
 root port, driven at SuperSpeed by the miniport and reported to
 `usbport.sys` as High-Speed. That proposal is
-[superspeed-storage-behind-a-switch.md](../../future-plans/superspeed-storage-behind-a-switch.md),
-and its section 2 says where the line between the two lies. With the miniport
-frozen it will not be built; it stays in `future-plans/` as the record of what
-it would have taken, and its `-0` transcription list is what Phase 29's `29-0`
-batch starts from.
+`docs/future-plans/superspeed-storage-behind-a-switch.md`, and its section 2
+says where the line between the two lies. With the miniport frozen it will
+not be built; it stayed in `future-plans/` as the record of what it would
+have taken until that folder was removed on 2026-10-12 (it is in git
+history at `00a3b9e`), and its `-0` transcription list is what Phase 29's
+`29-0` batch started from.
 
 ## 4. Scheduled: the decisions taken on 2026-10-02
 
@@ -121,7 +122,8 @@ is the index; this is the same list in the proposal's order:
   and the composite parent with no SuperSpeed port powered, proven against
   round 12's device matrix; SuperSpeed on root ports is Phase 29, hubs Phase
   30, streams and UAS Phase 31.
-- **The behind-a-switch proposal is not built.** It stays in `future-plans/`.
+- **The behind-a-switch proposal is not built.** It stayed in `future-plans/`
+  until 2026-10-12, and is in git history at `00a3b9e`.
 - **One cut, `2.0.0.0`, after UAS** (Phase 32).
 - **The hub class and composite splitting live inside the bus driver.**
   External hubs are objects of the bus, not PDOs; a composite device is split
@@ -500,6 +502,13 @@ changing the three layers:
   closed, the release raises `DpcClosed` with an interlocked exchange
   (the ISR and the enum thread are gone by then).
 
+**Amended for roadmap-hcd 37.3.** The shutdown latch (section 5.8) adds
+one word under the controller lock, `ShutLatched`, set with `PowerDown` in
+one hold before the shutdown's halt and read by every admission that
+would otherwise leave a request waiting for a D0; its flush runs on the
+power path under the power gate, takes its lists under the controller
+lock and completes outside it, and creates no thread.
+
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
 the topology only through its own device object, whose lifetime 5.2 pins to
 the PDO's remove. It takes the controller lock to queue a transfer and nothing
@@ -551,16 +560,18 @@ The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
 path (section 8), which the gate's `HCD-HUBPAGE` rule holds them to.
 
-Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD
-reads, on every install path: the three above, `XhciFastPollFsLs`, and
-`XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and
-`XhciFirstEnumPortMs` (33.3), each at the driver's own default but the
-interval. Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
-install or update writes only a missing value and keeps one the user set; a
-later release therefore cannot change a default on a machine that already
-holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
-and since task 34.3 an eighth, `XhciIntelPortSwitch`, under the same
-flag (at 1; at 0 since task 36.42).
+Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD reads,
+on every install path: the three above, `XhciFastPollFsLs`, and
+`XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and `XhciFirstEnumPortMs`
+(33.3), each at the driver's own default but the interval and, since
+roadmap-hcd 37.2, `XhciForceBulkOnly`: the INFs write 0 (UAS) and the driver
+reads an absent value as 1 (Bulk-Only), for text-mode Setup (section 5.6; issue
+15). Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an install or
+update writes only a missing value and keeps one the user set; a later release
+therefore cannot change a default on a machine that already holds the old one.
+The gate's `VAL-*` rules hold all seven, flags included, and since task 34.3 an
+eighth, `XhciIntelPortSwitch`, under the same flag (at 1; at 0 since task
+36.42).
 
 **Amended for `2.3.0.0` (roadmap-hcd 36.20).** The INFs write sixteen
 values under the same rule and flag: the eight above; `XhciTolerance`,
@@ -577,6 +588,10 @@ every value the driver reads is written by the INFs with the driver's own
 default, so the INFs write nineteen, these three at 0, 0 and 1 - each the
 value that reads as an absent one does - under the same rule and flag.
 `txtsetup.oem` still writes none, so F6 Setup runs at the code defaults.
+**Amended by roadmap-hcd 37.2 (2026-10-12):** `XhciForceBulkOnly` is the
+one value whose written number is not what an absent one reads as: the
+INFs write 0 and the driver reads an absent one as 1 (above, and section
+5.6).
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by
@@ -698,12 +713,15 @@ offers a UAS alternate setting the controller can run - at SuperSpeed that
 means stream support; below it, always - even beside a Bulk-Only one
 (`src\xhci_xport.c`), and the one override, `XhciForceBulkOnly` in the
 controller's driver key (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`), is a value
-text mode never writes. A dual-mode SuperSpeed device on a controller
-without streams falls back to Bulk-Only and is usable. A device selected
-for UAS presents the UAS class id, which no Setup row binds, so it is not
+text mode never writes. **Since roadmap-hcd 37.2 an unread value is 1**
+(issue 15), so in text mode a device offering both transports is selected
+for Bulk-Only and meets Setup's own `usbstor`; the INFs write 0, which
+keeps UAS on an installed system. A device selected for UAS presents the
+UAS class id, which no Setup row binds, so a UAS-only device is still not
 usable until GUI mode; a Bulk-Only-only device (most USB flash sticks;
-QEMU's `usb-storage`) always meets Setup's own `usbstor`, and is the one
-to use for a predictable result.
+QEMU's `usb-storage`) always meets Setup's own `usbstor`. Folding the UAS
+driver into `xhci98.sys` would answer the UAS-only case (UAS.1 in the
+roadmap's "Planned work").
 Carrying `xhciuas.sys` as a second `scsi` option would need its own
 hardware ids and a text-mode reading of its own, and is left out. GUI-mode
 Setup and the installed system install it from the package as before.
@@ -730,9 +748,11 @@ The limits, all of them the user's to know:
    Setup reads every F6 disk.
 3. Installing Windows onto a USB disk is not supported: nothing here makes
    the installed system boot from one.
-4. A disk the bus selects for UAS is not usable in text mode, even if it
-   also offers Bulk-Only, since no UAS driver is loaded (above); a
-   Bulk-Only-only device always is.
+4. A disk the bus selects for UAS is not usable in text mode, since no
+   UAS driver is loaded (above). Since 37.2 that is a UAS-only disk: one
+   that also offers Bulk-Only is selected for Bulk-Only there, as an
+   unread `XhciForceBulkOnly` is 1, and a Bulk-Only-only device always
+   is usable.
 5. Text mode runs with interrupt moderation at the code default and the log
    off, since no INF value is written until GUI mode.
 6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user
@@ -970,6 +990,134 @@ Restart) hung after the controller's D3 with the guest in real mode, and a
 It is outside this wait (no relations answer is involved after the D3)
 and was not bisected. Not read here: Windows ME, Driver Verifier, a
 SuperSpeed device, and a device that never answers (QEMU models none).
+
+### 5.8 The shutdown latch (task 37.3, 2026-10-12)
+
+**The gap.** After the controller's D3 nothing the bus holds can end by
+itself. A transfer URB admitted then is published on a ring of a controller
+that is not initialized: the doorbell is dropped and the TD waits for the
+resume's reinitialization to complete it (`hcd_io.c`, `HcdIoMapped`). A
+command URB, `RESET_PORT` or a streams request waits on `SlowIrps` for
+`HcdCfgService`, which the thread runs only on a powered controller
+(`hcd_enum.c`, `HcdEnumService`). A record held on a pipe, or an IRP
+waiting for a record, waits for a release only a running ring gives. At
+S3 and S4 that is the design: the D0 that follows serves or completes
+every one. At S5 no D0 follows, and each of them waits for good. No
+observed hang rests on it - Windows ME's shutdown hang with an unopened
+disk was traced to ME itself, with nothing reaching the bus after the D3
+(`runs/run-36.md`) - so this is hardening of a gap `2.2.0.0` has too.
+
+**The latch.** `hc->ShutLatched`, a word appended at the end of
+`HCD_CONTROLLER`, written and read under the controller lock. It is set
+when the controller leaves D0 and its system state is
+`PowerSystemShutdown` (`Common.SystemPower`, written by `hcdSystemDone`
+from the system IRP before it asks for the device IRP), on both routes
+there: the device SET_POWER to D3, and the direct transition a failed
+`PoRequestPowerIrp` leaves to the work item (`hcd_power.c`). It is set
+**in the same hold of the controller lock as `PowerDown`**
+(`hcdSuspendSettled`, record 14 section 4.4), before
+`XhciSuspendController` halts the controller. A controller already
+suspended when the shutdown reaches it takes the latch there instead,
+there being no halt left to precede, by an operation that is idempotent:
+at the shutdown's D3 (an earlier direct transition left it suspended in
+D0, or the function is already out of D0); in the direct transition when
+it was already suspended in D0; and where `hcdSystemDone` finds the
+function already in the state the shutdown wants, so asks for no device
+IRP at all - there the system IRP is deferred to the work item, which
+latches and flushes at PASSIVE_LEVEL under the power gate and then
+completes it (Codex review of this design, round 1, finding 2). The pure
+decision is `XhciTolShutLatch` (`xhci_tol.c`):
+only the shutdown state latches, so S1 to S4 keep today's
+hold-until-resume. A D0 clears it, under the same lock, before the resume
+runs, and so does a PnP start, for the lifetime it begins: no D0 follows an S5 on any target read here, and one that did must
+find the bus serving again.
+
+**Admission after the latch.** Every path that would leave a request
+waiting reads the latch under the controller lock it is set under, so a
+request either sees it or was queued before it and is in the flush below:
+
+- `HcdIoSubmit` (a transfer URB): refused `USBD_STATUS_DEVICE_NOT_RESPONDING`
+  through `HcdIoRefuseLater`, at the next tick, never inline (a client
+  resubmitting from its completion routine would recurse) - after the
+  containment's hold (35-T.6, which keeps its own rule) and after a gone
+  device's `DEVICE_GONE`, which `HcdIoRefuseLater` completes and nothing
+  parks.
+- `HcdCfgQueue` (a command URB, `RESET_PORT`, a streams request): a URB is
+  refused the same way. `RESET_PORT` and the two streams requests carry no
+  URB, and `HcdIoRefuseLater`'s DPC reads `Argument1` as one, so they are
+  completed inline `STATUS_UNSUCCESSFUL` - what `hcdCfgComplete` makes of
+  `DEVICE_NOT_RESPONDING` for a request without a URB, so a refused one and
+  a flushed one read the same. A port reset is not resubmitted from a
+  completion routine, which is why the gone device's `NO_SUCH_DEVICE` is
+  completed inline already.
+- A promoted record's refills (`HcdIoRefillFlush`, `hcdWidePump`) are not
+  gated: they continue a request admitted before the latch, on a
+  controller that still runs until the halt, and the flush's drain stops
+  each promoted record's machine before it flushes the refills
+  (`hcdDrainOne`), so none is published after it (round 1, finding 3).
+- A record already taken and launched after the latch (`hcdGo`), or mapped
+  after it (`HcdIoMapped`, `hcdWideMapped`, `hcdWidePublishLocked` for a
+  promoted record): never held and never published; it goes to the done
+  list with `DEVICE_NOT_RESPONDING`, as a record of a gone device goes with
+  `DEVICE_GONE`, and `HcdIoDeferred` completes it at the next tick
+  (`!engine`, so `HcdIoRefuseLater`). This is also how a waiting IRP handed
+  a record by a completion, and a record still in the map pump at the
+  flush, end.
+
+**Never `DEVICE_GONE`.** `HcdIoDeferred` parks a transfer that completes
+`DEVICE_GONE` on its PDO (`HcdIoPark`) until an abort, a cancel or the
+PDO's stop or removal - none of which a shutdown sends - so that status
+would only move the wait. `DEVICE_NOT_RESPONDING` (`0xC0000005`) is what
+a transaction that got no answer completes with, and `XhciPipeNtStatus`
+maps it to `STATUS_UNSUCCESSFUL`.
+
+**The flush, after the halt.** On the power path, at PASSIVE_LEVEL, the
+power gate held - so the thread is not in a pass and no slow IRP is in its
+service, and no suspend, resume or recovery runs beside it - after
+`XhciSuspendController` (or at the D3 of a controller already suspended):
+
+1. **Commands**, always once latched: every IRP on `SlowIrps`, and every
+   device's IRPs selective suspend deferred (`SlowDeferred`, but those a
+   cancel routine owns, which that routine completes), taken off under the
+   controller lock and completed after it with `DEVICE_NOT_RESPONDING`
+   (`hcdCfgComplete`; a request without a URB `STATUS_UNSUCCESSFUL`). They
+   hold no DMA.
+2. **Transfers**, only on the halt's positive proof: `USBSTS` read by the
+   flush, on a started controller with its registers mapped and the
+   function still in D0, showing `HCHalted` on a window
+   that decodes (`XhciTolHaltProven`: all-ones carries the bit and proves
+   nothing); the common buffer not pinned; the controller not contained
+   (`Tol.Unreadable`). The quiesce's own flags are not the proof: it
+   clears `RUNNING` and `HW_RUNNING` on a configuration space that reads
+   all-ones too (`xhciTryClearBusMaster`), which the containment's proof
+   refuses (round 1, finding 1). A function the bus already has out of D0
+   cannot be read, so its transfers stay. Then every
+   pipe of every device with a slot (`SlotDevice[]`) and of every port's
+   device - the set `hcdDrainAll` walks - is drained with
+   `DEVICE_NOT_RESPONDING` (`HcdIoDrainPipe`: waiting IRPs, held records,
+   the engine's queue, a promoted record through its machine), the
+   device's pipes staying open and the device not marked gone. The saved
+   image is dropped (`SavedStateValid` 0) in the same step: the drained
+   TDs are still on the rings, and a resume, if one ever came, must
+   reinitialize rather than restore over them. Without the proof the
+   transfers stay where they are, as `HcdIoDeviceDrain` keeps them on a
+   pinned buffer: completing a request whose buffer the controller may
+   still master is worse than a wait. A contained controller keeps 35-T.6's
+   holds in full (the flush takes no command either).
+
+The pure decision is `XhciTolShutFlush` (`xhci_tol.c`, host suite
+`test_tol`). The log ring notes `power.shut`: bits 1-0 the decision
+(1 commands, 2 transfers), bits 31-8 the commands completed.
+
+**What it does not do.** It creates no thread and waits on none (roadmap
+36.35's rule: on Windows 98 SE a thread's creation during the S5
+transition never returned): every completion is made on the power path
+itself or by the PDO's refusal timer. It sends no command and touches no
+register beyond the halt the D3 already makes. It does not release
+requests already parked on a PDO for a departed device (`HcdIoPark`),
+whose rule is usbport's. It changes nothing at S1 to S4, at a stop or a
+removal, or with the latch clear.
+
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the

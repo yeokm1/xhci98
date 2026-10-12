@@ -78,7 +78,9 @@ What it checks, grouped by the failure each rule prevents:
            and XhciFastPollFsLs at 0, XhciFirstEnumWaitMs at 5000 and
            XhciFirstEnumPortMs at 2000, each the driver's own default, written
            so every value the driver reads is where a user looks for it
-           (owner, 2026-10-05). Task 34.3 made it eight:
+           (owner, 2026-10-05); since roadmap-hcd task 37.2 the driver reads
+           an absent XhciForceBulkOnly as 1, for text-mode Setup, so its 0
+           is no longer the absent value but the one an install must have. Task 34.3 made it eight:
            XhciIntelPortSwitch, the Intel port switchover's switch, at 1
            (owner, 2026-10-05) and at 0 since task 36.42 (owner,
            2026-10-09). Task 35-T.7 made it eleven: XhciTolerance
@@ -1245,7 +1247,7 @@ $requiredValues = @(
         Type    = "0x00010003"
         Default = "0"
         Why     = "roadmap-hcd task 31-A.3's switch to Bulk-Only where a device offers UAS too, read at every enumeration. The INF writes the 0 so the value is where a user looks for it (owner, 2026-10-05; roadmap-hcd task 34.1)"
-        DefaultWhy = "0 is the driver's own default, UAS wherever the device offers it; the INF writes the default and nothing else"
+        DefaultWhy = "0 is UAS wherever the device offers it, what every installed system runs. Since roadmap-hcd task 37.2 the driver reads an absent value as 1, Bulk-Only, for text-mode Setup, where usbstor is the only storage driver (issue 15), so a path missing the 0 would run every dual-mode drive on Bulk-Only and nothing would say so"
     },
     @{
         Name    = "XhciFastPollFsLs"

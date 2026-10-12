@@ -912,7 +912,9 @@ once (5.4 reconciles wake). D0 never completes before ACTIVE, except on GONE
   (`hcd_power.c`, before `XhciSuspendController`; the stop and the HCRST
   paths): in **one** controller-lock hold, `PowerEpoch` increments and
   `hc->PowerDown` is set (cleared when the controller is back in D0 and its
-  thread's service runs again). **Admission while `PowerDown`**: dispatch,
+  thread's service runs again); at a D3 whose system state is
+  `PowerSystemShutdown` the same hold also sets the shutdown latch (record
+  13 section 5.8, roadmap-hcd 37.3). **Admission while `PowerDown`**: dispatch,
   checking the flag in the same hold that would fill the slot, completes
   every Dx at once `STATUS_SUCCESS` itself (it is at PASSIVE_LEVEL: the
   PDOs are power-pageable), never pending it, so no Dx can arrive after the

@@ -1392,6 +1392,64 @@ static void test_terminal_resume(void)
     CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_NONE), 0, "running");
 }
 
+/* Roadmap-hcd 37.3 (record 13 section 5.8): only S5 latches - S1 to S4
+ * (SYSTEM_POWER_STATE 2 to 5) keep the hold until the resume, S0 and the
+ * unspecified state latch nothing; once latched the commands are always
+ * flushed and the transfers only with the halt proven and the buffer not
+ * pinned; a contained controller keeps 35-T.6's holds, and nothing is
+ * flushed unlatched. */
+static void test_shut(void)
+{
+    ULONG state;
+    ULONG latched;
+    ULONG halted;
+    ULONG pinned;
+    ULONG unreadable;
+    ULONG want;
+
+    for (state = 0; state <= 7; state++) {
+        CHECK_EQ(XhciTolShutLatch(state), state == 6 ? 1UL : 0UL,
+                 "only PowerSystemShutdown latches");
+    }
+    CHECK_EQ(XhciTolShutLatch(XHCI_TOL_SYSTEM_SHUTDOWN), 1, "S5");
+    CHECK_EQ(XhciTolShutLatch(4), 0, "S3 holds until the resume");
+    CHECK_EQ(XhciTolShutLatch(5), 0, "S4 holds until the resume");
+    for (latched = 0; latched <= 1; latched++) {
+        for (halted = 0; halted <= 1; halted++) {
+            for (pinned = 0; pinned <= 1; pinned++) {
+                for (unreadable = 0; unreadable <= 1; unreadable++) {
+                    want = 0;
+                    if (latched && !unreadable) {
+                        want = XHCI_TOL_SHUT_CMDS;
+                        if (halted && !pinned) {
+                            want |= XHCI_TOL_SHUT_XFERS;
+                        }
+                    }
+                    CHECK_EQ(XhciTolShutFlush(latched, halted, pinned,
+                                              unreadable),
+                             want, "the flush's decision");
+                }
+            }
+        }
+    }
+    CHECK_EQ(XhciTolShutFlush(1, 1, 0, 0),
+             XHCI_TOL_SHUT_CMDS | XHCI_TOL_SHUT_XFERS, "halted: both");
+    CHECK_EQ(XhciTolShutFlush(1, 0, 0, 0), XHCI_TOL_SHUT_CMDS,
+             "no proof: the transfers stay");
+    CHECK_EQ(XhciTolShutFlush(1, 1, 1, 0), XHCI_TOL_SHUT_CMDS,
+             "pinned: the transfers stay");
+    CHECK_EQ(XhciTolShutFlush(1, 1, 0, 1), 0, "contained: nothing");
+    CHECK_EQ(XhciTolShutFlush(0, 1, 0, 0), 0, "unlatched: nothing");
+    /* The proof is a USBSTS read, never the quiesce's flags: HCH on a
+     * decoding window proves it, all-ones (HCH among its bits) does not. */
+    CHECK_EQ(XhciTolShutFlush(1, XhciTolHaltProven(XHCI_USBSTS_HCH), 0, 0),
+             XHCI_TOL_SHUT_CMDS | XHCI_TOL_SHUT_XFERS, "HCH read");
+    CHECK_EQ(XhciTolShutFlush(1, XhciTolHaltProven(0xFFFFFFFFUL), 0, 0),
+             XHCI_TOL_SHUT_CMDS, "all-ones is no proof");
+    CHECK_EQ(XhciTolShutFlush(1, XhciTolHaltProven(0), 0, 0),
+             XHCI_TOL_SHUT_CMDS, "running");
+}
+
 /* Record 17 section 4.11: a start latches the three values and sets every
  * piece of tolerance state explicitly, whatever the last lifetime left. */
 static void test_start(void)
@@ -1503,6 +1561,7 @@ int main(void)
     test_terminal_release();
     test_terminal_resume();
     test_save_publish();
+    test_shut();
     test_start();
 
     printf("\n%d checks, %d failures\n", checks, failures);

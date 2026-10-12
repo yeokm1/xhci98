@@ -838,6 +838,15 @@ static void test_notes(void)
     CHECK_EQ(XhciEnumNoteReset(1, 1, 0xFF, 0), 0x01FF0000UL,
              "reset: the attempt held to seven bits");
 
+    CHECK_EQ(XhciEnumNoteResetWait(13, 1, 70), 0x0D000046UL,
+             "prwait: the running reset ended after 70 ms");
+    CHECK_EQ(XhciEnumNoteResetWait(13, 0, 1000), 0x0D8003E8UL,
+             "prwait: never ended at the 1 s limit");
+    CHECK_EQ(XhciEnumNoteResetWait(1, 1, 0), 0x01000000UL,
+             "prwait: ended at once, still nonzero by the port");
+    CHECK_EQ(XhciEnumNoteResetWait(0x1FF, 1, 0x12345UL), 0xFF00FFFFUL,
+             "prwait: the port and the ms held to their widths");
+
     CHECK_EQ(XhciEnumNoteSpeed(13, 4, XHCI_SPEED_SUPER,
                                XHCI_PSI_SOURCE_FALLBACK),
              0x0D040403UL, "speed: ID 4, SuperSpeed, by the fallback");

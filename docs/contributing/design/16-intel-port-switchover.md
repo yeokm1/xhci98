@@ -45,6 +45,14 @@ them at the E7250 bench, where a USB 3 stick copied at USB 2.0 speed with
 the switchover at its default 0. Its decision is section 11's twelfth, its
 documents section 15. Nothing in the driver changes.
 
+Revision 6, 2026-10-12, for roadmap-hcd task 37.5 (Phase 37): the script
+and its two batch files move out of the four flavour directories, where
+`2.3.0.0` published four byte-identical copies, into one `portsw\`
+directory at the version root beside `xhciqual\` and `xhcisnap\` (section
+5a). The packages no longer carry them. The scripts' logic does not change;
+only the batch files' words do. Its decision is section 11's thirteenth,
+its documents section 16.
+
 ## 1. What is asked, and what is not
 
 A tester reported Ivy Bridge machines on which `xhci98.sys` started cleanly
@@ -244,8 +252,9 @@ disable's release put them, on EHCI, whatever firmware had chosen at boot.
 
 ## 5a. The user script: `portsw.vbs` (revision 4)
 
-`src\portsw.vbs`, staged at the root of every package directory beside the
-INF, shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0
+`src\portsw.vbs`, published in the `portsw\` directory at the version root
+of a release (revision 6; until then at the root of every package
+directory beside the INF), shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0
 or 1, then says a restart is needed. It is Windows Script Host VBScript,
 because that is the one way to read and write a REG_DWORD that every target
 has with nothing installed: Windows 98 SE ships Script Host 1.0 and ME 2.0,
@@ -279,15 +288,32 @@ which raises the elevation prompt, and exits with 3, since it cannot know
 the elevated copy's result. Elsewhere a refused write is reported, with the
 keys already set named, and the advice to run it as an administrator.
 
-The packaging gates hold it: `make-package.ps1` stages it, `make-release.ps1`
-publishes it in every flavour directory, the packager's self-tests check it
-is staged byte for byte, ASCII with CRLF, and looks for both INFs' `XhciDesc`,
-and the source charset gate reads it as a file the 1998-era tools read.
+The packaging gates hold it: `make-release.ps1` publishes it once, from
+`src\`, into `portsw\` (`Publish-PortSwitchScripts`), and refuses a staged
+release whose `portsw\` lacks one of the three or holds anything else, or
+that has a copy anywhere outside it (`Assert-PortSwitchLayout`, before the
+publish swap); the upload assembly holds a tree that has `portsw\` to the
+same rule and accepts one cut before revision 6 as it was published (none
+before `2.3.0.0`, one set per flavour directory in `2.3.0.0`).
+`make-package.ps1` stages none of them since revision 6 (it staged them at
+every package root before). The packager's self-tests drive both functions
+with fixture trees, check the script is ASCII with CRLF and looks for both
+INFs' `XhciDesc`, and the source charset gate reads it as a file the
+1998-era tools read.
+
+**Why a directory of its own (revision 6).** The script finds the
+controllers through the registry, not through the directory it runs from,
+and the batch files look for it beside themselves, so neither depends on
+the INF beside it; nothing about them is architecture- or flavour-specific,
+and the setup engine never reads them, so one copy serves every flavour
+directory where `2.3.0.0` carried four byte-identical ones. No `readme.txt` of their own: the top-level readme's section 9
+says what they do and where to run them, and each prints its purpose when
+run.
 
 ### The batch files (revision 5)
 
-`src\portsw-on.bat` and `src\portsw-off.bat` are staged wherever
-`portsw.vbs` is, at the root of every package directory. Each shows the
+`src\portsw-on.bat` and `src\portsw-off.bat` are published wherever
+`portsw.vbs` is, in `portsw\` since revision 6. Each shows the
 value (`cscript //nologo portsw.vbs show`), stops there if that found no
 controller, sets 1 or 0 (`cscript //nologo portsw.vbs 1` or `0`), says
 that Windows must be restarted, and ends with `pause`, so a double-clicked
@@ -703,6 +729,14 @@ bench):
     `2.3.0.0`, with no change to a driver binary. There is no batch file
     for 2: it stays a hand edit.
 
+Revision 6 (owner, 2026-10-12, roadmap-hcd task 37.5):
+
+13. The script and its two batch files are published once, in `portsw\` at
+    the version root, and in no flavour directory; `make-package.ps1`
+    stops staging them, so a development package carries none either (a
+    guest leg copies them from `src\` or from a cut's `portsw\`). A
+    published release is not rewritten: `2.3.0.0` keeps its four copies.
+
 ## 12. What changes in the documents (task 34.4)
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
@@ -769,3 +803,22 @@ row 7; `source-files.md`.
   two files in section 3 and in each directory's contents.
 - `source-files.md` for the two files; `build-and-test.md` for the
   package's new files and their legs.
+
+## 16. What changes in the documents (revision 6, task 37.5)
+
+- The README's download table and switchover section: `portsw\` at the
+  top level, out of the driver directories' listing, and where to run the
+  scripts from (`2.3.0.0` named as the release that has them per flavour).
+- The release notes: the package contents under "Installing", the update
+  section's `portsw-off.bat`, the switchover section's script and batch
+  files, and the registry table's `XhciIntelPortSwitch` row.
+- The readme template (`make-release.ps1`): `PORTSW\` in the contents list
+  in place of the two lines in each directory, section 3's file table, and
+  section 9's "beside the INF in each RELEASE and DEBUG directory".
+- `release-acceptance-test.md` step 2 (2.1, and 2.6 for the layout);
+  `build-and-test.md`'s script and batch-file legs; `source-files.md` for
+  the three files; `xhciqual/hardware-testing.md`'s and
+  `xhci-programming.md`'s "in the package".
+- The batch files' own words: their comment says where `portsw.vbs` is,
+  and the "not found" message sends the user to the download's `PORTSW\`
+  directory rather than "the package directory".

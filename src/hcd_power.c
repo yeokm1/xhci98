@@ -54,6 +54,7 @@
 #define HCD_POWER_WORK_D0     1UL
 #define HCD_POWER_WORK_SYSTEM 2UL
 #define HCD_POWER_WORK_DIRECT 3UL
+#define HCD_POWER_WORK_SHUT   4UL
 
 /*
  * A controller at a 35-T.6 terminal (design record 17 section 4.6) is not
@@ -88,12 +89,17 @@ static ULONG hcdResumeContained(PHCD_CONTROLLER hc)
     return 1;
 }
 
+/* XhciTolShutLatch takes SYSTEM_POWER_STATE's value as a ULONG. */
+XHCI_C_ASSERT(hcd_shut_state, PowerSystemShutdown == 6 &&
+                                  XHCI_TOL_SYSTEM_SHUTDOWN == 6UL);
+
 /*
  * The controller suspended: selective suspend's epoch moves and PowerDown
  * is set first, under the controller lock (from then until the thread
  * serves the controller powered again, admission completes every Dx at
  * once), then XhciSuspendController, then a Dx pended before it is settled
- * (design record 14 section 4.4).
+ * (design record 14 section 4.4). At the shutdown's D3 the same hold sets
+ * the shutdown latch, before the halt (37.3, record 13 section 5.8).
  * The power gate held; IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
@@ -102,9 +108,76 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     HcdSuspControllerDownLocked(hc);
+    if (XhciTolShutLatch((ULONG)hc->Common.SystemPower)) {
+        hc->ShutLatched = 1;
+    }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     XhciSuspendController(&hc->Hc);
     HcdSuspSettleStale(hc);
+}
+
+/*
+ * The shutdown, the controller suspended by its D3 or before it (37.3,
+ * record 13 section 5.8): the latch set - already, when this D3 halted
+ * the controller (hcdSuspendSettled) - then what waits for a D0 that will
+ * not come completed DEVICE_NOT_RESPONDING: the queued commands always,
+ * the transfers only on the halt's positive proof, the buffer not pinned
+ * and the controller not contained (XhciTolShutFlush). The proof is
+ * USBSTS read here, HCH set on a window that decodes (XhciTolHaltProven),
+ * and only while the function is still in D0 - the caller sets the new
+ * device state after this - so a controller the bus already has in D3
+ * keeps its transfers. The quiesce's flags are not the proof: it clears
+ * them on a configuration space that reads all-ones too (Codex review of
+ * 37.3's design, round 1, finding 1). Idempotent. No thread is created
+ * and none waited on (36.35); completions are made here or by each PDO's
+ * refusal timer. The power gate held, so the thread is not in a pass;
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdShutFlush(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG halted;
+    ULONG mask;
+    ULONG cmds;
+
+    halted = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->ShutLatched = 1;
+    /* A started lifetime with its BAR mapped: a stopped FDO keeps
+     * HcInfoStatus and its recorded D0 but its registers are unmapped
+     * (hcd_ctl.c; Codex review of 4de0f999, round 2, finding 1). */
+    if (hc->ControllerStarted && hc->BarVa != NULL &&
+        hc->Common.DevicePower == PowerDeviceD0 &&
+        hc->Hc.HcInfoStatus == XHCI_HC_OK && !hc->Hc.Tol.Unreadable) {
+        halted = XhciTolHaltProven(XhciReadOp(&hc->Hc, XHCI_OP_USBSTS));
+    }
+    mask = XhciTolShutFlush(1, halted,
+                            hc->CommonBufferPinned != 0 ? 1UL : 0UL,
+                            hc->Hc.Tol.Unreadable != 0 ? 1UL : 0UL);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    cmds = 0;
+    if (mask & XHCI_TOL_SHUT_CMDS) {
+        cmds = HcdCfgShutFlush(hc);
+    }
+    if (mask & XHCI_TOL_SHUT_XFERS) {
+        HcdIoShutFlush(hc);
+    }
+    if (cmds > 0x00FFFFFFUL) {
+        cmds = 0x00FFFFFFUL;
+    }
+    XhciLogNote(&hc->Hc, "power.shut", (cmds << 8) | mask);
+}
+
+/* A D0: the shutdown latch cleared before the resume, so the bus serves
+ * again (record 13 section 5.8). The power gate held; IRQL:
+ * PASSIVE_LEVEL. */
+static VOID hcdShutClear(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->ShutLatched = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
@@ -114,6 +187,7 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 
     stack = IoGetCurrentIrpStackLocation(irp);
     HcdPowerGateEnter(hc);
+    hcdShutClear(hc);
     if (hc->ControllerStarted &&
         (hc->Common.DevicePower != PowerDeviceD0 || hc->SuspendedInD0)) {
         hc->SuspendedInD0 = 0;
@@ -184,11 +258,13 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
             hc->SuspendedInD0 = 1;
         }
         if (hc->Common.SystemPower == PowerSystemShutdown) {
+            hcdShutFlush(hc);
             HcdPswRelease(hc);
         }
         return;
     }
     if (hc->SuspendedInD0) {
+        hcdShutClear(hc);
         hc->SuspendedInD0 = 0;
         HcdPswRoute(hc);
         HcdPirqResume(hc);
@@ -223,6 +299,11 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
     }
     if (kind == HCD_POWER_WORK_DIRECT) {
         hcdDirectTransition(hc);
+    }
+    if (kind == HCD_POWER_WORK_SHUT) {
+        HcdPowerGateEnter(hc);
+        hcdShutFlush(hc);
+        HcdPowerGateLeave(hc);
     }
     PoStartNextPowerIrp(irp);
     IoCompleteRequest(irp, IO_NO_INCREMENT);
@@ -317,6 +398,17 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         hcdPowerDefer(hc, Irp, HCD_POWER_WORK_DIRECT);
         return STATUS_MORE_PROCESSING_REQUIRED;
     }
+    if (NT_SUCCESS(Irp->IoStatus.Status) && hc->ControllerStarted &&
+        want == hc->Common.DevicePower && want != PowerDeviceD0 &&
+        XhciTolShutLatch((ULONG)hc->Common.SystemPower)) {
+        /* 37.3: the shutdown finds the function already out of D0, so no
+         * device IRP is asked for and none would latch: the work item
+         * latches and flushes at PASSIVE_LEVEL under the power gate, then
+         * completes the system IRP (Codex review of 37.3's design, round
+         * 1, finding 2). */
+        hcdPowerDefer(hc, Irp, HCD_POWER_WORK_SHUT);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
     if (!NT_SUCCESS(Irp->IoStatus.Status) || !hc->ControllerStarted ||
         want == hc->Common.DevicePower) {
         PoStartNextPowerIrp(Irp);
@@ -388,8 +480,10 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
          * as Linux's xhci_shutdown does on these chipsets; a sleep keeps
-         * them, and its D0 routes them again. */
+         * them, and its D0 routes them again. Before it, 37.3's flush of
+         * what would wait for a D0 that will not come. */
         if (hc->Common.SystemPower == PowerSystemShutdown) {
+            hcdShutFlush(hc);
             HcdPswRelease(hc);
         }
         /* Suspended either way now, and the D0 that follows resumes it. */
