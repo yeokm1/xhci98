@@ -199,8 +199,11 @@ files point to `portsw\`. Not read: 32-bit 7 (7 x64 was).
   responding; without the mouse at boot all is normal. The kit has long
   recorded the same symptom on 98 SE as a vehicle note ("a usb-mouse
   present at boot breaks the DOS prompt"); this was the first ME boot with
-  one. Not read on `2.3.0.0` or on real hardware, so whether it predates
-  this release, and whether it is the driver's, is open.
+  one. Not read on `2.3.0.0`. On real hardware the owner reports no such
+  hang (2026-10-13): Windows 98 SE on the ThinkPad P14s Gen 1, a USB
+  mouse attached at boot, MS-DOS prompts working (the xhci98 version not
+  stated). So it is read as a QEMU vehicle fault, as the 98 SE note has
+  long taken it; ME on real hardware is not read.
 - **Release acceptance test row 4.2 on a clean Windows 2000**: the
   controller sits under "Other devices", 2000 leaves USB out of the
   hardware-type list, and Have Disk answers "does not contain information
