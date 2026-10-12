@@ -448,15 +448,19 @@ the safety notes, and how to read each result.
 
 ## Installing
 
-Each flavour directory of the package holds nine files. Eight are in every
+Each flavour directory of the package holds six files (nine in `2.3.0.0`,
+below). Five are in every
 one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
-`xhciuas.inf` and `xhciuas.sys`, the UAS driver, `txtsetup.oem`, which
-only Windows 2000 and XP Setup read (below), `portsw.vbs`, the Intel port
-switchover's script, and `portsw-on.bat` and `portsw-off.bat`, which turn
-the switchover on or off through it in one double-click. The ninth is
+`xhciuas.inf` and `xhciuas.sys`, the UAS driver, and `txtsetup.oem`, which
+only Windows 2000 and XP Setup read (below). The sixth is
 `xhcimsi.sys` in the x86 directories, the MSI helper the INF installs on
 32-bit Vista and 7 only, and `xhci98-test.cer` in the x64 directories, the
-public half of the certificate the x64 drivers are test-signed with. `release-x86\` is the one to install on 32-bit
+public half of the certificate the x64 drivers are test-signed with. The
+Intel port switchover's script, `portsw.vbs`, and `portsw-on.bat` and
+`portsw-off.bat`, which turn the switchover on or off through it in one
+double-click, are not part of the install. After `2.3.0.0` they are in the
+download's `portsw\` directory, one copy for every flavour directory; in
+`2.3.0.0` they are at the root of each flavour directory. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 
@@ -699,8 +703,9 @@ E7250 under Windows 7 x64).
 new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
 `2.2.0.0` wrote `1`, and an update never overwrites a value that is already
 there, so a machine updated from either keeps the switchover on. To take the
-new default, run `portsw-off.bat` (or `portsw.vbs 0`) from the package and
-restart Windows
+new default, run `portsw-off.bat` (or `portsw.vbs 0`) from the download's
+`portsw\` directory (in `2.3.0.0`, from the flavour directory) and restart
+Windows
 ("Intel 7-, 8- and 9-series chipsets: the port switchover").
 
 **An update from `2.2.0.0` adds the eight values new in `2.3.0.0`** at
@@ -953,12 +958,13 @@ controller. A standby or hibernate keeps them where they are.
   driver or enabling its controller. The reverse happens when the
   controller stops: the devices on those connectors go back to the USB 2.0
   controller, and work there if a driver for it is loaded.
-- **Turning it on, or off again: `portsw.vbs`.** Each package directory
-  (`release-x86\` and the others) carries `portsw.vbs`, a Windows Script Host
+- **Turning it on, or off again: `portsw.vbs`.** The download's `portsw\`
+  directory, beside `release-x86\` and the others, carries `portsw.vbs`
+  (in `2.3.0.0`, each flavour directory carries it instead), a Windows Script Host
   script that runs with nothing to install on every Windows this driver
   supports. Double-click it: it shows `XhciIntelPortSwitch` on every xhci98
   controller on the machine and asks for `1` (on) or `0` (off). From a
-  command prompt, `cscript //nologo portsw.vbs show`, `... portsw.vbs 1`
+  command prompt in that directory, `cscript //nologo portsw.vbs show`, `... portsw.vbs 1`
   or `... portsw.vbs 0` does the same. Setting a value needs an
   administrator (on Vista and 7 the script asks Windows for that itself).
   **Restart Windows afterwards**: the value is read when the controller
@@ -970,9 +976,9 @@ controller. A standby or hibernate keeps them where they are.
   controller is not an Intel one, so the switchover itself was not exercised
   there.
 - **In one double-click: `portsw-on.bat` and `portsw-off.bat`.** Beside
-  `portsw.vbs` in each package directory, each shows the value, sets `1` or
+  `portsw.vbs`, each shows the value, sets `1` or
   `0` through the script and says to restart Windows. On Windows 98 SE and
-  ME double-click it; on 2000 and XP run it as an administrator; on Vista
+  ME double-click it (at a prompt, change to its directory first); on 2000 and XP run it as an administrator; on Vista
   and 7 right-click it and choose Run as administrator. **Then restart
   Windows.** Neither sets `2`. Read in virtual machines on Windows 98 SE,
   ME, 2000, XP and Windows 7 x64 (run as administrator, and not, where the
@@ -1524,8 +1530,8 @@ New in `2.1.1.0`; since `2.3.0.0` the install writes `0` (`2.1.1.0` and
 `2.2.0.0` wrote `1`, and an update keeps a value already there). It matters
 only on the Intel chipsets listed in "Intel 7-, 8- and 9-series chipsets:
 the port switchover", unless it is `2`. Since `2.2.0.0` it is read on every
-Intel controller, and still on no other vendor's. `portsw.vbs`, in each
-package directory, shows it and sets it to `0` or `1` on every xhci98
+Intel controller, and still on no other vendor's. `portsw.vbs`, in the
+download's `portsw\` directory (in `2.3.0.0`, each flavour directory), shows it and sets it to `0` or `1` on every xhci98
 controller ("Turning it on, or off again" in that section).
 
 | Value | Effect |

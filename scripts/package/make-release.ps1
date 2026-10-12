@@ -37,6 +37,12 @@ file on it setup never touches - but a release directory is not install media,
 so a sibling subdirectory is exactly where it belongs. It is also built by a
 different toolchain (Open Watcom), so it is copied from `xhciqual\` rather than
 built here; the freshness check below is what stops a stale one shipping.
+`xhcisnap\`, the log reader, sits beside it on the same terms, and since
+roadmap-hcd task 37.18 so does **`portsw\`**: the Intel port switchover's
+`portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, copied once from `src\`
+rather than into every flavour directory, since they are the same for every
+architecture and flavour and the setup engine never reads them. It carries
+no `readme.txt` of its own: the top-level readme's section 9 explains them.
 
 **Only the executable and its MAP go out**, not the numbered `.BAT` wrappers.
 Those drive the staged active tests - which take ownership of the controller,
@@ -559,14 +565,100 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # -UploadSetOnly gates it where it is present and does not require it.
 $oemPublishable = @("txtsetup.oem")
 
-# The port switchover's user script (roadmap-hcd task 36.42), published at
-# the root of every flavour directory a cut writes, beside the INF the user
-# installed from. Not an INF-declared file: it is a text file the user runs
-# and the setup engine never reads. A version published before 2.3.0.0 has
-# none, so it is accepted where present and not required of one. Its two
-# batch files (task 36.56), which set 1 or 0 through it in one double-click,
-# go wherever it goes, under the same terms.
+# The port switchover's user script (roadmap-hcd task 36.42) and its two
+# batch files (task 36.56), which set 1 or 0 through it in one double-click.
+# Not INF-declared files: text files the user runs, the same for every
+# architecture and flavour, which the setup engine never reads. Since task
+# 37.18 a cut publishes them once, from src\, into portsw\ at the version
+# root beside xhciqual\ and xhcisnap\, and into no flavour directory; the
+# packages no longer carry them. A version published before 2.3.0.0 has
+# none and 2.3.0.0 has them at the root of each flavour directory, and a
+# published release is never rewritten, so the upload assembly accepts a
+# tree with no portsw\ in the layout its version was published with
+# (Assert-PortSwitchLayout -PublishedVersion).
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
+$pswDirName = "portsw"
+
+function Publish-PortSwitchScripts {
+    # Copies the scripts from SourceDir into <DestRoot>\<DirName>\ and returns
+    # that directory. Together or not at all: a missing one is refused before
+    # anything is copied, as make-package.ps1 refused it when it staged them.
+    param([string]$SourceDir, [string]$DestRoot, [string[]]$Names, [string]$DirName)
+    $missing = @($Names | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+    if ($missing.Count -gt 0) {
+        throw ("'{0}' has no {1}: the port switchover's scripts are published together or not at all (roadmap-hcd tasks 36.42, 36.56 and 37.18)." -f `
+               $SourceDir, ($missing -join ", "))
+    }
+    $dir = Join-Path $DestRoot $DirName
+    Ensure-Directory $dir
+    foreach ($name in $Names) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $name) -Destination (Join-Path $dir $name) -Force
+    }
+    return $dir
+}
+
+function Assert-PortSwitchLayout {
+    # The layout of task 37.18 in a version tree: <Root>\<DirName>\ holds the
+    # scripts and nothing else, and no other directory of the tree, a flavour
+    # directory above all, holds a copy of any of them.
+    #
+    # Without -PublishedVersion (the cut) that is the only layout accepted.
+    # With it (the upload assembly, which -UploadSetOnly also reaches with a
+    # tree published before this task) a tree that has <DirName>\ is still
+    # held to it, and one that has not is accepted only in the layout its
+    # version was published with, checked as strictly: before 2.3.0.0 none of
+    # the scripts anywhere; 2.3.0.0 all three at the root of every flavour
+    # directory (one holding <InfName>) and nowhere else; after 2.3.0.0 no
+    # other layout at all, since every such version is cut by this script.
+    param([string]$Root, [string[]]$Names, [string]$DirName, [string]$What,
+          [string]$PublishedVersion = "", [string]$InfName = "xhci98.inf")
+    $keys = @($Names | ForEach-Object { $_.ToLowerInvariant() })
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $dir = Join-Path $rootFull $DirName
+    $copies = @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force |
+                Where-Object { $_.Name.ToLowerInvariant() -in $keys })
+    $faults = @()
+    if (Test-Path -LiteralPath $dir -PathType Container) {
+        foreach ($name in $Names) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { $faults += "$DirName\$name is missing" }
+        }
+        foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force)) {
+            if ($item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $keys) {
+                $faults += "$DirName\$($item.Name) is not one of the scripts"
+            }
+        }
+        $allowedDirs = @($dir)
+        $layout = "in $DirName\ alone"
+    } elseif ($PublishedVersion -eq "" -or ([version]$PublishedVersion -gt [version]"2.3.0.0") -or
+              (Test-Path -LiteralPath $dir)) {
+        throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.18)."
+    } elseif ([version]$PublishedVersion -eq [version]"2.3.0.0") {
+        $allowedDirs = @(Get-ChildItem -LiteralPath $rootFull -Directory -Force |
+                         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName $InfName) -PathType Leaf } |
+                         ForEach-Object { $_.FullName })
+        foreach ($flavourDir in $allowedDirs) {
+            foreach ($name in $Names) {
+                if (-not (Test-Path -LiteralPath (Join-Path $flavourDir $name) -PathType Leaf)) {
+                    $faults += ("{0}\{1} is missing" -f (Split-Path -Leaf $flavourDir), $name)
+                }
+            }
+        }
+        $layout = "as 2.3.0.0 published them, at the root of each flavour directory"
+    } else {
+        $allowedDirs = @()
+        $layout = "absent, as a version before 2.3.0.0 has them"
+    }
+    foreach ($item in $copies) {
+        if ($item.DirectoryName.TrimEnd('\') -notin $allowedDirs) {
+            $faults += ("{0} is a copy outside where they belong" -f $item.FullName.Substring($rootFull.Length + 1))
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.18):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
 
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
@@ -1639,7 +1731,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
+                                               -Also ($uasPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -1796,6 +1888,11 @@ $gateOut
     # The test client (task 36.34) anywhere in the asset, the tools'
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
+    # And the port switchover's scripts in portsw\ alone where the tree has
+    # that directory (task 37.18); a version cut before it is accepted with
+    # the layout it was published with.
+    Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable -DirName $pswDirName `
+                            -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -2428,7 +2525,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable
         if ($legSigned) { $legCopy += $certPublishable }
         foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
@@ -2447,7 +2544,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable + $pswPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
+                                           -Also ($uasPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
         # The certificate beside a signed leg's binaries must be this key's
         # public half, byte for byte - the one a user would inspect or import.
@@ -2865,6 +2962,20 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
                    "beside it and than that header") -f $snapVersion, $snapSchemaTool)
     }
 
+    # --- the port switchover's scripts ---------------------------------------
+    #
+    # Once, into portsw\ beside the tools' directories (roadmap-hcd task
+    # 37.18), from src\ rather than from a package: the packages no longer
+    # carry them, and the four flavour directories once held four
+    # byte-identical copies of files that are neither architecture- nor
+    # flavour-specific. No readme.txt of their own: section 9 of the
+    # top-level readme is where they are explained, and each script says
+    # what it does when run.
+    Write-Step "port switchover scripts"
+    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot `
+                                          -Names $pswPublishable -DirName $pswDirName
+    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), $pswDirName)
+
     #
     # Two flavours that hash the same are one binary published twice. The
     # VS_FF_DEBUG check above already makes that nearly impossible, which is the
@@ -2972,8 +3083,6 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
-        $contents += "      portsw.vbs   (turns XhciIntelPortSwitch on or off; section 9)"
-        $contents += "      portsw-on.bat, portsw-off.bat (the same in one double-click)"
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
         } else {
@@ -3020,6 +3129,17 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ""
         $contents += "      Then send C:\MYDUMP.TXT, and attach"
         $contents += "      C:\MYDUMP.BIN if you are asked for it."
+        $contents += ""
+    }
+    if ($null -ne $pswStaged) {
+        $contents += "  PORTSW\  - the Intel port switchover's switch (section 9)"
+        $contents += ""
+        $contents += "      portsw.vbs     shows XhciIntelPortSwitch, and sets it on or off"
+        $contents += "      portsw-on.bat  turns it on in one double-click"
+        $contents += "      portsw-off.bat turns it off in one double-click"
+        $contents += ""
+        $contents += "      One copy for every directory above. Run them from this"
+        $contents += "      directory."
         $contents += ""
     }
 
@@ -3413,16 +3533,15 @@ The package's own files are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
-  portsw.vbs                 shows and sets the Intel port switchover
-                             (section 9, XhciIntelPortSwitch)
-  portsw-on.bat,             turn it on or off through portsw.vbs in one
-  portsw-off.bat             double-click (section 9)
   xhcimsi.sys               in the -X86 directories only: the helper that
                              gives 32-bit Vista and 7 a message-signalled
                              interrupt. The install puts it on those two
                              systems and no other
 
-Nothing else is in the package, and there is nothing to complete.
+Nothing else is in the package, and there is nothing to complete. The
+Intel port switchover's scripts (section 9, XhciIntelPortSwitch) are not
+part of it: they are in the PORTSW directory beside these, one copy for
+all of them.
 
 Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
@@ -4135,9 +4254,10 @@ A value that is absent means the default each one states.
   wrote 1, and an update KEEPS the value already there, so a machine
   updated from one of them stays at 1 until it is changed.
 
-  PORTSW.VBS, beside the INF in each RELEASE and DEBUG directory, shows
-  and sets it on every xhci98 controller, with nothing to install, on
-  every Windows this driver runs on. Double-click it, or run
+  PORTSW.VBS, in the PORTSW directory beside the RELEASE and DEBUG ones,
+  shows and sets it on every xhci98 controller, with nothing to install,
+  on every Windows this driver runs on. Double-click it, or, at a prompt
+  in the PORTSW directory, run
       cscript //nologo portsw.vbs show     (or 1, or 0)
   as an administrator. Read when the controller starts, so RESTART
   WINDOWS after changing it. A stop gives back only the registers the
@@ -4147,7 +4267,8 @@ A value that is absent means the default each one states.
   PORTSW-ON.BAT and PORTSW-OFF.BAT, beside it, do the same in one
   double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
   says to restart. On Vista and 7, right-click one and choose Run as
-  administrator. Then RESTART WINDOWS.
+  administrator. At a prompt on Windows 98 SE and ME, change to the
+  PORTSW directory first. Then RESTART WINDOWS.
 
   On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
   only at USB 2.0 speed on a blue connector is most likely still on the
@@ -5230,7 +5351,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # The whole staged release, the tools' directories included, whatever
     # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
     # before -Force moves an existing release aside (round 2, finding 4),
-    # so a refusal leaves releases\ as it was.
+    # so a refusal leaves releases\ as it was. The port switchover's scripts
+    # in portsw\ and nowhere else (task 37.18), at the same point and for the
+    # same reason.
+    Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName `
+                            -What "the staged release '$destRoot'"
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {

@@ -4030,8 +4030,15 @@ failed. Until it has passed on a target, design record 13 section 5.6 stays
 
 ### The port switchover script, `portsw.vbs` (roadmap-hcd task 36.42)
 
-Since task 36.42 every flavour directory of a package carries `portsw.vbs`
-at its root beside `xhci98.inf` (design record 16 section 5a). It shows
+Task 36.42 put `portsw.vbs` at the root of every flavour directory of a
+package beside `xhci98.inf`, and `2.3.0.0` was published so. Since task
+37.18 no package carries it: `make-release.ps1` publishes it once, from
+`src\`, in a `portsw\` directory at the version root beside `xhciqual\`
+and `xhcisnap\` (design record 16 section 5a), and holds the staged tree
+to that before the publish swap (`Assert-PortSwitchLayout`: the three in
+`portsw\` and nothing else there, no copy anywhere else). A guest leg
+copies `portsw\` from a local cut, or the three files from `src\`, into a
+directory of its own on the transfer disk and runs them from there. It shows
 `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1;
 double-clicked it asks through a dialog, and from a command prompt it takes
 `show`, `1` or `0` and prints to the console, which is how a leg reads it:
@@ -4072,13 +4079,13 @@ second `copy` a moment later.
 
 #### `portsw-on.bat` and `portsw-off.bat` (roadmap-hcd task 36.56)
 
-Since task 36.56 every flavour directory also carries `portsw-on.bat` and
-`portsw-off.bat` beside the script (design record 16 section 5a, "The
-batch files"): each shows the value, sets 1 or 0 through
+Since task 36.56 `portsw-on.bat` and `portsw-off.bat` go wherever the
+script goes, in `portsw\` since task 37.18 (design record 16 section 5a,
+"The batch files"): each shows the value, sets 1 or 0 through
 `cscript //nologo portsw.vbs`, says Windows must be restarted, and pauses.
 The same file runs under `COMMAND.COM` on 98 SE and ME and under `cmd.exe`
 on 2000 and later, so a leg runs each where a user would: double-clicked in
-Explorer in the package folder, and typed at a prompt in that folder; on
+Explorer in the `portsw\` folder, and typed at a prompt in that folder; on
 Vista and 7 once through Run as administrator (which starts it in
 `System32`) and once not elevated, where the script raises the elevation
 prompt and the batch file says so. After each, `cscript //nologo

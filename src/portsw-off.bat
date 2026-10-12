@@ -1,7 +1,8 @@
 @echo off
 rem portsw-off.bat - turns the Intel port switchover off: sets
 rem XhciIntelPortSwitch to 0 on every xhci98 controller through portsw.vbs,
-rem which is beside it (roadmap-hcd task 36.56, design record 16 section 5a).
+rem which is beside it in the download's portsw directory (roadmap-hcd
+rem tasks 36.56 and 37.18, design record 16 section 5a).
 rem
 rem Windows 98 SE and ME: double-click it, or run it at a prompt in this
 rem directory. 2000 and XP: run it as an administrator. Vista and 7:
@@ -43,8 +44,8 @@ echo it and choose Run as administrator.
 goto end
 :nofile
 echo portsw.vbs was not found in this directory. Run portsw-off.bat from
-echo the package directory that holds portsw.vbs: double-click it there,
-echo or change to that directory at the prompt first.
+echo the download's PORTSW directory, beside portsw.vbs: double-click it
+echo there, or change to that directory at the prompt first.
 :end
 echo.
 pause

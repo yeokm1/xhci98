@@ -197,30 +197,27 @@ try {
 
     # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
     #
-    # The port switchover's user script: staged at the package root, byte
-    # for byte, when named (and always from the default paths); a stand-in
-    # package that does not name it does not carry it; a missing one is
-    # refused. The script finds the controller's key by DriverDesc, so the
+    # The port switchover's user script. Since task 37.18 no package carries
+    # it or its two batch files: make-release.ps1 publishes the three once,
+    # from src\, into portsw\ at the version root (held further down, with
+    # fixtures), so the packager has no -PswScriptPath and stages none of
+    # them. The script finds the controller's key by DriverDesc, so the
     # string it matches is held to both INFs' XhciDesc, and the text a
     # Windows 98 WSH reads is held to ASCII with CRLF line endings.
-    Write-Step "portsw.vbs is staged at the root and matches the INFs"
+    Write-Step "no package carries portsw.vbs; it matches the INFs"
     $pswSrc = Join-Path $repo "src\portsw.vbs"
-    $pswOut = Join-Path $script:work "pkg-psw"
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-PswScriptPath", $pswSrc, "-OutDir", $pswOut)
-    Assert-True ($r.ExitCode -eq 0) ("a package with portsw.vbs was rejected:`n" + $r.Output)
-    $pswStaged = Join-Path $pswOut "portsw.vbs"
-    Assert-True (Test-Path -LiteralPath $pswStaged) "portsw.vbs is not at the package root."
-    if (Test-Path -LiteralPath $pswStaged) {
-        Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($pswStaged))) -eq
-                     (Get-StandInSha ([System.IO.File]::ReadAllBytes($pswSrc)))) `
-            "the staged portsw.vbs differs from src\portsw.vbs."
+    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $name))) `
+            "a package carries $name, which since roadmap-hcd task 37.18 is published once in portsw\ and staged into no package."
     }
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut "portsw.vbs"))) `
-        "a stand-in package that did not name -PswScriptPath carries portsw.vbs."
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-PswScriptPath", (Join-Path $script:work "no-such.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-missing"))
-    Assert-True ($r.ExitCode -ne 0) "a missing portsw.vbs was not refused."
+        "-PswScriptPath", $pswSrc, "-OutDir", (Join-Path $script:work "pkg-psw-gone"))
+    Assert-True ($r.ExitCode -ne 0) "make-package.ps1 still takes -PswScriptPath, so a package can carry the port switchover's scripts again (roadmap-hcd task 37.18)."
+    $packagerSrcText = [System.IO.File]::ReadAllText($packager)
+    foreach ($needle in @('$PswScriptPath', '"portsw.vbs"', '"portsw-on.bat"', '"portsw-off.bat"')) {
+        Assert-True (-not $packagerSrcText.Contains($needle)) `
+            "make-package.ps1 contains $needle again: since roadmap-hcd task 37.18 it stages none of the port switchover's scripts."
+    }
     $pswBytes = [System.IO.File]::ReadAllBytes($pswSrc)
     $pswBad = @($pswBytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) })
     Assert-True ($pswBad.Count -eq 0) "src\portsw.vbs holds a byte outside printable ASCII, TAB, CR and LF."
@@ -244,75 +241,16 @@ try {
 
     # --- portsw-on.bat and portsw-off.bat (roadmap-hcd task 36.56) ----------
     #
-    # Staged beside portsw.vbs from its directory, byte for byte; absent from
-    # a stand-in package that did not name the script; a script whose
-    # directory lacks them is refused. Each file is run by COMMAND.COM on
-    # Windows 98 SE and ME and by cmd.exe elsewhere (design record 16 section
-    # 5a), so the split is pinned: COMMAND.COM must reach no line it cannot
-    # parse, and the one cmd.exe line must sit where only cmd.exe goes.
-    Write-Step "portsw-on.bat and portsw-off.bat are staged and COMMAND.COM-safe"
+    # Published beside portsw.vbs, in portsw\ since task 37.18. Each file is
+    # run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere
+    # (design record 16 section 5a), so the split is pinned: COMMAND.COM must
+    # reach no line it cannot parse, and the one cmd.exe line must sit where
+    # only cmd.exe goes.
+    Write-Step "portsw-on.bat and portsw-off.bat are COMMAND.COM-safe"
     $pswBatches = @(
         @{ Name = "portsw-on.bat";  Value = "1"; Others = @("0", "2") },
         @{ Name = "portsw-off.bat"; Value = "0"; Others = @("1", "2") }
     )
-    foreach ($bat in $pswBatches) {
-        $batSrc = Join-Path $repo ("src\" + $bat.Name)
-        $batStaged = Join-Path $pswOut $bat.Name
-        Assert-True (Test-Path -LiteralPath $batStaged) "$($bat.Name) is not at the package root beside portsw.vbs."
-        if ((Test-Path -LiteralPath $batStaged) -and (Test-Path -LiteralPath $batSrc)) {
-            Assert-True ((Get-StandInSha ([System.IO.File]::ReadAllBytes($batStaged))) -eq
-                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($batSrc)))) `
-                "the staged $($bat.Name) differs from src\$($bat.Name)."
-        }
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $bat.Name))) `
-            "a stand-in package that did not name -PswScriptPath carries $($bat.Name)."
-    }
-    $pswLoneDir = Join-Path $script:work "psw-lone"
-    New-Item -ItemType Directory -Path $pswLoneDir -Force | Out-Null
-    Copy-Item -LiteralPath $pswSrc -Destination (Join-Path $pswLoneDir "portsw.vbs") -Force
-    Copy-Item -LiteralPath (Join-Path $repo "src\portsw-on.bat") -Destination (Join-Path $pswLoneDir "portsw-on.bat") -Force
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-PswScriptPath", (Join-Path $pswLoneDir "portsw.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-lone"))
-    Assert-True ($r.ExitCode -ne 0) "a portsw.vbs with no portsw-off.bat beside it was staged."
-    Assert-True ($r.Output -match "portsw-off\.bat") `
-        ("expected the refusal to name portsw-off.bat. Output:`n" + $r.Output)
-
-    # A bare file name for the script (review round 1): its directory is the
-    # caller's location, and the batch files are found there.
-    $pswBareDir = Join-Path $script:work "psw-bare"
-    New-Item -ItemType Directory -Path $pswBareDir -Force | Out-Null
-    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-        Copy-Item -LiteralPath (Join-Path $repo ("src\" + $name)) -Destination (Join-Path $pswBareDir $name) -Force
-    }
-    $pswBareOut = Join-Path $script:work "pkg-psw-bare"
-    Push-Location -LiteralPath $pswBareDir
-    try {
-        $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-            "-PswScriptPath", "portsw.vbs", "-OutDir", $pswBareOut)
-    } finally {
-        Pop-Location
-    }
-    Assert-True ($r.ExitCode -eq 0) ("-PswScriptPath given as a bare file name was rejected:`n" + $r.Output)
-    foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-        Assert-True (Test-Path -LiteralPath (Join-Path $pswBareOut $name)) `
-            "-PswScriptPath given as a bare file name did not stage $name."
-    }
-    # And a root-relative one, "\dir\portsw.vbs" (review round 2). The child
-    # starts with its process directory at this location, so this does not
-    # reproduce a process directory on another drive; it holds that such a
-    # path is resolved on the location's drive and its batch files found.
-    $pswRootRel = (Join-Path $pswBareDir "portsw.vbs").Substring([System.IO.Path]::GetPathRoot($pswBareDir).Length - 1)
-    $pswRootRelOut = Join-Path $script:work "pkg-psw-rootrel"
-    Push-Location -LiteralPath $script:work
-    try {
-        $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-            "-PswScriptPath", $pswRootRel, "-OutDir", $pswRootRelOut)
-    } finally {
-        Pop-Location
-    }
-    Assert-True ($r.ExitCode -eq 0) ("-PswScriptPath given root-relative ('$pswRootRel') was rejected:`n" + $r.Output)
-    Assert-True (Test-Path -LiteralPath (Join-Path $pswRootRelOut "portsw-off.bat")) `
-        "-PswScriptPath given root-relative did not stage portsw-off.bat."
 
     # The files themselves. Every line is held to a short list of the commands
     # both interpreters run, rather than searched for constructs one of them
@@ -1085,6 +1023,13 @@ try {
         Ensure-Directory (Join-Path $pubRoot "xhciqual")
         Set-Content -LiteralPath (Join-Path $pubRoot "xhciqual\XHCIQUAL.EXE") `
                     -Encoding ASCII -Value "stand-in qualifier"
+        # The port switchover's scripts in portsw\, as every cut publishes them
+        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $pubRoot "portsw")
+        foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot "portsw\$name") -Force
+        }
 
         # What the published tree looks like before the run, so that a mode
         # whose whole promise is "writes nothing under releases\" is held to it.
@@ -1354,6 +1299,13 @@ try {
         }
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
+        # The port switchover's scripts in portsw\, as every cut publishes them
+        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $pubRoot4 "portsw")
+        foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot4 "portsw\$name") -Force
+        }
 
         $up4 = Join-Path $script:work "upload-4dir"
         Ensure-Directory $up4
@@ -1465,7 +1417,7 @@ try {
             }
         }
         $strays = @(Get-ChildItem -LiteralPath $uploadDir -Directory -Recurse |
-            Where-Object { $_.Name -notin @("release", "debug", "xhciqual") })
+            Where-Object { $_.Name -notin @("release", "debug", "xhciqual", "portsw") })
         Assert-True ($strays.Count -eq 0) `
             ("a relative -PackageRoot created " + $strays.Count + " directory(ies) nobody named: " +
              (($strays | ForEach-Object { $_.Name } | Select-Object -First 3) -join ", "))
@@ -2223,6 +2175,13 @@ try {
                     -Value "stand-in per-version readme"
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $newPubRoot "LICENSE") -Force
+        # The port switchover's scripts in portsw\, as every cut publishes them
+        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $newPubRoot "portsw")
+        foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $newPubRoot "portsw\$name") -Force
+        }
 
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $newVersion,
                                "-ReleasesDir", $newRelRoot, "-UploadDir", $newUpRoot)
@@ -2333,15 +2292,147 @@ try {
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
-        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable + $pswPublishable';
-           Why  = "a cut no longer publishes portsw.vbs, the port switchover's user script, beside the INF (roadmap-hcd task 36.42)" },
+        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable';
+           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair and txtsetup.oem" },
         @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
            Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
         @{ Find = '$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")';
-           Why  = "the port switchover's user script and its two batch files (roadmap-hcd task 36.56) are no longer the files a flavour directory carries beside the INF" }
+           Why  = "the port switchover's user script and its two batch files (roadmap-hcd tasks 36.42 and 36.56) are no longer the files portsw\ carries" },
+        @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot';
+           Why  = "a cut no longer publishes the port switchover's scripts once, from src\, into portsw\ at the version root (roadmap-hcd task 37.18)" },
+        @{ Find = 'Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName';
+           Why  = "a cut no longer holds its staged tree to one portsw\ and no copy in a flavour directory before the publish swap (task 37.18)" },
+        @{ Find = '-What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds the tree to the layout its version was published with (task 37.18)" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
+    # And none of the scripts rides in a flavour directory or a package again.
+    Assert-True (-not ($releaserText -match '\$pswPublishable\s*\+|\+\s*\$pswPublishable')) `
+        "make-release.ps1 adds the port switchover's scripts to a flavour directory's or a package's file set again; since roadmap-hcd task 37.18 they are published in portsw\ alone."
+
+    #
+    # **The portsw\ layout itself, EXECUTED** (roadmap-hcd task 37.18): the
+    # two functions loaded from make-release.ps1's text, as the test-client
+    # check below is, and driven with fixture trees. Publish copies the three
+    # byte for byte and refuses a source missing one; the layout check takes
+    # a tree with portsw\ holding the three, and refuses a copy in a flavour
+    # directory, a missing script, a stranger in portsw\, and no portsw\ at
+    # all - which -PublishedVersion accepts only in the layout that version
+    # was published with: none before 2.3.0.0, one set per flavour directory
+    # in 2.3.0.0, never after it.
+    Write-Step "the port switchover's scripts are published in portsw\ alone"
+    $pswFns = @()
+    foreach ($fnName in @("Publish-PortSwitchScripts", "Assert-PortSwitchLayout")) {
+        $fnAt = $releaserText.IndexOf("function $fnName")
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 37.18)."
+        if ($fnAt -ge 0) { $pswFns += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
+    }
+    if ($pswFns.Count -eq 2) {
+        foreach ($fnText in $pswFns) { Invoke-Expression $fnText }
+        $pswNames = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
+        $pswRoot = Join-Path $script:work "pswlayout"
+        $cutRoot = Join-Path $pswRoot "cut"
+        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64", "xhcisnap")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $cutRoot $d) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $cutRoot "$d\xhci98.inf"), "; stand-in")
+        }
+        $pubDir = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $cutRoot -Names $pswNames -DirName "portsw"
+        Assert-True ($pubDir -eq (Join-Path $cutRoot "portsw")) "Publish-PortSwitchScripts did not return the portsw\ directory it wrote: $pubDir"
+        foreach ($name in $pswNames) {
+            $pubFile = Join-Path $cutRoot "portsw\$name"
+            Assert-True ((Test-Path -LiteralPath $pubFile) -and
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($pubFile))) -eq
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $repo "src\$name"))))) `
+                "Publish-PortSwitchScripts did not publish src\$name byte for byte into portsw\."
+        }
+        $refused = $null
+        try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "portsw" -What "fixture cut" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -eq $refused) "Assert-PortSwitchLayout refused a tree with the three in portsw\ alone: $refused"
+
+        # A source missing one: refused, naming it, and nothing written.
+        $loneSrc = Join-Path $pswRoot "lone-src"
+        New-Item -ItemType Directory -Force -Path $loneSrc | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repo "src\portsw.vbs") -Destination $loneSrc
+        Copy-Item -LiteralPath (Join-Path $repo "src\portsw-on.bat") -Destination $loneSrc
+        $loneDest = Join-Path $pswRoot "lone-dest"
+        New-Item -ItemType Directory -Force -Path $loneDest | Out-Null
+        $refused = $null
+        try { $null = Publish-PortSwitchScripts -SourceDir $loneSrc -DestRoot $loneDest -Names $pswNames -DirName "portsw" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused -and $refused -match "portsw-off\.bat") "Publish-PortSwitchScripts did not refuse a source with no portsw-off.bat, naming it: $refused"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $loneDest "portsw"))) "Publish-PortSwitchScripts wrote portsw\ before refusing a source missing a script."
+
+        # The faults, each on a copy of the good tree.
+        $faultCases = @(
+            @{ Name = "flavour-copy"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "portsw\portsw.vbs") -Destination (Join-Path $t "release-x64\portsw.vbs") }; Says = "release-x64" },
+            @{ Name = "deep-copy";    Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "portsw\portsw-on.bat") -Destination (Join-Path $t "xhcisnap\PORTSW-ON.BAT") }; Says = "xhcisnap" },
+            @{ Name = "missing";      Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "portsw\portsw-off.bat") }; Says = "portsw-off\.bat is missing" },
+            @{ Name = "stranger";     Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "portsw\readme.txt"), "x") }; Says = "readme\.txt" },
+            @{ Name = "no-dir";       Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "portsw") -Recurse }; Says = "no portsw" }
+        )
+        foreach ($c in $faultCases) {
+            $t = Join-Path $pswRoot ("fault-" + $c.Name)
+            Copy-Item -LiteralPath $cutRoot -Destination $t -Recurse
+            & $c.Do $t
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root $t -Names $pswNames -DirName "portsw" -What "fixture $($c.Name)" } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-PortSwitchLayout on the '{0}' fixture: expected a refusal matching '{1}', got: {2}" -f $c.Name, $c.Says, $refused)
+        }
+        # Given a published version, a tree WITH portsw\ is still held to the
+        # rule, whatever the version.
+        foreach ($v in @("2.2.0.0", "2.3.0.0", "2.3.0.1")) {
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root (Join-Path $pswRoot "fault-flavour-copy") -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -PublishedVersion $v accepted a tree with portsw\ and a copy in a flavour directory."
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-PortSwitchLayout -PublishedVersion $v refused a tree with the three in portsw\ alone: $refused"
+        }
+
+        # The layouts already published, each accepted for its own version
+        # only (Codex review round 1): none before 2.3.0.0, all three at the
+        # root of every flavour directory in 2.3.0.0, and no other layout
+        # after it; and a damaged one of either refused.
+        $legacyNone = Join-Path $pswRoot "legacy-none"
+        $legacyFlavour = Join-Path $pswRoot "legacy-2300"
+        foreach ($d in @("release-x86", "debug-x86", "xhciqual")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $legacyNone $d) | Out-Null
+            New-Item -ItemType Directory -Force -Path (Join-Path $legacyFlavour $d) | Out-Null
+            if ($d -eq "xhciqual") { continue }
+            [System.IO.File]::WriteAllText((Join-Path $legacyNone "$d\xhci98.inf"), "; stand-in")
+            [System.IO.File]::WriteAllText((Join-Path $legacyFlavour "$d\xhci98.inf"), "; stand-in")
+            foreach ($name in $pswNames) {
+                Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $legacyFlavour "$d\$name")
+            }
+        }
+        $legacyCases = @(
+            @{ Tree = $legacyNone;    Version = "2.2.0.0"; Want = $true },
+            @{ Tree = $legacyNone;    Version = "2.3.0.0"; Want = $false },
+            @{ Tree = $legacyNone;    Version = "2.3.0.1"; Want = $false },
+            @{ Tree = $legacyFlavour; Version = "2.3.0.0"; Want = $true },
+            @{ Tree = $legacyFlavour; Version = "2.2.0.0"; Want = $false },
+            @{ Tree = $legacyFlavour; Version = "2.4.0.0"; Want = $false }
+        )
+        foreach ($c in $legacyCases) {
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root $c.Tree -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-PortSwitchLayout -PublishedVersion {0} on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+        }
+        $damaged = @(
+            @{ Name = "2300-missing";  Base = $legacyFlavour; Version = "2.3.0.0"; Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "debug-x86\portsw-off.bat") } },
+            @{ Name = "2300-stray";    Base = $legacyFlavour; Version = "2.3.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "debug-x86\portsw.vbs") -Destination (Join-Path $t "xhciqual\portsw.vbs") } },
+            @{ Name = "none-stray";    Base = $legacyNone;    Version = "2.2.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $repo "src\portsw.vbs") -Destination (Join-Path $t "release-x86\portsw.vbs") } },
+            @{ Name = "none-portsw-file"; Base = $legacyNone; Version = "2.2.0.0"; Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "portsw"), "x") } }
+        )
+        foreach ($c in $damaged) {
+            $t = Join-Path $pswRoot ("damaged-" + $c.Name)
+            Copy-Item -LiteralPath $c.Base -Destination $t -Recurse
+            & $c.Do $t
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root $t -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -PublishedVersion $($c.Version) accepted the damaged '$($c.Name)' layout."
+        }
     }
     #
     # -Arch defaults to BOTH architectures, and that default is asserted rather
