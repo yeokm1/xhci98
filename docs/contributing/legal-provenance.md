@@ -350,6 +350,30 @@ They are not equal in weight. Linux is consulted routinely, above all for the
 controller quirk population, which is the stated authority for
 `xhciqual/quirks.c`.
 
+One exception to the do-not-copy rule, for Linux's xHCI quirk table only
+(owner, 2026-10-12; roadmap-hcd task 37.17). The facts: this project is
+GPL-2.0-only (`LICENSE`), and Linux's xHCI host driver files carry a GPL-2.0
+SPDX identifier. The owner's decision: the table that says which vendor,
+device and revision ids carry which quirk, with the comments that name the
+hardware, may be copied into this project, under these conditions:
+
+- the Linux copyright notice of the file it came from is kept beside the
+  copied text;
+- this section gains a row for each copy: the Linux file, the commit (the
+  pinned mirror's, from `external/README.md`), the lines, and where it landed
+  in this tree;
+- the behaviour a quirk changes is not copied. It is written from a
+  description of what the controller does wrong and from the xHCI
+  specification, as everything else here is;
+- the overlap audit above treats the recorded rows as known overlap, so any
+  other verbatim overlap with the Linux mirror is still a finding.
+
+This records the decision and its conditions; it draws no legal conclusion.
+
+| Linux file | Commit | Lines | Landed in | Notice kept |
+|---|---|---|---|---|
+| (none yet) | | | | |
+
 FreeBSD and Haiku were consulted at two points, and neither carries anything
 today: the 64-bit register write order is settled by the specification as a
 `shall` (5.1, p.337), and the Route String tier order that once rested on the
