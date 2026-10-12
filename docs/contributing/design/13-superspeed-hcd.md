@@ -1005,10 +1005,17 @@ there: the device SET_POWER to D3, and the direct transition a failed
 `PoRequestPowerIrp` leaves to the work item (`hcd_power.c`). It is set
 **in the same hold of the controller lock as `PowerDown`**
 (`hcdSuspendSettled`, record 14 section 4.4), before
-`XhciSuspendController` halts the controller; a controller already
-suspended when the shutdown's D3 arrives (an earlier direct transition
-left it suspended in D0) takes it at that D3 instead, there being no halt
-left to precede. The pure decision is `XhciTolShutLatch` (`xhci_tol.c`):
+`XhciSuspendController` halts the controller. A controller already
+suspended when the shutdown reaches it takes the latch there instead,
+there being no halt left to precede, by an operation that is idempotent:
+at the shutdown's D3 (an earlier direct transition left it suspended in
+D0, or the function is already out of D0); in the direct transition when
+it was already suspended in D0; and where `hcdSystemDone` finds the
+function already in the state the shutdown wants, so asks for no device
+IRP at all - there the system IRP is deferred to the work item, which
+latches and flushes at PASSIVE_LEVEL under the power gate and then
+completes it (Codex review of this design, round 1, finding 2). The pure
+decision is `XhciTolShutLatch` (`xhci_tol.c`):
 only the shutdown state latches, so S1 to S4 keep today's
 hold-until-resume. A D0 clears it, under the same lock, before the resume
 runs: no D0 follows an S5 on any target read here, and one that did must
@@ -1032,6 +1039,11 @@ request either sees it or was queued before it and is in the flush below:
   a flushed one read the same. A port reset is not resubmitted from a
   completion routine, which is why the gone device's `NO_SUCH_DEVICE` is
   completed inline already.
+- A promoted record's refills (`HcdIoRefillFlush`, `hcdWidePump`) are not
+  gated: they continue a request admitted before the latch, on a
+  controller that still runs until the halt, and the flush's drain stops
+  each promoted record's machine before it flushes the refills
+  (`hcdDrainOne`), so none is published after it (round 1, finding 3).
 - A record already taken and launched after the latch (`hcdGo`), or mapped
   after it (`HcdIoMapped`, `hcdWideMapped`, `hcdWidePublishLocked` for a
   promoted record): never held and never published; it goes to the done
@@ -1059,11 +1071,15 @@ service, and no suspend, resume or recovery runs beside it - after
    controller lock and completed after it with `DEVICE_NOT_RESPONDING`
    (`hcdCfgComplete`; a request without a URB `STATUS_UNSUCCESSFUL`). They
    hold no DMA.
-2. **Transfers**, only with the halt proven: neither
-   `XHCI_EXT_FLAG_RUNNING` nor `XHCI_EXT_FLAG_HW_RUNNING` left set by the
-   quiesce (it clears both on `HCHalted` read set or on Bus Master Enable
-   read back clear, and leaves them on neither), the common buffer not
-   pinned, the controller not contained (`Tol.Unreadable`). Then every
+2. **Transfers**, only on the halt's positive proof: `USBSTS` read by the
+   flush, with the function still in D0, showing `HCHalted` on a window
+   that decodes (`XhciTolHaltProven`: all-ones carries the bit and proves
+   nothing); the common buffer not pinned; the controller not contained
+   (`Tol.Unreadable`). The quiesce's own flags are not the proof: it
+   clears `RUNNING` and `HW_RUNNING` on a configuration space that reads
+   all-ones too (`xhciTryClearBusMaster`), which the containment's proof
+   refuses (round 1, finding 1). A function the bus already has out of D0
+   cannot be read, so its transfers stay. Then every
    pipe of every device with a slot (`SlotDevice[]`) and of every port's
    device - the set `hcdDrainAll` walks - is drained with
    `DEVICE_NOT_RESPONDING` (`HcdIoDrainPipe`: waiting IRPs, held records,

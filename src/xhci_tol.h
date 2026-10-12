@@ -581,6 +581,30 @@ ULONG XhciTolSaveCommit(ULONG published);
  * controller with a recovery still owed resumes as before. */
 ULONG XhciTolResumeRefused(ULONG terminal);
 
+/* The shutdown latch (roadmap-hcd 37.6; design record 13 section 5.8). Not
+ * a tolerance behaviour: it applies at every XhciTolerance value.
+ *
+ * XhciTolShutLatch: 1 when the controller leaving D0 latches, its system
+ * state (SYSTEM_POWER_STATE's value) PowerSystemShutdown; S1 to S4 keep
+ * the hold until the resume.
+ *
+ * XhciTolShutFlush: what the power path completes after the halt, a mask
+ * of XHCI_TOL_SHUT_*. Nothing unless latched, nor on a contained
+ * controller (35-T.6 holds its requests itself). The queued commands hold
+ * no DMA and are always taken; the transfers only on positive proof that
+ * the controller stopped executing - halted is 1 only when USBSTS, read
+ * on a function still in D0, has HCH set and is not all-ones
+ * (XhciTolHaltProven); the quiesce's own flags are not that proof, since
+ * it also clears them on a configuration space that reads all-ones - and
+ * the common buffer is not pinned. */
+#define XHCI_TOL_SYSTEM_SHUTDOWN    6UL     /* PowerSystemShutdown          */
+#define XHCI_TOL_SHUT_CMDS          1UL     /* SlowIrps and SlowDeferred    */
+#define XHCI_TOL_SHUT_XFERS         2UL     /* every pipe's transfers       */
+
+ULONG XhciTolShutLatch(ULONG systemPower);
+ULONG XhciTolShutFlush(ULONG latched, ULONG halted, ULONG pinned,
+                       ULONG unreadable);
+
 /* The all-ones episode (record 17 section 4.6). */
 typedef struct _XHCI_TOL_DEAD {
     ULONG Armed;

@@ -542,10 +542,14 @@ static ULONG hcdWidePublishLocked(PHCD_CONTROLLER hc, PHCD_XFER x)
     dev = pipe->Device;
     x->State = HCD_XFER_ON_RING;
     x->Engine = 1;
-    if (dev->Gone || pipe->Closed || x->CancelRequested) {
-        flags = XhciXpipeRecStop(&x->Rec, XHCI_XPIPE_OUT_STOP,
-                                 dev->Gone ? HCD_USBD_DEVICE_GONE
-                                           : HCD_USBD_CANCELED);
+    if (dev->Gone || pipe->Closed || x->CancelRequested || hc->ShutLatched) {
+        /* 37.6: past the shutdown latch nothing is published (record 13
+         * section 5.8). */
+        flags = XhciXpipeRecStop(
+            &x->Rec, XHCI_XPIPE_OUT_STOP,
+            dev->Gone           ? HCD_USBD_DEVICE_GONE
+            : hc->ShutLatched   ? XHCI_USBD_STATUS_DEV_NOT_RESPONDING
+                                : HCD_USBD_CANCELED);
     } else {
         flags = hcdWidePump(hc, x);
     }
@@ -575,6 +579,7 @@ static VOID hcdWideMapped(PHCD_CONTROLLER hc, PHCD_XFER x)
     dev = pipe->Device;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     if (!dev->Gone && !pipe->Closed && !x->CancelRequested &&
+        !hc->ShutLatched &&
         (pipe->Paused || pipe->TruncHeld ||
          (pipe->Exclusive != NULL && pipe->Exclusive != x &&
           x->Seq > pipe->Exclusive->Seq))) {
@@ -1611,12 +1616,16 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
     dev = pipe->Device;
     hcdCancelOn(x->Irp, x);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    if (x->CancelRequested || pipe->Closed || dev->Gone) {
+    if (x->CancelRequested || pipe->Closed || dev->Gone || hc->ShutLatched) {
         /* Cancelled, or its pipe or device going, while it was being
          * filled in: it completes now and is never held, so no drain the
-         * thread has already passed can miss it (round 4, finding 2). */
+         * thread has already passed can miss it (round 4, finding 2). Past
+         * the shutdown latch the same, as not responding: no D0 comes to
+         * serve it (37.6, record 13 section 5.8). */
         x->Engine = 0;
-        x->Status = dev->Gone ? HCD_USBD_DEVICE_GONE : HCD_USBD_CANCELED;
+        x->Status = dev->Gone          ? HCD_USBD_DEVICE_GONE
+                    : hc->ShutLatched  ? XHCI_USBD_STATUS_DEV_NOT_RESPONDING
+                                       : HCD_USBD_CANCELED;
         x->State = HCD_XFER_DONE;
         InsertTailList(&hc->DoneList, &x->Link);
         XhciControllerLockRelease(&hc->Hc, oldIrql);
@@ -1717,6 +1726,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG gone;
     ULONG parked;
     ULONG unreadable;
+    ULONG latched;
 
     x = NULL;
     kick = NULL;
@@ -1726,7 +1736,11 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * request that passed hcd_urb.c's test as it was set is held too. */
     unreadable = hc->Hc.Tol.Unreadable;
     gone = dev->Gone;
-    pipe = gone ? NULL : hcdPipeFromHandle(dev, req->Handle);
+    /* 37.6: and the shutdown latch under the lock it is set under, so a
+     * request either sees it or is queued before the flush that follows
+     * the halt (record 13 section 5.8). */
+    latched = hc->ShutLatched;
+    pipe = (gone || latched) ? NULL : hcdPipeFromHandle(dev, req->Handle);
     if (pipe != NULL && pipe->Closed) {
         pipe = NULL;
     }
@@ -1770,6 +1784,16 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         (VOID)InterlockedIncrement((PLONG)&hc->UrbsGone);
         (VOID)InterlockedDecrement(&dev->Refs);
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
+    }
+    if (latched) {
+        /* Never DEVICE_GONE, which HcdIoDeferred would park on the PDO
+         * for a stop that a shutdown never sends. */
+        if ((req->Flags & HCD_IO_ISOCH) != 0) {
+            HcdIoIsoRefused(urb, XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+        }
+        (VOID)InterlockedDecrement(&dev->Refs);
+        return HcdIoRefuseLater(pdo, irp, urb,
+                                XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
     }
     if (pipe == NULL) {
         return hcdRefuse(hc, dev, pdo, irp, (PURB)urb, HCD_USBD_INVALID_PIPE);
@@ -1871,6 +1895,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
      * for the rest of its life; its entry goes back. */
     hcdWideRelease(hc, x);
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
+        !hc->ShutLatched &&
         (pipe->Paused || pipe->TruncHeld ||
          (pipe->Exclusive != NULL && pipe->Exclusive != x &&
           x->Seq > pipe->Exclusive->Seq) ||
@@ -1885,7 +1910,10 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
-    if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested) {
+    /* 37.6: past the shutdown latch neither held nor published (record 13
+     * section 5.8). */
+    if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
+        !hc->ShutLatched) {
         if (x->Control) {
             for (i = 0; i < sizeof(creq); i++) {
                 ((PUCHAR)&creq)[i] = 0;
@@ -1959,6 +1987,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         x->Status = dev->Gone      ? HCD_USBD_DEVICE_GONE
                     : (pipe->Closed || x->CancelRequested)
                         ? HCD_USBD_CANCELED
+                    : hc->ShutLatched ? XHCI_USBD_STATUS_DEV_NOT_RESPONDING
                     : answer == XHCI_XFER_BUSY ? HCD_USBD_ERROR_BUSY
                     : (answer == XHCI_XFER_ISO_MALFORMED ||
                        answer == XHCI_XFER_ISO_TOO_LARGE)
@@ -2829,6 +2858,52 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
     }
     return 1;
+}
+
+/*
+ * The shutdown latch's transfer flush (37.6, record 13 section 5.8): on the
+ * power path after the shutdown's halt, the halt proven, every pipe of
+ * every device - the set the thread's drain walks (hcd_enum.c,
+ * hcdDrainAll), a device reached twice drained harmlessly twice - drained
+ * DEVICE_NOT_RESPONDING: its waiting IRPs, held records, engine queue and
+ * promoted records. The device is not marked gone and its pipes stay
+ * open; the TDs stay on the halted rings, so the saved image is dropped
+ * first and a resume, should one ever come, reinitializes rather than
+ * restoring over them. The port and slot tables are the thread's, stable
+ * here because the power gate keeps the thread out of its pass. IRQL:
+ * PASSIVE_LEVEL, the power gate held, no lock held.
+ */
+static VOID hcdShutDrainDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    ULONG dci;
+
+    HcdIoDrainPipe(hc, &dev->Ep0Pipe, XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+    for (dci = 2; dci < 32; dci++) {
+        if (dev->Pipes[dci] != NULL) {
+            HcdIoDrainPipe(hc, dev->Pipes[dci],
+                           XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+        }
+    }
+}
+
+VOID HcdIoShutFlush(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+    ULONG i;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->Hc.SavedStateValid = 0;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    for (i = 0; i < HCD_PORT_COUNT; i++) {
+        if (hc->Ports[i].Device != NULL) {
+            hcdShutDrainDevice(hc, hc->Ports[i].Device);
+        }
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        if (hc->SlotDevice[i] != NULL) {
+            hcdShutDrainDevice(hc, hc->SlotDevice[i]);
+        }
+    }
 }
 
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
