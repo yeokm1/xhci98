@@ -37,20 +37,31 @@ and do not add a conclusion to it.
 ## 1. What the project is, and why it needs any of this
 
 `xhci98.sys` is an independently written WDM kernel-mode driver for xHCI host
-controllers, targeting Windows 98 SE to Windows 7. It is built as a
-miniport of Microsoft's `usbport.sys` (see `AGENTS.md`, "Architecture
-Overview"), which means it must fit an interface, `USBPORT_REGISTRATION_PACKET`
-and its callbacks, that Microsoft never documented.
+controllers, targeting Windows 98 SE to Windows 7. Since `2.0.0.0` it is a
+monolithic host controller driver: it replaces Microsoft's `usbport.sys`, the
+hub driver and the composite parent with code of this project's own (see
+`AGENTS.md`, "Architecture Overview", and design record 13). Up to `1.2.0.0`
+it was a miniport of `usbport.sys`, which meant it had to fit an interface,
+`USBPORT_REGISTRATION_PACKET` and its callbacks, that Microsoft never
+documented; that miniport is frozen, and its sources are on branch
+`1.2.0.0`.
 
-Everything in this file exists because of that one problem: to make an
-independent driver plug into an undocumented interface, the shape of the
+Either way the driver plugs into interfaces Microsoft documented only in
+part. The miniport plugged in beneath `usbport.sys`. The host controller
+driver sits beneath Windows' own class drivers (`hidusb.sys`, `usbstor.sys`,
+`usbaudio.sys` and others), the helper exports of `usbd.sys`, and the
+Device Manager pages (`usbui.dll`, `sysclass.dll`). Everything in this
+file exists because of that one problem: to make an independent driver
+plug into an undocumented or partly documented interface, the shape of the
 interface has to be determined. Two sources supply it.
 
 - ReactOS reimplements the whole NT5-era USB stack in readable C, including
-  `usbport` and three miniports written against it. It supplies most of the
-  interface description.
-- The `usbport.sys` binaries already installed on the target machines supply
-  the target-specific contracts where ReactOS differs from them, omits
+  `usbport`, `usbhub` and three miniports written against `usbport`. It
+  supplies most of the interface description.
+- The Microsoft binaries already installed on the target machines
+  (`usbport.sys` for the miniport; the class drivers, `usbd.sys` and the
+  Device Manager pages for the host controller driver) supply the
+  target-specific contracts where ReactOS differs from them, omits
   something, or (as happened repeatedly) carries a guard the shipping code
   does not have.
 
