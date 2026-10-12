@@ -502,6 +502,13 @@ changing the three layers:
   closed, the release raises `DpcClosed` with an interlocked exchange
   (the ISR and the enum thread are gone by then).
 
+**Amended for roadmap-hcd 37.6.** The shutdown latch (section 5.8) adds
+one word under the controller lock, `ShutLatched`, set with `PowerDown` in
+one hold before the shutdown's halt and read by every admission that
+would otherwise leave a request waiting for a D0; its flush runs on the
+power path under the power gate, takes its lists under the controller
+lock and completes outside it, and creates no thread.
+
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
 the topology only through its own device object, whose lifetime 5.2 pins to
 the PDO's remove. It takes the controller lock to queue a transfer and nothing
@@ -972,6 +979,117 @@ Restart) hung after the controller's D3 with the guest in real mode, and a
 It is outside this wait (no relations answer is involved after the D3)
 and was not bisected. Not read here: Windows ME, Driver Verifier, a
 SuperSpeed device, and a device that never answers (QEMU models none).
+
+### 5.8 The shutdown latch (task 37.6, 2026-10-12)
+
+**The gap.** After the controller's D3 nothing the bus holds can end by
+itself. A transfer URB admitted then is published on a ring of a controller
+that is not initialized: the doorbell is dropped and the TD waits for the
+resume's reinitialization to complete it (`hcd_io.c`, `HcdIoMapped`). A
+command URB, `RESET_PORT` or a streams request waits on `SlowIrps` for
+`HcdCfgService`, which the thread runs only on a powered controller
+(`hcd_enum.c`, `HcdEnumService`). A record held on a pipe, or an IRP
+waiting for a record, waits for a release only a running ring gives. At
+S3 and S4 that is the design: the D0 that follows serves or completes
+every one. At S5 no D0 follows, and each of them waits for good. No
+observed hang rests on it - Windows ME's shutdown hang with an unopened
+disk was traced to ME itself, with nothing reaching the bus after the D3
+(`runs/run-36.md`) - so this is hardening of a gap `2.2.0.0` has too.
+
+**The latch.** `hc->ShutLatched`, a word appended at the end of
+`HCD_CONTROLLER`, written and read under the controller lock. It is set
+when the controller leaves D0 and its system state is
+`PowerSystemShutdown` (`Common.SystemPower`, written by `hcdSystemDone`
+from the system IRP before it asks for the device IRP), on both routes
+there: the device SET_POWER to D3, and the direct transition a failed
+`PoRequestPowerIrp` leaves to the work item (`hcd_power.c`). It is set
+**in the same hold of the controller lock as `PowerDown`**
+(`hcdSuspendSettled`, record 14 section 4.4), before
+`XhciSuspendController` halts the controller; a controller already
+suspended when the shutdown's D3 arrives (an earlier direct transition
+left it suspended in D0) takes it at that D3 instead, there being no halt
+left to precede. The pure decision is `XhciTolShutLatch` (`xhci_tol.c`):
+only the shutdown state latches, so S1 to S4 keep today's
+hold-until-resume. A D0 clears it, under the same lock, before the resume
+runs: no D0 follows an S5 on any target read here, and one that did must
+find the bus serving again.
+
+**Admission after the latch.** Every path that would leave a request
+waiting reads the latch under the controller lock it is set under, so a
+request either sees it or was queued before it and is in the flush below:
+
+- `HcdIoSubmit` (a transfer URB): refused `USBD_STATUS_DEVICE_NOT_RESPONDING`
+  through `HcdIoRefuseLater`, at the next tick, never inline (a client
+  resubmitting from its completion routine would recurse) - after the
+  containment's hold (35-T.6, which keeps its own rule) and after a gone
+  device's `DEVICE_GONE`, which `HcdIoRefuseLater` completes and nothing
+  parks.
+- `HcdCfgQueue` (a command URB, `RESET_PORT`, a streams request): a URB is
+  refused the same way. `RESET_PORT` and the two streams requests carry no
+  URB, and `HcdIoRefuseLater`'s DPC reads `Argument1` as one, so they are
+  completed inline `STATUS_UNSUCCESSFUL` - what `hcdCfgComplete` makes of
+  `DEVICE_NOT_RESPONDING` for a request without a URB, so a refused one and
+  a flushed one read the same. A port reset is not resubmitted from a
+  completion routine, which is why the gone device's `NO_SUCH_DEVICE` is
+  completed inline already.
+- A record already taken and launched after the latch (`hcdGo`), or mapped
+  after it (`HcdIoMapped`, `hcdWideMapped`, `hcdWidePublishLocked` for a
+  promoted record): never held and never published; it goes to the done
+  list with `DEVICE_NOT_RESPONDING`, as a record of a gone device goes with
+  `DEVICE_GONE`, and `HcdIoDeferred` completes it at the next tick
+  (`!engine`, so `HcdIoRefuseLater`). This is also how a waiting IRP handed
+  a record by a completion, and a record still in the map pump at the
+  flush, end.
+
+**Never `DEVICE_GONE`.** `HcdIoDeferred` parks a transfer that completes
+`DEVICE_GONE` on its PDO (`HcdIoPark`) until an abort, a cancel or the
+PDO's stop or removal - none of which a shutdown sends - so that status
+would only move the wait. `DEVICE_NOT_RESPONDING` (`0xC0000005`) is what
+a transaction that got no answer completes with, and `XhciPipeNtStatus`
+maps it to `STATUS_UNSUCCESSFUL`.
+
+**The flush, after the halt.** On the power path, at PASSIVE_LEVEL, the
+power gate held - so the thread is not in a pass and no slow IRP is in its
+service, and no suspend, resume or recovery runs beside it - after
+`XhciSuspendController` (or at the D3 of a controller already suspended):
+
+1. **Commands**, always once latched: every IRP on `SlowIrps`, and every
+   device's IRPs selective suspend deferred (`SlowDeferred`, but those a
+   cancel routine owns, which that routine completes), taken off under the
+   controller lock and completed after it with `DEVICE_NOT_RESPONDING`
+   (`hcdCfgComplete`; a request without a URB `STATUS_UNSUCCESSFUL`). They
+   hold no DMA.
+2. **Transfers**, only with the halt proven: neither
+   `XHCI_EXT_FLAG_RUNNING` nor `XHCI_EXT_FLAG_HW_RUNNING` left set by the
+   quiesce (it clears both on `HCHalted` read set or on Bus Master Enable
+   read back clear, and leaves them on neither), the common buffer not
+   pinned, the controller not contained (`Tol.Unreadable`). Then every
+   pipe of every device with a slot (`SlotDevice[]`) and of every port's
+   device - the set `hcdDrainAll` walks - is drained with
+   `DEVICE_NOT_RESPONDING` (`HcdIoDrainPipe`: waiting IRPs, held records,
+   the engine's queue, a promoted record through its machine), the
+   device's pipes staying open and the device not marked gone. The saved
+   image is dropped (`SavedStateValid` 0) in the same step: the drained
+   TDs are still on the rings, and a resume, if one ever came, must
+   reinitialize rather than restore over them. Without the proof the
+   transfers stay where they are, as `HcdIoDeviceDrain` keeps them on a
+   pinned buffer: completing a request whose buffer the controller may
+   still master is worse than a wait. A contained controller keeps 35-T.6's
+   holds in full (the flush takes no command either).
+
+The pure decision is `XhciTolShutFlush` (`xhci_tol.c`, host suite
+`test_tol`). The log ring notes `power.shut`: bits 1-0 the decision
+(1 commands, 2 transfers), bits 31-8 the commands completed.
+
+**What it does not do.** It creates no thread and waits on none (roadmap
+36.35's rule: on Windows 98 SE a thread's creation during the S5
+transition never returned): every completion is made on the power path
+itself or by the PDO's refusal timer. It sends no command and touches no
+register beyond the halt the D3 already makes. It does not release
+requests already parked on a PDO for a departed device (`HcdIoPark`),
+whose rule is usbport's. It changes nothing at S1 to S4, at a stop or a
+removal, or with the latch clear.
+
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the
