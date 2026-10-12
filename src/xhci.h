@@ -8494,6 +8494,21 @@ typedef struct _XHCI_EXTENSION {
     ULONG DnctrlEnables;
     ULONG DnctrlReadback;
 
+    /*
+     * The event ring check after the re-arm (roadmap-hcd 37.7, design record
+     * 17 section 4.1): an interrupt-delivered drain that, once IMAN.IE is
+     * back, finds an event at the dequeue queues one more drain rather than
+     * leave it to the 100 ms backstop. QEMU's MSI-X drops the message raised
+     * while the vector is unused across the IE toggle; on a compliant
+     * controller EHB and IP cover the window and the extra drain finds what
+     * the interrupt's would have. RearmPeekPending counts the peeks that saw
+     * an event, RearmPeekDrains those whose drain was queued (not already
+     * queued, not closed). Appended after the DNCTRL words, two ULONGs, so
+     * the parity TrailingPad keeps is unchanged.
+     */
+    ULONG RearmPeekPending;
+    ULONG RearmPeekDrains;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;

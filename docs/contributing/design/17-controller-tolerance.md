@@ -350,6 +350,67 @@ Moving the step off the thread revises this section's first paragraph,
 the owner's design of 2026-10-06 ("a step of its own on each
 controller-thread pass"). Orchestrator decision, owner confirmed 2026-10-11.
 
+**Amended for 37.7 (roadmap-hcd 37.7): the event ring check after the
+re-arm.** Phase 36's matrix counted `BackstopDrains` in every NT 6
+snapshot under `msi=off,msix=on` (Windows 7 3 to 20 a session, Vista 115
+to 288) and 0 under MSI, the line and polling (`runs/run-36.md`, "MSI-X
+BackstopDrains (NT6)"). The cause read from QEMU's source and the trace is
+QEMU's: qemu-xhci un-uses and re-uses the MSI-X vector on every IMAN.IE
+toggle and raises the interrupt before it marks the vector used again, and
+`msix_notify` returns on an unused vector before its mask and pending-bit
+check. An event written while the ISR's IE=0 stood is therefore never
+signalled, and it waits for this backstop. On a compliant controller IP
+set while IE was clear is delivered once IE is back (xHCI 1.2c 5.5.2.1),
+so `2.3.0.0` shipped unchanged.
+
+The check closes the wait without touching the interrupter:
+
+- **Where.** `hcdIsrDpc`, after `XhciEventDpc` returns, on an interrupt
+  delivery (not `XHCI_POLL_DELIVERY_POLL`, whose drain is followed by
+  record 15 section 7.1's peek instead). `hcdRearmPeek`.
+- **What.** Under the controller lock: `hcdDrainAdmitted`, the re-arm's
+  own condition (`XHCI_EXT_FLAG_INTERRUPTS`, so a drain usbport-style
+  disabled interrupts behind queues nothing), and `XhciEventRingPending`
+  at the dequeue. An event there is counted in `RearmPeekPending`, and
+  `IsrDpc` is queued through the ISR's admission (`hcdQueueDrain`'s), counted
+  in `RearmPeekDrains` when the insertion was taken. The qemu flavour's
+  start hold (task 36.4) holds it back as it does the backstop.
+- **No register.** It writes nothing: ERDP, EHB and IE stay the drain's,
+  and the ISR's IE=0 (record 05, "The DIRQL exception") is untouched. This
+  is Codex's preferred option (2026-10-11) over re-arming before the final
+  ERDP write, which would let the interrupter fire into a pass in progress,
+  or a blind second ERDP write.
+- **Bounded, never a chain.** One peek and at most one insertion per
+  interrupt-queued drain. The insertion passes `HCD_DRAIN_FROM_PEEK` as
+  `SystemArgument1` (every other insertion passes NULL), and a drain that
+  carries it does not peek, so a further drain waits for an interrupt,
+  which moderation paces. Codex's round 1 (2026-10-12) found the first
+  draft's re-peeking drain could chain DPCs back to back under sustained
+  completions, holding a processor at DISPATCH_LEVEL and starving the
+  controller thread. An event stranded in the second drain's own window
+  waits for the backstop, as before 37.7. `KeInsertQueueDpc` keeps the
+  arguments of whichever insertion queued the DPC and refuses the other.
+  When an interrupt queued it first, the peek's insertion is refused and
+  costs nothing, and that drain runs with NULL and peeks. When the peek's
+  insertion won, an interrupt's is refused and the drain runs with the
+  marker and does not peek; that loses only a peek, since the drain itself
+  takes what the interrupt signalled.
+- **Cost on a compliant controller.** One cached memory read per drain.
+  An event that arrives between the re-arm and the peek is drained twice
+  over: by the DPC this queues and by the interrupt it also raises, the
+  second finding the ring empty, the cost the backstop already accepts
+  (above).
+- **Release.** The insertion repeats `hcdQueueDrain`'s pairing with
+  `DpcClosed`, the one the backstop uses; the caller is itself counted in
+  `DpcsInFlight`.
+
+Expected: `BackstopDrains` 0 under MSI-X on Vista and 7 with
+`RearmPeekDrains` carrying the events the backstop used to, and the line
+and MSI rows unchanged in function and timing (their peek counters count
+only events that arrived in the window, each also interrupted). Neither counter is
+gated by `XhciTolerance`: the check is part of the drain, not a tolerance
+behaviour. Orchestrator design, owner to confirm.
+
 ### 4.2 The soft retry (35-T.2, unconditional but for an exclusion list)
 
 **Scope.** A USB Transaction Error on a bulk or interrupt endpoint that has
