@@ -122,6 +122,119 @@ BF.6 in "Planned work" since 2026-10-12), and Windows 7 and Vista x86,
 whose MSI-X goes through `xhcimsi.sys`.
 
 
+## 37.final - The legs from the `2.3.1.0` asset
+
+**Verdict: PASS** (2026-10-13). Every clause read on the ten install legs,
+37.3's shutdown legs and 37.5's `portsw\` legs passed; no driver defect
+was found. The open items below are documents, the vehicle, and one hang
+not yet attributed.
+
+**The package** is the published asset, `out\xhci98-2.3.1.0.zip`, SHA-256
+`F835E1DC886D6AFDB84B25E7BD89C229AE56CC0B849BBA1E232C2DFE3B707AC6`, the cut
+of `ffdc02f1`, `release-x86` and `release-x64`; each worker checked the
+hash and that every staged file equals its zip entry.
+
+**The vehicle.** Development host A, QEMU 11.1.0, TCG, `qemu-xhci,p2=4,p3=4`,
+one fresh overlay per guest over the read-only bases of the 37.1 and 37.4
+kits. Kit `out\p37-fin\kit` (the 37.1 kit retargeted: owner `p37-fin`,
+HMP 57500+idx, overlays `vm\t37fin`; `PORTSW\` staged from the zip's
+`portsw\`; the NT helpers from the 37.4 kit, with an XP-and-later `pnpctl`
+for the 32-bit NT guests, so Windows 2000 used Device Manager). Four
+workers ran the guests in parallel. Readings, shots and `XHCISNAP` texts in
+`out\p37-fin\legs\<guest>\` (`notes.txt` is each guest's full list).
+Devices: a Bulk-Only `usb-storage` stick and a `usb-uas` disk at
+SuperSpeed, a `usb-mouse`, and `usb-hub` on port 4 last with `usb-audio`
+behind it.
+
+**The install legs** (the clauses of the release notes' row "Every target,
+from the release package"):
+
+| Guest | Install route and result | Devices | Lifecycle |
+| --- | --- | --- | --- |
+| 98 SE, NUSB 3.3 | 4.1: wizard, D:\, the 98 SE CD for `usbd.sys`, restart; 4.4 and 4.7 recorded | mouse, stick and UAS `fc /b` clean, hub, audio bound (not played: 98 SE's USB audio in a VM) | disable and enable (the first enable froze the clock; the retry passed, see below), remove and refresh, disks clean |
+| 98 SE, SweetLow | 4.1, the same prompts; restart | as above | disable, enable, remove, refresh; Shut Down with all attached in 3.5 s |
+| ME, stock | 4.5: Specify a location D:\, no CD, restart | as above, TONE.WAV played whole (one unbroken 20.000 s tone, WAV capture) | disable and enable (Code 22), remove and Refresh, disks clean |
+| 2000 SP4, clean | the wizard's Search and Specify a location (row 4.2's Have Disk fails on a clean base, see below); restart (the transfer volume's, per `setupapi.log`) | as above, the tone whole (WAV capture) | disable, enable, uninstall and scan, disks clean |
+| XP SP3 | 4.6, Continue Anyway, no restart | as above, the tone played (isochronous packets 1720 to 21750) | disable, enable, remove, rescan |
+| XP x64 SP2 | 4.8, no restart | as above, played (1700 to 21730) | disable, enable, remove, rescan |
+| Vista SP2 x86 | 4.9, restart, Code 1 until then; MSI-X through `xhcimsi.sys` | as above, played (0 to 20380) | disable, enable, remove, rescan (Code 1 until a restart that was not prompted, see below) |
+| Vista SP2 x64 | 4.10, F8, Install anyway, no restart | as above, played (21.9 s host clock) | disable, enable, remove, rescan, restart with devices |
+| 7 SP1 x86 | 4.9, restart, Code 28 until then; MSI through `xhcimsi.sys` | as above, played | disable, enable, remove, rescan (Code 1 until a restart, as documented), restart with devices |
+| 7 SP1 x64 | 4.10, F8, Install anyway, no restart; all nineteen values written at their defaults | as above, played | disable, enable, remove, rescan, restart with devices |
+
+Every guest's `XHCISNAP` showed driver `2.3.1.0` running. "Played" on the
+NT 5.1 and NT 6 guests is the driver's isochronous packet counter rising by
+about 20,000 over the 20 s tone into QEMU's silent backend; nothing was
+heard there.
+
+**37.3, shutdown with devices attached** (twice per guest; "off" is QEMU's
+`paused (shutdown)` under `-no-shutdown`):
+
+| Guest | Run 1 | Run 2 | After |
+| --- | --- | --- | --- |
+| 98 SE, the 36.35 case | off in 3.5 s | off in 3.5 s | devices back, client rebound, `fc` clean |
+| ME | off in 4 s | off in 4 s | devices back (cold relaunch, see below) |
+| 2000 (`acpi=off`) | "safe to turn off" within 21 s | within 4 s | devices back, `fc` clean |
+| XP | off in 15 s | off in 15 s | devices back, `fc` clean |
+| 7 x64 | off in 7.4 s | off in 5.9 s | devices back, `fc` clean |
+
+The 98 SE case followed 36.35's leg (`run-36.md`, p36-final checklist
+A-98): `XhciSelectiveSuspend` 1, the selective-suspend test client bound to
+the mouse with reads on (`-PmMouse`; the stick-bound `-PmClient` has no
+interrupt-IN endpoint to read), `susp.switch=1` and reads completing before
+each Shut Down, with the stick, the UAS disk, the hub and audio attached.
+XP x64 and Vista x86 also shut down in 11 s with everything attached.
+
+**37.5, the scripts from `portsw\`:** on 98 SE and ME under COMMAND.COM
+(from `D:\PORTSW`), and on 2000, XP, XP x64 and 7 x64 from cmd.exe (7
+elevated): `portsw.vbs show`, `portsw-on.bat`, show, `portsw-off.bat`, show;
+`XhciIntelPortSwitch` read 0, 1, 0 in the controller's driver key each
+time. No message names the old location; run from elsewhere, the batch
+files point to `portsw\`. Not read: 32-bit 7 (7 x64 was).
+
+**Open items** (none blocks the release; each needs its own reading):
+
+- **Windows ME with a USB mouse attached at boot: the MS-DOS Prompt never
+  starts**, the CPU at 100%, the clock frozen and Msgsrv32 not
+  responding; without the mouse at boot all is normal. The kit has long
+  recorded the same symptom on 98 SE as a vehicle note ("a usb-mouse
+  present at boot breaks the DOS prompt"); this was the first ME boot with
+  one. Not read on `2.3.0.0` or on real hardware, so whether it predates
+  this release, and whether it is the driver's, is open.
+- **Release acceptance test row 4.2 on a clean Windows 2000**: the
+  controller sits under "Other devices", 2000 leaves USB out of the
+  hardware-type list, and Have Disk answers "does not contain information
+  about your hardware"; the Found New Hardware wizard's Search and Specify
+  a location route works. The row was read on bases where the controller
+  already had a driver.
+- **The UAS install on Windows 7**: no Found New Hardware wizard; Windows
+  searches Windows Update, says the device was not installed, and the
+  driver goes in through Device Manager. The readme says a wizard asks.
+  On Vista the wizard names the device by its own product string, not
+  "xHCI98 USB Attached SCSI Storage" (the name once installed).
+- **Vista x86, remove and rescan**: the controller came back at Code 1
+  until a restart, and no restart prompt was seen (only an "installed
+  successfully" balloon). 7 x86 on the same path behaved as documented.
+- **Two clock freezes on 98 SE as audio loaded** (an audio hot-add on the
+  regression guest; the first controller enable on the NUSB guest, the
+  USB mouse still moving), each passing on a retry: the release notes'
+  "a USB audio device can wedge the machine as it loads". Audio present
+  at boot also took `USBAUDIO.VXD` to a fatal exception in the startup
+  sound, the documented QEMU fault.
+- **Cosmetic**: `portsw-on.bat` and `portsw-off.bat` print "RESTART
+  WINDOWS" twice, once from the script and once from the batch file. One
+  98 SE Driver tab read Date 10-12-2026 against the INF's 10/13/2026;
+  which guest is not recorded (the regression guest keeps the driver key
+  of an earlier install and has `XHCI98.SYS` copied at boot, which would
+  explain it), and the install guests' 4.4 records read `2.3.1.0`.
+- **The vehicle**: the kit's QEMU path does not exist on this host (the
+  workers used scoop's QEMU 11.1.0); `system_reset` after a soft power-off
+  hangs ME's real-mode loader, and a cold boot of ME on plain `pc` with USB
+  devices hangs in SMM (`smm=off`, as 98 SE runs); on 7 a UAS disk comes
+  up Offline from QEMU's shared VVFAT disk signature (`diskpart online`);
+  `REGA.BAT` on 98 SE can send the previous export, since COMMAND.COM does
+  not wait for regedit.
+
 ## The roadmap entry before it was condensed (2026-10-12)
 
 On 2026-10-12 the owner had Phase 37's roadmap entry cut to one line a
