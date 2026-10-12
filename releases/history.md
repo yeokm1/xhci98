@@ -37,11 +37,13 @@ machines. The release notes say what was read on which system.
 - Windows ME needs no USB 2.0 stack: the `2.3.0.0` package was read on a
   stock Windows ME with none installed, and the documents now say so.
 - At shutdown, after the controller is powered off, a new transfer,
-  command or port reset is refused at once and what was queued is failed,
-  instead of waiting for a resume that never comes. Hardening; no hang
-  was traced to it.
+  command or port reset is refused at once instead of waiting for a
+  resume that never comes, and what was queued is failed once the
+  controller is proven halted. Hardening; no hang was traced to it.
 - An event left waiting when the interrupt is re-armed is served at once
-  instead of at the driver's 100 ms check. Seen only on QEMU's MSI-X,
+  by one more bounded pass, instead of at the driver's 100 ms check,
+  which still catches one left during that pass. Seen only on QEMU's
+  MSI-X,
   where a UAS disk on Vista x64 and 7 x64 went from about 4 MB/s to about
   100 MB/s.
 - `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` are in one `portsw\`

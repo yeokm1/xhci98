@@ -1,11 +1,13 @@
 # Issue 15 - Windows XP x64 Setup booted from a USB stick on an Intel xHCI stops with STOP 0x7B: the firmware's port reset was still running, and the driver gave the port up
 
-Status: **fixed in source for the next release (roadmap-hcd task 37.2);
-read on the owner's E7250 on 2026-10-12 up to text-mode Setup's partition
-screen.** Reported on a Lenovo ThinkPad X230 against `2.3.0.0` and
-reproduced the same day on the owner's Dell Latitude E7250 with the
-reporter's own install ISO. The X230 itself has not been read on the fixed
-driver; the owner's reading is that its stop is the same one (the same
+Status: **fixed in `2.3.1.0` (roadmap-hcd task 37.2); read on the owner's
+E7250 on 2026-10-12: text-mode Setup's partition screen on a diagnostic
+build with both fixes, then an install to the desktop on the
+`release-x64` build of `2072d222`.** Reported on a Lenovo ThinkPad X230
+against `2.3.0.0` and reproduced the same day on the owner's Dell
+Latitude E7250 with the reporter's own install ISO. The X230 itself has
+not been read on the fixed driver, and that reading is not owed (owner,
+2026-10-12); the owner's reading is that its stop is the same one (the same
 ISO, the same stop code and parameter, and no optical drive on either
 machine). Two defects stood in the way, one behind the other (sections 4 and
 5); the first is in every release since `2.0.0.0`, and the second since UAS
@@ -145,7 +147,8 @@ reached the partition screen.
 `2072d222` (no diagnostic screen; sha256 `2FCAD04B...F94D`) in both
 `XHCI98.SY_` copies on the stick: Setup ran from the stick through text
 mode and GUI mode to the desktop, and Device Manager showed no device
-marked with a problem. Owed: the X230 reporter's reading.
+marked with a problem. The X230 reporter's reading is not owed (owner,
+2026-10-12).
 
 ## 7. Rules kept
 

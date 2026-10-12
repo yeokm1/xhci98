@@ -6280,14 +6280,16 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 
 Nineteen, all written: sixteen before task 36.51, the last three by it. **No
 value is a tri-state** whose absence means something no written number
-does, so none is left unwritten. What a written default changes is
-diagnostic only: the "was it read" markers - `XHCISNAP`'s
+does, so none is left unwritten. Except for `XhciForceBulkOnly` since
+roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a
+written default changes is diagnostic only: the "was it read" markers - `XHCISNAP`'s
 `XhciWideMap` line (the number instead of "not set (the default)"),
 `SuspSwitchRead` and `susp.switch.value`, `Usb2HubSpeedSwitchRead` and
 `hub.speed.value`, and the like for the older sixteen - show the written
 value instead of "absent". `txtsetup.oem` is not an INF and writes none: F6
 Setup's first boot runs at the code defaults, which are the same numbers
-except the moderation interval's.
+except the moderation interval's and, since 37.2, `XhciForceBulkOnly`'s
+(Bulk-Only in text mode).
 
 Not in the table, and written by no INF on purpose:
 

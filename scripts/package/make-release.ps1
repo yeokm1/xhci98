@@ -3699,10 +3699,10 @@ does not touch it.
 
   - Pressing F6 itself needs the firmware's own USB keyboard support.
   - The floppy must be drive A: as the firmware sees it.
-  - A USB disk that supports UAS (most USB 3 enclosures and SSDs) is
-    usually not usable during Setup, even if it also supports the older
-    Bulk-Only mode. Most USB flash sticks are Bulk-Only only and always
-    work; use one of those.
+  - A USB disk that supports ONLY UAS is not usable during Setup. One
+    that also supports the older Bulk-Only mode, as most USB 3
+    enclosures, SSDs and sticks do, runs as Bulk-Only during Setup and
+    works, as do Bulk-Only flash sticks.
   - Installing Windows ONTO a USB disk is not supported.
   - A USB DRIVE PRESENT AT THE PARTITION SCREEN TAKES THE LETTER C:.
     Unplug the USB drives you do not need, or Windows installs to the next
@@ -3724,13 +3724,16 @@ does not touch it.
     any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
     work. This package cannot carry those files. Windows 2000 does not ask.
 
-  What has run, in virtual machines only: text mode with a USB keyboard
-  and a USB stick on Windows 2000 and XP, and the Recovery Console on both,
-  logged in and running commands with the USB keyboard alone, on this
-  release's code; and Windows XP and XP x64 installed to the desktop this
-  way on the build before it. Nothing of this has run on real hardware. A
-  repair install, Windows 2000's Emergency Repair Disk and Windows XP's
-  Automated System Recovery were not tried.
+  What has run in virtual machines: text mode with a USB keyboard and a
+  USB stick on Windows 2000 and XP, and the Recovery Console on both,
+  logged in and running commands with the USB keyboard alone; and
+  Windows XP and XP x64 installed to the desktop this way. On real
+  hardware: Windows XP x64 Setup started from a USB stick on a Dell
+  Latitude E7250's xHCI controller, with this driver integrated into the
+  install, ran to the desktop on this release's code. Nothing else of
+  this has run on real hardware. A repair install, Windows 2000's
+  Emergency Repair Disk and Windows XP's Automated System Recovery were
+  not tried.
 
 UPDATING FROM AN EARLIER 2.x RELEASE
 ....................................
@@ -4094,7 +4097,8 @@ debug throughout, in its build scripts and its documentation alike.)
 Every value this driver reads from the controller's driver key. There are
 nineteen, all DWORDs, and the install writes all nineteen, each at the
 default it states below except XhciImodInterval250ns, which it writes as
-160, so every one is already in the key to change. The install writes
+160, and XhciForceBulkOnly, which it writes as 0 where absent counts as
+1, so every one is already in the key to change. The install writes
 each only where it is missing, so a value you changed survives an
 install or update; to go back to the default, set it by hand, or delete
 the value and update the driver. If an earlier install left

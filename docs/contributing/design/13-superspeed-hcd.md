@@ -560,18 +560,18 @@ The root-hub sections write no value of the controller's: they carry the
 loader values on Windows 98 and the hub property-page registration on every
 path (section 8), which the gate's `HCD-HUBPAGE` rule holds them to.
 
-Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD
-reads, on every install path: the three above, `XhciFastPollFsLs`, and
-`XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and
-`XhciFirstEnumPortMs` (33.3), each at the driver's own default but the
-interval and, since roadmap-hcd 37.2, `XhciForceBulkOnly`: the INFs write
-0 (UAS) and the driver reads an absent value as 1 (Bulk-Only), for
-text-mode Setup (section 5.6; issue 15). Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
-install or update writes only a missing value and keeps one the user set; a
-later release therefore cannot change a default on a machine that already
-holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
-and since task 34.3 an eighth, `XhciIntelPortSwitch`, under the same
-flag (at 1; at 0 since task 36.42).
+Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD reads,
+on every install path: the three above, `XhciFastPollFsLs`, and
+`XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and `XhciFirstEnumPortMs`
+(33.3), each at the driver's own default but the interval and, since
+roadmap-hcd 37.2, `XhciForceBulkOnly`: the INFs write 0 (UAS) and the driver
+reads an absent value as 1 (Bulk-Only), for text-mode Setup (section 5.6; issue
+15). Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an install or
+update writes only a missing value and keeps one the user set; a later release
+therefore cannot change a default on a machine that already holds the old one.
+The gate's `VAL-*` rules hold all seven, flags included, and since task 34.3 an
+eighth, `XhciIntelPortSwitch`, under the same flag (at 1; at 0 since task
+36.42).
 
 **Amended for `2.3.0.0` (roadmap-hcd 36.20).** The INFs write sixteen
 values under the same rule and flag: the eight above; `XhciTolerance`,
@@ -588,6 +588,10 @@ every value the driver reads is written by the INFs with the driver's own
 default, so the INFs write nineteen, these three at 0, 0 and 1 - each the
 value that reads as an absent one does - under the same rule and flag.
 `txtsetup.oem` still writes none, so F6 Setup runs at the code defaults.
+**Amended by roadmap-hcd 37.2 (2026-10-12):** `XhciForceBulkOnly` is the
+one value whose written number is not what an absent one reads as: the
+INFs write 0 and the driver reads an absent one as 1 (above, and section
+5.6).
 
 The package is `xhci98-<version>.zip`, as the miniport's was - the published
 `releases\1.2.0.0` directory is never edited (`releases/README.md`) - staged by `make-package.ps1` from 26-A.1 and published by

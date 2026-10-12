@@ -183,14 +183,17 @@ QEMU virtual machines on development host A; each item says what was read.
   `2.3.0.0` package was read on a stock Windows ME with none installed,
   and the documents now say so ("Requirements", and the Windows ME row of
   "Targets and their standing").
-- **Nothing waits for ever on the controller after it is powered off for
-  shutdown.** A transfer, command or port reset that arrives then is
-  refused at once, and what was still queued is failed, where before it
-  waited for a resume that never comes at shutdown. Standby and hibernate
+- **After the controller is powered off for shutdown, a new request no
+  longer waits for a resume that never comes.** A transfer, command or
+  port reset that arrives then is refused at once, and once the
+  controller is proven halted, what was still queued is failed. A
+  transfer the controller might still write into is kept, as at any stop
+  where that is not proven ("Known limitations"). Standby and hibernate
   are unchanged. Hardening: no hang was traced to this gap. Read in QEMU
   on Windows 98 SE, shutting down with a stick and a mouse attached.
 - **An event left waiting when the interrupt is re-armed is served at
-  once** instead of at the driver's 100 ms check. Seen only on QEMU's
+  once**, by one more bounded pass, instead of at the driver's 100 ms
+  check, which still catches one left during that pass. Seen only on QEMU's
   MSI-X, which loses such an interrupt: on Windows Vista x64 and 7 x64
   there, a UAS disk ran at about 100 MB/s where `2.3.0.0` gave about
   4 MB/s. No real controller has been seen to lose one.
@@ -342,15 +345,15 @@ detail, and what each rests on.
 
 ## Targets and their standing
 
-Each target's row says what the `2.0.0.0` drivers were observed doing on
-that system, and where; `2.1.0.0`, `2.1.1.0`, `2.2.0.0`, `2.3.0.0` and
-`2.3.1.0` carry that code with the changes their history entries list, and
-the rows "What `2.1.0.0` changed", "What `2.1.1.0` changed", "What
-`2.2.0.0` changed", "What `2.3.0.0` changed" and "What `2.3.1.0`
-changes" say where each change was read. "The integration build" is the merged build of a release's
-code before its cut, in the never-published `qemu` flavour. The ten install
-legs are read on the `release` flavour of that build, and again from the
-release asset itself after the cut.
+Each target's row says what the `2.0.0.0` drivers were observed doing on that
+system, and where; `2.1.0.0`, `2.1.1.0`, `2.2.0.0`, `2.3.0.0` and `2.3.1.0`
+carry that code with the changes their history entries list, and the rows "What
+`2.1.0.0` changed", "What `2.1.1.0` changed", "What `2.2.0.0` changed", "What
+`2.3.0.0` changed" and "What `2.3.1.0` changes" say where each change was read.
+"The integration build" is the merged build of a release's code before its cut,
+in the never-published `qemu` flavour. The ten install legs are read on the
+`release` flavour of that build, and again from the release asset itself after
+the cut.
 
 | Target | Standing | What it rests on |
 |---|---|---|
@@ -2259,7 +2262,7 @@ information.
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
 | Standby (S3) on real hardware | Read only in virtual machines. At the `2.3.0.0` bench the ThinkPad E460's Windows 98 SE offered no Stand by, the Dell Latitude E7250's Windows 7 x64 had no graphics driver, and the ThinkPad P14s Gen 1 was not read |
 | Selective suspend and remote wake on real hardware | Read only in QEMU, which makes no SuperSpeed function wake and has no SuperSpeed hub. No real remote-wake device has been read: a USB 2.0 HID device waking a sleeping machine's bus, or a SuperSpeed device waking from a root port or from behind a USB 3 hub |
-| MSI-X on real hardware | Read only on QEMU's controller, whose MSI-X loses an interrupt now and then; since `2.3.1.0` the driver finds the event it would have announced when it re-arms the interrupt, where `2.3.0.0` waited for its 100 ms check (`XHCISNAP`'s BackstopDrains). On a real MSI-X controller BackstopDrains should stay near 0; not read. MSI was read on the Dell Latitude E7250 |
+| MSI-X on real hardware | Read only on QEMU's controller, whose MSI-X loses an interrupt now and then; since `2.3.1.0` the driver looks for such an event when it re-arms the interrupt and serves it in one more pass, where `2.3.0.0` waited for its 100 ms check, which still covers one left during that pass (`XHCISNAP`'s BackstopDrains). On a real MSI-X controller BackstopDrains should stay near 0; not read. MSI was read on the Dell Latitude E7250 |
 | `XHCIQUAL` on a line that is dead under DOS | Read only in QEMU. The Dell Latitude E7250's line is dead only under Windows' interrupt routing; under DOS it works, so its interrupt test passes there |
 | Windows 98 SE on the Dell Latitude E7250 | The interrupt routing repair under Windows 98 SE (PIC mode) has run on no machine: the E7250, the one machine read with that fault, runs XP x64 and 7 x64 |
 | `XhciWideMap` on real hardware | Not read on an updated 32-bit Windows 7, nor at `1` with a real UAS drive. In QEMU the UAS device holds one piece per stream, so a UAS drive at `1` could not be read there either |
