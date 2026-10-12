@@ -77,11 +77,12 @@ keeps both facts, since they describe the shipping driver.
 One case does not need any of section 1 or 2's generality: a bulk device on a
 root port, driven at SuperSpeed by the miniport and reported to
 `usbport.sys` as High-Speed. That proposal is
-[superspeed-storage-behind-a-switch.md](../../future-plans/superspeed-storage-behind-a-switch.md),
-and its section 2 says where the line between the two lies. With the miniport
-frozen it will not be built; it stays in `future-plans/` as the record of what
-it would have taken, and its `-0` transcription list is what Phase 29's `29-0`
-batch starts from.
+`docs/future-plans/superspeed-storage-behind-a-switch.md`, and its section 2
+says where the line between the two lies. With the miniport frozen it will
+not be built; it stayed in `future-plans/` as the record of what it would
+have taken until that folder was removed on 2026-10-12 (it is in git
+history at `00a3b9e`), and its `-0` transcription list is what Phase 29's
+`29-0` batch started from.
 
 ## 4. Scheduled: the decisions taken on 2026-10-02
 
@@ -121,7 +122,8 @@ is the index; this is the same list in the proposal's order:
   and the composite parent with no SuperSpeed port powered, proven against
   round 12's device matrix; SuperSpeed on root ports is Phase 29, hubs Phase
   30, streams and UAS Phase 31.
-- **The behind-a-switch proposal is not built.** It stays in `future-plans/`.
+- **The behind-a-switch proposal is not built.** It stayed in `future-plans/`
+  until 2026-10-12, and is in git history at `00a3b9e`.
 - **One cut, `2.0.0.0`, after UAS** (Phase 32).
 - **The hub class and composite splitting live inside the bus driver.**
   External hubs are objects of the bus, not PDOs; a composite device is split

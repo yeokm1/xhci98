@@ -293,7 +293,9 @@ implementation would first have to replace Option A with the Option B
 monolithic HCD before the xHCI layer gained the link, descriptor, burst, hub
 and bandwidth paths. What that takes is recorded in
 `docs/contributing/design/13-superspeed-hcd.md`; the narrower case of
-a bulk device on a root port is `docs/future-plans/superspeed-storage-behind-a-switch.md`.
+a bulk device on a root port was the proposal
+`docs/future-plans/superspeed-storage-behind-a-switch.md`, never built and
+removed on 2026-10-12 (in git history at `00a3b9e`).
 
 It is a driver-stack project of its own, scheduled on 2026-10-02 as this
 driver's successor, the HCD that took over `src\` and the name
