@@ -3185,8 +3185,7 @@ Please report what you find, on the project's GitHub page:
 
       https://github.com/yeokm1/xhci98/issues
 
-The form there asks for what a report needs. Section 7 says what is known
-already, so read that first.
+The form there asks for what a report needs.
 
 
 CONTENTS OF THIS FILE
@@ -3667,56 +3666,6 @@ virtual machines:
   hidclass.sys. Let Windows install them. A hidusbf setting on such a
   device has to be applied again (section 5).
 
-UPGRADING FROM THE EARLIER, USB 2.0-ONLY RELEASES (1.x)
-.......................................................
-
-This driver replaces the 1.x driver, which has the same file name,
-xhci98.sys. Going back is a reinstall of a 1.x package from its own
-download.
-
-  On every system, update the "USB 2.0 eXtensible Host Controller
-  (xhci98)" entry in Device Manager and pick the driver from a list with
-  Have Disk. Do not let Windows search: it can reinstall the old driver
-  from its own copy.
-
-  WINDOWS 98 SE WITH NUSB: DO NOT UPDATE WHILE THE 1.x DRIVER IS RUNNING.
-  NUSB's usbport.sys crashes the machine with a blue screen as it stops the
-  old driver. Instead:
-    1. Open an MS-DOS Prompt and type
-           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
-    2. Shut the machine down and switch it on again. The controller now
-       shows a yellow mark.
-    3. Device Manager -> the controller -> Update Driver -> "Display a list
-       of all the drivers in a specific location" -> Have Disk -> the
-       RELEASE-X86\ directory.
-    4. Pick "xHCI98 USB 3.x eXtensible Host Controller", give it the
-       Windows 98 SE CD when it asks for usbd.sys, and restart when asked.
-    5. Each USB device is found once more as new hardware.
-  If you already updated in place and got the blue screen, restart: this
-  driver comes up on its own.
-
-  On every system each USB device is a new entry in Device Manager after
-  the upgrade, so a hidusbf polling rate set under 1.x has to be set again
-  (section 5).
-
-  WINDOWS 98 SE WITH SWEETLOW'S STACK, AND WINDOWS ME: the same Update
-  Driver route, in place. Windows does not ask you to restart, but you
-  must: shut down and switch on again straight away. Until then USB
-  devices stop working. (Windows ME has not been tested as an upgrade.)
-
-  WINDOWS 2000: Update Driver -> "Display a list of the known drivers" ->
-  Have Disk. Pick "xHCI98 USB 3.x eXtensible Host Controller", the first
-  of three. It starts at once; at the next restart Windows may ask for
-  one more.
-
-  WINDOWS XP: Update Driver -> "Install from a list or specific location"
-  -> "Don't search. I will choose the driver to install" -> Have Disk ->
-  Continue Anyway. A second wizard follows for the root hub. No restart.
-
-  WINDOWS VISTA AND 7: Update Driver Software -> "Browse my computer" ->
-  "Let me pick from a list of device drivers on my computer" -> Have
-  Disk. Typing the folder into the search box keeps the old driver.
-
 
 ==============================================================================
  5. USING IT
@@ -3873,10 +3822,6 @@ it anyway if it is not there - the reports are what fix it:
 
 Outside this driver's control - these come from Windows, NUSB or the driver
 being unsigned, and no change to this driver can remove them:
-
-  * UPGRADING IN PLACE OVER A RUNNING 1.X DRIVER UNDER NUSB BLUE-SCREENS.
-    NUSB's usbport.sys crashes the machine as it stops the old driver,
-    before this release runs. Follow section 4, which avoids it.
 
   * WINDOWS VISTA X64 AND 7 X64 NEED TEST-SIGNING MODE, OR DRIVER
     SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
