@@ -544,6 +544,12 @@ ULONG XhciEnumNoteReset(ULONG port, ULONG ok, ULONG attempt, ULONG portsc)
            ((attempt & 0x7FUL) << 16) | (portsc & 0xFFFFUL);
 }
 
+ULONG XhciEnumNoteResetWait(ULONG port, ULONG ended, ULONG ms)
+{
+    return ((port & 0xFFUL) << 24) | (ended ? 0UL : 0x00800000UL) |
+           (ms > 0xFFFFUL ? 0xFFFFUL : ms);
+}
+
 ULONG XhciEnumNoteSpeed(ULONG port, ULONG psiv, ULONG speedClass,
                         ULONG source)
 {

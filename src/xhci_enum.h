@@ -271,6 +271,12 @@ ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
  *                      15:14 feed (bit 14 DISCONNECT, bit 15 CONNECT)
  *                      13:7  PORTSC change bits 23:17 (CSC at bit 7)
  *                      6:3   PORTSC PLS   2 PR   1 PED   0 CCS
+ *   enum.port.prwait a reset already running when the machine came to
+ *                    reset the port - the firmware's, left from the BIOS
+ *                    handoff (roadmap-hcd 37.2) - waited out first:
+ *                      31:24 port   23 set when it never ended (PR still
+ *                            set at the wait's limit)
+ *                      22:16 zero   15:0 ms waited (capped at FFFFh)
  *   enum.port.reset  a reset's result:
  *                      31:24 port   23 ok   22:16 attempt (0 the first)
  *                      15:0  PORTSC bits 15:0 as the reset left it (speed
@@ -300,7 +306,7 @@ ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
  *
  * The bound. A burst - one look, or one run of the machine that reset the
  * port - is charged to the port's budget of XHCI_ENUM_NOTE_BUDGET when it
- * begins; a run notes at most two attempts of four or five notes each, so a
+ * begins; a run notes at most two attempts of four to six notes each, so a
  * port costs the 16 KB ring at most some 2.5 KB between enumerations. A
  * port that enumerates (its PDO created) is given the whole budget back, so
  * a working port replugged any number of times keeps its notes and only a
@@ -355,6 +361,7 @@ VOID XhciEnumNoteFinish(PXHCI_ENUM_NOTES notes);
 ULONG XhciEnumNoteLook(ULONG port, ULONG state, ULONG linkAction,
                        ULONG feed, ULONG portsc);
 ULONG XhciEnumNoteReset(ULONG port, ULONG ok, ULONG attempt, ULONG portsc);
+ULONG XhciEnumNoteResetWait(ULONG port, ULONG ended, ULONG ms);
 ULONG XhciEnumNoteSpeed(ULONG port, ULONG psiv, ULONG speedClass,
                         ULONG source);
 ULONG XhciEnumNoteRate(ULONG port, ULONG kbps, ULONG plus);

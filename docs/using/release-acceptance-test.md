@@ -149,12 +149,12 @@ Controller Deviations This Driver Acts On".
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`), `xhciqual\`, `xhcisnap\` and `portsw\` come out directly (`portsw\` since roadmap-hcd task 37.18; the `2.3.0.0` asset has none) |
+| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`), `xhciqual\`, `xhcisnap\` and `portsw\` come out directly (`portsw\` since roadmap-hcd task 37.5; the `2.3.0.0` asset has none) |
 | 2.2 | Check that `xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
 | 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names: `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`. Read the list off that file rather than from memory |
 | 2.4 | Look for a version directory nested inside another | None |
 | 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports |
-| 2.6 | List `portsw\`, then look for `portsw.vbs` in each flavour directory | `portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd task 37.18). The `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
+| 2.6 | List `portsw\`, then look for `portsw.vbs` in each flavour directory | `portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd task 37.5). The `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
 
 The `release` directory for the machine's architecture is the one to install.
 The `debug` directory beside it is the same drivers built for diagnosis, for a

@@ -4032,7 +4032,7 @@ failed. Until it has passed on a target, design record 13 section 5.6 stays
 
 Task 36.42 put `portsw.vbs` at the root of every flavour directory of a
 package beside `xhci98.inf`, and `2.3.0.0` was published so. Since task
-37.18 no package carries it: `make-release.ps1` publishes it once, from
+37.5 no package carries it: `make-release.ps1` publishes it once, from
 `src\`, in a `portsw\` directory at the version root beside `xhciqual\`
 and `xhcisnap\` (design record 16 section 5a), and holds the staged tree
 to that before the publish swap (`Assert-PortSwitchLayout`: the three in
@@ -4080,7 +4080,7 @@ second `copy` a moment later.
 #### `portsw-on.bat` and `portsw-off.bat` (roadmap-hcd task 36.56)
 
 Since task 36.56 `portsw-on.bat` and `portsw-off.bat` go wherever the
-script goes, in `portsw\` since task 37.18 (design record 16 section 5a,
+script goes, in `portsw\` since task 37.5 (design record 16 section 5a,
 "The batch files"): each shows the value, sets 1 or 0 through
 `cscript //nologo portsw.vbs`, says Windows must be restarted, and pauses.
 The same file runs under `COMMAND.COM` on 98 SE and ME and under `cmd.exe`
@@ -6237,7 +6237,9 @@ than being discovered on a guest.
 #### The registry values the driver reads, and what the INFs write (task 36.51)
 
 **Every value the shipping driver reads is written by every install path of
-both INFs, at the driver's own default** (owner, 2026-10-11, superseding the
+both INFs, at the driver's own default** - except `XhciImodInterval250ns`
+and, since roadmap-hcd 37.2, `XhciForceBulkOnly`, whose written 0 differs
+from its absent 1 (the table) - (owner, 2026-10-11, superseding the
 rule that `XhciWideMap`, `XhciSelectiveSuspend` and
 `XhciUsb2HubSpeedFallback` were set by hand and written by no INF). The rows
 are taken from the code (`src\hcd_ctl.c`'s value pass, `HcdCtlForceBulkOnly`,
@@ -6259,7 +6261,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciLogVerbosity` | each start | 0 | 0-4; above 4 refused, 0 | 0 | yes |
 | `XhciLogDebugView` | each start | 0 | 0 off, any other on | 0 | yes |
 | `XhciImodInterval250ns` | each start | 4000 | 10-4000; outside, 4000 | 160 | no, by design: 160 is the owner's shipped interval (2026-10-04) and 4000 only the fallback; a written 4000 reads as absent does |
-| `XhciForceBulkOnly` | each enumeration | 0 | 0 off, any other on | 0 | yes |
+| `XhciForceBulkOnly` | each enumeration | 1 (37.2) | 0 off, any other on | 0 | no, by design: absent is text-mode Setup, where only Setup's own `usbstor` binds storage, so Bulk-Only; the install's 0 keeps UAS (issue 15) |
 | `XhciFastPollFsLs` | each start | 0 | 0-4 (`XhciPipeFastMode`) | 0 | yes |
 | `XhciFirstEnumWaitMs` | each start | 5000 | 0-30000 | 5000 | yes |
 | `XhciFirstEnumPortMs` | each start | 2000 | 0 to the wait | 2000 | yes |

@@ -1296,7 +1296,9 @@ that say so, disable and enable the controller in Device Manager).
 enumerated ("XhciForceBulkOnly").
 
 The install writes all nineteen: each at the driver's own default, except
-`XhciImodInterval250ns` at `160`. Each is written only where it is missing,
+`XhciImodInterval250ns` at `160` and `XhciForceBulkOnly` at `0`, which
+the driver reads as `1` when it is absent (text-mode Setup;
+"XhciForceBulkOnly"). Each is written only where it is missing,
 so a value you changed survives an install or update; to go back to the
 default, set it by hand, or delete the value and update the driver.
 `XhciTolerance`, `XhciIntervalCap` and `XhciAvgTrbEsit` are new in
@@ -1417,9 +1419,12 @@ value towards `4000` or delete it.
 ### XhciForceBulkOnly: Bulk-Only instead of UAS
 
 `1` makes every storage device on that controller that offers both
-transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0` or
-absent, the default, means UAS wherever the device offers it. Since
-`2.1.1.0` the install writes `0`.
+transports use Bulk-Only (Windows' own `usbstor.sys`) instead of UAS. `0`,
+which the install writes (since `2.1.1.0`), means UAS wherever the device
+offers it. Absent reads as `1` since roadmap task 37.2 (`0` before): that is
+how text-mode Setup sees it, before any INF has run, and there Setup's own
+`usbstor` is the only storage driver, so a stick or disk that offers both
+is usable there (issue 15).
 
 It is read each time a device enumerates, so unplug and replug the device
 after changing it. On Windows 2000 and later, a device already installed

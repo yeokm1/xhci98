@@ -99,7 +99,7 @@ XHCI_C_ASSERT(hcd_shut_state, PowerSystemShutdown == 6 &&
  * serves the controller powered again, admission completes every Dx at
  * once), then XhciSuspendController, then a Dx pended before it is settled
  * (design record 14 section 4.4). At the shutdown's D3 the same hold sets
- * the shutdown latch, before the halt (37.6, record 13 section 5.8).
+ * the shutdown latch, before the halt (37.3, record 13 section 5.8).
  * The power gate held; IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
@@ -117,7 +117,7 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
 }
 
 /*
- * The shutdown, the controller suspended by its D3 or before it (37.6,
+ * The shutdown, the controller suspended by its D3 or before it (37.3,
  * record 13 section 5.8): the latch set - already, when this D3 halted
  * the controller (hcdSuspendSettled) - then what waits for a D0 that will
  * not come completed DEVICE_NOT_RESPONDING: the queued commands always,
@@ -128,7 +128,7 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
  * device state after this - so a controller the bus already has in D3
  * keeps its transfers. The quiesce's flags are not the proof: it clears
  * them on a configuration space that reads all-ones too (Codex review of
- * 37.6's design, round 1, finding 1). Idempotent. No thread is created
+ * 37.3's design, round 1, finding 1). Idempotent. No thread is created
  * and none waited on (36.35); completions are made here or by each PDO's
  * refusal timer. The power gate held, so the thread is not in a pass;
  * IRQL: PASSIVE_LEVEL.
@@ -401,10 +401,10 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if (NT_SUCCESS(Irp->IoStatus.Status) && hc->ControllerStarted &&
         want == hc->Common.DevicePower && want != PowerDeviceD0 &&
         XhciTolShutLatch((ULONG)hc->Common.SystemPower)) {
-        /* 37.6: the shutdown finds the function already out of D0, so no
+        /* 37.3: the shutdown finds the function already out of D0, so no
          * device IRP is asked for and none would latch: the work item
          * latches and flushes at PASSIVE_LEVEL under the power gate, then
-         * completes the system IRP (Codex review of 37.6's design, round
+         * completes the system IRP (Codex review of 37.3's design, round
          * 1, finding 2). */
         hcdPowerDefer(hc, Irp, HCD_POWER_WORK_SHUT);
         return STATUS_MORE_PROCESSING_REQUIRED;
@@ -480,7 +480,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         }
         /* Task 34.3: the shutdown's D3 hands the connectors back to EHCI,
          * as Linux's xhci_shutdown does on these chipsets; a sleep keeps
-         * them, and its D0 routes them again. Before it, 37.6's flush of
+         * them, and its D0 routes them again. Before it, 37.3's flush of
          * what would wait for a D0 that will not come. */
         if (hc->Common.SystemPower == PowerSystemShutdown) {
             hcdShutFlush(hc);

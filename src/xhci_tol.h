@@ -581,7 +581,7 @@ ULONG XhciTolSaveCommit(ULONG published);
  * controller with a recovery still owed resumes as before. */
 ULONG XhciTolResumeRefused(ULONG terminal);
 
-/* The shutdown latch (roadmap-hcd 37.6; design record 13 section 5.8). Not
+/* The shutdown latch (roadmap-hcd 37.3; design record 13 section 5.8). Not
  * a tolerance behaviour: it applies at every XhciTolerance value.
  *
  * XhciTolShutLatch: 1 when the controller leaving D0 latches, its system

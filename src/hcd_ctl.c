@@ -36,10 +36,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* The device-key values the HCD reads (design record 13 section 5.5).
  * The miniport's three XhciVirtualHSHub* values are not read. The fourth,
  * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
- * start: absent is 1 since 37.3, Bulk-Only where the device offers it, for
+ * start: absent is 1 since 37.2, Bulk-Only where the device offers it, for
  * text-mode Setup (HcdCtlForceBulkOnly); the INFs' 0 keeps UAS.
- * XhciFastPollFsLs (33.8) is read at start: absent is 0, every interval by Table 6-12. Since
- * 34.1 the INFs write both, and the two below, at those defaults. */
+ * XhciFastPollFsLs (33.8) is read at start: absent is 0, every interval by
+ * Table 6-12. Since 34.1 the INFs write both, and the two below; the first
+ * at 0, not at its absent value, since 37.2. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
@@ -441,12 +442,15 @@ static VOID hcdFirmwareNote(PHCD_CONTROLLER hc)
  * is a nonzero REG_DWORD in the controller's driver key, the key every other
  * value of this driver lives in; 0 when it is zero. When it cannot be read -
  * absent, of another type, or no driver key at all - it is 1 (roadmap-hcd
- * 37.3): every INF install path writes 0, so an unread value means no INF has
- * run, which is text-mode Setup, where only usbstor's Bulk-Only ids have a
- * driver and xhciuas.sys is not loaded; a UAS-only PDO there is no disk, and a
- * boot stick behind it is STOP 0x7B. One value for every device on this
- * controller, read per enumeration so a change takes effect at the next one
- * (a devnode already installed on NT keeps its service until it is
+ * 37.2; issue 15). Every INF install path writes 0, so on an installed
+ * system the value is unread only when it was deleted or mistyped by hand,
+ * or a binary was copied over an install older than 34.1 - the conservative
+ * transport is the right answer there too - and in text-mode Setup, before
+ * any INF has run, it is always unread: there only usbstor's Bulk-Only ids
+ * have a driver and xhciuas.sys is not loaded, so a PDO given UAS's ids is no
+ * disk, and a boot stick behind it is STOP 0x7B. One value for every device
+ * on this controller, read per enumeration so a change takes effect at the
+ * next one (a devnode already installed on NT keeps its service until it is
  * uninstalled and re-plugged). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
@@ -1871,8 +1875,8 @@ static ULONG hcdQueueDrain(PHCD_CONTROLLER hc)
 }
 
 /*
- * The event ring check after the re-arm (roadmap-hcd 37.7, design record 17
- * section 4.1, "Amended for 37.7"): hcdIsrDpc's, after an interrupt-
+ * The event ring check after the re-arm (roadmap-hcd 37.4, design record 17
+ * section 4.1, "Amended for 37.4"): hcdIsrDpc's, after an interrupt-
  * delivered drain released EHB and set IMAN.IE. An event the controller
  * wrote while IE was clear raised IP, which a compliant interrupter delivers
  * once IE is back; QEMU's MSI-X instead drops that message, since it raises
@@ -1883,7 +1887,7 @@ static ULONG hcdQueueDrain(PHCD_CONTROLLER hc)
  * admission (hcdQueueDrain's, with HCD_DRAIN_FROM_PEEK) - never a drain
  * inline and never a chain: the drain this queues does not peek, so each
  * further drain waits for a moderated interrupt and no run of DPCs can hold
- * a processor at DISPATCH_LEVEL under sustained completions (Codex, 37.7
+ * a processor at DISPATCH_LEVEL under sustained completions (Codex, 37.4
  * round 1). An event the second drain's own window strands waits for the
  * backstop, as before. An insertion while IsrDpc is still queued is
  * refused and counted as pending only. No register is written, so the
@@ -2495,7 +2499,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
-    /* And the shutdown latch (37.6): a new lifetime serves its requests
+    /* And the shutdown latch (37.3): a new lifetime serves its requests
      * (Codex review of 4de0f999, round 2, finding 2). Before the start
      * admits anything, so no lock is needed against an admission. */
     hc->ShutLatched = 0;

@@ -350,7 +350,7 @@ Moving the step off the thread revises this section's first paragraph,
 the owner's design of 2026-10-06 ("a step of its own on each
 controller-thread pass"). Orchestrator decision, owner confirmed 2026-10-11.
 
-**Amended for 37.7 (roadmap-hcd 37.7): the event ring check after the
+**Amended for 37.4 (roadmap-hcd 37.4): the event ring check after the
 re-arm.** Phase 36's matrix counted `BackstopDrains` in every NT 6
 snapshot under `msi=off,msix=on` (Windows 7 3 to 20 a session, Vista 115
 to 288) and 0 under MSI, the line and polling (`runs/run-36.md`, "MSI-X
@@ -388,7 +388,7 @@ The check closes the wait without touching the interrupter:
   draft's re-peeking drain could chain DPCs back to back under sustained
   completions, holding a processor at DISPATCH_LEVEL and starving the
   controller thread. An event stranded in the second drain's own window
-  waits for the backstop, as before 37.7. `KeInsertQueueDpc` keeps the
+  waits for the backstop, as before 37.4. `KeInsertQueueDpc` keeps the
   arguments of whichever insertion queued the DPC and refuses the other.
   When an interrupt queued it first, the peek's insertion is refused and
   costs nothing, and that drain runs with NULL and peeks. When the peek's

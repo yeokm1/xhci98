@@ -19,7 +19,7 @@ is this project's two files and nothing else:
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
-since task 37.18: make-release.ps1 publishes them once, in a portsw\
+since task 37.5: make-release.ps1 publishes them once, in a portsw\
 directory at the version root, because they are the same for every
 architecture and flavour and the setup engine never reads them. A guest leg
 that needs them copies them from src\ or from a cut's portsw\.

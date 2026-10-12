@@ -8495,7 +8495,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG DnctrlReadback;
 
     /*
-     * The event ring check after the re-arm (roadmap-hcd 37.7, design record
+     * The event ring check after the re-arm (roadmap-hcd 37.4, design record
      * 17 section 4.1): an interrupt-delivered drain that, once IMAN.IE is
      * back, finds an event at the dequeue queues one more drain rather than
      * leave it to the 100 ms backstop. QEMU's MSI-X drops the message raised

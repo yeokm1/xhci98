@@ -170,7 +170,7 @@ NTSTATUS HcdCfgQueue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HcdIoRefuseLater(pdo, irp, urb, HCD_USBD_DEVICE_GONE);
     }
     if (hc->ShutLatched) {
-        /* 37.6: past the shutdown latch no D0 comes to serve it (record 13
+        /* 37.3: past the shutdown latch no D0 comes to serve it (record 13
          * section 5.8). A URB is refused DEVICE_NOT_RESPONDING at the next
          * tick - never DEVICE_GONE, which a completion would park; a
          * request without one (RESET_PORT, the streams requests) is
@@ -469,7 +469,7 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
- * The shutdown latch's command flush (37.6, record 13 section 5.8): on the
+ * The shutdown latch's command flush (37.3, record 13 section 5.8): on the
  * power path after the shutdown's D3, every slow IRP - SlowIrps whole, and
  * each device's selective-suspend deferrals but those a cancel routine
  * owns - taken off under the controller lock and completed after it

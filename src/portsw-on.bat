@@ -2,7 +2,7 @@
 rem portsw-on.bat - turns the Intel port switchover on: sets
 rem XhciIntelPortSwitch to 1 on every xhci98 controller through portsw.vbs,
 rem which is beside it in the download's portsw directory (roadmap-hcd
-rem tasks 36.56 and 37.18, design record 16 section 5a).
+rem tasks 36.56 and 37.5, design record 16 section 5a).
 rem
 rem Windows 98 SE and ME: double-click it, or run it at a prompt in this
 rem directory. 2000 and XP: run it as an administrator. Vista and 7:

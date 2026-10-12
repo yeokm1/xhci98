@@ -38,7 +38,7 @@ so a sibling subdirectory is exactly where it belongs. It is also built by a
 different toolchain (Open Watcom), so it is copied from `xhciqual\` rather than
 built here; the freshness check below is what stops a stale one shipping.
 `xhcisnap\`, the log reader, sits beside it on the same terms, and since
-roadmap-hcd task 37.18 so does **`portsw\`**: the Intel port switchover's
+roadmap-hcd task 37.5 so does **`portsw\`**: the Intel port switchover's
 `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, copied once from `src\`
 rather than into every flavour directory, since they are the same for every
 architecture and flavour and the setup engine never reads them. It carries
@@ -569,7 +569,7 @@ $oemPublishable = @("txtsetup.oem")
 # batch files (task 36.56), which set 1 or 0 through it in one double-click.
 # Not INF-declared files: text files the user runs, the same for every
 # architecture and flavour, which the setup engine never reads. Since task
-# 37.18 a cut publishes them once, from src\, into portsw\ at the version
+# 37.5 a cut publishes them once, from src\, into portsw\ at the version
 # root beside xhciqual\ and xhcisnap\, and into no flavour directory; the
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
@@ -587,7 +587,7 @@ function Publish-PortSwitchScripts {
     $missing = @($Names | Where-Object {
         -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
     if ($missing.Count -gt 0) {
-        throw ("'{0}' has no {1}: the port switchover's scripts are published together or not at all (roadmap-hcd tasks 36.42, 36.56 and 37.18)." -f `
+        throw ("'{0}' has no {1}: the port switchover's scripts are published together or not at all (roadmap-hcd tasks 36.42, 36.56 and 37.5)." -f `
                $SourceDir, ($missing -join ", "))
     }
     $dir = Join-Path $DestRoot $DirName
@@ -599,7 +599,7 @@ function Publish-PortSwitchScripts {
 }
 
 function Assert-PortSwitchLayout {
-    # The layout of task 37.18 in a version tree: <Root>\<DirName>\ holds the
+    # The layout of task 37.5 in a version tree: <Root>\<DirName>\ holds the
     # scripts and nothing else, and no other directory of the tree, a flavour
     # directory above all, holds a copy of any of them.
     #
@@ -632,7 +632,7 @@ function Assert-PortSwitchLayout {
         $layout = "in $DirName\ alone"
     } elseif ($PublishedVersion -eq "" -or ([version]$PublishedVersion -gt [version]"2.3.0.0") -or
               (Test-Path -LiteralPath $dir)) {
-        throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.18)."
+        throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.5)."
     } elseif ([version]$PublishedVersion -eq [version]"2.3.0.0") {
         $allowedDirs = @(Get-ChildItem -LiteralPath $rootFull -Directory -Force |
                          Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName $InfName) -PathType Leaf } |
@@ -655,7 +655,7 @@ function Assert-PortSwitchLayout {
         }
     }
     if ($faults.Count -gt 0) {
-        throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.18):`n  - {2}" -f `
+        throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.5):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
     }
 }
@@ -1889,7 +1889,7 @@ $gateOut
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
     # And the port switchover's scripts in portsw\ alone where the tree has
-    # that directory (task 37.18); a version cut before it is accepted with
+    # that directory (task 37.5); a version cut before it is accepted with
     # the layout it was published with.
     Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable -DirName $pswDirName `
                             -What "the upload set '$uploadRoot'" -PublishedVersion $Version
@@ -2965,7 +2965,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into portsw\ beside the tools' directories (roadmap-hcd task
-    # 37.18), from src\ rather than from a package: the packages no longer
+    # 37.5), from src\ rather than from a package: the packages no longer
     # carry them, and the four flavour directories once held four
     # byte-identical copies of files that are neither architecture- nor
     # flavour-specific. No readme.txt of their own: section 9 of the
@@ -4163,10 +4163,12 @@ A value that is absent means the default each one states.
   XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
   ..............................................................
 
-  Default 0 (absent): a disk that offers UAS gets UAS. Set it to 1 and every
-  disk on that controller that offers BOTH transports gets Bulk-Only,
-  Windows' own storage driver, instead. A UAS-only disk stays on UAS
-  whatever this says.
+  The install writes 0: a disk that offers UAS gets UAS. Set it to 1 and
+  every disk on that controller that offers BOTH transports gets
+  Bulk-Only, Windows' own storage driver, instead. Absent counts as 1:
+  that is text-mode Setup, before the INF has run, where Windows' own
+  storage driver is the only one. A UAS-only disk stays on UAS whatever
+  this says.
 
   It is read each time a device is plugged in, so unplug the disk and plug
   it back in after changing it. On Windows 2000 and later a disk already
@@ -5352,7 +5354,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
     # before -Force moves an existing release aside (round 2, finding 4),
     # so a refusal leaves releases\ as it was. The port switchover's scripts
-    # in portsw\ and nowhere else (task 37.18), at the same point and for the
+    # in portsw\ and nowhere else (task 37.5), at the same point and for the
     # same reason.
     Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName `
                             -What "the staged release '$destRoot'"

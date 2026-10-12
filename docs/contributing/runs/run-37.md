@@ -49,7 +49,7 @@ advice to plug an ordinary stick first stands unread either way).
 **A tool note.** The kit's `PNPCTL.EXE` is an NT build (subsystem version
 5.1), which ME refuses to start; Device Manager carried the lifecycle steps.
 
-## 37.7 - An event ring check after the re-arm
+## 37.4 - An event ring check after the re-arm
 
 **Verdict: PASS** (2026-10-12). Under QEMU's MSI-X the backstop no longer
 serves the events the interrupter's IE toggle strands; under MSI and the line
@@ -58,7 +58,7 @@ the check queues nothing.
 **The change.** `f808e22`: `hcdRearmPeek` (`src/hcd_ctl.c`) after an
 interrupt-delivered drain, the `HCD_DRAIN_FROM_PEEK` marker so the drain it
 queues does not peek again, `RearmPeekPending` and `RearmPeekDrains` before
-`TrailingPad`; design record 17 section 4.1, "Amended for 37.7". Codex,
+`TrailingPad`; design record 17 section 4.1, "Amended for 37.4". Codex,
 three rounds: round 1 found the first draft's re-peeking drain could chain
 DPCs at DISPATCH_LEVEL under sustained completions (fixed by the marker),
 round 2 a reversed race in the design text, round 3 no defects. Host tests
@@ -86,14 +86,14 @@ the UAS disk written 64 MiB in 1 MiB blocks and verified four times):
 
 | Guest | Build | Delivery | BackstopDrains | Peek pending / drains | TONE | UAS VERIFY | Result |
 |---|---|---|---|---|---|---|---|
-| 7 x64 | 37.7 | MSI-X | 0 | 487 / 226 | 20.26, 20.31 s (first play 59.5 s, cold); Ring Underrun 1-3 | 97.3-101.1 MB/s | PASS |
+| 7 x64 | 37.4 | MSI-X | 0 | 487 / 226 | 20.26, 20.31 s (first play 59.5 s, cold); Ring Underrun 1-3 | 97.3-101.1 MB/s | PASS |
 | 7 x64 | 2.3.0.0 | MSI-X | 172 | - | 24.87, 27.47, 26.51 s; Ring Underrun 9-42 | 3.6-4.1 MB/s | control |
-| 7 x64 | 37.7 | MSI | 0 | 869 / 0 | 21.34, 20.27, 20.36 s | 109.0-115.3 MB/s | PASS |
-| 7 x64 | 37.7 | line | 0 | 815 / 0 | 21.09, 20.26, 20.32 s | 109.7-115.8 MB/s | PASS |
-| Vista x64 | 37.7 | MSI-X | 0 | 1681 / 204 | capture: 3 plays in 62.76 s, 12 gaps of 20.7 ms | 94.4-103.6 MB/s | PASS |
+| 7 x64 | 37.4 | MSI | 0 | 869 / 0 | 21.34, 20.27, 20.36 s | 109.0-115.3 MB/s | PASS |
+| 7 x64 | 37.4 | line | 0 | 815 / 0 | 21.09, 20.26, 20.32 s | 109.7-115.8 MB/s | PASS |
+| Vista x64 | 37.4 | MSI-X | 0 | 1681 / 204 | capture: 3 plays in 62.76 s, 12 gaps of 20.7 ms | 94.4-103.6 MB/s | PASS |
 | Vista x64 | 2.3.0.0 | MSI-X | 263 | - | capture: 3 plays in 63.14 s, 70 gaps (one 990.7 ms) | 4.2-5.3 MB/s | control |
-| Vista x64 | 37.7 | MSI | 0 | 1811 / 0 | capture: 7 gaps, two of them the pauses between plays | 110.3-113.5 MB/s | PASS |
-| Vista x64 | 37.7 | line | 0 | 1562 / 0 | capture: 9 gaps, two of them the pauses between plays | 89.7-102.5 MB/s | PASS |
+| Vista x64 | 37.4 | MSI | 0 | 1811 / 0 | capture: 7 gaps, two of them the pauses between plays | 110.3-113.5 MB/s | PASS |
+| Vista x64 | 37.4 | line | 0 | 1562 / 0 | capture: 9 gaps, two of them the pauses between plays | 89.7-102.5 MB/s | PASS |
 
 Every stick compare was clean and every VERIFY read 0 sectors bad.
 
@@ -103,7 +103,7 @@ Every stick compare was clean and every VERIFY read 0 sectors bad.
   the `2.3.0.0` control counts 172 and 263 backstop drains, as Phase 36 read
   on 11.1.0-rc2 (`runs/run-36.md`, "MSI-X BackstopDrains (NT6)"), and with
   them its UAS reads run at about 4 MB/s and its audio gaps.
-- With 37.7 the same load counts no backstop drain; the peek queued 226 and
+- With 37.4 the same load counts no backstop drain; the peek queued 226 and
   204 drains in their place, and the UAS reads and the tone match MSI's.
 - Under MSI and the line the peek saw events at the dequeue but queued
   nothing: the interrupt had already queued the drain each time, which is

@@ -1392,7 +1392,7 @@ static void test_terminal_resume(void)
     CHECK_EQ(XhciTolResumeRefused(XHCI_TOL_TERMINAL_NONE), 0, "running");
 }
 
-/* Roadmap-hcd 37.6 (record 13 section 5.8): only S5 latches - S1 to S4
+/* Roadmap-hcd 37.3 (record 13 section 5.8): only S5 latches - S1 to S4
  * (SYSTEM_POWER_STATE 2 to 5) keep the hold until the resume, S0 and the
  * unspecified state latch nothing; once latched the commands are always
  * flushed and the transfers only with the halt proven and the buffer not

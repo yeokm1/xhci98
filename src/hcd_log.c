@@ -77,7 +77,7 @@ static VOID hcdLogTolLocked(PXHCI_EXTENSION ext, PXHCI_LOG log)
     XhciLogAppend(log, "tol.cap.intervals", s->CapIntervals, 1);
     XhciLogAppend(log, "tol.avgtrb.mode", s->AvgTrbMode, 1);
     XhciLogAppend(log, "tol.backstop.drains", s->BackstopDrains, 1);
-    /* Not a tolerance counter (roadmap-hcd 37.7), beside the backstop's so
+    /* Not a tolerance counter (roadmap-hcd 37.4), beside the backstop's so
      * the two drains of a late event are read together. */
     XhciLogAppend(log, "rearm.peek.pending", ext->RearmPeekPending, 1);
     XhciLogAppend(log, "rearm.peek.drains", ext->RearmPeekDrains, 1);

@@ -502,7 +502,7 @@ changing the three layers:
   closed, the release raises `DpcClosed` with an interlocked exchange
   (the ISR and the enum thread are gone by then).
 
-**Amended for roadmap-hcd 37.6.** The shutdown latch (section 5.8) adds
+**Amended for roadmap-hcd 37.3.** The shutdown latch (section 5.8) adds
 one word under the controller lock, `ShutLatched`, set with `PowerDown` in
 one hold before the shutdown's halt and read by every admission that
 would otherwise leave a request waiting for a D0; its flush runs on the
@@ -564,7 +564,9 @@ Since task 34.1 (owner, 2026-10-05) both INFs write every value the HCD
 reads, on every install path: the three above, `XhciFastPollFsLs`, and
 `XhciForceBulkOnly` (31-A.3), `XhciFirstEnumWaitMs` and
 `XhciFirstEnumPortMs` (33.3), each at the driver's own default but the
-interval. Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
+interval and, since roadmap-hcd 37.2, `XhciForceBulkOnly`: the INFs write
+0 (UAS) and the driver reads an absent value as 1 (Bulk-Only), for
+text-mode Setup (section 5.6; issue 15). Each is written with FLG_ADDREG_NOCLOBBER (`0x00010003`), so an
 install or update writes only a missing value and keeps one the user set; a
 later release therefore cannot change a default on a machine that already
 holds the old one. The gate's `VAL-*` rules hold all seven, flags included,
@@ -707,12 +709,15 @@ offers a UAS alternate setting the controller can run - at SuperSpeed that
 means stream support; below it, always - even beside a Bulk-Only one
 (`src\xhci_xport.c`), and the one override, `XhciForceBulkOnly` in the
 controller's driver key (`src\hcd_ctl.c` `HcdCtlForceBulkOnly`), is a value
-text mode never writes. A dual-mode SuperSpeed device on a controller
-without streams falls back to Bulk-Only and is usable. A device selected
-for UAS presents the UAS class id, which no Setup row binds, so it is not
+text mode never writes. **Since roadmap-hcd 37.2 an unread value is 1**
+(issue 15), so in text mode a device offering both transports is selected
+for Bulk-Only and meets Setup's own `usbstor`; the INFs write 0, which
+keeps UAS on an installed system. A device selected for UAS presents the
+UAS class id, which no Setup row binds, so a UAS-only device is still not
 usable until GUI mode; a Bulk-Only-only device (most USB flash sticks;
-QEMU's `usb-storage`) always meets Setup's own `usbstor`, and is the one
-to use for a predictable result.
+QEMU's `usb-storage`) always meets Setup's own `usbstor`. Folding the UAS
+driver into `xhci98.sys` would answer the UAS-only case (UAS.1 in the
+roadmap's "Planned work").
 Carrying `xhciuas.sys` as a second `scsi` option would need its own
 hardware ids and a text-mode reading of its own, and is left out. GUI-mode
 Setup and the installed system install it from the package as before.
@@ -980,7 +985,7 @@ It is outside this wait (no relations answer is involved after the D3)
 and was not bisected. Not read here: Windows ME, Driver Verifier, a
 SuperSpeed device, and a device that never answers (QEMU models none).
 
-### 5.8 The shutdown latch (task 37.6, 2026-10-12)
+### 5.8 The shutdown latch (task 37.3, 2026-10-12)
 
 **The gap.** After the controller's D3 nothing the bus holds can end by
 itself. A transfer URB admitted then is published on a ring of a controller

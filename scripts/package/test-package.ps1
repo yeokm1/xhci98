@@ -197,7 +197,7 @@ try {
 
     # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
     #
-    # The port switchover's user script. Since task 37.18 no package carries
+    # The port switchover's user script. Since task 37.5 no package carries
     # it or its two batch files: make-release.ps1 publishes the three once,
     # from src\, into portsw\ at the version root (held further down, with
     # fixtures), so the packager has no -PswScriptPath and stages none of
@@ -208,15 +208,15 @@ try {
     $pswSrc = Join-Path $repo "src\portsw.vbs"
     foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $flatOut $name))) `
-            "a package carries $name, which since roadmap-hcd task 37.18 is published once in portsw\ and staged into no package."
+            "a package carries $name, which since roadmap-hcd task 37.5 is published once in portsw\ and staged into no package."
     }
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-PswScriptPath", $pswSrc, "-OutDir", (Join-Path $script:work "pkg-psw-gone"))
-    Assert-True ($r.ExitCode -ne 0) "make-package.ps1 still takes -PswScriptPath, so a package can carry the port switchover's scripts again (roadmap-hcd task 37.18)."
+    Assert-True ($r.ExitCode -ne 0) "make-package.ps1 still takes -PswScriptPath, so a package can carry the port switchover's scripts again (roadmap-hcd task 37.5)."
     $packagerSrcText = [System.IO.File]::ReadAllText($packager)
     foreach ($needle in @('$PswScriptPath', '"portsw.vbs"', '"portsw-on.bat"', '"portsw-off.bat"')) {
         Assert-True (-not $packagerSrcText.Contains($needle)) `
-            "make-package.ps1 contains $needle again: since roadmap-hcd task 37.18 it stages none of the port switchover's scripts."
+            "make-package.ps1 contains $needle again: since roadmap-hcd task 37.5 it stages none of the port switchover's scripts."
     }
     $pswBytes = [System.IO.File]::ReadAllBytes($pswSrc)
     $pswBad = @($pswBytes | Where-Object { $_ -ge 0x80 -or ($_ -lt 0x20 -and $_ -ne 9 -and $_ -ne 10 -and $_ -ne 13) })
@@ -241,7 +241,7 @@ try {
 
     # --- portsw-on.bat and portsw-off.bat (roadmap-hcd task 36.56) ----------
     #
-    # Published beside portsw.vbs, in portsw\ since task 37.18. Each file is
+    # Published beside portsw.vbs, in portsw\ since task 37.5. Each file is
     # run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere
     # (design record 16 section 5a), so the split is pinned: COMMAND.COM must
     # reach no line it cannot parse, and the one cmd.exe line must sit where
@@ -1024,7 +1024,7 @@ try {
         Set-Content -LiteralPath (Join-Path $pubRoot "xhciqual\XHCIQUAL.EXE") `
                     -Encoding ASCII -Value "stand-in qualifier"
         # The port switchover's scripts in portsw\, as every cut publishes them
-        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # since roadmap-hcd task 37.5: the upload assembly refuses a tree of
         # this version without them (Assert-PortSwitchLayout).
         Ensure-Directory (Join-Path $pubRoot "portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
@@ -1300,7 +1300,7 @@ try {
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
         # The port switchover's scripts in portsw\, as every cut publishes them
-        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # since roadmap-hcd task 37.5: the upload assembly refuses a tree of
         # this version without them (Assert-PortSwitchLayout).
         Ensure-Directory (Join-Path $pubRoot4 "portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
@@ -2176,7 +2176,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $newPubRoot "LICENSE") -Force
         # The port switchover's scripts in portsw\, as every cut publishes them
-        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # since roadmap-hcd task 37.5: the upload assembly refuses a tree of
         # this version without them (Assert-PortSwitchLayout).
         Ensure-Directory (Join-Path $newPubRoot "portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
@@ -2299,21 +2299,21 @@ try {
         @{ Find = '$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")';
            Why  = "the port switchover's user script and its two batch files (roadmap-hcd tasks 36.42 and 36.56) are no longer the files portsw\ carries" },
         @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot';
-           Why  = "a cut no longer publishes the port switchover's scripts once, from src\, into portsw\ at the version root (roadmap-hcd task 37.18)" },
+           Why  = "a cut no longer publishes the port switchover's scripts once, from src\, into portsw\ at the version root (roadmap-hcd task 37.5)" },
         @{ Find = 'Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName';
-           Why  = "a cut no longer holds its staged tree to one portsw\ and no copy in a flavour directory before the publish swap (task 37.18)" },
+           Why  = "a cut no longer holds its staged tree to one portsw\ and no copy in a flavour directory before the publish swap (task 37.5)" },
         @{ Find = '-What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
-           Why  = "the upload assembly no longer holds the tree to the layout its version was published with (task 37.18)" }
+           Why  = "the upload assembly no longer holds the tree to the layout its version was published with (task 37.5)" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }
     # And none of the scripts rides in a flavour directory or a package again.
     Assert-True (-not ($releaserText -match '\$pswPublishable\s*\+|\+\s*\$pswPublishable')) `
-        "make-release.ps1 adds the port switchover's scripts to a flavour directory's or a package's file set again; since roadmap-hcd task 37.18 they are published in portsw\ alone."
+        "make-release.ps1 adds the port switchover's scripts to a flavour directory's or a package's file set again; since roadmap-hcd task 37.5 they are published in portsw\ alone."
 
     #
-    # **The portsw\ layout itself, EXECUTED** (roadmap-hcd task 37.18): the
+    # **The portsw\ layout itself, EXECUTED** (roadmap-hcd task 37.5): the
     # two functions loaded from make-release.ps1's text, as the test-client
     # check below is, and driven with fixture trees. Publish copies the three
     # byte for byte and refuses a source missing one; the layout check takes
@@ -2326,7 +2326,7 @@ try {
     $pswFns = @()
     foreach ($fnName in @("Publish-PortSwitchScripts", "Assert-PortSwitchLayout")) {
         $fnAt = $releaserText.IndexOf("function $fnName")
-        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 37.18)."
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 37.5)."
         if ($fnAt -ge 0) { $pswFns += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
     }
     if ($pswFns.Count -eq 2) {

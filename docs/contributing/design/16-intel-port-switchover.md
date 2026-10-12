@@ -45,7 +45,7 @@ them at the E7250 bench, where a USB 3 stick copied at USB 2.0 speed with
 the switchover at its default 0. Its decision is section 11's twelfth, its
 documents section 15. Nothing in the driver changes.
 
-Revision 6, 2026-10-12, for roadmap-hcd task 37.18 (Phase 37): the script
+Revision 6, 2026-10-12, for roadmap-hcd task 37.5 (Phase 37): the script
 and its two batch files move out of the four flavour directories, where
 `2.3.0.0` published four byte-identical copies, into one `portsw\`
 directory at the version root beside `xhciqual\` and `xhcisnap\` (section
@@ -729,7 +729,7 @@ bench):
     `2.3.0.0`, with no change to a driver binary. There is no batch file
     for 2: it stays a hand edit.
 
-Revision 6 (owner, 2026-10-12, roadmap-hcd task 37.18):
+Revision 6 (owner, 2026-10-12, roadmap-hcd task 37.5):
 
 13. The script and its two batch files are published once, in `portsw\` at
     the version root, and in no flavour directory; `make-package.ps1`
@@ -804,7 +804,7 @@ row 7; `source-files.md`.
 - `source-files.md` for the two files; `build-and-test.md` for the
   package's new files and their legs.
 
-## 16. What changes in the documents (revision 6, task 37.18)
+## 16. What changes in the documents (revision 6, task 37.5)
 
 - The README's download table and switchover section: `portsw\` at the
   top level, out of the driver directories' listing, and where to run the

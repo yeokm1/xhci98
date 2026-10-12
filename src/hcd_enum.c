@@ -1522,13 +1522,60 @@ static ULONG hcdUsb3ResetWrite(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc,
     }
 }
 
+/* A reset already running on a root port when the enumeration comes to
+ * reset it: the firmware's, left from the BIOS handoff. On the E7250 a
+ * WinSetupFromUSB stick the BIOS was still reading through its own xHCI
+ * driver showed PR set at text-mode Setup's first look (roadmap-hcd 37.2);
+ * a reset decided then is refused as "a reset already running"
+ * (XhciLinkDecide), so both attempts failed inside one debounce and the boot
+ * stick was never presented - STOP 0x7B. Wait for it to end, within the warm
+ * reset's budget, and acknowledge its PRC and WRC so its end is not taken
+ * for the driver's own. Returns the last PORTSC read, PR still set when it
+ * never ended, and *note the enum.port.prwait value (XhciEnumNoteResetWait),
+ * which the caller logs inside the port's charged burst (hcdNoteReset).
+ * Thread only, PASSIVE_LEVEL. */
+static ULONG hcdAwaitRunningReset(PHCD_CONTROLLER hc, ULONG port, ULONG usb3,
+                                  PULONG note)
+{
+    PXHCI_EXTENSION ext;
+    LARGE_INTEGER due;
+    ULONG portsc;
+    ULONG waited;
+    ULONG changes;
+
+    ext = &hc->Hc;
+    portsc = XhciReadPortsc(ext, port);
+    waited = 0;
+    while (waited < HCD_WARM_RESET_WAIT_MS && portsc != 0xFFFFFFFFUL &&
+           (portsc & XHCI_PORTSC_PR) != 0) {
+        HcdRelativeMs(&due, HCD_POLL_STEP_MS);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        waited += HCD_POLL_STEP_MS;
+        portsc = XhciReadPortsc(ext, port);
+    }
+    *note = XhciEnumNoteResetWait(port,
+                                  portsc != 0xFFFFFFFFUL &&
+                                      (portsc & XHCI_PORTSC_PR) == 0,
+                                  waited);
+    XHCI_DBG_VALUE("hcd: running reset waited out, prwait note", *note);
+    if (portsc != 0xFFFFFFFFUL && (portsc & XHCI_PORTSC_PR) == 0) {
+        changes = XHCI_PORTSC_PRC | (usb3 ? XHCI_PORTSC_WRC : 0);
+        XhciWritePortsc(ext, port, XhciPortscClearChanges(portsc, changes));
+        portsc = XhciReadPortsc(ext, port);
+    }
+    return portsc;
+}
+
 /* Reset a root port and wait for the xHC to finish it; the speed is read
  * from PORTSC once it has. A USB3 protocol port's reset is hot or warm by
  * its link's state (hcdUsb3ResetWrite), and completes with PRC - and WRC
- * when warm - and the link in U0. Returns 1 when the port came back
- * enabled; *after is the last PORTSC read, for task 35.3's note. */
+ * when warm - and the link in U0. A reset already running is waited out
+ * first (hcdAwaitRunningReset, 37.2). Returns 1 when the port came back
+ * enabled; *after is the last PORTSC read, for task 35.3's note, and
+ * *prWait the running reset's enum.port.prwait value, 0 when none was
+ * running. */
 static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed,
-                          PULONG after)
+                          PULONG after, PULONG prWait)
 {
     PXHCI_EXTENSION ext;
     LARGE_INTEGER due;
@@ -1544,9 +1591,13 @@ static ULONG hcdResetPort(PHCD_CONTROLLER hc, PHCD_PORT p, PULONG speed,
     ext = &hc->Hc;
     port = p->PortId;
     usb3 = XhciPortIsUsb3(&ext->PortMap, port);
+    *prWait = 0;
     portsc = XhciReadPortsc(ext, port);
+    if (portsc != 0xFFFFFFFFUL && (portsc & XHCI_PORTSC_PR) != 0) {
+        portsc = hcdAwaitRunningReset(hc, port, usb3, prWait);
+    }
     *after = portsc;
-    if (portsc == 0xFFFFFFFFUL ||
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_PR) != 0 ||
         (!usb3 && (portsc & XHCI_PORTSC_CCS) == 0)) {
         return 0;
     }
@@ -1625,13 +1676,16 @@ static ULONG hcdPortReset(PHCD_CONTROLLER hc, PHCD_PORT p,
 {
     ULONG speed;
     ULONG after;
+    ULONG prWait;
 
     if (p->Hub != NULL) {
         return HcdHubPortReset(hc, p->Hub, p->Number, speedClass);
     }
     speed = 0;
     *speedClass = XHCI_SPEED_UNKNOWN;
-    if (!hcdResetPort(hc, p, &speed, &after)) {
+    /* No enumeration burst here to charge a note to: a running reset's
+     * wait shows as the helper's debug trace only (37.2). */
+    if (!hcdResetPort(hc, p, &speed, &after, &prWait)) {
         return 0;
     }
     (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, speed, speedClass);
@@ -2339,7 +2393,7 @@ static VOID hcdNoteLook(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG value)
 /* A reset's result, and on success the raw speed ID, its class, where its
  * meaning came from and its rate: what 35.0's dump could not say. */
 static VOID hcdNoteReset(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG ok,
-                         ULONG portsc, ULONG speedClass)
+                         ULONG portsc, ULONG speedClass, ULONG prWait)
 {
     PXHCI_EXTENSION ext;
     ULONG kbps;
@@ -2349,6 +2403,9 @@ static VOID hcdNoteReset(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG ok,
     hcdNoteQuiet(hc, p, XhciEnumNoteBegin(&p->Notes));
     if (!XhciEnumNoteOn(&p->Notes)) {
         return;
+    }
+    if (prWait != 0) {
+        XhciLogNote(ext, "enum.port.prwait", prWait);
     }
     XhciLogNote(ext, "enum.port.reset",
                 XhciEnumNoteReset(p->PortId, ok, p->Enum.Retries, portsc));
@@ -2392,6 +2449,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
     ULONG speedClass;
     ULONG bytes;
     ULONG after;
+    ULONG prWait;
     ULONG ok;
     PUCHAR s;
     KIRQL oldIrql;
@@ -2427,14 +2485,15 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             /* The raw PSIV is kept for the Slot Context; the machine is
              * given the class the controller's PSI table decodes it to. */
             after = 0;
-            ok = hcdResetPort(hc, p, &speed, &after);
+            prWait = 0;
+            ok = hcdResetPort(hc, p, &speed, &after, &prWait);
             p->LinkPsiv = ok ? speed : 0;
             speedClass = XHCI_SPEED_UNKNOWN;
             if (ok) {
                 (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, p->PortId, speed,
                                          &speedClass);
             }
-            hcdNoteReset(hc, p, ok, after, speedClass);
+            hcdNoteReset(hc, p, ok, after, speedClass, prWait);
             speed = hcdEnumSpeedOf(speedClass);
         }
         hcdEventInit(next, XHCI_ENUM_EV_RESET_DONE, ok);

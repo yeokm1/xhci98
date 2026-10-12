@@ -543,7 +543,7 @@ static ULONG hcdWidePublishLocked(PHCD_CONTROLLER hc, PHCD_XFER x)
     x->State = HCD_XFER_ON_RING;
     x->Engine = 1;
     if (dev->Gone || pipe->Closed || x->CancelRequested || hc->ShutLatched) {
-        /* 37.6: past the shutdown latch nothing is published (record 13
+        /* 37.3: past the shutdown latch nothing is published (record 13
          * section 5.8). */
         flags = XhciXpipeRecStop(
             &x->Rec, XHCI_XPIPE_OUT_STOP,
@@ -1621,7 +1621,7 @@ static VOID hcdGo(PHCD_CONTROLLER hc, PHCD_XFER x)
          * filled in: it completes now and is never held, so no drain the
          * thread has already passed can miss it (round 4, finding 2). Past
          * the shutdown latch the same, as not responding: no D0 comes to
-         * serve it (37.6, record 13 section 5.8). */
+         * serve it (37.3, record 13 section 5.8). */
         x->Engine = 0;
         x->Status = dev->Gone          ? HCD_USBD_DEVICE_GONE
                     : hc->ShutLatched  ? XHCI_USBD_STATUS_DEV_NOT_RESPONDING
@@ -1736,7 +1736,7 @@ NTSTATUS HcdIoSubmit(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * request that passed hcd_urb.c's test as it was set is held too. */
     unreadable = hc->Hc.Tol.Unreadable;
     gone = dev->Gone;
-    /* 37.6: and the shutdown latch under the lock it is set under, so a
+    /* 37.3: and the shutdown latch under the lock it is set under, so a
      * request either sees it or is queued before the flush that follows
      * the halt (record 13 section 5.8). */
     latched = hc->ShutLatched;
@@ -1910,7 +1910,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         return;
     }
-    /* 37.6: past the shutdown latch neither held nor published (record 13
+    /* 37.3: past the shutdown latch neither held nor published (record 13
      * section 5.8). */
     if (ok && !dev->Gone && !pipe->Closed && !x->CancelRequested &&
         !hc->ShutLatched) {
@@ -2877,7 +2877,7 @@ static VOID hcdShutDrainDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /*
- * The shutdown latch's transfer flush (37.6, record 13 section 5.8): on the
+ * The shutdown latch's transfer flush (37.3, record 13 section 5.8): on the
  * power path after the shutdown's halt, the halt proven, every pipe of
  * every device - the set the thread's drain walks (hcd_enum.c,
  * hcdDrainAll), a device reached twice drained harmlessly twice - drained
