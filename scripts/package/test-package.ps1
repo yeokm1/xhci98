@@ -1023,6 +1023,13 @@ try {
         Ensure-Directory (Join-Path $pubRoot "xhciqual")
         Set-Content -LiteralPath (Join-Path $pubRoot "xhciqual\XHCIQUAL.EXE") `
                     -Encoding ASCII -Value "stand-in qualifier"
+        # The port switchover's scripts in portsw\, as every cut publishes them
+        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $pubRoot "portsw")
+        foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot "portsw\$name") -Force
+        }
 
         # What the published tree looks like before the run, so that a mode
         # whose whole promise is "writes nothing under releases\" is held to it.
@@ -1292,6 +1299,13 @@ try {
         }
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
+        # The port switchover's scripts in portsw\, as every cut publishes them
+        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $pubRoot4 "portsw")
+        foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot4 "portsw\$name") -Force
+        }
 
         $up4 = Join-Path $script:work "upload-4dir"
         Ensure-Directory $up4
@@ -1403,7 +1417,7 @@ try {
             }
         }
         $strays = @(Get-ChildItem -LiteralPath $uploadDir -Directory -Recurse |
-            Where-Object { $_.Name -notin @("release", "debug", "xhciqual") })
+            Where-Object { $_.Name -notin @("release", "debug", "xhciqual", "portsw") })
         Assert-True ($strays.Count -eq 0) `
             ("a relative -PackageRoot created " + $strays.Count + " directory(ies) nobody named: " +
              (($strays | ForEach-Object { $_.Name } | Select-Object -First 3) -join ", "))
@@ -2161,6 +2175,13 @@ try {
                     -Value "stand-in per-version readme"
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $newPubRoot "LICENSE") -Force
+        # The port switchover's scripts in portsw\, as every cut publishes them
+        # since roadmap-hcd task 37.18: the upload assembly refuses a tree of
+        # this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $newPubRoot "portsw")
+        foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $newPubRoot "portsw\$name") -Force
+        }
 
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $newVersion,
                                "-ReleasesDir", $newRelRoot, "-UploadDir", $newUpRoot)
@@ -2281,8 +2302,8 @@ try {
            Why  = "a cut no longer publishes the port switchover's scripts once, from src\, into portsw\ at the version root (roadmap-hcd task 37.18)" },
         @{ Find = 'Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName';
            Why  = "a cut no longer holds its staged tree to one portsw\ and no copy in a flavour directory before the publish swap (task 37.18)" },
-        @{ Find = '-What "the upload set ''$uploadRoot''" -AllowLegacy';
-           Why  = "the upload assembly no longer holds a tree with portsw\ to the task 37.18 layout, or no longer accepts one cut before it" }
+        @{ Find = '-What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds the tree to the layout its version was published with (task 37.18)" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
@@ -2298,8 +2319,9 @@ try {
     # byte for byte and refuses a source missing one; the layout check takes
     # a tree with portsw\ holding the three, and refuses a copy in a flavour
     # directory, a missing script, a stranger in portsw\, and no portsw\ at
-    # all - which -AllowLegacy accepts, both as a version before 2.3.0.0 has
-    # it (none) and as 2.3.0.0 has it (one set per flavour directory).
+    # all - which -PublishedVersion accepts only in the layout that version
+    # was published with: none before 2.3.0.0, one set per flavour directory
+    # in 2.3.0.0, never after it.
     Write-Step "the port switchover's scripts are published in portsw\ alone"
     $pswFns = @()
     foreach ($fnName in @("Publish-PortSwitchScripts", "Assert-PortSwitchLayout")) {
@@ -2357,26 +2379,59 @@ try {
             try { Assert-PortSwitchLayout -Root $t -Names $pswNames -DirName "portsw" -What "fixture $($c.Name)" } catch { $refused = $_.Exception.Message }
             Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-PortSwitchLayout on the '{0}' fixture: expected a refusal matching '{1}', got: {2}" -f $c.Name, $c.Says, $refused)
         }
-        # -AllowLegacy still holds a tree WITH portsw\ to the rule.
-        $refused = $null
-        try { Assert-PortSwitchLayout -Root (Join-Path $pswRoot "fault-flavour-copy") -Names $pswNames -DirName "portsw" -What "fixture" -AllowLegacy } catch { $refused = $_.Exception.Message }
-        Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -AllowLegacy accepted a tree with portsw\ and a copy in a flavour directory."
+        # Given a published version, a tree WITH portsw\ is still held to the
+        # rule, whatever the version.
+        foreach ($v in @("2.2.0.0", "2.3.0.0", "2.3.0.1")) {
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root (Join-Path $pswRoot "fault-flavour-copy") -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -PublishedVersion $v accepted a tree with portsw\ and a copy in a flavour directory."
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-PortSwitchLayout -PublishedVersion $v refused a tree with the three in portsw\ alone: $refused"
+        }
 
-        # The published layouts it must keep accepting: none (before 2.3.0.0)
-        # and one set per flavour directory (2.3.0.0).
+        # The layouts already published, each accepted for its own version
+        # only (Codex review round 1): none before 2.3.0.0, all three at the
+        # root of every flavour directory in 2.3.0.0, and no other layout
+        # after it; and a damaged one of either refused.
         $legacyNone = Join-Path $pswRoot "legacy-none"
         $legacyFlavour = Join-Path $pswRoot "legacy-2300"
-        foreach ($d in @("release-x86", "debug-x86")) {
+        foreach ($d in @("release-x86", "debug-x86", "xhciqual")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $legacyNone $d) | Out-Null
             New-Item -ItemType Directory -Force -Path (Join-Path $legacyFlavour $d) | Out-Null
+            if ($d -eq "xhciqual") { continue }
+            [System.IO.File]::WriteAllText((Join-Path $legacyNone "$d\xhci98.inf"), "; stand-in")
+            [System.IO.File]::WriteAllText((Join-Path $legacyFlavour "$d\xhci98.inf"), "; stand-in")
             foreach ($name in $pswNames) {
                 Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $legacyFlavour "$d\$name")
             }
         }
-        foreach ($legacy in @($legacyNone, $legacyFlavour)) {
+        $legacyCases = @(
+            @{ Tree = $legacyNone;    Version = "2.2.0.0"; Want = $true },
+            @{ Tree = $legacyNone;    Version = "2.3.0.0"; Want = $false },
+            @{ Tree = $legacyNone;    Version = "2.3.0.1"; Want = $false },
+            @{ Tree = $legacyFlavour; Version = "2.3.0.0"; Want = $true },
+            @{ Tree = $legacyFlavour; Version = "2.2.0.0"; Want = $false },
+            @{ Tree = $legacyFlavour; Version = "2.4.0.0"; Want = $false }
+        )
+        foreach ($c in $legacyCases) {
             $refused = $null
-            try { Assert-PortSwitchLayout -Root $legacy -Names $pswNames -DirName "portsw" -What "fixture" -AllowLegacy } catch { $refused = $_.Exception.Message }
-            Assert-True ($null -eq $refused) "Assert-PortSwitchLayout -AllowLegacy refused a layout already published ($(Split-Path -Leaf $legacy)): $refused"
+            try { Assert-PortSwitchLayout -Root $c.Tree -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-PortSwitchLayout -PublishedVersion {0} on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+        }
+        $damaged = @(
+            @{ Name = "2300-missing";  Base = $legacyFlavour; Version = "2.3.0.0"; Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "debug-x86\portsw-off.bat") } },
+            @{ Name = "2300-stray";    Base = $legacyFlavour; Version = "2.3.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "debug-x86\portsw.vbs") -Destination (Join-Path $t "xhciqual\portsw.vbs") } },
+            @{ Name = "none-stray";    Base = $legacyNone;    Version = "2.2.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $repo "src\portsw.vbs") -Destination (Join-Path $t "release-x86\portsw.vbs") } },
+            @{ Name = "none-portsw-file"; Base = $legacyNone; Version = "2.2.0.0"; Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "portsw"), "x") } }
+        )
+        foreach ($c in $damaged) {
+            $t = Join-Path $pswRoot ("damaged-" + $c.Name)
+            Copy-Item -LiteralPath $c.Base -Destination $t -Recurse
+            & $c.Do $t
+            $refused = $null
+            try { Assert-PortSwitchLayout -Root $t -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -PublishedVersion $($c.Version) accepted the damaged '$($c.Name)' layout."
         }
     }
     #

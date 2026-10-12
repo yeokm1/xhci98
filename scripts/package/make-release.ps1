@@ -574,7 +574,8 @@ $oemPublishable = @("txtsetup.oem")
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
 # published release is never rewritten, so the upload assembly accepts a
-# tree with no portsw\ as it was cut (Assert-PortSwitchLayout -AllowLegacy).
+# tree with no portsw\ in the layout its version was published with
+# (Assert-PortSwitchLayout -PublishedVersion).
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 $pswDirName = "portsw"
 
@@ -600,38 +601,62 @@ function Publish-PortSwitchScripts {
 function Assert-PortSwitchLayout {
     # The layout of task 37.18 in a version tree: <Root>\<DirName>\ holds the
     # scripts and nothing else, and no other directory of the tree, a flavour
-    # directory above all, holds a copy of any of them. -AllowLegacy accepts a
-    # tree with no <DirName>\ at all as it stands, which is how every version
-    # cut before task 37.18 was published (none before 2.3.0.0, one set per
-    # flavour directory in 2.3.0.0); a tree that has the directory is held to
-    # the rule either way.
-    param([string]$Root, [string[]]$Names, [string]$DirName, [string]$What, [switch]$AllowLegacy)
-    $dir = Join-Path $Root $DirName
-    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
-        if ($AllowLegacy) { return }
-        throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.18)."
-    }
+    # directory above all, holds a copy of any of them.
+    #
+    # Without -PublishedVersion (the cut) that is the only layout accepted.
+    # With it (the upload assembly, which -UploadSetOnly also reaches with a
+    # tree published before this task) a tree that has <DirName>\ is still
+    # held to it, and one that has not is accepted only in the layout its
+    # version was published with, checked as strictly: before 2.3.0.0 none of
+    # the scripts anywhere; 2.3.0.0 all three at the root of every flavour
+    # directory (one holding <InfName>) and nowhere else; after 2.3.0.0 no
+    # other layout at all, since every such version is cut by this script.
+    param([string]$Root, [string[]]$Names, [string]$DirName, [string]$What,
+          [string]$PublishedVersion = "", [string]$InfName = "xhci98.inf")
     $keys = @($Names | ForEach-Object { $_.ToLowerInvariant() })
-    $faults = @()
-    foreach ($name in $Names) {
-        if (-not (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { $faults += "$DirName\$name is missing" }
-    }
-    foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force)) {
-        if ($item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $keys) {
-            $faults += "$DirName\$($item.Name) is not one of the scripts"
-        }
-    }
     $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
-    $dirFull = (Get-Item -LiteralPath $dir).FullName.TrimEnd('\') + '\'
-    foreach ($item in @(Get-ChildItem -LiteralPath $Root -File -Recurse -Force)) {
-        if ($item.Name.ToLowerInvariant() -in $keys -and
-            -not $item.FullName.StartsWith($dirFull, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $faults += ("{0} is a copy outside {1}\" -f $item.FullName.Substring($rootFull.Length + 1), $DirName)
+    $dir = Join-Path $rootFull $DirName
+    $copies = @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force |
+                Where-Object { $_.Name.ToLowerInvariant() -in $keys })
+    $faults = @()
+    if (Test-Path -LiteralPath $dir -PathType Container) {
+        foreach ($name in $Names) {
+            if (-not (Test-Path -LiteralPath (Join-Path $dir $name) -PathType Leaf)) { $faults += "$DirName\$name is missing" }
+        }
+        foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force)) {
+            if ($item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $keys) {
+                $faults += "$DirName\$($item.Name) is not one of the scripts"
+            }
+        }
+        $allowedDirs = @($dir)
+        $layout = "in $DirName\ alone"
+    } elseif ($PublishedVersion -eq "" -or ([version]$PublishedVersion -gt [version]"2.3.0.0") -or
+              (Test-Path -LiteralPath $dir)) {
+        throw "$What has no $DirName\ directory, where the port switchover's scripts are published (roadmap-hcd task 37.18)."
+    } elseif ([version]$PublishedVersion -eq [version]"2.3.0.0") {
+        $allowedDirs = @(Get-ChildItem -LiteralPath $rootFull -Directory -Force |
+                         Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName $InfName) -PathType Leaf } |
+                         ForEach-Object { $_.FullName })
+        foreach ($flavourDir in $allowedDirs) {
+            foreach ($name in $Names) {
+                if (-not (Test-Path -LiteralPath (Join-Path $flavourDir $name) -PathType Leaf)) {
+                    $faults += ("{0}\{1} is missing" -f (Split-Path -Leaf $flavourDir), $name)
+                }
+            }
+        }
+        $layout = "as 2.3.0.0 published them, at the root of each flavour directory"
+    } else {
+        $allowedDirs = @()
+        $layout = "absent, as a version before 2.3.0.0 has them"
+    }
+    foreach ($item in $copies) {
+        if ($item.DirectoryName.TrimEnd('\') -notin $allowedDirs) {
+            $faults += ("{0} is a copy outside where they belong" -f $item.FullName.Substring($rootFull.Length + 1))
         }
     }
     if ($faults.Count -gt 0) {
-        throw ("{0} does not carry the port switchover's scripts in {1}\ alone (roadmap-hcd task 37.18):`n  - {2}" -f `
-               $What, $DirName, ($faults -join "`n  - "))
+        throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.18):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
     }
 }
 
@@ -1867,7 +1892,7 @@ $gateOut
     # that directory (task 37.18); a version cut before it is accepted with
     # the layout it was published with.
     Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable -DirName $pswDirName `
-                            -What "the upload set '$uploadRoot'" -AllowLegacy
+                            -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -3113,8 +3138,8 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      portsw-on.bat  turns it on in one double-click"
         $contents += "      portsw-off.bat turns it off in one double-click"
         $contents += ""
-        $contents += "      The same three for 32-bit and 64-bit Windows and for both"
-        $contents += "      builds. Run them from this directory."
+        $contents += "      One copy for every directory above. Run them from this"
+        $contents += "      directory."
         $contents += ""
     }
 
@@ -3515,8 +3540,8 @@ The package's own files are in:
 
 Nothing else is in the package, and there is nothing to complete. The
 Intel port switchover's scripts (section 9, XhciIntelPortSwitch) are not
-part of it: they are in the PORTSW directory beside these, once for every
-directory.
+part of it: they are in the PORTSW directory beside these, one copy for
+all of them.
 
 Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
