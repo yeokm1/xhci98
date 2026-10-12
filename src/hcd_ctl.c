@@ -36,8 +36,9 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* The device-key values the HCD reads (design record 13 section 5.5).
  * The miniport's three XhciVirtualHSHub* values are not read. The fourth,
  * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
- * start: absent is 0, UAS where the device offers it. XhciFastPollFsLs
- * (33.8) is read at start: absent is 0, every interval by Table 6-12. Since
+ * start: absent is 1 since 37.3, Bulk-Only where the device offers it, for
+ * text-mode Setup (HcdCtlForceBulkOnly); the INFs' 0 keeps UAS.
+ * XhciFastPollFsLs (33.8) is read at start: absent is 0, every interval by Table 6-12. Since
  * 34.1 the INFs write both, and the two below, at those defaults. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
@@ -438,11 +439,15 @@ static VOID hcdFirmwareNote(PHCD_CONTROLLER hc)
 /*
  * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
  * is a nonzero REG_DWORD in the controller's driver key, the key every other
- * value of this driver lives in; 0 when it is zero, absent or of another
- * type. One value for every device on this controller, read per enumeration
- * so a change takes effect at the next one (a devnode already installed on
- * NT keeps its service until it is uninstalled and re-plugged).
- * IRQL: PASSIVE_LEVEL.
+ * value of this driver lives in; 0 when it is zero. When it cannot be read -
+ * absent, of another type, or no driver key at all - it is 1 (roadmap-hcd
+ * 37.3): every INF install path writes 0, so an unread value means no INF has
+ * run, which is text-mode Setup, where only usbstor's Bulk-Only ids have a
+ * driver and xhciuas.sys is not loaded; a UAS-only PDO there is no disk, and a
+ * boot stick behind it is STOP 0x7B. One value for every device on this
+ * controller, read per enumeration so a change takes effect at the next one
+ * (a devnode already installed on NT keeps its service until it is
+ * uninstalled and re-plugged). IRQL: PASSIVE_LEVEL.
  */
 ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 {
@@ -450,7 +455,7 @@ ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
 
     value = 0;
     if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_FORCE_BOT, &value))) {
-        return 0;
+        return 1;
     }
     return value != 0;
 }
