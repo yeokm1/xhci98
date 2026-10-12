@@ -1,5 +1,5 @@
 xhci98 - an xHCI USB host controller driver, and a USB Attached SCSI class
-driver, for Windows 98 SE and Windows 2000 SP4.
+driver, for Windows 98 SE to Windows 7.
 
 Copyright (c) 2026 Yeo Kheng Meng
 

@@ -37,7 +37,7 @@ and do not add a conclusion to it.
 ## 1. What the project is, and why it needs any of this
 
 `xhci98.sys` is an independently written WDM kernel-mode driver for xHCI host
-controllers, targeting Windows 98 SE and Windows 2000 SP4. It is built as a
+controllers, targeting Windows 98 SE to Windows 7. It is built as a
 miniport of Microsoft's `usbport.sys` (see `AGENTS.md`, "Architecture
 Overview"), which means it must fit an interface, `USBPORT_REGISTRATION_PACKET`
 and its callbacks, that Microsoft never documented.
