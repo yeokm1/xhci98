@@ -209,7 +209,8 @@ files point to `portsw\`. Not read: 32-bit 7 (7 x64 was).
   hardware-type list, and Have Disk answers "does not contain information
   about your hardware"; the Found New Hardware wizard's Search and Specify
   a location route works. The row was read on bases where the controller
-  already had a driver.
+  already had a driver. Row 4.2 now gives the Search route, the list
+  route kept for an update over an installed xhci98 (2026-10-13).
 - **The UAS install on Windows 7**: no Found New Hardware wizard; Windows
   searches Windows Update, says the device was not installed, and the
   driver goes in through Device Manager. The readme says a wizard asks.
