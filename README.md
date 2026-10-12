@@ -95,6 +95,7 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
 | `xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier |
 | `xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader |
+| `portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `readme.txt` | | the release notes in plain text |
 
 In each driver directory:
@@ -103,8 +104,6 @@ In each driver directory:
 - `xhciuas.sys` and `xhciuas.inf`: the UAS storage driver.
 - `xhcimsi.sys` (32-bit only): the MSI helper. 32-bit Vista and 7 need this small second driver to give the controller a message-signalled interrupt. The INF installs it on those two systems only, as a service that starts at boot, which is why they ask for a restart. Every other system ignores it.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
-- `portsw.vbs`: the switch for the Intel port switchover.
-- `portsw-on.bat` and `portsw-off.bat`: turn that switchover on or off in one double-click.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
 
 `release-x86\` or `release-x64\` is the one to install.
@@ -296,7 +295,7 @@ A device on a switchable connector under a running USB 2.0 driver (NUSB's, for e
 
 The value is read when the controller starts, so restart Windows after changing it.
 
-`portsw.vbs`, in each package directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in the package directory:
+`portsw.vbs`, in the download's `portsw\` directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in that directory:
 
 ```
 cscript //nologo portsw.vbs show
@@ -310,7 +309,9 @@ cscript //nologo portsw.vbs 0
 
 Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
-`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. Then restart Windows.
+`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. At a prompt on 98 SE and ME, change to `portsw\` first. Then restart Windows.
+
+The `2.3.0.0` download has these three files in each driver directory instead; they work the same from there.
 
 ### The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)
 
