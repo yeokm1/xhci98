@@ -1820,7 +1820,11 @@ third first-class target with the full checkpoint tax `AGENTS.md` describes,
 but a supported-in-VM target stated the way Windows 2000's status is stated,
 under SweetLow's stack only. `AGENTS.md`, `README.md`, the release notes,
 both issue forms, the INF header comment, the generated `readme.txt` and the
-acceptance test (rows 4.5, 7.7, 7.8) all name it that way.
+acceptance test (rows 4.5, 7.7, 7.8) all name it that way. Under the host
+controller driver that requirement fell: roadmap 37.1 (2026-10-12,
+`runs/run-37.md`) read the `2.3.0.0` asset on the `winme-clean-install`
+snapshot, a stock ME with no USB 2.0 stack, and those documents now say
+Windows ME needs none.
 
 ### Windows XP target VM (roadmap Phase 19)
 

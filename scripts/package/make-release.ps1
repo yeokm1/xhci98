@@ -3388,11 +3388,10 @@ tested.
                      (section 3). SweetLow's USB 2.0 stack alone has no
                      storage part.
 
-  On Windows ME      SweetLow's USB 2.0 stack: every Windows ME test ran
-                     under it. Windows ME carries its own USB storage
-                     files. DO NOT
-                     install NUSB on Windows ME: it is a Windows 98 SE
-                     package.
+  On Windows ME      Nothing to install: no USB 2.0 stack is needed, and
+                     SweetLow's, if already there, also works. Windows ME
+                     carries its own USB storage files. DO NOT install
+                     NUSB on Windows ME: it is a Windows 98 SE package.
 
   On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
   XP, Vista and 7
