@@ -143,7 +143,11 @@ static VOID hcdShutFlush(PHCD_CONTROLLER hc)
     halted = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->ShutLatched = 1;
-    if (hc->Common.DevicePower == PowerDeviceD0 &&
+    /* A started lifetime with its BAR mapped: a stopped FDO keeps
+     * HcInfoStatus and its recorded D0 but its registers are unmapped
+     * (hcd_ctl.c; Codex review of 4de0f999, round 2, finding 1). */
+    if (hc->ControllerStarted && hc->BarVa != NULL &&
+        hc->Common.DevicePower == PowerDeviceD0 &&
         hc->Hc.HcInfoStatus == XHCI_HC_OK && !hc->Hc.Tol.Unreadable) {
         halted = XhciTolHaltProven(XhciReadOp(&hc->Hc, XHCI_OP_USBSTS));
     }

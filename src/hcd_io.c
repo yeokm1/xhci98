@@ -2860,19 +2860,9 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     return 1;
 }
 
-/*
- * The shutdown latch's transfer flush (37.6, record 13 section 5.8): on the
- * power path after the shutdown's halt, the halt proven, every pipe of
- * every device - the set the thread's drain walks (hcd_enum.c,
- * hcdDrainAll), a device reached twice drained harmlessly twice - drained
- * DEVICE_NOT_RESPONDING: its waiting IRPs, held records, engine queue and
- * promoted records. The device is not marked gone and its pipes stay
- * open; the TDs stay on the halted rings, so the saved image is dropped
- * first and a resume, should one ever come, reinitializes rather than
- * restoring over them. The port and slot tables are the thread's, stable
- * here because the power gate keeps the thread out of its pass. IRQL:
- * PASSIVE_LEVEL, the power gate held, no lock held.
- */
+/* One device's pipes drained DEVICE_NOT_RESPONDING for HcdIoShutFlush,
+ * its pipes left open and the device not marked gone. IRQL:
+ * PASSIVE_LEVEL, the power gate held, no lock held. */
 static VOID hcdShutDrainDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     ULONG dci;
@@ -2886,6 +2876,19 @@ static VOID hcdShutDrainDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
 }
 
+/*
+ * The shutdown latch's transfer flush (37.6, record 13 section 5.8): on the
+ * power path after the shutdown's halt, the halt proven, every pipe of
+ * every device - the set the thread's drain walks (hcd_enum.c,
+ * hcdDrainAll), a device reached twice drained harmlessly twice - drained
+ * DEVICE_NOT_RESPONDING: its waiting IRPs, held records, engine queue and
+ * promoted records. The TDs stay on the halted rings, so the saved image
+ * is dropped first and a resume, should one ever come, reinitializes
+ * rather than restoring over them. The port and slot tables are the
+ * thread's, stable here because the power gate keeps the thread out of
+ * its pass. IRQL: PASSIVE_LEVEL (unlike this file's blanket), the power
+ * gate held, no lock held.
+ */
 VOID HcdIoShutFlush(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;

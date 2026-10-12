@@ -1018,7 +1018,7 @@ completes it (Codex review of this design, round 1, finding 2). The pure
 decision is `XhciTolShutLatch` (`xhci_tol.c`):
 only the shutdown state latches, so S1 to S4 keep today's
 hold-until-resume. A D0 clears it, under the same lock, before the resume
-runs: no D0 follows an S5 on any target read here, and one that did must
+runs, and so does a PnP start, for the lifetime it begins: no D0 follows an S5 on any target read here, and one that did must
 find the bus serving again.
 
 **Admission after the latch.** Every path that would leave a request
@@ -1072,7 +1072,8 @@ service, and no suspend, resume or recovery runs beside it - after
    (`hcdCfgComplete`; a request without a URB `STATUS_UNSUCCESSFUL`). They
    hold no DMA.
 2. **Transfers**, only on the halt's positive proof: `USBSTS` read by the
-   flush, with the function still in D0, showing `HCHalted` on a window
+   flush, on a started controller with its registers mapped and the
+   function still in D0, showing `HCHalted` on a window
    that decodes (`XhciTolHaltProven`: all-ones carries the bit and proves
    nothing); the common buffer not pinned; the controller not contained
    (`Tol.Unreadable`). The quiesce's own flags are not the proof: it
