@@ -2490,6 +2490,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
+    /* And the shutdown latch (37.6): a new lifetime serves its requests
+     * (Codex review of 4de0f999, round 2, finding 2). Before the start
+     * admits anything, so no lock is needed against an admission. */
+    hc->ShutLatched = 0;
     /* Task 36.3's record was reset when the START_DEVICE arrived, before
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);
