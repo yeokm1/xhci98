@@ -139,8 +139,13 @@ on 2026-10-12 (owner).
 2026-10-12, the owner's E7250, BIOS A17, SATA in AHCI mode, "Enable USB
 3.0 Controller" on, the reporter's ISO from the WinSetupFromUSB stick with
 both fixes (and the diagnostic screen) in place of `XHCI98.SY_`: text mode
-reached the partition screen. Owed: the install carried to the desktop, the
-release build read the same way, and the X230 reporter's reading.
+reached the partition screen.
+
+2026-10-12, the same machine and settings, the `release-x64` build of
+`2072d222` (no diagnostic screen; sha256 `2FCAD04B...F94D`) in both
+`XHCI98.SY_` copies on the stick: Setup ran from the stick through text
+mode and GUI mode to the desktop, and Device Manager showed no device
+marked with a problem. Owed: the X230 reporter's reading.
 
 ## 7. Rules kept
 

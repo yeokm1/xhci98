@@ -744,9 +744,11 @@ The limits, all of them the user's to know:
    Setup reads every F6 disk.
 3. Installing Windows onto a USB disk is not supported: nothing here makes
    the installed system boot from one.
-4. A disk the bus selects for UAS is not usable in text mode, even if it
-   also offers Bulk-Only, since no UAS driver is loaded (above); a
-   Bulk-Only-only device always is.
+4. A disk the bus selects for UAS is not usable in text mode, since no
+   UAS driver is loaded (above). Since 37.2 that is a UAS-only disk: one
+   that also offers Bulk-Only is selected for Bulk-Only there, as an
+   unread `XhciForceBulkOnly` is 1, and a Bulk-Only-only device always
+   is usable.
 5. Text mode runs with interrupt moderation at the code default and the log
    off, since no INF value is written until GUI mode.
 6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user

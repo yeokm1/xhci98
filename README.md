@@ -147,7 +147,7 @@ The same floppy serves the Recovery Console of Windows 2000 and XP. Press F6 as 
 Things to know:
 
 - Pressing F6 needs the BIOS's own USB keyboard support.
-- A UAS disk is not usable until GUI-mode Setup; a plain USB flash stick is.
+- A disk that offers only UAS is not usable until GUI-mode Setup; a plain USB flash stick is, and so, since `2.3.1.0`, is a UAS disk that also offers Bulk-Only, as most do.
 - A USB drive present at the partition screen takes `C:`. Unplug the USB drives you do not need, or Windows installs to the next letter.
 - On Windows 2000, plug the USB keyboard and stick in before Setup starts.
 - To install Windows XP and XP x64, have a PS/2 keyboard or a laptop's built-in keyboard at hand. Later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver (see "Known limitations/issues"). The Recovery Console runs in text mode throughout and is not affected.
