@@ -1883,9 +1883,12 @@ the 3 ms lateness threshold at its edge, `ObsSumMs` saturating, a
 HELD-RELEASED-HELD and a RELEASED-HELD-RELEASED sequence between two
 runs, a call landing between a run's entry and its observation, an odd
 epoch, a change of armed period and a change of start - each rejected,
-and each followed by two coherent runs in the new state, of which the
-first seeds and the second counts (observation resumes after every kind
-of rejection); a long run of samples in one epoch counting every
+and observation resuming after each (round 5, finding 2): after an
+incoherent sample (an odd epoch, or a call between entry and
+observation) the baseline is invalid, the next coherent sample seeds and
+the one after it counts; after a coherent sample that changed epoch,
+period or start, that sample has already seeded, so the next matching
+sample counts; a long run of samples in one epoch counting every
 interval. The channel's vectors for the timer service are record 18
 section 15.3's; the binding machine's `XHCI_HLPR_EV_TIMER` and the
 per-start latch are record 18 section 15.4's.
@@ -1961,9 +1964,15 @@ as snapshot differences (section 7.2.9).
   slot (the PDO's serial, the D-state); `qemu.stop.dx` written by the
   stop's very first step, before the bar, for each PDO whose `PwrIrp` is
   a non-NULL Dx (serial, D-state, `PowerPending`); `qemu.susp.done`
-  written by the completion worker when it actually completes a D-IRP
-  (serial, and the path that claimed it: unlink, PDO close or stale
-  settle), apart from any hand-off; `poll.timer.call` written by the
+  written at the one point every D-IRP completion of the executor's
+  passes through, `hcdSuspCompletePower` (`src/hcd_susp.c`), whether it
+  is called inline - the PDO's close, `HcdSuspPdoClose` through
+  `hcdSuspSlotFinish` (~3087, ~3015) - or by a completion worker (the
+  unlink's hand-off, the stale settle): after `IoCompleteRequest`
+  returns and before `PowerPending` is dropped, from the serial, D-state
+  and claiming path (unlink, PDO close or stale settle) saved before the
+  completion, never read back from the completed IRP (round 5, finding
+  1); the settlement paths themselves unchanged; `poll.timer.call` written by the
   timer thread **before the injected delay** and `poll.timer.return`
   after the call returns, each with the start's serial and the call's
   sequence number in that start (round 4, finding 2); and
@@ -2592,6 +2601,14 @@ and 5 confirmed closed; 2 and 4 reopened narrower. All taken:
 | 1 | P2: a rejected sample left the baseline stale, so counting could stop for good | Section 7.2.9: coherent samples seed or count and always become the baseline, incoherent ones invalidate it; vectors showing observation resumes |
 | 2 | P2: T3's order did not prove the delay overlapped the outstanding IRP | Leg T3: call and return notes with sequence numbers, the call note before the delay, the required order with the completion inside the call |
 | 3 | P2: the skip does not make the unlink the only settlement path | Leg T3: the claim narrowed to normal executor completion, the claiming path recorded, the stop-entry condition a reading that may be owed |
+
+Round 5 (`9557fe74`, same thread): no P1, 1 P2, 1 P3. Round-4 findings 1
+and 2 confirmed closed; 3 reopened narrowly. Both taken:
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P2: a worker-only completion note misses the PDO close's inline completion | Leg T3: the note at `hcdSuspCompletePower`, for inline and worker callers, from metadata saved before the completion |
+| 2 | P3: the recovery vectors added a seed after a coherent mismatch | Section 7.2.10: the incoherent and coherent cases split |
 
 ## 14. What changes in the documents
 
