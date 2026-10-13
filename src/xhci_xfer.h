@@ -322,6 +322,25 @@ ULONG XhciXferSubmitControl(PXHCI_TRANSFER_QUEUE queue,
                             XHCI_TRB *scratch,
                             ULONG scratchCount);
 
+/*
+ * The same, with task 38.10's XhciControlLinkNoOp (design record 20 section
+ * 4.13): with `linkNoOp` set - the quirk applies and the device is
+ * SuperSpeed or faster - a control transfer that would start on the last
+ * TRB before the Link TRB is preceded by a No Op there
+ * (XhciRingControlLinkPad), counted in the same all-or-nothing room check;
+ * `*padded` (may be NULL) is 1 when one was placed. XhciXferSubmitControl
+ * is this with `linkNoOp` 0.
+ */
+ULONG XhciXferSubmitControlEx(PXHCI_TRANSFER_QUEUE queue,
+                              PXHCI_RING ring,
+                              const XHCI_CONTROL_REQUEST *request,
+                              PXHCI_TRANSFER transfer,
+                              PVOID transferParameters,
+                              XHCI_TRB *scratch,
+                              ULONG scratchCount,
+                              ULONG linkNoOp,
+                              PULONG padded);
+
 /* ------------------------------------------------------------------ */
 /* 7a-A.2: building a non-control transfer (interrupt, and bulk from 8-A.1) */
 /* ------------------------------------------------------------------ */

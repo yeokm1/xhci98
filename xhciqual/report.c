@@ -289,40 +289,6 @@ static const char *class_name(int pc)
     }
 }
 
-static void print_quirks(const QUIRK *q)
-{
-    if (q == 0) {
-        qprintf("  quirks: none known for this VID/DID\n");
-        return;
-    }
-    qprintf("  quirks: %s\n", q->name);
-    if (q->flags & QF_XUSB2PR)
-        qprintf("    - EHCI<->xHCI port mux (XUSB2PR): run C7 before "
-                "judging dead ports\n");
-    if (q->flags & QF_FW_UPLOAD)
-        qprintf("    - needs driver firmware upload if the card is "
-                "ROM-less\n");
-    if (q->flags & QF_FW_SPI)
-        qprintf("    - firmware from on-card SPI flash (no upload)\n");
-    if (q->flags & QF_SPURIOUS)
-        qprintf("    - spurious Success event after a short packet on the "
-                "same TD: ignore it\n");
-    if (q->flags & QF_BEI)
-        qprintf("    - never set BEI in isoch TRBs\n");
-    if (q->flags & QF_PME_STUCK)
-        qprintf("    - PME wake latch bug (matters on Win2000 power "
-                "transitions)\n");
-    if (q->flags & QF_BULK64K)
-        qprintf("    - keep bulk TRB chains under 64 KB\n");
-    if (q->flags & QF_CMD_RETRY)
-        qprintf("    - retry TRB Error command completions once\n");
-    if (q->flags & QF_BROKEN_MSI)
-        qprintf("    - broken MSI (Linux quirk: take the line or poll, "
-                "not MSI)\n");
-    if (q->flags & QF_AVOID)
-        qprintf("    - known-unreliable silicon: avoid as test platform\n");
-}
-
 void report_controller(CTRL *c, int active_ran)
 {
     PCIINFO *p = &c->pci;
@@ -330,7 +296,10 @@ void report_controller(CTRL *c, int active_ran)
 
     qprintf("\n==== Controller %02X:%02X.%X - %04X:%04X rev %02X ====\n",
             p->bus, p->dev, p->fn, p->vid, p->did, p->rev);
-    print_quirks(c->quirk);
+    /* The exact row, the vendor-wide row and the HCIVERSION floor note
+     * (quirks.c; host-tested by test/test_quirks.c). HCIVERSION is
+     * valid only where MMIO answered. */
+    quirk_report(p->vid, p->did, c->mmio_ok, c->hciversion, qprintf);
 
     qprintf("  PCI: cmd=%04X (MSE=%d BME=%d INTxDis=%d)  pin=INT%c#  "
             "line=IRQ %u\n",

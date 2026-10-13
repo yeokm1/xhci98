@@ -276,6 +276,7 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
     ULONG answered;
     ULONG errors;
     ULONG missed;
+    ULONG dropped;
     ULONG answer;
 
     if (cc == XHCI_CC_RING_UNDERRUN || cc == XHCI_CC_RING_OVERRUN) {
@@ -310,8 +311,17 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
     answered = q->IsoPacketsAnswered;
     errors = q->IsoPacketErrors;
     missed = q->IsoMissedService;
+    /* 38.10, XhciIsochSpuriousSuccess (design record 20 section 4.14): the
+     * scope as this start decided it, and what the event dropped. */
+    q->IsoSpuriousScope = XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_ISOCH_SUCCESS);
+    dropped = q->IsoSpuriousDropped;
     answer = XhciXferIsoEvent(q, pipe->Ring, slotId, dci, event->Param0,
                               event->Status, event->Control, &result);
+    if (q->IsoSpuriousDropped != dropped) {
+        hc->Hc.Quirk.IsochDropped += q->IsoSpuriousDropped - dropped;
+        XhciQuirkOutcome(&hc->Hc.Quirk, XHCI_QK_ISOCH_SUCCESS,
+                         XHCI_QK_OUT_DONE, XHCI_QK_WHY_NONE);
+    }
     hc->Counters.IsoPacketsAnswered += q->IsoPacketsAnswered - answered;
     hc->Counters.IsoPacketErrors += q->IsoPacketErrors - errors;
     hc->Counters.IsoMissedService += q->IsoMissedService - missed;

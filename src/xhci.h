@@ -37,6 +37,7 @@
  * 12 section 3.3), embedded for the same reason. */
 #include "xhci_vhub.h"
 #include "xhci_tol.h"
+#include "xhci_quirk.h"
 
 /* ------------------------------------------------------------------ */
 /* Hardware structures referenced by the layout                        */
@@ -2955,6 +2956,24 @@ ULONG XhciRingEnqueueTd(PXHCI_RING ring,
 ULONG XhciRingEnqueue(PXHCI_RING ring, const XHCI_TRB *trb, ULONG *trbPA);
 
 /*
+ * Task 38.10, XhciControlLinkNoOp (design record 20 section 4.13; Linux's
+ * XHCI_ETRON_HOST on the EJ168 and EJ188): before a SuperSpeed control
+ * transfer of `groupCount` TRBs, when the enqueue pointer rests on the last
+ * TRB before the Link TRB - where the Setup Stage would sit with its Data
+ * Stage beyond the link - one Transfer No Op TRB (6.4.1.4: type 8, no
+ * Chain, no IOC, Interrupter Target 0) is published there as a TD of its
+ * own, so the control transfer starts after the link. The room check
+ * counts the No Op and the whole group together, so nothing is written
+ * unless both fit: XHCI_RING_FULL then, with the ring untouched. `*padded`
+ * is 1 when the No Op was placed. Anywhere else the ring is untouched and
+ * XHCI_RING_OK returned. A No Op TD is the shape a cancelled TD is
+ * rewritten to (XhciRingNoOpAt), so nothing that walks the ring meets a
+ * new kind of TRB. IRQL: any; the caller's ring lock.
+ */
+ULONG XhciRingControlLinkPad(PXHCI_RING ring, ULONG groupCount,
+                             PULONG padded);
+
+/*
  * Where a group landed. The two indices are what a caller's own bookkeeping
  * keys on: an event resolves to an index, and "is this index inside the range
  * this transfer occupies" is the question that finds the owner. The PA is the
@@ -4243,6 +4262,20 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG RetryToken;
     ULONG RetryReplay;
     ULONG RetryDiverts;
+
+    /*
+     * Task 38.10, XhciIsochSpuriousSuccess (design record 20 section 4.14):
+     * `IsoSpuriousScope` is the device layer's, set before each isochronous
+     * event is handed in (hcd_dev.c), 0 for every queue XhciXferQueueInit
+     * makes. The last event this queue took - its TRB pointer as the event
+     * gave it and its completion code - and the Successes dropped for
+     * naming the TRB that event completed with a Transaction Error, a
+     * Babble or an Isoch Buffer Overrun.
+     */
+    ULONG IsoSpuriousScope;
+    ULONG IsoLastEventPA;
+    ULONG IsoLastEventCode;
+    ULONG IsoSpuriousDropped;
 } XHCI_TRANSFER_QUEUE, *PXHCI_TRANSFER_QUEUE;
 
 /*
@@ -8509,6 +8542,18 @@ typedef struct _XHCI_EXTENSION {
     ULONG RearmPeekPending;
     ULONG RearmPeekDrains;
 
+    /*
+     * Linux's xHCI controller quirks (roadmap-hcd 38.10, design record 20;
+     * xhci_quirk.h): the values a start read, the lists matched and the
+     * effective policy, each quirk's last outcome, and the counts the
+     * counter block carries. Filled by the start (hcd_ctl.c) after this
+     * extension is zeroed, and kept across a resume's or a recovery's
+     * reinitialization, which zero nothing. Appended after the re-arm
+     * words; an even number of ULONGs, so the parity TrailingPad keeps is
+     * unchanged.
+     */
+    XHCI_QUIRK_STATE Quirk;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -8884,7 +8929,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 173UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 207UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 

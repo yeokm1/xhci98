@@ -95,7 +95,14 @@ What it checks, grouped by the failure each rule prevents:
            made it nineteen: XhciWideMap at 0, XhciSelectiveSuspend at 0 and
            XhciUsb2HubSpeedFallback at 1, the three a user had set by hand
            until the owner's decision of 2026-10-11 that every value the
-           driver reads is written with its own default.
+           driver reads is written with its own default. Task 38.10 made it
+           thirty-three: fourteen of Linux's xHCI controller quirks (design
+           record 20 section 6.1) - XhciMsiAvoid, XhciStreamsOff,
+           XhciResumeReinit, XhciIntelShutdownToEhci, XhciSuspendHaltDelay,
+           XhciSuspendHaltTimeout, XhciAsmediaFlowControl, XhciTiIntervalCap,
+           XhciStuckLinkReset, XhciStreamRingPad, XhciControlLinkNoOp,
+           XhciIsochSpuriousSuccess and XhciAmdSuspendBitClear at 1, and
+           XhciShutdownReset at 0 (owner, 2026-10-13).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1295,7 +1302,7 @@ $requiredValues = @(
         Name    = "XhciIntervalCap"
         Type    = "0x00010003"
         Default = "1"
-        Why     = "roadmap-hcd task 35-T.7's interrupt-interval cap at 8 (32 ms) on AMD controllers (design record 17 section 4.7), gated with design record 17 section 2's three values: 1 the list, 0 off, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        Why     = "roadmap-hcd task 35-T.7's interrupt-interval cap at 8 (32 ms) on AMD controllers (design record 17 section 4.7) and, since roadmap-hcd task 38.10, on the ATI Navi10 USB-C controller 1002:7316 (design record 20 section 4.10), gated with design record 17 section 2's three values: 1 the list, 0 off, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
         DefaultWhy = "1 is the driver's own default, the gated list (design record 17 section 2); 0 or 2 would be a new decision"
     },
     @{
@@ -1353,6 +1360,112 @@ $requiredValues = @(
         Default = "1"
         Why     = "issue 18's default speed IDs for a Full- or Low-Speed device behind a hub on a USB 2.0 root port whose speed table names no such speed (roadmap-hcd task 36.49), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on (implementation-invariants.md, Port Speed); 0 would refuse such a device again, a new decision"
+    },
+    #
+    # Roadmap-hcd task 38.10's fourteen (design record 20 sections 4 and
+    # 6.1): one per Linux quirk taken, each read at each start, 0 off, 1
+    # Linux's listed controllers, 2 every controller where the record offers
+    # it and read as 1 where the quirk writes a vendor's registers; absent,
+    # another type or another number is the default. Every one ships at 1
+    # but XhciShutdownReset, at 0 (owner, 2026-10-13; record 20 section 9).
+    #
+    @{
+        Name    = "XhciMsiAvoid"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's refusal of a message interrupt on a Fresco Logic controller whose message never arrives (design record 20 section 4.1; Linux's XHCI_BROKEN_MSI), read at AddDevice and at each start: 0 off, 1 Linux's listed controllers, 2 every controller - the line or polling, never a message but at XhciInterruptMode 3. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would let a listed controller take a message that never arrives, a new decision"
+    },
+    @{
+        Name    = "XhciStreamsOff"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's streamless controller, both consumers of MaxPSASize reading it as 0 (design record 20 section 4.2; Linux's XHCI_BROKEN_STREAMS), read at each start: 0 off, 1 Linux's listed controllers and 17CD:0200, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would open streams on controllers Linux found broken, a new decision"
+    },
+    @{
+        Name    = "XhciResumeReinit"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's re-initialization at every resume in place of save and restore (design record 20 section 4.3; Linux's XHCI_RESET_ON_RESUME), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would restore state on controllers Linux found unable to keep it, a new decision"
+    },
+    @{
+        Name    = "XhciIntelShutdownToEhci"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's routing of every switchable connector back to EHCI at shutdown on 8086:1E31, 9C31 and 9CB1, whatever XhciIntelPortSwitch says (design record 20 section 4.4; Linux's XHCI_SPURIOUS_REBOOT), read at each start: 0 off, 1 Linux's listed controllers; the registers are Intel's, so a 2 is read as 1 and logged. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would leave a listed 7-series board able to power itself back on after shutdown, a new decision"
+    },
+    @{
+        Name    = "XhciShutdownReset"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 38.10's HCRST after a proven halt at shutdown (design record 20 section 4.5; Linux's XHCI_SPURIOUS_WAKEUP), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 0 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "0 is the driver's own default (owner, 2026-10-13): nothing the project has read shows the symptom, and the E7250 (9CB1) runs without it; the value is there for a machine that wakes by itself after shutdown, and shipping 1 would be a new decision"
+    },
+    @{
+        Name    = "XhciSuspendHaltDelay"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's wait of about 1.5 ms before the suspend's halt on AMD controllers (design record 20 section 4.6; Linux's XHCI_SUSPEND_DELAY), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would halt a listed controller with no delay, a new decision"
+    },
+    @{
+        Name    = "XhciSuspendHaltTimeout"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's 640 ms bound on the suspend's halt on the Fresco Logic FL1000 (design record 20 section 4.7; Linux's XHCI_SLOW_SUSPEND), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would give a listed controller 32 ms to halt, a new decision"
+    },
+    @{
+        Name    = "XhciAsmediaFlowControl"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's vendor flow-control write after each reset and resume on the ASM1042A 1B21:1142 (design record 20 section 4.8; Linux's XHCI_ASMEDIA_MODIFY_FLOWCONTROL), read at each start: 0 off, 1 Linux's listed controllers; the registers are ASMedia's, so a 2 is read as 1 and logged. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would skip the write Linux makes on every listed controller, a new decision"
+    },
+    @{
+        Name    = "XhciTiIntervalCap"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's interrupt-interval cap at 6 at High Speed and above on the TUSB73x0 104C:8241 (design record 20 section 4.9; Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_7), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would program a listed controller with intervals Linux found it mishandles, a new decision"
+    },
+    @{
+        Name    = "XhciStuckLinkReset"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's warm reset of a USB3 root port left in Polling with CCS and CAS clear after a restoring resume (design record 20 section 4.11; Linux's XHCI_MISSING_CAS), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would leave such a port stuck until replugged, a new decision"
+    },
+    @{
+        Name    = "XhciStreamRingPad"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's one ring of padding after a stream block on the VIA VL805 and Zhaoxin controllers (design record 20 section 4.12; Linux's XHCI_TRB_OVERFETCH), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would let a listed controller fetch past a stream block's end, a new decision"
+    },
+    @{
+        Name    = "XhciControlLinkNoOp"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's No Op TRB so a SuperSpeed control TD's Setup and Data do not straddle the Link TRB on the Etron EJ168 and EJ188 (design record 20 section 4.13; part of Linux's XHCI_ETRON_HOST), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would let a listed controller split Setup from Data across the link, a new decision"
+    },
+    @{
+        Name    = "XhciIsochSpuriousSuccess"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's drop of an isochronous Success event after an error on the same TRB on the Etron EJ168 and EJ188 (design record 20 section 4.14; part of Linux's XHCI_ETRON_HOST), read at each start: 0 off, 1 Linux's listed controllers, 2 every controller. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would let the spurious event reach a live request, a new decision"
+    },
+    @{
+        Name    = "XhciAmdSuspendBitClear"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.10's clear of bit 17 of BAR offset C12Ch before suspend on the AMD Raven2 1022:15E5 (design record 20 section 4.15; Linux's XHCI_DISABLE_SPARSE), read at each start: 0 off, 1 Linux's listed controllers; the bit is AMD's, so a 2 is read as 1 and logged. The INF writes the 1 under 34.1's don't-overwrite rule so a user's choice survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another type or another number reads as 1 (owner, 2026-10-13; design record 20 section 9); 0 would suspend a listed controller with the bit Linux clears still set, a new decision"
     },
     @{
         Name    = "XhciVirtualHSHub"

@@ -430,7 +430,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_FOUND_ACTIVE      0x4UL
 #define SNAP_POLL_DELIVERY_POLL     2UL
 #define SNAP_POLL_DELIVERIES        6UL
-#define SNAP_POLL_REASONS           19UL
+#define SNAP_POLL_REASONS           20UL
 #define SNAP_POLL_PIN_READ          1UL
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
@@ -3116,6 +3116,32 @@ static const char *const streams_counter_names[SNAP_STREAMS_WORDS] = {
     "QemuStreamResyncs", "QemuStreamResyncFailed", "QemuStreamRestops"
 };
 
+/* Task 38.10's thirty-four (Linux's xHCI controller quirks, design record
+ * 20 section 6.4) follow at 173: fourteen packed words, one per registry
+ * value in src\xhci_quirk.h's XHCI_QK_* order, then the PCI revision and
+ * the PCI id the lists were matched against, then eighteen counts. Shown
+ * by print_hcd_quirks. */
+#define SNAP_QUIRK_AT               173UL
+#define SNAP_QUIRK_WORDS            34UL
+#define SNAP_QUIRK_VALUES           14UL
+#define SNAP_QUIRK_REVISION         187UL
+#define SNAP_QUIRK_IDENTITY         188UL
+#define SNAP_QUIRK_COUNTS_AT        189UL
+#define SNAP_QUIRK_COUNTS           18UL
+static const char *const quirk_counter_names[SNAP_QUIRK_WORDS] = {
+    "QuirkMsiAvoid", "QuirkStreamsOff", "QuirkResumeReinit",
+    "QuirkShutdownToEhci", "QuirkShutdownReset", "QuirkHaltDelay",
+    "QuirkHaltTimeout", "QuirkAsmediaFlow", "QuirkTiIntervalCap",
+    "QuirkStuckLinkReset", "QuirkStreamRingPad", "QuirkControlLinkNoOp",
+    "QuirkIsochSuccess", "QuirkAmdSuspendBit", "QuirkPciRevision",
+    "QuirkIdentity", "QuirkMsiRefused", "QuirkHaltsLong", "QuirkHaltDelays",
+    "QuirkSavesSkipped", "QuirkStuckLinkResets", "QuirkPaddedBlocks",
+    "QuirkLinkNoOps", "QuirkIsochDropped", "QuirkTiCapped",
+    "QuirkAsmWrites", "QuirkAsmGiveUps", "QuirkAmdBitClears",
+    "QuirkAmdBitSkips", "QuirkShutEhciWrites", "QuirkShutResets",
+    "QuirkShutFlushes", "QuirkShutFlushSinkOff", "QuirkShutFlushUnacked"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3199,6 +3225,9 @@ static const char *hcd_counter_name(unsigned long i)
     if (i >= SNAP_STREAMS_AT && i - SNAP_STREAMS_AT < SNAP_STREAMS_WORDS) {
         return streams_counter_names[i - SNAP_STREAMS_AT];
     }
+    if (i >= SNAP_QUIRK_AT && i - SNAP_QUIRK_AT < SNAP_QUIRK_WORDS) {
+        return quirk_counter_names[i - SNAP_QUIRK_AT];
+    }
     return NULL;
 }
 
@@ -3230,6 +3259,148 @@ static void print_hcd_streams(const unsigned char *image,
          get32(image, countersAt + (SNAP_STREAMS_AT + 3) * 4),
          get32(image, countersAt + (SNAP_STREAMS_AT + 4) * 4),
          get32(image, countersAt + (SNAP_STREAMS_AT + 5) * 4));
+}
+
+/*
+ * Task 38.10's Linux quirks (design record 20 section 6.4), from the
+ * counter block when it is long enough (a driver before 38.10 sends fewer
+ * words, and nothing is printed). For each registry value, the four things
+ * a dump has to tell apart: the value read and what became of it, whether
+ * this controller's id is on the quirk's list, the policy in effect, and
+ * the quirk's last action. The packed word's layout is src\xhci_quirk.h's
+ * ("One packed word"); test\test_snap.c holds the words' places. Out of
+ * line, as hcd_counter_name.
+ */
+static const char *const quirk_value_names[SNAP_QUIRK_VALUES] = {
+    "XhciMsiAvoid", "XhciStreamsOff", "XhciResumeReinit",
+    "XhciIntelShutdownToEhci", "XhciShutdownReset", "XhciSuspendHaltDelay",
+    "XhciSuspendHaltTimeout", "XhciAsmediaFlowControl", "XhciTiIntervalCap",
+    "XhciStuckLinkReset", "XhciStreamRingPad", "XhciControlLinkNoOp",
+    "XhciIsochSpuriousSuccess", "XhciAmdSuspendBitClear"
+};
+
+static const char *const quirk_linux_flags[SNAP_QUIRK_VALUES] = {
+    "XHCI_BROKEN_MSI", "XHCI_BROKEN_STREAMS", "XHCI_RESET_ON_RESUME",
+    "XHCI_SPURIOUS_REBOOT", "XHCI_SPURIOUS_WAKEUP", "XHCI_SUSPEND_DELAY",
+    "XHCI_SLOW_SUSPEND", "XHCI_ASMEDIA_MODIFY_FLOWCONTROL",
+    "XHCI_LIMIT_ENDPOINT_INTERVAL_7", "XHCI_MISSING_CAS",
+    "XHCI_TRB_OVERFETCH", "XHCI_ETRON_HOST, part",
+    "XHCI_ETRON_HOST, part", "XHCI_DISABLE_SPARSE"
+};
+
+/* XHCI_QK_NORM_*. */
+static const char *const quirk_norm_text[5] = {
+    "as read", "absent: the default", "another type: the default",
+    "an unknown number: the default", "a 2 read as 1"
+};
+
+/* XHCI_QK_MODE_*. */
+static const char *const quirk_mode_text[3] = {
+    "off", "the listed controllers", "every controller"
+};
+
+/* XHCI_QK_OUT_*. */
+static const char *const quirk_out_text[4] = {
+    "none yet", "done", "skipped", "failed"
+};
+
+/* XHCI_QK_WHY_*; 0 is no reason and is not printed. */
+static const char *const quirk_why_text[14] = {
+    "", "no started lifetime or BAR", "not in D0", "window not decoding",
+    "a read of all ones", "the BAR does not reach it", "HCH not set",
+    "xhciReset's rules refused", "a configuration access failed",
+    "read back other than written", "the write bit never cleared",
+    "the control byte read FFh", "no PCI id ever read",
+    "the PCI id read before kept"
+};
+
+/* The counts, words 189 to 206, in plain words. */
+static const char *const quirk_count_text[SNAP_QUIRK_COUNTS] = {
+    "messages XhciMsiAvoid refused or stripped",
+    "suspend halts that took past 32 ms",
+    "pauses made before the suspend's halt",
+    "suspends that did not save state",
+    "stuck USB 3 links warm-reset",
+    "stream blocks padded",
+    "No Op TRBs placed before a Link TRB",
+    "isochronous Successes dropped",
+    "interrupt endpoints capped at Interval 6",
+    "ASMedia flow-control writes made",
+    "ASMedia flow-control writes given up",
+    "AMD bit 17 clears made",
+    "AMD bit 17 clears skipped",
+    "shutdowns that routed ports to EHCI",
+    "controller resets at shutdown",
+    "shutdown log flushes drained",
+    "shutdown log flushes with the sink off",
+    "shutdown log flushes not acknowledged"
+};
+
+static void print_hcd_quirks(const unsigned char *image,
+                             unsigned long countersAt,
+                             unsigned long counters)
+{
+    unsigned long id;
+    unsigned long rev;
+    unsigned long w;
+    unsigned long raw;
+    unsigned long v;
+    unsigned long i;
+    char rawText[16];
+    char why[64];
+
+    if (counters < SNAP_QUIRK_AT + SNAP_QUIRK_WORDS) {
+        return;
+    }
+    id = get32(image, countersAt + SNAP_QUIRK_IDENTITY * 4);
+    rev = get32(image, countersAt + SNAP_QUIRK_REVISION * 4);
+    comp("\nLinux quirks (task 38.10, design record 20):\n");
+    if (id == 0) {
+        comp("  matched against no PCI id (none read)");
+    } else {
+        comp("  matched against PCI %04lX:%04lX", id & 0xFFFFUL,
+             (id >> 16) & 0xFFFFUL);
+    }
+    if (rev == 0xFFFFFFFFUL) {
+        comp("; revision unread\n");
+    } else {
+        comp("; revision %02lX (never matched)\n", rev & 0xFFUL);
+    }
+    for (i = 0; i < SNAP_QUIRK_VALUES; i++) {
+        w = get32(image, countersAt + (SNAP_QUIRK_AT + i) * 4);
+        raw = (w >> 16) & 0xFFFFUL;
+        if (raw == 0xFFFFUL) {
+            strcpy(rawText, "none");
+        } else {
+            sprintf(rawText, "%lu", raw);
+        }
+        comp("  %s (%s)\n", quirk_value_names[i], quirk_linux_flags[i]);
+        v = (w >> 2) & 0x7UL;
+        comp("    read %s (%s): mode %lu, %s\n", rawText,
+             v < 5 ? quirk_norm_text[v] : "?", w & 0x3UL,
+             (w & 0x3UL) < 3 ? quirk_mode_text[w & 0x3UL] : "?");
+        v = (w >> 12) & 0xFUL;
+        why[0] = '\0';
+        if (v >= 14) {
+            sprintf(why, " (reason %lu)", v);
+        } else if (v != 0) {
+            sprintf(why, " (%s)", quirk_why_text[v]);
+        }
+        v = (w >> 8) & 0xFUL;
+        comp_wrapped("    ", "id %s; policy %s; last %s%s",
+                     (w & 0x20UL) != 0 ? "listed" : "not listed",
+                     (w & 0x80UL) != 0
+                         ? "overridden (XhciInterruptMode 3)"
+                         : (w & 0x40UL) != 0 ? "on" : "off",
+                     v < 4 ? quirk_out_text[v] : "?", why);
+    }
+    comp("  1002:7316 (ATI Navi10) has no value: XhciIntervalCap's 1 covers "
+         "it.\n");
+    comp("  counts:\n");
+    for (i = 0; i < SNAP_QUIRK_COUNTS; i++) {
+        comp("    %-41s %lu\n", quirk_count_text[i],
+             get32(image, countersAt + (SNAP_QUIRK_COUNTS_AT + i) * 4));
+    }
 }
 
 /*
@@ -3398,6 +3569,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     print_hcd_counters(image, countersAt, counters);
     print_hcd_hubspeed(image, countersAt, counters);
     print_hcd_streams(image, countersAt, counters);
+    print_hcd_quirks(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -3536,7 +3708,7 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
                       const unsigned char *ext, unsigned long extBytes)
 {
     static const char *const cap_text[3] = {
-        "off", "AMD controllers only", "every controller"
+        "off", "AMD controllers and 1002:7316", "every controller"
     };
     unsigned long headBytes;
     unsigned long tolAt;
@@ -3617,8 +3789,8 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
          v == 0 ? "off: 2.1.1.0's handling; faults seen still count"
                 : v == 1 ? "on" : "?");
     v = get32(t, 4);
-    comp("  XhciIntervalCap  %lu (%s): %s here, %lu endpoint(s) capped\n",
-         v, v < 3 ? cap_text[v] : "?",
+    comp("  XhciIntervalCap  %lu (%s):\n                   %s here, %lu "
+         "endpoint(s) capped\n", v, v < 3 ? cap_text[v] : "?",
          get32(t, 12) != 0 ? "applies" : "does not apply", get32(t, 16));
     v = get32(t, 8);
     comp("  XhciAvgTrbEsit   %lu (%s)\n", v,
@@ -4330,7 +4502,9 @@ static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
     "forced message (XhciInterruptMode 3), but the message could not be "
     "connected (32-bit: is xhcimsi.sys bound?): the start fails",
     "forced message (XhciInterruptMode 3), but this Windows has no message "
-    "interrupts: the start fails"
+    "interrupts: the start fails",
+    "automatic: a message granted, refused by XhciMsiAvoid (Linux's "
+    "XHCI_BROKEN_MSI), so polled"
 };
 
 static const char *const poll_role_text[3] = {
@@ -5182,13 +5356,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 172 and two words
+ * word is nonzero and its value names its place): 0 to 206 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STREAMS_AT + SNAP_STREAMS_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_QUIRK_AT + SNAP_QUIRK_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -5210,6 +5384,72 @@ static int selftest_counters(void)
     comp("[end]\n");
     return 0;
 }
+
+/*
+ * `-selftest-quirks`: task 38.10's "Linux quirks" block over canned packed
+ * words (src\xhci_quirk.h's layout): every normalization, a value listed
+ * and not, the policy on, off and overridden, each outcome with and
+ * without a reason, codes past the known ones; the PCI id and revision
+ * read, then neither read; and a 206-word block, a driver before 38.10,
+ * which prints nothing. selftest.cmd checks the lines.
+ */
+#define SNAP_QK(mode, norm, listed, on, over, out, why, raw) \
+    ((unsigned long)(mode) | ((unsigned long)(norm) << 2) | \
+     ((unsigned long)(listed) << 5) | ((unsigned long)(on) << 6) | \
+     ((unsigned long)(over) << 7) | ((unsigned long)(out) << 8) | \
+     ((unsigned long)(why) << 12) | ((unsigned long)(raw) << 16))
+static int selftest_quirks(void)
+{
+    static const unsigned long packed[SNAP_QUIRK_VALUES] = {
+        SNAP_QK(1, 0, 1, 0, 1, 0, 0, 1),        /* overridden            */
+        SNAP_QK(1, 1, 0, 0, 0, 0, 0, 0xFFFF),   /* absent                */
+        SNAP_QK(2, 0, 0, 1, 0, 1, 0, 2),        /* 2, every controller   */
+        SNAP_QK(1, 4, 1, 1, 0, 1, 0, 2),        /* a 2 read as 1         */
+        SNAP_QK(0, 2, 1, 0, 0, 0, 0, 0xFFFF),   /* another type          */
+        SNAP_QK(1, 3, 1, 1, 0, 2, 2, 7),        /* unknown, skipped      */
+        SNAP_QK(0, 0, 1, 0, 0, 0, 0, 0),        /* 0, listed, off        */
+        SNAP_QK(1, 1, 1, 1, 0, 3, 9, 0xFFFF),   /* failed, a reason      */
+        SNAP_QK(1, 1, 1, 1, 0, 3, 15, 0xFFFF),  /* a reason past ours    */
+        SNAP_QK(3, 6, 0, 0, 0, 5, 0, 0xFFFF),   /* codes past ours       */
+        SNAP_QK(1, 1, 0, 0, 0, 0, 12, 0xFFFF),  /* none yet, a reason    */
+        SNAP_QK(1, 1, 0, 0, 0, 0, 0, 0xFFFF),
+        SNAP_QK(1, 1, 0, 0, 0, 0, 0, 0xFFFF),
+        SNAP_QK(1, 1, 1, 1, 0, 2, 6, 0xFFFF)
+    };
+    static unsigned char image[32 + (SNAP_QUIRK_AT + SNAP_QUIRK_WORDS) * 4];
+    const unsigned long c = 32;
+    unsigned long i;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 0);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, SNAP_QUIRK_AT + SNAP_QUIRK_WORDS);
+    put32(image, 24, c);
+    for (i = 0; i < SNAP_QUIRK_VALUES; i++) {
+        put32(image, c + (SNAP_QUIRK_AT + i) * 4, packed[i]);
+    }
+    put32(image, c + SNAP_QUIRK_REVISION * 4, 4);
+    put32(image, c + SNAP_QUIRK_IDENTITY * 4, 0x10001B73UL);
+    for (i = 0; i < SNAP_QUIRK_COUNTS; i++) {
+        put32(image, c + (SNAP_QUIRK_COUNTS_AT + i) * 4, 100 + i);
+    }
+    companion = NULL;
+    print_hcd(image, sizeof(image));
+
+    /* No PCI id and no revision read. */
+    put32(image, c + SNAP_QUIRK_REVISION * 4, 0xFFFFFFFFUL);
+    put32(image, c + SNAP_QUIRK_IDENTITY * 4, 0);
+    print_hcd_quirks(image, c, SNAP_QUIRK_AT + SNAP_QUIRK_WORDS);
+
+    /* A driver before 38.10: one word short, nothing printed. */
+    print_hcd_quirks(image, c, SNAP_QUIRK_AT + SNAP_QUIRK_WORDS - 1);
+    comp("[end]\n");
+    return 0;
+}
+#undef SNAP_QK
 
 /*
  * `-selftest-xstat`: task 36.21's decode over canned HCD headers: a
@@ -10556,6 +10796,8 @@ int main(int argc, char **argv)
             return selftest_msi();
         } else if (strcmp(argv[i], "-selftest-counters") == 0) {
             return selftest_counters();
+        } else if (strcmp(argv[i], "-selftest-quirks") == 0) {
+            return selftest_quirks();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {

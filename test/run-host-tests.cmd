@@ -79,6 +79,10 @@ rem                  delivery, and the run over a modelled machine
 rem   test_snap    - the snapshot's HCD region (src\xhci_snap.c, task 35.3):
 rem                  every word of the image located once, in order, and the
 rem                  header's sizes and offsets agreeing with it
+rem   test_quirk   - Linux's xHCI controller quirks (src\xhci_quirk.c, task
+rem                  38.10): each value's reading, value 2, every listed id
+rem                  matched and its neighbours refused, VIA vendor-wide,
+rem                  the packed word, XhciMsiAvoid's decision
 rem   test_tol     - controller tolerance (src\xhci_tol.c, 35-T.9): the three
 rem                  values, the tolerance clock's ticks at each interval's
 rem                  boundary, the interval cap with fast polling, the soft
@@ -364,6 +368,10 @@ rem test_xpipe links nothing else: stage 2's TD planner over a URB's wide
 rem mapping (task 36.24, design record 13 section 11.6) is pure.
 call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
+rem test_quirk links nothing else: Linux's xHCI controller quirks' values,
+rem lists, match and packed word are pure (task 38.10, design record 20);
+rem their executors' vectors are in the suites of the files they act in.
+call :run test_quirk "test_quirk.c ..\src\xhci_quirk.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

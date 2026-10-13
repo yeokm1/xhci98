@@ -1536,8 +1536,45 @@ static void test_qemu_stream_quirk(void)
     }
 }
 
+/*
+ * Task 38.10: XhciTiIntervalCap (design record 20 section 4.9) - interrupt
+ * endpoints of High-Speed and faster devices, Interval 7 and above to 6 -
+ * and 1002:7316 under XhciIntervalCap's value 1 (section 4.10).
+ */
+static void test_quirk_caps(void)
+{
+    ULONG i;
+
+    for (i = 0; i <= 15; i++) {
+        CHECK_EQ(XhciTolTiCapInterval(1, 1, 1, i), (i > 6) ? 6UL : i,
+                 "applies: 7 and above to 6");
+        CHECK_EQ(XhciTolTiCapInterval(0, 1, 1, i), i, "not applied");
+        CHECK_EQ(XhciTolTiCapInterval(1, 0, 1, i), i,
+                 "isochronous never capped");
+        CHECK_EQ(XhciTolTiCapInterval(1, 1, 0, i), i,
+                 "Full and Low Speed never capped");
+        /* After the AMD cap, as Linux orders the two. */
+        CHECK_EQ(XhciTolTiCapInterval(1, 1, 1,
+                                      XhciTolCapInterval(1, 1, i)),
+                 (i > 6) ? 6UL : i, "both: the lower");
+    }
+    CHECK_EQ(XhciTolCapApplies(XHCI_TOL_CAP_GATED, 0x73161002UL), 1,
+             "1002:7316 under value 1");
+    CHECK_EQ(XhciTolCapApplies(XHCI_TOL_CAP_GATED, 0x73171002UL), 0,
+             "its neighbour is not");
+    CHECK_EQ(XhciTolCapApplies(XHCI_TOL_CAP_GATED, 0x73151002UL), 0,
+             "nor the other");
+    CHECK_EQ(XhciTolCapApplies(XHCI_TOL_CAP_GATED, 0x73161022UL), 1,
+             "every AMD id, as before");
+    CHECK_EQ(XhciTolCapApplies(XHCI_TOL_CAP_GATED, 0x73168086UL), 0,
+             "7316 under another vendor is not");
+    CHECK_EQ(XhciTolCapApplies(XHCI_TOL_CAP_OFF, 0x73161002UL), 0,
+             "value 0: off");
+}
+
 int main(void)
 {
+    test_quirk_caps();
     test_values();
     test_qemu_stream_quirk();
     test_clock();

@@ -1294,6 +1294,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG step;
     ULONG reason;
     ULONG abandoned;
+    ULONG padded;
     ULONG i;
 
     b = (PUCHAR)&sg;
@@ -1342,9 +1343,14 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (!marked && !expired && !dev->Gone) {
             dev->Ep0Done = 0;
             KeClearEvent(&hc->XferDoneEvent);
-            answer = XhciXferSubmitControl(&dev->Ep0Queue, &dev->Ep0, &req,
-                                           &dev->Ep0Xfer, dev, trbs,
-                                           XHCI_XFER_MAX_CONTROL_TRBS);
+            /* 38.10, XhciControlLinkNoOp (design record 20 section
+             * 4.13). */
+            answer = XhciXferSubmitControlEx(&dev->Ep0Queue, &dev->Ep0, &req,
+                                             &dev->Ep0Xfer, dev, trbs,
+                                             XHCI_XFER_MAX_CONTROL_TRBS,
+                                             HcdQuirkLinkNoOp(hc, dev),
+                                             &padded);
+            HcdQuirkLinkPadded(hc, padded);
             if (answer == XHCI_XFER_OK) {
 #if defined(XHCI_FLAVOUR_QEMU)
                 /* 35-T.9's EP0 faults withhold this doorbell. */
@@ -3463,6 +3469,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     ULONG portsc;
     ULONG changes;
     ULONG feed;
+    ULONG stuck;
 
     ext = &hc->Hc;
     portsc = XhciReadPortsc(ext, p->PortId);
@@ -3517,6 +3524,9 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
      * so until the hold is released (29-A.5). */
     if (hcdHoldOf(hc, p->PortId) != NULL) {
         p->Unreadable = 0;
+        /* 38.10: a held port is never touched by XhciStuckLinkReset; its
+         * post-resume reading is this one. */
+        p->Link.StuckCheck = 0;
         return;
     }
     /* The companion of a held port: its departures and arrivals are the
@@ -3527,8 +3537,18 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         XhciHoldCompanionPortsc(&h->Hold, portsc) == XHCI_HOLD_RELEASE) {
         hcdHoldRelease(hc, h);
     }
+    /* 38.10, XhciStuckLinkReset: whether this is the armed post-resume
+     * reading of a port stuck in Polling, for its count (record 20 section
+     * 4.11); XhciLinkPortFeed decides and disarms. */
+    stuck = (p->Link.StuckCheck && XhciLinkStuckPolling(portsc)) ? 1UL : 0UL;
     feed = XhciLinkPortFeed(&p->Link, XhciPortIsUsb3(&ext->PortMap, p->PortId),
                             portsc, p->Enum.State, &act);
+    if (stuck && act.Kind == XHCI_LINK_ACT_WARM_RESET) {
+        ext->Quirk.StuckLinkResets++;
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_STUCK_LINK, XHCI_QK_OUT_DONE,
+                         XHCI_QK_WHY_NONE);
+        XhciLogNote(ext, "quirk.stucklink.port", p->PortId);
+    }
     feed = hcdTolPortFeed(hc, p, portsc, feed);
     if (XhciEnumNoteWantLook(&p->Notes, p->Enum.State, feed,
                              act.Kind == XHCI_LINK_ACT_WARM_RESET ||

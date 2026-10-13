@@ -559,7 +559,10 @@ What the report carries:
   halts, root port PED faults and over-currents - and so do those of what
   applies at every value (an incompatible device's charges and `Holds`,
   `Contained`); the counters of the behaviours switched off stay at 0),
-  `XhciIntervalCap` with whether
+  `XhciIntervalCap` (value 1: AMD controllers and, from task 38.10, the
+  ATI Navi10 USB-C controller `1002:7316`, Linux's
+  `XHCI_LIMIT_ENDPOINT_INTERVAL_9`; printed "AMD controllers and
+  1002:7316") with whether
   the cap applies on this controller and how many endpoints it lowered, and
   `XhciAvgTrbEsit`.
 - **The controller**: running; failed with an in-place recovery still owed;
@@ -744,6 +747,49 @@ PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
 the resyncs that could not finish and the extra stops QEMU's own restart
 of an endpoint cost. A block shorter than 173 words is a driver from
 before it, and the section is not printed.
+Task 38.10's thirty-four follow (173 to 206; design record 20 section
+6.4): one packed word per Linux quirk value, `QuirkMsiAvoid` to
+`QuirkAmdSuspendBit` (173 to 186, in `src\xhci_quirk.h`'s order), then
+`QuirkPciRevision` (187) and `QuirkIdentity` (188, the PCI vendor and
+device the quirk lists were matched against), then the counts,
+`QuirkMsiRefused` to `QuirkShutFlushUnacked` (189 to 206). They get a
+section of their own, **"Linux quirks"**: the PCI id the lists were
+matched against ("no PCI id" when none was read) and the revision
+("unread" when none was; it is logged, never matched), then for each of
+the fourteen registry values its name and its Linux flag, and the four
+things record 20 keeps apart:
+
+- **the value read and what became of it**: the number read (its low 16
+  bits; "none" when nothing was read) and its normalization - "as read",
+  "absent", "another type" or "an unknown number" (each taken as the
+  default), or "a 2 read as 1" (a vendor-register quirk offers no 2) -
+  with the mode in effect (0 off, 1 the listed controllers, 2 every
+  controller);
+- **whether this controller's id is on the quirk's list** ("id listed" or
+  "id not listed");
+- **the policy in effect**: on, off, or overridden - `XhciMsiAvoid` alone,
+  when `XhciInterruptMode` 3 asks for a message whatever the quirk says;
+- **the last outcome**: none yet, done, skipped or failed, with its reason
+  when one was recorded (the precondition that was not met, the access
+  that failed, or for `XhciMsiAvoid` that no PCI id was read or the one
+  read before was kept).
+
+Then the counts in plain words: the messages `XhciMsiAvoid` refused or
+stripped, the suspend halts past 32 ms, the pauses before a suspend's
+halt, the suspends that did not save, the stuck USB 3 links warm-reset,
+the padded stream blocks, the No Op TRBs placed, the isochronous
+Successes dropped, the interrupt endpoints `XhciTiIntervalCap` capped,
+the ASMedia flow-control writes made and given up, the AMD bit 17 clears
+made and skipped, the shutdowns that routed ports to EHCI, the controller
+resets at shutdown, and the shutdown's log flushes drained, acknowledged
+with the sink off, and not acknowledged. The fifteenth id, `1002:7316`
+(ATI Navi10), has no value of its own: it joined `XhciIntervalCap`'s
+value 1, and the section says so. A block shorter than 207 words is a
+driver from before 38.10, and the section is not printed.
+`-selftest-quirks` prints the section over canned packed words (every
+normalization, listed and not, on, off and overridden, each outcome, codes
+this build does not know printed as `?`), with the PCI id and revision
+read and unread, and a 206-word block that prints nothing.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

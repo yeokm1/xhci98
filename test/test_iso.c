@@ -1911,8 +1911,111 @@ static void test_submit_across_the_link(void)
              "while the TD's last TRB after the wrap clears it");
 }
 
+/*
+ * Task 38.10, XhciIsochSpuriousSuccess (design record 20 section 4.14): a
+ * Success naming the TRB the queue's last event completed with a
+ * Transaction Error, a Babble or an Isoch Buffer Overrun is counted and
+ * dropped, with its request still pending and already retired: no packet
+ * is answered twice, no later packet or request is consumed, and nothing
+ * asks for recovery. Out of scope, the same event takes today's path.
+ */
+static void spurious_after(ULONG errorCode)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PUSBPORT_ISO_PACKET packet;
+    ULONG answered;
+    ULONG unmatched;
+
+    /* Pending: three packets, the first in error, then its Success. */
+    iso_fixture_init(&fix, 32);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+    packet = fix.iso[0].Block.Packet;
+    CHECK_EQ(iso_event(&fix, 0, errorCode, 0, &result), XHCI_XFER_OK,
+             "the error");
+    answered = fix.queue.IsoPacketsAnswered;
+    unmatched = fix.queue.UnmatchedEvents;
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "the spurious Success");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 1UL, "dropped and counted");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "nothing completed");
+    CHECK_EQ(result.NeedsRecovery, 0UL, "no recovery");
+    CHECK_EQ(result.RefusedRetire, 0UL, "no refused retire");
+    CHECK_EQ(fix.queue.IsoPacketsAnswered, answered, "no packet answered");
+    CHECK_EQ(fix.queue.UnmatchedEvents, unmatched, "not even as unmatched");
+    CHECK((ULONG)packet[0].Status != WANT_USBD_SUCCESS,
+               "packet 0 keeps its error");
+    CHECK_EQ(fix.transfers[0].IsoPacketsAnswered, 1UL, "packet 1 unanswered");
+    /* The later packets still complete the request, as they would have. */
+    CHECK_EQ(iso_event(&fix, 1, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "packet 1");
+    CHECK_EQ(packet[1].LengthTransferred, 192UL, "packet 1 its own");
+    CHECK_EQ(iso_event(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "packet 2");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the request ends");
+    CHECK_EQ(fix.queue.Count, 0UL, "on its own tail");
+
+    /* Retired: a one-packet request the error ended, then its Success,
+     * with a second request queued behind it. */
+    iso_fixture_init(&fix, 32);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 1, 192), XHCI_XFER_OK, "one");
+    CHECK_EQ(iso_fixture_submit(&fix, 1, 1, 192), XHCI_XFER_OK, "two");
+    CHECK_EQ(iso_event(&fix, 0, errorCode, 0, &result), XHCI_XFER_OK,
+             "the error retires the first");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the first ends");
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "its spurious Success");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 1UL, "dropped");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "the second untouched");
+    CHECK_EQ(fix.queue.Count, 1UL, "still queued");
+    CHECK_EQ(fix.transfers[1].IsoPacketsAnswered, 0UL,
+             "and not consumed by it");
+
+    /* Out of scope: today's handling, a duplicate counted unmatched. */
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+    CHECK_EQ(iso_event(&fix, 0, errorCode, 0, &result), XHCI_XFER_OK,
+             "the error");
+    unmatched = fix.queue.UnmatchedEvents;
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "the Success, no quirk");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "not dropped");
+    CHECK_EQ(fix.queue.UnmatchedEvents, unmatched + 1UL,
+             "a duplicate, as before");
+}
+
+static void test_spurious_success(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    spurious_after(XHCI_CC_USB_TRANSACTION_ERROR);
+    spurious_after(XHCI_CC_BABBLE);
+    spurious_after(XHCI_CC_ISOCH_BUFFER_OVERRUN);
+
+    /* A Success after a Short Packet, or for another TRB, is not this. */
+    iso_fixture_init(&fix, 32);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 0, &result),
+             XHCI_XFER_OK, "an error on packet 0");
+    CHECK_EQ(iso_event(&fix, 1, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "a Success on packet 1");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "another TRB: kept");
+    CHECK_EQ(fix.transfers[0].IsoPacketsAnswered, 2UL, "packet 1 answered");
+    CHECK_EQ(iso_event(&fix, 2, XHCI_CC_SHORT_PACKET, 10, &result),
+             XHCI_XFER_OK, "a short packet 2");
+    CHECK_EQ(iso_event(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "a Success after it");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL,
+             "after a Short Packet: not this quirk's");
+}
+
 int main(void)
 {
+    test_spurious_success();
     test_iso_code_info();
     test_frame_window();
     test_build_one_packet();

@@ -180,6 +180,10 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
         return STATUS_NO_SUCH_DEVICE;
     }
 
+    /* Task 38.10 (design record 20 section 4.1): on NT 6 the identity and
+     * XhciMsiAvoid for this FDO's first requirements filter, through the PCI
+     * PDO now that the stack exists. */
+    HcdQuirkAddDevice(hc);
     HcdSerialControllerAdd(hc);
     fdo->Flags |= DO_POWER_PAGABLE;
     fdo->Flags &= ~DO_DEVICE_INITIALIZING;

@@ -1874,6 +1874,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     ULONG answer;
     ULONG slot;
     ULONG dci;
+    ULONG padded;
     ULONG i;
     XHCI_XSTAT_STAMP entered;
 
@@ -1923,9 +1924,14 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
             creq.TransferFlagsIn = x->In;
             creq.MaxPacketSize = dev->Mps0;
             creq.SgList = &x->Sg.List;
-            answer = XhciXferSubmitControl(pipe->Queue, pipe->Ring, &creq,
-                                           &x->Xfer, x, trbs,
-                                           XHCI_XFER_MAX_CONTROL_TRBS);
+            /* 38.10, XhciControlLinkNoOp (design record 20 section
+             * 4.13). */
+            answer = XhciXferSubmitControlEx(pipe->Queue, pipe->Ring, &creq,
+                                             &x->Xfer, x, trbs,
+                                             XHCI_XFER_MAX_CONTROL_TRBS,
+                                             HcdQuirkLinkNoOp(hc, dev),
+                                             &padded);
+            HcdQuirkLinkPadded(hc, padded);
         } else if (x->Isoch) {
             answer = hcdIsoPublish(hc, pipe, x);
         } else {

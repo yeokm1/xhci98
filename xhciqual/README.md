@@ -73,7 +73,8 @@ a machine said on a day.
 
 - Tier A: PCI discovery for class codes `0C0330` (xHCI), `0C0320` (EHCI) and
   `0C0310` (OHCI): VID/DID/rev, Command/BME, BAR0 below 4 GB, MSI/MSI-X caps,
-  Interrupt Pin/Line, and VID/DID quirk lookup. The Intel `XUSB2PR` routing
+  Interrupt Pin/Line, and VID/DID quirk lookup (xHCI; "The `quirks:`
+  lines" below). The Intel `XUSB2PR` routing
   registers are reported here but are read by C7, which is Tier C, so
   `--probe-only` shows no routing values. The xHCI's interrupt routing in
   an Intel PCH (`D20IP`, `D20IR`, `PIRQx_ROUT`) is a different thing, read
@@ -117,6 +118,63 @@ a machine said on a day.
 - Tier D: fact sheet, a `FACT` line (machine-readable seed for the Phase 4
   parameter tables) plus one `DEV` line per identified device, and the
   section 8 go/no-go verdict.
+
+### The `quirks:` lines
+
+Each xHCI report opens with what `quirks.c` knows of the controller's
+vendor and device id. Linux is the authority for that table: every row is
+read from `drivers/usb/host/xhci-pci.c` and `pci-quirks.c` in
+`external/linux` at the pinned commit, and design record 20
+(`docs/contributing/design/20-linux-xhci-quirks.md`) is the survey it
+follows. Since roadmap-hcd task 38.10 the table carries every id of the
+Linux quirks the driver takes (record 20 section 3.1), and each line says
+which kind of entry it is:
+
+- **A quirk the driver takes** names the driver's registry value first and
+  the Linux flag beside it, for example
+  `XhciStreamsOff (Linux XHCI_BROKEN_STREAMS)`, with what the driver does
+  on the line below it (every item is two lines at most, so each fits the
+  80-column screen). The values are `XhciMsiAvoid`, `XhciStreamsOff`,
+  `XhciResumeReinit`, `XhciIntelShutdownToEhci`, `XhciShutdownReset` (off
+  by default in the driver, and the line says so), `XhciSuspendHaltDelay`,
+  `XhciSuspendHaltTimeout`, `XhciAsmediaFlowControl`, `XhciTiIntervalCap`,
+  `XhciIntervalCap`, `XhciStuckLinkReset`, `XhciStreamRingPad`,
+  `XhciControlLinkNoOp`, `XhciIsochSpuriousSuccess` and
+  `XhciAmdSuspendBitClear`. The line says Linux lists the controller; what
+  the driver does on a given machine also depends on the value set in its
+  registry key, which `XHCISNAP` reports.
+- **A Linux flag the driver covers without a value of its own** names the
+  flag and says `covered` (`XHCI_SPURIOUS_SUCCESS`, `XHCI_AVOID_BEI`,
+  `XHCI_ZHAOXIN_HOST`), or states what it is (`XHCI_PME_STUCK_QUIRK`).
+- **A Linux flag the driver does not take** names the flag and says `not
+  taken by the driver`: `XHCI_SW_BW_CHECKING` on Panther Point `8086:1E31`,
+  and `XHCI_AMD_PLL_FIX`, which Linux sets on every AMD xHCI when the
+  chipset is an SB700 at revision 3Bh or below, an SB800, a Hudson-2 or a
+  Bolton. The tool does not look for that chipset, so the line says when
+  it would apply.
+
+Rows are of two forms. An exact row names a vendor and a device. A
+vendor-wide row stands for what Linux sets on every device of a vendor:
+VIA (`1106`, `XhciResumeReinit`), Zhaoxin (`1D17`) and AMD (`1022`, the
+reach of the driver's `XhciIntervalCap` and the PLL note). Both are
+printed, the exact row first, each as its own `quirks:` line with its own
+items, so a VIA VL800 shows `XhciStreamsOff` from its id and
+`XhciResumeReinit` from its vendor. A flag is on one of the two rows,
+never both, so nothing is printed twice. A controller with neither row
+prints `quirks: none known for this VID/DID`.
+
+No revision is matched (record 20 section 6.3): `XhciSuspendHaltTimeout`
+is printed on every revision of the Fresco Logic FL1000 although Linux
+keys `XHCI_SLOW_SUSPEND` on revision 04, because the driver takes it on
+every revision. The revision is in the report's heading line.
+
+When a listed controller's HCIVERSION is below the driver's floor (1.0
+today; 0.96 once roadmap-hcd task 38.11 lands), the last item says so -
+`HCIVERSION 0.96 is below xhci98's floor 1.00`, then `the driver refuses
+this controller: none of the above acts on it` - because the driver will
+not start it and no value named above acts on it. The ASMedia ASM1042, which Linux
+says reports 0.96, is the known case. Nothing is said when MMIO was not
+readable.
 
 ## Build (Windows host)
 
@@ -189,6 +247,15 @@ every printed line is checked for each.
 letter rather than the one past the highest, all 26 taken (refused, with
 every letter asked about and none past `Z`), and a clock that is not a
 date and time.
+`xhciqual/test/test_quirks.c` (roadmap task 38.10) covers `quirks.c`:
+for each quirk the driver takes, every id design record 20 section 3.1
+lists carries its flag and prints its registry value and Linux flag, and
+no other row carries it; the vendor-wide rows match an unlisted device of
+their vendor and are never what `quirk_find` returns; at most one per
+vendor, no flag on both an exact row and its vendor's row, no duplicate
+row; the neighbours of listed ids and the same device under another
+vendor do not match; and the HCIVERSION floor note appears for a listed
+part below 1.0 only, and not when HCIVERSION was not read.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves

@@ -1623,8 +1623,11 @@ static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
     ULONG xportFlags;
 
     xportFlags = 0;
-    if (XhciStreamHcEntries(XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)) !=
-        0) {
+    /* 38.10, XhciStreamsOff (design record 20 section 4.2): a listed
+     * controller reads as streamless here and at OPEN_STREAMS alike. */
+    if (XhciStreamHcEntries(XhciQuirkStreamsHcc1(
+            XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
+            XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1))) != 0) {
         xportFlags |= XHCI_XPORT_F_HC_STREAMS;
     }
     if (HcdCtlForceBulkOnly(hc)) {

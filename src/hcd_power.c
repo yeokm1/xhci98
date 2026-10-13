@@ -112,8 +112,28 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
         hc->ShutLatched = 1;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* Task 38.10, XhciAmdSuspendBitClear (design record 20 section 4.15):
+     * before the halt, on the guarded suspend's own preconditions. The
+     * other suspend quirks act inside XhciSuspendController. */
+    HcdQuirkSuspend(hc);
     XhciSuspendController(&hc->Hc);
     HcdSuspSettleStale(hc);
+}
+
+/* A resume, the power gate held: XhciResumeController, then on success
+ * task 38.10's post-resume quirks (hcd_quirk.c, HcdQuirkResumed); a resume
+ * that fails is the recovery's. IRQL: PASSIVE_LEVEL. */
+static VOID hcdResume(PHCD_CONTROLLER hc)
+{
+    ULONG restores;
+
+    restores = hc->Hc.Quirk.Restores;
+    if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        hc->ResumeFailures++;
+        HcdControllerFail(hc);
+        return;
+    }
+    HcdQuirkResumed(hc, restores);
 }
 
 /*
@@ -197,10 +217,8 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         /* Task 36.3: and may have put the xHCI's interrupt route back. */
         HcdPirqResume(hc);
         hc->TolStartGen++;
-        if (!hcdResumeContained(hc) &&
-            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
-            hc->ResumeFailures++;
-            HcdControllerFail(hc);
+        if (!hcdResumeContained(hc)) {
+            hcdResume(hc);
         }
     }
     hc->Common.DevicePower = PowerDeviceD0;
@@ -236,18 +254,29 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
  *
  * IRQL: PASSIVE_LEVEL.
  */
-static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc);
+static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc);
 
 static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
 {
+    ULONG flush;
+
     HcdPowerGateEnter(hc);
-    hcdDirectTransitionGated(hc);
+    flush = hcdDirectTransitionGated(hc);
     HcdPowerGateLeave(hc);
+    /* Task 38.10: the shutdown's records flushed, the gate left (design
+     * record 20 section 6.4). */
+    if (flush) {
+        HcdQuirkShutdownFlush(hc);
+    }
 }
 
-/* The body of hcdDirectTransition, the power gate held. */
-static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
+/* The body of hcdDirectTransition, the power gate held. Returns 1 when a
+ * shutdown quirk acted and its records want flushing. */
+static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc)
 {
+    ULONG flush;
+
+    flush = 0;
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             /* Record 15 section 4.2: revoke, then contain an owed
@@ -260,8 +289,11 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
         if (hc->Common.SystemPower == PowerSystemShutdown) {
             hcdShutFlush(hc);
             HcdPswRelease(hc);
+            /* Task 38.10: Q4 and Q5 (design record 20 sections 4.4,
+             * 4.5). */
+            flush = HcdQuirkShutdown(hc);
         }
-        return;
+        return flush;
     }
     if (hc->SuspendedInD0) {
         hcdShutClear(hc);
@@ -269,15 +301,14 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
         HcdPswRoute(hc);
         HcdPirqResume(hc);
         hc->TolStartGen++;
-        if (!hcdResumeContained(hc) &&
-            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
-            hc->ResumeFailures++;
-            HcdControllerFail(hc);
+        if (!hcdResumeContained(hc)) {
+            hcdResume(hc);
         }
         HcdPollGrant(hc);
-        return;
+        return 0;
     }
     hc->WakesWithoutPower++;
+    return 0;
 }
 
 /* IRQL: PASSIVE_LEVEL (a system worker thread). */
@@ -435,6 +466,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     NTSTATUS status;
+    ULONG flush;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     XHCI_DBG_VALUE("hcd: power minor, type, state",
@@ -469,6 +501,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
     }
 
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
+        flush = 0;
         HcdPowerGateEnter(hc);
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
@@ -485,11 +518,20 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         if (hc->Common.SystemPower == PowerSystemShutdown) {
             hcdShutFlush(hc);
             HcdPswRelease(hc);
+            /* Task 38.10: Q4 and Q5 (design record 20 sections 4.4 and
+             * 4.5), while the function is still in D0. */
+            flush = HcdQuirkShutdown(hc);
         }
         /* Suspended either way now, and the D0 that follows resumes it. */
         hc->SuspendedInD0 = 0;
         hc->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
         HcdPowerGateLeave(hc);
+        /* Task 38.10: their records to the sink, bounded, with the gate
+         * left so the thread's pass can run (record 20 section 6.4); before
+         * the D3 IRP goes down. */
+        if (flush) {
+            HcdQuirkShutdownFlush(hc);
+        }
         (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);
         irp->IoStatus.Status = STATUS_SUCCESS;

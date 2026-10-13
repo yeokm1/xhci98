@@ -1745,6 +1745,28 @@ typedef struct _HCD_CONTROLLER {
     ULONG SilentGate;
     NTSTATUS SilentStatus;
     XHCI_SILENT Silent;
+    /* Linux's quirks (task 38.10, design record 20; xhci_quirk.h). The
+     * controller's PCI identity as this FDO last read it - at AddDevice
+     * after the attach on NT 6, and before each start's delivery is
+     * settled - kept for the FDO's lifetime, since the device does not
+     * change within it (section 4.1); and XhciMsiAvoid as read with the
+     * mode's cache, for the requirements filter, which reads no registry.
+     * PnP sends one PnP IRP at a time, so the filter and the start never
+     * run together. The rest of the quirks' state is the extension's
+     * (Hc.Quirk), zeroed with it at each start. */
+    ULONG QuirkIdentity;
+    ULONG QuirkIdentityValid;
+    ULONG MsiAvoidCacheRaw;
+    ULONG MsiAvoidCacheFound;       /* XHCI_QK_FOUND_*                     */
+    /* The shutdown's log flush (section 6.4): the D3 path advances Wanted
+     * and waits, bounded, for the thread to publish it as Acked after an
+     * HcdLogFlush it began after capturing it; Sink is whether that flush
+     * had the DebugView sink on. ShutFlushDone is set by the thread after
+     * each publication. */
+    LONG ShutFlushWanted;
+    LONG ShutFlushAcked;
+    ULONG ShutFlushSink;
+    KEVENT ShutFlushDone;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
@@ -2270,6 +2292,24 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc);
 VOID HcdCountersPoll(PHCD_CONTROLLER hc);
 
 NTSTATUS HcdReadValueDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
+
+/* hcd_quirk.c: Linux's xHCI controller quirks, the FDO's half (task 38.10,
+ * design record 20). IRQL as each function's comment there says. */
+VOID HcdQuirkAddDevice(PHCD_CONTROLLER hc);
+ULONG HcdQuirkFilterAvoid(PHCD_CONTROLLER hc);
+VOID HcdQuirkStartBegin(PHCD_CONTROLLER hc);
+ULONG HcdQuirkMsiAvoid(PHCD_CONTROLLER hc, ULONG interruptMode);
+VOID HcdQuirkMsiRefused(PHCD_CONTROLLER hc);
+VOID HcdQuirkPublishLocked(PHCD_CONTROLLER hc);
+VOID HcdQuirkStart(PHCD_CONTROLLER hc);
+VOID HcdQuirkAsmFlow(PHCD_CONTROLLER hc);
+VOID HcdQuirkSuspend(PHCD_CONTROLLER hc);
+ULONG HcdQuirkShutdown(PHCD_CONTROLLER hc);
+VOID HcdQuirkShutdownFlush(PHCD_CONTROLLER hc);
+VOID HcdQuirkFlushAck(PHCD_CONTROLLER hc, LONG ticket);
+VOID HcdQuirkResumed(PHCD_CONTROLLER hc, ULONG restoresBefore);
+ULONG HcdQuirkLinkNoOp(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdQuirkLinkPadded(PHCD_CONTROLLER hc, ULONG padded);
 
 /* hcd_msi86.c: message-signalled interrupts' kernel half (design records
  * 15 section 4.3 and 18). */

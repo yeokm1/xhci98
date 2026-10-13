@@ -691,6 +691,13 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
                 ? 1UL
                 : 0UL;
 #endif
+    /* Task 38.10, XhciMsiAvoid (design record 20 section 4.1): under mode
+     * 0, a controller the quirk applies to asks for the line alone, as
+     * mode 1 does; from AddDevice's or the last start's caches. */
+    if (!asked && hc->FilterMode == XHCI_POLL_MODE_AUTO &&
+        HcdQuirkFilterAvoid(hc)) {
+        asked = 1;
+    }
     enabled = HCD_MSI_STRIP_DEFAULT;
     if (hc->QemuNoStrip) {
         enabled = 0;

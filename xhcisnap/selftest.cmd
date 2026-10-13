@@ -196,7 +196,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-tol exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers only): applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside ten minutes; 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth." "controller: CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned.") do (
+for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers and 1002:7316):" "                   applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside ten minutes; 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth." "controller: CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned.") do (
     findstr /C:%%S "%BASE%.tol.log" > nul
     if errorlevel 1 (
         echo FAIL: the tolerance decode does not say %%S
@@ -315,6 +315,41 @@ if errorlevel 1 (
     echo FAIL: XHCISNAP's counter names do not match src\xhci_counters.h
     set FAILED=1
 )
+
+rem Task 38.10's Linux quirks (design record 20 section 6.4) from canned
+rem packed words: every normalization, a value listed and not, the policy
+rem on, off and overridden, each outcome and its reason, codes past the known
+rem ones; the PCI id and revision read and then unread; and a 206-word block
+rem (a driver before 38.10), which prints no section. The lines holding a ?
+rem are checked outside the FOR, which would take a ? as a file wildcard.
+"%~dp0XHCISNAP.EXE" -selftest-quirks > "%BASE%.quirks.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-quirks exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("matched against PCI 1B73:1000; revision 04 (never matched)" "matched against no PCI id (none read); revision unread" "XhciMsiAvoid (XHCI_BROKEN_MSI)" "id listed; policy overridden (XhciInterruptMode 3); last none yet" "read none (absent: the default): mode 1, the listed controllers" "id not listed; policy off; last none yet" "read 2 (as read): mode 2, every controller" "id not listed; policy on; last done" "read 2 (a 2 read as 1): mode 1, the listed controllers" "read none (another type: the default): mode 0, off" "read 7 (an unknown number: the default): mode 1, the listed controllers" "id listed; policy on; last skipped (not in D0)" "read 0 (as read): mode 0, off" "id listed; policy off; last none yet" "XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL)" "id listed; policy on; last failed (read back other than written)" "last failed (reason 15)" "last none yet (no PCI id ever read)" "XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part)" "id listed; policy on; last skipped (HCH not set)" "1002:7316 (ATI Navi10) has no value: XhciIntervalCap's 1 covers it." "messages XhciMsiAvoid refused or stripped 100" "interrupt endpoints capped at Interval 6  108" "shutdown log flushes not acknowledged     117" "QuirkShutFlushUnacked      117" "[end]") do (
+    findstr /C:%%S "%BASE%.quirks.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the Linux quirks decode does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"read none (?): mode 3, ?" "%BASE%.quirks.log" > nul
+if errorlevel 1 (
+    echo FAIL: the Linux quirks decode does not name unknown codes as ?
+    set FAILED=1
+)
+findstr /C:"id not listed; policy off; last ?" "%BASE%.quirks.log" > nul
+if errorlevel 1 (
+    echo FAIL: the Linux quirks decode does not name an unknown outcome as ?
+    set FAILED=1
+)
+for /f %%N in ('findstr /C:"Linux quirks (task 38.10" "%BASE%.quirks.log" ^| find /c /v ""') do set QKCOUNT=%%N
+if not "%QKCOUNT%"=="2" (
+    echo FAIL: expected 2 Linux quirks sections, got %QKCOUNT%
+    set FAILED=1
+)
+
 rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
 rem with traffic, the switch absent, Windows 98, a header from before 36.24
 rem and a count it cannot hold.
@@ -1078,5 +1113,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 32 cases, all passed
+echo xhcisnap selftest: 33 cases, all passed
 exit /b 0

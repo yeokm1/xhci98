@@ -345,9 +345,59 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG QemuStreamResyncs;
     ULONG QemuStreamResyncFailed;
     ULONG QemuStreamRestops;
+    /* Linux's xHCI controller quirks (task 38.10; design record 20 section
+     * 6.4), appended contiguous at word 173: one packed word per value in
+     * xhci_quirk.h's order (XHCI_QK_*: the mode, its normalization, the
+     * match, the effective policy, an override, the last outcome and its
+     * reason, the value read - xhci_quirk.h, "One packed word"), written at
+     * each start and at each action; then the PCI revision (configuration
+     * byte 08h, logged, never matched) and the vendor and device dword the
+     * lists were matched against; then the counts, copied from the
+     * extension's quirk state by the thread's poll (hcd_log.c): messages
+     * XhciMsiAvoid refused, suspend halts past 32 ms, the halt delays made,
+     * the suspends that skipped their save, the stuck links warm-reset, the
+     * padded stream blocks, the No Ops placed, the isochronous Successes
+     * dropped, the interrupt endpoints XhciTiIntervalCap capped, the
+     * ASMedia writes made and given up, the AMD bit's clears and skips, the
+     * shutdown's EHCI writes and HCRSTs, and its log flushes acknowledged
+     * drained, acknowledged with the sink off, and not acknowledged. */
+    ULONG QuirkMsiAvoid;
+    ULONG QuirkStreamsOff;
+    ULONG QuirkResumeReinit;
+    ULONG QuirkShutdownToEhci;
+    ULONG QuirkShutdownReset;
+    ULONG QuirkHaltDelay;
+    ULONG QuirkHaltTimeout;
+    ULONG QuirkAsmediaFlow;
+    ULONG QuirkTiIntervalCap;
+    ULONG QuirkStuckLinkReset;
+    ULONG QuirkStreamRingPad;
+    ULONG QuirkControlLinkNoOp;
+    ULONG QuirkIsochSuccess;
+    ULONG QuirkAmdSuspendBit;
+    ULONG QuirkPciRevision;
+    ULONG QuirkIdentity;
+    ULONG QuirkMsiRefused;
+    ULONG QuirkHaltsLong;
+    ULONG QuirkHaltDelays;
+    ULONG QuirkSavesSkipped;
+    ULONG QuirkStuckLinkResets;
+    ULONG QuirkPaddedBlocks;
+    ULONG QuirkLinkNoOps;
+    ULONG QuirkIsochDropped;
+    ULONG QuirkTiCapped;
+    ULONG QuirkAsmWrites;
+    ULONG QuirkAsmGiveUps;
+    ULONG QuirkAmdBitClears;
+    ULONG QuirkAmdBitSkips;
+    ULONG QuirkShutEhciWrites;
+    ULONG QuirkShutResets;
+    ULONG QuirkShutFlushes;
+    ULONG QuirkShutFlushSinkOff;
+    ULONG QuirkShutFlushUnacked;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 207 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */
