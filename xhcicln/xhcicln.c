@@ -1126,6 +1126,18 @@ static int cln_nt_recheck(char *why, size_t whyBytes)
         why[whyBytes - 1] = '\0';
         return 0;
     }
+    /* Every XHCI98\ entry, of any form and removed or not, conclusively
+     * absent: the global rule is about any such devnode, not only the
+     * candidates (one removed already answers absent). */
+    for (j = 0; j < clnEntryCount; j++) {
+        if (cln_nt_presence(&clnEntries[j]) != CLN_ABSENT) {
+            _snprintf(why, whyBytes - 1, "%s is not conclusively absent now "
+                      "(%s)", clnEntries[j].Id, clnEntries[j].Why[0] ?
+                      clnEntries[j].Why : "present");
+            why[whyBytes - 1] = '\0';
+            return 0;
+        }
+    }
     return 1;
 }
 
@@ -1532,20 +1544,6 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
      * qualifies: it means an older xhci98.sys runs (before the update's
      * restart, or after going back), as on 98 SE and ME. */
     clnRefusal[0] = '\0';
-    if (candidates == 0) {
-        if (clnPresentState != CLN_SET_COMPLETE) {
-            printf("\nWhether an XHCI98\\ devnode is present is unknown: %s.\n",
-                   clnPresentWhy);
-            return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
-        }
-        if (clnPresentCount > 0) {
-            printf("\nAn XHCI98\\ devnode is present (%s): an xhci98.sys "
-                   "before 2.4.0.0 is running (restart after the update "
-                   "first).\n", clnPresentIds[0]);
-            return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
-        }
-        return CLN_EXIT_DONE;
-    }
     if (clnPresentState != CLN_SET_COMPLETE) {
         _snprintf(why, sizeof(why) - 1, "whether an XHCI98\\ devnode is "
                   "present is unknown: %s", clnPresentWhy);
@@ -1558,14 +1556,29 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         why[sizeof(why) - 1] = '\0';
         cln_refuse(why);
     }
+    /* Any XHCI98\ entry, of any form, whose presence is not conclusively
+     * absent: the global rule is about every such devnode. */
     for (i = 0; i < clnEntryCount; i++) {
-        if (CLN_IS_OLD(clnEntries[i].Form) &&
-            clnEntries[i].Presence == CLN_UNKNOWN) {
+        if (clnEntries[i].Presence == CLN_UNKNOWN) {
             _snprintf(why, sizeof(why) - 1, "%s: %s", clnEntries[i].Id,
                       clnEntries[i].Why);
             why[sizeof(why) - 1] = '\0';
             cln_refuse(why);
+        } else if (clnEntries[i].Presence == CLN_PRESENT) {
+            _snprintf(why, sizeof(why) - 1, "%s is present: an xhci98.sys "
+                      "before 2.4.0.0 is running", clnEntries[i].Id);
+            why[sizeof(why) - 1] = '\0';
+            cln_refuse(why);
         }
+    }
+    if (candidates == 0) {
+        /* Nothing would be removed; a refusal still answers -remove with 1
+         * (the forced refusal before the update's restart, 10.13.10). */
+        if (clnRefusal[0] != '\0') {
+            printf("\nRemoval refused: %s.\n", clnRefusal);
+            return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
+        }
+        return CLN_EXIT_DONE;
     }
     if (clnRefusal[0] == '\0') {
         (void)cln_nt_hold_controllers();
@@ -1659,12 +1672,22 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         e->Done = 1;
         memset(&dip, 0, sizeof(dip));
         dip.cbSize = sizeof(dip);
-        if (api.GetDiParams(clnSet, &e->Data, &dip) &&
-            (dip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+        removed++;
+        if (!api.GetDiParams(clnSet, &e->Data, &dip)) {
+            /* Removed, but whether it waits on a restart is unknown: say
+             * so, count it as pending (the safe reading) and stop. */
+            e->Done = 2;
+            pending++;
+            printf("Removed %s, but whether a restart is pending could not "
+                   "be read (error 0x%lX); restart Windows to be sure. "
+                   "Stopped.\n", e->Id, (unsigned long)GetLastError());
+            stopped = 1;
+            break;
+        }
+        if ((dip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
             e->Done = 2;
             pending++;
         }
-        removed++;
         printf("Removed %s%s.\n", e->Id,
                (e->Done == 2) ? " (a restart is pending)" : "");
         dn = 0;

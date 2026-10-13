@@ -950,15 +950,45 @@ foreach ($m in $models) {
 # move), and an old model line would let this package compete for a devnode
 # an older binary made. Comments are not lines a setup engine reads.
 #
+# A %token% is expanded from [Strings] before the scan, as the setup engines
+# expand it, so `%Bus%\XHCI98_NOXPORT` with Bus="USB" is the id it becomes;
+# and a model line's ids may carry no %token% at all, so that every id this
+# package binds is one the role rules above read literally (round 1 of the
+# 38.8 code review, finding 1).
+$infStrings = @{}
+foreach ($e in @(Get-Section $inf "Strings")) {
+    if ($null -eq $e) { continue }
+    if ($e.Text -match '^\s*([^=\s]+)\s*=\s*(.*)$') {
+        $infStrings[$matches[1].Trim().ToLowerInvariant()] = $matches[2].Trim().Trim('"')
+    }
+}
+function Expand-InfTokens {
+    param([string]$Text)
+    return [regex]::Replace($Text, '%([^%]*)%', {
+        param($m)
+        if ($m.Groups[1].Value -eq "") { return "%" }
+        $k = $m.Groups[1].Value.ToLowerInvariant()
+        if ($infStrings.ContainsKey($k)) { return $infStrings[$k] }
+        return $m.Value
+    })
+}
+foreach ($m in $models) {
+    foreach ($id in $m.Ids) {
+        if ($id -match '%') {
+            Add-Failure "HCD-USBRES" ("models line {0} carries the id '{1}', which names a [Strings] substitution. Every id this package binds is written out literally, so that the gate's id rules read the id a setup engine matches." -f $m.Line, $id)
+        }
+    }
+}
 $usbResBases = @($prod.RootHubId) + @($prod.HubIds) + @($prod.CompositeId)
 foreach ($sec in $inf.SectionOrder) {
     foreach ($e in (Get-Section $inf $sec)) {
-        foreach ($tok in @([regex]::Matches($e.Text, '(?i)USB\\XHCI98_[^,\s"]*') | ForEach-Object { $_.Value })) {
+        $expanded = Expand-InfTokens $e.Text
+        foreach ($tok in @([regex]::Matches($expanded, '(?i)USB\\XHCI98_[^,\s"]*') | ForEach-Object { $_.Value })) {
             if (-not (Test-ProjectIdForm $tok $usbResBases)) {
                 Add-Failure "HCD-USBRES" ("[{0}] line {1} names '{2}'. The USB\XHCI98_ ids this package may name are '{3}' and their &VID_vvvv&PID_pppp[&REV_rrrr] forms, exactly; any other - USB\XHCI98_NOXPORT, the refused interface's, above all - must stay unbound (design record 13 section 10.13.2)." -f $sec, $e.Line, $tok, ($usbResBases -join "', '"))
             }
         }
-        if ($e.Text -imatch '(?<![A-Za-z0-9_%\\])XHCI98\\') {
+        if ($expanded -imatch '(?<![A-Za-z0-9_%\\])XHCI98\\') {
             Add-Failure "HCD-USBRES" ("[{0}] line {1} names an XHCI98\ id ('{2}'). The bus's ids are under USB\ since 2.4.0.0 and this package names none of the old ones (decision D2, a clean move): an old model line would let this INF compete for a devnode an older binary made." -f $sec, $e.Line, $e.Text)
         }
     }

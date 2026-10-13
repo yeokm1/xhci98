@@ -1055,6 +1055,14 @@ try {
     Assert-RuleFires "hcd-usbres-old-amd64" "HCD-USBRES" -Source $prodInfAmd64 -Arch amd64 {
         param($t) $t.Replace("%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n", "%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n%HubDesc%=Hub.Dev6,XHCI98\HUB`r`n")
     }
+    # A [Strings] substitution is expanded before the scan, and a model
+    # line's ids are literal (round 1 of the 38.8 code review, finding 1).
+    Assert-RuleFires "hcd-usbres-strings-token" "HCD-USBRES" {
+        param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330`r`n", "Xhci.Dev,PCI\CC_0C0330,%Bus%\XHCI98_NOXPORT&VID_0781&PID_5581`r`n").Replace("[Strings]`r`n", "[Strings]`r`nBus=`"USB`"`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-strings-addreg" "HCD-USBRES" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`n", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,XhciNote,,`"%Old%\ROOT_HUB`"`r`n").Replace("[Strings]`r`n", "[Strings]`r`nOld=`"XHCI98`"`r`n")
+    }
     # A comment is no line a setup engine reads: an old id in one passes.
     $commentOk = Invoke-Gate -Path (New-MutatedInf -Name "hcd-usbres-comment" -Mutate {
         param($t) $t.Replace("[XhciModels]`r`n", "[XhciModels]`r`n; was XHCI98\ROOT_HUB and USB\XHCI98_NOXPORT stays unbound`r`n")

@@ -6582,7 +6582,10 @@ designed, with these particulars:
   hub's and a composite's line to its own base and its forms exactly;
   `HCD-ROOTHUB` also refuses a root-hub line carrying any id but its own;
   `HCD-HUBCOPY` covers the root hub. `OEM-USBID` admits exactly the four
-  bases. The self-tests cover each, an old id in a comment passing.
+  bases. `HCD-USBRES` expands `[Strings]` tokens before its scan, and a
+  model line's ids and a `.oem` row's id may carry no `%token%` at all, so
+  `%Bus%\XHCI98_NOXPORT` cannot pass for a literal (the code review's round
+  1). The self-tests cover each, an old id in a comment passing.
 - **The tool**, `xhcicln\`: one C89 file, `XHCICLN.EXE` (MSVC 6.0) and
   `XHCICL64.EXE` (WDK 7.1 amd64, `/MT`, subsystem 5.02), both importing
   `KERNEL32` and `ADVAPI32` alone, both embedding the elevation manifest.
@@ -6598,7 +6601,11 @@ designed, with these particulars:
   a subkey of that walk with no `HardWareKey` value names nothing and is
   counted, not taken as an incomplete walk. When the `XHCI98` enumerator
   key does not exist at all, a failed SetupAPI set is read as empty, not
-  unknown.
+  unknown. The global "any `XHCI98\` devnode present" test covers every
+  entry under the enumerator, of any form, present or unknown, and is
+  repeated in each re-check; it refuses `-remove` (exit 1) even when no
+  entry qualifies, as on 98 SE and ME. A removal whose restart flags cannot
+  be read is counted as restart-pending and stops the run (exit 2).
 - **The veto table, provisional.** Step 4's readings are not yet taken, so
   `cln_removal_enabled` enables removal on NT 5.0, 5.1, 5.2, 6.0 and 6.1
   (any other version lists only); a version whose leg shows no veto is set

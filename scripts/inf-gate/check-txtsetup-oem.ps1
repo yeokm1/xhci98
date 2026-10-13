@@ -333,6 +333,9 @@ function Test-OemText {
                 continue
             }
             $id = $f[0].Text.ToUpperInvariant()
+            if ($id.Contains("%")) {
+                & $add "OEM-USBID" "'$($f[0].Text)' names a substitution; every id this file maps is written out literally, so OEM-USBID reads the id Setup matches."
+            }
             if ($id.StartsWith("USB\") -and -not ($ownUsbIds -contains $id)) {
                 & $add "OEM-USBID" "'$($f[0].Text)' is a USB\ id other than the bus's own four ($($ownUsbIds -join ', ')); USB\ROOT_HUB, USB\COMPOSITE and the class ids belong to Setup's own drivers, and USB\XHCI98_NOXPORT stays unbound."
             }
@@ -455,6 +458,7 @@ if ($SelfTest) {
             @{ Rule = "OEM-USBID";    Text = $text.Replace("id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"", "id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"`r`nid = `"USB\COMPOSITE`", `"xhci98`"") },
             @{ Rule = "OEM-IDS";      Text = $text.Replace("id = `"USB\XHCI98_ROOT_HUB`", `"xhci98`"", "id = `"USB\XHCI98_ROOT_HUB`", `"xhci98`"`r`nid = `"XHCI98\ROOT_HUB`", `"xhci98`"") },
             @{ Rule = "OEM-IDS";      Text = $text.Replace("id = `"USB\XHCI98_HUB30`", `"xhci98`"", "id = `"XHCI98\HUB30`", `"xhci98`"") },
+            @{ Rule = "OEM-USBID";    Text = $text.Replace("id = `"USB\XHCI98_HUB30`", `"xhci98`"", "id = `"USB\XHCI98_HUB30`", `"xhci98`"`r`nid = `"%Bus%\XHCI98_NOXPORT`", `"xhci98`"") },
             @{ Rule = "OEM-MSFILE";   Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d1, usbd.sys") },
             @{ Rule = "OEM-83";       Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98-amd64.inf") },
             @{ Rule = "OEM-ARCH";     Text = $text.Replace($word, "any") },
