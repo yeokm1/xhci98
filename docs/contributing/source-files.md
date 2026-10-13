@@ -390,6 +390,16 @@
 > `xhciqual\test\test_quirks.c` (every listed id with its Linux flag and
 > the driver value it prints, the vendor-wide rows, the neighbours refused,
 > and the HCIVERSION floor note).
+> Task 38.10's endpoint-ring fix (design record 20 section 5) adds the pure
+> `xhci_own.c` / `xhci_own.h` (who holds an endpoint's ring across an
+> interface switch: each step's decision for SELECT_INTERFACE and a
+> function's select, the drop-only command's, a completion code as an
+> outcome, and the one-setting walk; host suite `test_own`, over a
+> modelled controller and pool), carried out in `hcd_cfg.c` (the held
+> pipes `hcdCfgRetain` and their proofs, the switch `hcdCfgSwitch*`), with
+> `XhciPoolAcquireReserved` in `xhci_mem.c` (`test_membuf`), the pool
+> occupancy copied at `hcd_log.c`'s poll, and the qemu flavour's faults
+> `18` and `19` in `xhci_inj.h` and `hcd_inj.c`.
 > Two groups from before Phase 36 that this map did not name (added in
 > 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
 > command precondition table: would a conforming controller accept this

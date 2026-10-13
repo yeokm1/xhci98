@@ -152,6 +152,13 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_own     - endpoint ring ownership (src\xhci_own.c, task 38.10,
+rem                  design record 20 section 5): every step of an interface
+rem                  switch under every command, SET_INTERFACE, clear and
+rem                  rollback outcome, driven over a modelled controller and
+rem                  ring pool - no ring free while a context may name it,
+rem                  none leaked, the 64-context bound - and the one-setting
+rem                  descriptor walk
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -375,6 +382,10 @@ rem test_quirk links nothing else: Linux's xHCI controller quirks' values,
 rem lists, match and packed word are pure (task 38.10, design record 20);
 rem their executors' vectors are in the suites of the files they act in.
 call :run test_quirk "test_quirk.c ..\src\xhci_quirk.c"
+rem test_own links nothing else: who holds an endpoint's ring across an
+rem interface switch - each step's decision, the one-setting walk - is pure,
+rem and the suite drives it over a modelled controller and pool (task 38.10).
+call :run test_own "test_own.c ..\src\xhci_own.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

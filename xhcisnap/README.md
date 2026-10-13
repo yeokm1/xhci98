@@ -821,6 +821,18 @@ driver from before 38.10, and the section is not printed.
 normalization, listed and not, on, off and overridden, each outcome, codes
 this build does not know printed as `?`), with the PCI id and revision
 read and unread, and a 232-word block that prints nothing.
+Task 38.10's eight follow (233 to 240, `PoolRingsInUse`, `RingsRetained`,
+`RingsPinned`, `RingsReleased`, `SelectsReattached`,
+`SelectStallSuccesses`, `SelectRollbacks`, `SelectRollbacksReopened`;
+design record 20 section 5), with a section of their own, **"endpoint
+rings"**: the pool rings held at the last poll (of 32), the rings held
+for an endpoint the controller may still have enabled - stale, or pinned
+after a command whose completion was never seen - and those a later proof
+released, and how interface switches ended: the old pipes put back after a
+refused command, the one-setting STALLs carried out by clearing the
+endpoints' halts, the rollbacks after a STALL and those that reopened the
+old setting. A block shorter than 241 words is a driver from before it,
+and the section is not printed.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

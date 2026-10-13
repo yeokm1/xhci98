@@ -51,6 +51,7 @@
 #include "xhci_pipe.h"
 #include "xhci_stream.h"
 #include "xhci98_streams.h"
+#include "xhci_own.h"
 #include "xhci_dbg.h"
 
 /* URB functions, Windows 2000 DDK inc\usbdi.h. */
@@ -720,10 +721,15 @@ static VOID hcdCfgZero(PXHCI_EXTENSION ext, ULONG offset, ULONG bytes)
 }
 
 /* A Configure Endpoint built but not issued (hcdCfgRecycleCode): distinct
- * from 0, which is a command issued whose outcome is unknown. */
-#define HCD_CFG_NOT_ISSUED  0xFFFFFFFFUL
+ * from 0, which is a command issued whose outcome is unknown - the value
+ * xhci_own.c reads as not issued. */
+#define HCD_CFG_NOT_ISSUED  XHCI_OWN_NOT_ISSUED_CODE
 
 static VOID hcdCfgStreamsFree(PHCD_CONTROLLER hc, PHCD_STREAMS st);
+static VOID hcdCfgRetainedReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  ULONG dropped);
+static VOID hcdCfgRetain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         PHCD_PIPE pipe, ULONG pinned);
 
 /* The retired stream blocks (hcdCfgPipeFree) whose endpoint is in
  * `dropped` (DCI bits): a command that has completed successfully dropped
@@ -750,7 +756,9 @@ static VOID hcdCfgRetiredReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * that completed successfully reclaims the retired stream blocks of the
  * endpoints it dropped - all of them with DC = 1, else those of the Input
  * Control Context's Drop flags, which the shared Input Context still holds
- * (31-A.1). Thread only, powered. */
+ * (31-A.1) - and the retained pipes of those endpoints, whose rings no
+ * context names now (task 38.10, design record 20 section 5.2). Thread
+ * only, powered. */
 static ULONG hcdCfgCommand(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            const XHCI_TRB *trb, PULONG control)
 {
@@ -759,7 +767,8 @@ static ULONG hcdCfgCommand(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG dropped;
 
     code = HcdThreadCommand(hc, trb, control);
-    if (code == XHCI_CC_SUCCESS && dev->StreamsRetired != NULL &&
+    if (code == XHCI_CC_SUCCESS &&
+        (dev->StreamsRetired != NULL || dev->Retained != NULL) &&
         XHCI_TRB_GET_TYPE(trb->Control) == XHCI_TRB_TYPE_CONFIGURE_EP) {
         dropped = 0;
         if ((trb->Control & XHCI_TRB_DC) != 0) {
@@ -769,6 +778,7 @@ static ULONG hcdCfgCommand(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             dropped = XhciCommonAt(&hc->Hc, icc)[0];
         }
         hcdCfgRetiredReclaim(hc, dev, dropped);
+        hcdCfgRetainedReclaim(hc, dev, dropped);
     }
     return code;
 }
@@ -1119,9 +1129,13 @@ static ULONG hcdCfgRingless(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /* A new pipe for one endpoint, on a pool ring of its own. NULL when the
- * pool or the pool allocator has nothing; *usbd says which. */
+ * pool or the pool allocator has nothing; *usbd says which. `reserved` is
+ * how many of the device's rings an interface switch's own command will
+ * drop, outside the per-device cap (XhciPoolAcquireReserved; design record
+ * 20 section 5.2); 0 outside a switch. */
 static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                               const XHCI_PIPE_EP *ep, PLONG usbd)
+                               const XHCI_PIPE_EP *ep, ULONG reserved,
+                               PLONG usbd)
 {
     PXHCI_EXTENSION ext;
     PHCD_PIPE pipe;
@@ -1171,8 +1185,9 @@ static PHCD_PIPE hcdCfgPipeNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    answer = XhciPoolAcquire(&ext->RingPool, dev->SlotId,
-                             hcdCfgRingless(hc, dev), &index);
+    answer = XhciPoolAcquireReserved(&ext->RingPool, dev->SlotId,
+                                     hcdCfgRingless(hc, dev), reserved,
+                                     &index);
     if (answer == XHCI_POOL_OK) {
         dev->PoolRings++;
     }
@@ -1318,15 +1333,121 @@ static VOID hcdCfgCloseAll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, LONG usbd)
     hcdCfgCloseMask(hc, dev, 0xFFFFFFFCUL, usbd);
 }
 
+/* ----------------------------------------------------------------------- */
+/* Rings held until the controller drops them (task 38.10)                 */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Design record 20 section 5: a pool ring, and a stream block, go back
+ * only once a command proves the controller has given them up - Linux's
+ * rule (xhci.c, xhci_check_bandwidth frees the dropped rings only after
+ * the command succeeds, xhci_reset_bandwidth only the rings never
+ * installed). A closed pipe whose ring an Endpoint Context may still name
+ * - an endpoint left enabled with no pipe, or one a command whose outcome
+ * was never seen may have installed - is held here: on the device's
+ * Retained list, its ring still the device's in the pool and counted in
+ * PoolRings, its DCI marked stale so the next Configure Endpoint drops it.
+ * A pinned one is held until the slot goes (HcdCfgDeviceGone): the HCRST
+ * the lost completion requested is its proof. Thread only.
+ */
+static VOID hcdCfgRetain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         PHCD_PIPE pipe, ULONG pinned)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe->Closed = 1;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    pipe->Pinned = pinned;
+    pipe->RetainNext = dev->Retained;
+    dev->Retained = pipe;
+    if (pipe->Dci >= 2 && pipe->Dci < 32) {
+        dev->Stale |= 1UL << pipe->Dci;
+    }
+    if (pinned) {
+        hc->Counters.RingsPinned++;
+    } else {
+        hc->Counters.RingsRetained++;
+    }
+    XhciLogNote(&hc->Hc, "cfg.ring.held",
+                (dev->SlotId << 24) | ((pipe->Dci & 0xFFUL) << 16) |
+                    (pinned << 8) | (pipe->PoolIndex & 0xFFUL));
+}
+
+/* A held pipe given up: its stream block first - the proof that releases
+ * the ring releases the array its context named - then the pipe and its
+ * ring. Thread only. */
+static VOID hcdCfgRetainedFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               PHCD_PIPE pipe)
+{
+    PHCD_STREAMS st;
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    st = pipe->Streams;
+    pipe->Streams = NULL;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdCfgStreamsFree(hc, st);
+    pipe->RetainNext = NULL;
+    hcdCfgPipeFree(hc, dev, pipe);
+}
+
+/* The held pipes a proof releases: a successful Configure Endpoint that
+ * dropped their DCIs (`dropped`), a Reset Device (all of them), or a
+ * deconfigure that found every endpoint Disabled. Never a pinned one.
+ * Thread only. */
+static VOID hcdCfgRetainedReclaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  ULONG dropped)
+{
+    PHCD_PIPE *link;
+    PHCD_PIPE pipe;
+
+    link = &dev->Retained;
+    while ((pipe = *link) != NULL) {
+        if (!pipe->Pinned && pipe->Dci >= 2 && pipe->Dci < 32 &&
+            (dropped & (1UL << pipe->Dci)) != 0) {
+            *link = pipe->RetainNext;
+            hc->Counters.RingsReleased++;
+            hcdCfgRetainedFree(hc, dev, pipe);
+        } else {
+            link = &pipe->RetainNext;
+        }
+    }
+}
+
+/* How many held pipes a Configure Endpoint that drops every stale
+ * endpoint will release: an interface switch's reservation counts them
+ * (hcdCfgPipeNew). A pinned one is released by no command, so not
+ * counted. Thread only. */
+static ULONG hcdCfgRetainedCount(PHCD_USB_DEVICE dev)
+{
+    PHCD_PIPE pipe;
+    ULONG n;
+
+    n = 0;
+    for (pipe = dev->Retained; pipe != NULL; pipe = pipe->RetainNext) {
+        if (!pipe->Pinned) {
+            n++;
+        }
+    }
+    return n;
+}
+
 /* The device is being freed (hcd_enum.c, after HcdIoDeviceGone): its pipes
  * go without commands. */
 VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PHCD_STREAMS st;
+    PHCD_PIPE pipe;
 
     hcdCfgCloseAll(hc, dev, HCD_USBD_DEVICE_GONE);
-    /* The slot is disabled or HCRST has taken it: no context names a
-     * retired array any more (hcdCfgPipeFree). */
+    /* The slot is disabled or HCRST has taken it: no context names a held
+     * ring, pinned or not, nor a retired array (hcdCfgPipeFree). */
+    while ((pipe = dev->Retained) != NULL) {
+        dev->Retained = pipe->RetainNext;
+        hcdCfgRetainedFree(hc, dev, pipe);
+    }
+    dev->Stale = 0;
     while (dev->StreamsRetired != NULL) {
         st = dev->StreamsRetired;
         dev->StreamsRetired = st->Next;
@@ -1469,7 +1590,7 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     (VOID)hcdCfgTolerance(hc, dev, &tol);
     ep = &tol;
     usbd = XHCI_USBD_STATUS_SUCCESS;
-    pipe = hcdCfgPipeNew(hc, dev, ep, &usbd);
+    pipe = hcdCfgPipeNew(hc, dev, ep, 0, &usbd);
     if (pipe == NULL) {
         return NULL;
     }
@@ -1478,7 +1599,7 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         add[dci] = NULL;
     }
     add[ep->Dci] = pipe;
-    code = 0;
+    code = HCD_CFG_NOT_ISSUED;
     if (XhciPipeConfigurePlan(0, 0, XHCI_PIPE_DCI_BIT(ep->Dci), &plan) ==
             XHCI_PIPE_OK &&
         hcdCfgBuildInput(hc, dev, &plan, add) &&
@@ -1491,7 +1612,14 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (code != XHCI_CC_SUCCESS) {
         XHCI_DBG_VALUE("hcd: hub Configure Endpoint failed, slot/code",
                        (dev->SlotId << 8) | code);
-        hcdCfgPipeFree(hc, dev, pipe);
+        if (code == 0) {
+            /* Issued, never answered: the context may name the ring until
+             * the HCRST the timeout requested (design record 20 section
+             * 5.2). */
+            hcdCfgRetain(hc, dev, pipe, 1);
+        } else {
+            hcdCfgPipeFree(hc, dev, pipe);
+        }
         return NULL;
     }
     if (ep->Capped) {
@@ -1661,7 +1789,7 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 break;
             }
             hcdCfgFastPoll(hc, dev, &ep);
-            add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
+            add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, 0, &usbd);
             if (add[ep.Dci] == NULL) {
                 hc->Counters.EndpointRefusalsPool++;
                 break;
@@ -1688,7 +1816,18 @@ static LONG hcdCfgSelectOnce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         } else if (code != XHCI_CC_SUCCESS) {
             hcdCfgCountConfigure(hc, code, mask);
             usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
-            mask = 0;   /* nothing was enabled */
+            if (code == 0) {
+                /* Issued, never answered: every ring it named may be in a
+                 * context until the HCRST the timeout requested (design
+                 * record 20 section 5.2), so none is freed below. */
+                for (dci = 2; dci < 32; dci++) {
+                    if (add[dci] != NULL) {
+                        hcdCfgRetain(hc, dev, add[dci], 1);
+                        add[dci] = NULL;
+                    }
+                }
+            }
+            mask = 0;   /* nothing was enabled, or nothing is known */
         }
     }
     if (usbd == XHCI_USBD_STATUS_SUCCESS &&
@@ -1779,22 +1918,486 @@ static USBD_CONFIGURATION_HANDLE hcdCfgHandle(PHCD_USB_DEVICE dev,
                          : (USBD_CONFIGURATION_HANDLE)dev;
 }
 
+/* ----------------------------------------------------------------------- */
+/* An interface switch (task 38.10)                                         */
+/* ----------------------------------------------------------------------- */
+
+static ULONG hcdCfgDeviceClearHalt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                   PHCD_PIPE pipe);
+static LONG hcdCfgAbortPaused(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              PHCD_PIPE pipe, LONG usbd);
+
+/*
+ * One interface switch's pipes (design record 20 sections 5.3 and 5.4): the
+ * old pipes it detached and the new it made, by DCI; whether each old
+ * pipe's streams were live when it was detached, so a reattach restores
+ * exactly that; the client's pipe entry each new pipe answers, written only
+ * once the switch succeeds; and the open pipes it leaves beside it.
+ * xhci_own.c decides what becomes of each set at each step. Thread only.
+ */
+typedef struct _HCD_CFG_SWITCH {
+    PHCD_PIPE Old[32];
+    PHCD_PIPE New[32];
+    PUSBD_PIPE_INFORMATION Info[32];
+    UCHAR OldLive[32];
+    ULONG OldMask;
+    ULONG NewMask;
+    ULONG Keep;
+    ULONG Streams;
+} HCD_CFG_SWITCH, *PHCD_CFG_SWITCH;
+
+static VOID hcdCfgSwitchInit(PHCD_CFG_SWITCH sw)
+{
+    ULONG dci;
+
+    for (dci = 0; dci < 32; dci++) {
+        sw->Old[dci] = NULL;
+        sw->New[dci] = NULL;
+        sw->Info[dci] = NULL;
+        sw->OldLive[dci] = 0;
+    }
+    sw->OldMask = 0;
+    sw->NewMask = 0;
+    sw->Keep = 0;
+    sw->Streams = 0;
+}
+
+/*
+ * Step 1 (section 5.3): the open pipes of `which` (DCI bits), each paused
+ * and taken through the reusable abort (hcdCfgAbortPaused) - every request
+ * cancelled, the endpoint Stopped, its rings emptied with Set TR Dequeue at
+ * the enqueue position - so a pipe put back later restarts no TD whose
+ * request already completed. Pausing does not close admission, so each is
+ * then unpublished under the lock - Closed, its slot cleared, its streams'
+ * handles made not to resolve - and drained and waited out again, as
+ * hcdCfgCloseMask does, but kept, with its ring, stream block and handle.
+ * Every other open pipe is the switch's Keep. Returns 0 when an abort
+ * failed: hcdCfgFault has asked for the reset or cycle that settles the
+ * device, and the pipes stay published and paused, as hcdCfgAbort leaves
+ * them. Thread only.
+ */
+static ULONG hcdCfgSwitchDetach(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                PHCD_CFG_SWITCH sw, ULONG which)
+{
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG dci;
+    ULONG id;
+
+    for (dci = 2; dci < 32; dci++) {
+        if (dev->Pipes[dci] == NULL) {
+            continue;
+        }
+        if ((which & (1UL << dci)) == 0) {
+            sw->Keep |= 1UL << dci;
+            continue;
+        }
+        HcdIoPipePause(hc, dev->Pipes[dci]);
+        if (hcdCfgAbortPaused(hc, dev, dev->Pipes[dci], HCD_USBD_CANCELED) !=
+            XHCI_USBD_STATUS_SUCCESS) {
+            return 0;
+        }
+    }
+    for (dci = 2; dci < 32; dci++) {
+        if ((which & (1UL << dci)) == 0 || dev->Pipes[dci] == NULL) {
+            continue;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        pipe = dev->Pipes[dci];
+        pipe->Closed = 1;
+        dev->Pipes[dci] = NULL;
+        if (pipe->Streams != NULL) {
+            sw->OldLive[dci] = pipe->Streams->Live ? 1 : 0;
+            pipe->Streams->Live = 0;
+            for (id = 1; id <= pipe->Streams->Count; id++) {
+                pipe->Streams->Pipe[id]->Closed = 1;
+            }
+            sw->Streams = 1;
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        HcdIoDrainPipe(hc, pipe, HCD_USBD_CANCELED);
+        HcdIoWaitPipe(hc, pipe);
+        sw->Old[dci] = pipe;
+        sw->OldMask |= 1UL << dci;
+    }
+    return 1;
+}
+
+/* The rings the switch's own command will drop - the pipes it detached
+ * and every held stale one - which the per-device cap does not count
+ * while the switch is in flight (section 5.2; hcdCfgPipeNew). */
+static ULONG hcdCfgSwitchReserved(PHCD_USB_DEVICE dev,
+                                  const HCD_CFG_SWITCH *sw)
+{
+    ULONG n;
+    ULONG mask;
+
+    n = 0;
+    for (mask = sw->OldMask; mask != 0; mask &= mask - 1) {
+        n++;
+    }
+    return n + hcdCfgRetainedCount(dev);
+}
+
+/* A detached old pipe put back with its own handle: republished, its
+ * streams visible again if they were live, and the switch's pause - only
+ * that one - given back. Thread only. */
+static VOID hcdCfgSwitchReattach(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                 PHCD_CFG_SWITCH sw, PHCD_PIPE pipe)
+{
+    KIRQL oldIrql;
+    ULONG id;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    pipe->Closed = 0;
+    dev->Pipes[pipe->Dci] = pipe;
+    if (pipe->Streams != NULL && sw->OldLive[pipe->Dci]) {
+        pipe->Streams->Live = 1;
+        for (id = 1; id <= pipe->Streams->Count; id++) {
+            pipe->Streams->Pipe[id]->Closed = 0;
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    HcdIoPipeResume(hc, pipe);
+}
+
+/*
+ * One step's actions (xhci_own.h, XHCI_OWN_A_*) carried out, all but what
+ * is issued next: the stale marks cleared, then each set freed, held or
+ * pinned, then the new published or the old put back. A held pipe's DCI
+ * is marked stale as it is held (hcdCfgRetain). Thread only.
+ */
+static VOID hcdCfgSwitchApply(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                              PHCD_CFG_SWITCH sw, ULONG actions)
+{
+    PHCD_STREAMS st;
+    KIRQL oldIrql;
+    ULONG dci;
+
+    if ((actions & XHCI_OWN_A_STALE_CLEARED) != 0) {
+        dev->Stale = 0;
+    }
+    for (dci = 2; dci < 32; dci++) {
+        if ((actions & XHCI_OWN_A_FREE_OLD_STREAMS) != 0 &&
+            sw->Old[dci] != NULL) {
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            st = sw->Old[dci]->Streams;
+            sw->Old[dci]->Streams = NULL;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            hcdCfgStreamsFree(hc, st);
+        }
+        if (sw->New[dci] != NULL) {
+            if ((actions & XHCI_OWN_A_FREE_NEW) != 0) {
+                hcdCfgPipeFree(hc, dev, sw->New[dci]);
+                sw->New[dci] = NULL;
+            } else if ((actions & (XHCI_OWN_A_RETAIN_NEW |
+                                   XHCI_OWN_A_PIN_NEW)) != 0) {
+                hcdCfgRetain(hc, dev, sw->New[dci],
+                             (actions & XHCI_OWN_A_PIN_NEW) != 0);
+                sw->New[dci] = NULL;
+            }
+        }
+        if (sw->Old[dci] != NULL) {
+            if ((actions & XHCI_OWN_A_FREE_OLD) != 0) {
+                hcdCfgPipeFree(hc, dev, sw->Old[dci]);
+                sw->Old[dci] = NULL;
+            } else if ((actions & (XHCI_OWN_A_RETAIN_OLD |
+                                   XHCI_OWN_A_PIN_OLD)) != 0) {
+                hcdCfgRetain(hc, dev, sw->Old[dci],
+                             (actions & XHCI_OWN_A_PIN_OLD) != 0);
+                sw->Old[dci] = NULL;
+            }
+        }
+    }
+    if ((actions & XHCI_OWN_A_PUBLISH_NEW) != 0) {
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        for (dci = 2; dci < 32; dci++) {
+            if (sw->New[dci] != NULL) {
+                dev->Pipes[dci] = sw->New[dci];
+            }
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+    }
+    if ((actions & XHCI_OWN_A_REATTACH_OLD) != 0) {
+        for (dci = 2; dci < 32; dci++) {
+            if (sw->Old[dci] != NULL) {
+                hcdCfgSwitchReattach(hc, dev, sw, sw->Old[dci]);
+            }
+        }
+    }
+}
+
+/* The client's pipe entries: each new pipe's on success, and none left
+ * naming a pipe on a failure (section 5.3, step 2). Thread only. */
+static VOID hcdCfgSwitchAnswer(PHCD_CFG_SWITCH sw, ULONG success)
+{
+    PUSBD_PIPE_INFORMATION info;
+    PHCD_PIPE pipe;
+    ULONG dci;
+
+    for (dci = 2; dci < 32; dci++) {
+        info = sw->Info[dci];
+        if (info == NULL) {
+            continue;
+        }
+        pipe = success ? sw->New[dci] : NULL;
+        if (pipe != NULL) {
+            info->MaximumPacketSize = (USHORT)pipe->Ep.MaxPacketSize;
+            info->EndpointAddress = (UCHAR)pipe->Ep.Address;
+            info->Interval = (UCHAR)pipe->Ep.BInterval;
+            info->PipeType = (USBD_PIPE_TYPE)pipe->Ep.TransferType;
+        }
+        info->PipeHandle = (USBD_PIPE_HANDLE)pipe;
+    }
+}
+
+/*
+ * CLEAR_FEATURE(ENDPOINT_HALT) to each non-isochronous pipe of `pipes` - a
+ * one-setting STALL's new pipes, or a rollback's old - so the device's
+ * toggle or sequence restarts at 0 to match a fresh context (USB 2.0 and
+ * 3.2 9.4.5); an isochronous endpoint keeps none and need not implement the
+ * Halt feature, so it gets none, as hcdCfgSetInterface's fallback skips it.
+ * Stops at the first clear not taken, whatever the reason (owner,
+ * 2026-10-14: Linux ignores the result; here the select does not claim
+ * success over a device out of step). Returns XHCI_OWN_EV_CLEARS_*.
+ * Thread only.
+ */
+static ULONG hcdCfgSwitchClears(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                PHCD_PIPE *pipes)
+{
+    ULONG dci;
+
+    for (dci = 2; dci < 32; dci++) {
+        if (pipes[dci] != NULL &&
+            pipes[dci]->TransferType != XHCI_PIPE_XFER_ISOCH &&
+            hcdCfgDeviceClearHalt(hc, dev, pipes[dci]) != HCD_CTL_DONE) {
+            return XHCI_OWN_EV_CLEARS_FAILED;
+        }
+    }
+    return XHCI_OWN_EV_CLEARS_DONE;
+}
+
+/*
+ * The old setting re-instated after a STALL (section 5.3, step 4): each old
+ * pipe's ring - emptied by the abort, and superseded by step 3's command so
+ * no context names it - restarted at its base, zeroed, cycle 1
+ * (XhciRingRestart: zeroed TRBs carry cycle 0, xHCI 4.3.6 footnote 10), its
+ * queue's remembered positions forgotten, then one Configure Endpoint drops
+ * the new endpoints and adds the old on those rings with a fresh dequeue
+ * pointer and DCS 1. Fresh contexts restart the host's toggle, so the
+ * pipes' sequence and halt records restart with them. Returns the outcome
+ * as an XHCI_OWN_EV_CMD_* event. Thread only, powered.
+ */
+static ULONG hcdCfgSwitchRollback(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                  PHCD_CFG_SWITCH sw)
+{
+    XHCI_PIPE_PLAN plan;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG code;
+    ULONG dci;
+
+    hc->Counters.SelectRollbacks++;
+    if ((sw->OldMask | sw->NewMask) == 0) {
+        return XHCI_OWN_EV_CMD_SUCCESS;
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (dci = 2; dci < 32; dci++) {
+        pipe = sw->Old[dci];
+        if (pipe == NULL) {
+            continue;
+        }
+        if (pipe->Queue->Count == 0 &&
+            XhciRingRestart(pipe->Ring) == XHCI_RING_OK) {
+            (VOID)XhciXferQueueRestart(pipe->Queue);
+        }
+        pipe->SeqUsed = 0;
+        pipe->Halted = 0;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    code = HCD_CFG_NOT_ISSUED;
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (HcdInjSelectConfigure(hc, 1, &code)) {
+        return XhciOwnCommandEvent(code);
+    }
+#endif
+    if (XhciPipeConfigurePlan(sw->Keep, sw->NewMask, sw->OldMask, &plan) ==
+        XHCI_PIPE_OK) {
+        code = hcdCfgConfigureAdd(hc, dev, &plan, sw->Old, 0);
+    }
+    XhciLogNote(&hc->Hc, "cfg.select.rollback",
+                (dev->SlotId << 24) | (code & 0xFFUL));
+    return XhciOwnCommandEvent(code);
+}
+
+/* The switch's Configure Endpoint (step 3): `sw`'s old endpoints and every
+ * stale one dropped, its new added, Keep beside. Nothing to drop or add is
+ * a success with nothing issued. The completion code, HCD_CFG_NOT_ISSUED
+ * when nothing was issued; a refusal that would have added endpoints is
+ * counted. Thread only, powered. */
+static ULONG hcdCfgSwitchConfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                   PHCD_CFG_SWITCH sw)
+{
+    XHCI_PIPE_PLAN plan;
+    ULONG code;
+
+    if ((sw->OldMask | dev->Stale | sw->NewMask) == 0) {
+        return XHCI_CC_SUCCESS;
+    }
+    code = HCD_CFG_NOT_ISSUED;
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (!HcdInjSelectConfigure(hc, 0, &code))
+#endif
+    {
+        if (XhciPipeConfigurePlan(sw->Keep, sw->OldMask | dev->Stale,
+                                  sw->NewMask, &plan) == XHCI_PIPE_OK) {
+            code = hcdCfgConfigureAdd(hc, dev, &plan, sw->New, 1);
+        }
+    }
+    if (code != XHCI_CC_SUCCESS && sw->NewMask != 0) {
+        hcdCfgCountConfigure(hc, code == HCD_CFG_NOT_ISSUED ? 0 : code,
+                             sw->NewMask);
+    }
+    return code;
+}
+
+/* A switch's end that was not a plain success, in the log in every
+ * flavour: slot, interface, the answer (XHCI_OWN_ANS_*) and the last event
+ * (XHCI_OWN_EV_*). Thread only. */
+static VOID hcdCfgSwitchNote(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             ULONG number, ULONG answer, ULONG event)
+{
+    XhciLogNote(&hc->Hc, "cfg.select.end",
+                (dev->SlotId << 24) | ((number & 0xFFUL) << 16) |
+                    ((answer & 0xFFUL) << 8) | (event & 0xFFUL));
+}
+
+/*
+ * A switch driven to its end (xhci_own.c, XhciOwnSelectStep): each step's
+ * actions carried out, then what it issues next - SET_INTERFACE through
+ * `setif` (a select's one interface, or a function's every named one), the
+ * clears, the rollback - until the select ends. `event` is the Configure
+ * Endpoint's (or XHCI_OWN_EV_CMD_NOT_ISSUED for a refusal before it).
+ * Returns the answer (XHCI_OWN_ANS_*); *last the last event, *manual
+ * whether a one-setting STALL's clears were sent, *reattached whether the
+ * old pipes were put back. Thread only, powered.
+ */
+typedef ULONG (*HCD_CFG_SETIF)(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               PVOID context);
+
+static ULONG hcdCfgSwitchRun(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             PHCD_CFG_SWITCH sw, PXHCI_OWN_SELECT own,
+                             ULONG event, HCD_CFG_SETIF setif,
+                             PVOID context, PULONG last, PULONG manual,
+                             PULONG reattached)
+{
+    ULONG actions;
+    ULONG answer;
+
+    *manual = 0;
+    *reattached = 0;
+    for (;;) {
+        *last = event;
+        actions = XhciOwnSelectStep(own, event, &answer);
+        hcdCfgSwitchApply(hc, dev, sw, actions);
+        if ((actions & XHCI_OWN_A_REATTACH_OLD) != 0) {
+            *reattached = 1;
+        }
+        if (own->Phase == XHCI_OWN_PH_END) {
+            return answer;
+        }
+        if ((actions & XHCI_OWN_A_SET_INTERFACE) != 0) {
+            event = setif(hc, dev, context);
+        } else if ((actions & XHCI_OWN_A_CLEAR_NEW) != 0) {
+            *manual = 1;
+            event = hcdCfgSwitchClears(hc, dev, sw->New);
+        } else if ((actions & XHCI_OWN_A_ROLLBACK) != 0) {
+            event = hcdCfgSwitchRollback(hc, dev, sw);
+        } else if ((actions & XHCI_OWN_A_CLEAR_OLD) != 0) {
+            event = hcdCfgSwitchClears(hc, dev, sw->Old);
+        } else {
+            /* Nothing issued and not ended: a slip the next step answers
+             * by holding everything (XhciOwnSelectStep). */
+            event = 0;
+        }
+    }
+}
+
+/* What SELECT_INTERFACE asks SET_INTERFACE for. */
+typedef struct _HCD_CFG_SETIF_ONE {
+    ULONG Number;
+    ULONG Alternate;
+} HCD_CFG_SETIF_ONE, *PHCD_CFG_SETIF_ONE;
+
+/* SELECT_INTERFACE's SET_INTERFACE, as the event its outcome is: completed,
+ * STALLed by the device, or not established. Thread only, powered. */
+static ULONG hcdCfgSetInterfaceOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                   PVOID context)
+{
+    PHCD_CFG_SETIF_ONE one;
+    ULONG bytes;
+    ULONG stalled;
+
+    one = (PHCD_CFG_SETIF_ONE)context;
+    stalled = 0;
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (HcdInjSetInterface(hc, dev->SlotId, &stalled)) {
+        return stalled ? XHCI_OWN_EV_SETIF_STALLED : XHCI_OWN_EV_SETIF_FAILED;
+    }
+#endif
+    if (HcdThreadControlEx(hc, dev, 0x01, 11, (USHORT)one->Alternate,
+                           (USHORT)one->Number, 0, &bytes, &stalled)) {
+        return XHCI_OWN_EV_SETIF_DONE;
+    }
+    /* A device that STALLed SET_INTERFACE refused it itself and is
+     * answered with its own status, not one that blames the controller
+     * (26-V.2: a C-Media whose alternate 1 the passthrough refused). */
+    XHCI_DBG_VALUE("hcd: SET_INTERFACE failed, stalled", stalled);
+    return stalled ? XHCI_OWN_EV_SETIF_STALLED : XHCI_OWN_EV_SETIF_FAILED;
+}
+
 /*
  * One interface to another alternate setting, on the configuration the
- * client selected (its copy, dev->Selected): the interface's open pipes are
- * brought to rest and closed, their requests completed as cancelled; one
- * Configure Endpoint drops their endpoints - and any left enabled by an
- * earlier failure (dev->Stale) - and adds the new setting's; then
- * SET_INTERFACE. A failure leaves the interface with no pipes, as a client
- * that sees the error must select again. The other interfaces' pipes are
- * untouched (keepMask). Every SET_INTERFACE failure fails the request, a
- * STALL included: USB 2.0 9.4.10 lets a device with only a default setting
- * STALL it, but then the device has not reset its endpoints' toggles while
- * Drop and Add has reset the controller's (Codex review of batch (c),
- * round 11, findings 1 and 3). From a function PDO the handle is the PDO's
- * own and the interface must be one of its (design record 13 section
- * 10.9). The interface information's own Length bounds it, as usbport has
- * it (external/reactos/usbport/device.c, USBPORT_HandleSelectInterface and
+ * client selected (its copy, dev->Selected), under design record 20 section
+ * 5.3: a ring is returned to the pool only once a command proves the
+ * controller has given it up (roadmap-hcd.md task 38.10; Linux's rule,
+ * xhci_check_bandwidth and xhci_reset_bandwidth). The interface's open
+ * pipes are aborted resumably and detached, but kept; the new setting's
+ * pipes are made; one Configure Endpoint drops the old endpoints - and any
+ * left enabled by an earlier failure (dev->Stale) - and adds the new; then
+ * SET_INTERFACE. The other interfaces' pipes are untouched (keep). Each
+ * step's outcome decides what is freed, held, put back or published
+ * (xhci_own.c, XhciOwnSelectStep):
+ *
+ *   - a Configure Endpoint refused or never issued changed nothing (xHCI
+ *     4.6.6): the new pipes are freed and the old put back with their own
+ *     handles, the interface at its old setting; one whose completion was
+ *     never seen holds everything until the slot goes;
+ *   - SET_INTERFACE completed: the new pipes are published, success;
+ *   - STALLed by an interface with one alternate setting: a success, the
+ *     way Linux's usb_set_interface makes it (owner, 2026-10-14). USB 2.0
+ *     9.4.10 lets a device with only a default setting STALL the request,
+ *     and what it would have done - restart the device's toggles, which
+ *     Drop and Add has restarted at the controller - is done by
+ *     CLEAR_FEATURE(ENDPOINT_HALT) to each new non-isochronous endpoint
+ *     (USB 2.0 9.4.5), as hcdCfgSetInterface does for a function;
+ *   - STALLed otherwise, or one of those clears failed: the old setting is
+ *     re-instated by a second Configure Endpoint on its own rings, the
+ *     device's toggles restarted by the same clears, and the old pipes put
+ *     back with their own handles; the request fails with the STALL. Every
+ *     STALL failed the request until then, with no pipe left (Codex review
+ *     of batch (c), round 11, findings 1 and 3: the device's toggles not
+ *     reset while the controller's were);
+ *   - not established, a rollback that did not succeed, its clears
+ *     failing, or a rollback an old setting's open streams forbid: the
+ *     interface is left with no pipe, as a client that sees the error must
+ *     select again, and every ring the controller may hold is kept until a
+ *     proof releases it.
+ *
+ * From a function PDO the handle is the PDO's own and the interface must
+ * be one of its (design record 13 section 10.9). The interface
+ * information's own Length bounds it, as usbport has it
+ * (external/reactos/usbport/device.c, USBPORT_HandleSelectInterface and
  * USBPORT_InitInterfaceInfo): UrbHeader.Length is not read - usbport
  * rewrites it - and a Length too short for the alternate's pipes is
  * USBD_STATUS_BUFFER_TOO_SMALL. Windows 2000's usbaudio.sys sends its
@@ -1807,20 +2410,22 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     struct _URB_SELECT_INTERFACE *si;
     PUSBD_INTERFACE_INFORMATION ii;
-    PHCD_PIPE add[32];
+    HCD_CFG_SWITCH sw;
+    HCD_CFG_SETIF_ONE one;
+    XHCI_OWN_SELECT own;
     XHCI_PIPE_IFACE iface;
     XHCI_PIPE_EP ep;
-    XHCI_PIPE_PLAN plan;
-    KIRQL oldIrql;
+    PHCD_PIPE pipe;
+    UCHAR before;
+    ULONG reserved;
+    ULONG reattached;
+    ULONG manual;
     ULONG fixed;
-    ULONG keep;
-    ULONG old;
-    ULONG mask;
-    ULONG code;
-    ULONG bytes;
-    ULONG stalled;
-    ULONG asked;
+    ULONG which;
+    ULONG event;
     ULONG answer;
+    ULONG asked;
+    ULONG code;
     ULONG dci;
     ULONG e;
     LONG usbd;
@@ -1870,129 +2475,108 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                        ((ULONG)urb->UrbHeader.Length << 16) | ii->Length);
     }
 
-    /* The interface's pipes, to rest and closed; the others kept. */
-    keep = 0;
-    old = 0;
-    for (dci = 2; dci < 32; dci++) {
-        if (dev->Pipes[dci] == NULL) {
-            continue;
-        }
-        if (dev->Pipes[dci]->Interface == iface.InterfaceNumber) {
-            old |= 1UL << dci;
-            HcdIoPipePause(hc, dev->Pipes[dci]);
-            (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci],
-                                     HCD_USBD_CANCELED);
-            if (hcdCfgQuiesce(hc, dev, dev->Pipes[dci]) ==
-                XHCI_EP_STATE_RUNNING) {
-                return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
-            }
-        } else {
-            keep |= 1UL << dci;
-        }
-    }
-    hcdCfgCloseMask(hc, dev, old, HCD_USBD_CANCELED);
-    old |= dev->Stale;
-    if (iface.InterfaceNumber < 32) {
-        /* No pipe of the interface is open until this succeeds: a reset
-         * meanwhile leaves it at the alternate 0 the reset gives it. */
-        dev->Alternate[iface.InterfaceNumber] = 0;
+    /* No entry names a pipe until the switch succeeds (step 2): a reused
+     * URB's old handles are cleared before anything can fail, the detach
+     * below included. */
+    for (e = 0; e < iface.EndpointCount; e++) {
+        ii->Pipes[e].PipeHandle = NULL;
     }
 
-    for (dci = 0; dci < 32; dci++) {
-        add[dci] = NULL;
+    /* Step 1: the interface's pipes aborted and detached, kept; the others
+     * left as they are. */
+    hcdCfgSwitchInit(&sw);
+    which = 0;
+    for (dci = 2; dci < 32; dci++) {
+        if (dev->Pipes[dci] != NULL &&
+            dev->Pipes[dci]->Interface == iface.InterfaceNumber) {
+            which |= 1UL << dci;
+        }
     }
-    mask = 0;
+    if (!hcdCfgSwitchDetach(hc, dev, &sw, which)) {
+        return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
+    }
+    /* No pipe of the interface is open until this ends: a reset meanwhile
+     * leaves it at the alternate 0 the reset gives it. */
+    before = dev->Alternate[iface.InterfaceNumber];
+    dev->Alternate[iface.InterfaceNumber] = 0;
+
+    /* Step 2: the new setting's pipes, their rings from the pool, the
+     * rings this switch's command will drop reserved apart from the cap. */
+    reserved = hcdCfgSwitchReserved(dev, &sw);
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (e = 0; e < iface.EndpointCount; e++) {
-        answer = XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength,
-                                          iface.EndpointOffset[e],
-                                          HcdDevicePipeSpeed(hc, dev),
-                                          hc->Hc.HcInfo.Lec, &ep);
-        if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
-            (keep & (1UL << ep.Dci)) != 0) {
+        code = XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength,
+                                        iface.EndpointOffset[e],
+                                        HcdDevicePipeSpeed(hc, dev),
+                                        hc->Hc.HcInfo.Lec, &ep);
+        if (code != XHCI_PIPE_OK || sw.New[ep.Dci] != NULL ||
+            (sw.Keep & (1UL << ep.Dci)) != 0) {
             XHCI_DBG_VALUE("hcd: select interface refused, endpoint/speed",
                            (e << 8) | dev->Speed);
-            hcdCfgCountEndpoint(hc, answer);
+            hcdCfgCountEndpoint(hc, code);
             usbd = HCD_USBD_INVALID_PARAMETER;
             break;
         }
         hcdCfgFastPoll(hc, dev, &ep);
-        add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
-        if (add[ep.Dci] == NULL) {
+        pipe = hcdCfgPipeNew(hc, dev, &ep, reserved, &usbd);
+        if (pipe == NULL) {
             hc->Counters.EndpointRefusalsPool++;
             break;
         }
-        add[ep.Dci]->Interface = iface.InterfaceNumber;
-        mask |= 1UL << ep.Dci;
-        ii->Pipes[e].MaximumPacketSize = (USHORT)ep.MaxPacketSize;
-        ii->Pipes[e].EndpointAddress = (UCHAR)ep.Address;
-        ii->Pipes[e].Interval = (UCHAR)ep.BInterval;
-        ii->Pipes[e].PipeType = (USBD_PIPE_TYPE)ep.TransferType;
-        ii->Pipes[e].PipeHandle = (USBD_PIPE_HANDLE)add[ep.Dci];
+        pipe->Interface = iface.InterfaceNumber;
+        sw.New[ep.Dci] = pipe;
+        sw.NewMask |= 1UL << ep.Dci;
+        sw.Info[ep.Dci] = &ii->Pipes[e];
     }
 
-    if (usbd == XHCI_USBD_STATUS_SUCCESS && (old | mask) != 0) {
-        code = HCD_CFG_NOT_ISSUED;
-        if (XhciPipeConfigurePlan(keep, old, mask, &plan) == XHCI_PIPE_OK) {
-            code = hcdCfgConfigureAdd(hc, dev, &plan, add, 1);
-        }
+    /* Step 3, and what follows it (design record 20 section 5.3). */
+    XhciOwnSelectBegin(&own, 1,
+                       XhciOwnSingleSetting(dev->Selected,
+                                            dev->SelectedLength,
+                                            iface.InterfaceNumber),
+                       sw.Streams);
+    event = XHCI_OWN_EV_CMD_NOT_ISSUED;
+    if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+        code = hcdCfgSwitchConfigure(hc, dev, &sw);
         if (code == HCD_CFG_NOT_ISSUED) {
-            hcdCfgCountConfigure(hc, 0, mask);
             usbd = HCD_USBD_INTERNAL_HC_ERROR;
-            dev->Stale = old;
-        } else {
-            if (code != XHCI_CC_SUCCESS) {
-                /* Nothing changed: the old endpoints stay enabled with no
-                 * pipe, to be dropped by the next command. */
-                hcdCfgCountConfigure(hc, code, mask);
-                usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
-                dev->Stale = old;
-            } else {
-                dev->Stale = 0;
-            }
+        } else if (code != XHCI_CC_SUCCESS) {
+            usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
         }
-    } else if (usbd != XHCI_USBD_STATUS_SUCCESS) {
-        dev->Stale = old;
+        event = XhciOwnCommandEvent(code);
     }
-    if (usbd == XHCI_USBD_STATUS_SUCCESS &&
-        !HcdThreadControlEx(hc, dev, 0x01, 11,
-                            (USHORT)iface.AlternateSetting,
-                            (USHORT)iface.InterfaceNumber, 0, &bytes,
-                            &stalled)) {
-        /* Enabled on the controller, not on the device: dropped by the
-         * next command. A device that STALLed SET_INTERFACE refused it
-         * itself and is answered with its own status, not one that
-         * blames the controller (26-V.2: a C-Media whose alternate 1 the
-         * passthrough refused). */
-        XHCI_DBG_VALUE("hcd: SET_INTERFACE failed, stalled", stalled);
-        usbd = stalled ? XHCI_USBD_STATUS_STALL_PID :
-                         HCD_USBD_INTERNAL_HC_ERROR;
-        dev->Stale = mask;
+    one.Number = iface.InterfaceNumber;
+    one.Alternate = iface.AlternateSetting;
+    answer = hcdCfgSwitchRun(hc, dev, &sw, &own, event, hcdCfgSetInterfaceOne,
+                             &one, &event, &manual, &reattached);
+    hcdCfgSwitchAnswer(&sw, answer == XHCI_OWN_ANS_SUCCESS);
+    if (reattached) {
+        dev->Alternate[iface.InterfaceNumber] = before;
+        if (answer == XHCI_OWN_ANS_STALL) {
+            hc->Counters.SelectRollbacksReopened++;
+        } else {
+            hc->Counters.SelectsReattached++;
+        }
     }
-
-    if (usbd != XHCI_USBD_STATUS_SUCCESS) {
+    if (answer != XHCI_OWN_ANS_SUCCESS || manual) {
+        hcdCfgSwitchNote(hc, dev, iface.InterfaceNumber, answer, event);
+    }
+    if (answer != XHCI_OWN_ANS_SUCCESS) {
+        usbd = answer == XHCI_OWN_ANS_STALL  ? XHCI_USBD_STATUS_STALL_PID
+               : answer == XHCI_OWN_ANS_FAILED ? HCD_USBD_INTERNAL_HC_ERROR
+               : usbd != XHCI_USBD_STATUS_SUCCESS ? usbd
+                                                  : HCD_USBD_INTERNAL_HC_ERROR;
         XHCI_DBG_VALUE("hcd: select interface failed, USBD status",
                        (ULONG)usbd);
-        for (dci = 2; dci < 32; dci++) {
-            if (add[dci] != NULL) {
-                hcdCfgPipeFree(hc, dev, add[dci]);
-            }
-        }
         return hcdCfgCountEnd(hc, asked, usbd);
     }
 
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    for (dci = 2; dci < 32; dci++) {
-        if (add[dci] != NULL) {
-            dev->Pipes[dci] = add[dci];
-        }
+    if (manual) {
+        hc->Counters.SelectStallSuccesses++;
     }
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
-    if (iface.InterfaceNumber < 32) {
-        dev->Alternate[iface.InterfaceNumber] = (UCHAR)iface.AlternateSetting;
-        if (mask != 0) {
-            dev->IfaceUsed |= 1UL << iface.InterfaceNumber;
-        }
+    dev->Alternate[iface.InterfaceNumber] = (UCHAR)iface.AlternateSetting;
+    if (sw.NewMask != 0) {
+        dev->IfaceUsed |= 1UL << iface.InterfaceNumber;
     }
     ii->Class = (UCHAR)iface.InterfaceClass;
     ii->SubClass = (UCHAR)iface.InterfaceSubClass;
@@ -2001,7 +2585,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ii->NumberOfPipes = iface.EndpointCount;
     XHCI_DBG_VALUE("hcd: interface selected, number/alt",
                    (iface.InterfaceNumber << 8) | iface.AlternateSetting);
-    XHCI_DBG_VALUE("hcd: interface selected, endpoint mask", mask);
+    XHCI_DBG_VALUE("hcd: interface selected, endpoint mask", sw.NewMask);
     return hcdCfgCountEnd(hc, asked, XHCI_USBD_STATUS_SUCCESS);
 }
 
@@ -2010,107 +2594,27 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 /* ----------------------------------------------------------------------- */
 
 /* The open pipes of the function whose interfaces are `interfaceMask`,
- * brought to rest (paused, cancelled, quiesced) and closed; *keep gets the
- * siblings' DCIs, the return the function's. 0xFFFFFFFF when a quiesce
- * failed: the reset it requested settles the device, and the pipes stay
- * paused until it, as hcdCfgAbort leaves them. */
+ * aborted and detached into `sw` (hcdCfgSwitchDetach), the siblings' its
+ * Keep. 0 when an abort failed: the reset or cycle it requested settles
+ * the device, and the pipes stay paused until it, as hcdCfgAbort leaves
+ * them. */
 static ULONG hcdCfgCloseFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                 ULONG interfaceMask, PULONG keep)
+                                 ULONG interfaceMask, PHCD_CFG_SWITCH sw)
 {
     PHCD_PIPE pipe;
-    ULONG old;
+    ULONG which;
     ULONG dci;
 
-    *keep = 0;
-    old = 0;
+    hcdCfgSwitchInit(sw);
+    which = 0;
     for (dci = 2; dci < 32; dci++) {
         pipe = dev->Pipes[dci];
-        if (pipe == NULL) {
-            continue;
-        }
-        if (pipe->Interface >= 32UL ||
-            (interfaceMask & (1UL << pipe->Interface)) == 0) {
-            *keep |= 1UL << dci;
-            continue;
-        }
-        old |= 1UL << dci;
-        HcdIoPipePause(hc, pipe);
-        (VOID)HcdIoPipeCancelAll(hc, pipe, HCD_USBD_CANCELED);
-        if (hcdCfgQuiesce(hc, dev, pipe) == XHCI_EP_STATE_RUNNING) {
-            return 0xFFFFFFFFUL;
+        if (pipe != NULL && pipe->Interface < 32UL &&
+            (interfaceMask & (1UL << pipe->Interface)) != 0) {
+            which |= 1UL << dci;
         }
     }
-    hcdCfgCloseMask(hc, dev, old, HCD_USBD_CANCELED);
-    return old;
-}
-
-/* One Configure Endpoint: `old` (and the stale) dropped, `mask`'s added
- * from `add`, `keep` beside. 1 on success; on a failure Stale records what
- * the controller may still have enabled with no pipe, for the next
- * Configure Endpoint to drop. */
-static ULONG hcdCfgReplace(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                           ULONG keep, ULONG old, ULONG mask, PHCD_PIPE *add)
-{
-    XHCI_PIPE_PLAN plan;
-    ULONG code;
-
-    old |= dev->Stale;
-    if ((old | mask) == 0) {
-        return 1;
-    }
-    code = HCD_CFG_NOT_ISSUED;
-    if (XhciPipeConfigurePlan(keep, old, mask, &plan) == XHCI_PIPE_OK) {
-        code = hcdCfgConfigureAdd(hc, dev, &plan, add, 1);
-    }
-    if (code != XHCI_CC_SUCCESS) {
-        if (code == HCD_CFG_NOT_ISSUED) {
-            code = 0;
-        }
-        /* A release adds nothing, and refuses no endpoint a client asked
-         * for. */
-        if (mask != 0) {
-            hcdCfgCountConfigure(hc, code, mask);
-        }
-        dev->Stale = old;
-        return 0;
-    }
-    dev->Stale = 0;
-    return 1;
-}
-
-/* Whether interface `number` has an alternate setting other than 0 in the
- * device's configuration (walked to wTotalLength; a malformed tail counts
- * as one, so the caller does not assume a single setting). */
-static ULONG hcdCfgHasAlternates(PHCD_USB_DEVICE dev, ULONG number)
-{
-    ULONG total;
-    ULONG at;
-    ULONG len;
-
-    if (dev->Config == NULL || dev->ConfigLength < 9) {
-        return 1;
-    }
-    total = (ULONG)dev->Config[2] | ((ULONG)dev->Config[3] << 8);
-    if (total > dev->ConfigLength) {
-        total = dev->ConfigLength;
-    }
-    at = dev->Config[0];
-    while (at < total) {
-        if (total - at < 2) {
-            return 1;
-        }
-        len = dev->Config[at];
-        if (len < 2 || len > total - at) {
-            return 1;
-        }
-        if (dev->Config[at + 1] == 4 && len >= 9 &&
-            (ULONG)dev->Config[at + 2] == number &&
-            dev->Config[at + 3] != 0) {
-            return 1;
-        }
-        at += len;
-    }
-    return 0;
+    return hcdCfgSwitchDetach(hc, dev, sw, which);
 }
 
 /*
@@ -2118,14 +2622,18 @@ static ULONG hcdCfgHasAlternates(PHCD_USB_DEVICE dev, ULONG number)
  * re-added (fresh contexts start at DATA0): SET_INTERFACE, or - for an
  * alternate 0 a single-setting device STALLs it on (USB 2.0 9.4.10) -
  * CLEAR_FEATURE(ENDPOINT_HALT) on each of its new non-isochronous
- * endpoints, which restarts the device's toggle too (9.4.5). Only that
- * case falls back: a SET_INTERFACE that never reached the device, failed
- * otherwise, or was STALLed by an interface with other alternates has not
- * moved the device to alternate 0, and recording 0 then would be false
- * (Codex review of batch (c), round 19, finding 2). The STALL halts EP0 on
- * the controller; the engine reports it for the thread's own record as for
- * a URB's (hcd_dev.c, Ep0Halted), and the next thread control transfer
- * resets EP0 before its SETUP (hcd_enum.c, hcdEp0Quiet).
+ * endpoints, which restarts the device's toggle too (9.4.5); the rule a
+ * SELECT_INTERFACE follows too (owner, 2026-10-14; design record 20 section
+ * 5.3). Only that case falls back: a SET_INTERFACE that never reached the
+ * device, failed otherwise, or was STALLed by an interface with other
+ * alternates has not moved the device to alternate 0, and recording 0 then
+ * would be false (Codex review of batch (c), round 19, finding 2). One
+ * setting is read as a SELECT_INTERFACE reads it (XhciOwnSingleSetting, on
+ * the bus's configuration), and the clears go through
+ * hcdCfgDeviceClearHalt. The STALL halts EP0 on the controller; the engine
+ * reports it for the thread's own record as for a URB's (hcd_dev.c,
+ * Ep0Halted), and the next thread control transfer resets EP0 before its
+ * SETUP (hcd_enum.c, hcdEp0Quiet).
  */
 static ULONG hcdCfgSetInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                 PHCD_PIPE *add, ULONG number, ULONG alt)
@@ -2139,14 +2647,14 @@ static ULONG hcdCfgSetInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->Alternate[number] = (UCHAR)alt;
         return 1;
     }
-    if (alt != 0 || !stalled || hcdCfgHasAlternates(dev, number)) {
+    if (alt != 0 || !stalled ||
+        !XhciOwnSingleSetting(dev->Selected, dev->SelectedLength, number)) {
         return 0;
     }
     for (dci = 2; dci < 32; dci++) {
         if (add[dci] != NULL && add[dci]->Interface == number &&
             add[dci]->TransferType != XHCI_PIPE_XFER_ISOCH &&
-            !HcdThreadControl(hc, dev, 0x02, 1, 0,
-                              (USHORT)add[dci]->EndpointAddress, 0, &bytes)) {
+            hcdCfgDeviceClearHalt(hc, dev, add[dci]) != HCD_CTL_DONE) {
             return 0;
         }
     }
@@ -2154,27 +2662,65 @@ static ULONG hcdCfgSetInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return 1;
 }
 
-/* A function's endpoints, closed already (hcdCfgCloseFunction gave `old`
- * and `keep`), dropped in one Configure Endpoint beside its siblings', and
- * each of its interfaces left at a nonzero alternate sent back to 0, so an
- * audio function stops reserving isochronous bandwidth; a SET_INTERFACE
- * that fails leaves that interface as it was. 1 when the Configure Endpoint
- * succeeded; *owed gets the interfaces not yet released (all of them when
- * the Configure Endpoint failed). */
-static ULONG hcdCfgUnconfigureFunction(PHCD_CONTROLLER hc,
-                                       PHCD_USB_DEVICE dev,
-                                       ULONG interfaceMask, ULONG keep,
-                                       ULONG old, PULONG owed)
+/* What a function's select asks SET_INTERFACE for: every interface it
+ * names whose alternate changes or whose endpoints carried traffic since
+ * the device last restarted their toggles (hcdCfgSelectFunction). */
+typedef struct _HCD_CFG_SETIF_FUNC {
+    PHCD_PIPE *New;
+    PUCHAR Alt;
+    ULONG Named;
+} HCD_CFG_SETIF_FUNC, *PHCD_CFG_SETIF_FUNC;
+
+/* The function's SET_INTERFACEs, as one event: completed when every one
+ * did, else not established - a function's select re-instates nothing
+ * (design record 20 section 5.4), so a STALL is answered as any failure.
+ * Thread only, powered. */
+static ULONG hcdCfgSetInterfaceFunc(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                                    PVOID context)
 {
-    PHCD_PIPE none[32];
-    ULONG bytes;
+    PHCD_CFG_SETIF_FUNC f;
     ULONG n;
 
+    f = (PHCD_CFG_SETIF_FUNC)context;
     for (n = 0; n < 32; n++) {
-        none[n] = NULL;
+        if ((f->Named & (1UL << n)) == 0 ||
+            (f->Alt[n] == dev->Alternate[n] &&
+             (dev->IfaceUsed & (1UL << n)) == 0)) {
+            continue;
+        }
+        if (!hcdCfgSetInterface(hc, dev, f->New, n, f->Alt[n])) {
+            XHCI_DBG_VALUE("hcd: function select, SET_INTERFACE failed",
+                           (n << 8) | f->Alt[n]);
+            return XHCI_OWN_EV_SETIF_FAILED;
+        }
+        dev->IfaceUsed &= ~(1UL << n);
     }
+    return XHCI_OWN_EV_SETIF_DONE;
+}
+
+/* A function's endpoints, detached already (hcdCfgCloseFunction gave
+ * `sw`), dropped in one Configure Endpoint beside its siblings' with every
+ * stale one, and each of its interfaces left at a nonzero alternate sent
+ * back to 0, so an audio function stops reserving isochronous bandwidth; a
+ * SET_INTERFACE that fails leaves that interface as it was. What becomes
+ * of the detached pipes is the command's outcome's (XhciOwnDropStep):
+ * freed after a success, held stale after a refusal, pinned after an
+ * unknown one. 1 when the Configure Endpoint succeeded; *owed gets the
+ * interfaces not yet released (all of them when it failed). */
+static ULONG hcdCfgUnconfigureFunction(PHCD_CONTROLLER hc,
+                                       PHCD_USB_DEVICE dev,
+                                       ULONG interfaceMask,
+                                       PHCD_CFG_SWITCH sw, PULONG owed)
+{
+    ULONG bytes;
+    ULONG code;
+    ULONG n;
+
     *owed = interfaceMask;
-    if (!hcdCfgReplace(hc, dev, keep, old, 0, none)) {
+    code = hcdCfgSwitchConfigure(hc, dev, sw);
+    hcdCfgSwitchApply(hc, dev, sw,
+                      XhciOwnDropStep(XhciOwnCommandEvent(code)));
+    if (code != XHCI_CC_SUCCESS) {
         return 0;
     }
     *owed = 0;
@@ -2242,8 +2788,7 @@ static VOID hcdCfgReleaseSettled(PHCD_USB_DEVICE dev, ULONG mask)
 static ULONG hcdCfgReleaseOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               ULONG mask)
 {
-    ULONG keep;
-    ULONG old;
+    HCD_CFG_SWITCH sw;
     ULONG owed;
     ULONG spent;
     ULONG n;
@@ -2258,12 +2803,11 @@ static ULONG hcdCfgReleaseOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     XHCI_DBG_VALUE("hcd: removed function released, port/mask",
                    (dev->Port << 24) | (mask & 0x00FFFFFFUL));
-    old = hcdCfgCloseFunction(hc, dev, mask, &keep);
-    if (old == 0xFFFFFFFFUL) {
+    if (!hcdCfgCloseFunction(hc, dev, mask, &sw)) {
         hcdCfgReleaseSettled(dev, mask);
         return 0;
     }
-    (VOID)hcdCfgUnconfigureFunction(hc, dev, mask, keep, old, &owed);
+    (VOID)hcdCfgUnconfigureFunction(hc, dev, mask, &sw, &owed);
     if (hc->Hc.ControllerFailed || hc->ScratchTainted) {
         owed = 0;
     }
@@ -2337,15 +2881,18 @@ static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
  * SET_CONFIGURATION reaches it. Every USBD_INTERFACE_INFORMATION is checked
  * before anything is touched: its length, an interface of this function
  * named once, an alternate the configuration carries, room for its pipes.
- * Then the function's pipes close, one Configure Endpoint drops them and
- * adds the new ones beside the siblings', and each named interface whose
+ * Then the function's pipes are aborted and detached, one Configure
+ * Endpoint drops them and adds the new ones beside the siblings' - a
+ * refused one puts them back (design record 20 section 5.4) - and each
+ * named interface whose
  * alternate changes - or whose endpoints have carried traffic since the
  * device last restarted their toggles (IfaceUsed) - gets its SET_INTERFACE;
  * an interface still at the alternate 0 the bus's SET_CONFIGURATION left,
  * never opened since, has fresh toggles at both ends and gets none (HID
  * devices often STALL a SET_INTERFACE). A NULL descriptor unconfigures
- * this function only. A failure leaves the function with no pipes, as
- * hcdCfgSelectInterface's does. *held is the function's interfaces still
+ * this function only. A failure after the command leaves the function
+ * with no pipes and every ring the controller may hold held; nothing is
+ * re-instated, since some interfaces may already have moved. *held is the function's interfaces still
  * owed a release (HcdCfgService): a select that succeeds takes over the
  * ones it names, and the unconfigure's own leftovers replace it (Codex
  * review of batch (c), round 21, finding 1 and its note). Thread only.
@@ -2356,26 +2903,29 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 {
     struct _URB_SELECT_CONFIGURATION *sc;
     PUSBD_INTERFACE_INFORMATION ii;
-    PHCD_PIPE add[32];
+    HCD_CFG_SWITCH sw;
+    HCD_CFG_SETIF_FUNC func;
+    XHCI_OWN_SELECT own;
     UCHAR alt[32];
     XHCI_PIPE_IFACE iface;
     XHCI_PIPE_EP ep;
-    KIRQL oldIrql;
+    PHCD_PIPE pipe;
     PUCHAR p;
     PUCHAR end;
+    ULONG reattached;
+    ULONG reserved;
+    ULONG manual;
     ULONG fixed;
     ULONG named;
     ULONG opened;
+    ULONG event;
     ULONG owed;
-    ULONG keep;
-    ULONG old;
-    ULONG mask;
     ULONG done;
+    ULONG code;
     ULONG asked;
     ULONG answer;
     ULONG dci;
     ULONG e;
-    ULONG n;
     LONG usbd;
 
     asked = 0;
@@ -2384,7 +2934,6 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return HCD_USBD_INTERNAL_HC_ERROR;
     }
     for (dci = 0; dci < 32; dci++) {
-        add[dci] = NULL;
         alt[dci] = 0;
     }
 
@@ -2423,16 +2972,30 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         alt[ii->InterfaceNumber] = ii->AlternateSetting;
     }
 
-    old = hcdCfgCloseFunction(hc, dev, pdo->InterfaceMask, &keep);
-    if (old == 0xFFFFFFFFUL) {
+    /* No entry names a pipe until the switch succeeds: every validated
+     * interface's handles cleared before anything can fail, the detach
+     * below included. */
+    for (p = (PUCHAR)&sc->Interface;
+         sc->ConfigurationDescriptor != NULL && p + fixed <= end;
+         p += ii->Length) {
+        ii = (PUSBD_INTERFACE_INFORMATION)p;
+        (VOID)XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
+                                    ii->InterfaceNumber, ii->AlternateSetting,
+                                    &iface);
+        for (e = 0; e < iface.EndpointCount; e++) {
+            ii->Pipes[e].PipeHandle = NULL;
+        }
+    }
+
+    if (!hcdCfgCloseFunction(hc, dev, pdo->InterfaceMask, &sw)) {
         return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
     }
 
     if (sc->ConfigurationDescriptor == NULL) {
         /* This function's unconfigure; the siblings keep theirs. What it
          * could not finish is retried as a release would be. */
-        done = hcdCfgUnconfigureFunction(hc, dev, pdo->InterfaceMask, keep,
-                                         old, &owed);
+        done = hcdCfgUnconfigureFunction(hc, dev, pdo->InterfaceMask, &sw,
+                                         &owed);
         hcdCfgReleaseSettled(dev, pdo->InterfaceMask & ~owed);
         *held = owed;
         if (!done) {
@@ -2442,7 +3005,10 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return XHCI_USBD_STATUS_SUCCESS;
     }
 
-    mask = 0;
+    /* The new pipes (design record 20 section 5.4: steps 1 to 3 as a
+     * SELECT_INTERFACE's), the rings the switch's command will drop
+     * reserved apart from the cap. */
+    reserved = hcdCfgSwitchReserved(dev, &sw);
     opened = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (p = (PUCHAR)&sc->Interface;
@@ -2462,8 +3028,8 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                             iface.EndpointOffset[e],
                                             ii->InterfaceNumber,
                                             ii->AlternateSetting, &ep);
-            if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
-                (keep & (1UL << ep.Dci)) != 0) {
+            if (answer != XHCI_PIPE_OK || sw.New[ep.Dci] != NULL ||
+                (sw.Keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
                                (e << 8) | dev->Speed);
                 hcdCfgCountEndpoint(hc, answer);
@@ -2471,18 +3037,15 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 break;
             }
             hcdCfgFastPoll(hc, dev, &ep);
-            add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
-            if (add[ep.Dci] == NULL) {
+            pipe = hcdCfgPipeNew(hc, dev, &ep, reserved, &usbd);
+            if (pipe == NULL) {
                 hc->Counters.EndpointRefusalsPool++;
                 break;
             }
-            add[ep.Dci]->Interface = iface.InterfaceNumber;
-            mask |= 1UL << ep.Dci;
-            ii->Pipes[e].MaximumPacketSize = (USHORT)ep.MaxPacketSize;
-            ii->Pipes[e].EndpointAddress = (UCHAR)ep.Address;
-            ii->Pipes[e].Interval = (UCHAR)ep.BInterval;
-            ii->Pipes[e].PipeType = (USBD_PIPE_TYPE)ep.TransferType;
-            ii->Pipes[e].PipeHandle = (USBD_PIPE_HANDLE)add[ep.Dci];
+            pipe->Interface = iface.InterfaceNumber;
+            sw.New[ep.Dci] = pipe;
+            sw.NewMask |= 1UL << ep.Dci;
+            sw.Info[ep.Dci] = &ii->Pipes[e];
         }
         ii->Class = (UCHAR)iface.InterfaceClass;
         ii->SubClass = (UCHAR)iface.InterfaceSubClass;
@@ -2490,52 +3053,44 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         ii->InterfaceHandle = HCD_IFACE_COOKIE(iface.InterfaceNumber);
         ii->NumberOfPipes = iface.EndpointCount;
     }
-    if (usbd != XHCI_USBD_STATUS_SUCCESS) {
-        /* The closed ones are still enabled on the controller, with no
-         * pipe: the next Configure Endpoint drops them. */
-        dev->Stale |= old;
-    } else if (!hcdCfgReplace(hc, dev, keep, old, mask, add)) {
-        usbd = HCD_USBD_INTERNAL_HC_ERROR;
-    }
-    for (n = 0; n < 32 && usbd == XHCI_USBD_STATUS_SUCCESS; n++) {
-        if ((named & (1UL << n)) == 0 ||
-            (alt[n] == dev->Alternate[n] &&
-             (dev->IfaceUsed & (1UL << n)) == 0)) {
-            continue;
-        }
-        if (!hcdCfgSetInterface(hc, dev, add, n, alt[n])) {
-            XHCI_DBG_VALUE("hcd: function select, SET_INTERFACE failed",
-                           (n << 8) | alt[n]);
+
+    /* The Configure Endpoint and the SET_INTERFACEs. A refusal before or
+     * at the command puts the function's old pipes back; nothing after it
+     * is re-instated (section 5.4). */
+    XhciOwnSelectBegin(&own, 0, 0, sw.Streams);
+    event = XHCI_OWN_EV_CMD_NOT_ISSUED;
+    if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+        code = hcdCfgSwitchConfigure(hc, dev, &sw);
+        if (code != XHCI_CC_SUCCESS) {
             usbd = HCD_USBD_INTERNAL_HC_ERROR;
-            /* Enabled on the controller, not on the device. */
-            dev->Stale |= mask;
-        } else {
-            dev->IfaceUsed &= ~(1UL << n);
         }
+        event = XhciOwnCommandEvent(code);
     }
-    if (usbd != XHCI_USBD_STATUS_SUCCESS) {
+    func.New = sw.New;
+    func.Alt = alt;
+    func.Named = named;
+    answer = hcdCfgSwitchRun(hc, dev, &sw, &own, event,
+                             hcdCfgSetInterfaceFunc, &func, &event, &manual,
+                             &reattached);
+    hcdCfgSwitchAnswer(&sw, answer == XHCI_OWN_ANS_SUCCESS);
+    if (reattached) {
+        hc->Counters.SelectsReattached++;
+    }
+    if (answer != XHCI_OWN_ANS_SUCCESS) {
+        hcdCfgSwitchNote(hc, dev, pdo->Func.FirstInterface, answer, event);
+        if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+            usbd = HCD_USBD_INTERNAL_HC_ERROR;
+        }
         XHCI_DBG_VALUE("hcd: function select failed, USBD status",
                        (ULONG)usbd);
-        for (dci = 2; dci < 32; dci++) {
-            if (add[dci] != NULL) {
-                hcdCfgPipeFree(hc, dev, add[dci]);
-            }
-        }
         return hcdCfgCountEnd(hc, asked, usbd);
     }
-    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-    for (dci = 2; dci < 32; dci++) {
-        if (add[dci] != NULL) {
-            dev->Pipes[dci] = add[dci];
-        }
-    }
-    XhciControllerLockRelease(&hc->Hc, oldIrql);
     dev->IfaceUsed |= opened;
     *held &= ~named;
     hcdCfgReleaseSettled(dev, named);
     sc->ConfigurationHandle = hcdCfgHandle(dev, pdo);
     XHCI_DBG_VALUE("hcd: function configured, first interface/DCI mask",
-                   (pdo->Func.FirstInterface << 24) | (mask >> 8));
+                   (pdo->Func.FirstInterface << 24) | (sw.NewMask >> 8));
     return hcdCfgCountEnd(hc, asked, XHCI_USBD_STATUS_SUCCESS);
 }
 
@@ -3183,6 +3738,10 @@ static ULONG hcdCfgDeconfigure(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         enabled = 0;
     }
     if (!enabled) {
+        /* Every endpoint, a stale one's included, reads Disabled, or the
+         * slot is not Configured (a Reset Device or an Address Device has
+         * disabled them all, 4.6.11): no context names a held ring. */
+        hcdCfgRetainedReclaim(hc, dev, XHCI_PIPE_ENDPOINT_MASK);
         dev->Stale = 0;
         hcdCfgCloseAll(hc, dev, HCD_USBD_CANCELED);
         return 1;
@@ -3883,9 +4442,11 @@ static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         goto cleanup;
     }
     /* Reset Device disabled every endpoint but EP0, the stale ones too,
-     * and so no context names a retired stream array any more. */
+     * and so no context names a retired stream array or a held ring any
+     * more (a pinned one waits for the slot's going all the same). */
     dev->Stale = 0;
     hcdCfgRetiredReclaim(hc, dev, XHCI_PIPE_ENDPOINT_MASK);
+    hcdCfgRetainedReclaim(hc, dev, XHCI_PIPE_ENDPOINT_MASK);
     /* 36.54: nor any position on a stream ring, which the Configure below
      * gives a new context: each restarts at its base, cycle 1, so every
      * Stream Context it builds carries DCS 1 (record 17 section 4.12.3). */

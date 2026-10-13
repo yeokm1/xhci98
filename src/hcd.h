@@ -441,6 +441,15 @@ typedef struct _HCD_PIPE {
                                      * lock                               */
     struct _HCD_PIPE *Parent;       /* a stream's endpoint pipe           */
     struct _HCD_STREAMS *Streams;   /* the endpoint's open streams        */
+    /* Task 38.10 (design record 20 section 5; the thread's): a closed pipe
+     * whose ring an Endpoint Context may still name is held on its
+     * device's Retained list, not freed, until a proof releases it - a
+     * successful Configure Endpoint dropping its DCI, a Reset Device, the
+     * slot's going (hcd_cfg.c, hcdCfgRetain). Pinned: held after a command
+     * whose outcome was never seen, until the slot goes (the HCRST that
+     * outcome requested). */
+    struct _HCD_PIPE *RetainNext;
+    ULONG Pinned;
     ULONG XferCount;                /* records in Xfers: a stream's pipe is
                                      * allocated short (HCD_STREAM_XFERS) */
     HCD_XFER Xfers[HCD_PIPE_XFERS]; /* last: see XferCount                */
@@ -607,6 +616,10 @@ typedef struct _HCD_USB_DEVICE {
                                      * controller with no pipe, after a
                                      * failed select; the next Configure
                                      * Endpoint drops them                */
+    struct _HCD_PIPE *Retained;     /* task 38.10: closed pipes whose rings
+                                     * the controller may still hold, the
+                                     * stale endpoints' and the pinned
+                                     * (HCD_PIPE.RetainNext); thread      */
     UCHAR Alternate[32];            /* each interface's alternate setting
                                      * by bInterfaceNumber, as the last
                                      * select left it: RESET_PORT replays
@@ -1596,6 +1609,11 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.12: fault 13's answer for the next device clear, HCD_CTL_*
      * plus 1, 0 none; the thread's (hcd_inj.c, HcdInjClearHalt). */
     ULONG InjClearHalt;
+    /* Task 38.10: faults 18 and 19's answers, their argument plus 1, 0
+     * none; the thread's (hcd_inj.c, HcdInjSetInterface and
+     * HcdInjSelectConfigure). */
+    ULONG InjSetInterface;
+    ULONG InjSelectConfig;
     ULONG InjBulkStream;            /* 36.22: the held TD's stream, 0 none */
     /* BULK_TIMEOUT (review round 5): armed to lose the target endpoint's
      * next TD's completion events; once one is lost, every event inside
@@ -2181,6 +2199,9 @@ ULONG HcdInjWithholds(PHCD_CONTROLLER hc, ULONG slot, ULONG dci);
 VOID HcdInjEp0Doorbell(PHCD_CONTROLLER hc, struct _HCD_USB_DEVICE *dev);
 ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
                       PULONG outcome);
+ULONG HcdInjSetInterface(PHCD_CONTROLLER hc, ULONG slot, PULONG stalled);
+ULONG HcdInjSelectConfigure(PHCD_CONTROLLER hc, ULONG rollback,
+                            PULONG code);
 #endif
 
 /* hcd_cfg.c */

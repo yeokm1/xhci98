@@ -607,7 +607,8 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
 /*
  * The thread's poll: the two counters the kept controller sequence keeps in
  * XHCI_EXTENSION copied in - both zeroed with it at the same start, so a
- * copy is exact - and, in the qemu flavour, the trace. The health poll that
+ * copy is exact - the pool rings held (task 38.10), and, in the qemu
+ * flavour, the trace. The health poll that
  * moves FatalStatusDetected runs just before this, on the same thread. The
  * stop calls it once more after the thread has gone, since its own
  * XhciDisableInterrupts can count a mask failure (Codex review round 23,
@@ -625,6 +626,9 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     hc->Counters.LineRetireState = hc->Hc.LineRetireState;
     /* Task 38.10: the quirks' packed words and counts (hcd_quirk.c). */
     HcdQuirkPublishLocked(hc);
+    /* Task 38.10: from the array, not the running total (xhci_mem.c). */
+    hc->Counters.PoolRingsInUse =
+        XHCI_MAX_POOL_RINGS - XhciPoolFree(&hc->Hc.RingPool);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 #ifdef XHCI_DBG_TRACE
     hcdCountersTrace(&hc->Counters);

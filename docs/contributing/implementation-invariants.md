@@ -650,6 +650,8 @@ code:
 
   The derived/assumed provenance moves only when the Configure Endpoint commits, and `IsoCadenceMismatches` is split into assumed and derived because a derived-cadence mismatch is by design - usbport stamps High-Speed packets per microframe whatever the descriptor says.
 
+- **A pool ring, and a stream block, are returned only once a command proves the controller has given them up** (roadmap-hcd task 38.10; design record 20 section 5; Linux's rule, `xhci_check_bandwidth` and `xhci_reset_bandwidth`). The proofs: a successful Configure Endpoint that drops the endpoint, a Reset Device, the deconfigure reading every endpoint Disabled or the slot not Configured, a Disable Slot, an HCRST or the slot's going. A refused Configure Endpoint changed nothing (xHCI 1.2c 4.6.6), so the rings it would have added are freed and the old pipes put back; one whose completion was never seen holds everything it named until the slot goes. A closed pipe whose ring a context may still name is held on its device's `Retained` list, its DCI marked stale for the next command to drop (`hcd_cfg.c`, `hcdCfgRetain`); ownership is tracked per allocation, never read back from an endpoint's current state, since a Drop-and-Add leaves the DCI Running on its new context while the old ring is free. The decisions are `xhci_own.c`'s (host suite `test_own`). An interface switch's own command's drops are a reservation the per-device cap does not count (`XhciPoolAcquireReserved`). The bound that follows: every enabled non-EP0 context holds one pooled ring, so the controller is never asked for more than 32 + 32 contexts (Panther Point's limit).
+
 ## Hub Paths
 
 - Route String is zero only for devices attached directly to xHCI root ports.

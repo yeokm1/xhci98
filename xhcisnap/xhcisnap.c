@@ -3176,6 +3176,17 @@ static const char *const quirk_counter_names[SNAP_QUIRK_WORDS] = {
     "QuirkShutFlushes", "QuirkShutFlushSinkOff", "QuirkShutFlushUnacked"
 };
 
+/* Task 38.10's eight (endpoint rings held until the controller drops
+ * them, design record 20 section 5) follow at 233; the first is the pool
+ * rings held at the last poll, shown by print_hcd_rings. */
+#define SNAP_RINGS_AT               233UL
+#define SNAP_RINGS_WORDS            8UL
+static const char *const rings_counter_names[SNAP_RINGS_WORDS] = {
+    "PoolRingsInUse", "RingsRetained", "RingsPinned", "RingsReleased",
+    "SelectsReattached", "SelectStallSuccesses", "SelectRollbacks",
+    "SelectRollbacksReopened"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3267,6 +3278,9 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_QUIRK_AT && i - SNAP_QUIRK_AT < SNAP_QUIRK_WORDS) {
         return quirk_counter_names[i - SNAP_QUIRK_AT];
+    }
+    if (i >= SNAP_RINGS_AT && i - SNAP_RINGS_AT < SNAP_RINGS_WORDS) {
+        return rings_counter_names[i - SNAP_RINGS_AT];
     }
     return NULL;
 }
@@ -3442,6 +3456,35 @@ static void print_hcd_version(const unsigned char *image,
         comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): refused at another "
              "check\n", eff >> 8, eff & 0xFFUL, eff);
     }
+}
+
+/*
+ * Task 38.10's endpoint rings, from the counter block when it is long
+ * enough (a driver before 38.10 sends fewer words, and nothing is
+ * printed): the pool rings held at the last poll, the rings held for an
+ * endpoint the controller may still have enabled and what released them,
+ * and how interface switches ended. Out of line, as hcd_counter_name.
+ */
+static void print_hcd_rings(const unsigned char *image,
+                            unsigned long countersAt,
+                            unsigned long counters)
+{
+    if (counters < SNAP_RINGS_AT + SNAP_RINGS_WORDS) {
+        return;
+    }
+    comp("\nendpoint rings (task 38.10, design record 20 section 5):\n");
+    comp("  pool rings held %lu of 32; held for a stale endpoint %lu, "
+         "pinned %lu,\n    released by a later proof %lu\n",
+         get32(image, countersAt + SNAP_RINGS_AT * 4),
+         get32(image, countersAt + (SNAP_RINGS_AT + 1) * 4),
+         get32(image, countersAt + (SNAP_RINGS_AT + 2) * 4),
+         get32(image, countersAt + (SNAP_RINGS_AT + 3) * 4));
+    comp("  selects put back %lu; one-setting STALLs carried out %lu; "
+         "rollbacks %lu,\n    reopened %lu\n",
+         get32(image, countersAt + (SNAP_RINGS_AT + 4) * 4),
+         get32(image, countersAt + (SNAP_RINGS_AT + 5) * 4),
+         get32(image, countersAt + (SNAP_RINGS_AT + 6) * 4),
+         get32(image, countersAt + (SNAP_RINGS_AT + 7) * 4));
 }
 
 /*
@@ -3785,6 +3828,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     print_hcd_version(image, countersAt, counters);
     print_hcd_timer(image, countersAt, counters);
     print_hcd_quirks(image, countersAt, counters);
+    print_hcd_rings(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -5571,13 +5615,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 232 and two words
+ * word is nonzero and its value names its place): 0 to 240 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_QUIRK_AT + SNAP_QUIRK_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_RINGS_AT + SNAP_RINGS_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];

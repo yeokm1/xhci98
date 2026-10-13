@@ -38,8 +38,8 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 233,
-             "the whole counter block (38.10: 199 to 232)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 241,
+             "the whole counter block (38.10's rings: 233 to 240)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              1224 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
@@ -60,8 +60,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 233, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 233,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 241, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 241,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -820,7 +820,25 @@ static void test_counter_tail(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutFlushUnacked),
              232 * 4, "QuirkShutFlushUnacked at 232");
     CHECK_EQ(XHCI_QK_COUNT, 14, "one packed word per quirk");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 233 * 4, "233 words in all");
+    /* 38.10's eight (xhcisnap.c, rings_counter_names and
+     * print_hcd_rings). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, PoolRingsInUse), 233 * 4,
+             "PoolRingsInUse at 233");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, RingsRetained), 234 * 4,
+             "RingsRetained at 234");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, RingsPinned), 235 * 4,
+             "RingsPinned at 235");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, RingsReleased), 236 * 4,
+             "RingsReleased at 236");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectsReattached), 237 * 4,
+             "SelectsReattached at 237");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectStallSuccesses),
+             238 * 4, "SelectStallSuccesses at 238");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectRollbacks), 239 * 4,
+             "SelectRollbacks at 239");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectRollbacksReopened),
+             240 * 4, "SelectRollbacksReopened at 240");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 241 * 4, "241 words in all");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters

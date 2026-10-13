@@ -240,6 +240,20 @@ included.
   controller (`1002:7316`). The install writes each at its default, and an
   update adds them. None has been read on a controller it lists. See
   "Linux's controller quirks".
+- **Endpoint rings are kept until the controller has let go of them.**
+  When a driver switches an interface to another alternate setting (an
+  audio device starting or stopping, for one) and the switch fails part
+  way, the driver used to hand the old endpoints' transfer rings back for
+  reuse while the controller could still be using them. It now keeps every
+  ring until a command proves the controller is done with it, the rule
+  Linux follows; a switch the controller refuses leaves the interface
+  working at its old setting; and a device that refuses the switch has
+  its old setting put back. A device whose interface has only one setting
+  may refuse the request outright, as USB allows: that is now treated as
+  success, the endpoints' toggles reset by clearing their halts, as Linux
+  does. This also bounds the endpoints the driver ever asks of the
+  controller to the 64 that Intel's 7-series (Panther Point) controller
+  can hold. Not read on real hardware.
 
 ## What `2.3.1.0` changes
 

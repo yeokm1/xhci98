@@ -105,7 +105,19 @@
                                        * with half that TRB's length left,
                                        * then the doorbells rung; streams
                                        * too                                 */
-#define XHCI_INJ_LAST_BUILT      23UL
+/* Task 38.10's (design record 20 section 7), after 36.22's, hex 18 and
+ * 19: the steps of an interface switch a QEMU device never refuses,
+ * answered by the driver, nothing sent. */
+#define XHCI_INJ_SET_INTERFACE   24UL /* the next SELECT_INTERFACE's
+                                       * SET_INTERFACE: arg 0 a STALL, 1
+                                       * not established                     */
+#define XHCI_INJ_SELECT_CONFIG   25UL /* the next interface switch's
+                                       * Configure Endpoint: arg 0 refused
+                                       * at step 3, 1 refused at the
+                                       * rollback (Resource Error), 2 and 3
+                                       * no completion there - the
+                                       * controller reset requested          */
+#define XHCI_INJ_LAST_BUILT      25UL
 #define XHCI_INJ_CLEAR           0xFFUL  /* every injection ended            */
 
 /* XhciInjTake's verdicts. */

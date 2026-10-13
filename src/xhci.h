@@ -1248,6 +1248,22 @@ ULONG XhciPoolAcquire(PXHCI_RING_POOL pool,
                       ULONG ringless,
                       ULONG *poolIndex);
 
+/*
+ * The same within an interface switch (design record 20 section 5.2,
+ * roadmap-hcd.md task 38.10): `reserved` of the rings the device holds are
+ * the ones the switch's own command drops - the pipes it detached and any
+ * left stale by an earlier failure - held until a proof releases them, so
+ * they are not taken against the per-device cap; a device may then hold up
+ * to twice the cap while a switch is in flight. The fairness rule counts
+ * every ring held. XhciPoolAcquire is this with 0. IRQL: any (the caller
+ * holds the lock).
+ */
+ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
+                              ULONG deviceRef,
+                              ULONG ringless,
+                              ULONG reserved,
+                              ULONG *poolIndex);
+
 /* Release one ring. Refuses an index that is free, or that a different device
  * owns - both are bookkeeping errors that would otherwise hand the same ring to
  * two endpoints. IRQL: any. */
@@ -9016,7 +9032,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 233UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 241UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 

@@ -6,7 +6,10 @@ driver's code, and the quirks taken from it, each behind a registry value;
 and one fix to the driver's endpoint bookkeeping the survey exposed
 (section 5).
 
-Revision 6, 2026-10-14, answers review round 4 (section 11); revision 5,
+Revision 7, 2026-10-14, carries the owner's decision of that day on a
+STALLed SET_INTERFACE at an interface with one alternate setting (section
+5.3, step 4; section 9). Revision 6, the same day, answered review round 4
+(section 11); revision 5,
 the same day, answered round 3; revision 4,
 2026-10-13, answered round 2; revision 3,
 the same day, answered review round 1 with the
@@ -85,9 +88,11 @@ against that copy):
   is not the pinned commit; section 10 proposes adding the file to the
   mirror at it.
 - `drivers/usb/core/message.c`, whose `usb_set_interface` section 5 cites
-  for what Linux does when SET_INTERFACE fails. Not in the mirror; cited by
-  function name only, and its behaviour as stated there is to be read at
-  the pinned commit before the implementation relies on it.
+  for what Linux does when SET_INTERFACE fails or is STALLed. Not in the
+  mirror when the survey was written; added at the pinned commit on
+  2026-10-14 (`0f33d190`, `external/README.md`, copied flat as
+  `external/linux/message.c`) and read there before the implementation
+  (section 8).
 - The platform glue (`xhci-plat.c`, `xhci-mtk.c`, `xhci-rcar.c`,
   `xhci-tegra.c`, `xhci-histb.c`, the DWC3 glue and the rest), and
   `xhci-pci-prom21.c`. What those set is listed by bit name only, from
@@ -747,12 +752,62 @@ license freeing what the controller may still hold.
    established):
    - **Completed:** the old pipe objects and their rings are freed, the new
      pipes published and the URB's entries filled; success.
-   - **Stalled:** the device refused the request and stays at its old
+   - **Stalled, on an interface with one alternate setting** (owner,
+     2026-10-14): the request is treated as a success, the way Linux treats
+     it (`message.c:1655-1662`, its "manual set_interface"). A device whose
+     interface "only supports a default setting" may STALL SET_INTERFACE
+     (USB 2.0 9.4.10; USB 3.2 9.4.10, p.343), so the STALL refuses nothing:
+     the setting asked for is the one setting there is, the one the device
+     is at, and the new endpoints are the old setting's own. What the
+     request would have done at the device - set "all of the status and
+     configuration values" of the interface's endpoints to their defaults,
+     "resetting the sequence numbers ... to zero" (USB 3.2 9.1.1.5, p.321,
+     the section Linux's own comment cites at `message.c:1707`), and clear
+     their Halt feature "even if the requested ... interface is the same as
+     the current" one (9.4.5, p.338) - is done instead by
+     CLEAR_FEATURE(ENDPOINT_HALT) to each new non-isochronous endpoint,
+     which clears the halt and "always results in the data sequence being
+     reinitialized to zero" (9.4.5, p.338; the toggle, USB 2.0 9.4.5), as Linux clears every endpoint of the setting
+     after a manual set (`message.c:1690-1705`), with the mechanism
+     `hcdCfgSetInterface` already uses for the function select. The host
+     side needs nothing more: the contexts step 3 added are fresh, at DATA0
+     or sequence 0, which is what Linux's own reset of the host toggles
+     afterwards gives it (`usb_enable_interface` with its reset,
+     `message.c:1707-1718`). If every CLEAR_FEATURE completes, the select
+     ends as on **Completed**: the old pipe objects and their rings freed,
+     the new pipes published, the URB's entries filled, success. If one
+     fails - stalled or not established - the request takes the next
+     branch, the STALL on an interface with other settings, from its
+     rollback on: the device never left its setting, only its toggles are
+     in doubt, and the rollback's own CLEAR_FEATUREs restart them for the
+     old pipes; an old setting with streams open takes the "not
+     established" branch from there, as below.
+
+     Two differences from Linux, both narrower. Linux clears isochronous
+     endpoints too (some devices are said to expect it, `message.c:1275-1278`);
+     here they are skipped, as `hcdCfgSetInterface` skips them, because an
+     isochronous endpoint keeps no toggle and the Halt feature "is required
+     to be implemented for all interrupt and bulk endpoint types" only (USB
+     3.2 9.4.5, p.338), so a device may refuse the clear there and fail a
+     select that did nothing wrong. And Linux ignores what each clear
+     returns and reports success whatever it is (`usb_clear_halt` leaves
+     its own toggle alone on a failure, `message.c:1284-1286`); here a
+     failed clear leaves the device's toggle out of step with the fresh
+     context, so the select does not claim success over it (owner,
+     2026-10-14).
+
+     "One alternate setting" is read from the configuration the client
+     selected (`dev->Selected`), as Linux reads `num_altsetting` from the
+     interface's own: exactly one interface descriptor with that
+     `bInterfaceNumber`, walked to `wTotalLength`. A descriptor walk that
+     cannot finish counts as more than one, so a malformed configuration
+     takes the STALL branch below rather than a success.
+   - **Stalled, on an interface with more than one alternate setting:** the
+     device refused the request and stays at its old
      setting, with its endpoints' data toggles or sequence numbers as they
      were. Only here is the old setting re-instated (owner, 2026-10-13, as
      Linux's `usb_set_interface` restores the old setting's endpoints when
-     the request fails; `drivers/usb/core/message.c`, not in the mirror,
-     section 8): a second Configure Endpoint drops the new endpoints and
+     the request fails, `message.c:1663-1668`): a second Configure Endpoint drops the new endpoints and
      re-adds the old setting's on their own rings, each zeroed and given a
      fresh dequeue pointer with DCS 1 (zeroed TRBs carry cycle 0, xHCI
      4.3.6 footnote 10), the software ring state reset with it (enqueue,
@@ -788,7 +843,33 @@ license freeing what the controller may still hold.
 
 An old setting whose pipes had streams open is not re-instated even on a
 STALL: its stream handles are a dependent lifetime a fresh, streamless
-context cannot honour; it takes the "not established" branch.
+context cannot honour; it takes the "not established" branch for what it
+holds. A STALL on
+an interface with one alternate setting whose clears all complete needs no
+re-instatement, so its streams do not matter there: the new pipes, which
+have none, are published.
+
+What the request answers is decided by how it ended, apart from what the
+allocations became:
+
+- **Success** after a completed SET_INTERFACE, or after a one-setting
+  STALL whose clears all completed.
+- **The command's own status** when the select ended before or at step
+  3's Configure Endpoint - refused, not issued or unknown
+  (`XhciPipeConfigureUsbdStatus`), or the pool's or the parameters'
+  refusal before any command - as today.
+- **The STALL status** (`USBD_STATUS_STALL_PID`, today's answer to a
+  STALL) on every exit after the device STALLed SET_INTERFACE, whatever
+  followed: a one-setting clear that failed, however it failed; the
+  rollback refused, not issued or unknown; the rollback's own clears
+  completing or failing; an old setting with streams open. The device's
+  refusal is what the client is told; what became of the rings does not
+  change it.
+- **`INTERNAL_HC_ERROR`** when SET_INTERFACE was not established, as today.
+- **`DEVICE_GONE`** in place of any failure above once the device is
+  proven to have left its port, as every select's failure is answered
+  today (`hcdCfgSelectAnswer`) - all but `BUFFER_TOO_SMALL`, the length
+  probe, which that helper returns as it is.
 
 ### 5.4 The function select and every other path
 
@@ -839,6 +920,89 @@ admission (which keeps a ring free for each live device without one,
 that would have been served before - not the per-device cap, which a
 transaction's reservation does not consume (section 5.2). That is the
 bound working, and it is counted.
+
+### 5.6 As built (2026-10-14)
+
+Section 5 is built as written, with the owner's amendment of 2026-10-14
+(section 5.3, step 4). Where each part lives:
+
+- **The decisions are pure.** `src/xhci_own.c` / `xhci_own.h`:
+  `XhciOwnSelectStep` is section 5.3's table - each phase (step 3's
+  Configure Endpoint, SET_INTERFACE, the one-setting clears, the rollback,
+  its clears) and each event (a command's four outcomes, SET_INTERFACE's
+  three, the clears' two) to the actions taken on the old and new pipes
+  and what is issued next; `XhciOwnDropStep` the drop-only command of a
+  function's unconfigure and release; `XhciOwnCommandEvent` a completion
+  code as an outcome; `XhciOwnSingleSetting` section 5.3's walk for one
+  alternate setting. A step the phase does not wait for ends the select
+  holding everything, as an unknown outcome does. Host suite `test_own`:
+  the table cell by cell, then every path through a switch (540 at the
+  time of writing: six starting shapes, every combination of the three
+  flags, every event, each unknown outcome in both worlds - the
+  controller applied it or did not) driven over a modelled controller and
+  ring pool with `hcd_cfg.c`'s executor mirrored, checking after each step
+  that no ring is free while a context may name it, that no two contexts
+  name one ring, that every held ring has exactly one holder, that an
+  enabled endpoint with no published pipe is marked stale, and that the
+  enabled contexts never pass the rings held; and after each end that a
+  later proof and the slot's going return every ring.
+- **The reservation.** `XhciPoolAcquireReserved` (`xhci_mem.c`): the cap
+  counts the rings held minus the switch's reservation, the fairness test
+  every ring held; `XhciPoolAcquire` is it with no reservation. Host
+  vectors: `test_membuf`, `test_pool_reserved`.
+- **The executor.** `hcd_cfg.c`. A held allocation is a closed pipe on
+  the device's `Retained` list (`HCD_PIPE.RetainNext`, `Pinned`), its ring
+  still the device's in the pool and its DCI marked stale
+  (`hcdCfgRetain`); a proof releases it (`hcdCfgRetainedReclaim`): a
+  successful Configure Endpoint dropping its DCI (`hcdCfgCommand`, beside
+  the stream blocks' reclaim), the deconfigure finding every endpoint
+  Disabled or the slot not Configured, and RESET_PORT's Reset Device; the
+  slot's going frees the pinned ones too (`HcdCfgDeviceGone`). A switch
+  is `HCD_CFG_SWITCH`: `hcdCfgSwitchDetach` (step 1: the reusable abort,
+  then unpublished, drained and waited out, kept),
+  `hcdCfgSwitchReserved`, `hcdCfgSwitchConfigure` (step 3),
+  `hcdCfgSwitchRollback`, `hcdCfgSwitchClears`, `hcdCfgSwitchApply` (the
+  actions) and `hcdCfgSwitchRun` (the steps to the end). SELECT_INTERFACE
+  (`hcdCfgSelectInterface`) and a function's select
+  (`hcdCfgSelectFunction`, no rollback) run through them; a function's
+  unconfigure and a removed function's release through `XhciOwnDropStep`.
+- **The audit of section 5.4.** Every path that freed a pipe:
+  `hcdCfgCloseMask` (and `hcdCfgCloseAll`) now runs only after a proof -
+  the deconfigure's successful command or its all-Disabled reading, and
+  the slot's going; the select configuration's refused command frees its
+  new pipes (never installed) and an unknown one now pins them; the hub's
+  status pipe likewise (`HcdCfgHubOpen`). No other caller of
+  `hcdCfgPipeFree` returns a ring before its proof.
+
+Taken at implementation, inside the record's rules:
+
+- A function's unconfigure or release whose drop is refused leaves the
+  old pipes held stale, not put back: the client asked for them closed,
+  and that is today's outcome with the rings held.
+- `hcdCfgSetInterface`, the function select's own one-setting fallback,
+  reads one setting through `XhciOwnSingleSetting` on `dev->Selected` (the
+  same bytes as the `dev->Config` it read before, for a split device), so
+  a SELECT_INTERFACE and a function decide it by one rule, and its clears
+  go through `hcdCfgDeviceClearHalt`, as the switch's do.
+- The client's pipe entries are cleared before anything can fail and
+  written only on success, so a failure leaves every entry naming no
+  pipe.
+
+What the matrix reads (`xhci_counters.h`, appended at word 233, after the
+quirk words):
+`PoolRingsInUse` (the pool rings held, copied at each poll from the
+pool's own array), `RingsRetained`, `RingsPinned`, `RingsReleased`,
+`SelectsReattached`, `SelectStallSuccesses`, `SelectRollbacks`,
+`SelectRollbacksReopened`; `XHCISNAP` prints them as "endpoint rings". In
+the log, every flavour: `cfg.ring.held` (slot, DCI, pinned, pool index),
+`cfg.select.end` (slot, interface, the answer, the last event) for every
+switch that did not end in a plain success, `cfg.select.rollback` (slot,
+code). The qemu flavour's injection layer gained two faults for the legs
+(`build-and-test.md`, `XhciQemuInject`): `18`, the next
+SELECT_INTERFACE's SET_INTERFACE answered STALLed (`arg` 0) or not
+established (1), never sent; `19`, the next switch's Configure Endpoint
+answered refused (Resource Error) at step 3 (`arg` 0) or at the rollback
+(1), or with no completion and the controller reset requested (2, 3).
 
 ## 6. What is common to every quirk taken
 
@@ -994,8 +1158,16 @@ value 0 changes nothing; host tests carry the matching, the pure decisions
 and section 5's invariant. Section 5's failure paths are driven on QEMU
 where they can be staged - a SET_INTERFACE a device refuses (the
 26-V.2 C-Media case is one), and a refused Configure Endpoint through the
-qemu flavour's injection layer if it can be taught one (`hcd_inj.c`; what
-it injects today is read at implementation) - the leg for the fix. Every value is documented with the controllers it was
+qemu flavour's injection layer, which was taught both for it (section
+5.6: faults `18` and `19`) - the leg for the fix: `usb-audio`'s
+streaming interface switched between alternates 0 and 1 many times with
+`PoolRingsInUse` back where it started after each; `18` with `arg` 0 on
+that switch (two settings: the rollback, `SelectRollbacks` and
+`SelectRollbacksReopened` up, the audio device still playing after its
+class driver selects again); `19` with `arg` 0 (the old pipes put back,
+`SelectsReattached` up) and 1 after an `18` (`RingsRetained` up, then
+`RingsReleased` at the next select); `19` with `arg` 2 (the recovery,
+`RingsPinned` up, every device back and `PoolRingsInUse` as before). Every value is documented with the controllers it was
 read on, and for nearly all of them that is none: the project holds 9D2F
 (E460, Q12), 1E31 (B490, Q4, and section 5's bound) and 9CB1 (E7250, Q4
 and, at 1, Q5), and a field user holds a VL805 (Q3, Q13). Each such machine
@@ -1008,9 +1180,12 @@ release notes say so.
   branch at the time of writing); this record assumes only what the task
   text says - the floor moves to 0.96 behind a default-on value and 0.96
   parts are driven as 1.0 but for the TD Size.
-- `usb_set_interface`'s restore on a failed request (section 5.3, step 4):
-  from `drivers/usb/core/message.c`, not in the mirror; to be read at the
-  pinned commit before the implementation.
+- `usb_set_interface`'s restore on a failed request and its "manual
+  set_interface" on a STALL at an interface with one alternate setting
+  (section 5.3, step 4): from `drivers/usb/core/message.c`, added to the
+  mirror at the pinned commit on 2026-10-14 (`external/README.md`) and read
+  there the same day, `message.c:1587-1725` and `usb_clear_halt` at
+  `1267-1300`.
 
 ## 9. Decisions (owner, 2026-10-13)
 
@@ -1065,6 +1240,18 @@ From revision 0's open list, each with its recommendation then:
   not established, nor in the function select, where some interfaces may
   already have moved, nor for a setting with streams open (section 5.3,
   5.4). Those keep today's outcome with every ring held.
+
+Later (owner, 2026-10-14):
+
+- **A STALL on an interface with one alternate setting** is a success, as
+  Linux's "manual set_interface" makes it: CLEAR_FEATURE(ENDPOINT_HALT) to
+  each new non-isochronous endpoint, then the new pipes published as on a
+  completed SET_INTERFACE; a CLEAR_FEATURE that fails takes the STALL
+  branch, re-instating the old setting (section 5.3, step 4). A STALL on an
+  interface with more than one keeps that branch unchanged. Linux's
+  handling after its manual set was read and its intent kept - the device's
+  toggles restarted to match the host's - with the two narrowings section
+  5.3 states.
 
 ## 10. What changes in the documents
 
@@ -1150,6 +1337,18 @@ Round 4 ran on revision 5 (`8046e1c7`) and found no P1.
 | P3-3: the cost is fairness refusal too | section 5.5 |
 | P3-4: an acknowledged flush is not an emitted record | section 6.4 |
 | P3-5: the survey row's old predicate | section 3.2 (`XHCI_EP_LIMIT_QUIRK` row) |
+
+The owner's amendment of 2026-10-14 (revision 7, section 5.3's
+one-setting STALL) was reviewed on its own before any code, in two
+rounds; round 2 found no P1 or P2.
+
+| Finding | Answer |
+|---|---|
+| Round 1 P2: the request's status on each exit after a failed clear not stated | section 5.3, "What the request answers" |
+| Round 1 P3: the comment above `hcdCfgSelectInterface` still said every failure leaves no pipe | the comment rewritten for the switch as a whole |
+| Round 1 P3: the same-setting sequence reset cited to the Halt sentence | USB 3.2 9.1.1.5 cited beside 9.4.5 |
+| Round 2 P3: `BUFFER_TOO_SMALL` is not turned into `DEVICE_GONE` | section 5.3, the `DEVICE_GONE` row |
+| Round 2 P3: the comment's streams exclusion read as covering a one-setting success | the comment limits it to the rollback |
 
 ## 12. Provenance of this record
 
@@ -1313,7 +1512,8 @@ act, Q4, Q5, Q9 and Q16 log their word again at each action (and Q12 its
 port); Q1, Q3, Q7, Q8, Q10, Q13 and Q14 update their outcome and counts
 only, which the counter block and `XHCISNAP` carry, so their start note
 keeps the start's reading. The counter block gains words 199 to 232
-(`src\xhci_counters.h`; 233 words in all, after tasks 38.11 and 38.3):
+(`src\xhci_counters.h`, after tasks 38.11 and 38.3; section 5's eight
+follow at 233 to 240, 241 words in all):
 the fourteen packed words (199 to 212), the revision (213), the identity
 matched (214), and the counts (215 to 232). `XHCISNAP` prints them as a "Linux quirks" block and names
 `XhciInterruptMode`'s reason 19, "automatic: a message granted, refused by
