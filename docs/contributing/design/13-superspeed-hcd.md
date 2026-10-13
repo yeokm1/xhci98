@@ -1942,8 +1942,7 @@ The tree's switches read both ways (checked in `hcd_ctl.c`:
 but 0, `XhciSelectiveSuspend` only at exactly 1); this gate takes
 `XhciSelectiveSuspend`'s rule, because its on direction is the one that can
 leave a device unworking with nothing said, so a stray value is taken as
-off. **Proposed (O6)**, the owner having left values other than 0 and 1 to
-the design. The INFs write no value: absent is off, and an INF reinstall
+off. **Decided (O6, owner 2026-10-13).** The INFs write no value: absent is off, and an INF reinstall
 then cannot undo what `silent-on.bat` set. Read at every start, so
 `silent-off.bat`'s 0 takes effect at the next. On NT it is never read. The
 notes, at every verbosity as the start's other values are:
@@ -2314,9 +2313,8 @@ it gates `portsw-on.bat`'s.
 **Names.** `SILENT.REG` and `SILENT.VBS` are 8.3. `silent-on.bat` and
 `silent-off.bat` are the owner's names, 9 and 10 characters before the dot,
 not 8.3 - as `portsw-on.bat` and `portsw-off.bat` are not, which run by
-double-click and at a 98 SE or ME prompt under their long names. **Open
-(O7):** keep them, or publish 8.3 names (`SILENTON.BAT`, `SILENTOF.BAT`) as
-the 38.1 report batches are.
+double-click and at a 98 SE or ME prompt under their long names. **Decided
+(O7, owner 2026-10-13):** the long names stay.
 
 **The readme section** (the readme template's, under `tools\silent\`):
 
@@ -2419,8 +2417,8 @@ show no `silent.*` note and every install as before.
 #### 6.11.10 Questions and decisions
 
 O2 to O5 were decided by the owner on 2026-10-13, each as proposed; O1 is
-a fact to be read, not a choice; O6 and O7 come from the gate's design
-(owner, 2026-10-13) and are proposed here for the owner.
+a fact to be read, not a choice; O6 and O7, from the gate's design,
+were decided by the owner the same day, each as proposed.
 
 | | Question | Decided / to read |
 |---|---|---|
@@ -2429,8 +2427,8 @@ a fact to be read, not a choice; O6 and O7 come from the gate's design
 | O3 | The composite parent: TRUE when any function's interfaces match (the rule read literally), when all do, or never | any (literal) (owner) |
 | O4 | A malformed configuration: 0 whatever matched, or keep a match found before the fault | 0 (owner) |
 | O5 | The table's cap | 32, the excess dropped and counted (owner) |
-| O6 | `XhciSilentInstall` other than absent, 0 and 1 | **Proposed:** off - only a DWORD of exactly 1 is on, `XhciSelectiveSuspend`'s rule (6.11.3) |
-| O7 | The batch files' names | **Proposed:** keep the owner's `silent-on.bat` and `silent-off.bat`, long names as `portsw-on.bat`'s; or `SILENTON.BAT` and `SILENTOF.BAT` (6.11.8) |
+| O6 | `XhciSilentInstall` other than absent, 0 and 1 | off - only a DWORD of exactly 1 is on, `XhciSelectiveSuspend`'s rule (6.11.3) (owner, 2026-10-13) |
+| O7 | The batch files' names | `silent-on.bat` and `silent-off.bat`, long names as `portsw-on.bat`'s (6.11.8) (owner, 2026-10-13) |
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
