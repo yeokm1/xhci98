@@ -1,0 +1,88 @@
+# xhcihlpr.sys import allowlist - the x86 helper (design record 18, section
+# 15 for this revision; roadmap-hcd.md tasks 36.15, 36.16 and 38.3), built
+# with WDK 7.1 for x86, Windows XP target, subsystem 5.00.
+# scripts\build-driver.cmd passes it with -AllowPath and -GateProfile
+# hlprx86 on every x86 link of src\hlpr. Format and rules:
+# xhci98-imports.allow's header, with the hlprx86 profile's evidence rule:
+#
+#   w2k-export; xp-x86-export; nt6-x86-export
+#                    in the export table of EVERY authenticated kernel and
+#                    HAL of Windows 2000 SP4 (win2k-baselines.expected),
+#                    Windows XP SP3 x86 (winxp-x86-baselines.expected: the
+#                    four kernels and seven HALs), Windows Vista SP2 x86 and
+#                    Windows 7 SP1 x86 (hlprx86-vista-baselines.expected and
+#                    hlprx86-win7-baselines.expected, whose ntkrnlpa.exe
+#                    rows are still owed - those manifests' headers).
+#                    Resolution against the real export tables IS the
+#                    evidence, as for amd64; no Windows 98 evidence is
+#                    asked, because the INF installs the helper on no
+#                    Windows 98 or ME path. Every one of the four sets is
+#                    required: a set missing, or one image of it, fails the
+#                    gate (record 18 section 15.11).
+#
+# Three groups. The helper's own calls are `required`. The pairs WDK 7.1's
+# wxp wdmsec.lib brings with IoCreateDeviceSecure (design record 18 section
+# 2: the named device secured to the system alone) were listed from the
+# first WXP link's `link /dump /imports` of each flavour on 2026-10-14, not
+# admitted by name in advance, and are `optional`, because they are that
+# library object's choice and not this source's. The /GS support
+# (GsDriverEntry, BufferOverflowK.lib; record 18 section 8.1) adds
+# KeTickCount and KeBugCheckEx.
+#
+# IoConnectInterruptEx and IoDisconnectInterruptEx are denied: since
+# revision 13 the helper asks MmGetSystemRoutineAddress for them on Vista
+# and 7, and a static import of either would stop the image loading on
+# Windows 2000 and XP (record 18 section 15.1).
+
+[imports]
+
+# --- The helper's own calls ---
+ntoskrnl.exe!ExSetTimerResolution           all    required  w2k-export; xp-x86-export; nt6-x86-export; the timer service - its address handed to xhci98.sys, never called here (record 18 section 15.2)
+ntoskrnl.exe!MmGetSystemRoutineAddress      all    required  w2k-export; xp-x86-export; nt6-x86-export; the MSI service's pair on Vista and 7 (record 18 section 15.2); wdmsec.lib calls it too
+ntoskrnl.exe!IofCompleteRequest             all    required  w2k-export; xp-x86-export; nt6-x86-export; every IRP completed at once
+ntoskrnl.exe!RtlInitUnicodeString           all    required  w2k-export; xp-x86-export; nt6-x86-export; the device name and the routines' names
+ntoskrnl.exe!IoIsWdmVersionAvailable        all    required  w2k-export; xp-x86-export; nt6-x86-export; DriverEntry's minimum-version test and the NT 6 test
+ntoskrnl.exe!RtlQueryRegistryValues         qemu   required  w2k-export; xp-x86-export; nt6-x86-export; XhciHlprInject (record 18 sections 2.1 and 15.12), the qemu flavour only
+ntoskrnl.exe!RtlAssert                      debug  required  w2k-export; xp-x86-export; nt6-x86-export; WDK 7.1 checked-header ASSERTs only
+ntoskrnl.exe!RtlAssert                      qemu   required  w2k-export; xp-x86-export; nt6-x86-export; WDK 7.1 checked-header ASSERTs only
+
+# --- /GS (GsDriverEntry and BufferOverflowK.lib, the kit's default) ---
+ntoskrnl.exe!KeTickCount                    all    required  w2k-export; xp-x86-export; nt6-x86-export; the cookie's seed (a data import)
+ntoskrnl.exe!KeBugCheckEx                   all    required  w2k-export; xp-x86-export; nt6-x86-export; __report_gsfailure only, bugcheck 0xF7
+
+# --- wdmsec.lib's IoCreateDeviceSecure (the wxp\i386 copy) ---
+ntoskrnl.exe!IoCreateDevice                 all    required  w2k-export; xp-x86-export; nt6-x86-export; called by IoCreateDeviceSecure
+ntoskrnl.exe!IoDeleteDevice                 all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib, its failure path
+ntoskrnl.exe!IoDeviceObjectType             all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib (a data import)
+ntoskrnl.exe!ObOpenObjectByPointer          all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ZwSetSecurityObject            all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ZwClose                        all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ZwOpenKey                      all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib, the class key's override
+ntoskrnl.exe!ZwCreateKey                    all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib, the same
+ntoskrnl.exe!ZwQueryValueKey                all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib, the same
+ntoskrnl.exe!ZwSetValueKey                  all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib, the same
+ntoskrnl.exe!SeCaptureSecurityDescriptor    all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!SeExports                      all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib (a data import)
+ntoskrnl.exe!RtlCreateSecurityDescriptor    all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlSetDaclSecurityDescriptor   all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetDaclSecurityDescriptor   all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetSaclSecurityDescriptor   all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetGroupSecurityDescriptor  all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlGetOwnerSecurityDescriptor  all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlLengthSecurityDescriptor    all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlAbsoluteToSelfRelativeSD    all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlAddAccessAllowedAce         all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlLengthSid                   all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!RtlFreeUnicodeString           all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!ExAllocatePoolWithTag          all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib's own pool (the helper allocates none)
+ntoskrnl.exe!ExFreePoolWithTag              all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib's own pool
+ntoskrnl.exe!_snwprintf                     all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib, the class key's name
+ntoskrnl.exe!_wcsnicmp                      all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!wcschr                         all    optional  w2k-export; xp-x86-export; nt6-x86-export; wdmsec.lib
+ntoskrnl.exe!memcpy                         all    optional  w2k-export; xp-x86-export; nt6-x86-export; the checked flavours' structure copies
+ntoskrnl.exe!memset                         all    optional  w2k-export; xp-x86-export; nt6-x86-export; the checked flavours' structure fills
+
+[deny]
+
+IoConnectInterruptEx        Vista and later - a static import stops the helper loading on Windows 2000 and XP (record 18 section 15.1). Ask MmGetSystemRoutineAddress on NT 6.
+IoDisconnectInterruptEx     Vista and later - the same as IoConnectInterruptEx.

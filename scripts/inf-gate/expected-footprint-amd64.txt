@@ -11,6 +11,10 @@
 # directive|<os>|<install section>|<bare directive, e.g. Reboot>
 # service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>
 # servicevalue|<os>|<service name>|<service install section>|<directive>|<value>
+# servicedelete|<os>|<service name>|<DelService flags>
+#   (a service this install deletes - an earlier package's, record 18 section 15.7)
+# filedelete|<os>|<delfiles section>|<dirid>|<subdir>|<file>|<flags>
+#   (a file this install deletes; flags 0x00010000 defers it to the restart)
 # unmodelled|<os>|<section>|<directive>
 #
 # Verdicts. Each is derived from the flags field, and the derivation is
@@ -101,6 +105,7 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
@@ -168,6 +173,7 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|102
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep

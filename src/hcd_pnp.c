@@ -66,6 +66,12 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
         HcdPowerGateEnter(hc);
         HcdPollGrant(hc);
         HcdPowerGateLeave(hc);
+        /* The finer timer's thread (design record 15 section 7.2.5), after
+         * the start succeeded and the poller is granted, here in the PnP
+         * manager's start thread rather than by the controller thread; on
+         * 32-bit Vista and 7 the helper's timer routine is copied from the
+         * binding the filter and the start made, in this serialisation. */
+        HcdTmrCreate(hc);
         /* The door's names (hcd_door.c, 26-A.8), best effort: a missing
          * name costs a property page, not the controller. */
         HcdDoorControllerStart(hc);

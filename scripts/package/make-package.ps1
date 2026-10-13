@@ -101,14 +101,14 @@ self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
 in src\uas.
 
-.PARAMETER MsiDriverPath
-The NT 6 x86 MSI helper to stage (design record 18; task 36.15), overriding
-`src\msi86\obj<flavour>\i386\xhcimsi.sys`. The 32-bit INF names it in
+.PARAMETER HlprDriverPath
+The x86 helper to stage (design record 18; tasks 36.15 and 38.3), overriding
+`src\hlpr\obj<flavour>\i386\xhcihlpr.sys`. The 32-bit INF names it in
 [SourceDisksFiles], so the x86 package carries it whenever it is built from
 the default paths and a missing one is a refusal; a caller that names
 -DriverPath (the self-tests' stand-ins) names this too, or the INF's entry
 has no source. It is held to the flavour marker and, unless
--SkipBinaryGates, to the import gate's nt6x86 profile. The amd64 package has
+-SkipBinaryGates, to the import gate's hlprx86 profile. The amd64 package has
 no helper, and this parameter is refused there.
 
 .PARAMETER OemPath
@@ -244,7 +244,7 @@ param(
     [string]$DriverPath = "",
     [string]$UasInfPath = "",
     [string]$UasDriverPath = "",
-    [string]$MsiDriverPath = "",
+    [string]$HlprDriverPath = "",
     [string]$OemPath = "",
     [string]$TestSignPfx = "",
     [switch]$SkipPackageGate,
@@ -279,18 +279,18 @@ $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
 }
-# The NT 6 x86 MSI helper (design record 18), the x86 package's alone.
-if ($Arch -eq "amd64" -and $MsiDriverPath -ne "") {
-    throw "-MsiDriverPath names the NT 6 x86 MSI helper, which the amd64 package does not carry: the amd64 HCD has no helper (design record 18)."
+# The x86 helper (design record 18), the x86 package's alone.
+if ($Arch -eq "amd64" -and $HlprDriverPath -ne "") {
+    throw "-HlprDriverPath names the x86 helper, which the amd64 package does not carry: the amd64 HCD has no helper (design record 18)."
 }
-$stageMsi = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($MsiDriverPath -ne ""))
-if ($Arch -eq "x86" -and $MsiDriverPath -eq "") {
-    $msiObjDir = switch ($Flavor) {
+$stageHlpr = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($HlprDriverPath -ne ""))
+if ($Arch -eq "x86" -and $HlprDriverPath -eq "") {
+    $hlprObjDir = switch ($Flavor) {
         "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
-    $MsiDriverPath = Join-Path $repo "src\msi86\$msiObjDir\i386\xhcimsi.sys"
+    $HlprDriverPath = Join-Path $repo "src\hlpr\$hlprObjDir\i386\xhcihlpr.sys"
 }
 $uasInfName = if ($Arch -eq "amd64") { "xhciuas-amd64.inf" } else { "xhciuas.inf" }
 $uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhciuas-imports.allow" }
@@ -812,34 +812,39 @@ The package carries the UAS class driver. Build it first:
         Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
     }
 
-    # --- the NT 6 x86 MSI helper, held to its own gates (design record 18) ---
-    if ($stageMsi) {
-        Write-Step ("NT 6 x86 MSI helper ({0})" -f $Flavor)
-        if (-not (Test-Path -LiteralPath $MsiDriverPath)) {
+    # --- the x86 helper, held to its own gates (design record 18) ---------
+    if ($stageHlpr) {
+        Write-Step ("x86 helper ({0})" -f $Flavor)
+        if (-not (Test-Path -LiteralPath $HlprDriverPath)) {
             throw @"
-no $Flavor xhcimsi.sys at '$MsiDriverPath'.
-The x86 package carries the NT 6 x86 MSI helper its INF names. Build it first
+no $Flavor xhcihlpr.sys at '$HlprDriverPath'.
+The x86 package carries the x86 helper its INF names. Build it first
 (it needs tools\WinDDK71):
   scripts\build-driver.cmd $Flavor
 "@
         }
-        $msiFlavour = Get-ImageFlavourMarker -Path $MsiDriverPath
-        if ($msiFlavour -ne $Flavor) {
-            throw "'$MsiDriverPath' carries the flavour marker '$msiFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        $hlprFlavour = Get-ImageFlavourMarker -Path $HlprDriverPath
+        if ($hlprFlavour -ne $Flavor) {
+            throw "'$HlprDriverPath' carries the flavour marker '$hlprFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
         }
         if (-not $SkipBinaryGates) {
             $savedEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {
-                $msiGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                $hlprGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                  (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
-                                 "-Image", $MsiDriverPath, "-Flavor", $Flavor, "-Arch", "x86",
-                                 "-GateProfile", "nt6x86",
-                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "xhcimsi-imports.allow"))
-                if ($NoTargetEvidence) { $msiGateArgs += "-NoTargetEvidence" }
-                & powershell.exe @msiGateArgs
+                                 "-Image", $HlprDriverPath, "-Flavor", $Flavor, "-Arch", "x86",
+                                 "-GateProfile", "hlprx86",
+                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "xhcihlpr-imports.allow"))
+                # The hlprx86 profile requires every target set (design
+                # record 18 section 15.11): a helper gated on the allowlist
+                # alone is not packaged.
+                if ($NoTargetEvidence) {
+                    throw "-NoTargetEvidence: the x86 helper is never packaged on the allowlist alone - its hlprx86 import gate needs the Windows 2000, XP, Vista and 7 x86 kernels and HALs staged (design record 18 section 15.11; scripts\import-gate\extract-target-baselines.ps1)."
+                }
+                & powershell.exe @hlprGateArgs
                 if ($LASTEXITCODE -ne 0) {
-                    throw "'$MsiDriverPath' failed the import gate's nt6x86 profile against xhcimsi-imports.allow."
+                    throw "'$HlprDriverPath' failed the import gate's hlprx86 profile against xhcihlpr-imports.allow."
                 }
             } finally {
                 $ErrorActionPreference = $savedEap
@@ -913,8 +918,8 @@ The x86 package carries the NT 6 x86 MSI helper its INF names. Build it first
     # for a file the package cannot contain. xhci98.inf is also staged at the
     # package root unconditionally - that is the file the user points setup at.
     $staging = @{ "xhci98.inf" = $InfPath; "xhci98.sys" = $DriverPath }
-    if ($stageMsi) {
-        $staging["xhcimsi.sys"] = $MsiDriverPath
+    if ($stageHlpr) {
+        $staging["xhcihlpr.sys"] = $HlprDriverPath
     }
 
     $unsourced = @($layout.Keys | Where-Object { -not $staging.ContainsKey($_) })

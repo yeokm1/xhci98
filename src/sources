@@ -99,8 +99,9 @@ SOURCES=xhci_mem.c    \
         hcd_susp.c    \
         xhci_poll.c   \
         hcd_poll.c    \
+        hcd_tmr.c     \
         xhci_msi.c    \
-        xhci_msi86.c  \
+        xhci_hlpr.c   \
         hcd_msi86.c   \
         xhci98.rc
 

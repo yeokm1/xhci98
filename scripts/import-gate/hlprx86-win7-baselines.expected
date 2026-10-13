@@ -1,7 +1,8 @@
 # Authenticated Windows 7 SP1 x86 kernel/HAL export baselines, for the
-# import gate's nt6x86 profile (xhcimsi.sys, design record 18 section 8.2);
-# nt6x86-vista-baselines.expected is the other half and its header applies
-# here unchanged, the ntkrnlpa.exe row owed included.
+# import gate's hlprx86 profile (xhcihlpr.sys, design record 18 section
+# 15.11; until task 38.3 nt6x86-win7-baselines.expected, the nt6x86 profile
+# of xhcimsi.sys); hlprx86-vista-baselines.expected is its Vista sibling and
+# its header applies here unchanged, the ntkrnlpa.exe row owed included.
 #
 # Source: tools\win7-x86-extracted, measured 2026-10-10.
 #

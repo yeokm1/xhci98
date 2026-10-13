@@ -11,6 +11,10 @@
 # directive|<os>|<install section>|<bare directive, e.g. Reboot>
 # service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>
 # servicevalue|<os>|<service name>|<service install section>|<directive>|<value>
+# servicedelete|<os>|<service name>|<DelService flags>
+#   (a service this install deletes - an earlier package's, record 18 section 15.7)
+# filedelete|<os>|<delfiles section>|<dirid>|<subdir>|<file>|<flags>
+#   (a file this install deletes; flags 0x00010000 defers it to the restart)
 # unmodelled|<os>|<section>|<directive>
 #
 # Verdicts. Each is derived from the flags field, and the derivation is
@@ -104,6 +108,7 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciMaxTransferKB|0x00010003|1024|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciInterruptMode|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciPollFineTimer|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
@@ -112,6 +117,7 @@ path|Windows 2000|device install|Xhci.Dev.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 file|Windows 2000|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 2000|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
+file|Windows 2000|XhciHlpr.CopyFiles|10|System32\Drivers|xhcihlpr.sys|xhcihlpr.sys|xhcihlpr.tmp|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
@@ -127,6 +133,7 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|1024|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
@@ -140,6 +147,12 @@ servicevalue|Windows 2000|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows 2000|xhci98|Xhci.AddService|LoadOrderGroup|Base
+service|Windows 2000|xhcihlpr|XhciHlpr.AddService|0|remove
+servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|DisplayName|%XhciHlprSvcDesc%
+servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|ServiceType|1
+servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|StartType|0
+servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|ErrorControl|1
+servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|ServiceBinary|%12%\xhcihlpr.sys
 path|Windows 98|device install|RootHub.Dev
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 reg|Windows 98|RootHub.AddReg|HKR||DevLoader||*NTKERN|remove
@@ -195,7 +208,7 @@ servicevalue|Windows 2000|xhci98|Xhci.AddService|LoadOrderGroup|Base
 unmodelled|Windows 2000|Comp.Dev.NTx86|DelReg
 path|Windows Vista and 7 x86|device install|Xhci.Dev6.NTx86
 file|Windows Vista and 7 x86|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows Vista and 7 x86|XhciMsi.CopyFiles|10|System32\Drivers|xhcimsi.sys|xhcimsi.sys|xhcimsi.tmp|0|remove
+file|Windows Vista and 7 x86|XhciHlpr.CopyFiles|10|System32\Drivers|xhcihlpr.sys|xhcihlpr.sys|xhcihlpr.tmp|0|remove
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciForceBulkOnly|0x00010003|0|keep
@@ -211,6 +224,7 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMaxTransferKB|0x00010003|102
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciInterruptMode|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollIdleMs|0x00010003|50|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
@@ -224,17 +238,19 @@ servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|LoadOrderGroup|Base
-service|Windows Vista and 7 x86|xhcimsi|XhciMsi.AddService|0|remove
-servicevalue|Windows Vista and 7 x86|xhcimsi|XhciMsi.AddService|DisplayName|%XhciMsiSvcDesc%
-servicevalue|Windows Vista and 7 x86|xhcimsi|XhciMsi.AddService|ServiceType|1
-servicevalue|Windows Vista and 7 x86|xhcimsi|XhciMsi.AddService|StartType|0
-servicevalue|Windows Vista and 7 x86|xhcimsi|XhciMsi.AddService|ErrorControl|1
-servicevalue|Windows Vista and 7 x86|xhcimsi|XhciMsi.AddService|ServiceBinary|%12%\xhcimsi.sys
+service|Windows Vista and 7 x86|xhcihlpr|XhciHlpr.AddService|0|remove
+servicevalue|Windows Vista and 7 x86|xhcihlpr|XhciHlpr.AddService|DisplayName|%XhciHlprSvcDesc%
+servicevalue|Windows Vista and 7 x86|xhcihlpr|XhciHlpr.AddService|ServiceType|1
+servicevalue|Windows Vista and 7 x86|xhcihlpr|XhciHlpr.AddService|StartType|0
+servicevalue|Windows Vista and 7 x86|xhcihlpr|XhciHlpr.AddService|ErrorControl|1
+servicevalue|Windows Vista and 7 x86|xhcihlpr|XhciHlpr.AddService|ServiceBinary|%12%\xhcihlpr.sys
+servicedelete|Windows Vista and 7 x86|xhcimsi|0
 hwreg|Windows Vista and 7 x86|Xhci.Msi.AddReg|HKR|"Interrupt Management"||0x00000010||review
 hwreg|Windows Vista and 7 x86|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageSignaledInterruptProperties"||0x00000010||review
 hwreg|Windows Vista and 7 x86|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageSignaledInterruptProperties"|MSISupported|0x00010003|1|keep
 hwreg|Windows Vista and 7 x86|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageSignaledInterruptProperties"|MessageNumberLimit|0x00010003|1|keep
 directive|Windows Vista and 7 x86|Xhci.Dev6.NTx86|Reboot
+filedelete|Windows Vista and 7 x86|XhciMsi.DelFiles|10|System32\Drivers|xhcimsi.sys|0x00010000
 path|Windows Vista and 7 x86|device install|RootHub.Dev6.NTx86
 file|Windows Vista and 7 x86|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 reg|Windows Vista and 7 x86|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove

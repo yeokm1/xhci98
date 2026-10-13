@@ -441,8 +441,10 @@ static const unsigned long snap_guid[4] = {
  * messages connected, the capability, the connection's status, the x86
  * helper's binding, and the last IRP_MN_FILTER_RESOURCE_REQUIREMENTS's
  * record. The codes are src/hcd.h's HCD_MSI_ROUTINES_*, src/xhci_msi.h's
- * XHCI_MSI_CLASS_*, XHCI_MSI_OUT_* and XHCI_MSI86_STATE_*, and
- * src/xhci_msi86.h's XHCI_MSI86_REFUSE_*, duplicated and held to them by
+ * XHCI_MSI_CLASS_*, XHCI_MSI_OUT_* and XHCI_HLPR_STATE_*, and
+ * src/xhci_hlpr.h's XHCI_HLPR_REFUSE_* (src/xhci_msi86.h's
+ * XHCI_MSI86_REFUSE_* before 2.4, whose 4 no 2.4 driver writes),
+ * duplicated and held to them by
  * test_snap. A block of 96 words is a driver from before MSI.
  */
 #define SNAP_MSI_FIRST              96UL    /* MsiRoutines' word            */
@@ -3116,6 +3118,27 @@ static const char *const streams_counter_names[SNAP_STREAMS_WORDS] = {
     "QemuStreamResyncs", "QemuStreamResyncFailed", "QemuStreamRestops"
 };
 
+/* Task 38.3's twenty-three (a finer system timer while polling, design
+ * record 15 section 7.2.9; the x86 helper's two service verdicts, record 18
+ * section 15.3) follow at 173, shown by print_hcd_timer. Their codes are
+ * src/xhci_poll.h's XHCI_POLL_TMR_* and src/xhci_hlpr.h's XHCI_HLPR_SVC_*,
+ * duplicated here and held to them by test_snap. */
+#define SNAP_TMR_AT                 173UL
+#define SNAP_TMR_WORDS              23UL
+#define SNAP_TMR_SOURCES            4UL
+#define SNAP_TMR_THREADS            4UL
+#define SNAP_TMR_CAUSES             5UL
+#define SNAP_HLPR_VERDICTS          5UL
+static const char *const tmr_counter_names[SNAP_TMR_WORDS] = {
+    "TmrSwitchRead", "TmrSwitch", "TmrSource", "TmrThread", "TmrHeld",
+    "TmrHolds", "TmrReleases", "TmrReleasesForced", "TmrHoldsRaced",
+    "TmrObsCrossed", "TmrDesired", "TmrActualHeld", "TmrActualReleased",
+    "TmrReleaseCause", "TmrHeldMs", "TmrObsReleasedCount",
+    "TmrObsReleasedSumMs", "TmrObsReleasedLate", "TmrObsHeldCount",
+    "TmrObsHeldSumMs", "TmrObsHeldLate", "HlprMsiVerdict",
+    "HlprTimerVerdict"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3199,7 +3222,108 @@ static const char *hcd_counter_name(unsigned long i)
     if (i >= SNAP_STREAMS_AT && i - SNAP_STREAMS_AT < SNAP_STREAMS_WORDS) {
         return streams_counter_names[i - SNAP_STREAMS_AT];
     }
+    if (i >= SNAP_TMR_AT && i - SNAP_TMR_AT < SNAP_TMR_WORDS) {
+        return tmr_counter_names[i - SNAP_TMR_AT];
+    }
     return NULL;
+}
+
+static const char *poll_code(const char *const *table, unsigned long n,
+                             unsigned long v);
+
+static const char *const tmr_source_text[SNAP_TMR_SOURCES] = {
+    "none (Windows 98 SE or ME, the switch off, or not looked for yet)",
+    "the helper xhcihlpr.sys (32-bit)",
+    "MmGetSystemRoutineAddress (64-bit)",
+    "looked for, NOT found (on 32-bit: is xhcihlpr.sys running?)"
+};
+
+static const char *const tmr_thread_text[SNAP_TMR_THREADS] = {
+    "not created (not NT, the switch off, or neither polling nor watching)",
+    "running",
+    "creation FAILED (the controller polls at the clock tick)",
+    "joined (the controller stopped)"
+};
+
+static const char *const tmr_cause_text[SNAP_TMR_CAUSES] = {
+    "none yet",
+    "the poller left its active state",
+    "the poller was parked or revoked (a recovery or a failure)",
+    "a power transition (the controller left D0)",
+    "the stop"
+};
+
+static const char *const hlpr_verdict_text[SNAP_HLPR_VERDICTS] = {
+    "not judged (no helper bound)",
+    "accepted",
+    "not offered",
+    "malformed (refused)",
+    "not asked (before Vista)"
+};
+
+/* One phase's observations: the count, the mean and the late share. */
+static void print_tmr_phase(const char *phase, unsigned long count,
+                            unsigned long sumMs, unsigned long late)
+{
+    if (count == 0) {
+        comp("    %-9s no short-request interval observed\n", phase);
+        return;
+    }
+    comp("    %-9s %lu interval(s), mean %lu.%lu ms, %lu late (3 ms or more "
+         "past the period)\n", phase, count, sumMs / count,
+         ((sumMs % count) * 10UL) / count, late);
+}
+
+/*
+ * Task 38.3's finer timer and the helper's two verdicts, from the counter
+ * block when it is long enough (a driver before 38.3 sends fewer words, and
+ * nothing is printed). Out of line, as hcd_counter_name.
+ */
+static void print_hcd_timer(const unsigned char *image,
+                            unsigned long countersAt,
+                            unsigned long counters)
+{
+    unsigned long v;
+    const unsigned char *k;
+
+    if (counters < SNAP_TMR_AT + SNAP_TMR_WORDS) {
+        return;
+    }
+    k = image + countersAt + SNAP_TMR_AT * 4;
+    comp("\nthe finer system timer while polling (task 38.3, design record "
+         "15 section 7.2):\n");
+    v = get32(k, 0);
+    if (v == SNAP_POLL_NOT_FOUND) {
+        comp("  XhciPollFineTimer      not set; in effect %s\n",
+             get32(k, 4) != 0 ? "ON (the default)" : "off");
+    } else {
+        comp("  XhciPollFineTimer      %lu; in effect %s\n", v,
+             get32(k, 4) != 0 ? "ON" : "off");
+    }
+    comp("  the routine            %s\n",
+         poll_code(tmr_source_text, SNAP_TMR_SOURCES, get32(k, 2 * 4)));
+    comp("  the timer thread       %s\n",
+         poll_code(tmr_thread_text, SNAP_TMR_THREADS, get32(k, 3 * 4)));
+    comp("  asks for               %lu (100 ns units); held now %s\n",
+         get32(k, 10 * 4), get32(k, 4 * 4) != 0 ? "YES" : "no");
+    comp("  holds %lu, releases %lu (%lu forced by a boundary); holds raced "
+         "%lu\n", get32(k, 5 * 4), get32(k, 6 * 4), get32(k, 7 * 4),
+         get32(k, 8 * 4));
+    comp("  Windows answered       %lu at the last hold, %lu at the last "
+         "release\n", get32(k, 11 * 4), get32(k, 12 * 4));
+    comp("  last release           %s\n",
+         poll_code(tmr_cause_text, SNAP_TMR_CAUSES, get32(k, 13 * 4)));
+    comp("  held in this start     %lu ms\n", get32(k, 14 * 4));
+    comp("  poll intervals, by the request's phase (runs armed for 5 ms or "
+         "less;\n  %lu crossed a call and were not counted):\n",
+         get32(k, 9 * 4));
+    print_tmr_phase("released", get32(k, 15 * 4), get32(k, 16 * 4),
+                    get32(k, 17 * 4));
+    print_tmr_phase("held", get32(k, 18 * 4), get32(k, 19 * 4),
+                    get32(k, 20 * 4));
+    comp("  the x86 helper's services: MSI %s; timer %s\n",
+         poll_code(hlpr_verdict_text, SNAP_HLPR_VERDICTS, get32(k, 21 * 4)),
+         poll_code(hlpr_verdict_text, SNAP_HLPR_VERDICTS, get32(k, 22 * 4)));
 }
 
 /*
@@ -3398,6 +3522,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     print_hcd_counters(image, countersAt, counters);
     print_hcd_hubspeed(image, countersAt, counters);
     print_hcd_streams(image, countersAt, counters);
+    print_hcd_timer(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -4328,7 +4453,7 @@ static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
     "forced message (XhciInterruptMode 3), but no message was granted: the "
     "start fails",
     "forced message (XhciInterruptMode 3), but the message could not be "
-    "connected (32-bit: is xhcimsi.sys bound?): the start fails",
+    "connected (32-bit: is xhcihlpr.sys bound?): the start fails",
     "forced message (XhciInterruptMode 3), but this Windows has no message "
     "interrupts: the start fails"
 };
@@ -4787,7 +4912,7 @@ static int selftest_intr(void)
 static const char *const msi_routines_text[SNAP_MSI_ROUTINES] = {
     "not looked for (not Vista or 7, or no message granted)",
     "MmGetSystemRoutineAddress (64-bit)",
-    "the helper xhcimsi.sys (32-bit)",
+    "the helper xhcihlpr.sys (32-bit; xhcimsi.sys before 2.4)",
     "looked for, NOT found"
 };
 
@@ -4805,7 +4930,7 @@ static const char *const msi_refusal_text[SNAP_MSI_REFUSALS] = {
     "the query failed",
     "the answer's length",
     "the answer's identity (magic or interface version)",
-    "the routines (NULL, or both the same)"
+    "the routines (a 2.3.x driver's: NULL, or both the same)"
 };
 
 static const char *const msi_class_text[SNAP_MSI_CLASSES] = {
@@ -5182,13 +5307,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 172 and two words
+ * word is nonzero and its value names its place): 0 to 195 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STREAMS_AT + SNAP_STREAMS_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_TMR_AT + SNAP_TMR_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -5206,6 +5331,57 @@ static int selftest_counters(void)
         put32(image, 32 + i * 4, i + 1);
     }
     companion = NULL;
+    print_hcd(image, sizeof(image));
+    comp("[end]\n");
+    return 0;
+}
+
+/*
+ * `-selftest-timer`: task 38.3's decode over a canned counter block: a
+ * polled 32-bit controller whose helper answered the timer and not MSI,
+ * with a release by a power transition and both phases observed; then a
+ * driver from before 38.3, which prints none of it.
+ */
+static int selftest_timer(void)
+{
+    static unsigned char image[32 + (SNAP_TMR_AT + SNAP_TMR_WORDS) * 4];
+    unsigned char *k;
+
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 0);
+    put32(image, 12, 64);
+    put32(image, 16, 32);
+    put32(image, 20, SNAP_TMR_AT + SNAP_TMR_WORDS);
+    put32(image, 24, 32);
+    k = image + 32 + SNAP_TMR_AT * 4;
+    put32(k, 0, SNAP_POLL_NOT_FOUND);
+    put32(k, 1 * 4, 1);
+    put32(k, 2 * 4, 1);
+    put32(k, 3 * 4, 3);
+    put32(k, 5 * 4, 12);
+    put32(k, 6 * 4, 12);
+    put32(k, 7 * 4, 2);
+    put32(k, 8 * 4, 1);
+    put32(k, 9 * 4, 7);
+    put32(k, 10 * 4, 10000);
+    put32(k, 11 * 4, 10032);
+    put32(k, 12 * 4, 156250);
+    put32(k, 13 * 4, 3);
+    put32(k, 14 * 4, 4321);
+    put32(k, 15 * 4, 40);
+    put32(k, 16 * 4, 620);
+    put32(k, 17 * 4, 38);
+    put32(k, 18 * 4, 400);
+    put32(k, 19 * 4, 420);
+    put32(k, 20 * 4, 3);
+    put32(k, 21 * 4, 4);
+    put32(k, 22 * 4, 1);
+    companion = NULL;
+    print_hcd(image, sizeof(image));
+    comp("[pre-38.3]\n");
+    put32(image, 20, SNAP_TMR_AT);
     print_hcd(image, sizeof(image));
     comp("[end]\n");
     return 0;
@@ -9304,6 +9480,9 @@ static const struct {
 } instFiles[] = {
     { "xhci98.sys", 0 },
     { "xhciuas.sys", 0 },
+    { "xhcihlpr.sys", 0 },
+    /* The 2.3.x helper, retired by a 2.4 update: still listed, so an
+     * update's leftover is seen (design record 18 section 15.12, U4). */
     { "xhcimsi.sys", 0 },
     { "usbd.sys", 0 },
     { "usbui.dll", 1 }
@@ -9977,7 +10156,8 @@ static void usage_long(void)
 "                xHCI controllers' and this driver's devnodes with their\n"
 "                Device Manager status, problem code and allocated resources,\n"
 "                and the size, version and SHA-256 of xhci98.sys, xhciuas.sys,\n"
-"                xhcimsi.sys, usbd.sys and usbui.dll - then takes the dump into\n"
+"                xhcihlpr.sys (and xhcimsi.sys, the 2.3.x helper), usbd.sys\n"
+"                and usbui.dll - then takes the dump into\n"
 "                BASE.TXT, .BIN and .PSC.  BASE.DEV is written even when the\n"
 "                controller cannot be opened, and says why there is no dump.\n"
 "                BASE is made from the local clock, in the CURRENT directory:\n"
@@ -10556,6 +10736,8 @@ int main(int argc, char **argv)
             return selftest_msi();
         } else if (strcmp(argv[i], "-selftest-counters") == 0) {
             return selftest_counters();
+        } else if (strcmp(argv[i], "-selftest-timer") == 0) {
+            return selftest_timer();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {

@@ -211,8 +211,10 @@ typedef struct _XHCIHC_COUNTERS {
      * IoConnectInterruptEx pair came from (HCD_MSI_ROUTINES_*); the
      * messages connected and the capability read (XHCI_POLL_DELIVERY_*);
      * the connection's NTSTATUS; the raw list's message descriptors; the
-     * x86 helper's binding (XHCI_MSI86_STATE_*), its looks, the last
-     * look's NTSTATUS and refusal (XHCI_MSI86_REFUSE_*) and the helper's
+     * x86 helper's binding (XHCI_HLPR_STATE_*), its looks, the last
+     * look's NTSTATUS and refusal (XHCI_HLPR_REFUSE_*; until task 38.3
+     * XHCI_MSI86_REFUSE_*, whose 4, a bad routine pair, is now the MSI
+     * service's verdict, HlprMsiVerdict at word 194) and the helper's
      * version; the last requirements filter's sequence, the list's class
      * (XHCI_MSI_CLASS_*), the outcome (XHCI_MSI_OUT_*), the mode it used
      * as read (XHCI_POLL_NOT_FOUND when not found), its configurations,
@@ -345,9 +347,46 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG QemuStreamResyncs;
     ULONG QemuStreamResyncFailed;
     ULONG QemuStreamRestops;
+    /* A finer system timer while polling (task 38.3; design record 15
+     * section 7.2.9), appended contiguous at word 173: XhciPollFineTimer as
+     * read (XHCI_POLL_NOT_FOUND when not found) and in effect; where the
+     * routine came from (XHCI_POLL_TMR_SRC_*) and the timer thread's state
+     * (XHCI_POLL_TMR_THREAD_*); whether a request is held, the holds, the
+     * releases, those a boundary forced, the holds a boundary raced, and
+     * the poll runs whose interval crossed a call; the value asked (100 ns)
+     * and what the last TRUE and the last FALSE returned; the last
+     * release's cause (XHCI_POLL_TMR_CAUSE_*); the time held in this start
+     * in whole ms, saturating; the phase observations, RELEASED then HELD,
+     * each its count, sum in whole ms (saturating) and late intervals; and
+     * the x86 helper's two service verdicts (XHCI_HLPR_SVC_*; record 18
+     * section 15.3). The thread's writes under the controller lock, the
+     * DPC's under it and PollLock, the start's before the thread. */
+    ULONG TmrSwitchRead;
+    ULONG TmrSwitch;
+    ULONG TmrSource;
+    ULONG TmrThread;
+    ULONG TmrHeld;
+    ULONG TmrHolds;
+    ULONG TmrReleases;
+    ULONG TmrReleasesForced;
+    ULONG TmrHoldsRaced;
+    ULONG TmrObsCrossed;
+    ULONG TmrDesired;
+    ULONG TmrActualHeld;
+    ULONG TmrActualReleased;
+    ULONG TmrReleaseCause;
+    ULONG TmrHeldMs;
+    ULONG TmrObsReleasedCount;
+    ULONG TmrObsReleasedSumMs;
+    ULONG TmrObsReleasedLate;
+    ULONG TmrObsHeldCount;
+    ULONG TmrObsHeldSumMs;
+    ULONG TmrObsHeldLate;
+    ULONG HlprMsiVerdict;
+    ULONG HlprTimerVerdict;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 196 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

@@ -1,16 +1,18 @@
 /*
  * test_msi.c - host vectors for message-signalled interrupts' pure half
- * (src\xhci_msi.c, src\xhci_msi86.c; design record 15 section 4.3 and
- * design record 18): the capability read, the requirements list's checked
- * walk, its classification, the strip and the qemu no-line rewrite, the
- * filter record, the helper binding's state machine, the channel's two
- * halves and the trace record.
+ * (src\xhci_msi.c, src\xhci_hlpr.c; design record 15 section 4.3 and
+ * design record 18, section 15 for the helper's revision 13): the
+ * capability read, the requirements list's checked walk, its
+ * classification, the strip and the qemu no-line rewrite, the filter
+ * record, the helper binding's state machine with the timer's event, the
+ * channel V2's two halves with each service's verdicts, and the trace
+ * record.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include "../src/xhci_msi.h"
-#include "../src/xhci_msi86.h"
+#include "../src/xhci_hlpr.h"
 #include "../src/xhci_poll.h"
 #include "test_harness.h"
 
@@ -686,64 +688,89 @@ static void test_record(void)
 
 static void test_bind(void)
 {
-    XHCI_MSI86_BIND b;
+    XHCI_HLPR_BIND b;
 
-    XhciMsi86BindInit(&b);
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_FILTER),
-             XHCI_MSI86_ACT_LOOK, "a filter while unbound looks");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_LOOK_ABSENT), 0,
+    XhciHlprBindInit(&b);
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_FILTER),
+             XHCI_HLPR_ACT_LOOK, "a filter while unbound looks");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_ABSENT), 0,
              "absent: nothing to drop, no further look");
-    CHECK_EQ(b.State, XHCI_MSI86_STATE_ABSENT, "ABSENT");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_START),
-             XHCI_MSI86_ACT_LOOK, "a start while unbound looks");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_LOOK_REFUSED),
-             XHCI_MSI86_ACT_DROP_LOOK, "refused: its reference dropped");
-    CHECK_EQ(b.State, XHCI_MSI86_STATE_REFUSED, "REFUSED");
+    CHECK_EQ(b.State, XHCI_HLPR_STATE_ABSENT, "ABSENT");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_START),
+             XHCI_HLPR_ACT_LOOK, "a start while unbound looks");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_REFUSED),
+             XHCI_HLPR_ACT_DROP_LOOK, "refused: its reference dropped");
+    CHECK_EQ(b.State, XHCI_HLPR_STATE_REFUSED, "REFUSED");
     CHECK_EQ(b.Held, 0, "nothing held");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_FILTER),
-             XHCI_MSI86_ACT_LOOK, "looks again");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_LOOK_FAILED),
-             XHCI_MSI86_ACT_DROP_LOOK, "no IRP: its reference dropped");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_FILTER),
-             XHCI_MSI86_ACT_LOOK, "looks again");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_LOOK_ACCEPTED), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_FILTER),
+             XHCI_HLPR_ACT_LOOK, "looks again");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_FAILED),
+             XHCI_HLPR_ACT_DROP_LOOK, "no IRP: its reference dropped");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_FILTER),
+             XHCI_HLPR_ACT_LOOK, "looks again");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_ACCEPTED), 0,
              "accepted: the reference kept");
-    CHECK_EQ(b.State, XHCI_MSI86_STATE_BOUND, "BOUND");
+    CHECK_EQ(b.State, XHCI_HLPR_STATE_BOUND, "BOUND");
     CHECK_EQ(b.Held, 1, "held");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_START), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_START), 0,
              "a start while bound does not look");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_STOP), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_STOP), 0,
              "stop asks for nothing");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_FILTER), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_FILTER), 0,
              "the rebalance's filter does not look");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_START), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_START), 0,
              "nor its start; the binding kept");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_SURPRISE), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_SURPRISE), 0,
              "surprise removal asks for nothing");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_REMOVE), XHCI_MSI86_ACT_DROP,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_REMOVE), XHCI_HLPR_ACT_DROP,
              "remove drops the held reference");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_REMOVE), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_REMOVE), 0,
              "exactly once");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_FILTER), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_FILTER), 0,
              "and acquires none after");
     CHECK_EQ(b.Looks, 4, "four looks in all");
 
-    XhciMsi86BindInit(&b);
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_STOP), 0, "stop: no look");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_SURPRISE), 0,
+    XhciHlprBindInit(&b);
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_STOP), 0, "stop: no look");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_SURPRISE), 0,
              "surprise: no look");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_LOOK_ABSENT), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_ABSENT), 0,
              "a look result asks for no look");
-    CHECK_EQ(XhciMsi86BindStep(&b, XHCI_MSI86_EV_REMOVE), 0,
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_REMOVE), 0,
              "remove with nothing held drops nothing");
+
+    /* The timer's event (record 18 section 15.4) in every state. */
+    XhciHlprBindInit(&b);
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_TIMER), XHCI_HLPR_ACT_LOOK,
+             "the timer's event while UNSEEN looks");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_ABSENT), 0,
+             "an absent helper: no further look asked");
+    CHECK_EQ(b.State, XHCI_HLPR_STATE_ABSENT, "ABSENT");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_TIMER), XHCI_HLPR_ACT_LOOK,
+             "the timer's event while ABSENT looks (the next start's)");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_REFUSED),
+             XHCI_HLPR_ACT_DROP_LOOK, "a refused answer: its reference dropped");
+    CHECK_EQ(b.State, XHCI_HLPR_STATE_REFUSED, "REFUSED");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_TIMER), XHCI_HLPR_ACT_LOOK,
+             "the timer's event while REFUSED looks");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_LOOK_ACCEPTED), 0,
+             "accepted: the reference kept");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_TIMER), 0,
+             "the timer's event while BOUND does not look");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_REMOVE), XHCI_HLPR_ACT_DROP,
+             "the remove drops the binding's reference");
+    CHECK_EQ(XhciHlprBindStep(&b, XHCI_HLPR_EV_TIMER), 0,
+             "the timer's event while REMOVED does not look");
+    CHECK_EQ(b.Looks, 3, "three looks");
 }
 
-/* ---- the channel -------------------------------------------------------- */
+/* ---- the channel, version 2 (record 18 section 15.3) -------------------- */
 
 static int dummyConnect;
 static int dummyDisconnect;
+static int dummyTimer;
 
-static void fresh(XHCI_MSI86_QUERY *q)
+static void fresh(XHCI_HLPR_QUERY *q)
 {
     UCHAR *p;
     ULONG i;
@@ -752,119 +779,199 @@ static void fresh(XHCI_MSI86_QUERY *q)
     for (i = 0; i < sizeof(*q); i++) {
         p[i] = 0;
     }
-    q->Size = XHCI_MSI86_V1_MIN;
-    q->CallerMajor = XHCI_MSI86_MAJOR;
-    q->CallerVersion = 0x02030000UL;
+    q->Size = XHCI_HLPR_V2_MIN;
+    q->CallerMajor = XHCI_HLPR_MAJOR;
+    q->CallerVersion = 0x02040000UL;
+    q->CallerWants = XHCI_HLPR_SVC_MSI | XHCI_HLPR_SVC_TIMER;
+}
+
+/* A helper on NT 6 answering both services, or with `inject`. */
+static ULONG answer(XHCI_HLPR_QUERY *q, PVOID c, PVOID d, PVOID t,
+                    ULONG inject, ULONG *info)
+{
+    fresh(q);
+    return XhciHlprAnswer(q, XHCI_HLPR_V2_MIN, XHCI_HLPR_V2_MIN, c, d, t,
+                          0x02040000UL, inject, info);
 }
 
 static void test_channel(void)
 {
-    XHCI_MSI86_QUERY q;
+    XHCI_HLPR_QUERY q;
     ULONG info;
+    ULONG msi;
+    ULONG tmr;
     UCHAR *guard;
     ULONG len;
 
-    fresh(&q);
-    CHECK_EQ(XhciMsi86Answer(&q, sizeof(q), sizeof(q), &dummyConnect,
-                             &dummyDisconnect, 0x02030000UL, 0, &info),
-             XHCI_MSI86_ANS_OK, "a V1 query answered");
-    CHECK_EQ(info, XHCI_MSI86_V1_MIN, "the whole block");
-    CHECK_EQ(q.Magic, XHCI_MSI86_MAGIC, "magic");
-    CHECK_EQ(q.Returned, XHCI_MSI86_V1_MIN, "returned");
-    CHECK_EQ(q.CallerVersion, 0x02030000UL, "the caller's field untouched");
-    CHECK_EQ(XhciMsi86Accept(1, info, sizeof(q), &q), XHCI_MSI86_ACCEPTED,
-             "accepted");
-    CHECK_EQ(XhciMsi86Accept(0, info, sizeof(q), &q),
-             XHCI_MSI86_REFUSE_STATUS, "test 1: status");
-    CHECK_EQ(XhciMsi86Accept(1, info - 4, sizeof(q), &q),
-             XHCI_MSI86_REFUSE_LENGTH, "test 2: Information disagrees");
-    CHECK_EQ(XhciMsi86Accept(1, info, info - 4, &q),
-             XHCI_MSI86_REFUSE_LENGTH, "test 2: above the capacity");
-    q.Returned = 0x24;
-    CHECK_EQ(XhciMsi86Accept(1, 0x24, sizeof(q), &q),
-             XHCI_MSI86_REFUSE_LENGTH, "test 2: 0x24 leaves Flags uncovered");
+    CHECK_EQ(sizeof(XHCI_HLPR_QUERY), 0x34, "the V2.0 block is 0x34 bytes");
+    CHECK_EQ(XHCI_HLPR_IOCTL_QUERY_V2,
+             (0x22UL << 16) | (0x902UL << 2) | 3UL, "function 0x902");
 
-    /* Refusals before any read of the block. */
-    CHECK_EQ(XhciMsi86Answer(NULL, 0x28, 0x28, &dummyConnect,
-                             &dummyDisconnect, 0, 0, &info),
-             XHCI_MSI86_ANS_INVALID, "a NULL buffer");
+    CHECK_EQ(answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer, 0,
+                    &info),
+             XHCI_HLPR_ANS_OK, "a V2 query answered");
+    CHECK_EQ(info, XHCI_HLPR_V2_MIN, "the whole block");
+    CHECK_EQ(q.Magic, XHCI_HLPR_MAGIC, "magic 'XHLP'");
+    CHECK_EQ(q.Returned, XHCI_HLPR_V2_MIN, "returned");
+    CHECK_EQ(q.Services, XHCI_HLPR_SVC_MSI | XHCI_HLPR_SVC_TIMER,
+             "both services");
+    CHECK_EQ(q.CallerVersion, 0x02040000UL, "the caller's fields untouched");
+    CHECK_EQ(q.CallerWants, 3, "CallerWants untouched");
+    CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_ACCEPTED, "accepted on NT 6");
+    CHECK_EQ(msi, XHCI_HLPR_SVC_ACCEPTED, "MSI accepted");
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_ACCEPTED, "the timer accepted");
+
+    /* The channel's tests, each failing alone: no service judged. */
+    CHECK_EQ(XhciHlprAccept(0, info, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_STATUS, "status");
+    CHECK_EQ(msi + tmr, 0, "a refusal judges no service");
+    CHECK_EQ(XhciHlprAccept(1, info - 4, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_LENGTH, "Information disagrees");
+    CHECK_EQ(XhciHlprAccept(1, info, info - 4, &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_LENGTH, "above the capacity");
+    q.Returned = 0x30;
+    CHECK_EQ(XhciHlprAccept(1, 0x30, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_LENGTH, "0x30 leaves the timer field uncovered");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer, 0, &info);
+    q.Magic = 0x49534D58UL;
+    CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_IDENTITY, "the V1 magic is refused");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer, 0, &info);
+    q.HelperMajor = 1;
+    CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_IDENTITY, "major 1 is refused");
+
+    /* Windows 2000 and XP: the helper answers the timer alone; the MSI
+     * half is not asked whatever the answer says. */
+    (void)answer(&q, NULL, NULL, &dummyTimer, 0, &info);
+    CHECK_EQ(q.Services, XHCI_HLPR_SVC_TIMER, "a 2000 or XP helper: timer");
+    CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 0, &msi, &tmr),
+             XHCI_HLPR_ACCEPTED, "accepted below NT 6");
+    CHECK_EQ(msi, XHCI_HLPR_SVC_NOT_ASKED, "MSI not asked");
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_ACCEPTED, "the timer accepted");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer, 0, &info);
+    CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 0, &msi, &tmr),
+             XHCI_HLPR_ACCEPTED, "an MSI half offered to a 2000 or XP caller");
+    CHECK_EQ(msi, XHCI_HLPR_SVC_NOT_ASKED, "still not asked");
+
+    /* Each service's three verdicts with the other accepted. */
+    (void)answer(&q, NULL, NULL, &dummyTimer, 0, &info);
+    (void)XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr);
+    CHECK_EQ(msi, XHCI_HLPR_SVC_NOT_OFFERED, "MSI not offered");
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_ACCEPTED, "the timer still accepted");
+    (void)answer(&q, &dummyConnect, NULL, &dummyTimer, 0, &info);
+    CHECK_EQ(q.Services & XHCI_HLPR_SVC_MSI, 0, "a half pair is not offered");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_NULL_DISC, &info);
+    (void)XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr);
+    CHECK_EQ(msi, XHCI_HLPR_SVC_MALFORMED, "MSI bit set, a NULL disconnect");
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_ACCEPTED, "the timer apart");
+    (void)answer(&q, &dummyConnect, &dummyConnect, &dummyTimer, 0, &info);
+    (void)XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr);
+    CHECK_EQ(msi, XHCI_HLPR_SVC_MALFORMED, "an equal pair is malformed");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, NULL, 0, &info);
+    (void)XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr);
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_NOT_OFFERED, "the timer not offered");
+    CHECK_EQ(msi, XHCI_HLPR_SVC_ACCEPTED, "MSI apart");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer, 0, &info);
+    q.SetTimerResolution = q.ConnectEx;
+    (void)XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr);
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_MALFORMED, "a timer pointer equal to ConnectEx");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer, 0, &info);
+    q.Services |= 0xFFFFFFFCUL;
+    CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr),
+             XHCI_HLPR_ACCEPTED, "bits above 1 ignored");
+    CHECK_EQ(msi + tmr, 2, "both still accepted");
+
+    /* Refusals before any read of the block, at the end of an allocation. */
+    CHECK_EQ(XhciHlprAnswer(NULL, 0x34, 0x34, &dummyConnect, &dummyDisconnect,
+                            &dummyTimer, 0, 0, &info),
+             XHCI_HLPR_ANS_INVALID, "a NULL buffer");
     for (len = 0; len < 4; len++) {
         guard = (UCHAR *)malloc(len == 0 ? 1 : len);
-        CHECK_EQ(XhciMsi86Answer(guard + len, len, len, &dummyConnect,
-                                 &dummyDisconnect, 0, 0, &info),
-                 XHCI_MSI86_ANS_TOO_SMALL,
+        CHECK_EQ(XhciHlprAnswer(guard + len, len, len, &dummyConnect,
+                                &dummyDisconnect, &dummyTimer, 0, 0, &info),
+                 XHCI_HLPR_ANS_TOO_SMALL,
                  "a buffer shorter than Size, at the end of an allocation");
         CHECK_EQ(info, 0, "Information 0");
         free(guard);
     }
-    guard = (UCHAR *)malloc(0x27);
-    CHECK_EQ(XhciMsi86Answer(guard, 0x27, 0x27, &dummyConnect,
-                             &dummyDisconnect, 0, 0, &info),
-             XHCI_MSI86_ANS_TOO_SMALL, "0x27 bytes");
+    guard = (UCHAR *)malloc(0x33);
+    CHECK_EQ(XhciHlprAnswer(guard, 0x33, 0x33, &dummyConnect,
+                            &dummyDisconnect, &dummyTimer, 0, 0, &info),
+             XHCI_HLPR_ANS_TOO_SMALL, "0x33 bytes");
+    free(guard);
+    guard = (UCHAR *)malloc(0x28);
+    CHECK_EQ(XhciHlprAnswer(guard, 0x28, 0x28, &dummyConnect,
+                            &dummyDisconnect, &dummyTimer, 0, 0, &info),
+             XHCI_HLPR_ANS_TOO_SMALL, "a V1-sized block");
     free(guard);
     fresh(&q);
-    CHECK_EQ(XhciMsi86Answer(&q, 0x28, 0x2C, &dummyConnect,
-                             &dummyDisconnect, 0, 0, &info),
-             XHCI_MSI86_ANS_INVALID, "unequal lengths");
+    CHECK_EQ(XhciHlprAnswer(&q, 0x34, 0x38, &dummyConnect, &dummyDisconnect,
+                            &dummyTimer, 0, 0, &info),
+             XHCI_HLPR_ANS_INVALID, "unequal lengths");
     fresh(&q);
-    q.Size = 0x30;
-    CHECK_EQ(XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect,
-                             &dummyDisconnect, 0, 0, &info),
-             XHCI_MSI86_ANS_INVALID, "Size disagrees with the length");
+    q.Size = 0x38;
+    CHECK_EQ(XhciHlprAnswer(&q, 0x34, 0x34, &dummyConnect, &dummyDisconnect,
+                            &dummyTimer, 0, 0, &info),
+             XHCI_HLPR_ANS_INVALID, "Size disagrees with the length");
     fresh(&q);
-    q.CallerMajor = 2;
-    CHECK_EQ(XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect,
-                             &dummyDisconnect, 0, 0, &info),
-             XHCI_MSI86_ANS_REVISION, "an unknown major");
+    q.CallerMajor = 1;
+    CHECK_EQ(XhciHlprAnswer(&q, 0x34, 0x34, &dummyConnect, &dummyDisconnect,
+                            &dummyTimer, 0, 0, &info),
+             XHCI_HLPR_ANS_REVISION, "a V1 caller refused");
 
     /* A newer caller's longer block: filled to the helper's own size. */
     {
-        UCHAR big[0x30];
-        XHCI_MSI86_QUERY *b;
+        UCHAR big[0x40];
+        XHCI_HLPR_QUERY *bq;
         ULONG i;
 
         for (i = 0; i < sizeof(big); i++) {
             big[i] = 0xEE;
         }
-        b = (XHCI_MSI86_QUERY *)big;
-        b->Size = 0x30;
-        b->CallerMajor = XHCI_MSI86_MAJOR;
-        CHECK_EQ(XhciMsi86Answer(big, 0x30, 0x30, &dummyConnect,
-                                 &dummyDisconnect, 0, 0, &info),
-                 XHCI_MSI86_ANS_OK, "a longer block answered");
-        CHECK_EQ(info, XHCI_MSI86_V1_MIN, "to the helper's own size");
-        CHECK_EQ(big[0x2C], 0xEE, "nothing written past it");
-        CHECK_EQ(XhciMsi86Accept(1, info, 0x30, b), XHCI_MSI86_ACCEPTED,
-                 "and accepted by that caller");
+        bq = (XHCI_HLPR_QUERY *)big;
+        bq->Size = 0x40;
+        bq->CallerMajor = XHCI_HLPR_MAJOR;
+        CHECK_EQ(XhciHlprAnswer(big, 0x40, 0x40, &dummyConnect,
+                                &dummyDisconnect, &dummyTimer, 0, 0, &info),
+                 XHCI_HLPR_ANS_OK, "a longer block answered");
+        CHECK_EQ(info, XHCI_HLPR_V2_MIN, "to the helper's own size");
+        CHECK_EQ(big[0x34], 0xEE, "nothing written past it");
+        CHECK_EQ(XhciHlprAccept(1, info, 0x40, bq, 1, &msi, &tmr),
+                 XHCI_HLPR_ACCEPTED, "and accepted by that caller");
     }
 
-    /* The qemu injections. */
-    fresh(&q);
-    (void)XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect, &dummyDisconnect, 0,
-                          XHCI_MSI86_INJ_MAJOR2, &info);
-    CHECK_EQ(XhciMsi86Accept(1, info, 0x28, &q), XHCI_MSI86_REFUSE_IDENTITY,
-             "another major refused");
-    CHECK_EQ(q.Flags, XHCI_MSI86_F_INJECTED, "the injection flagged");
-    fresh(&q);
-    (void)XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect, &dummyDisconnect, 0,
-                          XHCI_MSI86_INJ_SHORT, &info);
-    CHECK_EQ(XhciMsi86Accept(1, info, 0x28, &q), XHCI_MSI86_REFUSE_LENGTH,
-             "a short answer refused");
-    fresh(&q);
-    (void)XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect, &dummyDisconnect, 0,
-                          XHCI_MSI86_INJ_NULL_DISC, &info);
-    CHECK_EQ(XhciMsi86Accept(1, info, 0x28, &q), XHCI_MSI86_REFUSE_ROUTINES,
-             "a NULL disconnect refused");
-    fresh(&q);
-    (void)XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect, &dummyDisconnect, 0,
-                          XHCI_MSI86_INJ_MAGIC, &info);
-    CHECK_EQ(XhciMsi86Accept(1, info, 0x28, &q), XHCI_MSI86_REFUSE_IDENTITY,
-             "a wrong magic refused");
-    fresh(&q);
-    (void)XhciMsi86Answer(&q, 0x28, 0x28, &dummyConnect, &dummyConnect, 0, 0,
-                          &info);
-    CHECK_EQ(XhciMsi86Accept(1, info, 0x28, &q), XHCI_MSI86_REFUSE_ROUTINES,
-             "an equal pair refused");
+    /* The qemu injections (record 18 sections 2.1 and 15.12, N3). */
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_MAJOR, &info);
+    CHECK_EQ(XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_IDENTITY, "another major refused");
+    CHECK_EQ(q.Flags, XHCI_HLPR_F_INJECTED, "the injection flagged");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_SHORT, &info);
+    CHECK_EQ(XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_LENGTH, "a short answer refused");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_MAGIC, &info);
+    CHECK_EQ(XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr),
+             XHCI_HLPR_REFUSE_IDENTITY, "a wrong magic refused");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_TIMER_OFF, &info);
+    (void)XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr);
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_NOT_OFFERED, "7: the timer service off");
+    CHECK_EQ(msi, XHCI_HLPR_SVC_ACCEPTED, "7: MSI unchanged");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_TIMER_NULL, &info);
+    (void)XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr);
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_MALFORMED, "8: bit 1 set, pointer NULL");
+    CHECK_EQ(msi, XHCI_HLPR_SVC_ACCEPTED, "8: MSI unchanged");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_MSI_OFF, &info);
+    (void)XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr);
+    CHECK_EQ(msi, XHCI_HLPR_SVC_NOT_OFFERED, "9: the MSI half off");
+    CHECK_EQ(tmr, XHCI_HLPR_SVC_ACCEPTED, "9: the timer unchanged");
 }
 
 /* ---- the trace ---------------------------------------------------------- */
@@ -897,10 +1004,10 @@ static void test_trace(void)
 
 static void test_version(void)
 {
-    CHECK_EQ(XhciMsi86PackVersion("2.3.0.0"), 0x02030000UL, "2.3.0.0");
-    CHECK_EQ(XhciMsi86PackVersion("1.2.300.4"), 0x0102FF04UL,
+    CHECK_EQ(XhciHlprPackVersion("2.3.0.0"), 0x02030000UL, "2.3.0.0");
+    CHECK_EQ(XhciHlprPackVersion("1.2.300.4"), 0x0102FF04UL,
              "a part held to 255");
-    CHECK_EQ(XhciMsi86PackVersion("7"), 0x07000000UL, "one part");
+    CHECK_EQ(XhciHlprPackVersion("7"), 0x07000000UL, "one part");
 }
 
 int main(void)

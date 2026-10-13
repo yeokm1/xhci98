@@ -171,12 +171,13 @@ function Get-InfFacts {
             $mfgTargets += $f[0]
             for ($k = 1; $k -lt $f.Count; $k++) { $mfgTargets += ($f[0] + "." + $f[$k]) }
         }
-        # The x86 MSI helper (design record 18) is added by the 32-bit Vista
-        # and 7 controller section alone (the INF gate's MSIHLP-* rules hold
-        # it there), a path text-mode Setup of 2000 and XP never takes, and it
-        # is no device's function driver; it is not one of the services this
-        # file maps ids to.
-        if ($line -match '^AddService\s*=\s*([^,\s]+)' -and $matches[1] -ine "xhcimsi") { $services[$matches[1].ToLowerInvariant()] = $true }
+        # The x86 helper (design record 18) is no device's function driver
+        # and not one of the services this file maps ids to: the INF installs
+        # it beside the controller's service on the 32-bit NT paths (the INF
+        # gate's HLPR-* rules hold it there), and F6 Setup loads xhci98.sys
+        # alone, keeping the clock tick until the installed system's own
+        # install brings the helper (record 18 section 15.9, decision H4).
+        if ($line -match '^AddService\s*=\s*([^,\s]+)' -and $matches[1] -ine "xhcihlpr") { $services[$matches[1].ToLowerInvariant()] = $true }
     }
     $current = ""
     foreach ($rawLine in ($Text -split "`r`n")) {

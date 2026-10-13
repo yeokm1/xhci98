@@ -77,7 +77,8 @@ design record 18, extended to Windows 2000 and XP and renamed
 and record 18 section 15.13's decisions the same day, and revised T3, T5
 and H2 after review round 1 (section 12, decision 9): `XhciPollIdleMs`
 keeps its default of 50, measured against 500 by the legs (section
-7.2.6a).
+7.2.6a). **The code, 2026-10-14**: section 7.2.14, as built; its legs
+are owed.
 
 ## 1. What is asked, and what is not
 
@@ -2052,6 +2053,84 @@ Answered before review, then revised by the owner after review round 1
 - **T5: (a)**, an update keeps an existing value (section 7.2.6a).
 
 The helper's decisions (H1 to H5) are record 18 section 15.13's.
+
+#### 7.2.14 As built (code, 2026-10-14)
+
+Written with the code (branch `p38-timer`); sections 7.2.1 to 7.2.13
+stand except where this list says otherwise. Nothing of it has run in a
+guest: every leg of section 7.2.12 is owed to the matrix.
+
+- **The files.** `src\hcd_tmr.c` holds the thread (`hcdTmrThread`), its
+  creation (`HcdTmrCreate`, from `hcdStart` after `HcdPollGrant`), the
+  stop's early bar (`HcdTmrStopEarly`, first in `hcdStopBody`) and late
+  join (`HcdTmrJoin`, after `HcdSuspDoneDrain`, before the release), the
+  per-start reset (`HcdTmrStartReset`, right after `HcdCountersStart`,
+  before the delivery is settled and the poller opened), and the
+  producers' entries (`HcdTmrActiveLocked`, `HcdTmrBoundaryLocked`,
+  `HcdTmrGrantLocked`, `HcdTmrSignalLocked`, and `HcdTmrBar` for the two
+  power paths). The routine's lookup is record 18's `HcdHlprTimerRoutine`
+  (`src\hcd_msi86.c`) for both images, so the amd64
+  `MmGetSystemRoutineAddress` row keeps `SITES=hcd_msi86.obj` (section
+  7.2.11 named `hcd_tmr.obj`). The pure half - `XhciPollTmrWant`,
+  `XhciPollTmrStep`, `XhciPollTmrCause`, `XhciPollTmrObserve`,
+  `XhciPollTmrElapsedMs` - is in `src\xhci_poll.c` with its vectors in
+  `test\test_poll.c` (`test_tmr_want`, `test_tmr_step`,
+  `test_tmr_schedules` with an executor model and 20 random sequences,
+  `test_tmr_observe`).
+- **The step's state is set by the step**, before the call is made: the
+  thread calls with no lock held, and the state, the epoch and the
+  counters are recorded after the call in one controller-lock hold. A
+  boundary between the inputs' read and a `TRUE` is counted
+  `TmrHoldsRaced` when the generation read after the call differs from
+  the one held, and released on the next step, which the boundary's event
+  guarantees.
+- **The producers signal only while a thread runs** (`Live`, set before
+  `PsCreateSystemThread` and cleared at the join), so Windows 98 SE and ME,
+  where none is ever made, take no new call on any path. The generation and
+  `TmrActive` are still written there, under the lock they already hold.
+- **A promotion sets `TmrActive`** only when it moved the poller (a
+  cancel and re-arm, or a deadline owed to the running DPC) and its need
+  is the active period; a promotion that left an earlier arm alone changes
+  nothing, the poller being ACTIVE already or not running.
+- **The thread's event** is re-initialised at each start rather than
+  reset (`KeResetEvent` has no import-gate row; no thread waits on it
+  then).
+- **The phase observer runs on every poll delivery**, Windows 98 SE and ME
+  included, where the epoch never moves and every interval counts as
+  RELEASED - the baseline the legs compare against on the same guest.
+  The period "armed for the run" is `PollPeriodLast` read at the DPC's
+  entry under `PollLock`.
+- **`TmrHeldMs`** is summed at each release from the system time's two
+  words (`XhciPollTmrElapsedMs`: 2^32 units are 429,496 ms and 7,296 units
+  over, no 64-bit arithmetic), saturating.
+- **`TmrSource` on 32-bit Windows 2000 and XP** stays 0 until the
+  thread's look, then 1 (the helper's timer service accepted) or 3; Vista
+  and 7 set it at the creation from the binding the start made.
+- **Counters** at words 173 to 193 in section 7.2.9's order - `TmrSwitchRead`,
+  `TmrSwitch`, `TmrSource`, `TmrThread`, `TmrHeld`, `TmrHolds`,
+  `TmrReleases`, `TmrReleasesForced`, `TmrHoldsRaced`, `TmrObsCrossed`,
+  `TmrDesired`, `TmrActualHeld`, `TmrActualReleased`, `TmrReleaseCause`,
+  `TmrHeldMs`, then `TmrObsReleasedCount`, `SumMs`, `Late` and
+  `TmrObsHeldCount`, `SumMs`, `Late` - and record 18's two service
+  verdicts at 194 and 195; 196 words in all. `XHCISNAP` names them and
+  prints a section of its own (`-selftest-timer`).
+- **Notes**: `poll.timer.hold` and `poll.timer.release` (the cause in the
+  top byte, the returned value in the low 24 bits) as section 7.2.9;
+  `poll.timer.look` (the source after the 2000 and XP look),
+  `poll.timer.source` and `poll.timer.thread.failed` at the creation,
+  `poll.timer.join` (the holds made) after the join; `poll.timer.call` and
+  `poll.timer.return` (the start's serial in the top 16 bits, the call's
+  number in the low 16), `qemu.susp.hold`, `qemu.stop.dx` and
+  `qemu.susp.done` (the serial in the top 16 bits, the D-state, then the
+  claiming path - 1 the executor, 2 the PDO's close, 3 the stale settle, 4
+  the unlink - or `PowerPending`) in the `qemu` flavour; the start's
+  `poll.timer.switch.read`, `poll.timer.switch` and `poll.timer.desired`;
+  and the stop's dump carries every counter by its `poll.timer.*` name.
+- **The `qemu` switches** `XhciQemuTmrDelayMs` (held to 10,000 ms) and
+  `XhciQemuSuspHoldDx` are read at each start with the delivery's values
+  (`hcd_ctl.c`, not `hcd_inj.c` as section 7.2.11 said); the executor's
+  skip is in `hcd_susp.c` before its `hcdSuspTake` of a Dx, and
+  `qemu.stop.dx` is `HcdSuspQemuStopNote`, the stop's first step.
 
 ## 8. Counters and log
 

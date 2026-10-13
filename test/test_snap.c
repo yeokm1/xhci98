@@ -18,7 +18,7 @@
 #include "../src/xhci_xstat.h"
 #include "../src/xhci_poll.h"
 #include "../src/xhci_msi.h"
-#include "../src/xhci_msi86.h"
+#include "../src/xhci_hlpr.h"
 #include "../src/xhci98_xfer.h"
 #include "../src/xhci_xpipe.h"
 #include "test_harness.h"
@@ -38,7 +38,7 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 173,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 196,
              "the whole counter block (36.54: 167 to 172)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              1224 + 18 * 64, "counters after the last record");
@@ -60,8 +60,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 173, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 173,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 196, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 196,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -468,16 +468,15 @@ static void test_msi_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead), 114 * 4,
              "stage A's words follow at 114");
 
-    CHECK_EQ(XHCI_MSI86_STATE_UNSEEN, 0, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_ABSENT, 1, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_REFUSED, 2, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_BOUND, 3, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_REMOVED, 4, "helper states, last");
-    CHECK_EQ(XHCI_MSI86_ACCEPTED, 0, "no refusal");
-    CHECK_EQ(XHCI_MSI86_REFUSE_STATUS, 1, "refusals");
-    CHECK_EQ(XHCI_MSI86_REFUSE_LENGTH, 2, "refusals");
-    CHECK_EQ(XHCI_MSI86_REFUSE_IDENTITY, 3, "refusals");
-    CHECK_EQ(XHCI_MSI86_REFUSE_ROUTINES, 4, "refusals, last");
+    CHECK_EQ(XHCI_HLPR_STATE_UNSEEN, 0, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_ABSENT, 1, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_REFUSED, 2, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_BOUND, 3, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_REMOVED, 4, "helper states, last");
+    CHECK_EQ(XHCI_HLPR_ACCEPTED, 0, "no refusal");
+    CHECK_EQ(XHCI_HLPR_REFUSE_STATUS, 1, "refusals");
+    CHECK_EQ(XHCI_HLPR_REFUSE_LENGTH, 2, "refusals");
+    CHECK_EQ(XHCI_HLPR_REFUSE_IDENTITY, 3, "refusals, last (4 retired)");
     CHECK_EQ(XHCI_MSI_CLASS_UNKNOWN, 0, "classes");
     CHECK_EQ(XHCI_MSI_CLASS_NO_INTERRUPT, 1, "classes");
     CHECK_EQ(XHCI_MSI_CLASS_NO_MESSAGE, 2, "classes");
@@ -717,7 +716,31 @@ static void test_counter_tail(void)
              171 * 4, "QemuStreamResyncFailed at 171");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QemuStreamRestops), 172 * 4,
              "QemuStreamRestops at 172");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 173 * 4, "173 words in all");
+    /* 38.3's timer block (xhcisnap.c, tmr_counter_names and
+     * print_hcd_timer). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrSwitchRead), 173 * 4,
+             "TmrSwitchRead at 173");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrSource), 175 * 4,
+             "TmrSource at 175");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrHolds), 178 * 4,
+             "TmrHolds at 178");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrDesired), 183 * 4,
+             "TmrDesired at 183");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrReleaseCause), 186 * 4,
+             "TmrReleaseCause at 186");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrObsReleasedCount),
+             188 * 4, "TmrObsReleasedCount at 188");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrObsHeldCount), 191 * 4,
+             "TmrObsHeldCount at 191");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HlprMsiVerdict), 194 * 4,
+             "HlprMsiVerdict at 194");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HlprTimerVerdict), 195 * 4,
+             "HlprTimerVerdict at 195");
+    CHECK_EQ(XHCI_POLL_TMR_SRC_NOT_FOUND, 3, "timer sources");
+    CHECK_EQ(XHCI_POLL_TMR_THREAD_JOINED, 3, "timer thread states");
+    CHECK_EQ(XHCI_POLL_TMR_CAUSE_STOP, 4, "release causes");
+    CHECK_EQ(XHCI_HLPR_SVC_NOT_ASKED, 4, "service verdicts");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 196 * 4, "196 words in all");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters

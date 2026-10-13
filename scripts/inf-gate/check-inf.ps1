@@ -1106,11 +1106,11 @@ foreach ($m in $models) {
             Add-Failure "PATH-NT" ("[{0}] has no [{1}]. On Win2000 the device installs with no service: Device Manager shows it present and the driver never loads." -f $nt, $svcSection)
             continue
         }
-        # The x86 MSI helper's own AddService on the Vista and 7 controller
-        # section is MSIHLP-SVC's (below), not this rule's: the function
+        # The x86 helper's own AddService on the two 32-bit controller
+        # sections is HLPR-SVC's (below), not this rule's: the function
         # driver's line is still exactly one.
         $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService" | Where-Object {
-            (($_.Value -split ',')[0].Trim()) -ine "xhcimsi" })
+            (($_.Value -split ',')[0].Trim()) -ine "xhcihlpr" })
         if ($addSvc.Count -ne 1) {
             Add-Failure "PATH-NT" ("[{0}] must contain exactly one AddService; found {1}." -f $svcSection, $addSvc.Count)
             continue
@@ -1332,6 +1332,13 @@ $requiredValues = @(
         Default = "1"
         Why     = "roadmap-hcd task 36.6's active poll period in ms (design record 15 section 3), 0 as 1, held to the idle period. The INF writes the 1 under 34.1's don't-overwrite rule"
         DefaultWhy = "1 is the driver's own default (owner, 2026-10-05)"
+    },
+    @{
+        Name    = "XhciPollFineTimer"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.3's finer system timer while polling (design record 15 section 7.2.4), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, beside XhciPollActiveMs, under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on (owner, 2026-10-12, decision T4); Windows 98 SE and ME read it and do nothing"
     },
     @{
         Name    = "XhciWideMap"
@@ -2235,15 +2242,19 @@ foreach ($secName in @($inf.SectionOrder)) {
     }
 }
 
-# ---- MSI-* and MSIHLP-* : message-signalled interrupts on Vista and 7 ------
+# ---- MSI-* and HLPR-* : message interrupts, and the x86 helper ------------
 #
-# Design record 15 section 4.3 and design record 18 (task 36.15). The
-# controller's hardware key asks Windows for one message - the four lines of
-# [Xhci.Msi.AddReg] - on the Vista and 7 controller path of each file and
-# nowhere else; and on the 32-bit file that path alone also installs
-# xhcimsi.sys, the NT 6 x86 MSI helper, as a boot-start service, and asks
-# for a restart (owner, 2026-10-09), because the one x86 xhci98.sys cannot
-# reach IoConnectInterruptEx without it.
+# Design record 15 section 4.3 and design record 18 (tasks 36.15 and 38.3).
+# The controller's hardware key asks Windows for one message - the four
+# lines of [Xhci.Msi.AddReg] - on the Vista and 7 controller path of each
+# file and nowhere else. On the 32-bit file both controller paths of NT -
+# Windows 2000 and XP's [Xhci.Dev.NTx86] and Vista and 7's
+# [Xhci.Dev6.NTx86] - install xhcihlpr.sys, the x86 helper, as a boot-start
+# service (record 18 section 15.8; until task 38.3 xhcimsi.sys, MSIHLP-*,
+# on the Vista and 7 path alone), because the one x86 xhci98.sys can reach
+# neither IoConnectInterruptEx nor ExSetTimerResolution without it; the
+# Vista and 7 path alone asks for a restart (owner, 2026-10-09; on 2000 and
+# XP none, decision H2), and alone retires the 2.3.x helper (decision H3).
 #
 #   MSI-PLACE     an AddReg section writing MessageSignaledInterruptProperties
 #                 is reached from anything but the Vista and 7 controller's
@@ -2251,25 +2262,39 @@ foreach ($secName in @($inf.SectionOrder)) {
 #   MSI-VALUES    MSISupported and MessageNumberLimit are not both written,
 #                 REG_DWORD 1, with FLG_ADDREG_NOCLOBBER (a user's
 #                 MSISupported 0 must survive an update, 34.1's rule).
-#   MSIHLP-AMD64  the 64-bit file names the helper anywhere: the amd64 HCD
-#                 has none.
-#   MSIHLP-SVC    the helper's AddService is not exactly one line in the
-#                 Vista and 7 controller's .Services, flags 0, to an install
-#                 section with ServiceType 1, StartType 0 (boot), ErrorControl
-#                 1 and ServiceBinary %12%\xhcimsi.sys copied by that same
-#                 controller section, to 10,System32\Drivers (the helper is
-#                 not a function driver, so BOTH-DESTDIR's driver-binary
-#                 walk does not see it; whole-branch review, 2026-10-10).
-#   MSIHLP-ONLYNT6 a CopyFiles section that delivers xhcimsi.sys is named by
-#                 any section but the Vista and 7 controller's.
-#   MSIHLP-HW     the 32-bit file asks for a message without installing the
+#   HLPR-AMD64    the 64-bit file names either helper anywhere: the amd64
+#                 HCD has none.
+#   HLPR-PLACE    the helper's service is installed, or a CopyFiles section
+#                 delivering xhcihlpr.sys is named, by any section but the
+#                 two 32-bit NT controller sections (and their .Services).
+#   HLPR-SVC      in each of those .Services, not exactly one helper line,
+#                 flags 0, to an install section with ServiceType 1,
+#                 StartType 0 (boot), ErrorControl 1 and ServiceBinary
+#                 %12%\xhcihlpr.sys, delivered by that same controller
+#                 section's CopyFiles to 10,System32\Drivers (the helper is
+#                 not a function driver, so BOTH-DESTDIR's driver-binary walk
+#                 does not see it; whole-branch review, 2026-10-10); the two
+#                 install sections the same one.
+#   HLPR-HW       the 32-bit file asks for a message without installing the
 #                 helper on the same section.
-#   MSIHLP-REBOOT a Reboot or Restart directive anywhere but the 32-bit Vista
-#                 and 7 controller section, or that section without one while
-#                 it installs the helper.
+#   HLPR-REBOOT   a Reboot or Restart directive anywhere but the 32-bit Vista
+#                 and 7 controller section - [Xhci.Dev.NTx86] included
+#                 (decision H2) - or that section without one while it
+#                 installs the helper.
+#   HLPR-OLD      xhcimsi named anywhere but one DelService=xhcimsi in the
+#                 Vista and 7 controller's .Services, and xhcimsi.sys
+#                 anywhere but the one DelFiles section that controller
+#                 section names, whose one entry carries exactly the flag
+#                 0x00010000 (DELFLG_IN_USE: the loaded file deleted at the
+#                 restart) and whose [DestinationDirs] entry is
+#                 10,System32\Drivers (record 18 section 15.7, as built:
+#                 dirid 12 is W98-DIRID12's refusal, and 10,System32\Drivers
+#                 is the same directory on NT).
 #
-$msiHelperBinary = "xhcimsi.sys"
-$msiHelperService = "xhcimsi"
+$msiHelperBinary = "xhcihlpr.sys"
+$msiHelperService = "xhcihlpr"
+$oldHelperBinary = "xhcimsi.sys"
+$oldHelperService = "xhcimsi"
 $msiController = if ($Arch -eq "amd64") { "Xhci.Dev6.NTamd64" } else { "Xhci.Dev6.NTx86" }
 $msiHw = $msiController + ".HW"
 $msiAddRegSections = New-Object System.Collections.ArrayList
@@ -2317,78 +2342,90 @@ $msiHelperNamed = New-Object System.Collections.ArrayList
 foreach ($secName in @($inf.SectionOrder)) {
     foreach ($e in @(Get-Section $inf $secName)) {
         if ($null -eq $e) { continue }
-        if ($e.Text -match ('(?i)\b' + [regex]::Escape($msiHelperService) + '\b')) {
+        if ($e.Text -match ('(?i)\b(' + [regex]::Escape($msiHelperService) + '|' + [regex]::Escape($oldHelperService) + ')\b')) {
             [void]$msiHelperNamed.Add(@{ Section = $secName; Line = $e.Line })
         }
     }
 }
 if ($Arch -eq "amd64") {
     foreach ($n in $msiHelperNamed) {
-        Add-Failure "MSIHLP-AMD64" ("[{0}] line {1} names the x86 MSI helper. The amd64 HCD reaches IoConnectInterruptEx through MmGetSystemRoutineAddress and has no helper (design record 18)." -f $n.Section, $n.Line)
+        Add-Failure "HLPR-AMD64" ("[{0}] line {1} names the x86 helper. The amd64 HCD reaches IoConnectInterruptEx and ExSetTimerResolution through MmGetSystemRoutineAddress and has no helper (design record 18)." -f $n.Section, $n.Line)
     }
 } else {
-    $msiServices = "$msiController.Services"
-    $helperRows = @()
+    $hlprControllers = @("Xhci.Dev.NTx86", "Xhci.Dev6.NTx86")
+    $hlprServices = @($hlprControllers | ForEach-Object { "$_.Services" })
+    $helperRowsBy = @{}
+    foreach ($svcSec in $hlprServices) { $helperRowsBy[$svcSec.ToLowerInvariant()] = @() }
     foreach ($secName in @($inf.SectionOrder)) {
         foreach ($row in @(Get-DirectiveRaw $inf $secName "AddService")) {
             $svc = ($row.Value -split ',')[0].Trim()
             if ($svc -ieq $msiHelperService) {
-                if ($secName -ine $msiServices) {
-                    Add-Failure "MSIHLP-SVC" ("[{0}] line {1} installs the x86 MSI helper. Only [{2}] may: the helper is for 32-bit Vista and 7 alone (design record 18 section 7)." -f $secName, $row.Line, $msiServices)
+                if ($hlprServices -notcontains $secName) {
+                    Add-Failure "HLPR-PLACE" ("[{0}] line {1} installs the x86 helper. Only [{2}] may: the controllers of 32-bit Windows 2000, XP, Vista and 7 (design record 18 section 15.8)." -f $secName, $row.Line, ($hlprServices -join "] and ["))
                 } else {
-                    $helperRows += $row
+                    $helperRowsBy[$secName.ToLowerInvariant()] += $row
                 }
             }
         }
     }
-    if ($helperRows.Count -gt 1) {
-        Add-Failure "MSIHLP-SVC" ("[{0}] installs the x86 MSI helper {1} times; once." -f $msiServices, $helperRows.Count)
-    }
-    $helperInstalled = $false
-    if ($helperRows.Count -eq 1) {
-        $f = @($helperRows[0].Value -split ',' | ForEach-Object { $_.Trim() })
+    $helperInstalledOn = @{}
+    $installSections = @()
+    for ($ci = 0; $ci -lt $hlprControllers.Count; $ci++) {
+        $ctl = $hlprControllers[$ci]
+        $svcSec = $hlprServices[$ci]
+        if (-not (Test-SectionExists $inf $ctl)) { continue }
+        $rows = @($helperRowsBy[$svcSec.ToLowerInvariant()])
+        if ($rows.Count -ne 1) {
+            Add-Failure "HLPR-SVC" ("[{0}] installs the x86 helper {1} times; exactly once (design record 18 section 15.8)." -f $svcSec, $rows.Count)
+            continue
+        }
+        $f = @($rows[0].Value -split ',' | ForEach-Object { $_.Trim() })
         $hFlags = if ($f.Count -gt 1) { $f[1] } else { "" }
         $hInstall = if ($f.Count -gt 2) { $f[2] } else { "" }
         if ($hFlags -ne "" -and $hFlags -notmatch '^(0x0*0|0)$') {
-            Add-Failure "MSIHLP-SVC" ("the helper's AddService in [{0}] must pass no flags: it is not the device's function driver; found '{1}'." -f $msiServices, $hFlags)
+            Add-Failure "HLPR-SVC" ("the helper's AddService in [{0}] must pass no flags: it is not the device's function driver; found '{1}'." -f $svcSec, $hFlags)
         }
         if ($hInstall -eq "" -or -not (Test-SectionExists $inf $hInstall)) {
-            Add-Failure "MSIHLP-SVC" ("the helper's AddService in [{0}] names install section '{1}', which does not exist." -f $msiServices, $hInstall)
-        } else {
-            $helperInstalled = $true
-            foreach ($req in @(
-                @{ Name = "ServiceType"; Expected = 1; Meaning = "SERVICE_KERNEL_DRIVER" },
-                @{ Name = "StartType"; Expected = 0; Meaning = "SERVICE_BOOT_START, so it is loaded before the controller's AddDevice (design record 18 section 5)" },
-                @{ Name = "ErrorControl"; Expected = 1; Meaning = "SERVICE_ERROR_NORMAL" }
-            )) {
-                $value = @(Get-Directive $inf $hInstall $req.Name)
-                if ($value.Count -ne 1 -or $value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
-                    Add-Failure "MSIHLP-SVC" ("[{0}] {1} must be {2} ({3})." -f $hInstall, $req.Name, $req.Expected, $req.Meaning)
-                }
-            }
-            $bin = @(Get-Directive $inf $hInstall "ServiceBinary")
-            if ($bin.Count -ne 1 -or $bin[0] -ine ('%12%\' + $msiHelperBinary)) {
-                Add-Failure "MSIHLP-SVC" ("[{0}] ServiceBinary must be %12%\{1}." -f $hInstall, $msiHelperBinary)
-            }
-            $deliveredBy = New-Object System.Collections.ArrayList
-            foreach ($cf in @(Get-Directive $inf $msiController "CopyFiles")) {
-                foreach ($e in @(Get-Section $inf $cf)) {
-                    if ($null -eq $e) { continue }
-                    if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { [void]$deliveredBy.Add($cf) }
-                }
-            }
-            foreach ($cf in $deliveredBy) {
-                $destKey = $cf.ToLowerInvariant()
-                if (-not $destDirs.ContainsKey($destKey)) { continue }   # BOTH-DESTDIR reports it
-                $hd = $destDirs[$destKey]
-                if ($hd.Dirid -ne "10" -or $hd.Subdir -ine "System32\Drivers") {
-                    Add-Failure "MSIHLP-SVC" ("[{0}] delivers {1} to '{2},{3}', not '10,System32\Drivers', where its ServiceBinary %12%\{1} loads it from." -f $cf, $msiHelperBinary, $hd.Dirid, $hd.Subdir)
-                }
-            }
-            if ($deliveredBy.Count -eq 0) {
-                Add-Failure "MSIHLP-SVC" ("[{0}] installs the helper's service but its CopyFiles does not deliver {1}." -f $msiController, $msiHelperBinary)
+            Add-Failure "HLPR-SVC" ("the helper's AddService in [{0}] names install section '{1}', which does not exist." -f $svcSec, $hInstall)
+            continue
+        }
+        $installSections += $hInstall.ToLowerInvariant()
+        $helperInstalledOn[$ctl.ToLowerInvariant()] = $true
+        foreach ($req in @(
+            @{ Name = "ServiceType"; Expected = 1; Meaning = "SERVICE_KERNEL_DRIVER" },
+            @{ Name = "StartType"; Expected = 0; Meaning = "SERVICE_BOOT_START, so it is loaded before the controller's AddDevice (design record 18 section 5)" },
+            @{ Name = "ErrorControl"; Expected = 1; Meaning = "SERVICE_ERROR_NORMAL" }
+        )) {
+            $value = @(Get-Directive $inf $hInstall $req.Name)
+            if ($value.Count -ne 1 -or $value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
+                Add-Failure "HLPR-SVC" ("[{0}] {1} must be {2} ({3})." -f $hInstall, $req.Name, $req.Expected, $req.Meaning)
             }
         }
+        $bin = @(Get-Directive $inf $hInstall "ServiceBinary")
+        if ($bin.Count -ne 1 -or $bin[0] -ine ('%12%\' + $msiHelperBinary)) {
+            Add-Failure "HLPR-SVC" ("[{0}] ServiceBinary must be %12%\{1}." -f $hInstall, $msiHelperBinary)
+        }
+        $deliveredBy = New-Object System.Collections.ArrayList
+        foreach ($cf in @(Get-Directive $inf $ctl "CopyFiles")) {
+            foreach ($e in @(Get-Section $inf $cf)) {
+                if ($null -eq $e) { continue }
+                if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { [void]$deliveredBy.Add($cf) }
+            }
+        }
+        foreach ($cf in $deliveredBy) {
+            $destKey = $cf.ToLowerInvariant()
+            if (-not $destDirs.ContainsKey($destKey)) { continue }   # BOTH-DESTDIR reports it
+            $hd = $destDirs[$destKey]
+            if ($hd.Dirid -ne "10" -or $hd.Subdir -ine "System32\Drivers") {
+                Add-Failure "HLPR-SVC" ("[{0}] delivers {1} to '{2},{3}', not '10,System32\Drivers', where its ServiceBinary %12%\{1} loads it from." -f $cf, $msiHelperBinary, $hd.Dirid, $hd.Subdir)
+            }
+        }
+        if ($deliveredBy.Count -eq 0) {
+            Add-Failure "HLPR-SVC" ("[{0}] installs the helper's service but its CopyFiles does not deliver {1}." -f $ctl, $msiHelperBinary)
+        }
+    }
+    if (@($installSections | Sort-Object -Unique).Count -gt 1) {
+        Add-Failure "HLPR-SVC" ("the two controller paths install the helper through different sections ({0}); one service shape serves both (design record 18 section 15.8)." -f (($installSections | Sort-Object -Unique) -join ", "))
     }
     foreach ($secName in @($inf.SectionOrder)) {
         foreach ($cf in @(Get-Directive $inf $secName "CopyFiles")) {
@@ -2401,13 +2438,74 @@ if ($Arch -eq "amd64") {
                     if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { $carries = $true }
                 }
             }
-            if ($carries -and $secName -ine $msiController) {
-                Add-Failure "MSIHLP-ONLYNT6" ("[{0}] copies {1}. Only [{2}] may: Windows 98, ME, 2000 and XP, the root hub and the hubs never get the helper (design record 18 section 7)." -f $secName, $msiHelperBinary, $msiController)
+            if ($carries -and $hlprControllers -notcontains $secName) {
+                Add-Failure "HLPR-PLACE" ("[{0}] copies {1}. Only [Xhci.Dev.NTx86] and [Xhci.Dev6.NTx86] may: Windows 98 and ME, the root hub, the hubs and the composite parents never get the helper (design record 18 section 15.8)." -f $secName, $msiHelperBinary)
             }
         }
     }
-    if ($msiAsked -and -not $helperInstalled) {
-        Add-Failure "MSIHLP-HW" ("[{0}] asks for a message on the 32-bit file without the helper installed on [{1}]: the x86 HCD could not connect it (design record 18 section 7)." -f $msiHw, $msiServices)
+    if ($msiAsked -and -not $helperInstalledOn.ContainsKey($msiController.ToLowerInvariant())) {
+        Add-Failure "HLPR-HW" ("[{0}] asks for a message on the 32-bit file without the helper installed on [{1}.Services]: the x86 HCD could not connect it (design record 18 section 7)." -f $msiHw, $msiController)
+    }
+
+    # HLPR-OLD: the 2.3.x helper retired on the Vista and 7 path, and named
+    # nowhere else (record 18 section 15.7, decision H3).
+    $oldSvcSection = "Xhci.Dev6.NTx86.Services"
+    $delSvc = @()
+    foreach ($secName in @($inf.SectionOrder)) {
+        foreach ($row in @(Get-DirectiveRaw $inf $secName "AddService")) {
+            if ((($row.Value -split ',')[0].Trim()) -ieq $oldHelperService) {
+                Add-Failure "HLPR-OLD" ("[{0}] line {1} installs {2}, the 2.3.x helper; the 2.4 package retires it (design record 18 section 15.7)." -f $secName, $row.Line, $oldHelperService)
+            }
+        }
+        foreach ($row in @(Get-DirectiveRaw $inf $secName "DelService")) {
+            if ((($row.Value -split ',')[0].Trim()) -ieq $oldHelperService) {
+                if ($secName -ine $oldSvcSection) {
+                    Add-Failure "HLPR-OLD" ("[{0}] line {1} deletes {2}. Only [{3}] may: only 32-bit Vista and 7 ever had it." -f $secName, $row.Line, $oldHelperService, $oldSvcSection)
+                } else {
+                    $delSvc += $row
+                }
+            }
+        }
+    }
+    if ((Test-SectionExists $inf "Xhci.Dev6.NTx86") -and $delSvc.Count -ne 1) {
+        Add-Failure "HLPR-OLD" ("[{0}] must carry exactly one DelService={1}, so an update from 2.3.x leaves no {1} service active (decision H3); found {2}." -f $oldSvcSection, $oldHelperService, $delSvc.Count)
+    }
+    $delFilesSecs = @(Get-Directive $inf "Xhci.Dev6.NTx86" "DelFiles")
+    $oldFileSec = ""
+    foreach ($secName in @($inf.SectionOrder)) {
+        foreach ($e in @(Get-Section $inf $secName)) {
+            if ($null -eq $e) { continue }
+            if ($e.Text -match ('(?i)\b' + [regex]::Escape($oldHelperBinary))) {
+                if ($secName -ieq "DestinationDirs") { continue }
+                if ($delFilesSecs -notcontains $secName) {
+                    Add-Failure "HLPR-OLD" ("[{0}] line {1} names {2}. Only the one DelFiles section [Xhci.Dev6.NTx86] names may: the 2.4 package neither carries nor installs it (design record 18 section 15.7)." -f $secName, $e.Line, $oldHelperBinary)
+                } else {
+                    $oldFileSec = $secName
+                }
+            }
+        }
+    }
+    if (Test-SectionExists $inf "Xhci.Dev6.NTx86") {
+        if ($oldFileSec -eq "") {
+            Add-Failure "HLPR-OLD" ("[Xhci.Dev6.NTx86] names no DelFiles section deleting {0}: the 2.3.x helper's file would stay on an updated machine (decision H3)." -f $oldHelperBinary)
+        } else {
+            $entries = @(Get-Section $inf $oldFileSec | Where-Object { $null -ne $_ })
+            if ($entries.Count -ne 1) {
+                Add-Failure "HLPR-OLD" ("[{0}] must hold exactly the one entry for {1}; found {2}." -f $oldFileSec, $oldHelperBinary, $entries.Count)
+            } else {
+                $df = @($entries[0].Text -split ',' | ForEach-Object { $_.Trim() })
+                $dflags = if ($df.Count -ge 4) { ConvertTo-CopyFlags $df[3] } else { $null }
+                if ($df.Count -ne 4 -or $df[0] -ine $oldHelperBinary -or $null -eq $dflags -or $dflags -ne 0x00010000) {
+                    Add-Failure "HLPR-OLD" ("[{0}] line {1}: the entry must be '{2},,,0x00010000' - DELFLG_IN_USE, so the loaded file is deleted at the restart rather than never (Microsoft's DelFiles directive; record 18 section 15.7); found '{3}'." -f $oldFileSec, $entries[0].Line, $oldHelperBinary, $entries[0].Text.Trim())
+                }
+            }
+            $dk = $oldFileSec.ToLowerInvariant()
+            if (-not $destDirs.ContainsKey($dk)) {
+                Add-Failure "HLPR-OLD" ("[{0}] has no [DestinationDirs] entry: the deletion would look in DefaultDestDir, not where {1} was installed." -f $oldFileSec, $oldHelperBinary)
+            } elseif ($destDirs[$dk].Dirid -ne "10" -or $destDirs[$dk].Subdir -ine "System32\Drivers") {
+                Add-Failure "HLPR-OLD" ("[DestinationDirs] sends [{0}] to '{1},{2}'; {3} was installed in 10,System32\Drivers." -f $oldFileSec, $destDirs[$dk].Dirid, $destDirs[$dk].Subdir, $oldHelperBinary)
+            }
+        }
     }
 }
 
@@ -2416,7 +2514,7 @@ foreach ($secName in @($inf.SectionOrder)) {
         if ($null -eq $e) { continue }
         if ($e.Text -match '^\s*(Reboot|Restart)\s*$') {
             if ($Arch -eq "amd64" -or $secName -ine $msiController) {
-                Add-Failure "MSIHLP-REBOOT" ("[{0}] line {1} asks for a restart. Only the 32-bit Vista and 7 controller section [Xhci.Dev6.NTx86] does, because the boot-start helper it installs starts at the next boot (design record 18 section 5); no other install of either file may." -f $secName, $e.Line)
+                Add-Failure "HLPR-REBOOT" ("[{0}] line {1} asks for a restart. Only the 32-bit Vista and 7 controller section [Xhci.Dev6.NTx86] does, because the boot-start helper it installs starts at the next boot and MSI needs it (design record 18 section 5); Windows 2000 and XP get none (decision H2), and no other install of either file may." -f $secName, $e.Line)
             }
         }
     }
@@ -2426,7 +2524,7 @@ if ($Arch -ne "amd64" -and (Test-SectionExists $inf $msiController)) {
     $installsHelper = @(Get-DirectiveRaw $inf "$msiController.Services" "AddService" | Where-Object {
         (($_.Value -split ',')[0].Trim()) -ieq $msiHelperService }).Count -gt 0
     if ($installsHelper -and $rebootRows.Count -ne 1) {
-        Add-Failure "MSIHLP-REBOOT" ("[{0}] installs the boot-start helper and must carry exactly one Reboot directive, so the helper is active from the next boot (owner, 2026-10-09; design record 18 section 5); found {1}." -f $msiController, $rebootRows.Count)
+        Add-Failure "HLPR-REBOOT" ("[{0}] installs the boot-start helper and must carry exactly one Reboot directive, so the helper is active from the next boot (owner, 2026-10-09; design record 18 section 5); found {1}." -f $msiController, $rebootRows.Count)
     }
 }
 
@@ -2524,6 +2622,10 @@ if ($EmitFootprint -ne "") {
         "# directive|<os>|<install section>|<bare directive, e.g. Reboot>",
         "# service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>",
         "# servicevalue|<os>|<service name>|<service install section>|<directive>|<value>",
+        "# servicedelete|<os>|<service name>|<DelService flags>",
+        "#   (a service this install deletes - an earlier package's, record 18 section 15.7)",
+        "# filedelete|<os>|<delfiles section>|<dirid>|<subdir>|<file>|<flags>",
+        "#   (a file this install deletes; flags 0x00010000 defers it to the restart)",
         "# unmodelled|<os>|<section>|<directive>",
         "#",
         "# Verdicts. Each is derived from the flags field, and the derivation is",
@@ -2880,9 +2982,18 @@ if ($EmitFootprint -ne "") {
             # derivation and says so. The install section below gets the same
             # treatment, and an earlier draft scanned only that one.
             foreach ($se in @(Get-Section $inf $svcSection)) {
-                if ($se.Text -notmatch '^\s*([^=]+?)\s*=') { continue }
+                if ($se.Text -notmatch '^\s*([^=]+?)\s*=\s*(.*)$') { continue }
                 $key = $matches[1].Trim()
+                $rest = $matches[2].Trim()
                 if ($key -eq "AddService") { continue }
+                # A service deleted (record 18 section 15.7, task 38.3): a row
+                # of its own, since an uninstall must not bring it back.
+                if ($key -eq "DelService") {
+                    $df = @($rest -split ',' | ForEach-Object { $_.Trim() })
+                    $dflags = if ($df.Count -gt 1 -and $df[1] -ne "") { $df[1] } else { "0" }
+                    $fpLines += ("servicedelete|{0}|{1}|{2}" -f $p.Os, $df[0], $dflags)
+                    continue
+                }
                 $fpLines += ("unmodelled|{0}|{1}|{2}" -f $p.Os, $svcSection, $key)
             }
         }
@@ -2941,9 +3052,31 @@ if ($EmitFootprint -ne "") {
         $installEntries = Get-Section $inf $p.Install
         if ($null -ne $installEntries) {
             foreach ($e in $installEntries) {
-                if ($e.Text -notmatch '^\s*([^=]+?)\s*=') { continue }
+                if ($e.Text -notmatch '^\s*([^=]+?)\s*=\s*(.*)$') { continue }
                 $key = $matches[1].Trim()
+                $rest = $matches[2].Trim()
                 if (@("AddReg", "CopyFiles") -contains $key) { continue }
+                # Files deleted (record 18 section 15.7, task 38.3), each its
+                # section, destination and flags.
+                if ($key -eq "DelFiles") {
+                    foreach ($ds in @($rest -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })) {
+                        $dk = $ds.ToLowerInvariant()
+                        $ddirid = $fpDefaultDirid
+                        $dsub = $fpDefaultSubdir
+                        if ($destDirs.ContainsKey($dk)) {
+                            $ddirid = $destDirs[$dk].Dirid
+                            $dsub = $destDirs[$dk].Subdir
+                        }
+                        foreach ($de in @(Get-Section $inf $ds)) {
+                            if ($null -eq $de) { continue }
+                            $df = @($de.Text -split ',' | ForEach-Object { $_.Trim() })
+                            $dflags = if ($df.Count -gt 3 -and $df[3] -ne "") { $df[3] } else { "0" }
+                            $fpLines += ("filedelete|{0}|{1}|{2}|{3}|{4}|{5}" -f `
+                                $p.Os, $ds, $ddirid, $dsub, $df[0], $dflags)
+                        }
+                    }
+                    continue
+                }
                 $fpLines += ("unmodelled|{0}|{1}|{2}" -f $p.Os, $p.Install, $key)
             }
         }
