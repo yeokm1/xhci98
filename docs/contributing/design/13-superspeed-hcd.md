@@ -5704,7 +5704,7 @@ device or the bench. The guest legs of 36.43 read what QEMU can show.
 ### 10.13 The bus's own ids under `USB\` (task 38.8, 2026-10-13)
 
 **Status: written before any code; the owner's decisions taken
-(2026-10-13, 10.13.12; D14 open), the task kept in `2.4.0.0` with the update costs
+(2026-10-13, 10.13.12), the task kept in `2.4.0.0` with the update costs
 of 10.13.4 and 10.13.5 accepted; reviewed to convergence (five rounds,
 the last with no finding).** The task and what is already decided are roadmap-hcd 38.8's (owner,
 2026-10-13): the four project-owned bases move from a private enumerator to
@@ -6472,11 +6472,11 @@ or through a passthrough after the cut (D13): before it, the SuperSpeed
 half's id rests on the host vectors (the same helper with one argument
 changed) and the INF gate, and the roadmap's checkpoint and the release
 notes say it was not read before the release. **The High Speed USB 2.0
-hub** the roadmap names is not D13's: D14 asks the owner whether QEMU's
-Full Speed hub stands for it before the cut (same id, same code), the
-High Speed reading coming with the USB 3 hub's - whose USB 2.0 half is a
-High Speed hub under `USB\XHCI98_HUB` - after it, or a High Speed hub is
-read before the cut by passthrough.
+hub** the roadmap names is not D13's: by D14 (owner, 2026-10-13) QEMU's
+Full Speed hub stands for it before the cut (same id, same code), and the
+High Speed reading comes with the USB 3 hub's - whose USB 2.0 half is a
+High Speed hub under `USB\XHCI98_HUB` - after it, the checkpoint and the
+release notes saying so with D13's.
 
 #### 10.13.11 Unread, and how it is read
 
@@ -6503,7 +6503,9 @@ read before the cut by passthrough.
 The owner kept the task in `2.4.0.0` with the update costs of 10.13.4 and
 10.13.5, and took D1 to D13 as below; after a review's opinion on each, the owner
 changed D4, D7 and D12 and kept the rest. The options put are kept beside
-each. D14, from the review's second round, is open.
+each. D14, from the review's second round, the owner took as (a); and the
+owner accepted the review's narrowing of D8, the tool listing only on
+Windows 98 SE and ME in this release (2026-10-13).
 
 | | Question | Options put | Decided |
 |---|---|---|---|
@@ -6520,7 +6522,7 @@ each. D14, from the review's second round, is open.
 | D11 | If the refused device id moves: does the tool also remove old refused devnodes? | (a) yes; (b) no | **left to NOX.1** (38.12 deferred), whose decision 4 is that the tool leaves them (10.13.9) |
 | D12 | An F6 leg (32-bit XP, with a hub), since both `txtsetup.oem` files change | (a) add it; (b) the gates suffice | **(a), widened** (owner, after the review's opinion): F6 legs on Windows 2000, 32-bit XP and XP x64, each with the input behind the hub and a composite device bound (10.13.10) |
 | D13 | The USB 3 hub the roadmap's legs name, which no guest can present | (a) host vectors and the gate, the reading on the owner's bench or a passthrough after the cut; (b) a passthrough leg before the cut | **(a), unchanged** after the review's opinion: the USB 3 hub is read after the cut, and the roadmap's checkpoint and the release notes say so (10.13.10) |
-| D14 | **Open** (from the review's second round): the roadmap's legs name a USB 2.0 hub; QEMU's is Full Speed. Does QEMU's Full Speed hub stand for it before the cut? | (a) yes, the same id and code; the High Speed reading with the USB 3 hub's after the cut, whose USB 2.0 half is one; (b) a High Speed hub by passthrough before the cut | proposed **(a)**, the checkpoint and the release notes saying so with D13's |
+| D14 | **(a)**, owner 2026-10-13 (from the review's second round): the roadmap's legs name a USB 2.0 hub; QEMU's is Full Speed. Does QEMU's Full Speed hub stand for it before the cut? | (a) yes, the same id and code; the High Speed reading with the USB 3 hub's after the cut, whose USB 2.0 half is one; (b) a High Speed hub by passthrough before the cut | proposed **(a)**, the checkpoint and the release notes saying so with D13's |
 
 ## 11. The transfer-buffer policy (task 25.7)
 
