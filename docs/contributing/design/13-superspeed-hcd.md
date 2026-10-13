@@ -1809,8 +1809,9 @@ read follows a `RESET_PIPE`'s new context.
 
 ### 6.11 The Windows 98 SE and ME silent install (task 38.2, 2026-10-13)
 
-**Status: design, for the review loop and the owner's approval; no code
-yet. Codex review round 1 applied (2026-10-13).** The rule and the
+**Status: design approved by the owner (2026-10-13) after three Codex
+review rounds, the third with no P1 or P2; code follows. O1 stays a fact
+for the first 98 SE leg to read.** The rule and the
 decisions are the owner's (roadmap-hcd task 38.2, 2026-10-12 and
 2026-10-13, the driver's own gate of 2026-10-13 included) and are not
 reopened here; what this section adds is where each part lives in the bus,
