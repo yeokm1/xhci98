@@ -1390,13 +1390,19 @@ that will decide whether it changes.
   controller lock, at DISPATCH_LEVEL. A promotion (`HcdPollPromoteLocked`)
   arms the active period from a doorbell, also at DISPATCH_LEVEL.
 - **The other paths that look at the ring under a poll delivery**
-  (section 7.1): the controller thread's pass (`HcdPollThreadPass`, about
-  every `HCD_POLL_MS`, 100 ms, or sooner when woken), the frame timer's
-  DPC (`hcdFrameDpc`, `HCD_FRAME_SAMPLE_MS`, 500 ms), and the tolerance
-  clock's DPC (`hcdTolDpc`, `XHCI_TOL_TICK_MS`, 100 ms, the backstop's
-  peek; `src/hcd_svc.c`, `src/xhci_tol.h`). Each queues the drain on a
-  hit. So the poll timer is not the only bound on how long an event
-  waits, and its period is not the driver's whole idle activity.
+  (section 7.1). Two peek and queue the drain on any hit: the controller
+  thread's pass (`HcdPollThreadPass`, about every `HCD_POLL_MS`, 100 ms,
+  or sooner when woken) and the frame timer's DPC (`hcdFrameDpc`,
+  `HCD_FRAME_SAMPLE_MS`, 500 ms). The tolerance clock's DPC (`hcdTolDpc`,
+  `XHCI_TOL_TICK_MS`, 100 ms) is not a peek of that kind: its backstop,
+  `XhciTolBackstop` (`src/xhci_tol.c`), does nothing at `XhciTolerance`
+  0, returns nothing on its first sight of a pending event, and asks for a
+  drain only once the same index, cycle, drain generation and start
+  generation have stayed stale for `XHCI_TOL_BACKSTOP_TICKS`
+  (`XHCI_TOL_TICKS(100)`, four ticks; `src/xhci_tol.h`) - a stale-event
+  detector, not a scheduler. So besides the poll timer, an event is
+  bounded by the next controller-thread pass or frame-timer DPC, and the
+  poll timer's period is not the driver's whole idle activity.
 - **The controller thread** (`hcdThread`, `src/hcd_ctl.c`) is created by
   `hcdThreadStart` inside `hcdStartBody` before `ControllerStarted` is
   set and before the PnP path's grant (`hcdStart`, `src/hcd_pnp.c`), and
@@ -1672,10 +1678,12 @@ be read, kept apart:
   than the idle period, section 6.1), a SuperSpeed device's Function
   Wake (a Device Notification Event, `hcd_susp.c` ~2435, with
   `XhciSelectiveSuspend` 1), and a USB 2.0 remote wake each reach the
-  driver at whichever of the poll timer, the controller thread's peek,
-  the tolerance clock's peek or the frame timer's peek sees the event
-  first. The nominal periods are scheduling intentions, quantised to the
-  clock, not latency bounds. A remote wake of a device while the
+  driver through the first path that both sees the event and schedules a
+  drain: the poll timer, the controller thread's peek or the frame
+  timer's peek (section 7.2.2), or - at `XhciTolerance` 1 and only after
+  the event has stayed undrained for the backstop's four ticks - the
+  tolerance clock. The nominal periods are scheduling intentions,
+  quantised to the clock, not latency bounds. A remote wake of a device while the
   controller stays in D0 is distinct from the controller's own resume
   from D3 (section 7.2.6's D0 path), and is measured apart.
 - **The ACTIVE window and the timer's toggles.** A longer idle period
@@ -1695,12 +1703,20 @@ be read, kept apart:
 **The measurement** (leg T8, section 7.2.12): on every target in mode 2 -
 98 SE and ME included - at `XhciPollIdleMs` 50 and 500, the idle guest's
 CPU over a fixed minute; the time from a plug to a working device at a
-root port and behind an external hub; a Function Wake and a USB 2.0
-remote wake with `XhciSelectiveSuspend` 1 (record 14's test client),
-each with the controller in D0; and the finer timer's holds and releases
-per minute (`TmrHolds`, `TmrReleases`) under a moving mouse and under
-intermittent storage bursts. The default is decided on that reading, by
-the owner.
+root port and behind an external hub; and the finer timer's holds and
+releases per minute (`TmrHolds`, `TmrReleases`) under a moving mouse and
+under intermittent storage bursts. **The wakes are not all readable on
+the test environment** (round 2, finding D): QEMU generates no Device
+Notification Event (record 14 section 8.12, read from QEMU 11.1.0's
+`hcd-xhci.c`), so a Function Wake's latency cannot be read on a guest,
+and a zero Function Wake counter is not a reading; a USB 2.0 remote wake
+can be (QEMU moves a port in U3 to Resume with PLC on a device's
+wakeup, the same section), with `XhciSelectiveSuspend` 1 and record 14's
+test client, on the targets where that client exists - none is
+provisioned for x64, so the x64 wake readings are owed unless one is
+built. Function Wake stays a bench reading or unread, and is said so. The
+default is decided by the owner on what was read, with what was not read
+named beside it.
 
 **An update keeps an existing value** (owner, 2026-10-13, decision T5:
 option (a)). Both INFs write `XhciPollIdleMs` under
@@ -1765,21 +1781,34 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
   helper, 2 the system (`MmGetSystemRoutineAddress`), 3 not found;
 - `TmrThread`: 0 not created, 1 running, 2 creation failed, 3 joined;
 - `TmrHeld` (0 or 1), `TmrHolds`, `TmrReleases`, `TmrReleasesForced`
-  (by a generation), `TmrHoldsRaced`;
+  (by a generation), `TmrHoldsRaced`, `TmrObsCrossed`;
 - `TmrDesired` (100 ns), `TmrActualHeld` (what the last `TRUE`
   returned), `TmrActualReleased` (what the last `FALSE` returned);
 - `TmrReleaseCause` of the last release: 1 the poller left ACTIVE, 2
   parked or revoked, 3 barred (a power transition), 4 the stop;
 - `TmrHeldMs`, the time held in this start, in whole ms, saturating;
-- **phase observations** (round 1, finding 6): the poll intervals that
-  `XhciPollObserve` measures are also kept per phase - while this
-  controller's request is HELD and while it is RELEASED - as a count in
-  each of five bins (below 2 ms, 2 to 4, 5 to 11, 12 to 19, 20 and
-  above) per phase, ten words, monotonic within a start. A leg reads a
-  phase's distribution as the difference of two snapshots taken around
-  it, so an interval seen before a release never counts after it, as the
-  start-long minimum and maximum (`PollIntervalMinMs`,
-  `PollIntervalMaxMs`) cannot.
+- **phase observations** (round 1, finding 6; round 2, finding B): the
+  interval between two poll runs counts only when it is a **short
+  request** - the period armed for it was at most 5 ms - and the
+  request's phase (HELD or RELEASED), the period armed, and the
+  controller's start were the same at both runs; any other interval,
+  one crossing a hold or release in particular, is discarded and counted
+  (`TmrObsCrossed`). Per phase, three words: `ObsCount`, `ObsSumMs`
+  (whole ms, saturating) and `ObsLate` (observed at least 3 ms longer
+  than the period armed). Monotonic within a start; a leg reads a phase
+  as the difference of two snapshots around it, so an interval from
+  before a release never counts after it, which the start-long minimum
+  and maximum (`PollIntervalMinMs`, `PollIntervalMaxMs`) cannot. Only a
+  short request shows the clock: on an idle bus the poller asks 50 ms,
+  which a fine and a coarse clock both serve within a tick.
+- **The released-phase stimulus.** A request is RELEASED while the
+  poller is PERIODIC, so a short PERIODIC period is the controlled way to
+  read the clock with this controller's request given back: a resting
+  HID device whose pending interrupt-IN, under `XhciIntervalCap` (or the
+  device's own interval) where needed, gives a PERIODIC period of 2 to
+  5 ms, recorded from `PollStateLast` and `PollPeriodLast`. The same
+  stimulus with the switch 0 is the baseline. It needs no ACTIVE state
+  and so never takes the request itself.
 
 The log's notes: `poll.timer.hold` (the value returned) and
 `poll.timer.release` (the cause in the top byte, the value returned below
@@ -1833,7 +1862,8 @@ beside `XhciPollObserve`); `src/hcd_power.c` (the bar beside each
 successful start); `src/hcd_ctl.c` (the switch's read, the per-start
 reset before `HcdPollOpen`, the stop's early bar and late join);
 `src/hcd.h` (`hc->Tmr`); `src/xhci_counters.h` and `src/hcd_log.c` (the
-counters and the dump); `src/hcd_inj.c` (`XhciQemuTmrDelayMs`, `qemu`
+counters, the dump and the `poll.timer.join` note); `src/hcd_inj.c` and
+`src/hcd_susp.c` (`XhciQemuTmrDelayMs` and `XhciQemuSuspHoldDx`, `qemu`
 only); both INFs (the switch's row on every path); `src/sources` (the
 new object); `scripts/import-gate/xhci98-imports-amd64.allow` (the
 `MmGetSystemRoutineAddress` row's `SITES` gains `hcd_tmr.obj`; the 32-bit
@@ -1859,19 +1889,31 @@ as snapshot differences (section 7.2.9).
   (`runs/run-36.md`, the P rows): the copy rate, the tone's span and
   gaps, the HELD phase's distribution against the switch-0 baseline,
   `TmrActualHeld`, and the guest's idle CPU.
-- **T2, the release.** After T1's copy, a minute idle: `TmrHeld` 0,
-  `TmrReleaseCause` 1, `TmrHolds` equal to `TmrReleases`, and the
-  RELEASED phase's distribution over that minute matching the switch-0
-  baseline (or, where it does not, the baseline taken again to show other
-  software, not this driver, holds the clock); then a mouse moved (held
-  while it moves) and left still (released one idle period later).
+- **T2, the release.** After T1's copy, the released-phase stimulus
+  (section 7.2.9) for a minute: `TmrHeld` 0, `TmrReleaseCause` 1,
+  `TmrHolds` equal to `TmrReleases`, and the RELEASED phase's `ObsLate`
+  share and mean (`ObsSumMs` / `ObsCount`) against the same stimulus with
+  the switch 0 in the same boot; where the two disagree, the baseline is
+  taken again to tell other software holding the clock from this driver.
+  Then a mouse moved (held while it moves) and left still (released one
+  idle period later).
 - **T3, the stop.** A disable while a copy runs, and a surprise
   removal (QEMU `device_del`, as record 18's L3): the stop's dump with
   `TmrHeld` 0 and cause 4, no bugcheck, and the next start's counters
-  from zero. Then the same disable with `XhciSelectiveSuspend` 1, a
-  child held in D2 by record 14's test client (its D-IRP pended), and
-  `XhciQemuTmrDelayMs` 2000: the stop completes, the child's D-IRP is
-  completed before the join, and the join waits out the delayed call.
+  from zero. Then the stop with a child's power IRP really outstanding
+  (round 2, finding C): a child put in D2 does not keep its D-IRP pended
+  (admission publishes the Dx and the executor completes it), so the
+  `qemu` flavour gains `XhciQemuSuspHoldDx` 1, under which the executor
+  claims a child's Dx and leaves it unsettled in its slot - normal
+  settlement held, the stop's unlink settlement unchanged - with a log
+  note at the hold (`qemu.susp.hold`). With it, `XhciSelectiveSuspend`
+  1, record 14's test client asking D2, `XhciQemuTmrDelayMs` 2000 and a
+  hold taken: the leg first shows the IRP outstanding when the stop
+  begins (the slot's `PowerPending` in the stop's dump), then reads, in
+  the log's order, the child's completion at its unlink, the timer
+  thread's `poll.timer.release` with the delayed call's return, and the
+  join (`poll.timer.join`, a note the stop writes after it). A child
+  already settled in D2 does not count as this leg.
 - **T4, S3, S4 and S5.** Where a guest sleeps (XP, Vista and 7 hibernate
   and the guests that stand by, as task 36.28's legs): a copy running,
   then the transition; after the resume `TmrReleaseCause` 3 from before
@@ -1882,9 +1924,15 @@ as snapshot differences (section 7.2.9).
   7 x86 for one hibernate each. A removal attempted around a transition
   where a guest offers one (section 7.2.7).
 - **T5, two controllers.** Two `qemu-xhci` controllers in mode 2 on 7
-  x86 and 2000, asking 1 ms and 4 ms (`XhciPollActiveMs` 1 and 4): both
-  active, then A idled - B's HELD phase over the window after A's release
-  unchanged - then both idle, against the switch-0 baseline.
+  x86 and 2000, A asking 1 ms and B 4 ms (`XhciPollActiveMs` 1 and 4),
+  A carrying the released-phase stimulus whenever it is not copying.
+  Read, each a window of its own: B alone holding (A released: A's
+  RELEASED observations calibrate what B's 4 ms request leaves the clock
+  at); A and B both holding (A's HELD observations); A released while B
+  holds (A's RELEASED again); both released (against the switch-0
+  baseline). How the kernel combines two requests from one image is
+  unread, so the leg records what each window shows and states no
+  expectation as a fact; section 7.2.8's reopening rule applies to it.
 - **T6, without the routine.** A cold boot with the helper's service
   disabled before the boot, on 32-bit 2000, XP and 7: `TmrSource` 3, the
   tick, nothing else changed. (Deleting the file of a running helper
@@ -1896,10 +1944,12 @@ as snapshot differences (section 7.2.9).
 - **T8, the idle period** (section 7.2.6a): every target in mode 2, 98
   SE and ME included, at `XhciPollIdleMs` 50 and 500 - the idle guest's
   CPU over a minute; a plug to a working device at a root port and
-  behind an external hub; a Function Wake and a USB 2.0 remote wake with
-  `XhciSelectiveSuspend` 1, controller in D0; holds and releases per
-  minute under a moving mouse and under intermittent copies; and, on an
-  update from `2.3.1.0`, the value kept.
+  behind an external hub; a USB 2.0 remote wake with
+  `XhciSelectiveSuspend` 1 and the controller in D0, on the targets
+  where record 14's test client runs (x64 owed); a Function Wake marked
+  unread on QEMU (section 7.2.6a); holds and releases per minute under a
+  moving mouse and under intermittent copies; and, on an update from
+  `2.3.1.0`, the value kept.
 
 #### 7.2.13 The owner's decisions (2026-10-13)
 
@@ -2434,6 +2484,19 @@ round-1 commit:
 | 11 | P3: the logging bound was false | Section 7.2.9 |
 | 12 | P3: an inference stated as a reading | Section 7.2.2 |
 | 13 | P3: the kit substitutes a target rather than refusing | Record 18 section 15.10 |
+
+Round 2 (`50c0dfc3`, same thread): 1 P1, 3 P2, 2 P3. Round-1 findings 1,
+3 to 5 and 7 to 13 confirmed closed; 2 and 6 reopened narrower. All
+taken:
+
+| # | Finding | Where answered |
+|---|---|---|
+| A | P1: the tolerance backstop is a stale-event detector (tolerance 1, four ticks), not a peek | Sections 7.2.2 and 7.2.6a |
+| B | P2: an idle 50 ms request cannot show the clock; boundary-crossing intervals counted | Section 7.2.9: short-request phase observations, crossings discarded, a PERIODIC released-phase stimulus; legs T2 and T5 by windows, T5 with no stated expectation |
+| C | P2: a child in D2 has no pended D-IRP | Leg T3: `XhciQemuSuspHoldDx`, the IRP shown outstanding, the ordered notes |
+| D | P2: QEMU raises no Function Wake; no x64 test client | Section 7.2.6a and leg T8: Function Wake unread on QEMU, the x64 wakes owed |
+| E | P3: WATCH creates a parked thread | Record 18 section 15.4 |
+| F | P3: the header gate cannot show the target | Record 18 section 15.10: the claim limited; the build log's target line and library path checked |
 
 ## 14. What changes in the documents
 

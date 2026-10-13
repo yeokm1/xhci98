@@ -1712,7 +1712,7 @@ the answers written in the same day. Review round 1 is recorded with
 record 15's (its section 13.6, the same thread); its record 18 findings
 (5, 7 to 10, 13) are taken in sections 15.4, 15.7, 15.10, 15.11 and
 15.12, and the owner then withdrew the forced restart on 2000 and XP
-(H2).
+(H2). Round 2's E and F are taken in sections 15.4 and 15.10.
 
 ## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.4)
 
@@ -1888,9 +1888,11 @@ start; the timer's "at most once per start" is a latch of its own in
 - **Windows 2000 and XP (32-bit):** the filter does nothing below NT 6
   (unchanged), so the only look is the timer's: made by the timer thread,
   at PASSIVE_LEVEL, at most once per start, the first time it would hold
-  and has no routine (record 15 section 7.2.5). A controller that never
-  polls has no timer thread and never looks, so a 2000 or XP machine
-  whose line works opens the helper not at all. The look itself is
+  and has no routine (record 15 section 7.2.5). A controller under a line
+  in mode 0 has a parked timer thread (the WATCH role, in case the line
+  moves to polling), but it looks for nothing until the delivery is poll
+  and a hold is wanted; a controller that never polls never looks, so a
+  2000 or XP machine whose line works opens the helper not at all. The look itself is
   section 3.2's IRP, unchanged but for the code and the block. On NT 5
   nothing else steps the binding between the start and the stop: the
   filter and the start's look are NT 6's, and the remove comes after the
@@ -2037,8 +2039,10 @@ accepts `WIN7`, `WLH`, `WXP` and `WNET` (its usage line), and for an
 `makefile.new` prints that the value is unknown and substitutes the
 latest target rather than stopping (~1032 to ~1052; static: read from
 `tools\WinDDK71\bin`, 2026-10-13), so a Windows 2000 target cannot be
-selected through it and a mistaken one would build silently for Windows
-7 - which the header gate below is there to catch. So:
+selected through it, and a mistaken value would build silently for
+Windows 7 - which no field of the image's header shows, since
+`SUBSYSTEM_VERSION=5.00` overrides the subsystem whatever the target
+(`makefile.new` ~3195). So:
 
 - **The environment: `WXP`, x86** (`setenv <WDK> fre|chk x86 WXP
   no_oacr`), the oldest the kit has, for every flavour: its libraries are
@@ -2067,7 +2071,11 @@ selected through it and a mistaken one would build silently for Windows
   `dumpbin /headers` of each helper link and refuses a subsystem other
   than `native` 5.00, a section alignment other than the `WXP` driver
   default (0x80), or a zero checksum, so a toolchain change cannot move
-  them unseen.
+  those fields unseen; that is all the header shows (round 2, finding F).
+  **The target itself is checked in the build's log**: `build-driver.cmd`
+  refuses a helper build whose log lacks the kit's own line
+  `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` (`makefile.new` ~1121) or
+  whose link names any library path other than `lib\wxp\i386`.
 
 **Every import of the linked libraries is audited against 2000 and XP**:
 the list is read from the first link's `dumpbin /imports`, not from this
