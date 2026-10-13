@@ -2049,9 +2049,10 @@ both sides of it.
   names.ps1` and `xhcisnap/README.md` with them. `XHCISNAP` prints one line
   under the controller's identity, for example `xHCI 0.96 (HCIVERSION
   0096h): accepted below 1.0 (XhciAccept096 1); TD Size in 1 KiB units`,
-  or `xHCI 1.00: XhciAccept096 1, not applicable`. A refused start's
-  counters reach DebugView only through the flush above, since a failed
-  start leaves no device for `XHCISNAP` to open.
+  or `xHCI 1.00: XhciAccept096 1, not applicable`. Whether `XHCISNAP`
+  can open a controller whose start failed is not read on any target, so
+  a refused start's counters are carried by the flush above, which does
+  not depend on it.
 - **`XHCIQUAL`.** `report.c` follows the HCIVERSION line, for a version
   below 1.0, with what the driver does with it: from 0.96, "xhci98 drives it
   with XhciAccept096 at its default 1 (TD Size in 1 KiB units; untested
