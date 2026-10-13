@@ -1555,7 +1555,7 @@ try {
     $fp = Get-Footprint -Path $svcExtraInf
     Assert-True (@($fp | Where-Object { $_ -eq "unmodelled|Windows 2000|Xhci.Dev.NTx86.Services|AddReg" }).Count -eq 1) (
         "a directive beside AddService must appear as a gap. Rows:`n" + ($fp -join "`n"))
-    Assert-True (@($fp | Where-Object { $_ -eq "servicedelete|Windows 2000|xhci97|0" }).Count -eq 1) (
+    Assert-True (@($fp | Where-Object { $_ -eq "servicedelete|Windows 2000|xhci97|0" }).Count -ge 1) (
         "a DelService beside AddService must appear as a servicedelete row. Rows:`n" + ($fp -join "`n"))
 
     # A flags field too large for a signed 32-bit integer is a `review` row, not

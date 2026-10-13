@@ -92,7 +92,7 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | Directory | For | Contents |
 |---|---|---|
 | `release-x86\` | 32-bit Windows: 98 SE, ME, 2000, XP, Vista, 7 | the drivers, the helper and the extras below |
-| `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcimsi.sys`, plus `xhci98-test.cer` |
+| `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcihlpr.sys`, plus `xhci98-test.cer` |
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
 | `tools\xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier, and `QUALREP.BAT`, the reading a bug report asks for |
 | `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off |
@@ -106,7 +106,7 @@ In each driver directory:
 
 - `xhci98.sys` and `xhci98.inf`: the controller driver.
 - `xhciuas.sys` and `xhciuas.inf`: the UAS storage driver.
-- `xhcimsi.sys` (32-bit only): the MSI helper. 32-bit Vista and 7 need this small second driver to give the controller a message-signalled interrupt. The INF installs it on those two systems only, as a service that starts at boot, which is why they ask for a restart. Every other system ignores it.
+- `xhcihlpr.sys` (32-bit only): the helper. 32-bit Windows 2000, XP, Vista and 7 use this small second driver for a finer system timer while the controller is polled (see "Polling and message-signalled interrupts"), and 32-bit Vista and 7 also to give the controller a message-signalled interrupt. The INF installs it on those four systems, as a service that starts at boot; Vista and 7 ask for a restart for it, 2000 and XP do not, and the finer timer starts there at the next boot. Windows 98 SE and ME ignore it. Releases `2.3.0.0` and `2.3.1.0` carried the MSI half alone, as `xhcimsi.sys`, for Vista and 7 only.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
 
@@ -167,7 +167,7 @@ Install the new version over the old one with Update Driver on "xHCI98 USB 3.x e
 
 - **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
 - **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory, and pick "xHCI98 USB 3.x eXtensible Host Controller", the first of the three models listed.
-- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where it asks for a restart, for the MSI helper `xhcimsi.sys`. On Vista x64 and 7 x64 the new driver, like the first install, runs in test-signing mode or on a start with driver signature enforcement disabled.
+- **XP, XP x64, Vista and 7**: the update takes effect at once with no restart, after one unsigned-driver warning; except on 32-bit Vista and 7, where it asks for a restart, for the helper `xhcihlpr.sys`; an update from `2.3.0.0` or `2.3.1.0` there also removes the old helper `xhcimsi.sys`, whose file goes at that restart. On 32-bit 2000 and XP the update installs `xhcihlpr.sys` with no restart asked for; its finer timer starts at the next boot. On Vista x64 and 7 x64 the new driver, like the first install, runs in test-signing mode or on a start with driver signature enforcement disabled.
 - **Vista and 7: a build with the same `DriverVer` is not taken.** If the new INF is identical to the installed one, Have Disk reuses the package already in Windows' driver store and keeps the old `xhci98.sys`. Replace the `.sys` by hand, or use a build with a newer `DriverVer`.
 
 Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
@@ -207,6 +207,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling, `3` a message-signalled interrupt only (see "Polling and message-signalled interrupts") | `0` | `3` | `0` | `0` |
 | `XhciPollIdleMs` | While polling, the period with nothing outstanding, in ms | `1` | `5000` | `50` | `50` |
 | `XhciPollActiveMs` | While polling, the shortest period with transfers outstanding, in ms (with only a mouse's or keyboard's periodic transfers outstanding, the endpoint's interval is used, held between this and the idle period) | `1` | `XhciPollIdleMs` | `1` | `1` |
+| `XhciPollFineTimer` | While polling at `XhciPollActiveMs`, a finer system clock asked of Windows (2000 to 7; Windows 98 SE and ME ignore it); `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | `0` |
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | `0` |
 | `XhciSilentInstall` | Windows 98 SE and ME only: `1` lets a device whose class is in the `SilentClasses` list install with no wizard; anything else is off. `silent-on.bat` in `tools\silent\` merges the list and sets `1`, `silent-off.bat` sets `0` and keeps the list. Merge it only once each listed class's drivers have been installed at least once; restart after either. Information on how the silent install is decided, and the list, from SweetLow. Read in virtual machines: on 98 SE a keyboard, mouse, stick and hub, each a device of its own, install with no wizard; ME installs those with no wizard without it; composite keyboards, mice and sticks not read | `0` | `1` | `0` | not written |
@@ -331,11 +332,11 @@ Two chipset registers decide which interrupt line the xHCI controller's interrup
 
 It writes nothing on any other controller.
 
-### Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`)
+### Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer`)
 
-A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered. On Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through the helper driver `xhcimsi.sys` in the package.
+A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered. On Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through the helper driver `xhcihlpr.sys` in the package (`xhcimsi.sys` in `2.3.0.0` and `2.3.1.0`).
 
-**The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` chooses how the controller's events reach the driver.
+**The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. On 32-bit 2000 and XP, which have no message-signalled interrupts, the helper serves only the finer timer below, so the install asks for no restart there. `XhciInterruptMode` chooses how the controller's events reach the driver.
 
 - `0` (default, automatic): picks, in this order:
   1. On Vista and 7, a message-signalled interrupt, where Windows grants one and it connects.
@@ -346,14 +347,16 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
 - `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers.
 - `3`: a message-signalled interrupt only (Vista and 7). With no message, the controller fails to start (Code 10).
 
-Under `1`, Vista and 7 are asked for the line, and a controller that is given a message instead (for example because it has no line) fails to start. Under `3`, Vista and 7 are asked for the message; it fails to start when none is granted or it cannot be connected, which on 32-bit means `xhcimsi.sys` is not running. Windows 98 SE, ME, 2000 and XP have no message-signalled interrupts, so `3` always fails there.
+Under `1`, Vista and 7 are asked for the line, and a controller that is given a message instead (for example because it has no line) fails to start. Under `3`, Vista and 7 are asked for the message; it fails to start when none is granted or it cannot be connected, which on 32-bit means `xhcihlpr.sys` is not running. Windows 98 SE, ME, 2000 and XP have no message-signalled interrupts, so `3` always fails there.
 
 Two more values set the polling periods, in ms:
 
 - `XhciPollIdleMs` (default `50`): with nothing outstanding.
 - `XhciPollActiveMs` (default `1`): with transfers outstanding. Windows runs the timer no faster than its clock allows: on the E7250 under XP x64, every 15 to 62 ms.
 
-The release notes' "Windows Vista and 7: message-signalled interrupts" and "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" have the details.
+New in `2.4.0.0`, `XhciPollFineTimer` (default `1`, on) asks Windows 2000, XP, Vista and 7 to run their clock at `XhciPollActiveMs` while the driver polls at that period, and gives the request back when it stops polling that fast (one idle period, `XhciPollIdleMs`, after the last transfer), and when the controller sleeps or stops. It applies only while the controller is polled; `0` turns it off, and it is read at each start (disable and enable the controller, or restart). On 32-bit Windows it comes through `xhcihlpr.sys`, so on 2000 and XP it starts at the first boot after the install. Windows 98 SE and ME have no such call and keep their clock. Not yet tried on any machine.
+
+The release notes' "Windows Vista and 7: message-signalled interrupts", "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" and "XhciPollFineTimer" have the details.
 
 ### UAS command size and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)
 

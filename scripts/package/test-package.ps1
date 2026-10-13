@@ -168,6 +168,23 @@ try {
     $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
         "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
     Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -HlprDriverPath."
+    # Record 18 section 15.11: the helper is never packaged on its allowlist
+    # alone, and a cut never publishes the retired 2.3.x helper. The binary
+    # gates cannot run on stand-ins, so the refusals are held by their text,
+    # each inside the block it guards.
+    $hlprPkgText = [System.IO.File]::ReadAllText($packager)
+    $hlprGateAt = $hlprPkgText.IndexOf('& powershell.exe @hlprGateArgs')
+    $hlprRefuseAt = $hlprPkgText.IndexOf('-NoTargetEvidence: the x86 helper is never packaged on the allowlist alone')
+    Assert-True ($hlprRefuseAt -gt 0 -and $hlprGateAt -gt $hlprRefuseAt -and ($hlprGateAt - $hlprRefuseAt) -lt 800) `
+        "make-package.ps1 must refuse -NoTargetEvidence just before the helper's hlprx86 gate."
+    $hlprRelText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "make-release.ps1"))
+    Assert-True ($hlprRelText.Contains('$retiredHelper = "xhcimsi.sys"') -and
+                 $hlprRelText.Contains('if (Test-Path -LiteralPath (Join-Path $destDir $retiredHelper))')) `
+        "make-release.ps1 must refuse a leg holding xhcimsi.sys, the retired 2.3.x helper."
+    Assert-True ($hlprRelText.Contains('-NoTargetEvidence: an x86 leg carries xhcihlpr.sys')) `
+        "make-release.ps1 must refuse -NoTargetEvidence for an x86 leg."
+    Assert-True ($hlprRelText.Contains('$legPublishableExtra = @("xhcihlpr.sys")')) `
+        "make-release.ps1 must publish xhcihlpr.sys, not xhcimsi.sys, as an x86 leg's third file."
 
     # --- txtsetup.oem (roadmap task 33.3) -----------------------------------
     #
@@ -3648,10 +3665,10 @@ try {
     $tsSignAt = $tsPkgText.IndexOf('Invoke-TestSign -Source $DriverPath')
     $tsHcdAt = $tsPkgText.IndexOf('& powershell.exe @gateArgs')
     $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
-    $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
+    $tsHlprAt = $tsPkgText.IndexOf('& powershell.exe @hlprGateArgs')
     $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
-    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0 -and
-                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt) `
+    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsHlprAt -gt 0 -and
+                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsHlprAt) `
         "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
     Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
         "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."

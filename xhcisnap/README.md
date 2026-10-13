@@ -244,8 +244,9 @@ written, says what the exit code means and ends with the attach line: the
   codes: 10, 28, 31, 39, 52 and others), and the allocated resources
   (memory, I/O, IRQ, DMA, bus numbers), or the boot configuration when
   nothing is allocated;
-- the installed files - `xhci98.sys`, `xhciuas.sys`, `xhcimsi.sys` and
-  `usbd.sys` in the Windows directory's `System32\Drivers` (where both INFs
+- the installed files - `xhci98.sys`, `xhciuas.sys`, `xhcihlpr.sys` (and
+  `xhcimsi.sys`, the `2.3.x` helper a `2.4` update retires, so a leftover
+  shows) and `usbd.sys` in the Windows directory's `System32\Drivers` (where both INFs
   copy them, dirid 10, on every target), `usbui.dll` in the system directory
   (dirid 11: `SYSTEM` on 9x, `system32` on NT) - each present or not, its
   size, file version and SHA-256. WOW64's redirection is turned off for the
@@ -708,7 +709,8 @@ extension words. `-selftest-intr` prints the decode over canned images.
 4.3 and 18 section 9). Counter words 96 to 113 are named
 (`MsiRoutines` to `MsiFilterStripped`) and decoded in their own section:
 where the `IoConnectInterruptEx` pair came from (the 64-bit
-`MmGetSystemRoutineAddress`, the 32-bit helper `xhcimsi.sys`, or not
+`MmGetSystemRoutineAddress`, the 32-bit helper - `xhcihlpr.sys` from
+`2.4.0.0`, `xhcimsi.sys` before - or not
 found), the messages connected and granted, the capability (MSI or MSI-X)
 and the connection's status; the 32-bit helper's state (ABSENT, REFUSED
 with the check that failed, BOUND with its version); and the last
@@ -744,6 +746,19 @@ PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
 the resyncs that could not finish and the extra stops QEMU's own restart
 of an endpoint cost. A block shorter than 173 words is a driver from
 before it, and the section is not printed.
+Task 38.3's twenty-three follow (173 to 195, `TmrSwitchRead` to
+`HlprTimerVerdict`; design record 15 section 7.2.9, record 18 section
+15.3), with a section of their own, **"the finer system timer while
+polling"**: `XhciPollFineTimer` as read and in effect, where
+`ExSetTimerResolution` came from (the helper, `MmGetSystemRoutineAddress`,
+not found, or none on Windows 98 SE and ME), the timer thread's state, the
+value asked and whether a request is held now, the holds and releases
+(those a boundary forced, the holds a boundary raced), what Windows
+answered, the last release's cause, the time held in this start, the poll
+intervals of short requests by the request's phase (count, mean, late),
+and the 32-bit helper's two service verdicts. A block shorter than 196
+words is a driver from before it, and the section is not printed;
+`-selftest-timer` prints the decode over a canned block.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

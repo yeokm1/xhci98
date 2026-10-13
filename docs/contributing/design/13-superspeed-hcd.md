@@ -463,7 +463,8 @@ changing the three layers:
   three ways the event ring is reached: the line interrupt
   (`IoConnectInterrupt`, as above), a message interrupt on Vista and 7
   (`IoConnectInterruptEx` on amd64, through the `xhcimsi.sys` helper on
-  x86; a message ISR of its own in `hcd_ctl.c`), or no interrupt at all
+  x86 - since `2.4.0.0` `xhcihlpr.sys`, record 18 section 15; a message
+  ISR of its own in `hcd_ctl.c`), or no interrupt at all
   while the poller (`hcd_poll.c`'s timer and DPC) drains the ring. The
   delivery is settled once per start. `PollLock`, a spin lock guarding the
   poller's state, nests inside the controller lock: **the controller
