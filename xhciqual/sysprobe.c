@@ -18,6 +18,7 @@
  */
 
 #include <i86.h>
+#include <stdio.h>
 #include <string.h>
 #include "qual.h"
 
@@ -400,6 +401,11 @@ void sys_crit_remove(void)
 
     if (crit_sel == 0)
         return;
+    /* atexit runs before the runtime flushes the streams, and a redirected
+     * stdout's last write can raise INT 24h: it must still find the chain
+     * (Codex review of the 38.1 leg fixes). */
+    fflush(stdout);
+    fflush(stderr);
     memset(&r, 0, sizeof(r));
     r.w.ax = 0x0201;
     r.h.bl = 0x24;

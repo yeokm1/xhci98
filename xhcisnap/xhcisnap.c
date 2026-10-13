@@ -8417,11 +8417,14 @@ static int dev_prop(DWORD dn, int haveDn, const char *id, ULONG prop,
                 }
                 memcpy(out + n, raw + i, l);
                 n += l;
-                /* Every string in the length, whatever the type says: 98 SE
-                 * and ME's configuration manager hands back a hardware id
-                 * list whose class-code id is not the first, and the 38.1
-                 * legs read the controller there as not an xHCI one (9X-1). */
-                if (n + 1 >= outBytes) {
+                /* The id lists: every string in the length, whatever the
+                 * type says. 98 SE and ME's configuration manager hands back
+                 * a hardware id list whose class-code id is not the first,
+                 * and the 38.1 legs read the controller there as not an
+                 * xHCI one (9X-1). Any other property stops at its first
+                 * string, so trailing data cannot change a name. */
+                if ((type != REG_MULTI_SZ && prop != CMX_DRP_HARDWAREID &&
+                     prop != CMX_DRP_COMPATIBLEIDS) || n + 1 >= outBytes) {
                     break;
                 }
                 i += (ULONG)strlen(raw + i) + 1;
