@@ -167,14 +167,16 @@ included.
   and `silent-on.bat` and `silent-off.bat`, which turn it on and off in one
   double-click; restart Windows after either. Run `silent-on.bat` only once
   each listed class's drivers have been installed at least once: with no
-  wizard, 98 SE asks for a missing driver file from its CD without saying
-  which device it is for (read for a mouse and a keyboard), and without the
-  CD the device is left with no driver. Never on 2000 and later. SweetLow
+  wizard, 98 SE asks for a missing driver file from its CD (read for a
+  mouse and a keyboard), and a device whose driver is not on the machine
+  depends on that CD being at hand. Never on 2000 and later. SweetLow
   provided the information on how the silent install is decided and the
-  list. Read in QEMU virtual machines: on 98 SE a mouse, keyboard, stick
-  and hub, each a device of its own, installed with no wizard, and so did a
-  USB audio composite device matched by an entry added by hand; with the
-  switch off, or no list, the wizard came as before. ME needs none of it
+  list. Read in QEMU virtual machines: on 98 SE a mouse, stick and hub,
+  each a device of its own, installed with no wizard, a keyboard brought no
+  wizard and asked for the CD (its install was not followed to the end),
+  and a USB audio composite device matched by an entry added by hand
+  installed with no wizard; with the switch off, or no list, a new mouse
+  brought the wizard as before. ME needs none of it
   for those: it installed a mouse, keyboard, stick and hub with no wizard
   with the switch off. On ME the switch matters only for a class ME would
   ask about (the audio device). A composite keyboard, mouse or stick was

@@ -2413,9 +2413,10 @@ double-click and at a 98 SE or ME prompt under their long names. **Decided
 - **Run `silent-on.bat` only once each listed class's drivers have been
   installed at least once on this machine**, by plugging such a device with
   the switch off and finishing its wizard: with no wizard, a silent install
-  on 98 SE asks for a missing driver file from the CD without saying which
-  device it is for, and without the CD the device is left with no driver
-  (38.2's legs: `hidusb.sys` and `kbdhid.vxd` asked for, 6.11.11). The case
+  on 98 SE asks for a missing driver file from the CD (38.2's legs:
+  `hidusb.sys` and `kbdhid.vxd` asked for, 6.11.11), so a device whose
+  driver is not yet on the machine depends on the CD being at hand; the
+  case with no CD was not read. The case
   read before that: a USB keyboard
   on 98 SE needs `kbdhid.vxd` from the Windows 98 SE CD (run-36, K5), and
   storage needs NUSB's `usbstor.sys` on 98 SE (ME's own on ME).
@@ -2557,8 +2558,9 @@ the HID drivers not, see (c)):
   a mouse, a Bulk-Only stick, a hub and a keyboard each `silent.pdo` MATCH,
   answer 1, no wizard. On the base used, the HID drivers had not been
   installed before, and the mouse and the keyboard asked for the CD
-  (`hidusb.sys`, `kbdhid.vxd`) with no wizard, then installed from it: the
-  readme's "drivers installed once first" is that.
+  (`hidusb.sys`, `kbdhid.vxd`) with no wizard; the mouse then installed
+  from it, and the keyboard was removed before its install was followed to
+  the end. The readme's "drivers installed once first" is that.
 - (b), the gate left at 1 from (c) and the list deleted: `silent.status`
   `0xC0000034`,
   `silent.entries` 0, a new mouse `silent.pdo` reason EMPTY, answer 0, the
