@@ -6279,8 +6279,28 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
 | `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
+| `XhciMsiAvoid` | each start; on NT 6 also at AddDevice (the requirements filter's cache, record 20 section 4.1) | 1 | 0 off, 1 listed, 2 every controller; another number or type, 1 | 1 (since 38.10) | yes |
+| `XhciStreamsOff` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciResumeReinit` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciIntelShutdownToEhci` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
+| `XhciShutdownReset` | each start | 0 | 0, 1, 2; else 0 | 0 (since 38.10) | yes |
+| `XhciSuspendHaltDelay` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciSuspendHaltTimeout` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciAsmediaFlowControl` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
+| `XhciTiIntervalCap` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciStuckLinkReset` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciStreamRingPad` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciControlLinkNoOp` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciIsochSpuriousSuccess` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciAmdSuspendBitClear` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
 
-Nineteen, all written: sixteen before task 36.51, the last three by it. **No
+Thirty-three, all written: sixteen before task 36.51, three by it, and
+fourteen by task 38.10 (Linux's controller quirks, design record 20: each
+read in `src\hcd_quirk.c`, 0 off, 1 Linux's listed controllers, 2 every
+controller where the record offers it; the log notes `quirk.<label>` and
+`hc.pci.rev` at each start and the counter block's words 173 to 206 are
+record 20 section 13.5, and `XHCISNAP` prints them as its "Linux quirks"
+block). **No
 value is a tri-state** whose absence means something no written number
 does, so none is left unwritten. Except for `XhciForceBulkOnly` since
 roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a

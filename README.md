@@ -217,9 +217,28 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 |---|---|---|---|---|---|
 | `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`) | `0` | `2` | `0` | `0` |
 | `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
-| `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
+| `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers and the ATI Navi10's USB-C controller (`1002:7316`), `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciUsb2HubSpeedFallback` | The standard speed ID for a Low- or Full-Speed device behind a hub where the controller's USB 2.0 speed table names neither (the VIA VL805); `0` turns it off | `0` | `1` | `1` | `1` |
+
+**Linux's controller quirks**, each for the controllers Linux names (see "Linux's controller quirks" below): `0` off, `1` the controllers listed there, `2` every controller where the row says so
+
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `XhciMsiAvoid` | Vista and 7: never a message-signalled interrupt (MSI), the line or polling instead; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciStreamsOff` | No UAS streams: Bulk-Only, or UAS without streams at USB 2.0; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciResumeReinit` | After standby or hibernation the controller is started afresh and its devices found again, instead of restored; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciIntelShutdownToEhci` | At shutdown, the Intel switchable connectors handed back to the USB 2.0 (EHCI) controller, whatever `XhciIntelPortSwitch` says; `2` is read as `1` | `0` | `1` | `1` | `1` |
+| `XhciShutdownReset` | At shutdown, the controller reset once it has halted; `2` on every controller | `0` | `2` | `0` | `0` |
+| `XhciSuspendHaltDelay` | A 1.5 ms pause before the controller is halted for standby; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciSuspendHaltTimeout` | Up to 640 ms, not 32 ms, for the controller to halt for standby; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciAsmediaFlowControl` | ASMedia's flow-control setting after each start, recovery and resume; `2` is read as `1` | `0` | `1` | `1` | `1` |
+| `XhciTiIntervalCap` | High-Speed and faster interrupt endpoints polled at least every 8 ms; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciStuckLinkReset` | After a resume, a USB 3 port stuck in its link's Polling state reset; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciStreamRingPad` | Spare memory after each block of UAS stream rings; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciControlLinkNoOp` | A SuperSpeed control transfer kept from straddling the end of its ring; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciIsochSpuriousSuccess` | A false "success" after an audio packet's error ignored; `2` on every controller | `0` | `2` | `1` | `1` |
+| `XhciAmdSuspendBitClear` | One AMD register bit cleared before standby; `2` is read as `1` | `0` | `1` | `1` | `1` |
 
 **The driver's log**
 
@@ -338,7 +357,7 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
 **The install and every update on 32-bit Vista and 7 ask for a restart**, because the helper starts only at boot. `XhciInterruptMode` chooses how the controller's events reach the driver.
 
 - `0` (default, automatic): picks, in this order:
-  1. On Vista and 7, a message-signalled interrupt, where Windows grants one and it connects.
+  1. On Vista and 7, a message-signalled interrupt, where Windows grants one and it connects, except on a controller `XhciMsiAvoid` applies to (see "Linux's controller quirks"), which takes the line or is polled.
   2. The controller's interrupt line, where it has one and Windows assigned it.
   3. Polling: no interrupt pin, none assigned, or a granted message that could not connect.
   4. After the start, a line the driver sees raised that never reaches it switches to polling by itself.
@@ -399,10 +418,10 @@ Each is tried a few times at most; then the port or the controller is held until
 - `0`: most of it off.
 - `1` (default): on.
 
-`XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms instead, as Linux does on some AMD controllers.
+`XhciIntervalCap` polls an interrupt endpoint that asks for more than 32 ms every 32 ms instead, as Linux does on some AMD controllers and on the ATI Navi10's USB-C controller.
 
 - `0`: off.
-- `1` (default): on AMD controllers.
+- `1` (default): on AMD controllers (PCI vendor `1022`) and on `1002:7316`.
 - `2`: on every controller.
 
 `XhciAvgTrbEsit` changes one figure the controller is told for each interrupt endpoint: its average transfer size, which the controller uses in its own bandwidth reckoning. It is a switch for comparison: if your devices misbehave, try `1` and see whether anything changes. Only interrupt endpoints are affected.
@@ -411,6 +430,41 @@ Each is tried a few times at most; then the port or the controller is held until
 - `1`: the endpoint's largest transfer per service interval, as Linux does.
 
 All three are read when the controller starts, so restart after changing one.
+
+### Linux's controller quirks (`XhciMsiAvoid` and thirteen more)
+
+Linux's xHCI driver works around faults of particular controllers, each named by its PCI vendor and device ID. This driver takes fourteen of them, each behind a value of its own. The values, the faults and the controllers are Linux's. The code is this driver's own, written from [design record 20](docs/contributing/design/20-linux-xhci-quirks.md), which also lists the quirks not taken and why.
+
+| Value | Linux flag | Controllers (`vendor:device`) |
+|---|---|---|
+| `XhciMsiAvoid` | `XHCI_BROKEN_MSI` | Fresco Logic `1B73:1000`, `1B73:1400` |
+| `XhciStreamsOff` | `XHCI_BROKEN_STREAMS` | Fresco Logic `1B73:1000`, `1B73:1009`; Etron `1B6F:7023`, `1B6F:7052`; VIA `1106:3432`; ASMedia `1B21:1042`; Cadence `17CD:0200` |
+| `XhciResumeReinit` | `XHCI_RESET_ON_RESUME` | AMD `1022:15E5`; Etron `1B6F:7023`, `1B6F:7052`; Renesas `1912:0015`; every VIA (`1106`) controller; Phytium `1DB7:DC27`; ASMedia `1B21:3042`; Zhaoxin `1D17:9202` |
+| `XhciIntelShutdownToEhci` | `XHCI_SPURIOUS_REBOOT` | Intel `8086:1E31`, `8086:9C31`, `8086:9CB1` |
+| `XhciShutdownReset` | `XHCI_SPURIOUS_WAKEUP` | Intel `8086:9C31`, `8086:9CB1` (off by default) |
+| `XhciSuspendHaltDelay` | `XHCI_SUSPEND_DELAY` | AMD `1022:145C`, `1022:15E0`, `1022:15E1`, `1022:43BB` |
+| `XhciSuspendHaltTimeout` | `XHCI_SLOW_SUSPEND` | Fresco Logic `1B73:1000` |
+| `XhciAsmediaFlowControl` | `XHCI_ASMEDIA_MODIFY_FLOWCONTROL` | ASMedia `1B21:1142` (ASM1042A) |
+| `XhciTiIntervalCap` | `XHCI_LIMIT_ENDPOINT_INTERVAL_7` | TI `104C:8241` (TUSB73x0) |
+| `XhciStuckLinkReset` | `XHCI_MISSING_CAS` | Intel `8086:22B5`, `8086:9D2F`, `8086:A12F`, `8086:5AA8`, `8086:19D0` |
+| `XhciStreamRingPad` | `XHCI_TRB_OVERFETCH` | VIA `1106:3483` (VL805); Zhaoxin `1D17:9202`, `1D17:9203` |
+| `XhciControlLinkNoOp` | `XHCI_ETRON_HOST` (part) | Etron `1B6F:7023` (EJ168), `1B6F:7052` (EJ188) |
+| `XhciIsochSpuriousSuccess` | `XHCI_ETRON_HOST` (part) | Etron `1B6F:7023`, `1B6F:7052` |
+| `XhciAmdSuspendBitClear` | `XHCI_DISABLE_SPARSE` | AMD `1022:15E5` |
+
+`XhciIntervalCap` (above) also covers Linux's `XHCI_LIMIT_ENDPOINT_INTERVAL_9` on the ATI Navi10's USB-C controller, `1002:7316`.
+
+- `0`: off on every controller.
+- `1` (the default, but `0` for `XhciShutdownReset`): on the controllers in the table.
+- `2`: on every controller, for the quirks the settings table says so. `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear` write a vendor's own registers, so a `2` there is read as `1`.
+
+Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. `XHCISNAP`'s report has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
+
+None of them has been read on a listed controller yet. Three listed controllers are on my own machines: the E460's (`8086:9D2F`, `XhciStuckLinkReset`), the B490's (`8086:1E31`, `XhciIntelShutdownToEhci`) and the E7250's (`8086:9CB1`, `XhciIntelShutdownToEhci`; `XhciShutdownReset` lists it but is off by default). A user has a VIA VL805 (`XhciResumeReinit`, `XhciStreamRingPad`). QEMU's controller is on no list.
+
+What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is logged, but the log lives in memory and is gone at the next start. It can be seen only in a capture of that shutdown: `XhciLogDebugView` set to `1` with a debug-output viewer or a kernel debugger attached (see the release notes, "The log, and how to send one").
+
+The release notes' "Linux's controller quirks" has each value in full.
 
 ## What is tested, and what is not
 
@@ -474,6 +528,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | Windows 2000: a mounted USB drive comes back at Code 31 after a controller recovery or hibernation | Possible after hibernating with a USB drive mounted; otherwise rare | Other devices come back. Unplug and replug the drive, or disable and enable it. |
 | Windows ME: a UAS drive as the first USB storage device shows Code 2 | Rare: once per installation, only if a UAS drive is plugged in before any ordinary stick | ME has not yet copied its own USB storage files. Plug in any ordinary USB stick once, then replug the UAS drive. |
 | Disabling a controller the driver closed off hangs | Very rare: the controller must fail in a way the driver cannot recover from | The driver keeps every transfer in flight so the controller cannot write into freed memory, and the disable waits on them. Restart instead. |
+| Intel 7-series (Panther Point, `8086:1E31`): too many periodic devices may lose data instead of being refused | Not measured: it needs more audio, mouse and other periodic traffic at once than the controller can serve | Linux keeps its own bandwidth accounting on this controller (`XHCI_SW_BW_CHECKING`) because the controller accepts schedules it cannot serve. This driver relies on the controller's own admission, so an over-subscribed schedule there may lose data rather than be refused. |
 
 ### Untested ground
 
@@ -484,6 +539,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 | The Intel port switchover beyond the B490 and the E7250 | Device ids `8C31`, `9C31`, `8CB1` and `8D31`, systems other than Windows 98 SE and 7 x64. |
+| Linux's controller quirks (`XhciMsiAvoid` and the others) | Built from Linux's handling and the xHCI specification, against host tests. None has been read on a controller it lists; QEMU's controller is on no list. |
 
 ## Toolchain and building
 

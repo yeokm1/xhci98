@@ -259,6 +259,17 @@ writing. After a restart firmware sets the routing again. But a disable and
 enable in Device Manager after setting 0 leaves the connectors where the
 disable's release put them, on EHCI, whatever firmware had chosen at boot.
 
+**One exception to 0's "no switchover write" (task 38.10, design record 20
+sections 4.4 and 13).** `XhciIntelShutdownToEhci`, Linux's
+`XHCI_SPURIOUS_REBOOT`, on by default: at a system shutdown's D3 on 8086:1E31,
+9C31 and 9CB1, after this record's release, `USB3_PSSEN` and `XUSB2PR` are
+both written 0 and read back, **whatever `XhciIntelPortSwitch` says**
+(owner, 2026-10-13), so the connectors are EHCI's when the machine powers
+off. It has no Sony exemption, as Linux's shutdown write has none. It is a
+value of its own, read at each start (0 off, 1 the three ids, a 2 read as
+1), and its write is the quirk's, in `hcd_quirk.c` `HcdQuirkShutdown`, not
+this record's executor.
+
 ## 5a. The user script: `portsw.vbs` (revision 4)
 
 `src\portsw.vbs`, published in the `tools\portsw\` directory of a release

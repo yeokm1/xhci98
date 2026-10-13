@@ -14,8 +14,10 @@ owner's rulings on it (section 9). Revision 0 (first committed as
 `c06eda96`, rebased since) was the survey alone, with the decisions open;
 revision 1 folded in the owner's decisions; revision 2 the owner's later
 answers on value 2, the task's renumbering from 38.11 to 38.10 (commits
-before it use 38.11) and the HCIVERSION floor. Nothing here is built yet;
-the record is reviewed to convergence before any code is written.
+before it use 38.11) and the HCIVERSION floor. Sections 3, 4 and 6 are
+built (task 38.10, 2026-10-14): section 13 says where each quirk acts and
+where the code settles or departs from the text. Section 5's fix is a
+change of its own, and section 13 does not describe it.
 
 ## 1. What is asked, and what is not
 
@@ -63,7 +65,11 @@ What it is not:
 carries a `GPL-2.0` SPDX identifier on its line 1 (read 2026-10-13). Every
 citation below is `file:line` in that copy at that commit.
 
-What the mirror does not carry, and what follows from it:
+What the mirror did not carry when this survey was written, and what
+followed from it (since `0f33d190` the mirror carries
+`include/linux/pci_ids.h` and `drivers/usb/core/message.c` at the pinned
+commit, as section 10 proposed; the implementation's ids were checked
+against that copy):
 
 - `include/linux/pci_ids.h`. The vendor constants `xhci-pci.c` uses but
   does not define (`PCI_VENDOR_ID_NEC`, `_AMD`, `_ATI`, `_INTEL`,
@@ -977,7 +983,8 @@ Section 5's ring rule is this driver's own bookkeeping, written from the
 specification; Linux is cited there for its order of operations, not
 copied. Where a quirk is a register write or a test of an id, writing it
 fresh from this record may be simpler than adapting, and then no row is
-owed; the implementation says which, per quirk.
+owed; the implementation says which, per quirk. As built, every quirk was
+written fresh (section 13.6).
 
 ## 7. Legs
 
@@ -1082,6 +1089,7 @@ At implementation:
 - `xhciqual/quirks.c`, `qual.h` and `report.c`: section 6.5.
 - `xhcisnap/xhcisnap.c` and `xhcisnap/README.md`: section 6.4.
 - `legal-provenance.md` section on the mirrors: a row per copy, if any.
+  As built there is none (section 13.6), so no row and no release notice.
 - `external/README.md`: `include/linux/pci_ids.h` and
   `drivers/usb/core/message.c` added to the Linux mirror at the pinned
   commit, so section 2.1's **(h)** values and section 5.3's citation rest
@@ -1154,3 +1162,176 @@ Project machines and their ids: `docs/contributing/runs/run-35.md` (E460
 9D2F, P14s Gen 1 02ED, B490 1E31, the AM5 CSM board) and `run-36.md` (E7250
 9CB1); the VL805: issue 13. The standing column of section 3.0: the owner's
 rulings and the readings named in it, nothing else.
+
+## 13. As built (code, 2026-10-14)
+
+Sections 3, 4 and 6, built for task 38.10. Section 5's endpoint-ring
+ownership is a separate change and is not described here. Where the code
+differs from, or settles, what the sections above say, the code is the
+authority and this section says so.
+
+### 13.1 Where it lives
+
+- **The pure half**, `src\xhci_quirk.c` and `src\xhci_quirk.h`: the
+  fourteen values in section 6.1's order (`XHCI_QK_MSI_AVOID` to
+  `XHCI_QK_AMD_BIT`), each with its value name, Linux flag and log label;
+  the defaults and whether a 2 is offered (`XhciQuirkDefault`,
+  `XhciQuirkTwoOffered`); the normalization (`XhciQuirkMode`); section
+  3.1's id lists and the match (`XhciQuirkMatches`, with VIA vendor-wide
+  for `XhciResumeReinit` alone); the effective policy
+  (`XhciQuirkEffective`, `XhciQuirkMatchAll`); the state a start fills
+  (`XHCI_QUIRK_STATE`, the extension's `Quirk`, zeroed with it at each start
+  and kept across a resume's or a recovery's reinitialization); the packed
+  word (`XhciQuirkPacked`); Q1's decision (`XhciQuirkMsiAvoidDecide`); and
+  Q2's effective HCCPARAMS1 (`XhciQuirkStreamsHcc1`). Host suite
+  `test\test_quirk.c`; each executor's vectors are in `test_ring`,
+  `test_iso`, `test_link`, `test_stream`, `test_tol` and `test_poll`.
+- **The FDO's half**, `src\hcd_quirk.c`: the registry reads, the identity
+  Q1 needs before the delivery is settled, and the quirks that act from the
+  FDO's own paths (Q4, Q5, Q9, Q16, Q12's arming and the shutdown's log
+  flush).
+
+### 13.2 The values, the match and the revision
+
+Fourteen REG_DWORDs in the controller's driver key, read through
+`HcdReadValueDword` at each start (`HcdQuirkStart`, after
+`XhciInitController`); `XhciMsiAvoid` is read earlier in the same start, in
+`hcdSettleDelivery`, and on NT 6 also at AddDevice after the attach
+(`HcdQuirkAddDevice`), for the requirements filter. Absent, another type,
+or a number other than 0, 1 and 2 is the default: 1, and 0 for
+`XhciShutdownReset`. A 2 is every controller, except on the three
+vendor-register quirks - `XhciIntelShutdownToEhci`,
+`XhciAsmediaFlowControl`, `XhciAmdSuspendBitClear` - where it is read as 1.
+Each normalization is recorded in the value's packed word. Both INFs write
+each value at its default with `0x00010003`, and the INF gate's `VAL-*`
+rows and the footprints carry them. `XhciIntervalCap` has no new value: its
+1 now covers 1002:7316 (ATI Navi10) beside every 1022 controller
+(`xhci_tol.c`, `XhciTolCapApplies`).
+
+Matching is by the PCI vendor and device dword alone
+(`PciVendorDevice`, the start's own read; Q1's identity, section 13.4).
+The revision (configuration byte 08h) is read at each start and logged as
+`hc.pci.rev` and in counter word 187, and is never matched (section 6.3).
+
+### 13.3 Where each quirk acts
+
+| Quirk | Value | Where (file, function) |
+|---|---|---|
+| Q1 | `XhciMsiAvoid` | `hcd_quirk.c` `HcdQuirkMsiAvoid`, called by `hcd_ctl.c` `hcdSettleDelivery` before `XhciPollDecideEx` (`xhci_poll.c`), which under mode 0 answers a granted message with polling and the new reason 19, `XHCI_POLL_R_MSI_AVOIDED`; the filter's side is `hcd_msi86.c` `HcdMsiFilter`, which asks for the line as mode 1 does when `HcdQuirkFilterAvoid` says so; the count is `HcdQuirkMsiRefused` |
+| Q2 | `XhciStreamsOff` | `XhciQuirkStreamsHcc1` at both consumers of MaxPSASize: `hcd_pdo.c` `hcdXportFlags` (the transport decision) and `hcd_cfg.c` `hcdCfgStreamsOpen` |
+| Q3 | `XhciResumeReinit` | `xhci_init.c` `XhciSuspendController`: no save, `SavedStateValid` 0, counted (`SavesSkipped`), so the resume takes the reinitialization |
+| Q4 | `XhciIntelShutdownToEhci` | `hcd_quirk.c` `HcdQuirkShutdown`, from both shutdown paths of `hcd_power.c` (`HcdControllerPower` and `hcdDirectTransitionGated`) after `hcdShutFlush` and `HcdPswRelease`, under the power gate: `USB3_PSSEN` (D8h) and then `XUSB2PR` (D0h) written 0 through `HcdSvcConfigSpace` and each read back |
+| Q5 | `XhciShutdownReset` | the same function, after Q4, through `xhci_init.c` `XhciShutdownReset` (the proven-halt test, then `xhciReset`, then `SavedStateValid` 0) |
+| Q7 | `XhciSuspendHaltDelay` | `xhci_init.c` `XhciSuspendController`, before the quiesce |
+| Q8 | `XhciSuspendHaltTimeout` | `xhci_init.c` `xhciQuiesceBounded`, given the long bound by `XhciSuspendController` alone; `XhciQuiesceController` (the start, the recovery, the stop) keeps 32 ms |
+| Q9 | `XhciAsmediaFlowControl` | `hcd_quirk.c` `HcdQuirkAsmFlow`, called from `HcdQuirkStart` (the start, after `XhciInitController` and before the enumeration), from `hcd_ctl.c` `hcdRecover` (the IRQL lowered, before `HcdPollGrant`), and from `HcdQuirkResumed` at the end of every successful resume, either branch (`hcd_power.c` `hcdResume`) |
+| Q10 | `XhciTiIntervalCap` | `xhci_tol.c` `XhciTolTiCapInterval`, applied in `hcd_cfg.c` `hcdCfgTolerance` after the AMD cap |
+| Q11 | `XhciIntervalCap` | `xhci_tol.c` `XhciTolCapApplies` |
+| Q12 | `XhciStuckLinkReset` | armed by `hcd_quirk.c` `HcdQuirkResumed`; decided in `xhci_link.c` `XhciLinkPortFeed` with `XhciLinkStuckPolling`; counted and logged in `hcd_enum.c` `hcdPortChanged` |
+| Q13 | `XhciStreamRingPad` | `xhci_stream.c` `XhciStreamLayoutPad`, `XhciStreamBigBytesPad` and `XhciStreamLayoutPlacedPad`, from `hcd_cfg.c` `hcdCfgStreamsBuild`; the free takes the layout's `TotalBytes` |
+| Q14a | `XhciControlLinkNoOp` | `xhci_ring.c` `XhciRingControlLinkPad`, through `xhci_xfer.c` `XhciXferSubmitControlEx` from `hcd_io.c` `HcdIoMapped` and `hcd_enum.c` `hcdThreadControlQuiet`; the input is `HcdQuirkLinkNoOp` |
+| Q14c | `XhciIsochSpuriousSuccess` | `xhci_xfer.c` `XhciXferIsoEvent`, its scope set before each isochronous event in `hcd_dev.c` `hcdIsoEvent` |
+| Q16 | `XhciAmdSuspendBitClear` | `hcd_quirk.c` `HcdQuirkSuspend`, from `hcd_power.c` `hcdSuspendSettled` before `XhciSuspendController` |
+
+### 13.4 Where the code settles or departs from the text
+
+- **Q1.** The start reads the identity through the configuration service
+  before the delivery is settled, keeps an identity already established
+  for the FDO when that read fails, and with none ever established avoids
+  the message at value 1 (section 4.1). The requirements filter is the
+  other way round: with no identity ever read it leaves the list as it is,
+  and the start's decision protects the controller. A failed identity read
+  at AddDevice is not logged there (the log does not exist yet); the start
+  records "identity unread" or "identity kept" as Q1's reason in its
+  packed word, and `quirk.msiavoid.idmismatch` when `XhciInitController`'s
+  read differs from the identity Q1 used. A strip the filter made at the
+  quirk's asking is kept on the FDO (`MsiAvoidFilterStrips`) and counted,
+  with the outcome done, by the next start, since that start is then given
+  the line and its own decision has nothing to refuse (review round 2).
+- **Q7.** The pause is a 1.5 ms `KeStallExecutionProcessor` stall, bounded
+  and exact, not the requested PASSIVE_LEVEL delay of about 1.5 ms that
+  section 4.6 describes.
+- **Q8.** The suspend's halt waits the usual 32 ms first; on a controller
+  where the quirk applies, and with USBSTS not reading all ones, it then
+  waits up to 608 ms more, 640 ms in all, ending as soon as HCH reads 1.
+  `HaltsLong` counts the suspend halts that had not completed within the
+  first 32 ms, whether or not they then completed; the extended wait's end
+  is the outcome (done, or failed with HCH not set).
+- **Q10.** `TiCapped` counts interrupt endpoints capped by it once the
+  Configure Endpoint that opens them succeeds, beside the AMD cap's
+  `CapIntervals` (review round 2): `hcdCfgTolerance` marks the endpoint
+  (`Capped` bit 1) and `hcdCfgQuirkCapped` counts it.
+- **Q14c.** The remembered event is the TRB pointer with its reserved low
+  bits dropped, as the engine reads it, and is forgotten when that TRB is
+  re-let to a new TD or the queue restarts, so a later request's Success at
+  the same place is never taken for the old error's (review rounds 1 and
+  2).
+- **Q4.** The two registers are written independently; the first failure
+  is the one recorded (review round 1).
+- **Q12.** After a resume that restored (`Quirk.Restores`, counted by
+  `XhciResumeController` on a restore), each USB3 root port's next reading
+  is armed (`Link.StuckCheck`) and disarmed after that one reading,
+  whatever it shows; a port held by 29-A.5 is disarmed without being
+  touched (`hcdPortChanged`). A port read powered, not in reset, with CCS
+  and CAS clear and PLS Polling is warm-reset through 29-A.2's
+  `xhciLinkWarm`, within its budget, and logged as `quirk.stucklink.port`.
+  A reinitializing resume arms nothing.
+- **Q14a.** The No Op is placed only when the enqueue pointer rests on the
+  last TRB before the Link TRB, and the room check counts it with the whole
+  control group, so nothing is written unless both fit (the submission is
+  then busy). At value 2 it still applies only to control transfers of a
+  SuperSpeed or faster device: the speed condition is Linux's and is kept
+  at every value.
+- **Q4, Q5 and the shutdown's flush.** Both run in the shutdown's D3 only,
+  after 37.3's flush and the switchover's release, on a started lifetime
+  with its BAR mapped, in D0, on a window that decodes; a skip or a failure
+  is the quirk's outcome, and the shutdown goes on. When either was on,
+  the D3 path leaves the power gate and runs `HcdQuirkShutdownFlush`
+  (section 6.4): it advances the ticket, wakes the thread and waits in 10 ms
+  steps, bounded at 500 ms, for the thread to acknowledge it
+  (`HcdQuirkFlushAck`, after the `HcdLogFlush` it began with the ticket
+  captured); the thread acknowledges with whether that flush emitted any
+  bytes to the sink (`Log.DebugViewBytes` moved: review round 1), so the
+  outcome is counted as flushed, acknowledged with nothing emitted (the
+  sink off, or nothing recorded), or not acknowledged.
+- **Q9 and Q16** count every give-up and every skip (`AsmGiveUps`,
+  `AmdBitSkips`); the packed word keeps the last outcome and its reason.
+
+### 13.5 What `XHCISNAP` reads
+
+At each start the log carries a note per value, `quirk.msiavoid`,
+`quirk.streamsoff`, `quirk.resumereinit`, `quirk.shuttoehci`,
+`quirk.shutreset`, `quirk.haltdelay`, `quirk.halttimeout`,
+`quirk.asmflow`, `quirk.ticap`, `quirk.stucklink`, `quirk.ringpad`,
+`quirk.linknoop`, `quirk.isochsuccess` and `quirk.amdbit`, each the packed
+word of `xhci_quirk.h` (bits 1:0 the mode, 4:2 the normalization, bit 5
+matched, bit 6 effective, bit 7 overridden, 11:8 the last outcome, 15:12
+its reason, 31:16 the value as read, FFFFh when none was); and
+`quirk.identity`, `hc.pci.rev` and, where they apply,
+`quirk.msiavoid.idmismatch` and `quirk.stucklink.port`. A quirk that acts
+logs its word again. The counter block gains words 173 to 206
+(`src\xhci_counters.h`; 207 words in all): the fourteen packed words (173
+to 186), the revision (187), the identity matched (188), and the counts
+(189 to 206). `XHCISNAP` prints them as a "Linux quirks" block and names
+`XhciInterruptMode`'s reason 19, "automatic: a message granted, refused by
+XhciMsiAvoid (Linux's XHCI_BROKEN_MSI), so polled" (`xhcisnap\README.md`). `XHCIQUAL`'s side is
+section 6.5, with its host suite `xhciqual\test\test_quirks.c`.
+
+### 13.6 Provenance
+
+Every quirk is written fresh from this record: the ids, offsets, bits and
+the ASMedia sequence's constants are interface facts, each cited at its
+Linux line in sections 3 and 4 and in the code's comments, and no Linux
+code is copied into `src`. `legal-provenance.md`'s exception for Linux's
+xHCI quirks is therefore not used: section 10's "a row per copy, if any"
+is none, that file gains no row, and no release notice is owed for task
+38.10 at 38.final.
+
+### 13.7 Read on hardware
+
+None. Every value ships unread on the controllers it lists. The project
+holds three listed controllers: the E460's 9D2F (Q12), the B490's 1E31 (Q4,
+and Q18's limitation) and the E7250's 9CB1 (Q4; Q5 lists it but is off by
+default); a field user holds a VL805 (Q3, Q13). QEMU's controller,
+1B36:000D, is on no list, so a guest shows each value read and "not this
+controller", value 2's reach, and that value 0 changes nothing (section 7).
