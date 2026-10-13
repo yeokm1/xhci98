@@ -100,8 +100,8 @@ identification.
 | Published driver binary | Yes | `releases/<version>/release-x86/xhci98.sys`, `releases/<version>/debug-x86/xhci98.sys`, and the `-x64` pair in a cut that carries one (the directories cut before roadmap task 21.3 keep the bare `release/` and `debug/` names they were written with) | This project's code, linked by the Windows 2000 DDK (the `-x86` pair) or by WDK 7.1 (the `-x64` pair; `scripts/build-driver.cmd`, `src/usbport_amd64.lib`) against `ntoskrnl.exe`/`hal.dll`/`usbport.sys` import libraries, which contribute no code to the image; the import table names symbols and nothing more (verify with `scripts\import-gate\check-imports.ps1`, which prints every module/symbol pair in it). No runtime or extender is linked into either build, which is what makes this row different from the qualifier's below. The 32-bit build links no third-party object at all. **The amd64 build links one object that is not this project's code**: WDK 7.1 compiles amd64 drivers with `/GS`, and its libraries supply `__security_check_cookie` and `__report_gsfailure`, the handler that issues `KeBugCheckEx(0xF7)` on a cookie mismatch - one call site in the whole of `.text`, reached from nothing in `src/` (`scripts/import-gate/xhci98-imports-amd64.allow`, the `KeBugCheckEx` row; `runs/run-21.md` task 21.3). Static, read from the release image's disassembly; which WDK library supplied the object is not recorded, because no amd64 linker map has been read or tracked. **Open question, per section 6's rule for a new tracked build output:** whether that WDK-supplied object asks for a notice beside the 64-bit binary has not been read, and no `NOTICE.TXT` is generated for the `-x64` directories. This row records the composition and the open question; it draws no conclusion from either. GPL-2.0-only (`LICENSE`) for this project's code |
 | The x64 binaries' embedded test signature, and `xhci98-test.cer` | Yes, from the first cut that carries them (`2.3.0.0`) | Appended to `xhci98.sys` and `xhciuas.sys` in every `-x64` directory; `releases/<version>/*-x64/xhci98-test.cer` beside them; never in an `-x86` directory | Design record 19 (owner, 2026-10-11). The signature is a PKCS #7 `WIN_CERTIFICATE` appended to the image by WDK 7.1's `SignTool.exe`, run in place from the git-ignored `tools/WinDDK71/bin/x86` at each cut; it holds this project's own self-signed certificate (`CN=xhci98 project test signing (not trusted)`), the image's SHA-1 digest and the signature over it, and no code. The certificate was made by the owner on 2026-10-11 with WDK 7.1's `MakeCert.exe` and `pvk2pfx.exe`, run in place the same way (the commands of design record 19 section 4, which `scripts/package/make-testcert.ps1` runs); its SHA-1 thumbprint is `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`; `xhci98-test.cer` is its public half, the DER encoding the packager exports from the `.pfx` at each cut. None of the three tools is tracked or published. The private key (`.pfx`) is not tracked or published (`.gitignore`: `*.pfx`, `*.pvk`). It is not a Microsoft signature and chains to no Microsoft or public root |
 | Published MSI helper binary | Yes, from the first cut that carries it (2.3.0.0) | `releases/<version>/release-x86/xhcimsi.sys` and `debug-x86/xhcimsi.sys`; never in an `-x64` directory | This project's code (`src/msi86/`, `src/xhci_msi86.c`), linked by **WDK 7.1 for x86, Vista target** (`setenv x86 WLH`; design record 18 section 8.1), against `ntoskrnl.exe` import libraries, which contribute no code. **Unlike the 32-bit `xhci98.sys` it links WDK library objects**: `wdmsec.lib`'s `IoCreateDeviceSecure` and the members it pulls in (31 `ntoskrnl.exe` pairs, listed in `scripts/import-gate/xhcimsi-imports.allow` from the first link's import table, 2026-10-10), and, `/GS` being left on as the kit's default, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support with `__report_gsfailure` (`KeBugCheckEx(0xF7)`), the same kind of object as the amd64 row above. Which members the link retained is to be read from a linker map, which no build here has written yet. **The same open question as the amd64 row**: whether those WDK-supplied objects ask for a notice beside the binary has not been read; this row records the composition and the question and draws no conclusion. GPL-2.0-only (`LICENSE`) for this project's code |
-| Published DOS qualifier binary | Yes | `releases/<version>/xhciqual/XHCIQUAL.EXE` + `.MAP` | Built from this project's sources but not only this project's code; see section 2a |
-| Published snapshot reader binary | Yes | `releases/<version>/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
+| Published DOS qualifier binary | Yes | `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` + `.MAP` | Built from this project's sources but not only this project's code; see section 2a |
+| Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
@@ -137,14 +137,15 @@ with none of the inputs can still check the claim.
 
 There are two. Both are tools rather than the driver, and both are the
 exception to the row above saying this project tracks only its own code:
-`releases/<version>/xhciqual/XHCIQUAL.EXE` and
-`releases/<version>/xhcisnap/XHCISNAP.EXE`. They are
+`releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
+`releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (at the version root,
+without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.10). They are
 not the same case: the qualifier carries an embedded DOS extender and an Open
 Watcom runtime, the reader carries a statically linked Microsoft C runtime.
 
 #### XHCIQUAL.EXE
 
-`releases/<version>/xhciqual/XHCIQUAL.EXE` is built from `xhciqual/`'s own C
+`releases/<version>/tools/xhciqual/XHCIQUAL.EXE` is built from `xhciqual/`'s own C
 and assembly, but it is not only that:
 
 - DOS/32 Advanced DOS Extender, embedded as the executable's stub.
@@ -153,7 +154,7 @@ and assembly, but it is not only that:
   XHCIQUAL.EXE is one standalone file - no DOS4GW.EXE to carry." The linker map
   states it independently at its head: "creating a DOS/32 Advanced DOS Extender
   (LE-style) executable". Static, read from the linker map and the makefile. The tracked copy of the
-  map is `releases/<version>/xhciqual/XHCIQUAL.MAP`, which every release
+  map is `releases/<version>/tools/xhciqual/XHCIQUAL.MAP`, which every release
   stages beside the executable; `xhciqual/xhciqual.map` is the build's own
   output and is git-ignored.
 - Open Watcom C runtime, statically linked. `XHCIQUAL.MAP` names the modules
@@ -188,7 +189,7 @@ section records; it draws no conclusion from it.
 
 #### XHCISNAP.EXE
 
-`releases/<version>/xhcisnap/XHCISNAP.EXE` is the Windows console reader. It
+`releases/<version>/tools/xhcisnap/XHCISNAP.EXE` is the Windows console reader. It
 is built from `xhcisnap/xhcisnap.c` alone, but like the qualifier it is not
 only that:
 
@@ -365,16 +366,23 @@ conditions:
   `GPL-2.0+` / `GPL-2.0-or-later`, read on the pinned mirror's commit; a file
   under any other licence, or dual-licensed with one this project cannot
   carry, is still under the do-not-copy rule;
-- the Linux copyright notices and the SPDX identifier of the file it came
-  from are kept beside the copied text, and the copy is marked as changed
-  from that file, with the date (GPL-2.0 section 2(a)); it stays GPL-2.0-only
-  with the rest of this tree, and nothing of it is relicensed;
+- every copyright, licence and warranty-disclaimer notice of the file it
+  came from, its SPDX identifier among them, is kept beside the copied text
+  (GPL-2.0 section 1), and the copy is marked as changed from that file,
+  with the date (section 2(a)). A copy from a `GPL-2.0-or-later` file keeps
+  that grant on the copied text as received; this project distributes it,
+  with the rest of its tree, under version 2 (`LICENSE`), and nothing of it
+  is relicensed;
 - this section gains a row for each copy: the Linux file, the commit (the
   pinned mirror's, from `external/README.md`), the lines, and where it landed
   in this tree;
 - a release whose binary carries such a copy says so in its notices, naming
   the Linux file and its copyright holders, as the tools' `NOTICE.TXT` files
-  do for what their EXEs link;
+  do for what their EXEs link, and the release's complete corresponding
+  source (GPL-2.0 section 3), the adapted code and the scripts that build
+  and package it included, is offered with the binary: the release's tag in
+  this public repository, named in the release's notes beside the download,
+  and checked at the cut;
 - what is taken is the quirk and its handling, adapted to this driver's
   structures; nothing else of Linux's xHCI host driver comes with it;
 - the overlap audit above treats the recorded rows as known overlap, so any
