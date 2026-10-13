@@ -60,9 +60,9 @@ XHCISNAP -help           the long help; bare XHCISNAP prints the short one
 XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
                          modifier on -verbosity / -disable only: on its own it
                          asks for nothing and is refused with exit 2
-XHCISNAP -nosysinfo -o C:\MYDUMP   a dump whose header skips reading the
+XHCISNAP -nosysinfo -report   a report whose header skips reading the
                          system details (from 2.3.0.0; see "The machine it was
-                         captured on"). A modifier on a dump only
+                         captured on"). A modifier on -report or a dump only
 ```
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
@@ -71,7 +71,8 @@ to the `.TXT`; 4 adds everything including kernel addresses.
 
 The published sequence is four steps and none of them is `regedit`:
 `-verbosity 2`, restart, reproduce, `-report` (from 2.4.0.0; before it the
-last step was `-o C:\NAME`, and `-o` and `-c` still each imply `-dump`). The
+last step was a dump named with `-o`, and `-o` and `-c` still each imply
+`-dump`). The
 three batch files beside the tool run the steps for a reporter: `SNAPON.BAT`,
 `SNAPGET.BAT` and `SNAPOFF.BAT` (see "The field report"). There is one value
 to set.
@@ -134,6 +135,14 @@ published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
 
+That replacing is `-dump`'s and `-o`'s, where the name is the user's own.
+**`-report` never replaces or deletes a file it did not create** (Codex
+review of 38.1, round 1): its temporaries are created with `CREATE_NEW`, its
+`.TXT` with an exclusive create, and its two regions are renamed with a bare
+`MoveFileA`, which refuses a name that exists, with nothing deleted first. A
+failure removes only this run's own files. See "The field report" for what
+happens when another run takes one of its names.
+
 ### The field report: `-report`, the `.DEV` and the three batch files (2.4.0.0)
 
 Roadmap-hcd task 38.1 (owner, 2026-10-12 and 2026-10-13): a reporter runs one
@@ -157,7 +166,20 @@ refused too. With all 26 letters taken the tool writes nothing and exits 6;
 a clock whose month, day, hour or minute is out of range is refused, exit 7.
 The full date and time, with the year, is written inside the `.DEV` and the
 `.TXT` ("local time"; every dump's `.TXT` carries the line since 2.4.0.0).
-The files always go to the current directory: `-report` refuses `-o`.
+The files always go to the current directory: `-report` refuses `-o`. The
+screen says "the current directory" and never prints its path, which is
+often the user's profile and so carries the user's name.
+
+**Another run in the same directory.** The letter is chosen as one no file
+has, but another run - a second `-report`, or a `-dump -o` with that
+basename - can make one of the set between the choice and the write. Every
+file `-report` makes is made exclusively, so the other file is never
+replaced: if the `.DEV` itself is taken nothing is written; if a dump file
+(`.TXT`, `.BIN`, `.PSC` or a temporary) is, before the dump or at its
+publication, the dump is not kept under the name, this run's own files of it
+are removed, the other file is left as it was, the screen and the `.DEV` name
+it, and the screen lists only the files this run made. Exit 8. Run it again:
+it takes the next letter.
 
 **What it writes, in order.** First `BASE.DEV`, the device report, then the
 ordinary dump into `BASE.TXT`, `.BIN` and `.PSC`. The `.DEV` is written and
@@ -189,7 +211,11 @@ maintainer asks.
   copy them, dirid 10, on every target), `usbui.dll` in the system directory
   (dirid 11: `SYSTEM` on 9x, `system32` on NT) - each present or not, its
   size, file version and SHA-256. WOW64's redirection is turned off for the
-  read, so a 64-bit Windows reports its native files.
+  read, so a 64-bit Windows reports its native files - only around each
+  call that opens an installed file, and restored straight after it.
+  `version.dll` is loaded before any of them, with the redirection on: off,
+  the load would find the native 64-bit DLL, which an x86 process cannot
+  load.
 
 **Where the device readings come from.** `cfgmgr32.dll`, loaded at run time
 (the import table still names only `KERNEL32.dll` and `ADVAPI32.dll`): the
@@ -198,7 +224,10 @@ the properties are `CM_Get_DevNode_Registry_Property`'s (or the devnode's
 `Enum` key where that routine is missing), and the resources are
 `CM_Get_First_Log_Conf`, `CM_Get_Next_Res_Des` and `CM_Get_Res_Des_Data`'s,
 decoded from either the NT layout or the 9x one by their size, and printed
-as raw bytes when neither fits. Under WOW64 the x86 `cfgmgr32.dll` answers
+as raw bytes when neither fits (a memory, I/O, DMA, IRQ or bus-number
+descriptor; any other type - class-specific, device-private - is named with
+its size and never printed, since it can carry anything). Under WOW64 the
+x86 `cfgmgr32.dll` answers
 the log configuration calls with `CR_CALL_NOT_IMPLEMENTED` (read on a 64-bit
 Windows 11 build host, 2026-10-13), so the resources then come from
 `HKLM\HARDWARE\RESOURCEMAP\PnP Manager\PnpManager`, the PnP manager's raw
@@ -212,9 +241,17 @@ been read on 98 SE, ME, 2000, XP or Vista**; task 38.1's legs read it.
 **Privacy.** A USB device's instance id can be its serial number, so the
 instance part of every id not under `PCI\` or `ROOT\` is printed as
 `(instance withheld)`. Every string goes through the same cleaning and
-name-withholding as the "captured on" block; with `-nosysinfo` this
-machine's names are not read, the strings are not screened for them, and the
-`.DEV` says so.
+name-withholding as the "captured on" block, and the rule does not depend on
+`-nosysinfo` (Codex review of 38.1, round 1). With `-nosysinfo` this
+machine's names are not read, so nothing can be screened for them: every
+free-text string (a description, `InfSection`, `DriverVersion`,
+`DriverDate`, the Windows directory) is then printed as "withheld: not
+screened", the installed files are named by their directory's role rather
+than its path, and the `.DEV` says so. Identifiers the system generates -
+the device id with its instance part withheld as above, the service name,
+the driver key - are still printed, but only in the letters, digits and
+punctuation an id is made of. The same holds on a machine whose computer
+name could not be read.
 
 **Exit codes of `-report`:**
 
@@ -227,6 +264,7 @@ machine's names are not read, the strings are not screened for them, and the
 | 5 | the `.DEV` could not be written in full |
 | 6 | all 26 names for this minute taken; nothing written |
 | 7 | the clock is not a valid date and time; nothing written |
+| 8 | a file of this run's set appeared after its name was chosen (another run made it): it was left as it was, and no dump is kept under the name; the `.DEV`, when it was written, says which file |
 
 **The three batch files**, `snapon.bat`, `snapget.bat` and `snapoff.bat` in
 this directory, shipped as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
@@ -255,10 +293,19 @@ months 1, 9, 10, 11 and 12, midnight, a taken letter moving to the next
 whichever file of the set holds it, Z the last, all 26 taken refused,
 impossible clock fields refused), the SHA-256 on the real `/O2` binary
 (`-selftest-sha256 BASE`: FIPS 180-2's one-block, two-block and million-`a`
-examples, the empty message, and a million `a` read back through the file
-path), and `-report` end to end against a controller index no machine has:
-exit 4 with the `.DEV` written, a second run taking the next letter, and
-`-o` refused.
+examples, the empty message, the padding boundaries at 55, 56, 63, 64 and
+65 bytes and at 127 and 128 fed in uneven pieces, the length carry across
+the low 32-bit word driven through the count and bit-length routines
+directly, and the file path: a million `a` read back, a read that fails, a
+read cut short, a file held exclusively, a directory, a deleted file),
+`-report`'s publication on its own (`-selftest-publish BASE`: clean, a
+`.TXT` taken first, a `.PSC` taken after the `.BIN` was renamed, a temporary
+taken first - the other file keeps its contents, this run's are gone), and
+`-report` end to end against a controller index no machine has: exit 4 with
+the `.DEV` written, a second run taking the next letter, `-o` refused, the
+screen never naming the directory, `-nosysinfo -report` printing no
+unscreened text, and with `XHCISNAP_FAULT=clash` (a `.TXT` made after the
+name is chosen) exit 8 with that file intact.
 
 ### The machine it was captured on (2.3.0.0)
 
@@ -315,7 +362,7 @@ posting it. Registry text is printed as plain ASCII (any other byte becomes
 `?`) and cut at 96 characters with `...`. `-selftest-sysinfo` drives the
 withholding over canned names.
 
-`-nosysinfo` beside a dump (`XHCISNAP -nosysinfo -o C:\MYDUMP`) skips all
+`-nosysinfo` beside `-report` or a dump (`XHCISNAP -nosysinfo -report`) skips all
 of it, for a machine on which the reading itself causes a problem: no
 `GetVersionEx`, no registry read for the BIOS, the CPU or the names, no
 processor or memory query. The header then says "captured on - not read:

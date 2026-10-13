@@ -510,6 +510,52 @@ for %%S in ("sha256 empty: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca4959
         set FAILED=1
     )
 )
+rem The padding boundaries (55, 56, 63, 64, 65 bytes; 127 and 128 fed in
+rem uneven pieces), the length carry across the low word driven through the
+rem count and bit-length routines, and the file path's failures: a read
+rem that fails, one cut short, a file held exclusively, a directory.
+for %%S in ("sha256 55 a: 9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318 ok" "sha256 56 a: b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a ok" "sha256 63 a: 7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34 ok") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("sha256 64 a: ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb ok" "sha256 64 a, 1+63: ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb ok" "sha256 65 a: 635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0 ok") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("sha256 127 a, 1+62+64: c57e9278af78fa3cab38667bef4ce29d783787a2f731d4e12200270f0c32320a ok" "sha256 128 a, 63+1+63+1: 6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e ok") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("sha256 count no carry: 00000000 FFFFFFFF ok" "sha256 count wrap to 0: 00000001 00000000 ok" "sha256 count wrap past: 00000001 00000010 ok" "sha256 count second carry: 00000002 00000000 ok") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("sha256 bits 512 MiB - 1: 00000000 FFFFFFF8 ok" "sha256 bits 512 MiB: 00000001 00000000 ok" "sha256 bits 4 GiB - 1: 00000007 FFFFFFF8 ok" "sha256 bits 4 GiB: 00000008 00000000 ok" "sha256 length block after the wrap: 00000008 00000000 ok") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("sha256 file read fails: not read, error 30 ok" "sha256 file read cut short: not read, error 0 ok" "sha256 file held: not read, error 32 ok" "sha256 file directory: not read, error 5 ok") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
 findstr /C:"WRONG" "%BASE%.sha.log" > nul
 if not errorlevel 1 (
     echo FAIL: the SHA-256 self-test printed a WRONG digest
@@ -570,6 +616,102 @@ if errorlevel 1 (
     echo FAIL: the -report -o refusal does not say it does not take -o
     set FAILED=1
 )
+rem Codex review of 38.1, round 1. The screen never names the directory (it
+rem is often the user's profile); -nosysinfo before -report is accepted too;
+rem and with -nosysinfo the names are not read, so the .DEV prints no free
+rem text unscreened - it says so, and the Windows directory is named, not
+rem shown.
+for %%I in ("%RUNDIR%") do set "RUNNAME=%%~nxI"
+for %%F in ("%BASE%.report1.log" "%BASE%.report2.log") do (
+    findstr /I /C:"%RUNNAME%" %%F > nul
+    if not errorlevel 1 (
+        echo FAIL: the -report screen names the current directory: %%F
+        set FAILED=1
+    )
+)
+mkdir "%RUNDIR%\rep3"
+pushd "%RUNDIR%\rep3"
+"%~dp0XHCISNAP.EXE" -nosysinfo -report -c 99 > "%BASE%.report4.log"
+if not "%errorlevel%"=="4" (
+    echo FAIL: -nosysinfo -report with no controller exited %errorlevel%, expected 4
+    set FAILED=1
+)
+copy /b *.DEV "%BASE%.nosys.txt" > nul
+popd
+for %%S in ("-nosysinfo: this machine's names were not read, so no free text" "in the Windows directory's System32\Drivers" "skipped by -nosysinfo") do (
+    findstr /C:%%S "%BASE%.nosys.txt" > nul
+    if errorlevel 1 (
+        echo FAIL: the -nosysinfo .DEV does not say %%S
+        set FAILED=1
+    )
+)
+findstr /I /C:"%SystemRoot%" "%BASE%.nosys.txt" > nul
+if not errorlevel 1 (
+    echo FAIL: the -nosysinfo .DEV prints the Windows directory unscreened
+    set FAILED=1
+)
+
+rem A file of the set made by another run after the name was chosen
+rem (XHCISNAP_FAULT=clash makes the .TXT): it survives as it was, the run
+rem says so, takes no dump under the name, and exits 8.
+mkdir "%RUNDIR%\rep2"
+pushd "%RUNDIR%\rep2"
+set "XHCISNAP_FAULT=clash"
+"%~dp0XHCISNAP.EXE" -report -c 99 > "%BASE%.clash.log"
+set CLASHRC=%errorlevel%
+set "XHCISNAP_FAULT="
+if not "%CLASHRC%"=="8" (
+    echo FAIL: -report with a clashing .TXT exited %CLASHRC%, expected 8
+    set FAILED=1
+)
+set TXTCOUNT=0
+for %%F in (*.TXT) do set /a TXTCOUNT+=1
+if not "%TXTCOUNT%"=="1" (
+    echo FAIL: the clash left %TXTCOUNT% .TXT files, expected the other run's 1
+    set FAILED=1
+)
+copy /b *.TXT "%BASE%.clash-txt.txt" > nul
+copy /b *.DEV "%BASE%.clash-dev.txt" > nul
+for %%F in (*.BIN *.PSC *.TMP) do (
+    echo FAIL: the clash left %%F
+    set FAILED=1
+)
+popd
+findstr /C:"made by XHCISNAP_FAULT=clash, standing in for another run" "%BASE%.clash-txt.txt" > nul
+if errorlevel 1 (
+    echo FAIL: the other run's .TXT did not survive the clash as it was
+    set FAILED=1
+)
+for %%S in ("appeared after" "NOT taken: " "end of device report") do (
+    findstr /C:%%S "%BASE%.clash-dev.txt" > nul
+    if errorlevel 1 (
+        echo FAIL: the clash .DEV does not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("appeared after this run chose its name" "It was left alone and is not this" "Attach ") do (
+    findstr /C:%%S "%BASE%.clash.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the clash screen does not say %%S
+        set FAILED=1
+    )
+)
+
+rem -report's publication on its own (report_publish, region_create): clean,
+rem a .TXT taken first, a .PSC taken after the .BIN was renamed, a temporary
+rem taken first. The other file keeps its contents and this run's are gone.
+"%~dp0XHCISNAP.EXE" -selftest-publish "%BASE%-pub" > "%BASE%.publish.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-publish exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("publish clean: ok" "publish .TXT taken: ok" "publish .PSC taken: ok" "publish .BIN.TMP taken: ok" "[end]") do (
+    findstr /C:%%S "%BASE%.publish.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the publication self-test does not say %%S
+        set FAILED=1
+    )
+)
 
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
@@ -578,5 +720,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 22 cases, all passed
+echo xhcisnap selftest: 25 cases, all passed
 exit /b 0

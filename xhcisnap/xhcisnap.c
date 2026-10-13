@@ -713,6 +713,138 @@ static int take_window(HANDLE device, unsigned long region,
  * pair itself: if the second rename fails, `main` deletes both finals rather
  * than leave a new `.BIN` beside an old `.PSC`. (Codex round 15.)
  */
+/*
+ * **-report never deletes or replaces a file it did not create** (Codex
+ * review of 38.1, round 1). Its base name is chosen from the clock as one no
+ * file has, but another run - a second -report, or a -dump -o with that
+ * basename - can create one of the set between the choice and the write.
+ * So in report mode the temporaries are created with CREATE_NEW, the .TXT
+ * with O_EXCL, and the two regions are published with a bare MoveFileA,
+ * which refuses an existing destination, with no DeleteFileA before it; a
+ * failure removes only what this run created. A name found taken is a clash:
+ * the other file is left as it was, the run says so, and -report exits 8.
+ * -dump and -o keep their own rules (publish_region below), which replace.
+ */
+static int reportMode;
+static char dumpWhy[256];
+static int reportClash;
+static char reportClashName[MAX_PATH];
+static int reportBinOurs;
+static int reportPscOurs;
+static int reportTxtOurs;
+
+static int name_clash_error(DWORD err)
+{
+    return (err == ERROR_FILE_EXISTS || err == ERROR_ALREADY_EXISTS) ? 1 : 0;
+}
+
+static void note_clash(const char *name)
+{
+    if (!reportClash) {
+        reportClash = 1;
+        _snprintf(reportClashName, sizeof(reportClashName) - 1, "%s", name);
+        reportClashName[sizeof(reportClashName) - 1] = '\0';
+    }
+    printf("  *** %s appeared after this run chose its name - another run "
+           "or program\n      made it. It is left as it was.\n", name);
+}
+
+/* A region's temporary file: replaced by -dump, created new by -report. */
+static HANDLE region_create(const char *path)
+{
+    HANDLE file;
+    DWORD err;
+
+    file = CreateFileA(path, GENERIC_WRITE, 0, NULL,
+                       reportMode ? CREATE_NEW : CREATE_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        err = GetLastError();
+        if (reportMode && name_clash_error(err)) {
+            note_clash(path);
+        } else {
+            printf("  cannot create %s, error %lu\n", path,
+                   (unsigned long)err);
+        }
+    }
+    return file;
+}
+
+#define PUB_OK      0
+#define PUB_CLASH   1
+#define PUB_FAILED  2
+
+/*
+ * -report's publication: the .TXT is created first (O_EXCL), so a clash on
+ * it costs nothing but the temporaries; then each region is renamed onto
+ * its final name, which MoveFileA refuses if the name exists. On any
+ * failure the temporaries and whatever this call already published are
+ * removed - all of them this run's own - and nothing else is touched.
+ * `*txtFd` is the open .TXT on PUB_OK, or -1 when it could not be created
+ * for a reason other than a clash (the report then goes to the screen, as a
+ * dump's does).
+ */
+static int report_publish(const char *binTmp, const char *bin,
+                          const char *pscTmp, const char *psc,
+                          const char *txt, int *txtFd)
+{
+    DWORD err;
+    int binMoved;
+    int clash;
+    const char *failed;
+
+    binMoved = 0;
+    *txtFd = _open(txt, _O_WRONLY | _O_CREAT | _O_EXCL | _O_TEXT,
+                   _S_IREAD | _S_IWRITE);
+    if (*txtFd < 0) {
+        if (errno == EEXIST) {
+            note_clash(txt);
+            DeleteFileA(binTmp);
+            DeleteFileA(pscTmp);
+            return PUB_CLASH;
+        }
+    } else {
+        reportTxtOurs = 1;
+    }
+    failed = bin;
+    if (!MoveFileA(binTmp, bin)) {
+        goto fail;
+    }
+    binMoved = 1;
+    reportBinOurs = 1;
+    failed = psc;
+    if (!MoveFileA(pscTmp, psc)) {
+        goto fail;
+    }
+    reportPscOurs = 1;
+    return PUB_OK;
+
+fail:
+    err = GetLastError();
+    clash = name_clash_error(err) ||
+            GetFileAttributesA(failed) != 0xFFFFFFFFUL;
+    if (clash) {
+        note_clash(failed);
+    } else {
+        printf("  cannot rename %s.TMP to %s, error %lu\n", failed, failed,
+               (unsigned long)err);
+    }
+    if (!binMoved) {
+        DeleteFileA(binTmp);
+    }
+    DeleteFileA(pscTmp);
+    if (reportBinOurs) {
+        DeleteFileA(bin);
+        reportBinOurs = 0;
+    }
+    if (reportTxtOurs) {
+        _close(*txtFd);
+        DeleteFileA(txt);
+        reportTxtOurs = 0;
+    }
+    *txtFd = -1;
+    return clash ? PUB_CLASH : PUB_FAILED;
+}
 static unsigned long abandon_region(HANDLE file, const char *path)
 {
     CloseHandle(file);
@@ -775,11 +907,8 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
     unsigned long total;
     unsigned long windows;
 
-    file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
-                       FILE_ATTRIBUTE_NORMAL, NULL);
+    file = region_create(path);
     if (file == INVALID_HANDLE_VALUE) {
-        printf("  cannot create %s, error %lu\n", path,
-               (unsigned long)GetLastError());
         return (unsigned long)-1;
     }
 
@@ -1465,11 +1594,21 @@ static const char *sys_os_name(unsigned long platform, unsigned long major,
 #define SYS_WITHHELD "(withheld: it contains this machine's computer, user, " \
                      "domain or workgroup name)"
 
+#define SYS_UNSCREENED "(withheld: not screened - this machine's names were " \
+                       "not read, so free text is not printed)"
+
 static char sysNames[SYS_NAMES][SYS_NAME_BYTES];
 static int sysNamesLoaded;
-/* -report with -nosysinfo: the names are not read, so sys_clean cleans the
- * characters and withholds nothing (task 38.1). */
-static int cleanSkipNames;
+/*
+ * -report with -nosysinfo: the names are not read (the option's promise), so
+ * nothing can be screened for them, and sys_clean then withholds every free
+ * text string rather than print it unscreened. The same holds where the
+ * names were read but this machine's computer name could not be: a screen
+ * with no computer name in it is not a screen. The privacy rule does not
+ * depend on -nosysinfo (Codex review of 38.1, round 1; until then
+ * -nosysinfo switched the withholding off and printed the strings).
+ */
+static int sysNamesOff;
 
 static void sys_load_names(void)
 {
@@ -1622,6 +1761,17 @@ static int sys_has_name(const char *text)
     return 0;
 }
 
+/* Whether strings can be screened: the names were read, and the computer
+ * name is among them (on NT GetComputerNameA, on 9x VNETSUP as well). */
+static int sys_can_screen(void)
+{
+    if (sysNamesOff) {
+        return 0;
+    }
+    sys_load_names();
+    return (sysNames[0][0] != '\0' || sysNames[4][0] != '\0') ? 1 : 0;
+}
+
 /*
  * A registry string made safe to paste: printable ASCII only (anything else,
  * a control byte or a byte from the machine's code page, becomes '?', since
@@ -1633,20 +1783,12 @@ static int sys_has_name(const char *text)
  * holds one of the machine's names (sys_has_name). The self-test loads canned
  * names, so it is pure there.
  */
-static void sys_clean(const char *in, char *out, size_t outBytes)
+static void sys_clean_chars(const char *in, char *out, size_t outBytes,
+                            int idOnly)
 {
     size_t n;
     int space;
-    int raw;
 
-    if (outBytes < 8) {
-        if (outBytes != 0) {
-            out[0] = '\0';
-        }
-        return;
-    }
-    /* As the registry gave it, before any byte is changed or cut. */
-    raw = cleanSkipNames ? 0 : sys_has_name(in);
     n = 0;
     space = 0;
     while (*in == ' ' || *in == '\t') {
@@ -1654,6 +1796,7 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
     }
     for (; *in != '\0'; in++) {
         unsigned char c = (unsigned char)*in;
+        int keep;
 
         if (c == ' ' || c == '\t') {
             space = 1;
@@ -1670,7 +1813,15 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
             out[n++] = ' ';
         }
         space = 0;
-        out[n++] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+        if (idOnly) {
+            keep = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') || c == '_' || c == '&' ||
+                   c == '\\' || c == '.' || c == '#' || c == '{' ||
+                   c == '}' || c == '-' || c == '(' || c == ')';
+        } else {
+            keep = (c >= 0x20 && c < 0x7F);
+        }
+        out[n++] = keep ? (char)c : '?';
     }
     if (*in != '\0') {
         out[n++] = '.';
@@ -1678,10 +1829,55 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
         out[n++] = '.';
     }
     out[n] = '\0';
-    if (!cleanSkipNames && (raw || sys_has_name(out)) &&
+}
+
+static void sys_clean(const char *in, char *out, size_t outBytes)
+{
+    int raw;
+
+    if (outBytes < 8) {
+        if (outBytes != 0) {
+            out[0] = '\0';
+        }
+        return;
+    }
+    if (!sys_can_screen()) {
+        if (strlen(SYS_UNSCREENED) < outBytes) {
+            strcpy(out, SYS_UNSCREENED);
+        } else {
+            out[0] = '\0';
+        }
+        return;
+    }
+    /* As the registry gave it, before any byte is changed or cut. */
+    raw = sys_has_name(in);
+    sys_clean_chars(in, out, outBytes, 0);
+    if ((raw || sys_has_name(out)) &&
         strlen(SYS_WITHHELD) < outBytes) {
         strcpy(out, SYS_WITHHELD);
     }
+}
+
+/*
+ * An identifier the system generated - a device id with its instance part
+ * already withheld where it can be a serial, a service name, a driver key -
+ * rather than free text. Screened as sys_clean does where screening is
+ * possible; where it is not, it is still printed, but only in the letters,
+ * digits and punctuation an id is made of, so no sentence can pass.
+ */
+static void sys_clean_id(const char *in, char *out, size_t outBytes)
+{
+    if (outBytes < 8) {
+        if (outBytes != 0) {
+            out[0] = '\0';
+        }
+        return;
+    }
+    if (sys_can_screen()) {
+        sys_clean(in, out, outBytes);
+        return;
+    }
+    sys_clean_chars(in, out, outBytes, 1);
 }
 
 /*
@@ -6908,8 +7104,6 @@ static int set_verbosity(unsigned long verbosity, int force)
  * The time the run started, read once, names the files and is written
  * inside the .DEV and the .TXT with its year.
  */
-static int reportMode;
-static char dumpWhy[256];
 
 static void run_time_once(void)
 {
@@ -7173,15 +7367,32 @@ static void sha256_init(SNAP_SHA256 *c)
     c->Used = 0;
 }
 
+/* The byte count as two words: the carry out of the low one. Its own
+ * routine so -selftest-sha256 drives the carry directly rather than through
+ * a 4 GB message. */
+static void sha256_count(SNAP_SHA256 *c, unsigned long n)
+{
+    c->BytesLo = (c->BytesLo + n) & 0xFFFFFFFFUL;
+    if (c->BytesLo < n) {
+        c->BytesHi = (c->BytesHi + 1) & 0xFFFFFFFFUL;
+    }
+}
+
+/* The message length in bits, as the two big-endian words of the last
+ * block: the byte count times eight, carried across the word. */
+static void sha256_bits(const SNAP_SHA256 *c, unsigned long *bitsHi,
+                        unsigned long *bitsLo)
+{
+    *bitsHi = ((c->BytesHi << 3) | (c->BytesLo >> 29)) & 0xFFFFFFFFUL;
+    *bitsLo = (c->BytesLo << 3) & 0xFFFFFFFFUL;
+}
+
 static void sha256_update(SNAP_SHA256 *c, const unsigned char *data,
                           unsigned long n)
 {
     unsigned long take;
 
-    c->BytesLo = (c->BytesLo + n) & 0xFFFFFFFFUL;
-    if (c->BytesLo < n) {
-        c->BytesHi++;
-    }
+    sha256_count(c, n);
     while (n > 0) {
         take = 64 - c->Used;
         if (take > n) {
@@ -7212,8 +7423,7 @@ static void sha256_final(SNAP_SHA256 *c, unsigned char *digest)
     unsigned long bitsLo;
     int i;
 
-    bitsHi = ((c->BytesHi << 3) | (c->BytesLo >> 29)) & 0xFFFFFFFFUL;
-    bitsLo = (c->BytesLo << 3) & 0xFFFFFFFFUL;
+    sha256_bits(c, &bitsHi, &bitsLo);
     c->Block[c->Used++] = 0x80;
     if (c->Used > 56) {
         memset(c->Block + c->Used, 0, 64 - c->Used);
@@ -7246,47 +7456,91 @@ static void sha256_hex(const unsigned char *digest, char *out)
  * WOW64's file system redirection off around a read of the native
  * system32, as driver_file_version does: the x86 tool on a 64-bit Windows
  * would otherwise read SysWOW64. Both routines are looked up, so 98 SE, ME
- * and 2000 never see them.
+ * and 2000 never see them. **The window is one call wide** (Codex review
+ * of 38.1, round 1): redirection off covers a LoadLibrary too, so a
+ * version.dll loaded inside it is the native 64-bit one, which an x86
+ * process cannot load. So everything is loaded and resolved first
+ * (wow64_resolve, ver_load), and the redirection is off only around each
+ * CreateFileA and each GetFileVersionInfo call on an installed file, and
+ * restored straight after it.
  */
 static PVOID wowRedir;
 static int wowRedirOff;
+static int wowResolved;
+static PFN_W64DIS wowDis;
+static PFN_W64REV wowRev;
 
-static void wow64_redirect_off(void)
+static void wow64_resolve(void)
 {
     HMODULE k32;
-    PFN_W64DIS dis;
 
-    wowRedirOff = 0;
+    if (wowResolved) {
+        return;
+    }
+    wowResolved = 1;
+    wowDis = NULL;
+    wowRev = NULL;
     k32 = GetModuleHandleA("kernel32.dll");
     if (k32 == NULL) {
         return;
     }
-    dis = (PFN_W64DIS)GetProcAddress(k32, "Wow64DisableWow64FsRedirection");
-    if (dis != NULL && GetProcAddress(k32, "Wow64RevertWow64FsRedirection")
-                           != NULL &&
-        dis(&wowRedir)) {
+    wowDis = (PFN_W64DIS)GetProcAddress(k32, "Wow64DisableWow64FsRedirection");
+    wowRev = (PFN_W64REV)GetProcAddress(k32, "Wow64RevertWow64FsRedirection");
+    if (wowDis == NULL || wowRev == NULL) {
+        wowDis = NULL;
+        wowRev = NULL;
+    }
+}
+
+static void wow64_redirect_off(void)
+{
+    wowRedirOff = 0;
+    wow64_resolve();
+    if (wowDis != NULL && wowDis(&wowRedir)) {
         wowRedirOff = 1;
     }
 }
 
 static void wow64_redirect_on(void)
 {
-    HMODULE k32;
-    PFN_W64REV rev;
-
     if (!wowRedirOff) {
         return;
     }
     wowRedirOff = 0;
-    k32 = GetModuleHandleA("kernel32.dll");
-    rev = (k32 != NULL)
-              ? (PFN_W64REV)GetProcAddress(k32, "Wow64RevertWow64FsRedirection")
-              : NULL;
-    if (rev != NULL) {
-        rev(wowRedir);
+    if (wowRev != NULL) {
+        wowRev(wowRedir);
     }
 }
 
+/* version.dll, loaded once with the redirection on, so it is the x86 one. */
+static struct {
+    HMODULE Module;
+    PFN_GFVIS Size;
+    PFN_GFVI Info;
+    PFN_VQV Query;
+} verApi;
+
+static void ver_load(void)
+{
+    memset(&verApi, 0, sizeof(verApi));
+    verApi.Module = LoadLibraryA("version.dll");
+    if (verApi.Module == NULL) {
+        return;
+    }
+    verApi.Size = (PFN_GFVIS)GetProcAddress(verApi.Module,
+                                            "GetFileVersionInfoSizeA");
+    verApi.Info = (PFN_GFVI)GetProcAddress(verApi.Module,
+                                           "GetFileVersionInfoA");
+    verApi.Query = (PFN_VQV)GetProcAddress(verApi.Module, "VerQueryValueA");
+}
+
+static void ver_unload(void)
+{
+    if (verApi.Module != NULL) {
+        FreeLibrary(verApi.Module);
+    }
+    memset(&verApi, 0, sizeof(verApi));
+}
 #define HASH_ABSENT   0
 #define HASH_OK       1
 #define HASH_FAILED   2
@@ -7294,8 +7548,18 @@ static void wow64_redirect_on(void)
 #define HASH_CHUNK 16384
 static unsigned char hashChunk[HASH_CHUNK];
 
-/* The size and SHA-256 of one file, read through ReadFile in chunks. */
-static int file_sha256(const char *path, unsigned long *size,
+/*
+ * The size and SHA-256 of one file, read through ReadFile in chunks. With
+ * `native` set the open is made with WOW64's redirection off (an installed
+ * file); the reads need no path and run with it on. `hashFault` is set by
+ * -selftest-sha256 alone: 1 makes the second ReadFile fail (as a failing
+ * disk would, ERROR_READ_FAULT), 2 makes it return end of file early (a file
+ * cut short under the reader), so both failure branches run on the real
+ * binary.
+ */
+static int hashFault;
+
+static int file_sha256(const char *path, int native, unsigned long *size,
                        unsigned char *digest, unsigned long *error)
 {
     HANDLE file;
@@ -7303,13 +7567,22 @@ static int file_sha256(const char *path, unsigned long *size,
     DWORD got;
     DWORD high;
     unsigned long total;
+    unsigned long reads;
 
     *size = 0;
     *error = 0;
+    if (native) {
+        wow64_redirect_off();
+    }
     file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
         *error = (unsigned long)GetLastError();
+    }
+    if (native) {
+        wow64_redirect_on();
+    }
+    if (file == INVALID_HANDLE_VALUE) {
         return (*error == ERROR_FILE_NOT_FOUND ||
                 *error == ERROR_PATH_NOT_FOUND) ? HASH_ABSENT : HASH_FAILED;
     }
@@ -7327,12 +7600,22 @@ static int file_sha256(const char *path, unsigned long *size,
     }
     sha256_init(&ctx);
     total = 0;
+    reads = 0;
     for (;;) {
         got = 0;
+        reads++;
+        if (hashFault == 1 && reads == 2) {
+            *error = ERROR_READ_FAULT;
+            CloseHandle(file);
+            return HASH_FAILED;
+        }
         if (!ReadFile(file, hashChunk, sizeof(hashChunk), &got, NULL)) {
             *error = (unsigned long)GetLastError();
             CloseHandle(file);
             return HASH_FAILED;
+        }
+        if (hashFault == 2 && reads == 2) {
+            got = 0;
         }
         if (got == 0) {
             break;
@@ -7349,42 +7632,41 @@ static int file_sha256(const char *path, unsigned long *size,
     return HASH_OK;
 }
 
-/* A file's version resource as a.b.c.d into `out`; 0 when there is none. */
+/* A file's version resource as a.b.c.d into `out`; 0 when there is none.
+ * version.dll is ver_load's, loaded beforehand; the redirection is off only
+ * around the two calls that open the file. */
 static int file_version_text(const char *path, char *out, size_t outBytes)
 {
-    HMODULE ver;
-    PFN_GFVIS gfvis;
-    PFN_GFVI gfvi;
-    PFN_VQV vqv;
     DWORD size, dummy;
     void *block;
     VS_FIXEDFILEINFO *ffi;
     UINT len;
+    BOOL got;
     int ok;
 
     ok = 0;
-    _snprintf(out, outBytes - 1, "not read (version.dll did not load)");
-    out[outBytes - 1] = '\0';
-    ver = LoadLibraryA("version.dll");
-    if (ver == NULL) {
+    if (verApi.Module == NULL) {
+        _snprintf(out, outBytes - 1, "not read (version.dll did not load)");
+        out[outBytes - 1] = '\0';
         return 0;
     }
-    gfvis = (PFN_GFVIS)GetProcAddress(ver, "GetFileVersionInfoSizeA");
-    gfvi = (PFN_GFVI)GetProcAddress(ver, "GetFileVersionInfoA");
-    vqv = (PFN_VQV)GetProcAddress(ver, "VerQueryValueA");
-    if (gfvis == NULL || gfvi == NULL || vqv == NULL) {
+    if (verApi.Size == NULL || verApi.Info == NULL || verApi.Query == NULL) {
         _snprintf(out, outBytes - 1, "not read (version.dll lacks a routine)");
         out[outBytes - 1] = '\0';
-        FreeLibrary(ver);
         return 0;
     }
-    size = gfvis((LPSTR)path, &dummy);
+    wow64_redirect_off();
+    size = verApi.Size((LPSTR)path, &dummy);
+    wow64_redirect_on();
     block = (size != 0) ? malloc(size) : NULL;
-    if (block == NULL) {
-        _snprintf(out, outBytes - 1, "none (no version resource)");
-    } else if (gfvi((LPSTR)path, 0, size, block) &&
-               vqv(block, "\\", (LPVOID *)&ffi, &len) &&
-               len >= sizeof(VS_FIXEDFILEINFO)) {
+    got = FALSE;
+    if (block != NULL) {
+        wow64_redirect_off();
+        got = verApi.Info((LPSTR)path, 0, size, block);
+        wow64_redirect_on();
+    }
+    if (got && verApi.Query(block, "\\", (LPVOID *)&ffi, &len) &&
+        len >= sizeof(VS_FIXEDFILEINFO)) {
         _snprintf(out, outBytes - 1, "%u.%u.%u.%u",
                   (unsigned)HIWORD(ffi->dwFileVersionMS),
                   (unsigned)LOWORD(ffi->dwFileVersionMS),
@@ -7396,14 +7678,20 @@ static int file_version_text(const char *path, char *out, size_t outBytes)
     }
     out[outBytes - 1] = '\0';
     free(block);
-    FreeLibrary(ver);
     return ok;
 }
-
 /*
  * `-selftest-sha256 BASE`: the FIPS 180-2 examples (one block, two blocks,
- * a million 'a'), the empty message, then the file path: a million 'a'
- * written to BASE.SHA and read back through file_sha256, and a missing file.
+ * a million 'a'), the empty message, and the padding boundaries - 55, 56,
+ * 63, 64 and 65 bytes, where the 0x80 and the length do or do not fit in
+ * the last block, and 127 and 128, the same a block later, fed in uneven
+ * pieces. Then the length carry, driven through sha256_count and
+ * sha256_bits directly (a message past 512 MiB or 4 GB is not one a
+ * self-test can hash): the low word wrapping, the bit count carrying into
+ * the high word, and the last block's length bytes after a wrap. Then the
+ * file path: a million 'a' written to BASE.SHA and read back through
+ * file_sha256, a read that fails, a read cut short, a file another handle
+ * holds exclusively, a directory, and the file once deleted.
  */
 static int selftest_sha_mem(const char *label, const unsigned char *data,
                             unsigned long n, unsigned long repeat,
@@ -7425,17 +7713,106 @@ static int selftest_sha_mem(const char *label, const unsigned char *data,
     return (strcmp(hex, expect) == 0) ? 0 : 1;
 }
 
+/* `n` bytes of 'a' fed in the pieces `cuts` names (0 ends the list). */
+static int selftest_sha_split(const char *label, unsigned long n,
+                              const unsigned long *cuts, const char *expect)
+{
+    static unsigned char as[256];
+    SNAP_SHA256 ctx;
+    unsigned char digest[32];
+    char hex[65];
+    unsigned long at;
+    int k;
+
+    memset(as, 'a', sizeof(as));
+    sha256_init(&ctx);
+    at = 0;
+    for (k = 0; cuts != NULL && cuts[k] != 0 && at < n; k++) {
+        unsigned long take = (cuts[k] > n - at) ? n - at : cuts[k];
+
+        sha256_update(&ctx, as + at, take);
+        at += take;
+    }
+    if (at < n) {
+        sha256_update(&ctx, as + at, n - at);
+    }
+    sha256_final(&ctx, digest);
+    sha256_hex(digest, hex);
+    printf("sha256 %s: %s %s\n", label, hex,
+           (strcmp(hex, expect) == 0) ? "ok" : "WRONG");
+    return (strcmp(hex, expect) == 0) ? 0 : 1;
+}
+
+static int selftest_sha_count(const char *label, unsigned long lo,
+                              unsigned long hi, unsigned long add,
+                              unsigned long wantLo, unsigned long wantHi)
+{
+    SNAP_SHA256 ctx;
+    int ok;
+
+    sha256_init(&ctx);
+    ctx.BytesLo = lo;
+    ctx.BytesHi = hi;
+    sha256_count(&ctx, add);
+    ok = (ctx.BytesLo == wantLo && ctx.BytesHi == wantHi);
+    printf("sha256 count %s: %08lX %08lX %s\n", label, ctx.BytesHi,
+           ctx.BytesLo, ok ? "ok" : "WRONG");
+    return ok ? 0 : 1;
+}
+
+static int selftest_sha_bits(const char *label, unsigned long lo,
+                             unsigned long hi, unsigned long wantHi,
+                             unsigned long wantLo)
+{
+    SNAP_SHA256 ctx;
+    unsigned long bitsHi;
+    unsigned long bitsLo;
+    int ok;
+
+    sha256_init(&ctx);
+    ctx.BytesLo = lo;
+    ctx.BytesHi = hi;
+    sha256_bits(&ctx, &bitsHi, &bitsLo);
+    ok = (bitsHi == wantHi && bitsLo == wantLo);
+    printf("sha256 bits %s: %08lX %08lX %s\n", label, bitsHi, bitsLo,
+           ok ? "ok" : "WRONG");
+    return ok ? 0 : 1;
+}
+
+static int selftest_sha_file(const char *label, const char *path, int want,
+                             unsigned long wantErr)
+{
+    unsigned char digest[32];
+    unsigned long size;
+    unsigned long err;
+    int rc;
+    int ok;
+
+    rc = file_sha256(path, 0, &size, digest, &err);
+    ok = (rc == want && err == wantErr);
+    printf("sha256 file %s: %s, error %lu %s\n", label,
+           (rc == HASH_OK) ? "read" : (rc == HASH_ABSENT) ? "not present"
+                                                          : "not read",
+           err, ok ? "ok" : "WRONG");
+    return ok ? 0 : 1;
+}
+
 static int selftest_sha256(const char *base)
 {
     static const char million[] =
         "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0";
+    static const unsigned long cuts127[] = { 1, 62, 64, 0 };
+    static const unsigned long cuts128[] = { 63, 1, 63, 1, 0 };
+    static const unsigned long cuts64[] = { 1, 63, 0 };
     char path[MAX_PATH];
+    char dirPath[MAX_PATH];
     unsigned char buf[1000];
     unsigned char digest[32];
     char hex[65];
     unsigned long size;
     unsigned long err;
     HANDLE file;
+    HANDLE hold;
     DWORD put;
     int bad;
     int rc;
@@ -7454,12 +7831,62 @@ static int selftest_sha256(const char *base)
     bad |= selftest_sha_mem("million a, 1000 x 1000", buf, 1000, 1000, million);
     bad |= selftest_sha_mem("million a, 1000000 x 1", buf, 1, 1000000UL,
                             million);
+    bad |= selftest_sha_split("55 a", 55, NULL,
+        "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318");
+    bad |= selftest_sha_split("56 a", 56, NULL,
+        "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a");
+    bad |= selftest_sha_split("63 a", 63, NULL,
+        "7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34");
+    bad |= selftest_sha_split("64 a", 64, NULL,
+        "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+    bad |= selftest_sha_split("64 a, 1+63", 64, cuts64,
+        "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+    bad |= selftest_sha_split("65 a", 65, NULL,
+        "635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0");
+    bad |= selftest_sha_split("127 a, 1+62+64", 127, cuts127,
+        "c57e9278af78fa3cab38667bef4ce29d783787a2f731d4e12200270f0c32320a");
+    bad |= selftest_sha_split("128 a, 63+1+63+1", 128, cuts128,
+        "6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e");
+
+    bad |= selftest_sha_count("no carry", 0xFFFFFFF0UL, 0, 0x0F,
+                              0xFFFFFFFFUL, 0);
+    bad |= selftest_sha_count("wrap to 0", 0xFFFFFFF0UL, 0, 0x10, 0, 1);
+    bad |= selftest_sha_count("wrap past", 0xFFFFFFF0UL, 0, 0x20, 0x10, 1);
+    bad |= selftest_sha_count("second carry", 0xFFFFFFFFUL, 1, 1, 0, 2);
+    bad |= selftest_sha_bits("512 MiB - 1", 0x1FFFFFFFUL, 0, 0,
+                             0xFFFFFFF8UL);
+    bad |= selftest_sha_bits("512 MiB", 0x20000000UL, 0, 1, 0);
+    bad |= selftest_sha_bits("4 GiB - 1", 0xFFFFFFFFUL, 0, 7, 0xFFFFFFF8UL);
+    bad |= selftest_sha_bits("4 GiB", 0, 1, 8, 0);
+    {
+        /* The carry through sha256_update and into the last block: the
+         * count 3 short of the wrap, then "abc", must leave a count of
+         * exactly 4 GiB and put 2^35 bits in the last block's length. */
+        static const unsigned char want[8] = { 0, 0, 0, 8, 0, 0, 0, 0 };
+        SNAP_SHA256 ctx;
+        int ok;
+
+        sha256_init(&ctx);
+        ctx.BytesLo = 0xFFFFFFFDUL;
+        sha256_update(&ctx, (const unsigned char *)"abc", 3);
+        ok = (ctx.BytesLo == 0 && ctx.BytesHi == 1);
+        sha256_final(&ctx, digest);
+        ok = ok && memcmp(ctx.Block + 56, want, 8) == 0;
+        printf("sha256 length block after the wrap: %02X%02X%02X%02X "
+               "%02X%02X%02X%02X %s\n", ctx.Block[56], ctx.Block[57],
+               ctx.Block[58], ctx.Block[59], ctx.Block[60], ctx.Block[61],
+               ctx.Block[62], ctx.Block[63], ok ? "ok" : "WRONG");
+        if (!ok) {
+            bad = 1;
+        }
+    }
 
     if (strlen(base) > (size_t)(MAX_PATH - 12)) {
         printf("the basename is too long\n");
         return 2;
     }
     sprintf(path, "%s.SHA", base);
+    sprintf(dirPath, "%s.SHD", base);
     file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                        FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) {
@@ -7477,8 +7904,7 @@ static int selftest_sha256(const char *base)
         }
     }
     CloseHandle(file);
-    rc = file_sha256(path, &size, digest, &err);
-    DeleteFileA(path);
+    rc = file_sha256(path, 0, &size, digest, &err);
     if (rc != HASH_OK) {
         printf("sha256 file: not read, error %lu\n", err);
         bad = 1;
@@ -7491,7 +7917,34 @@ static int selftest_sha256(const char *base)
             bad = 1;
         }
     }
-    rc = file_sha256(path, &size, digest, &err);
+    hashFault = 1;
+    bad |= selftest_sha_file("read fails", path, HASH_FAILED,
+                             ERROR_READ_FAULT);
+    hashFault = 2;
+    bad |= selftest_sha_file("read cut short", path, HASH_FAILED, 0);
+    hashFault = 0;
+    hold = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hold == INVALID_HANDLE_VALUE) {
+        printf("sha256 file held: cannot hold %s, error %lu WRONG\n", path,
+               (unsigned long)GetLastError());
+        bad = 1;
+    } else {
+        bad |= selftest_sha_file("held", path, HASH_FAILED,
+                                 ERROR_SHARING_VIOLATION);
+        CloseHandle(hold);
+    }
+    DeleteFileA(path);
+    if (!CreateDirectoryA(dirPath, NULL)) {
+        printf("sha256 file directory: cannot create %s, error %lu WRONG\n",
+               dirPath, (unsigned long)GetLastError());
+        bad = 1;
+    } else {
+        bad |= selftest_sha_file("directory", dirPath, HASH_FAILED,
+                                 ERROR_ACCESS_DENIED);
+        RemoveDirectoryA(dirPath);
+    }
+    rc = file_sha256(path, 0, &size, digest, &err);
     printf("sha256 file deleted: %s\n",
            (rc == HASH_ABSENT) ? "not present" : "WRONG, it was read");
     if (rc != HASH_ABSENT) {
@@ -7500,7 +7953,6 @@ static int selftest_sha256(const char *base)
     printf("[end]\n");
     return bad ? 1 : 0;
 }
-
 /*
  * ---- the device report's writers ------------------------------------------
  */
@@ -7624,12 +8076,12 @@ static void dev_public_id(const char *id, char *out, size_t outBytes)
     size_t n;
 
     if (_strnicmp(id, "PCI\\", 4) == 0 || _strnicmp(id, "ROOT\\", 5) == 0) {
-        sys_clean(id, out, outBytes);
+        sys_clean_id(id, out, outBytes);
         return;
     }
     slash = strrchr(id, '\\');
     if (slash == NULL) {
-        sys_clean(id, out, outBytes);
+        sys_clean_id(id, out, outBytes);
         return;
     }
     {
@@ -7641,7 +8093,7 @@ static void dev_public_id(const char *id, char *out, size_t outBytes)
         }
         memcpy(tmp, id, n);
         strcpy(tmp + n, "(instance withheld)");
-        sys_clean(tmp, out, outBytes);
+        sys_clean_id(tmp, out, outBytes);
     }
 }
 
@@ -7994,7 +8446,13 @@ static void res_decode(unsigned long rid, const unsigned char *b,
         dev_line("private", "device private data, %lu bytes", size);
         return;
     default:
-        res_hex("other", rid, b, size);
+        /* Not as bytes: a class-specific or bus-specific descriptor is the
+         * driver's own data and can carry anything, a serial or a name
+         * included, and bytes cannot be screened (Codex review of 38.1,
+         * round 1). The memory, I/O, DMA, IRQ and bus-number fallbacks above
+         * still print theirs: those layouts are numbers. */
+        dev_line("other", "resource type %lu, %lu bytes, not printed",
+                 rid, size);
         return;
     }
 }
@@ -8367,7 +8825,7 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
         dev_line("description", "not read");
     }
     if (service[0] != '\0') {
-        sys_clean(service, text, sizeof(text));
+        sys_clean_id(service, text, sizeof(text));
         dev_line("service", "%s", text);
     } else {
         dev_line("service", "none named (on 98 SE and ME a WDM driver is "
@@ -8376,7 +8834,7 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
     if (driver[0] == '\0') {
         dev_line("driver key", "none: no driver is installed for it");
     } else if (!haveDriverKey) {
-        sys_clean(driver, text, sizeof(text));
+        sys_clean_id(driver, text, sizeof(text));
         dev_line("driver key", "%s, which does not open", text);
     } else {
         static const char *const names[] = {
@@ -8384,7 +8842,7 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
         };
         int k;
 
-        sys_clean(driver, text, sizeof(text));
+        sys_clean_id(driver, text, sizeof(text));
         dev_line("driver key", "%s", text);
         for (k = 0; names[k] != NULL; k++) {
             if (reg_raw_text(HKEY_LOCAL_MACHINE, keyPath, names[k], hw,
@@ -8591,7 +9049,9 @@ static void write_dev_files(void)
 
     comp("\n  installed files - size, file version and SHA-256, computed by "
          "xhcisnap:\n");
-    wow64_redirect_off();
+    /* Loaded and resolved with the redirection on; see wow64_resolve. */
+    wow64_resolve();
+    ver_load();
     for (i = 0; i < (int)(sizeof(instFiles) / sizeof(instFiles[0])); i++) {
         n = instFiles[i].SystemDir
                 ? GetSystemDirectoryA(dir, sizeof(dir))
@@ -8607,9 +9067,19 @@ static void write_dev_files(void)
         } else {
             sprintf(path, "%s\\System32\\Drivers\\%s", dir, instFiles[i].Name);
         }
-        sys_clean(path, clean, sizeof(clean));
+        if (sys_can_screen()) {
+            sys_clean(path, clean, sizeof(clean));
+        } else {
+            /* The directory is free text (a per-user one under Terminal
+             * Services), so with nothing to screen it is named, not shown. */
+            _snprintf(clean, sizeof(clean) - 1, "in the %s",
+                      instFiles[i].SystemDir ? "system directory"
+                                             : "Windows directory's "
+                                               "System32\\Drivers");
+            clean[sizeof(clean) - 1] = '\0';
+        }
         dev_line(instFiles[i].Name, "%s", clean);
-        rc = file_sha256(path, &size, digest, &err);
+        rc = file_sha256(path, 1, &size, digest, &err);
         if (rc == HASH_ABSENT) {
             dev_line("", "not present");
             say("  ", "%-12s not present", instFiles[i].Name);
@@ -8628,7 +9098,7 @@ static void write_dev_files(void)
         comp("      SHA-256 %s\n", hex);
         say("  ", "%-12s %lu bytes, version %s", instFiles[i].Name, size, ver);
     }
-    wow64_redirect_on();
+    ver_unload();
 }
 #pragma auto_inline(on)
 
@@ -8656,6 +9126,10 @@ static int take_dump(unsigned long controller, const char *base,
  *   5  BASE.DEV could not be written in full
  *   6  all 26 names for this minute are taken; nothing was written
  *   7  the clock gave an impossible date or time; nothing was written
+ *   8  a file of this run's set appeared after its name was chosen (another
+ *      run or program made it): that file was left as it was, and nothing of
+ *      the dump was kept under the name; the .DEV, if it was written, says
+ *      which file
  */
 #define REPORT_OK           0
 #define REPORT_TXT_BAD      3
@@ -8663,24 +9137,35 @@ static int take_dump(unsigned long controller, const char *base,
 #define REPORT_DEV_BAD      5
 #define REPORT_NAMES_FULL   6
 #define REPORT_BAD_CLOCK    7
+#define REPORT_CLASH        8
+
+/* XHCISNAP_FAULT=clash: a file of the set made by "another run" after the
+ * name is chosen, so the clash branch runs with no second process. */
+static int faultClash;
 
 static int take_report(unsigned long controller)
 {
     char base[16];
     char devPath[32];
     char name[32];
-    char cwd[MAX_PATH];
     int rc;
     int fd;
     int devOk;
     int appendOk;
     int dumpRc;
     int k;
-    int haveTxt;
     static const char *const outExts[] = { ".DEV", ".TXT", ".BIN", ".PSC" };
+    static const char *const dumpExts[] = {
+        ".TXT", ".BIN", ".PSC", ".BIN.TMP", ".PSC.TMP", NULL
+    };
 
     run_time_once();
-    cleanSkipNames = sysinfoOff;
+    sysNamesOff = sysinfoOff;
+    reportClash = 0;
+    reportClashName[0] = '\0';
+    reportBinOurs = 0;
+    reportPscOurs = 0;
+    reportTxtOurs = 0;
     rc = stamp_base(runTime.wMonth, runTime.wDay, runTime.wHour,
                     runTime.wMinute, stamp_exists_here, NULL, base);
     if (rc == STAMP_BADCLOCK) {
@@ -8699,23 +9184,29 @@ static int take_report(unsigned long controller)
                "overwritten.\n");
         return REPORT_NAMES_FULL;
     }
-    if (GetCurrentDirectoryA(sizeof(cwd), cwd) == 0) {
-        strcpy(cwd, "the current directory");
-    }
+    /* The current directory is not printed: it is often the user's profile,
+     * named after the user (Codex review of 38.1, round 1). */
     sprintf(devPath, "%s.DEV", base);
-    printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s, in\n"
-           "  %s\n", (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
-           (unsigned)runTime.wDay, (unsigned)runTime.wHour,
-           (unsigned)runTime.wMinute, base, cwd);
+    printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s, in "
+           "the current directory\n", (unsigned)runTime.wYear,
+           (unsigned)runTime.wMonth, (unsigned)runTime.wDay,
+           (unsigned)runTime.wHour, (unsigned)runTime.wMinute, base);
 
     /* Created, never replaced: O_EXCL refuses a name that appeared since
      * the stamp was chosen. */
     fd = _open(devPath, _O_WRONLY | _O_CREAT | _O_EXCL | _O_TEXT,
                _S_IREAD | _S_IWRITE);
+    if (fd < 0 && errno == EEXIST) {
+        note_clash(devPath);
+        printf("  Nothing was written. Run it again: it will take the next "
+               "letter.\n");
+        return REPORT_CLASH;
+    }
     companion = (fd >= 0) ? _fdopen(fd, "w") : NULL;
     if (companion == NULL) {
         if (fd >= 0) {
             _close(fd);
+            DeleteFileA(devPath);
         }
         printf("  *** cannot create %s (errno %d). Nothing else is written: "
                "run it from a\n      directory you can write to.\n", devPath,
@@ -8725,6 +9216,18 @@ static int take_report(unsigned long controller)
     companionOpened = 1;
     companionFailed = 0;
 
+    if (faultClash) {
+        FILE *other;
+
+        sprintf(name, "%s.TXT", base);
+        other = fopen(name, "w");
+        if (other != NULL) {
+            fprintf(other, "made by XHCISNAP_FAULT=clash, standing in for "
+                    "another run\n");
+            fclose(other);
+        }
+    }
+
     comp("xhci98 device report - xhcisnap -report\n");
     comp("  tool               xhcisnap %s, built %s\n", XHCISNAP_VERSION,
          XHCISNAP_BUILT);
@@ -8733,9 +9236,11 @@ static int take_report(unsigned long controller)
     comp("  files              %s.DEV (this), %s.TXT, %s.BIN, %s.PSC\n", base,
          base, base, base);
     write_companion_system();
-    if (cleanSkipNames) {
-        comp("\n  -nosysinfo: this machine's names were not read, so the "
-             "strings below were\n  not screened for them.\n");
+    if (!sys_can_screen()) {
+        comp("\n  %s: this machine's names were not read, so no free text "
+             "below could be\n  screened for them and none is printed; ids "
+             "are printed in their own\n  characters only.\n",
+             sysNamesOff ? "-nosysinfo" : "not screened");
     }
     printf("\ndevices:\n");
     write_dev_devices();
@@ -8756,14 +9261,25 @@ static int take_report(unsigned long controller)
     companionFailed = 0;
     extMismatch = 0;
     dumpWhy[0] = '\0';
-    reportMode = 1;
-    dumpRc = take_dump(controller, base, 0);
-    reportMode = 0;
-
-    haveTxt = 0;
-    sprintf(name, "%s.TXT", base);
-    if (GetFileAttributesA(name) != 0xFFFFFFFFUL) {
-        haveTxt = 1;
+    /* A name of the dump's set that exists now appeared after the stamp was
+     * chosen; the dump is not taken under it at all. */
+    for (k = 0; dumpExts[k] != NULL; k++) {
+        sprintf(name, "%s%s", base, dumpExts[k]);
+        if (stamp_exists_here(name, NULL)) {
+            note_clash(name);
+            break;
+        }
+    }
+    if (reportClash) {
+        _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "%s appeared "
+                  "after this run chose its name (another run or program "
+                  "made it), and was left alone", reportClashName);
+        dumpWhy[sizeof(dumpWhy) - 1] = '\0';
+        dumpRc = 1;
+    } else {
+        reportMode = 1;
+        dumpRc = take_dump(controller, base, 0);
+        reportMode = 0;
     }
 
     companionOpened = 0;
@@ -8780,6 +9296,10 @@ static int take_report(unsigned long controller)
             dev_line("dump", "taken, but %s.TXT is incomplete or the "
                      "extension's size disagreed; the screen said which",
                      base);
+        } else if (reportClash) {
+            dev_line("dump", "NOT taken: %s", dumpWhy);
+            dev_line("", "This report above still stands. Run the report "
+                     "again: it takes the next free name.");
         } else {
             dev_line("dump", "NOT taken: %s", (dumpWhy[0] != '\0')
                          ? dumpWhy : "see the lines on the screen");
@@ -8795,14 +9315,25 @@ static int take_report(unsigned long controller)
         printf("  *** the dump's result could not be added to %s\n", devPath);
     }
 
-    printf("\n--- files written in %s\n", cwd);
+    /* Only what this run made: a file of the same name that another run
+     * made is not listed as this one's. */
+    printf("\n--- files written in the current directory\n");
     for (k = 0; k < 4; k++) {
+        int ours;
+
+        ours = (k == 0) ? 1 : (k == 1) ? reportTxtOurs
+                        : (k == 2) ? reportBinOurs : reportPscOurs;
         sprintf(name, "%s%s", base, outExts[k]);
-        if (GetFileAttributesA(name) != 0xFFFFFFFFUL) {
+        if (ours && GetFileAttributesA(name) != 0xFFFFFFFFUL) {
             printf("  %s\n", name);
         }
     }
-    if (haveTxt) {
+    if (reportClash) {
+        printf("*** %s was made by another run or program after this one "
+               "chose the name.\n    It was left alone and is not this "
+               "run's. Attach %s.DEV, and run the\n    report again for a "
+               "dump.\n", reportClashName, base);
+    } else if (reportTxtOurs) {
         printf("Attach %s.DEV and %s.TXT; send %s.BIN and %s.PSC only if "
                "asked.\n", base, base, base, base);
     } else {
@@ -8810,6 +9341,9 @@ static int take_report(unsigned long controller)
     }
     if (!devOk || !appendOk) {
         return REPORT_DEV_BAD;
+    }
+    if (reportClash) {
+        return REPORT_CLASH;
     }
     if (dumpRc == 0) {
         return REPORT_OK;
@@ -8820,6 +9354,132 @@ static int take_report(unsigned long controller)
     return REPORT_NO_DUMP;
 }
 
+/*
+ * `-selftest-publish BASE`: report_publish and region_create on their own,
+ * with no controller, each case on fresh files: a clean publication; a .TXT
+ * another run made first; a .PSC another run made first, after the .BIN was
+ * already renamed; a temporary another run made first. In each clash the
+ * other file must keep its contents, this run's files must all be gone, and
+ * the clash must be reported. Exit 0 all held, 1 not.
+ */
+static int pub_put(const char *path, const char *text)
+{
+    FILE *f;
+
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        return 0;
+    }
+    fputs(text, f);
+    fclose(f);
+    return 1;
+}
+
+static int pub_is(const char *path, const char *text)
+{
+    char buf[64];
+    FILE *f;
+    size_t n;
+
+    f = fopen(path, "rb");
+    if (f == NULL) {
+        return 0;
+    }
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return strcmp(buf, text) == 0;
+}
+
+static int pub_gone(const char *path)
+{
+    return GetFileAttributesA(path) == 0xFFFFFFFFUL;
+}
+
+static void pub_clear(char names[][MAX_PATH], int count)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        DeleteFileA(names[i]);
+    }
+    reportClash = 0;
+    reportClashName[0] = '\0';
+    reportBinOurs = 0;
+    reportPscOurs = 0;
+    reportTxtOurs = 0;
+}
+
+static int selftest_publish(const char *base)
+{
+    char n[5][MAX_PATH];
+    int fd;
+    int rc;
+    int ok;
+    int bad;
+    HANDLE h;
+
+    if (strlen(base) > (size_t)(MAX_PATH - 12)) {
+        printf("the basename is too long\n");
+        return 2;
+    }
+    sprintf(n[0], "%s.BIN.TMP", base);
+    sprintf(n[1], "%s.BIN", base);
+    sprintf(n[2], "%s.PSC.TMP", base);
+    sprintf(n[3], "%s.PSC", base);
+    sprintf(n[4], "%s.TXT", base);
+    reportMode = 1;
+    bad = 0;
+
+    pub_clear(n, 5);
+    pub_put(n[0], "bin");
+    pub_put(n[2], "psc");
+    rc = report_publish(n[0], n[1], n[2], n[3], n[4], &fd);
+    if (fd >= 0) {
+        _close(fd);
+    }
+    ok = rc == PUB_OK && pub_is(n[1], "bin") && pub_is(n[3], "psc") &&
+         !pub_gone(n[4]) && pub_gone(n[0]) && pub_gone(n[2]) && !reportClash;
+    printf("publish clean: %s\n", ok ? "ok" : "WRONG");
+    bad |= !ok;
+
+    pub_clear(n, 5);
+    pub_put(n[0], "bin");
+    pub_put(n[2], "psc");
+    pub_put(n[4], "theirs");
+    rc = report_publish(n[0], n[1], n[2], n[3], n[4], &fd);
+    ok = rc == PUB_CLASH && fd < 0 && pub_is(n[4], "theirs") &&
+         pub_gone(n[0]) && pub_gone(n[1]) && pub_gone(n[2]) &&
+         pub_gone(n[3]) && reportClash && strcmp(reportClashName, n[4]) == 0;
+    printf("publish .TXT taken: %s\n", ok ? "ok" : "WRONG");
+    bad |= !ok;
+
+    pub_clear(n, 5);
+    pub_put(n[0], "bin");
+    pub_put(n[2], "psc");
+    pub_put(n[3], "theirs");
+    rc = report_publish(n[0], n[1], n[2], n[3], n[4], &fd);
+    ok = rc == PUB_CLASH && fd < 0 && pub_is(n[3], "theirs") &&
+         pub_gone(n[0]) && pub_gone(n[1]) && pub_gone(n[2]) &&
+         pub_gone(n[4]) && reportClash && strcmp(reportClashName, n[3]) == 0;
+    printf("publish .PSC taken: %s\n", ok ? "ok" : "WRONG");
+    bad |= !ok;
+
+    pub_clear(n, 5);
+    pub_put(n[0], "theirs");
+    h = region_create(n[0]);
+    if (h != INVALID_HANDLE_VALUE) {
+        CloseHandle(h);
+    }
+    ok = h == INVALID_HANDLE_VALUE && pub_is(n[0], "theirs") && reportClash;
+    printf("publish .BIN.TMP taken: %s\n", ok ? "ok" : "WRONG");
+    bad |= !ok;
+
+    pub_clear(n, 5);
+    reportMode = 0;
+    printf("[end]\n");
+    return bad ? 1 : 0;
+}
 /* ---- main --------------------------------------------------------------- */
 
 /* HCSPARAMS1.MaxPorts is eight bits, so this is the whole address space. */
@@ -8923,7 +9583,11 @@ static void usage_long(void)
 "                3 the .TXT is not complete, 4 no dump (the .DEV says why),\n"
 "                5 the .DEV is not complete, 6 all 26 names taken this minute,\n"
 "                7 the clock is not a valid date; at 6 and 7 nothing is\n"
-"                written.  SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT beside this\n"
+"                written.  8 a file of the set appeared after the name was\n"
+"                chosen (another run made it): it is left alone and no dump\n"
+"                is kept under that name.  -report never replaces or deletes\n"
+"                a file it did not create.  SNAPON.BAT, SNAPGET.BAT and\n"
+"                SNAPOFF.BAT beside this\n"
 "                tool run -verbosity 2, -report and -disable.\n"
 "  -dump         take a dump with the defaults.  Implied by -c and -o, so it\n"
 "                is only needed when neither is given.  Writes BASE.BIN,\n"
@@ -8937,8 +9601,8 @@ static void usage_long(void)
 "                own USB stack already owns HCD0 leaves this driver at 1 or\n"
 "                2 - try those before concluding anything.\n"
 "  -o BASENAME   output basename.  Default XHCISNAP, in the CURRENT\n"
-"                directory - give a full path (-o C:\\MYDUMP) and you always\n"
-"                know where it went.\n"
+"                directory, where the dump prints its resolved path.  For a\n"
+"                field report use -report, which names its own files.\n"
 "  -help, -?, /? this text.  Add | MORE - it is longer than a screen, which\n"
 "                the short usage is deliberately not.\n"
 "  -verbosity N  set XhciLogVerbosity to exactly N, 0-4, up or down, in the\n"
@@ -9253,6 +9917,8 @@ int main(int argc, char **argv)
                 faultWrite = 1;
             } else if (strcmp(fault, "close") == 0) {
                 faultClose = 1;
+            } else if (strcmp(fault, "clash") == 0) {
+                faultClash = 1;
             }
         }
     }
@@ -9315,6 +9981,8 @@ int main(int argc, char **argv)
             return selftest_stamp();
         } else if (strcmp(argv[i], "-selftest-sha256") == 0 && i + 1 < argc) {
             return selftest_sha256(argv[++i]);
+        } else if (strcmp(argv[i], "-selftest-publish") == 0 && i + 1 < argc) {
+            return selftest_publish(argv[++i]);
         } else if (strcmp(argv[i], "-help") == 0 ||
                    strcmp(argv[i], "-?") == 0 ||
                    strcmp(argv[i], "/?") == 0) {
@@ -9563,6 +10231,7 @@ static int take_dump(unsigned long controller, const char *base,
     unsigned long portscBytes;
     int tearTorn;
     int tearSeen;
+    int txtFd;
     int i;
 
     run_time_once();
@@ -9666,7 +10335,29 @@ static int take_dump(unsigned long controller, const char *base,
      * same moment - the report for the previous set must not sit beside this
      * one's raw files, which it would if the fopen below failed.
      */
-    if (!publish_region(extTmpPath, extPath)
+    txtFd = -1;
+    if (reportMode) {
+        /* -report's own publication: nothing replaced, nothing of another
+         * run's deleted (report_publish). */
+        int pub = report_publish(extTmpPath, extPath, portscTmpPath,
+                                 portscPath, textPath, &txtFd);
+
+        if (pub != PUB_OK) {
+            printf("  no dump was published\n");
+            if (pub == PUB_CLASH) {
+                _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "read, but %s "
+                          "appeared after this run chose its name (another "
+                          "run or program made it); it was left alone, and "
+                          "nothing of this dump was kept", reportClashName);
+            } else {
+                _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "read, but %s and "
+                          "%s could not be renamed into place", extPath,
+                          portscPath);
+            }
+            dumpWhy[sizeof(dumpWhy) - 1] = '\0';
+            return 1;
+        }
+    } else if (!publish_region(extTmpPath, extPath)
         || !publish_region(portscTmpPath, portscPath)) {
         DeleteFileA(extTmpPath);
         DeleteFileA(portscTmpPath);
@@ -9685,7 +10376,9 @@ static int take_dump(unsigned long controller, const char *base,
         dumpWhy[sizeof(dumpWhy) - 1] = '\0';
         return 1;
     }
-    DeleteFileA(textPath);
+    if (!reportMode) {
+        DeleteFileA(textPath);
+    }
 
     /*
      * The companion is opened here, after both regions are published, so a
@@ -9697,9 +10390,23 @@ static int take_dump(unsigned long controller, const char *base,
      * thing the bench must see whatever the level is the PORTSC table, and
      * that is printed to the screen explicitly below.
      */
-    companion = fopen(textPath, "w");
+    if (reportMode) {
+        companion = (txtFd >= 0) ? _fdopen(txtFd, "w") : NULL;
+        if (companion == NULL && txtFd >= 0) {
+            /* This run's own empty .TXT, which nothing will now fill. */
+            _close(txtFd);
+            DeleteFileA(textPath);
+            reportTxtOurs = 0;
+        }
+    } else {
+        companion = fopen(textPath, "w");
+    }
     companionOpened = (companion != NULL) ? 1 : 0;
-    if (companion == NULL) {
+    if (companion == NULL && reportMode) {
+        printf("\n  *** cannot create %s - the report will be on screen only, "
+               "and on real\n      silicon it will scroll off. Run it from a "
+               "directory you can write to.\n", textPath);
+    } else if (companion == NULL) {
         printf("\n  *** cannot create %s - the report will be on screen only, "
                "and on real\n      silicon it will scroll off. Name somewhere "
                "writable with -o.\n", textPath);
@@ -9897,11 +10604,21 @@ static int take_dump(unsigned long controller, const char *base,
         char fullBin[MAX_PATH];
         char *namePart;
 
-        if (GetFullPathNameA(textPath, sizeof(full), full, &namePart) == 0) {
+        if (reportMode) {
+            /* -report's files are always in the current directory, and a
+             * resolved path there is often the user's profile, named after
+             * the user: the bare names, and take_report says where. */
             strcpy(full, textPath);
-        }
-        if (GetFullPathNameA(extPath, sizeof(fullBin), fullBin, &namePart) == 0) {
             strcpy(fullBin, extPath);
+        } else {
+            if (GetFullPathNameA(textPath, sizeof(full), full,
+                                 &namePart) == 0) {
+                strcpy(full, textPath);
+            }
+            if (GetFullPathNameA(extPath, sizeof(fullBin), fullBin,
+                                 &namePart) == 0) {
+                strcpy(fullBin, extPath);
+            }
         }
         /*
          * F17, and independent of whatever happened to the .TXT: the raw set is
