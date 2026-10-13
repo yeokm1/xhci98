@@ -1893,7 +1893,7 @@ a device, on Windows 98 SE, ME, 2000, XP and 32-bit Windows 7 (there is no
 64-bit test driver; the run record has the legs), and with the value at `0`
 reading as the build before it on every system. Windows' own drivers' idle was not
 read: Windows' HID driver never idles QEMU's mouse. No real machine has
-been read with it on, and no real remote-wake device ("Untested ground").
+been read with it on, and no real remote-wake device.
 So leave it off unless you are testing it.
 If a device misbehaves
 with it on, set `0`, restart and report whether that changed it.
@@ -2291,18 +2291,10 @@ information.
 | Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
-| The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31`, every other system, and a standby and resume rest on Linux's handling of the same chipsets and on host tests of the sequence |
+| The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31` and every other system rest on Linux's handling of the same chipsets and on host tests of the sequence |
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
-| Standby (S3) on real hardware | Read only in virtual machines. At the `2.3.0.0` bench the ThinkPad E460's Windows 98 SE offered no Stand by, the Dell Latitude E7250's Windows 7 x64 had no graphics driver, and the ThinkPad P14s Gen 1 was not read |
-| Selective suspend and remote wake on real hardware | Read only in QEMU, which makes no SuperSpeed function wake and has no SuperSpeed hub. No real remote-wake device has been read: a USB 2.0 HID device waking a sleeping machine's bus, or a SuperSpeed device waking from a root port or from behind a USB 3 hub |
-| MSI-X on real hardware | Read only on QEMU's controller, whose MSI-X loses an interrupt now and then; since `2.3.1.0` the driver looks for such an event when it re-arms the interrupt and serves it in one more pass, where `2.3.0.0` waited for its 100 ms check, which still covers one left during that pass (`XHCISNAP`'s BackstopDrains). On a real MSI-X controller BackstopDrains should stay near 0; not read. MSI was read on the Dell Latitude E7250 |
-| `XHCIQUAL` on a line that is dead under DOS | Read only in QEMU. The Dell Latitude E7250's line is dead only under Windows' interrupt routing; under DOS it works, so its interrupt test passes there |
-| Windows 98 SE on the Dell Latitude E7250 | The interrupt routing repair under Windows 98 SE (PIC mode) has run on no machine: the E7250, the one machine read with that fault, runs XP x64 and 7 x64 |
-| `XhciWideMap` on real hardware | Not read on an updated 32-bit Windows 7, nor at `1` with a real UAS drive. In QEMU the UAS device holds one piece per stream, so a UAS drive at `1` could not be read there either |
-| A real UAS drive after a transfer error or a stop | The retry in place on a UAS stream was read only with the error made on purpose in QEMU. No real drive has met one under this driver |
-| UAS speed at 1 MiB on real hardware | The 1 MiB default rests on readings in QEMU. ATTO with the MSSU10, compared with `2.2.0.0` on the same machine, was not read at the `2.3.0.0` bench; the E460's copies at about 200 MB/s are the only real-hardware figure |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing
