@@ -4352,8 +4352,9 @@ what this release's design expects; the rest, as read in virtual machines:
   32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
   one, for the helper xhcihlpr.sys (above). Until then the earlier release
   keeps running and Device Manager says the device needs a restart. An
-  update from 2.3.0.0 or 2.3.1.0 also removes the earlier helper,
-  xhcimsi.sys: its service is deleted, and its file goes at that restart.
+  update over a release that installed the earlier helper, xhcimsi.sys,
+  also removes it: its service is deleted, and its file goes at that
+  restart.
 
   WINDOWS 2000 AND XP: the install and an update copy the helper
   xhcihlpr.sys and ask for no restart of their own. The controller runs as
@@ -4757,7 +4758,7 @@ Untested ground:
     0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD
     0.96 parts are not applied, so isochronous transfers (audio, video) on
     those parts are the least certain. Set XhciAccept096 to 0 to refuse
-    such a controller as 2.3.1.0 did.
+    such a controller, as the releases before it did.
 
   * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
     9). Each fault was made on purpose at a root port in QEMU virtual
@@ -5200,7 +5201,7 @@ A value that is absent means the default each one states.
   Written as 1 by the install; 1, absent or any number but 0 is on.
 
   A controller names the xHCI revision it was built to in its HCIVERSION
-  register. 2.3.1.0 refused anything below 1.0 (Code 10), which is where
+  register. Earlier releases refused anything below 1.0 (Code 10), where
   the first-generation NEC/Renesas uPD720200 and uPD720200A (1033:0194)
   and ASMedia's ASM1042 stopped: they are 0.96 parts. With this on, a
   controller from 0.96 up starts, driven as a 1.0 one but for the fields

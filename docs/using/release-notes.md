@@ -803,6 +803,12 @@ hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
 
 ### Updating from 2.y.y.y
 
+**From `2.3.x` or earlier to `2.4.0.0` or later, read "From 2.3.x or
+earlier" (below) first**: that update finds each root hub, hub and
+composite device again, so update the controller only, and on Windows XP,
+XP x64 and 98 SE have a keyboard and mouse that do not go through this
+driver before starting. Otherwise:
+
 Install a newer `2.y.y.y` over an older one with Update Driver on "xHCI98
 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub",
 both pointed at the `release-` directory.
