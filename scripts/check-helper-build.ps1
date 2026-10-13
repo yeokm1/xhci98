@@ -63,13 +63,17 @@ function Get-HelperLogErrors {
     if ($targetLine.Count -eq 0) {
         $errors += "the build log lacks the kit's 'BUILDMSG: _NT_TARGET_VERSION SET TO WINXP' line - the helper was not built for the WXP target (record 18 section 15.10)"
     }
+    # Every library operand, quoted or not, and as a /DEFAULTLIB: argument
+    # too (review of 38.3, round 1: a quoted path ended in a quote and was
+    # passed over). A quoted operand may hold spaces.
     $libs = @()
     foreach ($line in $Lines) {
         $text = ($line -replace "^\d+>", "").Trim()
-        foreach ($token in ($text -split "\s+")) {
-            if ($token -match "\.lib$") {
-                $libs += $token
-            }
+        foreach ($m in [regex]::Matches($text, '(?i)"([^"]*?\.lib)"|([^\s"]+?\.lib)(?=$|[\s"])')) {
+            $lib = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+            $lib = $lib -replace '(?i)^/(DEFAULTLIB|NODEFAULTLIB):', ''
+            if ($lib -match '(?i)^/NODEFAULTLIB') { continue }
+            $libs += $lib
         }
     }
     if ($libs.Count -eq 0) {
@@ -90,6 +94,30 @@ function Get-HelperLogErrors {
         } else {
             $errors += "the link names $lib, outside lib\wxp\i386 and not the admitted lib\crt\i386\safecrtnt.lib"
         }
+    }
+    return $errors
+}
+
+# The log tied to the image (review of 38.3, round 1): its link wrote this
+# very file (/out: names it) and the log was finished no earlier than the
+# image, so a log of another build cannot vouch for it.
+function Get-HelperLogTieErrors {
+    param([string[]]$Lines, [string]$ImagePath, [datetime]$LogTime, [datetime]$ImageTime)
+
+    $errors = @()
+    $want = [System.IO.Path]::GetFullPath($ImagePath).ToLowerInvariant()
+    $outs = @()
+    foreach ($line in $Lines) {
+        $text = ($line -replace "^\d+>", "").Trim()
+        if ($text -match '(?i)^/out:"?([^"]+?)"?\s*$') {
+            $outs += [System.IO.Path]::GetFullPath($Matches[1]).ToLowerInvariant()
+        }
+    }
+    if ($outs.Count -ne 1 -or $outs[0] -ne $want) {
+        $errors += "the build log's link wrote '$($outs -join ', ')', not '$ImagePath' - it is not this image's log"
+    }
+    if ($LogTime -lt $ImageTime.AddSeconds(-2)) {
+        $errors += "the build log is older than the image - the image was linked after it, by another build"
     }
     return $errors
 }
@@ -141,6 +169,12 @@ if ($SelfTest) {
     Assert-True ($e.Count -eq 1 -and $e[0] -match "outside lib") "a library from any other directory is refused: $($e -join '; ')"
     $e = @(Get-HelperLogErrors -Lines ($good + "1>D:\x\tools\WinDDK71\lib\crt\i386\other.lib "))
     Assert-True ($e.Count -eq 1) "lib\crt\i386 admits safecrtnt.lib alone: $($e -join '; ')"
+    $e = @(Get-HelperLogErrors -Lines ($good + "1>""$kit\wlh\i386\wdmsec.lib"" "))
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "wlh library") "a quoted lib\wlh\i386 library is refused: $($e -join '; ')"
+    $e = @(Get-HelperLogErrors -Lines ($good + "1>""d:\Program Files\kit\lib\win7\i386\hal.lib"" "))
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "win7 library") "a quoted path with spaces is read whole and refused: $($e -join '; ')"
+    $e = @(Get-HelperLogErrors -Lines ($good + "1>/DEFAULTLIB:d:\x\tools\winddk71\lib\wnet\i386\ntoskrnl.lib"))
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "wnet library") "a /DEFAULTLIB: library is read and refused: $($e -join '; ')"
     $e = @(Get-HelperLogErrors -Lines @($good | Where-Object { $_ -notmatch "BUILDMSG" }))
     Assert-True ($e.Count -eq 1 -and $e[0] -match "WINXP") "a log without the WINXP line is refused: $($e -join '; ')"
     $e = @(Get-HelperLogErrors -Lines @("1>BUILDMSG: _NT_TARGET_VERSION SET TO WIN7", "$kit\wxp\i386\ntoskrnl.lib "))
@@ -166,6 +200,15 @@ if ($SelfTest) {
     Assert-True ($e.Count -eq 1 -and $e[0] -match "checksum") "a zero checksum is refused: $($e -join '; ')"
     $e = @(Get-HelperHeaderErrors -Lines ($hdr -replace "1 subsystem \(Native\)", "3 subsystem (Windows CUI)"))
     Assert-True ($e.Count -eq 1 -and $e[0] -match "Native") "a subsystem other than Native is refused: $($e -join '; ')"
+
+    $img = "d:\x\src\hlpr\objfre\i386\xhcihlpr.sys"
+    $t0 = [datetime]"2026-10-14T00:00:00"
+    $e = @(Get-HelperLogTieErrors -Lines @("1>/out:$img") -ImagePath $img -LogTime $t0.AddSeconds(1) -ImageTime $t0)
+    Assert-True ($e.Count -eq 0) "a log whose link wrote this image, finished after it, vouches for it: $($e -join '; ')"
+    $e = @(Get-HelperLogTieErrors -Lines @("1>/out:d:\x\src\hlpr\objchk\i386\xhcihlpr.sys") -ImagePath $img -LogTime $t0.AddSeconds(1) -ImageTime $t0)
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "not this image") "a log of another image is refused: $($e -join '; ')"
+    $e = @(Get-HelperLogTieErrors -Lines @("1>/out:$img") -ImagePath $img -LogTime $t0 -ImageTime $t0.AddMinutes(5))
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "older than the image") "a log older than the image is refused: $($e -join '; ')"
 
     Write-Host ""
     if ($script:failures.Count -gt 0) {
@@ -200,7 +243,11 @@ if (-not (Test-Path -LiteralPath $Dumper)) {
     exit 1
 }
 
-$errors = @(Get-HelperLogErrors -Lines @(Get-Content -LiteralPath $LogPath))
+$logLines = @(Get-Content -LiteralPath $LogPath)
+$errors = @(Get-HelperLogErrors -Lines $logLines)
+$errors += @(Get-HelperLogTieErrors -Lines $logLines -ImagePath $Image `
+    -LogTime (Get-Item -LiteralPath $LogPath).LastWriteTime `
+    -ImageTime (Get-Item -LiteralPath $Image).LastWriteTime)
 $saved = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {

@@ -838,11 +838,9 @@ typedef struct _HCD_DEVICE_PDO {
                                      * (PoSetPowerState) with its D-IRP
                                      * admission (hcd_susp.c); PASSIVE  */
 #if defined(XHCI_FLAVOUR_QEMU)
-    /* Record 15 section 7.2.12, leg T3 (qemu only): which settlement path
-     * claimed the pended D-IRP (HCD_SUSP_QEMU_CLAIM_*), set under the
-     * controller lock as it is claimed, and whether XhciQemuSuspHoldDx's
-     * first skip of it was noted. */
-    ULONG QemuClaim;
+    /* Record 15 section 7.2.12, leg T3 (qemu only): whether
+     * XhciQemuSuspHoldDx's first skip of a pended Dx was noted. The
+     * claiming path travels in the IRP (hcd_susp.c, HCD_SUSP_QEMU_MARK). */
     ULONG QemuHoldNoted;
 #endif
     /* The idle notification (design record 14 sections 4.4 and 6; task

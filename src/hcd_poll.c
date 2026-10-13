@@ -742,10 +742,14 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 
     hc = (PHCD_CONTROLLER)Context;
     ext = &hc->Hc;
-    now = hcdPollNow();
-    /* The finer timer's observation epoch, with the entry time (record 15
-     * section 7.2.9): read again where the run observes. */
+    /* The finer timer's observation epoch, read BEFORE the entry time
+     * (record 15 section 7.2.9; review of 38.3, round 1): a call that
+     * lands between the two reads moves the epoch past this value, so the
+     * observation's read below sees it and the sample counts nothing. Read
+     * after the time, a call landing between them would date a pre-call
+     * time under the post-call epoch. */
     epoch = hc->Tmr.ObsEpoch;
+    now = hcdPollNow();
     decision = hc->PollValues.IdleMs;
     state = XHCI_POLL_BUS_IDLE;
 

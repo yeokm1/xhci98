@@ -2099,7 +2099,11 @@ guest: every leg of section 7.2.12 is owed to the matrix.
   included, where the epoch never moves and every interval counts as
   RELEASED - the baseline the legs compare against on the same guest.
   The period "armed for the run" is `PollPeriodLast` read at the DPC's
-  entry under `PollLock`.
+  entry under `PollLock`. The entry epoch is read before the entry time,
+  not after it (review round 1 of the code): a call landing between the
+  two reads then moves the epoch past the value read, so the run is
+  incoherent and counts nothing, where the other order dated a pre-call
+  time under the post-call epoch.
 - **`TmrHeldMs`** is summed at each release from the system time's two
   words (`XhciPollTmrElapsedMs`: 2^32 units are 429,496 ms and 7,296 units
   over, no 64-bit arithmetic), saturating.
@@ -2123,7 +2127,10 @@ guest: every leg of section 7.2.12 is owed to the matrix.
   number in the low 16), `qemu.susp.hold`, `qemu.stop.dx` and
   `qemu.susp.done` (the serial in the top 16 bits, the D-state, then the
   claiming path - 1 the executor, 2 the PDO's close, 3 the stale settle, 4
-  the unlink - or `PowerPending`) in the `qemu` flavour; the start's
+  the unlink - or `PowerPending`; the claim and its D-state travel in the
+  claimed IRP's `DriverContext[3]`, written as it is claimed, so a later
+  claim of another IRP of the same PDO cannot rewrite them) in the `qemu`
+  flavour; the start's
   `poll.timer.switch.read`, `poll.timer.switch` and `poll.timer.desired`;
   and the stop's dump carries every counter by its `poll.timer.*` name.
 - **The `qemu` switches** `XhciQemuTmrDelayMs` (held to 10,000 ms) and

@@ -360,6 +360,15 @@ static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
 #define HCD_SUSP_QEMU_CLAIM_PDO_CLOSE   2UL
 #define HCD_SUSP_QEMU_CLAIM_STALE       3UL
 #define HCD_SUSP_QEMU_CLAIM_UNLINK      4UL
+
+/* The claim recorded in the IRP itself as it is claimed - the path in the
+ * low byte, the D-state asked in the next - so a later claim of another
+ * IRP of the same PDO cannot rewrite what this one's completion reports
+ * (review of 38.3, round 1). DriverContext[3] of a power IRP the PDO
+ * owns is this driver's; the completion workers use [0] to [2]. */
+#define HCD_SUSP_QEMU_MARK(irp, pdo, path)                                  \
+    ((irp)->Tail.Overlay.DriverContext[3] =                                 \
+         (PVOID)(ULONG_PTR)((((pdo)->PwrWanted & 0xFFUL) << 8) | (path)))
 #endif
 
 /* A D-IRP the thread claimed, completed SUCCESS (4.2): PoStartNextPowerIrp
@@ -377,7 +386,7 @@ static VOID hcdSuspCompletePower(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG d0)
 
     hc = pdo->Controller;
     note = ((pdo->Serial & 0xFFFFUL) << 16) |
-           ((pdo->PwrWanted & 0xFFUL) << 8) | (pdo->QemuClaim & 0xFFUL);
+           ((ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[3] & 0xFFFFUL);
 #endif
 
     if (d0) {
@@ -2262,7 +2271,8 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         if ((funcs[i].CompleteDx || funcs[i].CompleteD0) &&
             pdos[i]->PwrIrp != NULL) {
 #if defined(XHCI_FLAVOUR_QEMU)
-            pdos[i]->QemuClaim = HCD_SUSP_QEMU_CLAIM_EXECUTOR;
+            HCD_SUSP_QEMU_MARK(pdos[i]->PwrIrp, pdos[i],
+                               HCD_SUSP_QEMU_CLAIM_EXECUTOR);
 #endif
             hcdSuspTake(&taken, pdos[i], pdos[i]->PwrIrp,
                         funcs[i].CompleteD0 ? HCD_SUSP_TAKE_D0
@@ -3119,7 +3129,9 @@ VOID HcdSuspPdoClose(PHCD_DEVICE_PDO pdo, ULONG removal)
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         hcdSuspSlotCloseLocked(pdo, &s);
 #if defined(XHCI_FLAVOUR_QEMU)
-        pdo->QemuClaim = HCD_SUSP_QEMU_CLAIM_PDO_CLOSE;
+        if (s.Pwr != NULL) {
+            HCD_SUSP_QEMU_MARK(s.Pwr, pdo, HCD_SUSP_QEMU_CLAIM_PDO_CLOSE);
+        }
 #endif
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdThreadWake(hc);
@@ -3255,7 +3267,9 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hcdSuspSlotCloseLocked(pdo, out);
 #if defined(XHCI_FLAVOUR_QEMU)
-    pdo->QemuClaim = HCD_SUSP_QEMU_CLAIM_UNLINK;
+    if (out->Pwr != NULL) {
+        HCD_SUSP_QEMU_MARK(out->Pwr, pdo, HCD_SUSP_QEMU_CLAIM_UNLINK);
+    }
 #endif
     /* 8.5: the hardware's wake enable did not survive the device. */
     pdo->FwArmed = 0;
@@ -3481,7 +3495,8 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
                 XhciSuspDxStale(pdo->PwrDxEpoch, hc->PowerEpoch)) {
                 hc->Counters.SuspDxStale++;
 #if defined(XHCI_FLAVOUR_QEMU)
-                pdo->QemuClaim = HCD_SUSP_QEMU_CLAIM_STALE;
+                HCD_SUSP_QEMU_MARK(pdo->PwrIrp, pdo,
+                                   HCD_SUSP_QEMU_CLAIM_STALE);
 #endif
                 hcdSuspTake(&taken, pdo, pdo->PwrIrp, HCD_SUSP_TAKE_DX);
                 pdo->PwrIrp = NULL;

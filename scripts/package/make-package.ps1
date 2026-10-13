@@ -828,6 +828,31 @@ The x86 package carries the x86 helper its INF names. Build it first
             throw "'$HlprDriverPath' carries the flavour marker '$hlprFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
         }
         if (-not $SkipBinaryGates) {
+            # The toolchain the helper was decided on (design record 18
+            # section 15.10), held again here for a helper named by
+            # -HlprDriverPath as for one build-driver.cmd made: its build's
+            # own log, beside the obj tree (src\hlpr\build<alt>.log for
+            # src\hlpr\obj<alt>\i386\xhcihlpr.sys), must name the WXP target
+            # and lib\wxp\i386 and be the log of this very link, and the
+            # image's header must be native 5.00, aligned 0x80, checksummed
+            # (review of 38.3, round 1).
+            $hlprObjDir = Split-Path -Parent (Split-Path -Parent $HlprDriverPath)
+            $hlprLog = Join-Path (Split-Path -Parent $hlprObjDir) ("build" + ((Split-Path -Leaf $hlprObjDir) -replace '^obj', '') + ".log")
+            if (-not (Test-Path -LiteralPath $hlprLog)) {
+                throw "no build log at '$hlprLog' for '$HlprDriverPath': the helper is packaged only with the log of the WDK 7.1 WXP build that linked it (design record 18 section 15.10). Rebuild: scripts\build-driver.cmd $Flavor"
+            }
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+                    (Join-Path (Split-Path -Parent $PSScriptRoot) "check-helper-build.ps1") `
+                    -LogPath $hlprLog -Image $HlprDriverPath
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$HlprDriverPath' is not the WXP, subsystem 5.00 build design record 18 section 15.10 decided (scripts\check-helper-build.ps1)."
+                }
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
             $savedEap = $ErrorActionPreference
             $ErrorActionPreference = "Continue"
             try {

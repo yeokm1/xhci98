@@ -2311,7 +2311,13 @@ every leg of section 15.12 is owed.
   FileVersion).
 - **The toolchain check** is `scripts\check-helper-build.ps1` (run by
   `build-driver.cmd` after each helper link, its `-SelfTest` with the
-  import gate's self-tests). The first `WXP` link's log names
+  import gate's self-tests). It reads every library operand of the link,
+  quoted or not and as a `/DEFAULTLIB:` argument, and requires the log to
+  be this image's (its `/out:` names the image, and it was finished no
+  earlier than the image); `make-package.ps1` runs it again on the helper
+  it packages, with the log beside that helper's obj tree, so a helper
+  named by `-HlprDriverPath` is held to the same toolchain (review round 1
+  of the code). The first `WXP` link's log names
   `lib\wxp\i386`'s `BufferOverflowK.lib`, `libcntpr.lib`, `ntoskrnl.lib`,
   `hal.lib`, `wmilib.lib`, `wdmsec.lib` and `sehupd.lib`, and
   `lib\crt\i386\safecrtnt.lib`; the image is native 5.00, aligned 0x80,
