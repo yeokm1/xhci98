@@ -618,7 +618,19 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # is stamped has one), and a tree without it is accepted only before 2.4.0.0.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent")
+
+# The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
+# design record 13 section 6.11.8): copied once from src\ into tools\silent\
+# under these names, and into no flavour directory. First published in
+# 2.4.0.0, which is also the first version with tools\, so a tree without
+# tools\ has none of them anywhere (Assert-SilentInstallLayout).
+$silentPublishable = @{
+    "silent.reg"     = "SILENT.REG"
+    "silent.vbs"     = "SILENT.VBS"
+    "silent-on.bat"  = "silent-on.bat"
+    "silent-off.bat" = "silent-off.bat"
+}
 
 function Get-ToolDirName {
     # A tool's directory relative to the version root: tools\<Name> for the
@@ -741,6 +753,74 @@ function Assert-PortSwitchLayout {
     }
     if ($faults.Count -gt 0) {
         throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.5):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Publish-SilentInstallScripts {
+    # Copies the silent install's four files (task 38.2) from SourceDir into
+    # <DestRoot>\<DirName>\ under their published names and returns that
+    # directory. Together or not at all: a missing one is refused before
+    # anything is copied.
+    param([string]$SourceDir, [string]$DestRoot, [hashtable]$Map, [string]$DirName)
+    $missing = @($Map.Keys | Sort-Object | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+    if ($missing.Count -gt 0) {
+        throw ("'{0}' has no {1}: the silent install's list and scripts are published together or not at all (roadmap-hcd task 38.2)." -f `
+               $SourceDir, ($missing -join ", "))
+    }
+    $dir = Join-Path $DestRoot $DirName
+    Ensure-Directory $dir
+    foreach ($src in @($Map.Keys | Sort-Object)) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $src) -Destination (Join-Path $dir $Map[$src]) -Force
+    }
+    return $dir
+}
+
+function Assert-SilentInstallLayout {
+    # The layout of task 38.2 in a version tree: in a tree with tools\,
+    # tools\silent\ holds the four files under their published names and
+    # nothing else, and no other directory of the tree holds a copy of any
+    # of them. A tree without tools\ is a version published before 2.4.0.0
+    # (Assert-ToolsLayout refuses it at the cut and from 2.4.0.0), and none
+    # of those has any of them anywhere.
+    param([string]$Root, [hashtable]$Map, [string]$What, [string]$PublishedVersion = "")
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $names = @($Map.Values | Sort-Object)
+    $keys = @($names + @($Map.Keys) | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+    $copies = @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force |
+                Where-Object { $_.Name.ToLowerInvariant() -in $keys })
+    $faults = @()
+    $dir = Join-Path $rootFull (Join-Path $toolsDirName "silent")
+    if (Test-Path -LiteralPath (Join-Path $rootFull $toolsDirName) -PathType Container) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            $faults += "$toolsDirName\silent\ is missing"
+        } else {
+            foreach ($name in $names) {
+                $hit = @(Get-ChildItem -LiteralPath $dir -File -Force | Where-Object { $_.Name -ceq $name })
+                if ($hit.Count -ne 1) { $faults += "$toolsDirName\silent\$name is missing or not so named" }
+            }
+            foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force)) {
+                if ($item.PSIsContainer -or $item.Name -cnotin $names) {
+                    $faults += "$toolsDirName\silent\$($item.Name) is not one of the silent install's files"
+                }
+            }
+        }
+        $allowedDirs = @($dir)
+        $layout = "in $toolsDirName\silent\ alone"
+    } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge $toolsLayoutVersion) {
+        throw "$What has no $toolsDirName\ directory, where the silent install's list and scripts are published (roadmap-hcd task 38.2)."
+    } else {
+        $allowedDirs = @()
+        $layout = "absent, as a version before $toolsLayoutVersion has them"
+    }
+    foreach ($item in $copies) {
+        if ($item.DirectoryName.TrimEnd('\') -notin $allowedDirs) {
+            $faults += ("{0} is a copy outside where they belong" -f $item.FullName.Substring($rootFull.Length + 1))
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the silent install's list and scripts {1} (roadmap-hcd task 38.2):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
     }
 }
@@ -2097,6 +2177,10 @@ $gateOut
     Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable `
                             -DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot) `
                             -What "the upload set '$uploadRoot'" -PublishedVersion $pswVersion
+    # The silent install's four files in tools\silent\ alone where the tree
+    # has tools\, and none anywhere in a tree published before 2.4.0.0
+    # (task 38.2).
+    Assert-SilentInstallLayout -Root $uploadRoot -Map $silentPublishable -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     # The report batches beside their tools where the tree has tools\, and
     # none anywhere in a tree published before 2.4.0.0 (task 38.1).
     Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
@@ -3192,6 +3276,13 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
     Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), (Get-ToolDirName -Name "portsw"))
 
+    # The silent install's list and its switch's scripts (task 38.2), once,
+    # from src\, into tools\silent\ under their published names. The
+    # top-level readme explains them.
+    Write-Step "silent install list and scripts"
+    $silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")
+    Write-Ok ("{0} published once, in {1}\" -f (@($silentPublishable.Values | Sort-Object) -join ", "), (Get-ToolDirName -Name "silent"))
+
     #
     # Two flavours that hash the same are one binary published twice. The
     # VS_FF_DEBUG check above already makes that nearly impossible, which is the
@@ -3364,6 +3455,45 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ""
         $contents += "      One copy for every driver directory above. Run them from"
         $contents += "      this directory."
+        $contents += ""
+    }
+    if ($null -ne $silentStaged) {
+        $contents += "  TOOLS\SILENT\  - the silent install, Windows 98 SE and ME only"
+        $contents += ""
+        $contents += "      SILENT.REG     the list of device classes that may install"
+        $contents += "                     with no wizard"
+        $contents += "      SILENT.VBS     shows XhciSilentInstall and the list, and sets"
+        $contents += "                     the value on or off"
+        $contents += "      silent-on.bat  merges SILENT.REG, checks it, then turns it on"
+        $contents += "      silent-off.bat turns it off and keeps the list"
+        $contents += ""
+        $contents += "      OFF BY DEFAULT. With XhciSilentInstall at 1 on the"
+        $contents += "      controller, a device whose class is in the list installs"
+        $contents += "      with no Add New Hardware wizard; at anything else, or"
+        $contents += "      absent, nothing changes. The install does not write it."
+        $contents += "      Never on Windows 2000 and later."
+        $contents += ""
+        $contents += "      The list: hubs, boot keyboards and mice, and Bulk-Only"
+        $contents += "      USB storage. UAS is not in it: its driver is this"
+        $contents += "      package's own, and its first install is the wizard's."
+        $contents += ""
+        $contents += "      RUN silent-on.bat ONLY ONCE EACH LISTED CLASS'S DRIVERS"
+        $contents += "      HAVE BEEN INSTALLED AT LEAST ONCE on this machine. A"
+        $contents += "      silent install on 98 SE asks for no CD, so a class whose"
+        $contents += "      driver is not there yet (a keyboard needs KBDHID.VXD from"
+        $contents += "      it) ends not working, with nothing said."
+        $contents += ""
+        $contents += "      Double-click silent-on.bat or silent-off.bat here, or run"
+        $contents += "      it at a prompt in this directory, then RESTART WINDOWS."
+        $contents += "      silent-off.bat leaves the list in place, since another"
+        $contents += "      USB stack may read the same key. To delete it too, in"
+        $contents += "      regedit, under"
+        $contents += "        HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB"
+        $contents += "      delete the SilentClasses key, and restart."
+        $contents += ""
+        $contents += "      Not yet observed on 98 SE or ME; whether ME needs the list"
+        $contents += "      at all is not yet read. The information on how the silent"
+        $contents += "      install is decided, and the list, are from SweetLow."
         $contents += ""
     }
 
@@ -5737,6 +5867,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Assert-ToolsLayout -Root $destRoot -What "the staged release '$destRoot'"
     Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw") `
                             -What "the staged release '$destRoot'"
+    # The silent install's four files in tools\silent\ alone (task 38.2).
+    Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release '$destRoot'"
     # The report batches beside their tools and nowhere else (task 38.1).
     Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'"
     # And what they say: the shared checker, and the repository's own bytes.

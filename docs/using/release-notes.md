@@ -154,6 +154,25 @@ included.
   of it is in this package. A `2.3.1.0` install replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
 
+## What `2.4.0.0` adds
+
+- **The silent install on Windows 98 SE and ME, off by default.** A new
+  value, `XhciSilentInstall`, under the controller's driver key: at `1`, a
+  device whose class is in the list at
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses`
+  installs with no Add New Hardware wizard; at anything else, or absent, the
+  driver behaves as before. The install does not write it. The download's
+  `tools\silent\` directory carries the list, `SILENT.REG` (hubs, boot
+  keyboards and mice, Bulk-Only storage; UAS is not in it), `SILENT.VBS`,
+  and `silent-on.bat` and `silent-off.bat`, which turn it on and off in one
+  double-click; restart Windows after either. Run `silent-on.bat` only once
+  each listed class's drivers have been installed at least once: a silent
+  install on 98 SE asks for no CD, so a class whose driver is not there yet
+  ends not working with nothing said. Never on 2000 and later. SweetLow
+  provided the information on how the silent install is decided and the
+  list. Not yet observed on either system: the test legs on 98 SE and ME
+  are pending, and whether ME needs the list at all is not yet read.
+
 ## What `2.3.1.0` changes
 
 A fix release: every system `2.3.0.0` supports is supported, from the same
