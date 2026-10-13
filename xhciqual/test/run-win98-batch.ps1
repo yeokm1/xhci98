@@ -108,6 +108,17 @@ foreach ($minute in @("58","59")) {
     }
 }
 
+# Codex round 1 on task 38.1: QUALREP on read-only media. A second floppy,
+# B:, holds only XHCIQUAL.EXE and QUALREP.BAT and is presented read-only,
+# which the floppy controller reports to DOS as a write-protected disk. DOS
+# then asks Abort, Retry, Fail for each write; the case answers Fail, and
+# QUALREP must reach its not-writable branch, not the cold-boot one.
+$roDir = Join-Path $hddDir "RODISK"   # under the git-ignored staging dir
+if (Test-Path -LiteralPath $roDir) { Remove-Item -LiteralPath $roDir -Recurse -Force }
+New-Item -ItemType Directory -Path $roDir -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $hddDir "XHCIQUAL.EXE") -Destination (Join-Path $roDir "XHCIQUAL.EXE") -Force
+Copy-Item -LiteralPath (Join-Path $hddDir "QUALREP.BAT") -Destination (Join-Path $roDir "QUALREP.BAT") -Force
+
 if (-not (Test-Path -LiteralPath $usbImage)) {
     $stream = [IO.File]::Create($usbImage); $stream.SetLength(8MB); $stream.Close()
 }
@@ -171,6 +182,11 @@ $xhci = @("-device","qemu-xhci,id=hc,msi=off,msix=off")
 $xhciDev = @("-device","qemu-xhci,id=hc,p3=0,msi=off,msix=off",
              "-drive","if=none,id=ud,file=$usbImage,format=raw",
              "-device","usb-storage,drive=ud,bus=hc.0,port=1")
+$roFloppy = @("-drive","if=floppy,index=1,file=fat:floppy:$roDir,format=raw,readonly=on")
+# Answer: a screen pattern that wants a key, and the key. QUALREP ends with
+# PAUSE, so a case that runs it more than once must press a key for each.
+$pauseKey = @{ Pattern = "Press any key to continue"; Key = "ret" }
+$failKey = @{ Pattern = "Abort, Retry, Fail\?"; Key = "f" }
 $cases = @(
     [pscustomobject]@{ Name="irq_selftest"; Batch="3XIRQ";  Args=$xhci;    Success="completed normally with IRQ SELF-TEST PASS"; Fail="self-test FAILED|ended abnormally|was not created" },
     [pscustomobject]@{ Name="empty_full";   Batch="4XEMPTY"; Args=$xhci;    Success="completed normally with a QUALIFIED verdict"; Fail="NOT QUALIFIED|ended abnormally|was not created" },
@@ -178,11 +194,17 @@ $cases = @(
     [pscustomobject]@{ Name="no_controller"; Batch="4XEMPTY"; Args=@();      Success="completed normally but NOT QUALIFIED"; Fail="ended abnormally|was not created|with a QUALIFIED verdict" },
     [pscustomobject]@{ Name="done_flag_operand"; Batch="PSCAN"; Args=@(); Success="planted"; Fail="PRESCAN_DONE" },
     [pscustomobject]@{ Name="qualrep_read"; Batch="QUALREP"; Args=$xhci; Success="Log written: [0-9A-C][0-9]{6}[A-Z]\.LOG - attach this file[\s\S]*QUALREP: the reading completed normally"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
-    [pscustomobject]@{ Name="qualrep_twice"; Batch="QRTWICE"; Args=($xhci + @("-rtc","base=2026-10-13T14:25:00,clock=vm")); Success="A1314([0-9][0-9])A\.LOG\s+A1314(\1B|[0-9][0-9]A)\.LOG\s+QRTWICE_DONE"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
-    [pscustomobject]@{ Name="qualrep_all_taken"; Batch="QUALREP"; Args=($xhci + @("-rtc","base=2026-12-31T23:58:00,clock=vm")); Success="C31235[89]A\.LOG to C31235[89]Z\.LOG all[\s\S]*refused before reading anything"; Fail="completed normally|ended abnormally|unexpected exit code" }
+    [pscustomobject]@{ Name="qualrep_twice"; Batch="QRTWICE"; Answer=@($pauseKey); Args=($xhci + @("-rtc","base=2026-10-13T14:25:00,clock=vm")); Success="A1314([0-9][0-9])A\.LOG\s+A1314(\1B|[0-9][0-9]A)\.LOG\s+QRTWICE_DONE"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
+    [pscustomobject]@{ Name="qualrep_all_taken"; Batch="QUALREP"; Args=($xhci + @("-rtc","base=2026-12-31T23:58:00,clock=vm")); Success="C31235[89]A\.LOG to C31235[89]Z\.LOG all[\s\S]*refused before reading anything"; Fail="completed normally|ended abnormally|unexpected exit code" },
+    [pscustomobject]@{ Name="qualrep_rdonly"; Batch="QUALREP"; Drive="b:"; Answer=@($failKey); Args=($xhci + $roFloppy); Success="could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*ERROR: this directory is not writable[\s\S]*nothing needs a cold boot"; Fail="ended abnormally|completed normally|unexpected exit code|Log written" }
 )
 if ($CaseName.Count -ne 0) {
-    $cases = @($cases | Where-Object { $_.Name -in $CaseName })
+    $roFloppy = @("-drive","if=floppy,index=1,file=fat:floppy:$roDir,format=raw,readonly=on")
+# Answer: a screen pattern that wants a key, and the key. QUALREP ends with
+# PAUSE, so a case that runs it more than once must press a key for each.
+$pauseKey = @{ Pattern = "Press any key to continue"; Key = "ret" }
+$failKey = @{ Pattern = "Abort, Retry, Fail\?"; Key = "f" }
+$cases = @($cases | Where-Object { $_.Name -in $CaseName })
     if ($cases.Count -eq 0) { throw "No requested cases matched" }
 }
 
@@ -211,10 +233,33 @@ for ($index = 0; $index -lt $cases.Count; $index++) {
         if (-not (Wait-Vga $writer $vgaPath "[A-Z]:\\>" 45)) {
             throw "guest never reached a DOS prompt"
         }
-        Send-Text $writer "c:"
+        $drive = "c:"
+        if ($case.PSObject.Properties.Name -contains "Drive") { $drive = $case.Drive }
+        Send-Text $writer $drive
         Send-Text $writer "cd \"
         Send-Text $writer $case.Batch
-        $hit = Wait-Vga $writer $vgaPath ($case.Success + "|" + $case.Fail) $TimeoutSeconds
+        $answers = @()
+        if ($case.PSObject.Properties.Name -contains "Answer") { $answers = @($case.Answer) }
+        if ($answers.Count -eq 0) {
+            $hit = Wait-Vga $writer $vgaPath ($case.Success + "|" + $case.Fail) $TimeoutSeconds
+        } else {
+            # A prompt stays on screen after it is answered, so a key is sent
+            # at most once in 1.5 s; a spare key reaches the prompt or PAUSE.
+            $hit = $null
+            $lastKey = [DateTime]::MinValue
+            $end = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            do {
+                $text = Read-Vga $writer $vgaPath
+                if ($text -match $case.Success -or $text -match $case.Fail) { $hit = $text; break }
+                foreach ($a in $answers) {
+                    if ($text -match $a.Pattern -and ([DateTime]::UtcNow - $lastKey).TotalSeconds -ge 1.5) {
+                        Send-Key $writer $a.Key
+                        $lastKey = [DateTime]::UtcNow
+                    }
+                }
+                Start-Sleep -Milliseconds 300
+            } while ([DateTime]::UtcNow -lt $end)
+        }
         if ($null -eq $hit) {
             $failures += ("{0}: timed out; last screen:`n{1}" -f $case.Name,(Read-Vga $writer $vgaPath))
             Write-Host "  FAIL (timeout)"

@@ -466,7 +466,12 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   digit (`1` to `9`, then `A`, `B`, `C`), `DD` the day, `hh` the hour,
   `mm` the minute, and `S` the first letter from `A` to `Z` for which no
   file of that name exists, so `A131425A.LOG` is 13 October, 14:25, and a
-  second run in the same minute writes `A131425B.LOG`. It never overwrites.
+  second run in the same minute writes `A131425B.LOG`. It never overwrites:
+  the log is created with INT 21h `5Bh` ("create new file"), which fails
+  rather than truncate, and a name taken between the check and the create
+  moves on to the next letter; the handle so created is the one the report
+  writes to. The log is created before any sink is opened, so a refusal
+  with `--serial` has not touched COM1.
   The year is not in the name; the log's second line carries the full date
   and time (`Log: A131425A.LOG, begun 2026-10-13 14:25:07 by the DOS
   clock`), and the run ends on `Log written: A131425A.LOG - attach this
@@ -477,7 +482,8 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   Not with `--log` (exit 2). A modifier like the others, so pair it with
   `--quick` or `--probe-only` for a read-only run. The name is built by
   `stamp.c`, a pure function of the clock's fields and an "exists"
-  predicate, and is the scheme `XHCISNAP` uses for its own outputs.
+  predicate (and, for the create, `stamp_create` with an injected create),
+  and is the scheme `XHCISNAP` uses for its own outputs.
   `QUALREP.BAT` below is its caller.
 - `--gsi N`, also `--gsi=N` (N decimal, 0 to 255): compare the Intel PCH
   routing against N, the interrupt Windows reports for the controller

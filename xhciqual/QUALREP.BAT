@@ -34,7 +34,9 @@ echo QUALREP: XHCIQUAL found no USB host controller on this machine.
 echo Attach the file named on the Log written line above.
 goto end
 :refused
-if not exist QUALREP.FLG goto abnormal
+rem Exit 4 is a refusal before anything was read. With no completion flag
+rem either, nothing could be created here: the directory is not writable.
+if not exist QUALREP.FLG goto rdonly
 del QUALREP.FLG
 echo.
 echo QUALREP: XHCIQUAL refused before reading anything - see its message.
@@ -54,10 +56,13 @@ echo Photograph the screen and cold boot. The partial log is kept.
 echo Attach the photo and the file named on the Log line near the top.
 goto end
 :rdonly
+echo.
 echo ERROR: this directory is not writable, so no log can be kept here.
+echo Nothing was read and nothing needs a cold boot.
 echo Copy QUALREP.BAT and XHCIQUAL.EXE to a writable directory, run it there.
 goto end
 :noexe
 echo ERROR: XHCIQUAL.EXE is not in the current directory.
 echo Change to the directory holding QUALREP.BAT and XHCIQUAL.EXE, then run it.
 :end
+pause

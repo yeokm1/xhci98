@@ -65,6 +65,7 @@ static const char *opt_log_name = 0;
 static int opt_log_stamp   = 0;
 static int opt_log_plain   = 0;
 static char stamp_buf[STAMP_NAME_MAX];
+static int stamp_handle = -1;   /* the stamped log, created exclusively */
 static unsigned stamp_year, stamp_month, stamp_day;
 static unsigned stamp_hour, stamp_minute, stamp_second;
 /* Task 36.11: the GSI to compare the Intel PCH routing against, -1 none. */
@@ -479,6 +480,26 @@ static int dos_name_exists(const char *name, void *ctx)
     return _dos_getfileattr(name, &attr) == 0;
 }
 
+/* INT 21h AH=5Bh, "create new file": fails with error 50h (file exists)
+ * where AH=3Ch, and so fopen "w", would truncate. The handle is kept and
+ * becomes the log, so the name is never opened a second time. */
+#define DOS_ERR_FILE_EXISTS 0x50
+
+static int dos_create_new(const char *name, void *ctx)
+{
+    int h;
+    unsigned rc;
+
+    (void)ctx;
+    rc = _dos_creatnew(name, _A_NORMAL, &h);
+    if (rc == 0) {
+        stamp_handle = h;
+        return STAMP_CREATE_OK;
+    }
+    return (rc == DOS_ERR_FILE_EXISTS) ? STAMP_CREATE_EXISTS
+                                       : STAMP_CREATE_FAIL;
+}
+
 /* INT 21h AH=2Ah and AH=2Ch. The date is read again after the time, and
  * the time again if the date moved, so a run started on the stroke of
  * midnight is not named with one day's date and the next day's time. */
@@ -502,19 +523,27 @@ static void read_dos_clock(void)
     stamp_second = t.second;
 }
 
-/* Chooses the name, or refuses. Runs before the log is opened and before
- * anything reads the machine. Returns 1 with opt_log_name set, 0 refused. */
+/* Chooses the name and creates the file, or refuses. Runs before any sink
+ * is opened (COM1 included) and before anything reads the machine, so an
+ * unwritable directory is refused having touched nothing. Returns 1 with
+ * opt_log_name set and stamp_handle open, 0 refused. */
 static int resolve_log_stamp(void)
 {
     char prefix[8];
     int rc;
 
     read_dos_clock();
-    rc = stamp_name(stamp_month, stamp_day, stamp_hour, stamp_minute, "LOG",
-                    dos_name_exists, 0, stamp_buf);
+    rc = stamp_create(stamp_month, stamp_day, stamp_hour, stamp_minute,
+                      "LOG", dos_name_exists, dos_create_new, 0, stamp_buf);
     if (rc == STAMP_OK) {
         opt_log_name = stamp_buf;
         return 1;
+    }
+    if (rc == STAMP_CREATE_FAILED) {
+        printf("XHCIQUAL: --log-stamp refused: could not create %s in this\n"
+               "  directory (read-only media, a full disk, or a full root\n"
+               "  directory?). Nothing was read (exit 4).\n", stamp_buf);
+        return 0;
     }
     if (rc == STAMP_ALL_TAKEN &&
         stamp_prefix(stamp_month, stamp_day, stamp_hour, stamp_minute,
@@ -554,27 +583,28 @@ static void print_stamp_tail(void)
 /*
  * Opens the report's sinks. A plain --log that cannot be opened is warned
  * about and the run goes on without a file, as it always has; a --log-stamp
- * run exists to leave a log, so there it is a refusal, before anything is
- * read. Returns 1 to go on, 0 refused.
+ * run exists to leave a log, so its refusal is resolve_log_stamp's, before
+ * any sink is opened, and by here the file is already created. Returns 1 to
+ * go on (kept for a refusal a later sink might need).
  */
 static int open_report(void)
 {
+    if (opt_log_stamp) {
+        /* resolve_log_stamp created it, or the run was refused there. */
+        report_open_handle(stamp_handle, opt_serial, !opt_no_page);
+        stamp_handle = -1;
+        return 1;
+    }
     if (opt_log_name == 0) {
         (void)report_open(0, opt_serial, !opt_no_page);
         return 1;
     }
     if (report_open(opt_log_name, opt_serial, !opt_no_page))
         return 1;
-    if (opt_log_stamp) {
-        printf("XHCIQUAL: --log-stamp refused: could not create %s in this\n"
-               "  directory (read-only media, a full disk, or a full root\n"
-               "  directory?). Nothing was read (exit 4).\n", opt_log_name);
-        report_close();
-        return 0;
-    }
     printf("warning: could not open %s (read-only media?), continuing\n",
            opt_log_name);
     opt_log_name = 0;   /* nothing was written: do not claim a copy */
+    (void)report_open(0, opt_serial, !opt_no_page);
     return 1;
 }
 

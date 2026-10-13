@@ -40,18 +40,12 @@ int stamp_prefix(unsigned month, unsigned day, unsigned hour,
     return 1;
 }
 
-int stamp_name(unsigned month, unsigned day, unsigned hour, unsigned minute,
-               const char *ext, STAMP_EXISTS_FN exists, void *ctx,
-               char *out)
+/* The name with its letter left at 'A'. Returns STAMP_OK or a refusal. */
+static int stamp_base(unsigned month, unsigned day, unsigned hour,
+                      unsigned minute, const char *ext, char *out)
 {
     unsigned n, i;
-    char letter;
 
-    if (out == 0)
-        return STAMP_BAD_ARG;
-    out[0] = '\0';
-    if (ext == 0 || exists == 0)
-        return STAMP_BAD_ARG;
     for (n = 0; ext[n] != '\0'; n++) {
         if (n >= 3)
             return STAMP_BAD_ARG;
@@ -60,13 +54,66 @@ int stamp_name(unsigned month, unsigned day, unsigned hour, unsigned minute,
         return STAMP_BAD_ARG;
     if (!stamp_prefix(month, day, hour, minute, out))
         return STAMP_BAD_CLOCK;
+    out[7] = 'A';
     out[8] = '.';
     for (i = 0; i <= n; i++)
         out[9 + i] = ext[i];            /* copies the NUL too */
+    return STAMP_OK;
+}
+
+int stamp_name(unsigned month, unsigned day, unsigned hour, unsigned minute,
+               const char *ext, STAMP_EXISTS_FN exists, void *ctx,
+               char *out)
+{
+    char letter;
+    int rc;
+
+    if (out == 0)
+        return STAMP_BAD_ARG;
+    out[0] = '\0';
+    if (ext == 0 || exists == 0)
+        return STAMP_BAD_ARG;
+    rc = stamp_base(month, day, hour, minute, ext, out);
+    if (rc != STAMP_OK) {
+        out[0] = '\0';
+        return rc;
+    }
     for (letter = 'A'; letter <= 'Z'; letter++) {
         out[7] = letter;
         if (!exists(out, ctx))
             return STAMP_OK;
+    }
+    out[0] = '\0';
+    return STAMP_ALL_TAKEN;
+}
+
+int stamp_create(unsigned month, unsigned day, unsigned hour,
+                 unsigned minute, const char *ext, STAMP_EXISTS_FN exists,
+                 STAMP_CREATE_FN create, void *ctx, char *out)
+{
+    char letter;
+    int rc;
+
+    if (out == 0)
+        return STAMP_BAD_ARG;
+    out[0] = '\0';
+    if (ext == 0 || exists == 0 || create == 0)
+        return STAMP_BAD_ARG;
+    rc = stamp_base(month, day, hour, minute, ext, out);
+    if (rc != STAMP_OK) {
+        out[0] = '\0';
+        return rc;
+    }
+    for (letter = 'A'; letter <= 'Z'; letter++) {
+        out[7] = letter;
+        if (exists(out, ctx))
+            continue;
+        rc = create(out, ctx);
+        if (rc == STAMP_CREATE_OK)
+            return STAMP_OK;
+        if (rc == STAMP_CREATE_EXISTS || exists(out, ctx))
+            continue;
+        return STAMP_CREATE_FAILED;
     }
     out[0] = '\0';
     return STAMP_ALL_TAKEN;

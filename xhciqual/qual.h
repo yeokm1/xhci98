@@ -715,6 +715,7 @@ int  legacy_final_verdict(LEGACY_CTRL *c, int active_ran);
 /* ------------------------------------------------------------------ */
 
 int  report_open(const char *logname, int use_serial, int paginate);
+void report_open_handle(int dos_handle, int use_serial, int paginate);
 void report_close(void);
 void qprintf(const char *fmt, ...);
 /* The durable sinks only - a file and a serial line have no 25-row bound, so

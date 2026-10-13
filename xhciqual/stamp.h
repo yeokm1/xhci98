@@ -48,6 +48,33 @@ int stamp_name(unsigned month, unsigned day, unsigned hour, unsigned minute,
                const char *ext, STAMP_EXISTS_FN exists, void *ctx,
                char *out);
 
+/*
+ * The name, created: what --log-stamp uses (Codex round 1 on task 38.1). A
+ * name that is free when asked about can be taken before it is created, and
+ * a create that truncated would then overwrite it; so the caller's create
+ * must be exclusive (INT 21h AH=5Bh, "create new file"), and a create that
+ * finds the name taken moves on to the next letter rather than refusing.
+ *
+ * create answers STAMP_CREATE_OK when it made the file (and holds it, in
+ * ctx), STAMP_CREATE_EXISTS when the name was taken, or STAMP_CREATE_FAIL.
+ * A failure is asked about once more with exists, since what appeared in
+ * the gap may be something an exclusive create reports as a plain failure
+ * (a directory); a name still free after a failure is a medium that cannot
+ * be written, and that stops the search: STAMP_CREATE_FAILED, with out
+ * holding the name that could not be created.
+ */
+#define STAMP_CREATE_OK      0
+#define STAMP_CREATE_EXISTS  1
+#define STAMP_CREATE_FAIL    2
+
+#define STAMP_CREATE_FAILED  4  /* out holds the name that failed */
+
+typedef int (*STAMP_CREATE_FN)(const char *name, void *ctx);
+
+int stamp_create(unsigned month, unsigned day, unsigned hour,
+                 unsigned minute, const char *ext, STAMP_EXISTS_FN exists,
+                 STAMP_CREATE_FN create, void *ctx, char *out);
+
 /* The base without its letter, for a refusal message: "mDDhhmm" (7 chars
  * and NUL; out must hold 8). Returns 0 when a field is out of range. */
 int stamp_prefix(unsigned month, unsigned day, unsigned hour,

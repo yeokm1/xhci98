@@ -10,9 +10,13 @@
 #include <stdarg.h>
 #include <string.h>
 #include <conio.h>
+#include <dos.h>
 #include "qual.h"
 
 static FILE *logf = 0;
+/* A DOS handle the caller created exclusively (--log-stamp, INT 21h AH=5Bh)
+ * and handed over, written with INT 21h AH=40h; -1 when there is none. */
+static int log_handle = -1;
 static int serial_on = 0;
 
 /* console pager: pause every screenful so the report can be read on bare
@@ -46,18 +50,35 @@ static void serial_putc(char ch)
     outp(COM1_BASE + 0, (u8)ch);
 }
 
-int report_open(const char *logname, int use_serial, int paginate)
+static void sinks_on(int use_serial, int paginate)
 {
     serial_on = use_serial;
     page_on = paginate && !use_serial;   /* serial capture is non-interactive */
     if (serial_on)
         serial_init();
+}
+
+/* The log is opened before COM1 is touched: a caller that refuses when the
+ * log cannot be opened must not have programmed a UART first. A failure
+ * returns 0 with no sink on; the caller decides whether to go on without
+ * the file (report_open(0, ...)) or refuse. */
+int report_open(const char *logname, int use_serial, int paginate)
+{
     if (logname != 0) {
         logf = fopen(logname, "w");
         if (logf == 0)
             return 0;
     }
+    sinks_on(use_serial, paginate);
     return 1;
+}
+
+/* The log is a handle the caller has already created (and so already knows
+ * is writable); this takes ownership of it and closes it in report_close. */
+void report_open_handle(int dos_handle, int use_serial, int paginate)
+{
+    log_handle = dos_handle;
+    sinks_on(use_serial, paginate);
 }
 
 void report_close(void)
@@ -65,6 +86,43 @@ void report_close(void)
     if (logf != 0) {
         fclose(logf);
         logf = 0;
+    }
+    if (log_handle >= 0) {
+        (void)_dos_close(log_handle);
+        log_handle = -1;
+    }
+}
+
+/* Text-mode output on a raw DOS handle: LF becomes CR LF, as the CRT's "w"
+ * stream does for --log. Each write goes to DOS at once, so a later fault
+ * keeps every line already printed, as fflush does for the stream. */
+static void handle_out(const char *buf)
+{
+    static const char crlf[2] = { '\r', '\n' };
+    const char *p = buf;
+    const char *run = buf;
+    unsigned wrote;
+
+    for (;; p++) {
+        if (*p == '\n' || *p == '\0') {
+            if (p > run)
+                (void)_dos_write(log_handle, run, (unsigned)(p - run),
+                                 &wrote);
+            if (*p == '\0')
+                break;
+            (void)_dos_write(log_handle, crlf, 2, &wrote);
+            run = p + 1;
+        }
+    }
+}
+
+static void log_out(const char *buf)
+{
+    if (logf != 0) {
+        fputs(buf, logf);
+        fflush(logf);   /* durable per line: a later fault keeps this gate */
+    } else if (log_handle >= 0) {
+        handle_out(buf);
     }
 }
 
@@ -132,10 +190,7 @@ void qprintf(const char *fmt, ...)
     buf[sizeof(buf) - 1] = '\0';             /* _vsnprintf may not terminate */
 
     console_out(buf);
-    if (logf != 0) {
-        fputs(buf, logf);
-        fflush(logf);   /* durable per line: a later fault keeps this gate */
-    }
+    log_out(buf);
     if (serial_on) {
         for (p = buf; *p != 0; p++) {
             if (*p == '\n')
@@ -160,7 +215,7 @@ void qlogprintf(const char *fmt, ...)
     const char *p;
     va_list ap;
 
-    if (logf == 0 && !serial_on)
+    if (logf == 0 && log_handle < 0 && !serial_on)
         return;
 
     va_start(ap, fmt);
@@ -168,10 +223,7 @@ void qlogprintf(const char *fmt, ...)
     va_end(ap);
     buf[sizeof(buf) - 1] = '\0';             /* _vsnprintf may not terminate */
 
-    if (logf != 0) {
-        fputs(buf, logf);
-        fflush(logf);
-    }
+    log_out(buf);
     if (serial_on) {
         for (p = buf; *p != 0; p++) {
             if (*p == '\n')
@@ -202,7 +254,7 @@ void qconprintf(const char *fmt, ...)
  * "the full list is in the log" only when the full list really went there. */
 int report_logging(void)
 {
-    return (logf != 0 || serial_on) ? 1 : 0;
+    return (logf != 0 || log_handle >= 0 || serial_on) ? 1 : 0;
 }
 
 static const char *class_name(int pc)

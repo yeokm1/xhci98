@@ -165,9 +165,13 @@ The batch says which way the run went: a completed reading; no USB host
 controller found (the log is still written); the name refused before
 anything was read (exit 4: the clock is not a date, all 26 letters of
 that minute are taken, or the log cannot be created) - fix what the
-message says and run it again; or, with no completion flag, an abnormal
-end, where the partial log is kept and a photo of the screen is wanted.
-It deletes no log.
+message says and run it again; a directory that cannot be written
+(exit 4 with no completion flag either, as on a write-protected floppy,
+where DOS first asks Abort, Retry, Fail - answer F), where nothing was read
+and the two files are to be copied to a writable directory; or, with no
+completion flag after any other exit, an abnormal end, where the partial
+log is kept and a photo of the screen is wanted. The batch ends on
+`pause`. It deletes no log.
 
 ### Quick xHCI procedure: run the five batch files
 

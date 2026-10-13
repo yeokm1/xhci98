@@ -155,6 +155,142 @@ static void test_all_taken(void)
           "Z is used when A to Y are taken");
 }
 
+/*
+ * stamp_create (Codex round 1): the create is the caller's, exclusive, and
+ * the directory can change between the ask and the create. The fake create
+ * takes a name; "race" names are ones another writer creates in that gap
+ * (free when asked, taken by the time of the create), "dirrace" names the
+ * same but appearing as something an exclusive create reports as a plain
+ * failure, and fail_all is a medium that cannot be written at all.
+ */
+static char race[MAX_TAKEN][STAMP_NAME_MAX];
+static int nrace;
+static int dirrace;
+static int fail_all;
+static int creates;
+static char created[STAMP_NAME_MAX];
+static int truncated;
+
+static void create_clear(void)
+{
+    dir_clear();
+    nrace = 0;
+    dirrace = 0;
+    fail_all = 0;
+    creates = 0;
+    created[0] = '\0';
+    truncated = 0;
+}
+
+static int fake_create(const char *name, void *ctx)
+{
+    int i;
+
+    (void)ctx;
+    creates++;
+    for (i = 0; i < ntaken; i++) {
+        if (strcmp(taken[i], name) == 0) {
+            truncated++;            /* asked to create a name that exists */
+            return STAMP_CREATE_EXISTS;
+        }
+    }
+    for (i = 0; i < nrace; i++) {
+        if (strcmp(race[i], name) == 0) {
+            dir_add(name);          /* the other writer won the gap */
+            return dirrace ? STAMP_CREATE_FAIL : STAMP_CREATE_EXISTS;
+        }
+    }
+    if (fail_all)
+        return STAMP_CREATE_FAIL;
+    dir_add(name);
+    strcpy(created, name);
+    return STAMP_CREATE_OK;
+}
+
+static void race_add(const char *name)
+{
+    if (nrace < MAX_TAKEN) {
+        strcpy(race[nrace], name);
+        nrace++;
+    }
+}
+
+static void test_create(void)
+{
+    char out[STAMP_NAME_MAX];
+    char name[STAMP_NAME_MAX];
+    char c;
+    int rc;
+
+    create_clear();
+    rc = stamp_create(10, 13, 14, 25, "LOG", fake_exists, fake_create, 0,
+                      out);
+    CHECK(rc == STAMP_OK && strcmp(out, "A131425A.LOG") == 0 &&
+          strcmp(created, out) == 0 && creates == 1,
+          "a free name is created, once");
+
+    /* The finding: A is free when asked and taken before the create. */
+    create_clear();
+    race_add("A131425A.LOG");
+    rc = stamp_create(10, 13, 14, 25, "LOG", fake_exists, fake_create, 0,
+                      out);
+    CHECK(rc == STAMP_OK && strcmp(out, "A131425B.LOG") == 0 &&
+          strcmp(created, "A131425B.LOG") == 0,
+          "a collision between check and create moves to the next letter");
+    CHECK(creates == 2, "A tried once, B once");
+
+    /* The same, appearing as a directory: a plain failure, asked again. */
+    create_clear();
+    race_add("A131425A.LOG");
+    dirrace = 1;
+    rc = stamp_create(10, 13, 14, 25, "LOG", fake_exists, fake_create, 0,
+                      out);
+    CHECK(rc == STAMP_OK && strcmp(out, "A131425B.LOG") == 0,
+          "a failure on a name now taken moves to the next letter");
+
+    /* Names taken when asked are never handed to the create. */
+    create_clear();
+    dir_add("A131425A.LOG");
+    dir_add("A131425B.LOG");
+    rc = stamp_create(10, 13, 14, 25, "LOG", fake_exists, fake_create, 0,
+                      out);
+    CHECK(rc == STAMP_OK && strcmp(out, "A131425C.LOG") == 0 &&
+          creates == 1 && truncated == 0,
+          "existing names are skipped without a create");
+
+    /* An unwritable medium: the first failure stops the search. */
+    create_clear();
+    fail_all = 1;
+    rc = stamp_create(10, 13, 14, 25, "LOG", fake_exists, fake_create, 0,
+                      out);
+    CHECK(rc == STAMP_CREATE_FAILED && strcmp(out, "A131425A.LOG") == 0,
+          "an unwritable directory is refused, naming the file");
+    CHECK(creates == 1, "one create tried, not 26");
+
+    /* Every letter lost to the race: all taken, nothing created. */
+    create_clear();
+    for (c = 'A'; c <= 'Z'; c++) {
+        sprintf(name, "C312359%c.LOG", c);
+        race_add(name);
+    }
+    strcpy(out, "garbage");
+    rc = stamp_create(12, 31, 23, 59, "LOG", fake_exists, fake_create, 0,
+                      out);
+    CHECK(rc == STAMP_ALL_TAKEN && out[0] == '\0' && created[0] == '\0',
+          "26 collisions are all taken");
+    CHECK(creates == 26 && truncated == 0, "26 creates, none on a taken name");
+
+    create_clear();
+    CHECK(stamp_create(13, 1, 0, 0, "LOG", fake_exists, fake_create, 0,
+                       out) == STAMP_BAD_CLOCK && creates == 0,
+          "a bad clock creates nothing");
+    CHECK(stamp_create(1, 1, 0, 0, "LOG", fake_exists, 0, 0, out) ==
+          STAMP_BAD_ARG, "no create");
+    CHECK(stamp_create(1, 1, 0, 0, "LOGS", fake_exists, fake_create, 0,
+                       out) == STAMP_BAD_ARG && creates == 0,
+          "four-character extension creates nothing");
+}
+
 static void test_invalid(void)
 {
     char out[STAMP_NAME_MAX];
@@ -202,6 +338,7 @@ int main(void)
     test_next_letter();
     test_all_taken();
     test_invalid();
+    test_create();
     if (failures == 0)
         printf("test_stamp: %d checks passed\n", checks);
     else
