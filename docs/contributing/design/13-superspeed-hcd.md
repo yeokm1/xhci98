@@ -2286,8 +2286,10 @@ Controller`) and its `NTMPDriver` is `xhci98.sys`. Arguments `show`, `1` and
 `0`, or a double-click that shows and asks. Exit codes: 0 done; 1 refused
 or nothing found (no controller, NT); 2 usage, as `portsw.vbs`'s; and two
 of its own, **3 partial** (the DWORD written and read back on some
-controllers and not on others) and **4 list not verified** (`1` only:
-nothing written). `show` prints, for each controller, the value and what
+controllers and not on others), **4 list not verified** (`1` only:
+nothing written) and **5 not verified** (a `RegWrite` that returned no error
+on some controller whose `RegRead` then failed or read back another value:
+that controller's value may have changed). `show` prints, for each controller, the value and what
 the driver makes of it (exactly 1 on; missing, 0, another number or type
 off), and the list: a `regedit /e` export of the `SilentClasses` key read
 for its value lines (Script Host cannot list a key's values itself),
@@ -2318,13 +2320,26 @@ its class as well" - and the count kept toward the cap of 32.
 **Setting** (`1` after a passed check, or `0`) writes the DWORD to each
 controller's key in turn, each write trapped on its own (`On Error Resume
 Next`, cleared per key) and read back with `RegRead` (a DWORD of exactly the
-value written). It then prints one line per controller (set, or not set
-and the error), and: all set - the `show` text and "RESTART WINDOWS", once,
-as `portsw.vbs` does since 38.7, exit 0; none set - "the switch was not
-changed", exit 1; some set and some not - "PARTIAL: the switch was set on
-N of M controllers", the `show` text, "RESTART WINDOWS" withheld and in
-its place what to do (run `silent-off.bat` to set every controller back to
-0, or correct the failure and run the script again), exit 3. On an NT
+value written). The script keeps two records per controller, apart: whether
+the `RegWrite` returned without error, and whether the `RegRead` verified
+it, so each controller ends in one of three states - **set** (written and
+verified), **not set** (the write itself failed, so the value is as it
+was) or **unverified** (written without error, then the read-back failed
+or read another value, so the value may or may not have changed). It then
+prints one line per controller (its state, and the error for the last two),
+and, taking the first that applies: any unverified - "UNVERIFIED: the
+switch may have changed on N of M controllers", the `show` text (which may
+itself fail to read those keys), "RESTART WINDOWS" withheld and in its
+place the recovery (run `silent-off.bat` to set every controller back to
+0, or check `XhciSilentInstall` under each controller's key in `regedit`),
+exit 5; all set - the `show` text and "RESTART WINDOWS", once, as
+`portsw.vbs` does since 38.7, exit 0; none set (every write failed) - "the
+switch was not changed", exit 1; some set and some not - "PARTIAL: the
+switch was set on N of M controllers", the `show` text, "RESTART WINDOWS"
+withheld and in its place what to do (run `silent-off.bat` to set every
+controller back to 0, or correct the failure and run the script again),
+exit 3. "Not changed" is said only when no write succeeded; a write that
+succeeded and was not verified is never reported as not set. On an NT
 system it writes nothing: it says the silent install is a Windows 98 SE
 and ME feature the driver never reads there, and exits 1. No elevation
 path, since it writes only on 98 SE and ME.
@@ -2344,25 +2359,37 @@ it gates `portsw-on.bat`'s.
   or NT), no merge and no gate. Then `regedit /s
   silent.reg`; then `cscript //nologo silent.vbs 1`, which checks the list
   before it writes any gate (above). The batch reads its errorlevel highest
-  first, as COMMAND.COM's `if errorlevel N` is "N or more": 4 - "the list
-  did not read back as `SILENT.REG`'s six; the switch was not set on any
-  controller; the list may be merged in part" and what the script found; 3
-  - "the switch was set on some controllers and not others; the lines
-  above say which; run `silent-off.bat`, or correct it and run
-  `silent-on.bat` again"; 1 or 2 - "the switch was not set"; 0 - the
-  script's own restart line stands. The list goes in before the gate and
-  the gate only after the list reads back right, so no failure of the merge
-  can leave a gate on over a list that is not the six; and `regedit /s`
-  reports nothing and its errorlevel is not relied on - the check is.
+  first, as COMMAND.COM's `if errorlevel N` is "N or more": 5 - "the
+  switch may have changed on some controllers and could not be read back;
+  the lines above say which; run `silent-off.bat` to set it back to 0, or
+  check `XhciSilentInstall` in `regedit`; restart only once it reads
+  right"; 4 - "the list did not read back as `SILENT.REG`'s six; the
+  switch was not changed on any controller; the list may be merged in
+  part" and what the script found, and that a controller whose switch was
+  already on (the `show` lines above say so) stays on over that list - "run
+  `silent-off.bat` if the silent install must stop"; 3 - "the switch was
+  set on some controllers and not others; the lines above say which; run
+  `silent-off.bat`, or correct it and run `silent-on.bat` again"; 1 or 2 -
+  "the switch was not set"; 0 - the script's own restart line stands. The
+  list goes in before the gate and the gate is written only after the list
+  reads back right, so a failed check cannot newly enable a gate; existing
+  gate values remain unchanged, so a gate already on from an earlier run
+  stays on over whatever the failed merge left, and the 4 message says so
+  and points to `silent-off.bat`. `regedit /s` reports nothing and its
+  errorlevel is not relied on - the check is.
 - **`silent-off.bat`**: `cscript //nologo silent.vbs 0`, with the same
-  reading of 3 ("set back to 0 on some controllers and not others; run
-  `silent-off.bat` again") and of 1 or 2, and it says that the list was
+  descending reading of 5 ("may have changed on some controllers and could
+  not be read back; run `silent-off.bat` again, or check
+  `XhciSilentInstall` in `regedit`"), of 3 ("set back to 0 on some
+  controllers and not others; run `silent-off.bat` again") and of 1 or 2,
+  and it says that the list was
   left in place, because another USB stack may read the same key
   (SweetLow's, whose file this list's values are), and how to delete it by
   hand. `0` runs no list check: turning the switch off needs no list.
 
 `test-package.ps1`'s gate of the two batch files' text includes the stop
-after `show` and the 4, 3 and 1 branches of `silent-on.bat`.
+after `show` and the 5, 4, 3 and 1 branches of `silent-on.bat`, in that
+order.
 
 **Names.** `SILENT.REG` and `SILENT.VBS` are 8.3. `silent-on.bat` and
 `silent-off.bat` are the owner's names, 9 and 10 characters before the dot,
