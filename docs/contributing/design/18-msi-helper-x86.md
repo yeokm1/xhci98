@@ -1713,7 +1713,8 @@ record 15's (its section 13.6, the same thread); its record 18 findings
 (5, 7 to 10, 13) are taken in sections 15.4, 15.7, 15.10, 15.11 and
 15.12, and the owner then withdrew the forced restart on 2000 and XP
 (H2). Round 2's E and F are taken in sections 15.4 and 15.10, and round
-3's finding 3 in section 15.10.
+3's finding 3 in section 15.10. The loop converged at round 6 (record
+15 section 13.6).
 
 ## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.4)
 

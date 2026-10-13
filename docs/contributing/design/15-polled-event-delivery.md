@@ -2610,6 +2610,10 @@ and 2 confirmed closed; 3 reopened narrowly. Both taken:
 | 1 | P2: a worker-only completion note misses the PDO close's inline completion | Leg T3: the note at `hcdSuspCompletePower`, for inline and worker callers, from metadata saved before the completion |
 | 2 | P3: the recovery vectors added a seed after a coherent mismatch | Section 7.2.10: the incoherent and coherent cases split |
 
+Round 6 (`ffaaf528`, same thread), the confirmation round over round 5's
+diff: both findings confirmed closed, no P1, P2 or P3. **Converged**.
+Review thread `01a135b1-e223-7ab1-95c0-686c23dc9d01`, rounds 1 to 6.
+
 ## 14. What changes in the documents
 
 Task 36.20 (SUSP.3 until 2026-10-09, when Phase 36 took the cut that ships
