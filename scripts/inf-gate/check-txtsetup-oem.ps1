@@ -697,6 +697,9 @@ if ($SelfTest) {
         }
         # The INF side of OEM-IDS and OEM-SERVICE: an INF that grows a model
         # or renames its service must fail the unchanged oem file.
+        # A quoted Needs reference (INF general syntax), resolved: refused
+        # for the file it copies, and passed once a dll line carries it.
+        $quotedNeedsInf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs="Xtra.Install"' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n")
         $infCases = @(
             @{ Rule = "OEM-IDS";     Inf = $inf.Replace("%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB", "%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n%RootHubDesc%=RootHub.Dev,USB\XHCI98_OTHER_HUB") },
             @{ Rule = "OEM-SERVICE"; Inf = $inf.Replace("AddService=xhci98,", "AddService=xhcihcd,") },
@@ -707,7 +710,7 @@ if ($SelfTest) {
             @{ Rule = "OEM-COPY";    Inf = $inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n").Replace("[Xhci.CopyFiles]`r`n", "[Xhci.CopyFiles]`r`nxhcixtra.sys`r`n") },
             @{ Rule = "OEM-COPY";    Inf = $inf.Replace("[Xhci.CopyFiles]`r`n", "[Xhci.CopyFiles]`r`nxhcixtra.sys`r`n") },
             @{ Rule = "OEM-COPY";    Inf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs=Xtra.Install' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n") },
-            @{ Rule = "OEM-COPY";    Inf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs="Xtra.Install"' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n") },
+            @{ Rule = "OEM-COPY";    Inf = $quotedNeedsInf; Match = "copies 'xhcixtra\.sys' from this disk" },
             @{ Rule = "OEM-COPY";    Inf = ([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf, ('${1}Needs=Xtra.Missing' + "`r`n"), 1) },
             @{ Rule = "OEM-COPY";    Inf = ([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf, ('${1}CopyFiles=Xtra.Missing' + "`r`n"), 1) },
             @{ Rule = "OEM-COPY";    Inf = ([regex]'\[(RootHub\.Dev\.NT[a-z0-9]+)\]\r\n').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcico.dll=1`r`n"), ('[${1}.CoInstallers]' + "`r`nCopyFiles=@xhcico.dll`r`n`r`n" + '[${1}]' + "`r`n"), 1) }
@@ -721,12 +724,23 @@ if ($SelfTest) {
         foreach ($c in $infCases) {
             $total++
             $got = @(Test-OemText -Bytes $orig -InfText $c.Inf -Package "" -Profile $profile -PairBytes $pair)
-            if (@($got | Where-Object { $_.StartsWith($c.Rule + " ") }).Count -eq 0) {
+            $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
+            if ($c.ContainsKey("Match")) { $hit = @($hit | Where-Object { $_ -match $c.Match }) }
+            if ($hit.Count -eq 0) {
                 $bad++
-                Write-Err ("$profile INF mutation for $($c.Rule) was not refused. Got:`n  " + ($got -join "`n  "))
+                Write-Err ("$profile INF mutation for $($c.Rule) was not refused for its reason. Got:`n  " + ($got -join "`n  "))
             } else {
                 Write-Ok "$profile $($c.Rule) refuses an INF that moved"
             }
+        }
+        $total++
+        $carried = $enc.GetBytes($text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll    = d1, xhcixtra.sys"))
+        $got = @(Test-OemText -Bytes $carried -InfText $quotedNeedsInf -Package "" -Profile $profile -PairBytes $pair)
+        if ($got.Count -ne 0) {
+            $bad++
+            Write-Err ("$profile a quoted Needs whose file a dll line carries was refused:`n  " + ($got -join "`n  "))
+        } else {
+            Write-Ok "$profile a quoted Needs whose file a dll line carries passes"
         }
         # Stand-in packages: the staged set must pass; a missing oem file, a
         # missing driver, and a Microsoft file anywhere (hidden too) must not.
