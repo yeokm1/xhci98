@@ -1753,29 +1753,48 @@ static USBD_CONFIGURATION_HANDLE hcdCfgHandle(PHCD_USB_DEVICE dev,
 
 /*
  * One interface to another alternate setting, on the configuration the
- * client selected (its copy, dev->Selected): the interface's open pipes are
- * brought to rest and closed, their requests completed as cancelled; one
- * Configure Endpoint drops their endpoints - and any left enabled by an
- * earlier failure (dev->Stale) - and adds the new setting's; then
- * SET_INTERFACE. A failure leaves the interface with no pipes, as a client
- * that sees the error must select again. The other interfaces' pipes are
- * untouched (keepMask). A STALL from an interface with one alternate
- * setting is a success, the way Linux's usb_set_interface makes it (owner,
- * 2026-10-14; design record 20 section 5.3, step 4): USB 2.0 9.4.10 lets a
- * device with only a default setting STALL the request, and what the
- * request would have done - restart the device's toggles, which Drop and
- * Add has restarted at the controller - is done by CLEAR_FEATURE(
- * ENDPOINT_HALT) to each new non-isochronous endpoint (USB 2.0 9.4.5), as
- * hcdCfgSetInterface does for a function. A clear that fails, and a STALL
- * from an interface with other settings, fail the request, as every STALL
- * did until then (Codex review of batch (c), round 11, findings 1 and 3:
- * the device's toggles not reset while the controller's were). From a
- * function PDO the handle is the PDO's own and the interface must be one
- * of its (design record 13 section 10.9). The interface information's own
- * Length bounds it, as usbport has it (external/reactos/usbport/device.c,
- * USBPORT_HandleSelectInterface and USBPORT_InitInterfaceInfo):
- * UrbHeader.Length is not read - usbport rewrites it - and a Length too
- * short for the alternate's pipes is USBD_STATUS_BUFFER_TOO_SMALL. Windows 2000's usbaudio.sys sends its
+ * client selected (its copy, dev->Selected), under design record 20 section
+ * 5.3: a ring is returned to the pool only once a command proves the
+ * controller has given it up (roadmap-hcd.md task 38.10; Linux's rule,
+ * xhci_check_bandwidth and xhci_reset_bandwidth). The interface's open
+ * pipes are aborted resumably and detached, but kept; the new setting's
+ * pipes are made; one Configure Endpoint drops the old endpoints - and any
+ * left enabled by an earlier failure (dev->Stale) - and adds the new; then
+ * SET_INTERFACE. The other interfaces' pipes are untouched (keep). Each
+ * step's outcome decides what is freed, held, put back or published
+ * (xhci_own.c, XhciOwnSelectStep):
+ *
+ *   - a Configure Endpoint refused or never issued changed nothing (xHCI
+ *     4.6.6): the new pipes are freed and the old put back with their own
+ *     handles, the interface at its old setting; one whose completion was
+ *     never seen holds everything until the slot goes;
+ *   - SET_INTERFACE completed: the new pipes are published, success;
+ *   - STALLed by an interface with one alternate setting: a success, the
+ *     way Linux's usb_set_interface makes it (owner, 2026-10-14). USB 2.0
+ *     9.4.10 lets a device with only a default setting STALL the request,
+ *     and what it would have done - restart the device's toggles, which
+ *     Drop and Add has restarted at the controller - is done by
+ *     CLEAR_FEATURE(ENDPOINT_HALT) to each new non-isochronous endpoint
+ *     (USB 2.0 9.4.5), as hcdCfgSetInterface does for a function;
+ *   - STALLed otherwise, or one of those clears failed: the old setting is
+ *     re-instated by a second Configure Endpoint on its own rings, the
+ *     device's toggles restarted by the same clears, and the old pipes put
+ *     back with their own handles; the request fails with the STALL. Every
+ *     STALL failed the request until then, with no pipe left (Codex review
+ *     of batch (c), round 11, findings 1 and 3: the device's toggles not
+ *     reset while the controller's were);
+ *   - not established, a rollback that did not succeed, its clears
+ *     failing, or an old setting with streams open: the interface is left
+ *     with no pipe, as a client that sees the error must select again, and
+ *     every ring the controller may hold is kept until a proof releases it.
+ *
+ * From a function PDO the handle is the PDO's own and the interface must
+ * be one of its (design record 13 section 10.9). The interface
+ * information's own Length bounds it, as usbport has it
+ * (external/reactos/usbport/device.c, USBPORT_HandleSelectInterface and
+ * USBPORT_InitInterfaceInfo): UrbHeader.Length is not read - usbport
+ * rewrites it - and a Length too short for the alternate's pipes is
+ * USBD_STATUS_BUFFER_TOO_SMALL. Windows 2000's usbaudio.sys sends its
  * alternate-1 select with an interface Length of 0x24, room for its one
  * pipe, and every one was refused here while the header was read (c15,
  * 2026-10-03). Thread only.

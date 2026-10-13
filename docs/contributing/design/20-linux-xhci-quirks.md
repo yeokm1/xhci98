@@ -751,11 +751,15 @@ license freeing what the controller may still hold.
      (USB 2.0 9.4.10; USB 3.2 9.4.10, p.343), so the STALL refuses nothing:
      the setting asked for is the one setting there is, the one the device
      is at, and the new endpoints are the old setting's own. What the
-     request would have done at the device - restart each endpoint's data
-     toggle or sequence, as SET_INTERFACE does "even if the requested ...
-     interface is the same as the current" one (USB 3.2 9.4.5, p.338) - is
-     done instead by CLEAR_FEATURE(ENDPOINT_HALT) to each new
-     non-isochronous endpoint, as Linux clears every endpoint of the setting
+     request would have done at the device - set "all of the status and
+     configuration values" of the interface's endpoints to their defaults,
+     "resetting the sequence numbers ... to zero" (USB 3.2 9.1.1.5, p.321,
+     the section Linux's own comment cites at `message.c:1707`), and clear
+     their Halt feature "even if the requested ... interface is the same as
+     the current" one (9.4.5, p.338) - is done instead by
+     CLEAR_FEATURE(ENDPOINT_HALT) to each new non-isochronous endpoint,
+     which clears the halt and "always results in the data sequence being
+     reinitialized to zero" (9.4.5, p.338; the toggle, USB 2.0 9.4.5), as Linux clears every endpoint of the setting
      after a manual set (`message.c:1690-1705`), with the mechanism
      `hcdCfgSetInterface` already uses for the function select. The host
      side needs nothing more: the contexts step 3 added are fresh, at DATA0
@@ -831,10 +835,32 @@ license freeing what the controller may still hold.
 
 An old setting whose pipes had streams open is not re-instated even on a
 STALL: its stream handles are a dependent lifetime a fresh, streamless
-context cannot honour; it takes the "not established" branch. A STALL on
+context cannot honour; it takes the "not established" branch for what it
+holds. A STALL on
 an interface with one alternate setting whose clears all complete needs no
 re-instatement, so its streams do not matter there: the new pipes, which
 have none, are published.
+
+What the request answers is decided by how it ended, apart from what the
+allocations became:
+
+- **Success** after a completed SET_INTERFACE, or after a one-setting
+  STALL whose clears all completed.
+- **The command's own status** when the select ended before or at step
+  3's Configure Endpoint - refused, not issued or unknown
+  (`XhciPipeConfigureUsbdStatus`), or the pool's or the parameters'
+  refusal before any command - as today.
+- **The STALL status** (`USBD_STATUS_STALL_PID`, today's answer to a
+  STALL) on every exit after the device STALLed SET_INTERFACE, whatever
+  followed: a one-setting clear that failed, however it failed; the
+  rollback refused, not issued or unknown; the rollback's own clears
+  completing or failing; an old setting with streams open. The device's
+  refusal is what the client is told; what became of the rings does not
+  change it.
+- **`INTERNAL_HC_ERROR`** when SET_INTERFACE was not established, as today.
+- **`DEVICE_GONE`** in place of any failure above once the device is
+  proven to have left its port, as every select's failure is answered
+  today (`hcdCfgSelectAnswer`).
 
 ### 5.4 The function select and every other path
 
