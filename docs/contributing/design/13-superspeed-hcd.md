@@ -5793,12 +5793,17 @@ one tier (the root hub's key itself carrying the controller's PCI path,
 per tier - is unread, as is what 98 SE allows for the key (a registry key
 name, an instance id buffer) and what it does at the limit. That limit,
 if it exists, binds today's ids too. The design therefore reads it
-rather than assumes it: on 98 SE, a chain of serial-less hubs as deep as
-QEMU allows (up to five tiers) with a serial-less device at its end, on
-`2.3.1.0` and again after the update, each key read whole (10.13.10).
-If a depth works under the old ids and fails under the new, the release
-notes name the deepest serial-less chain that works on 98 SE; the bus
-cannot shorten a key 98 SE builds from its parents' paths. NT's
+rather than assumes it: on 98 SE, a chain of serial-less hubs five tiers
+deep with a serial-less composite device at its end - the longest form,
+since a location-form function's key carries the composite parent's too
+(10.12) - and the same chain under a hub whose serial id is 126
+characters, on `2.3.1.0` and again after the update, the parent's and the
+function's keys read whole (10.13.10). If QEMU cannot build a chain that
+deep, the deepest it builds is read and the record says the limit is the
+vehicle's, not a measured one of 98 SE's. If a depth works under the old
+ids and fails under the new, the release notes name the deepest
+serial-less chain read to work on 98 SE; the bus cannot shorten a key 98
+SE builds from its parents' paths. NT's
 location-form instance ids carry only the parent's `ParentIdPrefix`, not
 its path, so they do not grow.
 
@@ -6216,11 +6221,17 @@ those devnodes has been removed or stopped (a driver update, a rollback, a
 disable of every controller). So the tool holds every controller of this
 project for its run:
 
-1. **Find them**: every present devnode whose service is `xhci98` and
-   whose device id begins `PCI\` (`SetupDiGetClassDevs` with no class GUID,
-   no enumerator, `DIGCF_ALLCLASSES | DIGCF_PRESENT`, fully enumerated;
-   `SPDRP_SERVICE` of each), the set's creation, enumeration or any
-   property read failing being unknown.
+1. **Find them**: every present devnode whose device id begins `PCI\`
+   and whose service is `xhci98` (`SetupDiGetClassDevs` with no class
+   GUID, the enumerator `PCI` and `DIGCF_ALLCLASSES | DIGCF_PRESENT`,
+   fully enumerated, every instance id read; then each one's service
+   through `CM_Get_DevNode_Registry_Property` with `CM_DRP_SERVICE`).
+   The set's creation or walk failing, or an instance id unreadable, is
+   unknown. `CR_NO_SUCH_VALUE` - no `Service` value, an unbound device -
+   means not this project's, and the devnode is passed over; any other
+   failure, or a value that is not a string, is unknown. **The set must
+   not be empty**: no present project controller refuses, before the
+   question is asked.
 2. **Check each**: started (`DN_STARTED` from `CM_Get_DevNode_Status`),
    with a child (`CM_Get_Child`, `CM_Get_Sibling`) whose device id is
    `USB\XHCI98_ROOT_HUB`, itself started - a present root hub whose driver
@@ -6247,15 +6258,18 @@ project for its run:
    there (10.13.10); on a target where it is not, removal is disabled for
    that OS version in the shipped tool, which then lists only.
 5. **Re-check**: immediately before each removal the tool repeats the
-   global tests, steps 1 and 2 (the same controllers, by instance id, all
-   still started with their root hubs) and the candidate's presence test;
+   global tests, steps 1 and 2 (the same controllers, by instance id, at
+   least one, all still started with their root hubs, each still held by
+   a verified handle) and the candidate's presence test;
    immediately after, it verifies the candidate gone and steps 1 and 2
    unchanged. Any change stops the run there, with what was done printed.
 
 `CMP_WaitNoPendingInstallEvents` (declared in WDK 7.1's `cfgmgr32.h` for
-Windows 2000 and later, static) is called before the first removal, so a
-run does not start in the middle of an installation; it observes, it does
-not lock, and the safety rests on the held handles, not on it.
+Windows 2000 and later, static) is called before the first removal with a
+bounded wait (30 seconds), so a run does not start in the middle of an
+installation: only `WAIT_OBJECT_0` goes on, and `WAIT_TIMEOUT`,
+`WAIT_FAILED` or a missing export refuses. It observes, it does not lock;
+the safety rests on the held handles, not on it.
 
 **On 98 SE and ME there is no such exclusion.** The configuration manager
 does not check open handles at a query-remove there - the driver is
@@ -6276,7 +6290,7 @@ Device Manager's Uninstall takes, with `SP_REMOVEDEVICE_PARAMS` set to
 `DI_REMOVEDEVICE_GLOBAL` through `SetupDiSetClassInstallParams`. After each
 call it reads `SetupDiGetDeviceInstallParams` and treats `DI_NEEDREBOOT` or
 `DI_NEEDRESTART` as "removed, restart pending", reported apart from
-"removed" and kept in the exit code even if a later removal fails. A
+"removed" and kept in the final report even if a later removal fails. A
 failed `DIF_REMOVE` - access, WOW64, a class installer or co-installer
 refusing, or anything unexplained - stops at that entry and is reported;
 **there is no fallback route** (in particular not `CM_Uninstall_DevNode`,
@@ -6331,7 +6345,7 @@ three-state decision are pure (an instance id and the lookup results in, a
 verdict out), so a `-selftest` runs them over canned inputs - each old
 form, each new form, case variants, a truncated hex field,
 `USB\XHCI98_NOXPORT&...`, an unrelated `XHCI98\` id, a lookup error, an
-incomplete walk - and `build-driver.cmd` runs it when the EXE has been
+incomplete walk, an empty controller set, a service-less PCI devnode - and `build-driver.cmd` runs it when the EXE has been
 built, as it runs `XHCISNAP`'s report self-test.
 
 **Packaging**: `make-release.ps1` stages `tools\xhcicln\` with both
@@ -6409,10 +6423,11 @@ this design adds:
   keyboard on the second `xhci98` controller recorded as no help, since
   its root hub is new too.
 - **98 SE** updated on a stock install and under SweetLow's stack; and
-  a chain of serial-less hubs (QEMU hubs given a refused serial) as deep
-  as QEMU allows, up to five tiers, with a serial-less device at its end,
-  on `2.3.1.0` and after the update, each key read whole (10.13.1,
-  "Lengths").
+  a chain of serial-less hubs (QEMU hubs given a refused serial) five
+  tiers deep, or as deep as QEMU builds, with a serial-less composite
+  device at its end, and the same under a hub with a 126-character serial
+  id, on `2.3.1.0` and after the update, the parent's and the function's
+  keys read whole (10.13.1, "Lengths").
 - **A hub or composite device first plugged in** between the update and
   the restart, on 98 SE (10.13.4).
 - **Two controllers**: one update leg on a two-controller guest (2000 or
@@ -6420,7 +6435,8 @@ this design adds:
   (10.13.4).
 - **The tool**, on every target: its listing, `-remove`, the hidden view
   and `Enum` again; its global refusals forced once (run before the
-  restart on 98 SE; run with the controller disabled on one NT target);
+  restart on 98 SE; run with the controller disabled, so with no held
+  controller, on one NT target);
   on each NT target, whether a disable, an update and a rollback of the
   controller are vetoed while the tool holds its door open (10.13.8) - the
   result deciding whether removal is enabled there - with a stock
@@ -6469,13 +6485,12 @@ read before the cut by passthrough.
 | Whether 98's and ME's `cfgmgr32.dll` export `CM_Uninstall_DevNode` and honour `CM_LOCATE_DEVNODE_PHANTOM` (10.13.8, D8 (a)) | statically from the guests' files, then on a guest |
 | Whether `DIF_REMOVE` removes a non-present devnode on each NT target, its restart flags, and the 32-bit call's failure under WOW64 (10.13.8) | the tool's legs |
 | Whether NT vetoes a controller's query-remove while the tool holds its door open (10.13.8) | the tool's legs on each NT target; removal disabled where it is not |
-| What 98 SE allows for a location-form key two hub tiers deep (10.13.1) | the 98 SE SweetLow leg |
 | When the new ids appear on 2000 and XP with 38.4's helper, on one and two controllers (10.13.4) | the update legs |
 | Whether any input-free route through the XP and 98 SE prompts exists (D4) | not assumed: the release notes ask for independent input |
 | A USB 3 hub's SuperSpeed half under the new id (10.13.10) | the owner's bench or a passthrough, after the cut (D13) |
 | A High Speed USB 2.0 hub under the new id (10.13.10) | D14 |
 | Whether 98 SE's `HKEY_DYN_DATA\Config Manager\Enum` walk is complete and reliable, and what an exclusion during a run needs there (10.13.8) | the 98 SE and ME legs, before route (a) |
-| How deep a chain of serial-less hubs 98 SE takes, under the old ids and the new (10.13.1) | the 98 SE leg |
+| How deep a chain of serial-less hubs, ending in a serial-less composite device, 98 SE takes under the old ids and the new, and what it does at its limit (10.13.1) | the 98 SE leg, five tiers or as deep as QEMU builds |
 
 #### 10.13.12 Decisions taken (owner, 2026-10-13)
 
@@ -6494,7 +6509,7 @@ each. D14, from the review's second round, is open.
 | D6 | The tool's name and place | (a) `XHCICLN.EXE`, source `xhcicln\`, shipped `tools\xhcicln\`; (b) a mode of `XHCISNAP` | **(a)** |
 | D7 | The 64-bit targets | (a) a second, amd64 build `XHCICL64.EXE`; (b) the 32-bit build only | **(a), by design** (owner, after the review's opinion, replacing "only if the x64 leg shows the 32-bit build refused"): `XHCICL64.EXE` ships; the 32-bit build lists but refuses removal under WOW64; the 64-bit build tested on XP x64, Vista x64 and 7 x64 |
 | D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: on 98 SE and ME the tool lists only in this release, since those systems give no exclusion against an older image loading during a run; (a) is enabled only once it, the `HKEY_DYN_DATA` walk and such an exclusion have been read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8) |
-| D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes | **as written** (10.13.8), the exit codes now 0, 1, 2 and 3 (restart pending), a pending restart reported even when a later removal fails |
+| D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes | **as written** (10.13.8), the exit codes now 0, 1, 2 and 3 (restart pending), a pending restart kept in the final report even when a later removal fails |
 | D10 | The global refusals | (a) both (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`); (b) only the first | **(a) both**; after the review every project controller must be started, with a started `USB\XHCI98_ROOT_HUB` child and its door held open, and any test answering unknown refuses (10.13.8) |
 | D11 | If the refused device id moves: does the tool also remove old refused devnodes? | (a) yes; (b) no | **left to NOX.1** (38.12 deferred), whose decision 4 is that the tool leaves them (10.13.9) |
 | D12 | An F6 leg (32-bit XP, with a hub), since both `txtsetup.oem` files change | (a) add it; (b) the gates suffice | **(a), widened** (owner, after the review's opinion): F6 legs on Windows 2000, 32-bit XP and XP x64, each with the input behind the hub and a composite device bound (10.13.10) |
