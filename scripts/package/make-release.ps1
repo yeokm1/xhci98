@@ -4274,7 +4274,8 @@ Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
 Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
 directory as a new install. Nothing needs renaming first. (From 2.3.x or
 earlier the controller alone: the root hub is a new one and installs by
-itself - read FROM 2.3.x below first.) As read in virtual machines:
+itself - read FROM 2.3.x below first.) The four FROM 2.3.x paragraphs are
+what this release's design expects; the rest, as read in virtual machines:
 
   FROM 2.3.x OR EARLIER, ONCE: EACH ROOT HUB, HUB AND COMPOSITE DEVICE IS
   FOUND AGAIN AS NEW HARDWARE. From this release they are named under USB\
