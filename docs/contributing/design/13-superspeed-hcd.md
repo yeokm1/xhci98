@@ -1885,8 +1885,8 @@ leaves whole (several configurations, a device class of its own, more than
 So a function's answer depends on its own interfaces alone, never on its
 siblings'; and the composite parent answers TRUE when any of its functions'
 interfaces match a `0x40` entry, which is the rule read literally over the
-whole configuration. **Open (O3):** whether the parent should instead
-answer TRUE only when every function does, or never: its devnode is this
+whole configuration. **Decided (O3, owner 2026-10-13):** any, as written, not only when every
+function does, nor never. Its devnode is this
 package's own INF's and was read installing silently on 98 SE with
 `SilentInstall` FALSE (run-36, K2), so its answer is expected to change
 nothing there; the legs read it. The hub row is in the same position: the
@@ -1901,10 +1901,9 @@ the PDO is presented as UAS and bound by `xhciuas.inf` - the one class the
 list leaves out because this package's own INFs install it. On a machine
 where `xhciuas.inf` has never been installed, that drive would then be
 installed silently with no driver, the very case the readme warns against.
-**Open (O2), proposed:** a PDO whose transport is `XHCI_XPORT_UAS` or
+**Decided (O2, owner 2026-10-13):** a PDO whose transport is `XHCI_XPORT_UAS` or
 `XHCI_XPORT_REFUSED` answers FALSE whatever the list says; a PDO presented
-Bulk-Only (`XHCI_XPORT_BOT` or `NONE`) follows the rule. Until the owner
-decides, the rule stands as written.
+Bulk-Only (`XHCI_XPORT_BOT` or `NONE`) follows the rule.
 
 #### 6.11.3 Read once per controller start, into the bus's own storage
 
@@ -1926,7 +1925,7 @@ interface descriptor, once per PDO. **Past the cap** each further valid
 entry is dropped and counted, in the order the query enumerates the values,
 which the bus does not choose. Dropping can only remove silence - the
 wizard comes, as today - which is the safe direction, and the note ring
-says it happened. **Open (O5):** the cap's value.
+says it happened. **Decided (O5, owner 2026-10-13):** 32.
 
 **The read.** On 98 SE and ME only; `SilentCount`, `SilentIgnored` and
 `SilentDropped` are set to 0 first on every target, so a key deleted
@@ -2012,8 +2011,8 @@ descriptor itself walked over like any other:
   fault: the walk does not stop at the first match, so a configuration is
   silent only when it was walked whole and matched. Silence is the
   direction that can leave a device unworking with nothing said, so a
-  configuration the bus cannot read whole is not given it. **Open (O4):**
-  this choice, against keeping a match found before the fault.
+  configuration the bus cannot read whole is not given it. **Decided (O4, owner 2026-10-13):**
+  0, not a match found before the fault.
 - `config` NULL or `length` 0: 0.
 
 **The two traps** (roadmap 38.2), designed out where they arise:
@@ -2165,15 +2164,18 @@ Then the readme says whether ME needs the list. Proposed beside them (not
 the owner's list): one Windows 2000 reading with the list merged, which
 should show no `silent.*` note and every install as before.
 
-#### 6.11.10 Open questions for the owner
+#### 6.11.10 Questions and decisions
 
-| | Question | Proposed |
+O2 to O5 were decided by the owner on 2026-10-13, each as proposed; O1 is
+a fact to be read, not a choice.
+
+| | Question | Decided / to read |
 |---|---|---|
-| O1 | Does NTKERN's `RtlQueryRegistryValues` (98 SE, ME) enumerate every value when `Name` is NULL? If not: `ZwOpenKey` (98 SE evidence, not allowlisted) with `ZwEnumerateValueKey` (no Windows 98 evidence recorded), or a by-name query of `"0"` to `"31"` | read on the legs, or statically in 98 SE's `usbhub.sys`, before the fallback is chosen |
-| O2 | A PDO presented as UAS, or refused, whose Bulk-Only alternate matches the storage entry | FALSE for `XHCI_XPORT_UAS` and `XHCI_XPORT_REFUSED` |
-| O3 | The composite parent: TRUE when any function's interfaces match (the rule read literally), when all do, or never | any (literal) |
-| O4 | A malformed configuration: 0 whatever matched, or keep a match found before the fault | 0 |
-| O5 | The table's cap | 32, the excess dropped and counted |
+| O1 | Does NTKERN's `RtlQueryRegistryValues` (98 SE, ME) enumerate every value when `Name` is NULL? If not: `ZwOpenKey` (98 SE evidence, not allowlisted) with `ZwEnumerateValueKey` (no Windows 98 evidence recorded), or a by-name query of `"0"` to `"31"` | to read on a 98 SE guest (or statically in 98 SE's `usbhub.sys`) before the code; the fallback is chosen only if it does not |
+| O2 | A PDO presented as UAS, or refused, whose Bulk-Only alternate matches the storage entry | FALSE for `XHCI_XPORT_UAS` and `XHCI_XPORT_REFUSED` (owner) |
+| O3 | The composite parent: TRUE when any function's interfaces match (the rule read literally), when all do, or never | any (literal) (owner) |
+| O4 | A malformed configuration: 0 whatever matched, or keep a match found before the fault | 0 (owner) |
+| O5 | The table's cap | 32, the excess dropped and counted (owner) |
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
