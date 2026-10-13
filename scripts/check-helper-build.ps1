@@ -63,17 +63,25 @@ function Get-HelperLogErrors {
     if ($targetLine.Count -eq 0) {
         $errors += "the build log lacks the kit's 'BUILDMSG: _NT_TARGET_VERSION SET TO WINXP' line - the helper was not built for the WXP target (record 18 section 15.10)"
     }
-    # Every library operand, quoted or not, and as a /DEFAULTLIB: argument
-    # too (review of 38.3, round 1: a quoted path ended in a quote and was
-    # passed over). A quoted operand may hold spaces.
+    # Every library operand, quoted or not (a quoted one may hold spaces),
+    # and every /DEFAULTLIB: argument, with or without its extension; a
+    # /NODEFAULTLIB: exclusion links nothing and is passed over (review of
+    # 38.3, rounds 1 and 2).
     $libs = @()
     foreach ($line in $Lines) {
         $text = ($line -replace "^\d+>", "").Trim()
-        foreach ($m in [regex]::Matches($text, '(?i)"([^"]*?\.lib)"|([^\s"]+?\.lib)(?=$|[\s"])')) {
-            $lib = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
-            $lib = $lib -replace '(?i)^/(DEFAULTLIB|NODEFAULTLIB):', ''
-            if ($lib -match '(?i)^/NODEFAULTLIB') { continue }
-            $libs += $lib
+        foreach ($m in [regex]::Matches($text, '(?:[^\s"]|"[^"]*")+')) {
+            $op = $m.Value.Replace('"', '')
+            if ($op -match '(?i)^[/-]NODEFAULTLIB') { continue }
+            if ($op -match '(?i)^[/-]DEFAULTLIB:(.+)$') {
+                $lib = $Matches[1]
+                if ($lib -notmatch '(?i)\.lib$') { $lib = $lib + ".lib" }
+                $libs += $lib
+                continue
+            }
+            if ($op -match '(?i)\.lib$' -and $op -notmatch '^[/-]') {
+                $libs += $op
+            }
         }
     }
     if ($libs.Count -eq 0) {
@@ -175,6 +183,12 @@ if ($SelfTest) {
     Assert-True ($e.Count -eq 1 -and $e[0] -match "win7 library") "a quoted path with spaces is read whole and refused: $($e -join '; ')"
     $e = @(Get-HelperLogErrors -Lines ($good + "1>/DEFAULTLIB:d:\x\tools\winddk71\lib\wnet\i386\ntoskrnl.lib"))
     Assert-True ($e.Count -eq 1 -and $e[0] -match "wnet library") "a /DEFAULTLIB: library is read and refused: $($e -join '; ')"
+    $e = @(Get-HelperLogErrors -Lines ($good + "1>/DEFAULTLIB:d:\x\tools\winddk71\lib\wlh\i386\wdmsec"))
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "wlh library") "an extensionless /DEFAULTLIB: library is read and refused: $($e -join '; ')"
+    $e = @(Get-HelperLogErrors -Lines ($good + "1>/DEFAULTLIB:""d:\Program Files\kit\lib\wlh\i386\wdmsec"""))
+    Assert-True ($e.Count -eq 1 -and $e[0] -match "wlh library") "a quoted extensionless /DEFAULTLIB: library is read and refused: $($e -join '; ')"
+    $e = @(Get-HelperLogErrors -Lines ($good + "1>/NODEFAULTLIB:libcmt.lib" + "1>/NODEFAULTLIB:""c:\a b\x.lib"""))
+    Assert-True ($e.Count -eq 0) "a /NODEFAULTLIB: exclusion links nothing and is not refused: $($e -join '; ')"
     $e = @(Get-HelperLogErrors -Lines @($good | Where-Object { $_ -notmatch "BUILDMSG" }))
     Assert-True ($e.Count -eq 1 -and $e[0] -match "WINXP") "a log without the WINXP line is refused: $($e -join '; ')"
     $e = @(Get-HelperLogErrors -Lines @("1>BUILDMSG: _NT_TARGET_VERSION SET TO WIN7", "$kit\wxp\i386\ntoskrnl.lib "))
