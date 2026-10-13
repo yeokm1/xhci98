@@ -3669,15 +3669,25 @@ CD, a shared folder - then:
       Manager, not a right-click on the INF. RESTART WHEN ASKED: the install
       and every update ask for one, for xhcimsi.sys, and after a first
       install the controller does not start until then (Device Manager
-      shows code 28 on 7, code 1 on Vista meanwhile). Both have only been
-      run in virtual machines.{ARCHINSTALL}
+      shows code 28 on 7, code 1 on Vista meanwhile). A reinstall (the
+      controller removed in Device Manager and found again) needs the
+      restart too, even if Windows does not ask: 32-bit Vista showed only
+      an "installed successfully" balloon, and the controller stayed at
+      code 1 until a restart. Both have only been run in virtual
+      machines.{ARCHINSTALL}
 
 It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
 USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
 
-THE UAS DRIVER installs the first time a UAS disk is plugged in: the Found
-New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI
-Storage". Point it at the same directory. No restart is needed.
+THE UAS DRIVER installs the first time a UAS disk is plugged in. On
+Windows 98 SE, ME, 2000, XP and Vista a New Hardware wizard asks for its
+driver: point it at the same directory. Vista's wizard names the disk by
+its own product name; "xHCI98 USB Attached SCSI Storage" is its name once
+installed. Windows 7 shows no wizard: it searches Windows Update, then
+says the device's driver was not installed. Install it from Device
+Manager instead, on the UAS disk's entry, which carries a warning mark:
+    Update Driver Software -> Browse my computer for driver software
+and point it at the same directory. No restart is needed.
 
 WINDOWS 2000 OR XP SETUP, OR THE RECOVERY CONSOLE, ON AN xHCI-ONLY MACHINE
 ..........................................................................
@@ -3757,8 +3767,15 @@ virtual machines:
   once, with no restart. (Read with a command-line driver update rather
   than Device Manager.)
 
+  WINDOWS VISTA AND 7: USE HAVE DISK. Browse my computer with the folder
+  typed in answers that the best driver is already installed and keeps
+  the earlier release. Use Browse my computer for driver software ->
+  "Let me pick from a list of device drivers on my computer" -> Have Disk,
+  pointed at the same directory. (Read on 32-bit Vista and 7.)
+
   32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
-  one, for the helper xhcimsi.sys (above).
+  one, for the helper xhcimsi.sys (above). Until then the earlier release
+  keeps running and Device Manager says the device needs a restart.
 
   GOING BACK TO AN OLDER RELEASE ON VISTA OR 7: the controller's request
   for a message-signalled interrupt stays in its hardware key, and an
@@ -3988,7 +4005,8 @@ May be addressed in a later release:
 
   * 32-BIT WINDOWS VISTA AND 7: THE INSTALL ASKS FOR A RESTART, and the
     controller does not start until it is done, because the helper
-    xhcimsi.sys starts only at boot (section 4).
+    xhcimsi.sys starts only at boot (section 4). A reinstall needs the
+    restart even if Windows does not ask for it: 32-bit Vista did not.
 
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it

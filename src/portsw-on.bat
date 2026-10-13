@@ -27,7 +27,6 @@ echo Setting it to 1:
 cscript //nologo portsw.vbs 1
 if errorlevel 3 goto elevate
 if errorlevel 1 goto refused
-echo RESTART WINDOWS for the change to take effect.
 goto end
 :elevate
 echo Windows asked for administrator rights. If you allowed it, the

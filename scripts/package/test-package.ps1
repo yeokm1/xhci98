@@ -318,9 +318,11 @@ try {
             $at = [Array]::IndexOf($lines, $pin)
             if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
         }
-        foreach ($needle in @('RESTART WINDOWS', 'Vista and 7: right-click it', 'choose Run as administrator')) {
+        foreach ($needle in @('Vista and 7: right-click it', 'choose Run as administrator')) {
             if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
         }
+        # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.14).
+        if ($Text.Contains('echo RESTART WINDOWS')) { $faults += "it echoes 'RESTART WINDOWS', which portsw.vbs already prints" }
         return $faults
     }
 
@@ -352,7 +354,8 @@ try {
     foreach ($bad in @('goto nt', '@echo example > stray.txt', ' rem example > stray.txt', 'echo x | more',
                        'for /f %%i in (a.txt) do echo %%i', 'setlocal', 'if /i errorlevel 1 goto end',
                        'cd /d "%~dp0"', 'goto eof', 'cscript //nologo "portsw.vbs" 2', 'cscript //nologo portsw.vbs 2',
-                       'echo off', 'echo ON', 'echo Off', 'call :run', ':run', ('echo ' + ('x' * 130)))) {
+                       'echo off', 'echo ON', 'echo Off', 'call :run', ':run', ('echo ' + ('x' * 130)),
+                       'echo RESTART WINDOWS for the change to take effect.')) {
         $mutant = $onText.Replace($anchor, "`r`n" + $bad + "`r`n")
         Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted the line: $bad"
     }

@@ -539,10 +539,20 @@ same drivers built for troubleshooting. No Microsoft file is in the package.
    USB 3.x Root Hub" beneath it. Restart if asked: Windows 98 SE asks once,
    after the controller's install, and 32-bit Vista and 7 ask, for the MSI
    helper, holding the controller (Code 28 on 7, Code 1 on Vista) until
-   the restart. After any restart asked for, neither entry should carry a
-   warning mark.
-4. The first UAS device brings the Found New Hardware wizard for "xHCI98 USB
-   Attached SCSI Storage"; point it at the same directory.
+   the restart. A reinstall on 32-bit Vista and 7 (the controller removed
+   in Device Manager and found again) needs the restart too, whether or not
+   Windows asks: 32-bit Vista showed only an "installed successfully"
+   balloon and held the controller at Code 1 until a restart. After any
+   restart asked for, neither entry should carry a warning mark.
+4. The first UAS device asks for the UAS driver; point it at the same
+   directory. On Windows 98 SE, ME, 2000, XP and Vista a New Hardware wizard
+   asks; Vista's names the device by its own product string (QEMU's UAS
+   disk read "USB Attached SCSI HBA"), and it becomes "xHCI98 USB Attached
+   SCSI Storage" once installed. Windows 7 shows no wizard: it searches
+   Windows Update, then reports that the device was not installed. Install
+   it from Device Manager on the device's entry: Update Driver Software,
+   Browse my computer for driver software, the same directory. Read in
+   virtual machines.
 5. An external hub installs as "xHCI98 USB Hub" from the driver already
    installed. On Windows 98 SE and 2000 it installed with nothing to answer
    (Windows 98 SE shows its "New Hardware Found" box briefly). On Windows XP
@@ -730,6 +740,17 @@ flavour of the `2.1.0.0` integration build installed over the published
   (the steps above) were not read for this update. XP, XP x64 and 32-bit
   Vista showed their unsigned-driver warning once; on every one the update
   took effect at once, and no restart was asked for.
+- **Windows Vista and 7: use Have Disk.** Update Driver Software, Browse my
+  computer for driver software with the folder typed in answers that the
+  best driver software is already installed and keeps the earlier release.
+  Choose "Let me pick from a list of device drivers on my computer", Have
+  Disk, and the `release-` directory instead. Read on 32-bit Vista and 7,
+  from `2.3.0.0` to `2.3.1.0` (roadmap task 38.13).
+- **32-bit Vista and 7: restart when asked.** Through Have Disk, both asked
+  for a restart, for `xhcimsi.sys`, and until it the earlier release kept
+  running with the controller at no problem code ("You need to restart
+  your computer before the changes you made to this device will take
+  effect"); after it, `2.3.1.0` and its helper ran.
 
 **The root hub's Driver tab keeps showing `2.0.0.0`** (on Windows 98 SE and
 ME, its date) after the update, although the root hub runs the same new
@@ -1294,7 +1315,10 @@ no message-signalled interrupts and are unchanged.
   because that service starts only at boot. After a first install the
   controller does not start until you restart (Device Manager shows it
   waiting for the restart: code 28 on 7, code 1 on Vista), so its USB 3
-  ports work from the next start of Windows on, with the message. If
+  ports work from the next start of Windows on, with the message. A
+  reinstall needs the restart too, whether or not Windows asks: after a
+  remove and a scan for hardware changes, 32-bit Vista asked for none and
+  held the controller at code 1 until a restart. If
   `xhcimsi.sys` is missing or does not load, the controller keeps its
   interrupt line under `XhciInterruptMode` `0`.
 - **Asking for the interrupt line** on Vista and 7: set `XhciInterruptMode`
@@ -2211,7 +2235,10 @@ or says it was found by reading the code.
 - **32-bit Windows Vista and 7: the install asks for a restart**, and the
   controller does not start until it is done, because the helper
   `xhcimsi.sys` starts only at boot ("Windows Vista and 7:
-  message-signalled interrupts").
+  message-signalled interrupts"). A reinstall needs the restart even when
+  Windows does not ask for it: after a remove and a scan, 32-bit Vista
+  showed only an "installed successfully" balloon, the controller at
+  Code 1 until a restart.
 
 `2.0.0.0`'s list also had "a device moved to a different port is found
 again as new hardware", which `2.1.0.0` answers for every device with a
