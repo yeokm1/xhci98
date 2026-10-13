@@ -6,7 +6,10 @@ driver's code, and the quirks taken from it, each behind a registry value;
 and one fix to the driver's endpoint bookkeeping the survey exposed
 (section 5).
 
-Revision 6, 2026-10-14, answers review round 4 (section 11); revision 5,
+Revision 7, 2026-10-14, carries the owner's decision of that day on a
+STALLed SET_INTERFACE at an interface with one alternate setting (section
+5.3, step 4; section 9). Revision 6, the same day, answered review round 4
+(section 11); revision 5,
 the same day, answered round 3; revision 4,
 2026-10-13, answered round 2; revision 3,
 the same day, answered review round 1 with the
@@ -741,12 +744,58 @@ license freeing what the controller may still hold.
    established):
    - **Completed:** the old pipe objects and their rings are freed, the new
      pipes published and the URB's entries filled; success.
-   - **Stalled:** the device refused the request and stays at its old
+   - **Stalled, on an interface with one alternate setting** (owner,
+     2026-10-14): the request is treated as a success, the way Linux treats
+     it (`message.c:1655-1662`, its "manual set_interface"). A device whose
+     interface "only supports a default setting" may STALL SET_INTERFACE
+     (USB 2.0 9.4.10; USB 3.2 9.4.10, p.343), so the STALL refuses nothing:
+     the setting asked for is the one setting there is, the one the device
+     is at, and the new endpoints are the old setting's own. What the
+     request would have done at the device - restart each endpoint's data
+     toggle or sequence, as SET_INTERFACE does "even if the requested ...
+     interface is the same as the current" one (USB 3.2 9.4.5, p.338) - is
+     done instead by CLEAR_FEATURE(ENDPOINT_HALT) to each new
+     non-isochronous endpoint, as Linux clears every endpoint of the setting
+     after a manual set (`message.c:1690-1705`), with the mechanism
+     `hcdCfgSetInterface` already uses for the function select. The host
+     side needs nothing more: the contexts step 3 added are fresh, at DATA0
+     or sequence 0, which is what Linux's own reset of the host toggles
+     afterwards gives it (`usb_enable_interface` with its reset,
+     `message.c:1707-1718`). If every CLEAR_FEATURE completes, the select
+     ends as on **Completed**: the old pipe objects and their rings freed,
+     the new pipes published, the URB's entries filled, success. If one
+     fails - stalled or not established - the request takes the next
+     branch, the STALL on an interface with other settings, from its
+     rollback on: the device never left its setting, only its toggles are
+     in doubt, and the rollback's own CLEAR_FEATUREs restart them for the
+     old pipes; an old setting with streams open takes the "not
+     established" branch from there, as below.
+
+     Two differences from Linux, both narrower. Linux clears isochronous
+     endpoints too (some devices are said to expect it, `message.c:1275-1278`);
+     here they are skipped, as `hcdCfgSetInterface` skips them, because an
+     isochronous endpoint keeps no toggle and the Halt feature "is required
+     to be implemented for all interrupt and bulk endpoint types" only (USB
+     3.2 9.4.5, p.338), so a device may refuse the clear there and fail a
+     select that did nothing wrong. And Linux ignores what each clear
+     returns and reports success whatever it is (`usb_clear_halt` leaves
+     its own toggle alone on a failure, `message.c:1284-1286`); here a
+     failed clear leaves the device's toggle out of step with the fresh
+     context, so the select does not claim success over it (owner,
+     2026-10-14).
+
+     "One alternate setting" is read from the configuration the client
+     selected (`dev->Selected`), as Linux reads `num_altsetting` from the
+     interface's own: exactly one interface descriptor with that
+     `bInterfaceNumber`, walked to `wTotalLength`. A descriptor walk that
+     cannot finish counts as more than one, so a malformed configuration
+     takes the STALL branch below rather than a success.
+   - **Stalled, on an interface with more than one alternate setting:** the
+     device refused the request and stays at its old
      setting, with its endpoints' data toggles or sequence numbers as they
      were. Only here is the old setting re-instated (owner, 2026-10-13, as
      Linux's `usb_set_interface` restores the old setting's endpoints when
-     the request fails; `drivers/usb/core/message.c`, not in the mirror,
-     section 8): a second Configure Endpoint drops the new endpoints and
+     the request fails, `message.c:1663-1668`): a second Configure Endpoint drops the new endpoints and
      re-adds the old setting's on their own rings, each zeroed and given a
      fresh dequeue pointer with DCS 1 (zeroed TRBs carry cycle 0, xHCI
      4.3.6 footnote 10), the software ring state reset with it (enqueue,
@@ -782,7 +831,10 @@ license freeing what the controller may still hold.
 
 An old setting whose pipes had streams open is not re-instated even on a
 STALL: its stream handles are a dependent lifetime a fresh, streamless
-context cannot honour; it takes the "not established" branch.
+context cannot honour; it takes the "not established" branch. A STALL on
+an interface with one alternate setting whose clears all complete needs no
+re-instatement, so its streams do not matter there: the new pipes, which
+have none, are published.
 
 ### 5.4 The function select and every other path
 
@@ -1001,9 +1053,12 @@ release notes say so.
   branch at the time of writing); this record assumes only what the task
   text says - the floor moves to 0.96 behind a default-on value and 0.96
   parts are driven as 1.0 but for the TD Size.
-- `usb_set_interface`'s restore on a failed request (section 5.3, step 4):
-  from `drivers/usb/core/message.c`, not in the mirror; to be read at the
-  pinned commit before the implementation.
+- `usb_set_interface`'s restore on a failed request and its "manual
+  set_interface" on a STALL at an interface with one alternate setting
+  (section 5.3, step 4): from `drivers/usb/core/message.c`, added to the
+  mirror at the pinned commit on 2026-10-14 (`external/README.md`) and read
+  there the same day, `message.c:1587-1725` and `usb_clear_halt` at
+  `1267-1300`.
 
 ## 9. Decisions (owner, 2026-10-13)
 
@@ -1058,6 +1113,18 @@ From revision 0's open list, each with its recommendation then:
   not established, nor in the function select, where some interfaces may
   already have moved, nor for a setting with streams open (section 5.3,
   5.4). Those keep today's outcome with every ring held.
+
+Later (owner, 2026-10-14):
+
+- **A STALL on an interface with one alternate setting** is a success, as
+  Linux's "manual set_interface" makes it: CLEAR_FEATURE(ENDPOINT_HALT) to
+  each new non-isochronous endpoint, then the new pipes published as on a
+  completed SET_INTERFACE; a CLEAR_FEATURE that fails takes the STALL
+  branch, re-instating the old setting (section 5.3, step 4). A STALL on an
+  interface with more than one keeps that branch unchanged. Linux's
+  handling after its manual set was read and its intent kept - the device's
+  toggles restarted to match the host's - with the two narrowings section
+  5.3 states.
 
 ## 10. What changes in the documents
 

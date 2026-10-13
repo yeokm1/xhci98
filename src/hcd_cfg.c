@@ -1759,17 +1759,23 @@ static USBD_CONFIGURATION_HANDLE hcdCfgHandle(PHCD_USB_DEVICE dev,
  * earlier failure (dev->Stale) - and adds the new setting's; then
  * SET_INTERFACE. A failure leaves the interface with no pipes, as a client
  * that sees the error must select again. The other interfaces' pipes are
- * untouched (keepMask). Every SET_INTERFACE failure fails the request, a
- * STALL included: USB 2.0 9.4.10 lets a device with only a default setting
- * STALL it, but then the device has not reset its endpoints' toggles while
- * Drop and Add has reset the controller's (Codex review of batch (c),
- * round 11, findings 1 and 3). From a function PDO the handle is the PDO's
- * own and the interface must be one of its (design record 13 section
- * 10.9). The interface information's own Length bounds it, as usbport has
- * it (external/reactos/usbport/device.c, USBPORT_HandleSelectInterface and
- * USBPORT_InitInterfaceInfo): UrbHeader.Length is not read - usbport
- * rewrites it - and a Length too short for the alternate's pipes is
- * USBD_STATUS_BUFFER_TOO_SMALL. Windows 2000's usbaudio.sys sends its
+ * untouched (keepMask). A STALL from an interface with one alternate
+ * setting is a success, the way Linux's usb_set_interface makes it (owner,
+ * 2026-10-14; design record 20 section 5.3, step 4): USB 2.0 9.4.10 lets a
+ * device with only a default setting STALL the request, and what the
+ * request would have done - restart the device's toggles, which Drop and
+ * Add has restarted at the controller - is done by CLEAR_FEATURE(
+ * ENDPOINT_HALT) to each new non-isochronous endpoint (USB 2.0 9.4.5), as
+ * hcdCfgSetInterface does for a function. A clear that fails, and a STALL
+ * from an interface with other settings, fail the request, as every STALL
+ * did until then (Codex review of batch (c), round 11, findings 1 and 3:
+ * the device's toggles not reset while the controller's were). From a
+ * function PDO the handle is the PDO's own and the interface must be one
+ * of its (design record 13 section 10.9). The interface information's own
+ * Length bounds it, as usbport has it (external/reactos/usbport/device.c,
+ * USBPORT_HandleSelectInterface and USBPORT_InitInterfaceInfo):
+ * UrbHeader.Length is not read - usbport rewrites it - and a Length too
+ * short for the alternate's pipes is USBD_STATUS_BUFFER_TOO_SMALL. Windows 2000's usbaudio.sys sends its
  * alternate-1 select with an interface Length of 0x24, room for its one
  * pipe, and every one was refused here while the header was read (c15,
  * 2026-10-03). Thread only.
