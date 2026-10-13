@@ -2054,7 +2054,9 @@ after `hcdPdoNew` returns) nor the re-presented function's transport
   the same filtered configuration and the same transport gives the old
   answer while the gate and table are the same, and the devnode is
   installed already, so the answer decides nothing there either way. A
-  function PDO is composite.
+  function PDO is composite. A composite parent's disable and enable in
+  Device Manager on 98 SE does not reach this path (38.2's legs, 6.11.11):
+  PnP took the same function PDO back and nothing was decided again.
 
 Like the PDO's other creation fields, it is never changed after the PDO is
 listed. The query copies it.
@@ -2512,7 +2514,8 @@ both the wizard and the device's `silent.pdo` notes:
 7. **The composite parent disabled and enabled** in Device Manager in (c)
    (the path of `HcdDevicePdoRepresentFunctions`, task 36.43): the
    re-presented function PDOs' `silent.pdo` notes give the same answers as
-   at their first creation, and nothing asks.
+   at their first creation, and nothing asks. (Read on 98 SE: the path was
+   not taken; 6.11.11.)
 
 Then the readme says what ME did. Proposed beside them (not the owner's
 list): one Windows 2000 reading with the list merged and `XhciSilentInstall`
@@ -2535,6 +2538,78 @@ were decided by the owner the same day, each as proposed.
 | O5 | The table's cap | 32, the excess dropped and counted (owner) |
 | O6 | `XhciSilentInstall` other than absent, 0 and 1 | off - only a DWORD of exactly 1 is on, `XhciSelectiveSuspend`'s rule (6.11.3) (owner, 2026-10-13) |
 | O7 | The batch files' names | `silent-on.bat` and `silent-off.bat`, long names as `portsw-on.bat`'s (6.11.8) (owner, 2026-10-13) |
+
+#### 6.11.11 What the legs read (2026-10-13)
+
+Runtime: this driver's `silent.*` notes in `XHCISNAP` dumps at verbosity 2,
+the New Hardware wizard seen or not, Device Manager, and `regedit /e` of
+`Enum`; the `release` package of `d8c8fa63`, QEMU's `qemu-xhci`, development
+host A; evidence `out\p38-2\legs\notes.txt`, dumps and shots beside it
+(git-ignored). Every device on a devnode it had never had (a fresh serial).
+
+**Windows 98 SE** (NUSB 3.3, the HID and storage class drivers installed
+once before (c)):
+
+- (0): `silent.gate.value` `0xFFFFFFFF`, `silent.gate` 0, no other note.
+- (c): `silent.entries` 6, `silent.ignored` 0, `silent.dropped` 0 (O1);
+  a mouse, a Bulk-Only stick, a hub and a keyboard each `silent.pdo` MATCH,
+  answer 1, no wizard. On the base used, the HID drivers had not been
+  installed before, and the mouse and the keyboard asked for the CD
+  (`hidusb.sys`, `kbdhid.vxd`) with no wizard: the readme's "drivers
+  installed once first" is that.
+- (b), the gate 1 by hand and no list: `silent.status` `0xC0000034`,
+  `silent.entries` 0, a new mouse `silent.pdo` reason EMPTY, answer 0, the
+  wizard came.
+- (a), the list merged and the gate 0: only the two gate notes, no
+  `silent.pdo` note, the wizard came for a new mouse.
+- `silent-on.bat` over a list whose `"3"` read `c3,08,06,51`: refused, "The
+  switch was not set on any controller", exit 4, a gate already 1 left at
+  1. Over the six and three extra values (`40,01,00,00`, a DWORD,
+  `01,03,00,00`): passes, names each extra and says whether the driver
+  keeps it, "would keep 7"; after the restart `silent.entries` 7,
+  `silent.ignored` 2. `silent-off.bat`: 0 on every controller, the list
+  (extras included) left in place.
+- A composite with a matching function: QEMU 11.1 has none with a boot HID
+  or Bulk-Only function (each of its HID and storage devices has one
+  interface; `usb-net` has two configurations and is left whole), so
+  `usb-audio`, the one device the bus splits, was read with a hand-added
+  `0x40` entry for class 01: parent and function each MATCH, no wizard, no
+  CD; "xHCI98 USB Composite Device" and "USB Audio Device" working. A first
+  plug on a base whose installed `xhci98` INF predated the
+  `XHCI98\COMPOSITE` model left the parent devnode at Code 28 with nothing
+  said - the readme's hazard, through a stale INF.
+- The composite parent disabled and enabled: Code 22, then working; no new
+  `silent.pdo` note, so `HcdDevicePdoRepresentFunctions` did not run (6.11.4).
+- UAS barred: in (c) a `usb-uas` device on a SuperSpeed port `silent.pdo`
+  reason BARRED, answer 0, its `XHCIUAS.INF` wizard came. Refused in place
+  (`qemu-xhci p2=1,p3=4,streams=off`, every SuperSpeed port without a
+  companion): BARRED, answer 0, the wizard came and found no driver. Its
+  devnode's `HardwareID` value read
+  `USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`:
+  the second entry is the device id, which this section did not set out to
+  read; roadmap task 38.12 reads whether it can bind.
+- `Capabilities` in `Enum`: bit `0x20` set on the present devnodes the bus
+  answered 1, clear on those it answered 0; a hot-removed devnode's value
+  reads the same either way.
+
+**Windows ME** (the package installed by the New Hardware wizard on a stock
+ME):
+
+- (0): only the two gate notes; a new mouse, stick, hub and keyboard **each
+  installed with no wizard and no disk** with every PDO answering FALSE, as
+  37.1 saw; a `usb-audio` device behind the hub brought the wizard.
+- (c): `silent.entries` 6, `silent.ignored` 0, `silent.dropped` 0 (O1 holds
+  on ME); MATCH for the stick, mouse and hub; a new mouse, no wizard. With
+  the `0x40` class 01 entry added (`silent.entries` 7, `silent.ignored` 2),
+  the `usb-audio` device that brought the wizard in (0) installed with no
+  wizard and no disk, parent and function MATCH, both working.
+
+So **ME does not need the list** for the six entries' classes: it installs
+them silently without it. The switch changes what ME does only for a class
+ME would ask about, as audio showed. Not read on ME: (a), (b),
+`silent-off.bat`, the script's refusals and the composite parent's disable
+and enable, each read on 98 SE. Not read on Windows 2000: the base at hand
+had no `xhci98` controller.
 
 ## 7. The Windows 98 export evidence (task 25.3)
 

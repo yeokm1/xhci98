@@ -170,8 +170,13 @@ included.
   install on 98 SE asks for no CD, so a class whose driver is not there yet
   ends not working with nothing said. Never on 2000 and later. SweetLow
   provided the information on how the silent install is decided and the
-  list. Not yet observed on either system: the test legs on 98 SE and ME
-  are pending, and whether ME needs the list at all is not yet read.
+  list. Read in QEMU virtual machines: on 98 SE a mouse, keyboard, stick,
+  hub and a composite device with a matching function installed with no
+  wizard; with the switch off, or no list, the wizard came as before. ME
+  needs none of it for the listed classes: it installed a mouse, keyboard,
+  stick and hub with no wizard with the switch off. On ME the switch
+  matters only for a class ME would ask about (a USB audio device, read
+  with an entry added by hand). Not read on real hardware.
 
 ## What `2.3.1.0` changes
 

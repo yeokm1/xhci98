@@ -3545,9 +3545,11 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "        HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB"
         $contents += "      delete the SilentClasses key, and restart."
         $contents += ""
-        $contents += "      Not yet observed on 98 SE or ME; whether ME needs the list"
-        $contents += "      at all is not yet read. The information on how the silent"
-        $contents += "      install is decided, and the list, are from SweetLow."
+        $contents += "      Windows ME does not need it for these classes: it installs"
+        $contents += "      them with no wizard already. On 98 SE they install with no"
+        $contents += "      wizard once it is on (read in virtual machines). The"
+        $contents += "      information on how the silent install is decided, and the"
+        $contents += "      list, are from SweetLow."
         $contents += ""
     }
 
