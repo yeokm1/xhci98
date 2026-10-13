@@ -6,7 +6,8 @@ driver's code, and the quirks taken from it, each behind a registry value;
 and one fix to the driver's endpoint bookkeeping the survey exposed
 (section 5).
 
-Revision 4, 2026-10-13, answers review round 2 (section 11); revision 3,
+Revision 5, 2026-10-14, answers review round 3 (section 11); revision 4,
+2026-10-13, answered round 2; revision 3,
 the same day, answered review round 1 with the
 owner's rulings on it (section 9). Revision 0 (first committed as
 `c06eda96`, rebased since) was the survey alone, with the decisions open;
@@ -317,10 +318,16 @@ Two places change, because the first can only ask and the second decides:
   delivery is settled and connected (`hcd_ctl.c`: `hcdSettleDelivery`, then
   `hcdConnect`, then `XhciInitController`); so the start reads
   configuration offset 0 itself, through the same service, before
-  `hcdSettleDelivery`. A read that fails leaves the quirk unapplied for that
-  start, logged as "identity unread"; `XhciInitController`'s own read later
-  in the start is compared with it and a disagreement logged. With the
-  quirk effective:
+  `hcdSettleDelivery`. A read that fails keeps the identity already
+  established for this FDO (AddDevice's, or an earlier start's: the device
+  does not change within an FDO's lifetime), logged as "identity kept". If
+  no identity has ever been established, the start is conservative: at
+  value 1 or 2 the message is avoided as if the controller were listed
+  (line, else polling, under mode 0), logged as "identity unread"; a
+  wrongly avoided message costs a line or polling on an unknown controller,
+  where a wrongly taken one could cost a dead controller.
+  `XhciInitController`'s own read later in the start is compared with the
+  identity used and a disagreement logged. With the quirk effective:
 
   - **0, automatic (the default).** A message resource is never connected:
     the line where Windows granted one, and polling where it granted only a
@@ -611,10 +618,11 @@ endpoint replaced by a Drop-and-Add Configure Endpoint is Running again,
 on its new context, while the old allocation is free (xHCI 1.2c 4.6.6,
 p.106-107). Each allocation is in one of three states:
 
-- **New:** made for a command not yet completed; the controller has never
-  seen it. A command that is refused or never issued leaves it new, and it
-  is freed at once.
-- **Owned:** installed, or possibly installed. Held, and its pipe's DCI
+- **New:** not yet exposed: no command naming it has been issued. It
+  becomes owned the moment one is; a command that turns out refused or was
+  never issued returns it to new, and it is freed at once.
+- **Owned:** installed, or possibly installed (a command naming it issued
+  and not yet answered, or answered unknown). Held, and its pipe's DCI
   charged.
 - **Superseded:** a proof has released it: a successful Configure Endpoint
   that names it in a drop (alone or with an add), a successful Reset Device
@@ -622,7 +630,24 @@ p.106-107). Each allocation is in one of three states:
   re-initializing resume), or the slot gone - the proofs the stream blocks
   already use (`hcdCfgRetiredReclaim`, `HcdCfgDeviceGone`). A superseded
   allocation may be freed or, while its pipe object is kept for a rollback
-  (section 5.3, step 4), held without being charged to the controller.
+  (section 5.3, step 4), held: not charged as a context, but still reserved
+  in the pool (never reusable) until it is freed.
+
+Ownership changes on a command's completion, whatever follows it on the
+bus: a later control transfer's failure never reverses what a successful
+command installed or released.
+
+**The per-device cap during a transaction.** The pool refuses a device
+already holding `XHCI_MAX_DEVICE_ENDPOINTS` (four) rings (`xhci_mem.c`,
+`XhciPoolAcquire`; `xhci.h`), so holding the old rings while the new are
+made would refuse ordinary switches - a device with four endpoints could
+not make its first replacement. The cap is therefore taken against a
+device's rings outside any transaction; the rings one transaction holds
+for the old setting (detached, or superseded and held for a rollback) are
+counted apart, as that transaction's reservation, bounded by the cap
+again (so a device holds at most twice the cap, only while a switch is in
+flight), and stay reserved in the pool. The pool's own size, 32, still
+bounds everything the controller can hold (section 5.5).
 
 A successful command's proof is applied to the allocations it named - the
 detached old pipes and their stream blocks among them - before any
@@ -652,10 +677,18 @@ license freeing what the controller may still hold.
    every request cancelled, the endpoint Stopped, the ring emptied, Set TR
    Dequeue to the enqueue position, every stream likewise, and the
    cancellations settled - so a pipe resumed later restarts no TD whose
-   request already completed. Then each is unpublished under the controller
-   lock (`Closed`, the published pointer cleared, its streams' handles made
-   not to resolve), but kept, with its ring, its stream block and its
-   handle. An abort that fails ends as today (`hcdCfgFault`).
+   request already completed. Pausing does not close admission
+   (`hcd_io.c`, `HcdIoSubmit` accepts on a published, paused pipe), and the
+   abort's wait covers only the records it marked, so a request can arrive
+   between the abort and the detach. So each pipe is then unpublished
+   atomically under the controller lock (`Closed`, the published pointer
+   cleared, its streams' handles made not to resolve) and drained and waited
+   out again - `HcdIoDrainPipe` then `HcdIoWaitPipe`, the order
+   `hcdCfgCloseMask` uses, as the stream close already drains again after
+   closing (`hcd_cfg.c`, its reusable abort and second drain) - but kept,
+   with its ring, its stream block and its handle. An abort that fails ends
+   as today (`hcdCfgFault`). A reattach later republishes the pipe, restores
+   its streams' visibility, and releases only this transaction's pause.
 2. **The new pipes are made**, rings from the pool (new). The URB's pipe
    entries are filled only at the end, on success (they receive candidate
    handles before the command today, `hcd_cfg.c` in
@@ -692,21 +725,31 @@ license freeing what the controller may still hold.
      the request fails; `drivers/usb/core/message.c`, not in the mirror,
      section 8): a second Configure Endpoint drops the new endpoints and
      re-adds the old setting's on their own rings, each zeroed and given a
-     fresh dequeue pointer and cycle state (4.3.6, footnote 10). Fresh
-     contexts start at DATA0 (sequence 0), so the device side is brought to
-     match before anything reopens: CLEAR_FEATURE(ENDPOINT_HALT) to each
-     re-added non-isochronous endpoint, which restarts its toggle or
-     sequence (USB 2.0 9.4.5; the mechanism `hcdCfgSetInterface` already
-     uses for its own STALL case). If the rollback command succeeds and
-     every CLEAR_FEATURE completes, the new allocations are superseded and
-     freed, and the old pipe objects are reattached with **their own
-     handles**, so a client that keeps its old handles finds them valid;
-     the request fails with the STALL status. If the rollback command is
-     refused or not issued, or a CLEAR_FEATURE fails, the new endpoints
-     stay owned and stale (charged, held), the old pipe objects are freed,
-     and the interface has no open pipe - today's outcome, with the rings
-     held. If the rollback command's outcome is unknown, section 5.2's
-     rule.
+     fresh dequeue pointer with DCS 1 (zeroed TRBs carry cycle 0, xHCI
+     4.3.6 footnote 10), the software ring state reset with it (enqueue,
+     dequeue and cycle back to the base). The rollback's outcome decides
+     ownership at once, before anything else is tried:
+     - **Refused or not issued:** nothing changed; the new allocations stay
+       owned and stale, the old pipe objects are freed (their rings were
+       superseded at step 3), and the interface has no open pipe - today's
+       outcome, with the rings held.
+     - **Unknown:** both sets stay owned until the recovery's HCRST
+       (section 5.2).
+     - **Success:** the old allocations are owned again and the new
+       superseded and freed. Fresh contexts start at DATA0 (sequence 0), so
+       the device side is brought to match before anything reopens:
+       CLEAR_FEATURE(ENDPOINT_HALT) to each re-added non-isochronous
+       endpoint, which "always results in" the toggle (USB 2.0 9.4.5) or
+       "the data sequence being reinitialized to zero" (USB 3.2 9.4.5,
+       p.338) - the mechanism `hcdCfgSetInterface` already uses for its own
+       STALL case; isochronous endpoints keep no toggle and are skipped. If
+       every CLEAR_FEATURE completes, the old pipe objects are reattached
+       with **their own handles**, so a client that keeps its old handles
+       finds them valid; the request fails with the STALL status. If one
+       fails, the old endpoints stay installed and owned but the interface
+       is not reopened: the old pipe objects stay closed, their rings held
+       and their DCIs marked stale, for the next successful Configure
+       Endpoint or another proof to release.
    - **Not established** (no status stage seen, a transaction error, a
      timeout): the device may or may not have changed its setting, so
      nothing is re-instated on a guess. The new endpoints stay owned and
@@ -761,8 +804,10 @@ plus the enabled slots never pass 64, and no ring is in the pool while it
 is owned.
 
 The cost: during an interface switch the old and the new rings are both
-held until the switch settles, so a nearly full pool refuses a switch it
-would have served before. That is the bound working, and it is counted.
+held until the switch settles, so a nearly full pool (not the per-device
+cap, which a transaction's reservation does not consume, section 5.2)
+refuses a switch it would have served before. That is the bound working,
+and it is counted.
 
 ## 6. What is common to every quirk taken
 
@@ -855,12 +900,18 @@ and a shutdown is not a PnP stop: its D3 path runs 37.3's flush of pending
 requests and the switchover's release (`hcd_power.c`), not the stop's
 `HcdLogFlush`. So after Q4 and Q5 have acted, and after the power gate is
 left (the thread's pass takes the gate before it flushes, `hcd_ctl.c`, so
-waiting for it inside the gate would deadlock), the D3 path wakes the
-controller thread (`HcdThreadWake`) and waits, bounded at 500 ms, for one
-pass's `HcdLogFlush` to complete (a flush generation the thread advances
-after it), before the D3 IRP goes down. The sink stays the thread's, at
-PASSIVE_LEVEL, serialized as it is now. A pass that does not come within
-the bound is not waited for further, and nothing is claimed for it. Even a
+waiting for it inside the gate would deadlock), the D3 path takes a flush
+ticket (a request counter it advances after its records are written),
+wakes the controller thread (`HcdThreadWake`), and waits, bounded at
+500 ms in all, for the thread to acknowledge that ticket, before the D3
+IRP goes down. The thread captures the requested ticket **before** it
+begins a flush, and after `HcdLogFlush` returns publishes the captured
+ticket as acknowledged - so a flush already under way when the records
+were written, which may have drained before them, never acknowledges
+them. The sink stays the thread's, at PASSIVE_LEVEL, serialized as it is
+now. A thread that has left its loop (`ThreadStop`) or does not reach its
+flush within the bound is not waited for further; the attempt is counted as
+unacknowledged, and nothing is claimed for it. Even a
 flushed record reaches a user only through an external capture of that
 shutdown - the `XhciLogDebugView` sink under a debug-output viewer or a
 kernel debugger (`build-and-test.md`, "Getting a trace off a bare-metal
@@ -1040,6 +1091,18 @@ Round 2 ran on revision 3 (`7c824cfc`).
 | P2-8: the shutdown's records not flushed | section 6.4 (a bounded thread flush after the gate is left) |
 | P3-9: the CSM rule against Q7 and Q16 | section 3.0 |
 | P3-10: the HCIVERSION-keyed bits | section 6.2 |
+
+Round 3 ran on revision 4 (`c7b08912`); it agreed with the STALL-only
+rollback, subject to its findings 1 and 2.
+
+| Finding | Answer |
+|---|---|
+| P1-1: a CLEAR_FEATURE failure after a successful rollback freed installed rings | section 5.3, step 4 (ownership decided by the rollback's outcome at once; a later CLEAR_FEATURE failure leaves the old endpoints owned, closed and stale) and section 5.2 (ownership changes on a command's completion only) |
+| P1-2: requests admitted between the abort and the detach | section 5.3, step 1 (unpublish, then `HcdIoDrainPipe` and `HcdIoWaitPipe`; reattach releases only the transaction's pause) |
+| P2-3: the per-device cap of four refuses ordinary switches | section 5.2 (a transaction's reservation counted apart from the cap, still reserved in the pool) and section 5.5 |
+| P2-4: a flush generation does not acknowledge the shutdown records | section 6.4 (a ticket the thread captures before it flushes) |
+| P2-5: Q1 loses an established identity on a failed refresh | section 4.1 (the identity kept; none ever established is treated conservatively) |
+| P3-6: "new" defined by completion; the USB 3.2 citation | section 5.2; section 5.3, step 4 |
 
 ## 12. Provenance of this record
 
