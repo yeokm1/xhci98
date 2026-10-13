@@ -8,7 +8,7 @@ said. Where the two disagree about a clause, the roadmap wins.
 **On `out\...` and `vm\...` paths in this file.** They say where a reading
 was kept on the host that took it; they are not files a clone has.
 
-## 38.12 to 38.14 - The documents and batch files the `2.3.1.0` legs found wanting
+## 38.5 to 38.7 - The documents and batch files the `2.3.1.0` legs found wanting
 
 **Verdict: done** (2026-10-13). Documents and the two batch files only; no
 driver change.
@@ -20,10 +20,10 @@ serial captures in `out\p38-d\legs\<guest>\` (`notes.txt` is each guest's
 full list). Packages: the `2.3.1.0` asset (zip SHA-256
 `F835E1DC886D6AFDB84B25E7BD89C229AE56CC0B849BBA1E232C2DFE3B707AC6`,
 `release-x86`) and the published `2.3.0.0` (`releases\2.3.0.0\release-x86`);
-for 38.14 the asset's `portsw\` with `portsw-on.bat` and `portsw-off.bat`
+for 38.7 the asset's `portsw\` with `portsw-on.bat` and `portsw-off.bat`
 replaced by the working tree's.
 
-### 38.14 - "RESTART WINDOWS" printed once
+### 38.7 - "RESTART WINDOWS" printed once
 
 `portsw-on.bat` and `portsw-off.bat` no longer echo their own "RESTART
 WINDOWS for the change to take effect." after a successful set;
@@ -46,7 +46,7 @@ the prompt with no batch file too. `PORTSW-ON.BAT > C:\ON.TXT` at a
 COMMAND.COM prompt does not redirect a batch file's output; `COMMAND /C`
 does.
 
-### 38.13 - 32-bit Vista: the restart after a reinstall, and on an update
+### 38.6 - 32-bit Vista: the restart after a reinstall, and on an update
 
 The `2.3.1.0` legs saw 32-bit Vista bring the controller back at Code 1
 after a remove and a rescan with no restart prompt, only an "installed
@@ -80,7 +80,7 @@ or version are compared. Vista's log at its default level shows only the
 wizard ending with nothing installed. The release notes already said so
 of the `1.2.0.0` upgrade; the `2.y.y.y` section did not.
 
-### 38.12 - The UAS driver's install on Windows 7 and Vista
+### 38.5 - The UAS driver's install on Windows 7 and Vista
 
 From the `2.3.1.0` legs (run-37, "37.final"); no new reading. The readme
 template, the release notes' install steps and the acceptance test's 5.7

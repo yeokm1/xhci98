@@ -745,7 +745,7 @@ flavour of the `2.1.0.0` integration build installed over the published
   best driver software is already installed and keeps the earlier release.
   Choose "Let me pick from a list of device drivers on my computer", Have
   Disk, and the `release-` directory instead. Read on 32-bit Vista and 7,
-  from `2.3.0.0` to `2.3.1.0` (roadmap task 38.13).
+  from `2.3.0.0` to `2.3.1.0` (roadmap task 38.6).
 - **32-bit Vista and 7: restart when asked.** Through Have Disk, both asked
   for a restart, for `xhcimsi.sys`, and until it the earlier release kept
   running with the controller at no problem code ("You need to restart

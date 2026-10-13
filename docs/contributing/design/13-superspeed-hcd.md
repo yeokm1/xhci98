@@ -720,8 +720,9 @@ keeps UAS on an installed system. A device selected for UAS presents the
 UAS class id, which no Setup row binds, so a UAS-only device is still not
 usable until GUI mode; a Bulk-Only-only device (most USB flash sticks;
 QEMU's `usb-storage`) always meets Setup's own `usbstor`. Folding the UAS
-driver into `xhci98.sys` would answer the UAS-only case (UAS.1 in the
-roadmap's "Planned work").
+driver into `xhci98.sys` would answer the UAS-only case; it was planned
+(UAS.1, then roadmap-hcd 38.11) and removed on 2026-10-13 (owner), so the
+UAS-only case stays open.
 Carrying `xhciuas.sys` as a second `scsi` option would need its own
 hardware ids and a text-mode reading of its own, and is left out. GUI-mode
 Setup and the installed system install it from the package as before.

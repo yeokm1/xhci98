@@ -321,7 +321,7 @@ try {
         foreach ($needle in @('Vista and 7: right-click it', 'choose Run as administrator')) {
             if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
         }
-        # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.14).
+        # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.7).
         if ($Text.Contains('echo RESTART WINDOWS')) { $faults += "it echoes 'RESTART WINDOWS', which portsw.vbs already prints" }
         return $faults
     }
