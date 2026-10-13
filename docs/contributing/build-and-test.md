@@ -4038,7 +4038,12 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    the driver by then); the partition screen lists the USB disk beside the
    IDE disk (the bus's device PDO, Setup's `usbstor` and `disk` above it);
    no stop screen. Install onto the IDE disk.
-6. Text mode copies `xhci98.sys` from A: and restarts. Leave the floppy in
+6. Text mode copies `xhci98.sys` from A: and restarts. It also copies each
+   file of the option, and the INF as `oemscsNN.inf`, to `%windir%\OemDir`,
+   which GUI mode installs the controller from; on the x86 package that
+   includes the helper `xhcihlpr.sys` (its `dll` line: copied to `system32`
+   and `OemDir`, not loaded and given no service in text mode; design record
+   18 section 15.9). Leave the floppy in
    until GUI mode is finished: it may be asked for when GUI mode installs the
    controller and root hub from `xhci98.inf`, and so may the CD, for
    `usbd.sys` and `usbui.dll`. Record any prompt and any unsigned-driver
@@ -4047,7 +4052,9 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
    service `xhci98` is the INF's (`Start` 3, not the boot start text mode
    gave it), the USB keyboard types, and the stick has a drive letter with
-   the file put in it in step 2.
+   the file put in it in step 2. On 2000 and 32-bit XP the service
+   `xhcihlpr` is there too (`Start` 0), and `setupapi.log` shows no
+   `SPFILENOTIFY_COPYERROR` for the controller's install from `OemDir`.
 
 The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
 failed. Until it has passed on a target, design record 13 section 5.6 stays

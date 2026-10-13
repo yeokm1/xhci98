@@ -656,7 +656,17 @@ read. Other components (`computer`, `display`, `keyboard`, `mouse`) exist in
 the format but are chosen elsewhere in Setup; F6 offers the `scsi` component,
 and an F6 driver is loaded with Setup's own boot drivers, before the kernel
 starts - which is early enough for a bus driver, since Setup's USB stack is
-loaded the same way.
+loaded the same way. **Amended 2026-10-14:** the DDK's help topic was since
+read (`win2kddk-extracted\D_SETUP.CAB`, `d_setup.chm`, "Files.HwComponent.ID
+Section of a txtsetup.oem File"; also the file types `dll`, `hal`, `detect`
+and, in the media's parsers, `port` and `class`), and what text mode does
+with each type was read off 2000 SP4's and XP SP3's `SETUPDD.SYS` and
+`SETUPLDR.BIN`: every file of the option but the catalog goes to
+`%windir%\OemDir` as well as to its type's directory, which is where
+GUI-mode Setup installs the INF's devices from, and only the first
+`driver`, `port`, `class` or `hal` file is loaded in text mode. Design
+record 18 section 15.9's amendment has the reading; the x86 file's `dll`
+line for `xhcihlpr.sys` rests on it.
 
 **What `xhci98.sys` needs that an INF would normally give it.** Read from
 this repository's own sources: its imports are `ntoskrnl.exe` and `HAL.dll`
@@ -780,9 +790,12 @@ The limits, all of them the user's to know:
 directory) holds the two files to exactly the shape above: the five
 sections and nothing else, balanced quotes, the `scsi` component alone, the driver at the
 disk root as both the tag file and the `driver` line, the `inf` line, no
-catalog and no second driver, the service the INF adds, the INF's model ids
+catalog and no second driver, `dll` lines carrying exactly the other files
+the INF's NT 5.x install sections copy from the disk (`OEM-COPY`, since
+2026-10-14), the service the INF adds, the INF's model ids
 and no `USB\` id, no Microsoft file, 8.3 names, an architecture word in each
-description, the two files equal outside those descriptions, and in a
+description, the two files equal outside those descriptions and their `dll`
+lines, and in a
 package the file at the root with every file it names beside it.
 
 **Owed: one install leg per target**, from a floppy image in a virtual

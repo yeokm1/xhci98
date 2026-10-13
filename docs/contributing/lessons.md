@@ -9863,3 +9863,34 @@ matrix").
 Rule. **Time isochronous streams with `-display none` (screenshots through
 `screendump`). Before blaming a build for a timing reading, probe the
 emulator's main loop (an HMP round trip every 50 ms) and A/B the same build.**
+
+## F6: GUI-mode Setup installs from `%windir%\OemDir`, which holds only what `txtsetup.oem` names - a file the INF copies and the option does not carry fails the controller's install
+
+Roadmap task 38.final's VM matrix, 2026-10-14, development host A, QEMU,
+Windows XP SP3 installed from the `2.4.0.0` dry cut's `release-x86` floppy
+(`out\p38-matrix\legs\f6xp\`, git-ignored). Text mode passed. At GUI-mode
+Setup's "Installing Devices" the controller's install from `oem0.inf`
+(`xhci98.inf` from the floppy), section `[Xhci.Dev.NTx86]`, logged
+`SPFILENOTIFY_COPYERROR: Source = "C:\WINDOWS\OemDir\xhcihlpr.sys" ...
+Error = 0x00000002`, `FILEOP_ABORT`, "Install failed", and Setup put a NULL
+driver on `PCI\VEN_1B36&DEV_000D` with no prompt and no `xhcihlpr` service.
+Task 38.3 had added the helper's `CopyFiles` to that section;
+`txtsetup.oem` named only `xhci98.sys` and `xhci98.inf`, and every gate
+held each file to itself, none the two together.
+
+**What text mode puts in `OemDir`** (static, read off `SETUPDD.SYS` and
+`SETUPLDR.BIN` of Windows 2000 SP4 and XP SP3 with `dumpbin /disasm`; design
+record 18 section 15.9's amendment): every file of the chosen option but
+the catalog, under its own name (the INF as `oemscsNN.inf`), besides its
+type's own directory; `setupldr` loads only the first `driver`, `port`,
+`class` or `hal` file; only those lines name a service. The leg's own
+`OemDir` on Windows 2000 held `xhci98.sys` from the `driver` line, as the
+reading says. A `dll` line therefore gets a file to GUI mode without
+loading it in text mode.
+
+Rule. **Every file an INF's NT 5.x install section copies from the
+package must be on the F6 option (a `driver` or `dll` line), or GUI-mode
+Setup's install of that device fails silently.** `check-txtsetup-oem.ps1`'s
+`OEM-COPY` now derives the list from the INF, as a cross-file rule; when a
+change adds a file to one install artefact, look for the gate that ties
+it to the others before trusting each artefact's own gate.

@@ -20,9 +20,22 @@
 # txtsetup.sif's own hardware-id table, with usbd.sys, hidclass.sys and
 # hidparse.sys loaded from Setup's own source; none of them is on this disk.
 #
+# The dll line carries xhcihlpr.sys, the x86 helper (design record 18
+# section 15.9), for GUI-mode Setup only. Text mode copies every file of
+# this option but the catalog to %windir%\OemDir as well as to its own
+# directory (a dll's: system32), and GUI-mode Setup installs the controller
+# from xhci98.inf with OemDir as its source, so a file the INF's 2000/XP
+# controller section copies and this list does not carry fails that
+# install (2.4.0.0's F6 legs: no driver on the controller). A dll line is
+# not loaded in text mode and adds no service there - setupldr loads the
+# first driver, port, class or hal file of the option, and only a driver
+# line names a service - so text mode keeps the clock tick (decision H4).
+# OEM-COPY holds this list to the files that section copies.
+#
 # The 64-bit package's file is src\txtsetup-amd64.oem, staged under this
 # name; scripts\inf-gate\check-txtsetup-oem.ps1 gates both and holds them
-# equal outside their two description strings.
+# equal outside their two description strings and the helper's dll line,
+# which the 64-bit package has no file for.
 #
 # ASCII only, CRLF line endings.
 
@@ -37,6 +50,7 @@ XHCI98 = "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)"
 
 [Files.scsi.XHCI98]
 driver = d1, xhci98.sys, xhci98
+dll    = d1, xhcihlpr.sys
 inf    = d1, xhci98.inf
 
 [HardwareIds.scsi.XHCI98]

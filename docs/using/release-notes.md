@@ -711,7 +711,14 @@ through its own drivers above this one. The same floppy serves everything
 that starts from the Windows CD's text mode:
 
 - **Installing Windows 2000 or XP.** GUI-mode Setup then installs the
-  driver from `xhci98.inf` as usual.
+  driver from `xhci98.inf` as usual, from the copies text mode made of the
+  floppy's files. On the 32-bit floppy those include the helper
+  `xhcihlpr.sys`, which text mode copies and does not load; GUI-mode Setup
+  installs it with the controller, and it starts from the next boot (see
+  "XhciPollFineTimer: a finer system timer while polling"). A pre-release
+  build of `2.4.0.0` left it off `txtsetup.oem`'s file list, and GUI-mode
+  Setup then installed no driver on the controller (32-bit XP, read in a
+  virtual machine); this release's `txtsetup.oem` names it.
 - **The Recovery Console.** Press F6 as for an install, then R at Setup's
   Welcome screen (on Windows 2000, then C for the console). The USB
   keyboard logs in and types commands; the console runs in text mode
@@ -1729,7 +1736,8 @@ driver does not undo. `XHCISNAP`'s report has a "finer system timer"
 section: whether the value is on, where the call came from, whether a
 request is held, and how many were made and given back. Text-mode Setup
 (F6) has no helper and keeps the clock tick until the installed system's
-own install brings it.
+own install brings it; the 32-bit floppy carries the file for that
+install, and text mode copies it without loading it.
 
 **Not yet read on any system**: the timer's effect, its release, and the
 install of `xhcihlpr.sys` on 2000 and XP are owed to the test matrix
@@ -2760,7 +2768,8 @@ or says it was found by reading the code.
   (since `2.4.0.0`). The install brings the helper `xhcihlpr.sys` with no
   restart asked for, and a polled controller keeps the clock tick until
   the helper loads at the next start of Windows ("XhciPollFineTimer: a
-  finer system timer while polling"). Text-mode Setup (F6) has no helper.
+  finer system timer while polling"). Text-mode Setup (F6) copies the
+  helper's file from the floppy and does not load it.
 - **Intel 7-series (Panther Point, `8086:1E31`): a periodic schedule
   larger than the controller can serve may lose data instead of being
   refused.** Found by reading Linux's code, not measured. Linux keeps its

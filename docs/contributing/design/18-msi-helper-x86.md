@@ -2048,6 +2048,37 @@ with a legacy, non-PnP driver in a `scsi` component's file list, and
 with its service in the installed system, has not been read on either
 system.
 
+**Amended 2026-10-14 (as built, after the first F6 leg).** The decision
+stands; what this section left out is how the helper's *file* reaches the
+installed system's install. GUI-mode Setup installs the controller from
+the `inf =` line's INF with `%windir%\OemDir` as its source, and text mode
+puts there only the files the option's `[Files.scsi.XHCI98]` names. With
+`xhcihlpr.sys` named nowhere, the 2.4.0.0 dry cut's XP SP3 F6 leg read
+`SPFILENOTIFY_COPYERROR` for `C:\WINDOWS\OemDir\xhcihlpr.sys` (error 2),
+the copy aborted, and Setup installed a NULL driver on the controller
+(`out\p38-matrix\legs\f6xp\`, `setupapi.log`). `src\txtsetup.oem` now
+carries it on a `dll` line. Read off the media (static, 2026-10-14;
+disassembly with `dumpbin /disasm` of `SETUPDD.SYS` and `SETUPLDR.BIN`
+from `win2ksp4.ISO` and the XP SP3 OEM CD's `I386\`, not tracked): both
+parse the file types `driver`, `port`, `class`, `inf`, `dll`, `detect`,
+`hal`, `catalog` in that order; text mode copies each file of the chosen
+option to its type's directory (`dll`: `system32`; `driver`, `port`,
+`class`: `system32\drivers`; `inf`: `OemDir` as `oemscsNN.inf`;
+`catalog`: `OemDir` only) and then every one but the catalog to `OemDir`
+again under the same target name; `setupldr` loads from the option the
+first file of type `driver`, `port`, `class` or `hal` and skips the rest;
+the `DriverKey` field, which names the service, is read only on `driver`,
+`port` and `class` lines. The Windows 2000 DDK's help (`D_SETUP.CAB`,
+`d_setup.chm`, "Files.HwComponent.ID Section of a txtsetup.oem File")
+documents `dll` as valid for all components, copied to `system32`, and
+the service key as created for `driver` files. So a `dll` line puts the
+helper in `OemDir` (and a stray copy in `system32`) with no load and no
+service in text mode - decision H4 unchanged, the helper's service still
+first added by GUI-mode Setup's install. The F6 legs of 2000 SP4 and XP
+SP3 read whether GUI mode then installs it. The gate's `OEM-COPY` rule
+(`check-txtsetup-oem.ps1`) holds the option to every file the INF's NT
+5.x install sections copy from the disk, so this cannot recur unseen.
+
 ### 15.10 The toolchain and the image, for Windows 2000
 
 **WDK 7.1 has no Windows 2000 build environment.** Its `setenv.bat`
@@ -2346,3 +2377,8 @@ every leg of section 15.12 is owed.
   helper; `make-release.ps1`'s `Assert-HelperPublished`, its refusal of a
   leg holding `xhcimsi.sys`, and its refusal of `-NoTargetEvidence` for an
   x86 leg.
+- **F6** (2026-10-14, after the dry cut's XP SP3 F6 leg): `src\txtsetup.oem`
+  carries `dll = d1, xhcihlpr.sys` (section 15.9's amendment);
+  `src\txtsetup-amd64.oem` is unchanged, and `check-txtsetup-oem.ps1`'s
+  `OEM-PAIR` compares the two outside their `dll` lines, which its new
+  `OEM-COPY` rule holds to each file's own INF.

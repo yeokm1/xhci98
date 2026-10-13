@@ -4236,8 +4236,9 @@ WINDOWS 2000 OR XP SETUP, OR THE RECOVERY CONSOLE, ON AN xHCI-ONLY MACHINE
 
 When the keyboard or the install medium is on the xHCI controller, Setup
 can load this driver at its F6 prompt. Copy the files of RELEASE-X86\ (or
-RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - it holds
-txtsetup.oem, xhci98.sys and xhci98.inf, which is all F6 reads. Start
+RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - F6 reads
+txtsetup.oem, xhci98.sys and xhci98.inf, and from RELEASE-X86\ also
+xhcihlpr.sys, which Setup copies for later and does not load. Start
 Setup, press F6 when "Press F6 if you need to install a third party SCSI
 or RAID driver" shows, press S at the next screen, insert the floppy, and
 pick "xHCI98 USB 3.x Host Controller". Setup then uses its own keyboard,
@@ -4360,8 +4361,9 @@ what this release's design expects; the rest, as read in virtual machines:
   xhcihlpr.sys and ask for no restart of their own. The controller runs as
   before; the helper starts at the next restart, and from then a polled
   controller asks Windows for a finer clock while it is busy (section 9,
-  XhciPollFineTimer). Text-mode Setup through F6 does not bring the helper:
-  it arrives with the installed system's own install of the controller.
+  XhciPollFineTimer). Text-mode Setup through F6 copies the helper from
+  the floppy and does not load it: it arrives with the installed system's
+  own install of the controller.
 
   REMOVING THE HELPER: uninstalling the controller leaves xhcihlpr, a
   boot-start service that then loads and idles. Remove it with

@@ -20,10 +20,28 @@ families.
            alone, with a quoted description.
   OEM-DISK [Disks] is one disk, d1, whose tag file is \xhci98.sys and whose
            directory is the disk root - where the package stages the driver.
-  OEM-FILES [Files.scsi.XHCI98] is "driver = d1, xhci98.sys, xhci98" and
-           "inf = d1, xhci98.inf" and nothing else: no catalog (the package is
-           not signed), no dll, no second driver (xhciuas.sys is not loaded in
-           text mode; section 5.6).
+  OEM-FILES [Files.scsi.XHCI98] is "driver = d1, xhci98.sys, xhci98",
+           "inf = d1, xhci98.inf" and "dll = d1, <file>" lines, each file
+           once, and nothing else: no catalog (the package is not signed), no
+           port, class, hal or detect line, no second driver (xhciuas.sys is
+           not loaded in text mode; section 5.6).
+  OEM-COPY Every file the INF's Windows 2000/XP (x86) or XP x64 (amd64)
+           install sections copy - the models section NT 5.x picks, each
+           model's install section as NT 5.x picks it, its CopyFiles and
+           Needs - that the INF's [SourceDisksFiles] places on this disk is
+           carried by the driver line or a dll line, and every dll line
+           carries such a file. Text-mode Setup copies the files of the
+           option to %windir%\OemDir (the inf renamed oemscsNN.inf), and
+           GUI-mode Setup installs the controller from there: a file the
+           section copies and the option does not carry fails that install
+           (2.4.0.0's F6 leg on XP SP3: xhcihlpr.sys, no driver on the
+           controller). A dll line is the form for a file that must reach
+           OemDir without being loaded in text mode: setupldr loads the first
+           driver, port, class or hal file of the option, and only a driver
+           line names a service (static, read off 2000 SP4's and XP SP3's
+           setupldr.bin and setupdd.sys, 2026-10-14; design record 18
+           section 15.9). A copied file not on this disk must be one of
+           Windows' own (layout.inf brings it).
   OEM-SERVICE  The driver line's service key is the one service the INF beside
            it adds (AddService, every model the same one), so GUI-mode
            Setup's INF install updates the service text mode created rather
@@ -44,8 +62,10 @@ families.
   OEM-ARCH The x86 file's descriptions say "32-bit" and the amd64 file's say
            "x64", so a user offered both at the F6 list can tell them apart.
   OEM-PAIR The two committed files carry the same entries everywhere except
-           the [Disks] and [scsi] descriptions, since the accepted cost of two
-           files is that they can drift.
+           the [Disks] and [scsi] descriptions and the dll lines, since the
+           accepted cost of two files is that they can drift; the dll lines
+           follow each file's own INF (OEM-COPY) - the x86 helper
+           xhcihlpr.sys has no amd64 build.
   PKG-*    With -PackageDir: txtsetup.oem is at the package root (PKG-OEM),
            every file it names and its tag file are beside it (PKG-LAYOUT),
            and no Microsoft file is anywhere in the package (PKG-MSFILE).
@@ -186,7 +206,9 @@ function Get-InfFacts {
         # it beside the controller's service on the 32-bit NT paths (the INF
         # gate's HLPR-* rules hold it there), and F6 Setup loads xhci98.sys
         # alone, keeping the clock tick until the installed system's own
-        # install brings the helper (record 18 section 15.9, decision H4).
+        # install brings the helper (record 18 section 15.9, decision H4);
+        # its file rides a dll line for that install (OEM-COPY), which adds
+        # no service in text mode.
         if ($line -match '^AddService\s*=\s*([^,\s]+)' -and $matches[1] -ine "xhcihlpr") { $services[$matches[1].ToLowerInvariant()] = $true }
     }
     $current = ""
@@ -204,6 +226,125 @@ function Get-InfFacts {
         }
     }
     return @{ Services = $services; Ids = $ids }
+}
+
+function Get-InfSections {
+    # Section name (lower case) -> its lines, ';' comments outside quotes
+    # stripped; a section named twice is one section, as Setup reads it.
+    param([string]$Text)
+    $map = @{}
+    $cur = $null
+    foreach ($rawLine in ($Text -split "`r`n")) {
+        $line = $rawLine
+        $inQuote = $false
+        for ($i = 0; $i -lt $line.Length; $i++) {
+            if ($line[$i] -eq '"') { $inQuote = -not $inQuote }
+            elseif ($line[$i] -eq ';' -and -not $inQuote) { $line = $line.Substring(0, $i); break }
+        }
+        $line = $line.Trim()
+        if ($line -eq "") { continue }
+        if ($line -match '^\[(.+)\]$') {
+            $cur = $matches[1].Trim().ToLowerInvariant()
+            if (-not $map.ContainsKey($cur)) { $map[$cur] = New-Object System.Collections.ArrayList }
+            continue
+        }
+        if ($null -ne $cur) { [void]$map[$cur].Add($line) }
+    }
+    return $map
+}
+
+function Get-InfNt5Copies {
+    # What GUI-mode Setup copies when it installs the INF's devices on the
+    # systems this file serves: Windows 2000 and XP (x86; 2000 reads only the
+    # undecorated models section, XP the best TargetOSVersion match) or XP x64
+    # (amd64, NT 5.2). Returns @{ Copies = @{ source name (lower) = "where" };
+    # OnDisk = @{ name (lower) = $true } } - OnDisk from [SourceDisksFiles]
+    # and its architecture's decoration, the files the package itself holds.
+    param([string]$Text, [string]$Profile)
+    $sec = Get-InfSections -Text $Text
+    $arch = if ($Profile -eq "amd64") { "amd64" } else { "x86" }
+    # One entry per system: its version, and whether it reads decorations.
+    $systems = @()
+    if ($Profile -eq "amd64") { $systems += @{ Ver = 502; Decor = $true } }
+    else { $systems += @{ Ver = 500; Decor = $false }; $systems += @{ Ver = 501; Decor = $true } }
+    $modelSections = @{}
+    if ($sec.ContainsKey("manufacturer")) {
+        foreach ($line in $sec["manufacturer"]) {
+            $eq = $line.IndexOf('=')
+            if ($eq -lt 0) { continue }
+            $f = @($line.Substring($eq + 1).Split(',') | ForEach-Object { $_.Trim() })
+            $base = $f[0]
+            foreach ($os in $systems) {
+                $pick = $base
+                if ($os.Decor) {
+                    $best = -1
+                    for ($k = 1; $k -lt $f.Count; $k++) {
+                        if ($f[$k] -notmatch '^NT(x86|amd64|ia64)?(?:\.(\d+)(?:\.(\d+))?)?(?:\..*)?$') { continue }
+                        $dArch = $matches[1]; $maj = $matches[2]; $min = $matches[3]
+                        if ($dArch -and $dArch -ine $arch) { continue }
+                        $v = 0
+                        if ($maj) { $v = [int]$maj * 100; if ($min) { $v += [int]$min } }
+                        if ($v -gt $os.Ver) { continue }
+                        $score = $v * 2
+                        if ($dArch) { $score++ }
+                        if ($score -gt $best) { $best = $score; $pick = $base + "." + $f[$k] }
+                    }
+                }
+                $modelSections[$pick.ToLowerInvariant()] = $true
+            }
+        }
+    }
+    $installs = @{}
+    foreach ($m in $modelSections.Keys) {
+        if (-not $sec.ContainsKey($m)) { continue }
+        foreach ($line in $sec[$m]) {
+            $eq = $line.IndexOf('=')
+            if ($eq -lt 0) { continue }
+            $name = ($line.Substring($eq + 1).Split(',')[0]).Trim().ToLowerInvariant()
+            foreach ($cand in @("$name.nt$arch", "$name.nt", $name)) {
+                if ($sec.ContainsKey($cand)) { $installs[$cand] = $true; break }
+            }
+        }
+    }
+    $copies = @{}
+    $visited = @{}
+    $queue = New-Object System.Collections.ArrayList
+    foreach ($i in $installs.Keys) { [void]$queue.Add($i) }
+    while ($queue.Count -gt 0) {
+        $s = [string]$queue[0]; $queue.RemoveAt(0)
+        if ($visited.ContainsKey($s) -or -not $sec.ContainsKey($s)) { continue }
+        $visited[$s] = $true
+        foreach ($line in $sec[$s]) {
+            if ($line -match '^Needs\s*=\s*(.+)$') {
+                foreach ($n in $matches[1].Split(',')) { if ($n.Trim() -ne "") { [void]$queue.Add($n.Trim().ToLowerInvariant()) } }
+                continue
+            }
+            if ($line -notmatch '^CopyFiles\s*=\s*(.+)$') { continue }
+            foreach ($item in $matches[1].Split(',')) {
+                $it = $item.Trim()
+                if ($it -eq "") { continue }
+                if ($it.StartsWith("@")) { $copies[$it.Substring(1).Trim().ToLowerInvariant()] = "[$s] CopyFiles $it"; continue }
+                $cs = $it.ToLowerInvariant()
+                if (-not $sec.ContainsKey($cs)) { continue }
+                foreach ($entry in $sec[$cs]) {
+                    $ef = @($entry.Split(',') | ForEach-Object { $_.Trim() })
+                    $src = $ef[0]
+                    if ($ef.Count -gt 1 -and $ef[1] -ne "") { $src = $ef[1] }
+                    if ($src -ne "") { $copies[$src.ToLowerInvariant()] = "[$s] CopyFiles $it" }
+                }
+            }
+        }
+    }
+    $onDisk = @{}
+    foreach ($n in @("sourcedisksfiles", "sourcedisksfiles.$arch")) {
+        if (-not $sec.ContainsKey($n)) { continue }
+        foreach ($line in $sec[$n]) {
+            $eq = $line.IndexOf('=')
+            $k = if ($eq -ge 0) { $line.Substring(0, $eq) } else { $line }
+            $onDisk[$k.Trim().ToLowerInvariant()] = $true
+        }
+    }
+    return @{ Copies = $copies; OnDisk = $onDisk }
 }
 
 function Test-Is83 {
@@ -291,27 +432,59 @@ function Test-OemText {
 
     $files = & $get "Files.scsi.$optionId"
     $svc = ""
+    $driverFile = ""
+    $dllFiles = @{}
     if ($null -ne $files) {
         $seen = @{}
         foreach ($l in $files.Lines) {
             $f = @(Split-OemFields -Value $l.Value)
             foreach ($x in $f) { if ($x.Text -match '\.') { $named += $x.Text } }
             $kind = $l.Key.ToLowerInvariant()
+            if ($kind -eq "dll") {
+                # Any number, each its own file: copied to system32 and
+                # OemDir, never loaded in text mode (OEM-COPY).
+                if ($f.Count -ne 2 -or $f[0].Text -ne "d1" -or $f[1].Text -eq "" -or
+                    $f[1].Text -ieq $binary -or $f[1].Text -ieq $infName) {
+                    & $add "OEM-FILES" "a dll line must be 'dll = d1, <file>', its file neither $binary nor $infName."
+                } elseif ($dllFiles.ContainsKey($f[1].Text.ToLowerInvariant())) {
+                    & $add "OEM-FILES" "'$($f[1].Text)' is on two dll lines."
+                } else { $dllFiles[$f[1].Text.ToLowerInvariant()] = $true }
+                continue
+            }
             if ($seen.ContainsKey($kind)) { & $add "OEM-FILES" "a second '$($l.Key)' line."; continue }
             $seen[$kind] = $true
             if ($kind -eq "driver") {
                 if ($f.Count -ne 3 -or $f[0].Text -ne "d1" -or $f[1].Text -ne $binary -or $f[2].Text -eq "") {
                     & $add "OEM-FILES" "the driver line must be 'driver = d1, $binary, <service>'."
-                } else { $svc = $f[2].Text }
+                } else { $svc = $f[2].Text; $driverFile = $f[1].Text.ToLowerInvariant() }
             } elseif ($kind -eq "inf") {
                 if ($f.Count -ne 2 -or $f[0].Text -ne "d1" -or $f[1].Text -ne $infName) {
                     & $add "OEM-FILES" "the inf line must be 'inf = d1, $infName'."
                 }
             } else {
-                & $add "OEM-FILES" "'$($l.Key)' is not a line this file carries (driver and inf only)."
+                & $add "OEM-FILES" "'$($l.Key)' is not a line this file carries (driver, inf and dll only)."
             }
         }
         foreach ($k in @("driver", "inf")) { if (-not $seen.ContainsKey($k)) { & $add "OEM-FILES" "no '$k' line." } }
+    }
+
+    # OEM-COPY: GUI-mode Setup installs from %windir%\OemDir, where text mode
+    # put the option's files under their own names (the driver and dll
+    # lines; the inf goes there renamed, the catalog is refused above).
+    $nt5 = Get-InfNt5Copies -Text $InfText -Profile $Profile
+    foreach ($c in ($nt5.Copies.Keys | Sort-Object)) {
+        if ($nt5.OnDisk.ContainsKey($c)) {
+            if ($c -ne $driverFile -and -not $dllFiles.ContainsKey($c)) {
+                & $add "OEM-COPY" "the INF's $($nt5.Copies[$c]) copies '$c' from this disk, and no driver or dll line carries it to OemDir, so GUI-mode Setup's install of the device fails (a dll line carries a file text mode must not load)."
+            }
+        } elseif (-not ($msFiles -contains $c)) {
+            & $add "OEM-COPY" "the INF's $($nt5.Copies[$c]) copies '$c', which is neither in its [SourceDisksFiles] nor one of Windows' own files."
+        }
+    }
+    foreach ($d in ($dllFiles.Keys | Sort-Object)) {
+        if (-not $nt5.Copies.ContainsKey($d) -or -not $nt5.OnDisk.ContainsKey($d)) {
+            & $add "OEM-COPY" "the dll line carries '$d', which the INF's NT 5.x ($Profile) install does not copy from this disk."
+        }
     }
 
     $facts = Get-InfFacts -Text $InfText
@@ -384,6 +557,8 @@ function Test-OemText {
             $out = @()
             foreach ($s in $p) {
                 foreach ($l in $s.Lines) {
+                    # The dll lines follow each file's own INF (OEM-COPY).
+                    if ($s.Name -ieq "Files.scsi.$optionId" -and $l.Key -ieq "dll") { continue }
                     $v = $l.Value
                     if ($s.Name -eq "Disks" -or $s.Name -eq "scsi") { $v = ($v -replace '"[^"]*"', '""') }
                     $out += ("[" + $s.Name + "] " + $l.Key + "=" + $v)
@@ -466,8 +641,20 @@ if ($SelfTest) {
             @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"USB\XHCI98_ROOT_HUB`", `"xhci98`"", "`"USB\XHCI98_ROOT_HUB`", `"xhci98") },
             @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"PCI\CC_0C0330`", `"xhci98`"", "`"PCI\CC_0C0330`" x, `"xhci98`"") },
             @{ Rule = "OEM-QUOTE";    Text = $text.Replace("scsi = XHCI98`r`n", "scsi = XHCI98`"`r`n") },
-            @{ Rule = "OEM-PAIR";     Text = $text.Replace("id = `"PCI\CC_0C0330`", `"xhci98`"", "id = `"PCI\CC_0C0330`", `"xhci98`"`r`nid = `"PCI\CC_0C0330`", `"xhci98`"") }
+            @{ Rule = "OEM-PAIR";     Text = $text.Replace("id = `"PCI\CC_0C0330`", `"xhci98`"", "id = `"PCI\CC_0C0330`", `"xhci98`"`r`nid = `"PCI\CC_0C0330`", `"xhci98`"") },
+            @{ Rule = "OEM-COPY";     Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d1, xhcixtra.sys") },
+            @{ Rule = "OEM-FILES";    Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d1, xhci98.sys") },
+            @{ Rule = "OEM-FILES";    Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d1, xhcixtra.sys`r`ndll = d1, xhcixtra.sys") },
+            @{ Rule = "OEM-FILES";    Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d2, xhcixtra.sys") }
         )
+        # The x86 file's helper line (record 18 section 15.9): dropped, or
+        # carried as a catalog (which text mode puts in OemDir but the gate
+        # refuses), GUI-mode Setup's install from OemDir fails (2.4.0.0's F6
+        # leg on XP SP3).
+        if ($profile -eq "x86") {
+            $cases += @{ Rule = "OEM-COPY"; Text = $text.Replace("dll    = d1, xhcihlpr.sys`r`n", "") }
+            $cases += @{ Rule = "OEM-FILES"; Text = $text.Replace("dll    = d1, xhcihlpr.sys", "catalog = d1, xhcihlpr.sys") }
+        }
         foreach ($c in $cases) {
             # Twice: with the pair, as build-driver.cmd runs the gate, and
             # without it, as the packagers run it on a staged -OemPath. Every
@@ -492,8 +679,20 @@ if ($SelfTest) {
         $infCases = @(
             @{ Rule = "OEM-IDS";     Inf = $inf.Replace("%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB", "%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n%RootHubDesc%=RootHub.Dev,USB\XHCI98_OTHER_HUB") },
             @{ Rule = "OEM-SERVICE"; Inf = $inf.Replace("AddService=xhci98,", "AddService=xhcihcd,") },
-            @{ Rule = "OEM-SERVICE"; Inf = ([regex]'(\[Hub\.Dev\.NT[a-z0-9]+\.Services\]\r?\nAddService=)xhci98,').Replace($inf, '${1}xhcihub,', 1) }
+            @{ Rule = "OEM-SERVICE"; Inf = ([regex]'(\[Hub\.Dev\.NT[a-z0-9]+\.Services\]\r?\nAddService=)xhci98,').Replace($inf, '${1}xhcihub,', 1) },
+            # OEM-COPY's INF side: a file the controller's NT 5.x section
+            # copies from the disk and no line carries; one copied from
+            # neither the disk nor Windows; one pulled in through Needs.
+            @{ Rule = "OEM-COPY";    Inf = $inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n").Replace("[Xhci.CopyFiles]`r`n", "[Xhci.CopyFiles]`r`nxhcixtra.sys`r`n") },
+            @{ Rule = "OEM-COPY";    Inf = $inf.Replace("[Xhci.CopyFiles]`r`n", "[Xhci.CopyFiles]`r`nxhcixtra.sys`r`n") },
+            @{ Rule = "OEM-COPY";    Inf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs=Xtra.Install' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n") }
         )
+        if ($profile -eq "x86") {
+            # The helper copied by the Vista and 7 section alone: the dll
+            # line is then surplus, which proves the NT 6 models section is
+            # not read as 2000's or XP's.
+            $infCases += @{ Rule = "OEM-COPY"; Inf = $inf.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI,XhciHlpr.CopyFiles", "CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI") }
+        }
         foreach ($c in $infCases) {
             $total++
             $got = @(Test-OemText -Bytes $orig -InfText $c.Inf -Package "" -Profile $profile -PairBytes $pair)
@@ -514,12 +713,17 @@ if ($SelfTest) {
             @{ Name = "msfile";      Rule = "PKG-MSFILE"; Drop = "";             Ms = "";      Hide = $false; MsName = "usbd.sys" },
             @{ Name = "msfile-sub";  Rule = "PKG-MSFILE"; Drop = "";             Ms = "i386";  Hide = $true;  MsName = "hidclass.sys" }
         )
+        if ($profile -eq "x86") {
+            $pkgCases += @{ Name = "no-helper"; Rule = "PKG-LAYOUT"; Drop = "xhcihlpr.sys"; Ms = ""; Hide = $false }
+        }
         foreach ($pc in $pkgCases) {
             $total++
             $pkg = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-oemtest-" + [Guid]::NewGuid().ToString("N"))
             try {
                 New-Item -ItemType Directory -Path $pkg | Out-Null
-                foreach ($f in @("txtsetup.oem", "xhci98.inf", "xhci98.sys", "xhciuas.inf", "xhciuas.sys")) {
+                $stand = @("txtsetup.oem", "xhci98.inf", "xhci98.sys", "xhciuas.inf", "xhciuas.sys")
+                if ($profile -eq "x86") { $stand += "xhcihlpr.sys" }
+                foreach ($f in $stand) {
                     if ($f -ne $pc.Drop) { [System.IO.File]::WriteAllText((Join-Path $pkg $f), "stand-in") }
                 }
                 if ($pc.ContainsKey("MsName")) {
