@@ -369,3 +369,41 @@ extract is not authoritative.
 | Name | Version | SHA-256 | What it settles |
 |---|---|---|---|
 | `DS_VLI_VL805_093.pdf` | VIA Labs, "VL805 4-Port USB 3.0 Host Controller" datasheet, Revision 0.93, Sep. 4, 2014 (28 pages) | `be2d93a38e80331596da351dbb9a70c34ee61afa252fb4e0608d4cbf991bf305` | Four downstream ports of every speed, section 1 p.4; the four USB 2.0 pin pairs `USB2D1`-`USB2D4`, section 4 p.8; PCI configuration `50-53h` "XHCI MCU Firmware Version" (`FW_VERSION`, RO), section 6 p.14; `HCSPARAMS1` default `05000420h`, section 7 p.18; `HCCPARAMS` default `002841EBh`, p.20. It says nothing about speed tables |
+
+## xHCI 0.96 (roadmap-hcd task 38.11): no official copy found, not fetched
+
+Task 38.11 asks for the xHCI 0.96 specification to be fetched here and
+recorded as the 1.2c PDF is. It was searched for on 2026-10-13 and no
+official public copy was found in that search, so there is no row to add:
+
+- Revision 0.96 is dated 2009-05-08 in 1.2c's revision history (p.21), and
+  1.0 2010-05-21 ("Refer to xHCI 0_96 errata files").
+- Intel's xHCI page, as the Internet Archive holds it on 2010-03-25
+  (`https://web.archive.org/web/20100325212416/http://www.intel.com:80/technology/usb/xhcispec.htm`)
+  and 2010-05-08
+  (`https://web.archive.org/web/20100508103317/http://www.intel.com:80/technology/usb/xhcispec.htm`),
+  offered the draft only to companies that signed the xHCI contributor
+  agreement: "After the above requirements have been met, your company will
+  be sent a PDF electronic copy of the (draft) specification." It links no
+  download.
+- The same page on 2010-06-18
+  (`https://web.archive.org/web/20100618112125/http://www.intel.com:80/technology/usb/xhcispec.htm`),
+  after 1.0, is the first capture seen to link a public PDF
+  (`/technology/usb/download/xHCI_Specification_for_USB.pdf`), beside an
+  adopters agreement. That file was not fetched, so its revision is not
+  verified.
+- Copies offered by document-sharing sites are not official sources and
+  were not taken.
+
+What stands in, and is cited instead: **1.2c Appendix G, "0.96
+Exceptions"** (p.591-592, the copy in the table above), Intel's list of
+"the significant differences between 0.96 and 1.0 implementations" - G.1
+the Link TRB IOC after a Short Packet, G.2 Force Stopped Event optional
+(HCCPARAMS bit 8 then FSE), G.3 Secondary Bandwidth Domain Reporting
+optional (bit 9 then SBD), G.4 USB2 L1 Capability optional. It does not
+mention TD Size, so it is not complete; Linux's handling of 0.96
+controllers (the mirror in `external/`) fills the rest as evidence of what
+the parts accept. Design record 17 section 4.14.2 lists what a reading of
+the 0.96 text would settle. If a copy is ever obtained from Intel, record
+it here with its filename, SHA-256 and the licence limit it states, and
+keep it untracked like every document in this directory.
