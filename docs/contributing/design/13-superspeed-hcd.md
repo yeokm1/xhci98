@@ -5704,7 +5704,7 @@ device or the bench. The guest legs of 36.43 read what QEMU can show.
 ### 10.13 The bus's own ids under `USB\` (task 38.9, 2026-10-13)
 
 **Status: written before any code; the owner's decisions taken
-(2026-10-13, 10.13.12), the task kept in `2.4.0.0` with the update costs
+(2026-10-13, 10.13.12; D14 open), the task kept in `2.4.0.0` with the update costs
 of 10.13.4 and 10.13.5 accepted; under review.** The task and what is already decided are roadmap-hcd 38.9's (owner,
 2026-10-13): the four project-owned bases move from a private enumerator to
 `USB\` - `XHCI98\ROOT_HUB`, `XHCI98\HUB`, `XHCI98\HUB30` and
@@ -5786,8 +5786,19 @@ presented ancestor in it by four characters (`XHCI98&ROOT_HUB`, 15, to
 `USB&XHCI98_ROOT_HUB`, 19; each hub's and the composite parent's
 likewise): at most seven such ancestors (the root hub, five hub tiers, a
 composite parent), so at most 28 characters more than today's key for the
-same device. What 98 SE allows for that key, and whether it truncates, is
-unread; a leg reads a two-tier chain's key whole (10.13.10). NT's
+same device. That bounds the change, not the key: 38.2's reading shows
+one tier (the root hub's key itself carrying the controller's PCI path,
+`0PCI&...`), and whether each tier's key carries its parent's whole key
+- so that a chain of serial-less hubs grows by a hub's device id and key
+per tier - is unread, as is what 98 SE allows for the key (a registry key
+name, an instance id buffer) and what it does at the limit. That limit,
+if it exists, binds today's ids too. The design therefore reads it
+rather than assumes it: on 98 SE, a chain of serial-less hubs as deep as
+QEMU allows (up to five tiers) with a serial-less device at its end, on
+`2.3.1.0` and again after the update, each key read whole (10.13.10).
+If a depth works under the old ids and fails under the new, the release
+notes name the deepest serial-less chain that works on 98 SE; the bus
+cannot shorten a key 98 SE builds from its parents' paths. NT's
 location-form instance ids carry only the parent's `ParentIdPrefix`, not
 its path, so they do not grow.
 
@@ -6031,7 +6042,7 @@ So on 98 SE:
   mouse are among these devices, so, as on XP (10.13.4), a machine whose
   only input is USB on this controller may be left with a prompt nothing
   can answer; the release notes ask for another input device independent
-  of the updated controller (D4).
+  of the updated driver (D4).
 
 Windows ME's key form is unread (38.2's legs read it on 98 SE only) and is
 expected to be 98 SE's; the legs read both forms on both systems, which
@@ -6074,7 +6085,8 @@ Mode's does, is unread here; the legs look in both modes.
 
 **Removal** is the tool's (10.13.8), and the tool is optional: the release
 notes and the readme say when to run it - after an update from `2.3.x` or
-earlier and its restart - and that nothing needs it.
+earlier and its restart - and that nothing needs it. On 98 SE and ME it
+lists only in this release (10.13.8).
 
 #### 10.13.7 Every reader of the ids
 
@@ -6108,7 +6120,7 @@ file, case-insensitive too) and for `ROOT_HUB`, `HUB30`, `COMPOSITE`,
 | design record 13 (5.2, 5.6, 8.6, 10.7, 10.11, 10.12) | 37 occurrences | amended as the opening of this section lists |
 | `roadmap-hcd.md` decisions table | the hub and composite row | amended with the code |
 | `docs/contributing/source-files.md` (3 lines) | the ids beside `hcd_hubfdo.c`, `hcd_pdo.c`, the `.oem` files | the new ids; the tool's source directory added |
-| `docs/using/release-notes.md` | update steps; the root hub's Driver tab paragraph | a "from `2.3.x`" paragraph: each root hub, hub and composite device found again once, the devices beneath (10.13.5), the prompts the update brings on XP, XP x64 and 98 SE and the input they need - a keyboard and mouse independent of the updated controller (PS/2 or another controller) - before starting (D4), restart before connecting any new hub or composite device on 98 SE and ME (10.13.4), the tool and when to run it |
+| `docs/using/release-notes.md` | update steps; the root hub's Driver tab paragraph | a "from `2.3.x`" paragraph: each root hub, hub and composite device found again once, the devices beneath (10.13.5), the prompts the update brings on XP, XP x64 and 98 SE and the input they need - a keyboard and mouse independent of the updated driver: PS/2, or a USB controller driven by another stack, never a second controller running `xhci98.sys`, which takes the same new image and so the same prompts - before starting (D4), restart before connecting any new hub or composite device on 98 SE and ME (10.13.4), the tool and when to run it |
 | the readme template in `scripts\package\make-release.ps1` | the same update steps | the same, and `tools\` gains the tool's directory |
 | `legal-provenance.md` | rows 880 and 885 record the 33.4 and 8.6 sweeps | historical, unchanged; a row for 10.13.2's sweep; section 2a for the tool's executable (10.13.8) |
 | `docs/README.md`, `README.md` | the tools listed | the tool and its README |
@@ -6141,7 +6153,8 @@ SetupAPI documentation; not read on a guest here) - so the design does not
 rest on what one guest happens to allow: the 32-bit build, finding itself
 under WOW64 (`IsWow64Process`, resolved as `XHCISNAP` resolves it), still
 lists, but refuses every removal and names `XHCICL64.EXE`. The 64-bit
-build is tested on XP x64, Vista x64 and 7 x64 (10.13.10).
+build is tested on XP x64, Vista x64 and 7 x64 (10.13.10). On 98 SE and
+ME the tool lists only in this release (below).
 
 **What it removes - the selection rule.** A devnode is a candidate only
 when both hold:
@@ -6160,18 +6173,25 @@ only "absent" lets a removal go ahead:
   instance id returning `CR_NO_SUCH_DEVNODE` (`0x0D`, the Windows 2000 DDK's
   `cfgmgr32.h`, static) is absent; `CR_SUCCESS` is present; any other
   return - access denied, invalid data, a routine missing - is unknown. The
-  answer must agree with a `SetupDiGetClassDevs` set taken with
-  `DIGCF_PRESENT` and the enumerator `XHCI98`, itself fully enumerated
-  (`SetupDiEnumDeviceInfo` to `ERROR_NO_MORE_ITEMS` and no other error);
-  disagreement is unknown.
-- **On 98 SE and ME**: the walk of `HKEY_DYN_DATA\Config Manager\Enum` (the
-  route `XHCISNAP` uses there, runtime-read on 98 SE and ME in task 38.1)
+  answer must agree with a `SetupDiGetClassDevs` set taken with no class
+  GUID, the enumerator `XHCI98` and `DIGCF_ALLCLASSES | DIGCF_PRESENT`,
+  itself fully enumerated (`SetupDiEnumDeviceInfo` to
+  `ERROR_NO_MORE_ITEMS` and no other error, every instance id read);
+  disagreement, or any failure building or walking the set, is unknown.
+- **On 98 SE and ME**: the walk of `HKEY_DYN_DATA\Config Manager\Enum`
   must complete - every subkey enumerated to `ERROR_NO_MORE_ITEMS`, and
   every subkey's `HardWareKey` read whole - and then an entry no
-  `HardWareKey` names is absent. `XHCISNAP`'s walk, which skips an
-  unreadable subkey and stops at a cap, is a report and is not reused for
-  this decision: here a skipped subkey, a failed or truncated read, or the
-  cap reached makes **every** candidate unknown.
+  `HardWareKey` names is absent. That walk is `XHCISNAP`'s fallback where
+  `cfgmgr32.dll` does not answer; task 38.1's legs took their readings on
+  98 SE and ME through `cfgmgr32.dll` (`xhcisnap\README.md`, "Where the
+  device readings come from"), so **this route is unread**: a reading on
+  both systems - present, disabled and unplugged devnodes, `HardWareKey`
+  whole, the `Status` bits, and what a failed or cut-short walk looks like
+  - comes before the tool relies on it for anything but a listing.
+  `XHCISNAP`'s walk, which skips an unreadable subkey and stops at a cap,
+  is a report and is not reused for this decision: here a skipped subkey,
+  a failed or truncated read, or the cap reached makes **every** candidate
+  unknown.
 - An unknown answer refuses that removal and is printed with its reason;
   an unknown answer in a global test (below) refuses all.
 
@@ -6185,87 +6205,111 @@ controller's devnode; any file, INF, driver-store package or service.
 **The global refusals** (D10). It removes nothing - and lists what it
 would have removed, saying why - when any `XHCI98\` devnode is present
 (a binary before `2.4.0.0` is running: before the restart of 10.13.4, or
-after going back), or when no devnode answering `USB\XHCI98_ROOT_HUB` is
-present **and started** (`DN_STARTED` in its status: from
-`CM_Get_DevNode_Status` on NT; from the `Status` value of its
-`HKEY_DYN_DATA\Config Manager\Enum` entry on 98 SE and ME), since a
-present root hub whose driver did not start proves nothing about which
-image runs. Either test answering unknown refuses as well.
+after going back), or when the controller set below cannot be held. Either
+test answering unknown refuses as well.
 
-**Why an `XHCI98\` devnode cannot become present during a run, and how the
-tool holds that.** Only a `xhci98.sys` before `2.4.0.0` reports an
-`XHCI98\` id, and one image of the driver is loaded at a time: on NT every
-devnode bound to the `xhci98` service runs the one loaded image, and a
-different image loads only once every one of those devnodes has been
-removed or stopped (a driver update, a rollback, a disable of every
-controller); on 98 SE and ME the image is replaced only at a restart
-(release notes, "Updating from 2.y.y.y"). A started `USB\XHCI98_ROOT_HUB`
-therefore means the loaded image is this release's, and it stays so while
-that root hub's controller cannot be removed. The tool makes that so for
-its run: before the first presence test it opens every controller's door,
-`\\.\HCDn` (as `XHCISNAP` does), and keeps the handles open until it exits,
-so a query-remove of a controller - which any driver update, rollback or
-disable of it sends first - meets an open handle. The configuration
-manager declares a veto for exactly that case, `PNP_VetoOutstandingOpen`
-(the Windows 2000 DDK's `cfg.h`, static); **whether NT raises it for the
-controller while the handle is open is unread**, and is read on each NT
-target before the tool may remove anything there (10.13.10): on a target
-where it is not raised, the 64-bit or 32-bit build's removal is disabled
-for that OS version in the shipped tool, which then lists only. On NT the
-tool also waits, before the first removal, until no device installation is
-pending (`CMP_WaitNoPendingInstallEvents`, declared in WDK 7.1's
-`cfgmgr32.h` for Windows 2000 and later, static; resolved at run time, and
-a timeout or a missing routine refuses). **Immediately before each
-removal** it repeats the global tests and that candidate's presence test,
-and **immediately after**, verifies the candidate gone and the started
-root hub still started; any change stops the run there, with what was done
-printed.
+**The controller set, and why no `XHCI98\` devnode can become present
+during a run on NT.** Only a `xhci98.sys` before `2.4.0.0` reports an
+`XHCI98\` id, and on NT every devnode bound to the `xhci98` service runs
+the one loaded image; a different image loads only once every one of
+those devnodes has been removed or stopped (a driver update, a rollback, a
+disable of every controller). So the tool holds every controller of this
+project for its run:
+
+1. **Find them**: every present devnode whose service is `xhci98` and
+   whose device id begins `PCI\` (`SetupDiGetClassDevs` with no class GUID,
+   no enumerator, `DIGCF_ALLCLASSES | DIGCF_PRESENT`, fully enumerated;
+   `SPDRP_SERVICE` of each), the set's creation, enumeration or any
+   property read failing being unknown.
+2. **Check each**: started (`DN_STARTED` from `CM_Get_DevNode_Status`),
+   with a child (`CM_Get_Child`, `CM_Get_Sibling`) whose device id is
+   `USB\XHCI98_ROOT_HUB`, itself started - a present root hub whose driver
+   did not start proves nothing about which image runs. A project
+   controller not started, or without that child, refuses.
+3. **Open each one's door**: the controller writes its door's
+   `\DosDevices\HCDn` name as `SymbolicName` on its own devnode's hardware
+   key at every start (`HcdDoorControllerStart`, `hcd_door.c`), so the
+   tool reads that value (`SetupDiOpenDevRegKey`, `DIREG_DEV`), rewrites
+   the prefix to `\\.\` as the property pages do (8.2), opens it, and
+   checks the handle is that controller's: the door's
+   `IOCTL_GET_HCD_DRIVERKEY_NAME` (`0x220424`, 8.10) answer must equal the
+   devnode's `SPDRP_DRIVER`. A missing value, a failed open or a mismatch
+   refuses. The `\\.\HCDn` index is never guessed: another stack's
+   controller may hold `HCD0`, and the indexes have gaps.
+4. **Keep the handles open** until the tool exits, so a query-remove of a
+   held controller - which a driver update, rollback or disable of it sends
+   first - meets an open handle. NT's PnP manager checks for open handles
+   after a query-remove and vetoes it (Microsoft's "Handling an
+   IRP_MN_QUERY_REMOVE_DEVICE Request"; the veto type
+   `PNP_VetoOutstandingOpen` is declared in the Windows 2000 DDK's `cfg.h`,
+   static); **whether it does so for this controller on each NT target is
+   unread**, and is read in the legs before the tool may remove anything
+   there (10.13.10); on a target where it is not, removal is disabled for
+   that OS version in the shipped tool, which then lists only.
+5. **Re-check**: immediately before each removal the tool repeats the
+   global tests, steps 1 and 2 (the same controllers, by instance id, all
+   still started with their root hubs) and the candidate's presence test;
+   immediately after, it verifies the candidate gone and steps 1 and 2
+   unchanged. Any change stops the run there, with what was done printed.
+
+`CMP_WaitNoPendingInstallEvents` (declared in WDK 7.1's `cfgmgr32.h` for
+Windows 2000 and later, static) is called before the first removal, so a
+run does not start in the middle of an installation; it observes, it does
+not lock, and the safety rests on the held handles, not on it.
+
+**On 98 SE and ME there is no such exclusion.** The configuration manager
+does not check open handles at a query-remove there - the driver is
+expected to refuse it - and this driver's door keeps no open count
+(`HcdDoorCreateClose`) while its controller FDO accepts a query-remove
+(`HcdControllerPnp`); and the release notes' "the new `xhci98.sys` cannot
+replace the running one" is a reading of an ordinary update, not of every
+remove, reinstall or rollback sequence. So on 98 SE and ME **the tool lists
+only** in this release (below).
 
 **The route on NT** (2000 to 7): candidates from `SetupDiGetClassDevs`
-with the enumerator `XHCI98` and `DIGCF_ALLCLASSES` (no `DIGCF_PRESENT`),
-each one's id from `SetupDiGetDeviceInstanceId`; each removed by
-`SetupDiCallClassInstaller(DIF_REMOVE)`, the route Device Manager's
-Uninstall takes, with `SP_REMOVEDEVICE_PARAMS` set to
+with no class GUID, the enumerator `XHCI98` and `DIGCF_ALLCLASSES` (no
+`DIGCF_PRESENT`), each one's id from `SetupDiGetDeviceInstanceId`; the
+presence test's cross-check set is the same call with `DIGCF_ALLCLASSES |
+DIGCF_PRESENT`, a failed set creation or id read being unknown. Each
+candidate is removed by `SetupDiCallClassInstaller(DIF_REMOVE)`, the route
+Device Manager's Uninstall takes, with `SP_REMOVEDEVICE_PARAMS` set to
 `DI_REMOVEDEVICE_GLOBAL` through `SetupDiSetClassInstallParams`. After each
 call it reads `SetupDiGetDeviceInstallParams` and treats `DI_NEEDREBOOT` or
 `DI_NEEDRESTART` as "removed, restart pending", reported apart from
-"removed". A failed `DIF_REMOVE` - access, WOW64, a class installer or
-co-installer refusing, or anything unexplained - stops at that entry and is
-reported; **there is no fallback route** (in particular not
-`CM_Uninstall_DevNode`, which calls no class installer and sends no
-query-remove, so it would bypass the reason for the refusal). It needs an
-administrator on 2000 and XP and an elevated process on Vista and 7: the
-executable carries a manifest asking for elevation (`requireAdministrator`,
-a resource MSVC 6.0's resource compiler can embed; 98, ME, 2000 and XP
-ignore it), and a refusal for want of rights is reported as such.
+"removed" and kept in the exit code even if a later removal fails. A
+failed `DIF_REMOVE` - access, WOW64, a class installer or co-installer
+refusing, or anything unexplained - stops at that entry and is reported;
+**there is no fallback route** (in particular not `CM_Uninstall_DevNode`,
+which calls no class installer and sends no query-remove, so it would
+bypass the reason for the refusal). It needs an administrator on 2000 and
+XP and an elevated process on Vista and 7: the executable carries a
+manifest asking for elevation (`requireAdministrator`, a resource MSVC
+6.0's resource compiler can embed; 98, ME, 2000 and XP ignore it), and a
+refusal for want of rights is reported as such.
 
-**The route on 98 SE and ME** (D8). There an old devnode is a registry
-entry with no devnode (10.13.6), so the candidates come from
-`HKLM\Enum\XHCI98\` (`RegEnumKeyEx` to `ERROR_NO_MORE_ITEMS`, each key
-name read with a buffer sized by `RegQueryInfoKey`; a key it cannot read
-whole is unknown). Removal:
-
-- (a) **the configuration manager**: 98's and ME's `cfgmgr32.dll` is the
-  32-bit door to `CONFIGMG`, and `XHCISNAP` already uses it there
-  (`CM_Locate_DevNodeA`, `CM_Get_DevNode_Status` and the property and
-  resource calls; task 38.1, runtime). The entry is located with
-  `CM_LOCATE_DEVNODE_PHANTOM` and removed with `CM_Uninstall_DevNode`
-  (declared in the Windows 2000 DDK's `cfgmgr32.h` as
-  `CM_Uninstall_DevNode(IN DEVNODE dnPhantom, IN ULONG ulFlags)`, static).
-  Whether 98's and ME's `cfgmgr32.dll` export it and honour the flag for a
-  registry-only entry, and what they leave behind (the driver key), is
-  unread: first statically, the export tables of the guests'
-  `CFGMGR32.DLL` copied to `tools\win98se-extracted\` and
-  `tools\winme-extracted\` with their hashes (a `legal-provenance.md`
-  row), then on a guest, on an entry made for the purpose. Until both
-  systems have been read, (a) is not offered there.
-- (c) **the fallback, list only**: where (a) is missing, refuses or is
-  unread, the tool lists the entries and removes nothing. Old and new
-  entries carry the same names ("xHCI98 USB 3.x Root Hub" twice), so it
-  names a Device Manager procedure only if the 98 SE and ME legs find one
-  that tells the old entry from the new by more than its name; otherwise
-  it says that nothing needs the entries removed (10.13.6).
-- Never (b), a direct registry deletion (D8).
+**The route on 98 SE and ME** (D8): **list only in this release.** The
+candidates come from `HKLM\Enum\XHCI98\` (`RegEnumKeyEx` to
+`ERROR_NO_MORE_ITEMS`, each key name read with a buffer sized by
+`RegQueryInfoKey`; a key it cannot read whole is listed as unreadable).
+The owner's route (a) - the entry located with
+`CM_LOCATE_DEVNODE_PHANTOM` and removed with `CM_Uninstall_DevNode`
+through 98's and ME's `cfgmgr32.dll` (declared in the Windows 2000 DDK's
+`cfgmgr32.h` as `CM_Uninstall_DevNode(IN DEVNODE dnPhantom, IN ULONG
+ulFlags)`, static) - is enabled only when all of these have been read on
+both systems: the exports and the flag honoured for a registry-only entry
+(statically from the guests' `CFGMGR32.DLL` copied to
+`tools\win98se-extracted\` and `tools\winme-extracted\` with their hashes,
+a `legal-provenance.md` row, then on a guest) and what it leaves behind
+(the driver key); the `HKEY_DYN_DATA` walk above; and an exclusion that
+holds while the tool runs - a controller removed and reinstalled, and a
+driver rolled back, while the tool holds its doors, each read to leave no
+older image loaded, or a guard the driver adds that is shown to refuse
+them. Until then the fallback (c) applies: the tool lists the entries and
+removes nothing. Old and new entries carry the same names ("xHCI98 USB 3.x
+Root Hub" twice), so it names a Device Manager procedure only if the 98 SE
+and ME legs find one that tells the old entry from the new by more than
+its name; otherwise it says that nothing needs the entries removed
+(10.13.6). Never (b), a direct registry deletion (D8).
 
 **What it prints** (D9). With no argument it lists and removes nothing:
 each candidate's instance id, its `DeviceDesc`, its driver key and why it
@@ -6273,11 +6317,13 @@ qualifies, then each refused, unknown or skipped entry and why. `-remove`
 lists, asks once (`Y` goes on; anything else, or end of input, cancels and
 removes nothing), and removes, printing each result; `-yes` is accepted
 only together with `-remove`, and skips the question, for the legs'
-scripts. Exit codes: 0 nothing to do, or every candidate removed; 1
+scripts. Exit codes: 0 nothing to do, or every candidate removed (or, on 98 SE
+and ME, listed); 1
 refused before any removal (a global refusal, an unknown, rights, WOW64,
 a missing routine, cancelled); 2 stopped part-way (a removal failed, or a
-re-check changed) - the lines printed say which entries were removed; 3
-every candidate removed, a restart pending. Console only, as
+re-check changed) - the lines printed say which entries were removed, and
+whether a restart is pending for any of them; 3 every candidate removed,
+a restart pending. Console only, as
 `XHCISNAP`'s printing half is.
 
 **Self-test**: the selection rule's parse and classification and the
@@ -6348,7 +6394,8 @@ this design adds:
   location form, at a root port and behind the hub, and a composite
   device's function in both forms - kept or new, and where the written
   setting went; Device Manager's default view clean (no mark, no unknown
-  device, one root hub); the old entries in the hidden view (NT, with
+  device, one current root hub per started project controller and no old
+  one present); the old entries in the hidden view (NT, with
   `DEVMGR_SHOW_NONPRESENT_DEVICES=1` set before Device Manager starts, on
   every NT target, 10.13.6) and in Safe Mode (98 SE, ME); and an
   `XHCISNAP` report, compared with the one before, naming the new root
@@ -6356,12 +6403,16 @@ this design adds:
 - **The input trap** (D4): on 98 SE and on XP, an update with a
   serial-less USB keyboard and mouse on this controller as the only input
   device the user has, the leg recording what can be answered and with
-  what; and the release notes' instruction - another input device
-  independent of the updated controller - followed once on each.
-- **98 SE** updated on a stock install and under SweetLow's stack, and
-  under SweetLow's stack with a hub chain two tiers deep and a
-  location-form device at its end, the device's instance key read whole
-  (10.13.1, "Lengths").
+  what; and the release notes' instruction - a keyboard and mouse
+  independent of the updated driver (PS/2, or a controller another stack
+  drives) - followed once on each; and on the two-controller guest, a
+  keyboard on the second `xhci98` controller recorded as no help, since
+  its root hub is new too.
+- **98 SE** updated on a stock install and under SweetLow's stack; and
+  a chain of serial-less hubs (QEMU hubs given a refused serial) as deep
+  as QEMU allows, up to five tiers, with a serial-less device at its end,
+  on `2.3.1.0` and after the update, each key read whole (10.13.1,
+  "Lengths").
 - **A hub or composite device first plugged in** between the update and
   the restart, on 98 SE (10.13.4).
 - **Two controllers**: one update leg on a two-controller guest (2000 or
@@ -6370,25 +6421,40 @@ this design adds:
 - **The tool**, on every target: its listing, `-remove`, the hidden view
   and `Enum` again; its global refusals forced once (run before the
   restart on 98 SE; run with the controller disabled on one NT target);
-  on each NT target, whether a disable of the controller is vetoed while
-  the tool holds its door open (10.13.8) - the result deciding whether
-  removal is enabled there; on each 64-bit target the 32-bit build's
-  refusal under WOW64 and `XHCICL64.EXE` removing (XP x64, Vista x64, 7
-  x64); on 98 SE and ME, route (a) once its static reading allows.
+  on each NT target, whether a disable, an update and a rollback of the
+  controller are vetoed while the tool holds its door open (10.13.8) - the
+  result deciding whether removal is enabled there - with a stock
+  controller holding `HCD0` on one guest and two project controllers on
+  another; on each 64-bit target the 32-bit build's refusal under WOW64
+  and `XHCICL64.EXE` removing (XP x64, Vista x64, 7 x64); on 98 SE and
+  ME, the listing, and the readings route (a) waits for (the exports, the
+  `HKEY_DYN_DATA` walk, and a remove, reinstall and rollback during a
+  run).
 - **F6** (D12): an F6 install on Windows 2000, 32-bit XP and XP x64, each
-  with a hub carrying a keyboard and a mouse used as the input through
-  text mode and GUI-mode Setup, and a composite device bound by the end.
+  with a hub carrying a keyboard and a mouse and a composite device, in
+  stages: in text mode, the keyboard behind the hub used as the input, and
+  the target disk read offline at the text-mode reboot for the composite
+  parent's and the hub's devnodes under `Enum\USB\XHCI98_...` with
+  `Service=xhci98` (the reading 5.6 and issue 10 made); through GUI-mode
+  Setup on XP and XP x64, where USB input is known to be dead until
+  "Installing Devices" has run (5.6, issue 10), an independent input
+  device, recorded as used; and by the end, USB input restored and the
+  composite's function bound.
 
 **The hubs.** QEMU's only hub is a Full Speed USB 1.1 hub (task 33.4). It
 takes exactly the id and code path of a USB 2.0 hub (`USB\XHCI98_HUB`;
-`XhciHubPdoId` with `usb3` 0, whatever the hub's speed), so the guests
-read the USB 2.0 hub's id through it. No guest presents a High Speed hub
-or a USB 3 hub, so a High Speed USB 2.0 hub and a USB 3 hub's two halves
+`XhciHubPdoId` with `usb3` 0, whatever the hub's speed). No guest presents
+a High Speed hub or a USB 3 hub. The USB 3 hub's two halves
 (`USB\XHCI98_HUB30` for the SuperSpeed one) are read on the owner's bench
 or through a passthrough after the cut (D13): before it, the SuperSpeed
 half's id rests on the host vectors (the same helper with one argument
 changed) and the INF gate, and the roadmap's checkpoint and the release
-notes say it was not read before the release.
+notes say it was not read before the release. **The High Speed USB 2.0
+hub** the roadmap names is not D13's: D14 asks the owner whether QEMU's
+Full Speed hub stands for it before the cut (same id, same code), the
+High Speed reading coming with the USB 3 hub's - whose USB 2.0 half is a
+High Speed hub under `USB\XHCI98_HUB` - after it, or a High Speed hub is
+read before the cut by passthrough.
 
 #### 10.13.11 Unread, and how it is read
 
@@ -6407,29 +6473,33 @@ notes say it was not read before the release.
 | When the new ids appear on 2000 and XP with 38.4's helper, on one and two controllers (10.13.4) | the update legs |
 | Whether any input-free route through the XP and 98 SE prompts exists (D4) | not assumed: the release notes ask for independent input |
 | A USB 3 hub's SuperSpeed half under the new id (10.13.10) | the owner's bench or a passthrough, after the cut (D13) |
+| A High Speed USB 2.0 hub under the new id (10.13.10) | D14 |
+| Whether 98 SE's `HKEY_DYN_DATA\Config Manager\Enum` walk is complete and reliable, and what an exclusion during a run needs there (10.13.8) | the 98 SE and ME legs, before route (a) |
+| How deep a chain of serial-less hubs 98 SE takes, under the old ids and the new (10.13.1) | the 98 SE leg |
 
 #### 10.13.12 Decisions taken (owner, 2026-10-13)
 
 The owner kept the task in `2.4.0.0` with the update costs of 10.13.4 and
 10.13.5, and took D1 to D13 as below; after a review's opinion on each, the owner
 changed D4, D7 and D12 and kept the rest. The options put are kept beside
-each.
+each. D14, from the review's second round, is open.
 
 | | Question | Options put | Decided |
 |---|---|---|---|
 | D1 | Do the new PDOs also report the old `XHCI98\...` id as a further hardware id, for the transition? | (a) no; (b) yes, last | **(a) no**: the device id alone decides the devnode, so an extra hardware id keeps nothing; it would only let the old package's INF compete for the new devnode, and keep a dead id alive in every gate |
 | D2 | Do the new INFs keep the old `XHCI98\` model lines (and `txtsetup.oem` its old rows)? | (a) no, a clean move; (b) the INFs keep them, `txtsetup.oem` not | **(a) a clean move**; the release notes say that on 98 SE and ME no new hub or composite device is connected before the restart (10.13.4) |
 | D3 | Do the root hub's install sections stop copying `xhci98.sys`, as the hub and composite sections do? | (a) yes; (b) no, as today | **(a) yes**: after this update the root hub is a new devnode at a start where `xhci98.sys` is already running, and on 98 SE and ME its copy would replace the running file from wherever the update was taken from; the root hub exists only under a running `xhci98.sys`. With it: `HCD-HUBCOPY` widened to the root hub, the footprints re-emitted, a fresh-install leg on each path |
-| D4 | XP and XP x64 ask Found New Hardware and the unsigned warning for the new root hub, and the USB keyboard and mouse behind it do nothing until it is answered | (a) document it; (b) a way for the driver to spare XP the root hub's new devnode - none is known, since the device id alone decides the devnode | **(a) documented, as the review advised** (owner, after its opinion): before updating, have a keyboard and mouse independent of the updated controller - PS/2 or on another controller; the release notes make no claim that the driver signing option helps; the same holds on 98 SE, where the serial-less keyboard and mouse are new devnodes too (10.13.5); legs on 98 SE and XP with a serial-less USB keyboard and mouse as the only input (10.13.10) |
+| D4 | XP and XP x64 ask Found New Hardware and the unsigned warning for the new root hub, and the USB keyboard and mouse behind it do nothing until it is answered | (a) document it; (b) a way for the driver to spare XP the root hub's new devnode - none is known, since the device id alone decides the devnode | **(a) documented, as the review advised** (owner, after its opinion): before updating, have a keyboard and mouse independent of the updated driver - PS/2, or a USB controller another stack drives; a second controller running `xhci98.sys` does not count, since the restart that loads the new image gives its root hub a new devnode too; the release notes make no claim that the driver signing option helps; the same holds on 98 SE, where the serial-less keyboard and mouse are new devnodes too (10.13.5); legs on 98 SE and XP with a serial-less USB keyboard and mouse as the only input (10.13.10) |
 | D5 | The serial-less devices' new devnodes (10.13.5): the settings and COM numbers left on the old ones | (a) document it; (b) the tool also removes old children tied to an old parent by its `ParentIdPrefix` value; (c) carry the settings over | **(a) documented only**; the tool leaves every device and function devnode |
 | D6 | The tool's name and place | (a) `XHCICLN.EXE`, source `xhcicln\`, shipped `tools\xhcicln\`; (b) a mode of `XHCISNAP` | **(a)** |
 | D7 | The 64-bit targets | (a) a second, amd64 build `XHCICL64.EXE`; (b) the 32-bit build only | **(a), by design** (owner, after the review's opinion, replacing "only if the x64 leg shows the 32-bit build refused"): `XHCICL64.EXE` ships; the 32-bit build lists but refuses removal under WOW64; the 64-bit build tested on XP x64, Vista x64 and 7 x64 |
-| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: (a) is offered only once read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8) |
-| D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes 0, 1, 2 | **as written** (10.13.8) |
-| D10 | The global refusals | (a) both (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`); (b) only the first | **(a) both**; after the review the root hub must be present and started, and either test answering unknown refuses (10.13.8) |
+| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: on 98 SE and ME the tool lists only in this release, since those systems give no exclusion against an older image loading during a run; (a) is enabled only once it, the `HKEY_DYN_DATA` walk and such an exclusion have been read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8) |
+| D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes | **as written** (10.13.8), the exit codes now 0, 1, 2 and 3 (restart pending), a pending restart reported even when a later removal fails |
+| D10 | The global refusals | (a) both (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`); (b) only the first | **(a) both**; after the review every project controller must be started, with a started `USB\XHCI98_ROOT_HUB` child and its door held open, and any test answering unknown refuses (10.13.8) |
 | D11 | If the refused device id moves: does the tool also remove old refused devnodes? | (a) yes; (b) no | **left to NOX.1** (38.12 deferred), whose decision 4 is that the tool leaves them (10.13.9) |
 | D12 | An F6 leg (32-bit XP, with a hub), since both `txtsetup.oem` files change | (a) add it; (b) the gates suffice | **(a), widened** (owner, after the review's opinion): F6 legs on Windows 2000, 32-bit XP and XP x64, each with the input behind the hub and a composite device bound (10.13.10) |
 | D13 | The USB 3 hub the roadmap's legs name, which no guest can present | (a) host vectors and the gate, the reading on the owner's bench or a passthrough after the cut; (b) a passthrough leg before the cut | **(a), unchanged** after the review's opinion: the USB 3 hub is read after the cut, and the roadmap's checkpoint and the release notes say so (10.13.10) |
+| D14 | **Open** (from the review's second round): the roadmap's legs name a USB 2.0 hub; QEMU's is Full Speed. Does QEMU's Full Speed hub stand for it before the cut? | (a) yes, the same id and code; the High Speed reading with the USB 3 hub's after the cut, whose USB 2.0 half is one; (b) a High Speed hub by passthrough before the cut | proposed **(a)**, the checkpoint and the release notes saying so with D13's |
 
 ## 11. The transfer-buffer policy (task 25.7)
 
