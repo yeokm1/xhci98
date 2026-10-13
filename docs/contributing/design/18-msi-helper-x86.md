@@ -28,7 +28,7 @@ bound included) fails the start. Sections 4.2 to 4.4 are amended in
 place, each change marked; the decisions, readings and reviews below
 stay as taken.
 
-**Revision 13, 2026-10-13 (roadmap-hcd task 38.4, designed before code):**
+**Revision 13, 2026-10-13 (roadmap-hcd task 38.3, designed before code):**
 section 15. The helper is extended to load on Windows 2000 and XP, where
 it hands the 32-bit `xhci98.sys` the address of `ExSetTimerResolution`
 for design record 15 section 7.2's finer timer, MSI staying Vista and 7
@@ -1704,7 +1704,7 @@ the first round with no P1 or P2 (owner rule, 2026-10-10).
 | 2 | P2: a damaged lifecycle or start record could vanish unnoticed - every record is now numbered and the validator refuses a gap or a fragment. P2: the start-decision record was written for a failed decision only - now for every start outcome; the routines' source is a lifecycle record. P3: `SynchronizeIrql` 0's meaning | `0308ad2` |
 | 3 | No P1 or P2. P3: a start refused before the decision reported the previous start's | the commit that converged |
 
-### 14.11 Revision 13 (task 38.4)
+### 14.11 Revision 13 (task 38.3)
 
 Drafted 2026-10-13 and put to the owner for section 15.13's decisions
 before any review round (the owner's rule for Phase 38's design tasks);
@@ -1716,9 +1716,9 @@ record 15's (its section 13.6, the same thread); its record 18 findings
 3's finding 3 in section 15.10. The loop converged at round 6 (record
 15 section 13.6).
 
-## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.4)
+## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.3)
 
-Designed 2026-10-13 for roadmap-hcd task 38.4, before any code, beside
+Designed 2026-10-13 for roadmap-hcd task 38.3, before any code, beside
 design record 15 section 7.2 (the finer timer this extension exists
 for). The owner's decisions of 2026-10-13 it rests on: the 32-bit image
 reaches `ExSetTimerResolution` through this helper, extended to load on
@@ -1781,7 +1781,7 @@ trailing name.
    is not made. (`MmGetSystemRoutineAddress` is the documented way to find
    a routine that may be absent - the amd64 image's for the same pair,
    record 15 section 4.3 - and replaces the static import; an export-table
-   walk is not the route, roadmap 38.4.)
+   walk is not the route, roadmap 38.3.)
 3. The timer service, **2000 and later**: the address of
    `ExSetTimerResolution`, which the helper imports statically. Under the
    kit's headers the routine is declared `NTKERNELAPI`, an import, so
@@ -1837,7 +1837,7 @@ order and statuses (`Type3InputBuffer` non-NULL, equal lengths, both
 fill writes from offset 0x10 on, never the caller's fields.
 
 **The HCD's acceptance is two-level**, so the timer is negotiated apart
-from MSI (roadmap 38.4). A pure function, `XhciHlprAccept`, returns the
+from MSI (roadmap 38.3). A pure function, `XhciHlprAccept`, returns the
 channel's verdict and one verdict per service:
 
 - **The channel** (as section 3.2's tests 1 to 3): the status success;

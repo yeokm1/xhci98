@@ -64,7 +64,7 @@ fails the start. 0 and 2 are unchanged; 4 and above still run as 0.
 Sections 3, 3.1, 4, 4.3, 8 and 12 follow; reasons 14 to 18 are
 appended.
 
-**Revision 8, 2026-10-13 (task 38.4, designed before code).** Section
+**Revision 8, 2026-10-13 (task 38.3, designed before code).** Section
 7.2: a finer system timer while polling, on Windows 2000 and later -
 `ExSetTimerResolution` asked for while the poller is active and given
 back when it idles, at a power transition and at the stop, from a timer
@@ -1297,7 +1297,7 @@ What follows from it:
   design: it has no allowlist row, no Windows 98 export evidence, and changes
   the tick for the whole system. If the readings show polled throughput
   unusable, it is the next question, under the import gate's evidence rule.
-  **Answered by revision 8, section 7.2** (task 38.4): on Windows 2000 and
+  **Answered by revision 8, section 7.2** (task 38.3): on Windows 2000 and
   later, while the poller is active, through the helper on 32-bit systems
   and `MmGetSystemRoutineAddress` on 64-bit ones; never on Windows 98 SE
   or ME.
@@ -1340,9 +1340,9 @@ event not yet drained.
 The checks run under a poll delivery only, so a line delivery runs exactly
 today's code.
 
-### 7.2 A finer system timer while polling (revision 8, task 38.4)
+### 7.2 A finer system timer while polling (revision 8, task 38.3)
 
-Designed 2026-10-13 for roadmap-hcd task 38.4, before any code; the
+Designed 2026-10-13 for roadmap-hcd task 38.3, before any code; the
 helper half (how the 32-bit image reaches the routine, the helper's
 extension to Windows 2000 and XP and its rename to `xhcihlpr.sys`) is
 design record 18 section 15. The owner's answers of 2026-10-13 are
@@ -1351,7 +1351,7 @@ written in (section 7.2.13), as revised by the owner after review round
 
 #### 7.2.1 What is asked, and what is not
 
-Asked (roadmap 38.4): under a poll delivery, ask Windows for a finer
+Asked (roadmap 38.3): under a poll delivery, ask Windows for a finer
 system clock while the poller is in its active state, and give it back
 when the poller leaves it, the delivery leaves polling, the controller
 stops or leaves D0, and at S3, S4 and S5; at most one request per
@@ -1382,7 +1382,7 @@ that will decide whether it changes.
   the clock. It is why section 7 calls the tick something "other software
   can change", and why the legs below compare interval observations of
   their own phases, never the kernel's increment (`KeQueryTimeIncrement`
-  is the increment, not the current resolution; roadmap 38.4).
+  is the increment, not the current resolution; roadmap 38.3).
 - **Where the period is decided.** The poll timer's DPC
   (`hcdPollDpc`, `src/hcd_poll.c`) drains, gathers the bus's state
   (`hcdPollBus`) and takes `XhciPollDecidePeriod`'s state (ACTIVE,
@@ -1728,7 +1728,7 @@ Nothing changes in either INF for this task's idle value.
 #### 7.2.7 The power-IRP rule, argued
 
 Microsoft warns that `ExSetTimerResolution` can deadlock against a power
-IRP (roadmap 38.4; Microsoft's page "Calling ExSetTimerResolution while
+IRP (roadmap 38.3; Microsoft's page "Calling ExSetTimerResolution while
 processing a power IRP", whose text the implementation commit quotes in
 the code's comment and here). The design holds the rule by construction:
 
@@ -2406,7 +2406,7 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    ME, 2000 and XP, 32- and 64-bit, mode 3 fails the start. 0 and 2 are
    unchanged, and 4 and above still run as 0 (revision 7; task 36.53).
 
-9. (2026-10-13, task 38.4; revision 8; revised by the owner after review
+9. (2026-10-13, task 38.3; revision 8; revised by the owner after review
    round 1) A finer system timer while polling, on Windows 2000 and later
    (section 7.2): T1, the call on a timer thread of each controller's; T2,
    the active period x 10000 asked for; T3, held while the poller is
@@ -2539,7 +2539,7 @@ revocation's writers (section 5.3), and what `LineRetired` proves stated
 for all three of its proofs (section 4.2). Review thread
 `01a12062-0080-7c92-a609-9e2b765333c4`.
 
-### 13.6 Revision 8 (task 38.4)
+### 13.6 Revision 8 (task 38.3)
 
 Drafted 2026-10-13 and put to the owner for section 7.2.13's decisions
 before any review round (the owner's rule for Phase 38's design tasks:
