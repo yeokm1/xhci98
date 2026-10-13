@@ -6,7 +6,8 @@ driver's code, and the quirks taken from it, each behind a registry value;
 and one fix to the driver's endpoint bookkeeping the survey exposed
 (section 5).
 
-Revision 5, 2026-10-14, answers review round 3 (section 11); revision 4,
+Revision 6, 2026-10-14, answers review round 4 (section 11); revision 5,
+the same day, answered round 3; revision 4,
 2026-10-13, answered round 2; revision 3,
 the same day, answered review round 1 with the
 owner's rulings on it (section 9). Revision 0 (first committed as
@@ -186,7 +187,7 @@ beside it.
 | `XHCI_AVOID_BEI` | `xhci-pci.c:345-349` | every 8086 **(h)** | `xhci-ring.c:4048-4049`: BEI cleared on every eighth isochronous TD | BEI is never set (`xhci_xfer.c`, the isochronous TD builder: every TD carries IOC) |
 | `XHCI_NO_SOFT_RETRY` | `xhci-pci.c:418-425`, `488-491` | 1B6F:7023, 1B6F:7052, 1022:43B9, 1022:43BB | `xhci-ring.c:2529-2533`: no soft retry | the same four ids are excluded from 35-T.2's soft retry (`xhci_tol.c` `XhciTolNoSoftRetry`; record 17 section 4.2) |
 | `XHCI_LIMIT_ENDPOINT_INTERVAL_9` on the AMD ids | `xhci-pci.c:293-302` | 1022:13ED, 13EE, 148C, 15D4, 15D5, 15E0, 15E1, 15E5 | `xhci-mem.c:1452-1458`: interrupt and isochronous Interval 9 or more programmed as 8 | `XhciIntervalCap` 1 caps every 1022 controller, wider than Linux's list, interrupt endpoints only: isochronous ones are not capped, by the owner's decision of 2026-10-06 (record 17 section 4.7). Q11 adds the one id it missed |
-| `XHCI_EP_LIMIT_QUIRK` | `xhci-pci.c:350-353` | 8086:1E31 **(h)** | `xhci.c:2264-2282`, `4202-4214` and the release paths: at most 64 active endpoint contexts, EP0s included | **covered once section 5's fix lands, not before** (review round 1): today a failed Configure Endpoint or SET_INTERFACE leaves endpoints enabled whose pool rings were returned, so the pool does not bound the enabled contexts. With section 5 a pool ring is held until its endpoint is proven Disabled, and 32 slots' EP0s (`XHCI_MAX_SLOTS`) plus 32 pooled rings (`XHCI_MAX_POOL_RINGS`) bound the enabled contexts at 64; no quirk of its own (owner, 2026-10-13) |
+| `XHCI_EP_LIMIT_QUIRK` | `xhci-pci.c:350-353` | 8086:1E31 **(h)** | `xhci.c:2264-2282`, `4202-4214` and the release paths: at most 64 active endpoint contexts, EP0s included | **covered once section 5's fix lands, not before** (review round 1): today a failed Configure Endpoint or SET_INTERFACE leaves endpoints enabled whose pool rings were returned, so the pool does not bound the enabled contexts. With section 5 a pool ring is held until a proof shows the controller has relinquished that allocation (section 5.2), and 32 slots' EP0s (`XHCI_MAX_SLOTS`) plus 32 pooled rings (`XHCI_MAX_POOL_RINGS`) bound the enabled contexts at 64; no quirk of its own (owner, 2026-10-13) |
 | `XHCI_SNPS_BROKEN_SUSPEND` | `xhci-pci.c:322-324` | 1022:15E0, 1022:15E1 | `xhci.c:1025-1046`: a save that never clears SSS accepted, and the resume re-initializes | a save that does not complete leaves no valid state (`xhci_init.c` `xhciSaveState`), and the resume then re-initializes - the same end |
 | `XHCI_NO_64BIT_SUPPORT` | `xhci-pci.c:462-470` | 1B21:1142, 1242, 2142, 3242 | `xhci.c:5515-5516`: AC64 ignored, 32-bit DMA | every address is below 4 GB and every high dword written 0 (AGENTS.md, "No 64-bit DMA") |
 | `XHCI_U2_DISABLE_WAKE` | `xhci-pci.c:334-339` | 1022:43B9, 43BA, 43BB, 43BC | `xhci-hub.c:1776-1781` with `pci-quirks.c:506-589`: no wake bits on a USB 2.0 port the firmware disabled | no port wake bit is ever set (`PORTSC` WCE, WDE and WOE are defined in `xhci.h` and written by nothing), and the controller never arms system wake (section 3.4) |
@@ -573,6 +574,12 @@ The mirror says nothing of what the bit does, and this record claims no
 knowledge of it: the value is named for the action. Here it is one
 read-modify-write in the D3 path on a listed controller, made only when:
 
+- a started lifetime with its BAR mapped (`ControllerStarted` and `BarVa`
+  not NULL), checked under the power gate before the access, as Q5 checks
+  it (section 4.5): a stopped FDO keeps `IoSpaceLength`, `HcInfoStatus`
+  and its recorded D0 after the BAR is unmapped (`hcd_power.c`); the write
+  is made inside the D3 path's existing guarded suspend, before
+  `XhciSuspendController`;
 - the mapped window is at least C130h bytes (`IoSpaceLength`), so the
   dword lies inside the resource Windows granted;
 - the controller is in D0 and its window decodes (`HcInfoStatus` good, not
@@ -642,12 +649,28 @@ already holding `XHCI_MAX_DEVICE_ENDPOINTS` (four) rings (`xhci_mem.c`,
 `XhciPoolAcquire`; `xhci.h`), so holding the old rings while the new are
 made would refuse ordinary switches - a device with four endpoints could
 not make its first replacement. The cap is therefore taken against a
-device's rings outside any transaction; the rings one transaction holds
-for the old setting (detached, or superseded and held for a rollback) are
-counted apart, as that transaction's reservation, bounded by the cap
-again (so a device holds at most twice the cap, only while a switch is in
-flight), and stay reserved in the pool. The pool's own size, 32, still
-bounds everything the controller can hold (section 5.5).
+device's rings outside any transaction. A transaction's reservation is
+fixed before it allocates anything: every allocation its command will
+drop - the pipes it detaches **and** any allocation already retained as
+stale from an earlier failure (`dev->Stale`, which the command's drop mask
+already includes, `hcd_cfg.c` in `hcdCfgSelectInterface` and
+`hcdCfgReplace`) - so stale rings left by one failure never block the
+select that would release them. The reservation is bounded by the cap
+again (a device holds at most twice the cap, only while a switch is in
+flight). Two counts are kept apart, because `XhciPoolAcquire` today uses
+one `held` count for both the cap and its first-ring fairness exemption
+(`xhci_mem.c`): the **cap** count excludes the transaction's reservation;
+the physical count - pool occupancy, free-ring accounting,
+`dev->PoolRings`, and the fairness test - includes every retained
+allocation, so a replacement never passes for a device's first ring. The
+pool's own size, 32, still bounds everything the controller can hold
+(section 5.5).
+
+When a transaction ends without its command succeeding (the pool or the
+fairness test refuses a replacement, or the command is refused or not
+issued), its reservation settles back: the pipes it detached are
+reattached (section 5.3), and allocations that were already stale stay
+stale and retained, never republished.
 
 A successful command's proof is applied to the allocations it named - the
 detached old pipes and their stream blocks among them - before any
@@ -804,10 +827,12 @@ plus the enabled slots never pass 64, and no ring is in the pool while it
 is owned.
 
 The cost: during an interface switch the old and the new rings are both
-held until the switch settles, so a nearly full pool (not the per-device
-cap, which a transaction's reservation does not consume, section 5.2)
-refuses a switch it would have served before. That is the bound working,
-and it is counted.
+held until the switch settles, so pool exhaustion or the pool's fairness
+admission (which keeps a ring free for each live device without one,
+`XhciPoolAcquire`) can refuse the temporary replacement ring of a switch
+that would have been served before - not the per-device cap, which a
+transaction's reservation does not consume (section 5.2). That is the
+bound working, and it is counted.
 
 ## 6. What is common to every quirk taken
 
@@ -911,7 +936,11 @@ were written, which may have drained before them, never acknowledges
 them. The sink stays the thread's, at PASSIVE_LEVEL, serialized as it is
 now. A thread that has left its loop (`ThreadStop`) or does not reach its
 flush within the bound is not waited for further; the attempt is counted as
-unacknowledged, and nothing is claimed for it. Even a
+unacknowledged, and nothing is claimed for it. An acknowledgement says the
+request was serviced, not that records were emitted: `HcdLogFlush` returns
+at once when the `XhciLogDebugView` sink is off (`hcd_log.c`), so the
+thread acknowledges with the outcome - drained to the sink, or sink off -
+and only the first is counted as a flushed shutdown record. Even a
 flushed record reaches a user only through an external capture of that
 shutdown - the `XhciLogDebugView` sink under a debug-output viewer or a
 kernel debugger (`build-and-test.md`, "Getting a trace off a bare-metal
@@ -1103,6 +1132,16 @@ rollback, subject to its findings 1 and 2.
 | P2-4: a flush generation does not acknowledge the shutdown records | section 6.4 (a ticket the thread captures before it flushes) |
 | P2-5: Q1 loses an established identity on a failed refresh | section 4.1 (the identity kept; none ever established is treated conservatively) |
 | P3-6: "new" defined by completion; the USB 3.2 citation | section 5.2; section 5.3, step 4 |
+
+Round 4 ran on revision 5 (`8046e1c7`) and found no P1.
+
+| Finding | Answer |
+|---|---|
+| P2-1: stale allocations from an earlier failure not in the next transaction's reservation; one `held` count for cap and fairness | section 5.2 (the reservation is the command's full drop set, stale included, fixed before allocation; the cap count and the physical count kept apart; how a failed transaction settles) |
+| P2-2: Q16 without the live-mapping guard | section 4.15 |
+| P3-3: the cost is fairness refusal too | section 5.5 |
+| P3-4: an acknowledged flush is not an emitted record | section 6.4 |
+| P3-5: the survey row's old predicate | section 3.2 (`XHCI_EP_LIMIT_QUIRK` row) |
 
 ## 12. Provenance of this record
 
