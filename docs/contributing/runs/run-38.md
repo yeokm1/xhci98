@@ -95,3 +95,47 @@ Attached SCSI Storage" being its name once installed.
 copies; they were copied from `out\p37-fin\legs`. `swapto.ps1` adds the
 Windows 7 x64 bins stick and does not change the transfer drive's
 flavour; a clean shutdown and a relaunch with the other `-Flav` does.
+
+## 38.10 - The release's tools in `tools\`
+
+**Verdict: done** (2026-10-13). `make-release.ps1` publishes `xhciqual\`,
+`xhcisnap\` and `portsw\` under `<version>\tools\`, so the version root
+holds only the flavour directories, `readme.txt` and `LICENSE`. The upload
+assembly reads the layout off the tree: a tree with `tools\` is held to
+this layout and to the cut's port switchover layout at any version, and a
+tree without it is accepted only before `2.4.0.0`, each in the layout its
+version was published with (`2.3.1.0` `portsw\` at the root, `2.3.0.0` the
+scripts in each flavour directory, older none). The readme template, the
+tools' readmes ("two directories up"), `make-package.ps1`'s help, the two
+batch files' not-found message (`TOOLS\PORTSW`) and the documents follow.
+Commits `fc58af43` to `2af5ec79` and the case fix after the legs.
+
+**Gates.** `build-driver.cmd all` and `all -amd64`, run from PowerShell:
+build and gates passed. `test-package.ps1`: 607 checks passed, among them
+executed checks of `Get-ToolDirName`, `Assert-ToolsLayout` and the upload
+assembly's `$pswVersion` rule, each shown to fail with the rule reverted.
+
+**Review.** Codex thread `01a13334`: round 1 four findings (a `tools\` tree
+still admitting the legacy port switchover layouts; two old paths in
+generated text; and two on 38.11's licence conditions, all notices and the
+source offer); round 2 one P3 (the three earlier layouts named exactly);
+round 3 one P2 (a pin that also matched the validator); round 4 clean.
+
+**The vehicle.** Development host A, QEMU, at most 3 of the host's 8
+logical processors in use. Kit `out\p38-tools\kit` (`out\p38-d\kit`
+retargeted, vCPU cap 8, a `cut` flavour staging the cut's `tools\` as
+`TOOLS\`); notes `out\p38-tools\notes.txt`, shots under
+`out\p38-tools\legs\<dos|w98|xp>\shots\`. A local x86 dry cut into
+`out\p38-tools\releases` (version `2.3.1.0`, the branch not yet stamped),
+with both tools rebuilt from tracked sources in a scratch copy
+(`out\p38-tools\build\`): the freshness check refused the repository's own
+`XHCIQUAL.EXE` and `XHCISNAP.EXE`, byte-identical to `2.3.1.0`'s, because a
+checkout had given `src\xhci_version.h` and `xhcisnap.c` a newer file time.
+The cut at 38.final meets the same refusal after any fresh checkout.
+
+| Leg | Result |
+|---|---|
+| The package tree | Root: `debug-x86\`, `release-x86\`, `LICENSE`, `readme.txt`, `tools\`; `tools\xhciqual\`, `tools\xhcisnap\`, `tools\portsw\` complete; the zip the same; the readme names `TOOLS\XHCIQUAL\`, `TOOLS\XHCISNAP` and `TOOLS\PORTSW` (one lower-case path in the contents list, fixed after) |
+| `XHCIQUAL` under MS-DOS | Windows 98 SE boot floppy (MS-DOS 7.1), `C:\TOOLS\XHCIQUAL\XHCIQUAL`: quick scan, QEMU's `1B36:000D` "LOOKS QUALIFIED", probe safety PASS |
+| Windows 98 SE | From `TOOLS\XHCISNAP`: `XHCISNAP` and `-probe` (driver declined, the route works); from `TOOLS\PORTSW`: `portsw-on.bat` set 1 and `portsw-off.bat` 0, "RESTART WINDOWS" once each; run from another directory, the not-found message names `TOOLS\PORTSW` |
+| Windows XP SP3 | The cut's `release-x86` installed by Have Disk; from `TOOLS\XHCISNAP` the same two screens; from `TOOLS\PORTSW` on 1, off 0, `XhciIntelPortSwitch` read back 0. On NT the batch files change to their own directory first, so the not-found message is 9x only |

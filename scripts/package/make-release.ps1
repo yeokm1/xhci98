@@ -3171,7 +3171,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "  TOOLS\XHCIQUAL\  - the DOS machine checker from step 1"
         $contents += ""
         $contents += ("      XHCIQUAL.EXE {0:N0} bytes" -f $qexe.Length)
-        $contents += "      XHCIQUAL.MAP keep it beside the EXE; see tools\xhciqual\readme.txt"
+        $contents += "      XHCIQUAL.MAP keep it beside the EXE; see TOOLS\XHCIQUAL\readme.txt"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
         $contents += ""
