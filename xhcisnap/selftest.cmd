@@ -471,6 +471,106 @@ if not "%errorlevel%"=="2" (
     set FAILED=1
 )
 
+rem Task 38.1's clock-stamped name: months 1, 9, 10, 11 and 12 (one
+rem character each, 1-9 then A-C), midnight, a taken name moving A to B
+rem whichever file of the set holds it (case ignored, the .TMP names
+rem included), names outside the set ignored, Z the last, all 26 taken
+rem refused, and impossible clock fields refused with no name.
+"%~dp0XHCISNAP.EXE" -selftest-stamp > "%BASE%.stamp.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-stamp exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("stamp month 1 day 5 00:00 free: 1050000A" "stamp month 9 day 30 23:59 free: 9302359A" "stamp month 10 day 1 12:34 free: A011234A" "stamp month 11 day 15 07:08 free: B150708A" "stamp month 12 day 31 08:07 free: C310807A" "stamp A.TXT taken: A011234B" "stamp A.BIN.TMP taken: A011234B" "stamp A.DEV and B.PSC.TMP taken: A011234C" "stamp other names only: A011234A" "stamp A to Y taken: A011234Z" "stamp all 26 taken: REFUSED, all 26 names taken" "stamp month 0: REFUSED, the clock is not valid" "stamp month 13: REFUSED, the clock is not valid" "stamp day 0: REFUSED, the clock is not valid" "stamp day 32: REFUSED, the clock is not valid" "stamp hour 24: REFUSED, the clock is not valid" "stamp minute 60: REFUSED, the clock is not valid" "[end]") do (
+    findstr /C:%%S "%BASE%.stamp.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the stamp rule does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"but a name came back" "%BASE%.stamp.log" > nul
+if not errorlevel 1 (
+    echo FAIL: a refused stamp still returned a name
+    set FAILED=1
+)
+
+rem Task 38.1's SHA-256, on the real /O2 binary (the miscompile lesson of
+rem task 36.35): the FIPS 180-2 examples and the empty message in memory,
+rem then a million 'a' written to a file and read back through the path the
+rem installed files are hashed by, and the file once deleted.
+"%~dp0XHCISNAP.EXE" -selftest-sha256 "%BASE%" > "%BASE%.sha.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-sha256 exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("sha256 empty: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ok" "sha256 abc: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad ok" "sha256 448-bit: 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1 ok" "sha256 million a, 1000 x 1000: cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ok" "sha256 million a, 1000000 x 1: cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ok" "sha256 file 1000000 bytes: cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ok" "sha256 file deleted: not present" "[end]") do (
+    findstr /C:%%S "%BASE%.sha.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the SHA-256 self-test does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"WRONG" "%BASE%.sha.log" > nul
+if not errorlevel 1 (
+    echo FAIL: the SHA-256 self-test printed a WRONG digest
+    set FAILED=1
+)
+
+rem Task 38.1's -report, end to end in a directory of its own, against a
+rem controller index no machine has: the .DEV is written though the device
+rem does not open, says why there is no dump, and exits 4; a second run in
+rem the same directory takes another name rather than overwriting the
+rem first; -nosysinfo is honoured; -o beside -report is refused, writing
+rem nothing.
+mkdir "%RUNDIR%\rep"
+pushd "%RUNDIR%\rep"
+"%~dp0XHCISNAP.EXE" -report -c 99 > "%BASE%.report1.log"
+if not "%errorlevel%"=="4" (
+    echo FAIL: -report with no controller exited %errorlevel%, expected 4
+    set FAILED=1
+)
+"%~dp0XHCISNAP.EXE" -report -nosysinfo -c 99 > "%BASE%.report2.log"
+if not "%errorlevel%"=="4" (
+    echo FAIL: -report -nosysinfo with no controller exited %errorlevel%, expected 4
+    set FAILED=1
+)
+"%~dp0XHCISNAP.EXE" -report -o REFUSED > "%BASE%.report3.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: -report -o exited %errorlevel%, expected 2
+    set FAILED=1
+)
+set DEVCOUNT=0
+for %%F in (*.DEV) do set /a DEVCOUNT+=1
+if not "%DEVCOUNT%"=="2" (
+    echo FAIL: two -report runs left %DEVCOUNT% .DEV files, expected 2
+    set FAILED=1
+)
+for %%F in (REFUSED.*) do (
+    echo FAIL: -report -o wrote %%F
+    set FAILED=1
+)
+copy /b *.DEV "%BASE%.devs.txt" > nul
+popd
+for %%S in ("xhci98 device report - xhcisnap -report" "  local time         " "  devices - every PCI xHCI controller" "  installed files - size, file version and SHA-256" "    xhci98.sys   " "    usbui.dll    " "  dump result" "NOT taken: cannot open" "HCD99, error" "end of device report" "captured on - this machine" "skipped by -nosysinfo") do (
+    findstr /C:%%S "%BASE%.devs.txt" > nul
+    if errorlevel 1 (
+        echo FAIL: the .DEV files do not say %%S
+        set FAILED=1
+    )
+)
+for %%S in ("files named " ".DEV written" "Attach " "(no dump was taken: it says why)") do (
+    findstr /C:%%S "%BASE%.report1.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the -report screen does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"It does not take -o" "%BASE%.report3.log" > nul
+if errorlevel 1 (
+    echo FAIL: the -report -o refusal does not say it does not take -o
+    set FAILED=1
+)
+
 rd /s /q "%RUNDIR%" 2> nul
 rd out 2> nul
 
@@ -478,5 +578,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 19 cases, all passed
+echo xhcisnap selftest: 22 cases, all passed
 exit /b 0

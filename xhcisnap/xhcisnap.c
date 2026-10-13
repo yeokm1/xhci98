@@ -81,6 +81,10 @@
 #include <stdarg.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 /* ---- usbport's USBUSER escape (from the binaries, not from a header) ---- */
 
@@ -542,6 +546,19 @@ typedef struct _SNAP_HEADER {
 
 static unsigned char snap_buffer[SNAP_BUFFER_BYTES];
 
+/* The time a run started (task 38.1: -report names its files from it, and
+ * the .DEV and the .TXT carry it), and why the last window failed, for the
+ * .DEV's dump line. */
+static SYSTEMTIME runTime;
+static int runTimeSet;
+static char lastWindowWhy[160];
+
+static void window_why(const char *fmt, unsigned long a, unsigned long b)
+{
+    _snprintf(lastWindowWhy, sizeof(lastWindowWhy) - 1, fmt, a, b);
+    lastWindowWhy[sizeof(lastWindowWhy) - 1] = '\0';
+}
+
 static void put32(unsigned char *p, unsigned long offset, unsigned long value)
 {
     *(unsigned long *)(p + offset) = value;
@@ -592,8 +609,10 @@ static int take_window(HANDLE device, unsigned long region,
                          snap_buffer, SNAP_BUFFER_BYTES,
                          snap_buffer, SNAP_BUFFER_BYTES,
                          &returned, NULL)) {
-        printf("  DeviceIoControl failed, error %lu\n",
-               (unsigned long)GetLastError());
+        DWORD err = GetLastError();
+
+        printf("  DeviceIoControl failed, error %lu\n", (unsigned long)err);
+        window_why("the request failed, error %lu%.0lu", (unsigned long)err, 0);
         return 0;
     }
 
@@ -605,6 +624,12 @@ static int take_window(HANDLE device, unsigned long region,
     if (status != 0) {
         printf("  the request was refused: %lu (%s)\n",
                status, uu_status_text(status));
+        window_why((status == 6)
+                       ? "the driver refused the read, status %lu: the log "
+                         "channel is off, or this is not an xhci98 "
+                         "controller%.0lu"
+                       : "the driver refused the read, status %lu%.0lu",
+                   status, 0);
         /*
          * The advice that used to travel inside `uu_status_text`'s code-6
          * string, said here in prose instead - see the note there. This is the
@@ -627,6 +652,8 @@ static int take_window(HANDLE device, unsigned long region,
         printf("  the reply carries no snapshot signature (%08lX) - the "
                "driver answered the GUID but not with a snapshot\n",
                header->Signature);
+        window_why("the reply carried no snapshot signature (%08lX)%.0lu",
+                   header->Signature, 0);
         return 0;
     }
     if (header->HeaderBytes != (unsigned long)sizeof(SNAP_HEADER) ||
@@ -636,6 +663,9 @@ static int take_window(HANDLE device, unsigned long region,
                "same tree as the driver.\n",
                header->SchemaVersion, header->HeaderBytes,
                SNAP_SCHEMA, (unsigned)sizeof(SNAP_HEADER));
+        window_why("schema mismatch: the driver's is %lu, this tool's %lu; "
+                   "use the XHCISNAP from the driver's own release",
+                   header->SchemaVersion, SNAP_SCHEMA);
         return 0;
     }
     /* The reply must cover the payload it claims: a short one would leave
@@ -648,6 +678,8 @@ static int take_window(HANDLE device, unsigned long region,
         printf("  the reply is %lu bytes, short of the %lu-byte payload it "
                "claims - refusing it\n", (unsigned long)returned,
                header->PayloadBytes);
+        window_why("a reply of %lu bytes, short of its %lu-byte payload",
+                   (unsigned long)returned, header->PayloadBytes);
         return 0;
     }
     *payload = block + sizeof(SNAP_HEADER);
@@ -1435,6 +1467,9 @@ static const char *sys_os_name(unsigned long platform, unsigned long major,
 
 static char sysNames[SYS_NAMES][SYS_NAME_BYTES];
 static int sysNamesLoaded;
+/* -report with -nosysinfo: the names are not read, so sys_clean cleans the
+ * characters and withholds nothing (task 38.1). */
+static int cleanSkipNames;
 
 static void sys_load_names(void)
 {
@@ -1611,7 +1646,7 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
         return;
     }
     /* As the registry gave it, before any byte is changed or cut. */
-    raw = sys_has_name(in);
+    raw = cleanSkipNames ? 0 : sys_has_name(in);
     n = 0;
     space = 0;
     while (*in == ' ' || *in == '\t') {
@@ -1643,7 +1678,8 @@ static void sys_clean(const char *in, char *out, size_t outBytes)
         out[n++] = '.';
     }
     out[n] = '\0';
-    if ((raw || sys_has_name(out)) && strlen(SYS_WITHHELD) < outBytes) {
+    if (!cleanSkipNames && (raw || sys_has_name(out)) &&
+        strlen(SYS_WITHHELD) < outBytes) {
         strcpy(out, SYS_WITHHELD);
     }
 }
@@ -2093,6 +2129,14 @@ static void write_companion_header(const SNAP_HEADER *h)
      * carries what the version cannot between cuts: which build. */
     comp("  tool               xhcisnap %s, built %s\n",
          XHCISNAP_VERSION, XHCISNAP_BUILT);
+    /* When the dump was taken, with the year (task 38.1). */
+    if (runTimeSet) {
+        comp("  local time         %04u-%02u-%02u %02u:%02u:%02u (this "
+             "machine's clock)\n",
+             (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+             (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+             (unsigned)runTime.wMinute, (unsigned)runTime.wSecond);
+    }
     /* Wrapped under its own column: the path is the machine's, and the
      * failure texts alone pass 79 columns on a default C:\WINDOWS. */
     put_wrapped_to((companion != NULL) ? companion : stdout,
@@ -6786,10 +6830,12 @@ static int set_verbosity(unsigned long verbosity, int force)
                     "some key, so the driver will go on reading it as it is - "
                     "and while it is nonzero the read channel stays open to "
                     "anyone using this machine. Administrator rights are needed "
-                    "on Windows 2000; Windows 98 needs none.");
+                    "on Windows 2000 and later (on Vista and 7, Run as "
+                    "administrator); Windows 98 needs none.");
         } else {
             say("", "\nSome values could not be written. Administrator rights "
-                    "are needed on Windows 2000; Windows 98 needs none.");
+                    "are needed on Windows 2000 and later (on Vista and 7, "
+                    "Run as administrator); Windows 98 needs none.");
         }
         return 1;
     }
@@ -6819,7 +6865,7 @@ static int set_verbosity(unsigned long verbosity, int force)
      * read as this tool not knowing what it had just done.
      */
     if (anyOn) {
-        printf("Then reproduce and run:  XHCISNAP -o C:\\NAME\n");
+        printf("Then reproduce and run:  XHCISNAP -report  (or SNAPGET.BAT)\n");
         printf("Afterwards:              XHCISNAP -disable\n");
         say("  ", "While the channel is on, anyone using this machine can read "
                   "this driver's diagnostic state through it. The controller's "
@@ -6836,6 +6882,1942 @@ static int set_verbosity(unsigned long verbosity, int force)
     /* A run that covered part of the machine did not do what it was asked, so
      * it does not exit as though it had. */
     return dropped ? 1 : 0;
+}
+
+/*
+ * ---- -report: the device report and the clock-stamped name (task 38.1) ---
+ *
+ * Owner, 2026-10-12 and 2026-10-13: a reporter runs one batch and attaches
+ * what it names. A batch cannot build a dated name (COMMAND.COM on 98 SE and
+ * ME has no %DATE% or %TIME%, cmd.exe's follow the locale), so this tool
+ * builds it from the local clock, 8.3-safe, in the current directory, and
+ * never takes a name any file of the set already has. And this tool, rather
+ * than each target's own utilities, reads the controller's Device Manager
+ * status and problem code, its allocated resources and the SHA-256 of the
+ * installed files, so every target reports the same. BASE.DEV holds those;
+ * the dump that follows is the ordinary one, into BASE.TXT, .BIN and .PSC.
+ *
+ * The configuration manager is cfgmgr32.dll, loaded at run time like
+ * version.dll, so the import table still names KERNEL32 and ADVAPI32 alone.
+ * Each routine is looked up by name and one that is missing or failing is
+ * written as "not read: <why>" rather than ending the report. On 98 SE and
+ * ME, where cfgmgr32.dll may not answer, the devnodes are taken from
+ * HKEY_DYN_DATA\Config Manager\Enum instead, which carries the status and
+ * problem but not the resources.
+ *
+ * The time the run started, read once, names the files and is written
+ * inside the .DEV and the .TXT with its year.
+ */
+static int reportMode;
+static char dumpWhy[256];
+
+static void run_time_once(void)
+{
+    if (!runTimeSet) {
+        GetLocalTime(&runTime);
+        runTimeSet = 1;
+    }
+}
+
+/*
+ * The base name: mDDhhmmS. m is the month as one character, 1-9 then A, B
+ * and C, so the name stays eight characters; DD the day, hh the hour (24h),
+ * mm the minute; S the first letter A-Z for which no file of the set this run
+ * could write exists. The set is every name a -report or a dump of that base
+ * writes, its temporary files included. Pure: the clock fields and the
+ * existence test come in, so -selftest-stamp drives it over canned answers.
+ */
+#define STAMP_OK        0
+#define STAMP_TAKEN     1
+#define STAMP_BADCLOCK  2
+
+typedef int (*STAMP_EXISTS)(const char *name, void *context);
+
+static const char *const stampExts[] = {
+    ".DEV", ".TXT", ".BIN", ".PSC",
+    ".DEV.TMP", ".TXT.TMP", ".BIN.TMP", ".PSC.TMP", NULL
+};
+
+#pragma auto_inline(off)
+static char stamp_month_char(unsigned month)
+{
+    if (month >= 1 && month <= 9) {
+        return (char)('0' + month);
+    }
+    return (char)('A' + (month - 10));
+}
+
+static int stamp_base(unsigned month, unsigned day, unsigned hour,
+                      unsigned minute, STAMP_EXISTS exists, void *context,
+                      char *out)
+{
+    char name[32];
+    int letter;
+    int k;
+    int taken;
+
+    out[0] = '\0';
+    if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 ||
+        minute > 59) {
+        return STAMP_BADCLOCK;
+    }
+    for (letter = 0; letter < 26; letter++) {
+        sprintf(out, "%c%02u%02u%02u%c", stamp_month_char(month), day, hour,
+                minute, 'A' + letter);
+        taken = 0;
+        for (k = 0; stampExts[k] != NULL; k++) {
+            sprintf(name, "%s%s", out, stampExts[k]);
+            if (exists(name, context)) {
+                taken = 1;
+                break;
+            }
+        }
+        if (!taken) {
+            return STAMP_OK;
+        }
+    }
+    out[0] = '\0';
+    return STAMP_TAKEN;
+}
+#pragma auto_inline(on)
+
+/* Only "no such file" is absence: a name that cannot be looked at for any
+ * other reason counts as taken, since taking it could overwrite something. */
+static int stamp_exists_here(const char *name, void *context)
+{
+    DWORD err;
+
+    (void)context;
+    if (GetFileAttributesA(name) != 0xFFFFFFFFUL) {
+        return 1;
+    }
+    err = GetLastError();
+    return (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) ? 0 : 1;
+}
+
+typedef struct {
+    const char *const *Names;
+    int Count;
+} STAMP_SET;
+
+static int stamp_exists_canned(const char *name, void *context)
+{
+    const STAMP_SET *set = (const STAMP_SET *)context;
+    int i;
+
+    for (i = 0; i < set->Count; i++) {
+        if (_stricmp(set->Names[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void selftest_stamp_one(const char *label, unsigned month,
+                               unsigned day, unsigned hour, unsigned minute,
+                               const char *const *names, int count)
+{
+    STAMP_SET set;
+    char out[16];
+    int rc;
+
+    set.Names = names;
+    set.Count = count;
+    rc = stamp_base(month, day, hour, minute, stamp_exists_canned, &set, out);
+    if (rc == STAMP_OK) {
+        printf("stamp %s: %s\n", label, out);
+    } else if (rc == STAMP_TAKEN) {
+        printf("stamp %s: REFUSED, all 26 names taken%s\n", label,
+               (out[0] == '\0') ? "" : " (but a name came back)");
+    } else {
+        printf("stamp %s: REFUSED, the clock is not valid%s\n", label,
+               (out[0] == '\0') ? "" : " (but a name came back)");
+    }
+}
+
+static int selftest_stamp(void)
+{
+    static const char *const takenA[] = { "A011234A.TXT" };
+    static const char *const takenTmp[] = { "a011234a.bin.tmp" };
+    static const char *const takenAB[] = { "A011234A.DEV", "A011234B.PSC.TMP" };
+    static const char *const takenOther[] = { "A011234A", "A011234A.LOG",
+                                              "A011235A.DEV" };
+    static char allNames[26][16];
+    static const char *allPtrs[26];
+    int i;
+
+    selftest_stamp_one("month 1 day 5 00:00 free", 1, 5, 0, 0, NULL, 0);
+    selftest_stamp_one("month 9 day 30 23:59 free", 9, 30, 23, 59, NULL, 0);
+    selftest_stamp_one("month 10 day 1 12:34 free", 10, 1, 12, 34, NULL, 0);
+    selftest_stamp_one("month 11 day 15 07:08 free", 11, 15, 7, 8, NULL, 0);
+    selftest_stamp_one("month 12 day 31 08:07 free", 12, 31, 8, 7, NULL, 0);
+    selftest_stamp_one("A.TXT taken", 10, 1, 12, 34, takenA, 1);
+    selftest_stamp_one("A.BIN.TMP taken", 10, 1, 12, 34, takenTmp, 1);
+    selftest_stamp_one("A.DEV and B.PSC.TMP taken", 10, 1, 12, 34, takenAB, 2);
+    selftest_stamp_one("other names only", 10, 1, 12, 34, takenOther, 3);
+    for (i = 0; i < 26; i++) {
+        sprintf(allNames[i], "A011234%c.DEV", 'A' + i);
+        allPtrs[i] = allNames[i];
+    }
+    selftest_stamp_one("A to Y taken", 10, 1, 12, 34, allPtrs, 25);
+    selftest_stamp_one("all 26 taken", 10, 1, 12, 34, allPtrs, 26);
+    selftest_stamp_one("month 0", 0, 1, 12, 34, NULL, 0);
+    selftest_stamp_one("month 13", 13, 1, 12, 34, NULL, 0);
+    selftest_stamp_one("day 0", 10, 0, 12, 34, NULL, 0);
+    selftest_stamp_one("day 32", 10, 32, 12, 34, NULL, 0);
+    selftest_stamp_one("hour 24", 10, 1, 24, 34, NULL, 0);
+    selftest_stamp_one("minute 60", 10, 1, 12, 60, NULL, 0);
+    printf("[end]\n");
+    return 0;
+}
+
+/*
+ * ---- SHA-256 (FIPS 180-4), written for this tool --------------------------
+ *
+ * 32-bit words only: unsigned long is 32 bits on every target this builds
+ * for, and the message length is kept as a byte count in two of them, so no
+ * 64-bit arithmetic is needed. Out of line, beside its constant table, for
+ * the reason the counter-name lookup is (an MSVC 6.0 /O2 miscompile of an
+ * inlined table lookup, task 36.35); -selftest-sha256 checks the real /O2
+ * binary against the FIPS 180-2 example vectors.
+ */
+typedef struct {
+    unsigned long State[8];
+    unsigned long BytesLo;
+    unsigned long BytesHi;
+    unsigned long Used;
+    unsigned char Block[64];
+} SNAP_SHA256;
+
+static const unsigned long sha256_k[64] = {
+    0x428a2f98UL, 0x71374491UL, 0xb5c0fbcfUL, 0xe9b5dba5UL,
+    0x3956c25bUL, 0x59f111f1UL, 0x923f82a4UL, 0xab1c5ed5UL,
+    0xd807aa98UL, 0x12835b01UL, 0x243185beUL, 0x550c7dc3UL,
+    0x72be5d74UL, 0x80deb1feUL, 0x9bdc06a7UL, 0xc19bf174UL,
+    0xe49b69c1UL, 0xefbe4786UL, 0x0fc19dc6UL, 0x240ca1ccUL,
+    0x2de92c6fUL, 0x4a7484aaUL, 0x5cb0a9dcUL, 0x76f988daUL,
+    0x983e5152UL, 0xa831c66dUL, 0xb00327c8UL, 0xbf597fc7UL,
+    0xc6e00bf3UL, 0xd5a79147UL, 0x06ca6351UL, 0x14292967UL,
+    0x27b70a85UL, 0x2e1b2138UL, 0x4d2c6dfcUL, 0x53380d13UL,
+    0x650a7354UL, 0x766a0abbUL, 0x81c2c92eUL, 0x92722c85UL,
+    0xa2bfe8a1UL, 0xa81a664bUL, 0xc24b8b70UL, 0xc76c51a3UL,
+    0xd192e819UL, 0xd6990624UL, 0xf40e3585UL, 0x106aa070UL,
+    0x19a4c116UL, 0x1e376c08UL, 0x2748774cUL, 0x34b0bcb5UL,
+    0x391c0cb3UL, 0x4ed8aa4aUL, 0x5b9cca4fUL, 0x682e6ff3UL,
+    0x748f82eeUL, 0x78a5636fUL, 0x84c87814UL, 0x8cc70208UL,
+    0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
+};
+
+#define SHA_ROTR(x, n)  ((((x) >> (n)) | ((x) << (32 - (n)))) & 0xFFFFFFFFUL)
+#define SHA_CH(x, y, z) (((x) & (y)) ^ (~(x) & (z)))
+#define SHA_MAJ(x, y, z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
+#define SHA_BSIG0(x)    (SHA_ROTR(x, 2) ^ SHA_ROTR(x, 13) ^ SHA_ROTR(x, 22))
+#define SHA_BSIG1(x)    (SHA_ROTR(x, 6) ^ SHA_ROTR(x, 11) ^ SHA_ROTR(x, 25))
+#define SHA_SSIG0(x)    (SHA_ROTR(x, 7) ^ SHA_ROTR(x, 18) ^ ((x) >> 3))
+#define SHA_SSIG1(x)    (SHA_ROTR(x, 17) ^ SHA_ROTR(x, 19) ^ ((x) >> 10))
+
+#pragma auto_inline(off)
+static void sha256_block(unsigned long *s, const unsigned char *p)
+{
+    unsigned long w[64];
+    unsigned long a, b, c, d, e, f, g, h, t1, t2;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = ((unsigned long)p[4 * i] << 24) |
+               ((unsigned long)p[4 * i + 1] << 16) |
+               ((unsigned long)p[4 * i + 2] << 8) |
+               (unsigned long)p[4 * i + 3];
+    }
+    for (i = 16; i < 64; i++) {
+        w[i] = (SHA_SSIG1(w[i - 2]) + w[i - 7] + SHA_SSIG0(w[i - 15]) +
+                w[i - 16]) & 0xFFFFFFFFUL;
+    }
+    a = s[0]; b = s[1]; c = s[2]; d = s[3];
+    e = s[4]; f = s[5]; g = s[6]; h = s[7];
+    for (i = 0; i < 64; i++) {
+        t1 = (h + SHA_BSIG1(e) + SHA_CH(e, f, g) + sha256_k[i] + w[i]) &
+             0xFFFFFFFFUL;
+        t2 = (SHA_BSIG0(a) + SHA_MAJ(a, b, c)) & 0xFFFFFFFFUL;
+        h = g;
+        g = f;
+        f = e;
+        e = (d + t1) & 0xFFFFFFFFUL;
+        d = c;
+        c = b;
+        b = a;
+        a = (t1 + t2) & 0xFFFFFFFFUL;
+    }
+    s[0] = (s[0] + a) & 0xFFFFFFFFUL;
+    s[1] = (s[1] + b) & 0xFFFFFFFFUL;
+    s[2] = (s[2] + c) & 0xFFFFFFFFUL;
+    s[3] = (s[3] + d) & 0xFFFFFFFFUL;
+    s[4] = (s[4] + e) & 0xFFFFFFFFUL;
+    s[5] = (s[5] + f) & 0xFFFFFFFFUL;
+    s[6] = (s[6] + g) & 0xFFFFFFFFUL;
+    s[7] = (s[7] + h) & 0xFFFFFFFFUL;
+}
+
+static void sha256_init(SNAP_SHA256 *c)
+{
+    c->State[0] = 0x6a09e667UL;
+    c->State[1] = 0xbb67ae85UL;
+    c->State[2] = 0x3c6ef372UL;
+    c->State[3] = 0xa54ff53aUL;
+    c->State[4] = 0x510e527fUL;
+    c->State[5] = 0x9b05688cUL;
+    c->State[6] = 0x1f83d9abUL;
+    c->State[7] = 0x5be0cd19UL;
+    c->BytesLo = 0;
+    c->BytesHi = 0;
+    c->Used = 0;
+}
+
+static void sha256_update(SNAP_SHA256 *c, const unsigned char *data,
+                          unsigned long n)
+{
+    unsigned long take;
+
+    c->BytesLo = (c->BytesLo + n) & 0xFFFFFFFFUL;
+    if (c->BytesLo < n) {
+        c->BytesHi++;
+    }
+    while (n > 0) {
+        take = 64 - c->Used;
+        if (take > n) {
+            take = n;
+        }
+        memcpy(c->Block + c->Used, data, take);
+        c->Used += take;
+        data += take;
+        n -= take;
+        if (c->Used == 64) {
+            sha256_block(c->State, c->Block);
+            c->Used = 0;
+        }
+    }
+}
+
+static void sha256_put_be(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)((v >> 24) & 0xFF);
+    p[1] = (unsigned char)((v >> 16) & 0xFF);
+    p[2] = (unsigned char)((v >> 8) & 0xFF);
+    p[3] = (unsigned char)(v & 0xFF);
+}
+
+static void sha256_final(SNAP_SHA256 *c, unsigned char *digest)
+{
+    unsigned long bitsHi;
+    unsigned long bitsLo;
+    int i;
+
+    bitsHi = ((c->BytesHi << 3) | (c->BytesLo >> 29)) & 0xFFFFFFFFUL;
+    bitsLo = (c->BytesLo << 3) & 0xFFFFFFFFUL;
+    c->Block[c->Used++] = 0x80;
+    if (c->Used > 56) {
+        memset(c->Block + c->Used, 0, 64 - c->Used);
+        sha256_block(c->State, c->Block);
+        c->Used = 0;
+    }
+    memset(c->Block + c->Used, 0, 56 - c->Used);
+    sha256_put_be(c->Block + 56, bitsHi);
+    sha256_put_be(c->Block + 60, bitsLo);
+    sha256_block(c->State, c->Block);
+    for (i = 0; i < 8; i++) {
+        sha256_put_be(digest + 4 * i, c->State[i]);
+    }
+}
+
+static void sha256_hex(const unsigned char *digest, char *out)
+{
+    static const char hex[] = "0123456789abcdef";
+    int i;
+
+    for (i = 0; i < 32; i++) {
+        out[2 * i] = hex[(digest[i] >> 4) & 0x0F];
+        out[2 * i + 1] = hex[digest[i] & 0x0F];
+    }
+    out[64] = '\0';
+}
+#pragma auto_inline(on)
+
+/*
+ * WOW64's file system redirection off around a read of the native
+ * system32, as driver_file_version does: the x86 tool on a 64-bit Windows
+ * would otherwise read SysWOW64. Both routines are looked up, so 98 SE, ME
+ * and 2000 never see them.
+ */
+static PVOID wowRedir;
+static int wowRedirOff;
+
+static void wow64_redirect_off(void)
+{
+    HMODULE k32;
+    PFN_W64DIS dis;
+
+    wowRedirOff = 0;
+    k32 = GetModuleHandleA("kernel32.dll");
+    if (k32 == NULL) {
+        return;
+    }
+    dis = (PFN_W64DIS)GetProcAddress(k32, "Wow64DisableWow64FsRedirection");
+    if (dis != NULL && GetProcAddress(k32, "Wow64RevertWow64FsRedirection")
+                           != NULL &&
+        dis(&wowRedir)) {
+        wowRedirOff = 1;
+    }
+}
+
+static void wow64_redirect_on(void)
+{
+    HMODULE k32;
+    PFN_W64REV rev;
+
+    if (!wowRedirOff) {
+        return;
+    }
+    wowRedirOff = 0;
+    k32 = GetModuleHandleA("kernel32.dll");
+    rev = (k32 != NULL)
+              ? (PFN_W64REV)GetProcAddress(k32, "Wow64RevertWow64FsRedirection")
+              : NULL;
+    if (rev != NULL) {
+        rev(wowRedir);
+    }
+}
+
+#define HASH_ABSENT   0
+#define HASH_OK       1
+#define HASH_FAILED   2
+
+#define HASH_CHUNK 16384
+static unsigned char hashChunk[HASH_CHUNK];
+
+/* The size and SHA-256 of one file, read through ReadFile in chunks. */
+static int file_sha256(const char *path, unsigned long *size,
+                       unsigned char *digest, unsigned long *error)
+{
+    HANDLE file;
+    SNAP_SHA256 ctx;
+    DWORD got;
+    DWORD high;
+    unsigned long total;
+
+    *size = 0;
+    *error = 0;
+    file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        *error = (unsigned long)GetLastError();
+        return (*error == ERROR_FILE_NOT_FOUND ||
+                *error == ERROR_PATH_NOT_FOUND) ? HASH_ABSENT : HASH_FAILED;
+    }
+    high = 0;
+    *size = (unsigned long)GetFileSize(file, &high);
+    if (*size == 0xFFFFFFFFUL && GetLastError() != NO_ERROR) {
+        *error = (unsigned long)GetLastError();
+        CloseHandle(file);
+        return HASH_FAILED;
+    }
+    if (high != 0) {
+        *error = 0;
+        CloseHandle(file);
+        return HASH_FAILED;
+    }
+    sha256_init(&ctx);
+    total = 0;
+    for (;;) {
+        got = 0;
+        if (!ReadFile(file, hashChunk, sizeof(hashChunk), &got, NULL)) {
+            *error = (unsigned long)GetLastError();
+            CloseHandle(file);
+            return HASH_FAILED;
+        }
+        if (got == 0) {
+            break;
+        }
+        sha256_update(&ctx, hashChunk, got);
+        total += got;
+    }
+    CloseHandle(file);
+    if (total != *size) {
+        *error = 0;
+        return HASH_FAILED;
+    }
+    sha256_final(&ctx, digest);
+    return HASH_OK;
+}
+
+/* A file's version resource as a.b.c.d into `out`; 0 when there is none. */
+static int file_version_text(const char *path, char *out, size_t outBytes)
+{
+    HMODULE ver;
+    PFN_GFVIS gfvis;
+    PFN_GFVI gfvi;
+    PFN_VQV vqv;
+    DWORD size, dummy;
+    void *block;
+    VS_FIXEDFILEINFO *ffi;
+    UINT len;
+    int ok;
+
+    ok = 0;
+    _snprintf(out, outBytes - 1, "not read (version.dll did not load)");
+    out[outBytes - 1] = '\0';
+    ver = LoadLibraryA("version.dll");
+    if (ver == NULL) {
+        return 0;
+    }
+    gfvis = (PFN_GFVIS)GetProcAddress(ver, "GetFileVersionInfoSizeA");
+    gfvi = (PFN_GFVI)GetProcAddress(ver, "GetFileVersionInfoA");
+    vqv = (PFN_VQV)GetProcAddress(ver, "VerQueryValueA");
+    if (gfvis == NULL || gfvi == NULL || vqv == NULL) {
+        _snprintf(out, outBytes - 1, "not read (version.dll lacks a routine)");
+        out[outBytes - 1] = '\0';
+        FreeLibrary(ver);
+        return 0;
+    }
+    size = gfvis((LPSTR)path, &dummy);
+    block = (size != 0) ? malloc(size) : NULL;
+    if (block == NULL) {
+        _snprintf(out, outBytes - 1, "none (no version resource)");
+    } else if (gfvi((LPSTR)path, 0, size, block) &&
+               vqv(block, "\\", (LPVOID *)&ffi, &len) &&
+               len >= sizeof(VS_FIXEDFILEINFO)) {
+        _snprintf(out, outBytes - 1, "%u.%u.%u.%u",
+                  (unsigned)HIWORD(ffi->dwFileVersionMS),
+                  (unsigned)LOWORD(ffi->dwFileVersionMS),
+                  (unsigned)HIWORD(ffi->dwFileVersionLS),
+                  (unsigned)LOWORD(ffi->dwFileVersionLS));
+        ok = 1;
+    } else {
+        _snprintf(out, outBytes - 1, "none (no version resource)");
+    }
+    out[outBytes - 1] = '\0';
+    free(block);
+    FreeLibrary(ver);
+    return ok;
+}
+
+/*
+ * `-selftest-sha256 BASE`: the FIPS 180-2 examples (one block, two blocks,
+ * a million 'a'), the empty message, then the file path: a million 'a'
+ * written to BASE.SHA and read back through file_sha256, and a missing file.
+ */
+static int selftest_sha_mem(const char *label, const unsigned char *data,
+                            unsigned long n, unsigned long repeat,
+                            const char *expect)
+{
+    SNAP_SHA256 ctx;
+    unsigned char digest[32];
+    char hex[65];
+    unsigned long i;
+
+    sha256_init(&ctx);
+    for (i = 0; i < repeat; i++) {
+        sha256_update(&ctx, data, n);
+    }
+    sha256_final(&ctx, digest);
+    sha256_hex(digest, hex);
+    printf("sha256 %s: %s %s\n", label, hex,
+           (strcmp(hex, expect) == 0) ? "ok" : "WRONG");
+    return (strcmp(hex, expect) == 0) ? 0 : 1;
+}
+
+static int selftest_sha256(const char *base)
+{
+    static const char million[] =
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0";
+    char path[MAX_PATH];
+    unsigned char buf[1000];
+    unsigned char digest[32];
+    char hex[65];
+    unsigned long size;
+    unsigned long err;
+    HANDLE file;
+    DWORD put;
+    int bad;
+    int rc;
+    int i;
+
+    bad = 0;
+    bad |= selftest_sha_mem("empty", (const unsigned char *)"", 0, 1,
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    bad |= selftest_sha_mem("abc", (const unsigned char *)"abc", 3, 1,
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    bad |= selftest_sha_mem("448-bit",
+        (const unsigned char *)
+        "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq", 56, 1,
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    memset(buf, 'a', sizeof(buf));
+    bad |= selftest_sha_mem("million a, 1000 x 1000", buf, 1000, 1000, million);
+    bad |= selftest_sha_mem("million a, 1000000 x 1", buf, 1, 1000000UL,
+                            million);
+
+    if (strlen(base) > (size_t)(MAX_PATH - 12)) {
+        printf("the basename is too long\n");
+        return 2;
+    }
+    sprintf(path, "%s.SHA", base);
+    file = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                       FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) {
+        printf("sha256 file: cannot create %s, error %lu\n", path,
+               (unsigned long)GetLastError());
+        return 1;
+    }
+    for (i = 0; i < 1000; i++) {
+        if (!WriteFile(file, buf, sizeof(buf), &put, NULL) ||
+            put != sizeof(buf)) {
+            printf("sha256 file: cannot write %s\n", path);
+            CloseHandle(file);
+            DeleteFileA(path);
+            return 1;
+        }
+    }
+    CloseHandle(file);
+    rc = file_sha256(path, &size, digest, &err);
+    DeleteFileA(path);
+    if (rc != HASH_OK) {
+        printf("sha256 file: not read, error %lu\n", err);
+        bad = 1;
+    } else {
+        sha256_hex(digest, hex);
+        printf("sha256 file %lu bytes: %s %s\n", size, hex,
+               (strcmp(hex, million) == 0 && size == 1000000UL) ? "ok"
+                                                                : "WRONG");
+        if (strcmp(hex, million) != 0 || size != 1000000UL) {
+            bad = 1;
+        }
+    }
+    rc = file_sha256(path, &size, digest, &err);
+    printf("sha256 file deleted: %s\n",
+           (rc == HASH_ABSENT) ? "not present" : "WRONG, it was read");
+    if (rc != HASH_ABSENT) {
+        bad = 1;
+    }
+    printf("[end]\n");
+    return bad ? 1 : 0;
+}
+
+/*
+ * ---- the device report's writers ------------------------------------------
+ */
+static void dev_line(const char *label, const char *fmt, ...)
+{
+    char buf[1024];
+    char lead[64];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    _snprintf(lead, sizeof(lead) - 1, "    %-13s", label);
+    lead[sizeof(lead) - 1] = '\0';
+    put_wrapped_to((companion != NULL) ? companion : stdout, lead,
+                   "                 ", buf);
+}
+
+/* `in` contains `needle`, ASCII case ignored. */
+static int text_has_ci(const char *in, const char *needle)
+{
+    size_t n;
+
+    n = strlen(needle);
+    for (; *in != '\0'; in++) {
+        if (_strnicmp(in, needle, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Registry data as text, a REG_MULTI_SZ joined with " / " - raw, for
+ * matching; what is printed goes through sys_clean. 1 read, 0 not. */
+static int reg_raw_text(HKEY root, const char *keyPath, const char *name,
+                        char *out, size_t outBytes)
+{
+    static char raw[2048];
+    HKEY key;
+    DWORD type;
+    DWORD bytes;
+    DWORD i;
+    LONG rc;
+    size_t n;
+
+    out[0] = '\0';
+    if (RegOpenKeyExA(root, keyPath, 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return 0;
+    }
+    memset(raw, 0, sizeof(raw));
+    bytes = sizeof(raw) - 2;
+    type = 0;
+    rc = RegQueryValueExA(key, name, NULL, &type, (LPBYTE)raw, &bytes);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS ||
+        (type != REG_SZ && type != REG_EXPAND_SZ && type != REG_MULTI_SZ)) {
+        return 0;
+    }
+    if (bytes > sizeof(raw) - 2) {
+        bytes = sizeof(raw) - 2;
+    }
+    raw[bytes] = '\0';
+    n = 0;
+    for (i = 0; i < bytes && raw[i] != '\0'; ) {
+        size_t len = strlen(raw + i);
+
+        if (n != 0 && n + 4 < outBytes) {
+            memcpy(out + n, " / ", 3);
+            n += 3;
+        }
+        if (n + len >= outBytes) {
+            len = outBytes - n - 1;
+        }
+        memcpy(out + n, raw + i, len);
+        n += len;
+        if (type != REG_MULTI_SZ || n + 1 >= outBytes) {
+            break;
+        }
+        i += (DWORD)strlen(raw + i) + 1;
+    }
+    out[n] = '\0';
+    return 1;
+}
+
+/* A DWORD from the registry, REG_DWORD or a four-byte REG_BINARY. */
+static int reg_dword(HKEY root, const char *keyPath, const char *name,
+                     unsigned long *value)
+{
+    HKEY key;
+    DWORD type;
+    DWORD bytes;
+    unsigned char data[4];
+    LONG rc;
+
+    if (RegOpenKeyExA(root, keyPath, 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return 0;
+    }
+    bytes = sizeof(data);
+    rc = RegQueryValueExA(key, name, NULL, &type, data, &bytes);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS || bytes != 4 ||
+        (type != REG_DWORD && type != REG_BINARY)) {
+        return 0;
+    }
+    *value = (unsigned long)data[0] | ((unsigned long)data[1] << 8) |
+             ((unsigned long)data[2] << 16) | ((unsigned long)data[3] << 24);
+    return 1;
+}
+
+/*
+ * A device id as the report prints it. **A USB instance id can be the
+ * device's serial number** (design record 13 section 10.7 gives a device one
+ * from its serial where it has a usable one, as Microsoft's hub does), and
+ * the report is pasted publicly, so the instance part of every id not under
+ * PCI\ or ROOT\ is withheld. A PCI instance id is a location.
+ */
+static void dev_public_id(const char *id, char *out, size_t outBytes)
+{
+    const char *slash;
+    size_t n;
+
+    if (_strnicmp(id, "PCI\\", 4) == 0 || _strnicmp(id, "ROOT\\", 5) == 0) {
+        sys_clean(id, out, outBytes);
+        return;
+    }
+    slash = strrchr(id, '\\');
+    if (slash == NULL) {
+        sys_clean(id, out, outBytes);
+        return;
+    }
+    {
+        char tmp[300];
+
+        n = (size_t)(slash - id) + 1;
+        if (n > sizeof(tmp) - 40) {
+            n = sizeof(tmp) - 40;
+        }
+        memcpy(tmp, id, n);
+        strcpy(tmp + n, "(instance withheld)");
+        sys_clean(tmp, out, outBytes);
+    }
+}
+
+#pragma auto_inline(off)
+static const char *dev_problem_name(unsigned long p)
+{
+    switch (p) {
+    case 0:  return "none";
+    case 1:  return "the device is not configured correctly";
+    case 3:  return "out of memory";
+    case 10: return "the device cannot start";
+    case 12: return "not enough free resources";
+    case 14: return "Windows must be restarted";
+    case 18: return "reinstall the drivers";
+    case 19: return "a registry problem";
+    case 21: return "Windows is removing the device";
+    case 22: return "the device is disabled";
+    case 24: return "the device is not present";
+    case 28: return "the drivers for the device are not installed";
+    case 29: return "the firmware disabled the device";
+    case 31: return "not working properly: the driver did not add it";
+    case 32: return "the driver's service is disabled";
+    case 37: return "the driver's DriverEntry failed";
+    case 38: return "a previous instance of the driver is still loaded";
+    case 39: return "the driver could not be loaded (missing or corrupt)";
+    case 40: return "the driver's service key is invalid";
+    case 41: return "the driver loaded but found no hardware";
+    case 43: return "the driver reported that the device failed";
+    case 45: return "the device is not connected";
+    case 47: return "held for safe removal";
+    case 48: return "the driver is blocked from loading";
+    case 52: return "Windows cannot verify the driver's digital signature";
+    default: return "see Device Manager's list of codes";
+    }
+}
+
+static void dev_status_text(unsigned long st, char *out, size_t outBytes)
+{
+    static const struct {
+        unsigned long Bit;
+        const char *Name;
+    } bits[] = {
+        { 0x00000008UL, "started" },
+        { 0x00000002UL, "driver loaded" },
+        { 0x00000400UL, "HAS A PROBLEM" },
+        { 0x00008000UL, "private problem" },
+        { 0x00000100UL, "needs restart (NT)" },
+        { 0x00040000UL, "being removed" },
+        { 0x00002000UL, "disableable" },
+        { 0x00004000UL, "removable" },
+        { 0x40000000UL, "hidden" }
+    };
+    size_t n;
+    int i;
+
+    _snprintf(out, outBytes - 1, "%08lX", st);
+    out[outBytes - 1] = '\0';
+    n = strlen(out);
+    for (i = 0; i < (int)(sizeof(bits) / sizeof(bits[0])); i++) {
+        if ((st & bits[i].Bit) != 0) {
+            size_t len = strlen(bits[i].Name);
+
+            if (n + len + 3 >= outBytes) {
+                break;
+            }
+            strcpy(out + n, (n == 8) ? ": " : ", ");
+            n += 2;
+            strcpy(out + n, bits[i].Name);
+            n += len;
+        }
+    }
+    if ((st & 0x00000008UL) == 0 && n + 16 < outBytes) {
+        strcpy(out + n, (n == 8) ? ": NOT started" : ", NOT started");
+    }
+}
+#pragma auto_inline(on)
+
+/* ---- the configuration manager, looked up at run time ------------------- */
+
+#define CMX_SUCCESS             0x00000000UL
+#define CMX_NO_MORE_LOG_CONF    0x0000000EUL
+#define CMX_ALLOC_LOG_CONF      0x00000002UL
+#define CMX_BOOT_LOG_CONF       0x00000003UL
+#define CMX_DRP_DEVICEDESC      0x00000001UL
+#define CMX_DRP_HARDWAREID      0x00000002UL
+#define CMX_DRP_COMPATIBLEIDS   0x00000003UL
+#define CMX_DRP_SERVICE         0x00000005UL
+#define CMX_DRP_DRIVER          0x0000000AUL
+#define CMX_DN_HAS_PROBLEM      0x00000400UL
+
+typedef DWORD (WINAPI *PFN_CM_LOCATE)(DWORD *, char *, ULONG);
+typedef DWORD (WINAPI *PFN_CM_REL)(DWORD *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_ID)(DWORD, char *, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_STATUS)(ULONG *, ULONG *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
+                                    ULONG);
+typedef DWORD (WINAPI *PFN_CM_FIRSTLC)(DWORD *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_NEXTRD)(DWORD *, DWORD, ULONG, ULONG *, ULONG);
+typedef DWORD (WINAPI *PFN_CM_RDSIZE)(ULONG *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_RDDATA)(DWORD, void *, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_FREE)(DWORD);
+
+static struct {
+    HMODULE Module;
+    DWORD LoadError;
+    PFN_CM_LOCATE Locate;
+    PFN_CM_REL Child;
+    PFN_CM_REL Sibling;
+    PFN_CM_ID DeviceId;
+    PFN_CM_STATUS Status;
+    PFN_CM_PROP Property;
+    PFN_CM_FIRSTLC FirstLogConf;
+    PFN_CM_NEXTRD NextResDes;
+    PFN_CM_RDSIZE ResDesSize;
+    PFN_CM_RDDATA ResDesData;
+    PFN_CM_FREE FreeResDes;
+    PFN_CM_FREE FreeLogConf;
+} cmx;
+
+static void cmx_load(void)
+{
+    memset(&cmx, 0, sizeof(cmx));
+    cmx.Module = LoadLibraryA("cfgmgr32.dll");
+    if (cmx.Module == NULL) {
+        cmx.LoadError = GetLastError();
+        return;
+    }
+    cmx.Locate = (PFN_CM_LOCATE)GetProcAddress(cmx.Module, "CM_Locate_DevNodeA");
+    cmx.Child = (PFN_CM_REL)GetProcAddress(cmx.Module, "CM_Get_Child");
+    cmx.Sibling = (PFN_CM_REL)GetProcAddress(cmx.Module, "CM_Get_Sibling");
+    cmx.DeviceId = (PFN_CM_ID)GetProcAddress(cmx.Module, "CM_Get_Device_IDA");
+    cmx.Status = (PFN_CM_STATUS)GetProcAddress(cmx.Module,
+                                               "CM_Get_DevNode_Status");
+    cmx.Property = (PFN_CM_PROP)GetProcAddress(cmx.Module,
+                                     "CM_Get_DevNode_Registry_PropertyA");
+    cmx.FirstLogConf = (PFN_CM_FIRSTLC)GetProcAddress(cmx.Module,
+                                                      "CM_Get_First_Log_Conf");
+    cmx.NextResDes = (PFN_CM_NEXTRD)GetProcAddress(cmx.Module,
+                                                   "CM_Get_Next_Res_Des");
+    cmx.ResDesSize = (PFN_CM_RDSIZE)GetProcAddress(cmx.Module,
+                                                   "CM_Get_Res_Des_Data_Size");
+    cmx.ResDesData = (PFN_CM_RDDATA)GetProcAddress(cmx.Module,
+                                                   "CM_Get_Res_Des_Data");
+    cmx.FreeResDes = (PFN_CM_FREE)GetProcAddress(cmx.Module,
+                                                 "CM_Free_Res_Des_Handle");
+    cmx.FreeLogConf = (PFN_CM_FREE)GetProcAddress(cmx.Module,
+                                                  "CM_Free_Log_Conf_Handle");
+}
+
+static void cmx_unload(void)
+{
+    if (cmx.Module != NULL) {
+        FreeLibrary(cmx.Module);
+    }
+    memset(&cmx, 0, sizeof(cmx));
+}
+
+/* One devnode property as text, from the configuration manager, else from
+ * the devnode's own registry key (Enum\<id> on 9x, the NT Enum key). */
+static int dev_prop(DWORD dn, int haveDn, const char *id, ULONG prop,
+                    const char *regName, char *out, size_t outBytes)
+{
+    static char raw[2048];
+    char path[400];
+    ULONG type;
+    ULONG len;
+    ULONG i;
+    size_t n;
+
+    out[0] = '\0';
+    if (haveDn && cmx.Property != NULL) {
+        memset(raw, 0, sizeof(raw));
+        len = sizeof(raw) - 2;
+        type = 0;
+        if (cmx.Property(dn, prop, &type, raw, &len, 0) == CMX_SUCCESS) {
+            if (len > sizeof(raw) - 2) {
+                len = sizeof(raw) - 2;
+            }
+            raw[len] = '\0';
+            n = 0;
+            for (i = 0; i < len && raw[i] != '\0'; ) {
+                size_t l = strlen(raw + i);
+
+                if (n != 0 && n + 4 < outBytes) {
+                    memcpy(out + n, " / ", 3);
+                    n += 3;
+                }
+                if (n + l >= outBytes) {
+                    l = outBytes - n - 1;
+                }
+                memcpy(out + n, raw + i, l);
+                n += l;
+                if (type != REG_MULTI_SZ || n + 1 >= outBytes) {
+                    break;
+                }
+                i += (ULONG)strlen(raw + i) + 1;
+            }
+            out[n] = '\0';
+            return 1;
+        }
+    }
+    if (strlen(id) + 40 > sizeof(path)) {
+        return 0;
+    }
+    sprintf(path, "SYSTEM\\CurrentControlSet\\Enum\\%s", id);
+    if (reg_raw_text(HKEY_LOCAL_MACHINE, path, regName, out, outBytes)) {
+        return 1;
+    }
+    sprintf(path, "Enum\\%s", id);
+    return reg_raw_text(HKEY_LOCAL_MACHINE, path, regName, out, outBytes);
+}
+
+static unsigned long rd32(const unsigned char *b, unsigned long at)
+{
+    return (unsigned long)b[at] | ((unsigned long)b[at + 1] << 8) |
+           ((unsigned long)b[at + 2] << 16) | ((unsigned long)b[at + 3] << 24);
+}
+
+static unsigned long rd16(const unsigned char *b, unsigned long at)
+{
+    return (unsigned long)b[at] | ((unsigned long)b[at + 1] << 8);
+}
+
+/* An NT-shaped descriptor (cfgmgr32.h, packed): a count and a range size
+ * first, then a header of `hdr` bytes and `count` ranges. */
+static int res_nt_shape(unsigned long size, unsigned long hdr,
+                        const unsigned char *b)
+{
+    unsigned long count;
+    unsigned long type;
+
+    if (size < hdr || size < 8) {
+        return 0;
+    }
+    count = rd32(b, 0);
+    type = rd32(b, 4);
+    if (count > 64 || type > 256) {
+        return 0;
+    }
+    return (size - hdr == count * type) ? 1 : 0;
+}
+
+static void res_hex(const char *label, unsigned long rid,
+                    const unsigned char *b, unsigned long size)
+{
+    char hex[3 * 32 + 1];
+    unsigned long i;
+    unsigned long n;
+
+    n = (size > 32) ? 32 : size;
+    for (i = 0; i < n; i++) {
+        sprintf(hex + 3 * i, "%02X ", (unsigned)b[i]);
+    }
+    hex[3 * n] = '\0';
+    dev_line(label, "resource type %lu, %lu bytes in a layout this tool does "
+             "not decode: %s%s", rid, size, hex, (size > n) ? "..." : "");
+}
+
+#pragma auto_inline(off)
+static void res_decode(unsigned long rid, const unsigned char *b,
+                       unsigned long size)
+{
+    unsigned long base, end, baseHi, endHi, flags, num;
+
+    switch (rid) {
+    case 1:
+        if (res_nt_shape(size, 32, b)) {
+            base = rd32(b, 8);
+            baseHi = rd32(b, 12);
+            end = rd32(b, 16);
+            endHi = rd32(b, 20);
+            flags = rd32(b, 24);
+        } else if (size >= 16 && rd16(b, 2) != 0 &&
+                   size == 16 + rd16(b, 0) * rd16(b, 2)) {
+            base = rd32(b, 4);
+            end = rd32(b, 8);
+            baseHi = 0;
+            endHi = 0;
+            flags = rd16(b, 12);
+        } else {
+            res_hex("memory", rid, b, size);
+            return;
+        }
+        if (baseHi == 0 && endHi == 0 && end >= base) {
+            dev_line("memory", "%08lX-%08lX (%lu KB)%s%s", base, end,
+                     ((end - base) >> 10) + 1,
+                     (flags & 0x04) ? ", prefetchable" : "",
+                     (flags & 0x01) ? "" : ", read-only");
+        } else {
+            dev_line("memory", "%08lX%08lX-%08lX%08lX%s", baseHi, base, endHi,
+                     end, (flags & 0x04) ? ", prefetchable" : "");
+        }
+        return;
+    case 2:
+        if (res_nt_shape(size, 28, b)) {
+            base = rd32(b, 8);
+            end = rd32(b, 16);
+        } else if (size >= 12 && rd16(b, 2) != 0 &&
+                   size == 12 + rd16(b, 0) * rd16(b, 2)) {
+            base = rd16(b, 4);
+            end = rd16(b, 6);
+        } else {
+            res_hex("I/O", rid, b, size);
+            return;
+        }
+        dev_line("I/O", "%04lX-%04lX", base, end);
+        return;
+    case 3:
+        if (res_nt_shape(size, 16, b)) {
+            num = rd32(b, 12);
+        } else if (size == 4) {
+            num = b[1];
+        } else {
+            res_hex("DMA", rid, b, size);
+            return;
+        }
+        dev_line("DMA", "channel %lu", num);
+        return;
+    case 4:
+        if (res_nt_shape(size, 20, b)) {
+            flags = rd32(b, 8);
+            num = rd32(b, 12);
+        } else if (size == 8) {
+            flags = rd16(b, 0);
+            num = rd16(b, 2);
+        } else {
+            res_hex("IRQ", rid, b, size);
+            return;
+        }
+        if ((num & 0x80000000UL) != 0) {
+            /* Windows lists a message-signalled interrupt this way (Device
+             * Manager prints the number as a large unsigned value). */
+            dev_line("IRQ", "%lu, which is %ld as a signed number: a "
+                     "message-signalled interrupt (MSI)%s", num, (long)num,
+                     (flags & 0x01) ? ", shared" : "");
+        } else {
+            dev_line("IRQ", "%lu, %s, %s", num,
+                     (flags & 0x01) ? "shared" : "exclusive",
+                     (flags & 0x02) ? "edge" : "level");
+        }
+        return;
+    case 6:
+        if (size >= 20 && res_nt_shape(size, 20, b)) {
+            dev_line("bus number", "%lu-%lu", rd32(b, 12), rd32(b, 16));
+        } else {
+            res_hex("bus number", rid, b, size);
+        }
+        return;
+    case 0x8001UL:
+        dev_line("private", "device private data, %lu bytes", size);
+        return;
+    default:
+        res_hex("other", rid, b, size);
+        return;
+    }
+}
+#pragma auto_inline(on)
+
+static unsigned char resBuf[1024];
+
+/*
+ * The resources from HKLM\HARDWARE\RESOURCEMAP\PnP Manager\PnpManager,
+ * where NT's PnP manager records each started device's assignment as a
+ * REG_RESOURCE_LIST under its PDO's name. This is the route on a 64-bit
+ * Windows, where the x86 cfgmgr32.dll answers the log configuration calls
+ * with CR_CALL_NOT_IMPLEMENTED (read on the build host, 2026-10-13), and
+ * HARDWARE is not redirected under WOW64. The descriptors are the kernel's
+ * own, so a native x64 list has 20-byte partial descriptors (KAFFINITY is 8
+ * bytes there) and an x86 one 16; the length tells which. The .Raw list is
+ * read: bus-relative, so an interrupt is its line, or for a message-signalled
+ * one the flag and the number Device Manager shows.
+ */
+#define RESMAP_KEY "HARDWARE\\RESOURCEMAP\\PnP Manager\\PnpManager"
+
+static unsigned char resMapBuf[2048];
+
+static int res_map_fits(unsigned long len, unsigned long d)
+{
+    unsigned long at;
+    unsigned long full;
+    unsigned long fulls;
+    unsigned long count;
+
+    if (len < 4) {
+        return 0;
+    }
+    fulls = rd32(resMapBuf, 0);
+    if (fulls == 0 || fulls > 16) {
+        return 0;
+    }
+    at = 4;
+    for (full = 0; full < fulls; full++) {
+        if (at + 16 > len) {
+            return 0;
+        }
+        count = rd32(resMapBuf, at + 12);
+        if (count > 64) {
+            return 0;
+        }
+        at += 16 + count * d;
+    }
+    return (at == len) ? 1 : 0;
+}
+
+#pragma auto_inline(off)
+static void res_map_one(const unsigned char *p, unsigned long d)
+{
+    unsigned long type;
+    unsigned long flags;
+    unsigned long lo;
+    unsigned long hi;
+    unsigned long len;
+
+    type = p[0];
+    flags = rd16(p, 2);
+    switch (type) {
+    case 1:
+        lo = rd32(p, 4);
+        len = rd32(p, 12);
+        dev_line("I/O", "%04lX-%04lX", lo, (len != 0) ? lo + len - 1 : lo);
+        return;
+    case 2:
+        if ((flags & 0x0002) != 0) {
+            dev_line("IRQ", "message-signalled (MSI), %lu message(s), "
+                     "number %lu (%ld as a signed number, as Device Manager "
+                     "shows it)", rd16(p, 6), rd32(p, 8), (long)rd32(p, 8));
+        } else {
+            dev_line("IRQ", "%lu, %s, %s", rd32(p, 8),
+                     (p[1] == 3) ? "shared" : "exclusive",
+                     (flags & 0x0001) ? "edge" : "level");
+        }
+        return;
+    case 3:
+        lo = rd32(p, 4);
+        hi = rd32(p, 8);
+        len = rd32(p, 12);
+        if (hi == 0 && len != 0) {
+            dev_line("memory", "%08lX-%08lX (%lu KB)%s%s", lo, lo + len - 1,
+                     len >> 10, (flags & 0x0004) ? ", prefetchable" : "",
+                     (flags & 0x0001) ? ", read-only" : "");
+        } else {
+            dev_line("memory", "%08lX%08lX, length %lu", hi, lo, len);
+        }
+        return;
+    case 4:
+        dev_line("DMA", "channel %lu", rd32(p, 4));
+        return;
+    case 6:
+        lo = rd32(p, 4);
+        len = rd32(p, 8);
+        dev_line("bus number", "%lu-%lu", lo, (len != 0) ? lo + len - 1 : lo);
+        return;
+    case 7:
+        dev_line("memory", "large: %08lX%08lX, length field %08lX, flags "
+                 "%04lX", rd32(p, 8), rd32(p, 4), rd32(p, 12), flags);
+        return;
+    default:
+        /* Device-specific and private descriptors (5, 0x80 and up) carry
+         * nothing a reader of this report needs. */
+        (void)d;
+        return;
+    }
+}
+#pragma auto_inline(on)
+
+static int res_map(DWORD dn, int haveDn, const char *id)
+{
+    char pdo[200];
+    char value[240];
+    HKEY key;
+    DWORD type;
+    DWORD bytes;
+    LONG rc;
+    unsigned long d;
+    unsigned long at;
+    unsigned long full;
+    unsigned long fulls;
+    unsigned long count;
+    unsigned long k;
+
+    if (!dev_prop(dn, haveDn, id, 0x0000000FUL, "PhysicalDeviceObjectName",
+                  pdo, sizeof(pdo)) || pdo[0] == '\0' ||
+        strlen(pdo) + 8 > sizeof(value)) {
+        return 0;
+    }
+    sprintf(value, "%s.Raw", pdo);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, RESMAP_KEY, 0, KEY_READ, &key) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    bytes = sizeof(resMapBuf);
+    type = 0;
+    rc = RegQueryValueExA(key, value, NULL, &type, resMapBuf, &bytes);
+    RegCloseKey(key);
+    if (rc == ERROR_FILE_NOT_FOUND) {
+        dev_line("resources", "none recorded (HARDWARE\\RESOURCEMAP has no "
+                 "entry for this device)");
+        return 1;
+    }
+    if (rc != ERROR_SUCCESS || type != 8 /* REG_RESOURCE_LIST */) {
+        return 0;
+    }
+    if (res_map_fits(bytes, 16)) {
+        d = 16;
+    } else if (res_map_fits(bytes, 20)) {
+        d = 20;
+    } else {
+        dev_line("resources", "HARDWARE\\RESOURCEMAP's entry, %lu bytes, is "
+                 "in a layout this tool does not decode", (unsigned long)bytes);
+        return 1;
+    }
+    dev_line("resources", "allocated (HARDWARE\\RESOURCEMAP, raw):");
+    fulls = rd32(resMapBuf, 0);
+    at = 4;
+    for (full = 0; full < fulls; full++) {
+        count = rd32(resMapBuf, at + 12);
+        at += 16;
+        for (k = 0; k < count; k++) {
+            res_map_one(resMapBuf + at, d);
+            at += d;
+        }
+    }
+    return 1;
+}
+
+/* One logical configuration's resources: 1 printed, 0 none of that kind,
+ * -1 the call failed (*why says how). */
+static int dev_log_conf(DWORD dn, ULONG which, const char *heading,
+                        unsigned long *why)
+{
+    DWORD lc;
+    DWORD cur;
+    DWORD rd;
+    ULONG rid;
+    ULONG size;
+    DWORD rc;
+    int n;
+
+    lc = 0;
+    rc = cmx.FirstLogConf(&lc, dn, which);
+    if (rc == CMX_NO_MORE_LOG_CONF) {
+        return 0;
+    }
+    if (rc != CMX_SUCCESS) {
+        *why = (unsigned long)rc;
+        return -1;
+    }
+    dev_line("resources", "%s", heading);
+    cur = lc;
+    n = 0;
+    for (;;) {
+        rd = 0;
+        rid = 0;
+        rc = cmx.NextResDes(&rd, cur, 0, &rid, 0);
+        if (cur != lc && cmx.FreeResDes != NULL) {
+            cmx.FreeResDes(cur);
+        }
+        cur = lc;
+        if (rc != CMX_SUCCESS) {
+            break;
+        }
+        cur = rd;
+        n++;
+        size = 0;
+        if (cmx.ResDesSize(&size, rd, 0) != CMX_SUCCESS) {
+            dev_line("", "type %lu: not read: CM_Get_Res_Des_Data_Size "
+                     "failed", (unsigned long)rid);
+        } else if (size > sizeof(resBuf)) {
+            dev_line("", "type %lu: %lu bytes, more than this tool reads",
+                     (unsigned long)rid, (unsigned long)size);
+        } else {
+            memset(resBuf, 0, sizeof(resBuf));
+            rc = cmx.ResDesData(rd, resBuf, size, 0);
+            if (rc != CMX_SUCCESS) {
+                dev_line("", "type %lu: not read: CM_Get_Res_Des_Data "
+                         "answered %lu", (unsigned long)rid,
+                         (unsigned long)rc);
+            } else {
+                res_decode(rid, resBuf, size);
+            }
+        }
+        if (n >= 64) {
+            dev_line("", "more than 64 resources; the rest are not read");
+            break;
+        }
+    }
+    if (cur != lc && cmx.FreeResDes != NULL) {
+        cmx.FreeResDes(cur);
+    }
+    if (n == 0) {
+        dev_line("", "(empty)");
+    }
+    if (cmx.FreeLogConf != NULL) {
+        cmx.FreeLogConf(lc);
+    }
+    return 1;
+}
+
+static void dev_resources(DWORD dn, int haveDn, const char *id)
+{
+    unsigned long why;
+    int got;
+
+    if (!haveDn) {
+        dev_line("resources", "not read: they need cfgmgr32.dll, which did "
+                 "not answer on this system");
+        return;
+    }
+    if (cmx.FirstLogConf == NULL || cmx.NextResDes == NULL ||
+        cmx.ResDesSize == NULL || cmx.ResDesData == NULL) {
+        if (!res_map(dn, haveDn, id)) {
+            dev_line("resources", "not read: cfgmgr32.dll has no "
+                     "CM_Get_First_Log_Conf, CM_Get_Next_Res_Des or "
+                     "CM_Get_Res_Des_Data here, and HARDWARE\\RESOURCEMAP "
+                     "has no readable entry");
+        }
+        return;
+    }
+    why = 0;
+    got = dev_log_conf(dn, CMX_ALLOC_LOG_CONF, "allocated:", &why);
+    if (got < 0) {
+        /* 52 is CR_CALL_NOT_IMPLEMENTED, the x86 DLL under WOW64. */
+        if (!res_map(dn, haveDn, id)) {
+            dev_line("resources", "not read: CM_Get_First_Log_Conf answered "
+                     "%lu, and HARDWARE\\RESOURCEMAP has no readable entry",
+                     why);
+        }
+        return;
+    }
+    if (got == 0) {
+        dev_line("resources", "none allocated");
+        dev_log_conf(dn, CMX_BOOT_LOG_CONF,
+                     "the boot configuration (what the firmware assigned):",
+                     &why);
+    }
+}
+
+static int devListed;
+static int devSeen;
+
+/*
+ * One devnode: listed when it is a PCI xHCI controller (class code 0C0330
+ * in a hardware or compatible id), whatever drives it, or when xhci98.sys
+ * or xhciuas.sys drives it - on NT by its service, on 9x by NTMPDriver in
+ * its driver key, which is how key_match tells this driver's keys there.
+ */
+static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
+                         unsigned long st, unsigned long prob)
+{
+    static char hw[1024];
+    static char compat[1024];
+    char service[64];
+    char driver[200];
+    char ntmp[64];
+    char keyPath[300];
+    char text[SYS_TEXT_MAX + 8];
+    char text2[SYS_TEXT_MAX + 8];
+    char status[160];
+    int isXhci;
+    int ours;
+    int haveDriverKey;
+    HKEY probe;
+    char shown[SYS_TEXT_MAX + 8];
+
+    devSeen++;
+    dev_prop(dn, haveDn, id, CMX_DRP_HARDWAREID, "HardwareID", hw, sizeof(hw));
+    dev_prop(dn, haveDn, id, CMX_DRP_COMPATIBLEIDS, "CompatibleIDs", compat,
+             sizeof(compat));
+    dev_prop(dn, haveDn, id, CMX_DRP_SERVICE, "Service", service,
+             sizeof(service));
+    dev_prop(dn, haveDn, id, CMX_DRP_DRIVER, "Driver", driver, sizeof(driver));
+
+    ntmp[0] = '\0';
+    haveDriverKey = 0;
+    if (driver[0] != '\0' && strlen(driver) + 60 < sizeof(keyPath)) {
+        /* The driver value is <class>\<instance> under the class root: the
+         * NT root first, then 9x's, as find_driver_keys searches both. */
+        sprintf(keyPath, "SYSTEM\\CurrentControlSet\\Control\\Class\\%s",
+                driver);
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ,
+                          &probe) == ERROR_SUCCESS) {
+            RegCloseKey(probe);
+            haveDriverKey = 1;
+        } else {
+            sprintf(keyPath, "System\\CurrentControlSet\\Services\\Class\\%s",
+                    driver);
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_READ,
+                              &probe) == ERROR_SUCCESS) {
+                RegCloseKey(probe);
+                haveDriverKey = 1;
+            }
+        }
+        if (haveDriverKey) {
+            reg_raw_text(HKEY_LOCAL_MACHINE, keyPath, "NTMPDriver", ntmp,
+                         sizeof(ntmp));
+        }
+    }
+
+    isXhci = (_strnicmp(id, "PCI\\", 4) == 0) &&
+             (text_has_ci(hw, "CC_0C0330") || text_has_ci(compat, "CC_0C0330"));
+    ours = (_stricmp(service, "xhci98") == 0 ||
+            _stricmp(service, "xhciuas") == 0 ||
+            _stricmp(ntmp, "xhci98.sys") == 0 ||
+            _stricmp(ntmp, "xhciuas.sys") == 0);
+    if (!isXhci && !ours) {
+        return;
+    }
+    devListed++;
+
+    comp("\n  device %d: %s\n", devListed,
+         isXhci ? (ours ? "a PCI xHCI controller, driven by xhci98"
+                        : "a PCI xHCI controller")
+                : ((_stricmp(service, "xhciuas") == 0 ||
+                    _stricmp(ntmp, "xhciuas.sys") == 0)
+                       ? "driven by xhciuas" : "driven by xhci98"));
+    dev_public_id(id, shown, sizeof(shown));
+    dev_line("id", "%s", shown);
+    if (dev_prop(dn, haveDn, id, CMX_DRP_DEVICEDESC, "DeviceDesc", hw,
+                 sizeof(hw)) && hw[0] != '\0') {
+        sys_clean(hw, text, sizeof(text));
+        dev_line("description", "%s", text);
+    } else {
+        dev_line("description", "not read");
+    }
+    if (service[0] != '\0') {
+        sys_clean(service, text, sizeof(text));
+        dev_line("service", "%s", text);
+    } else {
+        dev_line("service", "none named (on 98 SE and ME a WDM driver is "
+                 "named by NTMPDriver instead)");
+    }
+    if (driver[0] == '\0') {
+        dev_line("driver key", "none: no driver is installed for it");
+    } else if (!haveDriverKey) {
+        sys_clean(driver, text, sizeof(text));
+        dev_line("driver key", "%s, which does not open", text);
+    } else {
+        static const char *const names[] = {
+            "NTMPDriver", "InfSection", "DriverVersion", "DriverDate", NULL
+        };
+        int k;
+
+        sys_clean(driver, text, sizeof(text));
+        dev_line("driver key", "%s", text);
+        for (k = 0; names[k] != NULL; k++) {
+            if (reg_raw_text(HKEY_LOCAL_MACHINE, keyPath, names[k], hw,
+                             sizeof(hw))) {
+                sys_clean(hw, text2, sizeof(text2));
+                dev_line("", "%s = %s", names[k], text2);
+            }
+        }
+    }
+
+    if (!haveSt && haveDn) {
+        if (cmx.Status == NULL) {
+            dev_line("status", "not read: cfgmgr32.dll has no "
+                     "CM_Get_DevNode_Status");
+        } else {
+            ULONG s;
+            ULONG p;
+            DWORD rc;
+
+            s = 0;
+            p = 0;
+            rc = cmx.Status(&s, &p, dn, 0);
+            if (rc == CMX_SUCCESS) {
+                haveSt = 1;
+                st = s;
+                prob = p;
+            } else {
+                dev_line("status", "not read: CM_Get_DevNode_Status "
+                         "answered %lu", (unsigned long)rc);
+            }
+        }
+    }
+    if (haveSt) {
+        dev_status_text(st, status, sizeof(status));
+        dev_line("status", "%s", status);
+        if ((st & CMX_DN_HAS_PROBLEM) != 0 || prob != 0) {
+            dev_line("problem", "Code %lu: %s", prob, dev_problem_name(prob));
+        } else {
+            dev_line("problem", "none");
+        }
+        if ((st & CMX_DN_HAS_PROBLEM) != 0 || prob != 0) {
+            say_hang("  ", "    ", "%s: %s, Code %lu", shown,
+                     ((st & 0x00000008UL) != 0) ? "started" : "NOT started",
+                     prob);
+        } else {
+            say_hang("  ", "    ", "%s: %s", shown,
+                     ((st & 0x00000008UL) != 0) ? "started" : "NOT started");
+        }
+    } else {
+        dev_line("status", "not read");
+        say_hang("  ", "    ", "%s: status not read", shown);
+    }
+    dev_resources(dn, haveDn, id);
+}
+
+static void dev_walk(DWORD dn, int depth)
+{
+    char id[400];
+    DWORD child;
+    DWORD next;
+
+    if (devSeen > 4096) {
+        return;
+    }
+    if (cmx.DeviceId(dn, id, sizeof(id), 0) == CMX_SUCCESS) {
+        id[sizeof(id) - 1] = '\0';
+        dev_consider(dn, 1, id, 0, 0, 0);
+    }
+    if (depth >= 64 || cmx.Child(&child, dn, 0) != CMX_SUCCESS) {
+        return;
+    }
+    for (;;) {
+        dev_walk(child, depth + 1);
+        if (devSeen > 4096 || cmx.Sibling(&next, child, 0) != CMX_SUCCESS) {
+            break;
+        }
+        child = next;
+    }
+}
+
+/* 98 SE and ME without a working cfgmgr32.dll: the configuration manager's
+ * own list of devnodes, which carries each one's status and problem. */
+static int dev_walk_dyn(void)
+{
+    HKEY parent;
+    char name[64];
+    char keyPath[128];
+    char id[400];
+    unsigned long st;
+    unsigned long prob;
+    int haveSt;
+    DWORD nameLen;
+    DWORD index;
+
+    if (RegOpenKeyExA(HKEY_DYN_DATA, "Config Manager\\Enum", 0, KEY_READ,
+                      &parent) != ERROR_SUCCESS) {
+        return 0;
+    }
+    for (index = 0; devSeen <= 4096; index++) {
+        nameLen = sizeof(name);
+        if (RegEnumKeyExA(parent, index, name, &nameLen, NULL, NULL, NULL,
+                          NULL) != ERROR_SUCCESS) {
+            break;
+        }
+        _snprintf(keyPath, sizeof(keyPath) - 1, "Config Manager\\Enum\\%s",
+                  name);
+        keyPath[sizeof(keyPath) - 1] = '\0';
+        if (!reg_raw_text(HKEY_DYN_DATA, keyPath, "HardWareKey", id,
+                          sizeof(id))) {
+            continue;
+        }
+        st = 0;
+        prob = 0;
+        haveSt = reg_dword(HKEY_DYN_DATA, keyPath, "Status", &st) &&
+                 reg_dword(HKEY_DYN_DATA, keyPath, "Problem", &prob);
+        dev_consider(0, 0, id, haveSt, st, prob);
+    }
+    RegCloseKey(parent);
+    return 1;
+}
+
+static void write_dev_devices(void)
+{
+    DWORD root;
+    DWORD rc;
+
+    comp("\n  devices - every PCI xHCI controller (class code 0C0330), "
+         "whatever drives it,\n  and every devnode xhci98.sys or xhciuas.sys "
+         "drives:\n");
+    devListed = 0;
+    devSeen = 0;
+    cmx_load();
+    if (cmx.Module == NULL) {
+        comp("    configuration manager: not read: cfgmgr32.dll did not load "
+             "(error %lu)\n", (unsigned long)cmx.LoadError);
+    } else if (cmx.Locate == NULL || cmx.Child == NULL ||
+               cmx.Sibling == NULL || cmx.DeviceId == NULL) {
+        comp("    configuration manager: not read: cfgmgr32.dll lacks "
+             "CM_Locate_DevNodeA, CM_Get_Child, CM_Get_Sibling or "
+             "CM_Get_Device_IDA\n");
+    } else {
+        root = 0;
+        rc = cmx.Locate(&root, NULL, 0);
+        if (rc != CMX_SUCCESS) {
+            comp("    configuration manager: not read: CM_Locate_DevNodeA "
+                 "answered %lu\n", (unsigned long)rc);
+        } else {
+            comp("    (read through cfgmgr32.dll)\n");
+            dev_walk(root, 0);
+        }
+    }
+    if (devSeen == 0) {
+        if (dev_walk_dyn()) {
+            comp("    (read from HKEY_DYN_DATA\\Config Manager\\Enum: status "
+                 "and problem, no resources)\n");
+        } else {
+            comp("    HKEY_DYN_DATA\\Config Manager\\Enum: not read either "
+                 "(it exists on 98 SE and ME only)\n");
+        }
+    }
+    cmx_unload();
+    if (devListed == 0) {
+        comp("\n    none found: no PCI xHCI controller and no devnode driven "
+             "by xhci98.sys or\n    xhciuas.sys (%d devnodes looked at)\n",
+             devSeen);
+        say("  ", "devices: none found (%d devnodes looked at)", devSeen);
+    } else {
+        comp("\n    %d device(s) listed, of %d devnodes looked at\n",
+             devListed, devSeen);
+    }
+}
+
+/*
+ * The installed files, where this package's INFs put them: the three
+ * drivers and usbd.sys in dirid 10's System32\Drivers (the Windows
+ * directory's, on every target, 98 SE and ME included), usbui.dll in dirid
+ * 11, the system directory (SYSTEM on 9x, system32 on NT).
+ */
+static const struct {
+    const char *Name;
+    int SystemDir;
+} instFiles[] = {
+    { "xhci98.sys", 0 },
+    { "xhciuas.sys", 0 },
+    { "xhcimsi.sys", 0 },
+    { "usbd.sys", 0 },
+    { "usbui.dll", 1 }
+};
+
+#pragma auto_inline(off)
+static void write_dev_files(void)
+{
+    char dir[MAX_PATH];
+    char path[MAX_PATH + 32];
+    char ver[96];
+    char hex[65];
+    char clean[SYS_TEXT_MAX + 8];
+    unsigned char digest[32];
+    unsigned long size;
+    unsigned long err;
+    UINT n;
+    int i;
+    int rc;
+
+    comp("\n  installed files - size, file version and SHA-256, computed by "
+         "xhcisnap:\n");
+    wow64_redirect_off();
+    for (i = 0; i < (int)(sizeof(instFiles) / sizeof(instFiles[0])); i++) {
+        n = instFiles[i].SystemDir
+                ? GetSystemDirectoryA(dir, sizeof(dir))
+                : GetWindowsDirectoryA(dir, sizeof(dir));
+        comp("\n");
+        if (n == 0 || n + 40 > sizeof(dir)) {
+            dev_line(instFiles[i].Name, "not read: the %s directory was not "
+                     "found", instFiles[i].SystemDir ? "system" : "Windows");
+            continue;
+        }
+        if (instFiles[i].SystemDir) {
+            sprintf(path, "%s\\%s", dir, instFiles[i].Name);
+        } else {
+            sprintf(path, "%s\\System32\\Drivers\\%s", dir, instFiles[i].Name);
+        }
+        sys_clean(path, clean, sizeof(clean));
+        dev_line(instFiles[i].Name, "%s", clean);
+        rc = file_sha256(path, &size, digest, &err);
+        if (rc == HASH_ABSENT) {
+            dev_line("", "not present");
+            say("  ", "%-12s not present", instFiles[i].Name);
+            continue;
+        }
+        if (rc != HASH_OK) {
+            dev_line("", "present, not read (error %lu)", err);
+            say("  ", "%-12s present, not read (error %lu)", instFiles[i].Name,
+                err);
+            continue;
+        }
+        file_version_text(path, ver, sizeof(ver));
+        sha256_hex(digest, hex);
+        dev_line("", "present, %lu bytes, version %s", size, ver);
+        /* Its own short indent: 64 digits under the column would pass 79. */
+        comp("      SHA-256 %s\n", hex);
+        say("  ", "%-12s %lu bytes, version %s", instFiles[i].Name, size, ver);
+    }
+    wow64_redirect_on();
+}
+#pragma auto_inline(on)
+
+static void write_dev_time(void)
+{
+    if (runTimeSet) {
+        comp("  local time         %04u-%02u-%02u %02u:%02u:%02u (this "
+             "machine's clock)\n",
+             (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+             (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+             (unsigned)runTime.wMinute, (unsigned)runTime.wSecond);
+    }
+}
+
+static int take_dump(unsigned long controller, const char *base,
+                     int probeOnly);
+
+/*
+ * `-report [-c N] [-nosysinfo]`. Exit codes:
+ *   0  BASE.DEV complete, and the dump's BASE.TXT complete
+ *   3  BASE.DEV complete; the dump was taken but its .TXT is incomplete,
+ *      or the extension's size disagreed (as the dump's own 3)
+ *   4  BASE.DEV complete; no dump was taken (the device would not open, or
+ *      the driver did not serve it - the .DEV says which)
+ *   5  BASE.DEV could not be written in full
+ *   6  all 26 names for this minute are taken; nothing was written
+ *   7  the clock gave an impossible date or time; nothing was written
+ */
+#define REPORT_OK           0
+#define REPORT_TXT_BAD      3
+#define REPORT_NO_DUMP      4
+#define REPORT_DEV_BAD      5
+#define REPORT_NAMES_FULL   6
+#define REPORT_BAD_CLOCK    7
+
+static int take_report(unsigned long controller)
+{
+    char base[16];
+    char devPath[32];
+    char name[32];
+    char cwd[MAX_PATH];
+    int rc;
+    int fd;
+    int devOk;
+    int appendOk;
+    int dumpRc;
+    int k;
+    int haveTxt;
+    static const char *const outExts[] = { ".DEV", ".TXT", ".BIN", ".PSC" };
+
+    run_time_once();
+    cleanSkipNames = sysinfoOff;
+    rc = stamp_base(runTime.wMonth, runTime.wDay, runTime.wHour,
+                    runTime.wMinute, stamp_exists_here, NULL, base);
+    if (rc == STAMP_BADCLOCK) {
+        printf("xhcisnap -report: the clock reads %04u-%02u-%02u %02u:%02u, "
+               "which is not a date and time\nthis tool can name a file "
+               "after. Set the clock and run it again. Nothing was written.\n",
+               (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+               (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+               (unsigned)runTime.wMinute);
+        return REPORT_BAD_CLOCK;
+    }
+    if (rc == STAMP_TAKEN) {
+        printf("xhcisnap -report: all 26 names for this minute are taken in "
+               "this directory\n(A to Z after the time). Wait a minute and "
+               "run it again. Nothing was written,\nand nothing was "
+               "overwritten.\n");
+        return REPORT_NAMES_FULL;
+    }
+    if (GetCurrentDirectoryA(sizeof(cwd), cwd) == 0) {
+        strcpy(cwd, "the current directory");
+    }
+    sprintf(devPath, "%s.DEV", base);
+    printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s, in\n"
+           "  %s\n", (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+           (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+           (unsigned)runTime.wMinute, base, cwd);
+
+    /* Created, never replaced: O_EXCL refuses a name that appeared since
+     * the stamp was chosen. */
+    fd = _open(devPath, _O_WRONLY | _O_CREAT | _O_EXCL | _O_TEXT,
+               _S_IREAD | _S_IWRITE);
+    companion = (fd >= 0) ? _fdopen(fd, "w") : NULL;
+    if (companion == NULL) {
+        if (fd >= 0) {
+            _close(fd);
+        }
+        printf("  *** cannot create %s (errno %d). Nothing else is written: "
+               "run it from a\n      directory you can write to.\n", devPath,
+               errno);
+        return REPORT_DEV_BAD;
+    }
+    companionOpened = 1;
+    companionFailed = 0;
+
+    comp("xhci98 device report - xhcisnap -report\n");
+    comp("  tool               xhcisnap %s, built %s\n", XHCISNAP_VERSION,
+         XHCISNAP_BUILT);
+    write_dev_time();
+    comp("  controller asked   -c %lu, \\\\.\\HCD%lu\n", controller, controller);
+    comp("  files              %s.DEV (this), %s.TXT, %s.BIN, %s.PSC\n", base,
+         base, base, base);
+    write_companion_system();
+    if (cleanSkipNames) {
+        comp("\n  -nosysinfo: this machine's names were not read, so the "
+             "strings below were\n  not screened for them.\n");
+    }
+    printf("\ndevices:\n");
+    write_dev_devices();
+    printf("\ninstalled files:\n");
+    write_dev_files();
+    comp("\n  dump: taken after this file was written; its result is "
+         "appended below. If\n  nothing follows, the dump did not "
+         "finish.\n");
+    devOk = finish_companion();
+    if (devOk) {
+        printf("\n  %s written\n", devPath);
+    } else {
+        printf("\n  *** %s could not be written in full\n", devPath);
+    }
+
+    printf("\n--- the dump -----------------------------------------------\n");
+    companionOpened = 0;
+    companionFailed = 0;
+    extMismatch = 0;
+    dumpWhy[0] = '\0';
+    reportMode = 1;
+    dumpRc = take_dump(controller, base, 0);
+    reportMode = 0;
+
+    haveTxt = 0;
+    sprintf(name, "%s.TXT", base);
+    if (GetFileAttributesA(name) != 0xFFFFFFFFUL) {
+        haveTxt = 1;
+    }
+
+    companionOpened = 0;
+    companionFailed = 0;
+    companion = fopen(devPath, "a");
+    appendOk = 0;
+    if (companion != NULL) {
+        companionOpened = 1;
+        comp("\n  dump result\n");
+        if (dumpRc == 0) {
+            dev_line("dump", "taken: %s.TXT complete, with %s.BIN and "
+                     "%s.PSC", base, base, base);
+        } else if (dumpRc == 3) {
+            dev_line("dump", "taken, but %s.TXT is incomplete or the "
+                     "extension's size disagreed; the screen said which",
+                     base);
+        } else {
+            dev_line("dump", "NOT taken: %s", (dumpWhy[0] != '\0')
+                         ? dumpWhy : "see the lines on the screen");
+            dev_line("", "This report above still stands. A controller "
+                     "that is not started (a Code above), or a log channel "
+                     "that is off (XHCISNAP -verbosity 2 or SNAPON.BAT, then "
+                     "restart), gives no dump.");
+        }
+        comp("end of device report\n");
+        appendOk = finish_companion();
+    }
+    if (!appendOk) {
+        printf("  *** the dump's result could not be added to %s\n", devPath);
+    }
+
+    printf("\n--- files written in %s\n", cwd);
+    for (k = 0; k < 4; k++) {
+        sprintf(name, "%s%s", base, outExts[k]);
+        if (GetFileAttributesA(name) != 0xFFFFFFFFUL) {
+            printf("  %s\n", name);
+        }
+    }
+    if (haveTxt) {
+        printf("Attach %s.DEV and %s.TXT; send %s.BIN and %s.PSC only if "
+               "asked.\n", base, base, base, base);
+    } else {
+        printf("Attach %s.DEV (no dump was taken: it says why).\n", base);
+    }
+    if (!devOk || !appendOk) {
+        return REPORT_DEV_BAD;
+    }
+    if (dumpRc == 0) {
+        return REPORT_OK;
+    }
+    if (dumpRc == 3) {
+        return REPORT_TXT_BAD;
+    }
+    return REPORT_NO_DUMP;
 }
 
 /* ---- main --------------------------------------------------------------- */
@@ -6863,7 +8845,8 @@ static unsigned char ext_image[EXT_IMAGE_MAX];
 /*
  * **The short usage is 22 lines and that is a hard budget, not a target.**
  * (`-nosysinfo`, task 36.47, took the blank line that stood before THE
- * FOUR STEPS, so the count is still 22.)
+ * FOUR STEPS, so the count is still 22; `-report`, task 38.1, took the
+ * blank line under the first, and is step 4 now.)
  * *(Project owner: "since Win98 console cannot scroll, I think we
  * need to make best effort to keep everything within one vertical screen.
  * Especially for the initial screen if no or wrong command line arguments are
@@ -6885,7 +8868,7 @@ static void usage(void)
     printf("xhcisnap %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
     printf(
 "read xhci98.sys's own log off a running machine, from user mode.\n"
-"\n"
+"  xhcisnap -report [-c N]    BASE.DEV (devices, files) + dump, BASE = clock\n"
 "  xhcisnap -dump [-c N] [-o BASE]   dump: BASE.TXT (send this), .BIN, .PSC\n"
 "  xhcisnap -verbosity N      set the level 0-4 on every xhci98 key, RESTART\n"
 "  xhcisnap -disable          exactly -verbosity 0.  There is no -enable.\n"
@@ -6902,7 +8885,7 @@ static void usage(void)
 "  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
 "  2. restart the machine       3 +PORTSC table, 4 +everything\n"
 "  3. reproduce the problem\n"
-"  4. xhcisnap -o C:\\MYDUMP     then send MYDUMP.TXT\n"
+"  4. xhcisnap -report          then send the .DEV and .TXT it names\n"
 "Step 1 is not optional - the channel ships OFF.  Run xhcisnap -disable once\n"
 "you have sent the capture; -help says what leaving it on costs.\n");
 }
@@ -6923,6 +8906,25 @@ static void usage_long(void)
 "EVERY ARGUMENT.  With none at all you get the short usage, not a dump - a\n"
 "program's name typed to find out what it is should not write three files.\n"
 "\n"
+"  -report       the field report (task 38.1).  Writes BASE.DEV first - the\n"
+"                xHCI controllers' and this driver's devnodes with their\n"
+"                Device Manager status, problem code and allocated resources,\n"
+"                and the size, version and SHA-256 of xhci98.sys, xhciuas.sys,\n"
+"                xhcimsi.sys, usbd.sys and usbui.dll - then takes the dump into\n"
+"                BASE.TXT, .BIN and .PSC.  BASE.DEV is written even when the\n"
+"                controller cannot be opened, and says why there is no dump.\n"
+"                BASE is made from the local clock, in the CURRENT directory:\n"
+"                mDDhhmmS - the month as 1-9, A, B or C, the day, the hour\n"
+"                (24h), the minute, and S the first letter A-Z no file of the\n"
+"                set already has, so a second run never overwrites the first.\n"
+"                Takes -c and -nosysinfo; refuses -o.  Prints every file it\n"
+"                wrote, and last the ones to attach: the .DEV and the .TXT\n"
+"                (the .BIN and .PSC only if asked).  Exit 0 both complete,\n"
+"                3 the .TXT is not complete, 4 no dump (the .DEV says why),\n"
+"                5 the .DEV is not complete, 6 all 26 names taken this minute,\n"
+"                7 the clock is not a valid date; at 6 and 7 nothing is\n"
+"                written.  SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT beside this\n"
+"                tool run -verbosity 2, -report and -disable.\n"
 "  -dump         take a dump with the defaults.  Implied by -c and -o, so it\n"
 "                is only needed when neither is given.  Writes BASE.BIN,\n"
 "                BASE.PSC and BASE.TXT, and prints the RESOLVED absolute path\n"
@@ -6967,7 +8969,7 @@ static void usage_long(void)
 "                problem on your machine.  The header then says they were\n"
 "                skipped.\n"
 "\n"
-"WHAT A DUMP WRITES:\n"
+"WHAT A DUMP WRITES (and -report adds BASE.DEV, the device report):\n"
 "  BASENAME.BIN  the raw extension image.  Send this to the maintainer - it\n"
 "                decodes only against an offsets.txt from the driver's own\n"
 "                tree, which is why it is an attachment and not the report.\n"
@@ -7192,48 +9194,23 @@ static int selftest_report(const char *base)
 
 int main(int argc, char **argv)
 {
-    /*
-     * **Two headers, and they are two on purpose.** `extLast` is the extension
-     * region's final window and `portscLast` is the PORTSC region's. The first
-     * version kept one and let the PORTSC call overwrite it - so the companion
-     * unwrapped the SAVED extension bytes using the LATER request's `RingHead`
-     * and `RingUsed`, and any record appended between the two calls rotated the
-     * printed ring or ran it past what was captured. The ring's geometry has to
-     * come from the same window its bytes did.
-     */
-    SNAP_HEADER extLast;
-    SNAP_HEADER portscLast;
-    unsigned long slotCount;
-    int slotState;
-    unsigned long hcdBytes;
-    int hcdState;
-    int companionWasWritten;
-    HANDLE device;
-    char devicePath[32];
-    char extPath[MAX_PATH];
-    char portscPath[MAX_PATH];
-    char textPath[MAX_PATH];
-    char extTmpPath[MAX_PATH];
-    char portscTmpPath[MAX_PATH];
     unsigned long controller;
-    unsigned long tearFirst;
-    unsigned long tearLast;
-    unsigned long extBytes;
-    unsigned long portscBytes;
     unsigned long verbosity;
     const char *base;
-    int tearTorn;
-    int tearSeen;
     int probeOnly;
     int doDump;
     int doSetLevel;
     int doDisable;
+    int doReport;
+    int baseGiven;
     int force;
     int i;
     const char *selftestReport;
     int doSelftestSysinfo;
 
     controller = 0;
+    doReport = 0;
+    baseGiven = 0;
     selftestReport = NULL;
     doSelftestSysinfo = 0;
     base = "XHCISNAP";
@@ -7301,6 +9278,7 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             /* As for `-c`: naming where the dump goes is asking for one. */
             doDump = 1;
+            baseGiven = 1;
             base = argv[++i];
             /*
              * **Bounded before it is used, because three fixed buffers are
@@ -7328,6 +9306,15 @@ int main(int argc, char **argv)
              * recorded only so that combining it with the registry switches
              * can be refused below. */
             doDump = 1;
+        } else if (strcmp(argv[i], "-report") == 0) {
+            /* Task 38.1: the .DEV, then the dump, under a name taken from
+             * the clock. It is a dump as far as the refusals below go. */
+            doReport = 1;
+            doDump = 1;
+        } else if (strcmp(argv[i], "-selftest-stamp") == 0) {
+            return selftest_stamp();
+        } else if (strcmp(argv[i], "-selftest-sha256") == 0 && i + 1 < argc) {
+            return selftest_sha256(argv[++i]);
         } else if (strcmp(argv[i], "-help") == 0 ||
                    strcmp(argv[i], "-?") == 0 ||
                    strcmp(argv[i], "/?") == 0) {
@@ -7443,6 +9430,16 @@ int main(int argc, char **argv)
         printf("-verbosity and -disable are opposites. Pick one.\n");
         return 2;
     }
+    /* -report names its files from the clock, in the current directory, so
+     * that a second run never overwrites the first; a name given with -o
+     * would undo exactly that. */
+    if (doReport && baseGiven) {
+        printf("-report names its files itself, from the clock, in the "
+               "current directory, so a\nsecond run never overwrites the "
+               "first. It does not take -o; use -dump -o for a\nname of "
+               "your own.\n");
+        return 2;
+    }
     /*
      * **`-force` is a modifier on the registry write and nothing else**, which
      * is what `README.md` documents it as. On its own it used to fall through
@@ -7522,6 +9519,54 @@ int main(int argc, char **argv)
         return set_verbosity(verbosity, force);
     }
 
+    if (doReport) {
+        return take_report(controller);
+    }
+    return take_dump(controller, base, probeOnly);
+}
+
+/*
+ * The dump, or with `probeOnly` the route check: 0 the .TXT is complete,
+ * 1 no dump, 3 a dump whose .TXT is not complete. -report calls it after
+ * writing its .DEV, with `reportMode` set, so the closing lines name what
+ * -report attaches; `dumpWhy` then carries the reason a dump was not taken.
+ */
+static int take_dump(unsigned long controller, const char *base,
+                     int probeOnly)
+{
+    /*
+     * **Two headers, and they are two on purpose.** `extLast` is the extension
+     * region's final window and `portscLast` is the PORTSC region's. The first
+     * version kept one and let the PORTSC call overwrite it - so the companion
+     * unwrapped the SAVED extension bytes using the LATER request's `RingHead`
+     * and `RingUsed`, and any record appended between the two calls rotated the
+     * printed ring or ran it past what was captured. The ring's geometry has to
+     * come from the same window its bytes did.
+     */
+    SNAP_HEADER extLast;
+    SNAP_HEADER portscLast;
+    unsigned long slotCount;
+    int slotState;
+    unsigned long hcdBytes;
+    int hcdState;
+    int companionWasWritten;
+    HANDLE device;
+    char devicePath[32];
+    char extPath[MAX_PATH];
+    char portscPath[MAX_PATH];
+    char textPath[MAX_PATH];
+    char extTmpPath[MAX_PATH];
+    char portscTmpPath[MAX_PATH];
+    unsigned long tearFirst;
+    unsigned long tearLast;
+    unsigned long extBytes;
+    unsigned long portscBytes;
+    int tearTorn;
+    int tearSeen;
+    int i;
+
+    run_time_once();
+    lastWindowWhy[0] = '\0';
     sprintf(devicePath, "\\\\.\\HCD%lu", controller);
     sprintf(extPath, "%s.BIN", base);
     sprintf(portscPath, "%s.PSC", base);
@@ -7540,8 +9585,15 @@ int main(int argc, char **argv)
                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                          OPEN_EXISTING, 0, NULL);
     if (device == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+
         printf("  cannot open %s, error %lu\n", devicePath,
-               (unsigned long)GetLastError());
+               (unsigned long)err);
+        _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "cannot open %s, error %lu: "
+                  "no xhci98 controller is started at index %lu (its driver "
+                  "is not loaded, or it has a Code above)", devicePath,
+                  (unsigned long)err, controller);
+        dumpWhy[sizeof(dumpWhy) - 1] = '\0';
         printf("  (that name is created by a started host controller's FDO -\n"
                "   xhci98.sys's own, or usbport's for the 1.x miniport; if it\n"
                "   does not exist, no such controller is started at this "
@@ -7571,6 +9623,10 @@ int main(int argc, char **argv)
         /* The partial .BIN.TMP is already gone; the previous .BIN, .PSC and
          * .TXT are untouched and still a set. */
         CloseHandle(device);
+        _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "the extension was not read "
+                  "from %s: %s", devicePath, (lastWindowWhy[0] != '\0')
+                      ? lastWindowWhy : "see the lines on the screen");
+        dumpWhy[sizeof(dumpWhy) - 1] = '\0';
         return 1;
     }
     if (extBytes != extLast.ExtensionBytes) {
@@ -7596,6 +9652,10 @@ int main(int argc, char **argv)
     CloseHandle(device);
     if (portscBytes == (unsigned long)-1) {
         DeleteFileA(extTmpPath);
+        _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "the PORTSC array was not "
+                  "read from %s: %s", devicePath, (lastWindowWhy[0] != '\0')
+                      ? lastWindowWhy : "see the lines on the screen");
+        dumpWhy[sizeof(dumpWhy) - 1] = '\0';
         return 1;
     }
 
@@ -7620,6 +9680,9 @@ int main(int argc, char **argv)
          * under it (the 2026-09-16 audit's C4). */
         DeleteFileA(textPath);
         printf("  no dump was published\n");
+        _snprintf(dumpWhy, sizeof(dumpWhy) - 1, "read, but %s and %s could "
+                  "not be renamed into place", extPath, portscPath);
+        dumpWhy[sizeof(dumpWhy) - 1] = '\0';
         return 1;
     }
     DeleteFileA(textPath);
@@ -7859,6 +9922,9 @@ int main(int argc, char **argv)
             if (extMismatch) {
                 printf("  report     %s (its decoded part is not to be "
                        "trusted, see above)\n", full);
+            } else if (reportMode) {
+                /* -report names what to attach once its .DEV is closed. */
+                printf("  report     %s written\n", full);
             } else {
                 printf("  send       %s\n", full);
                 printf("             attach %s beside it\n", fullBin);

@@ -48,6 +48,10 @@ it.
 
 ```text
 XHCISNAP -verbosity 2    set the level exactly (0-4), then RESTART
+XHCISNAP -report         the field report: mDDhhmmS.DEV, then the dump of
+                         controller 0 into mDDhhmmS.TXT/.BIN/.PSC, named from
+                         the clock in the current directory (from 2.4.0.0;
+                         see "The field report"). Takes -c and -nosysinfo
 XHCISNAP -dump           dump controller 0 to XHCISNAP.BIN/.PSC/.TXT
 XHCISNAP -dump -c 1 -o WEDGED   controller 1 to WEDGED.BIN/.PSC/.TXT
 XHCISNAP -disable        exactly -verbosity 0: back to 0, which is off outright
@@ -66,8 +70,11 @@ The ladder: 0 off; 1 the channel with counters only and the ring still off;
 to the `.TXT`; 4 adds everything including kernel addresses.
 
 The published sequence is four steps and none of them is `regedit`:
-`-verbosity 2`, restart, reproduce, `-o C:\NAME` (`-o` and `-c` each imply
-`-dump`, so the last step needs no flag of its own). There is one value to set.
+`-verbosity 2`, restart, reproduce, `-report` (from 2.4.0.0; before it the
+last step was `-o C:\NAME`, and `-o` and `-c` still each imply `-dump`). The
+three batch files beside the tool run the steps for a reporter: `SNAPON.BAT`,
+`SNAPGET.BAT` and `SNAPOFF.BAT` (see "The field report"). There is one value
+to set.
 `-verbosity N` sets exactly N, up or down, and is the only knob.
 
 `-verbosity N` prints each key's previous level beside the write. A value out
@@ -126,6 +133,132 @@ tool deletes both final raw names **and the old `.TXT`** and says no dump was
 published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
+
+### The field report: `-report`, the `.DEV` and the three batch files (2.4.0.0)
+
+Roadmap-hcd task 38.1 (owner, 2026-10-12 and 2026-10-13): a reporter runs one
+batch file and attaches what it names, rather than following a list. The tool
+itself reads what the field reports ask for, so every target reports the same.
+
+**The name.** `-report` names its files from the local clock, because a batch
+file cannot (COMMAND.COM on 98 SE and ME has no `%DATE%` or `%TIME%`, and
+cmd.exe's follow the locale). The base is eight characters, `mDDhhmmS`:
+
+- `m`, the month as one character: `1`-`9`, then `A` (October), `B`, `C`;
+- `DD`, `hh` and `mm`, the day, the hour (24-hour) and the minute;
+- `S`, a letter `A`-`Z`: the first for which **no** file of the set this run
+  could write already exists in the current directory - `.DEV`, `.TXT`,
+  `.BIN`, `.PSC`, and each of those with `.TMP` after it.
+
+So 13 October 2026 at 14:19 is `A131419A`, and a second run in the same minute
+is `A131419B`. Nothing is ever overwritten; the `.DEV` is created with an
+exclusive create, so a name that appeared since the letter was chosen is
+refused too. With all 26 letters taken the tool writes nothing and exits 6;
+a clock whose month, day, hour or minute is out of range is refused, exit 7.
+The full date and time, with the year, is written inside the `.DEV` and the
+`.TXT` ("local time"; every dump's `.TXT` carries the line since 2.4.0.0).
+The files always go to the current directory: `-report` refuses `-o`.
+
+**What it writes, in order.** First `BASE.DEV`, the device report, then the
+ordinary dump into `BASE.TXT`, `.BIN` and `.PSC`. The `.DEV` is written and
+closed before the controller is opened, so it exists whatever the dump does -
+the driver not loaded, the controller at a Code, the channel off - and the
+dump's result, with the reason when there is none, is appended to it
+afterwards. The screen lists every file written and ends with the ones to
+attach: the `.DEV` and the `.TXT`; the `.BIN` and `.PSC` only if the
+maintainer asks.
+
+**The `.DEV`** is plain ASCII text with CRLF line endings:
+
+- the tool's version and build, the local time, the controller index asked
+  for, and the same "captured on" block as the dump's header (below), under
+  the same privacy rule and the same `-nosysinfo`;
+- every devnode that is a PCI xHCI controller (a hardware or compatible id
+  carrying class code `CC_0C0330`), whatever drives it or if nothing does,
+  and every devnode `xhci98.sys` or `xhciuas.sys` drives (on NT by its
+  service; on 98 SE and ME by `NTMPDriver` in its driver key, the signal
+  `-verbosity` uses to find the driver's keys there). For each: the device
+  id, its description, its service, its driver key with `NTMPDriver`,
+  `InfSection`, `DriverVersion` and `DriverDate`, the status flags and the
+  problem code (`CM_Get_DevNode_Status`, with a short name for the common
+  codes: 10, 28, 31, 39, 52 and others), and the allocated resources
+  (memory, I/O, IRQ, DMA, bus numbers), or the boot configuration when
+  nothing is allocated;
+- the installed files - `xhci98.sys`, `xhciuas.sys`, `xhcimsi.sys` and
+  `usbd.sys` in the Windows directory's `System32\Drivers` (where both INFs
+  copy them, dirid 10, on every target), `usbui.dll` in the system directory
+  (dirid 11: `SYSTEM` on 9x, `system32` on NT) - each present or not, its
+  size, file version and SHA-256. WOW64's redirection is turned off for the
+  read, so a 64-bit Windows reports its native files.
+
+**Where the device readings come from.** `cfgmgr32.dll`, loaded at run time
+(the import table still names only `KERNEL32.dll` and `ADVAPI32.dll`): the
+tree is walked with `CM_Locate_DevNode`, `CM_Get_Child` and `CM_Get_Sibling`,
+the properties are `CM_Get_DevNode_Registry_Property`'s (or the devnode's
+`Enum` key where that routine is missing), and the resources are
+`CM_Get_First_Log_Conf`, `CM_Get_Next_Res_Des` and `CM_Get_Res_Des_Data`'s,
+decoded from either the NT layout or the 9x one by their size, and printed
+as raw bytes when neither fits. Under WOW64 the x86 `cfgmgr32.dll` answers
+the log configuration calls with `CR_CALL_NOT_IMPLEMENTED` (read on a 64-bit
+Windows 11 build host, 2026-10-13), so the resources then come from
+`HKLM\HARDWARE\RESOURCEMAP\PnP Manager\PnpManager`, the PnP manager's raw
+list under the device's PDO name, which also carries the message-signalled
+flag and the message count. On 98 SE and ME, if `cfgmgr32.dll` does not
+answer, the devnodes come from `HKEY_DYN_DATA\Config Manager\Enum` with
+their status and problem but no resources. Any routine missing or failing is
+written as "not read: <why>", never as a silence. **None of this has yet
+been read on 98 SE, ME, 2000, XP or Vista**; task 38.1's legs read it.
+
+**Privacy.** A USB device's instance id can be its serial number, so the
+instance part of every id not under `PCI\` or `ROOT\` is printed as
+`(instance withheld)`. Every string goes through the same cleaning and
+name-withholding as the "captured on" block; with `-nosysinfo` this
+machine's names are not read, the strings are not screened for them, and the
+`.DEV` says so.
+
+**Exit codes of `-report`:**
+
+| Exit | Meaning |
+|---|---|
+| 0 | the `.DEV` and the dump's `.TXT` complete |
+| 2 | a usage error (`-o` beside it, for one); nothing written |
+| 3 | the `.DEV` complete; the dump taken, but its `.TXT` incomplete or the extension's size disagreed (the dump's own 3) |
+| 4 | the `.DEV` complete; no dump (the device did not open or did not serve it; the `.DEV` says which) |
+| 5 | the `.DEV` could not be written in full |
+| 6 | all 26 names for this minute taken; nothing written |
+| 7 | the clock is not a valid date and time; nothing written |
+
+**The three batch files**, `snapon.bat`, `snapget.bat` and `snapoff.bat` in
+this directory, shipped as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
+beside `XHCISNAP.EXE` in the release's `tools\xhcisnap\`. Each is one file
+for COMMAND.COM (98 SE and ME) and cmd.exe (2000 to 7), in the shape
+`src\portsw-on.bat` has and its gate holds: `@echo off`, the pinned
+`%OS%` split, only COMMAND.COM built-ins and `XHCISNAP`, ASCII and CRLF,
+lines of 127 characters or fewer, no `%DATE%` or `%TIME%`, and `pause`
+last. Each first checks `XHCISNAP.EXE` is beside it and says so if not, and
+reads the exit code with `IF ERRORLEVEL`, highest first. On 2000 and XP they
+need an administrator, and on Vista and 7 Run as administrator; each says so
+first, and again where the registry write was refused (`-verbosity` and
+`-disable` exit 1 for any key not written, an access refusal included).
+
+- `SNAPON.BAT` runs `XHCISNAP -verbosity 2`, then says: restart Windows (or
+  disable and enable the controller in Device Manager), reproduce the
+  problem, run `SNAPGET.BAT`. Nothing to attach yet.
+- `SNAPGET.BAT` runs `XHCISNAP -report`, says what each exit code means, and
+  ends: attach the files XHCISNAP named above, the `.DEV` and the `.TXT` (the
+  `.BIN` and `.PSC` only if asked); the channel stays on until `SNAPOFF.BAT`.
+- `SNAPOFF.BAT` runs `XHCISNAP -disable` and says the change takes effect at
+  the next start. Nothing to attach.
+
+The self-tests (`selftest.cmd`) hold the name rule (`-selftest-stamp`:
+months 1, 9, 10, 11 and 12, midnight, a taken letter moving to the next
+whichever file of the set holds it, Z the last, all 26 taken refused,
+impossible clock fields refused), the SHA-256 on the real `/O2` binary
+(`-selftest-sha256 BASE`: FIPS 180-2's one-block, two-block and million-`a`
+examples, the empty message, and a million `a` read back through the file
+path), and `-report` end to end against a controller index no machine has:
+exit 4 with the `.DEV` written, a second run taking the next letter, and
+`-o` refused.
 
 ### The machine it was captured on (2.3.0.0)
 
