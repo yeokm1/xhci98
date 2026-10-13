@@ -3230,21 +3230,15 @@ static void print_hcd_rings(const unsigned char *image,
     if (counters < SNAP_RINGS_AT + SNAP_RINGS_WORDS) {
         return;
     }
-    comp("
-endpoint rings (task 38.10, design record 20 section 5):
-");
+    comp("\nendpoint rings (task 38.10, design record 20 section 5):\n");
     comp("  pool rings held %lu of 32; held for a stale endpoint %lu, "
-         "pinned %lu,
-    released by a later proof %lu
-",
+         "pinned %lu,\n    released by a later proof %lu\n",
          get32(image, countersAt + SNAP_RINGS_AT * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 1) * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 2) * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 3) * 4));
     comp("  selects put back %lu; one-setting STALLs carried out %lu; "
-         "rollbacks %lu,
-    reopened %lu
-",
+         "rollbacks %lu,\n    reopened %lu\n",
          get32(image, countersAt + (SNAP_RINGS_AT + 4) * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 5) * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 6) * 4),
