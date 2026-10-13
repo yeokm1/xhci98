@@ -1810,12 +1810,14 @@ read follows a `RESET_PIPE`'s new context.
 ### 6.11 The Windows 98 SE and ME silent install (task 38.2, 2026-10-13)
 
 **Status: design, for the review loop and the owner's approval; no code
-yet.** The rule and the decisions are the owner's (roadmap-hcd task 38.2,
-2026-10-12 and 2026-10-13) and are not reopened here; what this section adds
-is where each part lives in the bus, and the questions it could not settle,
-marked **Open** below. The information on how Windows 98 decides a silent
-install, and the list itself, are SweetLow's; the README, the release notes
-and the readme template credit him for both (owner, 2026-10-13).
+yet. Codex review round 1 applied (2026-10-13).** The rule and the
+decisions are the owner's (roadmap-hcd task 38.2, 2026-10-12 and
+2026-10-13, the driver's own gate of 2026-10-13 included) and are not
+reopened here; what this section adds is where each part lives in the bus,
+and the questions it could not settle, marked **Open** below. The
+information on how Windows 98 decides a silent install, and the list
+itself, are SweetLow's; the README, the release notes and the readme
+template credit him for both (owner, 2026-10-13).
 
 **Today.** Every PDO the project creates answers `SilentInstall` FALSE in
 `IRP_MN_QUERY_CAPABILITIES`: the device, function, composite-parent and hub
@@ -1830,12 +1832,12 @@ the 98 SE K2 and hub rows; run-37 for ME).
 
 #### 6.11.1 The rule
 
-A device PDO answers `SilentInstall` TRUE when any interface descriptor of
-its configuration matches an entry of
-`HKLM\System\CurrentControlSet\Services\USB\SilentClasses` - the key already
-in use on these systems, whose name Windows 98 SE's own `usbhub.sys` carries
-(`USB\SilentClasses`, section 10.6's fragment list) - so an existing `.reg`,
-and a machine that merged one, work unchanged.
+A device PDO answers `SilentInstall` TRUE when the driver's gate is on
+(6.11.3) and any interface descriptor of its configuration matches an entry
+of `HKLM\System\CurrentControlSet\Services\USB\SilentClasses` - the key
+already in use on these systems, whose name Windows 98 SE's own `usbhub.sys`
+carries (`USB\SilentClasses`, section 10.6's fragment list) - so an existing
+`.reg`, and a machine that merged one, work unchanged once the gate is on.
 
 - **An entry** is a value of that key, its name ignored, of type
   `REG_BINARY` and exactly 4 bytes: byte 0 the control byte, then
@@ -1852,18 +1854,24 @@ and a machine that merged one, work unchanged.
 - **An interface descriptor matches an entry** when the entry applies to
   the PDO's kind (6.11.2) and its class is equal, and its subclass and
   protocol are equal where the entry's bits say to compare them. Every
-  interface descriptor counts, alternate settings included; the
-  configuration matches when any one of them matches any one entry.
+  interface descriptor within the configuration's `wTotalLength` counts
+  (6.11.5), alternate settings included; the configuration matches when any
+  one of them matches any one entry.
 
 **Windows 98 SE and ME only** (owner): never on Windows 2000 and later. The
 test is the one the bus already uses for them,
 `!IoIsWdmVersionAvailable(1, 0x10)` (WDM 1.00 on 98, 1.05 on ME, 1.10 from
-2000; `hcd_pdo.c`, `hcd_door.c`). On an NT target the key is never opened,
-the table stays empty, and every PDO answers FALSE as today.
+2000; `hcd_pdo.c`, `hcd_door.c`). On an NT target neither the gate nor the
+key is read, the table stays empty, and every PDO answers FALSE as today.
 
-**Opt-in** (owner): the INFs write nothing. A missing key, an empty one, a
-key the query cannot read, or a list whose every entry is ignored, means an
-empty table, and nothing is silent.
+**Off unless both are there** (owner, 2026-10-12 and 2026-10-13): the gate
+and the list are each off by default, and the INFs write neither. With the
+gate off - its value absent, 0, any value but 1, not a DWORD, or unreadable
+(6.11.3) - the `SilentClasses` key is not even opened and every PDO answers
+FALSE whatever the list holds, so a list merged for another stack, or left
+from one, silences nothing here. With the gate on, a missing key, an empty
+one, a key the query cannot read whole (6.11.3), or a list whose every entry
+is ignored, means an empty table, and nothing is silent.
 
 #### 6.11.2 What each PDO answers
 
@@ -1871,7 +1879,10 @@ empty table, and nothing is silent.
 `XhciFuncSplit`): the device's PDOs are a composite parent and its function
 PDOs, and nothing else is composite - not a multi-interface device the bus
 leaves whole (several configurations, a device class of its own, more than
-16 functions), which is "not composite" and takes the `0x80` entries.
+16 functions), which is "not composite" and takes the `0x80` entries. In
+the PDO, composite is `Composite || Function` (`hcd_pdo.c`: `Composite` is
+set on the group's first PDO of a split device, `Function` on each function
+PDO by `hcdPdoNew`).
 
 | PDO | Configuration walked | Entries that apply |
 |---|---|---|
@@ -1903,163 +1914,276 @@ where `xhciuas.inf` has never been installed, that drive would then be
 installed silently with no driver, the very case the readme warns against.
 **Decided (O2, owner 2026-10-13):** a PDO whose transport is `XHCI_XPORT_UAS` or
 `XHCI_XPORT_REFUSED` answers FALSE whatever the list says; a PDO presented
-Bulk-Only (`XHCI_XPORT_BOT` or `NONE`) follows the rule.
+Bulk-Only (`XHCI_XPORT_BOT` or `NONE`) follows the rule. The transport read
+is the PDO's final one (6.11.4): `hcdXportDecide`'s on the creation path,
+the old PDO's copied one on the re-presentation path.
 
 #### 6.11.3 Read once per controller start, into the bus's own storage
 
 **Where.** A new static `hcdReadSilent` in `hcd_ctl.c`, called from
-`hcdStartBody` beside `hcdReadValues` - after the delivery is settled and
-the BAR mapped, before the interrupt is connected, the controller run and
-the controller thread created. The table lives in `HCD_CONTROLLER` (the FDO
-extension), not in `XHCI_EXTENSION`, so `XHCISNAP`'s dump layout is
-untouched; a machine with two controllers reads it once for each. No
-per-device registry read and no allocation (owner).
+`hcdStartBody` right after `hcdReadValues` - after the delivery is settled
+and the BAR mapped, before the interrupt is connected, the controller run
+and the controller thread created. The gate and the table live in
+`HCD_CONTROLLER` (the FDO extension), not in `XHCI_EXTENSION`, so
+`XHCISNAP`'s dump layout is untouched; a machine with two controllers reads
+both once for each. No per-device registry read and no allocation (owner).
 
-**The table** is fixed-size: `SilentEntry[XHCI_SILENT_MAX][4]` (`UCHAR`),
-`SilentCount`, and three counts for the log - `SilentIgnored`,
-`SilentDropped` and the query's `SilentStatus`. **The cap is 32 entries**,
-128 bytes of non-paged extension: the package's list is six and SweetLow's
-the same six; 32 is five times that, enough for any hand-extended list this
-design can foresee, and a match over it costs at most 32 comparisons an
-interface descriptor, once per PDO. **Past the cap** each further valid
-entry is dropped and counted, in the order the query enumerates the values,
-which the bus does not choose. Dropping can only remove silence - the
-wizard comes, as today - which is the safe direction, and the note ring
-says it happened. **Decided (O5, owner 2026-10-13):** 32.
+**The gate** (owner, 2026-10-13). On 98 SE and ME only, first:
+`XhciSilentInstall`, a `REG_DWORD` under the controller's driver key, read
+by `hcdReadDword` - the read every other `Xhci*` value of the start takes
+(`IoOpenDeviceRegistryKey(hc->Pdo, PLUGPLAY_REGKEY_DRIVER, ...)`, then
+`RtlQueryRegistryValues` with `hcdTakeDword`, which refuses any type but a
+4-byte `REG_DWORD`). On Windows 98 SE and ME that key is the controller's
+class key, `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN`, the key
+`portsw.vbs` writes `XhciIntelPortSwitch` to. **Only a DWORD of exactly 1 is
+on**; absent, 0, any other number, another type or a failed read is off.
+The tree's switches read both ways (checked in `hcd_ctl.c`:
+`XhciIntelPortSwitch` is on at any nonzero DWORD, `XhciWideMap` at anything
+but 0, `XhciSelectiveSuspend` only at exactly 1); this gate takes
+`XhciSelectiveSuspend`'s rule, because its on direction is the one that can
+leave a device unworking with nothing said, so a stray value is taken as
+off. **Proposed (O6)**, the owner having left values other than 0 and 1 to
+the design. The INFs write no value: absent is off, and an INF reinstall
+then cannot undo what `silent-on.bat` set. Read at every start, so
+`silent-off.bat`'s 0 takes effect at the next. On NT it is never read. The
+notes, at every verbosity as the start's other values are:
+`silent.gate.value` (the DWORD read, or `0xFFFFFFFF` when none was read -
+absent, another type, unreadable) and `silent.gate` (0 or 1), on 98 SE and
+ME only.
 
-**The read.** On 98 SE and ME only; `SilentCount`, `SilentIgnored` and
-`SilentDropped` are set to 0 first on every target, so a key deleted
-between two starts takes effect at the second.
+**The table** is fixed-size, a pure-core structure (`XHCI_SILENT`,
+`xhci_silent.h`) embedded in `HCD_CONTROLLER`: `Entry[XHCI_SILENT_MAX][4]`
+(`UCHAR`), `Count`, and two counts for the log, `Ignored` and `Dropped`;
+beside it the controller keeps `SilentGate` (0 or 1) and the query's
+`SilentStatus`. **The cap is 32 entries**, 128 bytes of non-paged
+extension: the package's list is six and SweetLow's the same six; 32 is
+five times that, enough for any hand-extended list this design can foresee,
+and a match over it costs at most 32 comparisons an interface descriptor,
+once per PDO. **Past the cap** each further valid entry is dropped and
+counted, in the order the query enumerates the values, which the bus does
+not choose. Dropping can only remove silence - the wizard comes, as today -
+which is the safe direction, and the note ring says it happened.
+**Decided (O5, owner 2026-10-13):** 32.
+
+**The read.** On every target first `XhciSilentReset` (`Count`, `Ignored`
+and `Dropped` to 0) and `SilentGate` 0, so a gate turned off or a key
+deleted between two starts takes effect at the second. Then, on 98 SE and
+ME, the gate; and only with the gate on,
 `RtlQueryRegistryValues(RTL_REGISTRY_SERVICES, L"USB\\SilentClasses",
 table, hc, NULL)` with one table entry: a query routine
 (`hcdTakeSilent`), `Name` NULL - which asks the routine for every value of
 the key - and `RTL_QUERY_REGISTRY_NOEXPAND`, not `REQUIRED`. The routine
 hands each value's type, data and length to the pure admission
 (`XhciSilentAdd`, 6.11.7), which keeps it, ignores it or drops it, and
-always returns `STATUS_SUCCESS`, so one bad value ends nothing. An absent
-key is the query's failure and an empty table. The start's notes record the
-query's status, the count kept, the count ignored and the count dropped
-(`silent.status`, `silent.entries`, `silent.ignored`, `silent.dropped`, at
-every verbosity, as the start's other values are).
+always returns `STATUS_SUCCESS`, so one bad value ends nothing.
+
+**A query that does not succeed leaves an empty table.** When the query's
+status is anything but `STATUS_SUCCESS`, `XhciSilentEnd(&hc->Silent, 0)`
+sets `Count` to 0 and keeps `Ignored`, `Dropped` and the status for the
+notes. An absent key is that failure before any value; the case the rule
+closes is a query that has called the routine for some values and then
+fails (a value it cannot read, a buffer it cannot size), which would
+otherwise leave a partial table that silences by whichever values came
+first. A list read in part is not the list, and the failure's direction is
+the wizard, as today. The start's notes record the query's status, the
+count kept (after `XhciSilentEnd`), the count ignored and the count dropped
+(`silent.status`, `silent.entries`, `silent.ignored`, `silent.dropped`), at
+every verbosity, with the gate on only: with it off the two gate notes are
+all there is, and their absence on NT is how a reading tells the three
+apart.
 
 **Imports.** Every routine the read needs is already on
 `xhci98-imports.allow` with no `SITES` limit: `RtlQueryRegistryValues`
 (stock 98 SE precedent, `uhcd.sys`, `usbhub.sys` and `usbd.sys` 4.10.2222;
-Appendix A row 170), `IoIsWdmVersionAvailable`. `RTL_REGISTRY_SERVICES` on
-Windows 98 is the 2a guest's runtime reading of NUSB's `usbport.sys` taking
-`Services\USB\DisableSelectiveSuspend` through
-`RtlQueryRegistryValues(RelativeTo = Services, L"usb", ...)` (`lessons.md`).
-No allowlist row changes.
+Appendix A row 170), `IoIsWdmVersionAvailable`, and the gate's
+`IoOpenDeviceRegistryKey` and `ZwClose`, which `hcdReadDword` imports
+already. `RTL_REGISTRY_SERVICES` on Windows 98 is the 2a guest's runtime
+reading of NUSB's `usbport.sys` taking `Services\USB\DisableSelectiveSuspend`
+through `RtlQueryRegistryValues(RelativeTo = Services, L"usb", ...)`
+(`lessons.md`). No allowlist row changes.
 
 **Open (O1): the enumeration on NTKERN.** That Windows 98 SE's and ME's
 `RtlQueryRegistryValues` call the routine for every value when `Name` is
 NULL has not been read; every use in this tree names its value. The legs
-read it (`silent.entries` 6 with the list merged), and a static reading of
-how 98 SE's `usbhub.sys` reads `USB\SilentClasses` would be the precedent.
-If NTKERN does not enumerate, the routes that remain need the owner: the
-NT route is `ZwOpenKey` plus `ZwEnumerateValueKey`, and `ZwOpenKey` has
-stock 98 SE evidence (Appendix A row 157) but no row on the allowlist,
-while `ZwEnumerateValueKey` has no Appendix A row at all - no Windows 98
-evidence recorded; or a query by name of values `"0"` to `"31"`, which
-reads the package's list and SweetLow's but not the rule's "name ignored".
-Neither is assumed here.
+read it (`silent.entries` 6 with the list merged and the gate on), and a
+static reading of how 98 SE's `usbhub.sys` reads `USB\SilentClasses` would
+be the precedent. If NTKERN does not enumerate, the routes that remain need
+the owner: the NT route is `ZwOpenKey` plus `ZwEnumerateValueKey`, and
+`ZwOpenKey` has stock 98 SE evidence (Appendix A row 157) but no row on the
+allowlist, while `ZwEnumerateValueKey` has no Appendix A row at all - no
+Windows 98 evidence recorded; or a query by name of values `"0"` to `"31"`,
+which reads the package's list and SweetLow's but not the rule's "name
+ignored". Neither is assumed here.
 
 #### 6.11.4 When the list is read, against when PDOs exist
 
-Device PDOs are created only by the controller thread
-(`HcdDevicePdoCreate`), which a start creates after the read; so every PDO
-of a start is created against that start's table, and no device of a start
-is enumerated before its read. **The decision is taken at creation and kept
-in the PDO**: a new `HCD_DEVICE_PDO.SilentInstall` (`ULONG`, 0 or 1),
-computed in `HcdDevicePdoCreate` for every PDO of the group - the split is
-known there (`set.Count != 0`), and the PDO's own `Config` and
-`ConfigLength` and its transport are fixed by then - and, like the PDO's
-other creation fields, never changed after it is listed. The query copies
-it.
+Device PDOs are created only by the controller thread, which a start
+creates after the read; so every PDO of a start is created against that
+start's gate and table, and no device of a start is enumerated before its
+read. **The decision is taken once the PDO's fields are final, before the
+PDO is published, and kept in it**: a new `HCD_DEVICE_PDO.SilentInstall`
+(`ULONG`, 0 or 1), written by one helper, `hcdSilentDecide(hc, pdo)`, from
+the PDO alone - its `Config` and `ConfigLength`, its kind (`Composite ||
+Function`), its final `Xport.Transport` - and the controller's gate and
+table, through the pure `XhciSilentPdo` (6.11.7). It is not taken in
+`hcdPdoNew`: neither the composite parent's `Composite` (set by the caller
+after `hcdPdoNew` returns) nor the re-presented function's transport
+(copied over `hcdPdoNew`'s by the caller) is final there.
+
+`hcdPdoNew` has two callers, and the helper is called on both paths
+(checked in `hcd_pdo.c`; there is no third):
+
+- **`HcdDevicePdoCreate`**, for every PDO of the group, after the creation
+  loop - once the first PDO's `Composite` is set and every PDO's transport
+  is `hcdXportDecide`'s - and before the dormant preview and the listing
+  under `PdoListLock`. Nothing later in that function writes a transport
+  (`hcdXportRefusal` reads `XHCI_XPORT_REFUSED`, it does not set it). A
+  group that revives dormant PDOs on 98 SE or ME deletes these, and their
+  answers with them.
+- **`HcdDevicePdoRepresentFunctions`** (task 36.43, the replacement of
+  each function PDO PnP let go with its composite parent's removed FDO),
+  for each replacement, after its identity is copied from the old PDO -
+  `Xport` among it - and before the `PdoListLock` hold that lists it in the
+  old one's place. It is decided again rather than copied from the old
+  PDO, so that one helper is the field's only writer: the same rule over
+  the same filtered configuration and the same transport gives the old
+  answer while the gate and table are the same, and the devnode is
+  installed already, so the answer decides nothing there either way. A
+  function PDO is composite.
+
+Like the PDO's other creation fields, it is never changed after the PDO is
+listed. The query copies it.
 
 What that leaves:
 
 - **A PDO kept across a controller stop** (dormant, revived on the next
   start, sections 5.2 and 10.11) keeps the answer it was created with,
-  against the earlier start's table. Its devnode is already installed, so
-  the answer no longer decides anything; on 98 SE and ME a revived group
-  keeps its old PDOs and deletes the new ones (`HcdDevicePdoCreate`), whose
-  answers are discarded with them.
-- **A list merged, changed or deleted while the controller runs** is seen
-  at the next controller start: a restart, or the controller's disable and
-  enable. A device plugged before that is answered by the old table. The
-  readme says to restart after merging.
-- A hub FDO's start reads nothing: the table is the controller's.
+  against the earlier start's gate and table. Its devnode is already
+  installed, so the answer no longer decides anything; on 98 SE and ME a
+  revived group keeps its old PDOs and deletes the new ones
+  (`HcdDevicePdoCreate`), whose answers are discarded with them.
+- **A list merged, changed or deleted, or the gate changed, while the
+  controller runs** is seen at the next controller start: a restart, or the
+  controller's disable and enable. A device plugged before that is answered
+  by the old gate and table. The readme says to restart.
+- A hub FDO's start reads nothing: the gate and table are the controller's.
 
 #### 6.11.5 The match, the descriptor walk and malformed descriptors
 
-The match is pure: `XhciSilentMatch(entries, count, config, length,
-composite)` returns 1 or 0. It walks the PDO's held copy of its
-configuration descriptor (`Config`, `ConfigLength` - the copy the PDO
-already carries so it may outlive the device record; for a function, its
-filtered configuration) by `bLength`, from offset 0, the configuration
-descriptor itself walked over like any other:
+The match is pure: `XhciSilentWalk(entries, count, config, length,
+composite)` returns `XHCI_SILENT_MATCH`, `XHCI_SILENT_NOMATCH` or
+`XHCI_SILENT_MALFORMED`, and `XhciSilentMatch` with the same arguments
+returns exactly 1 for a match and 0 otherwise. It walks the PDO's held copy
+of its configuration descriptor (`Config`, `ConfigLength`, the copy the PDO
+already carries so it may outlive the device record):
 
-- **Bounds:** at each offset the walk needs two bytes; a descriptor whose
-  `bLength` is below 2 (no progress) or runs past `ConfigLength` (truncated)
-  is **malformed**.
-- **An interface descriptor** is `bDescriptorType` 4 with `bLength` 9 or
-  more; class, subclass and protocol are its bytes 5, 6 and 7. A type-4
-  descriptor shorter than 9 is malformed. Any other type is walked over
-  unread (IADs, endpoints, class-specific descriptors).
+- **What the buffers are.** A device PDO's `Config` is the device's
+  (`hcdPdoNew` copies `dev->Config`), and that is the bytes of the second
+  `GET_DESCRIPTOR(CONFIGURATION)`, asked for the `wTotalLength` the 9-byte
+  head reported and cached only when exactly that many came back
+  (`hcd_enum.c`, `XHCI_ENUM_ACT_GET_CONFIG`; `xhci_enum.c`, state
+  `CONFIG9`). Nothing there checks the header's `bLength` or
+  `bDescriptorType`, and the copy's own `wTotalLength` is the second read's,
+  which a device may make differ from the head's. A function PDO's `Config`
+  is `XhciFuncConfig`'s, which refuses an unsound configuration and writes
+  `wTotalLength` equal to the length it builds.
+- **The header first.** `length` at least 9; byte 0 (`bLength`) at least 9;
+  byte 1 (`bDescriptorType`) 2; `wTotalLength` (bytes 2 and 3) at least 9,
+  at least the header's `bLength`, and **at most `length`**. Otherwise
+  malformed. These are the checks `xhci_func.c`'s `xhciFuncTotal` makes
+  before a split, restated in `xhci_silent.c` because they are static
+  there.
+- **Only `wTotalLength` is walked.** From the header's `bLength` to
+  `wTotalLength`; bytes of the buffer past `wTotalLength` are never read,
+  so an interface descriptor there does not count.
+- **Every descriptor after the header**: the walk needs two bytes at each
+  offset, so a single byte left before `wTotalLength` is malformed; a
+  `bLength` below 2 (no progress) or running past `wTotalLength` is
+  malformed; an interface descriptor (type 4) shorter than 9, and an IAD
+  (type 11) shorter than 8, are malformed, as in `xhciFuncSound`. Any other
+  type is walked over unread (endpoints, class-specific descriptors).
+- **An interface descriptor's** class, subclass and protocol are its bytes
+  5, 6 and 7.
 - **A malformed configuration answers 0**, whatever matched before the
   fault: the walk does not stop at the first match, so a configuration is
   silent only when it was walked whole and matched. Silence is the
   direction that can leave a device unworking with nothing said, so a
   configuration the bus cannot read whole is not given it. **Decided (O4, owner 2026-10-13):**
   0, not a match found before the fault.
-- `config` NULL or `length` 0: 0.
+- `config` NULL or `length` 0: 0 (malformed).
 
 **The two traps** (roadmap 38.2), designed out where they arise:
 
-- **An absent list is never dereferenced.** `XhciSilentMatch` returns 0
-  before it reads an entry or a descriptor when `count` is 0, and also when
-  `entries` is NULL whatever `count` says; the caller does not call it on
-  NT at all. In the bus the table is an array in the extension, so there
-  is no pointer to be NULL, but the pure function does not rely on that,
-  and the host tests call it with a NULL table.
+- **An absent list is never dereferenced.** `XhciSilentWalk` returns
+  `XHCI_SILENT_NOMATCH` before it reads an entry or a descriptor when
+  `count` is 0, and also when `entries` is NULL whatever `count` says; the
+  caller does not call it on NT or with the gate off at all. In the bus the
+  table is an array in the extension, so there is no pointer to be NULL,
+  but the pure function does not rely on that, and the host tests call it
+  with a NULL table.
 - **A flag is masked before it becomes a `BOOLEAN`.** The entries are kept
   as four `UCHAR`s, never packed into a `ULONG` whose `(BOOLEAN)` cast
   would keep the low byte - the control byte itself, nonzero for an
   ignored `0x01` entry - or lose a bit above it. Each test is written
-  `(control & mask) != 0`, the match returns exactly 0 or 1, and the
-  capability is written `caps->SilentInstall = pdo->SilentInstall ? TRUE :
-  FALSE`.
+  `(control & mask) != 0`, `XhciSilentMatch` returns exactly 0 or 1, and
+  the capability is written `caps->SilentInstall = pdo->SilentInstall ?
+  TRUE : FALSE`.
+
+**The PDO's answer** is `XhciSilentPdo(gate, entries, count, config,
+length, composite, storageBarred)`, `storageBarred` being the caller's
+`Transport == XHCI_XPORT_UAS || Transport == XHCI_XPORT_REFUSED`. It
+returns a reason: `XHCI_SILENT_OFF` (gate 0), `XHCI_SILENT_EMPTY` (no
+entries), `XHCI_SILENT_BARRED` (the transport, O2, before any walk), or the
+walk's result; the PDO's `SilentInstall` is 1 for `XHCI_SILENT_MATCH`
+alone. With the gate on, `hcdSilentDecide` notes each PDO it decides as
+`silent.pdo`, at every verbosity: `(RootPort << 24) | (first interface, or
+0xFF for a whole device or a parent, << 16) | (reason << 8) | answer`, so
+the bus's answer is read off the note ring with `XHCISNAP -report` (or
+`SNAPGET.BAT`), not inferred from the wizard. A route behind hubs is not
+in the value; the order of the notes and the `dev.*` notes beside them
+place it.
 
 #### 6.11.6 IRQL and locking
 
-- **The read** (`hcdReadSilent`, `hcdTakeSilent`, `XhciSilentAdd`):
-  PASSIVE_LEVEL, in the start body, on the PnP thread's START. It writes
-  the table with no lock: the previous start's controller thread has
-  exited (the stop waits for it), this start's does not exist yet, and
-  nothing else reads the table.
-- **The decision** (`XhciSilentMatch` from `HcdDevicePdoCreate`): the
-  controller thread, PASSIVE_LEVEL, reading the table with no lock - the
-  table is written only while no thread exists. No spin lock is held for
-  the walk.
+- **The read** (`hcdReadSilent`, the gate's `hcdReadDword`,
+  `hcdTakeSilent`, `XhciSilentAdd`, `XhciSilentEnd`): PASSIVE_LEVEL, in the
+  start body, on the PnP thread's START. It writes the gate and the table
+  with no lock: the previous start's controller thread has exited (the stop
+  waits for it), this start's does not exist yet, and nothing else reads
+  them.
+- **The decision** (`hcdSilentDecide`, from `HcdDevicePdoCreate` and
+  `HcdDevicePdoRepresentFunctions`): the controller thread, PASSIVE_LEVEL,
+  reading the gate and table with no lock - they are written only while no
+  thread exists - and writing a PDO not yet listed. No spin lock is held for
+  the walk; on both paths it runs before the `PdoListLock` hold that lists
+  the PDO.
 - **The query** (`hcdDeviceCapabilities`): PASSIVE_LEVEL, as every
   `IRP_MN_QUERY_CAPABILITIES`, reading the PDO's `SilentInstall` with no
-  lock: it was written before the PDO was listed under `PdoListLock`, the
-  publication every other creation field relies on.
+  lock: it was written before the PDO was listed under `PdoListLock`, on
+  both paths, the publication every other creation field relies on.
 - The pure half (`xhci_silent.c`) is DDK-free, C89, IRQL any.
 
 #### 6.11.7 The pure core and its host tests
 
-`src\xhci_silent.c` and `xhci_silent.h` (the admission `XhciSilentAdd` and
-the match `XhciSilentMatch`), with `test\test_silent.c` in
-`test\run-host-tests.cmd`, as the other pure halves are (`test_func`,
-`test_xport`). The vectors:
+`src\xhci_silent.c` and `xhci_silent.h` (the table `XHCI_SILENT`;
+`XhciSilentGate`, `XhciSilentReset`, `XhciSilentAdd` and `XhciSilentEnd`;
+`XhciSilentWalk`, `XhciSilentMatch` and `XhciSilentPdo`), with
+`test\test_silent.c` in `test\run-host-tests.cmd`, as the other pure halves
+are (`test_func`, `test_xport`). `XhciSilentGate(found, value)` is the
+gate's rule: 1 only when a DWORD was found and it is 1. The vectors:
 
+- **The gate:** absent, another type, 0, 2, `0xFFFFFFFF` all 0; a DWORD 1
+  is 1.
 - **Admission:** a 4-byte `REG_BINARY` with `0x80`, `0x40` and `0xC0` kept;
   `0x00`, `0x01`, `0x02`, `0x03` and `0x3F` ignored; `REG_DWORD` of 4
   bytes, `REG_SZ` and `REG_NONE` ignored; lengths 0, 3 and 5 ignored; NULL
   data ignored; an ignored entry takes no slot; the 33rd valid entry
   dropped and counted, the first 32 kept in order.
+- **A failed enumeration:** one entry kept and one ignored, then
+  `XhciSilentEnd(table, 0)`: `Count` 0, `Ignored` 1 kept, and a match
+  against a configuration the kept entry matched is 0; the same with
+  `XhciSilentEnd(table, 1)` keeps the entry and matches; `XhciSilentReset`
+  after a full table empties it and its counts.
 - **Control bits:** `0x80` with class only matches any subclass and
   protocol; `0x81` compares the subclass and not the protocol; `0x82` the
   protocol and not the subclass; `0x83` both; a class mismatch never
@@ -2074,23 +2198,49 @@ the match `XhciSilentMatch`), with `test\test_silent.c` in
   alternate 0).
 - **Subclass and protocol:** a match on a non-zero alternate setting only;
   a match on the last interface of several.
+- **The transport (O2):** `XhciSilentPdo` with `storageBarred` 1 over the
+  dual-mode drive's configuration and the package's six is
+  `XHCI_SILENT_BARRED` and answer 0, for the UAS case and the refused case
+  alike (the caller's two transports map to the one flag, and the helper's
+  mapping is read on the legs); with `storageBarred` 0 it matches. Gate 0
+  is `XHCI_SILENT_OFF` with a matching table.
 - **Empty and absent lists:** `count` 0 with a real table, a NULL table
   with `count` 0, and a NULL table with `count` 3 - all 0.
-- **Malformed configurations:** `bLength` 0, `bLength` 1, a descriptor
-  running past the length, a type-4 descriptor of 5 bytes, a matching
-  interface before a malformed descriptor (0), and a matching interface
-  after a long class-specific descriptor (1); `config` NULL and `length` 0.
-- **The `BOOLEAN` trap:** every result is exactly 0 or 1, including for an
-  entry `0x83` that matches, and an entry `0x01` (ignored) never yields a
-  nonzero result.
+- **The header:** `bLength` 8; `bDescriptorType` 4 at offset 0;
+  `wTotalLength` 8; `wTotalLength` below the header's `bLength` - each
+  malformed, with a matching interface after it.
+- **The two lengths:** `wTotalLength` greater than `length`, a matching
+  interface wholly inside the buffer - malformed, 0; `length` greater than
+  `wTotalLength` with the matching interface only past `wTotalLength` - no
+  match, 0; `length` greater than `wTotalLength` with the match inside and
+  junk past it - 1.
+- **Malformed descriptors:** `bLength` 0, `bLength` 1, a descriptor
+  running past `wTotalLength`, a single trailing byte before `wTotalLength`
+  after a matching interface, a type-4 descriptor of 5 bytes, an IAD of 7
+  bytes, a matching interface before a malformed descriptor (0), and a
+  matching interface after a long class-specific descriptor (1); `config`
+  NULL and `length` 0.
+- **The `BOOLEAN` trap:** every `XhciSilentMatch` result is exactly 0 or 1,
+  including for an entry `0x83` that matches, and an entry `0x01` (ignored)
+  never yields a nonzero result.
 
-#### 6.11.8 The `.reg` in `tools\silent\`
+#### 6.11.8 `tools\silent\`: the list, and the switch's scripts
 
-The package carries the list as a `.reg` in its own directory,
-`tools\silent\`, under task 38.10's `tools\` (owner, 2026-10-13, replacing
-the `release-x86` placement of 2026-10-12): never in a flavour directory,
-never at the version root, and `Assert-ToolsLayout`'s list of tool
-directories names it. Six entries, `REGEDIT4`, under
+The package carries the list and the scripts that set the gate in their own
+directory, `tools\silent\`, under task 38.10's `tools\` (owner, 2026-10-13,
+replacing the `release-x86` placement of 2026-10-12): never in a flavour
+directory, never at the version root, and `Assert-ToolsLayout`'s list of
+tool directories names it. Four files, sources under `src\` as
+`portsw.vbs`'s are, copied once by the release cut:
+
+| File | What it is |
+|---|---|
+| `SILENT.REG` | the list: six entries, `REGEDIT4` |
+| `SILENT.VBS` | shows or sets `XhciSilentInstall` on every xhci98 controller, and shows the list |
+| `silent-on.bat` | merges `SILENT.REG` and sets the gate to 1 |
+| `silent-off.bat` | sets the gate to 0 and leaves the list |
+
+**`SILENT.REG`**, under
 `[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses]`:
 
 | Value | Bytes | Control byte | Matches |
@@ -2103,37 +2253,97 @@ directories names it. Six entries, `REGEDIT4`, under
 | `"5"` | `hex:83,03,01,02` | the same | a boot mouse alone |
 
 The values and their names are those of SweetLow's `SilentClasses.reg`
-(in `usb20_win9x.zip`, `tools/usb20_win9x.zip`; the file is 214 bytes,
+(in `usb20_win9x.zip`, `tools/usb20_win9x.zip`, extracted to
+`tools\sweetlow-extracted\SilentClasses.reg`; the file is 214 bytes,
 SHA-256 `4DB099B600F0E45C82AF8F9A9E56745C6245093FCCDE574220FD610B12B523E3`,
-read as text, static). Keeping the same names means merging one over the
-other leaves six values, not twelve: names are ignored by the rule, but a
-duplicate would take a table slot. The file in `tools\silent\` is written
-by this project from those six facts; it is not a copy of his file, and
-`legal-provenance.md` section 4 gains the row for the values in the same
-change. Protocol is compared in the HID entries so a non-boot HID device
-(`03/00/xx`), whose class driver may be a vendor's, is never silent, and in
-the storage entry so the UAS alternate (`08/06/62`) is not matched by it;
-the hub entry compares the class alone because every hub binds the same
-way. **UAS is not listed** (owner): `xhciuas.inf` is this package's own,
-and its first install is the wizard's (but see O2).
+read as text, static; `legal-provenance.md` section 4 has the row). Keeping
+the same names means merging one over the other leaves six values, not
+twelve: names are ignored by the rule, but a duplicate would take a table
+slot. The file in `tools\silent\` is written by this project from those six
+facts; it is not a copy of his file. Protocol is compared in the HID
+entries so a non-boot HID device (`03/00/xx`), whose class driver may be a
+vendor's, is never silent, and in the storage entry so the UAS alternate
+(`08/06/62`) is not matched by it; the hub entry compares the class alone
+because every hub binds the same way. **UAS is not listed** (owner):
+`xhciuas.inf` is this package's own, and its first install is the
+wizard's (but see O2).
+
+**`SILENT.VBS`** is `portsw.vbs`'s pattern (`src\portsw.vbs`, roadmap-hcd
+task 36.42), for the one value `XhciSilentInstall`: Windows Script Host and
+VBScript, because 98 SE and ME have them and no `reg.exe`; the controller
+keys found as `portsw.vbs` finds them - every `NNNN` under
+`HKLM\System\CurrentControlSet\Services\Class\USB\`, listed from the section
+headers of a `regedit /e` export of that key (no WMI on a stock 98), or
+probed `0000` to `9999` when the export gives nothing, and kept when its
+`DriverDesc` is the controller's (`xHCI98 USB 3.x eXtensible Host
+Controller`) and its `NTMPDriver` is `xhci98.sys`. Arguments `show`, `1` and
+`0`, or a double-click that shows and asks; exit codes 0 done, 1 refused or
+nothing found, 2 usage, as `portsw.vbs`'s. `show` prints, for each
+controller, the value and what the driver makes of it (exactly 1 on;
+missing, 0, another number or type off), and the list: a `regedit /e`
+export of the `SilentClasses` key read for its value lines, saying whether
+the six of `SILENT.REG` are there with their bytes and how many other
+values the key holds (Script Host cannot list a key's values itself).
+Setting writes the DWORD to every controller's key and then prints the
+`show` text and "RESTART WINDOWS", once, as `portsw.vbs` does since 38.7.
+On an NT system it writes nothing: it says the silent install is a Windows
+98 SE and ME feature the driver never reads there, and exits 1. No
+elevation path, since it writes only on 98 SE and ME.
+
+**`silent-on.bat` and `silent-off.bat`** are `portsw-on.bat`'s shape: one
+file for COMMAND.COM and cmd.exe, ASCII and CRLF, the `if
+"%OS%"=="Windows_NT" goto nt` head, every line from the `run` label on
+COMMAND.COM syntax, a check that `SILENT.VBS` (and for `silent-on.bat`
+`SILENT.REG`) is in the current directory with the same "run it from the
+download's `TOOLS\SILENT` directory" message, a `pause` at the end, and the
+restart said once, by `SILENT.VBS`. On NT both say "Windows 98 SE and ME
+only; nothing was changed" and end. `test-package.ps1` gates their text as
+it gates `portsw-on.bat`'s.
+
+- **`silent-on.bat`**: `cscript //nologo silent.vbs show`; then `regedit /s
+  silent.reg`; then `cscript //nologo silent.vbs 1`, whose output reads the
+  list back. The list goes in before the gate is set, so a failure between
+  the two leaves the list merged and the gate as it was - off by default,
+  which silences nothing. `regedit /s` reports nothing and its errorlevel is
+  not relied on; the read-back is the check.
+- **`silent-off.bat`**: `cscript //nologo silent.vbs 0`, and it says that
+  the list was left in place, because another USB stack may read the same
+  key (SweetLow's, whose file this list's values are), and how to delete it
+  by hand.
+
+**Names.** `SILENT.REG` and `SILENT.VBS` are 8.3. `silent-on.bat` and
+`silent-off.bat` are the owner's names, 9 and 10 characters before the dot,
+not 8.3 - as `portsw-on.bat` and `portsw-off.bat` are not, which run by
+double-click and at a 98 SE or ME prompt under their long names. **Open
+(O7):** keep them, or publish 8.3 names (`SILENTON.BAT`, `SILENTOF.BAT`) as
+the 38.1 report batches are.
 
 **The readme section** (the readme template's, under `tools\silent\`):
 
 - What it does: on Windows 98 SE and ME, a device of a listed class -
   hub, boot keyboard, boot mouse, Bulk-Only stick, alone or in a composite
-  device - installs with no wizard; on Windows 2000 and later the list is
-  never read.
-- **Merge it only once each listed class's drivers have been installed at
-  least once on this machine**, by plugging such a device with the list
-  absent and finishing its wizard: a silent install asks for no CD and no
-  disk, so a class whose driver is not yet on the machine ends with a
+  device - installs with no wizard; on Windows 2000 and later neither the
+  switch nor the list is read, and the scripts change nothing there.
+- **Two parts, both needed**: the list (`SILENT.REG`) and the driver's
+  switch (`XhciSilentInstall`, off unless it is 1). `silent-on.bat` does
+  both; a list merged by hand, or by another stack, does nothing while the
+  switch is off.
+- **Run `silent-on.bat` only once each listed class's drivers have been
+  installed at least once on this machine**, by plugging such a device with
+  the switch off and finishing its wizard: a silent install asks for no CD
+  and no disk, so a class whose driver is not yet on the machine ends with a
   device that does not work and nothing said. The case read: a USB keyboard
   on 98 SE needs `kbdhid.vxd` from the Windows 98 SE CD (run-36, K5), and
   storage needs NUSB's `usbstor.sys` on 98 SE (ME's own on ME).
-- Restart after merging (the list is read at the controller's start).
-- To undo, delete the `SilentClasses` key in `regedit` and restart.
+- **Restart Windows** after either script: the driver reads the switch and
+  the list only when its controller starts.
+- **`silent-off.bat` turns the switch off and keeps the list**, because
+  another USB stack may share the key. To delete the list too, if nothing
+  else uses it: in `regedit`, under
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, delete the
+  `SilentClasses` key, and restart.
 - UAS is not in the list, and why.
-- ME: whether ME needs the list at all, as the legs read it (below).
+- ME: what the legs saw on ME without the list (below), as an observation.
 - The credit: SweetLow, for the information on how the silent install is
   decided and for the list.
 
@@ -2143,31 +2353,74 @@ and its first install is the wizard's (but see O2).
 the stick on a stock ME with no list and no wizard; the wizard came only for
 UAS (`XHCIUAS.INF`, this package's) and composite audio (run-37, 37.1). So
 ME may decide silence another way, or ME's `usbhub.sys` (4.90.3002.1, not
-read here for this) may not be what decides it; whether ME needs the list
-is what its legs answer, and the readme then says so.
+read here for this) may not be what decides it. What ME does without the
+list is therefore recorded as an observation, not asserted: on ME the legs
+assert the bus's answer (the `silent.pdo` notes) and that configuration
+(c) below asks no more than (a); the readme then says what was seen.
 
-**The legs**, on 98 SE and on ME, each first without the list and then with
-it merged and the guest restarted, the controller's notes read
-(`silent.status`, `silent.entries` 6, `silent.ignored` 0 and
-`silent.dropped` 0 with the list):
+**Fresh devnodes.** Windows decides a silent install only when it makes a
+devnode; a device whose devnode already exists - same parent, same
+instance id, which is the serial where the device has a usable one and
+then follows it across ports (section 10.7) - binds again with no wizard
+and says nothing about the answer. So every pass that reads silence plugs
+each device where it has no devnode: from a clean guest snapshot taken
+after each class's drivers were installed once (each class's first install
+through its wizard, the device's devnodes then removed in Device Manager,
+which leaves the class driver's files), or, for a device with no usable
+serial, at a port it has never been on. The first configuration's wizard
+is the proof that the devnode was new.
 
-1. A device installed once and then moved to another port (a new devnode
-   for a known class): the wizard without the list, none with it.
-2. A hub.
+**Three configurations**, on 98 SE and on ME, each after a restart, the
+controller's notes read with `XHCISNAP -report` or `SNAPGET.BAT`:
+
+- **(a) the list merged, the gate off** (`regedit /s SILENT.REG`, read
+  once with no `XhciSilentInstall` and once with `silent-off.bat`'s 0):
+  `silent.gate` 0, no
+  `silent.entries` and no `silent.pdo` note; the wizard as today.
+- **(b) the gate on, no list** (`silent.vbs 1` on a guest with no
+  `SilentClasses` key): `silent.gate` 1, `silent.status` the query's
+  failure, `silent.entries` 0, every `silent.pdo` reason
+  `XHCI_SILENT_EMPTY`, answer 0; the wizard as today.
+- **(c) both** (`silent-on.bat`): `silent.gate` 1, `silent.entries` 6,
+  `silent.ignored` 0, `silent.dropped` 0 (O1's reading); silence as below.
+
+**The devices**, each on a fresh devnode in each configuration, reading
+both the wizard and the device's `silent.pdo` notes:
+
+1. A device installed once and then on a fresh devnode (a known class on a
+   new devnode): the wizard in (a) and (b), none in (c), answer 1.
+2. A hub: answer 1 in (c); whether it changes anything for this package's
+   own `XHCI98\HUB` devnode is read.
 3. A boot keyboard and a boot mouse, each alone (on 98 SE the keyboard's
-   first install takes the CD's `kbdhid.vxd`, before the list is merged).
-4. A composite device with a boot keyboard or mouse function: the
-   parent and each function, which function is silent and which asks.
-5. A Bulk-Only stick.
+   first install takes the CD's `kbdhid.vxd`, before the snapshot).
+4. A composite device with a matching function and one that matches
+   nothing (a boot keyboard or mouse function beside a non-boot HID
+   `03/00/xx` or an audio function): in (c) the parent answers 1 (O3), the
+   matching function 1 and installs silently, the other function 0 and its
+   wizard comes.
+5. A Bulk-Only stick: answer 1 in (c).
+6. **UAS and refused, FALSE explicitly** (O2): in (c) a dual-mode drive
+   presented UAS answers 0 with reason `XHCI_SILENT_BARRED` and its
+   `XHCIUAS.INF` wizard comes; a device refused in place (UAS-only at
+   SuperSpeed on a controller that does not stream, on a root port with no
+   companion or behind a SuperSpeed hub; 31-A.3) answers 0 with the same
+   reason, read where such a vehicle is at hand, and otherwise recorded as
+   host-tested only.
+7. **The composite parent disabled and enabled** in Device Manager in (c)
+   (the path of `HcdDevicePdoRepresentFunctions`, task 36.43): the
+   re-presented function PDOs' `silent.pdo` notes give the same answers as
+   at their first creation, and nothing asks.
 
-Then the readme says whether ME needs the list. Proposed beside them (not
-the owner's list): one Windows 2000 reading with the list merged, which
-should show no `silent.*` note and every install as before.
+Then the readme says what ME did. Proposed beside them (not the owner's
+list): one Windows 2000 reading with the list merged and `XhciSilentInstall`
+1 set by hand in `regedit` (`SILENT.VBS` writes nothing on NT), which should
+show no `silent.*` note and every install as before.
 
 #### 6.11.10 Questions and decisions
 
 O2 to O5 were decided by the owner on 2026-10-13, each as proposed; O1 is
-a fact to be read, not a choice.
+a fact to be read, not a choice; O6 and O7 come from the gate's design
+(owner, 2026-10-13) and are proposed here for the owner.
 
 | | Question | Decided / to read |
 |---|---|---|
@@ -2176,6 +2429,8 @@ a fact to be read, not a choice.
 | O3 | The composite parent: TRUE when any function's interfaces match (the rule read literally), when all do, or never | any (literal) (owner) |
 | O4 | A malformed configuration: 0 whatever matched, or keep a match found before the fault | 0 (owner) |
 | O5 | The table's cap | 32, the excess dropped and counted (owner) |
+| O6 | `XhciSilentInstall` other than absent, 0 and 1 | **Proposed:** off - only a DWORD of exactly 1 is on, `XhciSelectiveSuspend`'s rule (6.11.3) |
+| O7 | The batch files' names | **Proposed:** keep the owner's `silent-on.bat` and `silent-off.bat`, long names as `portsw-on.bat`'s; or `SILENTON.BAT` and `SILENTOF.BAT` (6.11.8) |
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
