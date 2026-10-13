@@ -5796,8 +5796,10 @@ if it exists, binds today's ids too. The design therefore reads it
 rather than assumes it: on 98 SE, a chain of serial-less hubs five tiers
 deep with a serial-less composite device at its end - the longest form,
 since a location-form function's key carries the composite parent's too
-(10.12) - and the same chain under a hub whose serial id is 126
-characters, on `2.3.1.0` and again after the update, the parent's and the
+(10.12) - and the same five hubs with the outermost one given a usable
+126-character serial id instead, the four below it serial-less (five
+external hubs in all, the most the bus serves: 10.3, `XhciHubTierServable`),
+on `2.3.1.0` and again after the update, the parent's and the
 function's keys read whole (10.13.10). If QEMU cannot build a chain that
 deep, the deepest it builds is read and the record says the limit is the
 vehicle's, not a measured one of 98 SE's. If a depth works under the old
@@ -6425,8 +6427,8 @@ this design adds:
 - **98 SE** updated on a stock install and under SweetLow's stack; and
   a chain of serial-less hubs (QEMU hubs given a refused serial) five
   tiers deep, or as deep as QEMU builds, with a serial-less composite
-  device at its end, and the same under a hub with a 126-character serial
-  id, on `2.3.1.0` and after the update, the parent's and the function's
+  device at its end, and the same five with the outermost hub given a
+  126-character serial id (five external hubs in all, 10.3), on `2.3.1.0` and after the update, the parent's and the function's
   keys read whole (10.13.1, "Lengths").
 - **A hub or composite device first plugged in** between the update and
   the restart, on 98 SE (10.13.4).
@@ -6435,8 +6437,11 @@ this design adds:
   (10.13.4).
 - **The tool**, on every target: its listing, `-remove`, the hidden view
   and `Enum` again; its global refusals forced once (run before the
-  restart on 98 SE; run with the controller disabled, so with no held
-  controller, on one NT target);
+  restart on 98 SE; run with the controller disabled, a present but
+  unholdable controller, on one NT target; and run on one NT target
+  with no present project controller - the controller uninstalled in
+  Device Manager and not rescanned - while the old entries remain, the
+  refusal read before any question);
   on each NT target, whether a disable, an update and a rollback of the
   controller are vetoed while the tool holds its door open (10.13.8) - the
   result deciding whether removal is enabled there - with a stock
