@@ -5703,8 +5703,9 @@ device or the bench. The guest legs of 36.43 read what QEMU can show.
 
 ### 10.13 The bus's own ids under `USB\` (task 38.9, 2026-10-13)
 
-**Status: draft for the owner, written before any code; not yet reviewed.**
-The task and what is already decided are roadmap-hcd 38.9's (owner,
+**Status: written before any code; the owner's decisions taken
+(2026-10-13, 10.13.12), the task kept in `2.4.0.0` with the update costs
+of 10.13.4 and 10.13.5 accepted; under review.** The task and what is already decided are roadmap-hcd 38.9's (owner,
 2026-10-13): the four project-owned bases move from a private enumerator to
 `USB\` - `XHCI98\ROOT_HUB`, `XHCI98\HUB`, `XHCI98\HUB30` and
 `XHCI98\COMPOSITE` become `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`,
@@ -5720,8 +5721,8 @@ to the devices beneath, measured in the serial-number and the location
 case (10.13.5); the private hardware ids and the empty compatible-id lists
 kept (10.13.1); stock and vendor INF matches audited rather than assumed
 impossible (10.13.2); both F6 files and their gates changed (10.13.7). The
-choices this section could not settle are 10.13.12's, each with a
-recommendation. It is a new section rather than more of 10.12 because the
+choices the roadmap left open were put to the owner as D1 to D13 and are
+10.13.12's decisions taken. It is a new section rather than more of 10.12 because the
 move covers the root hub and the hubs as well as the composite parent;
 10.11 and 10.12 keep their designs, and only their ids change.
 
@@ -5752,8 +5753,8 @@ in the change that lands the code, as 36.43 amended its predecessors.
 | | `BusQueryInstanceID` | `hcdInstanceQueryId`: the serial id, `UniqueID` TRUE, else the location key in decimal, `UniqueID` FALSE (10.7) | unchanged |
 
 **Unchanged**: every device and function PDO's ids (10.7), the refused
-interface's `USB\XHCI98_NOXPORT&...` hardware id (10.7, task 31-A.3; task
-38.12's question, 10.13.9), every instance id and its rule, every
+interface's `USB\XHCI98_NOXPORT&...` hardware id and its device id (10.7,
+task 31-A.3; task NOX.1, deferred, 10.7.1 and 10.13.9), every instance id and its rule, every
 capability, the device texts and the INFs' model texts, the service name
 `xhci98`, the door's names (`\Device\XHCI98DEV<serial>`,
 `\DosDevices\XHCI98HUB<serial>`, 10.11), and the `txtsetup.oem` component
@@ -5779,7 +5780,7 @@ and a 126-character serial id, is 165, under `MAX_DEVICE_ID_LEN` (200),
 as 10.7's longest function path (157) is. The host vectors assert both
 numbers (10.13.7).
 
-**One source for the four bases** (proposed). Today the strings are
+**One source for the four bases.** Today the strings are
 spelled in three files (`hcd_rh.c`, `xhci_hub.c`, `xhci_func.c`) and the
 INF gate's `$prod` table, with nothing holding them equal; the root hub's
 is in DDK-bound code no host test reaches. The proposal: the four bases as
@@ -5926,9 +5927,9 @@ apply to this update: the root hub is new and installs from the new INF.
 
 | Path | When the new ids appear | How the new devnodes install | Read |
 |---|---|---|---|
-| Windows 98 SE and ME (`Xhci.Dev`, `RootHub.Dev`, `Hub.Dev`, `Comp.Dev`) | at the next start: the new `xhci98.sys` cannot replace the running one, which keeps running until the restart (release notes, "Updating from 2.y.y.y") | expected silently from the new INF, as each new hub and composite devnode installs today (6.11's opening, run-36 98 SE K2 and G1, run-37 for ME); the root hub's section copies `xhci98.sys` (8.6), so at that start the engine copies the file the running driver is - decision D3 | the legs |
+| Windows 98 SE and ME (`Xhci.Dev`, `RootHub.Dev`, `Hub.Dev`, `Comp.Dev`) | at the next start: the new `xhci98.sys` cannot replace the running one, which keeps running until the restart (release notes, "Updating from 2.y.y.y") | expected silently from the new INF, as each new hub and composite devnode installs today (6.11's opening, run-36 98 SE K2 and G1, run-37 for ME); the root hub's section copies `xhci98.sys` (8.6), so at that start the engine would copy over the file the running driver is: the root-hub sections copy nothing from this release (D3) | the legs |
 | Windows 2000 (`*.NTx86`) | at once: the update restarts the controller's stack and the new image loads (release notes: "It runs at once, with no restart") | no wizard, as for the hubs and composite parents (10.12, "What it buys") | the legs |
-| 32-bit XP (`*.NTx86`) and XP x64 (`*.NTamd64`) | at once | **Found New Hardware and the unsigned-driver warning, once per new devnode**: the root hub (the `1.2.0.0` upgrade read "a second wizard follows for the root hub", release notes, "Upgrading from 1.2.0.0"), each hub half and each composite parent (10.12; run-36 XP K2 and G1) - decision D4 | the legs |
+| 32-bit XP (`*.NTx86`) and XP x64 (`*.NTamd64`) | at once | **Found New Hardware and the unsigned-driver warning, once per new devnode**: the root hub (the `1.2.0.0` upgrade read "a second wizard follows for the root hub", release notes, "Upgrading from 1.2.0.0"), each hub half and each composite parent (10.12; run-36 XP K2 and G1); documented, with its input trap (D4) | the legs |
 | 32-bit Vista and 7 (`*.Dev6.NTx86`) | at the restart the update asks for, for the MSI helper (task 38.6; renamed `xhcihlpr.sys` by 38.4); until it, the earlier release runs | from the package Have Disk put in the driver store; no wizard expected (unread for a new devnode of an already-staged package) | the legs |
 | Vista x64 and 7 x64 (`*.Dev6.NTamd64`) | at once, in test-signing mode or an F8 boot (AGENTS.md) | as 32-bit Vista and 7 | the legs |
 
@@ -5940,9 +5941,9 @@ makes an `XHCI98\` devnode, which on NT matches the old package's INF
 98 SE and ME it matches only if the old INF is still in `INF\OTHER`, which
 Update Driver may have replaced with the new one (unread). Without a match
 it is an unknown device until the restart, after which it is a stale
-`XHCI98\` devnode like the rest. Decision D2 is whether the new INFs keep
-the old model lines to cover that window; the release notes say "restart
-before plugging in a new hub" either way.
+`XHCI98\` devnode like the rest. The new INFs do not keep the old model
+lines to cover that window (D2, a clean move); the release notes say, for
+98 SE and ME, "restart before plugging in a new hub".
 
 **Going back to `2.3.x`** after an update: the old binary reports the old
 ids, and each old devnode comes back present with its driver - unless the
@@ -5978,15 +5979,31 @@ at runtime for the composite case on the 36.43 update legs):
   whose reservation the old non-present devnode may keep, giving the new
   devnode the next free number (unread here; the Ports class's handling of
   a non-present port is Windows'). The old devnode stays non-present.
-  Decision D5 is what, if anything, the project does about that.
+  The project documents it and does nothing more (D5).
 - **Composite functions** follow their own rule: a serial id with `&nn`
   keeps the devnode; the location form with `nn` gets a new one.
 
-**On Windows 98 SE and ME** the configuration manager uses the instance id
-as given (10.11, unread for a re-parented devnode), and neither form
-contains anything of the parent's, so both are **expected to keep their
-devnodes and settings**; the legs read it for both forms, which closes
-what 10.11 and 10.12 left unread for these systems.
+**On Windows 98 SE** the instance key is not the answer alone. Task 38.2's
+legs read it (runtime, 2026-10-13, under NUSB 3.3; 10.7.1): a serial id is
+kept as answered, but for a location-form instance id 98 SE appends the
+parent's path with `\` turned into `&` (`1XHCI98&ROOT_HUB&0PCI&...`).
+So on 98 SE:
+
+- **a device or function with a serial id** is expected to keep its
+  devnode and settings, its key containing nothing of the parent's;
+- **a device or function on the location form** carries its parent's old
+  path in its key - `XHCI98&ROOT_HUB&0` at a root port, the hub's or the
+  composite parent's path behind one - which becomes
+  `USB&XHCI98_ROOT_HUB&0` and the rest: a **new devnode once**, as on NT,
+  and every serial-less device on the controller with it. 98 SE then runs
+  the Add New Hardware wizard for each, and asked for its CD for
+  `hidclass.sys` at the `2.0.0.0` to `2.1.0.0` update (release notes,
+  "Updating from 2.y.y.y"), unless task 38.2's silent install is switched
+  on and lists the class (6.11).
+
+Windows ME's key form is unread (38.2's legs read it on 98 SE only) and is
+expected to be 98 SE's; the legs read both forms on both systems, which
+closes what 10.11 and 10.12 left unread there.
 
 **Measuring both cases.** QEMU gives every emulated USB device a serial
 string built from its bus path when none is set (the `1-0000:00:03.0-4`
@@ -6036,13 +6053,13 @@ file, case-insensitive too) and for `ROOT_HUB`, `HUB30`, `COMPOSITE`,
 | `src\xhci_hub.c` `xhciHubPdoBase`; `src\xhci_hub.h` (`XhciHubPdoId`'s comment) | `XHCI98\HUB`, `XHCI98\HUB30` | the new bases; the header gains the four `#define`s (10.13.1) |
 | `src\xhci_func.c` `XhciFuncParentId` (two literals); `src\xhci_func.h` | `XHCI98\COMPOSITE` | the new base |
 | `src\hcd.h`, `src\hcd_pdo.c`, `src\hcd_hubfdo.c` | comments naming the ids | wording |
-| `src\xhci98.inf` (eight model lines: four in `[XhciModels]`, which serves 98 SE, ME, 2000 and XP, and four in `[XhciModels.NTx86.6.0]`), `src\xhci98-amd64.inf` (the same eight in its two models sections) | the model ids | the new ids; the root-hub install sections as decision D3 says; old model lines as D2 says |
+| `src\xhci98.inf` (eight model lines: four in `[XhciModels]`, which serves 98 SE, ME, 2000 and XP, and four in `[XhciModels.NTx86.6.0]`), `src\xhci98-amd64.inf` (the same eight in its two models sections) | the model ids | the new ids; the root-hub install sections copy nothing (D3); no old model line kept (D2) |
 | `src\txtsetup.oem`, `src\txtsetup-amd64.oem` | `[HardwareIds.scsi.XHCI98]` rows and the header comment | the four new ids; the component id `XHCI98` unchanged |
-| `scripts\inf-gate\check-inf.ps1` | `$prod` (`RootHubId`, `HubIds`, `CompositeId`); `HCD-HUB` and `HCD-COMP` require a hub's or composite's ids "under `XHCI98\`" | the new ids; "under `XHCI98\`" becomes "exactly one of the four bases or their `&VID_&PID_[&REV_]` forms"; a new rule, **`HCD-USBRES`**: no line of any section names a `USB\XHCI98_` id other than the four bound bases (so `USB\XHCI98_NOXPORT` stays unbound, 10.13.2); a new rule, **`HCD-IDSRC`**: the models' ids equal the shared header's `#define`s; `HCD-ROOTHUB`'s `^USB\\ROOT_HUB` test is unaffected, since the new id does not begin with it |
-| `scripts\inf-gate\test-inf-checks.ps1` | 16 mutations built on the old ids | rewritten on the new; new mutations for `HCD-USBRES` (a `USB\XHCI98_NOXPORT` model, a `USB\XHCI98_OTHER` model) and `HCD-IDSRC`; under D2, an old id on a non-hub line refused |
-| `scripts\inf-gate\check-txtsetup-oem.ps1` | `OEM-USBID` refuses **any** `USB\` id ("those belong to Setup's own drivers"); `OEM-IDS` ties the file to the INF's model ids; the self-tests at its foot | `OEM-USBID` refuses every `USB\` id except the four new bases, and names `USB\ROOT_HUB` and the class ids in its message; the self-tests rebuilt on the new ids, plus one that a `USB\XHCI98_NOXPORT` row is refused |
+| `scripts\inf-gate\check-inf.ps1` | `$prod` (`RootHubId`, `HubIds`, `CompositeId`); `HCD-HUB` and `HCD-COMP` require a hub's or composite's ids "under `XHCI98\`" | the new ids; "under `XHCI98\`" becomes "exactly one of the four bases or their `&VID_&PID_[&REV_]` forms"; a new rule, **`HCD-USBRES`**: no line of any section names a `USB\XHCI98_` id other than the four bound bases (so `USB\XHCI98_NOXPORT` stays unbound, 10.13.2 and NOX.1's decision 5) and no line names an `XHCI98\` id (the clean move, D2); a new rule, **`HCD-IDSRC`**: the models' ids equal the shared header's `#define`s; `HCD-ROOTHUB`'s `^USB\\ROOT_HUB` test is unaffected, since the new id does not begin with it |
+| `scripts\inf-gate\test-inf-checks.ps1` | 16 mutations built on the old ids | rewritten on the new; new mutations for `HCD-USBRES` (a `USB\XHCI98_NOXPORT` model, a `USB\XHCI98_OTHER` model) and `HCD-IDSRC`; an old `XHCI98\` id on any line refused (D2) |
+| `scripts\inf-gate\check-txtsetup-oem.ps1` | `OEM-USBID` refuses **any** `USB\` id ("those belong to Setup's own drivers"); `OEM-IDS` ties the file to the INF's model ids; the self-tests at its foot | `OEM-USBID` refuses every `USB\` id except the four new bases, and names `USB\ROOT_HUB` and the class ids in its message; the self-tests rebuilt on the new ids, plus one that a `USB\XHCI98_NOXPORT` row and one that an old `XHCI98\` row is refused |
 | `scripts\package\test-package.ps1` (one case) | stages a `txtsetup.oem` whose root-hub row reads `USB\ROOT_HUB`, expects a refusal | still valid under the new `OEM-USBID`; its search string becomes the new id |
-| `scripts\inf-gate\expected-footprint*.txt` | no id (searched) | re-emitted only if D3 changes the root hub's sections |
+| `scripts\inf-gate\expected-footprint*.txt` | no id (searched) | re-emitted, since the root hub's sections change (D3) |
 | `scripts\import-gate\win98-evidence.list`, the allowlists and baselines | no id (searched) | none; the tool is user mode and outside the import gate, as `XHCISNAP` is |
 | `scripts\vm-matrix\` (scripts, `lib\`, `guest\*.BAT`), `scripts\setup-qemu-*.ps1` | no reader of the ids, `Enum`, or `ROOT_HUB` (searched) | none; the 38.9 legs are driven by hand, as 38.2's were |
 | `xhcisnap\xhcisnap.c` | reads the controller only (by its PCI class code), through `cfgmgr32.dll` or `HKEY_DYN_DATA` | none |
@@ -6063,7 +6080,7 @@ file, case-insensitive too) and for `ROOT_HUB`, `HUB30`, `COMPOSITE`,
 
 #### 10.13.8 The cleanup tool
 
-**What it is** (decision D6 for the name and place; the rest proposed).
+**What it is** (D6 for the name and place).
 A console program, `XHCICLN.EXE`, its source in `xhcicln\` at the
 repository root beside `xhcisnap\` and `xhciqual\`, shipped in the release
 as `tools\xhcicln\` (an 8.3 name, as `tools\xhcisnap\` and
@@ -6077,15 +6094,16 @@ and 32-bit Vista and 7. Every configuration-manager and SetupAPI routine
 is resolved at run time (`LoadLibrary` and `GetProcAddress`, as
 `XHCISNAP` loads `cfgmgr32.dll`), so its import table names `KERNEL32`
 and `ADVAPI32` alone and it starts where a routine is missing, saying
-which. **The 64-bit systems** need a second build (decision D7): a 32-bit
+which. **The 64-bit systems** may need a second build (D7): a 32-bit
 process under WOW64 is documented by Microsoft as unable to run device
 installation actions - `SetupDiCallClassInstaller` returning
 `ERROR_IN_WOW64` (Microsoft's SetupAPI documentation; not read on a guest
-here). So the same source is built a second time with WDK 7.1's amd64
-compiler (`tools\WinDDK71`, as `xhci98.sys` amd64 is), and the 32-bit
-build, finding itself under WOW64 (`IsWow64Process`, resolved as
-`XHCISNAP` resolves it), refuses and names the 64-bit one. The x64 legs
-read both.
+here). The x64 leg reads first what the 32-bit build gets under WOW64.
+Only if it is refused is the same source built a second time, as
+`XHCICL64.EXE`, with WDK 7.1's amd64 compiler (`tools\WinDDK71`, as
+`xhci98.sys` amd64 is), and the 32-bit build, finding itself under WOW64
+(`IsWow64Process`, resolved as `XHCISNAP` resolves it), refuses and
+names the 64-bit one; if it is not refused, one build serves every target.
 
 **What it removes - the selection rule.** A devnode is a candidate only
 when every one of these holds:
@@ -6101,15 +6119,13 @@ when every one of these holds:
    `DIGCF_PRESENT`; on 98 SE and ME no entry of
    `HKEY_DYN_DATA\Config Manager\Enum` names it in `HardWareKey` (the
    route `XHCISNAP` reads on those systems, runtime-read on 98 SE and ME
-   in task 38.1);
-3. (under decision D11 only) or, where task 38.12 moves a refused
-   interface's device id, a non-present devnode under `USB\VID_` whose
-   first hardware id begins `USB\XHCI98_NOXPORT&` (10.13.9).
+   in task 38.1).
 
 **It never touches** a present devnode; any devnode whose device id is a
 current form (`USB\XHCI98_...`, present or not - a hub unplugged today is
 not stale); any device or function devnode (`USB\VID_...`), including the
-old location-form children of 10.13.5 unless D5 says otherwise; the
+old location-form children of 10.13.5 (D5) and any refused interface's
+old devnode (NOX.1's decision 4, 10.13.9); the
 controller's devnode; any file, INF, driver-store package or service.
 
 **It refuses to remove anything** (and lists what it would have removed,
@@ -6138,7 +6154,7 @@ on Vista and 7: the executable carries a manifest asking for elevation
 embed; 98, ME, 2000 and XP ignore it), and a refusal for want of rights
 is reported as such.
 
-**The route on 98 SE and ME** (decision D8). There an old devnode is a
+**The route on 98 SE and ME** (D8: (a), falling back to (c)). There an old devnode is a
 registry entry with no devnode (10.13.6), so the candidates come from
 `HKLM\Enum\XHCI98\` (`RegEnumKeyEx`, a read), and what can remove it is
 unread:
@@ -6161,7 +6177,7 @@ unread:
   setup engine's `DIF_REMOVE`, which a 32-bit program cannot call without
   a thunk).
 
-**What it prints** (decision D9 for the switches). With no argument it
+**What it prints** (D9). With no argument it
 lists and removes nothing: each candidate's instance id, its
 `DeviceDesc`, its driver key and why it qualifies, then each refused or
 skipped entry and why. `-remove` lists, asks once (`Y` to go on), and
@@ -6188,32 +6204,33 @@ executable is a third tool executable carrying a statically linked runtime
 runtime as that kit's user-mode builds do. `legal-provenance.md` section
 2a and `AGENTS.md`'s "the two tool executables" sentence change with it.
 
-#### 10.13.9 Task 38.12
+#### 10.13.9 Task NOX.1 (38.12 until 2026-10-13)
 
-Task 38.12 reads whether a refused storage interface's VID/PID device id
-binds a VID/PID-only INF on 98 SE and ME, and if it does, moves that
-PDO's device id to the `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp...` form.
-The two tasks touch each other in four places:
+Task 38.12 - whether a refused storage interface's VID/PID device id binds
+a VID/PID-only INF, and if so moving that PDO's device id to the
+`USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]` form - was deferred by the
+owner on 2026-10-13 to after `2.4.0.0`, as "Planned work" NOX.1; its plan
+and the owner's decisions on it are 10.7.1. So in `2.4.0.0` a refused
+interface keeps its ids as they are (10.7). The two tasks touch in four
+places:
 
 - **The namespace.** `USB\XHCI98_NOXPORT` and the four new bases share
-  the `USB\XHCI98_` prefix. The gates name each exactly (`HCD-USBRES`
-  keeps NOXPORT unbound; `OEM-USBID` admits only the four), the tool's
-  rule 1 names the old forms exactly, and no reader may test the prefix
-  alone.
-- **The devnode an earlier version made.** If 38.12 moves the device id,
-  a refused device's devnode moves from `Enum\USB\VID_vvvv&PID_pppp\...`
-  to `Enum\USB\XHCI98_NOXPORT&...\...` and the old one is non-present -
-  this task's situation under `USB\`. Its old entry is recognisable as
-  this project's only by its first hardware id (`USB\XHCI98_NOXPORT&...`,
-  read on 98 SE in the 38.2 legs). Decision D11 is whether the tool takes
-  those too.
-- **The instance id** of a refused PDO is unchanged either way, so a
-  refused device keeps its serial-or-location identity.
-- **Order.** Whichever lands second rebuilds the other's gate self-tests
-  on the combined namespace; the INF and `txtsetup.oem` edits do not
-  overlap (NOXPORT is in neither), but 38.4's rename of `xhcimsi.sys`
-  edits the same INF and `.oem` files, so the three are merged in turn
-  and the INF gate run on each.
+  the `USB\XHCI98_` prefix. The gates name each exactly: `HCD-USBRES`
+  refuses any INF of this package that names `USB\XHCI98_NOXPORT`, which
+  is NOX.1's decision 5 (10.7.1), and `OEM-USBID` admits only the four
+  new bases. The tool's rule 1 names the old forms exactly, and no reader
+  may test the prefix alone - so NOX.1, if it moves the device id later,
+  changes no 38.9 gate.
+- **The devnode an earlier version made.** If NOX.1 moves the device id,
+  a refused device's old devnode under `Enum\USB\VID_vvvv&PID_pppp\...`
+  is left alone, and the tool does not remove it (NOX.1's decision 4: it
+  claims nothing, and when the device has a serial number it is the
+  device's own working devnode). The tool's selection rule therefore has
+  no hardware-id clause; D11 is settled by that decision.
+- **The instance id** of a refused PDO is unchanged either way.
+- **Order.** 38.4's rename of `xhcimsi.sys` edits the same INF and `.oem`
+  files as this task, so the two are merged in turn and the INF gate run
+  on each; NOX.1, after `2.4.0.0`, builds on 38.9's gate rules.
 
 #### 10.13.10 The legs
 
@@ -6238,46 +6255,50 @@ a device. What this design adds to each update leg:
 - a hub plugged in for the first time between the update and the restart
   on 98 SE (10.13.4);
 - one F6 install on 32-bit XP with a hub attached (5.6), since both
-  `txtsetup.oem` files change (proposed for the roadmap; decision D12).
+  `txtsetup.oem` files change (D12).
 
 **The USB 3 hub.** QEMU's only hub is USB 1.1 (task 33.4), so no guest
 presents a USB 3 hub, and `USB\XHCI98_HUB30` cannot be read in a guest.
 The SuperSpeed half's id rests on the host vectors (it is the same
 helper with one argument changed) and the INF gate; a reading needs a real
-USB 3 hub - on the owner's bench, or passed through to a guest
-(decision D13).
+USB 3 hub - on the owner's bench, or passed through to a guest, after the
+cut (D13).
 
 #### 10.13.11 Unread, and how it is read
 
 | Unread | How it is read |
 |---|---|
 | Whether 98's configuration manager, NTKERN or `setupx.dll` treats `Enum\USB` entries other than by id (10.13.3) | the 98 SE (stock and SweetLow) and ME update legs |
-| Whether a re-parented devnode keeps its devnode on 98 SE and ME, both forms (10.13.5) | the same legs |
+| Whether a serial-form devnode keeps its devnode on 98 SE and ME, and ME's location-form key (10.13.5) | the same legs |
 | Whether Update Driver replaces the old INF in 98's `INF\OTHER` (10.13.4) | the 98 SE leg's `INF\OTHER` listing before and after |
 | What a new devnode of an already-staged package asks on Vista and 7 (10.13.4) | the Vista and 7 update legs |
 | Whether an old non-present devnode keeps a COM number or blocks `pnputil -d` (10.13.5, 10.13.6) | not a leg of this task; the release notes say "unread" |
 | Whether Device Manager lists a registry-only entry on 98 SE and ME, normal and Safe Mode (10.13.6) | the 98 SE and ME legs |
 | Whether 98's and ME's `cfgmgr32.dll` export `CM_Uninstall_DevNode` and honour `CM_LOCATE_DEVNODE_PHANTOM` (10.13.8, D8 (a)) | statically from the guests' files, then on a guest |
 | Whether `DIF_REMOVE` removes a non-present devnode on each NT target, and refuses under WOW64 (10.13.8) | the tool's legs |
-| A USB 3 hub's SuperSpeed half under the new id (10.13.10) | D13 |
+| A USB 3 hub's SuperSpeed half under the new id (10.13.10) | the owner's bench or a passthrough, after the cut (D13) |
 
-#### 10.13.12 Questions for the owner
+#### 10.13.12 Decisions taken (owner, 2026-10-13)
 
-| | Question | Options | Recommended |
+The owner kept the task in `2.4.0.0` with the update costs of 10.13.4 and
+10.13.5, and took D1 to D13 as below; the options and reasons put to the
+owner are kept beside each.
+
+| | Question | Options put | Decided |
 |---|---|---|---|
-| D1 | Do the new PDOs also report the old `XHCI98\...` id as a further hardware id, for the transition? | (a) no; (b) yes, last | **(a)**: the device id alone decides the devnode, so an extra hardware id keeps nothing; it would only let the old package's INF compete for the new devnode, and keep a dead id alive in every gate |
-| D2 | Do the new INFs keep the old `XHCI98\` model lines (and `txtsetup.oem` its old rows)? | (a) no, a clean move; (b) the INFs keep them, `txtsetup.oem` not | **(a)**: they help only a hub first plugged in between the update and the restart on 98 SE and ME (10.13.4), which the release notes cover; (b) would leave the gates admitting a retired id and give every stale `XHCI98\` entry a matching driver |
-| D3 | Do the root hub's install sections stop copying `xhci98.sys`, as the hub and composite sections do? | (a) yes; (b) no, as today | **(a)**: after this update the root hub is a new devnode at a start where `xhci98.sys` is already running, and on 98 SE and ME its copy would replace the running file from wherever the update was taken from, which may be gone (10.11's reason for the hubs); the root hub exists only under a running `xhci98.sys`, so it never needs the copy. Costs: `HCD-HUBCOPY` widened to the root hub, the footprints re-emitted, a fresh-install leg on each path |
-| D4 | XP and XP x64 ask the Found New Hardware wizard and the unsigned warning for the new root hub, and the USB keyboard and mouse behind it do nothing until it is answered: on a machine whose only input is USB on this controller the update cannot be finished | (a) document it: update with a PS/2 or built-in keyboard and pointing device, or set the driver signing option to Ignore first; (b) a way for the driver to spare XP the root hub's new devnode - none is known, since the device id alone decides the devnode | **(a)**, in the release notes' update section and the readme; the same trap the `1.2.0.0` upgrade carried ("a second wizard follows for the root hub") |
-| D5 | The serial-less devices' new devnodes on NT (10.13.5): what does the project do about the settings and COM numbers left on the old ones? | (a) document it, as the `2.0.0.0` to `2.1.0.0` update did; (b) as (a), and the tool also removes the old non-present children it can tie to an old parent (their instance ids begin with the old parent devnode's `ParentIdPrefix` value, read from its `Enum` key - a registry read of an undocumented value - and removed through `DIF_REMOVE`); (c) carry the settings over - not proposed: it writes into other drivers' devnodes | **(a)**; (b) is a later addition if the legs show a cost worth it, since the children are their class drivers' devnodes, not this project's |
-| D6 | The tool's name and place | (a) `XHCICLN.EXE`, source `xhcicln\`, shipped `tools\xhcicln\`; (b) a mode of `XHCISNAP` (`-clean`), shipped in `tools\xhcisnap\` | **(a)**: `XHCISNAP` reads and only ever writes its own log switches; a tool that deletes devnodes is kept apart from the one users run for every report, and (b) would still need a 64-bit build for D7 |
-| D7 | The 64-bit targets | (a) a second, amd64 build with WDK 7.1, `XHCICL64.EXE` beside `XHCICLN.EXE`; (b) the 32-bit build only, and on a 64-bit system it lists and says to uninstall each entry from Device Manager's hidden view | **(a)**, if the x64 leg confirms the 32-bit build is refused under WOW64; otherwise one build serves |
-| D8 | The route on 98 SE and ME | (a) the configuration manager, if the reading shows it works; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a)**, falling back to **(c)**; (b) only if the owner counts a registry deletion of the entry and its driver key as a supported route, which the roadmap's "supported PnP routes" does not obviously cover |
-| D9 | The switches | as 10.13.8: no argument lists; `-remove` asks then removes; `-yes` skips the question | as proposed |
-| D10 | The global refusals (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`) | (a) both; (b) only the first | **(a)**: the second is what proves the old devnodes are dead on this boot |
-| D11 | If 38.12 moves the refused device id: does the tool also remove the old refused devnodes (non-present, under `USB\VID_`, first hardware id `USB\XHCI98_NOXPORT&`)? | (a) yes; (b) no | **(a)**, only in the build that lands 38.12's move, and only by the hardware id test, since nothing else marks those entries as this project's |
-| D12 | An F6 leg (32-bit XP, with a hub), since both `txtsetup.oem` files change | (a) add it to 38.9's legs; (b) the INF and `.oem` gates suffice | **(a)**: text mode is the one engine whose matching of a `USB\` id from an F6 file has never been read |
-| D13 | The USB 3 hub the roadmap's legs name, which no guest can present | (a) the host vectors and the gate, the reading on the owner's bench (or a passthrough) after the cut, as 33.4's USB 3 hub was; (b) a passthrough leg before the cut | **(a)**, with the roadmap's leg text saying so |
+| D1 | Do the new PDOs also report the old `XHCI98\...` id as a further hardware id, for the transition? | (a) no; (b) yes, last | **(a) no**: the device id alone decides the devnode, so an extra hardware id keeps nothing; it would only let the old package's INF compete for the new devnode, and keep a dead id alive in every gate |
+| D2 | Do the new INFs keep the old `XHCI98\` model lines (and `txtsetup.oem` its old rows)? | (a) no, a clean move; (b) the INFs keep them, `txtsetup.oem` not | **(a) a clean move**; the release notes say that on 98 SE and ME a new hub is plugged in only after the restart (10.13.4) |
+| D3 | Do the root hub's install sections stop copying `xhci98.sys`, as the hub and composite sections do? | (a) yes; (b) no, as today | **(a) yes**: after this update the root hub is a new devnode at a start where `xhci98.sys` is already running, and on 98 SE and ME its copy would replace the running file from wherever the update was taken from; the root hub exists only under a running `xhci98.sys`. With it: `HCD-HUBCOPY` widened to the root hub, the footprints re-emitted, a fresh-install leg on each path |
+| D4 | XP and XP x64 ask Found New Hardware and the unsigned warning for the new root hub, and the USB keyboard and mouse behind it do nothing until it is answered | (a) document it; (b) a way for the driver to spare XP the root hub's new devnode - none is known, since the device id alone decides the devnode | **(a) documented**: update with a PS/2 or built-in keyboard and pointing device, or set the driver signing option to Ignore first; the trap the `1.2.0.0` upgrade carried |
+| D5 | The serial-less devices' new devnodes (10.13.5): the settings and COM numbers left on the old ones | (a) document it; (b) the tool also removes old children tied to an old parent by its `ParentIdPrefix` value; (c) carry the settings over | **(a) documented only**; the tool leaves every device and function devnode |
+| D6 | The tool's name and place | (a) `XHCICLN.EXE`, source `xhcicln\`, shipped `tools\xhcicln\`; (b) a mode of `XHCISNAP` | **(a)** |
+| D7 | The 64-bit targets | (a) a second, amd64 build `XHCICL64.EXE`; (b) the 32-bit build only | **`XHCICL64.EXE` only if the x64 leg shows the 32-bit build refused under WOW64**; otherwise one build |
+| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b) |
+| D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes 0, 1, 2 | **as written** (10.13.8) |
+| D10 | The global refusals | (a) both (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`); (b) only the first | **(a) both** |
+| D11 | If the refused device id moves: does the tool also remove old refused devnodes? | (a) yes; (b) no | **left to NOX.1** (38.12 deferred), whose decision 4 is that the tool leaves them (10.13.9) |
+| D12 | An F6 leg (32-bit XP, with a hub), since both `txtsetup.oem` files change | (a) add it; (b) the gates suffice | **(a) added** to 38.9's legs |
+| D13 | The USB 3 hub the roadmap's legs name, which no guest can present | (a) host vectors and the gate, the reading on the owner's bench or a passthrough after the cut; (b) a passthrough leg before the cut | **(a)**, the roadmap's leg text saying so |
 
 ## 11. The transfer-buffer policy (task 25.7)
 
