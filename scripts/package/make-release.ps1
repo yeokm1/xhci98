@@ -4276,6 +4276,15 @@ does not touch it.
     Setup stops. A laptop's built-in keyboard (connected inside as PS/2) or
     any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
     work. This package cannot carry those files. Windows 2000 does not ask.
+  - INSTALLING WINDOWS 2000 WITH A USB KEYBOARD OR MOUSE ON THE xHCI
+    CONTROLLER STOPS AT THE FIRST START OF THE NEW SYSTEM, with STOP
+    c000026c naming hidusb.SYS (error status 0xc0000034). Windows 2000's
+    text-mode Setup copies hidusb.sys for the USB keyboard and mouse but
+    not the Windows files it needs, which it copies only with Microsoft's
+    own USB controller drivers. Seen in virtual machines on 2.3.1.0 and
+    2.4.0.0. Text mode and the Recovery Console are not affected, nor
+    is Windows XP. This package cannot carry those files, and no
+    workaround is offered.
 
   What has run in virtual machines: text mode with a USB keyboard and a
   USB stick on Windows 2000 and XP, and the Recovery Console on both,
@@ -4660,6 +4669,10 @@ being unsigned, and no change to this driver can remove them:
     controller starts or stops, so a drive busy there is disconnected.
     Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
     by default (section 9).
+
+  * WINDOWS 2000 FROM THE F6 FLOPPY WITH A USB KEYBOARD OR MOUSE ON THE
+    CONTROLLER STOPS AT THE FIRST START OF THE NEW SYSTEM (STOP c000026c,
+    hidusb.SYS). Not this driver's file; no workaround (section 4).
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop

@@ -9894,3 +9894,35 @@ Setup's install of that device fails silently.** `check-txtsetup-oem.ps1`'s
 `OEM-COPY` now derives the list from the INF, as a cross-file rule; when a
 change adds a file to one install artefact, look for the gate that ties
 it to the others before trusting each artefact's own gate.
+
+## Windows 2000 from the F6 floppy with a USB keyboard or mouse stops at the first GUI-mode boot: text mode copies `hidusb.sys` and not its imports
+
+The same matrix, 2026-10-14, QEMU, Windows 2000 SP4 from the F6 floppy
+(`out\p38-matrix\legs\f6w2k\`, git-ignored). Text mode passed (the USB
+keyboard typed every key after F6, through a hub). The first GUI-mode boot
+stopped: `STOP c000026c {Unable to Load Device Driver}
+\SystemRoot\System32\Drivers\hidusb.SYS device driver could not be loaded.
+Error Status was 0xc0000034`. The disk at that point held `xhci98.sys`,
+`hidusb.sys`, `kbdhid.sys` and `mouhid.sys` in `system32\drivers`, and no
+`hidclass.sys`, `hidparse.sys` or `usbd.sys`.
+
+**Why.** Windows 2000's `TXTSETUP.SIF` binds `hidusb`, `kbdhid` and
+`mouhid` through `[HardwareIdsDatabase]` and copies their files, but copies
+`hidclass.sys`, `hidparse.sys` and `usbd.sys` only in `[files.openhci]` and
+`[files.uhcd]`, its own controllers' sections, which an xHCI-only machine
+never selects. `hidusb.sys` imports `HIDCLASS.SYS` and `USBD.SYS`, and a
+missing import is the `0xc0000034` that names the importer (the
+"`usbhub20.sys` bugchecks Win2000" lesson above). XP's text mode leaves the
+same files out, and its first boot goes on (issue 10).
+
+**Attribution.** Not new and not the hub's: the published `2.3.1.0` with the
+same hub population, and `2.4.0.0` with only a keyboard and a stick at root
+ports, stopped the same (shots `c1-18`, `c2-08`). The earlier F6 legs
+(task 33.3) read Windows 2000's text mode and Recovery Console, never an
+install to the desktop, so it was never reached before.
+
+Rule. **On Windows 2000 a demand- or system-start driver laid down without
+its imports is a boot bugcheck, not a dead device; an F6 leg is not read
+until the installed system has booted.** The package may not carry
+Microsoft's files, so this stands as a limitation (release notes, "Known
+limitations").

@@ -760,7 +760,7 @@ reading stands between the amd64 binary and its text mode.
 
 | Target | Verdict | Why, and the limits |
 |---|---|---|
-| Windows 2000 SP4 | Feasible with limits | Setup carries `hidusb`, `kbdhid`, `mouhid`, `usbstor`, `usbd`, `hidclass` and `hidparse`; no Setup row claims the controller or the root hub; no `usbccgp` is needed because the bus splits composites |
+| Windows 2000 SP4 | Feasible with limits | Setup carries `hidusb`, `kbdhid`, `mouhid`, `usbstor`, `usbd`, `hidclass` and `hidparse`; no Setup row claims the controller or the root hub; no `usbccgp` is needed because the bus splits composites. **Amended 2026-10-14:** an install with a USB keyboard or mouse on the controller stops at the first GUI-mode boot (limit 7 below) |
 | Windows XP SP3 (32-bit) | Feasible with limits | As 2000; Setup's own EHCI stack coexists on a machine that has EHCI |
 | Windows XP x64 SP2 | Feasible with limits | As XP, with the amd64 build and its own file |
 
@@ -783,6 +783,20 @@ The limits, all of them the user's to know:
 6. If the target disk needs one of Setup's own `[SCSI]` miniports, the user
    may have to add it at the same screen; whether pressing S suppresses
    Setup's own detection on these systems was not read.
+7. **Windows 2000: a USB keyboard or mouse on the controller during text
+   mode stops the first GUI-mode boot** (added 2026-10-14, runtime, QEMU,
+   `out\p38-matrix\legs\f6w2k\`): `STOP c000026c`,
+   `\SystemRoot\System32\Drivers\hidusb.SYS`, `0xc0000034`. Text mode
+   copies `hidusb.sys`, `kbdhid.sys` and `mouhid.sys` through
+   `[HardwareIdsDatabase]` but `hidclass.sys`, `hidparse.sys` and
+   `usbd.sys`, which `hidusb.sys` imports, only in `[files.openhci]` and
+   `[files.uhcd]` - the same gap as XP's above, which on 2000 is a bugcheck
+   (`lessons.md`, "`usbhub20.sys` bugchecks Win2000 ..."). Read on the
+   published `2.3.1.0` and on `2.4.0.0`, with a keyboard, a mouse and an
+   audio device behind a hub and with a keyboard and a stick at root
+   ports; text mode and the Recovery Console are unaffected. The package
+   may not carry Microsoft's files (`AGENTS.md`), so it stands as a
+   limitation (release notes, "Known limitations").
 
 **What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
 `build-driver.cmd` on every build, self-tested by mutation first, and by

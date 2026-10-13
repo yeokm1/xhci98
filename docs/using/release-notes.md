@@ -718,7 +718,8 @@ that starts from the Windows CD's text mode:
   "XhciPollFineTimer: a finer system timer while polling"). A pre-release
   build of `2.4.0.0` left it off `txtsetup.oem`'s file list, and GUI-mode
   Setup then installed no driver on the controller (32-bit XP, read in a
-  virtual machine); this release's `txtsetup.oem` names it.
+  virtual machine); this release's `txtsetup.oem` names it. **Windows 2000: see the
+  limit below on a USB keyboard or mouse.**
 - **The Recovery Console.** Press F6 as for an install, then R at Setup's
   Welcome screen (on Windows 2000, then C for the console). The USB
   keyboard logs in and types commands; the console runs in text mode
@@ -763,6 +764,25 @@ Limits:
   up to 5 seconds, for the devices plugged in at start before that first
   report (`XhciFirstEnumWaitMs`, under "Registry settings"; text-mode Setup
   always gets the defaults).
+- **Installing Windows 2000 with a USB keyboard or mouse on the xHCI
+  controller stops at the first start of GUI-mode Setup** with `STOP
+  c000026c` ("Unable to Load Device Driver",
+  `\SystemRoot\System32\Drivers\hidusb.SYS`, error status `0xc0000034`).
+  Windows 2000's text-mode Setup copies `hidusb.sys`, `kbdhid.sys` and
+  `mouhid.sys` to the new system for the USB keyboard and mouse it drove,
+  but `hidclass.sys`, `hidparse.sys` and `usbd.sys`, which `hidusb.sys`
+  needs, only together with Microsoft's own USB controller drivers, which
+  an xHCI-only machine does not use; the new system then cannot load
+  `hidusb.sys` at its first start. Read in QEMU virtual machines on
+  `2.3.1.0` and `2.4.0.0` alike, with a keyboard, a mouse and an audio
+  device behind a hub and with a keyboard and a USB stick at root ports.
+  Text mode itself, and the Recovery Console, are not affected: the stop
+  comes at the first start of the installed system. 32-bit XP is not
+  affected: its text mode leaves the same files out, and its first start
+  goes on without them (the XP limit below). The package cannot carry those Microsoft files,
+  and `txtsetup.oem` can copy only from its own floppy, so no workaround
+  is offered; an install with no USB keyboard or mouse on the controller
+  has not been read.
 - GUI-mode Setup may ask for the floppy or the Windows CD.
 
 What has run, in QEMU virtual machines on development host A only; no
@@ -2735,6 +2755,13 @@ or says it was found by reading the code.
   device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
   shows them as `?`.** See "Devices and hubs in Device Manager".
+- **Windows 2000 installed with the F6 floppy and a USB keyboard or mouse
+  on the controller stops at the first start of GUI-mode Setup** (`STOP
+  c000026c`, `hidusb.SYS`, `0xc0000034`): text mode copies `hidusb.sys`
+  but not the Windows files it needs. Read on `2.3.1.0` and `2.4.0.0`
+  alike; text mode and the Recovery Console are not affected, nor is XP.
+  No workaround is offered. See "Installing Windows 2000 or XP, or using
+  the Recovery Console: the F6 floppy".
 - **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks
   about the unsigned driver before the USB keyboard works.** Setup copies
   Windows' own HID and USB helper files only with Microsoft's own USB

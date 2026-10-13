@@ -4047,7 +4047,13 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    until GUI mode is finished: it may be asked for when GUI mode installs the
    controller and root hub from `xhci98.inf`, and so may the CD, for
    `usbd.sys` and `usbui.dll`. Record any prompt and any unsigned-driver
-   dialog (32-bit XP) as the leg's reading.
+   dialog (32-bit XP) as the leg's reading. **Windows 2000 with a USB
+   keyboard or mouse on the controller stops at the first GUI-mode boot**
+   (`STOP c000026c`, `hidusb.SYS`, `0xc0000034`): its text mode copies
+   `hidusb.sys` and not its imports (release notes, "Known limitations";
+   `lessons.md`). A 2000 leg that must reach GUI mode needs a population
+   with no USB keyboard or mouse on the controller; such a leg has not been
+   read.
 7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
    Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
    service `xhci98` is the INF's (`Start` 3, not the boot start text mode
