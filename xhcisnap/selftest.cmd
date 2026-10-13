@@ -260,7 +260,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-intr exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line offered: the start fails (an earlier 2.3.0.0 build)" "but a message was granted: the start fails" "value 3; in effect 3 (a message interrupt only)" "forced message (XhciInterruptMode 3): a message interrupt" "but no message was granted: the start fails" "is xhcimsi.sys bound?): the start fails" "this Windows has no message interrupts: the start fails") do (
+for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line offered: the start fails (an earlier 2.3.0.0 build)" "but a message was granted: the start fails" "value 3; in effect 3 (a message interrupt only)" "forced message (XhciInterruptMode 3): a message interrupt" "but no message was granted: the start fails" "is xhcihlpr.sys bound?): the start fails" "this Windows has no message interrupts: the start fails") do (
     findstr /C:%%S "%BASE%.intr.log" > nul
     if errorlevel 1 (
         echo FAIL: the event delivery decode does not say %%S
@@ -277,7 +277,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-msi exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("the helper xhcimsi.sys (32-bit)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1 or 3)" "REPLACED: the line choices stripped, the message left (mode 3)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
+for %%S in ("the helper xhcihlpr.sys (32-bit; xhcimsi.sys before 2.4)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1 or 3)" "REPLACED: the line choices stripped, the message left (mode 3)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
     findstr /C:%%S "%BASE%.msi.log" > nul
     if errorlevel 1 (
         echo FAIL: the message interrupt decode does not say %%S
@@ -338,6 +338,28 @@ if errorlevel 1 (
     echo FAIL: the version section was not printed exactly once per case, eight
     set FAILED=1
 )
+rem Task 38.3's finer timer from a canned counter block (design record 15
+rem section 7.2.9): a polled 32-bit controller whose helper answered the
+rem timer, a barred release, both phases; and a driver from before 38.3,
+rem which prints none of it.
+"%~dp0XHCISNAP.EXE" -selftest-timer > "%BASE%.timer.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-timer exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("XhciPollFineTimer      not set; in effect ON (the default)" "the helper xhcihlpr.sys (32-bit)" "joined (the controller stopped)" "asks for               10000 (100 ns units); held now no" "holds 12, releases 12 (2 forced by a boundary); holds raced 1" "Windows answered       10032 at the last hold, 156250 at the last release" "a power transition (the controller left D0)" "held in this start     4321 ms" "7 crossed a call" "released  40 interval(s), mean 15.5 ms, 38 late" "held      400 interval(s), mean 1.0 ms, 3 late" "MSI not asked (before Vista); timer accepted") do (
+    findstr /C:%%S "%BASE%.timer.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the timer decode does not say %%S
+        set FAILED=1
+    )
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t = Get-Content -Raw '%BASE%.timer.log'; $i = $t.IndexOf('[pre-38.3]'); if ($i -lt 0 -or $t.Substring($i).Contains('finer system timer')) { exit 1 }; exit 0"
+if errorlevel 1 (
+    echo FAIL: a counter block from before 38.3 printed the timer section
+    set FAILED=1
+)
+
 rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
 rem with traffic, the switch absent, Windows 98, a header from before 36.24
 rem and a count it cannot hold.

@@ -51,13 +51,13 @@ function Get-StandInSha {
 }
 
 function Invoke-Packager {
-    param([string[]]$Arguments, [switch]$WithBinaryGates, [switch]$NoMsiStandIn)
+    param([string[]]$Arguments, [switch]$WithBinaryGates, [switch]$NoHlprStandIn)
     # The stand-in "driver" is a text file, so the packager's pre-staging host
     # test suite and import gate are skipped for every case except the one
     # that is about them.
     if (-not $WithBinaryGates) { $Arguments = $Arguments + @("-SkipBinaryGates") }
     #
-    # The 32-bit INF names xhcimsi.sys, the NT 6 x86 MSI helper, since task
+    # The 32-bit INF names xhcihlpr.sys, the x86 helper, since task
     # 36.15 (design record 18), so an x86 stand-in package needs a stand-in
     # helper too, carrying the flavour the run asks for. Every case gets one
     # unless it names its own or is about the helper's absence; the amd64
@@ -68,12 +68,12 @@ function Invoke-Packager {
         if ($Arguments[$i] -eq "-Arch" -and $i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -eq "amd64") { $isAmd64 = $true }
         if ($Arguments[$i] -eq "-Flavor" -and $i + 1 -lt $Arguments.Count) { $flavour = $Arguments[$i + 1] }
     }
-    if (-not $NoMsiStandIn -and -not $isAmd64 -and ($Arguments -notcontains "-MsiDriverPath")) {
-        $standIn = Join-Path $script:work ("xhcimsi-" + $flavour + ".sys")
+    if (-not $NoHlprStandIn -and -not $isAmd64 -and ($Arguments -notcontains "-HlprDriverPath")) {
+        $standIn = Join-Path $script:work ("xhcihlpr-" + $flavour + ".sys")
         if (-not (Test-Path -LiteralPath $standIn)) {
             Set-Content -LiteralPath $standIn -Value ("not a real helper XHCI98_FLAVOUR_" + $flavour.ToUpperInvariant()) -Encoding ASCII
         }
-        $Arguments = $Arguments + @("-MsiDriverPath", $standIn)
+        $Arguments = $Arguments + @("-HlprDriverPath", $standIn)
     }
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packager) + $Arguments
     # ErrorActionPreference relaxed across the call, as
@@ -150,24 +150,41 @@ try {
     $flatOut = Join-Path $script:work "pkg-flat"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $flatOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys", "xhcimsi.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys", "xhcihlpr.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
 
-    # --- the NT 6 x86 MSI helper (task 36.15, design record 18) -------------
-    Write-Step "the x86 package carries the MSI helper its INF names, of its own flavour"
-    $r = Invoke-Packager -NoMsiStandIn -Arguments @("-InfPath", $plainInf, "-DriverPath", $driver,
+    # --- the x86 helper (task 36.15, design record 18) -------------
+    Write-Step "the x86 package carries the helper its INF names, of its own flavour"
+    $r = Invoke-Packager -NoHlprStandIn -Arguments @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OutDir", (Join-Path $script:work "pkg-no-helper"))
-    Assert-True ($r.ExitCode -ne 0) "an x86 package was built with no xhcimsi.sys for its INF's entry."
-    Assert-True ($r.Output -match "xhcimsi\.sys") ("expected the refusal to name xhcimsi.sys. Output:`n" + $r.Output)
-    $wrongHelper = Join-Path $script:work "xhcimsi-wrong.sys"
+    Assert-True ($r.ExitCode -ne 0) "an x86 package was built with no xhcihlpr.sys for its INF's entry."
+    Assert-True ($r.Output -match "xhcihlpr\.sys") ("expected the refusal to name xhcihlpr.sys. Output:`n" + $r.Output)
+    $wrongHelper = Join-Path $script:work "xhcihlpr-wrong.sys"
     Set-Content -LiteralPath $wrongHelper -Value "not a real helper XHCI98_FLAVOUR_QEMU" -Encoding ASCII
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper,
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper,
         "-OutDir", (Join-Path $script:work "pkg-wrong-helper"))
     Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a debug package."
     $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
-        "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
-    Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -MsiDriverPath."
+        "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
+    Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -HlprDriverPath."
+    # Record 18 section 15.11: the helper is never packaged on its allowlist
+    # alone, and a cut never publishes the retired 2.3.x helper. The binary
+    # gates cannot run on stand-ins, so the refusals are held by their text,
+    # each inside the block it guards.
+    $hlprPkgText = [System.IO.File]::ReadAllText($packager)
+    $hlprGateAt = $hlprPkgText.IndexOf('& powershell.exe @hlprGateArgs')
+    $hlprRefuseAt = $hlprPkgText.IndexOf('-NoTargetEvidence: the x86 helper is never packaged on the allowlist alone')
+    Assert-True ($hlprRefuseAt -gt 0 -and $hlprGateAt -gt $hlprRefuseAt -and ($hlprGateAt - $hlprRefuseAt) -lt 800) `
+        "make-package.ps1 must refuse -NoTargetEvidence just before the helper's hlprx86 gate."
+    $hlprRelText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "make-release.ps1"))
+    Assert-True ($hlprRelText.Contains('$retiredHelper = "xhcimsi.sys"') -and
+                 $hlprRelText.Contains('if (Test-Path -LiteralPath (Join-Path $destDir $retiredHelper))')) `
+        "make-release.ps1 must refuse a leg holding xhcimsi.sys, the retired 2.3.x helper."
+    Assert-True ($hlprRelText.Contains('-NoTargetEvidence: an x86 leg carries xhcihlpr.sys')) `
+        "make-release.ps1 must refuse -NoTargetEvidence for an x86 leg."
+    Assert-True ($hlprRelText.Contains('$legPublishableExtra = @("xhcihlpr.sys")')) `
+        "make-release.ps1 must publish xhcihlpr.sys, not xhcimsi.sys, as an x86 leg's third file."
 
     # --- txtsetup.oem (roadmap task 33.3) -----------------------------------
     #
@@ -1198,11 +1215,11 @@ try {
     Write-Step "a relative -OutDir resolves against the caller's location"
     $cwd = Join-Path $script:work "cwd"
     New-Item -ItemType Directory -Path $cwd | Out-Null
-    $msiStandInDebug = Join-Path $script:work "xhcimsi-relpkg.sys"
-    Set-Content -LiteralPath $msiStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
+    $hlprStandInDebug = Join-Path $script:work "xhcihlpr-relpkg.sys"
+    Set-Content -LiteralPath $hlprStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
-        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -MsiDriverPath '$msiStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
+        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -HlprDriverPath '$hlprStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
         "exit `$LASTEXITCODE"
     ) -join "; "
     $savedEap = $ErrorActionPreference
@@ -1267,8 +1284,8 @@ try {
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
             # The x86 media's third file of this project's own since task
             # 36.15 (design record 18), published beside xhci98.sys.
-            Set-Content -LiteralPath (Join-Path $pubFlavour "xhcimsi.sys") -Encoding ASCII `
-                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
+            Set-Content -LiteralPath (Join-Path $pubFlavour "xhcihlpr.sys") -Encoding ASCII `
+                        -Value "stand-in xhcihlpr.sys, $fl flavour, $relVersion"
 
             # The gated package: the same two files byte for byte, and since
             # 1.0.0.1 nothing else.
@@ -1276,8 +1293,8 @@ try {
             Ensure-Directory $pkgFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
-            Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcimsi.sys") -Encoding ASCII `
-                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
+            Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcihlpr.sys") -Encoding ASCII `
+                        -Value "stand-in xhcihlpr.sys, $fl flavour, $relVersion"
         }
         Set-Content -LiteralPath (Join-Path $pubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -1332,7 +1349,7 @@ try {
         # The files the INF names, in one directory, per flavour. This is the
         # assertion the malformed asset would have failed.
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcimsi.sys")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcihlpr.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
             }
@@ -1598,8 +1615,8 @@ try {
             Copy-Item -LiteralPath $leg.Inf -Destination (Join-Path $d "xhci98.inf") -Force
             # The x86 media's helper (design record 18); the x64 media has none.
             if ($leg.Dir -like "*-x86") {
-                Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
-                            -Value "stand-in xhcimsi.sys, $($leg.Dir), $relVersion"
+                Set-Content -LiteralPath (Join-Path $d "xhcihlpr.sys") -Encoding ASCII `
+                            -Value "stand-in xhcihlpr.sys, $($leg.Dir), $relVersion"
             }
         }
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
@@ -2479,8 +2496,8 @@ try {
             [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
                 [System.Text.Encoding]::ASCII.GetBytes("stand-in xhci98.sys, $fl, $newVersion"))
             Copy-Item -LiteralPath $newInf -Destination (Join-Path $d "xhci98.inf") -Force
-            Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
-                        -Value "stand-in xhcimsi.sys, $fl, $newVersion"
+            Set-Content -LiteralPath (Join-Path $d "xhcihlpr.sys") -Encoding ASCII `
+                        -Value "stand-in xhcihlpr.sys, $fl, $newVersion"
         }
         Set-Content -LiteralPath (Join-Path $newPubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -3648,10 +3665,10 @@ try {
     $tsSignAt = $tsPkgText.IndexOf('Invoke-TestSign -Source $DriverPath')
     $tsHcdAt = $tsPkgText.IndexOf('& powershell.exe @gateArgs')
     $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
-    $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
+    $tsHlprAt = $tsPkgText.IndexOf('& powershell.exe @hlprGateArgs')
     $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
-    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0 -and
-                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt) `
+    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsHlprAt -gt 0 -and
+                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsHlprAt) `
         "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
     Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
         "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."

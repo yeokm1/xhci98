@@ -558,12 +558,19 @@ $archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
 $publishable = @("xhci98.inf", "xhci98.sys")
 
 # **A leg may publish a third file of this project's own, when its INF
-# declares it** (task 36.15; design record 18 section 8.2): xhcimsi.sys, the
-# NT 6 x86 MSI helper, which the 32-bit INF names and the 64-bit one does not.
-# So the publishable set is per leg - the two above plus whichever of these
-# that leg's own INF declares - and a release cut before 2.3.0.0, whose INFs
-# declare none, is published and reconstructed exactly as before.
-$legPublishableExtra = @("xhcimsi.sys")
+# declares it** (task 36.15; design record 18 sections 8.2 and 15.11):
+# xhcihlpr.sys, the x86 helper, which the 32-bit INF names and the 64-bit one
+# does not (xhcimsi.sys, the NT 6 x86 MSI helper, until task 38.3). So the
+# publishable set is per leg - the two above plus whichever of these that
+# leg's own INF declares - and a release cut before 2.3.0.0, whose INFs
+# declare none, is published and reconstructed exactly as before. A 2.3.x
+# upload set, whose helper is xhcimsi.sys, is reconstructed from its own cut
+# commit (the version gate below already requires it); this tree promises no
+# cross-version reconstruction.
+$legPublishableExtra = @("xhcihlpr.sys")
+# The 2.3.x helper's name, which no cut from this tree may publish (record 18
+# section 15.11): an update retires it (DelService and DelFiles in the INF).
+$retiredHelper = "xhcimsi.sys"
 
 function Get-LegPublishable {
     # The publishable set of one leg, from the media layout its own INF
@@ -1774,53 +1781,53 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
     }
 }
 
-function Assert-MsiHelperPublished {
-    # xhcimsi.sys, the NT 6 x86 MSI helper (design record 18; task 36.15),
+function Assert-HelperPublished {
+    # xhcihlpr.sys, the x86 helper (design record 18; tasks 36.15 and 38.3),
     # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
     # the build loop's of xhci98.sys: the release FileVersion, VS_FF_DEBUG,
     # the flavour marker, the staged bytes being the built ones, and the
     # source stamp beside the build (scripts\source-stamp.ps1 -Driver
-    # xhcimsi), unstamped only under -AllowUnstampedDriver. x86 legs only:
+    # xhcihlpr), unstamped only under -AllowUnstampedDriver. x86 legs only:
     # the caller publishes it where that leg's INF declares it.
     param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
 
     $rebuild = "scripts\build-driver.cmd $Flavor"
     if (-not (Test-Path -LiteralPath $Sys)) {
-        throw "the $($Leg.Id) leg has no xhcimsi.sys to publish. Rebuild: $rebuild"
+        throw "the $($Leg.Id) leg has no xhcihlpr.sys to publish. Rebuild: $rebuild"
     }
     $info = (Get-Item -LiteralPath $Sys).VersionInfo
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
-        throw "the MSI helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        throw "the x86 helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
     if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        throw "the MSI helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+        throw "the x86 helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        throw "the MSI helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        throw "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
     }
-    $builtSys = Join-Path $ObjRoot "xhcimsi.sys"
+    $builtSys = Join-Path $ObjRoot "xhcihlpr.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
-        throw "the $($Leg.Id) MSI helper about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\msi86. Rebuild: $rebuild"
+        throw "the $($Leg.Id) x86 helper about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\hlpr. Rebuild: $rebuild"
     }
     if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
-        throw "the MSI helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+        throw "the x86 helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
     $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
     $savedEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
         $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
-            -File $stampScript -Driver xhcimsi -Check $ObjRoot 2>&1
+            -File $stampScript -Driver xhcihlpr -Check $ObjRoot 2>&1
         $stampCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $savedEap
     }
     if ($stampCode -eq 1) {
         throw @"
-the MSI helper about to be published as $($Leg.Dir)\ was built from sources this
+the x86 helper about to be published as $($Leg.Dir)\ was built from sources this
 tree no longer holds:
 $($stampOut -join "`n")
 Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
@@ -1828,17 +1835,17 @@ Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
     } elseif ($stampCode -eq 2) {
         if (-not $AllowUnstampedDriver) {
             throw @"
-no source stamp beside the $Flavor MSI helper in $ObjRoot, so this script
-cannot tell whether src\msi86 still reproduces it. Rebuild it ($rebuild), which
+no source stamp beside the $Flavor x86 helper in $ObjRoot, so this script
+cannot tell whether src\hlpr still reproduces it. Rebuild it ($rebuild), which
 writes the stamp as it goes; or, for a binary that must ship unstamped, pass
 -AllowUnstampedDriver, as for xhci98.sys.
 "@
         }
-        Write-Warn "no source stamp beside the $Flavor MSI helper, and -AllowUnstampedDriver was passed."
+        Write-Warn "no source stamp beside the $Flavor x86 helper, and -AllowUnstampedDriver was passed."
     } elseif ($stampCode -ne 0) {
-        throw "scripts\source-stamp.ps1 -Driver xhcimsi -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+        throw "scripts\source-stamp.ps1 -Driver xhcihlpr -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
-        Write-Ok "$($Leg.Id) MSI helper matches the sources in src\msi86"
+        Write-Ok "$($Leg.Id) x86 helper matches the sources in src\hlpr"
     }
 }
 
@@ -1998,7 +2005,7 @@ their defaults.
     # the layout individually below; this is where the layout comes from, not a
     # substitute for checking.
     # **Per leg since task 36.15** (design record 18 section 8.2): the two
-    # INFs no longer declare the same media - the 32-bit one adds the x86 MSI
+    # INFs no longer declare the same media - the 32-bit one adds the x86
     # helper - so each directory's layout comes from its own INF, and the
     # first leg's is no longer made to answer for the others. The comment
     # above describes the arrangement this replaced.
@@ -2824,7 +2831,14 @@ the result in place of the marker, then cut again. The first:
         $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                      $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
                      "-OutDir", $pkgDirForBuild)
-        if ($NoTargetEvidence) { $pkgArgs += "-NoTargetEvidence" }
+        if ($NoTargetEvidence) {
+            # The x86 helper is never packaged on its allowlist alone (design
+            # record 18 section 15.11); make-package.ps1 refuses it too.
+            if ($leg.Arch -eq "x86") {
+                throw "-NoTargetEvidence: an x86 leg carries xhcihlpr.sys, whose hlprx86 import gate needs the Windows 2000, XP, Vista and 7 x86 kernels and HALs staged (design record 18 section 15.11). Stage them and cut without -NoTargetEvidence."
+            }
+            $pkgArgs += "-NoTargetEvidence"
+        }
         # The x64 legs are signed at staging (design record 19); the password
         # reaches the child through XHCI98_TESTSIGN_PW, set above.
         $legSigned = ($leg.Arch -eq "x64")
@@ -3077,11 +3091,15 @@ invalidate readings already taken on these exact bytes - say so:
                             -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                             -Signed:$legSigned
 
-        # The NT 6 x86 MSI helper, where this leg's INF declares it (design
-        # record 18), held to the same refusals.
-        if ($declaredPublishable[$leg.Arch] -contains "xhcimsi.sys") {
-            Assert-MsiHelperPublished -Sys (Join-Path $destDir "xhcimsi.sys") -Leg $leg -Flavor $f -Version $Version `
-                                      -ObjRoot (Join-Path $repo ("src\msi86\" + $objDirName[$f] + "\i386"))
+        # The x86 helper, where this leg's INF declares it (design record
+        # 18), held to the same refusals; and the 2.3.x helper's name never
+        # published (section 15.11).
+        if ($declaredPublishable[$leg.Arch] -contains "xhcihlpr.sys") {
+            Assert-HelperPublished -Sys (Join-Path $destDir "xhcihlpr.sys") -Leg $leg -Flavor $f -Version $Version `
+                                   -ObjRoot (Join-Path $repo ("src\hlpr\" + $objDirName[$f] + "\i386"))
+        }
+        if (Test-Path -LiteralPath (Join-Path $destDir $retiredHelper)) {
+            throw "the $($leg.Id) leg holds $retiredHelper, the 2.3.x helper this release retires (design record 18 section 15.11). Rebuild the package: scripts\package\make-package.ps1 -Flavor $f"
         }
 
         $staged[$leg.Id] = [pscustomobject]@{
@@ -3445,7 +3463,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         if ($leg.Arch -eq "x86") {
-            $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
+            $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7; section 4)"
         } else {
             $contents += "      xhci98-test.cer (the test certificate both .sys files are"
             $contents += "                   signed with; you need not import it; section 4)"
@@ -3957,9 +3975,11 @@ The package's own files are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
-  xhcimsi.sys               in the -X86 directories only: the helper that
+  xhcihlpr.sys              in the -X86 directories only: the helper that
                              gives 32-bit Vista and 7 a message-signalled
-                             interrupt. The install puts it on those two
+                             interrupt, and 32-bit Windows 2000, XP, Vista
+                             and 7 a finer clock while the controller is
+                             polled. The install puts it on those four
                              systems and no other
 
 Nothing else is in the package, and there is nothing to complete. The
@@ -4091,7 +4111,7 @@ CD, a shared folder - then:
       and point it at the RELEASE-X86\ directory. If Windows warns that it
       cannot verify the publisher, install the driver anyway. Use Device
       Manager, not a right-click on the INF. RESTART WHEN ASKED: the install
-      and every update ask for one, for xhcimsi.sys, and after a first
+      and every update ask for one, for xhcihlpr.sys, and after a first
       install the controller does not start until then (Device Manager
       shows code 28 on 7, code 1 on Vista meanwhile). A reinstall (the
       controller removed in Device Manager and found again) needs the
@@ -4198,8 +4218,24 @@ virtual machines:
   pointed at the same directory. (Read on 32-bit Vista and 7.)
 
   32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
-  one, for the helper xhcimsi.sys (above). Until then the earlier release
-  keeps running and Device Manager says the device needs a restart.
+  one, for the helper xhcihlpr.sys (above). Until then the earlier release
+  keeps running and Device Manager says the device needs a restart. An
+  update from 2.3.0.0 or 2.3.1.0 also removes the earlier helper,
+  xhcimsi.sys: its service is deleted, and its file goes at that restart.
+
+  WINDOWS 2000 AND XP: the install and an update copy the helper
+  xhcihlpr.sys and ask for no restart of their own. The controller runs as
+  before; the helper starts at the next restart, and from then a polled
+  controller asks Windows for a finer clock while it is busy (section 9,
+  XhciPollFineTimer). Text-mode Setup through F6 does not bring the helper:
+  it arrives with the installed system's own install of the controller.
+
+  REMOVING THE HELPER: uninstalling the controller leaves xhcihlpr, a
+  boot-start service that then loads and idles. Remove it with
+  "sc delete xhcihlpr" on XP, Vista and 7, and on Windows 2000, which has
+  no sc.exe, by deleting the key
+  HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr; then delete
+  System32\Drivers\xhcihlpr.sys after the next restart.
 
   GOING BACK TO AN OLDER RELEASE ON VISTA OR 7: the controller's request
   for a message-signalled interrupt stays in its hardware key, and an
@@ -4499,7 +4535,7 @@ May be addressed in a later release:
 
   * 32-BIT WINDOWS VISTA AND 7: THE INSTALL ASKS FOR A RESTART, and the
     controller does not start until it is done, because the helper
-    xhcimsi.sys starts only at boot (section 4). A reinstall needs the
+    xhcihlpr.sys starts only at boot (section 4). A reinstall needs the
     restart even if Windows does not ask for it: 32-bit Vista did not.
 
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
@@ -4606,8 +4642,8 @@ Untested ground:
 Both drivers are called xhci98.sys and xhciuas.sys in every directory, and
 every copy carries driver version {VERSION}, so a copy taken out of its
 directory cannot be identified by name or by version. (The -X86 directories
-also hold xhcimsi.sys, the 32-bit Vista and 7 helper, which has no 64-bit
-twin.)
+also hold xhcihlpr.sys, the 32-bit Windows 2000, XP, Vista and 7 helper,
+which has no 64-bit twin.)
 {TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
@@ -4619,11 +4655,13 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every value this driver reads from the controller's driver key. There are
-twenty, all DWORDs, and the install writes all twenty, each at the
-default it states below except XhciImodInterval250ns, which it writes as
-160, and XhciForceBulkOnly, which it writes as 0 where absent counts as
-1, so every one is already in the key to change. The install writes
+Every value this driver reads from the controller's driver key but
+XhciSilentInstall, which the install does not write (the silent install,
+above). There are twenty-one, all DWORDs, and the install writes all
+twenty-one, each at the default it states below except
+XhciImodInterval250ns, which it writes as 160, and XhciForceBulkOnly,
+which it writes as 0 where absent counts as 1, so every one is already
+in the key to change. The install writes
 each only where it is missing, so a value you changed survives an
 install or update; to go back to the default, set it by hand, or delete
 the value and update the driver. If an earlier install left
@@ -4928,7 +4966,7 @@ A value that is absent means the default each one states.
   10). 2 polls always, at the cost of more processor wake-ups. 3 is a
   message-signalled interrupt only: on Vista and 7 the driver asks for the
   message, and the controller fails to start (Code 10) if none is granted
-  or it cannot be connected (on 32-bit, when xhcimsi.sys is not running);
+  or it cannot be connected (on 32-bit, when xhcihlpr.sys is not running);
   on 98 SE, ME, 2000 and XP, which have none, 3 always fails the start.
   Any other value is 0.
   Read when the controller starts: disable and enable it, or restart.
@@ -4942,6 +4980,17 @@ A value that is absent means the default each one states.
   faster than its clock tick, so 1 means as often as Windows allows.
   Polling adds up to one period to each transfer's completion. Neither
   value matters while the interrupt works.
+
+  XhciPollFineTimer, default 1: while the controller is polled and busy,
+  the driver asks Windows for a finer clock - XhciPollActiveMs in
+  milliseconds - so a polled disk is not held to one transfer per clock
+  tick (10 to 15.6 ms), and gives the request back once the controller has
+  been idle for XhciPollIdleMs. It is Windows 2000 and later only: on
+  32-bit systems through the helper xhcihlpr.sys, from the restart after
+  the install; on 98 SE and ME the value is read and does nothing. 0 turns
+  it off. The clock is the whole system's, so other programs see it too
+  while it is held. Read when the controller starts; an update keeps the
+  number already in the key.
 
   XhciMaxTransferKB  -  the UAS command size
   ..........................................
@@ -5030,7 +5079,7 @@ A value that is absent means the default each one states.
   and XHCISNAP's "controller version" lines say what the driver decided.
   No 0.96 controller has run under this driver yet.
 
-  THOSE TWENTY ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  THOSE TWENTY-ONE ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete
@@ -5086,9 +5135,9 @@ A value that is absent means the default each one states.
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to this project's own code in xhci98.sys, xhciuas.sys and the 32-bit
-helper xhcimsi.sys, and to their INFs. The 64-bit xhci98.sys and xhcimsi.sys
+helper xhcihlpr.sys, and to their INFs. The 64-bit xhci98.sys and xhcihlpr.sys
 also carry a few small support routines that Microsoft's driver kit links in
-(a stack-cookie check, and in xhcimsi.sys a device-security helper), which
+(a stack-cookie check, and in xhcihlpr.sys a device-security helper), which
 are not this project's work; docs/contributing/legal-provenance.md, in the
 project's source repository, records them.
 
@@ -5732,8 +5781,9 @@ same minute is 3141022B. Nothing is ever overwritten.
 
   3141022A.DEV The controller as Windows sees it: its Device Manager status
                and problem code, the resources it was given, and the versions
-               and SHA-256 hashes of xhci98.sys, xhciuas.sys, xhcimsi.sys,
-               usbd.sys and usbui.dll as installed. Attach it.
+               and SHA-256 hashes of xhci98.sys, xhciuas.sys, xhcihlpr.sys
+               (and xhcimsi.sys, the earlier helper, where it is still on the
+               disk), usbd.sys and usbui.dll as installed. Attach it.
   3141022A.TXT The report. Plain text. Below level 4 it holds no internal
                addresses - the driver refuses to record one at those levels,
                so that is a property of the file and not a promise about it.

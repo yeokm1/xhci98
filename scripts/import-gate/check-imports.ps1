@@ -149,24 +149,34 @@ param(
     [ValidateSet("auto", "x86", "amd64")]
     [string]$Arch = "auto",
 
-    # **The nt6x86 profile: xhcimsi.sys, the NT 6 x86 MSI helper** (design
-    # record 18 section 8.2). That binary loads on Windows Vista SP2 and 7 SP1
-    # x86 alone and imports IoConnectInterruptEx, which neither Windows 2000
-    # nor Windows 98 has, so the default x86 rules - every pair exported by
-    # Windows 2000 SP4 and evidenced on Windows 98 - would refuse it for the
-    # very thing it exists to do. Under this profile an x86 image is held to
-    # its own allowlist (which -AllowPath must name: no default allowlist
-    # applies) and to the export tables of the Vista SP2 and 7 SP1 x86 kernels
-    # and HALs (nt6x86-vista-baselines.expected, nt6x86-win7-baselines.expected),
-    # and the Windows 98 rule does not apply. The profile refuses an amd64
-    # image, and the default profile keeps refusing every Vista-only pair in
+    # **The hlprx86 profile: xhcihlpr.sys, the x86 helper** (design record 18
+    # section 15.11; until task 38.3 the nt6x86 profile of xhcimsi.sys, section
+    # 8.2). That binary loads on Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1
+    # x86, never on Windows 98 or ME, and imports ExSetTimerResolution and
+    # MmGetSystemRoutineAddress, which Windows 98 lacks, so the default x86
+    # rules - every pair evidenced on Windows 98 too - would refuse it for
+    # the very thing it exists to do. Under this profile an x86 image is held
+    # to its own allowlist (which -AllowPath must name: no default allowlist
+    # applies) and to the export tables of EVERY kernel and HAL of all four
+    # targets (win2k-baselines.expected, winxp-x86-baselines.expected,
+    # hlprx86-vista-baselines.expected, hlprx86-win7-baselines.expected), and
+    # the Windows 98 rule does not apply. **Every set is required**: a set
+    # missing, or one image of it, fails the gate rather than warning (record
+    # 18 section 15.11, round 1's finding 8); -NoTargetEvidence remains a
+    # developer's allowlist-only mode, which make-package.ps1 and
+    # make-release.ps1 refuse for the helper. The profile refuses an amd64
+    # image and the two Vista-only interrupt routines by name, and the
+    # default profile keeps refusing every pair Windows 98 lacks in
     # xhci98.sys's x86 image as before.
-    [ValidateSet("default", "nt6x86")]
+    [ValidateSet("default", "hlprx86")]
     [string]$GateProfile = "default",
 
-    # The two NT 6 x86 manifests and the directories their files are staged
-    # in. Defaults: beside this script, and tools\vista-x86-extracted and
-    # tools\win7-x86-extracted.
+    # The hlprx86 manifests and the directories their files are staged in.
+    # Defaults: beside this script, and tools\winxpsp3-extracted,
+    # tools\vista-x86-extracted and tools\win7-x86-extracted; the Windows
+    # 2000 set is -Win2kManifestPath and -Win2kDir's.
+    [string]$WinXpManifestPath = "",
+    [string]$WinXpDir = "",
     [string]$Nt6VistaManifestPath = "",
     [string]$Nt6Win7ManifestPath = "",
     [string]$Nt6VistaDir = "",
@@ -206,11 +216,17 @@ if ($Win2kManifestPath -eq "") {
 if ($Win98EvidenceList -eq "") {
     $Win98EvidenceList = Join-Path $PSScriptRoot "win98-evidence.list"
 }
+if ($WinXpManifestPath -eq "") {
+    $WinXpManifestPath = Join-Path $PSScriptRoot "winxp-x86-baselines.expected"
+}
+if ($WinXpDir -eq "") {
+    $WinXpDir = Join-Path $repo "tools\winxpsp3-extracted"
+}
 if ($Nt6VistaManifestPath -eq "") {
-    $Nt6VistaManifestPath = Join-Path $PSScriptRoot "nt6x86-vista-baselines.expected"
+    $Nt6VistaManifestPath = Join-Path $PSScriptRoot "hlprx86-vista-baselines.expected"
 }
 if ($Nt6Win7ManifestPath -eq "") {
-    $Nt6Win7ManifestPath = Join-Path $PSScriptRoot "nt6x86-win7-baselines.expected"
+    $Nt6Win7ManifestPath = Join-Path $PSScriptRoot "hlprx86-win7-baselines.expected"
 }
 if ($Nt6VistaDir -eq "") {
     $Nt6VistaDir = Join-Path $repo "tools\vista-x86-extracted"
@@ -603,6 +619,39 @@ $manifestFiles
     return $baseline
 }
 
+#
+# The hlprx86 profile's evidence (design record 18 section 15.11): every
+# kernel and HAL of each of the four sets, merged under "<tag> <image>" keys
+# so a failure names the target. Returns the merged baseline and the labels
+# of the sets with no file staged; a set partly staged or unauthenticated
+# throws in Get-Win2kBaseline, as it always has. The caller fails the gate
+# for a missing set: under this profile nothing is optional.
+#
+function Get-HlprBaseline {
+    param(
+        [object[]]$Sets,
+        [string]$Dumpbin
+    )
+
+    $merged = @{ "ntoskrnl.exe" = @{}; "hal.dll" = @{} }
+    $missing = @()
+    foreach ($set in $Sets) {
+        $rows = @(Read-Win2kBaselineManifest -Path $set.Manifest)
+        $one = Get-Win2kBaseline -Dir $set.Dir -Dumpbin $Dumpbin -ManifestRows $rows `
+            -Label $set.Label -ExtractSwitch $set.Extract
+        if ($null -eq $one) {
+            $missing += $set.Label
+            continue
+        }
+        foreach ($provider in @("ntoskrnl.exe", "hal.dll")) {
+            foreach ($binary in $one[$provider].Keys) {
+                $merged[$provider]["$($set.Tag) $binary"] = $one[$provider][$binary]
+            }
+        }
+    }
+    return [pscustomobject]@{ Baseline = $merged; Missing = $missing }
+}
+
 function Get-Win98Precedent {
     param([object[]]$Rows, [string]$Dumpbin)
 
@@ -882,6 +931,16 @@ function Test-Image {
             continue
         }
 
+        # The helper's own rule, whatever its allowlist says (record 18
+        # section 15.11): it loads on Windows 2000 and XP, so the Vista
+        # interrupt pair is asked of MmGetSystemRoutineAddress, never
+        # imported.
+        if ($ImageArch -eq "hlprx86" -and
+            ($pair.Symbol -ceq "IoConnectInterruptEx" -or $pair.Symbol -ceq "IoDisconnectInterruptEx")) {
+            Add-Failure "$($pair.Module)!$($pair.Symbol): the x86 helper may not import a Vista-only routine - it loads on Windows 2000 and XP (design record 18 section 15.1). Ask MmGetSystemRoutineAddress on NT 6."
+            continue
+        }
+
         # The successor replaces usbport.sys and must not import from it - on a
         # stock Windows 98 SE there is no usbport.sys to resolve against, which
         # is the reason the HCD is a second binary at all (roadmap-hcd.md,
@@ -937,7 +996,7 @@ function Test-Image {
                 if ($absent.Count -gt 0) {
                     Add-Failure "$($pair.Module)!$($pair.Symbol) is not exported by $BaselineLabel $($absent -join ', ') - the driver cannot load on that target."
                 } else {
-                    $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } elseif ($ImageArch -eq "nt6x86") { "nt6-x86-export" } else { "w2k-export" }
+                    $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } elseif ($ImageArch -eq "hlprx86") { "w2k-export; xp-x86-export; nt6-x86-export" } else { "w2k-export" }
                 }
             }
         }
@@ -985,7 +1044,7 @@ function Test-Image {
         # the refusal above has already failed it.)
         #
         if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
-            if ($ImageArch -eq "amd64" -or $ImageArch -eq "nt6x86") {
+            if ($ImageArch -eq "amd64" -or $ImageArch -eq "hlprx86") {
                 #
                 # **THE amd64 RULE, AND IT IS STRONGER THAN THE WINDOWS 98 ONE
                 # RATHER THAN A RELAXATION OF IT** (the owner's decision,
@@ -1002,11 +1061,11 @@ function Test-Image {
                 # pair evidenced when the baselines were never loaded.
                 #
                 if ($null -eq $Win2k) {
-                    if ($ImageArch -eq "nt6x86") {
-                        Add-Warning ("$($pair.Module)!$($pair.Symbol): the $BaselineLabel kernel/HAL " +
-                            "baselines are not staged in this working copy, so nothing checked that " +
-                            "this symbol resolves on 32-bit Vista SP2 or 7 SP1. Stage the files " +
-                            "nt6x86-vista-baselines.expected and nt6x86-win7-baselines.expected name.")
+                    if ($ImageArch -eq "hlprx86") {
+                        # Reached only under -NoTargetEvidence: without it a
+                        # missing set has already failed the run.
+                        Add-Warning ("$($pair.Module)!$($pair.Symbol): -NoTargetEvidence - nothing " +
+                            "checked that this symbol resolves on Windows 2000, XP, Vista or 7 x86.")
                     } else {
                         Add-Warning ("$($pair.Module)!$($pair.Symbol): the $BaselineLabel kernel/HAL " +
                             "baselines are not staged in this working copy, so nothing checked that " +
@@ -1115,49 +1174,44 @@ try {
     $precedent = $null
     $ntkernText = $null
 
-    if ($GateProfile -eq "nt6x86") {
+    if ($GateProfile -eq "hlprx86") {
         #
-        # The helper's run (design record 18 section 8.2): its own allowlist,
-        # the Vista SP2 and 7 SP1 x86 export tables, no Windows 2000 or 98
-        # evidence asked - and nothing else in this script changes.
+        # The helper's run (design record 18 section 15.11): its own allowlist,
+        # the export tables of every kernel and HAL of Windows 2000 SP4, XP SP3,
+        # Vista SP2 and 7 SP1 x86, each set required, no Windows 98 evidence
+        # asked - and nothing else in this script changes.
         #
         if (-not $script:allowPathPinned) {
-            throw "-GateProfile nt6x86 needs -AllowPath: no default allowlist applies to the NT 6 x86 helper (scripts\import-gate\xhcimsi-imports.allow)."
+            throw "-GateProfile hlprx86 needs -AllowPath: no default allowlist applies to the x86 helper (scripts\import-gate\xhcihlpr-imports.allow)."
         }
         if ($Arch -eq "amd64") {
-            throw "-GateProfile nt6x86 is an x86 profile: the amd64 HCD has no helper (design record 18)."
+            throw "-GateProfile hlprx86 is an x86 profile: the amd64 HCD has no helper (design record 18)."
         }
-        $nt6Rules = Read-AllowFile -Path $AllowPath
-        Write-Ok ("nt6x86 allowlist: {0} pairs, {1} denied symbols" -f $nt6Rules.Allow.Count, $nt6Rules.Deny.Count)
-        $nt6Dumpbin = Initialize-Dumpbin -ForArch "x86"
-        $nt6 = $null
+        $hlprRules = Read-AllowFile -Path $AllowPath
+        Write-Ok ("hlprx86 allowlist: {0} pairs, {1} denied symbols" -f $hlprRules.Allow.Count, $hlprRules.Deny.Count)
+        $hlprDumpbin = Initialize-Dumpbin -ForArch "x86"
+        $hlpr = $null
         if (-not $NoTargetEvidence) {
-            $merged = @{ "ntoskrnl.exe" = @{}; "hal.dll" = @{} }
-            $loaded = 0
-            foreach ($set in @(
-                @{ Label = "Windows Vista SP2 x86"; Dir = $Nt6VistaDir; Manifest = $Nt6VistaManifestPath; Tag = "vista" },
-                @{ Label = "Windows 7 SP1 x86"; Dir = $Nt6Win7Dir; Manifest = $Nt6Win7ManifestPath; Tag = "win7" })) {
-                $rows = @(Read-Win2kBaselineManifest -Path $set.Manifest)
-                $one = Get-Win2kBaseline -Dir $set.Dir -Dumpbin $nt6Dumpbin -ManifestRows $rows `
-                    -Label $set.Label -ExtractSwitch "(stage the files the manifest names)"
-                if ($null -eq $one) {
-                    Add-Warning "none of the authenticated $($set.Label) kernel/HAL baselines are present in '$($set.Dir)' - that half of the nt6x86 gate did not run."
-                    continue
-                }
-                foreach ($provider in @("ntoskrnl.exe", "hal.dll")) {
-                    foreach ($binary in $one[$provider].Keys) {
-                        $merged[$provider]["$($set.Tag) $binary"] = $one[$provider][$binary]
-                    }
-                }
-                $loaded++
+            $loaded = Get-HlprBaseline -Dumpbin $hlprDumpbin -Sets @(
+                @{ Label = "Windows 2000 SP4"; Dir = $Win2kDir; Manifest = $Win2kManifestPath; Tag = "w2k";
+                   Extract = "-Win2KIso <path>" },
+                @{ Label = "Windows XP SP3 x86"; Dir = $WinXpDir; Manifest = $WinXpManifestPath; Tag = "xp";
+                   Extract = "-WinXpIso <path>" },
+                @{ Label = "Windows Vista SP2 x86"; Dir = $Nt6VistaDir; Manifest = $Nt6VistaManifestPath; Tag = "vista";
+                   Extract = "(stage the files the manifest names)" },
+                @{ Label = "Windows 7 SP1 x86"; Dir = $Nt6Win7Dir; Manifest = $Nt6Win7ManifestPath; Tag = "win7";
+                   Extract = "(stage the files the manifest names)" })
+            foreach ($label in $loaded.Missing) {
+                Add-Failure ("none of the authenticated $label kernel/HAL baselines are staged - the hlprx86 " +
+                    "profile requires every set (design record 18 section 15.11). Stage them " +
+                    "(scripts\import-gate\extract-target-baselines.ps1 and the manifests' headers), " +
+                    "or pass -NoTargetEvidence for an allowlist-only developer run, which no package accepts.")
             }
-            if ($loaded -gt 0) {
-                $nt6 = $merged
-                Write-Ok ("NT 6 x86 baseline: {0} (versions, lengths and SHA256 authenticated)" -f `
-                    ((@($merged["ntoskrnl.exe"].Keys) + @($merged["hal.dll"].Keys) | Sort-Object) -join ", "))
-            }
+            $hlpr = $loaded.Baseline
+            Write-Ok ("x86 helper baseline: {0} (versions, lengths and SHA256 authenticated)" -f `
+                ((@($hlpr["ntoskrnl.exe"].Keys) + @($hlpr["hal.dll"].Keys) | Sort-Object) -join ", "))
         } else {
-            Add-Warning "-NoTargetEvidence: only the committed allowlist was enforced for the nt6x86 image."
+            Add-Warning "-NoTargetEvidence: only the committed allowlist was enforced for the hlprx86 image - no target evidence was checked, and no package or release accepts a helper gated so."
         }
         foreach ($path in $images) {
             $imageFlavor = $Flavor
@@ -1173,9 +1227,9 @@ try {
                 }
             }
             Test-DumperMachine -Path $path -ExpectedArch "x86"
-            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $nt6Rules -Dumpbin $nt6Dumpbin `
-                -Win2k $nt6 -BaselineLabel "Windows Vista SP2 / 7 SP1 x86" `
-                -Precedent $null -NtkernText $null -ImageArch "nt6x86"
+            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $hlprRules -Dumpbin $hlprDumpbin `
+                -Win2k $hlpr -BaselineLabel "Windows 2000 SP4 / XP SP3 / Vista SP2 / 7 SP1 x86" `
+                -Precedent $null -NtkernText $null -ImageArch "hlprx86"
         }
         $images = @()
     } elseif ($NoTargetEvidence) {

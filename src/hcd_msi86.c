@@ -5,10 +5,13 @@
  *
  *   - Where IoConnectInterruptEx and IoDisconnectInterruptEx come from:
  *     amd64 asks MmGetSystemRoutineAddress; the x86 image, which also loads
- *     on Windows 98 and so may import neither, asks the NT 6-only helper
- *     xhcimsi.sys over its named device (record 18 section 3). The pair is
- *     handed to hcd_ctl.c's hcdMsgConnect, the one seam.
- *   - The helper's binding per controller FDO (record 18 section 4.1).
+ *     on Windows 98 and so may import neither, asks the x86 helper
+ *     xhcihlpr.sys over its named device, channel version 2 (record 18
+ *     sections 3 and 15.3; until task 38.3 xhcimsi.sys's version 1). The
+ *     pair is handed to hcd_ctl.c's hcdMsgConnect, the one seam.
+ *   - The helper's binding per controller FDO (record 18 sections 4.1 and
+ *     15.4), which also carries the timer service's ExSetTimerResolution
+ *     to hcd_tmr.c (HcdHlprTimerRoutine; record 15 section 7.2.3).
  *   - IRP_MN_FILTER_RESOURCE_REQUIREMENTS (record 18 section 4.2): the
  *     checked walk, the class, and the strip that keeps only the line
  *     configurations when x86 has no helper bound or the mode is 1 - or,
@@ -18,14 +21,16 @@
  *     start, both system-thread contexts (section 4.2).
  *   - The qemu flavour's checksummed trace (record 18 section 9).
  *
- * Nothing here runs below NT 6: every entry tests IoIsWdmVersionAvailable
- * (6, 0) first, so Windows 98, ME, 2000 and XP pass the filter IRP down
- * untouched, as before.
+ * Nothing here runs below NT 6 but the timer's look: every other entry tests
+ * IoIsWdmVersionAvailable(6, 0) first, so Windows 98, ME, 2000 and XP pass
+ * the filter IRP down untouched, as before. HcdHlprTimerRoutine runs on
+ * Windows 2000 and later only, from the timer thread (never on 98 or ME).
  *
  * IRQL: PASSIVE_LEVEL throughout, in the PnP manager's threads (AddDevice,
  * IRP_MN_START_DEVICE and IRP_MN_REMOVE_DEVICE are system-thread
- * contexts; IRP_MN_FILTER_RESOURCE_REQUIREMENTS reads no registry), except
- * hcdMsi86Done, a completion routine (<= DISPATCH_LEVEL).
+ * contexts; IRP_MN_FILTER_RESOURCE_REQUIREMENTS reads no registry) and the
+ * timer thread's (HcdHlprTimerRoutine), except hcdHlprDone, a completion
+ * routine (<= DISPATCH_LEVEL).
  */
 
 #include "hcd.h"
@@ -101,7 +106,7 @@ static ULONG hcdMsiNt6(VOID)
 /* XHCI_VER packed one byte a part, for the helper's log and ours. */
 static ULONG hcdMsiVersion(VOID)
 {
-    return XhciMsi86PackVersion(XHCI_VER_STR);
+    return XhciHlprPackVersion(XHCI_VER_STR);
 }
 
 /* ---- the trace (record 18 section 9) ---------------------------------- */
@@ -211,7 +216,7 @@ VOID HcdMsiTraceStart(PHCD_CONTROLLER hc, ULONG grant, NTSTATUS status)
 
     f[0] = hc->PollValues.Mode;
     f[1] = grant;
-    f[2] = hc->Msi86Bind.State;
+    f[2] = hc->HlprBind.State;
     f[3] = hc->MsiFilter.Class;
     f[4] = hc->MsiFilter.Outcome;
     f[5] = hc->PollDelivery;
@@ -239,11 +244,13 @@ VOID HcdMsiCountersStart(PHCD_CONTROLLER hc)
     c->MsiCapability = hc->MsgCapability;
     c->MsiConnectStatus = (ULONG)hc->MsgConnectStatus;
     c->MsiDescriptors = hc->MsgDescriptors;
-    c->Msi86State = hc->Msi86Bind.State;
-    c->Msi86Looks = hc->Msi86Bind.Looks;
-    c->Msi86Status = (ULONG)hc->Msi86Status;
-    c->Msi86Refusal = hc->Msi86Refusal;
-    c->Msi86HelperVersion = hc->Msi86HelperVersion;
+    c->HlprMsiVerdict = hc->HlprMsiVerdict;
+    c->HlprTimerVerdict = hc->HlprTimerVerdict;
+    c->Msi86State = hc->HlprBind.State;
+    c->Msi86Looks = hc->HlprBind.Looks;
+    c->Msi86Status = (ULONG)hc->HlprStatus;
+    c->Msi86Refusal = hc->HlprRefusal;
+    c->Msi86HelperVersion = hc->HlprHelperVersion;
     c->MsiFilterSeq = hc->MsiFilter.Sequence;
     c->MsiFilterClass = hc->MsiFilter.Class;
     c->MsiFilterOutcome = hc->MsiFilter.Outcome;
@@ -283,7 +290,7 @@ VOID HcdMsiAddDevice(PHCD_CONTROLLER hc)
     ULONG value;
 
     XhciMsiFilterInit(&hc->MsiFilter);
-    XhciMsi86BindInit(&hc->Msi86Bind);
+    XhciHlprBindInit(&hc->HlprBind);
     hc->ModeCacheRaw = 0;
     hc->ModeCacheFound = 0;
     hc->ModeCacheFrom = HCD_MSI_FROM_NONE;
@@ -312,11 +319,11 @@ VOID HcdMsiStartValues(PHCD_CONTROLLER hc, ULONG modeFound, ULONG mode)
     hcdMsiReadSwitches(hc);
 }
 
-/* ---- the x86 helper (record 18 sections 3 and 4.1) --------------------- */
+/* ---- the x86 helper (record 18 sections 3, 4.1 and 15.3 to 15.4) ------- */
 
 #if !defined(_WIN64)
-static NTSTATUS NTAPI hcdMsi86Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
-                                   PVOID Context)
+static NTSTATUS NTAPI hcdHlprDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                                  PVOID Context)
 {
     UNREFERENCED_PARAMETER(DeviceObject);
     UNREFERENCED_PARAMETER(Irp);
@@ -325,9 +332,10 @@ static NTSTATUS NTAPI hcdMsi86Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* One look: open the helper's device, send the query, judge the answer,
- * and step the binding with the result. */
-static VOID hcdMsi86Look(PHCD_CONTROLLER hc)
+/* One look: open the helper's device, send the V2 query, judge the channel
+ * and each service, and step the binding with the result. A service's
+ * routines are kept only on its own "accepted". */
+static VOID hcdHlprLook(PHCD_CONTROLLER hc)
 {
     UNICODE_STRING name;
     PFILE_OBJECT file;
@@ -338,49 +346,55 @@ static VOID hcdMsi86Look(PHCD_CONTROLLER hc)
     NTSTATUS status;
     ULONG information;
     ULONG verdict;
+    ULONG msi;
+    ULONG timer;
     ULONG event;
     ULONG act;
     PUCHAR p;
     ULONG i;
 
     file = NULL;
-    hc->Msi86Refusal = 0;
-    RtlInitUnicodeString(&name, XHCI_MSI86_DEVICE_NAME);
+    msi = XHCI_HLPR_SVC_NONE;
+    timer = XHCI_HLPR_SVC_NONE;
+    hc->HlprRefusal = 0;
+    RtlInitUnicodeString(&name, XHCI_HLPR_DEVICE_NAME);
     status = IoGetDeviceObjectPointer(&name, FILE_READ_DATA, &file, &device);
     if (!NT_SUCCESS(status)) {
-        hc->Msi86Status = status;
-        event = XHCI_MSI86_EV_LOOK_ABSENT;
+        hc->HlprStatus = status;
+        event = XHCI_HLPR_EV_LOOK_ABSENT;
         goto step;
     }
     irp = IoAllocateIrp(device->StackSize, FALSE);
     if (irp == NULL) {
-        hc->Msi86Status = STATUS_INSUFFICIENT_RESOURCES;
-        event = XHCI_MSI86_EV_LOOK_FAILED;
+        hc->HlprStatus = STATUS_INSUFFICIENT_RESOURCES;
+        event = XHCI_HLPR_EV_LOOK_FAILED;
         goto step;
     }
-    p = (PUCHAR)&hc->Msi86Query;
-    for (i = 0; i < sizeof(hc->Msi86Query); i++) {
+    p = (PUCHAR)&hc->HlprQuery;
+    for (i = 0; i < sizeof(hc->HlprQuery); i++) {
         p[i] = 0;
     }
-    hc->Msi86Query.Size = sizeof(XHCI_MSI86_QUERY);
-    hc->Msi86Query.CallerMajor = XHCI_MSI86_MAJOR;
-    hc->Msi86Query.CallerMinor = XHCI_MSI86_MINOR;
-    hc->Msi86Query.CallerVersion = hcdMsiVersion();
+    hc->HlprQuery.Size = sizeof(XHCI_HLPR_QUERY);
+    hc->HlprQuery.CallerMajor = XHCI_HLPR_MAJOR;
+    hc->HlprQuery.CallerMinor = XHCI_HLPR_MINOR;
+    hc->HlprQuery.CallerVersion = hcdMsiVersion();
+    hc->HlprQuery.CallerWants =
+        (hcdMsiNt6() ? XHCI_HLPR_SVC_MSI : 0UL) | XHCI_HLPR_SVC_TIMER;
     irp->RequestorMode = KernelMode;
     irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     irp->IoStatus.Information = 0;
     next = IoGetNextIrpStackLocation(irp);
     next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
     next->Parameters.DeviceIoControl.IoControlCode =
-        XHCI_MSI86_IOCTL_QUERY_V1;
-    next->Parameters.DeviceIoControl.Type3InputBuffer = &hc->Msi86Query;
+        XHCI_HLPR_IOCTL_QUERY_V2;
+    next->Parameters.DeviceIoControl.Type3InputBuffer = &hc->HlprQuery;
     next->Parameters.DeviceIoControl.InputBufferLength =
-        sizeof(XHCI_MSI86_QUERY);
+        sizeof(XHCI_HLPR_QUERY);
     next->Parameters.DeviceIoControl.OutputBufferLength =
-        sizeof(XHCI_MSI86_QUERY);
+        sizeof(XHCI_HLPR_QUERY);
     next->FileObject = file;
     KeInitializeEvent(&done, NotificationEvent, FALSE);
-    HCD_SET_COMPLETION_ALWAYS(irp, hcdMsi86Done, &done);
+    HCD_SET_COMPLETION_ALWAYS(irp, hcdHlprDone, &done);
     if (IoCallDriver(device, irp) == STATUS_PENDING) {
         (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
                                     NULL);
@@ -388,78 +402,130 @@ static VOID hcdMsi86Look(PHCD_CONTROLLER hc)
     status = irp->IoStatus.Status;
     information = (ULONG)irp->IoStatus.Information;
     IoFreeIrp(irp);
-    hc->Msi86Status = status;
-    verdict = XhciMsi86Accept(NT_SUCCESS(status) ? 1UL : 0UL, information,
-                              sizeof(XHCI_MSI86_QUERY), &hc->Msi86Query);
-    if (verdict == XHCI_MSI86_ACCEPTED) {
-        event = XHCI_MSI86_EV_LOOK_ACCEPTED;
+    hc->HlprStatus = status;
+    verdict = XhciHlprAccept(NT_SUCCESS(status) ? 1UL : 0UL, information,
+                             sizeof(XHCI_HLPR_QUERY), &hc->HlprQuery,
+                             hcdMsiNt6(), &msi, &timer);
+    if (verdict == XHCI_HLPR_ACCEPTED) {
+        event = XHCI_HLPR_EV_LOOK_ACCEPTED;
     } else {
-        hc->Msi86Refusal = verdict;
-        event = XHCI_MSI86_EV_LOOK_REFUSED;
+        hc->HlprRefusal = verdict;
+        event = XHCI_HLPR_EV_LOOK_REFUSED;
     }
 
 step:
-    act = XhciMsi86BindStep(&hc->Msi86Bind, event);
-    HcdMsiTraceLife(hc, HCD_MSI_LIFE_LOOK, event, (ULONG)hc->Msi86Status);
-    /* The refusal's own event, with the acceptance test that failed, before
+    act = XhciHlprBindStep(&hc->HlprBind, event);
+    HcdMsiTraceLife(hc, HCD_MSI_LIFE_LOOK, event, (ULONG)hc->HlprStatus);
+    /* The refusal's own event, with the channel test that failed, before
      * the look's reference goes (Codex review of the 36.15 code, round 1). */
-    if (event == XHCI_MSI86_EV_LOOK_REFUSED) {
-        HcdMsiTraceLife(hc, HCD_MSI_LIFE_REFUSE, hc->Msi86Refusal,
-                        (ULONG)hc->Msi86Status);
+    if (event == XHCI_HLPR_EV_LOOK_REFUSED) {
+        HcdMsiTraceLife(hc, HCD_MSI_LIFE_REFUSE, hc->HlprRefusal,
+                        (ULONG)hc->HlprStatus);
     }
-    if ((act & XHCI_MSI86_ACT_DROP_LOOK) != 0 && file != NULL) {
+    if ((act & XHCI_HLPR_ACT_DROP_LOOK) != 0 && file != NULL) {
         ObDereferenceObject(file);
         HcdMsiTraceLife(hc, HCD_MSI_LIFE_DROP, 0, 0);
         return;
     }
-    if (event == XHCI_MSI86_EV_LOOK_ACCEPTED) {
-        hc->Msi86File = file;
-        hc->Msi86ConnectEx = hc->Msi86Query.ConnectEx;
-        hc->Msi86DisconnectEx = hc->Msi86Query.DisconnectEx;
-        hc->Msi86HelperVersion = hc->Msi86Query.HelperVersion;
-        hc->Msi86HelperMinor = hc->Msi86Query.HelperMinor;
-        hc->Msi86Flags = hc->Msi86Query.Flags;
-        HcdMsiTraceLife(hc, HCD_MSI_LIFE_BIND, hc->Msi86HelperVersion,
-                        hc->Msi86Flags);
+    if (event == XHCI_HLPR_EV_LOOK_ACCEPTED) {
+        hc->HlprFile = file;
+        hc->HlprMsiVerdict = msi;
+        hc->HlprTimerVerdict = timer;
+        hc->HlprConnectEx = (msi == XHCI_HLPR_SVC_ACCEPTED)
+                                ? hc->HlprQuery.ConnectEx
+                                : NULL;
+        hc->HlprDisconnectEx = (msi == XHCI_HLPR_SVC_ACCEPTED)
+                                   ? hc->HlprQuery.DisconnectEx
+                                   : NULL;
+        hc->HlprSetTimer = (timer == XHCI_HLPR_SVC_ACCEPTED)
+                               ? hc->HlprQuery.SetTimerResolution
+                               : NULL;
+        hc->HlprHelperVersion = hc->HlprQuery.HelperVersion;
+        hc->HlprHelperMinor = hc->HlprQuery.HelperMinor;
+        hc->HlprFlags = hc->HlprQuery.Flags;
+        HcdMsiTraceLife(hc, HCD_MSI_LIFE_BIND, hc->HlprHelperVersion,
+                        hc->HlprFlags);
     }
 }
 
-static VOID hcdMsi86Event(PHCD_CONTROLLER hc, ULONG event)
+static VOID hcdHlprEvent(PHCD_CONTROLLER hc, ULONG event)
 {
-    if ((XhciMsi86BindStep(&hc->Msi86Bind, event) & XHCI_MSI86_ACT_LOOK) !=
-        0) {
-        hcdMsi86Look(hc);
+    if ((XhciHlprBindStep(&hc->HlprBind, event) & XHCI_HLPR_ACT_LOOK) != 0) {
+        hcdHlprLook(hc);
     }
 }
+
+/* The MSI service is the helper's for this FDO: bound, and that half
+ * accepted (record 18 section 15.3: "the helper bound" now reads so). */
+static ULONG hcdHlprMsiServed(PHCD_CONTROLLER hc)
+{
+    return (hc->HlprBind.State == XHCI_HLPR_STATE_BOUND &&
+            hc->HlprMsiVerdict == XHCI_HLPR_SVC_ACCEPTED)
+               ? 1UL
+               : 0UL;
+}
 #endif /* !_WIN64 */
+
+/*
+ * ExSetTimerResolution for the timer thread (design record 15 section
+ * 7.2.3), NULL when not found: on amd64 MmGetSystemRoutineAddress; on x86
+ * the helper's timer service. `look` asks for the binding machine's
+ * XHCI_HLPR_EV_TIMER first, which looks only while not BOUND - the 32-bit
+ * Windows 2000 and XP thread's own look (record 18 section 15.4); without
+ * it the binding the filter and the start already made is read (Vista and
+ * 7, from the start inside the PnP manager's serialisation). Never called on
+ * Windows 98 or ME. IRQL: PASSIVE_LEVEL.
+ */
+PVOID HcdHlprTimerRoutine(PHCD_CONTROLLER hc, ULONG look)
+{
+#if defined(_WIN64)
+    UNICODE_STRING name;
+
+    UNREFERENCED_PARAMETER(hc);
+    UNREFERENCED_PARAMETER(look);
+    RtlInitUnicodeString(&name, L"ExSetTimerResolution");
+    return MmGetSystemRoutineAddress(&name);
+#else
+    if (look) {
+        hcdHlprEvent(hc, XHCI_HLPR_EV_TIMER);
+    }
+    if (hc->HlprBind.State != XHCI_HLPR_STATE_BOUND ||
+        hc->HlprTimerVerdict != XHCI_HLPR_SVC_ACCEPTED) {
+        return NULL;
+    }
+    return hc->HlprSetTimer;
+#endif
+}
 
 /* The start's look on x86 while not bound (record 18 section 4.1). */
 VOID HcdMsiStartLook(PHCD_CONTROLLER hc)
 {
 #if !defined(_WIN64)
     if (hcdMsiNt6()) {
-        hcdMsi86Event(hc, XHCI_MSI86_EV_START);
+        hcdHlprEvent(hc, XHCI_HLPR_EV_START);
     }
 #else
     UNREFERENCED_PARAMETER(hc);
 #endif
 }
 
-/* The remove, after the stop's release has disconnected: the reference
- * held for a BOUND answer dropped, exactly once (record 18 section 3.3). */
+/* The remove, after the stop's release has disconnected and the stop has
+ * joined the timer thread: the reference held for a BOUND answer dropped,
+ * exactly once (record 18 sections 3.3 and 15.4). */
 VOID HcdMsiRemove(PHCD_CONTROLLER hc)
 {
 #if !defined(_WIN64)
     ULONG act;
 
-    act = XhciMsi86BindStep(&hc->Msi86Bind, XHCI_MSI86_EV_REMOVE);
-    if ((act & XHCI_MSI86_ACT_DROP) != 0 && hc->Msi86File != NULL) {
-        ObDereferenceObject(hc->Msi86File);
+    act = XhciHlprBindStep(&hc->HlprBind, XHCI_HLPR_EV_REMOVE);
+    if ((act & XHCI_HLPR_ACT_DROP) != 0 && hc->HlprFile != NULL) {
+        ObDereferenceObject(hc->HlprFile);
         HcdMsiTraceLife(hc, HCD_MSI_LIFE_DROP, 1, 0);
     }
-    hc->Msi86File = NULL;
-    hc->Msi86ConnectEx = NULL;
-    hc->Msi86DisconnectEx = NULL;
+    hc->HlprFile = NULL;
+    hc->HlprConnectEx = NULL;
+    hc->HlprDisconnectEx = NULL;
+    hc->HlprSetTimer = NULL;
 #endif
     HcdMsiTraceLife(hc, HCD_MSI_LIFE_REMOVE, 0, 0);
 }
@@ -492,11 +558,11 @@ ULONG HcdMsiRoutines(PHCD_CONTROLLER hc, PVOID *connect, PVOID *disconnect)
         return HCD_MSI_ROUTINES_SYSTEM;
     }
 #else
-    if (hc->Msi86Bind.State != XHCI_MSI86_STATE_BOUND) {
+    if (!hcdHlprMsiServed(hc)) {
         return HCD_MSI_ROUTINES_NOT_FOUND;
     }
-    *connect = hc->Msi86ConnectEx;
-    *disconnect = hc->Msi86DisconnectEx;
+    *connect = hc->HlprConnectEx;
+    *disconnect = hc->HlprDisconnectEx;
     return HCD_MSI_ROUTINES_HELPER;
 #endif
 }
@@ -508,14 +574,13 @@ ULONG HcdMsiSystem(VOID)
     return hcdMsiNt6();
 }
 
-/* x86 alone, no helper bound, and this FDO's latest filter classified its
- * list NO_LINE (record 18 section 4.3). Revision 6's mode-1 input; since
+/* x86 alone, no helper's MSI service accepted, and this FDO's latest filter
+ * classified its list NO_LINE (record 18 sections 4.3 and 15.3). Revision 6's mode-1 input; since
  * revision 12 a recorded fact only, in the routines' L record. */
 ULONG HcdMsiNoLineOffered(PHCD_CONTROLLER hc)
 {
 #if !defined(_WIN64)
-    return (hcdMsiNt6() &&
-            hc->Msi86Bind.State != XHCI_MSI86_STATE_BOUND &&
+    return (hcdMsiNt6() && !hcdHlprMsiServed(hc) &&
             hc->MsiFilter.Class == XHCI_MSI_CLASS_NO_LINE)
                ? 1UL
                : 0UL;
@@ -631,7 +696,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
 
     status = HcdForwardAndWait(hc, irp);
 #if !defined(_WIN64)
-    hcdMsi86Event(hc, XHCI_MSI86_EV_FILTER);
+    hcdHlprEvent(hc, XHCI_HLPR_EV_FILTER);
 #endif
     replaced = 0;
     if (!NT_SUCCESS(status) && status != STATUS_NOT_SUPPORTED) {
@@ -687,7 +752,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
                                                                    : 0UL;
 #else
     asked = (keepMessage || hc->FilterMode == XHCI_POLL_MODE_LINE ||
-             hc->Msi86Bind.State != XHCI_MSI86_STATE_BOUND)
+             !hcdHlprMsiServed(hc))
                 ? 1UL
                 : 0UL;
 #endif

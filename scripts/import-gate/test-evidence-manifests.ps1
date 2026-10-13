@@ -42,6 +42,19 @@ try {
     Assert-True ($actualOutputs.Count -eq $expectedOutputs.Count) "Win2000 manifest must contain two kernels and eight HALs"
     Assert-True (($actualOutputs -join "|") -ceq ($expectedOutputs -join "|")) "Win2000 manifest must name every SP4 kernel/HAL variant, halborg.dll included"
 
+    # The XP SP3 x86 manifest (the hlprx86 profile, task 38.3): all four
+    # kernels - uniprocessor and multiprocessor, without and with PAE - and
+    # all seven HALs, since a loader binds whichever Setup chose.
+    $xpRows = @(Read-Win2kBaselineManifest -Path (Join-Path $PSScriptRoot "winxp-x86-baselines.expected"))
+    $xpExpected = @(
+        "hal.dll", "halaacpi.dll", "halacpi.dll", "halapic.dll", "halmacpi.dll",
+        "halmps.dll", "halsp.dll", "ntkrnlmp.exe", "ntkrnlpa.exe", "ntkrpamp.exe",
+        "ntoskrnl.exe"
+    )
+    $xpActual = @($xpRows | ForEach-Object { $_.Out } | Sort-Object)
+    Assert-True (($xpActual -join "|") -ceq ($xpExpected -join "|")) "XP SP3 x86 manifest must name the four kernels and seven HALs: $($xpActual -join ', ')"
+    Assert-True (@($xpRows | Where-Object { $_.Version -ne "5.1.2600.5512" }).Count -eq 0) "XP SP3 x86 manifest rows must all be 5.1.2600.5512"
+
     # ---------------------------------------------------------------------
     # The production Win98 manifest must carry identity for both roles.
     # ---------------------------------------------------------------------

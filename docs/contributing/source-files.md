@@ -267,7 +267,36 @@
 > counters and the trace); in `hcd_ctl.c` the seam `hcdMsgConnect`, the
 > message ISR and the capability read; and `src/msi86/` - `msi86_entry.c`,
 > `xhcimsi.rc`, `sources` and `makefile` - the NT 6 x86 helper
-> `xhcimsi.sys`, built with WDK 7.1 for x86.
+> `xhcimsi.sys`, built with WDK 7.1 for x86. Task 38.3 renamed both (below).
+> Task 38.3 (design records 15 section 7.2 and 18 section 15) adds the
+> finer system timer while polling and renames the helper. `src/hlpr/` -
+> `hlpr_entry.c`, `xhcihlpr.rc`, `sources` and `makefile` - replaces
+> `src/msi86/`: the x86 helper `xhcihlpr.sys`, built with WDK 7.1's `WXP`
+> x86 environment at subsystem 5.00, which loads on 2000, XP, Vista and 7,
+> creates `\Device\Xhci98Helper` and answers channel version 2 (IOCTL
+> `0x0022240B`, magic `'XHLP'`, a 0x34-byte block) with two services
+> negotiated apart, the MSI pair (Vista and 7 only, looked up through
+> `MmGetSystemRoutineAddress`) and the timer (`ExSetTimerResolution`,
+> imported). `xhci_hlpr.c` / `xhci_hlpr.h` replace `xhci_msi86.c` /
+> `xhci_msi86.h` as the channel's pure half (both ends, compiled into
+> `xhci98.sys`, the helper and `test_msi`, and included by `test_snap`), with the
+> binding machine's timer event and the per-start latch; `hcd_msi86.c`
+> keeps its name and takes the timer routine from the binding
+> (`HcdHlprTimerRoutine`). New `hcd_tmr.c`: the controller's timer thread
+> (one per controller, created after a successful start and joined at the
+> stop after the children's power IRPs are settled), the routine's lookup
+> per image (the helper on x86, the 32-bit NT 5 thread's own first look;
+> `MmGetSystemRoutineAddress` on amd64; none on 98 SE and ME), the
+> `ExSetTimerResolution` hold and release, and the `qemu` flavour's
+> `XhciQemuTmrDelayMs`. `xhci_poll.c` / `xhci_poll.h` gain the timer's pure
+> request machine (`XhciPollTmrWant`, `XhciPollTmrStep`, the release
+> causes) and its phase observer (`XhciPollTmrObserve` and the observation
+> epoch; host suite `test_poll`); the producers - the ACTIVE edge and the
+> generation in `hcd_poll.c`, the bar beside each power path's revoke in
+> `hcd_power.c`, the creation in `hcd_pnp.c`, and the switch's read, the
+> per-start reset and the stop's bar and join in `hcd_ctl.c` - signal the
+> thread; `hcd_susp.c` gains the `qemu` flavour's `XhciQemuSuspHoldDx`; the
+> counters are appended to `XHCIHC_COUNTERS` at words 176 to 198.
 > Tasks 36.28 to 36.40 (design record 14) add selective suspend: the pure
 > `xhci_susp.c` / `xhci_susp.h` (the switch, eligibility and capabilities,
 > the device's link machine, each function's power slot, the wake episode,

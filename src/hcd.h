@@ -42,7 +42,7 @@
 #include "xhci98_xfer.h"
 #include "xhci_poll.h"
 #include "xhci_msi.h"
-#include "xhci_msi86.h"
+#include "xhci_hlpr.h"
 
 /* Message-signalled interrupts (design records 15 section 4.3 and 18): the
  * qemu flavour's failed message connection, its switch that keeps the
@@ -837,6 +837,12 @@ typedef struct _HCD_DEVICE_PDO {
                                      * PDO's power reports
                                      * (PoSetPowerState) with its D-IRP
                                      * admission (hcd_susp.c); PASSIVE  */
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 15 section 7.2.12, leg T3 (qemu only): whether
+     * XhciQemuSuspHoldDx's first skip of a pended Dx was noted. The
+     * claiming path travels in the IRP (hcd_susp.c, HCD_SUSP_QEMU_MARK). */
+    ULONG QemuHoldNoted;
+#endif
     /* The idle notification (design record 14 sections 4.4 and 6; task
      * 36.32, hcd_susp.c), under the controller lock: stage A's held IRP
      * (today's stays IdleIrp, above) and its state (XHCI_SUSP_IDLE_*), the
@@ -1095,6 +1101,50 @@ typedef struct _HCD_HOLD {
 
 /* Hub ports remembered as deferred for the first answer (task 33.3). */
 #define HCD_SETTLE_DEFER_HUB 16UL
+
+/* ExSetTimerResolution, called only through a pointer: the 32-bit image
+ * may not import it (it loads on Windows 98), and the 64-bit image asks
+ * MmGetSystemRoutineAddress (design record 15 section 7.2.3). The Windows
+ * 2000 DDK's declaration. */
+typedef ULONG (NTAPI *HCD_SET_TIMER_RESOLUTION)(ULONG DesiredTime,
+                                                BOOLEAN SetResolution);
+
+/*
+ * The timer thread's whole world (design record 15 section 7.2.5): one per
+ * controller, in its extension, which outlives every stop. Initialised once
+ * (HcdTmrInitObjects) and reset at each start under the controller lock,
+ * before the poller opens. Under the controller lock: Live, Stop, Bar,
+ * Active, Gen, ObsEpoch and ObsPhase (the producers write them; the thread
+ * reads them in one hold per step) and the counters. The thread's own:
+ * State, HeldGen, Looked, Calls, HeldSince. The start's, before the thread
+ * runs: Switch, Desired, Routine, Lookable, DelayMs and the thread's object
+ * or kept handle, which the stop's join reads after the thread has left.
+ */
+typedef struct _HCD_TMR {
+    KEVENT Event;                   /* synchronization: an input changed  */
+    PVOID ThreadObject;             /* referenced at the creation         */
+    HANDLE ThreadHandle;            /* kept when the reference failed     */
+    ULONG Created;                  /* a thread to join                   */
+    HCD_SET_TIMER_RESOLUTION Routine;
+    ULONG Lookable;                 /* 32-bit NT 5: the thread's own look */
+    ULONG Looked;                   /* that look made in this start       */
+    ULONG Switch;                   /* XhciPollFineTimer in effect        */
+    ULONG Desired;                  /* XhciPollActiveMs x 10000           */
+    ULONG DelayMs;                  /* XhciQemuTmrDelayMs, qemu only      */
+    ULONG StartSerial;              /* this start's, for the observer     */
+    volatile ULONG Live;            /* a thread was created this start    */
+    ULONG Stop;
+    ULONG Bar;
+    ULONG Active;                   /* the poller's last decision ACTIVE  */
+    ULONG Gen;                      /* the boundary generation            */
+    volatile ULONG ObsEpoch;        /* odd: a call in flight              */
+    ULONG ObsPhase;                 /* XHCI_POLL_TMR_* of the even epoch  */
+    ULONG State;                    /* XHCI_POLL_TMR_RELEASED or _HELD    */
+    ULONG HeldGen;
+    ULONG Calls;                    /* the calls made in this start       */
+    LARGE_INTEGER HeldSince;
+    XHCI_POLL_TMR_OBS Obs;          /* the poll DPC's, under PollLock     */
+} HCD_TMR, *PHCD_TMR;
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -1438,21 +1488,32 @@ typedef struct _HCD_CONTROLLER {
     ULONG FilterSnapCount;
     ULONG FilterSnap[12][9];
 
-    /* The x86 helper (design record 18 sections 3 and 4.1): the binding,
-     * the last look's detail (its NTSTATUS, or the acceptance test that
-     * refused it), the accepted answer, its routines and the file object
-     * whose reference is held while BOUND. The block is the query sent,
-     * in this nonpaged extension. */
-    XHCI_MSI86_BIND Msi86Bind;
-    NTSTATUS Msi86Status;
-    ULONG Msi86Refusal;
-    XHCI_MSI86_QUERY Msi86Query;
-    PFILE_OBJECT Msi86File;
-    PVOID Msi86ConnectEx;
-    PVOID Msi86DisconnectEx;
-    ULONG Msi86HelperVersion;
-    ULONG Msi86HelperMinor;
-    ULONG Msi86Flags;
+    /* The x86 helper, xhcihlpr.sys (design record 18 sections 3, 4.1 and
+     * 15.3 to 15.4): the binding, the last look's detail (its NTSTATUS, or
+     * the channel test that refused it), the accepted answer - each
+     * service's verdict (XHCI_HLPR_SVC_*) and its routines, NULL unless
+     * that service was accepted - and the file object whose reference is
+     * held while BOUND. The block is the query sent, in this nonpaged
+     * extension. On Vista and 7 the filter and the start look, in the PnP
+     * manager's serialisation; on Windows 2000 and XP only the timer
+     * thread, between a start and its stop. */
+    XHCI_HLPR_BIND HlprBind;
+    NTSTATUS HlprStatus;
+    ULONG HlprRefusal;
+    XHCI_HLPR_QUERY HlprQuery;
+    PFILE_OBJECT HlprFile;
+    PVOID HlprConnectEx;
+    PVOID HlprDisconnectEx;
+    PVOID HlprSetTimer;
+    ULONG HlprMsiVerdict;
+    ULONG HlprTimerVerdict;
+    ULONG HlprHelperVersion;
+    ULONG HlprHelperMinor;
+    ULONG HlprFlags;
+
+    /* A finer system timer while polling (design record 15 section 7.2,
+     * task 38.3; hcd_tmr.c). */
+    HCD_TMR Tmr;
 
 #if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
@@ -1491,6 +1552,10 @@ typedef struct _HCD_CONTROLLER {
     /* Task 36.25: XhciQemuBigRefuse as the start read it - 1 refuses every
      * big stream block, forcing 11.7's fallback for a leg. */
     ULONG QemuBigRefuse;
+    /* Record 15 section 7.2.12, leg T3: XhciQemuSuspHoldDx as the start
+     * read it - 1 keeps the selective-suspend executor from claiming a
+     * child's pended Dx, so a stop can meet it still pended. */
+    ULONG QemuSuspHoldDx;
     /* Task 36.4: XhciQemuStartHold's end in tolerance ticks, latched at
      * each start (HcdInjStart), 0 none; ended early by HcdInjStartRelease. */
     volatile LONG InjStartHoldTicks;
@@ -2357,6 +2422,7 @@ VOID HcdMsiAddDevice(PHCD_CONTROLLER hc);
 VOID HcdMsiStartValues(PHCD_CONTROLLER hc, ULONG modeFound, ULONG mode);
 NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp);
 VOID HcdMsiStartLook(PHCD_CONTROLLER hc);
+PVOID HcdHlprTimerRoutine(PHCD_CONTROLLER hc, ULONG look);
 ULONG HcdMsiRoutines(PHCD_CONTROLLER hc, PVOID *connect, PVOID *disconnect);
 ULONG HcdMsiNoLineOffered(PHCD_CONTROLLER hc);
 ULONG HcdMsiSystem(VOID);
@@ -2375,6 +2441,20 @@ VOID HcdMsiTraceLife(PHCD_CONTROLLER hc, ULONG event, ULONG a, ULONG b);
 #define HCD_MSI_LIFE_DROP           7UL
 #define HCD_MSI_LIFE_REMOVE         8UL
 #define HCD_MSI_LIFE_FILTER         9UL
+
+/* hcd_tmr.c: a finer system timer while polling (design record 15 section
+ * 7.2, task 38.3). The producers' calls hold the controller lock. */
+VOID HcdTmrInitObjects(PHCD_CONTROLLER hc);
+VOID HcdTmrStartReset(PHCD_CONTROLLER hc);
+VOID HcdTmrCreate(PHCD_CONTROLLER hc);
+VOID HcdTmrStopEarly(PHCD_CONTROLLER hc);
+VOID HcdTmrJoin(PHCD_CONTROLLER hc);
+VOID HcdTmrBar(PHCD_CONTROLLER hc);
+VOID HcdTmrBoundaryLocked(PHCD_CONTROLLER hc);
+VOID HcdTmrGrantLocked(PHCD_CONTROLLER hc);
+VOID HcdTmrActiveLocked(PHCD_CONTROLLER hc, ULONG active);
+VOID HcdTmrSignalLocked(PHCD_CONTROLLER hc);
+
 /* hcd_susp.c (task 36.30; design record 14 section 3.10) */
 VOID HcdSuspService(PHCD_CONTROLLER hc);
 VOID HcdSuspDeviceInit(PHCD_USB_DEVICE dev, PHCD_PORT port);
@@ -2418,6 +2498,9 @@ VOID HcdSuspUnlinkFinish(PHCD_CONTROLLER hc, PHCD_SUSP_SETTLE s);
 VOID HcdSuspDoneDrain(PHCD_CONTROLLER hc);
 VOID HcdSuspDoneStart(PHCD_CONTROLLER hc);
 VOID HcdSuspControllerDownLocked(PHCD_CONTROLLER hc);
+#if defined(XHCI_FLAVOUR_QEMU)
+VOID HcdSuspQemuStopNote(PHCD_CONTROLLER hc);
+#endif
 VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);
 /* 36.32, the idle notification (design record 14 sections 4.4, 6, 3.12) */

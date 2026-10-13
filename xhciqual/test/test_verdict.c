@@ -218,7 +218,7 @@ static void test_full_dead_line(void)
     CHECK(has("QUALIFIED WITH CAVEATS") && has("Also with warnings"),
           "both shown");
     CHECK(has("since it offers MSI (x64"), "MSI named");
-    CHECK(has("xhcimsi.sys"), "with the 32-bit helper");
+    CHECK(has("xhcihlpr.sys"), "with the 32-bit helper");
 }
 
 static void test_full_pin0(void)
@@ -237,7 +237,7 @@ static void test_full_pin0(void)
     CHECK(!has("DISQUALIFIED"), "no longer disqualified");
     CHECK(has("MSI and MSI-X"), "both capabilities named");
     CHECK(has("MSI-X (x64") &&
-          has("directly; 32-bit with the xhcimsi.sys helper"),
+          has("directly; 32-bit with the xhcihlpr.sys helper"),
           "and both architectures' routes");
 
     c = full_pass();

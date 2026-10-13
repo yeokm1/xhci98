@@ -192,6 +192,28 @@ included.
   ("XhciAccept096", under "Registry settings"). No 0.96 controller has run
   under this driver: it is untested ground ("Untested ground"). Read in
   QEMU virtual machines only, whose controller is 1.0.
+- **A finer system timer while polling, on Windows 2000 and later, on by
+  default.** A polled controller was looked at no more often than
+  Windows' clock ticked (10 to 15 ms on Windows 2000, XP and 7 in QEMU),
+  however short
+  `XhciPollActiveMs` was. The driver now asks Windows for a clock of
+  `XhciPollActiveMs` while it polls at that period, and gives it back one
+  idle period after, when the controller sleeps, and when it stops. A new
+  value, `XhciPollFineTimer`, `1` by default, turns it off at `0`. Never
+  on Windows 98 SE and ME, which have no such call ("XhciPollFineTimer: a
+  finer system timer while polling").
+- **The 32-bit helper is now `xhcihlpr.sys`, and 2000 and XP get it too.**
+  It replaces `2.3.x`'s `xhcimsi.sys`: on 32-bit Vista and 7 it still
+  connects the message-signalled interrupt, and on 32-bit 2000, XP, Vista
+  and 7 it carries the finer timer. On 2000 and XP the install asks for no
+  restart, and the timer starts at the next boot; on Vista and 7 the
+  restart it asks for also removes `xhcimsi.sys` ("Updating from
+  2.y.y.y"). To remove it after an uninstall, `sc delete xhcihlpr`, or on
+  Windows 2000 its key ("Windows Vista and 7: message-signalled
+  interrupts").
+- Neither the finer timer nor the renamed helper has been read on any
+  guest or machine yet: both are owed to the test matrix ("Untested
+  ground").
 
 ## What `2.3.1.0` changes
 
@@ -512,7 +534,8 @@ interrupt that never arrives under `0` only where the driver sees the
 controller raise it, otherwise under `2`, which the verdict names; at the cost of more CPU
 wake-ups and up to the poll period of event latency; or an MSI-capable OS
 takes a message interrupt, where the controller offers one (Windows Vista and
-7: x64 directly, 32-bit with the `xhcimsi.sys` helper). The verdict prints
+7: x64 directly, 32-bit with the `xhcihlpr.sys` helper, `xhcimsi.sys`
+before `2.4.0.0`). The verdict prints
 which applies. Its exit code is 3 (0 qualified, 1 not qualified, 2 a usage
 error or no controller).
 
@@ -560,8 +583,10 @@ below). Five are in every
 one: `xhci98.inf` and `xhci98.sys`, the host controller driver,
 `xhciuas.inf` and `xhciuas.sys`, the UAS driver, and `txtsetup.oem`, which
 only Windows 2000 and XP Setup read (below). The sixth is
-`xhcimsi.sys` in the x86 directories, the MSI helper the INF installs on
-32-bit Vista and 7 only, and `xhci98-test.cer` in the x64 directories, the
+`xhcihlpr.sys` in the x86 directories, the helper the INF installs on
+32-bit Windows 2000, XP, Vista and 7 (in `2.3.0.0` and `2.3.1.0`,
+`xhcimsi.sys`, the MSI helper, installed on 32-bit Vista and 7 only), and
+`xhci98-test.cer` in the x64 directories, the
 public half of the certificate the x64 drivers are test-signed with. The
 Intel port switchover's script, `portsw.vbs`, and `portsw-on.bat` and
 `portsw-off.bat`, which turn the switchover on or off through it in one
@@ -588,9 +613,13 @@ same drivers built for troubleshooting. No Microsoft file is in the package.
      the INF.
 3. It installs as "xHCI98 USB 3.x eXtensible Host Controller" with "xHCI98
    USB 3.x Root Hub" beneath it. Restart if asked: Windows 98 SE asks once,
-   after the controller's install, and 32-bit Vista and 7 ask, for the MSI
+   after the controller's install, and 32-bit Vista and 7 ask, for the
    helper, holding the controller (Code 28 on 7, Code 1 on Vista) until
-   the restart. A reinstall on 32-bit Vista and 7 (the controller removed
+   the restart (read with `2.3.x`'s `xhcimsi.sys`; with `xhcihlpr.sys` not
+   yet read). From `2.4.0.0` 32-bit Windows 2000 and XP install the helper
+   too, with no restart asked for: the controller runs at once, and the
+   helper's finer timer ("XhciPollFineTimer: a finer system timer while
+   polling") starts at the next boot. A reinstall on 32-bit Vista and 7 (the controller removed
    in Device Manager and found again) needs the restart too, whether or not
    Windows asks: 32-bit Vista showed only an "installed successfully"
    balloon and held the controller at Code 1 until a restart. After any
@@ -843,6 +872,15 @@ download; in `2.3.0.0`, the flavour directory) and restart Windows
 their defaults and keeps the rest ("Registry settings"). On 32-bit Vista
 and 7 it also installs `xhcimsi.sys` and asks for a restart ("Windows
 Vista and 7: message-signalled interrupts").
+
+**An update to `2.4.0.0` adds `XhciPollFineTimer`** at `1` and keeps the
+rest. On 32-bit Vista and 7 it installs `xhcihlpr.sys`, deletes the
+`xhcimsi` service of `2.3.0.0` or `2.3.1.0`, and asks for a restart, at
+which the loaded `xhcimsi.sys` file is deleted; the old and the new helper
+never conflict, even in the boot between. On 32-bit Windows 2000 and XP it
+installs `xhcihlpr.sys` and asks for no restart; the finer timer
+("XhciPollFineTimer: a finer system timer while polling") starts at the
+next boot. Not yet read on any system.
 
 **Deleting the driver keeps the older packages.** On Vista and 7,
 uninstalling the controller in Device Manager with "Delete the driver
@@ -1366,9 +1404,13 @@ no message-signalled interrupts and are unchanged.
   controller's hardware key, and connects it when Windows grants it.
 - **32-bit Vista and 7**: the one 32-bit `xhci98.sys` also runs on Windows
   98, so it cannot itself use the Vista routine that connects a message.
-  The 32-bit package therefore carries a small second driver for these two
-  systems alone, `xhcimsi.sys`, which the INF installs as a service that
-  starts with Windows and which hands `xhci98.sys` that routine. **The
+  The 32-bit package therefore carries a small second driver,
+  `xhcihlpr.sys` (in `2.3.0.0` and `2.3.1.0`, `xhcimsi.sys`, for these two
+  systems alone), which the INF installs as a service that starts with
+  Windows and which hands `xhci98.sys` that routine. From `2.4.0.0` the
+  same helper also carries the finer timer, and is installed on 32-bit
+  Windows 2000 and XP too, with no restart asked for there
+  ("XhciPollFineTimer: a finer system timer while polling"). **The
   install and every update on 32-bit Vista and 7 ask you to restart**,
   because that service starts only at boot. After a first install the
   controller does not start until you restart (Device Manager shows it
@@ -1376,9 +1418,9 @@ no message-signalled interrupts and are unchanged.
   ports work from the next start of Windows on, with the message. A
   reinstall needs the restart too, whether or not Windows asks: after a
   remove and a scan for hardware changes, 32-bit Vista asked for none and
-  held the controller at code 1 until a restart. If
-  `xhcimsi.sys` is missing or does not load, the controller keeps its
-  interrupt line under `XhciInterruptMode` `0`.
+  held the controller at code 1 until a restart (read with `xhcimsi.sys`;
+  `xhcihlpr.sys` not yet read). If the helper is missing or does not load,
+  the controller keeps its interrupt line under `XhciInterruptMode` `0`.
 - **Asking for the interrupt line** on Vista and 7: set `XhciInterruptMode`
   to `1` and disable and enable the controller, or set `MSISupported` to
   `0` under `Interrupt Management\MessageSignaledInterruptProperties` in
@@ -1390,7 +1432,7 @@ no message-signalled interrupts and are unchanged.
   `XhciInterruptMode` to `3` and disable and enable the controller. The
   driver asks Windows for the message alone and uses it; if Windows
   grants none (for instance with `MSISupported` `0`), or the message
-  cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not
+  cannot be connected (on 32-bit Vista and 7, when `xhcihlpr.sys` is not
   running), the controller fails to start (Code 10), with no fallback to
   the line or to polling. On Windows 98 SE, ME, 2000 and XP, which have no
   message-signalled interrupts, `3` always fails the start.
@@ -1405,8 +1447,12 @@ no message-signalled interrupts and are unchanged.
   machine with an earlier test build: it ran on the line, and the
   `xhcimsi` service stayed.
 - **Removing the 32-bit helper** after uninstalling the driver: it stays
-  installed as a service and does nothing on its own; `sc delete xhcimsi`
-  from an administrator's prompt, then a restart, removes it.
+  installed as a service and does nothing on its own. On XP, Vista and 7,
+  `sc delete xhcihlpr` from an administrator's prompt, then a restart,
+  removes it; Windows 2000 has no `sc.exe`, so delete the key
+  `HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr` with `regedit` and
+  restart. The `2.3.0.0` and `2.3.1.0` helper is removed the same way with
+  `sc delete xhcimsi`; an update to `2.4.0.0` removes it by itself.
 
 `XHCISNAP` shows which delivery the controller uses. These behaviours were
 read in QEMU guests (the readings are listed in the run record), and on
@@ -1417,7 +1463,8 @@ by default, with nothing for the backstop to drain, and the line under
 ## Registry settings
 
 Each value is a `DWORD` in the controller's driver (software) key, and
-the install writes every value the driver reads, twenty, in this key:
+the install writes every value the driver reads but `XhciSilentInstall`,
+twenty-one, in this key:
 
 | Windows | Key |
 |---|---|
@@ -1436,7 +1483,7 @@ that say so, disable and enable the controller in Device Manager).
 `XhciForceBulkOnly` is the exception: it is read as each device is
 enumerated ("XhciForceBulkOnly").
 
-The install writes all twenty: each at the driver's own default, except
+The install writes all twenty-one: each at the driver's own default, except
 `XhciImodInterval250ns` at `160` and `XhciForceBulkOnly` at `0`, which
 the driver reads as `1` when it is absent (text-mode Setup;
 "XhciForceBulkOnly"). Each is written only where it is missing,
@@ -1449,8 +1496,9 @@ default, set it by hand, or delete the value and update the driver.
 them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
 `XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
 install too, at the value that reads as a missing one; an update keeps any
-of them you had already added. `XhciAccept096` (`1`) is new in `2.4.0.0`,
-and an update over `2.3.1.0` adds it. Since `2.3.0.0` the
+of them you had already added. `XhciPollFineTimer` (`1`) and
+`XhciAccept096` (`1`) are new in `2.4.0.0`, and an update over `2.3.0.0` or
+`2.3.1.0` adds them. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written
@@ -1495,12 +1543,13 @@ Vista and 7: message-signalled interrupts").
 | `0`, absent, not a `DWORD`, or `4` and above | Automatic, the default. The interrupt line where it works. A controller with no interrupt pin, or given no interrupt by Windows, is polled. A line the driver sees the controller raise and that never reaches it is detected after the start, and the controller moved to polling by the driver itself; an interrupt that fails in a way the driver cannot see (no sign of it in the controller's registers) is not, and needs `2`. On Vista and 7, a message-signalled interrupt where Windows grants one |
 | `1` | The interrupt line only, as `2.2.0.0`, on every system. On Vista and 7 the driver asks Windows for the line rather than a message. A controller given no line - no interrupt, no interrupt pin, or on Vista and 7 a message Windows grants anyway - fails to start (Device Manager: Code 10) |
 | `2` | Polling always, even where the line works. For a controller whose interrupt misbehaves; it costs more processor wake-ups |
-| `3` | A message-signalled interrupt (MSI or MSI-X) only. On Vista and 7 the driver asks Windows for the message alone; if none is granted, or it cannot be connected (on 32-bit Vista and 7, when `xhcimsi.sys` is not running), the controller fails to start (Code 10), with no fallback to the line or to polling. On Windows 98 SE, ME, 2000 and XP (32- and 64-bit), which have no message-signalled interrupts, `3` fails the start |
+| `3` | A message-signalled interrupt (MSI or MSI-X) only. On Vista and 7 the driver asks Windows for the message alone; if none is granted, or it cannot be connected (on 32-bit Vista and 7, when `xhcihlpr.sys` is not running), the controller fails to start (Code 10), with no fallback to the line or to polling. On Windows 98 SE, ME, 2000 and XP (32- and 64-bit), which have no message-signalled interrupts, `3` fails the start |
 
 | Value | Default | Effect |
 |---|---|---|
 | `XhciPollIdleMs` | `50` | While polling, how often (in ms) the driver looks when nothing is outstanding. `0` runs as `50`; above `5000` is held to `5000`. A device plugged in waits at most this long to be seen |
 | `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
+| `XhciPollFineTimer` | `1` | New in `2.4.0.0`. While polling at the active period, ask Windows 2000 and later for a finer system clock, of `XhciPollActiveMs` ("XhciPollFineTimer: a finer system timer while polling", below). `0` off; any other value, absent, or not a `DWORD` runs as `1`. Windows 98 SE and ME read it and do nothing |
 
 A start that `1` or `3` refuses records why: with `XhciLogDebugView` set,
 DebugView shows the counter dump's `intr.reason` line (14: a message
@@ -1527,6 +1576,52 @@ compared clean.
 which delivery the controller uses, and why. `XHCIQUAL` passes a
 controller with no working interrupt as `QUALIFIED WITH CAVEATS` ("Before
 you install: check the machine").
+
+### XhciPollFineTimer: a finer system timer while polling
+
+New in `2.4.0.0`; the install writes `1` on every path of both INFs, and
+an update keeps a value already there. Read at each start of the
+controller: disable and enable it, or restart Windows. A polled
+controller is looked at no more often than Windows' clock ticks: at
+best every 10 to 15 ms with `XhciPollActiveMs` `1` in QEMU on Windows
+2000, XP and 32-bit 7 (`2.3.x`), and every 15 to 62 ms on the Dell
+Latitude E7250 under XP x64 ("XhciInterruptMode, XhciPollIdleMs and
+XhciPollActiveMs"). With this
+value on, while the driver polls at the active period it asks Windows
+for a clock of `XhciPollActiveMs` (`ExSetTimerResolution`), and gives the
+request back when it stops polling at that period - one idle period
+(`XhciPollIdleMs`) after the last transfer outstanding, or with only a
+mouse's or keyboard's periodic transfers outstanding - and when the
+controller leaves full power (standby, hibernate, shutdown, or its own
+power-down), recovers, or stops. Each controller holds at most one
+request, and every request is given back. The call is made from a thread
+of the controller's own, which no power request waits on.
+
+- **Windows 2000, XP, Vista and 7, 32-bit**: through the helper
+  `xhcihlpr.sys`, which the INF installs on all four. On 2000 and XP the
+  install asks for no restart, so the controller runs at once with the
+  clock tick, and the finer timer starts at the next boot, when the helper
+  is loaded. Without the helper the controller polls at the clock tick, as
+  `2.3.1.0` did.
+- **XP x64, Vista x64 and 7 x64**: directly, with no helper.
+- **Windows 98 SE and ME**: never; they have no such call, and the value
+  is read and does nothing.
+- **Only while polling**: nothing changes under an interrupt line or a
+  message-signalled interrupt.
+
+The clock is the whole system's: a finer one lets every timer on the
+machine fire sooner, at some cost in processor wake-ups while it is
+held, and other software can hold a finer clock of its own, which this
+driver does not undo. `XHCISNAP`'s report has a "finer system timer"
+section: whether the value is on, where the call came from, whether a
+request is held, and how many were made and given back. Text-mode Setup
+(F6) has no helper and keeps the clock tick until the installed system's
+own install brings it.
+
+**Not yet read on any system**: the timer's effect, its release, and the
+install of `xhcihlpr.sys` on 2000 and XP are owed to the test matrix
+("Untested ground"). The `2.3.x` readings of polling above are of the
+clock tick alone.
 
 ### XhciImodInterval250ns: the interrupt moderation interval
 
@@ -2127,8 +2222,10 @@ them to the bug report:
 
 - `mDDhhmmS.DEV`: the controller as Windows sees it - its Device Manager
   status and problem code, the resources it was given, and the versions and
-  SHA-256 hashes of `xhci98.sys`, `xhciuas.sys`, `xhcimsi.sys`, `usbd.sys` and
-  `usbui.dll` as installed. `XHCISNAP` reads these itself, through the
+  SHA-256 hashes of `xhci98.sys`, `xhciuas.sys`, `xhcihlpr.sys`, `usbd.sys` and
+  `usbui.dll` as installed, and of `xhcimsi.sys`, the `2.3.x` helper, where
+  it is still on disk (`2.3.x`'s `XHCISNAP` lists `xhcimsi.sys` in place of
+  `xhcihlpr.sys`). `XHCISNAP` reads these itself, through the
   configuration manager, so every target reports the same.
 - `mDDhhmmS.TXT`: the report, plain text with no internal addresses in it.
 
@@ -2409,11 +2506,16 @@ or says it was found by reading the code.
   controller; `pnputil -d` removes them. Same section.
 - **32-bit Windows Vista and 7: the install asks for a restart**, and the
   controller does not start until it is done, because the helper
-  `xhcimsi.sys` starts only at boot ("Windows Vista and 7:
-  message-signalled interrupts"). A reinstall needs the restart even when
-  Windows does not ask for it: after a remove and a scan, 32-bit Vista
-  showed only an "installed successfully" balloon, the controller at
-  Code 1 until a restart.
+  `xhcihlpr.sys` (`xhcimsi.sys` in `2.3.x`) starts only at boot ("Windows
+  Vista and 7: message-signalled interrupts"). A reinstall needs the
+  restart even when Windows does not ask for it: after a remove and a
+  scan, 32-bit Vista showed only an "installed successfully" balloon, the
+  controller at Code 1 until a restart (read with `xhcimsi.sys`).
+- **32-bit Windows 2000 and XP: the finer timer waits for the next boot**
+  (since `2.4.0.0`). The install brings the helper `xhcihlpr.sys` with no
+  restart asked for, and a polled controller keeps the clock tick until
+  the helper loads at the next start of Windows ("XhciPollFineTimer: a
+  finer system timer while polling"). Text-mode Setup (F6) has no helper.
 
 `2.0.0.0`'s list also had "a device moved to a different port is found
 again as new hardware", which `2.1.0.0` answers for every device with a
@@ -2465,6 +2567,7 @@ information.
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
+| A finer system timer while polling (`XhciPollFineTimer`), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. Unread on every guest and every machine, owed to the test matrix: the timer's effect and its release, at a stop, a sleep and a recovery; two controllers; the helper's install on 2000 and XP and its replacement of `xhcimsi.sys` on Vista and 7 ("XhciPollFineTimer: a finer system timer while polling") |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing

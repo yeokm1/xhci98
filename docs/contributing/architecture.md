@@ -311,7 +311,10 @@ miniport's. The HCD that replaced it from `2.0.0.0` connects its own
 interrupt, and from `2.3.0.0` is no longer line-only: a controller with
 Interrupt Pin 0 is polled on a timer of the driver's own, and on Windows Vista and 7 the controller may take a
 message-signalled interrupt (MSI or MSI-X), on amd64 directly and on x86
-through the helper `xhcimsi.sys`. Automatic polling covers a pin of 0, no
+through the helper `xhcihlpr.sys` (`xhcimsi.sys` until task 38.3; since
+then the helper also hands `ExSetTimerResolution` to the x86 image on
+2000, XP, Vista and 7, for design record 15 section 7.2's finer timer
+while polling, and loads on all four). Automatic polling covers a pin of 0, no
 interrupt resource, and a line the driver sees raised and never
 delivered; another dead interrupt needs mode 2. `XhciInterruptMode`
 chooses (0 automatic; 1 asks for the line, though on Vista and 7 a

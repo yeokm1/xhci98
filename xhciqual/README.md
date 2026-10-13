@@ -608,7 +608,7 @@ automatic, or 2), which costs more CPU wake-ups and up to the poll period of
 event latency (`XhciPollIdleMs`, 50 ms by default, when idle); or an
 MSI-capable OS - the tool reads the PCI capability list (05h MSI, 11h MSI-X)
 and says whether Windows Vista and 7 can take a message interrupt instead
-(x64 directly, 32-bit with the `xhcimsi.sys` helper), or that polling is the
+(x64 directly, 32-bit with the `xhcihlpr.sys` helper), or that polling is the
 only route. One case differs: a controller whose pending bit (IMAN.IP) was
 never seen, through both of C4's waits, is not one automatic mode can see -
 the driver moves a line to polling when it sees IP asserted and nothing

@@ -267,6 +267,11 @@ rem built rather than after.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\test-flavour-rules.ps1"
 if errorlevel 1 goto gatetestfail
+rem The x86 helper's toolchain rules (design record 18 section 15.10): a
+rem helper built for another target than WXP shows in no field of its header.
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-helper-build.ps1" -SelfTest
+if errorlevel 1 goto gatetestfail
 
 echo.
 echo === INF gate self-tests ===
@@ -586,84 +591,96 @@ if errorlevel 1 goto flavourfail
 call :builduas %FLAVOR%
 if errorlevel 1 goto uasfail
 
-rem xhcimsi.sys, the NT 6 x86 MSI helper (design record 18), with every x86
-rem flavour and never with -amd64: the amd64 HCD has no helper.
-if /i "%ARCH%"=="amd64" goto skipmsi
-call :buildmsi %FLAVOR%
-if errorlevel 1 goto msifail
-:skipmsi
+rem xhcihlpr.sys, the x86 helper (design record 18, section 15), with every
+rem x86 flavour and never with -amd64: the amd64 HCD has no helper.
+if /i "%ARCH%"=="amd64" goto skiphlpr
+call :buildhlpr %FLAVOR%
+if errorlevel 1 goto hlprfail
+:skiphlpr
 
 endlocal
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :buildmsi <release|debug|qemu>
+rem :buildhlpr <release|debug|qemu>
 rem
-rem xhcimsi.sys, the NT 6 x86 MSI helper (design record 18 section 8.1):
-rem WDK 7.1, x86, Vista target (setenv <WDK> <flavor> x86 WLH no_oacr), the
-rem same BUILD_ALT_DIR as the x86 binaries just built, in src\msi86; then the
-rem import gate's nt6x86 profile against its own allowlist, the flavour
-rem marker check and the source stamp. An x86 build therefore needs
-rem tools\WinDDK71 (or WDKROOT) as well as MSVC 6 and the 2000 DDK, and fails
-rem without it: a package whose INF names xhcimsi.sys and does not carry it
-rem is refused by make-package.ps1 anyway, so there is no switch to skip it.
+rem xhcihlpr.sys, the x86 helper (design record 18 section 15.10; until task
+rem 38.3 xhcimsi.sys, built for Vista): WDK 7.1, x86, Windows XP target
+rem (setenv <WDK> <flavor> x86 WXP no_oacr), subsystem 5.00 by its sources,
+rem the same BUILD_ALT_DIR as the x86 binaries just built, in src\hlpr; then
+rem the build's target line, libraries and image header
+rem (scripts\check-helper-build.ps1), the import gate's hlprx86 profile
+rem against its own allowlist and every kernel and HAL of Windows 2000, XP,
+rem Vista and 7 x86, the flavour marker check and the source stamp. An x86
+rem build therefore needs tools\WinDDK71 (or WDKROOT) as well as MSVC 6 and
+rem the 2000 DDK, and fails without it: a package whose INF names
+rem xhcihlpr.sys and does not carry it is refused by make-package.ps1
+rem anyway, so there is no switch to skip it.
 rem ------------------------------------------------------------------
-:buildmsi
+:buildhlpr
 setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "MSIWDK=%REPO%\tools\WinDDK71"
-if not "%WDKROOT%"=="" set "MSIWDK=%WDKROOT%"
-if not exist "%MSIWDK%\bin\setenv.bat" goto msinowdk
-set "MSIALLOW=%REPO%\scripts\import-gate\xhcimsi-imports.allow"
-set "MSISYS=%REPO%\src\msi86\%OBJDIR%\i386\xhcimsi.sys"
-set "MSILOG=%REPO%\src\msi86\build%OBJDIR:obj=%"
+set "HLPRWDK=%REPO%\tools\WinDDK71"
+if not "%WDKROOT%"=="" set "HLPRWDK=%WDKROOT%"
+if not exist "%HLPRWDK%\bin\setenv.bat" goto hlprnowdk
+set "HLPRALLOW=%REPO%\scripts\import-gate\xhcihlpr-imports.allow"
+set "HLPRSYS=%REPO%\src\hlpr\%OBJDIR%\i386\xhcihlpr.sys"
+set "HLPRLOG=%REPO%\src\hlpr\build%OBJDIR:obj=%"
 
 echo.
-echo === build %FLAVOR% xhcimsi.sys (WDK 7.1, x86, Vista target) ===
-if exist "%MSISYS%" del "%MSISYS%"
-if exist "%MSILOG%.err" del "%MSILOG%.err"
-cmd /c "call "%MSIWDK%\bin\setenv.bat" %MSIWDK% %DDKFLAVOR% x86 WLH no_oacr && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\msi86" && build -cZ"
-if errorlevel 1 goto msibuildfail
-if exist "%MSILOG%.err" goto msibuildfail
-if not exist "%MSISYS%" goto msibuildfail
+echo === build %FLAVOR% xhcihlpr.sys (WDK 7.1, x86, Windows XP target) ===
+if exist "%HLPRSYS%" del "%HLPRSYS%"
+if exist "%HLPRLOG%.err" del "%HLPRLOG%.err"
+if exist "%HLPRLOG%.log" del "%HLPRLOG%.log"
+cmd /c "call "%HLPRWDK%\bin\setenv.bat" %HLPRWDK% %DDKFLAVOR% x86 WXP no_oacr && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\hlpr" && build -cZ"
+if errorlevel 1 goto hlprbuildfail
+if exist "%HLPRLOG%.err" goto hlprbuildfail
+if not exist "%HLPRSYS%" goto hlprbuildfail
 
 echo.
-echo === import gate (%FLAVOR% xhcimsi.sys, nt6x86) ===
+echo === helper toolchain (%FLAVOR% xhcihlpr.sys: WXP, lib\wxp\i386, subsystem 5.00) ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%MSISYS%" -Flavor %FLAVOR% -Arch x86 -GateProfile nt6x86 -AllowPath "%MSIALLOW%" %GATEOPT%
-if errorlevel 1 goto msigatefail
+    "%REPO%\scripts\check-helper-build.ps1" -LogPath "%HLPRLOG%.log" -Image "%HLPRSYS%" -Dumper "%HLPRWDK%\bin\x86\x86\link.exe"
+if errorlevel 1 goto hlprgatefail
+
+echo.
+echo === import gate (%FLAVOR% xhcihlpr.sys, hlprx86) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%HLPRSYS%" -Flavor %FLAVOR% -Arch x86 -GateProfile hlprx86 -AllowPath "%HLPRALLOW%" %GATEOPT%
+if errorlevel 1 goto hlprgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%MSISYS%" -Flavour %FLAVOR%
-if errorlevel 1 goto msigatefail
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%HLPRSYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto hlprgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\source-stamp.ps1" -Driver xhcimsi -Write "%REPO%\src\msi86\%OBJDIR%\i386"
-if errorlevel 1 goto msigatefail
+    "%REPO%\scripts\source-stamp.ps1" -Driver xhcihlpr -Write "%REPO%\src\hlpr\%OBJDIR%\i386"
+if errorlevel 1 goto hlprgatefail
 endlocal
 exit /b 0
 
-:msinowdk
+:hlprnowdk
 echo.
-echo ERROR: xhcimsi.sys, the NT 6 x86 MSI helper, builds with WDK 7.1 and none
-echo was found at "%MSIWDK%". Unpack it into tools\WinDDK71 or set WDKROOT
-echo (design record 18 section 8.1; docs\contributing\build-and-test.md).
+echo ERROR: xhcihlpr.sys, the x86 helper, builds with WDK 7.1 and none was
+echo found at "%HLPRWDK%". Unpack it into tools\WinDDK71 or set WDKROOT
+echo (design record 18 sections 8.1 and 15.10; docs\contributing\build-and-test.md).
 endlocal
 exit /b 1
 
-:msibuildfail
+:hlprbuildfail
 echo.
-echo ERROR: the %FLAVOR% build of xhcimsi.sys failed. See "%MSILOG%.log" and
-echo "%MSILOG%.err".
+echo ERROR: the %FLAVOR% build of xhcihlpr.sys failed. See "%HLPRLOG%.log" and
+echo "%HLPRLOG%.err".
 endlocal
 exit /b 1
 
-:msigatefail
+:hlprgatefail
 echo.
-echo ERROR: the %FLAVOR% xhcimsi.sys failed the import gate, carries the
-echo wrong flavour marker, or could not be stamped - see above. Do not deploy it.
+echo ERROR: the %FLAVOR% xhcihlpr.sys was not built for the WXP target at
+echo subsystem 5.00, failed the import gate, carries the wrong flavour marker,
+echo or could not be stamped - see above. Do not deploy it.
 endlocal
 exit /b 1
 
@@ -800,9 +817,9 @@ echo ERROR: the %FLAVOR% binary carries the wrong flavour marker - see above.
 endlocal
 exit /b 1
 
-:msifail
+:hlprfail
 echo.
-echo ERROR: the %FLAVOR% xhcimsi.sys, the x86 MSI helper, failed - see above.
+echo ERROR: the %FLAVOR% xhcihlpr.sys, the x86 helper, failed - see above.
 endlocal
 exit /b 1
 

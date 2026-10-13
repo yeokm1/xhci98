@@ -251,7 +251,10 @@ static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             /* Record 15 section 4.2: revoke, then contain an owed
-             * retirement, before the controller is suspended. */
+             * retirement, before the controller is suspended. The finer
+             * timer barred first, its release left to its thread (section
+             * 7.2.6): nothing here waits for the call. */
+            HcdTmrBar(hc);
             HcdPollRevoke(hc);
             (VOID)HcdPollContain(hc);
             hcdSuspendSettled(hc);
@@ -473,7 +476,10 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             /* Record 15 section 4.2: revoke, then contain an owed
-             * retirement, before the controller is suspended. */
+             * retirement, before the controller is suspended. The finer
+             * timer barred first, its release left to its thread (section
+             * 7.2.6): this IRP's completion waits for no call. */
+            HcdTmrBar(hc);
             HcdPollRevoke(hc);
             (VOID)HcdPollContain(hc);
             hcdSuspendSettled(hc);

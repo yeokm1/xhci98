@@ -15,7 +15,9 @@
  *     transitions the caller makes under PollLock, with KeCancelTimer and
  *     KeSetTimer left to the caller and their answers handed back;
  *   - the adaptive period (section 6.1), the conversion of a deadline into
- *     an arm (section 6.2), and the interval observation (section 7).
+ *     an arm (section 6.2), and the interval observation (section 7);
+ *   - the finer system timer's request machine and its phase observer
+ *     (section 7.2, task 38.3).
  *
  * The executor is hcd_poll.c. Times are the low word of KeQuerySystemTime,
  * in 100 ns units, compared by signed difference: no 64-bit arithmetic, and
@@ -220,6 +222,90 @@ ULONG XhciPollDecidePeriod(const XHCI_POLL_BUS *bus, ULONG activeMs,
                            ULONG idleMs, PULONG busState);
 VOID XhciPollObserve(PXHCI_POLL_OBS obs, ULONG now);
 ULONG XhciPollRecent(PULONG seen, ULONG last, ULONG now, ULONG idleMs);
+
+/*
+ * A finer system timer while polling (section 7.2; roadmap-hcd.md task
+ * 38.3). The executor is hcd_tmr.c's timer thread, one per controller; the
+ * decisions are here: whether a request is wanted (XhciPollTmrWant), the
+ * two-state request machine stepped by it and the boundary generation
+ * (XhciPollTmrStep), the cause a release records, and the phase observer
+ * the poll DPC feeds (XhciPollTmrObserve).
+ */
+
+/* The request's two states; there is no third. */
+#define XHCI_POLL_TMR_RELEASED          0UL
+#define XHCI_POLL_TMR_HELD              1UL
+
+/* What a step asks the executor to call. */
+#define XHCI_POLL_TMR_NONE              0UL
+#define XHCI_POLL_TMR_HOLD              1UL     /* ExSetTimerResolution TRUE */
+#define XHCI_POLL_TMR_RELEASE           2UL     /* FALSE, not wanted       */
+#define XHCI_POLL_TMR_RELEASE_FORCED    3UL     /* FALSE, a boundary crossed */
+
+/* TmrReleaseCause (section 7.2.9). */
+#define XHCI_POLL_TMR_CAUSE_NONE        0UL
+#define XHCI_POLL_TMR_CAUSE_IDLE        1UL     /* the poller left ACTIVE  */
+#define XHCI_POLL_TMR_CAUSE_REVOKED     2UL     /* parked or revoked       */
+#define XHCI_POLL_TMR_CAUSE_BARRED      3UL     /* a power transition      */
+#define XHCI_POLL_TMR_CAUSE_STOP        4UL     /* the stop                */
+
+/* TmrSource. */
+#define XHCI_POLL_TMR_SRC_NONE          0UL     /* 98 SE, ME, or switch off */
+#define XHCI_POLL_TMR_SRC_HELPER        1UL     /* xhcihlpr.sys's channel  */
+#define XHCI_POLL_TMR_SRC_SYSTEM        2UL     /* MmGetSystemRoutineAddress */
+#define XHCI_POLL_TMR_SRC_NOT_FOUND     3UL
+
+/* TmrThread. */
+#define XHCI_POLL_TMR_THREAD_NONE       0UL
+#define XHCI_POLL_TMR_THREAD_RUNNING    1UL
+#define XHCI_POLL_TMR_THREAD_FAILED     2UL
+#define XHCI_POLL_TMR_THREAD_JOINED     3UL
+
+/* The observer's two rules (section 7.2.9): only a run armed for at most
+ * this period shows the clock, and one this much longer than its period
+ * is late. */
+#define XHCI_POLL_TMR_SHORT_MS          5UL
+#define XHCI_POLL_TMR_LATE_MS           3UL
+
+/* The inputs of "wanted", read in one controller-lock hold. */
+typedef struct _XHCI_POLL_TMR_IN {
+    ULONG Switch;           /* XhciPollFineTimer in effect                 */
+    ULONG Routine;          /* the routine found, or still to be looked for */
+    ULONG Stop;             /* TmrStop                                     */
+    ULONG Delivery;         /* XHCI_POLL_DELIVERY_*                        */
+    ULONG Role;             /* XHCI_POLL_ROLE_*                            */
+    ULONG Bar;              /* TmrBar                                      */
+    ULONG PollService;
+    ULONG D0;               /* DevicePower is D0                           */
+    ULONG SuspendedInD0;
+    ULONG Active;           /* TmrActive                                   */
+} XHCI_POLL_TMR_IN, *PXHCI_POLL_TMR_IN;
+
+/* The phase observer (section 7.2.9): the last coherent sample, and per
+ * phase (index XHCI_POLL_TMR_RELEASED or _HELD) the intervals counted,
+ * their sum in whole ms (saturating) and those late. Under PollLock. */
+typedef struct _XHCI_POLL_TMR_OBS {
+    ULONG BaseValid;
+    ULONG BaseTime;
+    ULONG BaseEpoch;
+    ULONG BasePeriod;
+    ULONG BaseStart;
+    ULONG Count[2];
+    ULONG SumMs[2];
+    ULONG Late[2];
+    ULONG Crossed;
+} XHCI_POLL_TMR_OBS, *PXHCI_POLL_TMR_OBS;
+
+ULONG XhciPollTmrWant(const XHCI_POLL_TMR_IN *in);
+ULONG XhciPollTmrStep(PULONG state, PULONG heldGen, ULONG want, ULONG gen);
+ULONG XhciPollTmrCause(ULONG stop, ULONG bar, ULONG forced);
+VOID XhciPollTmrObsReset(PXHCI_POLL_TMR_OBS obs);
+VOID XhciPollTmrObserve(PXHCI_POLL_TMR_OBS obs, ULONG now, ULONG entryEpoch,
+                        ULONG obsEpoch, ULONG phase, ULONG periodMs,
+                        ULONG start);
+ULONG XhciPollTmrElapsedMs(ULONG hiThen, ULONG loThen, ULONG hiNow,
+                           ULONG loNow);
+ULONG XhciPollTmrAddMs(ULONG sum, ULONG ms);
 
 
 /*

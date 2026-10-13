@@ -38,7 +38,8 @@ device object and every reader of the name, an update from `2.3.0.0` or
 `2.3.1.0` leaving no `xhcimsi` service or file active. Sections 1 to 14
 describe `2.3.0.0` and `2.3.1.0` and keep the old name; where section 15
 replaces one, that section says so in a line at its head. The owner
-answered its decisions the same day (section 15.13).
+answered its decisions the same day (section 15.13). **The code,
+2026-10-14**: section 15.14, as built; its legs are owed.
 
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
@@ -2260,3 +2261,74 @@ helper's.
 - **H5: (a)**, WDK 7.1's `WXP` x86 environment with
   `SUBSYSTEM_VERSION=5.00`, `/GS` on and the `wxp` `wdmsec.lib` (section
   15.10).
+
+### 15.14 As built (code, 2026-10-14)
+
+Written with the code (branch `p38-timer`); the design above stands
+except where this list says otherwise. Nothing of it has run in a guest:
+every leg of section 15.12 is owed.
+
+- **The helper** (`src\hlpr\hlpr_entry.c`): `DriverEntry` as section 15.2,
+  in its order - the `IoIsWdmVersionAvailable(1, 0x10)` refusal, the qemu
+  flavour's `XhciHlprInject` (values 1 to 9), the MSI pair from
+  `MmGetSystemRoutineAddress` on NT 6 only (kept when both are found and
+  differ), `(PVOID)ExSetTimerResolution`, then the device. The class GUID
+  is `{3C8E5F21-9B47-4D02-A61C-7E2B90D4C318}`.
+- **The channel** (`src\xhci_hlpr.h`, `.c`): section 15.3's block, every
+  offset asserted. The helper answers a service only whole (the MSI bit
+  only with both pointers). The injections: 3 now answers major 3, the
+  next major a V2 caller refuses; 4 fills 0x30 bytes, leaving the timer's
+  field uncovered; 5 sets the MSI bit with `DisconnectEx` NULL, which is
+  now the MSI service's "malformed", not a refusal of the channel; 7, 8
+  and 9 as section 15.12's N3. `XHCI_HLPR_REFUSE_ROUTINES` is retired: a
+  bad routine pair is a service verdict, so the refusal word (`Msi86Refusal`)
+  carries 1 to 3 only, and 4 is a `2.3.x` driver's.
+- **The HCD**: the binding machine is `XhciHlprBindStep` with
+  `XHCI_HLPR_EV_TIMER` (10); the controller's fields are `Hlpr*`
+  (`hc->HlprBind`, `HlprMsiVerdict`, `HlprTimerVerdict`, `HlprSetTimer`
+  and the rest); the counter words `Msi86State` to `Msi86HelperVersion`
+  keep their names and places, and the two verdicts are appended at words
+  197 and 198 (`HlprMsiVerdict`, `HlprTimerVerdict`) after record 15's
+  timer words. `HcdHlprTimerRoutine` (`src\hcd_msi86.c`) is the one
+  lookup for both images: amd64 asks `MmGetSystemRoutineAddress`, x86
+  reads the binding, after `XHCI_HLPR_EV_TIMER` when asked to look. So the
+  amd64 allowlist's `MmGetSystemRoutineAddress` row keeps `SITES=hcd_msi86.obj`
+  and needs no `hcd_tmr.obj` (record 15 section 7.2.11 named it).
+- **The INF**: `XhciMsi.DelFiles` goes to `10,System32\Drivers`, not to
+  dirid 12 as section 15.7 wrote it: the INF gate's `W98-DIRID12` refuses
+  dirid 12 in `[DestinationDirs]` (Windows 98's engine reads that section,
+  and 12 is a different directory there), and on NT both name the same
+  directory. `HLPR-OLD` requires exactly that destination.
+- **The INF gate**: `HLPR-PLACE`, `HLPR-SVC` (both controller paths, one
+  install section), `HLPR-HW`, `HLPR-AMD64` (either helper's name),
+  `HLPR-REBOOT` and `HLPR-OLD` as section 15.11, with their mutations in
+  `test-inf-checks.ps1`; the footprint's two new row kinds are
+  `servicedelete` and `filedelete`. `BOTH-VERSION` reads `src\xhci98.rc`
+  alone as it did before, so it gained no helper row (section 15.11 had
+  it read the helper's `.rc`; the helper's version is the package's by
+  construction, `xhcihlpr.rc` including `xhci_version.h`, and
+  `make-release.ps1`'s `Assert-HelperPublished` checks the built file's
+  FileVersion).
+- **The toolchain check** is `scripts\check-helper-build.ps1` (run by
+  `build-driver.cmd` after each helper link, its `-SelfTest` with the
+  import gate's self-tests). It reads every library operand of the link,
+  quoted or not and as a `/DEFAULTLIB:` argument, and requires the log to
+  be this image's (its `/out:` names the image, and it was finished no
+  earlier than the image); `make-package.ps1` runs it again on the helper
+  it packages, with the log beside that helper's obj tree, so a helper
+  named by `-HlprDriverPath` is held to the same toolchain (review round 1
+  of the code). The first `WXP` link's log names
+  `lib\wxp\i386`'s `BufferOverflowK.lib`, `libcntpr.lib`, `ntoskrnl.lib`,
+  `hal.lib`, `wmilib.lib`, `wdmsec.lib` and `sehupd.lib`, and
+  `lib\crt\i386\safecrtnt.lib`; the image is native 5.00, aligned 0x80,
+  checksummed, `/osversion:6.1` as section 15.10 said.
+- **The import gate**: the 39 pairs of the three flavours resolve in every
+  image of the four sets (legal-provenance section 4); the profile's
+  missing-set failure, the by-name refusal of the interrupt pair and the
+  set loader are in `test-flavour-rules.ps1`, the XP manifest's shape in
+  `test-evidence-manifests.ps1`.
+- **The packager and the cut**: `make-package.ps1 -HlprDriverPath`
+  (was `-MsiDriverPath`) and its refusal of `-NoTargetEvidence` for the
+  helper; `make-release.ps1`'s `Assert-HelperPublished`, its refusal of a
+  leg holding `xhcimsi.sys`, and its refusal of `-NoTargetEvidence` for an
+  x86 leg.

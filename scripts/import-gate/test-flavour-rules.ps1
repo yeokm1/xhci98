@@ -227,6 +227,120 @@ try {
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'mixed obj directory' }).Count -eq 1) "SITES over a mixed obj directory fails: $($script:importFailures)"
     }
 
+    # ---------------------------------------------------------------------
+    # The hlprx86 profile (design record 18 section 15.11, task 38.3):
+    # xhcihlpr.sys against every kernel and HAL of Windows 2000, XP, Vista
+    # and 7 x86, each set required. Synthetic sets, each a kernel and a HAL
+    # authenticated by a manifest of its own, and dumpbin's exports and
+    # imports modelled per file.
+    # ---------------------------------------------------------------------
+    & {
+        . (Join-Path $PSScriptRoot "evidence-common.ps1")
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
+        foreach ($name in @('Get-ImportPairs', 'Get-ExportNames', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image', 'Get-Win2kBaseline', 'Get-HlprBaseline')) {
+            $function = $ast.Find({ param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $true)
+            . ([scriptblock]::Create($function.Extent.Text))
+        }
+        function Write-Ok { param($Message) }
+        function Add-Warning { param($Message) }
+        function Test-NtkernName { $false }
+        function Add-Failure { param($Message) $script:importFailures += $Message }
+        # Each set's kernel exports Common; XP and later add XpOnly; Vista
+        # and later add VistaOnly. The HALs export HalCommon.
+        $script:exportsOf = @{}
+        $script:importsNow = @()
+        function Invoke-Dumpbin {
+            param($Exe, $Mode, $Path)
+            if ($Mode -eq '/imports') {
+                return @('    ntoskrnl.exe') + @($script:importsNow | ForEach-Object { "        0 $_" }) + @('    Summary')
+            }
+            $names = $script:exportsOf[[System.IO.Path]::GetFullPath($Path)]
+            $rows = @()
+            $n = 1
+            foreach ($x in $names) { $rows += ("    {0} 0 00001000 {1}" -f $n, $x); $n++ }
+            return $rows
+        }
+        $hRoot = Join-Path $work 'hlpr'
+        $sets = @()
+        foreach ($set in @(
+            @{ Tag = 'w2k'; Label = 'W2K'; Extra = @() },
+            @{ Tag = 'xp'; Label = 'XP'; Extra = @('XpOnly') },
+            @{ Tag = 'vista'; Label = 'VISTA'; Extra = @('XpOnly', 'VistaOnly') },
+            @{ Tag = 'win7'; Label = 'WIN7'; Extra = @('XpOnly', 'VistaOnly') })) {
+            $dir = Join-Path $hRoot $set.Tag
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            $k = Join-Path $dir 'kernel.bin'
+            $h = Join-Path $dir 'hal.bin'
+            [System.IO.File]::WriteAllBytes($k, [System.Text.Encoding]::ASCII.GetBytes("k " + $set.Tag))
+            [System.IO.File]::WriteAllBytes($h, [System.Text.Encoding]::ASCII.GetBytes("h " + $set.Tag))
+            $script:exportsOf[[System.IO.Path]::GetFullPath($k)] = @('Common', 'IoConnectInterruptEx') + $set.Extra
+            $script:exportsOf[[System.IO.Path]::GetFullPath($h)] = @('HalCommon')
+            $man = Join-Path $hRoot ($set.Tag + '.expected')
+            Set-Content -LiteralPath $man -Encoding ASCII -Value @(
+                ("kernel.bin kernel.bin ntoskrnl.exe - {0} {1}" -f (Get-Item $k).Length, (Get-FileHash $k -Algorithm SHA256).Hash),
+                ("hal.bin hal.bin hal.dll - {0} {1}" -f (Get-Item $h).Length, (Get-FileHash $h -Algorithm SHA256).Hash))
+            $sets += @{ Label = $set.Label; Dir = $dir; Manifest = $man; Tag = $set.Tag; Extract = '-x' }
+        }
+        $hAllow = Join-Path $hRoot 'hlpr.allow'
+        Set-Content -LiteralPath $hAllow -Encoding ASCII -Value @(
+            '[imports]',
+            'ntoskrnl.exe!Common all optional synthetic',
+            'ntoskrnl.exe!XpOnly all optional synthetic',
+            'ntoskrnl.exe!VistaOnly all optional synthetic',
+            'ntoskrnl.exe!IoConnectInterruptEx all optional synthetic')
+        $hRules = Read-AllowFile $hAllow
+
+        $loaded = Get-HlprBaseline -Sets $sets -Dumpbin 'x'
+        Assert-True ($loaded.Missing.Count -eq 0) "hlprx86: four complete sets load: $($loaded.Missing)"
+        $script:importsNow = @('Common')
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $hRules -Win2k $loaded.Baseline -ImageArch hlprx86
+        Assert-True ($script:importFailures.Count -eq 0) "hlprx86: a pair Windows 2000 exports passes: $($script:importFailures)"
+        $script:importsNow = @('XpOnly')
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $hRules -Win2k $loaded.Baseline -ImageArch hlprx86
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'XpOnly is not exported by .*w2k kernel\.bin' }).Count -eq 1) "hlprx86: an XP-only pair fails (2000 lacks it): $($script:importFailures)"
+        $script:importsNow = @('VistaOnly')
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $hRules -Win2k $loaded.Baseline -ImageArch hlprx86
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'VistaOnly is not exported by' -and $_ -match 'xp kernel\.bin' }).Count -eq 1) "hlprx86: a Vista-only pair fails: $($script:importFailures)"
+        $script:importsNow = @('IoConnectInterruptEx')
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $hRules -Win2k $loaded.Baseline -ImageArch hlprx86
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'may not import a Vista-only routine' }).Count -eq 1) "hlprx86: IoConnectInterruptEx is refused by name, whatever the allowlist says: $($script:importFailures)"
+        $script:importsNow = @('Common')
+
+        # A whole set missing: the run fails for it (the caller turns each
+        # missing label into a failure); one image of a set missing throws.
+        Remove-Item -LiteralPath (Join-Path $sets[0].Dir 'kernel.bin'), (Join-Path $sets[0].Dir 'hal.bin')
+        $loaded = Get-HlprBaseline -Sets $sets -Dumpbin 'x'
+        Assert-True (($loaded.Missing -join ',') -eq 'W2K') "hlprx86: a whole Windows 2000 set missing is reported: $($loaded.Missing)"
+        Remove-Item -LiteralPath (Join-Path $sets[1].Dir 'kernel.bin'), (Join-Path $sets[1].Dir 'hal.bin')
+        $loaded = Get-HlprBaseline -Sets $sets -Dumpbin 'x'
+        Assert-True (($loaded.Missing -join ',') -eq 'W2K,XP') "hlprx86: a whole XP set missing is reported: $($loaded.Missing)"
+        Remove-Item -LiteralPath (Join-Path $sets[2].Dir 'hal.bin')
+        $threw = $false
+        try { $null = Get-HlprBaseline -Sets $sets -Dumpbin 'x' } catch { $threw = ($_.Exception.Message -match 'incomplete or unauthenticated') }
+        Assert-True $threw "hlprx86: one image of a set missing fails the run"
+    }
+
+    # The gate itself, end to end: a missing set FAILS under hlprx86 (never a
+    # warning), and -NoTargetEvidence says no target evidence was checked.
+    $emptyDir = Join-Path $work 'no-such-set'
+    New-Item -ItemType Directory -Path $emptyDir | Out-Null
+    $fakeHelper = Join-Path $work 'objfre\i386\xhcihlpr.sys'
+    New-Item -ItemType Directory -Path (Split-Path -Parent $fakeHelper) -Force | Out-Null
+    [System.IO.File]::WriteAllBytes($fakeHelper, [byte[]](0x4D, 0x5A))
+    $hlprAllow = Join-Path $PSScriptRoot "xhcihlpr-imports.allow"
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Image $fakeHelper -Flavor release `
+        -Arch x86 -GateProfile hlprx86 -AllowPath $hlprAllow -WinXpDir $emptyDir 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -ne 0 -and $out -match 'Windows XP SP3 x86 kernel/HAL baselines are staged - the hlprx86') "hlprx86 end to end: an unstaged XP set fails the gate: $out"
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate -Image $fakeHelper -Flavor release `
+        -Arch x86 -GateProfile hlprx86 -AllowPath $hlprAllow -NoTargetEvidence 2>&1 | Out-String
+    Assert-True ($out -match 'no target evidence was checked') "hlprx86 end to end: -NoTargetEvidence says no target evidence was checked: $out"
+
     $badSites = Join-Path $work 'bad-sites.allow'
     Set-Content -LiteralPath $badSites -Encoding ASCII -Value @('[imports]', 'ntoskrnl.exe!ExFreePool all required SITES=hcd_pool.c')
     $parsed = Invoke-Parse -AllowPath $badSites
@@ -359,7 +473,16 @@ try {
     }
     foreach ($row in $rows) {
         Assert-True ($denied -cnotcontains $row.Symbol) "$($row.Symbol) is both allowed and denied"
-    }} catch {
+    }
+
+    # The helper's production allowlist (record 18 section 15.11): the timer
+    # routine required, the Vista interrupt pair denied and in no row.
+    $r = Invoke-Parse -AllowPath (Join-Path $PSScriptRoot "xhcihlpr-imports.allow")
+    Assert-True ($r.Code -eq 0) "the helper's allowlist must parse"
+    Assert-True ($r.Text -match "allow ntoskrnl\.exe!ExSetTimerResolution all required") "the helper's allowlist requires ExSetTimerResolution"
+    Assert-True ($r.Text -match "deny IoConnectInterruptEx" -and $r.Text -match "deny IoDisconnectInterruptEx") "the helper's allowlist denies the Vista interrupt pair"
+    Assert-True ($r.Text -notmatch "allow ntoskrnl\.exe!Io(Dis)?connectInterruptEx") "the helper's allowlist admits neither Vista interrupt routine"
+} catch {
     # An exception mid-suite is a FAILED TEST, not a crashed script. Without
     # this the run died at the throw with $ErrorActionPreference = "Stop",
     # printed no summary line, and left the reader to tell a broken harness

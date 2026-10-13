@@ -10,6 +10,11 @@
  * with the controller lock held or with no lock, never with PollLock held.
  * Neither spin lock is held across a drain or a configuration request.
  *
+ * The finer timer's inputs (design record 15 section 7.2.6; hcd_tmr.c) are
+ * written here under the controller lock: the decision's ACTIVE, the
+ * park's and the revoke's boundary, the grant's clear of the bar, the
+ * move's signal; and the DPC feeds the timer's phase observer.
+ *
  * IRQL: each function carries its own.
  */
 
@@ -129,6 +134,7 @@ VOID HcdPollGrant(PHCD_CONTROLLER hc)
         HcdCtlDrainAdmitted(hc)) {
         ext->PollService = 1;
         ext->PollServiceGen++;
+        HcdTmrGrantLocked(hc);
 #if defined(XHCI_FLAVOUR_QEMU)
         if (hc->QemuDeadLine > 1 && !hc->QemuDeadLatched) {
             hc->QemuDeadAt =
@@ -156,6 +162,8 @@ VOID HcdPollRevoke(PHCD_CONTROLLER hc)
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->Hc.PollService = 0;
     hc->Hc.PollServiceGen++;
+    /* A boundary for the finer timer (record 15 section 7.2.6). */
+    HcdTmrBoundaryLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
@@ -472,6 +480,11 @@ VOID HcdPollPromoteLocked(PHCD_CONTROLLER hc, ULONG needMs)
         hc->Counters.PollPromotions++;
     }
     KeReleaseSpinLock(&hc->PollLock, pollIrql);
+    /* A promotion whose need is the active period is ACTIVE for the finer
+     * timer (record 15 section 7.2.6). */
+    if (step != XHCI_POLL_P_NONE && needMs <= hc->PollValues.ActiveMs) {
+        HcdTmrActiveLocked(hc, 1);
+    }
 }
 
 /*
@@ -693,6 +706,8 @@ static VOID hcdPollMove(PHCD_CONTROLLER hc, ULONG pairs)
     XhciPollServe(&hc->Poll);
     hc->Counters.PollRole = XHCI_POLL_ROLE_SERVE;
     KeReleaseSpinLock(&hc->PollLock, pollIrql);
+    /* The role is SERVE and the delivery poll: the finer timer's inputs. */
+    HcdTmrSignalLocked(hc);
 }
 
 /* The poll timer's DPC. IRQL: DISPATCH_LEVEL, no lock held on entry. */
@@ -718,6 +733,8 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     ULONG drained;
     ULONG bounds;
     ULONG portEvents;
+    ULONG epoch;
+    ULONG armed;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(Arg1);
@@ -725,6 +742,13 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 
     hc = (PHCD_CONTROLLER)Context;
     ext = &hc->Hc;
+    /* The finer timer's observation epoch, read BEFORE the entry time
+     * (record 15 section 7.2.9; review of 38.3, round 1): a call that
+     * lands between the two reads moves the epoch past this value, so the
+     * observation's read below sees it and the sample counts nothing. Read
+     * after the time, a call landing between them would date a pre-call
+     * time under the post-call epoch. */
+    epoch = hc->Tmr.ObsEpoch;
     now = hcdPollNow();
     decision = hc->PollValues.IdleMs;
     state = XHCI_POLL_BUS_IDLE;
@@ -732,6 +756,8 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
     take = XhciPollTake(&hc->Poll);
     role = hc->Poll.Role;
+    /* The period this run was armed for. */
+    armed = hc->Counters.PollPeriodLast;
     KeReleaseSpinLock(&hc->PollLock, pollIrql);
     if (take == XHCI_POLL_TAKE_NONE) {
         return;
@@ -746,6 +772,8 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
         XhciPollPark(&hc->Poll);
         KeReleaseSpinLock(&hc->PollLock, pollIrql);
         hc->Counters.PollParks++;
+        /* The park is a boundary for the finer timer (section 7.2.6). */
+        HcdTmrBoundaryLocked(hc);
         XhciControllerLockRelease(ext, oldIrql);
         goto epilogue;
     }
@@ -809,11 +837,28 @@ static VOID NTAPI hcdPollDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                       : 0UL;
     decision = XhciPollDecidePeriod(&bus, hc->PollValues.ActiveMs,
                                     hc->PollValues.IdleMs, &state);
+    /* The finer timer: held while ACTIVE, given back otherwise (record 15
+     * section 7.2.6, decision T3). */
+    HcdTmrActiveLocked(hc, (state == XHCI_POLL_BUS_ACTIVE) ? 1UL : 0UL);
     KeAcquireSpinLock(&hc->PollLock, &pollIrql);
     XhciPollObserve(&hc->PollObs, now);
     hc->Counters.PollIntervalMinMs = hc->PollObs.MinMs;
     hc->Counters.PollIntervalMaxMs = hc->PollObs.MaxMs;
     hc->Counters.PollIntervalsDiscarded = hc->PollObs.Discarded;
+    /* The phase observation (section 7.2.9): this run's sample against the
+     * last coherent one, the epoch read again in this hold. */
+    XhciPollTmrObserve(&hc->Tmr.Obs, now, epoch, hc->Tmr.ObsEpoch,
+                       hc->Tmr.ObsPhase, armed, hc->Tmr.StartSerial);
+    hc->Counters.TmrObsCrossed = hc->Tmr.Obs.Crossed;
+    hc->Counters.TmrObsReleasedCount =
+        hc->Tmr.Obs.Count[XHCI_POLL_TMR_RELEASED];
+    hc->Counters.TmrObsReleasedSumMs =
+        hc->Tmr.Obs.SumMs[XHCI_POLL_TMR_RELEASED];
+    hc->Counters.TmrObsReleasedLate =
+        hc->Tmr.Obs.Late[XHCI_POLL_TMR_RELEASED];
+    hc->Counters.TmrObsHeldCount = hc->Tmr.Obs.Count[XHCI_POLL_TMR_HELD];
+    hc->Counters.TmrObsHeldSumMs = hc->Tmr.Obs.SumMs[XHCI_POLL_TMR_HELD];
+    hc->Counters.TmrObsHeldLate = hc->Tmr.Obs.Late[XHCI_POLL_TMR_HELD];
     KeReleaseSpinLock(&hc->PollLock, pollIrql);
     XhciControllerLockRelease(ext, oldIrql);
 

@@ -1,0 +1,38 @@
+# Authenticated Windows XP SP3 x86 kernel/HAL export baselines, for the
+# import gate's hlprx86 profile: xhcihlpr.sys, the x86 helper (design record
+# 18 section 15.11), which loads on Windows 2000 SP4, XP SP3, Vista SP2 and 7
+# SP1 x86 and is gated against every kernel and HAL each of them can run.
+#
+# Source: the owner's own Windows XP Professional SP3 OEM medium (volume
+# GRTMPOEM_EN, the medium legal-provenance.md section 4 names for XP SP3's
+# usbport.sys), measured 2026-10-14 (task 38.3). XP SP3 ships the four
+# kernels - uniprocessor and multiprocessor, each without and with PAE - and
+# seven HALs, all inside I386\SP3.CAB; ntoskrnl.exe, ntkrnlmp.exe and the
+# HALs are also loose and compressed in I386\ (NTOSKRNL.EX_, HAL.DL_ ...),
+# and the loose copies expand to the same bytes (ntoskrnl.exe and hal.dll
+# compared 2026-10-14). The PAE kernels exist only in the cab, so every row
+# is taken from it.
+#
+# **PACKED names a member of I386\SP3.CAB**, not a file in I386\: that is
+# the difference from win2k-baselines.expected, and
+# scripts\import-gate\extract-target-baselines.ps1 -WinXpIso reads it so.
+# The import descriptor names NTOSKRNL.EXE or HAL.DLL whichever image the
+# loader binds it to, so every row must export each pair the helper imports.
+#
+# Format, identical to win2k-baselines.expected:
+#   PACKED OUTPUT PROVIDER VERSION LENGTH SHA256
+# VERSION is the number before the build-lab tag ("5.1.2600.5512
+# (xpsp.080413-2111)" in each file's resource), as winxp64-baselines.expected
+# records it.
+
+ntoskrnl.exe ntoskrnl.exe ntoskrnl.exe 5.1.2600.5512 2188928 6005A1A1DB35481612EF76856A609954990F058BFC42DFA7B0D43402BF3F3DCF
+ntkrnlpa.exe ntkrnlpa.exe ntoskrnl.exe 5.1.2600.5512 2065792 7968D60617E6EEF479DE339C6895B4479EAC79971D7CEA58F9FAFD66CC3B5914
+ntkrnlmp.exe ntkrnlmp.exe ntoskrnl.exe 5.1.2600.5512 2145280 F086434F85441B9C0245D9F17E2D41718FAC810310E244839436554E852A70B8
+ntkrpamp.exe ntkrpamp.exe ntoskrnl.exe 5.1.2600.5512 2023936 745F710FA3788DB04E1F4370B75FEE8B25BD64877FB2E4244A3C54EEF061968E
+hal.dll hal.dll hal.dll 5.1.2600.5512 105344 77263AD2C7B56CA964F6055A21A303BF7F031794A8AB27D251D9D2888FE5CFBA
+halaacpi.dll halaacpi.dll hal.dll 5.1.2600.5512 131840 FEBA3100FEDBD5197C0A67512FF11153C21ADAD356092BF8B8E197E66152BFCB
+halacpi.dll halacpi.dll hal.dll 5.1.2600.5512 81152 A42D3849073B8C17B06122FBBCD91C9C81BDA086BB60B7965A79DE3A0896ED39
+halapic.dll halapic.dll hal.dll 5.1.2600.5512 150528 E97EE5347F46842E3BBB7F662FCB0EF9E799ECCFA72633C0F73C323E1364CD20
+halmacpi.dll halmacpi.dll hal.dll 5.1.2600.5512 134400 034F6E289D979189553F44B7CF92E4F5C7A761248D50E22C9DCDE8313654B279
+halmps.dll halmps.dll hal.dll 5.1.2600.5512 152576 E5A6B1FCD1A82161E4C9915CE2489112DACCE985DBB3BD20B934CE253F7DB143
+halsp.dll halsp.dll hal.dll 5.1.2600.5512 77696 979AD1195127DA404CA446EAD73BB3D571E7711AAD61C328733005EFF1AAE767

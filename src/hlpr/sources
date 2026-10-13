@@ -1,0 +1,71 @@
+#
+# sources - WDK 7.1 build description for xhcihlpr.sys, the x86 helper
+# (design record 18, section 15 for this revision; roadmap-hcd.md tasks
+# 36.15, 36.16 and 38.3), a third binary beside xhci98.sys and
+# xhciuas.sys, installed only by the Windows 2000, XP, Vista and 7 x86
+# install paths of xhci98.inf.
+#
+# WDK 7.1, x86, Windows XP target - `setenv <WDK> fre|chk x86 WXP no_oacr` -
+# and nothing else: the x86 HCD and xhciuas.sys stay on MSVC 6 and the
+# Windows 2000 DDK. WDK 7.1 has no Windows 2000 environment, and WXP is the
+# oldest it has (record 18 section 15.10, decision H5): its libraries are
+# lib\wxp\i386, and the image is stamped subsystem 5.00 below so no
+# loader is asked about a later one. Built by scripts\build-driver.cmd for
+# every x86 flavour, after xhciuas.sys, which then checks the build log's
+# target line and libraries and the image's header, and the import gate's
+# hlprx86 profile against scripts\import-gate\xhcihlpr-imports.allow and
+# the Windows 2000, XP, Vista and 7 x86 kernels and HALs. Output:
+# src\hlpr\objfre\i386\xhcihlpr.sys (release), objchk (debug),
+# objchk_qemu (qemu).
+#
+# The /GS cookie stays on, the kit's default: the wdmsec.lib members that
+# IoCreateDeviceSecure brings are compiled with cookie checks, so the image
+# initialises the cookie through GsDriverEntry (record 18 section 8.1).
+#
+# ..\xhci_hlpr.c is the channel's pure half, shared with xhci98.sys and the
+# host suite (test\test_msi.c); XHCI_HLPR_HELPER makes its header take its
+# types from ntddk.h rather than xhci_compat.h.
+#
+
+TARGETNAME=xhcihlpr
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+# Record 18 section 15.10: the WXP environment stamps native,5.01; 5.00
+# removes the question of whether Windows 2000's loader takes a later one.
+SUBSYSTEM_VERSION=5.00
+
+INCLUDES=$(DDK_INC_PATH)
+
+C_DEFINES=$(C_DEFINES) -DXHCI_HLPR_HELPER
+
+TARGETLIBS=$(DDK_LIB_PATH)\wdmsec.lib
+
+SOURCES=hlpr_entry.c      \
+        ..\xhci_hlpr.c    \
+        xhcihlpr.rc
+
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!ERROR XHCI_EXTRA_DEFINES is set, and xhcihlpr.sys has no diagnostic builds. Clear it before building.
+!ENDIF
+
+#
+# The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
+# derives them for xhci98.sys (design record 08), so the same flavour
+# marker check and packaging refusals apply to this binary. The qemu flavour
+# adds the XhciHlprInject switch (record 18 sections 2.1 and 15.12) and
+# nothing else.
+#
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ENDIF
+
+!IF "$(_BUILDARCH)" != "x86"
+!ERROR xhcihlpr.sys is the x86 helper alone (design record 18): the amd64 HCD reaches IoConnectInterruptEx and ExSetTimerResolution through MmGetSystemRoutineAddress and has no helper.
+!ENDIF

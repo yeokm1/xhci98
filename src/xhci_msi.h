@@ -12,8 +12,8 @@
  *     under XhciInterruptMode 3 the rewrite that keeps only the message
  *     (record 18 section 4.2), over the list's bytes;
  *   - the qemu flavour's no-line rewrite (record 18 section 10, H1a);
- *   - the helper binding's per-FDO state machine (record 18 sections 4.1
- *     and 10, L2) and the filter record's class and sequence (section 4.2,
+ *   - the helper binding's per-FDO state machine (record 18 sections 4.1,
+ *     10 (L2) and 15.4) and the filter record's class and sequence (section 4.2,
  *     step 0);
  *   - the checksummed trace record (record 18 section 9).
  *
@@ -180,38 +180,46 @@ VOID XhciMsiFilterBegin(PXHCI_MSI_FILTER_RECORD record);
 VOID XhciMsiFilterPublish(PXHCI_MSI_FILTER_RECORD record, ULONG listClass,
                           ULONG outcome);
 
-/* ---- the helper binding (record 18 section 4.1) ----------------------- */
+/* ---- the helper binding (record 18 sections 4.1 and 15.4) ------------- */
 
-#define XHCI_MSI86_STATE_UNSEEN     0UL
-#define XHCI_MSI86_STATE_ABSENT     1UL
-#define XHCI_MSI86_STATE_REFUSED    2UL
-#define XHCI_MSI86_STATE_BOUND      3UL
-#define XHCI_MSI86_STATE_REMOVED    4UL
+/* One binding per controller FDO to xhcihlpr.sys (until task 38.3
+ * XhciMsi86BindStep, xhcimsi.sys's). EV_TIMER is the timer thread's look on
+ * Windows 2000 and XP (record 15 section 7.2.5): it asks a look only while
+ * not BOUND, exactly as a filter or a start does; the machine counts no
+ * looks per start, and the timer's "at most once per start" is a latch of
+ * its own (hcd_tmr.c). */
 
-#define XHCI_MSI86_EV_FILTER        1UL
-#define XHCI_MSI86_EV_START         2UL
-#define XHCI_MSI86_EV_STOP          3UL
-#define XHCI_MSI86_EV_SURPRISE      4UL
-#define XHCI_MSI86_EV_REMOVE        5UL
-#define XHCI_MSI86_EV_LOOK_ABSENT   6UL     /* not opened: no reference   */
-#define XHCI_MSI86_EV_LOOK_FAILED   7UL     /* opened, no IRP: reference  */
-#define XHCI_MSI86_EV_LOOK_REFUSED  8UL     /* opened, refused: reference */
-#define XHCI_MSI86_EV_LOOK_ACCEPTED 9UL     /* opened, accepted           */
+#define XHCI_HLPR_STATE_UNSEEN     0UL
+#define XHCI_HLPR_STATE_ABSENT     1UL
+#define XHCI_HLPR_STATE_REFUSED    2UL
+#define XHCI_HLPR_STATE_BOUND      3UL
+#define XHCI_HLPR_STATE_REMOVED    4UL
 
-#define XHCI_MSI86_ACT_LOOK         0x01UL  /* make a look                */
-#define XHCI_MSI86_ACT_DROP         0x02UL  /* drop the held reference    */
-#define XHCI_MSI86_ACT_DROP_LOOK    0x04UL  /* drop the look's reference  */
+#define XHCI_HLPR_EV_FILTER        1UL
+#define XHCI_HLPR_EV_START         2UL
+#define XHCI_HLPR_EV_STOP          3UL
+#define XHCI_HLPR_EV_SURPRISE      4UL
+#define XHCI_HLPR_EV_REMOVE        5UL
+#define XHCI_HLPR_EV_LOOK_ABSENT   6UL     /* not opened: no reference   */
+#define XHCI_HLPR_EV_LOOK_FAILED   7UL     /* opened, no IRP: reference  */
+#define XHCI_HLPR_EV_LOOK_REFUSED  8UL     /* opened, refused: reference */
+#define XHCI_HLPR_EV_LOOK_ACCEPTED 9UL     /* opened, accepted           */
+#define XHCI_HLPR_EV_TIMER          10UL    /* the timer thread's look    */
 
-typedef struct _XHCI_MSI86_BIND {
+#define XHCI_HLPR_ACT_LOOK         0x01UL  /* make a look                */
+#define XHCI_HLPR_ACT_DROP         0x02UL  /* drop the held reference    */
+#define XHCI_HLPR_ACT_DROP_LOOK    0x04UL  /* drop the look's reference  */
+
+typedef struct _XHCI_HLPR_BIND {
     ULONG State;
     ULONG Held;             /* a reference kept for a BOUND answer        */
     ULONG Looks;
-} XHCI_MSI86_BIND, *PXHCI_MSI86_BIND;
+} XHCI_HLPR_BIND, *PXHCI_HLPR_BIND;
 
-VOID XhciMsi86BindInit(PXHCI_MSI86_BIND bind);
+VOID XhciHlprBindInit(PXHCI_HLPR_BIND bind);
 
-/* One event; returns XHCI_MSI86_ACT_* for the executor to perform. */
-ULONG XhciMsi86BindStep(PXHCI_MSI86_BIND bind, ULONG event);
+/* One event; returns XHCI_HLPR_ACT_* for the executor to perform. */
+ULONG XhciHlprBindStep(PXHCI_HLPR_BIND bind, ULONG event);
 
 /* ---- the trace (record 18 section 9) ---------------------------------- */
 

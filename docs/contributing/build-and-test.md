@@ -418,19 +418,41 @@ scripts\build-driver.cmd qemu       REM the emulator-only third flavour
 scripts\build-driver.cmd all        REM all three - what a release cut gates
 ```
 
-**Every x86 run also builds `xhcimsi.sys`**, the NT 6 x86 MSI helper
-(design record 18; task 36.15), in `src\msi86\`, with **WDK 7.1 for x86,
-Vista target** (`setenv <WDK> <flavour> x86 WLH no_oacr`), because only that
-kit declares `IoConnectInterruptEx`. So an x86 build needs `tools\WinDDK71`
-(or `WDKROOT`) as well as MSVC 6.0 and the Windows 2000 DDK, and fails
-without it. The helper is gated by the import gate's `nt6x86` profile
-(`-GateProfile nt6x86 -AllowPath scripts\import-gate\xhcimsi-imports.allow`,
-against the Vista SP2 and 7 SP1 x86 kernels of
-`nt6x86-vista-baselines.expected` and `nt6x86-win7-baselines.expected`),
-the flavour marker check and `source-stamp.ps1 -Driver xhcimsi`; its output
-is `src\msi86\obj<flavour>\i386\xhcimsi.sys`, which `make-package.ps1`
-stages into the x86 package (`-MsiDriverPath` overrides it). An `-amd64`
-run builds no helper.
+**Every x86 run also builds `xhcihlpr.sys`**, the x86 helper for 32-bit
+Windows 2000, XP, Vista and 7 (design record 18 section 15; task 38.3; until
+then `xhcimsi.sys`, the NT 6 x86 MSI helper of task 36.15, built from
+`src\msi86\` for the Vista target), in `src\hlpr\`, with **WDK 7.1's `WXP`
+x86 environment** (`setenv <WDK> <flavour> x86 WXP no_oacr`), at subsystem
+version 5.00 (`SUBSYSTEM_VERSION=5.00` in its `sources`), `/GS` on and the
+`wxp` `wdmsec.lib` (owner, 2026-10-13, decision H5), because only that kit
+declares `IoConnectInterruptEx`, which the helper now asks of
+`MmGetSystemRoutineAddress` so that the image loads on 2000 and XP. So an
+x86 build needs `tools\WinDDK71` (or `WDKROOT`) as well as MSVC 6.0 and the
+Windows 2000 DDK, and fails without it. `build-driver.cmd`'s `:buildhlpr`
+then checks the toolchain with `scripts\check-helper-build.ps1`: the build
+log's `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` line, that every library
+linked is from `lib\wxp\i386` (`lib\crt\i386\safecrtnt.lib` admitted by
+name), and the image header (native subsystem 5.00, section alignment
+0x80, a nonzero checksum); its `-SelfTest` runs among the import gate's
+self-tests before anything is built. The helper is gated by the import
+gate's `hlprx86` profile (`-GateProfile hlprx86 -AllowPath
+scripts\import-gate\xhcihlpr-imports.allow`) against every x86 kernel and
+HAL of Windows 2000 SP4 (`win2k-baselines.expected`), XP SP3
+(`winxp-x86-baselines.expected`: `ntoskrnl`, `ntkrnlpa`, `ntkrnlmp`,
+`ntkrpamp` and seven HALs, staged in `tools\winxpsp3-extracted\`), Vista
+SP2 and 7 SP1 (`hlprx86-vista-baselines.expected` and
+`hlprx86-win7-baselines.expected`, renamed from `nt6x86-*`; their
+`ntkrnlpa` rows are still owed). **Every set is required**: a missing set
+fails the gate rather than warning, and the gate refuses
+`IoConnectInterruptEx` and `IoDisconnectInterruptEx` in the helper's
+import table by name. All 39 of the helper's import pairs resolve in every
+2000, XP, Vista and 7 x86 image staged (read 2026-10-14, static).
+`-NoTargetEvidence` is an allowlist-only developer mode for it, which
+`make-package.ps1` and `make-release.ps1` refuse for a package that carries
+the helper. Then the flavour marker check and `source-stamp.ps1 -Driver
+xhcihlpr`; its output is `src\hlpr\obj<flavour>\i386\xhcihlpr.sys`, which
+`make-package.ps1` stages into the x86 package (`-HlprDriverPath`
+overrides it). An `-amd64` run builds no helper.
 
 **`-amd64` is a second axis, not a fourth flavour**, and it goes after the
 flavour word:
@@ -584,7 +606,10 @@ Tracked inputs:
 
 Target files the evidence steps resolve against live under `tools\` (git-ignored);
 `scripts\import-gate\extract-target-baselines.ps1` recreates the Win2000 kernels
-and HALs and `ntkern.vxd` from the install media. The Win98/NUSB precedent
+and HALs and `ntkern.vxd` from the install media, and with `-WinXpIso <iso>`
+the 32-bit XP SP3 kernels and HALs the helper's `hlprx86` profile needs,
+from the XP SP3 OEM medium's `I386\SP3.CAB` into `tools\winxpsp3-extracted\`
+(`winxp-x86-baselines.expected`). The Win98/NUSB precedent
 binaries are staged separately.
 
 The allowlist records module/symbol pairs rather than bare names because the
@@ -6199,7 +6224,8 @@ Rule ids are grouped by the failure they prevent:
   `HcDisableAllSelectiveSuspend`) anywhere in either file, machine-wide or
   per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
   The driver's own `XhciSelectiveSuspend` is a `VAL-*` row, not one of these.
-- `VAL-*`: every registry value the driver reads, nineteen since task 36.51,
+- `VAL-*`: every registry value the driver reads but `XhciSilentInstall`,
+  twenty-one since tasks 38.11 and 38.3,
   present on every install path with the required type, flags and default
   ("The registry values the driver reads", below).
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
@@ -6276,11 +6302,15 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciInterruptMode` | each start; on NT 6 also at AddDevice (record 18's mode cache) | 0 | 0 automatic, 1 line, 2 polling, 3 and above as 0 | 0 | yes |
 | `XhciPollIdleMs` | each start | 50 | 1-5000; 0 as 50 | 50 | yes |
 | `XhciPollActiveMs` | each start | 1 | 1 to the idle period; 0 as 1 | 1 | yes |
+| `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 1 | 0 off, any other 1 | 1 (since 38.3) | yes |
 | `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
 | `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
+| `XhciAccept096` | each start, latched for the started lifetime | 1 | 0 the 1.0 floor, any other the 0.96 floor | 1 (since 38.11) | yes |
 
-Nineteen, all written: sixteen before task 36.51, the last three by it. **No
+Twenty-one, all written: sixteen before task 36.51, three by it,
+`XhciAccept096` by task 38.11 (design record 17 section 4.14.4) and
+`XhciPollFineTimer` by task 38.3 (design record 15 section 7.2.4). **No
 value is a tri-state** whose absence means something no written number
 does, so none is left unwritten. Except for `XhciForceBulkOnly` since
 roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a
@@ -6299,8 +6329,10 @@ Not in the table, and written by no INF on purpose:
   `XhciQemuInject`, `XhciQemuStartHold`, `XhciQemuMapGrant`,
   `XhciQemuBigRefuse`, `XhciQemuPsiE460`, `XhciQemuNoInterrupt`,
   `XhciQemuPinUnreadable`, `XhciQemuDeadLine`, `XhciQemuMsgConnectFail`,
-  `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, and `xhcimsi.sys`'s
-  `XhciMsiInject` (its service key's `Parameters` subkey);
+  `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, `XhciQemuTmrDelayMs`,
+  `XhciQemuSuspHoldDx`, and `xhcihlpr.sys`'s `XhciHlprInject` (its service
+  key's `Parameters` subkey; `xhcimsi.sys`'s `XhciMsiInject` until task
+  38.3);
 - values the OS owns: `MSISupported` (the `.HW` section's interrupt
   management request, which the 32-bit Vista and 7 path and the x64 NT 6
   path write for the OS, not for the driver), and usbstor's per-device
@@ -6667,11 +6699,36 @@ reads mode 1 with it set, as the message).
 `XhciMsi86InjNoLine` 1 rewrites the requirements list before it is
 classified - every line member of an interrupt run that also holds a
 message removed, every line-only configuration dropped - so the list
-offers no line (record 18 leg H1a). **`XhciMsiInject`** is the helper's own,
-in `HKLM\SYSTEM\CurrentControlSet\Services\xhcimsi\Parameters`, read once
-in its `DriverEntry` (so a change needs a reboot): 1 fails `DriverEntry`,
-2 refuses the query, 3 answers interface major 2, 4 a short answer, 5 a
-NULL `IoDisconnectInterruptEx`, 6 a wrong magic (record 18 section 2.1).
+offers no line (record 18 leg H1a). **`XhciHlprInject`** is the helper's
+own, `qemu` flavour only, in
+`HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr\Parameters`, read once in
+its `DriverEntry` (so a change needs a reboot; 0, absent, the wrong type or
+outside 1 to 9 is none): 1 fails `DriverEntry`, 2 refuses the query, 3
+answers interface major 3, the next major, which a version 2 caller
+refuses, 4 a short answer (0x30 bytes, the timer field uncovered), 5 the
+MSI bit set with a NULL `IoDisconnectInterruptEx`, 6 a wrong magic, 7 the
+timer service off (its bit clear, its pointer NULL), 8 the timer bit set
+with a NULL pointer, 9 the MSI half off (its bit clear, both pointers
+NULL) (record 18 sections 2.1 and 15.12). Until task 38.3 it was
+`xhcimsi.sys`'s `XhciMsiInject`, under `Services\xhcimsi\Parameters`,
+values 1 to 6 with 3 answering major 2.
+
+**`XhciQemuTmrDelayMs`, `XhciQemuSuspHoldDx`** (task 38.3; design record
+15 section 7.2.12, leg T3). REG_DWORDs in the controller's driver key, `qemu`
+flavour only, read at every start. `XhciQemuTmrDelayMs` N (0 off, held to
+10000) has the finer timer's thread sleep N ms before each
+`ExSetTimerResolution` call, so a release is still in flight while a
+power IRP or the stop goes on. `XhciQemuSuspHoldDx` 1 has selective
+suspend's executor leave a child's pended Dx IRP in its slot rather than
+claim it, so the controller's stop meets it outstanding; the other
+settlement paths (the PDO's close, the stale settle, the stop's unlink)
+are unchanged. Notes: `qemu.susp.hold` (the executor's first skip of a
+slot: the PDO's serial and D-state), `qemu.stop.dx` (the stop's first step,
+for each PDO with a Dx still pended), `qemu.susp.done` (each D-IRP the
+executor's paths complete, with the claiming path), and the timer thread's
+`poll.timer.call` (before the injected delay) and `poll.timer.return`
+(after the call), each with the start's serial and the call's sequence
+number.
 
 **The `M86` trace** (`qemu` flavour; record 18 section 9). The
 requirements filter writes every list it receives (`R`), rewrites (`I`)
@@ -6713,7 +6770,8 @@ and `intr.reason`), flushed to DebugView by the start itself; with
 `start.refused.delivery` (the reason).
 Reasons: 7 mode 1 with no interrupt or pin 0, 14 mode 1 given a message,
 16 mode 3 given no message (a line, or nothing), 17 mode 3's message not
-connected (no routines - 32-bit with `xhcimsi.sys` not bound - a refused
+connected (no routines - 32-bit with `xhcihlpr.sys`, `xhcimsi.sys` before
+task 38.3, not bound - a refused
 connection, or Windows connecting the line instead), 18 mode 3 on Windows
 98 SE, ME, 2000 or XP (32- or 64-bit); 15 is mode 3 running its message.
 
@@ -6726,6 +6784,31 @@ acknowledgement, 2 by PCI Interrupt Disable), `intr.retire.recover`,
 cleared a leftover Interrupt Disable `intr.intxdisable.cleared` (or
 `intr.intxdisable.stuck`). The stop's counter dump adds `intr.*`, `poll.*`
 and `watch.*` lines for the counter block's new words.
+
+**The finer timer's log notes and counters** (every flavour; task 38.3,
+design record 15 section 7.2.9). Written by the controller's timer thread
+(`src\hcd_tmr.c`) through `XhciLogNote`, so no `DbgPrint` site is added:
+`poll.timer.hold` (the value `ExSetTimerResolution` returned),
+`poll.timer.release` (the cause in the top byte - 1 the poller left ACTIVE,
+2 parked or revoked, 3 barred by a power transition, 4 the stop - and the
+value returned below it), `poll.timer.look` (the 32-bit NT 5 thread's own
+lookup of the helper), `poll.timer.source`, `poll.timer.thread.failed` and
+`poll.timer.join` (after the stop's join); at start, beside the delivery's
+notes, `poll.timer.switch.read`, `poll.timer.switch`, `poll.timer.desired`,
+`hlpr.msi.verdict` and `hlpr.timer.verdict`; the `qemu` flavour adds
+`qemu.tmr.delay` and `qemu.susp.holddx` at start, and `poll.timer.call` and
+`poll.timer.return` (above). The counter block's words 176 to 198
+(`src\xhci_counters.h`) carry `TmrSwitchRead`, `TmrSwitch`, `TmrSource` (0
+none, 1 the helper, 2 the system, 3 not found), `TmrThread` (0 not
+created, 1 running, 2 creation failed, 3 joined), `TmrHeld`, `TmrHolds`,
+`TmrReleases`, `TmrReleasesForced`, `TmrHoldsRaced`, `TmrObsCrossed`,
+`TmrDesired`, `TmrActualHeld`, `TmrActualReleased`, `TmrReleaseCause`,
+`TmrHeldMs`, the phase observations `TmrObsReleased{Count,SumMs,Late}` and
+`TmrObsHeld{Count,SumMs,Late}`, and the helper's `HlprMsiVerdict` and
+`HlprTimerVerdict`; the stop's counter dump prints them as `poll.timer.*`
+lines and `hlpr.msi.verdict` and `hlpr.timer.verdict`, and `XHCISNAP` as
+its "finer system timer" section. None has been
+read in a guest yet.
 
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script

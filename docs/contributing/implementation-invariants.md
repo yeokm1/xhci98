@@ -676,7 +676,10 @@ resource list and the pin: the line (INTx) where it works; polling
 interrupt resource, under mode 2, or after the watcher finds a line that
 never arrives; and on Vista and 7 a message (MSI or MSI-X) where Windows
 grants one - through `IoConnectInterruptEx` on amd64 and through the
-`xhcimsi.sys` helper on x86. Mode 1 asks for the line and keeps the
+`xhcihlpr.sys` helper on x86 (`xhcimsi.sys`, Vista and 7 only, until task
+38.3; the renamed helper loads on 2000 and XP too and carries a second
+service, the finer timer's `ExSetTimerResolution`, design record 18
+section 15). Mode 1 asks for the line and keeps the
 refusal below for a controller that has none, on 98 SE to XP and on x86
 Vista and 7 with no helper bound and no line offered; on Vista and 7 a
 message granted anyway is used, and one that cannot be connected polls

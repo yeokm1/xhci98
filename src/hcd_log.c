@@ -244,6 +244,44 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
     XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
     XhciLogAppend(log, "intr.values.found", hc->Counters.IntrValuesFound, 1);
+    /* The finer timer (task 38.3; design record 15 section 7.2.9). */
+    XhciLogAppend(log, "poll.timer.switch.read", hc->Counters.TmrSwitchRead,
+                  1);
+    XhciLogAppend(log, "poll.timer.switch", hc->Counters.TmrSwitch, 1);
+    XhciLogAppend(log, "poll.timer.source", hc->Counters.TmrSource, 1);
+    XhciLogAppend(log, "poll.timer.thread", hc->Counters.TmrThread, 1);
+    XhciLogAppend(log, "poll.timer.held", hc->Counters.TmrHeld, 1);
+    XhciLogAppend(log, "poll.timer.holds", hc->Counters.TmrHolds, 1);
+    XhciLogAppend(log, "poll.timer.releases", hc->Counters.TmrReleases, 1);
+    XhciLogAppend(log, "poll.timer.releases.forced",
+                  hc->Counters.TmrReleasesForced, 1);
+    XhciLogAppend(log, "poll.timer.holds.raced", hc->Counters.TmrHoldsRaced,
+                  1);
+    XhciLogAppend(log, "poll.timer.obs.crossed", hc->Counters.TmrObsCrossed,
+                  1);
+    XhciLogAppend(log, "poll.timer.desired", hc->Counters.TmrDesired, 1);
+    XhciLogAppend(log, "poll.timer.actual.held", hc->Counters.TmrActualHeld,
+                  1);
+    XhciLogAppend(log, "poll.timer.actual.released",
+                  hc->Counters.TmrActualReleased, 1);
+    XhciLogAppend(log, "poll.timer.release.cause",
+                  hc->Counters.TmrReleaseCause, 1);
+    XhciLogAppend(log, "poll.timer.held.ms", hc->Counters.TmrHeldMs, 1);
+    XhciLogAppend(log, "poll.timer.obs.released.count",
+                  hc->Counters.TmrObsReleasedCount, 1);
+    XhciLogAppend(log, "poll.timer.obs.released.sum",
+                  hc->Counters.TmrObsReleasedSumMs, 1);
+    XhciLogAppend(log, "poll.timer.obs.released.late",
+                  hc->Counters.TmrObsReleasedLate, 1);
+    XhciLogAppend(log, "poll.timer.obs.held.count",
+                  hc->Counters.TmrObsHeldCount, 1);
+    XhciLogAppend(log, "poll.timer.obs.held.sum",
+                  hc->Counters.TmrObsHeldSumMs, 1);
+    XhciLogAppend(log, "poll.timer.obs.held.late",
+                  hc->Counters.TmrObsHeldLate, 1);
+    XhciLogAppend(log, "hlpr.msi.verdict", hc->Counters.HlprMsiVerdict, 1);
+    XhciLogAppend(log, "hlpr.timer.verdict", hc->Counters.HlprTimerVerdict,
+                  1);
 #if defined(XHCI_FLAVOUR_QEMU)
     /* The stand-in dead line's withheld claims (record 15 section 11), at
      * every stop: mode 1 under the latch has no move to note them at. */
