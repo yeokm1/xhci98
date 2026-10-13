@@ -2010,8 +2010,10 @@ under this driver ("Untested ground"); if one misbehaves with it on, set
 `0`, restart and report what it did, with `XHCIQUAL`'s report, which names
 the controller's version, and `XHCISNAP`'s, which says what the driver
 decided ("controller version"). With `XhciLogDebugView` at `1`, a start the
-driver refuses for any reason now writes its log and counters to DebugView,
-the version among them.
+controller's initialization refuses (a Code 10 at any of its steps, the
+version check among them) now writes its log and counters to DebugView,
+the version among them; a start refused before that, for want of
+resources or a register window, does not.
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 

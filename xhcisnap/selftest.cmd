@@ -331,9 +331,11 @@ for %%S in ("not read: this start refused before it read XhciAccept096" "HCIVERS
         set FAILED=1
     )
 )
-findstr /C:"[short]controller version" "%BASE%.version.log" > nul
-if not errorlevel 1 (
-    echo FAIL: a block from before 38.11 printed a version section
+rem Eight cases print the heading, the short block none: a ninth heading is
+rem the length guard printing for a driver from before 38.11.
+powershell -NoProfile -Command "if (@(Select-String -SimpleMatch -Path '%BASE%.version.log' -Pattern 'controller version (task 38.11').Count -ne 8) { exit 1 }"
+if errorlevel 1 (
+    echo FAIL: the version section was not printed exactly once per case, eight
     set FAILED=1
 )
 rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
