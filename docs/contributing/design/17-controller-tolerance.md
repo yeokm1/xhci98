@@ -65,6 +65,13 @@ records the diagnosis of the UAS drive that stayed dead after a
 Transaction Error on its data stream. Section 4.2's scope line points to
 it.
 
+Revision 13, 2026-10-13, for roadmap-hcd task 38.3: section 4.13, the
+release of the transfers a pinned containment keeps, drafted, reviewed
+once, and deferred by the owner the same day to after `2.4.0.0`
+(PCR.1): no proof reachable on a disable establishes that the function
+can no longer write to memory. The section records why, the owner's
+answers and what a reopening must answer. Nothing else changes.
+
 ## 1. What is asked, and what is not
 
 A tester on an AMD AM5 board reports that a USB mouse randomly stops
@@ -1643,6 +1650,153 @@ development host A with the stamped `2.2.0.3` `qemu` build:
 With 4.12.2 to 4.12.4 the disk does not stay stuck, so nothing waits on
 it.
 
+### 4.13 Releasing the transfers kept by a pinned containment (deferred, PCR.1)
+
+**Deferred by the owner on 2026-10-13 to after `2.4.0.0`** ("Planned
+work", PCR.1 again; it was roadmap-hcd task 38.3). Nothing here is built,
+and the known limitation stands as the release notes state it: disabling
+a controller the driver closed off without proof that DMA stopped waits
+for ever on the transfers it keeps. Why it was deferred:
+
+- **Proof (b), D3hot asked for through the PCI stack and read back, was
+  dropped.** It is safe only if a later return to D0 resets the
+  controller, which PMCSR's `No_Soft_Reset` set prevents (xHCI 1.2c
+  5.2.7.1's note, p. 344; 4.23.1, p. 312; A.1.1, p. 564). `XHCIQUAL`'s probe
+  reads it set on every Intel PCH xHCI read so far - `8086:1E31` (B490),
+  `8086:9CB1` (E7250), `8086:9D2F` (E460, HP EliteBook 850 G5), `8086:02ED`
+  (P14s Gen 1) - and on AMD's chipset controller `1022:43F7` (the B650M);
+  clear only on AMD's processor controllers `1022:15B6`, `15B7`, `15B8`
+  and Intel's Thunderbolt `8086:15DB` (runtime, `xhciqual/results/`, held
+  on the maintainer's disk). And QEMU's `qemu-xhci` has no PCI Power
+  Management capability (runtime, `lessons.md`, "PME# cannot be reached in
+  this vehicle"), so no leg could read it.
+- **Proof (a), configuration space reading all ones, was shown by the
+  review not to prove isolation.** All ones shows that configuration
+  access failed, not why. Two counterexamples: a faulty firmware or bridge
+  restore that closes the downstream configuration and memory window while
+  upstream bus mastering stays enabled; and an endpoint whose inbound path
+  is broken while its DMA engine still writes. A good ID read at the start
+  excludes neither. `hcdContainProve` (`hcd_ctl.c`) already refuses all
+  ones as proof for the same reason, and the task's own condition says an
+  unreachable configuration window alone proves nothing.
+- **The only safe evidence is a real PnP removal** - the bus driver
+  reporting the function gone - **and a disable never gives one**, so no
+  proof reachable on a disable would release anything.
+
+#### 4.13.1 The problem, as read
+
+Since `2.2.0.0` a containment without proof (section 4.6: all ones
+without a Bus Master Enable read back clear, or an invalidation no halt or
+HCRST proved) pins the common buffer and keeps every transfer and mapping
+(`HcdIoDeviceDrain` returns 0 while `CommonBufferPinned` is set,
+`hcd_io.c`). The wait is in the class driver above our PDO, at its own
+REMOVE: our PDO does not wait on a pinned buffer (`hcdPdoQuiesce`,
+`hcd_pdo.c`).
+
+- Windows 2000: a controller disable hung 4 of 4 from fresh boots; the
+  HID mouse's REMOVE waits on its kept interrupt-IN read. Windows 98 SE:
+  the disable hung after the controller's QUERY_STOP with a suspended
+  client, and completed with no client (runtime, `runs/run-36.md`, "A-98
+  and A-2000 fault legs").
+- A disable reaches the controller as `QUERY_STOP` then `STOP` on Windows
+  98 SE and as `QUERY_REMOVE` then `REMOVE` on Windows 2000, whose remove
+  unloads the image (runtime, `lessons.md`, 26-A.2). ME, XP, Vista and 7
+  are not read.
+
+#### 4.13.2 The owner's answers (2026-10-13), kept for a reopening
+
+1. **Trigger**: the controller FDO's own `QUERY_STOP`, `QUERY_REMOVE`,
+   `STOP`, `SURPRISE_REMOVAL` and `REMOVE` only, not a child PDO's; a leg
+   reads the PnP order per target, and a target where a child waits first
+   goes back to the owner.
+2. **Stalled reads**: the release's own configuration reads bounded at
+   1 s, the context leaked safely, ending with no proof; other callers of
+   `HcdSvcConfigSpace` unchanged.
+3. **Proof (a)**: the whole 64-byte header all ones in two complete
+   paired reads at least 20 ms apart, USBSTS all ones, and the start's ID
+   read through the same route. Overtaken by the review (above).
+4. **Proof (b)**: dropped, with the D3 request, the power IRP and every
+   PMCSR and PM capability reading.
+5. **The record** (decision 7 of the draft): in memory and the log only;
+   no registry value. Deleting the FDO loses it.
+6. **A start-time check** (open): leaning to variant B - the start's own
+   halt and HCRST, then carry on, counted and logged - as a diagnostic
+   only, within one FDO's life (9x disable and enable, an NT rebalance),
+   never as the safety foundation; safety must hold before anything is
+   released. The start does not restore Bus Master Enable before its halt
+   and HCRST (`XhciInitController`, `xhci_init.c`: preflight read, halt,
+   HCRST, restore last), but PCI START has already run in `hcdStart`.
+7. **A buffer pinned by the stop's own quiesce** (`XhciFailClosedDma`,
+   not a containment): out of scope.
+
+#### 4.13.3 The design as far as it went
+
+What a future implementer can keep, whatever proof is found:
+
+- **Reading configuration space so a failed read never looks like all
+  ones.** The proven route (`IRP_MN_READ_CONFIG` to the `AddDevice` PDO,
+  `HcdSvcConfigSpace`) zero-fills and judges the status alone;
+  `IoStatus.Information` is unproven per target (it passed as the length
+  on Windows 2000 and was refused on 98 SE when judged, 26-A.2). The paired
+  read - each dword twice, into buffers prefilled `0x5A` and `0xA5`, a byte
+  counted only if both halves agree - establishes which bytes the bus
+  driver wrote without relying on the byte count.
+- **The trigger**: in the controller's PnP dispatch before the IRP goes
+  down and before `HcdStopController`; at a REMOVE, at the head of
+  `hcdRemove`, before admission closes.
+- **The release, once proven**: clear `CommonBufferPinned` for the current
+  allocation, then drop every device through the existing departure
+  (`hcdDropAll`, as `HcdEnumContain`'s proven branch) under the power
+  gate, as `HcdIoShutFlush` drains from the power path; selective
+  suspend's quarantine (`hcd_susp.c`) then runs down, which run-36's 98 SE
+  hang needs; the stop frees the buffer, stream blocks and wide pool, and
+  must not reach MMIO and `XhciFailClosedDma` again. The map-register wait
+  of section 4.6's known limitation ends once the kept transfers give
+  their registers back.
+- **Injection and legs** the draft proposed: an injected proof on top of
+  fault 07, a stalled read, the start check; the roadmap's leg (a disable
+  on 98 SE, ME, 2000, XP and 7 x64, with and without a client read
+  pending), a suspended client on 98 SE, the PnP order per target, and the
+  unproven case still holding. Commits `9e70590b` and `66df2a2d` hold both
+  drafts in full.
+
+#### 4.13.4 What a reopening must answer
+
+Beyond a proof that establishes isolation (above), the review's other
+findings on the draft:
+
+- **An image unload under a late completion.** Dropping the last FDO
+  reference inside the completion routine leaves driver code running
+  after the protection goes; on 9x the protection is not established
+  (`hcdRemove`; `lessons.md`, the "signalled but still executing" unload).
+  An interlock must cover the routine's return, or an abandoned request
+  keeps the image for good.
+- **A later trigger on torn-down resources.** A `SURPRISE_REMOVAL` with no
+  proof leaves `CommonBufferPinned` and `Contained` set while `HcdDmaClose`
+  drops the pointers and `hcdRelease` unmaps `BarVa`; a following `REMOVE`
+  would read USBSTS through stale state. Eligibility must be bound to a
+  live allocation and start generation and end before teardown.
+- **Injection that frees memory the emulated controller still names.**
+  Fault 07 does not halt QEMU's controller (`hcdContainProve` clears the
+  real Bus Master Enable before `HcdInjPciCommand` falsifies the readback),
+  and PCI START may restore it before the driver's halt; an injected proof
+  must first bring about a real halt and reset, or real removal.
+- **The original requests must complete.** The reused drain parks them
+  (`HcdIoDeferred` to `HcdIoPark`, `hcd_io.c`), completed only on cancel,
+  abort or PDO closure; a release must choose and specify their
+  completion, and count completions apart from DMA retirement.
+- **Timing as a contract.** Two relative 10 ms waits do not promise
+  20 ms on these targets, a 1 ms poll does not define a 1 s deadline, and
+  polling cannot bound a lower driver that blocks inside `IoCallDriver`.
+- **The start's ID is not a validated reading.** `ext->PciVendorDevice` is
+  zeroed and read without a completeness check, and a reinitialization can
+  overwrite it; a proof leaning on it needs a validated result tied to the
+  start generation.
+- **The legs.** A route to `REMOVE` for the unload leg (a 9x disable gives
+  a `STOP`), ME in it, every target's PnP order rather than five, and the
+  sequences `SURPRISE_REMOVAL` then `REMOVE` with no proof and a release, a
+  cancelled query and a later stop.
+
 ## 5. Injection
 
 QEMU raises none of these faults, and a fabricated event is only useful if
@@ -1850,6 +2004,10 @@ fault `16` on a stream now reads and what the abandon notes `43` and `44`
 mean; `xhcisnap/README.md` decodes counter words 167 to 172. The
 `README.md` already says only that a transaction error is retried. The
 roadmap's 36.54 carries the legs.
+
+At revision 13 (roadmap-hcd task 38.3, deferred as PCR.1, section
+4.13): no document changes. The known limitation in the release notes,
+the README and the package readme template stands as written.
 
 ## 8. Decisions taken (owner, 2026-10-06)
 
