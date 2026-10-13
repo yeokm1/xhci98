@@ -4579,8 +4579,21 @@ and none at all for an interface with no transport it can run. That
 refused interface shows no VID/PID-derived hardware id either: its one
 hardware id is the project-owned
 `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp&REV_rrrr` (`&MI_nn` on a function),
-which no INF names, so no `usbstor.inf` or vendor INF line binds a storage
-driver to a device whose transport cannot run; it shows with no driver.
+which no INF names. Its device id, though, keeps the VID/PID form
+(`USB\VID_vvvv&PID_pppp[&MI_nn]`; `hcdDeviceQueryId` routes only the
+hardware and compatible ids through the transport), and so does its
+instance path. So "no INF line can bind it" holds for the hardware ids
+only. Read on Windows 98 SE under NUSB 3.3 (runtime, 2026-10-13, task 38.2,
+a `usb-uas` refused in place): the refused devnode's `HardwareID` value
+carries the device id as a second entry,
+`USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`,
+and the wizard found no driver for it. Not read: whether an INF whose only
+line is the VID/PID form binds a refused device on 98 SE or ME; whether a
+device with a serial number, once its working form (High Speed, or a
+controller that streams) is installed, brings that devnode's driver back
+to its refused form, since both answer the same device and instance id;
+and how either goes on NT. Roadmap task 38.12, deferred, reads them
+(10.7.1).
 Where it sits decides the rest (`XhciXportRefusedAt`): on a
 companion-paired root port the bus asks 29-A.5's hold to send it back to
 USB 2.0 (`HcdHoldRequestUsb2`, Phase 29's executor: an accepted request is
@@ -4602,8 +4615,8 @@ never a vendor id alone. Bulk-Only counts only at alternate 0, because
 `usbstor.sys` selects alternate 0; the UAS driver selects its own setting.
 The device id is unchanged. Whether Windows 98's configuration manager
 matches an INF line against the device id as well as the hardware ids is
-unread; if it does, a hand-listed `VID&PID` still wins there, roadmap
-31-A.3's residual case.
+unread (10.7.1); if it does, a hand-listed `VID&PID` still wins there,
+roadmap 31-A.3's residual case.
 
 Microsoft's parent forms the `MI_` suffix with the format string `&MI_%02x`
 (Windows 7 SP1 and XP SP3 `usbccgp.sys`): lower-case hex, which the
@@ -4697,6 +4710,124 @@ Also never emitted: `USB\ROOT_HUB` and `USB\ROOT_HUB20` (the root hub is
 `XHCI98\ROOT_HUB`, section 8.6, and the INF gate's `HCD-ROOTHUB` refuses
 them), and `USB\CLASS_09*`, because a hub is never a PDO. `USB\MS_COMP_*` is
 out of scope for 2.0.0.0.
+
+#### 10.7.1 A refused interface's device id (task 38.12, deferred)
+
+**Deferred.** The owner deferred roadmap task 38.12 on 2026-10-13 until
+after `2.4.0.0`. This section is the plan for that task. It has not been
+reviewed, and nothing in it is implemented. The answers the owner gave the
+same day are recorded below as decisions taken.
+
+**What was read.** Task 38.2's legs (runtime, 2026-10-13; `runs/run-38.md`,
+"38.2"; `out\p38-2\legs\notes.txt`, `w98\R2ENUM.txt`) used Windows 98 SE
+under NUSB 3.3 with `-device qemu-xhci,p2=1,p3=4,streams=off`. A `usb-uas`
+was attached at port 3, a SuperSpeed port with no USB 2.0 companion, and was
+refused in place. The wizard found no driver for it. The devnode it left,
+`Enum\USB\VID_46F4&PID_0003\P382R2`, read:
+
+`"HardwareID"="USB\\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\\VID_46F4&PID_0003"`
+
+The PDO answers only the first of those as a hardware id. The second is
+its device id. `hcdDeviceQueryId` (`hcd_pdo.c`) sends a refused PDO's
+hardware and compatible ids through `hcdXportQueryId`, but answers
+`BusQueryDeviceID` in the ordinary form: `USB\VID_v&PID_p`, with `&MI_nn`
+for a function (`hcdFunctionQueryId`). So Windows 98 SE added the device id
+to the value. Which of its components does that is not read.
+
+On every other devnode in the same export, the device id is already the
+second hardware id. For a location-form instance id, 98 SE appends the
+parent's path with `\` turned into `&` (`1XHCI98&ROOT_HUB&0PCI&...`). A
+serial id is kept as answered.
+
+**The two routes the task reads.**
+
+1. **An INF line matched against the device id.** If the 9x driver search
+   matches against that value, then a hand-listed `USB\VID_v&PID_p` line
+   binds a refused device. NUSB 3.3's `USBSTOR.INF` (SHA-256
+   `e78b5f2d2d30b039d74d670f09ba41c39bdfca058b72fd7c22eb7d55f81f0f6b`) has
+   135 such lines and 6 `&MI_nn` lines (static, a text read). A vendor INF
+   would do the same.
+2. **The devnode its working form installed.** Take a device with a usable
+   serial number. It answers the same device id and instance id whether it
+   is refused, or working at High Speed or on a controller that streams.
+   Once the working form is installed, the refused form comes back to that
+   same devnode. That would load the stored driver with no INF search, and
+   it could do so on NT too. `xhciuas.sys` fails its start with fewer than
+   two streams at SuperSpeed (`uas_fdo.c`).
+
+**The reading.** It needs no code: every release since `2.0.0.0` answers
+these ids. It runs on a published `release-x86`.
+
+- **The vehicle.** QEMU 11.1.0 under TCG, with the kit of
+  `out\p38-2\kit2`; its `dev.ps1 uas` gains a serial argument. The guests
+  are 98 SE under NUSB 3.3 (`vm\t26\win98-gold.qcow2`), stock ME
+  (`vm\t37me\winme-stock-base.qcow2`) and Windows 2000 SP4
+  (`vm\t26\win2k-gold.qcow2`). Each takes 1 vCPU and 256 MB, on its own
+  overlay.
+- **Every plug uses a serial never seen before**, on the refusing layout
+  `p2=1,p3=4,streams=off` at port 3.
+- **The probe INFs are this project's own.** Each declares `Class=USB` and
+  an install section that installs nothing (on NT, `AddService=,2`). Probe
+  V's one line is `USB\VID_46F4&PID_0003`. Probe C's one line is
+  `USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000`. C is the control: it
+  must bind, or V's result means nothing.
+- **"Binds" means** the probe's line is chosen for the devnode: its
+  `DeviceDesc`, its `Driver` value and its Device Manager name all come
+  from the probe.
+- **On 98 SE and ME:**
+  - Offer V, then C, at the first plug's wizard.
+  - Put V in `C:\WINDOWS\INF\OTHER`, delete `DRVIDX.BIN` and
+    `DRVDATA.BIN`, and plug with nothing offered.
+  - After each plug, export `HKLM\Enum\USB`.
+- **On 2000:**
+  - Read the `Enum\USB` value.
+  - Offer V through Found New Hardware, and through Have Disk with
+    compatible hardware only. Offer C as the control.
+  - Microsoft documents NT's search as matching the hardware ids and the
+    compatible ids. That is documentation; the leg checks it.
+- **Route 2, on all three guests.**
+  1. Plug serial S on `p2=4,p3=4` with streams on, and install
+     `XHCIUAS.INF`.
+  2. Relaunch the same overlay on the refusing layout and plug S again.
+  3. Read whether the wizard comes back, and the devnode's name, status,
+     `HardwareID` and `Driver`, and take an `XHCISNAP` dump.
+- **Static.** Windows ME's `usbstor.inf`, extracted from its CD for 10.6.
+  A 98 SE without NUSB is not read, because no base here lacks NUSB.
+
+**What each outcome changes.**
+
+- **A driver binds by either route, on any target.** The refused PDO's
+  device id becomes `USB\XHCI98_NOXPORT&VID_vvvv&PID_pppp[&MI_nn]` on every
+  target. That form is the second hardware id too, as on every other PDO.
+  - `XhciXportId` gains the device-id form.
+  - `hcdDeviceQueryId` routes `BusQueryDeviceID` to `hcdXportQueryId` when
+    `Xport.Transport` is `XHCI_XPORT_REFUSED`, before its `pdo->Function`
+    fallthrough.
+  - The device id follows `pdo->Xport`. That holds a PDO to one identity,
+    because dormant revival compares `Xport` (`hcdDormantSame`) and
+    re-presentation copies it (`HcdDevicePdoRepresentFunctions`).
+  - Host vectors go in `test_xport`.
+  - The longest device id grows from 27 to 42 characters, and the longest
+    NT instance path from 157 to 172, within 200.
+  - The instance path moves within `Enum\USB`. A refused device's first
+    plug after the update brings the wizard once more.
+- **Nothing binds by either route.** Only the documents change. They say,
+  tagged runtime, where the device id was read to be harmless.
+
+**Decisions taken (owner, 2026-10-13).**
+
+1. The device id is changed only if a reading shows a driver binding by
+   either route. Otherwise only the documents change.
+2. If it changes, it changes on every target.
+3. 98 SE is read under NUSB 3.3, with stock ME and 2000 SP4 alongside. The
+   record states that a 98 SE without NUSB is unread.
+4. Old refused devnodes are left alone. 38.9's cleanup tool does not
+   remove them. Such a key claims nothing, and when the device has a serial
+   number it is the device's own working devnode.
+5. 38.9's INF gate refuses any INF of this package that names
+   `USB\XHCI98_NOXPORT`.
+6. No `usbstor.sys` probe is run. Whether a line binds is what decides the
+   change.
 
 ### 10.8 When and how the bus splits a device
 
