@@ -168,9 +168,11 @@ XHCIQUAL's own `Log written:` line. A refusal before anything was read
 written: the clock is not a date, all 26 letters of that minute are
 taken, or it cannot write here - a full disk, or a write-protected floppy,
 where DOS first asks Abort, Retry, Fail: answer F, then copy the two files
-to a disk with room that can be written. Answering A (Abort) instead ends
-XHCIQUAL at once, before anything was read, and QUALREP says it was
-stopped and that nothing needs a cold boot. With no completion flag after
+to a disk with room that can be written. XHCIQUAL hands DOS a Fail for
+an A (Abort) answer too, so it ends the same way. Should DOS ever end
+XHCIQUAL itself (an Abort it would not let XHCIQUAL fail), QUALREP says it
+was stopped and asks for a cold boot before XHCIQUAL runs again. With no
+completion flag after
 any other exit, the run ended abnormally: the partial log is kept and a
 photo of the screen is wanted, attached with the newest `.LOG`. The batch
 ends on `pause`. It deletes no log.

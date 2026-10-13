@@ -131,13 +131,27 @@ foreach ($minute in @("58","59")) {
 # which the floppy controller reports to DOS as a write-protected disk. DOS
 # then asks Abort, Retry, Fail for each write. qualrep_rdonly answers Fail:
 # XHCIQUAL must say it cannot write here, and QUALREP add nothing.
-# qualrep_abort answers Abort, which ends XHCIQUAL with exit code 0 (measured
-# 2026-10-13): QUALREP must reach its stopped branch, not the cold-boot one.
+# qualrep_abort answers Abort, which until DOS-1 ended XHCIQUAL from inside
+# DOS with exit code 0 (measured 2026-10-13); XHCIQUAL now hands DOS a Fail
+# for it, so the screen must be the Fail one: "cannot write here", and
+# neither QUALREP's stopped branch nor its cold-boot one.
 $roDir = Join-Path $hddDir "RODISK"   # under the git-ignored staging dir
 if (Test-Path -LiteralPath $roDir) { Remove-Item -LiteralPath $roDir -Recurse -Force }
 New-Item -ItemType Directory -Path $roDir -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $hddDir "XHCIQUAL.EXE") -Destination (Join-Path $roDir "XHCIQUAL.EXE") -Force
 Copy-Item -LiteralPath (Join-Path $hddDir "QUALREP.BAT") -Destination (Join-Path $roDir "QUALREP.BAT") -Force
+# DOS-1 (38.1 MS-DOS leg): before XHCIQUAL answered Fail for an Abort, an
+# Abort ended it from inside DOS, past DOS/32A's teardown, and the next
+# XHCIQUAL in that boot hung at the extender banner. One QUALREP per boot
+# cannot see that, so this one answers Abort and then runs XHCIQUAL again.
+$qrAbortRerun = @(
+    "@echo off",
+    "call QUALREP",
+    "cls",
+    "XHCIQUAL --probe-only --no-page --no-sysinfo",
+    "echo QRABRT_DONE"
+)
+[IO.File]::WriteAllText((Join-Path $roDir "QRABRT.BAT"), (($qrAbortRerun -join "`r`n") + "`r`n"))
 
 if (-not (Test-Path -LiteralPath $usbImage)) {
     $stream = [IO.File]::Create($usbImage); $stream.SetLength(8MB); $stream.Close()
@@ -253,7 +267,8 @@ $cases = @(
     [pscustomobject]@{ Name="qualrep_twice"; Batch="QRTWICE"; Answer=@($pauseKey); Args=($xhci + $qrPin); Success="A1314([0-9][0-9])A\.LOG\s+A1314(\1B|[0-9][0-9]A)\.LOG\s+QRTWICE_DONE"; Fail=$qrAny },
     [pscustomobject]@{ Name="qualrep_all_taken"; Batch="QUALREP"; Args=($xhci + @("-rtc","base=2026-12-31T23:58:00,clock=vm")); Success=("C31235[89]A\.LOG to C31235[89]Z\.LOG all[\s\S]*No log was written by this run, so it has no file to attach\." + $qrPause); Fail="Log written|ended abnormally|stopped before it finished|cannot write here" },
     [pscustomobject]@{ Name="qualrep_rdonly"; Batch="QUALREP"; Drive="b:"; Answer=@($failKey); Args=($xhci + $roFloppy); Success=("XHCIQUAL: cannot write here\. --log-stamp could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*nothing needs a cold\s+boot[\s\S]*No log was written, so there is no file to attach\." + $qrPause); Fail="ended abnormally|stopped before it finished|Log written|warning: could not create" },
-    [pscustomobject]@{ Name="qualrep_abort"; Batch="QUALREP"; Drive="b:"; Answer=@($abortKey); Args=($xhci + $roFloppy); Success=("Abort, Retry, Fail\?a[\s\S]*QUALREP: XHCIQUAL was stopped before it finished, as by an Abort[\s\S]*Attach the newest \.LOG in this directory, if there is one\." + $qrPause); Fail="ended abnormally|Log written|cannot write here" }
+    [pscustomobject]@{ Name="qualrep_abort"; Batch="QUALREP"; Drive="b:"; Answer=@($abortKey); Args=($xhci + $roFloppy); Success=("Abort, Retry, Fail\?a[\s\S]*XHCIQUAL: cannot write here\. --log-stamp could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*No log was written, so there is no file to attach\." + $qrPause); Fail="ended abnormally|stopped before it finished|Log written|warning: could not create" },
+    [pscustomobject]@{ Name="qualrep_abort_rerun"; Batch="QRABRT"; Drive="b:"; Answer=@($abortKey, $pauseKey); Args=($xhci + $roFloppy); Success="Probe safety: PASS - no PCI configuration writes\.\s+Done\.\s+QRABRT_DONE"; Fail="ended abnormally|stopped before it finished|Log written" }
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })

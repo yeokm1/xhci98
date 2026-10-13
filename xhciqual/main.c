@@ -15,6 +15,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <dos.h>
 #include "qual.h"
@@ -945,6 +946,10 @@ int main(int argc, char **argv)
     int n, i, nx, nl, all_qualified, any_caveats, active;
     const char *mode;
 
+    /* First, before any DOS file call: an Abort answered while DOS/32A is
+     * up would end the run past the extender's exit (DOS-1). */
+    if (sys_crit_install())
+        atexit(sys_crit_remove);
     prescan_done_flag(argc, argv);
     reset_done_flag();
     /* Task 11-V.8: no arguments at all means the read-only quick scan. Set

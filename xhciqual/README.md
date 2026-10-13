@@ -345,17 +345,40 @@ and where the tool can report the outcome it does, so the batch prints
 nothing after it but its `pause`: a completed reading ends on the tool's
 `Log written: mDDhhmmS.LOG - attach this file`, and a refusal (exit 4) on
 the tool's own reason, `XHCIQUAL: cannot write here` for a write-protected
-or full disk, and a last line saying there is no file to attach. The batch
-speaks only for what the tool cannot: exit code 0, which `--probe-only`
-never returns and which is what an **Abort** answer to DOS's
-`Abort, Retry, Fail?` leaves (measured in QEMU, 2026-10-13: DOS ends the
-program; nothing was read), and a run that ended without writing the
-completion flag (`IF EXIST`; a DOS/32A fault ends with exit code 255),
-which is the cold-boot case. Those branches end on "attach the newest .LOG
-in this directory", since the tool never said a name. It deletes the flag
-and no log. Every line it prints fits 79 columns. 8.3 name,
-ASCII, CRLF, `COMMAND.COM` built-ins only, and nothing on an `echo` or
-`rem` line that `COMMAND.COM` could read as a redirection or a variable.
+or full disk, and a last line saying there is no file to attach. An
+**Abort** answer to DOS's `Abort, Retry, Fail?` is handed to DOS as Fail
+(below), so it ends on the same `cannot write here`. The batch speaks only
+for what the tool cannot: exit code 0, which `--probe-only` never returns
+and which is what an Abort DOS would not let the tool turn into Fail
+leaves (DOS ends the program itself, past the DOS extender's exit, so the
+batch asks for a cold boot before XHCIQUAL runs again), and a run that
+ended without writing the completion flag (`IF EXIST`; a DOS/32A fault ends
+with exit code 255), which is the cold-boot case too. Those branches end on
+"attach the newest .LOG in this directory", since the tool never said a
+name. It deletes the flag and no log. Every line it prints fits 79
+columns. 8.3 name, ASCII, CRLF, `COMMAND.COM` built-ins only, and nothing
+on an `echo` or `rem` line that `COMMAND.COM` could read as a redirection
+or a variable.
+
+Why Abort is answered as Fail (defect DOS-1, found on the 38.1 MS-DOS
+leg, 2026-10-13): an Abort makes DOS end the process from inside its own
+critical-error code, an internal jump to its exit (MS-DOS 4.0 source,
+`CTRLC.ASM`, `DoAbort`), not through the INT 21h vector. DOS/32A runs its
+exit - putting back the real-mode INT 21h, 15h, 1Bh, 1Ch, 23h, 24h and 2Fh
+vectors, freeing its XMS block, restoring A20 - only when it sees an
+INT 21h AH=4Ch through its own real-mode INT 21h hook (DOS/32A 9.1.2
+source as Open Watcom v2 carries it, `contrib/extender/dos32a/src/dos32a`,
+`text/kernel/exit.asm` and `text/kernel/misc.asm`), so after an Abort
+those vectors still pointed into the freed extender, and the next DOS/32A
+program in that boot (any XHCIQUAL, even `--help`) hung after the banner
+with interrupts off. DOS/32A guards Ctrl-C (its protected-mode INT 23h
+only sets a flag) but leaves INT 24h to `COMMAND.COM`. So XHCIQUAL, first
+thing, chains the real-mode INT 24h with a 27-byte stub in conventional
+memory: `COMMAND.COM` still asks and Retry still retries, and an Abort
+reaches DOS as Fail where DOS allows Fail for that error (where it does
+not, DOS would turn a Fail into an Abort anyway). The previous vector is
+put back at exit, and DOS/32A's own exit restores the one it saved if the
+tool faults first.
 
 ### The staged procedure
 
@@ -659,15 +682,17 @@ powershell -ExecutionPolicy Bypass -File xhciqual\test\run-win98-batch.ps1
 
 The wrappers use only `COMMAND.COM` built-ins: `IF ERRORLEVEL` for the exit
 code and `IF EXIST` on XHCIQUAL's `--done-flag` completion sentinel (no
-`FIND.EXE`). Six cases drive `QUALREP.BAT` (task 38.1): one reading, whose
+`FIND.EXE`). Seven cases drive `QUALREP.BAT` (task 38.1): one reading, whose
 last line before the pause must be `Log written:`; one (`qualrep_log`) that
 reads the stamped log back - QUALREP, then a plain `--log` run of the same
 probe, both files copied to COM1 and compared on the host, so a stamped log
 that is empty or differs from the `--log` report beyond its `Log:` line and
 its ending fails (the 38.1 MS-DOS leg's 0-byte logs passed a screen-only
-check); two on a write-protected B:, answering Fail (XHCIQUAL's own "cannot
-write here" last) and Abort (QUALREP's stopped branch, not the cold-boot
-one); two in one boot
+check); three on a write-protected B:, answering Fail and Abort (both
+XHCIQUAL's own "cannot write here" last, since Abort is handed to DOS as
+Fail) and Abort followed by a second XHCIQUAL in the same boot, which must
+complete (`qualrep_abort_rerun`: before DOS-1 was fixed it hung at the
+DOS/32A banner); two in one boot
 with the guest clock pinned (`-rtc base=2026-10-13T14:25:00,clock=vm`),
 where `DIR /B` must list `A1314mmA.LOG` and then the same minute's `B`;
 and one at 31 December 23:58 with every letter of 23:58 and 23:59 already

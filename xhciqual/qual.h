@@ -964,6 +964,12 @@ void sysinfo_probe(SYSINFO *si);
  * mode through DPMI 0300h, so the handle DOS returns is the one handed
  * back. 0 with *handle set, or the DOS error code (50h: the name exists). */
 unsigned sys_dos_creatnew(const char *name, int *handle);
+/* sysprobe.c, DOS-1: chain the real-mode INT 24h so an Abort answer to
+ * DOS's Abort, Retry, Fail reaches DOS as Fail and the tool ends itself,
+ * through DOS/32A's exit. 1 installed, 0 not (the run goes on without it).
+ * sys_crit_remove puts the previous vector back. */
+int  sys_crit_install(void);
+void sys_crit_remove(void);
 /* sysinfo.c, pure: the --no-sysinfo state (owner, 2026-10-10) - nothing
  * read, and the header says the option skipped it. */
 void sysinfo_skip(SYSINFO *si);

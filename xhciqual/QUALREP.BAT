@@ -16,8 +16,10 @@ if exist QUALREP.FLG goto stale
 XHCIQUAL --probe-only --no-page --log-stamp --done-flag QUALREP.FLG
 rem MS-DOS 7.x COMMAND.COM has no ERRORLEVEL variable: test it at once,
 rem highest first, since IF ERRORLEVEL n is true for n or more. A DOS/32A
-rem fault ends with 255; an Abort answer to DOS's Abort, Retry, Fail ends
-rem the program with 0, which --probe-only never returns itself.
+rem fault ends with 255. XHCIQUAL hands DOS a Fail for an Abort answer to
+rem Abort, Retry, Fail, and reports the error itself (DOS-1); exit code 0,
+rem which --probe-only never returns, is left for an Abort DOS would not
+rem let it fail, which DOS carries out past the DOS extender's exit.
 if errorlevel 5 goto checked
 if errorlevel 4 goto refused
 if errorlevel 1 goto checked
@@ -34,9 +36,11 @@ goto end
 :stopped
 echo.
 echo QUALREP: XHCIQUAL was stopped before it finished, as by an Abort
-echo answer to a DOS disk error. Nothing needs a cold boot. If DOS said
-echo the disk is write-protected or full, copy QUALREP.BAT and XHCIQUAL.EXE
-echo to a disk you can write to and run QUALREP there; else run it again.
+echo answer to a DOS disk error that DOS would not let it turn into Fail.
+echo DOS ended it past its DOS extender's exit, so cold boot before running
+echo XHCIQUAL again. If DOS said the disk is write-protected or full, copy
+echo QUALREP.BAT and XHCIQUAL.EXE to a disk you can write to and run QUALREP
+echo there after the cold boot.
 echo Attach the newest .LOG in this directory, if there is one.
 goto end
 :abnormal
