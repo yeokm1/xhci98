@@ -345,9 +345,29 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG QemuStreamResyncs;
     ULONG QemuStreamResyncFailed;
     ULONG QemuStreamRestops;
+    /* Endpoint rings held until the controller drops them (task 38.10;
+     * design record 20 section 5), appended at word 173: the pool rings
+     * held now, copied at each poll from the pool's own array - flat across
+     * any number of interface switches that end where they began; pipes
+     * held closed for an endpoint the controller may still have enabled
+     * (stale), and held after a command whose completion was never seen
+     * (pinned, until the slot goes); stale ones a later proof released;
+     * selects that put the old pipes back after a refused or unissued
+     * command; SELECT_INTERFACEs a one-setting STALL ended in success
+     * through the clears; the rollbacks issued after a STALL, and those
+     * whose clears completed so the old pipes were put back. The thread's
+     * plain writes, the first under the controller lock at the poll. */
+    ULONG PoolRingsInUse;
+    ULONG RingsRetained;
+    ULONG RingsPinned;
+    ULONG RingsReleased;
+    ULONG SelectsReattached;
+    ULONG SelectStallSuccesses;
+    ULONG SelectRollbacks;
+    ULONG SelectRollbacksReopened;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 181 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

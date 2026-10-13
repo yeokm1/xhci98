@@ -744,6 +744,18 @@ PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
 the resyncs that could not finish and the extra stops QEMU's own restart
 of an endpoint cost. A block shorter than 173 words is a driver from
 before it, and the section is not printed.
+Task 38.10's eight follow (173 to 180, `PoolRingsInUse`, `RingsRetained`,
+`RingsPinned`, `RingsReleased`, `SelectsReattached`,
+`SelectStallSuccesses`, `SelectRollbacks`, `SelectRollbacksReopened`;
+design record 20 section 5), with a section of their own, **"endpoint
+rings"**: the pool rings held at the last poll (of 32), the rings held
+for an endpoint the controller may still have enabled - stale, or pinned
+after a command whose completion was never seen - and those a later proof
+released, and how interface switches ended: the old pipes put back after a
+refused command, the one-setting STALLs carried out by clearing the
+endpoints' halts, the rollbacks after a STALL and those that reopened the
+old setting. A block shorter than 181 words is a driver from before it,
+and the section is not printed.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

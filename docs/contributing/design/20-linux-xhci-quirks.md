@@ -913,6 +913,87 @@ that would have been served before - not the per-device cap, which a
 transaction's reservation does not consume (section 5.2). That is the
 bound working, and it is counted.
 
+### 5.6 As built (2026-10-14)
+
+Section 5 is built as written, with the owner's amendment of 2026-10-14
+(section 5.3, step 4). Where each part lives:
+
+- **The decisions are pure.** `src/xhci_own.c` / `xhci_own.h`:
+  `XhciOwnSelectStep` is section 5.3's table - each phase (step 3's
+  Configure Endpoint, SET_INTERFACE, the one-setting clears, the rollback,
+  its clears) and each event (a command's four outcomes, SET_INTERFACE's
+  three, the clears' two) to the actions taken on the old and new pipes
+  and what is issued next; `XhciOwnDropStep` the drop-only command of a
+  function's unconfigure and release; `XhciOwnCommandEvent` a completion
+  code as an outcome; `XhciOwnSingleSetting` section 5.3's walk for one
+  alternate setting. A step the phase does not wait for ends the select
+  holding everything, as an unknown outcome does. Host suite `test_own`:
+  the table cell by cell, then every path through a switch (540 at the
+  time of writing: six starting shapes, every combination of the three
+  flags, every event, each unknown outcome in both worlds - the
+  controller applied it or did not) driven over a modelled controller and
+  ring pool with `hcd_cfg.c`'s executor mirrored, checking after each step
+  that no ring is free while a context may name it, that no two contexts
+  name one ring, that every held ring has exactly one holder, that an
+  enabled endpoint with no published pipe is marked stale, and that the
+  enabled contexts never pass the rings held; and after each end that a
+  later proof and the slot's going return every ring.
+- **The reservation.** `XhciPoolAcquireReserved` (`xhci_mem.c`): the cap
+  counts the rings held minus the switch's reservation, the fairness test
+  every ring held; `XhciPoolAcquire` is it with no reservation. Host
+  vectors: `test_membuf`, `test_pool_reserved`.
+- **The executor.** `hcd_cfg.c`. A held allocation is a closed pipe on
+  the device's `Retained` list (`HCD_PIPE.RetainNext`, `Pinned`), its ring
+  still the device's in the pool and its DCI marked stale
+  (`hcdCfgRetain`); a proof releases it (`hcdCfgRetainedReclaim`): a
+  successful Configure Endpoint dropping its DCI (`hcdCfgCommand`, beside
+  the stream blocks' reclaim), the deconfigure finding every endpoint
+  Disabled or the slot not Configured, and RESET_PORT's Reset Device; the
+  slot's going frees the pinned ones too (`HcdCfgDeviceGone`). A switch
+  is `HCD_CFG_SWITCH`: `hcdCfgSwitchDetach` (step 1: the reusable abort,
+  then unpublished, drained and waited out, kept),
+  `hcdCfgSwitchReserved`, `hcdCfgSwitchConfigure` (step 3),
+  `hcdCfgSwitchRollback`, `hcdCfgSwitchClears`, `hcdCfgSwitchApply` (the
+  actions) and `hcdCfgSwitchRun` (the steps to the end). SELECT_INTERFACE
+  (`hcdCfgSelectInterface`) and a function's select
+  (`hcdCfgSelectFunction`, no rollback) run through them; a function's
+  unconfigure and a removed function's release through `XhciOwnDropStep`.
+- **The audit of section 5.4.** Every path that freed a pipe:
+  `hcdCfgCloseMask` (and `hcdCfgCloseAll`) now runs only after a proof -
+  the deconfigure's successful command or its all-Disabled reading, and
+  the slot's going; the select configuration's refused command frees its
+  new pipes (never installed) and an unknown one now pins them; the hub's
+  status pipe likewise (`HcdCfgHubOpen`). No other caller of
+  `hcdCfgPipeFree` returns a ring before its proof.
+
+Taken at implementation, inside the record's rules:
+
+- A function's unconfigure or release whose drop is refused leaves the
+  old pipes held stale, not put back: the client asked for them closed,
+  and that is today's outcome with the rings held.
+- `hcdCfgSetInterface`, the function select's own one-setting fallback,
+  reads one setting through `XhciOwnSingleSetting` on `dev->Selected` (the
+  same bytes as the `dev->Config` it read before, for a split device), so
+  a SELECT_INTERFACE and a function decide it by one rule, and its clears
+  go through `hcdCfgDeviceClearHalt`, as the switch's do.
+- The client's pipe entries are written only on success; on a failure
+  each entry the switch had made is left naming no pipe.
+
+What the matrix reads (`xhci_counters.h`, appended at word 173):
+`PoolRingsInUse` (the pool rings held, copied at each poll from the
+pool's own array), `RingsRetained`, `RingsPinned`, `RingsReleased`,
+`SelectsReattached`, `SelectStallSuccesses`, `SelectRollbacks`,
+`SelectRollbacksReopened`; `XHCISNAP` prints them as "endpoint rings". In
+the log, every flavour: `cfg.ring.held` (slot, DCI, pinned, pool index),
+`cfg.select.end` (slot, interface, the answer, the last event) for every
+switch that did not end in a plain success, `cfg.select.rollback` (slot,
+code). The qemu flavour's injection layer gained two faults for the legs
+(`build-and-test.md`, `XhciQemuInject`): `18`, the next
+SELECT_INTERFACE's SET_INTERFACE answered STALLed (`arg` 0) or not
+established (1), never sent; `19`, the next switch's Configure Endpoint
+answered refused (Resource Error) at step 3 (`arg` 0) or at the rollback
+(1), or with no completion and the controller reset requested (2, 3).
+
 ## 6. What is common to every quirk taken
 
 ### 6.1 The registry values
@@ -1066,8 +1147,16 @@ value 0 changes nothing; host tests carry the matching, the pure decisions
 and section 5's invariant. Section 5's failure paths are driven on QEMU
 where they can be staged - a SET_INTERFACE a device refuses (the
 26-V.2 C-Media case is one), and a refused Configure Endpoint through the
-qemu flavour's injection layer if it can be taught one (`hcd_inj.c`; what
-it injects today is read at implementation) - the leg for the fix. Every value is documented with the controllers it was
+qemu flavour's injection layer, which was taught both for it (section
+5.6: faults `18` and `19`) - the leg for the fix: `usb-audio`'s
+streaming interface switched between alternates 0 and 1 many times with
+`PoolRingsInUse` back where it started after each; `18` with `arg` 0 on
+that switch (two settings: the rollback, `SelectRollbacks` and
+`SelectRollbacksReopened` up, the audio device still playing after its
+class driver selects again); `19` with `arg` 0 (the old pipes put back,
+`SelectsReattached` up) and 1 after an `18` (`RingsRetained` up, then
+`RingsReleased` at the next select); `19` with `arg` 2 (the recovery,
+`RingsPinned` up, every device back and `PoolRingsInUse` as before). Every value is documented with the controllers it was
 read on, and for nearly all of them that is none: the project holds 9D2F
 (E460, Q12), 1E31 (B490, Q4, and section 5's bound) and 9CB1 (E7250, Q4
 and, at 1, Q5), and a field user holds a VL805 (Q3, Q13). Each such machine
@@ -1236,6 +1325,18 @@ Round 4 ran on revision 5 (`8046e1c7`) and found no P1.
 | P3-3: the cost is fairness refusal too | section 5.5 |
 | P3-4: an acknowledged flush is not an emitted record | section 6.4 |
 | P3-5: the survey row's old predicate | section 3.2 (`XHCI_EP_LIMIT_QUIRK` row) |
+
+The owner's amendment of 2026-10-14 (revision 7, section 5.3's
+one-setting STALL) was reviewed on its own before any code, in two
+rounds; round 2 found no P1 or P2.
+
+| Finding | Answer |
+|---|---|
+| Round 1 P2: the request's status on each exit after a failed clear not stated | section 5.3, "What the request answers" |
+| Round 1 P3: the comment above `hcdCfgSelectInterface` still said every failure leaves no pipe | the comment rewritten for the switch as a whole |
+| Round 1 P3: the same-setting sequence reset cited to the Halt sentence | USB 3.2 9.1.1.5 cited beside 9.4.5 |
+| Round 2 P3: `BUFFER_TOO_SMALL` is not turned into `DEVICE_GONE` | section 5.3, the `DEVICE_GONE` row |
+| Round 2 P3: the comment's streams exclusion read as covering a one-setting success | the comment limits it to the rollback |
 
 ## 12. Provenance of this record
 

@@ -456,6 +456,8 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     KeReleaseSpinLock(&hc->InjLock, oldIrql);
     hcdInjIrqArm(hc, 0, 0);
     hc->InjClearHalt = 0;
+    hc->InjSetInterface = 0;
+    hc->InjSelectConfig = 0;
 }
 
 /*
@@ -478,6 +480,63 @@ ULONG HcdInjClearHalt(PHCD_CONTROLLER hc, ULONG slot, ULONG dci,
                    (slot << 24) | (dci << 16) | *outcome);
     XhciLogNote(&hc->Hc, "qemu.inj.clearhalt",
                 (slot << 24) | (dci << 16) | *outcome);
+    return 1;
+}
+
+/*
+ * Task 38.10: fault 18. The next SET_INTERFACE a SELECT_INTERFACE sends
+ * (hcd_cfg.c, hcdCfgSetInterfaceOne) is answered and never sent, once: a
+ * STALL, or not established - the device left at its setting either way,
+ * which is what a refused request leaves. QEMU's devices answer every
+ * SET_INTERFACE their descriptors allow, so this is the only way a guest
+ * reaches design record 20 section 5.3's step 4 branches. Returns 1 with
+ * *stalled when it answered. IRQL: PASSIVE_LEVEL, the thread.
+ */
+ULONG HcdInjSetInterface(PHCD_CONTROLLER hc, ULONG slot, PULONG stalled)
+{
+    if (hc->InjSetInterface == 0) {
+        return 0;
+    }
+    *stalled = (hc->InjSetInterface == 1) ? 1UL : 0UL;
+    hc->InjSetInterface = 0;
+    XHCI_DBG_VALUE("qemu inject: SET_INTERFACE answered, slot/stalled",
+                   (slot << 24) | *stalled);
+    XhciLogNote(&hc->Hc, "qemu.inj.setif", (slot << 24) | *stalled);
+    return 1;
+}
+
+/*
+ * Task 38.10: fault 19. The next Configure Endpoint of an interface switch
+ * - step 3's (`rollback` 0; a function's unconfigure or release shares
+ * it) or the rollback's (1), as armed - is answered
+ * and never issued, once: refused with Resource Error, so the controller
+ * changed nothing, as xHCI 4.6.6 has a refusal leave it; or with no
+ * completion (code 0) and the controller reset requested, as hcdCommand
+ * answers a command that never completes - the HCRST then the proof that
+ * releases what the switch held. Returns 1 with *code when it answered.
+ * IRQL: PASSIVE_LEVEL, the thread.
+ */
+ULONG HcdInjSelectConfigure(PHCD_CONTROLLER hc, ULONG rollback, PULONG code)
+{
+    ULONG arg;
+
+    if (hc->InjSelectConfig == 0) {
+        return 0;
+    }
+    arg = hc->InjSelectConfig - 1;
+    if ((arg & 1UL) != (rollback ? 1UL : 0UL)) {
+        return 0;
+    }
+    hc->InjSelectConfig = 0;
+    if (arg >= 2) {
+        *code = 0;
+        HcdSvcRequestReset(&hc->Hc);
+    } else {
+        *code = XHCI_CC_RESOURCE_ERROR;
+    }
+    XHCI_DBG_VALUE("qemu inject: Configure Endpoint answered, rollback/code",
+                   (rollback << 8) | *code);
+    XhciLogNote(&hc->Hc, "qemu.inj.selcfg", (rollback << 8) | *code);
     return 1;
 }
 
@@ -2024,6 +2083,22 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
             hc->InjClearHalt = (arg == 0   ? HCD_CTL_STALLED
                                 : arg == 1 ? HCD_CTL_FAILED
                                            : HCD_CTL_NOT_SENT) + 1;
+        } else {
+            done = 0;
+        }
+        break;
+    case XHCI_INJ_SET_INTERFACE:
+        /* arg 0 STALL, 1 not established. */
+        if (arg <= 1) {
+            hc->InjSetInterface = arg + 1;
+        } else {
+            done = 0;
+        }
+        break;
+    case XHCI_INJ_SELECT_CONFIG:
+        /* arg 0/1 refused at step 3 / the rollback, 2/3 no completion. */
+        if (arg <= 3) {
+            hc->InjSelectConfig = arg + 1;
         } else {
             done = 0;
         }
