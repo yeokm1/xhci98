@@ -871,11 +871,14 @@ under "Targets and their standing" lists them per system.
   as the device sends it. A name with characters outside plain ASCII was
   not read on any system.
 - **Every device has the USB device interface** (new in `2.3.0.0`; GitHub
-  issue 17). Each device and each external hub registers
-  `GUID_DEVINTERFACE_USB_DEVICE`, as under Microsoft's own hub driver, so
-  a program that finds USB devices through it (`SetupDiGetClassDevs` with
-  that interface, or `RegisterDeviceNotification` for its arrivals and
-  removals) finds them. The root hub has none, as under Microsoft's stack.
+  issue 17). Each device registers `GUID_DEVINTERFACE_USB_DEVICE`, as under
+  Microsoft's own hub driver, so a program that finds USB devices through
+  it (`SetupDiGetClassDevs` with that interface, or
+  `RegisterDeviceNotification` for its arrivals and removals) finds them.
+  The root hub has none, as under Microsoft's stack. From `2.4.0.0` an
+  external hub has none either, only the hub interface, as under
+  Microsoft's stack on Windows 2000, XP and 7 (roadmap task 38.8; GitHub
+  issue 17, SweetLow); `2.3.0.0` and `2.3.1.0` gave an external hub both.
   A composite device has it on its own entry (below), not on its parts, as
   under Microsoft's stack.
 - **A composite device has an entry of its own** (new in `2.3.0.0`; GitHub

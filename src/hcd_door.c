@@ -595,18 +595,21 @@ VOID HcdDoorHubStop(PHCD_HUB_FDO fdo)
 
 /*
  * GUID_DEVINTERFACE_USB_DEVICE on a device PDO (task 36.17; design record
- * 13 section 8.10): every device PDO and every external hub's PDO, as
- * usbhub registers it, and of a composite the bus splits its composite
- * parent's PDO (task 36.43, section 10.12) - the device's own devnode, the
- * group's first PDO, the one the door answers the connection's driver key
- * from (hcdDoorConnection) - and no function, as usbhub registers it on the
- * composite device's PDO. The parent's state is the interface's.
+ * 13 section 8.10): every device PDO that is not a hub, as usbhub registers
+ * it, and of a composite the bus splits its composite parent's PDO (task
+ * 36.43, section 10.12) - the device's own devnode, the group's first PDO,
+ * the one the door answers the connection's driver key from
+ * (hcdDoorConnection) - and no function, as usbhub registers it on the
+ * composite device's PDO. The parent's state is the interface's. No
+ * external hub's PDO, a hub refused as too deep included: the stock stack
+ * gives a hub GUID_DEVINTERFACE_USB_HUB alone (task 38.8, read on 2000, XP
+ * and 7), which the hub FDO registers (HcdDoorHubStart).
  * Registered once, at the first successful start, and enabled at every
  * one; best effort, as the hub interface is. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdDoorDeviceStart(PHCD_DEVICE_PDO pdo)
 {
-    if (pdo->Function) {
+    if (pdo->Function || pdo->Hub) {
         return;
     }
     hcdInterfaceOn(pdo->Common.Self, &hcdGuidUsbDevice, &pdo->UsbInterface,

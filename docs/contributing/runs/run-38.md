@@ -139,3 +139,64 @@ The cut at 38.final meets the same refusal after any fresh checkout.
 | `XHCIQUAL` under MS-DOS | Windows 98 SE boot floppy (MS-DOS 7.1), `C:\TOOLS\XHCIQUAL\XHCIQUAL`: quick scan, QEMU's `1B36:000D` "LOOKS QUALIFIED", probe safety PASS |
 | Windows 98 SE | From `TOOLS\XHCISNAP`: `XHCISNAP` and `-probe` (driver declined, the route works); from `TOOLS\PORTSW`: `portsw-on.bat` set 1 and `portsw-off.bat` 0, "RESTART WINDOWS" once each; run from another directory, the not-found message names `TOOLS\PORTSW` |
 | Windows XP SP3 | The cut's `release-x86` installed by Have Disk; from `TOOLS\XHCISNAP` the same two screens; from `TOOLS\PORTSW` on 1, off 0, `XhciIntelPortSwitch` read back 0. On NT the batch files change to their own directory first, so the not-found message is 9x only |
+
+## 38.8 - The USB device interface off external hubs
+
+**Verdict: open** (2026-10-13). The reading is taken and the change is made
+(`hcd_door.c`, `HcdDoorDeviceStart` refuses a PDO with `Hub` set; design
+record 13 section 8.10 corrected; the release notes' entry). The legs on
+`xhci98` are owed.
+
+**The reading** (the checkpoint's: 2000, XP and 7 before the change). Stock
+Microsoft stack, no `xhci98` bound. Development host A, QEMU 11.1.0, three
+guests at once (5 of the 8 logical processors), kit `out\p38-tools\kit`, tag
+`i38`, each on a fresh overlay: `w2kc` (Windows 2000 SP4 that never had
+`xhci98`), `xp` (XP SP3) and `w7x86` (7 SP1 x86). Each with
+`piix3-usb-uhci`, QEMU's hub (`0409:55AA`, "NEC USB Hub", `usbhub`) on
+root port 1 with a keyboard behind it (port 1.1), and a mouse on root port 2,
+all set at boot; the launch's `qemu-xhci` stayed driverless (its wizard
+cancelled). Every driver came from the inbox set, no prompt for files.
+Read with `regedit /e` (2000) or `reg query /s` (XP, 7) of the two
+`DeviceClasses` keys and `Enum\USB`, sent over COM1, the byte counts
+checked against the guest's own; raw files
+`out\p38-tools\legs\<guest>\i38-d1` (`{A5DCBF10-...}`), `-d2`
+(`{F18A0E88-...}`), `-d3` (`Enum\USB`).
+
+| Guest | `GUID_DEVINTERFACE_USB_DEVICE` | `GUID_DEVINTERFACE_USB_HUB` |
+|---|---|---|
+| Windows 2000 SP4 | the keyboard (`...-1.1`), the mouse (`...-2`) | the root hub, the external hub (`...-1`) |
+| Windows XP SP3 | the keyboard, the mouse | the root hub, the external hub |
+| Windows 7 SP1 x86 | the keyboard, the mouse (linked; two stale entries of the base image's, neither linked nor enumerated) | the root hub, the external hub (linked; stale root hubs and hubs of the base image's, unlinked) |
+
+`GUID_DEVINTERFACE_USB_HOST_CONTROLLER` (`{3ABF6F2D-...}`, the third of
+SweetLow's list, added to the reading by the owner the same day), read on
+the same overlays at a second boot (`i38-d5`): on XP and 7 on the UHCI's PCI
+devnode alone, linked (7 also lists eight stale ICH7 controllers of the base
+image's history, unlinked); on Windows 2000 **the key does not exist** - its
+whole `DeviceClasses` exported (`i38-dc`, 20 interface classes) holds no
+`{3ABF6F2D-...}` - so 2000's stock stack registers no host controller
+interface at all. The qemu-xhci, driverless, carries none on any. `xhci98`
+registers it on the controller on every target, 2000 included; kept
+(owner, 2026-10-13: nothing on 2000 looks for it), recorded in record 13
+section 8.10.
+
+No devnode carries both. Windows 11 on development host A (`usbhub3`), read
+the same way, agrees: its four external hubs and its root hub carry the hub
+interface alone. On XP and 7 the hub's and the keyboard's `Enum` `Control`
+keys had no `ActiveService` value while both worked; not followed, nothing in
+38.8 depends on it.
+
+**The change.** The hub FDO already registers the hub interface on the hub
+PDO (`HcdDoorHubStart`, task 33.4); the device interface now stays off a
+hub's PDO, a hub refused as too deep included (it has a hub object, so
+`Hub` is set). A hub devnode `2.3.0.0` or `2.3.1.0` registered keeps its
+`DeviceClasses` entry, never enabled again. No host test: the rule is one
+condition inside a kernel routine on a flag set at the PDO's creation.
+
+**Owed: the legs.** The interface enumerated with `xhci98` on 2000, XP,
+XP x64 and 7 x64, a hub with a device behind it: the devices listed, the
+hubs not; the hub interface on the root hub and each hub alone; the host
+controller interface on the controller alone; `usbview` and Device Manager
+unchanged. QEMU's hub is a Full
+Speed hub and QEMU has no USB 3 hub, so the USB 2.0 and USB 3 hubs the task
+names need real hardware.

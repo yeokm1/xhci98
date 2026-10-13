@@ -2698,9 +2698,29 @@ creates its PDOs.
 
 **The USB device interface (task 36.17, 2026-10-09; GitHub issue 17 item
 3).** `GUID_DEVINTERFACE_USB_DEVICE` (`{A5DCBF10-6530-11D2-901F-00C04FB951ED}`,
-WDK 7.1 `usbiodef.h`) is registered on every device PDO and every external
-hub's PDO, as usbhub registers it, and not on the root hub, on which usbport
+WDK 7.1 `usbiodef.h`) is registered on every device PDO that is not a hub,
+as usbhub registers it, and not on the root hub, on which usbport
 registers none (`hcd_door.c`, `HcdDoorDeviceStart` and `HcdDoorDeviceStop`).
+**Corrected 2026-10-13 by task 38.8 (GitHub issue 17 item 3, reopened by
+SweetLow): until then an external hub's PDO carried it too, said to be "as
+usbhub registers it" with no reading behind it.** The reading
+(`runs/run-38.md`, "38.8"), on Windows 2000 SP4, XP and 7 x86 with the
+stock stack (UHCI, QEMU's hub on a root port with a keyboard behind it, a
+mouse on another root port): `GUID_DEVINTERFACE_USB_DEVICE` on the
+keyboard and the mouse only; `GUID_DEVINTERFACE_USB_HUB` on the root hub
+and the external hub only; no devnode with both. The third interface of
+the same list, `GUID_DEVINTERFACE_USB_HOST_CONTROLLER`, read with it: on XP
+and 7 on the controller's devnode alone, as the bus registers it
+(`HcdDoorControllerStart`); on 2000 on none, the stock stack registering
+no such interface there. The bus still registers it on 2000 (**decided,
+owner, 2026-10-13**): nothing on 2000 looks for it, and the `HCD<n>` name
+stays the route there. Windows 11's stack,
+read on development host A, agrees. So an external hub's PDO carries
+the hub interface alone, which its FDO registers (`HcdDoorHubStart`), a
+hub refused as too deep included (`HcdDoorDeviceStart` refuses every PDO
+with `Hub` set). A hub devnode a release before `2.4.0.0` registered keeps
+its `DeviceClasses` entry, never enabled again: an interface not linked,
+as Windows leaves for any device gone.
 **Superseded 2026-10-10 by task 36.43 (10.12): the interface is on the
 composite parent's PDO, the device's own devnode, and on no function; the
 rest of this paragraph is the rule it replaced.** A composite the bus
