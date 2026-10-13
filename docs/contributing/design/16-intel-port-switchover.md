@@ -53,7 +53,7 @@ directory at the version root beside `xhciqual\` and `xhcisnap\` (section
 only the batch files' words do. Its decision is section 11's thirteenth,
 its documents section 16.
 
-Revision 7, 2026-10-13, for roadmap-hcd task 38.10 (Phase 38, release
+Revision 7, 2026-10-13, for roadmap-hcd task 38.9 (Phase 38, release
 `2.4.0.0`): the release's tools move into one `tools\` directory at the
 version root, so `portsw\` becomes `tools\portsw\`, beside
 `tools\xhciqual\` and `tools\xhcisnap\`, and the version root holds only
@@ -749,7 +749,7 @@ Revision 6 (owner, 2026-10-12, roadmap-hcd task 37.5):
     guest leg copies them from `src\` or from a cut's `portsw\`). A
     published release is not rewritten: `2.3.0.0` keeps its four copies.
 
-Revision 7 (owner, 2026-10-13, roadmap-hcd task 38.10):
+Revision 7 (owner, 2026-10-13, roadmap-hcd task 38.9):
 
 14. The release's tools sit in one `tools\` directory at the version root:
     the script and its two batch files in `tools\portsw\`, beside
@@ -844,7 +844,7 @@ row 7; `source-files.md`.
   and the "not found" message sends the user to the download's `PORTSW\`
   directory rather than "the package directory".
 
-## 17. What changes in the documents (revision 7, task 38.10)
+## 17. What changes in the documents (revision 7, task 38.9)
 
 - The README's download table, the qualifier's folder and the switchover
   section: `tools\portsw\`, `tools\xhciqual\` and `tools\xhcisnap\`, with

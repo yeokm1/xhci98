@@ -242,7 +242,7 @@ try {
     # --- portsw-on.bat and portsw-off.bat (roadmap-hcd task 36.56) ----------
     #
     # Published beside portsw.vbs, in portsw\ since task 37.5 and in
-    # tools\portsw\ since task 38.10. Each file is
+    # tools\portsw\ since task 38.9. Each file is
     # run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere
     # (design record 16 section 5a), so the split is pinned: COMMAND.COM must
     # reach no line it cannot parse, and the one cmd.exe line must sit where
@@ -322,7 +322,7 @@ try {
         foreach ($needle in @('Vista and 7: right-click it', 'choose Run as administrator')) {
             if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
         }
-        # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.7).
+        # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.6).
         if ($Text.Contains('echo RESTART WINDOWS')) { $faults += "it echoes 'RESTART WINDOWS', which portsw.vbs already prints" }
         return $faults
     }
@@ -1284,7 +1284,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $pubRoot "LICENSE") -Force
         # The tools under tools\, as every cut publishes them since roadmap-hcd
-        # task 38.10: the tree is the current version's, which is 2.4.0.0 or
+        # task 38.9: the tree is the current version's, which is 2.4.0.0 or
         # later from the cut on, and the upload assembly refuses a tree of that
         # version without tools\ (Assert-ToolsLayout). A tree that has tools\
         # is held to it at any version, so this fixture passes before the
@@ -1299,7 +1299,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $repo "xhciqual\QUALREP.BAT") `
                   -Destination (Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT") -Force
         # The port switchover's scripts in tools\portsw\, as every cut publishes
-        # them since roadmap-hcd tasks 37.5 and 38.10: the upload assembly
+        # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
         # refuses a tree of this version without them (Assert-PortSwitchLayout).
         Ensure-Directory (Join-Path $pubRoot "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
@@ -1605,7 +1605,7 @@ try {
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
         # The port switchover's scripts in tools\portsw\, as every cut publishes
-        # them since roadmap-hcd tasks 37.5 and 38.10: the upload assembly
+        # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
         # refuses a tree of this version without them (Assert-PortSwitchLayout,
         # Assert-ToolsLayout).
         Ensure-Directory (Join-Path $pubRoot4 "tools\portsw")
@@ -2487,7 +2487,7 @@ try {
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $newPubRoot "LICENSE") -Force
         # The port switchover's scripts in tools\portsw\, as every cut publishes
-        # them since roadmap-hcd tasks 37.5 and 38.10: the upload assembly
+        # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
         # refuses a tree of this version without them (Assert-PortSwitchLayout,
         # Assert-ToolsLayout).
         Ensure-Directory (Join-Path $newPubRoot "tools\portsw")
@@ -2618,23 +2618,23 @@ try {
         @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot';
            Why  = "a cut no longer publishes the port switchover's scripts once, from src\, into portsw\ at the version root (roadmap-hcd task 37.5)" },
         @{ Find = 'Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")';
-           Why  = "a cut no longer holds its staged tree to one tools\portsw\ and no copy in a flavour directory before the publish swap (tasks 37.5 and 38.10)" },
+           Why  = "a cut no longer holds its staged tree to one tools\portsw\ and no copy in a flavour directory before the publish swap (tasks 37.5 and 38.9)" },
         @{ Find = '-What "the upload set ''$uploadRoot''" -PublishedVersion $pswVersion';
-           Why  = "the upload assembly no longer holds the tree to the port switchover layout its version was published with (tasks 37.5 and 38.10)" },
+           Why  = "the upload assembly no longer holds the tree to the port switchover layout its version was published with (tasks 37.5 and 38.9)" },
         @{ Find = '$pswVersion = if (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName)) { "" } else { $Version }';
-           Why  = "the upload assembly no longer holds a tree with tools\ to the cut's port switchover layout, so a legacy layout beside tools\ would pass (task 38.10)" },
-        # The tools under tools\ (roadmap-hcd task 38.10): each staged through
+           Why  = "the upload assembly no longer holds a tree with tools\ to the cut's port switchover layout, so a legacy layout beside tools\ would pass (task 38.9)" },
+        # The tools under tools\ (roadmap-hcd task 38.9): each staged through
         # Get-ToolDirName, and the layout held at the cut and at the upload.
         @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")';
-           Why  = "a cut no longer publishes the port switchover's scripts into tools\portsw\ (task 38.10)" },
+           Why  = "a cut no longer publishes the port switchover's scripts into tools\portsw\ (task 38.9)" },
         @{ Find = '$qualDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciqual")';
-           Why  = "a cut no longer stages the DOS qualifier into tools\xhciqual\ (task 38.10)" },
+           Why  = "a cut no longer stages the DOS qualifier into tools\xhciqual\ (task 38.9)" },
         @{ Find = '$snapDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcisnap")';
-           Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.10)" },
+           Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
-           Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.10)" },
+           Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
         @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover and the silent install (tasks 38.10 and 38.2)" },
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover and the silent install (tasks 38.9 and 38.2)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
@@ -2646,9 +2646,9 @@ try {
         @{ Find = 'Assert-SilentInstallContent -Root $uploadRoot -Map $silentPublishable -What "the upload set ''$uploadRoot''"';
            Why  = "the upload assembly no longer holds the silent install's files it archives to the checkers (task 38.2)" },
         @{ Find = 'Assert-ToolsLayout -Root $uploadRoot -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
-           Why  = "the upload assembly no longer holds the tree to tools\ at the layout its version was published with (task 38.10)" },
+           Why  = "the upload assembly no longer holds the tree to tools\ at the layout its version was published with (task 38.9)" },
         @{ Find = '-DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot)';
-           Why  = "the upload assembly no longer looks for the port switchover's scripts where the tree's own layout puts them (task 38.10)" }
+           Why  = "the upload assembly no longer looks for the port switchover's scripts where the tree's own layout puts them (task 38.9)" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
@@ -2657,24 +2657,24 @@ try {
     Assert-True (-not ($releaserText -match '\$pswPublishable\s*\+|\+\s*\$pswPublishable')) `
         "make-release.ps1 adds the port switchover's scripts to a flavour directory's or a package's file set again; since roadmap-hcd task 37.5 they are published in portsw\ alone."
     # No tool is staged at the version root by a literal name again (task
-    # 38.10): every staging goes through Get-ToolDirName.
+    # 38.9): every staging goes through Get-ToolDirName.
     foreach ($bad in @('Join-Path $destRoot "xhciqual"', 'Join-Path $destRoot "xhcisnap"', 'Join-Path $destRoot "portsw"', '$pswDirName')) {
         Assert-True (-not $releaserText.Contains($bad)) `
-            "make-release.ps1 contains '$bad' again, which stages a tool at the version root; since roadmap-hcd task 38.10 the tools are published under tools\."
+            "make-release.ps1 contains '$bad' again, which stages a tool at the version root; since roadmap-hcd task 38.9 the tools are published under tools\."
     }
     # And the tools' layout is held at the cut before the publish swap, beside
     # the port switchover's check, and on every cut rather than in the
-    # -SkipUploadSet branch (task 38.10).
+    # -SkipUploadSet branch (task 38.9).
     $tlAt = $releaserText.IndexOf('Assert-ToolsLayout -Root $destRoot')
     $tlPswAt = $releaserText.IndexOf('Assert-PortSwitchLayout -Root $destRoot')
     $tlSwapAt = $releaserText.IndexOf('Move-Item -LiteralPath $destRoot -Destination $finalRoot')
     $tlAsideAt = $releaserText.IndexOf('Move-Item -LiteralPath $finalRoot -Destination $asideRoot')
-    Assert-True ($tlAt -ge 0) "make-release.ps1 no longer holds the staged release to the tools\ layout (roadmap-hcd task 38.10)."
+    Assert-True ($tlAt -ge 0) "make-release.ps1 no longer holds the staged release to the tools\ layout (roadmap-hcd task 38.9)."
     if ($tlAt -ge 0) {
         Assert-True ($tlSwapAt -gt $tlAt -and $tlAsideAt -gt $tlAt) `
-            "make-release.ps1 holds the staged release to the tools\ layout after the -Force aside or the publish swap, so a refusal would leave releases\ changed (roadmap-hcd task 38.10)."
+            "make-release.ps1 holds the staged release to the tools\ layout after the -Force aside or the publish swap, so a refusal would leave releases\ changed (roadmap-hcd task 38.9)."
         Assert-True ($tlPswAt -gt $tlAt -and ($tlPswAt - $tlAt) -lt 400) `
-            "make-release.ps1's tools\ layout check is no longer beside the port switchover's at the publish step (roadmap-hcd task 38.10)."
+            "make-release.ps1's tools\ layout check is no longer beside the port switchover's at the publish step (roadmap-hcd task 38.9)."
         $tlLine = ($releaserText.Substring(0, $tlAt) -split "`n")[-1]
         Assert-True ($tlLine.TrimEnd("`r") -eq '    ') "make-release.ps1's tools\ layout check at the cut is not at the publish step's own level."
     }
@@ -2689,7 +2689,7 @@ try {
     # all - which -PublishedVersion accepts only in the layout that version
     # was published with: none before 2.3.0.0, one set per flavour directory
     # in 2.3.0.0, never after it. The cut fixture is a current cut's, with the
-    # tools under tools\ (roadmap-hcd task 38.10), so it names the directory
+    # tools under tools\ (roadmap-hcd task 38.9), so it names the directory
     # "tools\portsw" as Get-ToolDirName does at the cut; the published layouts
     # name "portsw" at the version root, where every version before 2.4.0.0
     # has it.
@@ -2807,7 +2807,7 @@ try {
     }
 
     #
-    # **The tools\ layout itself, EXECUTED** (roadmap-hcd task 38.10): the
+    # **The tools\ layout itself, EXECUTED** (roadmap-hcd task 38.9): the
     # two functions and the three values they read, loaded from
     # make-release.ps1's text as the port switchover's are above, and driven
     # with fixture trees. Get-ToolDirName answers tools\<name> for the cut and
@@ -2822,12 +2822,12 @@ try {
     $tlTexts = @()
     foreach ($varName in @("toolsDirName", "toolsLayoutVersion", "toolNames")) {
         $m = [regex]::Match($releaserText, '(?m)^\$' + $varName + ' = [^\r\n]+')
-        Assert-True $m.Success "make-release.ps1 no longer sets `$$varName at its top level (roadmap-hcd task 38.10)."
+        Assert-True $m.Success "make-release.ps1 no longer sets `$$varName at its top level (roadmap-hcd task 38.9)."
         if ($m.Success) { $tlTexts += $m.Value }
     }
     foreach ($fnName in @("Get-ToolDirName", "Assert-ToolsLayout")) {
         $fnAt = $releaserText.IndexOf("function $fnName")
-        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.10)."
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.9)."
         if ($fnAt -ge 0) { $tlTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
     }
     if ($tlTexts.Count -eq 5) {
@@ -2908,7 +2908,7 @@ try {
         }
 
         # **A tree with tools\ is held to the cut's port switchover layout**,
-        # whatever its version (Codex review of task 38.10): the upload
+        # whatever its version (Codex review of task 38.9): the upload
         # assembly's own $pswVersion line, taken from make-release.ps1's text
         # and evaluated here, then Assert-PortSwitchLayout called as the
         # assembly calls it. Without it, a tree with tools\ but no
@@ -2916,7 +2916,7 @@ try {
         # before, and a copy in every flavour directory or none at all would
         # pass. The trees without tools\ keep their legacy layouts.
         $pvMatch = [regex]::Match($releaserText, '(?m)^ *(\$pswVersion = [^\r\n]+)')
-        Assert-True $pvMatch.Success "make-release.ps1's upload assembly no longer derives `$pswVersion from the tree's tools\ (roadmap-hcd task 38.10)."
+        Assert-True $pvMatch.Success "make-release.ps1's upload assembly no longer derives `$pswVersion from the tree's tools\ (roadmap-hcd task 38.9)."
         if ($pvMatch.Success -and $pswFns.Count -eq 2) {
             $pswNames = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
             $tlMixed = Join-Path $tlRoot "tools-legacy-2300"
@@ -2932,7 +2932,7 @@ try {
                     }
                 }
             }
-            # And a tree in task 38.10's layout, accepted at any version.
+            # And a tree in task 38.9's layout, accepted at any version.
             $tlGood = Join-Path $tlRoot "tools-good"
             Copy-Item -LiteralPath $tlCut -Destination $tlGood -Recurse
             Remove-Item -LiteralPath (Join-Path $tlGood "tools\portsw\readme.txt")

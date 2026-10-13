@@ -43,7 +43,7 @@ roadmap-hcd task 37.5 so does **`portsw\`**: the Intel port switchover's
 rather than into every flavour directory, since they are the same for every
 architecture and flavour and the setup engine never reads them. It carries
 no `readme.txt` of its own: the top-level readme's section 9 explains them.
-Since roadmap-hcd task 38.10 the three sit under **`tools\`** in the version
+Since roadmap-hcd task 38.9 the three sit under **`tools\`** in the version
 directory (`tools\xhciqual\`, `tools\xhcisnap\`, `tools\portsw\`), so the
 version root holds only the flavour directories, the readme and the licence;
 a version published before 2.4.0.0 keeps its tools at its root (portsw\ only
@@ -599,7 +599,7 @@ $oemPublishable = @("txtsetup.oem")
 # Not INF-declared files: text files the user runs, the same for every
 # architecture and flavour, which the setup engine never reads. Since task
 # 37.5 a cut publishes them once, from src\, into portsw\ beside xhciqual\
-# and xhcisnap\ (all three under tools\ since task 38.10), and into no
+# and xhcisnap\ (all three under tools\ since task 38.9), and into no
 # flavour directory; the
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
@@ -608,7 +608,7 @@ $oemPublishable = @("txtsetup.oem")
 # (Assert-PortSwitchLayout -PublishedVersion).
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 
-# The release's tools in tools\ (roadmap-hcd task 38.10): a cut publishes
+# The release's tools in tools\ (roadmap-hcd task 38.9): a cut publishes
 # xhciqual\, xhcisnap\ and portsw\ under <version>\tools\, so the version
 # root holds only the flavour directories, the readme and the licence. The
 # first version so published is 2.4.0.0; every one before it has them at the
@@ -641,7 +641,7 @@ function Get-ToolDirName {
 }
 
 function Assert-ToolsLayout {
-    # The layout of task 38.10: tools\ holding nothing but the tools'
+    # The layout of task 38.9: tools\ holding nothing but the tools'
     # directories, and none of them at the version root.
     #
     # Without -PublishedVersion (the cut) that is the only layout accepted.
@@ -667,12 +667,12 @@ function Assert-ToolsLayout {
         }
         $layout = "in $toolsDirName\"
     } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge $toolsLayoutVersion) {
-        throw "$What has no $toolsDirName\ directory, where the release's tools are published (roadmap-hcd task 38.10)."
+        throw "$What has no $toolsDirName\ directory, where the release's tools are published (roadmap-hcd task 38.9)."
     } else {
         $layout = "at the version root, as a version before $toolsLayoutVersion has them"
     }
     if ($faults.Count -gt 0) {
-        throw ("{0} does not carry the release's tools {1} (roadmap-hcd task 38.10):`n  - {2}" -f `
+        throw ("{0} does not carry the release's tools {1} (roadmap-hcd task 38.9):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
     }
 }
@@ -2217,11 +2217,11 @@ $gateOut
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
     # The tools in tools\ where the tree has it, and at the version root only
-    # before 2.4.0.0 (task 38.10). And the port switchover's scripts in their
+    # before 2.4.0.0 (task 38.9). And the port switchover's scripts in their
     # directory alone where the tree has it (task 37.5); a version cut before
     # it is accepted with the layout it was published with.
     Assert-ToolsLayout -Root $uploadRoot -What "the upload set '$uploadRoot'" -PublishedVersion $Version
-    # A tree with tools\ is cut in task 38.10's layout, so it is held to the
+    # A tree with tools\ is cut in task 38.9's layout, so it is held to the
     # cut's port switchover layout too, whatever its version: the legacy
     # layouts -PublishedVersion admits belong to trees without tools\.
     $pswVersion = if (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName)) { "" } else { $Version }
@@ -3320,7 +3320,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
-    # tasks 37.5 and 38.10), from src\ rather than from a package: the packages no longer
+    # tasks 37.5 and 38.9), from src\ rather than from a package: the packages no longer
     # carry them, and the four flavour directories once held four
     # byte-identical copies of files that are neither architecture- nor
     # flavour-specific. No readme.txt of their own: section 9 of the
@@ -5921,8 +5921,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
     # before -Force moves an existing release aside (round 2, finding 4),
     # so a refusal leaves releases\ as it was. The port switchover's scripts
-    # in tools\portsw\ and nowhere else (tasks 37.5 and 38.10), and the tools
-    # in tools\ alone (task 38.10), at the same point and for the same reason.
+    # in tools\portsw\ and nowhere else (tasks 37.5 and 38.9), and the tools
+    # in tools\ alone (task 38.9), at the same point and for the same reason.
     Assert-ToolsLayout -Root $destRoot -What "the staged release '$destRoot'"
     Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw") `
                             -What "the staged release '$destRoot'"

@@ -602,7 +602,7 @@ VOID HcdDoorHubStop(PHCD_HUB_FDO fdo)
  * (hcdDoorConnection) - and no function, as usbhub registers it on the
  * composite device's PDO. The parent's state is the interface's. No
  * external hub's PDO, a hub refused as too deep included: the stock stack
- * gives a hub GUID_DEVINTERFACE_USB_HUB alone (task 38.8, read on 2000, XP
+ * gives a hub GUID_DEVINTERFACE_USB_HUB alone (task 38.7, read on 2000, XP
  * and 7), which the hub FDO registers (HcdDoorHubStart).
  * Registered once, at the first successful start, and enabled at every
  * one; best effort, as the hub interface is. IRQL: PASSIVE_LEVEL.

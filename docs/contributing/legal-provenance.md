@@ -139,7 +139,7 @@ There are two. Both are tools rather than the driver, and both are the
 exception to the row above saying this project tracks only its own code:
 `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
 `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (at the version root,
-without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.10). They are
+without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9). They are
 not the same case: the qualifier carries an embedded DOS extender and an Open
 Watcom runtime, the reader carries a statically linked Microsoft C runtime.
 
@@ -354,7 +354,7 @@ controller quirk population, which is the stated authority for
 One exception to the do-not-copy rule, for Linux's xHCI controller quirks
 only (owner, 2026-10-12, for roadmap-hcd task 37.17, removed from Phase 37
 the same day, so nothing was copied under it; widened by the owner on
-2026-10-13 for task 38.11, which took 37.17's place). The facts: this
+2026-10-13 for task 38.10, which took 37.17's place). The facts: this
 project is GPL-2.0-only (`LICENSE`), and Linux's xHCI host driver files
 carry a GPL-2.0 SPDX identifier. The owner's decision: the table that says
 which vendor, device and revision ids carry which quirk, with the comments

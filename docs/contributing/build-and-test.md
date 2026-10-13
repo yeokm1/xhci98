@@ -296,7 +296,7 @@ file: amd64 has no `__stdcall` name decoration, so the x86 library's
 
 The version and the release date are edited in one place, `src\xhci_version.h`. It declares three macros: `XHCI_VER_CSV` (the four-part number as four integers, which is what a `VERSIONINFO` resource takes), `XHCI_VER_STR` (the same number as a string, which is what everything else takes) and `XHCI_DRIVERVER_DATE` (the release date, in the `MM/DD/YYYY` form `DriverVer` takes). The file is `#define` lines and comments only, because three toolchains include it: the DDK's `rc.exe`, MSVC 6.0's `cl.exe`, and Open Watcom's `wcc386`.
 
-Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.10, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
+Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
 The last two sites cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so the `DriverVer` in `src\xhci98.inf` **and** the one in `src\xhci98-amd64.inf` each keep a literal and are checked against the header instead. There have been two since roadmap task 21.3, `check-inf.ps1 -Arch` cross-checks whichever file it is given against the `xhci_version.h` beside it, and `build-driver.cmd` runs it over both on every build - so a bumped header with a stale date in the 64-bit file fails the build rather than shipping. Three gates cover what is left:
 
@@ -4034,7 +4034,7 @@ Task 36.42 put `portsw.vbs` at the root of every flavour directory of a
 package beside `xhci98.inf`, and `2.3.0.0` was published so. Since task
 37.5 no package carries it: `make-release.ps1` publishes it once, from
 `src\`, in a `portsw\` directory beside `xhciqual\` and `xhcisnap\`, at
-the version root in `2.3.1.0` and under `tools\` since task 38.10
+the version root in `2.3.1.0` and under `tools\` since task 38.9
 (`tools\portsw\`, first in `2.4.0.0`; design record 16 section 5a), and
 holds the staged tree to that before the publish swap
 (`Assert-PortSwitchLayout`: the three in `tools\portsw\` and nothing else
@@ -4083,7 +4083,7 @@ second `copy` a moment later.
 
 Since task 36.56 `portsw-on.bat` and `portsw-off.bat` go wherever the
 script goes, in `portsw\` since task 37.5 and `tools\portsw\` since task
-38.10 (design record 16 section 5a, "The batch files"): each shows the value, sets 1 or 0 through
+38.9 (design record 16 section 5a, "The batch files"): each shows the value, sets 1 or 0 through
 `cscript //nologo portsw.vbs`, says Windows must be restarted, and pauses.
 The same file runs under `COMMAND.COM` on 98 SE and ME and under `cmd.exe`
 on 2000 and later, so a leg runs each where a user would: double-clicked in

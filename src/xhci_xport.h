@@ -31,7 +31,7 @@
  * line binds a refused device through it, whether a serial-number device
  * returns to the devnode its working form installed (same device and
  * instance id), and NT's behaviour are unread: design record 13 section
- * 10.7.1, roadmap task 38.12 (deferred).
+ * 10.7.1, roadmap task NOX.1 (deferred).
  *
  * The decision:
  *   - no UAS alternate on the interface: XHCI_XPORT_NONE, the ids as

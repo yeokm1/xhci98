@@ -2236,7 +2236,7 @@ gate's rule: 1 only when a DWORD was found and it is 1. The vectors:
 #### 6.11.8 `tools\silent\`: the list, and the switch's scripts
 
 The package carries the list and the scripts that set the gate in their own
-directory, `tools\silent\`, under task 38.10's `tools\` (owner, 2026-10-13,
+directory, `tools\silent\`, under task 38.9's `tools\` (owner, 2026-10-13,
 replacing the `release-x86` placement of 2026-10-12): never in a flavour
 directory, never at the version root, and `Assert-ToolsLayout`'s list of
 tool directories names it. Four files, sources under `src\` as
@@ -2336,7 +2336,7 @@ itself fail to read those keys), "RESTART WINDOWS" withheld and in its
 place the recovery (run `silent-off.bat` to set every controller back to
 0, or check `XhciSilentInstall` under each controller's key in `regedit`),
 exit 5; all set - the `show` text and "RESTART WINDOWS", once, as
-`portsw.vbs` does since 38.7, exit 0; none set (every write failed) - "the
+`portsw.vbs` does since 38.6, exit 0; none set (every write failed) - "the
 switch was not changed", exit 1; some set and some not - "PARTIAL: the
 switch was set on N of M controllers", the `show` text, "RESTART WINDOWS"
 withheld and in its place what to do (run `silent-off.bat` to set every
@@ -2601,7 +2601,7 @@ the HID drivers not, see (c)):
   devnode's `HardwareID` value read
   `USB\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\VID_46F4&PID_0003`:
   the second entry is the device id, which this section did not set out to
-  read; roadmap task 38.12 reads whether it can bind.
+  read; roadmap task NOX.1 reads whether it can bind.
 - `Capabilities` in `Enum`: bit `0x20` set on the present devnodes the bus
   answered 1, clear on those it answered 0; a hot-removed devnode's value
   reads the same either way.
@@ -3522,10 +3522,10 @@ creates its PDOs.
 WDK 7.1 `usbiodef.h`) is registered on every device PDO that is not a hub,
 as usbhub registers it, and not on the root hub, on which usbport
 registers none (`hcd_door.c`, `HcdDoorDeviceStart` and `HcdDoorDeviceStop`).
-**Corrected 2026-10-13 by task 38.8 (GitHub issue 17 item 3, reopened by
+**Corrected 2026-10-13 by task 38.7 (GitHub issue 17 item 3, reopened by
 SweetLow): until then an external hub's PDO carried it too, said to be "as
 usbhub registers it" with no reading behind it.** The reading
-(`runs/run-38.md`, "38.8"), on Windows 2000 SP4, XP and 7 x86 with the
+(`runs/run-38.md`, "38.7"), on Windows 2000 SP4, XP and 7 x86 with the
 stock stack (UHCI, QEMU's hub on a root port with a keyboard behind it, a
 mouse on another root port): `GUID_DEVINTERFACE_USB_DEVICE` on the
 keyboard and the mouse only; `GUID_DEVINTERFACE_USB_HUB` on the root hub
@@ -4592,7 +4592,7 @@ line is the VID/PID form binds a refused device on 98 SE or ME; whether a
 device with a serial number, once its working form (High Speed, or a
 controller that streams) is installed, brings that devnode's driver back
 to its refused form, since both answer the same device and instance id;
-and how either goes on NT. Roadmap task 38.12, deferred, reads them
+and how either goes on NT. Roadmap task NOX.1, deferred, reads them
 (10.7.1).
 Where it sits decides the rest (`XhciXportRefusedAt`): on a
 companion-paired root port the bus asks 29-A.5's hold to send it back to
@@ -4711,9 +4711,9 @@ Also never emitted: `USB\ROOT_HUB` and `USB\ROOT_HUB20` (the root hub is
 them), and `USB\CLASS_09*`, because a hub is never a PDO. `USB\MS_COMP_*` is
 out of scope for 2.0.0.0.
 
-#### 10.7.1 A refused interface's device id (task 38.12, deferred)
+#### 10.7.1 A refused interface's device id (task NOX.1, deferred)
 
-**Deferred.** The owner deferred roadmap task 38.12 on 2026-10-13 until
+**Deferred.** The owner deferred roadmap task NOX.1 on 2026-10-13 until
 after `2.4.0.0`. This section is the plan for that task. It has not been
 reviewed, and nothing in it is implemented. The answers the owner gave the
 same day are recorded below as decisions taken.
@@ -4821,10 +4821,10 @@ these ids. It runs on a published `release-x86`.
 2. If it changes, it changes on every target.
 3. 98 SE is read under NUSB 3.3, with stock ME and 2000 SP4 alongside. The
    record states that a 98 SE without NUSB is unread.
-4. Old refused devnodes are left alone. 38.9's cleanup tool does not
+4. Old refused devnodes are left alone. 38.8's cleanup tool does not
    remove them. Such a key claims nothing, and when the device has a serial
    number it is the device's own working devnode.
-5. 38.9's INF gate refuses any INF of this package that names
+5. 38.8's INF gate refuses any INF of this package that names
    `USB\XHCI98_NOXPORT`.
 6. No `usbstor.sys` probe is run. Whether a line binds is what decides the
    change.

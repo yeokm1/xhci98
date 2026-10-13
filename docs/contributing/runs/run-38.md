@@ -5,10 +5,14 @@ roadmap entry carries the goal, the status, the task list and the
 checkpoint; this file carries what each task did and what each reading
 said. Where the two disagree about a clause, the roadmap wins.
 
+**On task numbers.** They follow the roadmap's numbering after the
+renumbering of 2026-10-13 (the decisions table's Phase 38 row); commits
+of that day before it use the old numbers.
+
 **On `out\...` and `vm\...` paths in this file.** They say where a reading
 was kept on the host that took it; they are not files a clone has.
 
-## 38.5 to 38.7 - The documents and batch files the `2.3.1.0` legs found wanting
+## 38.4 to 38.6 - The documents and batch files the `2.3.1.0` legs found wanting
 
 **Verdict: done** (2026-10-13). Documents and the two batch files only; no
 driver change.
@@ -20,10 +24,10 @@ serial captures in `out\p38-d\legs\<guest>\` (`notes.txt` is each guest's
 full list). Packages: the `2.3.1.0` asset (zip SHA-256
 `F835E1DC886D6AFDB84B25E7BD89C229AE56CC0B849BBA1E232C2DFE3B707AC6`,
 `release-x86`) and the published `2.3.0.0` (`releases\2.3.0.0\release-x86`);
-for 38.7 the asset's `portsw\` with `portsw-on.bat` and `portsw-off.bat`
+for 38.6 the asset's `portsw\` with `portsw-on.bat` and `portsw-off.bat`
 replaced by the working tree's.
 
-### 38.7 - "RESTART WINDOWS" printed once
+### 38.6 - "RESTART WINDOWS" printed once
 
 `portsw-on.bat` and `portsw-off.bat` no longer echo their own "RESTART
 WINDOWS for the change to take effect." after a successful set;
@@ -46,7 +50,7 @@ the prompt with no batch file too. `PORTSW-ON.BAT > C:\ON.TXT` at a
 COMMAND.COM prompt does not redirect a batch file's output; `COMMAND /C`
 does.
 
-### 38.6 - 32-bit Vista: the restart after a reinstall, and on an update
+### 38.5 - 32-bit Vista: the restart after a reinstall, and on an update
 
 The `2.3.1.0` legs saw 32-bit Vista bring the controller back at Code 1
 after a remove and a rescan with no restart prompt, only an "installed
@@ -80,7 +84,7 @@ or version are compared. Vista's log at its default level shows only the
 wizard ending with nothing installed. The release notes already said so
 of the `1.2.0.0` upgrade; the `2.y.y.y` section did not.
 
-### 38.5 - The UAS driver's install on Windows 7 and Vista
+### 38.4 - The UAS driver's install on Windows 7 and Vista
 
 From the `2.3.1.0` legs (run-37, "37.final"); no new reading. The readme
 template, the release notes' install steps and the acceptance test's 5.7
@@ -96,7 +100,7 @@ copies; they were copied from `out\p37-fin\legs`. `swapto.ps1` adds the
 Windows 7 x64 bins stick and does not change the transfer drive's
 flavour; a clean shutdown and a relaunch with the other `-Flav` does.
 
-## 38.10 - The release's tools in `tools\`
+## 38.9 - The release's tools in `tools\`
 
 **Verdict: done** (2026-10-13). `make-release.ps1` publishes `xhciqual\`,
 `xhcisnap\` and `portsw\` under `<version>\tools\`, so the version root
@@ -117,7 +121,7 @@ assembly's `$pswVersion` rule, each shown to fail with the rule reverted.
 
 **Review.** Codex thread `01a13334`: round 1 four findings (a `tools\` tree
 still admitting the legacy port switchover layouts; two old paths in
-generated text; and two on 38.11's licence conditions, all notices and the
+generated text; and two on 38.10's licence conditions, all notices and the
 source offer); round 2 one P3 (the three earlier layouts named exactly);
 round 3 one P2 (a pin that also matched the validator); round 4 clean.
 
@@ -140,7 +144,7 @@ The cut at 38.final meets the same refusal after any fresh checkout.
 | Windows 98 SE | From `TOOLS\XHCISNAP`: `XHCISNAP` and `-probe` (driver declined, the route works); from `TOOLS\PORTSW`: `portsw-on.bat` set 1 and `portsw-off.bat` 0, "RESTART WINDOWS" once each; run from another directory, the not-found message names `TOOLS\PORTSW` |
 | Windows XP SP3 | The cut's `release-x86` installed by Have Disk; from `TOOLS\XHCISNAP` the same two screens; from `TOOLS\PORTSW` on 1, off 0, `XhciIntelPortSwitch` read back 0. On NT the batch files change to their own directory first, so the not-found message is 9x only |
 
-## 38.8 - The USB device interface off external hubs
+## 38.7 - The USB device interface off external hubs
 
 **Verdict: done** (2026-10-13). The reading is taken, the change is made
 (`hcd_door.c`, `HcdDoorDeviceStart` refuses a PDO with `Hub` set; design
@@ -185,7 +189,7 @@ No devnode carries both. Windows 11 on development host A (`usbhub3`), read
 the same way, agrees: its four external hubs and its root hub carry the hub
 interface alone. On XP and 7 the hub's and the keyboard's `Enum` `Control`
 keys had no `ActiveService` value while both worked; not followed, nothing in
-38.8 depends on it.
+38.7 depends on it.
 
 **The change.** The hub FDO already registers the hub interface on the hub
 PDO (`HcdDoorHubStart`, task 33.4); the device interface now stays off a
@@ -323,7 +327,7 @@ notes `out\p38-2\legs\notes.txt`. What was read is record 13 section
 
 | Guest | Result |
 |---|---|
-| Windows 98 SE | (0): the gate read off, no list read. (c): six entries; a mouse, a stick, a hub and a keyboard MATCH, no wizard, the mouse and the keyboard asking for the CD (`hidusb.sys`, `kbdhid.vxd`); the hub's devnode a failed install under the base's `1.99.0.0` INF (no `XHCI98\HUB` model before `2.1.0.0`); with the current INF a new hub, a mouse behind it and a new keyboard silent, installed and working (the keyboard typing); UAS barred, its wizard came. (b) and (a): a new mouse brought the wizard. `silent-on.bat` refused a wrong value (exit 4) and named extra values; `silent-off.bat` left the list. `usb-audio` with a hand-added 0x40 entry: parent and function silent and working. The parent's disable and enable re-decided nothing (`HcdDevicePdoRepresentFunctions` not reached). A refused device: barred, the wizard found no driver; its `HardwareID` also carries the VID/PID device id (task 38.12) |
+| Windows 98 SE | (0): the gate read off, no list read. (c): six entries; a mouse, a stick, a hub and a keyboard MATCH, no wizard, the mouse and the keyboard asking for the CD (`hidusb.sys`, `kbdhid.vxd`); the hub's devnode a failed install under the base's `1.99.0.0` INF (no `XHCI98\HUB` model before `2.1.0.0`); with the current INF a new hub, a mouse behind it and a new keyboard silent, installed and working (the keyboard typing); UAS barred, its wizard came. (b) and (a): a new mouse brought the wizard. `silent-on.bat` refused a wrong value (exit 4) and named extra values; `silent-off.bat` left the list. `usb-audio` with a hand-added 0x40 entry: parent and function silent and working. The parent's disable and enable re-decided nothing (`HcdDevicePdoRepresentFunctions` not reached). A refused device: barred, the wizard found no driver; its `HardwareID` also carries the VID/PID device id (task NOX.1) |
 | Windows ME | (0): a mouse, stick, hub and keyboard installed with no wizard and every answer FALSE; audio brought the wizard. (c): six entries, MATCH, a new mouse silent; with the 0x40 entry the audio device installed with no wizard. ME needs no list for a keyboard, mouse, stick or hub of its own |
 
 Not read: a composite keyboard, mouse or stick (no QEMU device offers one),
