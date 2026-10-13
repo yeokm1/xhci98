@@ -263,6 +263,24 @@ static void say_hang(const char *indent, const char *hang, const char *fmt, ...)
     put_wrapped_to(stdout, indent, hang, buf);
 }
 
+/* A registry path is one word to the wrapper, and the class key's is 82
+ * columns with its HKLM\, so a path too long for one line is broken after
+ * its last backslash (legs of 38.1: it wrapped at 80 on XP and 7). */
+static void print_hklm_path(const char *indent, const char *path,
+                            const char *tail)
+{
+    const char *last;
+
+    last = strrchr(path, '\\');
+    if (last == NULL ||
+        strlen(indent) + 5 + strlen(path) + strlen(tail) <= 79) {
+        printf("%sHKLM\\%s%s\n", indent, path, tail);
+        return;
+    }
+    printf("%sHKLM\\%.*s\n%s  %s%s\n", indent, (int)(last - path + 1), path,
+           indent, last + 1, tail);
+}
+
 static const char *uu_status_text(unsigned long code)
 {
     switch (code) {
@@ -6612,8 +6630,8 @@ static void print_key_header(void)
 
     parent = common_key_parent();
     if (parent != NULL) {
-        say("", "\n%d xhci98 driver key(s) under HKLM\\%s:",
-            driverKeyCount, parent);
+        printf("\n%d xhci98 driver key(s) under\n", driverKeyCount);
+        print_hklm_path("  ", parent, ":");
     } else {
         say("", "\n%d xhci98 driver key(s), under more than one class path:",
             driverKeyCount);
@@ -6715,7 +6733,8 @@ static int set_dword(const char *keyPath, const char *value, DWORD data)
 
     rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, keyPath, 0, KEY_SET_VALUE, &key);
     if (rc != ERROR_SUCCESS) {
-        printf("  cannot open HKLM\\%s for writing, error %ld\n", keyPath, rc);
+        printf("  cannot open for writing (error %ld):\n", rc);
+        print_hklm_path("    ", keyPath, "");
         return 0;
     }
     rc = RegSetValueExA(key, value, 0, REG_DWORD, (const BYTE *)&data,
@@ -9450,11 +9469,11 @@ static int take_report(unsigned long controller, const char *given)
         sprintf(base, "%s", given);
         again = "Run it again with another name, or with none.";
         if (report_name_taken(base, name, sizeof(name))) {
-            printf("xhcisnap -report: %s already exists in this directory, "
-                   "so the name %s is\ntaken. Nothing was written, and "
-                   "nothing was overwritten. Give another name,\nor none for "
-                   "one made from the clock (SNAPGET.BAT with another name, "
-                   "or none).\n", name, base);
+            say("", "xhcisnap -report: %s already exists in this directory, "
+                "so the name %s is taken. Nothing was written, and nothing "
+                "was overwritten. Give another name, or none for one made "
+                "from the clock (SNAPGET.BAT with another name, or none).",
+                name, base);
             report_attach_line(base, 0, 0);
             return REPORT_NAMES_FULL;
         }
@@ -10465,10 +10484,13 @@ int main(int argc, char **argv)
              * next argument, and it is NAME unless it is one of the three
              * options -report goes with. A '-x', a '/?' or a '-help' there
              * is a NAME and is refused by the name rule (exit 2), so no %1
-             * makes SNAPGET.BAT run anything but a report. */
-            if (i + 1 < argc && strcmp(argv[i + 1], "-o") != 0 &&
-                strcmp(argv[i + 1], "-c") != 0 &&
-                strcmp(argv[i + 1], "-nosysinfo") != 0) {
+             * makes SNAPGET.BAT run anything but a report. A -o or -c with
+             * no word after it is one too: SNAPGET -c would otherwise end
+             * on the generic usage, with no attach line (Codex review of
+             * 38.1, round 4). */
+            if (i + 1 < argc && strcmp(argv[i + 1], "-nosysinfo") != 0 &&
+                ((strcmp(argv[i + 1], "-o") != 0 &&
+                  strcmp(argv[i + 1], "-c") != 0) || i + 2 >= argc)) {
                 reportName = argv[++i];
             }
         } else if (strcmp(argv[i], "-selftest-stamp") == 0) {

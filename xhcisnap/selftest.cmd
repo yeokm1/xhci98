@@ -938,8 +938,10 @@ pushd "%RUNDIR%"
 call "%RUNDIR%\bat\snapget.bat" "A&B" < nul > "%BASE%.bat1.log" 2>&1
 call "%RUNDIR%\bat\snapget.bat" "-X" < nul > "%BASE%.bat3.log" 2>&1
 call "%RUNDIR%\bat\snapget.bat" CON < nul > "%BASE%.bat4.log" 2>&1
+call "%RUNDIR%\bat\snapget.bat" -c < nul > "%BASE%.bat11.log" 2>&1
+call "%RUNDIR%\bat\snapget.bat" -o < nul > "%BASE%.bat12.log" 2>&1
 popd
-for %%F in ("%BASE%.bat1.log" "%BASE%.bat3.log" "%BASE%.bat4.log") do (
+for %%F in ("%BASE%.bat1.log" "%BASE%.bat3.log" "%BASE%.bat4.log" "%BASE%.bat11.log" "%BASE%.bat12.log") do (
     findstr /C:"That name is refused" %%F > nul
     if errorlevel 1 (
         echo FAIL: SNAPGET.BAT did not reach XHCISNAP's name refusal: %%F
@@ -1008,7 +1010,7 @@ if errorlevel 1 (
 )
 rem Owner, 2026-10-13: the last line before pause's prompt names what to
 rem attach - XHCISNAP's, since the batch prints nothing after it.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$bad = 0; foreach ($c in @(@('bat1','Nothing to attach: nothing was written.'), @('bat3','Nothing to attach: nothing was written.'), @('bat4','Nothing to attach: nothing was written.'), @('bat5','Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.'), @('bat6','Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.'), @('bat8','Nothing to attach: nothing was changed.'), @('bat9','Nothing to attach: nothing was changed.'))) { $l = @(Get-Content -LiteralPath ($env:BASE + '.' + $c[0] + '.log') | Where-Object { $_.Trim() -ne '' -and $_ -notmatch '^Press any key' }); if ($l.Count -eq 0 -or $l[$l.Count - 1] -cne $c[1]) { Write-Output ('FAIL: ' + $c[0] + ' ends with: ' + $(if ($l.Count) { $l[$l.Count - 1] } else { '(nothing)' })); $bad = 1 } }; exit $bad"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$bad = 0; foreach ($c in @(@('bat1','Nothing to attach: nothing was written.'), @('bat3','Nothing to attach: nothing was written.'), @('bat4','Nothing to attach: nothing was written.'), @('bat11','Nothing to attach: nothing was written.'), @('bat12','Nothing to attach: nothing was written.'), @('bat5','Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.'), @('bat6','Nothing to attach yet: restart Windows, reproduce, then run SNAPGET.BAT.'), @('bat8','Nothing to attach: nothing was changed.'), @('bat9','Nothing to attach: nothing was changed.'))) { $l = @(Get-Content -LiteralPath ($env:BASE + '.' + $c[0] + '.log') | Where-Object { $_.Trim() -ne '' -and $_ -notmatch '^Press any key' }); if ($l.Count -eq 0 -or $l[$l.Count - 1] -cne $c[1]) { Write-Output ('FAIL: ' + $c[0] + ' ends with: ' + $(if ($l.Count) { $l[$l.Count - 1] } else { '(nothing)' })); $bad = 1 } }; exit $bad"
 if errorlevel 1 set FAILED=1
 set BATCOUNT=0
 for %%F in ("%RUNDIR%\bat\*") do set /a BATCOUNT+=1

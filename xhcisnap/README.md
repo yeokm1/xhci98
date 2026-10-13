@@ -367,8 +367,9 @@ survives a quoted word and protects an escaped one.
 - `SNAPON.BAT [LEVEL]` runs `XHCISNAP -on LEVEL`: no `LEVEL` is 2, the log,
   and `LEVEL` must be exactly `1`, `2`, `3` or `4` (quotes the C runtime has
   stripped, but no sign, no leading zero, nothing after it); `0` is refused
-  with a pointer to `SNAPOFF.BAT` (it is off), anything else and a second
-  word are refused naming the levels, all exit 2 with nothing changed. The
+  with a pointer to `SNAPOFF.BAT` (it is off), anything else is refused
+  naming the levels, all exit 2 with nothing changed. The batch passes on
+  its first word only, so a second is ignored (`SNAPON 1 4` is level 1). The
   write is `-verbosity`'s, with the same key matching and exit 1 for any key
   not written. `XHCISNAP` then says, at 2, what `SNAPON.BAT` takes; at 1,
   that the channel was not switched on and (on 2000 to 7) to run it as an
