@@ -1,18 +1,23 @@
 # Linux's xHCI controller quirks
 
-Design record for roadmap-hcd task 38.11: the survey of every quirk
+Design record for roadmap-hcd task 38.10: the survey of every quirk
 Linux's xHCI host driver applies by controller identity, read against this
 driver's code, and the quirks taken from it, each behind a registry value.
 Revision 1, 2026-10-13: the owner's decisions of the same day folded in
 (section 7) - which quirks are taken, each default, the naming of the
 values and a scope rule for platforms without a CSM (section 3.0).
-Revision 0 (`71566971`, first committed as `c06eda96` before a rebase) was
-the survey alone, with the decisions open. Nothing here is built yet; the
-record is reviewed before any code is written.
+Revision 0 (first committed as `c06eda96`, rebased since) was the survey
+alone, with the decisions open. Revision 2, the same day, folds in three
+further owner answers: where value 2 is offered (section 5.1), the task's
+renumbering from 38.11 to 38.10 (commits before it use 38.11), and the
+HCIVERSION floor, which moves to 0.96 in task 38.11 while the 0.96-era
+quirks stay untaken (section 3.3). Review round 1 ran on revision 1; its
+findings are not yet answered here. Nothing here is built yet; the record
+is reviewed to convergence before any code is written.
 
 ## 1. What is asked, and what is not
 
-Task 38.11 asks for Linux's xHCI controller quirks in the driver, each
+Task 38.10 asks for Linux's xHCI controller quirks in the driver, each
 behind a registry gate for the controllers Linux names. Until now the
 driver carries only quirks of its own: the routing quirk
 `XhciIntelIrqRoute` (36.3), the port switchover `XhciIntelPortSwitch`
@@ -182,10 +187,10 @@ beside it.
 | Q18, `XHCI_SW_BW_CHECKING` | `xhci-pci.c:354` | 8086:1E31 **(h)**: Linux keeps its own periodic bandwidth tables (`xhci.c:2996-3003` and the reservation code behind it) because the controller admits schedules it cannot serve. **Not taken** (owner): a task of its own if a report needs it |
 | Q19, `XHCI_AMD_PLL_FIX` | `xhci-pci.c:311-313` | every 1022 xHCI on an SB700 (revision 3Bh or below), SB800, Hudson-2 or Bolton chipset (`pci-quirks.c:153-194`, `209-287`): chipset power management held off while isochronous requests are queued (`pci-quirks.c:340-455`; `xhci-ring.c:832-837`, `4209-4212`), through I/O ports CD6h and CD7h and the northbridge's configuration space. **Not taken** (owner): a task of its own if a report needs it. It needs port-I/O imports, and `HAL.dll!WRITE_PORT_UCHAR` is the import kept out of the shipping flavours because defect 2b's cause is not established (AGENTS.md, "Build flavours"); it writes devices other than the xHCI function; and whether these FCH parts pass the HCIVERSION floor is not in the mirror |
 | Q20, `XHCI_CDNS_SCTX_QUIRK` | `xhci-pci.c:506-508` | 17CD:0200 **(h)**: two reserved dwords of a stream context cleared after Set TR Dequeue (`xhci-ring.c:1490-1502`). **Not taken** (owner): a task of its own if a report needs it |
-| `XHCI_LINK_TRB_QUIRK` | `xhci.c:5489-5492` | HCIVERSION 0.95 only, and only with a module parameter that defaults to 0. This driver refuses a controller below 1.0 (`xhci_caps.c` `XhciCheckCapDword0`, `XHCI_HC_BAD_VERSION`), and the floor stays (owner, 2026-10-13) |
-| `XHCI_AMD_0x96_HOST` | `xhci-pci.c:308-309` | HCIVERSION 0.96 only (its use, `xhci.h:1782-1786`: isochronous Link TRBs kept chained); refused by the same floor |
-| `XHCI_NEC_HOST` | `xhci-pci.c:290-291` | every 1033 **(h)**: a vendor Get Firmware command at start whose answer is only logged (`xhci.c:652-663`, `xhci-ring.c:1683-1694`, `1935-1941`), and isochronous Link TRBs kept chained for "0.96 hardware from AMD and NEC" (`xhci.h:1779-1786`). The command is diagnostic; the chaining is for a 0.96 part, which the floor refuses. The uPD720200's HCIVERSION is not in the mirror; `XHCIQUAL` prints it, and a 1.0 reading would reopen the chaining |
-| `XHCI_SPURIOUS_SUCCESS` and `XHCI_BROKEN_STREAMS` on 1B21:1042 | `xhci-pci.c:453-461` | "reports 0.96" (`xhci-pci.c:455-458`): refused by the floor. Q2 keeps the id in its list at no cost |
+| `XHCI_LINK_TRB_QUIRK` | `xhci.c:5489-5492` | HCIVERSION 0.95 only, and only with a module parameter that defaults to 0. This driver refuses a controller below 1.0 (`xhci_caps.c` `XhciCheckCapDword0`, `XHCI_HC_BAD_VERSION`); task 38.11 moves the floor to 0.96 (owner, 2026-10-13), which still refuses 0.95 |
+| `XHCI_AMD_0x96_HOST` | `xhci-pci.c:308-309` | HCIVERSION 0.96 only (its use, `xhci.h:1782-1786`: isochronous Link TRBs kept chained). **Not taken** (owner, 2026-10-13): task 38.11 admits 0.96 controllers and drives them as 1.0 ones but for the TD Size field, and the 0.96-era quirks are not taken there |
+| `XHCI_NEC_HOST` | `xhci-pci.c:290-291` | every 1033 **(h)**: a vendor Get Firmware command at start whose answer is only logged (`xhci.c:652-663`, `xhci-ring.c:1683-1694`, `1935-1941`), and isochronous Link TRBs kept chained for "0.96 hardware from AMD and NEC" (`xhci.h:1779-1786`). The command is diagnostic. **The chaining is not taken** (owner, 2026-10-13, with task 38.11, as for `XHCI_AMD_0x96_HOST`). Linux keys both on the vendor alone, whatever the version |
+| `XHCI_SPURIOUS_SUCCESS` and `XHCI_BROKEN_STREAMS` on 1B21:1042 | `xhci-pci.c:453-461` | "reports 0.96" (`xhci-pci.c:455-458`): refused by today's floor, admitted by task 38.11's. Covered then as on every controller: the spurious Success by the TD engine (section 3.2), the streams by Q2, whose list carries the id |
 | `XHCI_RESET_EP_QUIRK`, `XHCI_TRUST_TX_LENGTH`, `XHCI_PLAT` | `xhci.h:1589`, `1607`, `1613` | deprecated; the first is set for 1B73:1000 revision 00 with a trace that says so (`xhci-pci.c:259-264`) and acts nowhere; the other two are set by no file in the mirror |
 | `XHCI_LPM_SUPPORT`, `XHCI_HW_LPM_DISABLE` | `xhci-pci.c:345-349`, `448-451`, `493-495` | link power management: this driver programs no U1 or U2 timeout and no USB 2.0 LPM (no `PORTPMSC` write anywhere in `src`) |
 | `XHCI_PME_STUCK_QUIRK` | `xhci-pci.c:371-381` | clears a PME latch so wake works (`xhci-pci.c:786-800`); the controller never arms wake here (section 3.4) |
@@ -207,7 +212,8 @@ Read in `src` on branch `phase-38`, each by file and function:
   each start into `XHCI_EXTENSION.PciVendorDevice` (`xhci_init.c`,
   `XhciInitController`); the revision (offset 08h) is not read. HCIVERSION
   is read and anything below 1.0 refused (`xhci_caps.c`,
-  `XhciCheckCapDword0`).
+  `XhciCheckCapDword0`); task 38.11 moves that floor to 0.96 behind a
+  value of its own.
 - **Settings.** Every value lives in the controller's driver key
   (`hcd_ctl.c`, `hcdReadDword`, `IoOpenDeviceRegistryKey` with
   `PLUGPLAY_REGKEY_DRIVER`), read at each start, a REG_DWORD of four bytes
@@ -245,7 +251,7 @@ Read in `src` on branch `phase-38`, each by file and function:
 Each: what Linux does, where this driver acts, the change, its value and
 default, its cost, and what the reports show. The behaviour named is
 Linux's as read; the implementation checks each against xHCI 1.2c before
-it is written (task 38.11). Values are 0 off, 1 Linux's ids and 2 every
+it is written (task 38.10). Values are 0 off, 1 Linux's ids and 2 every
 controller where offered (section 5.1).
 
 ### 4.1 Q1, `XhciMsiAvoid` (Fresco Logic, `XHCI_BROKEN_MSI`)
@@ -276,8 +282,10 @@ and the no-helper x86 path already make it do. How it meets
   (`quirk.msiavoid` with "mode 3 overrides"). Mode 3 exists for testing a
   message on purpose; the quirk is not a reason to forbid that.
 
-98 SE to XP are unaffected (no message there). No 2: forcing the line on
-every controller is `XhciInterruptMode` 1's job. Default 1.
+98 SE to XP are unaffected (no message there). 2 avoids a message on
+every controller, with mode 0's fallback to polling - which is what
+separates it from `XhciInterruptMode` 1, whose start fails where no line
+is offered. Default 1.
 
 ### 4.2 Q2, `XhciStreamsOff` (`XHCI_BROKEN_STREAMS`)
 
@@ -317,8 +325,9 @@ controller, both registers are written 0 **whatever `XhciIntelPortSwitch`
 says** (owner, 2026-10-13), through the existing config-space path
 (`HcdSvcConfigSpace`), after the existing release. Record 16 section 5's
 "0 ... makes no switchover write" gains this exception, and
-`implementation-invariants.md` names the write. No 2: the registers exist
-only on the PCH generations record 16 lists. Default 1. The project's B490
+`implementation-invariants.md` names the write. 0 or 1 only: the
+registers are Intel's and exist only on the PCH generations record 16
+lists, so a 2 is read as 1 and logged (section 5.1). Default 1. The project's B490
 (1E31) and E7250 (9CB1) are listed.
 
 ### 4.5 Q5, `XhciShutdownReset` (`XHCI_SPURIOUS_WAKEUP`), off by default
@@ -339,7 +348,8 @@ shutdown when on.
 Linux sleeps 1 to 1.5 ms before clearing Run/Stop at suspend on 1022:145C,
 15E0, 15E1 and 43BB. Here the suspend waits 1.5 ms before
 `XhciQuiesceController` on a listed controller, at PASSIVE_LEVEL in the
-power path. No 2. Default 1. Cost: 1.5 ms per D3.
+power path. 2 applies the delay on every controller. Default 1. Cost:
+1.5 ms per D3.
 
 ### 4.7 Q8, `XhciSlowHalt` (Fresco Logic FL1000, `XHCI_SLOW_SUSPEND`)
 
@@ -362,8 +372,9 @@ wait again, write the data, set it again (`pci-quirks.c:593-634`; the
 values are constants there). Here it follows `xhciReset` at each start,
 recovery and resume, through the configuration-space path. It is a second
 kind of configuration write above the standard header, beside the Intel
-switchover's, so `implementation-invariants.md` changes with it. No 2: the
-registers are this vendor's. Default 1. Cost: a bounded poll (Linux allows
+switchover's, so `implementation-invariants.md` changes with it. 0 or 1
+only: the registers are this vendor's, so a 2 is read as 1 and logged.
+Default 1. Cost: a bounded poll (Linux allows
 1000 x 50 us) and four configuration writes per reset.
 
 ### 4.9 Q10, `XhciTiIntervalCap` (TUSB73x0, `XHCI_LIMIT_ENDPOINT_INTERVAL_7`)
@@ -374,7 +385,7 @@ more, at High Speed and above, on 104C:8241. Here it takes
 **interrupt endpoints only** (owner, 2026-10-13), as record 17 decided for
 the AMD cap: an isochronous endpoint's interval sets its data rate. The
 cap's ordering against fast polling (record 17 section 4.7) carries over.
-No 2. Default 1.
+2 applies the cap on every controller. Default 1.
 
 ### 4.10 Q11, 1002:7316 under `XhciIntervalCap`
 
@@ -437,14 +448,17 @@ them, the soft-retry exclusion is covered (section 3.2), and
   one cycles nothing (`XhciTolCycleReason`); a host vector confirms that,
   or the case is added.
 
-`XHCIQUAL` marks both parts `QF_AVOID`, the project's own verdict. No 2.
-Default 1.
+`XHCIQUAL` marks both parts `QF_AVOID`, the project's own verdict. 2
+applies (a) and (c), which are generic, on every controller; (b) stays on
+the listed ids at 2 as at 1 (owner, 2026-10-13: refusing `RESET_PORT` is
+not offered everywhere). Default 1.
 
 ### 4.14 Q16, `XhciAmdSparseOff` (AMD Raven2, `XHCI_DISABLE_SPARSE`)
 
 Linux clears bit 17 of BAR offset C12Ch before each suspend on 1022:15E5.
 The mirror says nothing of what the bit does. Here it is one
-read-modify-write in the D3 path on a listed controller. No 2. Default 1.
+read-modify-write in the D3 path on a listed controller. 0 or 1 only: an
+AMD vendor bit, so a 2 is read as 1 and logged. Default 1.
 Q3 also lists 15E5.
 
 ## 5. What is common to every quirk taken
@@ -457,22 +471,22 @@ the style of the values already there (`XhciIntelIrqRoute`,
 `XhciUsb2HubSpeedFallback`), with the Linux flag given beside each here and
 in `XHCISNAP`; those five keep their names. The names:
 
-| Value | Linux flag | Effect | Default |
-|---|---|---|---|
-| `XhciMsiAvoid` | `XHCI_BROKEN_MSI` | the line or polling, never a message | 1 |
-| `XhciStreamsOff` | `XHCI_BROKEN_STREAMS` | the controller treated as having no streams | 1 |
-| `XhciResumeReinit` | `XHCI_RESET_ON_RESUME` | no save or restore; resume re-initializes | 1 |
-| `XhciIntelShutdownRoute` | `XHCI_SPURIOUS_REBOOT` | connectors routed to EHCI at shutdown | 1 |
-| `XhciShutdownReset` | `XHCI_SPURIOUS_WAKEUP` | HCRST after the shutdown's halt | 0 |
-| `XhciSuspendDelay` | `XHCI_SUSPEND_DELAY` | 1.5 ms before the suspend's halt | 1 |
-| `XhciSlowHalt` | `XHCI_SLOW_SUSPEND` | the suspend's halt bound 640 ms | 1 |
-| `XhciAsmediaFlowCtl` | `XHCI_ASMEDIA_MODIFY_FLOWCONTROL` | the vendor flow-control write after each reset | 1 |
-| `XhciTiIntervalCap` | `XHCI_LIMIT_ENDPOINT_INTERVAL_7` | interrupt Interval 7 and above programmed as 6 | 1 |
-| `XhciStuckLinkReset` | `XHCI_MISSING_CAS` | a USB3 port stuck in Polling warm-reset after resume | 1 |
-| `XhciStreamRingPad` | `XHCI_TRB_OVERFETCH` | one ring of padding after a stream block | 1 |
-| `XhciEtronWorkarounds` | `XHCI_ETRON_HOST` | (a), (b) and (c) of section 4.13 | 1 |
-| `XhciAmdSparseOff` | `XHCI_DISABLE_SPARSE` | bit 17 of C12Ch cleared before suspend | 1 |
-| `XhciIntervalCap` (existing) | `XHCI_LIMIT_ENDPOINT_INTERVAL_9` | 1002:7316 added to its value 1 | 1 |
+| Value | Linux flag | Effect | Default | 2 offered |
+|---|---|---|---|---|
+| `XhciMsiAvoid` | `XHCI_BROKEN_MSI` | the line or polling, never a message | 1 | yes |
+| `XhciStreamsOff` | `XHCI_BROKEN_STREAMS` | the controller treated as having no streams | 1 | yes |
+| `XhciResumeReinit` | `XHCI_RESET_ON_RESUME` | no save or restore; resume re-initializes | 1 | yes |
+| `XhciIntelShutdownRoute` | `XHCI_SPURIOUS_REBOOT` | connectors routed to EHCI at shutdown | 1 | no |
+| `XhciShutdownReset` | `XHCI_SPURIOUS_WAKEUP` | HCRST after the shutdown's halt | 0 | yes |
+| `XhciSuspendDelay` | `XHCI_SUSPEND_DELAY` | 1.5 ms before the suspend's halt | 1 | yes |
+| `XhciSlowHalt` | `XHCI_SLOW_SUSPEND` | the suspend's halt bound 640 ms | 1 | yes |
+| `XhciAsmediaFlowCtl` | `XHCI_ASMEDIA_MODIFY_FLOWCONTROL` | the vendor flow-control write after each reset | 1 | no |
+| `XhciTiIntervalCap` | `XHCI_LIMIT_ENDPOINT_INTERVAL_7` | interrupt Interval 7 and above programmed as 6 | 1 | yes |
+| `XhciStuckLinkReset` | `XHCI_MISSING_CAS` | a USB3 port stuck in Polling warm-reset after resume | 1 | yes |
+| `XhciStreamRingPad` | `XHCI_TRB_OVERFETCH` | one ring of padding after a stream block | 1 | yes |
+| `XhciEtronWorkarounds` | `XHCI_ETRON_HOST` | (a), (b) and (c) of section 4.13 | 1 | (a) and (c) only |
+| `XhciAmdSparseOff` | `XHCI_DISABLE_SPARSE` | bit 17 of C12Ch cleared before suspend | 1 | no |
+| `XhciIntervalCap` (existing) | `XHCI_LIMIT_ENDPOINT_INTERVAL_9` | 1002:7316 added to its value 1; no value of its own | 1 | its existing 2 |
 
 Each is read at each start with `hcdReadDword`, in the house form of
 `XhciIntervalCap` and `XhciIntelIrqRoute`:
@@ -481,7 +495,7 @@ Each is read at each start with `hcdReadDword`, in the house form of
 |---|---|
 | 0 | off: Linux's behaviour is not applied, on any controller |
 | 1 | Linux's listed controllers |
-| 2 | every controller, where section 4 offers it; elsewhere read as 1 |
+| 2 | every controller, where the fix is generic xHCI behaviour (the "2 offered" column); for a vendor-register or vendor-specific quirk - `XhciIntelShutdownRoute`, `XhciAsmediaFlowCtl`, `XhciAmdSparseOff`, and Q14's refused `RESET_PORT` - a 2 is read as 1 and logged (owner, 2026-10-13) |
 | absent, another type or any other number | the default: 1, or 0 for `XhciShutdownReset` |
 
 Absent is the default, so on by default for every value but one, unlike
@@ -498,8 +512,9 @@ Each quirk's id list is a table in the pure core, matched against
 `PciVendorDevice` (device << 16 | vendor), with a host test of the match
 per quirk: every listed id matches, the neighbours and the other vendors'
 same device numbers do not, and the vendor-wide row (Q3's every 1106)
-matches every device of that vendor. HCIVERSION enters nowhere: the two
-Linux bits keyed on it are below the floor (section 3.3).
+matches every device of that vendor. HCIVERSION enters nowhere: of the
+two Linux bits keyed on it, the 0.95 one stays below the floor and the
+0.96 one is not taken (section 3.3).
 
 ### 5.3 Revision
 
@@ -533,7 +548,8 @@ need: a flag each, which widens the word to 32 bits; rows for ids it lacks
 ids, named as not taken); a vendor-wide row form for VIA and Zhaoxin,
 which it lacks; and each printed quirk naming the driver's registry value
 and its Linux flag. It already reads the revision and HCIVERSION, so it
-can say when a listed part is below the driver's floor.
+can say when a listed part is below the driver's floor (1.0 today, 0.96
+once task 38.11 lands).
 
 ### 5.6 Provenance
 
@@ -577,6 +593,16 @@ Taken from revision 0's open list, each with its recommendation then:
 - **Revision.** No revision matching; the revision logged. (Recommended:
   the same.)
 - **HCIVERSION floor.** Unchanged in this task. (Recommended: the same.)
+  Later the same day (owner): the floor moves to 0.96 in task 38.11, and
+  the 0.96-era quirks - NEC's isochronous chaining, the AMD 0x96 rules, the
+  0.95 link-TRB quirk - are not taken (section 3.3).
+- **Value 2** (owner, later the same day): offered only where the fix is
+  generic xHCI behaviour - Q1, Q2, Q3, Q5, Q7, Q8, Q10, Q12, Q13 and Q14's
+  (a) and (c); the vendor-register or vendor-specific ones - Q4, Q9, Q16
+  and Q14's refused `RESET_PORT` - take 0 or 1, a 2 read as 1 and logged;
+  Q11 has no value of its own (section 5.1).
+- **Numbering** (owner, later the same day): the task is 38.10, renumbered
+  from 38.11.
 - **CSM.** New rule: a platform without a CSM cannot run a supported
   system, so its quirks are not applicable (section 3.0).
 - **Q1** taken, on, with the usual fallback to polling where

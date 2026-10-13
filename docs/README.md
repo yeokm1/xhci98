@@ -141,7 +141,7 @@ turn out to need.
 
 | Working on | Primary reading | Also relevant |
 |---|---|---|
-| Phase 0 (DOS qualifier) | `docs/contributing/design/01-hardware-qualification-tool.md` | `docs/usb-xhci-info/xhci-data-structures.md` (registers); Linux `drivers/usb/host/xhci-pci.c`, which is what `xhciqual/quirks.c`'s VID/DID table tracks; `docs/contributing/design/20-linux-xhci-quirks.md`, the survey of that population against the driver (roadmap-hcd 38.11) |
+| Phase 0 (DOS qualifier) | `docs/contributing/design/01-hardware-qualification-tool.md` | `docs/usb-xhci-info/xhci-data-structures.md` (registers); Linux `drivers/usb/host/xhci-pci.c`, which is what `xhciqual/quirks.c`'s VID/DID table tracks; `docs/contributing/design/20-linux-xhci-quirks.md`, the survey of that population against the driver (roadmap-hcd 38.10) |
 | Phase 1 (build env) | `docs/contributing/build-and-test.md` setup/build sections | - |
 | Phase 2a-2d (VMs, QEMU migration) | `docs/contributing/roadmap.md` phase entries; `docs/contributing/build-and-test.md` QEMU, NUSB, snapshots, file transfer; for 2c/2d also "Windows 2000 SMP Stress VM (Phase 2d)" (WHPX host setup, flag contrast vs 2b) | `docs/contributing/lessons.md`, the Standard-PC HAL entry (TCG/APIC storm) and the `usbhub20.sys` / `USBD.SYS` entry |
 | Phase 3 (miniport spike) | `docs/usb-xhci-info/usbport-miniport-interface.md` (the whole thing) + `docs/usb-xhci-info/usbport-miniport-abi.md` (exact layouts/signatures) | `docs/contributing/design/04-controller-common-buffer.md` (the DMA-memory model and its declared limits); `docs/usb-xhci-info/win98-wdm.md` integration decision; `docs/contributing/build-and-test.md` INF, install, crash recovery; `docs/contributing/design/03-host-unit-tests.md` |
