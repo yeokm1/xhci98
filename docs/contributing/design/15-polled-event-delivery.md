@@ -2131,8 +2131,8 @@ guest: every leg of section 7.2.12 is owed to the matrix.
   `TmrDesired`, `TmrActualHeld`, `TmrActualReleased`, `TmrReleaseCause`,
   `TmrHeldMs`, then `TmrObsReleasedCount`, `SumMs`, `Late` and
   `TmrObsHeldCount`, `SumMs`, `Late` - and record 18's two service
-  verdicts at 197 and 198; 199 words in all (38.11's three, at 173 to
-  175, came first). `XHCISNAP` names them and
+  verdicts at 197 and 198, after 38.11's three at 173 to 175 (38.10's
+  quirk words follow at 199 to 232; 233 words in all). `XHCISNAP` names them and
   prints a section of its own (`-selftest-timer`).
 - **Notes**: `poll.timer.hold` and `poll.timer.release` (the cause in the
   top byte, the returned value in the low 24 bits) as section 7.2.9;
