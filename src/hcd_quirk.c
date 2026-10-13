@@ -545,6 +545,7 @@ ULONG HcdQuirkShutdown(PHCD_CONTROLLER hc)
     ULONG attempted;
     ULONG ready;
     ULONG why;
+    ULONG why2;
 
     ext = &hc->Hc;
     st = &ext->Quirk;
@@ -562,9 +563,13 @@ ULONG HcdQuirkShutdown(PHCD_CONTROLLER hc)
     if (XhciQuirkOn(st, XHCI_QK_SHUT_TO_EHCI)) {
         attempted = 1;
         if (ready) {
+            /* Both registers whatever the first's outcome (review round 1):
+             * a USB3_PSSEN that would not clear does not keep the USB 2.0
+             * pairs on the xHCI. The first failure is the one reported. */
             why = hcdQuirkEhciWrite(hc, HCD_QK_USB3_PSSEN);
+            why2 = hcdQuirkEhciWrite(hc, HCD_QK_XUSB2PR);
             if (why == XHCI_QK_WHY_NONE) {
-                why = hcdQuirkEhciWrite(hc, HCD_QK_XUSB2PR);
+                why = why2;
             }
             if (why == XHCI_QK_WHY_NONE) {
                 st->ShutEhciWrites++;
@@ -658,22 +663,24 @@ VOID HcdQuirkShutdownFlush(PHCD_CONTROLLER hc)
     } else if (hc->ShutFlushSink) {
         st->ShutFlushes++;
     } else {
+        /* Serviced, nothing emitted: the sink off, or nothing recorded. */
         st->ShutFlushSinkOff++;
     }
     hcdQuirkPublish(hc);
 }
 
 /* The thread, after the HcdLogFlush it began with `ticket` captured: the
- * ticket published as acknowledged, with whether the sink was on. A flush
- * already under way when the records were written captured an older
- * ticket, so it never acknowledges them. IRQL: PASSIVE_LEVEL (the
- * controller thread). */
-VOID HcdQuirkFlushAck(PHCD_CONTROLLER hc, LONG ticket)
+ * ticket published as acknowledged, with whether that flush emitted any
+ * record to the sink (`emitted`, HcdLogFlush's own count: 0 with the sink
+ * off or the records not kept, review round 1). A flush already under way
+ * when the records were written captured an older ticket, so it never
+ * acknowledges them. IRQL: PASSIVE_LEVEL (the controller thread). */
+VOID HcdQuirkFlushAck(PHCD_CONTROLLER hc, LONG ticket, ULONG emitted)
 {
     if (hc->ShutFlushAcked == ticket) {
         return;
     }
-    hc->ShutFlushSink = hc->Hc.Log.DebugViewEnabled ? 1UL : 0UL;
+    hc->ShutFlushSink = emitted ? 1UL : 0UL;
     (VOID)InterlockedExchange(&hc->ShutFlushAcked, ticket);
     (VOID)KeSetEvent(&hc->ShutFlushDone, IO_NO_INCREMENT, FALSE);
 }

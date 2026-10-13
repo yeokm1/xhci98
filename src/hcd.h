@@ -2306,7 +2306,7 @@ VOID HcdQuirkAsmFlow(PHCD_CONTROLLER hc);
 VOID HcdQuirkSuspend(PHCD_CONTROLLER hc);
 ULONG HcdQuirkShutdown(PHCD_CONTROLLER hc);
 VOID HcdQuirkShutdownFlush(PHCD_CONTROLLER hc);
-VOID HcdQuirkFlushAck(PHCD_CONTROLLER hc, LONG ticket);
+VOID HcdQuirkFlushAck(PHCD_CONTROLLER hc, LONG ticket, ULONG emitted);
 VOID HcdQuirkResumed(PHCD_CONTROLLER hc, ULONG restoresBefore);
 ULONG HcdQuirkLinkNoOp(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdQuirkLinkPadded(PHCD_CONTROLLER hc, ULONG padded);

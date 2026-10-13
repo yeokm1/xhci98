@@ -4495,6 +4495,9 @@ static ULONG xhciQuiesceBounded(PXHCI_EXTENSION ext, ULONG haltMs)
                                      XHCI_OP_USBSTS,
                                  XHCI_USBSTS_HCH, XHCI_USBSTS_HCH,
                                  haltMs - XHCI_HALT_TIMEOUT_MS, &usbsts);
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_HALT_TIMEOUT,
+                         halted ? XHCI_QK_OUT_DONE : XHCI_QK_OUT_FAILED,
+                         halted ? XHCI_QK_WHY_NONE : XHCI_QK_WHY_NOT_HALTED);
     }
     if (!halted) {
         /*

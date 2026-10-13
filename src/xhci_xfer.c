@@ -1107,6 +1107,16 @@ static VOID xhciXferForgetMidTdTails(PXHCI_TRANSFER_QUEUE queue,
     if (queue == NULL || ring == NULL || trbCount == 0) {
         return;
     }
+    /* Task 38.10 (review round 1): the remembered isochronous event is
+     * forgotten the same way, so a Success for a TD placed here later is
+     * never taken for the earlier error's duplicate (XhciXferIsoEvent). */
+    if (queue->IsoLastEventPA != 0 &&
+        XhciRingIndexFromPA(ring, queue->IsoLastEventPA, &j) ==
+            XHCI_RING_OK &&
+        xhciXferRangeContains(ring, firstIndex, trbCount, j, NULL)) {
+        queue->IsoLastEventPA = 0;
+        queue->IsoLastEventCode = 0;
+    }
     i = 0;
     while (i < queue->MidTdTailCount) {
         if (xhciXferRangeContains(ring, firstIndex, trbCount,
@@ -2685,6 +2695,9 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue)
     for (i = 0; i < XHCI_XFER_MID_TD_TAIL; i++) {
         queue->MidTdTailIndex[i] = XHCI_XFER_NO_INDEX;
     }
+    /* 38.10: a restarted ring has no last event to be duplicated. */
+    queue->IsoLastEventPA = 0;
+    queue->IsoLastEventCode = 0;
     return 1;
 }
 

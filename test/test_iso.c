@@ -1986,11 +1986,49 @@ static void spurious_after(ULONG errorCode)
              "a duplicate, as before");
 }
 
+/* Review round 1: the error's TRB re-let to a later request - the ring
+ * lapped - is that request's, and its Success is never taken for the old
+ * error's duplicate. */
+static void spurious_not_after_reuse(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG i;
+
+    /* Five requests completed at 0 to 4; then, as an aborted request
+     * would leave it, the last event an error at 5 that no later event
+     * replaced. Index 5 re-let to a new request forgets it. */
+    iso_fixture_init(&fix, 8);
+    fix.queue.IsoSpuriousScope = 1;
+    for (i = 0; i < 5; i++) {
+        CHECK_EQ(iso_fixture_submit(&fix, i % 4, 1, 192), XHCI_XFER_OK,
+                 "fill");
+        CHECK_EQ(iso_event(&fix, i, XHCI_CC_SUCCESS, 0, &result),
+                 XHCI_XFER_OK, "complete");
+    }
+    fix.queue.IsoLastEventPA = RING_PA + 5UL * 16UL;
+    fix.queue.IsoLastEventCode = XHCI_CC_BABBLE;
+    CHECK_EQ(iso_fixture_submit(&fix, 1, 1, 192), XHCI_XFER_OK,
+             "5 re-let");
+    CHECK_EQ(fix.queue.IsoLastEventPA, 0UL, "the remembered error forgotten");
+    CHECK_EQ(iso_event(&fix, 5, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "its own Success");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "not dropped");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the request ends");
+
+    /* A restart forgets it too. */
+    fix.queue.IsoLastEventPA = RING_PA;
+    fix.queue.IsoLastEventCode = XHCI_CC_BABBLE;
+    CHECK_EQ(XhciXferQueueRestart(&fix.queue), 1UL, "restarted empty");
+    CHECK_EQ(fix.queue.IsoLastEventPA, 0UL, "forgotten at a restart");
+}
+
 static void test_spurious_success(void)
 {
     ISO_FIXTURE fix;
     XHCI_XFER_EVENT_RESULT result;
 
+    spurious_not_after_reuse();
     spurious_after(XHCI_CC_USB_TRANSACTION_ERROR);
     spurious_after(XHCI_CC_BABBLE);
     spurious_after(XHCI_CC_ISOCH_BUFFER_OVERRUN);

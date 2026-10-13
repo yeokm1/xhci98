@@ -2330,6 +2330,7 @@ static VOID NTAPI hcdThread(PVOID Context)
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
     LONG ticket;
+    ULONG sunk;
 
     hc = (PHCD_CONTROLLER)Context;
     for (;;) {
@@ -2353,8 +2354,9 @@ static VOID NTAPI hcdThread(PVOID Context)
          * nearer a DPC. The shutdown's flush ticket is captured before it
          * and acknowledged after it (task 38.10, hcd_quirk.c). */
         ticket = hc->ShutFlushWanted;
+        sunk = hc->Hc.Log.DebugViewBytes;
         HcdLogFlush(hc, XHCI_LOG_REASON_PERIODIC, 0);
-        HcdQuirkFlushAck(hc, ticket);
+        HcdQuirkFlushAck(hc, ticket, hc->Hc.Log.DebugViewBytes != sunk);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
     /* No door request waits for a thread that is gone (task 36.45). */

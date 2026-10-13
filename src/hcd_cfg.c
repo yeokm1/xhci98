@@ -935,6 +935,8 @@ static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               capped);
     if (ti != capped) {
         ext->Quirk.TiCapped++;
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_TI_CAP, XHCI_QK_OUT_DONE,
+                         XHCI_QK_WHY_NONE);
         capped = ti;
     }
     if (capped == ep->Interval) {
