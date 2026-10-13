@@ -2320,7 +2320,7 @@ try {
            Why  = "the upload assembly no longer holds a tree with tools\ to the cut's port switchover layout, so a legacy layout beside tools\ would pass (task 38.10)" },
         # The tools under tools\ (roadmap-hcd task 38.10): each staged through
         # Get-ToolDirName, and the layout held at the cut and at the upload.
-        @{ Find = '-Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")';
+        @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")';
            Why  = "a cut no longer publishes the port switchover's scripts into tools\portsw\ (task 38.10)" },
         @{ Find = '$qualDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciqual")';
            Why  = "a cut no longer stages the DOS qualifier into tools\xhciqual\ (task 38.10)" },

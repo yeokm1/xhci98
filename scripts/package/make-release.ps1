@@ -3041,8 +3041,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     # top-level readme is where they are explained, and each script says
     # what it does when run.
     Write-Step "port switchover scripts"
-    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot `
-                                          -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
+    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
     Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), (Get-ToolDirName -Name "portsw"))
 
     #
