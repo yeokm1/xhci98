@@ -192,6 +192,12 @@ hub's PDO, a hub refused as too deep included (it has a hub object, so
 `Hub` is set). A hub devnode `2.3.0.0` or `2.3.1.0` registered keeps its
 `DeviceClasses` entry, never enabled again. No host test: the rule is one
 condition inside a kernel routine on a flag set at the PDO's creation.
+Both builds and gates pass (`build-driver.cmd all`, `all -amd64`).
+
+**Review.** Codex thread `01a133b3`, round 1 on `c4c2bab4` (the hub flag on
+every hub PDO before its start, the teardown of a never-registered link,
+readers of the old rule across the tree, the documents against this
+record): clean.
 
 **Owed: the legs.** The interface enumerated with `xhci98` on 2000, XP,
 XP x64 and 7 x64, a hub with a device behind it: the devices listed, the
