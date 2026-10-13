@@ -350,23 +350,33 @@ They are not equal in weight. Linux is consulted routinely, above all for the
 controller quirk population, which is the stated authority for
 `xhciqual/quirks.c`.
 
-One exception to the do-not-copy rule, for Linux's xHCI quirk table only
-(owner, 2026-10-12; made for roadmap-hcd task 37.17, which was removed
-from Phase 37 the same day, so nothing has been copied under it). The
-facts: this project is
-GPL-2.0-only (`LICENSE`), and Linux's xHCI host driver files carry a GPL-2.0
-SPDX identifier. The owner's decision: the table that says which vendor,
-device and revision ids carry which quirk, with the comments that name the
-hardware, may be copied into this project, under these conditions:
+One exception to the do-not-copy rule, for Linux's xHCI controller quirks
+only (owner, 2026-10-12, for roadmap-hcd task 37.17, removed from Phase 37
+the same day, so nothing was copied under it; widened by the owner on
+2026-10-13 for task 38.11, which took 37.17's place). The facts: this
+project is GPL-2.0-only (`LICENSE`), and Linux's xHCI host driver files
+carry a GPL-2.0 SPDX identifier. The owner's decision: the table that says
+which vendor, device and revision ids carry which quirk, with the comments
+that name the hardware, and since 2026-10-13 the code that applies each
+quirk taken, may be copied or adapted into this project, under these
+conditions:
 
-- the Linux copyright notice of the file it came from is kept beside the
-  copied text;
+- only from a file whose SPDX identifier is `GPL-2.0`, `GPL-2.0-only` or
+  `GPL-2.0+` / `GPL-2.0-or-later`, read on the pinned mirror's commit; a file
+  under any other licence, or dual-licensed with one this project cannot
+  carry, is still under the do-not-copy rule;
+- the Linux copyright notices and the SPDX identifier of the file it came
+  from are kept beside the copied text, and the copy is marked as changed
+  from that file, with the date (GPL-2.0 section 2(a)); it stays GPL-2.0-only
+  with the rest of this tree, and nothing of it is relicensed;
 - this section gains a row for each copy: the Linux file, the commit (the
   pinned mirror's, from `external/README.md`), the lines, and where it landed
   in this tree;
-- the behaviour a quirk changes is not copied. It is written from a
-  description of what the controller does wrong and from the xHCI
-  specification, as everything else here is;
+- a release whose binary carries such a copy says so in its notices, naming
+  the Linux file and its copyright holders, as the tools' `NOTICE.TXT` files
+  do for what their EXEs link;
+- what is taken is the quirk and its handling, adapted to this driver's
+  structures; nothing else of Linux's xHCI host driver comes with it;
 - the overlap audit above treats the recorded rows as known overlap, so any
   other verbatim overlap with the Linux mirror is still a finding.
 
