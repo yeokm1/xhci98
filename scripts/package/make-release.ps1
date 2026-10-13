@@ -4073,7 +4073,7 @@ The package's own files are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
-  xhcihlpr.sys              in the -X86 directories only: the helper that
+  xhcihlpr.sys               in the -X86 directories only: the helper that
                              gives 32-bit Vista and 7 a message-signalled
                              interrupt, and 32-bit Windows 2000, XP, Vista
                              and 7 a finer clock while the controller is
@@ -4191,10 +4191,10 @@ CD, a shared folder - then:
       Wizard asks the same question - give it the same directory.)
 
   WINDOWS ME
-      SweetLow's USB 2.0 stack first (section 2). Then the same Device
-      Manager route as Windows 98 SE, pointed at the RELEASE-X86\
-      directory, and restart when asked. Windows ME has only been run in a
-      virtual machine.
+      No USB 2.0 stack is needed (section 2). The same Device Manager
+      route as Windows 98 SE, pointed at the RELEASE-X86\ directory;
+      "Insert Disk" may ask for the Windows ME CD (section 3). Restart when
+      asked. Windows ME has only been run in a virtual machine.
 
   WINDOWS 2000 SP4 AND WINDOWS XP (32-BIT)
       Open Device Manager and find the unrecognised xHCI controller, then
