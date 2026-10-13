@@ -1784,9 +1784,10 @@ static USBD_CONFIGURATION_HANDLE hcdCfgHandle(PHCD_USB_DEVICE dev,
  *     of batch (c), round 11, findings 1 and 3: the device's toggles not
  *     reset while the controller's were);
  *   - not established, a rollback that did not succeed, its clears
- *     failing, or an old setting with streams open: the interface is left
- *     with no pipe, as a client that sees the error must select again, and
- *     every ring the controller may hold is kept until a proof releases it.
+ *     failing, or a rollback an old setting's open streams forbid: the
+ *     interface is left with no pipe, as a client that sees the error must
+ *     select again, and every ring the controller may hold is kept until a
+ *     proof releases it.
  *
  * From a function PDO the handle is the PDO's own and the interface must
  * be one of its (design record 13 section 10.9). The interface

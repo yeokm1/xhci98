@@ -860,7 +860,8 @@ allocations became:
 - **`INTERNAL_HC_ERROR`** when SET_INTERFACE was not established, as today.
 - **`DEVICE_GONE`** in place of any failure above once the device is
   proven to have left its port, as every select's failure is answered
-  today (`hcdCfgSelectAnswer`).
+  today (`hcdCfgSelectAnswer`) - all but `BUFFER_TOO_SMALL`, the length
+  probe, which that helper returns as it is.
 
 ### 5.4 The function select and every other path
 
