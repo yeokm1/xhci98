@@ -2065,10 +2065,16 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   Linux does not settle what a 0.96 part does with a Frame ID; Appendix G
   does not say either. Proposed, as this project's conservative policy
   rather than a rule taken from Linux: below 1.0, SIA on every TD
-  whatever bit 11 reads, the CFC input to `XhciXferIsoFramePolicy` and
-  `XhciXferIsoStartPlan` taken as "no usable CFC" there - so a new flow
-  answers `XHCI_ISO_START_SIA_NO_CFC` too, whose name then means no usable
-  CFC capability rather than a zero bit; at 1.0 and later the policy as
+  whatever bit 11 reads. A CFC input of 0 alone would not do it - with
+  `fresh` set `XhciXferIsoFramePolicy` still allows a Frame ID through
+  `cfc || fresh` (`xhci_xfer.c`), and `XhciXferIsoStartPlan` answers
+  `XHCI_ISO_START_SIA_NO_CFC` only when the flow is not fresh - so both
+  helpers take a version input and, below 1.0, prohibit the Frame ID
+  outright, independent of CFC and freshness: the policy leaves
+  `Frames.Allowed` 0, and the plan answers `XHCI_ISO_START_SIA_NO_CFC` for
+  every explicit-start case, a new flow's included, the reason then
+  meaning no usable CFC capability rather than a zero bit. A client's ASAP
+  stays `XHCI_ISO_START_ASAP`. At 1.0 and later both helpers are as
   today. It is the owner's (4.14.11); until answered, the design is the
   proposal.
 
@@ -2087,7 +2093,15 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
     type;
   - **the policy**: bits 15:0 the floor (`0x0096` or `0x0100`), bits 19:16
     the TD Size form (1 packets, 2 KiB; 0 before the check), bit 20 set
-    when D7's override applied (`qemu` flavour only), the rest 0.
+    when D7's override applied (`qemu` flavour only), bit 21 set once the
+    versions word was written - at the step 0c read, whether or not the
+    check then refused - the rest 0.
+
+  Bit 21 is what says the versions were read: a register that answers all
+  ones gives a versions word of `FFFFFFFF` too, so the word alone cannot
+  tell "read `FFFF`" from "not read". `XHCISNAP` and the counter dump take
+  bit 21 as authoritative, and print "not read" only when the policy word
+  is `FFFFFFFF` or bit 21 is clear.
 
   `hcdLogCountersLocked` (`hcd_log.c`), which publishes a chosen list
   rather than the whole block, names the three, so the counter dump of a
@@ -2175,11 +2189,17 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   an explicit start frame on a CFC-0 controller - a Frame ID on its first
   TD at 1.0, SIA below it - every TRB word asserted.
 - `test_iso` again, with D8 as proposed: below 1.0 SIA on every TD with
-  bit 11 read both clear and set, and at 1.0 the existing CFC-0 and CFC-1
-  vectors unchanged.
+  bit 11 read both clear and set, for a fresh flow at an explicit start
+  frame and for one under way, each asserting the emitted SIA bit and
+  Frame ID field and `XhciXferIsoStartPlan`'s answer
+  (`XHCI_ISO_START_SIA_NO_CFC`; ASAP still `XHCI_ISO_START_ASAP`), and at
+  1.0 the existing CFC-0 and CFC-1 vectors, the fresh-flow Frame ID
+  included, unchanged.
 - The counter words' packing (a pure helper): register `0x0100` and
-  effective `0x0096` under the override, an unread pair, a refusal's
-  words, and the policy word for both floors and forms.
+  effective `0x0096` under the override, an unread pair, a read of
+  `FFFF`/`FFFF` told apart from it by bit 21, a refusal's words, and the
+  policy word for both floors and forms; `XHCISNAP`'s decoder on the same
+  words (`-selftest`).
 - `test_caps` again: a nonzero HCCPARAMS2 (FSC and LEC set) ignored below
   1.0 and believed at 1.0; QEMU's register reads 0, so only the host
   vector can show D4 holds. `xhciEffectiveCapDword0`: the override
