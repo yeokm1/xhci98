@@ -2060,12 +2060,17 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
 - **D8, open: the Frame ID below 1.0.** With CFC 0 the driver may give a
   new isochronous flow's first TD a Frame ID (`XhciXferIsoFramePolicy`,
   `XHCI_ISO_START_FIRST_FRAME_ID`), where Linux writes SIA on every TD of a
-  CFC-0 controller and so never a Frame ID on a 0.96 part (A4). Whether
-  0.96 defines or honours the Frame ID is unread, and Appendix G does not
-  say. Proposed: below 1.0, SIA on every TD, the policy answering
-  `XHCI_ISO_START_SIA_NO_CFC` for a new flow too; at 1.0 and later the
-  policy as today. It is the owner's (4.14.11); until answered, the design
-  is the proposal.
+  controller whose CFC reads 0 (A4). Linux's test is on CFC alone, not on
+  the version, and what HCCPARAMS bit 11 means below 1.0 is unread, so
+  Linux does not settle what a 0.96 part does with a Frame ID; Appendix G
+  does not say either. Proposed, as this project's conservative policy
+  rather than a rule taken from Linux: below 1.0, SIA on every TD
+  whatever bit 11 reads, the CFC input to `XhciXferIsoFramePolicy` and
+  `XhciXferIsoStartPlan` taken as "no usable CFC" there - so a new flow
+  answers `XHCI_ISO_START_SIA_NO_CFC` too, whose name then means no usable
+  CFC capability rather than a zero bit; at 1.0 and later the policy as
+  today. It is the owner's (4.14.11); until answered, the design is the
+  proposal.
 
 #### 4.14.7 What a user and a report see
 
@@ -2073,15 +2078,20 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   write `XhciLogVerbosity` 0, at which `XhciLogAppend` (`xhci_log.c`)
   records no ordinary note, so the notes alone would not carry the
   version. The counter block (`src/xhci_counters.h`) gains three words
-  after the last one in use at implementation: the effective HCIVERSION as
-  read at step 0c, written before the check so a refused start has it, and
-  `FFFFFFFF` (not read) from `HcdCountersStart` until then; the value read
-  (`FFFFFFFF` when absent or of another type); and the floor with the TD
-  Size form in effect, plus, in the `qemu` flavour, whether D7's override
-  applied. `hcdLogCountersLocked` (`hcd_log.c`), which publishes a chosen
-  list rather than the whole block, names the three, so the counter dump
-  of a flush carries them with `XhciLogVerbosity` 0 and `XhciLogDebugView`
-  1.
+  after the last one in use at implementation, each `FFFFFFFF` from
+  `HcdCountersStart` until written ("not read"):
+  - **the versions**: bits 15:0 the register's own HCIVERSION and bits
+    31:16 the effective one, both written at step 0c before the check, so a
+    refused start has them; the two halves differ only under D7's override;
+  - **the value read**: the DWORD, or `FFFFFFFF` when absent or of another
+    type;
+  - **the policy**: bits 15:0 the floor (`0x0096` or `0x0100`), bits 19:16
+    the TD Size form (1 packets, 2 KiB; 0 before the check), bit 20 set
+    when D7's override applied (`qemu` flavour only), the rest 0.
+
+  `hcdLogCountersLocked` (`hcd_log.c`), which publishes a chosen list
+  rather than the whole block, names the three, so the counter dump of a
+  flush carries them with `XhciLogVerbosity` 0 and `XhciLogDebugView` 1.
 - **The notes**, at verbosity 2 and above: `hc.version` before the step 0c
   check rather than after the decode, `hc.floor` (`0x0096` or `0x0100`)
   and `hc.accept096`.
@@ -2164,6 +2174,12 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   (D3) and today's values at 1.0; and, with D8 as proposed, a new flow at
   an explicit start frame on a CFC-0 controller - a Frame ID on its first
   TD at 1.0, SIA below it - every TRB word asserted.
+- `test_iso` again, with D8 as proposed: below 1.0 SIA on every TD with
+  bit 11 read both clear and set, and at 1.0 the existing CFC-0 and CFC-1
+  vectors unchanged.
+- The counter words' packing (a pure helper): register `0x0100` and
+  effective `0x0096` under the override, an unread pair, a refusal's
+  words, and the policy word for both floors and forms.
 - `test_caps` again: a nonzero HCCPARAMS2 (FSC and LEC set) ignored below
   1.0 and believed at 1.0; QEMU's register reads 0, so only the host
   vector can show D4 holds. `xhciEffectiveCapDword0`: the override
@@ -2199,9 +2215,20 @@ No virtual machine presents a controller below 1.0: QEMU's answers
   (`hcd-xhci.c` defines the isochronous fields and uses none of them), so
   a guest at `0x0096` runs the branches below 1.0 through the driver - the
   floor at 1 and 0 (the refusal's counter dump read in DebugView at
-  `XhciLogVerbosity` 0), the TD Size form, D2 and D3 on a mouse, a hub, a
-  stick with stage 2's and stage 3's paths in use, and USB audio for the
-  isochronous request - on Windows 98 SE and Windows 2000 SP4. It shows
+  `XhciLogVerbosity` 0, the register's `0100` beside the effective
+  `0096`), the TD Size form, D2 and D3 on a mouse, a hub, a stick and USB
+  audio for the isochronous request - on Windows 98 SE and Windows 2000
+  SP4. Stage 2's and stage 3's paths need more than a stick: they run only
+  on Windows 2000 and later with `XhciWideMap` 1 and a register-free
+  adapter (`hcd_dma.c`, `HcdDmaWideOpen`, which keeps them off on Windows
+  98 SE and ME), and stage 3 only on a SuperSpeed UAS stream ring. So on
+  the Windows 2000 SP4 guest at `0x0096`, with `XhciWideMap` 1, a
+  SuperSpeed UAS drive copies large files twice - once with the large
+  stream rings refused by the `qemu` flavour's `XhciQemuBigRefuse` (record
+  13 section 11.7, point 6's fallback) for stage 2, once with them for
+  stage 3 - and the transfer-pipe counters (`XHCI_XPIPE_STATS`, record 13
+  sections 11.6 and 11.7, point 9) show that `hcdWidePump` and
+  `hcdWideBigOne` published TDs. It shows
   they break nothing in the driver, not that a 0.96 controller accepts the
   fields: QEMU ignores them, so their bit patterns rest on the host
   vectors, and QEMU's HCCPARAMS2 reads 0, so D4 rests on its host vector.
