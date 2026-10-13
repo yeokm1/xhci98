@@ -157,8 +157,8 @@ ULONG XhciOwnCommandEvent(ULONG code);
 
 /*
  * Whether interface `number` has exactly one alternate setting in the
- * configuration descriptor `config` (`length` bytes, walked to the smaller
- * of that and its wTotalLength): 1 when exactly one interface descriptor
+ * configuration descriptor `config` (`length` bytes, walked to its
+ * wTotalLength, which `length` must reach): 1 when exactly one interface descriptor
  * carries that bInterfaceNumber and the walk reached its end cleanly. A
  * descriptor shorter than its kind, a zero or overlong bLength, a header
  * too short - any walk that cannot finish - answers 0, so a malformed

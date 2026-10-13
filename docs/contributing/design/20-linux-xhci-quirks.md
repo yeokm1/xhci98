@@ -976,8 +976,9 @@ Taken at implementation, inside the record's rules:
   same bytes as the `dev->Config` it read before, for a split device), so
   a SELECT_INTERFACE and a function decide it by one rule, and its clears
   go through `hcdCfgDeviceClearHalt`, as the switch's do.
-- The client's pipe entries are written only on success; on a failure
-  each entry the switch had made is left naming no pipe.
+- The client's pipe entries are cleared before anything can fail and
+  written only on success, so a failure leaves every entry naming no
+  pipe.
 
 What the matrix reads (`xhci_counters.h`, appended at word 173):
 `PoolRingsInUse` (the pool rings held, copied at each poll from the

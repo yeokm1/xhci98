@@ -725,6 +725,10 @@ static void test_single_setting(void)
     len = buildConfig(c, ifs, 4);
     CHECK_EQ(XhciOwnSingleSetting(c, len - 1, 2), 0UL,
              "a descriptor running past the bytes given");
+    /* Bytes ending cleanly after interface 1's alternate 0, its alternate 1
+     * past them: not one setting. */
+    CHECK_EQ(XhciOwnSingleSetting(c, 9 + 16 + 16, 1), 0UL,
+             "bytes short of wTotalLength");
     c[1] = 4;
     CHECK_EQ(XhciOwnSingleSetting(c, len, 0), 0UL, "not a configuration");
     CHECK_EQ(XhciOwnSingleSetting(NULL, len, 0), 0UL, "no descriptor");

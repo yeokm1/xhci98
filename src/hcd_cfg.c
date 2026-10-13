@@ -2469,6 +2469,11 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * rings this switch's command will drop reserved apart from the cap. */
     reserved = hcdCfgSwitchReserved(dev, &sw);
     usbd = XHCI_USBD_STATUS_SUCCESS;
+    /* No entry names a pipe until the switch succeeds (step 2): a reused
+     * URB's old handles are cleared before anything can fail. */
+    for (e = 0; e < iface.EndpointCount; e++) {
+        ii->Pipes[e].PipeHandle = NULL;
+    }
     for (e = 0; e < iface.EndpointCount; e++) {
         code = XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength,
                                         iface.EndpointOffset[e],
@@ -2961,6 +2966,17 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     reserved = hcdCfgSwitchReserved(dev, &sw);
     opened = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
+    /* No entry names a pipe until the switch succeeds: every validated
+     * interface's handles cleared before anything can fail. */
+    for (p = (PUCHAR)&sc->Interface; p + fixed <= end; p += ii->Length) {
+        ii = (PUSBD_INTERFACE_INFORMATION)p;
+        (VOID)XhciPipeFindInterface(dev->Selected, dev->SelectedLength,
+                                    ii->InterfaceNumber, ii->AlternateSetting,
+                                    &iface);
+        for (e = 0; e < iface.EndpointCount; e++) {
+            ii->Pipes[e].PipeHandle = NULL;
+        }
+    }
     for (p = (PUCHAR)&sc->Interface;
          usbd == XHCI_USBD_STATUS_SUCCESS && p + fixed <= end;
          p += ii->Length) {

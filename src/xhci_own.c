@@ -195,7 +195,9 @@ ULONG XhciOwnSingleSetting(const UCHAR *config, ULONG length, ULONG number)
     }
     total = (ULONG)config[2] | ((ULONG)config[3] << 8);
     if (total > length) {
-        total = length;
+        /* The bytes stop short of the advertised end: another setting may
+         * lie past them. */
+        return 0;
     }
     seen = 0;
     at = config[0];
