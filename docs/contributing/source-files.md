@@ -43,11 +43,13 @@
 > serial read to `hcd_enum.c` (`HcdDeviceReadSerial`) and the duplicate and
 > dormant matching to `hcd_pdo.c`. Task 33.4 adds `hcd_hubfdo.c`
 > (an external hub's FDO, the third PnP role: each hub the bus serves is a
-> devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
+> devnode under `USB\XHCI98_HUB` or `USB\XHCI98_HUB30` since task 38.8,
+> `XHCI98\HUB` or `XHCI98\HUB30` before, design record 13 section 10.11)
 > and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
 > node information; host suite `test_hub`). Task 36.43 gives `hcd_hubfdo.c` a
 > fourth PnP role, a composite device's FDO over its composite-parent PDO
-> (`XHCI98\COMPOSITE`, design record 13 section 10.12), with the parent's ids
+> (`USB\XHCI98_COMPOSITE`, `XHCI98\COMPOSITE` before task 38.8, design record
+> 13 section 10.12), with the parent's ids
 > in the pure `xhci_func.c` (`XhciFuncParentId`, host suite `test_func`) and
 > the parent, its functions and their in-place re-presentation in
 > `hcd_pdo.c`. Task 34.3 adds the pure
@@ -295,6 +297,18 @@
 > register it touches saved). Task 36.33's fix adds
 > `xhcisnap\check-counter-names.ps1`, which checks the built `XHCISNAP`'s
 > counter names against `xhci_counters.h` word by word.
+> Task 38.8 (design record 13 section 10.13) moves the bus's own ids under
+> `USB\` and spells their four bases once, as `#define`s in the pure
+> `xhci_hub.h` (`XHCI_ID_ROOT_HUB`, `XHCI_ID_HUB`, `XHCI_ID_HUB30`,
+> `XHCI_ID_COMPOSITE`; host suite `test_hub` spells each out), which
+> `hcd_rh.c`, `xhci_hub.c` and `xhci_func.c` build every answer from and
+> `scripts\inf-gate\check-inf.ps1` holds the INFs to (`HCD-IDSRC`). It adds
+> the cleanup tool's tree at the repository root, beside `xhcisnap\`:
+> `xhcicln\xhcicln.c` (one C89 source, `XHCICLN.EXE` with MSVC 6.0 and
+> `XHCICL64.EXE` with WDK 7.1 amd64), `xhcicln.rc` and `xhcicln.manifest` (the
+> elevation request), `build.cmd`, `selftest.cmd` (the `-selftest` that
+> `build-driver.cmd` runs when the EXE is built) and `README.TXT` (the text
+> of the published `readme.txt`).
 > Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
 > `xhci_silent.h` (the Windows 98 SE and ME silent install: the
 > `XhciSilentInstall` gate's rule, the `SilentClasses` table's admission,
@@ -387,7 +401,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI config access, bounded waits. Implemented in `xhci_pci.c`. | no |
 | `xhci_dbg.h` | The trace channel's macros; empty outside the `qemu` flavour. | no |
 | `xhci_compat.h` | Win98/Win2000 DDK compatibility shims, chiefly undoing the Win2K DDK's `ExAllocatePool` to `ExAllocatePoolWithTag` rewrite - a policy (Option A needs no private pool), not a missing export. | no |
-| `xhci_version.h` | The package version and release date, the single editable source of the version. Included by `xhci98.rc`, `xhciqual\qual.h` and `xhcisnap\xhcisnap.c`; the INF's `DriverVer` literal is checked against it by the INF gate. | yes |
+| `xhci_version.h` | The package version and release date, the single editable source of the version. Included by `xhci98.rc`, `xhciqual\qual.h`, `xhcisnap\xhcisnap.c` and `xhcicln\xhcicln.c`; the INF's `DriverVer` literal is checked against it by the INF gate. | yes |
 
 ## Build and packaging inputs
 
@@ -405,7 +419,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `silent-on.bat`, `silent-off.bat` | Its two batch files (task 38.2, section 6.11.8), `portsw-on.bat`'s shape: `silent-on.bat` shows, stops on any errorlevel, merges `silent.reg` with `regedit /s` and runs `silent.vbs 1`, reading its errorlevel 5, 4, 3, 1 in that order; `silent-off.bat` runs `silent.vbs 0` and says the list was left in place and how to delete it. On NT both change nothing. Published in `tools\silent\`. |
 | `..\xhcisnap\snapon.bat`, `..\xhcisnap\snapget.bat`, `..\xhcisnap\snapoff.bat` | The field reports' Windows batch files (roadmap-hcd task 38.1), outside `src\` beside the tool they run: `XHCISNAP -on %1` (the log channel on: `-verbosity 2` with no `LEVEL`, an optional `LEVEL` of exactly 1 to 4, `0` refused pointing at `SNAPOFF.BAT`, all checked by the tool), `XHCISNAP -report %1` (the `.DEV` status, resources and file hashes, and the dump, in the current directory under a date-and-time 8.3 name `XHCISNAP` builds, or `-report NAME` for an optional 8.3 `NAME` the tool validates and refuses rather than overwrites; the channel left on) and `XHCISNAP -disable` (owner, 2026-10-13, for the two arguments). One file each for `COMMAND.COM` and `cmd.exe`, with `portsw-on.bat`'s split. Published as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside `XHCISNAP.EXE` in `tools\xhcisnap\` by `make-release.ps1` from `2.4.0.0`, held by the packager's self-tests (`Get-ReportBatchFaults`: the split, the one command line - for the two that take an argument (`ArgPass`), exactly `XHCISNAP -on %1` or `XHCISNAP -report %1`, with no `if` on `%1` (Codex review of 38.1, round 3) - no percent variable but that `%1`, the tool run last (`ToolLast`, owner, 2026-10-13: reached by one `if exist XHCISNAP.EXE goto` to the label just above it, only labels and `pause` after it and no `IF ERRORLEVEL`, `XHCISNAP` printing the outcome and, last, the files to attach), no drive path, ASCII and CRLF; `Assert-ReportBatchLayout`), the source charset gate and the batch-file line-ending gate. |
 | `..\xhciqual\QUALREP.BAT` | The field reports' MS-DOS batch file (roadmap-hcd task 38.1): `XHCIQUAL --probe-only --no-page --log-stamp`, the read-only probe saved to a new `mDDhhmmS.LOG` in the current directory that `XHCIQUAL` names from the DOS clock. Published beside `XHCIQUAL.EXE` in `tools\xhciqual\` from `2.4.0.0`, held by the same self-tests and gates. |
-| `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330` and `XHCI98\ROOT_HUB`. Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them and to each other. |
+| `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330`, `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and `USB\XHCI98_COMPOSITE` (under `XHCI98\` before task 38.8). Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them and to each other. |
 
 ## Generated, not tracked
 

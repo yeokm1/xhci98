@@ -98,9 +98,10 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off |
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `tools\silent\` | Windows 98 SE and ME | `SILENT.REG`, `SILENT.VBS`, `silent-on.bat` and `silent-off.bat`, the silent install's list and its switch (see "Tuning") |
+| `tools\xhcicln\` | Windows | `XHCICLN.EXE` (32-bit) and `XHCICL64.EXE` (64-bit), an optional tool that lists the old `XHCI98\` entries an update from `2.3.x` or earlier leaves behind and, on Windows 2000 to 7, removes them; nothing needs it |
 | `readme.txt` | | the release notes in plain text |
 
-Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`. So is `tools\silent\`.
+Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`. So are `tools\silent\` and `tools\xhcicln\`.
 
 In each driver directory:
 
@@ -536,6 +537,7 @@ The drivers are C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64
 4. Build the two tools that ship beside the drivers:
    - `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier. It needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points), the only tool installed normally on the host; the drivers never use it.
    - `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
+   - `xhcicln\build.cmd` produces `XHCICLN.EXE` with the in-repo MSVC 6.0 and `XHCICL64.EXE` with the in-repo WDK 7.1 (`build.cmd x86` for the first alone), the cleanup tool of `2.4.0.0`.
 
 5. Make install media. A `.sys` on its own is not install media; each INF travels with its driver, and nothing else does, because the controller's INF has Windows supply its own `usbd.sys` and `usbui.dll`.
 
@@ -560,6 +562,8 @@ scripts/        Setup helpers, build wrapper, the import/INF/packaging gates,
 xhciqual/       The DOS hardware-qualification tool (Open Watcom) and its
                 bare-metal run logs under results/
 xhcisnap/       The snapshot reader for the driver's log channel
+xhcicln/        The optional cleanup tool for the devnodes a driver before
+                2.4.0.0 left under XHCI98\
 docs/           Documentation, indexed by docs/README.md
   using/        The user-facing release notes and acceptance test
   contributing/ Roadmaps, architecture, build/test/runbooks, diagnostics,
@@ -629,13 +633,15 @@ None of these PDFs is tracked here. Fetch your own copies into the git-ignored `
 
 This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`.
 
-The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes.
+The repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes.
 
 * `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
 
 * `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
 
 * `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
+
+* `XHCICLN.EXE` embeds the MSVC 6.0 runtime, and `XHCICL64.EXE` the WDK 7.1 one (from `2.4.0.0`).
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
