@@ -627,6 +627,45 @@ static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
 }
 
 /*
+ * The Windows 98 SE and ME silent install (task 38.2; design record 13
+ * sections 6.11.2 and 6.11.4): the one writer of pdo->SilentInstall, from
+ * the PDO alone - its Config, its kind (Composite || Function) and its final
+ * transport - and the controller's gate and table, which this start's
+ * hcdReadSilent wrote before the thread existed. Called once the PDO's
+ * fields are final and before it is listed: on both of hcdPdoNew's paths
+ * (HcdDevicePdoCreate, HcdDevicePdoRepresentFunctions). A PDO presented UAS
+ * or refused answers 0 whatever the list says (O2). With the gate on, each
+ * decision is noted as silent.pdo: (RootPort << 24) | (first interface, or
+ * 0xFF for a whole device or a parent, << 16) | (reason << 8) | answer.
+ * Thread only, PASSIVE_LEVEL, no lock held: the gate and table are written
+ * only while no thread exists, and the PDO is not yet listed.
+ */
+static VOID hcdSilentDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    ULONG composite;
+    ULONG barred;
+    ULONG reason;
+    ULONG iface;
+
+    composite = (pdo->Composite || pdo->Function) ? 1UL : 0UL;
+    barred = (pdo->Xport.Transport == XHCI_XPORT_UAS ||
+              pdo->Xport.Transport == XHCI_XPORT_REFUSED)
+                 ? 1UL
+                 : 0UL;
+    reason = XhciSilentPdo(hc->SilentGate,
+                           (const UCHAR (*)[4])hc->Silent.Entry,
+                           hc->Silent.Count, pdo->Config, pdo->ConfigLength,
+                           composite, barred);
+    pdo->SilentInstall = (reason == XHCI_SILENT_MATCH) ? 1UL : 0UL;
+    if (hc->SilentGate) {
+        iface = pdo->Function ? (pdo->Func.FirstInterface & 0xFFUL) : 0xFFUL;
+        XhciLogNote(&hc->Hc, "silent.pdo",
+                    ((pdo->RootPort & 0xFFUL) << 24) | (iface << 16) |
+                        ((reason & 0xFFUL) << 8) | pdo->SilentInstall);
+    }
+}
+
+/*
  * A device one of whose PDOs has no transport (31-A.3: UAS-only at
  * SuperSpeed on a controller that does not stream), once per device, before
  * any PDO is listed. Where it sits decides (XhciXportRefusedAt): on a
@@ -1677,6 +1716,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         }
         last = pdo;
     }
+    /* The silent install (38.2, design record 13 section 6.11.4): every
+     * PDO's kind and transport are final here, and none is listed yet. */
+    for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
+        hcdSilentDecide(hc, pdo);
+    }
     /* Their names (33.6), read now, while the device is here - but not
      * for a hub, whose PDO answers a fixed name (task 33.4), nor for a
      * group set to revive a dormant one on Windows 98 SE or ME, which
@@ -2410,6 +2454,9 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             nu->PwrState = XHCI_SUSP_D3;
             nu->PwrWanted = XHCI_SUSP_D0;
         }
+        /* Decided again over the copied transport, not copied, so the
+         * helper stays the field's one writer (6.11.4). */
+        hcdSilentDecide(hc, nu);
         made[i] = nu;
     }
     done = 0;
@@ -2827,7 +2874,9 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
      * usbhub answers; the location form is unique only under the root
      * hub, and PnP qualifies it. */
     caps->UniqueID = (pdo->SerialId[0] != 0) ? TRUE : FALSE;
-    caps->SilentInstall = FALSE;
+    /* Windows 98 SE and ME only, and off by default (task 38.2; design
+     * record 13 section 6.11): hcdSilentDecide's answer, 0 on NT. */
+    caps->SilentInstall = pdo->SilentInstall ? TRUE : FALSE;
     caps->RawDeviceOK = FALSE;
     /* FALSE, as Windows 2000's usbhub reports a device PDO: the hot-plug
      * applet lists a removable device only when it is FALSE. A split

@@ -51,6 +51,11 @@ rem                  Stream ID, the doorbell value and the event's stream
 rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
 rem                  31-A.3): Bulk-Only or UAS for an interface offering
 rem                  either, and the hardware and compatible ids that follow
+rem   test_silent  - the Windows 98 SE and ME silent install (src\xhci_silent.c,
+rem                  task 38.2, design record 13 section 6.11): the gate, the
+rem                  SilentClasses admission and cap, a failed enumeration,
+rem                  the control bits, composite, the package's six, the
+rem                  transport bar, empty lists and malformed descriptors
 rem   test_psw     - the Intel port switchover (src\xhci_psw.c, task 34.3):
 rem                  the device-id gate, the board exemption, the
 rem                  XhciIntelPortSwitch rule, and the route and release over
@@ -302,6 +307,10 @@ call :run test_stream "test_stream.c ..\src\xhci_stream.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
+rem test_silent links nothing else: the gate, the list's admission and the
+rem descriptor walk are pure computations over registry values and bytes
+rem (task 38.2).
+call :run test_silent "test_silent.c ..\src\xhci_silent.c"
 rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).

@@ -296,6 +296,8 @@ static NTSTATUS hcdRootHubCapabilities(PIRP irp)
     caps->Removable = FALSE;
     caps->DockDevice = FALSE;
     caps->UniqueID = FALSE;
+    /* Always FALSE: the silent install (task 38.2; design record 13 section
+     * 6.11.2) walks no configuration for the root hub. */
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
     caps->SurpriseRemovalOK = FALSE;

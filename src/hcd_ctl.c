@@ -86,6 +86,12 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * DWORD 0 turns it off; absent, another number or another type is on.
  * Read at every start. */
 #define HCD_VALUE_HUB_SPEED     L"XhciUsb2HubSpeedFallback"
+/* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
+ * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
+ * 0, another number, another type or a failed read is off (O6). No INF
+ * writes it. Read at every start. The list it gates is a Services key. */
+#define HCD_VALUE_SILENT        L"XhciSilentInstall"
+#define HCD_SILENT_LIST         L"USB\\SilentClasses"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
  * chunk may use, held to this many registers (1 to the real grant), so a
@@ -380,6 +386,92 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
     XhciLogNote(ext, "qemu.psi.e460", hc->QemuPsiE460);
 #endif
+}
+
+/* xhci_silent.h keeps REG_BINARY's number for the pure core; this is where
+ * the two must agree. */
+typedef char hcdSilentRegBinaryAgrees[(REG_BINARY == XHCI_SILENT_REG_BINARY)
+                                          ? 1
+                                          : -1];
+
+/*
+ * The query routine for hcdReadSilent: called once for every value of
+ * USB\SilentClasses (the table's Name is NULL), each handed to the pure
+ * admission, which keeps, ignores or drops it and counts it. Always
+ * STATUS_SUCCESS, so one bad value ends nothing (design record 13 section
+ * 6.11.3). IRQL: PASSIVE_LEVEL.
+ */
+static NTSTATUS NTAPI hcdTakeSilent(PWSTR ValueName, ULONG ValueType,
+                                    PVOID ValueData, ULONG ValueLength,
+                                    PVOID Context, PVOID EntryContext)
+{
+    PHCD_CONTROLLER hc;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(EntryContext);
+
+    hc = (PHCD_CONTROLLER)Context;
+    (VOID)XhciSilentAdd(&hc->Silent, ValueType, (const UCHAR *)ValueData,
+                        ValueLength);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The silent install's gate and list (task 38.2; design record 13 section
+ * 6.11.3), once per start, after hcdReadValues and before the controller
+ * thread exists, so every PDO of this start is decided against them
+ * (hcd_pdo.c, hcdSilentDecide). On every target the table is emptied and
+ * the gate cleared first; on Windows 98 SE and ME alone the gate is read,
+ * and only with it on the list. The list's query names no value: NTKERN's
+ * enumeration of every value for a NULL Name is O1, unread, and the four
+ * counts noted here are how the first 98 SE leg reads it - kept, ignored
+ * and dropped are every call the routine received. A query that does not
+ * succeed leaves the table empty: a list read in part is not the list.
+ * No lock: the previous start's thread has exited and this start's does
+ * not exist yet. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdReadSilent(PHCD_CONTROLLER hc)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    PXHCI_EXTENSION ext;
+    NTSTATUS status;
+    ULONG value;
+    PUCHAR p;
+    ULONG i;
+
+    ext = &hc->Hc;
+    XhciSilentReset(&hc->Silent);
+    hc->SilentGate = 0;
+    hc->SilentStatus = STATUS_SUCCESS;
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        return;
+    }
+
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_SILENT, &value);
+    hc->SilentGate = XhciSilentGate(NT_SUCCESS(status) ? 1UL : 0UL, value);
+    XhciLogNote(ext, "silent.gate.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "silent.gate", hc->SilentGate);
+    if (!hc->SilentGate) {
+        return;
+    }
+
+    p = (PUCHAR)table;
+    for (i = 0; i < sizeof(table); i++) {
+        p[i] = 0;
+    }
+    table[0].QueryRoutine = hcdTakeSilent;
+    table[0].Flags = RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = NULL;
+    status = RtlQueryRegistryValues(RTL_REGISTRY_SERVICES, HCD_SILENT_LIST,
+                                    table, hc, NULL);
+    hc->SilentStatus = status;
+    XhciSilentEnd(&hc->Silent, (status == STATUS_SUCCESS) ? 1UL : 0UL);
+    XhciLogNote(ext, "silent.status", (ULONG)status);
+    XhciLogNote(ext, "silent.entries", hc->Silent.Count);
+    XhciLogNote(ext, "silent.ignored", hc->Silent.Ignored);
+    XhciLogNote(ext, "silent.dropped", hc->Silent.Dropped);
 }
 
 #if defined(XHCI_FLAVOUR_QEMU)
@@ -2548,6 +2640,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
     hcdReadValues(hc);
+    hcdReadSilent(hc);
     hcdLogDelivery(hc);
 #if defined(XHCI_FLAVOUR_QEMU)
     HcdInjStart(hc);

@@ -154,6 +154,8 @@ static NTSTATUS uasCapabilities(PUAS_PDO pdo, PDEVICE_CAPABILITIES caps)
     caps->DockDevice = FALSE;
     caps->UniqueID = (BOOLEAN)(pdo->Fdo != NULL &&
                                pdo->Fdo->Serial[0] != 0);
+    /* Always FALSE: a LUN is a disk, not a USB interface, so the silent
+     * install (task 38.2; design record 13 section 6.11.2) never applies. */
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
     caps->SurpriseRemovalOK = TRUE;

@@ -27,6 +27,7 @@
 #include "xhci_pipe.h"
 #include "xhci_func.h"
 #include "xhci_xport.h"
+#include "xhci_silent.h"
 #include "xhci_hub.h"
 #include "xhci_sshub.h"
 #include "xhci_link.h"
@@ -879,6 +880,11 @@ typedef struct _HCD_DEVICE_PDO {
      * REMOVE or START of a PDO whose device stays linked. */
     ULONG FwArmed;
     ULONG ArmNow;
+    /* The Windows 98 SE and ME silent install (task 38.2; design record 13
+     * section 6.11.4): 0 or 1, written once by hcdSilentDecide before the
+     * PDO is listed, from its final Config, kind and transport and the
+     * controller's gate and table; IRP_MN_QUERY_CAPABILITIES copies it. */
+    ULONG SilentInstall;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* A PDO other PDOs are presented under (ParentSerial): a hub's (task 33.4)
@@ -1730,6 +1736,15 @@ typedef struct _HCD_CONTROLLER {
      * a D0; read under the controller lock by every admission that would
      * otherwise leave a request waiting for a D0 (hcd_io.c, hcd_cfg.c). */
     ULONG ShutLatched;
+    /* The Windows 98 SE and ME silent install (task 38.2; design record 13
+     * section 6.11.3): the gate XhciSilentInstall (0 or 1), the
+     * SilentClasses table and the query's status, written by each start's
+     * hcdReadSilent while no controller thread exists, read with no lock
+     * by the thread's hcdSilentDecide. On NT the gate stays 0 and the table
+     * empty. Outside Hc, so XHCISNAP's dump layout is untouched. */
+    ULONG SilentGate;
+    NTSTATUS SilentStatus;
+    XHCI_SILENT Silent;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
 /* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
