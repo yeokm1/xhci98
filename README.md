@@ -98,7 +98,7 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `readme.txt` | | the release notes in plain text |
 
-Releases before `2.4.0.0` have `xhciqual\`, `xhcisnap\` and `portsw\` at the top level instead of under `tools\`.
+Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none.
 
 In each driver directory:
 

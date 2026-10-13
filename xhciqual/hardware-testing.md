@@ -748,7 +748,7 @@ whose register table and BIOS-mode behaviour come from the same two sources.
 **Since `2.1.1.0` the driver can route the ports itself** on Intel 1E31,
 8C31, 9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16),
 since `2.3.0.0` only when `XhciIntelPortSwitch` turns it on (1, or 2; off
-by default, task 36.42; `portsw.vbs` in the download's `tools\portsw\`, before `2.4.0.0` its
+by default, task 36.42; `portsw.vbs` in the download's `tools\portsw\`, in `2.3.1.0` its
 `portsw\`, sets 0 or 1), and hands
 them back to EHCI
 when it stops and at shutdown. So on such a machine this tool, run from DOS before Windows, shows

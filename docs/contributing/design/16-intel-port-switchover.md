@@ -848,7 +848,7 @@ row 7; `source-files.md`.
 
 - The README's download table, the qualifier's folder and the switchover
   section: `tools\portsw\`, `tools\xhciqual\` and `tools\xhcisnap\`, with
-  the releases before `2.4.0.0` named as having them at the top level.
+  the releases before `2.4.0.0` named as having the tools at the top level (`portsw\` only in `2.3.1.0`; `2.3.0.0` per flavour directory, earlier none).
 - The release notes: the package contents under "Installing", the
   qualifier's directory, the update section's `portsw-off.bat`, the
   switchover section's script, the registry table's `XhciIntelPortSwitch`

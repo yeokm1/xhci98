@@ -46,7 +46,8 @@ no `readme.txt` of its own: the top-level readme's section 9 explains them.
 Since roadmap-hcd task 38.10 the three sit under **`tools\`** in the version
 directory (`tools\xhciqual\`, `tools\xhcisnap\`, `tools\portsw\`), so the
 version root holds only the flavour directories, the readme and the licence;
-a version published before 2.4.0.0 keeps them at its root, and the upload
+a version published before 2.4.0.0 keeps its tools at its root (portsw\ only
+in 2.3.1.0; 2.3.0.0 has the scripts per flavour, older none), and the upload
 assembly reads each tree at the layout its version was published with.
 
 **Only the executable and its MAP go out**, not the numbered `.BAT` wrappers.

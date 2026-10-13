@@ -20,8 +20,8 @@ is this project's two files and nothing else:
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
 since task 37.5: make-release.ps1 publishes them once, in a tools\portsw\
-directory of the version (task 38.10; a version before 2.4.0.0 has portsw\
-at its root), because they are the same for every architecture and flavour
+directory of the version (task 38.10; 2.3.1.0 has portsw\ at its root,
+2.3.0.0 the scripts in each flavour directory, earlier versions none), because they are the same for every architecture and flavour
 and the setup engine never reads them. A guest leg that needs them copies
 them from src\ or from a cut's tools\portsw\.
 
