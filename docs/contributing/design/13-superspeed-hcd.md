@@ -2412,9 +2412,11 @@ double-click and at a 98 SE or ME prompt under their long names. **Decided
   switch is off.
 - **Run `silent-on.bat` only once each listed class's drivers have been
   installed at least once on this machine**, by plugging such a device with
-  the switch off and finishing its wizard: a silent install asks for no CD
-  and no disk, so a class whose driver is not yet on the machine ends with a
-  device that does not work and nothing said. The case read: a USB keyboard
+  the switch off and finishing its wizard: with no wizard, a silent install
+  on 98 SE asks for a missing driver file from the CD without saying which
+  device it is for, and without the CD the device is left with no driver
+  (38.2's legs: `hidusb.sys` and `kbdhid.vxd` asked for, 6.11.11). The case
+  read before that: a USB keyboard
   on 98 SE needs `kbdhid.vxd` from the Windows 98 SE CD (run-36, K5), and
   storage needs NUSB's `usbstor.sys` on 98 SE (ME's own on ME).
 - **Restart Windows** after either script: the driver reads the switch and
@@ -2547,17 +2549,18 @@ the New Hardware wizard seen or not, Device Manager, and `regedit /e` of
 host A; evidence `out\p38-2\legs\notes.txt`, dumps and shots beside it
 (git-ignored). Every device on a devnode it had never had (a fresh serial).
 
-**Windows 98 SE** (NUSB 3.3, the HID and storage class drivers installed
-once before (c)):
+**Windows 98 SE** (NUSB 3.3; the storage class driver installed before (c),
+the HID drivers not, see (c)):
 
 - (0): `silent.gate.value` `0xFFFFFFFF`, `silent.gate` 0, no other note.
 - (c): `silent.entries` 6, `silent.ignored` 0, `silent.dropped` 0 (O1);
   a mouse, a Bulk-Only stick, a hub and a keyboard each `silent.pdo` MATCH,
   answer 1, no wizard. On the base used, the HID drivers had not been
   installed before, and the mouse and the keyboard asked for the CD
-  (`hidusb.sys`, `kbdhid.vxd`) with no wizard: the readme's "drivers
-  installed once first" is that.
-- (b), the gate 1 by hand and no list: `silent.status` `0xC0000034`,
+  (`hidusb.sys`, `kbdhid.vxd`) with no wizard, then installed from it: the
+  readme's "drivers installed once first" is that.
+- (b), the gate left at 1 from (c) and the list deleted: `silent.status`
+  `0xC0000034`,
   `silent.entries` 0, a new mouse `silent.pdo` reason EMPTY, answer 0, the
   wizard came.
 - (a), the list merged and the gate 0: only the two gate notes, no
@@ -2604,12 +2607,15 @@ ME):
   the `usb-audio` device that brought the wizard in (0) installed with no
   wizard and no disk, parent and function MATCH, both working.
 
-So **ME does not need the list** for the six entries' classes: it installs
-them silently without it. The switch changes what ME does only for a class
+So **ME does not need the list** for a keyboard, mouse, stick or hub that
+is a device of its own: it installs them silently without it. Composite
+HID and storage (the entries `0x43` and `0xC3`) were read on neither system:
+no QEMU device offers one. The switch changes what ME does only for a class
 ME would ask about, as audio showed. Not read on ME: (a), (b),
 `silent-off.bat`, the script's refusals and the composite parent's disable
-and enable, each read on 98 SE. Not read on Windows 2000: the base at hand
-had no `xhci98` controller.
+and enable, each read on 98 SE (of the refusals, the wrong-value one; the
+unreadable `SILENT.REG` was not read). Not read on Windows 2000: the base at
+hand had no `xhci98` controller.
 
 ## 7. The Windows 98 export evidence (task 25.3)
 
