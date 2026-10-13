@@ -82,9 +82,11 @@ What the mirror does not carry, and what follows from it:
   is not the pinned commit; section 10 proposes adding the file to the
   mirror at it.
 - `drivers/usb/core/message.c`, whose `usb_set_interface` section 5 cites
-  for what Linux does when SET_INTERFACE fails. Not in the mirror; cited by
-  function name only, and its behaviour as stated there is to be read at
-  the pinned commit before the implementation relies on it.
+  for what Linux does when SET_INTERFACE fails or is STALLed. Not in the
+  mirror when the survey was written; added at the pinned commit on
+  2026-10-14 (`0f33d190`, `external/README.md`, copied flat as
+  `external/linux/message.c`) and read there before the implementation
+  (section 8).
 - The platform glue (`xhci-plat.c`, `xhci-mtk.c`, `xhci-rcar.c`,
   `xhci-tegra.c`, `xhci-histb.c`, the DWC3 glue and the rest), and
   `xhci-pci-prom21.c`. What those set is listed by bit name only, from
