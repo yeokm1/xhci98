@@ -204,5 +204,6 @@ XP x64 and 7 x64, a hub with a device behind it: the devices listed, the
 hubs not; the hub interface on the root hub and each hub alone; the host
 controller interface on the controller alone; `usbview` and Device Manager
 unchanged. QEMU's hub is a Full
-Speed hub and QEMU has no USB 3 hub, so the USB 2.0 and USB 3 hubs the task
-names need real hardware.
+Speed hub and QEMU has no USB 3 hub; the owner amended the legs to it the
+same day, a USB 2.0 hub and both halves of a USB 3 hub taking the same path
+(the `Hub` flag set at every hub PDO's creation), reviewed statically.
