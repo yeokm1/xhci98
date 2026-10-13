@@ -8417,7 +8417,11 @@ static int dev_prop(DWORD dn, int haveDn, const char *id, ULONG prop,
                 }
                 memcpy(out + n, raw + i, l);
                 n += l;
-                if (type != REG_MULTI_SZ || n + 1 >= outBytes) {
+                /* Every string in the length, whatever the type says: 98 SE
+                 * and ME's configuration manager hands back a hardware id
+                 * list whose class-code id is not the first, and the 38.1
+                 * legs read the controller there as not an xHCI one (9X-1). */
+                if (n + 1 >= outBytes) {
                     break;
                 }
                 i += (ULONG)strlen(raw + i) + 1;
@@ -9040,6 +9044,15 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
 
     isXhci = (_strnicmp(id, "PCI\\", 4) == 0) &&
              (text_has_ci(hw, "CC_0C0330") || text_has_ci(compat, "CC_0C0330"));
+    if (!isXhci && haveDn && _strnicmp(id, "PCI\\", 4) == 0) {
+        /* 9X-1 again, by the other road: the devnode's own Enum key, where
+         * 98 SE and ME keep the ids as one comma-separated string. */
+        dev_prop(dn, 0, id, CMX_DRP_HARDWAREID, "HardwareID", hw, sizeof(hw));
+        dev_prop(dn, 0, id, CMX_DRP_COMPATIBLEIDS, "CompatibleIDs", compat,
+                 sizeof(compat));
+        isXhci = text_has_ci(hw, "CC_0C0330") ||
+                 text_has_ci(compat, "CC_0C0330");
+    }
     ours = (_stricmp(service, "xhci98") == 0 ||
             _stricmp(service, "xhciuas") == 0 ||
             _stricmp(ntmp, "xhci98.sys") == 0 ||
