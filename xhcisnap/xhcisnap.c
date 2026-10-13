@@ -267,7 +267,9 @@ static void say_hang(const char *indent, const char *hang, const char *fmt, ...)
  * columns with its HKLM\, so the path is broken after a backslash wherever
  * the next piece would pass column 79, each continuation two further in
  * (legs of 38.1: it wrapped at 80 on XP and 7; Codex review of 38.1, round
- * 5: an instance key, 4 deep, still passed it when broken only once). */
+ * 5: an instance key, 4 deep, still passed it when broken only once). A
+ * piece is never split, so one past a whole line would still pass it; no
+ * class or instance key has one (a GUID is 38, a hardware id about 41). */
 static void print_hklm_path(const char *indent, const char *path,
                             const char *tail)
 {
@@ -292,6 +294,7 @@ static void print_hklm_path(const char *indent, const char *path,
     }
     printf("%s\n", tail);
 }
+
 static const char *uu_status_text(unsigned long code)
 {
     switch (code) {
