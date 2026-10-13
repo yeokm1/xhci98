@@ -17,7 +17,7 @@ redistributed by it. Re-fetch it with the commands below on any machine.
 | `reactos/usbport/` | `drivers/usb/usbport/` | The port driver `xhci98.sys` plugs into: `usbport.c` (registration/takeover), `endpoint.c`, `roothub.c`, `device.c` (the SET_ADDRESS flow to intercept), `queue.c`, `iface.c`, `pnp.c`, `power.c`, plus `usbport.spec` (export list). |
 | `reactos/usbehci/` | `drivers/usb/usbehci/` | A complete USB2 miniport against that ABI; the structural template for `src/xhci_dispatch.c`. |
 | `reactos/usbohci/`, `reactos/usbuhci/` | `drivers/usb/usbohci/`, `usbuhci/` | USB 1.1 miniports; secondary templates showing which parts vary by controller type. |
-| `linux/` | `drivers/usb/host/` | xHCI hardware programming: `xhci-ring.c`, `xhci-mem.c`, `xhci-hub.c`, ext-caps; and the quirk references `xhci-pci.c`, `xhci-pci-renesas.c` (Renesas uPD720201/202 firmware upload), `pci-quirks.c` (BIOS handoff + Intel port switchover). |
+| `linux/` | `drivers/usb/host/` | xHCI hardware programming: `xhci-ring.c`, `xhci-mem.c`, `xhci-hub.c`, ext-caps; and the quirk references `xhci-pci.c`, `xhci-pci-renesas.c` (Renesas uPD720201/202 firmware upload), `pci-quirks.c` (BIOS handoff + Intel port switchover); and, as single files from elsewhere in the tree, `include/linux/pci_ids.h` (the vendor and device constants) and `drivers/usb/core/message.c` (`usb_set_interface`'s rollback), copied flat as `pci_ids.h` and `message.c` (2026-10-14, design record 20). |
 | `freebsd/` | `sys/dev/usb/controller/` | Secondary. Clean xHCI register-sequence reference: `xhci.c`, `xhci.h`, `xhcireg.h`, `xhci_pci.c`. |
 | `haiku/` | `src/add-ons/kernel/busses/usb/` | Secondary. Readable xHCI implementation: `xhci.cpp`, `xhci.h`, `xhci_hardware.h`, `xhci_rh.cpp`. |
 | `qemu/` | `hw/usb/` | The emulated controller this project's guests actually run against, read to settle what the model does and does not implement: `hcd-xhci.c`, `hcd-xhci.h`. Added 2026-09-20 for roadmap task 23.3, whose first question is whether QEMU models interrupt moderation at all. It does not - `imod` is stored, returned and migrated, and no code path consults it - so no interrupt-rate reading can come out of a guest. **This tree documents the emulator, not the hardware**: where it and `xhci-data-structures.md` disagree the spec wins, and the disagreements are themselves findings (the model resets IMOD to 0 where hardware resets it to 4000). |
@@ -91,6 +91,12 @@ git -C "$tmp/reactos" sparse-checkout set \
 # Linux: core xHCI hardware + PCI quirk/handoff + Renesas firmware
 git clone --depth 1 --filter=tree:0 --sparse https://github.com/torvalds/linux "$tmp/linux"
 git -C "$tmp/linux" sparse-checkout set drivers/usb/host
+# Two single files beside them, at the same commit (added 2026-10-14 for roadmap-hcd
+# task 38.10, design record 20): the PCI vendor/device constants xhci-pci.c names, and
+# usb_set_interface's rollback. Copied flat into linux/ as pci_ids.h and message.c.
+R=https://raw.githubusercontent.com/torvalds/linux/c6859eed755df351a3978b33cb92365f9b3e8f06
+curl -sSfL -o "$tmp/linux/pci_ids.h" "$R/include/linux/pci_ids.h"   # SHA-256 55928d1f2c4f7e6b912c54baf64b876fc8cd4d083d2016a45a87ca33ebc9439d
+curl -sSfL -o "$tmp/linux/message.c" "$R/drivers/usb/core/message.c" # SHA-256 c6e1b4ce8d94b41954575aa7a9c9792ca70e2fa27558dfec400b063ffe5fc96b
 
 # FreeBSD: register-sequence reference
 git clone --depth 1 --filter=blob:none --sparse https://github.com/freebsd/freebsd-src "$tmp/freebsd"
