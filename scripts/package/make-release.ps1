@@ -825,6 +825,57 @@ function Assert-SilentInstallLayout {
     }
 }
 
+function Assert-SilentInstallContent {
+    # What the silent install's files in a version tree SAY (task 38.2), where
+    # Assert-SilentInstallLayout checks only where they are (Codex review of
+    # 38.2, round 1: a truncated SILENT.REG under the right name passed it).
+    # In tools\silent\, each batch is read as bytes and held to
+    # package-common.ps1's Get-SilentBatchFaults and SILENT.REG to
+    # Get-SilentRegFaults, the definitions test-package.ps1 holds the
+    # sources to; SILENT.VBS has no checker of its own. With -Reference (the
+    # cut: the repository root) each of the four must also be the
+    # repository's src\ file byte for byte. The upload assembly passes none,
+    # as for Assert-ReportBatchContent. Run it after
+    # Assert-SilentInstallLayout, which reports a missing file; a tree
+    # without tools\ has none to read.
+    param([string]$Root, [hashtable]$Map, [string]$What, [string]$Reference = "")
+    $dir = Join-Path (Get-Item -LiteralPath $Root).FullName (Join-Path $toolsDirName "silent")
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return }
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $values = @{ "silent-on.bat" = "1"; "silent-off.bat" = "0" }
+    $faults = @()
+    foreach ($src in @($Map.Keys | Sort-Object)) {
+        $pub = $Map[$src]
+        $path = Join-Path $dir $pub
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $text = $latin1.GetString($bytes)
+        $found = @()
+        if ($values.ContainsKey($src)) {
+            $found = @(Get-SilentBatchFaults -Text $text -Value $values[$src])
+        } elseif ($src -eq "silent.reg") {
+            $found = @(Get-SilentRegFaults -Text $text)
+        }
+        foreach ($f in $found) { $faults += "$toolsDirName\silent\${pub}: $f" }
+        if ($Reference -ne "") {
+            $refPath = Join-Path $Reference ("src\" + $src)
+            if (-not (Test-Path -LiteralPath $refPath -PathType Leaf)) {
+                $faults += "$toolsDirName\silent\${pub}: the repository has no src\$src to compare it with"
+            } else {
+                $refBytes = [System.IO.File]::ReadAllBytes($refPath)
+                if ($bytes.Length -ne $refBytes.Length -or
+                    [System.BitConverter]::ToString($bytes) -cne [System.BitConverter]::ToString($refBytes)) {
+                    $faults += "$toolsDirName\silent\$pub is not the repository's src\$src byte for byte"
+                }
+            }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} carries silent install files that are not the ones this release publishes (roadmap-hcd task 38.2):`n  - {1}" -f `
+               $What, ($faults -join "`n  - "))
+    }
+}
+
 function Publish-ReportBatches {
     # Copies one tool's report batches (roadmap-hcd task 38.1) from SourceDir
     # into DestDir under their published names. Together or not at all: a
@@ -2181,6 +2232,9 @@ $gateOut
     # has tools\, and none anywhere in a tree published before 2.4.0.0
     # (task 38.2).
     Assert-SilentInstallLayout -Root $uploadRoot -Map $silentPublishable -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # And what they say, before anything is archived, as for the report
+    # batches below.
+    Assert-SilentInstallContent -Root $uploadRoot -Map $silentPublishable -What "the upload set '$uploadRoot'"
     # The report batches beside their tools where the tree has tools\, and
     # none anywhere in a tree published before 2.4.0.0 (task 38.1).
     Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
@@ -5869,6 +5923,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
                             -What "the staged release '$destRoot'"
     # The silent install's four files in tools\silent\ alone (task 38.2).
     Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release '$destRoot'"
+    Assert-SilentInstallContent -Root $destRoot -Map $silentPublishable -What "the staged release '$destRoot'" -Reference $repo
     # The report batches beside their tools and nowhere else (task 38.1).
     Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'"
     # And what they say: the shared checker, and the repository's own bytes.

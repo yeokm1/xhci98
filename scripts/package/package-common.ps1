@@ -703,3 +703,110 @@ function Get-ReportBatchFaults {
     if ($Spec.Win -and -not $Text.Contains('Run as administrator')) { $faults += "it no longer says 'Run as administrator' for Vista and 7" }
     return $faults
 }
+
+# The silent install's two batch files and SILENT.REG (roadmap-hcd task
+# 38.2, design record 13 section 6.11.8): what test-package.ps1 holds the
+# repository's sources to, and what make-release.ps1 holds a staged or
+# published tools\silent\ to (Assert-SilentInstallContent; Codex review of
+# 38.2, round 1). The batches are run by COMMAND.COM on Windows 98 SE and
+# ME and by cmd.exe elsewhere, so they are held as portsw-on.bat's are:
+# every line from a short list both interpreters run, and a pinned split
+# whose cmd.exe branch only says it changed nothing. silent-on.bat merges
+# SILENT.REG before it sets 1, and silent-off.bat never merges it.
+function Get-SilentBatchFaults {
+    param([string]$Text, [string]$Value)
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+    $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+    if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+    if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+    $code = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+    }
+    # The split: cmd.exe takes nt, says nothing was changed, and ends.
+    $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', $null, 'goto end', ':run')
+    for ($k = 0; $k -lt $split.Count; $k++) {
+        if ($code.Count -le $k) { $faults += "the file ends inside the split"; break }
+        $line = $lines[$code[$k]]
+        if ($null -eq $split[$k]) {
+            if ($line -cnotmatch '^echo [ -~]*nothing was changed\.$') { $faults += "command 4 after @echo off is not the echo that says nothing was changed" }
+        } elseif ($line -cne $split[$k]) {
+            $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+        }
+    }
+    $osLine = -1
+    if ($code.Count -gt 0) { $osLine = $code[0] }
+    $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                 '^if not exist silent\.(vbs|reg) goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
+                 '^cscript //nologo silent\.vbs (show|[0-9])$', '^regedit /s silent\.reg$')
+    $labels = @{}
+    $gotos = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+        if ($i -ne $osLine) {
+            $ok = $false
+            foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+            if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+        }
+        if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
+            $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+        }
+        if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+        if ($line -cmatch '^:([a-z]+)$') {
+            if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+            $labels[$Matches[1]] = $i
+        }
+        if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+    }
+    foreach ($g in $gotos) {
+        if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+        if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+    }
+    $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo silent\.vbs [0-9]$' })
+    if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo silent.vbs ' + $Value)) {
+        $faults += "it does not set exactly one value, $Value"
+    }
+    $merges = @($lines | Where-Object { $_ -cmatch '^regedit ' })
+    if ($Value -eq "1") {
+        $pins = @('if not exist silent.vbs goto nofile', 'if not exist silent.reg goto nofile',
+                  'cscript //nologo silent.vbs show', 'if errorlevel 1 goto nochange',
+                  'regedit /s silent.reg', 'cscript //nologo silent.vbs 1',
+                  'if errorlevel 5 goto unverified', 'if errorlevel 4 goto nolist',
+                  'if errorlevel 3 goto partial', 'if errorlevel 1 goto notset')
+        if ($merges.Count -ne 1) { $faults += "it does not merge SILENT.REG exactly once" }
+    } else {
+        $pins = @('if not exist silent.vbs goto nofile', 'cscript //nologo silent.vbs 0',
+                  'if errorlevel 5 goto unverified', 'if errorlevel 3 goto partial',
+                  'if errorlevel 1 goto notset', ':list')
+        if ($merges.Count -ne 0) { $faults += "it merges a .reg file; silent-off.bat leaves the list alone" }
+        foreach ($needle in @('The list was left in place', 'delete the', 'SilentClasses key')) {
+            if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
+        }
+    }
+    $last = -1
+    foreach ($pin in $pins) {
+        $at = [Array]::IndexOf($lines, $pin)
+        if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
+    }
+    if (-not $Text.Contains('Windows 98 SE and ME only')) { $faults += "it no longer says 'Windows 98 SE and ME only'" }
+    return $faults
+}
+
+# SILENT.REG: REGEDIT4, the one key, and the six values of design record
+# 13 section 6.11.8 with their exact bytes, nothing else (SweetLow's
+# list; names kept so a merge over his leaves six values, not twelve).
+function Get-SilentRegFaults {
+    param([string]$Text)
+    $want = "REGEDIT4`r`n`r`n[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses]`r`n" +
+            "`"0`"=hex:80,09,00,00`r`n`"1`"=hex:43,03,01,01`r`n`"2`"=hex:43,03,01,02`r`n" +
+            "`"3`"=hex:c3,08,06,50`r`n`"4`"=hex:83,03,01,01`r`n`"5`"=hex:83,03,01,02`r`n`r`n"
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if ($Text -cne $want) { $faults += "it is not REGEDIT4, the SilentClasses key and its six values, exactly" }
+    return $faults
+}

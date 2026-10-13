@@ -382,90 +382,9 @@ try {
     # interpreters run, and a pinned split whose cmd.exe branch only says it
     # changed nothing. silent-on.bat merges SILENT.REG before it sets 1, and
     # silent-off.bat never merges it. SILENT.REG is held to its six values.
+    # The two checkers are package-common.ps1's, which make-release.ps1 also
+    # holds a staged or published tools\silent\ to (Assert-SilentInstallContent).
     Write-Step "silent-on.bat and silent-off.bat are COMMAND.COM-safe; SILENT.REG is the six values"
-    function Get-SilentBatchFaults {
-        param([string]$Text, [string]$Value)
-        $faults = @()
-        if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
-        if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
-        if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
-        $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
-        if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
-        if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
-        $code = @()
-        for ($i = 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
-        }
-        # The split: cmd.exe takes nt, says nothing was changed, and ends.
-        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', $null, 'goto end', ':run')
-        for ($k = 0; $k -lt $split.Count; $k++) {
-            if ($code.Count -le $k) { $faults += "the file ends inside the split"; break }
-            $line = $lines[$code[$k]]
-            if ($null -eq $split[$k]) {
-                if ($line -cnotmatch '^echo [ -~]*nothing was changed\.$') { $faults += "command 4 after @echo off is not the echo that says nothing was changed" }
-            } elseif ($line -cne $split[$k]) {
-                $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
-            }
-        }
-        $osLine = -1
-        if ($code.Count -gt 0) { $osLine = $code[0] }
-        $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
-                     '^if not exist silent\.(vbs|reg) goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
-                     '^cscript //nologo silent\.vbs (show|[0-9])$', '^regedit /s silent\.reg$')
-        $labels = @{}
-        $gotos = @()
-        for ($i = 1; $i -lt $lines.Count; $i++) {
-            $line = $lines[$i]
-            if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
-            if ($i -ne $osLine) {
-                $ok = $false
-                foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
-                if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
-            }
-            if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
-                $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
-            }
-            if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
-            if ($line -cmatch '^:([a-z]+)$') {
-                if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
-                $labels[$Matches[1]] = $i
-            }
-            if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
-        }
-        foreach ($g in $gotos) {
-            if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
-            if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
-        }
-        $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo silent\.vbs [0-9]$' })
-        if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo silent.vbs ' + $Value)) {
-            $faults += "it does not set exactly one value, $Value"
-        }
-        $merges = @($lines | Where-Object { $_ -cmatch '^regedit ' })
-        if ($Value -eq "1") {
-            $pins = @('if not exist silent.vbs goto nofile', 'if not exist silent.reg goto nofile',
-                      'cscript //nologo silent.vbs show', 'if errorlevel 1 goto nochange',
-                      'regedit /s silent.reg', 'cscript //nologo silent.vbs 1',
-                      'if errorlevel 5 goto unverified', 'if errorlevel 4 goto nolist',
-                      'if errorlevel 3 goto partial', 'if errorlevel 1 goto notset')
-            if ($merges.Count -ne 1) { $faults += "it does not merge SILENT.REG exactly once" }
-        } else {
-            $pins = @('if not exist silent.vbs goto nofile', 'cscript //nologo silent.vbs 0',
-                      'if errorlevel 5 goto unverified', 'if errorlevel 3 goto partial',
-                      'if errorlevel 1 goto notset', ':list')
-            if ($merges.Count -ne 0) { $faults += "it merges a .reg file; silent-off.bat leaves the list alone" }
-            foreach ($needle in @('The list was left in place', 'delete the', 'SilentClasses key')) {
-                if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
-            }
-        }
-        $last = -1
-        foreach ($pin in $pins) {
-            $at = [Array]::IndexOf($lines, $pin)
-            if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
-        }
-        if (-not $Text.Contains('Windows 98 SE and ME only')) { $faults += "it no longer says 'Windows 98 SE and ME only'" }
-        return $faults
-    }
-
     $silentBatches = @(
         @{ Name = "silent-on.bat";  Value = "1" },
         @{ Name = "silent-off.bat"; Value = "0" }
@@ -516,20 +435,7 @@ try {
     $sHarmlessFaults = @(Get-SilentBatchFaults -Text $sHarmless -Value "1")
     Assert-True ($sHarmlessFaults.Count -eq 0) ("the silent batch checker refused harmless echo text:`n  " + ($sHarmlessFaults -join "`n  "))
 
-    # SILENT.REG: REGEDIT4, the one key, and the six values of design record
-    # 13 section 6.11.8 with their exact bytes, nothing else (SweetLow's
-    # list; names kept so a merge over his leaves six values, not twelve).
-    function Get-SilentRegFaults {
-        param([string]$Text)
-        $want = "REGEDIT4`r`n`r`n[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses]`r`n" +
-                "`"0`"=hex:80,09,00,00`r`n`"1`"=hex:43,03,01,01`r`n`"2`"=hex:43,03,01,02`r`n" +
-                "`"3`"=hex:c3,08,06,50`r`n`"4`"=hex:83,03,01,01`r`n`"5`"=hex:83,03,01,02`r`n`r`n"
-        $faults = @()
-        if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
-        if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
-        if ($Text -cne $want) { $faults += "it is not REGEDIT4, the SilentClasses key and its six values, exactly" }
-        return $faults
-    }
+    # SILENT.REG: held to package-common.ps1's Get-SilentRegFaults.
     $regSrc = Join-Path $repo "src\silent.reg"
     $regText = $latin1.GetString([System.IO.File]::ReadAllBytes($regSrc))
     $regFaults = @(Get-SilentRegFaults -Text $regText)
@@ -2735,6 +2641,10 @@ try {
            Why  = "a cut no longer holds its staged tree to tools\silent\ alone before the publish swap (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $uploadRoot -Map $silentPublishable -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
            Why  = "the upload assembly no longer holds the tree to the silent install's layout (task 38.2)" },
+        @{ Find = 'Assert-SilentInstallContent -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''" -Reference $repo';
+           Why  = "a cut no longer holds the silent install's staged files to the checkers and the repository's own bytes (task 38.2)" },
+        @{ Find = 'Assert-SilentInstallContent -Root $uploadRoot -Map $silentPublishable -What "the upload set ''$uploadRoot''"';
+           Why  = "the upload assembly no longer holds the silent install's files it archives to the checkers (task 38.2)" },
         @{ Find = 'Assert-ToolsLayout -Root $uploadRoot -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
            Why  = "the upload assembly no longer holds the tree to tools\ at the layout its version was published with (task 38.10)" },
         @{ Find = '-DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot)';
@@ -3071,12 +2981,12 @@ try {
     $siMap = [regex]::Match($releaserText, '(?ms)^\$silentPublishable = @\{.*?^\}')
     Assert-True $siMap.Success "make-release.ps1 no longer sets `$silentPublishable at its top level (roadmap-hcd task 38.2)."
     if ($siMap.Success) { $siTexts += $siMap.Value }
-    foreach ($fnName in @("Publish-SilentInstallScripts", "Assert-SilentInstallLayout")) {
+    foreach ($fnName in @("Publish-SilentInstallScripts", "Assert-SilentInstallLayout", "Assert-SilentInstallContent")) {
         $fnAt = $releaserText.IndexOf("function $fnName")
         Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.2)."
         if ($fnAt -ge 0) { $siTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
     }
-    if ($siTexts.Count -eq 5) {
+    if ($siTexts.Count -eq 6) {
         foreach ($siText in $siTexts) { Invoke-Expression $siText }
         $siWant = @{ "silent.reg" = "SILENT.REG"; "silent.vbs" = "SILENT.VBS"; "silent-on.bat" = "silent-on.bat"; "silent-off.bat" = "silent-off.bat" }
         Assert-True ($silentPublishable.Count -eq 4) "make-release.ps1's `$silentPublishable no longer names four files (design record 13 section 6.11.8)."
@@ -3105,6 +3015,38 @@ try {
             $refused = $null
             try { Assert-SilentInstallLayout -Root $siCut -Map $silentPublishable -What "fixture cut" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
             Assert-True ($null -eq $refused) "Assert-SilentInstallLayout -PublishedVersion '$v' refused the four in tools\silent\ alone: $refused"
+        }
+        # **What they say, EXECUTED** (Codex review of 38.2, round 1): the
+        # layout check passes four files by name alone, so a zero-byte
+        # SILENT.REG passed it. Each malformed one is refused in both modes,
+        # naming its file; a stale SILENT.VBS (no checker of its own) by the
+        # cut's byte comparison alone. The reference is the repository.
+        Write-Step "a staged or published tools\silent\ is held to the checkers"
+        foreach ($ref in @("", $repo)) {
+            $refused = $null
+            try { Assert-SilentInstallContent -Root $siCut -Map $silentPublishable -What "fixture cut" -Reference $ref } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-SilentInstallContent -Reference '$ref' refused the published four: $refused"
+        }
+        $siContent = @(
+            @{ Name = "empty-reg"; File = "SILENT.REG";     Edit = { param($s) "" };                                                   Stale = $false },
+            @{ Name = "lf-reg";    File = "SILENT.REG";     Edit = { param($s) $s.Replace("`r`n", "`n") };                             Stale = $false },
+            @{ Name = "lf-on";     File = "silent-on.bat";  Edit = { param($s) $s.Replace("`r`n", "`n") };                             Stale = $false },
+            @{ Name = "swap-off";  File = "silent-off.bat"; Edit = { param($s) $s.Replace("silent.vbs 0", "silent.vbs 1") };           Stale = $false },
+            @{ Name = "stale-vbs"; File = "SILENT.VBS";     Edit = { param($s) $s + "' stale`r`n" };                                   Stale = $true }
+        )
+        $siLatin1 = [System.Text.Encoding]::GetEncoding(28591)
+        foreach ($c in $siContent) {
+            $t = Join-Path $siRoot ("content-" + $c.Name)
+            Copy-Item -LiteralPath $siCut -Destination $t -Recurse
+            $f = Join-Path $t ("tools\silent\" + $c.File)
+            [System.IO.File]::WriteAllBytes($f, $siLatin1.GetBytes((& $c.Edit $siLatin1.GetString([System.IO.File]::ReadAllBytes($f)))))
+            foreach ($ref in @("", $repo)) {
+                $refused = $null
+                try { Assert-SilentInstallContent -Root $t -Map $silentPublishable -What "fixture $($c.Name)" -Reference $ref } catch { $refused = $_.Exception.Message }
+                $want = ($ref -ne "") -or (-not $c.Stale)
+                Assert-True (($null -ne $refused) -eq $want -and ($null -eq $refused -or $refused -match [regex]::Escape($c.File))) `
+                    ("Assert-SilentInstallContent -Reference '{0}' on the '{1}' fixture: refused={2}, expected {3}, naming {4}. {5}" -f $ref, $c.Name, ($null -ne $refused), $want, $c.File, $refused)
+            }
         }
         # Together or not at all.
         $siLone = Join-Path $siRoot "lone-src"

@@ -264,23 +264,34 @@ static void say_hang(const char *indent, const char *hang, const char *fmt, ...)
 }
 
 /* A registry path is one word to the wrapper, and the class key's is 82
- * columns with its HKLM\, so a path too long for one line is broken after
- * its last backslash (legs of 38.1: it wrapped at 80 on XP and 7). */
+ * columns with its HKLM\, so the path is broken after a backslash wherever
+ * the next piece would pass column 79, each continuation two further in
+ * (legs of 38.1: it wrapped at 80 on XP and 7; Codex review of 38.1, round
+ * 5: an instance key, 4 deep, still passed it when broken only once). */
 static void print_hklm_path(const char *indent, const char *path,
                             const char *tail)
 {
-    const char *last;
+    const char *p;
+    const char *next;
+    size_t col;
+    size_t len;
 
-    last = strrchr(path, '\\');
-    if (last == NULL ||
-        strlen(indent) + 5 + strlen(path) + strlen(tail) <= 79) {
-        printf("%sHKLM\\%s%s\n", indent, path, tail);
-        return;
+    printf("%sHKLM\\", indent);
+    col = strlen(indent) + 5;
+    p = path;
+    while (*p != '\0') {
+        next = strchr(p, '\\');
+        len = next != NULL ? (size_t)(next - p + 1) : strlen(p);
+        if (p != path && col + len + (next == NULL ? strlen(tail) : 0) > 79) {
+            printf("\n%s  ", indent);
+            col = strlen(indent) + 2;
+        }
+        printf("%.*s", (int)len, p);
+        col += len;
+        p += len;
     }
-    printf("%sHKLM\\%.*s\n%s  %s%s\n", indent, (int)(last - path + 1), path,
-           indent, last + 1, tail);
+    printf("%s\n", tail);
 }
-
 static const char *uu_status_text(unsigned long code)
 {
     switch (code) {

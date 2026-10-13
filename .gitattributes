@@ -57,3 +57,14 @@ releases/**/LICENSE eol=crlf
 # only the copy would leave the next release to be cut from an LF-only
 # original. make-release.ps1 checks it as well, at the point of the copy.
 LICENSE eol=crlf
+
+# The silent install's list and its script (roadmap-hcd task 38.2) are
+# published as they are checked out, into tools\silent\ as SILENT.REG and
+# SILENT.VBS. The packager holds SILENT.REG to its exact CRLF bytes, so a
+# clone with core.autocrlf false or input would fail the package self-test
+# and cut an LF-only list (Codex review of 38.2, round 1). The scripts are
+# pinned with it (portsw.vbs too), so the published texts follow one rule.
+*.reg eol=crlf
+*.REG eol=crlf
+*.vbs eol=crlf
+*.VBS eol=crlf
