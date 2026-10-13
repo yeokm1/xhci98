@@ -479,16 +479,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | SuperSpeedPlus (USB 3.1 Gen 2, USB 3.2 Gen 1x2 and Gen 2x2) | Accepted at its trained rate, built from the specification. Not read on any hardware: no Gen 2 device has been tested, so every mode is untested. |
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
-| Stand by on Windows 98 SE | Read only in QEMU virtual machines, where Windows 98 SE itself does not resume reliably, with or without a USB controller. A USB disk attached when the computer started (Windows uses it in MS-DOS compatibility mode) stopped the resume before the desktop, under this driver and under NUSB's EHCI driver alike. A disk plugged in after Windows started, or a USB mouse alone or behind a hub, resumed and kept working. Untested on real hardware: remove USB disks before Stand by. See the release notes' "Known limitations". |
-| The Intel port switchover beyond the B490 and the E7250 | Device ids `8C31`, `9C31`, `8CB1` and `8D31`, systems other than Windows 98 SE and 7 x64, and standby. |
-| Standby (S3) on real hardware | Not read on any real machine: the E460's Windows 98 SE offers no Stand by, the E7250's Windows 7 x64 has no graphics driver, and the P14s Gen 1 was not read. |
-| Remote wake on real hardware | Selective suspend's remote wake, for a USB 2.0 HID device and for a SuperSpeed device at a root port or behind a USB 3 hub, was read only in QEMU. |
-| MSI-X on real hardware | Read only on QEMU's controller. MSI was read on the E7250. |
-| `XHCIQUAL` on a line that is dead under DOS | Read only in QEMU. The E7250's line is dead only under Windows' routing; under DOS its interrupt test passes. |
-| Windows 98 SE on the E7250 | The interrupt routing repair under Windows 98 SE has run on no machine. |
-| `XhciWideMap` on real hardware | Not read on an updated 32-bit Windows 7, nor at `1` with a real UAS drive. |
-| A real UAS drive after a transfer error or a stop | The retry in place on a UAS stream was read only with the error made on purpose in QEMU. |
-| UAS speed at 1 MiB on real hardware | ATTO with the MSSU10 was not repeated for `2.3.0.0`. The E460's copies at about 200 MB/s are the only real-hardware figure. |
+| The Intel port switchover beyond the B490 and the E7250 | Device ids `8C31`, `9C31`, `8CB1` and `8D31`, systems other than Windows 98 SE and 7 x64. |
 
 ## Toolchain and building
 
