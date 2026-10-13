@@ -56,6 +56,16 @@ reset it and enable bus mastering - and are development instrumentation. What a
 user needs is the one read-only command that answers "will this driver work on
 this machine", and that is `XHCIQUAL` with no arguments.
 
+**The report batches go out beside their tools** (roadmap-hcd task 38.1):
+`QUALREP.BAT` beside `XHCIQUAL.EXE` (a read-only probe whose log is named from
+the DOS clock), and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside
+`XHCISNAP.EXE` (the log channel on, the report and the dump with the channel
+left on, the channel off). They are what a field report asks its reporter to
+run. They are copied from `xhciqual\` and `xhcisnap\`, published under 8.3
+upper-case names, and held to their tools' directories alone
+(`Assert-ReportBatchLayout`); a version published before 2.4.0.0 has none. Their
+text is gated by `test-package.ps1` as `portsw-on.bat`'s is.
+
 **Both published readmes document the whole command line even so**, split into
 read-only options and active ones: the qualifier's own `readme.txt` in a
 `COMMAND LINE` section, and the driver's `readme.txt` in step 1. The wrappers
@@ -497,6 +507,15 @@ $UploadDir   = Resolve-DirectoryArgument $UploadDir
 # called on the media matters: a long name is not what a DOS prompt will show.
 $qualtoolFiles = @{ "xhciqual.exe" = "XHCIQUAL.EXE"; "xhciqual.map" = "XHCIQUAL.MAP" }
 
+# The field reports' batch files (roadmap-hcd task 38.1), per tool: source name
+# in the tool's own directory -> published 8.3 name beside its executable.
+# Copied with the tool, so a cut that skips a tool publishes none of its
+# batches; held there and nowhere else by Assert-ReportBatchLayout.
+$reportBatches = @{
+    "xhcisnap" = @{ "snapon.bat" = "SNAPON.BAT"; "snapget.bat" = "SNAPGET.BAT"; "snapoff.bat" = "SNAPOFF.BAT" };
+    "xhciqual" = @{ "QUALREP.BAT" = "QUALREP.BAT" }
+}
+
 #
 # **A published directory is a flavour AND an architecture, and both are in its
 # name** - `release-x86`, `debug-x86`, `release-x64`, `debug-x64` (roadmap task
@@ -718,6 +737,67 @@ function Assert-PortSwitchLayout {
     }
     if ($faults.Count -gt 0) {
         throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.5):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Publish-ReportBatches {
+    # Copies one tool's report batches (roadmap-hcd task 38.1) from SourceDir
+    # into DestDir under their published names. Together or not at all: a
+    # missing one is refused before anything is copied.
+    param([string]$SourceDir, [string]$DestDir, [hashtable]$Map)
+    $missing = @($Map.Keys | Sort-Object | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+    if ($missing.Count -gt 0) {
+        throw ("'{0}' has no {1}: a tool's report batches are published together or not at all (roadmap-hcd task 38.1)." -f `
+               $SourceDir, ($missing -join ", "))
+    }
+    Ensure-Directory $DestDir
+    foreach ($src in @($Map.Keys | Sort-Object)) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $src) -Destination (Join-Path $DestDir $Map[$src]) -Force
+    }
+}
+
+function Assert-ReportBatchLayout {
+    # The layout of task 38.1 in a version tree: in a tree with tools\, each
+    # tool directory that is there holds every one of its report batches, and
+    # no other directory of the tree holds a copy of any of them. A tree
+    # without tools\ is a version published before 2.4.0.0 (Assert-ToolsLayout
+    # refuses it at the cut and from 2.4.0.0), and none of those has any.
+    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$PublishedVersion = "")
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $batchHome = @{}
+    foreach ($tool in $Batches.Keys) {
+        foreach ($pub in $Batches[$tool].Values) { $batchHome[$pub.ToLowerInvariant()] = $tool }
+    }
+    $faults = @()
+    $tools = Join-Path $rootFull "tools"
+    if (Test-Path -LiteralPath $tools -PathType Container) {
+        foreach ($tool in @($Batches.Keys | Sort-Object)) {
+            $dir = Join-Path $tools $tool
+            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+            foreach ($pub in @($Batches[$tool].Values | Sort-Object)) {
+                if (-not (Test-Path -LiteralPath (Join-Path $dir $pub) -PathType Leaf)) { $faults += "tools\$tool\$pub is missing" }
+            }
+        }
+        $layout = "beside their tools in tools\"
+        $withTools = $true
+    } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"2.4.0.0") {
+        throw "$What has no tools\ directory, where the report batches are published beside their tools (roadmap-hcd task 38.1)."
+    } else {
+        $layout = "absent, as a version before 2.4.0.0 has them"
+        $withTools = $false
+    }
+    foreach ($item in @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force)) {
+        $key = $item.Name.ToLowerInvariant()
+        if (-not $batchHome.ContainsKey($key)) { continue }
+        $want = Join-Path $tools $batchHome[$key]
+        if (-not $withTools -or $item.DirectoryName.TrimEnd('\') -ne $want) {
+            $faults += ("{0} is a copy outside where it belongs" -f $item.FullName.Substring($rootFull.Length + 1))
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the report batches {1} (roadmap-hcd task 38.1):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
     }
 }
@@ -1962,6 +2042,9 @@ $gateOut
     Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable `
                             -DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot) `
                             -What "the upload set '$uploadRoot'" -PublishedVersion $pswVersion
+    # The report batches beside their tools where the tree has tools\, and
+    # none anywhere in a tree published before 2.4.0.0 (task 38.1).
+    Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -2925,10 +3008,13 @@ driver".
             Copy-Item -LiteralPath (Join-Path $QualtoolDir $src) `
                       -Destination (Join-Path $qualDir $qualtoolFiles[$src]) -Force
         }
+        # Its report batch (roadmap-hcd task 38.1), beside it. Not compiled, so
+        # no freshness rule applies; its text is gated by test-package.ps1.
+        Publish-ReportBatches -SourceDir $QualtoolDir -DestDir $qualDir -Map $reportBatches["xhciqual"]
         $qualtoolStaged = $qualDir
         Write-Ok (("XHCIQUAL.EXE staged at version {0} from src\xhci_version.h, " +
                    "newer than every .c/.h/.asm beside it and than that header, " +
-                   "with a .MAP no older than itself") -f $toolVersion)
+                   "with a .MAP no older than itself, and QUALREP.BAT beside it") -f $toolVersion)
     }
 
     # --- the snapshot reader ------------------------------------------------
@@ -3025,10 +3111,13 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $snapDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcisnap")
         Ensure-Directory $snapDir
         Copy-Item -LiteralPath $snapExe -Destination (Join-Path $snapDir "XHCISNAP.EXE") -Force
+        # Its three report batches (roadmap-hcd task 38.1), beside it.
+        Publish-ReportBatches -SourceDir $SnapToolDir -DestDir $snapDir -Map $reportBatches["xhcisnap"]
         $snaptoolStaged = $snapDir
         Write-Ok (("XHCISNAP.EXE staged at version {0} from src\xhci_version.h, " +
                    "wire schema {1}, matching src\xhci.h, newer than every .c/.h " +
-                   "beside it and than that header") -f $snapVersion, $snapSchemaTool)
+                   "beside it and than that header, with SNAPON.BAT, SNAPGET.BAT " +
+                   "and SNAPOFF.BAT beside it") -f $snapVersion, $snapSchemaTool)
     }
 
     # --- the port switchover's scripts ---------------------------------------
@@ -3172,6 +3261,8 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ""
         $contents += ("      XHCIQUAL.EXE {0:N0} bytes" -f $qexe.Length)
         $contents += "      XHCIQUAL.MAP keep it beside the EXE; see TOOLS\XHCIQUAL\readme.txt"
+        $contents += "      QUALREP.BAT  the read-only probe a bug report asks for, saved"
+        $contents += "                   to a new .LOG named from the date and time"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
         $contents += ""
@@ -3181,22 +3272,25 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "  TOOLS\XHCISNAP\  - what to run if something goes wrong"
         $contents += ""
         $contents += ("      XHCISNAP.EXE {0:N0} bytes" -f $sexe.Length)
+        $contents += "      SNAPON.BAT   turns the driver's log channel on"
+        $contents += "      SNAPGET.BAT  writes the report and the dump a bug report asks for"
+        $contents += "      SNAPOFF.BAT  turns the channel off again"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
         $contents += ""
         $contents += "      It reads the driver's own log off the running"
-        $contents += "      machine and writes a report you can paste into a"
+        $contents += "      machine and writes a report you can attach to a"
         $contents += "      bug report. On Windows 98 it is the only way to"
         $contents += "      get anything out at all. Four steps, and none of"
-        $contents += "      them is regedit:"
+        $contents += "      them is regedit (section 6):"
         $contents += ""
-        $contents += "        XHCISNAP -verbosity 2"
-        $contents += "        restart the machine"
+        $contents += "        SNAPON.BAT"
+        $contents += "        restart Windows"
         $contents += "        make the problem happen again"
-        $contents += "        XHCISNAP -o C:\MYDUMP"
+        $contents += "        SNAPGET.BAT"
         $contents += ""
-        $contents += "      Then send C:\MYDUMP.TXT, and attach"
-        $contents += "      C:\MYDUMP.BIN if you are asked for it."
+        $contents += "      Then attach the .DEV and .TXT files it names,"
+        $contents += "      and run SNAPOFF.BAT once you have sent them."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -3476,6 +3570,10 @@ with the safety notes spelled out.
                         XHCIQUAL.LOG. A family word after --log is read as a
                         selector, so name the file explicitly if you pass
                         both
+      --log-stamp       write the report to a NEW file in the current
+                        directory named from the DOS date and time,
+                        mDDhhmmS.LOG; it never overwrites a file, and not
+                        with --log. QUALREP.BAT uses it (section 6)
       --done-flag FILE  create FILE only if the run finishes normally, so a
                         batch file can tell a crash apart from a bad verdict
       --no-sysinfo      do not read the machine's description (SMBIOS,
@@ -3497,6 +3595,10 @@ with the safety notes spelled out.
                         space
       --no-wait         do not wait 15 seconds for a device to be plugged in
       --no-devid        skip the xHCI device identification step
+
+FOR A BUG REPORT, run TOOLS\XHCIQUAL\QUALREP.BAT from its own directory under
+real DOS: the read-only probe, saved to a new .LOG named from the date and
+time. Attach the .LOG it names (section 6).
 
 IF YOU ARE ASKED FOR LOGS, run these two in order. The first reads everything
 the read-only path can see, writes nothing to the machine, and leaves
@@ -3521,7 +3623,9 @@ the run was read-only - which cannot pass tests it does not run, so 1 is the
 normal result of every read-only command above - 2 if the command line was
 wrong or no controller of that kind is here, and 3 if the full run passed a
 controller only WITH CAVEATS (no working interrupt, so the driver polls
-it). The verdict on screen is what to read; those codes are for batch files.
+it), and 4 if --log-stamp could not name or create its log, before reading
+anything. The verdict on screen is what to read; those codes are for batch
+files.
 
 >> IT MUST BE RUN FROM REAL DOS, NOT A DOS WINDOW INSIDE WINDOWS. <<
 
@@ -3952,28 +4056,45 @@ Things specific to this driver, worth knowing in advance:
  6. IF SOMETHING GOES WRONG
 ==============================================================================
 
-  REPORT IT FIRST. XHCISNAP IS ONLY FOR WHEN THE MAINTAINER ASKS FOR IT
-  .....................................................................
+  REPORT IT ON GITHUB
+  ...................
 
   Open an issue on the project's GitHub page (section 7) and describe what
-  happened. DO NOT RUN XHCISNAP UNLESS THE MAINTAINER ASKS YOU TO. Installing
-  and using the driver never needs it, and its first step changes one of the
-  driver's settings, so it is not something to try on your own.
+  happened. The bug report form asks for two things these batch files
+  gather; installing and using the driver never needs them.
 
-  XHCISNAP.EXE is in the TOOLS\XHCISNAP directory of this package. It reads
-  the driver's own log straight out of the running machine and writes a report
-  you can attach to that issue. On Windows 98 and Windows ME it is the ONLY
-  way to get anything out. When you are asked, it is four steps, and none of
-  them is REGEDIT:
+  IF THE MACHINE KEEPS RUNNING: SNAPON, SNAPGET, SNAPOFF
+
+  TOOLS\XHCISNAP holds XHCISNAP.EXE and three batch files that run it. It
+  reads the driver's own log straight out of the running machine and writes
+  a report you can attach to that issue. On Windows 98 and Windows ME it is
+  the ONLY way to get anything out. Four steps, and none of them is REGEDIT.
+  Copy the directory somewhere writable first (not a CD), and on Vista and
+  7 right-click each batch file and choose Run as administrator:
+
+      1. SNAPON.BAT                 turns the log channel on
+      2. restart Windows
+      3. make the problem happen again
+      4. SNAPGET.BAT                writes the report and the dump
+
+  SNAPGET.BAT writes its files in the directory it runs in, not in C:\,
+  under a name made from the date and time - for example 3141022A.DEV
+  and 3141022A.TXT for 14 March at 10:22 (the month is one character, 1 to
+  9 then A, B, C) - and a second run never overwrites the first. It prints
+  the names. Attach the .DEV file (the controller's Device Manager status
+  and problem code, its resources, and the versions and SHA-256 hashes of
+  the installed driver files) and the .TXT file (the report). Keep the .BIN
+  and .PSC beside them and attach those only if you are asked for them. It
+  leaves the channel on, so you can run it again after the next attempt.
+  Step 1 finds the right registry key for you, on every controller this
+  driver runs - see section 9 for what it sets.
+
+  Without the batch files the same steps are:
 
       1. XHCISNAP -verbosity 2
-      2. restart the machine
+      2. restart Windows
       3. make the problem happen again
-      4. XHCISNAP -o C:\MYDUMP
-
-  Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked
-  for it. Step 1 finds the right registry key for you, on every controller
-  this driver runs - see section 9 for what it sets.
+      4. XHCISNAP -report           (or XHCISNAP -o NAME for the dump alone)
 
   STEP 2 IS NOT OPTIONAL. The driver reads that setting when it starts.
   Without the restart the driver is still at whatever it read last time -
@@ -3992,9 +4113,18 @@ Things specific to this driver, worth knowing in advance:
 
   What step 1 DOES change is ONE of this driver's own settings, and it says
   so as it writes it - that is the point of it, and it is why step 2 is a
-  restart. XHCISNAP -disable puts it back, and you should run that once you
-  have sent the capture: while it is on, anyone using this machine can read
-  the driver's diagnostic state. See section 9.
+  restart. SNAPOFF.BAT (XHCISNAP -disable) puts it back, and you should run
+  that once you have sent the capture: while it is on, anyone using this
+  machine can read the driver's diagnostic state. See section 9.
+
+  IF THE MACHINE WILL NOT START WINDOWS, OR CRASHES: QUALREP UNDER DOS
+
+  TOOLS\XHCIQUAL\QUALREP.BAT runs XHCIQUAL's read-only probe under real
+  MS-DOS (not a DOS box inside Windows; see step 1) and saves it to a new
+  .LOG in the directory it runs in, named from the DOS date and time the
+  same way. Run it from writable storage that is not on the controller
+  being tested, and attach the .LOG file it names. Without the batch file:
+  XHCIQUAL --probe-only --no-page --log-stamp
 
   WHAT THE LOG CAN AND CANNOT ANSWER
 
@@ -4949,6 +5079,11 @@ MODIFIERS - these say what to do with the report, not what to run
   --log [FILE]      also write the report to a file, default XHCIQUAL.LOG.
                     A family word after --log is read as a selector, so
                     name the file explicitly if you pass both
+  --log-stamp       write the report to a NEW file in the current directory
+                    named from the DOS date and time, mDDhhmmS.LOG (month 1
+                    to 9 then A, B, C; day; hour; minute; the first free
+                    letter A to Z). It never overwrites a file, and not
+                    with --log. QUALREP.BAT uses it
   --done-flag FILE  create FILE only if the run finishes normally, so a
                     batch file can tell a crash apart from a bad verdict
   --no-sysinfo      do not read the machine's description (SMBIOS,
@@ -4970,6 +5105,21 @@ ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER
                     result back. This one writes PCI configuration space
   --no-wait         do not wait 15 seconds for a device to be plugged in
   --no-devid        skip the xHCI device identification step
+
+
+FOR A BUG REPORT: QUALREP.BAT
+
+  QUALREP.BAT, beside XHCIQUAL.EXE, is the one command a bug report asks
+  for. Run it from this directory, under real DOS as above:
+
+           QUALREP
+
+  It runs XHCIQUAL --probe-only --no-page --log-stamp: the read-only probe,
+  written to a new .LOG in the current directory named from the DOS date
+  and time, for example 3141022A.LOG for 14 March at 10:22. A second run
+  never overwrites the first. It prints the name; attach that .LOG file to
+  the report. If the DOS clock is not set to a date, XHCIQUAL refuses
+  before reading anything - set it with DATE and TIME and run it again.
 
 
 IF YOU ARE ASKED FOR LOGS
@@ -4999,6 +5149,7 @@ WHAT IT RETURNS TO DOS
   2   the command line was wrong, or no controller of that kind is here
   3   a full active run whose controllers all qualified, at least one only
       WITH CAVEATS (no working interrupt, so the driver polls it)
+  4   --log-stamp could not name or create its log; nothing was read
 
   The verdict on screen is what to read. These are for batch files.
 
@@ -5027,7 +5178,8 @@ controller, reset it, transfer data and reset ports, and a machine can stop
 responding while they run. They are development instrumentation, listed
 above because this one program contains them - not because installing the
 driver involves them. The numbered batch files the project uses to drive
-them in a fixed order are not included here.
+them in a fixed order are not included here; QUALREP.BAT, which is, runs
+only the read-only probe.
 
 If you run one anyway:
 
@@ -5175,7 +5327,7 @@ provenance record is docs\contributing\legal-provenance.md, section 2a.
 
 If USB is not working properly with this driver, this is what to run. It reads
 the driver's own log straight out of the running machine and writes a report
-you can paste into a bug report.
+you can attach to a bug report.
 
 It talks to the driver directly, through the controller's own device, on
 every Windows version this driver supports. Nothing else needs installing,
@@ -5189,23 +5341,36 @@ from the driver either.
 
 What step 1 DOES change is ONE of this driver's own settings - that is the
 point of it, and it is why step 2 is a restart. It prints it as it writes it,
-and XHCISNAP -disable puts it back. Run that once you have sent the capture:
-while it is on, anyone using this machine can read the driver's diagnostic
-state.
+and SNAPOFF.BAT (XHCISNAP -disable) puts it back. Run that once you have sent
+the capture: while it is on, anyone using this machine can read the driver's
+diagnostic state.
 
 
  THE FOUR STEPS
 ------------------------------------------------------------------------------
 
-  1.  XHCISNAP -verbosity 2
-  2.  restart the machine
-  3.  make the problem happen again
-  4.  XHCISNAP -o C:\MYDUMP
+Three batch files beside XHCISNAP.EXE do the typing. Double-click them, or
+run them at a prompt in this directory; on Windows Vista and 7, right-click
+each one and choose Run as administrator. Copy this directory somewhere
+writable first if it is not (a CD is not).
 
-Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked for it.
+  1.  SNAPON.BAT     XHCISNAP -verbosity 2: the log channel on
+  2.  restart Windows
+  3.  make the problem happen again
+  4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
+
+SNAPGET.BAT writes its files in the directory it runs in, not in C:\, under a
+name made from the date and time, and prints the names. Attach the .DEV and
+.TXT files to the bug report. Attach the .BIN and .PSC as well only if you
+are asked for them. It leaves the channel on, so you can run it again after
+the next attempt; when you are done:
+
+  5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off
 
 You never have to open REGEDIT. Step 1 does the whole of that for you, on
-every xHCI controller the machine has.
+every xHCI controller the machine has. Without the batch files, type the
+commands they run; XHCISNAP -o NAME writes the dump alone under a name you
+choose.
 
 
  WHY STEP 1 IS NOT OPTIONAL
@@ -5225,22 +5390,32 @@ Level 2 is the one to use. The others exist and a maintainer may ask for one:
       more than you would want to paste in public.
 
 
- WHAT THE THREE FILES ARE
+ WHAT THE FILES ARE
 ------------------------------------------------------------------------------
 
-  MYDUMP.TXT   The report. Plain text. Below level 4 it holds no internal
+Each name is mDDhhmmS: the month as one character (1 to 9, then A, B, C for
+October to December), the day, the hour, the minute, and the first letter A
+to Z not yet taken, so 3141022A is 14 March at 10:22 and a second run in the
+same minute is 3141022B. Nothing is ever overwritten.
+
+  3141022A.DEV The controller as Windows sees it: its Device Manager status
+               and problem code, the resources it was given, and the versions
+               and SHA-256 hashes of xhci98.sys, xhciuas.sys, xhcimsi.sys,
+               usbd.sys and usbui.dll as installed. Attach it.
+  3141022A.TXT The report. Plain text. Below level 4 it holds no internal
                addresses - the driver refuses to record one at those levels,
                so that is a property of the file and not a promise about it.
-               This is the one to paste.
-  MYDUMP.BIN   The driver's raw internal state. A maintainer can decode it
+               Attach it.
+  3141022A.BIN The driver's raw internal state. A maintainer can decode it
                against the exact build you are running; nobody else can. Send
                it as an attachment if asked.
-  MYDUMP.PSC   The raw port register values, for the same audience.
+  3141022A.PSC The raw port register values, for the same audience.
 
 The report's header names the system it was taken on - the Windows
 version, BIOS, processor and memory - and never a serial number or a
-name. If reading those details causes a problem on your machine, add
--nosysinfo to step 4; the header then says they were skipped.
+name. If reading those details causes a problem on your machine, type
+XHCISNAP -nosysinfo -report instead of step 4; the header then says they
+were skipped.
 
 
  IF NOTHING COMES BACK
@@ -5450,6 +5625,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Assert-ToolsLayout -Root $destRoot -What "the staged release '$destRoot'"
     Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw") `
                             -What "the staged release '$destRoot'"
+    # The report batches beside their tools and nowhere else (task 38.1).
+    Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'"
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {

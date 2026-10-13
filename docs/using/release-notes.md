@@ -504,6 +504,16 @@ needed: if the tool will not run at all on a boot that loads nothing, add
 and try again. `xhciqual/hardware-testing.md` has the staged active tests,
 the safety notes, and how to read each result.
 
+From `2.4.0.0` the same directory carries `QUALREP.BAT`, the one command a
+bug report asks for: it runs `XHCIQUAL --probe-only --no-page --log-stamp`,
+the read-only probe, and saves it in the current directory to a new log
+named from the DOS date and time, `mDDhhmmS.LOG` (the month as one
+character, `1` to `9` then `A`, `B`, `C`; the day, hour and minute; then the
+first letter `A` to `Z` not yet taken), so a second run never overwrites the
+first. Attach the `.LOG` it names. `XHCIQUAL` refuses `--log-stamp` before
+reading anything, with exit code `4`, if the DOS clock does not read as a
+date, all 26 names of that minute are taken, or the log cannot be created.
+
 ## Installing
 
 Each flavour directory of the package holds six files (nine in `2.3.0.0`,
@@ -1271,7 +1281,10 @@ what applies at every value still counts (a held port after repeated
 incompatible-device reports, a closing-off without proof). **If a USB device stops on your
 machine**, send the controller's id (`XHCIQUAL`'s probe, or Device Manager)
 and two `XHCISNAP` reports at `XhciLogVerbosity` `2`, one while it works and
-one after it stops; and if it still stops, the same with `XhciAvgTrbEsit` at
+one after it stops (from `2.4.0.0`: `SNAPON.BAT` and a restart, then
+`SNAPGET.BAT` once while it works and once after it stops, which leaves the
+channel on between the two and never overwrites the first; "The log, and how
+to send one" below); and if it still stops, the same with `XhciAvgTrbEsit` at
 `1`.
 
 What it rests on. QEMU raises none of these faults, so each was made on
@@ -2019,23 +2032,58 @@ The driver keeps a small log of what happened on the bus, inside itself, and
 machine. The log is off by default and stays off unless you are diagnosing
 something.
 
+From `2.4.0.0` three batch files beside it do the typing, on every Windows
+the driver runs (under `COMMAND.COM` on 98 SE and ME, `cmd.exe` from 2000 to
+7). Double-click them, or run them at a prompt in that directory; on Vista
+and 7, right-click each one and choose Run as administrator.
+
+```
+  1.  SNAPON.BAT     XHCISNAP -verbosity 2: the log channel on
+  2.  restart Windows
+  3.  make the problem happen again
+  4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
+  5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off, once you have sent them
+```
+
+`SNAPGET.BAT` writes its files in the directory it runs in, never under
+`C:\`, under a name `XHCISNAP` makes from the local date and time,
+`mDDhhmmS` (the month as one character, `1` to `9` then `A`, `B`, `C`; the
+day, hour and minute; then the first letter `A` to `Z` not yet taken), so a
+second run never overwrites the first; it prints the names. Attach two of
+them to the bug report:
+
+- `mDDhhmmS.DEV`: the controller as Windows sees it - its Device Manager
+  status and problem code, the resources it was given, and the versions and
+  SHA-256 hashes of `xhci98.sys`, `xhciuas.sys`, `xhcimsi.sys`, `usbd.sys` and
+  `usbui.dll` as installed. `XHCISNAP` reads these itself, through the
+  configuration manager, so every target reports the same.
+- `mDDhhmmS.TXT`: the report, plain text with no internal addresses in it.
+
+`mDDhhmmS.BIN`, the driver's raw internal state, which only a maintainer
+holding the exact build can decode, and `mDDhhmmS.PSC`, the raw port
+registers, are written beside them; attach those if you are asked for them.
+`SNAPGET.BAT` leaves the channel on, so it can be run again after the next
+attempt.
+
+Without the batch files, and in every release before `2.4.0.0`, the same
+steps are typed:
+
 ```
   1.  XHCISNAP -verbosity 2
   2.  restart the machine
   3.  make the problem happen again
-  4.  XHCISNAP -o C:\MYDUMP
+  4.  XHCISNAP -report       (2.4.0.0 on; before it, XHCISNAP -o MYDUMP)
 ```
 
-Then send `C:\MYDUMP.TXT`, a plain-text report with no internal addresses in
-it. `C:\MYDUMP.BIN` is written beside it, the driver's raw internal state,
-which only a maintainer holding the exact build can decode; attach it if you
-are asked for it. Step 1 finds the right registry key for you, on every xHCI
-controller the machine has. Step 2 is not optional: the driver reads these
-settings when it starts. **Use the `XHCISNAP.EXE` from this download**, not
-a copy kept from an earlier release: one from before `2.2.0.0` neither
-decodes the enumeration records nor reads the per-port section below.
+`XHCISNAP -o NAME` still writes the dump alone, `NAME.TXT` with `NAME.BIN`
+and `NAME.PSC` beside it, under a name you choose. Step 1 finds the right
+registry key for you, on every xHCI controller the machine has. Step 2 is
+not optional: the driver reads these settings when it starts. **Use the
+`XHCISNAP.EXE` from this download**, not a copy kept from an earlier
+release: one from before `2.2.0.0` neither decodes the enumeration records
+nor reads the per-port section below.
 
-From `2.3.0.0` the top of `MYDUMP.TXT` also says which system it came from:
+From `2.3.0.0` the top of the `.TXT` also says which system it came from:
 the Windows version, build and service pack, 32-bit or 64-bit, the
 processor, the memory, and the make, model and BIOS where that Windows
 records them (on Vista and 7 the make and model; on 2000 and XP, 98 SE and
@@ -2045,8 +2093,8 @@ to withhold a firmware string that contains one (a name of three characters
 or more). The file is meant to be pasted into a public issue as it is, but
 if your machine's firmware strings were customised, read the top of the
 file first. If reading those details causes a problem on your machine, add
-`-nosysinfo` to step 4 (`XHCISNAP -nosysinfo -o C:\MYDUMP`): the report
-then says they were skipped and is otherwise the same.
+`-nosysinfo` to step 4 (`XHCISNAP -nosysinfo -report`): the report then
+says they were skipped and is otherwise the same.
 
 | Value | What it does |
 |---|---|
@@ -2069,7 +2117,7 @@ and nothing more; one from `2.2.0.0` names the step that stopped.
 The log cannot capture a crash: a machine that has bugchecked is not running
 for anything to read.
 
-> **Run `XHCISNAP -disable` once you have sent the capture.** While the channel
+> **Run `SNAPOFF.BAT` (`XHCISNAP -disable`) once you have sent the capture.** While the channel
 > is on, anyone using the machine can read the driver's diagnostic state
 > through it, including internal addresses in the raw dump.
 

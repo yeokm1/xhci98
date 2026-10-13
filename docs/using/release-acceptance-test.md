@@ -55,7 +55,7 @@ characterisation record for the hardware this project holds, and
 | 1 | An xHCI machine | PCI class code `0C0330` and a memory window below 4 GB. Step 3 confirms them. Since `2.3.0.0` an interrupt pin is not required: a controller with none is polled, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` says so (`QUALIFIED WITH CAVEATS`) |
 | 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). **On Windows 98 SE, NUSB 3.3 or 3.6 installed** if the storage clauses (5.2, 5.7, 5.8) are to be taken: storage there needs NUSB's mass-storage component, and without it those clauses are a SKIP with that reason (4.1). Do not install NUSB on any other target. The two 64-bit rows take a different package: separate 64-bit builds in their own directories (step 2); and on Vista x64 and Windows 7 x64 the drivers load only on a boot where driver signature enforcement was disabled, at every start (4.10). One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
-| 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves `PROBE.LOG` on it, and that file is the run's first artefact |
+| 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves its probe log (`mDDhhmmS.LOG` from `2.4.0.0`, `PROBE.LOG` before it) on it, and that file is the run's first artefact |
 | 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
 | 6 | A way back | A recovery rung that survives a driver which loads and then fails. Windows 98: the Startup Menu and Safe Mode. The NT targets: F8, and the Recovery Console pre-installed with `winnt32 /cmdcons` while USB still works. Test-boot the rung once before the first install, not after |
 
@@ -150,11 +150,12 @@ Controller Deviations This Driver Acts On".
 | # | Do | Expected reading |
 |---|---|---|
 | 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` and `portsw\` (roadmap-hcd task 38.10). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
-| 2.2 | Check that `tools\xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
+| 2.2 | Check that `tools\xhcisnap\` is one of them | Present, holding `XHCISNAP.EXE` with `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside it from `2.4.0.0` (roadmap-hcd task 38.1). It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
 | 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names: `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`. Read the list off that file rather than from memory |
 | 2.4 | Look for a version directory nested inside another | None |
 | 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports |
 | 2.6 | List `tools\portsw\`, then look for `portsw.vbs` in each flavour directory | `tools\portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd tasks 37.5 and 38.10). The `2.3.1.0` asset has them in `portsw\` at the top level; the `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
+| 2.7 | From `2.4.0.0`: list `tools\xhciqual\` and `tools\xhcisnap\`, then look for `QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` anywhere else in the asset | `QUALREP.BAT` beside `XHCIQUAL.EXE`, the three `SNAP*.BAT` beside `XHCISNAP.EXE`, and none of the four anywhere else (roadmap-hcd task 38.1). An asset before `2.4.0.0` has none of them |
 
 The `release` directory for the machine's architecture is the one to install.
 The `debug` directory beside it is the same drivers built for diagnosis, for a
@@ -187,8 +188,8 @@ again from the `2.0.0.0` asset.
 |---|---|---|
 | 3.1 | Boot real DOS with `XHCIQUAL.EXE` from the download's `TOOLS\XHCIQUAL\` directory (`XHCIQUAL\` at the top of an asset before `2.4.0.0`), keeping `XHCIQUAL.MAP` beside it. No EMM386, no V86 monitor or paging memory manager, and not a DOS box inside Windows | A prompt on a machine whose memory the qualifier can address one-to-one |
 | 3.2 | `XHCIQUAL` | One of four verdicts: `LOOKS QUALIFIED`, `LOOKS QUALIFIED WITH CAVEATS` (no line interrupt: the driver polls the controller), `DISQUALIFIED` or `CANNOT SAY`. The first two continue |
-| 3.3 | `XHCIQUAL --probe-only --no-page --log PROBE.LOG` | Read-only, writes nothing to the machine, and leaves `PROBE.LOG`, the run's first artefact |
-| 3.4 | Read the controller `FACT` line out of `PROBE.LOG` | `hciver`, `ports`, `usb2ports` (the split between USB 2.0 and USB 3.x protocol ports; the `2.0.0.0` driver manages both), `pin`, `bar` and `irq`, each written down |
+| 3.3 | `QUALREP`, from `TOOLS\XHCIQUAL\` (before `2.4.0.0`, `XHCIQUAL --probe-only --no-page --log PROBE.LOG`) | Read-only, writes nothing to the machine, and leaves a new log in the current directory named from the DOS date and time, `mDDhhmmS.LOG`, whose name it prints: the run's first artefact. Run it again: the second log takes the next letter and the first is unchanged |
+| 3.4 | Read the controller `FACT` line out of that log | `hciver`, `ports`, `usb2ports` (the split between USB 2.0 and USB 3.x protocol ports; the `2.0.0.0` driver manages both), `pin`, `bar` and `irq`, each written down |
 
 This step is the same on every target. `XHCIQUAL` reads the machine rather
 than the operating system installed on it.
@@ -434,7 +435,8 @@ under `2.0.0.0`. Windows 7 has not been run on real hardware with `2.0.0.0`.
 The point of a log channel is that a stranger can produce one. This step tests
 the instruction a user is given, not the driver. That instruction is
 `docs/using/release-notes.md`, "The log, and how to send one", and
-`readme.txt` sections 6 and 9, which say the same thing in the user's words.
+`readme.txt` sections 6 and 9 and `tools\xhcisnap\readme.txt`, which say the
+same thing in the user's words.
 Read them for the target under test and do what they say. The table below
 carries the commands and what to read back, and nothing else those two
 documents own.
@@ -447,14 +449,15 @@ a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
 
 | # | Do | Expected reading |
 |---|---|---|
-| 8.1 | `XHCISNAP -verbosity 2` | It names each driver key it wrote to and prints the level that key held before, once per xHCI controller the machine has |
+| 8.1 | `SNAPON.BAT` from `tools\xhcisnap\` (on Vista and 7, Run as administrator; before `2.4.0.0`, `XHCISNAP -verbosity 2`) | It runs `XHCISNAP -verbosity 2`, which names each driver key it wrote to and prints the level that key held before, once per xHCI controller the machine has |
 | 8.2 | Restart the machine | This is what makes it take: the driver reads the value when it starts |
 | 8.3 | Use a device, or reproduce whatever is wrong; leave 5.8's SuperSpeed device plugged in | Nothing to read yet. An empty note ring at 8.5 is a reading rather than a failure |
-| 8.4 | `XHCISNAP -o C:\MYDUMP` | It writes `C:\MYDUMP.TXT` and prints the resolved absolute path it wrote it to |
-| 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
-| 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
+| 8.4 | `SNAPGET.BAT` (before `2.4.0.0`, `XHCISNAP -o C:\MYDUMP`) | It runs `XHCISNAP -report`, which writes `mDDhhmmS.DEV`, `.TXT`, `.BIN` and `.PSC` in the directory it runs in, not under `C:\`, the name made from the local date and time, and prints the names. The channel stays on. Run it again: the second set takes the next letter and the first is unchanged |
+| 8.5 | Read the `.TXT` file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build |
+| 8.6 | `SNAPOFF.BAT` (before `2.4.0.0`, `XHCISNAP -disable`) | It runs `XHCISNAP -disable` and reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
 | 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView`, `XhciImodInterval250ns`, `XhciForceBulkOnly`, `XhciFastPollFsLs`, `XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`, `XhciIntelPortSwitch`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`, `XhciMaxTransferKB`, `XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciWideMap`, `XhciSelectiveSuspend` and `XhciUsb2HubSpeedFallback`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. On a fresh install the INF writes all nineteen: `XhciImodInterval250ns` `160`, `XhciFirstEnumWaitMs` `5000`, `XhciFirstEnumPortMs` `2000`, `XhciMaxTransferKB` `1024`, `XhciPollIdleMs` `50`, `XhciIntelIrqRoute`, `XhciTolerance`, `XhciIntervalCap`, `XhciPollActiveMs` and `XhciUsb2HubSpeedFallback` `1`, and the other nine `0` (an update keeps a value already there, such as the `1` an earlier install wrote for `XhciIntelPortSwitch`), and the report shows the interval read and in force. Write down the report's lines for the value read and the interval in force |
 | 8.8 | The SuperSpeed witness: in the 8.4 report, find 5.8's device | The speed the driver decoded from its port, SuperSpeed, and the speed it programmed into the device's slot, SuperSpeed, agreeing. The slot's speed is the report's slot table: `PSIV` is the Speed field of the controller's own Slot Context for the device, and `speed` is that value decoded, `SuperSpeed, 5 Gbit/s, Gen 1x1` for a 5 Gbit/s link. A SuperSpeed device that reads High Speed here ran on the USB 2.0 port of its connector; record which connector it was in |
+| 8.9 | From `2.4.0.0`: read the 8.4 `.DEV` file | The controller's Device Manager status and problem code (a started controller, problem `0`), the resources it was given (memory window and interrupt, written down beside 3.4's `bar` and `irq`), and a version and SHA-256 for `xhci98.sys`, `xhciuas.sys`, `xhcimsi.sys`, `usbd.sys` and `usbui.dll`, each file this target has installed. The `xhci98.sys` hash is the one `readme.txt` gives for the directory installed. Where this target cannot report an item, the file says so rather than leaving it out |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the
 route to a driver exists at all separately from whether this driver answered on
@@ -504,8 +507,10 @@ shutdown, record only.
 ## When something fails
 
 Report it; do not diagnose it. File an issue with
-`.github/ISSUE_TEMPLATE/bug_report.yml`, attach `PROBE.LOG` and the readings
-from the run, and say which substep and which reading.
+`.github/ISSUE_TEMPLATE/bug_report.yml`, attach step 3's probe log (the
+`mDDhhmmS.LOG` `QUALREP` wrote; `PROBE.LOG` before `2.4.0.0`), and, where
+Windows still runs, the `.DEV` and `.TXT` files `SNAPGET.BAT` wrote at 8.4,
+with the readings from the run, and say which substep and which reading.
 `docs/using/release-notes.md`'s "Known limitations" is worth reading first,
 since several of the things a tester will meet are measured and published, but
 report it anyway if it is not there.

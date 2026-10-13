@@ -81,10 +81,11 @@ Controller qualified verdict.
 
 XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
-To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/issues/new/choose), run these from real DOS and attach `FULL.LOG` if the second run finished, or `PROBE.LOG` only if it did not:
+To submit logs with a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose), from `2.4.0.0` run `QUALREP.BAT` from real DOS in the `TOOLS\XHCIQUAL\` folder and attach the `.LOG` file it names. It runs `XHCIQUAL --probe-only --no-page --log-stamp`, which is read-only: it takes ownership of nothing and writes no PCI configuration register. The log is written in the current directory under a name made from the DOS date and time (`mDDhhmmS.LOG`), so a second run never overwrites the first.
 
-1. `XHCIQUAL --probe-only --no-page --log PROBE.LOG` is read-only. It takes ownership of nothing and writes no PCI configuration register.
-2. If that does not crash the machine, continue with `XHCIQUAL --no-page --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
+If a maintainer asks for the full run as well, continue with `XHCIQUAL --no-page --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
+
+If the machine runs Windows with the driver, the bug report asks for the driver's own report too: in `TOOLS\XHCISNAP\`, run `SNAPON.BAT`, restart Windows, make the problem happen, run `SNAPGET.BAT`, and attach the `.DEV` and `.TXT` files it names; `SNAPOFF.BAT` turns the log channel off again afterwards. On Vista and 7, right-click each one and choose Run as administrator.
 
 ### The package
 
@@ -93,12 +94,12 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 | `release-x86\` | 32-bit Windows: 98 SE, ME, 2000, XP, Vista, 7 | the drivers, the helper and the extras below |
 | `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcimsi.sys`, plus `xhci98-test.cer` |
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
-| `tools\xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier |
-| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader |
+| `tools\xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier, and `QUALREP.BAT`, the reading a bug report asks for |
+| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader, and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`, which turn its channel on, write the report a bug report asks for, and turn the channel off |
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `readme.txt` | | the release notes in plain text |
 
-Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none.
+Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`.
 
 In each driver directory:
 
@@ -569,7 +570,7 @@ tools/          The build toolchain, unpacked in place (git-ignored)
 external/       Local mirrors of the reference sources (git-ignored)
 vm/             Guest images and per-run evidence (git-ignored)
 out/            Staged install media from the packager (git-ignored)
-.github/        Issue forms - the bug report and the hardware report
+.github/        Issue forms - the bug report
 AGENTS.md       Guide for AI agents working on this project
 ```
 

@@ -373,6 +373,211 @@ try {
     $harmlessFaults = @(Get-PswBatchFaults -Text $harmless -Value "1")
     Assert-True ($harmlessFaults.Count -eq 0) ("the batch-file checker refused harmless echo text:`n  " + ($harmlessFaults -join "`n  "))
 
+    # --- the field reports' batch files (roadmap-hcd task 38.1) -------------
+    #
+    # SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE, run by
+    # COMMAND.COM on Windows 98 SE and ME and by cmd.exe from 2000 to 7, so
+    # they carry portsw-on.bat's pinned split; QUALREP.BAT beside
+    # XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries none.
+    # Each line is held to a short list of what both interpreters run, as
+    # portsw-on.bat's are. Each batch runs its tool once, by name, with the
+    # one command line the task fixes; no batch names a drive path or reads
+    # a percent variable (COMMAND.COM on 98 SE and ME has no %DATE% or
+    # %TIME%, and cmd.exe's follow the locale, which is why the tools build
+    # the names); and SNAPGET.BAT never turns the channel off.
+    Write-Step "SNAPON, SNAPGET, SNAPOFF and QUALREP are COMMAND.COM-safe"
+    $reportBatchSpecs = @(
+        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-verbosity 2"; Names = @() },
+        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report";      Names = @(".DEV", ".TXT") },
+        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @() },
+        @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
+    )
+
+    function Get-ReportBatchFaults {
+        param([string]$Text, [hashtable]$Spec)
+        $faults = @()
+        if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+        if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+        if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+        $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+        if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+        if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+        $code = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+        }
+        $osLine = -1
+        $ntLine = -1
+        if ($Spec.Win) {
+            $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+            for ($k = 0; $k -lt $split.Count; $k++) {
+                if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
+                    $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+                }
+            }
+            if ($code.Count -gt 0) { $osLine = $code[0] }
+            if ($code.Count -gt 3) { $ntLine = $code[3] }
+        }
+        $toolRe = '(?i:' + $Spec.Tool + '(\.exe)?)'
+        $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                     ('^if not exist ' + $toolRe + ' goto [a-z]+$'), '^if errorlevel [0-9] goto [a-z]+$',
+                     ('^' + $toolRe + ' [-a-z0-9 ]+( --done-flag [A-Z0-9]+\.FLG)?$'))
+        if ($Spec.Win) { $allowed += '^if not "%OS%"=="Windows_NT" goto [a-z]+$' }
+        # A completion flag, where the spec names one (QUALREP.BAT's, through
+        # XHCIQUAL's --done-flag): tested, and deleted - that file alone.
+        $flagArgs = ""
+        if ($Spec.ContainsKey("Flag")) {
+            $fl = [regex]::Escape($Spec.Flag)
+            $allowed += @(('^if (not )?exist ' + $fl + ' goto [a-z]+$'), ('^if exist ' + $fl + ' del ' + $fl + '$'), ('^del ' + $fl + '$'))
+            $flagArgs = '( --done-flag ' + $fl + ')?'
+        }
+        $labels = @{}
+        $gotos = @()
+        $runs = @()
+        for ($i = 1; $i -lt $lines.Count; $i++) {
+            $line = $lines[$i]
+            if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+            $isSplit = ($i -eq $osLine -or $i -eq $ntLine)
+            if (-not $isSplit) {
+                $ok = $false
+                foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+                if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+            }
+            $isText = ($line -cmatch '^(rem|echo)\b')
+            if ($isText -and $line -match '[<>|&%^]') {
+                $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+            }
+            if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+            if ($line -match '%(DATE|TIME)%') { $faults += "line $($i + 1) reads %DATE% or %TIME%, which COMMAND.COM on 98 SE and ME lacks: $line" }
+            if (-not $isSplit -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
+                $faults += "line $($i + 1) reads a percent variable: $line"
+            }
+            if (-not $isSplit -and -not $isText -and $line -match '[A-Za-z]:\\|^cd\b|^chdir\b') {
+                $faults += "line $($i + 1) names a drive path or changes directory, so its output would not land in the current directory: $line"
+            }
+            if ($line -cmatch '^:([a-z]+)$') {
+                if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+                $labels[$Matches[1]] = $i
+            }
+            if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+            if ($line -match ('^' + $toolRe + '( |$)')) { $runs += $line }
+        }
+        foreach ($g in $gotos) {
+            if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+            if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+        }
+        $want = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + $flagArgs + '$') })
+        if ($runs.Count -ne 1 -or $want.Count -ne 1) {
+            $faults += ("it does not run {0} exactly once, as '{0} {1}' (it runs: {2})" -f $Spec.Tool, $Spec.Args, ($runs -join "; "))
+        }
+        if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
+            $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"
+        }
+        $echoes = (@($lines | Where-Object { $_ -cmatch '^echo ' }) -join "`n")
+        if ($Spec.Names.Count -gt 0 -and -not $echoes.ToUpperInvariant().Contains("ATTACH")) { $faults += "no echo line says what to attach" }
+        foreach ($ext in $Spec.Names) {
+            if (-not $echoes.ToUpperInvariant().Contains($ext)) { $faults += "no echo line names the $ext file it writes" }
+        }
+        if ($Spec.Win -and -not $Text.Contains('Run as administrator')) { $faults += "it no longer says 'Run as administrator' for Vista and 7" }
+        return $faults
+    }
+
+    foreach ($spec in $reportBatchSpecs) {
+        $batSrc = Join-Path $repo ($spec.Dir + "\" + $spec.Name)
+        if (-not (Test-Path -LiteralPath $batSrc -PathType Leaf)) {
+            Assert-True $false "$($spec.Dir)\$($spec.Name) is missing (roadmap-hcd task 38.1)."
+            continue
+        }
+        # Bytes, then Latin-1, for the reason portsw-on.bat's are read so.
+        $batText = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($batSrc))
+        $faults = @(Get-ReportBatchFaults -Text $batText -Spec $spec)
+        Assert-True ($faults.Count -eq 0) ("$($spec.Dir)\$($spec.Name):`n  " + ($faults -join "`n  "))
+    }
+
+    # Controls on the checker, on fixtures written to the task's terms here
+    # rather than on the files, so they hold whatever the files' wording: each
+    # good fixture must pass, every mutant be refused, and the harmless echo
+    # text pass.
+    function New-ReportBatchFixture {
+        param([hashtable]$Spec)
+        $l = @("@echo off", ("rem " + $Spec.Name.ToUpperInvariant() + " - a fixture of test-package.ps1."))
+        if ($Spec.Win) { $l += @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run') }
+        $l += @(("if not exist " + $Spec.Tool + ".EXE goto nofile"), ($Spec.Tool + " " + $Spec.Args),
+                "if errorlevel 4 goto failed")
+        if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
+        if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files named above.") }
+        $l += @("goto end", ":failed", "echo It did not finish. Read the lines above.", "goto end",
+                ":nofile", ("echo " + $Spec.Tool + ".EXE was not found in this directory."), ":end", "echo.", "pause")
+        return (($l -join "`r`n") + "`r`n")
+    }
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    foreach ($spec in $reportBatchSpecs) {
+        $fx = New-ReportBatchFixture -Spec $spec
+        $fxFaults = @(Get-ReportBatchFaults -Text $fx -Spec $spec)
+        Assert-True ($fxFaults.Count -eq 0) ("the report-batch checker refused its own good $($spec.Name) fixture:`n  " + ($fxFaults -join "`n  "))
+        $runLine = $spec.Tool + " " + $spec.Args
+        $at = "`r`n" + $runLine + "`r`n"
+        $mutants = @(
+            @{ Why = "a UTF-8 BOM";      Text = $latin1.GetString([byte[]](@(0xEF, 0xBB, 0xBF) + $latin1.GetBytes($fx))) },
+            @{ Why = "UTF-16";           Text = $latin1.GetString([byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($fx))) },
+            @{ Why = "LF endings";       Text = $fx.Replace("`r`n", "`n") },
+            @{ Why = "no last CRLF";     Text = $fx.Substring(0, $fx.Length - 2) },
+            @{ Why = "truncated";        Text = $fx.Substring(0, $fx.IndexOf(":end`r`n")) },
+            @{ Why = "no pause";         Text = $fx.Replace("echo.`r`npause`r`n", "echo.`r`n") },
+            @{ Why = "no @echo off";     Text = $fx.Substring("@echo off`r`n".Length) },
+            @{ Why = "a %DATE% line";    Text = $fx.Replace($at, "`r`nset STAMP=%DATE%`r`n" + $runLine + "`r`n") },
+            @{ Why = "%TIME% in its run"; Text = $fx.Replace($at, "`r`n" + $runLine + " %TIME%`r`n") },
+            @{ Why = "%1 in its run";    Text = $fx.Replace($at, "`r`n" + $runLine + " %1`r`n") },
+            @{ Why = "a redirect";       Text = $fx.Replace($at, "`r`n" + $runLine + " > OUT.TXT`r`n") },
+            @{ Why = "a C:\ write";      Text = $fx.Replace($at, "`r`n" + $spec.Tool + " -o C:\DUMP`r`n") },
+            @{ Why = "a cd to the root"; Text = $fx.Replace($at, "`r`ncd \`r`n" + $runLine + "`r`n") },
+            @{ Why = "run twice";        Text = $fx.Replace($at, $at + $runLine + "`r`n") },
+            @{ Why = "never run";        Text = $fx.Replace($at, "`r`n") },
+            @{ Why = "run by path";      Text = $fx.Replace($at, "`r`n.\" + $runLine + "`r`n") },
+            @{ Why = "echo on";          Text = $fx.Replace($at, $at + "echo on`r`n") },
+            @{ Why = "a pipe on echo";   Text = $fx.Replace($at, $at + "echo x | more`r`n") },
+            @{ Why = "a missing label";  Text = $fx.Replace($at, $at + "if errorlevel 1 goto nowhere`r`n") },
+            @{ Why = "a label twice";    Text = $fx.Replace(":end`r`n", ":end`r`n:end`r`n") },
+            @{ Why = "a long line";      Text = $fx.Replace($at, $at + "echo " + ("x" * 130) + "`r`n") },
+            @{ Why = "setlocal";         Text = $fx.Replace($at, "`r`nsetlocal`r`n" + $runLine + "`r`n") },
+            @{ Why = "call";             Text = $fx.Replace($at, "`r`ncall :end`r`n" + $runLine + "`r`n") }
+        )
+        if ($spec.Win) {
+            $mutants += @{ Why = "no split"; Text = $fx.Replace("goto run`r`n:nt`r`n", ":nt`r`n") }
+            $mutants += @{ Why = "a stray goto nt"; Text = $fx.Replace($at, $at + "goto nt`r`n") }
+        } else {
+            $mutants += @{ Why = "a cmd.exe cd /d"; Text = $fx.Replace($at, "`r`ncd /d `"%~dp0`"`r`n" + $runLine + "`r`n") }
+        }
+        if ($spec.Name -eq "snapget.bat") {
+            $mutants += @{ Why = "-disable for -report"; Text = $fx.Replace($at, "`r`nXHCISNAP -disable`r`n") }
+            $mutants += @{ Why = "-disable after -report"; Text = $fx.Replace($at, $at + "XHCISNAP -disable`r`n") }
+            $mutants += @{ Why = "-verbosity 0 after -report"; Text = $fx.Replace($at, $at + "XHCISNAP -verbosity 0`r`n") }
+            $mutants += @{ Why = "no .DEV named"; Text = $fx.Replace("Attach the .DEV and .TXT", "Attach the .TXT") }
+        }
+        if ($spec.Name -eq "QUALREP.BAT") {
+            $mutants += @{ Why = "--log for --log-stamp"; Text = $fx.Replace($at, "`r`nXHCIQUAL --probe-only --no-page --log PROBE.LOG`r`n") }
+            $mutants += @{ Why = "an active run"; Text = $fx.Replace($at, "`r`nXHCIQUAL --no-page --log-stamp`r`n") }
+            $mutants += @{ Why = "another done flag"; Text = $fx.Replace($at, "`r`n" + $runLine + " --done-flag OTHER.FLG`r`n") }
+            $mutants += @{ Why = "a log deleted"; Text = $fx.Replace($at, $at + "del *.LOG`r`n") }
+            $mutants += @{ Why = "another file deleted"; Text = $fx.Replace($at, $at + "if exist OTHER.FLG del OTHER.FLG`r`n") }
+        }
+        if ($spec.Name -eq "snapon.bat") {
+            $mutants += @{ Why = "verbosity 3"; Text = $fx.Replace($at, "`r`nXHCISNAP -verbosity 3`r`n") }
+        }
+        foreach ($m in $mutants) {
+            Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."
+            Assert-True (@(Get-ReportBatchFaults -Text $m.Text -Spec $spec).Count -gt 0) "the report-batch checker accepted $($spec.Name) with $($m.Why)."
+        }
+        $harmless = $fx.Replace($at, $at + "echo setlocal is not used here, and the date comes from XHCISNAP.`r`n")
+        $harmlessFaults = @(Get-ReportBatchFaults -Text $harmless -Spec $spec)
+        Assert-True ($harmlessFaults.Count -eq 0) ("the report-batch checker refused harmless echo text in $($spec.Name):`n  " + ($harmlessFaults -join "`n  "))
+        if ($spec.ContainsKey("Flag")) {
+            $withFlag = $fx.Replace($at, ("`r`nif exist {0} del {0}`r`nif exist {0} goto failed`r`n{1} --done-flag {0}`r`nif not exist {0} goto failed`r`ndel {0}`r`n" -f $spec.Flag, $runLine))
+            $flagFaults = @(Get-ReportBatchFaults -Text $withFlag -Spec $spec)
+            Assert-True ($flagFaults.Count -eq 0) ("the report-batch checker refused $($spec.Name)'s own completion flag:`n  " + ($flagFaults -join "`n  "))
+        }
+    }
+
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
     $probeDriver = Join-Path $srcDir "xhci98-probe.sys"
@@ -1033,6 +1238,11 @@ try {
         Ensure-Directory (Join-Path $pubRoot "tools\xhciqual")
         Set-Content -LiteralPath (Join-Path $pubRoot "tools\xhciqual\XHCIQUAL.EXE") `
                     -Encoding ASCII -Value "stand-in qualifier"
+        # And its report batch beside it (roadmap-hcd task 38.1): the upload
+        # assembly refuses a tool directory without its batches
+        # (Assert-ReportBatchLayout).
+        Set-Content -LiteralPath (Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT") `
+                    -Encoding ASCII -Value "stand-in report batch"
         # The port switchover's scripts in tools\portsw\, as every cut publishes
         # them since roadmap-hcd tasks 37.5 and 38.10: the upload assembly
         # refuses a tree of this version without them (Assert-PortSwitchLayout).
@@ -2648,6 +2858,152 @@ try {
             }
         }
     }
+    #
+    # **The report batches' layout, EXECUTED** (roadmap-hcd task 38.1): the
+    # map and the two functions loaded from make-release.ps1's text, as the
+    # tools\ layout's are above, and driven with fixture trees. Publish
+    # copies a tool's batches under their upper-case 8.3 names and refuses a
+    # source missing one; the layout check takes each batch beside its own
+    # tool alone, and refuses a copy anywhere else, a missing one, and any
+    # in a tree published before 2.4.0.0.
+    Write-Step "the report batches are published beside their tools alone"
+    foreach ($anchor in @(
+        @{ Find = 'Publish-ReportBatches -SourceDir $QualtoolDir -DestDir $qualDir -Map $reportBatches["xhciqual"]';
+           Why  = "a cut no longer publishes QUALREP.BAT beside XHCIQUAL.EXE" },
+        @{ Find = 'Publish-ReportBatches -SourceDir $SnapToolDir -DestDir $snapDir -Map $reportBatches["xhcisnap"]';
+           Why  = "a cut no longer publishes SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE" },
+        @{ Find = 'Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release ''$destRoot''"';
+           Why  = "a cut no longer holds its staged tree to the report batches' layout" },
+        @{ Find = 'Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds the tree to the report batches' layout its version was published with" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + " (roadmap-hcd task 38.1).")
+    }
+    $rbAt = $releaserText.IndexOf('Assert-ReportBatchLayout -Root $destRoot')
+    $rbSwapAt = $releaserText.IndexOf('Move-Item -LiteralPath $destRoot -Destination $finalRoot')
+    $rbAsideAt = $releaserText.IndexOf('Move-Item -LiteralPath $finalRoot -Destination $asideRoot')
+    Assert-True ($rbAt -ge 0 -and $rbSwapAt -gt $rbAt -and $rbAsideAt -gt $rbAt) `
+        "make-release.ps1 holds the staged release to the report batches' layout after the -Force aside or the publish swap, or not at all (roadmap-hcd task 38.1)."
+    $rbTexts = @()
+    $rbMap = [regex]::Match($releaserText, '(?ms)^\$reportBatches = @\{.*?^\}')
+    Assert-True $rbMap.Success "make-release.ps1 no longer sets `$reportBatches at its top level (roadmap-hcd task 38.1)."
+    if ($rbMap.Success) { $rbTexts += $rbMap.Value }
+    foreach ($fnName in @("Publish-ReportBatches", "Assert-ReportBatchLayout")) {
+        $fnAt = $releaserText.IndexOf("function $fnName")
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.1)."
+        if ($fnAt -ge 0) { $rbTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
+    }
+    if ($rbTexts.Count -eq 3) {
+        foreach ($rbText in $rbTexts) { Invoke-Expression $rbText }
+        $wantMap = @{ "xhcisnap" = @("SNAPGET.BAT", "SNAPOFF.BAT", "SNAPON.BAT"); "xhciqual" = @("QUALREP.BAT") }
+        Assert-True ((@($reportBatches.Keys | Sort-Object) -join ",") -eq "xhciqual,xhcisnap") "make-release.ps1's `$reportBatches no longer names exactly the qualifier and XHCISNAP."
+        foreach ($tool in $wantMap.Keys) {
+            if (-not $reportBatches.ContainsKey($tool)) { continue }
+            Assert-True ((@($reportBatches[$tool].Values | Sort-Object) -join ",") -ceq ($wantMap[$tool] -join ",")) `
+                "make-release.ps1 no longer publishes exactly $($wantMap[$tool] -join ', ') beside the $tool tool, in upper case."
+        }
+        foreach ($spec in $reportBatchSpecs) {
+            Assert-True ($reportBatches[$spec.Dir].ContainsKey($spec.Name)) "make-release.ps1 does not publish $($spec.Dir)\$($spec.Name), the file the batch gate reads."
+        }
+
+        $rbRoot = Join-Path $script:work "reportbatches"
+        $rbSrc = Join-Path $rbRoot "src"
+        New-Item -ItemType Directory -Force -Path $rbSrc | Out-Null
+        foreach ($spec in $reportBatchSpecs) {
+            [System.IO.File]::WriteAllText((Join-Path $rbSrc $spec.Name), (New-ReportBatchFixture -Spec $spec), (New-Object System.Text.ASCIIEncoding))
+        }
+        $rbCut = Join-Path $rbRoot "cut"
+        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbCut $d) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $rbCut "$d\xhci98.inf"), "; stand-in")
+        }
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbCut "tools\$name") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $rbCut "tools\$name\readme.txt"), "stand-in")
+        }
+        foreach ($tool in @("xhciqual", "xhcisnap")) {
+            Publish-ReportBatches -SourceDir $rbSrc -DestDir (Join-Path $rbCut "tools\$tool") -Map $reportBatches[$tool]
+        }
+        foreach ($tool in $wantMap.Keys) {
+            $got = @(Get-ChildItem -LiteralPath (Join-Path $rbCut "tools\$tool") -Filter "*.BAT" | ForEach-Object { $_.Name } | Sort-Object)
+            Assert-True (($got -join ",") -ceq ($wantMap[$tool] -join ",")) "Publish-ReportBatches put '$($got -join ', ')' in tools\$tool, not '$($wantMap[$tool] -join ', ')'."
+        }
+        foreach ($spec in $reportBatchSpecs) {
+            $pub = Join-Path $rbCut ("tools\" + $spec.Dir + "\" + $reportBatches[$spec.Dir][$spec.Name])
+            Assert-True ((Test-Path -LiteralPath $pub) -and
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($pub))) -eq
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $rbSrc $spec.Name))))) `
+                "Publish-ReportBatches did not publish $($spec.Name) byte for byte."
+        }
+        foreach ($v in @("", "2.3.1.0", "2.4.0.0", "2.4.0.1")) {
+            $refused = $null
+            try { Assert-ReportBatchLayout -Root $rbCut -Batches $reportBatches -What "fixture cut" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ReportBatchLayout -PublishedVersion '$v' refused the batches beside their tools alone: $refused"
+        }
+
+        # A source missing one: refused, naming it, and nothing written.
+        $rbLone = Join-Path $rbRoot "lone-src"
+        New-Item -ItemType Directory -Force -Path $rbLone | Out-Null
+        Copy-Item -LiteralPath (Join-Path $rbSrc "snapon.bat") -Destination $rbLone
+        Copy-Item -LiteralPath (Join-Path $rbSrc "snapoff.bat") -Destination $rbLone
+        $rbLoneDest = Join-Path $rbRoot "lone-dest"
+        $refused = $null
+        try { Publish-ReportBatches -SourceDir $rbLone -DestDir $rbLoneDest -Map $reportBatches["xhcisnap"] } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused -and $refused -match "snapget\.bat") "Publish-ReportBatches did not refuse a source with no snapget.bat, naming it: $refused"
+        Assert-True (-not (Test-Path -LiteralPath $rbLoneDest)) "Publish-ReportBatches wrote its directory before refusing a source missing a batch."
+
+        # A skipped tool: its directory absent, none of its batches anywhere.
+        $rbSkip = Join-Path $rbRoot "skip-qual"
+        Copy-Item -LiteralPath $rbCut -Destination $rbSkip -Recurse
+        Remove-Item -LiteralPath (Join-Path $rbSkip "tools\xhciqual") -Recurse
+        $refused = $null
+        try { Assert-ReportBatchLayout -Root $rbSkip -Batches $reportBatches -What "fixture" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -eq $refused) "Assert-ReportBatchLayout refused a cut with no tools\xhciqual (-SkipQualtool): $refused"
+
+        $rbFaults = @(
+            @{ Name = "stray-portsw";  Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPGET.BAT") -Destination (Join-Path $t "tools\portsw\SNAPGET.BAT") }; Says = "portsw\\SNAPGET\.BAT" },
+            @{ Name = "swapped";       Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhciqual\QUALREP.BAT") -Destination (Join-Path $t "tools\xhcisnap\QUALREP.BAT") }; Says = "xhcisnap\\QUALREP\.BAT" },
+            @{ Name = "flavour-copy";  Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPON.BAT") -Destination (Join-Path $t "release-x86\snapon.bat") }; Says = "release-x86\\snapon\.bat" },
+            @{ Name = "root-copy";     Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPOFF.BAT") -Destination (Join-Path $t "SNAPOFF.BAT") }; Says = "SNAPOFF\.BAT is a copy" },
+            @{ Name = "deep-copy";     Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "tools\xhcisnap\old") | Out-Null; Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPGET.BAT") -Destination (Join-Path $t "tools\xhcisnap\old\SNAPGET.BAT") }; Says = "old\\SNAPGET\.BAT" },
+            @{ Name = "missing-snap";  Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPOFF.BAT") }; Says = "SNAPOFF\.BAT is missing" },
+            @{ Name = "missing-qual";  Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhciqual\QUALREP.BAT") }; Says = "QUALREP\.BAT is missing" }
+        )
+        foreach ($c in $rbFaults) {
+            $t = Join-Path $rbRoot ("fault-" + $c.Name)
+            Copy-Item -LiteralPath $rbCut -Destination $t -Recurse
+            & $c.Do $t
+            foreach ($v in @("", "2.3.1.0", "2.4.0.0")) {
+                $refused = $null
+                try { Assert-ReportBatchLayout -Root $t -Batches $reportBatches -What "fixture $($c.Name)" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+                Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-ReportBatchLayout -PublishedVersion '{0}' on the '{1}' fixture: expected a refusal matching '{2}', got: {3}" -f $v, $c.Name, $c.Says, $refused)
+            }
+        }
+
+        # A tree with no tools\: accepted with none of them before 2.4.0.0,
+        # refused with one anywhere, and refused for the cut and from 2.4.0.0.
+        $rbLegacy = Join-Path $rbRoot "legacy"
+        foreach ($d in @("release-x86", "debug-x86", "xhciqual", "xhcisnap", "portsw")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbLegacy $d) | Out-Null
+        }
+        [System.IO.File]::WriteAllText((Join-Path $rbLegacy "xhcisnap\XHCISNAP.EXE"), "stand-in")
+        $rbLegacyStray = Join-Path $rbRoot "legacy-stray"
+        Copy-Item -LiteralPath $rbLegacy -Destination $rbLegacyStray -Recurse
+        Copy-Item -LiteralPath (Join-Path $rbSrc "snapget.bat") -Destination (Join-Path $rbLegacyStray "xhcisnap\SNAPGET.BAT")
+        foreach ($c in @(
+            @{ Tree = $rbLegacy;      Version = "2.3.1.0"; Want = $true },
+            @{ Tree = $rbLegacy;      Version = "2.2.0.0"; Want = $true },
+            @{ Tree = $rbLegacy;      Version = "2.4.0.0"; Want = $false },
+            @{ Tree = $rbLegacy;      Version = "";        Want = $false },
+            @{ Tree = $rbLegacyStray; Version = "2.3.1.0"; Want = $false }
+        )) {
+            $refused = $null
+            try { Assert-ReportBatchLayout -Root $c.Tree -Batches $reportBatches -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-ReportBatchLayout -PublishedVersion '{0}' on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+        }
+    }
+
     #
     # -Arch defaults to BOTH architectures, and that default is asserted rather
     # than left to reading - in the same place and for the same reason it was
