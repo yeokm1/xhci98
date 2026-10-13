@@ -689,10 +689,6 @@ try {
         } else {
             $mutants += @{ Why = "a %1 test";            Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
         }
-        foreach ($m in $mutants) {
-            Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."
-            Assert-True (@(Get-ReportBatchFaults -Text $m.Text -Spec $spec).Count -gt 0) "the report-batch checker accepted $($spec.Name) with $($m.Why)."
-        }
         if ($spec.ContainsKey("ToolLast")) {
             # Nothing reads the exit code and nothing follows the tool line
             # but labels and pause (owner, 2026-10-13: XHCISNAP's last line
@@ -714,6 +710,12 @@ try {
             $harmless = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`necho setlocal is not used here, and the date comes from XHCISNAP.`r`n" + $guardLine + "`r`n")
         } else {
             $harmless = $fx.Replace($at, $at + "echo setlocal is not used here, and the date comes from XHCISNAP.`r`n")
+        }
+        # After every control is built, the ToolLast ones included (Codex
+        # review of 38.1, round 4: they were appended after this loop).
+        foreach ($m in $mutants) {
+            Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."
+            Assert-True (@(Get-ReportBatchFaults -Text $m.Text -Spec $spec).Count -gt 0) "the report-batch checker accepted $($spec.Name) with $($m.Why)."
         }
         $harmlessFaults = @(Get-ReportBatchFaults -Text $harmless -Spec $spec)
         Assert-True ($harmlessFaults.Count -eq 0) ("the report-batch checker refused harmless echo text in $($spec.Name):`n  " + ($harmlessFaults -join "`n  "))
