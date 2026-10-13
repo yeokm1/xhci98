@@ -25,9 +25,9 @@
  *
  * Hubs (task 33.4; design record 13 section 10.11). The bus serves every
  * hub itself (hcd_hub.c), and since 33.4 also presents each as a devnode: a
- * PDO here with Hub set and the project-owned ids XHCI98\HUB or
- * XHCI98\HUB30, bound to this driver as a hub FDO (hcd_hubfdo.c). Every PDO
- * names the parent it is presented under (ParentSerial: 0 the root hub,
+ * PDO here with Hub set and the project-owned ids USB\XHCI98_HUB or
+ * USB\XHCI98_HUB30, bound to this driver as a hub FDO (hcd_hubfdo.c). Every
+ * PDO names the parent it is presented under (ParentSerial: 0 the root hub,
  * else a hub PDO's Serial), and a relations answer carries only its own
  * parent's. A gone PDO under a hub PnP has let go of is missing whichever
  * parent answers (hcdAncestorGoneLocked), and a change is announced to the
@@ -48,7 +48,7 @@
  * ids carrying &MI_nn (xhci_func.c), all sharing the one device record and
  * created, listed and unlisted together (the Group). Since task 36.43
  * (section 10.12) the group starts with the device's own PDO, Composite set,
- * under the project-owned XHCI98\COMPOSITE, bound to this driver as a
+ * under the project-owned USB\XHCI98_COMPOSITE, bound to this driver as a
  * composite FDO (hcd_hubfdo.c) whose BusRelations are the functions: their
  * ParentSerial is its Serial, as a hub's children's is the hub PDO's, and
  * every parent rule above reads "a hub or a composite" (HcdPdoIsParent).
@@ -243,7 +243,7 @@ static NTSTATUS hcdXportQueryId(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG which)
 }
 
 /* A hub PDO's device and hardware ids (task 33.4; design record 13 section
- * 10.11): XHCI98\HUB or XHCI98\HUB30, project-owned so no OS hub INF
+ * 10.11): USB\XHCI98_HUB or USB\XHCI98_HUB30, project-owned so no OS hub INF
  * matches, and no compatible id - the query keeps the status it arrived
  * with. Its instance id is any PDO's (hcdInstanceQueryId). */
 static NTSTATUS hcdHubQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
@@ -283,8 +283,8 @@ static NTSTATUS hcdHubQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 }
 
 /* A composite-parent PDO's device and hardware ids (task 36.43; design
- * record 13 section 10.12): XHCI98\COMPOSITE with the device's VID, PID and
- * REV, project-owned so no OS composite parent or vendor whole-device INF
+ * record 13 section 10.12): USB\XHCI98_COMPOSITE with the device's VID, PID
+ * and REV, project-owned so no OS composite parent or vendor whole-device INF
  * matches, and no compatible id - the query keeps the status it arrived
  * with. Its instance id is any PDO's (hcdInstanceQueryId). */
 static NTSTATUS hcdCompositeQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,

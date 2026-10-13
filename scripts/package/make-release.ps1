@@ -215,6 +215,18 @@ builds with the in-repo MSVC 6.0 and installs nothing - so this exists for the
 packager's own self-tests, and a release cut with it publishes a read channel
 nobody can open.
 
+.PARAMETER CleanToolDir
+Where `XHCICLN.EXE` and `XHCICL64.EXE` are built. Defaults to `xhcicln\` in the
+repository. Both are staged into `releases\<version>\tools\xhcicln\` with a
+readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
+7 removes, the devnodes a driver before 2.4.0.0 left under `XHCI98\`
+(roadmap-hcd task 38.8, design record 13 section 10.13.8).
+
+.PARAMETER SkipCleanTool
+Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
+half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
+without it, and says so on the console.
+
 .PARAMETER QualtoolDir
 Where to take `XHCIQUAL.EXE` and its `.MAP` from. Defaults to `xhciqual\` in the
 repository.
@@ -317,6 +329,8 @@ param(
     [switch]$SkipQualtool,
     [string]$SnapToolDir = "",
     [switch]$SkipSnapTool,
+    [string]$CleanToolDir = "",
+    [switch]$SkipCleanTool,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -376,6 +390,7 @@ $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
+if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -504,6 +519,7 @@ function Resolve-DirectoryArgument {
 $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
+$CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
@@ -616,9 +632,11 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # assembly reads the layout off the tree as Assert-PortSwitchLayout does: a
 # tree with tools\ is held to it at any version (a dry cut before the version
 # is stamped has one), and a tree without it is accepted only before 2.4.0.0.
+# xhcicln\, the cleanup tool of task 38.8, is first published in 2.4.0.0 too,
+# and only ever under tools\.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -3317,6 +3335,70 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
                    "and SNAPOFF.BAT beside it") -f $snapVersion, $snapSchemaTool)
     }
 
+    # --- the cleanup tool (task 38.8) ----------------------------------------
+    #
+    # XHCICLN.EXE (MSVC 6.0, the 32-bit targets) and XHCICL64.EXE (WDK 7.1
+    # amd64, the 64-bit ones), one source: the opt-in tool that lists, and on
+    # Windows 2000 to 7 removes, the devnodes a driver before 2.4.0.0 left
+    # under XHCI98\ (design record 13 section 10.13.8). The same staleness
+    # rule as XHCISNAP's - each EXE newer than every source beside it and than
+    # src\xhci_version.h - and the same version rule: the source expands the
+    # shared macro and the macro is this release's. Not a driver, so the
+    # packager's test signing of the x64 drivers (design record 19) does not
+    # reach XHCICL64.EXE.
+    $cleantoolStaged = $null
+    if (-not $SkipCleanTool) {
+        Write-Step "cleanup tool"
+        $cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")
+        foreach ($name in $cleanExes) {
+            if (-not (Test-Path -LiteralPath (Join-Path $CleanToolDir $name) -PathType Leaf)) {
+                throw @"
+'$CleanToolDir' has no $name.
+Build both first:  xhcicln\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipCleanTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $cleanReadmeSrc = Join-Path $CleanToolDir "README.TXT"
+        if (-not (Test-Path -LiteralPath $cleanReadmeSrc -PathType Leaf)) {
+            throw "'$CleanToolDir' has no README.TXT, the text the tool's published readme.txt is made from."
+        }
+        $cleanSources = @(@(Get-ChildItem -LiteralPath $CleanToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            @(Get-Item -LiteralPath $versionHeader))
+        foreach ($name in $cleanExes) {
+            $cleanTime = (Get-Item -LiteralPath (Join-Path $CleanToolDir $name)).LastWriteTimeUtc
+            $cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })
+            if ($cleanNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $CleanToolDir $name)' is older than $($cleanNewer.Count) of its own source file(s):
+  - $(($cleanNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhcicln\build.cmd) before releasing: a stale copy prints a version
+that is not this release's, or decides with rules the source no longer has.
+"@
+            }
+        }
+        $cleanSource = Join-Path $CleanToolDir "xhcicln.c"
+        Assert-TakesSharedVersion -Path $cleanSource -Macro "XHCICLN_VERSION"
+        $cleanVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $cleanVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$cleanVersion", but this release is $Version.
+XHCICLN prints that string first on every run, so the two must agree. Bump the
+version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
+"@
+        }
+        $cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")
+        Ensure-Directory $cleanDir
+        foreach ($name in $cleanExes) {
+            Copy-Item -LiteralPath (Join-Path $CleanToolDir $name) -Destination (Join-Path $cleanDir $name) -Force
+        }
+        $cleantoolStaged = $cleanDir
+        Write-Ok (("XHCICLN.EXE and XHCICL64.EXE staged at version {0} from src\xhci_version.h, " +
+                   "newer than every source beside them and than that header") -f $cleanVersion)
+    }
+
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
@@ -3498,6 +3580,22 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += "      At a prompt, SNAPON 3 sets level 3 rather than"
         $contents += "      2 (1 to 4), and SNAPGET MYPC saves the files as"
         $contents += "      MYPC.DEV and so on; section 6 has the rules."
+        $contents += ""
+    }
+    if ($null -ne $cleantoolStaged) {
+        $c32 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICLN.EXE")
+        $c64 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICL64.EXE")
+        $contents += "  TOOLS\XHCICLN\  - removes what an update from 2.3.x left behind"
+        $contents += ""
+        $contents += ("      XHCICLN.EXE  {0:N0} bytes, for 32-bit Windows" -f $c32.Length)
+        $contents += ("      XHCICL64.EXE {0:N0} bytes, for 64-bit Windows" -f $c64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      Optional: nothing needs it (section 4, updating from"
+        $contents += "      2.3.x or earlier). It lists the old, inert devnodes"
+        $contents += "      under XHCI98\ and, on Windows 2000 to 7, removes them"
+        $contents += "      when asked; on 98 SE and ME it lists only."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -4174,8 +4272,41 @@ UPDATING FROM AN EARLIER 2.x RELEASE
 
 Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
 Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
-directory as a new install. Nothing needs renaming first. As read in
-virtual machines:
+directory as a new install. Nothing needs renaming first. (From 2.3.x or
+earlier the controller alone: the root hub is a new one and installs by
+itself - read FROM 2.3.x below first.) As read in virtual machines:
+
+  FROM 2.3.x OR EARLIER, ONCE: EACH ROOT HUB, HUB AND COMPOSITE DEVICE IS
+  FOUND AGAIN AS NEW HARDWARE. From this release they are named under USB\
+  rather than XHCI98\ (there is no XHCI98 bus), and Windows keeps a device
+  entry per name, so each is installed once more under its new name and
+  its old entry stays behind, hidden and inert. The devices beneath them
+  follow: one with a serial number (most USB sticks and disks) keeps its
+  entry and settings; one without (most mice and keyboards) is found again
+  too, and what was kept on its old entry - a hidusbf polling rate, a
+  friendly name, possibly a USB serial adapter's COM number - is not
+  carried over. Apply such settings again afterwards.
+
+  BEFORE UPDATING FROM 2.3.x ON XP, XP X64 OR 98 SE, HAVE A KEYBOARD AND
+  MOUSE THAT DO NOT GO THROUGH THIS DRIVER: PS/2, a laptop's built-in
+  ones, or a USB controller another driver runs. Windows XP and XP x64 ask
+  Found New Hardware and the unsigned-driver question for the new root
+  hub, each hub and each composite device, and Windows 98 SE runs the Add
+  New Hardware wizard for each device found again (it may ask for the
+  Windows CD); until they are answered the USB keyboard and mouse behind
+  the new root hub do nothing. A second controller running this driver
+  does not help: after the restart its root hub is new too.
+
+  WINDOWS 98 SE AND ME: CONNECT NO NEW HUB OR COMPOSITE DEVICE BETWEEN
+  THE UPDATE AND THE RESTART. The earlier release still runs until then
+  and would give it an old name.
+
+  THE OLD ENTRIES ARE HARMLESS and nothing needs them removed. To remove
+  them anyway, after the update and its restart, run TOOLS\XHCICLN\
+  (section 8): it lists them, and on Windows 2000 to 7 removes them when
+  asked; on 98 SE and ME it lists only. Going back to 2.3.x brings each old
+  entry back with its driver - or, if the tool removed it, found and
+  installed afresh.
 
   WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
   The new file waits to replace the old one at the next start, and until
@@ -4219,7 +4350,8 @@ virtual machines:
   ME, its date), although it runs the new file. To change it, run Update
   Driver on "xHCI98 USB 3.x Root Hub" too: on Vista and 7, "Let me pick
   from a list of device drivers on my computer" and the new entry;
-  elsewhere Have Disk.
+  elsewhere Have Disk. (Not from 2.3.x or earlier: there the root hub is
+  new and installed from this release.)
 
   From the first 2.x release only, each device is then found once more as
   new hardware, exactly once: a stick under its serial number, the other
@@ -5143,6 +5275,7 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     $missingTools = @()
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
     if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
+    if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -5804,6 +5937,63 @@ beside XHCIQUAL.EXE covers a different program and does not apply here.
         Write-Ok "NOTICE.TXT written beside XHCISNAP.EXE (static MSVC 6.0 C runtime)"
     }
 
+    # --- the cleanup tool's readme and notices (task 38.8) --------------------
+    #
+    # The readme is xhcicln\README.TXT, tracked beside the source, with the
+    # release's footer; NOTICE.TXT records the two statically linked runtimes
+    # as XHCISNAP's records its one, for the same reason and on the same terms
+    # (legal-provenance.md section 2a).
+    if ($null -ne $cleantoolStaged) {
+        $cleanReadme = @([System.IO.File]::ReadAllText((Join-Path $CleanToolDir "README.TXT")) -split "`r?`n")
+        while ($cleanReadme.Count -gt 0 -and $cleanReadme[$cleanReadme.Count - 1] -eq "") {
+            $cleanReadme = @($cleanReadme | Select-Object -First ($cleanReadme.Count - 1))
+        }
+        $cleanFooter = @'
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCICLN.EXE and XHCICL64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+'@
+        $cleanLines = @($cleanReadme) + @($cleanFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $cleantoolStaged "readme.txt") -Lines $cleanLines
+        Write-Ok "readme.txt written beside XHCICLN.EXE and XHCICL64.EXE"
+
+        $cleanNotice = @'
+==============================================================================
+                          x h c i 9 8   {VERSION}
+           THIRD-PARTY NOTICES FOR XHCICLN.EXE AND XHCICL64.EXE
+==============================================================================
+
+XHCICLN.EXE and XHCICL64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCICLN.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCICL64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. You can see
+it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+'@
+        $cleanNotice = $cleanNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT") `
+                            -Lines ($cleanNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
     # --- the licence the readme sends the reader to --------------------------
     #
     # **The generated guide says "GNU GPL v2 - see LICENSE", so LICENSE has to
@@ -6023,6 +6213,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $snaptoolStaged) {
         Write-Warn "no tools\xhcisnap\ in this release (-SkipSnapTool) - it publishes a read channel nobody can open."
+    }
+    if ($null -eq $cleantoolStaged) {
+        Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
     }
 
     Write-Step "Done"

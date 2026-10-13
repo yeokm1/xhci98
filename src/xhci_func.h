@@ -141,8 +141,9 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
 /*
  * A composite-parent PDO's ids (task 36.43; design record 13 section
  * 10.12), project-owned so no OS INF matches: XHCI_FUNC_ID_DEVICE
- * XHCI98\COMPOSITE&VID_vvvv&PID_pppp; XHCI_FUNC_ID_HARDWARE that with
- * &REV_rrrr, then without, then XHCI98\COMPOSITE alone, as a multi-string.
+ * USB\XHCI98_COMPOSITE&VID_vvvv&PID_pppp (XHCI_ID_COMPOSITE, xhci_hub.h);
+ * XHCI_FUNC_ID_HARDWARE that with &REV_rrrr, then without, then
+ * USB\XHCI98_COMPOSITE alone, as a multi-string.
  * No compatible id (XHCI_FUNC_BAD_PARAM, *used 0); the instance id is
  * XhciFuncInstanceId's with XHCI_INSTANCE_NO_MI. As XhciFuncId: upper-case
  * hex, *used the whole length even when it did not fit.

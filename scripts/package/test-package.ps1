@@ -182,7 +182,7 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $oemOut "txtsetup.oem")) "txtsetup.oem is not at the package root."
     $badOem = Join-Path $script:work "bad-txtsetup.oem"
     [System.IO.File]::WriteAllText($badOem,
-        [System.IO.File]::ReadAllText((Join-Path $repo "src\txtsetup.oem")).Replace('"XHCI98\ROOT_HUB"', '"USB\ROOT_HUB"'),
+        [System.IO.File]::ReadAllText((Join-Path $repo "src\txtsetup.oem")).Replace('"USB\XHCI98_ROOT_HUB"', '"USB\ROOT_HUB"'),
         (New-Object System.Text.ASCIIEncoding))
     $badOemOut = Join-Path $script:work "pkg-oem-bad"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
@@ -2633,8 +2633,18 @@ try {
            Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover and the silent install (tasks 38.9 and 38.2)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install and the cleanup tool (tasks 38.9, 38.2 and 38.8)" },
+        @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
+           Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
+        @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
+           Why  = "a cut no longer stages both builds of the cleanup tool, the 64-bit one a native build by design (task 38.8, decision D7)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path $cleanSource -Macro "XHCICLN_VERSION"';
+           Why  = "a cut no longer holds the cleanup tool's version to the shared macro (task 38.8)" },
+        @{ Find = '$cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })';
+           Why  = "a cut no longer refuses a cleanup tool older than its sources (task 38.8)" },
+        @{ Find = 'Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT")';
+           Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
@@ -2838,7 +2848,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
         }
-        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent")) {
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
         }
@@ -2861,6 +2871,7 @@ try {
         }
         Assert-True ((Get-ToolDirName -Name "xhciqual") -eq "tools\xhciqual") "Get-ToolDirName does not put the qualifier under tools\ at the cut."
         Assert-True ((Get-ToolDirName -Name "xhcisnap") -eq "tools\xhcisnap") "Get-ToolDirName does not put XHCISNAP under tools\ at the cut."
+        Assert-True ((Get-ToolDirName -Name "xhcicln") -eq "tools\xhcicln") "Get-ToolDirName does not put the cleanup tool under tools\ at the cut."
 
         # The accepted layout, for the cut and for every published version.
         foreach ($v in @("", "2.3.1.0", "2.4.0.0", "2.4.0.1")) {
@@ -2874,6 +2885,7 @@ try {
         $tlFaults = @(
             @{ Name = "root-tool";    Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "xhcisnap") | Out-Null }; Says = "xhcisnap\\ is at the version root" },
             @{ Name = "root-portsw";  Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\portsw") -Destination (Join-Path $t "portsw") }; Says = "portsw\\ is at the version root" },
+            @{ Name = "root-xhcicln"; Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\xhcicln") -Destination (Join-Path $t "xhcicln") }; Says = "xhcicln\\ is at the version root" },
             @{ Name = "stranger-file"; Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "tools\readme.txt"), "x") }; Says = "tools\\readme\.txt is not one of" },
             @{ Name = "stranger-dir"; Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "tools\release-x86") | Out-Null }; Says = "tools\\release-x86 is not one of" },
             @{ Name = "tool-as-file"; Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhciqual") -Recurse; [System.IO.File]::WriteAllText((Join-Path $t "tools\xhciqual"), "x") }; Says = "tools\\xhciqual is not one of" },

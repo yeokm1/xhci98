@@ -29,10 +29,15 @@ families.
            Setup's INF install updates the service text mode created rather
            than adding a second one.
   OEM-IDS  [HardwareIds.scsi.XHCI98] maps exactly the INF's model ids
-           (PCI\CC_0C0330 and XHCI98\ROOT_HUB) to that service. OEM-USBID: no
-           USB\ id at all - USB\ROOT_HUB and the class ids belong to Setup's
-           own drivers (txtsetup.sif's [HardwareIdsDatabase]), and taking one
-           would put xhci98.sys on a device usbhub.sys or hidusb.sys drives.
+           (PCI\CC_0C0330, USB\XHCI98_ROOT_HUB, USB\XHCI98_HUB,
+           USB\XHCI98_HUB30 and USB\XHCI98_COMPOSITE) to that service; an old
+           XHCI98\ row is not one of them (task 38.8, a clean move).
+           OEM-USBID: no USB\ id but those four bases of the bus's own (under
+           USB\ since 2.4.0.0; design record 13 section 10.13) - USB\ROOT_HUB,
+           USB\COMPOSITE and the class ids belong to Setup's own drivers
+           (txtsetup.sif's [HardwareIdsDatabase]), and taking one would put
+           xhci98.sys on a device usbhub.sys or hidusb.sys drives; and
+           USB\XHCI98_NOXPORT, the refused interface's id, stays unbound.
   OEM-MSFILE  No Microsoft file is named anywhere: usbd.sys, the HID and
            storage drivers come from Setup's own source.
   OEM-83   Every file name is 8.3.
@@ -76,6 +81,11 @@ if ($OemPath -eq "") { $OemPath = $oemFor[$Arch] }
 if ($InfPath -eq "") { $InfPath = $infFor[$Arch] }
 
 $optionId = "XHCI98"
+# The only USB\ ids this file may map: the four bases of the bus's own ids
+# (src\xhci_hub.h; check-inf.ps1 holds the INF's models to that header, and
+# OEM-IDS holds this file to the INF's models), exactly - never a prefix test,
+# which would admit USB\XHCI98_NOXPORT (design record 13 section 10.13.9).
+$ownUsbIds = @("USB\XHCI98_ROOT_HUB", "USB\XHCI98_HUB", "USB\XHCI98_HUB30", "USB\XHCI98_COMPOSITE")
 $binary = "xhci98.sys"
 $infName = "xhci98.inf"
 $sections = @("Disks", "Defaults", "scsi", "Files.scsi.$optionId", "HardwareIds.scsi.$optionId")
@@ -323,8 +333,8 @@ function Test-OemText {
                 continue
             }
             $id = $f[0].Text.ToUpperInvariant()
-            if ($id.StartsWith("USB\")) {
-                & $add "OEM-USBID" "'$($f[0].Text)' is a USB\ id; those belong to Setup's own drivers."
+            if ($id.StartsWith("USB\") -and -not ($ownUsbIds -contains $id)) {
+                & $add "OEM-USBID" "'$($f[0].Text)' is a USB\ id other than the bus's own four ($($ownUsbIds -join ', ')); USB\ROOT_HUB, USB\COMPOSITE and the class ids belong to Setup's own drivers, and USB\XHCI98_NOXPORT stays unbound."
             }
             if ($mapped.ContainsKey($id)) { & $add "OEM-IDS" "'$($f[0].Text)' is mapped twice." }
             $mapped[$id] = $true
@@ -437,14 +447,18 @@ if ($SelfTest) {
             @{ Rule = "OEM-FILES";    Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndriver = d1, xhciuas.sys, xhciuas") },
             @{ Rule = "OEM-FILES";    Text = $text.Replace("inf    = d1, xhci98.inf`r`n", "") },
             @{ Rule = "OEM-SERVICE";  Text = $text.Replace("driver = d1, xhci98.sys, xhci98", "driver = d1, xhci98.sys, xhcihcd") },
-            @{ Rule = "OEM-IDS";      Text = $text.Replace("id = `"XHCI98\ROOT_HUB`", `"xhci98`"`r`n", "") },
-            @{ Rule = "OEM-IDS";      Text = $text.Replace("`"XHCI98\ROOT_HUB`", `"xhci98`"", "`"XHCI98\ROOT_HUB`", `"usbhub`"") },
+            @{ Rule = "OEM-IDS";      Text = $text.Replace("id = `"USB\XHCI98_ROOT_HUB`", `"xhci98`"`r`n", "") },
+            @{ Rule = "OEM-IDS";      Text = $text.Replace("`"USB\XHCI98_ROOT_HUB`", `"xhci98`"", "`"USB\XHCI98_ROOT_HUB`", `"usbhub`"") },
             @{ Rule = "OEM-IDS";      Text = $text.Replace("`"PCI\CC_0C0330`"", "`"PCI\CC_0C0320`"") },
-            @{ Rule = "OEM-USBID";    Text = $text.Replace("`"XHCI98\ROOT_HUB`"", "`"USB\ROOT_HUB`"") },
+            @{ Rule = "OEM-USBID";    Text = $text.Replace("`"USB\XHCI98_ROOT_HUB`"", "`"USB\ROOT_HUB`"") },
+            @{ Rule = "OEM-USBID";    Text = $text.Replace("id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"", "id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"`r`nid = `"USB\XHCI98_NOXPORT`", `"xhci98`"") },
+            @{ Rule = "OEM-USBID";    Text = $text.Replace("id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"", "id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"`r`nid = `"USB\COMPOSITE`", `"xhci98`"") },
+            @{ Rule = "OEM-IDS";      Text = $text.Replace("id = `"USB\XHCI98_ROOT_HUB`", `"xhci98`"", "id = `"USB\XHCI98_ROOT_HUB`", `"xhci98`"`r`nid = `"XHCI98\ROOT_HUB`", `"xhci98`"") },
+            @{ Rule = "OEM-IDS";      Text = $text.Replace("id = `"USB\XHCI98_HUB30`", `"xhci98`"", "id = `"XHCI98\HUB30`", `"xhci98`"") },
             @{ Rule = "OEM-MSFILE";   Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98.inf`r`ndll = d1, usbd.sys") },
             @{ Rule = "OEM-83";       Text = $text.Replace("inf    = d1, xhci98.inf", "inf    = d1, xhci98-amd64.inf") },
             @{ Rule = "OEM-ARCH";     Text = $text.Replace($word, "any") },
-            @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"XHCI98\ROOT_HUB`", `"xhci98`"", "`"XHCI98\ROOT_HUB`", `"xhci98") },
+            @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"USB\XHCI98_ROOT_HUB`", `"xhci98`"", "`"USB\XHCI98_ROOT_HUB`", `"xhci98") },
             @{ Rule = "OEM-QUOTE";    Text = $text.Replace("`"PCI\CC_0C0330`", `"xhci98`"", "`"PCI\CC_0C0330`" x, `"xhci98`"") },
             @{ Rule = "OEM-QUOTE";    Text = $text.Replace("scsi = XHCI98`r`n", "scsi = XHCI98`"`r`n") },
             @{ Rule = "OEM-PAIR";     Text = $text.Replace("id = `"PCI\CC_0C0330`", `"xhci98`"", "id = `"PCI\CC_0C0330`", `"xhci98`"`r`nid = `"PCI\CC_0C0330`", `"xhci98`"") }
@@ -471,7 +485,7 @@ if ($SelfTest) {
         # The INF side of OEM-IDS and OEM-SERVICE: an INF that grows a model
         # or renames its service must fail the unchanged oem file.
         $infCases = @(
-            @{ Rule = "OEM-IDS";     Inf = $inf.Replace("%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB", "%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB`r`n%RootHubDesc%=RootHub.Dev,XHCI98\OTHER_HUB") },
+            @{ Rule = "OEM-IDS";     Inf = $inf.Replace("%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB", "%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n%RootHubDesc%=RootHub.Dev,USB\XHCI98_OTHER_HUB") },
             @{ Rule = "OEM-SERVICE"; Inf = $inf.Replace("AddService=xhci98,", "AddService=xhcihcd,") },
             @{ Rule = "OEM-SERVICE"; Inf = ([regex]'(\[Hub\.Dev\.NT[a-z0-9]+\.Services\]\r?\nAddService=)xhci98,').Replace($inf, '${1}xhcihub,', 1) }
         )

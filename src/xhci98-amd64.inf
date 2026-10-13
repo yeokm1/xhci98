@@ -9,7 +9,10 @@
 ; through LayoutFile; Vista and Windows 7 x64 take [XhciModels.NTamd64.6.0],
 ; which copies the driver alone. Both models sections carry the controller
 ; and the root hub the controller creates, under the project-owned id
-; (xhci98.inf has the long form).
+; (xhci98.inf has the long form), with the hubs and composite devices the
+; bus presents. The four ids are under USB\ since 2.4.0.0 (task 38.8; design
+; record 13 section 10.13), XHCI98\ before; no old id is named here, and the
+; root hub's sections copy nothing (decision D3, as the hubs').
 ;
 ; Written as task 25.8's scaffold INF; stageable since 26-A.1 removed the
 ; scaffold marker from the image. Task 28-A.2 (taken at the start of Phase
@@ -32,17 +35,17 @@ DriverVer=10/13/2026,2.3.1.0
 
 [XhciModels.NTamd64]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
-%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
-%HubDesc%=Hub.Dev,XHCI98\HUB
-%Hub30Desc%=Hub.Dev,XHCI98\HUB30
-%CompositeDesc%=Comp.Dev,XHCI98\COMPOSITE
+%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB
+%HubDesc%=Hub.Dev,USB\XHCI98_HUB
+%Hub30Desc%=Hub.Dev,USB\XHCI98_HUB30
+%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE
 
 [XhciModels.NTamd64.6.0]
 %XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
-%RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
-%HubDesc%=Hub.Dev6,XHCI98\HUB
-%Hub30Desc%=Hub.Dev6,XHCI98\HUB30
-%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE
+%RootHubDesc%=RootHub.Dev6,USB\XHCI98_ROOT_HUB
+%HubDesc%=Hub.Dev6,USB\XHCI98_HUB
+%Hub30Desc%=Hub.Dev6,USB\XHCI98_HUB30
+%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -76,20 +79,19 @@ AddService=xhci98,0x00000002,Xhci.AddService
 
 [RootHub.Dev.NTamd64]
 AddReg=RootHub.AddReg.NT
-CopyFiles=Xhci.CopyFiles
 
 [RootHub.Dev.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
 [RootHub.Dev6.NTamd64]
 AddReg=RootHub.AddReg.NT
-CopyFiles=Xhci.CopyFiles
 
 [RootHub.Dev6.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
 ; An external hub (task 33.4; design record 13, section 10.11): presented by
-; the bus under XHCI98\HUB or XHCI98\HUB30 and bound to xhci98.sys again.
+; the bus under USB\XHCI98_HUB or USB\XHCI98_HUB30 and bound to xhci98.sys
+; again.
 ; Its sections copy NOTHING - the devnode exists only under a running
 ; xhci98.sys - so a hub plugged in long after the install never asks for the
 ; original media (HCD-HUBCOPY).
@@ -117,8 +119,8 @@ HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,0x000
 HKR,"Interrupt Management\MessageSignaledInterruptProperties",MessageNumberLimit,0x00010003,1
 
 ; A composite device (task 36.43; design record 13, section 10.12): its
-; function PDOs beneath a devnode of its own under XHCI98\COMPOSITE, bound to
-; xhci98.sys again. Copies NOTHING (HCD-HUBCOPY) and registers no property
+; function PDOs beneath a devnode of its own under USB\XHCI98_COMPOSITE,
+; bound to xhci98.sys again. Copies NOTHING (HCD-HUBCOPY) and registers no property
 ; page (HCD-COMPPAGE); the hub page an earlier driver may have left goes, as
 ; XP's own usb.inf installs its composite parent.
 [Comp.Dev.NTamd64]
