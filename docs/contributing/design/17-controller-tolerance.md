@@ -2271,9 +2271,11 @@ On the draft's questions, each recommendation taken:
 Open for the owner, from review round 1:
 
 - **D8, the isochronous Frame ID below 1.0.** (a) As 1.0: with CFC 0 a new
-  flow's first TD may carry a Frame ID, as today; or (b) as Linux: SIA on
-  every TD below 1.0. Recommended (b): Linux never writes a Frame ID to a
-  0.96 part, and whether 0.96 honours one is unread (4.14.6).
+  flow's first TD may carry a Frame ID, as today; or (b) SIA on every TD
+  below 1.0, whatever HCCPARAMS bit 11 reads - Linux's behaviour on a
+  controller whose CFC reads 0, taken here as the project's own
+  conservative policy. Recommended (b): whether 0.96 defines or honours a
+  Frame ID, and what bit 11 means there, are unread (4.14.6).
 
 ## 5. Injection
 
