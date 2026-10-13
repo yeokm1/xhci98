@@ -64,6 +64,18 @@ fails the start. 0 and 2 are unchanged; 4 and above still run as 0.
 Sections 3, 3.1, 4, 4.3, 8 and 12 follow; reasons 14 to 18 are
 appended.
 
+**Revision 8, 2026-10-13 (task 38.4, designed before code).** Section
+7.2: a finer system timer while polling, on Windows 2000 and later -
+`ExSetTimerResolution` asked for while the poller is active and given
+back when it idles, at a power transition and at the stop, from a timer
+thread of the controller's, with a registry value to turn it off (on by
+default). The 32-bit image reaches the routine through the helper of
+design record 18, extended to Windows 2000 and XP and renamed
+`xhcihlpr.sys` (record 18 section 15); where sections 4.3 and 10 name
+`xhcimsi.sys` they describe `2.3.0.0` and `2.3.1.0`. Section 7's
+"next question" is answered there. The owner's decisions it needs are
+section 7.2.13's and record 18 section 15.13's.
+
 ## 1. What is asked, and what is not
 
 A registry switch chooses how the bus learns that the controller has written
@@ -1275,10 +1287,14 @@ What follows from it:
   checks (section 7.1) are what recover part of it. Isochronous audio must
   be kept fed across a poll; whether each target's `usbaudio.sys` queues far
   enough ahead is read, not assumed.
-- **A finer timer** (`ExSetTimerResolution` on NT) is not part of this
+- **A finer timer** (`ExSetTimerResolution` on NT) was not part of this
   design: it has no allowlist row, no Windows 98 export evidence, and changes
   the tick for the whole system. If the readings show polled throughput
   unusable, it is the next question, under the import gate's evidence rule.
+  **Answered by revision 8, section 7.2** (task 38.4): on Windows 2000 and
+  later, while the poller is active, through the helper on 32-bit systems
+  and `MmGetSystemRoutineAddress` on 64-bit ones; never on Windows 98 SE
+  or ME.
 
 ### 7.1 Opportunistic checks
 
@@ -1317,6 +1333,394 @@ event not yet drained.
 
 The checks run under a poll delivery only, so a line delivery runs exactly
 today's code.
+
+### 7.2 A finer system timer while polling (revision 8, task 38.4)
+
+Designed 2026-10-13 for roadmap-hcd task 38.4, before any code; the
+helper half (how the 32-bit image reaches the routine, the helper's
+extension to Windows 2000 and XP and its rename to `xhcihlpr.sys`) is
+design record 18 section 15. Section 7.2.13 lists what is open for the
+owner; nothing below is taken as decided where it names a decision.
+
+#### 7.2.1 What is asked, and what is not
+
+Asked (roadmap 38.4): under a poll delivery, ask Windows for a finer
+system clock while the poller is in its active state, and give it back
+when the poller idles, the delivery leaves polling, the controller stops
+or leaves D0, and at S3, S4 and S5; at most one request per controller,
+every `TRUE` paired with its `FALSE`; the call made at PASSIVE_LEVEL from
+a thread, never from the poll DPC; a registry value that turns it off,
+on by default (owner, 2026-10-12); and no power IRP whose completion
+depends, directly or indirectly, on the call completing.
+
+Not asked: Windows 98 SE and ME. Their kernel has no `ExSetTimerResolution`
+(the roadmap's "no Windows 98 export"), the 32-bit image may not import
+it or `MmGetSystemRoutineAddress`, and no helper loads there; on them the
+poller keeps the clock tick, as today. Nothing changes under a line or
+message delivery, under the watch role, or on a controller that never
+polls. The tick on Windows 98 is still unmeasured (section 7).
+
+#### 7.2.2 State today (read 2026-10-13)
+
+- **What the tick does to polling** (`runs/run-36.md`, task 36.13's P1
+  rows, mode 2, `release`): `PollIntervalMinMs` 10 on Windows 2000, 15 on
+  XP, XP x64 and 7 x86, 5 on Vista x86 and 1 on Vista x64, against an
+  active period of 1 ms. The last two show that other software on the
+  guest had already raised the tick, which is why section 7 calls the
+  tick something "other software can change" and why the readings below
+  compare interval counters, not the kernel's increment
+  (`KeQueryTimeIncrement` is the increment, not the current resolution;
+  roadmap 38.4). (runtime, through this driver's counters)
+- **Where the period is decided.** The poll timer's DPC
+  (`hcdPollDpc`, `src/hcd_poll.c`) drains, gathers the bus's state
+  (`hcdPollBus`) and takes `XhciPollDecidePeriod`'s state (ACTIVE,
+  PERIODIC or IDLE; `XHCI_POLL_BUS_*`, `src/xhci_poll.h`) under the
+  controller lock, at DISPATCH_LEVEL. A promotion (`HcdPollPromoteLocked`)
+  arms the active period from a doorbell, also at DISPATCH_LEVEL.
+- **The controller thread** (`hcdThread`, `src/hcd_ctl.c`) wakes on
+  `WorkEvent` or every `HCD_POLL_MS` (100 ms), runs `hcdPoll` (which holds
+  the power gate for an owed containment, `HcdPollThreadPass`), then
+  `HcdEnumService` under the power gate, then the log flush.
+- **The controller thread is on the completion path of power IRPs.**
+  With `XhciSelectiveSuspend` 1 a child PDO's D-IRP is pended into its
+  slot by dispatch and settled by the thread's pass (`src/hcd_susp.c`,
+  the executor; `src/hcd.h`, `PwrIrp` and `PowerPending`), and the
+  controller FDO's own device SET_POWER waits on the power gate the
+  thread's pass holds (`HcdControllerPower`, `src/hcd_power.c`). So a
+  thread blocked in a call that waits for a power transition holds up a
+  power IRP. This is why the call is not made on the controller thread
+  (section 7.2.5), though the roadmap's text names it; decision T1.
+- **The power paths.** A device SET_POWER to a lower state revokes the
+  poller's service (`HcdPollRevoke`) under the power gate before
+  `hcdSuspendSettled`; the fallback when no device IRP could be asked
+  (`hcdDirectTransitionGated`) does the same; a D0 grants it again
+  (`HcdPollGrant` in `hcdD0Finish`). The system IRP asks for D3 for every
+  sleep state and for shutdown (`hcdSystemDone`). None of them waits for
+  either thread except through the power gate.
+- **The stop** (`hcdStopBody`) joins the controller thread first
+  (`hcdThreadStop`, the thread object on NT), then revokes and closes the
+  poller under the power gate. Surprise removal and the remove reach it
+  through `HcdStopController` (`src/hcd_pnp.c`).
+
+#### 7.2.3 The routine, per image
+
+| Image and system | Where `ExSetTimerResolution` comes from | Without it |
+|---|---|---|
+| 32-bit, Windows 98 SE and ME | nowhere: no look, no thread | the clock tick, as today |
+| 32-bit, Windows 2000 and XP | `xhcihlpr.sys`'s channel, its timer service (record 18 section 15.3): the address the loader wrote into the helper's import table | the clock tick, recorded "not found" |
+| 32-bit, Vista and 7 | the same channel, the same answer that carries the MSI routines | the same |
+| 64-bit, XP x64, Vista x64, 7 x64 | `MmGetSystemRoutineAddress(L"ExSetTimerResolution")`, as for the MSI pair (section 4.3) | the same |
+
+The routine is called only through a pointer the image holds; neither
+image imports it. The 32-bit image keeps the import set it has
+(`IoGetDeviceObjectPointer` is already in it, record 18 section 3.4);
+the 64-bit image's `MmGetSystemRoutineAddress` row widens its `SITES` to
+the new object (section 7.2.11). The typedef is the Windows 2000 DDK's
+declaration, `ULONG ExSetTimerResolution(ULONG DesiredTime, BOOLEAN
+SetResolution)`, `NTAPI`; the 100 ns unit and the returned value (the
+resolution in effect after the call) are the documented contract.
+
+#### 7.2.4 The switch
+
+`XhciPollFineTimer` (the name is decision T4), a `REG_DWORD` in the
+controller's driver key, read at each start with section 3's values and
+by the same strict reader: 1, absent, unreadable or not a four-byte DWORD
+is on; 0 is off; any other value runs as 1 and the value read is
+recorded. Both INFs write it on every install path with
+`FLG_ADDREG_NOCLOBBER`, value 1, beside `XhciPollActiveMs`, so it is where
+a user looks and an update keeps a 0 a user set (task 34.1's rule; the
+INF gate's footprint gains the row). Windows 98 SE and ME read it and do
+nothing with it. A change takes effect at the next start (a disable and
+enable), as the other poll values do.
+
+#### 7.2.5 Who calls: a timer thread of the controller's
+
+**The call is made on a system thread of its own, one per controller,
+never on the controller thread and never on a system work queue**
+(decision T1). The controller thread decides nothing about the timer; it
+only creates the timer thread when it is first needed.
+
+- **Why not the controller thread.** It is on the completion path of
+  power IRPs (section 7.2.2): with selective suspend on it settles child
+  D-IRPs, and the FDO's own SET_POWER waits on the power gate its pass
+  holds. A call that blocks there makes a power IRP's completion depend
+  on the call, which the roadmap's own rule forbids. Calling it only
+  outside the gate would still leave the selective-suspend D-IRPs behind
+  it.
+- **Why not a work item.** `ExQueueWorkItem` (the only work-item routine
+  the 32-bit image has; `IoQueueWorkItem` is not on Windows 98) does not
+  keep `xhci98.sys` loaded while the item runs (record 18 section 14.8,
+  round 7's finding), and a system worker blocked in the call is a worker
+  the D0 completion's own deferral (`hcdPowerDefer`, `DelayedWorkQueue`)
+  may need, an indirect dependency.
+- **Why not the helper.** On 32-bit systems the helper could run the
+  call on a thread of its own and never be unloaded, but the 64-bit image
+  has no helper (owner, 2026-10-13: "the amd64 image asks
+  `MmGetSystemRoutineAddress`"), so one executor in `xhci98.sys` serves
+  both images, and the helper stays what record 18 made it, a resolver
+  that hands out kernel addresses and runs nothing the HCD calls.
+
+**The timer thread** (`hcdTmrThread`, in a new `src/hcd_tmr.c`; the
+pure half in `src/xhci_poll.c`):
+
+- **Created** by the controller thread, at PASSIVE_LEVEL, in its pass,
+  the first time it finds the delivery is poll, the switch on, no timer
+  thread for this start, and the routine found - looking for it first
+  where the image must (32-bit Windows 2000 and XP: one look per start,
+  record 18 section 15.4; 64-bit: `MmGetSystemRoutineAddress`; 32-bit
+  Vista and 7: the binding the filter and the start already made). That
+  covers a start whose delivery is poll (the grant wakes the thread) and
+  a move from the line (`hcdPollMove` wakes it). Only on NT
+  (`IoIsWdmVersionAvailable(1, 0x10)`), whose thread creation is "not
+  known to block in a transition" (`hcd_susp.c`, the completion workers'
+  note); Windows 98's S5 reading there does not reach it, since no thread
+  is made on 98 or ME. The creation is made from the controller thread's
+  pass, outside the power gate, and nothing waits for it but that pass. A creation that fails is
+  counted, the controller polls at the tick, and no retry is made until
+  the next start.
+- **Joined** by the stop, after the controller thread is joined and
+  before the poller is closed, outside the power gate and every lock:
+  the stop sets `TmrStop`, wakes it and waits on its thread object, as
+  `hcdThreadStop` does on NT. The thread releases a held request before
+  it leaves (section 7.2.6), so the stop returns with nothing held.
+- **Its whole world** is a block in the controller (`hc->Tmr`): its
+  event, its thread object, the routine, the request and the values
+  below. It touches the controller lock only to read its inputs and to
+  record what it did, never across the call, and holds no gate, no spin
+  lock and no reference anyone else waits on while it calls.
+
+#### 7.2.6 The request and its state machine
+
+**The value** (decision T2, recommended): `XhciPollActiveMs` x 10000, in
+100 ns units, the active period in effect - 10000 (1 ms) at the default.
+The returned value is recorded; the kernel's own minimum and rounding are
+its business, and the record does not assume either.
+
+**The active state** is `XhciPollDecidePeriod`'s ACTIVE (section 6.1),
+and also a promotion whose need is the active period (section 6.2): both
+are taken under the controller lock at DISPATCH_LEVEL. At each, the code
+stamps `TmrLastActive` (the low word of `KeQuerySystemTime`, as the
+poller's clocks) and sets `TmrActiveSeen`; if no request is held or
+asked, it sets the timer thread's event (`KeSetEvent`, callable at
+DISPATCH_LEVEL). That is all the DPC does: it never calls the routine and
+never waits.
+
+**Wanted** is a pure function (`XhciPollTmrWant`, `test_poll`) over
+values read in one controller-lock hold:
+
+- the switch on, the routine found, no stop asked (`TmrStop` 0);
+- the delivery poll and the role SERVE (`ext->EventDelivery`,
+  `hc->Poll.Role`);
+- not barred (`TmrBar` 0, below);
+- the service granted (`PollService` 1), and `DevicePower` D0 and not
+  `SuspendedInD0`;
+- the last ACTIVE within the linger: `TmrActiveSeen` and less than
+  `XHCI_POLL_TMR_LINGER_MS` since `TmrLastActive`, by signed difference
+  (decision T3: 1000 ms recommended).
+
+**The step** (`XhciPollTmrStep`, pure): from RELEASED, wanted gives HOLD
+(call `TRUE`, then HELD); from HELD, not wanted gives RELEASE (call
+`FALSE`, then RELEASED); otherwise nothing. There is no third state, so
+two `TRUE`s in a row, or a `FALSE` with nothing held, cannot be produced.
+The thread loops: wait on its event (with a timeout of the linger's
+remainder while HELD, unbounded while RELEASED), read the inputs, step,
+call, record, repeat. On `TmrStop` it steps with "not wanted", calls
+`FALSE` if HELD, and leaves.
+
+**The bar** is set under the controller lock by the paths that take the
+controller away and must not wait for the call: the device SET_POWER to
+a lower state and the direct transition toward sleep (each beside its
+`HcdPollRevoke`, then `KeSetEvent` on the timer thread), and the stop
+(before the join). A grant (`HcdPollGrant`) clears it. So a release at a
+power transition is a bit set and an event signalled: the IRP goes on at
+once, and the call happens later on the timer thread.
+
+**Every release point**, and what makes it:
+
+| Point | Site | How it releases |
+|---|---|---|
+| The poller idles | the timer thread | no ACTIVE for the linger: the timeout wakes it, "not wanted" |
+| The poller parked: a recovery, a failed controller, a revocation | the timer thread | `PollService` 0, after the linger, as an idle (a recovery that restores service within the linger keeps it, so a recovery does not toggle the system clock) |
+| The controller leaves D0 (device SET_POWER, D1 to D3) | `HcdControllerPower`, under the power gate, beside `HcdPollRevoke` | `TmrBar` 1 and the event; released by the thread at once, asynchronously |
+| The direct transition toward sleep (no device IRP) | `hcdDirectTransitionGated` | the same |
+| S3 and S4 | the system IRP asks for D3 (`hcdSystemDone`), so the row above; where the D-IRP could not be asked, the direct transition | the same |
+| S5 (shutdown) | the same D3, or the shut work item where the function is already out of D0 (then already released) | the same; a call still blocked when power goes is harmless, since nothing waits for it |
+| The delivery leaves polling | only by a stop or a failed start: no run-time path leaves a poll delivery (the move goes to it) | the stop's row |
+| The controller stops, is surprise-removed or removed | `hcdStopBody` (all three reach it) | `TmrStop` and `TmrBar`, the join; the thread calls `FALSE` before it exits |
+| A start that fails | the timer thread is only created after a start succeeded, by the controller thread | nothing to release |
+| The switch | read at start only | a 0 makes no thread; nothing to release mid-run |
+
+A request taken just before a bar - the thread read "wanted", the
+power path barred, the thread then called `TRUE` - is released on the
+thread's next pass, which the bar's event guarantees; it is counted
+(`TmrHoldsRaced`) and is a request held for a moment across the start of
+a transition, which the rule allows because nothing waits for it.
+
+#### 7.2.7 The power-IRP rule, argued
+
+Microsoft warns that `ExSetTimerResolution` can deadlock against a power
+IRP (roadmap 38.4; the warning's exact text is quoted from Microsoft's
+page in the code's comment and in this section by the implementation
+commit - it has not been reread for this revision). The design holds the
+rule by construction:
+
+1. Only the timer thread calls the routine.
+2. Nothing on a power path waits for the timer thread. The power paths
+   set the bar and an event; the D-IRP, the system IRP and the D0
+   completion take only the power gate, which the timer thread never
+   holds. The controller thread, which is on the D-IRP path, never
+   waits for the timer thread either: it creates it and signals it.
+3. The timer thread holds nothing a power path needs while it calls: no
+   gate, no spin lock, no IRP, no remove-lock count, no work item.
+4. The lifetime: the thread runs `xhci98.sys`'s code and reads
+   `hc->Tmr`, both alive until the stop has joined it; the stop
+   precedes the remove that can unload the image (WDM's order, which
+   `HcdStopController`'s callers keep). The routine is the kernel's.
+5. The only party that waits for the call is the stop's join, a PnP
+   path, not a power IRP.
+
+**Not established here**, and asked of the review and the legs: whether
+a PnP stop or removal can be held behind a system power transition that
+the call itself is waiting for. If one can, the join would wait for the
+transition and the transition would not wait for the join (point 2), so
+it is a delay, not a cycle; the S3 and S4 legs below read a removal
+attempted around a transition where a guest offers one.
+
+#### 7.2.8 Several controllers
+
+Each controller holds at most one request, from its own timer thread,
+and pairs it. Their sum is the kernel's: the record relies on the
+documented pairing of each `TRUE` with a `FALSE` and on nothing about how
+the kernel combines requests from one driver. Leg T5 reads it: with two
+polled controllers both active, then one idle, the other's interval
+counters stay at the fine value, and with both idle the tick returns. If
+T5 shows the kernel not combining requests from one image, the record is
+reopened (the alternative is one request per image, counted across
+controllers, at the cost of a lock across controllers' lifetimes).
+
+#### 7.2.9 Counters and log
+
+Appended to `XHCIHC_COUNTERS` after the last word (section 8's rule, the
+start zeroing them; `XHCISNAP` names them, as task 36.9 did):
+
+- `TmrSwitchRead` (`0xFFFFFFFF` not found) and `TmrSwitch` in effect;
+- `TmrSource`: 0 none (Windows 98 SE and ME, or the switch off), 1 the
+  helper, 2 the system (`MmGetSystemRoutineAddress`), 3 not found;
+- `TmrThread`: 0 not created, 1 running, 2 creation failed, 3 joined;
+- `TmrHeld` (0 or 1), `TmrHolds`, `TmrReleases`, `TmrHoldsRaced`;
+- `TmrDesired` (100 ns), `TmrActualHeld` (what `TRUE` returned),
+  `TmrActualReleased` (what `FALSE` returned);
+- `TmrReleaseCause` of the last release: 1 idle, 2 parked, 3 barred (a
+  power transition), 4 the stop;
+- `TmrHeldMs`, the time held in this start, in whole ms, saturating.
+
+The log's notes: `poll.timer.hold` (the value returned) and
+`poll.timer.release` (the cause in the top byte, the value returned below
+it), written by the timer thread through `XhciLogNote` - a producer, so
+no `DbgPrint` site is added (AGENTS.md); the stop's counter dump
+(`hcdLogCountersLocked`) carries the counters by the same `poll.timer.*`
+names. A hold or release is rare by construction (the linger), so the
+notes cannot flood the ring.
+
+**The tick read back.** What shows the effect is the poll interval
+counters (`PollIntervalMinMs` and `PollIntervalMaxMs`, section 8),
+observations quantised to the clock; `TmrActualHeld` is what the kernel
+said it set, recorded beside them, not instead of them.
+
+#### 7.2.10 Host tests
+
+In `test_poll`: `XhciPollTmrWant` over each input alone and the linger at
+its edges and across the time word's wrap; `XhciPollTmrStep` from both
+states, with the invariants checked over random sequences of inputs
+(never `TRUE` while HELD, never `FALSE` while RELEASED, every `TRUE`
+followed by a `FALSE` before the thread's exit); a recovery that restores
+service inside the linger (no call) and outside it (one release, one
+hold); D3 and back (barred release at once, no hold until the next
+ACTIVE); the stale hold against a bar (one hold, one release, counted
+raced); the stop while HELD, while RELEASED and while a bar is set (one
+release, or none). The channel's vectors for the timer service are
+record 18 section 15.3's.
+
+#### 7.2.11 What changes, for the integrator
+
+`src/hcd_tmr.c` (new: the thread, its creation and join, the routine's
+lookup per image), `src/xhci_poll.c` and `src/xhci_poll.h` (the two pure
+functions, the linger and cause constants), `src/hcd_poll.c` (the stamp
+and the signal in `hcdPollDpc` and `HcdPollPromoteLocked`; the bar's
+clear in `HcdPollGrant`), `src/hcd_power.c` (the bar beside each
+`HcdPollRevoke` of a power path), `src/hcd_ctl.c` (the switch's read, the
+creation in the controller thread's pass, the join in `hcdStopBody`),
+`src/hcd.h` (`hc->Tmr`), `src/xhci_counters.h` and `src/hcd_log.c`
+(the counters and the dump), both INFs (the switch's row on every path),
+`src/sources` (the new object),
+`scripts/import-gate/xhci98-imports-amd64.allow` (the
+`MmGetSystemRoutineAddress` row's `SITES` gains `hcd_tmr.obj`; the 32-bit
+allowlist is unchanged), the INF gate's footprint, `xhcisnap` (the names),
+`test/test_poll.c`; and section 8's catalogue, `source-files.md`, the
+release notes' poll rows, and `build-and-test.md`'s log lines.
+
+#### 7.2.12 Legs
+
+On QEMU guests, the `release` package unless a switch needs `qemu`;
+each leg records the kernel image that ran and that the boot was an
+ordinary one, as record 18 section 10 asks.
+
+- **T1, the effect.** Polled UAS `XFERTEST VERIFY` and the 20 s
+  `TONE.WAV` under mode 2 on Windows 2000 (the SMP guest, and under
+  Driver Verifier on `xhci98.sys` and `xhcihlpr.sys`), XP, XP x64 and 7
+  (x86 and x64), with `XhciPollFineTimer` 1 and then 0, read against
+  task 36.13's readings (`runs/run-36.md`, the P rows): the copy rate,
+  the tone's span and gaps, `PollIntervalMinMs`, `TmrActualHeld`, and the
+  guest's idle CPU load.
+- **T2, the release at idle.** After T1's copy, one idle minute:
+  `TmrHeld` 0, `TmrReleaseCause` 1, `TmrHolds` equal to `TmrReleases`,
+  and a short interval no longer seen once only PERIODIC and IDLE
+  decisions run (a mouse attached reads as PERIODIC, so not held).
+- **T3, the stop.** A disable while a copy runs, and a surprise
+  removal (QEMU `device_del`, as record 18's L3): the stop's dump with
+  `TmrHeld` 0 and cause 4, no bugcheck, and the next start's counters
+  from zero.
+- **T4, S3, S4 and S5.** Where a guest sleeps (XP, Vista and 7 hibernate
+  and the guests that stand by, as task 36.28's legs): a copy running,
+  then the transition; after the resume `TmrReleaseCause` 3 from before
+  it, the delivery still poll, the hold taken again at the next copy.
+  Shutdown with a copy running: the system powers off (no hang), read on
+  2000 and 7. Under Driver Verifier on 2000 SMP and 7 x86 for one
+  hibernate each.
+- **T5, two controllers.** Two `qemu-xhci` controllers in mode 2 on 7
+  x86 and 2000: both active (each `TmrHeld` 1), one idled (its release;
+  the other's `PollIntervalMinMs` still fine), both idle (the tick
+  back, read by a fresh copy with the switch 0 on one of them).
+- **T6, without the routine.** 32-bit 2000, XP and 7 with the helper's
+  file removed: `TmrSource` 3, the tick, nothing else changed; Windows
+  98 SE and ME in mode 2: `TmrSource` 0, the release before it's
+  readings (record 18 section 15.12's D legs carry the install half).
+- **T7, the switch off** reads exactly as task 36.13 did: no thread
+  (`TmrThread` 0).
+
+#### 7.2.13 Open for the owner
+
+- **T1.** Who calls `ExSetTimerResolution`: (a) the controller thread,
+  as roadmap 38.4 says, or (b) a timer thread per controller, created by
+  the controller thread and joined at the stop (section 7.2.5).
+  Recommended (b): with selective suspend on, the controller thread
+  settles child D-IRPs, so a call blocked on it breaks the power-IRP
+  rule; (a) would need the timer off whenever `XhciSelectiveSuspend` is
+  1. The roadmap's "from the controller thread" would read "from a thread
+  of the controller's".
+- **T2.** The value asked: (a) the active period in effect, x 10000
+  (1 ms at the default), (b) 1 ms always, or (c) the finest the system
+  allows. Recommended (a): it follows the one value a user already sets
+  for polling, and is (b) at the default.
+- **T3.** When a request is given back after the active state ends: (a)
+  at the first decision that is not ACTIVE (ACTIVE already lasts one idle
+  period after the last event, section 6.1), or (b) after a further fixed
+  linger of 1000 ms. Recommended (b): bursty storage would otherwise move
+  the whole system's clock up and down several times a second.
+- **T4.** The switch's name: `XhciPollFineTimer` (1 on, the default; 0
+  off), or another. Recommended as written.
+
+The helper's decisions (H1 to H5) are record 18 section 15.13's.
 
 ## 8. Counters and log
 
@@ -1670,6 +2074,10 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    ME, 2000 and XP, 32- and 64-bit, mode 3 fails the start. 0 and 2 are
    unchanged, and 4 and above still run as 0 (revision 7; task 36.53).
 
+**Open (revision 8):** section 7.2.13's T1 to T4 and design record 18
+section 15.13's H1 to H5, put to the owner on 2026-10-13 before any
+review round; written here once answered.
+
 ## 13. The reviews
 
 ### 13.1 Revision 1
@@ -1792,6 +2200,12 @@ implement", no P1 or P2. Two P3s taken: `HcdPollRevoke` named among the
 revocation's writers (section 5.3), and what `LineRetired` proves stated
 for all three of its proofs (section 4.2). Review thread
 `01a12062-0080-7c92-a609-9e2b765333c4`.
+
+### 13.6 Revision 8 (task 38.4)
+
+Drafted 2026-10-13 and put to the owner for section 7.2.13's decisions
+before any review round (the owner's rule for Phase 38's design tasks:
+decisions first, review after). The review is recorded here when run.
 
 ## 14. What changes in the documents
 
