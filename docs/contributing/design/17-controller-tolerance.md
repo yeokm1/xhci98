@@ -2076,8 +2076,7 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   every explicit-start case, a new flow's included, the reason then
   meaning no usable CFC capability rather than a zero bit. A client's ASAP
   stays `XHCI_ISO_START_ASAP`. At 1.0 and later both helpers are as
-  today. It is the owner's (4.14.11); until answered, the design is the
-  proposal.
+  today. The owner took it (4.14.11, D8 (b)).
 
 #### 4.14.7 What a user and a report see
 
