@@ -4636,6 +4636,13 @@ being unsigned, and no change to this driver can remove them:
     installed there is no mass-storage driver at all. HID and audio still
     work.
 
+  * WINDOWS 98 SE: STAND BY IS UNTESTED ON REAL HARDWARE; REMOVE USB DISKS
+    BEFORE STAND BY. Read only in QEMU virtual machines, where Windows 98
+    SE itself does not resume reliably, with no USB controller as well.
+    With a USB disk attached the resume stopped before the desktop under
+    this driver and under NUSB's EHCI driver alike; with a USB mouse
+    alone, or behind a hub, it completed and the mouse worked.
+
   * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
     own device manager stops responding; it does the same on Microsoft's
     own USB stack. Wait for the install to finish before unplugging.
@@ -4738,13 +4745,6 @@ Untested ground:
   * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
     specification, and read on no real controller; value 4's programming
     was read in virtual machines only.
-
-  * STAND BY ON WINDOWS 98 SE. Read only in QEMU virtual machines, where
-    Windows 98 SE itself does not resume reliably, with no USB controller
-    as well. With a USB disk attached the resume stopped before the
-    desktop under this driver and under NUSB's EHCI driver alike; with a
-    USB mouse alone, or behind a hub, it completed and the mouse worked.
-    Untested on real hardware: REMOVE USB DISKS BEFORE STAND BY.
 
   * LOW- AND FULL-SPEED DEVICES BEHIND A BUILT-IN HUB WHOSE USB 2.0 SPEED
     TABLE LISTS ONLY HIGH SPEED, as on the VIA VL805
