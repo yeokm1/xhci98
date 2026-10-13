@@ -1945,7 +1945,10 @@ leave a device unworking with nothing said, so a stray value is taken as
 off. **Decided (O6, owner 2026-10-13).** The INFs write no value: absent is off, and an INF reinstall
 then cannot undo what `silent-on.bat` set. Read at every start, so
 `silent-off.bat`'s 0 takes effect at the next. On NT it is never read. The
-notes, at every verbosity as the start's other values are:
+notes, in every build flavour, are `XhciLogNote` records like the start's
+other values, so they reach the note ring only when `XhciLogVerbosity` is 2
+or more (`XHCI_LOG_VERBOSITY_RING`; below it the ring is off, `xhci_log.c`),
+the channel 38.1's `SNAPON.BAT` turns on (`XHCISNAP -verbosity 2`):
 `silent.gate.value` (the DWORD read, or `0xFFFFFFFF` when none was read -
 absent, another type, unreadable) and `silent.gate` (0 or 1), on 98 SE and
 ME only.
@@ -1986,10 +1989,12 @@ otherwise leave a partial table that silences by whichever values came
 first. A list read in part is not the list, and the failure's direction is
 the wizard, as today. The start's notes record the query's status, the
 count kept (after `XhciSilentEnd`), the count ignored and the count dropped
-(`silent.status`, `silent.entries`, `silent.ignored`, `silent.dropped`), at
-every verbosity, with the gate on only: with it off the two gate notes are
-all there is, and their absence on NT is how a reading tells the three
-apart.
+(`silent.status`, `silent.entries`, `silent.ignored`, `silent.dropped`), in
+every build flavour when the verbosity is 2 or more, with the gate on only:
+with it off the two gate notes are all there is, and their absence on NT is
+how a reading at verbosity 2 tells the three apart. Below verbosity 2 no
+`silent.*` note is written anywhere, so an empty ring says nothing about the
+gate.
 
 **Imports.** Every routine the read needs is already on
 `xhci98-imports.allow` with no `SITES` limit: `RtlQueryRegistryValues`
@@ -2135,7 +2140,9 @@ returns a reason: `XHCI_SILENT_OFF` (gate 0), `XHCI_SILENT_EMPTY` (no
 entries), `XHCI_SILENT_BARRED` (the transport, O2, before any walk), or the
 walk's result; the PDO's `SilentInstall` is 1 for `XHCI_SILENT_MATCH`
 alone. With the gate on, `hcdSilentDecide` notes each PDO it decides as
-`silent.pdo`, at every verbosity: `(RootPort << 24) | (first interface, or
+`silent.pdo`, in every build flavour when the verbosity is 2 or more (the
+start's notes' rule, 6.11.3; below 2 the decision is made and not noted):
+`(RootPort << 24) | (first interface, or
 0xFF for a whole device or a parent, << 16) | (reason << 8) | answer`, so
 the bus's answer is read off the note ring with `XHCISNAP -report` (or
 `SNAPGET.BAT`), not inferred from the wizard. A route behind hubs is not
@@ -2236,7 +2243,7 @@ tool directories names it. Four files, sources under `src\` as
 |---|---|
 | `SILENT.REG` | the list: six entries, `REGEDIT4` |
 | `SILENT.VBS` | shows or sets `XhciSilentInstall` on every xhci98 controller, and shows the list |
-| `silent-on.bat` | merges `SILENT.REG` and sets the gate to 1 |
+| `silent-on.bat` | merges `SILENT.REG`, checks the list read back, and only then sets the gate to 1 |
 | `silent-off.bat` | sets the gate to 0 and leaves the list |
 
 **`SILENT.REG`**, under
@@ -2276,18 +2283,51 @@ headers of a `regedit /e` export of that key (no WMI on a stock 98), or
 probed `0000` to `9999` when the export gives nothing, and kept when its
 `DriverDesc` is the controller's (`xHCI98 USB 3.x eXtensible Host
 Controller`) and its `NTMPDriver` is `xhci98.sys`. Arguments `show`, `1` and
-`0`, or a double-click that shows and asks; exit codes 0 done, 1 refused or
-nothing found, 2 usage, as `portsw.vbs`'s. `show` prints, for each
-controller, the value and what the driver makes of it (exactly 1 on;
-missing, 0, another number or type off), and the list: a `regedit /e`
-export of the `SilentClasses` key read for its value lines, saying whether
-the six of `SILENT.REG` are there with their bytes and how many other
-values the key holds (Script Host cannot list a key's values itself).
-Setting writes the DWORD to every controller's key and then prints the
-`show` text and "RESTART WINDOWS", once, as `portsw.vbs` does since 38.7.
-On an NT system it writes nothing: it says the silent install is a Windows
-98 SE and ME feature the driver never reads there, and exits 1. No
-elevation path, since it writes only on 98 SE and ME.
+`0`, or a double-click that shows and asks. Exit codes: 0 done; 1 refused
+or nothing found (no controller, NT); 2 usage, as `portsw.vbs`'s; and two
+of its own, **3 partial** (the DWORD written and read back on some
+controllers and not on others) and **4 list not verified** (`1` only:
+nothing written). `show` prints, for each controller, the value and what
+the driver makes of it (exactly 1 on; missing, 0, another number or type
+off), and the list: a `regedit /e` export of the `SilentClasses` key read
+for its value lines (Script Host cannot list a key's values itself),
+saying whether the six of `SILENT.REG` are there with their type and bytes
+and naming every other value the key holds.
+
+**The list check, before any gate.** `1` first runs the list check and
+writes no controller's value unless it passes: the `regedit /e` export of
+`SilentClasses` to a file in `%TEMP%` (the script's directory when there is
+none), read back, a value line continued with `\` joined first, and each of
+`"0"` to `"5"` present as `hex:` (`REG_BINARY`) with exactly its four bytes
+of the table above (hex compared without regard to case). An export that
+fails or leaves no file, a file that cannot be read, a missing key, a
+missing one of the six, another type (`dword:`, a string, `hex(N):`) or
+other bytes - each is a failed check: it names what it found, says "the
+switch was not set on any controller", and exits 4. The check reads the key
+as it is after the merge, not the merge's own result, so a merge that
+failed over a key already holding the six passes (the list the driver will
+read is the right one) and a merge that failed over a different list does
+not. **Values beyond the six are reported, not refused** (the choice
+here): the key may be shared with another stack's list, extended by hand
+(SweetLow's stack reads the same key), and refusing would make the switch unusable beside it, and deleting them would
+break that stack; so the check passes and prints, before writing, each
+other value's name, type and bytes and whether the driver's admission
+(6.11.7) would keep it - "the driver reads these too; a kept one silences
+its class as well" - and the count kept toward the cap of 32.
+
+**Setting** (`1` after a passed check, or `0`) writes the DWORD to each
+controller's key in turn, each write trapped on its own (`On Error Resume
+Next`, cleared per key) and read back with `RegRead` (a DWORD of exactly the
+value written). It then prints one line per controller (set, or not set
+and the error), and: all set - the `show` text and "RESTART WINDOWS", once,
+as `portsw.vbs` does since 38.7, exit 0; none set - "the switch was not
+changed", exit 1; some set and some not - "PARTIAL: the switch was set on
+N of M controllers", the `show` text, "RESTART WINDOWS" withheld and in
+its place what to do (run `silent-off.bat` to set every controller back to
+0, or correct the failure and run the script again), exit 3. On an NT
+system it writes nothing: it says the silent install is a Windows 98 SE
+and ME feature the driver never reads there, and exits 1. No elevation
+path, since it writes only on 98 SE and ME.
 
 **`silent-on.bat` and `silent-off.bat`** are `portsw-on.bat`'s shape: one
 file for COMMAND.COM and cmd.exe, ASCII and CRLF, the `if
@@ -2299,16 +2339,30 @@ restart said once, by `SILENT.VBS`. On NT both say "Windows 98 SE and ME
 only; nothing was changed" and end. `test-package.ps1` gates their text as
 it gates `portsw-on.bat`'s.
 
-- **`silent-on.bat`**: `cscript //nologo silent.vbs show`; then `regedit /s
-  silent.reg`; then `cscript //nologo silent.vbs 1`, whose output reads the
-  list back. The list goes in before the gate is set, so a failure between
-  the two leaves the list merged and the gate as it was - off by default,
-  which silences nothing. `regedit /s` reports nothing and its errorlevel is
-  not relied on; the read-back is the check.
-- **`silent-off.bat`**: `cscript //nologo silent.vbs 0`, and it says that
-  the list was left in place, because another USB stack may read the same
-  key (SweetLow's, whose file this list's values are), and how to delete it
-  by hand.
+- **`silent-on.bat`**: `cscript //nologo silent.vbs show`, and **on any
+  errorlevel from it, stop**: "nothing was changed" (no controller found,
+  or NT), no merge and no gate. Then `regedit /s
+  silent.reg`; then `cscript //nologo silent.vbs 1`, which checks the list
+  before it writes any gate (above). The batch reads its errorlevel highest
+  first, as COMMAND.COM's `if errorlevel N` is "N or more": 4 - "the list
+  did not read back as `SILENT.REG`'s six; the switch was not set on any
+  controller; the list may be merged in part" and what the script found; 3
+  - "the switch was set on some controllers and not others; the lines
+  above say which; run `silent-off.bat`, or correct it and run
+  `silent-on.bat` again"; 1 or 2 - "the switch was not set"; 0 - the
+  script's own restart line stands. The list goes in before the gate and
+  the gate only after the list reads back right, so no failure of the merge
+  can leave a gate on over a list that is not the six; and `regedit /s`
+  reports nothing and its errorlevel is not relied on - the check is.
+- **`silent-off.bat`**: `cscript //nologo silent.vbs 0`, with the same
+  reading of 3 ("set back to 0 on some controllers and not others; run
+  `silent-off.bat` again") and of 1 or 2, and it says that the list was
+  left in place, because another USB stack may read the same key
+  (SweetLow's, whose file this list's values are), and how to delete it by
+  hand. `0` runs no list check: turning the switch off needs no list.
+
+`test-package.ps1`'s gate of the two batch files' text includes the stop
+after `show` and the 4, 3 and 1 branches of `silent-on.bat`.
 
 **Names.** `SILENT.REG` and `SILENT.VBS` are 8.3. `silent-on.bat` and
 `silent-off.bat` are the owner's names, 9 and 10 characters before the dot,
@@ -2368,25 +2422,48 @@ which leaves the class driver's files), or, for a device with no usable
 serial, at a port it has never been on. The first configuration's wizard
 is the proof that the devnode was new.
 
-**Three configurations**, on 98 SE and on ME, each after a restart, the
-controller's notes read with `XHCISNAP -report` or `SNAPGET.BAT`:
+**The channel on every leg.** The `silent.*` notes reach the ring only at
+`XhciLogVerbosity` 2 or more (6.11.3), and the default is 0, so every
+observation leg below runs 38.1's `SNAPON.BAT` (`XHCISNAP -verbosity 2`,
+in `tools\xhcisnap\`) before its restart, and reads the notes after it with
+`SNAPGET.BAT` (or `XHCISNAP -report`). A leg whose ring holds none of the
+start's other notes either did not turn the channel on, and is run again;
+it is never read as "no `silent.*` note".
 
+**Four configurations**, on 98 SE and on ME, each after `SNAPON.BAT` and a
+restart:
+
+- **(0) the default install** (a clean install of the package: no
+  `XhciSilentInstall` under any controller's key, which the INFs never
+  write, and no `SilentClasses` key): `silent.gate.value` `0xFFFFFFFF`,
+  `silent.gate` 0, and no `silent.status`, `silent.entries`,
+  `silent.ignored`, `silent.dropped` or `silent.pdo` note - the gate is
+  read as off and the list is never read, and no PDO's decision is noted
+  because none is made; every PDO's `IRP_MN_QUERY_CAPABILITIES` answers
+  `SilentInstall` FALSE, as before 6.11; the wizard as today. This is the
+  configuration every user is in who never runs `silent-on.bat`.
 - **(a) the list merged, the gate off** (`regedit /s SILENT.REG`, read
   once with no `XhciSilentInstall` and once with `silent-off.bat`'s 0):
   `silent.gate` 0, no
   `silent.entries` and no `silent.pdo` note; the wizard as today.
-- **(b) the gate on, no list** (`silent.vbs 1` on a guest with no
-  `SilentClasses` key): `silent.gate` 1, `silent.status` the query's
-  failure, `silent.entries` 0, every `silent.pdo` reason
-  `XHCI_SILENT_EMPTY`, answer 0; the wizard as today.
+- **(b) the gate on, no list** (the DWORD 1 set by hand in `regedit` under
+  the controller's key, on a guest with no `SilentClasses` key -
+  `silent.vbs 1` refuses here, exit 4, which the leg also reads, with no
+  gate written): `silent.gate` 1, `silent.status` the query's failure,
+  `silent.entries` 0, every `silent.pdo` reason `XHCI_SILENT_EMPTY`,
+  answer 0; the wizard as today.
 - **(c) both** (`silent-on.bat`): `silent.gate` 1, `silent.entries` 6,
   `silent.ignored` 0, `silent.dropped` 0 (O1's reading); silence as below.
+  Beside it, the script's refusals read once each on 98 SE: a guest whose
+  `SilentClasses` holds `"0"` with other bytes and a `SILENT.REG` made
+  unreadable (exit 4, every controller's value unchanged), and a guest with
+  one extra well-formed value (passes, the extra named and counted).
 
 **The devices**, each on a fresh devnode in each configuration, reading
 both the wizard and the device's `silent.pdo` notes:
 
 1. A device installed once and then on a fresh devnode (a known class on a
-   new devnode): the wizard in (a) and (b), none in (c), answer 1.
+   new devnode): the wizard in (0), (a) and (b), none in (c), answer 1.
 2. A hub: answer 1 in (c); whether it changes anything for this package's
    own `XHCI98\HUB` devnode is read.
 3. A boot keyboard and a boot mouse, each alone (on 98 SE the keyboard's
@@ -2411,8 +2488,9 @@ both the wizard and the device's `silent.pdo` notes:
 
 Then the readme says what ME did. Proposed beside them (not the owner's
 list): one Windows 2000 reading with the list merged and `XhciSilentInstall`
-1 set by hand in `regedit` (`SILENT.VBS` writes nothing on NT), which should
-show no `silent.*` note and every install as before.
+1 set by hand in `regedit` (`SILENT.VBS` writes nothing on NT), after
+`SNAPON.BAT`, which should show the start's other notes, no `silent.*`
+note, and every install as before.
 
 #### 6.11.10 Questions and decisions
 
