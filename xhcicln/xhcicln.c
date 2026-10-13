@@ -1526,13 +1526,26 @@ static int cln_run_nt(unsigned long major, unsigned long minor, int wow64)
         return CLN_EXIT_REFUSED;
     }
     candidates = cln_list();
-    if (candidates == 0) {
-        return CLN_EXIT_DONE;
-    }
 
     /* The global refusals, read in a listing too so it says what -remove
-     * would do. */
+     * would do. An old devnode present refuses even when nothing else
+     * qualifies: it means an older xhci98.sys runs (before the update's
+     * restart, or after going back), as on 98 SE and ME. */
     clnRefusal[0] = '\0';
+    if (candidates == 0) {
+        if (clnPresentState != CLN_SET_COMPLETE) {
+            printf("\nWhether an XHCI98\\ devnode is present is unknown: %s.\n",
+                   clnPresentWhy);
+            return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
+        }
+        if (clnPresentCount > 0) {
+            printf("\nAn XHCI98\\ devnode is present (%s): an xhci98.sys "
+                   "before 2.4.0.0 is running (restart after the update "
+                   "first).\n", clnPresentIds[0]);
+            return clnRemove ? CLN_EXIT_REFUSED : CLN_EXIT_DONE;
+        }
+        return CLN_EXIT_DONE;
+    }
     if (clnPresentState != CLN_SET_COMPLETE) {
         _snprintf(why, sizeof(why) - 1, "whether an XHCI98\\ devnode is "
                   "present is unknown: %s", clnPresentWhy);
