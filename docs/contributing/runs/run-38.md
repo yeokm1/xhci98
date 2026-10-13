@@ -142,10 +142,11 @@ The cut at 38.final meets the same refusal after any fresh checkout.
 
 ## 38.8 - The USB device interface off external hubs
 
-**Verdict: open** (2026-10-13). The reading is taken and the change is made
+**Verdict: done** (2026-10-13). The reading is taken, the change is made
 (`hcd_door.c`, `HcdDoorDeviceStart` refuses a PDO with `Hub` set; design
-record 13 section 8.10 corrected; the release notes' entry). The legs on
-`xhci98` are owed.
+record 13 section 8.10 corrected; the release notes' entry), and the legs on
+`xhci98` read on 2000, XP, XP x64 and 7 x64. Commits `c4c2bab4` to
+`b113f3b4` and this record.
 
 **The reading** (the checkpoint's: 2000, XP and 7 before the change). Stock
 Microsoft stack, no `xhci98` bound. Development host A, QEMU 11.1.0, three
@@ -199,11 +200,30 @@ every hub PDO before its start, the teardown of a never-registered link,
 readers of the old rule across the tree, the documents against this
 record): clean.
 
-**Owed: the legs.** The interface enumerated with `xhci98` on 2000, XP,
-XP x64 and 7 x64, a hub with a device behind it: the devices listed, the
-hubs not; the hub interface on the root hub and each hub alone; the host
-controller interface on the controller alone; `usbview` and Device Manager
-unchanged. QEMU's hub is a Full
-Speed hub and QEMU has no USB 3 hub; the owner amended the legs to it the
-same day, a USB 2.0 hub and both halves of a USB 3 hub taking the same path
-(the `Hub` flag set at every hub PDO's creation), reviewed statically.
+**The legs.** QEMU's hub is a Full Speed hub and QEMU has no USB 3 hub;
+the owner amended the legs to it the same day, a USB 2.0 hub and both
+halves of a USB 3 hub taking the same path (the `Hub` flag set at every hub
+PDO's creation), reviewed statically. Development host A, four guests at
+once (7 of the 8 logical processors), kit flavour `p388` (`make-package.ps1
+-Flavor release` of `c4c2bab4` into `out\p38-8\pkg-release-<arch>`), tag
+`l38`, each on a fresh overlay. `w2k` (the 2000 gold, `1.99.0.0` installed
+and disabled) updated by Have Disk; `xp`, `xp64` and `w7x64` (7 x64 with
+F8's signature enforcement off) installed through the wizard or Have Disk;
+the installed `xhci98.sys` compared byte for byte (`fc /b`) with the
+staged one, no difference. The mouse on root port 1, then QEMU's hub on port
+4 and the keyboard behind it (4.1), hot-added in that order (or the mouse
+at boot), no QEMU wedge; the keyboard behind the hub typed every command.
+The three `DeviceClasses` keys, `Enum\XHCI98` and `Enum\USB` read as for
+the reading, byte counts checked; raw files
+`out\p38-tools\legs\<guest>\l38-e1` to `-e5`.
+
+| Guest | `..._USB_DEVICE` (linked) | `..._USB_HUB` (linked) | `..._USB_HOST_CONTROLLER` (linked) | Device Manager, usbview |
+|---|---|---|---|---|
+| Windows 2000 SP4 | the keyboard (`...-4.1`), the mouse (`...-1`) | `XHCI98\ROOT_HUB`, `XHCI98\HUB&VID_0409&PID_55AA` | the controller (`1B36:000D`) | by connection: controller, root hub, the mouse, "xHCI98 USB Hub" with the keyboard; no yellow mark. `UV32.EXE` (WDK 7.1's `UVMS.EXE` does not run on 2000): 3 devices, 1 hub, the keyboard on the hub's port 1 |
+| Windows XP SP3 | the keyboard, the mouse | the root hub, the external hub | the controller | the same tree, no yellow mark under USB (a VGA controller of the base image's is marked); `UVMS.EXE`: "External Hub: XHCI98HUB2", the keyboard on its port 1 |
+| Windows XP x64 | the keyboard, the mouse | the root hub, the external hub | the controller | the same tree, no yellow mark; `UV64.EXE` as on XP |
+| Windows 7 SP1 x64 | the keyboard, the mouse (two stale entries of the base image's, unlinked) | the root hub, the external hub (stale root hubs and hubs, unlinked) | the controller (eight stale ICH7 controllers, unlinked) | the same tree, no yellow mark; `UV64.EXE` as on XP |
+
+No hub carries the device interface on any; every live entry is linked
+once. On XP, XP x64 and 7 x64 the keyboard's `Enum` `Control` key again lacked
+`ActiveService` while it worked, as on the stock stack.
