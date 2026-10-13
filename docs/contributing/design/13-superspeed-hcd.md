@@ -5701,11 +5701,12 @@ multi-function device (QEMU has no keyboard-and-mouse composite; its
 `usb-audio` is a parent with one function), which needs a passthrough
 device or the bench. The guest legs of 36.43 read what QEMU can show.
 
-### 10.13 The bus's own ids under `USB\` (task 38.9, 2026-10-13)
+### 10.13 The bus's own ids under `USB\` (task 38.8, 2026-10-13)
 
 **Status: written before any code; the owner's decisions taken
 (2026-10-13, 10.13.12; D14 open), the task kept in `2.4.0.0` with the update costs
-of 10.13.4 and 10.13.5 accepted; under review.** The task and what is already decided are roadmap-hcd 38.9's (owner,
+of 10.13.4 and 10.13.5 accepted; reviewed to convergence (five rounds,
+the last with no finding).** The task and what is already decided are roadmap-hcd 38.8's (owner,
 2026-10-13): the four project-owned bases move from a private enumerator to
 `USB\` - `XHCI98\ROOT_HUB`, `XHCI98\HUB`, `XHCI98\HUB30` and
 `XHCI98\COMPOSITE` become `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`,
@@ -5729,7 +5730,7 @@ move covers the root hub and the hubs as well as the composite parent;
 **What it supersedes, once its code lands**: 8.6's "a private enumerator
 rather than a `USB\` id keeps the instance under `Enum\XHCI98\` on every
 target ... and cannot collide with any OS row by construction" - after
-38.9 the root hub's devnode is under `Enum\USB`, and the guarantee rests on
+38.8 the root hub's devnode is under `Enum\USB`, and the guarantee rests on
 the audit of 10.13.2 and the gate rule of 10.13.7, not on construction; the
 id rows of 5.2's object table, 5.6's `txtsetup.oem` paragraphs, 10.7's last
 paragraph, 10.11's and 10.12's id tables and INF paragraphs, and their
@@ -5740,7 +5741,7 @@ in the change that lands the code, as 36.43 amended its predecessors.
 
 #### 10.13.1 The ids, old and new
 
-| PDO | Query | Today | After 38.9 |
+| PDO | Query | Today | After 38.8 |
 |---|---|---|---|
 | Root hub (`hcd_rh.c`, `hcdRootHubId`, `hcdRootHubQueryId`) | `BusQueryDeviceID` | `XHCI98\ROOT_HUB` | `USB\XHCI98_ROOT_HUB` |
 | | `BusQueryHardwareIDs` | `XHCI98\ROOT_HUB` | `USB\XHCI98_ROOT_HUB` |
@@ -5964,12 +5965,12 @@ apply to this update: the root hub is new and installs from the new INF.
 | Path | When the new ids appear | How the new devnodes install | Read |
 |---|---|---|---|
 | Windows 98 SE and ME (`Xhci.Dev`, `RootHub.Dev`, `Hub.Dev`, `Comp.Dev`) | at the next start: the new `xhci98.sys` cannot replace the running one, which keeps running until the restart (release notes, "Updating from 2.y.y.y") | expected silently from the new INF, as each new hub and composite devnode installs today (6.11's opening, run-36 98 SE K2 and G1, run-37 for ME); the root hub's section copies `xhci98.sys` (8.6), so at that start the engine would copy over the file the running driver is: the root-hub sections copy nothing from this release (D3) | the legs |
-| Windows 2000 (`*.NTx86`) | read at once for `2.1.0.0` over `2.0.0.0` (release notes: "It runs at once, with no restart"); for this release's package, with 38.4's helper extended to 2000 and XP, to be read | no wizard, as for the hubs and composite parents (10.12, "What it buys") | the legs |
+| Windows 2000 (`*.NTx86`) | read at once for `2.1.0.0` over `2.0.0.0` (release notes: "It runs at once, with no restart"); for this release's package, with 38.3's helper extended to 2000 and XP, to be read | no wizard, as for the hubs and composite parents (10.12, "What it buys") | the legs |
 | 32-bit XP (`*.NTx86`) and XP x64 (`*.NTamd64`) | read at once for `2.1.0.0`; for this release's package, to be read, as for 2000 | **Found New Hardware and the unsigned-driver warning, once per new devnode**: the root hub (the `1.2.0.0` upgrade read "a second wizard follows for the root hub", release notes, "Upgrading from 1.2.0.0"), each hub half and each composite parent (10.12; run-36 XP K2 and G1); documented, with its input trap (D4) | the legs |
-| 32-bit Vista and 7 (`*.Dev6.NTx86`) | at the restart the update asks for, for the MSI helper (task 38.6; renamed `xhcihlpr.sys` by 38.4); until it, the earlier release runs | from the package Have Disk put in the driver store; no wizard expected (unread for a new devnode of an already-staged package) | the legs |
+| 32-bit Vista and 7 (`*.Dev6.NTx86`) | at the restart the update asks for, for the MSI helper (task 38.5; renamed `xhcihlpr.sys` by 38.3); until it, the earlier release runs | from the package Have Disk put in the driver store; no wizard expected (unread for a new devnode of an already-staged package) | the legs |
 | Vista x64 and 7 x64 (`*.Dev6.NTamd64`) | at once, in test-signing mode or an F8 boot (AGENTS.md) | as 32-bit Vista and 7 | the legs |
 
-**The timing in the table is the earlier releases'.** Task 38.4 extends the
+**The timing in the table is the earlier releases'.** Task 38.3 extends the
 helper to 2000 and XP and changes what an update installs there, and on a
 machine with two controllers the image stays loaded while either still
 runs it; so when the new ids appear on 2000 and XP is read on this
@@ -6116,7 +6117,7 @@ file, case-insensitive too) and for `ROOT_HUB`, `HUB30`, `COMPOSITE`,
 | `scripts\package\test-package.ps1` (one case) | stages a `txtsetup.oem` whose root-hub row reads `USB\ROOT_HUB`, expects a refusal | still valid under the new `OEM-USBID`; its search string becomes the new id |
 | `scripts\inf-gate\expected-footprint*.txt` | no id (searched) | re-emitted, since the root hub's sections change (D3) |
 | `scripts\import-gate\win98-evidence.list`, the allowlists and baselines | no id (searched) | none; the tool is user mode and outside the import gate, as `XHCISNAP` is |
-| `scripts\vm-matrix\` (scripts, `lib\`, `guest\*.BAT`), `scripts\setup-qemu-*.ps1` | no reader of the ids, `Enum`, or `ROOT_HUB` (searched) | none; the 38.9 legs are driven by hand, as 38.2's were |
+| `scripts\vm-matrix\` (scripts, `lib\`, `guest\*.BAT`), `scripts\setup-qemu-*.ps1` | no reader of the ids, `Enum`, or `ROOT_HUB` (searched) | none; the 38.8 legs are driven by hand, as 38.2's were |
 | `xhcisnap\xhcisnap.c` (`write_dev_devices`, `dev_consider`) | walks the devnode tree (`cfgmgr32.dll`, or `HKEY_DYN_DATA` on 98 and ME) and reports every devnode driven by `xhci98` or `xhciuas`, chosen by its service or `NTMPDriver`, with its instance id; no literal id | no change to the code: its selection is by driver, not by id; the legs compare a report before and after the update (10.13.10) |
 | `xhciqual\` | no reader | none |
 | `src\uas\*.inf`, `scripts\inf-gate\check-uas-inf.ps1` | no reader | none |
@@ -6379,7 +6380,7 @@ places:
   is NOX.1's decision 5 (10.7.1), and `OEM-USBID` admits only the four
   new bases. The tool's rule 1 names the old forms exactly, and no reader
   may test the prefix alone - so NOX.1, if it moves the device id later,
-  changes no 38.9 gate.
+  changes no 38.8 gate.
 - **The devnode an earlier version made.** If NOX.1 moves the device id,
   a refused device's old devnode under `Enum\USB\VID_vvvv&PID_pppp\...`
   is left alone, and the tool does not remove it (NOX.1's decision 4: it
@@ -6387,9 +6388,9 @@ places:
   device's own working devnode). The tool's selection rule therefore has
   no hardware-id clause; D11 is settled by that decision.
 - **The instance id** of a refused PDO is unchanged either way.
-- **Order.** 38.4's rename of `xhcimsi.sys` edits the same INF and `.oem`
+- **Order.** 38.3's rename of `xhcimsi.sys` edits the same INF and `.oem`
   files as this task, so the two are merged in turn and the INF gate run
-  on each; NOX.1, after `2.4.0.0`, builds on 38.9's gate rules.
+  on each; NOX.1, after `2.4.0.0`, builds on 38.8's gate rules.
 
 #### 10.13.10 The legs
 
@@ -6490,7 +6491,7 @@ read before the cut by passthrough.
 | Whether 98's and ME's `cfgmgr32.dll` export `CM_Uninstall_DevNode` and honour `CM_LOCATE_DEVNODE_PHANTOM` (10.13.8, D8 (a)) | statically from the guests' files, then on a guest |
 | Whether `DIF_REMOVE` removes a non-present devnode on each NT target, its restart flags, and the 32-bit call's failure under WOW64 (10.13.8) | the tool's legs |
 | Whether NT vetoes a controller's query-remove while the tool holds its door open (10.13.8) | the tool's legs on each NT target; removal disabled where it is not |
-| When the new ids appear on 2000 and XP with 38.4's helper, on one and two controllers (10.13.4) | the update legs |
+| When the new ids appear on 2000 and XP with 38.3's helper, on one and two controllers (10.13.4) | the update legs |
 | Whether any input-free route through the XP and 98 SE prompts exists (D4) | not assumed: the release notes ask for independent input |
 | A USB 3 hub's SuperSpeed half under the new id (10.13.10) | the owner's bench or a passthrough, after the cut (D13) |
 | A High Speed USB 2.0 hub under the new id (10.13.10) | D14 |
