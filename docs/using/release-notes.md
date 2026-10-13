@@ -495,7 +495,8 @@ two summary lines on the screen and the whole block in its log. If reading
 these details causes trouble on a machine, add `--no-sysinfo`: the header
 then says they were skipped, and the verdict and every test are the same.
 
-It is in the download's `xhciqual\` directory. **It must be run from real
+It is in the download's `tools\xhciqual\` directory (before `2.4.0.0`,
+`xhciqual\` at the top of the download). **It must be run from real
 DOS**, not a DOS box inside Windows, booted without EMM386 or any other V86 or
 paging memory manager. `HIMEM.SYS` is allowed, and on some machines it is
 needed: if the tool will not run at all on a boot that loads nothing, add
@@ -515,9 +516,10 @@ only Windows 2000 and XP Setup read (below). The sixth is
 public half of the certificate the x64 drivers are test-signed with. The
 Intel port switchover's script, `portsw.vbs`, and `portsw-on.bat` and
 `portsw-off.bat`, which turn the switchover on or off through it in one
-double-click, are not part of the install. After `2.3.0.0` they are in the
-download's `portsw\` directory, one copy for every flavour directory; in
-`2.3.0.0` they are at the root of each flavour directory. `release-x86\` is the one to install on 32-bit
+double-click, are not part of the install. From `2.4.0.0` they are in the
+download's `tools\portsw\` directory, one copy for every flavour directory;
+in `2.3.1.0`, in `portsw\` at the top of the download; in `2.3.0.0`, at the
+root of each flavour directory. `release-x86\` is the one to install on 32-bit
 Windows and `release-x64\` on 64-bit Windows; the `debug-` directories are the
 same drivers built for troubleshooting. No Microsoft file is in the package.
 
@@ -784,8 +786,8 @@ new install writes `XhciIntelPortSwitch` at `0`, off; `2.1.1.0` and
 `2.2.0.0` wrote `1`, and an update never overwrites a value that is already
 there, so a machine updated from either keeps the switchover on. To take the
 new default, run `portsw-off.bat` (or `portsw.vbs 0`) from the download's
-`portsw\` directory (in `2.3.0.0`, from the flavour directory) and restart
-Windows
+`tools\portsw\` directory (in `2.3.1.0`, `portsw\` at the top of the
+download; in `2.3.0.0`, the flavour directory) and restart Windows
 ("Intel 7-, 8- and 9-series chipsets: the port switchover").
 
 **An update from `2.2.0.0` adds the eight values new in `2.3.0.0`** at
@@ -1038,9 +1040,10 @@ controller. A standby or hibernate keeps them where they are.
   driver or enabling its controller. The reverse happens when the
   controller stops: the devices on those connectors go back to the USB 2.0
   controller, and work there if a driver for it is loaded.
-- **Turning it on, or off again: `portsw.vbs`.** The download's `portsw\`
-  directory, beside `release-x86\` and the others, carries `portsw.vbs`
-  (in `2.3.0.0`, each flavour directory carries it instead), a Windows Script Host
+- **Turning it on, or off again: `portsw.vbs`.** The download's
+  `tools\portsw\` directory carries `portsw.vbs` (in `2.3.1.0`, `portsw\`
+  beside `release-x86\` and the others; in `2.3.0.0`, each flavour
+  directory carries it instead), a Windows Script Host
   script that runs with nothing to install on every Windows this driver
   supports. Double-click it: it shows `XhciIntelPortSwitch` on every xhci98
   controller on the machine and asks for `1` (on) or `0` (off). From a
@@ -1619,7 +1622,8 @@ New in `2.1.1.0`; since `2.3.0.0` the install writes `0` (`2.1.1.0` and
 only on the Intel chipsets listed in "Intel 7-, 8- and 9-series chipsets:
 the port switchover", unless it is `2`. Since `2.2.0.0` it is read on every
 Intel controller, and still on no other vendor's. `portsw.vbs`, in the
-download's `portsw\` directory (in `2.3.0.0`, each flavour directory), shows it and sets it to `0` or `1` on every xhci98
+download's `tools\portsw\` directory (in `2.3.1.0`, `portsw\` at the top of
+the download; in `2.3.0.0`, each flavour directory), shows it and sets it to `0` or `1` on every xhci98
 controller ("Turning it on, or off again" in that section).
 
 | Value | Effect |
@@ -2007,8 +2011,10 @@ descriptors at High Speed.
 ## The log, and how to send one
 
 The driver keeps a small log of what happened on the bus, inside itself, and
-`XHCISNAP.EXE` (in the download) reads it off the running machine. The log is
-off by default and stays off unless you are diagnosing something.
+`XHCISNAP.EXE` (in the download's `tools\xhcisnap\` directory; before
+`2.4.0.0`, `xhcisnap\` at the top of the download) reads it off the running
+machine. The log is off by default and stays off unless you are diagnosing
+something.
 
 ```
   1.  XHCISNAP -verbosity 2

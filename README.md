@@ -65,7 +65,7 @@ On Windows 98 SE, storage of any kind, UAS included, needs NUSB's mass-storage c
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
-Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. It says whether the driver can work on the machine before you install anything. A controller reporting no legacy interrupt pin is not refused: the driver polls it, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports it as `QUALIFIED WITH CAVEATS`.
+Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `TOOLS\XHCIQUAL\` folder. It says whether the driver can work on the machine before you install anything. A controller reporting no legacy interrupt pin is not refused: the driver polls it, or takes a message-signalled interrupt on Vista and 7, and `XHCIQUAL` reports it as `QUALIFIED WITH CAVEATS`.
 
 <img src="images/xhci98-xhciqual-basic.jpg" width="800">
 
@@ -93,10 +93,12 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 | `release-x86\` | 32-bit Windows: 98 SE, ME, 2000, XP, Vista, 7 | the drivers, the helper and the extras below |
 | `release-x64\` | 64-bit Windows: XP x64, Vista x64, 7 x64 | the same, without `xhcimsi.sys`, plus `xhci98-test.cer` |
 | `debug-x86\`, `debug-x64\` | troubleshooting only | the same drivers built for troubleshooting; install only if asked |
-| `xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier |
-| `xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader |
-| `portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
+| `tools\xhciqual\` | DOS | `XHCIQUAL.EXE`, the qualifier |
+| `tools\xhcisnap\` | Windows | `XHCISNAP.EXE`, the log snapshot reader |
+| `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `readme.txt` | | the release notes in plain text |
+
+Releases before `2.4.0.0` have `xhciqual\`, `xhcisnap\` and `portsw\` at the top level instead of under `tools\`.
 
 In each driver directory:
 
@@ -296,7 +298,7 @@ A device on a switchable connector under a running USB 2.0 driver (NUSB's, for e
 
 The value is read when the controller starts, so restart Windows after changing it.
 
-`portsw.vbs`, in the download's `portsw\` directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in that directory:
+`portsw.vbs`, in the download's `tools\portsw\` directory, shows the value on every xhci98 controller and sets it to `1` or `0`. Double-click it to see the value and be asked for a new one, or run it from a command prompt in that directory:
 
 ```
 cscript //nologo portsw.vbs show
@@ -310,7 +312,7 @@ cscript //nologo portsw.vbs 0
 
 Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Windows for that itself. It never sets `2`, which is set by hand.
 
-`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. At a prompt on 98 SE and ME, change to `portsw\` first. Then restart Windows.
+`portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. At a prompt on 98 SE and ME, change to `tools\portsw\` first. Then restart Windows.
 
 The `2.3.0.0` download has these three files in each driver directory instead; they work the same from there.
 

@@ -53,6 +53,15 @@ directory at the version root beside `xhciqual\` and `xhcisnap\` (section
 only the batch files' words do. Its decision is section 11's thirteenth,
 its documents section 16.
 
+Revision 7, 2026-10-13, for roadmap-hcd task 38.10 (Phase 38, release
+`2.4.0.0`): the release's tools move into one `tools\` directory at the
+version root, so `portsw\` becomes `tools\portsw\`, beside
+`tools\xhciqual\` and `tools\xhcisnap\`, and the version root holds only
+the driver directories, `readme.txt` and `LICENSE` (section 5a). The
+scripts' logic does not change for it. `2.3.1.0`, the
+one release published with `portsw\` at the version root, keeps it there.
+Its decision is section 11's fourteenth, its documents section 17.
+
 ## 1. What is asked, and what is not
 
 A tester reported Ivy Bridge machines on which `xhci98.sys` started cleanly
@@ -252,9 +261,9 @@ disable's release put them, on EHCI, whatever firmware had chosen at boot.
 
 ## 5a. The user script: `portsw.vbs` (revision 4)
 
-`src\portsw.vbs`, published in the `portsw\` directory at the version root
-of a release (revision 6; until then at the root of every package
-directory beside the INF), shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0
+`src\portsw.vbs`, published in the `tools\portsw\` directory of a release
+(revision 7; in `portsw\` at the version root from revision 6, and until
+then at the root of every package directory beside the INF), shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0
 or 1, then says a restart is needed. It is Windows Script Host VBScript,
 because that is the one way to read and write a REG_DWORD that every target
 has with nothing installed: Windows 98 SE ships Script Host 1.0 and ME 2.0,
@@ -289,12 +298,14 @@ the elevated copy's result. Elsewhere a refused write is reported, with the
 keys already set named, and the advice to run it as an administrator.
 
 The packaging gates hold it: `make-release.ps1` publishes it once, from
-`src\`, into `portsw\` (`Publish-PortSwitchScripts`), and refuses a staged
-release whose `portsw\` lacks one of the three or holds anything else, or
-that has a copy anywhere outside it (`Assert-PortSwitchLayout`, before the
-publish swap); the upload assembly holds a tree that has `portsw\` to the
-same rule and accepts one cut before revision 6 as it was published (none
-before `2.3.0.0`, one set per flavour directory in `2.3.0.0`).
+`src\`, into `tools\portsw\` (`Publish-PortSwitchScripts`), and refuses a
+staged release whose `tools\portsw\` lacks one of the three or holds
+anything else, or that has a copy anywhere outside it
+(`Assert-PortSwitchLayout`, before the publish swap); the upload assembly
+holds a tree that has `tools\portsw\` to the same rule and accepts a cut
+before revision 7 as it was published (none before `2.3.0.0`, one set per
+flavour directory in `2.3.0.0`, `portsw\` at the version root in
+`2.3.1.0`).
 `make-package.ps1` stages none of them since revision 6 (it staged them at
 every package root before). The packager's self-tests drive both functions
 with fixture trees, check the script is ASCII with CRLF and looks for both
@@ -313,7 +324,8 @@ run.
 ### The batch files (revision 5)
 
 `src\portsw-on.bat` and `src\portsw-off.bat` are published wherever
-`portsw.vbs` is, in `portsw\` since revision 6. Each shows the
+`portsw.vbs` is, in `portsw\` since revision 6 and `tools\portsw\` since
+revision 7. Each shows the
 value (`cscript //nologo portsw.vbs show`), stops there if that found no
 controller, sets 1 or 0 (`cscript //nologo portsw.vbs 1` or `0`), says
 that Windows must be restarted, and ends with `pause`, so a double-clicked
@@ -737,6 +749,15 @@ Revision 6 (owner, 2026-10-12, roadmap-hcd task 37.5):
     guest leg copies them from `src\` or from a cut's `portsw\`). A
     published release is not rewritten: `2.3.0.0` keeps its four copies.
 
+Revision 7 (owner, 2026-10-13, roadmap-hcd task 38.10):
+
+14. The release's tools sit in one `tools\` directory at the version root:
+    the script and its two batch files in `tools\portsw\`, beside
+    `tools\xhciqual\` and `tools\xhcisnap\`, so the version root holds only
+    the driver directories, `readme.txt` and `LICENSE`. First in
+    `2.4.0.0`. A published release is not rewritten: `2.3.1.0` keeps
+    `portsw\` at its version root, and `2.3.0.0` its four copies.
+
 ## 12. What changes in the documents (task 34.4)
 
 - `xhci-programming.md`: the `XUSB2PR` section, which says the driver leaves
@@ -822,3 +843,25 @@ row 7; `source-files.md`.
 - The batch files' own words: their comment says where `portsw.vbs` is,
   and the "not found" message sends the user to the download's `PORTSW\`
   directory rather than "the package directory".
+
+## 17. What changes in the documents (revision 7, task 38.10)
+
+- The README's download table, the qualifier's folder and the switchover
+  section: `tools\portsw\`, `tools\xhciqual\` and `tools\xhcisnap\`, with
+  the releases before `2.4.0.0` named as having them at the top level.
+- The release notes: the package contents under "Installing", the
+  qualifier's directory, the update section's `portsw-off.bat`, the
+  switchover section's script, the registry table's `XhciIntelPortSwitch`
+  row, and `XHCISNAP.EXE` in "The log, and how to send one"; the sections
+  of published releases ("What `2.3.1.0` changes") stay as they are.
+- The readme template (`make-release.ps1`): `TOOLS\XHCIQUAL\`,
+  `TOOLS\XHCISNAP\` and `TOOLS\PORTSW\` in the contents list and wherever
+  it names the tools' directories (the checker's steps, the log section,
+  section 9).
+- `release-acceptance-test.md` step 2 (2.1, 2.2 and 2.6), 3.1 and step 8;
+  `build-and-test.md`'s package layout and the script and batch-file legs;
+  `source-files.md` for the three files and the two tools;
+  `xhciqual/README.md`, `xhcisnap/README.md`,
+  `xhciqual/hardware-testing.md`'s and `xhci-programming.md`'s "in the
+  package".
+- Run records keep the paths they read.

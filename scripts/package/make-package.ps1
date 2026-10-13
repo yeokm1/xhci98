@@ -19,10 +19,11 @@ is this project's two files and nothing else:
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
-since task 37.5: make-release.ps1 publishes them once, in a portsw\
-directory at the version root, because they are the same for every
-architecture and flavour and the setup engine never reads them. A guest leg
-that needs them copies them from src\ or from a cut's portsw\.
+since task 37.5: make-release.ps1 publishes them once, in a tools\portsw\
+directory of the version (task 38.10; a version before 2.4.0.0 has portsw\
+at its root), because they are the same for every architecture and flavour
+and the setup engine never reads them. A guest leg that needs them copies
+them from src\ or from a cut's tools\portsw\.
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
 targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack

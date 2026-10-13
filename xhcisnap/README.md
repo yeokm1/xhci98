@@ -14,7 +14,8 @@ is the 1.x history; where it says usbport or the miniport, that is the 1.x
 route, which the tool still reads.
 
 It ships. The kernel side is in every build flavour of the driver and this tool
-is published in `releases/<version>/xhcisnap/`. It began as a bench companion
+is published in `releases/<version>/tools/xhcisnap/` (before `2.4.0.0`,
+`releases/<version>/xhcisnap/`). It began as a bench companion
 to a probe build that could not ship either; it is part of the product now.
 
 ## Why it exists

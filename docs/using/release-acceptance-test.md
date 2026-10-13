@@ -149,12 +149,12 @@ Controller Deviations This Driver Acts On".
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`), `xhciqual\`, `xhcisnap\` and `portsw\` come out directly (`portsw\` since roadmap-hcd task 37.5; the `2.3.0.0` asset has none) |
-| 2.2 | Check that `xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
+| 2.1 | Unzip the asset and list the top level, then `tools\` | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories (`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`) and `tools\` come out directly, and nothing else; `tools\` holds `xhciqual\`, `xhcisnap\` and `portsw\` (roadmap-hcd task 38.10). An asset before `2.4.0.0` has no `tools\` and carries `xhciqual\`, `xhcisnap\` and, from `2.3.1.0` (roadmap-hcd task 37.5), `portsw\` at the top level instead |
+| 2.2 | Check that `tools\xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
 | 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names: `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`. Read the list off that file rather than from memory |
 | 2.4 | Look for a version directory nested inside another | None |
 | 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports |
-| 2.6 | List `portsw\`, then look for `portsw.vbs` in each flavour directory | `portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd task 37.5). The `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
+| 2.6 | List `tools\portsw\`, then look for `portsw.vbs` in each flavour directory | `tools\portsw\` holds `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat` and nothing else, and no flavour directory holds any of them (roadmap-hcd tasks 37.5 and 38.10). The `2.3.1.0` asset has them in `portsw\` at the top level; the `2.3.0.0` asset instead has the three in each flavour directory and no `portsw\` |
 
 The `release` directory for the machine's architecture is the one to install.
 The `debug` directory beside it is the same drivers built for diagnosis, for a
@@ -185,7 +185,7 @@ again from the `2.0.0.0` asset.
 
 | # | Do | Expected reading |
 |---|---|---|
-| 3.1 | Boot real DOS with `XHCIQUAL.EXE` from the download's `XHCIQUAL\` directory, keeping `XHCIQUAL.MAP` beside it. No EMM386, no V86 monitor or paging memory manager, and not a DOS box inside Windows | A prompt on a machine whose memory the qualifier can address one-to-one |
+| 3.1 | Boot real DOS with `XHCIQUAL.EXE` from the download's `TOOLS\XHCIQUAL\` directory (`XHCIQUAL\` at the top of an asset before `2.4.0.0`), keeping `XHCIQUAL.MAP` beside it. No EMM386, no V86 monitor or paging memory manager, and not a DOS box inside Windows | A prompt on a machine whose memory the qualifier can address one-to-one |
 | 3.2 | `XHCIQUAL` | One of four verdicts: `LOOKS QUALIFIED`, `LOOKS QUALIFIED WITH CAVEATS` (no line interrupt: the driver polls the controller), `DISQUALIFIED` or `CANNOT SAY`. The first two continue |
 | 3.3 | `XHCIQUAL --probe-only --no-page --log PROBE.LOG` | Read-only, writes nothing to the machine, and leaves `PROBE.LOG`, the run's first artefact |
 | 3.4 | Read the controller `FACT` line out of `PROBE.LOG` | `hciver`, `ports`, `usb2ports` (the split between USB 2.0 and USB 3.x protocol ports; the `2.0.0.0` driver manages both), `pin`, `bar` and `irq`, each written down |
@@ -440,7 +440,8 @@ carries the commands and what to read back, and nothing else those two
 documents own.
 
 It is the same procedure on every target. Everything here runs out of this
-release's `XHCISNAP` directory. On the 64-bit targets the one `XHCISNAP.EXE`,
+release's `tools\xhcisnap\` directory (`xhcisnap\` at the top of a release
+before `2.4.0.0`). On the 64-bit targets the one `XHCISNAP.EXE`,
 a 32-bit program, runs under WOW64 against the 64-bit driver; `XHCISNAP
 -probe` was read that way on Windows XP x64 (roadmap-hcd 28-A.2).
 

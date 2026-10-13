@@ -39,7 +39,8 @@ findings; read it before changing the xHCI interrupt or C6 paths.
 The tool's own version line ended at v0.11. `TOOL_VERSION` in `qual.h` now
 expands `XHCI_VER_STR` out of `../src/xhci_version.h`, so the tool reports the
 driver's package version. The qualifier is published inside a release
-directory beside `xhci98.sys`, and a tool answering with a different number
+directory beside `xhci98.sys`, in `tools\xhciqual\` (before `2.4.0.0`,
+`xhciqual\` at the version root), and a tool answering with a different number
 would tie a saved log to the wrong artifact. `make-release.ps1` refuses a cut
 whose `qual.h` has been edited back to a literal. So there is nothing to bump
 here: bump the header, then rebuild this tool, which the release script also

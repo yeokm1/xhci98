@@ -43,6 +43,11 @@ roadmap-hcd task 37.5 so does **`portsw\`**: the Intel port switchover's
 rather than into every flavour directory, since they are the same for every
 architecture and flavour and the setup engine never reads them. It carries
 no `readme.txt` of its own: the top-level readme's section 9 explains them.
+Since roadmap-hcd task 38.10 the three sit under **`tools\`** in the version
+directory (`tools\xhciqual\`, `tools\xhcisnap\`, `tools\portsw\`), so the
+version root holds only the flavour directories, the readme and the licence;
+a version published before 2.4.0.0 keeps them at its root, and the upload
+assembly reads each tree at the layout its version was published with.
 
 **Only the executable and its MAP go out**, not the numbered `.BAT` wrappers.
 Those drive the staged active tests - which take ownership of the controller,
@@ -184,7 +189,7 @@ cut refuses; a stamp that MISMATCHES is refused either way.
 
 .PARAMETER SnapToolDir
 Where `XHCISNAP.EXE` is built. Defaults to `xhcisnap\` in the repository. It is
-staged into `releases\<version>\xhcisnap\`, beside the DOS qualifier's own
+staged into `releases\<version>\tools\xhcisnap\`, beside the DOS qualifier's own
 directory, and it is what a user runs to switch the driver's read channel on and
 to take a dump off the machine - **the only route this driver has for getting
 evidence off Windows 98**. It has never been in a release before task 13-L.2.
@@ -200,7 +205,7 @@ Where to take `XHCIQUAL.EXE` and its `.MAP` from. Defaults to `xhciqual\` in the
 repository.
 
 .PARAMETER SkipQualtool
-Publish without the `xhciqual\` subdirectory. For a host with no Open Watcom
+Publish without the `tools\xhciqual\` subdirectory. For a host with no Open Watcom
 build available; the resulting release is incomplete and says so.
 
 .PARAMETER SkipUploadSet
@@ -570,15 +575,70 @@ $oemPublishable = @("txtsetup.oem")
 # Not INF-declared files: text files the user runs, the same for every
 # architecture and flavour, which the setup engine never reads. Since task
 # 37.5 a cut publishes them once, from src\, into portsw\ at the version
-# root beside xhciqual\ and xhcisnap\, and into no flavour directory; the
+# root beside xhciqual\ and xhcisnap\ (under tools\ since task 38.10), and into no flavour directory; the
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
 # published release is never rewritten, so the upload assembly accepts a
 # tree with no portsw\ in the layout its version was published with
 # (Assert-PortSwitchLayout -PublishedVersion).
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
-$pswDirName = "portsw"
 
+# The release's tools in tools\ (roadmap-hcd task 38.10): a cut publishes
+# xhciqual\, xhcisnap\ and portsw\ under <version>\tools\, so the version
+# root holds only the flavour directories, the readme and the licence. The
+# first version so published is 2.4.0.0; every one before it has them at the
+# version root, and a published release is never rewritten. So the upload
+# assembly reads the layout off the tree as Assert-PortSwitchLayout does: a
+# tree with tools\ is held to it at any version (a dry cut before the version
+# is stamped has one), and a tree without it is accepted only before 2.4.0.0.
+$toolsDirName = "tools"
+$toolsLayoutVersion = [version]"2.4.0.0"
+$toolNames = @("xhciqual", "xhcisnap", "portsw")
+
+function Get-ToolDirName {
+    # A tool's directory relative to the version root: tools\<Name> for the
+    # cut (no -Root) and for a tree that has tools\, <Name> for one without.
+    param([string]$Name, [string]$Root = "")
+    if ($Root -ne "" -and -not (Test-Path -LiteralPath (Join-Path $Root $toolsDirName))) { return $Name }
+    return (Join-Path $toolsDirName $Name)
+}
+
+function Assert-ToolsLayout {
+    # The layout of task 38.10: tools\ holding nothing but the tools'
+    # directories, and none of them at the version root.
+    #
+    # Without -PublishedVersion (the cut) that is the only layout accepted.
+    # With it (the upload assembly) a tree that has tools\ is still held to
+    # it, and one that has not is accepted only before 2.4.0.0, where it is
+    # how every version was published.
+    param([string]$Root, [string]$What, [string]$PublishedVersion = "")
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $tools = Join-Path $rootFull $toolsDirName
+    $faults = @()
+    if (Test-Path -LiteralPath $tools) {
+        if (-not (Test-Path -LiteralPath $tools -PathType Container)) {
+            $faults += "$toolsDirName is a file, not a directory"
+        } else {
+            foreach ($item in @(Get-ChildItem -LiteralPath $tools -Force)) {
+                if (-not $item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $toolNames) {
+                    $faults += "$toolsDirName\$($item.Name) is not one of the tools' directories"
+                }
+            }
+        }
+        foreach ($name in $toolNames) {
+            if (Test-Path -LiteralPath (Join-Path $rootFull $name)) { $faults += "$name\ is at the version root, not in $toolsDirName\" }
+        }
+        $layout = "in $toolsDirName\"
+    } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge $toolsLayoutVersion) {
+        throw "$What has no $toolsDirName\ directory, where the release's tools are published (roadmap-hcd task 38.10)."
+    } else {
+        $layout = "at the version root, as a version before $toolsLayoutVersion has them"
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the release's tools {1} (roadmap-hcd task 38.10):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
 function Publish-PortSwitchScripts {
     # Copies the scripts from SourceDir into <DestRoot>\<DirName>\ and returns
     # that directory. Together or not at all: a missing one is refused before
@@ -1888,11 +1948,18 @@ $gateOut
     # The test client (task 36.34) anywhere in the asset, the tools'
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
-    # And the port switchover's scripts in portsw\ alone where the tree has
-    # that directory (task 37.5); a version cut before it is accepted with
-    # the layout it was published with.
-    Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable -DirName $pswDirName `
-                            -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # The tools in tools\ where the tree has it, and at the version root only
+    # before 2.4.0.0 (task 38.10). And the port switchover's scripts in their
+    # directory alone where the tree has it (task 37.5); a version cut before
+    # it is accepted with the layout it was published with.
+    Assert-ToolsLayout -Root $uploadRoot -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # A tree with tools\ is cut in task 38.10's layout, so it is held to the
+    # cut's port switchover layout too, whatever its version: the legacy
+    # layouts -PublishedVersion admits belong to trees without tools\.
+    $pswVersion = if (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName)) { "" } else { $Version }
+    Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable `
+                            -DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot) `
+                            -What "the upload set '$uploadRoot'" -PublishedVersion $pswVersion
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -2842,7 +2909,7 @@ the release readme tells the user exactly that. Rebuild the qualifier
         if (-not (Test-DriverVersionMatches -Reported $toolVersion -Declared $Version)) {
             throw @"
 '$versionHeader' declares the version as "$toolVersion", but this release is $Version.
-The qualifier is published inside releases\$Version\xhciqual\ and prints that
+The qualifier is published inside releases\$Version\tools\xhciqual\ and prints that
 string into every log a user saves, so the two must agree. Bump the version in
 src\xhci_version.h and rebuild the qualifier (xhciqual\SETENV.BAT then
 xhciqual\build.cmd) - see docs\contributing\build-and-test.md, "Versioning the
@@ -2850,7 +2917,7 @@ driver".
 "@
         }
 
-        $qualDir = Join-Path $destRoot "xhciqual"
+        $qualDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciqual")
         Ensure-Directory $qualDir
         foreach ($src in $qualtoolFiles.Keys) {
             Copy-Item -LiteralPath (Join-Path $QualtoolDir $src) `
@@ -2945,7 +3012,7 @@ read the driver beside it.
         if (-not (Test-DriverVersionMatches -Reported $snapVersion -Declared $Version)) {
             throw @"
 '$versionHeader' declares the version as "$snapVersion", but this release is $Version.
-XHCISNAP is published inside releases\$Version\xhcisnap\, prints that string on
+XHCISNAP is published inside releases\$Version\tools\xhcisnap\, prints that string on
 its default screen, and writes it into the header of every report a user sends
 back, so the two must agree. Bump the version in src\xhci_version.h and rebuild
 the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
@@ -2953,7 +3020,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
 "@
         }
 
-        $snapDir = Join-Path $destRoot "xhcisnap"
+        $snapDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcisnap")
         Ensure-Directory $snapDir
         Copy-Item -LiteralPath $snapExe -Destination (Join-Path $snapDir "XHCISNAP.EXE") -Force
         $snaptoolStaged = $snapDir
@@ -2964,8 +3031,8 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
 
     # --- the port switchover's scripts ---------------------------------------
     #
-    # Once, into portsw\ beside the tools' directories (roadmap-hcd task
-    # 37.5), from src\ rather than from a package: the packages no longer
+    # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
+    # tasks 37.5 and 38.10), from src\ rather than from a package: the packages no longer
     # carry them, and the four flavour directories once held four
     # byte-identical copies of files that are neither architecture- nor
     # flavour-specific. No readme.txt of their own: section 9 of the
@@ -2973,8 +3040,8 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     # what it does when run.
     Write-Step "port switchover scripts"
     $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot `
-                                          -Names $pswPublishable -DirName $pswDirName
-    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), $pswDirName)
+                                          -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
+    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), (Get-ToolDirName -Name "portsw"))
 
     #
     # Two flavours that hash the same are one binary published twice. The
@@ -3100,17 +3167,17 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     }
     if ($null -ne $qualtoolStaged) {
         $qexe = Get-Item -LiteralPath (Join-Path $qualtoolStaged "XHCIQUAL.EXE")
-        $contents += "  XHCIQUAL\  - the DOS machine checker from step 1"
+        $contents += "  TOOLS\XHCIQUAL\  - the DOS machine checker from step 1"
         $contents += ""
         $contents += ("      XHCIQUAL.EXE {0:N0} bytes" -f $qexe.Length)
-        $contents += "      XHCIQUAL.MAP keep it beside the EXE; see xhciqual\readme.txt"
+        $contents += "      XHCIQUAL.MAP keep it beside the EXE; see tools\xhciqual\readme.txt"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
         $contents += ""
     }
     if ($null -ne $snaptoolStaged) {
         $sexe = Get-Item -LiteralPath (Join-Path $snaptoolStaged "XHCISNAP.EXE")
-        $contents += "  XHCISNAP\  - what to run if something goes wrong"
+        $contents += "  TOOLS\XHCISNAP\  - what to run if something goes wrong"
         $contents += ""
         $contents += ("      XHCISNAP.EXE {0:N0} bytes" -f $sexe.Length)
         $contents += "      readme.txt"
@@ -3132,14 +3199,14 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ""
     }
     if ($null -ne $pswStaged) {
-        $contents += "  PORTSW\  - the Intel port switchover's switch (section 9)"
+        $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (section 9)"
         $contents += ""
         $contents += "      portsw.vbs     shows XhciIntelPortSwitch, and sets it on or off"
         $contents += "      portsw-on.bat  turns it on in one double-click"
         $contents += "      portsw-off.bat turns it off in one double-click"
         $contents += ""
-        $contents += "      One copy for every directory above. Run them from this"
-        $contents += "      directory."
+        $contents += "      One copy for every driver directory above. Run them from"
+        $contents += "      this directory."
         $contents += ""
     }
 
@@ -3334,8 +3401,8 @@ It is recommended because not every xHCI controller can be driven, and ONE OF
 THE WAYS IT CAN FAIL CANNOT BE FIXED IN SOFTWARE. Finding that out in thirty
 seconds is cheaper than finding it out after installing an operating system.
 
-The checker is in the XHCIQUAL\ subdirectory. Copy XHCIQUAL.EXE to a DOS boot
-disk, and run ONE command:
+The checker is in the TOOLS\XHCIQUAL\ subdirectory. Copy XHCIQUAL.EXE to a DOS
+boot disk, and run ONE command:
 
       XHCIQUAL
 
@@ -3362,8 +3429,8 @@ writes no PCI configuration register. It prints one of four verdicts:
 
 The tool takes options too, and you need none of them to answer the question
 above. The whole command line is below so that a log someone asks you for can
-be produced without guesswork; XHCIQUAL\readme.txt carries the same list with
-the safety notes spelled out.
+be produced without guesswork; TOOLS\XHCIQUAL\readme.txt carries the same list
+with the safety notes spelled out.
 
       XHCIQUAL                          the read-only quick scan, one screen
       XHCIQUAL [xhci|ehci|ohci|all] [options]
@@ -3417,7 +3484,8 @@ the safety notes spelled out.
 
   ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER, reset it, and reset its
   ports. They are development instrumentation; installing this driver never
-  requires them, and XHCIQUAL\readme.txt carries the precautions they need.
+  requires them, and TOOLS\XHCIQUAL\readme.txt carries the precautions they
+  need.
 
       --full            the full active run, across all three families
       --poll-only       active bring-up with no interrupt handler installed.
@@ -3477,9 +3545,9 @@ it). The verdict on screen is what to read; those codes are for batch files.
    boot whether it loaded.
 
    Two more things, only if you go on to run the deeper tests listed in
-   XHCIQUAL\readme.txt: use a PS/2 keyboard, because a USB keyboard on the
-   controller being tested can stop responding mid-run; and do not boot or
-   write a log through that same controller.
+   TOOLS\XHCIQUAL\readme.txt: use a PS/2 keyboard, because a USB keyboard on
+   the controller being tested can stop responding mid-run; and do not boot
+   or write a log through that same controller.
 
 A controller reporting no interrupt pin is still driven: the driver reads
 its events on a timer instead (polling, XhciInterruptMode in section 9),
@@ -3540,8 +3608,8 @@ The package's own files are in:
 
 Nothing else is in the package, and there is nothing to complete. The
 Intel port switchover's scripts (section 9, XhciIntelPortSwitch) are not
-part of it: they are in the PORTSW directory beside these, one copy for
-all of them.
+part of it: they are in the TOOLS\PORTSW directory, one copy for all of
+them.
 
 Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
@@ -3891,8 +3959,8 @@ Things specific to this driver, worth knowing in advance:
   and using the driver never needs it, and its first step changes one of the
   driver's settings, so it is not something to try on your own.
 
-  XHCISNAP.EXE is in the XHCISNAP directory of this package. It reads the
-  driver's own log straight out of the running machine and writes a report
+  XHCISNAP.EXE is in the TOOLS\XHCISNAP directory of this package. It reads
+  the driver's own log straight out of the running machine and writes a report
   you can attach to that issue. On Windows 98 and Windows ME it is the ONLY
   way to get anything out. When you are asked, it is four steps, and none of
   them is REGEDIT:
@@ -4278,10 +4346,10 @@ A value that is absent means the default each one states.
   wrote 1, and an update KEEPS the value already there, so a machine
   updated from one of them stays at 1 until it is changed.
 
-  PORTSW.VBS, in the PORTSW directory beside the RELEASE and DEBUG ones,
-  shows and sets it on every xhci98 controller, with nothing to install,
-  on every Windows this driver runs on. Double-click it, or, at a prompt
-  in the PORTSW directory, run
+  PORTSW.VBS, in the TOOLS\PORTSW directory, shows and sets it on every
+  xhci98 controller, with nothing to install, on every Windows this
+  driver runs on. Double-click it, or, at a prompt in the TOOLS\PORTSW
+  directory, run
       cscript //nologo portsw.vbs show     (or 1, or 0)
   as an administrator. Read when the controller starts, so RESTART
   WINDOWS after changing it. A stop gives back only the registers the
@@ -4292,7 +4360,7 @@ A value that is absent means the default each one states.
   double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
   says to restart. On Vista and 7, right-click one and choose Run as
   administrator. At a prompt on Windows 98 SE and ME, change to the
-  PORTSW directory first. Then RESTART WINDOWS.
+  TOOLS\PORTSW directory first. Then RESTART WINDOWS.
 
   On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
   only at USB 2.0 speed on a blue connector is most likely still on the
@@ -4642,13 +4710,13 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     # audit's H14. `-SkipQualtool` and `-SkipSnapTool` warn on the console and
     # leave the section-8 listing out, but every other mention of those
     # directories stayed: section 1 tells the reader the checker is in
-    # XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
+    # TOOLS\XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
     # there. build-and-test.md says the result "is incomplete and says so", and
     # the console is not where a user reads it.
     #
     $missingTools = @()
-    if ($null -eq $qualtoolStaged) { $missingTools += "XHCIQUAL\ (the DOS machine checker of section 1)" }
-    if ($null -eq $snaptoolStaged) { $missingTools += "XHCISNAP\ (the report tool of section 6)" }
+    if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
+    if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -4976,11 +5044,11 @@ behind.
 
 
 ------------------------------------------------------------------------------
-Part of the xhci98 {VERSION} release. See the readme.txt in the directory above
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file in the
-directory above. XHCIQUAL.EXE is not only this project's code: it is linked
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIQUAL.EXE is not only this project's code: it is linked
 as a DOS/32 Advanced DOS Extender executable and statically includes that
 extender and the Open Watcom C runtime, which carry their own notices. Those
 notices are in NOTICE.TXT beside this file, and this product uses DOS/32
@@ -5017,7 +5085,7 @@ Advanced DOS Extender technology.
 ==============================================================================
 
 XHCIQUAL.EXE is built from this project's own C and assembly sources, which
-are under the GNU GPL v2 - see the LICENSE file in the directory above.
+are under the GNU GPL v2 - see the LICENSE file two directories up.
 
 It is linked as a DOS/32 Advanced DOS Extender (LE-style) executable. That
 means the extender itself is embedded in the EXE as its stub, so the tool is a
@@ -5190,11 +5258,11 @@ machine, and there is nothing for this tool to read.
 
 
 ------------------------------------------------------------------------------
-Part of the xhci98 {VERSION} release. See the readme.txt in the directory above
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file in the
-directory above. XHCISNAP.EXE is not only this project's code: the Microsoft
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCISNAP.EXE is not only this project's code: the Microsoft
 Visual C++ 6.0 C runtime is statically linked into it, which is why it is one
 file that runs on a machine with nothing installed on it. That linkage is
 recorded in NOTICE.TXT beside this file.
@@ -5233,7 +5301,7 @@ recorded in NOTICE.TXT beside this file.
 ==============================================================================
 
 XHCISNAP.EXE is built from this project's own C source, which is under the GNU
-GPL v2 - see the LICENSE file in the directory above.
+GPL v2 - see the LICENSE file two directories up.
 
 It is not only this project's code. It is compiled with Microsoft Visual C++
 6.0 and linked against that compiler's STATIC C runtime - the build passes no
@@ -5376,9 +5444,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
     # before -Force moves an existing release aside (round 2, finding 4),
     # so a refusal leaves releases\ as it was. The port switchover's scripts
-    # in portsw\ and nowhere else (task 37.5), at the same point and for the
-    # same reason.
-    Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName `
+    # in tools\portsw\ and nowhere else (tasks 37.5 and 38.10), and the tools
+    # in tools\ alone (task 38.10), at the same point and for the same reason.
+    Assert-ToolsLayout -Root $destRoot -What "the staged release '$destRoot'"
+    Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw") `
                             -What "the staged release '$destRoot'"
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
@@ -5466,10 +5535,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
         }
     }
     if ($null -eq $qualtoolStaged) {
-        Write-Warn "no xhciqual\ in this release (-SkipQualtool) - it is incomplete."
+        Write-Warn "no tools\xhciqual\ in this release (-SkipQualtool) - it is incomplete."
     }
     if ($null -eq $snaptoolStaged) {
-        Write-Warn "no xhcisnap\ in this release (-SkipSnapTool) - it publishes a read channel nobody can open."
+        Write-Warn "no tools\xhcisnap\ in this release (-SkipSnapTool) - it publishes a read channel nobody can open."
     }
 
     Write-Step "Done"
