@@ -2528,7 +2528,7 @@ were decided by the owner the same day, each as proposed.
 
 | | Question | Decided / to read |
 |---|---|---|
-| O1 | Does NTKERN's `RtlQueryRegistryValues` (98 SE, ME) enumerate every value when `Name` is NULL? If not: `ZwOpenKey` (98 SE evidence, not allowlisted) with `ZwEnumerateValueKey` (no Windows 98 evidence recorded), or a by-name query of `"0"` to `"31"` | to read on a 98 SE guest (or statically in 98 SE's `usbhub.sys`) before the code; the fallback is chosen only if it does not |
+| O1 | Does NTKERN's `RtlQueryRegistryValues` (98 SE, ME) enumerate every value when `Name` is NULL? If not: `ZwOpenKey` (98 SE evidence, not allowlisted) with `ZwEnumerateValueKey` (no Windows 98 evidence recorded), or a by-name query of `"0"` to `"31"` | **Read 2026-10-13 on a 98 SE guest (runtime):** it does - with the gate on and the six-entry list merged, the notes read `silent.entries=00000006`, `silent.ignored=00000000`, `silent.dropped=00000000`, `silent.status=00000000`; no fallback is needed (`out\p38-2\legs\`) |
 | O2 | A PDO presented as UAS, or refused, whose Bulk-Only alternate matches the storage entry | FALSE for `XHCI_XPORT_UAS` and `XHCI_XPORT_REFUSED` (owner) |
 | O3 | The composite parent: TRUE when any function's interfaces match (the rule read literally), when all do, or never | any (literal) (owner) |
 | O4 | A malformed configuration: 0 whatever matched, or keep a match found before the fault | 0 (owner) |
