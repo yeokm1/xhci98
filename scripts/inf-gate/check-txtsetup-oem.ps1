@@ -27,8 +27,10 @@ families.
            not loaded in text mode; section 5.6).
   OEM-COPY Every file the INF's Windows 2000/XP (x86) or XP x64 (amd64)
            install sections copy - the models section NT 5.x picks, each
-           model's install section as NT 5.x picks it, its CopyFiles and
-           Needs - that the INF's [SourceDisksFiles] places on this disk is
+           model's install section as NT 5.x picks it and its .CoInstallers
+           section, their CopyFiles and Needs, quoted names unquoted, a
+           section named and absent refused - that the INF's
+           [SourceDisksFiles] places on this disk is
            carried by the driver line or a dll line, and every dll line
            carries such a file. Text-mode Setup copies the files of the
            option to %windir%\OemDir (the inf renamed oemscsNN.inf), and
@@ -294,16 +296,29 @@ function Get-InfNt5Copies {
             }
         }
     }
+    # A name in a directive may be quoted (INF general syntax); Setup reads
+    # it without the quotes.
+    $unq = { param($t) $t = $t.Trim(); if ($t.Length -ge 2 -and $t.StartsWith('"') -and $t.EndsWith('"')) { $t = $t.Substring(1, $t.Length - 2).Trim() }; return $t }
     $installs = @{}
+    $unresolved = @()
     foreach ($m in $modelSections.Keys) {
-        if (-not $sec.ContainsKey($m)) { continue }
+        if (-not $sec.ContainsKey($m)) { $unresolved += "the models section [$m]"; continue }
         foreach ($line in $sec[$m]) {
             $eq = $line.IndexOf('=')
             if ($eq -lt 0) { continue }
-            $name = ($line.Substring($eq + 1).Split(',')[0]).Trim().ToLowerInvariant()
+            $name = (& $unq ($line.Substring($eq + 1).Split(',')[0])).ToLowerInvariant()
+            $found = $false
             foreach ($cand in @("$name.nt$arch", "$name.nt", $name)) {
-                if ($sec.ContainsKey($cand)) { $installs[$cand] = $true; break }
+                if ($sec.ContainsKey($cand)) {
+                    $installs[$cand] = $true
+                    # Setup runs the install section's co-installers'
+                    # CopyFiles too.
+                    if ($sec.ContainsKey("$cand.coinstallers")) { $installs["$cand.coinstallers"] = $true }
+                    $found = $true
+                    break
+                }
             }
+            if (-not $found) { $unresolved += "the install section of [$m]'s '$name'" }
         }
     }
     $copies = @{}
@@ -312,22 +327,23 @@ function Get-InfNt5Copies {
     foreach ($i in $installs.Keys) { [void]$queue.Add($i) }
     while ($queue.Count -gt 0) {
         $s = [string]$queue[0]; $queue.RemoveAt(0)
-        if ($visited.ContainsKey($s) -or -not $sec.ContainsKey($s)) { continue }
+        if ($visited.ContainsKey($s)) { continue }
+        if (-not $sec.ContainsKey($s)) { $unresolved += "the Needs section [$s]"; continue }
         $visited[$s] = $true
         foreach ($line in $sec[$s]) {
             if ($line -match '^Needs\s*=\s*(.+)$') {
-                foreach ($n in $matches[1].Split(',')) { if ($n.Trim() -ne "") { [void]$queue.Add($n.Trim().ToLowerInvariant()) } }
+                foreach ($n in $matches[1].Split(',')) { $nn = & $unq $n; if ($nn -ne "") { [void]$queue.Add($nn.ToLowerInvariant()) } }
                 continue
             }
             if ($line -notmatch '^CopyFiles\s*=\s*(.+)$') { continue }
             foreach ($item in $matches[1].Split(',')) {
-                $it = $item.Trim()
+                $it = & $unq $item
                 if ($it -eq "") { continue }
-                if ($it.StartsWith("@")) { $copies[$it.Substring(1).Trim().ToLowerInvariant()] = "[$s] CopyFiles $it"; continue }
+                if ($it.StartsWith("@")) { $copies[(& $unq $it.Substring(1)).ToLowerInvariant()] = "[$s] CopyFiles $it"; continue }
                 $cs = $it.ToLowerInvariant()
-                if (-not $sec.ContainsKey($cs)) { continue }
+                if (-not $sec.ContainsKey($cs)) { $unresolved += "[$s]'s CopyFiles section [$it]"; continue }
                 foreach ($entry in $sec[$cs]) {
-                    $ef = @($entry.Split(',') | ForEach-Object { $_.Trim() })
+                    $ef = @($entry.Split(',') | ForEach-Object { & $unq $_ })
                     $src = $ef[0]
                     if ($ef.Count -gt 1 -and $ef[1] -ne "") { $src = $ef[1] }
                     if ($src -ne "") { $copies[$src.ToLowerInvariant()] = "[$s] CopyFiles $it" }
@@ -341,10 +357,10 @@ function Get-InfNt5Copies {
         foreach ($line in $sec[$n]) {
             $eq = $line.IndexOf('=')
             $k = if ($eq -ge 0) { $line.Substring(0, $eq) } else { $line }
-            $onDisk[$k.Trim().ToLowerInvariant()] = $true
+            $onDisk[(& $unq $k).ToLowerInvariant()] = $true
         }
     }
-    return @{ Copies = $copies; OnDisk = $onDisk }
+    return @{ Copies = $copies; OnDisk = $onDisk; Unresolved = $unresolved }
 }
 
 function Test-Is83 {
@@ -472,6 +488,11 @@ function Test-OemText {
     # put the option's files under their own names (the driver and dll
     # lines; the inf goes there renamed, the catalog is refused above).
     $nt5 = Get-InfNt5Copies -Text $InfText -Profile $Profile
+    foreach ($u in $nt5.Unresolved) {
+        # A section this walk cannot read could copy anything: refused, not
+        # skipped (an Include= of another INF is not followed either).
+        & $add "OEM-COPY" "$u is not in the INF, so what the NT 5.x install copies cannot be read."
+    }
     foreach ($c in ($nt5.Copies.Keys | Sort-Object)) {
         if ($nt5.OnDisk.ContainsKey($c)) {
             if ($c -ne $driverFile -and -not $dllFiles.ContainsKey($c)) {
@@ -685,7 +706,11 @@ if ($SelfTest) {
             # neither the disk nor Windows; one pulled in through Needs.
             @{ Rule = "OEM-COPY";    Inf = $inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n").Replace("[Xhci.CopyFiles]`r`n", "[Xhci.CopyFiles]`r`nxhcixtra.sys`r`n") },
             @{ Rule = "OEM-COPY";    Inf = $inf.Replace("[Xhci.CopyFiles]`r`n", "[Xhci.CopyFiles]`r`nxhcixtra.sys`r`n") },
-            @{ Rule = "OEM-COPY";    Inf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs=Xtra.Install' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n") }
+            @{ Rule = "OEM-COPY";    Inf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs=Xtra.Install' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n") },
+            @{ Rule = "OEM-COPY";    Inf = (([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcixtra.sys=1`r`n"), ('${1}Needs="Xtra.Install"' + "`r`n"), 1) + "`r`n[Xtra.Install]`r`nCopyFiles=@xhcixtra.sys`r`n") },
+            @{ Rule = "OEM-COPY";    Inf = ([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf, ('${1}Needs=Xtra.Missing' + "`r`n"), 1) },
+            @{ Rule = "OEM-COPY";    Inf = ([regex]'(\[RootHub\.Dev\.NT[a-z0-9]+\]\r\n)').Replace($inf, ('${1}CopyFiles=Xtra.Missing' + "`r`n"), 1) },
+            @{ Rule = "OEM-COPY";    Inf = ([regex]'\[(RootHub\.Dev\.NT[a-z0-9]+)\]\r\n').Replace($inf.Replace("[SourceDisksFiles]`r`n", "[SourceDisksFiles]`r`nxhcico.dll=1`r`n"), ('[${1}.CoInstallers]' + "`r`nCopyFiles=@xhcico.dll`r`n`r`n" + '[${1}]' + "`r`n"), 1) }
         )
         if ($profile -eq "x86") {
             # The helper copied by the Vista and 7 section alone: the dll

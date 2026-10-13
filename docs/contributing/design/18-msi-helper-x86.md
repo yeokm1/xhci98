@@ -2058,8 +2058,11 @@ puts there only the files the option's `[Files.scsi.XHCI98]` names. With
 the copy aborted, and Setup installed a NULL driver on the controller
 (`out\p38-matrix\legs\f6xp\`, `setupapi.log`). `src\txtsetup.oem` now
 carries it on a `dll` line. Read off the media (static, 2026-10-14;
-disassembly with `dumpbin /disasm` of `SETUPDD.SYS` and `SETUPLDR.BIN`
-from `win2ksp4.ISO` and the XP SP3 OEM CD's `I386\`, not tracked): both
+disassembly with MSVC 6.0's `dumpbin /disasm` of `SETUPDD.SYS` and
+`SETUPLDR.BIN` from `win2ksp4.ISO` and the XP SP3 OEM CD's `I386\`, not
+tracked; hashes and instruction addresses in `legal-provenance.md`
+section 4, "What text-mode Setup does with each `txtsetup.oem` file
+type"): both
 parse the file types `driver`, `port`, `class`, `inf`, `dll`, `detect`,
 `hal`, `catalog` in that order; text mode copies each file of the chosen
 option to its type's directory (`dll`: `system32`; `driver`, `port`,
