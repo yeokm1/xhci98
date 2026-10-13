@@ -171,12 +171,13 @@ included.
   mouse and a keyboard), and a device whose driver is not on the machine
   depends on that CD being at hand. Never on 2000 and later. SweetLow
   provided the information on how the silent install is decided and the
-  list. Read in QEMU virtual machines: on 98 SE a mouse, stick and hub,
-  each a device of its own, installed with no wizard, a keyboard brought no
-  wizard and asked for the CD (its install was not followed to the end),
-  and a USB audio composite device matched by an entry added by hand
-  installed with no wizard; with the switch off, or no list, a new mouse
-  brought the wizard as before. ME needs none of it
+  list. Read in QEMU virtual machines: on 98 SE a mouse, keyboard, stick
+  and hub, each a device of its own, installed with no wizard and worked
+  (the mouse and the keyboard after the CD prompt above), and so did a USB
+  audio composite device matched by an entry added by hand; with the
+  switch off, or no list, a new mouse brought the wizard as before. A hub
+  needs this package's INF from `2.1.0.0` or later: under an older one its
+  devnode is left with no driver. ME needs none of it
   for those: it installed a mouse, keyboard, stick and hub with no wizard
   with the switch off. On ME the switch matters only for a class ME would
   ask about (the audio device). A composite keyboard, mouse or stick was

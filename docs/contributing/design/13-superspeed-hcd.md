@@ -2560,7 +2560,16 @@ the HID drivers not, see (c)):
   installed before, and the mouse and the keyboard asked for the CD
   (`hidusb.sys`, `kbdhid.vxd`) with no wizard; the mouse then installed
   from it, and the keyboard was removed before its install was followed to
-  the end. The readme's "drivers installed once first" is that.
+  the end. The readme's "drivers installed once first" is that. The stick
+  installed (`Driver` set); the hub's devnode was left a failed install
+  (no `Driver`, `ConfigFlags` 0x40), because that base's installed
+  `xhci98` INF was `1.99.0.0`, older than the `XHCI98\HUB` model (added in
+  `2.1.0.0`). Read again on the same base with the current INF
+  (`2.3.1.0`) in `INF\OTHER`: a new hub, no wizard, MATCH, `Driver` set,
+  `ConfigFlags` 0, "xHCI98 USB Hub" working, a mouse behind it silent and
+  working; a new keyboard, no wizard, MATCH, one CD prompt (`hidusb.sys`;
+  `kbdhid.vxd` was on the disk by then), "HID-compliant keyboard" working
+  and typing.
 - (b), the gate left at 1 from (c) and the list deleted: `silent.status`
   `0xC0000034`,
   `silent.entries` 0, a new mouse `silent.pdo` reason EMPTY, answer 0, the
