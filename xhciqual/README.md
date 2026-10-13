@@ -183,6 +183,12 @@ legacy DMI one, bad checksums, a table above 4 GB), structure tables
 range), the memory sums, CPUID decoding and the no-SMBIOS fallback. Every
 table plants a serial number, UUID, asset tag, SKU and part number, and
 every printed line is checked for each.
+`xhciqual/test/test_stamp.c` (roadmap task 38.1) covers `stamp.c`, the
+`--log-stamp` name: months 1, 9, 10, 11 and 12 (`1`, `9`, `A`, `B`,
+`C`), midnight, the next free letter when `A` is taken, the first free
+letter rather than the one past the highest, all 26 taken (refused, with
+every letter asked about and none past `Z`), and a clock that is not a
+date and time.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -261,7 +267,10 @@ scan means "not qualified here", not "something went wrong", and a
 this tool does not know, or a bad value for one. **3** (from 2.2.0.3) is a
 full active run whose controllers were all qualified and at least one only
 **QUALIFIED WITH CAVEATS** - no working interrupt, so the driver polls it;
-see "What a verdict means". The batch wrappers bucket
+see "What a verdict means". **4** (from roadmap-hcd task 38.1) is a
+`--log-stamp` run refused before anything was read: the DOS clock is not a
+date and time, the minute's 26 names are all taken, or the log cannot be
+created. The batch wrappers bucket
 these with `IF ERRORLEVEL` and pair them with `--done-flag`, which is what
 separates a bad verdict from a crash - the flag is written on any normal exit,
 including a usage error. (Stated here because the audit of 2026-09-07 found
@@ -310,6 +319,33 @@ you install: check the machine" section of
 [`../docs/using/release-notes.md`](../docs/using/release-notes.md), which
 also carries the four quick-scan verdicts. Keep the two in step: that
 section is a rendering of this one, and this file is the normative copy.
+
+### A field report: `QUALREP.BAT`
+
+A reporter asked for an `XHCIQUAL` reading (the field reports of
+roadmap-hcd task 37.2) runs one batch file. `QUALREP.BAT` ships in the
+release's `tools\xhciqual\` beside `XHCIQUAL.EXE`; copy both to a writable
+directory on non-target storage (not the root of `C:\`), boot MS-DOS 7.x,
+change to that directory and run:
+
+```bat
+QUALREP
+```
+
+It runs `XHCIQUAL --probe-only --no-page --log-stamp --done-flag
+QUALREP.FLG`: read-only (step 1 of the recommended order, so no PCI
+configuration write and no ownership taken), with the log named from the
+DOS clock in the current directory, never overwriting an earlier one, so
+it can be run again. It first checks that `XHCIQUAL.EXE` is in the current
+directory and that the directory is writable, buckets the exit code with
+`IF ERRORLEVEL` from the highest down (1 a completed reading, 2 no USB
+host controller found, 4 the name refused, anything else unexpected), and
+separates a crash from all of those with `IF EXIST` on the completion
+flag, which it deletes afterwards. It deletes no log. The tool prints
+`Log written: mDDhhmmS.LOG - attach this file` at the end of the run, and
+the batch's last line says to attach the file that line names. 8.3 name,
+ASCII, CRLF, `COMMAND.COM` built-ins only, and nothing on an `echo` or
+`rem` line that `COMMAND.COM` could read as a redirection or a variable.
 
 ### The staged procedure
 
@@ -423,7 +459,26 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   disables paging).
 - `--log [filename]`: save the report; the filename defaults to
   `XHCIQUAL.LOG`. No log file is created unless `--log` is present.
-  `--log=filename` is also accepted.
+  `--log=filename` is also accepted. It replaces a file of the same name.
+- `--log-stamp` (roadmap-hcd task 38.1, owner 2026-10-13): save the report
+  to a **new** log in the current directory, named from the DOS clock
+  (INT 21h `2Ah` and `2Ch`) as `mDDhhmmS.LOG`: `m` the month as one hex
+  digit (`1` to `9`, then `A`, `B`, `C`), `DD` the day, `hh` the hour,
+  `mm` the minute, and `S` the first letter from `A` to `Z` for which no
+  file of that name exists, so `A131425A.LOG` is 13 October, 14:25, and a
+  second run in the same minute writes `A131425B.LOG`. It never overwrites.
+  The year is not in the name; the log's second line carries the full date
+  and time (`Log: A131425A.LOG, begun 2026-10-13 14:25:07 by the DOS
+  clock`), and the run ends on `Log written: A131425A.LOG - attach this
+  file`. It is refused, with exit **4** and its own message, before
+  anything is read, when the clock is not a date and time (a zero or
+  out-of-range field), when `A` to `Z` are all taken for that minute, or
+  when the log cannot be created (which a plain `--log` only warns about).
+  Not with `--log` (exit 2). A modifier like the others, so pair it with
+  `--quick` or `--probe-only` for a read-only run. The name is built by
+  `stamp.c`, a pure function of the clock's fields and an "exists"
+  predicate, and is the scheme `XHCISNAP` uses for its own outputs.
+  `QUALREP.BAT` below is its caller.
 - `--gsi N`, also `--gsi=N` (N decimal, 0 to 255): compare the Intel PCH
   routing against N, the interrupt Windows reports for the controller
   ("Intel PCH interrupt routing" below). It is accepted only beside
@@ -576,7 +631,12 @@ powershell -ExecutionPolicy Bypass -File xhciqual\test\run-win98-batch.ps1
 
 The wrappers use only `COMMAND.COM` built-ins: `IF ERRORLEVEL` for the exit
 code and `IF EXIST` on XHCIQUAL's `--done-flag` completion sentinel (no
-`FIND.EXE`).
+`FIND.EXE`). Three cases drive `QUALREP.BAT` (task 38.1): one reading to
+its success branch with the `Log written:` line on screen; two in one boot
+with the guest clock pinned (`-rtc base=2026-10-13T14:25:00,clock=vm`),
+where `DIR /B` must list `A1314mmA.LOG` and then the same minute's `B`;
+and one at 31 December 23:58 with every letter of 23:58 and 23:59 already
+on the disk, which must refuse and write nothing.
 
 ### The Win98 boot image
 

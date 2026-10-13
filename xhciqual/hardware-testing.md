@@ -138,6 +138,37 @@ which is what the safety section above says not to do first. If you are
 working from notes written before v0.11, `XHCIQUAL --full` is that old
 behaviour.
 
+### A field report: run `QUALREP.BAT`
+
+When a field report asks for an `XHCIQUAL` reading, this is the one command
+to run. Copy `XHCIQUAL.EXE` and `QUALREP.BAT` (both in the release's
+`tools\xhciqual\`) to a writable directory on non-target storage, not the
+root of `C:\`. Boot MS-DOS 7.x, change to that directory, and run:
+
+```bat
+QUALREP
+```
+
+It is read-only: it runs `XHCIQUAL --probe-only --no-page --log-stamp`,
+the step 1 inventory below, which makes no PCI configuration write and
+takes no ownership, so none of the cold boots or device handling of the
+staged procedure is needed. The log is named from the DOS clock and saved
+in the current directory - `mDDhhmmS.LOG`, month as one hex digit
+(`1`-`9`, `A`-`C`), day, hour, minute and the first free letter, so
+`A131425A.LOG` is 13 October 14:25 - and an earlier log is never
+overwritten, so running it again is safe. The run ends on a line
+`Log written: A131425A.LOG - attach this file`; the batch's last line
+says to attach that file. Set the DOS clock first (`DATE`, `TIME`) if it
+is wrong: the log's second line carries the full date and time.
+
+The batch says which way the run went: a completed reading; no USB host
+controller found (the log is still written); the name refused before
+anything was read (exit 4: the clock is not a date, all 26 letters of
+that minute are taken, or the log cannot be created) - fix what the
+message says and run it again; or, with no completion flag, an abnormal
+end, where the partial log is kept and a photo of the screen is wanted.
+It deletes no log.
+
 ### Quick xHCI procedure: run the five batch files
 
 Boot clean MS-DOS 7.1 (the Windows 98 target DOS), change to the writable
@@ -673,6 +704,9 @@ Exit codes are:
   WITH CAVEATS - no working interrupt, so the driver polls it (or an
   MSI-capable OS). `3XIRQ`, `4XEMPTY` and `5XDEV` bucket it on its own and
   say so; `--irq-selftest` gives it for "NO WORKING INTERRUPT".
+- `4` (roadmap-hcd task 38.1): `--log-stamp` refused before anything was
+  read - the DOS clock is not a date and time, `A` to `Z` are all taken
+  for that minute, or the log cannot be created. `QUALREP` says so.
 
 ## What to record for each machine
 

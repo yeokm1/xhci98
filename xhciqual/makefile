@@ -16,7 +16,8 @@ AFLAGS = -zq
 
 OBJS = main.obj pci.obj quirks.obj xhcicap.obj bringup.obj devid.obj &
        legacy.obj irq.obj irqasm.obj report.obj mmiodiag.obj route.obj &
-       xhci_pirq.obj verdict.obj sysinfo.obj sysprobe.obj sysasm.obj
+       xhci_pirq.obj verdict.obj sysinfo.obj sysprobe.obj sysasm.obj &
+       stamp.obj
 
 # option map -> XHCIQUAL.MAP: keep it paired with each field-test binary so a
 # reported DOS/32A fault EIP can be resolved to a symbol later (docs/contributing/lessons.md).
@@ -29,7 +30,8 @@ xhciqual.exe : $(OBJS)
 .asm.obj :
 	$(ASM) $(AFLAGS) $[@
 
-main.obj : main.c qual.h ../src/xhci_version.h
+main.obj : main.c qual.h stamp.h ../src/xhci_version.h
+stamp.obj : stamp.c stamp.h
 pci.obj : pci.c qual.h ../src/xhci_version.h
 quirks.obj : quirks.c qual.h ../src/xhci_version.h
 xhcicap.obj : xhcicap.c qual.h ../src/xhci_version.h

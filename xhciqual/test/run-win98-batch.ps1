@@ -66,7 +66,7 @@ Copy-Item -LiteralPath (Join-Path $qualDir "xhciqual.exe") -Destination (Join-Pa
 if (Test-Path -LiteralPath (Join-Path $qualDir "xhciqual.map")) {
     Copy-Item -LiteralPath (Join-Path $qualDir "xhciqual.map") -Destination (Join-Path $hddDir "XHCIQUAL.MAP") -Force
 }
-foreach ($bat in @("1PROBE.BAT","2XPOLL.BAT","3XIRQ.BAT","4XEMPTY.BAT","5XDEV.BAT")) {
+foreach ($bat in @("1PROBE.BAT","2XPOLL.BAT","3XIRQ.BAT","4XEMPTY.BAT","5XDEV.BAT","QUALREP.BAT")) {
     $src = Join-Path $qualDir $bat
     if (Test-Path -LiteralPath $src) {
         $text = [IO.File]::ReadAllText($src) -replace "`r`n","`n" -replace "`n","`r`n"
@@ -88,6 +88,25 @@ $prescanBat = @(
 )
 $prescanText = ($prescanBat -join "`r`n") + "`r`n"
 [IO.File]::WriteAllText((Join-Path $hddDir "PSCAN.BAT"), $prescanText)
+# Task 38.1: QUALREP twice in one boot, with the guest clock pinned (-rtc
+# below) so the names are known: the second run in the same minute takes
+# the next letter, and DIR /B lists both, in creation order.
+$qrTwice = @(
+    "@echo off",
+    "call QUALREP",
+    "call QUALREP",
+    "cls",
+    "dir /b A1314*.LOG",
+    "echo QRTWICE_DONE"
+)
+[IO.File]::WriteAllText((Join-Path $hddDir "QRTWICE.BAT"), (($qrTwice -join "`r`n") + "`r`n"))
+# ...and the refusal: every letter of 31 December 23:58 and 23:59 already
+# taken, so a run in either minute must refuse and write nothing.
+foreach ($minute in @("58","59")) {
+    foreach ($letter in [char[]](65..90)) {
+        [IO.File]::WriteAllText((Join-Path $hddDir ("C3123" + $minute + $letter + ".LOG")), "planted`r`n")
+    }
+}
 
 if (-not (Test-Path -LiteralPath $usbImage)) {
     $stream = [IO.File]::Create($usbImage); $stream.SetLength(8MB); $stream.Close()
@@ -157,7 +176,10 @@ $cases = @(
     [pscustomobject]@{ Name="empty_full";   Batch="4XEMPTY"; Args=$xhci;    Success="completed normally with a QUALIFIED verdict"; Fail="NOT QUALIFIED|ended abnormally|was not created" },
     [pscustomobject]@{ Name="device_full";  Batch="5XDEV";   Args=$xhciDev; Success="completed normally with a QUALIFIED verdict"; Fail="NOT QUALIFIED|ended abnormally|was not created" },
     [pscustomobject]@{ Name="no_controller"; Batch="4XEMPTY"; Args=@();      Success="completed normally but NOT QUALIFIED"; Fail="ended abnormally|was not created|with a QUALIFIED verdict" },
-    [pscustomobject]@{ Name="done_flag_operand"; Batch="PSCAN"; Args=@(); Success="planted"; Fail="PRESCAN_DONE" }
+    [pscustomobject]@{ Name="done_flag_operand"; Batch="PSCAN"; Args=@(); Success="planted"; Fail="PRESCAN_DONE" },
+    [pscustomobject]@{ Name="qualrep_read"; Batch="QUALREP"; Args=$xhci; Success="Log written: [0-9A-C][0-9]{6}[A-Z]\.LOG - attach this file[\s\S]*QUALREP: the reading completed normally"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
+    [pscustomobject]@{ Name="qualrep_twice"; Batch="QRTWICE"; Args=($xhci + @("-rtc","base=2026-10-13T14:25:00,clock=vm")); Success="A1314([0-9][0-9])A\.LOG\s+A1314(\1B|[0-9][0-9]A)\.LOG\s+QRTWICE_DONE"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
+    [pscustomobject]@{ Name="qualrep_all_taken"; Batch="QUALREP"; Args=($xhci + @("-rtc","base=2026-12-31T23:58:00,clock=vm")); Success="C31235[89]A\.LOG to C31235[89]Z\.LOG all[\s\S]*refused before reading anything"; Fail="completed normally|ended abnormally|unexpected exit code" }
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })
