@@ -38,8 +38,10 @@
  * (31-A.3; xhci_xport.h, hcdXportDecide), and its hardware and compatible
  * ids follow it: only that transport's class ids. A device with no
  * transport it can run shows the project-owned XHCI98_NOXPORT hardware id
- * and no compatible id, and on a companion-paired root port is offered to
- * 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
+ * and no compatible id - but keeps the ordinary VID/PID device id, which
+ * Windows 98 SE adds to the devnode's HardwareID value (xhci_xport.h;
+ * design record 13 section 10.7.1) - and on a companion-paired root port
+ * is offered to 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
  *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets one
  * function PDO per function, each an HCD_DEVICE_PDO with Function set, its
@@ -672,7 +674,8 @@ static VOID hcdSilentDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
  * companion-paired root port 29-A.5's hold is asked to send it back to USB
  * 2.0 (HcdHoldRequestUsb2); on a root port with no companion, behind a
  * SuperSpeed hub, or when the hold is not taken, it is refused in place -
- * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids,
+ * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids
+ * (the device id stays VID/PID; xhci_xport.h, design record 13 10.7.1),
  * its hub port and siblings untouched. Each place is counted. Returns
  * nonzero when the hold request was accepted - queued for the thread's next
  * pass, which reads the device's identity on the SuperSpeed port, writes PED
