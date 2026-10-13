@@ -73,8 +73,11 @@ default). The 32-bit image reaches the routine through the helper of
 design record 18, extended to Windows 2000 and XP and renamed
 `xhcihlpr.sys` (record 18 section 15); where sections 4.3 and 10 name
 `xhcimsi.sys` they describe `2.3.0.0` and `2.3.1.0`. Section 7's
-"next question" is answered there. The owner's decisions it needs are
-section 7.2.13's and record 18 section 15.13's.
+"next question" is answered there. The owner answered section 7.2.13's
+and record 18 section 15.13's decisions the same day (section 12,
+decision 9), and with T3 moved `XhciPollIdleMs`'s default from 50 to 500
+ms (sections 3, 3.1 and 7.2.6a); one question that change raises, the
+update's 50, is still open (T5).
 
 ## 1. What is asked, and what is not
 
@@ -200,7 +203,7 @@ with no interrupt.
 | Value | Default | Meaning | Out of range |
 |---|---|---|---|
 | `XhciInterruptMode` | 0 | 0 automatic; 1 the line interrupt only; 2 polling; 3 a message-signalled interrupt only (2026-10-11, section 4.3); 4 and above reserved | 4 and above run as 0, the value read recorded (section 8) |
-| `XhciPollIdleMs` | 50 | The poll period when nothing is outstanding (section 6) | 0 runs as 50; above 5000 held to 5000 |
+| `XhciPollIdleMs` | 500 (50 until revision 8; owner, 2026-10-13) | The poll period when nothing is outstanding (section 6), and the window after the last event in which the poller stays ACTIVE (section 6.1) | 0 runs as 500; above 5000 held to 5000; 50 on an update, section 7.2.6a |
 | `XhciPollActiveMs` | 1 | The poll period while work is outstanding | 0 runs as 1; above the idle period in effect held to it |
 
 A value that is absent, not a four-byte `REG_DWORD`, or unreadable takes
@@ -224,10 +227,15 @@ bound.
   Windows grants one (section 4.3). It is the only mode that falls back:
   1 and 3 each name one delivery and fail the start without it
   (2026-10-11), and 2 always polls.
-- **50 ms idle.** A connect is debounced for 100 ms by the USB 2.0
-  specification before a driver acts on it, so a 50 ms look at an idle ring
-  adds no delay a user can see to a hot-plug, and costs about 20 timer DPCs
-  a second, each a look at one TRB when nothing has happened.
+- **500 ms idle** (owner, 2026-10-13, with task 38.4's decision T3; 50 ms
+  from 2026-10-05 until then). The reasoning of the first default was that
+  a connect is debounced for 100 ms by the USB 2.0 specification before a
+  driver acts on it, so a 50 ms look at an idle ring added no delay a user
+  could see to a hot-plug, at about 20 timer DPCs a second. At 500 ms a
+  polled controller sees a plug, an unplug or a remote wake up to half a
+  second later, at about 2 DPCs a second when idle, and stays ACTIVE for
+  half a second after its last event; section 7.2.6a has what that
+  changes on every target.
 - **1 ms active.** A request for "as often as the kernel will run the
   timer". Expected to be the clock tick in practice, not 1 ms (section 7).
 
@@ -1339,8 +1347,8 @@ today's code.
 Designed 2026-10-13 for roadmap-hcd task 38.4, before any code; the
 helper half (how the 32-bit image reaches the routine, the helper's
 extension to Windows 2000 and XP and its rename to `xhcihlpr.sys`) is
-design record 18 section 15. Section 7.2.13 lists what is open for the
-owner; nothing below is taken as decided where it names a decision.
+design record 18 section 15. The owner's answers of 2026-10-13 are
+written in (section 7.2.13); T5 is still open.
 
 #### 7.2.1 What is asked, and what is not
 
@@ -1422,10 +1430,10 @@ resolution in effect after the call) are the documented contract.
 
 #### 7.2.4 The switch
 
-`XhciPollFineTimer` (the name is decision T4), a `REG_DWORD` in the
-controller's driver key, read at each start with section 3's values and
-by the same strict reader: 1, absent, unreadable or not a four-byte DWORD
-is on; 0 is off; any other value runs as 1 and the value read is
+`XhciPollFineTimer` (owner, 2026-10-13, decision T4), a `REG_DWORD` in
+the controller's driver key, read at each start with section 3's values
+and by the same strict reader: 1, absent, unreadable or not a four-byte
+DWORD is on; 0 is off; any other value runs as 1 and the value read is
 recorded. Both INFs write it on every install path with
 `FLG_ADDREG_NOCLOBBER`, value 1, beside `XhciPollActiveMs`, so it is where
 a user looks and an update keeps a 0 a user set (task 34.1's rule; the
@@ -1436,9 +1444,11 @@ enable), as the other poll values do.
 #### 7.2.5 Who calls: a timer thread of the controller's
 
 **The call is made on a system thread of its own, one per controller,
-never on the controller thread and never on a system work queue**
-(decision T1). The controller thread decides nothing about the timer; it
-only creates the timer thread when it is first needed.
+never on the controller thread and never on a system work queue** (owner,
+2026-10-13, decision T1: option (b); the roadmap's "from the controller
+thread" reads "from a thread of the controller's"). The controller thread
+decides nothing about the timer; it only creates the timer thread when it
+is first needed.
 
 - **Why not the controller thread.** It is on the completion path of
   power IRPs (section 7.2.2): with selective suspend on it settles child
@@ -1475,9 +1485,9 @@ pure half in `src/xhci_poll.c`):
   known to block in a transition" (`hcd_susp.c`, the completion workers'
   note); Windows 98's S5 reading there does not reach it, since no thread
   is made on 98 or ME. The creation is made from the controller thread's
-  pass, outside the power gate, and nothing waits for it but that pass. A creation that fails is
-  counted, the controller polls at the tick, and no retry is made until
-  the next start.
+  pass, outside the power gate, and nothing waits for it but that pass.
+  A creation that fails is counted, the controller polls at the tick,
+  and no retry is made until the next start.
 - **Joined** by the stop, after the controller thread is joined and
   before the poller is closed, outside the power gate and every lock:
   the stop sets `TmrStop`, wakes it and waits on its thread object, as
@@ -1491,19 +1501,31 @@ pure half in `src/xhci_poll.c`):
 
 #### 7.2.6 The request and its state machine
 
-**The value** (decision T2, recommended): `XhciPollActiveMs` x 10000, in
-100 ns units, the active period in effect - 10000 (1 ms) at the default.
-The returned value is recorded; the kernel's own minimum and rounding are
-its business, and the record does not assume either.
+**The value** (owner, 2026-10-13, decision T2): `XhciPollActiveMs` x
+10000, in 100 ns units, the active period in effect - 10000 (1 ms) at the
+default. The returned value is recorded; the kernel's own minimum and
+rounding are its business, and the record does not assume either.
 
-**The active state** is `XhciPollDecidePeriod`'s ACTIVE (section 6.1),
-and also a promotion whose need is the active period (section 6.2): both
-are taken under the controller lock at DISPATCH_LEVEL. At each, the code
-stamps `TmrLastActive` (the low word of `KeQuerySystemTime`, as the
-poller's clocks) and sets `TmrActiveSeen`; if no request is held or
-asked, it sets the timer thread's event (`KeSetEvent`, callable at
-DISPATCH_LEVEL). That is all the DPC does: it never calls the routine and
-never waits.
+**Held while the poller is ACTIVE, given back when it is not** (owner,
+2026-10-13, decision T3: no hold of its own after the active state ends;
+the idle period governs it). ACTIVE is `XhciPollDecidePeriod`'s state of
+section 6.1, whose clause "an event drained within the last idle period"
+already keeps the poller ACTIVE for `XhciPollIdleMs` after its last event,
+so the idle period is the only linger: with the new 500 ms default
+(section 7.2.6a) a request outlives the last event by half a second, and
+no constant of the timer's adds to it. A PERIODIC decision (only
+interrupt endpoints pending) is not ACTIVE, so it gives the request back
+as an IDLE one does.
+
+**What the DPC does.** `TmrActive` is a flag under the controller lock,
+written at two places, both at DISPATCH_LEVEL: the service DPC's
+decision (`hcdPollDpc`, after `XhciPollDecidePeriod`: 1 for ACTIVE, 0 for
+PERIODIC or IDLE) and a promotion whose need is the active period
+(`HcdPollPromoteLocked`: 1). Whenever a write changes it, the writer sets
+the timer thread's event (`KeSetEvent`, callable at DISPATCH_LEVEL). So
+do the poller's park (the DPC's `ParkPending` decision) and
+`HcdPollRevoke`. That is all: the DPC never calls the routine and never
+waits.
 
 **Wanted** is a pure function (`XhciPollTmrWant`, `test_poll`) over
 values read in one controller-lock hold:
@@ -1514,18 +1536,16 @@ values read in one controller-lock hold:
 - not barred (`TmrBar` 0, below);
 - the service granted (`PollService` 1), and `DevicePower` D0 and not
   `SuspendedInD0`;
-- the last ACTIVE within the linger: `TmrActiveSeen` and less than
-  `XHCI_POLL_TMR_LINGER_MS` since `TmrLastActive`, by signed difference
-  (decision T3: 1000 ms recommended).
+- `TmrActive` 1.
 
 **The step** (`XhciPollTmrStep`, pure): from RELEASED, wanted gives HOLD
 (call `TRUE`, then HELD); from HELD, not wanted gives RELEASE (call
 `FALSE`, then RELEASED); otherwise nothing. There is no third state, so
 two `TRUE`s in a row, or a `FALSE` with nothing held, cannot be produced.
-The thread loops: wait on its event (with a timeout of the linger's
-remainder while HELD, unbounded while RELEASED), read the inputs, step,
-call, record, repeat. On `TmrStop` it steps with "not wanted", calls
-`FALSE` if HELD, and leaves.
+The thread loops: wait on its event (unbounded: every input that can
+change "wanted" signals it), read the inputs, step, call, record, repeat.
+On `TmrStop` it steps with "not wanted", calls `FALSE` if HELD, and
+leaves.
 
 **The bar** is set under the controller lock by the paths that take the
 controller away and must not wait for the call: the device SET_POWER to
@@ -1539,8 +1559,8 @@ once, and the call happens later on the timer thread.
 
 | Point | Site | How it releases |
 |---|---|---|
-| The poller idles | the timer thread | no ACTIVE for the linger: the timeout wakes it, "not wanted" |
-| The poller parked: a recovery, a failed controller, a revocation | the timer thread | `PollService` 0, after the linger, as an idle (a recovery that restores service within the linger keeps it, so a recovery does not toggle the system clock) |
+| The poller leaves ACTIVE (PERIODIC or IDLE), that is, the idle period has passed since its last event with no command, no control, bulk or isochronous TD and no port in reset pending | `hcdPollDpc`'s decision | `TmrActive` 0 and the event; "not wanted" |
+| The poller parked or revoked: a recovery, a failed controller, a containment | the DPC's park, `HcdPollRevoke` | the event; `PollService` 0 is "not wanted". A recovery therefore gives the request back and the next ACTIVE takes it again; recoveries are rare, and a request is never left held behind a terminal failure whose poller no longer decides anything |
 | The controller leaves D0 (device SET_POWER, D1 to D3) | `HcdControllerPower`, under the power gate, beside `HcdPollRevoke` | `TmrBar` 1 and the event; released by the thread at once, asynchronously |
 | The direct transition toward sleep (no device IRP) | `hcdDirectTransitionGated` | the same |
 | S3 and S4 | the system IRP asks for D3 (`hcdSystemDone`), so the row above; where the D-IRP could not be asked, the direct transition | the same |
@@ -1550,11 +1570,88 @@ once, and the call happens later on the timer thread.
 | A start that fails | the timer thread is only created after a start succeeded, by the controller thread | nothing to release |
 | The switch | read at start only | a 0 makes no thread; nothing to release mid-run |
 
+**What "ACTIVE" covers, read plainly.** Every event drained counts,
+including a HID report: a mouse that is moving keeps the poller ACTIVE
+(each report is an event within the idle period) and so keeps the request
+held, until it has been still for the idle period. A mouse at rest with
+its interrupt-IN pending is PERIODIC and holds nothing. That is the
+existing meaning of ACTIVE (section 6.1), which T3 takes as it is; the
+cost is the system's finer clock while any polled device produces
+events.
+
 A request taken just before a bar - the thread read "wanted", the
 power path barred, the thread then called `TRUE` - is released on the
 thread's next pass, which the bar's event guarantees; it is counted
 (`TmrHoldsRaced`) and is a request held for a moment across the start of
 a transition, which the rule allows because nothing waits for it.
+
+#### 7.2.6a The idle period's new default: 500 ms
+
+The owner's T3 answer moves `XhciPollIdleMs`'s default from 50 to 500 ms
+(section 3). The value is read the same way on every target, Windows 98
+SE and ME included, and it matters only to a controller whose delivery is
+poll (the watcher's period is `XHCI_POLL_WATCH_MS`, 100 ms, and does not
+read it). What it changes there:
+
+- **The idle poll.** About 2 timer DPCs a second on an idle bus instead
+  of 20, each a look at one TRB: less idle CPU and fewer wake-ups on
+  every target. (Task 36.13's P1 rows measured the idle guest's CPU at
+  50 ms; leg T8 reads it again at 500.)
+- **Hot-plug and hub changes.** A Port Status Change event on an idle
+  bus waits up to the idle period for a poll, so a plug, an unplug, or a
+  change behind an external hub (whose status endpoint contributes
+  nothing shorter than the idle period, section 6.1) is seen up to 500
+  ms later instead of 50, before the driver's own 100 ms debounce. Visible
+  to a user, but bounded, and only on a polled controller. Enumeration
+  itself is not slowed: a port in reset or enumeration is ACTIVE.
+- **Remote wake and resume.** A device's remote wake reaches the driver
+  as a port change too, so on a polled controller with selective suspend
+  on (`XhciSelectiveSuspend` 1) the driver sees it up to 500 ms later.
+  Whether any device or class driver minds that delay is not read; leg T8
+  reads a remote wake (record 14's test client) under mode 2.
+- **The ACTIVE window.** The poller stays ACTIVE, polling at the active
+  period, for 500 ms after its last event instead of 50 ms: up to 500
+  more polls per burst tail with the finer timer held (one a millisecond),
+  or about 50 at a 10 ms tick without it. That is also how long the
+  finer timer outlives a burst (section 7.2.6).
+- **PERIODIC.** An interrupt endpoint's interval is held between the
+  active and idle periods (section 6.1), so an endpoint polled every 64,
+  128 or 256 ms, which ran at 50 ms before, now runs at its own interval:
+  fewer polls, and no change for anything at 50 ms or less (a mouse at 8
+  ms, a keyboard at 10 ms).
+- **The deadline checks.** Section 6.2's displaced-deadline bound
+  (twice the idle bound) and section 7's discarded-interval bound are
+  stated in terms of the idle bound, 5000 ms, not the default; unchanged.
+- **The bound and the active period.** `XhciPollActiveMs` stays held to
+  the idle period in effect; at 500 nothing a user sets today is newly
+  held. The 5000 ms bound is unchanged.
+
+**An update keeps 50.** Both INFs write `XhciPollIdleMs` with
+`FLG_ADDREG_NOCLOBBER` (section 3, task 34.1's rule), so the `2.4.0.0`
+INFs' 500 reaches only a fresh install; every machine updated from
+`2.0.0.0` to `2.3.1.0` keeps the 50 the earlier INF wrote. Nothing can
+tell that 50 from a 50 a user typed: the INF syntax has no conditional
+write on a value's contents, the registry keeps no author, and 50 was the
+default, so a user who "set" it set the default. Three ways (decision
+T5):
+
+- (a) leave it: updated machines poll at 50, fresh ones at 500; the
+  release notes say how to change it. Task 34.1's rule kept exactly.
+- (b) `DelReg` of the value before the `AddReg` on every NT and 98
+  path: every update writes 500 and loses any value a user set.
+- (c) the driver reads exactly 50 as "the earlier default" and runs 500,
+  recording the value read (50) and a status saying so; a user who wants
+  50 sets 49 or 51, which the release notes say. The INF still writes 500
+  with `FLG_ADDREG_NOCLOBBER`.
+
+**Recommended (c):** it moves every untouched machine, keeps every value
+a user chose other than 50 itself, and costs one comparison in the
+strict reader; 49 and 51 poll indistinguishably from 50. The record
+says nothing more until the owner answers.
+
+Release notes, at the code: the poll values' table gives 500, the
+hot-plug and remote-wake delay on a polled controller, and T5's outcome;
+section 3's table above already says it.
 
 #### 7.2.7 The power-IRP rule, argued
 
@@ -1610,8 +1707,8 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
 - `TmrHeld` (0 or 1), `TmrHolds`, `TmrReleases`, `TmrHoldsRaced`;
 - `TmrDesired` (100 ns), `TmrActualHeld` (what `TRUE` returned),
   `TmrActualReleased` (what `FALSE` returned);
-- `TmrReleaseCause` of the last release: 1 idle, 2 parked, 3 barred (a
-  power transition), 4 the stop;
+- `TmrReleaseCause` of the last release: 1 the poller left ACTIVE, 2
+  parked or revoked, 3 barred (a power transition), 4 the stop;
 - `TmrHeldMs`, the time held in this start, in whole ms, saturating.
 
 The log's notes: `poll.timer.hold` (the value returned) and
@@ -1619,8 +1716,9 @@ The log's notes: `poll.timer.hold` (the value returned) and
 it), written by the timer thread through `XhciLogNote` - a producer, so
 no `DbgPrint` site is added (AGENTS.md); the stop's counter dump
 (`hcdLogCountersLocked`) carries the counters by the same `poll.timer.*`
-names. A hold or release is rare by construction (the linger), so the
-notes cannot flood the ring.
+names. A hold or release comes only at an ACTIVE edge, so the
+notes are bounded by the poller's ACTIVE edges: at most one hold and one
+release per ACTIVE spell, each spell lasting at least the idle period.
 
 **The tick read back.** What shows the effect is the poll interval
 counters (`PollIntervalMinMs` and `PollIntervalMaxMs`, section 8),
@@ -1629,29 +1727,33 @@ said it set, recorded beside them, not instead of them.
 
 #### 7.2.10 Host tests
 
-In `test_poll`: `XhciPollTmrWant` over each input alone and the linger at
-its edges and across the time word's wrap; `XhciPollTmrStep` from both
+In `test_poll`: `XhciPollTmrWant` over each input alone;
+`XhciPollDecidePeriod`'s ACTIVE window at the new idle default (an event
+499 and 500 ms ago); `XhciPollTmrStep` from both
 states, with the invariants checked over random sequences of inputs
 (never `TRUE` while HELD, never `FALSE` while RELEASED, every `TRUE`
-followed by a `FALSE` before the thread's exit); a recovery that restores
-service inside the linger (no call) and outside it (one release, one
-hold); D3 and back (barred release at once, no hold until the next
+followed by a `FALSE` before the thread's exit); a recovery (one
+release at the revocation, one hold at the next ACTIVE); a PERIODIC
+decision after ACTIVE (a release); D3 and back (barred release at once, no hold until the next
 ACTIVE); the stale hold against a bar (one hold, one release, counted
 raced); the stop while HELD, while RELEASED and while a bar is set (one
 release, or none). The channel's vectors for the timer service are
-record 18 section 15.3's.
+record 18 section 15.3's. The idle default's reader: 500 when absent,
+and T5's handling of a 50 once answered.
 
 #### 7.2.11 What changes, for the integrator
 
 `src/hcd_tmr.c` (new: the thread, its creation and join, the routine's
 lookup per image), `src/xhci_poll.c` and `src/xhci_poll.h` (the two pure
-functions, the linger and cause constants), `src/hcd_poll.c` (the stamp
-and the signal in `hcdPollDpc` and `HcdPollPromoteLocked`; the bar's
-clear in `HcdPollGrant`), `src/hcd_power.c` (the bar beside each
+functions, the cause constants, and the idle default 500), `src/hcd_poll.c`
+(`TmrActive` and the signal in `hcdPollDpc` and `HcdPollPromoteLocked`,
+the signal at the park and in `HcdPollRevoke`; the bar's clear in
+`HcdPollGrant`), `src/hcd_power.c` (the bar beside each
 `HcdPollRevoke` of a power path), `src/hcd_ctl.c` (the switch's read, the
 creation in the controller thread's pass, the join in `hcdStopBody`),
 `src/hcd.h` (`hc->Tmr`), `src/xhci_counters.h` and `src/hcd_log.c`
-(the counters and the dump), both INFs (the switch's row on every path),
+(the counters and the dump), both INFs (the switch's row on every path,
+`XhciPollIdleMs` 500 on every path, and T5's outcome),
 `src/sources` (the new object),
 `scripts/import-gate/xhci98-imports-amd64.allow` (the
 `MmGetSystemRoutineAddress` row's `SITES` gains `hcd_tmr.obj`; the 32-bit
@@ -1674,8 +1776,10 @@ ordinary one, as record 18 section 10 asks.
   guest's idle CPU load.
 - **T2, the release at idle.** After T1's copy, one idle minute:
   `TmrHeld` 0, `TmrReleaseCause` 1, `TmrHolds` equal to `TmrReleases`,
-  and a short interval no longer seen once only PERIODIC and IDLE
-  decisions run (a mouse attached reads as PERIODIC, so not held).
+  a short interval no longer seen once only PERIODIC and IDLE decisions
+  run, and the release about the idle period (500 ms) after the copy's
+  last event; then a mouse moved (held while it moves) and left still
+  (released about 500 ms later).
 - **T3, the stop.** A disable while a copy runs, and a surprise
   removal (QEMU `device_del`, as record 18's L3): the stop's dump with
   `TmrHeld` 0 and cause 4, no bugcheck, and the next start's counters
@@ -1695,30 +1799,30 @@ ordinary one, as record 18 section 10 asks.
   file removed: `TmrSource` 3, the tick, nothing else changed; Windows
   98 SE and ME in mode 2: `TmrSource` 0, the release before it's
   readings (record 18 section 15.12's D legs carry the install half).
-- **T7, the switch off** reads exactly as task 36.13 did: no thread
-  (`TmrThread` 0).
+- **T7, the switch off** reads as task 36.13 did but for the idle
+  default: no thread (`TmrThread` 0).
+- **T8, the idle default** on every target in mode 2, 98 SE and ME
+  included: `XhciPollIdleMs` absent (500 in effect) against 50 set by
+  hand - the idle guest's CPU load, a hot-plug's time to a working
+  device, a device behind an external hub plugged in, and a remote wake
+  under `XhciSelectiveSuspend` 1 (record 14's test client); and the
+  update from `2.3.1.0` read for T5's outcome (the value read and the
+  value in effect).
 
-#### 7.2.13 Open for the owner
+#### 7.2.13 The owner's decisions (2026-10-13)
 
-- **T1.** Who calls `ExSetTimerResolution`: (a) the controller thread,
-  as roadmap 38.4 says, or (b) a timer thread per controller, created by
-  the controller thread and joined at the stop (section 7.2.5).
-  Recommended (b): with selective suspend on, the controller thread
-  settles child D-IRPs, so a call blocked on it breaks the power-IRP
-  rule; (a) would need the timer off whenever `XhciSelectiveSuspend` is
-  1. The roadmap's "from the controller thread" would read "from a thread
-  of the controller's".
-- **T2.** The value asked: (a) the active period in effect, x 10000
-  (1 ms at the default), (b) 1 ms always, or (c) the finest the system
-  allows. Recommended (a): it follows the one value a user already sets
-  for polling, and is (b) at the default.
-- **T3.** When a request is given back after the active state ends: (a)
-  at the first decision that is not ACTIVE (ACTIVE already lasts one idle
-  period after the last event, section 6.1), or (b) after a further fixed
-  linger of 1000 ms. Recommended (b): bursty storage would otherwise move
-  the whole system's clock up and down several times a second.
-- **T4.** The switch's name: `XhciPollFineTimer` (1 on, the default; 0
-  off), or another. Recommended as written.
+- **T1: (b)**, a timer thread per controller, created by the controller
+  thread and joined at the stop (section 7.2.5).
+- **T2: (a)**, `XhciPollActiveMs` x 10000 (section 7.2.6).
+- **T3:** the request is given back when the poller goes idle, with no
+  hold of its own: the idle period governs it (section 7.2.6); and
+  `XhciPollIdleMs`'s default becomes 500 ms (sections 3 and 7.2.6a).
+- **T4:** `XhciPollFineTimer`, 1 by default (section 7.2.4).
+
+Open:
+
+- **T5.** The update's 50 (section 7.2.6a): (a) kept, (b) reset by
+  `DelReg`, or (c) read as the earlier default. Recommended (c).
 
 The helper's decisions (H1 to H5) are record 18 section 15.13's.
 
@@ -2045,7 +2149,7 @@ leg above does not depend on one.
 Taken by the owner on 2026-10-05, each from options with a recommendation:
 
 1. The values and defaults: `XhciPollIdleMs` 50, `XhciPollActiveMs` 1,
-   neither 0.
+   neither 0. (The idle default became 500 on 2026-10-13, decision 9.)
 2. The upper bound (section 3.2): 5000 ms for the idle period, the active
    period held to it (1000 ms was recommended; no bound was the other
    option).
@@ -2074,9 +2178,14 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    ME, 2000 and XP, 32- and 64-bit, mode 3 fails the start. 0 and 2 are
    unchanged, and 4 and above still run as 0 (revision 7; task 36.53).
 
-**Open (revision 8):** section 7.2.13's T1 to T4 and design record 18
-section 15.13's H1 to H5, put to the owner on 2026-10-13 before any
-review round; written here once answered.
+9. (2026-10-13, task 38.4; revision 8) A finer system timer while
+   polling, on Windows 2000 and later (section 7.2): T1, the call on a
+   timer thread of each controller's; T2, the active period x 10000 asked
+   for; T3, held while the poller is ACTIVE and given back when it is
+   not, the idle period the only linger, and `XhciPollIdleMs`'s default
+   500 ms (amending decision 1's 50); T4, `XhciPollFineTimer`, on by
+   default. The helper's H1 to H5 are design record 18 section 15.13's.
+   Open: T5, the update's 50 (section 7.2.6a).
 
 ## 13. The reviews
 
@@ -2205,7 +2314,9 @@ for all three of its proofs (section 4.2). Review thread
 
 Drafted 2026-10-13 and put to the owner for section 7.2.13's decisions
 before any review round (the owner's rule for Phase 38's design tasks:
-decisions first, review after). The review is recorded here when run.
+decisions first, review after); the answers written in the same day,
+with the idle default's change (sections 3 and 7.2.6a) and the open T5.
+The review is recorded here when run.
 
 ## 14. What changes in the documents
 
