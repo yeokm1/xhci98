@@ -3893,12 +3893,15 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
      * last event is remembered for every queue, the scope gating only the
      * drop.
      */
+    /* The pointer as the engine reads it, its reserved low bits dropped
+     * (xhciXferEventPointer, which counts them once, below), so the reuse
+     * check in xhciXferForgetMidTdTails finds it (review round 2). */
     lastPA = queue->IsoLastEventPA;
     lastCode = queue->IsoLastEventCode;
-    queue->IsoLastEventPA = eventTrbPA;
+    queue->IsoLastEventPA = eventTrbPA & ~0x0FUL;
     queue->IsoLastEventCode = completionCode;
     if (queue->IsoSpuriousScope && completionCode == XHCI_CC_SUCCESS &&
-        eventTrbPA != 0 && eventTrbPA == lastPA &&
+        (eventTrbPA & ~0x0FUL) != 0 && (eventTrbPA & ~0x0FUL) == lastPA &&
         (lastCode == XHCI_CC_USB_TRANSACTION_ERROR ||
          lastCode == XHCI_CC_BABBLE ||
          lastCode == XHCI_CC_ISOCH_BUFFER_OVERRUN)) {

@@ -125,6 +125,7 @@ VOID HcdQuirkAddDevice(PHCD_CONTROLLER hc)
     hc->QuirkIdentityValid = 0;
     hc->MsiAvoidCacheRaw = 0;
     hc->MsiAvoidCacheFound = XHCI_QK_FOUND_NONE;
+    hc->MsiAvoidFilterStrips = 0;
     if (!HcdMsiSystem()) {
         return;
     }
@@ -210,6 +211,14 @@ ULONG HcdQuirkMsiAvoid(PHCD_CONTROLLER hc, ULONG interruptMode)
         return 0;
     }
     XhciQuirkSetEffective(st, XHCI_QK_MSI_AVOID, matched, avoid, 0);
+    /* The requirements filter that ran before this start stripped the
+     * messages at the quirk's asking: the quirk acted there (review round
+     * 2), so the line this start was given is its doing. */
+    if (hc->MsiAvoidFilterStrips != 0) {
+        st->MsiRefused += hc->MsiAvoidFilterStrips;
+        XhciQuirkOutcome(st, XHCI_QK_MSI_AVOID, XHCI_QK_OUT_DONE,
+                         st->Why[XHCI_QK_MSI_AVOID]);
+    }
     return (interruptMode == XHCI_POLL_MODE_AUTO) ? avoid : 0UL;
 }
 

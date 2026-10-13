@@ -918,6 +918,7 @@ static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     PXHCI_EXTENSION ext;
     ULONG capped;
     ULONG ti;
+    ULONG tiCapped;
 
     ext = &hc->Hc;
     if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT) {
@@ -933,18 +934,28 @@ static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                   ? 1UL
                                   : 0UL,
                               capped);
-    if (ti != capped) {
-        ext->Quirk.TiCapped++;
-        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_TI_CAP, XHCI_QK_OUT_DONE,
-                         XHCI_QK_WHY_NONE);
-        capped = ti;
-    }
+    tiCapped = (ti != capped) ? 1UL : 0UL;
+    capped = ti;
     if (capped == ep->Interval) {
         return 1;
     }
     ep->Interval = capped;
-    ep->Capped = 1;
+    /* Bit 1 marks XhciTiIntervalCap's part, counted with CapIntervals once
+     * the Configure Endpoint that opens it succeeds (hcdCfgQuirkCapped). */
+    ep->Capped = tiCapped ? 3UL : 1UL;
     return 0;
+}
+
+/* 38.10: XhciTiIntervalCap's count and outcome for an endpoint a
+ * successful Configure Endpoint opened (review round 2: not before). */
+static VOID hcdCfgQuirkCapped(PHCD_CONTROLLER hc, const XHCI_PIPE_EP *ep)
+{
+    if ((ep->Capped & 2UL) == 0) {
+        return;
+    }
+    hc->Hc.Quirk.TiCapped++;
+    XhciQuirkOutcome(&hc->Hc.Quirk, XHCI_QK_TI_CAP, XHCI_QK_OUT_DONE,
+                     XHCI_QK_WHY_NONE);
 }
 
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
@@ -1036,6 +1047,7 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (add[dci] != NULL && add[dci]->Ep.Capped &&
                 code == XHCI_CC_SUCCESS && opening) {
                 ext->Tol.Stats.CapIntervals++;
+                hcdCfgQuirkCapped(hc, &add[dci]->Ep);
             }
             if (add[dci] == NULL || !add[dci]->Ep.FastPoll) {
                 continue;
@@ -1484,6 +1496,7 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     if (ep->Capped) {
         ext->Tol.Stats.CapIntervals++;
+        hcdCfgQuirkCapped(hc, ep);
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Pipes[ep->Dci] = pipe;

@@ -2016,6 +2016,24 @@ static void spurious_not_after_reuse(void)
     CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "not dropped");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the request ends");
 
+    /* An error whose pointer carried reserved low bits is remembered as
+     * the engine reads it, so its TRB re-let forgets it too. */
+    iso_fixture_init(&fix, 8);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 1, 192), XHCI_XFER_OK, "at 0");
+    CHECK_EQ(XhciXferIsoEvent(&fix.queue, &fix.ring, ISO_FIX_SLOT,
+                              ISO_FIX_DCI, RING_PA | 1UL,
+                              event_dw2(XHCI_CC_BABBLE, 0),
+                              event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), &result),
+             XHCI_XFER_OK, "a Babble with a low bit set");
+    CHECK_EQ(fix.queue.IsoLastEventPA, RING_PA, "remembered without it");
+    CHECK_EQ(XhciXferIsoEvent(&fix.queue, &fix.ring, ISO_FIX_SLOT,
+                              ISO_FIX_DCI, RING_PA | 1UL,
+                              event_dw2(XHCI_CC_SUCCESS, 0),
+                              event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), &result),
+             XHCI_XFER_OK, "its Success, the same low bit");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 1UL, "dropped as the same TRB");
+
     /* A restart forgets it too. */
     fix.queue.IsoLastEventPA = RING_PA;
     fix.queue.IsoLastEventCode = XHCI_CC_BABBLE;

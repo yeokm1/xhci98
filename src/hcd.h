@@ -1758,6 +1758,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG QuirkIdentityValid;
     ULONG MsiAvoidCacheRaw;
     ULONG MsiAvoidCacheFound;       /* XHCI_QK_FOUND_*                     */
+    ULONG MsiAvoidFilterStrips;     /* message descriptors the last filter
+                                     * stripped at XhciMsiAvoid's asking  */
     /* The shutdown's log flush (section 6.4): the D3 path advances Wanted
      * and waits, bounded, for the thread to publish it as Acked after an
      * HcdLogFlush it began after capturing it; Sink is whether that flush
