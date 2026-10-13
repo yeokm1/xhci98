@@ -384,103 +384,11 @@ try {
     # one command line the task fixes; no batch names a drive path or reads
     # a percent variable (COMMAND.COM on 98 SE and ME has no %DATE% or
     # %TIME%, and cmd.exe's follow the locale, which is why the tools build
-    # the names); and SNAPGET.BAT never turns the channel off.
+    # the names); and SNAPGET.BAT never turns the channel off. The specs and
+    # Get-ReportBatchFaults are package-common.ps1's, the one definition
+    # make-release.ps1 also holds staged and published batches to.
     Write-Step "SNAPON, SNAPGET, SNAPOFF and QUALREP are COMMAND.COM-safe"
-    $reportBatchSpecs = @(
-        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-verbosity 2"; Names = @() },
-        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report";      Names = @(".DEV", ".TXT") },
-        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @() },
-        @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
-    )
-
-    function Get-ReportBatchFaults {
-        param([string]$Text, [hashtable]$Spec)
-        $faults = @()
-        if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
-        if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
-        if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
-        $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
-        if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
-        if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
-        $code = @()
-        for ($i = 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
-        }
-        $osLine = -1
-        $ntLine = -1
-        if ($Spec.Win) {
-            $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
-            for ($k = 0; $k -lt $split.Count; $k++) {
-                if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
-                    $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
-                }
-            }
-            if ($code.Count -gt 0) { $osLine = $code[0] }
-            if ($code.Count -gt 3) { $ntLine = $code[3] }
-        }
-        $toolRe = '(?i:' + $Spec.Tool + '(\.exe)?)'
-        $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
-                     ('^if not exist ' + $toolRe + ' goto [a-z]+$'), '^if errorlevel [0-9] goto [a-z]+$',
-                     ('^' + $toolRe + ' [-a-z0-9 ]+( --done-flag [A-Z0-9]+\.FLG)?$'))
-        if ($Spec.Win) { $allowed += '^if not "%OS%"=="Windows_NT" goto [a-z]+$' }
-        # A completion flag, where the spec names one (QUALREP.BAT's, through
-        # XHCIQUAL's --done-flag): tested, and deleted - that file alone.
-        $flagArgs = ""
-        if ($Spec.ContainsKey("Flag")) {
-            $fl = [regex]::Escape($Spec.Flag)
-            $allowed += @(('^if (not )?exist ' + $fl + ' goto [a-z]+$'), ('^if exist ' + $fl + ' del ' + $fl + '$'), ('^del ' + $fl + '$'))
-            $flagArgs = '( --done-flag ' + $fl + ')?'
-        }
-        $labels = @{}
-        $gotos = @()
-        $runs = @()
-        for ($i = 1; $i -lt $lines.Count; $i++) {
-            $line = $lines[$i]
-            if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
-            $isSplit = ($i -eq $osLine -or $i -eq $ntLine)
-            if (-not $isSplit) {
-                $ok = $false
-                foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
-                if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
-            }
-            $isText = ($line -cmatch '^(rem|echo)\b')
-            if ($isText -and $line -match '[<>|&%^]') {
-                $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
-            }
-            if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
-            if ($line -match '%(DATE|TIME)%') { $faults += "line $($i + 1) reads %DATE% or %TIME%, which COMMAND.COM on 98 SE and ME lacks: $line" }
-            if (-not $isSplit -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
-                $faults += "line $($i + 1) reads a percent variable: $line"
-            }
-            if (-not $isSplit -and -not $isText -and $line -match '[A-Za-z]:\\|^cd\b|^chdir\b') {
-                $faults += "line $($i + 1) names a drive path or changes directory, so its output would not land in the current directory: $line"
-            }
-            if ($line -cmatch '^:([a-z]+)$') {
-                if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
-                $labels[$Matches[1]] = $i
-            }
-            if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
-            if ($line -match ('^' + $toolRe + '( |$)')) { $runs += $line }
-        }
-        foreach ($g in $gotos) {
-            if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
-            if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
-        }
-        $want = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + $flagArgs + '$') })
-        if ($runs.Count -ne 1 -or $want.Count -ne 1) {
-            $faults += ("it does not run {0} exactly once, as '{0} {1}' (it runs: {2})" -f $Spec.Tool, $Spec.Args, ($runs -join "; "))
-        }
-        if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
-            $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"
-        }
-        $echoes = (@($lines | Where-Object { $_ -cmatch '^echo ' }) -join "`n")
-        if ($Spec.Names.Count -gt 0 -and -not $echoes.ToUpperInvariant().Contains("ATTACH")) { $faults += "no echo line says what to attach" }
-        foreach ($ext in $Spec.Names) {
-            if (-not $echoes.ToUpperInvariant().Contains($ext)) { $faults += "no echo line names the $ext file it writes" }
-        }
-        if ($Spec.Win -and -not $Text.Contains('Run as administrator')) { $faults += "it no longer says 'Run as administrator' for Vista and 7" }
-        return $faults
-    }
+    $reportBatchSpecs = Get-ReportBatchSpecs
 
     foreach ($spec in $reportBatchSpecs) {
         $batSrc = Join-Path $repo ($spec.Dir + "\" + $spec.Name)
@@ -1240,9 +1148,10 @@ try {
                     -Encoding ASCII -Value "stand-in qualifier"
         # And its report batch beside it (roadmap-hcd task 38.1): the upload
         # assembly refuses a tool directory without its batches
-        # (Assert-ReportBatchLayout).
-        Set-Content -LiteralPath (Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT") `
-                    -Encoding ASCII -Value "stand-in report batch"
+        # (Assert-ReportBatchLayout), and one whose text the shared checker
+        # refuses (Assert-ReportBatchContent), so it is the repository's own.
+        Copy-Item -LiteralPath (Join-Path $repo "xhciqual\QUALREP.BAT") `
+                  -Destination (Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT") -Force
         # The port switchover's scripts in tools\portsw\, as every cut publishes
         # them since roadmap-hcd tasks 37.5 and 38.10: the upload assembly
         # refuses a tree of this version without them (Assert-PortSwitchLayout).
@@ -1343,6 +1252,31 @@ try {
         }
         Assert-True (Test-Path -LiteralPath $uploadZip) "no upload archive was written when assembled without a package root."
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the run created the package root it was told did not exist."
+
+        # --- a malformed report batch in the published tree (task 38.1) -----
+        #
+        # The layout checks see names and places only, so a QUALREP.BAT in
+        # the right place that the shared checker refuses (here: LF endings,
+        # which COMMAND.COM misreads) must stop the assembly before anything
+        # is archived (Codex review of 38.1, round 1).
+        Write-Step "the upload set refuses a malformed report batch in the published tree"
+        $qrPub = Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT"
+        $qrGood = [System.IO.File]::ReadAllBytes($qrPub)
+        $qrBad = [System.Text.Encoding]::ASCII.GetString($qrGood).Replace("`r`n", "`n")
+        [System.IO.File]::WriteAllBytes($qrPub, [System.Text.Encoding]::ASCII.GetBytes($qrBad))
+        Remove-Item -LiteralPath $uploadDir -Recurse -Force
+        Remove-Item -LiteralPath $uploadZip -Force
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published QUALREP.BAT with LF endings was assembled into the asset."
+        Assert-True ($r.Output -match "QUALREP\.BAT" -and $r.Output -match "CRLF") `
+            ("expected the refusal to name QUALREP.BAT and its line endings. Output:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a malformed report batch."
+        [System.IO.File]::WriteAllBytes($qrPub, $qrGood)
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not re-assembled once QUALREP.BAT was restored:`n" + $r.Output)
 
         # --- the UAS class driver's pair (roadmap task 31-A.2) ---------------
         #
@@ -2875,7 +2809,11 @@ try {
         @{ Find = 'Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release ''$destRoot''"';
            Why  = "a cut no longer holds its staged tree to the report batches' layout" },
         @{ Find = 'Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
-           Why  = "the upload assembly no longer holds the tree to the report batches' layout its version was published with" }
+           Why  = "the upload assembly no longer holds the tree to the report batches' layout its version was published with" },
+        @{ Find = 'Assert-ReportBatchContent -Root $destRoot -Batches $reportBatches -What "the staged release ''$destRoot''" -Reference $repo';
+           Why  = "a cut no longer holds the batches it staged to the shared checker and the repository's own bytes" },
+        @{ Find = 'Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''"';
+           Why  = "the upload assembly no longer holds the batches it archives to the shared checker" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + " (roadmap-hcd task 38.1).")
@@ -2885,16 +2823,23 @@ try {
     $rbAsideAt = $releaserText.IndexOf('Move-Item -LiteralPath $finalRoot -Destination $asideRoot')
     Assert-True ($rbAt -ge 0 -and $rbSwapAt -gt $rbAt -and $rbAsideAt -gt $rbAt) `
         "make-release.ps1 holds the staged release to the report batches' layout after the -Force aside or the publish swap, or not at all (roadmap-hcd task 38.1)."
+    $rbcAt = $releaserText.IndexOf('Assert-ReportBatchContent -Root $destRoot')
+    Assert-True ($rbcAt -ge 0 -and $rbSwapAt -gt $rbcAt -and $rbAsideAt -gt $rbcAt) `
+        "make-release.ps1 holds the staged report batches' content after the -Force aside or the publish swap, or not at all (roadmap-hcd task 38.1)."
+    $rbcUpAt = $releaserText.IndexOf('Assert-ReportBatchContent -Root $uploadRoot')
+    $rbcZipAt = $releaserText.IndexOf('[System.IO.Compression.ZipFile]', [Math]::Max($rbcUpAt, 0))
+    Assert-True ($rbcUpAt -ge 0 -and $rbcZipAt -gt $rbcUpAt) `
+        "make-release.ps1 checks the upload set's report batches after archiving them, or not at all (roadmap-hcd task 38.1)."
     $rbTexts = @()
     $rbMap = [regex]::Match($releaserText, '(?ms)^\$reportBatches = @\{.*?^\}')
     Assert-True $rbMap.Success "make-release.ps1 no longer sets `$reportBatches at its top level (roadmap-hcd task 38.1)."
     if ($rbMap.Success) { $rbTexts += $rbMap.Value }
-    foreach ($fnName in @("Publish-ReportBatches", "Assert-ReportBatchLayout")) {
+    foreach ($fnName in @("Publish-ReportBatches", "Assert-ReportBatchLayout", "Assert-ReportBatchContent")) {
         $fnAt = $releaserText.IndexOf("function $fnName")
         Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.1)."
         if ($fnAt -ge 0) { $rbTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
     }
-    if ($rbTexts.Count -eq 3) {
+    if ($rbTexts.Count -eq 4) {
         foreach ($rbText in $rbTexts) { Invoke-Expression $rbText }
         $wantMap = @{ "xhcisnap" = @("SNAPGET.BAT", "SNAPOFF.BAT", "SNAPON.BAT"); "xhciqual" = @("QUALREP.BAT") }
         Assert-True ((@($reportBatches.Keys | Sort-Object) -join ",") -eq "xhciqual,xhcisnap") "make-release.ps1's `$reportBatches no longer names exactly the qualifier and XHCISNAP."
@@ -3001,6 +2946,69 @@ try {
             $refused = $null
             try { Assert-ReportBatchLayout -Root $c.Tree -Batches $reportBatches -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
             Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-ReportBatchLayout -PublishedVersion '{0}' on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+        }
+
+        # **What the staged batches say, EXECUTED** (Codex review of 38.1,
+        # round 1): the layout checks above pass a batch by name and place
+        # alone, so Assert-ReportBatchContent holds each one in the tree to
+        # the shared checker - for the cut, whose -SnapToolDir and
+        # -QualtoolDir may hold anything, and for the upload assembly,
+        # including -UploadSetOnly's tree - and, with -Reference (the cut),
+        # to the repository's own bytes. Here the reference is a stand-in
+        # repository holding the fixtures, as the tree holds them.
+        Write-Step "a staged or published report batch is held to the shared checker"
+        $rbRef = Join-Path $rbRoot "ref"
+        foreach ($spec in $reportBatchSpecs) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbRef $spec.Dir) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $rbSrc $spec.Name) -Destination (Join-Path $rbRef ($spec.Dir + "\" + $spec.Name))
+        }
+        foreach ($ref in @("", $rbRef)) {
+            $refused = $null
+            try { Assert-ReportBatchContent -Root $rbCut -Batches $reportBatches -What "fixture cut" -Reference $ref } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ReportBatchContent -Reference '$ref' refused the good fixture batches: $refused"
+        }
+        foreach ($tree in @($rbSkip, $rbLegacy)) {
+            $refused = $null
+            try { Assert-ReportBatchContent -Root $tree -Batches $reportBatches -What "fixture" -Reference $rbRef } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ReportBatchContent refused '$(Split-Path -Leaf $tree)', which has no batch of a skipped tool or no tools\ at all: $refused"
+        }
+        # Each malformed one refused in both modes, naming its file; the
+        # stale one (passes the checker, but not the repository's bytes)
+        # refused by the cut alone, and in a tool's directory as a
+        # -SnapToolDir or -QualtoolDir would put it there.
+        $rbContent = @(
+            @{ Name = "lf-snapget";   File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("`r`n", "`n") };                         Stale = $false },
+            @{ Name = "bom-snapon";   File = "tools\xhcisnap\SNAPON.BAT";  Edit = { param($s) ([string][char]0xEF + [char]0xBB + [char]0xBF) + $s }; Stale = $false },
+            @{ Name = "disable-get";  File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("XHCISNAP -report`r`n", "XHCISNAP -report`r`nXHCISNAP -disable`r`n") }; Stale = $false },
+            @{ Name = "nopause-off";  File = "tools\xhcisnap\SNAPOFF.BAT"; Edit = { param($s) $s.Replace("echo.`r`npause`r`n", "echo.`r`n") };      Stale = $false },
+            @{ Name = "active-qual";  File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace("XHCIQUAL --probe-only --no-page --log-stamp", "XHCIQUAL --no-page --log-stamp") }; Stale = $false },
+            @{ Name = "cdrive-qual";  File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace("XHCIQUAL --probe-only --no-page --log-stamp`r`n", "XHCIQUAL --probe-only --no-page --log C:\PROBE.LOG`r`n") }; Stale = $false },
+            @{ Name = "stale-snapget"; File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace(":end`r`n", ":end`r`necho An older wording.`r`n") }; Stale = $true },
+            @{ Name = "stale-qual";   File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace(":end`r`n", ":end`r`necho An older wording.`r`n") }; Stale = $true }
+        )
+        foreach ($c in $rbContent) {
+            $t = Join-Path $rbRoot ("content-" + $c.Name)
+            Copy-Item -LiteralPath $rbCut -Destination $t -Recurse
+            $p = Join-Path $t $c.File
+            $before = [System.IO.File]::ReadAllText($p)
+            $after = [string](& $c.Edit $before)
+            Assert-True ($after -cne $before) "the report-batch content control '$($c.Name)' did not change its fixture, so it controls nothing."
+            [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::GetEncoding(28591).GetBytes($after))
+            $says = [regex]::Escape((Split-Path -Leaf $c.File))
+            foreach ($ref in @("", $rbRef)) {
+                $refused = $null
+                try { Assert-ReportBatchContent -Root $t -Batches $reportBatches -What "fixture $($c.Name)" -Reference $ref } catch { $refused = $_.Exception.Message }
+                if ($c.Stale -and $ref -eq "") {
+                    Assert-True ($null -eq $refused) "Assert-ReportBatchContent (upload assembly) refused the '$($c.Name)' fixture, which the checker passes: $refused"
+                } else {
+                    Assert-True ($null -ne $refused -and $refused -match $says) ("Assert-ReportBatchContent -Reference '{0}' on the '{1}' fixture: expected a refusal naming {2}, got: {3}" -f $ref, $c.Name, (Split-Path -Leaf $c.File), $refused)
+                }
+            }
+            if ($c.Stale) {
+                $refused = $null
+                try { Assert-ReportBatchContent -Root $t -Batches $reportBatches -What "fixture" -Reference $rbRef } catch { $refused = $_.Exception.Message }
+                Assert-True ($null -ne $refused -and $refused -match "byte for byte") "Assert-ReportBatchContent did not call the '$($c.Name)' fixture a stale copy: $refused"
+            }
         }
     }
 

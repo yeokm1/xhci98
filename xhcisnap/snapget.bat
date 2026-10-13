@@ -23,7 +23,8 @@ echo 2000 and XP: run it as an administrator. Vista and 7: right-click it
 echo and choose Run as administrator.
 if not exist XHCISNAP.EXE goto nofile
 XHCISNAP -report
-if errorlevel 8 goto old
+if errorlevel 9 goto old
+if errorlevel 8 goto clash
 if errorlevel 7 goto clock
 if errorlevel 6 goto full
 if errorlevel 5 goto devbad
@@ -54,6 +55,12 @@ goto attach
 echo.
 echo All 26 names for this minute are taken here. Wait a minute and run
 echo SNAPGET.BAT again; nothing was written or overwritten.
+goto end
+:clash
+echo.
+echo Another run made a file of this set while it ran. That file was left
+echo as it was and no dump was kept under this name. Run SNAPGET.BAT again:
+echo it takes the next letter.
 goto end
 :clock
 echo.

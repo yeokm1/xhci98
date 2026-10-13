@@ -537,3 +537,113 @@ function Get-TestSignCertificate {
         $cert.Reset()
     }
 }
+
+# The field reports' batch files (roadmap-hcd task 38.1): SNAPON.BAT,
+# SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE, run by COMMAND.COM on
+# Windows 98 SE and ME and by cmd.exe from 2000 to 7, so they carry
+# portsw-on.bat's pinned split; QUALREP.BAT beside XHCIQUAL.EXE, run by
+# MS-DOS's COMMAND.COM alone, so it carries none. One definition of what each
+# must say, read by test-package.ps1 against the repository's sources and by
+# make-release.ps1 against the batches a cut stages and an upload set
+# assembles (Assert-ReportBatchContent), so a stale or malformed batch in a
+# -SnapToolDir, a -QualtoolDir or a published tree is refused as the
+# repository's own would be. Name is the source name in the tool's own
+# directory (Dir); make-release.ps1's $reportBatches maps it to the
+# published 8.3 name.
+function Get-ReportBatchSpecs {
+    return @(
+        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-verbosity 2"; Names = @() },
+        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report";      Names = @(".DEV", ".TXT") },
+        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @() },
+        @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
+    )
+}
+
+function Get-ReportBatchFaults {
+    param([string]$Text, [hashtable]$Spec)
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+    $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+    if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+    if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+    $code = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+    }
+    $osLine = -1
+    $ntLine = -1
+    if ($Spec.Win) {
+        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+        for ($k = 0; $k -lt $split.Count; $k++) {
+            if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
+                $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+            }
+        }
+        if ($code.Count -gt 0) { $osLine = $code[0] }
+        if ($code.Count -gt 3) { $ntLine = $code[3] }
+    }
+    $toolRe = '(?i:' + $Spec.Tool + '(\.exe)?)'
+    $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                 ('^if not exist ' + $toolRe + ' goto [a-z]+$'), '^if errorlevel [0-9] goto [a-z]+$',
+                 ('^' + $toolRe + ' [-a-z0-9 ]+( --done-flag [A-Z0-9]+\.FLG)?$'))
+    if ($Spec.Win) { $allowed += '^if not "%OS%"=="Windows_NT" goto [a-z]+$' }
+    # A completion flag, where the spec names one (QUALREP.BAT's, through
+    # XHCIQUAL's --done-flag): tested, and deleted - that file alone.
+    $flagArgs = ""
+    if ($Spec.ContainsKey("Flag")) {
+        $fl = [regex]::Escape($Spec.Flag)
+        $allowed += @(('^if (not )?exist ' + $fl + ' goto [a-z]+$'), ('^if exist ' + $fl + ' del ' + $fl + '$'), ('^del ' + $fl + '$'))
+        $flagArgs = '( --done-flag ' + $fl + ')?'
+    }
+    $labels = @{}
+    $gotos = @()
+    $runs = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+        $isSplit = ($i -eq $osLine -or $i -eq $ntLine)
+        if (-not $isSplit) {
+            $ok = $false
+            foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+            if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+        }
+        $isText = ($line -cmatch '^(rem|echo)\b')
+        if ($isText -and $line -match '[<>|&%^]') {
+            $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+        }
+        if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+        if ($line -match '%(DATE|TIME)%') { $faults += "line $($i + 1) reads %DATE% or %TIME%, which COMMAND.COM on 98 SE and ME lacks: $line" }
+        if (-not $isSplit -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
+            $faults += "line $($i + 1) reads a percent variable: $line"
+        }
+        if (-not $isSplit -and -not $isText -and $line -match '[A-Za-z]:\\|^cd\b|^chdir\b') {
+            $faults += "line $($i + 1) names a drive path or changes directory, so its output would not land in the current directory: $line"
+        }
+        if ($line -cmatch '^:([a-z]+)$') {
+            if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+            $labels[$Matches[1]] = $i
+        }
+        if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+        if ($line -match ('^' + $toolRe + '( |$)')) { $runs += $line }
+    }
+    foreach ($g in $gotos) {
+        if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+        if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+    }
+    $want = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + $flagArgs + '$') })
+    if ($runs.Count -ne 1 -or $want.Count -ne 1) {
+        $faults += ("it does not run {0} exactly once, as '{0} {1}' (it runs: {2})" -f $Spec.Tool, $Spec.Args, ($runs -join "; "))
+    }
+    if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
+        $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"
+    }
+    $echoes = (@($lines | Where-Object { $_ -cmatch '^echo ' }) -join "`n")
+    if ($Spec.Names.Count -gt 0 -and -not $echoes.ToUpperInvariant().Contains("ATTACH")) { $faults += "no echo line says what to attach" }
+    foreach ($ext in $Spec.Names) {
+        if (-not $echoes.ToUpperInvariant().Contains($ext)) { $faults += "no echo line names the $ext file it writes" }
+    }
+    if ($Spec.Win -and -not $Text.Contains('Run as administrator')) { $faults += "it no longer says 'Run as administrator' for Vista and 7" }
+    return $faults
+}

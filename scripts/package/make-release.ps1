@@ -63,8 +63,12 @@ the DOS clock), and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside
 left on, the channel off). They are what a field report asks its reporter to
 run. They are copied from `xhciqual\` and `xhcisnap\`, published under 8.3
 upper-case names, and held to their tools' directories alone
-(`Assert-ReportBatchLayout`); a version published before 2.4.0.0 has none. Their
-text is gated by `test-package.ps1` as `portsw-on.bat`'s is.
+(`Assert-ReportBatchLayout`); a version published before 2.4.0.0 has none. What
+they say is held to one checker, `Get-ReportBatchFaults` in `package-common.ps1`:
+by `test-package.ps1` on the repository's sources, and here on the batches
+actually staged (which must also be the repository's bytes) and on those in the
+tree an upload set is assembled from, `-UploadSetOnly`'s included
+(`Assert-ReportBatchContent`).
 
 **Both published readmes document the whole command line even so**, split into
 read-only options and active ones: the qualifier's own `readme.txt` in a
@@ -799,6 +803,57 @@ function Assert-ReportBatchLayout {
     if ($faults.Count -gt 0) {
         throw ("{0} does not carry the report batches {1} (roadmap-hcd task 38.1):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Assert-ReportBatchContent {
+    # What the report batches in a version tree SAY (roadmap-hcd task 38.1),
+    # where Assert-ReportBatchLayout checks only where they are: each one in
+    # a tools\<tool>\ directory that is there is read as bytes and held to
+    # package-common.ps1's Get-ReportBatchFaults, the one definition
+    # test-package.ps1 holds the repository's sources to. So a stale or
+    # malformed batch that came in with -SnapToolDir or -QualtoolDir, or that
+    # sits in the published tree -UploadSetOnly re-assembles, is refused
+    # rather than published or archived (Codex review of 38.1, round 1).
+    #
+    # With -Reference (the cut: the repository root) each one must also be
+    # the repository's own tracked source byte for byte, so a tool directory
+    # holding an older copy that still passes the checker cannot publish it.
+    # The upload assembly passes none: the tree it reads was cut from the
+    # sources of its own commit. Run it after Assert-ReportBatchLayout, which
+    # reports a missing batch; a tree without tools\ has none to read.
+    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$Reference = "")
+    $tools = Join-Path (Get-Item -LiteralPath $Root).FullName "tools"
+    if (-not (Test-Path -LiteralPath $tools -PathType Container)) { return }
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $faults = @()
+    foreach ($spec in @(Get-ReportBatchSpecs)) {
+        $dir = Join-Path $tools $spec.Dir
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        $pub = $Batches[$spec.Dir][$spec.Name]
+        $path = Join-Path $dir $pub
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        # Bytes, then Latin-1, so a BOM or UTF-16 is seen rather than decoded.
+        foreach ($f in @(Get-ReportBatchFaults -Text $latin1.GetString($bytes) -Spec $spec)) {
+            $faults += "tools\$($spec.Dir)\${pub}: $f"
+        }
+        if ($Reference -ne "") {
+            $refPath = Join-Path $Reference ($spec.Dir + "\" + $spec.Name)
+            if (-not (Test-Path -LiteralPath $refPath -PathType Leaf)) {
+                $faults += "tools\$($spec.Dir)\${pub}: the repository has no $($spec.Dir)\$($spec.Name) to compare it with"
+            } else {
+                $refBytes = [System.IO.File]::ReadAllBytes($refPath)
+                if ($bytes.Length -ne $refBytes.Length -or
+                    [System.BitConverter]::ToString($bytes) -cne [System.BitConverter]::ToString($refBytes)) {
+                    $faults += "tools\$($spec.Dir)\${pub} is not the repository's $($spec.Dir)\$($spec.Name) byte for byte (a stale copy in the tool directory?)"
+                }
+            }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} carries report batches that are not the ones this release publishes (roadmap-hcd task 38.1):`n  - {1}" -f `
+               $What, ($faults -join "`n  - "))
     }
 }
 
@@ -2045,6 +2100,9 @@ $gateOut
     # The report batches beside their tools where the tree has tools\, and
     # none anywhere in a tree published before 2.4.0.0 (task 38.1).
     Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # And what they say, before anything is archived: the cut checked them
+    # when it staged them, but -UploadSetOnly reads a tree it did not stage.
+    Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -3009,7 +3067,8 @@ driver".
                       -Destination (Join-Path $qualDir $qualtoolFiles[$src]) -Force
         }
         # Its report batch (roadmap-hcd task 38.1), beside it. Not compiled, so
-        # no freshness rule applies; its text is gated by test-package.ps1.
+        # no freshness rule applies; what it says is held, once staged, to the
+        # shared checker and the repository's own bytes (Assert-ReportBatchContent).
         Publish-ReportBatches -SourceDir $QualtoolDir -DestDir $qualDir -Map $reportBatches["xhciqual"]
         $qualtoolStaged = $qualDir
         Write-Ok (("XHCIQUAL.EXE staged at version {0} from src\xhci_version.h, " +
@@ -5627,6 +5686,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
                             -What "the staged release '$destRoot'"
     # The report batches beside their tools and nowhere else (task 38.1).
     Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'"
+    # And what they say: the shared checker, and the repository's own bytes.
+    Assert-ReportBatchContent -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'" -Reference $repo
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
