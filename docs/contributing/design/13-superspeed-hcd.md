@@ -261,7 +261,7 @@ inside the bus that the PnP manager never sees.
 | Object | Kind | Created by | Parent in the PnP tree | Extension |
 |---|---|---|---|---|
 | Controller FDO | WDM FDO, attached over the PCI PDO | `AddDevice` for a PDO this driver did not create | the PCI bus | the controller extension: resources, BAR mapping, the interrupt object, the DMA adapter and the common buffer (section 11), the controller lock, the command engine, the event ring, the port objects of the root ports, the slot table, the log ring |
-| Root-hub PDO | WDM PDO, hardware id `XHCI98\ROOT_HUB`, no compatible ids (section 8) | the controller FDO, at its first start | the controller | a small PDO extension pointing back at the controller |
+| Root-hub PDO | WDM PDO, hardware id `USB\XHCI98_ROOT_HUB` (`XHCI98\ROOT_HUB` before `2.4.0.0`, section 10.13), no compatible ids (section 8) | the controller FDO, at its first start | the controller | a small PDO extension pointing back at the controller |
 | Root-hub FDO | WDM FDO, attached over the root-hub PDO | `AddDevice` again, for a PDO this driver did create - the role is decided by the PDO's own driver object | the root-hub PDO | the bus's view of the topology: the port objects, the hub objects inside the bus, the list of device and function PDOs |
 | Device PDO | WDM PDO, one per non-composite device and per non-hub device the bus does not split | the root-hub FDO, when enumeration (5.3) reaches a bindable device | the root hub, wherever the device is in the USB topology | the device's slot, its configuration and pipes, its ids |
 | Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs; **since 36.43 the device's composite-parent PDO (10.12)**, itself where a device PDO would be | the function (its interface mask, its ids), its own filtered copy of the configuration descriptor (10.9), the group serial it shares with its siblings, and a pointer to the device record inside the bus, whose slot and pipes it shares, cleared when the device leaves (corrected 2026-10-03 from "a pointer to the parent device object inside the bus, whose pipes it shares", as 26-A.7 implements it) |
@@ -279,7 +279,11 @@ and the devices behind it are its children; the bus still runs the hub.
 **And on 2026-10-10 by task 36.43 (section 10.12):** each composite device
 the bus splits has a composite-parent PDO under `XHCI98\COMPOSITE`, bound to
 this driver as a composite FDO - a fourth role - with its function PDOs as
-its children; the bus still splits, configures and routes.
+its children; the bus still splits, configures and routes. **Amended 2026-10-14 (task 38.8, section 10.13):** from
+`2.4.0.0` the root hub's, the hubs' and the composite parents' ids are
+under `USB\` - `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30`
+and `USB\XHCI98_COMPOSITE` - and their devnodes under `Enum\USB`; the roles
+are unchanged.
 
 **The controller FDO's start and stop on an Intel 7-, 8- or 9-series PCH or
 C610/X99 also move the switchable connectors** (task 34.3, 2026-10-05): on
@@ -295,8 +299,10 @@ The driver's role at `AddDevice` is decided by whether the PDO handed in was
 created by this driver object (`Pdo->DriverObject == DriverObject`), and
 nothing else. A PDO of this driver's that is not a root-hub PDO never reaches
 `AddDevice`: device and function PDOs are bound by the targets' class INFs to
-their own function drivers (section 6), and only `XHCI98\ROOT_HUB` is bound
-to this binary (section 8).
+their own function drivers (section 6), and only the root hub's id
+(`USB\XHCI98_ROOT_HUB`; `XHCI98\ROOT_HUB` before `2.4.0.0`) is bound to this
+binary (section 8) - with, since tasks 33.4 and 36.43, the hubs' and the
+composite parents' (10.11, 10.12).
 
 Lifetimes follow the WDM rules the targets enforce, with two of this
 project's own. A device that leaves (its port reports a disconnect, its hub is
@@ -529,7 +535,8 @@ Two INFs in `src\`, the files the miniport's two were:
 2000 and 32-bit XP, `NTx86.6.0` for 32-bit Vista and Windows 7) and
 `xhci98-amd64.inf` (`NTamd64` for XP x64, `NTamd64.6.0` for Vista and
 Windows 7 x64). Each models section carries two models: the controller under
-`PCI\CC_0C0330` and the root hub under `XHCI98\ROOT_HUB`, both bound to
+`PCI\CC_0C0330` and the root hub under `XHCI98\ROOT_HUB` (`USB\XHCI98_ROOT_HUB`
+from `2.4.0.0`; the hub and composite models of 10.11 and 10.12 beside them), both bound to
 `xhci98.sys` through one service, `xhci98`. The device descriptions are
 the owner's names: `xHCI98 USB 3.x eXtensible Host Controller` and `xHCI98
 USB 3.x Root Hub`. Both files pass the INF gate under its HCD profile
@@ -677,7 +684,13 @@ task 33.4 (section 10.11) each has a PDO under `XHCI98\HUB` or
 `xhci98` too (2026-10-04), so text mode gives a hub PDO the same second
 `AddDevice` as the root hub's; the gate's `OEM-IDS` rule refuses this file
 the moment the INF binds an id it does not map, so the two cannot ship out
-of step. Whether text-mode Setup on Windows 2000 and XP actually starts a
+of step. **Amended 2026-10-14 (task 38.8, section 10.13):** the four ids text mode maps are
+`USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and
+`USB\XHCI98_COMPOSITE`. They are `USB\` ids, but private names no
+`[HardwareIdsDatabase]` row or stock INF carries (section 10.13.2), so
+`usbhub` still cannot bind them; the gate's `OEM-USBID` admits exactly those
+four and no other `USB\` id (`USB\XHCI98_NOXPORT` above all), and the
+component id `XHCI98` is unchanged. Whether text-mode Setup on Windows 2000 and XP actually starts a
 hub PDO this way is unread until the F6 leg is taken with a hub. Meanwhile
 the bus splits composite devices itself and presents `&MI_nn` functions
 with `USB\Class_` compatible ids (section 10.7), so `USB\COMPOSITE` never
@@ -3393,6 +3406,13 @@ usbport does for its own root hubs, is optional.) A compatible id of
 forbids. A private enumerator rather than a `USB\` id keeps the instance
 under `Enum\XHCI98\` on every target, out of the `USB` key that usbhub and
 NUSB's stack populate, and cannot collide with any OS row by construction.
+**Amended 2026-10-14 (task 38.8, section 10.13):** from `2.4.0.0` the id is `USB\XHCI98_ROOT_HUB`, because a
+device id's first component names its enumerator and there is no `XHCI98`
+bus (GitHub issue 17 item 10). The instance moves to `Enum\USB\`, beside
+the other stacks' devnodes (the device ids differ, so nothing collides),
+and the guarantee that no OS row matches rests on section 10.13.2's audit
+and the INF gate's `HCD-USBRES` rule, not on construction. Still no
+compatible id; the reasoning above about `USB\ROOT_HUB*` is unchanged.
 Device PDOs stay `USB\VID_...` and `USB\Class_...` so the class INFs match
 them (section 10). The root hub is installed from the HCD's own INF, whose
 `[Version]` is `Class=USB`, `ClassGUID={36FC9E60-C465-11CF-8056-444553540000}`,
@@ -3507,7 +3527,7 @@ creates its PDOs.
 | Open item | Binds |
 |---|---|
 | Device Manager's view by connection on 98 and NT: that it uses only `CM_Get_Child` / `Sibling` is expected, not read. | 26-A.8 (or a guest reading in 26-V.1 / 26-V.2) |
-| A sweep of each target's whole `%windir%\inf` (and NUSB's and SweetLow's full file sets) for any row matching `XHCI98\ROOT_HUB`: impossible by construction, unchecked. | 26-A.4 |
+| A sweep of each target's whole `%windir%\inf` (and NUSB's and SweetLow's full file sets) for any row matching `XHCI98\ROOT_HUB`: impossible by construction, unchecked. (Since task 38.8 the id is `USB\XHCI98_ROOT_HUB`, and section 10.13.2's audit is the sweep, bounded as it says.) | 26-A.4 |
 | **External hubs inside the bus against `DeviceIsHub`.** `usbui.dll` recurses into a connection with `DeviceIsHub` TRUE through `GET_NODE_CONNECTION_NAME` and `CreateFile("\\.\" + name)`. With no hub devnode the HCD either reports the devices behind a hub flat under the root hub's ports, or answers `DeviceIsHub` and serves a per-hub node through the root-hub interface link plus a suffix (`FileObject->FileName`). A design decision. **Closed 2026-10-04 by task 33.4 (10.11)**: each hub is a devnode with a door of its own, `DeviceIsHub` TRUE and its name returned | 26-A.8; 33.4 |
 | **Split composite devices**: `usbui.dll` maps a connection to one devnode through `GET_NODE_CONNECTION_DRIVERKEY_NAME`. With the bus splitting a composite into per-function PDOs there is no single connection devnode; which key to return (the first function's, or a failure) and what `usbui` then shows is unread. **Closed 2026-10-10 by task 36.43 (10.12)**: every split device has a composite-parent devnode, and the connection's driver key is the parent's | 26-A.8, with 26-A.7; 36.43 |
 | How Windows 98's engine treats a root-hub section whose `NTMPDriver` is the already-loaded controller driver, and NTKERN calling `AddDevice` a second time on that driver object (98's own `usbhub.sys` serves several devnodes, so it is expected to work). | 26-V.0 / 26-V.1 (a guest reading) |
@@ -3881,13 +3901,14 @@ reasons do not apply to a driver that owns those things.
 
 **`scripts\inf-gate\check-inf.ps1`** has one profile, the HCD's: the binary
 `xhci98.sys`, the version header `src\xhci_version.h` and resource script
-`src\xhci98.rc`, and the root-hub id `XHCI98\ROOT_HUB`. Each model line has a
+`src\xhci98.rc`, and the root-hub id `XHCI98\ROOT_HUB` (`USB\XHCI98_ROOT_HUB` since task 38.8). Each model line has a
 role, controller or root hub, and the controller-only rules (`VAL-*`,
 `PROP-*`, `OS-*`) skip the root-hub model. Four rules are the HCD's own:
 
 | Rule | Refuses |
 |---|---|
-| `HCD-ROOTHUB` | a models section with no controller, a models section with no `XHCI98\ROOT_HUB` model, and any model line matching `USB\ROOT_HUB` or `USB\ROOT_HUB20`, the OS hub driver's ids for usbport's root hubs |
+| `HCD-ROOTHUB` | a models section with no controller, a models section with no `XHCI98\ROOT_HUB` model (`USB\XHCI98_ROOT_HUB` since task 38.8, when the rule also took a root-hub line carrying any other id), and any model line matching `USB\ROOT_HUB` or `USB\ROOT_HUB20`, the OS hub driver's ids for usbport's root hubs |
+| `HCD-USBRES`, `HCD-IDSRC` (task 38.8, section 10.13.7) | any `USB\XHCI98_` id on any line other than the four bound bases and their `&VID_&PID_[&REV_]` forms, and any `XHCI98\` id on any line; a table of ids that differs from `src\xhci_hub.h`'s four `#define`s |
 | `HCD-HUBPAGE` | a root-hub install that writes no hub page, or the wrong one: `EnumPropPages` = `"sysclass.dll,USBHubPropPage"` on the 9x path, `EnumPropPages32` = `"usbui.dll,USBHubPropPageProvider"` on every NT path (section 8.5) |
 | `VAL-HCDVHUB` | any of the three `XhciVirtualHSHub*` values written: the HCD reads none (section 4) |
 | `OS-HCDREPLACED` | `usbport.sys` or `usbhub.sys` fetched on any path: the HCD replaces both. `usbd.sys` (the leaf class drivers import its helper exports) and `usbui.dll` (both tabs) stay on the paths the miniport fetched them on |
@@ -4709,7 +4730,11 @@ a parent for every device it splits, under the project-owned
 still never `USB\COMPOSITE`, for the reason above.
 Also never emitted: `USB\ROOT_HUB` and `USB\ROOT_HUB20` (the root hub is
 `XHCI98\ROOT_HUB`, section 8.6, and the INF gate's `HCD-ROOTHUB` refuses
-them), and `USB\CLASS_09*`, because a hub is never a PDO. `USB\MS_COMP_*` is
+them), and `USB\CLASS_09*`, because a hub is never a PDO. **Amended 2026-10-14 (task 38.8, section 10.13):** the
+composite parent is `USB\XHCI98_COMPOSITE` and the root hub
+`USB\XHCI98_ROOT_HUB` from `2.4.0.0`; a hub has been a PDO since task 33.4,
+under `USB\XHCI98_HUB` or `USB\XHCI98_HUB30` from `2.4.0.0`; still never a
+`USB\CLASS_09*`, `USB\ROOT_HUB*` or `USB\COMPOSITE` id. `USB\MS_COMP_*` is
 out of scope for 2.0.0.0.
 
 #### 10.7.1 A refused interface's device id (task NOX.1, deferred)
@@ -4859,8 +4884,8 @@ configuration, every interface at alternate 0, no endpoint open;
 `RESET_PORT` replays it. A function's `SELECT_CONFIGURATION` never sends
 SET_CONFIGURATION (10.9). A device the bus does not split is left Addressed
 for its function driver to configure. **Since task 36.43 (10.12)** a split
-device is presented as a composite-parent PDO under `XHCI98\COMPOSITE` with
-its function PDOs beneath it, the parent first on the group's chain; when
+device is presented as a composite-parent PDO under `XHCI98\COMPOSITE`
+(`USB\XHCI98_COMPOSITE` from `2.4.0.0`, 10.13) with its function PDOs beneath it, the parent first on the group's chain; when
 and how the bus splits is unchanged.
 
 **Grouping**, in this order, over the configuration's interfaces (alternate 0
@@ -5042,6 +5067,11 @@ IOCTLs are independent, for a cosmetic gain. Decided: two.
 | `BusQueryCompatibleIDs` | none | none |
 | `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, task 33.2): the hub's serial id when it has a usable one, else the instance key in decimal | the same |
 | Device text | `xHCI98 USB Hub` | `xHCI98 USB 3.x Hub` |
+
+**Amended 2026-10-14 (task 38.8, section 10.13):** from `2.4.0.0` the bases are `USB\XHCI98_HUB` and
+`USB\XHCI98_HUB30` (`XHCI_ID_HUB` and `XHCI_ID_HUB30` in `xhci_hub.h`), so
+the rows read `USB\XHCI98_HUB&VID_vvvv&PID_pppp` and so on; the forms, the
+empty compatible-id list and the instance rule are unchanged.
 
 Never `USB\Class_09...`, `USB\HubClass`, `USB\USB20_HUB` / `USB30_HUB` or
 `USB\VID_...&PID_...`. The hub-class matches every target's INFs carry were
@@ -5284,7 +5314,9 @@ for a copy's source and ask for it when it is gone). The INF gate holds that
 the engine runs beside it, with no `Include` or `Needs`; round 1, finding
 3), keeps both hub models in every models section and every hub
 id under `XHCI98\` (`HCD-HUB`), refuses a Microsoft hub-class id on any line,
-and holds the hub sections to the hub page (`HCD-HUBPAGE`).
+and holds the hub sections to the hub page (`HCD-HUBPAGE`). **Amended 2026-10-14 (task 38.8, section 10.13):** the
+models name `USB\XHCI98_HUB` and `USB\XHCI98_HUB30`, and `HCD-HUB` takes on a
+hub's line only those bases or their `&VID_&PID_[&REV_]` forms, exactly.
 
 **What 33.4 leaves open**: the hot-plug applet's listing rule; Windows 98's
 instance handling of a device re-parented under a hub; the 98 and ME
@@ -5352,6 +5384,9 @@ the same device.
 |---|---|
 | `BusQueryDeviceID` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `XHCI98\COMPOSITE&VID_vvvv&PID_pppp&REV_rrrr`, `XHCI98\COMPOSITE&VID_vvvv&PID_pppp`, `XHCI98\COMPOSITE` |
+
+(**Amended 2026-10-14 (task 38.8, section 10.13):** from `2.4.0.0` the base is `USB\XHCI98_COMPOSITE`,
+`XHCI_ID_COMPOSITE` in `xhci_hub.h`; the rows below are unchanged.)
 | `BusQueryCompatibleIDs` | none |
 | `BusQueryInstanceID` | any PDO's rule (`hcdInstanceQueryId`, 33.2): the device's serial id when it has a usable one, `UniqueID` TRUE, else the location key in decimal, `UniqueID` FALSE - what the device would answer were it not split |
 | Device text | its `iProduct` (33.6, read once per enumeration and kept like any PDO's), else `USB Composite Device`, the name Microsoft's own INFs give the parent; the INF's model text replaces it once installed. Each PDO's strings are picked by its own function (`pdo->Func`, none for the parent), never by its place on the chain, which the parent now heads |
@@ -5674,6 +5709,8 @@ re-emitted. **Text-mode Setup** (5.6): both `txtsetup.oem` files map
 `XHCI98\COMPOSITE` to `xhci98` beside the hub ids - without it a composite
 keyboard's functions would never appear under F6, the parent having no
 driver there - and `OEM-IDS` already holds the file to the INF's model ids.
+**Amended 2026-10-14 (task 38.8, section 10.13):** the model and the `.oem` row are `USB\XHCI98_COMPOSITE`, and
+`HCD-COMP` takes on the line only that base or its forms, exactly.
 
 **Updating from `2.2.0.0`** (and from `2.1.0.0`). Each composite device
 re-detects once: its parent is a new devnode everywhere, installed from
@@ -5707,7 +5744,7 @@ device or the bench. The guest legs of 36.43 read what QEMU can show.
 **Status: written before any code; the owner's decisions taken
 (2026-10-13, 10.13.12), the task kept in `2.4.0.0` with the update costs
 of 10.13.4 and 10.13.5 accepted; reviewed to convergence (five rounds,
-the last with no finding).** The task and what is already decided are roadmap-hcd 38.8's (owner,
+the last with no finding); the code landed 2026-10-14, as 10.13.13 records.** The task and what is already decided are roadmap-hcd 38.8's (owner,
 2026-10-13): the four project-owned bases move from a private enumerator to
 `USB\` - `XHCI98\ROOT_HUB`, `XHCI98\HUB`, `XHCI98\HUB30` and
 `XHCI98\COMPOSITE` become `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`,
@@ -6524,6 +6561,68 @@ Windows 98 SE and ME in this release (2026-10-13).
 | D12 | An F6 leg (32-bit XP, with a hub), since both `txtsetup.oem` files change | (a) add it; (b) the gates suffice | **(a), widened** (owner, after the review's opinion): F6 legs on Windows 2000, 32-bit XP and XP x64, each with the input behind the hub and a composite device bound (10.13.10) |
 | D13 | The USB 3 hub the roadmap's legs name, which no guest can present | (a) host vectors and the gate, the reading on the owner's bench or a passthrough after the cut; (b) a passthrough leg before the cut | **(a), unchanged** after the review's opinion: the USB 3 hub is read after the cut, and the roadmap's checkpoint and the release notes say so (10.13.10) |
 | D14 | **(a)**, owner 2026-10-13 (from the review's second round): the roadmap's legs name a USB 2.0 hub; QEMU's is Full Speed. Does QEMU's Full Speed hub stand for it before the cut? | (a) yes, the same id and code; the High Speed reading with the USB 3 hub's after the cut, whose USB 2.0 half is one; (b) a High Speed hub by passthrough before the cut | proposed **(a)**, the checkpoint and the release notes saying so with D13's |
+
+#### 10.13.13 As built (2026-10-14)
+
+The code landed on branch `p38-ids` from `phase-38` (roadmap-hcd 38.8), as
+designed, with these particulars:
+
+- **The ids.** `xhci_hub.h` spells the four bases as narrow `#define`s
+  (`XHCI_ID_ROOT_HUB`, `XHCI_ID_HUB`, `XHCI_ID_HUB30`, `XHCI_ID_COMPOSITE`);
+  `hcd_rh.c` takes the root hub's UTF-16 copy from the same spelling through
+  `XHCI_ID_WIDE` (`L ## s`, the C89 token paste), so no second spelling
+  exists. `test_hub` spells the four out (`test_hub_id_bases`, the wide copy
+  compared character by character) and asserts 97 and 91 for the two hub
+  answers; `test_func` asserts 109 and 39 for the composite parent's.
+- **The INFs and `.oem` files** name only the new ids; the root-hub
+  sections on all four paths of both INFs copy nothing (D3, the footprints
+  re-emitted). The gate: `HCD-USBRES` scans every section's lines (comments
+  excluded) for `USB\XHCI98_` tokens and `XHCI98\` ids; `HCD-IDSRC` reads
+  `xhci_hub.h` beside the INF (skipped, with a line saying so, where it is
+  absent, as the version cross-check is); `HCD-HUB` and `HCD-COMP` hold a
+  hub's and a composite's line to its own base and its forms exactly;
+  `HCD-ROOTHUB` also refuses a root-hub line carrying any id but its own;
+  `HCD-HUBCOPY` covers the root hub. `OEM-USBID` admits exactly the four
+  bases. `HCD-USBRES` expands `[Strings]` tokens before its scan, and a
+  model line's ids and a `.oem` row's id may carry no `%token%` at all, so
+  `%Bus%\XHCI98_NOXPORT` cannot pass for a literal (the code review's round
+  1). The self-tests cover each, an old id in a comment passing.
+- **The tool**, `xhcicln\`: one C89 file, `XHCICLN.EXE` (MSVC 6.0) and
+  `XHCICL64.EXE` (WDK 7.1 amd64, `/MT`, subsystem 5.02), both importing
+  `KERNEL32` and `ADVAPI32` alone, both embedding the elevation manifest.
+  Its `-selftest` (71 checks) covers the classification, both presence
+  decisions, the service verdict, the door name, the exit codes and the
+  removal table; `selftest.cmd` runs both builds under
+  `__COMPAT_LAYER=RunAsInvoker` (the manifest's elevation cannot be
+  answered on a build host) and checks the switch refusals. Three
+  particulars the design left to the code: a re-check that fails before
+  the first removal exits 1 (nothing was removed), after it 2; `-remove` on
+  98 SE and ME lists and exits 0, or 1 when an `XHCI98\` devnode is present
+  or the `HKEY_DYN_DATA` walk is incomplete (the forced refusal of 10.13.10);
+  a subkey of that walk with no `HardWareKey` value names nothing and is
+  counted, not taken as an incomplete walk. When the `XHCI98` enumerator
+  key does not exist at all, a failed SetupAPI set is read as empty, not
+  unknown. The global "any `XHCI98\` devnode present" test covers every
+  entry under the enumerator, of any form, present or unknown, and is
+  repeated in each re-check; it refuses `-remove` (exit 1) even when no
+  entry qualifies, as on 98 SE and ME. A removal whose restart flags cannot
+  be read is counted as restart-pending and stops the run (exit 2).
+- **The veto table, provisional.** Step 4's readings are not yet taken, so
+  `cln_removal_enabled` enables removal on NT 5.0, 5.1, 5.2, 6.0 and 6.1
+  (any other version lists only); a version whose leg shows no veto is set
+  to list only before the cut (decided provisionally, 2026-10-14, so that
+  the legs can run `-remove` at all).
+- **Packaging.** `make-release.ps1` stages `tools\xhcicln\` with both
+  executables (freshness against `.c`, `.h`, `.rc`, `.manifest` and
+  `src\xhci_version.h`; `XHCICLN_VERSION` held to the shared macro;
+  `-SkipCleanTool`, the readme then saying the directory is missing), a
+  `readme.txt` made from the tracked `xhcicln\README.TXT` and a generated
+  `NOTICE.TXT` recording both static runtimes; `Assert-ToolsLayout` admits
+  `xhcicln`; the readme template's update section and the release notes
+  carry the `2.3.x` update costs (D4, D5) and the tool.
+- **Not read before the legs**: everything 10.13.11 lists, and the release
+  notes' update paragraphs, which state the design's expectations and take
+  their "read in" sentences from the legs.
 
 ## 11. The transfer-buffer policy (task 25.7)
 

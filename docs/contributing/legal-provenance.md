@@ -102,6 +102,7 @@ identification.
 | Published MSI helper binary | Yes, from the first cut that carries it (2.3.0.0) | `releases/<version>/release-x86/xhcimsi.sys` and `debug-x86/xhcimsi.sys`; never in an `-x64` directory | This project's code (`src/msi86/`, `src/xhci_msi86.c`), linked by **WDK 7.1 for x86, Vista target** (`setenv x86 WLH`; design record 18 section 8.1), against `ntoskrnl.exe` import libraries, which contribute no code. **Unlike the 32-bit `xhci98.sys` it links WDK library objects**: `wdmsec.lib`'s `IoCreateDeviceSecure` and the members it pulls in (31 `ntoskrnl.exe` pairs, listed in `scripts/import-gate/xhcimsi-imports.allow` from the first link's import table, 2026-10-10), and, `/GS` being left on as the kit's default, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support with `__report_gsfailure` (`KeBugCheckEx(0xF7)`), the same kind of object as the amd64 row above. Which members the link retained is to be read from a linker map, which no build here has written yet. **The same open question as the amd64 row**: whether those WDK-supplied objects ask for a notice beside the binary has not been read; this row records the composition and the question and draws no conclusion. GPL-2.0-only (`LICENSE`) for this project's code |
 | Published x86 helper binary, renamed | Yes, from the first cut that carries it (`2.4.0.0`; not cut yet) | `releases/<version>/release-x86/xhcihlpr.sys` and `debug-x86/xhcihlpr.sys`; never in an `-x64` directory; the `2.3.x` directories keep `xhcimsi.sys` (the row above) | The same helper renamed and extended to Windows 2000 and XP (roadmap-hcd task 38.3, design record 18 section 15): this project's code (`src/hlpr/`, `src/xhci_hlpr.c`), linked by **WDK 7.1 for x86, Windows XP target** (`setenv x86 WXP`, `SUBSYSTEM_VERSION=5.00`; record 18 section 15.10, decision H5), against `ntoskrnl.exe` import libraries from `lib\wxp\i386`, which contribute no code. It links the same kinds of WDK library object as the row above, now the `wxp` copies: `wdmsec.lib`'s `IoCreateDeviceSecure` and its members, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support, and - for a driver whose subsystem is below 6.01 - `lib\crt\i386\safecrtnt.lib` and `libcntpr.lib` (`makefile.new`; the build's own link line, 2026-10-14); its imports, 39 pairs listed in `scripts/import-gate/xhcihlpr-imports.allow` from the first `WXP` link of each flavour, resolve in every kernel and HAL the gate's manifests authenticate for Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86 - the Vista and 7 PAE kernels not among them (section 4). **The same open question as the two rows above** about a notice for the WDK-supplied objects; this row records the composition and draws no conclusion. GPL-2.0-only (`LICENSE`) for this project's code |
 | Published DOS qualifier binary | Yes | `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` + `.MAP` | Built from this project's sources but not only this project's code; see section 2a |
+| Published cleanup tool binaries | Yes, from the first cut that carries them (`2.4.0.0`) | `releases/<version>/tools/xhcicln/XHCICLN.EXE` and `XHCICL64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
 | Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
@@ -136,13 +137,15 @@ with none of the inputs can still check the claim.
 
 ### 2a. The tracked binaries that are not only ours
 
-There are two. Both are tools rather than the driver, and both are the
-exception to the row above saying this project tracks only its own code:
-`releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
+There are two, and from `2.4.0.0` four. All are tools rather than the
+driver, and all are the exception to the row above saying this project tracks
+only its own code: `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
 `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (at the version root,
-without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9). They are
-not the same case: the qualifier carries an embedded DOS extender and an Open
-Watcom runtime, the reader carries a statically linked Microsoft C runtime.
+without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9), and
+from `2.4.0.0` `releases/<version>/tools/xhcicln/XHCICLN.EXE` and
+`XHCICL64.EXE` (roadmap-hcd task 38.8). They are not the same case: the
+qualifier carries an embedded DOS extender and an Open Watcom runtime, the
+reader and the cleanup tool statically linked Microsoft C runtimes.
 
 #### XHCIQUAL.EXE
 
@@ -214,6 +217,32 @@ untracked third-party material (section 2's row). The linkage is the fact;
 executable recording it, in the same place and for the same reason as the
 qualifier's. Both notices are generated at every cut, so a published directory
 carries the one for each tool it holds.
+
+#### XHCICLN.EXE and XHCICL64.EXE
+
+`releases/<version>/tools/xhcicln/XHCICLN.EXE` and `XHCICL64.EXE` are the
+optional cleanup tool of `2.4.0.0` (design record 13 section 10.13.8), both
+built from `xhcicln/xhcicln.c` alone, with `xhcicln/xhcicln.rc` embedding
+`xhcicln/xhcicln.manifest`, this project's own text. Each is not only that:
+
+- `XHCICLN.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked,
+  exactly as `XHCISNAP.EXE` above. `xhcicln/build.cmd` compiles with
+  `cl /nologo /W3 /WX /O2` and no `/MD`. Static, and re-derivable:
+  `link -dump -imports XHCICLN.EXE` names `KERNEL32.dll` and `ADVAPI32.dll`
+  and no C runtime DLL.
+- `XHCICL64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`,
+  from the untracked `tools/WinDDK71/lib/crt/amd64`), statically linked:
+  `xhcicln/build.cmd` compiles with WDK 7.1's `cl` and `/MT`. Static, and
+  re-derivable the same way: the import table names `KERNEL32.dll` and
+  `ADVAPI32.dll` and no C runtime DLL (read 2026-10-14 with WDK 7.1's
+  `link /dump /imports`).
+
+Every SetupAPI and configuration-manager routine either calls is looked up
+at run time from the system's own `setupapi.dll` and `cfgmgr32.dll`, which
+are not linked, shipped or tracked. Nothing of either runtime's terms is
+quoted here. `scripts/package/make-release.ps1` generates one `NOTICE.TXT`
+beside the two recording both linkages, for the same reason as the two
+above.
 
 Stated plainly: `XHCISNAP.EXE` is a single executable combining this project's
 GPL-2.0-only code with Microsoft's Visual C++ 6.0 static C runtime, two

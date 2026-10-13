@@ -874,7 +874,7 @@ typedef struct _HCD_DEVICE_PDO {
                                      * without the DMA-halt proof         */
     /* A composite device's own PDO (task 36.43; design record 13 section
      * 10.12): the parent of its function PDOs, the group's first PDO, under
-     * XHCI98\COMPOSITE, bound to this driver as a composite FDO. Fixed at
+     * USB\XHCI98_COMPOSITE, bound to this driver as a composite FDO. Fixed at
      * creation. Presentation only: it carries no pipe and takes no URB. */
     ULONG Composite;
     /* Stage B (design record 14 sections 8.4 and 8.5, 36.38), the thread's

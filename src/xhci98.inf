@@ -8,9 +8,18 @@
 ; OS's own usbhub.sys claims on every NT target (roadmap-hcd.md, decisions
 ; table). Device PDOs are children of that root hub, or of the external hub
 ; they sit behind, which the bus presents as a third role of the same binary
-; under XHCI98\HUB or XHCI98\HUB30 (task 33.4); a composite device's function
-; PDOs are children of its composite parent, a fourth role under
-; XHCI98\COMPOSITE (task 36.43).
+; under USB\XHCI98_HUB or USB\XHCI98_HUB30 (task 33.4); a composite device's
+; function PDOs are children of its composite parent, a fourth role under
+; USB\XHCI98_COMPOSITE (task 36.43).
+;
+; Since 2.4.0.0 (task 38.8; design record 13 section 10.13) the four ids are
+; under USB\, as a device id's first component names its enumerator; they
+; were XHCI98\ROOT_HUB, XHCI98\HUB, XHCI98\HUB30 and XHCI98\COMPOSITE. This
+; file names only the new ones (a clean move): an update gives each root
+; hub, hub and composite device a new devnode, and the old ones stay
+; non-present until XHCICLN.EXE (tools\xhcicln\) removes them, if ever.
+; src\xhci_hub.h spells the four once, and the gate ties these lines to it
+; (HCD-IDSRC) and refuses any other USB\XHCI98_ id here (HCD-USBRES).
 ;
 ; Written as task 25.8's scaffold INF and stageable since 26-A.1 removed the
 ; scaffold marker from the image; the root hub's id is the one task 25.4
@@ -43,17 +52,17 @@ DriverVer=10/13/2026,2.3.1.0
 
 [XhciModels]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
-%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
-%HubDesc%=Hub.Dev,XHCI98\HUB
-%Hub30Desc%=Hub.Dev,XHCI98\HUB30
-%CompositeDesc%=Comp.Dev,XHCI98\COMPOSITE
+%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB
+%HubDesc%=Hub.Dev,USB\XHCI98_HUB
+%Hub30Desc%=Hub.Dev,USB\XHCI98_HUB30
+%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE
 
 [XhciModels.NTx86.6.0]
 %XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
-%RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
-%HubDesc%=Hub.Dev6,XHCI98\HUB
-%Hub30Desc%=Hub.Dev6,XHCI98\HUB30
-%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE
+%RootHubDesc%=RootHub.Dev6,USB\XHCI98_ROOT_HUB
+%HubDesc%=Hub.Dev6,USB\XHCI98_HUB
+%Hub30Desc%=Hub.Dev6,USB\XHCI98_HUB30
+%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -106,7 +115,11 @@ HKR,,XhciImodInterval250ns,0x00010003,160
 
 [RootHub.Dev]
 AddReg=RootHub.AddReg
-CopyFiles=Xhci.CopyFiles
+; The root hub copies NOTHING since 2.4.0.0 (task 38.8, decision D3), on any
+; path: the devnode exists only under a running xhci98.sys, and after an
+; update it is a new devnode at the start where the new binary already runs,
+; so a copy here would replace the running file from wherever the update came
+; from. The gate holds it with the hubs' rule (HCD-HUBCOPY).
 
 [RootHub.AddReg]
 HKR,,DevLoader,,*NTKERN
@@ -116,7 +129,8 @@ HKR,,NTMPDriver,,xhci98.sys
 HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
 
 ; An external hub (task 33.4; design record 13, section 10.11): the bus
-; serves it and presents it as a devnode under XHCI98\HUB or XHCI98\HUB30,
+; serves it and presents it as a devnode under USB\XHCI98_HUB or
+; USB\XHCI98_HUB30,
 ; bound to xhci98.sys again. Its sections copy NOTHING: the devnode exists
 ; only under a running xhci98.sys, so the binary is on disk and loaded, and
 ; a hub plugged in long after the install must not send the setup engine
@@ -131,7 +145,7 @@ HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
 
 ; A composite device (task 36.43; design record 13, section 10.12): the bus
 ; splits it and presents its functions beneath a devnode of its own under
-; XHCI98\COMPOSITE, bound to xhci98.sys again. Like a hub's, its sections
+; USB\XHCI98_COMPOSITE, bound to xhci98.sys again. Like a hub's, its sections
 ; copy NOTHING (HCD-HUBCOPY) and, a composite not being a hub, register no
 ; property page (HCD-COMPPAGE).
 [Comp.Dev]
@@ -186,7 +200,6 @@ HKR,,Controller,1,01
 
 [RootHub.Dev.NTx86]
 AddReg=RootHub.AddReg.NT
-CopyFiles=Xhci.CopyFiles
 
 [RootHub.Dev.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
@@ -240,7 +253,6 @@ DelService=xhcimsi
 
 [RootHub.Dev6.NTx86]
 AddReg=RootHub.AddReg.NT
-CopyFiles=Xhci.CopyFiles
 
 [RootHub.Dev6.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService

@@ -4,8 +4,8 @@
  *
  * The bus serves every hub itself (hcd_hub.c, hcd_sshub.c); what changes in
  * 33.4 is only the presentation. A hub's PDO (hcd_pdo.c, an HCD_DEVICE_PDO
- * with Hub set, under the project-owned ids XHCI98\HUB or XHCI98\HUB30) is
- * bound by this driver's own INF, and AddDevice - decided as for the root
+ * with Hub set, under the project-owned ids USB\XHCI98_HUB or
+ * USB\XHCI98_HUB30) is bound by this driver's own INF, and AddDevice - decided as for the root
  * hub by the PDO's driver object - attaches this FDO over it. Its
  * BusRelations are the PDOs presented under that hub (ParentSerial), its
  * door the hub IOCTLs of the Power tab for the hub's own ports
@@ -26,7 +26,7 @@
  * A composite device's FDO, the fourth role (task 36.43; design record 13
  * section 10.12), is this code too, told apart by its kind
  * (HCD_KIND_COMPOSITE_FDO): attached over a composite-parent PDO
- * (XHCI98\COMPOSITE), its BusRelations are the device's function PDOs, and
+ * (USB\XHCI98_COMPOSITE), its BusRelations are the device's function PDOs, and
  * it has no door - no name, no interface, no IOCTL (hcd_entry.c refuses
  * them). Its remove lets go of the functions as a hub FDO's lets go of its
  * children, but its start re-presents them in place (HcdDevicePdoRepresentAsk)

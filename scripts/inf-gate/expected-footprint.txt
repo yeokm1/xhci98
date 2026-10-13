@@ -156,12 +156,10 @@ servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|StartType|0
 servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|ErrorControl|1
 servicevalue|Windows 2000|xhcihlpr|XhciHlpr.AddService|ServiceBinary|%12%\xhcihlpr.sys
 path|Windows 98|device install|RootHub.Dev
-file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 reg|Windows 98|RootHub.AddReg|HKR||DevLoader||*NTKERN|remove
 reg|Windows 98|RootHub.AddReg|HKR||NTMPDriver||xhci98.sys|remove
 reg|Windows 98|RootHub.AddReg|HKR||EnumPropPages||"sysclass.dll,USBHubPropPage"|remove
 path|Windows 2000|device install|RootHub.Dev.NTx86
-file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 reg|Windows 2000|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
 service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows 2000|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
@@ -255,7 +253,6 @@ hwreg|Windows Vista and 7 x86|Xhci.Msi.AddReg|HKR|"Interrupt Management\MessageS
 directive|Windows Vista and 7 x86|Xhci.Dev6.NTx86|Reboot
 filedelete|Windows Vista and 7 x86|XhciMsi.DelFiles|10|System32\Drivers|xhcimsi.sys|0x00010000
 path|Windows Vista and 7 x86|device install|RootHub.Dev6.NTx86
-file|Windows Vista and 7 x86|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 reg|Windows Vista and 7 x86|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
 service|Windows Vista and 7 x86|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%

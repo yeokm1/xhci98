@@ -8,6 +8,7 @@
  */
 
 #include "xhci_func.h"
+#include "xhci_hub.h"
 
 #define XHCI_FUNC_BIT(n)    (1UL << ((n) & 0x1FUL))
 
@@ -584,7 +585,7 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
 
 static VOID xhciFuncParentVidPid(XHCI_FUNC_TEXT *t, const UCHAR *device)
 {
-    xhciFuncStr(t, "XHCI98\\COMPOSITE&VID_");
+    xhciFuncStr(t, XHCI_ID_COMPOSITE "&VID_");
     xhciFuncHexN(t, xhciFuncWord(device + 8), 4);
     xhciFuncStr(t, "&PID_");
     xhciFuncHexN(t, xhciFuncWord(device + 10), 4);
@@ -614,7 +615,7 @@ ULONG XhciFuncParentId(const UCHAR *device, ULONG which, char *out,
         xhciFuncChar(&t, 0);
         xhciFuncParentVidPid(&t, device);
         xhciFuncChar(&t, 0);
-        xhciFuncStr(&t, "XHCI98\\COMPOSITE");
+        xhciFuncStr(&t, XHCI_ID_COMPOSITE);
         xhciFuncChar(&t, 0);
         xhciFuncChar(&t, 0);
         break;

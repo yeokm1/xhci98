@@ -1225,7 +1225,8 @@ static void test_text(void)
 
 /*
  * A composite-parent PDO's ids (task 36.43; design record 13 section
- * 10.12): XHCI98\COMPOSITE with the device's VID, PID and REV, upper-case
+ * 10.12): USB\XHCI98_COMPOSITE (task 38.8, section 10.13; XHCI98\COMPOSITE
+ * before) with the device's VID, PID and REV, upper-case
  * hex, no compatible id and no instance id of its own (any PDO's rule);
  * the size query, a buffer one byte short written to its end and not past,
  * and the parameter refusals.
@@ -1247,25 +1248,27 @@ static void parent_id_is(ULONG which, const char *want, ULONG wantLength,
 
 static void test_parent_ids(void)
 {
-    static const char devId[] = "XHCI98\\COMPOSITE&VID_0D8C&PID_0014";
+    static const char devId[] = "USB\\XHCI98_COMPOSITE&VID_0D8C&PID_0014";
     static const char hwIds[] =
-        "XHCI98\\COMPOSITE&VID_0D8C&PID_0014&REV_0100\0"
-        "XHCI98\\COMPOSITE&VID_0D8C&PID_0014\0"
-        "XHCI98\\COMPOSITE\0";
+        "USB\\XHCI98_COMPOSITE&VID_0D8C&PID_0014&REV_0100\0"
+        "USB\\XHCI98_COMPOSITE&VID_0D8C&PID_0014\0"
+        "USB\\XHCI98_COMPOSITE\0";
     static const char hexIds[] =
-        "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01&REV_A2B3\0"
-        "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01\0"
-        "XHCI98\\COMPOSITE\0";
-    char small[40];
+        "USB\\XHCI98_COMPOSITE&VID_ABCD&PID_EF01&REV_A2B3\0"
+        "USB\\XHCI98_COMPOSITE&VID_ABCD&PID_EF01\0"
+        "USB\\XHCI98_COMPOSITE\0";
+    char small[48];
     ULONG used;
 
     copy_dev(cmDev);
     parent_id_is(XHCI_FUNC_ID_DEVICE, devId, sizeof(devId),
                  "parent device id, its NUL included");
-    CHECK_EQ(sizeof(devId), 35, "parent device id: 35 with its NUL");
+    CHECK_EQ(sizeof(devId), 39, "parent device id: 39 with its NUL");
     parent_id_is(XHCI_FUNC_ID_HARDWARE, hwIds, sizeof(hwIds),
                  "parent hardware ids, the multi-string's NUL included");
-    CHECK_EQ(sizeof(hwIds), 97, "parent hardware ids: 97 with both NULs");
+    /* The longest answer of any PDO of the bus's own (design record 13
+     * section 10.13.1): 109, inside hcdCompositeQueryId's 128. */
+    CHECK_EQ(sizeof(hwIds), 109, "parent hardware ids: 109 with both NULs");
 
     dev[8] = 0xCD;
     dev[9] = 0xAB;
@@ -1281,12 +1284,12 @@ static void test_parent_ids(void)
              XHCI_FUNC_TOO_SMALL, "parent hardware ids: size query");
     CHECK_EQ(used, sizeof(hexIds), "parent hardware ids: size needed");
     memset(small, 'x', sizeof(small));
-    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, small, 34, &used),
+    CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_DEVICE, small, 38, &used),
              XHCI_FUNC_TOO_SMALL, "parent device id one byte short");
-    CHECK_EQ(used, 35, "parent device id: 35 needed");
-    CHECK_EQ(memcmp(small, "XHCI98\\COMPOSITE&VID_ABCD&PID_EF01", 34), 0,
+    CHECK_EQ(used, 39, "parent device id: 39 needed");
+    CHECK_EQ(memcmp(small, "USB\\XHCI98_COMPOSITE&VID_ABCD&PID_EF01", 38), 0,
              "parent device id: written up to the end of the buffer");
-    CHECK_EQ(small[34], 'x', "parent device id: nothing past the buffer");
+    CHECK_EQ(small[38], 'x', "parent device id: nothing past the buffer");
 
     used = 7;
     CHECK_EQ(XhciFuncParentId(dev, XHCI_FUNC_ID_COMPATIBLE, small,

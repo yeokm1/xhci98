@@ -27,7 +27,8 @@ rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
 rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
 rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
-rem      everything else here)
+rem      everything else here), and the XHCICLN self-test when that one has
+rem      (task 38.8; xhcicln\build.cmd)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
@@ -397,6 +398,15 @@ if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
     echo === xhcisnap report self-test ===
     call "%REPO%\xhcisnap\selftest.cmd"
     if errorlevel 1 goto snaptestfail
+)
+
+rem The cleanup tool's pure half (task 38.8), when its EXE has been built (it
+rem has a build.cmd of its own, as XHCISNAP has).
+if exist "%REPO%\xhcicln\XHCICLN.EXE" (
+    echo.
+    echo === xhcicln self-test ===
+    call "%REPO%\xhcicln\selftest.cmd"
+    if errorlevel 1 goto clntestfail
 )
 
 echo.
@@ -920,6 +930,13 @@ exit /b 1
 echo.
 echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
 echo 1998-era toolchain cannot read one. See the check's output above.
+endlocal
+exit /b 1
+
+:clntestfail
+echo.
+echo ERROR: xhcicln's self-test failed, so its choice of which old devnodes
+echo to remove cannot be trusted.
 endlocal
 exit /b 1
 

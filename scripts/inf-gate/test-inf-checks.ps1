@@ -23,7 +23,8 @@ staging: no build, no VM, and no Microsoft binaries.
 
 Since 2026-10-02 the two production INFs are the successor host controller
 driver's (design record 13): each models section installs the controller and
-the root hub it creates (XHCI98\ROOT_HUB), the OS-supplied lists are
+the root hub it creates (USB\XHCI98_ROOT_HUB since 2.4.0.0, XHCI98\ROOT_HUB
+before), the OS-supplied lists are
 [Xhci.CopyOS] (usbd.sys) and [Xhci.CopyUI] (usbui.dll), and usbport.sys,
 usbhub.sys and the virtual-hub values are refused rather than required.
 
@@ -819,11 +820,12 @@ try {
     #
     # One binary is the function driver of the controller and of the root hub
     # the controller creates, so every models section carries both, and the
-    # root hub only under the project-owned XHCI98\ROOT_HUB - USB\ROOT_HUB and
+    # root hub only under the project-owned USB\XHCI98_ROOT_HUB (task 38.8;
+    # XHCI98\ROOT_HUB before) - USB\ROOT_HUB and
     # USB\ROOT_HUB20 are the OS hub driver's ids for usbport's root hubs.
     Write-Step "the root hub's models and Power tab"
     Assert-RuleFires "hcd-no-roothub" "HCD-ROOTHUB" {
-        param($t) $t.Replace("%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB`r`n", "")
+        param($t) $t.Replace("%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n", "")
     }
     Assert-RuleFires "hcd-no-controller-nt6" "HCD-ROOTHUB" {
         param($t) $t.Replace("%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n", "")
@@ -831,10 +833,10 @@ try {
     # A setup engine matches every id on the line, the later ones as
     # compatible ids, so the OS hub's id second on the line is still refused.
     Assert-RuleFires "hcd-os-roothub-id" "HCD-ROOTHUB" {
-        param($t) $t.Replace("RootHub.Dev,XHCI98\ROOT_HUB", "RootHub.Dev,XHCI98\ROOT_HUB,USB\ROOT_HUB20")
+        param($t) $t.Replace("RootHub.Dev,USB\XHCI98_ROOT_HUB", "RootHub.Dev,USB\XHCI98_ROOT_HUB,USB\ROOT_HUB20")
     }
     Assert-RuleFires "hcd-os-roothub-id-only" "HCD-ROOTHUB" {
-        param($t) $t.Replace("RootHub.Dev6,XHCI98\ROOT_HUB", "RootHub.Dev6,USB\ROOT_HUB")
+        param($t) $t.Replace("RootHub.Dev6,USB\XHCI98_ROOT_HUB", "RootHub.Dev6,USB\ROOT_HUB")
     }
     # The Power tab: the line gone on 9x, and the wrong provider on 9x and on
     # NT (the controller's page where the hub's belongs).
@@ -863,16 +865,41 @@ try {
     }
     # Quoted, the OS hub's id is still the OS hub's id.
     Assert-RuleFires "hcd-os-roothub-id-quoted" "HCD-ROOTHUB" {
-        param($t) $t.Replace("RootHub.Dev,XHCI98\ROOT_HUB", "RootHub.Dev,XHCI98\ROOT_HUB,`"USB\ROOT_HUB20`"")
+        param($t) $t.Replace("RootHub.Dev,USB\XHCI98_ROOT_HUB", "RootHub.Dev,USB\XHCI98_ROOT_HUB,`"USB\ROOT_HUB20`"")
     }
     # OS-ONNT6 holds on the NT 6.x root-hub install as on the controller's.
     Assert-RuleFires "hcd-roothub-nt6-copies-usbd" "OS-ONNT6" {
-        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n")
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n",
+                             "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyOS`r`n")
     }
     Assert-RuleFires "hcd-roothub-nt6-copies-usbui" "OS-ONNT6" {
-        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n",
+                             "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyUI`r`n")
+    }
+
+    # The root hub copies nothing since 2.4.0.0 (task 38.8, decision D3), on
+    # every path, as the hubs and composite parents do; and its line carries
+    # its own id alone.
+    Assert-RuleFires "hcd-roothub-copies-9x" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[RootHub.Dev]`r`nAddReg=RootHub.AddReg`r`n", "[RootHub.Dev]`r`nAddReg=RootHub.AddReg`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-roothub-copies-nt" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-roothub-copies-nt6" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-roothub-copies-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("[RootHub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-roothub-copies-amd64-nt6" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("[RootHub.Dev6.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev6.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
+    }
+    Assert-RuleFires "hcd-roothub-other-driver" "HCD-HUBCOPY" {
+        param($t) $t.Replace("[RootHub.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,xhci98.sys", "[RootHub.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,NTMPDriver,,usbhub.sys")
+    }
+    Assert-RuleFires "hcd-roothub-second-id" "HCD-ROOTHUB" {
+        param($t) $t.Replace("RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n", "RootHub.Dev,USB\XHCI98_ROOT_HUB,USB\VID_1B36&PID_000D`r`n")
     }
 
     # ---- HCD-HUB, HCD-HUBCOPY: external hubs as devnodes (task 33.4) ----
@@ -883,16 +910,16 @@ try {
     # hub installs as on the root hub's.
     Write-Step "the external hubs' models, copies and Power tab"
     Assert-RuleFires "hcd-no-hub" "HCD-HUB" {
-        param($t) $t.Replace("%HubDesc%=Hub.Dev,XHCI98\HUB`r`n", "")
+        param($t) $t.Replace("%HubDesc%=Hub.Dev,USB\XHCI98_HUB`r`n", "")
     }
     Assert-RuleFires "hcd-no-hub30-nt6" "HCD-HUB" {
-        param($t) $t.Replace("%Hub30Desc%=Hub.Dev6,XHCI98\HUB30`r`n", "")
+        param($t) $t.Replace("%Hub30Desc%=Hub.Dev6,USB\XHCI98_HUB30`r`n", "")
     }
     Assert-RuleFires "hcd-hub-os-class-id" "HCD-HUB" {
-        param($t) $t.Replace("Hub.Dev,XHCI98\HUB`r`n", "Hub.Dev,XHCI98\HUB,USB\Class_09`r`n")
+        param($t) $t.Replace("Hub.Dev,USB\XHCI98_HUB`r`n", "Hub.Dev,USB\XHCI98_HUB,USB\Class_09`r`n")
     }
     Assert-RuleFires "hcd-hub-vidpid-id" "HCD-HUB" {
-        param($t) $t.Replace("Hub.Dev6,XHCI98\HUB30`r`n", "Hub.Dev6,XHCI98\HUB30,USB\VID_2109&PID_0813`r`n")
+        param($t) $t.Replace("Hub.Dev6,USB\XHCI98_HUB30`r`n", "Hub.Dev6,USB\XHCI98_HUB30,USB\VID_2109&PID_0813`r`n")
     }
     Assert-RuleFires "hcd-hub-hubclass-on-controller" "HCD-HUB" {
         param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330", "Xhci.Dev,PCI\CC_0C0330,USB\HUBCLASS")
@@ -925,7 +952,7 @@ try {
         param($t) $t.Replace("[Hub.Dev.NTx86.Services]", "[Hub.Dev.NTx86.Svc]")
     }
     Assert-RuleFires "hcd-hub-no-hub-amd64" "HCD-HUB" -Source $prodInfAmd64 -Arch amd64 {
-        param($t) $t.Replace("%HubDesc%=Hub.Dev6,XHCI98\HUB`r`n", "")
+        param($t) $t.Replace("%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n", "")
     }
     Assert-RuleFires "hcd-hub-copies-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
         param($t) $t.Replace("[Hub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`n", "[Hub.Dev.NTamd64]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
@@ -938,16 +965,16 @@ try {
     # nothing, loads only the controller's driver and registers no page.
     Write-Step "the composite parents' models, copies and pages"
     Assert-RuleFires "hcd-no-composite-9x" "HCD-COMP" {
-        param($t) $t.Replace("%CompositeDesc%=Comp.Dev,XHCI98\COMPOSITE`r`n", "")
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE`r`n", "")
     }
     Assert-RuleFires "hcd-no-composite-nt6" "HCD-COMP" {
-        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n", "")
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE`r`n", "")
     }
     Assert-RuleFires "hcd-composite-os-id" "HCD-COMP" {
-        param($t) $t.Replace("Comp.Dev,XHCI98\COMPOSITE`r`n", "Comp.Dev,XHCI98\COMPOSITE,USB\COMPOSITE`r`n")
+        param($t) $t.Replace("Comp.Dev,USB\XHCI98_COMPOSITE`r`n", "Comp.Dev,USB\XHCI98_COMPOSITE,USB\COMPOSITE`r`n")
     }
     Assert-RuleFires "hcd-composite-vidpid-id" "HCD-COMP" {
-        param($t) $t.Replace("Comp.Dev6,XHCI98\COMPOSITE`r`n", "Comp.Dev6,XHCI98\COMPOSITE,USB\VID_0D8C&PID_0014`r`n")
+        param($t) $t.Replace("Comp.Dev6,USB\XHCI98_COMPOSITE`r`n", "Comp.Dev6,USB\XHCI98_COMPOSITE,USB\VID_0D8C&PID_0014`r`n")
     }
     Assert-RuleFires "hcd-composite-on-controller" "HCD-COMP" {
         param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330", "Xhci.Dev,PCI\CC_0C0330,USB\COMPOSITE")
@@ -974,7 +1001,7 @@ try {
         param($t) $t.Replace("[Comp.Dev.NTx86.Services]", "[Comp.Dev.NTx86.Svc]")
     }
     Assert-RuleFires "hcd-no-composite-amd64" "HCD-COMP" -Source $prodInfAmd64 -Arch amd64 {
-        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n", "")
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE`r`n", "")
     }
     Assert-RuleFires "hcd-composite-copies-amd64" "HCD-HUBCOPY" -Source $prodInfAmd64 -Arch amd64 {
         param($t) $t.Replace("[Comp.Dev.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
@@ -982,6 +1009,108 @@ try {
     Assert-RuleFires "hcd-composite-hubpage-amd64" "HCD-COMPPAGE" -Source $prodInfAmd64 -Arch amd64 {
         param($t) $t.Replace("[Comp.Dev6.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`n", "[Comp.Dev6.NTamd64]`r`nDelReg=Comp.DelReg.NT`r`nAddReg=RootHub.AddReg.NT`r`n")
     }
+
+    # ---- HCD-HUB / HCD-COMP forms, HCD-USBRES (task 38.8) ----------------
+    #
+    # Under USB\ a prefix proves nothing, so a hub's or composite's line takes
+    # its own base or that base's &VID_&PID_[&REV_] form exactly; the forms
+    # pass, case-insensitively, as the engines compare. No line of any
+    # section names another USB\XHCI98_ id - USB\XHCI98_NOXPORT, the refused
+    # interface's, above all - and none names an old XHCI98\ id (the clean
+    # move, decision D2).
+    Write-Step "the USB\XHCI98_ namespace and the old ids"
+    $formsOk = Invoke-Gate -Path (New-MutatedInf -Name "hcd-forms-ok" -Mutate {
+        param($t) $t.Replace("%HubDesc%=Hub.Dev,USB\XHCI98_HUB`r`n", "%HubDesc%=Hub.Dev,USB\XHCI98_HUB,USB\XHCI98_HUB&VID_2109&PID_2813&REV_9093,usb\xhci98_hub&vid_2109&pid_2813`r`n").
+                     Replace("%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE`r`n", "%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE,USB\XHCI98_COMPOSITE&VID_0D8C&PID_0014`r`n")
+    })
+    Assert-True ($formsOk.ExitCode -eq 0) ("hcd-forms-ok : a hub's and a composite's own &VID_&PID_[&REV_] forms were refused:`n" + $formsOk.Output)
+    Assert-RuleFires "hcd-hub-other-base" "HCD-HUB" {
+        param($t) $t.Replace("Hub.Dev,USB\XHCI98_HUB`r`n", "Hub.Dev,USB\XHCI98_HUB,USB\XHCI98_COMPOSITE`r`n")
+    }
+    Assert-RuleFires "hcd-hub-bad-hex" "HCD-HUB" {
+        param($t) $t.Replace("Hub.Dev,USB\XHCI98_HUB`r`n", "Hub.Dev,USB\XHCI98_HUB,USB\XHCI98_HUB&VID_21G9&PID_2813`r`n")
+    }
+    Assert-RuleFires "hcd-composite-hub-base" "HCD-COMP" {
+        param($t) $t.Replace("Comp.Dev6,USB\XHCI98_COMPOSITE`r`n", "Comp.Dev6,USB\XHCI98_COMPOSITE,USB\XHCI98_HUB`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-noxport-model" "HCD-USBRES" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE`r`n", "%CompositeDesc%=Comp.Dev,USB\XHCI98_COMPOSITE`r`n%CompositeDesc%=Comp.Dev,USB\XHCI98_NOXPORT`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-noxport-form" "HCD-USBRES" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE`r`n", "%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE`r`n%CompositeDesc%=Comp.Dev6,USB\XHCI98_NOXPORT&VID_0781&PID_5581&MI_00`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-other-model" "HCD-USBRES" {
+        param($t) $t.Replace("%HubDesc%=Hub.Dev,USB\XHCI98_HUB`r`n", "%HubDesc%=Hub.Dev,USB\XHCI98_HUB`r`n%HubDesc%=Hub.Dev,USB\XHCI98_OTHER`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-noxport-addreg" "HCD-USBRES" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`n", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,XhciNote,,`"USB\XHCI98_NOXPORT`"`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-old-model" "HCD-USBRES" {
+        param($t) $t.Replace("%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n", "%RootHubDesc%=RootHub.Dev,USB\XHCI98_ROOT_HUB`r`n%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-old-second-id" "HCD-USBRES" {
+        param($t) $t.Replace("Hub.Dev6,USB\XHCI98_HUB30`r`n", "Hub.Dev6,USB\XHCI98_HUB30,xhci98\hub30`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-old-composite-nt6" "HCD-USBRES" {
+        param($t) $t.Replace("%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE`r`n", "%CompositeDesc%=Comp.Dev6,USB\XHCI98_COMPOSITE`r`n%CompositeDesc%=Comp.Dev6,XHCI98\COMPOSITE`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-noxport-amd64" "HCD-USBRES" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("%HubDesc%=Hub.Dev,USB\XHCI98_HUB`r`n", "%HubDesc%=Hub.Dev,USB\XHCI98_HUB`r`n%HubDesc%=Hub.Dev,USB\XHCI98_NOXPORT`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-old-amd64" "HCD-USBRES" -Source $prodInfAmd64 -Arch amd64 {
+        param($t) $t.Replace("%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n", "%HubDesc%=Hub.Dev6,USB\XHCI98_HUB`r`n%HubDesc%=Hub.Dev6,XHCI98\HUB`r`n")
+    }
+    # A [Strings] substitution is expanded before the scan, and a model
+    # line's ids are literal (round 1 of the 38.8 code review, finding 1).
+    Assert-RuleFires "hcd-usbres-strings-token" "HCD-USBRES" {
+        param($t) $t.Replace("Xhci.Dev,PCI\CC_0C0330`r`n", "Xhci.Dev,PCI\CC_0C0330,%Bus%\XHCI98_NOXPORT&VID_0781&PID_5581`r`n").Replace("[Strings]`r`n", "[Strings]`r`nBus=`"USB`"`r`n")
+    }
+    Assert-RuleFires "hcd-usbres-strings-addreg" "HCD-USBRES" {
+        param($t) $t.Replace("[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`n", "[Comp.AddReg]`r`nHKR,,DevLoader,,*NTKERN`r`nHKR,,XhciNote,,`"%Old%\ROOT_HUB`"`r`n").Replace("[Strings]`r`n", "[Strings]`r`nOld=`"XHCI98`"`r`n")
+    }
+    # A comment is no line a setup engine reads: an old id in one passes.
+    $commentOk = Invoke-Gate -Path (New-MutatedInf -Name "hcd-usbres-comment" -Mutate {
+        param($t) $t.Replace("[XhciModels]`r`n", "[XhciModels]`r`n; was XHCI98\ROOT_HUB and USB\XHCI98_NOXPORT stays unbound`r`n")
+    })
+    Assert-True ($commentOk.ExitCode -eq 0) ("hcd-usbres-comment : an old id in a comment was refused:`n" + $commentOk.Output)
+
+    # ---- HCD-IDSRC: the INF's ids are src\xhci_hub.h's (task 38.8) -------
+    #
+    # The rule reads the header beside the INF, so the cases stage a copy of
+    # it beside the mutated INFs - and the good case asserts the check RAN,
+    # as the version block's does, since it skips without the header.
+    Write-Step "the id source: src\xhci_hub.h"
+    {
+        $idHdrText = [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci_hub.h"))
+        $stagedIdHdr = Join-Path $script:work "xhci_hub.h"
+        $asciiId = New-Object System.Text.ASCIIEncoding
+        try {
+            [System.IO.File]::WriteAllText($stagedIdHdr, $idHdrText, $asciiId)
+            foreach ($src in @(@{ Name = "idsrc-good"; Source = $prodInf; Arch = "x86" },
+                               @{ Name = "idsrc-good-amd64"; Source = $prodInfAmd64; Arch = "amd64" })) {
+                $r = Invoke-Gate -Path (New-MutatedInf -Name $src.Name -Mutate { param($t) $t } -InfUnchanged -Source $src.Source) -Extra @("-Arch", $src.Arch)
+                Assert-True ($r.ExitCode -eq 0) ($src.Name + " : the production INF and src\xhci_hub.h disagree:`n" + $r.Output)
+                Assert-True (-not ($r.Output -match "id source check skipped")) `
+                    ($src.Name + " : the id source check SKIPPED, so every case below would pass vacuously. Output was:`n" + $r.Output)
+            }
+            $idCases = @(
+                @{ Name = "idsrc-spelling"; Pattern = '(?m)^(#define\s+XHCI_ID_HUB30\s+")USB\\\\XHCI98_HUB30(")'; Replace = '${1}USB\\XHCI98_HUB3${2}' },
+                @{ Name = "idsrc-old-root"; Pattern = '(?m)^(#define\s+XHCI_ID_ROOT_HUB\s+")USB\\\\XHCI98_ROOT_HUB(")'; Replace = '${1}XHCI98\\ROOT_HUB${2}' },
+                @{ Name = "idsrc-gone";     Pattern = '(?m)^#define\s+XHCI_ID_COMPOSITE\s+.*\r?\n'; Replace = '' },
+                @{ Name = "idsrc-twice";    Pattern = '(?m)^(#define\s+XHCI_ID_HUB\s+.*\r?\n)'; Replace = '${1}${1}' }
+            )
+            foreach ($c in $idCases) {
+                $mutated = $idHdrText -replace $c.Pattern, $c.Replace
+                Assert-True ($mutated -ne $idHdrText) ($c.Name + " : the mutation matched nothing, so it tests nothing.")
+                [System.IO.File]::WriteAllText($stagedIdHdr, $mutated, $asciiId)
+                $r = Invoke-Gate -Path (New-MutatedInf -Name $c.Name -Mutate { param($t) $t } -InfUnchanged)
+                Assert-True ($r.ExitCode -ne 0) ($c.Name + " : a header disagreeing with the INF's ids was accepted.")
+                Assert-True ($r.Output -match [regex]::Escape("FAIL [HCD-IDSRC]")) ($c.Name + " : expected HCD-IDSRC. Output was:`n" + $r.Output)
+            }
+        } finally {
+            if (Test-Path -LiteralPath $stagedIdHdr) { Remove-Item -LiteralPath $stagedIdHdr -Force }
+        }
+    }.Invoke() | Out-Null
 
     Write-Step "the two install paths"
     Assert-RuleFires "no-ntx86" "PATH-NT" {
@@ -1104,7 +1233,9 @@ try {
         param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbport.sys,,,16`r`nusbd.sys,,,16")
     }
     Assert-RuleFires "os-usbhub-on-roothub" "OS-HCDREPLACED" {
-        param($t) Add-CopySection $t "[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles" "usbhub.sys,,,16"
+        # The root hub copies nothing since task 38.8 (D3), so the case gives
+        # it a CopyFiles line back first and hangs the hub driver off that.
+        param($t) Add-CopySection ($t.Replace("[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`n", "[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")) "[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles" "usbhub.sys,,,16"
     }
     # usbhub20.sys on any path, or on the media: Windows 2000's own USB.INF
     # places it with the root hub, XP has no such file, and the owner's

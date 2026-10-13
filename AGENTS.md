@@ -319,8 +319,9 @@ instance id from the device's serial number where it has a usable one,
 design record 13 section 10.7). External hubs are run
 by the bus and, since `2.1.0.0` (roadmap-hcd task 33.4, design record 13
 section 10.11), also presented as devnodes under project-owned ids
-(`XHCI98\HUB`, `XHCI98\HUB30`) bound to `xhci98.sys` once more, with the
-devices behind each nested beneath it.
+(`USB\XHCI98_HUB`, `USB\XHCI98_HUB30` since `2.4.0.0`, task 38.8, section
+10.13; `XHCI98\HUB` and `XHCI98\HUB30` before) bound to `xhci98.sys` once
+more, with the devices behind each nested beneath it.
 
 ```
   [hidusb.sys, usbstor.sys, usbaudio.sys, vendor drivers, xhciuas.sys]
@@ -632,7 +633,8 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
-  anywhere: the two tool executables carry statically linked runtimes
+  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, and from
+  `2.4.0.0` `XHCICLN` and `XHCICL64`) carry statically linked runtimes
   (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the

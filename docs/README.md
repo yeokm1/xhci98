@@ -192,6 +192,10 @@ reachable from here or from `AGENTS.md`'s repository layout.
   holds one README per machine and run.
 - [`xhcisnap/README.md`](../xhcisnap/README.md) - the host-side reader for the
   driver's log channel, and what it can and cannot get off a Windows 98 machine.
+- [`xhcicln/README.TXT`](../xhcicln/README.TXT) - the optional tool that
+  lists, and on Windows 2000 to 7 removes, the devnodes a driver before
+  `2.4.0.0` left under `XHCI98\` (roadmap-hcd task 38.8, design record 13
+  section 10.13.8); published as the tool's `readme.txt`.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.

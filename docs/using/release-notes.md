@@ -214,6 +214,22 @@ included.
 - Neither the finer timer nor the renamed helper has been read on any
   guest or machine yet: both are owed to the test matrix ("Untested
   ground").
+- **The root hub, the hubs and the composite devices are named under
+  `USB\`.** Their device ids move from `XHCI98\ROOT_HUB`, `XHCI98\HUB`,
+  `XHCI98\HUB30` and `XHCI98\COMPOSITE` (each hub and composite id with its
+  `&VID_`, `&PID_` and `&REV_` forms) to `USB\XHCI98_ROOT_HUB`,
+  `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and `USB\XHCI98_COMPOSITE`: a device
+  id's first part names the bus that found the device, and there is no
+  `XHCI98` bus (SweetLow, GitHub issue 17). Their entries move from
+  `Enum\XHCI98` to `Enum\USB` in the registry. The names stay private to
+  this project, so no Windows or vendor INF binds them, and the root hub's
+  install no longer copies `xhci98.sys` (the controller's does). **An
+  update from `2.3.x` or earlier finds each root hub, hub and composite
+  device once more, and asks on XP, XP x64 and 98 SE** ("Updating from
+  2.y.y.y", "From 2.3.x or earlier"). The download's `tools\xhcicln\`
+  carries `XHCICLN.EXE` and `XHCICL64.EXE`, an optional tool that lists the
+  old entries an update leaves behind and, on Windows 2000 to 7, removes
+  them; on 98 SE and ME it lists only.
 
 ## What `2.3.1.0` changes
 
@@ -893,6 +909,63 @@ from an administrator's prompt with `pnputil -e`, and remove each
 "Universal Serial Bus controllers" with `pnputil -d oemNN.inf`. The same
 applies before going back to an older version
 ("Windows Vista and 7: message-signalled interrupts").
+
+#### From 2.3.x or earlier
+
+From `2.4.0.0` the root hub, every hub and every composite device are named
+under `USB\` instead of `XHCI98\` ("What `2.4.0.0` adds"). Windows keeps an
+entry per device id, so this update costs something once, on every system.
+What follows is what the design expects (design record 13 section 10.13);
+it has not yet been read in a virtual machine:
+
+- **Each root hub, hub and composite device is found again as new
+  hardware, once**, and installed from this package under its new name. Its
+  old entry stays behind, not present: nothing loads for it, it costs
+  nothing at run time, and Device Manager hides it (on Windows 2000 to 7
+  it shows, greyed, after `set DEVMGR_SHOW_NONPRESENT_DEVICES=1` at a
+  prompt, `devmgmt.msc` from that prompt and View, Show hidden devices; the
+  old and the new carry the same names). Update the controller only: the
+  root hub is a new one and installs by itself from the new package, so
+  the root hub's Driver tab paragraph above does not apply.
+- **The devices beneath follow.** A device or a composite device's
+  function with a usable serial number (most sticks and disks) keeps its
+  entry, its driver and its settings. One without (most mice and
+  keyboards, at a root port or behind a hub) is found again too, because
+  Windows names it after its parent, and on Windows 98 SE the Add New
+  Hardware wizard runs for each and may ask for the Windows 98 SE CD. What
+  was kept on the old entry is not carried over: a setting a tool wrote
+  there (hidusbf's polling rate), a friendly name, and for a USB serial
+  adapter possibly its COM number (the old entry may keep the number it
+  had, and the new one take the next free one; not read). Apply them again
+  afterwards.
+- **Before updating on Windows XP, XP x64 or 98 SE, have a keyboard and
+  mouse that do not go through this driver**: PS/2, a laptop's built-in
+  ones, or a USB controller another driver runs. XP and XP x64 ask Found
+  New Hardware and the unsigned-driver question for the new root hub, each
+  hub and each composite device, and 98 SE runs its wizard for each device
+  found again; until those are answered, the USB keyboard and mouse behind
+  the new root hub do nothing. A second controller running this driver does
+  not help: the restart that loads the new driver gives its root hub a new
+  entry too.
+- **Windows 98 SE and ME: connect no new hub or composite device between
+  the update and the restart.** The earlier release runs until then and
+  would give it an old name, which the new package no longer binds.
+- **Removing the old entries is optional**, and nothing needs it. After
+  the update and its restart, `XHCICLN.EXE` (32-bit Windows) or
+  `XHCICL64.EXE` (64-bit Windows) in the download's `tools\xhcicln\` lists
+  them and, run with `-remove`, removes the ones that are not present on
+  Windows 2000 to 7, after one question; on Windows 2000 and XP run it as
+  an administrator, and on Vista and 7 it asks for elevation itself. It
+  removes nothing - and says why - while an old entry is present (before
+  the restart, or after going back), while no controller of this project
+  is started with its new root hub, or when any of its checks cannot be
+  answered for certain, and it never touches a device's own entry. On
+  Windows 98 SE and ME this release lists only: nothing there keeps an
+  older driver from loading during a run, and the entries are inert. Its
+  `readme.txt` has the rest.
+- **Going back to `2.3.x`** brings each old entry back with its driver,
+  and the new ones go non-present - unless the tool removed an old entry,
+  which is then found and installed afresh (on XP with the wizard).
 
 ### Updating xhciuas.sys over an older one
 
@@ -2568,6 +2641,7 @@ information.
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
 | A finer system timer while polling (`XhciPollFineTimer`), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. Unread on every guest and every machine, owed to the test matrix: the timer's effect and its release, at a stop, a sleep and a recovery; two controllers; the helper's install on 2000 and XP and its replacement of `xhcimsi.sys` on Vista and 7 ("XhciPollFineTimer: a finer system timer while polling") |
+| A High Speed hub and a USB 3 hub under the `2.4.0.0` ids (`USB\XHCI98_HUB`, `USB\XHCI98_HUB30`) | Built against host tests and the INF gate. Virtual machines model only a Full Speed hub, which takes the same id and code path as a High Speed one (`USB\XHCI98_HUB`) and stands for it before the release; a High Speed hub and a USB 3 hub's two halves under the new ids are read on real hardware after the release |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing

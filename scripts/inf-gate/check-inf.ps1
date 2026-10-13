@@ -277,11 +277,25 @@ $ErrorActionPreference = "Stop"
 #                          model with it is a COMPOSITE install, which copies
 #                          nothing either (HCD-HUBCOPY) and registers no
 #                          property page (HCD-COMPPAGE).
+#   IdHeader / IdMacros    the pure header beside the INF that spells the four
+#                          ids above once for the C (task 38.8; design record
+#                          13 section 10.13.1), and the #define each id is
+#                          read from: HCD-IDSRC holds this table equal to it.
+#
+# The four ids are under USB\ since 2.4.0.0 (task 38.8, section 10.13); they
+# were XHCI98\ROOT_HUB, XHCI98\HUB, XHCI98\HUB30 and XHCI98\COMPOSITE, and no
+# line of this package may name those any more (HCD-USBRES; a clean move,
+# the owner's decision D2).
 #
 $prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";
-           Binary = "xhci98.sys"; RootHubId = "XHCI98\ROOT_HUB";
-           HubIds = @("XHCI98\HUB", "XHCI98\HUB30");
-           CompositeId = "XHCI98\COMPOSITE" }
+           Binary = "xhci98.sys"; RootHubId = "USB\XHCI98_ROOT_HUB";
+           HubIds = @("USB\XHCI98_HUB", "USB\XHCI98_HUB30");
+           CompositeId = "USB\XHCI98_COMPOSITE";
+           IdHeader = "xhci_hub.h";
+           IdMacros = [ordered]@{ XHCI_ID_ROOT_HUB = "USB\XHCI98_ROOT_HUB";
+                                  XHCI_ID_HUB = "USB\XHCI98_HUB";
+                                  XHCI_ID_HUB30 = "USB\XHCI98_HUB30";
+                                  XHCI_ID_COMPOSITE = "USB\XHCI98_COMPOSITE" } }
 
 $script:failures = @()
 $script:warnings = @()
@@ -846,15 +860,32 @@ foreach ($m in $models) {
 # ---- HCD-HUB: external hubs as devnodes (task 33.4) ----------------------
 #
 # Since 2.1.0.0 the bus presents every hub it serves as a devnode under a
-# project-owned id - XHCI98\HUB, or XHCI98\HUB30 for a USB 3 hub's SuperSpeed
-# half - bound to xhci98.sys again (design record 13 section 10.11). A models
+# project-owned id - USB\XHCI98_HUB, or USB\XHCI98_HUB30 for a USB 3 hub's
+# SuperSpeed half (XHCI98\HUB and XHCI98\HUB30 before 2.4.0.0, task 38.8) -
+# bound to xhci98.sys again (design record 13 section 10.11). A models
 # section without either leaves that kind of hub a devnode with no driver
-# on its path. Every id on a hub's line must be the project's own, and no
+# on its path. Every id on a hub's line must be the project's own - one of
+# the two hub bases or its &VID_vvvv&PID_pppp[&REV_rrrr] form, exactly, since
+# under USB\ a prefix proves nothing (section 10.13.2) - and no
 # line anywhere may name a Microsoft hub id: USB\CLASS_09 (and its forms),
 # USB\HUBCLASS, USB\USB20_HUB and USB\USB30_HUB are the OS hub drivers' on
 # every target (section 10.11 lists the sweep), and a model for one would
 # compete with usbhub.sys for every other stack's hubs on the machine.
 #
+function Test-ProjectIdForm {
+    # True when $Id is one of $Bases exactly, or one of them followed by
+    # &VID_vvvv&PID_pppp and optionally &REV_rrrr, four hex digits each - the
+    # forms the bus answers (design record 13 section 10.13.1). Matching is
+    # case-insensitive, as every target's setup engine compares ids.
+    param([string]$Id, [string[]]$Bases)
+    foreach ($b in $Bases) {
+        if ($Id -imatch ('^' + [regex]::Escape($b) + '(&VID_[0-9A-F]{4}&PID_[0-9A-F]{4}(&REV_[0-9A-F]{4})?)?$')) {
+            return $true
+        }
+    }
+    return $false
+}
+
 foreach ($ms in $modelSections) {
     $here = @($models | Where-Object { $_.Decoration -eq $ms.Decoration })
     foreach ($hid in $prod.HubIds) {
@@ -868,8 +899,8 @@ foreach ($m in $models) {
         if ($id -match '^USB\\(CLASS_09|HUBCLASS|USB20_HUB|USB30_HUB)') {
             Add-Failure "HCD-HUB" ("models line {0} matches '{1}', which is the OS hub driver's id. The HCD's hubs are '{2}'." -f $m.Line, $id, ($prod.HubIds -join "' and '"))
         }
-        if ($m.Role -eq "hub" -and $id -notmatch '^XHCI98\\') {
-            Add-Failure "HCD-HUB" ("hub models line {0} carries '{1}'. A hub's ids are the project's own, under XHCI98\, so no OS INF can match the devnode and no other line here can match an OS hub." -f $m.Line, $id)
+        if ($m.Role -eq "hub" -and -not (Test-ProjectIdForm $id $prod.HubIds)) {
+            Add-Failure "HCD-HUB" ("hub models line {0} carries '{1}'. A hub's ids are the project's own - '{2}' or its &VID_vvvv&PID_pppp[&REV_rrrr] form, exactly - so no OS INF can match the devnode and no other line here can match an OS hub." -f $m.Line, $id, ($prod.HubIds -join "' or '"))
         }
     }
 }
@@ -878,9 +909,9 @@ foreach ($m in $models) {
 # ---- HCD-COMP: composite devices as devnodes (task 36.43) ---------------
 #
 # Since task 36.43 the bus presents every composite device it splits as a
-# devnode of its own under the project-owned XHCI98\COMPOSITE, bound to
-# xhci98.sys again, with the function PDOs beneath it (design record 13
-# section 10.12). A models section without that model leaves every composite
+# devnode of its own under the project-owned USB\XHCI98_COMPOSITE
+# (XHCI98\COMPOSITE before 2.4.0.0, task 38.8), bound to xhci98.sys again,
+# with the function PDOs beneath it (design record 13 section 10.12). A models section without that model leaves every composite
 # device a devnode with no driver on its path - and its functions, which only
 # a started parent reports, absent. Every id on the line is the project's
 # own, and no line anywhere may name USB\COMPOSITE: that id brings the OS's
@@ -899,8 +930,101 @@ foreach ($m in $models) {
         if ($id -match '^USB\\COMPOSITE$') {
             Add-Failure "HCD-COMP" ("models line {0} matches '{1}', which brings the OS composite parent the HCD replaces. The HCD's composite parent is '{2}'." -f $m.Line, $id, $prod.CompositeId)
         }
-        if ($m.Role -eq "composite" -and $id -notmatch '^XHCI98\\') {
-            Add-Failure "HCD-COMP" ("composite models line {0} carries '{1}'. A composite parent's ids are the project's own, under XHCI98\, so no OS or vendor INF can match the devnode." -f $m.Line, $id)
+        if ($m.Role -eq "composite" -and -not (Test-ProjectIdForm $id @($prod.CompositeId))) {
+            Add-Failure "HCD-COMP" ("composite models line {0} carries '{1}'. A composite parent's ids are the project's own - '{2}' or its &VID_vvvv&PID_pppp[&REV_rrrr] form, exactly - so no OS or vendor INF can match the devnode." -f $m.Line, $id, $prod.CompositeId)
+        }
+        if ($m.Role -eq "roothub" -and $id -ine $prod.RootHubId) {
+            Add-Failure "HCD-ROOTHUB" ("root-hub models line {0} carries '{1}'. The root hub answers '{2}' alone, and any other id on its line is one more devnode this section could bind." -f $m.Line, $id, $prod.RootHubId)
+        }
+    }
+}
+
+#
+# ---- HCD-USBRES: the USB\XHCI98_ namespace, and no old id (task 38.8) ----
+#
+# Since 2.4.0.0 the four ids are under USB\ (design record 13 section 10.13),
+# so the guarantee that nothing else binds them rests on the audit of
+# section 10.13.2 and on this rule, not on a private enumerator. The
+# namespace is the project's in both directions: USB\XHCI98_NOXPORT, the
+# refused storage interface's id (task 31-A.3), must stay unbound, so no line
+# of any section names a USB\XHCI98_ id other than the four bound bases and
+# their &VID_&PID_[&REV_] forms - never a prefix test, which would admit it
+# (task NOX.1's decision 5, section 10.7.1). And no line names an XHCI98\ id
+# at all: the INFs dropped the old ids with the move (decision D2, a clean
+# move), and an old model line would let this package compete for a devnode
+# an older binary made. Comments are not lines a setup engine reads.
+#
+# A %token% is expanded from [Strings] before the scan, as the setup engines
+# expand it, so `%Bus%\XHCI98_NOXPORT` with Bus="USB" is the id it becomes;
+# and a model line's ids may carry no %token% at all, so that every id this
+# package binds is one the role rules above read literally (round 1 of the
+# 38.8 code review, finding 1).
+$infStrings = @{}
+foreach ($e in @(Get-Section $inf "Strings")) {
+    if ($null -eq $e) { continue }
+    if ($e.Text -match '^\s*([^=\s]+)\s*=\s*(.*)$') {
+        $infStrings[$matches[1].Trim().ToLowerInvariant()] = $matches[2].Trim().Trim('"')
+    }
+}
+function Expand-InfTokens {
+    param([string]$Text)
+    return [regex]::Replace($Text, '%([^%]*)%', {
+        param($m)
+        if ($m.Groups[1].Value -eq "") { return "%" }
+        $k = $m.Groups[1].Value.ToLowerInvariant()
+        if ($infStrings.ContainsKey($k)) { return $infStrings[$k] }
+        return $m.Value
+    })
+}
+foreach ($m in $models) {
+    foreach ($id in $m.Ids) {
+        if ($id -match '%') {
+            Add-Failure "HCD-USBRES" ("models line {0} carries the id '{1}', which names a [Strings] substitution. Every id this package binds is written out literally, so that the gate's id rules read the id a setup engine matches." -f $m.Line, $id)
+        }
+    }
+}
+$usbResBases = @($prod.RootHubId) + @($prod.HubIds) + @($prod.CompositeId)
+foreach ($sec in $inf.SectionOrder) {
+    foreach ($e in (Get-Section $inf $sec)) {
+        $expanded = Expand-InfTokens $e.Text
+        foreach ($tok in @([regex]::Matches($expanded, '(?i)USB\\XHCI98_[^,\s"]*') | ForEach-Object { $_.Value })) {
+            if (-not (Test-ProjectIdForm $tok $usbResBases)) {
+                Add-Failure "HCD-USBRES" ("[{0}] line {1} names '{2}'. The USB\XHCI98_ ids this package may name are '{3}' and their &VID_vvvv&PID_pppp[&REV_rrrr] forms, exactly; any other - USB\XHCI98_NOXPORT, the refused interface's, above all - must stay unbound (design record 13 section 10.13.2)." -f $sec, $e.Line, $tok, ($usbResBases -join "', '"))
+            }
+        }
+        if ($expanded -imatch '(?<![A-Za-z0-9_%\\])XHCI98\\') {
+            Add-Failure "HCD-USBRES" ("[{0}] line {1} names an XHCI98\ id ('{2}'). The bus's ids are under USB\ since 2.4.0.0 and this package names none of the old ones (decision D2, a clean move): an old model line would let this INF compete for a devnode an older binary made." -f $sec, $e.Line, $e.Text)
+        }
+    }
+}
+
+#
+# ---- HCD-IDSRC: the INF's ids are the C's (task 38.8) ---------------------
+#
+# The C spells the four ids once, in src\xhci_hub.h (design record 13
+# section 10.13.1), and builds every answer from them; this gate's table above
+# is the INF's side. They are held equal here, so the driver and the INFs
+# cannot drift apart: the models must carry the table's ids (HCD-ROOTHUB,
+# HCD-HUB, HCD-COMP) and no other USB\XHCI98_ id (HCD-USBRES), and the table
+# must equal the header. Only when the header is beside the INF, as for the
+# version cross-check: a staged package carries no source.
+#
+$idHdrPath = Join-Path (Split-Path -Parent $InfPath) $prod.IdHeader
+if (-not (Test-Path -LiteralPath $idHdrPath)) {
+    Write-Host ("  (no " + $prod.IdHeader + " beside this INF - id source check skipped)") -ForegroundColor DarkGray
+} else {
+    $idHdrText = [System.IO.File]::ReadAllText($idHdrPath)
+    foreach ($macro in $prod.IdMacros.Keys) {
+        $want = $prod.IdMacros[$macro]
+        $hits = @([regex]::Matches($idHdrText, ('(?m)^\s*#define\s+' + $macro + '\s+"((?:[^"\\]|\\.)*)"\s*$')))
+        if ($hits.Count -ne 1) {
+            Add-Failure "HCD-IDSRC" ("{0} defines {1} as a string literal {2} times, not once. It is where the C takes that id from (design record 13 section 10.13.1)." -f $prod.IdHeader, $macro, $hits.Count)
+            continue
+        }
+        # The C literal's escapes, of which an id uses only the backslash.
+        $have = $hits[0].Groups[1].Value -replace '\\(.)', '$1'
+        if ($have -cne $want) {
+            Add-Failure "HCD-IDSRC" ("{0} defines {1} as '{2}', but this INF's models are held to '{3}'. The driver would answer an id no model of this package binds." -f $prod.IdHeader, $macro, $have, $want)
         }
     }
 }
@@ -917,9 +1041,14 @@ foreach ($m in $models) {
 # value or service binary it writes names the driver the controller's own
 # install delivers - which is why PATH-W98's and PATH-NT's "its own
 # CopyFiles delivers it" checks stand aside for this role. A composite
-# parent's install (task 36.43) is held the same way, for the same reason.
+# parent's install (task 36.43) is held the same way, for the same reason,
+# and since 2.4.0.0 the root hub's too (task 38.8, decision D3): it exists
+# only under a running xhci98.sys as well, and after the id move an update
+# makes it a new devnode at the start where the new binary already runs, so
+# on Windows 98 SE and ME its copy would replace the running file from
+# wherever the update was taken.
 #
-foreach ($m in @($models | Where-Object { $_.Role -eq "hub" -or $_.Role -eq "composite" })) {
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq "hub" -or $_.Role -eq "composite" })) {
     foreach ($ap in @(Get-ModelPaths $m)) {
         $install = $m.Section + $ap.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -1028,7 +1157,7 @@ foreach ($m in $models) {
                     }
                 }
                 foreach ($d in $ntmpFiles) {
-                    if ($m.Role -eq "hub" -or $m.Role -eq "composite") {
+                    if ($m.Role -eq "roothub" -or $m.Role -eq "hub" -or $m.Role -eq "composite") {
                         # HCD-HUBCOPY: a hub (or a composite parent, task
                         # 36.43) copies nothing and loads the driver the
                         # controller's install delivered.
@@ -1152,7 +1281,7 @@ foreach ($m in $models) {
                         if ($dst -ne "") { [void]$delivered.Add($dst.ToLowerInvariant()) }
                     }
                 }
-                if ($m.Role -eq "hub" -or $m.Role -eq "composite") {
+                if ($m.Role -eq "roothub" -or $m.Role -eq "hub" -or $m.Role -eq "composite") {
                     # HCD-HUBCOPY: a hub (or a composite parent, task 36.43)
                     # copies nothing and runs the controller's service
                     # binary.
