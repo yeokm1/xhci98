@@ -462,7 +462,7 @@ Absent, not a `DWORD`, or any other number is the default. The revision of the c
 
 None of them has been read on a listed controller yet. Three listed controllers are on my own machines: the E460's (`8086:9D2F`, `XhciStuckLinkReset`), the B490's (`8086:1E31`, `XhciIntelShutdownToEhci`) and the E7250's (`8086:9CB1`, `XhciIntelShutdownToEhci`; `XhciShutdownReset` lists it but is off by default). A user has a VIA VL805 (`XhciResumeReinit`, `XhciStreamRingPad`). QEMU's controller is on no list.
 
-What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is logged, but the log lives in memory and is gone at the next start. It can be seen only in a capture of that shutdown: `XhciLogDebugView` set to `1` with a debug-output viewer or a kernel debugger attached (see the release notes, "The log, and how to send one").
+What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is logged, but the log lives in memory and is gone at the next start. It can be seen only in a capture of that shutdown: `XhciLogVerbosity` at `2` or above (below it nothing is recorded) and `XhciLogDebugView` set to `1`, with a debug-output viewer or a kernel debugger attached (see the release notes, "The log, and how to send one").
 
 The release notes' "Linux's controller quirks" has each value in full.
 

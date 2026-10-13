@@ -1089,7 +1089,7 @@ At implementation:
 - `xhciqual/quirks.c`, `qual.h` and `report.c`: section 6.5.
 - `xhcisnap/xhcisnap.c` and `xhcisnap/README.md`: section 6.4.
 - `legal-provenance.md` section on the mirrors: a row per copy, if any.
-  As built there is none (section 13.6), so no row and no release notice.
+  As built there is no copy (section 13.6), so no row was added.
 - `external/README.md`: `include/linux/pci_ids.h` and
   `drivers/usb/core/message.c` added to the Linux mirror at the pinned
   commit, so section 2.1's **(h)** values and section 5.3's citation rest
@@ -1308,8 +1308,11 @@ word of `xhci_quirk.h` (bits 1:0 the mode, 4:2 the normalization, bit 5
 matched, bit 6 effective, bit 7 overridden, 11:8 the last outcome, 15:12
 its reason, 31:16 the value as read, FFFFh when none was); and
 `quirk.identity`, `hc.pci.rev` and, where they apply,
-`quirk.msiavoid.idmismatch` and `quirk.stucklink.port`. A quirk that acts
-logs its word again. The counter block gains words 173 to 206
+`quirk.msiavoid.idmismatch` and `quirk.stucklink.port`. Of the quirks that
+act, Q4, Q5, Q9 and Q16 log their word again at each action (and Q12 its
+port); Q1, Q3, Q7, Q8, Q10, Q13 and Q14 update their outcome and counts
+only, which the counter block and `XHCISNAP` carry, so their start note
+keeps the start's reading. The counter block gains words 173 to 206
 (`src\xhci_counters.h`; 207 words in all): the fourteen packed words (173
 to 186), the revision (187), the identity matched (188), and the counts
 (189 to 206). `XHCISNAP` prints them as a "Linux quirks" block and names
@@ -1323,9 +1326,9 @@ Every quirk is written fresh from this record: the ids, offsets, bits and
 the ASMedia sequence's constants are interface facts, each cited at its
 Linux line in sections 3 and 4 and in the code's comments, and no Linux
 code is copied into `src`. `legal-provenance.md`'s exception for Linux's
-xHCI quirks is therefore not used: section 10's "a row per copy, if any"
-is none, that file gains no row, and no release notice is owed for task
-38.10 at 38.final.
+xHCI quirks was not used: section 10's "a row per copy, if any" found no
+copy, and that file gained no row. 38.final's check of the release
+notices reads this section.
 
 ### 13.7 Read on hardware
 

@@ -2119,9 +2119,10 @@ what `2` reaches.
 down, and log what they did, but the log lives in memory and the next start
 cannot read it, so `XHCISNAP` never shows it. The driver sends those lines
 out before the shutdown goes on, waiting for its thread for at most half a
-second, and they reach you only through `XhciLogDebugView` set to `1` with
-a debug-output viewer or a kernel debugger attached to that shutdown ("The
-log, and how to send one").
+second, and they reach you only with `XhciLogVerbosity` at `2` or above
+(below it the lines are not recorded at all) and `XhciLogDebugView` set to
+`1`, with a debug-output viewer or a kernel debugger attached to that
+shutdown ("The log, and how to send one").
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 

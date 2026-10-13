@@ -5092,7 +5092,8 @@ A value that is absent means the default each one states.
   WHAT HAPPENS AT SHUTDOWN IS SEEN ONLY IN A CAPTURE OF THAT SHUTDOWN.
   XhciIntelShutdownToEhci and XhciShutdownReset log what they did, but the
   log lives in memory and is gone at the next start, so XHCISNAP never
-  shows it. Set XhciLogDebugView to 1 and attach a debug-output viewer or
+  shows it. Set XhciLogVerbosity to 2 or above (below it nothing is
+  recorded) and XhciLogDebugView to 1, and attach a debug-output viewer or
   a kernel debugger to the shutdown to see it.
 
   THOSE THIRTY-THREE ARE THE WHOLE LIST. The earlier releases'
