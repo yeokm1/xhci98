@@ -76,8 +76,9 @@ Revision 14, 2026-10-13, for roadmap-hcd task 38.11, written before code:
 section 4.14 accepts controllers whose HCIVERSION is 0.96 behind
 `XhciAccept096`, on by default, with the TD Size field in 0.96's units on
 them (owner, 2026-10-13), and audits every other behaviour of xHCI 1.0 the
-driver relies on against what 0.96 may lack. Its open decisions are section
-4.14.11. Nothing else changes.
+driver relies on against what 0.96 may lack. The owner's answers of the
+same day to its seven questions are folded in (section 4.14.11). Nothing
+else changes.
 
 ## 1. What is asked, and what is not
 
@@ -1807,8 +1808,9 @@ findings on the draft:
 ### 4.14 Controllers below xHCI 1.0: version 0.96 accepted (38.11, revision 14)
 
 Roadmap-hcd task 38.11 (owner, 2026-10-13). Written before code; nothing
-here is built. The owner's decisions already taken are stated as such;
-section 4.14.11 is what is still the owner's.
+here is built. The owner's decisions, those given with the task and the
+answers to the draft's questions D1 to D7, are section 4.14.11 and are
+written into the sections below.
 
 **Why here.** This record is the one about running on controllers that
 depart from what the driver otherwise assumes, under section 2's rule:
@@ -1906,22 +1908,22 @@ evaluates.
 
 Every behaviour of xHCI 1.0 and later the driver depends on, against what
 0.96 may lack or define differently. "As 1.0 holds" means the owner's rule
-- a 0.96 controller driven as a 1.0 one - is safe on the evidence; a
-"decision" row is in section 4.14.11. Linux citations are `file:line` at
+- a 0.96 controller driven as a 1.0 one - is safe on the evidence; a row
+naming a decision departs from it, as section 4.14.11 records. Linux citations are `file:line` at
 the pinned commit.
 
 | # | Behaviour | xHCI 1.2c | 0.96 | Linux below 1.0 | The driver | Verdict |
 |---|---|---|---|---|---|---|
-| A1 | TD Size | 4.11.2.4 p.198: packets remaining after this TRB, capped at 31, 0 on the last TRB | unread; not in Appendix G | `xhci-ring.c:3472-3516` (`xhci_td_remainder`): bytes remaining **including** this TRB, shifted right by 10, capped at 31 by `TRB_TD_SIZE`, and returned before the last-TRB test, so the last TRB carries its own length in KiB. MediaTek's 0.96 platform glue takes the 1.0 form (`3498-3509`), not PCI | `xhci_xfer.c`, `xhciXferTdSize`: the 1.0 form for every TRB, then 0 written over the last (control, normal and isoch builders) | the owner's rule (4.14.5); D1 |
-| A2 | Setup Stage TRB Transfer Type (TRT) | Table 6-26 p.432, dword 3 bits 17:16 | unread | written only at 1.0 or later (`xhci-ring.c:3820-3828`, "xHCI 1.0/1.1 6.4.1.2.1"); 0 below | `XhciXferBuildControl` writes 0, 2 or 3 always | D2 |
-| A3 | Isoch TRB TBC and TLBPC | Table 6-34 p.436-437 | unread | both written as 0 below 1.0 (`xhci-ring.c:3895-3913`, "Only xHCI 1.0 host controllers support this field"; `3923-3945`) | `xhciXferIsoBurstFields` computes both; TLBPC is nonzero for a High-Speed high-bandwidth or SuperSpeed burst TD | D3 |
+| A1 | TD Size | 4.11.2.4 p.198: packets remaining after this TRB, capped at 31, 0 on the last TRB | unread; not in Appendix G | `xhci-ring.c:3472-3516` (`xhci_td_remainder`): bytes remaining **including** this TRB, shifted right by 10, capped at 31 by `TRB_TD_SIZE`, and returned before the last-TRB test, so the last TRB carries its own length in KiB. MediaTek's 0.96 platform glue takes the 1.0 form (`3498-3509`), not PCI | `xhci_xfer.c`, `xhciXferTdSize`: the 1.0 form for every TRB, then 0 written over the last (control, normal and isoch builders) | the owner's rule (4.14.5); D1: Linux's form, the last TRB included |
+| A2 | Setup Stage TRB Transfer Type (TRT) | Table 6-26 p.432, dword 3 bits 17:16 | unread | written only at 1.0 or later (`xhci-ring.c:3820-3828`, "xHCI 1.0/1.1 6.4.1.2.1"); 0 below | `XhciXferBuildControl` writes 0, 2 or 3 always | D2: 0 below 1.0 |
+| A3 | Isoch TRB TBC and TLBPC | Table 6-34 p.436-437 | unread | both written as 0 below 1.0 (`xhci-ring.c:3895-3913`, "Only xHCI 1.0 host controllers support this field"; `3923-3945`) | `xhciXferIsoBurstFields` computes both; TLBPC is nonzero for a High-Speed high-bandwidth or SuperSpeed burst TD | D3: both 0 below 1.0 |
 | A4 | Isoch Frame ID and SIA, CFC | 4.11.2.5 p.199-200; CFC HCCPARAMS1 bit 11, p.353 | bit 11 unread (Appendix G names bits 8 and 9 only) | Frame ID only when CFC reads 1, else SIA (`xhci-ring.c:4119-4126`), at every version | CFC 0 already means a Frame ID on a data flow's first TD only, SIA after (`hcd_io.c`; `XhciXferBuildIso`) | as 1.0 holds: a 0.96 part reading bit 11 as 0 takes the existing CFC-0 path |
 | A5 | Block Event Interrupt (BEI) | p.437 | unread | never set below 1.0 (`xhci-ring.c:4035-4040`) | `XHCI_TRB_BEI` is defined and never written | not applicable |
 | A6 | Event Data TRBs, ED, EDTLA | 4.11.5.2 p.209-210 | unread | - | no Event Data TRB is placed; an ED event is counted and discarded (`EventDataEvents`); the EDTLA is read only from a Stopped - Short Packet event | as 1.0 holds |
 | A7 | Stopped, Stopped - Length Invalid, Stopped - Short Packet; SPC | 4.6.9 p.120-123; SPC HCCPARAMS1 bit 9 | G.2: Force Stopped Event optional; bit 9 is SBD, not SPC | - | the three codes are measurements latched for an abort (`XhciXferQueueStopped`) and selective suspend's evidence of an untouched head TD (`hcd_dev.c`, `hcdDevStopUntouched`); nothing waits for one, and without the event the suspend does not rewind (`hcd_susp.c`, `hcdSuspRewind`); SPC is never read | as 1.0 holds: a missing event takes the path that acts on no evidence |
 | A8 | HCCPARAMS1 bits 8 and 9 | PAE and SPC, p.353 | FSE and SBD (G.2, G.3, p.591) | - | neither bit is read (`xhci.h` decodes AC64, BNC, CSZ, PPC, CFC, MaxPSASize, xECP) | not applicable |
-| A9 | HCCPARAMS2 at 1Ch: FSC, LEC, CIC | 5.3.9 p.355-356; H.1 p.593 | unread; presumably reserved | read only above 1.0 (`xhci.c:5464-5467`), so never on a 0.96 part | read on reach at every version; FSC decides whether a Save State is taken (`xhciSaveState`), LEC whether Max ESIT Payload Hi is written and Mult reserved (`hcd_cfg.c`, `XhciPipeEndpointParamsAt`) | D4 |
-| A10 | Contexts: Max ESIT Payload Hi, Mult | Table 6-8 p.414, 6.2.3.8 p.420 | unread | Mult with LEC only above 1.0 (`xhci-mem.c:1342-1355`) | follows LEC (A9) | with D4 |
+| A9 | HCCPARAMS2 at 1Ch: FSC, LEC, CIC | 5.3.9 p.355-356; H.1 p.593 | unread; presumably reserved | read only above 1.0 (`xhci.c:5464-5467`), so never on a 0.96 part | read on reach at every version; FSC decides whether a Save State is taken (`xhciSaveState`), LEC whether Max ESIT Payload Hi is written and Mult reserved (`hcd_cfg.c`, `XhciPipeEndpointParamsAt`) | D4: taken as 0 below 1.0 |
+| A10 | Contexts: Max ESIT Payload Hi, Mult | Table 6-8 p.414, 6.2.3.8 p.420 | unread | Mult with LEC only above 1.0 (`xhci-mem.c:1342-1355`) | follows LEC (A9) | with D4: LEC 0, Mult as today |
 | A11 | Average TRB Length | 4.14.1.1, Table 6-11 | unread | EP0 8 at every version (`xhci-mem.c:1200`); a control endpoint's 8 at configure only at 1.0 or later (`1485-1487`); bulk 0 everywhere | EP0 8; others 1024, or `XhciAvgTrbEsit` | as 1.0 holds: a bandwidth hint, and Linux's EP0 8 is version-free |
 | A12 | Streams: MaxPSASize, LSA, Secondary Stream Arrays | 4.12, p.227, Table 6-8 p.414 | unread | linear arrays at every version | linear arrays only (`xhci_stream.c`, `XhciStreamEndpointContext`), no secondary arrays | as 1.0 holds; ASM1042 is Linux's `XHCI_BROKEN_STREAMS` part, which record 20's `XhciStreamsOff` lists |
 | A13 | Supported Protocol Capability, PSI, Protocol Slot Type | 7.2 | G.4: dword 08h bit 16 is L1C; PSI unread | PSI and the default speed IDs at every version | PSIC 0 takes the default speed IDs (`xhci_caps.c`); L1 and LPM never used; Enable Slot with slot type 0 (`hcd_enum.c`) | as 1.0 holds |
@@ -1947,7 +1949,7 @@ the code. `xhci-data-structures.md`'s TD Size formula and
 
 A REG_DWORD under the controller's driver key (owner, 2026-10-13: a value
 there, on by default, 0 restoring the 1.0 floor). The name follows record
-20's effect style (section 5.1 there); proposed, the owner confirms it.
+20's effect style (section 5.1 there); confirmed by the owner.
 
 | Value | Meaning |
 |---|---|
@@ -1993,11 +1995,11 @@ are not taken.
   TRB, this TRB's own included, shifted right by 10, held to 31. With the
   builder's running `LengthSum`, which is inclusive of this TRB, that is
   `(TotalLength - (LengthSum - length)) >> 10`.
-- **The last TRB** under the 0.96 form is D1. As proposed (D1 (a)), it
-  carries the same expression, as Linux writes it, and the builders' "0 on
-  the last TRB" clear (`XhciXferBuildControl`, `XhciXferBuildNormal`,
-  `xhciXferBuildIsoPacket`) applies to the packet form only. Under the
-  alternative (D1 (b)) the clear stays for both forms.
+- **The last TRB** (D1, owner: Linux's form) carries the same expression,
+  as Linux writes it, so a last TRB of 1 KiB or more is not 0; the
+  builders' "0 on the last TRB" clear (`XhciXferBuildControl`,
+  `XhciXferBuildNormal`, `xhciXferBuildIsoPacket`) applies to the packet
+  form only.
 - **The form reaches the builders through their requests.** The three
   request structures (`XHCI_CONTROL_REQUEST`, `XHCI_NORMAL_REQUEST`,
   `XHCI_ISO_REQUEST`, `src/xhci_xfer.h`) gain a `TdSizeForm` field: 1 the
@@ -2014,11 +2016,10 @@ are not taken.
   TDs like any other: a 1 MiB TD saturates at 31 in both forms until its
   last 31 KiB, or its last 31 packets.
 
-#### 4.14.6 The other departures proposed below 1.0
+#### 4.14.6 The other departures below 1.0
 
-Each is the owner's to take (4.14.11); the rule stated is what is built if
-taken. All are decided by HCIVERSION below `0x0100`, with host vectors on
-both sides of it.
+Taken by the owner (4.14.11), each as Linux has it. All are decided by
+HCIVERSION below `0x0100`, with host vectors on both sides of it.
 
 - **D2, Transfer Type 0.** `XhciXferBuildControl` writes TRT 0 in the
   Setup Stage TRB below 1.0, as Linux does (A2). The Data Stage TRB's DIR
@@ -2041,8 +2042,10 @@ both sides of it.
   `FFFFFFFF` when absent). A start refused at step 0c flushes the ring as
   a refused delivery does (`hcdLogRefused`'s `HcdLogFlush(hc,
   XHCI_LOG_REASON_FAILURE, 1)`), so with `XhciLogDebugView` 1 DebugView
-  shows why there was a Code 10; D5 asks whether every refusal of
-  `XhciInitController` does the same.
+  shows why there was a Code 10. So does every other refusal of
+  `XhciInitController` (D5, owner): the flush is made where
+  `hcdStartBody` handles that refusal, after its `start.refused.*` notes,
+  so one call covers every step.
 - **`XHCISNAP`.** The counter block (`src/xhci_counters.h`) gains three
   words after the last one in use at implementation: the HCIVERSION, the
   value read, and the floor and TD Size form in effect; `check-counter-
@@ -2058,8 +2061,9 @@ both sides of it.
   with XhciAccept096 at its default 1 (TD Size in 1 KiB units; untested
   ground); at 0 it refuses to start it (Code 10)"; below 0.96, "xhci98
   refuses to start it (Code 10)". It already prints HCCPARAMS2 raw, which
-  answers A9 on any 0.96 part it is run on. Whether the verdict changes is
-  D6.
+  answers A9 on any 0.96 part it is run on. The verdict is unchanged
+  (D6, owner): it judges the handoff, DMA, interrupts and ports, which the
+  version does not change, and the line says what the driver does.
 - **The release notes and README.** The value under "Registry settings";
   under "Untested ground" a row: "Controllers below xHCI 1.0 (0.96: NEC/
   Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) - accepted
@@ -2092,15 +2096,15 @@ both sides of it.
   `0x0096` accepted at 1 and refused at 0, `0x0099` and `0x00A0` accepted
   at 1, `0x0100`, `0x0110` and `0x0120` accepted at both, `0xFFFF` refused
   at both; `XhciVersionFloor` for absent, 0, 1, 2, another number and
-  another type; and, with D4, HCCPARAMS2 ignored below 1.0 and believed at
+  another type; and HCCPARAMS2 ignored below 1.0 (D4) and believed at
   1.0, with the existing reach gates unchanged.
 - `test_xfer`: TD Size in both forms - a three-fragment control data stage
   and a bulk TD worked by hand, 1023, 1024 and 1025-byte remainders,
-  saturation at 31 for a 1 MiB TD, a zero-length TD, and the last TRB under
-  D1's choice; `TdSizeForm` 0 refused; with D2, TRT 0 below 1.0 and today's
-  values at 1.0.
-- `test_iso`: TD Size per TD in both forms; with D3, TBC and TLBPC 0 below
-  1.0 and today's values at 1.0.
+  saturation at 31 for a 1 MiB TD, a zero-length TD, and the last TRB in
+  Linux's form (D1); `TdSizeForm` 0 refused; TRT 0 below 1.0 (D2) and
+  today's values at 1.0.
+- `test_iso`: TD Size per TD in both forms; TBC and TLBPC 0 below 1.0
+  (D3) and today's values at 1.0.
 - Every existing vector keeps the packet form and passes unchanged.
 
 #### 4.14.10 Legs
@@ -2112,7 +2116,7 @@ No virtual machine presents a controller below 1.0: QEMU's answers
   (or XP): the controller starts, a mouse, a hub and a stick work, and
   `XHCISNAP` shows HCIVERSION 1.00, the value and "not applicable" - the
   1.0 path bit for bit at every value.
-- **The 0.96 branches in a guest** (D7): a `qemu`-flavour-only value,
+- **The 0.96 branches in a guest** (D7, owner): a `qemu`-flavour-only value,
   `XhciQemuHciVersion`, written by no INF, makes the driver decode a given
   HCIVERSION in place of the register's, as `XhciQemuPsiE460` replaces a PSI
   table (section 5). QEMU reads neither TD Size, TRT, TBC nor TLBPC
@@ -2127,30 +2131,31 @@ No virtual machine presents a controller below 1.0: QEMU's answers
   mouse, a hub, and if anything isochronous is at hand, audio. Until then
   the release notes' row of 4.14.7 stands.
 
-#### 4.14.11 Open for the owner
+#### 4.14.11 Decisions (owner, 2026-10-13)
 
-Each is a question with a recommendation; the plain-language form is in
-the task's report.
+With the task (the roadmap's text): the floor becomes 0.96 behind a value
+under the controller's driver key, on by default, 0 restoring the 1.0
+floor; a 0.96 controller is driven as a 1.0 one but for the TD Size field,
+written in its version's units; NEC's isochronous Link TRB chaining and the
+AMD 0.96 rules are not taken.
 
-- **D1, TD Size on the last TRB below 1.0.** (a) Linux's form on every
-  TRB, the last included, or (b) 0 on the last TRB as 1.0 requires, with
-  the KiB form on the others. Recommended (a): it is what every Linux has
-  written to these parts, and nothing says 0.96 knew the last-TRB rule.
-- **D2, Transfer Type in the Setup Stage TRB below 1.0.** (a) As 1.0, or
-  (b) 0, as Linux. Recommended (b).
-- **D3, TBC and TLBPC in an Isoch TRB below 1.0.** (a) As 1.0, or (b) 0,
-  as Linux. Recommended (b).
-- **D4, HCCPARAMS2 below 1.0.** (a) Read on reach as at 1.0, or (b) taken
-  as 0, as Linux. Recommended (b).
-- **D5, the refused start's flush.** (a) The step 0c refusal alone flushes
-  to DebugView, or (b) every refusal of `XhciInitController` does.
-  Recommended (b).
-- **D6, `XHCIQUAL`'s verdict on a controller below 1.0.** (a) A report
-  line only, the verdict unchanged, or (b) the verdict "qualified with
-  caveats". Recommended (a).
-- **D7, the `qemu`-flavour version override.** (a) Take it, or (b) the
-  legs are the value's three settings on QEMU only. Recommended (a).
-- **The value's name**, `XhciAccept096`. Recommended as named.
+On the draft's questions, each recommendation taken:
+
+- **D1, TD Size on the last TRB below 1.0**: Linux's form on every TRB,
+  the last included (4.14.5). Not taken: 0 on the last TRB with the KiB
+  form on the others.
+- **D2, Transfer Type in the Setup Stage TRB below 1.0**: 0, as Linux
+  (4.14.6).
+- **D3, TBC and TLBPC in an Isoch TRB below 1.0**: 0, as Linux (4.14.6).
+- **D4, HCCPARAMS2 below 1.0**: taken as 0, as Linux, so FSC and LEC are
+  0 (4.14.6).
+- **D5, the refused start's flush**: every refusal of
+  `XhciInitController` flushes the note ring, not the version's alone
+  (4.14.7).
+- **D6, `XHCIQUAL`'s verdict**: unchanged; a report line only (4.14.7).
+- **D7, the `qemu`-flavour version override**: taken,
+  `XhciQemuHciVersion`, `qemu` flavour only, written by no INF (4.14.10).
+- **The value's name**: `XhciAccept096`.
 
 ## 5. Injection
 
