@@ -772,7 +772,7 @@ offset checks ("for both architectures").
 
 ## 5. Load order
 
-**Revision 13:** the helper is boot-start on 2000 and XP too, and every install and update there asks for a restart as on Vista and 7 (owner, 2026-10-13, decision H2), for `2.4.0.0` and later (section 15.5).
+**Revision 13:** the helper is boot-start on 2000 and XP too, with no restart asked there - the finer timer works from the next boot (owner, 2026-10-13, decision H2) - for `2.4.0.0` and later (section 15.5).
 
 The helper must be loaded before the controller's first
 `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` of a boot.
@@ -1708,8 +1708,11 @@ the first round with no P1 or P2 (owner rule, 2026-10-10).
 
 Drafted 2026-10-13 and put to the owner for section 15.13's decisions
 before any review round (the owner's rule for Phase 38's design tasks);
-the answers written in the same day. The review is recorded here when
-run.
+the answers written in the same day. Review round 1 is recorded with
+record 15's (its section 13.6, the same thread); its record 18 findings
+(5, 7 to 10, 13) are taken in sections 15.4, 15.7, 15.10, 15.11 and
+15.12, and the owner then withdrew the forced restart on 2000 and XP
+(H2).
 
 ## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.4)
 
@@ -1867,25 +1870,31 @@ for the helper's half.
 
 ### 15.4 The HCD's looks
 
-One binding per controller FDO, as section 4.1 (the state machine
-`XhciMsi86BindStep` renamed `XhciHlprBindStep`, its rules unchanged), and
-one new kind of look:
+One binding per controller FDO, as section 4.1. Its state machine is
+`XhciMsi86BindStep` in `src/xhci_msi.c` (~540) with its states and
+events in `src/xhci_msi.h` (~191), not the channel's files; it is renamed
+`XhciHlprBindStep` with its rules unchanged and gains one event,
+`XHCI_HLPR_EV_TIMER`, which asks for a look only while not `BOUND`, with
+vectors in `test_msi` (the event in every state; a refused or absent
+result asking for no further look). The machine does not count looks per
+start; the timer's "at most once per start" is a latch of its own in
+`hc->Tmr` (record 15 section 7.2.5).
 
 - **Vista and 7 (32-bit):** at each filter and start while not `BOUND`,
-  as now. The timer uses whatever that binding holds; the timer adds no
-  look of its own there, so the filter's look and a timer look can never
-  race.
+  as now. The timer adds no look there: the start copies the timer
+  service's pointer from the binding into `hc->Tmr` before it creates
+  the timer thread, inside the PnP manager's serialisation of the filter
+  and the start, so a later filter's look never races the timer's read.
 - **Windows 2000 and XP (32-bit):** the filter does nothing below NT 6
-  (unchanged), so the only look is the timer's: made by the controller
-  thread, at PASSIVE_LEVEL, at most once per start, when it first needs
-  the routine (record 15 section 7.2.5) - a poll delivery with the switch
-  on. A controller that never polls never looks, so a 2000 or XP machine
-  whose line works opens the helper not at all. The event is a new
-  `XHCI_HLPR_EV_TIMER`, which asks for a look only while not `BOUND`; the
-  look itself is section 3.2's IRP, unchanged but for the code and the
-  block. The filter and the start never run while the controller thread
-  does (it is created in the start and joined in the stop), so this look
-  cannot race theirs.
+  (unchanged), so the only look is the timer's: made by the timer thread,
+  at PASSIVE_LEVEL, at most once per start, the first time it would hold
+  and has no routine (record 15 section 7.2.5). A controller that never
+  polls has no timer thread and never looks, so a 2000 or XP machine
+  whose line works opens the helper not at all. The look itself is
+  section 3.2's IRP, unchanged but for the code and the block. On NT 5
+  nothing else steps the binding between the start and the stop: the
+  filter and the start's look are NT 6's, and the remove comes after the
+  stop has joined the timer thread.
 - **Windows 98 SE and ME:** no look, as now.
 
 `IoGetDeviceObjectPointer` is therefore called on Windows 2000 and XP
@@ -1900,37 +1909,24 @@ The helper stays boot-start (`StartType` 0, `ErrorControl` 1; section 5)
 on every path that installs it, so on every boot of a configured machine
 its device exists before the HCD's `AddDevice`. On 2000 and XP that
 matters less than on Vista and 7: the timer's look is made later, by the
-controller thread, so a helper that is present at all is found.
+timer thread, so a helper that is present at all is found.
 
 **SetupAPI does not start a boot-start service it installs** (section 5),
-so after a first install the helper is absent until the next boot.
-**The owner's decision (2026-10-13, H2, option (b)): always prompt.**
-`[Xhci.Dev.NTx86]`, the Windows 2000 and XP controller section, carries
-`Reboot` as `[Xhci.Dev6.NTx86]` does (section 5's mechanism: setup reports
-`DI_NEEDREBOOT` and the user is asked to restart), so every install and
-every update of the controller on 2000 and XP asks for a restart, as on
-32-bit Vista and 7. It is the controller section's alone: the root hub's,
-the hubs' and the composite parent's sections never ask, Windows 98 SE
-and ME never reach it, and the 64-bit INF does not change (XP x64 has no
-helper and asks for nothing). The two options not taken stay on record:
-no restart, the timer from the next boot (the recommendation); and
-`SPSVCINST_STARTSERVICE`, whose behaviour for a boot-start driver on
+so after a first install on 2000 or XP the helper is absent until the
+next boot. **The owner's decision (2026-10-13, H2, revised after review
+round 1): no forced restart on 2000 and XP.** `[Xhci.Dev.NTx86]` carries
+no `Reboot`; setup asks for a restart only where it decides one is
+needed by its own rules, as for the release before it. The controller
+starts as before, and a polled controller keeps the clock tick until the
+next boot, when the helper is there and the timer thread's look finds
+it; the release notes say "the finer timer works from the next restart".
+The options not taken stay on record: a `Reboot` on every 2000 and XP
+install and update (the owner's first answer, withdrawn after the review
+found it a disruption on a primary target for an optional improvement),
+and `SPSVCINST_STARTSERVICE`, whose behaviour for a boot-start driver on
 Windows 2000 is unread.
 
-**What a restart request does before the restart on 2000 and XP is not
-read.** On 32-bit Vista and 7 the fresh install held the controller
-until the restart (R4: problem code 28 on 7, 1 on Vista) and the update
-kept the old image running (U1). Windows 2000 and XP may do either, or
-start the new controller at once. That matters most on Windows 2000, a
-primary target: an xHCI-only machine held until a restart has no USB
-input from the driver until then (what the firmware's legacy emulation
-still gives is the machine's). **Reading R5**, taken on 2000 SP4 and XP
-SP3 for a fresh install (the Found New Hardware wizard and Device
-Manager's update) and for an update from `2.3.1.0`: the prompt shown, the
-controller's state and problem code until the restart, which image runs,
-and whether a USB mouse and stick work before it. The release notes say
-what R5 shows; if it shows the controller held, the owner is told before
-the cut.
+Vista and 7 keep section 5's `Reboot` (decision 4), for MSI.
 
 ### 15.6 Versions and mixed installs
 
@@ -1942,7 +1938,7 @@ section 6's table for `2.4.0.0` and later:
 |---|---|---|
 | `2.4`, fresh, Vista or 7 (32-bit) | no helper until the restart | section 6's first row: the restart asked; the controller held until it (R4); after it bound, MSI and the timer |
 | `2.4` over `2.3.0.0` or `2.3.1.0`, Vista or 7 (32-bit) | the old HCD and `xhcimsi.sys` until the restart (U1's reading: the old image keeps running) | the restart asked; at it the old service is gone or failing to load (section 15.7) and `xhcihlpr.sys` loads; the `2.4` HCD binds the new device |
-| `2.4`, fresh or over an earlier package, 2000 or XP | until the restart, R5's reading (held, the old image, or the new one); no helper | the restart asked (decision H2); after it the helper is there and a polled controller's look binds it |
+| `2.4`, fresh or over an earlier package, 2000 or XP | as the release before it until the next boot; no helper | no forced restart (decision H2); a polled controller keeps the tick until the next boot, when its look binds the helper |
 | the `2.4` HCD, `xhcihlpr.sys` missing or failing, `xhcimsi.sys` still loaded | the old helper idles; nothing opens it | `ABSENT`: on Vista and 7 the helper-less MSI rules (section 4.2's strip), and no timer anywhere |
 | `2.3.x` installed over `2.4` (a downgrade) | the `2.3` HCD, `xhcihlpr.sys` still boot-start, and `xhcimsi.sys` added back by the `2.3` INF (Vista and 7) | two helpers, two names, no collision; the `2.3` HCD binds `xhcimsi`; `xhcihlpr` loads and answers nobody. Section 6's downgrade hazard (`MSISupported`) stands as written |
 | a later package with channel major 3 | old HCD, new helper | the old HCD's V2 code is refused by a V3-only helper (helper-less outcome); a later helper keeps answering V2 for as long as it can serve it (the rule for a minor change) |
@@ -1967,19 +1963,24 @@ AddService=xhcihlpr,,XhciHlpr.AddService
 DelService=xhcimsi
 
 [XhciMsi.DelFiles]
-xhcimsi.sys
+xhcimsi.sys,,,0x00010000
 ```
 
 with `XhciMsi.DelFiles=12` in `[DestinationDirs]`. `DelService` and
-`DelFiles` are documented INF directives; how each behaves against a
-boot-start service that is running at the time, and whether the boot
-loader still loads a service the update marked for deletion at the first
-boot after it, has not been read here. The design does not depend on
+`DelFiles` are documented INF directives. The old image is loaded and
+cannot be unloaded when the update runs, and Microsoft's `DelFiles` page
+says an in-use file is deleted only when its entry carries the deferred
+flag, `0x00010000` (`DELFLG_IN_USE`), which queues the deletion for the
+restart (round 1, finding 5); without it the file would survive any
+number of reboots. How `DelService` behaves against a running boot-start
+service, and whether the boot loader still loads a service marked for
+deletion at the first boot after it, have not been read here. The design does not depend on
 either: the old helper's device has the old name, which nobody opens, so
 an `xhcimsi.sys` that loads once more only idles, and one whose file is
 gone fails to load with `ErrorControl` 1, as leg H2 read it (event 7026,
-the boot normal). Leg U4 reads both boots after the update (section
-15.12). The alternative, `StartType` 4 (disabled) by a second
+the boot normal). Leg U4 reads the service, the loaded image and the file
+separately at each of the two boots after the update, the queued
+deletion included (section 15.12). The alternative, `StartType` 4 (disabled) by a second
 `AddService` for `xhcimsi`, keeps a disabled service key on every updated
 machine for good, and is decision H3's other option.
 
@@ -1992,9 +1993,9 @@ machine for good, and is decision H3's other option.
   `XhciMsi.DelFiles=12`.
 - **`[Xhci.Dev.NTx86]`** (Windows 2000 and XP, the controller) gains
   `XhciHlpr.CopyFiles` in its `CopyFiles`, and its `.Services` gains
-  `AddService=xhcihlpr,,XhciHlpr.AddService`, and the section carries
-  `Reboot` (decision H2). No `.HW` section (no MSI below NT 6), no
-  `DelService` (nothing to delete there).
+  `AddService=xhcihlpr,,XhciHlpr.AddService`. No `Reboot` (decision H2),
+  no `.HW` section (no MSI below NT 6), no `DelService` (nothing to
+  delete there).
 - **`[Xhci.Dev6.NTx86]`** as section 15.7.
 - `[XhciHlpr.AddService]` is section 7's `[XhciMsi.AddService]` renamed:
   `ServiceType` 1, `StartType` 0, `ErrorControl` 1,
@@ -2031,9 +2032,13 @@ system.
 ### 15.10 The toolchain and the image, for Windows 2000
 
 **WDK 7.1 has no Windows 2000 build environment.** Its `setenv.bat`
-accepts `WIN7`, `WLH`, `WXP` and `WNET` (its usage line), and
-`makefile.new` refuses any `_NT_TARGET_VERSION` but XP, Server 2003,
-Vista and 7 (static: read from `tools\WinDDK71\bin`, 2026-10-13). So:
+accepts `WIN7`, `WLH`, `WXP` and `WNET` (its usage line), and for an
+`_NT_TARGET_VERSION` other than XP, Server 2003, Vista and 7
+`makefile.new` prints that the value is unknown and substitutes the
+latest target rather than stopping (~1032 to ~1052; static: read from
+`tools\WinDDK71\bin`, 2026-10-13), so a Windows 2000 target cannot be
+selected through it and a mistaken one would build silently for Windows
+7 - which the header gate below is there to catch. So:
 
 - **The environment: `WXP`, x86** (`setenv <WDK> fre|chk x86 WXP
   no_oacr`), the oldest the kit has, for every flavour: its libraries are
@@ -2081,7 +2086,17 @@ SP3 x86 images (a new `winxp-x86-baselines.expected`: `ntoskrnl.exe`,
 extracted from XP SP3 media by `extract-target-baselines.ps1`;
 `tools\winxpsp3-extracted` holds none of them today), and the Vista SP2
 and 7 SP1 x86 images (the two `nt6x86-*` manifests, renamed with the
-profile, their owed `ntkrnlpa.exe` rows still owed). The allowlist
+profile, their owed `ntkrnlpa.exe` rows still owed). **Every set is
+required** (round 1, finding 8): today's `nt6x86` profile warns and
+passes when a whole baseline set is missing (`check-imports.ps1` ~1137,
+~1369), and a release accepts `-NoTargetEvidence`. Under `hlprx86` a
+missing or partial set - 2000, XP, Vista or 7, or one image of a set -
+fails the gate; `-NoTargetEvidence` stays as a developer's
+allowlist-only mode that prints that no target evidence was checked, and
+`make-package.ps1` and `make-release.ps1` refuse a helper gated that way.
+`test-flavour-rules.ps1`'s mutations cover a whole 2000 set missing, a
+whole XP set missing, one XP image missing, and the release's refusal of
+`-NoTargetEvidence`. The allowlist
 `xhcihlpr-imports.allow` replaces `xhcimsi-imports.allow`; its evidence
 tag is `w2k-export; xp-x86-export; nt6-x86-export`. The helper's own
 rows become: `ExSetTimerResolution` (`required`, the timer service),
@@ -2100,14 +2115,14 @@ fails it, an XP-only pair fails it (2000 lacks it), a 2000 pair passes.
 `Xhci.Dev6.NTx86`), `HLPR-SVC` (the same service shape in both
 `.Services` sections), `HLPR-HW` (record 15's `MSI-*` lines only in
 `Xhci.Dev6.NTx86.HW`, and only with the helper), `HLPR-AMD64` (none in
-the 64-bit INF), `HLPR-REBOOT` (`Reboot` in `Xhci.Dev.NTx86` and
-`Xhci.Dev6.NTx86` and in no other section of either INF, each only where
-that section also installs the helper; mutations for each removed and
-for one moved to a root hub, hub or undecorated section), and a new
+the 64-bit INF), `HLPR-REBOOT` (`Reboot` in `Xhci.Dev6.NTx86` alone, as
+`MSIHLP-REBOOT` today - not in `Xhci.Dev.NTx86` (decision H2), with a
+mutation adding it there), and a new
 **`HLPR-OLD`**: `xhcimsi`
 named only by one `DelService` in `Xhci.Dev6.NTx86.Services` and
 `xhcimsi.sys` only in the one `DelFiles` section that section names,
-with `XhciMsi.DelFiles=12`; no `AddService` of `xhcimsi` and no
+its entry carrying exactly the flag `0x00010000`, with
+`XhciMsi.DelFiles=12` (mutations: the flag dropped, the entry moved); no `AddService` of `xhcimsi` and no
 `xhcimsi.sys` in `[SourceDisksFiles]` anywhere. `PATH-NT`'s relaxation
 (today `check-inf.ps1` ~1113, which exempts the line naming `xhcimsi`)
 names `xhcihlpr` and covers both controller sections; `BOTH-VERSION`
@@ -2129,7 +2144,9 @@ with the code:
 |---|---|---|
 | The helper's sources | `src\msi86\` (`msi86_entry.c`, `xhcimsi.rc`, `sources`, `makefile`) | moved to `src\hlpr\` and renamed (section 15.2); `TARGETNAME=xhcihlpr`; the `_BUILDARCH` refusal kept |
 | The channel | `src\xhci_msi86.h`, `src\xhci_msi86.c` (the device name, the IOCTL, the block) | `src\xhci_hlpr.h` and `.c`, V2 (section 15.3); `src\sources` and `src\hlpr\sources` name them |
-| The HCD's look | `src\hcd_msi86.c` (`hcdMsi86Look`, `HcdMsiRoutines`, the comment naming `xhcimsi.sys`), `src\hcd.h` | the V2 look, the services' verdicts, the timer event (section 15.4) |
+| The HCD's look | `src\hcd_msi86.c` (`hcdMsi86Look`, `HcdMsiRoutines`, the comment naming `xhcimsi.sys`), `src\hcd.h` | the V2 look, the services' verdicts (section 15.4) |
+| The binding machine | `src\xhci_msi.c` (`XhciMsi86BindStep` ~540), `src\xhci_msi.h` (states and events ~191), `test\test_msi.c` | renamed, `XHCI_HLPR_EV_TIMER` added (section 15.4) |
+| The INF value policy | `scripts\inf-gate\check-inf.ps1` (~1323, the table of driver-key values and defaults), `test-inf-checks.ps1` | the `XhciPollFineTimer` row and its mutations (record 15 section 7.2.4) |
 | The counters | `src\xhci_counters.h` (the helper's state words) | unchanged words; the services' verdicts and the timer's appended (record 15 section 7.2.9) |
 | The host suite | `test\test_msi.c`, `test\run-host-tests.cmd` | V2 vectors (section 15.3) |
 | The INF | `src\xhci98.inf` (`[SourceDisksFiles]`, `XhciMsi.*`, the strings) | section 15.8 |
@@ -2140,8 +2157,8 @@ with the code:
 | The charset gate | `check-source-charset.ps1` (~85, `^src\\msi86\\obj`) | `^src\\hlpr\\obj` |
 | The source stamp | `source-stamp.ps1` (`-Driver xhcimsi`, `xhcimsi.srcstamp`) | `xhcihlpr`, `src\hlpr`, `xhci_hlpr.h` as the parent header |
 | The packager | `make-package.ps1` (`$MsiDriverPath`, the staging, the gate call) | the new path and profile; a staged package holding `xhcimsi.sys` refused |
-| The release | `make-release.ps1` (`$legPublishableExtra`, `Assert-MsiHelperPublished`, the readme and contents texts) | `$legPublishableExtra` holds both names, so a `2.3.x` upload set is still reconstructed exactly; a new cut publishes `xhcihlpr.sys` and is refused one holding `xhcimsi.sys`; `Assert-HelperPublished`; the texts |
-| The packager's tests | `test-package.ps1` | the stand-ins renamed; a historical `xhcimsi.sys` set reconstructed; a new set with `xhcimsi.sys` refused |
+| The release | `make-release.ps1` (`$legPublishableExtra`, `Assert-MsiHelperPublished`, the readme and contents texts) | `$legPublishableExtra` names `xhcihlpr.sys`; a cut is refused one holding `xhcimsi.sys`; `Assert-HelperPublished`; the texts. A `2.3.x` upload set is reconstructed from its own cut commit, as the script's version gate (~2411) already requires; the `2.4` tree promises no cross-version reconstruction |
+| The packager's tests | `test-package.ps1` | the stand-ins renamed; a new set with `xhcimsi.sys` refused |
 | `XHCISNAP` | `xhcisnap\xhcisnap.c` (the installed-file list, ~9307; the routine-source and reason texts, ~4331, ~4790; the help, ~9980), `xhcisnap\README.md`, `xhcisnap\selftest.cmd`, `test\test_snap.c` | the file list reads `xhcihlpr.sys` and still reports an `xhcimsi.sys` found (the update's evidence, leg U4); the texts |
 | `XHCIQUAL` | `xhciqual\verdict.c`, `xhciqual\test\test_verdict.c`, `xhciqual\README.md`, `xhciqual\test\run-qemu-matrix.ps1` | the helper's name in the verdict text |
 | The guides | `AGENTS.md` (the Quick Reference's compiler row, "The x86 package carries a third binary"), `README.md`, `docs\using\release-notes.md`, `docs\using\release-acceptance-test.md`, `docs\contributing\build-and-test.md`, `architecture.md`, `implementation-invariants.md`, `source-files.md`, `legal-provenance.md` (the binary row, the toolchain row, the export readings), `lessons.md` (the D4 entry keeps its old name: it is a reading), `docs\contributing\design\README.md` (record 18's line) | the name, the targets (2000 and XP added), the restart, the removal command |
@@ -2156,9 +2173,9 @@ Record 15 section 7.2.12's T legs are the timer's; these are the
 helper's.
 
 - **N1, the helper on 2000 and XP.** Install on 2000 SP4 (uniprocessor
-  and the SMP guest) and XP SP3: the restart asked (decision H2) and R5
-  read (section 15.5); after the restart `xhcihlpr` running as
-  a boot driver, and, with mode 2, the binding `BOUND` with services
+  and the SMP guest) and XP SP3: no restart forced (decision H2), the
+  controller as the release before it; after the next boot `xhcihlpr`
+  running as a boot driver, and, with mode 2, the binding `BOUND` with services
   "timer" and MSI "not asked", the helper's version, `TmrSource` 1. On
   2000 the image's load is the reading that settles section 15.10's
   subsystem and OS-version questions.
@@ -2168,23 +2185,32 @@ helper's.
   2.1's 1 to 6 re-read on 7 x86 for the channel (`ABSENT`, `REFUSED` by
   test); and three new values - 7 the timer service off (bit 1 clear),
   8 the timer pointer NULL with bit 1 set (malformed), 9 the MSI half
-  off on NT 6 - each read on 7 x86 (MSI and the timer judged apart: 7
-  and 8 leave MSI connected and the tick; 9 strips to the line and keeps
-  the timer), and 7 and 8 on XP.
+  off on NT 6. Each of 7, 8 and 9 is read twice on 7 x86 (round 1,
+  finding 7): once in mode 0 with the message granted (the MSI verdict
+  and delivery: 7 and 8 leave MSI connected, 9 strips to the line), and
+  once in mode 2 with a copy running (the timer verdict and the calls:
+  7 and 8 give `TmrSource` 3 and no `TRUE`, 9 gives `TmrSource` 1 and
+  paired calls); 7 and 8 also on XP in mode 2. Each injection value is
+  set before a cold boot, since a loaded helper cannot change.
 - **M and H** (section 10) re-run on 7 x86 and Vista x86 for MSI through
   V2: M's first variant, H1, H2 and H3 with the new names, H1a.
 - **U4, the update** on Vista SP2 x86 and 7 SP1 x86, from the published
-  `2.3.0.0` and from `2.3.1.0`: the restart asked; the first boot after
-  it (`xhcimsi` loaded or not, its event if it failed, `xhcihlpr`
-  running, MSI bound to the new device, `XHCISNAP`'s file list); a
-  second boot (no `xhcimsi` service key, no `xhcimsi.sys`). Under
+  `2.3.0.0` and from `2.3.1.0`: before the restart, the deletion queued
+  (`PendingFileRenameOperations` naming `xhcimsi.sys`) and the service's
+  state; the first boot after it, the service, the loaded image and the
+  file read separately (`xhcimsi` loaded or not, its event if it failed,
+  the file present or not, `xhcihlpr` running, MSI bound to the new
+  device, `XHCISNAP`'s file list); a second boot (no `xhcimsi` service
+  key, no `xhcimsi.sys`). Under
   decision H3's other option, the service read disabled instead.
 - **U5, the downgrade**: `2.3.1.0` over `2.4` on 7 x86 without
   uninstalling: both helpers load, the `2.3` HCD bound to `xhcimsi`,
   MSI as `2.3.1.0` had it.
-- **U6, mixed versions on 2000 and XP**: `2.4` over `2.3.1.0` (the
-  restart asked, R5's update case, then the helper), and the helper's
-  file deleted (`ABSENT`, the tick, a normal boot).
+- **U6, mixed versions on 2000 and XP**: `2.4` over `2.3.1.0` (as the
+  release before it until the next boot, then the helper bound on a
+  polled controller), and a cold boot with the helper's service disabled
+  (`ABSENT`, the tick, a normal boot) - not a file deleted under a
+  running helper, which changes nothing until the boot.
 - **U3** (section 10) with the new name on 7 x86, and on 2000 (no
   `sc.exe`: the service key deleted by hand).
 - **F6** on 2000 and XP: text-mode Setup through F6 with the package's
@@ -2193,7 +2219,7 @@ helper's.
 - **D2** (section 10): Windows 98 SE (required), ME, and the 2000, XP,
   Vista and 7 install legs from the new media; 98 SE and ME read as the
   release before it (no helper copied, no restart beyond theirs); 2000
-  and XP read with the restart now asked.
+  and XP with the helper copied and no restart forced.
 - **D3** the x64 package: no helper, no media change.
 
 ### 15.13 The owner's decisions (2026-10-13)
@@ -2201,11 +2227,12 @@ helper's.
 - **H1:** the device object renamed with the helper,
   `\Device\Xhci98Helper`, and the channel's V2 answered only there
   (sections 15.2 and 15.3).
-- **H2: (b), always prompt.** `Reboot` in the 2000 and XP controller
-  section too, so every install and update there asks for a restart
-  (section 15.5), with reading R5 owed before the cut.
-- **H3: (a)**, `DelService=xhcimsi` and `DelFiles` of `xhcimsi.sys` on
-  the 32-bit Vista and 7 path (section 15.7).
+- **H2: no forced restart on 2000 and XP** (revised after review round
+  1; the first answer, a `Reboot` on every install and update there, is
+  withdrawn): normal restart behaviour, the finer timer from the next
+  boot, documented (section 15.5).
+- **H3: (a)**, `DelService=xhcimsi` and a deferred `DelFiles` of
+  `xhcimsi.sys` on the 32-bit Vista and 7 path (section 15.7).
 - **H4: (a)**, F6 documented as keeping the clock tick until the
   installed system's own install of the controller brings the helper
   (section 15.9).
