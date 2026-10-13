@@ -1,12 +1,11 @@
 # Issue 13 - On the VIA VL805 no Low- or Full-Speed device ever appears: the controller's USB 2.0 speed table names only its integrated hub's link, and the driver read it as the vocabulary of every speed below that hub
 
-Status: **fixed in `2.3.0.0` without hardware; not yet observed on a
-VL805.** Reported as GitHub issue 18 by SweetLow against `2.2.0.0`, and
+Status: **fixed in `2.3.0.0`; confirmed on a VL805 with Low-Speed and
+SuperSpeed devices** (owner, 2026-10-13; a Full-Speed device not yet
+reported). Reported as GitHub issue 18 by SweetLow against `2.2.0.0`, and
 investigated on 2026-10-10 from the logs; the fix is roadmap task 36.49 (section 6), built and tested on
-host vectors and in QEMU only - no VL805, and no controller with a USB 2.0
-speed table that omits Full and Low Speed, is held by this project. The
-release notes carry it as untested ground, with the switch that turns it
-off.
+host vectors and in QEMU, since no VL805 is held by this project; the
+confirmation above is the first reading on one.
 
 Machines affected: those with a VIA Labs VL805 (`1106:3483`), the reporter's
 a PCIe add-in card at revision `01`. Any controller whose USB 2.0 Supported
@@ -246,8 +245,10 @@ Decoding", the downstream exception):
 
 ## 7. What is still open
 
-- **The hardware reading.** The fix has never run on a VL805. In QEMU, which
-  publishes no USB 2.0 table, it is a regression check only.
+- **The hardware reading.** Read on a VL805 with `2.3.0.0` (owner,
+  2026-10-13): Low-Speed and SuperSpeed devices work. A Full-Speed device
+  has not been reported; in QEMU, which publishes no USB 2.0 table, the fix
+  is a regression check only.
 - **Full-Speed TT babble.** The Raspberry Pi kernel's `XHCI_VLI_HUB_TT_QUIRK`
   works around Full-Speed non-periodic transfers behind the VL805's internal
   TT on firmware below `0x0138C0`. If a Full-Speed device enumerates and its
