@@ -1,11 +1,11 @@
 # xhci98 - Release Notes
 
-This file describes package version `2.3.1.0`, the thirteenth release and
-the sixth of the host controller driver, dated 2026-10-13 (`DriverVer`
-`10/13/2026,2.3.1.0`, in all four INFs). It is a fix release: what it
-changes from `2.3.0.0` is "What `2.3.1.0` changes", below, and what
-`2.3.0.0` changed from `2.2.0.0` is "What `2.3.0.0` changed" after it;
-what `2.2.0.0` changed from `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and
+This file describes package version `2.4.0.0`, the fourteenth release and
+the seventh of the host controller driver, dated 2026-10-14 (`DriverVer`
+`10/14/2026,2.4.0.0`, in all four INFs). What it adds to `2.3.1.0` is
+"What `2.4.0.0` adds", below; what `2.3.1.0` changed from `2.3.0.0` is
+"What `2.3.1.0` changed" after it, and what `2.3.0.0` changed from
+`2.2.0.0` is "What `2.3.0.0` changed" after that; what `2.2.0.0` changed from `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and
 `2.1.0.0` from `2.0.0.0`, are their entries in `releases/history.md`, and
 the sections below say where each change was read. Where this file and
 `docs/contributing/roadmap-hcd.md`, `docs/contributing/build-and-test.md` or
@@ -17,7 +17,8 @@ tests where QEMU models no such device or controller. The owner's bench of
 2026-10-11 then read several on real hardware: a Dell Latitude E7250 under
 Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
 `2.3.0.0` changed", below, lists them and says which. `2.3.1.0`'s setup
-fix was read on the same E7250 under Windows XP x64 Setup.
+fix was read on the same E7250 under Windows XP x64 Setup. "What
+`2.4.0.0` adds" says, item by item, what was read of `2.4.0.0`'s changes.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
@@ -115,7 +116,7 @@ included.
   machines: Windows 2000 Setup bugchecked on both physical machines this
   project tried, so the driver has never run on Windows 2000 on real silicon.
   Windows ME, 32-bit Windows XP, Windows Vista and 32-bit Windows 7 are
-  supported in virtual machines only for `2.3.1.0`. Real hardware: Windows
+  supported in virtual machines only for `2.4.0.0`. Real hardware: Windows
   98 SE, at a bench session before the `2.0.0.0` release, on a ThinkPad
   E460 and a ThinkPad P14s Gen 1, and Windows XP x64 and 7 x64 on the
   owner's Dell Latitude E7250. `2.1.0.0`'s own
@@ -131,7 +132,7 @@ included.
   interrupt routing repair, the port switchover, composite devices and the
   asynchronous-audio fix on real hardware ("What `2.3.0.0` changed"); of
   `2.3.1.0`'s, the Windows XP x64 Setup fix was read on the Dell Latitude
-  E7250 ("What `2.3.1.0` changes").
+  E7250 ("What `2.3.1.0` changed").
   "Targets and their standing"
   says what each one rests on.
 - It is not a mass-storage driver for Windows 98 SE. Storage on Windows 98
@@ -151,7 +152,7 @@ included.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
-  of it is in this package. A `2.3.1.0` install replaces it, because both are
+  of it is in this package. A `2.4.0.0` install replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
 
 ## What `2.4.0.0` adds
@@ -255,7 +256,7 @@ included.
   controller to the 64 that Intel's 7-series (Panther Point) controller
   can hold. Not read on real hardware.
 
-## What `2.3.1.0` changes
+## What `2.3.1.0` changed
 
 A fix release: every system `2.3.0.0` supports is supported, from the same
 four directories. The Setup fix was read on real hardware, the rest in
@@ -452,7 +453,7 @@ Each target's row says what the `2.0.0.0` drivers were observed doing on that
 system, and where; `2.1.0.0`, `2.1.1.0`, `2.2.0.0`, `2.3.0.0` and `2.3.1.0`
 carry that code with the changes their history entries list, and the rows "What
 `2.1.0.0` changed", "What `2.1.1.0` changed", "What `2.2.0.0` changed", "What
-`2.3.0.0` changed" and "What `2.3.1.0` changes" say where each change was read.
+`2.3.0.0` changed" and "What `2.3.1.0` changed" say where each change was read.
 "The integration build" is the merged build of a release's code before its cut,
 in the never-published `qemu` flavour. The ten install legs are read on the
 `release` flavour of that build, and again from the release asset itself after
@@ -472,7 +473,7 @@ the cut.
 | What `2.1.1.0` changed | | The registry values: in QEMU on development host A, on the `release` flavour before `XhciIntelPortSwitch` was added, a fresh install on Windows 98 SE and 2000 writing the seven at their defaults, and an update over `2.1.0.0` on Windows 98 SE, 2000 and 32-bit Windows 7 keeping two values set by hand and adding the missing three ("Registry settings"). The Power tab: on the owner's ThinkPad P14s Gen 1, a SuperSpeed drive declaring 896 mA reading 510 mA and `XHCISNAP` giving its exact figure, a USB 2.0 device reading as before ("The controller's Advanced tab and the root hub's Power tab"). The Intel port switchover: on the owner's Lenovo B490 (`1E31`) under Windows 98 SE with NUSB, on Auto and Smart Auto, and its gate staying closed on the P14s Gen 1 and in QEMU ("Intel 7-, 8- and 9-series chipsets: the port switchover") |
 | What `2.2.0.0` changed | | The SuperSpeed fix for Intel Sunrise Point-LP: on the owner's ThinkPad E460 (`8086:9D2F`) under Windows 98 SE, on the `release` flavour of a build taken before the cut with the fix and the enumeration notes in it, a UAS-capable USB 3 stick seen at SuperSpeed from power-on, after two unplug and replug cycles and behind a USB 3 hub, a large file copied there and back and compared clean, and ATTO Disk Benchmark at 242 MB/s writing and 245 MB/s reading at 8 MB transfers; the hub's SuperSpeed and USB 2.0 halves both present after a hot-plug, a replug and a cold boot; `XHCISNAP`'s report naming the port's speed ID 4 as SuperSpeed by its default meaning ("SuperSpeed and UAS"). No Bulk-Only SuperSpeed device was to hand. The speed tables of the ThinkPad P14s Gen 1, the Lenovo B490 and a tester's HP EliteBook 850 G5 were read with `XHCIQUAL`: the first two list ID 4, which is why they never failed, and the HP's Sunrise Point controller publishes the E460's table word for word. In QEMU on development host A, which publishes no speed table, on Windows 98 SE and on Windows 2000 SP4 at two processors under Driver Verifier: a SuperSpeed stick at a root port, a stick behind QEMU's Full-Speed hub, and a SuperSpeed unplug and replug, each with a file compare, read as `2.1.1.0` read beside them, on the integration build and, on Windows 98 SE, the `release` flavour, and again on the final code; with the E460's speed table put in QEMU's place by a test aid, the stick read at SuperSpeed by the default meaning. A SuperSpeed device behind a SuperSpeed hub was not read in QEMU, which models no SuperSpeed hub; the E460 reading above has it. `XhciIntelPortSwitch` 2: on QEMU's controller, which is not Intel, on Windows 98 SE on the `release` flavour, no switchover write and the devices working. The controller tolerance, on the `qemu` flavour with each fault made on purpose, on the same two guests: every fault design record 17 section 5 lists - a lost interrupt, a root port disabled, an over-current, the controller halted, all ones with and without the proof the controller stopped, a transaction error, the retry's failed reset and its two races, the reports nothing owns, and the control endpoint's - each made once on both guests, against a USB mouse with a Bulk-Only copy running on a SuperSpeed stick, and each made to persist on Windows 98 SE and on Windows 2000 but for three not run there (the stale context's and the retry's two races persisting); each transient fault answered with no replug, each persistent one ending in its stated state, and the counters and terminal text read in `XHCISNAP`; at `XhciTolerance` `0`, on both guests, the root port disabled, the over-current, the controller halted, the transaction error and a report nothing owns, each handled as `2.1.1.0` handles it and still counted (the others were not read at `0`). A copy running across a controller recovery fails, since every device is re-enumerated, and on Windows 2000 a mounted drive can come back at Code 31 ("Known limitations"). The three new registry values: written at `1`, `1` and `0` by the install into a driver key that had never had them on Windows 2000 and by an update on Windows 98 SE (a fresh install on Windows 98 SE was not read), and a user's `0` kept by an update on Windows 2000; `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub and `XhciAvgTrbEsit` `1` left the devices working, on Windows 98 SE on the `release` flavour |
 | What `2.3.0.0` changed | | In QEMU on development host A, on the integration builds before the cut; each item's section says what was read and on which systems. Then the owner's bench of 2026-10-11, on the signed release package. On a Dell Latitude E7250 (`8086:9CB1`) under Windows 7 x64, in test-signing mode: MSI with the routing repair writing nothing, and BackstopDrains 0; the line under `XhciInterruptMode` `1`, with the repair rewriting the route, also with the EHCI disabled; the switchover at `0` leaving a USB 3 stick at USB 2.0 speed and at `1` giving SuperSpeed; two USB audio devices, each under its composite entry, with USBView showing their strings, and the asynchronous one playing on the fix. Under XP x64: the repair rewriting the route at the default, and with it off, the dead line moved to polling and a SuperSpeed stick copying clean. On a ThinkPad E460 under Windows 98 SE: about 18 GB through a SuperSpeed stick on the line and about 4 GB under polling, every copy compared clean. On a ThinkPad P14s Gen 1 under Windows 98 SE, brief checks only. Not read: standby, remote wake, MSI-X, Windows 98 SE on the E7250, and the Low-Speed mouse of GitHub issue 17 ("Untested ground") |
-| What `2.3.1.0` changes | | The Setup fix: on the owner's Dell Latitude E7250 (`8086:9CB1`) with the USB 3.0 controller on, Windows XP x64 Setup started from a WinSetupFromUSB stick carrying the X230 reporter's nLite-integrated install, on a build with both fixes: text mode reached the partition screen, where `2.3.0.0` stopped with 0x7B; the stick offers both transports and ran as Bulk-Only there. Then, on the `release-x64` build of the fix (2026-10-12, before the version stamp), the install ran from the stick to the desktop, with no device in Device Manager marked with a problem. The stock Windows ME reading is the Windows ME row's, on the `2.3.0.0` package. The shutdown latch, in QEMU on development host A, from the release package: Windows 98 SE (with a selective-suspend client), ME, 2000, XP and 7 x64 each shut down twice with a mouse, a stick, a UAS disk and a hub with audio attached, and every device came back. The re-arm check: under QEMU's MSI-X on Vista x64 and 7 x64, BackstopDrains 0 and UAS at about 100 MB/s, and under MSI and the line, nothing queued by it. The `portsw\` layout: the release package's tree, and the scripts run from `portsw\` on Windows 98 SE, ME, 2000, XP, XP x64 and 7 x64. Not read: a real MSI-X controller, and the X230 itself |
+| What `2.3.1.0` changed | | The Setup fix: on the owner's Dell Latitude E7250 (`8086:9CB1`) with the USB 3.0 controller on, Windows XP x64 Setup started from a WinSetupFromUSB stick carrying the X230 reporter's nLite-integrated install, on a build with both fixes: text mode reached the partition screen, where `2.3.0.0` stopped with 0x7B; the stick offers both transports and ran as Bulk-Only there. Then, on the `release-x64` build of the fix (2026-10-12, before the version stamp), the install ran from the stick to the desktop, with no device in Device Manager marked with a problem. The stock Windows ME reading is the Windows ME row's, on the `2.3.0.0` package. The shutdown latch, in QEMU on development host A, from the release package: Windows 98 SE (with a selective-suspend client), ME, 2000, XP and 7 x64 each shut down twice with a mouse, a stick, a UAS disk and a hub with audio attached, and every device came back. The re-arm check: under QEMU's MSI-X on Vista x64 and 7 x64, BackstopDrains 0 and UAS at about 100 MB/s, and under MSI and the line, nothing queued by it. The `portsw\` layout: the release package's tree, and the scripts run from `portsw\` on Windows 98 SE, ME, 2000, XP, XP x64 and 7 x64. Not read: a real MSI-X controller, and the X230 itself |
 
 The virtual machines are QEMU's `qemu-xhci`, which models no SuperSpeed hub,
 no link faster than 5 Gbit/s, no Low-Speed device and no High-Speed hub; what
