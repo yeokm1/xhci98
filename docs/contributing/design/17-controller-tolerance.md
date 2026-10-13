@@ -79,7 +79,7 @@ them (owner, 2026-10-13), and audits every other behaviour of xHCI 1.0 the
 driver relies on against what 0.96 may lack. The owner's answers of the
 same day to its seven questions are folded in (section 4.14.11), and review
 round 1's findings answered (an eighth question, D8, the isochronous Frame
-ID below 1.0, opened for the owner). Nothing else changes.
+ID below 1.0, answered (b) by the owner the same day). Nothing else changes.
 
 ## 1. What is asked, and what is not
 
@@ -2003,7 +2003,7 @@ capped at 31. NEC's isochronous Link TRB chaining and the AMD 0.96 rules
 are not taken. The owner's answers to the draft's questions add three more
 version rules (4.14.6, D2 to D4), so below 1.0 the driver departs from the
 1.0 programming in four places: TD Size, Transfer Type, TBC and TLBPC, and
-HCCPARAMS2; D8 would make a fifth.
+HCCPARAMS2, and by D8 a fifth, the Frame ID.
 
 - `xhciXferTdSize` (`src/xhci_xfer.c`) gains the form as an input. The
   packet form is today's, unchanged. The 0.96 form is Linux's
@@ -2057,7 +2057,7 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   have, since SuperSpeedPlus came after it. Exactly at 1.0 the register is
   still read on reach, as today; Linux's stricter test (above 1.0) is not
   copied.
-- **D8, open: the Frame ID below 1.0.** With CFC 0 the driver may give a
+- **D8, taken (b) (owner, 2026-10-13): the Frame ID below 1.0.** With CFC 0 the driver may give a
   new isochronous flow's first TD a Frame ID (`XhciXferIsoFramePolicy`,
   `XHCI_ISO_START_FIRST_FRAME_ID`), where Linux writes SIA on every TD of a
   controller whose CFC reads 0 (A4). Linux's test is on CFC alone, not on
@@ -2185,10 +2185,10 @@ HCIVERSION below `0x0100`, with host vectors on both sides of it.
   1.0 (D2) and today's values at 1.0. Each vector asserts every word of
   every TRB built, not the field alone, in both forms.
 - `test_iso`: TD Size per TD in both forms; TBC and TLBPC 0 below 1.0
-  (D3) and today's values at 1.0; and, with D8 as proposed, a new flow at
+  (D3) and today's values at 1.0; and, with D8 as taken, a new flow at
   an explicit start frame on a CFC-0 controller - a Frame ID on its first
   TD at 1.0, SIA below it - every TRB word asserted.
-- `test_iso` again, with D8 as proposed: below 1.0 SIA on every TD with
+- `test_iso` again, with D8 as taken: below 1.0 SIA on every TD with
   bit 11 read both clear and set, for a fresh flow at an explicit start
   frame and for one under way, each asserting the emitted SIA bit and
   Frame ID field and `XhciXferIsoStartPlan`'s answer
@@ -2288,9 +2288,9 @@ On the draft's questions, each recommendation taken:
   `XhciQemuHciVersion`, `qemu` flavour only, written by no INF (4.14.10).
 - **The value's name**: `XhciAccept096`.
 
-Open for the owner, from review round 1:
+From review round 1, answered by the owner the same day:
 
-- **D8, the isochronous Frame ID below 1.0.** (a) As 1.0: with CFC 0 a new
+- **D8, the isochronous Frame ID below 1.0: taken (b).** (a) As 1.0: with CFC 0 a new
   flow's first TD may carry a Frame ID, as today; or (b) SIA on every TD
   below 1.0, whatever HCCPARAMS bit 11 reads - Linux's behaviour on a
   controller whose CFC reads 0, taken here as the project's own
