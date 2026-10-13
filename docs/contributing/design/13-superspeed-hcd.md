@@ -1807,6 +1807,374 @@ half (4,441 of 8,922 reads, 49.8 %), not growing. The flow tracking of review ro
 build; on this device it gives the same Frame IDs, since every feedback
 read follows a `RESET_PIPE`'s new context.
 
+### 6.11 The Windows 98 SE and ME silent install (task 38.2, 2026-10-13)
+
+**Status: design, for the review loop and the owner's approval; no code
+yet.** The rule and the decisions are the owner's (roadmap-hcd task 38.2,
+2026-10-12 and 2026-10-13) and are not reopened here; what this section adds
+is where each part lives in the bus, and the questions it could not settle,
+marked **Open** below. The information on how Windows 98 decides a silent
+install, and the list itself, are SweetLow's; the README, the release notes
+and the readme template credit him for both (owner, 2026-10-13).
+
+**Today.** Every PDO the project creates answers `SilentInstall` FALSE in
+`IRP_MN_QUERY_CAPABILITIES`: the device, function, composite-parent and hub
+PDOs in `hcd_pdo.c` (`hcdDeviceCapabilities`), the root-hub PDO in
+`hcd_rh.c`, and `xhciuas.sys`'s LUN PDOs in `src\uas\uas_pdo.c`
+(`uasCapabilities`). On Windows 98 SE a device whose class INF is the OS's
+own therefore brings the New Hardware wizard at every new devnode - a known
+device on another port, behind another hub - even when nothing need be asked;
+the devnodes of this package's own INFs (the root hub, `XHCI98\HUB`,
+`XHCI98\COMPOSITE`) were read installing with no wizard already (run-36,
+the 98 SE K2 and hub rows; run-37 for ME).
+
+#### 6.11.1 The rule
+
+A device PDO answers `SilentInstall` TRUE when any interface descriptor of
+its configuration matches an entry of
+`HKLM\System\CurrentControlSet\Services\USB\SilentClasses` - the key already
+in use on these systems, whose name Windows 98 SE's own `usbhub.sys` carries
+(`USB\SilentClasses`, section 10.6's fragment list) - so an existing `.reg`,
+and a machine that merged one, work unchanged.
+
+- **An entry** is a value of that key, its name ignored, of type
+  `REG_BINARY` and exactly 4 bytes: byte 0 the control byte, then
+  `bInterfaceClass`, `bInterfaceSubClass` and `bInterfaceProtocol`.
+- **The control byte:** `0x80` - the entry applies to a device that is not
+  composite; `0x40` - to one that is; `0x01` - compare the subclass; `0x02` -
+  compare the protocol. The class is always compared. Both `0x80` and `0x40`
+  set applies either way.
+- **Ignored entries:** one with neither `0x80` nor `0x40`; and, as this
+  design reads "a 4-byte `REG_BINARY`", one of any other type (`REG_DWORD`,
+  a string, `REG_NONE`) or any other length. The other control bits (`0x3C`)
+  are not read. An ignored entry takes no room in the table (6.11.3) and is
+  counted.
+- **An interface descriptor matches an entry** when the entry applies to
+  the PDO's kind (6.11.2) and its class is equal, and its subclass and
+  protocol are equal where the entry's bits say to compare them. Every
+  interface descriptor counts, alternate settings included; the
+  configuration matches when any one of them matches any one entry.
+
+**Windows 98 SE and ME only** (owner): never on Windows 2000 and later. The
+test is the one the bus already uses for them,
+`!IoIsWdmVersionAvailable(1, 0x10)` (WDM 1.00 on 98, 1.05 on ME, 1.10 from
+2000; `hcd_pdo.c`, `hcd_door.c`). On an NT target the key is never opened,
+the table stays empty, and every PDO answers FALSE as today.
+
+**Opt-in** (owner): the INFs write nothing. A missing key, an empty one, a
+key the query cannot read, or a list whose every entry is ignored, means an
+empty table, and nothing is silent.
+
+#### 6.11.2 What each PDO answers
+
+"Composite" means what the bus's own split decides (section 10.8,
+`XhciFuncSplit`): the device's PDOs are a composite parent and its function
+PDOs, and nothing else is composite - not a multi-interface device the bus
+leaves whole (several configurations, a device class of its own, more than
+16 functions), which is "not composite" and takes the `0x80` entries.
+
+| PDO | Configuration walked | Entries that apply |
+|---|---|---|
+| A device PDO the bus did not split | its whole configuration (`Config`) | `0x80` |
+| A hub's PDO (`XHCI98\HUB`, `XHCI98\HUB30`; 10.11) | its whole configuration; a hub is never split (`bDeviceClass` 9) | `0x80` |
+| The composite parent (`XHCI98\COMPOSITE`; 10.12) | the device's whole configuration | `0x40` |
+| Each function PDO of a split device | its own filtered configuration (`Config` of a function, 10.9): its interfaces only | `0x40` |
+| The root-hub PDO (`hcd_rh.c`) | none | always FALSE |
+| `xhciuas.sys`'s LUN PDOs (`uas_pdo.c`) | none: a disk, not a USB interface | always FALSE |
+
+So a function's answer depends on its own interfaces alone, never on its
+siblings'; and the composite parent answers TRUE when any of its functions'
+interfaces match a `0x40` entry, which is the rule read literally over the
+whole configuration. **Open (O3):** whether the parent should instead
+answer TRUE only when every function does, or never: its devnode is this
+package's own INF's and was read installing silently on 98 SE with
+`SilentInstall` FALSE (run-36, K2), so its answer is expected to change
+nothing there; the legs read it. The hub row is in the same position: the
+hub entry is the list's, and whether it changes anything for this bus's own
+hub devnode is read on the legs, not assumed.
+
+**A storage interface under UAS.** A dual-mode drive's interface has a
+Bulk-Only alternate 0 (`08/06/50`) and a UAS alternate (`08/06/62`), and the
+bus presents one transport (section 10.7, `xhci_xport.h`). Under the rule as
+written, the Bulk-Only alternate matches the list's storage entry even when
+the PDO is presented as UAS and bound by `xhciuas.inf` - the one class the
+list leaves out because this package's own INFs install it. On a machine
+where `xhciuas.inf` has never been installed, that drive would then be
+installed silently with no driver, the very case the readme warns against.
+**Open (O2), proposed:** a PDO whose transport is `XHCI_XPORT_UAS` or
+`XHCI_XPORT_REFUSED` answers FALSE whatever the list says; a PDO presented
+Bulk-Only (`XHCI_XPORT_BOT` or `NONE`) follows the rule. Until the owner
+decides, the rule stands as written.
+
+#### 6.11.3 Read once per controller start, into the bus's own storage
+
+**Where.** A new static `hcdReadSilent` in `hcd_ctl.c`, called from
+`hcdStartBody` beside `hcdReadValues` - after the delivery is settled and
+the BAR mapped, before the interrupt is connected, the controller run and
+the controller thread created. The table lives in `HCD_CONTROLLER` (the FDO
+extension), not in `XHCI_EXTENSION`, so `XHCISNAP`'s dump layout is
+untouched; a machine with two controllers reads it once for each. No
+per-device registry read and no allocation (owner).
+
+**The table** is fixed-size: `SilentEntry[XHCI_SILENT_MAX][4]` (`UCHAR`),
+`SilentCount`, and three counts for the log - `SilentIgnored`,
+`SilentDropped` and the query's `SilentStatus`. **The cap is 32 entries**,
+128 bytes of non-paged extension: the package's list is six and SweetLow's
+the same six; 32 is five times that, enough for any hand-extended list this
+design can foresee, and a match over it costs at most 32 comparisons an
+interface descriptor, once per PDO. **Past the cap** each further valid
+entry is dropped and counted, in the order the query enumerates the values,
+which the bus does not choose. Dropping can only remove silence - the
+wizard comes, as today - which is the safe direction, and the note ring
+says it happened. **Open (O5):** the cap's value.
+
+**The read.** On 98 SE and ME only; `SilentCount`, `SilentIgnored` and
+`SilentDropped` are set to 0 first on every target, so a key deleted
+between two starts takes effect at the second.
+`RtlQueryRegistryValues(RTL_REGISTRY_SERVICES, L"USB\\SilentClasses",
+table, hc, NULL)` with one table entry: a query routine
+(`hcdTakeSilent`), `Name` NULL - which asks the routine for every value of
+the key - and `RTL_QUERY_REGISTRY_NOEXPAND`, not `REQUIRED`. The routine
+hands each value's type, data and length to the pure admission
+(`XhciSilentAdd`, 6.11.7), which keeps it, ignores it or drops it, and
+always returns `STATUS_SUCCESS`, so one bad value ends nothing. An absent
+key is the query's failure and an empty table. The start's notes record the
+query's status, the count kept, the count ignored and the count dropped
+(`silent.status`, `silent.entries`, `silent.ignored`, `silent.dropped`, at
+every verbosity, as the start's other values are).
+
+**Imports.** Every routine the read needs is already on
+`xhci98-imports.allow` with no `SITES` limit: `RtlQueryRegistryValues`
+(stock 98 SE precedent, `uhcd.sys`, `usbhub.sys` and `usbd.sys` 4.10.2222;
+Appendix A row 170), `IoIsWdmVersionAvailable`. `RTL_REGISTRY_SERVICES` on
+Windows 98 is the 2a guest's runtime reading of NUSB's `usbport.sys` taking
+`Services\USB\DisableSelectiveSuspend` through
+`RtlQueryRegistryValues(RelativeTo = Services, L"usb", ...)` (`lessons.md`).
+No allowlist row changes.
+
+**Open (O1): the enumeration on NTKERN.** That Windows 98 SE's and ME's
+`RtlQueryRegistryValues` call the routine for every value when `Name` is
+NULL has not been read; every use in this tree names its value. The legs
+read it (`silent.entries` 6 with the list merged), and a static reading of
+how 98 SE's `usbhub.sys` reads `USB\SilentClasses` would be the precedent.
+If NTKERN does not enumerate, the routes that remain need the owner: the
+NT route is `ZwOpenKey` plus `ZwEnumerateValueKey`, and `ZwOpenKey` has
+stock 98 SE evidence (Appendix A row 157) but no row on the allowlist,
+while `ZwEnumerateValueKey` has no Appendix A row at all - no Windows 98
+evidence recorded; or a query by name of values `"0"` to `"31"`, which
+reads the package's list and SweetLow's but not the rule's "name ignored".
+Neither is assumed here.
+
+#### 6.11.4 When the list is read, against when PDOs exist
+
+Device PDOs are created only by the controller thread
+(`HcdDevicePdoCreate`), which a start creates after the read; so every PDO
+of a start is created against that start's table, and no device of a start
+is enumerated before its read. **The decision is taken at creation and kept
+in the PDO**: a new `HCD_DEVICE_PDO.SilentInstall` (`ULONG`, 0 or 1),
+computed in `HcdDevicePdoCreate` for every PDO of the group - the split is
+known there (`set.Count != 0`), and the PDO's own `Config` and
+`ConfigLength` and its transport are fixed by then - and, like the PDO's
+other creation fields, never changed after it is listed. The query copies
+it.
+
+What that leaves:
+
+- **A PDO kept across a controller stop** (dormant, revived on the next
+  start, sections 5.2 and 10.11) keeps the answer it was created with,
+  against the earlier start's table. Its devnode is already installed, so
+  the answer no longer decides anything; on 98 SE and ME a revived group
+  keeps its old PDOs and deletes the new ones (`HcdDevicePdoCreate`), whose
+  answers are discarded with them.
+- **A list merged, changed or deleted while the controller runs** is seen
+  at the next controller start: a restart, or the controller's disable and
+  enable. A device plugged before that is answered by the old table. The
+  readme says to restart after merging.
+- A hub FDO's start reads nothing: the table is the controller's.
+
+#### 6.11.5 The match, the descriptor walk and malformed descriptors
+
+The match is pure: `XhciSilentMatch(entries, count, config, length,
+composite)` returns 1 or 0. It walks the PDO's held copy of its
+configuration descriptor (`Config`, `ConfigLength` - the copy the PDO
+already carries so it may outlive the device record; for a function, its
+filtered configuration) by `bLength`, from offset 0, the configuration
+descriptor itself walked over like any other:
+
+- **Bounds:** at each offset the walk needs two bytes; a descriptor whose
+  `bLength` is below 2 (no progress) or runs past `ConfigLength` (truncated)
+  is **malformed**.
+- **An interface descriptor** is `bDescriptorType` 4 with `bLength` 9 or
+  more; class, subclass and protocol are its bytes 5, 6 and 7. A type-4
+  descriptor shorter than 9 is malformed. Any other type is walked over
+  unread (IADs, endpoints, class-specific descriptors).
+- **A malformed configuration answers 0**, whatever matched before the
+  fault: the walk does not stop at the first match, so a configuration is
+  silent only when it was walked whole and matched. Silence is the
+  direction that can leave a device unworking with nothing said, so a
+  configuration the bus cannot read whole is not given it. **Open (O4):**
+  this choice, against keeping a match found before the fault.
+- `config` NULL or `length` 0: 0.
+
+**The two traps** (roadmap 38.2), designed out where they arise:
+
+- **An absent list is never dereferenced.** `XhciSilentMatch` returns 0
+  before it reads an entry or a descriptor when `count` is 0, and also when
+  `entries` is NULL whatever `count` says; the caller does not call it on
+  NT at all. In the bus the table is an array in the extension, so there
+  is no pointer to be NULL, but the pure function does not rely on that,
+  and the host tests call it with a NULL table.
+- **A flag is masked before it becomes a `BOOLEAN`.** The entries are kept
+  as four `UCHAR`s, never packed into a `ULONG` whose `(BOOLEAN)` cast
+  would keep the low byte - the control byte itself, nonzero for an
+  ignored `0x01` entry - or lose a bit above it. Each test is written
+  `(control & mask) != 0`, the match returns exactly 0 or 1, and the
+  capability is written `caps->SilentInstall = pdo->SilentInstall ? TRUE :
+  FALSE`.
+
+#### 6.11.6 IRQL and locking
+
+- **The read** (`hcdReadSilent`, `hcdTakeSilent`, `XhciSilentAdd`):
+  PASSIVE_LEVEL, in the start body, on the PnP thread's START. It writes
+  the table with no lock: the previous start's controller thread has
+  exited (the stop waits for it), this start's does not exist yet, and
+  nothing else reads the table.
+- **The decision** (`XhciSilentMatch` from `HcdDevicePdoCreate`): the
+  controller thread, PASSIVE_LEVEL, reading the table with no lock - the
+  table is written only while no thread exists. No spin lock is held for
+  the walk.
+- **The query** (`hcdDeviceCapabilities`): PASSIVE_LEVEL, as every
+  `IRP_MN_QUERY_CAPABILITIES`, reading the PDO's `SilentInstall` with no
+  lock: it was written before the PDO was listed under `PdoListLock`, the
+  publication every other creation field relies on.
+- The pure half (`xhci_silent.c`) is DDK-free, C89, IRQL any.
+
+#### 6.11.7 The pure core and its host tests
+
+`src\xhci_silent.c` and `xhci_silent.h` (the admission `XhciSilentAdd` and
+the match `XhciSilentMatch`), with `test\test_silent.c` in
+`test\run-host-tests.cmd`, as the other pure halves are (`test_func`,
+`test_xport`). The vectors:
+
+- **Admission:** a 4-byte `REG_BINARY` with `0x80`, `0x40` and `0xC0` kept;
+  `0x00`, `0x01`, `0x02`, `0x03` and `0x3F` ignored; `REG_DWORD` of 4
+  bytes, `REG_SZ` and `REG_NONE` ignored; lengths 0, 3 and 5 ignored; NULL
+  data ignored; an ignored entry takes no slot; the 33rd valid entry
+  dropped and counted, the first 32 kept in order.
+- **Control bits:** `0x80` with class only matches any subclass and
+  protocol; `0x81` compares the subclass and not the protocol; `0x82` the
+  protocol and not the subclass; `0x83` both; a class mismatch never
+  matches.
+- **Composite:** a `0x80` entry does not match with `composite` 1, a `0x40`
+  entry does not match with 0, `0xC3` matches with either.
+- **The package's six** against a Full Speed hub (`09/00/00`), a High Speed
+  multi-TT hub (`09/00/02`), a SuperSpeed hub (`09/00/03`), a boot keyboard
+  and a boot mouse alone and as functions, a non-boot HID (`03/00/00`, no
+  match), a Bulk-Only stick alone and as a function, a CBI floppy
+  (`08/04/00`, no match), and a dual-mode drive's two alternates (match on
+  alternate 0).
+- **Subclass and protocol:** a match on a non-zero alternate setting only;
+  a match on the last interface of several.
+- **Empty and absent lists:** `count` 0 with a real table, a NULL table
+  with `count` 0, and a NULL table with `count` 3 - all 0.
+- **Malformed configurations:** `bLength` 0, `bLength` 1, a descriptor
+  running past the length, a type-4 descriptor of 5 bytes, a matching
+  interface before a malformed descriptor (0), and a matching interface
+  after a long class-specific descriptor (1); `config` NULL and `length` 0.
+- **The `BOOLEAN` trap:** every result is exactly 0 or 1, including for an
+  entry `0x83` that matches, and an entry `0x01` (ignored) never yields a
+  nonzero result.
+
+#### 6.11.8 The `.reg` in `tools\silent\`
+
+The package carries the list as a `.reg` in its own directory,
+`tools\silent\`, under task 38.10's `tools\` (owner, 2026-10-13, replacing
+the `release-x86` placement of 2026-10-12): never in a flavour directory,
+never at the version root, and `Assert-ToolsLayout`'s list of tool
+directories names it. Six entries, `REGEDIT4`, under
+`[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses]`:
+
+| Value | Bytes | Control byte | Matches |
+|---|---|---|---|
+| `"0"` | `hex:80,09,00,00` | `0x80`: not composite; class only | any hub (`09`, every protocol: Full Speed `00`, High Speed single- and multi-TT `01`/`02`, SuperSpeed `03`); hubs are never composite |
+| `"1"` | `hex:43,03,01,01` | `0x40` + `0x01` + `0x02`: composite; subclass and protocol | a boot keyboard function (`03/01/01`) |
+| `"2"` | `hex:43,03,01,02` | the same | a boot mouse function (`03/01/02`) |
+| `"3"` | `hex:c3,08,06,50` | `0x80` + `0x40` + `0x01` + `0x02`: alone or composite; subclass and protocol | Bulk-Only SCSI storage (`08/06/50`) |
+| `"4"` | `hex:83,03,01,01` | `0x80` + `0x01` + `0x02`: not composite | a boot keyboard alone |
+| `"5"` | `hex:83,03,01,02` | the same | a boot mouse alone |
+
+The values and their names are those of SweetLow's `SilentClasses.reg`
+(in `usb20_win9x.zip`, `tools/usb20_win9x.zip`; the file is 214 bytes,
+SHA-256 `4DB099B600F0E45C82AF8F9A9E56745C6245093FCCDE574220FD610B12B523E3`,
+read as text, static). Keeping the same names means merging one over the
+other leaves six values, not twelve: names are ignored by the rule, but a
+duplicate would take a table slot. The file in `tools\silent\` is written
+by this project from those six facts; it is not a copy of his file, and
+`legal-provenance.md` section 4 gains the row for the values in the same
+change. Protocol is compared in the HID entries so a non-boot HID device
+(`03/00/xx`), whose class driver may be a vendor's, is never silent, and in
+the storage entry so the UAS alternate (`08/06/62`) is not matched by it;
+the hub entry compares the class alone because every hub binds the same
+way. **UAS is not listed** (owner): `xhciuas.inf` is this package's own,
+and its first install is the wizard's (but see O2).
+
+**The readme section** (the readme template's, under `tools\silent\`):
+
+- What it does: on Windows 98 SE and ME, a device of a listed class -
+  hub, boot keyboard, boot mouse, Bulk-Only stick, alone or in a composite
+  device - installs with no wizard; on Windows 2000 and later the list is
+  never read.
+- **Merge it only once each listed class's drivers have been installed at
+  least once on this machine**, by plugging such a device with the list
+  absent and finishing its wizard: a silent install asks for no CD and no
+  disk, so a class whose driver is not yet on the machine ends with a
+  device that does not work and nothing said. The case read: a USB keyboard
+  on 98 SE needs `kbdhid.vxd` from the Windows 98 SE CD (run-36, K5), and
+  storage needs NUSB's `usbstor.sys` on 98 SE (ME's own on ME).
+- Restart after merging (the list is read at the controller's start).
+- To undo, delete the `SilentClasses` key in `regedit` and restart.
+- UAS is not in the list, and why.
+- ME: whether ME needs the list at all, as the legs read it (below).
+- The credit: SweetLow, for the information on how the silent install is
+  decided and for the list.
+
+#### 6.11.9 Windows ME, and the legs
+
+**ME is read, not assumed.** Roadmap 37.1 installed the mouse, the hub and
+the stick on a stock ME with no list and no wizard; the wizard came only for
+UAS (`XHCIUAS.INF`, this package's) and composite audio (run-37, 37.1). So
+ME may decide silence another way, or ME's `usbhub.sys` (4.90.3002.1, not
+read here for this) may not be what decides it; whether ME needs the list
+is what its legs answer, and the readme then says so.
+
+**The legs**, on 98 SE and on ME, each first without the list and then with
+it merged and the guest restarted, the controller's notes read
+(`silent.status`, `silent.entries` 6, `silent.ignored` 0 and
+`silent.dropped` 0 with the list):
+
+1. A device installed once and then moved to another port (a new devnode
+   for a known class): the wizard without the list, none with it.
+2. A hub.
+3. A boot keyboard and a boot mouse, each alone (on 98 SE the keyboard's
+   first install takes the CD's `kbdhid.vxd`, before the list is merged).
+4. A composite device with a boot keyboard or mouse function: the
+   parent and each function, which function is silent and which asks.
+5. A Bulk-Only stick.
+
+Then the readme says whether ME needs the list. Proposed beside them (not
+the owner's list): one Windows 2000 reading with the list merged, which
+should show no `silent.*` note and every install as before.
+
+#### 6.11.10 Open questions for the owner
+
+| | Question | Proposed |
+|---|---|---|
+| O1 | Does NTKERN's `RtlQueryRegistryValues` (98 SE, ME) enumerate every value when `Name` is NULL? If not: `ZwOpenKey` (98 SE evidence, not allowlisted) with `ZwEnumerateValueKey` (no Windows 98 evidence recorded), or a by-name query of `"0"` to `"31"` | read on the legs, or statically in 98 SE's `usbhub.sys`, before the fallback is chosen |
+| O2 | A PDO presented as UAS, or refused, whose Bulk-Only alternate matches the storage entry | FALSE for `XHCI_XPORT_UAS` and `XHCI_XPORT_REFUSED` |
+| O3 | The composite parent: TRUE when any function's interfaces match (the rule read literally), when all do, or never | any (literal) |
+| O4 | A malformed configuration: 0 whatever matched, or keep a match found before the fault | 0 |
+| O5 | The table's cap | 32, the excess dropped and counted |
+
 ## 7. The Windows 98 export evidence (task 25.3)
 
 The miniport imported almost nothing because `usbport.sys` did the work; the
