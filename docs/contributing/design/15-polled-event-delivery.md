@@ -1787,13 +1787,25 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
 - `TmrReleaseCause` of the last release: 1 the poller left ACTIVE, 2
   parked or revoked, 3 barred (a power transition), 4 the stop;
 - `TmrHeldMs`, the time held in this start, in whole ms, saturating;
-- **phase observations** (round 1, finding 6; round 2, finding B): the
-  interval between two poll runs counts only when it is a **short
-  request** - the period armed for it was at most 5 ms - and the
-  request's phase (HELD or RELEASED), the period armed, and the
-  controller's start were the same at both runs; any other interval,
-  one crossing a hold or release in particular, is discarded and counted
-  (`TmrObsCrossed`). Per phase, three words: `ObsCount`, `ObsSumMs`
+- **phase observations** (round 1, finding 6; round 2, finding B; round
+  3, finding 2): **the observation epoch**, `TmrObsEpoch`, is advanced
+  by the timer thread under the controller lock immediately before each
+  call (to an odd value: a call in flight) and immediately after it
+  returns (to the next even value), so every hold and every release moves
+  it twice. `hcdPollDpc` reads the epoch with its entry timestamp (`now`,
+  taken at entry today, `src/hcd_poll.c` ~728) and again in the
+  controller-lock hold where it observes (`XhciPollObserve`, ~813), and
+  keeps, with each accepted run's timestamp, that run's epoch and the
+  period armed for it. The interval between two runs counts only when
+  it is a **short request** - the period armed for it at most 5 ms -
+  and the previous run's epoch, this run's entry epoch and its
+  observation epoch are one even value, and the period armed and the
+  start are the same; so an interval that touches a call, crosses any
+  hold or release (a HELD-RELEASED-HELD ABA included, since each moves
+  the epoch), or sees one land during its own drain is discarded and
+  counted (`TmrObsCrossed`). The phase it counts in is the phase of that
+  even epoch (HELD or RELEASED, recorded beside the epoch by the timer
+  thread). Per phase, three words: `ObsCount`, `ObsSumMs`
   (whole ms, saturating) and `ObsLate` (observed at least 3 ms longer
   than the period armed). Monotonic within a start; a leg reads a phase
   as the difference of two snapshots around it, so an interval from
@@ -1804,11 +1816,20 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
 - **The released-phase stimulus.** A request is RELEASED while the
   poller is PERIODIC, so a short PERIODIC period is the controlled way to
   read the clock with this controller's request given back: a resting
-  HID device whose pending interrupt-IN, under `XhciIntervalCap` (or the
-  device's own interval) where needed, gives a PERIODIC period of 2 to
-  5 ms, recorded from `PollStateLast` and `PollPeriodLast`. The same
-  stimulus with the switch 0 is the baseline. It needs no ACTIVE state
-  and so never takes the request itself.
+  device whose pending interrupt-IN endpoint's own programmed interval
+  converts (section 6.1) to 2 to 5 ms - a high-speed interrupt endpoint
+  of `Interval` 4 or 5 (2 or 4 ms), for instance - so the poller sits
+  PERIODIC at that period with no event arriving. `XhciIntervalCap` is
+  not a way to get there: it only caps an encoded interval at 8 (32 ms;
+  `XhciTolCapInterval`, `src/xhci_tol.c`). Which QEMU device model, or
+  which configuration of one, offers such an endpoint has not been read;
+  the leg names it in its run sheet from that model's descriptors before
+  it runs, and where none is found, T2's and T5's released readings are
+  owed and said so. A reading is accepted only with a non-zero
+  `ObsCount` in the window and `PollStateLast` PERIODIC with
+  `PollPeriodLast` between 2 and 5 recorded. The same stimulus with the
+  switch 0 is the baseline. It needs no ACTIVE state and so never takes
+  the request itself.
 
 The log's notes: `poll.timer.hold` (the value returned) and
 `poll.timer.release` (the cause in the top byte, the value returned below
@@ -1844,8 +1865,13 @@ forced release, then a hold); a recovery; a PERIODIC decision after
 ACTIVE (a release); D3 and back (barred release, no hold until the next
 ACTIVE); the stale hold against a bar (counted raced); the stop while
 HELD, while RELEASED and while a bar is set; the first pass with
-`TmrActive` already 1 (a hold without a new edge); the phase bins at
-their edges. The channel's vectors for the timer service are record 18
+`TmrActive` already 1 (a hold without a new edge); the observer
+(`XhciPollTmrObserve`, pure): the 5 ms short-request cutoff at its edge,
+the 3 ms lateness threshold at its edge, `ObsSumMs` saturating, a
+HELD-RELEASED-HELD and a RELEASED-HELD-RELEASED sequence between two
+runs (rejected), a call landing between a run's entry and its
+observation (rejected), an odd epoch (rejected), a change of armed
+period or of start (rejected). The channel's vectors for the timer service are record 18
 section 15.3's; the binding machine's `XHCI_HLPR_EV_TIMER` and the
 per-start latch are record 18 section 15.4's.
 
@@ -1854,17 +1880,18 @@ per-start latch are record 18 section 15.4's.
 `src/hcd_tmr.c` (new: the thread, its creation in the start and join in
 the stop, the routine's lookup per image, the 32-bit NT 5 look);
 `src/xhci_poll.c` and `src/xhci_poll.h` (the two pure functions, the
-cause constants, the phase bins); `src/hcd_poll.c` (`TmrActive`, the
+cause constants, the observer and its epoch); `src/hcd_poll.c` (`TmrActive`, the
 boundary and the event in `hcdPollDpc`, `HcdPollPromoteLocked`, the
-park, `HcdPollRevoke`, `HcdPollGrant` and `hcdPollMove`; the phase bins
-beside `XhciPollObserve`); `src/hcd_power.c` (the bar beside each
+park, `HcdPollRevoke`, `HcdPollGrant` and `hcdPollMove`; the epoch read
+at the DPC's entry and the observer beside `XhciPollObserve`); `src/hcd_power.c` (the bar beside each
 `HcdPollRevoke` of a power path); `src/hcd_pnp.c` (the creation after a
 successful start); `src/hcd_ctl.c` (the switch's read, the per-start
 reset before `HcdPollOpen`, the stop's early bar and late join);
 `src/hcd.h` (`hc->Tmr`); `src/xhci_counters.h` and `src/hcd_log.c` (the
 counters, the dump and the `poll.timer.join` note); `src/hcd_inj.c` and
-`src/hcd_susp.c` (`XhciQemuTmrDelayMs` and `XhciQemuSuspHoldDx`, `qemu`
-only); both INFs (the switch's row on every path); `src/sources` (the
+`src/hcd_susp.c` (`XhciQemuTmrDelayMs` and `XhciQemuSuspHoldDx`, the
+skip before `hcdSuspTake`, and the `qemu.*` and `poll.timer.call` notes,
+`qemu` only); both INFs (the switch's row on every path); `src/sources` (the
 new object); `scripts/import-gate/xhci98-imports-amd64.allow` (the
 `MmGetSystemRoutineAddress` row's `SITES` gains `hcd_tmr.obj`; the 32-bit
 allowlist is unchanged); `scripts/inf-gate/check-inf.ps1`'s value-policy
@@ -1903,17 +1930,28 @@ as snapshot differences (section 7.2.9).
   from zero. Then the stop with a child's power IRP really outstanding
   (round 2, finding C): a child put in D2 does not keep its D-IRP pended
   (admission publishes the Dx and the executor completes it), so the
-  `qemu` flavour gains `XhciQemuSuspHoldDx` 1, under which the executor
-  claims a child's Dx and leaves it unsettled in its slot - normal
-  settlement held, the stop's unlink settlement unchanged - with a log
-  note at the hold (`qemu.susp.hold`). With it, `XhciSelectiveSuspend`
-  1, record 14's test client asking D2, `XhciQemuTmrDelayMs` 2000 and a
-  hold taken: the leg first shows the IRP outstanding when the stop
-  begins (the slot's `PowerPending` in the stop's dump), then reads, in
-  the log's order, the child's completion at its unlink, the timer
-  thread's `poll.timer.release` with the delayed call's return, and the
-  join (`poll.timer.join`, a note the stop writes after it). A child
-  already settled in D2 does not count as this leg.
+  `qemu` flavour gains `XhciQemuSuspHoldDx` 1. **Under it the executor
+  does not claim a child's pended Dx at all**: its pass skips the slot
+  before `hcdSuspTake` (which today clears `PwrIrp` as it takes the IRP,
+  `src/hcd_susp.c` ~2222), so the IRP stays in `PwrIrp` and only the
+  stop's unlink can settle it, through `HcdSuspUnlinkFinish`'s hand-off
+  to a completion worker - unchanged. Notes, `qemu` only: `qemu.susp.hold`
+  when the executor first skips a slot (the PDO's serial and the D-state);
+  `qemu.stop.dx` written by the stop's very first step, before the bar,
+  for each PDO whose `PwrIrp` is a non-NULL Dx (serial, D-state,
+  `PowerPending`); `qemu.susp.done` written by the completion worker
+  when it actually completes a D-IRP (serial), apart from the unlink's
+  hand-off; `poll.timer.call` when the timer thread enters a call and
+  `poll.timer.release` when the `FALSE` returns; `poll.timer.join` after
+  the join returns. The leg, with `XhciSelectiveSuspend` 1, record 14's
+  test client asking D2, `XhciQemuTmrDelayMs` 2000 and a hold taken, then
+  a disable, passes only on: `qemu.stop.dx` naming the held PDO (the IRP
+  outstanding at the stop's entry); `poll.timer.call` before it or
+  before `qemu.susp.done` (the delayed call outstanding while the child
+  waits); `qemu.susp.done` for that PDO and `poll.timer.release` both
+  before `poll.timer.join`; and no assumption that the unlink itself
+  completed the IRP. A child already settled in D2 does not count as
+  this leg.
 - **T4, S3, S4 and S5.** Where a guest sleeps (XP, Vista and 7 hibernate
   and the guests that stand by, as task 36.28's legs): a copy running,
   then the transition; after the resume `TmrReleaseCause` 3 from before
@@ -2497,6 +2535,17 @@ taken:
 | D | P2: QEMU raises no Function Wake; no x64 test client | Section 7.2.6a and leg T8: Function Wake unread on QEMU, the x64 wakes owed |
 | E | P3: WATCH creates a parked thread | Record 18 section 15.4 |
 | F | P3: the header gate cannot show the target | Record 18 section 15.10: the claim limited; the build log's target line and library path checked |
+
+Round 3 (`7dde5165`, same thread): 1 P1, 3 P2, 1 P3. A, D and E
+confirmed closed; B, C and F reopened. All taken:
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P1: `XhciIntervalCap` caps at 32 ms and cannot make a 2-5 ms probe | Section 7.2.9: an endpoint with a native short interval, named from the model's descriptors, the reading owed where none exists, acceptance needing a recorded PERIODIC period and a non-zero count |
+| 2 | P2: equal phases at both ends miss an ABA and a transition during the drain | Section 7.2.9: the observation epoch, moved before and after every call, read at the DPC's entry and at its observation; vectors in section 7.2.10 |
+| 3 | P2: the library gate rejected the CRT libraries subsystem 5.00 adds | Record 18 section 15.10: the CRT libraries enumerated and allowed; fixtures |
+| 4 | P2: T3's injection cleared the slot; the stop's dump comes after the drain; unlink only hands off | Leg T3: the claim skipped before `hcdSuspTake`, the entry note, the completion worker's own note, the ordering rule |
+| 5 | P3: stale "phase bins" in the test and integrator lists | Sections 7.2.10 and 7.2.11 |
 
 ## 14. What changes in the documents
 

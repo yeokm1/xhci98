@@ -1712,7 +1712,8 @@ the answers written in the same day. Review round 1 is recorded with
 record 15's (its section 13.6, the same thread); its record 18 findings
 (5, 7 to 10, 13) are taken in sections 15.4, 15.7, 15.10, 15.11 and
 15.12, and the owner then withdrew the forced restart on 2000 and XP
-(H2). Round 2's E and F are taken in sections 15.4 and 15.10.
+(H2). Round 2's E and F are taken in sections 15.4 and 15.10, and round
+3's finding 3 in section 15.10.
 
 ## 15. Revision 13: the helper on Windows 2000 and XP, renamed `xhcihlpr.sys` (task 38.4)
 
@@ -2074,8 +2075,19 @@ Windows 7 - which no field of the image's header shows, since
   those fields unseen; that is all the header shows (round 2, finding F).
   **The target itself is checked in the build's log**: `build-driver.cmd`
   refuses a helper build whose log lacks the kit's own line
-  `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` (`makefile.new` ~1121) or
-  whose link names any library path other than `lib\wxp\i386`.
+  `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` (`makefile.new` ~1121), or
+  whose link names a target-specific library from any directory but
+  `lib\wxp\i386` (a `wlh`, `win7` or `wnet` path refused by name). The
+  kit adds, for a `DRIVER` whose subsystem is below 6.01 - as
+  `SUBSYSTEM_VERSION=5.00` makes it - `$(CRT_LIB_PATH)\safecrtnt.lib`
+  and `$(SDK_LIB_PATH)\libcntpr.lib` (`makefile.new` ~4282), and
+  `setenv.bat` (~326) points `CRT_LIB_PATH` at `lib\crt\*`, so
+  `lib\crt\i386\safecrtnt.lib` is the one library admitted outside
+  `lib\wxp\i386`, by name (round 3, finding 3); both are in the first
+  link's import audit like every other library. The gate's self-tests:
+  a valid `WXP`, subsystem 5.00 build log (accepted), the same with a
+  `lib\wlh\i386` library (refused), and with the `WINXP` line missing
+  (refused).
 
 **Every import of the linked libraries is audited against 2000 and XP**:
 the list is read from the first link's `dumpbin /imports`, not from this
