@@ -1794,16 +1794,28 @@ start zeroing them; `XHCISNAP` names them, as task 36.9 did):
   returns (to the next even value), so every hold and every release moves
   it twice. `hcdPollDpc` reads the epoch with its entry timestamp (`now`,
   taken at entry today, `src/hcd_poll.c` ~728) and again in the
-  controller-lock hold where it observes (`XhciPollObserve`, ~813), and
-  keeps, with each accepted run's timestamp, that run's epoch and the
-  period armed for it. The interval between two runs counts only when
-  it is a **short request** - the period armed for it at most 5 ms -
-  and the previous run's epoch, this run's entry epoch and its
-  observation epoch are one even value, and the period armed and the
-  start are the same; so an interval that touches a call, crosses any
-  hold or release (a HELD-RELEASED-HELD ABA included, since each moves
-  the epoch), or sees one land during its own drain is discarded and
-  counted (`TmrObsCrossed`). The phase it counts in is the phase of that
+  controller-lock hold where it observes (`XhciPollObserve`, ~813). Each
+  run is a **sample**: its entry timestamp, its entry and observation
+  epochs, the period armed for it and the start. **The baseline**
+  (round 4, finding 1) is the last coherent sample, kept apart from the
+  counting:
+  - a sample is **coherent** when its entry and observation epochs are
+    one even value; an incoherent one (an odd epoch, or a call landing
+    between the run's entry and its observation) **invalidates** the
+    baseline and counts nothing;
+  - a coherent sample with no valid baseline, or whose epoch, period
+    armed or start differs from the baseline's, **seeds** a new baseline
+    and counts nothing - so a release, a hold, a change of period or a
+    new start costs exactly one run and never stops the counting;
+  - a coherent sample matching the baseline in epoch, period and start
+    counts the interval from the baseline's timestamp when it is a
+    **short request** (the period armed at most 5 ms), and in every case
+    becomes the new baseline.
+
+  So an interval that touches a call, crosses any hold or release (a
+  HELD-RELEASED-HELD ABA included, since each moves the epoch), or sees
+  one land during its own drain is never counted; each such run is
+  counted in `TmrObsCrossed`. The phase it counts in is the phase of that
   even epoch (HELD or RELEASED, recorded beside the epoch by the timer
   thread). Per phase, three words: `ObsCount`, `ObsSumMs`
   (whole ms, saturating) and `ObsLate` (observed at least 3 ms longer
@@ -1869,9 +1881,12 @@ HELD, while RELEASED and while a bar is set; the first pass with
 (`XhciPollTmrObserve`, pure): the 5 ms short-request cutoff at its edge,
 the 3 ms lateness threshold at its edge, `ObsSumMs` saturating, a
 HELD-RELEASED-HELD and a RELEASED-HELD-RELEASED sequence between two
-runs (rejected), a call landing between a run's entry and its
-observation (rejected), an odd epoch (rejected), a change of armed
-period or of start (rejected). The channel's vectors for the timer service are record 18
+runs, a call landing between a run's entry and its observation, an odd
+epoch, a change of armed period and a change of start - each rejected,
+and each followed by two coherent runs in the new state, of which the
+first seeds and the second counts (observation resumes after every kind
+of rejection); a long run of samples in one epoch counting every
+interval. The channel's vectors for the timer service are record 18
 section 15.3's; the binding machine's `XHCI_HLPR_EV_TIMER` and the
 per-start latch are record 18 section 15.4's.
 
@@ -1890,7 +1905,7 @@ reset before `HcdPollOpen`, the stop's early bar and late join);
 `src/hcd.h` (`hc->Tmr`); `src/xhci_counters.h` and `src/hcd_log.c` (the
 counters, the dump and the `poll.timer.join` note); `src/hcd_inj.c` and
 `src/hcd_susp.c` (`XhciQemuTmrDelayMs` and `XhciQemuSuspHoldDx`, the
-skip before `hcdSuspTake`, and the `qemu.*` and `poll.timer.call` notes,
+skip before `hcdSuspTake`, and the `qemu.*`, `poll.timer.call` and `poll.timer.return` notes,
 `qemu` only); both INFs (the switch's row on every path); `src/sources` (the
 new object); `scripts/import-gate/xhci98-imports-amd64.allow` (the
 `MmGetSystemRoutineAddress` row's `SITES` gains `hcd_tmr.obj`; the 32-bit
@@ -1931,27 +1946,49 @@ as snapshot differences (section 7.2.9).
   (round 2, finding C): a child put in D2 does not keep its D-IRP pended
   (admission publishes the Dx and the executor completes it), so the
   `qemu` flavour gains `XhciQemuSuspHoldDx` 1. **Under it the executor
-  does not claim a child's pended Dx at all**: its pass skips the slot
-  before `hcdSuspTake` (which today clears `PwrIrp` as it takes the IRP,
-  `src/hcd_susp.c` ~2222), so the IRP stays in `PwrIrp` and only the
-  stop's unlink can settle it, through `HcdSuspUnlinkFinish`'s hand-off
-  to a completion worker - unchanged. Notes, `qemu` only: `qemu.susp.hold`
-  when the executor first skips a slot (the PDO's serial and the D-state);
-  `qemu.stop.dx` written by the stop's very first step, before the bar,
-  for each PDO whose `PwrIrp` is a non-NULL Dx (serial, D-state,
-  `PowerPending`); `qemu.susp.done` written by the completion worker
-  when it actually completes a D-IRP (serial), apart from the unlink's
-  hand-off; `poll.timer.call` when the timer thread enters a call and
-  `poll.timer.release` when the `FALSE` returns; `poll.timer.join` after
-  the join returns. The leg, with `XhciSelectiveSuspend` 1, record 14's
-  test client asking D2, `XhciQemuTmrDelayMs` 2000 and a hold taken, then
-  a disable, passes only on: `qemu.stop.dx` naming the held PDO (the IRP
-  outstanding at the stop's entry); `poll.timer.call` before it or
-  before `qemu.susp.done` (the delayed call outstanding while the child
-  waits); `qemu.susp.done` for that PDO and `poll.timer.release` both
-  before `poll.timer.join`; and no assumption that the unlink itself
-  completed the IRP. A child already settled in D2 does not count as
-  this leg.
+  does not claim a child's pended Dx**: its pass skips the slot before
+  `hcdSuspTake` (which appends the IRP to the pass's taken list; its
+  caller then clears `PwrIrp`, `src/hcd_susp.c` ~2227), so the IRP stays
+  in `PwrIrp`. That preserves it against **normal executor completion
+  only** (round 4, finding 3): the other settlement paths stay as they
+  are - the PDO's close (`HcdSuspPdoClose`, ~3035, from the PDO's
+  teardown), the controller's suspend (`HcdSuspSettleStale`, ~3424, from
+  `hcd_power.c` ~116) and the stop's unlink (`HcdSuspUnlinkFinish`'s
+  hand-off to a completion worker) - and the completion note says which
+  of them claimed the IRP.
+
+  Notes, `qemu` only: `qemu.susp.hold` when the executor first skips a
+  slot (the PDO's serial, the D-state); `qemu.stop.dx` written by the
+  stop's very first step, before the bar, for each PDO whose `PwrIrp` is
+  a non-NULL Dx (serial, D-state, `PowerPending`); `qemu.susp.done`
+  written by the completion worker when it actually completes a D-IRP
+  (serial, and the path that claimed it: unlink, PDO close or stale
+  settle), apart from any hand-off; `poll.timer.call` written by the
+  timer thread **before the injected delay** and `poll.timer.return`
+  after the call returns, each with the start's serial and the call's
+  sequence number in that start (round 4, finding 2); and
+  `poll.timer.join` after the join returns.
+
+  The leg: `XhciSelectiveSuspend` 1, record 14's test client asking D2,
+  `XhciQemuTmrDelayMs` 2000, a hold taken by a copy, then a stop of the
+  controller. It passes only on this order in the log, for the held PDO
+  and one call sequence number n: `qemu.stop.dx` (the IRP outstanding at
+  the stop's entry), then `poll.timer.call` n (the stop's bar starts the
+  delayed release), then `qemu.susp.done` (the child completed **while
+  call n is still outstanding**), then `poll.timer.return` n, then
+  `poll.timer.join`. A `qemu.susp.done` after `poll.timer.return` n is a
+  run in which the delay did not overlap the completion: retaken with a
+  longer delay, or the overlap reported owed. A child already settled in
+  D2 does not count.
+
+  **Which stop reaches its entry with the child's IRP still in its slot
+  is not read.** A Device Manager disable may remove the child PDOs
+  before the controller's stop, so that `HcdSuspPdoClose` settles the IRP
+  first and `qemu.stop.dx` names nothing; a surprise removal (QEMU
+  `device_del`) may order them otherwise. The leg tries both and records
+  the order it saw; if neither reaches the stop's entry with the IRP
+  outstanding, this half of T3 is owed, and section 7.2.7's point 3 then
+  rests on the stop's static order (section 7.2.5) alone, said so.
 - **T4, S3, S4 and S5.** Where a guest sleeps (XP, Vista and 7 hibernate
   and the guests that stand by, as task 36.28's legs): a copy running,
   then the transition; after the resume `TmrReleaseCause` 3 from before
@@ -2546,6 +2583,15 @@ confirmed closed; B, C and F reopened. All taken:
 | 3 | P2: the library gate rejected the CRT libraries subsystem 5.00 adds | Record 18 section 15.10: the CRT libraries enumerated and allowed; fixtures |
 | 4 | P2: T3's injection cleared the slot; the stop's dump comes after the drain; unlink only hands off | Leg T3: the claim skipped before `hcdSuspTake`, the entry note, the completion worker's own note, the ordering rule |
 | 5 | P3: stale "phase bins" in the test and integrator lists | Sections 7.2.10 and 7.2.11 |
+
+Round 4 (`5ba0b6f2`, same thread): no P1, 3 P2. Round-3 findings 1, 3
+and 5 confirmed closed; 2 and 4 reopened narrower. All taken:
+
+| # | Finding | Where answered |
+|---|---|---|
+| 1 | P2: a rejected sample left the baseline stale, so counting could stop for good | Section 7.2.9: coherent samples seed or count and always become the baseline, incoherent ones invalidate it; vectors showing observation resumes |
+| 2 | P2: T3's order did not prove the delay overlapped the outstanding IRP | Leg T3: call and return notes with sequence numbers, the call note before the delay, the required order with the completion inside the call |
+| 3 | P2: the skip does not make the unlink the only settlement path | Leg T3: the claim narrowed to normal executor completion, the claiming path recorded, the stop-entry condition a reading that may be owed |
 
 ## 14. What changes in the documents
 
