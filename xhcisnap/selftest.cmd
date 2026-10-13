@@ -315,6 +315,27 @@ if errorlevel 1 (
     echo FAIL: XHCISNAP's counter names do not match src\xhci_counters.h
     set FAILED=1
 )
+rem Task 38.11's version line from canned counter words: unwritten, refused
+rem before step 0c, QEMU's 1.0, a 0.96 part accepted and refused, the qemu
+rem flavour's override, an all-ones register, a 0.95 part, and a block from
+rem a driver before 38.11 that prints nothing.
+"%~dp0XHCISNAP.EXE" -selftest-version > "%BASE%.version.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-version exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("not read: this start refused before it read XhciAccept096" "HCIVERSION     not read: this start refused before step 0c" "XhciAccept096  absent or not a DWORD, so 1; floor 0.96" "xHCI 1.00: XhciAccept096 not applicable" "xHCI 0.96 (HCIVERSION 0096h): accepted below 1.0; TD Size in 1 KiB units" "XhciAccept096  0; floor 1.00" "xHCI 0.96 (HCIVERSION 0096h): below 1.0, refused at XhciAccept096 0 (Code 10)" "XhciQemuHciVersion decoded 0096h in place of the register's 0100h" "HCIVERSION     FFFFh: not decoding, refused (Code 10)" "xHCI 0.95 (HCIVERSION 0095h): below 0.96, refused at every value (Code 10)" "[short]" "[end]") do (
+    findstr /C:%%S "%BASE%.version.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the version line does not say %%S
+        set FAILED=1
+    )
+)
+findstr /C:"[short]controller version" "%BASE%.version.log" > nul
+if not errorlevel 1 (
+    echo FAIL: a block from before 38.11 printed a version section
+    set FAILED=1
+)
 rem Task 36.24's stage 2 counters from canned HCD headers: the switch on
 rem with traffic, the switch absent, Windows 98, a header from before 36.24
 rem and a count it cannot hold.

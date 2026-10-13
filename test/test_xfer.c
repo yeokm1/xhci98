@@ -131,6 +131,7 @@ static void request_init(XHCI_CONTROL_REQUEST *req,
     req->TransferFlagsIn = (bmRequestType & 0x80) ? 1 : 0;
     req->MaxPacketSize = maxPacketSize;
     req->SgList = (sg != NULL) ? &sg->List : NULL;
+    req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
 }
 
 /* A Transfer Event's DW2 and DW3, assembled from the field positions in
@@ -1111,6 +1112,7 @@ static void normal_request_init(XHCI_NORMAL_REQUEST *req,
     req->DirectionIn = directionIn;
     req->MaxPacketSize = mps;
     req->SgList = (sg != NULL) ? &sg->List : NULL;
+    req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->MaxDataTrbs = 0;
 }
 
@@ -4600,6 +4602,7 @@ static ULONG wbuild(ULONG cap, ULONG length, XHCI_TRB *out, ULONG *count)
     req.DirectionIn = 1;
     req.MaxPacketSize = 1024;
     req.SgList = &wsg.List;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req.MaxDataTrbs = cap;
     *count = 0;
     return XhciXferBuildNormal(&req, 1, out, XHCI_XFER_MAX_WIDE_DATA_TRBS + 4,
@@ -4632,6 +4635,7 @@ static void test_wide_cap(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 1024;
     req.SgList = (const USBPORT_SCATTER_GATHER_LIST *)0x10;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req.MaxDataTrbs = 514;
     CHECK_EQ(XhciXferBuildNormal(&req, 1, wout, 600, &count),
              XHCI_XFER_BAD_PARAM, "cap 514 refused, the list unread");
@@ -4640,6 +4644,7 @@ static void test_wide_cap(void)
     memset(&tiny, 0, sizeof(tiny));
     tiny.SgElementCount = 600;
     req.SgList = &tiny;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req.MaxDataTrbs = 513;
     CHECK_EQ(XhciXferBuildNormal(&req, 1, wout, 600, &count),
              XHCI_XFER_TOO_MANY_TRBS, "600 elements over 513, unread");
@@ -4703,6 +4708,7 @@ static ULONG big_submit(ULONG which, ULONG n)
     req.DirectionIn = 1;
     req.MaxPacketSize = 1024;
     req.SgList = &wsg.List;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
     return XhciXferSubmitNormal(&big.queue, &big.ring, &req, 1,
                                 &big.td[which], (PVOID)0x9000UL, bscratch,
@@ -4731,6 +4737,7 @@ static void big_fill(ULONG at)
         req.DirectionIn = 1;
         req.MaxPacketSize = 1024;
         req.SgList = &wsg.List;
+        req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
         (VOID)XhciXferSubmitNormal(&big.queue, &big.ring, &req, 1,
                                    &big.td[2], (PVOID)0x9100UL, bscratch,
                                    XHCI_XFER_MAX_WIDE_DATA_TRBS + 2);
@@ -4880,8 +4887,288 @@ static void test_wide_td(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* 38.11: TD Size by version, and the Setup TRB's Transfer Type        */
+/* (design record 17 sections 4.14.5 and 4.14.6, D1 and D2)            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Every word of TRB `i`, as literals: Normal is type 1 (0x400), Setup Stage
+ * 2 (0x800), Data Stage 3 (0xC00), Status Stage 4 (0x1000); ISP 0x4, CH 0x10,
+ * IOC 0x20, IDT 0x40; DIR 0x10000; TRT bits 17:16; TD Size bits 21:17 of the
+ * status word; interrupter 0 (xhci-data-structures.md section 7).
+ */
+static void td_word_check(const XHCI_TRB *out, ULONG i, ULONG p0, ULONG p1,
+                          ULONG status, ULONG control, const char *what)
+{
+    CHECK_EQ(out[i].Param0, p0, what);
+    CHECK_EQ(out[i].Param1, p1, what);
+    CHECK_EQ(out[i].Status, status, what);
+    CHECK_EQ(out[i].Control, control, what);
+}
+
+#define TDS(n) (((ULONG)(n)) << 17)
+
+/*
+ * A GET_DESCRIPTOR of 4648 bytes at Max Packet Size 64, three fragments of
+ * 1500, 2048 and 1100 bytes. Packets: 73 in the TD; 23 after the first TRB
+ * leaves 50, held to 31; 55 after the second leaves 18; the last 0. KiB
+ * (Linux's form, this TRB included): 4648 >> 10 = 4, 3148 >> 10 = 3, and the
+ * last carries its own 1100 >> 10 = 1 (D1). The Setup TRB's TRT is 3 (IN
+ * data) at 1.0 and 0 below it (D2); every other word is the same.
+ */
+static void test_td_size_control_forms(void)
+{
+    XHCI_CONTROL_REQUEST req;
+    XHCI_CONTROL_LAYOUT layout;
+    XHCI_TRB out[XHCI_XFER_MAX_CONTROL_TRBS];
+    SG_BUFFER sg;
+    ULONG form;
+
+    for (form = XHCI_TD_SIZE_FORM_PACKETS; form <= XHCI_TD_SIZE_FORM_KIB;
+         form++) {
+        const char *what;
+        ULONG kib;
+
+        kib = (form == XHCI_TD_SIZE_FORM_KIB) ? 1UL : 0UL;
+        what = kib ? "0.96 control" : "1.0 control";
+        sg_init(&sg);
+        sg_add(&sg, 0x0C001000UL, 1500, 0);
+        sg_add(&sg, 0x0C003000UL, 2048, 1500);
+        sg_add(&sg, 0x0C006000UL, 1100, 3548);
+        request_init(&req, 0x80, 0x06, 0x0200, 0, 4648, 4648, 64, &sg);
+        req.TdSizeForm = form;
+        CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                      &layout),
+                 XHCI_XFER_OK, what);
+        CHECK_EQ(layout.TrbCount, 5, what);
+        td_word_check(out, 0, 0x02000680UL, 0x12280000UL, 8UL,
+                      kib ? 0x00000840UL : 0x00030840UL,
+                      kib ? "0.96 Setup: TRT 0" : "1.0 Setup: TRT 3 (IN)");
+        td_word_check(out, 1, 0x0C001000UL, 0, 1500UL | TDS(kib ? 4 : 31),
+                      0x00010C14UL,
+                      kib ? "0.96 Data 1: 4648 >> 10"
+                          : "1.0 Data 1: 50 packets, held to 31");
+        td_word_check(out, 2, 0x0C003000UL, 0, 2048UL | TDS(kib ? 3 : 18),
+                      0x00000414UL,
+                      kib ? "0.96 Data 2: 3148 >> 10" : "1.0 Data 2: 18");
+        td_word_check(out, 3, 0x0C006000UL, 0, 1100UL | TDS(kib ? 1 : 0),
+                      0x00000404UL,
+                      kib ? "0.96 last: its own 1100 >> 10, not 0 (D1)"
+                          : "1.0 last: 0");
+        td_word_check(out, 4, 0, 0, 0, 0x00001020UL, "Status: OUT, IOC");
+    }
+
+    /* TRT on the other two shapes: OUT data 2 and no data 0 at 1.0, 0 at
+     * 0.96 for both. */
+    sg_init(&sg);
+    sg_add(&sg, 0x0C001000UL, 8, 0);
+    request_init(&req, 0x21, 0x09, 0x0200, 0, 8, 8, 64, &sg);
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout), XHCI_XFER_OK, "OUT data, 1.0");
+    CHECK_EQ(out[0].Control, 0x00020840UL, "1.0: TRT 2 (OUT)");
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_KIB;
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout), XHCI_XFER_OK, "OUT data, 0.96");
+    CHECK_EQ(out[0].Control, 0x00000840UL, "0.96: TRT 0");
+    td_word_check(out, 1, 0x0C001000UL, 0, 8UL, 0x00000C00UL,
+                  "0.96 OUT data: 8 >> 10 is 0, no ISP, no DIR");
+    td_word_check(out, 2, 0, 0, 0, 0x00011020UL, "Status: IN, IOC");
+    request_init(&req, 0x00, 0x09, 1, 0, 0, 0, 64, NULL);
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_KIB;
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout), XHCI_XFER_OK, "no data, 0.96");
+    CHECK_EQ(layout.TrbCount, 2, "Setup and Status");
+    CHECK_EQ(out[0].Control, 0x00000840UL, "no data: TRT 0 either way");
+
+    /* A request that forgot the field, or names no form, is refused before
+     * anything is written. */
+    request_init(&req, 0x00, 0x09, 1, 0, 0, 0, 64, NULL);
+    req.TdSizeForm = 0;
+    out[0].Control = 0xA5A5A5A5UL;
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout), XHCI_XFER_BAD_PARAM,
+             "TdSizeForm 0 refused");
+    CHECK_EQ(out[0].Control, 0xA5A5A5A5UL, "and nothing written");
+    req.TdSizeForm = 3;
+    CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
+                                  &layout), XHCI_XFER_BAD_PARAM,
+             "TdSizeForm 3 refused");
+}
+
+/* One normal TD of `length` bytes as fragments of `a` and `b` (b may be 0),
+ * OUT, at Max Packet Size `mps`, in `form`. */
+static ULONG td_normal(ULONG form, ULONG a, ULONG b, ULONG mps, XHCI_TRB *out,
+                       ULONG *count)
+{
+    XHCI_NORMAL_REQUEST req;
+    SG_BUFFER sg;
+
+    sg_init(&sg);
+    if (a != 0) {
+        sg_add(&sg, 0x0D000000UL, a, 0);
+    }
+    if (b != 0) {
+        sg_add(&sg, 0x0D010000UL, b, a);
+    }
+    normal_request_init(&req, a + b, 0, mps, &sg);
+    req.TdSizeForm = form;
+    *count = 0;
+    return XhciXferBuildNormal(&req, 0, out, XHCI_XFER_MAX_DATA_TRBS, count);
+}
+
+static void test_td_size_normal_forms(void)
+{
+    static const ULONG lens[] = { 1023, 1024, 1025, 2047, 2048 };
+    static const ULONG kibs[] = { 0, 1, 1, 1, 2 };
+    XHCI_NORMAL_REQUEST req;
+    XHCI_TRB out[XHCI_XFER_MAX_DATA_TRBS];
+    ULONG count;
+    ULONG i;
+
+    /* A bulk OUT TD of 5000 bytes by hand at 512: 10 packets, 5 after the
+     * first TRB's 3000; KiB 5000 >> 10 = 4, then the last's 2000 >> 10 = 1. */
+    CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_PACKETS, 3000, 2000, 512, out,
+                       &count), XHCI_XFER_OK, "1.0 bulk");
+    CHECK_EQ(count, 2, "two TRBs");
+    td_word_check(out, 0, 0x0D000000UL, 0, 3000UL | TDS(5), 0x00000410UL,
+                  "1.0 bulk TRB 1: 5 packets left");
+    td_word_check(out, 1, 0x0D010000UL, 0, 2000UL, 0x00000420UL,
+                  "1.0 bulk last: 0, IOC");
+    CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_KIB, 3000, 2000, 512, out, &count),
+             XHCI_XFER_OK, "0.96 bulk");
+    td_word_check(out, 0, 0x0D000000UL, 0, 3000UL | TDS(4), 0x00000410UL,
+                  "0.96 bulk TRB 1: 5000 >> 10");
+    td_word_check(out, 1, 0x0D010000UL, 0, 2000UL | TDS(1), 0x00000420UL,
+                  "0.96 bulk last: 2000 >> 10 (D1)");
+
+    /* The remainders either side of 1 KiB, as one TRB and as the last of
+     * two (a 3000-byte TRB before it): >> 10 truncates. */
+    for (i = 0; i < sizeof(lens) / sizeof(lens[0]); i++) {
+        CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_KIB, lens[i], 0, 512, out,
+                           &count), XHCI_XFER_OK, "0.96 one TRB");
+        td_word_check(out, 0, 0x0D000000UL, 0, lens[i] | TDS(kibs[i]),
+                      0x00000420UL, "0.96 one TRB: its length >> 10");
+        CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_PACKETS, lens[i], 0, 512, out,
+                           &count), XHCI_XFER_OK, "1.0 one TRB");
+        td_word_check(out, 0, 0x0D000000UL, 0, lens[i], 0x00000420UL,
+                      "1.0 one TRB: the last, 0");
+        CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_KIB, 3000, lens[i], 512, out,
+                           &count), XHCI_XFER_OK, "0.96 two TRBs");
+        td_word_check(out, 0, 0x0D000000UL, 0,
+                      3000UL | TDS((3000UL + lens[i]) >> 10), 0x00000410UL,
+                      "0.96 first of two");
+        td_word_check(out, 1, 0x0D010000UL, 0, lens[i] | TDS(kibs[i]),
+                      0x00000420UL, "0.96 last of two: 1023/1024/1025");
+    }
+
+    /* Stage 2's TDs are each sized by their own length: two of 64 KiB and a
+     * short final one of 10000, each two TRBs. KiB: 64 KiB saturates at 31
+     * on both TRBs, the last included; 10000 gives 9 and 3. Packets (512):
+     * 128 then 64 left, held to 31, then 0; 10000 is 20 packets, 9 left. */
+    for (i = 0; i < 2; i++) {
+        CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_KIB, 32768, 32768, 512, out,
+                           &count), XHCI_XFER_OK, "0.96 stage 2 TD");
+        td_word_check(out, 0, 0x0D000000UL, 0, 32768UL | TDS(31),
+                      0x00000410UL, "0.96 64 KiB TD: 64 held to 31");
+        td_word_check(out, 1, 0x0D010000UL, 0, 32768UL | TDS(31),
+                      0x00000420UL, "0.96 its last: 32 held to 31");
+        CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_PACKETS, 32768, 32768, 512, out,
+                           &count), XHCI_XFER_OK, "1.0 stage 2 TD");
+        td_word_check(out, 0, 0x0D000000UL, 0, 32768UL | TDS(31),
+                      0x00000410UL, "1.0 64 KiB TD: 64 packets held to 31");
+        td_word_check(out, 1, 0x0D010000UL, 0, 32768UL, 0x00000420UL,
+                      "1.0 its last: 0");
+    }
+    CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_KIB, 6000, 4000, 512, out, &count),
+             XHCI_XFER_OK, "0.96 short final TD");
+    td_word_check(out, 0, 0x0D000000UL, 0, 6000UL | TDS(9), 0x00000410UL,
+                  "0.96 short final: 10000 >> 10");
+    td_word_check(out, 1, 0x0D010000UL, 0, 4000UL | TDS(3), 0x00000420UL,
+                  "0.96 short final's last: 4000 >> 10");
+    CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_PACKETS, 6000, 4000, 512, out,
+                       &count), XHCI_XFER_OK, "1.0 short final TD");
+    td_word_check(out, 0, 0x0D000000UL, 0, 6000UL | TDS(9), 0x00000410UL,
+                  "1.0 short final: 20 packets, 11 sent");
+    td_word_check(out, 1, 0x0D010000UL, 0, 4000UL, 0x00000420UL,
+                  "1.0 short final's last: 0");
+
+    /* A zero-length TD: one zero-length TRB, TD Size 0 in both forms. */
+    CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_KIB, 0, 0, 512, out, &count),
+             XHCI_XFER_OK, "0.96 zero-length");
+    CHECK_EQ(count, 1, "one TRB");
+    td_word_check(out, 0, 0, 0, 0, 0x00000420UL, "0.96 zero-length: 0");
+    CHECK_EQ(td_normal(XHCI_TD_SIZE_FORM_PACKETS, 0, 0, 512, out, &count),
+             XHCI_XFER_OK, "1.0 zero-length");
+    td_word_check(out, 0, 0, 0, 0, 0x00000420UL, "1.0 zero-length: 0");
+
+    /* TdSizeForm 0 refused before anything is read or written. */
+    CHECK_EQ(td_normal(0, 3000, 2000, 512, out, &count), XHCI_XFER_BAD_PARAM,
+             "a normal request with TdSizeForm 0");
+    CHECK_EQ(count, 0, "nothing written");
+    memset(&req, 0, sizeof(req));
+    req.TransferLength = 8;
+    req.MaxPacketSize = 8;
+    req.SgList = (const USBPORT_SCATTER_GATHER_LIST *)0x10;
+    CHECK_EQ(XhciXferBuildNormal(&req, 0, out, XHCI_XFER_MAX_DATA_TRBS,
+                                 &count), XHCI_XFER_BAD_PARAM,
+             "a zeroed request refused before its list is touched");
+}
+
+/*
+ * Stage 3's single TD of 2 MiB, 512 page TRBs: in both forms TD Size stays
+ * at 31 until the last 31 KiB or 31 packets. KiB: TRB i carries
+ * (2048 - 4i) held to 31, so 31 to TRB 504, then 28, 24 ... and the last its
+ * own 4. Packets at 1024: 2048 - 4(i + 1), 31 to TRB 504, 24 ... 4, then 0.
+ */
+static void test_td_size_big_td_forms(void)
+{
+    XHCI_NORMAL_REQUEST req;
+    ULONG count;
+    ULONG form;
+    ULONG want;
+    ULONG i;
+
+    for (form = XHCI_TD_SIZE_FORM_PACKETS; form <= XHCI_TD_SIZE_FORM_KIB;
+         form++) {
+        CHECK_EQ(wsg_build(512, 4096UL), 2097152UL, "2 MiB of pages");
+        memset(&req, 0, sizeof(req));
+        req.TransferLength = 2097152UL;
+        req.DirectionIn = 1;
+        req.MaxPacketSize = 1024;
+        req.SgList = &wsg.List;
+        req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+        req.TdSizeForm = form;
+        CHECK_EQ(XhciXferBuildNormal(&req, 1, wout,
+                                     XHCI_XFER_MAX_WIDE_DATA_TRBS + 4,
+                                     &count), XHCI_XFER_OK, "a 2 MiB TD");
+        CHECK_EQ(count, 512, "512 TRBs");
+        for (i = 0; i < 512; i++) {
+            if (form == XHCI_TD_SIZE_FORM_KIB) {
+                want = 2048UL - 4UL * i;
+            } else {
+                want = (i == 511) ? 0UL : 2048UL - 4UL * (i + 1UL);
+            }
+            if (want > 31) {
+                want = 31;
+            }
+            CHECK_EQ(wout[i].Status, 4096UL | TDS(want),
+                     form == XHCI_TD_SIZE_FORM_KIB
+                         ? "0.96 2 MiB: KiB held to 31, the last 4"
+                         : "1.0 2 MiB: packets held to 31, the last 0");
+            CHECK_EQ(wout[i].Control,
+                     (i == 511) ? 0x00000424UL : 0x00000414UL,
+                     "Normal, ISP, chained but the last, which has IOC");
+        }
+    }
+}
+
 int main(void)
 {
+    test_td_size_control_forms();
+    test_td_size_normal_forms();
+    test_td_size_big_td_forms();
     test_xpipe_two_tds();
     test_wide_cap();
     test_wide_td();

@@ -4577,6 +4577,19 @@ Untested ground:
   * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
     controller, and at your own risk.
 
+  * CONTROLLERS BELOW xHCI 1.0 (XhciAccept096, section 9): the 0.96
+    NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others.
+    Accepted by default, driven as xHCI 1.0 controllers but for the fields
+    Linux writes differently on them (TD Size in 0.96's units, the control
+    transfer's Transfer Type, the isochronous burst counts, and no
+    isochronous Frame ID) and with the capability register at 1Ch
+    ignored, so a resume from standby re-enumerates their devices. Built
+    against host tests and Linux's handling of the same parts; read on no
+    0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD
+    0.96 parts are not applied, so isochronous transfers (audio, video) on
+    those parts are the least certain. Set XhciAccept096 to 0 to refuse
+    such a controller as 2.3.1.0 did.
+
   * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
     9). Each fault was made on purpose at a root port in QEMU virtual
     machines, under Windows 98 SE and Windows 2000; QEMU has no
@@ -4607,7 +4620,7 @@ debug throughout, in its build scripts and its documentation alike.)
 ==============================================================================
 
 Every value this driver reads from the controller's driver key. There are
-nineteen, all DWORDs, and the install writes all nineteen, each at the
+twenty, all DWORDs, and the install writes all twenty, each at the
 default it states below except XhciImodInterval250ns, which it writes as
 160, and XhciForceBulkOnly, which it writes as 0 where absent counts as
 1, so every one is already in the key to change. The install writes
@@ -4999,7 +5012,25 @@ A value that is absent means the default each one states.
   (Usb2HubSpeedFallbacks) and those still refused (TopoBehindHubNoSpeed).
   It was built without the hardware and has never run on a VL805.
 
-  THOSE NINETEEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
+  XhciAccept096  -  controllers below xHCI 1.0
+  ............................................
+
+  Written as 1 by the install; 1, absent or any number but 0 is on.
+
+  A controller names the xHCI revision it was built to in its HCIVERSION
+  register. 2.3.1.0 refused anything below 1.0 (Code 10), which is where
+  the first-generation NEC/Renesas uPD720200 and uPD720200A (1033:0194)
+  and ASMedia's ASM1042 stopped: they are 0.96 parts. With this on, a
+  controller from 0.96 up starts, driven as a 1.0 one but for the fields
+  Linux writes differently on 0.96 parts, and with the capability
+  register at 1Ch ignored, so a resume from standby re-enumerates its
+  devices. Below 0.96 is refused at every value, and on a 1.0 or later
+  controller the value changes nothing. Set 0 and restart to refuse a
+  controller below 1.0 again. XHCIQUAL names the controller's version,
+  and XHCISNAP's "controller version" lines say what the driver decided.
+  No 0.96 controller has run under this driver yet.
+
+  THOSE TWENTY ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
   XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
   the key by an earlier install has no effect, because this driver reports
   every device at its true speed with no virtual hub in the way. Delete

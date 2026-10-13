@@ -99,6 +99,7 @@ HKR,,XhciPollActiveMs,0x00010003,1
 HKR,,XhciWideMap,0x00010003,0
 HKR,,XhciSelectiveSuspend,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
+HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciImodInterval250ns,0x00010003,160
 
 [RootHub.Dev]
@@ -166,6 +167,7 @@ HKR,,XhciPollActiveMs,0x00010003,1
 HKR,,XhciWideMap,0x00010003,0
 HKR,,XhciSelectiveSuspend,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
+HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01

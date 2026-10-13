@@ -220,6 +220,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers, `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciUsb2HubSpeedFallback` | The standard speed ID for a Low- or Full-Speed device behind a hub where the controller's USB 2.0 speed table names neither (the VIA VL805); `0` turns it off | `0` | `1` | `1` | `1` |
+| `XhciAccept096` | Controllers below xHCI 1.0 started (the 0.96 NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042), driven as 1.0 ones but for the fields Linux writes differently on them; `0` refuses them (Code 10) as `2.3.1.0` did. Untested ground | `0` | `1` | `1` | `1` |
 
 **The driver's log**
 
@@ -484,6 +485,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | A UAS-only drive at SuperSpeed on a controller without streams | It is sent back to its USB 2.0 port and runs UAS at High Speed, or is refused if it has no USB 2.0 port. Built from the specification; no such controller has been held. |
 | Polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification. Not read on any real controller or in any virtual machine. |
 | The Intel port switchover beyond the B490 and the E7250 | Device ids `8C31`, `9C31`, `8CB1` and `8D31`, systems other than Windows 98 SE and 7 x64. |
+| Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`) and driven as xHCI 1.0 controllers but for the fields Linux writes differently on them; a resume from standby re-enumerates their devices. Built against host tests and Linux's handling of the same parts; read on no 0.96 controller, and isochronous transfers (audio, video) on them are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did. |
 
 ## Toolchain and building
 

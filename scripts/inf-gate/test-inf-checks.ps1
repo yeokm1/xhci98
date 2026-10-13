@@ -626,7 +626,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -659,8 +659,9 @@ try {
     # one is 64, today's size. Task 36.51 (owner, 2026-10-11: every value
     # the driver reads is written with its default) adds XhciWideMap and
     # XhciSelectiveSuspend at 0, whose wrong one is 1, and
-    # XhciUsb2HubSpeedFallback at 1, whose wrong one is 0.
-    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the wide mapping, selective suspend and the hub speed fallback, on both paths"
+    # XhciUsb2HubSpeedFallback at 1, whose wrong one is 0. Task 38.11 adds
+    # XhciAccept096 at 1, whose wrong one is 0 (the 1.0 floor of 2.3.1.0).
+    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the wide mapping, selective suspend, the hub speed fallback and the 0.96 floor, on both paths"
     foreach ($tv in @(
         @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n"; Clob = "HKR,,XhciMaxTransferKB,0x00010001,1024`r`n" },
         @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
@@ -672,7 +673,8 @@ try {
         @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n"; Clob = "HKR,,XhciPollActiveMs,0x00010001,1`r`n" },
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n"; Clob = "HKR,,XhciWideMap,0x00010001,0`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n"; Clob = "HKR,,XhciSelectiveSuspend,0x00010001,0`r`n" },
-        @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" }
+        @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
+        @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" }
     )) {
         Assert-RuleFires ($tv.Key + "-no-9x") "VAL-MISSING" {
             param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, ""))
@@ -2067,7 +2069,8 @@ try {
         @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n" },
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n" },
-        @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" }
+        @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },
+        @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" }
     )) {
         Assert-RuleFires ("amd64-" + $tv.Key + "-missing") "VAL-MISSING" {
             param($t) $t.Replace($tv.Row, "")

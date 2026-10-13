@@ -83,7 +83,10 @@ Controller").
    the initial capability-register sanity reads.
 2. Halt the controller: clear USBCMD.RUN. Poll USBSTS.HCH = 1.
 3. Reset: set USBCMD.HCRST = 1. Poll USBCMD.HCRST = 0 and USBSTS.CNR = 0.
-4. Check HCIVERSION: must be >= 0x0100. Bail if not. In practice re-derive
+4. Check HCIVERSION: must be >= 0x0100, or >= 0x0096 under
+   `XhciAccept096` (its default; roadmap-hcd task 38.11, design record 17
+   section 4.14: a controller below 1.0 is then driven by the 0.96 rules of
+   that section). Bail if not. In practice re-derive
    the whole capability set here and compare it field for field with the
    pre-handoff decode. The question this step exists to answer is whether the
    far end of the mapping is still the same controller, and six extra reads

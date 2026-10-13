@@ -504,6 +504,25 @@ ULONG XhciWriteCrcrAbort(PXHCI_EXTENSION ext, ULONG *crcrRead)
 /* ------------------------------------------------------------------ */
 
 /*
+ * Capability dword 0 as this driver decodes it (task 38.11, design record 17
+ * section 4.14.4): every read of it passes through here before anything
+ * decodes it - the step 0c check and XhciDeriveControllerInfo - so the floor,
+ * the TD Size form, D2 to D4 and XhciHcInfoEqual's same-controller test all
+ * see one version for the started lifetime. The shipping flavours return the
+ * read unchanged; the qemu flavour applies XhciQemuHciVersion (D7), which the
+ * start latched. IRQL: any.
+ */
+static ULONG xhciEffectiveCapDword0(PXHCI_EXTENSION ext, ULONG raw)
+{
+#if defined(XHCI_FLAVOUR_QEMU)
+    return XhciEffectiveCapDword0(raw, ext->HciQemuVersion);
+#else
+    UNREFERENCED_PARAMETER(ext);
+    return raw;
+#endif
+}
+
+/*
  * Read the whole capability register set and decode it.
  *
  * Called twice in the sequence: once before the BIOS handoff, which needs
@@ -526,7 +545,8 @@ ULONG XhciDeriveControllerInfo(PXHCI_EXTENSION ext, PXHCI_HC_INFO info)
     ULONG dboff;
     ULONG rtsoff;
 
-    capDword0 = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
+    capDword0 = xhciEffectiveCapDword0(ext,
+                                       XhciRead32(ext, XHCI_CAP_CAPLENGTH));
     hcsparams1 = XhciRead32(ext, XHCI_CAP_HCSPARAMS1);
     hcsparams2 = XhciRead32(ext, XHCI_CAP_HCSPARAMS2);
     hccparams1 = XhciRead32(ext, XHCI_CAP_HCCPARAMS1);
@@ -549,7 +569,7 @@ ULONG XhciDeriveControllerInfo(PXHCI_EXTENSION ext, PXHCI_HC_INFO info)
 
     return XhciDeriveHcInfo(capDword0, hcsparams1, hcsparams2, hccparams1,
                             hccparams2, dboff, rtsoff, ext->IoSpaceLength,
-                            info);
+                            ext->HciFloor, info);
 }
 
 /*
@@ -4782,12 +4802,36 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     /* Step 0c: MMIO sanity, before any register that has a side effect. */
     ext->InitStep = XHCI_INIT_STEP_CAP_SANITY;
     value = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
-    status = XhciCheckCapDword0(value, ext->IoSpaceLength, NULL, NULL);
     XHCI_DBG_VALUE("CAPLENGTH/HCIVERSION dword", value);
+    /*
+     * Task 38.11 (design record 17 section 4.14.7): the version recorded
+     * before it is checked, so a refused start's counter dump and notes say
+     * what was refused - the register's own and, under the qemu flavour's
+     * override, the one decoded in its place.
+     */
+    {
+        ULONG effective;
+
+        effective = xhciEffectiveCapDword0(ext, value);
+        ext->HciVersionRegister = XHCI_HCIVERSION_OF(value);
+        ext->HciVersionEffective = XHCI_HCIVERSION_OF(effective);
+        ext->HciOverrideApplied = (effective != value) ? 1UL : 0UL;
+        ext->HciTdSizeForm = 0;
+        ext->HciVersionRead = 1;
+        XhciLogNote(ext, "hc.version", ext->HciVersionEffective);
+        if (ext->HciOverrideApplied) {
+            XhciLogNote(ext, "qemu.hciversion", ext->HciVersionEffective);
+            XhciLogNote(ext, "hc.version.register", ext->HciVersionRegister);
+        }
+        value = effective;
+    }
+    status = XhciCheckCapDword0(value, ext->IoSpaceLength, ext->HciFloor,
+                                NULL, NULL);
     if (status != XHCI_HC_OK) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_CAP_SANITY, status,
                               MP_STATUS_HW_ERROR);
     }
+    ext->HciTdSizeForm = XhciTdSizeFormOf(ext->HciVersionEffective);
 
     /* Step 5, early: the handoff needs HCCPARAMS1.xECP, so the whole
      * capability set is decoded now and re-decoded after the reset. */
@@ -4819,7 +4863,6 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * not be able to meet. A log without them describes a controller the reader
      * has to guess at.
      */
-    XhciLogNote(ext, "hc.version", ext->HcInfo.HciVersion);
     XhciLogNote(ext, "hc.maxslots", ext->HcInfo.MaxSlots);
     XhciLogNote(ext, "hc.maxports", ext->HcInfo.MaxPorts);
     XhciLogNote(ext, "hc.maxintrs", ext->HcInfo.MaxIntrs);

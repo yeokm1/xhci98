@@ -86,6 +86,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * DWORD 0 turns it off; absent, another number or another type is on.
  * Read at every start. */
 #define HCD_VALUE_HUB_SPEED     L"XhciUsb2HubSpeedFallback"
+/* Task 38.11 (design record 17 section 4.14.4): the 0.96 floor, written by
+ * the INFs at 1: only a DWORD 0 restores the 1.0 floor of 2.3.1.0; absent,
+ * another number or another type is the 0.96 floor (XhciVersionFloor).
+ * Read at every start and latched for its lifetime. */
+#define HCD_VALUE_ACCEPT_096    L"XhciAccept096"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
  * 0, another number, another type or a failed read is off (O6). No INF
@@ -118,6 +123,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * protocol's PSI table read as the E460's (xhci_caps.c); absent, another
  * type or any other number is off. Read at every start. */
 #define HCD_VALUE_QEMU_PSI_E460 L"XhciQemuPsiE460"
+/* Task 38.11, D7 (design record 17 section 4.14.10), qemu flavour only and
+ * written by no INF: a DWORD 0x0001 to 0xFFFE is decoded as HCIVERSION in
+ * place of the register's (xhci_init.c, xhciEffectiveCapDword0); absent, 0,
+ * 0xFFFF and up, or another type applies nothing. Read at every start. */
+#define HCD_VALUE_QEMU_HCIVERSION L"XhciQemuHciVersion"
 #endif
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
@@ -236,6 +246,29 @@ static VOID hcdReadLogSwitches(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "log.verbosity.read", ext->Log.VerbosityRead);
     XhciLogNote(ext, "log.verbosity.refused", ext->Log.VerbosityRefused);
     XhciLogNote(ext, "log.debugview", ext->Log.DebugViewEnabled);
+}
+
+/*
+ * Task 38.11's three counter words (design record 17 section 4.14.7) from
+ * what the start latched and step 0c recorded in the extension: the value
+ * and the policy at hcdReadValues, the versions once XhciInitController has
+ * read them, whatever it then decided. The start's writes, before the
+ * thread exists and under the door gate. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdVersionCounters(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    if (ext->HciVersionRead) {
+        hc->Counters.HciVersions =
+            XhciVersionPairWord(ext->HciVersionRegister,
+                                ext->HciVersionEffective);
+    }
+    hc->Counters.HciAccept096Value = ext->HciAccept096Value;
+    hc->Counters.HciVersionPolicy =
+        XhciVersionPolicyWord(ext->HciFloor, ext->HciTdSizeForm,
+                              ext->HciOverrideApplied, ext->HciVersionRead);
 }
 
 /* IRQL: PASSIVE_LEVEL. */
@@ -369,6 +402,24 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "hub.speed.value",
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "hub.speed.fallback", hc->HubSpeedFallback);
+
+    /* Task 38.11: latched in the extension, which this start has zeroed
+     * and which no in-place reinitialization zeroes again, so every version
+     * check of the started lifetime uses this floor. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_ACCEPT_096, &value);
+    ext->HciAccept096Value = NT_SUCCESS(status) ? value : 0xFFFFFFFFUL;
+    ext->HciFloor = XhciVersionFloor(NT_SUCCESS(status) ? 1UL : 0UL, value);
+    XhciLogNote(ext, "hc.accept096", ext->HciAccept096Value);
+    XhciLogNote(ext, "hc.floor", ext->HciFloor);
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_QEMU_HCIVERSION, &value);
+    ext->HciQemuVersion =
+        (NT_SUCCESS(status) && value != 0 && value < 0xFFFFUL) ? value : 0;
+    XhciLogNote(ext, "qemu.hciversion.value", ext->HciQemuVersion);
+#endif
+    hcdVersionCounters(hc);
 
 #if defined(XHCI_FLAVOUR_QEMU)
     value = 0;
@@ -2745,6 +2796,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     mp = XhciInitController(ext, &res);
     XhciLogNote(ext, "pci.cfg.status", hc->ConfigLastStatus);
     XhciLogNote(ext, "pci.cfg.info", hc->ConfigLastInformation);
+    hcdVersionCounters(hc);
     if (mp != MP_STATUS_SUCCESS) {
         XhciLogNote(ext, "start.refused.step", ext->InitStep);
         XhciLogNote(ext, "start.refused.status", ext->InitStatus);
@@ -2761,6 +2813,17 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
          * leaves; the mirrors are embedded scalars, so the poll is safe
          * after the release (Codex review round 24, finding 2). */
         HcdCountersPoll(hc);
+        /*
+         * Task 38.11, D5 (design record 17 section 4.14.7): every refusal of
+         * the initial start, at any step, flushes the ring with the counter
+         * dump as a refused delivery does (hcdLogRefused), so with
+         * XhciLogDebugView 1 DebugView shows why there was a Code 10 - the
+         * version words included - at XhciLogVerbosity 0. Here and not in
+         * xhciInitFailed: a resume's or a recovery's reinitialization shares
+         * that and may run below PASSIVE_LEVEL, where HcdLogFlush emits
+         * nothing, so those keep their reporting as it was.
+         */
+        HcdLogFlush(hc, XHCI_LOG_REASON_FAILURE, 1);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     hcdTolApplies(hc);

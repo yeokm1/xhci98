@@ -175,6 +175,7 @@ static void iso_request(XHCI_ISO_REQUEST *req,
                         ULONG maxBurstSize)
 {
     req->Iso = &iso->Block;
+    req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->DirectionIn = directionIn;
     req->MaxPacketSize = maxPacketSize;
     req->MaxBurstSize = maxBurstSize;
@@ -448,6 +449,83 @@ static void test_build_one_packet(void)
              "a one-packet OUT request builds");
     CHECK_EQ(out[0].Control, ISO_SIA | ISO_TRB_TYPE | ISO_IOC,
              "and carries no ISP");
+}
+
+/*
+ * Task 38.11 (design record 17 sections 4.14.5 and 4.14.6, D1 and D3): TD
+ * Size per TD in both forms, and TBC and TLBPC written 0 below 1.0. A
+ * SuperSpeed IN endpoint at 1024 with Max Burst Size 1 and three bursts an
+ * interval (Max ESIT Payload 6144), three packets: 3072 split 2048 + 1024
+ * (TDPC 3: TBC 1, TLBPC 0), 5000 (TDPC 5: TBC 2, TLBPC 0) and 4096 (TDPC 4:
+ * TBC 1, TLBPC 1). Packets: the split TD's first TRB 3 - 2 = 1, every last
+ * 0. KiB: 3072 >> 10 = 3 then the last's 1024 >> 10 = 1, 5000 >> 10 = 4 and
+ * 4096 >> 10 = 4. Every word of every TRB is asserted.
+ */
+static void test_build_td_size_forms(void)
+{
+    ISO_BUFFER iso;
+    XHCI_ISO_REQUEST req;
+    XHCI_ISO_LAYOUT layout;
+    XHCI_TRB out[8];
+    ULONG form;
+    ULONG kib;
+    ULONG i;
+    static const ULONG pa[4] = { 0x0B300800UL, 0x0B301000UL, 0x0B400000UL,
+                                 0x0B500000UL };
+    static const ULONG len[4] = { 2048, 1024, 5000, 4096 };
+    static const ULONG tdsPackets[4] = { 1, 0, 0, 0 };
+    static const ULONG tdsKib[4] = { 3, 1, 4, 4 };
+    static const ULONG burst[4] = { ISO_TBC(1) | ISO_TLBPC(0), 0,
+                                    ISO_TBC(2) | ISO_TLBPC(0),
+                                    ISO_TBC(1) | ISO_TLBPC(1) };
+    static const ULONG shape[4] = { ISO_TRB_TYPE | ISO_ISP | ISO_CH | ISO_SIA,
+                                    (1UL << 10) | ISO_ISP | ISO_IOC,
+                                    ISO_TRB_TYPE | ISO_ISP | ISO_IOC | ISO_SIA,
+                                    ISO_TRB_TYPE | ISO_ISP | ISO_IOC |
+                                        ISO_SIA };
+
+    for (form = XHCI_TD_SIZE_FORM_PACKETS; form <= XHCI_TD_SIZE_FORM_KIB;
+         form++) {
+        kib = (form == XHCI_TD_SIZE_FORM_KIB) ? 1UL : 0UL;
+        iso_init(&iso);
+        iso_add_split(&iso, pa[0], 2048, 1024, 500);
+        iso_add(&iso, pa[2], 5000, 501);
+        iso_add(&iso, pa[3], 4096, 502);
+        iso_request(&req, &iso, 1, 1024, 1);
+        req.MaxEsitPayload = 6144;
+        req.TdSizeForm = form;
+        CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_OK,
+                 kib ? "0.96 isoch builds" : "1.0 isoch builds");
+        CHECK_EQ(layout.TrbCount, 4UL, "four TRBs");
+        CHECK_EQ(layout.TdCount, 3UL, "three TDs");
+        for (i = 0; i < 4; i++) {
+            CHECK_EQ(out[i].Param0, pa[i], "buffer pointer");
+            CHECK_EQ(out[i].Param1, 0UL, "no 64-bit DMA");
+            CHECK_EQ(out[i].Status,
+                     len[i] | ((kib ? tdsKib[i] : tdsPackets[i]) << 17),
+                     kib ? "0.96: TD Size in KiB, the last TRB included"
+                         : "1.0: TD Size in packets, 0 on the last");
+            CHECK_EQ(out[i].Control, shape[i] | (kib ? 0UL : burst[i]),
+                     kib ? "0.96: TBC and TLBPC 0 (D3)"
+                         : "1.0: TBC and TLBPC as 4.11.2.3 computes them");
+        }
+    }
+
+    /* A packet past the Max ESIT Payload is still refused below 1.0, and a
+     * request with no form is refused. */
+    iso_init(&iso);
+    iso_add(&iso, pa[2], 6145, 501);
+    iso_request(&req, &iso, 1, 1024, 1);
+    req.MaxEsitPayload = 6144;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_KIB;
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout),
+             XHCI_XFER_ISO_MALFORMED, "0.96: over the ESIT payload refused");
+    iso_init(&iso);
+    iso_add(&iso, pa[2], 192, 501);
+    iso_request(&req, &iso, 1, 1024, 0);
+    req.TdSizeForm = 0;
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_BAD_PARAM,
+             "an isoch request with TdSizeForm 0 refused");
 }
 
 static void test_build_zero_length_packet(void)
@@ -927,6 +1005,7 @@ static void test_build_refusals(void)
     CHECK_EQ(XhciXferBuildIso(NULL, 0, out, 8, &layout), XHCI_XFER_BAD_PARAM,
              "NULL request");
     req.Iso = NULL;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     CHECK_EQ(XhciXferBuildIso(&req, 0, out, 8, &layout), XHCI_XFER_ISO_MALFORMED,
              "a NULL block is checked even though usbport cannot produce one");
 }
@@ -1919,6 +1998,7 @@ int main(void)
     test_build_zero_length_packet();
     test_build_split_packet();
     test_build_burst_fields();
+    test_build_td_size_forms();
     test_build_multiple_packets();
     test_build_frame_ids();
     test_build_refusals();

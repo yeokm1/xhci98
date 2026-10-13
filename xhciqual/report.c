@@ -364,6 +364,20 @@ void report_controller(CTRL *c, int active_ran)
             "PPC=%d\n",
             c->hciversion >> 8, c->hciversion & 0xFF, c->caplength,
             c->csz, c->ac64, c->ppc);
+    /*
+     * Task 38.11 (design record 17 section 4.14.7, D6): what xhci98 does
+     * with a controller below xHCI 1.0. The verdict is unchanged - it judges
+     * the handoff, DMA, interrupts and ports, which the version does not
+     * change - so this is a line, not a finding.
+     */
+    if (c->hciversion >= 0x0096 && c->hciversion < 0x0100) {
+        qprintf("  xhci98 drives it with XhciAccept096 at its default 1 (TD "
+                "Size in 1 KiB units;\n    untested ground); at 0 it refuses "
+                "to start it (Code 10)\n");
+    } else if (c->hciversion < 0x0096) {
+        qprintf("  xhci98 refuses to start it (Code 10): below xHCI 0.96 at "
+                "every XhciAccept096\n");
+    }
     qprintf("  MaxSlots %d  MaxIntrs %d  MaxPorts %d  Scratchpad %d  "
             "PAGESIZE %08lX\n",
             c->maxslots, c->maxintrs, c->maxports, c->spbufs, c->pagesize);
@@ -376,7 +390,14 @@ void report_controller(CTRL *c, int active_ran)
      * in what a machine does after standby, and until this line existed the only
      * way to guess it was from HCIVERSION - which is not what the bit says.
      */
-    if (c->hcc2_ok) {
+    if (c->hcc2_ok && c->hciversion < 0x0100) {
+        /* Task 38.11, D4: below 1.0 what offset 1Ch means is not
+         * established, so the raw value is shown for what it holds and no
+         * field of it is decoded; the driver takes FSC and LEC as 0. */
+        qprintf("  HCCPARAMS2 %08lX (raw; below 1.0 its meaning is not "
+                "established - xhci98\n    takes FSC and LEC as 0, so "
+                "suspend/resume re-enumerates)\n", c->hcc2);
+    } else if (c->hcc2_ok) {
         qprintf("  HCCPARAMS2 %08lX  FSC=%d U3C=%d CMC=%d%s\n",
                 c->hcc2, c->fsc, c->u3c, c->cmc,
                 c->fsc ? "" : "  (FSC=0: suspend/resume re-enumerates)");

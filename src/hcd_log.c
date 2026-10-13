@@ -314,6 +314,12 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
                   hc->Counters.TopoBehindHubNoSpeed, 1);
     XhciLogAppend(log, "hub.speed.fallbacks",
                   hc->Counters.Usb2HubSpeedFallbacks, 1);
+    /* Controllers below xHCI 1.0 (task 38.11): what a refused start's
+     * flush carries at XhciLogVerbosity 0 (design record 17 section
+     * 4.14.7). */
+    XhciLogAppend(log, "hc.versions", hc->Counters.HciVersions, 1);
+    XhciLogAppend(log, "hc.accept096", hc->Counters.HciAccept096Value, 1);
+    XhciLogAppend(log, "hc.version.policy", hc->Counters.HciVersionPolicy, 1);
     hcdLogTolLocked(ext, log);
 }
 
@@ -542,6 +548,10 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
     for (i = 0; i < sizeof(XHCIHC_COUNTERS); i++) {
         p[i] = 0;
     }
+    /* Task 38.11's three read "not read" until the start writes them. */
+    hc->Counters.HciVersions = 0xFFFFFFFFUL;
+    hc->Counters.HciAccept096Value = 0xFFFFFFFFUL;
+    hc->Counters.HciVersionPolicy = 0xFFFFFFFFUL;
     hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);
     if (hc->CountersStart == 0) {
         hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);

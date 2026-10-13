@@ -95,7 +95,9 @@ What it checks, grouped by the failure each rule prevents:
            made it nineteen: XhciWideMap at 0, XhciSelectiveSuspend at 0 and
            XhciUsb2HubSpeedFallback at 1, the three a user had set by hand
            until the owner's decision of 2026-10-11 that every value the
-           driver reads is written with its own default.
+           driver reads is written with its own default. Task 38.11 made it
+           twenty: XhciAccept096 at 1, the xHCI 0.96 floor (design record 17
+           section 4.14.4; owner, 2026-10-13).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1353,6 +1355,13 @@ $requiredValues = @(
         Default = "1"
         Why     = "issue 18's default speed IDs for a Full- or Low-Speed device behind a hub on a USB 2.0 root port whose speed table names no such speed (roadmap-hcd task 36.49), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on (implementation-invariants.md, Port Speed); 0 would refuse such a device again, a new decision"
+    },
+    @{
+        Name    = "XhciAccept096"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-hcd task 38.11's floor (design record 17 section 4.14.4), read at each start and latched for its lifetime: at 1 a controller whose HCIVERSION is 0.96 or above starts, driven as a 1.0 one but for the fields Linux writes differently below 1.0; at 0 one below 1.0 is refused (Code 10). The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-13)"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; 0 restores the 1.0 floor of 2.3.1.0"
     },
     @{
         Name    = "XhciVirtualHSHub"

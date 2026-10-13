@@ -437,6 +437,7 @@ static void normal_transfer(ULONG vo, ULONG length, ULONG mps, ULONG regs,
             req.DirectionIn = in;
             req.MaxPacketSize = mps;
             req.SgList = &sg.List;
+            req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
             req.MaxDataTrbs = 0;
             count = 0;
             answer = XhciXferBuildNormal(&req, in, out,
@@ -542,6 +543,7 @@ static void test_normal_pinned(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 512;
     req.SgList = &sg.List;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req.MaxDataTrbs = 0;
     CHECK_EQ(XhciXferBuildNormal(&req, 1, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                  &count), XHCI_XFER_OK, "built");
@@ -627,6 +629,7 @@ static void control_transfer(ULONG vo, ULONG length, ULONG mps0, ULONG regs,
         req.TransferFlagsIn = in;
         req.MaxPacketSize = mps0;
         req.SgList = &sg.List;
+        req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
         answer = XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                       &lay);
         wantTrt = (length == 0) ? XHCI_TRB_TRT_NO_DATA
@@ -740,6 +743,7 @@ static void test_submit_and_short(void)
     req.DirectionIn = 1;
     req.MaxPacketSize = 512;
     req.SgList = &sg.List;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req.MaxDataTrbs = 0;
 
     bad = 0;
@@ -894,6 +898,7 @@ static void iso_request(XHCI_ISO_REQUEST *req, ULONG interval, ULONG mps,
                         ULONG allowed, ULONG now)
 {
     req->Iso = &iso_block.Block;
+    req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->DirectionIn = 0;
     req->MaxPacketSize = mps;
     req->MaxBurstSize = 0;
@@ -1120,6 +1125,7 @@ static void test_iso_frame_decision(void)
     CHECK_EQ(XhciXferIsoUsesFrameIds(&req), 0, "no signature");
     iso_block.Block.Signature = USBPORT_ISO_SIGNATURE;
     req.Iso = NULL;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     CHECK_EQ(XhciXferIsoUsesFrameIds(&req), 0, "no block");
 }
 
@@ -1147,17 +1153,19 @@ static ULONG iso_td_first(ULONG td)
 }
 
 /* Plan, build and check: every TD SIA (`fid` 0), the first TD alone a
- * Frame ID (`fid` 1), or every TD a Frame ID (`fid` 2). */
-static void iso_plan_case(XHCI_ISO_REQUEST *req, ULONG asap, ULONG cfc,
-                          ULONG sampled, ULONG fresh, ULONG plan, ULONG fid,
-                          const char *what)
+ * Frame ID (`fid` 1), or every TD a Frame ID (`fid` 2), on a controller of
+ * HCIVERSION `version` (task 38.11, D8). */
+static void iso_plan_case_v(XHCI_ISO_REQUEST *req, ULONG asap, ULONG cfc,
+                            ULONG sampled, ULONG fresh, ULONG version,
+                            ULONG plan, ULONG fid, const char *what)
 {
     ULONG td;
     ULONG at;
     ULONG want;
 
-    XhciXferIsoFramePolicy(req, asap, cfc, sampled, fresh);
-    CHECK_EQ(XhciXferIsoStartPlan(req, asap, cfc, sampled, fresh), plan, what);
+    XhciXferIsoFramePolicy(req, asap, cfc, sampled, fresh, version);
+    CHECK_EQ(XhciXferIsoStartPlan(req, asap, cfc, sampled, fresh, version),
+             plan, what);
     CHECK_EQ(XhciXferBuildIso(req, req->DirectionIn, iso_out,
                               XHCI_XFER_MAX_ISO_TRBS, &iso_layout),
              XHCI_XFER_OK, what);
@@ -1169,8 +1177,19 @@ static void iso_plan_case(XHCI_ISO_REQUEST *req, ULONG asap, ULONG cfc,
         if (want == 0) {
             CHECK_EQ(XHCI_TRB_GET_FRAME_ID(iso_out[at].Control),
                      iso_block.Block.Packet[td].FrameNumber & 0x7FFUL, what);
+        } else {
+            CHECK_EQ(XHCI_TRB_GET_FRAME_ID(iso_out[at].Control), 0, what);
         }
     }
+}
+
+/* At 1.0, as every vector before task 38.11 was written. */
+static void iso_plan_case(XHCI_ISO_REQUEST *req, ULONG asap, ULONG cfc,
+                          ULONG sampled, ULONG fresh, ULONG plan, ULONG fid,
+                          const char *what)
+{
+    iso_plan_case_v(req, asap, cfc, sampled, fresh, XHCI_HCIVERSION_1_0, plan,
+                    fid, what);
 }
 
 static void test_iso_start_plan(void)
@@ -1191,7 +1210,7 @@ static void test_iso_start_plan(void)
     CHECK_EQ(iso_block.Block.Packet[0].Length, 3, "packet 0 is 3 bytes");
     iso_request(&req, 3, 3, 0, 1000);
     req.DirectionIn = 1;
-    XhciXferIsoFramePolicy(&req, 0, 0, 1, 1);
+    XhciXferIsoFramePolicy(&req, 0, 0, 1, 1, XHCI_HCIVERSION_1_0);
     CHECK_EQ(req.Frames.Allowed, 1, "no CFC, a new flow: allowed");
     CHECK_EQ(req.Frames.FirstOnly, 1, "on the first TD alone");
     iso_plan_case(&req, 0, 0, 1, 1, XHCI_ISO_START_FIRST_FRAME_ID, 1,
@@ -1208,6 +1227,42 @@ static void test_iso_start_plan(void)
                   "CFC, no frame sample: SIA");
 
     /*
+     * Task 38.11, D8 (design record 17 section 4.14.6): below 1.0 SIA on
+     * every TD, whatever HCCPARAMS1 bit 11 reads and however fresh the
+     * flow - the policy leaves Allowed 0, the plan answers SIA_NO_CFC for
+     * every explicit start, a new flow's included, and ASAP stays ASAP.
+     * Every TD's SIA bit and Frame ID field are asserted. At 1.0 the
+     * vectors above, the fresh flow's Frame ID included, stand unchanged.
+     */
+    XhciXferIsoFramePolicy(&req, 0, 0, 1, 1, XHCI_HCIVERSION_0_96);
+    CHECK_EQ(req.Frames.Allowed, 0, "0.96, no CFC, a new flow: not allowed");
+    XhciXferIsoFramePolicy(&req, 0, 1, 1, 1, XHCI_HCIVERSION_0_96);
+    CHECK_EQ(req.Frames.Allowed, 0, "0.96, CFC read 1: not allowed");
+    iso_plan_case_v(&req, 0, 0, 1, 1, XHCI_HCIVERSION_0_96,
+                    XHCI_ISO_START_SIA_NO_CFC, 0,
+                    "0.96, bit 11 clear, a new flow: SIA");
+    iso_plan_case_v(&req, 0, 0, 1, 0, XHCI_HCIVERSION_0_96,
+                    XHCI_ISO_START_SIA_NO_CFC, 0,
+                    "0.96, bit 11 clear, a flow under way: SIA");
+    iso_plan_case_v(&req, 0, 1, 1, 1, XHCI_HCIVERSION_0_96,
+                    XHCI_ISO_START_SIA_NO_CFC, 0,
+                    "0.96, bit 11 set, a new flow: SIA");
+    iso_plan_case_v(&req, 0, 1, 1, 0, XHCI_HCIVERSION_0_96,
+                    XHCI_ISO_START_SIA_NO_CFC, 0,
+                    "0.96, bit 11 set, a flow under way: SIA");
+    iso_plan_case_v(&req, 0, 1, 0, 1, XHCI_HCIVERSION_0_96,
+                    XHCI_ISO_START_SIA_NO_CFC, 0,
+                    "0.96, no frame sample: SIA_NO_CFC, not NO_SAMPLE");
+    iso_plan_case_v(&req, 1, 1, 1, 1, XHCI_HCIVERSION_0_96,
+                    XHCI_ISO_START_ASAP, 0, "0.96, ASAP: still ASAP");
+    iso_plan_case_v(&req, 0, 0, 1, 1, 0x00FFUL,
+                    XHCI_ISO_START_SIA_NO_CFC, 0,
+                    "00FFh is below 1.0 too: SIA");
+    iso_plan_case_v(&req, 0, 0, 1, 1, XHCI_HCIVERSION_1_1,
+                    XHCI_ISO_START_FIRST_FRAME_ID, 1,
+                    "1.10, no CFC, a new flow: the first TD a Frame ID");
+
+    /*
      * The pacing. usbaudio.sys reads the feedback, and on the read's
      * completion advances its frame by the refresh period (32) and reads
      * again at once, through a RESET_PIPE that leaves the ring empty. With
@@ -1222,8 +1277,8 @@ static void test_iso_start_plan(void)
         CHECK_EQ(iso_fill(0, 1, 3, 1, start, 3, &sg, &length), 1, "filled");
         iso_request(&req, 3, 3, 0, now);
         req.DirectionIn = 1;
-        XhciXferIsoFramePolicy(&req, 0, 0, 1, 1);
-        if (XhciXferIsoStartPlan(&req, 0, 0, 1, 1) !=
+        XhciXferIsoFramePolicy(&req, 0, 0, 1, 1, XHCI_HCIVERSION_1_0);
+        if (XhciXferIsoStartPlan(&req, 0, 0, 1, 1, XHCI_HCIVERSION_1_0) !=
             XHCI_ISO_START_FIRST_FRAME_ID) {
             break;
         }
@@ -1472,6 +1527,7 @@ static void test_wide_mapper_sweep(void)
                     req.DirectionIn = 1;
                     req.MaxPacketSize = 512;
                     req.SgList = &tdOwn.List;
+                    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
                     req.MaxDataTrbs = 0;
                     count = 0;
                     if (XhciXferBuildNormal(&req, 1, out,
@@ -1550,6 +1606,7 @@ static void test_wide_one_td(void)
                 req.DirectionIn = 1;
                 req.MaxPacketSize = 1024;
                 req.SgList = &oneTd.List;
+                req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
                 req.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
                 count = 0;
                 if (ok) {

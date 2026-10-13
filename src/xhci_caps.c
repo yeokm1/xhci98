@@ -991,13 +991,52 @@ static VOID xhciCopyHcInfo(PXHCI_HC_INFO dst, const XHCI_HC_INFO *src)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 38.11: the version floor and the forms below 1.0               */
+/* (design record 17 section 4.14)                                      */
+/* ------------------------------------------------------------------ */
+
+ULONG XhciVersionFloor(ULONG found, ULONG value)
+{
+    return (found && value == 0) ? XHCI_HCIVERSION_1_0 : XHCI_HCIVERSION_0_96;
+}
+
+ULONG XhciEffectiveCapDword0(ULONG raw, ULONG override)
+{
+    if (raw == 0xFFFFFFFFUL || override == 0 || override >= 0xFFFFUL) {
+        return raw;
+    }
+    return (raw & 0x0000FFFFUL) | (override << 16);
+}
+
+ULONG XhciTdSizeFormOf(ULONG hciVersion)
+{
+    return (hciVersion < XHCI_HCIVERSION_1_0) ? XHCI_TD_SIZE_FORM_KIB
+                                              : XHCI_TD_SIZE_FORM_PACKETS;
+}
+
+ULONG XhciVersionPairWord(ULONG registerVersion, ULONG effectiveVersion)
+{
+    return (registerVersion & 0xFFFFUL) | ((effectiveVersion & 0xFFFFUL) << 16);
+}
+
+ULONG XhciVersionPolicyWord(ULONG floor, ULONG form, ULONG overrideApplied,
+                            ULONG versionsRead)
+{
+    return (floor & 0xFFFFUL) | ((form & 0xFUL) << 16) |
+           (overrideApplied ? XHCI_VERSION_POLICY_OVERRIDE : 0UL) |
+           (versionsRead ? XHCI_VERSION_POLICY_READ : 0UL);
+}
+
 ULONG XhciCheckCapDword0(ULONG capDword0,
                          ULONG mappedBytes,
+                         ULONG floor,
                          ULONG *capLength,
                          ULONG *hciVersion)
 {
     ULONG length;
     ULONG version;
+    ULONG lowest;
 
     /* Before believing anything read out of the window, the window has to be
      * big enough to hold the registers being read from it. */
@@ -1021,7 +1060,11 @@ ULONG XhciCheckCapDword0(ULONG capDword0,
     if (length < XHCI_CAP_REGISTERS_BYTES || length == 0xFFUL) {
         return XHCI_HC_BAD_CAPLENGTH;
     }
-    if (version == 0xFFFFUL || version < XHCI_HCIVERSION_1_0) {
+    /* Task 38.11: only the 0.96 floor opens anything below 1.0, so a floor
+     * never latched (0) is today's 1.0. */
+    lowest = (floor == XHCI_HCIVERSION_0_96) ? XHCI_HCIVERSION_0_96
+                                             : XHCI_HCIVERSION_1_0;
+    if (version == 0xFFFFUL || version < lowest) {
         return XHCI_HC_BAD_VERSION;
     }
 
@@ -1042,6 +1085,7 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
                        ULONG dboff,
                        ULONG rtsoff,
                        ULONG mappedBytes,
+                       ULONG floor,
                        PXHCI_HC_INFO info)
 {
     XHCI_HC_INFO derived;
@@ -1054,7 +1098,7 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
         return XHCI_HC_BAD_PARAM;
     }
 
-    status = XhciCheckCapDword0(capDword0, mappedBytes,
+    status = XhciCheckCapDword0(capDword0, mappedBytes, floor,
                                 &derived.CapLength, &derived.HciVersion);
     if (status != XHCI_HC_OK) {
         return status;
@@ -1133,10 +1177,19 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
      * An all-ones read is not treated as data, for the reason every other read in
      * this function is not: it is what an undecoding window answers, and bit 2 of
      * it is a 1 - which is the one direction of this decision that loses data.
+     *
+     * Below 1.0 the version does decide it (task 38.11, D4; design record 17
+     * section 4.14.6), and the argument above does not reach there: Appendix H
+     * speaks of 1.0 implementations, what a 0.96 part keeps at 1Ch is unread,
+     * and Linux reads the register only above 1.0 (xhci.c:5464-5467). So FSC
+     * and LEC are 0 there - a declined Save State and a resume that
+     * reinitializes the bus, which is what an FSC-0 1.0 controller already
+     * costs. From 1.0 up the register is read on reach alone, as before.
      */
     derived.Fsc = 0;
     derived.Lec = 0;
-    if (derived.CapLength >= XHCI_CAP_HCCPARAMS2_BYTES &&
+    if (derived.HciVersion >= XHCI_HCIVERSION_1_0 &&
+        derived.CapLength >= XHCI_CAP_HCCPARAMS2_BYTES &&
         mappedBytes >= XHCI_CAP_HCCPARAMS2_BYTES &&
         hccparams2 != 0xFFFFFFFFUL) {
         derived.Fsc = XHCI_HCCPARAMS2_FSC(hccparams2);

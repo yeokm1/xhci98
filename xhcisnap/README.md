@@ -744,6 +744,22 @@ PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
 the resyncs that could not finish and the extra stops QEMU's own restart
 of an endpoint cost. A block shorter than 173 words is a driver from
 before it, and the section is not printed.
+Task 38.11's three follow (173 to 175, `HciVersions`, `HciAccept096Value`
+and `HciVersionPolicy`; design record 17 section 4.14.7), each FFFFFFFF
+until the start writes it, with a section of their own, **"controller
+version"**: `XhciAccept096` as read and the floor it set (0.96, or 1.00 at
+`0`), and the controller's HCIVERSION with what the driver did with it -
+`xHCI 0.96 (HCIVERSION 0096h): accepted below 1.0; TD Size in 1 KiB
+units`, refused at `XhciAccept096 0` or below 0.96 (Code 10), or `xHCI
+1.00: XhciAccept096 not applicable`. Bit 21 of the policy word, not the
+versions word, says whether the version was read, so a register that
+answered all ones is told from a start refused before it; the `qemu`
+flavour's `XhciQemuHciVersion` is named beside the register's own value
+whenever it applied. A block shorter than 176 words is a driver from
+before it, and the section is not printed. Whether `XHCISNAP` can open a
+controller whose start failed is not read on any target; such a start's
+counter dump goes to DebugView with `XhciLogDebugView` `1`.
+`-selftest-version` prints the section over canned words.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

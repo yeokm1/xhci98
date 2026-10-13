@@ -3116,6 +3116,17 @@ static const char *const streams_counter_names[SNAP_STREAMS_WORDS] = {
     "QemuStreamResyncs", "QemuStreamResyncFailed", "QemuStreamRestops"
 };
 
+/* Task 38.11's three (controllers below xHCI 1.0, design record 17 section
+ * 4.14.7) follow at 173: the versions, XhciAccept096 as read and the
+ * policy, decoded by print_hcd_version. */
+#define SNAP_VERSION_AT             173UL
+#define SNAP_VERSION_WORDS          3UL
+#define SNAP_VERSION_OVERRIDE       0x00100000UL
+#define SNAP_VERSION_READ           0x00200000UL
+static const char *const version_counter_names[SNAP_VERSION_WORDS] = {
+    "HciVersions", "HciAccept096Value", "HciVersionPolicy"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3199,7 +3210,85 @@ static const char *hcd_counter_name(unsigned long i)
     if (i >= SNAP_STREAMS_AT && i - SNAP_STREAMS_AT < SNAP_STREAMS_WORDS) {
         return streams_counter_names[i - SNAP_STREAMS_AT];
     }
+    if (i >= SNAP_VERSION_AT && i - SNAP_VERSION_AT < SNAP_VERSION_WORDS) {
+        return version_counter_names[i - SNAP_VERSION_AT];
+    }
     return NULL;
+}
+
+/*
+ * Task 38.11's line (design record 17 section 4.14.7): the controller's
+ * version, the floor XhciAccept096 set and what the driver did with it,
+ * from the counter block when it is long enough (a driver before 38.11
+ * sends fewer words, and nothing is printed). Bit 21 of the policy word is
+ * what says the versions were read: a register that answered all ones
+ * leaves a versions word of FFFFFFFFh too. Out of line, as
+ * hcd_counter_name.
+ */
+static void print_hcd_version(const unsigned char *image,
+                              unsigned long countersAt,
+                              unsigned long counters)
+{
+    unsigned long versions;
+    unsigned long value;
+    unsigned long policy;
+    unsigned long floor;
+    unsigned long form;
+    unsigned long reg;
+    unsigned long eff;
+
+    if (counters < SNAP_VERSION_AT + SNAP_VERSION_WORDS) {
+        return;
+    }
+    versions = get32(image, countersAt + SNAP_VERSION_AT * 4);
+    value = get32(image, countersAt + (SNAP_VERSION_AT + 1) * 4);
+    policy = get32(image, countersAt + (SNAP_VERSION_AT + 2) * 4);
+    comp("\ncontroller version (task 38.11, design record 17 section "
+         "4.14):\n");
+    if (policy == 0xFFFFFFFFUL) {
+        comp("  not read: this start refused before it read XhciAccept096\n");
+        return;
+    }
+    floor = policy & 0xFFFFUL;
+    form = (policy >> 16) & 0xFUL;
+    if (value == 0xFFFFFFFFUL) {
+        comp("  XhciAccept096  absent or not a DWORD, so 1; floor %s\n",
+             floor == 0x0096UL ? "0.96" : "1.00");
+    } else {
+        comp("  XhciAccept096  %lu; floor %s\n", value,
+             floor == 0x0096UL ? "0.96" : "1.00");
+    }
+    if ((policy & SNAP_VERSION_READ) == 0) {
+        comp("  HCIVERSION     not read: this start refused before step 0c\n");
+        return;
+    }
+    reg = versions & 0xFFFFUL;
+    eff = (versions >> 16) & 0xFFFFUL;
+    if ((policy & SNAP_VERSION_OVERRIDE) != 0) {
+        comp("  (qemu flavour: XhciQemuHciVersion decoded %04lXh in place of "
+             "the register's %04lXh)\n", eff, reg);
+    } else if (reg != eff) {
+        comp("  (the register read %04lXh and %04lXh was decoded, with no "
+             "override recorded)\n", reg, eff);
+    }
+    if (eff == 0xFFFFUL) {
+        comp("  HCIVERSION     FFFFh: not decoding, refused (Code 10)\n");
+    } else if (eff >= 0x0100UL) {
+        comp("  xHCI %lX.%02lX: XhciAccept096 not applicable%s\n", eff >> 8,
+             eff & 0xFFUL, form == 0 ? "; refused at another check" : "");
+    } else if (eff < 0x0096UL) {
+        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): below 0.96, refused at "
+             "every value (Code 10)\n", eff >> 8, eff & 0xFFUL, eff);
+    } else if (form == 2) {
+        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): accepted below 1.0; TD "
+             "Size in 1 KiB units\n", eff >> 8, eff & 0xFFUL, eff);
+    } else if (floor == 0x0100UL) {
+        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): below 1.0, refused at "
+             "XhciAccept096 0 (Code 10)\n", eff >> 8, eff & 0xFFUL, eff);
+    } else {
+        comp("  xHCI %lX.%02lX (HCIVERSION %04lXh): refused at another "
+             "check\n", eff >> 8, eff & 0xFFUL, eff);
+    }
 }
 
 /*
@@ -3398,6 +3487,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     print_hcd_counters(image, countersAt, counters);
     print_hcd_hubspeed(image, countersAt, counters);
     print_hcd_streams(image, countersAt, counters);
+    print_hcd_version(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -5182,13 +5272,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 172 and two words
+ * word is nonzero and its value names its place): 0 to 175 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STREAMS_AT + SNAP_STREAMS_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_VERSION_AT + SNAP_VERSION_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -5208,6 +5298,46 @@ static int selftest_counters(void)
     companion = NULL;
     print_hcd(image, sizeof(image));
     comp("[end]\n");
+    return 0;
+}
+
+/*
+ * `-selftest-version`: task 38.11's line over canned counter words, one
+ * case a paragraph: the words not written; the value read but the start
+ * refused before step 0c; QEMU's 1.0 at the default, value absent; a 0.96
+ * part accepted at 1; the same refused at 0; the qemu flavour's override
+ * (register 0100h, 0096h decoded); a register that read FFFFh; and a 0.95
+ * part. xhcisnap\selftest.cmd checks each line.
+ */
+static int selftest_version(void)
+{
+    static const unsigned long cases[8][3] = {
+        { 0xFFFFFFFFUL, 0xFFFFFFFFUL, 0xFFFFFFFFUL },
+        { 0xFFFFFFFFUL, 0xFFFFFFFFUL, 0x00000096UL },
+        { 0x01000100UL, 0xFFFFFFFFUL, 0x00210096UL },
+        { 0x00960096UL, 1UL, 0x00220096UL },
+        { 0x00960096UL, 0UL, 0x00200100UL },
+        { 0x00960100UL, 1UL, 0x00320096UL },
+        { 0xFFFFFFFFUL, 1UL, 0x00200096UL },
+        { 0x00950095UL, 1UL, 0x00200096UL }
+    };
+    static unsigned char image[(SNAP_VERSION_AT + SNAP_VERSION_WORDS) * 4];
+    unsigned long c;
+    unsigned long k;
+
+    companion = NULL;
+    for (c = 0; c < 8; c++) {
+        memset(image, 0, sizeof(image));
+        for (k = 0; k < 3; k++) {
+            put32(image, (SNAP_VERSION_AT + k) * 4, cases[c][k]);
+        }
+        comp("[case %lu]", c);
+        print_hcd_version(image, 0, SNAP_VERSION_AT + SNAP_VERSION_WORDS);
+    }
+    /* A block from a driver before 38.11: nothing printed. */
+    comp("[short]");
+    print_hcd_version(image, 0, SNAP_VERSION_AT + SNAP_VERSION_WORDS - 1);
+    comp("\n[end]\n");
     return 0;
 }
 
@@ -10556,6 +10686,8 @@ int main(int argc, char **argv)
             return selftest_msi();
         } else if (strcmp(argv[i], "-selftest-counters") == 0) {
             return selftest_counters();
+        } else if (strcmp(argv[i], "-selftest-version") == 0) {
+            return selftest_version();
         } else if (strcmp(argv[i], "-selftest-xstat") == 0) {
             return selftest_xstat();
         } else if (strcmp(argv[i], "-selftest-sysinfo") == 0) {

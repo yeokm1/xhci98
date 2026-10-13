@@ -345,9 +345,22 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG QemuStreamResyncs;
     ULONG QemuStreamResyncFailed;
     ULONG QemuStreamRestops;
+    /* Controllers below xHCI 1.0 (task 38.11; design record 17 section
+     * 4.14.7), appended at word 173, each 0xFFFFFFFF from HcdCountersStart
+     * until written ("not read"): the versions (XhciVersionPairWord - bits
+     * 15:0 the register's HCIVERSION, 31:16 the effective one, written from
+     * the step 0c read whether or not its check refused); XhciAccept096 as
+     * read (the DWORD, or 0xFFFFFFFF absent or of another type); and the
+     * policy (XhciVersionPolicyWord - the floor, the TD Size form, the qemu
+     * override, and bit 21 once the versions word was written, which is what
+     * tells a register that read all ones from one never read). The start's
+     * writes. */
+    ULONG HciVersions;
+    ULONG HciAccept096Value;
+    ULONG HciVersionPolicy;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 176 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

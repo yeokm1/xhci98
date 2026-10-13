@@ -370,6 +370,7 @@ static ULONG hcdWideBigOne(PHCD_CONTROLLER hc, PHCD_XFER x)
     nreq.MaxPacketSize = pipe->MaxPacketSize;
     nreq.SgList = sg;
     nreq.MaxDataTrbs = XHCI_XFER_MAX_WIDE_DATA_TRBS;
+    nreq.TdSizeForm = XhciTdSizeFormOf(hc->Hc.HcInfo.HciVersion);
     answer = XhciXferSubmitNormal(pipe->Queue, pipe->Ring, &nreq, x->In,
                                   &x->Xfer, x, hc->WideScratch,
                                   HCD_WIDE_SCRATCH_TRBS);
@@ -496,6 +497,7 @@ static ULONG hcdWidePump(PHCD_CONTROLLER hc, PHCD_XFER x)
         nreq.DirectionIn = (pipe->EndpointAddress & 0x80UL) != 0;
         nreq.MaxPacketSize = pipe->MaxPacketSize;
         nreq.SgList = sg;
+        nreq.TdSizeForm = XhciTdSizeFormOf(hc->Hc.HcInfo.HciVersion);
         answer = XhciXferSubmitNormal(pipe->Queue, pipe->Ring, &nreq, x->In,
                                       t, x, trbs,
                                       XHCI_XFER_MAX_CONTROL_TRBS);
@@ -1314,6 +1316,7 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
     req.MaxEsitPayload = pipe->Ep.MaxEsitPayload;
     req.PacketsPerFrame = (interval <= 3UL) ? (8UL >> interval) : 0UL;
     req.Frames.IstFrames = ext->HcInfo.IstFrames;
+    req.TdSizeForm = XhciTdSizeFormOf(ext->HcInfo.HciVersion);
     sampled = XhciFrameIdNow(ext, &now);
     if (sampled) {
         req.Frames.CurrentFrame = now;
@@ -1321,7 +1324,8 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
         now = ext->FrameNumber;
     }
     fresh = pipe->IsoFlowFresh;
-    XhciXferIsoFramePolicy(&req, x->Asap, ext->HcInfo.Cfc, sampled, fresh);
+    XhciXferIsoFramePolicy(&req, x->Asap, ext->HcInfo.Cfc, sampled, fresh,
+                           ext->HcInfo.HciVersion);
     if (!x->Asap) {
         start = it->StartFrame;
     } else if (pipe->Queue->Count != 0) {
@@ -1343,7 +1347,7 @@ static ULONG hcdIsoPublish(PHCD_CONTROLLER hc, PHCD_PIPE pipe, PHCD_XFER x)
      * decision, so the two cannot drift (round 17). A start beyond what a
      * Frame ID can name is still refused, by hcdIsoAdmit. */
     plan = XhciXferIsoStartPlan(&req, x->Asap, ext->HcInfo.Cfc, sampled,
-                                fresh);
+                                fresh, ext->HcInfo.HciVersion);
     answer = XhciXferSubmitIso(pipe->Queue, pipe->Ring, &req,
                                req.DirectionIn, &x->Xfer, x, ext->IsoScratch,
                                XHCI_XFER_MAX_ISO_TRBS, &ext->IsoLayout);
@@ -1923,6 +1927,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
             creq.TransferFlagsIn = x->In;
             creq.MaxPacketSize = dev->Mps0;
             creq.SgList = &x->Sg.List;
+            creq.TdSizeForm = XhciTdSizeFormOf(hc->Hc.HcInfo.HciVersion);
             answer = XhciXferSubmitControl(pipe->Queue, pipe->Ring, &creq,
                                            &x->Xfer, x, trbs,
                                            XHCI_XFER_MAX_CONTROL_TRBS);
@@ -1936,6 +1941,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
             nreq.DirectionIn = (pipe->EndpointAddress & 0x80UL) != 0;
             nreq.MaxPacketSize = pipe->MaxPacketSize;
             nreq.SgList = &x->Sg.List;
+            nreq.TdSizeForm = XhciTdSizeFormOf(hc->Hc.HcInfo.HciVersion);
             answer = XhciXferSubmitNormal(pipe->Queue, pipe->Ring, &nreq,
                                           x->In, &x->Xfer, x, trbs,
                                           XHCI_XFER_MAX_CONTROL_TRBS);

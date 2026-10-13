@@ -79,8 +79,10 @@ a machine said on a day.
   an Intel PCH (`D20IP`, `D20IR`, `PIRQx_ROUT`) is a different thing, read
   in every mode on the reviewed chipsets alone ("Intel PCH interrupt
   routing" below).
-- Tier B: family-specific capability introspection. xHCI reports HCIVERSION,
-  context size, slots/interrupters/ports, scratchpads, PPC, `HCCPARAMS2`
+- Tier B: family-specific capability introspection. xHCI reports HCIVERSION
+  (and, below 1.0, what xhci98 does with it: from 0.96 it drives the
+  controller under `XhciAccept096` at its default, below 0.96 it refuses it;
+  roadmap-hcd task 38.11, design record 17 section 4.14), context size, slots/interrupters/ports, scratchpads, PPC, `HCCPARAMS2`
   (U3C/CMC/FSC), USBLEGSUP, and USB2/USB3 protocol topology with each
   protocol's speed table (PSI entries) decoded, plus, in the log and on the
   serial line only, the raw extended-capability chain ("Raw
@@ -89,7 +91,9 @@ a machine said on a day.
   declines every controller Save State, so a resume rebuilds the bus instead
   of restoring it (`docs/using/release-notes.md`, "Known limitations"). Read the bit,
   never the version: it is optional at xHCI 1.0 rather than absent, so a 1.0
-  controller may advertise it. A controller whose `CAPLENGTH` stops before
+  controller may advertise it. Below 1.0 the line shows the raw value only:
+  what offset 1Ch means on a 0.96 part is not established, and the driver
+  takes FSC and LEC as 0 there. A controller whose `CAPLENGTH` stops before
   `0x20` has no such register and the line says `absent`. EHCI reports
   HCIVERSION, HCSPARAMS/HCCPARAMS, root ports, PPC, and its PCI legacy
   capability. OHCI reports HcRevision and both root-hub descriptors.

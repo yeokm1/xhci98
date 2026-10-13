@@ -182,6 +182,16 @@ included.
   with the switch off. On ME the switch matters only for a class ME would
   ask about (the audio device). A composite keyboard, mouse or stick was
   not read on either (no virtual device offers one), nor real hardware.
+- **Controllers below xHCI 1.0 start.** `2.3.1.0` refused a controller
+  whose HCIVERSION is below 1.0 (Code 10, "This device cannot start"),
+  which is where the first-generation NEC/Renesas uPD720200 and uPD720200A
+  (`1033:0194`) and ASMedia's ASM1042 stopped: they are xHCI 0.96 parts.
+  From `2.4.0.0` such a controller starts, driven as an xHCI 1.0 one but
+  for the fields Linux writes differently on 0.96 parts. A new value,
+  `XhciAccept096`, written by the install at `1`, turns it off at `0`
+  ("XhciAccept096", under "Registry settings"). No 0.96 controller has run
+  under this driver: it is untested ground ("Untested ground"). Read in
+  QEMU virtual machines only, whose controller is 1.0.
 
 ## What `2.3.1.0` changes
 
@@ -1407,7 +1417,7 @@ by default, with nothing for the backstop to drain, and the line under
 ## Registry settings
 
 Each value is a `DWORD` in the controller's driver (software) key, and
-the install writes every value the driver reads, nineteen, in this key:
+the install writes every value the driver reads, twenty, in this key:
 
 | Windows | Key |
 |---|---|
@@ -1426,7 +1436,7 @@ that say so, disable and enable the controller in Device Manager).
 `XhciForceBulkOnly` is the exception: it is read as each device is
 enumerated ("XhciForceBulkOnly").
 
-The install writes all nineteen: each at the driver's own default, except
+The install writes all twenty: each at the driver's own default, except
 `XhciImodInterval250ns` at `160` and `XhciForceBulkOnly` at `0`, which
 the driver reads as `1` when it is absent (text-mode Setup;
 "XhciForceBulkOnly"). Each is written only where it is missing,
@@ -1439,7 +1449,8 @@ default, set it by hand, or delete the value and update the driver.
 them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
 `XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
 install too, at the value that reads as a missing one; an update keeps any
-of them you had already added. Since `2.3.0.0` the
+of them you had already added. `XhciAccept096` (`1`) is new in `2.4.0.0`,
+and an update over `2.3.1.0` adds it. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written
@@ -1971,6 +1982,37 @@ gave an ID and which slots hold one, and on the VL805 the card's firmware
 version (`pci.vl805.fw`). If a Low- or Full-Speed device behind such a hub
 misbehaves with it on, set `0`, restart and report whether that changed it.
 
+### XhciAccept096: controllers below xHCI 1.0
+
+New in `2.4.0.0`, and **on unless you set it to `0`**. A controller says
+which revision of the xHCI specification it was built to in its HCIVERSION
+register. `2.3.1.0` refused anything below 1.0; the first-generation
+NEC/Renesas uPD720200 and uPD720200A (`1033:0194`) and ASMedia's ASM1042
+are 0.96 parts. With this value on, a controller from 0.96 up starts. It is
+driven as a 1.0 controller but for the fields Linux writes differently on
+0.96 parts: the TD Size field in 1 KiB units rather than packets, the
+control transfer's Transfer Type written 0, the isochronous burst counts
+written 0, every isochronous transfer scheduled at the next opportunity
+rather than at a named frame, and the capability register at offset 1Ch
+ignored, so a resume from standby re-enumerates the controller's devices.
+On a 1.0 or later controller the value changes nothing.
+
+| | |
+|---|---|
+| Key | the controller's driver key ("Registry settings", above) |
+| Value | `XhciAccept096`, a `DWORD`; the install writes `1` |
+| Absent, `1`, any other number or not a `DWORD` | On, the default: from 0.96 up starts |
+| `0` | Off: below 1.0 is refused (Code 10), as in `2.3.1.0` |
+
+Anything below 0.96 is refused at every value. Read at each start of the
+controller: restart Windows after changing it. No 0.96 controller has run
+under this driver ("Untested ground"); if one misbehaves with it on, set
+`0`, restart and report what it did, with `XHCIQUAL`'s report, which names
+the controller's version, and `XHCISNAP`'s, which says what the driver
+decided ("controller version"). With `XhciLogDebugView` at `1`, a start the
+driver refuses for any reason now writes its log and counters to DebugView,
+the version among them.
+
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
 See "The log, and how to send one". Both default to `0`.
@@ -2414,6 +2456,7 @@ information.
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; never run on a VL805 or on any controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
+| Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby re-enumerates their devices; built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs") |
 | The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31` and every other system rest on Linux's handling of the same chipsets and on host tests of the sequence |

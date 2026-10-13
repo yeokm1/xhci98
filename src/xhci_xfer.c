@@ -334,14 +334,28 @@ static ULONG xhciXferMps0Valid(ULONG mps)
  *   TD Size(n)           = MIN(31, TD Packet Count - Packets Transferred(n))
  *
  * and 0 for the last TRB of the TD, which the caller writes over the value
- * returned here. `lengthSum` is inclusive of TRB n.
+ * returned here. `lengthSum` is inclusive of TRB n, `length` is TRB n's own.
+ *
+ * Below xHCI 1.0 (task 38.11, design record 17 section 4.14.5) the field is
+ * in other units: Linux's `xhci_td_remainder` for a controller under 0x100
+ * writes the bytes of the TD not yet described before this TRB - this TRB's
+ * own included - shifted right by 10, held to 31 by `TRB_TD_SIZE`, and
+ * returns it before its last-TRB test, so the last TRB carries its own length
+ * in KiB (D1). That form ignores the Max Packet Size. The callers clear the
+ * last TRB's field for the packet form only.
  */
-static ULONG xhciXferTdSize(ULONG totalLength, ULONG lengthSum, ULONG mps)
+static ULONG xhciXferTdSize(ULONG form, ULONG totalLength, ULONG lengthSum,
+                            ULONG length, ULONG mps)
 {
     ULONG packetCount;
     ULONG transferred;
     ULONG remaining;
 
+    if (form == XHCI_TD_SIZE_FORM_KIB) {
+        remaining = (totalLength - (lengthSum - length)) >> 10;
+        return (remaining > XHCI_TRB_TD_SIZE_MAX) ? XHCI_TRB_TD_SIZE_MAX
+                                                  : remaining;
+    }
     packetCount = (totalLength + mps - 1) / mps;
     transferred = lengthSum / mps;
     if (transferred >= packetCount) {
@@ -382,7 +396,17 @@ typedef struct _XHCI_XFER_BUILD_STATE {
      * bulk; the two are one shape here). */
     ULONG NormalOnly;
     ULONG DataCap;          /* data TRBs at most (36.25)            */
+    ULONG TdSizeForm;       /* XHCI_TD_SIZE_FORM_* (38.11)          */
 } XHCI_XFER_BUILD_STATE;
+
+/* A request's TD Size form (task 38.11): 0 - a request whose builder forgot
+ * the field - and anything else unknown is refused, so that site fails its
+ * first transfer instead of writing the 1.0 form on a 0.96 controller. */
+static ULONG xhciXferFormValid(ULONG form)
+{
+    return (form == XHCI_TD_SIZE_FORM_PACKETS ||
+            form == XHCI_TD_SIZE_FORM_KIB) ? 1UL : 0UL;
+}
 
 static ULONG xhciXferEmitData(XHCI_XFER_BUILD_STATE *state,
                               ULONG physicalAddress,
@@ -403,8 +427,9 @@ static ULONG xhciXferEmitData(XHCI_XFER_BUILD_STATE *state,
 
     state->LengthSum += length;
     trb->Status = (length & XHCI_TRB_LENGTH_MASK) |
-                  XHCI_TRB_TD_SIZE(xhciXferTdSize(state->TotalLength,
-                                                  state->LengthSum,
+                  XHCI_TRB_TD_SIZE(xhciXferTdSize(state->TdSizeForm,
+                                                  state->TotalLength,
+                                                  state->LengthSum, length,
                                                   state->MaxPacketSize)) |
                   XHCI_TRB_INTERRUPTER(0);
 
@@ -633,6 +658,9 @@ ULONG XhciXferBuildControl(const XHCI_CONTROL_REQUEST *request,
     if (!xhciXferMps0Valid(request->MaxPacketSize)) {
         return XHCI_XFER_BAD_PARAM;
     }
+    if (!xhciXferFormValid(request->TdSizeForm)) {
+        return XHCI_XFER_BAD_PARAM;
+    }
 
     layout->TrbCount = 0;
     layout->DataFirst = XHCI_XFER_NO_INDEX;
@@ -671,6 +699,13 @@ ULONG XhciXferBuildControl(const XHCI_CONTROL_REQUEST *request,
     } else {
         trt = XHCI_TRB_TRT_OUT_DATA;
     }
+    /* Task 38.11, D2: below 1.0 the Setup Stage TRB's Transfer Type is
+     * written 0, as Linux writes it only from 1.0 ("xHCI 1.0/1.1 6.4.1.2.1",
+     * xhci-ring.c:3820-3828); the Data and Status Stage TRBs' DIR bits, which
+     * the controller acts on, are unchanged. */
+    if (request->TdSizeForm == XHCI_TD_SIZE_FORM_KIB) {
+        trt = XHCI_TRB_TRT_NO_DATA;
+    }
 
     /* --- Setup Stage TD: exactly one TRB, immediate data (p.192). --- */
     trb = &out[0];
@@ -696,6 +731,7 @@ ULONG XhciXferBuildControl(const XHCI_CONTROL_REQUEST *request,
     state.DirectionIn = dataIn;
     state.NormalOnly = 0;
     state.DataCap = XHCI_XFER_MAX_DATA_TRBS;
+    state.TdSizeForm = request->TdSizeForm;
 
     /* --- Data Stage TD, if there is one. --- */
     if (dataStage) {
@@ -712,9 +748,12 @@ ULONG XhciXferBuildControl(const XHCI_CONTROL_REQUEST *request,
         out[state.DataFirst + state.DataCount - 1].Control &= ~XHCI_TRB_CH;
         /* "The value of the TD Size in the last Transfer TRB of a TD shall be
          * cleared to '0' to explicitly indicate that it is the last Transfer
-         * TRB of the TD" (p.198). */
-        out[state.DataFirst + state.DataCount - 1].Status &=
-            ~XHCI_TRB_TD_SIZE(XHCI_TRB_TD_SIZE_MAX);
+         * TRB of the TD" (p.198) - the packet form's rule; below 1.0 the last
+         * TRB keeps Linux's value (38.11, D1). */
+        if (state.TdSizeForm == XHCI_TD_SIZE_FORM_PACKETS) {
+            out[state.DataFirst + state.DataCount - 1].Status &=
+                ~XHCI_TRB_TD_SIZE(XHCI_TRB_TD_SIZE_MAX);
+        }
     }
 
     /* --- Status Stage TD: one TRB, and the only one carrying IOC. --- */
@@ -776,6 +815,9 @@ ULONG XhciXferBuildNormal(const XHCI_NORMAL_REQUEST *request,
     if (request->MaxPacketSize == 0 || request->MaxPacketSize > 0x7FFUL) {
         return XHCI_XFER_BAD_PARAM;
     }
+    if (!xhciXferFormValid(request->TdSizeForm)) {
+        return XHCI_XFER_BAD_PARAM;
+    }
     /*
      * usbport's direction against the endpoint's, checked and not chosen
      * between. For a control transfer the second opinion is the SETUP bytes; for
@@ -805,6 +847,7 @@ ULONG XhciXferBuildNormal(const XHCI_NORMAL_REQUEST *request,
     state.NormalOnly = 1;
     state.DataCap = (request->MaxDataTrbs == 0) ? XHCI_XFER_MAX_DATA_TRBS
                                                 : request->MaxDataTrbs;
+    state.TdSizeForm = request->TdSizeForm;
 
     if (request->TransferLength == 0) {
         /*
@@ -831,7 +874,9 @@ ULONG XhciXferBuildNormal(const XHCI_NORMAL_REQUEST *request,
      * Size in the last Transfer TRB of a TD shall be cleared to '0'" (p.198).
      * Every TRB was emitted chained, so exactly one of each is cleared here. */
     last->Control &= ~XHCI_TRB_CH;
-    last->Status &= ~XHCI_TRB_TD_SIZE(XHCI_TRB_TD_SIZE_MAX);
+    if (state.TdSizeForm == XHCI_TD_SIZE_FORM_PACKETS) {
+        last->Status &= ~XHCI_TRB_TD_SIZE(XHCI_TRB_TD_SIZE_MAX);
+    }
     /*
      * **IOC lands here rather than on a Status Stage TRB**, because a
      * non-control TD has no third stage to carry it: this is the only TRB whose
@@ -3009,6 +3054,7 @@ typedef struct _XHCI_ISO_BUILD_STATE {
     ULONG MaxPacketSize;
     ULONG DirectionIn;
     ULONG IsochControl;     /* TBC/TLBPC/Frame ID or SIA for TRB 0   */
+    ULONG TdSizeForm;       /* XHCI_TD_SIZE_FORM_* (38.11)           */
 } XHCI_ISO_BUILD_STATE;
 
 /*
@@ -3046,8 +3092,9 @@ static ULONG xhciXferEmitIsoData(XHCI_ISO_BUILD_STATE *state,
      * transferred for *a TD*.
      */
     trb->Status = (length & XHCI_TRB_LENGTH_MASK) |
-                  XHCI_TRB_TD_SIZE(xhciXferTdSize(state->PacketLength,
-                                                  state->LengthSum,
+                  XHCI_TRB_TD_SIZE(xhciXferTdSize(state->TdSizeForm,
+                                                  state->PacketLength,
+                                                  state->LengthSum, length,
                                                   state->MaxPacketSize)) |
                   XHCI_TRB_INTERRUPTER(0);
 
@@ -3215,6 +3262,13 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
     state->TdTrbs = 0;
     state->LengthSum = 0;
     state->PacketLength = packet->Length;
+    /* Task 38.11, D3: below 1.0 both fields are written 0, as Linux writes
+     * them ("Only xHCI 1.0 host controllers support this field",
+     * xhci-ring.c:3895-3945); the range check above still stands. */
+    if (state->TdSizeForm == XHCI_TD_SIZE_FORM_KIB) {
+        tbc = 0;
+        tlbpc = 0;
+    }
     state->IsochControl = XHCI_TRB_TBC(tbc) | XHCI_TRB_TLBPC(tlbpc);
     if (useFrameId) {
         /* The caller has already established that every packet of this request
@@ -3252,9 +3306,11 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
     /* "The Chain bit is always '0' in the last TRB of an Isoch TD" (Table 6-34)
      * and "the TD Size in the last Transfer TRB of a TD shall be cleared to '0'"
      * (p.198). Every TRB was emitted chained, so exactly one of each is
-     * cleared. */
+     * cleared - the TD Size for the packet form only (38.11, D1). */
     last->Control &= ~XHCI_TRB_CH;
-    last->Status &= ~XHCI_TRB_TD_SIZE(XHCI_TRB_TD_SIZE_MAX);
+    if (state->TdSizeForm == XHCI_TD_SIZE_FORM_PACKETS) {
+        last->Status &= ~XHCI_TRB_TD_SIZE(XHCI_TRB_TD_SIZE_MAX);
+    }
     /*
      * **IOC on every packet's last TRB**, which is the one place this builder
      * deliberately costs more than the others.
@@ -3388,13 +3444,18 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request)
  * been published since. The flow rules are XhciXferIsoFlowNext's.
  */
 VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
-                            ULONG cfc, ULONG sampled, ULONG fresh)
+                            ULONG cfc, ULONG sampled, ULONG fresh,
+                            ULONG hciVersion)
 {
     if (request == NULL) {
         return;
     }
+    /* Task 38.11, D8: below 1.0 no Frame ID at all, whatever HCCPARAMS1 bit
+     * 11 reads and however fresh the flow - this project's conservative
+     * policy, since whether a 0.96 part honours one is unread. */
     request->Frames.Allowed =
-        (!asap && sampled && (cfc || fresh)) ? 1UL : 0UL;
+        (!asap && sampled && (cfc || fresh) &&
+         hciVersion >= XHCI_HCIVERSION_1_0) ? 1UL : 0UL;
     request->Frames.FirstOnly = cfc ? 0UL : 1UL;
 }
 
@@ -3424,10 +3485,16 @@ ULONG XhciXferIsoFlowNext(ULONG fresh, ULONG event, ULONG queued)
 }
 
 ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
-                           ULONG cfc, ULONG sampled, ULONG fresh)
+                           ULONG cfc, ULONG sampled, ULONG fresh,
+                           ULONG hciVersion)
 {
     if (asap) {
         return XHCI_ISO_START_ASAP;
+    }
+    /* Task 38.11, D8: every explicit start below 1.0, a new flow's included;
+     * the reason then means no usable CFC capability, not a zero bit. */
+    if (hciVersion < XHCI_HCIVERSION_1_0) {
+        return XHCI_ISO_START_SIA_NO_CFC;
     }
     if (!sampled) {
         return XHCI_ISO_START_SIA_NO_SAMPLE;
@@ -3489,6 +3556,9 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
         return XHCI_XFER_BAD_PARAM;
     }
     if (request->MaxEsitPayload == 0) {
+        return XHCI_XFER_BAD_PARAM;
+    }
+    if (!xhciXferFormValid(request->TdSizeForm)) {
         return XHCI_XFER_BAD_PARAM;
     }
     /*
@@ -3558,6 +3628,7 @@ ULONG XhciXferBuildIso(const XHCI_ISO_REQUEST *request,
     state.MaxPacketSize = request->MaxPacketSize;
     state.DirectionIn = request->DirectionIn ? 1UL : 0UL;
     state.IsochControl = 0;
+    state.TdSizeForm = request->TdSizeForm;
 
     for (i = 0; i < packets; i++) {
         status = xhciXferBuildIsoPacket(

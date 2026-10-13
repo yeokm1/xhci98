@@ -1318,6 +1318,7 @@ static ULONG hcdThreadControlQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     req.TransferFlagsIn = (requestType & 0x80) != 0;
     req.MaxPacketSize = dev->Mps0;
     req.SgList = &sg;
+    req.TdSizeForm = XhciTdSizeFormOf(hc->Hc.HcInfo.HciVersion);
 
     /* The transfer's one deadline, HCD_TRANSFER_WAIT_MS, kept across every
      * wake (35-T.4: a stale mark costs its context read, not the wait): a

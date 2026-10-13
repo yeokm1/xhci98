@@ -303,6 +303,24 @@
 > (`hcdReadSilent`, `hcdTakeSilent`) and applied in `hcd_pdo.c`
 > (`hcdSilentDecide`, `hcdDeviceCapabilities`); and the switch's user
 > files `silent.reg`, `silent.vbs`, `silent-on.bat` and `silent-off.bat`.
+> Task 38.11 (design record 17 section 4.14) adds no file: xHCI 0.96
+> controllers accepted behind `XhciAccept096`. The pure halves are in
+> `xhci_caps.c` (`XhciVersionFloor`, `XhciEffectiveCapDword0`,
+> `XhciTdSizeFormOf`, the counter words `XhciVersionPairWord` and
+> `XhciVersionPolicyWord`, the floor in `XhciCheckCapDword0` and
+> `XhciDeriveHcInfo`, and HCCPARAMS2 taken as 0 below 1.0; `test_caps`)
+> and `xhci_xfer.c` (the request's `TdSizeForm`, the TD Size in KiB, the
+> Setup TRB's Transfer Type and the isochronous TBC and TLBPC written 0, no
+> Frame ID below 1.0 in `XhciXferIsoFramePolicy` and
+> `XhciXferIsoStartPlan`; `test_xfer`, `test_iso`, `test_td`); the value
+> and the qemu flavour's `XhciQemuHciVersion` are read in `hcd_ctl.c`
+> (`hcdReadValues`, `hcdVersionCounters`, and the refused start's flush),
+> the effective version at step 0c in `xhci_init.c`
+> (`xhciEffectiveCapDword0`), the seven request sites in `hcd_enum.c`,
+> `hcd_hub.c` and `hcd_io.c`, the three counter words in `xhci_counters.h`
+> and `hcd_log.c` (`test_snap`), and outside `src\` `xhcisnap\xhcisnap.c`
+> (`print_hcd_version`, `-selftest-version`) and `xhciqual\report.c` (the
+> line after HCIVERSION and the HCCPARAMS2 line below 1.0).
 > Two groups from before Phase 36 that this map did not name (added in
 > 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
 > command precondition table: would a conforming controller accept this

@@ -38,8 +38,8 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 173,
-             "the whole counter block (36.54: 167 to 172)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 176,
+             "the whole counter block (38.11: 173 to 175)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              1224 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
@@ -60,8 +60,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 173, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 173,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 176, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 176,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -717,7 +717,15 @@ static void test_counter_tail(void)
              171 * 4, "QemuStreamResyncFailed at 171");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QemuStreamRestops), 172 * 4,
              "QemuStreamRestops at 172");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 173 * 4, "173 words in all");
+    /* 38.11's three (xhcisnap.c, version_counter_names and
+     * print_hcd_version). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HciVersions), 173 * 4,
+             "HciVersions at 173");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HciAccept096Value), 174 * 4,
+             "HciAccept096Value at 174");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HciVersionPolicy), 175 * 4,
+             "HciVersionPolicy at 175");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 176 * 4, "176 words in all");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters

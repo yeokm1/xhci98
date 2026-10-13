@@ -1808,10 +1808,11 @@ findings on the draft:
 
 ### 4.14 Controllers below xHCI 1.0: version 0.96 accepted (38.11, revision 14)
 
-Roadmap-hcd task 38.11 (owner, 2026-10-13). Written before code; nothing
-here is built. The owner's decisions, those given with the task and the
-answers to the draft's questions D1 to D7, are section 4.14.11 and are
-written into the sections below.
+Roadmap-hcd task 38.11 (owner, 2026-10-13). Written before code, and
+built on 2026-10-14 (branch `p38-096`); section 4.14.12 is the code as
+built and where it departs from the text above. The owner's decisions,
+those given with the task and the answers to the draft's questions D1 to
+D7, are section 4.14.11 and are written into the sections below.
 
 **Why here.** This record is the one about running on controllers that
 depart from what the driver otherwise assumes, under section 2's rule:
@@ -2296,6 +2297,72 @@ From review round 1, answered by the owner the same day:
   controller whose CFC reads 0, taken here as the project's own
   conservative policy. Recommended (b): whether 0.96 defines or honours a
   Frame ID, and what bit 11 means there, are unread (4.14.6).
+
+#### 4.14.12 As built (2026-10-14)
+
+The code follows sections 4.14.4 to 4.14.10; what it adds or settles:
+
+- **The floor.** `XhciVersionFloor(found, value)` and the floor parameter of
+  `XhciCheckCapDword0` and `XhciDeriveHcInfo` (`xhci_caps.c`). A floor
+  other than `XHCI_HCIVERSION_0_96` - 0, a path that never latched one,
+  included - is the 1.0 floor, so nothing can open below 1.0 by accident.
+  The value and the floor are latched by `hcdReadValues` into the
+  extension (`HciFloor`, `HciAccept096Value`), beside the qemu flavour's
+  `HciQemuVersion`.
+- **The effective version.** The pure `XhciEffectiveCapDword0(raw,
+  override)` leaves an all-ones read all ones, so a device that is not
+  decoding is still refused as one under the override; `xhci_init.c`'s
+  `xhciEffectiveCapDword0` applies it in the qemu flavour only and is the
+  identity elsewhere. Step 0c records the register's and the effective
+  version, whether the override applied and, once the check accepted, the
+  TD Size form (`HciVersionRegister`, `HciVersionEffective`,
+  `HciOverrideApplied`, `HciTdSizeForm`, `HciVersionRead`; eight words
+  appended to `XHCI_EXTENSION`, the parity `TrailingPad` keeps unchanged).
+- **The counter words** are 173 to 175 (`HciVersions`, `HciAccept096Value`,
+  `HciVersionPolicy`), set to FFFFFFFFh by `HcdCountersStart`. The HCD
+  packs them (`hcd_ctl.c`, `hcdVersionCounters`) from the extension at
+  `hcdReadValues` (the value and the policy) and again as soon as
+  `XhciInitController` returns, on either outcome, before the refusal's
+  flush: the same words section 4.14.7 asks to be written at step 0c,
+  written by the layer that owns the counter block. `hcdLogCountersLocked`
+  names them `hc.versions`, `hc.accept096` and `hc.version.policy`.
+- **The notes.** `hc.version` is the effective version, before the check;
+  under the override `qemu.hciversion` (the effective) and
+  `hc.version.register` (the register's) follow it. `hc.accept096` and
+  `hc.floor` at `hcdReadValues`, and in the qemu flavour
+  `qemu.hciversion.value`.
+- **D5.** One `HcdLogFlush(hc, XHCI_LOG_REASON_FAILURE, 1)` in
+  `hcdStartBody`'s refusal branch, after `HcdCountersPoll`; nothing moved
+  into `xhciInitFailed`.
+- **The form in the builders.** `TdSizeForm` is the one version input the
+  three builders take: `XHCI_TD_SIZE_FORM_KIB` selects the KiB TD Size, the
+  last TRB kept (D1), TRT 0 (D2) and TBC and TLBPC 0 (D3); 0 or any other
+  value is `XHCI_XFER_BAD_PARAM` before anything is written. The seven
+  sites take it from `XhciTdSizeFormOf(HcInfo.HciVersion)`, the effective
+  version.
+- **D8.** `XhciXferIsoFramePolicy` and `XhciXferIsoStartPlan` take the
+  effective HCIVERSION as a sixth argument; below 1.0 the plan answers
+  `XHCI_ISO_START_SIA_NO_CFC` before the frame-sample test, so an explicit
+  start with no sample below 1.0 reads `SIA_NO_CFC`, not `SIA_NO_SAMPLE`.
+  The vectors are in `test_td` beside the 36.57 plan vectors they extend,
+  not in `test_iso`.
+- **`XHCISNAP`.** The section is "controller version", printed after
+  "stream endpoints" from the counter block: the tool prints no
+  HCIVERSION anywhere else, so there is no identity line to sit under.
+  `-selftest-version` drives it over eight canned cases and a short block;
+  `selftest.cmd` checks each line.
+- **`XHCIQUAL`.** The line follows HCIVERSION for 0.90 to 0.FF (below 0.90
+  the tool refuses the register block, as before); below 1.0 the
+  HCCPARAMS2 line prints the raw value and says the driver takes FSC and
+  LEC as 0, with no field decoded.
+- **Host tests.** `test_caps` (`test_version_floor`), `test_xfer`
+  (`test_td_size_control_forms`, `test_td_size_normal_forms`,
+  `test_td_size_big_td_forms`), `test_iso` (`test_build_td_size_forms`),
+  `test_td` (the D8 plan vectors) and `test_snap` (the three words'
+  offsets); every existing request in the suites names the packet form.
+- **The audit at code time** found nothing to change in the code beyond
+  section 4.14.3; what it found to put to the owner is in the task's
+  report (roadmap-hcd 38.11), not here.
 
 ## 5. Injection
 

@@ -7665,7 +7665,10 @@ deferral of scope recorded in the roadmap, not a correctness limit.
    list, which `test_xfer` pins on ordered, reversed and shuffled lists.
 5. **TD Size, Link TRBs and the residual.** TD Size saturates at 31
    packets remaining and is 0 on the last TRB (4.11.2.4), as the builder
-   does today (`test_build_td_size_saturates`); a TD that crosses the Link
+   does today (`test_build_td_size_saturates`); below xHCI 1.0 (task 38.11,
+   design record 17 section 4.14.5) it is Linux's KiB form instead,
+   saturating at 31 until the TD's last 31 KiB and carried on the last TRB
+   too (`test_td_size_big_td_forms`); a TD that crosses the Link
    TRB carries Chain on the Link as today's publication sets it. A short
    packet's length is the inclusive prefix of the TD's TRB lengths up to
    the named TRB less its residual (`XhciRingSumTrbLengths` walks the ring
