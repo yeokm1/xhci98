@@ -6,7 +6,8 @@ driver's code, and the quirks taken from it, each behind a registry value;
 and one fix to the driver's endpoint bookkeeping the survey exposed
 (section 5).
 
-Revision 3, 2026-10-13, answers review round 1 (section 11) with the
+Revision 4, 2026-10-13, answers review round 2 (section 11); revision 3,
+the same day, answered review round 1 with the
 owner's rulings on it (section 9). Revision 0 (first committed as
 `c06eda96`, rebased since) was the survey alone, with the decisions open;
 revision 1 folded in the owner's decisions; revision 2 the owner's later
@@ -123,8 +124,9 @@ evidence**, not "not applicable". So each id below is one of: applicable
 (a CSM read on a machine, or not a platform at all); not applicable (the
 owner's ruling that its platforms have no CSM, or not x86); or deferred
 (not established). A taken quirk keeps its deferred ids in its match,
-since matching a controller that never runs costs nothing; a quirk whose
-every id is deferred is itself deferred, not taken until evidence comes.
+since matching a controller that never runs costs nothing. Whether to take
+a quirk all of whose ids are deferred is the owner's choice per quirk: Q7
+and Q16 (AMD ids only) are taken (owner, 2026-10-13), Q17 is not.
 
 | Ids | Platform | Standing | Evidence |
 |---|---|---|---|
@@ -145,8 +147,9 @@ every id is deferred is itself deferred, not taken until evidence comes.
 The rule settles two quirks. Q6 names only Tiger Lake and Alder Lake ids
 and is not applicable by the owner's ruling. Q17 names only 22B5, whose
 Cherry Trail half is ruled out and whose Braswell half is deferred, so Q17
-is deferred pending platform evidence. Every other quirk keeps an
-applicable id.
+is deferred pending platform evidence and not taken. Q7 and Q16 name only
+deferred AMD ids and are taken by the owner's choice; every other quirk
+taken keeps at least one applicable id.
 
 ### 3.1 Taken
 
@@ -296,18 +299,28 @@ Two places change, because the first can only ask and the second decides:
   the filter keeps only the line configurations, as `XhciInterruptMode` 1
   and the no-helper x86 path already make it do (record 18 section 4.2).
   The filter runs before the start and reads no registry, so its inputs
-  are cached where the mode is: `HcdMsiAddDevice`, a system thread at
-  PASSIVE_LEVEL after the FDO is attached, also reads `XhciMsiAvoid` and the
-  vendor and device dword (configuration offset 0, through the lower stack
-  as the start reads it); each start refreshes both caches, as it does the
-  mode's. An identity that cannot be read leaves the filter as it is, and
-  the start's decision below still protects the controller. A rebalance
-  re-filters on the same cache, since the device does not change. Where the
+  are cached where the mode is. `HcdMsiAddDevice` runs before
+  `IoAttachDeviceToDeviceStack` (`hcd_entry.c`, `XhciAddDevice`), so the
+  value is cached there with the mode, and the vendor and device dword
+  (configuration offset 0) is read just after the attach, in the same
+  AddDevice, through the PCI-PDO configuration service (`hcd_svc.c`, which
+  sends to `hc->Pdo`). Each start refreshes both caches, as it does the
+  mode's. An identity that cannot be read leaves the filter as it is (and
+  is logged), and the start's decision below still protects the
+  controller. A rebalance re-filters on the same cache, since the device
+  does not change. Where the
   list has a shape the filter does not replace (record 18 section 4.2's
   unsupported shapes, `hcd_msi86.c`), it stays as given.
 - **The start's delivery decision refuses the message.** `XhciPollDecide`
-  gains the effective quirk as an input (the value, and the id read at the
-  start). With it set:
+  gains the effective quirk as an input. Its identity cannot come from
+  `PciVendorDevice`, which `XhciInitController` reads only after the
+  delivery is settled and connected (`hcd_ctl.c`: `hcdSettleDelivery`, then
+  `hcdConnect`, then `XhciInitController`); so the start reads
+  configuration offset 0 itself, through the same service, before
+  `hcdSettleDelivery`. A read that fails leaves the quirk unapplied for that
+  start, logged as "identity unread"; `XhciInitController`'s own read later
+  in the start is compared with it and a disagreement logged. With the
+  quirk effective:
 
   - **0, automatic (the default).** A message resource is never connected:
     the line where Windows granted one, and polling where it granted only a
@@ -386,9 +399,14 @@ HCRST while HCHalted is 0, and the suspend path goes on after a failed
 quiesce or halt (`XhciSuspendController`). The preconditions, each checked
 and each failure logged and the reset skipped:
 
+- a started lifetime with its BAR mapped (`ControllerStarted` and `BarVa`
+  not NULL), checked under the power gate before the first register access,
+  as 37.3's shutdown flush checks it (`hcd_power.c`: a stopped FDO keeps
+  `HcInfoStatus` and its recorded D0 with its registers unmapped);
 - the window decodes (`HcInfoStatus` good, not latched unreadable) and the
   controller is in D0;
-- USBSTS reads other than all ones and with HCH 1, read after the halt;
+- USBSTS reads other than all ones and with HCH 1, read after the halt
+  (`XhciTolHaltProven`, the test the shutdown flush uses);
 - the existing reset-readiness rules of `xhciReset` (no HCRST still
   pending, CNR handled), with its 1 ms stall and bounded wait.
 
@@ -583,89 +601,167 @@ endpoint is not yet Disabled is retired to the device
 (`dev->StreamsRetired`) and freed only on a proof (`hcdCfgRetiredReclaim`,
 `HcdCfgDeviceGone`).
 
-### 5.2 The rule
+### 5.2 The rule: an allocation is owned until a proof releases it
 
-**A pool ring returns to the pool only once its endpoint is proven
-Disabled** (owner, 2026-10-13: fix it in 38.10, the Linux way): a
-successful Configure Endpoint that drops it, a successful Reset Device
-(which disables every endpoint but EP0), a Disable Slot, an HCRST (start,
-recovery, re-initializing resume), or the slot gone - the proofs the
-stream blocks already use. xHCI 1.2c 4.6.6 (p.106) is why a failed command
-proves nothing: "If the command is unsuccessful: ... The Output Endpoint
-Contexts referenced by the command in the Device Context shall be
-unchanged"; and (p.107) "If new data structures are allocated, software
-shall be responsible for recovering the old data structures after the
-command completes". Section 4.3.6's example (p.78-79) frees the affected
-rings before the command; it is the sequence for a command that succeeds
-and does not license freeing a ring the controller still owns after one
-that failed.
+**A pool ring, and a stream block, return only once the controller is
+proven done with them** (owner, 2026-10-13: fix it in 38.10, the Linux
+way). Ownership is tracked per allocation, by the pipe object that holds
+it, never inferred afterwards from the endpoint's current state - an
+endpoint replaced by a Drop-and-Add Configure Endpoint is Running again,
+on its new context, while the old allocation is free (xHCI 1.2c 4.6.6,
+p.106-107). Each allocation is in one of three states:
 
-### 5.3 SELECT_INTERFACE and the function select, rewritten to it
+- **New:** made for a command not yet completed; the controller has never
+  seen it. A command that is refused or never issued leaves it new, and it
+  is freed at once.
+- **Owned:** installed, or possibly installed. Held, and its pipe's DCI
+  charged.
+- **Superseded:** a proof has released it: a successful Configure Endpoint
+  that names it in a drop (alone or with an add), a successful Reset Device
+  (every endpoint but EP0), a Disable Slot, an HCRST (start, recovery,
+  re-initializing resume), or the slot gone - the proofs the stream blocks
+  already use (`hcdCfgRetiredReclaim`, `HcdCfgDeviceGone`). A superseded
+  allocation may be freed or, while its pipe object is kept for a rollback
+  (section 5.3, step 4), held without being charged to the controller.
 
-1. **The old pipes are detached, not freed.** Paused, cancelled and
-   quiesced as today, then unpublished (closed to new submissions) but kept,
-   rings and all.
-2. **The new pipes are made**, rings from the pool. A pool that cannot
-   supply them fails the request before any command: the old pipes are
-   reattached as they were, nothing having changed (today's
-   `EndpointRefusalsPool` count).
+A successful command's proof is applied to the allocations it named - the
+detached old pipes and their stream blocks among them - before any
+replacement is published, so `hcdCfgPipeFree`'s present test of the DCI's
+current state (`hcd_cfg.c`, the `hcdCfgEpState` call) is not what decides
+for a pipe the transaction detached.
+
+A command has four outcomes, kept apart (the API already separates
+`HCD_CFG_NOT_ISSUED` from an issued command, and `hcdCommand` returns 0
+after a lost completion or a timeout and requests the recovery,
+`hcd_enum.c`): **not issued**; **success**; **refused** (a completion with
+an error code); and **unknown** (issued, no completion seen). Only a
+refusal is the 4.6.6 case - "If the command is unsuccessful: ... The Output
+Endpoint Contexts referenced by the command in the Device Context shall be
+unchanged" (p.106); an unobserved completion proves nothing either way, so
+after **unknown** every allocation the command named stays owned, every
+affected pipe stays detached with submissions refused, and the recovery's
+HCRST, which the timeout has already requested, supersedes them all.
+Section 4.3.6's example (p.78-79) frees the affected rings before the
+command; it is the sequence for a command that succeeds and does not
+license freeing what the controller may still hold.
+
+### 5.3 SELECT_INTERFACE, rewritten to it
+
+1. **The old pipes are aborted resumably, then detached.** Each is paused
+   and taken through the existing reusable abort, `hcdCfgAbortPaused`:
+   every request cancelled, the endpoint Stopped, the ring emptied, Set TR
+   Dequeue to the enqueue position, every stream likewise, and the
+   cancellations settled - so a pipe resumed later restarts no TD whose
+   request already completed. Then each is unpublished under the controller
+   lock (`Closed`, the published pointer cleared, its streams' handles made
+   not to resolve), but kept, with its ring, its stream block and its
+   handle. An abort that fails ends as today (`hcdCfgFault`).
+2. **The new pipes are made**, rings from the pool (new). The URB's pipe
+   entries are filled only at the end, on success (they receive candidate
+   handles before the command today, `hcd_cfg.c` in
+   `hcdCfgSelectInterface`; on any failure they are left zero). A pool that
+   cannot supply them fails the request before any command: the new pipes
+   are freed and the old reattached - republished and unpaused - nothing
+   having changed (today's `EndpointRefusalsPool` count).
 3. **The Configure Endpoint** drops the old endpoints (and any stale ones)
-   and adds the new. **If it fails**, the controller changed nothing
-   (4.6.6): the new pipes and their rings are freed at once, since the
-   controller never accepted them - as Linux's `xhci_reset_bandwidth` frees
-   only the never-installed rings (`xhci.c:3176-3198`) - and the old pipes
-   are reattached and resumed, the interface still at its old alternate
-   setting. The request fails with the command's status.
-4. **If it succeeds**, the old endpoints are proven Disabled, and the old
-   pipes and their rings are freed, as Linux frees the dropped and replaced
-   rings only after the command succeeds (`xhci_check_bandwidth`,
-   `xhci.c:3135-3167`). Then SET_INTERFACE goes to the device.
-5. **If SET_INTERFACE fails**, the device is still at the old setting and
-   the controller has the new one. The bus issues a second Configure
-   Endpoint that drops the new endpoints and re-adds the old setting's,
-   each on a fresh pool ring (the old rings went back at step 4), as
-   Linux's `usb_set_interface` restores the old setting's endpoints when
-   the request fails (`drivers/usb/core/message.c`, not in the mirror,
-   section 2.1). If it succeeds, the new pipes and their rings are freed
-   (now proven Disabled), and the old setting's pipes are opened again for
-   the interface, so the device and the controller agree; the request fails
-   with SET_INTERFACE's status. If that command fails too, or the pool
-   cannot supply the rings, the new endpoints stay enabled with their pipes
-   detached and **their rings held** (charged to the device as stale, as
-   stream blocks are retired), to be returned when a later successful
-   Configure Endpoint drops them or another proof comes; the interface has
-   no open pipe, as today.
+   and adds the new.
+   - **Not issued or refused:** the controller changed nothing (4.6.6). The
+     new pipes and their rings are freed, since the controller never saw
+     them - as Linux's `xhci_reset_bandwidth` frees only the never-installed
+     rings (`xhci.c:3176-3198`) - and the old pipes are reattached with
+     their own handles, the interface at its old alternate setting. The
+     request fails with the command's status.
+   - **Unknown:** section 5.2's rule; the interface has no open pipe and
+     the request fails.
+   - **Success:** the old allocations are superseded (as Linux frees the
+     dropped and replaced rings only after the command succeeds,
+     `xhci_check_bandwidth`, `xhci.c:3135-3167`), and the new are owned.
+     The old pipe objects are kept detached for step 4, holding their
+     superseded rings uncharged; their stream blocks are freed now (a
+     rollback re-adds an endpoint without streams, so a stream block is
+     never reused). Then SET_INTERFACE goes to the device.
+4. **SET_INTERFACE** has three outcomes, which the control path already
+   separates (`hcd_enum.c`, `HcdThreadControlEx`: completed, stalled, or not
+   established):
+   - **Completed:** the old pipe objects and their rings are freed, the new
+     pipes published and the URB's entries filled; success.
+   - **Stalled:** the device refused the request and stays at its old
+     setting, with its endpoints' data toggles or sequence numbers as they
+     were. Only here is the old setting re-instated (owner, 2026-10-13, as
+     Linux's `usb_set_interface` restores the old setting's endpoints when
+     the request fails; `drivers/usb/core/message.c`, not in the mirror,
+     section 8): a second Configure Endpoint drops the new endpoints and
+     re-adds the old setting's on their own rings, each zeroed and given a
+     fresh dequeue pointer and cycle state (4.3.6, footnote 10). Fresh
+     contexts start at DATA0 (sequence 0), so the device side is brought to
+     match before anything reopens: CLEAR_FEATURE(ENDPOINT_HALT) to each
+     re-added non-isochronous endpoint, which restarts its toggle or
+     sequence (USB 2.0 9.4.5; the mechanism `hcdCfgSetInterface` already
+     uses for its own STALL case). If the rollback command succeeds and
+     every CLEAR_FEATURE completes, the new allocations are superseded and
+     freed, and the old pipe objects are reattached with **their own
+     handles**, so a client that keeps its old handles finds them valid;
+     the request fails with the STALL status. If the rollback command is
+     refused or not issued, or a CLEAR_FEATURE fails, the new endpoints
+     stay owned and stale (charged, held), the old pipe objects are freed,
+     and the interface has no open pipe - today's outcome, with the rings
+     held. If the rollback command's outcome is unknown, section 5.2's
+     rule.
+   - **Not established** (no status stage seen, a transaction error, a
+     timeout): the device may or may not have changed its setting, so
+     nothing is re-instated on a guess. The new endpoints stay owned and
+     stale, the old pipe objects are freed, and the interface has no open
+     pipe until the client's next select or a reset settles it - today's
+     outcome, with the rings held.
 
-The old setting's pipes reopened at step 5 are new pipe objects with new
-handles: the client's request failed, and the handles it held were closed
-at step 4. Whether a client re-reads the interface after a failed
-SELECT_INTERFACE before using its pipes, or whether step 5 should reuse the
-old handles, is for the implementation to read per target's class drivers;
-the bookkeeping rule above holds either way.
+An old setting whose pipes had streams open is not re-instated even on a
+STALL: its stream handles are a dependent lifetime a fresh, streamless
+context cannot honour; it takes the "not established" branch.
 
-The same rule binds every other path that frees a pipe: the select
+### 5.4 The function select and every other path
+
+`hcdCfgSelectFunction` sends SET_INTERFACE for several interfaces in turn,
+recording each success (`dev->Alternate[n]`), so a failure can come after
+some interfaces moved: restoring every old context would leave the moved
+interfaces' device endpoints at the new setting. So the function select
+re-instates nothing. Steps 1 to 3 apply as above (resumable abort, detach,
+the owned and superseded states, the four command outcomes, the refused
+command reattaching the old pipes); a failed SET_INTERFACE on any
+interface leaves every new endpoint owned and stale, frees the old pipe
+objects, and fails the request with no open pipe for the function -
+today's outcome, with every ring held until its proof.
+
+The same ownership binds every other path that frees a pipe: the select
 configuration, the releases (`hcdCfgReleaseOne`), the deconfigure and the
-hub's pipes. The implementation audits each caller of `hcdCfgPipeFree` and
-`hcdCfgCloseMask` for a ring returned before its proof.
+hub's pipes (`hcdCfgPipeNew`, from `HcdCfgHubOpen`). The implementation
+audits each caller of `hcdCfgPipeFree` and `hcdCfgCloseMask` for an
+allocation returned before its proof.
 
-### 5.4 The bound, and Panther Point
+Locking: publication, `Closed`, the pause counts and stream visibility
+change under the controller lock, as `hcdCfgCloseMask` does today; the
+waits (the abort's, the commands', the control transfers') run on the
+thread outside it. A client's dispatch meanwhile finds a detached pipe
+closed and is refused, as it is today between close and free.
+
+### 5.5 The bound, and Panther Point
 
 With section 5.2's rule every enabled non-EP0 endpoint context holds
-exactly one pool ring until it is proven Disabled (a stream endpoint is one
-context holding its pipe's pool ring; its stream rings are in its block and
-are not contexts). So the enabled contexts never exceed 32 EP0s (one per
+exactly one charged pool ring until a proof supersedes it: hub status
+pipes come from `hcdCfgPipeNew` like every other, and a stream endpoint is
+one context holding its pipe's pool ring, its stream rings in its block
+and not contexts. So the enabled contexts never exceed 32 EP0s (one per
 enabled slot, `XHCI_MAX_SLOTS`) plus 32 pooled rings
 (`XHCI_MAX_POOL_RINGS`): 64, Panther Point's limit in Linux
 (`xhci-pci.c:350-353`). An empty pool refuses the endpoint, as today; the
-controller is never asked for a 65th context. So `XHCI_EP_LIMIT_QUIRK` needs
-no quirk of its own (owner, 2026-10-13). A host assertion proves the
-invariant on the pure model: across select, failed command, failed
-SET_INTERFACE, rollback and every proof, the pool rings held plus the
-enabled slots never pass 64, and no ring is in the pool while a context
-names it.
+controller is never asked for a 65th context. So `XHCI_EP_LIMIT_QUIRK`
+needs no quirk of its own (owner, 2026-10-13). A host assertion proves the
+invariant on the pure model: across select, every command outcome, every
+SET_INTERFACE outcome, the rollback and every proof, the charged pool rings
+plus the enabled slots never pass 64, and no ring is in the pool while it
+is owned.
 
 The cost: during an interface switch the old and the new rings are both
-held until the command completes, so a nearly full pool refuses a switch it
+held until the switch settles, so a nearly full pool refuses a switch it
 would have served before. That is the bound working, and it is counted.
 
 ## 6. What is common to every quirk taken
@@ -722,9 +818,11 @@ Each quirk's id list is a table in the pure core, matched against
 `PciVendorDevice` (device << 16 | vendor), with a host test of the match
 per quirk: every listed id matches, the neighbours and the other vendors'
 same device numbers do not, and the vendor-wide row (Q3's every 1106)
-matches every device of that vendor. HCIVERSION enters nowhere: of the two
-Linux bits keyed on it, the 0.95 one stays below the floor and the 0.96 one
-is not taken (section 3.3).
+matches every device of that vendor. No quirk taken here needs a
+version match. (Linux keys four bits on HCIVERSION: `XHCI_LINK_TRB_QUIRK`
+at 0.95 and `XHCI_AMD_0x96_HOST` at 0.96, not taken, section 3.3;
+`XHCI_SPURIOUS_SUCCESS` above 0.96, covered on every controller, section
+3.2; `XHCI_DEFAULT_PM_RUNTIME_ALLOW` at 1.20 and above, not applicable.)
 
 ### 6.3 Revision
 
@@ -752,11 +850,21 @@ skips. `XHCISNAP` prints a "Linux quirks" block naming each value, its
 Linux flag and those four.
 
 The shutdown's own actions (Q4's write, Q5's HCRST) are logged like the
-rest, but the log ring lives in memory and the next boot cannot read it:
-they reach a user only through an external capture of that shutdown - the
-`XhciLogDebugView` sink's output at stop under a debug-output viewer or a
+rest, but the log ring lives in memory and the next boot cannot read it,
+and a shutdown is not a PnP stop: its D3 path runs 37.3's flush of pending
+requests and the switchover's release (`hcd_power.c`), not the stop's
+`HcdLogFlush`. So after Q4 and Q5 have acted, and after the power gate is
+left (the thread's pass takes the gate before it flushes, `hcd_ctl.c`, so
+waiting for it inside the gate would deadlock), the D3 path wakes the
+controller thread (`HcdThreadWake`) and waits, bounded at 500 ms, for one
+pass's `HcdLogFlush` to complete (a flush generation the thread advances
+after it), before the D3 IRP goes down. The sink stays the thread's, at
+PASSIVE_LEVEL, serialized as it is now. A pass that does not come within
+the bound is not waited for further, and nothing is claimed for it. Even a
+flushed record reaches a user only through an external capture of that
+shutdown - the `XhciLogDebugView` sink under a debug-output viewer or a
 kernel debugger (`build-and-test.md`, "Getting a trace off a bare-metal
-machine"). The release notes say so.
+machine"); the release notes say so.
 
 ### 6.5 What `XHCIQUAL` reports
 
@@ -813,7 +921,7 @@ release notes say so.
   branch at the time of writing); this record assumes only what the task
   text says - the floor moves to 0.96 behind a default-on value and 0.96
   parts are driven as 1.0 but for the TD Size.
-- `usb_set_interface`'s restore on a failed request (section 5.3, step 5):
+- `usb_set_interface`'s restore on a failed request (section 5.3, step 4):
   from `drivers/usb/core/message.c`, not in the mirror; to be read at the
   pinned commit before the implementation.
 
@@ -863,7 +971,13 @@ From revision 0's open list, each with its recommendation then:
   added to `XhciStreamsOff` (round 1).
 - **The endpoint rings** (round 1): fixed in 38.10 the Linux way (section
   5), so Panther Point's 64-endpoint limit is bounded by the pool with no
-  quirk of its own.
+  quirk of its own. The owner's instruction to re-instate the old
+  alternate setting after a failed SET_INTERFACE is carried out where it is
+  known to be safe (review round 2): on a SET_INTERFACE the device STALLed,
+  with the device's toggles restarted to match; not on an outcome that was
+  not established, nor in the function select, where some interfaces may
+  already have moved, nor for a setting with streams open (section 5.3,
+  5.4). Those keep today's outcome with every ring held.
 
 ## 10. What changes in the documents
 
@@ -911,6 +1025,21 @@ Round 1 ran on revision 1 (`aee03882` after rebasing).
 | P3-10: the diagnostic states; the shutdown result across a boot | section 6.4 |
 | Names (Part B) | section 6.1 (owner took them) |
 | Q20 (Part B) | section 3.3 (owner: the id joins `XhciStreamsOff`) |
+
+Round 2 ran on revision 3 (`7c824cfc`).
+
+| Finding | Answer |
+|---|---|
+| P1-1: an unknown Configure Endpoint outcome treated as a refusal | section 5.2 (four outcomes; unknown keeps every allocation owned until the recovery's HCRST) |
+| P1-2: reattaching cancelled old pipes could restart abandoned TDs | section 5.3, step 1 (the reusable abort, `hcdCfgAbortPaused`, before detaching) |
+| P1-3: the rollback did not establish device and controller agreement | section 5.3, step 4 (re-instated only on a STALL, with CLEAR_FEATURE(ENDPOINT_HALT) restarting the device's toggles; not on an outcome not established; not with streams open); section 5.4 (no rollback in the function select) |
+| P2-4: the failed-select handle contract | section 5.3 (old pipe objects kept and reattached with their own handles; the URB's pipe entries filled only on success) |
+| P2-5: "proven Disabled" is the wrong predicate for a replacement | section 5.2 (ownership per allocation - new, owned, superseded - applied to the named allocations before publication) |
+| P2-6: Q1's identity read after delivery is settled; AddDevice before the attach | section 4.1 |
+| P2-7: Q5's live-mapping guard | section 4.5 |
+| P2-8: the shutdown's records not flushed | section 6.4 (a bounded thread flush after the gate is left) |
+| P3-9: the CSM rule against Q7 and Q16 | section 3.0 |
+| P3-10: the HCIVERSION-keyed bits | section 6.2 |
 
 ## 12. Provenance of this record
 
