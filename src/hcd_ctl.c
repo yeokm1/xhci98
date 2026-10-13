@@ -1226,6 +1226,7 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     ULONG reason;
     ULONG noLine;
     ULONG value2;
+    ULONG msiAvoid;
     NTSTATUS status;
 #if defined(XHCI_FLAVOUR_QEMU)
     ULONG value;
@@ -1348,13 +1349,19 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     }
 
     reason = XHCI_POLL_R_NONE;
+    /* Task 38.10, XhciMsiAvoid (design record 20 section 4.1): its value
+     * and this controller's identity, read before anything is mapped. */
+    msiAvoid = HcdQuirkMsiAvoid(hc, hc->PollValues.Mode);
     /* A message whose routines were found is decided as connected; a
      * connection that then fails turns it to a poll, or under mode 3 fails
      * the start (hcdConnect). */
-    delivery = XhciPollDecide(hc->PollValues.Mode, haveInterrupt, message,
-                              (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
-                              hc->PollPinStatus, hc->PollPin, HcdMsiSystem(),
-                              &reason);
+    delivery = XhciPollDecideEx(hc->PollValues.Mode, haveInterrupt, message,
+                                (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
+                                hc->PollPinStatus, hc->PollPin,
+                                HcdMsiSystem(), msiAvoid, &reason);
+    if (reason == XHCI_POLL_R_MSI_AVOIDED) {
+        HcdQuirkMsiRefused(hc);
+    }
     hc->PollDelivery = delivery;
     hc->PollReason = reason;
     hc->Counters.IntrModeRead = hc->PollValues.ModeRead;
@@ -1751,6 +1758,11 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
     InitializeListHead(&hc->DoorIrps);
+    /* Task 38.10: the shutdown's log flush (hcd_quirk.c). */
+    KeInitializeEvent(&hc->ShutFlushDone, NotificationEvent, FALSE);
+    hc->ShutFlushWanted = 0;
+    hc->ShutFlushAcked = 0;
+    hc->ShutFlushSink = 0;
     /* Task 36.3: the routing record's unread marks, not zeros, before
      * any start (a zero Mode would read as value 0). */
     XhciPirqReset(&hc->Pirq);
@@ -1950,8 +1962,11 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         KeLowerIrql(raised);
     }
     /* The poller's service back on the final successful pass, inside the
-     * power gate (record 15 section 5.3). */
+     * power gate (record 15 section 5.3); before it, task 38.10's ASMedia
+     * write, which the raised reset could not make (record 20 section
+     * 4.8). */
     if (ok) {
+        HcdQuirkAsmFlow(hc);
         HcdPollGrant(hc);
     }
     HcdPowerGateLeave(hc);
@@ -2412,6 +2427,8 @@ static VOID NTAPI hcdThread(PVOID Context)
 {
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
+    LONG ticket;
+    ULONG sunk;
 
     hc = (PHCD_CONTROLLER)Context;
     for (;;) {
@@ -2432,8 +2449,12 @@ static VOID NTAPI hcdThread(PVOID Context)
         HcdPowerGateLeave(hc);
         /* The continuous sink (26-A.8): whatever the producers recorded
          * since the last wake, emitted here at PASSIVE_LEVEL and nowhere
-         * nearer a DPC. */
+         * nearer a DPC. The shutdown's flush ticket is captured before it
+         * and acknowledged after it (task 38.10, hcd_quirk.c). */
+        ticket = hc->ShutFlushWanted;
+        sunk = hc->Hc.Log.DebugViewBytes;
         HcdLogFlush(hc, XHCI_LOG_REASON_PERIODIC, 0);
+        HcdQuirkFlushAck(hc, ticket, hc->Hc.Log.DebugViewBytes != sunk);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
     /* No door request waits for a thread that is gone (task 36.45). */
@@ -2685,6 +2706,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     for (i = 0; i < sizeof(XHCI_EXTENSION); i++) {
         p[i] = 0;
     }
+    /* Task 38.10: every quirk at its default and unread, before the
+     * delivery reads XhciMsiAvoid (hcd_quirk.c). */
+    HcdQuirkStartBegin(hc);
     /* The power fallback's marker describes the controller this start
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
@@ -2878,6 +2902,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     }
     hcdTolApplies(hc);
     hcdFirmwareNote(hc);
+    /* Task 38.10: the quirks' values, the lists matched against the id just
+     * read, and the ASMedia write before anything is enumerated. */
+    HcdQuirkStart(hc);
     /* Task 36.3: the route repaired before the first interrupt is enabled. */
     hcdPirqStart(hc);
     /* Before the thread runs, so no backstop pass reads it mid-write. */

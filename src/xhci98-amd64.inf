@@ -167,6 +167,23 @@ HKR,,XhciWideMap,0x00010003,0
 HKR,,XhciSelectiveSuspend,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
+; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
+; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
+; where the record offers it. Absent reads as the default written here.
+HKR,,XhciMsiAvoid,0x00010003,1
+HKR,,XhciStreamsOff,0x00010003,1
+HKR,,XhciResumeReinit,0x00010003,1
+HKR,,XhciIntelShutdownToEhci,0x00010003,1
+HKR,,XhciShutdownReset,0x00010003,0
+HKR,,XhciSuspendHaltDelay,0x00010003,1
+HKR,,XhciSuspendHaltTimeout,0x00010003,1
+HKR,,XhciAsmediaFlowControl,0x00010003,1
+HKR,,XhciTiIntervalCap,0x00010003,1
+HKR,,XhciStuckLinkReset,0x00010003,1
+HKR,,XhciStreamRingPad,0x00010003,1
+HKR,,XhciControlLinkNoOp,0x00010003,1
+HKR,,XhciIsochSpuriousSuccess,0x00010003,1
+HKR,,XhciAmdSuspendBitClear,0x00010003,1
 HKR,,XhciImodInterval250ns,0x00010003,160
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01

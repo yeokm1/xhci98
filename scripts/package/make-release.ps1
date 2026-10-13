@@ -4714,6 +4714,13 @@ May be addressed in a later release:
     devices come back. Seen in virtual machines, with the controller
     polled as well; not on Windows 98 SE.
 
+  * INTEL 7-SERIES (PANTHER POINT, 8086:1E31): TOO MANY PERIODIC DEVICES AT
+    ONCE MAY LOSE DATA INSTEAD OF BEING REFUSED. Found by reading Linux's
+    code, not measured: Linux keeps its own bandwidth accounting on this
+    controller (XHCI_SW_BW_CHECKING) because it accepts periodic schedules
+    - audio, mice, keyboards, hubs - that it cannot serve. This driver
+    relies on the controller's own admission there.
+
 Untested ground:
 
   * SUPERSPEED ISOCHRONOUS TRANSFERS. Built from the specification. No
@@ -4767,6 +4774,11 @@ Untested ground:
     raised one under this driver yet. XhciIntervalCap and XhciAvgTrbEsit
     have been read on no AMD or other real controller.
 
+  * LINUX'S CONTROLLER QUIRKS (XhciMsiAvoid and the thirteen others,
+    section 9). Built from Linux's handling and the xHCI specification;
+    none has been read on a controller it lists, and QEMU's controller is
+    on no list.
+
 
 ==============================================================================
  8. WHAT IS IN THIS DIRECTORY
@@ -4791,8 +4803,8 @@ debug throughout, in its build scripts and its documentation alike.)
 
 Every value this driver reads from the controller's driver key but
 XhciSilentInstall, which the install does not write (the silent install,
-above). There are twenty-one, all DWORDs, and the install writes all
-twenty-one, each at the default it states below except
+above). There are thirty-five, all DWORDs, and the install writes all
+thirty-five, each at the default it states below except
 XhciImodInterval250ns, which it writes as 160, and XhciForceBulkOnly,
 which it writes as 0 where absent counts as 1, so every one is already
 in the key to change. The install writes
@@ -5071,12 +5083,13 @@ A value that is absent means the default each one states.
   XhciIntervalCap  -  the AMD interrupt-interval cap
   ..................................................
 
-  Default 1: on AMD controllers (PCI vendor 1022) only, an interrupt
-  endpoint - a mouse, a keyboard, a hub - asking to be polled less often
-  than every 32 ms is polled every 32 ms, as Linux does on some AMD
-  controllers. Audio is never capped. Set it to 0 to turn it off, or to 2
-  to apply it on every controller; absent or any other number is 1. Read
-  when the controller starts. Read on no AMD controller yet.
+  Default 1: on AMD controllers (PCI vendor 1022) and the ATI Navi10's
+  USB-C controller (1002:7316) only, an interrupt endpoint - a mouse, a
+  keyboard, a hub - asking to be polled less often than every 32 ms is
+  polled every 32 ms, as Linux does on some AMD controllers and on that
+  one. Audio is never capped. Set it to 0 to turn it off, or to 2 to apply
+  it on every controller; absent or any other number is 1. Read when the
+  controller starts. Read on no AMD or ATI controller yet.
 
   XhciAvgTrbEsit  -  a comparison switch
   ......................................
@@ -5213,9 +5226,94 @@ A value that is absent means the default each one states.
   and XHCISNAP's "controller version" lines say what the driver decided.
   No 0.96 controller has run under this driver yet.
 
-  THOSE TWENTY-ONE ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
-  XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
-  the key by an earlier install has no effect, because this driver reports
+  Linux's controller quirks  -  fourteen values
+  .............................................
+
+  Linux's xHCI driver works around faults of particular controllers, each
+  named by its PCI vendor and device ID (vendor:device below). This driver
+  takes fourteen of them, each behind a value of its own; the faults and
+  the lists are Linux's, the code this driver's own. Every one reads the
+  same way:
+
+      0   off on every controller.
+      1   on the controllers listed: the default for all but
+          XhciShutdownReset, whose default is 0.
+      2   on every controller, where the entry says so. On
+          XhciIntelShutdownToEhci, XhciAsmediaFlowControl and
+          XhciAmdSuspendBitClear, which write one vendor's own registers,
+          2 is read as 1.
+      Absent, not a DWORD or any other number is the default.
+
+  Matched by vendor and device ID alone; the revision is logged, never
+  matched. Read when the controller starts, so restart after changing one.
+  XHCISNAP's report has a "Linux quirks" block: each value as read,
+  whether this controller is listed, whether it applies, what it last did.
+  NONE HAS BEEN READ ON A CONTROLLER IT LISTS. The Linux flag is in
+  brackets.
+
+  XhciMsiAvoid (XHCI_BROKEN_MSI; 1B73:1000, 1B73:1400): on Vista and 7,
+    no message-signalled interrupt - these controllers never raise one.
+    Under XhciInterruptMode 0 the line is asked for, and a message granted
+    anyway is not used: the controller is polled. XhciInterruptMode 3, a
+    message by name, is honoured. 2: every controller.
+  XhciStreamsOff (XHCI_BROKEN_STREAMS; 1B73:1000, 1B73:1009, 1B6F:7023,
+    1B6F:7052, 1106:3432, 1B21:1042, 17CD:0200): no UAS streams; a drive
+    that offers Bulk-Only uses it, a UAS-only drive at SuperSpeed goes to
+    its USB 2.0 port. 2: every controller.
+  XhciResumeReinit (XHCI_RESET_ON_RESUME; 1022:15E5, 1B6F:7023,
+    1B6F:7052, 1912:0015, every VIA 1106, 1DB7:DC27, 1B21:3042,
+    1D17:9202): after standby or hibernation the controller is started
+    afresh and every device found again. 2: every controller.
+  XhciIntelShutdownToEhci (XHCI_SPURIOUS_REBOOT; 8086:1E31, 8086:9C31,
+    8086:9CB1): at shutdown the switchable connectors go back to the USB
+    2.0 controller, WHATEVER XhciIntelPortSwitch SAYS, against a machine
+    that powers itself back on. 2 is read as 1.
+  XhciShutdownReset (XHCI_SPURIOUS_WAKEUP; 8086:9C31, 8086:9CB1): OFF BY
+    DEFAULT. At 1 the controller is reset at shutdown once it has proved
+    halted, for a machine that wakes by itself after shutting down.
+    2: every controller.
+  XhciSuspendHaltDelay (XHCI_SUSPEND_DELAY; 1022:145C, 1022:15E0,
+    1022:15E1, 1022:43BB): a 1.5 ms pause before the controller is halted
+    for standby, hibernation or shutdown. 2: every controller.
+  XhciSuspendHaltTimeout (XHCI_SLOW_SUSPEND; 1B73:1000): that halt may
+    take up to 640 ms instead of 32 ms; it ends as soon as the controller
+    halts. 2: every controller.
+  XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL; 1B21:1142, the
+    ASM1042A): a vendor flow-control setting after each start, recovery
+    and resume. 2 is read as 1.
+  XhciTiIntervalCap (XHCI_LIMIT_ENDPOINT_INTERVAL_7; 104C:8241): an
+    interrupt endpoint of a High-Speed or faster device is polled at least
+    every 8 ms; audio is never capped. 2: every controller.
+  XhciStuckLinkReset (XHCI_MISSING_CAS; 8086:22B5, 8086:9D2F, 8086:A12F,
+    8086:5AA8, 8086:19D0): after a resume, a USB 3 port stuck in its
+    link's Polling state is reset once. 2: every controller.
+  XhciStreamRingPad (XHCI_TRB_OVERFETCH; 1106:3483, the VL805, 1D17:9202,
+    1D17:9203): spare memory after each block of UAS stream rings, which
+    these controllers read past. 2: every controller.
+  XhciControlLinkNoOp (XHCI_ETRON_HOST, part; 1B6F:7023, 1B6F:7052): a
+    SuperSpeed control transfer kept from straddling the end of its ring.
+    2: every controller, SuperSpeed devices only.
+  XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part; the same two): a false
+    success after an audio packet's error is dropped. 2: every controller.
+  XhciAmdSuspendBitClear (XHCI_DISABLE_SPARSE; 1022:15E5): bit 17 of the
+    controller's register at C12Ch cleared before each standby,
+    hibernation and shutdown, as Linux does. 2 is read as 1.
+
+  On the project's own machines: the E460's 8086:9D2F (XhciStuckLinkReset),
+  the B490's 8086:1E31 and the E7250's 8086:9CB1 (XhciIntelShutdownToEhci;
+  XhciShutdownReset lists the E7250's but is off). A user holds a VL805.
+
+  WHAT HAPPENS AT SHUTDOWN IS SEEN ONLY IN A CAPTURE OF THAT SHUTDOWN.
+  XhciIntelShutdownToEhci and XhciShutdownReset log what they did, but the
+  log lives in memory and is gone at the next start, so XHCISNAP never
+  shows it. Set XhciLogVerbosity to 2 or above (below it nothing is
+  recorded) and XhciLogDebugView to 1, and attach a debug-output viewer or
+  a kernel debugger to the shutdown to see it.
+
+  THOSE THIRTY-FIVE ARE THE WHOLE LIST. The earlier releases'
+  XhciVirtualHSHub, XhciVirtualHSHubVid and XhciVirtualHSHubPid are not
+  read: a copy left in the key by an earlier install has no effect, because
+  this driver reports
   every device at its true speed with no virtual hub in the way. Delete
   them if you want them gone.
 

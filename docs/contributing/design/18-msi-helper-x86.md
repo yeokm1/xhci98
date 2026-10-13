@@ -468,6 +468,20 @@ meet a rebalance's filter with the previous mode, and the start's own
 fresh reading then governs as above. That is recorded (`FilterModeRaw`
 beside the start's value), not prevented.
 
+**`XhciMsiAvoid` (task 38.10, design record 20 sections 4.1 and 13).** A
+third reason to ask for the strip: under effective mode 0, on a controller
+Linux's `XHCI_BROKEN_MSI` names (Fresco Logic 1B73:1000 and 1B73:1400 at
+value 1; every controller at 2), the filter asks for the line alone, as
+mode 1 does (`HcdMsiFilter`, from `hcd_quirk.c` `HcdQuirkFilterAvoid`). It
+reads no registry, as above: `AddDevice` caches the raw `XhciMsiAvoid`
+beside the mode and, after `IoAttachDeviceToDeviceStack`, reads the
+controller's vendor and device dword (configuration offset 0) through the
+PCI PDO's configuration service (`HcdQuirkAddDevice`); each start refreshes
+both. With no identity ever read the filter leaves the list as it is, and
+the start's own decision (record 15 section 4, reason 19) still keeps the
+message from being connected under mode 0. A rebalance re-filters on the
+same caches; mode 3's message is never stripped for it.
+
 Otherwise (amd64 in modes 0 and 2; x86 with the helper bound in those
 modes) the filter walks, classifies and records the list (steps 1 to 5)
 and changes nothing: outcome "not asked". Mode 3 asks for the message keep above, never for

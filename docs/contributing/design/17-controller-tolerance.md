@@ -1092,6 +1092,18 @@ cap leaves too. An endpoint mode 4 does not change goes through the cap as
 above. Host vectors cover each combination of the cap's three values with
 fast polling's modes, mode 4 included, and the fallback.
 
+**Task 38.10 (design record 20 sections 4.9, 4.10 and 13).** The cap's
+value 1 also covers 1002:7316, the ATI Navi10's USB-C controller, the one
+id of Linux's `XHCI_LIMIT_ENDPOINT_INTERVAL_9` outside vendor 1022
+(`XhciTolCapApplies`); its threshold, its endpoint types and its 0 and 2
+are unchanged. Beside it, `XhciTiIntervalCap` takes the same shape for TI's
+TUSB73x0 (104C:8241, Linux's `XHCI_LIMIT_ENDPOINT_INTERVAL_7`): an
+interrupt endpoint of a High-Speed or faster device whose Interval is 7 or
+more is programmed at 6, isochronous endpoints never (owner, 2026-10-13).
+It is applied after this cap (`XhciTolTiCapInterval` in `hcdCfgTolerance`),
+as Linux orders the two, so the ordering with fast polling above carries
+over: eligibility is still judged on the uncapped Interval.
+
 **The Average TRB Length switch** (owner, 2026-10-06). Revision 0 proposed
 taking the Average TRB Length of a periodic endpoint as its Max ESIT
 Payload, as Linux programs it; review round 1 showed the field enters the

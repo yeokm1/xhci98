@@ -9,6 +9,10 @@
 #include "xhci_tol.h"
 
 #define XHCI_TOL_VENDOR_AMD         0x1022UL
+/* Task 38.10 (design record 20 section 4.10): the ATI Navi10 USB-C
+ * controller, Linux's one XHCI_LIMIT_ENDPOINT_INTERVAL_9 id outside vendor
+ * 1022 (xhci-pci.c:304-306), under XhciIntervalCap's value 1. */
+#define XHCI_TOL_ATI_NAVI10_XHCI    0x73161002UL
 
 ULONG XhciTolMode(ULONG found, ULONG value)
 {
@@ -42,7 +46,8 @@ ULONG XhciTolCapApplies(ULONG capMode, ULONG vendorDevice)
         return 1;
     }
     if (capMode == XHCI_TOL_CAP_GATED) {
-        return ((vendorDevice & 0xFFFFUL) == XHCI_TOL_VENDOR_AMD) ? 1UL : 0UL;
+        return ((vendorDevice & 0xFFFFUL) == XHCI_TOL_VENDOR_AMD ||
+                vendorDevice == XHCI_TOL_ATI_NAVI10_XHCI) ? 1UL : 0UL;
     }
     return 0;
 }
@@ -52,6 +57,16 @@ ULONG XhciTolCapInterval(ULONG applies, ULONG isInterrupt, ULONG interval)
     if (applies && isInterrupt &&
         interval > XHCI_TOL_INTERVAL_CAP) {
         return XHCI_TOL_INTERVAL_CAP;
+    }
+    return interval;
+}
+
+ULONG XhciTolTiCapInterval(ULONG applies, ULONG isInterrupt,
+                           ULONG highOrAbove, ULONG interval)
+{
+    if (applies && isInterrupt && highOrAbove &&
+        interval > XHCI_TOL_TI_INTERVAL_CAP) {
+        return XHCI_TOL_TI_INTERVAL_CAP;
     }
     return interval;
 }

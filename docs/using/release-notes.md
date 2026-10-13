@@ -230,6 +230,16 @@ included.
   carries `XHCICLN.EXE` and `XHCICL64.EXE`, an optional tool that lists the
   old entries an update leaves behind and, on Windows 2000 to 7, removes
   them; on 98 SE and ME it lists only.
+- **Linux's controller quirks, fourteen of them, each behind a value of
+  its own.** Linux's xHCI driver works around faults of particular
+  controllers, named by PCI vendor and device ID; this release takes
+  fourteen of those workarounds, each a new value under the controller's
+  driver key with `0` off, `1` Linux's controllers (the default for all but
+  `XhciShutdownReset`, which is off) and, where it is generic, `2` every
+  controller, and `XhciIntervalCap` now also covers the ATI Navi10's USB-C
+  controller (`1002:7316`). The install writes each at its default, and an
+  update adds them. None has been read on a controller it lists. See
+  "Linux's controller quirks".
 
 ## What `2.3.1.0` changes
 
@@ -1414,7 +1424,8 @@ Two settings concern AMD controllers in particular (both under "Registry
 settings"). **`XhciIntervalCap`**: Linux polls an interrupt endpoint that
 asks for more than 32 ms every 32 ms on some AMD controllers; this driver
 does the same on every AMD controller (PCI vendor `1022`), the AM5 and X570
-ones included, which Linux does not list. **`XhciAvgTrbEsit`** is a
+ones included, which Linux does not list, and from `2.4.0.0` on the ATI
+Navi10's USB-C controller (`1002:7316`), which Linux lists too. **`XhciAvgTrbEsit`** is a
 comparison switch, off by default, that changes one figure the controller is
 told for each interrupt endpoint, for a tester whose machine misbehaves to
 try. And **`XhciTolerance`** set to `0` turns everything in the list above
@@ -1532,6 +1543,12 @@ no message-signalled interrupts and are unchanged.
   `HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr` with `regedit` and
   restart. The `2.3.0.0` and `2.3.1.0` helper is removed the same way with
   `sc delete xhcimsi`; an update to `2.4.0.0` removes it by itself.
+- **A controller that never raises its message** (from `2.4.0.0`): on the
+  Fresco Logic controllers Linux names (`XhciMsiAvoid`, "Linux's
+  controller quirks"), `XhciInterruptMode` `0` asks Windows for the line
+  and never uses a message: the line where Windows grants one, polling
+  where it grants only a message. `XHCISNAP` gives the reason as "a
+  message granted, refused by XhciMsiAvoid".
 
 `XHCISNAP` shows which delivery the controller uses. These behaviours were
 read in QEMU guests (the readings are listed in the run record), and on
@@ -1543,7 +1560,7 @@ by default, with nothing for the backstop to drain, and the line under
 
 Each value is a `DWORD` in the controller's driver (software) key, and
 the install writes every value the driver reads but `XhciSilentInstall`,
-twenty-one, in this key:
+thirty-five, in this key:
 
 | Windows | Key |
 |---|---|
@@ -1562,7 +1579,7 @@ that say so, disable and enable the controller in Device Manager).
 `XhciForceBulkOnly` is the exception: it is read as each device is
 enumerated ("XhciForceBulkOnly").
 
-The install writes all twenty-one: each at the driver's own default, except
+The install writes all thirty-five: each at the driver's own default, except
 `XhciImodInterval250ns` at `160` and `XhciForceBulkOnly` at `0`, which
 the driver reads as `1` when it is absent (text-mode Setup;
 "XhciForceBulkOnly"). Each is written only where it is missing,
@@ -1575,9 +1592,11 @@ default, set it by hand, or delete the value and update the driver.
 them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
 `XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
 install too, at the value that reads as a missing one; an update keeps any
-of them you had already added. `XhciPollFineTimer` (`1`) and
-`XhciAccept096` (`1`) are new in `2.4.0.0`, and an update over `2.3.0.0` or
-`2.3.1.0` adds them. Since `2.3.0.0` the
+of them you had already added. `XhciPollFineTimer` (`1`),
+`XhciAccept096` (`1`) and the fourteen values of Linux's controller
+quirks ("Linux's controller quirks", below) are new in `2.4.0.0`, each
+written at its default, and an update over `2.3.0.0` or `2.3.1.0` adds
+them. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written
@@ -1956,7 +1975,7 @@ within USB 2.0 and costs a few polls a second for such a device.
 
 | Value | Effect |
 |---|---|
-| `1`, any other number, absent, or not a `DWORD` | The cap on AMD controllers (PCI vendor `1022`) only |
+| `1`, any other number, absent, or not a `DWORD` | The cap on AMD controllers (PCI vendor `1022`) and, from `2.4.0.0`, on the ATI Navi10's USB-C controller (`1002:7316`, Linux's `XHCI_LIMIT_ENDPOINT_INTERVAL_9`) only |
 | `0` | Off on every controller |
 | `2` | The cap on every controller |
 
@@ -2188,6 +2207,138 @@ controller's initialization refuses (a Code 10 at any of its steps, the
 version check among them) now writes its log and counters to DebugView,
 the version among them; a start refused before that, for want of
 resources or a register window, does not.
+### Linux's controller quirks
+
+New in `2.4.0.0`; the install writes each value at its default. Linux's
+xHCI driver works around faults of particular controllers, each named by
+its PCI vendor and device ID. This driver takes fourteen of those
+workarounds, each behind a value named for what it does, and adds one
+controller to `XhciIntervalCap` (above). The faults and the controller
+lists are Linux's, read in its `drivers/usb/host/xhci-pci.c`; the code is
+this driver's own, written from design record 20, which also says which of
+Linux's quirks were not taken and why.
+
+Every value reads the same way:
+
+| Value | Effect |
+|---|---|
+| `0` | Off on every controller |
+| `1` | On the controllers listed for it below: the default, except for `XhciShutdownReset`, whose default is `0` |
+| `2` | On every controller, where the entry below says so. On `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear`, which write one vendor's own registers, a `2` is read as `1` |
+| absent, not a `DWORD`, or any other number | The default |
+
+A controller is matched by its vendor and device ID alone; its revision is
+read and logged, never matched. Each value is read when the controller
+starts, so a change takes effect at the next restart, or at a disable and
+enable of the controller. `XHCISNAP`'s report has a "Linux quirks" block
+naming each value with its Linux flag: the value as read (and whether it
+was absent, of another type, an unknown number, or a `2` read as `1`),
+whether this controller is on its list, whether the quirk applies, and what
+it last did (done, skipped and why, or failed), then counts of what each
+did.
+
+- **`XhciMsiAvoid`** (Linux's `XHCI_BROKEN_MSI`; Fresco Logic `1B73:1000`
+  and `1B73:1400`). These controllers offer a message-signalled interrupt
+  and never raise it. Only Vista and 7 use one. Under `XhciInterruptMode`
+  `0` the driver asks Windows for the interrupt line instead, and a message
+  Windows grants anyway is not used: the controller is polled ("Windows
+  Vista and 7: message-signalled interrupts"). `XhciInterruptMode` `1` and
+  `2` are unchanged, and `3`, a message by name, is honoured, the report
+  saying the quirk was overridden. `2` applies it on every controller.
+- **`XhciStreamsOff`** (`XHCI_BROKEN_STREAMS`; Fresco Logic `1B73:1000`,
+  `1B73:1009`; Etron `1B6F:7023`, `1B6F:7052`; VIA `1106:3432`; ASMedia
+  `1B21:1042`; and Cadence `17CD:0200`, whose separate stream-context
+  quirk in Linux is answered here by giving it no streams). The controller
+  is treated as having no streams: a drive that offers Bulk-Only as well
+  uses Bulk-Only, and a UAS-only drive at SuperSpeed is sent back to its
+  USB 2.0 port and runs UAS there ("SuperSpeed and UAS"). `2` on every
+  controller.
+- **`XhciResumeReinit`** (`XHCI_RESET_ON_RESUME`; AMD `1022:15E5`; Etron
+  `1B6F:7023`, `1B6F:7052`; Renesas `1912:0015`; every VIA (`1106`)
+  controller; Phytium `1DB7:DC27`; ASMedia `1B21:3042`; Zhaoxin
+  `1D17:9202`). These controllers do not keep their state across standby
+  or hibernation, so the driver saves nothing and starts the controller
+  afresh at the resume: every device on it is found again, as on a
+  controller without Force Save Context. `2` on every controller.
+- **`XhciIntelShutdownToEhci`** (`XHCI_SPURIOUS_REBOOT`; Intel `8086:1E31`,
+  `8086:9C31`, `8086:9CB1`). On some machines with these chipsets a
+  computer shut down with its switchable connectors on the xHCI controller
+  powers itself back on. At shutdown the driver hands every switchable
+  connector back to the USB 2.0 controller, writing both routing registers
+  `0`, whatever `XhciIntelPortSwitch` says: also at its default `0`, which
+  otherwise writes nothing ("Intel 7-, 8- and 9-series chipsets: the port
+  switchover"). A `2` is read as `1`.
+- **`XhciShutdownReset`** (`XHCI_SPURIOUS_WAKEUP`; Intel `8086:9C31`,
+  `8086:9CB1`). **Off by default.** Linux resets these controllers at
+  shutdown because of spurious wakes. At `1` this driver resets the
+  controller at shutdown, and only once it has proved the controller
+  halted. Nothing read here shows the fault, and the E7250 (`9CB1`) shuts
+  down without it; set it on a machine that wakes by itself after shutting
+  down. `2` on every controller.
+- **`XhciSuspendHaltDelay`** (`XHCI_SUSPEND_DELAY`; AMD `1022:145C`,
+  `1022:15E0`, `1022:15E1`, `1022:43BB`). A 1.5 ms pause before the
+  controller is halted for standby, hibernation or shutdown. `2` on every
+  controller.
+- **`XhciSuspendHaltTimeout`** (`XHCI_SLOW_SUSPEND`; Fresco Logic
+  `1B73:1000`, every revision, where Linux names revision 04). The halt for
+  standby, hibernation or shutdown may take up to 640 ms instead of 32 ms;
+  the wait ends as soon as the controller halts, so a healthy one loses
+  nothing. Every other halt keeps 32 ms. `2` on every controller.
+- **`XhciAsmediaFlowControl`** (`XHCI_ASMEDIA_MODIFY_FLOWCONTROL`; the
+  ASMedia ASM1042A, `1B21:1142`). A vendor flow-control setting written
+  through the controller's configuration space after each start, each
+  recovery and each resume. One that cannot be made is logged and the
+  controller goes on. A `2` is read as `1`.
+- **`XhciTiIntervalCap`** (`XHCI_LIMIT_ENDPOINT_INTERVAL_7`; TI's
+  TUSB73x0, `104C:8241`). An interrupt endpoint of a High-Speed or faster
+  device that asks to be polled less often than every 8 ms is polled every
+  8 ms. Low- and Full-Speed devices and isochronous (audio) endpoints are
+  never capped. It is applied after `XhciIntervalCap`. `2` on every
+  controller.
+- **`XhciStuckLinkReset`** (`XHCI_MISSING_CAS`; Intel `8086:22B5`,
+  `8086:9D2F`, `8086:A12F`, `8086:5AA8`, `8086:19D0`). After a resume that
+  restored the controller's state, a USB 3 port found stuck in its link's
+  Polling state, with nothing attached reported, is warm-reset once, so a
+  device there can be found. A port stuck in Compliance was already reset
+  on every controller. `2` on every controller.
+- **`XhciStreamRingPad`** (`XHCI_TRB_OVERFETCH`; the VIA VL805,
+  `1106:3483`; Zhaoxin `1D17:9202`, `1D17:9203`). These controllers read
+  past the end of a ring, so each block of UAS stream rings is given one
+  ring's worth of spare memory after it. `2` on every controller.
+- **`XhciControlLinkNoOp`** (part of `XHCI_ETRON_HOST`; Etron's EJ168,
+  `1B6F:7023`, and EJ188, `1B6F:7052`). A SuperSpeed device's control
+  transfer that would begin at the last place before its ring wraps is
+  moved past the wrap with a No Op, so its stages are not split. `2` on
+  every controller, still for SuperSpeed devices only.
+- **`XhciIsochSpuriousSuccess`** (part of `XHCI_ETRON_HOST`; the same two).
+  On an isochronous (audio) endpoint, a success the controller reports for
+  a packet it has already answered with an error is dropped and counted.
+  `2` on every controller.
+- **`XhciAmdSuspendBitClear`** (`XHCI_DISABLE_SPARSE`; AMD `1022:15E5`).
+  Bit 17 of the controller's register at offset `C12Ch` is cleared before
+  each standby, hibernation and shutdown, as Linux does; neither Linux's
+  source nor this driver says what the bit does. Only where that register
+  lies inside the controller's memory window. A `2` is read as `1`.
+
+**Read on hardware: none.** Every one of these ships unread on the
+controllers it lists. Three listed controllers are the project's own: the
+ThinkPad E460's `8086:9D2F` (`XhciStuckLinkReset`), the Lenovo B490's
+`8086:1E31` (`XhciIntelShutdownToEhci`) and the Dell Latitude E7250's
+`8086:9CB1` (`XhciIntelShutdownToEhci`; `XhciShutdownReset` lists it but is
+off by default). A user holds a VIA VL805 (`XhciResumeReinit`,
+`XhciStreamRingPad`). QEMU's controller (`1B36:000D`) is on no list, so a
+virtual machine shows only each value read and the quirk not applying, and
+what `2` reaches.
+
+**What happens at shutdown is seen only in a capture of that shutdown.**
+`XhciIntelShutdownToEhci` and `XhciShutdownReset` act as the machine shuts
+down, and log what they did, but the log lives in memory and the next start
+cannot read it, so `XHCISNAP` never shows it. The driver sends those lines
+out before the shutdown goes on, waiting for its thread for at most half a
+second, and they reach you only with `XhciLogVerbosity` at `2` or above
+(below it the lines are not recorded at all) and `XhciLogDebugView` set to
+`1`, with a debug-output viewer or a kernel debugger attached to that
+shutdown ("The log, and how to send one").
 
 ### XhciLogVerbosity and XhciLogDebugView: the log
 
@@ -2595,6 +2746,16 @@ or says it was found by reading the code.
   restart asked for, and a polled controller keeps the clock tick until
   the helper loads at the next start of Windows ("XhciPollFineTimer: a
   finer system timer while polling"). Text-mode Setup (F6) has no helper.
+- **Intel 7-series (Panther Point, `8086:1E31`): a periodic schedule
+  larger than the controller can serve may lose data instead of being
+  refused.** Found by reading Linux's code, not measured. Linux keeps its
+  own bandwidth accounting on this controller (`XHCI_SW_BW_CHECKING`),
+  because the controller accepts periodic schedules - audio, mice,
+  keyboards, hubs' status - that it cannot then serve. This driver relies
+  on the controller's own admission there, as on every controller, so too
+  many periodic devices at once may lose data rather than be refused. It
+  was not taken in `2.4.0.0` ("Linux's controller quirks"); a later release
+  may take it if a report needs it.
 
 `2.0.0.0`'s list also had "a device moved to a different port is found
 again as new hardware", which `2.1.0.0` answers for every device with a
@@ -2648,6 +2809,7 @@ information.
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
 | A finer system timer while polling (`XhciPollFineTimer`), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. Unread on every guest and every machine, owed to the test matrix: the timer's effect and its release, at a stop, a sleep and a recovery; two controllers; the helper's install on 2000 and XP and its replacement of `xhcimsi.sys` on Vista and 7 ("XhciPollFineTimer: a finer system timer while polling") |
 | A High Speed hub and a USB 3 hub under the `2.4.0.0` ids (`USB\XHCI98_HUB`, `USB\XHCI98_HUB30`) | Built against host tests and the INF gate. Virtual machines model only a Full Speed hub, which takes the same id and code path as a High Speed one (`USB\XHCI98_HUB`) and stands for it before the release; a High Speed hub and a USB 3 hub's two halves under the new ids are read on real hardware after the release |
+| Linux's controller quirks (`XhciMsiAvoid` and the thirteen others, and `XhciIntervalCap` on `1002:7316`) | Built from Linux's handling and the xHCI specification against host tests. None has been read on a controller it lists, though the project's E460 (`9D2F`), B490 (`1E31`) and E7250 (`9CB1`) and a user's VL805 are listed for some ("Linux's controller quirks"). QEMU's controller is on no list. What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is visible only in an external capture of that shutdown |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing

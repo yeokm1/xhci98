@@ -299,6 +299,30 @@ Space Enable clear, Tier B is unavailable and the report says the read-only
 probe left MSE unchanged; use an active mode only after the inventory is
 captured.
 
+Each xHCI report opens with its `quirks:` lines, from Linux's quirk list
+(the README's "The `quirks:` lines" has the forms). A quirk the driver
+takes is printed as the driver's registry value with the Linux flag
+beside it. For the E460's Sunrise Point-LP (`8086:9D2F`) this build
+prints the lines below; they were printed by this build's `quirks.c`
+compiled on the build host, not by a run on the machine, whose saved
+`PROBE.LOG` predates them:
+
+```text
+  quirks: Intel Sunrise Point-LP (100-series)
+    - XhciStuckLinkReset (Linux XHCI_MISSING_CAS)
+      a USB3 port stuck in Polling warm-reset after resume
+    - Linux XHCI_AVOID_BEI: covered
+      BEI in isoch TRBs; xhci98 never sets it
+    - Linux XHCI_PME_STUCK_QUIRK: PME wake latch bug
+      matters on Win2000 power transitions
+```
+
+A controller can print two `quirks:` lines, its own id's and its
+vendor's (VIA, Zhaoxin and AMD have vendor-wide rows). A listed controller
+whose HCIVERSION is below the driver's floor gets a last item saying the
+driver refuses it, so none of the values above acts there; record such a
+part, since the driver will not start it.
+
 Each controller report carries a PCI Power Management block, which on real
 silicon looks like:
 
@@ -992,14 +1016,20 @@ active test.
 
 ### AMD (PCI vendor `1022`) - the report-only rows and the controller-fault report
 
-Since roadmap-hcd task 35-T.8 `quirks.c` names fifteen AMD xHCI ids, with
-no flag set: the tool acts on none of them, and the `quirks:` line only
-says what Linux's `xhci-pci.c` does with the part - the eight ids Linux
+Since roadmap-hcd task 35-T.8 `quirks.c` names AMD xHCI ids (sixteen
+since task 38.10 added `145C`). The tool acts on none of them; the
+`quirks:` lines say what Linux's `xhci-pci.c` does with the part and,
+since task 38.10, which of the driver's values that becomes (README, "The
+`quirks:` lines") - the eight ids Linux
 caps the interrupt interval on (`13ED`, `13EE`, `148C`, `15D4`, `15D5`,
 `15E0`, `15E1`, `15E5`), the Promontory A parts `43B9` to `43BC` (`43B9`
 and `43BB` excluded from Linux's soft retry, and so from the driver's,
 design record 17 section 4.2), `43F7`, and the Promontory 21 parts `43FC`
-and `43FD`, which Linux hands to a separate driver. The driver's interval
+and `43FD`, which Linux hands to a separate driver; `XhciSuspendHaltDelay`
+on `145C`, `15E0`, `15E1` and `43BB`, and `XhciResumeReinit` and
+`XhciAmdSuspendBitClear` on `15E5`. A vendor-wide AMD row is printed under
+every `1022` controller, listed or not: the reach of `XhciIntervalCap`,
+and Linux's `XHCI_AMD_PLL_FIX`, not taken by the driver. The driver's interval
 cap keys on the vendor rather than these rows: `XhciIntervalCap`'s default
 caps the interrupt interval on every AMD controller, listed or not (record
 17 section 4.7).

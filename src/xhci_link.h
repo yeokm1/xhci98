@@ -92,6 +92,9 @@ typedef struct _XHCI_LINK_PORT {
     ULONG GaveUp;           /* given up until the link next leaves Error  */
     ULONG LastState;        /* XHCI_LINK_*, as last classified            */
     ULONG LastReset;        /* the reset last asked: HOT_RESET, WARM_RESET */
+    ULONG StuckCheck;       /* 38.10: the next reading is the first after a
+                             * restoring resume, with XhciStuckLinkReset
+                             * applying (XhciLinkPortFeed)                */
 } XHCI_LINK_PORT, *PXHCI_LINK_PORT;
 
 typedef struct _XHCI_LINK_ACTION {
@@ -106,6 +109,16 @@ typedef struct _XHCI_LINK_ACTION {
 
 /* Clear a port's record: at a start, and when its port is powered. */
 VOID XhciLinkInit(PXHCI_LINK_PORT link);
+
+/*
+ * Task 38.10, XhciStuckLinkReset (design record 20 section 4.11; Linux's
+ * XHCI_MISSING_CAS, xhci-hub.c:1820-1841): 1 when a USB3 root port reads
+ * powered, not resetting, with CCS and CAS both clear and its link in
+ * Polling - a port these controllers can leave so after a resume without
+ * the Cold Attach Status that would announce it. Compliance, Linux's other
+ * half, is already warm-reset whatever its CAS (29-A.2).
+ */
+ULONG XhciLinkStuckPolling(ULONG portsc);
 
 /* The link state one PORTSC value of a USB3 port describes. */
 ULONG XhciLinkClassify(ULONG portsc);

@@ -623,6 +623,8 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     /* The core sets it at an HCRST that retired a moved line (record 15
      * section 4.2); the HCD's own proofs set both. */
     hc->Counters.LineRetireState = hc->Hc.LineRetireState;
+    /* Task 38.10: the quirks' packed words and counts (hcd_quirk.c). */
+    HcdQuirkPublishLocked(hc);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 #ifdef XHCI_DBG_TRACE
     hcdCountersTrace(&hc->Counters);

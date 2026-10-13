@@ -316,6 +316,21 @@ ran it as mode 0 ("line asked for, message granted", reason 11), and
 failed only on x86 with no helper bound and no line offered ("forced, no
 line offered", reason 13).
 
+**`XhciMsiAvoid` (task 38.10, design record 20 sections 4.1 and 13).** A
+further input of the decision: `XhciPollDecideEx`, which `XhciPollDecide`
+calls with it 0, takes whether Linux's `XHCI_BROKEN_MSI` quirk applies to
+this controller (Fresco Logic 1B73:1000 and 1B73:1400 at value 1, every
+controller at 2). `hcdSettleDelivery` reads the value and the controller's
+PCI identity, through the configuration service, before it decides
+(`hcd_quirk.c`, `HcdQuirkMsiAvoid`). With it set, mode 0's message row
+never connects the message: the delivery is a poll with the new reason 19,
+`XHCI_POLL_R_MSI_AVOIDED` (`XHCISNAP`: "automatic: a message granted,
+refused by XhciMsiAvoid (Linux's XHCI_BROKEN_MSI), so polled"), and the
+requirements filter has already asked for the line on
+such a controller where it could (record 18 section 4.2), so a granted line
+takes mode 0's line rows. Modes 1, 2 and 3 answer as above; under mode 3
+the user's message stands and the quirk is recorded as overridden.
+
 Every failing row ends the start before anything is mapped or connected,
 with the status a forced line with no line has always given:
 `STATUS_DEVICE_CONFIGURATION_ERROR` when an interrupt resource was

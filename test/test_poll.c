@@ -1314,8 +1314,47 @@ static void test_tmr_observe(void)
              "far past saturates");
 }
 
+/*
+ * Task 38.10, XhciMsiAvoid (design record 20 section 4.1): under mode 0 a
+ * granted message is never connected on a controller the quirk applies to
+ * - it polls, with its own reason - while a line, and modes 1, 2 and 3,
+ * answer as without it.
+ */
+static void test_decide_msi_avoid(void)
+{
+    ULONG reason;
+
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_POLL, "mode 0, a message: polled");
+    CHECK_EQ(reason, XHCI_POLL_R_MSI_AVOIDED, "the quirk's reason");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 0, &reason),
+             XHCI_POLL_DELIVERY_MESSAGE, "without it: the message");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 1, 0, 0,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_LINE, "mode 0, a line: the line");
+    CHECK_EQ(reason, XHCI_POLL_R_AUTO, "as before");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_LINE, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_NONE, "mode 1, a message: refused as before");
+    CHECK_EQ(reason, XHCI_POLL_R_FORCED_LINE_MESSAGE, "mode 1's reason");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_POLL, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_POLL, "mode 2: polling");
+    CHECK_EQ(reason, XHCI_POLL_R_FORCED_POLL, "mode 2's reason");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_MESSAGE, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_MESSAGE, "mode 3: the user's message");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 0, 0, 0,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_POLL, "no interrupt: polling as before");
+    CHECK_EQ(reason, XHCI_POLL_R_AUTO_NO_INTERRUPT, "its reason");
+}
+
 int main(void)
 {
+    test_decide_msi_avoid();
     test_values();
     test_decide();
     test_connected();

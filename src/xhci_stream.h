@@ -160,6 +160,24 @@ ULONG XhciStreamBigBytes(ULONG entries, ULONG streams, PULONG bytes);
 ULONG XhciStreamLayoutPlaced(ULONG entries, ULONG streams, ULONG paLow,
                              ULONG paHigh, PXHCI_STREAM_LAYOUT layout);
 
+/*
+ * Task 38.10, XhciStreamRingPad (design record 20 section 4.12; Linux's
+ * XHCI_TRB_OVERFETCH on the VIA VL805 and Zhaoxin's two): the same three
+ * with `pad` nonzero allocate one ring more past the last stream's ring, so
+ * a controller that prefetches past the end of a segment reads driver
+ * memory rather than past the block. The rings' places and the alignment
+ * rules are unchanged; only TotalBytes (and the big layout's size) grow,
+ * and the free takes the same TotalBytes. The unpadded names are these
+ * with `pad` 0.
+ */
+ULONG XhciStreamLayoutPad(ULONG entries, ULONG streams, ULONG ringTrbs,
+                          ULONG pad, PXHCI_STREAM_LAYOUT layout);
+ULONG XhciStreamBigBytesPad(ULONG entries, ULONG streams, ULONG pad,
+                            PULONG bytes);
+ULONG XhciStreamLayoutPlacedPad(ULONG entries, ULONG streams, ULONG paLow,
+                                ULONG paHigh, ULONG pad,
+                                PXHCI_STREAM_LAYOUT layout);
+
 /* ------------------------------------------------------------------ */
 /* Encoders                                                             */
 /* ------------------------------------------------------------------ */

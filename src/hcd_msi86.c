@@ -668,6 +668,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     PUCHAR fresh;
     XHCI_POLL_VALUES values;
     ULONG asked;
+    ULONG quirkAsked;
     ULONG keepMessage;
     ULONG enabled;
     ULONG outcome;
@@ -679,6 +680,7 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     }
     /* Step 0: the class is UNKNOWN before anything can return early. */
     XhciMsiFilterBegin(&hc->MsiFilter);
+    hc->MsiAvoidFilterStrips = 0;
     hc->FilterStripped = 0;
     hc->FilterWalk.Verdict = XHCI_MSI_WALK_OK;
     hc->FilterWalk.Lists = 0;
@@ -756,6 +758,15 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
                 ? 1UL
                 : 0UL;
 #endif
+    /* Task 38.10, XhciMsiAvoid (design record 20 section 4.1): under mode
+     * 0, a controller the quirk applies to asks for the line alone, as
+     * mode 1 does; from AddDevice's or the last start's caches. */
+    quirkAsked = 0;
+    if (!asked && hc->FilterMode == XHCI_POLL_MODE_AUTO &&
+        HcdQuirkFilterAvoid(hc)) {
+        asked = 1;
+        quirkAsked = 1;
+    }
     enabled = HCD_MSI_STRIP_DEFAULT;
     if (hc->QemuNoStrip) {
         enabled = 0;
@@ -805,6 +816,12 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
         }
     }
     XhciMsiFilterPublish(&hc->MsiFilter, hc->FilterClassify.Class, outcome);
+    /* 38.10: a strip the quirk asked for, kept for the next start's dump
+     * (review round 2; hcd_quirk.c, HcdQuirkMsiAvoid). */
+    hc->MsiAvoidFilterStrips = 0;
+    if (quirkAsked && outcome == XHCI_MSI_OUT_REPLACED) {
+        hc->MsiAvoidFilterStrips = hc->FilterStripped;
+    }
 #if defined(XHCI_FLAVOUR_QEMU)
     if (replaced) {
         XHCI_MSI_WALK after;

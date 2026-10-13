@@ -87,6 +87,10 @@
 #define XHCI_POLL_R_FORCED_MESSAGE_NOT_GRANTED  16UL    /* 3, none granted */
 #define XHCI_POLL_R_FORCED_MESSAGE_NOT_CONNECTED 17UL   /* 3, not connected */
 #define XHCI_POLL_R_FORCED_MESSAGE_NO_SYSTEM    18UL    /* 3, before NT 6  */
+/* Task 38.10, XhciMsiAvoid (design record 20 section 4.1): mode 0, a
+ * message granted on a controller the quirk applies to, never connected:
+ * polled. */
+#define XHCI_POLL_R_MSI_AVOIDED                 19UL
 
 /* The pin's read. */
 #define XHCI_POLL_PIN_NOT_READ          0UL
@@ -188,6 +192,14 @@ VOID XhciPollValues(PXHCI_POLL_VALUES v, ULONG modeFound, ULONG mode,
 ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
                      ULONG messageSystem, PULONG reason);
+/* The same with task 38.10's XhciMsiAvoid as an input (design record 20
+ * section 4.1): `msiAvoid` set, mode 0 never takes a message resource -
+ * it polls, XHCI_POLL_R_MSI_AVOIDED - while modes 1, 2 and 3 answer as
+ * before (mode 3's message is the user's by name). XhciPollDecide is this
+ * with `msiAvoid` 0. */
+ULONG XhciPollDecideEx(ULONG mode, ULONG haveInterrupt, ULONG message,
+                       ULONG messageConnected, ULONG pinStatus, ULONG pin,
+                       ULONG messageSystem, ULONG msiAvoid, PULONG reason);
 ULONG XhciPollConnected(ULONG mode, ULONG connected, ULONG lineBased,
                         PULONG reason);
 

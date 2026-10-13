@@ -3101,8 +3101,99 @@ static void test_ring_resync_owed(void)
 
 }
 
+/*
+ * Task 38.10, XhciControlLinkNoOp (design record 20 section 4.13): a No Op
+ * TD at the last TRB before the Link TRB only, counted with the group in
+ * one room check, so the control transfer's Setup Stage starts after the
+ * link; anywhere else, or with no room for both, nothing is written.
+ */
+static void test_control_link_pad(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB one;
+    XHCI_TRB trbs[3];
+    XHCI_TD_GROUP_PLACEMENT placement;
+    XHCI_RING ring;
+    ULONG lengths[3];
+    ULONG padded;
+    ULONG i;
+
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init");
+    /* At 0: not the last usable TRB, nothing placed. */
+    CHECK_EQ(XhciRingControlLinkPad(&ring, 3, &padded), XHCI_RING_OK,
+             "at 0");
+    CHECK_EQ(padded, 0, "no pad at 0");
+    CHECK_EQ(ring.Enqueue, 0, "ring untouched");
+
+    /* Walk the enqueue to 6, the last TRB before the Link TRB at 7, each
+     * single-TRB TD retired at once. */
+    XhciTrbClear(&one);
+    one.Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_NORMAL) | XHCI_TRB_IOC;
+    for (i = 0; i < 6; i++) {
+        CHECK_EQ(XhciRingEnqueueTd(&ring, &one, 1, NULL), XHCI_RING_OK,
+                 "filler");
+        CHECK_EQ(retire_success(&ring, RING_PA + i * 16), XHCI_RING_OK,
+                 "filler retired");
+    }
+    CHECK_EQ(ring.Enqueue, 6, "at the last usable TRB");
+    CHECK_EQ(XhciRingControlLinkPad(&ring, 3, &padded), XHCI_RING_OK,
+             "padded");
+    CHECK_EQ(padded, 1, "a No Op placed");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(mem[6].Control), XHCI_TRB_TYPE_NOOP,
+             "a Transfer No Op at 6");
+    CHECK_EQ(mem[6].Control & (XHCI_TRB_CH | XHCI_TRB_IOC), 0,
+             "no Chain, no IOC");
+    CHECK_EQ(mem[6].Control & XHCI_TRB_CYCLE, 1, "published, lap 1");
+    CHECK_EQ(mem[6].Status, 0, "Interrupter Target 0");
+    CHECK_EQ(ring.Enqueue, 0, "past the link");
+    CHECK_EQ(ring.Cycle, 0, "the cycle toggled at the link");
+    CHECK_EQ(mem[7].Control & XHCI_TRB_CH, 0,
+             "the link does not chain a TD of one No Op");
+
+    /* The control group now starts after the link, whole. */
+    for (i = 0; i < 3; i++) {
+        XhciTrbClear(&trbs[i]);
+        trbs[i].Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_NORMAL);
+        lengths[i] = 1;
+    }
+    CHECK_EQ(XhciRingEnqueueTdGroup(&ring, trbs, 3, lengths, 3, &placement),
+             XHCI_RING_OK, "the group after the pad");
+    CHECK_EQ(placement.FirstIndex, 0, "Setup at 0, after the link");
+    CHECK_EQ(placement.LastIndex, 2, "the group stays in one lap");
+    /* The control TD's own event retires the No Op with it. */
+    CHECK_EQ(retire_success(&ring, RING_PA + 2 * 16), XHCI_RING_OK,
+             "the group's event retires through the No Op");
+    CHECK_EQ(XhciRingFree(&ring), 6, "everything came back");
+
+    /* No room for the No Op and the group together: nothing written. */
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "ring init again");
+    for (i = 0; i < 6; i++) {
+        CHECK_EQ(XhciRingEnqueueTd(&ring, &one, 1, NULL), XHCI_RING_OK,
+                 "filler");
+    }
+    for (i = 0; i < 4; i++) {
+        CHECK_EQ(retire_success(&ring, RING_PA + i * 16), XHCI_RING_OK,
+                 "four retired");
+    }
+    CHECK_EQ(XhciRingFree(&ring), 4, "four free");
+    CHECK_EQ(XhciRingControlLinkPad(&ring, 4, &padded), XHCI_RING_FULL,
+             "four and the No Op do not fit");
+    CHECK_EQ(padded, 0, "nothing placed");
+    CHECK_EQ(ring.Enqueue, 6, "the enqueue unmoved");
+    CHECK_EQ(XhciRingControlLinkPad(&ring, 3, &padded), XHCI_RING_OK,
+             "three and the No Op fit");
+    CHECK_EQ(padded, 1, "placed");
+    CHECK_EQ(XhciRingControlLinkPad(NULL, 3, &padded), XHCI_RING_BAD_PARAM,
+             "no ring");
+    CHECK_EQ(XhciRingControlLinkPad(&ring, 0, &padded), XHCI_RING_BAD_PARAM,
+             "an empty group");
+}
+
 int main(void)
 {
+    test_control_link_pad();
     test_two_halves();
     test_trb_fields();
     test_ring_init();

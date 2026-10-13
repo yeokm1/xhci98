@@ -627,7 +627,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,1`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,1`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -663,8 +663,12 @@ try {
     # XhciUsb2HubSpeedFallback at 1, whose wrong one is 0. Task 38.11 adds
     # XhciAccept096 at 1, whose wrong one is 0 (the 1.0 floor of 2.3.1.0).
     # Task 38.3 adds XhciPollFineTimer at 1, whose wrong one is 0 (design
-    # record 15 section 7.2.4).
-    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the finer timer, the wide mapping, selective suspend, the hub speed fallback and the 0.96 floor, on both paths"
+    # record 15 section 7.2.4). Task 38.10 adds fourteen of Linux's
+    # controller quirks (design record 20 section 6.1), each at 1 with 0 its
+    # wrong one but XhciShutdownReset, at 0 with 1 its wrong one; they sit
+    # after the 0.96 floor under one comment, which $tolRows carries so the
+    # anchors still reach the interval.
+    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the finer timer, the wide mapping, selective suspend, the hub speed fallback, the 0.96 floor and Linux's controller quirks, on both paths"
     foreach ($tv in @(
         @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n"; Clob = "HKR,,XhciMaxTransferKB,0x00010001,1024`r`n" },
         @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
@@ -678,7 +682,21 @@ try {
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n"; Clob = "HKR,,XhciWideMap,0x00010001,0`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n"; Clob = "HKR,,XhciSelectiveSuspend,0x00010001,0`r`n" },
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
-        @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" }
+        @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" },
+        @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n"; Clob = "HKR,,XhciMsiAvoid,0x00010001,1`r`n" },
+        @{ Key = "streamsoff"; Row = "HKR,,XhciStreamsOff,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamsOff,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamsOff,0x00010001,1`r`n" },
+        @{ Key = "resreinit"; Row = "HKR,,XhciResumeReinit,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeReinit,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeReinit,0x00010001,1`r`n" },
+        @{ Key = "shutehci"; Row = "HKR,,XhciIntelShutdownToEhci,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelShutdownToEhci,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelShutdownToEhci,0x00010001,1`r`n" },
+        @{ Key = "shutreset"; Row = "HKR,,XhciShutdownReset,0x00010003,0`r`n"; Wrong = "HKR,,XhciShutdownReset,0x00010003,1`r`n"; Clob = "HKR,,XhciShutdownReset,0x00010001,0`r`n" },
+        @{ Key = "haltdelay"; Row = "HKR,,XhciSuspendHaltDelay,0x00010003,1`r`n"; Wrong = "HKR,,XhciSuspendHaltDelay,0x00010003,0`r`n"; Clob = "HKR,,XhciSuspendHaltDelay,0x00010001,1`r`n" },
+        @{ Key = "halttmo"; Row = "HKR,,XhciSuspendHaltTimeout,0x00010003,1`r`n"; Wrong = "HKR,,XhciSuspendHaltTimeout,0x00010003,0`r`n"; Clob = "HKR,,XhciSuspendHaltTimeout,0x00010001,1`r`n" },
+        @{ Key = "asmflow"; Row = "HKR,,XhciAsmediaFlowControl,0x00010003,1`r`n"; Wrong = "HKR,,XhciAsmediaFlowControl,0x00010003,0`r`n"; Clob = "HKR,,XhciAsmediaFlowControl,0x00010001,1`r`n" },
+        @{ Key = "tiintcap"; Row = "HKR,,XhciTiIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciTiIntervalCap,0x00010003,0`r`n"; Clob = "HKR,,XhciTiIntervalCap,0x00010001,1`r`n" },
+        @{ Key = "stucklink"; Row = "HKR,,XhciStuckLinkReset,0x00010003,1`r`n"; Wrong = "HKR,,XhciStuckLinkReset,0x00010003,0`r`n"; Clob = "HKR,,XhciStuckLinkReset,0x00010001,1`r`n" },
+        @{ Key = "ringpad"; Row = "HKR,,XhciStreamRingPad,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamRingPad,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamRingPad,0x00010001,1`r`n" },
+        @{ Key = "ctlnoop"; Row = "HKR,,XhciControlLinkNoOp,0x00010003,1`r`n"; Wrong = "HKR,,XhciControlLinkNoOp,0x00010003,0`r`n"; Clob = "HKR,,XhciControlLinkNoOp,0x00010001,1`r`n" },
+        @{ Key = "isochspur"; Row = "HKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`n"; Wrong = "HKR,,XhciIsochSpuriousSuccess,0x00010003,0`r`n"; Clob = "HKR,,XhciIsochSpuriousSuccess,0x00010001,1`r`n" },
+        @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n"; Clob = "HKR,,XhciAmdSuspendBitClear,0x00010001,1`r`n" }
     )) {
         Assert-RuleFires ($tv.Key + "-no-9x") "VAL-MISSING" {
             param($t) $t.Replace($tailFor9x, $tailFor9x.Replace($tv.Row, ""))
@@ -2234,9 +2252,9 @@ try {
     Assert-RuleFires "amd64-imod-default-old" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160", "HKR,,XhciImodInterval250ns,0x00010003,500")
     } -Source $prodInfAmd64 -Arch amd64
-    # Task 35-T.7's three values and the later ones on the 64-bit file: its
-    # one AddReg section serves both of its paths, so missing and
-    # wrong-default once each.
+    # Task 35-T.7's three values and the later ones on the 64-bit file, task
+    # 38.10's fourteen among them: its one AddReg section serves both of its
+    # paths, so missing and wrong-default once each.
     foreach ($tv in @(
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n" },
@@ -2249,7 +2267,21 @@ try {
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n" },
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },
-        @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" }
+        @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" },
+        @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n" },
+        @{ Key = "streamsoff"; Row = "HKR,,XhciStreamsOff,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamsOff,0x00010003,0`r`n" },
+        @{ Key = "resreinit"; Row = "HKR,,XhciResumeReinit,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeReinit,0x00010003,0`r`n" },
+        @{ Key = "shutehci"; Row = "HKR,,XhciIntelShutdownToEhci,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelShutdownToEhci,0x00010003,0`r`n" },
+        @{ Key = "shutreset"; Row = "HKR,,XhciShutdownReset,0x00010003,0`r`n"; Wrong = "HKR,,XhciShutdownReset,0x00010003,1`r`n" },
+        @{ Key = "haltdelay"; Row = "HKR,,XhciSuspendHaltDelay,0x00010003,1`r`n"; Wrong = "HKR,,XhciSuspendHaltDelay,0x00010003,0`r`n" },
+        @{ Key = "halttmo"; Row = "HKR,,XhciSuspendHaltTimeout,0x00010003,1`r`n"; Wrong = "HKR,,XhciSuspendHaltTimeout,0x00010003,0`r`n" },
+        @{ Key = "asmflow"; Row = "HKR,,XhciAsmediaFlowControl,0x00010003,1`r`n"; Wrong = "HKR,,XhciAsmediaFlowControl,0x00010003,0`r`n" },
+        @{ Key = "tiintcap"; Row = "HKR,,XhciTiIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciTiIntervalCap,0x00010003,0`r`n" },
+        @{ Key = "stucklink"; Row = "HKR,,XhciStuckLinkReset,0x00010003,1`r`n"; Wrong = "HKR,,XhciStuckLinkReset,0x00010003,0`r`n" },
+        @{ Key = "ringpad"; Row = "HKR,,XhciStreamRingPad,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamRingPad,0x00010003,0`r`n" },
+        @{ Key = "ctlnoop"; Row = "HKR,,XhciControlLinkNoOp,0x00010003,1`r`n"; Wrong = "HKR,,XhciControlLinkNoOp,0x00010003,0`r`n" },
+        @{ Key = "isochspur"; Row = "HKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`n"; Wrong = "HKR,,XhciIsochSpuriousSuccess,0x00010003,0`r`n" },
+        @{ Key = "amdbitclr"; Row = "HKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"; Wrong = "HKR,,XhciAmdSuspendBitClear,0x00010003,0`r`n" }
     )) {
         Assert-RuleFires ("amd64-" + $tv.Key + "-missing") "VAL-MISSING" {
             param($t) $t.Replace($tv.Row, "")

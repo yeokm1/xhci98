@@ -364,6 +364,32 @@
 > and `hcd_log.c` (`test_snap`), and outside `src\` `xhcisnap\xhcisnap.c`
 > (`print_hcd_version`, `-selftest-version`) and `xhciqual\report.c` (the
 > line after HCIVERSION and the HCCPARAMS2 line below 1.0).
+> Task 38.10 (design record 20, section 13) adds Linux's xHCI controller
+> quirks: the pure `xhci_quirk.c` / `xhci_quirk.h` (the fourteen values in
+> record 20 section 6.1's order, each with its name, Linux flag and log
+> label; the defaults, value 2 offered or read as 1, the normalization;
+> section 3.1's id lists and the match, VIA vendor-wide for
+> `XhciResumeReinit`; the effective policy; the per-start state
+> `XHCI_QUIRK_STATE` in the extension; the packed word the log and counter
+> words 199 to 212 carry; `XhciMsiAvoid`'s decision and `XhciStreamsOff`'s
+> HCCPARAMS1; host suite `test\test_quirk.c`, with each executor's vectors
+> in `test_ring`, `test_iso`, `test_link`, `test_stream`, `test_tol` and
+> `test_poll`) and the driver half `hcd_quirk.c` (the registry reads at
+> each start and, for `XhciMsiAvoid`, at AddDevice on NT 6; the PCI
+> identity read before the delivery is settled and the requirements
+> filter's cache; the ASMedia flow-control write after each start, recovery
+> and resume; the AMD bit before each suspend; the shutdown's Intel routing
+> write and HCRST with the bounded log flush after them; the post-resume
+> arming of the stuck-link check; and the counter block's copy). The quirks
+> that act in the core read `XhciQuirkOn` where they act: `xhci_init.c`
+> (suspend, halt, shutdown reset), `xhci_ring.c` and `xhci_xfer.c` (the
+> control No Op, the isochronous Success), `xhci_link.c` (the stuck link),
+> `xhci_stream.c` (the padded block), `xhci_tol.c` (the TI cap, and
+> 1002:7316 under `XhciIntervalCap`) and `xhci_poll.c` (reason 19).
+> `xhciqual\quirks.c` gains the same rows and flags, host suite
+> `xhciqual\test\test_quirks.c` (every listed id with its Linux flag and
+> the driver value it prints, the vendor-wide rows, the neighbours refused,
+> and the HCIVERSION floor note).
 > Two groups from before Phase 36 that this map did not name (added in
 > 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
 > command precondition table: would a conforming controller accept this

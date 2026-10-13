@@ -1081,6 +1081,11 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->RetryToken = 0;
     queue->RetryReplay = 0;
     queue->RetryDiverts = 0;
+    /* 38.10: out of scope until the device layer says otherwise. */
+    queue->IsoSpuriousScope = 0;
+    queue->IsoLastEventPA = 0;
+    queue->IsoLastEventCode = 0;
+    queue->IsoSpuriousDropped = 0;
 }
 
 /*
@@ -1146,6 +1151,16 @@ static VOID xhciXferForgetMidTdTails(PXHCI_TRANSFER_QUEUE queue,
 
     if (queue == NULL || ring == NULL || trbCount == 0) {
         return;
+    }
+    /* Task 38.10 (review round 1): the remembered isochronous event is
+     * forgotten the same way, so a Success for a TD placed here later is
+     * never taken for the earlier error's duplicate (XhciXferIsoEvent). */
+    if (queue->IsoLastEventPA != 0 &&
+        XhciRingIndexFromPA(ring, queue->IsoLastEventPA, &j) ==
+            XHCI_RING_OK &&
+        xhciXferRangeContains(ring, firstIndex, trbCount, j, NULL)) {
+        queue->IsoLastEventPA = 0;
+        queue->IsoLastEventCode = 0;
     }
     i = 0;
     while (i < queue->MidTdTailCount) {
@@ -1273,10 +1288,28 @@ ULONG XhciXferSubmitControl(PXHCI_TRANSFER_QUEUE queue,
                             XHCI_TRB *scratch,
                             ULONG scratchCount)
 {
+    return XhciXferSubmitControlEx(queue, ring, request, transfer,
+                                   transferParameters, scratch, scratchCount,
+                                   0, NULL);
+}
+
+ULONG XhciXferSubmitControlEx(PXHCI_TRANSFER_QUEUE queue,
+                              PXHCI_RING ring,
+                              const XHCI_CONTROL_REQUEST *request,
+                              PXHCI_TRANSFER transfer,
+                              PVOID transferParameters,
+                              XHCI_TRB *scratch,
+                              ULONG scratchCount,
+                              ULONG linkNoOp,
+                              PULONG padded)
+{
     XHCI_CONTROL_LAYOUT layout;
     XHCI_TD_GROUP_PLACEMENT placement;
     ULONG status;
 
+    if (padded != NULL) {
+        *padded = 0;
+    }
     if (queue == NULL || ring == NULL || request == NULL ||
         transfer == NULL || scratch == NULL) {
         return XHCI_XFER_BAD_PARAM;
@@ -1285,6 +1318,19 @@ ULONG XhciXferSubmitControl(PXHCI_TRANSFER_QUEUE queue,
     status = XhciXferBuildControl(request, scratch, scratchCount, &layout);
     if (status != XHCI_XFER_OK) {
         return status;
+    }
+
+    /* 38.10: the No Op first, when the Setup Stage would sit on the last
+     * TRB before the Link TRB; refused whole, with nothing written, unless
+     * the No Op and the group both fit (record 20 section 4.13). */
+    if (linkNoOp) {
+        status = XhciRingControlLinkPad(ring, layout.TrbCount, padded);
+        if (status == XHCI_RING_FULL) {
+            return XHCI_XFER_BUSY;
+        }
+        if (status != XHCI_RING_OK) {
+            return XHCI_XFER_BAD_PARAM;
+        }
     }
 
     /*
@@ -2694,6 +2740,9 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue)
     for (i = 0; i < XHCI_XFER_MID_TD_TAIL; i++) {
         queue->MidTdTailIndex[i] = XHCI_XFER_NO_INDEX;
     }
+    /* 38.10: a restarted ring has no last event to be duplicated. */
+    queue->IsoLastEventPA = 0;
+    queue->IsoLastEventCode = 0;
     return 1;
 }
 
@@ -3868,6 +3917,8 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     ULONG ahead;
     ULONG packetLength;
     ULONG bytes;
+    ULONG lastPA;
+    ULONG lastCode;
     ULONG i;
 
     if (result == NULL) {
@@ -3901,6 +3952,33 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
 
     completionCode = XHCI_TRB_GET_COMPLETION(eventDw2);
     residual = XHCI_TRB_GET_RESIDUAL(eventDw2);
+
+    /*
+     * Task 38.10, XhciIsochSpuriousSuccess (design record 20 section 4.14;
+     * Linux's XHCI_ETRON_HOST, xhci-ring.c:2593-2597): on these parts a
+     * Success can follow a Transaction Error, a Babble or an Isoch Buffer
+     * Overrun for the same TRB. The error already answered its packet, and
+     * may have retired its request; the Success is counted and dropped
+     * before anything reads it, so no packet is answered twice, no later
+     * packet or request is consumed by it, and no recovery follows. The
+     * last event is remembered for every queue, the scope gating only the
+     * drop.
+     */
+    /* The pointer as the engine reads it, its reserved low bits dropped
+     * (xhciXferEventPointer, which counts them once, below), so the reuse
+     * check in xhciXferForgetMidTdTails finds it (review round 2). */
+    lastPA = queue->IsoLastEventPA;
+    lastCode = queue->IsoLastEventCode;
+    queue->IsoLastEventPA = eventTrbPA & ~0x0FUL;
+    queue->IsoLastEventCode = completionCode;
+    if (queue->IsoSpuriousScope && completionCode == XHCI_CC_SUCCESS &&
+        (eventTrbPA & ~0x0FUL) != 0 && (eventTrbPA & ~0x0FUL) == lastPA &&
+        (lastCode == XHCI_CC_USB_TRANSACTION_ERROR ||
+         lastCode == XHCI_CC_BABBLE ||
+         lastCode == XHCI_CC_ISOCH_BUFFER_OVERRUN)) {
+        queue->IsoSpuriousDropped++;
+        return XHCI_XFER_OK;
+    }
 
     if (XhciXferIsoCodeInfo(completionCode, &code) != XHCI_XFER_OK) {
         queue->BadCodes++;

@@ -750,6 +750,37 @@ ULONG XhciRingEnqueueTd(PXHCI_RING ring,
     return status;
 }
 
+/* Task 38.10: see the contract in xhci.h (design record 20 section 4.13). */
+ULONG XhciRingControlLinkPad(PXHCI_RING ring, ULONG groupCount,
+                             PULONG padded)
+{
+    XHCI_TRB noop;
+    ULONG status;
+
+    if (padded != NULL) {
+        *padded = 0;
+    }
+    if (ring == NULL || ring->Base == NULL || groupCount == 0 ||
+        ring->Trbs < XHCI_RING_MIN_TRBS) {
+        return XHCI_RING_BAD_PARAM;
+    }
+    /* The Link TRB is the last slot; the enqueue never rests on it. */
+    if (ring->Enqueue + 2 != ring->Trbs) {
+        return XHCI_RING_OK;
+    }
+    if (groupCount > 0xFFFFFFFFUL - 1UL ||
+        !XhciRingHasRoom(ring, groupCount + 1UL)) {
+        return XHCI_RING_FULL;
+    }
+    XhciTrbClear(&noop);
+    noop.Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_NOOP);
+    status = XhciRingEnqueueTd(ring, &noop, 1, NULL);
+    if (status == XHCI_RING_OK && padded != NULL) {
+        *padded = 1;
+    }
+    return status;
+}
+
 /*
  * The single-TRB case - every command, and any transfer that fits in one TRB.
  * A one-TRB TD is still a TD, so it goes through the same path rather than

@@ -66,6 +66,14 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
                      ULONG messageSystem, PULONG reason)
 {
+    return XhciPollDecideEx(mode, haveInterrupt, message, messageConnected,
+                            pinStatus, pin, messageSystem, 0, reason);
+}
+
+ULONG XhciPollDecideEx(ULONG mode, ULONG haveInterrupt, ULONG message,
+                       ULONG messageConnected, ULONG pinStatus, ULONG pin,
+                       ULONG messageSystem, ULONG msiAvoid, PULONG reason)
+{
     ULONG unreadable;
 
     unreadable = (pinStatus != XHCI_POLL_PIN_READ) ? 1UL : 0UL;
@@ -90,6 +98,12 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
         if (mode == XHCI_POLL_MODE_LINE) {
             *reason = XHCI_POLL_R_FORCED_LINE_MESSAGE;
             return XHCI_POLL_DELIVERY_NONE;
+        }
+        /* 38.10: a message this controller would never raise is not
+         * connected; the poll stands in, as for an unconnected one. */
+        if (msiAvoid) {
+            *reason = XHCI_POLL_R_MSI_AVOIDED;
+            return XHCI_POLL_DELIVERY_POLL;
         }
         if (!messageConnected) {
             *reason = XHCI_POLL_R_MESSAGE_NOT_CONNECTED;

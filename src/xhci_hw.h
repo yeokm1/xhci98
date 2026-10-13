@@ -278,6 +278,20 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources);
 ULONG XhciRecoverController(PXHCI_EXTENSION ext);
 
 /*
+ * Task 38.10, XhciShutdownReset (design record 20 section 4.5): an HCRST
+ * after the shutdown's halt, **only on a halt proven** - xHCI 1.2c 5.4.1
+ * (p.360) forbids HCRST while HCHalted is 0. Refused, writing nothing, on a
+ * window that does not decode, a latched unreadable controller, or a USBSTS
+ * that reads all ones or without HCH; then xhciReset's own readiness rules
+ * (no HCRST pending, CNR) with its 1 ms stall and bounded waits. A reset
+ * made invalidates the saved image, which HCRST destroys. Returns
+ * XHCI_QK_WHY_NONE when the reset completed, else the reason
+ * (XHCI_QK_WHY_*). The caller checks the started lifetime, the mapped BAR
+ * and D0 under the power gate. IRQL: PASSIVE_LEVEL.
+ */
+ULONG XhciShutdownReset(PXHCI_EXTENSION ext);
+
+/*
  * Read the six capability registers and decode them into `info`, returning an
  * XHCI_HC_* status. The init sequence uses it twice - before the handoff and
  * after the reset - and `ResumeController` uses it a third time to ask whether

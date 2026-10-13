@@ -765,8 +765,90 @@ static void test_resume_from_resume(void)
     CHECK_EQ(a.Kind, XHCI_LINK_ACT_NONE, "and writes nothing");
 }
 
+/*
+ * Task 38.10, XhciStuckLinkReset (design record 20 section 4.11): the
+ * Polling half of Linux's XHCI_MISSING_CAS. Armed, the first reading
+ * warm-resets a USB3 port with CCS and CAS clear in Polling, within 29-A.2's
+ * budget; it disarms whatever it read; unarmed, Polling is waited on as a
+ * link still training; never on a USB 2.0 port.
+ */
+static void test_stuck_polling(void)
+{
+    XHCI_LINK_PORT link;
+    XHCI_LINK_ACTION act;
+    ULONG feed;
+    ULONG i;
+
+    CHECK_EQ(XhciLinkStuckPolling(portsc(XHCI_PLS_POLLING, 0)), 1,
+             "Polling, no CCS, no CAS: stuck");
+    CHECK_EQ(XhciLinkStuckPolling(portsc(XHCI_PLS_POLLING, CONN)), 0,
+             "CCS set: not stuck");
+    CHECK_EQ(XhciLinkStuckPolling(portsc(XHCI_PLS_POLLING,
+                                         XHCI_PORTSC_CAS)), 0,
+             "CAS set: not stuck (the CAS path's)");
+    CHECK_EQ(XhciLinkStuckPolling(portsc(XHCI_PLS_COMPLIANCE, 0)), 0,
+             "Compliance: 29-A.2's already");
+    CHECK_EQ(XhciLinkStuckPolling(portsc(XHCI_PLS_RX_DETECT, 0)), 0,
+             "RxDetect: empty");
+    CHECK_EQ(XhciLinkStuckPolling(portsc(XHCI_PLS_POLLING, XHCI_PORTSC_PR)),
+             0, "resetting: not stuck");
+    CHECK_EQ(XhciLinkStuckPolling(XHCI_PLS_POLLING << XHCI_PORTSC_PLS_SHIFT),
+             0, "unpowered: not stuck");
+    CHECK_EQ(XhciLinkStuckPolling(0xFFFFFFFFUL), 0, "all ones: not stuck");
+
+    /* Unarmed: waited on, nothing written. */
+    XhciLinkInit(&link);
+    CHECK_EQ(link.StuckCheck, 0, "unarmed at init");
+    feed = XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_POLLING, 0),
+                            XHCI_ENUM_EMPTY, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_NONE, "unarmed: no write");
+
+    /* Armed: one warm reset, and disarmed. */
+    link.StuckCheck = 1;
+    feed = XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_POLLING, 0),
+                            XHCI_ENUM_EMPTY, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_WARM_RESET, "armed: warm reset");
+    CHECK_EQ(feed & XHCI_LINK_FEED_CONNECT, 0, "no connect fed");
+    CHECK_EQ(link.StuckCheck, 0, "disarmed");
+    CHECK_EQ(link.WarmResets, 1, "charged to 29-A.2's budget");
+    feed = XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_POLLING, 0),
+                            XHCI_ENUM_EMPTY, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_NONE, "one reading only");
+
+    /* Armed on a port that is fine: disarmed, today's handling. */
+    XhciLinkInit(&link);
+    link.StuckCheck = 1;
+    feed = XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_U0, ENAB),
+                            XHCI_ENUM_EMPTY, &act);
+    CHECK_EQ(link.StuckCheck, 0, "disarmed by a healthy reading");
+    CHECK_EQ(feed & XHCI_LINK_FEED_CONNECT, XHCI_LINK_FEED_CONNECT,
+             "the connection fed as before");
+
+    /* Never on a USB 2.0 port. */
+    XhciLinkInit(&link);
+    link.StuckCheck = 1;
+    (VOID)XhciLinkPortFeed(&link, 0, portsc(XHCI_PLS_POLLING, 0),
+                           XHCI_ENUM_EMPTY, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_NONE, "USB 2.0: untouched");
+    CHECK_EQ(link.StuckCheck, 0, "and disarmed");
+
+    /* The budget: a spent one gives up rather than resetting again. */
+    XhciLinkInit(&link);
+    for (i = 0; i < XHCI_LINK_MAX_WARM_RESETS; i++) {
+        link.StuckCheck = 1;
+        (VOID)XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_POLLING, 0),
+                               XHCI_ENUM_EMPTY, &act);
+        CHECK_EQ(act.Kind, XHCI_LINK_ACT_WARM_RESET, "within the budget");
+    }
+    link.StuckCheck = 1;
+    (VOID)XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_POLLING, 0),
+                           XHCI_ENUM_EMPTY, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_GIVE_UP, "the budget spent");
+}
+
 int main(void)
 {
+    test_stuck_polling();
     test_classify();
     test_service();
     test_reset_policy();

@@ -75,11 +75,14 @@
 
 /* Interrupt Interval cap (Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_9). */
 #define XHCI_TOL_INTERVAL_CAP       8UL     /* 2^8 * 125 us = 32 ms          */
+/* XhciTiIntervalCap (Linux's XHCI_LIMIT_ENDPOINT_INTERVAL_7; task 38.10,
+ * design record 20 section 4.9). */
+#define XHCI_TOL_TI_INTERVAL_CAP    6UL     /* 2^6 * 125 us = 8 ms           */
 #define XHCI_TOL_AVG_TRB_DEFAULT    1024UL
 
 /* XhciIntervalCap. */
 #define XHCI_TOL_CAP_OFF            0UL
-#define XHCI_TOL_CAP_GATED          1UL     /* vendor 1022                   */
+#define XHCI_TOL_CAP_GATED          1UL     /* vendor 1022, and 1002:7316    */
 #define XHCI_TOL_CAP_ALL            2UL
 
 /* Why a location is held (XHCI_TOL_LOC.Hold); 0 when not held. */
@@ -132,8 +135,18 @@ ULONG XhciTolAvgTrbMode(ULONG found, ULONG value);   /* XhciAvgTrbEsit: 0/1  */
 ULONG XhciTolElapsed(ULONG now, ULONG stamp, ULONG ticks);
 
 /* 35-T.7. 1 when the cap applies on this controller (PCI offset 0's
- * vendor/device dword). */
+ * vendor/device dword): at 1 every AMD (1022) controller and, since task
+ * 38.10, the ATI Navi10 USB-C controller 1002:7316 (design record 20
+ * section 4.10). */
 ULONG XhciTolCapApplies(ULONG capMode, ULONG vendorDevice);
+
+/* 38.10, XhciTiIntervalCap (design record 20 section 4.9): an interrupt
+ * endpoint of a High-Speed or faster device whose Interval is 7 or more
+ * programmed as 6, when the quirk applies; anything else unchanged. Applied
+ * after XhciTolCapInterval, as Linux orders the two (xhci-mem.c:1452-1463);
+ * isochronous endpoints are never capped (owner, 2026-10-13). */
+ULONG XhciTolTiCapInterval(ULONG applies, ULONG isInterrupt,
+                           ULONG highOrAbove, ULONG interval);
 
 /* The Interval programmed: interval capped at 8 for an interrupt endpoint
  * when the cap applies; any other endpoint unchanged. The executor offers

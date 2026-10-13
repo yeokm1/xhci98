@@ -912,10 +912,13 @@ static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * keeps the descriptor's value; Capped marks a lowered Interval, counted
  * once the Configure Endpoint that opens it succeeds. Returns nonzero when
  * the cap left the Interval as it was. Thread only. */
-static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PXHCI_PIPE_EP ep)
+static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                             PXHCI_PIPE_EP ep)
 {
     PXHCI_EXTENSION ext;
     ULONG capped;
+    ULONG ti;
+    ULONG tiCapped;
 
     ext = &hc->Hc;
     if (ep->TransferType != XHCI_PIPE_XFER_INTERRUPT) {
@@ -924,12 +927,35 @@ static ULONG hcdCfgTolerance(PHCD_CONTROLLER hc, PXHCI_PIPE_EP ep)
     ep->AverageTrbLength = XhciTolAvgTrbLength(ext->Tol.Stats.AvgTrbMode, 1,
                                                ep->MaxEsitPayload);
     capped = XhciTolCapInterval(ext->Tol.Stats.CapApplied, 1, ep->Interval);
+    /* 38.10, XhciTiIntervalCap (design record 20 section 4.9): after the
+     * AMD cap, as Linux orders the two; High Speed and above only. */
+    ti = XhciTolTiCapInterval(XhciQuirkOn(&ext->Quirk, XHCI_QK_TI_CAP), 1,
+                              HcdDeviceSpeedClass(hc, dev) >= XHCI_SPEED_HIGH
+                                  ? 1UL
+                                  : 0UL,
+                              capped);
+    tiCapped = (ti != capped) ? 1UL : 0UL;
+    capped = ti;
     if (capped == ep->Interval) {
         return 1;
     }
     ep->Interval = capped;
-    ep->Capped = 1;
+    /* Bit 1 marks XhciTiIntervalCap's part, counted with CapIntervals once
+     * the Configure Endpoint that opens it succeeds (hcdCfgQuirkCapped). */
+    ep->Capped = tiCapped ? 3UL : 1UL;
     return 0;
+}
+
+/* 38.10: XhciTiIntervalCap's count and outcome for an endpoint a
+ * successful Configure Endpoint opened (review round 2: not before). */
+static VOID hcdCfgQuirkCapped(PHCD_CONTROLLER hc, const XHCI_PIPE_EP *ep)
+{
+    if ((ep->Capped & 2UL) == 0) {
+        return;
+    }
+    hc->Hc.Quirk.TiCapped++;
+    XhciQuirkOutcome(&hc->Hc.Quirk, XHCI_QK_TI_CAP, XHCI_QK_OUT_DONE,
+                     XHCI_QK_WHY_NONE);
 }
 
 /* Fast polling (33.8): the controller's XhciFastPollFsLs mode applied to an
@@ -946,10 +972,10 @@ static VOID hcdCfgFastPoll(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (hc->FastPollMode == XHCI_PIPE_FAST_CODES) {
         (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
                                dev->Route, ep);
-        (VOID)hcdCfgTolerance(hc, ep);
+        (VOID)hcdCfgTolerance(hc, dev, ep);
         return;
     }
-    if (hcdCfgTolerance(hc, ep)) {
+    if (hcdCfgTolerance(hc, dev, ep)) {
         (VOID)XhciPipeFastPoll(hc->FastPollMode, HcdDevicePipeSpeed(hc, dev),
                                dev->Route, ep);
     }
@@ -1021,6 +1047,7 @@ static ULONG hcdCfgConfigureAdd(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (add[dci] != NULL && add[dci]->Ep.Capped &&
                 code == XHCI_CC_SUCCESS && opening) {
                 ext->Tol.Stats.CapIntervals++;
+                hcdCfgQuirkCapped(hc, &add[dci]->Ep);
             }
             if (add[dci] == NULL || !add[dci]->Ep.FastPoll) {
                 continue;
@@ -1439,7 +1466,7 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return NULL;
     }
     tol = *ep;
-    (VOID)hcdCfgTolerance(hc, &tol);
+    (VOID)hcdCfgTolerance(hc, dev, &tol);
     ep = &tol;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     pipe = hcdCfgPipeNew(hc, dev, ep, &usbd);
@@ -1469,6 +1496,7 @@ PHCD_PIPE HcdCfgHubOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     if (ep->Capped) {
         ext->Tol.Stats.CapIntervals++;
+        hcdCfgQuirkCapped(hc, ep);
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev->Pipes[ep->Dci] = pipe;
@@ -4023,6 +4051,7 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
     PUCHAR va;
     ULONG offset;
     ULONG bytes;
+    ULONG pad;
     ULONG id;
     ULONG i;
 
@@ -4042,14 +4071,18 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
     /* 36.25 (design record 13 section 11.7): with promotion on, every
      * stream's ring is 1024 TRBs, placed by the block's physical address;
      * a block that cannot be had or placed falls back to today's. */
+    /* 38.10, XhciStreamRingPad (design record 20 section 4.12): both
+     * layouts one ring longer on a controller that overfetches; the free
+     * takes the layout's own TotalBytes. */
+    pad = XhciQuirkOn(&ext->Quirk, XHCI_QK_RING_PAD);
     if (hc->WideEnabled && hcdCfgBigWanted(hc) &&
-        XhciStreamBigBytes(plan->Entries, plan->Streams, &bytes) ==
+        XhciStreamBigBytesPad(plan->Entries, plan->Streams, pad, &bytes) ==
             XHCI_STREAM_OK) {
         st->Va = HcdDmaStreamAlloc(hc, bytes, &st->Pa);
         if (st->Va != NULL &&
-            XhciStreamLayoutPlaced(plan->Entries, plan->Streams,
-                                   st->Pa.LowPart, (ULONG)st->Pa.HighPart,
-                                   &st->Layout) == XHCI_STREAM_OK) {
+            XhciStreamLayoutPlacedPad(plan->Entries, plan->Streams,
+                                      st->Pa.LowPart, (ULONG)st->Pa.HighPart,
+                                      pad, &st->Layout) == XHCI_STREAM_OK) {
             st->RingTrbs = XHCI_STREAM_BIG_RING_TRBS;
         } else {
             if (st->Va != NULL) {
@@ -4060,8 +4093,8 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
         }
     }
     if (st->Va == NULL) {
-        if (XhciStreamLayout(plan->Entries, plan->Streams,
-                             ext->Layout.PoolRingTrbs, &st->Layout) !=
+        if (XhciStreamLayoutPad(plan->Entries, plan->Streams,
+                                ext->Layout.PoolRingTrbs, pad, &st->Layout) !=
             XHCI_STREAM_OK) {
             HcdPoolFree(st);
             return NULL;
@@ -4073,6 +4106,11 @@ static PHCD_STREAMS hcdCfgStreamsBuild(PHCD_CONTROLLER hc,
         }
     } else {
         hcdCfgBigCount(hc, 1);
+    }
+    if (pad) {
+        ext->Quirk.PaddedBlocks++;
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_RING_PAD, XHCI_QK_OUT_DONE,
+                         XHCI_QK_WHY_NONE);
     }
     va = (PUCHAR)st->Va;
     for (i = 0; i < st->Layout.TotalBytes; i++) {
@@ -4229,7 +4267,11 @@ static ULONG hcdCfgStreamsOpen(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         return XHCI98_STREAMS_ALREADY_OPEN;
     }
     hcc1 = XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1);
-    hcEntries = XhciStreamHcEntries(hcc1);
+    /* 38.10, XhciStreamsOff (design record 20 section 4.2): the same
+     * effective value the transport decision reads (hcd_pdo.c). */
+    hcEntries = XhciStreamHcEntries(
+        XhciQuirkStreamsHcc1(XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
+                             hcc1));
     XHCI_DBG_VALUE("hcd: streams asked, endpoint << 16 | requested",
                    (pipe->EndpointAddress << 16) | rq->StreamsRequested);
     XHCI_DBG_VALUE("hcd: streams, HCCPARAMS1 MaxPSASize",

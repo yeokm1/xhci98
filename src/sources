@@ -102,6 +102,8 @@ SOURCES=xhci_mem.c    \
         hcd_tmr.c     \
         xhci_msi.c    \
         xhci_hlpr.c   \
+        xhci_quirk.c  \
+        hcd_quirk.c   \
         hcd_msi86.c   \
         xhci98.rc
 

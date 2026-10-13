@@ -130,6 +130,12 @@ ULONG XhciStreamPlan(ULONG requested, ULONG exponent, ULONG hcEntries,
 ULONG XhciStreamLayout(ULONG entries, ULONG streams, ULONG ringTrbs,
                        PXHCI_STREAM_LAYOUT layout)
 {
+    return XhciStreamLayoutPad(entries, streams, ringTrbs, 0, layout);
+}
+
+ULONG XhciStreamLayoutPad(ULONG entries, ULONG streams, ULONG ringTrbs,
+                          ULONG pad, PXHCI_STREAM_LAYOUT layout)
+{
     ULONG ringBytes;
     ULONG base;
     ULONG total;
@@ -149,7 +155,8 @@ ULONG XhciStreamLayout(ULONG entries, ULONG streams, ULONG ringTrbs,
     }
     layout->RingBase = base;
     layout->RingBytes = ringBytes;
-    total = base + streams * ringBytes;
+    /* 38.10, XhciStreamRingPad: one ring more, past the last stream's. */
+    total = base + (streams + (pad ? 1UL : 0UL)) * ringBytes;
     if ((total % XHCI_STREAM_PAGE_BYTES) != 0) {
         total += XHCI_STREAM_PAGE_BYTES - (total % XHCI_STREAM_PAGE_BYTES);
     }
@@ -164,6 +171,12 @@ ULONG XhciStreamRingOffset(const XHCI_STREAM_LAYOUT *layout, ULONG streamId)
 
 ULONG XhciStreamBigBytes(ULONG entries, ULONG streams, PULONG bytes)
 {
+    return XhciStreamBigBytesPad(entries, streams, 0, bytes);
+}
+
+ULONG XhciStreamBigBytesPad(ULONG entries, ULONG streams, ULONG pad,
+                            PULONG bytes)
+{
     if (bytes == NULL || !xhciStreamIsPow2(entries) ||
         entries < XHCI_STREAM_MIN_ENTRIES ||
         entries > XHCI_STREAM_MAX_ENTRIES || streams == 0 ||
@@ -174,18 +187,28 @@ ULONG XhciStreamBigBytes(ULONG entries, ULONG streams, PULONG bytes)
      * ring fit XHCI_STREAM_BIG_ALIGN: for a page-aligned base that ring is
      * 4, 8, 12 or 16 KiB in. */
     *bytes = XHCI_STREAM_BIG_ALIGN +
-             streams * XHCI_STREAM_BIG_RING_TRBS * XHCI_TRB_BYTES;
+             (streams + (pad ? 1UL : 0UL)) * XHCI_STREAM_BIG_RING_TRBS *
+                 XHCI_TRB_BYTES;
     return XHCI_STREAM_OK;
 }
 
 ULONG XhciStreamLayoutPlaced(ULONG entries, ULONG streams, ULONG paLow,
                              ULONG paHigh, PXHCI_STREAM_LAYOUT layout)
 {
+    return XhciStreamLayoutPlacedPad(entries, streams, paLow, paHigh, 0,
+                                     layout);
+}
+
+ULONG XhciStreamLayoutPlacedPad(ULONG entries, ULONG streams, ULONG paLow,
+                                ULONG paHigh, ULONG pad,
+                                PXHCI_STREAM_LAYOUT layout)
+{
     ULONG bytes;
     ULONG first;
 
     if (layout == NULL ||
-        XhciStreamBigBytes(entries, streams, &bytes) != XHCI_STREAM_OK ||
+        XhciStreamBigBytesPad(entries, streams, pad, &bytes) !=
+            XHCI_STREAM_OK ||
         paHigh != 0 || (paLow % XHCI_STREAM_PAGE_BYTES) != 0 ||
         paLow > 0xFFFFFFFFUL - (bytes - 1UL)) {
         return XHCI_STREAM_BAD_PARAM;
