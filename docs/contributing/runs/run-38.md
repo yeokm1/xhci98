@@ -227,3 +227,103 @@ the reading, byte counts checked; raw files
 No hub carries the device interface on any; every live entry is linked
 once. On XP, XP x64 and 7 x64 the keyboard's `Enum` `Control` key again lacked
 `ActiveService` while it worked, as on the stock stack.
+
+## 38.1 - The field reports' batch files
+
+**Verdict: done** (2026-10-13). `XHCISNAP -report` writes a device report
+(`BASE.DEV`: each xHCI controller's Device Manager status, problem code and
+allocated resources through `cfgmgr32.dll` loaded at run time, and the
+installed files' sizes, versions and SHA-256) and then the dump, under an
+8.3 name built from the clock (`mDDhhmmS`, a letter for the first free
+slot) or one the user gives, never over an earlier run's files.
+`SNAPON.BAT [LEVEL]`, `SNAPGET.BAT [NAME]` and `SNAPOFF.BAT` in
+`tools\xhcisnap\`, one file each for COMMAND.COM and cmd.exe, pass `%1`
+straight to `XHCISNAP -on %1` or `-report %1` and end on the tool's own
+last line, which names the files to attach (owner, 2026-10-13).
+`XHCIQUAL --log-stamp` names its log from the DOS clock the same way, and
+`QUALREP.BAT` in `tools\xhciqual\` runs the probe-only reading with it.
+Gated by `Get-ReportBatchFaults` (`package-common.ps1`) on the sources, the
+staged release and the upload set, and at the cut byte for byte against the
+repository. Commits `bbc4aafd` to `512546e5`.
+
+**Gates.** `xhcisnap\build.cmd` and `selftest.cmd` (32 cases, the batches
+run through cmd.exe among them); `xhciqual\build.cmd` (host tests);
+`xhciqual\test\run-win98-batch.ps1`, 12 of 12 under MS-DOS 7.1 in QEMU,
+`qualrep_abort_rerun` among them; `test-package.ps1`, 1182 checks.
+
+**Review.** Codex: tools round 1 six P2, round 2 one P2, packaging round 1
+one P2, round 3 two P2 (a quoted `%1` breaking cmd.exe's `if`, and a
+dispatch bypass: the batches now test nothing on `%1`), round 4 one P2
+(`f66411ea`) and two P3 (`0b7fcbe9`), round 5 (`task-mv6kaiqc-9o61ed`)
+clean with one P3 (registry paths wrapped at every backslash that keeps
+79 columns, `4c5a6500`). The two leg fixes below: round 1
+(`task-mv6nkdce-u8gsu5`) two P2, fixed in `512546e5` (`dev_prop`'s walk of
+every string limited to the two id lists; `XHCIQUAL` flushes stdout and
+stderr before it unchains INT 24h), round 2 (`task-mv6o0n1y-q4t1rk`) clean
+on the code.
+
+**The vehicle.** Development host A, QEMU, kits copied from
+`out\p38-tools\kit` per run (`out\p38-1\legs-a` to `legs-g`, notes in
+each). Driver flavour `p388` (`out\p38-8\pkg-release-<arch>`). Legs a and b
+(tools of `27dbc0b1`) found the defects fixed in `f8dc5690` and
+`b24b3dbe`: the resources never decoded (NT's count-0 descriptor, 9x's
+68-byte layout), `XHCIQUAL`'s stamped log 0 bytes (DOS/32A's 5Bh returns
+no handle in protected mode; made in real mode), QUALREP's Abort path, the
+attach advice after a failed dump. Legs c (`b24b3dbe`) read XP and 7 x64,
+legs d (`0b7fcbe9`) the other six targets, and three further runs read the
+fixes their defects needed.
+
+| Leg | Result |
+|---|---|
+| MS-DOS 7.1 (legs d, e) | QUALREP twice: "Log written: A131900A.LOG", "...B.LOG", 2,463 bytes each, read back over COM1. Read-only `B:`, Fail: "cannot write here", "No log was written". **DOS-1**: after an Abort the next `XHCIQUAL` in the same boot hung (CS16, IF clear, HLT): DOS's Abort exits inside DOS without the INT 21h AH=4Ch that DOS/32A's teardown waits for (MS-DOS 4.0 `CTRLC.ASM`; DOS/32A 9.1.2 `exit.asm`), leaving INT 21h hooked into the freed extender (vector read live). Fixed in `f2260d10`: a real-mode INT 24h stub returns Abort as Fail where Fail is allowed; on the fix, Abort then a second run in the same boot completes, Retry and the writable run unchanged. `512546e5`'s flush is harness-read only |
+| Windows 98 SE, ME (legs d, f) | SNAPON level 2, restart, SNAPGET: "memory FEBF0000-FEBF3FFF (16 KB)", "IRQ 11, shared, level", last line "Attach: A131906A.DEV A131906A.TXT (...)"; SNAPON 3, SNAPON 0 refused pointing at SNAPOFF.BAT; SNAPGET MYNAME twice, the second refused, nothing overwritten; "A&B", `-c`, `-o` refused, "Nothing to attach: nothing was written."; SNAPOFF 2 to 0. **9X-1**: a disabled controller's dump kept but not flagged, the controller not read as a PCI xHCI one (its class-code id not the first string `cfgmgr32` returned). Fixed in `ffe2c23d`; on the fix both read "device 1: a PCI xHCI controller, driven by xhci98" and, disabled, "*** dump taken from a controller Device Manager reports as disabled (Code 22)" |
+| Windows 2000 (legs d, g) | as above; "IRQ 11", "private device private data, 36 bytes"; on the final tool the device section byte-identical to legs d's |
+| Windows XP SP3 (legs c, g) | "IRQ 10, shared, level"; the class key split after `Class\` within 79 columns; on the final tool byte-identical to legs c's |
+| Windows XP x64 (legs d) | the x86 tool under WOW64: resources decoded, `xhci98.sys`'s SHA-256 the amd64 package's |
+| Windows 7 SP1 x86 (legs d) | elevated as above, "IRQ 4294967294, which is -2 as a signed number: a message-signalled interrupt (MSI)"; not elevated, "WRITE FAILED" and the Run-as-administrator advice. The instance-key line was 87 columns on that build (fixed in `4c5a6500`) |
+| Windows 7 SP1 x64 (legs c, g) | as 7 x86; on the final tool, not elevated, the instance key wraps at its backslashes, the longest line 77 columns |
+
+The final legs ran the `XHCISNAP` of `ffe2c23d` (SHA-256 `54FD6683...F66406`);
+`512546e5` narrows `ffe2c23d`'s walk back to the first string for every
+property but the two id lists, so it changes nothing those legs read.
+
+## 38.2 - The Windows 98 SE and ME silent install
+
+**Verdict: done** (2026-10-13). A device PDO answers `SilentInstall` TRUE
+on 98 SE and ME when `XhciSilentInstall` is 1 under the controller's key
+(off by default; the INFs write nothing) and an interface of its
+configuration matches an entry of `Services\USB\SilentClasses`, read once
+per controller start into the bus's own table (design record 13 section
+6.11, approved `869db5ff`). `tools\silent\` carries the six-entry
+`SILENT.REG`, `SILENT.VBS` and `silent-on.bat` / `silent-off.bat`; the
+packager publishes them there alone and holds their content to the
+checkers, and the cut to `src\` byte for byte. Commits `c248e3dc` to
+`e3f9f0b1`.
+
+**Gates.** `test\test_silent.c` (1201 checks) with the host suites; both
+builds and their gates at `d8c8fa63`; `test-package.ps1`, 1182 checks.
+
+**Review.** Codex: the design rounds 1 to 3 (`4c25f131`, `663882ac`,
+`7d92f987`), the code clean at round 1, the packaging round 1
+(`task-mv6kaj9w-704vbh`) two P2 (content never checked at a cut or upload;
+`*.reg` line endings left to the host, both fixed in `4c5a6500`) and round 2
+(`task-mv6kod02-4jf7e7`) clean; the legs' documents rounds 1 to 3, each
+finding a claim the notes did not carry (`d61d329b`, `e3f9f0b1`).
+
+**O1** (record 13 section 6.11.10): NTKERN's `RtlQueryRegistryValues` with
+a NULL `Name` enumerates every value, `silent.entries=00000006` on 98 SE and
+on ME (runtime; `legal-provenance.md` section 4). No fallback.
+
+**The legs.** Development host A, QEMU, the `release` package of
+`d8c8fa63` (`out\p38-2\pkg-release-x86`), every device on a fresh serial;
+notes `out\p38-2\legs\notes.txt`. What was read is record 13 section
+6.11.11, in short:
+
+| Guest | Result |
+|---|---|
+| Windows 98 SE | (0): the gate read off, no list read. (c): six entries; a mouse, a stick and a hub MATCH and silent; a keyboard MATCH, no wizard, the CD asked for `kbdhid.vxd` (its install not followed to the end); UAS barred, its wizard came. (b) and (a): a new mouse brought the wizard. `silent-on.bat` refused a wrong value (exit 4) and named extra values; `silent-off.bat` left the list. `usb-audio` with a hand-added 0x40 entry: parent and function silent and working. The parent's disable and enable re-decided nothing (`HcdDevicePdoRepresentFunctions` not reached). A refused device: barred, the wizard found no driver; its `HardwareID` also carries the VID/PID device id (task 38.12) |
+| Windows ME | (0): a mouse, stick, hub and keyboard installed with no wizard and every answer FALSE; audio brought the wizard. (c): six entries, MATCH, a new mouse silent; with the 0x40 entry the audio device installed with no wizard. ME needs no list for a keyboard, mouse, stick or hub of its own |
+
+Not read: a composite keyboard, mouse or stick (no QEMU device offers one),
+on ME the (a), (b), refusal and parent re-enable legs, the case with no CD,
+and Windows 2000 (the base at hand had no `xhci98` controller).
