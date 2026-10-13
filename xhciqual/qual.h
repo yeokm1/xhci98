@@ -716,6 +716,7 @@ int  legacy_final_verdict(LEGACY_CTRL *c, int active_ran);
 
 int  report_open(const char *logname, int use_serial, int paginate);
 void report_open_handle(int dos_handle, int use_serial, int paginate);
+int  report_log_ok(void);
 void report_close(void);
 void qprintf(const char *fmt, ...);
 /* The durable sinks only - a file and a serial line have no 25-row bound, so
@@ -959,6 +960,10 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf);
 /* sysprobe.c: reads only - the BIOS area, one DPMI mapping of the table,
  * CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh 1600h. */
 void sysinfo_probe(SYSINFO *si);
+/* sysprobe.c, task 38.1: INT 21h AH=5Bh ("create new file") made in real
+ * mode through DPMI 0300h, so the handle DOS returns is the one handed
+ * back. 0 with *handle set, or the DOS error code (50h: the name exists). */
+unsigned sys_dos_creatnew(const char *name, int *handle);
 /* sysinfo.c, pure: the --no-sysinfo state (owner, 2026-10-10) - nothing
  * read, and the header says the option skipped it. */
 void sysinfo_skip(SYSINFO *si);

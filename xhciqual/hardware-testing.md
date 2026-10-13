@@ -157,22 +157,23 @@ in the current directory - `mDDhhmmS.LOG`, month as one hex digit
 (`1`-`9`, `A`-`C`), day, hour, minute and the first free letter, so
 `A131425A.LOG` is 13 October 14:25 - and an earlier log is never
 overwritten, so running it again is safe. The run ends on a line
-`Log written: A131425A.LOG - attach this file`; the batch's last line
-says to attach that file. Set the DOS clock first (`DATE`, `TIME`) if it
+`Log written: A131425A.LOG - attach this file`, the last line before
+the batch's pause. Set the DOS clock first (`DATE`, `TIME`) if it
 is wrong: the log's second line carries the full date and time.
 
-The batch says which way the run went: a completed reading; no USB host
-controller found (the log is still written); the name refused before
-anything was read (exit 4: the clock is not a date, all 26 letters of
-that minute are taken, or the log cannot be created) - fix what the
-message says and run it again; a disk it cannot write to ("cannot write
-here": exit 4 with no completion flag either, as on a full disk or a
-write-protected floppy, where DOS first asks Abort, Retry, Fail - answer F),
-where nothing was read and the two files are to be copied to a disk with
-room that can be written; or, with no
-completion flag after any other exit, an abnormal end, where the partial
-log is kept and a photo of the screen is wanted. The batch ends on
-`pause`. It deletes no log.
+The last line printed names the file to attach. A completed reading (or
+no USB host controller found, where the log is still written) ends on
+XHCIQUAL's own `Log written:` line. A refusal before anything was read
+(exit 4) ends on XHCIQUAL's own reason and a line saying no log was
+written: the clock is not a date, all 26 letters of that minute are
+taken, or it cannot write here - a full disk, or a write-protected floppy,
+where DOS first asks Abort, Retry, Fail: answer F, then copy the two files
+to a disk with room that can be written. Answering A (Abort) instead ends
+XHCIQUAL at once, before anything was read, and QUALREP says it was
+stopped and that nothing needs a cold boot. With no completion flag after
+any other exit, the run ended abnormally: the partial log is kept and a
+photo of the screen is wanted, attached with the newest `.LOG`. The batch
+ends on `pause`. It deletes no log.
 
 ### Quick xHCI procedure: run the five batch files
 
@@ -711,7 +712,7 @@ Exit codes are:
   say so; `--irq-selftest` gives it for "NO WORKING INTERRUPT".
 - `4` (roadmap-hcd task 38.1): `--log-stamp` refused before anything was
   read - the DOS clock is not a date and time, `A` to `Z` are all taken
-  for that minute, or the log cannot be created. `QUALREP` says so.
+  for that minute, or the log cannot be created. XHCIQUAL says which.
 
 ## What to record for each machine
 

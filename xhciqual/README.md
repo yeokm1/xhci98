@@ -273,7 +273,9 @@ date and time, the minute's 26 names are all taken, or the log cannot be
 created. The batch wrappers bucket
 these with `IF ERRORLEVEL` and pair them with `--done-flag`, which is what
 separates a bad verdict from a crash - the flag is written on any normal exit,
-including a usage error. (Stated here because the audit of 2026-09-07 found
+including a usage error, but for one: a `--log-stamp` run refused because it
+cannot write here does not try a flag in that same directory (exit 4
+alone). (Stated here because the audit of 2026-09-07 found
 this file describing it two ways.)
 
 "One screen" was measured in QEMU: three controllers print 13 lines (11
@@ -337,14 +339,21 @@ QUALREP.FLG`: read-only (step 1 of the recommended order, so no PCI
 configuration write and no ownership taken), with the log named from the
 DOS clock in the current directory, never overwriting an earlier one, so
 it can be run again. It first checks that `XHCIQUAL.EXE` is in the current
-directory and that it can write there (a write-protected or full disk
-stops it, saying it cannot write here), buckets the exit code with
-`IF ERRORLEVEL` from the highest down (1 a completed reading, 2 no USB
-host controller found, 4 the name refused, anything else unexpected), and
-separates a crash from all of those with `IF EXIST` on the completion
-flag, which it deletes afterwards. It deletes no log. The tool prints
-`Log written: mDDhhmmS.LOG - attach this file` at the end of the run, and
-the batch's last line says to attach the file that line names. 8.3 name,
+directory and that it can delete a stale completion flag, then runs the
+tool. The last line printed names the file to attach (owner, 2026-10-13),
+and where the tool can report the outcome it does, so the batch prints
+nothing after it but its `pause`: a completed reading ends on the tool's
+`Log written: mDDhhmmS.LOG - attach this file`, and a refusal (exit 4) on
+the tool's own reason, `XHCIQUAL: cannot write here` for a write-protected
+or full disk, and a last line saying there is no file to attach. The batch
+speaks only for what the tool cannot: exit code 0, which `--probe-only`
+never returns and which is what an **Abort** answer to DOS's
+`Abort, Retry, Fail?` leaves (measured in QEMU, 2026-10-13: DOS ends the
+program; nothing was read), and a run that ended without writing the
+completion flag (`IF EXIST`; a DOS/32A fault ends with exit code 255),
+which is the cold-boot case. Those branches end on "attach the newest .LOG
+in this directory", since the tool never said a name. It deletes the flag
+and no log. Every line it prints fits 79 columns. 8.3 name,
 ASCII, CRLF, `COMMAND.COM` built-ins only, and nothing on an `echo` or
 `rem` line that `COMMAND.COM` could read as a redirection or a variable.
 
@@ -471,7 +480,14 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   the log is created with INT 21h `5Bh` ("create new file"), which fails
   rather than truncate, and a name taken between the check and the create
   moves on to the next letter; the handle so created is the one the report
-  writes to. The log is created before any sink is opened, so a refusal
+  writes to. The `5Bh` is made in real mode through DPMI `0300h`
+  (`sys_dos_creatnew`, `sysprobe.c`), not with the C library's
+  `_dos_creatnew`: issued in protected mode, DOS/32A 9.1.2 creates the file
+  but hands back `5B00h` in place of the handle, so every write failed
+  with error 6 and the log stayed 0 bytes (found on the 38.1 MS-DOS leg,
+  2026-10-13; the screen said `Log written` all the same). A write that
+  fails or falls short now ends the run on `Log NOT complete` instead of
+  `Log written`. The log is created before any sink is opened, so a refusal
   with `--serial` has not touched COM1.
   The year is not in the name; the log's second line carries the full date
   and time (`Log: A131425A.LOG, begun 2026-10-13 14:25:07 by the DOS
@@ -479,7 +495,12 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   file`. It is refused, with exit **4** and its own message, before
   anything is read, when the clock is not a date and time (a zero or
   out-of-range field), when `A` to `Z` are all taken for that minute, or
-  when the log cannot be created (which a plain `--log` only warns about).
+  when the log cannot be created (which a plain `--log` only warns about;
+  this refusal begins `XHCIQUAL: cannot write here`, and the
+  `--done-flag`, when it names a file in the current directory, is not
+  tried, since on a write-protected disk it would be a second
+  Abort, Retry, Fail). Each refusal's last line says that no log was
+  written, so there is no file to attach.
   Not with `--log` (exit 2). A modifier like the others, so pair it with
   `--quick` or `--probe-only` for a read-only run. The name is built by
   `stamp.c`, a pure function of the clock's fields and an "exists"
@@ -638,8 +659,15 @@ powershell -ExecutionPolicy Bypass -File xhciqual\test\run-win98-batch.ps1
 
 The wrappers use only `COMMAND.COM` built-ins: `IF ERRORLEVEL` for the exit
 code and `IF EXIST` on XHCIQUAL's `--done-flag` completion sentinel (no
-`FIND.EXE`). Three cases drive `QUALREP.BAT` (task 38.1): one reading to
-its success branch with the `Log written:` line on screen; two in one boot
+`FIND.EXE`). Six cases drive `QUALREP.BAT` (task 38.1): one reading, whose
+last line before the pause must be `Log written:`; one (`qualrep_log`) that
+reads the stamped log back - QUALREP, then a plain `--log` run of the same
+probe, both files copied to COM1 and compared on the host, so a stamped log
+that is empty or differs from the `--log` report beyond its `Log:` line and
+its ending fails (the 38.1 MS-DOS leg's 0-byte logs passed a screen-only
+check); two on a write-protected B:, answering Fail (XHCIQUAL's own "cannot
+write here" last) and Abort (QUALREP's stopped branch, not the cold-boot
+one); two in one boot
 with the guest clock pinned (`-rtc base=2026-10-13T14:25:00,clock=vm`),
 where `DIR /B` must list `A1314mmA.LOG` and then the same minute's `B`;
 and one at 31 December 23:58 with every letter of 23:58 and 23:59 already

@@ -482,7 +482,9 @@ static int dos_name_exists(const char *name, void *ctx)
 
 /* INT 21h AH=5Bh, "create new file": fails with error 50h (file exists)
  * where AH=3Ch, and so fopen "w", would truncate. The handle is kept and
- * becomes the log, so the name is never opened a second time. */
+ * becomes the log, so the name is never opened a second time. Made in real
+ * mode (sys_dos_creatnew, sysprobe.c), not with _dos_creatnew, whose
+ * handle DOS/32A loses: the 38.1 MS-DOS leg's empty logs. */
 #define DOS_ERR_FILE_EXISTS 0x50
 
 static int dos_create_new(const char *name, void *ctx)
@@ -491,7 +493,7 @@ static int dos_create_new(const char *name, void *ctx)
     unsigned rc;
 
     (void)ctx;
-    rc = _dos_creatnew(name, _A_NORMAL, &h);
+    rc = sys_dos_creatnew(name, &h);
     if (rc == 0) {
         stamp_handle = h;
         return STAMP_CREATE_OK;
@@ -539,10 +541,24 @@ static int resolve_log_stamp(void)
         opt_log_name = stamp_buf;
         return 1;
     }
+    /* Each refusal's last line says what to attach, which is nothing: a
+     * caller's batch (QUALREP.BAT) prints nothing after it but its pause,
+     * so this is the last line on the screen (owner, 2026-10-13). */
     if (rc == STAMP_CREATE_FAILED) {
-        printf("XHCIQUAL: --log-stamp refused: could not create %s in this\n"
-               "  directory (read-only media, a full disk, or a full root\n"
-               "  directory?). Nothing was read (exit 4).\n", stamp_buf);
+        /* The completion flag is not tried in a directory that has just
+         * refused a file: on a write-protected disk it would be a second
+         * Abort, Retry, Fail and then a warning under this text. Exit 4
+         * says the run was refused; QUALREP.BAT takes it without a flag. */
+        if (opt_done_flag != 0 && strchr(opt_done_flag, '\\') == 0 &&
+            strchr(opt_done_flag, ':') == 0)
+            opt_done_flag = 0;
+        printf("XHCIQUAL: cannot write here. --log-stamp could not create %s\n"
+               "  in this directory: a write-protected or full disk, or a full\n"
+               "  root directory. Nothing was read, and nothing needs a cold\n"
+               "  boot. Copy XHCIQUAL.EXE (and QUALREP.BAT) to a disk you can\n"
+               "  write to and run it there (exit 4).\n"
+               "No log was written, so there is no file to attach.\n",
+               stamp_buf);
         return 0;
     }
     if (rc == STAMP_ALL_TAKEN &&
@@ -551,12 +567,15 @@ static int resolve_log_stamp(void)
         printf("XHCIQUAL: --log-stamp refused: %sA.LOG to %sZ.LOG all\n"
                "  exist in this directory. Nothing was read and nothing was\n"
                "  overwritten. Wait for the next minute, or move the old logs\n"
-               "  elsewhere, then run again (exit 4).\n", prefix, prefix);
+               "  elsewhere, then run again (exit 4).\n"
+               "No log was written by this run, so it has no file to "
+               "attach.\n", prefix, prefix);
     } else {
         printf("XHCIQUAL: --log-stamp refused: the DOS clock reads\n"
                "  %04u-%02u-%02u %02u:%02u, which is not a date and time a\n"
                "  log can be named from. Set it with DATE and TIME, then run\n"
-               "  again. Nothing was read (exit 4).\n",
+               "  again. Nothing was read (exit 4).\n"
+               "No log was written, so there is no file to attach.\n",
                stamp_year, stamp_month, stamp_day, stamp_hour,
                stamp_minute);
     }
@@ -576,8 +595,16 @@ static void print_stamp_header(void)
 
 static void print_stamp_tail(void)
 {
-    if (opt_log_stamp && opt_log_name != 0)
+    if (!opt_log_stamp || opt_log_name == 0)
+        return;
+    if (report_log_ok()) {
         qprintf("Log written: %s - attach this file\n", opt_log_name);
+    } else {
+        /* The screen only: the log is what failed. */
+        printf("Log NOT complete: writing %s failed (a full disk?).\n"
+               "Photograph this screen; attach the photo and %s.\n",
+               opt_log_name, opt_log_name);
+    }
 }
 
 /*

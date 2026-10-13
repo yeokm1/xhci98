@@ -14,9 +14,15 @@
 #include "qual.h"
 
 static FILE *logf = 0;
-/* A DOS handle the caller created exclusively (--log-stamp, INT 21h AH=5Bh)
- * and handed over, written with INT 21h AH=40h; -1 when there is none. */
+/* A DOS handle the caller created exclusively (--log-stamp, INT 21h AH=5Bh
+ * in real mode, sys_dos_creatnew) and handed over, written with INT 21h
+ * AH=40h; -1 when there is none. */
 static int log_handle = -1;
+/* Set when a write to log_handle failed or fell short; nothing more is
+ * written to it, and report_log_ok answers 0, so the run's last line does
+ * not claim a log it did not write (the 38.1 MS-DOS leg's 0-byte logs were
+ * announced as written). */
+static int log_failed = 0;
 static int serial_on = 0;
 
 /* console pager: pause every screenful so the report can be read on bare
@@ -78,7 +84,14 @@ int report_open(const char *logname, int use_serial, int paginate)
 void report_open_handle(int dos_handle, int use_serial, int paginate)
 {
     log_handle = dos_handle;
+    log_failed = 0;
     sinks_on(use_serial, paginate);
+}
+
+/* 1 unless a write to the handed-over log failed or fell short. */
+int report_log_ok(void)
+{
+    return !log_failed;
 }
 
 void report_close(void)
@@ -96,21 +109,29 @@ void report_close(void)
 /* Text-mode output on a raw DOS handle: LF becomes CR LF, as the CRT's "w"
  * stream does for --log. Each write goes to DOS at once, so a later fault
  * keeps every line already printed, as fflush does for the stream. */
+static void handle_put(const char *p, unsigned n)
+{
+    unsigned wrote = 0;
+
+    if (log_failed)
+        return;
+    if (_dos_write(log_handle, p, n, &wrote) != 0 || wrote != n)
+        log_failed = 1;
+}
+
 static void handle_out(const char *buf)
 {
     static const char crlf[2] = { '\r', '\n' };
     const char *p = buf;
     const char *run = buf;
-    unsigned wrote;
 
     for (;; p++) {
         if (*p == '\n' || *p == '\0') {
             if (p > run)
-                (void)_dos_write(log_handle, run, (unsigned)(p - run),
-                                 &wrote);
+                handle_put(run, (unsigned)(p - run));
             if (*p == '\0')
                 break;
-            (void)_dos_write(log_handle, crlf, 2, &wrote);
+            handle_put(crlf, 2);
             run = p + 1;
         }
     }

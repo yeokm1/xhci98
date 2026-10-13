@@ -6,7 +6,9 @@
  * the SMBIOS structure table when it lies above 1 MB, CPUID, and three
  * real-mode services through DPMI 0300h - INT 15h E820, INT 21h 30h/3306h,
  * INT 2Fh 1600h. No PCI access, no port I/O, nothing written but the
- * 32-byte E820 buffer this file allocates and frees.
+ * 32-byte E820 buffer this file allocates and frees. One call here is not
+ * the system description: sys_dos_creatnew, --log-stamp's exclusive create
+ * (task 38.1), which is here because it needs the same real-mode call.
  *
  * No identifiers: see sysinfo.c and qual.h. Nothing here reads a serial
  * number, UUID, asset tag or SKU; the table bytes go straight to
@@ -237,4 +239,64 @@ void sysinfo_probe(SYSINFO *si)
     probe_e820(si);
     probe_dos(si);
     sysinfo_seal(si);
+}
+
+/*
+ * Task 38.1, --log-stamp: INT 21h AH=5Bh ("create new file"), which fails
+ * with 50h where AH=3Ch would truncate, made in real mode.
+ *
+ * Not _dos_creatnew: that issues AH=5Bh in protected mode, and DOS/32A
+ * 9.1.2 (the stub wlink embeds) creates the file but hands EAX back as it
+ * went in, 5B00h, not the handle DOS returned. Measured 2026-10-13 in QEMU
+ * on MS-DOS 7.1: _dos_creatnew answered 0 with handle 5B00h, every write to
+ * it failed with error 6 (invalid handle), and the log stayed 0 bytes,
+ * while the real handle stayed open until exit. Through DPMI 0300h the
+ * real-mode AX comes back as DOS left it. The name has to be in
+ * conventional memory for a real-mode DS:DX, so it goes in a DPMI 0100h
+ * block, freed before return. Writes and the close are protected-mode
+ * AH=40h and AH=3Eh (_dos_write, _dos_close), which DOS/32A passes back
+ * correctly. A write-protected disk raises DOS's Abort, Retry, Fail here
+ * as it would in protected mode: Fail returns an error, Abort ends the
+ * program with exit code 0.
+ */
+unsigned sys_dos_creatnew(const char *name, int *handle)
+{
+    union REGS r;
+    RMREGS rm;
+    size_t len;
+    u16 seg, sel;
+    unsigned rc;
+
+    len = strlen(name);
+    if (len > 127)
+        return 0x03;                    /* path not found */
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0100;
+    r.w.bx = (u16)((len + 1 + 15) / 16);   /* paragraphs */
+    int386(0x31, &r, &r);
+    if (r.w.cflag)
+        return 0x08;                    /* insufficient memory */
+    seg = r.w.ax;
+    sel = r.w.dx;
+    memcpy((void *)((u32)seg << 4), name, len + 1);
+
+    memset(&rm, 0, sizeof(rm));
+    rm.eax = 0x5B00;
+    rm.ecx = 0;                         /* normal attributes */
+    rm.ds = seg;
+    rm.edx = 0;
+    if (!rm_int(0x21, &rm)) {
+        rc = 0x1F;                      /* general failure */
+    } else if (rm.flags & 1) {
+        rc = (u16)rm.eax;
+    } else {
+        *handle = (int)(u16)rm.eax;
+        rc = 0;
+    }
+
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0101;
+    r.w.dx = sel;
+    int386(0x31, &r, &r);
+    return rc;
 }
