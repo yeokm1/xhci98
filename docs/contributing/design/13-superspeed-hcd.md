@@ -2566,8 +2566,8 @@ the HID drivers not, see (c)):
   `xhci98` INF was `1.99.0.0`, older than the `XHCI98\HUB` model (added in
   `2.1.0.0`). Read again on the same base with the current INF
   (`2.3.1.0`) in `INF\OTHER`: a new hub, no wizard, MATCH, `Driver` set,
-  `ConfigFlags` 0, "xHCI98 USB Hub" working, a mouse behind it silent and
-  working; a new keyboard, no wizard, MATCH, one CD prompt (`hidusb.sys`;
+  `ConfigFlags` 0, "xHCI98 USB Hub" working, a mouse behind it silent (one
+  CD prompt, `hidusb.sys`) and working; a new keyboard, no wizard, MATCH, one CD prompt (`hidusb.sys`;
   `kbdhid.vxd` was on the disk by then), "HID-compliant keyboard" working
   and typing.
 - (b), the gate left at 1 from (c) and the list deleted: `silent.status`

@@ -298,7 +298,7 @@ per controller start into the bus's own table (design record 13 section
 `SILENT.REG`, `SILENT.VBS` and `silent-on.bat` / `silent-off.bat`; the
 packager publishes them there alone and holds their content to the
 checkers, and the cut to `src\` byte for byte. Commits `c248e3dc` to
-`e3f9f0b1`.
+`0338f690`.
 
 **Gates.** `test\test_silent.c` (1201 checks) with the host suites; both
 builds and their gates at `d8c8fa63`; `test-package.ps1`, 1182 checks.
@@ -308,7 +308,9 @@ builds and their gates at `d8c8fa63`; `test-package.ps1`, 1182 checks.
 (`task-mv6kaj9w-704vbh`) two P2 (content never checked at a cut or upload;
 `*.reg` line endings left to the host, both fixed in `4c5a6500`) and round 2
 (`task-mv6kod02-4jf7e7`) clean; the legs' documents rounds 1 to 3, each
-finding a claim the notes did not carry (`d61d329b`, `e3f9f0b1`).
+finding a claim the notes did not carry (`d61d329b`, `e3f9f0b1`,
+`0338f690`, the last after a further 98 SE leg), round 4
+(`task-mv6pma9g-yj5yvq`) clean.
 
 **O1** (record 13 section 6.11.10): NTKERN's `RtlQueryRegistryValues` with
 a NULL `Name` enumerates every value, `silent.entries=00000006` on 98 SE and
