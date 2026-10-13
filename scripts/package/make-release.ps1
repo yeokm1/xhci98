@@ -574,8 +574,9 @@ $oemPublishable = @("txtsetup.oem")
 # batch files (task 36.56), which set 1 or 0 through it in one double-click.
 # Not INF-declared files: text files the user runs, the same for every
 # architecture and flavour, which the setup engine never reads. Since task
-# 37.5 a cut publishes them once, from src\, into portsw\ at the version
-# root beside xhciqual\ and xhcisnap\ (under tools\ since task 38.10), and into no flavour directory; the
+# 37.5 a cut publishes them once, from src\, into portsw\ beside xhciqual\
+# and xhcisnap\ (all three under tools\ since task 38.10), and into no
+# flavour directory; the
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
 # published release is never rewritten, so the upload assembly accepts a
