@@ -7194,6 +7194,84 @@ typedef struct {
     int Count;
 } STAMP_SET;
 
+/*
+ * A name given to -report with -o (owner, 2026-10-13: SNAPGET.BAT takes an
+ * optional name to save to). An 8.3 base in the current directory: 1 to 8
+ * characters, letters, digits, '_' and '-' (not first, so it never reads as
+ * an option), no path, drive or extension, and not a DOS device name, which
+ * would open the device instead of a file. The set of characters is
+ * narrower than 8.3 allows on purpose: SNAPGET.BAT quotes the name in an
+ * `if` test, where '&', '^', '%', '!' and the parentheses would break the
+ * line under cmd.exe. Returns NULL when the name is acceptable, or why not.
+ */
+static const char *report_name_refusal(const char *name)
+{
+    static const char *const devices[] = {
+        "CON", "PRN", "AUX", "NUL", NULL
+    };
+    size_t len;
+    size_t i;
+    int k;
+    char c;
+
+    len = strlen(name);
+    if (len == 0) {
+        return "it is empty";
+    }
+    for (i = 0; i < len; i++) {
+        c = name[i];
+        if (c == '\\' || c == '/') {
+            return "it names a directory: the files are always written in "
+                   "the current directory";
+        }
+        if (c == ':') {
+            return "it names a drive: the files are always written in the "
+                   "current directory";
+        }
+        if (c == '.') {
+            return "it carries a dot: give the name without an extension, "
+                   "this tool adds .DEV, .TXT, .BIN and .PSC";
+        }
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_' || (c == '-' && i > 0))) {
+            return "it carries a character other than a letter, a digit, "
+                   "'_' or '-' (and '-' may not come first)";
+        }
+    }
+    if (len > 8) {
+        return "it is longer than 8 characters";
+    }
+    for (k = 0; devices[k] != NULL; k++) {
+        if (_stricmp(name, devices[k]) == 0) {
+            return "it is a DOS device name";
+        }
+    }
+    if (len == 4 && (_strnicmp(name, "COM", 3) == 0 ||
+                     _strnicmp(name, "LPT", 3) == 0) &&
+        name[3] >= '0' && name[3] <= '9') {
+        return "it is a DOS device name";
+    }
+    return NULL;
+}
+
+/* Whether any file of a given name's set exists (or cannot be looked at). */
+static int report_name_taken(const char *base, char *which, size_t whichSize)
+{
+    char name[32];
+    int k;
+
+    for (k = 0; stampExts[k] != NULL; k++) {
+        sprintf(name, "%s%s", base, stampExts[k]);
+        if (stamp_exists_here(name, NULL)) {
+            _snprintf(which, whichSize - 1, "%s", name);
+            which[whichSize - 1] = '\0';
+            return 1;
+        }
+    }
+    which[0] = '\0';
+    return 0;
+}
+
 static int stamp_exists_canned(const char *name, void *context)
 {
     const STAMP_SET *set = (const STAMP_SET *)context;
@@ -9117,15 +9195,21 @@ static int take_dump(unsigned long controller, const char *base,
                      int probeOnly);
 
 /*
- * `-report [-c N] [-nosysinfo]`. Exit codes:
+ * `-report [-o NAME] [-c N] [-nosysinfo]`. NAME (owner, 2026-10-13) is an
+ * 8.3 base in the current directory, held to report_name_refusal's rule in
+ * main (exit 2 when it fails); without it the base is the clock's. Exit
+ * codes:
  *   0  BASE.DEV complete, and the dump's BASE.TXT complete
  *   3  BASE.DEV complete; the dump was taken but its .TXT is incomplete,
  *      or the extension's size disagreed (as the dump's own 3)
  *   4  BASE.DEV complete; no dump was taken (the device would not open, or
  *      the driver did not serve it - the .DEV says which)
  *   5  BASE.DEV could not be written in full
- *   6  all 26 names for this minute are taken; nothing was written
- *   7  the clock gave an impossible date or time; nothing was written
+ *   6  no free name: all 26 for this minute are taken, or a file of the
+ *      given NAME's set (.DEV .TXT .BIN .PSC or a .TMP of one) already
+ *      exists; nothing was written or overwritten
+ *   7  the clock gave an impossible date or time; nothing was written (not
+ *      with a given NAME, which does not need the clock)
  *   8  a file of this run's set appeared after its name was chosen (another
  *      run or program made it): that file was left as it was, and nothing of
  *      the dump was kept under the name; the .DEV, if it was written, says
@@ -9143,11 +9227,12 @@ static int take_dump(unsigned long controller, const char *base,
  * name is chosen, so the clash branch runs with no second process. */
 static int faultClash;
 
-static int take_report(unsigned long controller)
+static int take_report(unsigned long controller, const char *given)
 {
     char base[16];
     char devPath[32];
     char name[32];
+    const char *again;
     int rc;
     int fd;
     int devOk;
@@ -9166,6 +9251,26 @@ static int take_report(unsigned long controller)
     reportBinOurs = 0;
     reportPscOurs = 0;
     reportTxtOurs = 0;
+    if (given != NULL) {
+        /* main has held it to report_name_refusal: at most 8 characters. */
+        sprintf(base, "%s", given);
+        again = "Run it again with another name, or with none.";
+        if (report_name_taken(base, name, sizeof(name))) {
+            printf("xhcisnap -report: %s already exists in this directory, "
+                   "so the name %s is\ntaken. Nothing was written, and "
+                   "nothing was overwritten. Give another name,\nor none for "
+                   "one made from the clock.\n", name, base);
+            return REPORT_NAMES_FULL;
+        }
+        sprintf(devPath, "%s.DEV", base);
+        printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s "
+               "(the name given), in the\ncurrent directory\n",
+               (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
+               (unsigned)runTime.wDay, (unsigned)runTime.wHour,
+               (unsigned)runTime.wMinute, base);
+        goto named;
+    }
+    again = "Run it again: it will take the next letter.";
     rc = stamp_base(runTime.wMonth, runTime.wDay, runTime.wHour,
                     runTime.wMinute, stamp_exists_here, NULL, base);
     if (rc == STAMP_BADCLOCK) {
@@ -9192,14 +9297,14 @@ static int take_report(unsigned long controller)
            (unsigned)runTime.wMonth, (unsigned)runTime.wDay,
            (unsigned)runTime.wHour, (unsigned)runTime.wMinute, base);
 
+named:
     /* Created, never replaced: O_EXCL refuses a name that appeared since
-     * the stamp was chosen. */
+     * the stamp was chosen or the given name was found free. */
     fd = _open(devPath, _O_WRONLY | _O_CREAT | _O_EXCL | _O_TEXT,
                _S_IREAD | _S_IWRITE);
     if (fd < 0 && errno == EEXIST) {
         note_clash(devPath);
-        printf("  Nothing was written. Run it again: it will take the next "
-               "letter.\n");
+        printf("  Nothing was written. %s\n", again);
         return REPORT_CLASH;
     }
     companion = (fd >= 0) ? _fdopen(fd, "w") : NULL;
@@ -9298,8 +9403,12 @@ static int take_report(unsigned long controller)
                      base);
         } else if (reportClash) {
             dev_line("dump", "NOT taken: %s", dumpWhy);
-            dev_line("", "This report above still stands. Run the report "
-                     "again: it takes the next free name.");
+            dev_line("", "This report above still stands. %s",
+                     (given != NULL)
+                         ? "Run the report again under another name, or "
+                           "with none."
+                         : "Run the report again: it takes the next free "
+                           "name.");
         } else {
             dev_line("dump", "NOT taken: %s", (dumpWhy[0] != '\0')
                          ? dumpWhy : "see the lines on the screen");
@@ -9528,7 +9637,7 @@ static void usage(void)
     printf("xhcisnap %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
     printf(
 "read xhci98.sys's own log off a running machine, from user mode.\n"
-"  xhcisnap -report [-c N]    BASE.DEV (devices, files) + dump, BASE = clock\n"
+"  xhcisnap -report [-o NAME] [-c N]  .DEV + dump; NAME 8.3, else from clock\n"
 "  xhcisnap -dump [-c N] [-o BASE]   dump: BASE.TXT (send this), .BIN, .PSC\n"
 "  xhcisnap -verbosity N      set the level 0-4 on every xhci98 key, RESTART\n"
 "  xhcisnap -disable          exactly -verbosity 0.  There is no -enable.\n"
@@ -9577,18 +9686,24 @@ static void usage_long(void)
 "                mDDhhmmS - the month as 1-9, A, B or C, the day, the hour\n"
 "                (24h), the minute, and S the first letter A-Z no file of the\n"
 "                set already has, so a second run never overwrites the first.\n"
-"                Takes -c and -nosysinfo; refuses -o.  Prints every file it\n"
+"                -o NAME gives the base instead: 1 to 8 letters, digits, '_'\n"
+"                or '-' (not first), no path, drive or extension, not a DOS\n"
+"                device name (exit 2 otherwise), still in the current\n"
+"                directory, and refused (exit 6) if any file of its set -\n"
+"                .DEV .TXT .BIN .PSC or a .TMP of one - exists already.\n"
+"                Takes -c and -nosysinfo.  Prints every file it\n"
 "                wrote, and last the ones to attach: the .DEV and the .TXT\n"
 "                (the .BIN and .PSC only if asked).  Exit 0 both complete,\n"
 "                3 the .TXT is not complete, 4 no dump (the .DEV says why),\n"
-"                5 the .DEV is not complete, 6 all 26 names taken this minute,\n"
-"                7 the clock is not a valid date; at 6 and 7 nothing is\n"
-"                written.  8 a file of the set appeared after the name was\n"
-"                chosen (another run made it): it is left alone and no dump\n"
-"                is kept under that name.  -report never replaces or deletes\n"
-"                a file it did not create.  SNAPON.BAT, SNAPGET.BAT and\n"
-"                SNAPOFF.BAT beside this\n"
-"                tool run -verbosity 2, -report and -disable.\n"
+"                5 the .DEV is not complete, 6 no free name (all 26 taken\n"
+"                this minute, or NAME taken), 7 the clock is not a valid\n"
+"                date; at 6 and 7 nothing is written.  8 a file of the set\n"
+"                appeared after the name was chosen (another run made it):\n"
+"                it is left alone and no dump is kept under that name; run\n"
+"                it again (under another NAME, if one was given).  -report\n"
+"                never replaces or deletes a file it did not create.\n"
+"                SNAPON.BAT [LEVEL], SNAPGET.BAT [NAME] and SNAPOFF.BAT\n"
+"                beside this tool run -verbosity, -report and -disable.\n"
 "  -dump         take a dump with the defaults.  Implied by -c and -o, so it\n"
 "                is only needed when neither is given.  Writes BASE.BIN,\n"
 "                BASE.PSC and BASE.TXT, and prints the RESOLVED absolute path\n"
@@ -9602,7 +9717,8 @@ static void usage_long(void)
 "                2 - try those before concluding anything.\n"
 "  -o BASENAME   output basename.  Default XHCISNAP, in the CURRENT\n"
 "                directory, where the dump prints its resolved path.  For a\n"
-"                field report use -report, which names its own files.\n"
+"                field report use -report, which names its own files\n"
+"                (beside -report, -o takes an 8.3 name only; see above).\n"
 "  -help, -?, /? this text.  Add | MORE - it is longer than a screen, which\n"
 "                the short usage is deliberately not.\n"
 "  -verbosity N  set XhciLogVerbosity to exactly N, 0-4, up or down, in the\n"
@@ -10099,14 +10215,20 @@ int main(int argc, char **argv)
         return 2;
     }
     /* -report names its files from the clock, in the current directory, so
-     * that a second run never overwrites the first; a name given with -o
-     * would undo exactly that. */
+     * that a second run never overwrites the first. A name given with -o
+     * (owner, 2026-10-13: SNAPGET.BAT NAME) is held to the 8.3 rule here and
+     * refused, not overwritten, when a file of its set exists. */
     if (doReport && baseGiven) {
-        printf("-report names its files itself, from the clock, in the "
-               "current directory, so a\nsecond run never overwrites the "
-               "first. It does not take -o; use -dump -o for a\nname of "
-               "your own.\n");
-        return 2;
+        const char *why;
+
+        why = report_name_refusal(base);
+        if (why != NULL) {
+            printf("-report -o takes a name of 1 to 8 letters, digits, '_' "
+                   "or '-', with no path,\ndrive or extension; its files are "
+                   "written in the current directory. That\nname is refused: "
+                   "%s. Nothing was written.\n", why);
+            return 2;
+        }
     }
     /*
      * **`-force` is a modifier on the registry write and nothing else**, which
@@ -10188,7 +10310,7 @@ int main(int argc, char **argv)
     }
 
     if (doReport) {
-        return take_report(controller);
+        return take_report(controller, baseGiven ? base : NULL);
     }
     return take_dump(controller, base, probeOnly);
 }

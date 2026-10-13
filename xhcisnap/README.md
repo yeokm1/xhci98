@@ -52,6 +52,9 @@ XHCISNAP -report         the field report: mDDhhmmS.DEV, then the dump of
                          controller 0 into mDDhhmmS.TXT/.BIN/.PSC, named from
                          the clock in the current directory (from 2.4.0.0;
                          see "The field report"). Takes -c and -nosysinfo
+XHCISNAP -report -o MYPC the same, named MYPC.DEV/.TXT/.BIN/.PSC: an 8.3 base
+                         in the current directory, refused (exit 6) rather
+                         than overwritten when a file of the set exists
 XHCISNAP -dump           dump controller 0 to XHCISNAP.BIN/.PSC/.TXT
 XHCISNAP -dump -c 1 -o WEDGED   controller 1 to WEDGED.BIN/.PSC/.TXT
 XHCISNAP -disable        exactly -verbosity 0: back to 0, which is off outright
@@ -74,8 +77,9 @@ The published sequence is four steps and none of them is `regedit`:
 last step was a dump named with `-o`, and `-o` and `-c` still each imply
 `-dump`). The
 three batch files beside the tool run the steps for a reporter: `SNAPON.BAT`,
-`SNAPGET.BAT` and `SNAPOFF.BAT` (see "The field report"). There is one value
-to set.
+`SNAPGET.BAT` and `SNAPOFF.BAT` (see "The field report"); `SNAPON.BAT` takes
+an optional level (1 to 4, default 2) and `SNAPGET.BAT` an optional name to
+save to. There is one value to set.
 `-verbosity N` sets exactly N, up or down, and is the only knob.
 
 `-verbosity N` prints each key's previous level beside the write. A value out
@@ -166,9 +170,28 @@ refused too. With all 26 letters taken the tool writes nothing and exits 6;
 a clock whose month, day, hour or minute is out of range is refused, exit 7.
 The full date and time, with the year, is written inside the `.DEV` and the
 `.TXT` ("local time"; every dump's `.TXT` carries the line since 2.4.0.0).
-The files always go to the current directory: `-report` refuses `-o`. The
-screen says "the current directory" and never prints its path, which is
-often the user's profile and so carries the user's name.
+The files always go to the current directory. The screen says "the current
+directory" and never prints its path, which is often the user's profile and
+so carries the user's name.
+
+**A name of the reporter's own: `-report -o NAME`** (owner, 2026-10-13;
+`SNAPGET.BAT NAME` runs it). `NAME` replaces the clock's base and is held to
+an 8.3 base in the current directory, by the tool and not only by the batch:
+1 to 8 characters, each a letter, a digit, `_` or `-` (`-` not first, so it
+never reads as an option), with no path, no drive, no dot and no extension,
+and not a DOS device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`,
+`LPT0`-`LPT9`). The set is narrower than 8.3 allows on purpose: `SNAPGET.BAT`
+quotes the name in an `IF` test, where `&`, `^`, `%`, `!` and the
+parentheses would break the line under cmd.exe. A name outside the rule is
+refused with the reason and exit 2, writing nothing. A name any file of whose
+set (`.DEV`, `.TXT`, `.BIN`, `.PSC`, or one of those with `.TMP`) already
+exists is refused, not overwritten: exit 6, nothing written, the existing
+file as it was. Past that check the run is the clock-named one exactly -
+the same exclusive creates and the same exit 8 when a file of the set
+appears meanwhile (run it again under another name, or none). The clock is
+not needed for the name, so a given name is never refused with exit 7; the
+local time is still written inside. Beside `-dump`, `-o` keeps its old
+meaning, a basename or path the dump replaces.
 
 **Another run in the same directory.** The letter is chosen as one no file
 has, but another run - a second `-report`, or a `-dump -o` with that
@@ -179,7 +202,7 @@ replaced: if the `.DEV` itself is taken nothing is written; if a dump file
 publication, the dump is not kept under the name, this run's own files of it
 are removed, the other file is left as it was, the screen and the `.DEV` name
 it, and the screen lists only the files this run made. Exit 8. Run it again:
-it takes the next letter.
+it takes the next letter (with `-o NAME`, give another name, or none).
 
 **What it writes, in order.** First `BASE.DEV`, the device report, then the
 ordinary dump into `BASE.TXT`, `.BIN` and `.PSC`. The `.DEV` is written and
@@ -258,13 +281,13 @@ name could not be read.
 | Exit | Meaning |
 |---|---|
 | 0 | the `.DEV` and the dump's `.TXT` complete |
-| 2 | a usage error (`-o` beside it, for one); nothing written |
+| 2 | a usage error (a `-o NAME` outside the 8.3 rule, for one); nothing written |
 | 3 | the `.DEV` complete; the dump taken, but its `.TXT` incomplete or the extension's size disagreed (the dump's own 3) |
 | 4 | the `.DEV` complete; no dump (the device did not open or did not serve it; the `.DEV` says which) |
 | 5 | the `.DEV` could not be written in full |
-| 6 | all 26 names for this minute taken; nothing written |
-| 7 | the clock is not a valid date and time; nothing written |
-| 8 | a file of this run's set appeared after its name was chosen (another run made it): it was left as it was, and no dump is kept under the name; the `.DEV`, when it was written, says which file |
+| 6 | no free name: all 26 for this minute taken, or with `-o NAME` a file of that name's set already here; nothing written or overwritten. Wait a minute, or give another name (or none) |
+| 7 | the clock is not a valid date and time; nothing written (never with `-o NAME`). Set the clock |
+| 8 | a file of this run's set appeared after its name was chosen (another run made it): it was left as it was, and no dump is kept under the name; the `.DEV`, when it was written, says which file. Run it again: it takes the next letter, or give another name |
 
 **The three batch files**, `snapon.bat`, `snapget.bat` and `snapoff.bat` in
 this directory, shipped as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
@@ -279,12 +302,24 @@ need an administrator, and on Vista and 7 Run as administrator; each says so
 first, and again where the registry write was refused (`-verbosity` and
 `-disable` exit 1 for any key not written, an access refusal included).
 
-- `SNAPON.BAT` runs `XHCISNAP -verbosity 2`, then says: restart Windows (or
-  disable and enable the controller in Device Manager), reproduce the
-  problem, run `SNAPGET.BAT`. Nothing to attach yet.
-- `SNAPGET.BAT` runs `XHCISNAP -report`, says what each exit code means, and
-  ends: attach the files XHCISNAP named above, the `.DEV` and the `.TXT` (the
-  `.BIN` and `.PSC` only if asked); the channel stays on until `SNAPOFF.BAT`.
+Two of them take one optional argument (owner, 2026-10-13), passed on as
+`%1` and read nowhere else: the gate admits `%1` only in an
+`IF [NOT] "%1"=="V" GOTO` test and on the one tool line that passes it,
+and no other percent variable (`%2`, `%0`, `%DATE%`) at all.
+
+- `SNAPON.BAT [LEVEL]` runs `XHCISNAP -verbosity 2` with no argument, and
+  `XHCISNAP -verbosity LEVEL` for a `LEVEL` of `1`, `2`, `3` or `4`, which the
+  batch tests one by one so that `00` or `2x` never reaches the tool as a
+  level. `0` is refused with a pointer to `SNAPOFF.BAT` (it is off), and
+  anything else is refused naming the levels; neither changes anything. Then
+  it says: restart Windows (or disable and enable the controller in Device
+  Manager), reproduce the problem, run `SNAPGET.BAT`. Nothing to attach yet.
+- `SNAPGET.BAT [NAME]` runs `XHCISNAP -report` with no argument and
+  `XHCISNAP -report -o NAME` with one, says what each exit code means - at 2
+  with a name, the name was refused and why is on the line above; at 6 and
+  8 with a name, give another or none - and ends: attach the files XHCISNAP
+  named above, the `.DEV` and the `.TXT` (the `.BIN` and `.PSC` only if
+  asked); the channel stays on until `SNAPOFF.BAT`.
 - `SNAPOFF.BAT` runs `XHCISNAP -disable` and says the change takes effect at
   the next start. Nothing to attach.
 
@@ -302,10 +337,16 @@ read cut short, a file held exclusively, a directory, a deleted file),
 `.TXT` taken first, a `.PSC` taken after the `.BIN` was renamed, a temporary
 taken first - the other file keeps its contents, this run's are gone), and
 `-report` end to end against a controller index no machine has: exit 4 with
-the `.DEV` written, a second run taking the next letter, `-o` refused, the
-screen never naming the directory, `-nosysinfo -report` printing no
-unscreened text, and with `XHCISNAP_FAULT=clash` (a `.TXT` made after the
-name is chosen) exit 8 with that file intact.
+the `.DEV` written, a second run taking the next letter, `-o REFUSED.X`
+refused for its dot, the screen never naming the directory, `-nosysinfo
+-report` printing no unscreened text, and with `XHCISNAP_FAULT=clash` (a
+`.TXT` made after the name is chosen) exit 8 with that file intact; and
+`-report -o NAME`: a valid name used as the base (exit 4, `NAME.DEV`), the
+same name again (in other case) refused with exit 6 and the first `.DEV`
+byte for byte as it was, a name whose `.PSC.TMP` alone exists refused with
+that file intact, and a path, a drive, a dot, 9 characters, an empty name,
+`CON`, `com1`, a leading `-` and `A&B` each refused with exit 2, writing
+nothing.
 
 ### The machine it was captured on (2.3.0.0)
 

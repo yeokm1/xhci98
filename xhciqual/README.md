@@ -337,7 +337,8 @@ QUALREP.FLG`: read-only (step 1 of the recommended order, so no PCI
 configuration write and no ownership taken), with the log named from the
 DOS clock in the current directory, never overwriting an earlier one, so
 it can be run again. It first checks that `XHCIQUAL.EXE` is in the current
-directory and that the directory is writable, buckets the exit code with
+directory and that it can write there (a write-protected or full disk
+stops it, saying it cannot write here), buckets the exit code with
 `IF ERRORLEVEL` from the highest down (1 a completed reading, 2 no USB
 host controller found, 4 the name refused, anything else unexpected), and
 separates a crash from all of those with `IF EXIST` on the completion

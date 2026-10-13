@@ -35,7 +35,7 @@ echo Attach the file named on the Log written line above.
 goto end
 :refused
 rem Exit 4 is a refusal before anything was read. With no completion flag
-rem either, nothing could be created here: the directory is not writable.
+rem either, nothing could be created here: the disk is write-protected or full.
 if not exist QUALREP.FLG goto rdonly
 del QUALREP.FLG
 echo.
@@ -57,9 +57,9 @@ echo Attach the photo and the file named on the Log line near the top.
 goto end
 :rdonly
 echo.
-echo ERROR: this directory is not writable, so no log can be kept here.
+echo ERROR: QUALREP cannot write here (a write-protected or full disk), so no log can be kept.
 echo Nothing was read and nothing needs a cold boot.
-echo Copy QUALREP.BAT and XHCIQUAL.EXE to a writable directory, run it there.
+echo Copy QUALREP.BAT and XHCIQUAL.EXE to a disk with room you can write to, run it there.
 goto end
 :noexe
 echo ERROR: XHCIQUAL.EXE is not in the current directory.

@@ -3350,6 +3350,9 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ""
         $contents += "      Then attach the .DEV and .TXT files it names,"
         $contents += "      and run SNAPOFF.BAT once you have sent them."
+        $contents += "      At a prompt, SNAPON 3 sets level 3 rather than"
+        $contents += "      2 (1 to 4), and SNAPGET MYPC saves the files as"
+        $contents += "      MYPC.DEV and so on; section 6 has the rules."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -4148,6 +4151,40 @@ Things specific to this driver, worth knowing in advance:
   Step 1 finds the right registry key for you, on every controller this
   driver runs - see section 9 for what it sets.
 
+  Two of the batch files take one optional word, typed after the name at a
+  prompt in their directory (on Vista and 7, an administrator's prompt):
+
+      SNAPON 3      level 3 instead of 2 (1 to 4; with none, 2, the log -
+                    use it unless you are asked for another). SNAPON 0 is
+                    refused: 0 is off, and SNAPOFF.BAT turns it off.
+      SNAPGET MYPC  saves the files as MYPC.DEV, MYPC.TXT, .BIN and .PSC
+                    instead of the date-and-time name: 1 to 8 letters,
+                    digits, _ or -, no path, drive or extension, in the
+                    same directory. A name already taken there is refused;
+                    nothing is overwritten.
+
+  What SNAPGET.BAT says when it stops is XHCISNAP -report's exit code:
+
+      0  the .DEV and the .TXT were written in full: attach them.
+      2  the name given was refused, and the line above says why: give
+         1 to 8 letters, digits, _ or -, or no name. (With no name, the
+         XHCISNAP.EXE is older than the batch: use this package's.)
+      3  the .TXT is not complete: attach it, and say so.
+      4  no dump was taken, and the .DEV says why - often the channel is
+         off: SNAPON.BAT, restart, make it happen, SNAPGET.BAT. Attach the
+         .DEV.
+      5  the .DEV could not be written in full: the disk is full or cannot
+         be written. Copy the directory somewhere writable, run it there.
+      6  no free name: all 26 for this minute are taken (wait a minute and
+         run it again), or the name given is taken (give another, or
+         none). Nothing was written or overwritten.
+      7  the clock is not a valid date and time: set it, run it again.
+         Nothing was written.
+      8  another run made a file of this set while it ran. That file was
+         left as it was and no dump was kept under the name: run
+         SNAPGET.BAT again - it takes the next letter, or give another
+         name.
+
   Without the batch files the same steps are:
 
       1. XHCISNAP -verbosity 2
@@ -4192,7 +4229,7 @@ Things specific to this driver, worth knowing in advance:
   anything to read.
 
   THE DRIVER WRITES NO LOG FILE ITSELF, and there is no registry value that
-  makes it. XHCISNAP writes the file, and you name it on the command line.
+  makes it. XHCISNAP writes the file, named from the clock or by you.
 
   DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, receives this
   driver's log as it runs if XhciLogDebugView is set. LIKE XHCISNAP, USE IT
@@ -5422,7 +5459,12 @@ SNAPGET.BAT writes its files in the directory it runs in, not in C:\, under a
 name made from the date and time, and prints the names. Attach the .DEV and
 .TXT files to the bug report. Attach the .BIN and .PSC as well only if you
 are asked for them. It leaves the channel on, so you can run it again after
-the next attempt; when you are done:
+the next attempt. At a prompt, SNAPON 3 sets level 3 rather than 2 (1 to 4;
+SNAPON 0 is refused, SNAPOFF.BAT is off), and SNAPGET MYPC saves the files
+as MYPC.DEV, .TXT, .BIN and .PSC (1 to 8 letters, digits, _ or -, in this
+directory; a name already taken is refused, never overwritten). The
+readme.txt at the top of the download, section 6, says what each of
+SNAPGET.BAT's endings means. When you are done:
 
   5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off
 

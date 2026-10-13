@@ -196,7 +196,7 @@ $cases = @(
     [pscustomobject]@{ Name="qualrep_read"; Batch="QUALREP"; Args=$xhci; Success="Log written: [0-9A-C][0-9]{6}[A-Z]\.LOG - attach this file[\s\S]*QUALREP: the reading completed normally"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
     [pscustomobject]@{ Name="qualrep_twice"; Batch="QRTWICE"; Answer=@($pauseKey); Args=($xhci + @("-rtc","base=2026-10-13T14:25:00,clock=vm")); Success="A1314([0-9][0-9])A\.LOG\s+A1314(\1B|[0-9][0-9]A)\.LOG\s+QRTWICE_DONE"; Fail="ended abnormally|refused before|unexpected exit code|ERROR: XHCIQUAL|ERROR: this directory" },
     [pscustomobject]@{ Name="qualrep_all_taken"; Batch="QUALREP"; Args=($xhci + @("-rtc","base=2026-12-31T23:58:00,clock=vm")); Success="C31235[89]A\.LOG to C31235[89]Z\.LOG all[\s\S]*refused before reading anything"; Fail="completed normally|ended abnormally|unexpected exit code" },
-    [pscustomobject]@{ Name="qualrep_rdonly"; Batch="QUALREP"; Drive="b:"; Answer=@($failKey); Args=($xhci + $roFloppy); Success="could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*ERROR: this directory is not writable[\s\S]*nothing needs a cold boot"; Fail="ended abnormally|completed normally|unexpected exit code|Log written" }
+    [pscustomobject]@{ Name="qualrep_rdonly"; Batch="QUALREP"; Drive="b:"; Answer=@($failKey); Args=($xhci + $roFloppy); Success="could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*ERROR: QUALREP cannot write here[\s\S]*nothing needs a cold boot"; Fail="ended abnormally|completed normally|unexpected exit code|Log written" }
 )
 if ($CaseName.Count -ne 0) {
     $roFloppy = @("-drive","if=floppy,index=1,file=fat:floppy:$roDir,format=raw,readonly=on")

@@ -169,6 +169,12 @@ body:
         internal addresses) of each run here. Keep the matching .BIN and .PSC
         files and attach them only if a maintainer asks.
 
+        Both take one optional word at a prompt in that directory: SNAPON 3
+        sets level 3 instead of 2 (1 to 4; use 2 unless a maintainer asks),
+        and SNAPGET BEFORE then SNAPGET AFTER save the files as BEFORE.DEV,
+        AFTER.DEV and so on (1 to 8 letters, digits, _ or -; a name already
+        used there is refused, never overwritten).
+
         Without the batch files (or before 2.4.0.0), type what they run, in a
         directory you can write to:
 

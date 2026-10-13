@@ -566,8 +566,8 @@ rem Task 38.1's -report, end to end in a directory of its own, against a
 rem controller index no machine has: the .DEV is written though the device
 rem does not open, says why there is no dump, and exits 4; a second run in
 rem the same directory takes another name rather than overwriting the
-rem first; -nosysinfo is honoured; -o beside -report is refused, writing
-rem nothing.
+rem first; -nosysinfo is honoured; a name beside -report that is not an 8.3
+rem base is refused, writing nothing.
 mkdir "%RUNDIR%\rep"
 pushd "%RUNDIR%\rep"
 "%~dp0XHCISNAP.EXE" -report -c 99 > "%BASE%.report1.log"
@@ -580,9 +580,9 @@ if not "%errorlevel%"=="4" (
     echo FAIL: -report -nosysinfo with no controller exited %errorlevel%, expected 4
     set FAILED=1
 )
-"%~dp0XHCISNAP.EXE" -report -o REFUSED > "%BASE%.report3.log"
+"%~dp0XHCISNAP.EXE" -report -o REFUSED.X > "%BASE%.report3.log"
 if not "%errorlevel%"=="2" (
-    echo FAIL: -report -o exited %errorlevel%, expected 2
+    echo FAIL: -report -o REFUSED.X exited %errorlevel%, expected 2
     set FAILED=1
 )
 set DEVCOUNT=0
@@ -611,9 +611,9 @@ for %%S in ("files named " ".DEV written" "Attach " "(no dump was taken: it says
         set FAILED=1
     )
 )
-findstr /C:"It does not take -o" "%BASE%.report3.log" > nul
+findstr /C:"it carries a dot" "%BASE%.report3.log" > nul
 if errorlevel 1 (
-    echo FAIL: the -report -o refusal does not say it does not take -o
+    echo FAIL: the -report -o REFUSED.X refusal does not say it carries a dot
     set FAILED=1
 )
 rem Codex review of 38.1, round 1. The screen never names the directory (it
@@ -697,6 +697,85 @@ for %%S in ("appeared after this run chose its name" "It was left alone and is n
     )
 )
 
+rem A name given to -report with -o (owner, 2026-10-13: SNAPGET.BAT NAME).
+rem A valid name is used as the base and the run exits 4 as the clock-named
+rem one does; a second run under the same name exits 6 and leaves the first
+rem run's .DEV byte for byte; a name whose .PSC.TMP alone exists is taken too
+rem and that file is left as it was; a path, a drive, a dot, 9 characters,
+rem an empty name, a DOS device name and a leading '-' each exit 2 and write
+rem nothing.
+mkdir "%RUNDIR%\rep4"
+pushd "%RUNDIR%\rep4"
+"%~dp0XHCISNAP.EXE" -report -o MyRep_1 -c 99 > "%BASE%.named1.log"
+if not "%errorlevel%"=="4" (
+    echo FAIL: -report -o MyRep_1 with no controller exited %errorlevel%, expected 4
+    set FAILED=1
+)
+if not exist MyRep_1.DEV (
+    echo FAIL: -report -o MyRep_1 wrote no MyRep_1.DEV
+    set FAILED=1
+)
+findstr /C:"files named MyRep_1 (the name given)" "%BASE%.named1.log" > nul
+if errorlevel 1 (
+    echo FAIL: the named -report screen does not say the name was given
+    set FAILED=1
+)
+findstr /C:"Attach MyRep_1.DEV" "%BASE%.named1.log" > nul
+if errorlevel 1 (
+    echo FAIL: the named -report screen does not name MyRep_1.DEV to attach
+    set FAILED=1
+)
+copy /b MyRep_1.DEV "%BASE%.named1-dev.txt" > nul
+"%~dp0XHCISNAP.EXE" -report -o myrep_1 -c 99 > "%BASE%.named2.log"
+if not "%errorlevel%"=="6" (
+    echo FAIL: -report -o under a taken name exited %errorlevel%, expected 6
+    set FAILED=1
+)
+fc /b MyRep_1.DEV "%BASE%.named1-dev.txt" > nul
+if errorlevel 1 (
+    echo FAIL: a taken name's .DEV was changed by the refused run
+    set FAILED=1
+)
+findstr /C:"Nothing was written, and nothing was overwritten." "%BASE%.named2.log" > nul
+if errorlevel 1 (
+    echo FAIL: the taken-name refusal does not say nothing was written
+    set FAILED=1
+)
+> TAKEN.PSC.TMP echo theirs
+"%~dp0XHCISNAP.EXE" -report -o TAKEN -c 99 > "%BASE%.named3.log"
+if not "%errorlevel%"=="6" (
+    echo FAIL: -report -o TAKEN beside TAKEN.PSC.TMP exited %errorlevel%, expected 6
+    set FAILED=1
+)
+findstr /B /C:"theirs" TAKEN.PSC.TMP > nul
+if errorlevel 1 (
+    echo FAIL: TAKEN.PSC.TMP did not survive the refused run as it was
+    set FAILED=1
+)
+for %%N in ("sub\X" "C:X" "A.B" "ABCDEFGHI" "" "CON" "com1" "-X" "A&B") do (
+    "%~dp0XHCISNAP.EXE" -report -o %%N -c 99 > "%BASE%.badname.log"
+    if errorlevel 3 (
+        echo FAIL: -report -o %%N exited past 2, expected 2
+        set FAILED=1
+    ) else if not errorlevel 2 (
+        echo FAIL: -report -o %%N exited below 2, expected 2
+        set FAILED=1
+    )
+    findstr /C:"That" "%BASE%.badname.log" > nul
+    if errorlevel 1 (
+        echo FAIL: -report -o %%N was not refused by the name rule
+        set FAILED=1
+    )
+)
+set NAMEDCOUNT=0
+for %%F in (*) do set /a NAMEDCOUNT+=1
+if not "%NAMEDCOUNT%"=="2" (
+    echo FAIL: the named -report cases left %NAMEDCOUNT% files, expected 2: MyRep_1.DEV and TAKEN.PSC.TMP
+    dir /b
+    set FAILED=1
+)
+popd
+
 rem -report's publication on its own (report_publish, region_create): clean,
 rem a .TXT taken first, a .PSC taken after the .BIN was renamed, a temporary
 rem taken first. The other file keeps its contents and this run's are gone.
@@ -720,5 +799,5 @@ if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 25 cases, all passed
+echo xhcisnap selftest: 28 cases, all passed
 exit /b 0

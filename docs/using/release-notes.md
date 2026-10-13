@@ -2065,6 +2065,34 @@ registers, are written beside them; attach those if you are asked for them.
 `SNAPGET.BAT` leaves the channel on, so it can be run again after the next
 attempt.
 
+Two of the batch files take one optional argument, typed after the name at a
+prompt in their directory (on Vista and 7, an administrator's prompt):
+
+- `SNAPON.BAT 3` sets level 3 instead of 2. The level is 1 to 4, and 2 - the
+  log, the one to use unless you are asked for another - when none is given.
+  `SNAPON.BAT 0` is refused, since 0 is off: `SNAPOFF.BAT` turns the channel
+  off. Anything else is refused too, and neither refusal changes anything.
+- `SNAPGET.BAT MYPC` saves the files as `MYPC.DEV`, `MYPC.TXT`, `MYPC.BIN`
+  and `MYPC.PSC` instead of the clock's name (it runs
+  `XHCISNAP -report -o MYPC`): 1 to 8 letters, digits, `_` or `-`, with no
+  path, drive or extension, in the same directory. `XHCISNAP` holds the name
+  to that rule itself, and refuses a name any file of whose set is already
+  there rather than overwrite it.
+
+When the report does not go through, `SNAPGET.BAT` says so by
+`XHCISNAP -report`'s exit code (`xhcisnap\README.md` has the same table):
+
+| Exit | What it means | What to do |
+|---|---|---|
+| 0 | the `.DEV` and the `.TXT` were written in full | attach them |
+| 2 | the name given was refused; the line above says why | give 1 to 8 letters, digits, `_` or `-`, or no name (with no name, the `XHCISNAP.EXE` is older than the batch: use the one from the same download) |
+| 3 | the `.TXT` is not complete | attach it, and say so |
+| 4 | no dump was taken; the `.DEV` says why | often the channel is off: `SNAPON.BAT`, restart, reproduce, `SNAPGET.BAT`; attach the `.DEV` |
+| 5 | the `.DEV` could not be written in full | the disk is full or cannot be written: copy the directory somewhere writable and run it there |
+| 6 | no free name: all 26 for this minute are taken, or the name given is taken; nothing written or overwritten | wait a minute and run it again, or give another name, or none |
+| 7 | the clock is not a valid date and time; nothing written | set the clock and run it again |
+| 8 | another run made a file of this set while this one ran; that file was left as it was, and no dump was kept under the name | run `SNAPGET.BAT` again: it takes the next letter (with a name, give another, or none) |
+
 Without the batch files, and in every release before `2.4.0.0`, the same
 steps are typed:
 

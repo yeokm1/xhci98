@@ -381,10 +381,13 @@ try {
     # XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries none.
     # Each line is held to a short list of what both interpreters run, as
     # portsw-on.bat's are. Each batch runs its tool once, by name, with the
-    # one command line the task fixes; no batch names a drive path or reads
-    # a percent variable (COMMAND.COM on 98 SE and ME has no %DATE% or
-    # %TIME%, and cmd.exe's follow the locale, which is why the tools build
-    # the names); and SNAPGET.BAT never turns the channel off. The specs and
+    # one command line the task fixes - SNAPON.BAT and SNAPGET.BAT twice,
+    # that line when %1 is empty and the spec's ArgRun with %1 passed on
+    # (owner, 2026-10-13: an optional level, an optional name); no batch
+    # names a drive path or reads a percent variable other than %1 in those
+    # forms (COMMAND.COM on 98 SE and ME has no %DATE% or %TIME%, and
+    # cmd.exe's follow the locale, which is why the tools build the names);
+    # and SNAPGET.BAT never turns the channel off. The specs and
     # Get-ReportBatchFaults are package-common.ps1's, the one definition
     # make-release.ps1 also holds staged and published batches to.
     Write-Step "SNAPON, SNAPGET, SNAPOFF and QUALREP are COMMAND.COM-safe"
@@ -410,8 +413,16 @@ try {
         param([hashtable]$Spec)
         $l = @("@echo off", ("rem " + $Spec.Name.ToUpperInvariant() + " - a fixture of test-package.ps1."))
         if ($Spec.Win) { $l += @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run') }
-        $l += @(("if not exist " + $Spec.Tool + ".EXE goto nofile"), ($Spec.Tool + " " + $Spec.Args),
-                "if errorlevel 4 goto failed")
+        $l += ("if not exist " + $Spec.Tool + ".EXE goto nofile")
+        if ($Spec.ContainsKey("ArgRun")) {
+            # The optional argument (owner, 2026-10-13): no argument runs
+            # Args, one runs ArgRun with %1 passed on.
+            $l += @('if "%1"=="" goto deflt', ($Spec.Tool + " " + $Spec.ArgRun), "goto ran", ":deflt",
+                    ($Spec.Tool + " " + $Spec.Args), ":ran")
+        } else {
+            $l += ($Spec.Tool + " " + $Spec.Args)
+        }
+        $l += "if errorlevel 4 goto failed"
         if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
         if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files named above.") }
         $l += @("goto end", ":failed", "echo It did not finish. Read the lines above.", "goto end",
@@ -471,6 +482,28 @@ try {
         }
         if ($spec.Name -eq "snapon.bat") {
             $mutants += @{ Why = "verbosity 3"; Text = $fx.Replace($at, "`r`nXHCISNAP -verbosity 3`r`n") }
+            $mutants += @{ Why = "a level test past 4"; Text = $fx.Replace('if "%1"=="" goto deflt', "if `"%1`"==`"5`" goto ran`r`nif `"%1`"==`"`" goto deflt") }
+        }
+        if ($spec.ContainsKey("ArgRun")) {
+            # %1 passes only in the forms the spec names; %2, %0, %DATE% and
+            # %1 anywhere else are refused (owner, 2026-10-13).
+            $argLine = $spec.Tool + " " + $spec.ArgRun
+            $argAt = "`r`n" + $argLine + "`r`n"
+            $mutants += @{ Why = "%2 for %1";            Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "%2") + "`r`n") }
+            $mutants += @{ Why = "%1 and %2";            Text = $fx.Replace($argAt, "`r`n" + $argLine + " %2`r`n") }
+            $mutants += @{ Why = "%0 for %1";            Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "%0") + "`r`n") }
+            $mutants += @{ Why = "%DATE% for %1";        Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "%DATE%") + "`r`n") }
+            $mutants += @{ Why = "a %2 test";            Text = $fx.Replace('if "%1"=="" goto deflt', 'if "%2"=="" goto deflt') }
+            $mutants += @{ Why = "a %DATE% test";        Text = $fx.Replace('if "%1"=="" goto deflt', "if `"%DATE%`"==`"`" goto ran`r`nif `"%1`"==`"`" goto deflt") }
+            $mutants += @{ Why = "no empty test";        Text = $fx.Replace("if `"%1`"==`"`" goto deflt`r`n", "") }
+            $mutants += @{ Why = "%1 on an echo";        Text = $fx.Replace($argAt, $argAt + "echo saved as %1`r`n") }
+            $mutants += @{ Why = "set from %1";          Text = $fx.Replace($argAt, "`r`nset N=%1`r`n" + $argLine + "`r`n") }
+            $mutants += @{ Why = "the arg run twice";    Text = $fx.Replace($argAt, $argAt + $argLine + "`r`n") }
+            $mutants += @{ Why = "no arg run";           Text = $fx.Replace($argAt, "`r`n") }
+            $mutants += @{ Why = "%1 quoted in its run"; Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "`"%1`"") + "`r`n") }
+            $mutants += @{ Why = "%1 by path";           Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "C:\%1") + "`r`n") }
+        } else {
+            $mutants += @{ Why = "a %1 test";            Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
         }
         foreach ($m in $mutants) {
             Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."

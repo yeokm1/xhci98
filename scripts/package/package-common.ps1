@@ -550,10 +550,19 @@ function Get-TestSignCertificate {
 # repository's own would be. Name is the source name in the tool's own
 # directory (Dir); make-release.ps1's $reportBatches maps it to the
 # published 8.3 name.
+#
+# ArgRun, where a spec has one, is the batch's optional argument (owner,
+# 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME): the batch runs its tool
+# twice in the text, once as Args when %1 is empty and once as ArgRun, the
+# one line that may pass %1 on. %1 may otherwise appear only in an
+# `if [not] "%1"=="V" goto label` test, V one of ArgValues. No other percent
+# variable (%2, %0, %DATE%, ...) is admitted anywhere.
 function Get-ReportBatchSpecs {
     return @(
-        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-verbosity 2"; Names = @() },
-        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report";      Names = @(".DEV", ".TXT") },
+        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-verbosity 2"; Names = @();
+           ArgRun = "-verbosity %1"; ArgValues = @("", "0", "1", "2", "3", "4") },
+        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report";      Names = @(".DEV", ".TXT");
+           ArgRun = "-report -o %1"; ArgValues = @("") },
         @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @() },
         @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
     )
@@ -589,6 +598,14 @@ function Get-ReportBatchFaults {
                  ('^if not exist ' + $toolRe + ' goto [a-z]+$'), '^if errorlevel [0-9] goto [a-z]+$',
                  ('^' + $toolRe + ' [-a-z0-9 ]+( --done-flag [A-Z0-9]+\.FLG)?$'))
     if ($Spec.Win) { $allowed += '^if not "%OS%"=="Windows_NT" goto [a-z]+$' }
+    $argForms = @()
+    if ($Spec.ContainsKey("ArgRun")) {
+        $vals = '(' + ((@($Spec.ArgValues) | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')'
+        $argForms = @(('^if (not )?"%1"==' + '"' + $vals + '"' + ' goto [a-z]+$'),
+                      ('^' + $toolRe + ' ' + [regex]::Escape($Spec.ArgRun) + '$'))
+        $allowed += $argForms
+    }
+    $argEmptyTest = $false
     # A completion flag, where the spec names one (QUALREP.BAT's, through
     # XHCIQUAL's --done-flag): tested, and deleted - that file alone.
     $flagArgs = ""
@@ -615,8 +632,14 @@ function Get-ReportBatchFaults {
         }
         if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
         if ($line -match '%(DATE|TIME)%') { $faults += "line $($i + 1) reads %DATE% or %TIME%, which COMMAND.COM on 98 SE and ME lacks: $line" }
-        if (-not $isSplit -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
+        $isArg = $false
+        foreach ($p in $argForms) { if ($line -cmatch $p) { $isArg = $true; break } }
+        if ($isArg -and $line -cmatch '^if "%1"=="" goto [a-z]+$') { $argEmptyTest = $true }
+        if (-not $isSplit -and -not $isArg -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
             $faults += "line $($i + 1) reads a percent variable: $line"
+        }
+        if ($isArg -and ([regex]::Matches($line, '%')).Count -ne 1) {
+            $faults += "line $($i + 1) reads a percent variable other than %1: $line"
         }
         if (-not $isSplit -and -not $isText -and $line -match '[A-Za-z]:\\|^cd\b|^chdir\b') {
             $faults += "line $($i + 1) names a drive path or changes directory, so its output would not land in the current directory: $line"
@@ -633,7 +656,13 @@ function Get-ReportBatchFaults {
         if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
     }
     $want = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + $flagArgs + '$') })
-    if ($runs.Count -ne 1 -or $want.Count -ne 1) {
+    if ($Spec.ContainsKey("ArgRun")) {
+        $wantArg = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.ArgRun) + '$') })
+        if ($runs.Count -ne 2 -or $want.Count -ne 1 -or $wantArg.Count -ne 1) {
+            $faults += ("it does not run {0} exactly twice, once as '{0} {1}' and once as '{0} {2}' (it runs: {3})" -f $Spec.Tool, $Spec.Args, $Spec.ArgRun, ($runs -join "; "))
+        }
+        if (-not $argEmptyTest) { $faults += "no 'if `"%1`"==`"`" goto' line, so nothing sends a run with no argument to '$($Spec.Tool) $($Spec.Args)'" }
+    } elseif ($runs.Count -ne 1 -or $want.Count -ne 1) {
         $faults += ("it does not run {0} exactly once, as '{0} {1}' (it runs: {2})" -f $Spec.Tool, $Spec.Args, ($runs -join "; "))
     }
     if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
