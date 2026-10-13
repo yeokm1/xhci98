@@ -11,33 +11,25 @@ rem right-click it and choose Run as administrator.
 rem
 rem One file for COMMAND.COM and cmd.exe. COMMAND.COM never runs the line
 rem after the nt label: the goto run before it jumps over it. Every line
-rem from the run label on is COMMAND.COM syntax. ASCII, CRLF line endings.
+rem from the run label on is COMMAND.COM syntax. XHCISNAP runs last and
+rem prints the outcome itself, its last line saying there is nothing to
+rem attach, so nothing but pause follows it (owner, 2026-10-13). ASCII,
+rem CRLF line endings.
 if "%OS%"=="Windows_NT" goto nt
 goto run
 :nt
 cd /d "%~dp0"
 :run
-echo snapoff.bat: the xhci98 log channel off, XHCISNAP -disable.
+echo snapoff.bat runs XHCISNAP -disable to turn the xhci98 log channel off.
 echo 2000 and XP: run it as an administrator. Vista and 7: right-click it
 echo and choose Run as administrator.
-if not exist XHCISNAP.EXE goto nofile
-XHCISNAP -disable
-if errorlevel 1 goto refused
-echo.
-echo The channel is off from the next start: restart Windows, or disable
-echo and enable the xHCI controller in Device Manager, for it to take effect.
-goto end
-:refused
-echo The channel was NOT switched off. Read the lines above: some
-echo controllers may already have been changed.
-if not "%OS%"=="Windows_NT" goto end
-echo Run snapoff.bat as an administrator: on Vista and 7, right-click
-echo it and choose Run as administrator.
-goto end
-:nofile
+if exist XHCISNAP.EXE goto tool
 echo XHCISNAP.EXE was not found in this directory. Run snapoff.bat from
 echo the download's TOOLS\XHCISNAP directory, beside XHCISNAP.EXE: double-
 echo click it there, or change to that directory at the prompt first.
+echo Nothing was changed, and there is nothing to attach.
+goto end
+:tool
+XHCISNAP -disable
 :end
-echo Nothing to attach: snapoff.bat writes no file.
 pause

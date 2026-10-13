@@ -381,11 +381,12 @@ try {
     # XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries none.
     # Each line is held to a short list of what both interpreters run, as
     # portsw-on.bat's are. Each batch runs its tool once, by name, with the
-    # one command line the task fixes - SNAPON.BAT and SNAPGET.BAT twice,
-    # that line when %1 is empty and the spec's ArgRun with %1 passed on
-    # (owner, 2026-10-13: an optional level, an optional name); no batch
-    # names a drive path or reads a percent variable other than %1 in those
-    # forms (COMMAND.COM on 98 SE and ME has no %DATE% or %TIME%, and
+    # one command line the task fixes - SNAPON.BAT's and SNAPGET.BAT's end in
+    # %1, passed on as it came for the tool to default and check (owner,
+    # 2026-10-13: an optional level, an optional name; Codex review of 38.1,
+    # round 3: no `if` on it); no batch names a drive path or reads a
+    # percent variable other than that one %1 (COMMAND.COM on 98 SE and ME
+    # has no %DATE% or %TIME%, and
     # cmd.exe's follow the locale, which is why the tools build the names);
     # and SNAPGET.BAT never turns the channel off. The specs and
     # Get-ReportBatchFaults are package-common.ps1's, the one definition
@@ -413,15 +414,18 @@ try {
         param([hashtable]$Spec)
         $l = @("@echo off", ("rem " + $Spec.Name.ToUpperInvariant() + " - a fixture of test-package.ps1."))
         if ($Spec.Win) { $l += @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run') }
-        $l += ("if not exist " + $Spec.Tool + ".EXE goto nofile")
-        if ($Spec.ContainsKey("ArgRun")) {
-            # The optional argument (owner, 2026-10-13): no argument runs
-            # Args, one runs ArgRun with %1 passed on.
-            $l += @('if "%1"=="" goto deflt', ($Spec.Tool + " " + $Spec.ArgRun), "goto ran", ":deflt",
-                    ($Spec.Tool + " " + $Spec.Args), ":ran")
-        } else {
-            $l += ($Spec.Tool + " " + $Spec.Args)
+        if ($Spec.ContainsKey("ToolLast")) {
+            # The tool runs last and prints the outcome, its last line what
+            # to attach (owner, 2026-10-13); with ArgPass, Args ends in %1,
+            # passed on as it came for the tool to default and check.
+            if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
+            if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files XHCISNAP names.") }
+            $l += @(("if exist " + $Spec.Tool + ".EXE goto tool"), ("echo " + $Spec.Tool + ".EXE was not found in this directory."),
+                    "goto end", ":tool", ($Spec.Tool + " " + $Spec.Args), ":end", "pause")
+            return (($l -join "`r`n") + "`r`n")
         }
+        $l += ("if not exist " + $Spec.Tool + ".EXE goto nofile")
+        $l += ($Spec.Tool + " " + $Spec.Args)
         $l += "if errorlevel 4 goto failed"
         if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
         if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files named above.") }
@@ -442,11 +446,11 @@ try {
             @{ Why = "LF endings";       Text = $fx.Replace("`r`n", "`n") },
             @{ Why = "no last CRLF";     Text = $fx.Substring(0, $fx.Length - 2) },
             @{ Why = "truncated";        Text = $fx.Substring(0, $fx.IndexOf(":end`r`n")) },
-            @{ Why = "no pause";         Text = $fx.Replace("echo.`r`npause`r`n", "echo.`r`n") },
+            @{ Why = "no pause";         Text = $fx.Replace("`r`npause`r`n", "`r`n") },
             @{ Why = "no @echo off";     Text = $fx.Substring("@echo off`r`n".Length) },
             @{ Why = "a %DATE% line";    Text = $fx.Replace($at, "`r`nset STAMP=%DATE%`r`n" + $runLine + "`r`n") },
             @{ Why = "%TIME% in its run"; Text = $fx.Replace($at, "`r`n" + $runLine + " %TIME%`r`n") },
-            @{ Why = "%1 in its run";    Text = $fx.Replace($at, "`r`n" + $runLine + " %1`r`n") },
+            @{ Why = "another %1 in its run"; Text = $fx.Replace($at, "`r`n" + $runLine + " %1`r`n") },
             @{ Why = "a redirect";       Text = $fx.Replace($at, "`r`n" + $runLine + " > OUT.TXT`r`n") },
             @{ Why = "a C:\ write";      Text = $fx.Replace($at, "`r`n" + $spec.Tool + " -o C:\DUMP`r`n") },
             @{ Why = "a cd to the root"; Text = $fx.Replace($at, "`r`ncd \`r`n" + $runLine + "`r`n") },
@@ -482,26 +486,35 @@ try {
         }
         if ($spec.Name -eq "snapon.bat") {
             $mutants += @{ Why = "verbosity 3"; Text = $fx.Replace($at, "`r`nXHCISNAP -verbosity 3`r`n") }
-            $mutants += @{ Why = "a level test past 4"; Text = $fx.Replace('if "%1"=="" goto deflt', "if `"%1`"==`"5`" goto ran`r`nif `"%1`"==`"`" goto deflt") }
+            $mutants += @{ Why = "-verbosity %1 for -on %1"; Text = $fx.Replace($at, "`r`nXHCISNAP -verbosity %1`r`n") }
+            $mutants += @{ Why = "a second -on line"; Text = $fx.Replace($at, $at + "XHCISNAP -on 2`r`n") }
+            $mutants += @{ Why = "a level test routed around"; Text = $fx.Replace($at, "`r`nif `"%1`"==`"0`" goto end`r`n" + $runLine + "`r`n") }
         }
-        if ($spec.ContainsKey("ArgRun")) {
-            # %1 passes only in the forms the spec names; %2, %0, %DATE% and
-            # %1 anywhere else are refused (owner, 2026-10-13).
-            $argLine = $spec.Tool + " " + $spec.ArgRun
-            $argAt = "`r`n" + $argLine + "`r`n"
-            $mutants += @{ Why = "%2 for %1";            Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "%2") + "`r`n") }
-            $mutants += @{ Why = "%1 and %2";            Text = $fx.Replace($argAt, "`r`n" + $argLine + " %2`r`n") }
-            $mutants += @{ Why = "%0 for %1";            Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "%0") + "`r`n") }
-            $mutants += @{ Why = "%DATE% for %1";        Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "%DATE%") + "`r`n") }
-            $mutants += @{ Why = "a %2 test";            Text = $fx.Replace('if "%1"=="" goto deflt', 'if "%2"=="" goto deflt') }
-            $mutants += @{ Why = "a %DATE% test";        Text = $fx.Replace('if "%1"=="" goto deflt', "if `"%DATE%`"==`"`" goto ran`r`nif `"%1`"==`"`" goto deflt") }
-            $mutants += @{ Why = "no empty test";        Text = $fx.Replace("if `"%1`"==`"`" goto deflt`r`n", "") }
-            $mutants += @{ Why = "%1 on an echo";        Text = $fx.Replace($argAt, $argAt + "echo saved as %1`r`n") }
-            $mutants += @{ Why = "set from %1";          Text = $fx.Replace($argAt, "`r`nset N=%1`r`n" + $argLine + "`r`n") }
-            $mutants += @{ Why = "the arg run twice";    Text = $fx.Replace($argAt, $argAt + $argLine + "`r`n") }
-            $mutants += @{ Why = "no arg run";           Text = $fx.Replace($argAt, "`r`n") }
-            $mutants += @{ Why = "%1 quoted in its run"; Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "`"%1`"") + "`r`n") }
-            $mutants += @{ Why = "%1 by path";           Text = $fx.Replace($argAt, "`r`n" + $argLine.Replace("%1", "C:\%1") + "`r`n") }
+        if ($spec.Name -eq "snapget.bat") {
+            $mutants += @{ Why = "-report -o %1 for -report %1"; Text = $fx.Replace($at, "`r`nXHCISNAP -report -o %1`r`n") }
+            $mutants += @{ Why = "a second -report line"; Text = $fx.Replace($at, "`r`nif errorlevel 2 goto end`r`n" + $runLine + "`r`nXHCISNAP -report`r`n") }
+        }
+        if ($spec.ContainsKey("ArgPass")) {
+            # %1 passes on the one run line alone, as it came, and nothing
+            # tests it; %2, %0, %*, %~1, %DATE% and %1 anywhere else are
+            # refused (Codex review of 38.1, round 3).
+            $mutants += @{ Why = "an if on %1";          Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "an if not on %1";      Text = $fx.Replace($at, $at + "if not `"%1`"==`"`" goto end`r`n") }
+            $mutants += @{ Why = "an if on %1 unquoted"; Text = $fx.Replace($at, "`r`nif %1.==. goto end`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "%2 for %1";            Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%2") + "`r`n") }
+            $mutants += @{ Why = "%1 and %2";            Text = $fx.Replace($at, "`r`n" + $runLine + " %2`r`n") }
+            $mutants += @{ Why = "%0 for %1";            Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%0") + "`r`n") }
+            $mutants += @{ Why = "%* for %1";            Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%*") + "`r`n") }
+            $mutants += @{ Why = "%~1 for %1";           Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%~1") + "`r`n") }
+            $mutants += @{ Why = "%DATE% for %1";        Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%DATE%") + "`r`n") }
+            $mutants += @{ Why = "a %2 test";            Text = $fx.Replace($at, "`r`nif `"%2`"==`"`" goto end`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "%1 on an echo";        Text = $fx.Replace($at, $at + "echo saved as %1`r`n") }
+            $mutants += @{ Why = "set from %1";          Text = $fx.Replace($at, "`r`nset N=%1`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "shift";                Text = $fx.Replace($at, "`r`nshift`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "no %1 passed";         Text = $fx.Replace($at, "`r`n" + $runLine.Replace(" %1", "") + "`r`n") }
+            $mutants += @{ Why = "%1 quoted in its run"; Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "`"%1`"") + "`r`n") }
+            $mutants += @{ Why = "%1 by path";           Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "C:\%1") + "`r`n") }
+            $mutants += @{ Why = "%1 not last";          Text = $fx.Replace($at, "`r`n" + $runLine + " -c 0`r`n") }
         } else {
             $mutants += @{ Why = "a %1 test";            Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
         }
@@ -509,7 +522,28 @@ try {
             Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."
             Assert-True (@(Get-ReportBatchFaults -Text $m.Text -Spec $spec).Count -gt 0) "the report-batch checker accepted $($spec.Name) with $($m.Why)."
         }
-        $harmless = $fx.Replace($at, $at + "echo setlocal is not used here, and the date comes from XHCISNAP.`r`n")
+        if ($spec.ContainsKey("ToolLast")) {
+            # Nothing reads the exit code and nothing follows the tool line
+            # but labels and pause (owner, 2026-10-13: XHCISNAP's last line
+            # names what to attach); nothing but rem and echo before the
+            # 'if exist' test, so no jump routes around the tool.
+            $guardLine = "if exist " + $spec.Tool + ".EXE goto tool"
+            $mutants += @{ Why = "an if errorlevel after the tool"; Text = $fx.Replace($at, $at + "if errorlevel 1 goto end`r`n") }
+            $mutants += @{ Why = "an echo after the tool";          Text = $fx.Replace($at, $at + "echo Done.`r`n") }
+            $mutants += @{ Why = "an echo before pause";            Text = $fx.Replace(":end`r`npause`r`n", ":end`r`necho.`r`npause`r`n") }
+            $mutants += @{ Why = "a goto after the tool";           Text = $fx.Replace($at, $at + "goto end`r`n") }
+            $mutants += @{ Why = "an exit-code ladder";             Text = $fx.Replace($at, $at + "if errorlevel 2 goto bad`r`ngoto end`r`n:bad`r`necho Refused.`r`n") }
+            $mutants += @{ Why = "an if errorlevel before the tool"; Text = $fx.Replace("`r`n:tool`r`n", "`r`nif errorlevel 1 goto end`r`n:tool`r`n") }
+            $mutants += @{ Why = "a goto around the guard";         Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`ngoto end`r`n" + $guardLine + "`r`n") }
+            $mutants += @{ Why = "no guard";                        Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`n") }
+            $mutants += @{ Why = "the guard to another label";      Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`nif exist " + $spec.Tool + ".EXE goto end`r`n") }
+            $mutants += @{ Why = "if not exist for the guard";      Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`nif not exist " + $spec.Tool + ".EXE goto tool`r`n") }
+            $mutants += @{ Why = "a second way to the tool";        Text = $fx.Replace("`r`ngoto end`r`n:tool`r`n", "`r`ngoto tool`r`n:tool`r`n") }
+            $mutants += @{ Why = "the tool not below its label";    Text = $fx.Replace(":tool`r`n" + $runLine + "`r`n", ":tool`r`necho Running.`r`n" + $runLine + "`r`n") }
+            $harmless = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`necho setlocal is not used here, and the date comes from XHCISNAP.`r`n" + $guardLine + "`r`n")
+        } else {
+            $harmless = $fx.Replace($at, $at + "echo setlocal is not used here, and the date comes from XHCISNAP.`r`n")
+        }
         $harmlessFaults = @(Get-ReportBatchFaults -Text $harmless -Spec $spec)
         Assert-True ($harmlessFaults.Count -eq 0) ("the report-batch checker refused harmless echo text in $($spec.Name):`n  " + ($harmlessFaults -join "`n  "))
         if ($spec.ContainsKey("Flag")) {
@@ -3012,11 +3046,11 @@ try {
         $rbContent = @(
             @{ Name = "lf-snapget";   File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("`r`n", "`n") };                         Stale = $false },
             @{ Name = "bom-snapon";   File = "tools\xhcisnap\SNAPON.BAT";  Edit = { param($s) ([string][char]0xEF + [char]0xBB + [char]0xBF) + $s }; Stale = $false },
-            @{ Name = "disable-get";  File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("XHCISNAP -report`r`n", "XHCISNAP -report`r`nXHCISNAP -disable`r`n") }; Stale = $false },
-            @{ Name = "nopause-off";  File = "tools\xhcisnap\SNAPOFF.BAT"; Edit = { param($s) $s.Replace("echo.`r`npause`r`n", "echo.`r`n") };      Stale = $false },
+            @{ Name = "disable-get";  File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("XHCISNAP -report %1`r`n", "XHCISNAP -report %1`r`nXHCISNAP -disable`r`n") }; Stale = $false },
+            @{ Name = "nopause-off";  File = "tools\xhcisnap\SNAPOFF.BAT"; Edit = { param($s) $s.Replace(":end`r`npause`r`n", ":end`r`n") };        Stale = $false },
             @{ Name = "active-qual";  File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace("XHCIQUAL --probe-only --no-page --log-stamp", "XHCIQUAL --no-page --log-stamp") }; Stale = $false },
             @{ Name = "cdrive-qual";  File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace("XHCIQUAL --probe-only --no-page --log-stamp`r`n", "XHCIQUAL --probe-only --no-page --log C:\PROBE.LOG`r`n") }; Stale = $false },
-            @{ Name = "stale-snapget"; File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace(":end`r`n", ":end`r`necho An older wording.`r`n") }; Stale = $true },
+            @{ Name = "stale-snapget"; File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("goto end`r`n:tool`r`n", "echo An older wording.`r`ngoto end`r`n:tool`r`n") }; Stale = $true },
             @{ Name = "stale-qual";   File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace(":end`r`n", ":end`r`necho An older wording.`r`n") }; Stale = $true }
         )
         foreach ($c in $rbContent) {

@@ -52,9 +52,13 @@ XHCISNAP -report         the field report: mDDhhmmS.DEV, then the dump of
                          controller 0 into mDDhhmmS.TXT/.BIN/.PSC, named from
                          the clock in the current directory (from 2.4.0.0;
                          see "The field report"). Takes -c and -nosysinfo
-XHCISNAP -report -o MYPC the same, named MYPC.DEV/.TXT/.BIN/.PSC: an 8.3 base
+XHCISNAP -report MYPC    the same, named MYPC.DEV/.TXT/.BIN/.PSC: an 8.3 base
                          in the current directory, refused (exit 6) rather
-                         than overwritten when a file of the set exists
+                         than overwritten when a file of the set exists;
+                         -report -o MYPC is the same name, spelled the old way
+XHCISNAP -on [LEVEL]     SNAPON.BAT's form: -verbosity LEVEL, LEVEL exactly
+                         1-4, 2 when none is given; 0 and anything else
+                         refused (exit 2, nothing changed). It stands alone
 XHCISNAP -dump           dump controller 0 to XHCISNAP.BIN/.PSC/.TXT
 XHCISNAP -dump -c 1 -o WEDGED   controller 1 to WEDGED.BIN/.PSC/.TXT
 XHCISNAP -disable        exactly -verbosity 0: back to 0, which is off outright
@@ -174,15 +178,18 @@ The files always go to the current directory. The screen says "the current
 directory" and never prints its path, which is often the user's profile and
 so carries the user's name.
 
-**A name of the reporter's own: `-report -o NAME`** (owner, 2026-10-13;
-`SNAPGET.BAT NAME` runs it). `NAME` replaces the clock's base and is held to
-an 8.3 base in the current directory, by the tool and not only by the batch:
+**A name of the reporter's own: `-report NAME`** (owner, 2026-10-13;
+`SNAPGET.BAT NAME` runs it). `NAME` is the argument after `-report` unless
+that is `-o`, `-c` or `-nosysinfo`, so a `-X`, a `/?` or a `-help` there is a
+name, and refused; `-report -o NAME` gives the same name the older way, and
+the two at once are refused (exit 2). `NAME` replaces the clock's base and
+is held to an 8.3 base in the current directory, by the tool and not only by the batch:
 1 to 8 characters, each a letter, a digit, `_` or `-` (`-` not first, so it
 never reads as an option), with no path, no drive, no dot and no extension,
 and not a DOS device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`,
-`LPT0`-`LPT9`). The set is narrower than 8.3 allows on purpose: `SNAPGET.BAT`
-quotes the name in an `IF` test, where `&`, `^`, `%`, `!` and the
-parentheses would break the line under cmd.exe. A name outside the rule is
+`LPT0`-`LPT9`). The set is narrower than 8.3 allows on purpose: a name a
+reporter types is one the maintainer types back, and `&`, `^`, `%`, `!` and
+the parentheses mean something to cmd.exe. A name outside the rule is
 refused with the reason and exit 2, writing nothing. A name any file of whose
 set (`.DEV`, `.TXT`, `.BIN`, `.PSC`, or one of those with `.TMP`) already
 exists is refused, not overwritten: exit 6, nothing written, the existing
@@ -209,9 +216,17 @@ ordinary dump into `BASE.TXT`, `.BIN` and `.PSC`. The `.DEV` is written and
 closed before the controller is opened, so it exists whatever the dump does -
 the driver not loaded, the controller at a Code, the channel off - and the
 dump's result, with the reason when there is none, is appended to it
-afterwards. The screen lists every file written and ends with the ones to
-attach: the `.DEV` and the `.TXT`; the `.BIN` and `.PSC` only if the
-maintainer asks.
+afterwards. A controller at a Code does not by itself mean no dump: on 98
+SE and ME a disabled one (Code 22) keeps its `\\.\HCD0` open and the dump is
+taken (the p38-1 legs, 2026-10-13), so when a PCI xHCI controller `xhci98`
+drives is reported by Device Manager as disabled, at a Code or not started,
+the `.DEV`'s dump result and the screen say "dump taken from a controller
+Device Manager reports as disabled (Code 22)" (or its Code), naming the
+device; with more than one such controller, as one that may be it. No dump
+comes from a controller whose driver is not loaded (as before the restart
+after an install) or whose channel is off. The screen lists every file
+written, says what the exit code means and ends with the attach line: the
+`.DEV` and the `.TXT`; the `.BIN` and `.PSC` only if the maintainer asks.
 
 **The `.DEV`** is plain ASCII text with CRLF line endings:
 
@@ -247,7 +262,12 @@ the properties are `CM_Get_DevNode_Registry_Property`'s (or the devnode's
 `Enum` key where that routine is missing), and the resources are
 `CM_Get_First_Log_Conf`, `CM_Get_Next_Res_Des` and `CM_Get_Res_Des_Data`'s,
 decoded from either the NT layout or the 9x one by their size, and printed
-as raw bytes when neither fits (a memory, I/O, DMA, IRQ or bus-number
+as raw bytes when neither fits. 98 SE's and ME's `cfgmgr32.dll` hands back a
+memory descriptor in NT's layout - the 32-byte header, then 36-byte ranges -
+with the range-size field left at 20, 9x's own range size; that is decoded
+too (the p38-1 legs, 2026-10-13: 68 bytes, `FEBF0000-FEBF3FFF`, as Device
+Manager showed it; `-selftest-res` holds it). Raw bytes are printed for a
+memory, I/O, DMA, IRQ or bus-number
 descriptor; any other type - class-specific, device-private - is named with
 its size and never printed, since it can carry anything). Under WOW64 the
 x86 `cfgmgr32.dll` answers
@@ -258,8 +278,25 @@ list under the device's PDO name, which also carries the message-signalled
 flag and the message count. On 98 SE and ME, if `cfgmgr32.dll` does not
 answer, the devnodes come from `HKEY_DYN_DATA\Config Manager\Enum` with
 their status and problem but no resources. Any routine missing or failing is
-written as "not read: <why>", never as a silence. **None of this has yet
-been read on 98 SE, ME, 2000, XP or Vista**; task 38.1's legs read it.
+written as "not read: <why>", never as a silence. On 98 SE and ME (the
+p38-1 legs, 2026-10-13) the devnodes, their status and problem code came
+through `cfgmgr32.dll`, and the IRQ and, since that leg, the memory range
+were decoded. On 2000, XP, XP x64 and 7 (the same legs) the allocated
+descriptors came back with a count of 0 and one range still after the
+header (memory 68 bytes, 32 + 36; IRQ 32 bytes on 2000, 20 + 12, and 36 on
+XP and later, 24 + 12), which the decode now takes, the fields being in the
+header: `FEBF0000-FEBF3FFF` everywhere, IRQ 11 on 2000, 10 on XP and XP x64,
+and on 7 the message-signalled number Device Manager shows (`-selftest-res`
+holds every one of these images). On NT a disabled controller has no
+`\\.\HCD0`, so it gives no dump; the `.DEV` says Code 22 and why. **None of
+it has yet been read on Vista.**
+
+A driver file 98 SE or ME copied while the old one was in use sits under a
+`.TMP` name until the next restart renames it (ME right after an install had
+`XHCI98.TMP` and no `xhci98.sys`); a file not present whose `.TMP` is there
+is listed as "not present; its .TMP is, pending rename at the next restart".
+The 98 SE build's letter (`2222 A`) follows the build number with a space,
+so the OS line is not wrapped with the letter on a line of its own.
 
 **Privacy.** A USB device's instance id can be its serial number, so the
 instance part of every id not under `PCI\` or `ROOT\` is printed as
@@ -296,32 +333,59 @@ for COMMAND.COM (98 SE and ME) and cmd.exe (2000 to 7), in the shape
 `src\portsw-on.bat` has and its gate holds: `@echo off`, the pinned
 `%OS%` split, only COMMAND.COM built-ins and `XHCISNAP`, ASCII and CRLF,
 lines of 127 characters or fewer, no `%DATE%` or `%TIME%`, and `pause`
-last. Each first checks `XHCISNAP.EXE` is beside it and says so if not, and
-reads the exit code with `IF ERRORLEVEL`, highest first. On 2000 and XP they
-need an administrator, and on Vista and 7 Run as administrator; each says so
-first, and again where the registry write was refused (`-verbosity` and
-`-disable` exit 1 for any key not written, an access refusal included).
+last. Each first checks `XHCISNAP.EXE` is beside it (`IF EXIST XHCISNAP.EXE
+GOTO TOOL`) and says so if not; otherwise **`XHCISNAP` is the last thing it
+runs, and nothing but `pause` follows** (owner, 2026-10-13: the last line
+of output names the files to attach). The tool prints the outcome the
+batches' `IF ERRORLEVEL` ladders used to - the advice for each exit code,
+Run as administrator where a registry write was refused on 2000 to 7
+(`-on` and `-disable` exit 1 for any key not written, an access refusal
+included), and what to do next - and its last line is the attach line:
+`Attach: A131554A.DEV A131554A.TXT (the .BIN and .PSC only if asked)`,
+`Attach: A131554A.DEV` with no dump, `Nothing to attach: nothing was
+written.` when nothing was, `Nothing to attach yet: restart Windows,
+reproduce, then run SNAPGET.BAT.` after `-on`, and `Nothing to attach.`
+after `-disable`. The gate holds the shape: the tool line is reached by
+that one `IF EXIST` with its label just above it, only `rem` and `echo`
+come between the split and the test, only labels and the last `pause`
+follow the tool line, and no line reads the exit code. Each batch says
+first that 2000 and XP need an administrator and Vista and 7 Run as
+administrator.
 
 Two of them take one optional argument (owner, 2026-10-13), passed on as
-`%1` and read nowhere else: the gate admits `%1` only in an
-`IF [NOT] "%1"=="V" GOTO` test and on the one tool line that passes it,
-and no other percent variable (`%2`, `%0`, `%DATE%`) at all.
+`%1` at the end of the batch's one tool line and read nowhere else: no `IF`
+tests it (Codex review of 38.1, round 3: `SNAPGET "A&B"` broke cmd.exe's
+`IF "%1"==""` before the tool could refuse it, and `SNAPON "1"` failed the
+batch's compare though the C runtime hands the tool a plain `1`), so the
+default and the check are the tool's. The gate admits `%1` only on that
+line, which must be exactly `XHCISNAP -on %1` or `XHCISNAP -report %1`, and
+no other percent variable (`%2`, `%0`, `%*`, `%~1`, `%DATE%`) at all. A
+word the user escapes for the prompt (`A^&B`) arrives unescaped and splits
+the line; that is the user's own command, and no form of `%1` both
+survives a quoted word and protects an escaped one.
 
-- `SNAPON.BAT [LEVEL]` runs `XHCISNAP -verbosity 2` with no argument, and
-  `XHCISNAP -verbosity LEVEL` for a `LEVEL` of `1`, `2`, `3` or `4`, which the
-  batch tests one by one so that `00` or `2x` never reaches the tool as a
-  level. `0` is refused with a pointer to `SNAPOFF.BAT` (it is off), and
-  anything else is refused naming the levels; neither changes anything. Then
-  it says: restart Windows (or disable and enable the controller in Device
-  Manager), reproduce the problem, run `SNAPGET.BAT`. Nothing to attach yet.
-- `SNAPGET.BAT [NAME]` runs `XHCISNAP -report` with no argument and
-  `XHCISNAP -report -o NAME` with one, says what each exit code means - at 2
-  with a name, the name was refused and why is on the line above; at 6 and
-  8 with a name, give another or none - and ends: attach the files XHCISNAP
-  named above, the `.DEV` and the `.TXT` (the `.BIN` and `.PSC` only if
-  asked); the channel stays on until `SNAPOFF.BAT`.
-- `SNAPOFF.BAT` runs `XHCISNAP -disable` and says the change takes effect at
-  the next start. Nothing to attach.
+- `SNAPON.BAT [LEVEL]` runs `XHCISNAP -on LEVEL`: no `LEVEL` is 2, the log,
+  and `LEVEL` must be exactly `1`, `2`, `3` or `4` (quotes the C runtime has
+  stripped, but no sign, no leading zero, nothing after it); `0` is refused
+  with a pointer to `SNAPOFF.BAT` (it is off), anything else and a second
+  word are refused naming the levels, all exit 2 with nothing changed. The
+  write is `-verbosity`'s, with the same key matching and exit 1 for any key
+  not written. `XHCISNAP` then says, at 2, what `SNAPON.BAT` takes; at 1,
+  that the channel was not switched on and (on 2000 to 7) to run it as an
+  administrator; at 0, the channel is on: restart Windows (or disable and
+  enable the controller in Device Manager), reproduce the problem, run
+  `SNAPGET.BAT`. Nothing to attach yet.
+- `SNAPGET.BAT [NAME]` runs `XHCISNAP -report NAME` (`-report` alone with no
+  word). `-report` says what its exit code means - at 2 the name was refused
+  and why; at 3 the `.TXT` is not complete, say so; at 4 no dump, the `.DEV`
+  says why, and SNAPON, restart, reproduce, SNAPGET; at 5 copy the directory
+  somewhere writable (Run as administrator on Vista and 7); at 6 the name is
+  taken or, with none, all 26 are; at 8 run it again, under another name if
+  one was given - then that the channel stays on until `SNAPOFF.BAT`, and
+  last the attach line.
+- `SNAPOFF.BAT` runs `XHCISNAP -disable`, which says the change takes
+  effect at the next start (or, refused, to run it as an administrator), and
+  last: Nothing to attach.
 
 The self-tests (`selftest.cmd`) hold the name rule (`-selftest-stamp`:
 months 1, 9, 10, 11 and 12, midnight, a taken letter moving to the next
@@ -346,7 +410,21 @@ same name again (in other case) refused with exit 6 and the first `.DEV`
 byte for byte as it was, a name whose `.PSC.TMP` alone exists refused with
 that file intact, and a path, a drive, a dot, 9 characters, an empty name,
 `CON`, `com1`, a leading `-` and `A&B` each refused with exit 2, writing
-nothing.
+nothing; `-report NAME` the same way, with `-X`, `/?`, `-help`, `-dump`,
+`COM0`, `LPT9` and `A%B` among the refused names and `-report A -o B`
+refused; `-selftest-on` (the `-on` parse, no registry): none is 2, `1` to
+`4` and a quoted `"4"` taken, `0`, `5`, `00`, `01`, `+1`, `x`, an empty word
+and two words refused with exit 2, and `-on 0` itself pointing at
+`SNAPOFF.BAT`; and the real `SNAPGET.BAT` and `SNAPON.BAT` run through
+cmd.exe beside a copy of the build, with `"A&B"`, `"-X"` and `CON` reaching
+`XHCISNAP`'s refusal with no cmd.exe error first, and with
+`XHCISNAP_FAULT=noreg` (the level parsed, nothing written) a quoted `"1"`
+taken as level 1 and no word as 2, each batch's last line before `pause`'s
+prompt being `XHCISNAP`'s attach line; and `-selftest-res`, the memory
+descriptors 98 SE and ME and 2000 to 7 hand back decoded as
+`FEBF0000-FEBF3FFF`, one of neither layout left raw, and the IRQ
+descriptors of 2000, XP and 7 decoded as 11, 10 and a message-signalled
+interrupt.
 
 ### The machine it was captured on (2.3.0.0)
 

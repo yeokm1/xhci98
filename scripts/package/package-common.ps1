@@ -551,19 +551,24 @@ function Get-TestSignCertificate {
 # directory (Dir); make-release.ps1's $reportBatches maps it to the
 # published 8.3 name.
 #
-# ArgRun, where a spec has one, is the batch's optional argument (owner,
-# 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME): the batch runs its tool
-# twice in the text, once as Args when %1 is empty and once as ArgRun, the
-# one line that may pass %1 on. %1 may otherwise appear only in an
-# `if [not] "%1"=="V" goto label` test, V one of ArgValues. No other percent
-# variable (%2, %0, %DATE%, ...) is admitted anywhere.
+# ArgPass, where a spec has it, is the batch's optional argument (owner,
+# 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on as it came:
+# Args ends in %1, and that one run line is the only line that may carry
+# %1. The default and the check are the tool's (XHCISNAP -on, -report
+# NAME), so no `if` reads %1 (Codex review of 38.1, round 3: a quoted or
+# metacharacter %1 broke cmd.exe's `if "%1"==` before the tool could refuse
+# it, and a goto change could route around a level test). No other percent
+# variable (%2, %0, %*, %~1, %DATE%, ...) is admitted anywhere.
+#
+# ToolLast (owner, 2026-10-13: the batch's last line of output names the
+# files to attach): the tool line is the last command before pause, reached
+# by `if exist TOOL goto X` with :X just above it, and nothing reads the exit
+# code - the tool prints the outcome. QUALREP.BAT keeps its flag logic.
 function Get-ReportBatchSpecs {
     return @(
-        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-verbosity 2"; Names = @();
-           ArgRun = "-verbosity %1"; ArgValues = @("", "0", "1", "2", "3", "4") },
-        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report";      Names = @(".DEV", ".TXT");
-           ArgRun = "-report -o %1"; ArgValues = @("") },
-        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @() },
+        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-on %1";       Names = @(); ArgPass = $true; ToolLast = $true },
+        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report %1";   Names = @(".DEV", ".TXT"); ArgPass = $true; ToolLast = $true },
+        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @(); ToolLast = $true },
         @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
     )
 }
@@ -598,14 +603,12 @@ function Get-ReportBatchFaults {
                  ('^if not exist ' + $toolRe + ' goto [a-z]+$'), '^if errorlevel [0-9] goto [a-z]+$',
                  ('^' + $toolRe + ' [-a-z0-9 ]+( --done-flag [A-Z0-9]+\.FLG)?$'))
     if ($Spec.Win) { $allowed += '^if not "%OS%"=="Windows_NT" goto [a-z]+$' }
-    $argForms = @()
-    if ($Spec.ContainsKey("ArgRun")) {
-        $vals = '(' + ((@($Spec.ArgValues) | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')'
-        $argForms = @(('^if (not )?"%1"==' + '"' + $vals + '"' + ' goto [a-z]+$'),
-                      ('^' + $toolRe + ' ' + [regex]::Escape($Spec.ArgRun) + '$'))
-        $allowed += $argForms
+    if ($Spec.ContainsKey("ToolLast")) { $allowed += ('^if exist ' + $toolRe + ' goto [a-z]+$') }
+    $argRunRe = $null
+    if ($Spec.ContainsKey("ArgPass")) {
+        $argRunRe = '^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + '$'
+        $allowed += $argRunRe
     }
-    $argEmptyTest = $false
     # A completion flag, where the spec names one (QUALREP.BAT's, through
     # XHCIQUAL's --done-flag): tested, and deleted - that file alone.
     $flagArgs = ""
@@ -617,6 +620,7 @@ function Get-ReportBatchFaults {
     $labels = @{}
     $gotos = @()
     $runs = @()
+    $runAt = @()
     for ($i = 1; $i -lt $lines.Count; $i++) {
         $line = $lines[$i]
         if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
@@ -632,9 +636,7 @@ function Get-ReportBatchFaults {
         }
         if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
         if ($line -match '%(DATE|TIME)%') { $faults += "line $($i + 1) reads %DATE% or %TIME%, which COMMAND.COM on 98 SE and ME lacks: $line" }
-        $isArg = $false
-        foreach ($p in $argForms) { if ($line -cmatch $p) { $isArg = $true; break } }
-        if ($isArg -and $line -cmatch '^if "%1"=="" goto [a-z]+$') { $argEmptyTest = $true }
+        $isArg = ($null -ne $argRunRe -and $line -cmatch $argRunRe)
         if (-not $isSplit -and -not $isArg -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
             $faults += "line $($i + 1) reads a percent variable: $line"
         }
@@ -649,21 +651,46 @@ function Get-ReportBatchFaults {
             $labels[$Matches[1]] = $i
         }
         if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
-        if ($line -match ('^' + $toolRe + '( |$)')) { $runs += $line }
+        if ($line -match ('^' + $toolRe + '( |$)')) { $runs += $line; $runAt += $i }
     }
     foreach ($g in $gotos) {
         if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
         if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
     }
     $want = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + $flagArgs + '$') })
-    if ($Spec.ContainsKey("ArgRun")) {
-        $wantArg = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.ArgRun) + '$') })
-        if ($runs.Count -ne 2 -or $want.Count -ne 1 -or $wantArg.Count -ne 1) {
-            $faults += ("it does not run {0} exactly twice, once as '{0} {1}' and once as '{0} {2}' (it runs: {3})" -f $Spec.Tool, $Spec.Args, $Spec.ArgRun, ($runs -join "; "))
-        }
-        if (-not $argEmptyTest) { $faults += "no 'if `"%1`"==`"`" goto' line, so nothing sends a run with no argument to '$($Spec.Tool) $($Spec.Args)'" }
-    } elseif ($runs.Count -ne 1 -or $want.Count -ne 1) {
+    if ($runs.Count -ne 1 -or $want.Count -ne 1) {
         $faults += ("it does not run {0} exactly once, as '{0} {1}' (it runs: {2})" -f $Spec.Tool, $Spec.Args, ($runs -join "; "))
+    }
+    if ($Spec.ContainsKey("ToolLast") -and $runAt.Count -eq 1) {
+        # The tool runs last and prints the outcome, its last line what to
+        # attach (owner, 2026-10-13): after its line only labels and the
+        # final pause, no IF ERRORLEVEL anywhere, and it is reached by
+        # `if exist TOOL goto X` with X the label just above it.
+        $r = $runAt[0]
+        for ($k = $r + 1; $k -lt $lines.Count - 1; $k++) {
+            if ($lines[$k] -cnotmatch '^(:[a-z]+|rem( [ -~]*)?)$') { $faults += "line $($k + 1) follows the $($Spec.Tool) line; only labels and the last pause may: $($lines[$k])" }
+        }
+        if (@($lines | Where-Object { $_ -cmatch '^if errorlevel' }).Count -gt 0) { $faults += "it reads the exit code with IF ERRORLEVEL; $($Spec.Tool) prints the outcome itself" }
+        $above = $r - 1
+        while ($above -gt 0 -and $lines[$above] -cmatch '^rem( |$)') { $above-- }
+        $entry = $null
+        if ($lines[$above] -cmatch '^:([a-z]+)$') { $entry = $Matches[1] }
+        $guard = @()
+        $guardAt = -1
+        for ($k = 1; $k -lt $r; $k++) { if ($lines[$k] -cmatch ('^if exist ' + $toolRe + ' goto ([a-z]+)$')) { $guard += $Matches[2]; $guardAt = $k } }
+        # From the split (or @echo off) to the guard, only rem and echo, so
+        # no jump can route around the tool line.
+        $from = 1
+        if ($Spec.Win -and $code.Count -gt 4) { $from = $code[4] + 1 }
+        for ($k = $from; $k -lt $guardAt; $k++) {
+            if ($lines[$k] -cnotmatch '^(rem|echo)( [ -~]*|\.)?$') { $faults += "line $($k + 1) comes before the 'if exist $($Spec.Tool).EXE' test; only rem and echo may: $($lines[$k])" }
+        }
+        if ($null -eq $entry -or $guard.Count -ne 1 -or $guard[0] -cne $entry) {
+            $faults += "the $($Spec.Tool) line is not reached by one 'if exist $($Spec.Tool).EXE goto X' before it, with :X just above it"
+        }
+        foreach ($g in $gotos) {
+            if ($null -ne $entry -and $g[1] -ceq $entry -and $lines[$g[0]] -cnotmatch '^if exist ') { $faults += "line $($g[0] + 1) jumps to the $($Spec.Tool) line other than through 'if exist'" }
+        }
     }
     if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
         $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"

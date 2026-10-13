@@ -176,6 +176,7 @@ static void put_wrapped_to(FILE *dest, const char *indent, const char *hang,
         const char *hard;
         const char *brk;
         size_t width;
+        int broke;
 
         /* An embedded newline is a break the caller asked for; it is honoured
          * wherever it falls and the wrapping restarts after it. */
@@ -184,6 +185,7 @@ static void put_wrapped_to(FILE *dest, const char *indent, const char *hang,
             hard++;
         }
 
+        broke = 0;
         for (;;) {
             /*
              * A pathological indent must not produce a one-character column;
@@ -211,8 +213,15 @@ static void put_wrapped_to(FILE *dest, const char *indent, const char *hang,
             while (*p == ' ') {
                 p++;
             }
+            broke = 1;
         }
-        note_write(dest, fprintf(dest, "%s%.*s\n", lead, (int)(hard - p), p));
+        /* A token longer than the line (a PCI device id) is printed whole
+         * above and leaves nothing: no blank continuation after it (the
+         * p38-1 legs, 2026-10-13). */
+        if (!broke || p < hard) {
+            note_write(dest, fprintf(dest, "%s%.*s\n", lead, (int)(hard - p),
+                                     p));
+        }
         lead = hang;
         if (*hard == '\0') {
             break;
@@ -2120,6 +2129,9 @@ static void write_companion_system(void)
     } else {
         v.szCSDVersion[sizeof(v.szCSDVersion) - 1] = '\0';
         sys_clean(v.szCSDVersion, csd, sizeof(csd));
+        while (csd[0] == ' ') {
+            memmove(csd, csd + 1, strlen(csd));
+        }
         sys_line("OS", "%s: platform %lu, version %lu.%lu, build %lu%s%s",
                  sys_os_name(v.dwPlatformId, v.dwMajorVersion,
                              v.dwMinorVersion, v.dwBuildNumber, product,
@@ -2130,7 +2142,14 @@ static void write_companion_system(void)
                  (unsigned long)((v.dwPlatformId == SYS_PLATFORM_9X)
                                      ? (v.dwBuildNumber & 0xFFFFUL)
                                      : v.dwBuildNumber),
-                 (csd[0] != '\0') ? ", " : "", csd);
+                 /* 98 SE's CSD is the letter A, part of the build's name
+                  * (2222 A): joined with a space, so that the line fits and
+                  * the letter is never wrapped onto a line of its own (the
+                  * p38-1 legs, 2026-10-13). An NT service pack follows a
+                  * comma. */
+                 (csd[0] == '\0') ? ""
+                     : (v.dwPlatformId == SYS_PLATFORM_9X) ? " " : ", ",
+                 csd);
     }
 
     /* This tool is an x86 program on every target; on a 64-bit Windows it
@@ -7195,14 +7214,15 @@ typedef struct {
 } STAMP_SET;
 
 /*
- * A name given to -report with -o (owner, 2026-10-13: SNAPGET.BAT takes an
- * optional name to save to). An 8.3 base in the current directory: 1 to 8
- * characters, letters, digits, '_' and '-' (not first, so it never reads as
- * an option), no path, drive or extension, and not a DOS device name, which
+ * A name given to -report, as -report NAME or -report -o NAME (owner,
+ * 2026-10-13: SNAPGET.BAT takes an optional name to save to). An 8.3 base in
+ * the current directory: 1 to 8 characters, letters, digits, '_' and '-'
+ * (not first, so it never reads as an option), no path, drive or extension,
+ * and not a DOS device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9), which
  * would open the device instead of a file. The set of characters is
- * narrower than 8.3 allows on purpose: SNAPGET.BAT quotes the name in an
- * `if` test, where '&', '^', '%', '!' and the parentheses would break the
- * line under cmd.exe. Returns NULL when the name is acceptable, or why not.
+ * narrower than 8.3 allows on purpose: a name a reporter types is one the
+ * maintainer types back, and '&', '^', '%', '!' and the parentheses mean
+ * something to cmd.exe. Returns NULL when the name is acceptable, or why not.
  */
 static const char *report_name_refusal(const char *name)
 {
@@ -8411,7 +8431,39 @@ static int res_nt_shape(unsigned long size, unsigned long hdr,
     if (count > 64 || type > 256) {
         return 0;
     }
+    /* An allocated descriptor from NT's cfgmgr32.dll carries count 0 and
+     * still one range after the header (read on 2000, XP, XP x64 and 7,
+     * the p38-1 legs, 2026-10-13: memory 68 = 32 + 36, IRQ 32 = 20 + 12 or
+     * 36 = 24 + 12); the fields this tool reads are in the header. */
+    if (count == 0 && size - hdr == type) {
+        return 1;
+    }
     return (size - hdr == count * type) ? 1 : 0;
+}
+
+/*
+ * The NT-shaped header with ranges of NT's size whatever the range-size
+ * field says. 98 SE's and ME's cfgmgr32.dll hands back the NT layout - a
+ * 32-byte MEM_DES header of DWORD count and type, 64-bit base and end, flags
+ * and a reserved DWORD, then 36-byte MEM_RANGEs - but leaves the type field
+ * at 20, the size of the 9x configuration manager's own MEM_RANGE (read on
+ * the p38-1 legs, 2026-10-13: 68 bytes, count 1, type 20, FEBF0000-FEBF3FFF,
+ * as Device Manager showed). `range` is NT's range size.
+ */
+static int res_nt_shape_9x(unsigned long size, unsigned long hdr,
+                           unsigned long range, unsigned long range9x,
+                           const unsigned char *b)
+{
+    unsigned long count;
+
+    if (size < hdr || size < 8) {
+        return 0;
+    }
+    count = rd32(b, 0);
+    if (count > 64 || rd32(b, 4) != range9x) {
+        return 0;
+    }
+    return (size - hdr == count * range) ? 1 : 0;
 }
 
 static void res_hex(const char *label, unsigned long rid,
@@ -8438,7 +8490,8 @@ static void res_decode(unsigned long rid, const unsigned char *b,
 
     switch (rid) {
     case 1:
-        if (res_nt_shape(size, 32, b)) {
+        if (res_nt_shape(size, 32, b) ||
+            res_nt_shape_9x(size, 32, 36, 20, b)) {
             base = rd32(b, 8);
             baseHi = rd32(b, 12);
             end = rd32(b, 16);
@@ -8491,7 +8544,9 @@ static void res_decode(unsigned long rid, const unsigned char *b,
         dev_line("DMA", "channel %lu", num);
         return;
     case 4:
-        if (res_nt_shape(size, 20, b)) {
+        /* IRQ_DES: count, type, flags, number, then the affinity, 4 bytes
+         * (a 20-byte header, 2000) or 8 (24, XP and later). */
+        if (res_nt_shape(size, 20, b) || res_nt_shape(size, 24, b)) {
             flags = rd32(b, 8);
             num = rd32(b, 12);
         } else if (size == 8) {
@@ -8537,6 +8592,72 @@ static void res_decode(unsigned long rid, const unsigned char *b,
 #pragma auto_inline(on)
 
 static unsigned char resBuf[1024];
+
+/*
+ * `-selftest-res`: the memory descriptor's decode over canned bytes, on the
+ * screen. The first is ME's and 98 SE's (p38-1's legs, 2026-10-13: the
+ * header's 32 bytes as the .DEV printed them, the 36-byte range after it
+ * zeroed, which the decode does not read); the second the same with NT's
+ * range-size field, 36; the third a range size neither has, which stays raw.
+ */
+static int selftest_res(void)
+{
+    static const unsigned char hdr[32] = {
+        0x01, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0xBF, 0xFE, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0x3F, 0xBF, 0xFE, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    /* The IRQ descriptors' first 16 bytes on 2000 (32 in all), XP and
+     * XP x64 (36), and 7 (36, a message-signalled one). */
+    static const unsigned char irq2k[16] = {
+        0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00
+    };
+    static const unsigned char irqXp[16] = {
+        0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00
+    };
+    static const unsigned char irq7[16] = {
+        0x00, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x01, 0x00, 0xFE, 0xFF, 0xFF, 0xFF
+    };
+    unsigned char b[68];
+
+    memset(b, 0, sizeof(b));
+    memcpy(b, hdr, sizeof(hdr));
+    printf("res 9x:\n");
+    res_decode(1, b, sizeof(b));
+    /* NT's (2000 to 7): count 0, type 36, flags 3 (7: 0x83). */
+    b[0] = 0;
+    b[4] = 36;
+    b[24] = 0x03;
+    printf("res nt:\n");
+    res_decode(1, b, sizeof(b));
+    b[24] = 0x83;
+    printf("res nt 7:\n");
+    res_decode(1, b, sizeof(b));
+    b[4] = 21;
+    printf("res odd:\n");
+    res_decode(1, b, sizeof(b));
+    memset(b, 0, sizeof(b));
+    memcpy(b, irq2k, sizeof(irq2k));
+    b[16] = 0xFF;
+    b[17] = 0xFF;
+    b[18] = 0xFF;
+    b[19] = 0xFF;
+    printf("irq 2000:\n");
+    res_decode(4, b, 32);
+    memcpy(b, irqXp, sizeof(irqXp));
+    printf("irq xp:\n");
+    res_decode(4, b, 36);
+    memset(b, 0, sizeof(b));
+    memcpy(b, irq7, sizeof(irq7));
+    printf("irq 7:\n");
+    res_decode(4, b, 36);
+    printf("[end]\n");
+    return 0;
+}
 
 /*
  * The resources from HKLM\HARDWARE\RESOURCEMAP\PnP Manager\PnpManager,
@@ -8817,6 +8938,14 @@ static void dev_resources(DWORD dn, int haveDn, const char *id)
 
 static int devListed;
 static int devSeen;
+/* PCI xHCI controllers xhci98 drives, and the first of them Device Manager
+ * reports as not working (disabled, a Code, or not started): on 98 SE and
+ * ME a disabled controller's \\.\HCDn stays open and a dump is still taken
+ * (p38-1's legs, 2026-10-13), so the .DEV and the screen say what Device
+ * Manager says of it beside the dump. */
+static int devOurCtl;
+static int devFlagNo;
+static char devFlag[120];
 
 /*
  * One devnode: listed when it is a PCI xHCI controller (class code 0C0330
@@ -8961,6 +9090,24 @@ static void dev_consider(DWORD dn, int haveDn, const char *id, int haveSt,
         } else {
             dev_line("problem", "none");
         }
+        if (isXhci && ours) {
+            devOurCtl++;
+            if (devFlagNo == 0 && ((st & CMX_DN_HAS_PROBLEM) != 0 ||
+                                   prob != 0 || (st & 0x00000008UL) == 0)) {
+                devFlagNo = devListed;
+                if (prob == 22) {
+                    strcpy(devFlag, "disabled (Code 22)");
+                } else if (prob != 0) {
+                    _snprintf(devFlag, sizeof(devFlag) - 1, "%s, Code %lu "
+                              "(%s)", ((st & 0x00000008UL) != 0)
+                                          ? "started" : "NOT started",
+                              prob, dev_problem_name(prob));
+                } else {
+                    strcpy(devFlag, "NOT started");
+                }
+                devFlag[sizeof(devFlag) - 1] = '\0';
+            }
+        }
         if ((st & CMX_DN_HAS_PROBLEM) != 0 || prob != 0) {
             say_hang("  ", "    ", "%s: %s, Code %lu", shown,
                      ((st & 0x00000008UL) != 0) ? "started" : "NOT started",
@@ -9052,6 +9199,9 @@ static void write_dev_devices(void)
          "drives:\n");
     devListed = 0;
     devSeen = 0;
+    devOurCtl = 0;
+    devFlagNo = 0;
+    devFlag[0] = '\0';
     cmx_load();
     if (cmx.Module == NULL) {
         comp("    configuration manager: not read: cfgmgr32.dll did not load "
@@ -9159,8 +9309,27 @@ static void write_dev_files(void)
         dev_line(instFiles[i].Name, "%s", clean);
         rc = file_sha256(path, 1, &size, digest, &err);
         if (rc == HASH_ABSENT) {
-            dev_line("", "not present");
-            say("  ", "%-12s not present", instFiles[i].Name);
+            /* 98 SE and ME copy a driver that is in use under a .TMP name
+             * and rename it at the next restart: ME right after an install
+             * has XHCI98.TMP and no xhci98.sys (the p38-1 legs,
+             * 2026-10-13). */
+            char tmpPath[MAX_PATH + 32];
+            char *dot;
+
+            strcpy(tmpPath, path);
+            dot = strrchr(tmpPath, '.');
+            if (dot != NULL) {
+                strcpy(dot, ".TMP");
+            }
+            if (dot != NULL && GetFileAttributesA(tmpPath) != 0xFFFFFFFFUL) {
+                dev_line("", "not present; its .TMP is, pending rename at "
+                         "the next restart");
+                say("  ", "%-12s not present (its .TMP is: pending rename "
+                    "at restart)", instFiles[i].Name);
+            } else {
+                dev_line("", "not present");
+                say("  ", "%-12s not present", instFiles[i].Name);
+            }
             continue;
         }
         if (rc != HASH_OK) {
@@ -9227,6 +9396,31 @@ static int take_dump(unsigned long controller, const char *base,
  * name is chosen, so the clash branch runs with no second process. */
 static int faultClash;
 
+/* Windows NT (2000 to 7) rather than 98 SE or ME: GetVersion's high bit. */
+static int on_nt(void)
+{
+    return ((GetVersion() & 0x80000000UL) == 0) ? 1 : 0;
+}
+
+/*
+ * **The last line a run of -report prints names what to attach** (owner,
+ * 2026-10-13): SNAPGET.BAT runs this tool as its last step and prints
+ * nothing after it but `pause`, so the outcome advice its exit-code ladder
+ * gave is printed here, before that line, and the line itself is the attach
+ * list - or says there is nothing to attach.
+ */
+static void report_attach_line(const char *base, int dev, int txt)
+{
+    if (!dev) {
+        printf("Nothing to attach: nothing was written.\n");
+    } else if (txt) {
+        printf("Attach: %s.DEV %s.TXT (the .BIN and .PSC only if asked)\n",
+               base, base);
+    } else {
+        printf("Attach: %s.DEV\n", base);
+    }
+}
+
 static int take_report(unsigned long controller, const char *given)
 {
     char base[16];
@@ -9259,7 +9453,9 @@ static int take_report(unsigned long controller, const char *given)
             printf("xhcisnap -report: %s already exists in this directory, "
                    "so the name %s is\ntaken. Nothing was written, and "
                    "nothing was overwritten. Give another name,\nor none for "
-                   "one made from the clock.\n", name, base);
+                   "one made from the clock (SNAPGET.BAT with another name, "
+                   "or none).\n", name, base);
+            report_attach_line(base, 0, 0);
             return REPORT_NAMES_FULL;
         }
         sprintf(devPath, "%s.DEV", base);
@@ -9280,6 +9476,7 @@ static int take_report(unsigned long controller, const char *given)
                (unsigned)runTime.wYear, (unsigned)runTime.wMonth,
                (unsigned)runTime.wDay, (unsigned)runTime.wHour,
                (unsigned)runTime.wMinute);
+        report_attach_line(base, 0, 0);
         return REPORT_BAD_CLOCK;
     }
     if (rc == STAMP_TAKEN) {
@@ -9287,13 +9484,14 @@ static int take_report(unsigned long controller, const char *given)
                "this directory\n(A to Z after the time). Wait a minute and "
                "run it again. Nothing was written,\nand nothing was "
                "overwritten.\n");
+        report_attach_line(base, 0, 0);
         return REPORT_NAMES_FULL;
     }
     /* The current directory is not printed: it is often the user's profile,
      * named after the user (Codex review of 38.1, round 1). */
     sprintf(devPath, "%s.DEV", base);
     printf("xhcisnap -report: %04u-%02u-%02u %02u:%02u, files named %s, in "
-           "the current directory\n", (unsigned)runTime.wYear,
+           "the\ncurrent directory\n", (unsigned)runTime.wYear,
            (unsigned)runTime.wMonth, (unsigned)runTime.wDay,
            (unsigned)runTime.wHour, (unsigned)runTime.wMinute, base);
 
@@ -9305,6 +9503,7 @@ named:
     if (fd < 0 && errno == EEXIST) {
         note_clash(devPath);
         printf("  Nothing was written. %s\n", again);
+        report_attach_line(base, 0, 0);
         return REPORT_CLASH;
     }
     companion = (fd >= 0) ? _fdopen(fd, "w") : NULL;
@@ -9314,8 +9513,12 @@ named:
             DeleteFileA(devPath);
         }
         printf("  *** cannot create %s (errno %d). Nothing else is written: "
-               "run it from a\n      directory you can write to.\n", devPath,
-               errno);
+               "the disk may be full\n      or read-only. Copy this "
+               "directory somewhere you can write to and run it\n      "
+               "there.%s\n", devPath, errno,
+               on_nt() ? " On Vista and 7, right-click SNAPGET.BAT and choose "
+                         "Run as\n      administrator." : "");
+        report_attach_line(base, 0, 0);
         return REPORT_DEV_BAD;
     }
     companionOpened = 1;
@@ -9401,6 +9604,23 @@ named:
             dev_line("dump", "taken, but %s.TXT is incomplete or the "
                      "extension's size disagreed; the screen said which",
                      base);
+        }
+        if ((dumpRc == 0 || dumpRc == 3) && devFlagNo != 0) {
+            if (devOurCtl > 1) {
+                dev_line("", "device %d above, one of the %d xHCI "
+                         "controllers xhci98 drives here, is one Device "
+                         "Manager reports as %s; if \\\\.\\HCD%lu is that "
+                         "one, the dump was taken from it as it is",
+                         devFlagNo, devOurCtl, devFlag, controller);
+            } else {
+                dev_line("", "dump taken from a controller Device Manager "
+                         "reports as %s (device %d above): it shows the "
+                         "driver's state while Windows has it so",
+                         devFlag, devFlagNo);
+            }
+        }
+        if (dumpRc == 0 || dumpRc == 3) {
+            ;
         } else if (reportClash) {
             dev_line("dump", "NOT taken: %s", dumpWhy);
             dev_line("", "This report above still stands. %s",
@@ -9413,9 +9633,10 @@ named:
             dev_line("dump", "NOT taken: %s", (dumpWhy[0] != '\0')
                          ? dumpWhy : "see the lines on the screen");
             dev_line("", "This report above still stands. A controller "
-                     "that is not started (a Code above), or a log channel "
-                     "that is off (XHCISNAP -verbosity 2 or SNAPON.BAT, then "
-                     "restart), gives no dump.");
+                     "whose driver is not loaded (as before the restart "
+                     "after an install), one with no \\\\.\\HCD%lu, or a log "
+                     "channel that is off (XHCISNAP -verbosity 2 or "
+                     "SNAPON.BAT, then restart), gives no dump.", controller);
         }
         comp("end of device report\n");
         appendOk = finish_companion();
@@ -9437,30 +9658,58 @@ named:
             printf("  %s\n", name);
         }
     }
-    if (reportClash) {
-        printf("*** %s was made by another run or program after this one "
-               "chose the name.\n    It was left alone and is not this "
-               "run's. Attach %s.DEV, and run the\n    report again for a "
-               "dump.\n", reportClashName, base);
-    } else if (reportTxtOurs) {
-        printf("Attach %s.DEV and %s.TXT; send %s.BIN and %s.PSC only if "
-               "asked.\n", base, base, base, base);
-    } else {
-        printf("Attach %s.DEV (no dump was taken: it says why).\n", base);
+    if ((dumpRc == 0 || dumpRc == 3) && devFlagNo != 0) {
+        printf("*** dump taken from a controller Device Manager reports as "
+               "%s%s;\n    %s.DEV says so.\n", devFlag,
+               (devOurCtl > 1) ? " (if it is this one)" : "", base);
     }
     if (!devOk || !appendOk) {
-        return REPORT_DEV_BAD;
+        rc = REPORT_DEV_BAD;
+    } else if (reportClash) {
+        rc = REPORT_CLASH;
+    } else if (dumpRc == 0) {
+        rc = REPORT_OK;
+    } else if (dumpRc == 3) {
+        rc = REPORT_TXT_BAD;
+    } else {
+        rc = REPORT_NO_DUMP;
     }
+    /* What SNAPGET.BAT's exit-code ladder said, said here, so that the
+     * last line on the screen is the attach line (owner, 2026-10-13). */
+    printf("\n");
     if (reportClash) {
-        return REPORT_CLASH;
+        printf("%s was made by another run or program after this one chose "
+               "the name.\nIt was left alone and is not this run's, and no "
+               "dump was kept under this name.\n%s\n", reportClashName,
+               (given != NULL) ? "Run SNAPGET.BAT (XHCISNAP -report) again "
+                                 "with another name, or none."
+                               : "Run SNAPGET.BAT (XHCISNAP -report) again: "
+                                 "it takes the next letter.");
+    } else if (rc == REPORT_DEV_BAD) {
+        printf("%s.DEV could not be written in full: the disk may be full "
+               "or read-only. Copy\nthis directory somewhere you can write "
+               "to and run it there.%s\n", base,
+               on_nt() ? " On Vista and 7,\nright-click SNAPGET.BAT and "
+                         "choose Run as administrator." : "");
+    } else if (rc == REPORT_TXT_BAD) {
+        printf("The dump's .TXT is not complete: read the lines above, and "
+               "say so when you\nattach it.\n");
+    } else if (rc == REPORT_NO_DUMP) {
+        printf("No dump was taken; %s.DEV says why. If the log channel is "
+               "off,\nrun SNAPON.BAT, restart Windows, reproduce the "
+               "problem, then run SNAPGET.BAT\nagain.\n", base);
+    } else {
+        printf("The device report and the dump were written.\n");
     }
-    if (dumpRc == 0) {
-        return REPORT_OK;
-    }
-    if (dumpRc == 3) {
-        return REPORT_TXT_BAD;
-    }
-    return REPORT_NO_DUMP;
+    printf("The log channel stays on until you run SNAPOFF.BAT (XHCISNAP "
+           "-disable).\n");
+    /* Only files that are there: a failed dump leaves no .TXT to attach
+     * (the p38-1 legs, 2026-10-13). */
+    sprintf(name, "%s.TXT", base);
+    report_attach_line(base, GetFileAttributesA(devPath) != 0xFFFFFFFFUL,
+                       reportTxtOurs && !reportClash &&
+                       GetFileAttributesA(name) != 0xFFFFFFFFUL);
+    return rc;
 }
 
 /*
@@ -9637,7 +9886,7 @@ static void usage(void)
     printf("xhcisnap %s   built %s\n", XHCISNAP_VERSION, XHCISNAP_BUILT);
     printf(
 "read xhci98.sys's own log off a running machine, from user mode.\n"
-"  xhcisnap -report [-o NAME] [-c N]  .DEV + dump; NAME 8.3, else from clock\n"
+"  xhcisnap -report [NAME] [-c N]  .DEV + dump; NAME 8.3, else from clock\n"
 "  xhcisnap -dump [-c N] [-o BASE]   dump: BASE.TXT (send this), .BIN, .PSC\n"
 "  xhcisnap -verbosity N      set the level 0-4 on every xhci98 key, RESTART\n"
 "  xhcisnap -disable          exactly -verbosity 0.  There is no -enable.\n"
@@ -9686,9 +9935,12 @@ static void usage_long(void)
 "                mDDhhmmS - the month as 1-9, A, B or C, the day, the hour\n"
 "                (24h), the minute, and S the first letter A-Z no file of the\n"
 "                set already has, so a second run never overwrites the first.\n"
-"                -o NAME gives the base instead: 1 to 8 letters, digits, '_'\n"
-"                or '-' (not first), no path, drive or extension, not a DOS\n"
-"                device name (exit 2 otherwise), still in the current\n"
+"                -report NAME, or -report -o NAME, gives the base instead\n"
+"                (NAME is the argument after -report unless that is -o, -c\n"
+"                or -nosysinfo): 1 to 8 letters, digits, '_' or '-' (not\n"
+"                first), no path, drive or extension, not a DOS device name\n"
+"                - CON PRN AUX NUL COM0-9 LPT0-9 - (exit 2 otherwise; one\n"
+"                name only, not both spellings), still in the current\n"
 "                directory, and refused (exit 6) if any file of its set -\n"
 "                .DEV .TXT .BIN .PSC or a .TMP of one - exists already.\n"
 "                Takes -c and -nosysinfo.  Prints every file it\n"
@@ -9703,7 +9955,13 @@ static void usage_long(void)
 "                it again (under another NAME, if one was given).  -report\n"
 "                never replaces or deletes a file it did not create.\n"
 "                SNAPON.BAT [LEVEL], SNAPGET.BAT [NAME] and SNAPOFF.BAT\n"
-"                beside this tool run -verbosity, -report and -disable.\n"
+"                beside this tool run -on LEVEL, -report NAME and -disable,\n"
+"                passing the word given to them on as it came.\n"
+"  -on [LEVEL]   SNAPON.BAT's form, and it stands alone: -verbosity LEVEL\n"
+"                with LEVEL exactly 1, 2, 3 or 4, and 2 (the log) when none\n"
+"                is given.  0 is refused - SNAPOFF.BAT or -disable turns the\n"
+"                channel off - and so is anything else (exit 2, nothing\n"
+"                changed).  The write and its exit codes are -verbosity's.\n"
 "  -dump         take a dump with the defaults.  Implied by -c and -o, so it\n"
 "                is only needed when neither is given.  Writes BASE.BIN,\n"
 "                BASE.PSC and BASE.TXT, and prints the RESOLVED absolute path\n"
@@ -9972,6 +10230,83 @@ static int selftest_report(const char *base)
     return 3;
 }
 
+/*
+ * `-on [LEVEL]`, SNAPON.BAT's one command line (Codex review of 38.1, round
+ * 3). The batch passes its %1 on as it came, with no `if` on it: a quoted or
+ * metacharacter argument broke cmd.exe's `if "%1"==` test before this tool
+ * could refuse it, and `SNAPON "1"` failed the batch's compare though the C
+ * runtime hands this tool a plain 1. So the default and the check live here.
+ * `count` and `args` are what follows -on. No LEVEL is 2, the log; LEVEL is
+ * exactly one of the characters 1 to 4 (no sign, no leading zero, nothing
+ * after it); 0 is refused, since SNAPOFF.BAT is what turns the channel off;
+ * anything else, and a second argument, is refused. Returns 0 with *level
+ * set, or 2 having said why. Pure but for the message, so -selftest-on
+ * drives it with no registry.
+ */
+static int parse_on_level(int count, char **args, unsigned long *level)
+{
+    const char *a;
+
+    if (count == 0) {
+        *level = XHCISNAP_LEVEL_LOG;
+        return 0;
+    }
+    if (count > 1) {
+        printf("-on takes one level at most, 1, 2, 3 or 4, or none for 2, the "
+               "log. Nothing was\nchanged.\n");
+        return 2;
+    }
+    a = args[0];
+    if (a[0] == '0' && a[1] == '\0') {
+        printf("-on does not take 0: level 0 is off, and SNAPOFF.BAT "
+               "(XHCISNAP -disable)\nis what turns the channel off. Nothing was "
+               "changed.\n");
+        return 2;
+    }
+    if (a[0] < '1' || a[0] > '4' || a[1] != '\0') {
+        printf("-on takes a level of 1, 2, 3 or 4, or none for 2, the log. "
+               "'%s' is not one,\nand this tool will not guess. Nothing was "
+               "changed.\n", a);
+        return 2;
+    }
+    *level = (unsigned long)(a[0] - '0');
+    return 0;
+}
+
+/*
+ * What SNAPON.BAT's and SNAPOFF.BAT's exit-code ladders said, said by the
+ * tool, so the batch can run it last and the last line on the screen is the
+ * attach line (owner, 2026-10-13). `on` is -on, else -disable. Returns rc.
+ */
+static int switch_wrapup(int rc, int on)
+{
+    printf("\n");
+    if (rc == 0 && on) {
+        printf("The channel is on. Next:\n"
+               "  1. Restart Windows, or disable and enable the xHCI "
+               "controller in\n     Device Manager.\n"
+               "  2. Reproduce the problem.\n"
+               "  3. Run SNAPGET.BAT (XHCISNAP -report), in this directory.\n"
+               "Nothing to attach yet: restart Windows, reproduce, then run "
+               "SNAPGET.BAT.\n");
+    } else if (rc == 0) {
+        printf("The channel is off from the next start: restart Windows, or "
+               "disable and enable\nthe xHCI controller in Device Manager, "
+               "for it to take effect.\nNothing to attach.\n");
+    } else {
+        printf("The channel was %s. Read the lines above: some\ncontrollers "
+               "may already have been changed.\n",
+               on ? "not switched on" : "NOT switched off");
+        if (on_nt()) {
+            printf("Run %s as an administrator: on Vista and 7, right-click "
+                   "it and choose\nRun as administrator.\n",
+                   on ? "SNAPON.BAT" : "SNAPOFF.BAT");
+        }
+        printf("Nothing to attach.\n");
+    }
+    return rc;
+}
+
 int main(int argc, char **argv)
 {
     unsigned long controller;
@@ -9986,9 +10321,13 @@ int main(int argc, char **argv)
     int force;
     int i;
     const char *selftestReport;
+    const char *reportName;
     int doSelftestSysinfo;
+    int noReg;
 
     controller = 0;
+    reportName = NULL;
+    noReg = 0;
     doReport = 0;
     baseGiven = 0;
     selftestReport = NULL;
@@ -10035,8 +10374,36 @@ int main(int argc, char **argv)
                 faultClose = 1;
             } else if (strcmp(fault, "clash") == 0) {
                 faultClash = 1;
+            } else if (strcmp(fault, "noreg") == 0) {
+                /* -on stops once its level is parsed, so selftest.cmd can
+                 * drive SNAPON.BAT through cmd.exe without the registry. */
+                noReg = 1;
             }
         }
+    }
+    /*
+     * `-on [LEVEL]` and `-selftest-on [LEVEL]` stand alone: SNAPON.BAT's line
+     * is `XHCISNAP -on %1`, and whatever its %1 was is LEVEL, checked by
+     * parse_on_level (Codex review of 38.1, round 3). The write is
+     * -verbosity's, with the same key matching, refusals and exit codes;
+     * -force is not taken, as SNAPON.BAT never passed it.
+     */
+    if (strcmp(argv[1], "-on") == 0 || strcmp(argv[1], "-selftest-on") == 0) {
+        unsigned long onLevel;
+
+        if (parse_on_level(argc - 2, argv + 2, &onLevel) != 0) {
+            printf("SNAPON.BAT takes the same: SNAPON for 2, the log, or "
+                   "SNAPON 3 for level 3.\nNothing to attach: nothing was "
+                   "changed.\n");
+            return 2;
+        }
+        if (argv[1][1] == 's' || noReg) {
+            printf("-on: level %lu accepted; the registry was not touched "
+                   "(%s).\n", onLevel,
+                   noReg ? "XHCISNAP_FAULT=noreg" : "-selftest-on");
+            return switch_wrapup(0, 1);
+        }
+        return switch_wrapup(set_verbosity(onLevel, 0), 1);
     }
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
@@ -10093,6 +10460,17 @@ int main(int argc, char **argv)
              * the clock. It is a dump as far as the refusals below go. */
             doReport = 1;
             doDump = 1;
+            /* -report NAME (Codex review of 38.1, round 3): SNAPGET.BAT's
+             * line is `XHCISNAP -report %1`, so whatever its %1 was is the
+             * next argument, and it is NAME unless it is one of the three
+             * options -report goes with. A '-x', a '/?' or a '-help' there
+             * is a NAME and is refused by the name rule (exit 2), so no %1
+             * makes SNAPGET.BAT run anything but a report. */
+            if (i + 1 < argc && strcmp(argv[i + 1], "-o") != 0 &&
+                strcmp(argv[i + 1], "-c") != 0 &&
+                strcmp(argv[i + 1], "-nosysinfo") != 0) {
+                reportName = argv[++i];
+            }
         } else if (strcmp(argv[i], "-selftest-stamp") == 0) {
             return selftest_stamp();
         } else if (strcmp(argv[i], "-selftest-sha256") == 0 && i + 1 < argc) {
@@ -10132,6 +10510,8 @@ int main(int argc, char **argv)
             /* Deferred like -selftest-report, so a -nosysinfo after it
              * still counts (Codex review of 36.47, round 6). */
             doSelftestSysinfo = 1;
+        } else if (strcmp(argv[i], "-selftest-res") == 0) {
+            return selftest_res();
         } else if (strcmp(argv[i], "-selftest-xpipe") == 0) {
             return selftest_xpipe();
         } else if (strcmp(argv[i], "-selftest-ssusp") == 0) {
@@ -10217,16 +10597,31 @@ int main(int argc, char **argv)
     /* -report names its files from the clock, in the current directory, so
      * that a second run never overwrites the first. A name given with -o
      * (owner, 2026-10-13: SNAPGET.BAT NAME) is held to the 8.3 rule here and
-     * refused, not overwritten, when a file of its set exists. */
+     * refused, not overwritten, when a file of its set exists. -report NAME
+     * is the same name, and one of the two spellings is all a run takes. */
+    if (reportName != NULL) {
+        if (baseGiven) {
+            printf("-report NAME and -o NAME both name the files. Give one "
+                   "name.\nNothing was written.\n");
+            report_attach_line(reportName, 0, 0);
+            return 2;
+        }
+        base = reportName;
+        baseGiven = 1;
+    }
     if (doReport && baseGiven) {
         const char *why;
 
         why = report_name_refusal(base);
         if (why != NULL) {
-            printf("-report -o takes a name of 1 to 8 letters, digits, '_' "
-                   "or '-', with no path,\ndrive or extension; its files are "
-                   "written in the current directory. That\nname is refused: "
-                   "%s. Nothing was written.\n", why);
+            printf("-report takes a name of 1 to 8 letters, digits, '_' or "
+                   "'-' (not first), with\nno path, drive or extension, and "
+                   "not a DOS device name; its files are written\nin the "
+                   "current directory. That name is refused:\n");
+            say("  ", "%s.", why);
+            printf("Nothing was written. SNAPGET.BAT takes such a name, or "
+                   "none:\nSNAPGET or SNAPGET MYPC.\n");
+            report_attach_line(base, 0, 0);
             return 2;
         }
     }
@@ -10303,7 +10698,7 @@ int main(int argc, char **argv)
      * number.
      */
     if (doDisable) {
-        return set_verbosity(XHCISNAP_LEVEL_OFF, force);
+        return switch_wrapup(set_verbosity(XHCISNAP_LEVEL_OFF, force), 0);
     }
     if (doSetLevel) {
         return set_verbosity(verbosity, force);

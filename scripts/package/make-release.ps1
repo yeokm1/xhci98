@@ -4159,16 +4159,26 @@ Things specific to this driver, worth knowing in advance:
                     refused: 0 is off, and SNAPOFF.BAT turns it off.
       SNAPGET MYPC  saves the files as MYPC.DEV, MYPC.TXT, .BIN and .PSC
                     instead of the date-and-time name: 1 to 8 letters,
-                    digits, _ or -, no path, drive or extension, in the
-                    same directory. A name already taken there is refused;
+                    digits, _ or -, not starting with -, no path, drive or
+                    extension, and not a DOS device name (CON, PRN, AUX,
+                    NUL, COM0 to COM9, LPT0 to LPT9), in the same
+                    directory. A name already taken there is refused;
                     nothing is overwritten.
 
-  What SNAPGET.BAT says when it stops is XHCISNAP -report's exit code:
+  The batch files pass the word on to XHCISNAP as it came (SNAPON runs
+  XHCISNAP -on LEVEL, SNAPGET XHCISNAP -report NAME), and XHCISNAP checks
+  it: a word it does not take changes nothing and writes nothing.
+
+  Each batch file runs XHCISNAP last, and XHCISNAP says what happened and
+  what to do next. Its last line, just above "Press any key", names the
+  files to attach (for example "Attach: 3141022A.DEV 3141022A.TXT"), or
+  says there is nothing to attach. What it says when SNAPGET.BAT stops
+  follows XHCISNAP -report's exit code:
 
       0  the .DEV and the .TXT were written in full: attach them.
       2  the name given was refused, and the line above says why: give
-         1 to 8 letters, digits, _ or -, or no name. (With no name, the
-         XHCISNAP.EXE is older than the batch: use this package's.)
+         a name by the rules above, or no name. (If XHCISNAP printed its
+         usage instead, it is older than the batch: use this package's.)
       3  the .TXT is not complete: attach it, and say so.
       4  no dump was taken, and the .DEV says why - often the channel is
          off: SNAPON.BAT, restart, make it happen, SNAPGET.BAT. Attach the
@@ -5450,7 +5460,7 @@ run them at a prompt in this directory; on Windows Vista and 7, right-click
 each one and choose Run as administrator. Copy this directory somewhere
 writable first if it is not (a CD is not).
 
-  1.  SNAPON.BAT     XHCISNAP -verbosity 2: the log channel on
+  1.  SNAPON.BAT     XHCISNAP -on (-verbosity 2): the log channel on
   2.  restart Windows
   3.  make the problem happen again
   4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
@@ -5461,8 +5471,9 @@ name made from the date and time, and prints the names. Attach the .DEV and
 are asked for them. It leaves the channel on, so you can run it again after
 the next attempt. At a prompt, SNAPON 3 sets level 3 rather than 2 (1 to 4;
 SNAPON 0 is refused, SNAPOFF.BAT is off), and SNAPGET MYPC saves the files
-as MYPC.DEV, .TXT, .BIN and .PSC (1 to 8 letters, digits, _ or -, in this
-directory; a name already taken is refused, never overwritten). The
+as MYPC.DEV, .TXT, .BIN and .PSC (1 to 8 letters, digits, _ or -, not
+starting with -, not a DOS device name such as CON, NUL, COM1 or LPT1, in
+this directory; a name already taken is refused, never overwritten). The
 readme.txt at the top of the download, section 6, says what each of
 SNAPGET.BAT's endings means. When you are done:
 
