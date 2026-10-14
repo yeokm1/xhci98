@@ -546,6 +546,16 @@ LONG TbtRingSend(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words)
     return TbtRingSendUs(ring, pdf, dw, words, TBT_TX_CONSUME_MS * 1000UL);
 }
 
+/* One step of a ring wait, added to the ring's waited sum. */
+static VOID tbtRingStep(PTBT_RING ring, PTBT_WAIT w)
+{
+    ULONG before;
+
+    before = w->WaitedUs;
+    TbtWaitStep(w, ring->Host, 0);
+    ring->WaitedUs += w->WaitedUs - before;
+}
+
 LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
                    ULONG consumeUs)
 {
@@ -617,7 +627,7 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
         if (TbtWaitDone(&w, ring->Host)) {
             break;
         }
-        TbtWaitStep(&w, ring->Host, 0);
+        tbtRingStep(ring, &w);
     }
     ring->Counters.TxStuck++;
     tbtLog(ring->Host, "tbt.ring.tx-stuck", idx);
@@ -769,6 +779,7 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
     ULONG frames;
     ULONG ev;
     ULONG echo;
+    ULONG acked;
     LONG rc;
     TBT_FRAME f;
     TBT_WAIT w;
@@ -828,7 +839,7 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
                 if (TbtWaitDone(&w, ring->Host)) {
                     break;
                 }
-                TbtWaitStep(&w, ring->Host, 0);
+                tbtRingStep(ring, &w);
                 continue;
             }
             frames++;
@@ -861,7 +872,12 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
             if (f.Pdf != pdf || f.Words < 3 ||
                 ((f.Dw[0] ^ route->Hi) & TBT_ROUTE_HI_TOPOLOGY) != 0 ||
                 f.Dw[1] != route->Lo) {
+                /* An acknowledgement the hand-off sends waits too: it
+                 * counts against this attempt, so a frozen clock still
+                 * ends it. */
+                acked = ring->WaitedUs;
                 tbtHandOff(ring, &f);
+                w.WaitedUs += ring->WaitedUs - acked;
                 if (TbtWaitDone(&w, ring->Host)) {
                     break;
                 }
@@ -1181,10 +1197,15 @@ LONG TbtCtlWrite1(PTBT_CTL ctl, const TBT_ROUTE *route, ULONG cs,
 
 VOID TbtCtlService(PTBT_CTL ctl)
 {
+    TbtCtlServiceN(ctl, TBT_WAIT_FRAME_BUDGET);
+}
+
+VOID TbtCtlServiceN(PTBT_CTL ctl, ULONG maxFrames)
+{
     TBT_FRAME f;
     ULONG frames;
 
-    for (frames = 0; frames < TBT_WAIT_FRAME_BUDGET; frames++) {
+    for (frames = 0; frames < maxFrames; frames++) {
         if (!TbtRingReceive(ctl->Ring, &f)) {
             return;
         }

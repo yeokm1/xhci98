@@ -105,6 +105,7 @@
  * the one wait or request already running when a budget runs out. */
 #define TBT_U4_RESUME_HOST_US       10000000UL
 #define TBT_U4_RESUME_EACH_US       20000000UL
+#define TBT_U4_SERVICE_BATCH        16UL        /* frames a budgeted safe point takes */
 #define TBT_U4_USB3_MAX_MBPS        80000UL     /* above any USB4 link: unrepresentable */
 
 /* USB3 bandwidth (record 22 section 6.9; Linux usb4.c, tunnel.c, quirks.c). */
@@ -258,6 +259,8 @@ typedef struct _TBT_U4_PORT {
     ULONG HostBaPcie;       /* the host router's Buffer Allocation for this port */
     ULONG HostBaUsb3;
     BOOLEAN RemovalOwed;    /* a PCIe teardown's step 6 is owed */
+    BOOLEAN HostResidual;   /* host entries never read at a teardown: swept
+                             * before the port connects again */
     TBT_U4_ROUTER Dev;
 
     /* Lane fields this driver changed (section 6.5), restored at unplug. */
@@ -300,6 +303,8 @@ typedef struct _TBT_U4_LINK {
     ULONG ParentLaneCap;    /* its Lane Adapter Configuration Capability */
     TBT_ROUTE Child;
     BOOLEAN ChildTbt3;      /* a Thunderbolt 3 router: no router operations */
+    BOOLEAN ChildUuidValid; /* ChildUuid read: compared, never a failed sample */
+    BOOLEAN RemovalPending; /* removed, its parent's paths not yet all closed */
     ULONG ChildLc;          /* its link controller, for the fused UUID */
     ULONG ChildUuid[4];
     ULONG CapsState;        /* TBT_U4_CAPS_* of the child (section 6.4) */
@@ -442,6 +447,7 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG QuarantineLifted;
     ULONG PortsPreserved;
     ULONG PortsHeld;
+    ULONG ResumeBudgetsSpent;
     ULONG PortsCleaned;
     ULONG DownstreamPortResets;
     ULONG HostRouterResets;
@@ -504,6 +510,10 @@ typedef struct _TBT_U4CM {
     ULONG BudgetWaitedUs;   /* the waits known to have passed: the backstop */
     ULONG ResumeHostUs;     /* the budgets, TBT_U4_RESUME_* unless a test sets them */
     ULONG ResumeEachUs;
+    ULONG BudgetRingBase;   /* the ring's waited sum when the budget began */
+    BOOLEAN HostTmuOk;      /* the host router's TMU usable (or none) */
+    BOOLEAN HostTmuTdOwed;  /* its Time Disruption set by this driver, not
+                             * yet read back clear */
 
     TBT_U4_ACTION Actions[TBT_U4_ACTION_QUEUE];
     ULONG ActionHead;

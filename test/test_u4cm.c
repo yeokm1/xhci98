@@ -899,6 +899,9 @@ static void test_dp_preserved(void)
     g_fab.R[dev].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
     /* DP IN 5's video path out of lane 1 at HopID 12 */
     g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 12UL | (1UL << 11);
+    /* and its device end: lane 1's HopID 12 on to a non-protocol adapter
+     * (the whole DP tunnel, not only the host's entry) */
+    g_fab.R[dev].Adp[1].Path[2 * 12] = 0x80000000UL | 8UL | (3UL << 11);
     g_fab.RxQCount = 0;
     cfgDefault(&c);
     (void)start(&g_fab, &g_ring, &g_cm, &c);
@@ -908,6 +911,7 @@ static void test_dp_preserved(void)
     CHECK(p->Pcie.Up && p->Pcie.Hd != 12 && p->Pcie.Hu != 12, "around its HopID");
     CHECK(!p->Usb3.Up, "no USB3 beside DisplayPort");
     CHECK(g_fab.R[0].Adp[5].Path[2 * 8] & 0x80000000UL, "the DP path untouched");
+    CHECK(g_fab.R[dev].Adp[1].Path[2 * 12] & 0x80000000UL, "its device end untouched");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2007,12 +2011,265 @@ static void test_review2_restore(void)
     CHECK(p->Pcie.Incomplete, "the host lane's entry unread: incomplete");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
     CHECK(p->Pcie.Written & TBT_U4_E_HOST_ENABLE, "its host side owned all the same");
+    /* Its unplug with the entry readable again: the sweep finds it and
+     * closes it, and only then is the path proven closed. */
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
+    CHECK_EQ(fabPath0(&g_fab, 0, lane, 9) & 0x80000000UL, 0, "the unread entry found and closed");
+    CHECK(hostClean(&g_fab, 1), "the host side clean");
+    CHECK(!p->HostResidual, "nothing owed");
+
+    /* Still unreadable at the unplug: never proven closed, owed; the
+     * re-plug waits for the sweep, then connects. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    lane = fabPortLane0(&g_fab, 1);
+    armSwallow(&g_fab, 0, TBT_CS_PATH, (unsigned long)lane, 2 * 9, 0, 0, 0, 100000UL);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Pcie.Incomplete, "incomplete");
     g_ldCalls = 0;
     memset(&g_ld, 0, sizeof(g_ld));
     fabUnplug(&g_fab, 1);
     poll(&g_cm, &g_fab, 1);
     CHECK(g_ldCalls == 0 || !g_ld.PathClosed, "an incomplete tunnel: never proven closed");
-    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
+    CHECK(p->HostResidual, "the sweep owed");
+    CHECK(fabPath0(&g_fab, 0, lane, 9) & 0x80000000UL, "the entry still there");
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(state(&g_cm, 1) != TBT_U4_UP, "no connection over an unswept host side");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 3);
+    CHECK(!p->HostResidual, "swept once readable");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "then connected");
+}
+
+static int g_jumpRouter;
+static int g_jumpDone;
+
+/* The first path read of a router moves the clock past any budget. */
+static int jumpHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                    unsigned long adp, unsigned long addr, unsigned long n,
+                    const unsigned long *data)
+{
+    (void)adp;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (!g_jumpDone && pdf == TBT_PDF_READ && router == g_jumpRouter && cs == TBT_CS_PATH) {
+        g_jumpDone = 1;
+        f->NowUs += 1000000000UL;
+    }
+    return FAB_HOOK_GO;
+}
+
+static int g_retryRouter;
+static unsigned long g_retryCount;
+
+/* Every request to one router: three attempts lost, the fourth answered. */
+static int retryHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)f;
+    (void)pdf;
+    (void)cs;
+    (void)adp;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (router != g_retryRouter) {
+        return FAB_HOOK_GO;
+    }
+    g_retryCount++;
+    return (g_retryCount % 4UL) != 0 ? FAB_HOOK_SWALLOW : FAB_HOOK_GO;
+}
+
+static int g_tmuFail;
+
+/* Every write of the host router's TMU Time Disruption clear swallowed. */
+static int tdHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                  unsigned long adp, unsigned long addr, unsigned long n,
+                  const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    if (g_tmuFail && pdf == TBT_PDF_WRITE && router == 0 && cs == TBT_CS_ROUTER &&
+        data != NULL && n == 1 && addr == (unsigned long)g_cm.HostRouter.CapTmu &&
+        (data[0] & TBT_TMU_RTR0_TD) == 0) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+static void test_review3(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int child;
+    int lane;
+    int i;
+    LONG rc;
+    ULONG before;
+    ULONG before0;
+    const TBT_U4_PORT *p;
+
+    /* The budget spent inside verification itself: HELD, nothing torn
+     * down, the spent path counted. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    before = g_cm.Counters.ResumeBudgetsSpent;
+    g_jumpRouter = dev;
+    g_jumpDone = 0;
+    g_fab.Hook = jumpHook;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK(g_jumpDone, "the verification's path read reached");
+    CHECK_EQ(rc, TBT_E_STATE, "spent in verification: the failure path");
+    CHECK_EQ(g_cm.Counters.ResumeBudgetsSpent, before + 1, "the budget-spent path ran");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
+    CHECK(fabPcieUp(&g_fab, 1), "nothing torn down");
+
+    /* Retries that succeed on the last attempt, on a frozen clock: the
+     * waited sum still ends the resume within the bound. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_cm.ResumeHostUs = 2000000UL;
+    g_cm.ResumeEachUs = 0;
+    before0 = g_cm.Counters.ResumeBudgetsSpent;
+    g_fab.ClockFrozen = 1;
+    g_fab.FrozenUs = g_fab.NowUs;
+    g_retryRouter = dev;
+    g_retryCount = 0;
+    g_fab.Hook = retryHook;
+    before = g_fab.NowUs;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    g_fab.ClockFrozen = 0;
+    CHECK(g_retryCount > 0, "retries happened");
+    CHECK(g_cm.Counters.ResumeBudgetsSpent > before0, "the waited sum spent the budget");
+    CHECK(g_fab.NowUs - before <= boundWith(2, 2000000UL, 0), "a frozen clock: within the bound");
+
+    /* A full quarantine table: a pending host protocol HopID 8 is still
+     * never reused. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    cfgDefault(&c);
+    g_ldCalls = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    for (i = 0; i < (int)TBT_U4_QUARANTINE; i++) {
+        g_cm.Quarantine[i].Used = TRUE;
+        g_cm.Quarantine[i].Route.Hi = 0;
+        g_cm.Quarantine[i].Route.Lo = 0x7F;
+        g_cm.Quarantine[i].Adapter = 60;
+        g_cm.Quarantine[i].Hop = 8 + (ULONG)i;
+    }
+    g_fab.R[0].Adp[fabPortPcie(&g_fab, 1)].Path[2 * 8 + 1] |= 0x10000000UL;  /* pending */
+    g_fab.R[0].Adp[fabPortPcie(&g_fab, 1)].PpStuck[8] = 1;                  /* never drains */
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(!p->Pcie.Up, "a pending protocol entry with the table full: no PCIe tunnel");
+    CHECK(!fabPcieUp(&g_fab, 1), "nothing built over it");
+    for (i = 0; i < (int)TBT_U4_QUARANTINE; i++) {
+        g_cm.Quarantine[i].Used = FALSE;
+    }
+
+    /* The host's Time Disruption that will not clear: owned, no USB3
+     * built, cleared and USB3 built once it clears. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    g_tmuFail = 1;
+    g_fab.Hook = tdHook;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    if (g_cm.HostRouter.CapTmu != 0) {
+        CHECK(g_cm.HostTmuTdOwed, "the disruption owned");
+        CHECK(!g_cm.HostTmuOk, "the host TMU not usable");
+        CHECK(!p->Usb3.Up, "no USB3 over it");
+        CHECK(p->Pcie.Up, "PCIe built");
+        g_tmuFail = 0;
+        fabUnplug(&g_fab, 1);
+        poll(&g_cm, &g_fab, 2);
+        CHECK(!g_cm.HostTmuTdOwed && g_cm.HostTmuOk, "cleared at the idle tick");
+        fabPlug(&g_fab, 1, dev);
+        poll(&g_cm, &g_fab, 4);
+        CHECK(p->Usb3.Up, "USB3 once the host TMU is usable");
+    }
+    g_fab.Hook = NULL;
+    g_tmuFail = 0;
+
+    /* A Thunderbolt 3 child whose fuse read fails at discovery: adopted
+     * from the next good sample, never a false removal. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, dev, child, 1);
+    g_fab.RxQCount = 0;
+    armSwallow(&g_fab, child, TBT_CS_ROUTER, 0, FAB_RCAP_LC + 3, 0, 0, 0, TBT_CTL_ATTEMPTS);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    CHECK_EQ(g_cm.Counters.LinksDiscovered, 1, "the link");
+    CHECK_EQ(g_swLeft, 0, "its fuse read failed at discovery");
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(g_cm.Counters.LinksRemoved, 0, "no false removal");
+    CHECK(g_cm.Links[0].ChildUuidValid &&
+          g_cm.Links[0].ChildUuid[0] == 0xAABB0000UL + (unsigned long)child, "adopted");
+
+    /* A link's removal whose parent entry cannot be read: kept pending,
+     * retried, the OS told once. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, dev, child, 1);
+    g_fab.R[dev].Adp[7].Path[2 * 8] = 0x80000000UL | 8UL | (3UL << 11) | (7UL << 17);
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    g_fab.R[dev].Adp[3].Path[2 * 9] = 0x80000000UL | 8UL | (7UL << 11) | (16UL << 17);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    (void)countActions(&g_cm, 0);
+    armSwallow(&g_fab, dev, TBT_CS_PATH, 7, 2 * 8, 0, 0, 0, 100000UL);
+    fabUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(g_cm.Links[0].Used && g_cm.Links[0].RemovalPending, "its removal pending");
+    CHECK(g_fab.R[dev].Adp[7].Path[2 * 8] & 0x80000000UL, "the unread entry still there");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!g_cm.Links[0].Used, "finished once readable");
+    CHECK_EQ(g_fab.R[dev].Adp[7].Path[2 * 8] & 0x80000000UL, 0, "the entry closed");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_DEEP_REMOVED), 1, "the OS told once");
+    CHECK_EQ(g_cm.Counters.LinksRemoved, 1, "counted once");
+
+    /* The resume of a lost configuration closes a pending host protocol
+     * entry before rebuilding over it. */
+    dev = setupMinimal(1, NULL);
+    lane = fabPortLane0(&g_fab, 1);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    {
+        int hp = fabPortPcie(&g_fab, 1);
+        g_fab.R[0].Adp[hp].Path[2 * 8] = 8UL | ((unsigned long)lane << 11);
+        g_fab.R[0].Adp[hp].Path[2 * 8 + 1] |= 0x10000000UL;     /* pending */
+        g_fab.R[0].Adp[hp].PpStuck[8] = 1;                      /* never drains */
+    }
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "a pending host entry that never drains: not rebuilt");
+    CHECK(state(&g_cm, 1) != TBT_U4_UP, "not UP over it");
+    CHECK(quarantineCount(&g_cm) >= 1, "quarantined");
 }
 
 int main(void)
@@ -2049,6 +2306,7 @@ int main(void)
     test_review2_budget();
     test_review2_identity_and_links();
     test_review2_restore();
+    test_review3();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

@@ -231,6 +231,11 @@ typedef struct _TBT_RING {
     ULONG LastEventRouteLo;
 
     TBT_RING_COUNTERS Counters;
+
+    /* Every wait the ring's own loops took, summed (they only grow; a
+     * caller takes differences): the waited-sum backstop of a caller's
+     * budget when the clock does not move. */
+    ULONG WaitedUs;
 } TBT_RING, *PTBT_RING;
 
 /* A route string as two DWs (Spec 6.4.2.2); level n is byte n of the 56-bit
@@ -531,6 +536,9 @@ LONG TbtCtlWrite1(PTBT_CTL ctl, const TBT_ROUTE *route, ULONG cs,
 /* Take every frame the RX ring holds, acknowledging and queueing as the
  * receiver does; sends acknowledgements only. */
 VOID TbtCtlService(PTBT_CTL ctl);
+/* The same, at most `maxFrames` frames: what is left stays on the ring for
+ * the next call (an acknowledgement owed is never dropped). */
+VOID TbtCtlServiceN(PTBT_CTL ctl, ULONG maxFrames);
 
 /* The queues, oldest first. */
 BOOLEAN TbtCtlNextHotPlug(PTBT_CTL ctl, PTBT_HP_EVENT out);
