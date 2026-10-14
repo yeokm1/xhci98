@@ -1,0 +1,1121 @@
+/*
+ * test_tbt_icm.c - host vectors for the firmware connection manager client
+ * (src\cm\tbt_icm.c; roadmap-usb4.md task 39-A.3, design record 21
+ * sections 5 and 10.1).
+ *
+ * Alpine Ridge is tested against every frame ICM-PROTOCOL.md quotes as
+ * observed: driver ready T:1/T:2, get route T:833/T:834, approve
+ * T:34153/T:34154, device connected T:9/T:27886/T:34163 (words 0 to 5 as
+ * quoted, the name block built from section 4.4's entry table, the rest of
+ * the 220 bytes zero, as that section says), device disconnected T:21087;
+ * and against the sequences of its section 6: the rebind with the dock
+ * attached (6.2), unplug (6.3), plug and approve (6.4), resume (6.5) and
+ * unplug while suspended (6.6). Boot ACL frames (T:7099 to T:7102) are not
+ * here: the client sends no boot ACL command.
+ *
+ * Falcon Ridge, Titan Ridge and Ice Lake are UNCAPTURED: their vectors are
+ * built from Linux drivers/thunderbolt tb_msgs.h's structure layouts
+ * (struct icm_fr_*, icm_tr_*, icm_icl_*) and icm.c's per-generation hooks,
+ * and test the client against those layouts, not against hardware.
+ *
+ * The firmware is modelled here over tbt_fake.h's host interface, with a
+ * virtual clock, so every timeout, retry and the disconnect landing inside
+ * a 10 s approve run in microseconds.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include "../src/cm/tbt_icm.h"
+#include "tbt_fake.h"
+#include "test_harness.h"
+
+/* ------------------------------------------------------------------ */
+/* The modelled firmware                                              */
+/* ------------------------------------------------------------------ */
+
+#define GEN_FR  1
+#define GEN_AR  2
+#define GEN_TR  3
+#define GEN_ICL 4
+
+#define MODE_ANSWER     0
+#define MODE_NEVER      1
+#define MODE_ERROR      2
+
+static const unsigned long kUuid[4] = {
+    0xa0211100UL, 0x003d0efcUL, 0xffffffffUL, 0xffffffffUL  /* ICM 4.4 [obs] */
+};
+static const unsigned long kUuid2[4] = {
+    0x28f88500UL, 0x8086d8dfUL, 0xffffffffUL, 0xffffffffUL  /* ICM 4.6's other ACL entry */
+};
+
+typedef struct FW {
+    int Gen;
+    int ReadyMode;
+    unsigned long HoldUs;
+    unsigned long HoldUntil;
+    int Present;                /* the dock is attached */
+    int Approved;               /* its tunnel exists */
+    unsigned long ConnId;
+    int ApproveMode;
+    unsigned long ApproveDelayUs;
+    unsigned long DisconnectInApproveUs;
+    int RouteMode;
+    int TopoMode;
+    unsigned long Ready;
+    unsigned long Approves;
+    unsigned long Routes;
+    unsigned long Topos;
+    unsigned long Reads;
+    unsigned long LastApprove[8];
+    unsigned long LastApproveWords;
+} FW;
+
+static FW g_fw;
+static TBT_RING g_ring;
+static TBT_ICM g_icm;
+
+static unsigned long g_linkDowns;
+static int g_linkDownInWait;
+static unsigned long g_hookCalls;
+static BOOLEAN g_hookAnswer;
+
+/* The endpoint name block of ICM 4.4 [obs] T:9, as bytes. */
+static unsigned long nameBlock(unsigned long *dw, unsigned long words)
+{
+    static const unsigned char b[] = {
+        0x11, 0x01, 'C', 'a', 'l', 'D', 'i', 'g', 'i', 't', ',', ' ',
+        'I', 'n', 'c', '.', 0,
+        0x0b, 0x02, 'T', 'S', '3', ' ', 'P', 'l', 'u', 's', 0,
+        0x08, 0x10, 0x3d, 0x00, 0x11, 0x00, 0x11, 0x01,
+        0x02, 0x12,
+        0x00
+    };
+    unsigned long i;
+
+    memset(dw, 0, 4 * words);
+    for (i = 0; i < sizeof(b) && i / 4 < words; i++) {
+        dw[i / 4] |= (unsigned long)b[i] << (8 * (i % 4));
+    }
+    return words;
+}
+
+/* Alpine Ridge / Falcon Ridge device connected (ICM 4.4; Linux struct
+ * icm_fr_event_device_connected): 61 DWs. Link info bit 11 is set as the
+ * capture shows it (R11). */
+static void arConnected(unsigned long id, int approved, unsigned long link,
+                        unsigned long depth, const unsigned long *uuid,
+                        unsigned long delayUs)
+{
+    unsigned long dw[61];
+    unsigned long li;
+
+    dw[0] = 0x0100b103UL;
+    memcpy(&dw[1], uuid, 16);
+    li = link | (depth << 4) | (approved ? 0x100UL : 0) | 0x800UL;
+    dw[5] = 0x10UL | (id << 8) | (li << 16);
+    nameBlock(&dw[6], 55);
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 61, delayUs, 0);
+}
+
+static void arDisconnected(unsigned long link, unsigned long depth,
+                           unsigned long delayUs)
+{
+    unsigned long dw[2];
+
+    dw[0] = 0x01000004UL;           /* T:21087 */
+    dw[1] = (link | (depth << 4)) << 16;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, delayUs, 0);
+}
+
+/* Titan Ridge / Ice Lake device connected (Linux struct
+ * icm_tr_event_device_connected): 63 DWs, UNCAPTURED. */
+static void trConnected(unsigned long id, int approved, unsigned long routeLo,
+                        const unsigned long *uuid, unsigned long delayUs,
+                        unsigned long index)
+{
+    unsigned long dw[63];
+    unsigned long li;
+
+    dw[0] = 0x0100b103UL | (index << 16);
+    memcpy(&dw[1], uuid, 16);
+    dw[5] = 0;
+    dw[6] = routeLo;
+    li = (routeLo & 7) | (1UL << 4) | (approved ? 0x100UL : 0);
+    dw[7] = id | (li << 16);
+    nameBlock(&dw[8], 55);
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 63, delayUs, 0);
+}
+
+static void trDisconnected(unsigned long routeLo, unsigned long delayUs)
+{
+    unsigned long dw[3];
+
+    dw[0] = 0x01000004UL;
+    dw[1] = 0;
+    dw[2] = routeLo;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 3, delayUs, 0);
+}
+
+static void fwAnnounce(unsigned long delayUs)
+{
+    if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
+        trConnected(g_fw.ConnId, g_fw.Approved, 1, kUuid, delayUs, 0);
+    } else {
+        arConnected(g_fw.ConnId, g_fw.Approved, 1, 1, kUuid, delayUs);
+    }
+}
+
+/* Falcon Ridge topology (Linux struct icm_fr_pkg_get_topology_response,
+ * 38 DWs a packet, ICM_GET_TOPOLOGY_PACKETS of them): packet 0 is the
+ * host, its port 1 naming switch 1; switch 1 at route 1 names switch 2
+ * at route 0x0301 on its port 3. UNCAPTURED. */
+static void fwTopology(int error)
+{
+    unsigned long dw[38];
+    unsigned long i;
+
+    for (i = 0; i < 14; i++) {
+        memset(dw, 0, sizeof(dw));
+        dw[0] = 0x0e000001UL | (i << 16) | (error ? 0x100UL : 0);
+        if (i == 0) {
+            dw[3] = 0x00000001UL;
+            dw[6 + 1] = (1UL << 24) | 1UL;
+        } else if (i == 1) {
+            dw[1] = 0x00000001UL;
+            dw[3] = 0x01000001UL;
+            dw[6 + 3] = (2UL << 24) | 1UL;
+        } else if (i == 2) {
+            dw[1] = 0x00000301UL;
+            dw[3] = 0x02000001UL;
+        }
+        fakeQueue(TBT_PDF_ICM_RESP, dw, 38, 2000 + 200 * i, 0);
+    }
+}
+
+static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                   unsigned long words)
+{
+    unsigned long r[64];
+    unsigned long i;
+    unsigned long code;
+
+    (void)fk;
+    if (pdf == TBT_PDF_READ) {
+        g_fw.Reads++;
+        if (g_fake.NowUs >= g_fw.HoldUntil) {
+            r[0] = dw[0] | 0x80000000UL;
+            r[1] = dw[1];
+            r[2] = dw[2] | (3UL << 19);
+            r[3] = 0x15C08086UL;
+            fakeQueue(TBT_PDF_READ, r, 4, 100, 0);
+        }
+        return;
+    }
+    if (pdf != TBT_PDF_ICM_CMD || words < 1) {
+        return;
+    }
+    code = dw[0] & 0xFF;
+    if (code == 0x03) {
+        g_fw.Ready++;
+        if (g_fw.ReadyMode == MODE_NEVER) {
+            return;
+        }
+        if (g_fw.Gen == GEN_AR) {
+            r[0] = 0x0100e203UL;    /* T:2 */
+            r[1] = 0x28010b60UL;
+            i = 2;
+        } else if (g_fw.Gen == GEN_FR) {
+            r[0] = 0x01000003UL;    /* icm_fr_pkg_driver_ready_response */
+            r[1] = 0x00010b60UL;
+            i = 2;
+        } else {
+            r[0] = 0x01004003UL;    /* icm_tr_pkg_driver_ready_response */
+            r[1] = ((1UL | (3UL << 4) | (16UL << 7)) << 16);
+            r[2] = 0x00004500UL;
+            r[3] = 0x000015EBUL;
+            i = 4;
+        }
+        if (g_fw.ReadyMode == MODE_ERROR) {
+            r[0] |= 0x100UL;
+        }
+        fakeQueue(TBT_PDF_ICM_RESP, r, i, 6000, 0);
+        g_fw.HoldUntil = g_fake.NowUs + g_fw.HoldUs;
+        if (g_fw.Present) {
+            g_fw.ConnId++;
+            fwAnnounce(g_fw.HoldUs - 10000UL);
+        }
+        return;
+    }
+    if (code == 0x0A) {
+        g_fw.Routes++;
+        if (g_fw.RouteMode == MODE_NEVER) {
+            return;
+        }
+        r[0] = 0x0100000aUL | (g_fw.RouteMode == MODE_ERROR ? 0x100UL : 0);
+        r[1] = dw[1];
+        r[2] = 0;
+        r[3] = (dw[1] >> 16) & 7;   /* the route of a depth-1 device is its link */
+        fakeQueue(TBT_PDF_ICM_RESP, r, 4, 3000, 0);
+        return;
+    }
+    if (code == 0x01) {
+        g_fw.Topos++;
+        if (g_fw.TopoMode != MODE_NEVER) {
+            fwTopology(g_fw.TopoMode == MODE_ERROR);
+        }
+        return;
+    }
+    if (code == 0x04) {
+        g_fw.Approves++;
+        memcpy(g_fw.LastApprove, dw, 4 * (words < 8 ? words : 8));
+        g_fw.LastApproveWords = words;
+        if (g_fw.DisconnectInApproveUs != 0) {
+            if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
+                trDisconnected(1, g_fw.DisconnectInApproveUs);
+            } else {
+                arDisconnected(1, 1, g_fw.DisconnectInApproveUs);
+            }
+            g_fw.DisconnectInApproveUs = 0;
+            g_fw.Present = 0;
+        }
+        if (g_fw.ApproveMode == MODE_NEVER) {
+            return;
+        }
+        memcpy(r, dw, 4 * words);
+        r[0] = 0x01000004UL | (g_fw.ApproveMode == MODE_ERROR ? 0x100UL : 0);
+        if (g_fw.ApproveMode == MODE_ANSWER) {
+            g_fw.Approved = 1;
+        }
+        fakeQueue(TBT_PDF_ICM_RESP, r, words, g_fw.ApproveDelayUs, 0);
+        return;
+    }
+}
+
+static void onLinkDown(PVOID ctx, const TBT_ICM_DEVICE *dev, BOOLEAN inWait)
+{
+    (void)ctx;
+    (void)dev;
+    g_linkDowns++;
+    g_linkDownInWait = inWait;
+}
+
+static BOOLEAN onApproveHook(PVOID ctx, const TBT_ICM_DEVICE *dev)
+{
+    (void)ctx;
+    (void)dev;
+    g_hookCalls++;
+    return g_hookAnswer;
+}
+
+static const TBT_ICM_PROFILE *rowFor(int gen)
+{
+    switch (gen) {
+    case GEN_FR: return &TbtIcmProfileFalconRidge;
+    case GEN_TR: return &TbtIcmProfileTitanRidge;
+    case GEN_ICL: return &TbtIcmProfileIceLake;
+    default: return &TbtIcmProfileAlpineRidge;
+    }
+}
+
+static void setup(int gen, int present, int approved)
+{
+    fakeReset();
+    memset(&g_fw, 0, sizeof(g_fw));
+    memset(&g_ring, 0, sizeof(g_ring));
+    g_fw.Gen = gen;
+    g_fw.HoldUs = 580000UL;         /* ICM 6.2 [obs] */
+    g_fw.Present = present;
+    g_fw.Approved = approved;
+    g_fw.ConnId = 4;
+    g_fw.ApproveDelayUs = 358000UL; /* ICM 4.3 [obs] */
+    g_fake.OnTx = fwOnTx;
+    g_linkDowns = 0;
+    g_linkDownInWait = -1;
+    g_hookCalls = 0;
+    TbtIcmInit(&g_icm, rowFor(gen), &g_ring, &g_fakeHost, 0);
+    TbtIcmSetLinkDown(&g_icm, onLinkDown, NULL);
+}
+
+static LONG start(void)
+{
+    return TbtIcmStart(&g_icm, fakeMem(), FAKE_PHYS, FAKE_MEM_BYTES);
+}
+
+static unsigned long countTx(unsigned long pdf, unsigned long code)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = 0; i < g_fake.TxCount && i < FAKE_TXLOG; i++) {
+        if (g_fake.TxLogPdf[i] == pdf &&
+            (pdf != TBT_PDF_ICM_CMD || (g_fake.TxLogDw[i][0] & 0xFF) == code)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static long findTx(unsigned long pdf, unsigned long code)
+{
+    unsigned long i;
+
+    for (i = 0; i < g_fake.TxCount && i < FAKE_TXLOG; i++) {
+        if (g_fake.TxLogPdf[i] == pdf &&
+            (pdf != TBT_PDF_ICM_CMD || (g_fake.TxLogDw[i][0] & 0xFF) == code)) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+static unsigned long actions(TBT_ICM_ACTION *out, unsigned long max)
+{
+    unsigned long n = 0;
+    TBT_ICM_ACTION a;
+
+    while (TbtIcmNextAction(&g_icm, &a)) {
+        if (n < max) {
+            out[n] = a;
+        }
+        n++;
+    }
+    return n;
+}
+
+/* Advance the clock with idle polls, as the thread would. */
+static void idle(unsigned long ms)
+{
+    unsigned long t;
+
+    for (t = 0; t < ms; t += 200) {
+        fakeSleep(NULL, 200);
+        TbtIcmPoll(&g_icm);
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Frames                                                             */
+/* ------------------------------------------------------------------ */
+
+static void test_frames_ar(void)
+{
+    static const unsigned long t2[2] = { 0x0100e203UL, 0x28010b60UL };
+    static const unsigned long t21087[2] = { 0x01000004UL, 0x00110000UL };
+    unsigned long ev[61];
+    TBT_ICM_READY ready;
+    TBT_ICM_ANNOUNCE a;
+    TBT_ICM_GONE g;
+    TBT_ICM_DEVICE dev;
+    ULONG req[8];
+    ULONG n;
+
+    /* T:2 */
+    CHECK(TbtIcmProfileAlpineRidge.DecodeReady(t2, 2, &ready), "T:2 decodes");
+    CHECK_EQ(ready.Flags, 0xe2, "flags 0xe2");
+    CHECK(ready.Flags & TBT_ICM_READY_RTD3, "RTD3 bit 6");
+    CHECK_EQ(ready.RomVersion, 0x60, "ROM version");
+    CHECK_EQ(ready.RamVersion, 0x0b, "RAM version");
+    CHECK_EQ(ready.SecurityLevel, 1, "security level user");
+    CHECK_EQ(ready.BootAclCount, 16, "16 ACL entries");
+    CHECK(ready.BootAclSupported, "boot ACL supported");
+
+    /* T:9, T:27886, T:34163: words 0 to 5 and the name block. */
+    ev[0] = 0x0100b103UL;
+    memcpy(&ev[1], kUuid, 16);
+    ev[5] = 0x09110510UL;           /* T:9: approved, id 5, key 0x10 */
+    nameBlock(&ev[6], 55);
+    CHECK(TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "T:9 decodes");
+    CHECK_EQ(a.EventFlags, 0xb1, "flags 0xb1");
+    CHECK_EQ(TBT_ICM_EVF_SLEVEL(a.EventFlags), 2, "level field 2, as observed");
+    CHECK(a.EventFlags & TBT_ICM_EVF_DUAL_LANE, "dual lane");
+    CHECK(a.EventFlags & TBT_ICM_EVF_SPEED_20G, "20 Gb/s");
+    CHECK_EQ(a.Uuid[0], 0xa0211100UL, "UUID word 1");
+    CHECK_EQ(a.Uuid[3], 0xffffffffUL, "UUID word 4");
+    CHECK_EQ(a.Key, 0x10, "key 0x10");
+    CHECK_EQ(a.ConnectionId, 5, "id 5");
+    CHECK_EQ(a.LinkInfo, 0x0911, "link info 0x0911");
+    CHECK_EQ(a.Link, 1, "link 1");
+    CHECK_EQ(a.Depth, 1, "depth 1");
+    CHECK(a.Approved, "approved at T:9");
+    CHECK(!a.Rejected, "not rejected");
+    CHECK(!a.Boot, "not boot");
+    CHECK(!a.RouteValid, "no route in an Alpine Ridge event");
+    CHECK_EQ(a.Names.Entries, 4, "four entries before the terminator");
+    CHECK(strcmp(a.Names.Vendor, "CalDigit, Inc.") == 0, "vendor name");
+    CHECK(strcmp(a.Names.Model, "TS3 Plus") == 0, "model name");
+    CHECK_EQ(a.Names.TbVendorId, 0x3d, "Intel entry vendor 0x3d");
+    CHECK_EQ(a.Names.TbModelId, 0x11, "model 0x11");
+    CHECK_EQ(a.Names.IntelFlags, 0x01, "RTD3 flag");
+    CHECK_EQ(a.Names.Present, TBT_ICM_NAMES_VENDOR | TBT_ICM_NAMES_MODEL | TBT_ICM_NAMES_INTEL,
+             "all three kinds present, nothing malformed");
+    ev[5] = 0x08110610UL;           /* T:27886 */
+    CHECK(TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "T:27886 decodes");
+    CHECK(!a.Approved, "not approved");
+    CHECK_EQ(a.ConnectionId, 6, "id 6");
+    ev[5] = 0x09110710UL;           /* T:34163 */
+    CHECK(TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "T:34163 decodes");
+    CHECK(a.Approved, "approved again");
+    CHECK_EQ(a.ConnectionId, 7, "id 7");
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 5, &a), "five words: refused");
+    CHECK(TbtIcmProfileAlpineRidge.DecodeConnected(ev, 6, &a), "six words: no names, decoded");
+    CHECK_EQ(a.Names.Entries, 0, "no names");
+
+    /* T:21087 */
+    CHECK(TbtIcmProfileAlpineRidge.DecodeDisconnected(t21087, 2, &g), "T:21087 decodes");
+    CHECK_EQ(g.Link, 1, "link 1");
+    CHECK_EQ(g.Depth, 1, "depth 1");
+    {
+        unsigned long bad[2] = { 0x01000004UL, 0x00770000UL };
+        CHECK(!TbtIcmProfileAlpineRidge.DecodeDisconnected(bad, 2, &g),
+              "depth 7 is past TB_SWITCH_MAX_DEPTH: refused");
+    }
+
+    /* T:34153: the approve request, byte for byte. */
+    memset(&dev, 0, sizeof(dev));
+    memcpy(dev.Uuid, kUuid, 16);
+    dev.Key = 0x10;
+    dev.ConnectionId = 6;
+    n = TbtIcmProfileAlpineRidge.EncodeApprove(&dev, req);
+    CHECK_EQ(n, 6, "six words");
+    CHECK_EQ(req[0], 0x00000004UL, "T:34153 word 0");
+    CHECK_EQ(req[1], 0xa0211100UL, "word 1");
+    CHECK_EQ(req[2], 0x003d0efcUL, "word 2");
+    CHECK_EQ(req[3], 0xffffffffUL, "word 3");
+    CHECK_EQ(req[4], 0xffffffffUL, "word 4");
+    CHECK_EQ(req[5], 0x00000610UL, "word 5: key 0x10, id 6");
+}
+
+static void test_names(void)
+{
+    unsigned long blk[4];
+    TBT_ICM_NAMES nm;
+
+    /* An entry longer than the block. */
+    memset(blk, 0, sizeof(blk));
+    blk[0] = 0x00000140UL;          /* length 0x40, type 1 */
+    TbtIcmDecodeNames(blk, 4, &nm);
+    CHECK(nm.Present & TBT_ICM_NAMES_MALFORMED, "overlong entry: malformed");
+    CHECK_EQ(nm.Entries, 0, "nothing taken");
+    /* A length of 1 cannot hold its own header. */
+    blk[0] = 0x00000101UL;
+    TbtIcmDecodeNames(blk, 4, &nm);
+    CHECK(nm.Present & TBT_ICM_NAMES_MALFORMED, "length 1: malformed");
+    /* Non-printable bytes are kept out of the log. */
+    blk[0] = 0x07410106UL;          /* len 6, vendor, 'A', 0x07 */
+    blk[1] = 0x00004243UL;          /* 'C', 'B' */
+    TbtIcmDecodeNames(blk, 4, &nm);
+    CHECK(strcmp(nm.Vendor, "A?CB") == 0, "control byte replaced");
+    /* An empty block. */
+    memset(blk, 0, sizeof(blk));
+    TbtIcmDecodeNames(blk, 4, &nm);
+    CHECK_EQ(nm.Present, 0, "zero-length terminator first: nothing");
+}
+
+/* ------------------------------------------------------------------ */
+/* Alpine Ridge sequences                                             */
+/* ------------------------------------------------------------------ */
+
+static void test_bind_rebind(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long dr;
+    long gr;
+    const TBT_ICM_DEVICE *d;
+
+    /* ICM 6.2: the dock attached and approved. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_fake.MboxCount, 1, "one mailbox command");
+    CHECK_EQ(g_fake.MboxLog[0], 0x23, "allow all devices, ICM 2.3 [obs]");
+    dr = findTx(TBT_PDF_ICM_CMD, 3);
+    CHECK_EQ(dr, 0, "driver ready is the first frame");
+    CHECK_EQ(g_fake.TxLogWords[dr], 1, "T:1: one word");
+    CHECK_EQ(g_fake.TxLogDw[dr][0], 0x00000003UL, "T:1: 0x00000003");
+    CHECK_EQ(g_fake.TxBadCrc, 0, "every trailer right");
+    CHECK(g_fw.Reads >= 2, "host polls unanswered during the hold, then answered");
+    CHECK_EQ(g_icm.Counters.HostPollAnswered, 1, "answered once the hold ended");
+    gr = findTx(TBT_PDF_ICM_CMD, 0x0A);
+    CHECK(gr > dr, "get route after driver ready");
+    CHECK_EQ(g_fake.TxLogDw[gr][0], 0x0000000aUL, "T:833 word 0");
+    CHECK_EQ(g_fake.TxLogDw[gr][1], 0x00110000UL, "T:833 word 1");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "no approve: already approved");
+    CHECK_EQ(g_icm.Ready.SecurityLevel, 1, "ready decoded");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL, "entry 0");
+    if (d != NULL) {
+        CHECK(d->RouteValid, "route from get route");
+        CHECK_EQ(d->Route.Lo, 1, "T:834: route 1");
+        CHECK_EQ(d->ConnectionId, 5, "id 5");
+        CHECK(d->Approved, "approved");
+    }
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_UP, "tunnel up");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_ANNOUNCED, "announced approved");
+    CHECK(TbtIcmActionLive(&g_icm, &act[0]), "still live");
+    CHECK_EQ(g_fake.Imr[0], 0, "interrupts stay masked");
+}
+
+static void test_plug_approve_unplug(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long ap;
+    const TBT_ICM_DEVICE *d;
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind with nothing attached");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "empty table");
+    CHECK_EQ(actions(act, 8), 0, "no actions");
+
+    /* ICM 6.4: plugged, announced unapproved, id 6. */
+    g_fw.Present = 1;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(200);
+    ap = findTx(TBT_PDF_ICM_CMD, 4);
+    CHECK(ap >= 0, "approve sent");
+    if (ap >= 0) {
+        CHECK_EQ(g_fake.TxLogWords[ap], 6, "T:34153: six words");
+        CHECK_EQ(g_fake.TxLogDw[ap][5], 0x00000610UL, "T:34153: key 0x10, id 6");
+        CHECK_EQ(g_fake.TxLogDw[ap][1], 0xa0211100UL, "UUID");
+    }
+    CHECK(findTx(TBT_PDF_ICM_CMD, 0x0A) < ap, "get route before approve (ICM 6.4)");
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "T:34154: approved");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->Approved, "entry approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_UP, "tunnel up");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_APPROVED, "after approve");
+
+    /* ICM 6.3: unplug while active. */
+    arDisconnected(1, 1, 0);
+    idle(200);
+    CHECK_EQ(g_linkDowns, 1, "link-down upcall");
+    CHECK_EQ(g_linkDownInWait, 0, "in the idle poll, not a wait");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "entry dropped");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "tunnel down");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_DISCONNECTED, "disconnected");
+    CHECK(act[0].WasApproved, "it had a tunnel");
+    CHECK(act[0].LinkDownSent, "the upcall ran first");
+    CHECK(!TbtIcmActionLive(&g_icm, &act[0]), "no longer live");
+
+    /* A disconnect for nothing in the table: warned, ignored. */
+    arDisconnected(1, 1, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.DisconnectUnknown, 1, "counted");
+    CHECK_EQ(actions(act, 8), 0, "no action");
+}
+
+static void test_policy(void)
+{
+    TBT_ICM_ACTION act[4];
+
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApprovePolicy(&g_icm, FALSE);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "XhciCmApprove 0: no approve");
+    CHECK_EQ(g_icm.Counters.ApprovalsWithheld, 1, "withheld");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "kept in the table");
+    CHECK_EQ(actions(act, 4), 0, "no tunnel");
+
+    /* A pre-tunnelled device is used under policy 0 (record 21 5.4). */
+    arDisconnected(1, 1, 0);
+    idle(200);
+    actions(act, 4);
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(actions(act, 4), 1, "approved device: tunnel up");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_ANNOUNCED, "as announced");
+
+    /* The hook decides when set. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApproveHook(&g_icm, onApproveHook, NULL);
+    g_hookAnswer = FALSE;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(g_hookCalls, 1, "hook asked");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "hook said no");
+}
+
+static void test_resume_refresh_and_reconcile(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    unsigned long routes;
+
+    /* ICM 6.5: suspended with the dock approved; re-announced id 7. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    routes = g_fw.Routes;
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(g_fake.TxCtrl, 0, "rings stopped");
+    CHECK_EQ(g_fake.MboxCount, 3, "two more mailbox commands");
+    CHECK_EQ(g_fake.MboxLog[1], 0x05, "save devices first (record 21 5.6)");
+    CHECK_EQ(g_fake.MboxLog[2], 0x07, "then driver unloads");
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(g_fake.MboxCount, 3, "no 0x23 on resume");
+    CHECK_EQ(g_fw.Ready, 2, "driver ready again");
+    CHECK_EQ(g_fw.Routes, routes, "no get route for a known device (ICM 6.5 [obs])");
+    CHECK_EQ(g_icm.Counters.Refreshes, 1, "refreshed");
+    CHECK_EQ(TbtIcmDevice(&g_icm, 0)->ConnectionId, 6, "id updated (the model's next id)");
+    n = actions(act, 8);
+    CHECK_EQ(n, 0, "no tunnel change");
+
+    /* ICM 6.6: unplugged while suspended - no event, reconciled. */
+    TbtIcmSuspend(&g_icm);
+    g_fw.Present = 0;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "dropped by the reconciliation");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "tunnel down");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_RECONCILED, "reconciled");
+    CHECK_EQ(g_icm.Counters.Reconciled, 1, "counted");
+}
+
+static void test_disconnect_during_approve(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    unsigned long t0;
+    unsigned long late[6];
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    g_fw.DisconnectInApproveUs = 2000000UL;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    fakePump();
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.Approves, 1, "one approve, never retried");
+    CHECK_EQ(g_linkDowns, 1, "link-down upcall");
+    CHECK_EQ(g_linkDownInWait, 1, "run inside the approve wait (record 21 4.4)");
+    CHECK(g_fake.NowUs - t0 < 2500000UL, "the wait ended at the disconnect, not at 10 s");
+    CHECK_EQ(g_icm.Counters.ApprovalsAbandoned, 1, "abandoned");
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 0, "not approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "only the tunnel down");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "down");
+    CHECK(!act[0].WasApproved, "it never had a tunnel");
+
+    /* The firmware's late answer to that approve is a stray, not the
+     * answer to the next device's approve: the UUID echo differs. */
+    late[0] = 0x01000004UL;
+    memcpy(&late[1], kUuid, 16);
+    late[5] = 0x00000610UL;
+    g_fw.ApproveMode = MODE_ANSWER;
+    g_fw.ApproveDelayUs = 500000UL;
+    arConnected(8, 0, 3, 1, kUuid2, 0);
+    fakeQueue(TBT_PDF_ICM_RESP, late, 6, 100000UL, 0);
+    idle(200);
+    CHECK(g_icm.Counters.Strays >= 1, "the late answer counted as a stray");
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "the second device approved by its own answer");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "its tunnel up");
+    CHECK_EQ(act[0].Uuid[0], kUuid2[0], "the right device");
+}
+
+static void test_timeouts_and_errors(void)
+{
+    TBT_ICM_ACTION act[4];
+    unsigned long t0;
+    const TBT_ICM_DEVICE *d;
+
+    /* Approve never answered: four tries of 10 s. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    fakePump();
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.Approves, 4, "one try and three retries (ICM 3 [inf])");
+    CHECK(g_fake.NowUs - t0 >= 40000000UL, "four 10 s waits");
+    CHECK(g_fake.NowUs - t0 < 41000000UL, "and no more");
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "failed");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && !d->Approved, "left unapproved, kept");
+    CHECK_EQ(actions(act, 4), 0, "no tunnel");
+
+    /* The error flag: not retried. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(600);
+    CHECK_EQ(g_fw.Approves, 1, "one approve");
+    CHECK_EQ(g_icm.Counters.ErrorFlags, 1, "error flag counted");
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "failed");
+    CHECK_EQ(actions(act, 4), 0, "no tunnel");
+
+    /* Get route never answered: the entry stays, without a route, and the
+     * approve goes ahead (orchestrator decision 2026-10-15). */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.RouteMode = MODE_NEVER;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    fakePump();
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.Routes, 4, "four get routes");
+    CHECK(g_fake.NowUs - t0 >= 20000000UL, "four 5 s waits");
+    CHECK_EQ(g_icm.Counters.RouteFailures, 1, "route failure counted");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && !d->RouteValid, "kept without a route");
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "approved all the same");
+    CHECK_EQ(actions(act, 4), 1, "tunnel up");
+
+    /* Driver ready never answered: the start is refused, rings stopped and
+     * the session it opened closed with 0x07. */
+    setup(GEN_AR, 0, 0);
+    g_fw.ReadyMode = MODE_NEVER;
+    t0 = g_fake.NowUs;
+    CHECK_EQ(start(), TBT_E_TIMEOUT, "start refused");
+    CHECK_EQ(g_fw.Ready, 4, "four driver readys");
+    CHECK(g_fake.NowUs - t0 >= 20000000UL, "5 s each");
+    CHECK_EQ(g_fake.TxCtrl, 0, "TX stopped");
+    CHECK_EQ(g_fake.RxCtrl, 0, "RX stopped");
+    CHECK_EQ(g_fake.MboxCount, 2, "0x23 then 0x07");
+    CHECK_EQ(g_fake.MboxLog[1], 0x07, "driver unloads");
+    TbtIcmUnbind(&g_icm);
+    CHECK_EQ(g_fake.MboxCount, 2, "a later unbind sends nothing more");
+
+    /* Driver ready answered with the error flag. */
+    setup(GEN_AR, 0, 0);
+    g_fw.ReadyMode = MODE_ERROR;
+    CHECK_EQ(start(), TBT_E_ERROR_FLAG, "start refused");
+    CHECK_EQ(g_fw.Ready, 1, "not retried");
+
+    /* Mailbox 0x23 failing: refused before any session. */
+    setup(GEN_AR, 0, 0);
+    g_fake.MboxMode = FAKE_MBOX_ERROR;
+    CHECK_EQ(start(), TBT_E_ERROR_FLAG, "error bit");
+    CHECK_EQ(g_fake.MboxCount, 1, "no 0x07: no session was opened");
+    CHECK_EQ(g_fake.TxCtrl, 0, "rings stopped");
+    CHECK_EQ(g_fw.Ready, 0, "no driver ready");
+    setup(GEN_AR, 0, 0);
+    g_fake.MboxMode = FAKE_MBOX_HANG;
+    t0 = g_fake.NowUs;
+    CHECK_EQ(start(), TBT_E_TIMEOUT, "request bit never clears");
+    CHECK(g_fake.NowUs - t0 >= 500000UL, "after 500 ms (ICM 2.3 [inf])");
+    CHECK(g_fake.NowUs - t0 < 600000UL, "and not much more");
+}
+
+static void test_odd_frames(void)
+{
+    unsigned long dw[4];
+    TBT_ICM_ACTION act[4];
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    dw[0] = 0x01000033UL;
+    dw[1] = 0;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    dw[0] = 0x0100000aUL;
+    fakeQueue(TBT_PDF_ICM_RESP, dw, 2, 0, 0);
+    dw[0] = 0x01000003UL;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 3, 0, 0);     /* connected, too short */
+    idle(200);
+    CHECK_EQ(g_icm.Counters.EventsUnknown, 1, "unknown event code counted");
+    CHECK_EQ(g_icm.Counters.Strays, 1, "a response nobody waited for");
+    CHECK_EQ(g_icm.Counters.EventsMalformed, 1, "short event counted");
+
+    /* Rejected: ignored. */
+    {
+        unsigned long ev[6];
+        ev[0] = 0x0100b103UL;
+        memcpy(&ev[1], kUuid, 16);
+        ev[5] = 0x02110510UL;
+        fakeQueue(TBT_PDF_ICM_EVENT, ev, 6, 0, 0);
+    }
+    idle(200);
+    CHECK_EQ(g_icm.Counters.Rejected, 1, "rejected counted");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "not in the table");
+    CHECK_EQ(actions(act, 4), 0, "no action");
+
+    /* A second packet of an announcement is ignored (Linux icm.c
+     * __icm_tr_device_connected). */
+    trConnected(5, 1, 1, kUuid, 0, 1);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.EventsIgnored, 1, "extra packet ignored");
+}
+
+static void test_event_queued_in_wait(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* A second device announced while the first one's approve waits: run
+     * after it, not dropped. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    arConnected(2, 0, 3, 1, kUuid2, 100000UL);
+    idle(1400);
+    CHECK_EQ(g_icm.Counters.EventsQueued, 1, "one queued inside the wait");
+    CHECK_EQ(g_fw.Approves, 2, "both approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnels up");
+    CHECK_EQ(act[0].Uuid[0], kUuid[0], "first device first");
+    CHECK_EQ(act[1].Uuid[0], kUuid2[0], "then the queued one");
+
+    /* A queued announcement whose device leaves before it runs is purged. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    arConnected(2, 0, 3, 1, kUuid2, 100000UL);
+    arDisconnected(3, 1, 200000UL);
+    idle(1400);
+    CHECK_EQ(g_fw.Approves, 1, "only the first approved");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "only the first in the table");
+    CHECK_EQ(g_icm.Counters.DisconnectUnknown, 1, "the disconnect found no entry");
+}
+
+static void test_dual_link_and_replace(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* Re-announced through the port's other link (Linux icm.c
+     * icm_fr_device_connected): a refresh, with the route asked again. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(200);
+    actions(act, 8);
+    arConnected(6, 1, 2, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.Refreshes, 1, "same physical port: refresh");
+    CHECK_EQ(TbtIcmDevice(&g_icm, 0)->Link, 2, "link updated");
+    CHECK_EQ(g_fw.Routes, 2, "route asked again");
+    CHECK_EQ(actions(act, 8), 0, "no tunnel change");
+
+    /* The same UUID announced unapproved where it was approved: the old
+     * entry is gone (replug missed), the new one approved. */
+    arConnected(7, 0, 2, 1, kUuid, 0);
+    idle(600);
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "down for the old, up for the new");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "down first");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_REPLACED, "replaced");
+    CHECK_EQ(act[1].Why, TBT_ICM_WHY_APPROVED, "then approved");
+}
+
+/* ------------------------------------------------------------------ */
+/* The other rows (UNCAPTURED, Linux layouts)                         */
+/* ------------------------------------------------------------------ */
+
+static void test_titan_ridge(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long ap;
+    unsigned long t0;
+    unsigned long ev[3];
+    TBT_ICM_GONE g;
+
+    setup(GEN_TR, 1, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_fake.MboxLog[0], 0x23, "Titan Ridge reads the mode: allow all sent");
+    CHECK_EQ(g_icm.Ready.Words, 4, "four-word driver ready");
+    CHECK_EQ(g_icm.Ready.SecurityLevel, 1, "info level 2:0");
+    CHECK_EQ(g_icm.Ready.ProtocolVersion, 3, "protocol version 6:4");
+    CHECK_EQ(g_icm.Ready.BootAclCount, 16, "ACL count 12:7");
+    CHECK_EQ(g_icm.Ready.NvmVersion, 0x4500, "NVM version word");
+    CHECK_EQ(g_icm.Ready.DeviceId, 0x15EB, "device id");
+    CHECK_EQ(g_fw.Routes, 0, "no get route: the route is in the event");
+    ap = findTx(TBT_PDF_ICM_CMD, 4);
+    CHECK(ap >= 0, "approve sent");
+    if (ap >= 0) {
+        CHECK_EQ(g_fake.TxLogWords[ap], 8, "icm_tr_pkg_approve_device: 8 words");
+        CHECK_EQ(g_fake.TxLogDw[ap][1], kUuid[0], "UUID");
+        CHECK_EQ(g_fake.TxLogDw[ap][5], 0, "route high");
+        CHECK_EQ(g_fake.TxLogDw[ap][6], 1, "route low");
+        CHECK_EQ(g_fake.TxLogDw[ap][7], 5, "connection id in bits 7:0");
+    }
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "tunnel up");
+    CHECK(act[0].RouteValid && act[0].Route.Lo == 1, "the action carries the route");
+    CHECK_EQ(act[0].Link, 1, "link from the route's first level");
+    CHECK_EQ(act[0].Depth, 1, "depth from the route's length");
+
+    /* Disconnect by route. */
+    trDisconnected(1, 0);
+    idle(200);
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "tunnel down");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_DISCONNECTED, "by route");
+    ev[0] = 0x01000004UL;
+    ev[1] = 0;
+    CHECK(!TbtIcmProfileTitanRidge.DecodeDisconnected(ev, 2, &g), "two words: too short for a route");
+
+    /* Tolerance: the layout guessed wrong shows as an error flag or as no
+     * answer; either leaves the device unapproved and the thread free. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    trConnected(6, 0, 1, kUuid, 0, 0);
+    idle(600);
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "error flag: unapproved");
+    CHECK_EQ(actions(act, 8), 0, "no tunnel");
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    trConnected(6, 0, 1, kUuid, 0, 0);
+    fakePump();
+    t0 = g_fake.NowUs;
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_fw.Approves, 4, "bounded retries");
+    CHECK(g_fake.NowUs - t0 < 41000000UL, "bounded time");
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "timeout: unapproved");
+    {
+        unsigned long shortEv[7];
+        memset(shortEv, 0, sizeof(shortEv));
+        shortEv[0] = 0x0100b103UL;
+        fakeQueue(TBT_PDF_ICM_EVENT, shortEv, 7, 0, 0);
+        idle(200);
+        CHECK_EQ(g_icm.Counters.EventsMalformed, 1, "seven words: too short, ignored");
+    }
+
+    /* Driver ready: 250 ms with ten retries (icm_tr_driver_ready). */
+    setup(GEN_TR, 0, 0);
+    g_fw.ReadyMode = MODE_NEVER;
+    t0 = g_fake.NowUs;
+    CHECK_EQ(start(), TBT_E_TIMEOUT, "refused");
+    CHECK_EQ(g_fw.Ready, 11, "eleven tries");
+    CHECK(g_fake.NowUs - t0 < 3500000UL, "about 2.75 s");
+
+    /* Suspend: no save devices on Titan Ridge, driver unloads only. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(g_fake.MboxCount, 2, "0x23, then one at suspend");
+    CHECK_EQ(g_fake.MboxLog[1], 0x07, "driver unloads only");
+}
+
+static void test_ice_lake(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    unsigned long veto[2];
+
+    setup(GEN_ICL, 1, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_fake.MboxCount, 0, "no mode query on Ice Lake: no 0x23");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "no approve on Ice Lake (icm_icl_ops)");
+    CHECK_EQ(g_icm.Counters.ApprovalsUnsupported, 1, "counted");
+    CHECK_EQ(actions(act, 8), 0, "no tunnel for an unapproved device");
+
+    setup(GEN_ICL, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "an approved device: tunnel up");
+
+    veto[0] = 0x0100000aUL;
+    veto[1] = 0x00000001UL;
+    fakeQueue(TBT_PDF_ICM_EVENT, veto, 2, 0, 0);
+    idle(200);
+    CHECK(g_icm.VetoActive, "RTD3 veto recorded");
+    veto[1] = 0;
+    fakeQueue(TBT_PDF_ICM_EVENT, veto, 2, 0, 0);
+    idle(200);
+    CHECK(!g_icm.VetoActive, "veto ended");
+
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(g_fake.MboxCount, 0, "no mailbox at suspend (icm_icl_ops has no suspend)");
+    CHECK_EQ(g_fake.TxCtrl, 0, "rings stopped");
+    TbtIcmUnbind(&g_icm);
+    CHECK_EQ(g_fake.MboxCount, 1, "unbind closes the session (icm_stop)");
+    CHECK_EQ(g_fake.MboxLog[0], 0x07, "driver unloads");
+
+    /* 20 s driver ready (icm_icl_driver_ready). */
+    CHECK_EQ(TbtIcmProfileIceLake.ReadyTimeoutMs, 20000, "20 s");
+}
+
+static void test_falcon_ridge(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    const TBT_ICM_DEVICE *d;
+
+    setup(GEN_FR, 1, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_fake.MboxCount, 0, "no mode query on Falcon Ridge: no 0x23");
+    CHECK_EQ(g_icm.Ready.SecurityLevel, 1, "security level from the u16");
+    CHECK_EQ(g_fw.Topos, 1, "topology asked once");
+    CHECK_EQ(g_fw.Routes, 0, "no get route");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->RouteValid, "route from the topology");
+    if (d != NULL) {
+        CHECK_EQ(d->Route.Lo, 1, "switch 1's route");
+    }
+    CHECK_EQ(g_fw.Approves, 1, "approved with key and id");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "tunnel up");
+
+    /* A depth-2 device: the walk follows switch 1's port to switch 2. */
+    arConnected(9, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    d = TbtIcmDevice(&g_icm, 1);
+    CHECK(d != NULL && d->RouteValid && d->Route.Lo == 0x0301, "depth 2: route 0x0301");
+
+    /* The topology with the error flag: no route, approve still sent. */
+    setup(GEN_FR, 1, 0);
+    g_fw.TopoMode = MODE_ERROR;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_icm.Counters.RouteFailures, 1, "route failure");
+    CHECK_EQ(g_fw.Approves, 1, "approve sent");
+
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(g_fake.MboxCount, 2, "save devices and driver unloads");
+    CHECK_EQ(g_fake.MboxLog[0], 0x05, "0x05");
+    CHECK_EQ(g_fake.MboxLog[1], 0x07, "0x07");
+}
+
+static void test_settings(void)
+{
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(g_icm.CmdTimeoutMs, 5000, "default command timeout");
+    CHECK_EQ(g_icm.ApproveTimeoutMs, 10000, "default approve timeout");
+    CHECK(g_icm.ApproveAll, "XhciCmApprove defaults to 1");
+    TbtIcmSetTimeouts(&g_icm, 10, 999999);
+    CHECK_EQ(g_icm.CmdTimeoutMs, 1000, "held to 1000");
+    CHECK_EQ(g_icm.ApproveTimeoutMs, 60000, "held to 60000");
+    TbtIcmSetTimeouts(&g_icm, 0, 0);
+    CHECK_EQ(g_icm.CmdTimeoutMs, 5000, "0 is the default");
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_icm.Counters.IdlePolls, 0, "no poll before a bind");
+    TbtIcmUnbind(&g_icm);
+    CHECK_EQ(g_fake.Writes, 0, "an unbind before any start touches nothing");
+}
+
+int main(void)
+{
+    test_frames_ar();
+    test_names();
+    test_bind_rebind();
+    test_plug_approve_unplug();
+    test_policy();
+    test_resume_refresh_and_reconcile();
+    test_disconnect_during_approve();
+    test_timeouts_and_errors();
+    test_odd_frames();
+    test_event_queued_in_wait();
+    test_dual_link_and_replace();
+    test_titan_ridge();
+    test_ice_lake();
+    test_falcon_ridge();
+    test_settings();
+    printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
+    return failures;
+}

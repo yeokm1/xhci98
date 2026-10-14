@@ -109,7 +109,13 @@ typedef struct _TBT_HOST {
 #define TBT_WAIT_FRAME_BUDGET   1024UL
 
 /* TbtRingStart flags */
-#define TBT_RING_START_RESET_HI 0x00000001UL    /* Host Interface Reset first (not the ICM client's) */
+/* Host Interface Reset first. Never automatic: the ICM client does not
+ * reset (ICM 6.1), and a later caller must decide it explicitly. */
+#define TBT_RING_START_RESET_HI 0x00000001UL
+/* Mask ring interrupts through Interrupt Mask Clear, the specification's
+ * route for a host whose status does not clear itself; without it the
+ * mask register is written 0 directly, Intel's (tbt_regs.h). */
+#define TBT_RING_START_MASK_IMC 0x00000002UL
 
 /* ---------------------------------------------------------------------- */
 /* Frames                                                                 */
@@ -205,8 +211,8 @@ BOOLEAN TbtRouteEqual(const TBT_ROUTE *a, const TBT_ROUTE *b); /* TopologyID onl
 
 /*
  * Start ring 0: read Host Interface Capabilities (all ones, or 0 or more
- * than 21 paths, is TBT_E_HW), optionally reset the host interface, write
- * every Interrupt Mask DW 0, carve `va`/`phys` (TBT_RING_DMA_BYTES, 16-byte
+ * than 21 paths, is TBT_E_HW), optionally reset the host interface, mask
+ * every ring interrupt as `flags` says, carve `va`/`phys` (TBT_RING_DMA_BYTES, 16-byte
  * aligned), program TX ring 0 and RX ring 0 in Raw Mode with `rxPdfMask`,
  * and post every RX descriptor but one. `va` must stay valid until
  * TbtRingStop. Restartable: a second start after a stop reprograms the same

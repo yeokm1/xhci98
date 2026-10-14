@@ -7,7 +7,7 @@
  * not a count of polls; the TX ring refuses to fill its last vacant
  * descriptor; a receive buffer's Buffer Overflow bit and a length past the
  * buffer are reported rather than read past; the trailer of an ICM frame is
- * flagged, not dropped; the Interrupt Mask is written directly; the Host
+ * flagged, not dropped; the interrupt mask follows each host's contract; the Host
  * Interface Reset is optional, because the Alpine Ridge client does not
  * reset (ICM-PROTOCOL.md 6.1); the hot-plug and router code, which the ICM
  * client never uses, stayed behind for the software connection manager of
@@ -274,7 +274,11 @@ LONG TbtRingStart(PTBT_RING ring,
     /* Every cause masked: this driver polls (record 21 section 4.3). */
     n = TBT_HI_IMR_DWORDS(paths);
     for (i = 0; i < n; i++) {
-        TBT_WR(ring, TBT_HI_IMR + 4UL * i, 0);
+        if ((flags & TBT_RING_START_MASK_IMC) != 0) {
+            TBT_WR(ring, TBT_HI_IMC + 4UL * i, 0xFFFFFFFFUL);
+        } else {
+            TBT_WR(ring, TBT_HI_IMR + 4UL * i, 0);
+        }
     }
 
     /* TX ring 0, Spec 12.6.3.2: base and size (each resets the indexes),

@@ -11,8 +11,14 @@
  * carries its citation: "Spec" is that specification, "ICM" is usb4-emu's
  * docs/ICM-PROTOCOL.md (branch main, read at a68bc74; the same text as the
  * eba0cf1 design record 21 cites), whose [obs] and [inf] tags are kept.
- * Linux's drivers/thunderbolt is not a source of anything here (design
- * record 21 section 9).
+ * Since the owner's decision of 2026-10-15 the Linux and FreeBSD
+ * Thunderbolt drivers are interface documentation under design record 20's
+ * rule (facts taken and cited by file and symbol, no function body
+ * copied): every offset below was cross-checked against Linux's
+ * drivers/thunderbolt/nhi_regs.h (mirror pinned at c6859eed) and FreeBSD's
+ * sys/dev/thunderbolt/nhi_reg.h (pinned at 9d50245a), which agree with
+ * the specification; the Ice Lake family's vendor-specific configuration
+ * registers at the end are Linux's alone ("Linux nhi_regs.h").
  *
  * C89, no bitfields: offsets, shifts and masks over ULONG words, as
  * xhci_hw.h does for the xHCI.
@@ -55,7 +61,10 @@
  * ------------------------------------------------------------------------
  *
  * The changes made here: the router, adapter and path configuration space
- * fields the ICM client never touches were left out (the USB4 software
+ * fields the ICM client never touches were left out - which takes with them
+ * everything u4regs.h's notice says was cross-checked against tbtools'
+ * registers.json: nothing below rests on tbtools, and every field is cited
+ * to the specification or to ICM-PROTOCOL.md (the USB4 software
  * connection manager of Phase 40 adds what it needs); every name took this
  * driver's TBT_ prefix; the receive descriptor's Buffer Overflow bit, the
  * Total Paths limit, the Interrupt Mask register and the Ring Control
@@ -139,13 +148,20 @@
 
 /*
  * Interrupt Mask, Spec 12.6.3.4.4, Table 12-31: R/W, 1 = the cause raises
- * an interrupt, packed 3N bits (TX, RX, RX vacancy) over ceiling(3N/32)
- * DWs. ICM 2.1 calls the first DW "ring interrupt enable 0" and reads it
- * 0x00001001 with the Linux client bound, 0 unbound [obs]. This driver
- * polls (record 21 section 4.3, decision D3) and writes every DW 0.
+ * an interrupt, default 0; the specification packs 3N causes (TX, RX, RX
+ * vacancy). ICM 2.1 calls the first DW "ring interrupt enable 0" and reads
+ * it 0x00001001 with the Linux client bound, 0 unbound [obs]. This driver
+ * polls (record 21 section 4.3, decision D3) and masks every ring cause by
+ * each host's own contract (Linux nhi.c nhi_mask_interrupt, called from
+ * nhi_disable_interrupts over RING_INTERRUPT_REG_COUNT, the 2N TX and RX
+ * causes; the vacancy causes stay at their default 0): on Intel hosts,
+ * whose interrupt status clears itself (pci.c nhi_pci_check_quirks,
+ * QUIRK_AUTO_CLEAR_INT), by writing the mask register itself; elsewhere
+ * through Interrupt Mask Clear (Spec 12.6.3.4.5, Table 12-32).
  */
-#define TBT_HI_IMR                  0x38200UL
-#define TBT_HI_IMR_DWORDS(paths)    ((3UL * (ULONG)(paths) + 31UL) / 32UL)
+#define TBT_HI_IMR                  0x38200UL   /* REG_RING_INTERRUPT_BASE */
+#define TBT_HI_IMC                  0x38208UL   /* REG_RING_INTERRUPT_MASK_CLEAR_BASE */
+#define TBT_HI_IMR_DWORDS(paths)    ((2UL * (ULONG)(paths) + 31UL) / 32UL)
 /* Interrupt Status, Spec 12.6.3.4.1: read-to-clear unless auto-clear is
  * disabled, so never read by this driver (ICM 2.1 notes the capture tool
  * skipped it for the same reason). */
@@ -244,7 +260,8 @@
 #define TBT_ICM_FW_STATUS           0x39944UL
 #define TBT_ICM_FW_ICM_ENABLED      0x00000001UL    /* bit 0 [obs/inf] */
 #define TBT_ICM_FW_NVM_AUTH_DONE    0x80000000UL    /* bit 31 [obs/inf] */
-/* Bits 1, 2 and 30 are the firmware start path's (ICM 2.7); never written. */
+/* Bits 1, 2 and 30 are the firmware start path's (ICM 2.7; Linux nhi_regs.h
+ * REG_FW_STS_ICM_EN_INVERT, _ICM_EN_CPU, _CIO_RESET_REQ); never written. */
 
 /* Inbound mailbox, ICM 2.3: data word, then the command word. */
 #define TBT_ICM_INMAIL_DATA         0x39900UL
@@ -272,5 +289,47 @@
 /* NVM authentication poll, ICM 2.2 [inf]: up to 60 reads 50 ms apart. */
 #define TBT_ICM_AUTH_POLLS          60UL
 #define TBT_ICM_AUTH_POLL_MS        50UL
+
+/* ====================================================================== */
+/* Ice Lake family NHI, PCI configuration space (Linux nhi_regs.h)       */
+/* ====================================================================== */
+
+/*
+ * The integrated controllers (Ice Lake to Meteor Lake) run their firmware
+ * only while "force power" is set in a vendor-specific configuration
+ * register, and say it is up through another (Linux nhi_regs.h VS_CAP_22,
+ * VS_CAP_9; pci.c icl_nhi_force_power: DMA delay 0x22, then up to 350
+ * reads of FW_READY about 3 ms apart), and program LTR on every power-up
+ * (icl_nhi_resume) and hand the link controller to Sx through a mailbox
+ * (icl_nhi_suspend_noirq). Linux gives these hooks to every integrated host
+ * from Ice Lake to Wildcat Lake, firmware CM or not (pci.c nhi_ids,
+ * icl_nhi_ops). tbt_hw.c runs them through the driver's configuration
+ * accessor before the connection manager is chosen.
+ */
+#define TBT_ICL_VS_CAP_9            0xC8UL          /* VS_CAP_9 */
+#define TBT_ICL_VS_CAP_9_FW_READY   0x80000000UL    /* VS_CAP_9_FW_READY */
+#define TBT_ICL_VS_CAP_10           0xCCUL          /* VS_CAP_10: fused UUID, low */
+#define TBT_ICL_VS_CAP_11           0xD0UL          /* VS_CAP_11: fused UUID, high */
+#define TBT_ICL_VS_CAP_15           0xE0UL          /* VS_CAP_15: LTR written */
+#define TBT_ICL_VS_CAP_16           0xE4UL          /* VS_CAP_16: maximum LTR, 15:0 */
+#define TBT_ICL_VS_CAP_18           0xECUL          /* VS_CAP_18: TBT2PCIe */
+#define TBT_ICL_VS_CAP_18_DONE      0x00000001UL
+#define TBT_ICL_VS_CAP_19           0xF0UL          /* VS_CAP_19: PCIe2TBT */
+#define TBT_ICL_VS_CAP_19_VALID     0x00000001UL
+#define TBT_ICL_VS_CAP_19_CMD_SHIFT 1
+#define TBT_ICL_VS_CAP_19_CMD_MASK  0x000000FEUL
+#define TBT_ICL_VS_CAP_22           0xFCUL          /* VS_CAP_22 */
+#define TBT_ICL_VS_CAP_22_FORCE_POWER 0x00000002UL  /* VS_CAP_22_FORCE_POWER */
+#define TBT_ICL_VS_CAP_22_DMA_DELAY_MASK 0xFF000000UL /* VS_CAP_22_DMA_DELAY_MASK */
+#define TBT_ICL_VS_CAP_22_DMA_DELAY_SHIFT 24
+#define TBT_ICL_DMA_DELAY           0x22UL          /* pci.c icl_nhi_force_power */
+#define TBT_ICL_FW_READY_POLLS      350UL           /* pci.c icl_nhi_force_power */
+#define TBT_ICL_FW_READY_POLL_MS    3UL
+/* LC mailbox commands, nhi_regs.h enum icl_lc_mailbox_cmd; pci.c
+ * ICL_LC_MAILBOX_TIMEOUT. */
+#define TBT_ICL_LC_GO2SX            0x02UL
+#define TBT_ICL_LC_GO2SX_NO_WAKE    0x03UL
+#define TBT_ICL_LC_PREPARE_FOR_RESET 0x21UL
+#define TBT_ICL_LC_TIMEOUT_MS       500UL
 
 #endif /* TBT_REGS_H */

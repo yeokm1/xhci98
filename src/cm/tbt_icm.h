@@ -1,48 +1,74 @@
 /*
- * tbt_icm.h - the client of an Intel Thunderbolt 3 controller's firmware
+ * tbt_icm.h - the client of an Intel Thunderbolt controller's firmware
  * connection manager (the ICM), its pure half (roadmap-usb4.md task 39-A.3;
  * design record 21 sections 1.4 and 5).
  *
- * What is here: the ICM frames of ICM-PROTOCOL.md sections 3 and 4 behind a
- * per-generation table of encoders, decoders and capabilities (record 21
- * section 1.4), the bind, resume, suspend and unbind sequences of record 21
- * sections 5.1 and 5.6, the device table and the events of section 5.3,
- * the approval decision of section 5.4 behind a policy value and a hook
- * (decision D4: XhciCmApprove 0 or 1, task 39-A.6 reads it), and the
- * timeouts, retries and error flag of section 5.5. What is not: the
- * registry, PnP, power, the thread, the common buffer, the re-enumeration
- * and the nvme98 statement - the driver (39-A.4, 39-A.5, 39-A.7) does those
- * and reaches this file through the TBT_HOST accessor of tbt_ring.h, an
- * action queue it drains, and one upcall.
+ * What is here: the ICM frames behind a per-generation table of encoders,
+ * decoders and capabilities (record 21 section 1.4); the profile choice by
+ * PCI id and its confirmation from the firmware status after start; the
+ * bind, resume, suspend and unbind sequences of record 21 sections 5.1 and
+ * 5.6; the device table and the events of section 5.3; the approval
+ * decision of section 5.4 behind a policy value and a hook (decision D4:
+ * XhciCmApprove 0 or 1, task 39-A.6 reads it); the timeouts, retries and
+ * error flag of section 5.5. What is not: the registry, PnP, power, the
+ * thread, the common buffer, the configuration-space writes, the
+ * re-enumeration and the nvme98 statement - the driver (39-A.4, 39-A.5,
+ * 39-A.7) does those and reaches this file through the TBT_HOST accessor of
+ * tbt_ring.h, an action queue it drains, and one upcall.
  *
- * Every word layout is ICM-PROTOCOL.md's (usb4-emu, branch main, read at
- * a68bc74), cited "ICM n.n" with its [obs] and [inf] tags; Linux's
- * drivers/thunderbolt is not a source (record 21 section 9).
+ * SOURCES. "ICM n.n" is usb4-emu's docs/ICM-PROTOCOL.md (branch main, read
+ * at a68bc74), the clean-room contract written from the P14s Gen 1 capture,
+ * with its [obs] and [inf] tags. "Linux <file> <symbol>" is the Linux
+ * drivers/thunderbolt mirror pinned at c6859eed, read under design record
+ * 20's rule since the owner's decision of 2026-10-15 (layouts, constants,
+ * ids and sequences taken and cited; no function body copied). Where the
+ * two describe the same frame they agree; the Alpine Ridge layouts are the
+ * capture's. A behaviour cited to Linux alone is unconfirmed until a
+ * capture shows it, as every row but Alpine Ridge is.
  *
- * TWO ROWS. Alpine Ridge is captured (the P14s Gen 1, NHI 8086:15BF) and
- * every layout of its row is an observed frame or the description beside
- * one. Titan Ridge is NOT captured: its row is built from ICM 4.9's
- * comparison table alone (owner, decision D9 of 2026-10-15), and each byte
- * layout that table does not fix is this file's choice, marked UNCAPTURED
- * where it is made. The client is written so a wrong choice costs an
- * approval and never the thread: a response with the error flag, a
- * response that never comes, an event too short to decode - each leaves
- * the device unapproved, is counted and logged, and every wait is bounded.
+ * FOUR ROWS (record 21 section 1.4, the orchestrator's coverage plan of
+ * 2026-10-15, owner to confirm):
+ *   Falcon Ridge   Thunderbolt 2 (Linux icm_probe's FALCON_RIDGE cases)
+ *   Alpine Ridge   CAPTURED on 8086:15BF; the others of its ids are not
+ *   Titan Ridge    and Maple Ridge, Titan Ridge's messages
+ *   Ice Lake       the integrated controllers, Ice Lake to Meteor Lake,
+ *                  when their firmware connection manager runs
+ * Only Alpine Ridge's frames have been seen on a wire; every other row is
+ * UNCAPTURED, built from Linux's structure layouts, and its host vectors
+ * test this file against those layouts, not against hardware. The client
+ * is written so a wrong layout costs an approval and never the thread: a
+ * response with the error flag, a response that never comes, an event too
+ * short to decode - each leaves the device unapproved, is counted and
+ * logged, and every wait is bounded.
  *
- * The sequence a driver runs: TbtIcmInit, TbtIcmStart (refusing the start
- * on a negative result), then on the thread every idle period TbtIcmPoll
- * followed by TbtIcmNextAction until it returns FALSE, running each tunnel
- * up or down the action names; TbtIcmSuspend and TbtIcmResume around a
- * system sleep; TbtIcmUnbind at stop. While the driver itself waits for a
- * tunnel port (record 21 section 6.5) it calls TbtIcmService between its
- * reads and TbtIcmActionLive to learn whether the device left meanwhile.
+ * WHAT IS LEFT OUT, from what Linux's client does with the same firmware:
+ * boot ACL reads and writes, keys and challenges (security level
+ * "secure"), host-to-host (XDomain) paths, the USB4 router-operation proxy,
+ * NVM upgrade, the firmware start path and CIO reset for a stopped ICM,
+ * and runtime suspend. Each row's lifecycle follows Linux icm_probe's hooks
+ * for it: Falcon Ridge asks the route through the multi-packet topology
+ * query (icm_fr_get_route), Alpine Ridge through get route; Titan Ridge and
+ * Ice Lake carry it in their events; only Falcon and Alpine Ridge send
+ * mailbox 0x05 at suspend; Ice Lake has no approve and sends nothing at
+ * suspend. Ice Lake's RTD3 veto is recorded (VetoActive) and needs nothing
+ * more: it holds off a runtime suspend this driver never makes. Ice Lake's
+ * fused host UUID and its force power are PCI configuration, tbt_hw.h's.
+ *
+ * Which row, and whether this client runs at all, is tbt_hw.h's
+ * TbtHwSelect: TbtIcmStart is called only after it returned TBT_SEL_ICM.
+ * Then on the thread every idle period TbtIcmPoll followed by
+ * TbtIcmNextAction until it returns FALSE, running each tunnel up or down
+ * the action names; TbtIcmSuspend and TbtIcmResume around a system sleep;
+ * TbtIcmUnbind at stop. While the driver itself waits for a tunnel port
+ * (record 21 section 6.5) it calls TbtIcmService between its reads and
+ * TbtIcmActionLive to learn whether the device left meanwhile.
  *
  * IRQL and locking: as tbt_ring.h - PASSIVE_LEVEL, on the connection-
  * manager thread, no lock held, for every function that takes a TBT_ICM.
- * The decoders and encoders of the profile rows and TbtIcmProfileForId are
- * pure and callable at any IRQL. The LinkDown upcall and the approval hook
- * run on that thread, possibly inside a command wait, and must not call
- * back into this file.
+ * The rows' decoders and encoders and TbtIcmDecodeNames are pure and
+ * callable at any IRQL. The LinkDown
+ * upcall and the approval hook run on that thread, possibly inside a
+ * command wait, and must not call back into this file.
  *
  * DDK-free: part of the pure core. C89, no 64-bit arithmetic, no floating
  * point.
@@ -56,31 +82,42 @@
 #include "tbt_ring.h"
 
 /* ---------------------------------------------------------------------- */
-/* ICM header word (ICM 3.1)                                              */
+/* ICM header word (ICM 3.1; Linux tb_msgs.h struct icm_pkg_header)       */
 /* ---------------------------------------------------------------------- */
 
-#define TBT_ICM_HDR_CODE(v)         ((ULONG)(v) & 0xFFUL)           /* 7:0 */
-#define TBT_ICM_HDR_FLAGS(v)        (((ULONG)(v) >> 8) & 0xFFUL)    /* 15:8 */
-#define TBT_ICM_HDR_INDEX(v)        (((ULONG)(v) >> 16) & 0xFFUL)   /* 23:16 */
-#define TBT_ICM_HDR_COUNT(v)        (((ULONG)(v) >> 24) & 0xFFUL)   /* 31:24 */
-/* Bit 0 of the flags is the error flag of every response (ICM 3.1, 4.8 [inf]). */
-#define TBT_ICM_FLAG_ERROR          0x01UL
+/*
+ * Linux lays every message out as a little-endian structure whose first
+ * byte is the code; ICM-PROTOCOL.md gives the same frames as numeric DWs
+ * with the code in bits 7:0. They are the same bytes: a structure's byte k
+ * is bits 8*(k%4)+7..8*(k%4) of DW k/4 (ICM 0). A u16 at byte offset 2 of a
+ * DW is therefore its bits 31:16, and a uuid_t is four DWs.
+ */
+#define TBT_ICM_HDR_CODE(v)         ((ULONG)(v) & 0xFFUL)           /* code */
+#define TBT_ICM_HDR_FLAGS(v)        (((ULONG)(v) >> 8) & 0xFFUL)    /* flags */
+#define TBT_ICM_HDR_INDEX(v)        (((ULONG)(v) >> 16) & 0xFFUL)   /* packet_id */
+#define TBT_ICM_HDR_COUNT(v)        (((ULONG)(v) >> 24) & 0xFFUL)   /* total_packets */
+#define TBT_ICM_FLAG_ERROR          0x01UL  /* ICM_FLAGS_ERROR; ICM 4.8 */
 /* A request goes out with flags, index and count 0 (ICM 3.1 [obs] T:1). */
 #define TBT_ICM_REQUEST(code)       ((ULONG)(code) & 0xFFUL)
 
-/* Command codes, ICM 4's first table. */
-#define TBT_ICM_CMD_DRIVER_READY    0x03UL
-#define TBT_ICM_CMD_APPROVE         0x04UL
-#define TBT_ICM_CMD_GET_ROUTE       0x0AUL
-/* Event codes, ICM 4's second table. */
-#define TBT_ICM_EV_CONNECTED        0x03UL
-#define TBT_ICM_EV_DISCONNECTED     0x04UL
+/* Command codes (ICM 4; Linux tb_msgs.h enum icm_pkg_code). */
+#define TBT_ICM_CMD_GET_TOPOLOGY    0x01UL  /* ICM_GET_TOPOLOGY, Falcon Ridge */
+#define TBT_ICM_CMD_DRIVER_READY    0x03UL  /* ICM_DRIVER_READY */
+#define TBT_ICM_CMD_APPROVE         0x04UL  /* ICM_APPROVE_DEVICE */
+#define TBT_ICM_CMD_GET_ROUTE       0x0AUL  /* ICM_GET_ROUTE */
+/* Event codes (ICM 4; enum icm_event_code). */
+#define TBT_ICM_EV_CONNECTED        0x03UL  /* ICM_EVENT_DEVICE_CONNECTED */
+#define TBT_ICM_EV_DISCONNECTED     0x04UL  /* ICM_EVENT_DEVICE_DISCONNECTED */
+#define TBT_ICM_EV_XD_CONNECTED     0x06UL  /* host-to-host; ignored */
+#define TBT_ICM_EV_XD_DISCONNECTED  0x07UL  /* host-to-host; ignored */
+#define TBT_ICM_EV_DP_CHANGED       0x08UL  /* DisplayPort; ignored */
+#define TBT_ICM_EV_RTD3_VETO        0x0AUL  /* Ice Lake family; logged, ignored */
 
-/* Driver-ready flags, shared by both generations (ICM 4.1, 4.9 [inf]). */
-#define TBT_ICM_READY_RTD3          0x40UL  /* bit 6; logged, never acted on */
+/* Driver-ready flags: RTD3 is bit 6 on every generation that reports it
+ * (ICM 4.1; ICM_AR_FLAGS_RTD3, ICM_TR_FLAGS_RTD3). Logged, never acted on. */
+#define TBT_ICM_READY_RTD3          0x40UL
 
-/* Link info, 16 bits (ICM 4.4): word 5 bits 31:16 of a device-connected
- * event, word 1 bits 31:16 of get route and device disconnected. */
+/* Link info, 16 bits (ICM 4.4; ICM_LINK_INFO_*). */
 #define TBT_ICM_LI_LINK(v)          ((ULONG)(v) & 0x7UL)            /* 2:0 */
 #define TBT_ICM_LI_DEPTH(v)         (((ULONG)(v) >> 4) & 0xFUL)     /* 7:4 */
 #define TBT_ICM_LI_APPROVED         0x0100UL                        /* 8 */
@@ -88,12 +125,18 @@
 #define TBT_ICM_LI_BOOT             0x0400UL                        /* 10 */
 #define TBT_ICM_LI_MAKE(link, depth) \
     (((ULONG)(link) & 0x7UL) | (((ULONG)(depth) & 0xFUL) << 4))
+/* The bounds Linux's icm_fr_device_disconnected holds a link-and-depth
+ * event to (ICM_MAX_LINK, TB_SWITCH_MAX_DEPTH in tb.h). */
+#define TBT_ICM_MAX_LINK            4UL
+#define TBT_ICM_MAX_DEPTH           6UL
 
-/* Device-connected event flags (header bits 15:8, ICM 4.4). */
+/* Device-connected event flags, header bits 15:8 (ICM 4.4; ICM_FLAGS_*). */
+#define TBT_ICM_EVF_SLEVEL(v)       (((ULONG)(v) >> 3) & 0x3UL)     /* 4:3 */
 #define TBT_ICM_EVF_DUAL_LANE       0x20UL  /* bit 5 */
 #define TBT_ICM_EVF_SPEED_20G       0x80UL  /* bit 7, else 10 Gb/s */
 
-/* The endpoint name block's entry types (ICM 4.4 [obs] T:9). */
+/* The endpoint name block's entry types (ICM 4.4 [obs] T:9; Linux icm.c
+ * struct ep_name_entry, EP_NAME_INTEL_VSS, struct intel_vss). */
 #define TBT_ICM_NAME_VENDOR         0x01UL
 #define TBT_ICM_NAME_MODEL          0x02UL
 #define TBT_ICM_NAME_INTEL          0x10UL
@@ -110,27 +153,36 @@
 #define TBT_ICM_ACTION_QUEUE        48UL
 #define TBT_ICM_NAME_CHARS          48UL    /* with the terminating NUL */
 
-/* ICM 3 [inf], record 21 section 5.5 and section 8's bounds. */
+/* ICM 3 [inf]; Linux icm.c ICM_TIMEOUT, ICM_RETRIES, ICM_APPROVE_TIMEOUT;
+ * record 21 section 8's bounds. */
 #define TBT_ICM_CMD_TIMEOUT_MS      5000UL
 #define TBT_ICM_APPROVE_TIMEOUT_MS  10000UL
 #define TBT_ICM_TIMEOUT_MIN_MS      1000UL
 #define TBT_ICM_TIMEOUT_MAX_MS      60000UL
 #define TBT_ICM_RETRIES             3UL
-/* The host-router poll after driver ready, ICM 4.1 [inf]: router space DW
- * 0 of route 0, 100 ms per try, up to 50 tries 50 ms apart. */
+/* The host-router poll after driver ready (ICM 4.1 [inf]; Linux icm.c
+ * __icm_driver_ready): router space DW 0 of route 0, 100 ms per try, up
+ * to 50 tries 50 ms apart. */
 #define TBT_ICM_HOSTPOLL_TRIES      50UL
 #define TBT_ICM_HOSTPOLL_TIMEOUT_MS 100UL
 #define TBT_ICM_HOSTPOLL_GAP_MS     50UL
-/* The reconciliation window, ICM 6.5 and 6.6 [inf]. */
+/* The reconciliation window (ICM 6.5, 6.6 [inf]; Linux icm.c icm_complete
+ * queues the rescan 500 ms out and icm_postpone_rescan pushes it another
+ * 500 ms on every device-connected event). The pushes are capped here. */
 #define TBT_ICM_RECONCILE_MS        500UL
+#define TBT_ICM_RECONCILE_MAX_MS    5000UL
+/* The NVM-authentication wait a Tiger Lake class row confirms with (Linux
+ * icm.c icm_tgl_is_supported: 10 ms); tbt_hw.c's. */
+#define TBT_ICM_AUTH_CONFIRM_MS     10UL
+/* Falcon Ridge's topology query (Linux tb_msgs.h ICM_GET_TOPOLOGY_PACKETS,
+ * struct icm_fr_pkg_get_topology_response: 38 DWs a packet). */
+#define TBT_ICM_TOPO_PACKETS        14UL
+#define TBT_ICM_TOPO_PORTS          16UL
+#define TBT_ICM_TOPO_WORDS          38UL
 /* How much one TbtIcmPoll takes before it returns to the driver. */
 #define TBT_ICM_POLL_FRAMES         64UL
 #define TBT_ICM_POLL_EVENTS         32UL
 
-/* TbtIcmStart's one positive result: the firmware is in safe mode, the
- * start proceeds with no rings and nothing sent (record 21 section 5.1
- * step 5). */
-#define TBT_ICM_SAFE_MODE           1L
 
 /* ---------------------------------------------------------------------- */
 /* Decoded messages                                                       */
@@ -139,14 +191,14 @@
 typedef struct _TBT_ICM_READY {
     ULONG Words;            /* DWs the response carried */
     ULONG Flags;            /* header bits 15:8 */
-    ULONG SecurityLevel;    /* ICM 4.1: 0 none, 1 user, 2 secure, ... */
+    ULONG SecurityLevel;    /* 0 none, 1 user, 2 secure, ... (ICM 4.1) */
     ULONG BootAclCount;
     BOOLEAN BootAclSupported;
-    ULONG RomVersion;       /* Alpine Ridge */
-    ULONG RamVersion;       /* Alpine Ridge */
-    ULONG ProtocolVersion;  /* Titan Ridge, UNCAPTURED */
-    ULONG NvmVersion;       /* Titan Ridge, UNCAPTURED */
-    ULONG DeviceId;         /* Titan Ridge, UNCAPTURED */
+    ULONG RomVersion;       /* Falcon and Alpine Ridge */
+    ULONG RamVersion;       /* Falcon and Alpine Ridge */
+    ULONG ProtocolVersion;  /* Titan Ridge and Ice Lake */
+    ULONG NvmVersion;       /* Titan Ridge and Ice Lake */
+    ULONG DeviceId;         /* Titan Ridge and Ice Lake */
 } TBT_ICM_READY, *PTBT_ICM_READY;
 
 #define TBT_ICM_NAMES_VENDOR        0x01UL
@@ -168,15 +220,15 @@ typedef struct _TBT_ICM_NAMES {
 typedef struct _TBT_ICM_ANNOUNCE {
     ULONG Uuid[4];
     ULONG EventFlags;
-    ULONG Key;              /* Alpine Ridge only (ICM 4.9: none on Titan Ridge) */
+    ULONG Key;              /* Falcon and Alpine Ridge only */
     ULONG ConnectionId;
     ULONG LinkInfo;
-    ULONG Link;
-    ULONG Depth;
+    ULONG Link;             /* from the link info, or the route's first level */
+    ULONG Depth;            /* from the link info, or the route's length */
     BOOLEAN Approved;
     BOOLEAN Rejected;
     BOOLEAN Boot;
-    BOOLEAN RouteValid;     /* carried by the event (Titan Ridge) */
+    BOOLEAN RouteValid;     /* carried by the event (Titan Ridge, Ice Lake) */
     TBT_ROUTE Route;
     TBT_ICM_NAMES Names;
 } TBT_ICM_ANNOUNCE, *PTBT_ICM_ANNOUNCE;
@@ -211,47 +263,49 @@ typedef struct _TBT_ICM_DEVICE {
 /* The per-generation table (record 21 section 1.4)                       */
 /* ---------------------------------------------------------------------- */
 
-#define TBT_ICM_GEN_ALPINE_RIDGE    1UL
-#define TBT_ICM_GEN_TITAN_RIDGE     2UL
+#define TBT_ICM_GEN_FALCON_RIDGE    1UL
+#define TBT_ICM_GEN_ALPINE_RIDGE    2UL
+#define TBT_ICM_GEN_TITAN_RIDGE     3UL
+#define TBT_ICM_GEN_ICE_LAKE        4UL
 
-#define TBT_ICM_CAP_GET_ROUTE       0x01UL  /* the route must be asked for (Alpine Ridge) */
-#define TBT_ICM_CAP_KEY             0x02UL  /* events and approve carry a connection key */
-#define TBT_ICM_CAP_ROUTE_IN_EVENTS 0x04UL  /* devices are addressed by route (Titan Ridge) */
-#define TBT_ICM_CAP_CAPTURED        0x08UL  /* the row's layouts were read off a capture */
+/* Row capabilities, each the presence of a Linux icm_probe hook or op. */
+#define TBT_ICM_CAP_GET_ROUTE       0x0001UL /* icm->get_route: icm_ar_get_route */
+#define TBT_ICM_CAP_TOPOLOGY        0x0200UL /* icm->get_route: icm_fr_get_route's topology */
+#define TBT_ICM_CAP_KEY             0x0002UL /* events and approve carry a connection key */
+#define TBT_ICM_CAP_ROUTE_IN_EVENTS 0x0004UL /* devices addressed by route string */
+#define TBT_ICM_CAP_APPROVE         0x0008UL /* tb_cm_ops.approve_switch exists */
+#define TBT_ICM_CAP_GET_MODE        0x0010UL /* icm->get_mode: auth poll, mode, then 0x23 */
+#define TBT_ICM_CAP_SAVE_DEVICES    0x0020UL /* icm->save_devices: mailbox 0x05 at suspend */
+#define TBT_ICM_CAP_SUSPEND_UNLOAD  0x0040UL /* tb_cm_ops.suspend: mailbox 0x07 at suspend */
+#define TBT_ICM_CAP_FORCE_POWER     0x0080UL /* pci.c icl_nhi_ops: force power before start */
+#define TBT_ICM_CAP_EXTRA_PACKETS   0x0100UL /* a connected event's index > 0 is ignored */
 
 typedef struct _TBT_ICM_PROFILE {
     const char *Name;
     ULONG Generation;
     ULONG Caps;
+    ULONG ReadyTimeoutMs;   /* driver ready per attempt */
+    ULONG ReadyRetries;     /* after the first attempt */
     /* Each decoder returns FALSE for a frame it cannot read; the client
      * then counts and ignores it. */
     BOOLEAN (*DecodeReady)(const ULONG *dw, ULONG words, PTBT_ICM_READY out);
     BOOLEAN (*DecodeConnected)(const ULONG *dw, ULONG words, PTBT_ICM_ANNOUNCE out);
     BOOLEAN (*DecodeDisconnected)(const ULONG *dw, ULONG words, PTBT_ICM_GONE out);
     /* Fills `dw` (room for TBT_ICM_APPROVE_MAX_WORDS) and returns its
-     * length; the response echoes words 1 to 4, the UUID. */
+     * length; the response echoes words 1 to 4, the UUID. NULL on a row
+     * with no approve. */
     ULONG (*EncodeApprove)(const TBT_ICM_DEVICE *dev, PULONG dw);
 } TBT_ICM_PROFILE, *PTBT_ICM_PROFILE;
 
 #define TBT_ICM_APPROVE_MAX_WORDS   8UL
 
+extern const TBT_ICM_PROFILE TbtIcmProfileFalconRidge;
 extern const TBT_ICM_PROFILE TbtIcmProfileAlpineRidge;
 extern const TBT_ICM_PROFILE TbtIcmProfileTitanRidge;
+extern const TBT_ICM_PROFILE TbtIcmProfileIceLake;
 
-/*
- * The row for an NHI's PCI ids, or NULL. The ids are pci-ids.ucw.cz's
- * Intel "Thunderbolt 3 NHI" entries (pci.ids version 2026.10.14), Alpine
- * Ridge and Titan Ridge, never Linux's (owner, decision D9); `*captured` is
- * set TRUE for the one id a capture exists for, 15BF. `forceIntel` is
- * XhciCmMode 2 (record 21 section 8): an Intel id the table does not list
- * takes the Alpine Ridge row. Any IRQL.
- */
-const TBT_ICM_PROFILE *TbtIcmProfileForId(ULONG vendorId,
-                                          ULONG deviceId,
-                                          BOOLEAN forceIntel,
-                                          BOOLEAN *captured);
 
-/* The name-block walk both rows share, exposed for the host suite. `dw`
+/* The name-block walk every row shares, exposed for the host suite. `dw`
  * is the block's first DW, `words` its length. Any IRQL. */
 VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
 
@@ -301,9 +355,9 @@ typedef VOID (*TBT_ICM_LINKDOWN)(PVOID context,
 
 /*
  * The approval policy's hook (record 21 section 5.4): called for a device
- * announced unapproved and not rejected, before any approve is sent;
- * returns TRUE to approve. NULL means the policy value alone decides
- * (TbtIcmSetApprovePolicy). Task 39-A.6 is the layer that sets either.
+ * announced unapproved and not rejected, on a row that can approve, before
+ * any approve is sent; returns TRUE to approve. NULL means the policy value
+ * alone decides (TbtIcmSetApprovePolicy). Task 39-A.6 sets either.
  */
 typedef BOOLEAN (*TBT_ICM_APPROVE_HOOK)(PVOID context,
                                         const TBT_ICM_DEVICE *dev);
@@ -321,6 +375,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG Strays;           /* responses nobody waited for, other frames */
     ULONG EventsConnected;
     ULONG EventsDisconnected;
+    ULONG EventsIgnored;    /* host-to-host, DisplayPort, RTD3 veto, extra packets */
     ULONG EventsUnknown;
     ULONG EventsMalformed;
     ULONG EventsQueued;     /* decoded inside a wait, run after it */
@@ -336,6 +391,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG ApprovalsFailed;
     ULONG ApprovalsAbandoned;   /* the device left during the wait */
     ULONG ApprovalsWithheld;    /* the policy said no */
+    ULONG ApprovalsUnsupported; /* the row has no approve */
     ULONG TunnelUps;
     ULONG TunnelDowns;
     ULONG Reconciled;
@@ -350,6 +406,7 @@ typedef struct _TBT_ICM_COUNTERS {
 
 typedef struct _TBT_ICM {
     const TBT_ICM_PROFILE *Profile;
+    ULONG RingFlags;            /* tbt_hw.c TbtHwRingFlags */
     PTBT_RING Ring;
     const TBT_HOST *Host;
 
@@ -363,11 +420,14 @@ typedef struct _TBT_ICM {
     ULONG Retries;
 
     BOOLEAN Bound;              /* rings running and driver ready answered */
-    BOOLEAN SafeMode;
+    BOOLEAN Started;            /* rings were started since the last unbind */
+    BOOLEAN Session;            /* driver ready was sent: 0x07 ends it */
+    BOOLEAN VetoActive;         /* Ice Lake's RTD3 veto, for the log */
     BOOLEAN InWait;             /* a command or a poll is outstanding */
     ULONG WaitSlot;             /* the entry the outstanding command is for */
     ULONG WaitSerial;           /* 0 when it is for none */
     BOOLEAN WaitGone;           /* that entry was dropped during the wait */
+    BOOLEAN SettleExtend;       /* a device-connected event arrived in the window */
 
     TBT_ICM_READY Ready;
     ULONG NextSerial;
@@ -381,15 +441,26 @@ typedef struct _TBT_ICM {
     ULONG ActionHead;
     ULONG ActionCount;
 
+    /* Falcon Ridge's topology, one entry per packet (struct
+     * icm_fr_pkg_get_topology_response: route_lo, route_hi, first_data,
+     * switch_index, ports[16]; the rest is not kept). */
+    ULONG TopoReceived;         /* bit per packet index */
+    ULONG TopoRouteLo[TBT_ICM_TOPO_PACKETS];
+    ULONG TopoRouteHi[TBT_ICM_TOPO_PACKETS];
+    ULONG TopoInfo[TBT_ICM_TOPO_PACKETS];   /* DW 3: first_data .. switch_index */
+    ULONG TopoPorts[TBT_ICM_TOPO_PACKETS][TBT_ICM_TOPO_PORTS];
+
     TBT_ICM_COUNTERS Counters;
 } TBT_ICM, *PTBT_ICM;
 
-/* Bind `icm` to its row, its ring and the accessor, with every policy and
+/* Bind `icm` to its row (tbt_hw.h TBT_HW_PROFILE.Icm), its ring, the
+ * accessor and the ring start flags (TbtHwRingFlags), with every policy and
  * timing at its default. Installs the ring's unsolicited receiver. */
 VOID TbtIcmInit(PTBT_ICM icm,
                 const TBT_ICM_PROFILE *profile,
                 PTBT_RING ring,
-                const TBT_HOST *host);
+                const TBT_HOST *host,
+                ULONG ringFlags);
 
 VOID TbtIcmSetLinkDown(PTBT_ICM icm, TBT_ICM_LINKDOWN fn, PVOID context);
 VOID TbtIcmSetApprovePolicy(PTBT_ICM icm, BOOLEAN approveAll);
@@ -397,26 +468,22 @@ VOID TbtIcmSetApproveHook(PTBT_ICM icm, TBT_ICM_APPROVE_HOOK fn, PVOID context);
 /* Each held to TBT_ICM_TIMEOUT_MIN_MS..MAX_MS; 0 means the default. */
 VOID TbtIcmSetTimeouts(PTBT_ICM icm, ULONG cmdMs, ULONG approveMs);
 
-/*
- * Record 21 section 5.1 steps 2 to 5: the host interface capabilities
- * (paths at least 1, version 0), firmware status (ICM enabled), the NVM
- * authentication poll, the operating mode. TBT_OK for connection-manager
- * mode, TBT_ICM_SAFE_MODE for mode 0, TBT_E_REFUSED or TBT_E_HW otherwise.
- * Touches no ring. `mode` may be NULL.
- */
-LONG TbtIcmCheckFirmware(PTBT_ICM icm, PULONG mode);
 
-/* One NHI mailbox command (ICM 2.3): TBT_OK, TBT_E_ERROR_FLAG or
- * TBT_E_TIMEOUT. */
+/* One NHI mailbox command (ICM 2.3; Linux nhi.c nhi_mailbox_cmd): TBT_OK,
+ * TBT_E_ERROR_FLAG or TBT_E_TIMEOUT. */
 LONG TbtIcmMailbox(PTBT_ICM icm, ULONG code, ULONG data);
 
 /*
- * Record 21 section 5.1 steps 2 to 10 over the common buffer the driver
- * allocated (`va`, `phys`, `bytes`, as TbtRingStart): the checks, then ring
- * 0, mailbox 0x23, driver ready, the host-router poll and the events it
- * collected. TBT_OK, TBT_ICM_SAFE_MODE (nothing started), or a negative
- * result on which the start is refused - the rings already stopped and
- * mailbox 0x07 sent if they had been started.
+ * Record 21 section 5.1 steps 6 to 10, after TbtHwSelect said TBT_SEL_ICM
+ * (which ran steps 2 to 5), over the common buffer the driver allocated
+ * (`va`, `phys`, `bytes`, as TbtRingStart): ring 0, mailbox 0x23 where the
+ * row reads the mode, driver ready, the host-router poll and the events it
+ * collected. TBT_OK, or a negative result on which the start is refused.
+ * A failure before the rings start leaves everything as it was; one after
+ * stops this driver's rings (nothing of theirs is pending when it returns,
+ * so the common buffer may be freed) and sends mailbox 0x07 only if driver
+ * ready had been sent - the stage reached decides the cleanup, and no
+ * tunnel is touched (orchestrator decision C, 2026-10-15).
  */
 LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes);
 
@@ -444,22 +511,25 @@ BOOLEAN TbtIcmActionLive(const TBT_ICM *icm, const TBT_ICM_ACTION *action);
 const TBT_ICM_DEVICE *TbtIcmDevice(const TBT_ICM *icm, ULONG slot);
 ULONG TbtIcmDeviceCount(const TBT_ICM *icm);
 
-/* Record 21 section 5.6: system suspend - rings stopped, mailbox 0x05,
- * then 0x07, each failure logged and tolerated. The table is kept. */
+/* Record 21 section 5.6: system suspend - rings stopped, then mailbox
+ * 0x05 and 0x07 where the row sends them (Linux icm.c icm_suspend), each
+ * failure logged and tolerated. The table is kept. */
 VOID TbtIcmSuspend(PTBT_ICM icm);
 
 /*
  * Resume to D0: section 5.1 from step 6 without mailbox 0x23, on the
  * block TbtIcmStart was given, then the reconciliation of section 5.3 - a
  * table entry not re-announced within TBT_ICM_RECONCILE_MS of the
- * host-router poll is dropped with a TUNNEL_DOWN. TBT_OK, or a negative
- * result after which the client is unbound (rings stopped, 0x07 sent).
+ * host-router poll (pushed back by each announcement) is dropped with a
+ * TUNNEL_DOWN. TBT_OK, or a negative result after which the client is
+ * unbound (rings stopped, 0x07 sent).
  */
 LONG TbtIcmResume(PTBT_ICM icm);
 
 /* Unbind (stop, remove, disable, shutdown): rings stopped, then mailbox
- * 0x07 (ICM 6.7 [obs]). Tunnels and approvals survive it; nothing is
- * queued. Idempotent; sends nothing in safe mode. */
+ * 0x07 (ICM 6.7 [obs]; Linux icm.c icm_stop). Tunnels and approvals
+ * survive it; nothing is queued. Idempotent: 0x07 only after a driver
+ * ready, nothing at all if the rings never started. */
 VOID TbtIcmUnbind(PTBT_ICM icm);
 
 #endif /* TBT_ICM_H */
