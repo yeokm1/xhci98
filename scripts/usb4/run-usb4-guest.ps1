@@ -6,8 +6,8 @@
 #   1. Resolves the main checkout (vm\ and out\vmlocks\ live there, so the
 #      script works the same from a worktree).
 #   2. Creates (or reuses) a qcow2 OVERLAY of the guest's base image under
-#      vm\usb4\<Name>\disk.qcow2 - the base is only ever a read-only backing
-#      file - and an NVMe disk overlay beside it.
+#      vm\<RunRoot>\<Name>\disk.qcow2 (vm\usb4\ by default) - the base is
+#      only ever a read-only backing file - and an NVMe disk overlay beside it.
 #   3. Takes the host's VM admission lock (out\vmlocks\_admit), checks the
 #      vCPU budget (sum of -smp of every running qemu-system process plus
 #      this guest's, at most the logical processor count) and >= 6 GB of free
@@ -16,7 +16,7 @@
 #   4. Launches QEMU detached (it outlives this script) with QMP on
 #      127.0.0.1:<QmpPort> and VNC on 127.0.0.1:<VncPort>, a port-0xE9 debug
 #      console log and a serial log per launch, the trace when asked, and
-#      writes vm\usb4\<Name>\run.json, which usb4-qmp.ps1 reads.
+#      writes vm\<RunRoot>\<Name>\run.json, which usb4-qmp.ps1 reads.
 #
 # Rules this keeps (record 21 section 10.2): it never writes inside the
 # usb4-emu tree (that repository's binary is COPIED to vm\usb4\bin, its
@@ -31,8 +31,11 @@
 #   powershell -File scripts\usb4\run-usb4-guest.ps1 -Guest win2k-xonly -Usb4Profile generic -HostModel intel-adl
 #   # Print the command line only:
 #   powershell -File scripts\usb4\run-usb4-guest.ps1 -Guest winxp -Usb4Profile tb3 -DryRun
+#   # Windows 98 SE from the t26 image with the host controller driver, run
+#   # directory vm\p40-topo\<Name>, usb4-generic with the pre-OS CM:
+#   powershell -File scripts\usb4\run-usb4-guest.ps1 -Guest win98 -BaseImage vm\t26\win98-gold.qcow2 -RunRoot p40-topo -Usb4Profile generic -PreosCm
 #
-# Then: powershell -File scripts\usb4\usb4-qmp.ps1 -Name <Name> <verb> ...
+# Then: powershell -File scripts\usb4\usb4-qmp.ps1 -Name <Name> [-RunRoot <dir>] <verb> ...
 #
 # Under powershell -File, a value that starts with '-' needs the colon form,
 # -Extra:-S; -TracePattern takes a comma-separated list ('usb4_*,pci_nvme_*').
@@ -52,8 +55,16 @@ param(
     # none: no usb4 device at all (the baseline).
     [ValidateSet('tb3', 'generic', 'none')][string]$Usb4Profile = 'tb3',
 
-    # Overlay / run directory name under vm\usb4\. Default <Guest>-<Usb4Profile>.
+    # Run directory name under vm\<RunRoot>\. Default <Guest>-<Usb4Profile>.
     [string]$Name,
+    # The directory under the main checkout's vm\ that holds the run
+    # directory (default usb4; a worker's own vm\<branch>\ also works).
+    [string]$RunRoot = 'usb4',
+    # Another qcow2 base under vm\ in place of the guest's vm\<guest>.img,
+    # e.g. vm\t26\win98-gold.qcow2 (98 SE with the host controller driver
+    # installed; vm\win98.img carries the 1.x miniport). Only ever a backing
+    # file; the guest's machine line is kept.
+    [string]$BaseImage,
 
     # tb3 only: P14s "Thunderbolt BIOS Assist"_"Support in Pre Boot Environment".
     [ValidateSet('OFF_OFF', 'OFF_ON', 'ON_OFF', 'ON_ON')][string]$Bios = 'OFF_OFF',
@@ -161,6 +172,7 @@ foreach ($p in @($QmpPort, $VncPort)) {
 }
 if (-not $Name) { $Name = "$Guest-$Usb4Profile" }
 if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "bad -Name '$Name'" }
+if ($RunRoot -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or $RunRoot -eq 'bin') { throw "bad -RunRoot '$RunRoot' (one directory name under vm\)" }
 if (-not $Tag) { $Tag = Get-Date -Format 'yyyyMMdd-HHmmss' }
 if ($Tag -notmatch '^[A-Za-z0-9._-]+$') { throw "bad -Tag '$Tag'" }
 
@@ -170,11 +182,28 @@ if ($Usb4Profile -ne 'generic' -and ($PreosCm -or $ForceTunnel -or $HostModel -n
 if ($Usb4Profile -eq 'none' -and ($Usb3 -or $Dock)) { throw '-Usb3 and -Dock need a usb4 profile' }
 if ($XferDir -and $XferImg) { throw 'give -XferDir or -XferImg, not both' }
 
-$runDir = Join-Path $usb4Root $Name
+# True when path lies under root.
+function Test-Under([string]$path, [string]$root) {
+    $p = [System.IO.Path]::GetFullPath($path).TrimEnd('\') + '\'
+    $r = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)
+}
+$runParent = Join-Path $vmRoot $RunRoot
+$runDir = Join-Path $runParent $Name
 $base = Join-Path $vmRoot $g.Img
+if ($BaseImage) {
+    # a relative path names a file of the main checkout (vm\ lives there)
+    if (-not [System.IO.Path]::IsPathRooted($BaseImage)) { $BaseImage = Join-Path $mainRoot $BaseImage }
+    if (-not (Test-Path $BaseImage -PathType Leaf)) { throw "-BaseImage $BaseImage does not exist" }
+    $base = (Resolve-Path $BaseImage).Path
+    if (-not (Test-Under $base $vmRoot) -or $base -notmatch '\.(qcow2|img)$') {
+        throw "-BaseImage must be a qcow2 image under $vmRoot"
+    }
+}
 $disk = Join-Path $runDir 'disk.qcow2'
 $nvme = Join-Path $runDir 'nvme.qcow2'
 if (-not (Test-Path $base)) { throw "base image missing: $base" }
+if (Test-Under $base $runDir) { throw "-BaseImage cannot sit in the run directory $runDir" }
 
 # ---------------------------------------------------------------- QEMU binary
 # Default: the fork's build, copied to vm\usb4\bin under the admission lock.
@@ -191,19 +220,14 @@ function Invoke-QemuImg([string[]]$a) {
 }
 
 # ---------------------------------------------------------------- disks
-# A writable transfer image must be a raw xfer*.img under vm\usb4\, so no
+# A writable transfer image must be a raw xfer*.img under vm\<RunRoot>\, so no
 # base image (vm\*.img) and nothing in usb4-emu can be attached writable; an
 # NVMe base is only ever a qcow2 backing file.
-function Test-Under([string]$path, [string]$root) {
-    $p = [System.IO.Path]::GetFullPath($path).TrimEnd('\') + '\'
-    $r = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
-    return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)
-}
 if ($XferImg) {
     if (-not (Test-Path $XferImg -PathType Leaf)) { throw "-XferImg $XferImg does not exist" }
     $XferImg = (Resolve-Path $XferImg).Path
-    if (-not (Test-Under $XferImg $usb4Root) -or (Split-Path -Leaf $XferImg) -notmatch '^xfer[A-Za-z0-9._-]*\.img$') {
-        throw "-XferImg must be a raw image named xfer*.img under $usb4Root (it is attached writable)"
+    if (-not (Test-Under $XferImg $runParent) -or (Split-Path -Leaf $XferImg) -notmatch '^xfer[A-Za-z0-9._-]*\.img$') {
+        throw "-XferImg must be a raw image named xfer*.img under $runParent (it is attached writable)"
     }
 }
 if ($NvmeBase) {
@@ -319,6 +343,11 @@ while ($i -lt $Extra.Count) {
     if ($v -match '(^|[,.])(drive|file|filename|chardev|netdev|romfile|pcap|path|logfile|events)=' -or
         $v -match '^-' -or $v -match '[\\/:]') {
         throw "-Extra $x $v names a backend, a file or a path; the launcher owns those"
+    }
+    # The model refuses host-model on tb3-alpine-ridge and ignores preos-cm
+    # there, as -HostModel and -PreosCm are refused above.
+    if ($x -ceq '-global' -and $v -match '^usb4-host\.(host-model|preos-cm)=' -and $Usb4Profile -ne 'generic') {
+        throw "-Extra $x $v applies to -Usb4Profile generic only"
     }
     $i += 2
 }
@@ -491,7 +520,7 @@ try {
         bootStrict = [bool]$BootStrict; dvorak = [bool]$g.Nt
         qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; created = $created; qemu = $proc.ExecutablePath
         token = $token; branch = $branch; tag = $Tag
-        runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
+        runRoot = $RunRoot; base = $base; runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
         debugcon = $dbg; serial = $ser; trace = $(if ($Trace) { $trc } else { $null }); out = $out
         started = (Get-Date -Format s)
     }
@@ -506,4 +535,4 @@ try {
 Write-Host "started $Name (pid $qpid): QMP 127.0.0.1:$QmpPort, VNC 127.0.0.1:$VncPort"
 Write-Host "  debugcon $dbg"
 if ($Trace) { Write-Host "  trace    $trc" }
-Write-Host "  stop:    powershell -File scripts\usb4\usb4-qmp.ps1 -Name $Name quit"
+Write-Host "  stop:    powershell -File scripts\usb4\usb4-qmp.ps1 -Name $Name -RunRoot $RunRoot quit"

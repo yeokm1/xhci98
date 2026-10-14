@@ -1,6 +1,6 @@
 # usb4-qmp.ps1 - drive a guest started by run-usb4-guest.ps1 over QMP.
 #
-#   powershell -File scripts\usb4\usb4-qmp.ps1 -Name <run name> <verb> [args...]
+#   powershell -File scripts\usb4\usb4-qmp.ps1 -Name <run name> [-RunRoot <dir>] <verb> [args...]
 #
 # Verbs:
 #   status                 QEMU's run state, and whether the pid lives
@@ -31,6 +31,8 @@
 # It acts only on the process run.json names (a QEMU this project started).
 param(
     [Parameter(Mandatory = $true)][string]$Name,
+    # The run directory's parent under vm\, as run-usb4-guest.ps1 -RunRoot.
+    [string]$RunRoot = 'usb4',
     [Parameter(Mandatory = $true, Position = 0)]
     [ValidateSet('status', 'unplug', 'plug', 'tunnel', 'harness', 'shot', 'hmp', 'key', 'type', 'run',
                  'powerdown', 'quit', 'release', 'wait')]
@@ -46,7 +48,9 @@ Set-StrictMode -Version 2
 $scriptRepo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $commonDir = (& git -C $scriptRepo rev-parse --path-format=absolute --git-common-dir).Trim()
 $mainRoot = Split-Path -Parent ($commonDir -replace '/', '\')
-$runDir = Join-Path $mainRoot "vm\usb4\$Name"
+if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "bad -Name '$Name'" }
+if ($RunRoot -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or $RunRoot -eq 'bin') { throw "bad -RunRoot '$RunRoot'" }
+$runDir = Join-Path $mainRoot "vm\$RunRoot\$Name"
 $runJson = Join-Path $runDir 'run.json'
 if (-not (Test-Path $runJson)) { throw "no run.json for '$Name' ($runJson)" }
 $run = Get-Content $runJson -Raw | ConvertFrom-Json
