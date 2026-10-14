@@ -176,6 +176,16 @@ rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
 rem                  filter), the vendor, device and class parsed from them,
 rem                  the NHI profile table, and the registry values'
 rem                  defaults, refusals and bounds
+rem   test_tbt_topo - the Thunderbolt tunnel ports' pure half (src\cm\tbt_topo.c,
+rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
+rem                  and 6.5): the P14s Gen 1's configuration space as
+rem                  captured, the emulator's i440FX, q35 and switch layouts,
+rem                  an integrated host's root ports, the set and its
+rem                  sources (switch ids, root port ids, SHPC, the
+rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
+rem                  and SHPC
+rem                  readings, a port without the capability bits, and the
+rem                  bounded poll
 rem
 rem   test_tbt_ring - xhcicm.sys's host interface ring 0 (src\cm\tbt_ring.c,
 rem                  task 39-A.2): the USB4 2.0 Appendix A.2 CRC-32C vectors,
@@ -422,6 +432,10 @@ rem ICM message row.
 call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
+rem port readings and the poll are pure, driven over a modelled machine
+rem whose P14s half is the captured configuration space (39-A.5).
+call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
