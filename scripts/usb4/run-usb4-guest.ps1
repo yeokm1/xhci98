@@ -527,12 +527,13 @@ try {
     # survives the shell that launched it.
     $bat = Join-Path $runDir "launch-$Tag.cmd"
     $out = Join-Path $runDir "qemu-$Tag.out"
+    $cmdFile = Join-Path $runDir 'qemu.cmdline'
     # Every file written here is itself, as the disks are.
-    foreach ($f in @($pidFile, $bat, $out, $dbg, $ser, $trc, $runJson)) { Assert-SoleFile $f 'an output file' }
+    foreach ($f in @($pidFile, $bat, $out, $cmdFile, $dbg, $ser, $trc, $runJson)) { Assert-SoleFile $f 'an output file' }
     if (Test-Path $pidFile) { Remove-Item $pidFile -Force }
     $batText = "@echo off`r`nset `"PATH=$emuBin;%PATH%`"`r`ncd /d `"$runDir`"`r`n$cmdline > `"$out`" 2>&1`r`n"
     [System.IO.File]::WriteAllText($bat, $batText, [System.Text.Encoding]::ASCII)
-    Set-Content -Path (Join-Path $runDir 'qemu.cmdline') -Value $cmdline -Encoding ASCII
+    Set-Content -Path $cmdFile -Value $cmdline -Encoding ASCII
     $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
         CommandLine = "cmd.exe /c `"$bat`""; CurrentDirectory = $runDir }
     if ($r.ReturnValue -ne 0) { throw "Win32_Process.Create returned $($r.ReturnValue)" }
