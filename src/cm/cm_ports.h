@@ -85,7 +85,8 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
  * `devices` re-announced devices one ordinary command (the route query)
  * and one approve, each over 1 + `retries` attempts of `cmdMs` and
  * `approveMs`. Held to CM_PORTS_HOLD_MAX_MS, so no timeout can overflow;
- * a bound that reaches the cap is the cap, never less.
+ * the cap is far above any bound the client's own limits allow (sixteen
+ * devices at the longest timeouts come to about two hours).
  */
 typedef struct _CM_PORTS_RESUME {
     ULONG ReadyMs;
@@ -101,7 +102,7 @@ typedef struct _CM_PORTS_RESUME {
 
 #define CM_PORTS_HOLD_EXTRA_MS      10000UL
 #define CM_PORTS_HOLD_PLATFORM_MS   5000UL
-#define CM_PORTS_HOLD_MAX_MS        1800000UL
+#define CM_PORTS_HOLD_MAX_MS        86400000UL  /* a day: saturation only */
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
 
 #endif /* CM_PORTS_H */

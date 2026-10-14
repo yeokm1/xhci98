@@ -434,12 +434,10 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
 {
     PVOID now[CM_SNAP_MAX];
     ULONG isNew[CM_SNAP_MAX];
-    ULONG filtered[CM_SNAP_MAX];
     ULONG count;
+    ULONG fresh;
     ULONG i;
-    ULONG j;
     ULONG attach;
-    ULONG unfiltered;
     KIRQL irql;
     NTSTATUS status;
 
@@ -458,8 +456,8 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
     for (i = 0; i < count; i++) {
         now[i] = (PVOID)relations->Objects[i];
     }
-    (VOID)CmPortsNewPdos((PVOID const *)filter->Snap, filter->SnapCount,
-                         (PVOID const *)now, count, isNew);
+    fresh = CmPortsNewPdos((PVOID const *)filter->Snap, filter->SnapCount,
+                           (PVOID const *)now, count, isNew);
 
     /* Whether this answer is one an active bridge with safe eject sees:
      * read before the baseline below can make the bridge active. */
@@ -469,22 +467,12 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
     KeReleaseSpinLock(&cmRegLock, irql);
 
     for (i = 0; i < count; i++) {
-        /* A PDO already reported keeps what it had: a child filter or
-         * none. */
-        filtered[i] = 0;
-        for (j = 0; j < filter->SnapCount && !isNew[i]; j++) {
-            if (filter->Snap[j] == now[i]) {
-                filtered[i] = filter->SnapFiltered[j];
-            }
-        }
         if (!isNew[i] || !attach) {
             continue;
         }
         status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i]);
         KeAcquireSpinLock(&cmRegLock, &irql);
         if (NT_SUCCESS(status)) {
-            filtered[i] = 1;
-            filter->ChildLive++;
             cmRegAttached++;
         } else if (status == STATUS_DEVICE_BUSY) {
             cmRegSkipped++;
@@ -493,21 +481,21 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
         }
         KeReleaseSpinLock(&cmRegLock, irql);
     }
-    unfiltered = 0;
+
+    /* The snapshot is replaced under the lock, since the eject's
+     * eligibility (cmEjectReady) reads it from the child's removal. A
+     * changed population starts a new generation, which invalidates an
+     * eject posted against the old one. */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (fresh != 0 || count != filter->SnapCount) {
+        filter->RelGen++;
+    }
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
-        filter->SnapFiltered[i] = filtered[i];
-        if (!filtered[i]) {
-            unfiltered++;
-        }
     }
     filter->SnapCount = count;
-
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    filter->Unfiltered = unfiltered + (relations != NULL &&
-                                       relations->Count > CM_SNAP_MAX
-                                           ? relations->Count - CM_SNAP_MAX
-                                           : 0);
+    filter->SnapTruncated = (ULONG)(relations != NULL &&
+                                    relations->Count > CM_SNAP_MAX);
     if (filter->Published && !filter->Gone && !filter->Baseline) {
         filter->Baseline = 1;
         cmRegRecompute();
@@ -560,14 +548,38 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
 }
 
 /*
- * A child filter's device has been removed (its REMOVE_DEVICE already
- * passed down and finished below): `ejected` when that removal followed a
- * query-remove, not a surprise removal. The bridge counts its live child
- * stacks; once none is left and no device it reported is without a child
- * filter (the baseline's, which cannot be watched), a port on which an
- * orderly removal was seen is posted to the owning domain - so the
- * per-port entry runs only after every function behind the port has
- * finished its removal (record 22 section 10.4). PASSIVE_LEVEL.
+ * Whether every function behind a bridge is without a device stack: each
+ * PDO its last BusRelations reported has nothing attached (an eject, a
+ * disable or no driver removed or never built its stack), and that answer
+ * was not truncated. Whatever put a stack back - a re-enable, a driver
+ * installed - shows as an attached device, so no state is remembered per
+ * PDO. The snapshot's PDOs are those pci.sys still reports, so they are
+ * not yet deleted. Under the lock.
+ */
+static BOOLEAN cmEjectReady(PCM_FILTER bridge)
+{
+    ULONG i;
+
+    if (!bridge->Published || bridge->Gone || bridge->SnapTruncated) {
+        return FALSE;
+    }
+    for (i = 0; i < bridge->SnapCount; i++) {
+        if (((PDEVICE_OBJECT)bridge->Snap[i])->AttachedDevice != NULL) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/*
+ * A child filter's device has been removed: its REMOVE_DEVICE completed
+ * below and the filter detached from the PDO. `ejected` when that removal
+ * followed a query-remove, not a surprise removal. Once no function behind
+ * the port has a stack (cmEjectReady), a port on which an orderly removal
+ * was seen is posted to the owning domain with the bridge's population
+ * generation, so record 22's per-port entry runs only after every
+ * function behind the port has finished its removal, and never against a
+ * population that changed since (section 10.4). PASSIVE_LEVEL.
  */
 VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
 {
@@ -580,19 +592,17 @@ VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (bridge->ChildLive != 0) {
-        bridge->ChildLive--;
-    }
     if (ejected) {
         bridge->EjectSeen = 1;
     }
     d = bridge->Owner;
-    if (bridge->EjectSeen && bridge->ChildLive == 0 &&
-        bridge->Unfiltered == 0 && bridge->Published && !bridge->Gone &&
-        d != NULL && bridge->OwnerIndex < d->Reenum.Members) {
+    if (bridge->EjectSeen && cmEjectReady(bridge) && d != NULL &&
+        bridge->OwnerIndex < d->Reenum.Members) {
         bridge->EjectSeen = 0;
         d->Reenum.EjectPending |= 1UL << bridge->OwnerIndex;
         d->Reenum.Port[bridge->OwnerIndex].Flags |= CM_PORT_EJECTED;
+        d->Reenum.Port[bridge->OwnerIndex].EjectSerial = bridge->Serial;
+        d->Reenum.Port[bridge->OwnerIndex].EjectGen = bridge->RelGen;
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -910,11 +920,17 @@ static ULONG cmBusIds(ULONG bridge, PULONG ids, ULONG room)
                 return room + 1;
             }
             ids[n++] = id;
-            if (fn == 0 &&
-                (!cmCfgRead(NULL, XHCI_TBT_BDF(bus, dev, 0),
-                            XHCI_TBT_CFG_HEADER, &hdr) ||
-                 ((hdr >> 16) & XHCI_TBT_HDR_MF) == 0)) {
-                break;
+            if (fn == 0) {
+                /* A header that cannot be read leaves functions 1 to 7
+                 * unknown: the inventory is incomplete, not single. */
+                if (!cmCfgRead(NULL, XHCI_TBT_BDF(bus, dev, 0),
+                               XHCI_TBT_CFG_HEADER, &hdr) ||
+                    hdr == 0xFFFFFFFFUL) {
+                    return room + 1;
+                }
+                if (((hdr >> 16) & XHCI_TBT_HDR_MF) == 0) {
+                    break;
+                }
             }
         }
     }
@@ -923,9 +939,9 @@ static ULONG cmBusIds(ULONG bridge, PULONG ids, ULONG room)
 
 /*
  * Section 6.1 on one member: the vanished children removed (tunnel down
- * and RESYNC), then Reenumerate_DevNode.
+ * and RESYNC), then Reenumerate_DevNode. TRUE when that succeeded.
  */
-static VOID cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
+static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
 {
     PCM_REENUM r;
     ULONG bridge;
@@ -945,7 +961,7 @@ static VOID cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
     if (bridge == 0) {
         r->CallFailures++;
         CmLogNote(nhi, "cm.reenum.9x.no-devnode", r->Port[i].Bdf);
-        return;
+        return FALSE;
     }
     if (removeVanished) {
         idCount = cmBusIds(r->Port[i].Bdf, ids, CM_BUS_FUNCTIONS);
@@ -988,6 +1004,7 @@ static VOID cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
         r->CallFailures++;
     }
     CmLogNote(nhi, "cm.reenum.9x.reenumerate", (r->Port[i].Bdf << 8) | cr);
+    return (BOOLEAN)(cr == CMG_CR_SUCCESS);
 }
 
 /*
@@ -1086,11 +1103,10 @@ static VOID cmAskBaselines(PCM_NHI nhi)
             serial = f->Serial;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
-        if (serial != 0) {
+        if (serial != 0 && cmInvalidate(nhi, i, FALSE)) {
+            /* Recorded once asked, so a failed call is asked again. */
             r->Port[i].AskedSerial = serial;
-            if (cmInvalidate(nhi, i, FALSE)) {
-                CmLogNote(nhi, "cm.reenum.baseline-asked", r->Port[i].Bdf);
-            }
+            CmLogNote(nhi, "cm.reenum.baseline-asked", r->Port[i].Bdf);
         }
     }
 }
@@ -1116,13 +1132,17 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
             }
             continue;
         }
-        r->Port[i].Missed = 0;
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
+                /* Lost its filter or its exclusivity since it was read
+                 * active: owed when it is active again. */
                 r->CallFailures++;
+                r->Port[i].Missed = 1;
             }
         } else if (r->Route == CM_ROUTE_CONFIGMG) {
-            cmCfgmgMember(nhi, i, removeVanished);
+            if (!cmCfgmgMember(nhi, i, removeVanished)) {
+                r->Port[i].Missed = 1;
+            }
         }
     }
 }
@@ -1388,24 +1408,44 @@ VOID CmReenumService(PCM_NHI nhi)
 {
     PCM_REENUM r;
     KIRQL irql;
+    PCM_FILTER f;
     ULONG pending;
+    ULONG stale;
     ULONG i;
 
     r = &nhi->Reenum;
     if (!r->Listed) {
         return;
     }
+    stale = 0;
     cmCfgmgLate(nhi);
+    /* Each eject is checked again at the hand-off, under the lock: the
+     * same publication of the bridge, still this domain's, the same
+     * population, and still no function with a stack behind it. One that
+     * no longer holds is dropped and logged; the hook is called after the
+     * lock is released. */
     KeAcquireSpinLock(&cmRegLock, &irql);
     pending = r->EjectPending;
     r->EjectPending = 0;
     for (i = 0; i < r->Members; i++) {
-        if (pending & (1UL << i)) {
-            r->Port[i].Flags &= ~CM_PORT_EJECTED;
+        if ((pending & (1UL << i)) == 0) {
+            continue;
+        }
+        r->Port[i].Flags &= ~CM_PORT_EJECTED;
+        f = cmRegFind(r->Port[i].Bdf);
+        if (f == NULL || f->Owner != nhi ||
+            f->Serial != r->Port[i].EjectSerial ||
+            f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
+            pending &= ~(1UL << i);
+            stale |= 1UL << i;
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     for (i = 0; i < r->Members; i++) {
+        if (stale & (1UL << i)) {
+            r->EjectsStale++;
+            CmLogNote(nhi, "cm.reenum.eject.stale", r->Port[i].Bdf);
+        }
         if ((pending & (1UL << i)) == 0) {
             continue;
         }
@@ -1424,15 +1464,21 @@ VOID CmReenumService(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER && r->Reenum != 0) {
         cmAskBaselines(nhi);
     }
-    /* A change skipped while a member was not active, now that it is. */
+    /* A change skipped while a member was not active, now that it is;
+     * the debt stays until a call is actually made. */
     for (i = 0; i < r->Members && r->Reenum != 0; i++) {
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE)) {
-            r->Port[i].Missed = 0;
-            CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
             if (r->Route == CM_ROUTE_FILTER) {
-                (VOID)cmInvalidate(nhi, i, TRUE);
+                if (cmInvalidate(nhi, i, TRUE)) {
+                    r->Port[i].Missed = 0;
+                }
             } else if (r->Route == CM_ROUTE_CONFIGMG) {
-                cmCfgmgMember(nhi, i, TRUE);
+                if (cmCfgmgMember(nhi, i, TRUE)) {
+                    r->Port[i].Missed = 0;
+                }
+            }
+            if (!r->Port[i].Missed) {
+                CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
             }
         }
     }
@@ -1460,10 +1506,11 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     r->Suspends++;
-    /* Every synchronous stage of the client's resume (cm_ports.h): the
-     * devices in the table now are those the reconciliation expects
-     * re-announced and approved, and one more for a device plugged during
-     * the sleep. */
+    /* Every synchronous stage of the client's resume (cm_ports.h), with
+     * every device the client's table can hold re-announced and approved
+     * (a dock plugged during the sleep can add several): the watchdog is
+     * the safety net for a client that never answers, not a deadline for
+     * one still working, so it errs long. */
     profile = nhi->Icm.Profile;
     resume.ReadyMs = nhi->Icm.CmdTimeoutMs;
     resume.ReadyRetries = 0;
@@ -1476,7 +1523,7 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     resume.HostPollTries = TBT_ICM_HOSTPOLL_TRIES;
     resume.HostPollMs = TBT_ICM_HOSTPOLL_TIMEOUT_MS;
     resume.ReconcileMs = TBT_ICM_RECONCILE_MAX_MS;
-    resume.Devices = TbtIcmDeviceCount(&nhi->Icm) + 1;
+    resume.Devices = TBT_ICM_MAX_DEVICES;
     resume.CmdMs = nhi->Icm.CmdTimeoutMs;
     resume.ApproveMs = nhi->Icm.ApproveTimeoutMs;
     resume.Retries = nhi->Icm.Retries;

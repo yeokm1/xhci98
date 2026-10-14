@@ -241,17 +241,15 @@ typedef struct _CM_FILTER {
     ULONG TimerArmed;
     KTIMER HoldTimer;
     KDPC HoldDpc;
-    /* The snapshot of section 7.4: the PnP dispatch alone touches it. */
+    /* The snapshot of section 7.4: written by the PnP dispatch alone,
+     * under the registration list's lock (the eject's eligibility reads
+     * it from a child's removal). */
     ULONG SnapCount;
     PVOID Snap[CM_SNAP_MAX];
-    ULONG SnapFiltered[CM_SNAP_MAX];    /* a child filter was attached   */
-    /* Safe eject's per-port accounting, under the registration list's
-     * lock: child stacks alive, reported devices without a child filter
-     * (as of the last BusRelations), and an orderly removal seen since the
-     * last eject was posted. */
-    ULONG ChildLive;
-    ULONG Unfiltered;
-    ULONG EjectSeen;
+    ULONG SnapTruncated;    /* the last answer held more than CM_SNAP_MAX  */
+    ULONG RelGen;           /* bumped when the reported population changes */
+    ULONG EjectSeen;        /* an orderly child removal since the last
+                               eject was posted                           */
 
     /* ---- child ---- */
     struct _CM_FILTER *Bridge;

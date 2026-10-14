@@ -253,18 +253,27 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         KeAcquireSpinLock(&filter->Lock, &irql);
         filter->Removing = 1;
         KeReleaseSpinLock(&filter->Lock, irql);
+        if (child) {
+            /* The child waits for the removal to finish below, detaches,
+             * and only then counts the port's eject (CmRegChildRemoved),
+             * so it is posted once this function's stack is gone. */
+            status = CmForwardSync(&filter->Common, irp);
+            cmFilterRelease(filter);
+            (VOID)KeWaitForSingleObject(&filter->Drained, Executive,
+                                        KernelMode, FALSE, NULL);
+            IoDetachDevice(filter->Common.Lower);
+            CmRegChildRemoved(filter,
+                              (BOOLEAN)(filter->QueryRemoved &&
+                                        !filter->SurpriseRemoved));
+            (VOID)CmCompleteIrp(irp, status, irp->IoStatus.Information);
+            IoDeleteDevice(filter->Common.Self);
+            return status;
+        }
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(filter->Common.Lower, irp);
         cmFilterRelease(filter);
         (VOID)KeWaitForSingleObject(&filter->Drained, Executive, KernelMode,
                                     FALSE, NULL);
-        if (child) {
-            /* After the removal finished below: the port's eject is posted
-             * only once every function behind it is removed. */
-            CmRegChildRemoved(filter,
-                              (BOOLEAN)(filter->QueryRemoved &&
-                                        !filter->SurpriseRemoved));
-        }
         IoDetachDevice(filter->Common.Lower);
         IoDeleteDevice(filter->Common.Self);
         return status;

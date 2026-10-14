@@ -325,8 +325,13 @@ static void test_bound(void)
              "nothing but the platform's 5 s and the 10 s");
     CHECK_EQ(bound(0xFFFFFFFFUL, 0xFFFFFFFFUL, 0, 0, 0, 0), CM_PORTS_HOLD_MAX_MS,
              "a huge timeout is held to the cap, without overflow");
-    CHECK_EQ(bound(60000, 9, 16, 60000, 60000, 9), CM_PORTS_HOLD_MAX_MS,
-             "sixteen devices at the longest timeouts reach the cap");
+    /* Sixteen devices at the longest timeouts with the client's three
+     * retries: not saturated, every term counted (the cap is a day). */
+    CHECK_EQ(bound(60000, 3, 16, 60000, 60000, 3),
+             5000 + 4 * 60000 + 5000 + 5000 + 16 * (4 * 60000 + 4 * 60000) + 10000,
+             "sixteen devices at the longest timeouts are counted in full");
+    CHECK(bound(60000, 3, 16, 60000, 60000, 3) < CM_PORTS_HOLD_MAX_MS,
+          "and stay below the cap");
     r.ReadyMs = 0xFFFFFFFFUL;
     r.ReadyRetries = 0xFFFFFFFFUL;
     r.HostPollTries = 0xFFFFFFFFUL;

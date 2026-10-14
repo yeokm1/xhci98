@@ -154,8 +154,10 @@ typedef struct _CM_REENUM_PORT {
     ULONG AskedSerial;      /* NT: the filter publication a baseline was
                                last asked of                              */
     ULONG Missed;           /* a tunnel change came while the member was
-                               exclusive but not active: re-enumerated
-                               once it is                                 */
+                               exclusive but not active, or its call could
+                               not be made: re-enumerated once it is      */
+    ULONG EjectSerial;      /* the eject's bridge publication and          */
+    ULONG EjectGen;         /* population generation, checked at hand-off */
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -255,6 +257,7 @@ typedef struct _CM_REENUM {
     ULONG Marked;           /* 98: DN_REMOVABLE set                       */
     ULONG MarkFailures;
     ULONG Ejects;           /* eject notifications served                 */
+    ULONG EjectsStale;      /* dropped at hand-off: the port changed      */
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);
