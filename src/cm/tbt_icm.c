@@ -181,6 +181,21 @@ static BOOLEAN tbtIcmTrReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
     return TRUE;
 }
 
+/* Record 21 section 1.4.6: an all-zero UUID, or a name block that runs
+ * past its frame, is a frame read with the wrong layout. */
+static BOOLEAN tbtIcmAnnounceSane(const TBT_ICM_ANNOUNCE *a)
+{
+    if ((a->Uuid[0] | a->Uuid[1] | a->Uuid[2] | a->Uuid[3]) == 0) {
+        return FALSE;
+    }
+    return (BOOLEAN)((a->Names.Present & TBT_ICM_NAMES_MALFORMED) == 0);
+}
+
+static BOOLEAN tbtIcmRouteZero(const TBT_ROUTE *r)
+{
+    return (BOOLEAN)((r->Hi & TBT_ROUTE_HI_TOPOLOGY) == 0 && r->Lo == 0);
+}
+
 static VOID tbtIcmAnnounceCommon(const ULONG *dw, PTBT_ICM_ANNOUNCE out)
 {
     ULONG i;
@@ -219,7 +234,7 @@ static BOOLEAN tbtIcmFrConnected(const ULONG *dw, ULONG words,
     out->Link = TBT_ICM_LI_LINK(out->LinkInfo);
     out->Depth = TBT_ICM_LI_DEPTH(out->LinkInfo);
     TbtIcmDecodeNames(dw + 6, words - 6, &out->Names);
-    return TRUE;
+    return tbtIcmAnnounceSane(out);
 }
 
 /*
@@ -243,7 +258,7 @@ static BOOLEAN tbtIcmTrConnected(const ULONG *dw, ULONG words,
     out->Link = TbtRouteLevel(&out->Route, 0);
     out->Depth = TbtRouteDepth(&out->Route);
     TbtIcmDecodeNames(dw + 8, words - 8, &out->Names);
-    return TRUE;
+    return (BOOLEAN)(!tbtIcmRouteZero(&out->Route) && tbtIcmAnnounceSane(out));
 }
 
 /* ICM 4.5 [obs] T:21087 `0x01000004 0x00110000`; Linux struct
@@ -281,7 +296,7 @@ static BOOLEAN tbtIcmTrDisconnected(const ULONG *dw, ULONG words,
     out->RouteValid = TRUE;
     out->Link = TbtRouteLevel(&out->Route, 0);
     out->Depth = TbtRouteDepth(&out->Route);
-    return TRUE;
+    return (BOOLEAN)!tbtIcmRouteZero(&out->Route);
 }
 
 /* ICM 4.3 [obs] T:34153 `0x00000004 0xa0211100 0x003d0efc 0xffffffff
@@ -312,6 +327,21 @@ static ULONG tbtIcmTrApprove(const TBT_ICM_DEVICE *dev, PULONG dw)
     dw[6] = dev->Route.Lo;
     dw[7] = dev->ConnectionId & 0xFFUL;
     return 8;
+}
+
+/* Linux icm.c icm_icl_driver_ready reads the TR structure but takes only
+ * the protocol version from it; no security level or boot-ACL count is
+ * read on this row (record 21 section 1.4.4). UNCAPTURED. */
+static BOOLEAN tbtIcmIclReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
+{
+    if (words < 1) {
+        return FALSE;
+    }
+    tbtIcmReadyHeader(dw, words, out);
+    if (words >= 2) {
+        out->ProtocolVersion = ((dw[1] >> 16) >> 4) & 0x7UL;
+    }
+    return TRUE;
 }
 
 /*
@@ -359,7 +389,7 @@ const TBT_ICM_PROFILE TbtIcmProfileIceLake = {
     TBT_ICM_CAP_ROUTE_IN_EVENTS | TBT_ICM_CAP_FORCE_POWER |
         TBT_ICM_CAP_EXTRA_PACKETS,
     20000UL, TBT_ICM_RETRIES,
-    tbtIcmTrReady, tbtIcmTrConnected, tbtIcmTrDisconnected, NULL
+    tbtIcmIclReady, tbtIcmTrConnected, tbtIcmTrDisconnected, NULL
 };
 
 /* ====================================================================== */
@@ -577,7 +607,8 @@ BOOLEAN TbtIcmNextAction(PTBT_ICM icm, PTBT_ICM_ACTION out)
         icm->ResyncPending = FALSE;
         tbtIcmZero(out, sizeof(*out));
         out->Kind = TBT_ICM_ACT_RESYNC;
-        out->Why = TBT_ICM_WHY_LOST;
+        out->Why = icm->ResyncWhy != 0 ? icm->ResyncWhy : TBT_ICM_WHY_LOST;
+        icm->ResyncWhy = 0;
         out->Slot = TBT_ICM_NO_SLOT;
         return TRUE;
     }
@@ -778,9 +809,25 @@ static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
 {
     tbtIcmPurgeQueued(icm, g);
     if (tbtIcmDropSubtree(icm, g, TBT_ICM_WHY_DISCONNECTED, TRUE) == 0) {
+        /* Record 21 section 1.4.6: some device of this domain is gone;
+         * the tunnel-down sequence runs for every port of its set. */
+        icm->ResyncPending = TRUE;
+        icm->ResyncWhy = TBT_ICM_WHY_UNMATCHED;
         icm->Counters.DisconnectUnknown++;
         tbtIcmLog(icm, "tbt.icm.disconnect-unknown",
                   g->RouteValid ? g->Route.Lo : TBT_ICM_LI_MAKE(g->Link, g->Depth));
+    }
+}
+
+/* Record 21 section 1.4.6: a frame a row cannot read goes to the log
+ * whole - it is the capture that row is waiting for. */
+static VOID tbtIcmLogRaw(PTBT_ICM icm, const TBT_FRAME *f)
+{
+    ULONG i;
+
+    tbtIcmLog(icm, "tbt.icm.raw-words", f->Words);
+    for (i = 0; i < f->Words; i++) {
+        tbtIcmLog(icm, "tbt.icm.raw", f->Dw[i]);
     }
 }
 
@@ -802,6 +849,7 @@ static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
         if (!icm->Profile->DecodeConnected(f->Dw, f->Words, &a)) {
             icm->Counters.EventsMalformed++;
             tbtIcmLog(icm, "tbt.icm.connected-malformed", f->Words);
+            tbtIcmLogRaw(icm, f);
             return;
         }
         icm->SettleExtend = TRUE;
@@ -814,7 +862,8 @@ static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
         icm->Counters.EventsDisconnected++;
         if (!icm->Profile->DecodeDisconnected(f->Dw, f->Words, &g)) {
             icm->Counters.EventsMalformed++;
-            tbtIcmLog(icm, "tbt.icm.disconnected-malformed", f->Words > 1 ? f->Dw[1] : 0);
+            tbtIcmLog(icm, "tbt.icm.disconnected-malformed", f->Words);
+            tbtIcmLogRaw(icm, f);
             return;
         }
         tbtIcmDisconnected(icm, &g);
@@ -1158,6 +1207,7 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
     d = &icm->Devices[slot];
     words = icm->Profile->EncodeApprove(d, req);
     icm->Counters.ApprovalsSent++;
+    d->ApproveFailed = FALSE;
     /* The response repeats the request (ICM 4.3 [obs] T:34154; Linux
      * reads the reply as the request's own structure): every word must
      * match, so a late answer to an earlier connection of the same device
@@ -1176,7 +1226,22 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
     } else if (rc == TBT_E_GONE || !d->InUse) {
         icm->Counters.ApprovalsAbandoned++;
         tbtIcmLog(icm, "tbt.icm.approve-abandoned", slot);
+    } else if (rc == TBT_E_TIMEOUT) {
+        /* Record 21 section 1.4.6: no answer is not proof that no tunnel
+         * exists - the firmware builds it while it processes the request,
+         * before it answers (ICM 4.3 [obs]). The outcome is unknown until
+         * an announcement, a disconnect or the reconciliation settles it,
+         * no second approve is sent meanwhile, and the tunnel-up sequence
+         * runs anyway (the driver re-enumerates the whole domain for it). */
+        d->ApproveUnknown = TRUE;
+        icm->Counters.ApprovalsUnknown++;
+        tbtIcmLog(icm, "tbt.icm.approve-unknown", slot);
+        tbtIcmQueueAction(icm, TBT_ICM_ACT_TUNNEL_UP, TBT_ICM_WHY_APPROVE_UNKNOWN,
+                          slot, FALSE);
     } else {
+        /* The error flag (or a ring that would not send): unapproved,
+         * kept; the next announcement tries again (record 21 5.3). */
+        d->ApproveFailed = TRUE;
         icm->Counters.ApprovalsFailed++;
         tbtIcmLog(icm, "tbt.icm.approve-failed", (ULONG)(-rc));
     }
@@ -1237,14 +1302,61 @@ static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot)
     tbtIcmApprove(icm, slot);
 }
 
+/* The route, where the row asks for it; FALSE (logged and counted) when
+ * the request failed or the device left meanwhile. */
+static BOOLEAN tbtIcmRouteOk(PTBT_ICM icm, ULONG slot)
+{
+    LONG rc;
+
+    if (!tbtIcmAsksRoute(icm) || icm->Devices[slot].RouteValid) {
+        return TRUE;
+    }
+    rc = tbtIcmRoute(icm, slot);
+    if (rc == TBT_OK && icm->Devices[slot].InUse) {
+        return TRUE;
+    }
+    if (rc != TBT_E_GONE && icm->Devices[slot].InUse) {
+        icm->Counters.RouteFailures++;
+        tbtIcmLog(icm, "tbt.icm.route-failed", (ULONG)(-rc));
+    }
+    return FALSE;
+}
+
+/*
+ * After the route: an announced-approved device's tunnel is up; an
+ * unapproved one goes to the policy - unless its route failed, which
+ * leaves it unrouted and unapproved, kept, for the next announcement to
+ * retry (record 21 section 5.5).
+ */
+static VOID tbtIcmSettle(PTBT_ICM icm, ULONG slot, BOOLEAN routed)
+{
+    PTBT_ICM_DEVICE d;
+
+    d = &icm->Devices[slot];
+    if (!d->InUse) {
+        return;
+    }
+    if (d->Approved) {
+        /* Tunnelled before this driver bound it, or by an approve whose
+         * answer was lost (record 21 section 6.5). */
+        tbtIcmQueueAction(icm, TBT_ICM_ACT_TUNNEL_UP, TBT_ICM_WHY_ANNOUNCED,
+                          slot, FALSE);
+        return;
+    }
+    if (routed) {
+        tbtIcmPolicy(icm, slot);
+    }
+}
+
 static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
 {
     ULONG i;
     ULONG slot;
     BOOLEAN byRoute;
     BOOLEAN same;
+    BOOLEAN recovery;
+    BOOLEAN routed;
     PTBT_ICM_DEVICE d;
-    LONG rc;
 
     byRoute = tbtIcmByRoute(icm);
     if (a->Rejected) {
@@ -1254,10 +1366,6 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
         return;
     }
 
-    /* A known UUID still in the same place and the same approval state is
-     * a refresh: the resume case (ICM 6.5 [obs]; Linux icm.c
-     * icm_fr_device_connected compares depth, physical port and approval,
-     * __icm_tr_device_connected the route and approval). */
     slot = TBT_ICM_NO_SLOT;
     for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
         if (icm->Devices[i].InUse &&
@@ -1268,34 +1376,50 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
     }
     if (slot != TBT_ICM_NO_SLOT) {
         d = &icm->Devices[slot];
+        /* The same place: Linux icm.c icm_fr_device_connected compares
+         * depth and physical port, __icm_tr_device_connected the route. */
         if (byRoute) {
             same = (BOOLEAN)(d->RouteValid && TbtRouteEqual(&d->Route, &a->Route));
         } else {
             same = (BOOLEAN)(d->Depth == a->Depth &&
                              tbtIcmPhyPort(d->Link) == tbtIcmPhyPort(a->Link));
         }
-        if (same && d->Approved == a->Approved) {
-            BOOLEAN relink;
-
-            relink = (BOOLEAN)(!byRoute && d->Link != a->Link);
+        /* An entry needing recovery (record 21 section 5.3): unrouted by
+         * a failed route request, an approve outcome unknown, or
+         * unapproved after an approve answered with the error flag. */
+        recovery = (BOOLEAN)(d->ApproveUnknown || d->ApproveFailed ||
+                             (!d->RouteValid && tbtIcmAsksRoute(icm)));
+        if (same && (recovery || d->Approved == a->Approved)) {
+            if (!byRoute && d->Link != a->Link) {
+                /* Enumerated through the port's other link: the route
+                 * moved with it (Linux icm.c icm_fr_device_connected). */
+                d->RouteValid = FALSE;
+            }
             d->Key = a->Key;
             d->ConnectionId = a->ConnectionId;
             d->Boot = a->Boot;
             d->Link = a->Link;
+            d->EventFlags = a->EventFlags;
             d->Stale = FALSE;
             icm->Counters.Refreshes++;
             tbtIcmLog(icm, "tbt.icm.refresh", slot);
-            /* Enumerated through the port's other link: the route moved
-             * with it (Linux icm.c icm_fr_device_connected). */
-            if (relink) {
-                d->RouteValid = FALSE;
-                if (tbtIcmAsksRoute(icm) && tbtIcmRoute(icm, slot) != TBT_OK) {
-                    icm->Counters.RouteFailures++;
-                    tbtIcmLog(icm, "tbt.icm.route-failed", a->LinkInfo);
-                }
+            if (!recovery && d->RouteValid) {
+                /* The resume case (ICM 6.5 [obs]): nothing else. */
+                return;
             }
-            if (d->InUse && !d->Approved) {
-                tbtIcmPolicy(icm, slot);
+            routed = tbtIcmRouteOk(icm, slot);
+            if (!d->InUse) {
+                return;
+            }
+            if (d->ApproveUnknown || d->ApproveFailed || !d->Approved) {
+                /* This announcement settles the approval state. */
+                d->ApproveUnknown = FALSE;
+                d->ApproveFailed = FALSE;
+                if (d->Approved == a->Approved && d->Approved) {
+                    return;
+                }
+                d->Approved = a->Approved;
+                tbtIcmSettle(icm, slot, routed);
             }
             return;
         }
@@ -1331,31 +1455,11 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
     d->Serial = icm->NextSerial;
     tbtIcmLog(icm, "tbt.icm.connected", (slot << 16) | a->LinkInfo);
 
-    /*
-     * The route, where the row must ask for it. A failure keeps the entry
-     * without a route (orchestrator decision 2026-10-15, owner to
-     * confirm): on Alpine Ridge the route is for the log only - approve
-     * carries the UUID, key and id - and dropping the entry of a
-     * tunnelled device would lose its tunnel-down.
-     */
-    if (tbtIcmAsksRoute(icm)) {
-        rc = tbtIcmRoute(icm, slot);
-        if (rc == TBT_E_GONE || !d->InUse) {
-            return;
-        }
-        if (rc != TBT_OK) {
-            icm->Counters.RouteFailures++;
-            tbtIcmLog(icm, "tbt.icm.route-failed", (ULONG)(-rc));
-        }
-    }
-
-    if (d->Approved) {
-        /* Tunnelled before this driver bound it (record 21 section 6.5). */
-        tbtIcmQueueAction(icm, TBT_ICM_ACT_TUNNEL_UP, TBT_ICM_WHY_ANNOUNCED,
-                          slot, FALSE);
-        return;
-    }
-    tbtIcmPolicy(icm, slot);
+    /* The route where the row asks for it (AR get route, FR the topology
+     * query). A failure keeps the entry, unrouted and, if the firmware has
+     * not approved it, unapproved (record 21 section 5.5). */
+    routed = tbtIcmRouteOk(icm, slot);
+    tbtIcmSettle(icm, slot, routed);
 }
 
 static VOID tbtIcmDrainQueue(PTBT_ICM icm, ULONG budget)
@@ -1436,6 +1540,23 @@ LONG TbtIcmMailbox(PTBT_ICM icm, ULONG code, ULONG data)
 /* Bind, resume, suspend, unbind                                          */
 /* ====================================================================== */
 
+/* A failure after activation (record 21 section 1.4.2): this driver's
+ * rings stopped - nothing of theirs is pending afterwards, so the common
+ * buffer may be freed - its queued work dropped, tunnels untouched. The
+ * session stays recorded, so the stop sends 0x07 only if driver ready was
+ * sent. */
+static VOID tbtIcmFail(PTBT_ICM icm)
+{
+    if (icm->Started) {
+        TbtRingStop(icm->Ring);
+    }
+    icm->Started = FALSE;
+    icm->Bound = FALSE;
+    icm->InWait = FALSE;
+    icm->QueueCount = 0;
+    icm->Failed = TRUE;
+}
+
 /* Undo exactly the stages reached: the rings if they started, mailbox
  * 0x07 if driver ready was sent (orchestrator decision C). No tunnel is
  * touched, and nothing of the rings' is pending afterwards. */
@@ -1500,7 +1621,7 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
     if (!resume && (icm->Profile->Caps & TBT_ICM_CAP_GET_MODE) != 0) {
         rc = TbtIcmMailbox(icm, TBT_ICM_MBOX_ALLOW_ALL, 0);
         if (rc != TBT_OK) {
-            tbtIcmTearDown(icm);
+            tbtIcmFail(icm);
             return rc;
         }
     }
@@ -1508,7 +1629,7 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
     icm->Session = TRUE;
     rc = tbtIcmAnnounceAll(icm, resume);
     if (rc != TBT_OK) {
-        tbtIcmTearDown(icm);
+        tbtIcmFail(icm);
         return rc;
     }
     icm->Bound = TRUE;
@@ -1642,7 +1763,7 @@ LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes)
 
 LONG TbtIcmResume(PTBT_ICM icm)
 {
-    if (icm->Ring->Va == NULL || icm->Started) {
+    if (icm->Ring->Va == NULL || icm->Started || icm->Failed) {
         return TBT_E_STOPPED;
     }
     return tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,

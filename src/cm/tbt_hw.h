@@ -143,6 +143,7 @@ ULONG TbtHwForcePowerValue(ULONG vsCap22, BOOLEAN on);
  * (orchestrator decision C, 2026-10-15). */
 typedef struct _TBT_HW_POWER {
     BOOLEAN ForcePowerSetHere;  /* force power was clear and this driver set it */
+    BOOLEAN FwReadyFailed;      /* the last firmware-ready poll never saw it */
 } TBT_HW_POWER, *PTBT_HW_POWER;
 
 /*
@@ -160,6 +161,10 @@ LONG TbtHwPlatformInit(const TBT_HW_PROFILE *hw,
                        PTBT_HW_POWER power);
 
 /*
+ * NOT CALLED IN THE FIRST CUT: record 21 section 1.4.3 leaves system
+ * suspend with an integrated controller unsupported and sends no LC
+ * mailbox handshake. Kept for Phase 40.
+ *
  * System sleep on a profile with TBT_HW_ICL_POWER while its ICM owns it
  * (Linux pci.c icl_nhi_suspend_noirq, the firmware-suspend branch): the LC
  * mailbox's GO2SX, or GO2SX_NO_WAKE, as Linux pairs them with `wake`.
@@ -171,11 +176,18 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
                           BOOLEAN icmOwned,
                           BOOLEAN wake);
 
-/* Shutdown on a TBT_HW_ICL_POWER profile: force power off as Linux pci.c
- * icl_nhi_shutdown does - but only when `power` says this driver set it;
- * a force power the firmware or the BIOS left on stays on. */
+/* Stop and shutdown on a TBT_HW_ICL_POWER profile: force power off as
+ * Linux pci.c icl_nhi_shutdown does - but only when `power` says this
+ * driver set it, and on an inert instance (`active` FALSE) only where its
+ * firmware-ready poll failed (record 21 section 1.4.2); a force power the
+ * firmware or the BIOS left on stays on. */
 VOID TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
-                           PTBT_HW_POWER power);
+                           PTBT_HW_POWER power, BOOLEAN active);
+
+/* The Apple platform policy's mark (record 21 section 1.4.2 test 1): the
+ * NHI's subsystem vendor 106B. Any IRQL. */
+#define TBT_HW_VENDOR_APPLE     0x106BUL
+BOOLEAN TbtHwIsApple(ULONG subsystemVendorId);
 
 /* The LC mailbox (Linux pci.c icl_nhi_lc_mailbox_cmd and _complete):
  * command and VALID into VS_CAP_19, VS_CAP_18 DONE polled 1 ms apart up to

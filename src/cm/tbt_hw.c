@@ -175,6 +175,7 @@ LONG TbtHwPlatformInit(const TBT_HW_PROFILE *hw,
     if ((v & TBT_ICL_VS_CAP_22_FORCE_POWER) == 0) {
         power->ForcePowerSetHere = TRUE;
     }
+    power->FwReadyFailed = FALSE;
     cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_22, TbtHwForcePowerValue(v, TRUE));
 
     for (i = 0; i < TBT_ICL_FW_READY_POLLS; i++) {
@@ -185,6 +186,7 @@ LONG TbtHwPlatformInit(const TBT_HW_PROFILE *hw,
         host->Sleep(host->Context, TBT_ICL_FW_READY_POLL_MS);
     }
     if (i == TBT_ICL_FW_READY_POLLS) {
+        power->FwReadyFailed = TRUE;
         tbtHwLog(host, "tbt.hw.fw-not-ready", v);
         return TBT_E_TIMEOUT;
     }
@@ -239,7 +241,7 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
 }
 
 VOID TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
-                           PTBT_HW_POWER power)
+                           PTBT_HW_POWER power, BOOLEAN active)
 {
     ULONG v;
 
@@ -247,11 +249,21 @@ VOID TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
         !power->ForcePowerSetHere) {
         return;
     }
+    /* Record 21 section 1.4.2: an inert instance clears it only where its
+     * own firmware-ready poll failed, so nothing came up through it. */
+    if (!active && !power->FwReadyFailed) {
+        return;
+    }
     power->ForcePowerSetHere = FALSE;
     v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_22);
     if (v != 0xFFFFFFFFUL) {
         cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_22, TbtHwForcePowerValue(v, FALSE));
     }
+}
+
+BOOLEAN TbtHwIsApple(ULONG subsystemVendorId)
+{
+    return (BOOLEAN)(subsystemVendorId == TBT_HW_VENDOR_APPLE);
 }
 
 BOOLEAN TbtHwReadHostUuid(const TBT_HW_PROFILE *hw,
@@ -387,8 +399,12 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
     out->FwStatus = fw;
     tbtHwLog(host, "tbt.hw.fw-status", fw);
 
-    /* (d) The interface version: 0 only, record 21 section 5.1 step 2. */
-    if (TBT_HI_CAPS_VERSION(out->Caps) != TBT_HI_VERSION_TBT3) {
+    /* (d) The interface version (record 21 section 1.4.2 test 4): 0 on
+     * Alpine Ridge [obs], below 0x40 on the other rows - this project's
+     * policy, 0x40 being where Linux nhi.c nhi_reset starts resetting. */
+    if (hw->Icm == &TbtIcmProfileAlpineRidge ?
+            TBT_HI_CAPS_VERSION(out->Caps) != TBT_HI_VERSION_TBT3 :
+            TBT_HI_CAPS_VERSION(out->Caps) >= TBT_HI_VERSION_2) {
         tbtHwInert(out, TBT_INERT_NHI_VERSION, host);
         return;
     }

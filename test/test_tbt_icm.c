@@ -608,11 +608,14 @@ static void test_plug_approve_unplug(void)
     CHECK(act[0].LinkDownSent, "the upcall ran first");
     CHECK(!TbtIcmActionLive(&g_icm, &act[0]), "no longer live");
 
-    /* A disconnect for nothing in the table: warned, ignored. */
+    /* A disconnect for nothing in the table (record 21 section 1.4.6):
+     * some device of the domain is gone - every port's tunnel-down. */
     arDisconnected(1, 1, 0);
     idle(200);
     CHECK_EQ(g_icm.Counters.DisconnectUnknown, 1, "counted");
-    CHECK_EQ(actions(act, 8), 0, "no action");
+    CHECK_EQ(actions(act, 8), 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_RESYNC, "the whole domain");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_UNMATCHED, "unmatched");
 }
 
 static void test_policy(void)
@@ -746,10 +749,20 @@ static void test_timeouts_and_errors(void)
     CHECK_EQ(g_fw.Approves, 4, "one try and three retries (ICM 3 [inf])");
     CHECK(g_fake.NowUs - t0 >= 40000000UL, "four 10 s waits");
     CHECK(g_fake.NowUs - t0 < 41000000UL, "and no more");
-    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "failed");
+    CHECK_EQ(g_icm.Counters.ApprovalsUnknown, 1, "outcome unknown (record 21 1.4.6)");
     d = TbtIcmDevice(&g_icm, 0);
-    CHECK(d != NULL && !d->Approved, "left unapproved, kept");
-    CHECK_EQ(actions(act, 4), 0, "no tunnel");
+    CHECK(d != NULL && !d->Approved && d->ApproveUnknown, "kept, unknown");
+    CHECK_EQ(actions(act, 4), 1, "the tunnel-up sequence runs anyway");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_APPROVE_UNKNOWN, "for an unknown outcome");
+    /* Settled by the next announcement: approved = 1, a tunnel up, and no
+     * second approve. */
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(g_fw.Approves, 4, "no further approve");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->Approved && !d->ApproveUnknown, "settled approved");
+    CHECK_EQ(actions(act, 4), 1, "a tunnel up");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_ANNOUNCED, "as announced");
 
     /* The error flag: not retried. */
     setup(GEN_AR, 0, 0);
@@ -762,8 +775,9 @@ static void test_timeouts_and_errors(void)
     CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "failed");
     CHECK_EQ(actions(act, 4), 0, "no tunnel");
 
-    /* Get route never answered: the entry stays, without a route, and the
-     * approve goes ahead (orchestrator decision 2026-10-15). */
+    /* Get route never answered: the entry stays, unrouted and unapproved
+     * (record 21 section 5.5); the next announcement retries the route and
+     * then the approval. */
     setup(GEN_AR, 0, 0);
     CHECK_EQ(start(), TBT_OK, "bind");
     g_fw.RouteMode = MODE_NEVER;
@@ -776,11 +790,27 @@ static void test_timeouts_and_errors(void)
     CHECK_EQ(g_icm.Counters.RouteFailures, 1, "route failure counted");
     d = TbtIcmDevice(&g_icm, 0);
     CHECK(d != NULL && !d->RouteValid, "kept without a route");
-    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "approved all the same");
+    CHECK_EQ(g_fw.Approves, 0, "not approved while unrouted");
+    CHECK_EQ(actions(act, 4), 0, "no tunnel");
+    g_fw.RouteMode = MODE_ANSWER;
+    arConnected(7, 0, 1, 1, kUuid, 0);
+    idle(600);
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->RouteValid, "routed on the next announcement");
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "then approved");
     CHECK_EQ(actions(act, 4), 1, "tunnel up");
 
-    /* Driver ready never answered: the start is refused, rings stopped and
-     * the session it opened closed with 0x07. */
+    /* An announced-approved device whose route fails keeps its tunnel. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.RouteMode = MODE_ERROR;
+    arConnected(6, 1, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(actions(act, 4), 1, "tunnel up without a route");
+
+    /* Driver ready never answered: a failure after activation (record 21
+     * section 1.4.2) - rings stopped at once, 0x07 at the stop since driver
+     * ready was sent. */
     setup(GEN_AR, 0, 0);
     g_fw.ReadyMode = MODE_NEVER;
     t0 = g_fake.NowUs;
@@ -789,10 +819,14 @@ static void test_timeouts_and_errors(void)
     CHECK(g_fake.NowUs - t0 >= 20000000UL, "5 s each");
     CHECK_EQ(g_fake.TxCtrl, 0, "TX stopped");
     CHECK_EQ(g_fake.RxCtrl, 0, "RX stopped");
-    CHECK_EQ(g_fake.MboxCount, 2, "0x23 then 0x07");
+    CHECK_EQ(g_fake.MboxCount, 1, "0x23 only, so far");
+    CHECK(g_icm.Failed, "failed after activation");
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_E_STOPPED, "a failed instance stays idle");
+    TbtIcmUnbind(&g_icm);
+    CHECK_EQ(g_fake.MboxCount, 2, "0x07 at the stop");
     CHECK_EQ(g_fake.MboxLog[1], 0x07, "driver unloads");
     TbtIcmUnbind(&g_icm);
-    CHECK_EQ(g_fake.MboxCount, 2, "a later unbind sends nothing more");
+    CHECK_EQ(g_fake.MboxCount, 2, "a second unbind sends nothing more");
 
     /* Driver ready answered with the error flag. */
     setup(GEN_AR, 0, 0);
@@ -813,6 +847,46 @@ static void test_timeouts_and_errors(void)
     CHECK_EQ(start(), TBT_E_TIMEOUT, "request bit never clears");
     CHECK(g_fake.NowUs - t0 >= 500000UL, "after 500 ms (ICM 2.3 [inf])");
     CHECK(g_fake.NowUs - t0 < 600000UL, "and not much more");
+}
+
+static void test_wrong_layout(void)
+{
+    unsigned long ev[63];
+    TBT_ICM_ANNOUNCE a;
+    TBT_ICM_GONE g;
+
+    /* Record 21 section 1.4.6: an all-zero UUID, a zero route, a name
+     * block running past its frame - each a frame read with the wrong
+     * layout, dropped. */
+    memset(ev, 0, sizeof(ev));
+    ev[0] = 0x0100b103UL;
+    ev[5] = 0x08110510UL;
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "zero UUID: refused");
+    memcpy(&ev[1], kUuid, 16);
+    ev[6] = 0x00000140UL;           /* an entry of 0x40 bytes in a 4-byte block */
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 7, &a), "name block past the frame: refused");
+    memset(ev, 0, sizeof(ev));
+    ev[0] = 0x0100b103UL;
+    memcpy(&ev[1], kUuid, 16);
+    CHECK(!TbtIcmProfileTitanRidge.DecodeConnected(ev, 63, &a), "zero route: refused");
+    ev[6] = 1;
+    CHECK(TbtIcmProfileTitanRidge.DecodeConnected(ev, 63, &a), "route 1: read");
+    ev[1] = 0;
+    ev[2] = 0;
+    CHECK(!TbtIcmProfileTitanRidge.DecodeDisconnected(ev, 3, &g), "zero route disconnect: refused");
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    memset(ev, 0, sizeof(ev));
+    ev[0] = 0x0100b103UL;
+    ev[5] = 0x08110510UL;
+    fakeQueue(TBT_PDF_ICM_EVENT, ev, 61, 0, 0);
+    g_fake.LogCount = 0;
+    idle(200);
+    CHECK_EQ(g_icm.Counters.EventsMalformed, 1, "counted");
+    CHECK(g_fake.LogCount >= 62, "logged with every raw word");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "nothing tracked");
+    CHECK_EQ(g_fw.Approves, 0, "nothing approved");
 }
 
 static void test_odd_frames(void)
@@ -981,7 +1055,7 @@ static void test_titan_ridge(void)
     TbtIcmPoll(&g_icm);
     CHECK_EQ(g_fw.Approves, 4, "bounded retries");
     CHECK(g_fake.NowUs - t0 < 41000000UL, "bounded time");
-    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "timeout: unapproved");
+    CHECK_EQ(g_icm.Counters.ApprovalsUnknown, 1, "timeout: outcome unknown, nothing hung");
     {
         unsigned long shortEv[7];
         memset(shortEv, 0, sizeof(shortEv));
@@ -1022,6 +1096,9 @@ static void test_ice_lake(void)
 
     setup(GEN_ICL, 1, 1);
     CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_icm.Ready.ProtocolVersion, 3, "protocol version read");
+    CHECK_EQ(g_icm.Ready.SecurityLevel, 0, "no security level on this row");
+    CHECK_EQ(g_icm.Ready.BootAclCount, 0, "no boot ACL count either");
     n = actions(act, 8);
     CHECK_EQ(n, 1, "an approved device: tunnel up");
 
@@ -1073,12 +1150,12 @@ static void test_falcon_ridge(void)
     d = TbtIcmDevice(&g_icm, 1);
     CHECK(d != NULL && d->RouteValid && d->Route.Lo == 0x0301, "depth 2: route 0x0301");
 
-    /* The topology with the error flag: no route, approve still sent. */
+    /* The topology with the error flag: unrouted, so not approved. */
     setup(GEN_FR, 1, 0);
     g_fw.TopoMode = MODE_ERROR;
     CHECK_EQ(start(), TBT_OK, "bind");
     CHECK_EQ(g_icm.Counters.RouteFailures, 1, "route failure");
-    CHECK_EQ(g_fw.Approves, 1, "approve sent");
+    CHECK_EQ(g_fw.Approves, 0, "no approve while unrouted");
 
     TbtIcmSuspend(&g_icm);
     CHECK_EQ(g_fake.MboxCount, 2, "save devices and driver unloads");
@@ -1397,6 +1474,7 @@ int main(void)
     test_resume_refresh_and_reconcile();
     test_disconnect_during_approve();
     test_timeouts_and_errors();
+    test_wrong_layout();
     test_odd_frames();
     test_event_queued_in_wait();
     test_dual_link_and_replace();

@@ -250,6 +250,8 @@ typedef struct _TBT_ICM_DEVICE {
     BOOLEAN Boot;
     BOOLEAN Stale;          /* not yet re-announced since the last driver ready */
     BOOLEAN RouteValid;
+    BOOLEAN ApproveUnknown; /* an approve never answered: outcome unknown */
+    BOOLEAN ApproveFailed;  /* an approve answered with the error flag */
     ULONG Serial;           /* this occupancy's stamp, never 0 while InUse */
     ULONG Uuid[4];
     ULONG Key;
@@ -317,8 +319,9 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
 
 #define TBT_ICM_ACT_TUNNEL_UP       1UL
 #define TBT_ICM_ACT_TUNNEL_DOWN     2UL
-/* A tunnel change was lost to a full queue: rescan every tunnel port of
- * this domain (record 21 section 6) as if each had changed. */
+/* Every tunnel port of this domain to be treated as changed (record 21
+ * section 6): an action lost to a full queue, or a disconnect that
+ * matched no entry (section 1.4.6). */
 #define TBT_ICM_ACT_RESYNC          3UL
 
 #define TBT_ICM_WHY_APPROVED        1UL     /* approve succeeded */
@@ -326,7 +329,9 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
 #define TBT_ICM_WHY_DISCONNECTED    3UL     /* a device-disconnected event */
 #define TBT_ICM_WHY_RECONCILED      4UL     /* not re-announced after driver ready */
 #define TBT_ICM_WHY_REPLACED        5UL     /* another announcement took its place */
-#define TBT_ICM_WHY_LOST            6UL     /* RESYNC: an action or announcement did not fit */
+#define TBT_ICM_WHY_LOST            6UL     /* RESYNC: an action did not fit */
+#define TBT_ICM_WHY_APPROVE_UNKNOWN 7UL     /* TUNNEL_UP: approve unanswered, tunnel may be up */
+#define TBT_ICM_WHY_UNMATCHED       8UL     /* RESYNC: a disconnect that matched no entry */
 
 /*
  * One tunnel change for the driver's thread to act on (record 21 section
@@ -403,6 +408,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG ApprovalsAbandoned;   /* the device left during the wait */
     ULONG ApprovalsWithheld;    /* the policy said no */
     ULONG ApprovalsUnsupported; /* the row has no approve */
+    ULONG ApprovalsUnknown;     /* never answered: outcome unknown */
     ULONG TunnelUps;
     ULONG TunnelDowns;
     ULONG Reconciled;
@@ -440,7 +446,9 @@ typedef struct _TBT_ICM {
     ULONG WaitSerial;           /* 0 when it is for none */
     BOOLEAN WaitGone;           /* that entry was dropped during the wait */
     BOOLEAN SettleExtend;       /* a device-connected event arrived in the window */
-    BOOLEAN ResyncPending;      /* an action did not fit: a RESYNC is owed */
+    BOOLEAN ResyncPending;      /* a RESYNC is owed */
+    ULONG ResyncWhy;            /* its reason, TBT_ICM_WHY_* */
+    BOOLEAN Failed;             /* a failure after activation: stays idle */
     BOOLEAN RediscoverPending;  /* an announcement did not fit: driver ready again */
     ULONG RediscoverRun;        /* rediscoveries in a row */
 
@@ -493,12 +501,13 @@ LONG TbtIcmMailbox(PTBT_ICM icm, ULONG code, ULONG data);
  * (which ran steps 2 to 5), over the common buffer the driver allocated
  * (`va`, `phys`, `bytes`, as TbtRingStart): ring 0, mailbox 0x23 where the
  * row reads the mode, driver ready, the host-router poll and the events it
- * collected. TBT_OK, or a negative result on which the start is refused.
- * A failure before the rings start leaves everything as it was; one after
- * stops this driver's rings (nothing of theirs is pending when it returns,
- * so the common buffer may be freed) and sends mailbox 0x07 only if driver
- * ready had been sent - the stage reached decides the cleanup, and no
- * tunnel is touched (orchestrator decision C, 2026-10-15).
+ * collected. TBT_OK, or a negative result: a failure before the rings
+ * start leaves everything as it was; one after (record 21 section 1.4.2,
+ * "failure after activation") stops this driver's rings - nothing of
+ * theirs is pending when it returns, so the common buffer may be freed -
+ * and leaves the instance idle (Failed); TbtIcmUnbind at the stop then
+ * sends mailbox 0x07 only if driver ready had been sent. No tunnel is
+ * touched.
  */
 LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes);
 

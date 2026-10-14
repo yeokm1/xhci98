@@ -93,6 +93,7 @@
 /* Table 12-11: 000b/00000b is "USB4 Ver. 1.0 or TBT3", 010b/00000b is USB4
  * 2.0 (40h). Design record 21 section 5.1 refuses any nonzero version. */
 #define TBT_HI_VERSION_TBT3         0x00UL
+#define TBT_HI_VERSION_2            0x40UL  /* Linux nhi_regs.h REG_CAPS_VERSION_2 */
 
 /* Host Router Reset, Spec 12.6.3.1.2, Table 12-12: bit 0 HRR, R/W SC. Not
  * used by the ICM client (ICM 2.6: interface version 0, no handshake). */

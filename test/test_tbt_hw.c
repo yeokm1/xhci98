@@ -110,7 +110,7 @@ static void test_platform(void)
     g_fake.Vs9Reads = 0;
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "again at D0");
     CHECK(pw.ForcePowerSetHere, "still ours");
-    TbtHwPlatformShutdown(icl, &g_cfg, &pw);
+    TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
     CHECK_EQ(g_fake.Cfg[0xFC / 4], 0x22000000UL, "shutdown clears what this driver set");
     CHECK(!pw.ForcePowerSetHere, "record cleared");
 
@@ -121,15 +121,29 @@ static void test_platform(void)
     g_fake.Vs9ReadyAfterReads = 1;
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "already on");
     CHECK(!pw.ForcePowerSetHere, "not ours");
-    TbtHwPlatformShutdown(icl, &g_cfg, &pw);
+    TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
     CHECK(g_fake.Cfg[0xFC / 4] & 0x2UL, "left on");
 
-    /* Never ready: 350 polls 3 ms apart, then a timeout. */
+    /* Never ready: 350 polls 3 ms apart, then a timeout; an inert
+     * instance clears the force power it set only then. */
     fakeReset();
     memset(&pw, 0, sizeof(pw));
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_E_TIMEOUT, "never ready");
     CHECK_EQ(g_fake.Vs9Reads, 350, "350 reads");
     CHECK(g_fake.NowUs >= 1050000UL, "about a second");
+    CHECK(pw.FwReadyFailed, "recorded");
+    TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
+    CHECK_EQ(g_fake.Cfg[0xFC / 4] & 2UL, 0, "inert, never ready: cleared");
+
+    /* Ready, but inert for another reason: left set. */
+    fakeReset();
+    memset(&pw, 0, sizeof(pw));
+    g_fake.Vs9ReadyAfterReads = 1;
+    CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "ready");
+    TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
+    CHECK(g_fake.Cfg[0xFC / 4] & 2UL, "inert after a ready poll: left set");
+    CHECK(TbtHwIsApple(0x106B), "Apple's subsystem vendor");
+    CHECK(!TbtHwIsApple(0x17AA), "Lenovo's is not");
 
     fakeReset();
     memset(&pw, 0, sizeof(pw));
@@ -216,6 +230,18 @@ static void test_select(void)
     g_fake.Caps = 0x0040000CUL;
     doSelect(ar, TRUE, FALSE, FALSE, &s);
     CHECK_EQ(s.Reason, TBT_INERT_NHI_VERSION, "interface version 0x40: inert");
+    fakeReset();
+    g_fake.Caps = 0x0020000CUL;
+    doSelect(ar, TRUE, FALSE, FALSE, &s);
+    CHECK_EQ(s.Reason, TBT_INERT_NHI_VERSION, "Alpine Ridge takes 0 alone");
+    fakeReset();
+    g_fake.Caps = 0x0020000CUL;
+    doSelect(tgl, TRUE, FALSE, FALSE, &s);
+    CHECK_EQ(s.Outcome, TBT_SEL_ICM, "the other rows take below 0x40");
+    fakeReset();
+    g_fake.Caps = 0x0040000CUL;
+    doSelect(tgl, TRUE, FALSE, FALSE, &s);
+    CHECK_EQ(s.Reason, TBT_INERT_NHI_VERSION, "and not 0x40");
 
     fakeReset();
     g_fake.Caps = 0xFFFFFFFFUL;
