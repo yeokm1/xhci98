@@ -94,8 +94,8 @@ ULONG CmProfileFor(const CM_IDS *ids);
  * started and the reason logged, and the driver writes nothing to the
  * hardware - no reset, no ring, no approve, no teardown, no mailbox. Never
  * a failed devnode. CmStartDecision gives the reason the ids and the mode
- * already decide, before any register is read; task 39-A.4 adds the
- * readiness, ownership and protocol reasons found after start.
+ * already decide, before any register is read; the readiness, ownership
+ * and protocol reasons found after start follow it (cm_nhi.c).
  */
 #define CM_INERT_NONE            0  /* a connection manager runs           */
 #define CM_INERT_MODE_OFF        1  /* XhciCmMode 0                        */
@@ -103,13 +103,37 @@ ULONG CmProfileFor(const CM_IDS *ids);
 #define CM_INERT_NOT_BUILT       3  /* the profile's client is not built   */
 #define CM_INERT_FORCE_REFUSED   4  /* XhciCmMode 3 on a host whose router
                                        is not a USB4 router               */
+/* The reasons found after start (cm_nhi.c, task 39-A.4). */
+#define CM_INERT_CONFIG          5  /* configuration space unreadable       */
+#define CM_INERT_SELECTION       6  /* tbt_hw.c TbtHwSelect said INERT: its
+                                       reason is the log's cm.select.reason */
+#define CM_INERT_SAFE_MODE       7  /* the firmware is in safe mode         */
+#define CM_INERT_SOFTWARE_CM     8  /* TbtHwSelect admitted the USB4 software
+                                       connection manager, which this build
+                                       does not carry (Phase 40)            */
+#define CM_INERT_RESOURCES       9  /* no common buffer below 4 GB, or no
+                                       thread                               */
+#define CM_INERT_RING_REFUSED   10  /* ring 0 refused before any register of
+                                       it was written                       */
+#define CM_INERT_POWER          11  /* the function was not in D0 when the
+                                       start would have activated it        */
+#define CM_INERT_BUS_MASTER     12  /* Bus Master could not be set (or its
+                                       command register not read)           */
 
 /*
- * The profiles whose client this build carries, one bit per CM_PROFILE_*.
- * None in the scaffold of task 39-A.1: every start is inert. Task 39-A.4
- * sets the Alpine Ridge bit; Phase 40 the USB4 one.
+ * The profiles whose client this build carries, one bit per CM_PROFILE_*:
+ * every ICM profile since task 39-A.4 (tbt_icm.c's Falcon, Alpine and
+ * Titan Ridge and Ice Lake message tables; Maple Ridge and Tiger Lake to
+ * Meteor Lake on the Titan Ridge and Ice Lake tables, where tbt_hw.c's
+ * selection finds their ICM running). Phase 40 adds the USB4 one; until
+ * then a start the software connection manager would take is inert.
  */
-#define CM_PROFILES_BUILT 0UL
+#define CM_PROFILES_BUILT ((1UL << CM_PROFILE_ICM_FR) |                    \
+                           (1UL << CM_PROFILE_ICM_AR) |                    \
+                           (1UL << CM_PROFILE_ICM_TR) |                    \
+                           (1UL << CM_PROFILE_ICM_ICL) |                   \
+                           (1UL << CM_PROFILE_ICM_MR) |                    \
+                           (1UL << CM_PROFILE_ICM_TGL))
 
 /*
  * The inert reason for a start in `mode` (XhciCmMode as taken) on an NHI

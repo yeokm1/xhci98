@@ -221,8 +221,23 @@ static void test_decision(void)
     ar = 1UL << CM_PROFILE_ICM_AR;
     all = 0xFFFFFFFFUL;
     CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_AR, 1, CM_PROFILES_BUILT),
-             CM_INERT_NOT_BUILT, "the scaffold builds no client: inert");
-    CHECK_EQ(CM_PROFILES_BUILT, 0, "and claims none");
+             CM_INERT_NONE, "task 39-A.4 builds the Alpine Ridge client");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_FR, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Falcon Ridge's");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_TR, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Titan Ridge's");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_ICL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Ice Lake's");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_USB4, 0, CM_PROFILES_BUILT),
+             CM_INERT_NOT_BUILT, "but not the software CM (Phase 40)");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_MR, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Maple Ridge's, on Titan Ridge's messages");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Tiger Lake's, on Ice Lake's");
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NOT_BUILT, "so mode 3 is inert in this build");
+    CHECK_EQ(CmStartDecision(2, CM_PROFILE_UNKNOWN, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "mode 2 on an unlisted Intel id runs AR");
     CHECK_EQ(CmStartDecision(0, CM_PROFILE_ICM_AR, 1, all), CM_INERT_MODE_OFF,
              "mode 0 is inert whatever is built");
     CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_TGL, 1, ar), CM_INERT_NOT_BUILT,

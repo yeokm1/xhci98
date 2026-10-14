@@ -1,8 +1,8 @@
 /*
  * tbt_topo.c - finding a Thunderbolt domain's tunnel ports and reading
- * them (roadmap-usb4.md task 39-A.5; design record 21 sections 6.3 and
- * 6.5). tbt_topo.h has the contract, the register layouts and their
- * citations.
+ * them (roadmap-usb4.md tasks 39-A.5 and 40-A.4; design record 21
+ * sections 6.3 and 6.5, design record 22 section 7.6). tbt_topo.h has the
+ * contract, the register layouts and their citations.
  *
  * C89, DDK-free. IRQL: as tbt_topo.h says, any for the decoders and the
  * poll machine, the accessors' for the rest (PASSIVE_LEVEL in the driver).
@@ -411,6 +411,7 @@ static VOID xhciTbtSetClear(PXHCI_TBT_TOPO topo)
         topo->Base[i] = XHCI_TBT_PORT_ERROR;
     }
     topo->Tunnels = 0;
+    topo->Named = 0;
     topo->Tunnel = XHCI_TBT_NO_BDF;
     topo->BaseArmed = 0;
     xhciTbtZero((PULONG)&topo->Pick, sizeof(topo->Pick) / sizeof(ULONG));
@@ -711,6 +712,7 @@ ULONG XhciTbtTopoFind(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
     if (in->Overrides != 0) {
         xhciTbtOverride(io, in, topo);
     }
+    topo->FindOutcome = topo->Outcome;
     xhciTbtMarkMembers(topo);
     return topo->Outcome;
 }
@@ -818,6 +820,426 @@ ULONG XhciTbtParseBdfList(PCWSTR text, ULONG chars, PULONG list,
         }
         i++;
     }
+}
+
+/* ---- the USB4 profile's correspondence --------------------------------- */
+
+static ULONG xhciTbtPortBit(ULONG port)
+{
+    return 1UL << (port - 1);
+}
+
+/* The member index of `bdf` in the set, or XHCI_TBT_NO_MEMBER. */
+static ULONG xhciTbtMemberOf(const XHCI_TBT_TOPO *topo, ULONG bdf)
+{
+    ULONG i;
+
+    for (i = 0; i < topo->Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (topo->Set[i] == bdf) {
+            return i;
+        }
+    }
+    return XHCI_TBT_NO_MEMBER;
+}
+
+/* The binding of `port`, named or learned, or XHCI_TBT_NO_MEMBER. */
+static ULONG xhciTbtBindOfPort(const XHCI_TBT_BINDS *binds, ULONG port)
+{
+    ULONG i;
+
+    for (i = 0; i < binds->Count && i < XHCI_TBT_MAX_BINDS; i++) {
+        if (binds->Port[i] == port &&
+            (binds->How[i] == XHCI_TBT_CORR_NAMED ||
+             binds->How[i] == XHCI_TBT_CORR_LEARNED)) {
+            return i;
+        }
+    }
+    return XHCI_TBT_NO_MEMBER;
+}
+
+/* The entry of `bdf`, of any kind, or XHCI_TBT_NO_MEMBER. */
+static ULONG xhciTbtBindOfBdf(const XHCI_TBT_BINDS *binds, ULONG bdf)
+{
+    ULONG i;
+
+    for (i = 0; i < binds->Count && i < XHCI_TBT_MAX_BINDS; i++) {
+        if (binds->Bdf[i] == bdf) {
+            return i;
+        }
+    }
+    return XHCI_TBT_NO_MEMBER;
+}
+
+/*
+ * A new entry; with no room left the table overflows, and from then on no
+ * port is known (XhciTbtPortMember answers none).
+ */
+static ULONG xhciTbtBindNew(PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf,
+                            ULONG how)
+{
+    ULONG i;
+
+    if (binds->Count >= XHCI_TBT_MAX_BINDS) {
+        binds->Overflow = 1;
+        return XHCI_TBT_NO_MEMBER;
+    }
+    i = binds->Count++;
+    binds->Port[i] = port;
+    binds->Bdf[i] = bdf;
+    binds->How[i] = how;
+    return i;
+}
+
+/*
+ * Two claims disagree about `port` and `bdf`: the port, the bridge and
+ * whatever either was bound to are known no longer, for the instance.
+ */
+static ULONG xhciTbtBindConflict(PXHCI_TBT_BINDS binds, ULONG port,
+                                 ULONG bdf)
+{
+    ULONG e;
+
+    e = xhciTbtBindOfPort(binds, port);
+    if (e != XHCI_TBT_NO_MEMBER) {
+        binds->How[e] = XHCI_TBT_CORR_CONFLICT;
+        binds->Port[e] = 0;
+    }
+    e = xhciTbtBindOfBdf(binds, bdf);
+    if (e != XHCI_TBT_NO_MEMBER) {
+        if (binds->Port[e] != 0) {
+            binds->PortConflict |= xhciTbtPortBit(binds->Port[e]);
+        }
+        binds->How[e] = XHCI_TBT_CORR_CONFLICT;
+        binds->Port[e] = 0;
+    } else {
+        xhciTbtBindNew(binds, 0, bdf, XHCI_TBT_CORR_CONFLICT);
+    }
+    binds->PortConflict |= xhciTbtPortBit(port);
+    return XHCI_TBT_MAP_CONFLICT;
+}
+
+/*
+ * Claims `port` for the bridge at `bdf` with `how`: `fresh` for a new
+ * binding, KNOWN for the same binding again (by either kind), CONFLICT
+ * when the port is conflicted or bound to another bridge, or the bridge
+ * conflicted or bound to another port, or the table cannot hold it.
+ */
+static ULONG xhciTbtClaim(PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf,
+                          ULONG how, ULONG fresh)
+{
+    ULONG p;
+    ULONG b;
+
+    if (binds->Overflow) {
+        return XHCI_TBT_MAP_CONFLICT;
+    }
+    if (binds->PortConflict & xhciTbtPortBit(port)) {
+        return xhciTbtBindConflict(binds, port, bdf);
+    }
+    p = xhciTbtBindOfPort(binds, port);
+    if (p != XHCI_TBT_NO_MEMBER && binds->Bdf[p] == bdf) {
+        return XHCI_TBT_MAP_KNOWN;
+    }
+    b = xhciTbtBindOfBdf(binds, bdf);
+    if (p != XHCI_TBT_NO_MEMBER || b != XHCI_TBT_NO_MEMBER) {
+        return xhciTbtBindConflict(binds, port, bdf);
+    }
+    if (xhciTbtBindNew(binds, port, bdf, how) == XHCI_TBT_NO_MEMBER) {
+        return XHCI_TBT_MAP_CONFLICT;
+    }
+    return fresh;
+}
+
+VOID XhciTbtBindsInit(PXHCI_TBT_BINDS binds)
+{
+    if (binds != NULL) {
+        xhciTbtZero((PULONG)binds, sizeof(*binds) / sizeof(ULONG));
+    }
+}
+
+/*
+ * The discovery cannot stand as it is: an empty set with `outcome`, as
+ * record 21 section 6.3 makes an incomplete or overfull discovery.
+ */
+static VOID xhciTbtSetVoid(PXHCI_TBT_TOPO topo, ULONG outcome)
+{
+    xhciTbtSetClear(topo);
+    topo->Outcome = outcome;
+    xhciTbtMarkMembers(topo);
+}
+
+ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
+                          PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf)
+{
+    ULONG member;
+    ULONG probe;
+    ULONG id;
+    ULONG hdr;
+    ULONG claim;
+    XHCI_TBT_BRIDGE br;
+
+    if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
+        port == 0 || port > XHCI_TBT_MAX_PORTS || bdf > 0xFFFFUL) {
+        return XHCI_TBT_MAP_BAD_PARAM;
+    }
+    if (topo->Outcome != XHCI_TBT_TOPO_SET &&
+        topo->Outcome != XHCI_TBT_TOPO_OVERRIDE &&
+        topo->Outcome != XHCI_TBT_TOPO_NO_CANDIDATE &&
+        topo->Outcome != XHCI_TBT_TOPO_UNLISTED &&
+        topo->Outcome != XHCI_TBT_TOPO_AMBIGUOUS) {
+        return XHCI_TBT_MAP_REFUSED;
+    }
+    if (bdf == topo->Parent || bdf == topo->Nhi) {
+        return XHCI_TBT_MAP_REFUSED;
+    }
+    member = xhciTbtMemberOf(topo, bdf);
+    if (member != XHCI_TBT_NO_MEMBER) {
+        /* Whatever source put it there stays; the naming binds it. */
+        claim = xhciTbtClaim(binds, port, bdf, XHCI_TBT_CORR_NAMED,
+                             XHCI_TBT_MAP_KNOWN);
+        return claim;
+    }
+    if (topo->Outcome == XHCI_TBT_TOPO_OVERRIDE) {
+        /* The override is the whole set. */
+        return XHCI_TBT_MAP_REFUSED;
+    }
+
+    probe = xhciTbtProbe(io, bdf, &id);
+    if (probe == 0) {
+        return XHCI_TBT_MAP_NO_BRIDGE;
+    }
+    hdr = probe == 1 ? xhciTbtHeader(io, bdf) : XHCI_TBT_ALL_ONES;
+    if (hdr == XHCI_TBT_ALL_ONES) {
+        /* A port the router names that cannot be read: the set might lack
+         * it, so it stands as none until a discovery completes. */
+        topo->Unread++;
+        xhciTbtSetVoid(topo, XHCI_TBT_TOPO_INCOMPLETE);
+        return XHCI_TBT_MAP_UNREAD;
+    }
+    if (XHCI_TBT_HDR_LAYOUT(hdr) != XHCI_TBT_HDR_BRIDGE) {
+        return XHCI_TBT_MAP_NO_BRIDGE;
+    }
+
+    /* A claim that disagrees with one already made binds nothing, but
+     * the router still names the bridge as a tunnel port: it joins the set
+     * all the same, its port unknown (the whole set acts for it). */
+    claim = xhciTbtClaim(binds, port, bdf, XHCI_TBT_CORR_NAMED,
+                         XHCI_TBT_MAP_ADDED);
+    if (topo->Tunnels >= XHCI_TBT_MAX_TUNNELS) {
+        xhciTbtSetVoid(topo, XHCI_TBT_TOPO_MANY);
+        return XHCI_TBT_MAP_FULL;
+    }
+
+    /* Taken whatever its capability list reads, as an override entry is:
+     * only its port readings depend on the capabilities. */
+    xhciTbtClassify(io, bdf, id, &br);
+    xhciTbtSetAdd(topo, &br, XHCI_TBT_SRC_ROUTER);
+    topo->Named++;
+    topo->Outcome = XHCI_TBT_TOPO_SET;
+    xhciTbtMarkMembers(topo);
+    return claim == XHCI_TBT_MAP_CONFLICT ? XHCI_TBT_MAP_CONFLICT
+                                          : XHCI_TBT_MAP_ADDED;
+}
+
+/*
+ * One member's occupancy: its secondary bus in *bus and, in *seen, bit d
+ * set for each device d whose function 0 answers there. 0 when it could
+ * not be read (a failed access, bus numbers all-ones, or no secondary bus
+ * above the bridge's own), else 1.
+ */
+static ULONG xhciTbtOccupancy(PXHCI_TBT_CFG io, ULONG bdf, PULONG bus,
+                              PULONG seen)
+{
+    ULONG buses;
+    ULONG secondary;
+    ULONG dev;
+    ULONG id;
+    ULONG probe;
+
+    *bus = 0;
+    *seen = 0;
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_BUSES, &buses) ||
+        buses == XHCI_TBT_ALL_ONES) {
+        return 0;
+    }
+    secondary = (buses >> 8) & 0xFFUL;
+    if (secondary <= XHCI_TBT_BDF_BUS(bdf)) {
+        /* Unconfigured (0) or misprogrammed: no bus to look at. */
+        return 0;
+    }
+    *bus = secondary;
+    for (dev = 0; dev < 32; dev++) {
+        probe = xhciTbtProbe(io, XHCI_TBT_BDF(secondary, dev, 0), &id);
+        if (probe == 2) {
+            return 0;
+        }
+        if (probe == 1) {
+            *seen |= 1UL << dev;
+        }
+    }
+    return 1;
+}
+
+/* 1 when the baseline was taken over the set as it is now. */
+static ULONG xhciTbtBaseFits(const XHCI_TBT_TOPO *topo,
+                             const XHCI_TBT_BINDS *binds)
+{
+    ULONG i;
+
+    if (!binds->Armed || binds->BaseCount != topo->Tunnels) {
+        return 0;
+    }
+    for (i = 0; i < topo->Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (binds->BaseBdf[i] != topo->Set[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                      PXHCI_TBT_BINDS binds)
+{
+    ULONG i;
+    ULONG bus;
+    ULONG seen;
+
+    if (binds == NULL) {
+        return XHCI_TBT_MAP_BAD_PARAM;
+    }
+    binds->Armed = 0;
+    if (io == NULL || io->Read == NULL || topo == NULL ||
+        topo->Tunnels == 0 || topo->Tunnels > XHCI_TBT_MAX_TUNNELS) {
+        return XHCI_TBT_MAP_BAD_PARAM;
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
+        if (!xhciTbtOccupancy(io, topo->Set[i], &bus, &seen)) {
+            return XHCI_TBT_MAP_UNREAD;
+        }
+        binds->BaseBdf[i] = topo->Set[i];
+        binds->BaseBus[i] = bus;
+        binds->BaseSeen[i] = seen;
+    }
+    binds->BaseCount = topo->Tunnels;
+    binds->Armed = 1;
+    return 0;
+}
+
+VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS ||
+        xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER) {
+        return;
+    }
+    /* A conflicted port's tunnel is recorded too: it can never be learned,
+     * but its device could still be taken for another port's. */
+    binds->Pending |= xhciTbtPortBit(port);
+}
+
+VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS) {
+        return;
+    }
+    binds->Pending &= ~xhciTbtPortBit(port);
+}
+
+/* 1 when a gain on the bridge at `bdf` is its own bound port's. */
+static ULONG xhciTbtExplained(const XHCI_TBT_BINDS *binds, ULONG bdf)
+{
+    ULONG e = xhciTbtBindOfBdf(binds, bdf);
+
+    return (e != XHCI_TBT_NO_MEMBER &&
+            (binds->How[e] == XHCI_TBT_CORR_NAMED ||
+             binds->How[e] == XHCI_TBT_CORR_LEARNED)) ? 1UL : 0UL;
+}
+
+ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
+                   PXHCI_TBT_BINDS binds, ULONG port, const ULONG *active)
+{
+    ULONG i;
+    ULONG bit;
+    ULONG bus[XHCI_TBT_MAX_TUNNELS];
+    ULONG seen[XHCI_TBT_MAX_TUNNELS];
+    ULONG gained = 0;
+    ULONG member = XHCI_TBT_NO_MEMBER;
+    ULONG result;
+
+    if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
+        port == 0 || port > XHCI_TBT_MAX_PORTS ||
+        topo->Tunnels > XHCI_TBT_MAX_TUNNELS) {
+        return XHCI_TBT_MAP_BAD_PARAM;
+    }
+    bit = xhciTbtPortBit(port);
+    if (xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER) {
+        binds->Pending &= ~bit;
+        return XHCI_TBT_MAP_KNOWN;
+    }
+    if (binds->Overflow || (binds->PortConflict & bit)) {
+        return XHCI_TBT_MAP_CONFLICT;
+    }
+    if (!(binds->Pending & bit)) {
+        return XHCI_TBT_MAP_NOT_UP;
+    }
+    if (topo->Tunnels == 0) {
+        binds->Armed = 0;
+        return XHCI_TBT_MAP_NOT_ARMED;
+    }
+    if (!xhciTbtBaseFits(topo, binds)) {
+        /* No baseline, or one over another set: take one now, which
+         * cannot tell what this tunnel brought. */
+        XhciTbtLearnArm(io, topo, binds);
+        return XHCI_TBT_MAP_NOT_ARMED;
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
+        if (!xhciTbtOccupancy(io, topo->Set[i], &bus[i], &seen[i]) ||
+            bus[i] != binds->BaseBus[i]) {
+            return XHCI_TBT_MAP_UNREAD;
+        }
+    }
+    for (i = 0; i < topo->Tunnels; i++) {
+        if ((seen[i] & ~binds->BaseSeen[i]) &&
+            !xhciTbtExplained(binds, topo->Set[i])) {
+            gained++;
+            member = i;
+        }
+        binds->BaseSeen[i] = seen[i];
+    }
+    if (gained == 0) {
+        return XHCI_TBT_MAP_NOT_GAINED;
+    }
+    if (gained > 1 || binds->Pending != bit) {
+        /* Another tunnel not yet attributed could explain the gain. */
+        return XHCI_TBT_MAP_SEVERAL;
+    }
+    /* Only a binding resolves the tunnel: an inactive or conflicting
+     * attribution leaves it pending until it is proven down. */
+    if (active != NULL && !active[member]) {
+        return XHCI_TBT_MAP_INACTIVE;
+    }
+    result = xhciTbtClaim(binds, port, topo->Set[member],
+                          XHCI_TBT_CORR_LEARNED, XHCI_TBT_MAP_LEARNED);
+    if (result == XHCI_TBT_MAP_LEARNED) {
+        binds->Pending &= ~bit;
+    }
+    return result;
+}
+
+ULONG XhciTbtPortMember(const XHCI_TBT_TOPO *topo,
+                        const XHCI_TBT_BINDS *binds, ULONG port)
+{
+    ULONG e;
+
+    if (topo == NULL || binds == NULL || port == 0 ||
+        port > XHCI_TBT_MAX_PORTS || binds->Overflow ||
+        (binds->PortConflict & xhciTbtPortBit(port))) {
+        return XHCI_TBT_NO_MEMBER;
+    }
+    e = xhciTbtBindOfPort(binds, port);
+    if (e == XHCI_TBT_NO_MEMBER) {
+        return XHCI_TBT_NO_MEMBER;
+    }
+    return xhciTbtMemberOf(topo, binds->Bdf[e]);
 }
 
 /* ---- the port reading -------------------------------------------------- */
