@@ -346,7 +346,7 @@ static void test_pir_valid(void)
     CHECK(pir_scan_area() == PIR_OK, "SeaBIOS-shaped table parses");
     CHECK(pir.phys == 0xF55A0UL, "found at F55A0h");
     CHECK(pir.version == 0x0100 && pir.size == 128, "version and size");
-    CHECK(pir.nslots == 6 && pir.kept == 6, "six entries");
+    CHECK(pir.nslots == 6, "six entries");
     CHECK(pir.candidates == 1, "one signature");
     CHECK(pir_find(&pir, 0, 1, &n) == 0 && n == 1, "00:01 is entry 1");
     CHECK(pir_find(&pir, 0, 6, &n) == 5 && n == 1, "00:06 is entry 6");
@@ -365,9 +365,9 @@ static void test_pir_valid(void)
           "entry 1 dumped");
     CHECK(has("  6   00:06   5    61/DEF8 62/DEF8 63/DEF8 60/DEF8\n"),
           "entry 6 dumped, links rotated");
-    CHECK(has("00:1C: NO ENTRY - a function behind a root port"),
-          "00:1C named as absent");
-    CHECK(!has("in the entries kept"), "every entry kept");
+    CHECK(has("  00:1C: NO ENTRY - this table routes nothing behind a root "
+              "port there\n"), "00:1C named as absent");
+    CHECK(!has("more entries not shown"), "every entry dumped");
     CHECK(!has("no function at"), "configuration space not read: silent");
 
     out[0] = '\0';
@@ -413,6 +413,32 @@ static void test_pir_rp(void)
           "1C.4 named, INTB's link");
     CHECK(!has("00:1C.1"), "absent functions not printed");
 
+    /* Listed, but the pin's link is 0, or its bitmap allows no IRQ: the
+     * entry alone does not make a route. */
+    t[PIR_HDR_LEN + 5 * PIR_SLOT_LEN + 2] = 0;          /* INTA link 0 */
+    put16(t + PIR_HDR_LEN + 5 * PIR_SLOT_LEN + 6, 0);   /* INTB bitmap 0 */
+    pir_sum(t, 128);
+    CHECK(pir_scan_area() == PIR_OK, "unusable pins parse");
+    pir.rp_read = 1;
+    for (n = 0; n < 8; n++)
+        pir.rp_id[n] = 0xFFFFFFFFUL;
+    pir.rp_id[0] = 0x02B88086UL;
+    pir.rp_hdr[0] = 0x81;
+    pir.rp_pin[0] = 1;
+    pir.rp_line[0] = 11;
+    pir.rp_id[4] = 0x02BC8086UL;
+    pir.rp_hdr[4] = 0x01;
+    pir.rp_pin[4] = 2;
+    pir.rp_line[4] = 10;
+    out[0] = '\0';
+    report_pir(&pir, cap);
+    CHECK(has("    00:1C.0 8086:02B8 bridge, pin INTA line 11: --/---- "
+              "(link 0: not connected)\n"), "link 0 named for the function");
+    CHECK(has("    00:1C.4 8086:02BC bridge, pin INTB line 10: 61/0000 "
+              "(no IRQ allowed)\n"), "empty bitmap named for the function");
+    pir_entry(t + PIR_HDR_LEN + 5 * PIR_SLOT_LEN, 0, 0xE0, 0x60, 0);
+    pir_sum(t, 128);
+
     out[0] = '\0';
     report_pir_short(&pir, cap);
     CHECK(strcmp(out, "IRQ table: $PIR at F55A0h, 6 entries; 00:1C "
@@ -451,6 +477,35 @@ static void test_pir_rp(void)
     report_pir(&pir, cap);
     CHECK(has("no function at 00:1C.0 in configuration space"),
           "no function present");
+
+    /* No table, or an unusable one: the functions are still printed. */
+    pir.rp_id[0] = 0x02B88086UL;
+    pir.rp_hdr[0] = 0x81;
+    pir.rp_pin[0] = 1;
+    pir.rp_line[0] = 11;
+    pir.rp_id[4] = 0x02BC8086UL;
+    pir.rp_hdr[4] = 0x01;
+    pir.rp_pin[4] = 1;
+    pir.rp_line[4] = 11;
+    memset(area, 0, sizeof(area));
+    pir_scan(area, sizeof(area), 0xF0000UL, &pir);
+    CHECK(pir.state == PIR_NONE, "no table, functions kept");
+    out[0] = '\0';
+    report_pir(&pir, cap);
+    CHECK(has("  00:1C: no usable table to look in\n"), "no table to look in");
+    CHECK(has("    00:1C.4 8086:02BC bridge, pin INTA line 11: no table\n"),
+          "1C.4 named with no table");
+    t = pir_build(PIR_AT, 6);
+    put16(t + 6, 120);
+    pir_scan(area, sizeof(area), 0xF0000UL, &pir);
+    CHECK(pir.state == PIR_BAD_SIZE, "unusable table, functions kept");
+    out[0] = '\0';
+    report_pir(&pir, cap);
+    CHECK(has("UNUSABLE"), "unusable named");
+    CHECK(has("  00:1C: no usable table to look in\n"),
+          "unusable: no table to look in");
+    CHECK(has("    00:1C.0 8086:02B8 bridge, pin INTA line 11: no table\n"),
+          "1C.0 named with an unusable table");
 }
 
 static void test_pir_bad(void)
@@ -464,7 +519,8 @@ static void test_pir_bad(void)
     out[0] = '\0';
     report_pir(&pir, cap);
     CHECK(strcmp(out, "PCI IRQ routing table ($PIR, read only): none in "
-                      "F0000h-FFFFFh\n") == 0, "none reported");
+                      "F0000h-FFFFFh\n  00:1C: no usable table to look in\n")
+              == 0, "none reported");
     out[0] = '\0';
     report_pir_short(&pir, cap);
     CHECK(strcmp(out, "IRQ table: no $PIR in F0000h-FFFFFh\n") == 0,
@@ -481,7 +537,7 @@ static void test_pir_bad(void)
     t = pir_build(PIR_AT, 6);
     t[31] = (u8)(t[31] + 1);
     CHECK(pir_scan_area() == PIR_BAD_CHECKSUM, "bad checksum");
-    CHECK(pir.nslots == 6 && pir.kept == 6, "bad checksum still parsed");
+    CHECK(pir.nslots == 6, "bad checksum still parsed");
     CHECK(pir_find(&pir, 0, 2, 0) == 1, "bad checksum: entries searchable");
     out[0] = '\0';
     report_pir(&pir, cap);
@@ -500,7 +556,7 @@ static void test_pir_bad(void)
     pir_sum(t, 64);
     CHECK(pir_scan_area() == PIR_TRUNCATED, "size past FFFFFh");
     CHECK(pir.phys == 0xFFFC0UL && pir.size == 80, "truncated: where, size");
-    CHECK(pir.kept == 0, "truncated: nothing kept");
+    CHECK(pir.nslots == 0, "truncated: nothing parsed");
     out[0] = '\0';
     report_pir(&pir, cap);
     CHECK(has("at FFFC0h, UNUSABLE"), "unusable named");
@@ -535,7 +591,18 @@ static void test_pir_bad(void)
     CHECK(pir_scan_area() == PIR_BAD_VERSION, "version 2.0");
     out[0] = '\0';
     report_pir(&pir, cap);
-    CHECK(has("version 2.0, size 128: version is not 1.x"), "version named");
+    CHECK(has("version 2.0, size 128: version is not 1.0"), "version named");
+    put16(t + 4, 0x0101);
+    pir_sum(t, 128);
+    CHECK(pir_scan_area() == PIR_BAD_VERSION, "version 1.1 is not 1.0");
+
+    /* A checksum-valid 1.1 table ahead of a 1.0 one: the 1.0 one wins. */
+    pir_build(PIR_AT, 6);
+    memcpy(area + 0x200, area + PIR_AT, 128);
+    put16(area + 0x204, 0x0101);
+    pir_sum(area + 0x200, 128);
+    CHECK(pir_scan_area() == PIR_OK, "the 1.0 table wins over a 1.1");
+    CHECK(pir.phys == 0xF55A0UL && pir.candidates == 2, "1.0 table chosen");
 
     /* A bad candidate before a good one: the good one wins. */
     pir_build(PIR_AT, 6);
@@ -579,22 +646,36 @@ static void test_pir_edges(void)
     CHECK(has("  2   00:02   1    61/DEF8 62/DEF8 63/DEF8 60/DEF8 fn bits "
               "set\n"), "function bits flagged");
 
-    /* More entries than are kept. */
-    t = pir_build(0x1000, PIR_MAX_SLOTS + 2);
+    /* More entries than are dumped. Devices 1-130 wrap at 32, so device
+     * 1Ch is entries 28, 60, 92 and 124. */
+    t = pir_build(0x1000, PIR_DUMP_MAX + 2);
     CHECK(pir_scan_area() == PIR_OK, "a long table parses");
-    CHECK(pir.nslots == PIR_MAX_SLOTS + 2 && pir.kept == PIR_MAX_SLOTS,
-          "kept capped");
-    /* Devices 1-130 wrap at 32, so device 1Ch is entries 28, 60, 92 and
-     * 124, all kept. */
+    CHECK(pir.nslots == PIR_DUMP_MAX + 2, "every entry parsed");
     CHECK(pir_find(&pir, 0, 0x1C, &n) == 27 && n == 4,
-          "every kept duplicate counted");
+          "every duplicate counted");
     out[0] = '\0';
     report_pir(&pir, cap);
-    CHECK(has("  2 more entries not shown\n"), "the rest counted");
-    CHECK(has("  128 00:00   127  "), "the last kept entry dumped");
+    CHECK(has("  2 more entries not shown (00:1C is searched in all)\n"),
+          "the rest counted");
+    CHECK(has("  128 00:00   127  "), "the last dumped entry");
     CHECK(!has("  129 "), "nothing past the cap dumped");
     CHECK(has("00:1C: listed 4 times, first at entry 28"), "00:1C listed");
-    (void)t;
+
+    /* 00:1C only past the dump cap: still found, still "listed". */
+    for (n = 0; n < PIR_DUMP_MAX + 2; n++)
+        t[PIR_HDR_LEN + n * PIR_SLOT_LEN + 1] = 0x08;   /* all 00:01 */
+    t[PIR_HDR_LEN + (PIR_DUMP_MAX + 1) * PIR_SLOT_LEN + 1] = 0xE0;
+    pir_sum(t, (u16)(PIR_HDR_LEN + PIR_SLOT_LEN * (PIR_DUMP_MAX + 2)));
+    CHECK(pir_scan_area() == PIR_OK, "1C-last table parses");
+    CHECK(pir_find(&pir, 0, 0x1C, &n) == PIR_DUMP_MAX + 1 && n == 1,
+          "00:1C found past the dump cap");
+    out[0] = '\0';
+    report_pir(&pir, cap);
+    CHECK(has("00:1C: listed, entry 130"), "listed past the cap");
+    CHECK(!has("NO ENTRY"), "no false NO ENTRY");
+    out[0] = '\0';
+    report_pir_short(&pir, cap);
+    CHECK(has("130 entries; 00:1C listed\n"), "short: listed past the cap");
 }
 
 int main(void)

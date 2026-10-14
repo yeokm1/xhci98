@@ -1220,16 +1220,20 @@ applicable`; `test/test_route.c` is the coverage of the rest.
 ## The BIOS PCI IRQ routing table (`$PIR`)
 
 Roadmap-usb4 task 39-0.6. Windows 98 runs a laptop of this era in APM
-(non-ACPI) mode, and its PCI IRQ steering then routes a PCI function from
-the BIOS's PCI IRQ routing table, `$PIR`, when POST gave the function no
-Interrupt Line. A function hot-added behind a Thunderbolt tunnel is such a
-function. Windows swizzles its pin up through the bridges to the bus 0
-root port and looks that device up in `$PIR`. With no entry for the root
-port's device, the function gets no IRQ (Device Manager Code 29). The
-`usb4-emu` repository's `docs/WIN98-TEST.md`, "Hot-added NVMe gets no IRQ
-behind 00:1c", has the QEMU reproduction. Whether the ThinkPad P14s Gen 1's
-BIOS lists its Thunderbolt root port `00:1C.4` is not known yet. This block
-is how the bench reads it.
+(non-ACPI) mode. Its PCI IRQ steering can then route a PCI function that
+POST gave no Interrupt Line from the BIOS's PCI IRQ routing table, `$PIR`.
+A function hot-added behind a Thunderbolt tunnel is such a function: the
+pin is swizzled up through the bridges to the bus 0 root port, and that
+device is looked up in the table. In the `usb4-emu` repository's QEMU
+reproduction (`docs/WIN98-TEST.md`, "Hot-added NVMe gets no IRQ behind
+00:1c"), Windows 98 reported "IRQ Table read from MS IRQ Routing
+Specification", the table had no entry for the root port's device, and
+the hot-added function got no IRQ (Device Manager Code 29). Whether the
+ThinkPad P14s Gen 1's BIOS lists its Thunderbolt root port `00:1C.4` is not
+known yet. This block is how the bench reads it. It describes the table
+only: which routing source Windows uses on a given machine is its IRQ
+Steering setting's, and an entry still needs a usable link and IRQ bitmap
+for the pin.
 
 **Read only, machine-wide, once per run.** The table is looked for on every
 16-byte boundary of `F0000h`-`FFFFFh`, read directly (the extender maps the
@@ -1251,14 +1255,15 @@ miniport data and a checksum byte. Each 16-byte slot entry holds the bus,
 the device (bits 7:3), a link value and an IRQ bitmap for each of INTA-INTD,
 and the slot number. `route.c` carries the offsets with the citation.
 
-**Checked before it is believed.** A candidate is used only when the
-version's major byte is 1, the size is above 32 and a multiple of 16, the
-table ends inside `FFFFFh`, and every byte sums to 0. The first candidate
-that passes wins. When none passes, the first one's failure is reported
-(`UNUSABLE`: version, size or truncated, with nothing parsed). A table
-whose size passes but whose checksum fails is still dumped, under
-`checksum FAILS`, with a line saying the entries are shown as found. At
-most 128 entries are kept, and any more are counted.
+**Checked before it is believed.** A candidate is used only when its
+version is `0100h` (1.0, the only version the specification defines), the
+size is above 32 and a multiple of 16, the table ends inside `FFFFFh`, and
+every byte sums to 0. The first candidate that passes wins. When none
+passes, the first one's failure is reported (`UNUSABLE`: version, size or
+truncated, with nothing parsed). A table whose size passes but whose
+checksum fails is still dumped, under `checksum FAILS`, with a line saying
+the entries are shown as found. Every entry is searched for `00:1C`; the
+dump stops at 128 entries and counts the rest.
 
 What it prints:
 
@@ -1270,12 +1275,13 @@ What it prints:
   (`--/----` for link 0, not connected). An entry whose device byte has
   function bits set is flagged, since the specification uses only bits
   7:3;
-- **`00:1C` by name**: `listed, entry N` (or `listed K times`), or
-  `NO ENTRY`, which means a function behind a root port there that POST
-  gave no Interrupt Line gets no IRQ from this table. Under that, each
-  `00:1C` function found in configuration space is listed with its id,
-  whether it is a bridge, its pin and line, and that pin's `link/bitmap`
-  from the entry (`no entry` when there is none).
+- **`00:1C` by name**: `listed, entry N` (or `listed K times`), `NO ENTRY`
+  (this table routes nothing behind a root port there), or `no usable
+  table to look in`. Under that, whatever the table's state, each `00:1C`
+  function found in configuration space is listed with its id, whether it
+  is a bridge, its pin and line, and that pin's `link/bitmap` from the
+  entry, marked `(link 0: not connected)` or `(no IRQ allowed)` when the
+  entry gives the pin no route (`no entry` or `no table` otherwise).
 
 QEMU's SeaBIOS (rel-1.17.0) builds the table for i440FX, so the matrix reads
 a real one. With a `pci-bridge` placed at `00:1C.0`, which stands where the
@@ -1293,8 +1299,7 @@ PCI IRQ routing table ($PIR, read only): at F55A0h, version 1.0, 128 bytes
   4   00:04   3    63/DEF8 60/DEF8 61/DEF8 62/DEF8
   5   00:05   4    60/DEF8 61/DEF8 62/DEF8 63/DEF8
   6   00:06   5    61/DEF8 62/DEF8 63/DEF8 60/DEF8
-  00:1C: NO ENTRY - a function behind a root port here that POST
-    gave no Interrupt Line gets no IRQ from this table
+  00:1C: NO ENTRY - this table routes nothing behind a root port there
     00:1C.0 1B36:0001 bridge, pin INTA line 11: no entry
 ```
 
@@ -1302,16 +1307,17 @@ This is the table `WIN98-TEST.md` read from guest memory for the Code 29
 failure (router `8086:122E`, bus 0 devices 1 to 6, links `60`-`63`
 rotated, bitmap `DEF8`, at `F55A0h`). It was read on 2026-10-15 under
 QEMU on development host A. The host suite pins the same table and every
-branch QEMU does not reach: `00:1C` listed once and twice, a bad checksum,
-a truncated table and header, bad sizes and version, no table, an invalid
-candidate ahead of a valid one, link 0, function bits, and more entries
-than are kept.
+branch QEMU does not reach: `00:1C` listed once and twice and only past
+the dump's 128 entries, a pin with link 0 or an empty bitmap, a bad
+checksum, a truncated table and header, bad sizes and versions (1.1
+included), no table, an invalid candidate ahead of a valid one, function
+bits, and the `00:1C` functions printed with no table and with an unusable
+one.
 
 Two things it does not read. Windows 98 can also take routing from the PCI
-BIOS (INT 1Ah `B10Eh`, "Get PCI Interrupt Routing Options"), which
-this tool does not call. And it does not read ACPI's `_PRT`, which an
-ACPI-mode or NT system uses instead. The block answers the `$PIR`
-question only.
+BIOS (INT 1Ah `B10Eh`, "Get PCI Interrupt Routing Options"), which this
+tool does not call. And it does not read ACPI's `_PRT`, which an ACPI-mode
+or NT system uses instead. The block answers the `$PIR` question only.
 
 ## The system description in the header
 

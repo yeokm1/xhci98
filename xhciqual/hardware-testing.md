@@ -305,7 +305,8 @@ routing table" has the format): where it is, whether its checksum holds,
 every entry, and then `00:1C` by name, `listed` or `NO ENTRY`, with each
 `00:1C` function found in configuration space. `none in F0000h-FFFFFh` and
 `UNUSABLE` are results too. Record them; a machine whose BIOS keeps no
-`$PIR` leaves Windows 98's IRQ steering with nothing to read from it.
+usable `$PIR` gives Windows 98's IRQ steering nothing to read from that
+source.
 
 Each xHCI report opens with its `quirks:` lines, from Linux's quirk list
 (the README's "The `quirks:` lines" has the forms). A quirk the driver
@@ -1059,13 +1060,14 @@ it is replugged").
 
 Roadmap-usb4 tasks 39-0.6 and 39-E.2. On the P14s the Thunderbolt 3
 controller sits behind the PCH root port `00:1C.4`. Windows 98 there runs
-with PCI IRQ steering, which routes a function from `$PIR` when POST gave
-it no Interrupt Line. A device hot-added behind the tunnel gets no line
-from POST, so it gets an IRQ only if `$PIR` has an entry for device
-`00:1C`. Without one, Device Manager shows Code 29 (`usb4-emu`
-`docs/WIN98-TEST.md`, "Hot-added NVMe gets no IRQ behind 00:1c", where
-QEMU reproduces it). The captures on file do not include the P14s's
-`$PIR`, so the answer is not known yet.
+with PCI IRQ steering (its Enum has "IRQ Holder for PCI Steering"), which
+can route a function that POST gave no Interrupt Line from `$PIR`. A
+device hot-added behind the tunnel gets no line from POST. In the QEMU
+reproduction (`usb4-emu` `docs/WIN98-TEST.md`, "Hot-added NVMe gets no IRQ
+behind 00:1c"), Windows 98 read its routing from `$PIR`, the table had no
+entry for the root port's device, and the hot-added function showed Code
+29. The captures on file do not include the P14s's `$PIR`, so whether the
+same holds there is not known yet.
 
 To read it, boot the P14s to DOS (the same boot medium as the procedure
 above, Thunderbolt BIOS settings as for the Windows 98 runs) and run:
@@ -1086,8 +1088,17 @@ values and IRQ bitmaps are what a later fix would need. Record under
 - the BIOS version from the system description, since a BIOS update can
   change the table.
 
-What the answer means is task 39-E.2's to write into the release notes.
-`listed` means a function hot-added behind the tunnel can be given an IRQ
-by Windows 98. `NO ENTRY` means it cannot, so on that machine pre-boot
-tunnelling (the device attached before power-on) is the route on Windows
-98.
+Also record which routing source Windows 98 uses there: Device Manager,
+System devices, PCI bus, the IRQ Steering tab, and the status line it
+shows (`IRQ Table read from MS IRQ Routing Specification` is `$PIR`; the
+tab can also name ACPI or a PCI BIOS call, which this tool does not read).
+
+What the answer means is task 39-E.2's to write into the release notes,
+and it is evidence about this table, not a guarantee. `NO ENTRY`, with
+Windows on the `$PIR` source, is the QEMU reproduction's condition, so a
+function hot-added behind the tunnel is expected to get no IRQ and
+pre-boot tunnelling (the device attached before power-on) to be the route
+on Windows 98; confirm it with a hot-add on the machine. `listed` is
+necessary rather than sufficient: the `00:1C` entry in the dump must show a
+link that is not 0 and an IRQ bitmap that is not empty for the pin the
+hot-added function's pin swizzles to, and a hot-add is still the proof.

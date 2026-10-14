@@ -156,7 +156,7 @@ The QEMU matrix is not the whole of what runs per build. `xhciqual/build.cmd` ru
 
 Since task 36.11 it also builds `xhciqual/test/test_route.c`, over `xhciqual/route.c` and the driver's `src/xhci_pirq.c`: the routing report on the reviewed Intel chipsets, which no QEMU controller has.
 
-Since roadmap-usb4 task 39-0.6 `test_route.c` also covers the BIOS `$PIR` table parser in `route.c`: a valid table, `00:1C` listed and not, a bad checksum, a truncated table and header, bad sizes and version, no table, and the entry cap.
+Since roadmap-usb4 task 39-0.6 `test_route.c` also covers the BIOS `$PIR` table parser in `route.c`: a valid table, `00:1C` listed and not, a bad checksum, a truncated table and header, bad sizes and versions, no table, `00:1C` found past the 128-entry dump cap, and the `00:1C` functions printed with no usable table.
 
 Since task 36.48 it also builds `xhciqual/test/test_sysinfo.c`, over `xhciqual/sysinfo.c`: SMBIOS entry points (2.x, 3.0, legacy DMI, bad checksums, a table above 4 GB) and tables (valid, truncated at every length, garbled, strings missing), CPUID text and the no-SMBIOS fallback, with every identifier planted and checked absent from the output.
 
