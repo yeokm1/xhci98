@@ -6081,8 +6081,8 @@ apply to this update: the root hub is new and installs from the new INF.
 | Path | When the new ids appear | How the new devnodes install | Read |
 |---|---|---|---|
 | Windows 98 SE and ME (`Xhci.Dev`, `RootHub.Dev`, `Hub.Dev`, `Comp.Dev`) | at the next start: the new `xhci98.sys` cannot replace the running one, which keeps running until the restart (release notes, "Updating from 2.y.y.y") | expected silently from the new INF, as each new hub and composite devnode installs today (6.11's opening, run-36 98 SE K2 and G1, run-37 for ME); the root hub's section copies `xhci98.sys` (8.6), so at that start the engine would copy over the file the running driver is: the root-hub sections copy nothing from this release (D3) | the legs |
-| Windows 2000 (`*.NTx86`) | read at once for `2.1.0.0` over `2.0.0.0` (release notes: "It runs at once, with no restart"); for this release's package, with 38.3's helper extended to 2000 and XP, to be read | no wizard, as for the hubs and composite parents (10.12, "What it buys") | the legs |
-| 32-bit XP (`*.NTx86`) and XP x64 (`*.NTamd64`) | read at once for `2.1.0.0`; for this release's package, to be read, as for 2000 | **Found New Hardware and the unsigned-driver warning, once per new devnode**: the root hub (the `1.2.0.0` upgrade read "a second wizard follows for the root hub", release notes, "Upgrading from 1.2.0.0"), each hub half and each composite parent (10.12; run-36 XP K2 and G1); documented, with its input trap (D4) | the legs |
+| Windows 2000 (`*.NTx86`) | read at once for `2.1.0.0` over `2.0.0.0` (release notes: "It runs at once, with no restart"); for this release's package, with 38.3's helper extended to 2000 and XP, read at once too (2026-10-14, the VM matrix: over `2.3.0.0` and `2.3.1.0`, no restart asked; one unrepeated stop at problem 31 until the restart, in the boot that first installed a stock UHCI controller) | no wizard, as for the hubs and composite parents (10.12, "What it buys") | the legs |
+| 32-bit XP (`*.NTx86`) and XP x64 (`*.NTamd64`) | read at once for `2.1.0.0`; for this release's package read at once on XP (2026-10-14, the VM matrix), although the controller's wizard says "will not work until you restart" and a System Settings Change box offers one | **Found New Hardware and the unsigned-driver warning, once per new devnode**: the root hub (the `1.2.0.0` upgrade read "a second wizard follows for the root hub", release notes, "Upgrading from 1.2.0.0"), each hub half and each composite parent (10.12; run-36 XP K2 and G1); documented, with its input trap (D4) | the legs |
 | 32-bit Vista and 7 (`*.Dev6.NTx86`) | at the restart the update asks for, for the MSI helper (task 38.5; renamed `xhcihlpr.sys` by 38.3); until it, the earlier release runs | from the package Have Disk put in the driver store; no wizard expected (unread for a new devnode of an already-staged package) | the legs |
 | Vista x64 and 7 x64 (`*.Dev6.NTamd64`) | at once, in test-signing mode or an F8 boot (AGENTS.md) | as 32-bit Vista and 7 | the legs |
 
@@ -6092,7 +6092,7 @@ machine with two controllers the image stays loaded while either still
 runs it; so when the new ids appear on 2000 and XP is read on this
 release's package, on one and on two controllers, with the running
 driver's version taken from `XHCISNAP`'s report, not from the Driver tab
-(10.13.10). Nothing in this design depends on it being at once.
+(10.13.10). Nothing in this design depends on it being at once. Read on the `2.4.0.0` dry cuts (2026-10-14, the Phase 38 VM matrix, legs I2 and I5): the new ids appeared as the table now says on every path, the prompts were those the release notes' "From 2.3.x or earlier" lists, and on two controllers (XP) one update ran both at once.
 
 **Between the update and the restart on 98 SE and ME** (and on 32-bit
 Vista and 7) the old binary still runs and still reports `XHCI98\` ids. A
@@ -6705,7 +6705,15 @@ designed, with these particulars:
   `cln_removal_enabled` enables removal on NT 5.0, 5.1, 5.2, 6.0 and 6.1
   (any other version lists only); a version whose leg shows no veto is set
   to list only before the cut (decided provisionally, 2026-10-14, so that
-  the legs can run `-remove` at all).
+  the legs can run `-remove` at all). **Read (2026-10-14, the Phase 38 VM
+  matrix):** the disable was vetoed on 2000, 32-bit XP, Vista and 7 in
+  both architectures, the update on 2000, XP, Vista x64 and 7 x64, and the
+  rollback on XP; on 32-bit Vista and 7 Windows itself defers every update
+  and rollback of the controller to the restart (the control without the
+  tool identical), so the hold is not needed there. No target showed a
+  missing veto, so the table stands; XP x64's cells are unread (its
+  stock-controller configuration could not be reached) and stay owed
+  before the cut (roadmap-hcd 38.final).
 - **Packaging.** `make-release.ps1` stages `tools\xhcicln\` with both
   executables (freshness against `.c`, `.h`, `.rc`, `.manifest` and
   `src\xhci_version.h`; `XHCICLN_VERSION` held to the shared macro;

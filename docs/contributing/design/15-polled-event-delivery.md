@@ -2106,8 +2106,14 @@ The helper's decisions (H1 to H5) are record 18 section 15.13's.
 #### 7.2.14 As built (code, 2026-10-14)
 
 Written with the code (branch `p38-timer`); sections 7.2.1 to 7.2.13
-stand except where this list says otherwise. Nothing of it has run in a
-guest: every leg of section 7.2.12 is owed to the matrix.
+stand except where this list says otherwise. Nothing of it had run in a
+guest when it was written; the Phase 38 VM matrix then read most of
+section 7.2.12's legs (`docs/contributing/runs/run-38.md`): the helper's
+install and binding (N1 to N3, D2, D3, U3 to U6), the stop (T3, its
+`qemu.stop.dx` half owed, above), hibernation and shutdown (T4; standby
+not makeable on any NT guest), two controllers (T5) and the clock under
+the finer timer, which made the default 0. T1 and T2 were not run, and
+T8 is deferred.
 
 - **The files.** `src\hcd_tmr.c` holds the thread (`hcdTmrThread`), its
   creation (`HcdTmrCreate`, from `hcdStart` after `HcdPollGrant`), the

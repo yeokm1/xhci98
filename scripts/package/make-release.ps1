@@ -4833,15 +4833,15 @@ Untested ground:
     sets another. QEMU has no keyboard-and-mouse composite device, so this
     is read on no virtual machine (the composite entry's own selection
     was, with USB audio devices) and is owed to a real device after the
-    release; a new rate reaches a function when it
-    next starts (on 98 SE and ME restart the function's entry too, or
-    replug the device).
+    release; a new rate reaches a function when it next starts (on 98 SE
+    and ME restart the function's entry too, or replug the device).
 
   * A FINER SYSTEM TIMER WHILE POLLING (XhciPollFineTimer, section 9; off
     by default). Read only in QEMU virtual machines without hardware
-    acceleration, polling, on Windows 7 and Vista, where while it was held
-    the guest's clock ran at a tenth to seven tenths of real time and USB
-    keyboard input was lost. Read on no real machine.
+    acceleration, polling: on Windows 7 and Vista, while it was held, the
+    guest's clock ran at a tenth to seven tenths of real time and USB
+    keyboard input was lost; on XP and 2000 the clock kept nine tenths of
+    real time or more. Read on no real machine.
 
   * LINUX'S CONTROLLER QUIRKS (XhciMsiAvoid and the thirteen others,
     section 9). Built from Linux's handling and the xHCI specification;
@@ -5210,8 +5210,8 @@ A value that is absent means the default each one states.
   ships off because in virtual machines (QEMU without hardware
   acceleration, polling, on Windows 7 and Vista) the guest's clock ran at
   a tenth to seven tenths of real time while it was held, and USB
-  keyboard input was lost; real hardware is unread (section 7, Untested
-  ground).
+  keyboard input was lost (on XP and 2000 nine tenths or more); real
+  hardware is unread (section 7, Untested ground).
 
   XhciMaxTransferKB  -  the UAS command size
   ..........................................
