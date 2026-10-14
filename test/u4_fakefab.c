@@ -532,7 +532,7 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         return;
     }
     if (addr == 4) {
-        if (t == 1 && (ad->Cs[FAB_CAP_LANE] & 0xFFUL) != FAB_CAP_PORT) {
+        if (t == 1 && ad->Lane1) {
             f->Lane1LockWrites++;
         }
         ad->Cs[4] = (old & ~0x800003FFUL) | (v & 0x800003FFUL);
@@ -979,6 +979,7 @@ static void fabLane(FAB_ROUTER *r, unsigned a, int usb4Port, int tmu)
 
     fabAdpNew(r, a, 0x000001UL, 23);
     ad = &r->Adp[a];
+    ad->Lane1 = (a % 2) == 0;
     ad->Cs[1] = FAB_CAP_LANE;
     ad->Cs[4] = 0x80000000UL | (60UL << 20) | 0;       /* Lock, Total Buffers 60 */
     ad->Cs[5] |= 0;                                     /* LCA 0, DHP 0 */

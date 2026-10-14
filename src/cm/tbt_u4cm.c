@@ -2314,8 +2314,9 @@ static VOID tbtU4TmuAtConnect(PTBT_U4CM cm, PTBT_U4_PORT p)
 /* ---------------------------------------------------------------------- */
 
 /*
- * Steps 2 to 9 on a port whose lane 0 reads connected: Lock cleared on both
- * lane adapters (Guide 3.2.1; Spec 8.2.2.1), ROUTER_CS_0 to 4 at route =
+ * Steps 2 to 9 on a port whose lane 0 reads connected: Lock cleared on lane
+ * 0 only (Guide 3.2.1; Spec 8.2.2.1, which leaves a write to a lane 1
+ * adapter's Lock undefined), ROUTER_CS_0 to 4 at route =
  * lane 0, the USB4 Version classified, enumerated (or adopted when a
  * predecessor enumerated it, its TopologyID kept), retried up to 20 times
  * 50 ms apart while it comes up (u4cm.c u4cm_connect), its adapters, the
@@ -3414,6 +3415,7 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
     p->LostKnown = FALSE;
     p->RelockSeen = FALSE;
     p->HostCloseOwed = FALSE;
+    p->ClassifyPending = FALSE;
     p->State = TBT_U4_EMPTY;
     p->Why = TBT_U4_WHY_NONE;
     p->CheckPending = TRUE;
@@ -3506,6 +3508,48 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls)
     }
     if (p->Unlocked && (cs4 & TBT_ADP4_LOCK) != 0) {
         return TRUE;
+    }
+    if (p->ClassifyPending && d->Present) {
+        /* A resume left this port HELD without classifying it: resolved
+         * here first. The same router with TopologyID Valid clear is the
+         * known configuration loss (no evidence); another identity is
+         * removal; still configured, a kept re-lock decides below. */
+        rc = tbtU4Rd(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_3, &v[0]);
+        if (tbtU4Gone(cm, rc)) {
+            return TRUE;
+        }
+        if (rc != TBT_OK) {
+            return FALSE;       /* still unresolved: HELD, as it is */
+        }
+        if ((v[0] & TBT_RTR3_V) == 0) {
+            if (!d->UuidValid) {
+                return FALSE;
+            }
+            if (!d->Tbt3) {
+                rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2, u);
+                u[2] = d->Uuid[2];
+                u[3] = d->Uuid[3];
+            } else if (d->CapLc != 0) {
+                rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapLc + TBT_LC_FUSE, 4, u);
+            } else {
+                return FALSE;
+            }
+            if (tbtU4Gone(cm, rc)) {
+                return TRUE;
+            }
+            if (rc != TBT_OK) {
+                return FALSE;
+            }
+            if (u[0] != d->Uuid[0] || u[1] != d->Uuid[1] || u[2] != d->Uuid[2] ||
+                u[3] != d->Uuid[3]) {
+                return TRUE;
+            }
+            p->ClassifyPending = FALSE;
+            p->LostKnown = TRUE;
+            p->RelockSeen = FALSE;
+            return FALSE;
+        }
+        p->ClassifyPending = FALSE;
     }
     if (p->RelockSeen && !p->LostKnown) {
         return TRUE;    /* seen by a resume that could not finish */
@@ -3663,6 +3707,7 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     /* The router enumerated again: a known configuration loss is over
      * (until then it stays known, through a failed rebuild). */
     p->LostKnown = FALSE;
+    p->ClassifyPending = FALSE;
     tbtU4TmuAtConnect(cm, p);
 
     p->State = TBT_U4_BONDING;
@@ -3893,13 +3938,9 @@ static BOOLEAN tbtU4PcieLive(PTBT_U4CM cm, PTBT_U4_PORT p)
             return FALSE;
         }
         if (TbtWaitDone(&w, cm->Host)) {
-            /* Transitional since the wait began at the latest. Only the
-             * clock says how long: a wait ended by its waited sum (a
-             * coarse or stopped clock) is no evidence of 2 s. */
-            if (!p->Transitional) {
-                p->Transitional = TRUE;
-                p->TransitionalSinceUs = w.StartUs;
-            }
+            /* The waited sum ended the wait (a coarse or stopped clock):
+             * no evidence of 2 s; the deadline from the first transitional
+             * sample, recorded above, stands. */
             return FALSE;
         }
         tbtU4Pause(cm, &w);
@@ -5627,6 +5668,11 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                 p->State = TBT_U4_HELD;
                 p->Why = TBT_U4_WHY_RESUME;
                 cm->Counters.PortsHeld++;
+            }
+            if (p->State == TBT_U4_HELD && !p->LostKnown) {
+                /* Unclassified (or not verified): the next readable check
+                 * classifies it before any reset mark counts. */
+                p->ClassifyPending = TRUE;
             }
         }
     }

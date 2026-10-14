@@ -252,7 +252,7 @@ typedef struct _TBT_U4_PORT {
     ULONG Generation;       /* incremented at every entry to CONNECTING */
     BOOLEAN UnplugPending;
     BOOLEAN CheckPending;
-    BOOLEAN Unlocked;       /* this driver cleared Lock on the lanes */
+    BOOLEAN Unlocked;       /* this driver cleared Lock on lane 0 */
     BOOLEAN PcieFailed;     /* no PCIe until a re-plug */
     BOOLEAN Ejected;
     BOOLEAN DpPreserved;    /* a DisplayPort tunnel found at start */
@@ -265,6 +265,8 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN RelockSeen;     /* lane 0's Lock found set again (and cleared):
                              * removal evidence kept until it is acted on */
     BOOLEAN HostCloseOwed;  /* a resume's host closure not yet proven */
+    BOOLEAN ClassifyPending; /* a resume left it HELD unclassified: the
+                              * next readable check classifies it first */
     BOOLEAN LostKnown;      /* a resume found its configuration lost (TopologyID
                              * Valid clear): that alone is no new evidence */
     TBT_U4_ROUTER Dev;

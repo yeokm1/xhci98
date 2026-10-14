@@ -78,6 +78,7 @@ typedef struct FAB_ADP {
     int DetectStuck;                /* PCIe: LTSSM never Detect while PE is 0 */
     int HcaStuck;                   /* USB3 Down: HCA never follows CMR */
     int LtssmForce;                 /* PCIe: nonzero reads LTSSM LtssmForce - 1 */
+    int Lane1;                      /* a lane 1 adapter (every fixture: even numbers) */
     unsigned long Consumed;         /* USB3: consumed bandwidth, CS_1 11:0 | 23:12 */
 } FAB_ADP;
 

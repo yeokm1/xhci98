@@ -2814,6 +2814,16 @@ static void test_review7(void)
     p = TbtU4Port(&g_cm, 1);
     TbtU4Suspend(&g_cm);
     fabPowerCycle(&g_fab);
+    {
+        /* the host's side kept across the sleep (only the device lost its
+         * configuration): a lane entry and the PCIe Down's HopID 8 */
+        int ln = fabPortLane0(&g_fab, 1);
+        int hp = fabPortPcie(&g_fab, 1);
+
+        g_fab.R[0].Adp[ln].Path[2 * 9] = 0x80000000UL | 8UL | ((unsigned long)hp << 11);
+        g_fab.R[0].Adp[ln].Path[2 * 9 + 1] = 0x01000000UL;
+        g_fab.R[0].Adp[hp].Path[2 * 8] = 0x80000000UL | 8UL | ((unsigned long)ln << 11);
+    }
     g_closeDev = dev;
     g_closeLane = fabPortLane0(&g_fab, 1);
     g_closeStage = 0;
@@ -2823,12 +2833,16 @@ static void test_review7(void)
     CHECK_EQ(g_closeStage, 2, "the budget spent inside the host sweep");
     CHECK_EQ(rc, TBT_E_STATE, "cut short: the failure path");
     CHECK(p->HostCloseOwed, "the closure owed");
+    CHECK(fabPath0(&g_fab, 0, fabPortLane0(&g_fab, 1), 9) & 0x80000000UL,
+          "the host lane entry still outstanding");
     gen = p->Generation;
     poll(&g_cm, &g_fab, 3);
     CHECK(!p->HostCloseOwed && !p->HostResidual, "finished at the idle ticks");
     CHECK(!p->BwReleaseOwed, "the release with it");
     CHECK(!p->Pcie.Up && !p->Usb3.Up, "its tunnels down");
     CHECK(hostClean(&g_fab, 1), "the host side clean");
+    CHECK_EQ(fabPath0(&g_fab, 0, fabPortLane0(&g_fab, 1), 9) & 0x80000000UL, 0,
+             "the outstanding entry invalidated by the idle sweep");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "still HELD");
     CHECK_EQ(p->Generation, gen, "no reconnection");
 
@@ -2848,6 +2862,55 @@ static void test_review7(void)
     g_fab.Hook = NULL;
     g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 0;
     CHECK(!p->Pcie.Up, "transitional across the sleep past 2 s: lost");
+
+    /* A preserved tunnel whose router lost its configuration, the resume's
+     * classification cut short after Lock was cleared: once reads work,
+     * classified as the known loss - no teardown, no reconnection. */
+    {
+        TBT_U4_CONFIG c;
+
+        cfgDefault(&c);
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_USB4);
+        fabPlug(&g_fab, 1, dev);
+        fabPreos(&g_fab, 1, 0);
+        g_fab.RxQCount = 0;
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        p = TbtU4Port(&g_cm, 1);
+        CHECK(p->Pcie.Preserved, "preserved");
+        (void)countActions(&g_cm, 0);
+        TbtU4Suspend(&g_cm);
+        g_fab.R[dev].Rcs[3] &= ~0x80000000UL;
+        g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[4] |= 0x80000000UL;
+        armSwallow(&g_fab, dev, TBT_CS_ROUTER, 0, 0, 0, 0, 0, 100000UL);
+        rc = TbtU4Resume(&g_cm);
+        g_fab.Hook = NULL;
+        CHECK_EQ(rc, TBT_E_STATE, "cut short: the failure path");
+        CHECK(p->ClassifyPending, "left unclassified");
+        gen = p->Generation;
+        poll(&g_cm, &g_fab, 3);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "classified as the known loss: still HELD");
+        CHECK(p->LostKnown && !p->ClassifyPending, "the loss known");
+        CHECK_EQ(p->Generation, gen, "no teardown, no reconnection");
+        CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "no removal");
+    }
+
+    /* Thunderbolt 3: lane 0's Lock written, lane 1's never. */
+    {
+        TBT_U4_CONFIG c;
+
+        cfgDefault(&c);
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+        fabPlug(&g_fab, 1, dev);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Thunderbolt 3: UP");
+        CHECK_EQ(g_fab.Lane1LockWrites, 0, "lane 1 never written");
+        CHECK(fabFindWrite(&g_fab, 0, 0, TBT_CS_ADAPTER, (unsigned long)fabPortLane0(&g_fab, 1),
+                           4) >= 0, "lane 0's Lock written");
+    }
     (void)dev;
 }
 
