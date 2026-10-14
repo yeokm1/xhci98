@@ -417,7 +417,7 @@ Restart after changing it. The release notes' "XhciSelectiveSuspend: putting idl
 
 ### The silent install (`XhciSilentInstall`)
 
-On Windows 98 SE, a device Windows already has drivers for still brings the Add New Hardware wizard when it is plugged into a new port. With `XhciSilentInstall` at `1`, a device whose class is in the `SilentClasses` list installs with no wizard instead. Windows 2000 and later never read it.
+On Windows 98 SE, a device Windows already has drivers for still brings the Add New Hardware wizard whenever Windows makes a new entry for it: on a port it has never used, unless it carries a serial number Windows follows from port to port. With `XhciSilentInstall` at `1`, a device whose class is in the `SilentClasses` list installs with no wizard instead. Windows 2000 and later never read it.
 
 - `0` (default): off. Any value but `1` is off.
 - `1`: on.
@@ -426,7 +426,7 @@ On Windows 98 SE, a device Windows already has drivers for still brings the Add 
 
 Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
 
-Windows ME installs a keyboard, mouse, stick or hub of its own with no wizard even without it. Read in virtual machines.
+Read in virtual machines: on 98 SE a keyboard, mouse, stick and hub, each a device of its own, install with no wizard once it is on. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks have not been read on either.
 
 SweetLow provided the information on how Windows decides a silent install, and the list.
 
@@ -485,8 +485,6 @@ Linux's xHCI driver works around faults of particular controllers, each named by
 
 Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. `XHCISNAP`'s report has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
 
-None of them has been read on a listed controller yet. Three listed controllers are on my own machines: the E460's (`8086:9D2F`, `XhciStuckLinkReset`), the B490's (`8086:1E31`, `XhciIntelShutdownToEhci`) and the E7250's (`8086:9CB1`, `XhciIntelShutdownToEhci`; `XhciShutdownReset` lists it but is off by default). A user has a VIA VL805 (`XhciResumeReinit`, `XhciStreamRingPad`). QEMU's controller is on no list.
-
 What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is logged, but the log lives in memory and is gone at the next start. It can be seen only in a capture of that shutdown: `XhciLogVerbosity` at `2` or above (below it nothing is recorded) and `XhciLogDebugView` set to `1`, with a debug-output viewer or a kernel debugger attached (see the release notes, "The log, and how to send one").
 
 The release notes' "Linux's controller quirks" has each value in full.
@@ -502,7 +500,6 @@ Windows 98 SE and Windows 2000 SP4 are the primary targets. Real hardware: Windo
 | Windows ME | VMs only, under SweetLow's stack: HID, storage, hubs, composite audio, soaks, SuperSpeed storage and UAS. A stock install with no USB 2.0 stack: HID, a hub, composite audio, storage and UAS, disable, enable, remove and rescan. |
 | Windows XP, 32-bit and x64 | VMs: HID, storage, hubs, composite audio, disable and enable, soaks, SuperSpeed storage and UAS. Real hardware: XP x64 on the E7250. |
 | Windows Vista SP2 and 7 SP1, 32-bit and x64 | VMs: the same, on four virtual processors. On the x64 systems, in test-signing mode or with driver signature enforcement disabled (F8). Real hardware: 7 x64 on the E7250. |
-| The release package | `2.0.0.0` and `2.1.0.0` each installed from the release download on all ten systems and passed. `2.1.0.0` also installed over `2.0.0.0` on each. `2.3.0.0` installed from its package on every system in VMs, and on the E7250 and the E460. |
 
 | Machine | Controller | Tested by |
 |---|---|---|

@@ -5380,10 +5380,6 @@ A value that is absent means the default each one states.
     controller's register at C12Ch cleared before each standby,
     hibernation and shutdown, as Linux does. 2 is read as 1.
 
-  On the project's own machines: the E460's 8086:9D2F (XhciStuckLinkReset),
-  the B490's 8086:1E31 and the E7250's 8086:9CB1 (XhciIntelShutdownToEhci;
-  XhciShutdownReset lists the E7250's but is off). A user holds a VL805.
-
   WHAT HAPPENS AT SHUTDOWN IS SEEN ONLY IN A CAPTURE OF THAT SHUTDOWN.
   XhciIntelShutdownToEhci and XhciShutdownReset log what they did, but the
   log lives in memory and is gone at the next start, so XHCISNAP never

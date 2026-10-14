@@ -2525,16 +2525,6 @@ did.
   source nor this driver says what the bit does. Only where that register
   lies inside the controller's memory window. A `2` is read as `1`.
 
-**Read on hardware: none.** Every one of these ships unread on the
-controllers it lists. Three listed controllers are the project's own: the
-ThinkPad E460's `8086:9D2F` (`XhciStuckLinkReset`), the Lenovo B490's
-`8086:1E31` (`XhciIntelShutdownToEhci`) and the Dell Latitude E7250's
-`8086:9CB1` (`XhciIntelShutdownToEhci`; `XhciShutdownReset` lists it but is
-off by default). A user holds a VIA VL805 (`XhciResumeReinit`,
-`XhciStreamRingPad`). QEMU's controller (`1B36:000D`) is on no list, so a
-virtual machine shows only each value read and the quirk not applying, and
-what `2` reaches.
-
 **What happens at shutdown is seen only in a capture of that shutdown.**
 `XhciIntelShutdownToEhci` and `XhciShutdownReset` act as the machine shuts
 down, and log what they did, but the log lives in memory and the next start
