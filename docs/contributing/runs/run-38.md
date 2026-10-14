@@ -372,7 +372,8 @@ table, the defects and their attributions), `legs\<guest>\notes.txt`,
 | Finding | Attribution |
 |---|---|
 | XP SP3 from the F6 floppy: GUI-mode Setup installs the controller from `OemDir`, the INF's copy of `xhcihlpr.sys` fails (`txtsetup.oem` named no such file), the controller gets the NULL driver, nothing asked | **New in `2.4.0.0`** (38.3's helper on XP). Fixed in `f0c28bc6`..`d967daa2`: `txtsetup.oem` carries `xhcihlpr.sys` on a `dll` line, which text mode copies and does not load, and the gate rule `OEM-COPY` ties the option's files to the INF's NT 5.x `CopyFiles` (the reading of 2000 SP4's and XP SP3's `setupdd.sys` and `setupldr.bin` is `legal-provenance.md` section 4). Review: Codex thread `01a1377a`, clean at round 3. Read on dry cut 4: XP F6 to the desktop, the helper copied in text mode and running at the first boot, the USB keyboard typing in GUI mode |
-| Windows 2000 from the F6 floppy: STOP `c000026c` at the first GUI-mode boot (`hidusb.SYS` with a USB keyboard or mouse, `usbstor.SYS` with a stick alone), `0xc0000034` | **Pre-existing**: the same on `2.3.1.0` with both triggers. Text mode lays down the class driver but not `usbd.sys`, `hidclass.sys` or `hidparse.sys`, which it imports. Documented as a known limitation (`1afcd46f`, `8653ad50`). A Windows 2000 entry in `txtsetup.oem`, the user copying those three files from their own Windows 2000 CD onto the floppy (owner, 2026-10-14; the release carries no Microsoft file), is on branch `p38-w2kf6` with its gate and issue record 16, reviewed (Codex thread `01a1398f`, converged at round 5), **pending its merge**; its legs on that branch's package reached the product key page with a keyboard and mouse behind the hub and with a stick |
+| Windows 2000 from the F6 floppy: STOP `c000026c` at the first GUI-mode boot (`hidusb.SYS` with a USB keyboard or mouse, `usbstor.SYS` with a stick alone), `0xc0000034` | **Pre-existing**: the same on `2.3.1.0` with both triggers. Text mode lays down the class driver but not `usbd.sys`, `hidclass.sys` or `hidparse.sys`, which it imports. Documented as a known limitation (`1afcd46f`, `8653ad50`). **Fixed** by a Windows 2000 entry in `txtsetup.oem`, `XHCI98W2K`, the user copying those three files (`USBD.SY_`, `HIDCLASS.SY_`, `HIDPARSE.SY_`) from their own Windows 2000 CD onto the floppy (owner, 2026-10-14; the release carries no Microsoft file), with the gate rule `OEM-W2K` and `docs/issues/16-w2k-f6-first-gui-boot-usbd.md`; branch `p38-w2kf6`, merged `b8e48823`. Review: Codex threads `01a1393c` (2 rounds) and `01a1398f` (converged at round 5). Legs on the branch's package (`out\p38-matrix\legs6w2k
+otes.txt`, runs 81 to 85): 2000 SP4 through the new entry with a keyboard, mouse and audio device behind the hub, and with a stick alone, both to the product key page with no STOP; without the files, the documented prompt for them; XP's first entry clean to GUI mode. A slipstreamed variant did not load `xhci98` in text mode and was not pursued. The 2000 desktop past the key page is unread (no product key) |
 | Windows 98 SE under SweetLow's stack: exception 0E at `0028:FF0AA6E0` once | **Not reproduced**: `2.4.0.0` 0 of 6 runs (3 with `usb-audio`, 3 without; 90 dialogs), `2.3.1.0` 0 of 3; the first run 1 of 1. Unattributed, no regression pattern |
 | Mode 2 with the finer timer held: the guest's clock slows and USB key presses are lost at QEMU's queue | Accepted; the owner shipped `XhciPollFineTimer` off (38.3). Guest clock over host clock, the timer held against off: 7 x64 0.23 to 0.42 (0 to 67 of 199 keys arrived; PS/2, the value 0 and mode 0 199 of 199), 7 x86 0.62 idle and 0.11 with the mouse moving against 1.00, Vista x86 0.50 idle and 0.27 under a copy against 1.000, XP 0.975 and 0.904, 2000 0.967 and 0.994; 98 SE and ME 0.99 to 1.00 (no finer timer there). Off by default read on dry cut 5 on 98 SE and XP |
 | ME: Shut Down hangs (black screen, the processor busy) after a controller disable and enable with the devices attached | **Pre-existing**: `2.3.1.0` 2 of 2, dry cut 3 1 of 1, dry cut 5 2 of 2; without the cycle dry cut 5 shut down in 7 s. Not yet among the known limitations |
@@ -450,7 +451,7 @@ scan) and three P2, round 2 one P3, round 3 clean.
 | I6, the tool on 2000, XP (both configurations), XP x64, Vista and 7 x86 and x64 | PASS: the list, `-remove` ("4 removed."), a second run with nothing, the refusals before the restart and with the controller disabled, and on XP after a return to `2.3.1.0`. With two project controllers on XP, one uninstalled and not rescanned, the tool did not refuse, as its readme says (it refuses only when no project controller is running); the checklist's wording disagrees |
 | I7, the 32-bit tool under WOW64 | PASS on XP x64, Vista x64 and 7 x64: `XHCICLN.EXE` refuses naming `XHCICL64.EXE`, which removes |
 | I8, 98 SE and ME | PASS: lists only, `-remove` before the restart exit 1, the `HKEY_DYN_DATA` walk finding no live `XHCI98\` devnode. `CM_Uninstall_DevNode` is a stub on both (returns success, removes nothing); `CM_LOCATE_DEVNODE_PHANTOM` works |
-| I9, F6 with the input behind the hub | XP PASS on dry cut 4; XP x64 PASS to the product key page; 2000 the pre-existing STOP (above) |
+| I9, F6 with the input behind the hub | XP PASS on dry cut 4; XP x64 PASS to the product key page; 2000 the pre-existing STOP (above), lifted by the Windows 2000 entry merged later the same day |
 | I10, a High Speed and a USB 3 hub | After the cut (owner, 2026-10-13) |
 
 **The controller's veto**, with the tool holding the door (the keyboard
@@ -637,13 +638,14 @@ composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
   and the readme's section 8 listing `RELEASE-X64\` and `DEBUG-X64\`). The
   owner's cut command is `out\p38-final\cut-2.4.0.0.ps1.txt`; a draft
   history entry is `out\p38-final\releases\history.md`.
-- **The VM matrix** (above), and the XP F6 fix it called for.
+- **The VM matrix** (above), the XP F6 fix it called for, and the
+  Windows 2000 F6 entry (`b8e48823`, issue 16).
 
 **Left:**
 
-- The Windows 2000 F6 entry (branch `p38-w2kf6`, pending its merge), then
-  a dry cut 6 and the F6 legs on 2000 and XP from it; XP x64's F6 install
-  past the product key page (it needs a key).
+- A dry cut with the Windows 2000 F6 entry (merged `b8e48823`) and the F6
+  legs on 2000 and XP from it; 2000's and XP x64's F6 installs past the
+  product key page (each needs a key).
 - XHCICLN on XP x64: its veto read, NT 5.2 set to list only, or the
   owner's waiver (38.8).
 - The documents pass: `results.md` section 4's points (among them the ME
