@@ -12,7 +12,8 @@
  * Raptor Lake-P, Meteor Lake), since an integrated tunnel root port is
  * matched only beside an NHI of its own processor (section 6.3 source 3).
  * Meteor Lake has no root port id in the listing: its set comes from the
- * override.
+ * override. Design record 22 section 3.7 adds the USB4-only hosts' rows
+ * (task 40-0.2's ids, as both INFs carry them).
  */
 
 #include "cm_ports.h"
@@ -46,6 +47,36 @@ static const ULONG cmAdlRoot[] = { CM_ID(0x466E), CM_ID(0x463F), CM_ID(0x462F),
 static const ULONG cmRplNhi[] = { CM_ID(0xA73E), CM_ID(0xA76D) };
 static const ULONG cmRplRoot[] = { CM_ID(0xA76E), CM_ID(0xA71F), CM_ID(0xA72F) };
 static const ULONG cmMtlNhi[] = { CM_ID(0x7EB2), CM_ID(0x7EC2), CM_ID(0x7EC3) };
+/* Design record 22 section 3.7's USB4-only hosts (Phase 40): Lunar, Panther
+ * and Wildcat Lake name no tunnel port in the listing; Barlow Ridge's host
+ * bridges are its own switch's ports; AMD's USB4 PCIe tunnel ports are
+ * root ports beside its two routers' NHIs (Pink Sardine 1668 and 1669,
+ * FreeBSD nhi_reg.h), so ambiguous until the override assigns them. */
+static const ULONG cmLnlNhi[] = { CM_ID(0xA833), CM_ID(0xA834) };
+static const ULONG cmPtlNhi[] = { CM_ID(0xE333), CM_ID(0xE334), CM_ID(0xE433),
+                                  CM_ID(0xE434) };
+static const ULONG cmWclNhi[] = { CM_ID(0x4D33) };
+static const ULONG cmBrNhi[] = { CM_ID(0x5781), CM_ID(0x5784) };
+static const ULONG cmBrPort[] = { CM_ID(0x5780), CM_ID(0x5783) };
+static const ULONG cmAmdNhi[] = { CM_PORTS_ID(0x1022, 0x1668),
+                                  CM_PORTS_ID(0x1022, 0x1669) };
+static const ULONG cmAmdRoot[] = { CM_PORTS_ID(0x1022, 0x14CD),
+                                   CM_PORTS_ID(0x1022, 0x14EF),
+                                   CM_PORTS_ID(0x1022, 0x150A) };
+/* The emulator's generic USB4 host (usb4-emu usb4-generic, 1B36:00F4) and
+ * its q35 tunnel port, a root port beside it. */
+static const ULONG cmEmuNhi[] = { CM_PORTS_ID(0x1B36, 0x00F4) };
+static const ULONG cmEmuRoot[] = { CM_PORTS_ID(0x1B36, 0x000C) };
+
+/*
+ * Bridge ids xhcicmf.inf names that no family carries: ASMedia's ASM4242
+ * downstream port, whose host is matched by class alone (no NHI id to
+ * pair it with), and QEMU's generic PCI-to-PCI bridge, the emulator's
+ * i440FX tunnel bridge, which the SHPC source finds and which is far too
+ * common an id to be a family's.
+ */
+static const ULONG cmUnpaired[] = { CM_PORTS_ID(0x1B21, 0x2423),
+                                    CM_PORTS_ID(0x1B36, 0x0001) };
 
 static const CM_FAMILY cmFamilies[] = {
     { "falcon-ridge", cmFrNhi, CM_N(cmFrNhi), cmFrPort, CM_N(cmFrPort),
@@ -66,8 +97,27 @@ static const CM_FAMILY cmFamilies[] = {
       cmAdlRoot, CM_N(cmAdlRoot) },
     { "raptor-lake-p", cmRplNhi, CM_N(cmRplNhi), NULL, 0,
       cmRplRoot, CM_N(cmRplRoot) },
-    { "meteor-lake", cmMtlNhi, CM_N(cmMtlNhi), NULL, 0, NULL, 0 }
+    { "meteor-lake", cmMtlNhi, CM_N(cmMtlNhi), NULL, 0, NULL, 0 },
+    { "lunar-lake", cmLnlNhi, CM_N(cmLnlNhi), NULL, 0, NULL, 0 },
+    { "panther-lake", cmPtlNhi, CM_N(cmPtlNhi), NULL, 0, NULL, 0 },
+    { "wildcat-lake", cmWclNhi, CM_N(cmWclNhi), NULL, 0, NULL, 0 },
+    { "barlow-ridge", cmBrNhi, CM_N(cmBrNhi), cmBrPort, CM_N(cmBrPort),
+      NULL, 0 },
+    { "amd-usb4", cmAmdNhi, CM_N(cmAmdNhi), NULL, 0,
+      cmAmdRoot, CM_N(cmAmdRoot) },
+    { "usb4-emu", cmEmuNhi, CM_N(cmEmuNhi), NULL, 0,
+      cmEmuRoot, CM_N(cmEmuRoot) }
 };
+
+ULONG CmPortsUnpairedCount(VOID)
+{
+    return (ULONG)CM_N(cmUnpaired);
+}
+
+ULONG CmPortsUnpairedAt(ULONG n)
+{
+    return n < CM_N(cmUnpaired) ? cmUnpaired[n] : 0;
+}
 
 ULONG CmPortsFamilyCount(VOID)
 {

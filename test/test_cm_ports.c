@@ -15,6 +15,14 @@
 
 /* ---- the families ------------------------------------------------------ */
 
+static ULONG inList(const ULONG *list, ULONG count, ULONG id);
+
+static ULONG inFamily(const CM_FAMILY *f, ULONG id)
+{
+    return inList(f->SwitchPortIds, f->SwitchPortIdCount, id) ||
+           inList(f->RootPortIds, f->RootPortIdCount, id);
+}
+
 static void test_families(void)
 {
     const CM_FAMILY *f;
@@ -42,11 +50,16 @@ static void test_families(void)
     CHECK(f != NULL && f->RootPortIdCount == 0, "Meteor Lake lists no root port (the override is the way)");
     CHECK(CmPortsFamily(ID(0x15DC)) == NULL, "a USB-only Alpine Ridge NHI has no family");
     CHECK(CmPortsFamily(ID(0x15C0)) == NULL, "a bridge id is no NHI");
-    CHECK(CmPortsFamily(CM_PORTS_ID(0x1022, 0x1668)) == NULL, "AMD is not a section 3.3 family");
+    CHECK(CmPortsFamily(CM_PORTS_ID(0x1022, 0x1234)) == NULL, "an unlisted AMD id has no family");
     CHECK(CmPortsFamily(CM_PORTS_ID(0x1234, 0x15BF)) == NULL, "the vendor counts");
 
     n = CmPortsFamilyCount();
-    CHECK_EQ(n, 10, "ten families");
+    CHECK_EQ(n, 16, "sixteen families: ten of record 21, six of record 22");
+    f = CmPortsFamily(CM_PORTS_ID(0x1022, 0x1669));
+    CHECK(f != NULL && f->RootPortIdCount == 3 && f->NhiIdCount == 2,
+          "AMD's two routers share their root ports (ambiguous: the override assigns them)");
+    f = CmPortsFamily(ID(0x5784));
+    CHECK(f != NULL && f->SwitchPortIdCount == 2, "Barlow Ridge has its own switch ports");
     CHECK(CmPortsFamilyAt(n) == NULL, "past the table is NULL");
     /* No id twice anywhere, and every family names its NHIs. */
     twice = 0;
@@ -55,6 +68,9 @@ static void test_families(void)
         CHECK(f->NhiIdCount > 0, "every family has NHIs");
         CHECK(f->SwitchPortIdCount == 0 || f->RootPortIdCount == 0,
               "a family is discrete or integrated, never both");
+        for (j = 0; j < CmPortsUnpairedCount(); j++) {
+            CHECK(!inFamily(f, CmPortsUnpairedAt(j)), "an unpaired id is no family's");
+        }
         for (j = 0; j < n; j++) {
             g = CmPortsFamilyAt(j);
             for (k = 0; k < g->NhiIdCount; k++) {
@@ -132,6 +148,7 @@ static void test_infs(void)
     ULONG unknown;
     ULONG missing;
     ULONG dev;
+    ULONG ven;
     ULONG i;
     ULONG k;
     const char *p;
@@ -146,20 +163,24 @@ static void test_infs(void)
             continue;
         }
         dev = hex4(p + 4);
+        ven = hex4(p - 5);
         known = 0;
         for (i = 0; i < CmPortsFamilyCount(); i++) {
-            f = CmPortsFamilyAt(i);
-            if (inList(f->SwitchPortIds, f->SwitchPortIdCount, ID(dev)) ||
-                inList(f->RootPortIds, f->RootPortIdCount, ID(dev))) {
+            if (inFamily(CmPortsFamilyAt(i), CM_PORTS_ID(ven, dev))) {
+                known = 1;
+            }
+        }
+        for (i = 0; i < CmPortsUnpairedCount(); i++) {
+            if (CmPortsUnpairedAt(i) == CM_PORTS_ID(ven, dev)) {
                 known = 1;
             }
         }
         if (!known) {
             unknown++;
-            printf("  xhcicmf.inf names %04lX, which no family lists\n", dev);
+            printf("  xhcicmf.inf names %04lX:%04lX, which no family lists\n", ven, dev);
         }
-        if (!inList(seen, seenCount, ID(dev)) && seenCount < 64) {
-            seen[seenCount++] = ID(dev);
+        if (!inList(seen, seenCount, CM_PORTS_ID(ven, dev)) && seenCount < 64) {
+            seen[seenCount++] = CM_PORTS_ID(ven, dev);
         }
     }
     CHECK_EQ(unknown, 0, "every bridge id of xhcicmf.inf is a family's");
@@ -173,21 +194,27 @@ static void test_infs(void)
             missing += inList(seen, seenCount, f->RootPortIds[k]) ? 0 : 1;
         }
     }
-    CHECK_EQ(missing, 0, "every family port id is in xhcicmf.inf");
-    CHECK_EQ(seenCount, 30, "30 bridge ids: 11 switch ports and 19 root ports");
+    for (k = 0; k < CmPortsUnpairedCount(); k++) {
+        missing += inList(seen, seenCount, CmPortsUnpairedAt(k)) ? 0 : 1;
+    }
+    CHECK_EQ(missing, 0, "every family port id and every unpaired id is in xhcicmf.inf");
+    CHECK_EQ(seenCount, 38, "38 bridge ids: record 21's 30, record 22's 6, the emulator's 2");
 
     CHECK(readInf("..\\src\\cm\\xhcicm.inf") != 0, "xhcicm.inf read");
     seenCount = 0;
     unknown = 0;
-    for (p = strstr(infText, "VEN_8086&DEV_"); p != NULL;
-         p = strstr(p + 13, "VEN_8086&DEV_")) {
-        dev = hex4(p + 13);
-        if (CmPortsFamily(ID(dev)) == NULL) {
-            unknown++;
-            printf("  xhcicm.inf names %04lX, which no family lists\n", dev);
+    for (p = strstr(infText, "PCI\\VEN_"); p != NULL; p = strstr(p + 8, "PCI\\VEN_")) {
+        if (strncmp(p + 12, "&DEV_", 5) != 0) {
+            continue;
         }
-        if (!inList(seen, seenCount, ID(dev)) && seenCount < 64) {
-            seen[seenCount++] = ID(dev);
+        ven = hex4(p + 8);
+        dev = hex4(p + 17);
+        if (CmPortsFamily(CM_PORTS_ID(ven, dev)) == NULL) {
+            unknown++;
+            printf("  xhcicm.inf names %04lX:%04lX, which no family lists\n", ven, dev);
+        }
+        if (!inList(seen, seenCount, CM_PORTS_ID(ven, dev)) && seenCount < 64) {
+            seen[seenCount++] = CM_PORTS_ID(ven, dev);
         }
     }
     CHECK_EQ(unknown, 0, "every NHI id of xhcicm.inf is a family's");
@@ -195,6 +222,10 @@ static void test_infs(void)
     for (i = 0; i < CmPortsFamilyCount(); i++) {
         f = CmPortsFamilyAt(i);
         for (k = 0; k < f->NhiIdCount; k++) {
+            /* The emulator's host is matched by the class line alone. */
+            if ((f->NhiIds[k] & 0xFFFFUL) == 0x1B36UL) {
+                continue;
+            }
             missing += inList(seen, seenCount, f->NhiIds[k]) ? 0 : 1;
         }
     }

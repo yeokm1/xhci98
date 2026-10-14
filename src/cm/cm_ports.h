@@ -48,6 +48,11 @@ const CM_FAMILY *CmPortsFamily(ULONG nhiId);
 ULONG CmPortsFamilyCount(VOID);
 const CM_FAMILY *CmPortsFamilyAt(ULONG n);
 
+/* The bridge ids xhcicmf.inf names that no family carries (cm_ports.c says
+ * why each), for the host suite. 0 past the end. */
+ULONG CmPortsUnpairedCount(VOID);
+ULONG CmPortsUnpairedAt(ULONG n);
+
 /*
  * A Windows 98 PCI device id, "PCI\VEN_vvvv&DEV_dddd...\BUS_bb&DEV_dd&
  * FUNC_ff" (ANSI, at most `chars` characters, ending at the first NUL):
@@ -92,7 +97,9 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
  * A client still working at that point is treated as failed: the IRP is
  * released and the bridge invalidated (record 21 section 6.3's failure
  * path), which is the bounded, recoverable outcome; a hang of the power
- * transition is not.
+ * transition is not. cm_reenum.c logs this bound and arms the watchdog
+ * at CM_PORTS_HOLD_MAX_MS itself: the client's announcement-driven work
+ * has no bound this arithmetic can count exactly.
  */
 typedef struct _CM_PORTS_RESUME {
     ULONG ReadyMs;

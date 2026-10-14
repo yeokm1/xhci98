@@ -31,10 +31,11 @@
  *                    (TbtIcmNextAction), oldest first: the tunnel-up or
  *                    tunnel-down sequence of section 6.5 on every active
  *                    member, or a RESYNC of the whole set (both
- *                    sequences' re-enumeration, no poll). The NHI does not
- *                    call it while XhciCmReenum is 0 (section 8) and
- *                    counts the action as skipped; called anyway, it
- *                    re-enumerates nothing then either.
+ *                    sequences' re-enumeration, no poll). Called for every
+ *                    action whatever XhciCmReenum says: at 0 (section 8)
+ *                    it makes no re-enumeration call and counts the action
+ *                    as not done, but still voids the domain's pending
+ *                    ejects, since the tunnel changed.
  *   CmReenumService  once per pass of the thread (each idle poll), after
  *                    the actions are drained: the eject notifications the
  *                    child filters posted (section 7.4, record 22 section
@@ -158,6 +159,7 @@ typedef struct _CM_REENUM_PORT {
                                not be made: re-enumerated once it is      */
     ULONG EjectSerial;      /* the eject's bridge publication and          */
     ULONG EjectGen;         /* population generation, checked at hand-off */
+    ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -316,6 +318,12 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
  * STATUS_PENDING), FALSE when the caller passes it down as usual.
  * <= DISPATCH_LEVEL. */
 BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
+
+/* A child filter received IRP_MN_QUERY_REMOVE_DEVICE: it takes the
+ * bridge's eject epoch, which a tunnel change (CmReenumAction) advances,
+ * so its eventual removal counts as an eject only if no tunnel changed in
+ * between. PASSIVE_LEVEL. */
+VOID CmRegChildQueryRemove(struct _CM_FILTER *child);
 
 /* A child filter's device has been removed, its REMOVE_DEVICE passed
  * down and finished below; `ejected` when a query-remove preceded it and

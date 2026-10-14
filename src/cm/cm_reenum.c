@@ -571,6 +571,18 @@ static BOOLEAN cmEjectReady(PCM_FILTER bridge)
     return TRUE;
 }
 
+VOID CmRegChildQueryRemove(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    if (child->Bridge == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    child->QueryEpoch = child->Bridge->EjectEpoch;
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 /*
  * A child filter's device has been removed: its REMOVE_DEVICE completed
  * below and the filter detached from the PDO. `ejected` when that removal
@@ -592,7 +604,9 @@ VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (ejected) {
+    /* A removal whose query came before a tunnel change is of the old
+     * connection: not an eject of this one. */
+    if (ejected && child->QueryEpoch == bridge->EjectEpoch) {
         bridge->EjectSeen = 1;
     }
     d = bridge->Owner;
@@ -815,6 +829,41 @@ static ULONG cmNhiLocation(PCM_NHI nhi)
 /* ---- Windows 98: CONFIGMG --------------------------------------------- */
 
 /*
+ * The walk's diagnostic, once per member: the instance part of a vendor
+ * 8086 PCI device id whose location did not parse, as up to three words of
+ * four characters, so a reading shows what form Windows 98 gave it.
+ */
+static VOID cmLogInstance(PCM_NHI nhi, const char *id)
+{
+    ULONG i;
+    ULONG k;
+    ULONG w;
+    ULONG n;
+    ULONG id32;
+
+    if (!CmPortsIdVenDev(id, CMG_MAX_DEVICE_ID_LEN, &id32) ||
+        (id32 & 0xFFFFUL) != 0x8086UL) {
+        return;
+    }
+    for (i = 4; i < CMG_MAX_DEVICE_ID_LEN && id[i] != 0 && id[i] != '\\';
+         i++) {
+    }
+    if (i >= CMG_MAX_DEVICE_ID_LEN || id[i] == 0) {
+        return;
+    }
+    i++;
+    CmLogNote(nhi, "cm.reenum.9x.walk.id", id32);
+    for (k = 0; k < 3 && id[i] != 0; k++) {
+        w = 0;
+        for (n = 0; n < 4 && id[i] != 0; n++) {
+            w = (w << 8) | (ULONG)(UCHAR)id[i];
+            i++;
+        }
+        CmLogNote(nhi, "cm.reenum.9x.walk.inst", w);
+    }
+}
+
+/*
  * The devnode of the bridge at `bdf`: the cached one while its id still
  * names that location, else a walk of the tree from the root. 0 for none.
  */
@@ -827,6 +876,9 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
     ULONG node;
     ULONG next;
     ULONG at;
+    ULONG pci;
+    ULONG dropped;
+    ULONG cr;
     char id[CMG_MAX_DEVICE_ID_LEN + 1];
 
     r = &nhi->Reenum;
@@ -839,26 +891,43 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
     r->Port[index].Devnode = 0;
     depth = 0;
     nodes = 0;
+    pci = 0;
+    dropped = 0;
     stack[depth++] = r->Cfgmg.Root;
     while (depth > 0 && nodes < CM_WALK_NODES) {
         node = stack[--depth];
         nodes++;
-        if (CmCfgmgDeviceId(&r->Cfgmg, node, id, sizeof(id)) ==
-                CMG_CR_SUCCESS &&
-            CmPortsIdLocation(id, sizeof(id), &at) &&
-            at == r->Port[index].Bdf) {
-            r->Port[index].Devnode = node;
-            return node;
+        cr = CmCfgmgDeviceId(&r->Cfgmg, node, id, sizeof(id));
+        if (cr == CMG_CR_SUCCESS && CmPortsIdLocation(id, sizeof(id), &at)) {
+            if (at == r->Port[index].Bdf) {
+                r->Port[index].Devnode = node;
+                return node;
+            }
+            pci++;
+        } else if (cr == CMG_CR_SUCCESS && !r->Port[index].WalkLogged) {
+            cmLogInstance(nhi, id);
         }
         if (CmCfgmgChild(&r->Cfgmg, node, &next) != CMG_CR_SUCCESS) {
             continue;
         }
-        while (next != 0 && depth < CM_WALK_STACK) {
+        while (next != 0) {
+            if (depth == CM_WALK_STACK) {
+                dropped++;
+                break;
+            }
             stack[depth++] = next;
             if (CmCfgmgSibling(&r->Cfgmg, next, &next) != CMG_CR_SUCCESS) {
                 break;
             }
         }
+    }
+    /* Why the walk did not find it, once per member: devnodes visited,
+     * PCI locations parsed, and siblings the stack could not hold. */
+    if (!r->Port[index].WalkLogged) {
+        r->Port[index].WalkLogged = 1;
+        CmLogNote(nhi, "cm.reenum.9x.walk.nodes", nodes);
+        CmLogNote(nhi, "cm.reenum.9x.walk.pci", pci);
+        CmLogNote(nhi, "cm.reenum.9x.walk.dropped", dropped);
     }
     return 0;
 }
@@ -959,9 +1028,11 @@ static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
     r = &nhi->Reenum;
     bridge = cmFindDevnode(nhi, i);
     if (bridge == 0) {
+        /* Not retried by Missed on every pass: the next tunnel change
+         * walks again. */
         r->CallFailures++;
         CmLogNote(nhi, "cm.reenum.9x.no-devnode", r->Port[i].Bdf);
-        return FALSE;
+        return TRUE;
     }
     if (removeVanished) {
         idCount = cmBusIds(r->Port[i].Bdf, ids, CM_BUS_FUNCTIONS);
@@ -1378,6 +1449,7 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
         f = cmRegFind(r->Port[i].Bdf);
         if (f != NULL && f->Owner == nhi) {
             f->RelGen++;
+            f->EjectEpoch++;
             f->EjectSeen = 0;
         }
     }
@@ -1560,7 +1632,13 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     resume.CmdMs = nhi->Icm.CmdTimeoutMs;
     resume.ApproveMs = nhi->Icm.ApproveTimeoutMs;
     resume.Retries = nhi->Icm.Retries;
-    r->HoldBoundMs = CmPortsHoldBound(&resume);
+    /* The client's own bound is logged; the watchdog itself is the fixed
+     * limit, CM_PORTS_HOLD_MAX_MS: the client's announcement-driven work
+     * has no bound this driver can count exactly (each drain may process
+     * many announcements), and past the limit the failure path is the
+     * policy (cm_ports.h). */
+    CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
+    r->HoldBoundMs = CM_PORTS_HOLD_MAX_MS;
     seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
     if (r->Route != CM_ROUTE_FILTER) {

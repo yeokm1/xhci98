@@ -221,9 +221,12 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
                 nhi->Counters.ActionsNotLive++;
             }
         }
+        /* Every action reaches the seam, XhciCmReenum 0 included: it
+         * voids safe eject's pending ejects on any tunnel change, and
+         * makes no re-enumeration call itself while the value is 0
+         * (cm_reenum.h). */
         if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
             nhi->Counters.ReenumSkipped++;
-            continue;
         }
         CmReenumAction(nhi, &a);
     }
