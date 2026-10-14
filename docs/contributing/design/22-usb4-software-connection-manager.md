@@ -1804,8 +1804,8 @@ unplug; a failure in a later step does not reach back to it; `nvme98`'s gone dea
 Against `nvme98`'s gone deadline (5 s in its test build, from its own
 presence loss), as record 21 section 7.2 requires, under saturation too.
 The per-step bounds of section 5.2 are bounds, not a budget: summed, the
-worst case of the steps before the statement (several requests at up to
-400 ms each, two drains at up to 500 ms, the Detect read, the 2 s PCI-side
+worst case of the steps before the statement (several requests at
+nominally 400 ms each, before section 5.3's tick allowance, two drains at up to 500 ms, the Detect read, the 2 s PCI-side
 reading) passes 5 s. So the statement has a deadline of its own:
 
 - **The order** is section 7.3's: the PCIe host side and its read-back,
