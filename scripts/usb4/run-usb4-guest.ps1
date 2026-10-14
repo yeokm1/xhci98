@@ -33,6 +33,9 @@
 #   powershell -File scripts\usb4\run-usb4-guest.ps1 -Guest winxp -Usb4Profile tb3 -DryRun
 #
 # Then: powershell -File scripts\usb4\usb4-qmp.ps1 -Name <Name> <verb> ...
+#
+# Under powershell -File, a value that starts with '-' needs the colon form,
+# -Extra:-S; -TracePattern takes a comma-separated list ('usb4_*,pci_nvme_*').
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('win98', 'winme', 'win2k-xonly', 'win2k-smp', 'winxp', 'winxp64',
