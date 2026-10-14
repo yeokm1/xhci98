@@ -903,17 +903,32 @@ static ULONG hcdCfgBuildInput(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * descriptor it is handed, and which XhciFastPollFsLs keys on. At
  * SuperSpeed the endpoint keeps its companion from the device's own and
  * takes the caller's byte by XhciPipeRebaseInterval (task 36.19; design
- * record 13 section 13.7): XhciPipeFunctionEndpoint. Thread only.
+ * record 13 section 13.7). Since task 38.12 (section 10.14.3) the
+ * composite record `rec` - the composite devnode's own select - comes
+ * second: the caller's byte where it differs from the device's, else the
+ * record's where that differs, else the device's own
+ * (XhciPipeFunctionEndpointFrom). `caller` NULL is a SELECT_INTERFACE's.
+ * *fromRecord is nonzero when the record's byte was taken; the caller
+ * counts it once the endpoint is open (hcdCfgRecordOpened). Thread only.
  */
 static ULONG hcdCfgFunctionEndpoint(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                    const UCHAR *caller, ULONG offset,
+                                    const UCHAR *caller,
+                                    PHCD_COMP_RECORD rec, ULONG offset,
                                     ULONG number, ULONG alternate,
-                                    PXHCI_PIPE_EP ep)
+                                    PXHCI_PIPE_EP ep, PULONG fromRecord)
 {
-    return XhciPipeFunctionEndpoint(dev->Selected, dev->SelectedLength,
-                                    offset, caller, number, alternate,
-                                    HcdDevicePipeSpeed(hc, dev),
-                                    hc->Hc.HcInfo.Lec, ep);
+    ULONG answer;
+    ULONG source;
+
+    answer = XhciPipeFunctionEndpointFrom(
+        dev->Selected, dev->SelectedLength, offset, caller,
+        rec != NULL ? rec->Bytes : NULL, rec != NULL ? rec->Length : 0,
+        number, alternate, HcdDevicePipeSpeed(hc, dev), hc->Hc.HcInfo.Lec,
+        ep, &source);
+    *fromRecord = (answer == XHCI_PIPE_OK && source == XHCI_PIPE_FROM_RECORD)
+                      ? 1UL
+                      : 0UL;
+    return answer;
 }
 
 /* The interval cap and the Average TRB Length switch (35-T.7, design record
@@ -1944,6 +1959,7 @@ typedef struct _HCD_CFG_SWITCH {
     ULONG NewMask;
     ULONG Keep;
     ULONG Streams;
+    ULONG FromRecord;   /* new pipes at a composite record's byte (38.12) */
 } HCD_CFG_SWITCH, *PHCD_CFG_SWITCH;
 
 static VOID hcdCfgSwitchInit(PHCD_CFG_SWITCH sw)
@@ -1960,6 +1976,26 @@ static VOID hcdCfgSwitchInit(PHCD_CFG_SWITCH sw)
     sw->NewMask = 0;
     sw->Keep = 0;
     sw->Streams = 0;
+    sw->FromRecord = 0;
+}
+
+/* Task 38.12 (design record 13 section 10.14.6): the new pipes a switch
+ * that succeeded opened at a composite record's byte, counted and logged
+ * only now that they are open. Thread only. */
+static VOID hcdCfgRecordOpened(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                               PHCD_CFG_SWITCH sw)
+{
+    ULONG dci;
+
+    for (dci = 2; dci < 32; dci++) {
+        if ((sw->FromRecord & (1UL << dci)) == 0 || sw->New[dci] == NULL) {
+            continue;
+        }
+        hc->Counters.CompositeIntervals++;
+        XhciLogNote(&hc->Hc, "comp.interval",
+                    ((dev->SlotId & 0xFFUL) << 24) | (dci << 16) |
+                        (sw->New[dci]->Ep.BInterval & 0xFFUL));
+    }
 }
 
 /*
@@ -2406,8 +2442,10 @@ static ULONG hcdCfgSetInterfaceOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * 2026-10-03). Thread only.
  */
 static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                                  PHCD_DEVICE_PDO pdo, PURB urb)
+                                  PHCD_DEVICE_PDO pdo, PURB urb,
+                                  PHCD_COMP_RECORD rec)
 {
+    ULONG fromRecord;
     struct _URB_SELECT_INTERFACE *si;
     PUSBD_INTERFACE_INFORMATION ii;
     HCD_CFG_SWITCH sw;
@@ -2505,10 +2543,20 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     reserved = hcdCfgSwitchReserved(dev, &sw);
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (e = 0; e < iface.EndpointCount; e++) {
-        code = XhciPipeEndpointParamsAt(dev->Selected, dev->SelectedLength,
-                                        iface.EndpointOffset[e],
-                                        HcdDevicePipeSpeed(hc, dev),
-                                        hc->Hc.HcInfo.Lec, &ep);
+        /* A function's takes the composite devnode's own rate, if it has
+         * one (task 38.12, section 10.14.3, D6); a device's is its own. */
+        fromRecord = 0;
+        code = pdo->Function
+                   ? hcdCfgFunctionEndpoint(hc, dev, NULL, rec,
+                                            iface.EndpointOffset[e],
+                                            iface.InterfaceNumber,
+                                            iface.AlternateSetting, &ep,
+                                            &fromRecord)
+                   : XhciPipeEndpointParamsAt(dev->Selected,
+                                              dev->SelectedLength,
+                                              iface.EndpointOffset[e],
+                                              HcdDevicePipeSpeed(hc, dev),
+                                              hc->Hc.HcInfo.Lec, &ep);
         if (code != XHCI_PIPE_OK || sw.New[ep.Dci] != NULL ||
             (sw.Keep & (1UL << ep.Dci)) != 0) {
             XHCI_DBG_VALUE("hcd: select interface refused, endpoint/speed",
@@ -2526,6 +2574,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         pipe->Interface = iface.InterfaceNumber;
         sw.New[ep.Dci] = pipe;
         sw.NewMask |= 1UL << ep.Dci;
+        sw.FromRecord |= fromRecord << ep.Dci;
         sw.Info[ep.Dci] = &ii->Pipes[e];
     }
 
@@ -2550,6 +2599,9 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     answer = hcdCfgSwitchRun(hc, dev, &sw, &own, event, hcdCfgSetInterfaceOne,
                              &one, &event, &manual, &reattached);
     hcdCfgSwitchAnswer(&sw, answer == XHCI_OWN_ANS_SUCCESS);
+    if (answer == XHCI_OWN_ANS_SUCCESS) {
+        hcdCfgRecordOpened(hc, dev, &sw);
+    }
     if (reattached) {
         dev->Alternate[iface.InterfaceNumber] = before;
         if (answer == XHCI_OWN_ANS_STALL) {
@@ -2899,8 +2951,9 @@ static VOID hcdCfgReleases(PHCD_CONTROLLER hc)
  */
 static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                  PHCD_DEVICE_PDO pdo, PURB urb,
-                                 PULONG held)
+                                 PHCD_COMP_RECORD rec, PULONG held)
 {
+    ULONG fromRecord;
     struct _URB_SELECT_CONFIGURATION *sc;
     PUSBD_INTERFACE_INFORMATION ii;
     HCD_CFG_SWITCH sw;
@@ -3025,9 +3078,10 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             answer = hcdCfgFunctionEndpoint(hc, dev,
                                             (const UCHAR *)
                                                 sc->ConfigurationDescriptor,
-                                            iface.EndpointOffset[e],
+                                            rec, iface.EndpointOffset[e],
                                             ii->InterfaceNumber,
-                                            ii->AlternateSetting, &ep);
+                                            ii->AlternateSetting, &ep,
+                                            &fromRecord);
             if (answer != XHCI_PIPE_OK || sw.New[ep.Dci] != NULL ||
                 (sw.Keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
@@ -3045,6 +3099,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             pipe->Interface = iface.InterfaceNumber;
             sw.New[ep.Dci] = pipe;
             sw.NewMask |= 1UL << ep.Dci;
+            sw.FromRecord |= fromRecord << ep.Dci;
             sw.Info[ep.Dci] = &ii->Pipes[e];
         }
         ii->Class = (UCHAR)iface.InterfaceClass;
@@ -3073,6 +3128,9 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                              hcdCfgSetInterfaceFunc, &func, &event, &manual,
                              &reattached);
     hcdCfgSwitchAnswer(&sw, answer == XHCI_OWN_ANS_SUCCESS);
+    if (answer == XHCI_OWN_ANS_SUCCESS) {
+        hcdCfgRecordOpened(hc, dev, &sw);
+    }
     if (reattached) {
         hc->Counters.SelectsReattached++;
     }
@@ -5441,6 +5499,7 @@ VOID HcdCfgRetryService(PHCD_CONTROLLER hc)
  * halted (HcdEnumService). */
 VOID HcdCfgService(PHCD_CONTROLLER hc)
 {
+    PHCD_COMP_RECORD rec;
     PLIST_ENTRY entry;
     PHCD_USB_DEVICE dev;
     PHCD_DEVICE_PDO pdo;
@@ -5547,13 +5606,21 @@ VOID HcdCfgService(PHCD_CONTROLLER hc)
         }
         switch (urb->UrbHeader.Function) {
         case HCD_URB_SELECT_CONFIGURATION:
-            usbd = pdo->Function
-                       ? hcdCfgSelectFunction(hc, dev, pdo, urb, &held)
-                       : hcdCfgSelect(hc, dev, urb);
+            if (pdo->Function) {
+                /* The composite devnode's own select, referenced for the
+                 * length of this one (task 38.12, section 10.14.3). */
+                rec = HcdCompRecordRef(hc, dev);
+                usbd = hcdCfgSelectFunction(hc, dev, pdo, urb, rec, &held);
+                HcdCompRecordRelease(rec);
+            } else {
+                usbd = hcdCfgSelect(hc, dev, urb);
+            }
             usbd = hcdCfgSelectAnswer(hc, dev, usbd);
             break;
         case HCD_URB_SELECT_INTERFACE:
-            usbd = hcdCfgSelectInterface(hc, dev, pdo, urb);
+            rec = pdo->Function ? HcdCompRecordRef(hc, dev) : NULL;
+            usbd = hcdCfgSelectInterface(hc, dev, pdo, urb, rec);
+            HcdCompRecordRelease(rec);
             number = urb->UrbSelectInterface.Interface.InterfaceNumber;
             if (usbd == XHCI_USBD_STATUS_SUCCESS && number < 32) {
                 held &= ~(1UL << number);

@@ -38,8 +38,9 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 241,
-             "the whole counter block (38.10's rings: 233 to 240)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 246,
+             "the whole counter block (38.12's composite selects: 241 to "
+             "245)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              1224 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
@@ -60,8 +61,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 241, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 241,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 246, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 246,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -838,7 +839,17 @@ static void test_counter_tail(void)
              "SelectRollbacks at 239");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectRollbacksReopened),
              240 * 4, "SelectRollbacksReopened at 240");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 241 * 4, "241 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeSelects), 241 * 4,
+             "CompositeSelects at 241");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeSelectRefused),
+             242 * 4, "CompositeSelectRefused at 242");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeRewrites), 243 * 4,
+             "CompositeRewrites at 243");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeMismatches),
+             244 * 4, "CompositeMismatches at 244");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeIntervals), 245 * 4,
+             "CompositeIntervals at 245");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 246 * 4, "246 words in all");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters

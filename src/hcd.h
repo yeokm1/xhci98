@@ -904,7 +904,25 @@ typedef struct _HCD_DEVICE_PDO {
      * PDO is listed, from its final Config, kind and transport and the
      * controller's gate and table; IRP_MN_QUERY_CAPABILITIES copies it. */
     ULONG SilentInstall;
+    /* A composite parent's record (task 38.12; design record 13 section
+     * 10.14.2): the configuration descriptor its own composite FDO's
+     * SELECT_CONFIGURATION carried, or NULL. Swapped under the
+     * controller's PdoListLock by the parent's dispatch and its FDO
+     * (HcdCompositeForget); read by the thread through a reference taken
+     * under the same lock (HcdCompRecordRef). The PDO's deletion drops its
+     * reference. */
+    struct _HCD_COMP_RECORD *CompRecord;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
+
+/* A composite record (task 38.12): reference-counted, so a function select
+ * on the thread keeps the bytes it reads while the parent's dispatch
+ * replaces or forgets the record. Freed at the last reference, at <=
+ * DISPATCH_LEVEL. */
+typedef struct _HCD_COMP_RECORD {
+    volatile LONG Refs;
+    ULONG Length;
+    UCHAR Bytes[1];
+} HCD_COMP_RECORD, *PHCD_COMP_RECORD;
 
 /* A PDO other PDOs are presented under (ParentSerial): a hub's (task 33.4)
  * or a composite device's (task 36.43). */
@@ -2251,6 +2269,12 @@ NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 
 /* hcd_urb.c */
 NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
+NTSTATUS HcdCompositePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
+VOID HcdCompositeForget(PHCD_DEVICE_PDO pdo);
+VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
+                            ULONG unconfigure);
+PHCD_COMP_RECORD HcdCompRecordRef(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCompRecordRelease(PHCD_COMP_RECORD rec);
 LONG HcdUrbIoRequest(PVOID urb, PHCD_IO_REQUEST req);
 ULONG HcdUrbIsUsbdiQuery(const GUID *guid);
 NTSTATUS HcdUrbQueryInterface(PHCD_DEVICE_PDO pdo, PIRP irp);

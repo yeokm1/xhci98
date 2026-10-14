@@ -1842,3 +1842,664 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
     (VOID)InterlockedDecrement(&pdo->Busy);
     return status;
 }
+
+/* ----------------------------------------------------------------------- */
+/* The composite devnode's own SELECT_CONFIGURATION (task 38.12)            */
+/* ----------------------------------------------------------------------- */
+
+/*
+ * Design record 13 section 10.14. Under Microsoft's stack the composite
+ * parent selects the whole configuration down the composite devnode's own
+ * stack, so a lower filter there (hidusbf's "Process Parent") rewrites
+ * every function's bInterval in one place. Here the composite FDO sends the
+ * same requests down its own stack at its start (HcdCompositeSelectDown),
+ * and the parent PDO answers them in its dispatch
+ * (HcdCompositePdoInternalIoctl) - the two descriptors from its own copies,
+ * the select by keeping the caller's descriptor as the record a function's
+ * select and SELECT_INTERFACE take their bInterval from (hcd_cfg.c, rule 2
+ * of section 10.14.3). Nothing here configures the device, opens a pipe or
+ * waits on the thread: a select pended for the thread could be parked by a
+ * containment while the FDO's REMOVE waits on its unconfigure (a review,
+ * round 1).
+ */
+
+/* The interface handle a select returns, as hcd_cfg.c's. */
+#define HCD_COMP_IFACE_COOKIE(n)                                               \
+    ((USBD_INTERFACE_HANDLE)(ULONG_PTR)(0x48430000UL | (n)))
+
+/* The parent's mark on a select it refused and counted (UsbdFlags, the
+ * header field the bus owns; zero as the FDO sends it). */
+#define HCD_COMP_REFUSED_MARK   0x52504D43UL
+
+/* The FDO sequence's steps, for comp.fdo (its high nibble). */
+#define HCD_COMP_STEP_ALLOC     1UL
+#define HCD_COMP_STEP_DEVICE    2UL
+#define HCD_COMP_STEP_HEADER    3UL
+#define HCD_COMP_STEP_CONFIG    4UL
+#define HCD_COMP_STEP_PLAN      5UL
+#define HCD_COMP_STEP_SELECT    6UL
+
+/* The last reference frees the block; the decrement is the atomic test.
+ * IRQL: <= DISPATCH_LEVEL. */
+VOID HcdCompRecordRelease(PHCD_COMP_RECORD rec)
+{
+    if (rec != NULL && InterlockedDecrement(&rec->Refs) == 0) {
+        HcdPoolFree(rec);
+    }
+}
+
+/* The parent's record replaced by `rec` (NULL forgets it), the old one's
+ * reference dropped after the lock. Under PdoListLock while the PDO names
+ * its controller, the lock HcdCompRecordRef reads under; an orphan has no
+ * thread reader left (HcdDevicePdoReleaseAll cleared its device's Pdo
+ * before orphaning it). The new block is complete before it is published
+ * and is not touched by the publisher afterwards. IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdCompSwap(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                        PHCD_COMP_RECORD rec)
+{
+    PHCD_COMP_RECORD old;
+    KIRQL oldIrql;
+
+    if (hc != NULL) {
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        old = pdo->CompRecord;
+        pdo->CompRecord = rec;
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    } else {
+        old = (PHCD_COMP_RECORD)InterlockedExchangePointer(
+            (PVOID *)&pdo->CompRecord, rec);
+    }
+    HcdCompRecordRelease(old);
+}
+
+/* The controller through the parent PDO, its Busy raised, or NULL with
+ * nothing raised once the PDO is orphaned - hcd_hubfdo.c's guard. Never
+ * held across a call down a stack. IRQL: <= DISPATCH_LEVEL. */
+static PHCD_CONTROLLER hcdCompEnter(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    hc = pdo->Controller;
+    if (hc == NULL) {
+        (VOID)InterlockedDecrement(&pdo->Busy);
+    }
+    return hc;
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+static VOID hcdCompLeave(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc)
+{
+    if (hc != NULL) {
+        (VOID)InterlockedDecrement(&pdo->Busy);
+    }
+}
+
+/* The record forgotten: by the composite FDO before its sequence, at its
+ * sequence's failure and at its removal (section 10.14.2, step 0), and by
+ * the PDO's deletion. IRQL: <= DISPATCH_LEVEL. */
+VOID HcdCompositeForget(PHCD_DEVICE_PDO pdo)
+{
+    PHCD_CONTROLLER hc;
+
+    if (pdo == NULL || !pdo->Composite) {
+        return;
+    }
+    hc = hcdCompEnter(pdo);
+    hcdCompSwap(pdo, hc, NULL);
+    hcdCompLeave(pdo, hc);
+}
+
+/* The record a function's select reads, referenced, or NULL. The group's
+ * first PDO is the composite parent (section 10.12); dev->Pdo is read under
+ * PdoListLock, and is cleared by the thread before a group's PDOs are
+ * deleted, or by HcdDevicePdoReleaseAll only after HcdEnumDetach has had
+ * the thread drop every device, so no function select is in flight then.
+ * Thread only. */
+PHCD_COMP_RECORD HcdCompRecordRef(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO parent;
+    PHCD_COMP_RECORD rec;
+    KIRQL oldIrql;
+
+    rec = NULL;
+    if (dev == NULL) {
+        return NULL;
+    }
+    KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+    if (dev->Pdo != NULL) {
+        parent = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension;
+        if (parent->Composite) {
+            rec = parent->CompRecord;
+            if (rec != NULL) {
+                (VOID)InterlockedIncrement(&rec->Refs);
+            }
+        }
+    }
+    KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    return rec;
+}
+
+/* GET_DESCRIPTOR_FROM_DEVICE at the parent: the device or configuration
+ * descriptor from the PDO's own copies, fixed at creation. The client's
+ * buffer is reached as hcdFunctionConfig reaches it. */
+static NTSTATUS hcdCompDescriptor(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb)
+{
+    HCD_IO_REQUEST req;
+    const UCHAR *from;
+    PUCHAR to;
+    ULONG have;
+    ULONG wLength;
+    ULONG n;
+    ULONG i;
+
+    if ((ULONG)urb->UrbHeader.Length <
+            sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST) ||
+        HcdUrbIoRequest(urb, &req) != USBD_STATUS_SUCCESS ||
+        req.Setup[2] != 0 || (req.Setup[3] != 1 && req.Setup[3] != 2)) {
+        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                              STATUS_INVALID_PARAMETER);
+    }
+    if (req.Setup[3] == 1) {
+        from = pdo->DeviceDesc;
+        have = sizeof(pdo->DeviceDesc);
+    } else {
+        from = pdo->Config;
+        have = (pdo->Config != NULL) ? pdo->ConfigLength : 0;
+    }
+    to = NULL;
+    if (req.Mdl != NULL) {
+        if (MmGetMdlByteCount(req.Mdl) < req.Length) {
+            return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                                  STATUS_INVALID_PARAMETER);
+        }
+        if ((req.Mdl->MdlFlags &
+             (MDL_MAPPED_TO_SYSTEM_VA | MDL_SOURCE_IS_NONPAGED_POOL)) != 0) {
+            to = (PUCHAR)req.Mdl->MappedSystemVa;
+        }
+    } else {
+        to = (PUCHAR)req.Buffer;
+    }
+    wLength = (ULONG)req.Setup[6] | ((ULONG)req.Setup[7] << 8);
+    n = req.Length;
+    if (n > wLength) {
+        n = wLength;
+    }
+    if (n > have) {
+        n = have;
+    }
+    if (to == NULL && n != 0) {
+        return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
+                              STATUS_INVALID_PARAMETER);
+    }
+    for (i = 0; i < n; i++) {
+        to[i] = from[i];
+    }
+    if (req.LengthOut != NULL) {
+        *req.LengthOut = n;
+    }
+    urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
+ * SELECT_CONFIGURATION at the parent (section 10.14.2): validated against
+ * the PDO's own copy of the device's configuration, every interface entry
+ * before the record changes; a refusal forgets any earlier record (D3). The
+ * caller's descriptor is read to its own wTotalLength, the bound every
+ * port driver trusts in a select. The record and the answer are complete
+ * before the record is published; nothing is configured.
+ */
+static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                              PIRP irp, PURB urb)
+{
+    struct _URB_SELECT_CONFIGURATION *sc;
+    PUSBD_INTERFACE_INFORMATION ii;
+    XHCI_PIPE_IFACE iface;
+    PHCD_COMP_RECORD rec;
+    const UCHAR *desc;
+    const UCHAR *c;
+    PUCHAR p;
+    PUCHAR end;
+    USBD_STATUS usbd;
+    ULONG rewrites;
+    ULONG mismatches;
+    ULONG entries;
+    ULONG named;
+    ULONG fixed;
+    ULONG total;
+    ULONG off;
+    ULONG b;
+    ULONG e;
+    ULONG i;
+
+    sc = &urb->UrbSelectConfiguration;
+    if (hc == NULL) {
+        return hcdUrbComplete(irp, urb, (USBD_STATUS)HCD_USBD_DEVICE_GONE,
+                              STATUS_NO_SUCH_DEVICE);
+    }
+    usbd = USBD_STATUS_INVALID_PARAMETER;
+    if ((ULONG)urb->UrbHeader.Length <
+        (ULONG)FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface)) {
+        goto refused;
+    }
+    if (sc->ConfigurationDescriptor == NULL) {
+        /* The unconfigure (D9): the record forgotten, the device left
+         * configured, no function touched. */
+        hcdCompSwap(pdo, hc, NULL);
+        XhciLogNote(&hc->Hc, "comp.unconfig", pdo->Serial);
+        sc->ConfigurationHandle = NULL;
+        urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+        return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+    }
+    if (pdo->Config == NULL || pdo->ConfigLength < XHCI_PIPE_CONFIG_BYTES) {
+        goto refused;
+    }
+    desc = (const UCHAR *)sc->ConfigurationDescriptor;
+    total = (ULONG)desc[2] | ((ULONG)desc[3] << 8);
+    if (XhciPipeRecordCheck(desc, total, (ULONG)pdo->Config[5]) !=
+        XHCI_PIPE_OK) {
+        goto refused;
+    }
+
+    /* Every entry first: inside the URB, an interface and alternate the
+     * device's configuration carries, each once, room for its pipes. */
+    fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
+    end = (PUCHAR)urb + urb->UrbHeader.Length;
+    named = 0;
+    entries = 0;
+    for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {
+        /* Every byte to the URB's end is an entry (a review, round 1): a
+         * tail too short for one is refused, never skipped. */
+        if (p + fixed > end) {
+            usbd = USBD_STATUS_INVALID_PARAMETER;
+            goto refused;
+        }
+        ii = (PUSBD_INTERFACE_INFORMATION)p;
+        if (ii->Length < fixed || p + ii->Length > end ||
+            ii->InterfaceNumber >= 32 ||
+            (named & (1UL << ii->InterfaceNumber)) != 0 ||
+            XhciPipeFindInterface(pdo->Config, pdo->ConfigLength,
+                                  ii->InterfaceNumber, ii->AlternateSetting,
+                                  &iface) != XHCI_PIPE_OK) {
+            usbd = USBD_STATUS_INVALID_PARAMETER;
+            goto refused;
+        }
+        if (ii->Length <
+            fixed + iface.EndpointCount * sizeof(USBD_PIPE_INFORMATION)) {
+            usbd = (USBD_STATUS)HCD_USBD_BUFFER_TOO_SMALL;
+            goto refused;
+        }
+        named |= 1UL << ii->InterfaceNumber;
+        entries++;
+    }
+    if (entries == 0) {
+        goto refused;
+    }
+
+    rec = (PHCD_COMP_RECORD)HcdPoolAlloc(
+        FIELD_OFFSET(HCD_COMP_RECORD, Bytes) + total);
+    if (rec == NULL) {
+        usbd = (USBD_STATUS)HCD_USBD_NO_MEMORY;
+        goto refused;
+    }
+    rec->Refs = 1;
+    rec->Length = total;
+    for (i = 0; i < total; i++) {
+        rec->Bytes[i] = desc[i];
+    }
+
+    /* The answer, as a select fills it: the effective byte a function with
+     * no filter of its own would get, and no pipe handle - no pipe is
+     * opened for the composite. */
+    rewrites = 0;
+    mismatches = 0;
+    for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {
+        ii = (PUSBD_INTERFACE_INFORMATION)p;
+        (VOID)XhciPipeFindInterface(pdo->Config, pdo->ConfigLength,
+                                    ii->InterfaceNumber, ii->AlternateSetting,
+                                    &iface);
+        (VOID)XhciPipeRecordTally(pdo->Config, pdo->ConfigLength, rec->Bytes,
+                                  rec->Length, ii->InterfaceNumber,
+                                  ii->AlternateSetting, &rewrites,
+                                  &mismatches);
+        ii->Class = (UCHAR)iface.InterfaceClass;
+        ii->SubClass = (UCHAR)iface.InterfaceSubClass;
+        ii->Protocol = (UCHAR)iface.InterfaceProtocol;
+        ii->InterfaceHandle = HCD_COMP_IFACE_COOKIE(iface.InterfaceNumber);
+        ii->NumberOfPipes = iface.EndpointCount;
+        for (e = 0; e < iface.EndpointCount; e++) {
+            off = iface.EndpointOffset[e];
+            c = pdo->Config + off;
+            if (XhciPipeCallerInterval(pdo->Config, pdo->ConfigLength, off,
+                                       rec->Bytes, rec->Length,
+                                       iface.InterfaceNumber,
+                                       iface.AlternateSetting, &b) !=
+                XHCI_PIPE_OK) {
+                b = (ULONG)c[6];
+            }
+            ii->Pipes[e].EndpointAddress = c[2];
+            ii->Pipes[e].PipeType = (USBD_PIPE_TYPE)(c[3] & 3);
+            ii->Pipes[e].MaximumPacketSize =
+                (USHORT)(((ULONG)c[4] | ((ULONG)c[5] << 8)) & 0x7FFUL);
+            ii->Pipes[e].Interval = (UCHAR)b;
+            ii->Pipes[e].PipeHandle = NULL;
+        }
+    }
+    hcdCompSwap(pdo, hc, rec);
+    sc->ConfigurationHandle = (USBD_CONFIGURATION_HANDLE)pdo;
+    hcdCount(&hc->Counters.CompositeSelects);
+    for (i = 0; i < rewrites; i++) {
+        hcdCount(&hc->Counters.CompositeRewrites);
+    }
+    for (i = 0; i < mismatches; i++) {
+        hcdCount(&hc->Counters.CompositeMismatches);
+    }
+    XhciLogNote(&hc->Hc, "comp.select",
+                ((pdo->Serial & 0xFFUL) << 24) | ((entries & 0xFFUL) << 16) |
+                    ((rewrites & 0xFFUL) << 8) | (mismatches & 0xFFUL));
+    urb->UrbHeader.Status = USBD_STATUS_SUCCESS;
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+
+refused:
+    hcdCompSwap(pdo, hc, NULL);
+    hcdCount(&hc->Counters.CompositeSelectRefused);
+    /* Marked on the request itself, so its sender tells this refusal
+     * from a failure nobody counted (a review, round 2) - only where the
+     * URB's stated length covers the field (round 3). */
+    if ((ULONG)urb->UrbHeader.Length >= sizeof(struct _URB_HEADER)) {
+        urb->UrbHeader.UsbdFlags = HCD_COMP_REFUSED_MARK;
+    }
+    XhciLogNote(&hc->Hc, "comp.refused",
+                ((pdo->Serial & 0xFFUL) << 24) |
+                    ((ULONG)usbd & 0x00FFFFFFUL));
+    return hcdUrbComplete(irp, urb, usbd,
+                          usbd == (USBD_STATUS)HCD_USBD_BUFFER_TOO_SMALL
+                              ? STATUS_BUFFER_TOO_SMALL
+                              : STATUS_INVALID_PARAMETER);
+}
+
+/*
+ * Every IRP_MJ_INTERNAL_DEVICE_CONTROL at a composite parent's PDO (section
+ * 10.14.2, D11): SUBMIT_URB with GET_DESCRIPTOR_FROM_DEVICE or
+ * SELECT_CONFIGURATION, answered here and now; everything else
+ * STATUS_NOT_SUPPORTED, as before task 38.12. Inside the PDO's Busy, which
+ * its STOP and REMOVE wait out (hcdPdoQuiesce). Nothing here waits. IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+NTSTATUS HcdCompositePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PHCD_CONTROLLER hc;
+    NTSTATUS status;
+    PURB urb;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    (VOID)InterlockedIncrement(&pdo->Busy);
+    if (pdo->Closing) {
+        status = HcdCompleteIrp(irp, STATUS_DELETE_PENDING, 0);
+        goto done;
+    }
+    hc = pdo->Controller;
+    urb = (PURB)stack->Parameters.Others.Argument1;
+    if (stack->Parameters.DeviceIoControl.IoControlCode !=
+            IOCTL_INTERNAL_USB_SUBMIT_URB ||
+        urb == NULL) {
+        status = HcdCompleteIrp(irp, STATUS_NOT_SUPPORTED, 0);
+        goto done;
+    }
+    if (hc == NULL) {
+        /* Orphaned (HcdDevicePdoReleaseAll): nothing is answered for a
+         * device the bus no longer holds (a review, round 1). */
+        status = hcdUrbComplete(irp, urb, (USBD_STATUS)HCD_USBD_DEVICE_GONE,
+                                STATUS_NO_SUCH_DEVICE);
+        goto done;
+    }
+    switch (urb->UrbHeader.Function) {
+    case URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE:
+        status = hcdCompDescriptor(pdo, irp, urb);
+        break;
+    case URB_FUNCTION_SELECT_CONFIGURATION:
+        status = hcdCompSelect(pdo, hc, irp, urb);
+        break;
+    default:
+        status = HcdCompleteIrp(irp, STATUS_NOT_SUPPORTED, 0);
+        break;
+    }
+done:
+    (VOID)InterlockedDecrement(&pdo->Busy);
+    return status;
+}
+
+/* IRQL: <= DISPATCH_LEVEL (a completion routine). */
+static NTSTATUS NTAPI hcdCompDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                                  PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    (VOID)KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+/* One URB down the composite FDO's own stack, waited for; a URB status
+ * that is not a success fails it. IRQL: PASSIVE_LEVEL. */
+static NTSTATUS hcdCompSend(PDEVICE_OBJECT lower, PURB urb)
+{
+    PIO_STACK_LOCATION next;
+    KEVENT done;
+    NTSTATUS status;
+    PIRP irp;
+
+    irp = IoAllocateIrp(lower->StackSize, FALSE);
+    if (irp == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    irp->IoStatus.Information = 0;
+    next = IoGetNextIrpStackLocation(irp);
+    next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    next->Parameters.DeviceIoControl.IoControlCode =
+        IOCTL_INTERNAL_USB_SUBMIT_URB;
+    next->Parameters.Others.Argument1 = urb;
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    HCD_SET_COMPLETION_ALWAYS(irp, hcdCompDone, &done);
+    status = IoCallDriver(lower, irp);
+    if (status == STATUS_PENDING) {
+        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
+                                    NULL);
+    }
+    status = irp->IoStatus.Status;
+    IoFreeIrp(irp);
+    if (NT_SUCCESS(status) && !USBD_SUCCESS(urb->UrbHeader.Status)) {
+        status = STATUS_UNSUCCESSFUL;
+    }
+    return status;
+}
+
+/* IRQL: PASSIVE_LEVEL. */
+static NTSTATUS hcdCompGetDescriptor(PDEVICE_OBJECT lower, PURB urb,
+                                     ULONG type, PVOID buffer, ULONG length,
+                                     PULONG got)
+{
+    struct _URB_CONTROL_DESCRIPTOR_REQUEST *dr;
+    NTSTATUS status;
+    ULONG i;
+
+    for (i = 0; i < sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST); i++) {
+        ((PUCHAR)urb)[i] = 0;
+    }
+    dr = &urb->UrbControlDescriptorRequest;
+    dr->Hdr.Length = sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST);
+    dr->Hdr.Function = URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE;
+    dr->TransferBuffer = buffer;
+    dr->TransferBufferLength = length;
+    dr->DescriptorType = (UCHAR)type;
+    status = hcdCompSend(lower, urb);
+    *got = NT_SUCCESS(status) ? dr->TransferBufferLength : 0;
+    if (*got > length) {
+        *got = length;
+    }
+    return status;
+}
+
+/*
+ * The composite FDO's own sequence (section 10.14.2). At its START, after
+ * the START came back up (`unconfigure` 0): the record forgotten, then the
+ * device and configuration descriptors and one SELECT_CONFIGURATION over
+ * the descriptor that came back, every interface at alternate 0, down
+ * `lower`, the top of the stack below the FDO, a lower filter included. At
+ * its REMOVE (`unconfigure` 1): the NULL-descriptor select. Any failure,
+ * one a filter reports after the parent published the record included,
+ * forgets the record again and is counted and logged; the START never
+ * fails for it (D4). IRQL: PASSIVE_LEVEL.
+ */
+VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
+                            ULONG unconfigure)
+{
+    struct _URB_SELECT_CONFIGURATION *sc;
+    PUSBD_INTERFACE_INFORMATION ii;
+    PHCD_CONTROLLER hc;
+    UCHAR numbers[32];
+    ULONG pipes[32];
+    UCHAR head[XHCI_PIPE_CONFIG_BYTES];
+    UCHAR device[18];
+    PUCHAR config;
+    PURB urb;
+    PURB sel;
+    NTSTATUS status;
+    ULONG countIt;
+    ULONG count;
+    ULONG total;
+    ULONG size;
+    ULONG step;
+    ULONG got;
+    ULONG one;
+    ULONG i;
+    ULONG e;
+
+    config = NULL;
+    sel = NULL;
+    status = STATUS_SUCCESS;
+    step = 0;
+    countIt = !unconfigure;
+    HcdCompositeForget(parent);
+    urb = (PURB)HcdPoolAlloc(sizeof(URB));
+    if (urb == NULL) {
+        step = HCD_COMP_STEP_ALLOC;
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto cleanup;
+    }
+    if (unconfigure) {
+        for (i = 0; i < sizeof(struct _URB_SELECT_CONFIGURATION); i++) {
+            ((PUCHAR)urb)[i] = 0;
+        }
+        urb->UrbHeader.Length = sizeof(struct _URB_SELECT_CONFIGURATION);
+        urb->UrbHeader.Function = URB_FUNCTION_SELECT_CONFIGURATION;
+        status = hcdCompSend(lower, urb);
+        if (!NT_SUCCESS(status)) {
+            step = HCD_COMP_STEP_SELECT;
+        }
+        goto cleanup;
+    }
+
+    status = hcdCompGetDescriptor(lower, urb, 1, device, sizeof(device),
+                                  &got);
+    if (!NT_SUCCESS(status) || got < sizeof(device)) {
+        step = HCD_COMP_STEP_DEVICE;
+        goto cleanup;
+    }
+    status = hcdCompGetDescriptor(lower, urb, 2, head, sizeof(head), &got);
+    total = (ULONG)head[2] | ((ULONG)head[3] << 8);
+    if (!NT_SUCCESS(status) || got < sizeof(head) ||
+        total < XHCI_PIPE_CONFIG_BYTES) {
+        step = HCD_COMP_STEP_HEADER;
+        goto cleanup;
+    }
+    config = (PUCHAR)HcdPoolAlloc(total);
+    if (config == NULL) {
+        step = HCD_COMP_STEP_ALLOC;
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto cleanup;
+    }
+    status = hcdCompGetDescriptor(lower, urb, 2, config, total, &got);
+    if (!NT_SUCCESS(status) || got < total) {
+        step = HCD_COMP_STEP_CONFIG;
+        goto cleanup;
+    }
+    if (XhciPipeParentPlan(config, total, numbers, pipes, &count) !=
+        XHCI_PIPE_OK) {
+        step = HCD_COMP_STEP_PLAN;
+        status = STATUS_UNSUCCESSFUL;
+        goto cleanup;
+    }
+
+    /* Sized as USBD_CreateConfigurationRequestEx sizes it: each entry a
+     * whole USBD_INTERFACE_INFORMATION, which holds one pipe, and room for
+     * the rest of its pipes. */
+    size = FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface);
+    for (i = 0; i < count; i++) {
+        one = sizeof(USBD_INTERFACE_INFORMATION);
+        if (pipes[i] > 1) {
+            one += (pipes[i] - 1) * sizeof(USBD_PIPE_INFORMATION);
+        }
+        size += one;
+    }
+    sel = (PURB)HcdPoolAlloc(size);
+    if (sel == NULL) {
+        step = HCD_COMP_STEP_ALLOC;
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto cleanup;
+    }
+    for (i = 0; i < size; i++) {
+        ((PUCHAR)sel)[i] = 0;
+    }
+    sc = &sel->UrbSelectConfiguration;
+    sc->Hdr.Length = (USHORT)size;
+    sc->Hdr.Function = URB_FUNCTION_SELECT_CONFIGURATION;
+    sc->ConfigurationDescriptor = (PUSB_CONFIGURATION_DESCRIPTOR)config;
+    ii = &sc->Interface;
+    for (i = 0; i < count; i++) {
+        one = sizeof(USBD_INTERFACE_INFORMATION);
+        if (pipes[i] > 1) {
+            one += (pipes[i] - 1) * sizeof(USBD_PIPE_INFORMATION);
+        }
+        ii->Length = (USHORT)one;
+        ii->InterfaceNumber = numbers[i];
+        ii->AlternateSetting = 0;
+        ii->NumberOfPipes = pipes[i];
+        for (e = 0; e < pipes[i]; e++) {
+            ii->Pipes[e].MaximumTransferSize =
+                USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE;
+        }
+        ii = (PUSBD_INTERFACE_INFORMATION)((PUCHAR)ii + one);
+    }
+    status = hcdCompSend(lower, sel);
+    if (!NT_SUCCESS(status)) {
+        step = HCD_COMP_STEP_SELECT;
+        /* Counted here unless the parent refused this very request and
+         * counted it, which it marks on the URB: an IRP that could not be
+         * allocated, a filter that failed it before or after the parent
+         * (a review, rounds 1 and 2). */
+        countIt = sel->UrbHeader.UsbdFlags != HCD_COMP_REFUSED_MARK;
+    }
+
+cleanup:
+    if (step != 0) {
+        /* Whatever the parent published before a filter failed the
+         * request goes too (a review, round 2). */
+        HcdCompositeForget(parent);
+        hc = hcdCompEnter(parent);
+        if (hc != NULL) {
+            if (countIt) {
+                hcdCount(&hc->Counters.CompositeSelectRefused);
+            }
+            XhciLogNote(&hc->Hc, "comp.fdo",
+                        (step << 28) | ((ULONG)status & 0x0FFFFFFFUL));
+        }
+        hcdCompLeave(parent, hc);
+    }
+    HcdPoolFree(sel);
+    HcdPoolFree(config);
+    HcdPoolFree(urb);
+}

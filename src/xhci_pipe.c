@@ -877,23 +877,65 @@ ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
                                ULONG interfaceNumber, ULONG alternate,
                                ULONG speed, ULONG lec, PXHCI_PIPE_EP ep)
 {
+    return XhciPipeFunctionEndpointFrom(config, length, offset, caller, NULL,
+                                        0, interfaceNumber, alternate, speed,
+                                        lec, ep, NULL);
+}
+
+/*
+ * The byte a function endpoint is opened at (design record 13 section
+ * 10.14.3, D1): the function's own caller's where it differs from the
+ * device's, else the composite record's, else the device's own. A caller
+ * whose copy matches with the device's own byte is no override, so a class
+ * driver that selects with the descriptor it was given falls through to
+ * the record.
+ */
+ULONG XhciPipeFunctionEndpointFrom(const UCHAR *config, ULONG length,
+                                   ULONG offset, const UCHAR *caller,
+                                   const UCHAR *record, ULONG recordLength,
+                                   ULONG interfaceNumber, ULONG alternate,
+                                   ULONG speed, ULONG lec, PXHCI_PIPE_EP ep,
+                                   PULONG source)
+{
     UCHAR copy[XHCI_PIPE_ENDPOINT_BYTES];
     ULONG answer;
     ULONG super;
+    ULONG total;
+    ULONG own;
     ULONG b;
     ULONG i;
 
+    if (source != NULL) {
+        *source = XHCI_PIPE_FROM_DEVICE;
+    }
     if (config == NULL || ep == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    total = xhciPipeTotal(config, length);
+    if (offset >= total || total - offset < XHCI_PIPE_ENDPOINT_BYTES) {
         return XHCI_PIPE_BAD_PARAM;
     }
     super = speed == XHCI_PIPE_SPEED_SUPER ||
             speed == XHCI_PIPE_SPEED_SUPER_PLUS;
-    if (caller == NULL ||
+    own = (ULONG)config[offset + 6];
+    if (caller != NULL &&
         XhciPipeCallerInterval(config, length, offset, caller,
                                (ULONG)caller[2] | ((ULONG)caller[3] << 8),
-                               interfaceNumber, alternate, &b) !=
-            XHCI_PIPE_OK ||
-        b == (ULONG)config[offset + 6]) {
+                               interfaceNumber, alternate, &b) ==
+            XHCI_PIPE_OK &&
+        b != own) {
+        if (source != NULL) {
+            *source = XHCI_PIPE_FROM_CALLER;
+        }
+    } else if (record != NULL &&
+               XhciPipeCallerInterval(config, length, offset, record,
+                                      recordLength, interfaceNumber,
+                                      alternate, &b) == XHCI_PIPE_OK &&
+               b != own) {
+        if (source != NULL) {
+            *source = XHCI_PIPE_FROM_RECORD;
+        }
+    } else {
         return XhciPipeEndpointParamsAt(config, length, offset, speed, lec,
                                         ep);
     }
@@ -909,6 +951,119 @@ ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
         return answer;
     }
     return XhciPipeRebaseInterval(ep, speed, b);
+}
+
+ULONG XhciPipeRecordCheck(const UCHAR *record, ULONG length,
+                          ULONG configValue)
+{
+    XHCI_PIPE_IFACE iface;
+    ULONG total;
+    ULONG answer;
+
+    if (record == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    if (length < XHCI_PIPE_CONFIG_BYTES ||
+        (ULONG)record[0] < XHCI_PIPE_CONFIG_BYTES ||
+        (ULONG)record[1] != XHCI_PIPE_DT_CONFIGURATION) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    total = (ULONG)record[2] | ((ULONG)record[3] << 8);
+    if (total < XHCI_PIPE_CONFIG_BYTES || total > length ||
+        (ULONG)record[5] != configValue) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    /* The walk checks every descriptor whether or not the interface is
+     * found; only a malformed set is refused here. */
+    answer = XhciPipeFindInterface(record, total, 0xFFFFFFFFUL, 0, &iface);
+    return (answer == XHCI_PIPE_MALFORMED || answer == XHCI_PIPE_BAD_PARAM)
+               ? XHCI_PIPE_MALFORMED
+               : XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeParentPlan(const UCHAR *config, ULONG length, PUCHAR numbers,
+                         PULONG pipes, PULONG count)
+{
+    XHCI_PIPE_IFACE iface;
+    ULONG answer;
+    ULONG total;
+    ULONG offset;
+    ULONG seen;
+    ULONG n;
+    ULONG i;
+
+    if (config == NULL || numbers == NULL || pipes == NULL ||
+        count == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    *count = 0;
+    /* The walk first: every later offset is trusted only after it. */
+    answer = XhciPipeFindInterface(config, length, 0xFFFFFFFFUL, 0, &iface);
+    if (answer != XHCI_PIPE_NOT_FOUND) {
+        return XHCI_PIPE_MALFORMED;
+    }
+    total = xhciPipeWord(config + 2);
+    seen = 0;
+    i = 0;
+    offset = (ULONG)config[0];
+    while (offset < total) {
+        if ((ULONG)config[offset + 1] == XHCI_PIPE_DT_INTERFACE &&
+            (ULONG)config[offset + 3] == 0) {
+            n = (ULONG)config[offset + 2];
+            if (n >= 32UL) {
+                return XHCI_PIPE_MALFORMED;
+            }
+            if ((seen & (1UL << n)) == 0) {
+                seen |= 1UL << n;
+                if (XhciPipeFindInterface(config, length, n, 0, &iface) !=
+                    XHCI_PIPE_OK) {
+                    return XHCI_PIPE_MALFORMED;
+                }
+                numbers[i] = (UCHAR)n;
+                pipes[i] = iface.EndpointCount;
+                i++;
+            }
+        }
+        offset += (ULONG)config[offset];
+    }
+    if (i == 0) {
+        return XHCI_PIPE_NOT_FOUND;
+    }
+    *count = i;
+    return XHCI_PIPE_OK;
+}
+
+ULONG XhciPipeRecordTally(const UCHAR *config, ULONG length,
+                          const UCHAR *record, ULONG recordLength,
+                          ULONG interfaceNumber, ULONG alternate,
+                          PULONG rewrites, PULONG mismatches)
+{
+    XHCI_PIPE_IFACE iface;
+    ULONG answer;
+    ULONG off;
+    ULONG b;
+    ULONG e;
+
+    if (config == NULL || record == NULL || rewrites == NULL ||
+        mismatches == NULL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    answer = XhciPipeFindInterface(config, length, interfaceNumber,
+                                   alternate, &iface);
+    if (answer != XHCI_PIPE_OK) {
+        return answer;
+    }
+    for (e = 0; e < iface.EndpointCount; e++) {
+        off = iface.EndpointOffset[e];
+        if (XhciPipeCallerInterval(config, length, off, record, recordLength,
+                                   interfaceNumber, alternate, &b) !=
+            XHCI_PIPE_OK) {
+            (*mismatches)++;
+        } else if (b != (ULONG)config[off + 6]) {
+            (*rewrites)++;
+        }
+    }
+    return XHCI_PIPE_OK;
 }
 
 ULONG XhciPipeFastRetry(ULONG completionCode)

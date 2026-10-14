@@ -377,6 +377,63 @@ ULONG XhciPipeFunctionEndpoint(const UCHAR *config, ULONG length,
                                ULONG speed, ULONG lec, PXHCI_PIPE_EP ep);
 
 /*
+ * XhciPipeFunctionEndpoint with the composite record (task 38.12; design
+ * record 13 section 10.14.3): `record`, `recordLength` bytes, the
+ * configuration descriptor the composite devnode's own SELECT_CONFIGURATION
+ * carried, or NULL. The bInterval is the caller's when its matched byte
+ * differs from the device's (FROM_CALLER), else the record's when its
+ * matched byte differs (FROM_RECORD), else the device's (FROM_DEVICE); a
+ * match is XhciPipeCallerInterval's, the endpoint's first six bytes equal
+ * to the device's, so no field but bInterval is ever taken. `caller` NULL
+ * is a SELECT_INTERFACE's form. *source (may be NULL) says which. Returns
+ * the parser's code.
+ */
+#define XHCI_PIPE_FROM_DEVICE   0UL
+#define XHCI_PIPE_FROM_CALLER   1UL
+#define XHCI_PIPE_FROM_RECORD   2UL
+ULONG XhciPipeFunctionEndpointFrom(const UCHAR *config, ULONG length,
+                                   ULONG offset, const UCHAR *caller,
+                                   const UCHAR *record, ULONG recordLength,
+                                   ULONG interfaceNumber, ULONG alternate,
+                                   ULONG speed, ULONG lec, PXHCI_PIPE_EP ep,
+                                   PULONG source);
+
+/*
+ * The composite record's header (task 38.12, section 10.14.2): a
+ * configuration descriptor (bDescriptorType 2, bLength 9 or more) whose
+ * wTotalLength is at least 9 and no more than `length`, whose
+ * bConfigurationValue is `configValue`, and whose descriptors walk cleanly
+ * to wTotalLength (XhciPipeFindInterface's walk). XHCI_PIPE_OK, else
+ * XHCI_PIPE_MALFORMED (XHCI_PIPE_BAD_PARAM for NULL).
+ */
+ULONG XhciPipeRecordCheck(const UCHAR *record, ULONG length,
+                          ULONG configValue);
+
+/*
+ * The composite FDO's SELECT_CONFIGURATION (task 38.12, section 10.14.2):
+ * every interface number the configuration `config` carries at alternate
+ * 0, in the order of their descriptors, into `numbers` (room for 32), each
+ * with the endpoint count XhciPipeFindInterface gives that alternate into
+ * `pipes`; *count how many. XHCI_PIPE_OK; XHCI_PIPE_NOT_FOUND for none;
+ * XHCI_PIPE_MALFORMED for a set the walk refuses or an interface number of
+ * 32 or more (the bus never splits such a device, section 10.8).
+ */
+ULONG XhciPipeParentPlan(const UCHAR *config, ULONG length, PUCHAR numbers,
+                         PULONG pipes, PULONG count);
+
+/*
+ * For the composite record's log and counters (section 10.14.6): of the
+ * endpoints of interface `interfaceNumber` at `alternate` in the device's
+ * `config`, how many the record matches with another bInterval
+ * (*rewrites) and how many it does not match at all (*mismatches). Both
+ * added to, never cleared. XHCI_PIPE_OK, or the walk's code.
+ */
+ULONG XhciPipeRecordTally(const UCHAR *config, ULONG length,
+                          const UCHAR *record, ULONG recordLength,
+                          ULONG interfaceNumber, ULONG alternate,
+                          PULONG rewrites, PULONG mismatches);
+
+/*
  * Whether a Configure Endpoint that failed with `completionCode` while
  * adding an endpoint XhciPipeFastPoll changed is retried at its fallback
  * Interval - Table 6-12's under modes 2 and 3, Interval 3 (1 ms) under

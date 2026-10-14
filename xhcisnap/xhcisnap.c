@@ -3187,6 +3187,16 @@ static const char *const rings_counter_names[SNAP_RINGS_WORDS] = {
     "SelectRollbacksReopened"
 };
 
+/* Task 38.12's five (the composite devnode's own SELECT_CONFIGURATION,
+ * design record 13 section 10.14.6) follow at 241, shown by
+ * print_hcd_compsel. */
+#define SNAP_COMPSEL_AT             241UL
+#define SNAP_COMPSEL_WORDS          5UL
+static const char *const compsel_counter_names[SNAP_COMPSEL_WORDS] = {
+    "CompositeSelects", "CompositeSelectRefused", "CompositeRewrites",
+    "CompositeMismatches", "CompositeIntervals"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3281,6 +3291,9 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_RINGS_AT && i - SNAP_RINGS_AT < SNAP_RINGS_WORDS) {
         return rings_counter_names[i - SNAP_RINGS_AT];
+    }
+    if (i >= SNAP_COMPSEL_AT && i - SNAP_COMPSEL_AT < SNAP_COMPSEL_WORDS) {
+        return compsel_counter_names[i - SNAP_COMPSEL_AT];
     }
     return NULL;
 }
@@ -3485,6 +3498,31 @@ static void print_hcd_rings(const unsigned char *image,
          get32(image, countersAt + (SNAP_RINGS_AT + 5) * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 6) * 4),
          get32(image, countersAt + (SNAP_RINGS_AT + 7) * 4));
+}
+
+/*
+ * Task 38.12's composite selects, from the counter block when it is long
+ * enough (a driver before 38.12 sends fewer words, and nothing is
+ * printed): the composite devnode's own SELECT_CONFIGURATIONs the parent
+ * recorded and refused, what a filter there rewrote or broke, and the
+ * function endpoints built from it. Out of line, as hcd_counter_name.
+ */
+static void print_hcd_compsel(const unsigned char *image,
+                              unsigned long countersAt,
+                              unsigned long counters)
+{
+    if (counters < SNAP_COMPSEL_AT + SNAP_COMPSEL_WORDS) {
+        return;
+    }
+    comp("\ncomposite selects (task 38.12, design record 13 section "
+         "10.14):\n");
+    comp("  recorded %lu, refused or failed %lu; endpoints rewritten %lu, "
+         "not matched %lu;\n    function endpoints at a recorded rate %lu\n",
+         get32(image, countersAt + SNAP_COMPSEL_AT * 4),
+         get32(image, countersAt + (SNAP_COMPSEL_AT + 1) * 4),
+         get32(image, countersAt + (SNAP_COMPSEL_AT + 2) * 4),
+         get32(image, countersAt + (SNAP_COMPSEL_AT + 3) * 4),
+         get32(image, countersAt + (SNAP_COMPSEL_AT + 4) * 4));
 }
 
 /*
@@ -3829,6 +3867,7 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
     print_hcd_timer(image, countersAt, counters);
     print_hcd_quirks(image, countersAt, counters);
     print_hcd_rings(image, countersAt, counters);
+    print_hcd_compsel(image, countersAt, counters);
 }
 
 /* ---- controller tolerance: the extension's Tol, placed by the HCD header */
@@ -5615,13 +5654,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 240 and two words
+ * word is nonzero and its value names its place): 0 to 245 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_RINGS_AT + SNAP_RINGS_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_COMPSEL_AT + SNAP_COMPSEL_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];

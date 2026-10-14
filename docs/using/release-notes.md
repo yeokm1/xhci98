@@ -255,6 +255,22 @@ included.
   does. This also bounds the endpoints the driver ever asks of the
   controller to the 64 that Intel's 7-series (Panther Point) controller
   can hold. Not read on real hardware.
+- **hidusbf on a composite device's own entry.** Under Windows' own USB
+  stack, a composite device - a keyboard with media keys, a keyboard and
+  mouse receiver - selects its configuration once, on its "USB Composite
+  Device" entry, so hidusbf's "Process Parent" sets the polling rate of
+  every function there at once. Under this driver that entry
+  (`USB\XHCI98_COMPOSITE`) took no such request until now, so the filter
+  there did nothing; only the filter on a function's own entry worked. The
+  driver's composite entry now selects the configuration through its own
+  entry at its start, as Windows' does, and each function takes its
+  polling rate from it, unless a filter on the function's own entry sets
+  another, which wins. A change of the rate reaches a function when it
+  next starts: at once on 2000 and later, where restarting the composite
+  entry restarts its functions; on 98 SE and ME restart the function's
+  entry too, or replug the device. SweetLow found it (GitHub issue 17).
+  Read in no virtual machine yet ("Untested ground"; see "SweetLow's
+  hidusbf").
 
 ## What `2.3.1.0` changed
 
@@ -1161,6 +1177,16 @@ root port and at Full Speed behind QEMU's hub). On a stock Windows 98 SE,
 on the `release` flavour, the filter loaded and its setting reached the
 controller. hidusbf works behind a hub on XP too: its Setup reads the mouse's speed there, and 1000, 500 and 250 Hz programmed Interval 3, 4 and 5.
 
+- **A composite device: either entry** (new in `2.4.0.0`). hidusbf's
+  "Process Parent" puts the filter on the composite device's own entry,
+  `xHCI98 USB Composite Device` (`USB\XHCI98_COMPOSITE`), and sets every
+  function's rate there; the filter on a function's own entry sets that
+  function's alone, and wins over the composite's. A new rate on the
+  composite entry reaches a function when the function next starts: on
+  2000 and later restarting the composite entry does it, on 98 SE and ME
+  restart the function's entry too, or replug the device. If hidusbf's
+  Setup does not offer the composite entry, set `LowerFilters` and
+  `bInterval` on it by hand, as for a function on Windows 98 SE.
 - **1000 Hz is the ceiling** for a Low- or Full-Speed device, as the xHCI
   specification sets it, unless `XhciFastPollFsLs` is set (under "Registry
   settings").
@@ -2871,6 +2897,7 @@ information.
 | A finer system timer while polling (`XhciPollFineTimer`), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. Unread on every guest and every machine, owed to the test matrix: the timer's effect and its release, at a stop, a sleep and a recovery; two controllers; the helper's install on 2000 and XP and its replacement of `xhcimsi.sys` on Vista and 7 ("XhciPollFineTimer: a finer system timer while polling") |
 | A High Speed hub and a USB 3 hub under the `2.4.0.0` ids (`USB\XHCI98_HUB`, `USB\XHCI98_HUB30`) | Built against host tests and the INF gate. Virtual machines model only a Full Speed hub, which takes the same id and code path as a High Speed one (`USB\XHCI98_HUB`) and stands for it before the release; a High Speed hub and a USB 3 hub's two halves under the new ids are read on real hardware after the release |
 | Linux's controller quirks (`XhciMsiAvoid` and the thirteen others, and `XhciIntervalCap` on `1002:7316`) | Built from Linux's handling and the xHCI specification against host tests. None has been read on a controller it lists, though the project's E460 (`9D2F`), B490 (`1E31`) and E7250 (`9CB1`) and a user's VL805 are listed for some ("Linux's controller quirks"). QEMU's controller is on no list. What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is visible only in an external capture of that shutdown |
+| hidusbf on a composite device's own entry (`USB\XHCI98_COMPOSITE`) | New in `2.4.0.0`, built against host tests. QEMU offers no keyboard-and-mouse composite device, so the rate set there reaching a function is owed to a real composite device, by passthrough or on a machine; whether hidusbf's Setup offers the entry is unread ("SweetLow's hidusbf: a mouse's polling rate") |
 | Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing

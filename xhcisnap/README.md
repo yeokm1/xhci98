@@ -833,6 +833,16 @@ refused command, the one-setting STALLs carried out by clearing the
 endpoints' halts, the rollbacks after a STALL and those that reopened the
 old setting. A block shorter than 241 words is a driver from before it,
 and the section is not printed.
+Task 38.12's five follow (241 to 245, `CompositeSelects`,
+`CompositeSelectRefused`, `CompositeRewrites`, `CompositeMismatches`,
+`CompositeIntervals`; design record 13 section 10.14), with a section of
+their own, **"composite selects"**: the composite devnode's own
+`SELECT_CONFIGURATION`s the parent recorded, and those it refused or whose
+own sequence failed; the endpoints a filter on the composite devnode gave
+another `bInterval`, and those it changed in more than `bInterval` (not
+taken); and the function endpoints built at a recorded rate. A block
+shorter than 246 words is a driver from before it, and the section is not
+printed.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`
