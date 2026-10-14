@@ -44,9 +44,11 @@
  * 532-663, holds 124 entries and no conditional; its only other lines are
  * two three-line comments, "4.0 OPK2 Services" (624-626) and "4.1 Services"
  * (645-647). So service n is the entry on line 533 + n up to line 623,
- * 530 + n from 627 to 644, and 527 + n from 648. The header's own name
- * array (DEBUG_SERVICE_NAMES, lines 671 on) lists the same 124 in the same
- * order. Get_Version returns a WORD read from AX (lines 2791-2797); every
+ * 536 + n from 627 to 644, and 539 + n from 648. The header's own name
+ * array (DEBUG_SERVICE_NAMES, lines 671 on) lists 124 names in the same
+ * order, the same but for one spelling at 109 (line 783's
+ * Register_For_Idle_Detection for line 648's
+ * Register_DevNode_For_Idle_Detection). Get_Version returns a WORD read from AX (lines 2791-2797); every
  * other service returns a CR_ value in EAX and is C-callable (lines
  * 2775-2777).
  */
