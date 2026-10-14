@@ -4241,8 +4241,24 @@ txtsetup.oem, xhci98.sys and xhci98.inf, and from RELEASE-X86\ also
 xhcihlpr.sys, which Setup copies for later and does not load. Start
 Setup, press F6 when "Press F6 if you need to install a third party SCSI
 or RAID driver" shows, press S at the next screen, insert the floppy, and
-pick "xHCI98 USB 3.x Host Controller". Setup then uses its own keyboard,
-mouse and USB storage drivers above it.
+pick "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)" (on XP x64,
+the x64 entry). Setup then uses its own keyboard, mouse and USB storage
+drivers above it.
+
+INSTALLING WINDOWS 2000: use the second entry, with three files from your
+CD. Before Setup, copy USBD.SY_, HIDCLASS.SY_ and HIDPARSE.SY_ from the
+I386 folder of the Windows 2000 CD you install from to the root of the
+same floppy, as they are (do not expand or rename them; this package does
+not carry them). At the F6 list press the Down arrow to "xHCI98 USB 3.x
+Host Controller (32-bit Windows 2000, files from CD)" and press Enter.
+Text mode then copies those files to the new system as well, so a USB
+keyboard, mouse or stick used during Setup works when it first starts.
+If the files are not on the floppy, Setup stops while copying files with
+"Insert the disk labeled: USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the
+32-bit Windows 2000 CD into drive A:" - put a floppy holding them in A:
+and press Enter, or press F3 to quit. That entry is for Windows 2000
+only; Windows XP takes the first. It leaves three idle service entries,
+usbd, hidclass and hidparse, set to start on demand.
 
 The same floppy serves the RECOVERY CONSOLE of Windows 2000 and XP: press
 F6 as for an install, then R at Setup's Welcome screen (on Windows 2000,
@@ -4276,22 +4292,28 @@ does not touch it.
     Setup stops. A laptop's built-in keyboard (connected inside as PS/2) or
     any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
     work. This package cannot carry those files. Windows 2000 does not ask.
-  - INSTALLING WINDOWS 2000 WITH A USB KEYBOARD, MOUSE OR STORAGE DEVICE
-    ON THE xHCI CONTROLLER STOPS AT THE FIRST START OF THE NEW SYSTEM,
-    with STOP c000026c naming hidusb.SYS or usbstor.SYS (error status
-    0xc0000034). Windows 2000's text-mode Setup copies the drivers for
-    the USB keyboard, mouse and stick it used, but not the Windows files
-    they need, such as usbd.sys, which it copies only with Microsoft's
-    own USB controller drivers. Seen in virtual machines. Text mode and
-    the Recovery Console still work, and Windows XP with a USB keyboard
-    and mouse is not affected. An install with no USB keyboard, mouse or
-    storage device on the controller was not tried. This package cannot
-    carry those files, and no workaround is offered.
+  - WINDOWS 2000 WITH THE FIRST ENTRY, "(32-bit Windows 2000/XP)", AND A
+    USB KEYBOARD, MOUSE OR STORAGE DEVICE ON THE xHCI CONTROLLER STOPS
+    AT THE FIRST START OF THE NEW SYSTEM, with STOP c000026c naming
+    hidusb.SYS or usbstor.SYS (error status 0xc0000034). Windows 2000's
+    text-mode Setup copies the drivers for the USB keyboard, mouse and
+    stick it used, but not the Windows files they need, such as
+    usbd.sys, which it copies only with Microsoft's own USB controller
+    drivers. The Windows 2000 entry, with the three files from the CD
+    on the floppy (above), copies them. Seen in virtual machines. Text
+    mode and the Recovery Console work with either entry, Windows XP
+    with a USB keyboard and mouse is not affected, and an install with
+    no USB keyboard, mouse or storage device on the controller went on
+    with no stop. This package does not carry those files.
 
   What has run in virtual machines: text mode with a USB keyboard and a
   USB stick on Windows 2000 and XP, and the Recovery Console on both,
-  logged in and running commands with the USB keyboard alone; and
-  Windows XP and XP x64 installed to the desktop this way. On real
+  logged in and running commands with the USB keyboard alone; Windows
+  XP and XP x64 installed to the desktop this way; and Windows 2000 SP4
+  with the Windows 2000 entry and the three files, with a USB keyboard
+  and mouse behind a hub and with a USB stick alone, through text mode
+  and the first start into GUI-mode Setup up to its product key page
+  (no key was entered). On real
   hardware: Windows XP x64 Setup started from a USB stick on a Dell
   Latitude E7250's xHCI controller, with this driver integrated into the
   install, ran to the desktop on this release's code. Nothing else of
@@ -4673,10 +4695,10 @@ being unsigned, and no change to this driver can remove them:
     Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
     by default (section 9).
 
-  * WINDOWS 2000 FROM THE F6 FLOPPY WITH A USB KEYBOARD, MOUSE OR STORAGE
-    DEVICE ON THE CONTROLLER STOPS AT THE FIRST START OF THE NEW SYSTEM
-    (STOP c000026c, hidusb.SYS or usbstor.SYS). Not this driver's file;
-    no workaround (section 4).
+  * WINDOWS 2000 FROM THE F6 FLOPPY NEEDS THREE FILES FROM ITS CD and the
+    Windows 2000 entry; with the first entry and a USB keyboard, mouse or
+    storage device on the controller the new system stops at its first
+    start (STOP c000026c, hidusb.SYS or usbstor.SYS). Section 4.
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop

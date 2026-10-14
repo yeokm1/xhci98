@@ -9928,7 +9928,9 @@ which imports `USBD.SYS`, and no `usbd.sys` (`files-4b.txt`, shot `b08`).
 The first reading was named after the driver it hit (`hidusb`) and so
 documented as a keyboard-or-mouse limit; the mechanism is any class
 driver Setup binds that imports `usbd.sys`. An install with no USB
-keyboard, mouse or storage device at text mode has not been read.
+keyboard, mouse or storage device at text mode (a hub and an audio device
+only) went into GUI-mode Setup with no stop (`hive-gui-keypage-4c.txt`,
+to the product key page).
 
 Rule. **On Windows 2000 a demand- or system-start driver laid down without
 its imports is a boot bugcheck, not a dead device; an F6 leg is not read
@@ -9936,8 +9938,9 @@ until the installed system has booted, and a limitation is scoped by its
 mechanism (here every class driver importing `usbd.sys`), not by the one
 driver the first stop named.** The package may not carry
 Microsoft's files, so this stands as a limitation (release notes, "Known
-limitations"); a fix through `txtsetup.oem` was investigated and is in the
-lesson below.
+limitations") for the first F6 entry; since `2.4.0.0` the Windows 2000
+entry, with three files the user copies from the CD, lifts it (the lesson
+below).
 
 ## A `txtsetup.oem` disk is always read from drive A: - text mode cannot take a file from the Windows CD - and a `driver` line always makes a service
 
@@ -10002,11 +10005,36 @@ with only `txtsetup.oem` changed, new blank disks `vm\t38mx\f6-w2k-x*`):
   product key page, which this medium demands (`x2a-g05`, `x2b-g03`).
 
 So on the interactive F6 route the limitation can be lifted only with the
-three Microsoft files on the F6 disk, put there by the user, which the project's rule for its media
-does not allow as things stand; the option would also have to be a second
-one, for Windows 2000 only, since XP's text mode would ask for the missing
-disk with no way past it, and it leaves three inert `Start` 3 services
-behind. That is the owner's decision; nothing was changed.
+three Microsoft files on the F6 disk, put there by the user. **As built
+(`2.4.0.0`, the owner's decision of 2026-10-14):** the package carries
+none of them; the 32-bit `txtsetup.oem` has a second entry, `XHCI98W2K`,
+for Windows 2000 only, in exactly the form above, and the release notes
+tell the user to copy `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` from
+the CD's `I386` to the floppy root. It is a second entry because XP's
+text mode would ask for the missing disk with no way past it; it leaves
+three inert `Start` 3 services behind. The legs on the built package
+(branch `p38-w2kf6`, `release` flavour, unsigned; runs 81-85 in
+`notes.txt`), following the release notes' steps as written: both
+entries listed at the F6 screen; Windows 2000 SP4 with the Windows 2000
+entry and the three files, with a hub, USB keyboard, mouse and audio
+device (every key from F6 on the USB keyboard, which worked in GUI mode
+too) and with a stick and no HID, through text mode and the first boot
+to the product key page, no stop, `setupapi.log` installing the
+controller, hubs, HID and `USBSTOR\DISK`; the Windows 2000 entry with
+the files missing asked "Insert the disk labeled: USBD.SY_ HIDCLASS.SY_
+HIDPARSE.SY_ from the 32-bit Windows 2000 CD into drive A:", and a
+floppy holding them swapped in (QEMU `change`) let the copy go on; 32-bit
+XP SP3 with the first entry went into GUI-mode Setup with the controller
+installed from `OemDir` and no copy error. The gate (`OEM-W2K`,
+`PKG-MSFILE` with the compressed names) holds the shape and keeps the
+files off the package.
+
+A slipstream was tried once on the side: an `[InputDevicesSupport]`
+entry for `xhci98` in a copy of the CD's `TXTSETUP.SIF`, with its own
+file section listing the three files, and the driver in the copy's
+`I386`. Text mode did not load the driver (no slot addressed by it, an
+empty port-0xE9 log from the `qemu` flavour), and it was not pursued;
+the release notes say only what was read.
 
 Rule. **On the interactive F6 route (an `$OEM$\TEXTMODE` preinstall was
 not tried) a `txtsetup.oem` can name only files on a disk in drive A:, and

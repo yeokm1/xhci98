@@ -3971,7 +3971,15 @@ driver at the F6 prompt. The install leg per target, in a virtual machine:
 
 1. Stage the package: `scripts\package\make-package.ps1 -Flavor release`
    (add `-Arch amd64` for XP x64). The directory is 8.3-clean and fits a
-   1.44 MB floppy, so QEMU can serve it as one directly.
+   1.44 MB floppy, so QEMU can serve it as one directly. **For a Windows
+   2000 leg that reaches GUI mode**, follow the release notes' "Installing
+   Windows 2000 from the F6 floppy": serve a COPY of the staged directory
+   (in a git-ignored leg directory, never the staged package itself, whose
+   gate refuses them) with `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_`
+   added at its root, copied unchanged from the install CD's `I386`
+   (`7z e <the CD image> I386/USBD.SY_ I386/HIDCLASS.SY_ I386/HIDPARSE.SY_`;
+   the CD image is opened read-only and never modified, and none of the
+   three is ever committed).
 2. A blank disk for the install: `qemu-img create -f qcow2 <disk> 8G`. The
    USB stick is a host directory served read-only through VVFAT, which QEMU
    presents as a partitioned FAT disk, so it needs no preparation and has a
@@ -4032,7 +4040,10 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    prompt for the disk in drive A:. Expect the list to offer "xHCI98 USB
    3.x Host Controller (32-bit Windows 2000/XP)" (or "... (Windows XP
    x64)"); choose it with Enter, and press Enter again at the screen that
-   lists it as the device Setup will load.
+   lists it as the device Setup will load. On the 32-bit floppy the list
+   has a second entry, "xHCI98 USB 3.x Host Controller (32-bit Windows
+   2000, files from CD)" (Down arrow, then Enter): the Windows 2000 leg
+   with the three files picks it; a 32-bit XP leg keeps the first.
 5. Setup loads its files and starts the kernel. Expect: the Welcome screen
    answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
    the driver by then); the partition screen lists the USB disk beside the
@@ -4049,12 +4060,16 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    `usbd.sys` and `usbui.dll`. Record any prompt and any unsigned-driver
    dialog (32-bit XP) as the leg's reading. **Windows 2000 with a USB
    keyboard, mouse or storage device on the controller stops at the first
-   GUI-mode boot** (`STOP c000026c`, `hidusb.SYS` or `usbstor.SYS`,
-   `0xc0000034`): its text mode copies those class drivers and not
-   `usbd.sys`, which both import (release notes, "Known limitations";
-   `lessons.md`). A 2000 leg that must reach GUI mode needs a population
-   with no USB keyboard, mouse or storage device on the controller during
-   text mode; such a leg has not been read.
+   GUI-mode boot with the first entry** (`STOP c000026c`, `hidusb.SYS` or
+   `usbstor.SYS`, `0xc0000034`): its text mode copies those class drivers
+   and not `usbd.sys`, which both import (release notes, "Known
+   limitations"; `lessons.md`). With the Windows 2000 entry and the three
+   files, text mode also lays down `usbd.sys`, `hidclass.sys` and
+   `hidparse.sys` (expanded, in `system32\drivers` and `OemDir`) and the
+   services `usbd`, `hidclass` and `hidparse` at `Start` 3, and the first
+   GUI-mode boot goes on. With the first entry and no USB keyboard, mouse
+   or storage device during text mode (a hub and an audio device only),
+   the first GUI-mode boot went on too (2026-10-14).
 7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
    Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
    service `xhci98` is the INF's (`Start` 3, not the boot start text mode

@@ -760,7 +760,7 @@ reading stands between the amd64 binary and its text mode.
 
 | Target | Verdict | Why, and the limits |
 |---|---|---|
-| Windows 2000 SP4 | Feasible with limits | Setup carries `hidusb`, `kbdhid`, `mouhid`, `usbstor`, `usbd`, `hidclass` and `hidparse`; no Setup row claims the controller or the root hub; no `usbccgp` is needed because the bus splits composites. **Amended 2026-10-14:** an install with a USB keyboard, mouse or storage device on the controller stops at the first GUI-mode boot (limit 7 below) |
+| Windows 2000 SP4 | Feasible with limits | Setup carries `hidusb`, `kbdhid`, `mouhid`, `usbstor`, `usbd`, `hidclass` and `hidparse`; no Setup row claims the controller or the root hub; no `usbccgp` is needed because the bus splits composites. **Amended 2026-10-14:** an install with a USB keyboard, mouse or storage device on the controller stops at the first GUI-mode boot unless the Windows 2000 entry, with three files the user copies from the CD, is picked (limit 7 below) |
 | Windows XP SP3 (32-bit) | Feasible with limits | As 2000; Setup's own EHCI stack coexists on a machine that has EHCI |
 | Windows XP x64 SP2 | Feasible with limits | As XP, with the amd64 build and its own file |
 
@@ -801,26 +801,38 @@ The limits, all of them the user's to know:
    (`files-4b.txt`: `usbstor.sys` on the disk, no `usbd.sys`). Text mode
    and the Recovery Console are unaffected; an install with no USB
    keyboard, mouse or storage device on the controller during text mode
-   has not been read. The package may not carry Microsoft's files
-   (`AGENTS.md`), so it stands as a limitation, with no workaround
-   (release notes, "Known limitations").
-   **A fix through this file, investigated 2026-10-14 (as built: no
-   change).** Naming the user's Windows 2000 CD as a second `[Disks]`
-   entry cannot work: text mode reads every file of an F6 option from
-   `\device\floppy0` and asks for a missing disk's tag file there,
-   "Insert the disk labeled: ... into drive A:", with no escape (static;
-   runtime, the CD in the CD drive, `x1b-06`). `USBD.SY_`,
-   `HIDCLASS.SY_` and `HIDPARSE.SY_` copied by the user from that CD
-   onto the F6 floppy, on `driver` lines with a `DriverKey` (which
-   `setupldr` requires) and `[Config.*]` values setting the services
-   those lines create to `Start` 3, did lift the stop, with a hub,
-   keyboard and mouse and with a stick and no HID device (both to the
-   product key page, `x2a-g05`, `x2b-g03`). That puts Microsoft files
-   on the F6 disk, needs a second, Windows 2000-only option (XP's
-   text mode would ask for the disk with no way past it) and leaves
-   three inert services, so it waits on the owner. `lessons.md`, "A
-   `txtsetup.oem` disk is always read from drive A: ...", has the
-   reading and the legs; `legal-provenance.md` section 4 the addresses.
+   (a hub and an audio device only) booted into GUI-mode Setup with no
+   stop and installed the controller from `OemDir` (dry cut 4,
+   `hive-gui-keypage-4c.txt`, to the product key page).
+   **As built, 2.4.0.0: a second F6 entry for Windows 2000 (the owner's
+   decision of 2026-10-14).** Naming the user's Windows 2000 CD as a
+   second `[Disks]` entry cannot work: text mode reads every file of an
+   F6 option from `\device\floppy0` and asks for a missing disk's tag
+   file there, "Insert the disk labeled: ... into drive A:", with no
+   escape (static; runtime, the CD in the CD drive, `x1b-06`). So the
+   32-bit file has a second option, `XHCI98W2K`, "xHCI98 USB 3.x Host
+   Controller (32-bit Windows 2000, files from CD)": `XHCI98`'s lines
+   and ids, then `driver = d2, usbd.sys, usbd`, `driver = d2,
+   hidclass.sys, hidclass` and `driver = d2, hidparse.sys, hidparse`,
+   disk `d2` tagged `\usbd.sy_` at the floppy root, and `[Config.usbd]`,
+   `[Config.hidclass]` and `[Config.hidparse]` each `value = "", Start,
+   REG_DWORD, 3`. The user copies `USBD.SY_`, `HIDCLASS.SY_` and
+   `HIDPARSE.SY_` from the CD's `I386` folder to the floppy root (the
+   release notes' F6 section); the package carries none of them
+   (`PKG-MSFILE`, `legal-provenance.md` section 5). Each part is what was
+   read: `setupldr` refuses a `driver` line without a `DriverKey`, and
+   `setupdd` creates a boot-start service in group `SCSI miniport` for
+   each, which `[Config.*]` sets to `Start` 3; `setupldr` loads only the
+   first driver line, `xhci98.sys`; the copy expands the compressed
+   files. `XHCI98` stays the default and unchanged, for XP, whose text
+   mode would ask for `d2` with no way past it. The investigation's
+   legs (the user-copied files on a one-option file, a hub, keyboard
+   and mouse and a stick with no HID, both to the product key page,
+   `x2a-g05`, `x2b-g03`) and the legs on the built package are in
+   `lessons.md`, "A `txtsetup.oem` disk is always read from drive A:
+   ..."; the addresses in `legal-provenance.md` section 4. `OEM-W2K`
+   holds the shape. Picking `XHCI98` on Windows 2000 still stops as
+   above (release notes, "Known limitations").
 
 **What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
 `build-driver.cmd` on every build, self-tested by mutation first, and by
@@ -833,8 +845,12 @@ the INF's NT 5.x install sections copy from the disk (`OEM-COPY`, since
 2026-10-14), the service the INF adds, the INF's model ids
 and no `USB\` id, no Microsoft file, 8.3 names, an architecture word in each
 description, the two files equal outside those descriptions and their `dll`
-lines, and in a
-package the file at the root with every file it names beside it.
+lines, the x86 file's Windows 2000 entry to the shape in limit 7
+(`OEM-W2K`: its own sections, `d2`, the three `d2` lines and the
+`[Config.*]` values, the only place the three Microsoft names may appear),
+and in a
+package the file at the root with every file it names on `d1` beside it and
+no Microsoft file, nor a compressed name of one (`PKG-MSFILE`).
 
 **Owed: one install leg per target**, from a floppy image in a virtual
 machine with no USB host controller but `qemu-xhci`, a `usb-kbd` and a
