@@ -1,7 +1,7 @@
 # Design Record 21 - Thunderbolt 3 Firmware Connection Manager Client and Tunnel Re-enumeration
 
-Status: draft 4, 2026-10-14, before code; Codex review rounds 1 to 3
-(session `01a13afc`, 13, 10 and 5 findings) folded in, and the owner's
+Status: draft 5, 2026-10-14, before code; Codex review rounds 1 to 4
+(session `01a13afc`, 13, 10, 5 and 3 findings) folded in, and the owner's
 decisions of the same day on approval and the master switch (section 11).
 Written for the
 planned work `TB3` in `roadmap-usb4.md` ("Planned - Thunderbolt 3: the ICM
@@ -820,8 +820,10 @@ the SHPC slot's presence bit is the only reading.
   notification, where wired, comes after that reading and before the
   removal and re-enumeration of sections 6.1 or 6.2.
 - Both run on the connection-manager thread, serialised with the ICM
-  traffic, so a tunnel down arriving during a tunnel up's slot poll is
-  handled after it and sees the bus empty.
+  traffic. The tunnel-up poll services RX frames while it waits, and a
+  `device disconnected` for the device it is waiting on abandons the poll:
+  the tunnel-down sequence then runs in its place and sees the bus empty
+  (section 7.2's budget depends on this).
 
 ## 7. The contract with `nvme98`
 
@@ -883,9 +885,11 @@ is in:
   one this driver can answer alone. Until it is answered, **no hardware
   statement is sent**, on any OS.
 
-Until the emulator qualification exists on an OS, and the hardware
-boundary is resolved, no statement is sent there and `nvme98`'s gone
-deadline (its decision MD-1) is the fallback, as its PLAN already provides.
+The two conditions apply separately: on the emulator, no statement is
+sent on an OS until that OS's ordering qualification exists; on hardware,
+no statement is sent until that and the hardware boundary are both
+settled. Wherever a statement is not sent, `nvme98`'s gone deadline (its
+decision MD-1) is the fallback, as its PLAN already provides.
 
 ### 7.2 The notification channel (proposal, decision D6)
 
@@ -893,13 +897,22 @@ The interface is "to be agreed" (handoff section 6b) and `nvme98`'s gate G3
 names the candidate shapes: on 9x a VxD service or a registered callback, on
 NT `IOCTL_SCSI_MINIPORT` with an `nvme98` signature. This record proposes:
 
-- **NT**: the recipient is resolved **at tunnel up**, never at tunnel down:
-  after a re-enumeration, once the bus has settled, the thread walks
+- **NT**: the recipient is resolved **at tunnel up**, never at tunnel down,
+  and **never on the connection-manager thread**: a synchronous IOCTL to
+  another driver's port has no cancellation and completes when that port
+  gets to it, so it must not sit in front of the ICM traffic (review round
+  4). After a re-enumeration the thread hands the work to a second system
+  thread of this driver, the discovery worker, which walks
   `\Device\ScsiPortN` (N from 0 up to the first miss after 31) with
   `IoGetDeviceObjectPointer` and an `IOCTL_SCSI_MINIPORT` carrying
   `nvme98`'s signature and a "report your PCI location" function, and
-  caches the port whose answer matches a function behind the tunnel,
-  keeping the reference. At tunnel down that cached port gets one
+  publishes, under the registration list's lock, the port whose answer
+  matches a function behind the tunnel, keeping the reference. A tunnel
+  down that arrives first sets the entry gone, so a result landing after
+  it is discarded and its reference dropped; the worker is joined at stop
+  after its outstanding call returns, which is the one wait the stop
+  cannot bound and the reason it is not the connection-manager thread's.
+  At tunnel down that cached port gets one
   `IOCTL_SCSI_MINIPORT`, "link down", sent synchronously from the
   connection-manager thread before the filter's invalidation, and from
   inside a command wait if the disconnect landed during one (section 4.4).
@@ -921,7 +934,7 @@ disconnect:
 | noticing the event | the idle RX poll: `XhciCmPollIdleMs`, which the driver clamps to 250 ms whenever the statement is enabled on that OS, whatever the registry says (the 5000 ms ceiling of section 8 is for a machine with the statement off) |
 | a command in flight | none added: the event is decoded inside the wait (section 4.4) |
 | a tunnel-up poll in flight (section 6.5) | none added: the poll services RX frames too, and a `device disconnected` for the device it is waiting on abandons the poll - the event says the device is gone |
-| a recipient discovery in flight | none added: discovery is a sequence of IOCTLs between which the thread services RX frames, and a disconnect abandons the sequence |
+| a recipient discovery in flight | none added: discovery runs on the discovery worker, not the connection-manager thread, so an IOCTL outstanding at another driver's port never sits in front of the event; a disconnect marks the entry gone and the worker's late result is discarded |
 | the port reading | 2 s at most (section 6.5), and the firmware's event already follows the link drop, so the normal cost is one read |
 | the recipient | none when cached; **when the cache is not ready** (the disconnect came before discovery finished) **no statement is sent** and MD-1 applies - a late statement is worth less than none, since `nvme98` would act on it after its own deadline |
 | delivery | one synchronous IOCTL or VxD call, whose execution bound is `nvme98`'s to state in the interface (the proposal asks for 100 ms, with the call never queued behind held SRBs) |
@@ -929,8 +942,8 @@ disconnect:
 So about 2.25 s plus the delivery bound in the worst case, as an
 **estimate**, not a measurement: `TB3-A.7`'s qualification measures it on
 each OS, saturated, with the disconnect injected during idle, during a
-command wait, during a tunnel-up poll and during discovery, as gate G3's
-"every injection point" asks.
+command wait, during a tunnel-up poll, and while an individual discovery
+IOCTL is pending at the port, as gate G3's "every injection point" asks.
 - **Windows 98 and ME**: `nvme98`'s own VxD (the base ships `NVMEVSD.VXD`)
   exports one service, "link down for bus:dev.fn", under a VxD id `nvme98`
   chooses; this driver reaches it through the same dynalink thunk it uses
