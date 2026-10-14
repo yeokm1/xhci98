@@ -138,8 +138,17 @@
  * access was made, the dword in *value (all-ones where no function
  * answers). Write writes `width` bytes (1, 2 or 4) at `offset`, naturally
  * aligned, and returns 1 when the access was made; it is used for the SHPC
- * DWORD Select byte alone, and may be NULL, in which case no SHPC register
- * is read and an SHPC port gives no presence reading.
+ * DWORD Select byte of a bridge alone, and may be NULL, in which case no
+ * SHPC register is read and an SHPC port gives no presence reading.
+ *
+ * The writer is the driver half's to qualify, per target: it must reach a
+ * type 1 (bridge) function's configuration space byte-wise at an offset
+ * (Microsoft documents restrictions on HalSetBusDataByOffset writes to a
+ * bridge's header, and Windows 98's HAL exports are a smaller set), and
+ * the select-then-read sequence of one SHPC read must not interleave with
+ * another of this driver's own on the same bridge: the caller serialises
+ * its port reads, which the connection-manager thread does by running them
+ * all. Where no writer is qualified, pass NULL.
  */
 typedef ULONG (*XHCI_TBT_READ)(PVOID context, ULONG bdf, ULONG offset,
                                PULONG value);
@@ -190,12 +199,22 @@ ULONG XhciTbtShpcSlotPresent(ULONG slotRegister);
 
 /* ---- capability walk --------------------------------------------------- */
 
+/* XhciTbtFindCapStatus's return. */
+#define XHCI_TBT_CAP_ABSENT         0UL /* no list, or not in it            */
+#define XHCI_TBT_CAP_FOUND          1UL
+#define XHCI_TBT_CAP_FAILED         2UL /* an access failed, or the list is
+                                           malformed (a loop past 48)       */
+#define XHCI_TBT_CAP_GONE           3UL /* a read came back all-ones        */
+
 /*
- * The capability list of the function at `bdf`: returns 1 and the
- * capability's offset in *offset when `capId` is found, 0 otherwise (no
- * list, an all-ones read, a failed access, a pointer below 40h, or a list
- * longer than 48 entries, which is a loop).
+ * The capability list of the function at `bdf`: FOUND with the
+ * capability's offset in *offset, or why not. A pointer below 40h ends
+ * the list (ABSENT).
  */
+ULONG XhciTbtFindCapStatus(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
+                           PULONG offset);
+
+/* 1 when XhciTbtFindCapStatus says FOUND, 0 for anything else. */
 ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
                      PULONG offset);
 
@@ -203,35 +222,37 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 
 /* XHCI_TBT_TOPO.Outcome. */
 #define XHCI_TBT_TOPO_NONE          0UL /* not run                          */
-#define XHCI_TBT_TOPO_SET           1UL /* a verified set, by discovery     */
+#define XHCI_TBT_TOPO_SET           1UL /* a verified set                   */
 #define XHCI_TBT_TOPO_OVERRIDE      2UL /* XhciCmTunnelBridge named it      */
 #define XHCI_TBT_TOPO_NO_CANDIDATE  3UL /* no sibling bridge qualifies      */
-#define XHCI_TBT_TOPO_MANY          4UL /* switch ports past the set's room */
+#define XHCI_TBT_TOPO_MANY          4UL /* verified ports past the room     */
 #define XHCI_TBT_TOPO_OVERRIDE_BAD  5UL /* the value names a non-bridge     */
 #define XHCI_TBT_TOPO_NHI_ABSENT    6UL /* nothing answers at the NHI       */
 #define XHCI_TBT_TOPO_BAD_PARAM     7UL
 #define XHCI_TBT_TOPO_LEARN         8UL /* candidates, none verified yet    */
 
 /* XHCI_TBT_BRIDGE.Flags. */
-#define XHCI_TBT_BR_PCIE            0x01UL  /* a PCI Express capability    */
-#define XHCI_TBT_BR_SLOT            0x02UL  /* an implemented slot         */
-#define XHCI_TBT_BR_HOTPLUG         0x04UL  /* Hot-Plug Capable            */
-#define XHCI_TBT_BR_SURPRISE        0x08UL  /* Hot-Plug Surprise           */
-#define XHCI_TBT_BR_SHPC            0x10UL  /* an SHPC capability          */
-#define XHCI_TBT_BR_CANDIDATE       0x20UL  /* HOTPLUG or SHPC             */
-#define XHCI_TBT_BR_LINKREPORT      0x40UL  /* Link Active reported        */
-#define XHCI_TBT_BR_LISTED          0x80UL  /* in the platform table       */
+#define XHCI_TBT_BR_PCIE            0x001UL /* a PCI Express capability    */
+#define XHCI_TBT_BR_SLOT            0x002UL /* an implemented slot         */
+#define XHCI_TBT_BR_HOTPLUG         0x004UL /* Hot-Plug Capable            */
+#define XHCI_TBT_BR_SURPRISE        0x008UL /* Hot-Plug Surprise           */
+#define XHCI_TBT_BR_SHPC            0x010UL /* an SHPC capability          */
+#define XHCI_TBT_BR_CANDIDATE       0x020UL /* HOTPLUG or SHPC             */
+#define XHCI_TBT_BR_LINKREPORT      0x040UL /* Link Active reported        */
+#define XHCI_TBT_BR_LISTED          0x080UL /* the platform table names it */
+#define XHCI_TBT_BR_UNREAD          0x100UL /* a capability walk failed    */
 
 /* XHCI_TBT_TOPO.Source[]: what verified a tunnel port. */
 #define XHCI_TBT_SRC_SWITCH         1UL /* a hot-plug port of the NHI's own
-                                           switch                           */
-#define XHCI_TBT_SRC_TABLE          2UL /* the platform table's root port   */
+                                           PCI Express switch               */
+#define XHCI_TBT_SRC_TABLE          2UL /* the platform table               */
 #define XHCI_TBT_SRC_OVERRIDE       3UL /* XhciCmTunnelBridge               */
-#define XHCI_TBT_SRC_LEARNED        4UL /* went up across a tunnel up       */
+#define XHCI_TBT_SRC_LEARNED        4UL /* came up across a tunnel up       */
 
-#define XHCI_TBT_MAX_SIBLINGS       16UL
+#define XHCI_TBT_MAX_SIBLINGS       16UL    /* kept for the log             */
+#define XHCI_TBT_MAX_CANDIDATES     16UL    /* kept for learning            */
 /* Tunnel ports one domain can have: a two-port part's two downstream
- * ports, an integrated host's four root ports. */
+ * ports, an integrated host's root ports. */
 #define XHCI_TBT_MAX_TUNNELS        4UL
 
 /* One type 1 function on the search bus, for the pick and the log. */
@@ -246,18 +267,27 @@ typedef struct _XHCI_TBT_BRIDGE {
     ULONG Flags;        /* XHCI_TBT_BR_*                                    */
 } XHCI_TBT_BRIDGE, *PXHCI_TBT_BRIDGE;
 
+/*
+ * One platform table entry: a root port that is a given controller's
+ * tunnel port. PortId is required (vendor 15:0, device 31:16); NhiId 0
+ * and the two locations XHCI_TBT_NO_BDF are wildcards. Ids come from a
+ * public listing, recorded where the table is kept; a location is a
+ * platform fact and needs its own evidence.
+ */
+typedef struct _XHCI_TBT_TABLE_ENTRY {
+    ULONG NhiId;        /* the NHI's vendor/device, 0 for any               */
+    ULONG Nhi;          /* the NHI's location, XHCI_TBT_NO_BDF for any      */
+    ULONG PortId;       /* the root port's vendor/device                    */
+    ULONG Port;         /* its location, XHCI_TBT_NO_BDF for any            */
+} XHCI_TBT_TABLE_ENTRY, *PXHCI_TBT_TABLE_ENTRY;
+
 /* What a discovery is asked. */
 typedef struct _XHCI_TBT_TOPO_IN {
     ULONG Nhi;          /* the NHI's location                               */
     ULONG Overrides;    /* how many XhciCmTunnelBridge named, 0 for none    */
     ULONG Override[XHCI_TBT_MAX_TUNNELS];
-    /*
-     * The platform table: vendor 15:0 / device 31:16 dwords of root ports
-     * known to be an integrated controller's tunnel ports, or NULL. Each id
-     * must come from a public listing, recorded where the table is.
-     */
-    const ULONG *RootPortIds;
-    ULONG RootPortIdCount;
+    const XHCI_TBT_TABLE_ENTRY *Table;  /* the platform table, or NULL      */
+    ULONG TableCount;
 } XHCI_TBT_TOPO_IN, *PXHCI_TBT_TOPO_IN;
 
 /*
@@ -268,49 +298,66 @@ typedef struct _XHCI_TBT_TOPO_IN {
 typedef struct _XHCI_TBT_TOPO {
     ULONG Outcome;      /* XHCI_TBT_TOPO_*                                  */
     ULONG Nhi;          /* the NHI's location as given                      */
+    ULONG NhiId;        /* its vendor/device                                */
     ULONG Parent;       /* the NHI's parent bridge, or XHCI_TBT_NO_BDF when
                            the NHI is on a root bus                         */
     ULONG ParentType;   /* its PCI Express port type, 0 for none            */
-    ULONG RootSide;     /* 1: the candidates are root ports or on a root bus */
+    ULONG Upstream;     /* the bridge above the search bus, or NO_BDF       */
+    ULONG UpstreamType; /* its PCI Express port type, 0 for none            */
+    ULONG Switch;       /* 1: parent and siblings are one PCI Express
+                           switch's downstream ports                        */
     ULONG SearchBus;    /* the bus the siblings were read on                */
-    ULONG Candidates;   /* siblings that qualified                          */
-    ULONG Listed;       /* candidates in the platform table                 */
     ULONG Siblings;     /* type 1 siblings seen, the parent excluded; those
                            past XHCI_TBT_MAX_SIBLINGS are counted, not kept */
     XHCI_TBT_BRIDGE Sibling[XHCI_TBT_MAX_SIBLINGS];
+    ULONG Candidates;   /* siblings that qualified                          */
+    ULONG Cand[XHCI_TBT_MAX_CANDIDATES];    /* their locations, in bus order */
+    ULONG Listed;       /* candidates the platform table names              */
+    ULONG Unread;       /* siblings whose capability walk failed            */
+    ULONG Ambiguous;    /* 1: another domain's NHI on the search bus made a
+                           wildcard-location table entry unusable           */
     /* the set of verified tunnel ports */
     ULONG Tunnels;      /* how many                                         */
     ULONG Tunnel;       /* the first, or XHCI_TBT_NO_BDF                    */
     ULONG Set[XHCI_TBT_MAX_TUNNELS];        /* their locations              */
     ULONG Source[XHCI_TBT_MAX_TUNNELS];     /* XHCI_TBT_SRC_*               */
     ULONG Last[XHCI_TBT_MAX_TUNNELS];       /* the last XHCI_TBT_PORT_* read */
+    ULONG Base[XHCI_TBT_MAX_TUNNELS];       /* each one's at XhciTbtSetArm  */
+    ULONG BaseArmed;
     XHCI_TBT_BRIDGE Pick;   /* the first one's reading                      */
-    /* learning: each kept candidate's reading before a tunnel up */
+    /* learning: each candidate's reading at XhciTbtLearnArm */
     ULONG LearnArmed;
-    ULONG Before[XHCI_TBT_MAX_SIBLINGS];
+    ULONG Before[XHCI_TBT_MAX_CANDIDATES];
     /* the walk's own state */
     ULONG Visited[8];   /* one bit per bus number                           */
     UCHAR Stack[256];   /* buses still to walk                              */
 } XHCI_TBT_TOPO, *PXHCI_TBT_TOPO;
 
 /*
- * Discovers the tunnel ports of the domain whose NHI is at in->Nhi:
+ * Discovers the tunnel ports of the domain whose NHI is at in->Nhi. No
+ * controller generation's layout is assumed; each test reads capabilities:
  *
- *   - its parent is the type 1 function whose secondary bus is the NHI's
- *     bus; none means the NHI is on a root bus (an integrated NHI, or the
- *     emulator's generic layout). No switch upstream port is assumed;
+ *   - the NHI's parent is the type 1 function whose secondary bus is the
+ *     NHI's bus; none means the NHI is on a root bus (an integrated NHI, or
+ *     the emulator's generic layout);
  *   - the candidates are the parent's type 1 siblings (the root bus's own
  *     bridges when there is no parent) with Hot-Plug Capable in an
  *     implemented slot, or an SHPC capability;
- *   - behind a parent that is not a root port the candidates are ports of
- *     the same switch as the NHI's - the controller's own (Linux icm.c
- *     get_upstream_port finds that switch by its upstream port) - and all
- *     of them are the set, SRC_SWITCH: the P14s's one tunnel port, a
- *     two-port part's two (MANY past XHCI_TBT_MAX_TUNNELS);
- *   - on a root bus or beside a root port only the candidates in the
- *     platform table are taken, SRC_TABLE; with none listed the outcome is
- *     LEARN: the candidates are logged, nothing is verified, and the
- *     caller arms XhciTbtLearnArm before its next tunnel up;
+ *   - when the parent is a PCI Express Downstream Port and the bridge above
+ *     the search bus a PCI Express Upstream Port, the parent and its
+ *     siblings are one switch's downstream ports - the controller's own,
+ *     since the NHI hangs off it (Linux drivers/thunderbolt/icm.c
+ *     get_upstream_port walks to that upstream port) - and every candidate
+ *     is verified, SRC_SWITCH: the P14s's one tunnel port, a two-port
+ *     part's two (MANY past XHCI_TBT_MAX_TUNNELS);
+ *   - anywhere else (a root bus, beside a root port, behind conventional
+ *     bridges such as the emulator's i440FX stand-ins, or a parent whose
+ *     type could not be read) only candidates a platform table entry
+ *     matches are verified, SRC_TABLE: the entry's PortId, and its NhiId,
+ *     Nhi and Port where given. An entry without a Port location is not
+ *     used when another function on the search bus carries the NhiId of
+ *     any entry (two domains could share such root ports; Ambiguous). With
+ *     nothing verified the outcome is LEARN;
  *   - in->Override wins over all of it, SRC_OVERRIDE, but only if a type 1
  *     function answers at every location it names; otherwise OVERRIDE_BAD
  *     and an empty set: the value is the user's statement and is not
@@ -319,7 +366,9 @@ typedef struct _XHCI_TBT_TOPO {
  * The discovery runs whatever the override says, so the log can name the
  * candidates. Returns topo->Outcome. topo->Set holds topo->Tunnels ports
  * for SET and OVERRIDE and none otherwise; an empty set means
- * re-enumeration is disabled until one is learned (record 21 section 6.4).
+ * re-enumeration is disabled until one is learned (record 21 section
+ * 6.4). When the event-to-port mapping is unknown the caller rescans every
+ * port of the set.
  */
 ULONG XhciTbtTopoFind(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
                       PXHCI_TBT_TOPO topo);
@@ -335,13 +384,15 @@ ULONG XhciTbtParseBdfList(PCWSTR text, ULONG chars, PULONG list,
                           ULONG capacity);
 
 /*
- * Learning, for a LEARN domain (or one whose every port was learned):
- * XhciTbtLearnArm reads each kept candidate before a tunnel up;
- * XhciTbtLearn reads them again after it (the caller's poll budget past
- * the approve) and adds to the set, SRC_LEARNED, the one candidate not in
- * it whose reading went from anything else to UP. None or more than one
- * such candidate learns nothing (two ports coming up at once cannot be
- * told apart). Returns the number learned, 0 or 1; disarms either way.
+ * Learning, for a LEARN domain or one whose every port was learned:
+ * XhciTbtLearnArm reads every candidate before a tunnel up; XhciTbtLearn
+ * reads them again after it (once the caller's poll has ended) and adds to
+ * the set, SRC_LEARNED, the one candidate not yet in it that read DOWN
+ * when armed and UP now. Nothing is learned when two or more did, when any
+ * candidate's reading failed at either end, when a capability walk failed
+ * at discovery, or when there were more candidates than are kept: the
+ * uniqueness could not be judged. Returns the number learned, 0 or 1, and
+ * disarms either way.
  */
 VOID XhciTbtLearnArm(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo);
 ULONG XhciTbtLearn(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo);
@@ -349,12 +400,13 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo);
 /* ---- the port reading (record 21 section 6.5) -------------------------- */
 
 /* XHCI_TBT_PORT.Verdict and XhciTbtPortRead's return. */
-#define XHCI_TBT_PORT_ERROR         0UL /* an access failed                 */
+#define XHCI_TBT_PORT_ERROR         0UL /* an access or walk failed         */
 #define XHCI_TBT_PORT_UP            1UL /* every reading says up            */
 #define XHCI_TBT_PORT_DOWN          2UL /* every reading says down          */
 #define XHCI_TBT_PORT_MIXED         3UL /* the readings disagree            */
 #define XHCI_TBT_PORT_NONE          4UL /* the port has nothing to read     */
-#define XHCI_TBT_PORT_GONE          5UL /* the port itself reads all-ones   */
+#define XHCI_TBT_PORT_GONE          5UL /* the port bridge itself reads
+                                           all-ones (not its endpoint)      */
 
 typedef struct _XHCI_TBT_PORT {
     ULONG Verdict;      /* XHCI_TBT_PORT_*                                  */
@@ -374,7 +426,7 @@ typedef struct _XHCI_TBT_PORT {
     ULONG ShpcValid;    /* the SHPC slots were read                         */
     ULONG ShpcSlots;    /* Number of Slots Implemented                      */
     ULONG ShpcPresent;  /* slots reporting a card present                   */
-    ULONG ShpcFirst;    /* the first present slot's register, 0 for none    */
+    ULONG ShpcFirst;    /* 1 + the first present slot's index, 0 for none   */
 } XHCI_TBT_PORT, *PXHCI_TBT_PORT;
 
 /*
@@ -383,26 +435,39 @@ typedef struct _XHCI_TBT_PORT {
  * Presence Detect State (where the slot is implemented) and the SHPC
  * slots (any present) all say present, DOWN when they all say absent,
  * MIXED when they disagree, NONE when the port has none of the three.
- * An SHPC read writes the DWORD Select byte and puts back the value it
- * found there.
+ * A failed access or capability walk is ERROR, never NONE. GONE is the
+ * port bridge reading all-ones; an endpoint behind a downed tunnel reading
+ * all-ones is not read here and is a presence signal only. An SHPC read
+ * writes the DWORD Select byte and puts back the value it found there; a
+ * failure to put it back is ERROR.
  */
 ULONG XhciTbtPortRead(PXHCI_TBT_CFG io, ULONG bdf, PXHCI_TBT_PORT port);
 
 /*
- * Folds the readings of a set's tunnel bridges (verdicts[0..count-1]) into
- * one, for the poll of `want`: the ICM does not say which port a device is
- * on. Up wanted: UP when any member reads UP. Down wanted: DOWN when every
- * member reads DOWN, GONE or NONE and one reads DOWN, GONE when every
- * member reads GONE or NONE and one reads GONE. Otherwise: ERROR if any
- * member's access failed, NONE if every member reads NONE, else MIXED. So
- * with another device still tunnelled on a second port a down poll runs to
- * its timeout, and the caller treats that as "not read clear".
+ * Folds a set's readings (verdicts[0..count-1]) into one for the poll of
+ * `want`, where the ICM does not say which port a device is on. `bases`
+ * is each member's reading when the poll began (XhciTbtSetArm), or NULL.
+ *
+ * Up wanted: UP when a member whose base was DOWN, MIXED or GONE now reads
+ * UP (that port made progress), or when every member reads UP; never on a
+ * member that was already up, so an existing tunnel on another port does
+ * not end the settling window early. Down wanted: DOWN when every member
+ * reads DOWN, GONE when every member reads DOWN or GONE and one GONE: an
+ * affirmative reading from every member, since the departed device's port
+ * is not known. Otherwise ERROR if any member's read failed, NONE if every
+ * member reads NONE, else MIXED: with another device still tunnelled the
+ * down poll runs to its timeout, which the caller treats as "not read
+ * clear" and still rescans every port of the set.
  */
-ULONG XhciTbtSetVerdict(const ULONG *verdicts, ULONG count, ULONG want);
+ULONG XhciTbtSetVerdict(const ULONG *verdicts, const ULONG *bases,
+                        ULONG count, ULONG want);
+
+/* Reads every port of the set into topo->Base[] and arms the baseline. */
+VOID XhciTbtSetArm(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo);
 
 /*
  * Reads every port of the set into topo->Last[] and returns their fold
- * for `want` (XhciTbtSetVerdict); NONE for an empty set.
+ * for `want`, with the baseline when armed; NONE for an empty set.
  */
 ULONG XhciTbtSetRead(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG want);
 
