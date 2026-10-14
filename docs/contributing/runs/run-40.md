@@ -42,9 +42,11 @@ removal in the model) and re-plug, on both host models; the model's pre-OS
 connection manager (`preos_cm`) on both host models; the driver's stop and
 a second instance over the configured fabric; nothing attached.
 
-**What it said** (xhci98 at `452151c4` plus the round 1 fixes; the log is
-`out\u4-crosscheck\run.log`): 30601 checks, 0 failures - the model's own
-CRC and frame checks on every packet included.
+**What it said** (xhci98 at `20442cd5`; the log is
+`out\u4-crosscheck\run.log`): 32449 checks, 0 failures - the model's own
+CRC and frame checks on every packet included. The same run at the core's
+first complete version (`452151c4` with its first corrections) read 30601
+checks, 0 failures.
 
 - `minimal`: port 1 UP at start, PCIe at lane HopIDs 8 and 9 and USB3 at
   10 and 11 (`u4.pcie.up 00010809`, `u4.usb3.up 00010a0b`), bonded, the
