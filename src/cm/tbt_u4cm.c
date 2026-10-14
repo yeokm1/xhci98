@@ -3447,7 +3447,6 @@ static VOID tbtU4MarkUnlocked(PTBT_U4CM cm, PTBT_U4_PORT p)
 }
 
 static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p);
-static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p);
 
 /*
  * Per port at start, reading only (section 9.2). The outcomes: all four
@@ -3913,7 +3912,7 @@ static VOID tbtU4CleanAdapter(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG adp)
  * entries deactivated; the port EMPTY, to be connected afresh once its
  * link retrains.
  */
-static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p)
+static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
 {
     PTBT_U4_ROUTER h;
     BOOLEAN closed;
@@ -3939,6 +3938,11 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p)
     if (hadPcie) {
         tbtU4LinkDownUpcall(cm, p, closed, FALSE);
         tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
+    }
+    if (!portReset) {
+        /* Steps 1 and 2 only: the Host Router Reset that follows does the
+         * rest for the whole domain. */
+        return;
     }
     if (h->Adp[p->Lane0].CapPort != 0 &&
         tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
@@ -4041,13 +4045,11 @@ static VOID tbtU4Check(PTBT_U4CM cm, PTBT_U4_PORT p)
     p->CheckPending = FALSE;
     switch (p->State) {
     case TBT_U4_EMPTY:
-        if (tbtU4Evidence(cm, p, &cls) || cls == TBT_U4_LANE_CONNECTED ||
-            cls == TBT_U4_LANE_TRANSITIONAL) {
-            if (cls == TBT_U4_LANE_CONNECTED || cls == TBT_U4_LANE_TRANSITIONAL) {
-                tbtU4Connect(cm, p, FALSE);
-            }
-        }
+        (void)tbtU4Evidence(cm, p, &cls);
         p->UnplugPending = FALSE;
+        if (cls == TBT_U4_LANE_CONNECTED || cls == TBT_U4_LANE_TRANSITIONAL) {
+            tbtU4Connect(cm, p, FALSE);
+        }
         break;
     case TBT_U4_UNSUPPORTED:
         gone = tbtU4Evidence(cm, p, &cls);
@@ -4168,9 +4170,63 @@ static VOID tbtU4HotPlugEnable(PTBT_U4CM cm)
     }
 }
 
+/*
+ * Section 9.3 on a version 2 host interface with XhciCmPreOsCleanup 2: the
+ * Host Router Reset of Guide 3.5 for the whole domain in place of the
+ * per-port resets - the rings disabled at least 1 ms before, HRR set and
+ * left untouched 50 ms, cleared by the host within 500 ms (Linux nhi.c
+ * nhi_reset), then the rings again and the host router enumerated afresh.
+ * Every port is EMPTY after it, its link retraining.
+ */
+static LONG tbtU4HostRouterReset(PTBT_U4CM cm)
+{
+    ULONG v;
+    ULONG i;
+    LONG rc;
+    TBT_WAIT w;
+
+    cm->Counters.HostRouterResets++;
+    tbtU4Log(cm, "u4.host-router-reset", 1);
+    TbtRingStop(cm->Ring);
+    TbtWaitMin(cm->Host, TBT_RING_SETTLE_US);
+    cm->Host->Write32(cm->Host->Context, TBT_HI_HR_RESET, TBT_HI_HR_RESET_HRR);
+    TbtWaitMin(cm->Host, TBT_U4_HRR_HOLD_US);
+    TbtWaitStart(&w, cm->Host, TBT_U4_HRR_DONE_US, FALSE);
+    for (;;) {
+        v = cm->Host->Read32(cm->Host->Context, TBT_HI_HR_RESET);
+        if (v != 0xFFFFFFFFUL && (v & TBT_HI_HR_RESET_HRR) == 0) {
+            break;
+        }
+        if (TbtWaitDone(&w, cm->Host)) {
+            cm->InertReason = TBT_INERT_PROTOCOL;
+            return TBT_E_TIMEOUT;
+        }
+        TbtWaitStep(&w, cm->Host, TBT_U4_POLL_STEP_US);
+    }
+    rc = tbtU4Rings(cm);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+        cm->Links[i].Used = FALSE;
+    }
+    rc = tbtU4HostRouter(cm);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    tbtU4HostTmu(cm);
+    for (i = 0; i < cm->PortCount; i++) {
+        cm->Ports[i].State = TBT_U4_EMPTY;
+        cm->Ports[i].CheckPending = TRUE;
+    }
+    return TBT_OK;
+}
+
 LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
 {
     ULONG i;
+    BOOLEAN hrr;
+    BOOLEAN any;
     LONG rc;
     PTBT_U4_PORT p;
 
@@ -4194,12 +4250,23 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
         tbtU4DiscoverPort(cm, &cm->Ports[i]);
     }
     if (cm->Config.PreOsCleanup != 0) {
+        hrr = (BOOLEAN)(cm->Config.PreOsCleanup == 2 &&
+                        TBT_HI_CAPS_VERSION(cm->Config.HostInterfaceCaps) ==
+                        TBT_HI_VERSION_2);
+        any = FALSE;
         for (i = 0; i < cm->PortCount; i++) {
             p = &cm->Ports[i];
             if (p->State == TBT_U4_HELD ||
                 (cm->Config.PreOsCleanup == 2 &&
                  (p->Pcie.Preserved || p->Usb3.Preserved || p->DpPreserved))) {
-                tbtU4Clean(cm, p);
+                tbtU4Clean(cm, p, (BOOLEAN)!hrr);
+                any = TRUE;
+            }
+        }
+        if (hrr && any) {
+            rc = tbtU4HostRouterReset(cm);
+            if (rc != TBT_OK) {
+                return tbtU4Fail(cm, rc);
             }
         }
     }
@@ -4324,7 +4391,7 @@ VOID TbtU4Suspend(PTBT_U4CM cm)
 
     tbtU4Zero(cm->Obligations, sizeof(cm->Obligations));
     k = 0;
-    for (i = 0; i < cm->PortCount && k + 1 < TBT_U4_OBLIGATIONS + 1; i++) {
+    for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
         if (p->Pcie.Up && k < TBT_U4_OBLIGATIONS) {
             o = &cm->Obligations[k++];
@@ -4365,7 +4432,6 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     ULONG v;
     BOOLEAN met;
     BOOLEAN allMet;
-    BOOLEAN lost;
     TBT_U4_TUNNEL t;
     PTBT_U4_OBLIGATION o;
     PTBT_U4_PORT p;
@@ -4424,7 +4490,6 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                    tbtU4Rd(cm, &p->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_3, &v) == TBT_OK &&
                    (v & TBT_RTR3_V) == 0) {
             /* The domain lost its configuration across the sleep. */
-            lost = TRUE;
             if (o->BuiltHere) {
                 tbtU4Zero(&p->Pcie, sizeof(p->Pcie));
                 tbtU4Zero(&p->Usb3, sizeof(p->Usb3));
@@ -4437,7 +4502,6 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                 tbtU4Connect(cm, p, FALSE);
                 met = (BOOLEAN)(o->Usb3 ? p->Usb3.Up : p->Pcie.Up);
             }
-            (void)lost;
         } else if (p->Dev.Present) {
             met = tbtU4Follow(cm, p, o->Usb3, &t);
             if (met && !o->Usb3) {

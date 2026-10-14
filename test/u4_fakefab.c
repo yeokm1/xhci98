@@ -66,6 +66,14 @@ static unsigned long getLe(const unsigned char *p)
            ((unsigned long)p[2] << 16) | ((unsigned long)p[3] << 24);
 }
 
+static void fabQueue(FAB *f, unsigned long pdf, const unsigned long *dw,
+                     unsigned long words, unsigned long delayUs);
+
+void fabInject(FAB *f, unsigned long pdf, const unsigned long *dw, unsigned long words)
+{
+    fabQueue(f, pdf, dw, words, 0);
+}
+
 void *fabMem(FAB *f)
 {
     return f->MemDw;
@@ -369,6 +377,12 @@ static void fabPcieUpdate(FAB *f, int r, unsigned a)
     unsigned long *o;
     int both;
 
+    if (f->R[r].Adp[a].LtssmForce != 0) {
+        c = &f->R[r].Adp[a].Cs[FAB_CAP_ADP];
+        *c = (*c & ~(0xFUL << 25)) |
+             ((unsigned long)(f->R[r].Adp[a].LtssmForce - 1) << 25);
+        return;
+    }
     if (!fabPeerProto(f, r, a, &pr, &pa)) {
         c = &f->R[r].Adp[a].Cs[FAB_CAP_ADP];
         *c = (*c & ~(0xFUL << 25)) | (f->R[r].Adp[a].DetectStuck ? (1UL << 25) : 0);
@@ -1267,6 +1281,60 @@ void fabPlug(FAB *f, int port, int dev)
     }
 }
 
+/* A router that loses power comes back uninitialised (Spec 3.3): every
+ * configuration a connection manager wrote is gone. */
+static void fabResetRouter(FAB *f, int d)
+{
+    FAB_ROUTER *r = &f->R[d];
+    unsigned a;
+    unsigned h;
+
+    r->Rcs[1] &= ~(7UL << 20);
+    r->Rcs[2] = 0;
+    r->Rcs[3] = 0;
+    r->Rcs[4] &= 0xFF000000UL;
+    r->Rcs[5] = 0;
+    r->Rcs[6] &= ~0x03000000UL;
+    r->Rcs[26] = 0;
+    if (!r->Tbt3) {
+        r->Rcs[FAB_RCAP_TMU] &= 0x0000FFFFUL;
+        r->Rcs[FAB_RCAP_TMU + 3] = 0;
+        r->Rcs[FAB_RCAP_TMU + 15] = 0;
+        for (h = 22; h <= 25; h++) {
+            r->Rcs[FAB_RCAP_TMU + h] = 0;
+        }
+    } else {
+        r->Rcs[FAB_RCAP_PLUG + 1] = 0x7CUL;
+    }
+    for (a = 1; a <= r->MaxAdp; a++) {
+        FAB_ADP *ad = &r->Adp[a];
+        unsigned long t;
+
+        if (!ad->Present) {
+            continue;
+        }
+        for (h = 8; h < FAB_HOPS; h++) {
+            ad->Path[2 * h] = 0;
+            ad->Path[2 * h + 1] = 0;
+        }
+        t = ad->Cs[2] & 0xFFFFFFUL;
+        if (t == 1) {
+            ad->Cs[FAB_CAP_LANE + 1] = (ad->Cs[FAB_CAP_LANE + 1] & (0xFUL << 26)) |
+                                       0x10UL | (0x4UL << 16);
+            ad->Cs[4] = (ad->Cs[4] & ~(0x3FFUL << 20)) | (60UL << 20);
+            if (ad->Cs[FAB_CAP_PORT] != 0) {
+                ad->Cs[FAB_CAP_PORT + 19] = 0;
+            }
+            ad->Cs[FAB_CAP_TMU_ADP + 3] = 0;
+            ad->Cs[FAB_CAP_TMU_ADP + 6] = 0;
+        } else if (t != 2) {
+            ad->Path[2 * 8] = 7UL << 17;
+            ad->Path[2 * 8 + 1] = 0x01000000UL;
+            ad->Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
+        }
+    }
+}
+
 static void fabDisconnect(FAB *f, int pr, unsigned pa)
 {
     FAB_ROUTER *p = &f->R[pr];
@@ -1289,10 +1357,7 @@ static void fabDisconnect(FAB *f, int pr, unsigned pa)
         for (i = 1; i <= f->R[dev].MaxAdp; i++) {
             f->R[dev].Adp[i].Peer = -1;
         }
-        /* A router that loses power forgets its configuration. */
-        f->R[dev].Rcs[3] &= ~0x80000000UL;
-        f->R[dev].Rcs[5] = 0;
-        f->R[dev].Rcs[6] &= ~0x03000000UL;
+        fabResetRouter(f, dev);
     }
     if (pr == 0) {
         /* Spec 4.4.5.2: the host's protocol adapters back to defaults. */
@@ -1327,6 +1392,35 @@ void fabUnplug(FAB *f, int port)
     if ((f->R[0].Adp[a].Cs[5] & 0x80000000UL) == 0) {
         fabHotPlug(f, 0, (unsigned long)a, 1);
     }
+}
+
+void fabSwapQuiet(FAB *f, int port, int dev)
+{
+    int a = fabPortLane0(f, port);
+    int old = f->R[0].Adp[a].Peer;
+    unsigned long hi;
+    unsigned long lo;
+    unsigned long lock0 = f->R[0].Adp[a].Cs[4] & 0x80000000UL;
+    unsigned long lock1 = f->R[0].Adp[a + 1].Cs[4] & 0x80000000UL;
+    unsigned long width = (f->R[0].Adp[a].Cs[FAB_CAP_LANE + 1] >> 20) & 0x3FUL;
+
+    if (old >= 0) {
+        f->R[old].Connected = 0;
+        f->R[old].Adp[f->R[old].UpAdp].Peer = -1;
+        f->R[old].Adp[f->R[old].UpAdp + 1].Peer = -1;
+    }
+    fabConnect(f, 0, (unsigned)a, dev);
+    f->R[0].Adp[a].Cs[4] = (f->R[0].Adp[a].Cs[4] & ~0x80000000UL) | lock0;
+    f->R[0].Adp[a + 1].Cs[4] = (f->R[0].Adp[a + 1].Cs[4] & ~0x80000000UL) | lock1;
+    setLaneWidth(&f->R[0].Adp[a], width);
+    setLaneWidth(&f->R[0].Adp[a + 1], width);
+    setLaneWidth(&f->R[dev].Adp[f->R[dev].UpAdp], width);
+    setLaneWidth(&f->R[dev].Adp[f->R[dev].UpAdp + 1], width);
+    fabRouteOf(f, dev, &hi, &lo);
+    f->R[dev].Rcs[1] = (f->R[dev].Rcs[1] & ~(7UL << 20)) | (1UL << 20);
+    f->R[dev].Rcs[2] = lo;
+    f->R[dev].Rcs[3] = hi | 0x80000000UL;
+    f->R[dev].Rcs[6] |= 0x01000000UL;
 }
 
 void fabPlugChild(FAB *f, int dev, int child, int enumerate)

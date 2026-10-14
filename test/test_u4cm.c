@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/cm/tbt_u4cm.h"
+#include "../src/cm/tbt_hw.h"
 #include "u4_fakefab.h"
 #include "test_harness.h"
 
@@ -144,9 +145,1256 @@ static void test_cold_minimal(void)
     CHECK_EQ(g_fab.TxBadCrc, 0, "every frame's CRC good");
 }
 
+/* ------------------------------------------------------------------ */
+/* Hooks: unplug at a chosen request                                  */
+/* ------------------------------------------------------------------ */
+
+static int g_hkRouter;
+static unsigned long g_hkCs;
+static unsigned long g_hkAdp;
+static unsigned long g_hkAddr;
+static int g_hkWrite;
+static int g_hkPort;
+static int g_hkFired;
+static unsigned long g_hkSkip;
+
+static int unplugHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                      unsigned long adp, unsigned long addr, unsigned long n,
+                      const unsigned long *data)
+{
+    (void)data;
+    if (g_hkFired || router != g_hkRouter || cs != g_hkCs ||
+        (g_hkWrite && pdf != TBT_PDF_WRITE) || (!g_hkWrite && pdf != TBT_PDF_READ) ||
+        (cs != TBT_CS_ROUTER && adp != g_hkAdp) ||
+        g_hkAddr < addr || g_hkAddr >= addr + n) {
+        return 0;
+    }
+    if (g_hkSkip != 0) {
+        g_hkSkip--;
+        return 0;
+    }
+    g_hkFired = 1;
+    fabUnplug(f, g_hkPort);
+    return 0;
+}
+
+static void armUnplug(FAB *f, int router, unsigned long cs, unsigned long adp,
+                      unsigned long addr, int write, int port)
+{
+    g_hkRouter = router;
+    g_hkCs = cs;
+    g_hkAdp = adp;
+    g_hkAddr = addr;
+    g_hkWrite = write;
+    g_hkPort = port;
+    g_hkFired = 0;
+    g_hkSkip = 0;
+    f->Hook = unplugHook;
+}
+
+/* No host-side entry of the port left Valid or pending, and the host's
+ * PCIe Down disabled. */
+static int hostClean(const FAB *f, int port)
+{
+    int lane = fabPortLane0(f, port);
+    int hp = fabPortPcie(f, port);
+    int hu = fabPortUsb3(f, port);
+    int h;
+
+    for (h = 8; h < 24; h++) {
+        if ((fabPath0(f, 0, lane, h) & 0x80000000UL) ||
+            (fabPath1(f, 0, lane, h) & 0x10000000UL)) {
+            return 0;
+        }
+    }
+    if (hp && ((fabPath0(f, 0, hp, 8) & 0x80000000UL) ||
+               (fabAdp(f, 0, hp, FAB_CAP_ADP) & 0x80000000UL))) {
+        return 0;
+    }
+    if (hu && ((fabPath0(f, 0, hu, 8) & 0x80000000UL) ||
+               (fabAdp(f, 0, hu, FAB_CAP_ADP) & 0x80000000UL))) {
+        return 0;
+    }
+    return 1;
+}
+
+static int quarantineCount(const TBT_U4CM *cm)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < (int)TBT_U4_QUARANTINE; i++) {
+        if (cm->Quarantine[i].Used) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static int setupMinimal(int plugged, const TBT_U4_CONFIG *c)
+{
+    int dev;
+    TBT_U4_CONFIG d;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    if (plugged) {
+        fabPlug(&g_fab, 1, dev);
+    }
+    if (c == NULL) {
+        cfgDefault(&d);
+        c = &d;
+    }
+    g_ldCalls = 0;
+    g_ldAnswer = TBT_U4_STMT_WITHHELD;
+    memset(&g_ld, 0, sizeof(g_ld));
+    (void)start(&g_fab, &g_ring, &g_cm, c);
+    return dev;
+}
+
+/* ------------------------------------------------------------------ */
+
+static void test_hot_plug_unplug(void)
+{
+    int dev;
+    int lane;
+    ULONG gen;
+    const TBT_U4_PORT *p;
+
+    dev = setupMinimal(0, NULL);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "nothing attached");
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(g_fab.HpAcks >= 1, "the plug event acknowledged");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "hot plug: UP");
+    p = TbtU4Port(&g_cm, 1);
+    gen = p->Generation;
+    (void)countActions(&g_cm, 0);
+
+    /* A presence sample anchors the statement's deadline. */
+    TbtU4PresenceSample(&g_cm, 1, gen, g_fab.NowUs, TRUE);
+    CHECK(p->AnchorValid, "anchor taken");
+    TbtU4PresenceSample(&g_cm, 1, gen + 7, g_fab.NowUs, TRUE);
+    CHECK_EQ(p->AnchorGeneration, gen, "a sample of another generation ignored");
+
+    lane = fabPortLane0(&g_fab, 1);
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "unplug: EMPTY");
+    CHECK(hostClean(&g_fab, 1), "the host side torn down");
+    CHECK_EQ(g_ldCalls, 1, "the link-down upcall ran once");
+    CHECK(g_ld.PathClosed, "with the path proven closed");
+    CHECK(g_ld.AnchorValid, "the anchor handed over");
+    CHECK(g_ld.RemainingUs > 0 && g_ld.RemainingUs <= TBT_U4_STATEMENT_US,
+          "and what is left of 3 s");
+    CHECK_EQ(g_ld.Port, 1, "for port 1");
+    CHECK(g_ld.MapValid && g_ld.MapRid == 0x0108, "with its router-named bridge");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "a removal queued");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_PORT + 19) & 8UL, 0, "Port Configured cleared");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_LANE + 1) & 0x30UL, 0x10UL,
+             "Target Link Width restored");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_TMU_ADP + 6) & 2UL, 2UL,
+             "host port TMU: Disable Time Sync again");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "nothing quarantined");
+    CHECK_EQ(g_cm.Counters.Usb3TornDown, 1, "the USB3 host side too");
+
+    /* Re-plug: a new router, a new generation, the Detect gate again. */
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "re-plug: UP");
+    CHECK(p->Generation > gen, "a new generation");
+    CHECK(p->Usb3.Up, "USB3 again, 500 ms after the last teardown");
+    CHECK_EQ(g_cm.Counters.PcieBuilt, 2, "two PCIe tunnels built in all");
+}
+
+/* An unplug at each point of the sequence: never a hang, the port
+ * EMPTY, the host side clean. */
+static void test_unplug_everywhere(void)
+{
+    static const struct {
+        int devRouter;
+        unsigned long cs;
+        unsigned long adp;
+        unsigned long addr;
+        int write;
+        const char *what;
+    } pts[] = {
+        { 1, TBT_CS_ROUTER, 0, 3, 1, "enumeration write" },
+        { 1, TBT_CS_ROUTER, 0, 6, 0, "Router Ready wait" },
+        { 1, TBT_CS_ROUTER, 0, 26, 1, "a router operation" },
+        { 0, TBT_CS_ADAPTER, 1, FAB_CAP_LANE + 1, 1, "bonding" },
+        { 1, TBT_CS_ROUTER, 0, FAB_RCAP_TMU + 25, 1, "TMU post time" },
+        { 1, TBT_CS_ROUTER, 0, 5, 1, "Configuration Valid" },
+        { 1, TBT_CS_ROUTER, 0, 6, 0, "Configuration Ready wait" },
+        { 0, TBT_CS_PATH, 5, 16, 1, "PCIe host entry" },
+        { 1, TBT_CS_PATH, 1, 16, 1, "PCIe device entry" },
+        { 1, TBT_CS_ADAPTER, 5, FAB_CAP_ADP, 1, "PCIe Path Enable" },
+        { 0, TBT_CS_ADAPTER, 7, FAB_CAP_ADP + 2, 1, "USB3 bandwidth request" },
+        { 0, TBT_CS_PATH, 7, 16, 1, "USB3 host entry" },
+        { 1, TBT_CS_ADAPTER, 6, FAB_CAP_ADP, 1, "USB3 Path Enable" }
+    };
+    unsigned i;
+    int dev;
+    ULONG t0;
+    char msg[96];
+
+    for (i = 0; i < sizeof(pts) / sizeof(pts[0]); i++) {
+        dev = setupMinimal(0, NULL);
+        armUnplug(&g_fab, pts[i].devRouter ? dev : 0, pts[i].cs, pts[i].adp, pts[i].addr,
+                  pts[i].write, 1);
+        if (pts[i].devRouter && pts[i].addr == 6 && pts[i].cs == TBT_CS_ROUTER &&
+            strstr(pts[i].what, "Configuration") != NULL) {
+            g_hkSkip = 1;       /* the second read of CS_6 */
+        }
+        fabPlug(&g_fab, 1, dev);
+        t0 = g_fab.NowUs;
+        poll(&g_cm, &g_fab, 3);
+        sprintf(msg, "unplug during %s: fired", pts[i].what);
+        CHECK(g_hkFired, msg);
+        sprintf(msg, "unplug during %s: EMPTY", pts[i].what);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, msg);
+        sprintf(msg, "unplug during %s: host side clean", pts[i].what);
+        CHECK(hostClean(&g_fab, 1), msg);
+        sprintf(msg, "unplug during %s: bounded", pts[i].what);
+        CHECK(g_fab.NowUs - t0 < 30000000UL, msg);
+        sprintf(msg, "unplug during %s: nothing quarantined", pts[i].what);
+        CHECK_EQ(quarantineCount(&g_cm), 0, msg);
+        g_fab.Hook = NULL;
+        /* And the port works again. */
+        fabPlug(&g_fab, 1, dev);
+        poll(&g_cm, &g_fab, 2);
+        sprintf(msg, "after an unplug during %s: re-plug UP", pts[i].what);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, msg);
+    }
+}
+
+/* Unplug during tunnel-up on port 2 while port 1's sequence runs: the
+ * safe point nests port 2's teardown. */
+static void test_unplug_nested(void)
+{
+    int d1;
+    int d2;
+    TBT_U4_CONFIG c;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+    d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 2, d2);
+    cfgDefault(&c);
+    g_ldCalls = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2 up");
+    /* While port 1 connects, pull port 2 at port 1's CV write. */
+    g_hkRouter = d1;
+    g_hkCs = TBT_CS_ROUTER;
+    g_hkAddr = 5;
+    g_hkWrite = 1;
+    g_hkPort = 2;
+    g_hkFired = 0;
+    g_hkSkip = 0;
+    g_fab.Hook = unplugHook;
+    fabPlug(&g_fab, 1, d1);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(g_hkFired, "port 2 pulled during port 1's sequence");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "port 1 still comes up");
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_EMPTY, "port 2 torn down");
+    CHECK(hostClean(&g_fab, 2), "port 2's host side clean");
+    CHECK(g_cm.Counters.UnplugsNested >= 1 || g_cm.Counters.Unplugs >= 1, "counted");
+    g_fab.Hook = NULL;
+}
+
+static void test_quick_replug(void)
+{
+    int dev;
+    int d2;
+    ULONG gen;
+    const TBT_U4_PORT *p;
+
+    /* Lock: unplugged and re-plugged between two checks, no event (hot
+     * plug disabled on the lane). */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    gen = p->Generation;
+    g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[5] |= 0x80000000UL;
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "quick re-plug seen through Lock: UP again");
+    CHECK(p->Generation >= gen + 1, "as a new connection");
+    CHECK(g_cm.Counters.QuickReplugs >= 1, "counted as a quick re-plug");
+
+    /* TopologyID Valid clear: the router was reset under a live link. */
+    gen = p->Generation;
+    g_fab.R[dev].Rcs[3] &= ~0x80000000UL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "a fresh router behind a live link: UP again");
+    CHECK(p->Generation > gen, "torn down and reconnected");
+
+    /* A different router, enumerated by someone else, swapped in between
+     * two checks with Lock as it was: only its UUID tells. */
+    gen = p->Generation;
+    d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[d2].Rcs[7] = 0xCAFEF00DUL;
+    fabSwapQuiet(&g_fab, 1, d2);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "another UUID: UP again");
+    CHECK(p->Generation > gen, "as another router");
+}
+
+static void test_bonding(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int lane;
+    const TBT_U4_PORT *p;
+
+    /* Impossible (the device's BE clear): lane 1 disabled, verified. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].BondPossible = 0;
+    g_fab.R[dev].Adp[1].Cs[FAB_CAP_PORT + 18] = 0;
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bonding impossible: UP single");
+    CHECK(!p->Bonded && p->SingleLane && p->Lane1Disabled, "lane 1 disabled");
+    CHECK(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, "Lane Disable set");
+    CHECK_EQ((fabPath0(&g_fab, 0, lane, 9) >> 17) & 0x7F, 32,
+             "host BA's 32 credits even single (within what the lane has)");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, 0,
+             "Lane Disable cleared at unplug");
+
+    /* Bonding that never reaches x2: the fields written back, then lane 1
+     * disabled. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].BondNoWidth = 1;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bonding timeout: UP single");
+    CHECK(p->Lane1Disabled, "via lane 1 disabled");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_LANE + 1) & 0x30UL, 0x10UL,
+             "Target Link Width written back to single");
+    CHECK_EQ(fabAdp(&g_fab, dev, 1, FAB_CAP_LANE + 1) & 0x30UL, 0x10UL,
+             "on the device too");
+
+    /* The preconditions unmet: a CLx enable left on the host's lane 1. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].BondNoWidth = 1;
+    lane = fabPortLane0(&g_fab, 1);
+    g_fab.R[0].Adp[lane + 1].Cs[FAB_CAP_LANE + 1] |= 0x0800UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "CL1 enabled on lane 1: FAILED");
+    CHECK_EQ(TbtU4Port(&g_cm, 1)->Why, TBT_U4_WHY_BONDING, "for bonding");
+    CHECK_EQ(fabPath0(&g_fab, 0, fabPortPcie(&g_fab, 1), 8) & 0x80000000UL, 0, "no path");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, 0,
+             "Lane Disable not touched");
+
+    /* A predecessor's non-default Target Link Width, bonding impossible:
+     * not rewritten, FAILED. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].BondPossible = 0;
+    g_fab.R[dev].Adp[1].Cs[FAB_CAP_PORT + 18] = 0;
+    lane = fabPortLane0(&g_fab, 1);
+    g_fab.R[0].Adp[lane].Cs[FAB_CAP_LANE + 1] |= 0x30UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "a predecessor's dual width: FAILED");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane, FAB_CAP_LANE + 1) & 0x30UL, 0x30UL, "left as found");
+
+    /* XhciCmLaneBonding 0. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    c.LaneBonding = FALSE;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bonding off: UP");
+    CHECK(!p->Bonded && p->Lane1Disabled, "single, lane 1 disabled");
+    CHECK_EQ(fabFindWrite(&g_fab, 0, 0, TBT_CS_ADAPTER, (unsigned long)fabPortLane0(&g_fab, 1),
+                          FAB_CAP_LANE + 1), -1, "lane 0's width never written");
+    CHECK(fabFindWrite(&g_fab, 0, 0, TBT_CS_ADAPTER,
+                       (unsigned long)fabPortLane0(&g_fab, 1) + 1, FAB_CAP_LANE + 1) >= 0,
+          "lane 1's Lane Disable written");
+    CHECK(!p->Usb3.Up || p->TmuOk, "USB3 only with the TMU ready");
+}
+
+static void test_rops(void)
+{
+    int dev;
+    int k;
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+
+    /* Every router operation Not Supported, host and device. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    for (k = 0; k < FAB_OPS; k++) {
+        g_fab.R[0].RopMode[k] = FAB_ROP_NS;
+        g_fab.R[dev].RopMode[k] = FAB_ROP_NS;
+    }
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no router operation: still UP");
+    CHECK(!g_cm.Ports[0].MapValid, "no router-named bridge");
+    CHECK(p->Dev.ModelName[0] == 0, "unnamed");
+    CHECK_EQ((fabPath0(&g_fab, 0, fabPortLane0(&g_fab, 1), 9) >> 17) & 0x7F, 32,
+             "32 credits on a bonded lane by default");
+    CHECK(g_cm.Counters.RopUnsupported >= 4, "each not-supported counted");
+
+    /* Failing operations. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    for (k = 0; k < FAB_OPS; k++) {
+        g_fab.R[dev].RopMode[k] = FAB_ROP_FAIL;
+    }
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "failing operations: still UP");
+    CHECK(g_cm.Counters.RopFailed >= 3, "each failure counted");
+
+    /* Never completing: the router operation-blocked, then everything
+     * takes its unsupported branch. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].RopMode[FAB_OP_DROM] = FAB_ROP_HANG;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "a hanging operation: still UP");
+    CHECK(p->Dev.OpBlocked, "the router operation-blocked");
+    CHECK(g_cm.Counters.RopTimeouts == 1 && g_cm.Counters.RopBlocked >= 1,
+          "one timeout, then blocked without another write");
+    CHECK_EQ(p->Dev.CapsState, TBT_U4_CAPS_DEFAULT,
+             "enumerated here: capabilities at their defaults anyway");
+}
+
+static void test_detect_and_hca(void)
+{
+    int dev;
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+
+    /* The device's PCIe Up never in Detect: no path entry written. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Adp[5].DetectStuck = 1;
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "Detect gate timed out: FAILED");
+    CHECK_EQ(p->Why, TBT_U4_WHY_DETECT, "for the gate");
+    CHECK_EQ(g_cm.Counters.DetectTimeouts, 1, "counted");
+    CHECK_EQ(fabFindWrite(&g_fab, 0, 0, TBT_CS_PATH, (unsigned long)fabPortPcie(&g_fab, 1), 16),
+             -1, "no PCIe path entry written");
+    CHECK(p->Usb3.Up, "the USB3 tunnel still built");
+
+    /* HCA never answers: no USB3 tunnel, CMR cleared, PCIe untouched. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[0].Adp[7].HcaStuck = 1;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "HCA silent: still UP");
+    CHECK(p->Pcie.Up && !p->Usb3.Up && p->Usb3Failed, "PCIe up, USB3 failed");
+    CHECK_EQ(fabAdp(&g_fab, 0, 7, FAB_CAP_ADP + 2) & 0x80000000UL, 0, "CMR cleared");
+    CHECK_EQ(fabPath0(&g_fab, 0, 7, 8) & 0x80000000UL, 0, "no USB3 path");
+    CHECK_EQ(g_cm.Counters.HcaTimeouts, 1, "counted");
+}
+
+static void test_approve_and_usb3_off(void)
+{
+    int dev;
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    c.Approve = FALSE;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "approval 0: UP");
+    CHECK(!p->Pcie.Up && p->Usb3.Up, "no PCIe, USB3 built");
+    CHECK_EQ(fabPath0(&g_fab, 0, 5, 8) & 0x80000000UL, 0, "no PCIe entry");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "nothing to re-enumerate");
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    c.Usb3Tunnel = FALSE;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB3 off: UP");
+    CHECK(p->Pcie.Up && !p->Usb3.Up, "PCIe only");
+    CHECK_EQ(fabAdp(&g_fab, 0, 7, FAB_CAP_ADP) & 0xC0000000UL, 0x40000000UL,
+             "host USB3 Down: Path Enable 0, Valid 1");
+    CHECK_EQ(fabAdp(&g_fab, dev, 6, FAB_CAP_ADP) & 0xC0000000UL, 0x40000000UL,
+             "device USB3 Up the same");
+    CHECK(fabRtr(&g_fab, dev, 5) & 0x02000000UL, "UTO set all the same (Guide 3.2.3)");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_TMU + 3) >> 16, 0, "no TMU without USB3");
+}
+
+static void test_quirks(void)
+{
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x463E), TBT_U4_QUIRK_USB3_MAX_BW, "ADL NHI0");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x466D), TBT_U4_QUIRK_USB3_MAX_BW, "ADL NHI1");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0xA73E), TBT_U4_QUIRK_USB3_MAX_BW, "RPL NHI0");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0xA76D), TBT_U4_QUIRK_USB3_MAX_BW, "RPL NHI1");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x7EB2), TBT_U4_QUIRK_USB3_MAX_BW, "MTL-M");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x7EC2), TBT_U4_QUIRK_USB3_MAX_BW, "MTL-P 0");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x7EC3), TBT_U4_QUIRK_USB3_MAX_BW, "MTL-P 1");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x5781),
+             TBT_U4_QUIRK_USB3_MAX_BW | TBT_U4_QUIRK_BLOCK_RPM, "Barlow Ridge host 80G");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x5784),
+             TBT_U4_QUIRK_USB3_MAX_BW | TBT_U4_QUIRK_BLOCK_RPM, "Barlow Ridge host 40G");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x5786), TBT_U4_QUIRK_USB3_MAX_BW, "Barlow Ridge hub 80G");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x57A4), TBT_U4_QUIRK_USB3_MAX_BW, "Barlow Ridge hub 40G");
+    CHECK_EQ(TbtU4QuirkMatch(0x8086, 0x15EF), TBT_U4_QUIRK_NO_CLX, "Titan Ridge DD");
+    CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x0208), TBT_U4_QUIRK_NO_CLX, "AMD 0208");
+    CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x020B), TBT_U4_QUIRK_NO_CLX, "AMD 020B");
+    CHECK_EQ(TbtU4QuirkMatch(0x0438, 0x020C), 0, "AMD 020C is not listed");
+    CHECK_EQ(TbtU4QuirkMatch(0x8087, 0x0B26), TBT_U4_QUIRK_DP_CREDITS, "Goshen Ridge");
+    CHECK_EQ(TbtU4QuirkMatch(0x8086, 0x463E), 0, "8086 is not 8087");
+    CHECK_EQ(TbtU4QuirkMatchDrom(0x00D4, 0xB070), TBT_U4_QUIRK_FORCE_POWER, "WD19TB");
+    CHECK_EQ(TbtU4QuirkMatchDrom(0x00D4, 0xB071), TBT_U4_QUIRK_FORCE_POWER, "WD19TB 2");
+    CHECK_EQ(TbtU4QuirkMatchDrom(0x00D4, 0xB072), 0, "not B072");
+    CHECK_EQ(TbtU4LaneClass(2), TBT_U4_LANE_CONNECTED, "CL0 connected");
+    CHECK_EQ(TbtU4LaneClass(6), TBT_U4_LANE_CONNECTED, "CL2 a live link");
+    CHECK_EQ(TbtU4LaneClass(1), TBT_U4_LANE_TRANSITIONAL, "training");
+    CHECK_EQ(TbtU4LaneClass(7), TBT_U4_LANE_DISCONNECTED, "CLd");
+    CHECK_EQ(TbtU4LaneClass(0), TBT_U4_LANE_DISABLED, "disabled");
+    CHECK_EQ(TbtU4LaneClass(9), TBT_U4_LANE_UNKNOWN, "reserved");
+}
+
+/* ------------------------------------------------------------------ */
+/* Tunnels found at start (record 22 section 9)                       */
+/* ------------------------------------------------------------------ */
+
+static unsigned long pathWrites(const FAB *f)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = 0; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrCs[i] == TBT_CS_PATH ||
+            (f->WrCs[i] == TBT_CS_ADAPTER && f->WrAddr[i] == FAB_CAP_ADP &&
+             f->WrAdp[i] != 0 && f->WrRouter[i] >= 0 &&
+             ((f->R[f->WrRouter[i]].Adp[f->WrAdp[i]].Cs[2] >> 16) == 0x10 ||
+              (f->R[f->WrRouter[i]].Adp[f->WrAdp[i]].Cs[2] >> 16) == 0x20))) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void test_preos(void)
+{
+    static const int adl[2] = { 0, 1 };
+    TBT_U4_CONFIG c;
+    int dev;
+    int k;
+    const TBT_U4_PORT *p;
+
+    for (k = 0; k < 2; k++) {
+        fabInit(&g_fab);
+        if (adl[k]) {
+            fabHostAdl(&g_fab);
+        } else {
+            fabHostMinimal(&g_fab);
+        }
+        dev = fabDevice(&g_fab, FAB_DEV_USB4);
+        fabPlug(&g_fab, 1, dev);
+        fabPreos(&g_fab, 1, 1);
+        g_fab.RxQCount = 0;     /* the pre-OS CM consumed its own events */
+        g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[5] |= 0x80000000UL;
+        cfgDefault(&c);
+        g_ldCalls = 0;
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        p = TbtU4Port(&g_cm, 1);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, adl[k] ? "intel-adl pre-OS: UP" : "minimal pre-OS: UP");
+        CHECK(p->Pcie.Preserved && p->Pcie.Hd == 8 && p->Pcie.Hu == 9, "PCIe preserved at 8 and 9");
+        CHECK(p->Usb3.Preserved && p->Usb3.Hd == 10 && p->Usb3.Hu == 11, "USB3 preserved");
+        CHECK_EQ(pathWrites(&g_fab), 0, "no path entry or Path Enable written");
+        CHECK_EQ(g_cm.Counters.PortsPreserved, 1, "counted");
+        CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "nothing re-enumerated");
+        CHECK(fabPcieUp(&g_fab, 1), "the fabric's tunnel still up");
+        CHECK(!p->HotPlugEnabled, "hot plug left as found on a preserved port");
+        CHECK_EQ(fabFindWrite(&g_fab, 0, dev, TBT_CS_ROUTER, 1, 0) == -1 &&
+                 fabFindWrite(&g_fab, 0, dev, TBT_CS_ROUTER, 3, 0) == -1, 1,
+                 "the device's DW 1 to 3 never written (Guide 3.2.1 note)");
+        poll(&g_cm, &g_fab, 2);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "and stays UP across idle ticks");
+        /* Its unplug: the discovered tunnel's host side torn down. */
+        fabUnplug(&g_fab, 1);
+        poll(&g_cm, &g_fab, 1);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "preserved, then unplugged: EMPTY");
+        CHECK(hostClean(&g_fab, 1), "host side clean");
+        CHECK_EQ(g_ldCalls, 1, "the statement's upcall for the preserved tunnel");
+    }
+
+    /* A router a predecessor enumerated with no tunnel: adopted, then
+     * connected normally. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[0].Adp[5].Path + 16, 0, 8);
+    memset(g_fab.R[0].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
+    g_fab.R[0].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.R[dev].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "no tunnel state: connected normally");
+    CHECK(p->Dev.Preserved && !p->Dev.EnumeratedHere, "the router adopted, not re-enumerated");
+    CHECK(p->Pcie.Up && !p->Pcie.Preserved, "the tunnel built here");
+
+    /* Half-built: the host's PCIe Down entry valid, the device's missing. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "half-built: HELD");
+    CHECK_EQ(pathWrites(&g_fab), 0, "left exactly as found");
+    CHECK_EQ(g_cm.Counters.PortsHeld, 1, "counted");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "and stays HELD");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
+    CHECK(hostClean(&g_fab, 1), "its host side torn down");
+
+    /* XhciCmPreOsCleanup 1: the HELD port cleaned, then connected. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    c.PreOsCleanup = 1;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_cm.Counters.PortsCleaned, 1, "cleanup 1: the HELD port cleaned");
+    CHECK_EQ(g_cm.Counters.DownstreamPortResets, 1, "with a Downstream Port Reset");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "and connected afresh");
+    CHECK(TbtU4Port(&g_cm, 1)->Dev.EnumeratedHere, "the router enumerated here");
+
+    /* XhciCmPreOsCleanup 2: a verified tunnel cleaned too. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 1);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    c.PreOsCleanup = 2;
+    g_ldCalls = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_cm.Counters.PortsCleaned, 1, "cleanup 2: the preserved port cleaned");
+    CHECK_EQ(g_ldCalls, 1, "its endpoint's statement path ran");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "and rebuilt");
+    CHECK(TbtU4Port(&g_cm, 1)->Pcie.Up && !TbtU4Port(&g_cm, 1)->Pcie.Preserved, "built here now");
+    CHECK(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN) == 1, "the removal queued");
+
+    /* XhciCmPreOsCleanup 2 on a version 2 host interface: one Host Router
+     * Reset for the domain in place of the port's reset. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.Caps = 0x0040000CUL;
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 1);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    c.PreOsCleanup = 2;
+    c.HostInterfaceCaps = g_fab.Caps;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(g_fab.HrResets, 1, "version 2: one Host Router Reset");
+    CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0, "no Downstream Port Reset");
+    CHECK_EQ(g_cm.Counters.HostRouterResets, 1, "counted");
+    /* The model's HRR leaves the routers as they were; the host router is
+     * enumerated afresh and the port connected again. */
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "after the reset: UP");
+
+    /* A disconnected port with a predecessor's residual host paths: torn
+     * down as an unplug's. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabUnplug(&g_fab, 1);
+    g_fab.R[0].Adp[1].Path[2 * 9] |= 0x80000000UL;
+    g_fab.R[0].Adp[5].Path[2 * 8] |= 0x80000000UL;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "residual paths on a dark port: EMPTY");
+    CHECK(hostClean(&g_fab, 1), "and torn down");
+}
+
+/* Only a DisplayPort tunnel through the port: reserved, a PCIe tunnel
+ * built on the link as found, no USB3. */
+static void test_dp_preserved(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    const TBT_U4_PORT *p;
+
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[0].Adp[8].Path + 16, 0, 8);
+    memset(g_fab.R[0].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
+    g_fab.R[0].Adp[8].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.R[dev].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    /* DP IN 5's video path out of lane 1 at HopID 12 */
+    g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 12UL | (1UL << 11);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->DpPreserved, "the DisplayPort tunnel noted");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "PCIe built beside it: UP");
+    CHECK(p->Pcie.Up && p->Pcie.Hd != 12 && p->Pcie.Hu != 12, "around its HopID");
+    CHECK(!p->Usb3.Up, "no USB3 beside DisplayPort");
+    CHECK(g_fab.R[0].Adp[5].Path[2 * 8] & 0x80000000UL, "the DP path untouched");
+}
+
+/* ------------------------------------------------------------------ */
+/* The statement (record 22 sections 7.3, 10)                          */
+/* ------------------------------------------------------------------ */
+
+static void test_statement(void)
+{
+    int dev;
+    int lane;
+    ULONG gen;
+    const TBT_U4_PORT *p;
+
+    /* A prerequisite failing (Pending Packets stuck on the host lane's
+     * upstream entry): the path is not proven closed, the entry
+     * quarantined, and retried each tick until it drains. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    g_fab.R[0].Adp[lane].PpStuck[p->Pcie.Hu] = 1;
+    g_ldAnswer = TBT_U4_STMT_SENT;
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(g_ldCalls, 1, "the upcall ran");
+    CHECK(!g_ld.PathClosed, "path not proven closed: the statement's prerequisite failed");
+    CHECK_EQ(quarantineCount(&g_cm), 1, "the entry quarantined");
+    CHECK_EQ(g_cm.Counters.PendingTimeouts, 1, "Pending Packets timeout counted");
+    g_fab.R[0].Adp[lane].PpStuck[9] = 0;
+    g_fab.R[0].Adp[lane].Path[2 * 9 + 1] &= ~0x10000000UL;
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(quarantineCount(&g_cm), 0, "drained: the quarantine lifted");
+    CHECK_EQ(g_cm.Counters.QuarantineLifted, 1, "counted");
+    /* A quarantined HopID is never reused meanwhile. */
+    g_fab.R[0].Adp[lane].PpStuck[9] = 1;
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(p->Pcie.Up && p->Pcie.Hu != 9, "HopID 9 skipped while quarantined");
+
+    /* A later step failing (the USB3 bandwidth release): the statement's
+     * prerequisites still hold. */
+    dev = setupMinimal(1, NULL);
+    g_fab.R[0].Adp[7].HcaStuck = 1;
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(g_ld.PathClosed, "a later step's failure does not reach back");
+
+    /* The anchor: the last matching sample's issue time; a sample that
+     * arrives late shrinks the allowance. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    gen = p->Generation;
+    TbtU4PresenceSample(&g_cm, 1, gen, g_fab.NowUs, TRUE);
+    g_fab.Host.Sleep(g_fab.Host.Context, 2500);
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(g_ld.AnchorValid, "an anchor");
+    CHECK(g_ld.RemainingUs < 500000UL, "2.5 s old: less than 0.5 s left");
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    TbtU4PresenceSample(&g_cm, 1, p->Generation, g_fab.NowUs, FALSE);
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(!g_ld.AnchorValid && g_ld.RemainingUs == 0, "no matching sample: no anchor");
+    CHECK(g_cm.Counters.StatementsWithheld >= 1, "withheld counted");
+}
+
+/* ------------------------------------------------------------------ */
+/* Capabilities of a preserved router (record 22 section 6.4)          */
+/* ------------------------------------------------------------------ */
+
+static void preserveWith(int mode, unsigned long capsData)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].RopMode[FAB_OP_CAPS] = mode;
+    g_fab.R[dev].CapsData = capsData;
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    /* the device reports a link error */
+    {
+        unsigned long dw[3];
+        dw[0] = 0x80000000UL;
+        dw[1] = (unsigned long)fabPortLane0(&g_fab, 1);
+        dw[2] = TBT_EV_ERR_LINK | (1UL << 8) | TBT_NOTIFY_SQ;
+        g_fab.AcksPlain = 0;
+        g_fab.AcksEnh = 0;
+        fabInject(&g_fab, TBT_PDF_NOTIFY, dw, 3);
+    }
+    poll(&g_cm, &g_fab, 1);
+}
+
+static void test_caps_preserved(void)
+{
+    const TBT_U4_PORT *p;
+
+    /* Sequence bit enabled (capability 2: bits 4 and 5). */
+    preserveWith(FAB_ROP_OK, (1UL << 4) | (1UL << 5));
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(p->Dev.CapsState, TBT_U4_CAPS_KNOWN, "answered: adopted");
+    CHECK_EQ(g_fab.AcksEnh, 1, "enhanced acknowledgement for that router");
+    CHECK_EQ(g_fab.AcksPlain, 0, "not the plain one");
+
+    preserveWith(FAB_ROP_NS, 0);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(p->Dev.CapsState, TBT_U4_CAPS_DEFAULT, "not supported: none enabled");
+    CHECK_EQ(g_fab.AcksPlain, 1, "the plain acknowledgement");
+
+    preserveWith(FAB_ROP_FAIL, 0);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(p->Dev.CapsState, TBT_U4_CAPS_UNKNOWN, "failing: unknown");
+    CHECK_EQ(g_fab.AcksPlain + g_fab.AcksEnh, 0, "no acknowledgement of either form");
+    CHECK(!p->Dev.BaValid, "no Buffer Allocation Request");
+
+    preserveWith(FAB_ROP_HANG, 0);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(p->Dev.CapsState, TBT_U4_CAPS_UNKNOWN, "never completing: unknown");
+    CHECK(p->Dev.OpBlocked, "and the router operation-blocked");
+    CHECK_EQ(g_fab.AcksPlain + g_fab.AcksEnh, 0, "no acknowledgement");
+}
+
+/* ------------------------------------------------------------------ */
+/* Inert after activation, two domains                                 */
+/* ------------------------------------------------------------------ */
+
+static void test_inert_and_domains(void)
+{
+    TBT_U4_CONFIG c;
+    LONG rc;
+    int d1;
+    int d2;
+
+    /* The host router never answers: rings stopped, the fabric as it was. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.Stopped = 1;
+    cfgDefault(&c);
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK, "host router unanswered: the start fails");
+    CHECK(g_cm.Failed, "inert after activation");
+    CHECK_EQ(g_cm.InertReason, TBT_INERT_HOST_ROUTER, "for that reason");
+    CHECK_EQ(g_fab.TxCtrl | g_fab.RxCtrl, 0, "both rings stopped before returning");
+    CHECK_EQ(g_fab.Writes, 0, "nothing written to the fabric");
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_fab.TxCtrl, 0, "and the poll does nothing");
+
+    /* A Thunderbolt 3 host router (USB4 Version 0): refused. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] &= 0x00FFFFFFUL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "host router version 0: inert");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | 0x30000000UL;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "a reserved host router version: inert");
+
+    /* Two domains at once, each its own fabric, ring and instance. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, d1);
+    fabInit(&g_fab2);
+    fabHostAdl(&g_fab2);
+    d2 = fabDevice(&g_fab2, FAB_DEV_USB4);
+    fabPlug(&g_fab2, 2, d2);
+    CHECK_EQ(start(&g_fab, &g_ring, &g_cm, &c), TBT_OK, "domain 1 starts");
+    CHECK_EQ(start(&g_fab2, &g_ring2, &g_cm2, &c), TBT_OK, "domain 2 starts");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "domain 1 port 1 UP");
+    CHECK_EQ(state(&g_cm2, 2), TBT_U4_UP, "domain 2 port 2 UP");
+    fabUnplug(&g_fab2, 2);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm2, 2), TBT_U4_UP, "domain 2 not polled yet");
+    poll(&g_cm2, &g_fab2, 1);
+    CHECK_EQ(state(&g_cm2, 2), TBT_U4_EMPTY, "domain 2's unplug");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "domain 1 untouched");
+}
+
+/* ------------------------------------------------------------------ */
+/* intel-adl, Thunderbolt 3, links below depth 1                       */
+/* ------------------------------------------------------------------ */
+
+static void test_adl(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    const TBT_U4_PORT *p;
+    unsigned long bw;
+
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_cm.Ports[0].PcieDown, 8, "intel-adl: PCIe Down 8 paired with port 1");
+    CHECK_EQ(g_cm.Ports[1].PcieDown, 9, "and 9 with port 2");
+    CHECK_EQ(g_cm.Ports[0].Usb3Down, 12, "USB3 Down 12");
+    CHECK(!g_cm.HostRouter.Adp[10].Present && !g_cm.HostRouter.Adp[11].Present,
+          "10 and 11 not present (ERR_ADDR)");
+    CHECK(!g_cm.Ports[0].MapValid, "the mapping operation not supported: the pairing rule");
+    CHECK(g_cm.HostRouter.BaValid && g_cm.HostRouter.BaMaxPcie == 28, "BA answered");
+    CHECK(g_cm.HostRouter.Quirks & TBT_U4_QUIRK_USB3_MAX_BW, "the USB3 quirk on 8087:463E");
+    CHECK(g_cm.Counters.HotPlugOther >= 2, "DP IN plug events counted");
+    CHECK(g_fab.HpAcks >= 2, "and acknowledged");
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "UP");
+    CHECK_EQ((fabPath0(&g_fab, 0, 1, p->Pcie.Hu) >> 17) & 0x7F, 28, "the host's baMaxPCIe");
+    /* The quirk: 16376 * 0.9 = 14738 Mb/s, in 512 B units of 125 us at
+     * the smallest scale that fits 12 bits. */
+    bw = fabAdp(&g_fab, 0, 12, FAB_CAP_ADP + 2) & 0xFFFUL;
+    CHECK(bw > 0, "a bandwidth allocated");
+    CHECK_EQ(fabAdp(&g_fab, 0, 12, FAB_CAP_ADP + 3), 0, "scale 0 (Linux's choice for 14.7 Gb/s)");
+    CHECK_EQ(bw, (14738UL * 125UL + 511UL) / 512UL, "14738 Mb/s, the clamped 90 per cent");
+}
+
+static void test_tbt3(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    const TBT_U4_PORT *p;
+    unsigned long sx;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Thunderbolt 3 Titan Ridge DD: UP");
+    CHECK(p->Dev.Tbt3, "run as a Thunderbolt 3 router");
+    CHECK(p->Pcie.Up && !p->Usb3.Up, "PCIe, no USB3");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 1) & 0x7CUL, 0x04UL,
+             "plug events active, USB disable set (not Alpine Ridge)");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5), 0, "no ROUTER_CS_5 handshake");
+    CHECK_EQ(fabRtr(&g_fab, dev, 4) & 0xFF00UL, 0, "no CMUV written");
+    sx = fabRtr(&g_fab, dev, FAB_RCAP_LC + FAB_LC_START + 0x96);
+    CHECK_EQ(sx & 0x40010000UL, 0x40010000UL, "LC: L1C and UPSTREAM (odd adapter 1)");
+    CHECK_EQ((fabPath0(&g_fab, dev, 3, 8) >> 17) & 0x7F, 7, "TB3 protocol ingress: 7 credits");
+    CHECK(fabPath1(&g_fab, dev, 3, 8) & 0x01000000UL, "with IFC");
+    CHECK(p->Bonded, "bonded through the link controller's BE");
+    CHECK(p->Dev.Uuid[0] == 0xAABB0000UL + (unsigned long)dev, "UUID from the LC fuse");
+    CHECK_EQ(p->Dev.Quirks, TBT_U4_QUIRK_NO_CLX, "the CLx quirk noted");
+    CHECK(g_cm.Counters.Tbt3Routers == 1, "counted");
+
+    /* Alpine Ridge keeps its USB plug event. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_AR);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Alpine Ridge: UP");
+    CHECK_EQ(fabRtr(&g_fab, dev, FAB_RCAP_PLUG + 1) & 0x7CUL, 0, "USB disable left clear");
+
+    /* No Plug Events capability: refused. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    g_fab.R[dev].Rcs[1] &= ~0xFFUL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UNSUPPORTED, "no Plug Events: UNSUPPORTED");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
+}
+
+static void test_links(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int child;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, dev, child, 1);
+    /* the depth-1 router's own PCIe Down feeds the child */
+    g_fab.R[dev].Adp[7].Path[2 * 8] = 0x80000000UL | 8UL | (3UL << 11) | (7UL << 17);
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    g_fab.R[dev].Adp[3].Path[2 * 9] = 0x80000000UL | 8UL | (7UL << 11) | (16UL << 17);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "preserved with a router below");
+    CHECK_EQ(g_cm.Counters.LinksDiscovered, 1, "the depth-2 link discovered");
+    (void)countActions(&g_cm, 0);
+    fabUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(g_cm.Counters.LinksRemoved, 1, "its removal noticed");
+    CHECK_EQ(g_fab.R[dev].Adp[7].Path[2 * 8] & 0x80000000UL, 0, "the parent's side invalidated");
+    CHECK_EQ(g_fab.R[dev].Adp[3].Path[2 * 9] & 0x80000000UL, 0, "both directions");
+    CHECK_EQ(g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] & 0x80000000UL, 0, "its PCIe Down disabled");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_DEEP_REMOVED), 1, "the OS told");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the depth-1 tunnel kept");
+
+    /* A new router at depth 2 is left uninitialised: its event counted. */
+    fabPlugChild(&g_fab, dev, child, 0);
+    g_fab.R[dev].Adp[3].Cs[4] |= 0x80000000UL;
+    {
+        unsigned long dw[3];
+        dw[0] = 0x80000000UL;
+        dw[1] = 1;
+        dw[2] = 3;
+        fabInject(&g_fab, TBT_PDF_HOTPLUG, dw, 3);
+    }
+    poll(&g_cm, &g_fab, 2);
+    CHECK(g_cm.Counters.HotPlugDownstream >= 1, "a depth-2 plug event counted");
+    CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "and the router left uninitialised");
+}
+
+/* ------------------------------------------------------------------ */
+/* Loss, eject, suspend and resume, a coarse clock                     */
+/* ------------------------------------------------------------------ */
+
+static void test_loss_and_eject(void)
+{
+    int dev;
+    const TBT_U4_PORT *p;
+
+    /* The PCIe tunnel lost with the router still there (an admin-down). */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    (void)countActions(&g_cm, 0);
+    g_fab.R[0].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "PCIe lost: FAILED");
+    CHECK_EQ(p->Why, TBT_U4_WHY_LOST, "lost");
+    CHECK(p->Usb3.Up, "the USB3 tunnel kept");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "a removal queued");
+    CHECK_EQ(g_cm.Counters.PcieLost, 1, "counted");
+    CHECK_EQ(fabAdp(&g_fab, dev, 5, FAB_CAP_ADP) & 0x80000000UL, 0, "the device end disabled too");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "no rebuild until a re-plug");
+
+    /* L1 and Recovery are a live link; a transitional state is a loss
+     * only after 2 s (record 22 section 7.1 item 4). */
+    dev = setupMinimal(1, NULL);
+    g_fab.R[0].Adp[5].LtssmForce = 1 + 7;      /* L1 */
+    poll(&g_cm, &g_fab, 12);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "L1: still UP");
+    g_fab.R[0].Adp[5].LtssmForce = 1 + 4;      /* Recovery */
+    poll(&g_cm, &g_fab, 12);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Recovery: still UP");
+    g_fab.R[0].Adp[5].LtssmForce = 1 + 2;      /* Configuration */
+    poll(&g_cm, &g_fab, 5);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Configuration under 2 s: still UP");
+    poll(&g_cm, &g_fab, 10);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "Configuration for 2 s: lost");
+    g_fab.R[0].Adp[5].LtssmForce = 0;
+    (void)dev;
+
+    /* Eject: both tunnels down orderly, the port down until a re-plug. */
+    dev = setupMinimal(1, NULL);
+    CHECK_EQ(TbtU4Eject(&g_cm, 1), TBT_OK, "eject");
+    CHECK(!fabPcieUp(&g_fab, 1) && !fabUsb3Up(&g_fab, 1), "both tunnels down");
+    CHECK(hostClean(&g_fab, 1), "host side clean");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "FAILED, ejected");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "stays down");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "re-plugged: UP");
+    CHECK_EQ(TbtU4Eject(&g_cm, 2), TBT_E_PARAM, "nothing on port 2 to eject");
+}
+
+static void test_suspend_resume(void)
+{
+    int dev;
+    LONG rc;
+    const TBT_U4_PORT *p;
+    ULONG b;
+
+    /* Everything survived: verified. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(g_fab.TxCtrl, 0, "rings stopped at suspend");
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume: every obligation verified");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "still UP");
+
+    /* The domain lost its configuration: rebuilt before the hold is
+     * released. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    rc = TbtU4Resume(&g_cm);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(rc, TBT_OK, "resume: rebuilt (or torn down on removal evidence)");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "UP after resume");
+
+    /* The router gone: torn down, the obligation discharged. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume: removal evidence discharges it");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "EMPTY");
+
+    /* Verification failing with no removal evidence: HELD, failure path. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "resume: an obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD, untouched");
+
+    b = TbtU4ResumeBoundUs(0, 10000);
+    CHECK(b >= 1050000UL && b < 2000000UL, "no obligation: the platform's 1.05 s and a tick");
+    CHECK(TbtU4ResumeBoundUs(2, 10000) > TbtU4ResumeBoundUs(1, 10000), "grows per obligation");
+    CHECK(TbtU4ResumeBoundUs(1, 55000) > TbtU4ResumeBoundUs(1, 10000), "and with the tick");
+    CHECK(TbtU4ResumeBoundUs(1000, 55000) == TbtU4ResumeBoundUs(TBT_U4_OBLIGATIONS, 55000),
+          "held to the table");
+}
+
+static void test_coarse_clock(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    const TBT_U4_PORT *p;
+
+    /* Windows 98's 10 ms tick: every bound measured on the clock; the
+     * same outcome. */
+    fabInit(&g_fab);
+    g_fab.TickUs = 10000;
+    g_fab.Host.TickUs = 10000;
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "a 10 ms clock: UP");
+    CHECK(p->Pcie.Up && p->Usb3.Up, "both tunnels");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(p->Usb3.Up, "USB3 again after its 500 ms gap");
+}
+
 int main(void)
 {
     test_cold_minimal();
+    test_hot_plug_unplug();
+    test_unplug_everywhere();
+    test_unplug_nested();
+    test_quick_replug();
+    test_bonding();
+    test_rops();
+    test_detect_and_hca();
+    test_approve_and_usb3_off();
+    test_quirks();
+    test_preos();
+    test_dp_preserved();
+    test_statement();
+    test_caps_preserved();
+    test_inert_and_domains();
+    test_adl();
+    test_tbt3();
+    test_links();
+    test_loss_and_eject();
+    test_suspend_resume();
+    test_coarse_clock();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

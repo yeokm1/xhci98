@@ -77,6 +77,7 @@ typedef struct FAB_ADP {
     int PeerAdp;
     int DetectStuck;                /* PCIe: LTSSM never Detect while PE is 0 */
     int HcaStuck;                   /* USB3 Down: HCA never follows CMR */
+    int LtssmForce;                 /* PCIe: nonzero reads LTSSM LtssmForce - 1 */
     unsigned long Consumed;         /* USB3: consumed bandwidth, CS_1 11:0 | 23:12 */
 } FAB_ADP;
 
@@ -183,6 +184,10 @@ void fabUnplug(FAB *f, int port);
 /* Attach a child router to a device's downstream port as a pre-OS CM
  * would have it: enumerated at depth 2, unlocked; and pull it. */
 void fabPlugChild(FAB *f, int dev, int child, int enumerate);
+/* Put `dev` behind port `port` in place of what is there, with no event
+ * and Lock as it was: a router a predecessor enumerated, swapped between
+ * two checks (only its UUID tells). */
+void fabSwapQuiet(FAB *f, int port, int dev);
 void fabUnplugChild(FAB *f, int dev);
 
 /* The pre-OS connection manager's leftovers on `port` (record 22 section
@@ -205,6 +210,9 @@ int  fabUsb3Up(const FAB *f, int port);
 /* The index of the first logged write matching, from `from`; -1. */
 long fabFindWrite(const FAB *f, long from, int router, unsigned long cs,
                   unsigned long adp, unsigned long addr);
+
+/* A frame from the fabric, now (a notification, a hot plug event). */
+void fabInject(FAB *f, unsigned long pdf, const unsigned long *dw, unsigned long words);
 
 /* The block for TbtU4Start */
 void *fabMem(FAB *f);

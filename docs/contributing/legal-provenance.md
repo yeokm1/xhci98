@@ -326,6 +326,28 @@ that files generated from `registers.json` carry the tbtools notice.
 39-A.2 reads the file against that rule before it lands, and records what
 it finds here.
 
+#### Source files adapted under GPL-2.0-only (Phase 40, 2026-10-15)
+
+Not a binary. On 2026-10-15 `usb4-emu` was relicensed to GPL-2.0-only
+(`main` commit `3c74189403bad9972dc073301365db69f9aad76f`), and the owner
+allowed code to be adapted, with attribution, from `usb4-emu` (its
+`tools/usb4cm` included), from Linux `drivers/thunderbolt` and from FreeBSD
+`sys/dev/thunderbolt` for the Thunderbolt and USB4 work only (the run
+brief's addendum 7). Each file below keeps the source's copyright lines and
+SPDX tag in its header and says what it changed.
+
+| File in this repository | Source file | Commit read | What was adapted |
+|---|---|---|---|
+| `src/cm/tbt_u4cm.c` | `usb4-emu` `tools/usb4cm/core/u4cm.c` (blob `921525880d13b772fbac1598ec66c8281ebcfac5`, GPL-2.0-only) | `3c74189` | the connection manager's sequence - router enumeration, adapter discovery by capability walk, port and protocol-adapter pairing, the router operation, the DROM read, lane bonding, the device router's connect, the Configuration Valid handshake, path programming, the PCIe and USB3 tunnels - translated and changed as design record 22 section 2.2 says |
+| `src/cm/tbt_u4cm.c` | Linux `drivers/thunderbolt/tb.c`, `switch.c`, `tunnel.c`, `path.c`, `usb4.c`, `tmu.c`, `lc.c`, `quirks.c`, `cap.c` (GPL-2.0) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | sequences, constants and register uses, translated to C89 (no function body pasted): `tb_switch_configure`, `usb4_switch_setup`, `tb_plug_events_active`, `tb_switch_next_cap`, `usb4_switch_credits_init`, `tb_pci_init_credits`, `tb_available_credits`, `tb_path_activate`, `tb_tunnel_discover_pci` / `_usb3`, `tb_path_discover`, `usb4_usb3_port_allocate_bandwidth` / `_release_bandwidth`, `usb4_port_reset`, `tb_switch_lane_bonding_enable`, `tb_switch_tmu_post_time`, `tb_switch_tmu_enable` (HiFi-Bi), `tb_switch_tmu_disable`, `tb_lc_read_uuid`, `tb_lc_lane_bonding_possible`, `tb_lc_set_port_configured`, `tb_check_quirks` and its table |
+| `src/cm/tbt_regs.h` (the Phase 40 block) | Linux `drivers/thunderbolt/tb_regs.h`, `tb_msgs.h` (GPL-2.0) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | the cross-check of every field taken from the USB4 Specification 2.0, and the Thunderbolt 3 Plug Events and link controller fields, which the specification does not define |
+| `src/cm/tbt_ring.c`, `tbt_ring.h` (the USB4 transport) | `usb4-emu` `tools/usb4cm/core/u4hi.c` (`u4_hp_ack`, `u4cm_unsolicited`, `u4_xfer`; blob `869add9a38fb536933f084a81245e095bb598361` at `3c74189`); Linux `drivers/thunderbolt/ctl.c` (`tb_cfg_ack_plug`, `tb_cfg_ack_notification`) | `3c74189`; `c6859eed` | the hot plug acknowledgement and its queue, the write request on the read's transfer, the plain acknowledgement's form; the file's earlier lift (`39-A.2`, MIT, above) keeps its notice |
+
+The host suite's fake fabric (`test/u4_fakefab.c`) is written for this
+project from the specification and from `usb4-emu`'s documents; it adapts
+no code. `usb4-emu`'s fabric model (`src/qemu/hw/usb4/`) is read in place,
+never copied, by the cross-check script of task 40-A.5.
+
 ### The third-party PDFs
 
 Both PDFs were tracked in this repository for a time. The xHCI specification
