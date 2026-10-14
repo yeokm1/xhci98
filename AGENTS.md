@@ -625,24 +625,43 @@ and its bit-exact companion `docs/usb-xhci-info/usbport-miniport-abi.md`;
 they describe the `1.2.0.0` sources and bind nothing in `src/`.
 
 The Thunderbolt 3 and USB4 work (`docs/contributing/roadmap-usb4.md`,
-design record 21, `src\cm\`) has its own references:
+design records 21 and 22, `src\cm\`) has its own references:
 
 - `usb4-emu`'s `docs/ICM-PROTOCOL.md` is the contract, cited by section,
   with the P14s Gen 1 captures behind each [obs].
 - The USB4 Specification 2.0 and Connection Manager Guide 2.0
   (`docs/references/README.md`) are the generic host interface.
-- `usb4-emu`'s `tools/usb4cm` (MIT) is lifted with its notices kept
-  (`legal-provenance.md` section 2a).
-- Since 2026-10-15 (owner), Linux's `drivers/thunderbolt` and FreeBSD's
-  `sys/dev/thunderbolt` are interface documentation for this work under
-  the mirror rule here. Device ids, message codes and layouts, register
-  offsets, constants, sequences and controller quirks are taken and cited
-  by file and symbol. No function body of either tree is copied into
-  `src/` or the docs.
+- Since 2026-10-15 (owner, through the `usb4-emu` maintainer's note, once
+  that repository's relicensing to GPL-2.0-only landed on its `main` at
+  `3c74189`), this work may adapt code from `usb4-emu` itself,
+  `tools/usb4cm` included; from Linux's `drivers/thunderbolt`; from
+  FreeBSD's `sys/dev/thunderbolt`; and data from Intel's tbtools (MIT, the
+  commit `usb4-emu`'s `docs/REFERENCES.md` pins). Device ids, message
+  codes and layouts, register offsets, constants, sequences and controller
+  quirks are still cited by file and symbol where they are used.
+- Every adapted file keeps the copyright lines of each source file it came
+  from and its SPDX tag (`SPDX-License-Identifier: GPL-2.0-only` with
+  Linux's or `usb4-emu`'s lines; the BSD-2-Clause notice of a FreeBSD
+  file, the MIT notice of tbtools data or of a `usb4cm` file lifted before
+  the relicensing, kept verbatim), and gains a `legal-provenance.md`
+  section 2a entry naming the source file, the pinned commit actually read
+  (`external/README.md`'s for Linux and FreeBSD; the `usb4-emu` or tbtools
+  commit read) and what was adapted.
+  Adapting is translating: the code is still C89, safe on Windows 98 and
+  2000, free of 64-bit arithmetic and in this file's style, never a paste
+  of a Linux kernel API.
+- Behaviour taken from Linux alone stays tagged [linux] and unconfirmed
+  until a hardware capture shows it; adapting Linux code does not confirm
+  it.
+- Nothing from this repository or `usb4-emu` moves into `nvme98`, which
+  is BSD-3-Clause.
 
-The mirrors and their pinned commits are in `external/README.md`;
-`legal-provenance.md` section 3 records the rule and section 4 the fact
-classes taken.
+That permission is for the Thunderbolt and USB4 work only. Every other
+mirror, and Linux and FreeBSD for any other subsystem, stays under the
+mirror rule of "Third-Party Material and Provenance" below, with only the
+exception for Linux's xHCI quirks that it names. The mirrors and their
+pinned commits are in `external/README.md`; `legal-provenance.md` section
+3 records the rule and section 4 the fact classes taken.
 
 ---
 
@@ -683,7 +702,11 @@ rules that bind day-to-day work, and none of them is optional.
   Struct layouts, offsets, signatures, constants, and observed call ordering
   are what this project takes; function bodies are never copied into `src/`
   or the docs. This project being GPL-2.0 itself does not relax that rule,
-  because the rule is what makes `src/` independently written.
+  because the rule is what makes `src/` independently written. The
+  recorded exceptions are `legal-provenance.md` section 3's: Linux's xHCI
+  controller quirks (design record 20), and the Thunderbolt and USB4 work's
+  sources under "Reference Implementations" above, each adapted file with
+  its notices kept and its section 2a entry.
 - Defeat no protection mechanism, and patch no binary; read each one as the
   vendor shipped it. Routine unpacking (`7z e` plus `expand.exe` on install
   media) is not this rule's subject; the recorded adjacent cases are in

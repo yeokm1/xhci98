@@ -55,6 +55,16 @@ rem  13. the text-mode Setup driver descriptions of task 33.3,
 rem      src\txtsetup.oem and src\txtsetup-amd64.oem, gated by
 rem      scripts\inf-gate\check-txtsetup-oem.ps1 (self-tested first) beside
 rem      the INF gates
+rem  14. the third binary, xhcicm.sys - the Thunderbolt 3 connection manager
+rem      of roadmap-usb4.md task 39-A.1 (design record 21), built from
+rem      src\cm after xhciuas.sys for each flavour and architecture and held
+rem      to the same gates: its own allowlists
+rem      (scripts\import-gate\xhcicm-imports.allow on x86,
+rem      xhcicm-imports-amd64.allow on amd64), the flavour marker check and
+rem      source stamp, and its four INFs' own gate
+rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
+rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
+rem      xhcicmf-amd64.inf on every build)
 rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
@@ -320,6 +330,43 @@ echo === UAS INF gate (amd64) ===
 set "INFFILE=src\uas\xhciuas-amd64.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -Arch amd64
+if errorlevel 1 goto inffail
+
+rem The connection manager's four INFs (task 39-A.1): the NHI's pair and the
+rem NT-only tunnel-bridge filter's pair, under a gate of their own,
+rem self-tested by mutation first.
+echo.
+echo === CM INF gate self-tests ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -SelfTest
+if errorlevel 1 goto inftestfail
+
+echo.
+echo === CM INF gate (NHI, x86) ===
+set "INFFILE=src\cm\xhcicm.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Arch x86
+if errorlevel 1 goto inffail
+
+echo.
+echo === CM INF gate (NHI, amd64) ===
+set "INFFILE=src\cm\xhcicm-amd64.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Arch amd64
+if errorlevel 1 goto inffail
+
+echo.
+echo === CM INF gate (filter, x86) ===
+set "INFFILE=src\cm\xhcicmf.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Filter -Arch x86
+if errorlevel 1 goto inffail
+
+echo.
+echo === CM INF gate (filter, amd64) ===
+set "INFFILE=src\cm\xhcicmf-amd64.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Filter -Arch amd64
 if errorlevel 1 goto inffail
 
 rem The text-mode Setup driver descriptions (task 33.3): src\txtsetup.oem and
@@ -601,6 +648,9 @@ if errorlevel 1 goto flavourfail
 call :builduas %FLAVOR%
 if errorlevel 1 goto uasfail
 
+call :buildcm %FLAVOR%
+if errorlevel 1 goto cmfail
+
 rem xhcihlpr.sys, the x86 helper (design record 18, section 15), with every
 rem x86 flavour and never with -amd64: the amd64 HCD has no helper.
 if /i "%ARCH%"=="amd64" goto skiphlpr
@@ -752,6 +802,64 @@ echo wrong flavour marker, or could not be stamped - see above. Do not deploy it
 endlocal
 exit /b 1
 
+rem ------------------------------------------------------------------
+rem :buildcm <release|debug|qemu>
+rem
+rem xhcicm.sys, the Thunderbolt 3 connection manager (roadmap-usb4.md task
+rem 39-A.1, design record 21): the same toolchain, flavour and
+rem BUILD_ALT_DIR as the xhciuas.sys just built, in src\cm, then the import
+rem gate against the driver's own allowlist for the architecture, the
+rem flavour marker check, and the source stamp.
+rem ------------------------------------------------------------------
+:buildcm
+setlocal
+set "FLAVOR=%~1"
+call :flavordirs %FLAVOR%
+if "%OBJDIR%"=="" goto badflavor
+set "CMALLOW=%REPO%\scripts\import-gate\xhcicm-imports.allow"
+if /i "%ARCH%"=="amd64" set "CMALLOW=%REPO%\scripts\import-gate\xhcicm-imports-amd64.allow"
+set "CMSYS=%REPO%\src\cm\%OBJDIR%\%ARCHDIR%\xhcicm.sys"
+set "CMLOG=%REPO%\src\cm\build%OBJDIR:obj=%"
+
+echo.
+echo === build %FLAVOR% xhcicm.sys ===
+if exist "%CMSYS%" del "%CMSYS%"
+if exist "%CMLOG%.err" del "%CMLOG%.err"
+cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\cm" && build -cZ"
+if errorlevel 1 goto cmbuildfail
+if exist "%CMLOG%.err" goto cmbuildfail
+if not exist "%CMSYS%" goto cmbuildfail
+
+echo.
+echo === import gate (%FLAVOR% xhcicm.sys) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%CMSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%CMALLOW%" %GATEOPT%
+if errorlevel 1 goto cmgatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%CMSYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto cmgatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\source-stamp.ps1" -Driver xhcicm -Write "%REPO%\src\cm\%OBJDIR%\%ARCHDIR%"
+if errorlevel 1 goto cmgatefail
+endlocal
+exit /b 0
+
+:cmbuildfail
+echo.
+echo ERROR: the %FLAVOR% build of xhcicm.sys failed. See "%CMLOG%.log" and
+echo "%CMLOG%.err".
+endlocal
+exit /b 1
+
+:cmgatefail
+echo.
+echo ERROR: the %FLAVOR% xhcicm.sys failed the import gate, carries the
+echo wrong flavour marker, or could not be stamped - see above. Do not deploy it.
+endlocal
+exit /b 1
+
 :badflavor
 echo ERROR: unknown build flavor "%FLAVOR%" - use release, debug, qemu, both
 echo or all.
@@ -836,6 +944,12 @@ exit /b 1
 :uasfail
 echo.
 echo ERROR: the %FLAVOR% xhciuas.sys did not build or did not pass its gates.
+endlocal
+exit /b 1
+
+:cmfail
+echo.
+echo ERROR: the %FLAVOR% xhcicm.sys did not build or did not pass its gates.
 endlocal
 exit /b 1
 

@@ -609,6 +609,17 @@ function Get-LegPublishable {
 # it is present and does not require it.
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
+# The Thunderbolt 3 connection manager's three files (roadmap-usb4.md task
+# 39-A.1): its NHI INF, its NT-only tunnel-port filter INF and the binary,
+# published beside the UAS pair on the same terms - its own INFs declare
+# them, its own gate (scripts\inf-gate\check-cm-inf.ps1) checks them in
+# place, and the binary is held to every refusal xhciuas.sys is
+# (Assert-CmPublished). The filter INF is in the flavour directory's nt\
+# subdirectory, out of Windows 98's and ME's way (runs/run-39.md, 39-0.4;
+# the gate's CM-NO9XBRIDGE). A version published before 3.0.0.0 has none,
+# so -UploadSetOnly gates them where present and does not require them.
+$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")
+
 # The text-mode Setup driver description (roadmap task 33.3), published at the
 # root of every flavour directory a cut writes, where text-mode Setup of
 # Windows 2000 and XP reads it from A:\. Not an INF-declared file either: its
@@ -1645,8 +1656,9 @@ function Assert-PackageMatchesDeclaredMedia {
         [hashtable]$PublishedPaths,
         [string]$InfName,
         [string]$Flavor,
-        # Files accepted at the package root beside the declared set: the UAS
-        # pair, which its own INF declares and its own gate checks.
+        # Files accepted beside the declared set, by their path relative to
+        # the package root: the UAS pair, which its own INF declares and its
+        # own gate checks, and the connection manager's three (one in nt\).
         [string[]]$Also = @()
     )
 
@@ -1662,7 +1674,7 @@ function Assert-PackageMatchesDeclaredMedia {
             # comes from the published tree, not from the package.
             continue
         }
-        if ($key -in $alsoKeys -and $relative.ToLowerInvariant() -eq $key) {
+        if ($relative.ToLowerInvariant() -in $alsoKeys) {
             continue
         }
         if (-not $Expected.ContainsKey($key) -or
@@ -1796,6 +1808,76 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
         throw "scripts\source-stamp.ps1 -Driver xhciuas -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
         Write-Ok "$($Leg.Id) UAS binary matches the sources in src\uas"
+    }
+}
+
+function Assert-CmPublished {
+    # xhcicm.sys, the Thunderbolt 3 connection manager (roadmap-usb4.md task
+    # 39-A.1), held to the refusals Assert-UasPublished makes of xhciuas.sys,
+    # which are the build loop's of xhci98.sys, in the same order and for
+    # the same reasons, which are argued there: the release FileVersion,
+    # VS_FF_DEBUG, the flavour marker, the staged bytes being the built ones,
+    # and the source stamp beside the build (scripts\source-stamp.ps1
+    # -Driver xhcicm), unstamped only under -AllowUnstampedDriver.
+    param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot, [switch]$Signed)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
+    if (-not (Test-Path -LiteralPath $Sys)) {
+        throw "the $($Leg.Id) leg has no xhcicm.sys to publish. Rebuild: $rebuild"
+    }
+    $info = (Get-Item -LiteralPath $Sys).VersionInfo
+    if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+        throw "the connection manager binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+    }
+    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
+        throw "the connection manager binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    }
+    $marker = Get-ImageFlavourMarker -Path $Sys
+    if ($marker -ne $Flavor) {
+        $found = if ($marker -eq "") { "none" } else { $marker }
+        throw "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+    }
+    $builtSys = Join-Path $ObjRoot "xhcicm.sys"
+    if (-not (Test-Path -LiteralPath $builtSys)) {
+        throw "the $($Leg.Id) connection manager binary about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\cm. Rebuild: $rebuild"
+    }
+    if ($Signed) {
+        Assert-TestSigned -Sys $Sys -BuiltSys $builtSys -Label "$($Leg.Dir)\xhcicm.sys"
+    } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
+        throw "the connection manager binary about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+    }
+    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $stampScript -Driver xhcicm -Check $ObjRoot 2>&1
+        $stampCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
+    if ($stampCode -eq 1) {
+        throw @"
+the connection manager binary about to be published as $($Leg.Dir)\ was built from sources this
+tree no longer holds:
+$($stampOut -join "`n")
+Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
+"@
+    } elseif ($stampCode -eq 2) {
+        if (-not $AllowUnstampedDriver) {
+            throw @"
+no source stamp beside the $Flavor connection manager binary in $ObjRoot, so this script
+cannot tell whether src\cm still reproduces it. Rebuild it ($rebuild), which
+writes the stamp as it goes; or, for a binary that must ship unstamped, pass
+-AllowUnstampedDriver, as for xhci98.sys.
+"@
+        }
+        Write-Warn "no source stamp beside the $Flavor connection manager binary, and -AllowUnstampedDriver was passed."
+    } elseif ($stampCode -ne 0) {
+        throw "scripts\source-stamp.ps1 -Driver xhcicm -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+    } else {
+        Write-Ok "$($Leg.Id) connection manager binary matches the sources in src\cm"
     }
 }
 
@@ -2084,7 +2166,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
+                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2195,6 +2277,55 @@ $gateOut
             Write-Ok ("{0}\ carries the UAS class driver, by its own INF" -f $f)
         } elseif ($null -ne $pkgDir) {
             throw "the assembled upload set's $f\ directory has no xhciuas.inf, and this cut built it with one."
+        }
+
+        # The Thunderbolt 3 connection manager's two INFs, by its own gate
+        # (roadmap-usb4.md task 39-A.1). Required of a directory this cut
+        # built; gated where present in one -UploadSetOnly reads, since a
+        # version published before 3.0.0.0 has none.
+        # The three files go together: a directory holding any of them holds
+        # all three, so a reconstruction never publishes the NHI's installer
+        # without the filter's, or an INF without its binary.
+        $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        # The filter INF anywhere but nt\ is refused whatever else is there:
+        # Windows 98 SE and ME read a $Windows NT$ INF beside the one they are
+        # pointed at (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE).
+        foreach ($item in @(Get-ChildItem -LiteralPath $uploadFlavorDir -Recurse -Force -File -Filter "xhcicmf.inf")) {
+            $rel = $item.FullName.Substring($uploadFlavorDir.TrimEnd('\').Length + 1)
+            if ($rel -ine "nt\xhcicmf.inf") {
+                throw "CM-NO9XBRIDGE (scripts\inf-gate\check-cm-inf.ps1's rule): the assembled upload set's $f\ directory holds $rel; the connection manager's filter INF is published in nt\ alone, out of Windows 98's and ME's way."
+            }
+        }
+        $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
+        if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
+            $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })
+            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the three files go together."
+        }
+        foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
+            $cmInfPath = Join-Path $uploadFlavorDir $cmInf.Name
+            if (Test-Path -LiteralPath $cmInfPath) {
+                $savedEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $gateOut = & powershell.exe (@("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmGate,
+                                                   "-InfPath", $cmInfPath, "-Arch", $LegArches[$f],
+                                                   "-PackageDir", $uploadFlavorDir) + $cmInf.Extra) 2>&1 | Out-String
+                } finally {
+                    $ErrorActionPreference = $savedEap
+                }
+                if ($LASTEXITCODE -ne 0) {
+                    throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-cm-inf.ps1
+on $($cmInf.Name). Do not upload it: the connection manager's INFs and binary
+are not the media they claim to be.
+
+$gateOut
+"@
+                }
+                Write-Ok ("{0}\ carries the connection manager's {1}, by its own gate" -f $f, $cmInf.Name)
+            } elseif ($null -ne $pkgDir) {
+                throw "the assembled upload set's $f\ directory has no $($cmInf.Name), and this cut built it with one."
+            }
         }
 
         # The text-mode Setup description, by its own gate against the INF
@@ -2905,13 +3036,14 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
 
-        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable
+        $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable
         if ($legSigned) { $legCopy += $certPublishable }
         foreach ($name in $legCopy) {
             $src = Join-Path $pkgDir $name
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
             }
+            Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
             Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
         }
 
@@ -2924,7 +3056,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
+                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
         # The certificate beside a signed leg's binaries must be this key's
         # public half, byte for byte - the one a user would inspect or import.
@@ -3109,6 +3241,13 @@ invalidate readings already taken on these exact bytes - say so:
                             -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                             -Signed:$legSigned
 
+        # The Thunderbolt 3 connection manager beside them, held to the same
+        # refusals (roadmap-usb4.md task 39-A.1).
+        $cmSys = Join-Path $destDir "xhcicm.sys"
+        Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version `
+                           -ObjRoot (Join-Path $repo ("src\cm\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
+                           -Signed:$legSigned
+
         # The x86 helper, where this leg's INF declares it (design record
         # 18), held to the same refusals; and the 2.3.x helper's name never
         # published (section 15.11).
@@ -3135,6 +3274,8 @@ invalidate readings already taken on these exact bytes - say so:
             Sha256    = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
             UasLength = (Get-Item -LiteralPath $uasSys).Length
             UasSha256 = (Get-FileHash -LiteralPath $uasSys -Algorithm SHA256).Hash
+            CmLength  = (Get-Item -LiteralPath $cmSys).Length
+            CmSha256  = (Get-FileHash -LiteralPath $cmSys -Algorithm SHA256).Hash
         }
     }
 
@@ -3543,6 +3684,12 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
         $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
+        $contents += "      xhcicm.inf   (the Thunderbolt 3 connection manager's INF)"
+        $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
+        $contents += "                   later only: never point Windows 98 or ME at nt\)"
+        $contents += ("      xhcicm.sys   {0:N0} bytes" -f $s.CmLength)
+        $contents += "      SHA-256"
+        $contents += ("      {0}" -f $s.CmSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         if ($leg.Arch -eq "x86") {
             $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7; section 4)"

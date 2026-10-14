@@ -807,8 +807,25 @@ function Test-ImportSitesFromSource {
             }
         }
     }
+    # A SOURCES entry may name a file of another directory by path (src\cm's
+    # ..\xhci_log.c, roadmap-usb4.md task 39-A.1): its object is found by the
+    # path the build compiled, not by the directory the image is in.
+    $byPath = @{}
+    $sourcesFile = Join-Path $srcDir "sources"
+    if (Test-Path -LiteralPath $sourcesFile) {
+        $m = [regex]::Match([System.IO.File]::ReadAllText($sourcesFile), '(?ms)^SOURCES\s*=(.*?)(?:\r?\n\r?\n|\r?\n[A-Z])')
+        if ($m.Success) {
+            foreach ($tok in ([regex]::Replace($m.Groups[1].Value, '\\[ \t]*\r?\n', ' ') -split '\s+')) {
+                if ($tok -match '\.c$') {
+                    $byPath[[System.IO.Path]::GetFileNameWithoutExtension($tok).ToLowerInvariant()] = Join-Path $srcDir $tok
+                }
+            }
+        }
+    }
     foreach ($obj in $Objects) {
-        $source = Join-Path $srcDir ([System.IO.Path]::GetFileNameWithoutExtension($obj.Name) + ".c")
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($obj.Name)
+        $source = Join-Path $srcDir ($stem + ".c")
+        if ($byPath.ContainsKey($stem.ToLowerInvariant())) { $source = $byPath[$stem.ToLowerInvariant()] }
         if (-not (Test-Path -LiteralPath $source)) {
             Add-Failure "SITES rule: $($obj.Name) beside $ImagePath is an unreadable LTCG object and its source $source was not found, so the rule cannot be checked for it."
             continue
