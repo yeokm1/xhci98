@@ -9895,7 +9895,7 @@ Setup's install of that device fails silently.** `check-txtsetup-oem.ps1`'s
 change adds a file to one install artefact, look for the gate that ties
 it to the others before trusting each artefact's own gate.
 
-## Windows 2000 from the F6 floppy with a USB keyboard or mouse stops at the first GUI-mode boot: text mode copies `hidusb.sys` and not its imports
+## Windows 2000 from the F6 floppy with a USB keyboard, mouse or stick stops at the first GUI-mode boot: text mode copies the class driver and not its imports
 
 The same matrix, 2026-10-14, QEMU, Windows 2000 SP4 from the F6 floppy
 (`out\p38-matrix\legs\f6w2k\`, git-ignored). Text mode passed (the USB
@@ -9921,8 +9921,19 @@ ports, stopped the same (shots `c1-18`, `c2-08`). The earlier F6 legs
 (task 33.3) read Windows 2000's text mode and Recovery Console, never an
 install to the desktop, so it was never reached before.
 
+**Not only HID.** A later leg on `2.4.0.0` (09:17) with no USB keyboard
+or mouse - a stick at root port 1, an audio device behind a hub - stopped
+the same way naming `usbstor.SYS`: text mode had laid down `usbstor.sys`,
+which imports `USBD.SYS`, and no `usbd.sys` (`files-4b.txt`, shot `b08`).
+The first reading was named after the driver it hit (`hidusb`) and so
+documented as a keyboard-or-mouse limit; the mechanism is any class
+driver Setup binds that imports `usbd.sys`. An install with no USB
+keyboard, mouse or storage device at text mode has not been read.
+
 Rule. **On Windows 2000 a demand- or system-start driver laid down without
 its imports is a boot bugcheck, not a dead device; an F6 leg is not read
-until the installed system has booted.** The package may not carry
+until the installed system has booted, and a limitation is scoped by its
+mechanism (here every class driver importing `usbd.sys`), not by the one
+driver the first stop named.** The package may not carry
 Microsoft's files, so this stands as a limitation (release notes, "Known
 limitations").
