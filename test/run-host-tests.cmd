@@ -170,6 +170,15 @@ rem                  allocator's order and refusals, the walk for the UAS
 rem                  alternate setting and its Pipe Usage descriptors at High
 rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
 rem                  CDB direction table and the storage id strings
+rem   test_tbt_topo - the Thunderbolt tunnel ports' pure half (src\cm\tbt_topo.c,
+rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
+rem                  and 6.5): the P14s Gen 1's configuration space as
+rem                  captured, the emulator's i440FX, q35 and switch layouts,
+rem                  an integrated host's root ports, the set and its
+rem                  provenance (switch, platform table, the XhciCmTunnelBridge
+rem                  list, learned), the Link Status, Slot Status and SHPC
+rem                  readings, a port without the capability bits, and the
+rem                  bounded poll
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -386,6 +395,10 @@ rem test_own links nothing else: who holds an endpoint's ring across an
 rem interface switch - each step's decision, the one-setting walk - is pure,
 rem and the suite drives it over a modelled controller and pool (task 38.10).
 call :run test_own "test_own.c ..\src\xhci_own.c"
+rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
+rem port readings and the poll are pure, driven over a modelled machine
+rem whose P14s half is the captured configuration space (39-A.5).
+call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
