@@ -73,7 +73,7 @@ Both take the directory, not the file: the stamp is written beside
 param(
     [string]$Write = "",
     [string]$Check = "",
-    [ValidateSet("xhci98", "xhciuas", "xhcimsi")]
+    [ValidateSet("xhci98", "xhciuas", "xhcihlpr")]
     [string]$Driver = "xhci98"
 )
 
@@ -92,14 +92,14 @@ if ($Driver -eq "xhciuas") {
     $binaryName = "xhciuas.sys"
     $parentHeaders = $true
 }
-# The NT 6 x86 MSI helper (design record 18 section 8.2): src\msi86, whose
-# SOURCES names the shared ..\xhci_msi86.c - hashed itself, through the
-# path-keeping parse below - and which includes src\xhci_msi86.h and
-# src\xhci_version.h.
-if ($Driver -eq "xhcimsi") {
-    $srcDir = Join-Path $repo "src\msi86"
-    $stampName = "xhcimsi.srcstamp"
-    $binaryName = "xhcimsi.sys"
+# The x86 helper (design record 18 sections 8.2 and 15.11): src\hlpr
+# (src\msi86 and xhcimsi until task 38.3), whose SOURCES names the shared
+# ..\xhci_hlpr.c - hashed itself, through the path-keeping parse below -
+# and which includes src\xhci_hlpr.h and src\xhci_version.h.
+if ($Driver -eq "xhcihlpr") {
+    $srcDir = Join-Path $repo "src\hlpr"
+    $stampName = "xhcihlpr.srcstamp"
+    $binaryName = "xhcihlpr.sys"
     $parentHeaders = $true
 }
 # Prefixed rather than listed like a source file, so the source comparison
@@ -116,7 +116,7 @@ function Get-SourceFiles {
         throw "src\sources has no SOURCES= list this script can read."
     }
     # Line continuations removed first, then split on whitespace alone, so a
-    # path a SOURCES entry carries - src\msi86's ..\xhci_msi86.c - stays one
+    # path a SOURCES entry carries - src\hlpr's ..\xhci_hlpr.c - stays one
     # token (design record 18 section 8.2). Splitting on every backslash, as
     # this did until then, gave the same list for src\ and src\uas, which
     # name no path, and broke that entry into two.

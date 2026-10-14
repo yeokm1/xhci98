@@ -10,9 +10,19 @@
 #include <stdarg.h>
 #include <string.h>
 #include <conio.h>
+#include <dos.h>
 #include "qual.h"
 
 static FILE *logf = 0;
+/* A DOS handle the caller created exclusively (--log-stamp, INT 21h AH=5Bh
+ * in real mode, sys_dos_creatnew) and handed over, written with INT 21h
+ * AH=40h; -1 when there is none. */
+static int log_handle = -1;
+/* Set when a write to log_handle failed or fell short; nothing more is
+ * written to it, and report_log_ok answers 0, so the run's last line does
+ * not claim a log it did not write (the 38.1 MS-DOS leg's 0-byte logs were
+ * announced as written). */
+static int log_failed = 0;
 static int serial_on = 0;
 
 /* console pager: pause every screenful so the report can be read on bare
@@ -46,18 +56,42 @@ static void serial_putc(char ch)
     outp(COM1_BASE + 0, (u8)ch);
 }
 
-int report_open(const char *logname, int use_serial, int paginate)
+static void sinks_on(int use_serial, int paginate)
 {
     serial_on = use_serial;
     page_on = paginate && !use_serial;   /* serial capture is non-interactive */
     if (serial_on)
         serial_init();
+}
+
+/* The log is opened before COM1 is touched: a caller that refuses when the
+ * log cannot be opened must not have programmed a UART first. A failure
+ * returns 0 with no sink on; the caller decides whether to go on without
+ * the file (report_open(0, ...)) or refuse. */
+int report_open(const char *logname, int use_serial, int paginate)
+{
     if (logname != 0) {
         logf = fopen(logname, "w");
         if (logf == 0)
             return 0;
     }
+    sinks_on(use_serial, paginate);
     return 1;
+}
+
+/* The log is a handle the caller has already created (and so already knows
+ * is writable); this takes ownership of it and closes it in report_close. */
+void report_open_handle(int dos_handle, int use_serial, int paginate)
+{
+    log_handle = dos_handle;
+    log_failed = 0;
+    sinks_on(use_serial, paginate);
+}
+
+/* 1 unless a write to the handed-over log failed or fell short. */
+int report_log_ok(void)
+{
+    return !log_failed;
 }
 
 void report_close(void)
@@ -65,6 +99,51 @@ void report_close(void)
     if (logf != 0) {
         fclose(logf);
         logf = 0;
+    }
+    if (log_handle >= 0) {
+        (void)_dos_close(log_handle);
+        log_handle = -1;
+    }
+}
+
+/* Text-mode output on a raw DOS handle: LF becomes CR LF, as the CRT's "w"
+ * stream does for --log. Each write goes to DOS at once, so a later fault
+ * keeps every line already printed, as fflush does for the stream. */
+static void handle_put(const char *p, unsigned n)
+{
+    unsigned wrote = 0;
+
+    if (log_failed)
+        return;
+    if (_dos_write(log_handle, p, n, &wrote) != 0 || wrote != n)
+        log_failed = 1;
+}
+
+static void handle_out(const char *buf)
+{
+    static const char crlf[2] = { '\r', '\n' };
+    const char *p = buf;
+    const char *run = buf;
+
+    for (;; p++) {
+        if (*p == '\n' || *p == '\0') {
+            if (p > run)
+                handle_put(run, (unsigned)(p - run));
+            if (*p == '\0')
+                break;
+            handle_put(crlf, 2);
+            run = p + 1;
+        }
+    }
+}
+
+static void log_out(const char *buf)
+{
+    if (logf != 0) {
+        fputs(buf, logf);
+        fflush(logf);   /* durable per line: a later fault keeps this gate */
+    } else if (log_handle >= 0) {
+        handle_out(buf);
     }
 }
 
@@ -132,10 +211,7 @@ void qprintf(const char *fmt, ...)
     buf[sizeof(buf) - 1] = '\0';             /* _vsnprintf may not terminate */
 
     console_out(buf);
-    if (logf != 0) {
-        fputs(buf, logf);
-        fflush(logf);   /* durable per line: a later fault keeps this gate */
-    }
+    log_out(buf);
     if (serial_on) {
         for (p = buf; *p != 0; p++) {
             if (*p == '\n')
@@ -160,7 +236,7 @@ void qlogprintf(const char *fmt, ...)
     const char *p;
     va_list ap;
 
-    if (logf == 0 && !serial_on)
+    if (logf == 0 && log_handle < 0 && !serial_on)
         return;
 
     va_start(ap, fmt);
@@ -168,10 +244,7 @@ void qlogprintf(const char *fmt, ...)
     va_end(ap);
     buf[sizeof(buf) - 1] = '\0';             /* _vsnprintf may not terminate */
 
-    if (logf != 0) {
-        fputs(buf, logf);
-        fflush(logf);
-    }
+    log_out(buf);
     if (serial_on) {
         for (p = buf; *p != 0; p++) {
             if (*p == '\n')
@@ -202,7 +275,7 @@ void qconprintf(const char *fmt, ...)
  * "the full list is in the log" only when the full list really went there. */
 int report_logging(void)
 {
-    return (logf != 0 || serial_on) ? 1 : 0;
+    return (logf != 0 || log_handle >= 0 || serial_on) ? 1 : 0;
 }
 
 static const char *class_name(int pc)
@@ -216,40 +289,6 @@ static const char *class_name(int pc)
     }
 }
 
-static void print_quirks(const QUIRK *q)
-{
-    if (q == 0) {
-        qprintf("  quirks: none known for this VID/DID\n");
-        return;
-    }
-    qprintf("  quirks: %s\n", q->name);
-    if (q->flags & QF_XUSB2PR)
-        qprintf("    - EHCI<->xHCI port mux (XUSB2PR): run C7 before "
-                "judging dead ports\n");
-    if (q->flags & QF_FW_UPLOAD)
-        qprintf("    - needs driver firmware upload if the card is "
-                "ROM-less\n");
-    if (q->flags & QF_FW_SPI)
-        qprintf("    - firmware from on-card SPI flash (no upload)\n");
-    if (q->flags & QF_SPURIOUS)
-        qprintf("    - spurious Success event after a short packet on the "
-                "same TD: ignore it\n");
-    if (q->flags & QF_BEI)
-        qprintf("    - never set BEI in isoch TRBs\n");
-    if (q->flags & QF_PME_STUCK)
-        qprintf("    - PME wake latch bug (matters on Win2000 power "
-                "transitions)\n");
-    if (q->flags & QF_BULK64K)
-        qprintf("    - keep bulk TRB chains under 64 KB\n");
-    if (q->flags & QF_CMD_RETRY)
-        qprintf("    - retry TRB Error command completions once\n");
-    if (q->flags & QF_BROKEN_MSI)
-        qprintf("    - broken MSI (Linux quirk: take the line or poll, "
-                "not MSI)\n");
-    if (q->flags & QF_AVOID)
-        qprintf("    - known-unreliable silicon: avoid as test platform\n");
-}
-
 void report_controller(CTRL *c, int active_ran)
 {
     PCIINFO *p = &c->pci;
@@ -257,7 +296,10 @@ void report_controller(CTRL *c, int active_ran)
 
     qprintf("\n==== Controller %02X:%02X.%X - %04X:%04X rev %02X ====\n",
             p->bus, p->dev, p->fn, p->vid, p->did, p->rev);
-    print_quirks(c->quirk);
+    /* The exact row, the vendor-wide row and the HCIVERSION floor note
+     * (quirks.c; host-tested by test/test_quirks.c). HCIVERSION is
+     * valid only where MMIO answered. */
+    quirk_report(p->vid, p->did, c->mmio_ok, c->hciversion, qprintf);
 
     qprintf("  PCI: cmd=%04X (MSE=%d BME=%d INTxDis=%d)  pin=INT%c#  "
             "line=IRQ %u\n",
@@ -291,6 +333,20 @@ void report_controller(CTRL *c, int active_ran)
             "PPC=%d\n",
             c->hciversion >> 8, c->hciversion & 0xFF, c->caplength,
             c->csz, c->ac64, c->ppc);
+    /*
+     * Task 38.11 (design record 17 section 4.14.7, D6): what xhci98 does
+     * with a controller below xHCI 1.0. The verdict is unchanged - it judges
+     * the handoff, DMA, interrupts and ports, which the version does not
+     * change - so this is a line, not a finding.
+     */
+    if (c->hciversion >= 0x0096 && c->hciversion < 0x0100) {
+        qprintf("  xhci98 drives it with XhciAccept096 at its default 1 (TD "
+                "Size in 1 KiB units;\n    untested ground); at 0 it refuses "
+                "to start it (Code 10)\n");
+    } else if (c->hciversion < 0x0096) {
+        qprintf("  xhci98 refuses to start it (Code 10): below xHCI 0.96 at "
+                "every XhciAccept096\n");
+    }
     qprintf("  MaxSlots %d  MaxIntrs %d  MaxPorts %d  Scratchpad %d  "
             "PAGESIZE %08lX\n",
             c->maxslots, c->maxintrs, c->maxports, c->spbufs, c->pagesize);
@@ -303,7 +359,14 @@ void report_controller(CTRL *c, int active_ran)
      * in what a machine does after standby, and until this line existed the only
      * way to guess it was from HCIVERSION - which is not what the bit says.
      */
-    if (c->hcc2_ok) {
+    if (c->hcc2_ok && c->hciversion < 0x0100) {
+        /* Task 38.11, D4: below 1.0 what offset 1Ch means is not
+         * established, so the raw value is shown for what it holds and no
+         * field of it is decoded; the driver takes FSC and LEC as 0. */
+        qprintf("  HCCPARAMS2 %08lX (raw; below 1.0 its meaning is not "
+                "established - xhci98\n    takes FSC and LEC as 0, so "
+                "suspend/resume re-enumerates)\n", c->hcc2);
+    } else if (c->hcc2_ok) {
         qprintf("  HCCPARAMS2 %08lX  FSC=%d U3C=%d CMC=%d%s\n",
                 c->hcc2, c->fsc, c->u3c, c->cmc,
                 c->fsc ? "" : "  (FSC=0: suspend/resume re-enumerates)");

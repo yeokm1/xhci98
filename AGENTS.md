@@ -198,7 +198,7 @@ driver fills the gap for both.
 | Supported in VM | How each target was admitted, under the miniport; the HCD's standing on each is the release notes' "Targets and their standing", every one virtual-machine only for `2.0.0.0`. Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax; under the host controller driver it needs no USB 2.0 stack (stock ME read 2026-10-12, roadmap 37.1). Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), on metal once, the Dell Latitude E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19) and 64-bit Windows 7 on the E7250 at the `2.3.0.0` bench (2026-10-11), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads in test-signing mode (the binaries are test-signed, design record 19) or on an F8 boot with signature enforcement disabled**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
 | USB scope | SuperSpeed (5 Gbit/s) and USB 2.0 (HS/FS/LS) devices and hubs, and UAS; HID, mass storage, USB Ethernet, and USB Audio validation targets. SuperSpeedPlus links are accepted at their trained rate and are untested ground, as is SuperSpeed isochronous (`roadmap-hcd.md`, decisions table; the release notes, "Untested ground"). The frozen miniport was USB 2.0 only |
 | Integration model | A monolithic bus driver (design record 13): `xhci98.sys` is the controller's FDO and its root hub's FDO, runs hubs and composite splitting inside the bus, and presents device PDOs to each target's own class drivers; since `2.1.0.0` each external hub also has a PDO under a project-owned id, bound to `xhci98.sys` again as a hub FDO (design record 13 section 10.11). It replaces `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbccgp.sys`; `xhciuas.sys` is the UAS class driver above it. The miniport's model, a `usbport.sys` miniport (Option A), is the `1.2.0.0` branch's |
-| Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64. One x86 binary is the other exception: `xhcimsi.sys`, the NT 6 x86 MSI helper (design record 18), which `build-driver.cmd` builds with WDK 7.1 for x86, Vista target, in every x86 run, because only that kit declares `IoConnectInterruptEx`; an x86 build therefore needs `tools/WinDDK71` too. `xhci98.sys` and `xhciuas.sys` x86 stay on MSVC 6.0 |
+| Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64. One x86 binary is the other exception: `xhcihlpr.sys`, the x86 helper for 32-bit 2000, XP, Vista and 7 (design record 18; `xhcimsi.sys`, Vista and 7 only, through 2.3.x), which `build-driver.cmd` builds with WDK 7.1's `WXP` x86 environment at subsystem version 5.00 in every x86 run, because only that kit declares `IoConnectInterruptEx` (now looked up at run time, so the image loads on 2000 and XP); an x86 build therefore needs `tools/WinDDK71` too. `xhci98.sys` and `xhciuas.sys` x86 stay on MSVC 6.0 |
 | DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`), for every 32-bit build; WDK 7.1 in `tools/WinDDK71` (`x64 WNET`) for the amd64 one, whether it stays being design record 11's decision 3. All of them live in the repo and install nothing machine-wide; every script finds them relative to itself. `DDKROOT` overrides where the DDK is found and reaches its `setenv.bat`, so it does redirect the compiler the driver is built with. `MSVC6` does NOT: the DDK build takes its compiler from the generated environment script, and `MSVC6` only redirects the host-side tools that need `dumpbin` and `cl` of their own - the import gate and `scripts\vm-matrix\gen-offsets.ps1` |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
 | Driver type | WDM kernel-mode driver (.sys) |
@@ -319,8 +319,9 @@ instance id from the device's serial number where it has a usable one,
 design record 13 section 10.7). External hubs are run
 by the bus and, since `2.1.0.0` (roadmap-hcd task 33.4, design record 13
 section 10.11), also presented as devnodes under project-owned ids
-(`XHCI98\HUB`, `XHCI98\HUB30`) bound to `xhci98.sys` once more, with the
-devices behind each nested beneath it.
+(`USB\XHCI98_HUB`, `USB\XHCI98_HUB30` since `2.4.0.0`, task 38.8, section
+10.13; `XHCI98\HUB` and `XHCI98\HUB30` before) bound to `xhci98.sys` once
+more, with the devices behind each nested beneath it.
 
 ```
   [hidusb.sys, usbstor.sys, usbaudio.sys, vendor drivers, xhciuas.sys]
@@ -509,14 +510,23 @@ carries `txtsetup.oem` (from `src\txtsetup.oem` or `src\txtsetup-amd64.oem`)
 for text-mode Setup's F6 prompt, held by
 `scripts\inf-gate\check-txtsetup-oem.ps1` (design record 13 section 5.6).
 
-**The x86 package carries a third binary since 2.3.0.0**: `xhcimsi.sys`,
-the NT 6 x86 MSI helper (design record 18). `src/xhci98.inf` installs it
-from `[Xhci.Dev6.NTx86]` alone - a boot-start service, with the controller's
-`.HW` request for one message and a `Reboot` - and nowhere else; the INF
-gate's `MSIHLP-*` and `MSI-*` rules hold it there, and the 64-bit package
-never carries it. Its imports are Vista's, gated by the import gate's
-`-GateProfile nt6x86` against `xhcimsi-imports.allow`, not by the Windows
-98 and 2000 rules, because it is never installed on those targets.
+**The x86 package carries a third binary since 2.3.0.0**: since 2.4.0.0
+`xhcihlpr.sys`, the x86 helper (design record 18 section 15), which hands
+`xhci98.sys` the MSI connection on Vista and 7 and `ExSetTimerResolution`
+(the finer timer, design record 15 section 7.2) on 2000 and later; 2.3.0.0
+and 2.3.1.0 shipped it as `xhcimsi.sys`, the MSI half alone, for Vista and 7
+alone. `src/xhci98.inf` installs it as a boot-start service from
+`[Xhci.Dev.NTx86]` (2000 and XP: no `Reboot`, no `.HW`) and from
+`[Xhci.Dev6.NTx86]` (Vista and 7: the controller's `.HW` request for one
+message, a `Reboot`, and `DelService=xhcimsi` with the old file deleted,
+which the VM matrix read happen at once, during the update) and nowhere
+else; the INF gate's `HLPR-*` and `MSI-*` rules
+hold it there, and the 64-bit package never carries it. Its imports are
+gated by the import gate's `-GateProfile hlprx86` against
+`xhcihlpr-imports.allow` and the x86 kernels' and HALs' export tables of
+2000 SP4, XP SP3, Vista SP2 and 7 SP1, every set required, not by the
+Windows 98 rules,
+because it is never installed on Windows 98 or ME.
 
 The media carries no Microsoft file. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class
@@ -537,6 +547,11 @@ one, and `PKG-MSFILE` refuses a staged package holding one - by name, which
 covers the four, the three retired 1.0.0.0 media names and `usbhub20.sys`. A
 name list cannot see the same bytes under a name nobody thought of; what closes
 that is the packager refusing to publish anything it did not itself stage.
+Since 2.4.0.0 it refuses the CD's compressed names too (`USBD.SY_`): the
+32-bit `txtsetup.oem`'s Windows 2000 F6 entry names `usbd.sys`,
+`hidclass.sys` and `hidparse.sys`, which the user copies from their own
+Windows 2000 CD to the floppy - the media still carries none of them
+(`OEM-W2K` holds that entry's shape).
 `legal-provenance.md` section 5 records why. Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is
@@ -624,7 +639,8 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
-  anywhere: the two tool executables carry statically linked runtimes
+  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, and from
+  `2.4.0.0` `XHCICLN` and `XHCICL64`) carry statically linked runtimes
   (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the

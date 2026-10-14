@@ -367,6 +367,15 @@ ULONG XhciPoolAcquire(PXHCI_RING_POOL pool,
                       ULONG ringless,
                       ULONG *poolIndex)
 {
+    return XhciPoolAcquireReserved(pool, deviceRef, ringless, 0, poolIndex);
+}
+
+ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
+                              ULONG deviceRef,
+                              ULONG ringless,
+                              ULONG reserved,
+                              ULONG *poolIndex)
+{
     ULONG held;
     ULONG freeRings;
     ULONG i;
@@ -375,8 +384,19 @@ ULONG XhciPoolAcquire(PXHCI_RING_POOL pool,
         return XHCI_POOL_BAD_PARAM;
     }
 
+    /*
+     * Two counts, kept apart (design record 20 section 5.2). The cap is
+     * taken against the rings the device holds outside the caller's
+     * transaction: `reserved` is the rings that transaction's command
+     * will drop, held until a proof releases them, and a device with four
+     * endpoints must still be able to make its first replacement. A
+     * reservation larger than what is held is a caller's slip and reserves
+     * nothing. The fairness test below keeps the physical count, so a
+     * replacement never passes for a device's first ring.
+     */
     held = XhciPoolDeviceCount(pool, deviceRef);
-    if (held >= XHCI_MAX_DEVICE_ENDPOINTS) {
+    if ((reserved <= held ? held - reserved : held) >=
+        XHCI_MAX_DEVICE_ENDPOINTS) {
         pool->AcquireFailuresCap++;
         return XHCI_POOL_AT_CAP;
     }

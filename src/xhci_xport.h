@@ -21,10 +21,17 @@
  * UAS the VID/PID hardware ids stay, so a device usbstor.inf lists by hand
  * still binds usbstor.sys - the residual case roadmap 31-A.3 records rather
  * than fights. A REFUSED interface (no transport it can run) shows no
- * VID/PID-derived hardware id at all: its one hardware id is
+ * VID/PID-derived hardware id: its one hardware id is
  * USB\XHCI98_NOXPORT&VID_v&PID_p&REV_r[&MI_nn], a project-owned form no
- * INF names, so neither usbstor.inf nor a vendor INF can bind a storage
- * driver to it, and the device shows in Device Manager with no driver.
+ * INF names, and it has no compatible ids. Its device id is still the
+ * ordinary USB\VID_v&PID_p[&MI_nn] (hcd_pdo.c answers BusQueryDeviceID
+ * outside this policy), and Windows 98 SE puts that into the devnode's
+ * HardwareID value beside the NOXPORT id (read 2026-10-13, task 38.2,
+ * under NUSB 3.3; the wizard found no driver). Whether a VID/PID-only INF
+ * line binds a refused device through it, whether a serial-number device
+ * returns to the devnode its working form installed (same device and
+ * instance id), and NT's behaviour are unread: design record 13 section
+ * 10.7.1, roadmap task NOX.1 (deferred).
  *
  * The decision:
  *   - no UAS alternate on the interface: XHCI_XPORT_NONE, the ids as

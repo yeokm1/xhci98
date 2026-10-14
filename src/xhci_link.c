@@ -69,6 +69,17 @@ VOID XhciLinkInit(PXHCI_LINK_PORT link)
     link->GaveUp = 0;
     link->LastState = XHCI_LINK_UNKNOWN;
     link->LastReset = XHCI_LINK_ACT_NONE;
+    link->StuckCheck = 0;
+}
+
+ULONG XhciLinkStuckPolling(ULONG portsc)
+{
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_PP) == 0 ||
+        (portsc & XHCI_PORTSC_PR) != 0 ||
+        (portsc & (XHCI_PORTSC_CCS | XHCI_PORTSC_CAS)) != 0) {
+        return 0;
+    }
+    return XHCI_PORTSC_GET_PLS(portsc) == XHCI_PLS_POLLING ? 1UL : 0UL;
 }
 
 ULONG XhciLinkClassify(ULONG portsc)
@@ -286,6 +297,24 @@ ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
     }
     xhciLinkAct(action, XHCI_LINK_ACT_NONE, 0);
     feed = 0;
+    /*
+     * 38.10, XhciStuckLinkReset: the first reading after a restoring resume
+     * (the device layer arms StuckCheck there) warm-resets a USB3 port stuck
+     * in Polling with no CAS, within 29-A.2's budget (xhciLinkWarm), as it
+     * does a port in Compliance. One reading only: a Polling port read
+     * later is a link still training, waited on as before.
+     */
+    if (link != NULL && link->StuckCheck) {
+        link->StuckCheck = 0;
+        if (usb3 && XhciLinkStuckPolling(portsc)) {
+            link->LastState = XhciLinkClassify(portsc);
+            (VOID)xhciLinkWarm(link, action, 0);
+            if (enumState != XHCI_ENUM_EMPTY && enumState != XHCI_ENUM_GONE) {
+                feed |= XHCI_LINK_FEED_DISCONNECT;
+            }
+            return feed;
+        }
+    }
     if (usb3 && link != NULL) {
         state = XhciLinkClassify(portsc);
         (VOID)XhciLinkDecide(link, portsc, XHCI_LINK_WANT_SERVICE, action);

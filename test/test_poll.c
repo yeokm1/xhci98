@@ -5,8 +5,10 @@
  * across the word's wrap and clock steps, the poller's ownership machine
  * with KeCancelTimer's two answers at each state, the roles, park and
  * kick in both orders, close against expiry, the watcher's dead-line
- * verdict, the adaptive period and the interval observation, and the
- * line's retirement over a modelled register file.
+ * verdict, the adaptive period and the interval observation, the line's
+ * retirement over a modelled register file, and the finer timer's request
+ * machine, its schedules and its phase observer (record 15 section 7.2.10,
+ * task 38.3).
  */
 
 #include <stdio.h>
@@ -841,8 +843,518 @@ static void test_retire(void)
     CHECK_EQ(f.Iman, 0, "IP retired");
 }
 
+/* ------------------------------------------------------------------ */
+/* A finer system timer while polling (record 15 section 7.2.10)       */
+/* ------------------------------------------------------------------ */
+
+/* The inputs with every clause of "wanted" true. */
+static void tmr_in_all(XHCI_POLL_TMR_IN *in)
+{
+    in->Switch = 1;
+    in->Routine = 1;
+    in->Stop = 0;
+    in->Delivery = XHCI_POLL_DELIVERY_POLL;
+    in->Role = XHCI_POLL_ROLE_SERVE;
+    in->Bar = 0;
+    in->PollService = 1;
+    in->D0 = 1;
+    in->SuspendedInD0 = 0;
+    in->Active = 1;
+}
+
+static void test_tmr_want(void)
+{
+    XHCI_POLL_TMR_IN in;
+
+    tmr_in_all(&in);
+    CHECK_EQ(XhciPollTmrWant(&in), 1, "every clause true: wanted");
+    tmr_in_all(&in);
+    in.Switch = 0;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "the switch off");
+    tmr_in_all(&in);
+    in.Routine = 0;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "no routine");
+    tmr_in_all(&in);
+    in.Stop = 1;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "stopping");
+    tmr_in_all(&in);
+    in.Delivery = XHCI_POLL_DELIVERY_LINE;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "a line delivery");
+    tmr_in_all(&in);
+    in.Delivery = XHCI_POLL_DELIVERY_MSI;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "a message delivery");
+    tmr_in_all(&in);
+    in.Role = XHCI_POLL_ROLE_WATCH;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "the watch role");
+    tmr_in_all(&in);
+    in.Bar = 1;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "barred");
+    tmr_in_all(&in);
+    in.PollService = 0;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "the service revoked");
+    tmr_in_all(&in);
+    in.D0 = 0;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "out of D0");
+    tmr_in_all(&in);
+    in.SuspendedInD0 = 1;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "suspended in D0");
+    tmr_in_all(&in);
+    in.Active = 0;
+    CHECK_EQ(XhciPollTmrWant(&in), 0, "not ACTIVE");
+}
+
+static void test_tmr_step(void)
+{
+    ULONG state;
+    ULONG held;
+
+    state = XHCI_POLL_TMR_RELEASED;
+    held = 0;
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 0, 3), XHCI_POLL_TMR_NONE,
+             "RELEASED, not wanted: nothing");
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 1, 3), XHCI_POLL_TMR_HOLD,
+             "RELEASED, wanted: hold");
+    CHECK_EQ(state, XHCI_POLL_TMR_HELD, "HELD");
+    CHECK_EQ(held, 3, "the generation read with the inputs kept");
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 1, 3), XHCI_POLL_TMR_NONE,
+             "HELD, wanted, same generation: nothing");
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 0, 3), XHCI_POLL_TMR_RELEASE,
+             "HELD, not wanted: release");
+    CHECK_EQ(state, XHCI_POLL_TMR_RELEASED, "RELEASED");
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 0, 3), XHCI_POLL_TMR_NONE,
+             "no FALSE with nothing held");
+    (void)XhciPollTmrStep(&state, &held, 1, 4);
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 1, 5),
+             XHCI_POLL_TMR_RELEASE_FORCED,
+             "HELD, wanted again, the generation advanced: forced release");
+    CHECK_EQ(state, XHCI_POLL_TMR_RELEASED, "no HELD survives a generation");
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 1, 5), XHCI_POLL_TMR_HOLD,
+             "then held under the new generation");
+    CHECK_EQ(held, 5, "the new generation kept");
+    CHECK_EQ(XhciPollTmrStep(&state, &held, 0, 6),
+             XHCI_POLL_TMR_RELEASE_FORCED,
+             "a generation and not wanted: the forced release");
+
+    CHECK_EQ(XhciPollTmrCause(1, 1, 1), XHCI_POLL_TMR_CAUSE_STOP,
+             "the stop first");
+    CHECK_EQ(XhciPollTmrCause(0, 1, 1), XHCI_POLL_TMR_CAUSE_BARRED,
+             "then a bar");
+    CHECK_EQ(XhciPollTmrCause(0, 0, 1), XHCI_POLL_TMR_CAUSE_REVOKED,
+             "then a boundary");
+    CHECK_EQ(XhciPollTmrCause(0, 0, 0), XHCI_POLL_TMR_CAUSE_IDLE,
+             "else the poller left ACTIVE");
+}
+
+/*
+ * The executor modelled (hcd_tmr.c): the producers write the inputs and
+ * the generation under "the lock"; the thread, when it runs, reads them
+ * once per step and calls until a step asks for nothing. The calls are
+ * counted and the invariants checked at each.
+ */
+typedef struct _TMR_SIM {
+    XHCI_POLL_TMR_IN In;
+    ULONG Gen;
+    ULONG State;
+    ULONG HeldGen;
+    ULONG Trues;
+    ULONG Falses;
+    ULONG Forced;
+    ULONG Raced;
+    ULONG LastCause;
+    ULONG Bad;
+} TMR_SIM;
+
+static void sim_init(TMR_SIM *m)
+{
+    tmr_in_all(&m->In);
+    m->In.Active = 0;
+    m->Gen = 0;
+    m->State = XHCI_POLL_TMR_RELEASED;
+    m->HeldGen = 0;
+    m->Trues = 0;
+    m->Falses = 0;
+    m->Forced = 0;
+    m->Raced = 0;
+    m->LastCause = XHCI_POLL_TMR_CAUSE_NONE;
+    m->Bad = 0;
+}
+
+/* A boundary: the park, a revoke, a bar or the stop. */
+static void sim_boundary(TMR_SIM *m)
+{
+    m->In.Active = 0;
+    m->Gen++;
+}
+
+static void sim_bar(TMR_SIM *m)
+{
+    m->In.Bar = 1;
+    sim_boundary(m);
+}
+
+static void sim_revoke(TMR_SIM *m)
+{
+    m->In.PollService = 0;
+    sim_boundary(m);
+}
+
+static void sim_grant(TMR_SIM *m)
+{
+    m->In.PollService = 1;
+    m->In.Bar = 0;
+}
+
+/* One step: returns 1 when a call was made. */
+static ULONG sim_step(TMR_SIM *m)
+{
+    ULONG act;
+    ULONG before;
+
+    before = m->State;
+    act = XhciPollTmrStep(&m->State, &m->HeldGen, XhciPollTmrWant(&m->In),
+                          m->Gen);
+    if (act == XHCI_POLL_TMR_HOLD) {
+        if (before != XHCI_POLL_TMR_RELEASED) {
+            m->Bad++;
+        }
+        m->Trues++;
+        /* A boundary since the inputs were read: the hold is raced. */
+        if (m->Gen != m->HeldGen) {
+            m->Raced++;
+        }
+        return 1;
+    }
+    if (act == XHCI_POLL_TMR_RELEASE || act == XHCI_POLL_TMR_RELEASE_FORCED) {
+        if (before != XHCI_POLL_TMR_HELD) {
+            m->Bad++;
+        }
+        m->Falses++;
+        if (act == XHCI_POLL_TMR_RELEASE_FORCED) {
+            m->Forced++;
+        }
+        m->LastCause = XhciPollTmrCause(m->In.Stop, m->In.Bar,
+                                        act == XHCI_POLL_TMR_RELEASE_FORCED);
+        return 1;
+    }
+    return 0;
+}
+
+/* The thread's pass: steps until nothing is asked (bounded). */
+static void sim_pass(TMR_SIM *m)
+{
+    ULONG n;
+
+    for (n = 0; n < 8 && sim_step(m); n++) {
+    }
+    if (n >= 8) {
+        m->Bad++;
+    }
+    if (m->Trues - m->Falses > 1 || m->Falses > m->Trues) {
+        m->Bad++;
+    }
+}
+
+static void test_tmr_schedules(void)
+{
+    TMR_SIM m;
+    ULONG seed;
+    ULONG i;
+    ULONG r;
+
+    /* The first pass with TmrActive already 1: a hold with no new edge. */
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    CHECK_EQ(m.Trues, 1, "the first pass reconciles: held");
+
+    /* A PERIODIC decision after ACTIVE: one release, cause 1. */
+    m.In.Active = 0;
+    sim_pass(&m);
+    CHECK_EQ(m.Falses, 1, "PERIODIC after ACTIVE releases");
+    CHECK_EQ(m.LastCause, XHCI_POLL_TMR_CAUSE_IDLE, "cause: left ACTIVE");
+
+    /* Round 1's finding 3, schedule 1: a revoke, the release, a grant, the
+     * next decision still ACTIVE - one release, then one hold after the
+     * grant's signal. */
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    sim_revoke(&m);
+    sim_pass(&m);
+    CHECK_EQ(m.Falses, 1, "the revoke's release");
+    CHECK_EQ(m.LastCause, XHCI_POLL_TMR_CAUSE_REVOKED, "cause: revoked");
+    sim_grant(&m);
+    sim_pass(&m);
+    CHECK_EQ(m.Trues, 1, "no hold at the grant alone (TmrActive was reset)");
+    m.In.Active = 1;
+    sim_pass(&m);
+    CHECK_EQ(m.Trues, 2, "the next ACTIVE decision holds again");
+
+    /* Schedule 2: a revoke and a grant before the thread samples, the
+     * decision ACTIVE again - a forced release, then a hold. */
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    sim_revoke(&m);
+    sim_grant(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    CHECK_EQ(m.Forced, 1, "the forced release");
+    CHECK_EQ(m.Falses, 1, "one release");
+    CHECK_EQ(m.Trues, 2, "then a hold under the new generation");
+    CHECK_EQ(m.HeldGen, m.Gen, "held in the generation after the boundary");
+
+    /* A recovery: revoke, then the grant of the success, then ACTIVE. */
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    sim_revoke(&m);
+    sim_pass(&m);
+    sim_grant(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    CHECK_EQ(m.Trues - m.Falses, 1, "a recovery gives back and takes again");
+
+    /* D3 and back: the barred release, no hold until the next ACTIVE. */
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    sim_bar(&m);
+    m.In.PollService = 0;
+    m.In.D0 = 0;
+    sim_pass(&m);
+    CHECK_EQ(m.Falses, 1, "the bar's release");
+    CHECK_EQ(m.LastCause, XHCI_POLL_TMR_CAUSE_BARRED, "cause: barred");
+    m.In.D0 = 1;
+    sim_grant(&m);
+    sim_pass(&m);
+    CHECK_EQ(m.Trues, 1, "no hold at D0's grant alone");
+    m.In.Active = 1;
+    sim_pass(&m);
+    CHECK_EQ(m.Trues, 2, "the next ACTIVE holds");
+
+    /* The stale hold against a bar: the thread read "wanted", a power path
+     * barred, then the TRUE was made with the old generation - counted
+     * raced and released on the next pass. */
+    sim_init(&m);
+    m.In.Active = 1;
+    (void)XhciPollTmrStep(&m.State, &m.HeldGen, XhciPollTmrWant(&m.In),
+                          m.Gen);
+    sim_bar(&m);
+    m.Trues++;
+    if (m.Gen != m.HeldGen) {
+        m.Raced++;
+    }
+    CHECK_EQ(m.Raced, 1, "the hold counted raced");
+    sim_pass(&m);
+    CHECK_EQ(m.Falses, 1, "and released on the next pass");
+    CHECK_EQ(m.LastCause, XHCI_POLL_TMR_CAUSE_BARRED, "as barred");
+
+    /* The stop while HELD, while RELEASED and while barred: FALSE only if
+     * held, then nothing. */
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    m.In.Stop = 1;
+    m.In.Bar = 1;
+    sim_boundary(&m);
+    sim_pass(&m);
+    CHECK_EQ(m.Falses, 1, "the stop while HELD releases");
+    CHECK_EQ(m.LastCause, XHCI_POLL_TMR_CAUSE_STOP, "cause: the stop");
+    CHECK_EQ(m.State, XHCI_POLL_TMR_RELEASED, "and leaves RELEASED");
+    sim_init(&m);
+    m.In.Stop = 1;
+    m.In.Bar = 1;
+    sim_pass(&m);
+    CHECK_EQ(m.Falses + m.Trues, 0, "the stop while RELEASED calls nothing");
+    sim_init(&m);
+    m.In.Active = 1;
+    sim_pass(&m);
+    sim_bar(&m);
+    sim_pass(&m);
+    m.In.Stop = 1;
+    sim_boundary(&m);
+    sim_pass(&m);
+    CHECK_EQ(m.Falses, 1, "the stop after a bar: the bar's release alone");
+
+    /* Random sequences: never TRUE while HELD, never FALSE while RELEASED,
+     * no HELD across a generation, and every TRUE paired before the exit. */
+    seed = 12345;
+    for (i = 0; i < 20; i++) {
+        ULONG k;
+
+        sim_init(&m);
+        for (k = 0; k < 400; k++) {
+            seed = seed * 1103515245UL + 12345UL;
+            r = (seed >> 16) % 9;
+            switch (r) {
+            case 0: m.In.Active = 1; break;
+            case 1: m.In.Active = 0; break;
+            case 2: sim_revoke(&m); break;
+            case 3: sim_grant(&m); break;
+            case 4: sim_bar(&m); break;
+            case 5: sim_boundary(&m); break;
+            case 6: m.In.D0 = !m.In.D0; break;
+            default: sim_pass(&m); break;
+            }
+            if (m.State == XHCI_POLL_TMR_HELD && m.HeldGen != m.Gen) {
+                /* Allowed only until the next pass. */
+                sim_pass(&m);
+                if (m.State == XHCI_POLL_TMR_HELD && m.HeldGen != m.Gen) {
+                    m.Bad++;
+                }
+            }
+        }
+        m.In.Stop = 1;
+        m.In.Bar = 1;
+        sim_boundary(&m);
+        sim_pass(&m);
+        CHECK_EQ(m.Bad, 0, "random sequence: the invariants held");
+        CHECK_EQ(m.Trues, m.Falses, "random sequence: every TRUE paired");
+        CHECK_EQ(m.State, XHCI_POLL_TMR_RELEASED, "random sequence: released");
+    }
+}
+
+static void test_tmr_observe(void)
+{
+    XHCI_POLL_TMR_OBS o;
+    ULONG t;
+
+    XhciPollTmrObsReset(&o);
+    t = 1000;
+    XhciPollTmrObserve(&o, MS(t), 2, 2, XHCI_POLL_TMR_HELD, 1, 7);
+    CHECK_EQ(o.Count[1], 0, "the first sample seeds");
+    XhciPollTmrObserve(&o, MS(t + 1), 2, 2, XHCI_POLL_TMR_HELD, 1, 7);
+    CHECK_EQ(o.Count[1], 1, "the next counts, HELD");
+    CHECK_EQ(o.SumMs[1], 1, "1 ms");
+    CHECK_EQ(o.Late[1], 0, "not late");
+    XhciPollTmrObserve(&o, MS(t + 5), 2, 2, XHCI_POLL_TMR_HELD, 1, 7);
+    CHECK_EQ(o.Late[1], 1, "4 ms against 1 is late (>= period + 3)");
+    XhciPollTmrObserve(&o, MS(t + 9), 2, 2, XHCI_POLL_TMR_HELD, 1, 7);
+    CHECK_EQ(o.Late[1], 2, "4 ms against 1 is late, at the edge");
+    XhciPollTmrObserve(&o, MS(t + 12), 2, 2, XHCI_POLL_TMR_HELD, 1, 7);
+    CHECK_EQ(o.Late[1], 2, "3 ms against 1 is not");
+    CHECK_EQ(o.Count[1], 4, "four counted");
+
+    /* The 5 ms cutoff at its edge. */
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 0, 0, XHCI_POLL_TMR_RELEASED, 5, 1);
+    XhciPollTmrObserve(&o, MS(5), 0, 0, XHCI_POLL_TMR_RELEASED, 5, 1);
+    CHECK_EQ(o.Count[0], 1, "5 ms is a short request");
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 0, 0, XHCI_POLL_TMR_RELEASED, 6, 1);
+    XhciPollTmrObserve(&o, MS(6), 0, 0, XHCI_POLL_TMR_RELEASED, 6, 1);
+    CHECK_EQ(o.Count[0], 0, "6 ms is not");
+
+    /* A HELD-RELEASED-HELD sequence between two runs: the epoch moved by
+     * four, never counted; then observation resumes. */
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 2, 2, XHCI_POLL_TMR_HELD, 1, 1);
+    XhciPollTmrObserve(&o, MS(1), 6, 6, XHCI_POLL_TMR_HELD, 1, 1);
+    CHECK_EQ(o.Count[1], 0, "an ABA between runs is not counted");
+    CHECK_EQ(o.Crossed, 1, "it is crossed");
+    XhciPollTmrObserve(&o, MS(2), 6, 6, XHCI_POLL_TMR_HELD, 1, 1);
+    CHECK_EQ(o.Count[1], 1, "the run after the seeding one counts");
+    /* RELEASED-HELD-RELEASED likewise. */
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 4, 4, XHCI_POLL_TMR_RELEASED, 2, 1);
+    XhciPollTmrObserve(&o, MS(2), 8, 8, XHCI_POLL_TMR_RELEASED, 2, 1);
+    CHECK_EQ(o.Count[0], 0, "RELEASED-HELD-RELEASED not counted");
+
+    /* A call landing between a run's entry and its observation. */
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 2, 2, XHCI_POLL_TMR_HELD, 1, 1);
+    XhciPollTmrObserve(&o, MS(1), 2, 4, XHCI_POLL_TMR_RELEASED, 1, 1);
+    CHECK_EQ(o.Count[0] + o.Count[1], 0, "a call during the run: nothing");
+    CHECK_EQ(o.BaseValid, 0, "the baseline invalidated");
+    XhciPollTmrObserve(&o, MS(2), 4, 4, XHCI_POLL_TMR_RELEASED, 1, 1);
+    CHECK_EQ(o.Count[0], 0, "the next coherent sample seeds");
+    XhciPollTmrObserve(&o, MS(3), 4, 4, XHCI_POLL_TMR_RELEASED, 1, 1);
+    CHECK_EQ(o.Count[0], 1, "and the one after it counts");
+
+    /* An odd epoch: a call in flight. */
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 2, 2, XHCI_POLL_TMR_HELD, 1, 1);
+    XhciPollTmrObserve(&o, MS(1), 3, 3, XHCI_POLL_TMR_HELD, 1, 1);
+    CHECK_EQ(o.Count[1], 0, "an odd epoch counts nothing");
+    CHECK_EQ(o.BaseValid, 0, "and invalidates");
+
+    /* A change of armed period, and of start: each seeds, the next counts. */
+    XhciPollTmrObsReset(&o);
+    XhciPollTmrObserve(&o, MS(0), 2, 2, XHCI_POLL_TMR_HELD, 1, 1);
+    XhciPollTmrObserve(&o, MS(2), 2, 2, XHCI_POLL_TMR_HELD, 2, 1);
+    CHECK_EQ(o.Count[1], 0, "a changed period seeds");
+    XhciPollTmrObserve(&o, MS(4), 2, 2, XHCI_POLL_TMR_HELD, 2, 1);
+    CHECK_EQ(o.Count[1], 1, "the next matching sample counts");
+    XhciPollTmrObserve(&o, MS(6), 2, 2, XHCI_POLL_TMR_HELD, 2, 2);
+    CHECK_EQ(o.Count[1], 1, "a changed start seeds");
+    XhciPollTmrObserve(&o, MS(8), 2, 2, XHCI_POLL_TMR_HELD, 2, 2);
+    CHECK_EQ(o.Count[1], 2, "and the next counts");
+
+    /* A long run in one epoch counts every interval; the sum saturates. */
+    XhciPollTmrObsReset(&o);
+    for (t = 0; t < 100; t++) {
+        XhciPollTmrObserve(&o, MS(t), 2, 2, XHCI_POLL_TMR_HELD, 1, 1);
+    }
+    CHECK_EQ(o.Count[1], 99, "every interval of a long run");
+    o.SumMs[1] = 0xFFFFFFFEUL;
+    XhciPollTmrObserve(&o, MS(t + 4), 2, 2, XHCI_POLL_TMR_HELD, 1, 1);
+    CHECK_EQ(o.SumMs[1], 0xFFFFFFFFUL, "ObsSumMs saturates");
+
+    /* The held time, with no 64-bit arithmetic. */
+    CHECK_EQ(XhciPollTmrElapsedMs(0, 0, 0, MS(1234)), 1234, "within a word");
+    CHECK_EQ(XhciPollTmrElapsedMs(0, 0xFFFFFFF0UL, 1, MS(1)), 1,
+             "across the low word's wrap");
+    CHECK_EQ(XhciPollTmrElapsedMs(0, 0, 1, 0), 429496,
+             "one high-word lap is 429496 ms");
+    CHECK_EQ(XhciPollTmrElapsedMs(0, 0, 2, 0), 858993,
+             "two laps carry the remainder");
+    CHECK_EQ(XhciPollTmrElapsedMs(5, 0, 4, 0), 0, "backwards is 0");
+    CHECK_EQ(XhciPollTmrElapsedMs(0, 0, 10000, 0), 0xFFFFFFFFUL,
+             "far past saturates");
+}
+
+/*
+ * Task 38.10, XhciMsiAvoid (design record 20 section 4.1): under mode 0 a
+ * granted message is never connected on a controller the quirk applies to
+ * - it polls, with its own reason - while a line, and modes 1, 2 and 3,
+ * answer as without it.
+ */
+static void test_decide_msi_avoid(void)
+{
+    ULONG reason;
+
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_POLL, "mode 0, a message: polled");
+    CHECK_EQ(reason, XHCI_POLL_R_MSI_AVOIDED, "the quirk's reason");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 0, &reason),
+             XHCI_POLL_DELIVERY_MESSAGE, "without it: the message");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 1, 0, 0,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_LINE, "mode 0, a line: the line");
+    CHECK_EQ(reason, XHCI_POLL_R_AUTO, "as before");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_LINE, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_NONE, "mode 1, a message: refused as before");
+    CHECK_EQ(reason, XHCI_POLL_R_FORCED_LINE_MESSAGE, "mode 1's reason");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_POLL, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_POLL, "mode 2: polling");
+    CHECK_EQ(reason, XHCI_POLL_R_FORCED_POLL, "mode 2's reason");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_MESSAGE, 1, 1, 1,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_MESSAGE, "mode 3: the user's message");
+    CHECK_EQ(XhciPollDecideEx(XHCI_POLL_MODE_AUTO, 0, 0, 0,
+                              XHCI_POLL_PIN_READ, 1, NT6, 1, &reason),
+             XHCI_POLL_DELIVERY_POLL, "no interrupt: polling as before");
+    CHECK_EQ(reason, XHCI_POLL_R_AUTO_NO_INTERRUPT, "its reason");
+}
+
 int main(void)
 {
+    test_decide_msi_avoid();
     test_values();
     test_decide();
     test_connected();
@@ -856,6 +1368,10 @@ int main(void)
     test_observe();
     test_recent();
     test_retire();
+    test_tmr_want();
+    test_tmr_step();
+    test_tmr_schedules();
+    test_tmr_observe();
     printf("test_poll: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

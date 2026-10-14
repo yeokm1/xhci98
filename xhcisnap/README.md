@@ -14,7 +14,8 @@ is the 1.x history; where it says usbport or the miniport, that is the 1.x
 route, which the tool still reads.
 
 It ships. The kernel side is in every build flavour of the driver and this tool
-is published in `releases/<version>/xhcisnap/`. It began as a bench companion
+is published in `releases/<version>/tools/xhcisnap/` (before `2.4.0.0`,
+`releases/<version>/xhcisnap/`). It began as a bench companion
 to a probe build that could not ship either; it is part of the product now.
 
 ## Why it exists
@@ -47,6 +48,17 @@ it.
 
 ```text
 XHCISNAP -verbosity 2    set the level exactly (0-4), then RESTART
+XHCISNAP -report         the field report: mDDhhmmS.DEV, then the dump of
+                         controller 0 into mDDhhmmS.TXT/.BIN/.PSC, named from
+                         the clock in the current directory (from 2.4.0.0;
+                         see "The field report"). Takes -c and -nosysinfo
+XHCISNAP -report MYPC    the same, named MYPC.DEV/.TXT/.BIN/.PSC: an 8.3 base
+                         in the current directory, refused (exit 6) rather
+                         than overwritten when a file of the set exists;
+                         -report -o MYPC is the same name, spelled the old way
+XHCISNAP -on [LEVEL]     SNAPON.BAT's form: -verbosity LEVEL, LEVEL exactly
+                         1-4, 2 when none is given; 0 and anything else
+                         refused (exit 2, nothing changed). It stands alone
 XHCISNAP -dump           dump controller 0 to XHCISNAP.BIN/.PSC/.TXT
 XHCISNAP -dump -c 1 -o WEDGED   controller 1 to WEDGED.BIN/.PSC/.TXT
 XHCISNAP -disable        exactly -verbosity 0: back to 0, which is off outright
@@ -55,9 +67,9 @@ XHCISNAP -help           the long help; bare XHCISNAP prints the short one
 XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
                          modifier on -verbosity / -disable only: on its own it
                          asks for nothing and is refused with exit 2
-XHCISNAP -nosysinfo -o C:\MYDUMP   a dump whose header skips reading the
+XHCISNAP -nosysinfo -report   a report whose header skips reading the
                          system details (from 2.3.0.0; see "The machine it was
-                         captured on"). A modifier on a dump only
+                         captured on"). A modifier on -report or a dump only
 ```
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
@@ -65,8 +77,13 @@ The ladder: 0 off; 1 the channel with counters only and the ring still off;
 to the `.TXT`; 4 adds everything including kernel addresses.
 
 The published sequence is four steps and none of them is `regedit`:
-`-verbosity 2`, restart, reproduce, `-o C:\NAME` (`-o` and `-c` each imply
-`-dump`, so the last step needs no flag of its own). There is one value to set.
+`-verbosity 2`, restart, reproduce, `-report` (from 2.4.0.0; before it the
+last step was a dump named with `-o`, and `-o` and `-c` still each imply
+`-dump`). The
+three batch files beside the tool run the steps for a reporter: `SNAPON.BAT`,
+`SNAPGET.BAT` and `SNAPOFF.BAT` (see "The field report"); `SNAPON.BAT` takes
+an optional level (1 to 4, default 2) and `SNAPGET.BAT` an optional name to
+save to. There is one value to set.
 `-verbosity N` sets exactly N, up or down, and is the only knob.
 
 `-verbosity N` prints each key's previous level beside the write. A value out
@@ -126,6 +143,291 @@ published, so what is left is an absence and not a mixture. (The `.TXT` was
 left standing on that branch until the 2026-09-16 audit, which made the newest
 file in the directory a report of a set that had just been deleted.)
 
+That replacing is `-dump`'s and `-o`'s, where the name is the user's own.
+**`-report` never replaces or deletes a file it did not create** (Codex
+review of 38.1, round 1): its temporaries are created with `CREATE_NEW`, its
+`.TXT` with an exclusive create, and its two regions are renamed with a bare
+`MoveFileA`, which refuses a name that exists, with nothing deleted first. A
+failure removes only this run's own files. See "The field report" for what
+happens when another run takes one of its names.
+
+### The field report: `-report`, the `.DEV` and the three batch files (2.4.0.0)
+
+Roadmap-hcd task 38.1 (owner, 2026-10-12 and 2026-10-13): a reporter runs one
+batch file and attaches what it names, rather than following a list. The tool
+itself reads what the field reports ask for, so every target reports the same.
+
+**The name.** `-report` names its files from the local clock, because a batch
+file cannot (COMMAND.COM on 98 SE and ME has no `%DATE%` or `%TIME%`, and
+cmd.exe's follow the locale). The base is eight characters, `mDDhhmmS`:
+
+- `m`, the month as one character: `1`-`9`, then `A` (October), `B`, `C`;
+- `DD`, `hh` and `mm`, the day, the hour (24-hour) and the minute;
+- `S`, a letter `A`-`Z`: the first for which **no** file of the set this run
+  could write already exists in the current directory - `.DEV`, `.TXT`,
+  `.BIN`, `.PSC`, and each of those with `.TMP` after it.
+
+So 13 October 2026 at 14:19 is `A131419A`, and a second run in the same minute
+is `A131419B`. Nothing is ever overwritten; the `.DEV` is created with an
+exclusive create, so a name that appeared since the letter was chosen is
+refused too. With all 26 letters taken the tool writes nothing and exits 6;
+a clock whose month, day, hour or minute is out of range is refused, exit 7.
+The full date and time, with the year, is written inside the `.DEV` and the
+`.TXT` ("local time"; every dump's `.TXT` carries the line since 2.4.0.0).
+The files always go to the current directory. The screen says "the current
+directory" and never prints its path, which is often the user's profile and
+so carries the user's name.
+
+**A name of the reporter's own: `-report NAME`** (owner, 2026-10-13;
+`SNAPGET.BAT NAME` runs it). `NAME` is the argument after `-report` unless
+that is `-o`, `-c` or `-nosysinfo`, so a `-X`, a `/?` or a `-help` there is a
+name, and refused; `-report -o NAME` gives the same name the older way, and
+the two at once are refused (exit 2). `NAME` replaces the clock's base and
+is held to an 8.3 base in the current directory, by the tool and not only by the batch:
+1 to 8 characters, each a letter, a digit, `_` or `-` (`-` not first, so it
+never reads as an option), with no path, no drive, no dot and no extension,
+and not a DOS device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`,
+`LPT0`-`LPT9`). The set is narrower than 8.3 allows on purpose: a name a
+reporter types is one the maintainer types back, and `&`, `^`, `%`, `!` and
+the parentheses mean something to cmd.exe. A name outside the rule is
+refused with the reason and exit 2, writing nothing. A name any file of whose
+set (`.DEV`, `.TXT`, `.BIN`, `.PSC`, or one of those with `.TMP`) already
+exists is refused, not overwritten: exit 6, nothing written, the existing
+file as it was. Past that check the run is the clock-named one exactly -
+the same exclusive creates and the same exit 8 when a file of the set
+appears meanwhile (run it again under another name, or none). The clock is
+not needed for the name, so a given name is never refused with exit 7; the
+local time is still written inside. Beside `-dump`, `-o` keeps its old
+meaning, a basename or path the dump replaces.
+
+**Another run in the same directory.** The letter is chosen as one no file
+has, but another run - a second `-report`, or a `-dump -o` with that
+basename - can make one of the set between the choice and the write. Every
+file `-report` makes is made exclusively, so the other file is never
+replaced: if the `.DEV` itself is taken nothing is written; if a dump file
+(`.TXT`, `.BIN`, `.PSC` or a temporary) is, before the dump or at its
+publication, the dump is not kept under the name, this run's own files of it
+are removed, the other file is left as it was, the screen and the `.DEV` name
+it, and the screen lists only the files this run made. Exit 8. Run it again:
+it takes the next letter (with `-o NAME`, give another name, or none).
+
+**What it writes, in order.** First `BASE.DEV`, the device report, then the
+ordinary dump into `BASE.TXT`, `.BIN` and `.PSC`. The `.DEV` is written and
+closed before the controller is opened, so it exists whatever the dump does -
+the driver not loaded, the controller at a Code, the channel off - and the
+dump's result, with the reason when there is none, is appended to it
+afterwards. A controller at a Code does not by itself mean no dump: on 98
+SE and ME a disabled one (Code 22) keeps its `\\.\HCD0` open and the dump is
+taken (the p38-1 legs, 2026-10-13), so when a PCI xHCI controller `xhci98`
+drives is reported by Device Manager as disabled, at a Code or not started,
+the `.DEV`'s dump result and the screen say "dump taken from a controller
+Device Manager reports as disabled (Code 22)" (or its Code), naming the
+device; with more than one such controller, as one that may be it. No dump
+comes from a controller whose driver is not loaded (as before the restart
+after an install) or whose channel is off. The screen lists every file
+written, says what the exit code means and ends with the attach line: the
+`.DEV` and the `.TXT`; the `.BIN` and `.PSC` only if the maintainer asks.
+
+**The `.DEV`** is plain ASCII text with CRLF line endings:
+
+- the tool's version and build, the local time, the controller index asked
+  for, and the same "captured on" block as the dump's header (below), under
+  the same privacy rule and the same `-nosysinfo`;
+- every devnode that is a PCI xHCI controller (a hardware or compatible id
+  carrying class code `CC_0C0330`), whatever drives it or if nothing does,
+  and every devnode `xhci98.sys` or `xhciuas.sys` drives (on NT by its
+  service; on 98 SE and ME by `NTMPDriver` in its driver key, the signal
+  `-verbosity` uses to find the driver's keys there). For each: the device
+  id, its description, its service, its driver key with `NTMPDriver`,
+  `InfSection`, `DriverVersion` and `DriverDate`, the status flags and the
+  problem code (`CM_Get_DevNode_Status`, with a short name for the common
+  codes: 10, 28, 31, 39, 52 and others), and the allocated resources
+  (memory, I/O, IRQ, DMA, bus numbers), or the boot configuration when
+  nothing is allocated;
+- the installed files - `xhci98.sys`, `xhciuas.sys`, `xhcihlpr.sys` (and
+  `xhcimsi.sys`, the `2.3.x` helper a `2.4` update retires, so a leftover
+  shows) and `usbd.sys` in the Windows directory's `System32\Drivers` (where both INFs
+  copy them, dirid 10, on every target), `usbui.dll` in the system directory
+  (dirid 11: `SYSTEM` on 9x, `system32` on NT) - each present or not, its
+  size, file version and SHA-256. WOW64's redirection is turned off for the
+  read, so a 64-bit Windows reports its native files - only around each
+  call that opens an installed file, and restored straight after it.
+  `version.dll` is loaded before any of them, with the redirection on: off,
+  the load would find the native 64-bit DLL, which an x86 process cannot
+  load.
+
+**Where the device readings come from.** `cfgmgr32.dll`, loaded at run time
+(the import table still names only `KERNEL32.dll` and `ADVAPI32.dll`): the
+tree is walked with `CM_Locate_DevNode`, `CM_Get_Child` and `CM_Get_Sibling`,
+the properties are `CM_Get_DevNode_Registry_Property`'s (or the devnode's
+`Enum` key where that routine is missing), and the resources are
+`CM_Get_First_Log_Conf`, `CM_Get_Next_Res_Des` and `CM_Get_Res_Des_Data`'s,
+decoded from either the NT layout or the 9x one by their size, and printed
+as raw bytes when neither fits. 98 SE's and ME's `cfgmgr32.dll` hands back a
+memory descriptor in NT's layout - the 32-byte header, then 36-byte ranges -
+with the range-size field left at 20, 9x's own range size; that is decoded
+too (the p38-1 legs, 2026-10-13: 68 bytes, `FEBF0000-FEBF3FFF`, as Device
+Manager showed it; `-selftest-res` holds it). Raw bytes are printed for a
+memory, I/O, DMA, IRQ or bus-number
+descriptor; any other type - class-specific, device-private - is named with
+its size and never printed, since it can carry anything). Under WOW64 the
+x86 `cfgmgr32.dll` answers
+the log configuration calls with `CR_CALL_NOT_IMPLEMENTED` (read on a 64-bit
+Windows 11 build host, 2026-10-13), so the resources then come from
+`HKLM\HARDWARE\RESOURCEMAP\PnP Manager\PnpManager`, the PnP manager's raw
+list under the device's PDO name, which also carries the message-signalled
+flag and the message count. On 98 SE and ME, if `cfgmgr32.dll` does not
+answer, the devnodes come from `HKEY_DYN_DATA\Config Manager\Enum` with
+their status and problem but no resources. Any routine missing or failing is
+written as "not read: <why>", never as a silence. On 98 SE and ME (the
+p38-1 legs, 2026-10-13) the devnodes, their status and problem code came
+through `cfgmgr32.dll`, and the IRQ and, since that leg, the memory range
+were decoded. On 2000, XP, XP x64 and 7 (the same legs) the allocated
+descriptors came back with a count of 0 and one range still after the
+header (memory 68 bytes, 32 + 36; IRQ 32 bytes on 2000, 20 + 12, and 36 on
+XP and later, 24 + 12), which the decode now takes, the fields being in the
+header: `FEBF0000-FEBF3FFF` everywhere, IRQ 11 on 2000, 10 on XP and XP x64,
+and on 7 the message-signalled number Device Manager shows (`-selftest-res`
+holds every one of these images). On NT a disabled controller has no
+`\\.\HCD0`, so it gives no dump; the `.DEV` says Code 22 and why. **None of
+it has yet been read on Vista.**
+
+A driver file 98 SE or ME copied while the old one was in use sits under a
+`.TMP` name until the next restart renames it (ME right after an install had
+`XHCI98.TMP` and no `xhci98.sys`); a file not present whose `.TMP` is there
+is listed as "not present; its .TMP is, pending rename at the next restart".
+The 98 SE build's letter (`2222 A`) follows the build number with a space,
+so the OS line is not wrapped with the letter on a line of its own.
+
+**Privacy.** A USB device's instance id can be its serial number, so the
+instance part of every id not under `PCI\` or `ROOT\` is printed as
+`(instance withheld)`. Every string goes through the same cleaning and
+name-withholding as the "captured on" block, and the rule does not depend on
+`-nosysinfo` (Codex review of 38.1, round 1). With `-nosysinfo` this
+machine's names are not read, so nothing can be screened for them: every
+free-text string (a description, `InfSection`, `DriverVersion`,
+`DriverDate`, the Windows directory) is then printed as "withheld: not
+screened", the installed files are named by their directory's role rather
+than its path, and the `.DEV` says so. Identifiers the system generates -
+the device id with its instance part withheld as above, the service name,
+the driver key - are still printed, but only in the letters, digits and
+punctuation an id is made of. The same holds on a machine whose computer
+name could not be read.
+
+**Exit codes of `-report`:**
+
+| Exit | Meaning |
+|---|---|
+| 0 | the `.DEV` and the dump's `.TXT` complete |
+| 2 | a usage error (a `-o NAME` outside the 8.3 rule, for one); nothing written |
+| 3 | the `.DEV` complete; the dump taken, but its `.TXT` incomplete or the extension's size disagreed (the dump's own 3) |
+| 4 | the `.DEV` complete; no dump (the device did not open or did not serve it; the `.DEV` says which) |
+| 5 | the `.DEV` could not be written in full |
+| 6 | no free name: all 26 for this minute taken, or with `-o NAME` a file of that name's set already here; nothing written or overwritten. Wait a minute, or give another name (or none) |
+| 7 | the clock is not a valid date and time; nothing written (never with `-o NAME`). Set the clock |
+| 8 | a file of this run's set appeared after its name was chosen (another run made it): it was left as it was, and no dump is kept under the name; the `.DEV`, when it was written, says which file. Run it again: it takes the next letter, or give another name |
+
+**The three batch files**, `snapon.bat`, `snapget.bat` and `snapoff.bat` in
+this directory, shipped as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT`
+beside `XHCISNAP.EXE` in the release's `tools\xhcisnap\`. Each is one file
+for COMMAND.COM (98 SE and ME) and cmd.exe (2000 to 7), in the shape
+`src\portsw-on.bat` has and its gate holds: `@echo off`, the pinned
+`%OS%` split, only COMMAND.COM built-ins and `XHCISNAP`, ASCII and CRLF,
+lines of 127 characters or fewer, no `%DATE%` or `%TIME%`, and `pause`
+last. Each first checks `XHCISNAP.EXE` is beside it (`IF EXIST XHCISNAP.EXE
+GOTO TOOL`) and says so if not; otherwise **`XHCISNAP` is the last thing it
+runs, and nothing but `pause` follows** (owner, 2026-10-13: the last line
+of output names the files to attach). The tool prints the outcome the
+batches' `IF ERRORLEVEL` ladders used to - the advice for each exit code,
+Run as administrator where a registry write was refused on 2000 to 7
+(`-on` and `-disable` exit 1 for any key not written, an access refusal
+included), and what to do next - and its last line is the attach line:
+`Attach: A131554A.DEV A131554A.TXT (the .BIN and .PSC only if asked)`,
+`Attach: A131554A.DEV` with no dump, `Nothing to attach: nothing was
+written.` when nothing was, `Nothing to attach yet: restart Windows,
+reproduce, then run SNAPGET.BAT.` after `-on`, and `Nothing to attach.`
+after `-disable`. The gate holds the shape: the tool line is reached by
+that one `IF EXIST` with its label just above it, only `rem` and `echo`
+come between the split and the test, only labels and the last `pause`
+follow the tool line, and no line reads the exit code. Each batch says
+first that 2000 and XP need an administrator and Vista and 7 Run as
+administrator.
+
+Two of them take one optional argument (owner, 2026-10-13), passed on as
+`%1` at the end of the batch's one tool line and read nowhere else: no `IF`
+tests it (Codex review of 38.1, round 3: `SNAPGET "A&B"` broke cmd.exe's
+`IF "%1"==""` before the tool could refuse it, and `SNAPON "1"` failed the
+batch's compare though the C runtime hands the tool a plain `1`), so the
+default and the check are the tool's. The gate admits `%1` only on that
+line, which must be exactly `XHCISNAP -on %1` or `XHCISNAP -report %1`, and
+no other percent variable (`%2`, `%0`, `%*`, `%~1`, `%DATE%`) at all. A
+word the user escapes for the prompt (`A^&B`) arrives unescaped and splits
+the line; that is the user's own command, and no form of `%1` both
+survives a quoted word and protects an escaped one.
+
+- `SNAPON.BAT [LEVEL]` runs `XHCISNAP -on LEVEL`: no `LEVEL` is 2, the log,
+  and `LEVEL` must be exactly `1`, `2`, `3` or `4` (quotes the C runtime has
+  stripped, but no sign, no leading zero, nothing after it); `0` is refused
+  with a pointer to `SNAPOFF.BAT` (it is off), anything else is refused
+  naming the levels, all exit 2 with nothing changed. The batch passes on
+  its first word only, so a second is ignored (`SNAPON 1 4` is level 1). The
+  write is `-verbosity`'s, with the same key matching and exit 1 for any key
+  not written. `XHCISNAP` then says, at 2, what `SNAPON.BAT` takes; at 1,
+  that the channel was not switched on and (on 2000 to 7) to run it as an
+  administrator; at 0, the channel is on: restart Windows (or disable and
+  enable the controller in Device Manager), reproduce the problem, run
+  `SNAPGET.BAT`. Nothing to attach yet.
+- `SNAPGET.BAT [NAME]` runs `XHCISNAP -report NAME` (`-report` alone with no
+  word). `-report` says what its exit code means - at 2 the name was refused
+  and why; at 3 the `.TXT` is not complete, say so; at 4 no dump, the `.DEV`
+  says why, and SNAPON, restart, reproduce, SNAPGET; at 5 copy the directory
+  somewhere writable (Run as administrator on Vista and 7); at 6 the name is
+  taken or, with none, all 26 are; at 8 run it again, under another name if
+  one was given - then that the channel stays on until `SNAPOFF.BAT`, and
+  last the attach line.
+- `SNAPOFF.BAT` runs `XHCISNAP -disable`, which says the change takes
+  effect at the next start (or, refused, to run it as an administrator), and
+  last: Nothing to attach.
+
+The self-tests (`selftest.cmd`) hold the name rule (`-selftest-stamp`:
+months 1, 9, 10, 11 and 12, midnight, a taken letter moving to the next
+whichever file of the set holds it, Z the last, all 26 taken refused,
+impossible clock fields refused), the SHA-256 on the real `/O2` binary
+(`-selftest-sha256 BASE`: FIPS 180-2's one-block, two-block and million-`a`
+examples, the empty message, the padding boundaries at 55, 56, 63, 64 and
+65 bytes and at 127 and 128 fed in uneven pieces, the length carry across
+the low 32-bit word driven through the count and bit-length routines
+directly, and the file path: a million `a` read back, a read that fails, a
+read cut short, a file held exclusively, a directory, a deleted file),
+`-report`'s publication on its own (`-selftest-publish BASE`: clean, a
+`.TXT` taken first, a `.PSC` taken after the `.BIN` was renamed, a temporary
+taken first - the other file keeps its contents, this run's are gone), and
+`-report` end to end against a controller index no machine has: exit 4 with
+the `.DEV` written, a second run taking the next letter, `-o REFUSED.X`
+refused for its dot, the screen never naming the directory, `-nosysinfo
+-report` printing no unscreened text, and with `XHCISNAP_FAULT=clash` (a
+`.TXT` made after the name is chosen) exit 8 with that file intact; and
+`-report -o NAME`: a valid name used as the base (exit 4, `NAME.DEV`), the
+same name again (in other case) refused with exit 6 and the first `.DEV`
+byte for byte as it was, a name whose `.PSC.TMP` alone exists refused with
+that file intact, and a path, a drive, a dot, 9 characters, an empty name,
+`CON`, `com1`, a leading `-` and `A&B` each refused with exit 2, writing
+nothing; `-report NAME` the same way, with `-X`, `/?`, `-help`, `-dump`,
+`COM0`, `LPT9` and `A%B` among the refused names and `-report A -o B`
+refused; `-selftest-on` (the `-on` parse, no registry): none is 2, `1` to
+`4` and a quoted `"4"` taken, `0`, `5`, `00`, `01`, `+1`, `x`, an empty word
+and two words refused with exit 2, and `-on 0` itself pointing at
+`SNAPOFF.BAT`; and the real `SNAPGET.BAT` and `SNAPON.BAT` run through
+cmd.exe beside a copy of the build, with `"A&B"`, `"-X"` and `CON` reaching
+`XHCISNAP`'s refusal with no cmd.exe error first, and with
+`XHCISNAP_FAULT=noreg` (the level parsed, nothing written) a quoted `"1"`
+taken as level 1 and no word as 2, each batch's last line before `pause`'s
+prompt being `XHCISNAP`'s attach line; and `-selftest-res`, the memory
+descriptors 98 SE and ME and 2000 to 7 hand back decoded as
+`FEBF0000-FEBF3FFF`, one of neither layout left raw, and the IRQ
+descriptors of 2000, XP and 7 decoded as 11, 10 and a message-signalled
+interrupt.
+
 ### The machine it was captured on (2.3.0.0)
 
 From 2.3.0.0 (roadmap-hcd.md task 36.47) the `.TXT`'s header block, which
@@ -181,7 +483,7 @@ posting it. Registry text is printed as plain ASCII (any other byte becomes
 `?`) and cut at 96 characters with `...`. `-selftest-sysinfo` drives the
 withholding over canned names.
 
-`-nosysinfo` beside a dump (`XHCISNAP -nosysinfo -o C:\MYDUMP`) skips all
+`-nosysinfo` beside `-report` or a dump (`XHCISNAP -nosysinfo -report`) skips all
 of it, for a machine on which the reading itself causes a problem: no
 `GetVersionEx`, no registry read for the BIOS, the CPU or the names, no
 processor or memory query. The header then says "captured on - not read:
@@ -258,7 +560,10 @@ What the report carries:
   halts, root port PED faults and over-currents - and so do those of what
   applies at every value (an incompatible device's charges and `Holds`,
   `Contained`); the counters of the behaviours switched off stay at 0),
-  `XhciIntervalCap` with whether
+  `XhciIntervalCap` (value 1: AMD controllers and, from task 38.10, the
+  ATI Navi10 USB-C controller `1002:7316`, Linux's
+  `XHCI_LIMIT_ENDPOINT_INTERVAL_9`; printed "AMD controllers and
+  1002:7316") with whether
   the cap applies on this controller and how many endpoints it lowered, and
   `XhciAvgTrbEsit`.
 - **The controller**: running; failed with an in-place recovery still owed;
@@ -407,7 +712,8 @@ extension words. `-selftest-intr` prints the decode over canned images.
 4.3 and 18 section 9). Counter words 96 to 113 are named
 (`MsiRoutines` to `MsiFilterStripped`) and decoded in their own section:
 where the `IoConnectInterruptEx` pair came from (the 64-bit
-`MmGetSystemRoutineAddress`, the 32-bit helper `xhcimsi.sys`, or not
+`MmGetSystemRoutineAddress`, the 32-bit helper - `xhcihlpr.sys` from
+`2.4.0.0`, `xhcimsi.sys` before - or not
 found), the messages connected and granted, the capability (MSI or MSI-X)
 and the connection's status; the 32-bit helper's state (ABSENT, REFUSED
 with the check that failed, BOUND with its version); and the last
@@ -443,6 +749,103 @@ PCI `1B36:000D`, alone - with the Set TR Dequeue commands it completed,
 the resyncs that could not finish and the extra stops QEMU's own restart
 of an endpoint cost. A block shorter than 173 words is a driver from
 before it, and the section is not printed.
+Task 38.11's three follow (173 to 175, `HciVersions`, `HciAccept096Value`
+and `HciVersionPolicy`; design record 17 section 4.14.7), each FFFFFFFF
+until the start writes it, with a section of their own, **"controller
+version"**: `XhciAccept096` as read and the floor it set (0.96, or 1.00 at
+`0`), and the controller's HCIVERSION with what the driver did with it -
+`xHCI 0.96 (HCIVERSION 0096h): accepted below 1.0; TD Size in 1 KiB
+units`, refused at `XhciAccept096 0` or below 0.96 (Code 10), or `xHCI
+1.00: XhciAccept096 not applicable`. Bit 21 of the policy word, not the
+versions word, says whether the version was read, so a register that
+answered all ones is told from a start refused before it; the `qemu`
+flavour's `XhciQemuHciVersion` is named beside the register's own value
+whenever it applied. A block shorter than 176 words is a driver from
+before it, and the section is not printed. Whether `XHCISNAP` can open a
+controller whose start failed is not read on any target; such a start's
+counter dump goes to DebugView with `XhciLogDebugView` `1`.
+`-selftest-version` prints the section over canned words.
+Task 38.3's twenty-three follow (176 to 198, `TmrSwitchRead` to
+`HlprTimerVerdict`; design record 15 section 7.2.9, record 18 section
+15.3), with a section of their own, **"the finer system timer while
+polling"**: `XhciPollFineTimer` as read and in effect (a value present
+prints its number and "in effect off" or "ON", so the install's `0` reads
+"0; in effect off" after the name; "not set; in effect off (the
+default)" is printed only when the value is absent), where
+`ExSetTimerResolution` came from (the helper, `MmGetSystemRoutineAddress`,
+not found, or none on Windows 98 SE and ME), the timer thread's state, the
+value asked and whether a request is held now, the holds and releases
+(those a boundary forced, the holds a boundary raced), what Windows
+answered, the last release's cause, the time held in this start, the poll
+intervals of short requests by the request's phase (count, mean, late),
+and the 32-bit helper's two service verdicts. A block shorter than 199
+words is a driver from before it, and the section is not printed;
+`-selftest-timer` prints the decode over a canned block.
+Task 38.10's thirty-four follow (199 to 232; design record 20 section
+6.4): one packed word per Linux quirk value, `QuirkMsiAvoid` to
+`QuirkAmdSuspendBit` (199 to 212, in `src\xhci_quirk.h`'s order), then
+`QuirkPciRevision` (213) and `QuirkIdentity` (214, the PCI vendor and
+device the quirk lists were matched against), then the counts,
+`QuirkMsiRefused` to `QuirkShutFlushUnacked` (215 to 232). They get a
+section of their own, **"Linux quirks"**: the PCI id the lists were
+matched against ("no PCI id" when none was read) and the revision
+("unread" when none was; it is logged, never matched), then for each of
+the fourteen registry values its name and its Linux flag, and the four
+things record 20 keeps apart:
+
+- **the value read and what became of it**: the number read (its low 16
+  bits; "none" when nothing was read) and its normalization - "as read",
+  "absent", "another type" or "an unknown number" (each taken as the
+  default), or "a 2 read as 1" (a vendor-register quirk offers no 2) -
+  with the mode in effect (0 off, 1 the listed controllers, 2 every
+  controller);
+- **whether this controller's id is on the quirk's list** ("id listed" or
+  "id not listed");
+- **the policy in effect**: on, off, or overridden - `XhciMsiAvoid` alone,
+  when `XhciInterruptMode` 3 asks for a message whatever the quirk says;
+- **the last outcome**: none yet, done, skipped or failed, with its reason
+  when one was recorded (the precondition that was not met, the access
+  that failed, or for `XhciMsiAvoid` that no PCI id was read or the one
+  read before was kept).
+
+Then the counts in plain words: the messages `XhciMsiAvoid` refused or
+stripped, the suspend halts past 32 ms, the pauses before a suspend's
+halt, the suspends that did not save, the stuck USB 3 links warm-reset,
+the padded stream blocks, the No Op TRBs placed, the isochronous
+Successes dropped, the interrupt endpoints `XhciTiIntervalCap` capped,
+the ASMedia flow-control writes made and given up, the AMD bit 17 clears
+made and skipped, the shutdowns that routed ports to EHCI, the controller
+resets at shutdown, and the shutdown's log flushes drained, acknowledged
+with the sink off, and not acknowledged. The fifteenth id, `1002:7316`
+(ATI Navi10), has no value of its own: it joined `XhciIntervalCap`'s
+value 1, and the section says so. A block shorter than 233 words is a
+driver from before 38.10, and the section is not printed.
+`-selftest-quirks` prints the section over canned packed words (every
+normalization, listed and not, on, off and overridden, each outcome, codes
+this build does not know printed as `?`), with the PCI id and revision
+read and unread, and a 232-word block that prints nothing.
+Task 38.10's eight follow (233 to 240, `PoolRingsInUse`, `RingsRetained`,
+`RingsPinned`, `RingsReleased`, `SelectsReattached`,
+`SelectStallSuccesses`, `SelectRollbacks`, `SelectRollbacksReopened`;
+design record 20 section 5), with a section of their own, **"endpoint
+rings"**: the pool rings held at the last poll (of 32), the rings held
+for an endpoint the controller may still have enabled - stale, or pinned
+after a command whose completion was never seen - and those a later proof
+released, and how interface switches ended: the old pipes put back after a
+refused command, the one-setting STALLs carried out by clearing the
+endpoints' halts, the rollbacks after a STALL and those that reopened the
+old setting. A block shorter than 241 words is a driver from before it,
+and the section is not printed.
+Task 38.12's five follow (241 to 245, `CompositeSelects`,
+`CompositeSelectRefused`, `CompositeRewrites`, `CompositeMismatches`,
+`CompositeIntervals`; design record 13 section 10.14), with a section of
+their own, **"composite selects"**: the composite devnode's own
+`SELECT_CONFIGURATION`s the parent recorded, and those it refused or whose
+own sequence failed; the endpoints a filter on the composite devnode gave
+another `bInterval`, and those it changed in more than `bInterval` (not
+taken); and the function endpoints built at a recorded rate. A block
+shorter than 246 words is a driver from before it, and the section is not
+printed.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

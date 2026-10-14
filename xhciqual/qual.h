@@ -177,25 +177,78 @@ void route_read(const PCIINFO *p, ROUTEINFO *r);
 /* Quirk table (quirks.c)                                             */
 /* ------------------------------------------------------------------ */
 
-#define QF_XUSB2PR    0x0001  /* Intel 7/8-series EHCI<->xHCI port routing */
-#define QF_FW_UPLOAD  0x0002  /* Renesas uPD720201/202: fw upload on ROM-less cards */
-#define QF_FW_SPI     0x0004  /* NEC uPD720200: fw from on-card SPI flash */
-#define QF_SPURIOUS   0x0008  /* spurious Success event after a short packet on the same TD (ignore it) */
-#define QF_BEI        0x0010  /* mishandles BEI in isoch TRBs */
-#define QF_COMPLIANCE 0x0020  /* SS compliance-mode lockup (USB3-only, FYI; DMI-keyed in Linux, no row sets it) */
-#define QF_PME_STUCK  0x0040  /* PME wake latch bug (bites Win2000 power mgmt) */
-#define QF_BULK64K    0x0080  /* keep bulk TRB chains under 64 KB */
-#define QF_AVOID      0x0100  /* known-unreliable silicon */
-#define QF_CMD_RETRY  0x0200  /* retry TRB Error command completions once */
-#define QF_BROKEN_MSI 0x0400  /* broken MSI (Linux XHCI_BROKEN_MSI)    */
+/*
+ * One bit per quirk in a 32-bit word (u32: Open Watcom's flat model makes
+ * it an unsigned long, 32 bits, as the host compilers do). quirks.c's header says
+ * which bits are quirks the driver takes, which Linux bits the driver covers
+ * or does not take, and which are this tool's own. Bits 0-10 are the
+ * original sixteen-bit word's and keep their values; bits 11 on are
+ * roadmap-hcd task 38.10's (design record 20 section 6.5). A taken quirk's
+ * comment names the driver's registry value and Linux's flag.
+ */
+#define QF_XUSB2PR         0x00000001UL /* Intel 7/8/9-series and C610 EHCI<->xHCI port routing */
+#define QF_FW_UPLOAD       0x00000002UL /* Renesas uPD720201/202: fw upload on ROM-less cards */
+#define QF_FW_SPI          0x00000004UL /* NEC uPD720200: fw from on-card SPI flash */
+#define QF_SPURIOUS        0x00000008UL /* XHCI_SPURIOUS_SUCCESS: covered on every controller */
+#define QF_BEI             0x00000010UL /* XHCI_AVOID_BEI: covered (BEI never set) */
+#define QF_COMPLIANCE      0x00000020UL /* SS compliance-mode lockup (DMI-keyed in Linux, no row sets it) */
+#define QF_PME_STUCK       0x00000040UL /* XHCI_PME_STUCK_QUIRK (bites Win2000 power mgmt) */
+#define QF_BULK64K         0x00000080UL /* keep bulk TRB chains under 64 KB (no row sets it) */
+#define QF_AVOID           0x00000100UL /* known-unreliable silicon */
+#define QF_CMD_RETRY       0x00000200UL /* retry TRB Error command completions once (no row sets it) */
+#define QF_BROKEN_MSI      0x00000400UL /* XhciMsiAvoid (XHCI_BROKEN_MSI); verdict.c reads it */
+#define QF_STREAMS_OFF     0x00000800UL /* XhciStreamsOff (XHCI_BROKEN_STREAMS; 17CD:0200's XHCI_CDNS_SCTX_QUIRK) */
+#define QF_RESUME_REINIT   0x00001000UL /* XhciResumeReinit (XHCI_RESET_ON_RESUME) */
+#define QF_SHUTDOWN_EHCI   0x00002000UL /* XhciIntelShutdownToEhci (XHCI_SPURIOUS_REBOOT) */
+#define QF_SHUTDOWN_RESET  0x00004000UL /* XhciShutdownReset (XHCI_SPURIOUS_WAKEUP), driver default off */
+#define QF_SUSPEND_DELAY   0x00008000UL /* XhciSuspendHaltDelay (XHCI_SUSPEND_DELAY) */
+#define QF_SLOW_SUSPEND    0x00010000UL /* XhciSuspendHaltTimeout (XHCI_SLOW_SUSPEND), every revision */
+#define QF_ASM_FLOWCTL     0x00020000UL /* XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL) */
+#define QF_INTERVAL7       0x00040000UL /* XhciTiIntervalCap (XHCI_LIMIT_ENDPOINT_INTERVAL_7) */
+#define QF_INTERVAL9       0x00080000UL /* XhciIntervalCap (XHCI_LIMIT_ENDPOINT_INTERVAL_9), 1002:7316 */
+#define QF_INTERVAL_VENDOR 0x00100000UL /* XhciIntervalCap's reach: every AMD 1022 controller */
+#define QF_STUCK_LINK      0x00200000UL /* XhciStuckLinkReset (XHCI_MISSING_CAS) */
+#define QF_RING_PAD        0x00400000UL /* XhciStreamRingPad (XHCI_TRB_OVERFETCH) */
+#define QF_CTRL_NOOP       0x00800000UL /* XhciControlLinkNoOp (XHCI_ETRON_HOST, part) */
+#define QF_ISOCH_SPURIOUS  0x01000000UL /* XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part) */
+#define QF_SPARSE_CLEAR    0x02000000UL /* XhciAmdSuspendBitClear (XHCI_DISABLE_SPARSE) */
+#define QF_ZHAOXIN_HOST    0x04000000UL /* XHCI_ZHAOXIN_HOST: covered (speeds from PSIs) */
+#define QF_NT_SW_BW        0x08000000UL /* XHCI_SW_BW_CHECKING: not taken (record 20 Q18) */
+#define QF_NT_AMD_PLL      0x10000000UL /* XHCI_AMD_PLL_FIX: not taken (record 20 Q19) */
+
+/* A vendor-wide row's device: it matches every device of its vendor.
+ * 0xFFFF is never a present function's device id (a configuration read of
+ * an absent function returns all ones), so no exact row can need it. */
+#define QUIRK_ANY_DID 0xFFFFU
+
+/*
+ * The driver's HCIVERSION floor: xhci98 refuses a controller below it
+ * (src/xhci_caps.c, XhciCheckCapDword0 against XHCI_HCIVERSION_1_0, which
+ * returns XHCI_HC_BAD_VERSION). 1.0 today; roadmap-hcd task 38.11 moves it
+ * to 0.96 (0x0096), and this follows it then. The report says when a listed
+ * part is below it, so no value it names is read as acting on that part.
+ */
+#define QUIRK_HCI_FLOOR 0x0100U
 
 typedef struct {
-    u16 vid, did;
-    u16 flags;
+    u16 vid, did;          /* did QUIRK_ANY_DID: a vendor-wide row */
+    u32 flags;
     const char *name;
 } QUIRK;
 
+/* The exact row for vid:did, or NULL; never a vendor-wide row. */
 const QUIRK *quirk_find(u16 vid, u16 did);
+/* The vendor-wide row for vid (at most one per vendor), or NULL. */
+const QUIRK *quirk_find_vendor(u16 vid);
+/* Row i of the table (0-based), or NULL past the end; for the host test. */
+const QUIRK *quirk_row(int i);
+/* The "quirks:" lines for one controller: its exact row, then its vendor's
+ * row, then the HCIVERSION floor note when a listed part is below it
+ * (hciver_ok 0: HCIVERSION was not read, so nothing is said of it). Pure;
+ * pf is qprintf in the tool (the QPRINTF_FN type below). */
+void quirk_report(u16 vid, u16 did, int hciver_ok, u16 hciversion,
+                  void (*pf)(const char *fmt, ...));
+
 
 /* ------------------------------------------------------------------ */
 /* xHCI MMIO register map (xhcicap.c / bringup.c)                     */
@@ -715,6 +768,8 @@ int  legacy_final_verdict(LEGACY_CTRL *c, int active_ran);
 /* ------------------------------------------------------------------ */
 
 int  report_open(const char *logname, int use_serial, int paginate);
+void report_open_handle(int dos_handle, int use_serial, int paginate);
+int  report_log_ok(void);
 void report_close(void);
 void qprintf(const char *fmt, ...);
 /* The durable sinks only - a file and a serial line have no 25-row bound, so
@@ -958,6 +1013,16 @@ void report_sysinfo_short(const SYSINFO *si, QPRINTF_FN pf);
 /* sysprobe.c: reads only - the BIOS area, one DPMI mapping of the table,
  * CPUID, INT 15h E820, INT 21h 30h/3306h, INT 2Fh 1600h. */
 void sysinfo_probe(SYSINFO *si);
+/* sysprobe.c, task 38.1: INT 21h AH=5Bh ("create new file") made in real
+ * mode through DPMI 0300h, so the handle DOS returns is the one handed
+ * back. 0 with *handle set, or the DOS error code (50h: the name exists). */
+unsigned sys_dos_creatnew(const char *name, int *handle);
+/* sysprobe.c, DOS-1: chain the real-mode INT 24h so an Abort answer to
+ * DOS's Abort, Retry, Fail reaches DOS as Fail and the tool ends itself,
+ * through DOS/32A's exit. 1 installed, 0 not (the run goes on without it).
+ * sys_crit_remove puts the previous vector back. */
+int  sys_crit_install(void);
+void sys_crit_remove(void);
 /* sysinfo.c, pure: the --no-sysinfo state (owner, 2026-10-10) - nothing
  * read, and the header says the option skipped it. */
 void sysinfo_skip(SYSINFO *si);

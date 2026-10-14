@@ -8,12 +8,18 @@
  * Exit codes: 0 = all controllers qualified, 1 = at least one not
  * qualified (or probe-only), 2 = no selected controller / usage error,
  * 3 = none not qualified and at least one QUALIFIED WITH CAVEATS (no
- * working interrupt: the driver polls it - task 36.10).
+ * working interrupt: the driver polls it - task 36.10), 4 = --log-stamp
+ * refused before any hardware access: the DOS clock is not a date and time,
+ * the minute's 26 names are all taken, or the log cannot be created (task
+ * 38.1).
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <dos.h>
 #include "qual.h"
+#include "stamp.h"
 
 static PCIINFO pcis[MAX_CONTROLLERS];
 static CTRL ctrls[MAX_CONTROLLERS];
@@ -54,6 +60,15 @@ static int opt_wait_secs   = 15;
 static int opt_family_mask = HC_MASK_ALL;
 static int opt_family_seen = 0;
 static const char *opt_log_name = 0;
+/* Task 38.1 (owner, 2026-10-13): the log named from the DOS clock, in the
+ * current directory, never overwriting an earlier one, because the field
+ * report's batch cannot build such a name itself. Exclusive with --log. */
+static int opt_log_stamp   = 0;
+static int opt_log_plain   = 0;
+static char stamp_buf[STAMP_NAME_MAX];
+static int stamp_handle = -1;   /* the stamped log, created exclusively */
+static unsigned stamp_year, stamp_month, stamp_day;
+static unsigned stamp_hour, stamp_minute, stamp_second;
 /* Task 36.11: the GSI to compare the Intel PCH routing against, -1 none. */
 static long opt_gsi         = -1;
 
@@ -165,6 +180,8 @@ static void print_usage(void)
            "  --no-page          do not pause the screen every page\n"
            "  --serial           mirror output to COM1 115200 8N1\n"
            "  --log [filename]   save output (default: XHCIQUAL.LOG)\n"
+           "  --log-stamp        save output to a new log named from the DOS\n"
+           "                     clock (mDDhhmmS.LOG); never overwrites\n"
            "  --done-flag FILE   create FILE only on normal completion\n"
            "  --gsi N            with --quick or --probe-only: compare the\n"
            "                     Intel PCH routing against GSI/IRQ N\n"
@@ -265,6 +282,14 @@ static void print_help(void)
             "  --no-page         disable screen pagination\n"
             "  --serial          mirror output to COM1 115200 8N1\n"
             "  --log [FILE]      save report; default XHCIQUAL.LOG\n"
+            "  --log-stamp       save report to a NEW log in the current\n"
+            "                    directory named from the DOS clock:\n"
+            "                    mDDhhmmS.LOG - month 1-9/A/B/C, day, hour,\n"
+            "                    minute, then the first free letter A-Z.\n"
+            "                    Never overwrites; not with --log. Exit 4,\n"
+            "                    before any hardware access, if the clock\n"
+            "                    is not a date, all 26 names are taken, or\n"
+            "                    the log cannot be created (QUALREP.BAT)\n"
             "  --done-flag FILE  delete FILE at start, recreate it only if\n"
             "                    the run finishes normally (crash-safe check\n"
             "                    for batch wrappers; no FIND.EXE needed)\n"
@@ -284,7 +309,8 @@ static void print_help(void)
             "  1 = not qualified, or probe-only run\n"
             "  2 = usage error, or no selected controller found\n"
             "  3 = QUALIFIED WITH CAVEATS: no working interrupt, so\n"
-            "      xhci98.sys polls it (or an MSI-capable OS)\n\n"
+            "      xhci98.sys polls it (or an MSI-capable OS)\n"
+            "  4 = --log-stamp refused; nothing was read\n\n"
             "Keep all LOG files, BIOS settings, device model/speed, and a\n"
             "photo plus last printed line for any fault or freeze.\n");
 }
@@ -362,13 +388,17 @@ static int parse_args(int argc, char **argv)
             opt_set_intel = 1;
         } else if (strcmp(a, "serial") == 0) {
             opt_serial = 1;
+        } else if (strcmp(a, "log-stamp") == 0) {
+            opt_log_stamp = 1;
         } else if (strcmp(a, "log") == 0) {
+            opt_log_plain = 1;
             opt_log_name = "XHCIQUAL.LOG";
             /* a family word after --log is a selector, not a filename */
             if (i + 1 < argc && argv[i + 1][0] != '-' &&
                 argv[i + 1][0] != '/' && !is_family_word(argv[i + 1]))
                 opt_log_name = argv[++i];
         } else if (strncmp(a, "log=", 4) == 0 && a[4] != '\0') {
+            opt_log_plain = 1;
             opt_log_name = a + 4;
         } else if (strcmp(a, "done-flag") == 0) {
             /* filename required; created only on normal completion so a
@@ -429,6 +459,180 @@ static int parse_args(int argc, char **argv)
         print_usage();
         return 0;
     }
+    /* Task 38.1: one log, named one way. */
+    if (opt_log_stamp && opt_log_plain) {
+        print_usage();
+        return 0;
+    }
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 38.1 - the log named from the DOS clock                        */
+/* ------------------------------------------------------------------ */
+
+/* Anything of that name - a file, hidden or read-only, or a directory -
+ * takes the name: the attribute call answers for all of them. */
+static int dos_name_exists(const char *name, void *ctx)
+{
+    unsigned attr;
+
+    (void)ctx;
+    return _dos_getfileattr(name, &attr) == 0;
+}
+
+/* INT 21h AH=5Bh, "create new file": fails with error 50h (file exists)
+ * where AH=3Ch, and so fopen "w", would truncate. The handle is kept and
+ * becomes the log, so the name is never opened a second time. Made in real
+ * mode (sys_dos_creatnew, sysprobe.c), not with _dos_creatnew, whose
+ * handle DOS/32A loses: the 38.1 MS-DOS leg's empty logs. */
+#define DOS_ERR_FILE_EXISTS 0x50
+
+static int dos_create_new(const char *name, void *ctx)
+{
+    int h;
+    unsigned rc;
+
+    (void)ctx;
+    rc = sys_dos_creatnew(name, &h);
+    if (rc == 0) {
+        stamp_handle = h;
+        return STAMP_CREATE_OK;
+    }
+    return (rc == DOS_ERR_FILE_EXISTS) ? STAMP_CREATE_EXISTS
+                                       : STAMP_CREATE_FAIL;
+}
+
+/* INT 21h AH=2Ah and AH=2Ch. The date is read again after the time, and
+ * the time again if the date moved, so a run started on the stroke of
+ * midnight is not named with one day's date and the next day's time. */
+static void read_dos_clock(void)
+{
+    struct dosdate_t d1, d2;
+    struct dostime_t t;
+
+    _dos_getdate(&d1);
+    _dos_gettime(&t);
+    _dos_getdate(&d2);
+    if (d2.day != d1.day || d2.month != d1.month || d2.year != d1.year) {
+        _dos_gettime(&t);
+        d1 = d2;
+    }
+    stamp_year = d1.year;
+    stamp_month = d1.month;
+    stamp_day = d1.day;
+    stamp_hour = t.hour;
+    stamp_minute = t.minute;
+    stamp_second = t.second;
+}
+
+/* Chooses the name and creates the file, or refuses. Runs before any sink
+ * is opened (COM1 included) and before anything reads the machine, so an
+ * unwritable directory is refused having touched nothing. Returns 1 with
+ * opt_log_name set and stamp_handle open, 0 refused. */
+static int resolve_log_stamp(void)
+{
+    char prefix[8];
+    int rc;
+
+    read_dos_clock();
+    rc = stamp_create(stamp_month, stamp_day, stamp_hour, stamp_minute,
+                      "LOG", dos_name_exists, dos_create_new, 0, stamp_buf);
+    if (rc == STAMP_OK) {
+        opt_log_name = stamp_buf;
+        return 1;
+    }
+    /* Each refusal's last line says what to attach, which is nothing: a
+     * caller's batch (QUALREP.BAT) prints nothing after it but its pause,
+     * so this is the last line on the screen (owner, 2026-10-13). */
+    if (rc == STAMP_CREATE_FAILED) {
+        /* The completion flag is not tried in a directory that has just
+         * refused a file: on a write-protected disk it would be a second
+         * Abort, Retry, Fail and then a warning under this text. Exit 4
+         * says the run was refused; QUALREP.BAT takes it without a flag. */
+        if (opt_done_flag != 0 && strchr(opt_done_flag, '\\') == 0 &&
+            strchr(opt_done_flag, ':') == 0)
+            opt_done_flag = 0;
+        printf("XHCIQUAL: cannot write here. --log-stamp could not create %s\n"
+               "  in this directory: a write-protected or full disk, or a full\n"
+               "  root directory. Nothing was read, and nothing needs a cold\n"
+               "  boot. Copy XHCIQUAL.EXE (and QUALREP.BAT) to a disk you can\n"
+               "  write to and run it there (exit 4).\n"
+               "No log was written, so there is no file to attach.\n",
+               stamp_buf);
+        return 0;
+    }
+    if (rc == STAMP_ALL_TAKEN &&
+        stamp_prefix(stamp_month, stamp_day, stamp_hour, stamp_minute,
+                     prefix)) {
+        printf("XHCIQUAL: --log-stamp refused: %sA.LOG to %sZ.LOG all\n"
+               "  exist in this directory. Nothing was read and nothing was\n"
+               "  overwritten. Wait for the next minute, or move the old logs\n"
+               "  elsewhere, then run again (exit 4).\n"
+               "No log was written by this run, so it has no file to "
+               "attach.\n", prefix, prefix);
+    } else {
+        printf("XHCIQUAL: --log-stamp refused: the DOS clock reads\n"
+               "  %04u-%02u-%02u %02u:%02u, which is not a date and time a\n"
+               "  log can be named from. Set it with DATE and TIME, then run\n"
+               "  again. Nothing was read (exit 4).\n"
+               "No log was written, so there is no file to attach.\n",
+               stamp_year, stamp_month, stamp_day, stamp_hour,
+               stamp_minute);
+    }
+    return 0;
+}
+
+/* The log's first lines carry what its name cannot: the year, and the
+ * second. */
+static void print_stamp_header(void)
+{
+    if (!opt_log_stamp)
+        return;
+    qprintf("Log: %s, begun %04u-%02u-%02u %02u:%02u:%02u by the DOS "
+            "clock\n", stamp_buf, stamp_year, stamp_month, stamp_day,
+            stamp_hour, stamp_minute, stamp_second);
+}
+
+static void print_stamp_tail(void)
+{
+    if (!opt_log_stamp || opt_log_name == 0)
+        return;
+    if (report_log_ok()) {
+        qprintf("Log written: %s - attach this file\n", opt_log_name);
+    } else {
+        /* The screen only: the log is what failed. */
+        printf("Log NOT complete: writing %s failed (a full disk?).\n"
+               "Photograph this screen; attach the photo and %s.\n",
+               opt_log_name, opt_log_name);
+    }
+}
+
+/*
+ * Opens the report's sinks. A plain --log that cannot be opened is warned
+ * about and the run goes on without a file, as it always has; a --log-stamp
+ * run exists to leave a log, so its refusal is resolve_log_stamp's, before
+ * any sink is opened, and by here the file is already created. Returns 1 to
+ * go on (kept for a refusal a later sink might need).
+ */
+static int open_report(void)
+{
+    if (opt_log_stamp) {
+        /* resolve_log_stamp created it, or the run was refused there. */
+        report_open_handle(stamp_handle, opt_serial, !opt_no_page);
+        stamp_handle = -1;
+        return 1;
+    }
+    if (opt_log_name == 0) {
+        (void)report_open(0, opt_serial, !opt_no_page);
+        return 1;
+    }
+    if (report_open(opt_log_name, opt_serial, !opt_no_page))
+        return 1;
+    printf("warning: could not open %s (read-only media?), continuing\n",
+           opt_log_name);
+    opt_log_name = 0;   /* nothing was written: do not claim a copy */
+    (void)report_open(0, opt_serial, !opt_no_page);
     return 1;
 }
 
@@ -490,6 +694,7 @@ static int run_quick_scan(void)
     int worst;
 
     qprintf("XHCIQUAL %s - quick scan (read-only)\n", TOOL_VERSION);
+    print_stamp_header();
     /* Task 36.48: two lines on the screen, the full block in the log and
      * on the serial line. Reads only, like everything in this pass. */
     if (opt_no_sysinfo)
@@ -741,6 +946,10 @@ int main(int argc, char **argv)
     int n, i, nx, nl, all_qualified, any_caveats, active;
     const char *mode;
 
+    /* First, before any DOS file call: an Abort answered while DOS/32A is
+     * up would end the run past the extender's exit (DOS-1). */
+    if (sys_crit_install())
+        atexit(sys_crit_remove);
     prescan_done_flag(argc, argv);
     reset_done_flag();
     /* Task 11-V.8: no arguments at all means the read-only quick scan. Set
@@ -749,11 +958,14 @@ int main(int argc, char **argv)
     opt_quick = (argc == 1);
     if (!parse_args(argc, argv))
         return finish_normally(2);
+    /* Task 38.1: the name, or the refusal, before anything is read. */
+    if (opt_log_stamp && !resolve_log_stamp())
+        return finish_normally(4);
     if (opt_help) {
-        if (!report_open(opt_log_name, opt_serial, !opt_no_page))
-            printf("warning: could not open %s (read-only media?), "
-                   "continuing\n", opt_log_name);
+        if (!open_report())
+            return finish_normally(4);
         print_help();
+        print_stamp_tail();
         report_close();
         return finish_normally(0);
     }
@@ -769,29 +981,23 @@ int main(int argc, char **argv)
          * quick scan that scrolled off the top would have failed at the one
          * thing it exists to do.
          */
-        if (opt_log_name != 0 &&
-            !report_open(opt_log_name, opt_serial, !opt_no_page)) {
-            printf("warning: could not open %s (read-only media?), "
-                   "continuing\n", opt_log_name);
-            opt_log_name = 0;
-        } else if (opt_log_name == 0) {
-            (void)report_open(0, opt_serial, !opt_no_page);
-        }
+        if (!open_report())
+            return finish_normally(4);
         rc = run_quick_scan();
-        if (opt_log_name != 0)
+        if (opt_log_stamp)
+            print_stamp_tail();
+        else if (opt_log_name != 0)
             qprintf("Report copied to %s.\n", opt_log_name);
         report_close();
         return finish_normally(rc);
     }
 
-    if (!report_open(opt_log_name, opt_serial, !opt_no_page)) {
-        printf("warning: could not open %s (read-only media?), "
-               "continuing\n", opt_log_name);
-        opt_log_name = 0;   /* nothing was written: do not claim a copy */
-    }
+    if (!open_report())
+        return finish_normally(4);
 
     qprintf("XHCIQUAL %s (build %s) - USB host controller qualification\n",
             TOOL_VERSION, TOOL_BUILD);
+    print_stamp_header();
     /* Task 36.48: which machine this report came from. Reads only (the
      * BIOS area, CPUID, E820, DOS), before any controller is touched. */
     if (opt_no_sysinfo)
@@ -816,6 +1022,7 @@ int main(int argc, char **argv)
     n = pci_scan_usb(pcis, MAX_CONTROLLERS, opt_family_mask);
     if (n == 0) {
         qprintf("No selected USB host controller found on this machine.\n");
+        print_stamp_tail();
         report_close();
         return finish_normally(2);
     }
@@ -979,10 +1186,14 @@ int main(int argc, char **argv)
         }
     }
 
-    if (opt_log_name != 0)
-        qprintf("\nDone. Report copied to %s.\n", opt_log_name);
-    else
+    if (opt_log_stamp) {
         qprintf("\nDone.\n");
+        print_stamp_tail();
+    } else if (opt_log_name != 0) {
+        qprintf("\nDone. Report copied to %s.\n", opt_log_name);
+    } else {
+        qprintf("\nDone.\n");
+    }
     report_close();
 
     return finish_normally(run_exit_code(!all_qualified, any_caveats));

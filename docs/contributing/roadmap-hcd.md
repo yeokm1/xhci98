@@ -53,7 +53,7 @@ table is the index.
 | Binary and package name | `xhci98.sys`, `xhci98.inf` and `xhci98-amd64.inf`, package `xhci98-<version>.zip`, built from `src\` (owner, 2026-10-02, the third decision of the day on it: `xhci98h`, then `xhci98hc` coexisting on disk with the miniport, then - once task 25.8 had built the scaffold as `xhci98hc.sys` in `src\hcd\` - the miniport's removal from the tree and this name). A `2.0.0.0` install replaces the miniport's file; going back is a reinstall of the `1.2.0.0` package |
 | Version and cut point | One cut, `2.0.0.0`, after Phase 31: USB 2.0 parity on every target, SuperSpeed on root ports and behind SuperSpeed hubs, and UAS. No intermediate release |
 | The miniport | Frozen at `1.2.0.0`, no further cuts, and removed from the tree (above) |
-| Hub class and composite splitting | Inside the bus driver. External hubs are objects of the bus, not PDOs; a composite device is split by the bus into per-function PDOs. No hub-to-port contract to design, no INF binding path for an external hub or a composite parent (the root hub's own project-owned binding, in the root-hub row below, is the one hub binding the package carries), no per-target matching of `usbccgp.sys` or Windows 98's composite parent. From `2.1.0.0` an external hub also gets a devnode of its own, as every Microsoft stack shows its hubs (owner, 2026-10-04; task 33.4): the bus still runs the hub, and only its PnP presentation changes - each hub it serves is presented under a project-owned id (`XHCI98\HUB`, `XHCI98\HUB30` for a USB 3 hub's SuperSpeed half, so a USB 3 hub is two devnodes), bound by this package's own INFs to `xhci98.sys` as a hub FDO, with the devices behind it as its children; still no binding path for any OS hub driver (design record 13 section 10.11). **Amended 2026-10-10** (owner, after SweetLow's comment on issue 17; task 36.43): every composite device the bus splits also gets a composite-parent devnode under the project-owned `XHCI98\COMPOSITE`, bound by this package's own INFs to `xhci98.sys` as a composite FDO, with its function PDOs as its children, so one hub port is one devnode as on Microsoft's stacks; the bus still splits, configures and routes, and still no binding of `usbccgp.sys` or Windows 98's composite parent (design record 13 section 10.12) |
+| Hub class and composite splitting | Inside the bus driver. External hubs are objects of the bus, not PDOs; a composite device is split by the bus into per-function PDOs. No hub-to-port contract to design, no INF binding path for an external hub or a composite parent (the root hub's own project-owned binding, in the root-hub row below, is the one hub binding the package carries), no per-target matching of `usbccgp.sys` or Windows 98's composite parent. From `2.1.0.0` an external hub also gets a devnode of its own, as every Microsoft stack shows its hubs (owner, 2026-10-04; task 33.4): the bus still runs the hub, and only its PnP presentation changes - each hub it serves is presented under a project-owned id (`XHCI98\HUB`, `XHCI98\HUB30` for a USB 3 hub's SuperSpeed half, so a USB 3 hub is two devnodes), bound by this package's own INFs to `xhci98.sys` as a hub FDO, with the devices behind it as its children; still no binding path for any OS hub driver (design record 13 section 10.11). **Amended 2026-10-10** (owner, after SweetLow's comment on issue 17; task 36.43): every composite device the bus splits also gets a composite-parent devnode under the project-owned `XHCI98\COMPOSITE`, bound by this package's own INFs to `xhci98.sys` as a composite FDO, with its function PDOs as its children, so one hub port is one devnode as on Microsoft's stacks; the bus still splits, configures and routes, and still no binding of `usbccgp.sys` or Windows 98's composite parent (design record 13 section 10.12). **Amended 2026-10-14** (task 38.8, design record 13 section 10.13; GitHub issue 17 item 10): from `2.4.0.0` the root hub, hub and composite ids are under `USB\` - `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and `USB\XHCI98_COMPOSITE` - since a device id's first component names its enumerator and there is no `XHCI98` bus; private names no stock or vendor INF row carries (the audit of section 10.13.2), spelled once in `src\xhci_hub.h` and held there by the INF gate (`HCD-IDSRC`, `HCD-USBRES`); the root hub's install copies nothing (decision D3) |
 | Stock Windows 98 SE | A goal: the HCD loads, starts and binds devices on a Windows 98 SE install with no USB 2.0 stack. NUSB's and SweetLow's host-stack halves become inert under it. What a stock install still lacks is a mass-storage class driver, which NUSB's `usbstor.sys` and its `ntmap` layer supply and Windows ME ships; the HCD does not replace that. Phase 26 takes the reading (26-V.3), a checkpoint clause by the owner's decision of 2026-10-03 |
 | Mass storage on Windows 98 SE | NUSB's, kept (owner, 2026-10-02, choosing this over an own storage driver). A drive letter on 9x comes from the IOS layer, and NUSB's `usbntmap.inf` binds `usbstor.sys`'s disk objects (`USBSTOR\GenDisk` and its siblings) to `DevLoader=*IOS` with `PortDriver=USBMPHLP.PDR`, the USB mapping port driver, with `NTMAP.SYS` and `USBNTMAP.SYS` beside it; NUSB's own install INF stamps `NTMAP.SYS` as `4.10.0.2227` and annotates it with hotfixes 242975 and 267304, a Windows 98 SE line, and annotates `USBMPHLP.PDR` and `USBNTMAP.SYS` as `WinMe` in its file list - the package author's notes, not a reading of the files, which were not examined (`legal-provenance.md` section 4, the NUSB 3.6 INF row; method static, text read, nothing executed). They are Microsoft's and this project does not redistribute them. An own BOT driver would still sit under that mapping, and an own IOS port driver is a VxD project with no use elsewhere. So `usbstor.sys` stays the BOT driver on every target, and on Windows 98 SE mass storage, UAS included, needs NUSB installed; on a stock install it cannot work and the release notes say so. Whether the 98 SE CD carries any of the mapping files is task 31-0's to read from the disc |
 | Pool and DMA | The HCD allocates pool and its own common buffer. The miniport's "allocate no pool" rule stands for `src/`; for the HCD it is replaced by import-allowlist rows with Windows 98 export evidence, read in task 25.3, and a rule naming the sites that may allocate |
@@ -103,6 +103,8 @@ table is the index.
 | The x64 binaries test-signed | Owner, 2026-10-11, reversing design record 11 decision 9 for the x64 package only: every published x64 directory carries `xhci98.sys` and `xhciuas.sys` with an embedded Authenticode signature by the project's own test certificate (SHA-1, no timestamp, no catalog, the INFs unchanged), applied by the packager alone; `make-release.ps1` refuses a cut that would publish an unsigned x64 directory. The private key never enters the tree. Not Microsoft signing. Design record 19 is the authority (36.50) |
 | `2.3.0.0`: cut before the bench, re-cut with a later date | Owner, 2026-10-11: the bench zip is cut directly as `2.3.0.0` (the TEST `2.2.0.3` re-stamp dropped), kept under `out\` until the bench is good. A defect the bench finds is fixed in a re-cut of the same version with `DriverVer` moved to the re-cut's date, so Windows ranks it newer and Have Disk takes it on Vista and 7 (an unchanged INF is not taken). Taken once: `10/12/2026` for 36.56 and 36.57. The bench items not read move to "Planned - bench follow-up after `2.3.0.0`" and to "Untested ground" in the README and release notes |
 | Phase 37: the planned work and the reports after `2.3.0.0` | Owner, 2026-10-12: one phase takes Windows ME without SweetLow's stack (37.1), the three field reports received after `2.3.0.0` - the E7250's USB in text-mode setup, the X230's bugcheck in text-mode install, and the 2570p's resources under XP x64 with Windows 7 x64 working (37.2 to 37.4), with more information to come - and every "Planned work" section, whose placeholder ids I17, S5L, RRC, PCR and BF became 37.5 to 37.14. No version or branch until the owner chooses them. The same day `docs/future-plans/` was removed (owner); its last page, the superspeed-storage proposal for the frozen miniport, is in git history at `00a3b9e`. Later the same day (owner) the phase was cut back and renumbered: the 2570p's report (37.4) and the Linux quirk population (37.17) removed; every other open task except the X230's setup stop moved back to "Planned work" under its earlier placeholder id or a new one (37.2 is FR.1, 37.5 I17.1, 37.8 PCR.1, 37.9 to 37.14 BF.1 to BF.6, 37.15 TMR.1, 37.16 FR.2 - the batch files last, so the release goes out sooner - and 37.19 UAS.1); and the tasks left numbered in order, old to new: 37.1 stays, 37.3 is 37.2, 37.6 is 37.3, 37.7 is 37.4, 37.18 is 37.5. Commit messages and Codex notes from before the renumbering use the old numbers |
+| Phase 38: the planned work after `2.3.1.0` | Owner, 2026-10-13: every task in "Planned work" opened as one phase, in the order it was listed: FR.2 38.1, I17.1 38.2, PCR.1 38.3, BF.1 38.4, BF.2 38.5, BF.3 38.6, BF.4 38.7, BF.5 38.8, BF.6 38.9, TMR.1 38.10, UAS.1 38.11, RL.1 38.12, RL.2 38.13, RL.3 38.14. FR.1, the E7250's USB in XP x64 text-mode setup, was removed the same day (owner). 38.15 and 38.16 (issue 17 items 3 and 10) and 38.17 (the tools directory) joined the same day. Later the same day (owner) the real-hardware bench tasks 38.4 to 38.9 (BF.1 to BF.6) and the UAS fold 38.11 (UAS.1) were removed, what the bench would have read staying under "Untested ground" in the README and the release notes, and the tasks left were numbered in order, old to new: 38.1 to 38.3 stay, 38.10 is 38.4, 38.12 to 38.14 are 38.5 to 38.7 (done; commit `9252f1fd` names them by the old numbers), 38.15 is 38.8, 38.16 is 38.9, 38.17 is 38.10. The branch is `phase-38` (owner, 2026-10-13); no version until the owner chooses it. Commits and memories before the first change use the placeholder ids, and those before the renumbering the old numbers. 38.12, opened the same evening from the 38.2 legs, was deferred to after `2.4.0.0` the same day (owner) and is "Planned work" NOX.1; its plan is record 13 section 10.7.1, and the record's wrong claim is corrected in this phase. Later the same day (owner) 38.3 was deferred too, on its design's review (an all-ones configuration space proves no isolation from memory, and no safe proof is reachable at a disable), and is "Planned work" PCR.1 again, its plan design record 17 section 4.13; the tasks after it were numbered down by one, old to new: 38.4 is 38.3, 38.5 to 38.7 are 38.4 to 38.6, 38.8 is 38.7, 38.9 is 38.8, 38.10 is 38.9, 38.11 is 38.10; and the acceptance of xHCI 0.96 controllers joined as 38.11. Commits, design records and memories of 2026-10-13 before this change use the old numbers |
+| Phase 38's design decisions and version | Owner, 2026-10-13, reviewed by Codex the same day (session `01a1331e`): the release is `2.4.0.0`. 38.3: only at the stop or remove of a controller already pinned by containment, the D3hot proof is taken by the driver asking for D3 itself, through the PCI stack - a containment-release step, independent of `XhciSelectiveSuspend`, adding no idle or selective-suspend policy - (a device power IRP, not a direct write of the power management control register, which Windows reserves on XP and later), then reading the state back after the 10 ms PCI Bus Power Management 1.2 requires; with neither proof the transfers stay kept, and no registry value overrides that. 38.4: the x86 image reaches `ExSetTimerResolution` through `xhcimsi.sys` (design record 18), extended to load on Windows 2000 and XP, MSI staying Vista and 7 only. 38.9: the full task in this phase, design, code and legs; the old `XHCI98\` devnodes are removed by an opt-in tool under the release's `tools\`, an install needing no run of it. The task texts carry the review's conditions. Under the renumbering of the same day (the row above) the 38.3 named here is PCR.1, 38.4 is 38.3 and 38.9 is 38.8. 38.3 (2026-10-13, after its design's review): T1 a timer thread per controller; T2 the active period x 10000; T3 released when the poller leaves ACTIVE, the idle period the only linger, `XhciPollIdleMs` kept at 50 and measured against 500 before any change; T4 `XhciPollFineTimer`; T5 an update keeps an existing value; H1 `\Device\Xhci98Helper` and channel V2; H2 no forced restart on 2000 and XP; H3 `DelService` and a deferred `DelFiles`; H4 F6 keeps the tick; H5 WDK 7.1 `WXP`, subsystem 5.00 |
 
 ## The shape of the successor
 
@@ -153,9 +155,11 @@ polled event delivery, which joined it on 2026-10-08, MSI on Vista and 7,
 three of issue 17's items (2026-10-09), selective suspend, off by default
 (36.28 to 36.41, 2026-10-09; its planned ids were `SUSP.n`), 1 MiB UAS
 commands and test-signed x64 binaries; it closed with the cut on
-2026-10-12, and the bench work it could not read is in "Planned work"
-(BF.1 to BF.6). Phase 37 (2026-10-12, `2.3.1.0`) is Windows ME
+2026-10-12, and the bench work it could not read went to "Planned work"
+(BF.1 to BF.6), then to Phase 38, which removed it on 2026-10-13. Phase 37 (2026-10-12, `2.3.1.0`) is Windows ME
 without SweetLow's stack and the X230's XP x64 setup stop.
+Phase 38 (2026-10-13, `2.4.0.0`) takes the planned work left
+after it.
 The order is deliberate:
 parity first, because round 12's device matrix and the acceptance test are a
 free oracle for everything USB 2.0; SuperSpeed before hubs, because root-port
@@ -821,3 +825,130 @@ the release notes; and the install legs read from the asset.
 Records: `runs/run-37.md`; design records 13 (section 5.8) and 16;
 `docs/issues/15-xp64-setup-usb-stick-running-port-reset.md`;
 `docs/using/release-notes.md`.
+
+---
+
+## Phase 38 - The Planned Work After `2.3.1.0`: the Field-Report Batch Files, the 98 SE and ME Silent Install, Pinned Containment, the Polling Timer and the Tools Directory
+
+Goal: the reporters' helper batch files; the Windows 98 SE and ME silent
+install; a finer system timer while polling; the release's tools in a
+`tools\` directory; the bus's own ids under `USB\`; Linux's xHCI controller
+quirks, each behind a registry gate; xHCI 0.96 controllers accepted; the
+composite devnode's own `SELECT_CONFIGURATION`; and the documents the
+`2.3.1.0` legs found wanting; released as `2.4.0.0`.
+
+Status: open. Opened 2026-10-13 (owner) with every task then in "Planned
+work"; on branch `phase-38`; the version is `2.4.0.0` (owner, 2026-10-13),
+stamped `DriverVer` `10/14/2026` (`b4b8237c`). Tasks joined, left and were
+deferred on 2026-10-13 and 14 (the bench tasks and the UAS fold removed,
+NOX.1 and PCR.1 deferred, 38.11 and 38.12 joined) and the list was
+renumbered each time; the decisions table's Phase 38 rows map the old
+numbers to the new. Every task is done; the VM matrix read the dry cuts,
+and the install legs the signed asset, on 2026-10-14. The task text as it stood on 2026-10-14, with
+every reading, decision and review pointer, is `runs/run-38.md`, "Moved
+from the roadmap before the close".
+
+Why a phase: the bus's ids move every root hub, hub and composite devnode;
+the helper loads on Windows 2000 and XP for the first time; the quirks and
+the 0.96 floor change how controllers start; and it ends in a release.
+
+- [x] 38.1 the field reports' batch files (owner, 2026-10-12). Done 2026-10-13 (`bbc4aafd`..`512546e5`; run-38, "38.1"): `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside `XHCISNAP`, `QUALREP.BAT` beside `XHCIQUAL`, read on MS-DOS, 98 SE, ME, 2000, XP, XP x64 and 7 x86 and x64
+- [x] 38.2 the Windows 98 SE and ME silent install (issue 17 item 4). Done 2026-10-13 (`c248e3dc`..`0338f690`; record 13 section 6.11; run-38, "38.2"): `XhciSilentInstall`, off by default, and `tools\silent\`; ME installs a keyboard, mouse, stick and hub silently with no list
+- [x] 38.3 a finer system timer while polling, `XhciPollFineTimer`, and `xhcimsi.sys` renamed `xhcihlpr.sys` and loading on 2000 and XP. Done 2026-10-14 (record 15 section 7.2, record 18 section 15; merged `7aa959e4`; run-38, "38.3"): the helper's install and update legs read on 2000, XP and 32-bit Vista and 7, its absence on 98 SE, ME and x64; the value ships off (owner, 2026-10-14, `17888a97`..`64d2801f`), the VM matrix having read a polled guest's clock slowed under the finer timer. Owed after the cut: the finer timer on real hardware, where its default is reconsidered; `XhciPollIdleMs` 50 against 500, deferred by the owner, the default staying 50
+- [x] 38.4 the UAS driver's install on Windows 7 and Vista in the readme and the release notes. Done 2026-10-13 (run-38, "38.4")
+- [x] 38.5 a 32-bit Vista or 7 reinstall needs a restart, said in the documents. Done 2026-10-13 (run-38, "38.5"): an update through Have Disk asks for it on both
+- [x] 38.6 `portsw-on.bat` and `portsw-off.bat` print "RESTART WINDOWS" once. Done 2026-10-13 (run-38, "38.6")
+- [x] 38.7 the USB device interface off external hubs (issue 17 item 3). Done 2026-10-13 (`c4c2bab4`..`b113f3b4`; record 13 section 8.10; run-38, "38.7"): the stock reading on 2000, XP and 7, the legs on 2000, XP, XP x64 and 7 x64
+- [x] 38.8 the bus's own ids under `USB\` (`USB\XHCI98_ROOT_HUB`, `_HUB`, `_HUB30`, `_COMPOSITE`; issue 17 item 10) and the cleanup tool `XHCICLN.EXE` / `XHCICL64.EXE`. Done 2026-10-14 (record 13 section 10.13; merged `73d6a005`; run-38, "38.8"): a fresh install and an update over `2.3.1.0` on every target, the tool on every target, the controller's veto read on every NT target, XP x64's with two project controllers (2026-10-14, under 38.final), so removal stays enabled on each. Owed after the cut: a High Speed and a USB 3 hub, 98 SE's chain of five hubs
+- [x] 38.9 the release's tools in `tools\`. Done 2026-10-13 (`fc58af43`..`2af5ec79`; run-38, "38.9")
+- [x] 38.10 Linux's xHCI controller quirks, fourteen registry values, and the endpoint-ring ownership fix. Done 2026-10-14 (design record 20; merged `e1727c3c` and `59879e2d`; run-38, "38.10"): each value read on QEMU's controller as far as it can act there, the ring fix's faults injected on 2000 and XP. Owed after the cut: each quirk on a controller it names
+- [x] 38.11 xHCI 0.96 controllers accepted, `XhciAccept096` (default 1). Done 2026-10-14 (record 17 section 4.14; `5e192d2d`..`855276cb`; run-38, "38.11"): the gate at 1 and 0, and QEMU's controller reporting 0.96 through the `qemu` flavour. Owed after the cut: a real 0.96 controller
+- [x] 38.12 the composite devnode's own `SELECT_CONFIGURATION` (issue 17 item 11). Done 2026-10-14 (record 13 section 10.14; merged `667ae804`; run-38, "38.12"): the regression read with QEMU's audio device on 98 SE, ME, 2000, XP, XP x64 and 7 x64. Owed after the cut: hidusbf on a composite HID device (owner, 2026-10-14)
+- [x] 38.final the builds, cut and check of `2.4.0.0`. Done 2026-10-14. Stamped and dry-cut 2026-10-14 (`b4b8237c`; run-38, "38.final"); the XP F6 install the matrix found broken fixed (`f0c28bc6`..`d967daa2`); Windows 2000 from the F6 floppy fixed by its own `txtsetup.oem` entry with the user's three files from the CD (merged `b8e48823`; `docs/issues/16-w2k-f6-first-gui-boot-usbd.md`), read to the desktop and one restart; 38.8's XP x64 veto read; the documents pass of the matrix's readings done (run-38, "38.final"). Dry cut 7 at `53ddd829`; the owner's signed cut, `verify-cut.ps1` 0 FAIL, zip SHA-256 `BF5B62DA...08C79`, committed with the `releases/history.md` entry (`7e13fc81`); the install legs from the asset passed on all nine targets, A6 dropped for time (owner, 2026-10-14).; XP x64 from the F6 floppy past the product key page to the desktop and a restart, and 98 SE's S3 (an update keeps `XhciSilentInstall` 1), read from the asset. Left: publishing (the owner's)
+
+Checkpoint: the design-first tasks (38.2, 38.3, 38.8, 38.11 and 38.12)
+decided by the owner and reviewed to convergence before their code; each
+task's legs read as it names them, or owed after the cut and said so in
+the release notes' "Untested ground" (38.8's High Speed and USB 3 hubs,
+38.12's filter on a composite HID device); and 38.final's install legs
+read from the asset. Read (2026-10-14).
+
+Records: `runs/run-38.md`; design record 13 (sections 6.11, 8.10, 10.13
+and 10.14); `design/15-polled-event-delivery.md`;
+`design/16-intel-port-switchover.md`; `design/17-controller-tolerance.md`;
+`design/18-msi-helper-x86.md`; `design/20-linux-xhci-quirks.md`;
+`docs/contributing/legal-provenance.md`; `runs/run-37.md`, where 38.4 to
+38.6 come from; `docs/issues/16-w2k-f6-first-gui-boot-usbd.md`; GitHub
+issue 17; `docs/using/release-notes.md`.
+
+# Planned work
+
+Not phases yet: each takes the next free phase number when the owner opens
+it, and its placeholder ids take that number then (owner, 2026-10-06; the
+decisions table).
+
+## Planned - Slipstreaming xhci98 Into a Windows 2000 CD
+
+Goal: Windows 2000 Setup from a CD whose `TXTSETUP.SIF` carries xhci98,
+with no F6 floppy.
+
+Status: not opened, unnumbered and unversioned. Deferred by the owner on
+2026-10-14, when Phase 38's Windows 2000 F6 entry was merged; the one
+attempt is `docs/issues/16-w2k-f6-first-gui-boot-usbd.md` section 3 and
+`lessons.md`.
+
+- [ ] SLIP.1 xhci98 slipstreamed into a copy of a Windows 2000 CD (owner, 2026-10-14). One attempt during 38.final, an `[InputDevicesSupport]` entry for `xhci98` in the copy's `TXTSETUP.SIF` with its own file section listing `usbd.sys`, `hidclass.sys` and `hidparse.sys` and the driver in its `I386`, did not load the driver in text mode (no slot addressed, an empty port-0xE9 log from the `qemu` flavour; issue 16, runs 71 and 72); an `$OEM$\TEXTMODE` preinstall was not tried. Read first why text mode did not load it, then decide whether the documents describe a route
+
+## Planned - The Idle Poll Period, 50 Against 500 ms
+
+Goal: `XhciPollIdleMs`'s default decided on a full reading.
+
+Status: not opened, unnumbered and unversioned. Deferred by the owner on
+2026-10-14 from task 38.3's legs (T8); the default stays 50. The partial
+table is `runs/run-38.md`, "38.3".
+
+- [ ] IDLE.1 `XhciPollIdleMs` 50 against 500 on every target (owner, 2026-10-14): under mode 2, the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute. The partial reading on 2026-10-14 (XP, XP x64, 2000 and 2000 SMP, Vista x86 and x64) showed plug-to-working 0.3 to 0.7 s at both values, remote wake working at both on the x86 guests (the test client is x86; not applicable on XP x64 and Vista x64), Vista x86's idle host load halved at 500 (12.7 to 5.4 %) and Vista x64's about 30 % lower, and no difference beyond noise elsewhere; 98 SE, ME and 7 x86 and x64 not taken. The default is decided on the full reading
+
+## Planned - Bench Follow-Up After `2.4.0.0`
+
+Goal: on real hardware, what Phase 38 could read only in virtual
+machines.
+
+Status: not opened, unnumbered and unversioned. Listed by the owner on
+2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
+each task's "Owed after the cut"); the release notes' "Untested ground"
+names B24.1 to B24.5 meanwhile. A sixth item, `XHCICLN`'s veto on XP x64,
+was read before the cut (task 38.8) and left the list.
+
+- [ ] B24.1 Linux's controller quirks (task 38.10, design record 20) on the controllers they name, each value read on a controller it lists
+- [ ] B24.2 a real xHCI 0.96 controller (task 38.11, design record 17 section 4.14): its start at `XhciAccept096` 1 and its refusal at 0, a device of each speed, and audit items A14 and A21
+- [ ] B24.3 hidusbf on a composite HID device (task 38.12, design record 13 section 10.14.8): on the composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86
+- [ ] B24.4 a High Speed and a USB 3 hub under the `2.4.0.0` ids, `USB\XHCI98_HUB` and `USB\XHCI98_HUB30` (task 38.8, design record 13 section 10.13, D13 and D14), by passthrough or on the bench
+- [ ] B24.5 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
+
+## Planned - A Refused Interface's Device Id
+
+Goal: the read-first task deferred from Phase 38 (owner, 2026-10-13).
+
+Status: not opened, unnumbered and unversioned. Opened as 38.12 on
+2026-10-13 and deferred to after `2.4.0.0` the same day (owner); the plan,
+with the owner's answers to its decisions, is design record 13 section
+10.7.1, and Phase 38 corrects the record's and `src\xhci_xport.h`'s claim
+to what was read.
+
+- [ ] NOX.1 a refused storage interface's device id on Windows 98 SE and ME (from the 38.2 legs, 2026-10-13; owner, the same day: read first, a task of its own). Record 13 and `src\xhci_xport.h` say a REFUSED interface (no transport it can run, task 29-A) "shows no VID/PID-derived hardware id at all", its one hardware id `USB\XHCI98_NOXPORT&VID_v&PID_p&REV_r[&MI_nn]`, so neither `usbstor.inf` nor a vendor INF can bind it. On 98 SE the refused `usb-uas` devnode's registry `HardwareID` read `"USB\\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\\VID_46F4&PID_0003"` (runtime, `Enum\USB\VID_46F4&PID_0003\P382R2`, `out\p38-2\legs\`): the second entry is the bus's device id (`BusQueryDeviceID`), which the PDO still reports in VID/PID form. Read first, on 98 SE and ME (with NUSB 3.3's stack too, whose `usbstor.inf` names 135 VID/PID lines): whether an INF whose only line is that VID/PID binds a refused device. If it does, the refused PDO's device id takes the `XHCI98_NOXPORT` form as well (its instance path moves, so the design says what becomes of a devnode an earlier version made), checked against 38.9's move of the bus's own ids to `USB\XHCI98_...`; if it does not, record 13 and `xhci_xport.h` say why the device id is harmless there. Either way the claim is corrected to what was read, NT's matching (hardware and compatible ids only) stated as read or as not read. Host tests of the id, both builds, legs on 98 SE, ME and one NT target with a UAS-only device at SuperSpeed on a controller that does not stream
+
+## Planned - Releasing the Transfers Kept by a Pinned Containment
+
+Goal: the task deferred from Phase 38 (owner, 2026-10-13), the known
+limitation "After the driver closes off a controller it could not prove
+stopped, disabling the controller hangs" in the release notes.
+
+Status: not opened, unnumbered and unversioned. Planned as PCR.1, opened
+as 38.3 on 2026-10-13 and deferred the same day (owner), after its design
+was trimmed to the departure proof and a review showed that configuration
+space reading all ones proves no isolation from memory, so no safe proof
+is reachable at a disable; the plan, the owner's answers and what a
+reopening must answer are design record 17 section 4.13.
+
+- [ ] PCR.1 (in Phase 37 until 2026-10-12) releasing the transfers kept by a pinned containment (owner, 2026-10-11), so disabling, updating or removing a controller the driver closed off without proof that DMA stopped (record 17's containment, `XHCISNAP` "CONTAINED" and "PINNED") completes instead of waiting for ever. Since `2.2.0.0` the driver keeps every transfer the controller might still write into, by design, a hang the release notes list under "Known limitations"; Phase 36's matrix read it again on Windows 2000 (4 of 4 from fresh boots, selective suspend on and off: hidusb's interrupt-IN read kept, its REMOVE waiting) and on Windows 98 SE. At the controller's stop or remove, look for proof that it can no longer write to memory, and only then complete the kept transfers as failed: (a) the device has left the bus (its PCI configuration space, the vendor id included, reads all ones), or (b) it entered D3hot through its PCI power management capability and reads back D3hot, where it may not master (PCI Bus Power Management 1.2). Only at the stop or remove of a controller already pinned by containment, the driver asks for D3 itself, through the PCI stack (a device power IRP), never by writing the power management control register (owner, 2026-10-13, on Codex's review): a containment-release step, independent of `XhciSelectiveSuspend`, adding no idle or selective-suspend policy. It reads the state back only after the 10 ms the specification requires before the next access. Conditions from the review: the capability chain validated before it is read; a failed or short configuration read is never taken for all ones, and all-ones data counts as proof (a) only through a validated read whose platform meaning is that the device left the bus or is isolated from memory, an unreachable configuration window alone proving nothing; read completeness established per target, without assuming Windows 98 reports the byte count (`hcd_svc.c` leaves its `IoStatus.Information` unproven), and a stalled configuration or power request addressed, today's wait for it being unbounded; on 98 SE and ME the configuration reads use the route already proven there, to the original PDO; a failed or ineffective transition is no proof and releases nothing; D3hot is not a reset, a function with `No_Soft_Reset` set keeping its state, so before the kept buffers are released the design establishes that DMA stays inhibited through any later return to D0 until HCRST has completed and the old ring and context pointers are invalid, and where it cannot, the buffers stay kept and an unsafe restart is refused; and the release runs before any child's teardown waits on a kept transfer. With neither proof the transfers stay kept, and no registry value overrides that (owner, 2026-10-13). Record 17 gains the section first, a full review loop on the DMA-safety path, host vectors for each proof, and legs: the all-ones injection then a disable on 98 SE, ME, 2000, XP and 7 x64, with and without a client read pending, and the unproven case still holding

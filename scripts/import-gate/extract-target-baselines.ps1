@@ -62,6 +62,14 @@ param(
     [string]$Amd64Iso = "",
     [string]$Win2kManifestPath = "",
     [string]$Amd64ManifestPath = "",
+    # The Windows XP Professional SP3 x86 media, for the four XP kernels and
+    # seven HALs the import gate's hlprx86 profile resolves xhcihlpr.sys
+    # against (design record 18 section 15.11, task 38.3). They are read out
+    # of the medium's I386\SP3.CAB, which alone carries the PAE kernels.
+    # Omitting it skips that block; the hlprx86 profile then fails, since
+    # every one of its four sets is required.
+    [string]$WinXpIso = "",
+    [string]$WinXpManifestPath = "",
     [switch]$Force
 )
 
@@ -73,12 +81,16 @@ $repo = Get-RepoRoot
 $w2kDir = Join-Path $repo "tools\win2ksp4-extracted"
 $w98Dir = Join-Path $repo "tools\win98se-extracted"
 $amd64Dir = Join-Path $repo "tools\winxp64-extracted"
+$xpDir = Join-Path $repo "tools\winxpsp3-extracted"
 $work = Join-Path $env:TEMP ("xhci98-baselines-" + [System.IO.Path]::GetRandomFileName())
 if ($Win2kManifestPath -eq "") {
     $Win2kManifestPath = Join-Path $PSScriptRoot "win2k-baselines.expected"
 }
 if ($Amd64ManifestPath -eq "") {
     $Amd64ManifestPath = Join-Path $PSScriptRoot "winxp64-baselines.expected"
+}
+if ($WinXpManifestPath -eq "") {
+    $WinXpManifestPath = Join-Path $PSScriptRoot "winxp-x86-baselines.expected"
 }
 
 $sevenZip = Find-Tool "7z"
@@ -146,6 +158,7 @@ try {
     Ensure-Directory $w2kDir
     Ensure-Directory $w98Dir
     Ensure-Directory $amd64Dir
+    Ensure-Directory $xpDir
 
     # --- Windows 2000 SP4 kernel and HALs -----------------------------------
     Write-Step "Windows 2000 SP4 kernel and HAL export baselines"
@@ -338,6 +351,96 @@ $manifest64
 "@
         }
         Write-Ok "all NT 5.2 amd64 kernel/HAL files match the authenticated manifest"
+    }
+
+    # --- Windows XP SP3 x86 kernels and HALs ---------------------------------
+    #
+    # The same procedure once more, for the hlprx86 profile (design record 18
+    # section 15.11): tools\winxpsp3-extracted, beside the usbport.sys and
+    # usbhub.sys read there before. The difference is the container: every
+    # row's PACKED is a member of I386\SP3.CAB, the only place on the medium
+    # that carries the PAE kernels, so the cab is taken off the ISO first and
+    # the members out of it - already uncompressed, nothing to expand.
+    #
+    Write-Step "Windows XP SP3 x86 kernel and HAL export baselines"
+
+    $xpWanted = @(Read-Win2kBaselineManifest -Path $WinXpManifestPath)
+    $xpMissing = @($xpWanted | Where-Object { $Force -or -not (Test-Path -LiteralPath (Join-Path $xpDir $_.Out)) })
+
+    if ($xpMissing.Count -eq 0) {
+        Write-Ok "already staged (pass -Force to redo)"
+        foreach ($w in $xpWanted) { Report-File (Join-Path $xpDir $w.Out) }
+    } elseif ($WinXpIso -eq "") {
+        Write-Warn "no -WinXpIso given - skipping. The hlprx86 import-gate profile fails without these files."
+    } elseif (-not (Test-Path -LiteralPath $WinXpIso)) {
+        Write-Warn "Windows XP SP3 ISO not found at '$WinXpIso' - skipping. The hlprx86 import-gate profile fails without these files."
+    } else {
+        $xpWork = Join-Path $work "xp"
+        if (Test-Path -LiteralPath $xpWork) {
+            Remove-Item -LiteralPath $xpWork -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $xpWork | Out-Null
+        Invoke-SevenZip @("e", "-y", "-o$xpWork", $WinXpIso, "I386\SP3.CAB")
+        $cab = Join-Path $xpWork "SP3.CAB"
+        if (-not (Test-Path -LiteralPath $cab)) {
+            throw "7z could not read I386\SP3.CAB out of '$WinXpIso'"
+        }
+        # Authenticated in the work directory before anything is copied into
+        # tools\, for the reason the SP4 block above gives.
+        $expandedXp = Join-Path $xpWork "out"
+        New-Item -ItemType Directory -Path $expandedXp | Out-Null
+        Invoke-SevenZip (@("e", "-y", "-o$expandedXp", $cab) + @($xpMissing | ForEach-Object { $_.Packed }))
+        foreach ($w in $xpMissing) {
+            $member = Join-Path $expandedXp $w.Packed
+            if (-not (Test-Path -LiteralPath $member)) {
+                throw "'$($w.Packed)' is not in I386\SP3.CAB on '$WinXpIso'"
+            }
+            if ($w.Packed -cne $w.Out) {
+                Move-Item -LiteralPath $member -Destination (Join-Path $expandedXp $w.Out) -Force
+            }
+        }
+
+        $freshXp = @(Get-Win2kBaselineValidationErrors -Dir $expandedXp -Rows $xpMissing)
+        if ($freshXp.Count -gt 0) {
+            throw @"
+the Windows XP SP3 x86 kernel/HAL files extracted from '$WinXpIso' are not the
+recorded builds:
+  - $($freshXp -join "`n  - ")
+Nothing was staged. Either stage from the recorded media, or update
+scripts\import-gate\winxp-x86-baselines.expected deliberately - those files
+are what the hlprx86 profile reads to decide whether the x86 helper's imports
+resolve on Windows XP.
+"@
+        }
+
+        foreach ($w in $xpMissing) {
+            Copy-Item -LiteralPath (Join-Path $expandedXp $w.Out) `
+                      -Destination (Join-Path $xpDir $w.Out) -Force
+        }
+        Write-Ok "staged into $xpDir and matched against winxp-x86-baselines.expected"
+        foreach ($w in $xpWanted) { Report-File (Join-Path $xpDir $w.Out) }
+    }
+
+    $xpPresent = @($xpWanted | Where-Object {
+        Test-Path -LiteralPath (Join-Path $xpDir $_.Out)
+    })
+    if ($xpPresent.Count -gt 0) {
+        $validationXp = @(Get-Win2kBaselineValidationErrors -Dir $xpDir -Rows $xpWanted)
+        if ($validationXp.Count -gt 0) {
+            $manifestXp = (($xpWanted | Sort-Object Out | ForEach-Object {
+                "      $($_.Out)"
+            }) -join "`n")
+            throw @"
+staged Windows XP SP3 x86 baseline does not match '$WinXpManifestPath':
+  - $($validationXp -join "`n  - ")
+Fix it one of these ways:
+  - re-run this script with -Force and the recorded Windows XP SP3 media
+  - without the media: delete only the manifest-owned files listed below from
+    '$xpDir'; keep usbport.sys, usbhub.sys and every other file there:
+$manifestXp
+"@
+        }
+        Write-Ok "all Windows XP SP3 x86 kernel/HAL files match the authenticated manifest"
     }
 
     # --- Win98 SE ntkern.vxd ------------------------------------------------

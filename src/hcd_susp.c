@@ -354,11 +354,40 @@ static ULONG hcdSuspRead(PHCD_USB_DEVICE dev, PHCD_DEVICE_PDO *pdos,
     return n;
 }
 
+#if defined(XHCI_FLAVOUR_QEMU)
+/* Leg T3's claiming paths (record 15 section 7.2.12). */
+#define HCD_SUSP_QEMU_CLAIM_EXECUTOR    1UL
+#define HCD_SUSP_QEMU_CLAIM_PDO_CLOSE   2UL
+#define HCD_SUSP_QEMU_CLAIM_STALE       3UL
+#define HCD_SUSP_QEMU_CLAIM_UNLINK      4UL
+
+/* The claim recorded in the IRP itself as it is claimed - the path in the
+ * low byte, the D-state asked in the next - so a later claim of another
+ * IRP of the same PDO cannot rewrite what this one's completion reports
+ * (review of 38.3, round 1). DriverContext[3] of a power IRP the PDO
+ * owns is this driver's; the completion workers use [0] to [2]. */
+#define HCD_SUSP_QEMU_MARK(irp, pdo, path)                                  \
+    ((irp)->Tail.Overlay.DriverContext[3] =                                 \
+         (PVOID)(ULONG_PTR)((((pdo)->PwrWanted & 0xFFUL) << 8) | (path)))
+#endif
+
 /* A D-IRP the thread claimed, completed SUCCESS (4.2): PoStartNextPowerIrp
- * first, the D0's power state recorded. */
+ * first, the D0's power state recorded. Every D-IRP completion of the
+ * executor's passes comes through here, inline or by a worker; the qemu
+ * flavour notes it after IoCompleteRequest returns and before PowerPending
+ * drops, from what was saved before the completion (record 15 section
+ * 7.2.12, leg T3). */
 static VOID hcdSuspCompletePower(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG d0)
 {
     POWER_STATE state;
+#if defined(XHCI_FLAVOUR_QEMU)
+    PHCD_CONTROLLER hc;
+    ULONG note;
+
+    hc = pdo->Controller;
+    note = ((pdo->Serial & 0xFFFFUL) << 16) |
+           ((ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[3] & 0xFFFFUL);
+#endif
 
     if (d0) {
         pdo->Common.DevicePower = PowerDeviceD0;
@@ -368,6 +397,11 @@ static VOID hcdSuspCompletePower(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG d0)
     PoStartNextPowerIrp(irp);
     irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc != NULL) {
+        XhciLogNote(&hc->Hc, "qemu.susp.done", note);
+    }
+#endif
     (VOID)InterlockedDecrement(&pdo->PowerPending);
 }
 
@@ -2219,8 +2253,27 @@ static ULONG hcdSuspDecideOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
                 hcdSuspTake(&taken, pdos[i], NULL, HCD_SUSP_TAKE_REPORT);
             }
         }
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* Leg T3 (record 15 section 7.2.12): the pended Dx left in its
+         * slot, unclaimed by this pass, so a stop can meet it there; the
+         * other settlement paths are unchanged. */
+        if (hc->QemuSuspHoldDx && funcs[i].CompleteDx &&
+            !funcs[i].CompleteD0 && pdos[i]->PwrIrp != NULL) {
+            if (!pdos[i]->QemuHoldNoted) {
+                pdos[i]->QemuHoldNoted = 1;
+                XhciLogNoteLocked(&hc->Hc, "qemu.susp.hold",
+                                  ((pdos[i]->Serial & 0xFFFFUL) << 16) |
+                                      (pdos[i]->PwrWanted & 0xFFUL));
+            }
+            continue;
+        }
+#endif
         if ((funcs[i].CompleteDx || funcs[i].CompleteD0) &&
             pdos[i]->PwrIrp != NULL) {
+#if defined(XHCI_FLAVOUR_QEMU)
+            HCD_SUSP_QEMU_MARK(pdos[i]->PwrIrp, pdos[i],
+                               HCD_SUSP_QEMU_CLAIM_EXECUTOR);
+#endif
             hcdSuspTake(&taken, pdos[i], pdos[i]->PwrIrp,
                         funcs[i].CompleteD0 ? HCD_SUSP_TAKE_D0
                                             : HCD_SUSP_TAKE_DX);
@@ -3075,6 +3128,11 @@ VOID HcdSuspPdoClose(PHCD_DEVICE_PDO pdo, ULONG removal)
     if (hc != NULL) {
         XhciControllerLockAcquire(&hc->Hc, &oldIrql);
         hcdSuspSlotCloseLocked(pdo, &s);
+#if defined(XHCI_FLAVOUR_QEMU)
+        if (s.Pwr != NULL) {
+            HCD_SUSP_QEMU_MARK(s.Pwr, pdo, HCD_SUSP_QEMU_CLAIM_PDO_CLOSE);
+        }
+#endif
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdThreadWake(hc);
     } else {
@@ -3208,6 +3266,11 @@ ULONG HcdSuspUnlinkLocked(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hcdSuspSlotCloseLocked(pdo, out);
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (out->Pwr != NULL) {
+        HCD_SUSP_QEMU_MARK(out->Pwr, pdo, HCD_SUSP_QEMU_CLAIM_UNLINK);
+    }
+#endif
     /* 8.5: the hardware's wake enable did not survive the device. */
     pdo->FwArmed = 0;
     pdo->ArmNow = 0;
@@ -3431,6 +3494,10 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
             if (pdo->PwrIrp != NULL && pdo->PwrWanted != XHCI_SUSP_D0 &&
                 XhciSuspDxStale(pdo->PwrDxEpoch, hc->PowerEpoch)) {
                 hc->Counters.SuspDxStale++;
+#if defined(XHCI_FLAVOUR_QEMU)
+                HCD_SUSP_QEMU_MARK(pdo->PwrIrp, pdo,
+                                   HCD_SUSP_QEMU_CLAIM_STALE);
+#endif
                 hcdSuspTake(&taken, pdo, pdo->PwrIrp, HCD_SUSP_TAKE_DX);
                 pdo->PwrIrp = NULL;
             }
@@ -4151,3 +4218,37 @@ VOID HcdSuspCbStop(PHCD_CONTROLLER hc)
         }
     }
 }
+
+#if defined(XHCI_FLAVOUR_QEMU)
+/*
+ * Leg T3's first reading (record 15 section 7.2.12), the stop's very first
+ * step, before the finer timer's bar: each PDO whose slot still holds a
+ * pended Dx - its serial, the D-state and PowerPending. IRQL:
+ * PASSIVE_LEVEL; takes PdoListLock, then the controller lock.
+ */
+VOID HcdSuspQemuStopNote(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO pdo;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+    ULONG slot;
+
+    KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        for (pdo = (dev != NULL) ? hcdSuspPdo(dev->Pdo) : NULL; pdo != NULL;
+             pdo = pdo->Sibling) {
+            if (pdo->PwrIrp != NULL && pdo->PwrWanted != XHCI_SUSP_D0) {
+                XhciLogNoteLocked(&hc->Hc, "qemu.stop.dx",
+                                  ((pdo->Serial & 0xFFFFUL) << 16) |
+                                      ((pdo->PwrWanted & 0xFFUL) << 8) |
+                                      ((ULONG)pdo->PowerPending & 0xFFUL));
+            }
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+}
+#endif

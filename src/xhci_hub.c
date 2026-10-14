@@ -478,7 +478,7 @@ static VOID xhciHubPdoDec(XHCI_HUBPDO_TEXT *t, ULONG value)
 
 static VOID xhciHubPdoBase(XHCI_HUBPDO_TEXT *t, ULONG usb3)
 {
-    xhciHubPdoStr(t, usb3 ? "XHCI98\\HUB30" : "XHCI98\\HUB");
+    xhciHubPdoStr(t, usb3 ? XHCI_ID_HUB30 : XHCI_ID_HUB);
 }
 
 static VOID xhciHubPdoVidPid(XHCI_HUBPDO_TEXT *t, const UCHAR *device,

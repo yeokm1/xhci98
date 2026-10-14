@@ -25,9 +25,9 @@
  *
  * Hubs (task 33.4; design record 13 section 10.11). The bus serves every
  * hub itself (hcd_hub.c), and since 33.4 also presents each as a devnode: a
- * PDO here with Hub set and the project-owned ids XHCI98\HUB or
- * XHCI98\HUB30, bound to this driver as a hub FDO (hcd_hubfdo.c). Every PDO
- * names the parent it is presented under (ParentSerial: 0 the root hub,
+ * PDO here with Hub set and the project-owned ids USB\XHCI98_HUB or
+ * USB\XHCI98_HUB30, bound to this driver as a hub FDO (hcd_hubfdo.c). Every
+ * PDO names the parent it is presented under (ParentSerial: 0 the root hub,
  * else a hub PDO's Serial), and a relations answer carries only its own
  * parent's. A gone PDO under a hub PnP has let go of is missing whichever
  * parent answers (hcdAncestorGoneLocked), and a change is announced to the
@@ -38,15 +38,17 @@
  * (31-A.3; xhci_xport.h, hcdXportDecide), and its hardware and compatible
  * ids follow it: only that transport's class ids. A device with no
  * transport it can run shows the project-owned XHCI98_NOXPORT hardware id
- * and no compatible id, and on a companion-paired root port is offered to
- * 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
+ * and no compatible id - but keeps the ordinary VID/PID device id, which
+ * Windows 98 SE adds to the devnode's HardwareID value (xhci_xport.h;
+ * design record 13 section 10.7.1) - and on a companion-paired root port
+ * is offered to 29-A.5's hold (hcdXportRefusal, HcdHoldRequestUsb2).
  *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets one
  * function PDO per function, each an HCD_DEVICE_PDO with Function set, its
  * ids carrying &MI_nn (xhci_func.c), all sharing the one device record and
  * created, listed and unlisted together (the Group). Since task 36.43
  * (section 10.12) the group starts with the device's own PDO, Composite set,
- * under the project-owned XHCI98\COMPOSITE, bound to this driver as a
+ * under the project-owned USB\XHCI98_COMPOSITE, bound to this driver as a
  * composite FDO (hcd_hubfdo.c) whose BusRelations are the functions: their
  * ParentSerial is its Serial, as a hub's children's is the hub PDO's, and
  * every parent rule above reads "a hub or a composite" (HcdPdoIsParent).
@@ -241,7 +243,7 @@ static NTSTATUS hcdXportQueryId(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG which)
 }
 
 /* A hub PDO's device and hardware ids (task 33.4; design record 13 section
- * 10.11): XHCI98\HUB or XHCI98\HUB30, project-owned so no OS hub INF
+ * 10.11): USB\XHCI98_HUB or USB\XHCI98_HUB30, project-owned so no OS hub INF
  * matches, and no compatible id - the query keeps the status it arrived
  * with. Its instance id is any PDO's (hcdInstanceQueryId). */
 static NTSTATUS hcdHubQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
@@ -281,8 +283,8 @@ static NTSTATUS hcdHubQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
 }
 
 /* A composite-parent PDO's device and hardware ids (task 36.43; design
- * record 13 section 10.12): XHCI98\COMPOSITE with the device's VID, PID and
- * REV, project-owned so no OS composite parent or vendor whole-device INF
+ * record 13 section 10.12): USB\XHCI98_COMPOSITE with the device's VID, PID
+ * and REV, project-owned so no OS composite parent or vendor whole-device INF
  * matches, and no compatible id - the query keeps the status it arrived
  * with. Its instance id is any PDO's (hcdInstanceQueryId). */
 static NTSTATUS hcdCompositeQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
@@ -573,6 +575,9 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
     /* Its USB device interface off and its link freed (task 36.17): the
      * one place every deletion passes, before the object goes. */
     HcdDoorDeviceStop(pdo, 1);
+    /* A composite parent's record (task 38.12): its own reference dropped;
+     * a select still holding one keeps the bytes until it is done. */
+    HcdCompositeForget(pdo);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
     if (keep) {
@@ -627,13 +632,53 @@ static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
 }
 
 /*
+ * The Windows 98 SE and ME silent install (task 38.2; design record 13
+ * sections 6.11.2 and 6.11.4): the one writer of pdo->SilentInstall, from
+ * the PDO alone - its Config, its kind (Composite || Function) and its final
+ * transport - and the controller's gate and table, which this start's
+ * hcdReadSilent wrote before the thread existed. Called once the PDO's
+ * fields are final and before it is listed: on both of hcdPdoNew's paths
+ * (HcdDevicePdoCreate, HcdDevicePdoRepresentFunctions). A PDO presented UAS
+ * or refused answers 0 whatever the list says (O2). With the gate on, each
+ * decision is noted as silent.pdo: (RootPort << 24) | (first interface, or
+ * 0xFF for a whole device or a parent, << 16) | (reason << 8) | answer.
+ * Thread only, PASSIVE_LEVEL, no lock held: the gate and table are written
+ * only while no thread exists, and the PDO is not yet listed.
+ */
+static VOID hcdSilentDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
+{
+    ULONG composite;
+    ULONG barred;
+    ULONG reason;
+    ULONG iface;
+
+    composite = (pdo->Composite || pdo->Function) ? 1UL : 0UL;
+    barred = (pdo->Xport.Transport == XHCI_XPORT_UAS ||
+              pdo->Xport.Transport == XHCI_XPORT_REFUSED)
+                 ? 1UL
+                 : 0UL;
+    reason = XhciSilentPdo(hc->SilentGate,
+                           (const UCHAR (*)[4])hc->Silent.Entry,
+                           hc->Silent.Count, pdo->Config, pdo->ConfigLength,
+                           composite, barred);
+    pdo->SilentInstall = (reason == XHCI_SILENT_MATCH) ? 1UL : 0UL;
+    if (hc->SilentGate) {
+        iface = pdo->Function ? (pdo->Func.FirstInterface & 0xFFUL) : 0xFFUL;
+        XhciLogNote(&hc->Hc, "silent.pdo",
+                    ((pdo->RootPort & 0xFFUL) << 24) | (iface << 16) |
+                        ((reason & 0xFFUL) << 8) | pdo->SilentInstall);
+    }
+}
+
+/*
  * A device one of whose PDOs has no transport (31-A.3: UAS-only at
  * SuperSpeed on a controller that does not stream), once per device, before
  * any PDO is listed. Where it sits decides (XhciXportRefusedAt): on a
  * companion-paired root port 29-A.5's hold is asked to send it back to USB
  * 2.0 (HcdHoldRequestUsb2); on a root port with no companion, behind a
  * SuperSpeed hub, or when the hold is not taken, it is refused in place -
- * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids,
+ * its PDOs list with the XHCI98_NOXPORT hardware id and no compatible ids
+ * (the device id stays VID/PID; xhci_xport.h, design record 13 10.7.1),
  * its hub port and siblings untouched. Each place is counted. Returns
  * nonzero when the hold request was accepted - queued for the thread's next
  * pass, which reads the device's identity on the SuperSpeed port, writes PED
@@ -1581,8 +1626,11 @@ static ULONG hcdXportFlags(PHCD_CONTROLLER hc)
     ULONG xportFlags;
 
     xportFlags = 0;
-    if (XhciStreamHcEntries(XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)) !=
-        0) {
+    /* 38.10, XhciStreamsOff (design record 20 section 4.2): a listed
+     * controller reads as streamless here and at OPEN_STREAMS alike. */
+    if (XhciStreamHcEntries(XhciQuirkStreamsHcc1(
+            XhciQuirkOn(&hc->Hc.Quirk, XHCI_QK_STREAMS_OFF),
+            XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1))) != 0) {
         xportFlags |= XHCI_XPORT_F_HC_STREAMS;
     }
     if (HcdCtlForceBulkOnly(hc)) {
@@ -1676,6 +1724,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             last->Sibling = pdo;
         }
         last = pdo;
+    }
+    /* The silent install (38.2, design record 13 section 6.11.4): every
+     * PDO's kind and transport are final here, and none is listed yet. */
+    for (pdo = first; pdo != NULL; pdo = pdo->Sibling) {
+        hcdSilentDecide(hc, pdo);
     }
     /* Their names (33.6), read now, while the device is here - but not
      * for a hub, whose PDO answers a fixed name (task 33.4), nor for a
@@ -2410,6 +2463,9 @@ ULONG HcdDevicePdoRepresentFunctions(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             nu->PwrState = XHCI_SUSP_D3;
             nu->PwrWanted = XHCI_SUSP_D0;
         }
+        /* Decided again over the copied transport, not copied, so the
+         * helper stays the field's one writer (6.11.4). */
+        hcdSilentDecide(hc, nu);
         made[i] = nu;
     }
     done = 0;
@@ -2827,7 +2883,9 @@ static NTSTATUS hcdDeviceCapabilities(PHCD_DEVICE_PDO pdo, PIRP irp)
      * usbhub answers; the location form is unique only under the root
      * hub, and PnP qualifies it. */
     caps->UniqueID = (pdo->SerialId[0] != 0) ? TRUE : FALSE;
-    caps->SilentInstall = FALSE;
+    /* Windows 98 SE and ME only, and off by default (task 38.2; design
+     * record 13 section 6.11): hcdSilentDecide's answer, 0 on NT. */
+    caps->SilentInstall = pdo->SilentInstall ? TRUE : FALSE;
     caps->RawDeviceOK = FALSE;
     /* FALSE, as Windows 2000's usbhub reports a device PDO: the hot-plug
      * applet lists a removable device only when it is FALSE. A split

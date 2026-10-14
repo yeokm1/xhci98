@@ -482,6 +482,23 @@ So the field needs the endpoint's Max Packet Size. That is the reason
 `XhciXferBuildControl` takes EP0's MPS0 and refuses anything but 8/16/32/64
 (USB2 9.6.1 `bMaxPacketSize0`).
 
+**Below xHCI 1.0 the field is in other units** (roadmap-hcd task 38.11,
+design record 17 section 4.14.5). Appendix G ("0.96 Exceptions") does not
+mention TD Size, and no public copy of the 0.96 text was found, so the
+form is Linux's (`xhci-ring.c`, `xhci_td_remainder`, for a controller under
+`0x100`): the bytes of the TD not yet described before TRB n, TRB n's own
+included, shifted right by 10, held to 31 - and returned before the
+last-TRB test, so the last TRB carries its own length in KiB rather than 0:
+
+```
+TD Size(n)            = MIN( 31, ( TD Transfer Size
+                                   - TRB Transfer Length Sum(n - 1) ) >> 10 )
+```
+
+The driver writes this form on a controller whose effective HCIVERSION is
+below `0x0100`, the packet form above, and clears the last TRB's field for
+the packet form only.
+
 ### Control transfers are two or three TDs (spec 4.11.2.2, 6.4.1.2)
 
 Transcribed in full because the obvious reading (one TD with a Setup TRB, some

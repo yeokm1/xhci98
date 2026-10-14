@@ -66,6 +66,14 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
                      ULONG messageConnected, ULONG pinStatus, ULONG pin,
                      ULONG messageSystem, PULONG reason)
 {
+    return XhciPollDecideEx(mode, haveInterrupt, message, messageConnected,
+                            pinStatus, pin, messageSystem, 0, reason);
+}
+
+ULONG XhciPollDecideEx(ULONG mode, ULONG haveInterrupt, ULONG message,
+                       ULONG messageConnected, ULONG pinStatus, ULONG pin,
+                       ULONG messageSystem, ULONG msiAvoid, PULONG reason)
+{
     ULONG unreadable;
 
     unreadable = (pinStatus != XHCI_POLL_PIN_READ) ? 1UL : 0UL;
@@ -90,6 +98,12 @@ ULONG XhciPollDecide(ULONG mode, ULONG haveInterrupt, ULONG message,
         if (mode == XHCI_POLL_MODE_LINE) {
             *reason = XHCI_POLL_R_FORCED_LINE_MESSAGE;
             return XHCI_POLL_DELIVERY_NONE;
+        }
+        /* 38.10: a message this controller would never raise is not
+         * connected; the poll stands in, as for an unconnected one. */
+        if (msiAvoid) {
+            *reason = XHCI_POLL_R_MSI_AVOIDED;
+            return XHCI_POLL_DELIVERY_POLL;
         }
         if (!messageConnected) {
             *reason = XHCI_POLL_R_MESSAGE_NOT_CONNECTED;
@@ -563,6 +577,168 @@ VOID XhciPollObserve(PXHCI_POLL_OBS obs, ULONG now)
     }
     obs->Last = now;
     obs->LastValid = 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* A finer system timer while polling (section 7.2)                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Wanted (section 7.2.6): the switch on, the routine found (or still to be
+ * looked for), the thread not stopping; a poll delivery served; no bar;
+ * the poller granted on a controller in D0 and not suspended in it; and
+ * the poller's last decision ACTIVE.
+ */
+ULONG XhciPollTmrWant(const XHCI_POLL_TMR_IN *in)
+{
+    return (in->Switch && in->Routine && !in->Stop &&
+            in->Delivery == XHCI_POLL_DELIVERY_POLL &&
+            in->Role == XHCI_POLL_ROLE_SERVE && !in->Bar &&
+            in->PollService && in->D0 && !in->SuspendedInD0 && in->Active)
+               ? 1UL
+               : 0UL;
+}
+
+/*
+ * One step of the request (section 7.2.6). HELD gives the request back when
+ * it is not wanted, or - whatever "wanted" reads now - when the boundary
+ * generation has moved since the hold, so no hold crosses a power
+ * transition, a recovery or a stop unreleased. RELEASED takes it when
+ * wanted, recording the generation read with the inputs. The state is the
+ * one the call about to be made leaves; there is no third, so two TRUEs or
+ * a FALSE with nothing held cannot be asked for.
+ */
+ULONG XhciPollTmrStep(PULONG state, PULONG heldGen, ULONG want, ULONG gen)
+{
+    if (*state == XHCI_POLL_TMR_HELD) {
+        if (gen != *heldGen) {
+            *state = XHCI_POLL_TMR_RELEASED;
+            return XHCI_POLL_TMR_RELEASE_FORCED;
+        }
+        if (!want) {
+            *state = XHCI_POLL_TMR_RELEASED;
+            return XHCI_POLL_TMR_RELEASE;
+        }
+        return XHCI_POLL_TMR_NONE;
+    }
+    if (want) {
+        *state = XHCI_POLL_TMR_HELD;
+        *heldGen = gen;
+        return XHCI_POLL_TMR_HOLD;
+    }
+    return XHCI_POLL_TMR_NONE;
+}
+
+/* The cause a release records: the stop over a bar over a boundary over the
+ * poller leaving ACTIVE. */
+ULONG XhciPollTmrCause(ULONG stop, ULONG bar, ULONG forced)
+{
+    if (stop) {
+        return XHCI_POLL_TMR_CAUSE_STOP;
+    }
+    if (bar) {
+        return XHCI_POLL_TMR_CAUSE_BARRED;
+    }
+    if (forced) {
+        return XHCI_POLL_TMR_CAUSE_REVOKED;
+    }
+    return XHCI_POLL_TMR_CAUSE_IDLE;
+}
+
+VOID XhciPollTmrObsReset(PXHCI_POLL_TMR_OBS obs)
+{
+    PUCHAR p;
+    ULONG i;
+
+    p = (PUCHAR)obs;
+    for (i = 0; i < sizeof(*obs); i++) {
+        p[i] = 0;
+    }
+}
+
+/* `sum` + `ms`, held at 0xFFFFFFFF. */
+ULONG XhciPollTmrAddMs(ULONG sum, ULONG ms)
+{
+    return (sum > 0xFFFFFFFFUL - ms) ? 0xFFFFFFFFUL : sum + ms;
+}
+
+/*
+ * One poll run's sample (section 7.2.9): `entryEpoch` read with the run's
+ * entry time `now`, `obsEpoch` and `phase` in the hold where it observes,
+ * the period armed for the run and the start's serial. An incoherent
+ * sample (an odd epoch: a call in flight; or a call landing between entry
+ * and observation) invalidates the baseline; a coherent one with no
+ * baseline, or another epoch, period or start than the baseline's, seeds
+ * a new one; a matching one counts the interval since the baseline when
+ * the period is a short request, and becomes the baseline. A run that
+ * crossed a call, or a hold or release since the baseline, is counted in
+ * Crossed and in no phase.
+ */
+VOID XhciPollTmrObserve(PXHCI_POLL_TMR_OBS obs, ULONG now, ULONG entryEpoch,
+                        ULONG obsEpoch, ULONG phase, ULONG periodMs,
+                        ULONG start)
+{
+    LONG diff;
+    ULONG ms;
+
+    if (entryEpoch != obsEpoch || (obsEpoch & 1UL) != 0) {
+        obs->BaseValid = 0;
+        obs->Crossed++;
+        return;
+    }
+    if (obs->BaseValid && obs->BaseEpoch == obsEpoch &&
+        obs->BasePeriod == periodMs && obs->BaseStart == start &&
+        periodMs <= XHCI_POLL_TMR_SHORT_MS && phase <= XHCI_POLL_TMR_HELD) {
+        diff = (LONG)(now - obs->BaseTime);
+        if (diff >= 0 &&
+            (ULONG)diff <= 2UL * XHCI_POLL_IDLE_MAX_MS *
+                               XHCI_POLL_TICKS_PER_MS) {
+            ms = (ULONG)diff / XHCI_POLL_TICKS_PER_MS;
+            obs->Count[phase]++;
+            obs->SumMs[phase] = XhciPollTmrAddMs(obs->SumMs[phase], ms);
+            if (ms >= periodMs + XHCI_POLL_TMR_LATE_MS) {
+                obs->Late[phase]++;
+            }
+        }
+    } else if (obs->BaseValid && obs->BaseEpoch != obsEpoch) {
+        obs->Crossed++;
+    }
+    obs->BaseValid = 1;
+    obs->BaseTime = now;
+    obs->BaseEpoch = obsEpoch;
+    obs->BasePeriod = periodMs;
+    obs->BaseStart = start;
+}
+
+/*
+ * The whole ms between two system times given as their high and low words,
+ * with no 64-bit arithmetic: 2^32 units are 429496 ms and 7296 units over.
+ * A negative span is 0; one past 10000 high-word laps (about 49 days)
+ * saturates.
+ */
+ULONG XhciPollTmrElapsedMs(ULONG hiThen, ULONG loThen, ULONG hiNow,
+                           ULONG loNow)
+{
+    ULONG hi;
+    ULONG lo;
+    ULONG ms;
+    ULONG extra;
+
+    if (hiNow < hiThen || (hiNow == hiThen && loNow < loThen)) {
+        return 0;
+    }
+    hi = hiNow - hiThen;
+    if (loNow < loThen) {
+        hi--;
+    }
+    lo = loNow - loThen;
+    if (hi >= 10000UL) {
+        return 0xFFFFFFFFUL;
+    }
+    extra = (hi * 7296UL + lo % XHCI_POLL_TICKS_PER_MS) /
+            XHCI_POLL_TICKS_PER_MS;
+    ms = XhciPollTmrAddMs(hi * 429496UL, lo / XHCI_POLL_TICKS_PER_MS);
+    return XhciPollTmrAddMs(ms, extra);
 }
 
 /* ------------------------------------------------------------------ */

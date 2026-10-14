@@ -51,6 +51,11 @@ rem                  Stream ID, the doorbell value and the event's stream
 rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
 rem                  31-A.3): Bulk-Only or UAS for an interface offering
 rem                  either, and the hardware and compatible ids that follow
+rem   test_silent  - the Windows 98 SE and ME silent install (src\xhci_silent.c,
+rem                  task 38.2, design record 13 section 6.11): the gate, the
+rem                  SilentClasses admission and cap, a failed enumeration,
+rem                  the control bits, composite, the package's six, the
+rem                  transport bar, empty lists and malformed descriptors
 rem   test_psw     - the Intel port switchover (src\xhci_psw.c, task 34.3):
 rem                  the device-id gate, the board exemption, the
 rem                  XhciIntelPortSwitch rule, and the route and release over
@@ -60,13 +65,16 @@ rem                  lifetime that releases only it (task 35.5)
 rem   test_poll    - polled event delivery (src\xhci_poll.c, tasks 36.6 to
 rem                  36.8): the three values, the delivery and its reason,
 rem                  the deadlines, the poller's ownership machine and roles,
-rem                  the watcher's verdict, the period and the retirement
-rem   test_msi     - message-signalled interrupts (src\xhci_msi.c and
-rem                  src\xhci_msi86.c, task 36.15, design records 15 and
-rem                  18): the capability read, the requirements list's
-rem                  checked walk, class, strip and no-line rewrite, the
-rem                  filter record, the helper binding, the channel's two
-rem                  halves and the trace record
+rem                  the watcher's verdict, the period and the retirement,
+rem                  and the finer timer's request machine, schedules and
+rem                  phase observer (task 38.3, record 15 section 7.2)
+rem   test_msi     - message-signalled interrupts and the x86 helper
+rem                  (src\xhci_msi.c and src\xhci_hlpr.c, tasks 36.15 and
+rem                  38.3, design records 15 and 18): the capability read,
+rem                  the requirements list's checked walk, class, strip and
+rem                  no-line rewrite, the filter record, the helper binding
+rem                  and its timer event, the channel V2's two halves with
+rem                  each service's verdicts, and the trace record
 rem   test_pirq    - the Intel PCH interrupt routing quirk (src\xhci_pirq.c,
 rem                  task 36.3): the XhciIntelIrqRoute rule, the reviewed
 rem                  pairs, the target PIRQ in APIC and PIC mode, the
@@ -74,6 +82,10 @@ rem                  delivery, and the run over a modelled machine
 rem   test_snap    - the snapshot's HCD region (src\xhci_snap.c, task 35.3):
 rem                  every word of the image located once, in order, and the
 rem                  header's sizes and offsets agreeing with it
+rem   test_quirk   - Linux's xHCI controller quirks (src\xhci_quirk.c, task
+rem                  38.10): each value's reading, value 2, every listed id
+rem                  matched and its neighbours refused, VIA vendor-wide,
+rem                  the packed word, XhciMsiAvoid's decision
 rem   test_tol     - controller tolerance (src\xhci_tol.c, 35-T.9): the three
 rem                  values, the tolerance clock's ticks at each interval's
 rem                  boundary, the interval cap with fast polling, the soft
@@ -140,6 +152,13 @@ rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
 rem
+rem   test_own     - endpoint ring ownership (src\xhci_own.c, task 38.10,
+rem                  design record 20 section 5): every step of an interface
+rem                  switch under every command, SET_INTERFACE, clear and
+rem                  rollback outcome, driven over a modelled controller and
+rem                  ring pool - no ring free while a context may name it,
+rem                  none leaked, the 64-context bound - and the one-setting
+rem                  descriptor walk
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -302,6 +321,10 @@ call :run test_stream "test_stream.c ..\src\xhci_stream.c"
 rem test_xport links nothing else: the transport choice and its ids are pure
 rem computations over descriptor bytes and three flags (task 31-A.3).
 call :run test_xport "test_xport.c ..\src\xhci_xport.c"
+rem test_silent links nothing else: the gate, the list's admission and the
+rem descriptor walk are pure computations over registry values and bytes
+rem (task 38.2).
+call :run test_silent "test_silent.c ..\src\xhci_silent.c"
 rem test_psw links nothing else: the gate, the value rule, the two
 rem sequences and the lifetime are pure, driven over a modelled
 rem configuration space (34.3, 35.5).
@@ -312,7 +335,7 @@ call :run test_pirq "test_pirq.c ..\src\xhci_pirq.c"
 rem test_msi links nothing else: the capability read, the requirements
 rem list's walk, class and strip, the binding and both halves of the x86
 rem helper's channel are pure (36.15, design records 15 and 18).
-call :run test_msi "test_msi.c ..\src\xhci_msi.c ..\src\xhci_msi86.c"
+call :run test_msi "test_msi.c ..\src\xhci_msi.c ..\src\xhci_hlpr.c"
 rem test_snap links xhci_xstat.c beside it: the snapshot's HCD region layout -
 rem where each word lies and what the header says - is pure (task 35.3), and
 rem so is the arithmetic of the transfer-size readings it carries (36.21).
@@ -355,6 +378,14 @@ rem test_xpipe links nothing else: stage 2's TD planner over a URB's wide
 rem mapping (task 36.24, design record 13 section 11.6) is pure.
 call :run test_xpipe "test_xpipe.c ..\src\xhci_xpipe.c"
 call :run test_poll "test_poll.c ..\src\xhci_poll.c"
+rem test_quirk links nothing else: Linux's xHCI controller quirks' values,
+rem lists, match and packed word are pure (task 38.10, design record 20);
+rem their executors' vectors are in the suites of the files they act in.
+call :run test_quirk "test_quirk.c ..\src\xhci_quirk.c"
+rem test_own links nothing else: who holds an endpoint's ring across an
+rem interface switch - each step's decision, the one-setting walk - is pure,
+rem and the suite drives it over a modelled controller and pool (task 38.10).
+call :run test_own "test_own.c ..\src\xhci_own.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

@@ -6,7 +6,11 @@
  * the SMBIOS structure table when it lies above 1 MB, CPUID, and three
  * real-mode services through DPMI 0300h - INT 15h E820, INT 21h 30h/3306h,
  * INT 2Fh 1600h. No PCI access, no port I/O, nothing written but the
- * 32-byte E820 buffer this file allocates and frees.
+ * 32-byte E820 buffer this file allocates and frees. Two things here are
+ * not the system description: sys_dos_creatnew, --log-stamp's exclusive
+ * create (task 38.1), which is here because it needs the same real-mode
+ * call, and sys_crit_install / sys_crit_remove, the INT 24h chain that
+ * turns an Abort into a Fail (DOS-1), which share its DPMI services.
  *
  * No identifiers: see sysinfo.c and qual.h. Nothing here reads a serial
  * number, UUID, asset tag or SKU; the table bytes go straight to
@@ -14,6 +18,7 @@
  */
 
 #include <i86.h>
+#include <stdio.h>
 #include <string.h>
 #include "qual.h"
 
@@ -237,4 +242,182 @@ void sysinfo_probe(SYSINFO *si)
     probe_e820(si);
     probe_dos(si);
     sysinfo_seal(si);
+}
+
+/*
+ * Task 38.1, --log-stamp: INT 21h AH=5Bh ("create new file"), which fails
+ * with 50h where AH=3Ch would truncate, made in real mode.
+ *
+ * Not _dos_creatnew: that issues AH=5Bh in protected mode, and DOS/32A
+ * 9.1.2 (the stub wlink embeds) creates the file but hands EAX back as it
+ * went in, 5B00h, not the handle DOS returned. Measured 2026-10-13 in QEMU
+ * on MS-DOS 7.1: _dos_creatnew answered 0 with handle 5B00h, every write to
+ * it failed with error 6 (invalid handle), and the log stayed 0 bytes,
+ * while the real handle stayed open until exit. Through DPMI 0300h the
+ * real-mode AX comes back as DOS left it. The name has to be in
+ * conventional memory for a real-mode DS:DX, so it goes in a DPMI 0100h
+ * block, freed before return. Writes and the close are protected-mode
+ * AH=40h and AH=3Eh (_dos_write, _dos_close), which DOS/32A passes back
+ * correctly. A write-protected disk raises DOS's Abort, Retry, Fail here
+ * as it would in protected mode: Fail returns an error, Abort ends the
+ * program with exit code 0.
+ */
+unsigned sys_dos_creatnew(const char *name, int *handle)
+{
+    union REGS r;
+    RMREGS rm;
+    size_t len;
+    u16 seg, sel;
+    unsigned rc;
+
+    len = strlen(name);
+    if (len > 127)
+        return 0x03;                    /* path not found */
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0100;
+    r.w.bx = (u16)((len + 1 + 15) / 16);   /* paragraphs */
+    int386(0x31, &r, &r);
+    if (r.w.cflag)
+        return 0x08;                    /* insufficient memory */
+    seg = r.w.ax;
+    sel = r.w.dx;
+    memcpy((void *)((u32)seg << 4), name, len + 1);
+
+    memset(&rm, 0, sizeof(rm));
+    rm.eax = 0x5B00;
+    rm.ecx = 0;                         /* normal attributes */
+    rm.ds = seg;
+    rm.edx = 0;
+    if (!rm_int(0x21, &rm)) {
+        rc = 0x1F;                      /* general failure */
+    } else if (rm.flags & 1) {
+        rc = (u16)rm.eax;
+    } else {
+        *handle = (int)(u16)rm.eax;
+        rc = 0;
+    }
+
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0101;
+    r.w.dx = sel;
+    int386(0x31, &r, &r);
+    return rc;
+}
+
+/*
+ * DOS-1 (38.1 MS-DOS leg): an Abort answer to DOS's Abort, Retry, Fail
+ * killed DOS/32A's next start in the same boot. Abort makes DOS end the
+ * process inside its own critical-error code (MS-DOS 4.0 CTRLC.ASM,
+ * DoAbort: "Transfer exit_inner", an internal jump), never through the
+ * INT 21h vector, so DOS/32A's real-mode INT 21h hook never sees an AH=4Ch
+ * and its exit (text/kernel/exit.asm, int21h_pm) is skipped: the real-mode
+ * INT 21h, 15h, 1Bh, 1Ch, 23h, 24h and 2Fh vectors stay on the freed
+ * extender, and its XMS block and A20 state are kept. The extender guards
+ * Ctrl-C (its client installs a protected-mode INT 23h, which only sets a
+ * flag) but not INT 24h, which stays COMMAND.COM's.
+ *
+ * So the real-mode INT 24h is chained: COMMAND.COM still asks (Retry
+ * still retries), and an Abort comes back to DOS as Fail, which DOS
+ * returns to the call as an error the tool reports itself. Real mode,
+ * not a protected-mode INT 24h, because every DOS call the tool makes -
+ * protected-mode INT 21h too - runs DOS in real mode, so DOS raises the
+ * INT 24h there either way. Where DOS does not allow Fail for that error
+ * the Abort is left alone: DOS would turn a Fail into an Abort anyway.
+ * DOS/32A's exit puts back the INT 24h it saved at start, so a run that
+ * faults before sys_crit_remove leaves no vector on the freed block.
+ */
+static const u8 crit_stub[] = {
+    0x55,                       /* push bp                         */
+    0x50,                       /* push ax       (AH: allowed set) */
+    0x9C,                       /* pushf                           */
+    0x2E, 0xFF, 0x1E, 0x1B, 0x00, /* call far cs:[001Bh]           */
+    0x89, 0xE5,                 /* mov bp,sp                       */
+    0x3C, 0x02,                 /* cmp al,2      (Abort?)          */
+    0x75, 0x08,                 /* jne 16h                         */
+    0xF6, 0x46, 0x01, 0x08,     /* test byte [bp+1],8 (Fail ok?)   */
+    0x74, 0x02,                 /* jz 16h                          */
+    0xB0, 0x03,                 /* mov al,3      (Fail)            */
+    0x83, 0xC4, 0x02,           /* 16h: add sp,2                   */
+    0x5D,                       /* pop bp                          */
+    0xCF                        /* iret                            */
+};
+#define CRIT_OLD_VECTOR 0x1B
+
+static u16 crit_sel;
+static u16 crit_old_seg, crit_old_off;
+
+int sys_crit_install(void)
+{
+    union REGS r;
+    u16 seg;
+    u8 *stub;
+
+    if (crit_sel != 0)
+        return 1;
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0200;
+    r.h.bl = 0x24;
+    int386(0x31, &r, &r);
+    if (r.w.cflag)
+        return 0;
+    crit_old_seg = r.w.cx;
+    crit_old_off = r.w.dx;
+
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0100;
+    r.w.bx = (u16)((CRIT_OLD_VECTOR + 4 + 15) / 16);
+    int386(0x31, &r, &r);
+    if (r.w.cflag)
+        return 0;
+    seg = r.w.ax;
+    crit_sel = r.w.dx;
+    stub = (u8 *)((u32)seg << 4);
+    memcpy(stub, crit_stub, sizeof(crit_stub));
+    stub[CRIT_OLD_VECTOR + 0] = (u8)crit_old_off;
+    stub[CRIT_OLD_VECTOR + 1] = (u8)(crit_old_off >> 8);
+    stub[CRIT_OLD_VECTOR + 2] = (u8)crit_old_seg;
+    stub[CRIT_OLD_VECTOR + 3] = (u8)(crit_old_seg >> 8);
+
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0201;
+    r.h.bl = 0x24;
+    r.w.cx = seg;
+    r.w.dx = 0;
+    int386(0x31, &r, &r);
+    if (r.w.cflag) {
+        memset(&r, 0, sizeof(r));
+        r.w.ax = 0x0101;
+        r.w.dx = crit_sel;
+        int386(0x31, &r, &r);
+        crit_sel = 0;
+        return 0;
+    }
+    return 1;
+}
+
+void sys_crit_remove(void)
+{
+    union REGS r;
+
+    if (crit_sel == 0)
+        return;
+    /* atexit runs before the runtime flushes the streams, and a redirected
+     * stdout's last write can raise INT 24h: it must still find the chain
+     * (Codex review of the 38.1 leg fixes). */
+    fflush(stdout);
+    fflush(stderr);
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0201;
+    r.h.bl = 0x24;
+    r.w.cx = crit_old_seg;
+    r.w.dx = crit_old_off;
+    int386(0x31, &r, &r);
+    /* The block is freed only once nothing points at it. */
+    if (r.w.cflag)
+        return;
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0101;
+    r.w.dx = crit_sel;
+    int386(0x31, &r, &r);
+    crit_sel = 0;
 }

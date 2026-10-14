@@ -71,6 +71,7 @@ SOURCES=xhci_mem.c    \
         hcd_urb.c     \
         hcd_io.c      \
         hcd_cfg.c     \
+        xhci_own.c    \
         xhci_enum.c   \
         xhci_link.c   \
         xhci_psw.c    \
@@ -83,6 +84,7 @@ SOURCES=xhci_mem.c    \
         xhci_stream.c \
         xhci_func.c   \
         xhci_xport.c  \
+        xhci_silent.c \
         xhci_hub.c    \
         hcd_hub.c     \
         xhci_sshub.c  \
@@ -98,8 +100,11 @@ SOURCES=xhci_mem.c    \
         hcd_susp.c    \
         xhci_poll.c   \
         hcd_poll.c    \
+        hcd_tmr.c     \
         xhci_msi.c    \
-        xhci_msi86.c  \
+        xhci_hlpr.c   \
+        xhci_quirk.c  \
+        hcd_quirk.c   \
         hcd_msi86.c   \
         xhci98.rc
 

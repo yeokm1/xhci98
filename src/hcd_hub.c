@@ -1360,6 +1360,7 @@ VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub)
     nreq.DirectionIn = 1;
     nreq.MaxPacketSize = pipe->MaxPacketSize;
     nreq.SgList = &sg;
+    nreq.TdSizeForm = XhciTdSizeFormOf(hc->Hc.HcInfo.HciVersion);
 
     answer = XHCI_XFER_BUSY;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);

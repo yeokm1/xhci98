@@ -3,7 +3,8 @@
  * and the FDO this driver attaches over it in its second role (roadmap-hcd.md
  * task 26-A.4; design record 13 sections 5.2 and 8.6).
  *
- * The root-hub PDO answers IRP_MN_QUERY_ID with XHCI98\ROOT_HUB and no
+ * The root-hub PDO answers IRP_MN_QUERY_ID with USB\XHCI98_ROOT_HUB
+ * (XHCI_ID_ROOT_HUB, xhci_hub.h; XHCI98\ROOT_HUB before 2.4.0.0) and no
  * compatible id, so only this driver's own INF binds it - never usbhub.sys,
  * which a USB\ROOT_HUB* or hub-class compatible id would bring back on top of
  * the bus (section 8.6). Its FDO is this driver again, decided at AddDevice by
@@ -24,7 +25,7 @@
 #include "hcd.h"
 #include "xhci_dbg.h"
 
-static const WCHAR hcdRootHubId[] = L"XHCI98\\ROOT_HUB";
+static const WCHAR hcdRootHubId[] = XHCI_ID_WIDE(XHCI_ID_ROOT_HUB);
 static const WCHAR hcdRootHubText[] = L"xHCI98 USB 3.x Root Hub";
 
 static LONG hcdRootHubSerial;
@@ -296,6 +297,8 @@ static NTSTATUS hcdRootHubCapabilities(PIRP irp)
     caps->Removable = FALSE;
     caps->DockDevice = FALSE;
     caps->UniqueID = FALSE;
+    /* Always FALSE: the silent install (task 38.2; design record 13 section
+     * 6.11.2) walks no configuration for the root hub. */
     caps->SilentInstall = FALSE;
     caps->RawDeviceOK = FALSE;
     caps->SurpriseRemovalOK = FALSE;

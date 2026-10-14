@@ -67,7 +67,16 @@
  *           take the write at all. The halt bound is reused for symmetry.
  */
 #define XHCI_HALT_TIMEOUT_MS        32UL
+/* Task 38.10 (design record 20 section 4.7): the suspend's halt bound on a
+ * controller XhciSuspendHaltTimeout applies to - Linux's ten times its own
+ * suspend bound for the FL1000 (xhci.c:1004-1007), taken as twenty times
+ * this driver's - and the pause XhciSuspendHaltDelay asks for before the
+ * suspend's halt (section 4.6; Linux's 1 to 1.5 ms, xhci.c:985-986). */
+#define XHCI_HALT_SLOW_TIMEOUT_MS   640UL
+#define XHCI_HALT_DELAY_US          1500UL
 #define XHCI_RESET_TIMEOUT_MS       1000UL
+
+static ULONG xhciQuiesceBounded(PXHCI_EXTENSION ext, ULONG haltMs);
 #define XHCI_HANDOFF_TIMEOUT_MS     1000UL
 #define XHCI_RUN_TIMEOUT_MS         XHCI_HALT_TIMEOUT_MS
 
@@ -504,6 +513,25 @@ ULONG XhciWriteCrcrAbort(PXHCI_EXTENSION ext, ULONG *crcrRead)
 /* ------------------------------------------------------------------ */
 
 /*
+ * Capability dword 0 as this driver decodes it (task 38.11, design record 17
+ * section 4.14.4): every read of it passes through here before anything
+ * decodes it - the step 0c check and XhciDeriveControllerInfo - so the floor,
+ * the TD Size form, D2 to D4 and XhciHcInfoEqual's same-controller test all
+ * see one version for the started lifetime. The shipping flavours return the
+ * read unchanged; the qemu flavour applies XhciQemuHciVersion (D7), which the
+ * start latched. IRQL: any.
+ */
+static ULONG xhciEffectiveCapDword0(PXHCI_EXTENSION ext, ULONG raw)
+{
+#if defined(XHCI_FLAVOUR_QEMU)
+    return XhciEffectiveCapDword0(raw, ext->HciQemuVersion);
+#else
+    UNREFERENCED_PARAMETER(ext);
+    return raw;
+#endif
+}
+
+/*
  * Read the whole capability register set and decode it.
  *
  * Called twice in the sequence: once before the BIOS handoff, which needs
@@ -526,7 +554,8 @@ ULONG XhciDeriveControllerInfo(PXHCI_EXTENSION ext, PXHCI_HC_INFO info)
     ULONG dboff;
     ULONG rtsoff;
 
-    capDword0 = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
+    capDword0 = xhciEffectiveCapDword0(ext,
+                                       XhciRead32(ext, XHCI_CAP_CAPLENGTH));
     hcsparams1 = XhciRead32(ext, XHCI_CAP_HCSPARAMS1);
     hcsparams2 = XhciRead32(ext, XHCI_CAP_HCSPARAMS2);
     hccparams1 = XhciRead32(ext, XHCI_CAP_HCCPARAMS1);
@@ -549,7 +578,7 @@ ULONG XhciDeriveControllerInfo(PXHCI_EXTENSION ext, PXHCI_HC_INFO info)
 
     return XhciDeriveHcInfo(capDword0, hcsparams1, hcsparams2, hccparams1,
                             hccparams2, dboff, rtsoff, ext->IoSpaceLength,
-                            info);
+                            ext->HciFloor, info);
 }
 
 /*
@@ -621,8 +650,11 @@ static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
     if ((dw0 & XHCI_USBLEGSUP_BIOS_OWNED) != 0 ||
         (dw0 & XHCI_USBLEGSUP_OS_OWNED) == 0) {
         /* Bits 15:0 of this DWORD are the capability ID and NEXT pointer and
-         * are read-only, so writing the read value back is safe; bit 16 is
-         * read-only from the OS side too. Only bit 24 is ours. */
+         * are read-only, so writing the read value back is safe. Bit 16,
+         * BIOS Owned, is RW in Table 7-4 (p.478) but the BIOS's to clear
+         * (4.22.1, p.309-310), so it goes back exactly as read and this
+         * driver never clears it (design record 20 section 3.3, Q15). Only
+         * bit 24 is ours. */
         XhciWrite32(ext, offset, dw0 | XHCI_USBLEGSUP_OS_OWNED);
 
         if (!XhciWaitForBits(ext, offset, XHCI_USBLEGSUP_BIOS_OWNED, 0,
@@ -3760,9 +3792,24 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
      */
     XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
 
+    /* Task 38.10, XhciSuspendHaltDelay (design record 20 section 4.6): the
+     * pause these AMD parts want before Run/Stop is cleared. A stall, at
+     * least the 1 to 1.5 ms Linux sleeps, bounded and at PASSIVE_LEVEL. */
+    if (XhciQuirkOn(&ext->Quirk, XHCI_QK_HALT_DELAY)) {
+        KeStallExecutionProcessor(XHCI_HALT_DELAY_US);
+        ext->Quirk.HaltDelays++;
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_HALT_DELAY, XHCI_QK_OUT_DONE,
+                         XHCI_QK_WHY_NONE);
+    }
+
     /* Quiesce masks before closing ISR/DPC admission and before the halt, even
-     * when the halt later fails. Win98's unbracketed idle suspend depends on it. */
-    if (!XhciQuiesceController(ext)) {
+     * when the halt later fails. Win98's unbracketed idle suspend depends on it.
+     * The halt bound is the suspend's own on a controller
+     * XhciSuspendHaltTimeout applies to (task 38.10). */
+    if (!xhciQuiesceBounded(ext,
+                            XhciQuirkOn(&ext->Quirk, XHCI_QK_HALT_TIMEOUT)
+                                ? XHCI_HALT_SLOW_TIMEOUT_MS
+                                : XHCI_HALT_TIMEOUT_MS)) {
         /*
          * The controller would neither halt nor give up bus mastering. It is
          * about to be powered down while capable of DMA, and there is nothing
@@ -3808,7 +3855,18 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
      * -the-bus behaviour Phase 4 task 5 deferred and this task repeals - Win98
      * idle-suspends within about a second of every start, so on that target the
      * bus would be dismantled and rebuilt continuously.
+     *
+     * Task 38.10, XhciResumeReinit (design record 20 section 4.3): on a
+     * controller Linux re-initializes at every resume, no save is taken, so
+     * the resume takes the reinitialization a failed restore takes.
      */
+    if (XhciQuirkOn(&ext->Quirk, XHCI_QK_RESUME_REINIT)) {
+        ext->SavedStateValid = 0;
+        ext->Quirk.SavesSkipped++;
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_RESUME_REINIT, XHCI_QK_OUT_DONE,
+                         XHCI_QK_WHY_NONE);
+        return;
+    }
     (VOID)xhciSaveState(ext);
 }
 
@@ -3909,6 +3967,9 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
             }
         }
         if (restored) {
+            /* Task 38.10: a restore, for XhciStuckLinkReset's post-resume
+             * reading (hcd_power.c). */
+            ext->Quirk.Restores++;
             if ((ext->Flags & XHCI_EXT_FLAG_INTERRUPTS) != 0) {
                 XhciEnableInterrupts(ext);
             }
@@ -4298,6 +4359,31 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     return 1;
 }
 
+/* See the contract in src/xhci_hw.h (task 38.10, design record 20 section
+ * 4.5). Written from the record; Linux's xhci_shutdown is cited there for
+ * the order, not copied. IRQL: PASSIVE_LEVEL. */
+ULONG XhciShutdownReset(PXHCI_EXTENSION ext)
+{
+    ULONG usbsts;
+
+    if (ext == NULL || ext->HcInfoStatus != XHCI_HC_OK ||
+        ext->Tol.Unreadable) {
+        return XHCI_QK_WHY_UNREADABLE;
+    }
+    usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+    if (usbsts == 0xFFFFFFFFUL) {
+        return XHCI_QK_WHY_ALL_ONES;
+    }
+    if (!XhciTolHaltProven(usbsts)) {
+        return XHCI_QK_WHY_NOT_HALTED;
+    }
+    if (!xhciReset(ext)) {
+        return XHCI_QK_WHY_RESET_REFUSED;
+    }
+    ext->SavedStateValid = 0;
+    return XHCI_QK_WHY_NONE;
+}
+
 /*
  * See the contract in src/xhci_hw.h: this is the minimum that keeps a running
  * controller from writing into memory usbport has reclaimed, not the lifecycle
@@ -4338,8 +4424,17 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
  * B11 and contradicted it. */
 ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
 {
+    return xhciQuiesceBounded(ext, XHCI_HALT_TIMEOUT_MS);
+}
+
+/* The quiesce with the halt bound named: XHCI_HALT_TIMEOUT_MS everywhere but
+ * the suspend of a controller XhciSuspendHaltTimeout applies to (task
+ * 38.10). Same IRQL contract as XhciQuiesceController. */
+static ULONG xhciQuiesceBounded(PXHCI_EXTENSION ext, ULONG haltMs)
+{
     ULONG usbcmd;
     ULONG usbsts;
+    ULONG halted;
 
     if (ext == NULL) {
         return 1;
@@ -4405,9 +4500,26 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
     (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_RS_CONFIRMED, 0);
     xhciWriteUsbCmdFrom(ext, usbcmd, 0);
 
-    if (!XhciWaitForBits(ext, ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
-                         XHCI_USBSTS_HCH, XHCI_USBSTS_HCH,
-                         XHCI_HALT_TIMEOUT_MS, &usbsts)) {
+    halted = XhciWaitForBits(ext,
+                             ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
+                             XHCI_USBSTS_HCH, XHCI_USBSTS_HCH,
+                             XHCI_HALT_TIMEOUT_MS, &usbsts);
+    /* 38.10, XhciSuspendHaltTimeout (record 20 section 4.7): the suspend's
+     * halt alone waits on, to 640 ms in all; the wait ends at HCH, so a
+     * healthy controller pays nothing, and a halt that needed it is
+     * counted. */
+    if (!halted && haltMs > XHCI_HALT_TIMEOUT_MS && usbsts != 0xFFFFFFFFUL) {
+        ext->Quirk.HaltsLong++;
+        halted = XhciWaitForBits(ext,
+                                 ext->HcInfo.OperationalOffset +
+                                     XHCI_OP_USBSTS,
+                                 XHCI_USBSTS_HCH, XHCI_USBSTS_HCH,
+                                 haltMs - XHCI_HALT_TIMEOUT_MS, &usbsts);
+        XhciQuirkOutcome(&ext->Quirk, XHCI_QK_HALT_TIMEOUT,
+                         halted ? XHCI_QK_OUT_DONE : XHCI_QK_OUT_FAILED,
+                         halted ? XHCI_QK_WHY_NONE : XHCI_QK_WHY_NOT_HALTED);
+    }
+    if (!halted) {
         /*
          * The spec's 16 ms halt bound is unconditional ("irrespective of any
          * queued Transfer or Command Ring activity", 5.4.1.1), so a controller
@@ -4782,12 +4894,36 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     /* Step 0c: MMIO sanity, before any register that has a side effect. */
     ext->InitStep = XHCI_INIT_STEP_CAP_SANITY;
     value = XhciRead32(ext, XHCI_CAP_CAPLENGTH);
-    status = XhciCheckCapDword0(value, ext->IoSpaceLength, NULL, NULL);
     XHCI_DBG_VALUE("CAPLENGTH/HCIVERSION dword", value);
+    /*
+     * Task 38.11 (design record 17 section 4.14.7): the version recorded
+     * before it is checked, so a refused start's counter dump and notes say
+     * what was refused - the register's own and, under the qemu flavour's
+     * override, the one decoded in its place.
+     */
+    {
+        ULONG effective;
+
+        effective = xhciEffectiveCapDword0(ext, value);
+        ext->HciVersionRegister = XHCI_HCIVERSION_OF(value);
+        ext->HciVersionEffective = XHCI_HCIVERSION_OF(effective);
+        ext->HciOverrideApplied = (effective != value) ? 1UL : 0UL;
+        ext->HciTdSizeForm = 0;
+        ext->HciVersionRead = 1;
+        XhciLogNote(ext, "hc.version", ext->HciVersionEffective);
+        if (ext->HciOverrideApplied) {
+            XhciLogNote(ext, "qemu.hciversion", ext->HciVersionEffective);
+            XhciLogNote(ext, "hc.version.register", ext->HciVersionRegister);
+        }
+        value = effective;
+    }
+    status = XhciCheckCapDword0(value, ext->IoSpaceLength, ext->HciFloor,
+                                NULL, NULL);
     if (status != XHCI_HC_OK) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_CAP_SANITY, status,
                               MP_STATUS_HW_ERROR);
     }
+    ext->HciTdSizeForm = XhciTdSizeFormOf(ext->HciVersionEffective);
 
     /* Step 5, early: the handoff needs HCCPARAMS1.xECP, so the whole
      * capability set is decoded now and re-decoded after the reset. */
@@ -4819,7 +4955,6 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * not be able to meet. A log without them describes a controller the reader
      * has to guess at.
      */
-    XhciLogNote(ext, "hc.version", ext->HcInfo.HciVersion);
     XhciLogNote(ext, "hc.maxslots", ext->HcInfo.MaxSlots);
     XhciLogNote(ext, "hc.maxports", ext->HcInfo.MaxPorts);
     XhciLogNote(ext, "hc.maxintrs", ext->HcInfo.MaxIntrs);

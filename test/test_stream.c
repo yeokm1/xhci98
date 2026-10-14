@@ -506,8 +506,99 @@ static void test_layout_placed(void)
     CHECK_EQ(l.TotalBytes, 32768UL, "as before");
 }
 
+/*
+ * Task 38.10, XhciStreamRingPad (design record 20 section 4.12): both
+ * layouts padded and not. Padded, every ring keeps its place and its
+ * alignment, and a full ring's bytes of driver memory follow the last
+ * stream's ring inside the block; the unpadded names are the padded ones
+ * at 0.
+ */
+static void test_ring_pad(void)
+{
+    XHCI_STREAM_LAYOUT a;
+    XHCI_STREAM_LAYOUT b;
+    ULONG plain;
+    ULONG padded;
+    ULONG e;
+    ULONG s;
+    ULONG id;
+    ULONG bad;
+    static const ULONG ents[] = { 4, 8, 16, 32 };
+    static const ULONG trbs[] = { 4, 64, 256 };
+    ULONG t;
+
+    bad = 0;
+    for (e = 0; e < sizeof(ents) / sizeof(ents[0]); e++) {
+        for (s = 1; s < ents[e]; s++) {
+            for (t = 0; t < sizeof(trbs) / sizeof(trbs[0]); t++) {
+                if (XhciStreamLayoutPad(ents[e], s, trbs[t], 0, &a) !=
+                        XHCI_STREAM_OK ||
+                    XhciStreamLayout(ents[e], s, trbs[t], &b) !=
+                        XHCI_STREAM_OK ||
+                    a.TotalBytes != b.TotalBytes || a.RingBase != b.RingBase) {
+                    bad++;
+                    continue;
+                }
+                if (XhciStreamLayoutPad(ents[e], s, trbs[t], 1, &b) !=
+                        XHCI_STREAM_OK ||
+                    b.RingBase != a.RingBase || b.RingBytes != a.RingBytes ||
+                    b.ArrayBytes != a.ArrayBytes ||
+                    (b.TotalBytes % 4096UL) != 0) {
+                    bad++;
+                    continue;
+                }
+                for (id = 1; id <= s; id++) {
+                    if (XhciStreamRingOffset(&b, id) !=
+                        XhciStreamRingOffset(&a, id)) {
+                        bad++;
+                    }
+                }
+                if (XhciStreamRingOffset(&b, s) + 2UL * b.RingBytes >
+                    b.TotalBytes) {
+                    bad++;
+                }
+            }
+        }
+    }
+    CHECK_EQ(bad, 0UL, "padded: the rings unmoved, a ring's room after the "
+             "last, whole pages; 0 is today's layout");
+    CHECK_EQ(XhciStreamLayoutPad(4, 3, 64, 1, &b), XHCI_STREAM_OK,
+             "4 entries padded");
+    CHECK_EQ(b.TotalBytes, 8192UL, "1 KB + 3 KB + 1 KB: two pages");
+
+    bad = 0;
+    for (e = 0; e < sizeof(ents) / sizeof(ents[0]); e++) {
+        for (s = 1; s < ents[e]; s++) {
+            if (XhciStreamBigBytesPad(ents[e], s, 0, &plain) !=
+                    XHCI_STREAM_OK ||
+                XhciStreamBigBytesPad(ents[e], s, 1, &padded) !=
+                    XHCI_STREAM_OK ||
+                padded != plain + 16384UL) {
+                bad++;
+                continue;
+            }
+            if (XhciStreamLayoutPlacedPad(ents[e], s, 0x1000F000UL, 0, 1,
+                                          &b) != XHCI_STREAM_OK ||
+                XhciStreamLayoutPlaced(ents[e], s, 0x1000F000UL, 0, &a) !=
+                    XHCI_STREAM_OK ||
+                b.TotalBytes != padded || a.RingBase != b.RingBase ||
+                XhciStreamRingOffset(&b, s) + 2UL * b.RingBytes >
+                    b.TotalBytes) {
+                bad++;
+            }
+        }
+    }
+    CHECK_EQ(bad, 0UL, "the big layout padded by one 16 KiB ring, rings "
+             "placed as before");
+    CHECK_EQ(XhciStreamLayoutPlacedPad(32, 31, 0xFFF7C000UL, 0, 1, &b),
+             XHCI_STREAM_OK, "a padded block that ends at 4 GiB");
+    CHECK_EQ(XhciStreamLayoutPlacedPad(32, 31, 0xFFF80000UL, 0, 1, &b),
+             XHCI_STREAM_BAD_PARAM, "one that would wrap 32 bits");
+}
+
 int main(void)
 {
+    test_ring_pad();
     test_hc_entries();
     test_layout_placed();
     test_companion();

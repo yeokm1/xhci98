@@ -534,60 +534,61 @@ VOID XhciMsiFilterPublish(PXHCI_MSI_FILTER_RECORD record, ULONG listClass,
     record->Outcome = outcome;
 }
 
-VOID XhciMsi86BindInit(PXHCI_MSI86_BIND bind)
+VOID XhciHlprBindInit(PXHCI_HLPR_BIND bind)
 {
-    bind->State = XHCI_MSI86_STATE_UNSEEN;
+    bind->State = XHCI_HLPR_STATE_UNSEEN;
     bind->Held = 0;
     bind->Looks = 0;
 }
 
-ULONG XhciMsi86BindStep(PXHCI_MSI86_BIND bind, ULONG event)
+ULONG XhciHlprBindStep(PXHCI_HLPR_BIND bind, ULONG event)
 {
     ULONG act;
 
     act = 0;
     switch (event) {
-    case XHCI_MSI86_EV_FILTER:
-    case XHCI_MSI86_EV_START:
-        if (bind->State != XHCI_MSI86_STATE_BOUND &&
-            bind->State != XHCI_MSI86_STATE_REMOVED) {
+    case XHCI_HLPR_EV_FILTER:
+    case XHCI_HLPR_EV_START:
+    case XHCI_HLPR_EV_TIMER:
+        if (bind->State != XHCI_HLPR_STATE_BOUND &&
+            bind->State != XHCI_HLPR_STATE_REMOVED) {
             bind->Looks++;
-            act = XHCI_MSI86_ACT_LOOK;
+            act = XHCI_HLPR_ACT_LOOK;
         }
         break;
-    case XHCI_MSI86_EV_REMOVE:
+    case XHCI_HLPR_EV_REMOVE:
         if (bind->Held) {
-            act = XHCI_MSI86_ACT_DROP;
+            act = XHCI_HLPR_ACT_DROP;
         }
         bind->Held = 0;
-        bind->State = XHCI_MSI86_STATE_REMOVED;
+        bind->State = XHCI_HLPR_STATE_REMOVED;
         break;
-    case XHCI_MSI86_EV_LOOK_ABSENT:
-        if (bind->State != XHCI_MSI86_STATE_BOUND &&
-            bind->State != XHCI_MSI86_STATE_REMOVED) {
-            bind->State = XHCI_MSI86_STATE_ABSENT;
+    case XHCI_HLPR_EV_LOOK_ABSENT:
+        if (bind->State != XHCI_HLPR_STATE_BOUND &&
+            bind->State != XHCI_HLPR_STATE_REMOVED) {
+            bind->State = XHCI_HLPR_STATE_ABSENT;
         }
         break;
-    case XHCI_MSI86_EV_LOOK_FAILED:
-        act = XHCI_MSI86_ACT_DROP_LOOK;
-        if (bind->State != XHCI_MSI86_STATE_BOUND &&
-            bind->State != XHCI_MSI86_STATE_REMOVED) {
-            bind->State = XHCI_MSI86_STATE_ABSENT;
+    case XHCI_HLPR_EV_LOOK_FAILED:
+        act = XHCI_HLPR_ACT_DROP_LOOK;
+        if (bind->State != XHCI_HLPR_STATE_BOUND &&
+            bind->State != XHCI_HLPR_STATE_REMOVED) {
+            bind->State = XHCI_HLPR_STATE_ABSENT;
         }
         break;
-    case XHCI_MSI86_EV_LOOK_REFUSED:
-        act = XHCI_MSI86_ACT_DROP_LOOK;
-        if (bind->State != XHCI_MSI86_STATE_BOUND &&
-            bind->State != XHCI_MSI86_STATE_REMOVED) {
-            bind->State = XHCI_MSI86_STATE_REFUSED;
+    case XHCI_HLPR_EV_LOOK_REFUSED:
+        act = XHCI_HLPR_ACT_DROP_LOOK;
+        if (bind->State != XHCI_HLPR_STATE_BOUND &&
+            bind->State != XHCI_HLPR_STATE_REMOVED) {
+            bind->State = XHCI_HLPR_STATE_REFUSED;
         }
         break;
-    case XHCI_MSI86_EV_LOOK_ACCEPTED:
-        if (bind->State == XHCI_MSI86_STATE_BOUND ||
-            bind->State == XHCI_MSI86_STATE_REMOVED) {
-            act = XHCI_MSI86_ACT_DROP_LOOK;
+    case XHCI_HLPR_EV_LOOK_ACCEPTED:
+        if (bind->State == XHCI_HLPR_STATE_BOUND ||
+            bind->State == XHCI_HLPR_STATE_REMOVED) {
+            act = XHCI_HLPR_ACT_DROP_LOOK;
         } else {
-            bind->State = XHCI_MSI86_STATE_BOUND;
+            bind->State = XHCI_HLPR_STATE_BOUND;
             bind->Held = 1;
         }
         break;

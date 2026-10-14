@@ -83,7 +83,10 @@ Controller").
    the initial capability-register sanity reads.
 2. Halt the controller: clear USBCMD.RUN. Poll USBSTS.HCH = 1.
 3. Reset: set USBCMD.HCRST = 1. Poll USBCMD.HCRST = 0 and USBSTS.CNR = 0.
-4. Check HCIVERSION: must be >= 0x0100. Bail if not. In practice re-derive
+4. Check HCIVERSION: must be >= 0x0100, or >= 0x0096 under
+   `XhciAccept096` (its default; roadmap-hcd task 38.11, design record 17
+   section 4.14: a controller below 1.0 is then driven by the 0.96 rules of
+   that section). Bail if not. In practice re-derive
    the whole capability set here and compare it field for field with the
    pre-handoff decode. The question this step exists to answer is whether the
    far end of the mapping is still the same controller, and six extra reads
@@ -768,7 +771,7 @@ So `Auto` means "the OS driver does the switchover", and a driver that never wri
 What Linux does at probe is `USB3_PSSEN = USB3PRM; XUSB2PR = XUSB2PRM`: claim every switchable port, terminations first. **Since `2.1.1.0` this driver does the same** (roadmap-hcd task 34.3, superseding the Phase 4 decision recorded at the end of Phase 4 in `docs/contributing/roadmap.md`):
 
 - **The gate.** Intel `8086` and device id 1E31, 8C31, 9C31, 8CB1, 9CB1 or 8D31, not the Sony board `104D:90A8` that Linux exempts, and a subsystem id that could be read. On any other controller the switchover reads PCI offset 0 and nothing else.
-- **The switch.** `XhciIntelPortSwitch` in the controller's driver key; a DWORD that is not 0 turns it on, and since `2.3.0.0` (roadmap-hcd task 36.42) both INFs write it at 0 under FLG_ADDREG_NOCLOBBER and absent is off, so the routing is firmware's unless the user turns it on (`portsw.vbs`, in the download's `portsw\` since roadmap-hcd task 37.5, does). Up to `2.2.0.0` the default was on.
+- **The switch.** `XhciIntelPortSwitch` in the controller's driver key; a DWORD that is not 0 turns it on, and since `2.3.0.0` (roadmap-hcd task 36.42) both INFs write it at 0 under FLG_ADDREG_NOCLOBBER and absent is off, so the routing is firmware's unless the user turns it on (`portsw.vbs`, in the download's `tools\portsw\` since roadmap-hcd task 38.9 and in `portsw\` at the version root from task 37.5 until then, does). Up to `2.2.0.0` the default was on.
 - **When.** Route (`USB3_PSSEN = USB3PRM`, then `XUSB2PR = XUSB2PRM`, each read back) at each start before `XhciInitController` and at each return to D0; release (`USB3_PSSEN = 0`, then `XUSB2PR = 0`) after the halt at every stop and at a refused start, and at a system shutdown's D3. A sleep keeps the routing. Every access is best effort and goes through `HcdSvcConfigSpace` (`IRP_MN_READ_CONFIG` / `IRP_MN_WRITE_CONFIG`), so no new import.
 - **The log.** `psw.gate`, `psw.value.found` and `psw.value` (`psw.value` 0 means turned off only when `psw.value.found` is 1), the two masks and the two read-backs, `psw.route.step` and `psw.release.*`, in the log ring with `XhciLogVerbosity` raised, which `XHCISNAP` prints.
 

@@ -175,6 +175,7 @@ static void iso_request(XHCI_ISO_REQUEST *req,
                         ULONG maxBurstSize)
 {
     req->Iso = &iso->Block;
+    req->TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     req->DirectionIn = directionIn;
     req->MaxPacketSize = maxPacketSize;
     req->MaxBurstSize = maxBurstSize;
@@ -448,6 +449,83 @@ static void test_build_one_packet(void)
              "a one-packet OUT request builds");
     CHECK_EQ(out[0].Control, ISO_SIA | ISO_TRB_TYPE | ISO_IOC,
              "and carries no ISP");
+}
+
+/*
+ * Task 38.11 (design record 17 sections 4.14.5 and 4.14.6, D1 and D3): TD
+ * Size per TD in both forms, and TBC and TLBPC written 0 below 1.0. A
+ * SuperSpeed IN endpoint at 1024 with Max Burst Size 1 and three bursts an
+ * interval (Max ESIT Payload 6144), three packets: 3072 split 2048 + 1024
+ * (TDPC 3: TBC 1, TLBPC 0), 5000 (TDPC 5: TBC 2, TLBPC 0) and 4096 (TDPC 4:
+ * TBC 1, TLBPC 1). Packets: the split TD's first TRB 3 - 2 = 1, every last
+ * 0. KiB: 3072 >> 10 = 3 then the last's 1024 >> 10 = 1, 5000 >> 10 = 4 and
+ * 4096 >> 10 = 4. Every word of every TRB is asserted.
+ */
+static void test_build_td_size_forms(void)
+{
+    ISO_BUFFER iso;
+    XHCI_ISO_REQUEST req;
+    XHCI_ISO_LAYOUT layout;
+    XHCI_TRB out[8];
+    ULONG form;
+    ULONG kib;
+    ULONG i;
+    static const ULONG pa[4] = { 0x0B300800UL, 0x0B301000UL, 0x0B400000UL,
+                                 0x0B500000UL };
+    static const ULONG len[4] = { 2048, 1024, 5000, 4096 };
+    static const ULONG tdsPackets[4] = { 1, 0, 0, 0 };
+    static const ULONG tdsKib[4] = { 3, 1, 4, 4 };
+    static const ULONG burst[4] = { ISO_TBC(1) | ISO_TLBPC(0), 0,
+                                    ISO_TBC(2) | ISO_TLBPC(0),
+                                    ISO_TBC(1) | ISO_TLBPC(1) };
+    static const ULONG shape[4] = { ISO_TRB_TYPE | ISO_ISP | ISO_CH | ISO_SIA,
+                                    (1UL << 10) | ISO_ISP | ISO_IOC,
+                                    ISO_TRB_TYPE | ISO_ISP | ISO_IOC | ISO_SIA,
+                                    ISO_TRB_TYPE | ISO_ISP | ISO_IOC |
+                                        ISO_SIA };
+
+    for (form = XHCI_TD_SIZE_FORM_PACKETS; form <= XHCI_TD_SIZE_FORM_KIB;
+         form++) {
+        kib = (form == XHCI_TD_SIZE_FORM_KIB) ? 1UL : 0UL;
+        iso_init(&iso);
+        iso_add_split(&iso, pa[0], 2048, 1024, 500);
+        iso_add(&iso, pa[2], 5000, 501);
+        iso_add(&iso, pa[3], 4096, 502);
+        iso_request(&req, &iso, 1, 1024, 1);
+        req.MaxEsitPayload = 6144;
+        req.TdSizeForm = form;
+        CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_OK,
+                 kib ? "0.96 isoch builds" : "1.0 isoch builds");
+        CHECK_EQ(layout.TrbCount, 4UL, "four TRBs");
+        CHECK_EQ(layout.TdCount, 3UL, "three TDs");
+        for (i = 0; i < 4; i++) {
+            CHECK_EQ(out[i].Param0, pa[i], "buffer pointer");
+            CHECK_EQ(out[i].Param1, 0UL, "no 64-bit DMA");
+            CHECK_EQ(out[i].Status,
+                     len[i] | ((kib ? tdsKib[i] : tdsPackets[i]) << 17),
+                     kib ? "0.96: TD Size in KiB, the last TRB included"
+                         : "1.0: TD Size in packets, 0 on the last");
+            CHECK_EQ(out[i].Control, shape[i] | (kib ? 0UL : burst[i]),
+                     kib ? "0.96: TBC and TLBPC 0 (D3)"
+                         : "1.0: TBC and TLBPC as 4.11.2.3 computes them");
+        }
+    }
+
+    /* A packet past the Max ESIT Payload is still refused below 1.0, and a
+     * request with no form is refused. */
+    iso_init(&iso);
+    iso_add(&iso, pa[2], 6145, 501);
+    iso_request(&req, &iso, 1, 1024, 1);
+    req.MaxEsitPayload = 6144;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_KIB;
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout),
+             XHCI_XFER_ISO_MALFORMED, "0.96: over the ESIT payload refused");
+    iso_init(&iso);
+    iso_add(&iso, pa[2], 192, 501);
+    iso_request(&req, &iso, 1, 1024, 0);
+    req.TdSizeForm = 0;
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_BAD_PARAM,
+             "an isoch request with TdSizeForm 0 refused");
 }
 
 static void test_build_zero_length_packet(void)
@@ -927,6 +1005,7 @@ static void test_build_refusals(void)
     CHECK_EQ(XhciXferBuildIso(NULL, 0, out, 8, &layout), XHCI_XFER_BAD_PARAM,
              "NULL request");
     req.Iso = NULL;
+    req.TdSizeForm = XHCI_TD_SIZE_FORM_PACKETS;
     CHECK_EQ(XhciXferBuildIso(&req, 0, out, 8, &layout), XHCI_XFER_ISO_MALFORMED,
              "a NULL block is checked even though usbport cannot produce one");
 }
@@ -1911,14 +1990,174 @@ static void test_submit_across_the_link(void)
              "while the TD's last TRB after the wrap clears it");
 }
 
+/*
+ * Task 38.10, XhciIsochSpuriousSuccess (design record 20 section 4.14): a
+ * Success naming the TRB the queue's last event completed with a
+ * Transaction Error, a Babble or an Isoch Buffer Overrun is counted and
+ * dropped, with its request still pending and already retired: no packet
+ * is answered twice, no later packet or request is consumed, and nothing
+ * asks for recovery. Out of scope, the same event takes today's path.
+ */
+static void spurious_after(ULONG errorCode)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    PUSBPORT_ISO_PACKET packet;
+    ULONG answered;
+    ULONG unmatched;
+
+    /* Pending: three packets, the first in error, then its Success. */
+    iso_fixture_init(&fix, 32);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+    packet = fix.iso[0].Block.Packet;
+    CHECK_EQ(iso_event(&fix, 0, errorCode, 0, &result), XHCI_XFER_OK,
+             "the error");
+    answered = fix.queue.IsoPacketsAnswered;
+    unmatched = fix.queue.UnmatchedEvents;
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "the spurious Success");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 1UL, "dropped and counted");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "nothing completed");
+    CHECK_EQ(result.NeedsRecovery, 0UL, "no recovery");
+    CHECK_EQ(result.RefusedRetire, 0UL, "no refused retire");
+    CHECK_EQ(fix.queue.IsoPacketsAnswered, answered, "no packet answered");
+    CHECK_EQ(fix.queue.UnmatchedEvents, unmatched, "not even as unmatched");
+    CHECK((ULONG)packet[0].Status != WANT_USBD_SUCCESS,
+               "packet 0 keeps its error");
+    CHECK_EQ(fix.transfers[0].IsoPacketsAnswered, 1UL, "packet 1 unanswered");
+    /* The later packets still complete the request, as they would have. */
+    CHECK_EQ(iso_event(&fix, 1, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "packet 1");
+    CHECK_EQ(packet[1].LengthTransferred, 192UL, "packet 1 its own");
+    CHECK_EQ(iso_event(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "packet 2");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the request ends");
+    CHECK_EQ(fix.queue.Count, 0UL, "on its own tail");
+
+    /* Retired: a one-packet request the error ended, then its Success,
+     * with a second request queued behind it. */
+    iso_fixture_init(&fix, 32);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 1, 192), XHCI_XFER_OK, "one");
+    CHECK_EQ(iso_fixture_submit(&fix, 1, 1, 192), XHCI_XFER_OK, "two");
+    CHECK_EQ(iso_event(&fix, 0, errorCode, 0, &result), XHCI_XFER_OK,
+             "the error retires the first");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the first ends");
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "its spurious Success");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 1UL, "dropped");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "the second untouched");
+    CHECK_EQ(fix.queue.Count, 1UL, "still queued");
+    CHECK_EQ(fix.transfers[1].IsoPacketsAnswered, 0UL,
+             "and not consumed by it");
+
+    /* Out of scope: today's handling, a duplicate counted unmatched. */
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+    CHECK_EQ(iso_event(&fix, 0, errorCode, 0, &result), XHCI_XFER_OK,
+             "the error");
+    unmatched = fix.queue.UnmatchedEvents;
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "the Success, no quirk");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "not dropped");
+    CHECK_EQ(fix.queue.UnmatchedEvents, unmatched + 1UL,
+             "a duplicate, as before");
+}
+
+/* Review round 1: the error's TRB re-let to a later request - the ring
+ * lapped - is that request's, and its Success is never taken for the old
+ * error's duplicate. */
+static void spurious_not_after_reuse(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG i;
+
+    /* Five requests completed at 0 to 4; then, as an aborted request
+     * would leave it, the last event an error at 5 that no later event
+     * replaced. Index 5 re-let to a new request forgets it. */
+    iso_fixture_init(&fix, 8);
+    fix.queue.IsoSpuriousScope = 1;
+    for (i = 0; i < 5; i++) {
+        CHECK_EQ(iso_fixture_submit(&fix, i % 4, 1, 192), XHCI_XFER_OK,
+                 "fill");
+        CHECK_EQ(iso_event(&fix, i, XHCI_CC_SUCCESS, 0, &result),
+                 XHCI_XFER_OK, "complete");
+    }
+    fix.queue.IsoLastEventPA = RING_PA + 5UL * 16UL;
+    fix.queue.IsoLastEventCode = XHCI_CC_BABBLE;
+    CHECK_EQ(iso_fixture_submit(&fix, 1, 1, 192), XHCI_XFER_OK,
+             "5 re-let");
+    CHECK_EQ(fix.queue.IsoLastEventPA, 0UL, "the remembered error forgotten");
+    CHECK_EQ(iso_event(&fix, 5, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "its own Success");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "not dropped");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "the request ends");
+
+    /* An error whose pointer carried reserved low bits is remembered as
+     * the engine reads it, so its TRB re-let forgets it too. */
+    iso_fixture_init(&fix, 8);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 1, 192), XHCI_XFER_OK, "at 0");
+    CHECK_EQ(XhciXferIsoEvent(&fix.queue, &fix.ring, ISO_FIX_SLOT,
+                              ISO_FIX_DCI, RING_PA | 1UL,
+                              event_dw2(XHCI_CC_BABBLE, 0),
+                              event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), &result),
+             XHCI_XFER_OK, "a Babble with a low bit set");
+    CHECK_EQ(fix.queue.IsoLastEventPA, RING_PA, "remembered without it");
+    CHECK_EQ(XhciXferIsoEvent(&fix.queue, &fix.ring, ISO_FIX_SLOT,
+                              ISO_FIX_DCI, RING_PA | 1UL,
+                              event_dw2(XHCI_CC_SUCCESS, 0),
+                              event_dw3(ISO_FIX_SLOT, ISO_FIX_DCI), &result),
+             XHCI_XFER_OK, "its Success, the same low bit");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 1UL, "dropped as the same TRB");
+
+    /* A restart forgets it too. */
+    fix.queue.IsoLastEventPA = RING_PA;
+    fix.queue.IsoLastEventCode = XHCI_CC_BABBLE;
+    CHECK_EQ(XhciXferQueueRestart(&fix.queue), 1UL, "restarted empty");
+    CHECK_EQ(fix.queue.IsoLastEventPA, 0UL, "forgotten at a restart");
+}
+
+static void test_spurious_success(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+
+    spurious_not_after_reuse();
+    spurious_after(XHCI_CC_USB_TRANSACTION_ERROR);
+    spurious_after(XHCI_CC_BABBLE);
+    spurious_after(XHCI_CC_ISOCH_BUFFER_OVERRUN);
+
+    /* A Success after a Short Packet, or for another TRB, is not this. */
+    iso_fixture_init(&fix, 32);
+    fix.queue.IsoSpuriousScope = 1;
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+    CHECK_EQ(iso_event(&fix, 0, XHCI_CC_USB_TRANSACTION_ERROR, 0, &result),
+             XHCI_XFER_OK, "an error on packet 0");
+    CHECK_EQ(iso_event(&fix, 1, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "a Success on packet 1");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL, "another TRB: kept");
+    CHECK_EQ(fix.transfers[0].IsoPacketsAnswered, 2UL, "packet 1 answered");
+    CHECK_EQ(iso_event(&fix, 2, XHCI_CC_SHORT_PACKET, 10, &result),
+             XHCI_XFER_OK, "a short packet 2");
+    CHECK_EQ(iso_event(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+             "a Success after it");
+    CHECK_EQ(fix.queue.IsoSpuriousDropped, 0UL,
+             "after a Short Packet: not this quirk's");
+}
+
 int main(void)
 {
+    test_spurious_success();
     test_iso_code_info();
     test_frame_window();
     test_build_one_packet();
     test_build_zero_length_packet();
     test_build_split_packet();
     test_build_burst_fields();
+    test_build_td_size_forms();
     test_build_multiple_packets();
     test_build_frame_ids();
     test_build_refusals();

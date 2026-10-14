@@ -66,7 +66,7 @@ Copy-Item -LiteralPath (Join-Path $qualDir "xhciqual.exe") -Destination (Join-Pa
 if (Test-Path -LiteralPath (Join-Path $qualDir "xhciqual.map")) {
     Copy-Item -LiteralPath (Join-Path $qualDir "xhciqual.map") -Destination (Join-Path $hddDir "XHCIQUAL.MAP") -Force
 }
-foreach ($bat in @("1PROBE.BAT","2XPOLL.BAT","3XIRQ.BAT","4XEMPTY.BAT","5XDEV.BAT")) {
+foreach ($bat in @("1PROBE.BAT","2XPOLL.BAT","3XIRQ.BAT","4XEMPTY.BAT","5XDEV.BAT","QUALREP.BAT")) {
     $src = Join-Path $qualDir $bat
     if (Test-Path -LiteralPath $src) {
         $text = [IO.File]::ReadAllText($src) -replace "`r`n","`n" -replace "`n","`r`n"
@@ -88,6 +88,70 @@ $prescanBat = @(
 )
 $prescanText = ($prescanBat -join "`r`n") + "`r`n"
 [IO.File]::WriteAllText((Join-Path $hddDir "PSCAN.BAT"), $prescanText)
+# Task 38.1: QUALREP twice in one boot, with the guest clock pinned (-rtc
+# below) so the names are known: the second run in the same minute takes
+# the next letter, and DIR /B lists both, in creation order.
+$qrTwice = @(
+    "@echo off",
+    "call QUALREP",
+    "call QUALREP",
+    "cls",
+    "dir /b A1314*.LOG",
+    "echo QRTWICE_DONE"
+)
+[IO.File]::WriteAllText((Join-Path $hddDir "QRTWICE.BAT"), (($qrTwice -join "`r`n") + "`r`n"))
+# The 38.1 MS-DOS leg found --log-stamp logs of 0 bytes behind a screen that
+# said "Log written": the screen alone cannot prove the file. So QUALREP
+# runs, then a plain --log run of the same probe, and both files are copied
+# to COM1 (a QEMU file backend), read back on the host and compared: the
+# stamped log must be the plain one plus its own two lines.
+$qrLog = @(
+    "@echo off",
+    "call QUALREP",
+    "XHCIQUAL --probe-only --no-page --log P.LOG",
+    "cls",
+    "echo =STAMP=>COM1",
+    "copy /b A1314*.LOG COM1",
+    "echo =PLAIN=>COM1",
+    "copy /b P.LOG COM1",
+    "echo =END=>COM1",
+    "echo QRLOG_DONE"
+)
+[IO.File]::WriteAllText((Join-Path $hddDir "QRLOG.BAT"), (($qrLog -join "`r`n") + "`r`n"))
+# ...and the refusal: every letter of 31 December 23:58 and 23:59 already
+# taken, so a run in either minute must refuse and write nothing.
+foreach ($minute in @("58","59")) {
+    foreach ($letter in [char[]](65..90)) {
+        [IO.File]::WriteAllText((Join-Path $hddDir ("C3123" + $minute + $letter + ".LOG")), "planted`r`n")
+    }
+}
+
+# Codex round 1 on task 38.1: QUALREP on read-only media. A second floppy,
+# B:, holds only XHCIQUAL.EXE and QUALREP.BAT and is presented read-only,
+# which the floppy controller reports to DOS as a write-protected disk. DOS
+# then asks Abort, Retry, Fail for each write. qualrep_rdonly answers Fail:
+# XHCIQUAL must say it cannot write here, and QUALREP add nothing.
+# qualrep_abort answers Abort, which until DOS-1 ended XHCIQUAL from inside
+# DOS with exit code 0 (measured 2026-10-13); XHCIQUAL now hands DOS a Fail
+# for it, so the screen must be the Fail one: "cannot write here", and
+# neither QUALREP's stopped branch nor its cold-boot one.
+$roDir = Join-Path $hddDir "RODISK"   # under the git-ignored staging dir
+if (Test-Path -LiteralPath $roDir) { Remove-Item -LiteralPath $roDir -Recurse -Force }
+New-Item -ItemType Directory -Path $roDir -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $hddDir "XHCIQUAL.EXE") -Destination (Join-Path $roDir "XHCIQUAL.EXE") -Force
+Copy-Item -LiteralPath (Join-Path $hddDir "QUALREP.BAT") -Destination (Join-Path $roDir "QUALREP.BAT") -Force
+# DOS-1 (38.1 MS-DOS leg): before XHCIQUAL answered Fail for an Abort, an
+# Abort ended it from inside DOS, past DOS/32A's teardown, and the next
+# XHCIQUAL in that boot hung at the extender banner. One QUALREP per boot
+# cannot see that, so this one answers Abort and then runs XHCIQUAL again.
+$qrAbortRerun = @(
+    "@echo off",
+    "call QUALREP",
+    "cls",
+    "XHCIQUAL --probe-only --no-page --no-sysinfo",
+    "echo QRABRT_DONE"
+)
+[IO.File]::WriteAllText((Join-Path $roDir "QRABRT.BAT"), (($qrAbortRerun -join "`r`n") + "`r`n"))
 
 if (-not (Test-Path -LiteralPath $usbImage)) {
     $stream = [IO.File]::Create($usbImage); $stream.SetLength(8MB); $stream.Close()
@@ -144,6 +208,35 @@ function Connect-Monitor([int]$port) {
     throw "QEMU monitor did not open"
 }
 
+# QRLOG's serial capture: the stamped log, then the plain --log one. Returns
+# $null when the stamped log is the whole report, or what is wrong.
+function Test-StampedLog([string]$serial) {
+    $m = [regex]::Match($serial, "=STAMP=\r?\n([\s\S]*?)=PLAIN=\r?\n([\s\S]*?)=END=")
+    if (-not $m.Success) { return "the serial capture has no =STAMP= / =PLAIN= / =END= sections" }
+    $stamp = $m.Groups[1].Value
+    $plain = $m.Groups[2].Value
+    if ($stamp.Length -eq 0) { return "the stamped log is empty (0 bytes)" }
+    if ($plain.Length -eq 0) { return "the plain --log log is empty" }
+    if ($stamp -match "(?<!\r)\n") { return "the stamped log has a line not ended by CRLF" }
+    $s = @($stamp.TrimEnd("`r", "`n") -split "`r`n")
+    $p = @($plain.TrimEnd("`r", "`n") -split "`r`n")
+    if ($s[0] -notmatch '^XHCIQUAL \S+ \(build .*\) - USB host controller qualification$') { return "the stamped log's first line is not the report header: " + $s[0] }
+    if ($s.Count -lt 2 -or $s[1] -notmatch '^Log: A1314[0-9]{2}A\.LOG, begun 2026-10-13 14:[0-9]{2}:[0-9]{2} by the DOS clock$') { return "the stamped log's second line is not its Log: line" }
+    if (-not ($s -match '^---- Verdict for ')) { return "the stamped log has no verdict section" }
+    if (-not ($s -contains 'Probe safety: PASS - no PCI configuration writes.')) { return "the stamped log has no probe safety line" }
+    if ($s[-1] -notmatch '^Log written: A1314[0-9]{2}A\.LOG - attach this file$') { return "the stamped log does not end on its Log written line: " + $s[-1] }
+    if ($s[-2] -cne 'Done.' -or $p[-1] -cne 'Done. Report copied to P.LOG.') { return "the logs do not end as expected" }
+    # The same report: the stamped log without its Log: line and its ending,
+    # and the plain one without its ending, line for line.
+    $sBody = @($s[0]) + @($s[2..($s.Count - 3)])
+    $pBody = @($p[0..($p.Count - 2)])
+    $diff = @(Compare-Object -ReferenceObject $pBody -DifferenceObject $sBody -SyncWindow 0 -CaseSensitive)
+    if ($diff.Count -ne 0 -or $sBody.Count -ne $pBody.Count) {
+        return ("the stamped log is not the --log report: first difference " + ($diff | Select-Object -First 2 | Out-String))
+    }
+    return $null
+}
+
 # Each case: run a wrapper by name and require its own success line to appear.
 # The success text is unique to the wrapper (not XHCIQUAL's own verdict line),
 # so a match proves the wrapper took its success branch: exit code bucketed
@@ -152,12 +245,30 @@ $xhci = @("-device","qemu-xhci,id=hc,msi=off,msix=off")
 $xhciDev = @("-device","qemu-xhci,id=hc,p3=0,msi=off,msix=off",
              "-drive","if=none,id=ud,file=$usbImage,format=raw",
              "-device","usb-storage,drive=ud,bus=hc.0,port=1")
+$roFloppy = @("-drive","if=floppy,index=1,file=fat:floppy:$roDir,format=raw,readonly=on")
+# Answer: a screen pattern that wants a key, and the key. QUALREP ends with
+# PAUSE, so a case that runs it more than once must press a key for each.
+$pauseKey = @{ Pattern = "Press any key to continue"; Key = "ret" }
+$failKey = @{ Pattern = "Abort, Retry, Fail\?"; Key = "f" }
+$abortKey = @{ Pattern = "Abort, Retry, Fail\?"; Key = "a" }
+# QUALREP's last line is the one naming the file to attach, then its pause
+# (owner, 2026-10-13); each QUALREP case holds it to that.
+$qrPause = "\s*Press any key to continue"
+$qrAny = "ended abnormally|stopped before it finished|cannot write here|refused|unexpected exit code|NOT complete"
+$qrPin = @("-rtc","base=2026-10-13T14:25:00,clock=vm")
 $cases = @(
     [pscustomobject]@{ Name="irq_selftest"; Batch="3XIRQ";  Args=$xhci;    Success="completed normally with IRQ SELF-TEST PASS"; Fail="self-test FAILED|ended abnormally|was not created" },
     [pscustomobject]@{ Name="empty_full";   Batch="4XEMPTY"; Args=$xhci;    Success="completed normally with a QUALIFIED verdict"; Fail="NOT QUALIFIED|ended abnormally|was not created" },
     [pscustomobject]@{ Name="device_full";  Batch="5XDEV";   Args=$xhciDev; Success="completed normally with a QUALIFIED verdict"; Fail="NOT QUALIFIED|ended abnormally|was not created" },
     [pscustomobject]@{ Name="no_controller"; Batch="4XEMPTY"; Args=@();      Success="completed normally but NOT QUALIFIED"; Fail="ended abnormally|was not created|with a QUALIFIED verdict" },
-    [pscustomobject]@{ Name="done_flag_operand"; Batch="PSCAN"; Args=@(); Success="planted"; Fail="PRESCAN_DONE" }
+    [pscustomobject]@{ Name="done_flag_operand"; Batch="PSCAN"; Args=@(); Success="planted"; Fail="PRESCAN_DONE" },
+    [pscustomobject]@{ Name="qualrep_read"; Batch="QUALREP"; Args=$xhci; Success=("Log written: [0-9A-C][0-9]{6}[A-Z]\.LOG - attach this file" + $qrPause); Fail=$qrAny },
+    [pscustomobject]@{ Name="qualrep_log"; Batch="QRLOG"; Answer=@($pauseKey); Serial=$true; Args=($xhci + $qrPin); Success="QRLOG_DONE"; Fail=$qrAny },
+    [pscustomobject]@{ Name="qualrep_twice"; Batch="QRTWICE"; Answer=@($pauseKey); Args=($xhci + $qrPin); Success="A1314([0-9][0-9])A\.LOG\s+A1314(\1B|[0-9][0-9]A)\.LOG\s+QRTWICE_DONE"; Fail=$qrAny },
+    [pscustomobject]@{ Name="qualrep_all_taken"; Batch="QUALREP"; Args=($xhci + @("-rtc","base=2026-12-31T23:58:00,clock=vm")); Success=("C31235[89]A\.LOG to C31235[89]Z\.LOG all[\s\S]*No log was written by this run, so it has no file to attach\." + $qrPause); Fail="Log written|ended abnormally|stopped before it finished|cannot write here" },
+    [pscustomobject]@{ Name="qualrep_rdonly"; Batch="QUALREP"; Drive="b:"; Answer=@($failKey); Args=($xhci + $roFloppy); Success=("XHCIQUAL: cannot write here\. --log-stamp could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*nothing needs a cold\s+boot[\s\S]*No log was written, so there is no file to attach\." + $qrPause); Fail="ended abnormally|stopped before it finished|Log written|warning: could not create" },
+    [pscustomobject]@{ Name="qualrep_abort"; Batch="QUALREP"; Drive="b:"; Answer=@($abortKey); Args=($xhci + $roFloppy); Success=("Abort, Retry, Fail\?a[\s\S]*XHCIQUAL: cannot write here\. --log-stamp could not create [0-9A-C][0-9]{6}A\.LOG[\s\S]*No log was written, so there is no file to attach\." + $qrPause); Fail="ended abnormally|stopped before it finished|Log written|warning: could not create" },
+    [pscustomobject]@{ Name="qualrep_abort_rerun"; Batch="QRABRT"; Drive="b:"; Answer=@($abortKey, $pauseKey); Args=($xhci + $roFloppy); Success="Probe safety: PASS - no PCI configuration writes\.\s+Done\.\s+QRABRT_DONE"; Fail="ended abnormally|stopped before it finished|Log written" }
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })
@@ -173,13 +284,20 @@ for ($index = 0; $index -lt $cases.Count; $index++) {
     Remove-Item -LiteralPath $vgaPath,$stderrPath -Force -ErrorAction SilentlyContinue
     # Read-only VVFAT backing + per-drive snapshot: guest writes (logs, ZQREV.TMP,
     # done-flag) land in a throwaway overlay, so the host win98hdd\ staging dir
-    # stays immutable. Success is read from the screen, not this disk. Do not use
-    # fat:rw: - that writes back to the host.
+    # stays immutable. Success is read from the screen, not this disk, except
+    # where a case copies a file to COM1 (qualrep_log), whose capture is read
+    # back on the host. Do not use fat:rw: - that writes back to the host.
     $qargs = @("-machine","pc","-m","64","-boot","a",
                "-drive","if=floppy,file=$BootImage,format=raw",
                "-drive","file=fat:$hddDir,format=raw,if=ide,media=disk,snapshot=on",
                "-display","none",
                "-monitor","tcp:127.0.0.1:$port,server=on,wait=off") + $case.Args
+    $serialPath = $null
+    if ($case.PSObject.Properties.Name -contains "Serial") {
+        $serialPath = Join-Path $testDir ("serial-win98-" + $case.Name + ".log")
+        Remove-Item -LiteralPath $serialPath -Force -ErrorAction SilentlyContinue
+        $qargs += @("-serial", ("file:" + $serialPath))
+    }
     Write-Host ("[{0}/{1}] {2} ({3})" -f ($index+1),$cases.Count,$case.Name,$case.Batch)
     $process = Start-Process -FilePath $Qemu -ArgumentList $qargs -PassThru -WindowStyle Hidden -RedirectStandardError $stderrPath
     $client = $null; $writer = $null
@@ -189,15 +307,55 @@ for ($index = 0; $index -lt $cases.Count; $index++) {
         if (-not (Wait-Vga $writer $vgaPath "[A-Z]:\\>" 45)) {
             throw "guest never reached a DOS prompt"
         }
-        Send-Text $writer "c:"
+        $drive = "c:"
+        if ($case.PSObject.Properties.Name -contains "Drive") { $drive = $case.Drive }
+        Send-Text $writer $drive
         Send-Text $writer "cd \"
         Send-Text $writer $case.Batch
-        $hit = Wait-Vga $writer $vgaPath ($case.Success + "|" + $case.Fail) $TimeoutSeconds
+        $answers = @()
+        if ($case.PSObject.Properties.Name -contains "Answer") { $answers = @($case.Answer) }
+        if ($answers.Count -eq 0) {
+            $hit = Wait-Vga $writer $vgaPath ($case.Success + "|" + $case.Fail) $TimeoutSeconds
+        } else {
+            # A prompt stays on screen after it is answered, so a key is sent
+            # at most once in 1.5 s; a spare key reaches the prompt or PAUSE.
+            $hit = $null
+            $lastKey = [DateTime]::MinValue
+            $end = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            do {
+                $text = Read-Vga $writer $vgaPath
+                if ($text -match $case.Success -or $text -match $case.Fail) { $hit = $text; break }
+                foreach ($a in $answers) {
+                    if ($text -match $a.Pattern -and ([DateTime]::UtcNow - $lastKey).TotalSeconds -ge 1.5) {
+                        Send-Key $writer $a.Key
+                        $lastKey = [DateTime]::UtcNow
+                    }
+                }
+                Start-Sleep -Milliseconds 300
+            } while ([DateTime]::UtcNow -lt $end)
+        }
         if ($null -eq $hit) {
             $failures += ("{0}: timed out; last screen:`n{1}" -f $case.Name,(Read-Vga $writer $vgaPath))
             Write-Host "  FAIL (timeout)"
         } elseif ($hit -match $case.Success) {
-            Write-Host "  PASS"
+            $logFault = $null
+            if ($null -ne $serialPath) {
+                # The guest has copied the logs to COM1 by the time it
+                # prints the done line; QEMU flushes the file on quit.
+                Send-Hmp $writer "quit"
+                if (-not $process.WaitForExit(10000)) { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+                $serialText = ""
+                if (Test-Path -LiteralPath $serialPath) {
+                    $serialText = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($serialPath))
+                }
+                $logFault = Test-StampedLog $serialText
+            }
+            if ($null -eq $logFault) {
+                Write-Host "  PASS"
+            } else {
+                $failures += ("{0}: the log read back from the guest: {1}" -f $case.Name,$logFault)
+                Write-Host ("  FAIL (" + $logFault + ")")
+            }
         } else {
             $failures += ("{0}: wrapper reported a non-success branch:`n{1}" -f $case.Name,$hit)
             Write-Host "  FAIL"

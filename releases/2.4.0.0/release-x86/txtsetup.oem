@@ -1,0 +1,107 @@
+# txtsetup.oem - the text-mode Setup driver description for xhci98.sys, the
+# 32-bit package: Windows 2000 and 32-bit Windows XP (roadmap-hcd.md task
+# 33.3; design record 13, section 5.6).
+#
+# At the start of text-mode Setup, press F6, then S at the "Setup could not
+# determine the type of one or more mass storage devices" screen, and give
+# Setup this disk in drive A:. Setup loads xhci98.sys as a "scsi" component,
+# the one class F6 offers, and binds it by the ids below: the xHCI
+# controller's PCI class code, the root hub the driver creates under a
+# project-owned id (USB\XHCI98_ROOT_HUB), and the external hubs it presents
+# under two more (USB\XHCI98_HUB, USB\XHCI98_HUB30; task 33.4), and the
+# composite devices' parents under one more (USB\XHCI98_COMPOSITE; task
+# 36.43) - without it a composite keyboard's functions would never appear
+# here. The four are under USB\ since 2.4.0.0 (task 38.8; design record 13
+# section 10.13), XHCI98\ before; they are the only USB\ ids this file may
+# name (OEM-USBID). The component id XHCI98 names the F6 option, not a
+# device, and is unchanged. The devices behind the root
+# hub are then bound by Setup's
+# own HID and storage drivers (hidusb, kbdhid, mouhid, usbstor) through
+# txtsetup.sif's own hardware-id table, with usbd.sys, hidclass.sys and
+# hidparse.sys loaded from Setup's own source; none of them is on this disk.
+#
+# Windows 2000 has a second option, XHCI98W2K (design record 13 section
+# 5.6, limit 7). Its text mode lays down hidusb.sys and usbstor.sys for a
+# USB keyboard, mouse or stick but not usbd.sys, hidclass.sys or
+# hidparse.sys, which they import, and the first GUI-mode boot stops with
+# STOP c000026c. The option is XHCI98's lines and ids plus those three
+# files, which the package never carries: the user copies USBD.SY_,
+# HIDCLASS.SY_ and HIDPARSE.SY_ from the Windows 2000 CD's I386 folder to
+# this disk's root (disk d2, tagged by usbd.sy_; Setup expands them).
+# Text mode reads every disk of an option from drive A: and asks for a
+# missing one there with no way past it but F3, so the files cannot come
+# from the CD drive, and XP keeps the XHCI98 option, which never asks.
+# setupldr refuses a driver line without a service key, and setupdd makes
+# a service for each (group SCSI miniport, Start 0); the [Config.*]
+# sections set those three to Start 3, so nothing loads them as services -
+# the kernel loads each as hidusb's or usbstor's import. setupldr loads
+# only the option's first driver line, xhci98.sys. (Static and runtime,
+# Windows 2000 SP4, 2026-10-14: lessons.md, "A txtsetup.oem disk is always
+# read from drive A: ...".) OEM-W2K holds this option to that shape.
+#
+# The dll line carries xhcihlpr.sys, the x86 helper (design record 18
+# section 15.9), for GUI-mode Setup only. Text mode copies every file of
+# this option but the catalog to %windir%\OemDir as well as to its own
+# directory (a dll's: system32), and GUI-mode Setup installs the controller
+# from xhci98.inf with OemDir as its source, so a file the INF's 2000/XP
+# controller section copies and this list does not carry fails that
+# install (2.4.0.0's F6 legs: no driver on the controller). A dll line is
+# not loaded in text mode and adds no service there - setupldr loads the
+# first driver, port, class or hal file of the option, and only a driver
+# line names a service - so text mode keeps the clock tick (decision H4).
+# OEM-COPY holds this list to the files that section copies.
+#
+# The 64-bit package's file is src\txtsetup-amd64.oem, staged under this
+# name; scripts\inf-gate\check-txtsetup-oem.ps1 gates both and holds them
+# equal outside their two description strings, the helper's dll line,
+# which the 64-bit package has no file for, and the Windows 2000 option
+# with its disk d2, which XP x64 does not need.
+#
+# ASCII only, CRLF line endings.
+
+[Disks]
+d1 = "xHCI98 USB 3.x Driver Disk (32-bit)", \xhci98.sys, \
+d2 = "USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the 32-bit Windows 2000 CD", \usbd.sy_, \
+
+[Defaults]
+scsi = XHCI98
+
+[scsi]
+XHCI98 = "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)"
+XHCI98W2K = "xHCI98 USB 3.x Host Controller (32-bit Windows 2000, files from CD)"
+
+[Files.scsi.XHCI98]
+driver = d1, xhci98.sys, xhci98
+dll    = d1, xhcihlpr.sys
+inf    = d1, xhci98.inf
+
+[HardwareIds.scsi.XHCI98]
+id = "PCI\CC_0C0330", "xhci98"
+id = "USB\XHCI98_ROOT_HUB", "xhci98"
+id = "USB\XHCI98_HUB", "xhci98"
+id = "USB\XHCI98_HUB30", "xhci98"
+id = "USB\XHCI98_COMPOSITE", "xhci98"
+
+[Files.scsi.XHCI98W2K]
+driver = d1, xhci98.sys, xhci98
+dll    = d1, xhcihlpr.sys
+inf    = d1, xhci98.inf
+driver = d2, usbd.sys, usbd
+driver = d2, hidclass.sys, hidclass
+driver = d2, hidparse.sys, hidparse
+
+[HardwareIds.scsi.XHCI98W2K]
+id = "PCI\CC_0C0330", "xhci98"
+id = "USB\XHCI98_ROOT_HUB", "xhci98"
+id = "USB\XHCI98_HUB", "xhci98"
+id = "USB\XHCI98_HUB30", "xhci98"
+id = "USB\XHCI98_COMPOSITE", "xhci98"
+
+[Config.usbd]
+value = "", Start, REG_DWORD, 3
+
+[Config.hidclass]
+value = "", Start, REG_DWORD, 3
+
+[Config.hidparse]
+value = "", Start, REG_DWORD, 3

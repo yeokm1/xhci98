@@ -244,6 +244,44 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "intr.retire.state", ext->LineRetireState, 1);
     XhciLogAppend(log, "intr.moved.masked", hc->Counters.LineMoveMasked, 1);
     XhciLogAppend(log, "intr.values.found", hc->Counters.IntrValuesFound, 1);
+    /* The finer timer (task 38.3; design record 15 section 7.2.9). */
+    XhciLogAppend(log, "poll.timer.switch.read", hc->Counters.TmrSwitchRead,
+                  1);
+    XhciLogAppend(log, "poll.timer.switch", hc->Counters.TmrSwitch, 1);
+    XhciLogAppend(log, "poll.timer.source", hc->Counters.TmrSource, 1);
+    XhciLogAppend(log, "poll.timer.thread", hc->Counters.TmrThread, 1);
+    XhciLogAppend(log, "poll.timer.held", hc->Counters.TmrHeld, 1);
+    XhciLogAppend(log, "poll.timer.holds", hc->Counters.TmrHolds, 1);
+    XhciLogAppend(log, "poll.timer.releases", hc->Counters.TmrReleases, 1);
+    XhciLogAppend(log, "poll.timer.releases.forced",
+                  hc->Counters.TmrReleasesForced, 1);
+    XhciLogAppend(log, "poll.timer.holds.raced", hc->Counters.TmrHoldsRaced,
+                  1);
+    XhciLogAppend(log, "poll.timer.obs.crossed", hc->Counters.TmrObsCrossed,
+                  1);
+    XhciLogAppend(log, "poll.timer.desired", hc->Counters.TmrDesired, 1);
+    XhciLogAppend(log, "poll.timer.actual.held", hc->Counters.TmrActualHeld,
+                  1);
+    XhciLogAppend(log, "poll.timer.actual.released",
+                  hc->Counters.TmrActualReleased, 1);
+    XhciLogAppend(log, "poll.timer.release.cause",
+                  hc->Counters.TmrReleaseCause, 1);
+    XhciLogAppend(log, "poll.timer.held.ms", hc->Counters.TmrHeldMs, 1);
+    XhciLogAppend(log, "poll.timer.obs.released.count",
+                  hc->Counters.TmrObsReleasedCount, 1);
+    XhciLogAppend(log, "poll.timer.obs.released.sum",
+                  hc->Counters.TmrObsReleasedSumMs, 1);
+    XhciLogAppend(log, "poll.timer.obs.released.late",
+                  hc->Counters.TmrObsReleasedLate, 1);
+    XhciLogAppend(log, "poll.timer.obs.held.count",
+                  hc->Counters.TmrObsHeldCount, 1);
+    XhciLogAppend(log, "poll.timer.obs.held.sum",
+                  hc->Counters.TmrObsHeldSumMs, 1);
+    XhciLogAppend(log, "poll.timer.obs.held.late",
+                  hc->Counters.TmrObsHeldLate, 1);
+    XhciLogAppend(log, "hlpr.msi.verdict", hc->Counters.HlprMsiVerdict, 1);
+    XhciLogAppend(log, "hlpr.timer.verdict", hc->Counters.HlprTimerVerdict,
+                  1);
 #if defined(XHCI_FLAVOUR_QEMU)
     /* The stand-in dead line's withheld claims (record 15 section 11), at
      * every stop: mode 1 under the latch has no move to note them at. */
@@ -309,11 +347,27 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
                   1);
     XhciLogAppend(log, "composite.represented",
                   hc->Counters.CompositeRepresented, 1);
+    /* Task 38.12: the composite devnode's own selects. */
+    XhciLogAppend(log, "composite.selects", hc->Counters.CompositeSelects, 1);
+    XhciLogAppend(log, "composite.refused",
+                  hc->Counters.CompositeSelectRefused, 1);
+    XhciLogAppend(log, "composite.rewrites", hc->Counters.CompositeRewrites,
+                  1);
+    XhciLogAppend(log, "composite.mismatches",
+                  hc->Counters.CompositeMismatches, 1);
+    XhciLogAppend(log, "composite.intervals",
+                  hc->Counters.CompositeIntervals, 1);
     /* Issue 18's behind-hub speed IDs. */
     XhciLogAppend(log, "hub.speed.nospeed",
                   hc->Counters.TopoBehindHubNoSpeed, 1);
     XhciLogAppend(log, "hub.speed.fallbacks",
                   hc->Counters.Usb2HubSpeedFallbacks, 1);
+    /* Controllers below xHCI 1.0 (task 38.11): what a refused start's
+     * flush carries at XhciLogVerbosity 0 (design record 17 section
+     * 4.14.7). */
+    XhciLogAppend(log, "hc.versions", hc->Counters.HciVersions, 1);
+    XhciLogAppend(log, "hc.accept096", hc->Counters.HciAccept096Value, 1);
+    XhciLogAppend(log, "hc.version.policy", hc->Counters.HciVersionPolicy, 1);
     hcdLogTolLocked(ext, log);
 }
 
@@ -542,6 +596,10 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
     for (i = 0; i < sizeof(XHCIHC_COUNTERS); i++) {
         p[i] = 0;
     }
+    /* Task 38.11's three read "not read" until the start writes them. */
+    hc->Counters.HciVersions = 0xFFFFFFFFUL;
+    hc->Counters.HciAccept096Value = 0xFFFFFFFFUL;
+    hc->Counters.HciVersionPolicy = 0xFFFFFFFFUL;
     hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);
     if (hc->CountersStart == 0) {
         hc->CountersStart = (ULONG)InterlockedIncrement(&hcdCountersStarts);
@@ -559,7 +617,8 @@ VOID HcdCountersStart(PHCD_CONTROLLER hc)
 /*
  * The thread's poll: the two counters the kept controller sequence keeps in
  * XHCI_EXTENSION copied in - both zeroed with it at the same start, so a
- * copy is exact - and, in the qemu flavour, the trace. The health poll that
+ * copy is exact - the pool rings held (task 38.10), and, in the qemu
+ * flavour, the trace. The health poll that
  * moves FatalStatusDetected runs just before this, on the same thread. The
  * stop calls it once more after the thread has gone, since its own
  * XhciDisableInterrupts can count a mask failure (Codex review round 23,
@@ -575,6 +634,11 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     /* The core sets it at an HCRST that retired a moved line (record 15
      * section 4.2); the HCD's own proofs set both. */
     hc->Counters.LineRetireState = hc->Hc.LineRetireState;
+    /* Task 38.10: the quirks' packed words and counts (hcd_quirk.c). */
+    HcdQuirkPublishLocked(hc);
+    /* Task 38.10: from the array, not the running total (xhci_mem.c). */
+    hc->Counters.PoolRingsInUse =
+        XHCI_MAX_POOL_RINGS - XhciPoolFree(&hc->Hc.RingPool);
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 #ifdef XHCI_DBG_TRACE
     hcdCountersTrace(&hc->Counters);

@@ -67,6 +67,26 @@ if not exist test_sysinfo.exe goto builderr
 "%~dp0test_sysinfo.exe"
 if not "%errorlevel%"=="0" goto testfail
 
+rem Task 38.1: the --log-stamp name (stamp.c) - months 1 to 12 as one hex
+rem digit, midnight, the next free letter, all 26 taken, a bad clock.
+if exist test_stamp.exe del test_stamp.exe
+wcl386 -bt=nt -q -zq -wx -za -otexan -fe=test_stamp.exe ^
+    test_stamp.c ..\stamp.c
+if errorlevel 1 goto builderr
+if not exist test_stamp.exe goto builderr
+"%~dp0test_stamp.exe"
+if not "%errorlevel%"=="0" goto testfail
+
+rem Task 38.10: the quirk table (quirks.c) - design record 20 section 3.1's
+rem ids per quirk, the vendor-wide rows, and the HCIVERSION floor note.
+if exist test_quirks.exe del test_quirks.exe
+wcl386 -bt=nt -q -zq -wx -za -otexan -fe=test_quirks.exe ^
+    test_quirks.c ..\quirks.c
+if errorlevel 1 goto builderr
+if not exist test_quirks.exe goto builderr
+"%~dp0test_quirks.exe"
+if not "%errorlevel%"=="0" goto testfail
+
 echo.
 echo Host tests PASSED.
 call :cleanup
@@ -101,4 +121,10 @@ if exist xhci_pirq.obj del xhci_pirq.obj
 if exist test_sysinfo.exe del test_sysinfo.exe
 if exist test_sysinfo.obj del test_sysinfo.obj
 if exist sysinfo.obj del sysinfo.obj
+if exist test_stamp.exe del test_stamp.exe
+if exist test_stamp.obj del test_stamp.obj
+if exist stamp.obj del stamp.obj
+if exist test_quirks.exe del test_quirks.exe
+if exist test_quirks.obj del test_quirks.obj
+if exist quirks.obj del quirks.obj
 goto :eof

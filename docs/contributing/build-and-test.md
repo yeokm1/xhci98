@@ -296,13 +296,13 @@ file: amd64 has no `__stdcall` name decoration, so the x86 library's
 
 The version and the release date are edited in one place, `src\xhci_version.h`. It declares three macros: `XHCI_VER_CSV` (the four-part number as four integers, which is what a `VERSIONINFO` resource takes), `XHCI_VER_STR` (the same number as a string, which is what everything else takes) and `XHCI_DRIVERVER_DATE` (the release date, in the `MM/DD/YYYY` form `DriverVer` takes). The file is `#define` lines and comments only, because three toolchains include it: the DDK's `rc.exe`, MSVC 6.0's `cl.exe`, and Open Watcom's `wcc386`.
 
-Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\xhciqual\`, `releases\<version>\xhcisnap\`) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
+Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
 The last two sites cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so the `DriverVer` in `src\xhci98.inf` **and** the one in `src\xhci98-amd64.inf` each keep a literal and are checked against the header instead. There have been two since roadmap task 21.3, `check-inf.ps1 -Arch` cross-checks whichever file it is given against the `xhci_version.h` beside it, and `build-driver.cmd` runs it over both on every build - so a bumped header with a stale date in the 64-bit file fails the build rather than shipping. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
-- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
+- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (from `2.4.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
 
 The header spells the number out twice because `FILEVERSION` takes four comma-separated integers and cannot be given a string, and deriving one form from the other needs preprocessor stringizing that this era's `rc.exe` does not handle reliably. So both are written and the INF gate compares them. Two adjacent lines a gate reads beat one clever line no toolchain agrees about.
 
@@ -310,7 +310,7 @@ One trap is worth knowing before anyone improves on this. An earlier attempt at 
 
 The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `built <date> <time>` line from their compiler's `__DATE__`/`__TIME__`. That is a different fact from the version and must stay one: between cuts the version does not move and the tools are rebuilt many times a day, so the stamp is what tells a guest's stale copy from the one just staged. The driver has no such banner in a release build (`DriverEntry (built ...)` is inside `XHCI_DBG_TEXT` and compiles out), so a release binary is identified by its version resource and its SHA-256; a byte compare cannot stand in for either (task 13-L.4 in the roadmap records why).
 
-A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open.
+A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open. From `2.4.0.0` the cleanup tool (`xhcicln\build.cmd`, roadmap-hcd task 38.8) needs the in-repo MSVC 6.0 for `XHCICLN.EXE` and WDK 7.1, already a prerequisite of the amd64 driver, for `XHCICL64.EXE`; `-SkipCleanTool` leaves it out, and since nothing needs the tool the release is whole without it, its readme saying the directory is missing. Its executables ask for elevation (a manifest), so `xhcicln\selftest.cmd`, which `build-driver.cmd` runs when `XHCICLN.EXE` has been built, starts them with `__COMPAT_LAYER=RunAsInvoker`.
 
 The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 
@@ -418,19 +418,41 @@ scripts\build-driver.cmd qemu       REM the emulator-only third flavour
 scripts\build-driver.cmd all        REM all three - what a release cut gates
 ```
 
-**Every x86 run also builds `xhcimsi.sys`**, the NT 6 x86 MSI helper
-(design record 18; task 36.15), in `src\msi86\`, with **WDK 7.1 for x86,
-Vista target** (`setenv <WDK> <flavour> x86 WLH no_oacr`), because only that
-kit declares `IoConnectInterruptEx`. So an x86 build needs `tools\WinDDK71`
-(or `WDKROOT`) as well as MSVC 6.0 and the Windows 2000 DDK, and fails
-without it. The helper is gated by the import gate's `nt6x86` profile
-(`-GateProfile nt6x86 -AllowPath scripts\import-gate\xhcimsi-imports.allow`,
-against the Vista SP2 and 7 SP1 x86 kernels of
-`nt6x86-vista-baselines.expected` and `nt6x86-win7-baselines.expected`),
-the flavour marker check and `source-stamp.ps1 -Driver xhcimsi`; its output
-is `src\msi86\obj<flavour>\i386\xhcimsi.sys`, which `make-package.ps1`
-stages into the x86 package (`-MsiDriverPath` overrides it). An `-amd64`
-run builds no helper.
+**Every x86 run also builds `xhcihlpr.sys`**, the x86 helper for 32-bit
+Windows 2000, XP, Vista and 7 (design record 18 section 15; task 38.3; until
+then `xhcimsi.sys`, the NT 6 x86 MSI helper of task 36.15, built from
+`src\msi86\` for the Vista target), in `src\hlpr\`, with **WDK 7.1's `WXP`
+x86 environment** (`setenv <WDK> <flavour> x86 WXP no_oacr`), at subsystem
+version 5.00 (`SUBSYSTEM_VERSION=5.00` in its `sources`), `/GS` on and the
+`wxp` `wdmsec.lib` (owner, 2026-10-13, decision H5), because only that kit
+declares `IoConnectInterruptEx`, which the helper now asks of
+`MmGetSystemRoutineAddress` so that the image loads on 2000 and XP. So an
+x86 build needs `tools\WinDDK71` (or `WDKROOT`) as well as MSVC 6.0 and the
+Windows 2000 DDK, and fails without it. `build-driver.cmd`'s `:buildhlpr`
+then checks the toolchain with `scripts\check-helper-build.ps1`: the build
+log's `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` line, that every library
+linked is from `lib\wxp\i386` (`lib\crt\i386\safecrtnt.lib` admitted by
+name), and the image header (native subsystem 5.00, section alignment
+0x80, a nonzero checksum); its `-SelfTest` runs among the import gate's
+self-tests before anything is built. The helper is gated by the import
+gate's `hlprx86` profile (`-GateProfile hlprx86 -AllowPath
+scripts\import-gate\xhcihlpr-imports.allow`) against every x86 kernel and
+HAL of Windows 2000 SP4 (`win2k-baselines.expected`), XP SP3
+(`winxp-x86-baselines.expected`: `ntoskrnl`, `ntkrnlpa`, `ntkrnlmp`,
+`ntkrpamp` and seven HALs, staged in `tools\winxpsp3-extracted\`), Vista
+SP2 and 7 SP1 (`hlprx86-vista-baselines.expected` and
+`hlprx86-win7-baselines.expected`, renamed from `nt6x86-*`; their
+`ntkrnlpa` rows are still owed). **Every set is required**: a missing set
+fails the gate rather than warning, and the gate refuses
+`IoConnectInterruptEx` and `IoDisconnectInterruptEx` in the helper's
+import table by name. All 39 of the helper's import pairs resolve in every
+2000, XP, Vista and 7 x86 image staged (read 2026-10-14, static).
+`-NoTargetEvidence` is an allowlist-only developer mode for it, which
+`make-package.ps1` and `make-release.ps1` refuse for a package that carries
+the helper. Then the flavour marker check and `source-stamp.ps1 -Driver
+xhcihlpr`; its output is `src\hlpr\obj<flavour>\i386\xhcihlpr.sys`, which
+`make-package.ps1` stages into the x86 package (`-HlprDriverPath`
+overrides it). An `-amd64` run builds no helper.
 
 **`-amd64` is a second axis, not a fourth flavour**, and it goes after the
 flavour word:
@@ -584,7 +606,10 @@ Tracked inputs:
 
 Target files the evidence steps resolve against live under `tools\` (git-ignored);
 `scripts\import-gate\extract-target-baselines.ps1` recreates the Win2000 kernels
-and HALs and `ntkern.vxd` from the install media. The Win98/NUSB precedent
+and HALs and `ntkern.vxd` from the install media, and with `-WinXpIso <iso>`
+the 32-bit XP SP3 kernels and HALs the helper's `hlprx86` profile needs,
+from the XP SP3 OEM medium's `I386\SP3.CAB` into `tools\winxpsp3-extracted\`
+(`winxp-x86-baselines.expected`). The Win98/NUSB precedent
 binaries are staged separately.
 
 The allowlist records module/symbol pairs rather than bare names because the
@@ -3946,7 +3971,15 @@ driver at the F6 prompt. The install leg per target, in a virtual machine:
 
 1. Stage the package: `scripts\package\make-package.ps1 -Flavor release`
    (add `-Arch amd64` for XP x64). The directory is 8.3-clean and fits a
-   1.44 MB floppy, so QEMU can serve it as one directly.
+   1.44 MB floppy, so QEMU can serve it as one directly. **For a Windows
+   2000 leg that reaches GUI mode**, follow the release notes' "Installing
+   Windows 2000 from the F6 floppy": serve a COPY of the staged directory
+   (in a git-ignored leg directory, never the staged package itself, whose
+   gate refuses them) with `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_`
+   added at its root, copied unchanged from the install CD's `I386`
+   (`7z e <the CD image> I386/USBD.SY_ I386/HIDCLASS.SY_ I386/HIDPARSE.SY_`;
+   the CD image is opened read-only and never modified, and none of the
+   three is ever committed).
 2. A blank disk for the install: `qemu-img create -f qcow2 <disk> 8G`. The
    USB stick is a host directory served read-only through VVFAT, which QEMU
    presents as a partitioned FAT disk, so it needs no preparation and has a
@@ -4007,22 +4040,43 @@ qemu-system-i386 -machine pc -m 512 -smp 2 \
    prompt for the disk in drive A:. Expect the list to offer "xHCI98 USB
    3.x Host Controller (32-bit Windows 2000/XP)" (or "... (Windows XP
    x64)"); choose it with Enter, and press Enter again at the screen that
-   lists it as the device Setup will load.
+   lists it as the device Setup will load. On the 32-bit floppy the list
+   has a second entry, "xHCI98 USB 3.x Host Controller (32-bit Windows
+   2000, files from CD)" (Down arrow, then Enter): the Windows 2000 leg
+   with the three files picks it; a 32-bit XP leg keeps the first.
 5. Setup loads its files and starts the kernel. Expect: the Welcome screen
    answers keystrokes sent to `ukbd` (the BIOS has handed the controller to
    the driver by then); the partition screen lists the USB disk beside the
    IDE disk (the bus's device PDO, Setup's `usbstor` and `disk` above it);
    no stop screen. Install onto the IDE disk.
-6. Text mode copies `xhci98.sys` from A: and restarts. Leave the floppy in
+6. Text mode copies `xhci98.sys` from A: and restarts. It also copies each
+   file of the option, and the INF as `oemscsNN.inf`, to `%windir%\OemDir`,
+   which GUI mode installs the controller from; on the x86 package that
+   includes the helper `xhcihlpr.sys` (its `dll` line: copied to `system32`
+   and `OemDir`, not loaded and given no service in text mode; design record
+   18 section 15.9). Leave the floppy in
    until GUI mode is finished: it may be asked for when GUI mode installs the
    controller and root hub from `xhci98.inf`, and so may the CD, for
    `usbd.sys` and `usbui.dll`. Record any prompt and any unsigned-driver
-   dialog (32-bit XP) as the leg's reading.
+   dialog (32-bit XP) as the leg's reading. **Windows 2000 with a USB
+   keyboard, mouse or storage device on the controller stops at the first
+   GUI-mode boot with the first entry** (`STOP c000026c`, `hidusb.SYS` or
+   `usbstor.SYS`, `0xc0000034`): its text mode copies those class drivers
+   and not `usbd.sys`, which both import (release notes, "Known
+   limitations"; `lessons.md`). With the Windows 2000 entry and the three
+   files, text mode also lays down `usbd.sys`, `hidclass.sys` and
+   `hidparse.sys` (expanded, in `system32\drivers` and `OemDir`) and the
+   services `usbd`, `hidclass` and `hidparse` at `Start` 3, and the first
+   GUI-mode boot goes on. With the first entry and no USB keyboard, mouse
+   or storage device during text mode (a hub and an audio device only),
+   the first GUI-mode boot went on too (2026-10-14).
 7. In the installed system: Device Manager shows "xHCI98 USB 3.x eXtensible
    Host Controller" and "xHCI98 USB 3.x Root Hub" with no warning mark, the
    service `xhci98` is the INF's (`Start` 3, not the boot start text mode
    gave it), the USB keyboard types, and the stick has a drive letter with
-   the file put in it in step 2.
+   the file put in it in step 2. On 2000 and 32-bit XP the service
+   `xhcihlpr` is there too (`Start` 0), and `setupapi.log` shows no
+   `SPFILENOTIFY_COPYERROR` for the controller's install from `OemDir`.
 
 The leg passes on steps 4, 5 and 7; step 6's prompts are recorded, not
 failed. Until it has passed on a target, design record 13 section 5.6 stays
@@ -4033,11 +4087,13 @@ failed. Until it has passed on a target, design record 13 section 5.6 stays
 Task 36.42 put `portsw.vbs` at the root of every flavour directory of a
 package beside `xhci98.inf`, and `2.3.0.0` was published so. Since task
 37.5 no package carries it: `make-release.ps1` publishes it once, from
-`src\`, in a `portsw\` directory at the version root beside `xhciqual\`
-and `xhcisnap\` (design record 16 section 5a), and holds the staged tree
-to that before the publish swap (`Assert-PortSwitchLayout`: the three in
-`portsw\` and nothing else there, no copy anywhere else). A guest leg
-copies `portsw\` from a local cut, or the three files from `src\`, into a
+`src\`, in a `portsw\` directory beside `xhciqual\` and `xhcisnap\`, at
+the version root in `2.3.1.0` and under `tools\` since task 38.9
+(`tools\portsw\`, first in `2.4.0.0`; design record 16 section 5a), and
+holds the staged tree to that before the publish swap
+(`Assert-PortSwitchLayout`: the three in `tools\portsw\` and nothing else
+there, no copy anywhere else). A guest leg
+copies `tools\portsw\` from a local cut, or the three files from `src\`, into a
 directory of its own on the transfer disk and runs them from there. It shows
 `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1;
 double-clicked it asks through a dialog, and from a command prompt it takes
@@ -4080,12 +4136,12 @@ second `copy` a moment later.
 #### `portsw-on.bat` and `portsw-off.bat` (roadmap-hcd task 36.56)
 
 Since task 36.56 `portsw-on.bat` and `portsw-off.bat` go wherever the
-script goes, in `portsw\` since task 37.5 (design record 16 section 5a,
-"The batch files"): each shows the value, sets 1 or 0 through
+script goes, in `portsw\` since task 37.5 and `tools\portsw\` since task
+38.9 (design record 16 section 5a, "The batch files"): each shows the value, sets 1 or 0 through
 `cscript //nologo portsw.vbs`, says Windows must be restarted, and pauses.
 The same file runs under `COMMAND.COM` on 98 SE and ME and under `cmd.exe`
 on 2000 and later, so a leg runs each where a user would: double-clicked in
-Explorer in the `portsw\` folder, and typed at a prompt in that folder; on
+Explorer in the `tools\portsw\` folder, and typed at a prompt in that folder; on
 Vista and 7 once through Run as administrator (which starts it in
 `System32`) and once not elevated, where the script raises the elevation
 prompt and the batch file says so. After each, `cscript //nologo
@@ -6197,7 +6253,8 @@ Rule ids are grouped by the failure they prevent:
   `HcDisableAllSelectiveSuspend`) anywhere in either file, machine-wide or
   per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
   The driver's own `XhciSelectiveSuspend` is a `VAL-*` row, not one of these.
-- `VAL-*`: every registry value the driver reads, nineteen since task 36.51,
+- `VAL-*`: every registry value the driver reads, thirty-six since tasks
+  38.11, 38.3 and 38.10 and `XhciSilentInstall`'s 0 (owner, 2026-10-14),
   present on every install path with the required type, flags and default
   ("The registry values the driver reads", below).
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
@@ -6246,7 +6303,8 @@ are taken from the code (`src\hcd_ctl.c`'s value pass, `HcdCtlForceBulkOnly`,
 the routing quirk's and the polling's reads, `src\hcd_msi86.c`'s mode
 cache), not from other documents. Each is a `REG_DWORD` in the controller's
 driver (software) key (`IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER)`),
-read in every flavour on every target, and taken only as a four-byte
+read in every flavour on every target (`XhciSilentInstall` on 98 SE and
+ME only, though every path writes it), and taken only as a four-byte
 `REG_DWORD` - another type reads as absent. Every INF row is
 `HKR,,<name>,0x00010003,<data>` (`FLG_ADDREG_TYPE_DWORD` with
 `FLG_ADDREG_NOCLOBBER`), so an install writes only a missing value and an
@@ -6274,11 +6332,39 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciInterruptMode` | each start; on NT 6 also at AddDevice (record 18's mode cache) | 0 | 0 automatic, 1 line, 2 polling, 3 and above as 0 | 0 | yes |
 | `XhciPollIdleMs` | each start | 50 | 1-5000; 0 as 50 | 50 | yes |
 | `XhciPollActiveMs` | each start | 1 | 1 to the idle period; 0 as 1 | 1 | yes |
+| `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 0 | 0 off, any other 1 | 0 (since 38.3; 1 until the owner's change of 2026-10-14) | yes |
 | `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
 | `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
+| `XhciSilentInstall` | each start, on 98 SE and ME only | 0 | only 1 on | 0 (since the owner's change of 2026-10-14; task 38.2 wrote none) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
+| `XhciAccept096` | each start, latched for the started lifetime | 1 | 0 the 1.0 floor, any other the 0.96 floor | 1 (since 38.11) | yes |
+| `XhciMsiAvoid` | each start; on NT 6 also at AddDevice (the requirements filter's cache, record 20 section 4.1) | 1 | 0 off, 1 listed, 2 every controller; another number or type, 1 | 1 (since 38.10) | yes |
+| `XhciStreamsOff` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciResumeReinit` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciIntelShutdownToEhci` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
+| `XhciShutdownReset` | each start | 0 | 0, 1, 2; else 0 | 0 (since 38.10) | yes |
+| `XhciSuspendHaltDelay` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciSuspendHaltTimeout` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciAsmediaFlowControl` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
+| `XhciTiIntervalCap` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciStuckLinkReset` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciStreamRingPad` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciControlLinkNoOp` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciIsochSpuriousSuccess` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
+| `XhciAmdSuspendBitClear` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
 
-Nineteen, all written: sixteen before task 36.51, the last three by it. **No
+Thirty-six, all written: sixteen before task 36.51, three by it,
+`XhciAccept096` by task 38.11 (design record 17 section 4.14.4),
+`XhciPollFineTimer` by task 38.3 (design record 15 section 7.2.4),
+`XhciSilentInstall` by the owner's change of 2026-10-14 (design record 13
+section 6.11.3; the `SilentClasses` list it gates stays unwritten by the
+INFs, merged only by `tools\silent\`'s `silent-on.bat`), and
+fourteen by task 38.10 (Linux's controller quirks, design record 20: each
+read in `src\hcd_quirk.c`, 0 off, 1 Linux's listed controllers, 2 every
+controller where the record offers it; the log notes `quirk.<label>` and
+`hc.pci.rev` at each start and the counter block's words 199 to 232 are
+record 20 section 13.5, and `XHCISNAP` prints them as its "Linux quirks"
+block). **No
 value is a tri-state** whose absence means something no written number
 does, so none is left unwritten. Except for `XhciForceBulkOnly` since
 roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a
@@ -6297,8 +6383,10 @@ Not in the table, and written by no INF on purpose:
   `XhciQemuInject`, `XhciQemuStartHold`, `XhciQemuMapGrant`,
   `XhciQemuBigRefuse`, `XhciQemuPsiE460`, `XhciQemuNoInterrupt`,
   `XhciQemuPinUnreadable`, `XhciQemuDeadLine`, `XhciQemuMsgConnectFail`,
-  `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, and `xhcimsi.sys`'s
-  `XhciMsiInject` (its service key's `Parameters` subkey);
+  `XhciMsi86NoStrip`, `XhciMsi86InjNoLine`, `XhciQemuTmrDelayMs`,
+  `XhciQemuSuspHoldDx`, and `xhcihlpr.sys`'s `XhciHlprInject` (its service
+  key's `Parameters` subkey; `xhcimsi.sys`'s `XhciMsiInject` until task
+  38.3);
 - values the OS owns: `MSISupported` (the `.HW` section's interrupt
   management request, which the 32-bit Vista and 7 path and the x64 NT 6
   path write for the OS, not for the driver), and usbstor's per-device
@@ -6665,11 +6753,40 @@ reads mode 1 with it set, as the message).
 `XhciMsi86InjNoLine` 1 rewrites the requirements list before it is
 classified - every line member of an interrupt run that also holds a
 message removed, every line-only configuration dropped - so the list
-offers no line (record 18 leg H1a). **`XhciMsiInject`** is the helper's own,
-in `HKLM\SYSTEM\CurrentControlSet\Services\xhcimsi\Parameters`, read once
-in its `DriverEntry` (so a change needs a reboot): 1 fails `DriverEntry`,
-2 refuses the query, 3 answers interface major 2, 4 a short answer, 5 a
-NULL `IoDisconnectInterruptEx`, 6 a wrong magic (record 18 section 2.1).
+offers no line (record 18 leg H1a). **`XhciHlprInject`** is the helper's
+own, `qemu` flavour only, in
+`HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr\Parameters`, read once in
+its `DriverEntry` (so a change needs a reboot; 0, absent, the wrong type or
+outside 1 to 9 is none): 1 fails `DriverEntry`, 2 refuses the query, 3
+answers interface major 3, the next major, which a version 2 caller
+refuses, 4 a short answer (0x30 bytes, the timer field uncovered), 5 the
+MSI bit set with a NULL `IoDisconnectInterruptEx`, 6 a wrong magic, 7 the
+timer service off (its bit clear, its pointer NULL), 8 the timer bit set
+with a NULL pointer, 9 the MSI half off (its bit clear, both pointers
+NULL) (record 18 sections 2.1 and 15.12). Until task 38.3 it was
+`xhcimsi.sys`'s `XhciMsiInject`, under `Services\xhcimsi\Parameters`,
+values 1 to 6 with 3 answering major 2.
+
+**`XhciQemuTmrDelayMs`, `XhciQemuSuspHoldDx`** (task 38.3; design record
+15 section 7.2.12, leg T3). REG_DWORDs in the controller's driver key, `qemu`
+flavour only, read at every start. `XhciQemuTmrDelayMs` N (0 off, held to
+10000) has the finer timer's thread sleep N ms before each
+`ExSetTimerResolution` call, so a release is still in flight while a
+power IRP or the stop goes on. `XhciQemuSuspHoldDx` 1 has selective
+suspend's executor leave a child's pended Dx IRP in its slot rather than
+claim it, so the controller's stop meets it outstanding; the other
+settlement paths (the PDO's close, the stale settle, the stop's unlink)
+are unchanged. Notes: `qemu.susp.hold` (the executor's first skip of a
+slot: the PDO's serial and D-state), `qemu.stop.dx` (the stop's first step,
+for each PDO with a Dx still pended), `qemu.susp.done` (each D-IRP the
+executor's paths complete, with the claiming path), and the timer thread's
+`poll.timer.call` (before the injected delay) and `poll.timer.return`
+(after the call), each with the start's serial and the call's sequence
+number. Read in the Phase 38 VM matrix (2026-10-14): with
+`XhciQemuSuspHoldDx` 1 the shutdown's Dx IRP is held as well and the
+shutdown hangs, so clear it before a shutdown; and `qemu.stop.dx` never
+appeared, since Windows removed the children before the controller's
+stop (design record 15 section 7.2's leg T3).
 
 **The `M86` trace** (`qemu` flavour; record 18 section 9). The
 requirements filter writes every list it receives (`R`), rewrites (`I`)
@@ -6711,7 +6828,8 @@ and `intr.reason`), flushed to DebugView by the start itself; with
 `start.refused.delivery` (the reason).
 Reasons: 7 mode 1 with no interrupt or pin 0, 14 mode 1 given a message,
 16 mode 3 given no message (a line, or nothing), 17 mode 3's message not
-connected (no routines - 32-bit with `xhcimsi.sys` not bound - a refused
+connected (no routines - 32-bit with `xhcihlpr.sys`, `xhcimsi.sys` before
+task 38.3, not bound - a refused
 connection, or Windows connecting the line instead), 18 mode 3 on Windows
 98 SE, ME, 2000 or XP (32- or 64-bit); 15 is mode 3 running its message.
 
@@ -6724,6 +6842,31 @@ acknowledgement, 2 by PCI Interrupt Disable), `intr.retire.recover`,
 cleared a leftover Interrupt Disable `intr.intxdisable.cleared` (or
 `intr.intxdisable.stuck`). The stop's counter dump adds `intr.*`, `poll.*`
 and `watch.*` lines for the counter block's new words.
+
+**The finer timer's log notes and counters** (every flavour; task 38.3,
+design record 15 section 7.2.9). Written by the controller's timer thread
+(`src\hcd_tmr.c`) through `XhciLogNote`, so no `DbgPrint` site is added:
+`poll.timer.hold` (the value `ExSetTimerResolution` returned),
+`poll.timer.release` (the cause in the top byte - 1 the poller left ACTIVE,
+2 parked or revoked, 3 barred by a power transition, 4 the stop - and the
+value returned below it), `poll.timer.look` (the 32-bit NT 5 thread's own
+lookup of the helper), `poll.timer.source`, `poll.timer.thread.failed` and
+`poll.timer.join` (after the stop's join); at start, beside the delivery's
+notes, `poll.timer.switch.read`, `poll.timer.switch`, `poll.timer.desired`,
+`hlpr.msi.verdict` and `hlpr.timer.verdict`; the `qemu` flavour adds
+`qemu.tmr.delay` and `qemu.susp.holddx` at start, and `poll.timer.call` and
+`poll.timer.return` (above). The counter block's words 176 to 198
+(`src\xhci_counters.h`) carry `TmrSwitchRead`, `TmrSwitch`, `TmrSource` (0
+none, 1 the helper, 2 the system, 3 not found), `TmrThread` (0 not
+created, 1 running, 2 creation failed, 3 joined), `TmrHeld`, `TmrHolds`,
+`TmrReleases`, `TmrReleasesForced`, `TmrHoldsRaced`, `TmrObsCrossed`,
+`TmrDesired`, `TmrActualHeld`, `TmrActualReleased`, `TmrReleaseCause`,
+`TmrHeldMs`, the phase observations `TmrObsReleased{Count,SumMs,Late}` and
+`TmrObsHeld{Count,SumMs,Late}`, and the helper's `HlprMsiVerdict` and
+`HlprTimerVerdict`; the stop's counter dump prints them as `poll.timer.*`
+lines and `hlpr.msi.verdict` and `hlpr.timer.verdict`, and `XHCISNAP` as
+its "finer system timer" section. None has been
+read in a guest yet.
 
 **`XhciQemuInject`** (roadmap-hcd task 35-T.9, design record 17 section 5).
 A REG_DWORD the controller thread re-reads about once a second, so a script
@@ -6748,6 +6891,8 @@ in the guest fires a fault at run time by writing it:
 | `08` to `12` | The soft retry and the device cycle (35-T.2 to 35-T.4) | the next table |
 | `13` | A device clear not taken (36.12) | the next CLEAR_FEATURE(ENDPOINT_HALT) the thread sends any device - a RESET_PIPE's, a SYNC_CLEAR_STALL's, a streams open's or close's - is answered and never sent, once: `arg` 0 a STALL, 1 another failure, 2 never sent (any other `arg` is refused); the device's halt and toggle stay as they were. Noted `qemu.inj.clearhalt` (slot, DCI, outcome). Fire it before the reset it is for, for example before `08` with `arg` 4 on the HID pointer, whose fourth Transaction Error has the class driver reset the emulated Halted endpoint: the reset's Reset Endpoint, then this answer, leaves the device's half owed (`pipe.clear.owed`: slot, DCI, outcome) and the pipe paused, and the next RESET_PIPE, SYNC_CLEAR_STALL or RESET_PORT ends it (`pipe.clear.owed.end`: slot, DCI, and 1 both halves done, 2 a fresh context, 3 the endpoint no longer Stopped); a SYNC_RESET_PIPE between answers success and leaves it owed |
 | `14` to `17` | A bulk TD's short, error, stop and timeout (roadmap-hcd task 36.22) | the paragraph after the next table |
+| `18` | A SET_INTERFACE not taken (38.10) | the next SET_INTERFACE a SELECT_INTERFACE sends - from any device, so fire it just before the switch it is for - is answered and never sent, once: `arg` 0 a STALL, 1 not established (any other `arg` is refused). QEMU's devices take every SET_INTERFACE their descriptors allow, so this is how a guest reaches design record 20 section 5.3's step 4: on an interface with two settings (`usb-audio`'s streaming interface) a STALL re-instates the old one (`cfg.select.rollback`, `SelectRollbacks`, then `SelectRollbacksReopened` once the old endpoints' clears complete; isochronous endpoints get none), on an interface with one setting it is a success through CLEAR_FEATURE(ENDPOINT_HALT) on the new endpoints (`SelectStallSuccesses`), and not established leaves the interface with no pipe and its new endpoints held stale (`RingsRetained`). Noted `qemu.inj.setif` (slot, stalled) and `cfg.select.end` (slot, interface, answer, last event) |
+| `19` | A switch's Configure Endpoint not taken (38.10) | the next Configure Endpoint of an interface switch - a SELECT_INTERFACE's or a function select's step 3, or a function's unconfigure or release, which share it (`arg` 0, 2) or a rollback's (`arg` 1, 3; fire `18` with `arg` 0 as well to reach it) - is answered and never issued, once: 0 and 1 refused with Resource Error, the controller changing nothing (after `arg` 0 a select puts the old pipes back, `SelectsReattached`, while an unconfigure or release holds them closed and stale, `RingsRetained`; after `arg` 1 the new endpoints are held stale); 2 and 3 with no completion and the controller reset requested, as a command that never completes is answered (everything held pinned, `RingsPinned`, until the recovery's HCRST drops every device). Noted `qemu.inj.selcfg` (rollback, code) |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
 Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows

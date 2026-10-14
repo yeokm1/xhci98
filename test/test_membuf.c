@@ -621,6 +621,70 @@ static void test_pool_accounting_disagreement(void)
     CHECK_EQ(XhciPoolFree(&pool), 32UL, "and the array agrees the pool is free");
 }
 
+/*
+ * Task 38.10 (design record 20 section 5.2): an interface switch holds the
+ * rings its command will drop until a proof releases them, so they are a
+ * reservation the per-device cap does not count - a device at the cap can
+ * still make its replacements - while the fairness rule counts every ring
+ * held, so a replacement never passes for a first ring.
+ */
+static void test_pool_reserved(void)
+{
+    XHCI_RING_POOL pool;
+    ULONG idx;
+    ULONG n;
+
+    XhciPoolInit(&pool);
+    for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+        CHECK_EQ(XhciPoolAcquire(&pool, 1UL, 0UL, &idx), XHCI_POOL_OK,
+                 "device 1 to the cap");
+    }
+    CHECK_EQ(XhciPoolAcquire(&pool, 1UL, 0UL, &idx), XHCI_POOL_AT_CAP,
+             "a fifth ring outside a switch is refused");
+    /* A switch of all four: each replacement granted, the cap counting
+     * the rings outside the reservation. */
+    for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+        CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL, 4UL, &idx),
+                 XHCI_POOL_OK, "replacement granted within the reservation");
+    }
+    CHECK_EQ(XhciPoolDeviceCount(&pool, 1UL), 8UL,
+             "twice the cap while the switch is in flight");
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL, 4UL, &idx),
+             XHCI_POOL_AT_CAP, "a fifth replacement is refused");
+    CHECK_EQ(pool.AcquireFailuresCap, 2UL, "both cap refusals counted");
+
+    /* A reservation larger than what is held reserves nothing. */
+    XhciPoolInit(&pool);
+    for (n = 0; n < XHCI_MAX_DEVICE_ENDPOINTS; n++) {
+        CHECK_EQ(XhciPoolAcquire(&pool, 2UL, 0UL, &idx), XHCI_POOL_OK,
+                 "device 2 to the cap");
+    }
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 2UL, 0UL, 9UL, &idx),
+             XHCI_POOL_AT_CAP, "an overlong reservation is no reservation");
+
+    /* Fairness keeps the physical count: a device whose every ring is
+     * reserved is not ringless, so its replacement is refused at
+     * free == ringless, where a first ring would be granted. */
+    XhciPoolInit(&pool);
+    CHECK_EQ(XhciPoolAcquire(&pool, 1UL, 0UL, &idx), XHCI_POOL_OK,
+             "device 1's one ring");
+    for (n = 2; n <= 30; n++) {
+        CHECK_EQ(XhciPoolAcquire(&pool, n, 0UL, &idx), XHCI_POOL_OK, "fill");
+    }
+    CHECK_EQ(XhciPoolFree(&pool), 2UL, "two rings left");
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 2UL, 1UL, &idx),
+             XHCI_POOL_UNFAIR,
+             "a replacement is refused where a first ring would not be");
+    CHECK_EQ(pool.AcquireFailuresFairness, 1UL, "counted as fairness");
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 1UL, 1UL, &idx),
+             XHCI_POOL_OK, "and granted with slack");
+
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 0UL, 0UL, 0UL, &idx),
+             XHCI_POOL_BAD_PARAM, "device ref 0 refused");
+    CHECK_EQ(XhciPoolAcquireReserved(&pool, 1UL, 0UL, 0UL, NULL),
+             XHCI_POOL_BAD_PARAM, "null out pointer refused");
+}
+
 static void test_pool_release(void)
 {
     XHCI_RING_POOL pool;
@@ -825,6 +889,7 @@ int main(void)
     test_pool_admission_boundaries();
     test_pool_accounting_disagreement();
     test_pool_release();
+    test_pool_reserved();
     test_resource_base();
     test_context_strides();
 

@@ -43,12 +43,32 @@ roadmap-hcd task 37.5 so does **`portsw\`**: the Intel port switchover's
 rather than into every flavour directory, since they are the same for every
 architecture and flavour and the setup engine never reads them. It carries
 no `readme.txt` of its own: the top-level readme's section 9 explains them.
+Since roadmap-hcd task 38.9 the three sit under **`tools\`** in the version
+directory (`tools\xhciqual\`, `tools\xhcisnap\`, `tools\portsw\`), so the
+version root holds only the flavour directories, the readme and the licence;
+a version published before 2.4.0.0 keeps its tools at its root (portsw\ only
+in 2.3.1.0; 2.3.0.0 has the scripts per flavour, older none), and the upload
+assembly reads each tree at the layout its version was published with.
 
 **Only the executable and its MAP go out**, not the numbered `.BAT` wrappers.
 Those drive the staged active tests - which take ownership of the controller,
 reset it and enable bus mastering - and are development instrumentation. What a
 user needs is the one read-only command that answers "will this driver work on
 this machine", and that is `XHCIQUAL` with no arguments.
+
+**The report batches go out beside their tools** (roadmap-hcd task 38.1):
+`QUALREP.BAT` beside `XHCIQUAL.EXE` (a read-only probe whose log is named from
+the DOS clock), and `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside
+`XHCISNAP.EXE` (the log channel on, the report and the dump with the channel
+left on, the channel off). They are what a field report asks its reporter to
+run. They are copied from `xhciqual\` and `xhcisnap\`, published under 8.3
+upper-case names, and held to their tools' directories alone
+(`Assert-ReportBatchLayout`); a version published before 2.4.0.0 has none. What
+they say is held to one checker, `Get-ReportBatchFaults` in `package-common.ps1`:
+by `test-package.ps1` on the repository's sources, and here on the batches
+actually staged (which must also be the repository's bytes) and on those in the
+tree an upload set is assembled from, `-UploadSetOnly`'s included
+(`Assert-ReportBatchContent`).
 
 **Both published readmes document the whole command line even so**, split into
 read-only options and active ones: the qualifier's own `readme.txt` in a
@@ -184,7 +204,7 @@ cut refuses; a stamp that MISMATCHES is refused either way.
 
 .PARAMETER SnapToolDir
 Where `XHCISNAP.EXE` is built. Defaults to `xhcisnap\` in the repository. It is
-staged into `releases\<version>\xhcisnap\`, beside the DOS qualifier's own
+staged into `releases\<version>\tools\xhcisnap\`, beside the DOS qualifier's own
 directory, and it is what a user runs to switch the driver's read channel on and
 to take a dump off the machine - **the only route this driver has for getting
 evidence off Windows 98**. It has never been in a release before task 13-L.2.
@@ -195,12 +215,24 @@ builds with the in-repo MSVC 6.0 and installs nothing - so this exists for the
 packager's own self-tests, and a release cut with it publishes a read channel
 nobody can open.
 
+.PARAMETER CleanToolDir
+Where `XHCICLN.EXE` and `XHCICL64.EXE` are built. Defaults to `xhcicln\` in the
+repository. Both are staged into `releases\<version>\tools\xhcicln\` with a
+readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
+7 removes, the devnodes a driver before 2.4.0.0 left under `XHCI98\`
+(roadmap-hcd task 38.8, design record 13 section 10.13.8).
+
+.PARAMETER SkipCleanTool
+Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
+half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
+without it, and says so on the console.
+
 .PARAMETER QualtoolDir
 Where to take `XHCIQUAL.EXE` and its `.MAP` from. Defaults to `xhciqual\` in the
 repository.
 
 .PARAMETER SkipQualtool
-Publish without the `xhciqual\` subdirectory. For a host with no Open Watcom
+Publish without the `tools\xhciqual\` subdirectory. For a host with no Open Watcom
 build available; the resulting release is incomplete and says so.
 
 .PARAMETER SkipUploadSet
@@ -297,6 +329,8 @@ param(
     [switch]$SkipQualtool,
     [string]$SnapToolDir = "",
     [switch]$SkipSnapTool,
+    [string]$CleanToolDir = "",
+    [switch]$SkipCleanTool,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -356,6 +390,7 @@ $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
+if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -484,12 +519,22 @@ function Resolve-DirectoryArgument {
 $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
+$CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
 # Source name -> published 8.3 name. The tool is written for DOS, so what it is
 # called on the media matters: a long name is not what a DOS prompt will show.
 $qualtoolFiles = @{ "xhciqual.exe" = "XHCIQUAL.EXE"; "xhciqual.map" = "XHCIQUAL.MAP" }
+
+# The field reports' batch files (roadmap-hcd task 38.1), per tool: source name
+# in the tool's own directory -> published 8.3 name beside its executable.
+# Copied with the tool, so a cut that skips a tool publishes none of its
+# batches; held there and nowhere else by Assert-ReportBatchLayout.
+$reportBatches = @{
+    "xhcisnap" = @{ "snapon.bat" = "SNAPON.BAT"; "snapget.bat" = "SNAPGET.BAT"; "snapoff.bat" = "SNAPOFF.BAT" };
+    "xhciqual" = @{ "QUALREP.BAT" = "QUALREP.BAT" }
+}
 
 #
 # **A published directory is a flavour AND an architecture, and both are in its
@@ -529,12 +574,19 @@ $archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
 $publishable = @("xhci98.inf", "xhci98.sys")
 
 # **A leg may publish a third file of this project's own, when its INF
-# declares it** (task 36.15; design record 18 section 8.2): xhcimsi.sys, the
-# NT 6 x86 MSI helper, which the 32-bit INF names and the 64-bit one does not.
-# So the publishable set is per leg - the two above plus whichever of these
-# that leg's own INF declares - and a release cut before 2.3.0.0, whose INFs
-# declare none, is published and reconstructed exactly as before.
-$legPublishableExtra = @("xhcimsi.sys")
+# declares it** (task 36.15; design record 18 sections 8.2 and 15.11):
+# xhcihlpr.sys, the x86 helper, which the 32-bit INF names and the 64-bit one
+# does not (xhcimsi.sys, the NT 6 x86 MSI helper, until task 38.3). So the
+# publishable set is per leg - the two above plus whichever of these that
+# leg's own INF declares - and a release cut before 2.3.0.0, whose INFs
+# declare none, is published and reconstructed exactly as before. A 2.3.x
+# upload set, whose helper is xhcimsi.sys, is reconstructed from its own cut
+# commit (the version gate below already requires it); this tree promises no
+# cross-version reconstruction.
+$legPublishableExtra = @("xhcihlpr.sys")
+# The 2.3.x helper's name, which no cut from this tree may publish (record 18
+# section 15.11): an update retires it (DelService and DelFiles in the INF).
+$retiredHelper = "xhcimsi.sys"
 
 function Get-LegPublishable {
     # The publishable set of one leg, from the media layout its own INF
@@ -569,16 +621,86 @@ $oemPublishable = @("txtsetup.oem")
 # batch files (task 36.56), which set 1 or 0 through it in one double-click.
 # Not INF-declared files: text files the user runs, the same for every
 # architecture and flavour, which the setup engine never reads. Since task
-# 37.5 a cut publishes them once, from src\, into portsw\ at the version
-# root beside xhciqual\ and xhcisnap\, and into no flavour directory; the
+# 37.5 a cut publishes them once, from src\, into portsw\ beside xhciqual\
+# and xhcisnap\ (all three under tools\ since task 38.9), and into no
+# flavour directory; the
 # packages no longer carry them. A version published before 2.3.0.0 has
 # none and 2.3.0.0 has them at the root of each flavour directory, and a
 # published release is never rewritten, so the upload assembly accepts a
 # tree with no portsw\ in the layout its version was published with
 # (Assert-PortSwitchLayout -PublishedVersion).
 $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
-$pswDirName = "portsw"
 
+# The release's tools in tools\ (roadmap-hcd task 38.9): a cut publishes
+# xhciqual\, xhcisnap\ and portsw\ under <version>\tools\, so the version
+# root holds only the flavour directories, the readme and the licence. The
+# first version so published is 2.4.0.0; every one before it has them at the
+# version root, and a published release is never rewritten. So the upload
+# assembly reads the layout off the tree as Assert-PortSwitchLayout does: a
+# tree with tools\ is held to it at any version (a dry cut before the version
+# is stamped has one), and a tree without it is accepted only before 2.4.0.0.
+# xhcicln\, the cleanup tool of task 38.8, is first published in 2.4.0.0 too,
+# and only ever under tools\.
+$toolsDirName = "tools"
+$toolsLayoutVersion = [version]"2.4.0.0"
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")
+
+# The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
+# design record 13 section 6.11.8): copied once from src\ into tools\silent\
+# under these names, and into no flavour directory. First published in
+# 2.4.0.0, which is also the first version with tools\, so a tree without
+# tools\ has none of them anywhere (Assert-SilentInstallLayout).
+$silentPublishable = @{
+    "silent.reg"     = "SILENT.REG"
+    "silent.vbs"     = "SILENT.VBS"
+    "silent-on.bat"  = "silent-on.bat"
+    "silent-off.bat" = "silent-off.bat"
+}
+
+function Get-ToolDirName {
+    # A tool's directory relative to the version root: tools\<Name> for the
+    # cut (no -Root) and for a tree that has tools\, <Name> for one without.
+    param([string]$Name, [string]$Root = "")
+    if ($Root -ne "" -and -not (Test-Path -LiteralPath (Join-Path $Root $toolsDirName))) { return $Name }
+    return (Join-Path $toolsDirName $Name)
+}
+
+function Assert-ToolsLayout {
+    # The layout of task 38.9: tools\ holding nothing but the tools'
+    # directories, and none of them at the version root.
+    #
+    # Without -PublishedVersion (the cut) that is the only layout accepted.
+    # With it (the upload assembly) a tree that has tools\ is still held to
+    # it, and one that has not is accepted only before 2.4.0.0, where it is
+    # how every version was published.
+    param([string]$Root, [string]$What, [string]$PublishedVersion = "")
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $tools = Join-Path $rootFull $toolsDirName
+    $faults = @()
+    if (Test-Path -LiteralPath $tools) {
+        if (-not (Test-Path -LiteralPath $tools -PathType Container)) {
+            $faults += "$toolsDirName is a file, not a directory"
+        } else {
+            foreach ($item in @(Get-ChildItem -LiteralPath $tools -Force)) {
+                if (-not $item.PSIsContainer -or $item.Name.ToLowerInvariant() -notin $toolNames) {
+                    $faults += "$toolsDirName\$($item.Name) is not one of the tools' directories"
+                }
+            }
+        }
+        foreach ($name in $toolNames) {
+            if (Test-Path -LiteralPath (Join-Path $rootFull $name)) { $faults += "$name\ is at the version root, not in $toolsDirName\" }
+        }
+        $layout = "in $toolsDirName\"
+    } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge $toolsLayoutVersion) {
+        throw "$What has no $toolsDirName\ directory, where the release's tools are published (roadmap-hcd task 38.9)."
+    } else {
+        $layout = "at the version root, as a version before $toolsLayoutVersion has them"
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the release's tools {1} (roadmap-hcd task 38.9):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
 function Publish-PortSwitchScripts {
     # Copies the scripts from SourceDir into <DestRoot>\<DirName>\ and returns
     # that directory. Together or not at all: a missing one is refused before
@@ -657,6 +779,237 @@ function Assert-PortSwitchLayout {
     if ($faults.Count -gt 0) {
         throw ("{0} does not carry the port switchover's scripts {1} (roadmap-hcd task 37.5):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Publish-SilentInstallScripts {
+    # Copies the silent install's four files (task 38.2) from SourceDir into
+    # <DestRoot>\<DirName>\ under their published names and returns that
+    # directory. Together or not at all: a missing one is refused before
+    # anything is copied.
+    param([string]$SourceDir, [string]$DestRoot, [hashtable]$Map, [string]$DirName)
+    $missing = @($Map.Keys | Sort-Object | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+    if ($missing.Count -gt 0) {
+        throw ("'{0}' has no {1}: the silent install's list and scripts are published together or not at all (roadmap-hcd task 38.2)." -f `
+               $SourceDir, ($missing -join ", "))
+    }
+    $dir = Join-Path $DestRoot $DirName
+    Ensure-Directory $dir
+    foreach ($src in @($Map.Keys | Sort-Object)) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $src) -Destination (Join-Path $dir $Map[$src]) -Force
+    }
+    return $dir
+}
+
+function Assert-SilentInstallLayout {
+    # The layout of task 38.2 in a version tree: in a tree with tools\,
+    # tools\silent\ holds the four files under their published names and
+    # nothing else, and no other directory of the tree holds a copy of any
+    # of them. A tree without tools\ is a version published before 2.4.0.0
+    # (Assert-ToolsLayout refuses it at the cut and from 2.4.0.0), and none
+    # of those has any of them anywhere.
+    param([string]$Root, [hashtable]$Map, [string]$What, [string]$PublishedVersion = "")
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $names = @($Map.Values | Sort-Object)
+    $keys = @($names + @($Map.Keys) | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+    $copies = @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force |
+                Where-Object { $_.Name.ToLowerInvariant() -in $keys })
+    $faults = @()
+    $dir = Join-Path $rootFull (Join-Path $toolsDirName "silent")
+    if (Test-Path -LiteralPath (Join-Path $rootFull $toolsDirName) -PathType Container) {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+            $faults += "$toolsDirName\silent\ is missing"
+        } else {
+            foreach ($name in $names) {
+                $hit = @(Get-ChildItem -LiteralPath $dir -File -Force | Where-Object { $_.Name -ceq $name })
+                if ($hit.Count -ne 1) { $faults += "$toolsDirName\silent\$name is missing or not so named" }
+            }
+            foreach ($item in @(Get-ChildItem -LiteralPath $dir -Force)) {
+                if ($item.PSIsContainer -or $item.Name -cnotin $names) {
+                    $faults += "$toolsDirName\silent\$($item.Name) is not one of the silent install's files"
+                }
+            }
+        }
+        $allowedDirs = @($dir)
+        $layout = "in $toolsDirName\silent\ alone"
+    } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge $toolsLayoutVersion) {
+        throw "$What has no $toolsDirName\ directory, where the silent install's list and scripts are published (roadmap-hcd task 38.2)."
+    } else {
+        $allowedDirs = @()
+        $layout = "absent, as a version before $toolsLayoutVersion has them"
+    }
+    foreach ($item in $copies) {
+        if ($item.DirectoryName.TrimEnd('\') -notin $allowedDirs) {
+            $faults += ("{0} is a copy outside where they belong" -f $item.FullName.Substring($rootFull.Length + 1))
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the silent install's list and scripts {1} (roadmap-hcd task 38.2):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Assert-SilentInstallContent {
+    # What the silent install's files in a version tree SAY (task 38.2), where
+    # Assert-SilentInstallLayout checks only where they are (Codex review of
+    # 38.2, round 1: a truncated SILENT.REG under the right name passed it).
+    # In tools\silent\, each batch is read as bytes and held to
+    # package-common.ps1's Get-SilentBatchFaults and SILENT.REG to
+    # Get-SilentRegFaults, the definitions test-package.ps1 holds the
+    # sources to; SILENT.VBS has no checker of its own. With -Reference (the
+    # cut: the repository root) each of the four must also be the
+    # repository's src\ file byte for byte. The upload assembly passes none,
+    # as for Assert-ReportBatchContent. Run it after
+    # Assert-SilentInstallLayout, which reports a missing file; a tree
+    # without tools\ has none to read.
+    param([string]$Root, [hashtable]$Map, [string]$What, [string]$Reference = "")
+    $dir = Join-Path (Get-Item -LiteralPath $Root).FullName (Join-Path $toolsDirName "silent")
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return }
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $values = @{ "silent-on.bat" = "1"; "silent-off.bat" = "0" }
+    $faults = @()
+    foreach ($src in @($Map.Keys | Sort-Object)) {
+        $pub = $Map[$src]
+        $path = Join-Path $dir $pub
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $text = $latin1.GetString($bytes)
+        $found = @()
+        if ($values.ContainsKey($src)) {
+            $found = @(Get-SilentBatchFaults -Text $text -Value $values[$src])
+        } elseif ($src -eq "silent.reg") {
+            $found = @(Get-SilentRegFaults -Text $text)
+        }
+        foreach ($f in $found) { $faults += "$toolsDirName\silent\${pub}: $f" }
+        if ($Reference -ne "") {
+            $refPath = Join-Path $Reference ("src\" + $src)
+            if (-not (Test-Path -LiteralPath $refPath -PathType Leaf)) {
+                $faults += "$toolsDirName\silent\${pub}: the repository has no src\$src to compare it with"
+            } else {
+                $refBytes = [System.IO.File]::ReadAllBytes($refPath)
+                if ($bytes.Length -ne $refBytes.Length -or
+                    [System.BitConverter]::ToString($bytes) -cne [System.BitConverter]::ToString($refBytes)) {
+                    $faults += "$toolsDirName\silent\$pub is not the repository's src\$src byte for byte"
+                }
+            }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} carries silent install files that are not the ones this release publishes (roadmap-hcd task 38.2):`n  - {1}" -f `
+               $What, ($faults -join "`n  - "))
+    }
+}
+
+function Publish-ReportBatches {
+    # Copies one tool's report batches (roadmap-hcd task 38.1) from SourceDir
+    # into DestDir under their published names. Together or not at all: a
+    # missing one is refused before anything is copied.
+    param([string]$SourceDir, [string]$DestDir, [hashtable]$Map)
+    $missing = @($Map.Keys | Sort-Object | Where-Object {
+        -not (Test-Path -LiteralPath (Join-Path $SourceDir $_) -PathType Leaf) })
+    if ($missing.Count -gt 0) {
+        throw ("'{0}' has no {1}: a tool's report batches are published together or not at all (roadmap-hcd task 38.1)." -f `
+               $SourceDir, ($missing -join ", "))
+    }
+    Ensure-Directory $DestDir
+    foreach ($src in @($Map.Keys | Sort-Object)) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $src) -Destination (Join-Path $DestDir $Map[$src]) -Force
+    }
+}
+
+function Assert-ReportBatchLayout {
+    # The layout of task 38.1 in a version tree: in a tree with tools\, each
+    # tool directory that is there holds every one of its report batches, and
+    # no other directory of the tree holds a copy of any of them. A tree
+    # without tools\ is a version published before 2.4.0.0 (Assert-ToolsLayout
+    # refuses it at the cut and from 2.4.0.0), and none of those has any.
+    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$PublishedVersion = "")
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $batchHome = @{}
+    foreach ($tool in $Batches.Keys) {
+        foreach ($pub in $Batches[$tool].Values) { $batchHome[$pub.ToLowerInvariant()] = $tool }
+    }
+    $faults = @()
+    $tools = Join-Path $rootFull "tools"
+    if (Test-Path -LiteralPath $tools -PathType Container) {
+        foreach ($tool in @($Batches.Keys | Sort-Object)) {
+            $dir = Join-Path $tools $tool
+            if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+            foreach ($pub in @($Batches[$tool].Values | Sort-Object)) {
+                if (-not (Test-Path -LiteralPath (Join-Path $dir $pub) -PathType Leaf)) { $faults += "tools\$tool\$pub is missing" }
+            }
+        }
+        $layout = "beside their tools in tools\"
+        $withTools = $true
+    } elseif ($PublishedVersion -eq "" -or [version]$PublishedVersion -ge [version]"2.4.0.0") {
+        throw "$What has no tools\ directory, where the report batches are published beside their tools (roadmap-hcd task 38.1)."
+    } else {
+        $layout = "absent, as a version before 2.4.0.0 has them"
+        $withTools = $false
+    }
+    foreach ($item in @(Get-ChildItem -LiteralPath $rootFull -File -Recurse -Force)) {
+        $key = $item.Name.ToLowerInvariant()
+        if (-not $batchHome.ContainsKey($key)) { continue }
+        $want = Join-Path $tools $batchHome[$key]
+        if (-not $withTools -or $item.DirectoryName.TrimEnd('\') -ne $want) {
+            $faults += ("{0} is a copy outside where it belongs" -f $item.FullName.Substring($rootFull.Length + 1))
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} does not carry the report batches {1} (roadmap-hcd task 38.1):`n  - {2}" -f `
+               $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Assert-ReportBatchContent {
+    # What the report batches in a version tree SAY (roadmap-hcd task 38.1),
+    # where Assert-ReportBatchLayout checks only where they are: each one in
+    # a tools\<tool>\ directory that is there is read as bytes and held to
+    # package-common.ps1's Get-ReportBatchFaults, the one definition
+    # test-package.ps1 holds the repository's sources to. So a stale or
+    # malformed batch that came in with -SnapToolDir or -QualtoolDir, or that
+    # sits in the published tree -UploadSetOnly re-assembles, is refused
+    # rather than published or archived (Codex review of 38.1, round 1).
+    #
+    # With -Reference (the cut: the repository root) each one must also be
+    # the repository's own tracked source byte for byte, so a tool directory
+    # holding an older copy that still passes the checker cannot publish it.
+    # The upload assembly passes none: the tree it reads was cut from the
+    # sources of its own commit. Run it after Assert-ReportBatchLayout, which
+    # reports a missing batch; a tree without tools\ has none to read.
+    param([string]$Root, [hashtable]$Batches, [string]$What, [string]$Reference = "")
+    $tools = Join-Path (Get-Item -LiteralPath $Root).FullName "tools"
+    if (-not (Test-Path -LiteralPath $tools -PathType Container)) { return }
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    $faults = @()
+    foreach ($spec in @(Get-ReportBatchSpecs)) {
+        $dir = Join-Path $tools $spec.Dir
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { continue }
+        $pub = $Batches[$spec.Dir][$spec.Name]
+        $path = Join-Path $dir $pub
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        # Bytes, then Latin-1, so a BOM or UTF-16 is seen rather than decoded.
+        foreach ($f in @(Get-ReportBatchFaults -Text $latin1.GetString($bytes) -Spec $spec)) {
+            $faults += "tools\$($spec.Dir)\${pub}: $f"
+        }
+        if ($Reference -ne "") {
+            $refPath = Join-Path $Reference ($spec.Dir + "\" + $spec.Name)
+            if (-not (Test-Path -LiteralPath $refPath -PathType Leaf)) {
+                $faults += "tools\$($spec.Dir)\${pub}: the repository has no $($spec.Dir)\$($spec.Name) to compare it with"
+            } else {
+                $refBytes = [System.IO.File]::ReadAllBytes($refPath)
+                if ($bytes.Length -ne $refBytes.Length -or
+                    [System.BitConverter]::ToString($bytes) -cne [System.BitConverter]::ToString($refBytes)) {
+                    $faults += "tools\$($spec.Dir)\${pub} is not the repository's $($spec.Dir)\$($spec.Name) byte for byte (a stale copy in the tool directory?)"
+                }
+            }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} carries report batches that are not the ones this release publishes (roadmap-hcd task 38.1):`n  - {1}" -f `
+               $What, ($faults -join "`n  - "))
     }
 }
 
@@ -1446,53 +1799,53 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
     }
 }
 
-function Assert-MsiHelperPublished {
-    # xhcimsi.sys, the NT 6 x86 MSI helper (design record 18; task 36.15),
+function Assert-HelperPublished {
+    # xhcihlpr.sys, the x86 helper (design record 18; tasks 36.15 and 38.3),
     # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
     # the build loop's of xhci98.sys: the release FileVersion, VS_FF_DEBUG,
     # the flavour marker, the staged bytes being the built ones, and the
     # source stamp beside the build (scripts\source-stamp.ps1 -Driver
-    # xhcimsi), unstamped only under -AllowUnstampedDriver. x86 legs only:
+    # xhcihlpr), unstamped only under -AllowUnstampedDriver. x86 legs only:
     # the caller publishes it where that leg's INF declares it.
     param([string]$Sys, [object]$Leg, [string]$Flavor, [string]$Version, [string]$ObjRoot)
 
     $rebuild = "scripts\build-driver.cmd $Flavor"
     if (-not (Test-Path -LiteralPath $Sys)) {
-        throw "the $($Leg.Id) leg has no xhcimsi.sys to publish. Rebuild: $rebuild"
+        throw "the $($Leg.Id) leg has no xhcihlpr.sys to publish. Rebuild: $rebuild"
     }
     $info = (Get-Item -LiteralPath $Sys).VersionInfo
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
-        throw "the MSI helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        throw "the x86 helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
     if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        throw "the MSI helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+        throw "the x86 helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        throw "the MSI helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        throw "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
     }
-    $builtSys = Join-Path $ObjRoot "xhcimsi.sys"
+    $builtSys = Join-Path $ObjRoot "xhcihlpr.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
-        throw "the $($Leg.Id) MSI helper about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\msi86. Rebuild: $rebuild"
+        throw "the $($Leg.Id) x86 helper about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\hlpr. Rebuild: $rebuild"
     }
     if ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
         (Get-FileHash -LiteralPath $Sys -Algorithm SHA256).Hash) {
-        throw "the MSI helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
+        throw "the x86 helper about to be published as $($Leg.Dir)\ is not the one in $builtSys, so its source stamp says nothing about the bytes being shipped. Rebuild: $rebuild"
     }
     $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
     $savedEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
         $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
-            -File $stampScript -Driver xhcimsi -Check $ObjRoot 2>&1
+            -File $stampScript -Driver xhcihlpr -Check $ObjRoot 2>&1
         $stampCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $savedEap
     }
     if ($stampCode -eq 1) {
         throw @"
-the MSI helper about to be published as $($Leg.Dir)\ was built from sources this
+the x86 helper about to be published as $($Leg.Dir)\ was built from sources this
 tree no longer holds:
 $($stampOut -join "`n")
 Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
@@ -1500,17 +1853,17 @@ Rebuild it ($rebuild) so the published bytes are ones the tree can reproduce.
     } elseif ($stampCode -eq 2) {
         if (-not $AllowUnstampedDriver) {
             throw @"
-no source stamp beside the $Flavor MSI helper in $ObjRoot, so this script
-cannot tell whether src\msi86 still reproduces it. Rebuild it ($rebuild), which
+no source stamp beside the $Flavor x86 helper in $ObjRoot, so this script
+cannot tell whether src\hlpr still reproduces it. Rebuild it ($rebuild), which
 writes the stamp as it goes; or, for a binary that must ship unstamped, pass
 -AllowUnstampedDriver, as for xhci98.sys.
 "@
         }
-        Write-Warn "no source stamp beside the $Flavor MSI helper, and -AllowUnstampedDriver was passed."
+        Write-Warn "no source stamp beside the $Flavor x86 helper, and -AllowUnstampedDriver was passed."
     } elseif ($stampCode -ne 0) {
-        throw "scripts\source-stamp.ps1 -Driver xhcimsi -Check '$ObjRoot' failed: $($stampOut -join "`n")"
+        throw "scripts\source-stamp.ps1 -Driver xhcihlpr -Check '$ObjRoot' failed: $($stampOut -join "`n")"
     } else {
-        Write-Ok "$($Leg.Id) MSI helper matches the sources in src\msi86"
+        Write-Ok "$($Leg.Id) x86 helper matches the sources in src\hlpr"
     }
 }
 
@@ -1670,7 +2023,7 @@ their defaults.
     # the layout individually below; this is where the layout comes from, not a
     # substitute for checking.
     # **Per leg since task 36.15** (design record 18 section 8.2): the two
-    # INFs no longer declare the same media - the 32-bit one adds the x86 MSI
+    # INFs no longer declare the same media - the 32-bit one adds the x86
     # helper - so each directory's layout comes from its own INF, and the
     # first leg's is no longer made to answer for the others. The comment
     # above describes the arrangement this replaced.
@@ -1888,11 +2241,31 @@ $gateOut
     # The test client (task 36.34) anywhere in the asset, the tools'
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
-    # And the port switchover's scripts in portsw\ alone where the tree has
-    # that directory (task 37.5); a version cut before it is accepted with
-    # the layout it was published with.
-    Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable -DirName $pswDirName `
-                            -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # The tools in tools\ where the tree has it, and at the version root only
+    # before 2.4.0.0 (task 38.9). And the port switchover's scripts in their
+    # directory alone where the tree has it (task 37.5); a version cut before
+    # it is accepted with the layout it was published with.
+    Assert-ToolsLayout -Root $uploadRoot -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # A tree with tools\ is cut in task 38.9's layout, so it is held to the
+    # cut's port switchover layout too, whatever its version: the legacy
+    # layouts -PublishedVersion admits belong to trees without tools\.
+    $pswVersion = if (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName)) { "" } else { $Version }
+    Assert-PortSwitchLayout -Root $uploadRoot -Names $pswPublishable `
+                            -DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot) `
+                            -What "the upload set '$uploadRoot'" -PublishedVersion $pswVersion
+    # The silent install's four files in tools\silent\ alone where the tree
+    # has tools\, and none anywhere in a tree published before 2.4.0.0
+    # (task 38.2).
+    Assert-SilentInstallLayout -Root $uploadRoot -Map $silentPublishable -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # And what they say, before anything is archived, as for the report
+    # batches below.
+    Assert-SilentInstallContent -Root $uploadRoot -Map $silentPublishable -What "the upload set '$uploadRoot'"
+    # The report batches beside their tools where the tree has tools\, and
+    # none anywhere in a tree published before 2.4.0.0 (task 38.1).
+    Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'" -PublishedVersion $Version
+    # And what they say, before anything is archived: the cut checked them
+    # when it staged them, but -UploadSetOnly reads a tree it did not stage.
+    Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
@@ -2476,7 +2849,14 @@ the result in place of the marker, then cut again. The first:
         $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                      $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
                      "-OutDir", $pkgDirForBuild)
-        if ($NoTargetEvidence) { $pkgArgs += "-NoTargetEvidence" }
+        if ($NoTargetEvidence) {
+            # The x86 helper is never packaged on its allowlist alone (design
+            # record 18 section 15.11); make-package.ps1 refuses it too.
+            if ($leg.Arch -eq "x86") {
+                throw "-NoTargetEvidence: an x86 leg carries xhcihlpr.sys, whose hlprx86 import gate needs the Windows 2000, XP, Vista and 7 x86 kernels and HALs staged (design record 18 section 15.11). Stage them and cut without -NoTargetEvidence."
+            }
+            $pkgArgs += "-NoTargetEvidence"
+        }
         # The x64 legs are signed at staging (design record 19); the password
         # reaches the child through XHCI98_TESTSIGN_PW, set above.
         $legSigned = ($leg.Arch -eq "x64")
@@ -2729,11 +3109,15 @@ invalidate readings already taken on these exact bytes - say so:
                             -ObjRoot (Join-Path $repo ("src\uas\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                             -Signed:$legSigned
 
-        # The NT 6 x86 MSI helper, where this leg's INF declares it (design
-        # record 18), held to the same refusals.
-        if ($declaredPublishable[$leg.Arch] -contains "xhcimsi.sys") {
-            Assert-MsiHelperPublished -Sys (Join-Path $destDir "xhcimsi.sys") -Leg $leg -Flavor $f -Version $Version `
-                                      -ObjRoot (Join-Path $repo ("src\msi86\" + $objDirName[$f] + "\i386"))
+        # The x86 helper, where this leg's INF declares it (design record
+        # 18), held to the same refusals; and the 2.3.x helper's name never
+        # published (section 15.11).
+        if ($declaredPublishable[$leg.Arch] -contains "xhcihlpr.sys") {
+            Assert-HelperPublished -Sys (Join-Path $destDir "xhcihlpr.sys") -Leg $leg -Flavor $f -Version $Version `
+                                   -ObjRoot (Join-Path $repo ("src\hlpr\" + $objDirName[$f] + "\i386"))
+        }
+        if (Test-Path -LiteralPath (Join-Path $destDir $retiredHelper)) {
+            throw "the $($leg.Id) leg holds $retiredHelper, the 2.3.x helper this release retires (design record 18 section 15.11). Rebuild the package: scripts\package\make-package.ps1 -Flavor $f"
         }
 
         $staged[$leg.Id] = [pscustomobject]@{
@@ -2842,7 +3226,7 @@ the release readme tells the user exactly that. Rebuild the qualifier
         if (-not (Test-DriverVersionMatches -Reported $toolVersion -Declared $Version)) {
             throw @"
 '$versionHeader' declares the version as "$toolVersion", but this release is $Version.
-The qualifier is published inside releases\$Version\xhciqual\ and prints that
+The qualifier is published inside releases\$Version\tools\xhciqual\ and prints that
 string into every log a user saves, so the two must agree. Bump the version in
 src\xhci_version.h and rebuild the qualifier (xhciqual\SETENV.BAT then
 xhciqual\build.cmd) - see docs\contributing\build-and-test.md, "Versioning the
@@ -2850,16 +3234,20 @@ driver".
 "@
         }
 
-        $qualDir = Join-Path $destRoot "xhciqual"
+        $qualDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciqual")
         Ensure-Directory $qualDir
         foreach ($src in $qualtoolFiles.Keys) {
             Copy-Item -LiteralPath (Join-Path $QualtoolDir $src) `
                       -Destination (Join-Path $qualDir $qualtoolFiles[$src]) -Force
         }
+        # Its report batch (roadmap-hcd task 38.1), beside it. Not compiled, so
+        # no freshness rule applies; what it says is held, once staged, to the
+        # shared checker and the repository's own bytes (Assert-ReportBatchContent).
+        Publish-ReportBatches -SourceDir $QualtoolDir -DestDir $qualDir -Map $reportBatches["xhciqual"]
         $qualtoolStaged = $qualDir
         Write-Ok (("XHCIQUAL.EXE staged at version {0} from src\xhci_version.h, " +
                    "newer than every .c/.h/.asm beside it and than that header, " +
-                   "with a .MAP no older than itself") -f $toolVersion)
+                   "with a .MAP no older than itself, and QUALREP.BAT beside it") -f $toolVersion)
     }
 
     # --- the snapshot reader ------------------------------------------------
@@ -2945,7 +3333,7 @@ read the driver beside it.
         if (-not (Test-DriverVersionMatches -Reported $snapVersion -Declared $Version)) {
             throw @"
 '$versionHeader' declares the version as "$snapVersion", but this release is $Version.
-XHCISNAP is published inside releases\$Version\xhcisnap\, prints that string on
+XHCISNAP is published inside releases\$Version\tools\xhcisnap\, prints that string on
 its default screen, and writes it into the header of every report a user sends
 back, so the two must agree. Bump the version in src\xhci_version.h and rebuild
 the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
@@ -2953,28 +3341,101 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
 "@
         }
 
-        $snapDir = Join-Path $destRoot "xhcisnap"
+        $snapDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcisnap")
         Ensure-Directory $snapDir
         Copy-Item -LiteralPath $snapExe -Destination (Join-Path $snapDir "XHCISNAP.EXE") -Force
+        # Its three report batches (roadmap-hcd task 38.1), beside it.
+        Publish-ReportBatches -SourceDir $SnapToolDir -DestDir $snapDir -Map $reportBatches["xhcisnap"]
         $snaptoolStaged = $snapDir
         Write-Ok (("XHCISNAP.EXE staged at version {0} from src\xhci_version.h, " +
                    "wire schema {1}, matching src\xhci.h, newer than every .c/.h " +
-                   "beside it and than that header") -f $snapVersion, $snapSchemaTool)
+                   "beside it and than that header, with SNAPON.BAT, SNAPGET.BAT " +
+                   "and SNAPOFF.BAT beside it") -f $snapVersion, $snapSchemaTool)
+    }
+
+    # --- the cleanup tool (task 38.8) ----------------------------------------
+    #
+    # XHCICLN.EXE (MSVC 6.0, the 32-bit targets) and XHCICL64.EXE (WDK 7.1
+    # amd64, the 64-bit ones), one source: the opt-in tool that lists, and on
+    # Windows 2000 to 7 removes, the devnodes a driver before 2.4.0.0 left
+    # under XHCI98\ (design record 13 section 10.13.8). The same staleness
+    # rule as XHCISNAP's - each EXE newer than every source beside it and than
+    # src\xhci_version.h - and the same version rule: the source expands the
+    # shared macro and the macro is this release's. Not a driver, so the
+    # packager's test signing of the x64 drivers (design record 19) does not
+    # reach XHCICL64.EXE.
+    $cleantoolStaged = $null
+    if (-not $SkipCleanTool) {
+        Write-Step "cleanup tool"
+        $cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")
+        foreach ($name in $cleanExes) {
+            if (-not (Test-Path -LiteralPath (Join-Path $CleanToolDir $name) -PathType Leaf)) {
+                throw @"
+'$CleanToolDir' has no $name.
+Build both first:  xhcicln\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipCleanTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $cleanReadmeSrc = Join-Path $CleanToolDir "README.TXT"
+        if (-not (Test-Path -LiteralPath $cleanReadmeSrc -PathType Leaf)) {
+            throw "'$CleanToolDir' has no README.TXT, the text the tool's published readme.txt is made from."
+        }
+        $cleanSources = @(@(Get-ChildItem -LiteralPath $CleanToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            @(Get-Item -LiteralPath $versionHeader))
+        foreach ($name in $cleanExes) {
+            $cleanTime = (Get-Item -LiteralPath (Join-Path $CleanToolDir $name)).LastWriteTimeUtc
+            $cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })
+            if ($cleanNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $CleanToolDir $name)' is older than $($cleanNewer.Count) of its own source file(s):
+  - $(($cleanNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhcicln\build.cmd) before releasing: a stale copy prints a version
+that is not this release's, or decides with rules the source no longer has.
+"@
+            }
+        }
+        $cleanSource = Join-Path $CleanToolDir "xhcicln.c"
+        Assert-TakesSharedVersion -Path $cleanSource -Macro "XHCICLN_VERSION"
+        $cleanVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $cleanVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$cleanVersion", but this release is $Version.
+XHCICLN prints that string first on every run, so the two must agree. Bump the
+version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
+"@
+        }
+        $cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")
+        Ensure-Directory $cleanDir
+        foreach ($name in $cleanExes) {
+            Copy-Item -LiteralPath (Join-Path $CleanToolDir $name) -Destination (Join-Path $cleanDir $name) -Force
+        }
+        $cleantoolStaged = $cleanDir
+        Write-Ok (("XHCICLN.EXE and XHCICL64.EXE staged at version {0} from src\xhci_version.h, " +
+                   "newer than every source beside them and than that header") -f $cleanVersion)
     }
 
     # --- the port switchover's scripts ---------------------------------------
     #
-    # Once, into portsw\ beside the tools' directories (roadmap-hcd task
-    # 37.5), from src\ rather than from a package: the packages no longer
+    # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
+    # tasks 37.5 and 38.9), from src\ rather than from a package: the packages no longer
     # carry them, and the four flavour directories once held four
     # byte-identical copies of files that are neither architecture- nor
     # flavour-specific. No readme.txt of their own: section 9 of the
     # top-level readme is where they are explained, and each script says
     # what it does when run.
     Write-Step "port switchover scripts"
-    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot `
-                                          -Names $pswPublishable -DirName $pswDirName
-    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), $pswDirName)
+    $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
+    Write-Ok ("{0} published once, in {1}\" -f ($pswPublishable -join ", "), (Get-ToolDirName -Name "portsw"))
+
+    # The silent install's list and its switch's scripts (task 38.2), once,
+    # from src\, into tools\silent\ under their published names. The
+    # top-level readme explains them.
+    Write-Step "silent install list and scripts"
+    $silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")
+    Write-Ok ("{0} published once, in {1}\" -f (@($silentPublishable.Values | Sort-Object) -join ", "), (Get-ToolDirName -Name "silent"))
 
     #
     # Two flavours that hash the same are one binary published twice. The
@@ -3084,7 +3545,7 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
         if ($leg.Arch -eq "x86") {
-            $contents += "      xhcimsi.sys  (the MSI helper for 32-bit Vista and 7; section 4)"
+            $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7; section 4)"
         } else {
             $contents += "      xhci98-test.cer (the test certificate both .sys files are"
             $contents += "                   signed with; you need not import it; section 4)"
@@ -3100,46 +3561,115 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     }
     if ($null -ne $qualtoolStaged) {
         $qexe = Get-Item -LiteralPath (Join-Path $qualtoolStaged "XHCIQUAL.EXE")
-        $contents += "  XHCIQUAL\  - the DOS machine checker from step 1"
+        $contents += "  TOOLS\XHCIQUAL\  - the DOS machine checker from step 1"
         $contents += ""
         $contents += ("      XHCIQUAL.EXE {0:N0} bytes" -f $qexe.Length)
-        $contents += "      XHCIQUAL.MAP keep it beside the EXE; see xhciqual\readme.txt"
+        $contents += "      XHCIQUAL.MAP keep it beside the EXE; see TOOLS\XHCIQUAL\readme.txt"
+        $contents += "      QUALREP.BAT  the read-only probe a bug report asks for, saved"
+        $contents += "                   to a new .LOG named from the date and time"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
         $contents += ""
     }
     if ($null -ne $snaptoolStaged) {
         $sexe = Get-Item -LiteralPath (Join-Path $snaptoolStaged "XHCISNAP.EXE")
-        $contents += "  XHCISNAP\  - what to run if something goes wrong"
+        $contents += "  TOOLS\XHCISNAP\  - what to run if something goes wrong"
         $contents += ""
         $contents += ("      XHCISNAP.EXE {0:N0} bytes" -f $sexe.Length)
+        $contents += "      SNAPON.BAT   turns the driver's log channel on"
+        $contents += "      SNAPGET.BAT  writes the report and the dump a bug report asks for"
+        $contents += "      SNAPOFF.BAT  turns the channel off again"
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices this EXE carries"
         $contents += ""
         $contents += "      It reads the driver's own log off the running"
-        $contents += "      machine and writes a report you can paste into a"
+        $contents += "      machine and writes a report you can attach to a"
         $contents += "      bug report. On Windows 98 it is the only way to"
         $contents += "      get anything out at all. Four steps, and none of"
-        $contents += "      them is regedit:"
+        $contents += "      them is regedit (section 6):"
         $contents += ""
-        $contents += "        XHCISNAP -verbosity 2"
-        $contents += "        restart the machine"
+        $contents += "        SNAPON.BAT"
+        $contents += "        restart Windows"
         $contents += "        make the problem happen again"
-        $contents += "        XHCISNAP -o C:\MYDUMP"
+        $contents += "        SNAPGET.BAT"
         $contents += ""
-        $contents += "      Then send C:\MYDUMP.TXT, and attach"
-        $contents += "      C:\MYDUMP.BIN if you are asked for it."
+        $contents += "      Then attach the .DEV and .TXT files it names,"
+        $contents += "      and run SNAPOFF.BAT once you have sent them."
+        $contents += "      At a prompt, SNAPON 3 sets level 3 rather than"
+        $contents += "      2 (1 to 4), and SNAPGET MYPC saves the files as"
+        $contents += "      MYPC.DEV and so on; section 6 has the rules."
+        $contents += ""
+    }
+    if ($null -ne $cleantoolStaged) {
+        $c32 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICLN.EXE")
+        $c64 = Get-Item -LiteralPath (Join-Path $cleantoolStaged "XHCICL64.EXE")
+        $contents += "  TOOLS\XHCICLN\  - removes what an update from 2.3.x left behind"
+        $contents += ""
+        $contents += ("      XHCICLN.EXE  {0:N0} bytes, for 32-bit Windows" -f $c32.Length)
+        $contents += ("      XHCICL64.EXE {0:N0} bytes, for 64-bit Windows" -f $c64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      Optional: nothing needs it (section 4, updating from"
+        $contents += "      2.3.x or earlier). It lists the old, inert devnodes"
+        $contents += "      under XHCI98\ and, on Windows 2000 to 7, removes them"
+        $contents += "      when asked; on 98 SE and ME it lists only."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
-        $contents += "  PORTSW\  - the Intel port switchover's switch (section 9)"
+        $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (section 9)"
         $contents += ""
         $contents += "      portsw.vbs     shows XhciIntelPortSwitch, and sets it on or off"
         $contents += "      portsw-on.bat  turns it on in one double-click"
         $contents += "      portsw-off.bat turns it off in one double-click"
         $contents += ""
-        $contents += "      One copy for every directory above. Run them from this"
-        $contents += "      directory."
+        $contents += "      One copy for every driver directory above. Run them from"
+        $contents += "      this directory."
+        $contents += ""
+    }
+    if ($null -ne $silentStaged) {
+        $contents += "  TOOLS\SILENT\  - the silent install, Windows 98 SE and ME only"
+        $contents += ""
+        $contents += "      SILENT.REG     the list of device classes that may install"
+        $contents += "                     with no wizard"
+        $contents += "      SILENT.VBS     shows XhciSilentInstall and the list, and sets"
+        $contents += "                     the value on or off"
+        $contents += "      silent-on.bat  merges SILENT.REG, checks it, then turns it on"
+        $contents += "      silent-off.bat turns it off and keeps the list"
+        $contents += ""
+        $contents += "      OFF BY DEFAULT. With XhciSilentInstall at 1 on the"
+        $contents += "      controller, a device whose class is in the list installs"
+        $contents += "      with no Add New Hardware wizard; at anything else, or"
+        $contents += "      absent, nothing changes. The install writes it as 0,"
+        $contents += "      and an update keeps a 1 already there."
+        $contents += "      Never on Windows 2000 and later."
+        $contents += ""
+        $contents += "      The list: hubs, boot keyboards and mice, and Bulk-Only"
+        $contents += "      USB storage. UAS is not in it: its driver is this"
+        $contents += "      package's own, and its first install is the wizard's."
+        $contents += ""
+        $contents += "      RUN silent-on.bat ONLY ONCE EACH LISTED CLASS'S DRIVERS"
+        $contents += "      HAVE BEEN INSTALLED AT LEAST ONCE on this machine. With"
+        $contents += "      no wizard, 98 SE asks for a missing file from its CD (a"
+        $contents += "      keyboard needs KBDHID.VXD), so a device whose driver is"
+        $contents += "      not on the machine yet needs the CD at hand."
+        $contents += ""
+        $contents += "      Double-click silent-on.bat or silent-off.bat here, or run"
+        $contents += "      it at a prompt in this directory, then RESTART WINDOWS."
+        $contents += "      silent-off.bat leaves the list in place, since another"
+        $contents += "      USB stack may read the same key. To delete it too, in"
+        $contents += "      regedit, under"
+        $contents += "        HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB"
+        $contents += "      delete the SilentClasses key, and restart."
+        $contents += ""
+        $contents += "      Windows ME does not need it for a keyboard, mouse, stick"
+        $contents += "      or hub of its own: it installs them with no wizard"
+        $contents += "      already. On 98 SE they install with no wizard once it is"
+        $contents += "      on, the keyboard and mouse after the CD prompt above (read"
+        $contents += "      in virtual machines; a composite keyboard, mouse or stick"
+        $contents += "      was not read). The"
+        $contents += "      information on how the silent install is decided, and the"
+        $contents += "      list, are from SweetLow."
         $contents += ""
     }
 
@@ -3334,8 +3864,8 @@ It is recommended because not every xHCI controller can be driven, and ONE OF
 THE WAYS IT CAN FAIL CANNOT BE FIXED IN SOFTWARE. Finding that out in thirty
 seconds is cheaper than finding it out after installing an operating system.
 
-The checker is in the XHCIQUAL\ subdirectory. Copy XHCIQUAL.EXE to a DOS boot
-disk, and run ONE command:
+The checker is in the TOOLS\XHCIQUAL\ subdirectory. Copy XHCIQUAL.EXE to a DOS
+boot disk, and run ONE command:
 
       XHCIQUAL
 
@@ -3362,8 +3892,8 @@ writes no PCI configuration register. It prints one of four verdicts:
 
 The tool takes options too, and you need none of them to answer the question
 above. The whole command line is below so that a log someone asks you for can
-be produced without guesswork; XHCIQUAL\readme.txt carries the same list with
-the safety notes spelled out.
+be produced without guesswork; TOOLS\XHCIQUAL\readme.txt carries the same list
+with the safety notes spelled out.
 
       XHCIQUAL                          the read-only quick scan, one screen
       XHCIQUAL [xhci|ehci|ohci|all] [options]
@@ -3408,6 +3938,10 @@ the safety notes spelled out.
                         XHCIQUAL.LOG. A family word after --log is read as a
                         selector, so name the file explicitly if you pass
                         both
+      --log-stamp       write the report to a NEW file in the current
+                        directory named from the DOS date and time,
+                        mDDhhmmS.LOG; it never overwrites a file, and not
+                        with --log. QUALREP.BAT uses it (section 6)
       --done-flag FILE  create FILE only if the run finishes normally, so a
                         batch file can tell a crash apart from a bad verdict
       --no-sysinfo      do not read the machine's description (SMBIOS,
@@ -3417,7 +3951,8 @@ the safety notes spelled out.
 
   ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER, reset it, and reset its
   ports. They are development instrumentation; installing this driver never
-  requires them, and XHCIQUAL\readme.txt carries the precautions they need.
+  requires them, and TOOLS\XHCIQUAL\readme.txt carries the precautions they
+  need.
 
       --full            the full active run, across all three families
       --poll-only       active bring-up with no interrupt handler installed.
@@ -3428,6 +3963,10 @@ the safety notes spelled out.
                         space
       --no-wait         do not wait 15 seconds for a device to be plugged in
       --no-devid        skip the xHCI device identification step
+
+FOR A BUG REPORT, run TOOLS\XHCIQUAL\QUALREP.BAT from its own directory under
+real DOS: the read-only probe, saved to a new .LOG named from the date and
+time. Attach the .LOG it names (section 6).
 
 IF YOU ARE ASKED FOR LOGS, run these two in order. The first reads everything
 the read-only path can see, writes nothing to the machine, and leaves
@@ -3452,7 +3991,9 @@ the run was read-only - which cannot pass tests it does not run, so 1 is the
 normal result of every read-only command above - 2 if the command line was
 wrong or no controller of that kind is here, and 3 if the full run passed a
 controller only WITH CAVEATS (no working interrupt, so the driver polls
-it). The verdict on screen is what to read; those codes are for batch files.
+it), and 4 if --log-stamp could not name or create its log, before reading
+anything. The verdict on screen is what to read; those codes are for batch
+files.
 
 >> IT MUST BE RUN FROM REAL DOS, NOT A DOS WINDOW INSIDE WINDOWS. <<
 
@@ -3477,9 +4018,9 @@ it). The verdict on screen is what to read; those codes are for batch files.
    boot whether it loaded.
 
    Two more things, only if you go on to run the deeper tests listed in
-   XHCIQUAL\readme.txt: use a PS/2 keyboard, because a USB keyboard on the
-   controller being tested can stop responding mid-run; and do not boot or
-   write a log through that same controller.
+   TOOLS\XHCIQUAL\readme.txt: use a PS/2 keyboard, because a USB keyboard on
+   the controller being tested can stop responding mid-run; and do not boot
+   or write a log through that same controller.
 
 A controller reporting no interrupt pin is still driven: the driver reads
 its events on a timer instead (polling, XhciInterruptMode in section 9),
@@ -3533,15 +4074,17 @@ The package's own files are in:
   xhciuas.inf, xhciuas.sys   the UAS storage driver
   txtsetup.oem               the driver description Windows 2000 and XP
                              Setup read when F6 is pressed (section 4)
-  xhcimsi.sys               in the -X86 directories only: the helper that
+  xhcihlpr.sys               in the -X86 directories only: the helper that
                              gives 32-bit Vista and 7 a message-signalled
-                             interrupt. The install puts it on those two
+                             interrupt, and 32-bit Windows 2000, XP, Vista
+                             and 7 a finer clock while the controller is
+                             polled. The install puts it on those four
                              systems and no other
 
 Nothing else is in the package, and there is nothing to complete. The
 Intel port switchover's scripts (section 9, XhciIntelPortSwitch) are not
-part of it: they are in the PORTSW directory beside these, one copy for
-all of them.
+part of it: they are in the TOOLS\PORTSW directory, one copy for all of
+them.
 
 Two files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
@@ -3649,10 +4192,10 @@ CD, a shared folder - then:
       Wizard asks the same question - give it the same directory.)
 
   WINDOWS ME
-      SweetLow's USB 2.0 stack first (section 2). Then the same Device
-      Manager route as Windows 98 SE, pointed at the RELEASE-X86\
-      directory, and restart when asked. Windows ME has only been run in a
-      virtual machine.
+      No USB 2.0 stack is needed (section 2). The same Device Manager
+      route as Windows 98 SE, pointed at the RELEASE-X86\ directory;
+      "Insert Disk" may ask for the Windows ME CD (section 3). Restart when
+      asked. Windows ME has only been run in a virtual machine.
 
   WINDOWS 2000 SP4 AND WINDOWS XP (32-BIT)
       Open Device Manager and find the unrecognised xHCI controller, then
@@ -3667,29 +4210,56 @@ CD, a shared folder - then:
       and point it at the RELEASE-X86\ directory. If Windows warns that it
       cannot verify the publisher, install the driver anyway. Use Device
       Manager, not a right-click on the INF. RESTART WHEN ASKED: the install
-      and every update ask for one, for xhcimsi.sys, and after a first
+      and every update ask for one, for xhcihlpr.sys, and after a first
       install the controller does not start until then (Device Manager
-      shows code 28 on 7, code 1 on Vista meanwhile). Both have only been
-      run in virtual machines.{ARCHINSTALL}
+      shows code 28 on 7, code 1 on Vista meanwhile). A reinstall (the
+      controller removed in Device Manager and found again) needs the
+      restart too, even if Windows does not ask: 32-bit Vista showed only
+      an "installed successfully" balloon, and the controller stayed at
+      code 1 until a restart. Both have only been run in virtual
+      machines.{ARCHINSTALL}
 
 It installs as "xHCI98 USB 3.x eXtensible Host Controller", with "xHCI98
 USB 3.x Root Hub" underneath it. Neither should carry a warning mark.
 
-THE UAS DRIVER installs the first time a UAS disk is plugged in: the Found
-New Hardware wizard asks for a driver for "xHCI98 USB Attached SCSI
-Storage". Point it at the same directory. No restart is needed.
+THE UAS DRIVER installs the first time a UAS disk is plugged in. On
+Windows 98 SE, ME, 2000, XP and Vista a New Hardware wizard asks for its
+driver: point it at the same directory. Vista's wizard names the disk by
+its own product name; "xHCI98 USB Attached SCSI Storage" is its name once
+installed. Windows 7 shows no wizard: it searches Windows Update, then
+says the device's driver was not installed. Install it from Device
+Manager instead, on the UAS disk's entry, which carries a warning mark:
+    Update Driver Software -> Browse my computer for driver software
+and point it at the same directory. No restart is needed.
 
 WINDOWS 2000 OR XP SETUP, OR THE RECOVERY CONSOLE, ON AN xHCI-ONLY MACHINE
 ..........................................................................
 
 When the keyboard or the install medium is on the xHCI controller, Setup
 can load this driver at its F6 prompt. Copy the files of RELEASE-X86\ (or
-RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - it holds
-txtsetup.oem, xhci98.sys and xhci98.inf, which is all F6 reads. Start
+RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - F6 reads
+txtsetup.oem, xhci98.sys and xhci98.inf, and from RELEASE-X86\ also
+xhcihlpr.sys, which Setup copies for later and does not load. Start
 Setup, press F6 when "Press F6 if you need to install a third party SCSI
 or RAID driver" shows, press S at the next screen, insert the floppy, and
-pick "xHCI98 USB 3.x Host Controller". Setup then uses its own keyboard,
-mouse and USB storage drivers above it.
+pick "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)" (on XP x64,
+the x64 entry). Setup then uses its own keyboard, mouse and USB storage
+drivers above it.
+
+INSTALLING WINDOWS 2000: use the second entry, with three files from your
+CD. Before Setup, copy USBD.SY_, HIDCLASS.SY_ and HIDPARSE.SY_ from the
+I386 folder of the Windows 2000 CD you install from to the root of the
+same floppy, as they are (do not expand or rename them; this package does
+not carry them). At the F6 list press the Down arrow to "xHCI98 USB 3.x
+Host Controller (32-bit Windows 2000, files from CD)" and press Enter.
+Text mode then copies those files to the new system as well, so a USB
+keyboard, mouse or stick used during Setup works when it first starts.
+If the files are not on the floppy, Setup stops while copying files with
+"Insert the disk labeled: USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the
+32-bit Windows 2000 CD into drive A:" - put a floppy holding them in A:
+and press Enter, or press F3 to quit. That entry is for Windows 2000
+only; Windows XP takes the first. It leaves three idle service entries,
+usbd, hidclass and hidparse, set to start on demand.
 
 The same floppy serves the RECOVERY CONSOLE of Windows 2000 and XP: press
 F6 as for an install, then R at Setup's Welcome screen (on Windows 2000,
@@ -3723,11 +4293,28 @@ does not touch it.
     Setup stops. A laptop's built-in keyboard (connected inside as PS/2) or
     any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
     work. This package cannot carry those files. Windows 2000 does not ask.
+  - WINDOWS 2000 WITH THE FIRST ENTRY, "(32-bit Windows 2000/XP)", AND A
+    USB KEYBOARD, MOUSE OR STORAGE DEVICE ON THE xHCI CONTROLLER STOPS
+    AT THE FIRST START OF THE NEW SYSTEM, with STOP c000026c naming
+    hidusb.SYS or usbstor.SYS (error status 0xc0000034). Windows 2000's
+    text-mode Setup copies the drivers for the USB keyboard, mouse and
+    stick it used, but not the Windows files they need, such as
+    usbd.sys, which it copies only with Microsoft's own USB controller
+    drivers. The Windows 2000 entry, with the three files from the CD
+    on the floppy (above), copies them. Seen in virtual machines, and
+    an earlier release's first entry does the same. Text
+    mode and the Recovery Console work with either entry, Windows XP
+    with a USB keyboard and mouse is not affected, and an install with
+    no USB keyboard, mouse or storage device on the controller went on
+    with no stop. This package does not carry those files.
 
   What has run in virtual machines: text mode with a USB keyboard and a
   USB stick on Windows 2000 and XP, and the Recovery Console on both,
-  logged in and running commands with the USB keyboard alone; and
-  Windows XP and XP x64 installed to the desktop this way. On real
+  logged in and running commands with the USB keyboard alone; Windows
+  XP and XP x64 installed to the desktop this way; and Windows 2000 SP4
+  with the Windows 2000 entry and the three files, with a USB keyboard
+  and mouse behind a hub and with a USB stick alone, through text mode
+  and GUI-mode Setup to the desktop, and again after a restart. On real
   hardware: Windows XP x64 Setup started from a USB stick on a Dell
   Latitude E7250's xHCI controller, with this driver integrated into the
   install, ran to the desktop on this release's code. Nothing else of
@@ -3740,25 +4327,96 @@ UPDATING FROM AN EARLIER 2.x RELEASE
 
 Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
 Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
-directory as a new install. Nothing needs renaming first. As read in
-virtual machines:
+directory as a new install. Nothing needs renaming first. (From 2.3.x or
+earlier the controller alone: the root hub is a new one and installs by
+itself - read FROM 2.3.x below first.) As read in virtual machines:
+
+  FROM 2.3.x OR EARLIER, ONCE: EACH ROOT HUB, HUB AND COMPOSITE DEVICE IS
+  FOUND AGAIN AS NEW HARDWARE. From this release they are named under USB\
+  rather than XHCI98\ (there is no XHCI98 bus), and Windows keeps a device
+  entry per name, so each is installed once more under its new name and
+  its old entry stays behind, hidden and inert. The devices beneath them
+  follow: one with a serial number (most USB sticks and disks) keeps its
+  entry and settings; one without (most mice and keyboards) is found again
+  too, and what was kept on its old entry - a hidusbf polling rate, a
+  friendly name, possibly a USB serial adapter's COM number - is not
+  carried over. Apply such settings again afterwards.
+
+  BEFORE UPDATING FROM 2.3.x ON XP, XP X64 OR 98 SE, HAVE A KEYBOARD AND
+  MOUSE THAT DO NOT GO THROUGH THIS DRIVER: PS/2, a laptop's built-in
+  ones, or a USB controller another driver runs. Windows XP and XP x64 ask
+  Found New Hardware and the unsigned-driver question for the new root
+  hub, each hub and each composite device, and until they are answered
+  the USB keyboard and mouse behind the new root hub do nothing. A second
+  controller running this driver does not help: its root hub is new too.
+  On Windows 98 SE the USB keyboard and mouse do nothing while the update
+  wizard's last page is up, so its Finish needs another keyboard or
+  mouse; after the restart the Add New Hardware wizard for a mouse
+  without a serial number, found again, cannot be answered with that
+  mouse. The 98 SE update itself may ask for the Windows CD.
+
+  WINDOWS 98 SE AND ME: CONNECT NO NEW HUB OR COMPOSITE DEVICE BETWEEN
+  THE UPDATE AND THE RESTART. The earlier release still runs until then
+  and would give it an old name.
+
+  THE OLD ENTRIES ARE HARMLESS and nothing needs them removed. To remove
+  them anyway, after the update and its restart, run TOOLS\XHCICLN\
+  (section 8): it lists them, and on Windows 2000 to 7 removes them when
+  asked; on 98 SE and ME it lists only. Going back to 2.3.x brings each old
+  entry back with its driver - or, if the tool removed it, found and
+  installed afresh.
 
   WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
   The new file waits to replace the old one at the next start, and until
   then the earlier release keeps running. Under SweetLow's stack the
   controller showed a problem for a minute or two after Finish; on ME it
-  shows one until the restart, while the devices keep working.
+  shows one until the restart, while the devices keep working. From 2.3.x
+  ME asked nothing during the update, and one wizard after the restart,
+  for a USB audio device without a serial number.
 
   WINDOWS 2000: USE HAVE DISK. Letting Windows search answers that a
   suitable driver is already installed and keeps the earlier release. Use
-  "Display a list of the known drivers" -> Have Disk, as below.
+  "Display a list of the known drivers" -> Have Disk, as below. Use Have
+  Disk again for a reinstall: after an uninstall and a scan for hardware
+  changes, Windows 2000 installed the earlier release from the package it
+  still held, since it ignores the dates of unsigned drivers.
 
-  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update took effect at
-  once, with no restart. (Read with a command-line driver update rather
-  than Device Manager.)
+  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update takes effect at
+  once. Windows may still say the device will not work until you
+  restart, and XP then offers a restart: the new driver already runs.
+
+  TWO CONTROLLERS: an update of one makes both run the new driver at once
+  (they share the one file), but the other controller's Driver tab keeps
+  the old version until it is uninstalled and found again (read on XP).
+
+  WINDOWS VISTA AND 7: USE HAVE DISK. Browse my computer with the folder
+  typed in answers that the best driver is already installed and keeps
+  the earlier release. Use Browse my computer for driver software ->
+  "Let me pick from a list of device drivers on my computer" -> Have Disk,
+  pointed at the same directory. (Read on 32-bit Vista and 7.)
 
   32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
-  one, for the helper xhcimsi.sys (above).
+  one, for the helper xhcihlpr.sys (above). Until then the earlier release
+  keeps running and Device Manager says the device needs a restart. An
+  update over a release that installed the earlier helper, xhcimsi.sys,
+  also removes it: its file is deleted at once, during the update, and
+  its service is gone after that restart.
+
+  WINDOWS 2000 AND XP: the install and an update copy the helper
+  xhcihlpr.sys and ask for no restart of their own. The controller runs as
+  before; the helper starts at the next restart, and from then a polled
+  controller can ask Windows for a finer clock while it is busy, when
+  XhciPollFineTimer is set to 1 (section 9; off by default). Text-mode
+  Setup through F6 copies the helper from the floppy and does not load
+  it: it arrives with the installed system's own install of the
+  controller.
+
+  REMOVING THE HELPER: uninstalling the controller leaves xhcihlpr, a
+  boot-start service that then loads and idles. Remove it with
+  "sc delete xhcihlpr" on XP, Vista and 7, and on Windows 2000, which has
+  no sc.exe, by deleting the key
+  HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr; then delete
+  System32\Drivers\xhcihlpr.sys after the next restart.
 
   GOING BACK TO AN OLDER RELEASE ON VISTA OR 7: the controller's request
   for a message-signalled interrupt stays in its hardware key, and an
@@ -3778,7 +4436,8 @@ virtual machines:
   ME, its date), although it runs the new file. To change it, run Update
   Driver on "xHCI98 USB 3.x Root Hub" too: on Vista and 7, "Let me pick
   from a list of device drivers on my computer" and the new entry;
-  elsewhere Have Disk.
+  elsewhere Have Disk. (Not from 2.3.x or earlier: there the root hub is
+  new and installed from this release.)
 
   From the first 2.x release only, each device is then found once more as
   new hardware, exactly once: a stick under its serial number, the other
@@ -3866,28 +4525,89 @@ Things specific to this driver, worth knowing in advance:
  6. IF SOMETHING GOES WRONG
 ==============================================================================
 
-  REPORT IT FIRST. XHCISNAP IS ONLY FOR WHEN THE MAINTAINER ASKS FOR IT
-  .....................................................................
+  REPORT IT ON GITHUB
+  ...................
 
   Open an issue on the project's GitHub page (section 7) and describe what
-  happened. DO NOT RUN XHCISNAP UNLESS THE MAINTAINER ASKS YOU TO. Installing
-  and using the driver never needs it, and its first step changes one of the
-  driver's settings, so it is not something to try on your own.
+  happened. The bug report form asks for two things these batch files
+  gather; installing and using the driver never needs them.
 
-  XHCISNAP.EXE is in the XHCISNAP directory of this package. It reads the
-  driver's own log straight out of the running machine and writes a report
-  you can attach to that issue. On Windows 98 and Windows ME it is the ONLY
-  way to get anything out. When you are asked, it is four steps, and none of
-  them is REGEDIT:
+  IF THE MACHINE KEEPS RUNNING: SNAPON, SNAPGET, SNAPOFF
+
+  TOOLS\XHCISNAP holds XHCISNAP.EXE and three batch files that run it. It
+  reads the driver's own log straight out of the running machine and writes
+  a report you can attach to that issue. On Windows 98 and Windows ME it is
+  the ONLY way to get anything out. Four steps, and none of them is REGEDIT.
+  Copy the directory somewhere writable first (not a CD), and on Vista and
+  7 right-click each batch file and choose Run as administrator:
+
+      1. SNAPON.BAT                 turns the log channel on
+      2. restart Windows
+      3. make the problem happen again
+      4. SNAPGET.BAT                writes the report and the dump
+
+  SNAPGET.BAT writes its files in the directory it runs in, not in C:\,
+  under a name made from the date and time - for example 3141022A.DEV
+  and 3141022A.TXT for 14 March at 10:22 (the month is one character, 1 to
+  9 then A, B, C) - and a second run never overwrites the first. It prints
+  the names. Attach the .DEV file (the controller's Device Manager status
+  and problem code, its resources, and the versions and SHA-256 hashes of
+  the installed driver files) and the .TXT file (the report). Keep the .BIN
+  and .PSC beside them and attach those only if you are asked for them. It
+  leaves the channel on, so you can run it again after the next attempt.
+  Step 1 finds the right registry key for you, on every controller this
+  driver runs - see section 9 for what it sets.
+
+  Two of the batch files take one optional word, typed after the name at a
+  prompt in their directory (on Vista and 7, an administrator's prompt):
+
+      SNAPON 3      level 3 instead of 2 (1 to 4; with none, 2, the log -
+                    use it unless you are asked for another). SNAPON 0 is
+                    refused: 0 is off, and SNAPOFF.BAT turns it off.
+      SNAPGET MYPC  saves the files as MYPC.DEV, MYPC.TXT, .BIN and .PSC
+                    instead of the date-and-time name: 1 to 8 letters,
+                    digits, _ or -, not starting with -, no path, drive or
+                    extension, and not a DOS device name (CON, PRN, AUX,
+                    NUL, COM0 to COM9, LPT0 to LPT9), in the same
+                    directory. A name already taken there is refused;
+                    nothing is overwritten.
+
+  The batch files pass the word on to XHCISNAP as it came (SNAPON runs
+  XHCISNAP -on LEVEL, SNAPGET XHCISNAP -report NAME), and XHCISNAP checks
+  it: a word it does not take changes nothing and writes nothing.
+
+  Each batch file runs XHCISNAP last, and XHCISNAP says what happened and
+  what to do next. Its last line, just above "Press any key", names the
+  files to attach (for example "Attach: 3141022A.DEV 3141022A.TXT"), or
+  says there is nothing to attach. What it says when SNAPGET.BAT stops
+  follows XHCISNAP -report's exit code:
+
+      0  the .DEV and the .TXT were written in full: attach them.
+      2  the name given was refused, and the line above says why: give
+         a name by the rules above, or no name. (If XHCISNAP printed its
+         usage instead, it is older than the batch: use this package's.)
+      3  the .TXT is not complete: attach it, and say so.
+      4  no dump was taken, and the .DEV says why - often the channel is
+         off: SNAPON.BAT, restart, make it happen, SNAPGET.BAT. Attach the
+         .DEV.
+      5  the .DEV could not be written in full: the disk is full or cannot
+         be written. Copy the directory somewhere writable, run it there.
+      6  no free name: all 26 for this minute are taken (wait a minute and
+         run it again), or the name given is taken (give another, or
+         none). Nothing was written or overwritten.
+      7  the clock is not a valid date and time: set it, run it again.
+         Nothing was written.
+      8  another run made a file of this set while it ran. That file was
+         left as it was and no dump was kept under the name: run
+         SNAPGET.BAT again - it takes the next letter, or give another
+         name.
+
+  Without the batch files the same steps are:
 
       1. XHCISNAP -verbosity 2
-      2. restart the machine
+      2. restart Windows
       3. make the problem happen again
-      4. XHCISNAP -o C:\MYDUMP
-
-  Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked
-  for it. Step 1 finds the right registry key for you, on every controller
-  this driver runs - see section 9 for what it sets.
+      4. XHCISNAP -report           (or XHCISNAP -o NAME for the dump alone)
 
   STEP 2 IS NOT OPTIONAL. The driver reads that setting when it starts.
   Without the restart the driver is still at whatever it read last time -
@@ -3906,9 +4626,18 @@ Things specific to this driver, worth knowing in advance:
 
   What step 1 DOES change is ONE of this driver's own settings, and it says
   so as it writes it - that is the point of it, and it is why step 2 is a
-  restart. XHCISNAP -disable puts it back, and you should run that once you
-  have sent the capture: while it is on, anyone using this machine can read
-  the driver's diagnostic state. See section 9.
+  restart. SNAPOFF.BAT (XHCISNAP -disable) puts it back, and you should run
+  that once you have sent the capture: while it is on, anyone using this
+  machine can read the driver's diagnostic state. See section 9.
+
+  IF THE MACHINE WILL NOT START WINDOWS, OR CRASHES: QUALREP UNDER DOS
+
+  TOOLS\XHCIQUAL\QUALREP.BAT runs XHCIQUAL's read-only probe under real
+  MS-DOS (not a DOS box inside Windows; see step 1) and saves it to a new
+  .LOG in the directory it runs in, named from the DOS date and time the
+  same way. Run it from writable storage that is not on the controller
+  being tested, and attach the .LOG file it names. Without the batch file:
+  XHCIQUAL --probe-only --no-page --log-stamp
 
   WHAT THE LOG CAN AND CANNOT ANSWER
 
@@ -3917,7 +4646,7 @@ Things specific to this driver, worth knowing in advance:
   anything to read.
 
   THE DRIVER WRITES NO LOG FILE ITSELF, and there is no registry value that
-  makes it. XHCISNAP writes the file, and you name it on the command line.
+  makes it. XHCISNAP writes the file, named from the clock or by you.
 
   DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, receives this
   driver's log as it runs if XhciLogDebugView is set. LIKE XHCISNAP, USE IT
@@ -3955,6 +4684,13 @@ being unsigned, and no change to this driver can remove them:
     installed there is no mass-storage driver at all. HID and audio still
     work.
 
+  * WINDOWS 98 SE: STAND BY IS UNTESTED ON REAL HARDWARE; REMOVE USB DISKS
+    BEFORE STAND BY. Read only in QEMU virtual machines, where Windows 98
+    SE itself does not resume reliably, with no USB controller as well.
+    With a USB disk attached the resume stopped before the desktop under
+    this driver and under NUSB's EHCI driver alike; with a USB mouse
+    alone, or behind a hub, it completed and the mouse worked.
+
   * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
     own device manager stops responding; it does the same on Microsoft's
     own USB stack. Wait for the install to finish before unplugging.
@@ -3970,6 +4706,11 @@ being unsigned, and no change to this driver can remove them:
     controller starts or stops, so a drive busy there is disconnected.
     Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
     by default (section 9).
+
+  * WINDOWS 2000 FROM THE F6 FLOPPY NEEDS THREE FILES FROM ITS CD and the
+    Windows 2000 entry; with the first entry and a USB keyboard, mouse or
+    storage device on the controller the new system stops at its first
+    start (STOP c000026c, hidusb.SYS or usbstor.SYS). Section 4.
 
   * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
     DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
@@ -3988,7 +4729,8 @@ May be addressed in a later release:
 
   * 32-BIT WINDOWS VISTA AND 7: THE INSTALL ASKS FOR A RESTART, and the
     controller does not start until it is done, because the helper
-    xhcimsi.sys starts only at boot (section 4).
+    xhcihlpr.sys starts only at boot (section 4). A reinstall needs the
+    restart even if Windows does not ask for it: 32-bit Vista did not.
 
   * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
     ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
@@ -3998,6 +4740,12 @@ May be addressed in a later release:
 
   * WINDOWS VISTA AND 7: THE CONTROLLER'S ADVANCED TAB SHOWS NO BANDWIDTH.
     The figure comes from a query this driver does not answer.
+
+  * WINDOWS ME: SHUT DOWN CAN HANG AFTER THE CONTROLLER WAS DISABLED AND
+    ENABLED in Device Manager in the same session (a black screen that
+    stays). Seen in virtual machines, with an earlier release too. After
+    such a cycle, save your work before shutting down; if Shut Down hangs,
+    switch the computer off.
 
   * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
 
@@ -4032,6 +4780,13 @@ May be addressed in a later release:
     devices come back. Seen in virtual machines, with the controller
     polled as well; not on Windows 98 SE.
 
+  * INTEL 7-SERIES (PANTHER POINT, 8086:1E31): TOO MANY PERIODIC DEVICES AT
+    ONCE MAY LOSE DATA INSTEAD OF BEING REFUSED. Found by reading Linux's
+    code, not measured: Linux keeps its own bandwidth accounting on this
+    controller (XHCI_SW_BW_CHECKING) because it accepts periodic schedules
+    - audio, mice, keyboards, hubs - that it cannot serve. This driver
+    relies on the controller's own admission there.
+
 Untested ground:
 
   * SUPERSPEED ISOCHRONOUS TRANSFERS. Built from the specification. No
@@ -4050,13 +4805,6 @@ Untested ground:
     specification, and read on no real controller; value 4's programming
     was read in virtual machines only.
 
-  * STAND BY ON WINDOWS 98 SE. Read only in QEMU virtual machines, where
-    Windows 98 SE itself does not resume reliably, with no USB controller
-    as well. With a USB disk attached the resume stopped before the
-    desktop under this driver and under NUSB's EHCI driver alike; with a
-    USB mouse alone, or behind a hub, it completed and the mouse worked.
-    Untested on real hardware: REMOVE USB DISKS BEFORE STAND BY.
-
   * LOW- AND FULL-SPEED DEVICES BEHIND A BUILT-IN HUB WHOSE USB 2.0 SPEED
     TABLE LISTS ONLY HIGH SPEED, as on the VIA VL805
     (XhciUsb2HubSpeedFallback, section 9). Built from the specification
@@ -4065,12 +4813,39 @@ Untested ground:
   * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
     controller, and at your own risk.
 
-  * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
-    9). Each fault was made on purpose at a root port in QEMU virtual
-    machines, under Windows 98 SE and Windows 2000; QEMU has no
-    SuperSpeed hub, so nothing was read behind one. No real controller has
-    raised one under this driver yet. XhciIntervalCap and XhciAvgTrbEsit
-    have been read on no AMD or other real controller.
+  * CONTROLLERS BELOW xHCI 1.0 (XhciAccept096, section 9): the 0.96
+    NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others.
+    Accepted by default, driven as xHCI 1.0 controllers but for the fields
+    Linux writes differently on them (TD Size in 0.96's units, the control
+    transfer's Transfer Type, the isochronous burst counts, and no
+    isochronous Frame ID) and with the capability register at 1Ch
+    ignored, so a resume from standby re-enumerates their devices. Built
+    against host tests and Linux's handling of the same parts; read on no
+    0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD
+    0.96 parts are not applied, so isochronous transfers (audio, video) on
+    those parts are the least certain. Set XhciAccept096 to 0 to refuse
+    such a controller, as the releases before it did.
+
+  * HIDUSBF ON A COMPOSITE DEVICE'S OWN ENTRY (xHCI98 USB Composite
+    Device, new in this release). Each function takes its polling rate
+    from the rate set there, unless a filter on the function's own entry
+    sets another. QEMU has no keyboard-and-mouse composite device, so this
+    is read on no virtual machine (the composite entry's own selection
+    was, with USB audio devices) and is owed to a real device after the
+    release; a new rate reaches a function when it next starts (on 98 SE
+    and ME restart the function's entry too, or replug the device).
+
+  * A FINER SYSTEM TIMER WHILE POLLING (XhciPollFineTimer, section 9; off
+    by default). Read only in QEMU virtual machines without hardware
+    acceleration, polling: on Windows 7 and Vista, while it was held, the
+    guest's clock ran at a tenth to seven tenths of real time and USB
+    keyboard input was lost; on XP and 2000 the clock kept nine tenths of
+    real time or more. Read on no real machine.
+
+  * LINUX'S CONTROLLER QUIRKS (XhciMsiAvoid and the thirteen others,
+    section 9). Built from Linux's handling and the xHCI specification;
+    none has been read on a controller it lists, and QEMU's controller is
+    on no list.
 
 
 ==============================================================================
@@ -4081,8 +4856,8 @@ Untested ground:
 Both drivers are called xhci98.sys and xhciuas.sys in every directory, and
 every copy carries driver version {VERSION}, so a copy taken out of its
 directory cannot be identified by name or by version. (The -X86 directories
-also hold xhcimsi.sys, the 32-bit Vista and 7 helper, which has no 64-bit
-twin.)
+also hold xhcihlpr.sys, the 32-bit Windows 2000, XP, Vista and 7 helper,
+which has no 64-bit twin.)
 {TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
@@ -4094,11 +4869,12 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every value this driver reads from the controller's driver key. There are
-nineteen, all DWORDs, and the install writes all nineteen, each at the
-default it states below except XhciImodInterval250ns, which it writes as
-160, and XhciForceBulkOnly, which it writes as 0 where absent counts as
-1, so every one is already in the key to change. The install writes
+Every value this driver reads from the controller's driver key. There
+are thirty-six, all DWORDs, and the install writes all thirty-six, each
+at the default it states below except
+XhciImodInterval250ns, which it writes as 160, and XhciForceBulkOnly,
+which it writes as 0 where absent counts as 1, so every one is already
+in the key to change. The install writes
 each only where it is missing, so a value you changed survives an
 install or update; to go back to the default, set it by hand, or delete
 the value and update the driver. If an earlier install left
@@ -4260,10 +5036,10 @@ A value that is absent means the default each one states.
   wrote 1, and an update KEEPS the value already there, so a machine
   updated from one of them stays at 1 until it is changed.
 
-  PORTSW.VBS, in the PORTSW directory beside the RELEASE and DEBUG ones,
-  shows and sets it on every xhci98 controller, with nothing to install,
-  on every Windows this driver runs on. Double-click it, or, at a prompt
-  in the PORTSW directory, run
+  PORTSW.VBS, in the TOOLS\PORTSW directory, shows and sets it on every
+  xhci98 controller, with nothing to install, on every Windows this
+  driver runs on. Double-click it, or, at a prompt in the TOOLS\PORTSW
+  directory, run
       cscript //nologo portsw.vbs show     (or 1, or 0)
   as an administrator. Read when the controller starts, so RESTART
   WINDOWS after changing it. A stop gives back only the registers the
@@ -4274,7 +5050,7 @@ A value that is absent means the default each one states.
   double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
   says to restart. On Vista and 7, right-click one and choose Run as
   administrator. At a prompt on Windows 98 SE and ME, change to the
-  PORTSW directory first. Then RESTART WINDOWS.
+  TOOLS\PORTSW directory first. Then RESTART WINDOWS.
 
   On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
   only at USB 2.0 speed on a blue connector is most likely still on the
@@ -4374,12 +5150,13 @@ A value that is absent means the default each one states.
   XhciIntervalCap  -  the AMD interrupt-interval cap
   ..................................................
 
-  Default 1: on AMD controllers (PCI vendor 1022) only, an interrupt
-  endpoint - a mouse, a keyboard, a hub - asking to be polled less often
-  than every 32 ms is polled every 32 ms, as Linux does on some AMD
-  controllers. Audio is never capped. Set it to 0 to turn it off, or to 2
-  to apply it on every controller; absent or any other number is 1. Read
-  when the controller starts. Read on no AMD controller yet.
+  Default 1: on AMD controllers (PCI vendor 1022) and the ATI Navi10's
+  USB-C controller (1002:7316) only, an interrupt endpoint - a mouse, a
+  keyboard, a hub - asking to be polled less often than every 32 ms is
+  polled every 32 ms, as Linux does on some AMD controllers and on that
+  one. Audio is never capped. Set it to 0 to turn it off, or to 2 to apply
+  it on every controller; absent or any other number is 1. Read when the
+  controller starts. Read on no AMD or ATI controller yet.
 
   XhciAvgTrbEsit  -  a comparison switch
   ......................................
@@ -4403,7 +5180,7 @@ A value that is absent means the default each one states.
   10). 2 polls always, at the cost of more processor wake-ups. 3 is a
   message-signalled interrupt only: on Vista and 7 the driver asks for the
   message, and the controller fails to start (Code 10) if none is granted
-  or it cannot be connected (on 32-bit, when xhcimsi.sys is not running);
+  or it cannot be connected (on 32-bit, when xhcihlpr.sys is not running);
   on 98 SE, ME, 2000 and XP, which have none, 3 always fails the start.
   Any other value is 0.
   Read when the controller starts: disable and enable it, or restart.
@@ -4417,6 +5194,22 @@ A value that is absent means the default each one states.
   faster than its clock tick, so 1 means as often as Windows allows.
   Polling adds up to one period to each transfer's completion. Neither
   value matters while the interrupt works.
+
+  XhciPollFineTimer, default 0 (off): set to 1, while the controller is
+  polled and busy the driver asks Windows for a finer clock -
+  XhciPollActiveMs in milliseconds - so a polled disk is not held to one
+  transfer per clock tick (10 to 15.6 ms), and gives the request back
+  once the controller has been idle for XhciPollIdleMs. It is Windows
+  2000 and later only: on 32-bit systems through the helper xhcihlpr.sys,
+  from the restart after the install; on 98 SE and ME the value is read
+  and does nothing. Any value but 0 turns it on. The clock is the whole
+  system's, so other programs see it too while it is held. Read when the
+  controller starts; an update keeps the number already in the key. It
+  ships off because in virtual machines (QEMU without hardware
+  acceleration, polling, on Windows 7 and Vista) the guest's clock ran at
+  a tenth to seven tenths of real time while it was held, and USB
+  keyboard input was lost (on XP and 2000 nine tenths or more); real
+  hardware is unread (section 7, Untested ground).
 
   XhciMaxTransferKB  -  the UAS command size
   ..........................................
@@ -4466,6 +5259,16 @@ A value that is absent means the default each one states.
   suspended. Read in virtual machines only so far; leave it off unless
   you are testing it, and if a device misbehaves with it on, set 0.
 
+  XhciSilentInstall  -  the silent install, Windows 98 SE and ME only
+  ...................................................................
+
+  Written as 0 by the install; 0, absent or any number but 1 is off. At
+  1, a device whose class is in the SilentClasses list installs with no
+  Add New Hardware wizard. Set it with silent-on.bat and silent-off.bat
+  in TOOLS\SILENT\ (above), not by hand: silent-on.bat merges the list
+  first, and the value does nothing without it. Windows 2000 and later
+  never read it.
+
   XhciUsb2HubSpeedFallback  -  Low- and Full-Speed IDs behind a hub
   .................................................................
 
@@ -4487,9 +5290,105 @@ A value that is absent means the default each one states.
   (Usb2HubSpeedFallbacks) and those still refused (TopoBehindHubNoSpeed).
   It was built without the hardware and has never run on a VL805.
 
-  THOSE NINETEEN ARE THE WHOLE LIST. The earlier releases' XhciVirtualHSHub,
-  XhciVirtualHSHubVid and XhciVirtualHSHubPid are not read: a copy left in
-  the key by an earlier install has no effect, because this driver reports
+  XhciAccept096  -  controllers below xHCI 1.0
+  ............................................
+
+  Written as 1 by the install; 1, absent or any number but 0 is on.
+
+  A controller names the xHCI revision it was built to in its HCIVERSION
+  register. Earlier releases refused anything below 1.0 (Code 10), where
+  the first-generation NEC/Renesas uPD720200 and uPD720200A (1033:0194)
+  and ASMedia's ASM1042 stopped: they are 0.96 parts. With this on, a
+  controller from 0.96 up starts, driven as a 1.0 one but for the fields
+  Linux writes differently on 0.96 parts, and with the capability
+  register at 1Ch ignored, so a resume from standby re-enumerates its
+  devices. Below 0.96 is refused at every value, and on a 1.0 or later
+  controller the value changes nothing. Set 0 and restart to refuse a
+  controller below 1.0 again. XHCIQUAL names the controller's version,
+  and XHCISNAP's "controller version" lines say what the driver decided.
+
+  Linux's controller quirks  -  fourteen values
+  .............................................
+
+  Linux's xHCI driver works around faults of particular controllers, each
+  named by its PCI vendor and device ID (vendor:device below). This driver
+  takes fourteen of them, each behind a value of its own; the faults and
+  the lists are Linux's, the code this driver's own. Every one reads the
+  same way:
+
+      0   off on every controller.
+      1   on the controllers listed: the default, except
+          XhciShutdownReset, which is 0.
+      2   on every controller, except XhciIntelShutdownToEhci,
+          XhciAsmediaFlowControl and XhciAmdSuspendBitClear, which are
+          vendor-specific (a 2 there is read as 1).
+      Absent, not a DWORD or any other number is the default.
+
+  Matched by vendor and device ID alone; the revision is logged, never
+  matched. Read when the controller starts, so restart after changing one.
+  XHCISNAP's report has a "Linux quirks" block: each value as read,
+  whether this controller is listed, whether it applies, what it last did.
+  The Linux flag is in brackets.
+
+  XhciMsiAvoid (XHCI_BROKEN_MSI; 1B73:1000, 1B73:1400): on Vista and 7,
+    no message-signalled interrupt - these controllers never raise one.
+    Under XhciInterruptMode 0 the line is asked for, and a message granted
+    anyway is not used: the controller is polled. XhciInterruptMode 3, a
+    message by name, is honoured. 2: every controller.
+  XhciStreamsOff (XHCI_BROKEN_STREAMS; 1B73:1000, 1B73:1009, 1B6F:7023,
+    1B6F:7052, 1106:3432, 1B21:1042, 17CD:0200): no UAS streams; a drive
+    that offers Bulk-Only uses it, a UAS-only drive at SuperSpeed goes to
+    its USB 2.0 port. 2: every controller.
+  XhciResumeReinit (XHCI_RESET_ON_RESUME; 1022:15E5, 1B6F:7023,
+    1B6F:7052, 1912:0015, every VIA 1106, 1DB7:DC27, 1B21:3042,
+    1D17:9202): after standby or hibernation the controller is started
+    afresh and every device found again. 2: every controller.
+  XhciIntelShutdownToEhci (XHCI_SPURIOUS_REBOOT; 8086:1E31, 8086:9C31,
+    8086:9CB1): at shutdown the switchable connectors go back to the USB
+    2.0 controller, WHATEVER XhciIntelPortSwitch SAYS, against a machine
+    that powers itself back on. 2 is read as 1.
+  XhciShutdownReset (XHCI_SPURIOUS_WAKEUP; 8086:9C31, 8086:9CB1): OFF BY
+    DEFAULT. At 1 the controller is reset at shutdown once it has proved
+    halted, for a machine that wakes by itself after shutting down.
+    2: every controller.
+  XhciSuspendHaltDelay (XHCI_SUSPEND_DELAY; 1022:145C, 1022:15E0,
+    1022:15E1, 1022:43BB): a 1.5 ms pause before the controller is halted
+    for standby, hibernation or shutdown. 2: every controller.
+  XhciSuspendHaltTimeout (XHCI_SLOW_SUSPEND; 1B73:1000): that halt may
+    take up to 640 ms instead of 32 ms; it ends as soon as the controller
+    halts. 2: every controller.
+  XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL; 1B21:1142, the
+    ASM1042A): a vendor flow-control setting after each start, recovery
+    and resume. 2 is read as 1.
+  XhciTiIntervalCap (XHCI_LIMIT_ENDPOINT_INTERVAL_7; 104C:8241): an
+    interrupt endpoint of a High-Speed or faster device is polled at least
+    every 8 ms; audio is never capped. 2: every controller.
+  XhciStuckLinkReset (XHCI_MISSING_CAS; 8086:22B5, 8086:9D2F, 8086:A12F,
+    8086:5AA8, 8086:19D0): after a resume, a USB 3 port stuck in its
+    link's Polling state is reset once. 2: every controller.
+  XhciStreamRingPad (XHCI_TRB_OVERFETCH; 1106:3483, the VL805, 1D17:9202,
+    1D17:9203): spare memory after each block of UAS stream rings, which
+    these controllers read past. 2: every controller.
+  XhciControlLinkNoOp (XHCI_ETRON_HOST, part; 1B6F:7023, 1B6F:7052): a
+    SuperSpeed control transfer kept from straddling the end of its ring.
+    2: every controller, SuperSpeed devices only.
+  XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part; the same two): a false
+    success after an audio packet's error is dropped. 2: every controller.
+  XhciAmdSuspendBitClear (XHCI_DISABLE_SPARSE; 1022:15E5): bit 17 of the
+    controller's register at C12Ch cleared before each standby,
+    hibernation and shutdown, as Linux does. 2 is read as 1.
+
+  WHAT HAPPENS AT SHUTDOWN IS SEEN ONLY IN A CAPTURE OF THAT SHUTDOWN.
+  XhciIntelShutdownToEhci and XhciShutdownReset log what they did, but the
+  log lives in memory and is gone at the next start, so XHCISNAP never
+  shows it. Set XhciLogVerbosity to 2 or above (below it nothing is
+  recorded) and XhciLogDebugView to 1, and attach a debug-output viewer or
+  a kernel debugger to the shutdown to see it.
+
+  THOSE THIRTY-SIX ARE THE WHOLE LIST. The earlier releases'
+  XhciVirtualHSHub, XhciVirtualHSHubVid and XhciVirtualHSHubPid are not
+  read: a copy left in the key by an earlier install has no effect, because
+  this driver reports
   every device at its true speed with no virtual hub in the way. Delete
   them if you want them gone.
 
@@ -4543,9 +5442,9 @@ A value that is absent means the default each one states.
 
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to this project's own code in xhci98.sys, xhciuas.sys and the 32-bit
-helper xhcimsi.sys, and to their INFs. The 64-bit xhci98.sys and xhcimsi.sys
+helper xhcihlpr.sys, and to their INFs. The 64-bit xhci98.sys and xhcihlpr.sys
 also carry a few small support routines that Microsoft's driver kit links in
-(a stack-cookie check, and in xhcimsi.sys a device-security helper), which
+(a stack-cookie check, and in xhcihlpr.sys a device-security helper), which
 are not this project's work; docs/contributing/legal-provenance.md, in the
 project's source repository, records them.
 
@@ -4624,13 +5523,14 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     # audit's H14. `-SkipQualtool` and `-SkipSnapTool` warn on the console and
     # leave the section-8 listing out, but every other mention of those
     # directories stayed: section 1 tells the reader the checker is in
-    # XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
+    # TOOLS\XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
     # there. build-and-test.md says the result "is incomplete and says so", and
     # the console is not where a user reads it.
     #
     $missingTools = @()
-    if ($null -eq $qualtoolStaged) { $missingTools += "XHCIQUAL\ (the DOS machine checker of section 1)" }
-    if ($null -eq $snaptoolStaged) { $missingTools += "XHCISNAP\ (the report tool of section 6)" }
+    if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
+    if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
+    if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -4862,6 +5762,11 @@ MODIFIERS - these say what to do with the report, not what to run
   --log [FILE]      also write the report to a file, default XHCIQUAL.LOG.
                     A family word after --log is read as a selector, so
                     name the file explicitly if you pass both
+  --log-stamp       write the report to a NEW file in the current directory
+                    named from the DOS date and time, mDDhhmmS.LOG (month 1
+                    to 9 then A, B, C; day; hour; minute; the first free
+                    letter A to Z). It never overwrites a file, and not
+                    with --log. QUALREP.BAT uses it
   --done-flag FILE  create FILE only if the run finishes normally, so a
                     batch file can tell a crash apart from a bad verdict
   --no-sysinfo      do not read the machine's description (SMBIOS,
@@ -4883,6 +5788,21 @@ ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER
                     result back. This one writes PCI configuration space
   --no-wait         do not wait 15 seconds for a device to be plugged in
   --no-devid        skip the xHCI device identification step
+
+
+FOR A BUG REPORT: QUALREP.BAT
+
+  QUALREP.BAT, beside XHCIQUAL.EXE, is the one command a bug report asks
+  for. Run it from this directory, under real DOS as above:
+
+           QUALREP
+
+  It runs XHCIQUAL --probe-only --no-page --log-stamp: the read-only probe,
+  written to a new .LOG in the current directory named from the DOS date
+  and time, for example 3141022A.LOG for 14 March at 10:22. A second run
+  never overwrites the first. It prints the name; attach that .LOG file to
+  the report. If the DOS clock is not set to a date, XHCIQUAL refuses
+  before reading anything - set it with DATE and TIME and run it again.
 
 
 IF YOU ARE ASKED FOR LOGS
@@ -4912,6 +5832,7 @@ WHAT IT RETURNS TO DOS
   2   the command line was wrong, or no controller of that kind is here
   3   a full active run whose controllers all qualified, at least one only
       WITH CAVEATS (no working interrupt, so the driver polls it)
+  4   --log-stamp could not name or create its log; nothing was read
 
   The verdict on screen is what to read. These are for batch files.
 
@@ -4940,7 +5861,8 @@ controller, reset it, transfer data and reset ports, and a machine can stop
 responding while they run. They are development instrumentation, listed
 above because this one program contains them - not because installing the
 driver involves them. The numbered batch files the project uses to drive
-them in a fixed order are not included here.
+them in a fixed order are not included here; QUALREP.BAT, which is, runs
+only the read-only probe.
 
 If you run one anyway:
 
@@ -4958,11 +5880,11 @@ behind.
 
 
 ------------------------------------------------------------------------------
-Part of the xhci98 {VERSION} release. See the readme.txt in the directory above
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file in the
-directory above. XHCIQUAL.EXE is not only this project's code: it is linked
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIQUAL.EXE is not only this project's code: it is linked
 as a DOS/32 Advanced DOS Extender executable and statically includes that
 extender and the Open Watcom C runtime, which carry their own notices. Those
 notices are in NOTICE.TXT beside this file, and this product uses DOS/32
@@ -4999,7 +5921,7 @@ Advanced DOS Extender technology.
 ==============================================================================
 
 XHCIQUAL.EXE is built from this project's own C and assembly sources, which
-are under the GNU GPL v2 - see the LICENSE file in the directory above.
+are under the GNU GPL v2 - see the LICENSE file two directories up.
 
 It is linked as a DOS/32 Advanced DOS Extender (LE-style) executable. That
 means the extender itself is embedded in the EXE as its stub, so the tool is a
@@ -5088,7 +6010,7 @@ provenance record is docs\contributing\legal-provenance.md, section 2a.
 
 If USB is not working properly with this driver, this is what to run. It reads
 the driver's own log straight out of the running machine and writes a report
-you can paste into a bug report.
+you can attach to a bug report.
 
 It talks to the driver directly, through the controller's own device, on
 every Windows version this driver supports. Nothing else needs installing,
@@ -5102,23 +6024,42 @@ from the driver either.
 
 What step 1 DOES change is ONE of this driver's own settings - that is the
 point of it, and it is why step 2 is a restart. It prints it as it writes it,
-and XHCISNAP -disable puts it back. Run that once you have sent the capture:
-while it is on, anyone using this machine can read the driver's diagnostic
-state.
+and SNAPOFF.BAT (XHCISNAP -disable) puts it back. Run that once you have sent
+the capture: while it is on, anyone using this machine can read the driver's
+diagnostic state.
 
 
  THE FOUR STEPS
 ------------------------------------------------------------------------------
 
-  1.  XHCISNAP -verbosity 2
-  2.  restart the machine
-  3.  make the problem happen again
-  4.  XHCISNAP -o C:\MYDUMP
+Three batch files beside XHCISNAP.EXE do the typing. Double-click them, or
+run them at a prompt in this directory; on Windows Vista and 7, right-click
+each one and choose Run as administrator. Copy this directory somewhere
+writable first if it is not (a CD is not).
 
-Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked for it.
+  1.  SNAPON.BAT     XHCISNAP -on (-verbosity 2): the log channel on
+  2.  restart Windows
+  3.  make the problem happen again
+  4.  SNAPGET.BAT    XHCISNAP -report: the report and the dump
+
+SNAPGET.BAT writes its files in the directory it runs in, not in C:\, under a
+name made from the date and time, and prints the names. Attach the .DEV and
+.TXT files to the bug report. Attach the .BIN and .PSC as well only if you
+are asked for them. It leaves the channel on, so you can run it again after
+the next attempt. At a prompt, SNAPON 3 sets level 3 rather than 2 (1 to 4;
+SNAPON 0 is refused, SNAPOFF.BAT is off), and SNAPGET MYPC saves the files
+as MYPC.DEV, .TXT, .BIN and .PSC (1 to 8 letters, digits, _ or -, not
+starting with -, not a DOS device name such as CON, NUL, COM1 or LPT1, in
+this directory; a name already taken is refused, never overwritten). The
+readme.txt at the top of the download, section 6, says what each of
+SNAPGET.BAT's endings means. When you are done:
+
+  5.  SNAPOFF.BAT    XHCISNAP -disable: the channel off
 
 You never have to open REGEDIT. Step 1 does the whole of that for you, on
-every xHCI controller the machine has.
+every xHCI controller the machine has. Without the batch files, type the
+commands they run; XHCISNAP -o NAME writes the dump alone under a name you
+choose.
 
 
  WHY STEP 1 IS NOT OPTIONAL
@@ -5138,22 +6079,33 @@ Level 2 is the one to use. The others exist and a maintainer may ask for one:
       more than you would want to paste in public.
 
 
- WHAT THE THREE FILES ARE
+ WHAT THE FILES ARE
 ------------------------------------------------------------------------------
 
-  MYDUMP.TXT   The report. Plain text. Below level 4 it holds no internal
+Each name is mDDhhmmS: the month as one character (1 to 9, then A, B, C for
+October to December), the day, the hour, the minute, and the first letter A
+to Z not yet taken, so 3141022A is 14 March at 10:22 and a second run in the
+same minute is 3141022B. Nothing is ever overwritten.
+
+  3141022A.DEV The controller as Windows sees it: its Device Manager status
+               and problem code, the resources it was given, and the versions
+               and SHA-256 hashes of xhci98.sys, xhciuas.sys, xhcihlpr.sys
+               (and xhcimsi.sys, the earlier helper, where it is still on the
+               disk), usbd.sys and usbui.dll as installed. Attach it.
+  3141022A.TXT The report. Plain text. Below level 4 it holds no internal
                addresses - the driver refuses to record one at those levels,
                so that is a property of the file and not a promise about it.
-               This is the one to paste.
-  MYDUMP.BIN   The driver's raw internal state. A maintainer can decode it
+               Attach it.
+  3141022A.BIN The driver's raw internal state. A maintainer can decode it
                against the exact build you are running; nobody else can. Send
                it as an attachment if asked.
-  MYDUMP.PSC   The raw port register values, for the same audience.
+  3141022A.PSC The raw port register values, for the same audience.
 
 The report's header names the system it was taken on - the Windows
 version, BIOS, processor and memory - and never a serial number or a
-name. If reading those details causes a problem on your machine, add
--nosysinfo to step 4; the header then says they were skipped.
+name. If reading those details causes a problem on your machine, type
+XHCISNAP -nosysinfo -report instead of step 4; the header then says they
+were skipped.
 
 
  IF NOTHING COMES BACK
@@ -5172,11 +6124,11 @@ machine, and there is nothing for this tool to read.
 
 
 ------------------------------------------------------------------------------
-Part of the xhci98 {VERSION} release. See the readme.txt in the directory above
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
 for the driver itself.
 
-This project's own code is under the GNU GPL v2 - see the LICENSE file in the
-directory above. XHCISNAP.EXE is not only this project's code: the Microsoft
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCISNAP.EXE is not only this project's code: the Microsoft
 Visual C++ 6.0 C runtime is statically linked into it, which is why it is one
 file that runs on a machine with nothing installed on it. That linkage is
 recorded in NOTICE.TXT beside this file.
@@ -5215,7 +6167,7 @@ recorded in NOTICE.TXT beside this file.
 ==============================================================================
 
 XHCISNAP.EXE is built from this project's own C source, which is under the GNU
-GPL v2 - see the LICENSE file in the directory above.
+GPL v2 - see the LICENSE file two directories up.
 
 It is not only this project's code. It is compiled with Microsoft Visual C++
 6.0 and linked against that compiler's STATIC C runtime - the build passes no
@@ -5239,6 +6191,63 @@ beside XHCIQUAL.EXE covers a different program and does not apply here.
         Write-GeneratedText -Path (Join-Path $snaptoolStaged "NOTICE.TXT") `
                             -Lines ($snapNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCISNAP.EXE (static MSVC 6.0 C runtime)"
+    }
+
+    # --- the cleanup tool's readme and notices (task 38.8) --------------------
+    #
+    # The readme is xhcicln\README.TXT, tracked beside the source, with the
+    # release's footer; NOTICE.TXT records the two statically linked runtimes
+    # as XHCISNAP's records its one, for the same reason and on the same terms
+    # (legal-provenance.md section 2a).
+    if ($null -ne $cleantoolStaged) {
+        $cleanReadme = @([System.IO.File]::ReadAllText((Join-Path $CleanToolDir "README.TXT")) -split "`r?`n")
+        while ($cleanReadme.Count -gt 0 -and $cleanReadme[$cleanReadme.Count - 1] -eq "") {
+            $cleanReadme = @($cleanReadme | Select-Object -First ($cleanReadme.Count - 1))
+        }
+        $cleanFooter = @'
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCICLN.EXE and XHCICL64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+'@
+        $cleanLines = @($cleanReadme) + @($cleanFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $cleantoolStaged "readme.txt") -Lines $cleanLines
+        Write-Ok "readme.txt written beside XHCICLN.EXE and XHCICL64.EXE"
+
+        $cleanNotice = @'
+==============================================================================
+                          x h c i 9 8   {VERSION}
+           THIRD-PARTY NOTICES FOR XHCICLN.EXE AND XHCICL64.EXE
+==============================================================================
+
+XHCICLN.EXE and XHCICL64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCICLN.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCICL64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. You can see
+it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+'@
+        $cleanNotice = $cleanNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT") `
+                            -Lines ($cleanNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
     # --- the licence the readme sends the reader to --------------------------
@@ -5358,10 +6367,18 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # -SkipUploadSet says (Codex review of 36.34, round 1, finding 6), and
     # before -Force moves an existing release aside (round 2, finding 4),
     # so a refusal leaves releases\ as it was. The port switchover's scripts
-    # in portsw\ and nowhere else (task 37.5), at the same point and for the
-    # same reason.
-    Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName `
+    # in tools\portsw\ and nowhere else (tasks 37.5 and 38.9), and the tools
+    # in tools\ alone (task 38.9), at the same point and for the same reason.
+    Assert-ToolsLayout -Root $destRoot -What "the staged release '$destRoot'"
+    Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw") `
                             -What "the staged release '$destRoot'"
+    # The silent install's four files in tools\silent\ alone (task 38.2).
+    Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release '$destRoot'"
+    Assert-SilentInstallContent -Root $destRoot -Map $silentPublishable -What "the staged release '$destRoot'" -Reference $repo
+    # The report batches beside their tools and nowhere else (task 38.1).
+    Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'"
+    # And what they say: the shared checker, and the repository's own bytes.
+    Assert-ReportBatchContent -Root $destRoot -Batches $reportBatches -What "the staged release '$destRoot'" -Reference $repo
     Assert-NoTestClient -Root $destRoot -What "the staged release '$destRoot'"
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
@@ -5448,10 +6465,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
         }
     }
     if ($null -eq $qualtoolStaged) {
-        Write-Warn "no xhciqual\ in this release (-SkipQualtool) - it is incomplete."
+        Write-Warn "no tools\xhciqual\ in this release (-SkipQualtool) - it is incomplete."
     }
     if ($null -eq $snaptoolStaged) {
-        Write-Warn "no xhcisnap\ in this release (-SkipSnapTool) - it publishes a read channel nobody can open."
+        Write-Warn "no tools\xhcisnap\ in this release (-SkipSnapTool) - it publishes a read channel nobody can open."
+    }
+    if ($null -eq $cleantoolStaged) {
+        Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
     }
 
     Write-Step "Done"

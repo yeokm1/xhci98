@@ -67,7 +67,7 @@ int c4_lets_ports(int v_irq, int poll_only)
 /*
  * The message route the owner asked to be named (2026-10-09): Windows
  * Vista and 7 can take a message interrupt where the controller offers
- * one - the x64 binary directly, the 32-bit one through the xhcimsi.sys
+ * one - the x64 binary directly, the 32-bit one through the xhcihlpr.sys
  * helper (roadmap 36.15, design record 18). The capability list is read
  * by pci_read_static (05h MSI, 11h MSI-X); nothing is enabled.
  */
@@ -81,15 +81,15 @@ const char *msi_route_text(const PCIINFO *p, int broken_msi)
         return "Windows Vista and 7 can\n"
                "        take a message interrupt, since it offers MSI and "
                "MSI-X (x64\n"
-               "        directly; 32-bit with the xhcimsi.sys helper)";
+               "        directly; 32-bit with the xhcihlpr.sys helper)";
     if (p->has_msix)
         return "Windows Vista and 7 can\n"
                "        take a message interrupt, since it offers MSI-X (x64\n"
-               "        directly; 32-bit with the xhcimsi.sys helper)";
+               "        directly; 32-bit with the xhcihlpr.sys helper)";
     if (p->has_msi)
         return "Windows Vista and 7 can\n"
                "        take a message interrupt, since it offers MSI (x64\n"
-               "        directly; 32-bit with the xhcimsi.sys helper)";
+               "        directly; 32-bit with the xhcihlpr.sys helper)";
     return "Windows Vista and 7\n"
            "        could, but it offers neither MSI nor MSI-X, so polling "
            "is its\n"

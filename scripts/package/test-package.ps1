@@ -51,13 +51,13 @@ function Get-StandInSha {
 }
 
 function Invoke-Packager {
-    param([string[]]$Arguments, [switch]$WithBinaryGates, [switch]$NoMsiStandIn)
+    param([string[]]$Arguments, [switch]$WithBinaryGates, [switch]$NoHlprStandIn)
     # The stand-in "driver" is a text file, so the packager's pre-staging host
     # test suite and import gate are skipped for every case except the one
     # that is about them.
     if (-not $WithBinaryGates) { $Arguments = $Arguments + @("-SkipBinaryGates") }
     #
-    # The 32-bit INF names xhcimsi.sys, the NT 6 x86 MSI helper, since task
+    # The 32-bit INF names xhcihlpr.sys, the x86 helper, since task
     # 36.15 (design record 18), so an x86 stand-in package needs a stand-in
     # helper too, carrying the flavour the run asks for. Every case gets one
     # unless it names its own or is about the helper's absence; the amd64
@@ -68,12 +68,12 @@ function Invoke-Packager {
         if ($Arguments[$i] -eq "-Arch" -and $i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -eq "amd64") { $isAmd64 = $true }
         if ($Arguments[$i] -eq "-Flavor" -and $i + 1 -lt $Arguments.Count) { $flavour = $Arguments[$i + 1] }
     }
-    if (-not $NoMsiStandIn -and -not $isAmd64 -and ($Arguments -notcontains "-MsiDriverPath")) {
-        $standIn = Join-Path $script:work ("xhcimsi-" + $flavour + ".sys")
+    if (-not $NoHlprStandIn -and -not $isAmd64 -and ($Arguments -notcontains "-HlprDriverPath")) {
+        $standIn = Join-Path $script:work ("xhcihlpr-" + $flavour + ".sys")
         if (-not (Test-Path -LiteralPath $standIn)) {
             Set-Content -LiteralPath $standIn -Value ("not a real helper XHCI98_FLAVOUR_" + $flavour.ToUpperInvariant()) -Encoding ASCII
         }
-        $Arguments = $Arguments + @("-MsiDriverPath", $standIn)
+        $Arguments = $Arguments + @("-HlprDriverPath", $standIn)
     }
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packager) + $Arguments
     # ErrorActionPreference relaxed across the call, as
@@ -150,24 +150,41 @@ try {
     $flatOut = Join-Path $script:work "pkg-flat"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $flatOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys", "xhcimsi.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys", "xhcihlpr.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
 
-    # --- the NT 6 x86 MSI helper (task 36.15, design record 18) -------------
-    Write-Step "the x86 package carries the MSI helper its INF names, of its own flavour"
-    $r = Invoke-Packager -NoMsiStandIn -Arguments @("-InfPath", $plainInf, "-DriverPath", $driver,
+    # --- the x86 helper (task 36.15, design record 18) -------------
+    Write-Step "the x86 package carries the helper its INF names, of its own flavour"
+    $r = Invoke-Packager -NoHlprStandIn -Arguments @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OutDir", (Join-Path $script:work "pkg-no-helper"))
-    Assert-True ($r.ExitCode -ne 0) "an x86 package was built with no xhcimsi.sys for its INF's entry."
-    Assert-True ($r.Output -match "xhcimsi\.sys") ("expected the refusal to name xhcimsi.sys. Output:`n" + $r.Output)
-    $wrongHelper = Join-Path $script:work "xhcimsi-wrong.sys"
+    Assert-True ($r.ExitCode -ne 0) "an x86 package was built with no xhcihlpr.sys for its INF's entry."
+    Assert-True ($r.Output -match "xhcihlpr\.sys") ("expected the refusal to name xhcihlpr.sys. Output:`n" + $r.Output)
+    $wrongHelper = Join-Path $script:work "xhcihlpr-wrong.sys"
     Set-Content -LiteralPath $wrongHelper -Value "not a real helper XHCI98_FLAVOUR_QEMU" -Encoding ASCII
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper,
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper,
         "-OutDir", (Join-Path $script:work "pkg-wrong-helper"))
     Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a debug package."
     $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
-        "-DriverPath", $driver, "-MsiDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
-    Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -MsiDriverPath."
+        "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
+    Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -HlprDriverPath."
+    # Record 18 section 15.11: the helper is never packaged on its allowlist
+    # alone, and a cut never publishes the retired 2.3.x helper. The binary
+    # gates cannot run on stand-ins, so the refusals are held by their text,
+    # each inside the block it guards.
+    $hlprPkgText = [System.IO.File]::ReadAllText($packager)
+    $hlprGateAt = $hlprPkgText.IndexOf('& powershell.exe @hlprGateArgs')
+    $hlprRefuseAt = $hlprPkgText.IndexOf('-NoTargetEvidence: the x86 helper is never packaged on the allowlist alone')
+    Assert-True ($hlprRefuseAt -gt 0 -and $hlprGateAt -gt $hlprRefuseAt -and ($hlprGateAt - $hlprRefuseAt) -lt 800) `
+        "make-package.ps1 must refuse -NoTargetEvidence just before the helper's hlprx86 gate."
+    $hlprRelText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "make-release.ps1"))
+    Assert-True ($hlprRelText.Contains('$retiredHelper = "xhcimsi.sys"') -and
+                 $hlprRelText.Contains('if (Test-Path -LiteralPath (Join-Path $destDir $retiredHelper))')) `
+        "make-release.ps1 must refuse a leg holding xhcimsi.sys, the retired 2.3.x helper."
+    Assert-True ($hlprRelText.Contains('-NoTargetEvidence: an x86 leg carries xhcihlpr.sys')) `
+        "make-release.ps1 must refuse -NoTargetEvidence for an x86 leg."
+    Assert-True ($hlprRelText.Contains('$legPublishableExtra = @("xhcihlpr.sys")')) `
+        "make-release.ps1 must publish xhcihlpr.sys, not xhcimsi.sys, as an x86 leg's third file."
 
     # --- txtsetup.oem (roadmap task 33.3) -----------------------------------
     #
@@ -182,7 +199,7 @@ try {
     Assert-True (Test-Path -LiteralPath (Join-Path $oemOut "txtsetup.oem")) "txtsetup.oem is not at the package root."
     $badOem = Join-Path $script:work "bad-txtsetup.oem"
     [System.IO.File]::WriteAllText($badOem,
-        [System.IO.File]::ReadAllText((Join-Path $repo "src\txtsetup.oem")).Replace('"XHCI98\ROOT_HUB"', '"USB\ROOT_HUB"'),
+        [System.IO.File]::ReadAllText((Join-Path $repo "src\txtsetup.oem")).Replace('"USB\XHCI98_ROOT_HUB"', '"USB\ROOT_HUB"'),
         (New-Object System.Text.ASCIIEncoding))
     $badOemOut = Join-Path $script:work "pkg-oem-bad"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
@@ -241,7 +258,8 @@ try {
 
     # --- portsw-on.bat and portsw-off.bat (roadmap-hcd task 36.56) ----------
     #
-    # Published beside portsw.vbs, in portsw\ since task 37.5. Each file is
+    # Published beside portsw.vbs, in portsw\ since task 37.5 and in
+    # tools\portsw\ since task 38.9. Each file is
     # run by COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere
     # (design record 16 section 5a), so the split is pinned: COMMAND.COM must
     # reach no line it cannot parse, and the one cmd.exe line must sit where
@@ -318,9 +336,11 @@ try {
             $at = [Array]::IndexOf($lines, $pin)
             if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
         }
-        foreach ($needle in @('RESTART WINDOWS', 'Vista and 7: right-click it', 'choose Run as administrator')) {
+        foreach ($needle in @('Vista and 7: right-click it', 'choose Run as administrator')) {
             if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
         }
+        # portsw.vbs says to restart after a set; an echo of its own printed it twice (task 38.6).
+        if ($Text.Contains('echo RESTART WINDOWS')) { $faults += "it echoes 'RESTART WINDOWS', which portsw.vbs already prints" }
         return $faults
     }
 
@@ -352,7 +372,8 @@ try {
     foreach ($bad in @('goto nt', '@echo example > stray.txt', ' rem example > stray.txt', 'echo x | more',
                        'for /f %%i in (a.txt) do echo %%i', 'setlocal', 'if /i errorlevel 1 goto end',
                        'cd /d "%~dp0"', 'goto eof', 'cscript //nologo "portsw.vbs" 2', 'cscript //nologo portsw.vbs 2',
-                       'echo off', 'echo ON', 'echo Off', 'call :run', ':run', ('echo ' + ('x' * 130)))) {
+                       'echo off', 'echo ON', 'echo Off', 'call :run', ':run', ('echo ' + ('x' * 130)),
+                       'echo RESTART WINDOWS for the change to take effect.')) {
         $mutant = $onText.Replace($anchor, "`r`n" + $bad + "`r`n")
         Assert-True (@(Get-PswBatchFaults -Text $mutant -Value "1").Count -gt 0) "the batch-file checker accepted the line: $bad"
     }
@@ -368,6 +389,265 @@ try {
     $harmless = $onText.Replace($anchor, "`r`necho setlocal is not used here.`r`n")
     $harmlessFaults = @(Get-PswBatchFaults -Text $harmless -Value "1")
     Assert-True ($harmlessFaults.Count -eq 0) ("the batch-file checker refused harmless echo text:`n  " + ($harmlessFaults -join "`n  "))
+
+    # --- the silent install's files (roadmap-hcd task 38.2) -----------------
+    #
+    # SILENT.REG, SILENT.VBS, silent-on.bat and silent-off.bat in
+    # tools\silent\ (design record 13 section 6.11.8). The batches are run by
+    # COMMAND.COM on Windows 98 SE and ME and by cmd.exe elsewhere, so they
+    # are held as portsw-on.bat's are: every line from a short list both
+    # interpreters run, and a pinned split whose cmd.exe branch only says it
+    # changed nothing. silent-on.bat merges SILENT.REG before it sets 1, and
+    # silent-off.bat never merges it. SILENT.REG is held to its six values.
+    # The two checkers are package-common.ps1's, which make-release.ps1 also
+    # holds a staged or published tools\silent\ to (Assert-SilentInstallContent).
+    Write-Step "silent-on.bat and silent-off.bat are COMMAND.COM-safe; SILENT.REG is the six values"
+    $silentBatches = @(
+        @{ Name = "silent-on.bat";  Value = "1" },
+        @{ Name = "silent-off.bat"; Value = "0" }
+    )
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    foreach ($bat in $silentBatches) {
+        $batSrc = Join-Path $repo ("src\" + $bat.Name)
+        if (-not (Test-Path -LiteralPath $batSrc)) { Assert-True $false "src\$($bat.Name) is missing."; continue }
+        $batText = $latin1.GetString([System.IO.File]::ReadAllBytes($batSrc))
+        $faults = @(Get-SilentBatchFaults -Text $batText -Value $bat.Value)
+        Assert-True ($faults.Count -eq 0) ("src\$($bat.Name):`n  " + ($faults -join "`n  "))
+    }
+
+    # Controls on the checker: each mutant of silent-on.bat (and one of
+    # silent-off.bat) must be refused, and harmless echo text must not be.
+    $sOnBytes = [System.IO.File]::ReadAllBytes((Join-Path $repo "src\silent-on.bat"))
+    $sOnText = $latin1.GetString($sOnBytes)
+    $sAnchor = "`r`necho Now:`r`n"
+    Assert-True ($sOnText.Contains($sAnchor)) "src\silent-on.bat has no 'echo Now:' line for the checker's controls to replace."
+    foreach ($bad in @('goto nt', '@echo example > stray.txt', 'echo x | more', 'setlocal', 'cd /d "%~dp0"',
+                       'goto eof', 'cscript //nologo silent.vbs 2', 'cscript //nologo silent.vbs 0',
+                       'regedit /s other.reg', 'regedit /s silent.reg', 'reg add HKLM\x', 'echo off',
+                       'call :run', ':run', ('echo ' + ('x' * 130)))) {
+        $mutant = $sOnText.Replace($sAnchor, "`r`n" + $bad + "`r`n")
+        Assert-True (@(Get-SilentBatchFaults -Text $mutant -Value "1").Count -gt 0) "the silent batch checker accepted the line: $bad"
+    }
+    foreach ($mutant in @($sOnText.Replace("goto run`r`n:nt`r`n", ":nt`r`n"),
+                          $sOnText.Replace("`r`n:nt`r`necho ", "`r`n:nt`r`ncscript //nologo silent.vbs 1`r`necho "),
+                          $sOnText.Replace($sAnchor, "`r`necho caf" + [char]0xE9 + "`r`n"),
+                          $latin1.GetString([byte[]](@(0xEF, 0xBB, 0xBF) + $sOnBytes)),
+                          $sOnText.Replace("`r`n", "`n"),
+                          $sOnText.Substring(0, $sOnText.Length - 2),
+                          $sOnText.Replace("regedit /s silent.reg`r`n", ""),
+                          $sOnText.Replace("if errorlevel 4 goto nolist`r`n", ""),
+                          $sOnText.Replace("cscript //nologo silent.vbs 1", "cscript //nologo silent.vbs 0"))) {
+        Assert-True (@(Get-SilentBatchFaults -Text $mutant -Value "1").Count -gt 0) "the silent batch checker accepted a broken whole-file control of silent-on.bat."
+    }
+    # The merge moved after the set: the order pin must refuse it.
+    $sMoved = $sOnText.Replace("regedit /s silent.reg`r`n", "").Replace("cscript //nologo silent.vbs 1`r`n", "cscript //nologo silent.vbs 1`r`nregedit /s silent.reg`r`n")
+    Assert-True (@(Get-SilentBatchFaults -Text $sMoved -Value "1").Count -gt 0) "the silent batch checker accepted silent-on.bat merging SILENT.REG after it sets the switch."
+    $sOffText = $latin1.GetString([System.IO.File]::ReadAllBytes((Join-Path $repo "src\silent-off.bat")))
+    foreach ($mutant in @($sOffText.Replace("cscript //nologo silent.vbs 0`r`n", "regedit /s silent.reg`r`ncscript //nologo silent.vbs 0`r`n"),
+                          $sOffText.Replace("SilentClasses key", "key"),
+                          $sOffText.Replace("cscript //nologo silent.vbs 0", "cscript //nologo silent.vbs 1"))) {
+        Assert-True (@(Get-SilentBatchFaults -Text $mutant -Value "0").Count -gt 0) "the silent batch checker accepted a broken whole-file control of silent-off.bat."
+    }
+    $sHarmless = $sOnText.Replace($sAnchor, "`r`necho setlocal and regedit are words here.`r`n")
+    $sHarmlessFaults = @(Get-SilentBatchFaults -Text $sHarmless -Value "1")
+    Assert-True ($sHarmlessFaults.Count -eq 0) ("the silent batch checker refused harmless echo text:`n  " + ($sHarmlessFaults -join "`n  "))
+
+    # SILENT.REG: held to package-common.ps1's Get-SilentRegFaults.
+    $regSrc = Join-Path $repo "src\silent.reg"
+    $regText = $latin1.GetString([System.IO.File]::ReadAllBytes($regSrc))
+    $regFaults = @(Get-SilentRegFaults -Text $regText)
+    Assert-True ($regFaults.Count -eq 0) ("src\silent.reg:`n  " + ($regFaults -join "`n  "))
+    foreach ($mutant in @($regText.Replace("hex:c3,08,06,50", "hex:c3,08,06,62"),
+                          $regText.Replace("hex:80,09,00,00", "hex:00,09,00,00"),
+                          $regText.Replace("`"5`"=hex:83,03,01,02`r`n", ""),
+                          $regText.Replace("`"5`"=hex:83,03,01,02`r`n", "`"5`"=hex:83,03,01,02`r`n`"6`"=hex:c3,08,06,62`r`n"),
+                          $regText.Replace("`"0`"=", "`"9`"="),
+                          $regText.Replace("REGEDIT4", "Windows Registry Editor Version 5.00"),
+                          $regText.Replace("`r`n", "`n"))) {
+        Assert-True (@(Get-SilentRegFaults -Text $mutant).Count -gt 0) "the SILENT.REG checker accepted a changed list."
+    }
+
+    # --- the field reports' batch files (roadmap-hcd task 38.1) -------------
+    #
+    # SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE, run by
+    # COMMAND.COM on Windows 98 SE and ME and by cmd.exe from 2000 to 7, so
+    # they carry portsw-on.bat's pinned split; QUALREP.BAT beside
+    # XHCIQUAL.EXE, run by MS-DOS's COMMAND.COM alone, so it carries none.
+    # Each line is held to a short list of what both interpreters run, as
+    # portsw-on.bat's are. Each batch runs its tool once, by name, with the
+    # one command line the task fixes - SNAPON.BAT's and SNAPGET.BAT's end in
+    # %1, passed on as it came for the tool to default and check (owner,
+    # 2026-10-13: an optional level, an optional name; Codex review of 38.1,
+    # round 3: no `if` on it); no batch names a drive path or reads a
+    # percent variable other than that one %1 (COMMAND.COM on 98 SE and ME
+    # has no %DATE% or %TIME%, and
+    # cmd.exe's follow the locale, which is why the tools build the names);
+    # and SNAPGET.BAT never turns the channel off. The specs and
+    # Get-ReportBatchFaults are package-common.ps1's, the one definition
+    # make-release.ps1 also holds staged and published batches to.
+    Write-Step "SNAPON, SNAPGET, SNAPOFF and QUALREP are COMMAND.COM-safe"
+    $reportBatchSpecs = Get-ReportBatchSpecs
+
+    foreach ($spec in $reportBatchSpecs) {
+        $batSrc = Join-Path $repo ($spec.Dir + "\" + $spec.Name)
+        if (-not (Test-Path -LiteralPath $batSrc -PathType Leaf)) {
+            Assert-True $false "$($spec.Dir)\$($spec.Name) is missing (roadmap-hcd task 38.1)."
+            continue
+        }
+        # Bytes, then Latin-1, for the reason portsw-on.bat's are read so.
+        $batText = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($batSrc))
+        $faults = @(Get-ReportBatchFaults -Text $batText -Spec $spec)
+        Assert-True ($faults.Count -eq 0) ("$($spec.Dir)\$($spec.Name):`n  " + ($faults -join "`n  "))
+    }
+
+    # Controls on the checker, on fixtures written to the task's terms here
+    # rather than on the files, so they hold whatever the files' wording: each
+    # good fixture must pass, every mutant be refused, and the harmless echo
+    # text pass.
+    function New-ReportBatchFixture {
+        param([hashtable]$Spec)
+        $l = @("@echo off", ("rem " + $Spec.Name.ToUpperInvariant() + " - a fixture of test-package.ps1."))
+        if ($Spec.Win) { $l += @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run') }
+        if ($Spec.ContainsKey("ToolLast")) {
+            # The tool runs last and prints the outcome, its last line what
+            # to attach (owner, 2026-10-13); with ArgPass, Args ends in %1,
+            # passed on as it came for the tool to default and check.
+            if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
+            if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files XHCISNAP names.") }
+            $l += @(("if exist " + $Spec.Tool + ".EXE goto tool"), ("echo " + $Spec.Tool + ".EXE was not found in this directory."),
+                    "goto end", ":tool", ($Spec.Tool + " " + $Spec.Args), ":end", "pause")
+            return (($l -join "`r`n") + "`r`n")
+        }
+        $l += ("if not exist " + $Spec.Tool + ".EXE goto nofile")
+        $l += ($Spec.Tool + " " + $Spec.Args)
+        $l += "if errorlevel 4 goto failed"
+        if ($Spec.Win) { $l += "echo On Vista and 7: right-click it and choose Run as administrator." }
+        if ($Spec.Names.Count -gt 0) { $l += ("echo Attach the " + ($Spec.Names -join " and ") + " files named above.") }
+        $l += @("goto end", ":failed", "echo It did not finish. Read the lines above.", "goto end",
+                ":nofile", ("echo " + $Spec.Tool + ".EXE was not found in this directory."), ":end", "echo.", "pause")
+        return (($l -join "`r`n") + "`r`n")
+    }
+    $latin1 = [System.Text.Encoding]::GetEncoding(28591)
+    foreach ($spec in $reportBatchSpecs) {
+        $fx = New-ReportBatchFixture -Spec $spec
+        $fxFaults = @(Get-ReportBatchFaults -Text $fx -Spec $spec)
+        Assert-True ($fxFaults.Count -eq 0) ("the report-batch checker refused its own good $($spec.Name) fixture:`n  " + ($fxFaults -join "`n  "))
+        $runLine = $spec.Tool + " " + $spec.Args
+        $at = "`r`n" + $runLine + "`r`n"
+        $mutants = @(
+            @{ Why = "a UTF-8 BOM";      Text = $latin1.GetString([byte[]](@(0xEF, 0xBB, 0xBF) + $latin1.GetBytes($fx))) },
+            @{ Why = "UTF-16";           Text = $latin1.GetString([byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($fx))) },
+            @{ Why = "LF endings";       Text = $fx.Replace("`r`n", "`n") },
+            @{ Why = "no last CRLF";     Text = $fx.Substring(0, $fx.Length - 2) },
+            @{ Why = "truncated";        Text = $fx.Substring(0, $fx.IndexOf(":end`r`n")) },
+            @{ Why = "no pause";         Text = $fx.Replace("`r`npause`r`n", "`r`n") },
+            @{ Why = "no @echo off";     Text = $fx.Substring("@echo off`r`n".Length) },
+            @{ Why = "a %DATE% line";    Text = $fx.Replace($at, "`r`nset STAMP=%DATE%`r`n" + $runLine + "`r`n") },
+            @{ Why = "%TIME% in its run"; Text = $fx.Replace($at, "`r`n" + $runLine + " %TIME%`r`n") },
+            @{ Why = "another %1 in its run"; Text = $fx.Replace($at, "`r`n" + $runLine + " %1`r`n") },
+            @{ Why = "a redirect";       Text = $fx.Replace($at, "`r`n" + $runLine + " > OUT.TXT`r`n") },
+            @{ Why = "a C:\ write";      Text = $fx.Replace($at, "`r`n" + $spec.Tool + " -o C:\DUMP`r`n") },
+            @{ Why = "a cd to the root"; Text = $fx.Replace($at, "`r`ncd \`r`n" + $runLine + "`r`n") },
+            @{ Why = "run twice";        Text = $fx.Replace($at, $at + $runLine + "`r`n") },
+            @{ Why = "never run";        Text = $fx.Replace($at, "`r`n") },
+            @{ Why = "run by path";      Text = $fx.Replace($at, "`r`n.\" + $runLine + "`r`n") },
+            @{ Why = "echo on";          Text = $fx.Replace($at, $at + "echo on`r`n") },
+            @{ Why = "a pipe on echo";   Text = $fx.Replace($at, $at + "echo x | more`r`n") },
+            @{ Why = "a missing label";  Text = $fx.Replace($at, $at + "if errorlevel 1 goto nowhere`r`n") },
+            @{ Why = "a label twice";    Text = $fx.Replace(":end`r`n", ":end`r`n:end`r`n") },
+            @{ Why = "a long line";      Text = $fx.Replace($at, $at + "echo " + ("x" * 130) + "`r`n") },
+            @{ Why = "setlocal";         Text = $fx.Replace($at, "`r`nsetlocal`r`n" + $runLine + "`r`n") },
+            @{ Why = "call";             Text = $fx.Replace($at, "`r`ncall :end`r`n" + $runLine + "`r`n") }
+        )
+        if ($spec.Win) {
+            $mutants += @{ Why = "no split"; Text = $fx.Replace("goto run`r`n:nt`r`n", ":nt`r`n") }
+            $mutants += @{ Why = "a stray goto nt"; Text = $fx.Replace($at, $at + "goto nt`r`n") }
+        } else {
+            $mutants += @{ Why = "a cmd.exe cd /d"; Text = $fx.Replace($at, "`r`ncd /d `"%~dp0`"`r`n" + $runLine + "`r`n") }
+        }
+        if ($spec.Name -eq "snapget.bat") {
+            $mutants += @{ Why = "-disable for -report"; Text = $fx.Replace($at, "`r`nXHCISNAP -disable`r`n") }
+            $mutants += @{ Why = "-disable after -report"; Text = $fx.Replace($at, $at + "XHCISNAP -disable`r`n") }
+            $mutants += @{ Why = "-verbosity 0 after -report"; Text = $fx.Replace($at, $at + "XHCISNAP -verbosity 0`r`n") }
+            $mutants += @{ Why = "no .DEV named"; Text = $fx.Replace("Attach the .DEV and .TXT", "Attach the .TXT") }
+        }
+        if ($spec.Name -eq "QUALREP.BAT") {
+            $mutants += @{ Why = "--log for --log-stamp"; Text = $fx.Replace($at, "`r`nXHCIQUAL --probe-only --no-page --log PROBE.LOG`r`n") }
+            $mutants += @{ Why = "an active run"; Text = $fx.Replace($at, "`r`nXHCIQUAL --no-page --log-stamp`r`n") }
+            $mutants += @{ Why = "another done flag"; Text = $fx.Replace($at, "`r`n" + $runLine + " --done-flag OTHER.FLG`r`n") }
+            $mutants += @{ Why = "a log deleted"; Text = $fx.Replace($at, $at + "del *.LOG`r`n") }
+            $mutants += @{ Why = "another file deleted"; Text = $fx.Replace($at, $at + "if exist OTHER.FLG del OTHER.FLG`r`n") }
+        }
+        if ($spec.Name -eq "snapon.bat") {
+            $mutants += @{ Why = "verbosity 3"; Text = $fx.Replace($at, "`r`nXHCISNAP -verbosity 3`r`n") }
+            $mutants += @{ Why = "-verbosity %1 for -on %1"; Text = $fx.Replace($at, "`r`nXHCISNAP -verbosity %1`r`n") }
+            $mutants += @{ Why = "a second -on line"; Text = $fx.Replace($at, $at + "XHCISNAP -on 2`r`n") }
+            $mutants += @{ Why = "a level test routed around"; Text = $fx.Replace($at, "`r`nif `"%1`"==`"0`" goto end`r`n" + $runLine + "`r`n") }
+        }
+        if ($spec.Name -eq "snapget.bat") {
+            $mutants += @{ Why = "-report -o %1 for -report %1"; Text = $fx.Replace($at, "`r`nXHCISNAP -report -o %1`r`n") }
+            $mutants += @{ Why = "a second -report line"; Text = $fx.Replace($at, "`r`nif errorlevel 2 goto end`r`n" + $runLine + "`r`nXHCISNAP -report`r`n") }
+        }
+        if ($spec.ContainsKey("ArgPass")) {
+            # %1 passes on the one run line alone, as it came, and nothing
+            # tests it; %2, %0, %*, %~1, %DATE% and %1 anywhere else are
+            # refused (Codex review of 38.1, round 3).
+            $mutants += @{ Why = "an if on %1";          Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "an if not on %1";      Text = $fx.Replace($at, $at + "if not `"%1`"==`"`" goto end`r`n") }
+            $mutants += @{ Why = "an if on %1 unquoted"; Text = $fx.Replace($at, "`r`nif %1.==. goto end`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "%2 for %1";            Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%2") + "`r`n") }
+            $mutants += @{ Why = "%1 and %2";            Text = $fx.Replace($at, "`r`n" + $runLine + " %2`r`n") }
+            $mutants += @{ Why = "%0 for %1";            Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%0") + "`r`n") }
+            $mutants += @{ Why = "%* for %1";            Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%*") + "`r`n") }
+            $mutants += @{ Why = "%~1 for %1";           Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%~1") + "`r`n") }
+            $mutants += @{ Why = "%DATE% for %1";        Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "%DATE%") + "`r`n") }
+            $mutants += @{ Why = "a %2 test";            Text = $fx.Replace($at, "`r`nif `"%2`"==`"`" goto end`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "%1 on an echo";        Text = $fx.Replace($at, $at + "echo saved as %1`r`n") }
+            $mutants += @{ Why = "set from %1";          Text = $fx.Replace($at, "`r`nset N=%1`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "shift";                Text = $fx.Replace($at, "`r`nshift`r`n" + $runLine + "`r`n") }
+            $mutants += @{ Why = "no %1 passed";         Text = $fx.Replace($at, "`r`n" + $runLine.Replace(" %1", "") + "`r`n") }
+            $mutants += @{ Why = "%1 quoted in its run"; Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "`"%1`"") + "`r`n") }
+            $mutants += @{ Why = "%1 by path";           Text = $fx.Replace($at, "`r`n" + $runLine.Replace("%1", "C:\%1") + "`r`n") }
+            $mutants += @{ Why = "%1 not last";          Text = $fx.Replace($at, "`r`n" + $runLine + " -c 0`r`n") }
+        } else {
+            $mutants += @{ Why = "a %1 test";            Text = $fx.Replace($at, "`r`nif `"%1`"==`"`" goto end`r`n" + $runLine + "`r`n") }
+        }
+        if ($spec.ContainsKey("ToolLast")) {
+            # Nothing reads the exit code and nothing follows the tool line
+            # but labels and pause (owner, 2026-10-13: XHCISNAP's last line
+            # names what to attach); nothing but rem and echo before the
+            # 'if exist' test, so no jump routes around the tool.
+            $guardLine = "if exist " + $spec.Tool + ".EXE goto tool"
+            $mutants += @{ Why = "an if errorlevel after the tool"; Text = $fx.Replace($at, $at + "if errorlevel 1 goto end`r`n") }
+            $mutants += @{ Why = "an echo after the tool";          Text = $fx.Replace($at, $at + "echo Done.`r`n") }
+            $mutants += @{ Why = "an echo before pause";            Text = $fx.Replace(":end`r`npause`r`n", ":end`r`necho.`r`npause`r`n") }
+            $mutants += @{ Why = "a goto after the tool";           Text = $fx.Replace($at, $at + "goto end`r`n") }
+            $mutants += @{ Why = "an exit-code ladder";             Text = $fx.Replace($at, $at + "if errorlevel 2 goto bad`r`ngoto end`r`n:bad`r`necho Refused.`r`n") }
+            $mutants += @{ Why = "an if errorlevel before the tool"; Text = $fx.Replace("`r`n:tool`r`n", "`r`nif errorlevel 1 goto end`r`n:tool`r`n") }
+            $mutants += @{ Why = "a goto around the guard";         Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`ngoto end`r`n" + $guardLine + "`r`n") }
+            $mutants += @{ Why = "no guard";                        Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`n") }
+            $mutants += @{ Why = "the guard to another label";      Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`nif exist " + $spec.Tool + ".EXE goto end`r`n") }
+            $mutants += @{ Why = "if not exist for the guard";      Text = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`nif not exist " + $spec.Tool + ".EXE goto tool`r`n") }
+            $mutants += @{ Why = "a second way to the tool";        Text = $fx.Replace("`r`ngoto end`r`n:tool`r`n", "`r`ngoto tool`r`n:tool`r`n") }
+            $mutants += @{ Why = "the tool not below its label";    Text = $fx.Replace(":tool`r`n" + $runLine + "`r`n", ":tool`r`necho Running.`r`n" + $runLine + "`r`n") }
+            $harmless = $fx.Replace("`r`n" + $guardLine + "`r`n", "`r`necho setlocal is not used here, and the date comes from XHCISNAP.`r`n" + $guardLine + "`r`n")
+        } else {
+            $harmless = $fx.Replace($at, $at + "echo setlocal is not used here, and the date comes from XHCISNAP.`r`n")
+        }
+        # After every control is built, the ToolLast ones included (Codex
+        # review of 38.1, round 4: they were appended after this loop).
+        foreach ($m in $mutants) {
+            Assert-True ($m.Text -cne $fx) "the $($spec.Name) control '$($m.Why)' did not change the fixture, so it controls nothing."
+            Assert-True (@(Get-ReportBatchFaults -Text $m.Text -Spec $spec).Count -gt 0) "the report-batch checker accepted $($spec.Name) with $($m.Why)."
+        }
+        $harmlessFaults = @(Get-ReportBatchFaults -Text $harmless -Spec $spec)
+        Assert-True ($harmlessFaults.Count -eq 0) ("the report-batch checker refused harmless echo text in $($spec.Name):`n  " + ($harmlessFaults -join "`n  "))
+        if ($spec.ContainsKey("Flag")) {
+            $withFlag = $fx.Replace($at, ("`r`nif exist {0} del {0}`r`nif exist {0} goto failed`r`n{1} --done-flag {0}`r`nif not exist {0} goto failed`r`ndel {0}`r`n" -f $spec.Flag, $runLine))
+            $flagFaults = @(Get-ReportBatchFaults -Text $withFlag -Spec $spec)
+            Assert-True ($flagFaults.Count -eq 0) ("the report-batch checker refused $($spec.Name)'s own completion flag:`n  " + ($flagFaults -join "`n  "))
+        }
+    }
 
     # --- a diagnostic probe driver must never become install media ----------
     Write-Step "a diagnostic probe driver is refused"
@@ -935,11 +1215,11 @@ try {
     Write-Step "a relative -OutDir resolves against the caller's location"
     $cwd = Join-Path $script:work "cwd"
     New-Item -ItemType Directory -Path $cwd | Out-Null
-    $msiStandInDebug = Join-Path $script:work "xhcimsi-relpkg.sys"
-    Set-Content -LiteralPath $msiStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
+    $hlprStandInDebug = Join-Path $script:work "xhcihlpr-relpkg.sys"
+    Set-Content -LiteralPath $hlprStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
-        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -MsiDriverPath '$msiStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
+        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -HlprDriverPath '$hlprStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
         "exit `$LASTEXITCODE"
     ) -join "; "
     $savedEap = $ErrorActionPreference
@@ -1004,8 +1284,8 @@ try {
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
             # The x86 media's third file of this project's own since task
             # 36.15 (design record 18), published beside xhci98.sys.
-            Set-Content -LiteralPath (Join-Path $pubFlavour "xhcimsi.sys") -Encoding ASCII `
-                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
+            Set-Content -LiteralPath (Join-Path $pubFlavour "xhcihlpr.sys") -Encoding ASCII `
+                        -Value "stand-in xhcihlpr.sys, $fl flavour, $relVersion"
 
             # The gated package: the same two files byte for byte, and since
             # 1.0.0.1 nothing else.
@@ -1013,22 +1293,39 @@ try {
             Ensure-Directory $pkgFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
-            Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcimsi.sys") -Encoding ASCII `
-                        -Value "stand-in xhcimsi.sys, $fl flavour, $relVersion"
+            Set-Content -LiteralPath (Join-Path $pkgFlavour "xhcihlpr.sys") -Encoding ASCII `
+                        -Value "stand-in xhcihlpr.sys, $fl flavour, $relVersion"
         }
         Set-Content -LiteralPath (Join-Path $pubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $pubRoot "LICENSE") -Force
-        Ensure-Directory (Join-Path $pubRoot "xhciqual")
-        Set-Content -LiteralPath (Join-Path $pubRoot "xhciqual\XHCIQUAL.EXE") `
+        # The tools under tools\, as every cut publishes them since roadmap-hcd
+        # task 38.9: the tree is the current version's, which is 2.4.0.0 or
+        # later from the cut on, and the upload assembly refuses a tree of that
+        # version without tools\ (Assert-ToolsLayout). A tree that has tools\
+        # is held to it at any version, so this fixture passes before the
+        # version is stamped too.
+        Ensure-Directory (Join-Path $pubRoot "tools\xhciqual")
+        Set-Content -LiteralPath (Join-Path $pubRoot "tools\xhciqual\XHCIQUAL.EXE") `
                     -Encoding ASCII -Value "stand-in qualifier"
-        # The port switchover's scripts in portsw\, as every cut publishes them
-        # since roadmap-hcd task 37.5: the upload assembly refuses a tree of
-        # this version without them (Assert-PortSwitchLayout).
-        Ensure-Directory (Join-Path $pubRoot "portsw")
+        # And its report batch beside it (roadmap-hcd task 38.1): the upload
+        # assembly refuses a tool directory without its batches
+        # (Assert-ReportBatchLayout), and one whose text the shared checker
+        # refuses (Assert-ReportBatchContent), so it is the repository's own.
+        Copy-Item -LiteralPath (Join-Path $repo "xhciqual\QUALREP.BAT") `
+                  -Destination (Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT") -Force
+        # The port switchover's scripts in tools\portsw\, as every cut publishes
+        # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
+        # refuses a tree of this version without them (Assert-PortSwitchLayout).
+        Ensure-Directory (Join-Path $pubRoot "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot "portsw\$name") -Force
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot "tools\portsw\$name") -Force
+        }
+        # The silent install's four files in tools\silent\ (task 38.2).
+        Ensure-Directory (Join-Path $pubRoot "tools\silent")
+        foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
+            Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot ("tools\silent\" + $pair[1])) -Force
         }
 
         # What the published tree looks like before the run, so that a mode
@@ -1052,7 +1349,7 @@ try {
         # The files the INF names, in one directory, per flavour. This is the
         # assertion the malformed asset would have failed.
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcimsi.sys")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcihlpr.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
             }
@@ -1062,7 +1359,7 @@ try {
         # exact defect: every file present, and none of them together.
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir $relVersion))) `
             "the upload set nests the published tree as '$relVersion\'; the release root's contents belong at the top level."
-        foreach ($name in @("readme.txt", "LICENSE", "xhciqual\XHCIQUAL.EXE")) {
+        foreach ($name in @("readme.txt", "LICENSE", "tools\xhciqual\XHCIQUAL.EXE", "tools\portsw\portsw.vbs")) {
             Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir $name)) `
                 "'$name' is missing from the upload set root; the published tree was not copied whole."
         }
@@ -1123,6 +1420,31 @@ try {
         }
         Assert-True (Test-Path -LiteralPath $uploadZip) "no upload archive was written when assembled without a package root."
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the run created the package root it was told did not exist."
+
+        # --- a malformed report batch in the published tree (task 38.1) -----
+        #
+        # The layout checks see names and places only, so a QUALREP.BAT in
+        # the right place that the shared checker refuses (here: LF endings,
+        # which COMMAND.COM misreads) must stop the assembly before anything
+        # is archived (Codex review of 38.1, round 1).
+        Write-Step "the upload set refuses a malformed report batch in the published tree"
+        $qrPub = Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT"
+        $qrGood = [System.IO.File]::ReadAllBytes($qrPub)
+        $qrBad = [System.Text.Encoding]::ASCII.GetString($qrGood).Replace("`r`n", "`n")
+        [System.IO.File]::WriteAllBytes($qrPub, [System.Text.Encoding]::ASCII.GetBytes($qrBad))
+        Remove-Item -LiteralPath $uploadDir -Recurse -Force
+        Remove-Item -LiteralPath $uploadZip -Force
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published QUALREP.BAT with LF endings was assembled into the asset."
+        Assert-True ($r.Output -match "QUALREP\.BAT" -and $r.Output -match "CRLF") `
+            ("expected the refusal to name QUALREP.BAT and its line endings. Output:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a malformed report batch."
+        [System.IO.File]::WriteAllBytes($qrPub, $qrGood)
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not re-assembled once QUALREP.BAT was restored:`n" + $r.Output)
 
         # --- the UAS class driver's pair (roadmap task 31-A.2) ---------------
         #
@@ -1293,18 +1615,24 @@ try {
             Copy-Item -LiteralPath $leg.Inf -Destination (Join-Path $d "xhci98.inf") -Force
             # The x86 media's helper (design record 18); the x64 media has none.
             if ($leg.Dir -like "*-x86") {
-                Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
-                            -Value "stand-in xhcimsi.sys, $($leg.Dir), $relVersion"
+                Set-Content -LiteralPath (Join-Path $d "xhcihlpr.sys") -Encoding ASCII `
+                            -Value "stand-in xhcihlpr.sys, $($leg.Dir), $relVersion"
             }
         }
         Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
-        # The port switchover's scripts in portsw\, as every cut publishes them
-        # since roadmap-hcd task 37.5: the upload assembly refuses a tree of
-        # this version without them (Assert-PortSwitchLayout).
-        Ensure-Directory (Join-Path $pubRoot4 "portsw")
+        # The port switchover's scripts in tools\portsw\, as every cut publishes
+        # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
+        # refuses a tree of this version without them (Assert-PortSwitchLayout,
+        # Assert-ToolsLayout).
+        Ensure-Directory (Join-Path $pubRoot4 "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot4 "portsw\$name") -Force
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot4 "tools\portsw\$name") -Force
+        }
+        # The silent install's four files in tools\silent\ (task 38.2).
+        Ensure-Directory (Join-Path $pubRoot4 "tools\silent")
+        foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
+            Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot4 ("tools\silent\" + $pair[1])) -Force
         }
 
         $up4 = Join-Path $script:work "upload-4dir"
@@ -1417,7 +1745,7 @@ try {
             }
         }
         $strays = @(Get-ChildItem -LiteralPath $uploadDir -Directory -Recurse |
-            Where-Object { $_.Name -notin @("release", "debug", "xhciqual", "portsw") })
+            Where-Object { $_.Name -notin @("release", "debug", "tools", "xhciqual", "portsw", "silent") })
         Assert-True ($strays.Count -eq 0) `
             ("a relative -PackageRoot created " + $strays.Count + " directory(ies) nobody named: " +
              (($strays | ForEach-Object { $_.Name } | Select-Object -First 3) -join ", "))
@@ -2168,19 +2496,25 @@ try {
             [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
                 [System.Text.Encoding]::ASCII.GetBytes("stand-in xhci98.sys, $fl, $newVersion"))
             Copy-Item -LiteralPath $newInf -Destination (Join-Path $d "xhci98.inf") -Force
-            Set-Content -LiteralPath (Join-Path $d "xhcimsi.sys") -Encoding ASCII `
-                        -Value "stand-in xhcimsi.sys, $fl, $newVersion"
+            Set-Content -LiteralPath (Join-Path $d "xhcihlpr.sys") -Encoding ASCII `
+                        -Value "stand-in xhcihlpr.sys, $fl, $newVersion"
         }
         Set-Content -LiteralPath (Join-Path $newPubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
         Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
                   -Destination (Join-Path $newPubRoot "LICENSE") -Force
-        # The port switchover's scripts in portsw\, as every cut publishes them
-        # since roadmap-hcd task 37.5: the upload assembly refuses a tree of
-        # this version without them (Assert-PortSwitchLayout).
-        Ensure-Directory (Join-Path $newPubRoot "portsw")
+        # The port switchover's scripts in tools\portsw\, as every cut publishes
+        # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
+        # refuses a tree of this version without them (Assert-PortSwitchLayout,
+        # Assert-ToolsLayout).
+        Ensure-Directory (Join-Path $newPubRoot "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $newPubRoot "portsw\$name") -Force
+            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $newPubRoot "tools\portsw\$name") -Force
+        }
+        # The silent install's four files in tools\silent\ (task 38.2).
+        Ensure-Directory (Join-Path $newPubRoot "tools\silent")
+        foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
+            Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $newPubRoot ("tools\silent\" + $pair[1])) -Force
         }
 
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $newVersion,
@@ -2300,10 +2634,48 @@ try {
            Why  = "the port switchover's user script and its two batch files (roadmap-hcd tasks 36.42 and 36.56) are no longer the files portsw\ carries" },
         @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot';
            Why  = "a cut no longer publishes the port switchover's scripts once, from src\, into portsw\ at the version root (roadmap-hcd task 37.5)" },
-        @{ Find = 'Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName $pswDirName';
-           Why  = "a cut no longer holds its staged tree to one portsw\ and no copy in a flavour directory before the publish swap (task 37.5)" },
-        @{ Find = '-What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
-           Why  = "the upload assembly no longer holds the tree to the layout its version was published with (task 37.5)" }
+        @{ Find = 'Assert-PortSwitchLayout -Root $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")';
+           Why  = "a cut no longer holds its staged tree to one tools\portsw\ and no copy in a flavour directory before the publish swap (tasks 37.5 and 38.9)" },
+        @{ Find = '-What "the upload set ''$uploadRoot''" -PublishedVersion $pswVersion';
+           Why  = "the upload assembly no longer holds the tree to the port switchover layout its version was published with (tasks 37.5 and 38.9)" },
+        @{ Find = '$pswVersion = if (Test-Path -LiteralPath (Join-Path $uploadRoot $toolsDirName)) { "" } else { $Version }';
+           Why  = "the upload assembly no longer holds a tree with tools\ to the cut's port switchover layout, so a legacy layout beside tools\ would pass (task 38.9)" },
+        # The tools under tools\ (roadmap-hcd task 38.9): each staged through
+        # Get-ToolDirName, and the layout held at the cut and at the upload.
+        @{ Find = '$pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")';
+           Why  = "a cut no longer publishes the port switchover's scripts into tools\portsw\ (task 38.9)" },
+        @{ Find = '$qualDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciqual")';
+           Why  = "a cut no longer stages the DOS qualifier into tools\xhciqual\ (task 38.9)" },
+        @{ Find = '$snapDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcisnap")';
+           Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
+        @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
+           Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install and the cleanup tool (tasks 38.9, 38.2 and 38.8)" },
+        @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
+           Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
+        @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
+           Why  = "a cut no longer stages both builds of the cleanup tool, the 64-bit one a native build by design (task 38.8, decision D7)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path $cleanSource -Macro "XHCICLN_VERSION"';
+           Why  = "a cut no longer holds the cleanup tool's version to the shared macro (task 38.8)" },
+        @{ Find = '$cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })';
+           Why  = "a cut no longer refuses a cleanup tool older than its sources (task 38.8)" },
+        @{ Find = 'Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT")';
+           Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },
+        @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
+           Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
+        @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
+           Why  = "a cut no longer holds its staged tree to tools\silent\ alone before the publish swap (task 38.2)" },
+        @{ Find = 'Assert-SilentInstallLayout -Root $uploadRoot -Map $silentPublishable -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds the tree to the silent install's layout (task 38.2)" },
+        @{ Find = 'Assert-SilentInstallContent -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''" -Reference $repo';
+           Why  = "a cut no longer holds the silent install's staged files to the checkers and the repository's own bytes (task 38.2)" },
+        @{ Find = 'Assert-SilentInstallContent -Root $uploadRoot -Map $silentPublishable -What "the upload set ''$uploadRoot''"';
+           Why  = "the upload assembly no longer holds the silent install's files it archives to the checkers (task 38.2)" },
+        @{ Find = 'Assert-ToolsLayout -Root $uploadRoot -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds the tree to tools\ at the layout its version was published with (task 38.9)" },
+        @{ Find = '-DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot)';
+           Why  = "the upload assembly no longer looks for the port switchover's scripts where the tree's own layout puts them (task 38.9)" }
     )) {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
@@ -2311,6 +2683,28 @@ try {
     # And none of the scripts rides in a flavour directory or a package again.
     Assert-True (-not ($releaserText -match '\$pswPublishable\s*\+|\+\s*\$pswPublishable')) `
         "make-release.ps1 adds the port switchover's scripts to a flavour directory's or a package's file set again; since roadmap-hcd task 37.5 they are published in portsw\ alone."
+    # No tool is staged at the version root by a literal name again (task
+    # 38.9): every staging goes through Get-ToolDirName.
+    foreach ($bad in @('Join-Path $destRoot "xhciqual"', 'Join-Path $destRoot "xhcisnap"', 'Join-Path $destRoot "portsw"', '$pswDirName')) {
+        Assert-True (-not $releaserText.Contains($bad)) `
+            "make-release.ps1 contains '$bad' again, which stages a tool at the version root; since roadmap-hcd task 38.9 the tools are published under tools\."
+    }
+    # And the tools' layout is held at the cut before the publish swap, beside
+    # the port switchover's check, and on every cut rather than in the
+    # -SkipUploadSet branch (task 38.9).
+    $tlAt = $releaserText.IndexOf('Assert-ToolsLayout -Root $destRoot')
+    $tlPswAt = $releaserText.IndexOf('Assert-PortSwitchLayout -Root $destRoot')
+    $tlSwapAt = $releaserText.IndexOf('Move-Item -LiteralPath $destRoot -Destination $finalRoot')
+    $tlAsideAt = $releaserText.IndexOf('Move-Item -LiteralPath $finalRoot -Destination $asideRoot')
+    Assert-True ($tlAt -ge 0) "make-release.ps1 no longer holds the staged release to the tools\ layout (roadmap-hcd task 38.9)."
+    if ($tlAt -ge 0) {
+        Assert-True ($tlSwapAt -gt $tlAt -and $tlAsideAt -gt $tlAt) `
+            "make-release.ps1 holds the staged release to the tools\ layout after the -Force aside or the publish swap, so a refusal would leave releases\ changed (roadmap-hcd task 38.9)."
+        Assert-True ($tlPswAt -gt $tlAt -and ($tlPswAt - $tlAt) -lt 400) `
+            "make-release.ps1's tools\ layout check is no longer beside the port switchover's at the publish step (roadmap-hcd task 38.9)."
+        $tlLine = ($releaserText.Substring(0, $tlAt) -split "`n")[-1]
+        Assert-True ($tlLine.TrimEnd("`r") -eq '    ') "make-release.ps1's tools\ layout check at the cut is not at the publish step's own level."
+    }
 
     #
     # **The portsw\ layout itself, EXECUTED** (roadmap-hcd task 37.5): the
@@ -2321,7 +2715,11 @@ try {
     # directory, a missing script, a stranger in portsw\, and no portsw\ at
     # all - which -PublishedVersion accepts only in the layout that version
     # was published with: none before 2.3.0.0, one set per flavour directory
-    # in 2.3.0.0, never after it.
+    # in 2.3.0.0, never after it. The cut fixture is a current cut's, with the
+    # tools under tools\ (roadmap-hcd task 38.9), so it names the directory
+    # "tools\portsw" as Get-ToolDirName does at the cut; the published layouts
+    # name "portsw" at the version root, where every version before 2.4.0.0
+    # has it.
     Write-Step "the port switchover's scripts are published in portsw\ alone"
     $pswFns = @()
     foreach ($fnName in @("Publish-PortSwitchScripts", "Assert-PortSwitchLayout")) {
@@ -2334,21 +2732,21 @@ try {
         $pswNames = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
         $pswRoot = Join-Path $script:work "pswlayout"
         $cutRoot = Join-Path $pswRoot "cut"
-        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64", "xhcisnap")) {
+        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64", "tools\xhcisnap")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $cutRoot $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $cutRoot "$d\xhci98.inf"), "; stand-in")
         }
-        $pubDir = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $cutRoot -Names $pswNames -DirName "portsw"
-        Assert-True ($pubDir -eq (Join-Path $cutRoot "portsw")) "Publish-PortSwitchScripts did not return the portsw\ directory it wrote: $pubDir"
+        $pubDir = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $cutRoot -Names $pswNames -DirName "tools\portsw"
+        Assert-True ($pubDir -eq (Join-Path $cutRoot "tools\portsw")) "Publish-PortSwitchScripts did not return the portsw\ directory it wrote: $pubDir"
         foreach ($name in $pswNames) {
-            $pubFile = Join-Path $cutRoot "portsw\$name"
+            $pubFile = Join-Path $cutRoot "tools\portsw\$name"
             Assert-True ((Test-Path -LiteralPath $pubFile) -and
                          (Get-StandInSha ([System.IO.File]::ReadAllBytes($pubFile))) -eq
                          (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $repo "src\$name"))))) `
                 "Publish-PortSwitchScripts did not publish src\$name byte for byte into portsw\."
         }
         $refused = $null
-        try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "portsw" -What "fixture cut" } catch { $refused = $_.Exception.Message }
+        try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "tools\portsw" -What "fixture cut" } catch { $refused = $_.Exception.Message }
         Assert-True ($null -eq $refused) "Assert-PortSwitchLayout refused a tree with the three in portsw\ alone: $refused"
 
         # A source missing one: refused, naming it, and nothing written.
@@ -2359,34 +2757,34 @@ try {
         $loneDest = Join-Path $pswRoot "lone-dest"
         New-Item -ItemType Directory -Force -Path $loneDest | Out-Null
         $refused = $null
-        try { $null = Publish-PortSwitchScripts -SourceDir $loneSrc -DestRoot $loneDest -Names $pswNames -DirName "portsw" } catch { $refused = $_.Exception.Message }
+        try { $null = Publish-PortSwitchScripts -SourceDir $loneSrc -DestRoot $loneDest -Names $pswNames -DirName "tools\portsw" } catch { $refused = $_.Exception.Message }
         Assert-True ($null -ne $refused -and $refused -match "portsw-off\.bat") "Publish-PortSwitchScripts did not refuse a source with no portsw-off.bat, naming it: $refused"
-        Assert-True (-not (Test-Path -LiteralPath (Join-Path $loneDest "portsw"))) "Publish-PortSwitchScripts wrote portsw\ before refusing a source missing a script."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $loneDest "tools\portsw"))) "Publish-PortSwitchScripts wrote portsw\ before refusing a source missing a script."
 
         # The faults, each on a copy of the good tree.
         $faultCases = @(
-            @{ Name = "flavour-copy"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "portsw\portsw.vbs") -Destination (Join-Path $t "release-x64\portsw.vbs") }; Says = "release-x64" },
-            @{ Name = "deep-copy";    Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "portsw\portsw-on.bat") -Destination (Join-Path $t "xhcisnap\PORTSW-ON.BAT") }; Says = "xhcisnap" },
-            @{ Name = "missing";      Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "portsw\portsw-off.bat") }; Says = "portsw-off\.bat is missing" },
-            @{ Name = "stranger";     Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "portsw\readme.txt"), "x") }; Says = "readme\.txt" },
-            @{ Name = "no-dir";       Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "portsw") -Recurse }; Says = "no portsw" }
+            @{ Name = "flavour-copy"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\portsw\portsw.vbs") -Destination (Join-Path $t "release-x64\portsw.vbs") }; Says = "release-x64" },
+            @{ Name = "deep-copy";    Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\portsw\portsw-on.bat") -Destination (Join-Path $t "tools\xhcisnap\PORTSW-ON.BAT") }; Says = "xhcisnap" },
+            @{ Name = "missing";      Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\portsw\portsw-off.bat") }; Says = "portsw-off\.bat is missing" },
+            @{ Name = "stranger";     Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "tools\portsw\readme.txt"), "x") }; Says = "readme\.txt" },
+            @{ Name = "no-dir";       Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\portsw") -Recurse }; Says = "no tools\\portsw" }
         )
         foreach ($c in $faultCases) {
             $t = Join-Path $pswRoot ("fault-" + $c.Name)
             Copy-Item -LiteralPath $cutRoot -Destination $t -Recurse
             & $c.Do $t
             $refused = $null
-            try { Assert-PortSwitchLayout -Root $t -Names $pswNames -DirName "portsw" -What "fixture $($c.Name)" } catch { $refused = $_.Exception.Message }
+            try { Assert-PortSwitchLayout -Root $t -Names $pswNames -DirName "tools\portsw" -What "fixture $($c.Name)" } catch { $refused = $_.Exception.Message }
             Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-PortSwitchLayout on the '{0}' fixture: expected a refusal matching '{1}', got: {2}" -f $c.Name, $c.Says, $refused)
         }
         # Given a published version, a tree WITH portsw\ is still held to the
         # rule, whatever the version.
         foreach ($v in @("2.2.0.0", "2.3.0.0", "2.3.0.1")) {
             $refused = $null
-            try { Assert-PortSwitchLayout -Root (Join-Path $pswRoot "fault-flavour-copy") -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            try { Assert-PortSwitchLayout -Root (Join-Path $pswRoot "fault-flavour-copy") -Names $pswNames -DirName "tools\portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
             Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -PublishedVersion $v accepted a tree with portsw\ and a copy in a flavour directory."
             $refused = $null
-            try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            try { Assert-PortSwitchLayout -Root $cutRoot -Names $pswNames -DirName "tools\portsw" -What "fixture" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
             Assert-True ($null -eq $refused) "Assert-PortSwitchLayout -PublishedVersion $v refused a tree with the three in portsw\ alone: $refused"
         }
 
@@ -2434,6 +2832,517 @@ try {
             Assert-True ($null -ne $refused) "Assert-PortSwitchLayout -PublishedVersion $($c.Version) accepted the damaged '$($c.Name)' layout."
         }
     }
+
+    #
+    # **The tools\ layout itself, EXECUTED** (roadmap-hcd task 38.9): the
+    # two functions and the three values they read, loaded from
+    # make-release.ps1's text as the port switchover's are above, and driven
+    # with fixture trees. Get-ToolDirName answers tools\<name> for the cut and
+    # for a tree with tools\, and <name> for one without. Assert-ToolsLayout
+    # takes tools\ holding only the three tools' directories, and refuses a
+    # tool's directory at the root beside it, a stranger in it, and tools as a
+    # file - at any version, since a tree with tools\ is held to it whatever
+    # its version says. A tree without tools\ it refuses for the cut and from
+    # 2.4.0.0, and accepts before 2.4.0.0, where every published release has
+    # its tools at the version root and is never rewritten.
+    Write-Step "the release's tools are published under tools\"
+    $tlTexts = @()
+    foreach ($varName in @("toolsDirName", "toolsLayoutVersion", "toolNames")) {
+        $m = [regex]::Match($releaserText, '(?m)^\$' + $varName + ' = [^\r\n]+')
+        Assert-True $m.Success "make-release.ps1 no longer sets `$$varName at its top level (roadmap-hcd task 38.9)."
+        if ($m.Success) { $tlTexts += $m.Value }
+    }
+    foreach ($fnName in @("Get-ToolDirName", "Assert-ToolsLayout")) {
+        $fnAt = $releaserText.IndexOf("function $fnName")
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.9)."
+        if ($fnAt -ge 0) { $tlTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
+    }
+    if ($tlTexts.Count -eq 5) {
+        foreach ($tlText in $tlTexts) { Invoke-Expression $tlText }
+        $tlRoot = Join-Path $script:work "toolslayout"
+        $tlCut = Join-Path $tlRoot "cut"
+        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
+        }
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
+        }
+        [System.IO.File]::WriteAllText((Join-Path $tlCut "readme.txt"), "stand-in")
+        [System.IO.File]::WriteAllText((Join-Path $tlCut "LICENSE"), "stand-in")
+        # The root layout every version before 2.4.0.0 was published with.
+        $tlLegacy = Join-Path $tlRoot "legacy"
+        foreach ($d in @("release-x86", "debug-x86", "xhciqual", "xhcisnap", "portsw")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $tlLegacy $d) | Out-Null
+        }
+
+        # Get-ToolDirName: the cut, a tree with tools\, a tree without.
+        foreach ($c in @(
+            @{ Root = "";        Want = "tools\portsw" },
+            @{ Root = $tlCut;    Want = "tools\portsw" },
+            @{ Root = $tlLegacy; Want = "portsw" }
+        )) {
+            $got = Get-ToolDirName -Name "portsw" -Root $c.Root
+            Assert-True ($got -eq $c.Want) ("Get-ToolDirName -Name portsw -Root '{0}' returned '{1}', not '{2}'." -f $c.Root, $got, $c.Want)
+        }
+        Assert-True ((Get-ToolDirName -Name "xhciqual") -eq "tools\xhciqual") "Get-ToolDirName does not put the qualifier under tools\ at the cut."
+        Assert-True ((Get-ToolDirName -Name "xhcisnap") -eq "tools\xhcisnap") "Get-ToolDirName does not put XHCISNAP under tools\ at the cut."
+        Assert-True ((Get-ToolDirName -Name "xhcicln") -eq "tools\xhcicln") "Get-ToolDirName does not put the cleanup tool under tools\ at the cut."
+
+        # The accepted layout, for the cut and for every published version.
+        foreach ($v in @("", "2.3.1.0", "2.4.0.0", "2.4.0.1")) {
+            $refused = $null
+            try { Assert-ToolsLayout -Root $tlCut -What "fixture cut" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ToolsLayout -PublishedVersion '$v' refused the three tools under tools\ alone: $refused"
+        }
+
+        # The faults, each on a copy of the good tree, refused at the cut and
+        # at a version before 2.4.0.0 alike: tools\ is strict wherever it is.
+        $tlFaults = @(
+            @{ Name = "root-tool";    Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "xhcisnap") | Out-Null }; Says = "xhcisnap\\ is at the version root" },
+            @{ Name = "root-portsw";  Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\portsw") -Destination (Join-Path $t "portsw") }; Says = "portsw\\ is at the version root" },
+            @{ Name = "root-xhcicln"; Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\xhcicln") -Destination (Join-Path $t "xhcicln") }; Says = "xhcicln\\ is at the version root" },
+            @{ Name = "stranger-file"; Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "tools\readme.txt"), "x") }; Says = "tools\\readme\.txt is not one of" },
+            @{ Name = "stranger-dir"; Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "tools\release-x86") | Out-Null }; Says = "tools\\release-x86 is not one of" },
+            @{ Name = "tool-as-file"; Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhciqual") -Recurse; [System.IO.File]::WriteAllText((Join-Path $t "tools\xhciqual"), "x") }; Says = "tools\\xhciqual is not one of" },
+            @{ Name = "tools-file";   Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools") -Recurse; [System.IO.File]::WriteAllText((Join-Path $t "tools"), "x") }; Says = "tools is a file" }
+        )
+        foreach ($c in $tlFaults) {
+            $t = Join-Path $tlRoot ("fault-" + $c.Name)
+            Copy-Item -LiteralPath $tlCut -Destination $t -Recurse
+            & $c.Do $t
+            foreach ($v in @("", "2.3.1.0", "2.4.0.0")) {
+                $refused = $null
+                try { Assert-ToolsLayout -Root $t -What "fixture $($c.Name)" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+                Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-ToolsLayout -PublishedVersion '{0}' on the '{1}' fixture: expected a refusal matching '{2}', got: {3}" -f $v, $c.Name, $c.Says, $refused)
+            }
+        }
+
+        # No tools\ at all: refused for the cut and from 2.4.0.0, accepted
+        # before it, where it is how every release was published.
+        foreach ($c in @(
+            @{ Version = "";        Want = $false },
+            @{ Version = "2.4.0.0"; Want = $false },
+            @{ Version = "2.4.1.0"; Want = $false },
+            @{ Version = "2.3.1.0"; Want = $true },
+            @{ Version = "2.2.0.0"; Want = $true }
+        )) {
+            $refused = $null
+            try { Assert-ToolsLayout -Root $tlLegacy -What "fixture legacy" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-ToolsLayout -PublishedVersion '{0}' on a tree with no tools\: accepted={1}, expected {2}. {3}" -f $c.Version, ($null -eq $refused), $c.Want, $refused)
+            if (-not $c.Want -and $null -ne $refused) {
+                Assert-True ($refused -match "has no tools\\ directory") "Assert-ToolsLayout refused a tree with no tools\ on other terms: $refused"
+            }
+        }
+
+        # **A tree with tools\ is held to the cut's port switchover layout**,
+        # whatever its version (Codex review of task 38.9): the upload
+        # assembly's own $pswVersion line, taken from make-release.ps1's text
+        # and evaluated here, then Assert-PortSwitchLayout called as the
+        # assembly calls it. Without it, a tree with tools\ but no
+        # tools\portsw\ falls through to the legacy layouts at 2.3.0.0 and
+        # before, and a copy in every flavour directory or none at all would
+        # pass. The trees without tools\ keep their legacy layouts.
+        $pvMatch = [regex]::Match($releaserText, '(?m)^ *(\$pswVersion = [^\r\n]+)')
+        Assert-True $pvMatch.Success "make-release.ps1's upload assembly no longer derives `$pswVersion from the tree's tools\ (roadmap-hcd task 38.9)."
+        if ($pvMatch.Success -and $pswFns.Count -eq 2) {
+            $pswNames = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
+            $tlMixed = Join-Path $tlRoot "tools-legacy-2300"
+            $tlMixedNone = Join-Path $tlRoot "tools-legacy-none"
+            foreach ($tree in @($tlMixed, $tlMixedNone)) {
+                New-Item -ItemType Directory -Force -Path (Join-Path $tree "tools\xhciqual") | Out-Null
+                foreach ($d in @("release-x86", "debug-x86")) {
+                    New-Item -ItemType Directory -Force -Path (Join-Path $tree $d) | Out-Null
+                    [System.IO.File]::WriteAllText((Join-Path $tree "$d\xhci98.inf"), "; stand-in")
+                    if ($tree -ne $tlMixed) { continue }
+                    foreach ($name in $pswNames) {
+                        Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $tree "$d\$name")
+                    }
+                }
+            }
+            # And a tree in task 38.9's layout, accepted at any version.
+            $tlGood = Join-Path $tlRoot "tools-good"
+            Copy-Item -LiteralPath $tlCut -Destination $tlGood -Recurse
+            Remove-Item -LiteralPath (Join-Path $tlGood "tools\portsw\readme.txt")
+            foreach ($name in $pswNames) {
+                Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $tlGood "tools\portsw\$name")
+            }
+            foreach ($c in @(
+                @{ Tree = $tlMixed;     Version = "2.3.0.0"; Want = $false },
+                @{ Tree = $tlMixedNone; Version = "2.2.0.0"; Want = $false },
+                @{ Tree = $tlGood;      Version = "2.3.0.0"; Want = $true },
+                @{ Tree = $tlGood;      Version = "2.4.0.0"; Want = $true },
+                @{ Tree = (Join-Path $pswRoot "legacy-2300"); Version = "2.3.0.0"; Want = $true },
+                @{ Tree = (Join-Path $pswRoot "legacy-none"); Version = "2.2.0.0"; Want = $true }
+            )) {
+                # In a child scope, so the assembly's own names stay its own.
+                $refused = & {
+                    $uploadRoot = $c.Tree
+                    $Version = $c.Version
+                    Invoke-Expression $pvMatch.Groups[1].Value
+                    try {
+                        Assert-ToolsLayout -Root $uploadRoot -What "fixture" -PublishedVersion $Version
+                        Assert-PortSwitchLayout -Root $uploadRoot -Names $pswNames -DirName (Get-ToolDirName -Name "portsw" -Root $uploadRoot) `
+                                                -What "fixture" -PublishedVersion $pswVersion
+                        $null
+                    } catch { $_.Exception.Message }
+                }
+                Assert-True (($null -eq $refused) -eq $c.Want) ("the upload assembly's layout checks at {0} on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+            }
+        }
+    }
+    #
+    # **The silent install's layout, EXECUTED** (roadmap-hcd task 38.2): the
+    # map and the two functions loaded from make-release.ps1's text and
+    # driven with fixture trees. Publish copies the four under their
+    # published names, byte for byte, and refuses a source missing one; the
+    # layout check takes tools\silent\ holding the four alone, and refuses a
+    # missing one, a stranger, a lower-case SILENT.REG, a copy elsewhere and
+    # a tree with tools\ but no tools\silent\, at any version; a tree without
+    # tools\ it accepts only before 2.4.0.0 and only with none of them.
+    Write-Step "the silent install's list and scripts are published in tools\silent\ alone"
+    $siTexts = @()
+    foreach ($varName in @("toolsDirName", "toolsLayoutVersion")) {
+        $m = [regex]::Match($releaserText, '(?m)^\$' + $varName + ' = [^\r\n]+')
+        if ($m.Success) { $siTexts += $m.Value }
+    }
+    $siMap = [regex]::Match($releaserText, '(?ms)^\$silentPublishable = @\{.*?^\}')
+    Assert-True $siMap.Success "make-release.ps1 no longer sets `$silentPublishable at its top level (roadmap-hcd task 38.2)."
+    if ($siMap.Success) { $siTexts += $siMap.Value }
+    foreach ($fnName in @("Publish-SilentInstallScripts", "Assert-SilentInstallLayout", "Assert-SilentInstallContent")) {
+        $fnAt = $releaserText.IndexOf("function $fnName")
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.2)."
+        if ($fnAt -ge 0) { $siTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
+    }
+    if ($siTexts.Count -eq 6) {
+        foreach ($siText in $siTexts) { Invoke-Expression $siText }
+        $siWant = @{ "silent.reg" = "SILENT.REG"; "silent.vbs" = "SILENT.VBS"; "silent-on.bat" = "silent-on.bat"; "silent-off.bat" = "silent-off.bat" }
+        Assert-True ($silentPublishable.Count -eq 4) "make-release.ps1's `$silentPublishable no longer names four files (design record 13 section 6.11.8)."
+        foreach ($k in $siWant.Keys) {
+            Assert-True ($silentPublishable.ContainsKey($k) -and $silentPublishable[$k] -ceq $siWant[$k]) `
+                "make-release.ps1 no longer publishes src\$k as $($siWant[$k]) (design record 13 section 6.11.8)."
+        }
+        $siRoot = Join-Path $script:work "silentlayout"
+        $siCut = Join-Path $siRoot "cut"
+        foreach ($d in @("release-x86", "debug-x86", "tools\xhcisnap", "tools\portsw")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $siCut $d) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $siCut "$d\readme.txt"), "stand-in")
+        }
+        $siDir = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $siCut -Map $silentPublishable -DirName "tools\silent"
+        Assert-True ($siDir -eq (Join-Path $siCut "tools\silent")) "Publish-SilentInstallScripts did not return the tools\silent\ directory it wrote: $siDir"
+        $siGot = @(Get-ChildItem -LiteralPath $siDir -File | ForEach-Object { $_.Name } | Sort-Object)
+        Assert-True (($siGot -join ",") -ceq ((@($siWant.Values) | Sort-Object) -join ",")) "Publish-SilentInstallScripts put '$($siGot -join ', ')' in tools\silent\."
+        foreach ($k in $siWant.Keys) {
+            $pubFile = Join-Path $siDir $siWant[$k]
+            Assert-True ((Test-Path -LiteralPath $pubFile) -and
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($pubFile))) -eq
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $repo "src\$k"))))) `
+                "Publish-SilentInstallScripts did not publish src\$k byte for byte."
+        }
+        foreach ($v in @("", "2.4.0.0", "2.4.1.0")) {
+            $refused = $null
+            try { Assert-SilentInstallLayout -Root $siCut -Map $silentPublishable -What "fixture cut" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-SilentInstallLayout -PublishedVersion '$v' refused the four in tools\silent\ alone: $refused"
+        }
+        # **What they say, EXECUTED** (Codex review of 38.2, round 1): the
+        # layout check passes four files by name alone, so a zero-byte
+        # SILENT.REG passed it. Each malformed one is refused in both modes,
+        # naming its file; a stale SILENT.VBS (no checker of its own) by the
+        # cut's byte comparison alone. The reference is the repository.
+        Write-Step "a staged or published tools\silent\ is held to the checkers"
+        foreach ($ref in @("", $repo)) {
+            $refused = $null
+            try { Assert-SilentInstallContent -Root $siCut -Map $silentPublishable -What "fixture cut" -Reference $ref } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-SilentInstallContent -Reference '$ref' refused the published four: $refused"
+        }
+        $siContent = @(
+            @{ Name = "empty-reg"; File = "SILENT.REG";     Edit = { param($s) "" };                                                   Stale = $false },
+            @{ Name = "lf-reg";    File = "SILENT.REG";     Edit = { param($s) $s.Replace("`r`n", "`n") };                             Stale = $false },
+            @{ Name = "lf-on";     File = "silent-on.bat";  Edit = { param($s) $s.Replace("`r`n", "`n") };                             Stale = $false },
+            @{ Name = "swap-off";  File = "silent-off.bat"; Edit = { param($s) $s.Replace("silent.vbs 0", "silent.vbs 1") };           Stale = $false },
+            @{ Name = "stale-vbs"; File = "SILENT.VBS";     Edit = { param($s) $s + "' stale`r`n" };                                   Stale = $true }
+        )
+        $siLatin1 = [System.Text.Encoding]::GetEncoding(28591)
+        foreach ($c in $siContent) {
+            $t = Join-Path $siRoot ("content-" + $c.Name)
+            Copy-Item -LiteralPath $siCut -Destination $t -Recurse
+            $f = Join-Path $t ("tools\silent\" + $c.File)
+            [System.IO.File]::WriteAllBytes($f, $siLatin1.GetBytes((& $c.Edit $siLatin1.GetString([System.IO.File]::ReadAllBytes($f)))))
+            foreach ($ref in @("", $repo)) {
+                $refused = $null
+                try { Assert-SilentInstallContent -Root $t -Map $silentPublishable -What "fixture $($c.Name)" -Reference $ref } catch { $refused = $_.Exception.Message }
+                $want = ($ref -ne "") -or (-not $c.Stale)
+                Assert-True (($null -ne $refused) -eq $want -and ($null -eq $refused -or $refused -match [regex]::Escape($c.File))) `
+                    ("Assert-SilentInstallContent -Reference '{0}' on the '{1}' fixture: refused={2}, expected {3}, naming {4}. {5}" -f $ref, $c.Name, ($null -ne $refused), $want, $c.File, $refused)
+            }
+        }
+        # Together or not at all.
+        $siLone = Join-Path $siRoot "lone-src"
+        $siLoneDest = Join-Path $siRoot "lone-dest"
+        New-Item -ItemType Directory -Force -Path $siLone | Out-Null
+        foreach ($k in @("silent.reg", "silent.vbs", "silent-on.bat")) { Copy-Item -LiteralPath (Join-Path $repo "src\$k") -Destination (Join-Path $siLone $k) }
+        $refused = $null
+        try { $null = Publish-SilentInstallScripts -SourceDir $siLone -DestRoot $siLoneDest -Map $silentPublishable -DirName "tools\silent" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused -and $refused -match "silent-off\.bat") "Publish-SilentInstallScripts did not refuse a source with no silent-off.bat, naming it: $refused"
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $siLoneDest "tools\silent"))) "Publish-SilentInstallScripts wrote tools\silent\ before refusing a source missing a file."
+        # The faults, each on a copy of the good tree, at the cut and at any version.
+        $siFaults = @(
+            @{ Name = "missing";   Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\silent\silent-off.bat") }; Says = "silent-off\.bat is missing" },
+            @{ Name = "stranger";  Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "tools\silent\readme.txt"), "x") }; Says = "readme\.txt is not one of" },
+            @{ Name = "lowercase"; Do = { param($t) Rename-Item -LiteralPath (Join-Path $t "tools\silent\SILENT.REG") -NewName "x.tmp"; Rename-Item -LiteralPath (Join-Path $t "tools\silent\x.tmp") -NewName "silent.reg" }; Says = "SILENT\.REG is missing or not so named" },
+            @{ Name = "copy";      Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\silent\SILENT.REG") -Destination (Join-Path $t "release-x86\SILENT.REG") }; Says = "release-x86\\SILENT\.REG is a copy" },
+            @{ Name = "no-dir";    Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\silent") -Recurse }; Says = "tools\\silent\\ is missing" }
+        )
+        foreach ($c in $siFaults) {
+            $t = Join-Path $siRoot ("fault-" + $c.Name)
+            Copy-Item -LiteralPath $siCut -Destination $t -Recurse
+            & $c.Do $t
+            foreach ($v in @("", "2.3.1.0", "2.4.0.0")) {
+                $refused = $null
+                try { Assert-SilentInstallLayout -Root $t -Map $silentPublishable -What "fixture $($c.Name)" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+                Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-SilentInstallLayout -PublishedVersion '{0}' on the '{1}' fixture: expected a refusal matching '{2}', got: {3}" -f $v, $c.Name, $c.Says, $refused)
+            }
+        }
+        # No tools\: accepted only before 2.4.0.0, and only with none of the four.
+        $siLegacy = Join-Path $siRoot "legacy"
+        $siLegacyCopy = Join-Path $siRoot "legacy-copy"
+        foreach ($tree in @($siLegacy, $siLegacyCopy)) {
+            foreach ($d in @("release-x86", "portsw")) { New-Item -ItemType Directory -Force -Path (Join-Path $tree $d) | Out-Null }
+        }
+        Copy-Item -LiteralPath (Join-Path $repo "src\silent-on.bat") -Destination (Join-Path $siLegacyCopy "release-x86\silent-on.bat")
+        foreach ($c in @(
+            @{ Tree = $siLegacy;     Version = "";        Want = $false },
+            @{ Tree = $siLegacy;     Version = "2.4.0.0"; Want = $false },
+            @{ Tree = $siLegacy;     Version = "2.3.1.0"; Want = $true },
+            @{ Tree = $siLegacy;     Version = "2.2.0.0"; Want = $true },
+            @{ Tree = $siLegacyCopy; Version = "2.3.1.0"; Want = $false }
+        )) {
+            $refused = $null
+            try { Assert-SilentInstallLayout -Root $c.Tree -Map $silentPublishable -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-SilentInstallLayout -PublishedVersion '{0}' on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+        }
+    }
+    #
+    # **The report batches' layout, EXECUTED** (roadmap-hcd task 38.1): the
+    # map and the two functions loaded from make-release.ps1's text, as the
+    # tools\ layout's are above, and driven with fixture trees. Publish
+    # copies a tool's batches under their upper-case 8.3 names and refuses a
+    # source missing one; the layout check takes each batch beside its own
+    # tool alone, and refuses a copy anywhere else, a missing one, and any
+    # in a tree published before 2.4.0.0.
+    Write-Step "the report batches are published beside their tools alone"
+    foreach ($anchor in @(
+        @{ Find = 'Publish-ReportBatches -SourceDir $QualtoolDir -DestDir $qualDir -Map $reportBatches["xhciqual"]';
+           Why  = "a cut no longer publishes QUALREP.BAT beside XHCIQUAL.EXE" },
+        @{ Find = 'Publish-ReportBatches -SourceDir $SnapToolDir -DestDir $snapDir -Map $reportBatches["xhcisnap"]';
+           Why  = "a cut no longer publishes SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE" },
+        @{ Find = 'Assert-ReportBatchLayout -Root $destRoot -Batches $reportBatches -What "the staged release ''$destRoot''"';
+           Why  = "a cut no longer holds its staged tree to the report batches' layout" },
+        @{ Find = 'Assert-ReportBatchLayout -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''" -PublishedVersion $Version';
+           Why  = "the upload assembly no longer holds the tree to the report batches' layout its version was published with" },
+        @{ Find = 'Assert-ReportBatchContent -Root $destRoot -Batches $reportBatches -What "the staged release ''$destRoot''" -Reference $repo';
+           Why  = "a cut no longer holds the batches it staged to the shared checker and the repository's own bytes" },
+        @{ Find = 'Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set ''$uploadRoot''"';
+           Why  = "the upload assembly no longer holds the batches it archives to the shared checker" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + " (roadmap-hcd task 38.1).")
+    }
+    $rbAt = $releaserText.IndexOf('Assert-ReportBatchLayout -Root $destRoot')
+    $rbSwapAt = $releaserText.IndexOf('Move-Item -LiteralPath $destRoot -Destination $finalRoot')
+    $rbAsideAt = $releaserText.IndexOf('Move-Item -LiteralPath $finalRoot -Destination $asideRoot')
+    Assert-True ($rbAt -ge 0 -and $rbSwapAt -gt $rbAt -and $rbAsideAt -gt $rbAt) `
+        "make-release.ps1 holds the staged release to the report batches' layout after the -Force aside or the publish swap, or not at all (roadmap-hcd task 38.1)."
+    $rbcAt = $releaserText.IndexOf('Assert-ReportBatchContent -Root $destRoot')
+    Assert-True ($rbcAt -ge 0 -and $rbSwapAt -gt $rbcAt -and $rbAsideAt -gt $rbcAt) `
+        "make-release.ps1 holds the staged report batches' content after the -Force aside or the publish swap, or not at all (roadmap-hcd task 38.1)."
+    $rbcUpAt = $releaserText.IndexOf('Assert-ReportBatchContent -Root $uploadRoot')
+    $rbcZipAt = $releaserText.IndexOf('[System.IO.Compression.ZipFile]', [Math]::Max($rbcUpAt, 0))
+    Assert-True ($rbcUpAt -ge 0 -and $rbcZipAt -gt $rbcUpAt) `
+        "make-release.ps1 checks the upload set's report batches after archiving them, or not at all (roadmap-hcd task 38.1)."
+    $rbTexts = @()
+    $rbMap = [regex]::Match($releaserText, '(?ms)^\$reportBatches = @\{.*?^\}')
+    Assert-True $rbMap.Success "make-release.ps1 no longer sets `$reportBatches at its top level (roadmap-hcd task 38.1)."
+    if ($rbMap.Success) { $rbTexts += $rbMap.Value }
+    foreach ($fnName in @("Publish-ReportBatches", "Assert-ReportBatchLayout", "Assert-ReportBatchContent")) {
+        $fnAt = $releaserText.IndexOf("function $fnName")
+        Assert-True ($fnAt -ge 0) "make-release.ps1 no longer has $fnName (roadmap-hcd task 38.1)."
+        if ($fnAt -ge 0) { $rbTexts += $releaserText.Substring($fnAt, $releaserText.IndexOf("`n}", $fnAt) - $fnAt + 2) }
+    }
+    if ($rbTexts.Count -eq 4) {
+        foreach ($rbText in $rbTexts) { Invoke-Expression $rbText }
+        $wantMap = @{ "xhcisnap" = @("SNAPGET.BAT", "SNAPOFF.BAT", "SNAPON.BAT"); "xhciqual" = @("QUALREP.BAT") }
+        Assert-True ((@($reportBatches.Keys | Sort-Object) -join ",") -eq "xhciqual,xhcisnap") "make-release.ps1's `$reportBatches no longer names exactly the qualifier and XHCISNAP."
+        foreach ($tool in $wantMap.Keys) {
+            if (-not $reportBatches.ContainsKey($tool)) { continue }
+            Assert-True ((@($reportBatches[$tool].Values | Sort-Object) -join ",") -ceq ($wantMap[$tool] -join ",")) `
+                "make-release.ps1 no longer publishes exactly $($wantMap[$tool] -join ', ') beside the $tool tool, in upper case."
+        }
+        foreach ($spec in $reportBatchSpecs) {
+            Assert-True ($reportBatches[$spec.Dir].ContainsKey($spec.Name)) "make-release.ps1 does not publish $($spec.Dir)\$($spec.Name), the file the batch gate reads."
+        }
+
+        $rbRoot = Join-Path $script:work "reportbatches"
+        $rbSrc = Join-Path $rbRoot "src"
+        New-Item -ItemType Directory -Force -Path $rbSrc | Out-Null
+        foreach ($spec in $reportBatchSpecs) {
+            [System.IO.File]::WriteAllText((Join-Path $rbSrc $spec.Name), (New-ReportBatchFixture -Spec $spec), (New-Object System.Text.ASCIIEncoding))
+        }
+        $rbCut = Join-Path $rbRoot "cut"
+        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbCut $d) | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $rbCut "$d\xhci98.inf"), "; stand-in")
+        }
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbCut "tools\$name") | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $rbCut "tools\$name\readme.txt"), "stand-in")
+        }
+        foreach ($tool in @("xhciqual", "xhcisnap")) {
+            Publish-ReportBatches -SourceDir $rbSrc -DestDir (Join-Path $rbCut "tools\$tool") -Map $reportBatches[$tool]
+        }
+        foreach ($tool in $wantMap.Keys) {
+            $got = @(Get-ChildItem -LiteralPath (Join-Path $rbCut "tools\$tool") -Filter "*.BAT" | ForEach-Object { $_.Name } | Sort-Object)
+            Assert-True (($got -join ",") -ceq ($wantMap[$tool] -join ",")) "Publish-ReportBatches put '$($got -join ', ')' in tools\$tool, not '$($wantMap[$tool] -join ', ')'."
+        }
+        foreach ($spec in $reportBatchSpecs) {
+            $pub = Join-Path $rbCut ("tools\" + $spec.Dir + "\" + $reportBatches[$spec.Dir][$spec.Name])
+            Assert-True ((Test-Path -LiteralPath $pub) -and
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes($pub))) -eq
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $rbSrc $spec.Name))))) `
+                "Publish-ReportBatches did not publish $($spec.Name) byte for byte."
+        }
+        foreach ($v in @("", "2.3.1.0", "2.4.0.0", "2.4.0.1")) {
+            $refused = $null
+            try { Assert-ReportBatchLayout -Root $rbCut -Batches $reportBatches -What "fixture cut" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ReportBatchLayout -PublishedVersion '$v' refused the batches beside their tools alone: $refused"
+        }
+
+        # A source missing one: refused, naming it, and nothing written.
+        $rbLone = Join-Path $rbRoot "lone-src"
+        New-Item -ItemType Directory -Force -Path $rbLone | Out-Null
+        Copy-Item -LiteralPath (Join-Path $rbSrc "snapon.bat") -Destination $rbLone
+        Copy-Item -LiteralPath (Join-Path $rbSrc "snapoff.bat") -Destination $rbLone
+        $rbLoneDest = Join-Path $rbRoot "lone-dest"
+        $refused = $null
+        try { Publish-ReportBatches -SourceDir $rbLone -DestDir $rbLoneDest -Map $reportBatches["xhcisnap"] } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused -and $refused -match "snapget\.bat") "Publish-ReportBatches did not refuse a source with no snapget.bat, naming it: $refused"
+        Assert-True (-not (Test-Path -LiteralPath $rbLoneDest)) "Publish-ReportBatches wrote its directory before refusing a source missing a batch."
+
+        # A skipped tool: its directory absent, none of its batches anywhere.
+        $rbSkip = Join-Path $rbRoot "skip-qual"
+        Copy-Item -LiteralPath $rbCut -Destination $rbSkip -Recurse
+        Remove-Item -LiteralPath (Join-Path $rbSkip "tools\xhciqual") -Recurse
+        $refused = $null
+        try { Assert-ReportBatchLayout -Root $rbSkip -Batches $reportBatches -What "fixture" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -eq $refused) "Assert-ReportBatchLayout refused a cut with no tools\xhciqual (-SkipQualtool): $refused"
+
+        $rbFaults = @(
+            @{ Name = "stray-portsw";  Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPGET.BAT") -Destination (Join-Path $t "tools\portsw\SNAPGET.BAT") }; Says = "portsw\\SNAPGET\.BAT" },
+            @{ Name = "swapped";       Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhciqual\QUALREP.BAT") -Destination (Join-Path $t "tools\xhcisnap\QUALREP.BAT") }; Says = "xhcisnap\\QUALREP\.BAT" },
+            @{ Name = "flavour-copy";  Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPON.BAT") -Destination (Join-Path $t "release-x86\snapon.bat") }; Says = "release-x86\\snapon\.bat" },
+            @{ Name = "root-copy";     Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPOFF.BAT") -Destination (Join-Path $t "SNAPOFF.BAT") }; Says = "SNAPOFF\.BAT is a copy" },
+            @{ Name = "deep-copy";     Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "tools\xhcisnap\old") | Out-Null; Copy-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPGET.BAT") -Destination (Join-Path $t "tools\xhcisnap\old\SNAPGET.BAT") }; Says = "old\\SNAPGET\.BAT" },
+            @{ Name = "missing-snap";  Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhcisnap\SNAPOFF.BAT") }; Says = "SNAPOFF\.BAT is missing" },
+            @{ Name = "missing-qual";  Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhciqual\QUALREP.BAT") }; Says = "QUALREP\.BAT is missing" }
+        )
+        foreach ($c in $rbFaults) {
+            $t = Join-Path $rbRoot ("fault-" + $c.Name)
+            Copy-Item -LiteralPath $rbCut -Destination $t -Recurse
+            & $c.Do $t
+            foreach ($v in @("", "2.3.1.0", "2.4.0.0")) {
+                $refused = $null
+                try { Assert-ReportBatchLayout -Root $t -Batches $reportBatches -What "fixture $($c.Name)" -PublishedVersion $v } catch { $refused = $_.Exception.Message }
+                Assert-True ($null -ne $refused -and $refused -match $c.Says) ("Assert-ReportBatchLayout -PublishedVersion '{0}' on the '{1}' fixture: expected a refusal matching '{2}', got: {3}" -f $v, $c.Name, $c.Says, $refused)
+            }
+        }
+
+        # A tree with no tools\: accepted with none of them before 2.4.0.0,
+        # refused with one anywhere, and refused for the cut and from 2.4.0.0.
+        $rbLegacy = Join-Path $rbRoot "legacy"
+        foreach ($d in @("release-x86", "debug-x86", "xhciqual", "xhcisnap", "portsw")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbLegacy $d) | Out-Null
+        }
+        [System.IO.File]::WriteAllText((Join-Path $rbLegacy "xhcisnap\XHCISNAP.EXE"), "stand-in")
+        $rbLegacyStray = Join-Path $rbRoot "legacy-stray"
+        Copy-Item -LiteralPath $rbLegacy -Destination $rbLegacyStray -Recurse
+        Copy-Item -LiteralPath (Join-Path $rbSrc "snapget.bat") -Destination (Join-Path $rbLegacyStray "xhcisnap\SNAPGET.BAT")
+        foreach ($c in @(
+            @{ Tree = $rbLegacy;      Version = "2.3.1.0"; Want = $true },
+            @{ Tree = $rbLegacy;      Version = "2.2.0.0"; Want = $true },
+            @{ Tree = $rbLegacy;      Version = "2.4.0.0"; Want = $false },
+            @{ Tree = $rbLegacy;      Version = "";        Want = $false },
+            @{ Tree = $rbLegacyStray; Version = "2.3.1.0"; Want = $false }
+        )) {
+            $refused = $null
+            try { Assert-ReportBatchLayout -Root $c.Tree -Batches $reportBatches -What "fixture" -PublishedVersion $c.Version } catch { $refused = $_.Exception.Message }
+            Assert-True (($null -eq $refused) -eq $c.Want) ("Assert-ReportBatchLayout -PublishedVersion '{0}' on '{1}': accepted={2}, expected {3}. {4}" -f $c.Version, (Split-Path -Leaf $c.Tree), ($null -eq $refused), $c.Want, $refused)
+        }
+
+        # **What the staged batches say, EXECUTED** (Codex review of 38.1,
+        # round 1): the layout checks above pass a batch by name and place
+        # alone, so Assert-ReportBatchContent holds each one in the tree to
+        # the shared checker - for the cut, whose -SnapToolDir and
+        # -QualtoolDir may hold anything, and for the upload assembly,
+        # including -UploadSetOnly's tree - and, with -Reference (the cut),
+        # to the repository's own bytes. Here the reference is a stand-in
+        # repository holding the fixtures, as the tree holds them.
+        Write-Step "a staged or published report batch is held to the shared checker"
+        $rbRef = Join-Path $rbRoot "ref"
+        foreach ($spec in $reportBatchSpecs) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $rbRef $spec.Dir) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $rbSrc $spec.Name) -Destination (Join-Path $rbRef ($spec.Dir + "\" + $spec.Name))
+        }
+        foreach ($ref in @("", $rbRef)) {
+            $refused = $null
+            try { Assert-ReportBatchContent -Root $rbCut -Batches $reportBatches -What "fixture cut" -Reference $ref } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ReportBatchContent -Reference '$ref' refused the good fixture batches: $refused"
+        }
+        foreach ($tree in @($rbSkip, $rbLegacy)) {
+            $refused = $null
+            try { Assert-ReportBatchContent -Root $tree -Batches $reportBatches -What "fixture" -Reference $rbRef } catch { $refused = $_.Exception.Message }
+            Assert-True ($null -eq $refused) "Assert-ReportBatchContent refused '$(Split-Path -Leaf $tree)', which has no batch of a skipped tool or no tools\ at all: $refused"
+        }
+        # Each malformed one refused in both modes, naming its file; the
+        # stale one (passes the checker, but not the repository's bytes)
+        # refused by the cut alone, and in a tool's directory as a
+        # -SnapToolDir or -QualtoolDir would put it there.
+        $rbContent = @(
+            @{ Name = "lf-snapget";   File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("`r`n", "`n") };                         Stale = $false },
+            @{ Name = "bom-snapon";   File = "tools\xhcisnap\SNAPON.BAT";  Edit = { param($s) ([string][char]0xEF + [char]0xBB + [char]0xBF) + $s }; Stale = $false },
+            @{ Name = "disable-get";  File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("XHCISNAP -report %1`r`n", "XHCISNAP -report %1`r`nXHCISNAP -disable`r`n") }; Stale = $false },
+            @{ Name = "nopause-off";  File = "tools\xhcisnap\SNAPOFF.BAT"; Edit = { param($s) $s.Replace(":end`r`npause`r`n", ":end`r`n") };        Stale = $false },
+            @{ Name = "active-qual";  File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace("XHCIQUAL --probe-only --no-page --log-stamp", "XHCIQUAL --no-page --log-stamp") }; Stale = $false },
+            @{ Name = "cdrive-qual";  File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace("XHCIQUAL --probe-only --no-page --log-stamp`r`n", "XHCIQUAL --probe-only --no-page --log C:\PROBE.LOG`r`n") }; Stale = $false },
+            @{ Name = "stale-snapget"; File = "tools\xhcisnap\SNAPGET.BAT"; Edit = { param($s) $s.Replace("goto end`r`n:tool`r`n", "echo An older wording.`r`ngoto end`r`n:tool`r`n") }; Stale = $true },
+            @{ Name = "stale-qual";   File = "tools\xhciqual\QUALREP.BAT"; Edit = { param($s) $s.Replace(":end`r`n", ":end`r`necho An older wording.`r`n") }; Stale = $true }
+        )
+        foreach ($c in $rbContent) {
+            $t = Join-Path $rbRoot ("content-" + $c.Name)
+            Copy-Item -LiteralPath $rbCut -Destination $t -Recurse
+            $p = Join-Path $t $c.File
+            $before = [System.IO.File]::ReadAllText($p)
+            $after = [string](& $c.Edit $before)
+            Assert-True ($after -cne $before) "the report-batch content control '$($c.Name)' did not change its fixture, so it controls nothing."
+            [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::GetEncoding(28591).GetBytes($after))
+            $says = [regex]::Escape((Split-Path -Leaf $c.File))
+            foreach ($ref in @("", $rbRef)) {
+                $refused = $null
+                try { Assert-ReportBatchContent -Root $t -Batches $reportBatches -What "fixture $($c.Name)" -Reference $ref } catch { $refused = $_.Exception.Message }
+                if ($c.Stale -and $ref -eq "") {
+                    Assert-True ($null -eq $refused) "Assert-ReportBatchContent (upload assembly) refused the '$($c.Name)' fixture, which the checker passes: $refused"
+                } else {
+                    Assert-True ($null -ne $refused -and $refused -match $says) ("Assert-ReportBatchContent -Reference '{0}' on the '{1}' fixture: expected a refusal naming {2}, got: {3}" -f $ref, $c.Name, (Split-Path -Leaf $c.File), $refused)
+                }
+            }
+            if ($c.Stale) {
+                $refused = $null
+                try { Assert-ReportBatchContent -Root $t -Batches $reportBatches -What "fixture" -Reference $rbRef } catch { $refused = $_.Exception.Message }
+                Assert-True ($null -ne $refused -and $refused -match "byte for byte") "Assert-ReportBatchContent did not call the '$($c.Name)' fixture a stale copy: $refused"
+            }
+        }
+    }
+
     #
     # -Arch defaults to BOTH architectures, and that default is asserted rather
     # than left to reading - in the same place and for the same reason it was
@@ -2768,10 +3677,10 @@ try {
     $tsSignAt = $tsPkgText.IndexOf('Invoke-TestSign -Source $DriverPath')
     $tsHcdAt = $tsPkgText.IndexOf('& powershell.exe @gateArgs')
     $tsGateAt = $tsPkgText.IndexOf('& powershell.exe @uasGateArgs')
-    $tsMsiAt = $tsPkgText.IndexOf('& powershell.exe @msiGateArgs')
+    $tsHlprAt = $tsPkgText.IndexOf('& powershell.exe @hlprGateArgs')
     $tsStageAt = $tsPkgText.IndexOf('$stageDir = $OutDir + ".staging-"')
-    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsMsiAt -gt 0 -and
-                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsMsiAt) `
+    Assert-True ($tsSignAt -gt 0 -and $tsHcdAt -gt 0 -and $tsGateAt -gt 0 -and $tsHlprAt -gt 0 -and
+                 $tsSignAt -gt $tsHcdAt -and $tsSignAt -gt $tsGateAt -and $tsSignAt -gt $tsHlprAt) `
         "make-package.ps1 signs before its import gates have read the build, so their SITES rule finds no objects beside the signed copy."
     Assert-True ($tsSignAt -lt $tsStageAt -and $tsStageAt -gt 0) `
         "make-package.ps1 no longer signs before it stages, so the staged binaries are not the signed ones."

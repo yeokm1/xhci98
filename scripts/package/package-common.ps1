@@ -537,3 +537,276 @@ function Get-TestSignCertificate {
         $cert.Reset()
     }
 }
+
+# The field reports' batch files (roadmap-hcd task 38.1): SNAPON.BAT,
+# SNAPGET.BAT and SNAPOFF.BAT beside XHCISNAP.EXE, run by COMMAND.COM on
+# Windows 98 SE and ME and by cmd.exe from 2000 to 7, so they carry
+# portsw-on.bat's pinned split; QUALREP.BAT beside XHCIQUAL.EXE, run by
+# MS-DOS's COMMAND.COM alone, so it carries none. One definition of what each
+# must say, read by test-package.ps1 against the repository's sources and by
+# make-release.ps1 against the batches a cut stages and an upload set
+# assembles (Assert-ReportBatchContent), so a stale or malformed batch in a
+# -SnapToolDir, a -QualtoolDir or a published tree is refused as the
+# repository's own would be. Name is the source name in the tool's own
+# directory (Dir); make-release.ps1's $reportBatches maps it to the
+# published 8.3 name.
+#
+# ArgPass, where a spec has it, is the batch's optional argument (owner,
+# 2026-10-13: SNAPON.BAT LEVEL, SNAPGET.BAT NAME), passed on as it came:
+# Args ends in %1, and that one run line is the only line that may carry
+# %1. The default and the check are the tool's (XHCISNAP -on, -report
+# NAME), so no `if` reads %1 (Codex review of 38.1, round 3: a quoted or
+# metacharacter %1 broke cmd.exe's `if "%1"==` before the tool could refuse
+# it, and a goto change could route around a level test). No other percent
+# variable (%2, %0, %*, %~1, %DATE%, ...) is admitted anywhere.
+#
+# ToolLast (owner, 2026-10-13: the batch's last line of output names the
+# files to attach): the tool line is the last command before pause, reached
+# by `if exist TOOL goto X` with :X just above it, and nothing reads the exit
+# code - the tool prints the outcome. QUALREP.BAT keeps its flag logic.
+function Get-ReportBatchSpecs {
+    return @(
+        @{ Name = "snapon.bat";  Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-on %1";       Names = @(); ArgPass = $true; ToolLast = $true },
+        @{ Name = "snapget.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-report %1";   Names = @(".DEV", ".TXT"); ArgPass = $true; ToolLast = $true },
+        @{ Name = "snapoff.bat"; Dir = "xhcisnap"; Win = $true;  Tool = "XHCISNAP"; Args = "-disable";     Names = @(); ToolLast = $true },
+        @{ Name = "QUALREP.BAT"; Dir = "xhciqual"; Win = $false; Tool = "XHCIQUAL"; Args = "--probe-only --no-page --log-stamp"; Names = @("LOG"); Flag = "QUALREP.FLG" }
+    )
+}
+
+function Get-ReportBatchFaults {
+    param([string]$Text, [hashtable]$Spec)
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+    $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+    if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+    if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+    $code = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+    }
+    $osLine = -1
+    $ntLine = -1
+    if ($Spec.Win) {
+        $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', 'cd /d "%~dp0"', ':run')
+        for ($k = 0; $k -lt $split.Count; $k++) {
+            if ($code.Count -le $k -or $lines[$code[$k]] -cne $split[$k]) {
+                $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+            }
+        }
+        if ($code.Count -gt 0) { $osLine = $code[0] }
+        if ($code.Count -gt 3) { $ntLine = $code[3] }
+    }
+    $toolRe = '(?i:' + $Spec.Tool + '(\.exe)?)'
+    $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                 ('^if not exist ' + $toolRe + ' goto [a-z]+$'), '^if errorlevel [0-9] goto [a-z]+$',
+                 ('^' + $toolRe + ' [-a-z0-9 ]+( --done-flag [A-Z0-9]+\.FLG)?$'))
+    if ($Spec.Win) { $allowed += '^if not "%OS%"=="Windows_NT" goto [a-z]+$' }
+    if ($Spec.ContainsKey("ToolLast")) { $allowed += ('^if exist ' + $toolRe + ' goto [a-z]+$') }
+    $argRunRe = $null
+    if ($Spec.ContainsKey("ArgPass")) {
+        $argRunRe = '^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + '$'
+        $allowed += $argRunRe
+    }
+    # A completion flag, where the spec names one (QUALREP.BAT's, through
+    # XHCIQUAL's --done-flag): tested, and deleted - that file alone.
+    $flagArgs = ""
+    if ($Spec.ContainsKey("Flag")) {
+        $fl = [regex]::Escape($Spec.Flag)
+        $allowed += @(('^if (not )?exist ' + $fl + ' goto [a-z]+$'), ('^if exist ' + $fl + ' del ' + $fl + '$'), ('^del ' + $fl + '$'))
+        $flagArgs = '( --done-flag ' + $fl + ')?'
+    }
+    $labels = @{}
+    $gotos = @()
+    $runs = @()
+    $runAt = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+        $isSplit = ($i -eq $osLine -or $i -eq $ntLine)
+        if (-not $isSplit) {
+            $ok = $false
+            foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+            if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+        }
+        $isText = ($line -cmatch '^(rem|echo)\b')
+        if ($isText -and $line -match '[<>|&%^]') {
+            $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+        }
+        if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+        if ($line -match '%(DATE|TIME)%') { $faults += "line $($i + 1) reads %DATE% or %TIME%, which COMMAND.COM on 98 SE and ME lacks: $line" }
+        $isArg = ($null -ne $argRunRe -and $line -cmatch $argRunRe)
+        if (-not $isSplit -and -not $isArg -and $line -cnotmatch '^if not "%OS%"=="Windows_NT" goto [a-z]+$' -and -not $isText -and $line.Contains('%')) {
+            $faults += "line $($i + 1) reads a percent variable: $line"
+        }
+        if ($isArg -and ([regex]::Matches($line, '%')).Count -ne 1) {
+            $faults += "line $($i + 1) reads a percent variable other than %1: $line"
+        }
+        if (-not $isSplit -and -not $isText -and $line -match '[A-Za-z]:\\|^cd\b|^chdir\b') {
+            $faults += "line $($i + 1) names a drive path or changes directory, so its output would not land in the current directory: $line"
+        }
+        if ($line -cmatch '^:([a-z]+)$') {
+            if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+            $labels[$Matches[1]] = $i
+        }
+        if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+        if ($line -match ('^' + $toolRe + '( |$)')) { $runs += $line; $runAt += $i }
+    }
+    foreach ($g in $gotos) {
+        if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+        if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+    }
+    $want = @($runs | Where-Object { $_ -cmatch ('^' + $toolRe + ' ' + [regex]::Escape($Spec.Args) + $flagArgs + '$') })
+    if ($runs.Count -ne 1 -or $want.Count -ne 1) {
+        $faults += ("it does not run {0} exactly once, as '{0} {1}' (it runs: {2})" -f $Spec.Tool, $Spec.Args, ($runs -join "; "))
+    }
+    if ($Spec.ContainsKey("ToolLast") -and $runAt.Count -eq 1) {
+        # The tool runs last and prints the outcome, its last line what to
+        # attach (owner, 2026-10-13): after its line only labels and the
+        # final pause, no IF ERRORLEVEL anywhere, and it is reached by
+        # `if exist TOOL goto X` with X the label just above it.
+        $r = $runAt[0]
+        for ($k = $r + 1; $k -lt $lines.Count - 1; $k++) {
+            if ($lines[$k] -cnotmatch '^(:[a-z]+|rem( [ -~]*)?)$') { $faults += "line $($k + 1) follows the $($Spec.Tool) line; only labels and the last pause may: $($lines[$k])" }
+        }
+        if (@($lines | Where-Object { $_ -cmatch '^if errorlevel' }).Count -gt 0) { $faults += "it reads the exit code with IF ERRORLEVEL; $($Spec.Tool) prints the outcome itself" }
+        $above = $r - 1
+        while ($above -gt 0 -and $lines[$above] -cmatch '^rem( |$)') { $above-- }
+        $entry = $null
+        if ($lines[$above] -cmatch '^:([a-z]+)$') { $entry = $Matches[1] }
+        $guard = @()
+        $guardAt = -1
+        for ($k = 1; $k -lt $r; $k++) { if ($lines[$k] -cmatch ('^if exist ' + $toolRe + ' goto ([a-z]+)$')) { $guard += $Matches[2]; $guardAt = $k } }
+        # From the split (or @echo off) to the guard, only rem and echo, so
+        # no jump can route around the tool line.
+        $from = 1
+        if ($Spec.Win -and $code.Count -gt 4) { $from = $code[4] + 1 }
+        for ($k = $from; $k -lt $guardAt; $k++) {
+            if ($lines[$k] -cnotmatch '^(rem|echo)( [ -~]*|\.)?$') { $faults += "line $($k + 1) comes before the 'if exist $($Spec.Tool).EXE' test; only rem and echo may: $($lines[$k])" }
+        }
+        if ($null -eq $entry -or $guard.Count -ne 1 -or $guard[0] -cne $entry) {
+            $faults += "the $($Spec.Tool) line is not reached by one 'if exist $($Spec.Tool).EXE goto X' before it, with :X just above it"
+        }
+        foreach ($g in $gotos) {
+            if ($null -ne $entry -and $g[1] -ceq $entry -and $lines[$g[0]] -cnotmatch '^if exist ') { $faults += "line $($g[0] + 1) jumps to the $($Spec.Tool) line other than through 'if exist'" }
+        }
+    }
+    if ($Spec.Name -eq "snapget.bat" -and @($runs | Where-Object { $_ -match '-disable|-verbosity +0' }).Count -gt 0) {
+        $faults += "it turns the channel off; SNAPGET.BAT leaves it on and SNAPOFF.BAT turns it off"
+    }
+    $echoes = (@($lines | Where-Object { $_ -cmatch '^echo ' }) -join "`n")
+    if ($Spec.Names.Count -gt 0 -and -not $echoes.ToUpperInvariant().Contains("ATTACH")) { $faults += "no echo line says what to attach" }
+    foreach ($ext in $Spec.Names) {
+        if (-not $echoes.ToUpperInvariant().Contains($ext)) { $faults += "no echo line names the $ext file it writes" }
+    }
+    if ($Spec.Win -and -not $Text.Contains('Run as administrator')) { $faults += "it no longer says 'Run as administrator' for Vista and 7" }
+    return $faults
+}
+
+# The silent install's two batch files and SILENT.REG (roadmap-hcd task
+# 38.2, design record 13 section 6.11.8): what test-package.ps1 holds the
+# repository's sources to, and what make-release.ps1 holds a staged or
+# published tools\silent\ to (Assert-SilentInstallContent; Codex review of
+# 38.2, round 1). The batches are run by COMMAND.COM on Windows 98 SE and
+# ME and by cmd.exe elsewhere, so they are held as portsw-on.bat's are:
+# every line from a short list both interpreters run, and a pinned split
+# whose cmd.exe branch only says it changed nothing. silent-on.bat merges
+# SILENT.REG before it sets 1, and silent-off.bat never merges it.
+function Get-SilentBatchFaults {
+    param([string]$Text, [string]$Value)
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if (-not $Text.EndsWith("`r`n")) { $faults += "no CRLF after the last line, so COMMAND.COM may not run it"; return $faults }
+    $lines = @($Text.Substring(0, $Text.Length - 2) -split "`r`n")
+    if ($lines[0] -cne "@echo off") { $faults += "line 1 is not @echo off" }
+    if ($lines[$lines.Count - 1] -cne "pause") { $faults += "the last line is not pause" }
+    $code = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -cnotmatch '^rem( |$)') { $code += $i }
+    }
+    # The split: cmd.exe takes nt, says nothing was changed, and ends.
+    $split = @('if "%OS%"=="Windows_NT" goto nt', 'goto run', ':nt', $null, 'goto end', ':run')
+    for ($k = 0; $k -lt $split.Count; $k++) {
+        if ($code.Count -le $k) { $faults += "the file ends inside the split"; break }
+        $line = $lines[$code[$k]]
+        if ($null -eq $split[$k]) {
+            if ($line -cnotmatch '^echo [ -~]*nothing was changed\.$') { $faults += "command 4 after @echo off is not the echo that says nothing was changed" }
+        } elseif ($line -cne $split[$k]) {
+            $faults += ("command " + ($k + 1) + " after @echo off is not '" + $split[$k] + "'")
+        }
+    }
+    $osLine = -1
+    if ($code.Count -gt 0) { $osLine = $code[0] }
+    $allowed = @('^rem( [ -~]*)?$', '^echo( [ -~]*|\.)$', '^:[a-z]+$', '^goto [a-z]+$', '^pause$',
+                 '^if not exist silent\.(vbs|reg) goto [a-z]+$', '^if errorlevel [0-9] goto [a-z]+$',
+                 '^cscript //nologo silent\.vbs (show|[0-9])$', '^regedit /s silent\.reg$')
+    $labels = @{}
+    $gotos = @()
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line.Length -gt 127) { $faults += "line $($i + 1) is past COMMAND.COM's 127 characters" }
+        if ($i -ne $osLine) {
+            $ok = $false
+            foreach ($p in $allowed) { if ($line -cmatch $p) { $ok = $true; break } }
+            if (-not $ok) { $faults += "line $($i + 1) is not one of the commands both interpreters run: $line" }
+        }
+        if ($line -cmatch '^(rem|echo)\b' -and $line -match '[<>|&%^]') {
+            $faults += "line $($i + 1) has a redirection, pipe or percent character on an echo or rem line: $line"
+        }
+        if ($line -match '^echo +(on|off) *$') { $faults += "line $($i + 1) is an echo COMMAND.COM reads as a switch: $line" }
+        if ($line -cmatch '^:([a-z]+)$') {
+            if ($labels.ContainsKey($Matches[1])) { $faults += "label $($Matches[1]) twice" }
+            $labels[$Matches[1]] = $i
+        }
+        if ($line -cmatch '^(if .* )?goto ([a-z]+)$') { $gotos += , @($i, $Matches[2]) }
+    }
+    foreach ($g in $gotos) {
+        if (-not $labels.ContainsKey($g[1])) { $faults += "line $($g[0] + 1) jumps to a label the file does not have: $($g[1])" }
+        if ($g[1] -ceq "nt" -and $g[0] -ne $osLine) { $faults += "line $($g[0] + 1) is a goto nt that COMMAND.COM could take" }
+    }
+    $sets = @($lines | Where-Object { $_ -cmatch '^cscript //nologo silent\.vbs [0-9]$' })
+    if ($sets.Count -ne 1 -or $sets[0] -cne ('cscript //nologo silent.vbs ' + $Value)) {
+        $faults += "it does not set exactly one value, $Value"
+    }
+    $merges = @($lines | Where-Object { $_ -cmatch '^regedit ' })
+    if ($Value -eq "1") {
+        $pins = @('if not exist silent.vbs goto nofile', 'if not exist silent.reg goto nofile',
+                  'cscript //nologo silent.vbs show', 'if errorlevel 1 goto nochange',
+                  'regedit /s silent.reg', 'cscript //nologo silent.vbs 1',
+                  'if errorlevel 5 goto unverified', 'if errorlevel 4 goto nolist',
+                  'if errorlevel 3 goto partial', 'if errorlevel 1 goto notset')
+        if ($merges.Count -ne 1) { $faults += "it does not merge SILENT.REG exactly once" }
+    } else {
+        $pins = @('if not exist silent.vbs goto nofile', 'cscript //nologo silent.vbs 0',
+                  'if errorlevel 5 goto unverified', 'if errorlevel 3 goto partial',
+                  'if errorlevel 1 goto notset', ':list')
+        if ($merges.Count -ne 0) { $faults += "it merges a .reg file; silent-off.bat leaves the list alone" }
+        foreach ($needle in @('The list was left in place', 'delete the', 'SilentClasses key')) {
+            if (-not $Text.Contains($needle)) { $faults += "it no longer says '$needle'" }
+        }
+    }
+    $last = -1
+    foreach ($pin in $pins) {
+        $at = [Array]::IndexOf($lines, $pin)
+        if ($at -le $last) { $faults += "'$pin' is missing or out of order" } else { $last = $at }
+    }
+    if (-not $Text.Contains('Windows 98 SE and ME only')) { $faults += "it no longer says 'Windows 98 SE and ME only'" }
+    return $faults
+}
+
+# SILENT.REG: REGEDIT4, the one key, and the six values of design record
+# 13 section 6.11.8 with their exact bytes, nothing else (SweetLow's
+# list; names kept so a merge over his leaves six values, not twelve).
+function Get-SilentRegFaults {
+    param([string]$Text)
+    $want = "REGEDIT4`r`n`r`n[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses]`r`n" +
+            "`"0`"=hex:80,09,00,00`r`n`"1`"=hex:43,03,01,01`r`n`"2`"=hex:43,03,01,02`r`n" +
+            "`"3`"=hex:c3,08,06,50`r`n`"4`"=hex:83,03,01,01`r`n`"5`"=hex:83,03,01,02`r`n`r`n"
+    $faults = @()
+    if ($Text -match '[^\x20-\x7E\r\n]') { $faults += "a byte outside printable ASCII, CR and LF" }
+    if ($Text -match "(?<!`r)`n" -or $Text -match "`r(?!`n)") { $faults += "a line not ended by CRLF" }
+    if ($Text -cne $want) { $faults += "it is not REGEDIT4, the SilentClasses key and its six values, exactly" }
+    return $faults
+}

@@ -86,6 +86,19 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * DWORD 0 turns it off; absent, another number or another type is on.
  * Read at every start. */
 #define HCD_VALUE_HUB_SPEED     L"XhciUsb2HubSpeedFallback"
+/* Task 38.11 (design record 17 section 4.14.4): the 0.96 floor, written by
+ * the INFs at 1: only a DWORD 0 restores the 1.0 floor of 2.3.1.0; absent,
+ * another number or another type is the 0.96 floor (XhciVersionFloor).
+ * Read at every start and latched for its lifetime. */
+#define HCD_VALUE_ACCEPT_096    L"XhciAccept096"
+/* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
+ * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
+ * 0, another number, another type or a failed read is off (O6). The INFs
+ * write it at 0 on every path (owner, 2026-10-14; no INF wrote it before),
+ * NOCLOBBER, so silent-on.bat's 1 survives an update. Read at every start.
+ * The list it gates is a Services key, which no INF writes. */
+#define HCD_VALUE_SILENT        L"XhciSilentInstall"
+#define HCD_SILENT_LIST         L"USB\\SilentClasses"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 36.22, qemu flavour only and written by no INF: the map grant a
  * chunk may use, held to this many registers (1 to the real grant), so a
@@ -99,6 +112,12 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_INTR_MODE     L"XhciInterruptMode"
 #define HCD_VALUE_POLL_IDLE     L"XhciPollIdleMs"
 #define HCD_VALUE_POLL_ACTIVE   L"XhciPollActiveMs"
+/* Task 38.3 (design record 15 section 7.2.4): the finer system timer while
+ * polling - 1 is on; 0, absent, unreadable or not a DWORD is off; any
+ * other value runs as 1 (off by default since the owner's change of
+ * 2026-10-14). Read at every start; both INFs write 0 under
+ * FLG_ADDREG_NOCLOBBER. Windows 98 SE and ME read it and do nothing. */
+#define HCD_VALUE_POLL_FINE_TIMER L"XhciPollFineTimer"
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Record 15 section 11's switches, qemu flavour only and written by no
  * INF, read at every start: no interrupt resource and pin 0; the pin's
@@ -106,12 +125,23 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_QEMU_NO_INTR  L"XhciQemuNoInterrupt"
 #define HCD_VALUE_QEMU_PIN_FAIL L"XhciQemuPinUnreadable"
 #define HCD_VALUE_QEMU_DEADLINE L"XhciQemuDeadLine"
+/* Record 15 section 7.2.12's switches for legs T3 and T4, qemu only and
+ * written by no INF, read at every start: the timer thread sleeps this many
+ * ms before each call (held to 10 s); and 1 keeps the selective-suspend
+ * executor from claiming a child's pended Dx (hcd_susp.c). */
+#define HCD_VALUE_QEMU_TMR_DELAY L"XhciQemuTmrDelayMs"
+#define HCD_VALUE_QEMU_SUSP_HOLD L"XhciQemuSuspHoldDx"
 #endif
 #if defined(XHCI_FLAVOUR_QEMU)
 /* Task 35.4, qemu flavour only and written by no INF: 1 makes the USB 3
  * protocol's PSI table read as the E460's (xhci_caps.c); absent, another
  * type or any other number is off. Read at every start. */
 #define HCD_VALUE_QEMU_PSI_E460 L"XhciQemuPsiE460"
+/* Task 38.11, D7 (design record 17 section 4.14.10), qemu flavour only and
+ * written by no INF: a DWORD 0x0001 to 0xFFFE is decoded as HCIVERSION in
+ * place of the register's (xhci_init.c, xhciEffectiveCapDword0); absent, 0,
+ * 0xFFFF and up, or another type applies nothing. Read at every start. */
+#define HCD_VALUE_QEMU_HCIVERSION L"XhciQemuHciVersion"
 #endif
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
@@ -230,6 +260,29 @@ static VOID hcdReadLogSwitches(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "log.verbosity.read", ext->Log.VerbosityRead);
     XhciLogNote(ext, "log.verbosity.refused", ext->Log.VerbosityRefused);
     XhciLogNote(ext, "log.debugview", ext->Log.DebugViewEnabled);
+}
+
+/*
+ * Task 38.11's three counter words (design record 17 section 4.14.7) from
+ * what the start latched and step 0c recorded in the extension: the value
+ * and the policy at hcdReadValues, the versions once XhciInitController has
+ * read them, whatever it then decided. The start's writes, before the
+ * thread exists and under the door gate. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdVersionCounters(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+
+    ext = &hc->Hc;
+    if (ext->HciVersionRead) {
+        hc->Counters.HciVersions =
+            XhciVersionPairWord(ext->HciVersionRegister,
+                                ext->HciVersionEffective);
+    }
+    hc->Counters.HciAccept096Value = ext->HciAccept096Value;
+    hc->Counters.HciVersionPolicy =
+        XhciVersionPolicyWord(ext->HciFloor, ext->HciTdSizeForm,
+                              ext->HciOverrideApplied, ext->HciVersionRead);
 }
 
 /* IRQL: PASSIVE_LEVEL. */
@@ -364,6 +417,24 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
                 NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
     XhciLogNote(ext, "hub.speed.fallback", hc->HubSpeedFallback);
 
+    /* Task 38.11: latched in the extension, which this start has zeroed
+     * and which no in-place reinitialization zeroes again, so every version
+     * check of the started lifetime uses this floor. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_ACCEPT_096, &value);
+    ext->HciAccept096Value = NT_SUCCESS(status) ? value : 0xFFFFFFFFUL;
+    ext->HciFloor = XhciVersionFloor(NT_SUCCESS(status) ? 1UL : 0UL, value);
+    XhciLogNote(ext, "hc.accept096", ext->HciAccept096Value);
+    XhciLogNote(ext, "hc.floor", ext->HciFloor);
+#if defined(XHCI_FLAVOUR_QEMU)
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_QEMU_HCIVERSION, &value);
+    ext->HciQemuVersion =
+        (NT_SUCCESS(status) && value != 0 && value < 0xFFFFUL) ? value : 0;
+    XhciLogNote(ext, "qemu.hciversion.value", ext->HciQemuVersion);
+#endif
+    hcdVersionCounters(hc);
+
 #if defined(XHCI_FLAVOUR_QEMU)
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_QEMU_MAP_GRANT, &value);
@@ -380,6 +451,92 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     hc->QemuPsiE460 = (NT_SUCCESS(status) && value == 1) ? 1UL : 0UL;
     XhciLogNote(ext, "qemu.psi.e460", hc->QemuPsiE460);
 #endif
+}
+
+/* xhci_silent.h keeps REG_BINARY's number for the pure core; this is where
+ * the two must agree. */
+typedef char hcdSilentRegBinaryAgrees[(REG_BINARY == XHCI_SILENT_REG_BINARY)
+                                          ? 1
+                                          : -1];
+
+/*
+ * The query routine for hcdReadSilent: called once for every value of
+ * USB\SilentClasses (the table's Name is NULL), each handed to the pure
+ * admission, which keeps, ignores or drops it and counts it. Always
+ * STATUS_SUCCESS, so one bad value ends nothing (design record 13 section
+ * 6.11.3). IRQL: PASSIVE_LEVEL.
+ */
+static NTSTATUS NTAPI hcdTakeSilent(PWSTR ValueName, ULONG ValueType,
+                                    PVOID ValueData, ULONG ValueLength,
+                                    PVOID Context, PVOID EntryContext)
+{
+    PHCD_CONTROLLER hc;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(EntryContext);
+
+    hc = (PHCD_CONTROLLER)Context;
+    (VOID)XhciSilentAdd(&hc->Silent, ValueType, (const UCHAR *)ValueData,
+                        ValueLength);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * The silent install's gate and list (task 38.2; design record 13 section
+ * 6.11.3), once per start, after hcdReadValues and before the controller
+ * thread exists, so every PDO of this start is decided against them
+ * (hcd_pdo.c, hcdSilentDecide). On every target the table is emptied and
+ * the gate cleared first; on Windows 98 SE and ME alone the gate is read,
+ * and only with it on the list. The list's query names no value: NTKERN's
+ * enumeration of every value for a NULL Name is O1, unread, and the four
+ * counts noted here are how the first 98 SE leg reads it - kept, ignored
+ * and dropped are every call the routine received. A query that does not
+ * succeed leaves the table empty: a list read in part is not the list.
+ * No lock: the previous start's thread has exited and this start's does
+ * not exist yet. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdReadSilent(PHCD_CONTROLLER hc)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    PXHCI_EXTENSION ext;
+    NTSTATUS status;
+    ULONG value;
+    PUCHAR p;
+    ULONG i;
+
+    ext = &hc->Hc;
+    XhciSilentReset(&hc->Silent);
+    hc->SilentGate = 0;
+    hc->SilentStatus = STATUS_SUCCESS;
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        return;
+    }
+
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_SILENT, &value);
+    hc->SilentGate = XhciSilentGate(NT_SUCCESS(status) ? 1UL : 0UL, value);
+    XhciLogNote(ext, "silent.gate.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "silent.gate", hc->SilentGate);
+    if (!hc->SilentGate) {
+        return;
+    }
+
+    p = (PUCHAR)table;
+    for (i = 0; i < sizeof(table); i++) {
+        p[i] = 0;
+    }
+    table[0].QueryRoutine = hcdTakeSilent;
+    table[0].Flags = RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = NULL;
+    status = RtlQueryRegistryValues(RTL_REGISTRY_SERVICES, HCD_SILENT_LIST,
+                                    table, hc, NULL);
+    hc->SilentStatus = status;
+    XhciSilentEnd(&hc->Silent, (status == STATUS_SUCCESS) ? 1UL : 0UL);
+    XhciLogNote(ext, "silent.status", (ULONG)status);
+    XhciLogNote(ext, "silent.entries", hc->Silent.Count);
+    XhciLogNote(ext, "silent.ignored", hc->Silent.Ignored);
+    XhciLogNote(ext, "silent.dropped", hc->Silent.Dropped);
 }
 
 #if defined(XHCI_FLAVOUR_QEMU)
@@ -1071,6 +1228,8 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     ULONG delivery;
     ULONG reason;
     ULONG noLine;
+    ULONG value2;
+    ULONG msiAvoid;
     NTSTATUS status;
 #if defined(XHCI_FLAVOUR_QEMU)
     ULONG value;
@@ -1092,6 +1251,31 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
                       : 0UL;
     XhciPollValues(&hc->PollValues, modeFound, modeValue, idleFound,
                    idleValue, activeFound, activeValue);
+    /* Record 15 section 7.2.4: the finer timer's switch and the value it
+     * asks, the active period in effect in 100 ns. Off unless a non-zero
+     * value is read (opt-in, the owner's change of 2026-10-14). */
+    value2 = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_POLL_FINE_TIMER, &value2))) {
+        hc->Counters.TmrSwitchRead = value2;
+        hc->Tmr.Switch = (value2 == 0) ? 0UL : 1UL;
+    } else {
+        hc->Counters.TmrSwitchRead = XHCI_POLL_NOT_FOUND;
+        hc->Tmr.Switch = 0;
+    }
+    hc->Counters.TmrSwitch = hc->Tmr.Switch;
+    hc->Tmr.Desired = hc->PollValues.ActiveMs * XHCI_POLL_TICKS_PER_MS;
+    hc->Counters.TmrDesired = hc->Tmr.Desired;
+    hc->Tmr.DelayMs = 0;
+#if defined(XHCI_FLAVOUR_QEMU)
+    value2 = 0;
+    if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_TMR_DELAY, &value2))) {
+        hc->Tmr.DelayMs = (value2 > 10000UL) ? 10000UL : value2;
+    }
+    value2 = 0;
+    hc->QemuSuspHoldDx =
+        (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_QEMU_SUSP_HOLD, &value2)) &&
+         value2 == 1) ? 1UL : 0UL;
+#endif
     /* Record 18 section 4.2: the start's reading kept for a later filter
      * on this FDO; and on x86 a look for the helper while not bound
      * (section 4.1). Both NT 6 only. */
@@ -1169,13 +1353,19 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     }
 
     reason = XHCI_POLL_R_NONE;
+    /* Task 38.10, XhciMsiAvoid (design record 20 section 4.1): its value
+     * and this controller's identity, read before anything is mapped. */
+    msiAvoid = HcdQuirkMsiAvoid(hc, hc->PollValues.Mode);
     /* A message whose routines were found is decided as connected; a
      * connection that then fails turns it to a poll, or under mode 3 fails
      * the start (hcdConnect). */
-    delivery = XhciPollDecide(hc->PollValues.Mode, haveInterrupt, message,
-                              (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
-                              hc->PollPinStatus, hc->PollPin, HcdMsiSystem(),
-                              &reason);
+    delivery = XhciPollDecideEx(hc->PollValues.Mode, haveInterrupt, message,
+                                (hc->MsgConnectEx != NULL) ? 1UL : 0UL,
+                                hc->PollPinStatus, hc->PollPin,
+                                HcdMsiSystem(), msiAvoid, &reason);
+    if (reason == XHCI_POLL_R_MSI_AVOIDED) {
+        HcdQuirkMsiRefused(hc);
+    }
     hc->PollDelivery = delivery;
     hc->PollReason = reason;
     hc->Counters.IntrModeRead = hc->PollValues.ModeRead;
@@ -1224,10 +1414,20 @@ static VOID hcdLogDelivery(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "msi.descriptors", hc->MsgDescriptors);
     XhciLogNote(ext, "msi.raw.count", hc->MsgRawCount);
     XhciLogNote(ext, "msi.routines", hc->MsgRoutines);
-    XhciLogNote(ext, "msi86.state", hc->Msi86Bind.State);
-    XhciLogNote(ext, "msi86.status", (ULONG)hc->Msi86Status);
-    XhciLogNote(ext, "msi86.refusal", hc->Msi86Refusal);
-    XhciLogNote(ext, "msi86.helper.version", hc->Msi86HelperVersion);
+    XhciLogNote(ext, "msi86.state", hc->HlprBind.State);
+    XhciLogNote(ext, "msi86.status", (ULONG)hc->HlprStatus);
+    XhciLogNote(ext, "msi86.refusal", hc->HlprRefusal);
+    XhciLogNote(ext, "msi86.helper.version", hc->HlprHelperVersion);
+    XhciLogNote(ext, "hlpr.msi.verdict", hc->HlprMsiVerdict);
+    XhciLogNote(ext, "hlpr.timer.verdict", hc->HlprTimerVerdict);
+    /* Record 15 section 7.2.9. */
+    XhciLogNote(ext, "poll.timer.switch.read", hc->Counters.TmrSwitchRead);
+    XhciLogNote(ext, "poll.timer.switch", hc->Tmr.Switch);
+    XhciLogNote(ext, "poll.timer.desired", hc->Tmr.Desired);
+#if defined(XHCI_FLAVOUR_QEMU)
+    XhciLogNote(ext, "qemu.tmr.delay", hc->Tmr.DelayMs);
+    XhciLogNote(ext, "qemu.susp.holddx", hc->QemuSuspHoldDx);
+#endif
     XhciLogNote(ext, "msi.filter.seq", hc->MsiFilter.Sequence);
     XhciLogNote(ext, "msi.filter.class", hc->MsiFilter.Class);
     XhciLogNote(ext, "msi.filter.outcome", hc->MsiFilter.Outcome);
@@ -1552,6 +1752,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     HcdDmaInitObjects(hc);
     KeInitializeDpc(&hc->IsrDpc, hcdIsrDpc, hc);
     HcdPollInitObjects(hc);
+    HcdTmrInitObjects(hc);
     hc->DpcsInFlight = 0;
     hc->DpcClosed = 1;
     KeInitializeEvent(&hc->WorkEvent, SynchronizationEvent, FALSE);
@@ -1561,6 +1762,11 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->EnumDetachDone, NotificationEvent, TRUE);
     KeInitializeEvent(&hc->DoorGate, SynchronizationEvent, TRUE);
     InitializeListHead(&hc->DoorIrps);
+    /* Task 38.10: the shutdown's log flush (hcd_quirk.c). */
+    KeInitializeEvent(&hc->ShutFlushDone, NotificationEvent, FALSE);
+    hc->ShutFlushWanted = 0;
+    hc->ShutFlushAcked = 0;
+    hc->ShutFlushSink = 0;
     /* Task 36.3: the routing record's unread marks, not zeros, before
      * any start (a zero Mode would read as value 0). */
     XhciPirqReset(&hc->Pirq);
@@ -1760,8 +1966,11 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
         KeLowerIrql(raised);
     }
     /* The poller's service back on the final successful pass, inside the
-     * power gate (record 15 section 5.3). */
+     * power gate (record 15 section 5.3); before it, task 38.10's ASMedia
+     * write, which the raised reset could not make (record 20 section
+     * 4.8). */
     if (ok) {
+        HcdQuirkAsmFlow(hc);
         HcdPollGrant(hc);
     }
     HcdPowerGateLeave(hc);
@@ -2222,6 +2431,8 @@ static VOID NTAPI hcdThread(PVOID Context)
 {
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
+    LONG ticket;
+    ULONG sunk;
 
     hc = (PHCD_CONTROLLER)Context;
     for (;;) {
@@ -2242,8 +2453,12 @@ static VOID NTAPI hcdThread(PVOID Context)
         HcdPowerGateLeave(hc);
         /* The continuous sink (26-A.8): whatever the producers recorded
          * since the last wake, emitted here at PASSIVE_LEVEL and nowhere
-         * nearer a DPC. */
+         * nearer a DPC. The shutdown's flush ticket is captured before it
+         * and acknowledged after it (task 38.10, hcd_quirk.c). */
+        ticket = hc->ShutFlushWanted;
+        sunk = hc->Hc.Log.DebugViewBytes;
         HcdLogFlush(hc, XHCI_LOG_REASON_PERIODIC, 0);
+        HcdQuirkFlushAck(hc, ticket, hc->Hc.Log.DebugViewBytes != sunk);
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
     /* No door request waits for a thread that is gone (task 36.45). */
@@ -2495,6 +2710,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     for (i = 0; i < sizeof(XHCI_EXTENSION); i++) {
         p[i] = 0;
     }
+    /* Task 38.10: every quirk at its default and unread, before the
+     * delivery reads XhciMsiAvoid (hcd_quirk.c). */
+    HcdQuirkStartBegin(hc);
     /* The power fallback's marker describes the controller this start
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
@@ -2506,6 +2724,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     /* Task 36.3's record was reset when the START_DEVICE arrived, before
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);
+    /* The finer timer's block (design record 15 section 7.2.5), before the
+     * poller is opened and so before any of its producers can run. */
+    HcdTmrStartReset(hc);
     HcdEnumInit(hc);
     hcdXstatStart(hc);
     /* This attempt's decision starts unknown, so a start refused before
@@ -2548,6 +2769,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
     hcdReadValues(hc);
+    hcdReadSilent(hc);
     hcdLogDelivery(hc);
 #if defined(XHCI_FLAVOUR_QEMU)
     HcdInjStart(hc);
@@ -2652,6 +2874,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     mp = XhciInitController(ext, &res);
     XhciLogNote(ext, "pci.cfg.status", hc->ConfigLastStatus);
     XhciLogNote(ext, "pci.cfg.info", hc->ConfigLastInformation);
+    hcdVersionCounters(hc);
     if (mp != MP_STATUS_SUCCESS) {
         XhciLogNote(ext, "start.refused.step", ext->InitStep);
         XhciLogNote(ext, "start.refused.status", ext->InitStatus);
@@ -2668,10 +2891,24 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
          * leaves; the mirrors are embedded scalars, so the poll is safe
          * after the release (Codex review round 24, finding 2). */
         HcdCountersPoll(hc);
+        /*
+         * Task 38.11, D5 (design record 17 section 4.14.7): every refusal of
+         * the initial start, at any step, flushes the ring with the counter
+         * dump as a refused delivery does (hcdLogRefused), so with
+         * XhciLogDebugView 1 DebugView shows why there was a Code 10 - the
+         * version words included - at XhciLogVerbosity 0. Here and not in
+         * xhciInitFailed: a resume's or a recovery's reinitialization shares
+         * that and may run below PASSIVE_LEVEL, where HcdLogFlush emits
+         * nothing, so those keep their reporting as it was.
+         */
+        HcdLogFlush(hc, XHCI_LOG_REASON_FAILURE, 1);
         return STATUS_DEVICE_CONFIGURATION_ERROR;
     }
     hcdTolApplies(hc);
     hcdFirmwareNote(hc);
+    /* Task 38.10: the quirks' values, the lists matched against the id just
+     * read, and the ASMedia write before anything is enumerated. */
+    HcdQuirkStart(hc);
     /* Task 36.3: the route repaired before the first interrupt is enabled. */
     hcdPirqStart(hc);
     /* Before the thread runs, so no backstop pass reads it mid-write. */
@@ -2725,6 +2962,15 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
 
     XHCI_DBG_TEXT("hcd: stop controller");
     ext = &hc->Hc;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Leg T3's reading (record 15 section 7.2.12): each child Dx still
+     * pended at the stop's entry, before the bar. */
+    HcdSuspQemuStopNote(hc);
+#endif
+    /* The finer timer first of all (record 15 section 7.2.5): stopped and
+     * barred, so its thread gives a held request back at once; joined
+     * late, below. */
+    HcdTmrStopEarly(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     /* Selective suspend's epoch and admission (design record 14 section
      * 4.4): the stop's device teardown settles every slot at its unlink. */
@@ -2780,6 +3026,12 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     /* The thread's deferred completions done before anything of the
      * controller goes (hcd_susp.c). */
     HcdSuspDoneDrain(hc);
+    /* The finer timer's thread joined (record 15 section 7.2.5): every
+     * child D-IRP this controller held is completed and every completion
+     * worker has left, and no power path takes the door gate held here,
+     * so the join waits behind no power IRP; before the release, outside
+     * the power gate. */
+    HcdTmrJoin(hc);
     (VOID)XhciControllerUpdateFlags(ext,
                                     XHCI_EXT_FLAG_STARTED |
                                         XHCI_EXT_FLAG_INTERRUPTS |

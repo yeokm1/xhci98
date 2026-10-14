@@ -43,14 +43,21 @@
 > serial read to `hcd_enum.c` (`HcdDeviceReadSerial`) and the duplicate and
 > dormant matching to `hcd_pdo.c`. Task 33.4 adds `hcd_hubfdo.c`
 > (an external hub's FDO, the third PnP role: each hub the bus serves is a
-> devnode under `XHCI98\HUB` or `XHCI98\HUB30`, design record 13 section 10.11)
+> devnode under `USB\XHCI98_HUB` or `USB\XHCI98_HUB30` since task 38.8,
+> `XHCI98\HUB` or `XHCI98\HUB30` before, design record 13 section 10.11)
 > and the hub PDO's pure half in `xhci_hub.c` (its ids, the presented parent,
 > node information; host suite `test_hub`). Task 36.43 gives `hcd_hubfdo.c` a
 > fourth PnP role, a composite device's FDO over its composite-parent PDO
-> (`XHCI98\COMPOSITE`, design record 13 section 10.12), with the parent's ids
+> (`USB\XHCI98_COMPOSITE`, `XHCI98\COMPOSITE` before task 38.8, design record
+> 13 section 10.12), with the parent's ids
 > in the pure `xhci_func.c` (`XhciFuncParentId`, host suite `test_func`) and
 > the parent, its functions and their in-place re-presentation in
-> `hcd_pdo.c`. Task 34.3 adds the pure
+> `hcd_pdo.c`. Task 38.12 has that FDO select the configuration down its
+> own stack at its start, and the parent PDO answer it and keep the
+> caller's descriptor as the record a function's select takes its
+> `bInterval` from (`hcd_urb.c`, its last block; the pure precedence and
+> checks in `xhci_pipe.c`, host suite `test_pipe`; design record 13
+> section 10.14). Task 34.3 adds the pure
 > `xhci_psw.c` / `xhci_psw.h` (the Intel EHCI-to-xHCI port switchover: the
 > device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, and the
 > route and release sequences over two caller-supplied configuration-space
@@ -267,7 +274,36 @@
 > counters and the trace); in `hcd_ctl.c` the seam `hcdMsgConnect`, the
 > message ISR and the capability read; and `src/msi86/` - `msi86_entry.c`,
 > `xhcimsi.rc`, `sources` and `makefile` - the NT 6 x86 helper
-> `xhcimsi.sys`, built with WDK 7.1 for x86.
+> `xhcimsi.sys`, built with WDK 7.1 for x86. Task 38.3 renamed both (below).
+> Task 38.3 (design records 15 section 7.2 and 18 section 15) adds the
+> finer system timer while polling and renames the helper. `src/hlpr/` -
+> `hlpr_entry.c`, `xhcihlpr.rc`, `sources` and `makefile` - replaces
+> `src/msi86/`: the x86 helper `xhcihlpr.sys`, built with WDK 7.1's `WXP`
+> x86 environment at subsystem 5.00, which loads on 2000, XP, Vista and 7,
+> creates `\Device\Xhci98Helper` and answers channel version 2 (IOCTL
+> `0x0022240B`, magic `'XHLP'`, a 0x34-byte block) with two services
+> negotiated apart, the MSI pair (Vista and 7 only, looked up through
+> `MmGetSystemRoutineAddress`) and the timer (`ExSetTimerResolution`,
+> imported). `xhci_hlpr.c` / `xhci_hlpr.h` replace `xhci_msi86.c` /
+> `xhci_msi86.h` as the channel's pure half (both ends, compiled into
+> `xhci98.sys`, the helper and `test_msi`, and included by `test_snap`), with the
+> binding machine's timer event and the per-start latch; `hcd_msi86.c`
+> keeps its name and takes the timer routine from the binding
+> (`HcdHlprTimerRoutine`). New `hcd_tmr.c`: the controller's timer thread
+> (one per controller, created after a successful start and joined at the
+> stop after the children's power IRPs are settled), the routine's lookup
+> per image (the helper on x86, the 32-bit NT 5 thread's own first look;
+> `MmGetSystemRoutineAddress` on amd64; none on 98 SE and ME), the
+> `ExSetTimerResolution` hold and release, and the `qemu` flavour's
+> `XhciQemuTmrDelayMs`. `xhci_poll.c` / `xhci_poll.h` gain the timer's pure
+> request machine (`XhciPollTmrWant`, `XhciPollTmrStep`, the release
+> causes) and its phase observer (`XhciPollTmrObserve` and the observation
+> epoch; host suite `test_poll`); the producers - the ACTIVE edge and the
+> generation in `hcd_poll.c`, the bar beside each power path's revoke in
+> `hcd_power.c`, the creation in `hcd_pnp.c`, and the switch's read, the
+> per-start reset and the stop's bar and join in `hcd_ctl.c` - signal the
+> thread; `hcd_susp.c` gains the `qemu` flavour's `XhciQemuSuspHoldDx`; the
+> counters are appended to `XHCIHC_COUNTERS` at words 176 to 198.
 > Tasks 36.28 to 36.40 (design record 14) add selective suspend: the pure
 > `xhci_susp.c` / `xhci_susp.h` (the switch, eligibility and capabilities,
 > the device's link machine, each function's power slot, the wake episode,
@@ -295,6 +331,83 @@
 > register it touches saved). Task 36.33's fix adds
 > `xhcisnap\check-counter-names.ps1`, which checks the built `XHCISNAP`'s
 > counter names against `xhci_counters.h` word by word.
+> Task 38.8 (design record 13 section 10.13) moves the bus's own ids under
+> `USB\` and spells their four bases once, as `#define`s in the pure
+> `xhci_hub.h` (`XHCI_ID_ROOT_HUB`, `XHCI_ID_HUB`, `XHCI_ID_HUB30`,
+> `XHCI_ID_COMPOSITE`; host suite `test_hub` spells each out), which
+> `hcd_rh.c`, `xhci_hub.c` and `xhci_func.c` build every answer from and
+> `scripts\inf-gate\check-inf.ps1` holds the INFs to (`HCD-IDSRC`). It adds
+> the cleanup tool's tree at the repository root, beside `xhcisnap\`:
+> `xhcicln\xhcicln.c` (one C89 source, `XHCICLN.EXE` with MSVC 6.0 and
+> `XHCICL64.EXE` with WDK 7.1 amd64), `xhcicln.rc` and `xhcicln.manifest` (the
+> elevation request), `build.cmd`, `selftest.cmd` (the `-selftest` that
+> `build-driver.cmd` runs when the EXE is built) and `README.TXT` (the text
+> of the published `readme.txt`).
+> Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
+> `xhci_silent.h` (the Windows 98 SE and ME silent install: the
+> `XhciSilentInstall` gate's rule, the `SilentClasses` table's admission,
+> cap and failed-query rule, and the configuration walk and PDO answer;
+> host suite `test_silent`), read at each start in `hcd_ctl.c`
+> (`hcdReadSilent`, `hcdTakeSilent`) and applied in `hcd_pdo.c`
+> (`hcdSilentDecide`, `hcdDeviceCapabilities`); and the switch's user
+> files `silent.reg`, `silent.vbs`, `silent-on.bat` and `silent-off.bat`.
+> Since the owner's change of 2026-10-14 `xhci98.inf` and
+> `xhci98-amd64.inf` write `XhciSilentInstall` at 0 on every install path;
+> the `SilentClasses` list stays `silent.reg`'s alone.
+> Task 38.11 (design record 17 section 4.14) adds no file: xHCI 0.96
+> controllers accepted behind `XhciAccept096`. The pure halves are in
+> `xhci_caps.c` (`XhciVersionFloor`, `XhciEffectiveCapDword0`,
+> `XhciTdSizeFormOf`, the counter words `XhciVersionPairWord` and
+> `XhciVersionPolicyWord`, the floor in `XhciCheckCapDword0` and
+> `XhciDeriveHcInfo`, and HCCPARAMS2 taken as 0 below 1.0; `test_caps`)
+> and `xhci_xfer.c` (the request's `TdSizeForm`, the TD Size in KiB, the
+> Setup TRB's Transfer Type and the isochronous TBC and TLBPC written 0, no
+> Frame ID below 1.0 in `XhciXferIsoFramePolicy` and
+> `XhciXferIsoStartPlan`; `test_xfer`, `test_iso`, `test_td`); the value
+> and the qemu flavour's `XhciQemuHciVersion` are read in `hcd_ctl.c`
+> (`hcdReadValues`, `hcdVersionCounters`, and the refused start's flush),
+> the effective version at step 0c in `xhci_init.c`
+> (`xhciEffectiveCapDword0`), the seven request sites in `hcd_enum.c`,
+> `hcd_hub.c` and `hcd_io.c`, the three counter words in `xhci_counters.h`
+> and `hcd_log.c` (`test_snap`), and outside `src\` `xhcisnap\xhcisnap.c`
+> (`print_hcd_version`, `-selftest-version`) and `xhciqual\report.c` (the
+> line after HCIVERSION and the HCCPARAMS2 line below 1.0).
+> Task 38.10 (design record 20, section 13) adds Linux's xHCI controller
+> quirks: the pure `xhci_quirk.c` / `xhci_quirk.h` (the fourteen values in
+> record 20 section 6.1's order, each with its name, Linux flag and log
+> label; the defaults, value 2 offered or read as 1, the normalization;
+> section 3.1's id lists and the match, VIA vendor-wide for
+> `XhciResumeReinit`; the effective policy; the per-start state
+> `XHCI_QUIRK_STATE` in the extension; the packed word the log and counter
+> words 199 to 212 carry; `XhciMsiAvoid`'s decision and `XhciStreamsOff`'s
+> HCCPARAMS1; host suite `test\test_quirk.c`, with each executor's vectors
+> in `test_ring`, `test_iso`, `test_link`, `test_stream`, `test_tol` and
+> `test_poll`) and the driver half `hcd_quirk.c` (the registry reads at
+> each start and, for `XhciMsiAvoid`, at AddDevice on NT 6; the PCI
+> identity read before the delivery is settled and the requirements
+> filter's cache; the ASMedia flow-control write after each start, recovery
+> and resume; the AMD bit before each suspend; the shutdown's Intel routing
+> write and HCRST with the bounded log flush after them; the post-resume
+> arming of the stuck-link check; and the counter block's copy). The quirks
+> that act in the core read `XhciQuirkOn` where they act: `xhci_init.c`
+> (suspend, halt, shutdown reset), `xhci_ring.c` and `xhci_xfer.c` (the
+> control No Op, the isochronous Success), `xhci_link.c` (the stuck link),
+> `xhci_stream.c` (the padded block), `xhci_tol.c` (the TI cap, and
+> 1002:7316 under `XhciIntervalCap`) and `xhci_poll.c` (reason 19).
+> `xhciqual\quirks.c` gains the same rows and flags, host suite
+> `xhciqual\test\test_quirks.c` (every listed id with its Linux flag and
+> the driver value it prints, the vendor-wide rows, the neighbours refused,
+> and the HCIVERSION floor note).
+> Task 38.10's endpoint-ring fix (design record 20 section 5) adds the pure
+> `xhci_own.c` / `xhci_own.h` (who holds an endpoint's ring across an
+> interface switch: each step's decision for SELECT_INTERFACE and a
+> function's select, the drop-only command's, a completion code as an
+> outcome, and the one-setting walk; host suite `test_own`, over a
+> modelled controller and pool), carried out in `hcd_cfg.c` (the held
+> pipes `hcdCfgRetain` and their proofs, the switch `hcdCfgSwitch*`), with
+> `XhciPoolAcquireReserved` in `xhci_mem.c` (`test_membuf`), the pool
+> occupancy copied at `hcd_log.c`'s poll, and the qemu flavour's faults
+> `18` and `19` in `xhci_inj.h` and `hcd_inj.c`.
 > Two groups from before Phase 36 that this map did not name (added in
 > 36.20): strict mode, `xhci_strict.c` / `xhci_strict.h` (the xHCI 1.2
 > command precondition table: would a conforming controller accept this
@@ -379,7 +492,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI config access, bounded waits. Implemented in `xhci_pci.c`. | no |
 | `xhci_dbg.h` | The trace channel's macros; empty outside the `qemu` flavour. | no |
 | `xhci_compat.h` | Win98/Win2000 DDK compatibility shims, chiefly undoing the Win2K DDK's `ExAllocatePool` to `ExAllocatePoolWithTag` rewrite - a policy (Option A needs no private pool), not a missing export. | no |
-| `xhci_version.h` | The package version and release date, the single editable source of the version. Included by `xhci98.rc`, `xhciqual\qual.h` and `xhcisnap\xhcisnap.c`; the INF's `DriverVer` literal is checked against it by the INF gate. | yes |
+| `xhci_version.h` | The package version and release date, the single editable source of the version. Included by `xhci98.rc`, `xhciqual\qual.h`, `xhcisnap\xhcisnap.c` and `xhcicln\xhcicln.c`; the INF's `DriverVer` literal is checked against it by the INF gate. | yes |
 
 ## Build and packaging inputs
 
@@ -390,9 +503,14 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci98.rc` | The file version resource (task 8-A.4), so a binary recovered from a user's machine can be identified. Takes its fields from `xhci_version.h`; adds no import. |
 | `xhci98.inf` | The **32-bit** INF: one file for two setup engines. Windows 98 SE reads the undecorated sections and loads the driver through `NTKERN`; Windows 2000 SP4 reads the `.NTx86` sections and loads it as a kernel service. Both install sections copy the project's two files through the shared `Xhci.CopyFiles`, and each adds its own OS-supplied list (`Xhci.CopyW98`: `usbd.sys` and `usbhub.sys`; `Xhci.CopyNT`: those plus `usbport.sys`) that `LayoutFile` has the OS fetch from its own install source. Both also copy `usbui.dll` through `Xhci.CopyUI`, to dirid 11 rather than 10, since 1.0.2.0. Since 1.1.0.0 it carries a third install path for Windows Vista and Windows 7: `%Mfg%=XhciModels,NTx86.6.0` in `[Manufacturer]` leads NT 6.x to `[XhciModels.NTx86.6.0]` and `[Xhci.Dev6.NTx86]`, which copies `xhci98.sys` alone (those systems already carry the four OS-supplied files, and their file queue aborts on a `LayoutFile` copy). |
 | `xhci98-amd64.inf` | The **64-bit package's** INF, and it is a second file rather than a third path in the first (design record 11 section 12, decision 2): no Windows 98 path, a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`, and two install paths - `[Xhci.Dev.NTamd64]` for Windows XP x64 and Server 2003 x64, which fetches the OS-supplied files from `Driver Cache\amd64`, and `[Xhci.Dev6.NTamd64]` for Vista x64 and Windows 7 x64, which copies `xhci98.sys` alone. Neither file may grow the other's sections - an undecorated or `.NT*` section here is one a 32-bit engine reaches, which would put an amd64 binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`, `PATH-MFGDEC`, `OS-DEFAULT`). The two are checked against each other by `scripts\inf-gate\test-inf-checks.ps1`, because the accepted cost of two files is that they can drift. |
-| `portsw.vbs` | The Intel port switchover's user script (roadmap-hcd task 36.42, design record 16 section 5a): Windows Script Host VBScript that shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1, then says a restart is needed. Finds the controller's driver key among the `NNNN` subkeys of the USB class key (listed by WMI on NT, by a `regedit /e` export on 98 and ME, probed `0000` to `9999` only if neither answers) for this driver's `DriverDesc`; on Vista and 7 asks for elevation itself. Published once by `make-release.ps1`, in `portsw\` at the version root (roadmap-hcd task 37.5; no package carries it), held by the packager's self-tests and the source charset gate. |
-| `portsw-on.bat`, `portsw-off.bat` | The script's two batch files (roadmap-hcd task 36.56, design record 16 section 5a, "The batch files"): each shows the value, sets 1 or 0 through `cscript //nologo portsw.vbs`, says a restart is needed and pauses. One file for `COMMAND.COM` (98 SE, ME) and `cmd.exe` (2000 to 7): `if "%OS%"=="Windows_NT" goto nt`, then `goto run`, so only `cmd.exe` reaches `cd /d "%~dp0"`. Published beside `portsw.vbs` in `portsw\` by `make-release.ps1` (task 37.5), held by the packager's self-tests (the split, the calls, ASCII and CRLF), the source charset gate and the batch-file line-ending gate. |
-| `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330` and `XHCI98\ROOT_HUB`. Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them and to each other. |
+| `portsw.vbs` | The Intel port switchover's user script (roadmap-hcd task 36.42, design record 16 section 5a): Windows Script Host VBScript that shows `XhciIntelPortSwitch` on every xhci98 controller and sets it to 0 or 1, then says a restart is needed. Finds the controller's driver key among the `NNNN` subkeys of the USB class key (listed by WMI on NT, by a `regedit /e` export on 98 and ME, probed `0000` to `9999` only if neither answers) for this driver's `DriverDesc`; on Vista and 7 asks for elevation itself. Published once by `make-release.ps1`, in `tools\portsw\` (roadmap-hcd task 38.9; `portsw\` at the version root from task 37.5 until `2.4.0.0`; no package carries it), held by the packager's self-tests and the source charset gate. |
+| `portsw-on.bat`, `portsw-off.bat` | The script's two batch files (roadmap-hcd task 36.56, design record 16 section 5a, "The batch files"): each shows the value, sets 1 or 0 through `cscript //nologo portsw.vbs`, says a restart is needed and pauses. One file for `COMMAND.COM` (98 SE, ME) and `cmd.exe` (2000 to 7): `if "%OS%"=="Windows_NT" goto nt`, then `goto run`, so only `cmd.exe` reaches `cd /d "%~dp0"`. Published beside `portsw.vbs` in `tools\portsw\` by `make-release.ps1` (task 38.9; `portsw\` from task 37.5), held by the packager's self-tests (the split, the calls, ASCII and CRLF), the source charset gate and the batch-file line-ending gate. |
+| `silent.reg` | The silent install's list (roadmap-hcd task 38.2, design record 13 section 6.11.8): `REGEDIT4`, the six `SilentClasses` entries - hubs alone; boot keyboard and mouse alone or composite; Bulk-Only SCSI storage alone or composite - under SweetLow's value names, written by this project from those facts. Published as `tools\silent\SILENT.REG`. Silences nothing while `XhciSilentInstall` is not 1. |
+| `silent.vbs` | The silent install's user script (task 38.2, section 6.11.8), `portsw.vbs`'s pattern on Windows 98 SE and ME only: shows `XhciSilentInstall` on every xhci98 controller and the `SilentClasses` list (a `regedit /e` export read for its value lines), and sets the switch to 0, or to 1 only after the list reads back as `SILENT.REG`'s six; each write read back, each controller set, not set or unverified. Exit codes 0 done, 1 refused or nothing found (or NT), 2 usage, 3 partial, 4 list not verified, 5 not verified. Published as `tools\silent\SILENT.VBS`. |
+| `silent-on.bat`, `silent-off.bat` | Its two batch files (task 38.2, section 6.11.8), `portsw-on.bat`'s shape: `silent-on.bat` shows, stops on any errorlevel, merges `silent.reg` with `regedit /s` and runs `silent.vbs 1`, reading its errorlevel 5, 4, 3, 1 in that order; `silent-off.bat` runs `silent.vbs 0` and says the list was left in place and how to delete it. On NT both change nothing. Published in `tools\silent\`. |
+| `..\xhcisnap\snapon.bat`, `..\xhcisnap\snapget.bat`, `..\xhcisnap\snapoff.bat` | The field reports' Windows batch files (roadmap-hcd task 38.1), outside `src\` beside the tool they run: `XHCISNAP -on %1` (the log channel on: `-verbosity 2` with no `LEVEL`, an optional `LEVEL` of exactly 1 to 4, `0` refused pointing at `SNAPOFF.BAT`, all checked by the tool), `XHCISNAP -report %1` (the `.DEV` status, resources and file hashes, and the dump, in the current directory under a date-and-time 8.3 name `XHCISNAP` builds, or `-report NAME` for an optional 8.3 `NAME` the tool validates and refuses rather than overwrites; the channel left on) and `XHCISNAP -disable` (owner, 2026-10-13, for the two arguments). One file each for `COMMAND.COM` and `cmd.exe`, with `portsw-on.bat`'s split. Published as `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside `XHCISNAP.EXE` in `tools\xhcisnap\` by `make-release.ps1` from `2.4.0.0`, held by the packager's self-tests (`Get-ReportBatchFaults`: the split, the one command line - for the two that take an argument (`ArgPass`), exactly `XHCISNAP -on %1` or `XHCISNAP -report %1`, with no `if` on `%1` (Codex review of 38.1, round 3) - no percent variable but that `%1`, the tool run last (`ToolLast`, owner, 2026-10-13: reached by one `if exist XHCISNAP.EXE goto` to the label just above it, only labels and `pause` after it and no `IF ERRORLEVEL`, `XHCISNAP` printing the outcome and, last, the files to attach), no drive path, ASCII and CRLF; `Assert-ReportBatchLayout`), the source charset gate and the batch-file line-ending gate. |
+| `..\xhciqual\QUALREP.BAT` | The field reports' MS-DOS batch file (roadmap-hcd task 38.1): `XHCIQUAL --probe-only --no-page --log-stamp`, the read-only probe saved to a new `mDDhhmmS.LOG` in the current directory that `XHCIQUAL` names from the DOS clock. Published beside `XHCIQUAL.EXE` in `tools\xhciqual\` from `2.4.0.0`, held by the same self-tests and gates. |
+| `txtsetup.oem`, `txtsetup-amd64.oem` | The text-mode Setup driver descriptions (roadmap task 33.3, design record 13 section 5.6): what Windows 2000 and 32-bit XP (the first) and XP x64 (the second, staged under the first's name) read from drive A: when F6 is pressed, loading `xhci98.sys` as a `scsi` component and binding it to `PCI\CC_0C0330`, `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and `USB\XHCI98_COMPOSITE` (under `XHCI98\` before task 38.8). The x86 file also carries `xhcihlpr.sys` on a `dll` line, copied to `%windir%\OemDir` for GUI-mode Setup's install and not loaded in text mode (design record 18 section 15.9). Gated by `scripts\inf-gate\check-txtsetup-oem.ps1`, which holds both to the INF beside them (`OEM-COPY`: every file the INF's NT 5.x install copies from the disk is on the option) and to each other. |
 
 ## Generated, not tracked
 

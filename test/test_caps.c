@@ -969,12 +969,21 @@ static void test_unlisted_fallback(void)
  * seventh register explicitly through derive_hcc2; everything else goes through
  * this form, which passes a zero and therefore asserts nothing about it.
  */
+static ULONG derive_floor(ULONG capDword0, ULONG hcs1, ULONG hcs2, ULONG hcc1,
+                          ULONG hcc2, ULONG dboff, ULONG rtsoff, ULONG mapped,
+                          ULONG floor, PXHCI_HC_INFO info)
+{
+    return XhciDeriveHcInfo(capDword0, hcs1, hcs2, hcc1, hcc2, dboff, rtsoff,
+                            mapped, floor, info);
+}
+
+/* Every vector before task 38.11 was written at the 1.0 floor. */
 static ULONG derive_hcc2(ULONG capDword0, ULONG hcs1, ULONG hcs2, ULONG hcc1,
                          ULONG hcc2, ULONG dboff, ULONG rtsoff, ULONG mapped,
                          PXHCI_HC_INFO info)
 {
-    return XhciDeriveHcInfo(capDword0, hcs1, hcs2, hcc1, hcc2, dboff, rtsoff,
-                            mapped, info);
+    return derive_floor(capDword0, hcs1, hcs2, hcc1, hcc2, dboff, rtsoff,
+                        mapped, XHCI_HCIVERSION_1_0, info);
 }
 
 static ULONG derive(ULONG capDword0, ULONG hcs1, ULONG hcs2, ULONG hcc1,
@@ -984,6 +993,10 @@ static ULONG derive(ULONG capDword0, ULONG hcs1, ULONG hcs2, ULONG hcc1,
     return derive_hcc2(capDword0, hcs1, hcs2, hcc1, 0, dboff, rtsoff,
                        mapped, info);
 }
+
+/* The two floors a start can latch (task 38.11). */
+#define F10 XHCI_HCIVERSION_1_0
+#define F096 XHCI_HCIVERSION_0_96
 
 /* The baseline, with one input replaced. */
 #define DERIVE_BASE(info) \
@@ -1000,32 +1013,33 @@ static void test_hc_info(void)
     /* --- the two-value sanity gate, on its own ------------------------- */
     capLength = 0;
     version = 0;
-    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, HC_MAPPED, &capLength, &version),
+    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, HC_MAPPED, F10, &capLength,
+                                &version),
              XHCI_HC_OK, "a plausible CAPLENGTH/HCIVERSION dword");
     CHECK_EQ(capLength, 0x20, "CAPLENGTH is bits 7:0");
     CHECK_EQ(version, 0x0100, "HCIVERSION is bits 31:16");
-    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_OK, "both outputs are optional");
 
-    CHECK_EQ(XhciCheckCapDword0(0xFFFFFFFFUL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0xFFFFFFFFUL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_NOT_DECODING, "all ones is a device that is not decoding");
-    CHECK_EQ(XhciCheckCapDword0(0x01000000UL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0x01000000UL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_BAD_CAPLENGTH, "CAPLENGTH 0 puts the op regs at BAR0");
-    CHECK_EQ(XhciCheckCapDword0(0x010000FFUL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0x010000FFUL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_BAD_CAPLENGTH, "CAPLENGTH 0xFF is the byte-wide all-ones");
-    CHECK_EQ(XhciCheckCapDword0(0x0100001BUL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0x0100001BUL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_BAD_CAPLENGTH,
              "CAPLENGTH below 0x1C overlaps RTSOFF, the last cap register");
-    CHECK_EQ(XhciCheckCapDword0(0x0100001CUL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0x0100001CUL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_OK, "0x1C is the smallest CAPLENGTH that does not");
-    CHECK_EQ(XhciCheckCapDword0(0x00FF0020UL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0x00FF0020UL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_BAD_VERSION, "HCIVERSION below 1.0 is refused");
-    CHECK_EQ(XhciCheckCapDword0(0xFFFF0020UL, HC_MAPPED, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(0xFFFF0020UL, HC_MAPPED, F10, NULL, NULL),
              XHCI_HC_BAD_VERSION, "an all-ones HCIVERSION half is refused");
-    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, 0x1B, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, 0x1B, F10, NULL, NULL),
              XHCI_HC_WINDOW_TOO_SMALL,
              "a window too small to hold the capability registers");
-    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, 0x1C, NULL, NULL),
+    CHECK_EQ(XhciCheckCapDword0(HC_CAP_DWORD0, 0x1C, F10, NULL, NULL),
              XHCI_HC_OK, "0x1C bytes is exactly enough for them");
 
     /* --- the full derivation ------------------------------------------- */
@@ -1227,7 +1241,7 @@ static void test_hc_info(void)
         }
         CHECK_EQ(XhciDeriveHcInfo(HC_CAP_DWORD0, HC_HCSPARAMS1, HC_HCSPARAMS2,
                                   HC_HCCPARAMS1, 0, HC_DBOFF, HC_RTSOFF,
-                                  HC_MAPPED, NULL),
+                                  HC_MAPPED, F10, NULL),
                  XHCI_HC_BAD_PARAM, "a NULL output is refused, not written");
     }
 
@@ -1326,6 +1340,182 @@ static void test_hc_info(void)
              "a single changed field compares unequal");
     CHECK_EQ(XhciHcInfoEqual(&info, NULL), 0, "NULL is never equal");
     CHECK_EQ(XhciHcInfoEqual(NULL, &info), 0, "in either position");
+}
+
+/*
+ * Task 38.11 (design record 17 sections 4.14.4, 4.14.6 and 4.14.9): the
+ * floor at both values, the value's reading, D4, the effective version
+ * under the qemu flavour's override, and the counter words.
+ */
+static ULONG cap_at(ULONG version)
+{
+    return (version << 16) | 0x20UL;
+}
+
+static void test_version_floor(void)
+{
+    static const ULONG accepted96[] = { 0x0096UL, 0x0099UL, 0x00A0UL,
+                                        0x00FFUL };
+    static const ULONG always[] = { 0x0100UL, 0x0110UL, 0x0120UL };
+    XHCI_HC_INFO info;
+    XHCI_HC_INFO other;
+    ULONG version;
+    ULONG i;
+
+    /* The value: only a DWORD 0 restores the 1.0 floor. */
+    CHECK_EQ(XhciVersionFloor(0, 0), F096, "absent: the 0.96 floor");
+    CHECK_EQ(XhciVersionFloor(0, 0x12345678UL), F096,
+             "another type (not found as a DWORD): the 0.96 floor");
+    CHECK_EQ(XhciVersionFloor(1, 0), F10, "a DWORD 0: the 1.0 floor");
+    CHECK_EQ(XhciVersionFloor(1, 1), F096, "a DWORD 1: the 0.96 floor");
+    CHECK_EQ(XhciVersionFloor(1, 2), F096, "a DWORD 2: the 0.96 floor");
+    CHECK_EQ(XhciVersionFloor(1, 0xFFFFFFFFUL), F096,
+             "any other number: the 0.96 floor");
+
+    /* The floor at both values. */
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0x0095UL), HC_MAPPED, F096, NULL,
+                                NULL),
+             XHCI_HC_BAD_VERSION, "0.95 refused at the 0.96 floor");
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0x0095UL), HC_MAPPED, F10, NULL, NULL),
+             XHCI_HC_BAD_VERSION, "0.95 refused at the 1.0 floor");
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0x0090UL), HC_MAPPED, F096, NULL,
+                                NULL),
+             XHCI_HC_BAD_VERSION, "0.90 refused at the 0.96 floor");
+    for (i = 0; i < sizeof(accepted96) / sizeof(accepted96[0]); i++) {
+        version = 0;
+        CHECK_EQ(XhciCheckCapDword0(cap_at(accepted96[i]), HC_MAPPED, F096,
+                                    NULL, &version),
+                 XHCI_HC_OK, "0.96 to 0.FF accepted at the 0.96 floor");
+        CHECK_EQ(version, accepted96[i], "and reported as read");
+        CHECK_EQ(XhciCheckCapDword0(cap_at(accepted96[i]), HC_MAPPED, F10,
+                                    NULL, NULL),
+                 XHCI_HC_BAD_VERSION, "and refused at the 1.0 floor");
+    }
+    for (i = 0; i < sizeof(always) / sizeof(always[0]); i++) {
+        CHECK_EQ(XhciCheckCapDword0(cap_at(always[i]), HC_MAPPED, F096, NULL,
+                                    NULL),
+                 XHCI_HC_OK, "1.0 and later accepted at the 0.96 floor");
+        CHECK_EQ(XhciCheckCapDword0(cap_at(always[i]), HC_MAPPED, F10, NULL,
+                                    NULL),
+                 XHCI_HC_OK, "and at the 1.0 floor");
+    }
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0xFFFFUL), HC_MAPPED, F096, NULL, NULL),
+             XHCI_HC_BAD_VERSION, "FFFFh refused at the 0.96 floor");
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0xFFFFUL), HC_MAPPED, F10, NULL, NULL),
+             XHCI_HC_BAD_VERSION, "and at the 1.0 floor");
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0x0096UL), HC_MAPPED, 0, NULL, NULL),
+             XHCI_HC_BAD_VERSION,
+             "a floor never latched (0) is the 1.0 floor, not an open one");
+    CHECK_EQ(XhciCheckCapDword0(cap_at(0x0096UL), HC_MAPPED, 0x0050UL, NULL,
+                                NULL),
+             XHCI_HC_BAD_VERSION, "nor does any other floor open below 1.0");
+
+    /* The full derivation carries the floor through. */
+    CHECK_EQ(derive_floor(cap_at(0x0096UL), HC_HCSPARAMS1, HC_HCSPARAMS2,
+                          HC_HCCPARAMS1, 0, HC_DBOFF, HC_RTSOFF, HC_MAPPED,
+                          F096, &info),
+             XHCI_HC_OK, "a 0.96 controller derives at the 0.96 floor");
+    CHECK_EQ(info.HciVersion, 0x0096UL, "HciVersion 0.96");
+    CHECK_EQ(derive_floor(cap_at(0x0096UL), HC_HCSPARAMS1, HC_HCSPARAMS2,
+                          HC_HCCPARAMS1, 0, HC_DBOFF, HC_RTSOFF, HC_MAPPED,
+                          F10, &info),
+             XHCI_HC_BAD_VERSION, "and is refused at the 1.0 floor");
+
+    /* D4: HCCPARAMS2 with FSC (bit 2) and LEC (bit 4) set, ignored below
+     * 1.0 and believed at 1.0 and above; QEMU's register reads 0, so only
+     * this vector shows it. The reach gates are unchanged (above). */
+    CHECK_EQ(derive_floor(cap_at(0x0096UL), HC_HCSPARAMS1, HC_HCSPARAMS2,
+                          HC_HCCPARAMS1, 0x00000014UL, HC_DBOFF, HC_RTSOFF,
+                          HC_MAPPED, F096, &info),
+             XHCI_HC_OK, "0.96 with FSC and LEC set");
+    CHECK_EQ(info.Fsc, 0UL, "FSC taken as 0 below 1.0");
+    CHECK_EQ(info.Lec, 0UL, "LEC taken as 0 below 1.0");
+    CHECK_EQ(derive_floor(cap_at(0x00FFUL), HC_HCSPARAMS1, HC_HCSPARAMS2,
+                          HC_HCCPARAMS1, 0x00000014UL, HC_DBOFF, HC_RTSOFF,
+                          HC_MAPPED, F096, &info),
+             XHCI_HC_OK, "0.FF with both set");
+    CHECK_EQ(info.Fsc + info.Lec, 0UL, "0.FF is below 1.0 too");
+    CHECK_EQ(derive_floor(cap_at(0x0100UL), HC_HCSPARAMS1, HC_HCSPARAMS2,
+                          HC_HCCPARAMS1, 0x00000014UL, HC_DBOFF, HC_RTSOFF,
+                          HC_MAPPED, F096, &info),
+             XHCI_HC_OK, "1.0 with both set, at the 0.96 floor");
+    CHECK_EQ(info.Fsc, 1UL, "FSC believed at 1.0");
+    CHECK_EQ(info.Lec, 1UL, "LEC believed at 1.0");
+    CHECK_EQ(derive_floor(cap_at(0x0120UL), HC_HCSPARAMS1, HC_HCSPARAMS2,
+                          HC_HCCPARAMS1, 0x00000014UL, HC_DBOFF, HC_RTSOFF,
+                          HC_MAPPED, F10, &info),
+             XHCI_HC_OK, "1.2 with both set");
+    CHECK_EQ(info.Fsc + info.Lec, 2UL, "both believed at 1.2");
+
+    /* The effective dword 0 (D7): HCIVERSION replaced, CAPLENGTH and the
+     * reserved byte kept; no override, out-of-range ones and an all-ones
+     * read are the identity, as every shipping build is. */
+    CHECK_EQ(XhciEffectiveCapDword0(0x01000020UL, 0x0096UL), 0x00960020UL,
+             "the override replaces bits 31:16 alone");
+    CHECK_EQ(XhciEffectiveCapDword0(0x0100AB40UL, 0x0096UL), 0x0096AB40UL,
+             "CAPLENGTH and bits 15:8 kept");
+    CHECK_EQ(XhciEffectiveCapDword0(0x01000020UL, 0), 0x01000020UL,
+             "0 is no override: the identity");
+    CHECK_EQ(XhciEffectiveCapDword0(0x01000020UL, 0x0001UL), 0x00010020UL,
+             "0001h is the lowest override applied");
+    CHECK_EQ(XhciEffectiveCapDword0(0x01000020UL, 0xFFFEUL), 0xFFFE0020UL,
+             "FFFEh the highest");
+    CHECK_EQ(XhciEffectiveCapDword0(0x01000020UL, 0xFFFFUL), 0x01000020UL,
+             "FFFFh applies nothing");
+    CHECK_EQ(XhciEffectiveCapDword0(0x01000020UL, 0x10096UL), 0x01000020UL,
+             "nor anything above it");
+    CHECK_EQ(XhciEffectiveCapDword0(0xFFFFFFFFUL, 0x0096UL), 0xFFFFFFFFUL,
+             "an all-ones read stays all ones, so it is still not decoding");
+    CHECK_EQ(XhciCheckCapDword0(XhciEffectiveCapDword0(0xFFFFFFFFUL,
+                                                       0x0096UL),
+                                HC_MAPPED, F096, NULL, NULL),
+             XHCI_HC_NOT_DECODING, "and refused as one");
+
+    /* XhciHcInfoEqual across a re-derivation under the override: the
+     * recheck after HCRST sees the same effective version. */
+    CHECK_EQ(derive_floor(XhciEffectiveCapDword0(HC_CAP_DWORD0, 0x0096UL),
+                          HC_HCSPARAMS1, HC_HCSPARAMS2, HC_HCCPARAMS1, 0,
+                          HC_DBOFF, HC_RTSOFF, HC_MAPPED, F096, &info),
+             XHCI_HC_OK, "QEMU's 1.0 decoded as 0.96");
+    CHECK_EQ(info.HciVersion, 0x0096UL, "HciVersion is the effective one");
+    CHECK_EQ(derive_floor(XhciEffectiveCapDword0(HC_CAP_DWORD0, 0x0096UL),
+                          HC_HCSPARAMS1, HC_HCSPARAMS2, HC_HCCPARAMS1, 0,
+                          HC_DBOFF, HC_RTSOFF, HC_MAPPED, F096, &other),
+             XHCI_HC_OK, "and again after the reset");
+    CHECK_EQ(XhciHcInfoEqual(&info, &other), 1,
+             "the same controller under the override");
+    CHECK_EQ(derive_floor(XhciEffectiveCapDword0(HC_CAP_DWORD0, 0x0096UL),
+                          HC_HCSPARAMS1, HC_HCSPARAMS2, HC_HCCPARAMS1, 0,
+                          HC_DBOFF, HC_RTSOFF, HC_MAPPED, F10, &other),
+             XHCI_HC_BAD_VERSION, "refused by the 1.0 floor under it");
+
+    /* The TD Size form. */
+    CHECK_EQ(XhciTdSizeFormOf(0x0096UL), XHCI_TD_SIZE_FORM_KIB, "0.96: KiB");
+    CHECK_EQ(XhciTdSizeFormOf(0x00FFUL), XHCI_TD_SIZE_FORM_KIB, "0.FF: KiB");
+    CHECK_EQ(XhciTdSizeFormOf(0x0100UL), XHCI_TD_SIZE_FORM_PACKETS,
+             "1.0: packets");
+    CHECK_EQ(XhciTdSizeFormOf(0x0120UL), XHCI_TD_SIZE_FORM_PACKETS,
+             "1.2: packets");
+
+    /* The counter words (record 17 section 4.14.7). */
+    CHECK_EQ(XhciVersionPairWord(0x0100UL, 0x0096UL), 0x00960100UL,
+             "the override: register 0100h, effective 0096h");
+    CHECK_EQ(XhciVersionPairWord(0x0096UL, 0x0096UL), 0x00960096UL,
+             "a real 0.96 part");
+    CHECK_EQ(XhciVersionPairWord(0xFFFFUL, 0xFFFFUL), 0xFFFFFFFFUL,
+             "a register read as FFFFh");
+    CHECK_EQ(XhciVersionPolicyWord(F096, 0, 0, 0), 0x00000096UL,
+             "unread: the floor alone, bit 21 clear");
+    CHECK_EQ(XhciVersionPolicyWord(F096, 0, 0, 1), 0x00200096UL,
+             "read FFFFh and refused: bit 21 tells it from unread");
+    CHECK_EQ(XhciVersionPolicyWord(F10, 0, 0, 1), 0x00200100UL,
+             "a 0.96 part refused at the 1.0 floor: no form");
+    CHECK_EQ(XhciVersionPolicyWord(F096, XHCI_TD_SIZE_FORM_KIB, 1, 1),
+             0x00320096UL, "the override accepted: KiB, bits 20 and 21");
+    CHECK_EQ(XhciVersionPolicyWord(F096, XHCI_TD_SIZE_FORM_PACKETS, 0, 1),
+             0x00210096UL, "a 1.0 controller at the default");
+    CHECK_EQ(XhciVersionPolicyWord(F10, XHCI_TD_SIZE_FORM_PACKETS, 0, 1),
+             0x00210100UL, "a 1.0 controller at 0");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2201,6 +2391,7 @@ int main(void)
     test_rate();
     test_unlisted_fallback();
     test_hc_info();
+    test_version_floor();
     test_port_map_equal();
     test_digest_collision();
     test_replay_e460();

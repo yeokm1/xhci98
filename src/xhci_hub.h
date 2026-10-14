@@ -394,9 +394,26 @@ ULONG XhciHubReleaseOrder(const ULONG *parent, ULONG count, ULONG top,
  * is presented.
  */
 
+/* The four bases of the bus's own device ids, the one place they are
+ * spelled (roadmap-hcd.md task 38.8; design record 13 section 10.13.1):
+ * hcd_rh.c, XhciHubPdoId and XhciFuncParentId build every answer from
+ * them, the host suite spells each out, and the INF gate refuses an INF
+ * whose models name any other (HCD-IDSRC). Under USB\ since 2.4.0.0, as a
+ * device id's first component names its enumerator and there is no XHCI98
+ * bus; XHCI98\ROOT_HUB and the like before. Private names no stock or
+ * vendor INF row carries (section 10.13.2), and no PDO of these kinds
+ * answers a compatible id. XHCI_ID_WIDE makes the root hub's UTF-16 copy
+ * from the same spelling. */
+#define XHCI_ID_ROOT_HUB            "USB\\XHCI98_ROOT_HUB"
+#define XHCI_ID_HUB                 "USB\\XHCI98_HUB"
+#define XHCI_ID_HUB30               "USB\\XHCI98_HUB30"
+#define XHCI_ID_COMPOSITE           "USB\\XHCI98_COMPOSITE"
+#define XHCI_ID_WIDE2(s)            L ## s
+#define XHCI_ID_WIDE(s)             XHCI_ID_WIDE2(s)
+
 /* The ids a hub PDO answers, project-owned so no OS hub INF matches them:
- * XHCI98\HUB (a USB 2.0 or 1.1 hub, or a USB 3 hub's USB 2.0 half) or
- * XHCI98\HUB30 (a USB 3 hub's SuperSpeed half), qualified by the device
+ * XHCI_ID_HUB (a USB 2.0 or 1.1 hub, or a USB 3 hub's USB 2.0 half) or
+ * XHCI_ID_HUB30 (a USB 3 hub's SuperSpeed half), qualified by the device
  * descriptor's idVendor, idProduct and bcdDevice. NUL-terminated strings,
  * a second NUL closing a multi-string (the hardware ids), upper-case hex,
  * as XhciFuncId writes them; *used is the length the answer needs, NULs

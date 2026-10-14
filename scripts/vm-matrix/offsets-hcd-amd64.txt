@@ -1,4 +1,4 @@
-SIZEOF 648
+SIZEOF 964
 CommandsGivenUp 92
 DevicesAddressed 4
 EndpointConfigureFailures 60

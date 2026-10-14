@@ -11,6 +11,8 @@
  */
 
 #include <stdio.h>
+#include <stddef.h>
+#include <string.h>
 #include "../src/xhci.h"
 #include "../src/xhci_enum.h"
 #include "../src/xhci_hub.h"
@@ -497,6 +499,39 @@ static int same_text(const char *got, ULONG used, const char *want,
     return 1;
 }
 
+/*
+ * The four bases of the bus's own ids (task 38.8; design record 13 section
+ * 10.13.1), spelled out here once more so a typo in xhci_hub.h fails a
+ * test: the C builds every answer from that header and the INF gate ties
+ * the INFs to it (HCD-IDSRC), so this is the one place a wrong spelling
+ * could be caught before a guest. The root hub's UTF-16 copy (hcd_rh.c,
+ * XHCI_ID_WIDE) is checked character by character against the narrow one.
+ */
+static void test_hub_id_bases(void)
+{
+    static const wchar_t wide[] = XHCI_ID_WIDE(XHCI_ID_ROOT_HUB);
+    static const char narrow[] = XHCI_ID_ROOT_HUB;
+    ULONG i;
+
+    CHECK(strcmp(XHCI_ID_ROOT_HUB, "USB\\XHCI98_ROOT_HUB") == 0,
+          "root hub base");
+    CHECK(strcmp(XHCI_ID_HUB, "USB\\XHCI98_HUB") == 0, "hub base");
+    CHECK(strcmp(XHCI_ID_HUB30, "USB\\XHCI98_HUB30") == 0, "SS hub base");
+    CHECK(strcmp(XHCI_ID_COMPOSITE, "USB\\XHCI98_COMPOSITE") == 0,
+          "composite base");
+    CHECK_EQ(sizeof(wide) / sizeof(wide[0]), sizeof(narrow),
+             "root hub: wide copy the same length");
+    for (i = 0; i < sizeof(narrow); i++) {
+        CHECK_EQ((ULONG)wide[i], (ULONG)(UCHAR)narrow[i],
+                 "root hub: wide copy the same characters");
+    }
+    /* One USB\ component each, no second backslash (a device id's rule). */
+    CHECK(strchr(XHCI_ID_ROOT_HUB + 4, '\\') == NULL, "root hub: one \\");
+    CHECK(strchr(XHCI_ID_HUB + 4, '\\') == NULL, "hub: one \\");
+    CHECK(strchr(XHCI_ID_HUB30 + 4, '\\') == NULL, "SS hub: one \\");
+    CHECK(strchr(XHCI_ID_COMPOSITE + 4, '\\') == NULL, "composite: one \\");
+}
+
 static void test_hub_pdo_ids(void)
 {
     /* A VIA VL813-style USB 2.0 half 2109:2813 rev 0x9093, and its
@@ -505,14 +540,15 @@ static void test_hub_pdo_ids(void)
                      0x09, 0x21, 0x13, 0x28, 0x93, 0x90, 0, 0, 0, 1 };
     UCHAR ss[18] = { 18, 1, 0x00, 0x03, 9, 0, 3, 9,
                      0x09, 0x21, 0x13, 0x08, 0x93, 0x90, 0, 0, 0, 1 };
-    static const char devHs[] = "XHCI98\\HUB&VID_2109&PID_2813";
-    static const char hwHs[] = "XHCI98\\HUB&VID_2109&PID_2813&REV_9093\0"
-                               "XHCI98\\HUB&VID_2109&PID_2813\0"
-                               "XHCI98\\HUB\0";
-    static const char devSs[] = "XHCI98\\HUB30&VID_2109&PID_0813";
-    static const char hwSs[] = "XHCI98\\HUB30&VID_2109&PID_0813&REV_9093\0"
-                               "XHCI98\\HUB30&VID_2109&PID_0813\0"
-                               "XHCI98\\HUB30\0";
+    static const char devHs[] = "USB\\XHCI98_HUB&VID_2109&PID_2813";
+    static const char hwHs[] = "USB\\XHCI98_HUB&VID_2109&PID_2813&REV_9093\0"
+                               "USB\\XHCI98_HUB&VID_2109&PID_2813\0"
+                               "USB\\XHCI98_HUB\0";
+    static const char devSs[] = "USB\\XHCI98_HUB30&VID_2109&PID_0813";
+    static const char hwSs[] =
+        "USB\\XHCI98_HUB30&VID_2109&PID_0813&REV_9093\0"
+        "USB\\XHCI98_HUB30&VID_2109&PID_0813\0"
+        "USB\\XHCI98_HUB30\0";
     char out[160];
     ULONG used;
     ULONG i;
@@ -530,12 +566,18 @@ static void test_hub_pdo_ids(void)
     CHECK_EQ(XhciHubPdoId(ss, 1, 0, XHCI_HUBPDO_ID_HARDWARE, out,
                           sizeof(out), &used), XHCI_HUBPDO_OK, "SS hw ids");
     CHECK(same_text(out, used, hwSs, sizeof(hwSs)), "SS hardware ids");
+    /* The longest hub answer (design record 13 section 10.13.1): 97 with
+     * its NULs, inside hcdHubQueryId's 128. */
+    CHECK_EQ(used, 97, "SS hardware ids: 97 with both NULs");
+    CHECK_EQ(sizeof(hwHs), 91, "hub hardware ids: 91 with both NULs");
 
-    /* Nothing under the USB\ enumerator, ever: no OS hub INF may match. */
-    for (i = 0; i + 4 <= used; i++) {
-        CHECK(!(out[i] == 'U' && out[i + 1] == 'S' && out[i + 2] == 'B' &&
-                out[i + 3] == '\\'),
-              "no USB\\ id on a hub");
+    /* Under USB\ since task 38.8, but every string still begins with the
+     * project's own private base, so no OS hub INF row (USB\ROOT_HUB*,
+     * USB\Class_09, USB\HUBCLASS, a VID/PID) can match (section 10.13.2). */
+    for (i = 0; i < used - 1; ) {
+        CHECK(strncmp(out + i, XHCI_ID_HUB30, sizeof(XHCI_ID_HUB30) - 1) == 0,
+              "every SS hub id begins USB\\XHCI98_HUB30");
+        i += (ULONG)strlen(out + i) + 1;
     }
 
     CHECK_EQ(XhciHubPdoId(hs, 0, 0x0102UL, XHCI_HUBPDO_ID_INSTANCE, out,
@@ -846,6 +888,7 @@ int main(void)
     test_hub_ex_speed();
     test_hub_ex_v2();
     test_hub_desc_plan();
+    test_hub_id_bases();
     test_hub_pdo_ids();
     test_hub_presented_parent();
     test_hub_port_location();

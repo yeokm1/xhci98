@@ -39,7 +39,8 @@ findings; read it before changing the xHCI interrupt or C6 paths.
 The tool's own version line ended at v0.11. `TOOL_VERSION` in `qual.h` now
 expands `XHCI_VER_STR` out of `../src/xhci_version.h`, so the tool reports the
 driver's package version. The qualifier is published inside a release
-directory beside `xhci98.sys`, and a tool answering with a different number
+directory beside `xhci98.sys`, in `tools\xhciqual\` (before `2.4.0.0`,
+`xhciqual\` at the version root), and a tool answering with a different number
 would tie a saved log to the wrong artifact. `make-release.ps1` refuses a cut
 whose `qual.h` has been edited back to a literal. So there is nothing to bump
 here: bump the header, then rebuild this tool, which the release script also
@@ -72,14 +73,17 @@ a machine said on a day.
 
 - Tier A: PCI discovery for class codes `0C0330` (xHCI), `0C0320` (EHCI) and
   `0C0310` (OHCI): VID/DID/rev, Command/BME, BAR0 below 4 GB, MSI/MSI-X caps,
-  Interrupt Pin/Line, and VID/DID quirk lookup. The Intel `XUSB2PR` routing
+  Interrupt Pin/Line, and VID/DID quirk lookup (xHCI; "The `quirks:`
+  lines" below). The Intel `XUSB2PR` routing
   registers are reported here but are read by C7, which is Tier C, so
   `--probe-only` shows no routing values. The xHCI's interrupt routing in
   an Intel PCH (`D20IP`, `D20IR`, `PIRQx_ROUT`) is a different thing, read
   in every mode on the reviewed chipsets alone ("Intel PCH interrupt
   routing" below).
-- Tier B: family-specific capability introspection. xHCI reports HCIVERSION,
-  context size, slots/interrupters/ports, scratchpads, PPC, `HCCPARAMS2`
+- Tier B: family-specific capability introspection. xHCI reports HCIVERSION
+  (and, below 1.0, what xhci98 does with it: from 0.96 it drives the
+  controller under `XhciAccept096` at its default, below 0.96 it refuses it;
+  roadmap-hcd task 38.11, design record 17 section 4.14), context size, slots/interrupters/ports, scratchpads, PPC, `HCCPARAMS2`
   (U3C/CMC/FSC), USBLEGSUP, and USB2/USB3 protocol topology with each
   protocol's speed table (PSI entries) decoded, plus, in the log and on the
   serial line only, the raw extended-capability chain ("Raw
@@ -88,7 +92,9 @@ a machine said on a day.
   declines every controller Save State, so a resume rebuilds the bus instead
   of restoring it (`docs/using/release-notes.md`, "Known limitations"). Read the bit,
   never the version: it is optional at xHCI 1.0 rather than absent, so a 1.0
-  controller may advertise it. A controller whose `CAPLENGTH` stops before
+  controller may advertise it. Below 1.0 the line shows the raw value only:
+  what offset 1Ch means on a 0.96 part is not established, and the driver
+  takes FSC and LEC as 0 there. A controller whose `CAPLENGTH` stops before
   `0x20` has no such register and the line says `absent`. EHCI reports
   HCIVERSION, HCSPARAMS/HCCPARAMS, root ports, PPC, and its PCI legacy
   capability. OHCI reports HcRevision and both root-hub descriptors.
@@ -116,6 +122,63 @@ a machine said on a day.
 - Tier D: fact sheet, a `FACT` line (machine-readable seed for the Phase 4
   parameter tables) plus one `DEV` line per identified device, and the
   section 8 go/no-go verdict.
+
+### The `quirks:` lines
+
+Each xHCI report opens with what `quirks.c` knows of the controller's
+vendor and device id. Linux is the authority for that table: every row is
+read from `drivers/usb/host/xhci-pci.c` and `pci-quirks.c` in
+`external/linux` at the pinned commit, and design record 20
+(`docs/contributing/design/20-linux-xhci-quirks.md`) is the survey it
+follows. Since roadmap-hcd task 38.10 the table carries every id of the
+Linux quirks the driver takes (record 20 section 3.1), and each line says
+which kind of entry it is:
+
+- **A quirk the driver takes** names the driver's registry value first and
+  the Linux flag beside it, for example
+  `XhciStreamsOff (Linux XHCI_BROKEN_STREAMS)`, with what the driver does
+  on the line below it (every item is two lines at most, so each fits the
+  80-column screen). The values are `XhciMsiAvoid`, `XhciStreamsOff`,
+  `XhciResumeReinit`, `XhciIntelShutdownToEhci`, `XhciShutdownReset` (off
+  by default in the driver, and the line says so), `XhciSuspendHaltDelay`,
+  `XhciSuspendHaltTimeout`, `XhciAsmediaFlowControl`, `XhciTiIntervalCap`,
+  `XhciIntervalCap`, `XhciStuckLinkReset`, `XhciStreamRingPad`,
+  `XhciControlLinkNoOp`, `XhciIsochSpuriousSuccess` and
+  `XhciAmdSuspendBitClear`. The line says Linux lists the controller; what
+  the driver does on a given machine also depends on the value set in its
+  registry key, which `XHCISNAP` reports.
+- **A Linux flag the driver covers without a value of its own** names the
+  flag and says `covered` (`XHCI_SPURIOUS_SUCCESS`, `XHCI_AVOID_BEI`,
+  `XHCI_ZHAOXIN_HOST`), or states what it is (`XHCI_PME_STUCK_QUIRK`).
+- **A Linux flag the driver does not take** names the flag and says `not
+  taken by the driver`: `XHCI_SW_BW_CHECKING` on Panther Point `8086:1E31`,
+  and `XHCI_AMD_PLL_FIX`, which Linux sets on every AMD xHCI when the
+  chipset is an SB700 at revision 3Bh or below, an SB800, a Hudson-2 or a
+  Bolton. The tool does not look for that chipset, so the line says when
+  it would apply.
+
+Rows are of two forms. An exact row names a vendor and a device. A
+vendor-wide row stands for what Linux sets on every device of a vendor:
+VIA (`1106`, `XhciResumeReinit`), Zhaoxin (`1D17`) and AMD (`1022`, the
+reach of the driver's `XhciIntervalCap` and the PLL note). Both are
+printed, the exact row first, each as its own `quirks:` line with its own
+items, so a VIA VL800 shows `XhciStreamsOff` from its id and
+`XhciResumeReinit` from its vendor. A flag is on one of the two rows,
+never both, so nothing is printed twice. A controller with neither row
+prints `quirks: none known for this VID/DID`.
+
+No revision is matched (record 20 section 6.3): `XhciSuspendHaltTimeout`
+is printed on every revision of the Fresco Logic FL1000 although Linux
+keys `XHCI_SLOW_SUSPEND` on revision 04, because the driver takes it on
+every revision. The revision is in the report's heading line.
+
+When a listed controller's HCIVERSION is below the driver's floor (1.0
+today; 0.96 once roadmap-hcd task 38.11 lands), the last item says so -
+`HCIVERSION 0.96 is below xhci98's floor 1.00`, then `the driver refuses
+this controller: none of the above acts on it` - because the driver will
+not start it and no value named above acts on it. The ASMedia ASM1042, which Linux
+says reports 0.96, is the known case. Nothing is said when MMIO was not
+readable.
 
 ## Build (Windows host)
 
@@ -182,6 +245,21 @@ legacy DMI one, bad checksums, a table above 4 GB), structure tables
 range), the memory sums, CPUID decoding and the no-SMBIOS fallback. Every
 table plants a serial number, UUID, asset tag, SKU and part number, and
 every printed line is checked for each.
+`xhciqual/test/test_stamp.c` (roadmap task 38.1) covers `stamp.c`, the
+`--log-stamp` name: months 1, 9, 10, 11 and 12 (`1`, `9`, `A`, `B`,
+`C`), midnight, the next free letter when `A` is taken, the first free
+letter rather than the one past the highest, all 26 taken (refused, with
+every letter asked about and none past `Z`), and a clock that is not a
+date and time.
+`xhciqual/test/test_quirks.c` (roadmap task 38.10) covers `quirks.c`:
+for each quirk the driver takes, every id design record 20 section 3.1
+lists carries its flag and prints its registry value and Linux flag, and
+no other row carries it; the vendor-wide rows match an unlisted device of
+their vendor and are never what `quirk_find` returns; at most one per
+vendor, no flag on both an exact row and its vendor's row, no duplicate
+row; the neighbours of listed ids and the same device under another
+vendor do not match; and the HCIVERSION floor note appears for a listed
+part below 1.0 only, and not when HCIVERSION was not read.
 
 That code lives in its own translation unit so it can be tested here, because
 the QEMU matrix cannot reach the field-dependent branches. SeaBIOS leaves
@@ -260,10 +338,15 @@ scan means "not qualified here", not "something went wrong", and a
 this tool does not know, or a bad value for one. **3** (from 2.2.0.3) is a
 full active run whose controllers were all qualified and at least one only
 **QUALIFIED WITH CAVEATS** - no working interrupt, so the driver polls it;
-see "What a verdict means". The batch wrappers bucket
+see "What a verdict means". **4** (from roadmap-hcd task 38.1) is a
+`--log-stamp` run refused before anything was read: the DOS clock is not a
+date and time, the minute's 26 names are all taken, or the log cannot be
+created. The batch wrappers bucket
 these with `IF ERRORLEVEL` and pair them with `--done-flag`, which is what
 separates a bad verdict from a crash - the flag is written on any normal exit,
-including a usage error. (Stated here because the audit of 2026-09-07 found
+including a usage error, but for one: a `--log-stamp` run refused because it
+cannot write here does not try a flag in that same directory (exit 4
+alone). (Stated here because the audit of 2026-09-07 found
 this file describing it two ways.)
 
 "One screen" was measured in QEMU: three controllers print 13 lines (11
@@ -309,6 +392,64 @@ you install: check the machine" section of
 [`../docs/using/release-notes.md`](../docs/using/release-notes.md), which
 also carries the four quick-scan verdicts. Keep the two in step: that
 section is a rendering of this one, and this file is the normative copy.
+
+### A field report: `QUALREP.BAT`
+
+A reporter asked for an `XHCIQUAL` reading (the field reports of
+roadmap-hcd task 37.2) runs one batch file. `QUALREP.BAT` ships in the
+release's `tools\xhciqual\` beside `XHCIQUAL.EXE`; copy both to a writable
+directory on non-target storage (not the root of `C:\`), boot MS-DOS 7.x,
+change to that directory and run:
+
+```bat
+QUALREP
+```
+
+It runs `XHCIQUAL --probe-only --no-page --log-stamp --done-flag
+QUALREP.FLG`: read-only (step 1 of the recommended order, so no PCI
+configuration write and no ownership taken), with the log named from the
+DOS clock in the current directory, never overwriting an earlier one, so
+it can be run again. It first checks that `XHCIQUAL.EXE` is in the current
+directory and that it can delete a stale completion flag, then runs the
+tool. The last line printed names the file to attach (owner, 2026-10-13),
+and where the tool can report the outcome it does, so the batch prints
+nothing after it but its `pause`: a completed reading ends on the tool's
+`Log written: mDDhhmmS.LOG - attach this file`, and a refusal (exit 4) on
+the tool's own reason, `XHCIQUAL: cannot write here` for a write-protected
+or full disk, and a last line saying there is no file to attach. An
+**Abort** answer to DOS's `Abort, Retry, Fail?` is handed to DOS as Fail
+(below), so it ends on the same `cannot write here`. The batch speaks only
+for what the tool cannot: exit code 0, which `--probe-only` never returns
+and which is what an Abort DOS would not let the tool turn into Fail
+leaves (DOS ends the program itself, past the DOS extender's exit, so the
+batch asks for a cold boot before XHCIQUAL runs again), and a run that
+ended without writing the completion flag (`IF EXIST`; a DOS/32A fault ends
+with exit code 255), which is the cold-boot case too. Those branches end on
+"attach the newest .LOG in this directory", since the tool never said a
+name. It deletes the flag and no log. Every line it prints fits 79
+columns. 8.3 name, ASCII, CRLF, `COMMAND.COM` built-ins only, and nothing
+on an `echo` or `rem` line that `COMMAND.COM` could read as a redirection
+or a variable.
+
+Why Abort is answered as Fail (defect DOS-1, found on the 38.1 MS-DOS
+leg, 2026-10-13): an Abort makes DOS end the process from inside its own
+critical-error code, an internal jump to its exit (MS-DOS 4.0 source,
+`CTRLC.ASM`, `DoAbort`), not through the INT 21h vector. DOS/32A runs its
+exit - putting back the real-mode INT 21h, 15h, 1Bh, 1Ch, 23h, 24h and 2Fh
+vectors, freeing its XMS block, restoring A20 - only when it sees an
+INT 21h AH=4Ch through its own real-mode INT 21h hook (DOS/32A 9.1.2
+source as Open Watcom v2 carries it, `contrib/extender/dos32a/src/dos32a`,
+`text/kernel/exit.asm` and `text/kernel/misc.asm`), so after an Abort
+those vectors still pointed into the freed extender, and the next DOS/32A
+program in that boot (any XHCIQUAL, even `--help`) hung after the banner
+with interrupts off. DOS/32A guards Ctrl-C (its protected-mode INT 23h
+only sets a flag) but leaves INT 24h to `COMMAND.COM`. So XHCIQUAL, first
+thing, chains the real-mode INT 24h with a 27-byte stub in conventional
+memory: `COMMAND.COM` still asks and Retry still retries, and an Abort
+reaches DOS as Fail where DOS allows Fail for that error (where it does
+not, DOS would turn a Fail into an Abort anyway). The previous vector is
+put back at exit, and DOS/32A's own exit restores the one it saved if the
+tool faults first.
 
 ### The staged procedure
 
@@ -422,7 +563,44 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   disables paging).
 - `--log [filename]`: save the report; the filename defaults to
   `XHCIQUAL.LOG`. No log file is created unless `--log` is present.
-  `--log=filename` is also accepted.
+  `--log=filename` is also accepted. It replaces a file of the same name.
+- `--log-stamp` (roadmap-hcd task 38.1, owner 2026-10-13): save the report
+  to a **new** log in the current directory, named from the DOS clock
+  (INT 21h `2Ah` and `2Ch`) as `mDDhhmmS.LOG`: `m` the month as one hex
+  digit (`1` to `9`, then `A`, `B`, `C`), `DD` the day, `hh` the hour,
+  `mm` the minute, and `S` the first letter from `A` to `Z` for which no
+  file of that name exists, so `A131425A.LOG` is 13 October, 14:25, and a
+  second run in the same minute writes `A131425B.LOG`. It never overwrites:
+  the log is created with INT 21h `5Bh` ("create new file"), which fails
+  rather than truncate, and a name taken between the check and the create
+  moves on to the next letter; the handle so created is the one the report
+  writes to. The `5Bh` is made in real mode through DPMI `0300h`
+  (`sys_dos_creatnew`, `sysprobe.c`), not with the C library's
+  `_dos_creatnew`: issued in protected mode, DOS/32A 9.1.2 creates the file
+  but hands back `5B00h` in place of the handle, so every write failed
+  with error 6 and the log stayed 0 bytes (found on the 38.1 MS-DOS leg,
+  2026-10-13; the screen said `Log written` all the same). A write that
+  fails or falls short now ends the run on `Log NOT complete` instead of
+  `Log written`. The log is created before any sink is opened, so a refusal
+  with `--serial` has not touched COM1.
+  The year is not in the name; the log's second line carries the full date
+  and time (`Log: A131425A.LOG, begun 2026-10-13 14:25:07 by the DOS
+  clock`), and the run ends on `Log written: A131425A.LOG - attach this
+  file`. It is refused, with exit **4** and its own message, before
+  anything is read, when the clock is not a date and time (a zero or
+  out-of-range field), when `A` to `Z` are all taken for that minute, or
+  when the log cannot be created (which a plain `--log` only warns about;
+  this refusal begins `XHCIQUAL: cannot write here`, and the
+  `--done-flag`, when it names a file in the current directory, is not
+  tried, since on a write-protected disk it would be a second
+  Abort, Retry, Fail). Each refusal's last line says that no log was
+  written, so there is no file to attach.
+  Not with `--log` (exit 2). A modifier like the others, so pair it with
+  `--quick` or `--probe-only` for a read-only run. The name is built by
+  `stamp.c`, a pure function of the clock's fields and an "exists"
+  predicate (and, for the create, `stamp_create` with an injected create),
+  and is the scheme `XHCISNAP` uses for its own outputs.
+  `QUALREP.BAT` below is its caller.
 - `--gsi N`, also `--gsi=N` (N decimal, 0 to 255): compare the Intel PCH
   routing against N, the interrupt Windows reports for the controller
   ("Intel PCH interrupt routing" below). It is accepted only beside
@@ -497,7 +675,7 @@ automatic, or 2), which costs more CPU wake-ups and up to the poll period of
 event latency (`XhciPollIdleMs`, 50 ms by default, when idle); or an
 MSI-capable OS - the tool reads the PCI capability list (05h MSI, 11h MSI-X)
 and says whether Windows Vista and 7 can take a message interrupt instead
-(x64 directly, 32-bit with the `xhcimsi.sys` helper), or that polling is the
+(x64 directly, 32-bit with the `xhcihlpr.sys` helper), or that polling is the
 only route. One case differs: a controller whose pending bit (IMAN.IP) was
 never seen, through both of C4's waits, is not one automatic mode can see -
 the driver moves a line to polling when it sees IP asserted and nothing
@@ -575,7 +753,21 @@ powershell -ExecutionPolicy Bypass -File xhciqual\test\run-win98-batch.ps1
 
 The wrappers use only `COMMAND.COM` built-ins: `IF ERRORLEVEL` for the exit
 code and `IF EXIST` on XHCIQUAL's `--done-flag` completion sentinel (no
-`FIND.EXE`).
+`FIND.EXE`). Seven cases drive `QUALREP.BAT` (task 38.1): one reading, whose
+last line before the pause must be `Log written:`; one (`qualrep_log`) that
+reads the stamped log back - QUALREP, then a plain `--log` run of the same
+probe, both files copied to COM1 and compared on the host, so a stamped log
+that is empty or differs from the `--log` report beyond its `Log:` line and
+its ending fails (the 38.1 MS-DOS leg's 0-byte logs passed a screen-only
+check); three on a write-protected B:, answering Fail and Abort (both
+XHCIQUAL's own "cannot write here" last, since Abort is handed to DOS as
+Fail) and Abort followed by a second XHCIQUAL in the same boot, which must
+complete (`qualrep_abort_rerun`: before DOS-1 was fixed it hung at the
+DOS/32A banner); two in one boot
+with the guest clock pinned (`-rtc base=2026-10-13T14:25:00,clock=vm`),
+where `DIR /B` must list `A1314mmA.LOG` and then the same minute's `B`;
+and one at 31 December 23:58 with every letter of 23:58 and 23:59 already
+on the disk, which must refuse and write nothing.
 
 ### The Win98 boot image
 

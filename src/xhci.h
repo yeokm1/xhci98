@@ -37,6 +37,7 @@
  * 12 section 3.3), embedded for the same reason. */
 #include "xhci_vhub.h"
 #include "xhci_tol.h"
+#include "xhci_quirk.h"
 
 /* ------------------------------------------------------------------ */
 /* Hardware structures referenced by the layout                        */
@@ -357,6 +358,55 @@ XHCI_C_ASSERT(event_type_range_is_eight_wide, XHCI_EVENT_TYPE_COUNT == 8);
 #define XHCI_HCIVERSION_OF(dw0) ((((ULONG)(dw0)) >> 16) & 0xFFFFUL)
 #define XHCI_HCIVERSION_1_0     0x0100UL
 #define XHCI_HCIVERSION_1_1     0x0110UL
+/*
+ * Task 38.11 (design record 17 section 4.14): the oldest revision this driver
+ * starts, behind XhciAccept096. Everything below it stays refused at every
+ * value of the gate - 0.95 and earlier are Linux's Link TRB quirk territory -
+ * and a value from 0x0097 to 0x00FF, which no published revision carries, is
+ * below 1.0 and driven by the 0.96 rules.
+ */
+#define XHCI_HCIVERSION_0_96    0x0096UL
+
+/*
+ * The floor a start latches from XhciAccept096 (record 17 section 4.14.4):
+ * `found` is 1 when the value was a REG_DWORD, 0 when it was absent or of
+ * another type. Only a DWORD 0 restores the 1.0 floor of 2.3.1.0; absent,
+ * another type and every other number is the 0.96 floor. IRQL: any (pure).
+ */
+ULONG XhciVersionFloor(ULONG found, ULONG value);
+
+/*
+ * The capability dword 0 the driver decodes (record 17 sections 4.14.4 and
+ * 4.14.10, D7): `raw` with bits 31:16 replaced by `override` when it is
+ * 0x0001 to 0xFFFE, CAPLENGTH and the rest kept; any other `override` (0 is
+ * "none"), and an all-ones `raw` - a device not decoding, which the check
+ * must still see as one - return `raw` unchanged. Only the qemu flavour ever
+ * passes a nonzero override (XhciQemuHciVersion). IRQL: any (pure).
+ */
+ULONG XhciEffectiveCapDword0(ULONG raw, ULONG override);
+
+/*
+ * The TD Size form a controller of HCIVERSION `hciVersion` is written in
+ * (record 17 section 4.14.5): packets from 1.0, KiB below it. The KiB form is
+ * also what selects the other departures below 1.0 in the transfer builders
+ * (D2 and D3), so it is the one version input they take. IRQL: any (pure).
+ */
+#define XHCI_TD_SIZE_FORM_PACKETS   1UL
+#define XHCI_TD_SIZE_FORM_KIB       2UL
+ULONG XhciTdSizeFormOf(ULONG hciVersion);
+
+/*
+ * The two counter words of record 17 section 4.14.7 beside the value read.
+ * The versions word: bits 15:0 the register's own HCIVERSION, 31:16 the
+ * effective one. The policy word: bits 15:0 the floor, 19:16 the TD Size form
+ * (0 before the check accepted a version), bit 20 the qemu flavour's override
+ * applied, bit 21 the versions word written. IRQL: any (pure).
+ */
+#define XHCI_VERSION_POLICY_OVERRIDE    0x00100000UL
+#define XHCI_VERSION_POLICY_READ        0x00200000UL
+ULONG XhciVersionPairWord(ULONG registerVersion, ULONG effectiveVersion);
+ULONG XhciVersionPolicyWord(ULONG floor, ULONG form, ULONG overrideApplied,
+                            ULONG versionsRead);
 
 /*
  * Force Save Context Capability, HCCPARAMS2 bit 2 (Table 5-16, p.355). It
@@ -1198,6 +1248,22 @@ ULONG XhciPoolAcquire(PXHCI_RING_POOL pool,
                       ULONG ringless,
                       ULONG *poolIndex);
 
+/*
+ * The same within an interface switch (design record 20 section 5.2,
+ * roadmap-hcd.md task 38.10): `reserved` of the rings the device holds are
+ * the ones the switch's own command drops - the pipes it detached and any
+ * left stale by an earlier failure - held until a proof releases them, so
+ * they are not taken against the per-device cap; a device may then hold up
+ * to twice the cap while a switch is in flight. The fairness rule counts
+ * every ring held. XhciPoolAcquire is this with 0. IRQL: any (the caller
+ * holds the lock).
+ */
+ULONG XhciPoolAcquireReserved(PXHCI_RING_POOL pool,
+                              ULONG deviceRef,
+                              ULONG ringless,
+                              ULONG reserved,
+                              ULONG *poolIndex);
+
 /* Release one ring. Refuses an index that is free, or that a different device
  * owns - both are bookkeeping errors that would otherwise hand the same ring to
  * two endpoints. IRQL: any. */
@@ -1804,7 +1870,10 @@ typedef struct _XHCI_HC_INFO {
      * puts the operational registers on top of the address. This comment said
      * "HCCPARAMS2 arrived in xHCI 1.1" until audit round 4 refuted it, and the
      * version gate it described is gone; see XhciDeriveHcInfo for the two gates
-     * that remain and XHCI_HCCPARAMS2_FSC for what the bit decides.
+     * that remain and XHCI_HCCPARAMS2_FSC for what the bit decides. Below 1.0
+     * (task 38.11, D4) the register is not believed at all, which is a
+     * statement about 0.96 parts, not about 1.0 ones: what offset 1Ch means
+     * there is unread, and Linux reads it only above 1.0.
      *
      * Zero is the safe direction in both senses: it is what a controller that
      * does not implement the register would ideally answer, and it is the value
@@ -1847,10 +1916,16 @@ typedef struct _XHCI_HC_INFO {
  * Enable clear, D3, a bad BAR mapping, or a removed device - and every later
  * read would be equally meaningless.
  *
+ * `floor` is the start's latched XhciVersionFloor (task 38.11):
+ * XHCI_HCIVERSION_0_96 accepts from 0.96, and any other value - 0 included,
+ * so a path that never latched one keeps 2.3.1.0's behaviour - from 1.0.
+ * 0xFFFF is refused at either floor.
+ *
  * Either output pointer may be NULL. IRQL: any (pure).
  */
 ULONG XhciCheckCapDword0(ULONG capDword0,
                          ULONG mappedBytes,
+                         ULONG floor,
                          ULONG *capLength,
                          ULONG *hciVersion);
 
@@ -1864,7 +1939,10 @@ ULONG XhciCheckCapDword0(ULONG capDword0,
  * read (or 0 when the window is too small to read it at all) and this function
  * decides whether to believe it. Both gates
  * are here rather than at the call site so that "does this controller declare
- * FSC" has exactly one answer - and so that the host suite can ask it.
+ * FSC" has exactly one answer - and so that the host suite can ask it. A
+ * third is the version (task 38.11, D4): below 1.0 the register is taken as
+ * 0, as Linux never reads it there; from 1.0 it is read on reach alone.
+ * `floor` is XhciCheckCapDword0's.
  *
  * IRQL: any (pure).
  */
@@ -1876,6 +1954,7 @@ ULONG XhciDeriveHcInfo(ULONG capDword0,
                        ULONG dboff,
                        ULONG rtsoff,
                        ULONG mappedBytes,
+                       ULONG floor,
                        PXHCI_HC_INFO info);
 
 /* Do two derivations describe the same controller? The init sequence derives
@@ -2953,6 +3032,24 @@ ULONG XhciRingEnqueueTd(PXHCI_RING ring,
                         ULONG *firstTrbPA);
 /* The single-TRB case: every command, and any transfer that fits in one TRB. */
 ULONG XhciRingEnqueue(PXHCI_RING ring, const XHCI_TRB *trb, ULONG *trbPA);
+
+/*
+ * Task 38.10, XhciControlLinkNoOp (design record 20 section 4.13; Linux's
+ * XHCI_ETRON_HOST on the EJ168 and EJ188): before a SuperSpeed control
+ * transfer of `groupCount` TRBs, when the enqueue pointer rests on the last
+ * TRB before the Link TRB - where the Setup Stage would sit with its Data
+ * Stage beyond the link - one Transfer No Op TRB (6.4.1.4: type 8, no
+ * Chain, no IOC, Interrupter Target 0) is published there as a TD of its
+ * own, so the control transfer starts after the link. The room check
+ * counts the No Op and the whole group together, so nothing is written
+ * unless both fit: XHCI_RING_FULL then, with the ring untouched. `*padded`
+ * is 1 when the No Op was placed. Anywhere else the ring is untouched and
+ * XHCI_RING_OK returned. A No Op TD is the shape a cancelled TD is
+ * rewritten to (XhciRingNoOpAt), so nothing that walks the ring meets a
+ * new kind of TRB. IRQL: any; the caller's ring lock.
+ */
+ULONG XhciRingControlLinkPad(PXHCI_RING ring, ULONG groupCount,
+                             PULONG padded);
 
 /*
  * Where a group landed. The two indices are what a caller's own bookkeeping
@@ -4243,6 +4340,20 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG RetryToken;
     ULONG RetryReplay;
     ULONG RetryDiverts;
+
+    /*
+     * Task 38.10, XhciIsochSpuriousSuccess (design record 20 section 4.14):
+     * `IsoSpuriousScope` is the device layer's, set before each isochronous
+     * event is handed in (hcd_dev.c), 0 for every queue XhciXferQueueInit
+     * makes. The last event this queue took - its TRB pointer as the event
+     * gave it and its completion code - and the Successes dropped for
+     * naming the TRB that event completed with a Transaction Error, a
+     * Babble or an Isoch Buffer Overrun.
+     */
+    ULONG IsoSpuriousScope;
+    ULONG IsoLastEventPA;
+    ULONG IsoLastEventCode;
+    ULONG IsoSpuriousDropped;
 } XHCI_TRANSFER_QUEUE, *PXHCI_TRANSFER_QUEUE;
 
 /*
@@ -8509,6 +8620,43 @@ typedef struct _XHCI_EXTENSION {
     ULONG RearmPeekPending;
     ULONG RearmPeekDrains;
 
+    /*
+     * Controllers below xHCI 1.0 (task 38.11, design record 17 section 4.14).
+     * Latched by the start's hcdReadValues, after the extension is zeroed and
+     * before XhciInitController, so every check of the started lifetime - the
+     * step 0c check, the recheck after HCRST, a restore's same-controller test
+     * and each in-place reinitialization - uses one floor and one override:
+     * HciFloor is XhciVersionFloor's answer, HciAccept096Value the DWORD as
+     * read (0xFFFFFFFF absent or of another type), HciQemuVersion the qemu
+     * flavour's XhciQemuHciVersion (0 none; always 0 in a shipping build).
+     * Written at step 0c, before its check, so a refused start has them:
+     * HciVersionRead 1 once capability dword 0 was read, the register's own
+     * HCIVERSION and the effective one (they differ only under the override,
+     * HciOverrideApplied 1), and HciTdSizeForm once the check accepted the
+     * version (0 before). The HCD packs them into the counter block. Eight
+     * ULONGs, so the parity TrailingPad keeps is unchanged.
+     */
+    ULONG HciFloor;
+    ULONG HciAccept096Value;
+    ULONG HciQemuVersion;
+    ULONG HciVersionRead;
+    ULONG HciVersionRegister;
+    ULONG HciVersionEffective;
+    ULONG HciOverrideApplied;
+    ULONG HciTdSizeForm;
+
+    /*
+     * Linux's xHCI controller quirks (roadmap-hcd 38.10, design record 20;
+     * xhci_quirk.h): the values a start read, the lists matched and the
+     * effective policy, each quirk's last outcome, and the counts the
+     * counter block carries. Filled by the start (hcd_ctl.c) after this
+     * extension is zeroed, and kept across a resume's or a recovery's
+     * reinitialization, which zero nothing. Appended after the version
+     * words; an even number of ULONGs, so the parity TrailingPad keeps is
+     * unchanged.
+     */
+    XHCI_QUIRK_STATE Quirk;
+
     ULONG TrailingPad;
 
     ULONG TrailingSignature;
@@ -8884,7 +9032,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 173UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 246UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 

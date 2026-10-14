@@ -277,6 +277,16 @@ typedef struct _XHCI_CONTROL_REQUEST {
     /* Never NULL - it is &Transfer->SgList, an interior pointer - but routinely
      * empty (batch 6-0). Consulted only when TransferLength is nonzero. */
     const USBPORT_SCATTER_GATHER_LIST *SgList;
+    /*
+     * Task 38.11 (design record 17 section 4.14.5): XHCI_TD_SIZE_FORM_PACKETS
+     * on a controller of 1.0 or later, XHCI_TD_SIZE_FORM_KIB below it, from
+     * XhciTdSizeFormOf on the controller's effective HCIVERSION - and the KiB
+     * form also selects the builder's other departures below 1.0 (D2, D3).
+     * 0 is refused as XHCI_XFER_BAD_PARAM, so a site that zeroes the request
+     * and forgets this fails its first transfer instead of silently writing
+     * the 1.0 form.
+     */
+    ULONG TdSizeForm;
 } XHCI_CONTROL_REQUEST, *PXHCI_CONTROL_REQUEST;
 
 /*
@@ -322,6 +332,25 @@ ULONG XhciXferSubmitControl(PXHCI_TRANSFER_QUEUE queue,
                             XHCI_TRB *scratch,
                             ULONG scratchCount);
 
+/*
+ * The same, with task 38.10's XhciControlLinkNoOp (design record 20 section
+ * 4.13): with `linkNoOp` set - the quirk applies and the device is
+ * SuperSpeed or faster - a control transfer that would start on the last
+ * TRB before the Link TRB is preceded by a No Op there
+ * (XhciRingControlLinkPad), counted in the same all-or-nothing room check;
+ * `*padded` (may be NULL) is 1 when one was placed. XhciXferSubmitControl
+ * is this with `linkNoOp` 0.
+ */
+ULONG XhciXferSubmitControlEx(PXHCI_TRANSFER_QUEUE queue,
+                              PXHCI_RING ring,
+                              const XHCI_CONTROL_REQUEST *request,
+                              PXHCI_TRANSFER transfer,
+                              PVOID transferParameters,
+                              XHCI_TRB *scratch,
+                              ULONG scratchCount,
+                              ULONG linkNoOp,
+                              PULONG padded);
+
 /* ------------------------------------------------------------------ */
 /* 7a-A.2: building a non-control transfer (interrupt, and bulk from 8-A.1) */
 /* ------------------------------------------------------------------ */
@@ -365,6 +394,16 @@ typedef struct _XHCI_NORMAL_REQUEST {
      * caller's scratch count, apart from it.
      */
     ULONG MaxDataTrbs;
+    /*
+     * Task 38.11 (design record 17 section 4.14.5): XHCI_TD_SIZE_FORM_PACKETS
+     * on a controller of 1.0 or later, XHCI_TD_SIZE_FORM_KIB below it, from
+     * XhciTdSizeFormOf on the controller's effective HCIVERSION - and the KiB
+     * form also selects the builder's other departures below 1.0 (D2, D3).
+     * 0 is refused as XHCI_XFER_BAD_PARAM, so a site that zeroes the request
+     * and forgets this fails its first transfer instead of silently writing
+     * the 1.0 form.
+     */
+    ULONG TdSizeForm;
 } XHCI_NORMAL_REQUEST, *PXHCI_NORMAL_REQUEST;
 
 /*
@@ -896,6 +935,16 @@ typedef struct _XHCI_ISO_REQUEST {
      */
     ULONG PacketsPerFrame;
     XHCI_ISO_FRAME_POLICY Frames;
+    /*
+     * Task 38.11 (design record 17 section 4.14.5): XHCI_TD_SIZE_FORM_PACKETS
+     * on a controller of 1.0 or later, XHCI_TD_SIZE_FORM_KIB below it, from
+     * XhciTdSizeFormOf on the controller's effective HCIVERSION - and the KiB
+     * form also selects the builder's other departures below 1.0 (D2, D3).
+     * 0 is refused as XHCI_XFER_BAD_PARAM, so a site that zeroes the request
+     * and forgets this fails its first transfer instead of silently writing
+     * the 1.0 form.
+     */
+    ULONG TdSizeForm;
 } XHCI_ISO_REQUEST, *PXHCI_ISO_REQUEST;
 
 ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
@@ -920,14 +969,24 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
  *
  * XhciXferIsoFramePolicy sets the request's Allowed and FirstOnly from
  * `asap` (the client's flag), `cfc` (HCCPARAMS1.CFC), `sampled` (the frame
- * axis was read) and `fresh`; XhciXferIsoStartPlan then says which of the
- * cases below the builder will take, from the same inputs, and must be
- * asked after it. All three pure.
+ * axis was read), `fresh` and `hciVersion` (the controller's effective
+ * HCIVERSION); XhciXferIsoStartPlan then says which of the cases below the
+ * builder will take, from the same inputs, and must be asked after it. All
+ * three pure.
+ *
+ * Below xHCI 1.0 (task 38.11, D8; design record 17 section 4.14.6) no TD
+ * carries a Frame ID, whatever HCCPARAMS1 bit 11 reads and however fresh
+ * the flow: the policy leaves `Allowed` 0 and the plan answers
+ * XHCI_ISO_START_SIA_NO_CFC for every explicit start, a new flow's
+ * included - the reason then meaning no usable CFC capability rather than a
+ * zero bit. Linux writes SIA on every TD of a controller whose CFC reads 0;
+ * this is the project's own conservative policy, since whether a 0.96 part
+ * honours a Frame ID, and what bit 11 means there, are unread.
  */
 #define XHCI_ISO_START_ASAP             0UL /* the client asked for ASAP  */
 #define XHCI_ISO_START_FRAME_IDS        1UL /* CFC: every TD a Frame ID   */
-#define XHCI_ISO_START_SIA_NO_CFC       2UL /* no CFC, a flow under way:
-                                             * SIA                        */
+#define XHCI_ISO_START_SIA_NO_CFC       2UL /* no CFC, a flow under way,
+                                             * or below 1.0 (38.11): SIA  */
 #define XHCI_ISO_START_SIA_NO_SAMPLE    3UL /* no frame sample: SIA       */
 #define XHCI_ISO_START_SIA_UNUSABLE     4UL /* a packet outside the window
                                              * or (CFC) a cadence the
@@ -940,9 +999,11 @@ ULONG XhciXferIsoUsesFrameIds(const XHCI_ISO_REQUEST *request);
 #define XHCI_ISO_FLOW_DRY               2UL /* an Underrun/Overrun handled */
 
 VOID XhciXferIsoFramePolicy(PXHCI_ISO_REQUEST request, ULONG asap,
-                            ULONG cfc, ULONG sampled, ULONG fresh);
+                            ULONG cfc, ULONG sampled, ULONG fresh,
+                            ULONG hciVersion);
 ULONG XhciXferIsoStartPlan(const XHCI_ISO_REQUEST *request, ULONG asap,
-                           ULONG cfc, ULONG sampled, ULONG fresh);
+                           ULONG cfc, ULONG sampled, ULONG fresh,
+                           ULONG hciVersion);
 /* The pipe's `fresh` after `event`; `queued` is the pipe's queue count when
  * a DRY event is handled. Pure. */
 ULONG XhciXferIsoFlowNext(ULONG fresh, ULONG event, ULONG queued);

@@ -148,20 +148,44 @@ body:
       label: XHCISNAP report (the driver's log)
       description: |
         If the machine keeps running, the driver's own log is the most useful
-        thing you can send. XHCISNAP.EXE is in the download; use the one from
-        the release you installed, not a copy from a 1.x.x.x release:
+        thing you can send. It is in the download's TOOLS\XHCISNAP directory;
+        use the one from the release you installed. From 2.4.0.0 three batch
+        files beside XHCISNAP.EXE do it - double-click them, or on Vista and 7
+        right-click each and choose Run as administrator:
 
-            XHCISNAP -verbosity 3
-            (restart the machine)
-            XHCISNAP -o C:\dump-before
+            SNAPON.BAT        (turns the driver's log channel on)
+            (restart Windows)
+            SNAPGET.BAT       (once while it works, if you can)
             (make the problem happen)
-            XHCISNAP -o C:\dump-after
+            SNAPGET.BAT       (again, after it happens)
+            SNAPOFF.BAT       (turns the channel off, once you have the files)
+
+        Each SNAPGET.BAT writes its files in the directory it runs in, under a
+        name made from the date and time (for example 3141022A.DEV and
+        3141022A.TXT for 14 March at 10:22), never overwriting an earlier run,
+        and prints the names. Attach the .DEV file (the controller's Device
+        Manager status, its resources, and the installed driver files'
+        versions and hashes) and the .TXT file (the report: plain text, no
+        internal addresses) of each run here. Keep the matching .BIN and .PSC
+        files and attach them only if a maintainer asks.
+
+        Both take one optional word at a prompt in that directory: SNAPON 3
+        sets level 3 instead of 2 (1 to 4; use 2 unless a maintainer asks),
+        and SNAPGET BEFORE then SNAPGET AFTER save the files as BEFORE.DEV,
+        AFTER.DEV and so on (1 to 8 letters, digits, _ or -, not starting
+        with -, not a DOS device name such as CON, NUL, COM1 or LPT1; a name
+        already used there is refused, never overwritten).
+
+        Without the batch files (or before 2.4.0.0), type what they run, in a
+        directory you can write to:
+
+            XHCISNAP -verbosity 2
+            (restart Windows, make the problem happen)
+            XHCISNAP -report      (before 2.4.0.0: XHCISNAP -o DUMP)
             XHCISNAP -disable
 
-        Attach C:\dump-before.TXT and C:\dump-after.TXT here (plain text, no
-        internal addresses). Keep the matching .BIN files and attach them only
-        if a maintainer asks. The log cannot capture a crash; for a crash, the
-        photo above and the XHCIQUAL report below are what helps.
+        The log cannot capture a crash; for a crash, the photo above and the
+        XHCIQUAL report below are what helps.
         From 2.3.0.0 the top of the .TXT names the Windows version, the
         processor, the memory and, where Windows records them, the make, model
         and BIOS. It does not print the computer name, your user name or the
@@ -176,36 +200,39 @@ body:
     attributes:
       label: XHCIQUAL report
       description: |
-        Boot **real DOS** (not a DOS box inside Windows), put XHCIQUAL.EXE on
-        writable storage that is NOT on the controller being tested, and start
-        with the quick scan:
+        Boot **real DOS** (not a DOS box inside Windows), copy the download's
+        TOOLS\XHCIQUAL directory onto writable storage that is NOT on the
+        controller being tested, change to it, and run:
 
-            XHCIQUAL
+            QUALREP
 
-        With no arguments it is a read-only one-screen verdict: no log file,
-        no PCI configuration write, no ownership taken. A DISQUALIFIED here
-        ends it. Then the probe, still read-only, which does write a log:
+        QUALREP.BAT (from 2.4.0.0) runs XHCIQUAL --probe-only --no-page
+        --log-stamp: the read-only probe - no PCI configuration write, no
+        ownership taken - saved to a new log in the current directory named
+        from the DOS date and time (for example 3141022A.LOG), never
+        overwriting an earlier one. Attach the .LOG file it names here.
+
+        Without the batch file (or before 2.4.0.0), type:
 
             XHCIQUAL --probe-only --no-page --log PROBE.LOG
 
         (`--no-page` matters: without it the run stops every 23 rows waiting
-        for a key.)
+        for a key.) Attach PROBE.LOG.
 
-        If the probe does not crash the machine, the active runs come next.
-        They TAKE OVER THE CONTROLLER - reset it, reset its ports - so use a
-        PS/2 keyboard. Run them one at a time rather than as one long run,
-        **cold-booting between each** (the download carries no batch files;
-        these are the command lines, and the numbered .BAT wrappers in the
-        repository's xhciqual/ directory run the same ones):
+        A maintainer may then ask for the active runs. They TAKE OVER THE
+        CONTROLLER - reset it, reset its ports - so use a PS/2 keyboard. Run
+        them one at a time rather than as one long run, **cold-booting between
+        each** (the download carries no batch file for these; these are the
+        command lines, and the numbered .BAT wrappers in the repository's
+        xhciqual/ directory run the same ones):
 
-            XHCIQUAL --probe-only --no-page --log PROBE.LOG
             XHCIQUAL xhci --poll-only --no-wait --no-devid --no-page --log XPOLL.LOG
             XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
             XHCIQUAL xhci --no-wait --no-page --log XEMPTY.LOG   (no external test device attached)
             XHCIQUAL xhci --no-page --log XDEV.LOG               (one expendable USB 2.0 device attached directly)
 
-        Attach whichever of PROBE.LOG, XPOLL.LOG, XIRQ.LOG, XEMPTY.LOG and
-        XDEV.LOG you got to this report, or paste them here. Getting only the
-        first one or two is still worth reporting.
+        Attach whichever of XPOLL.LOG, XIRQ.LOG, XEMPTY.LOG and XDEV.LOG you
+        got to this report, or paste them here. Getting only the probe log is
+        still worth reporting.
     validations:
       required: false

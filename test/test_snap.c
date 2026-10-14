@@ -18,7 +18,7 @@
 #include "../src/xhci_xstat.h"
 #include "../src/xhci_poll.h"
 #include "../src/xhci_msi.h"
-#include "../src/xhci_msi86.h"
+#include "../src/xhci_hlpr.h"
 #include "../src/xhci98_xfer.h"
 #include "../src/xhci_xpipe.h"
 #include "test_harness.h"
@@ -38,8 +38,9 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 1224,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 173,
-             "the whole counter block (36.54: 167 to 172)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 246,
+             "the whole counter block (38.12's composite selects: 241 to "
+             "245)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              1224 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
@@ -60,8 +61,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 173, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 306 + 173,
+    CHECK_EQ(XhciSnapHcdWords(18), 306 + 18 * 16 + 246, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 306 + 246,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -468,16 +469,15 @@ static void test_msi_words(void)
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspSwitchRead), 114 * 4,
              "stage A's words follow at 114");
 
-    CHECK_EQ(XHCI_MSI86_STATE_UNSEEN, 0, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_ABSENT, 1, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_REFUSED, 2, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_BOUND, 3, "helper states");
-    CHECK_EQ(XHCI_MSI86_STATE_REMOVED, 4, "helper states, last");
-    CHECK_EQ(XHCI_MSI86_ACCEPTED, 0, "no refusal");
-    CHECK_EQ(XHCI_MSI86_REFUSE_STATUS, 1, "refusals");
-    CHECK_EQ(XHCI_MSI86_REFUSE_LENGTH, 2, "refusals");
-    CHECK_EQ(XHCI_MSI86_REFUSE_IDENTITY, 3, "refusals");
-    CHECK_EQ(XHCI_MSI86_REFUSE_ROUTINES, 4, "refusals, last");
+    CHECK_EQ(XHCI_HLPR_STATE_UNSEEN, 0, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_ABSENT, 1, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_REFUSED, 2, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_BOUND, 3, "helper states");
+    CHECK_EQ(XHCI_HLPR_STATE_REMOVED, 4, "helper states, last");
+    CHECK_EQ(XHCI_HLPR_ACCEPTED, 0, "no refusal");
+    CHECK_EQ(XHCI_HLPR_REFUSE_STATUS, 1, "refusals");
+    CHECK_EQ(XHCI_HLPR_REFUSE_LENGTH, 2, "refusals");
+    CHECK_EQ(XHCI_HLPR_REFUSE_IDENTITY, 3, "refusals, last (4 retired)");
     CHECK_EQ(XHCI_MSI_CLASS_UNKNOWN, 0, "classes");
     CHECK_EQ(XHCI_MSI_CLASS_NO_INTERRUPT, 1, "classes");
     CHECK_EQ(XHCI_MSI_CLASS_NO_MESSAGE, 2, "classes");
@@ -717,7 +717,139 @@ static void test_counter_tail(void)
              171 * 4, "QemuStreamResyncFailed at 171");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QemuStreamRestops), 172 * 4,
              "QemuStreamRestops at 172");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 173 * 4, "173 words in all");
+    /* 38.11's three (xhcisnap.c, version_counter_names and
+     * print_hcd_version). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HciVersions), 173 * 4,
+             "HciVersions at 173");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HciAccept096Value), 174 * 4,
+             "HciAccept096Value at 174");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HciVersionPolicy), 175 * 4,
+             "HciVersionPolicy at 175");
+    /* 38.3's timer block (xhcisnap.c, tmr_counter_names and
+     * print_hcd_timer). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrSwitchRead), 176 * 4,
+             "TmrSwitchRead at 176");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrSource), 178 * 4,
+             "TmrSource at 178");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrHolds), 181 * 4,
+             "TmrHolds at 181");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrDesired), 186 * 4,
+             "TmrDesired at 186");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrReleaseCause), 189 * 4,
+             "TmrReleaseCause at 189");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrObsReleasedCount),
+             191 * 4, "TmrObsReleasedCount at 191");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, TmrObsHeldCount), 194 * 4,
+             "TmrObsHeldCount at 194");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HlprMsiVerdict), 197 * 4,
+             "HlprMsiVerdict at 197");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HlprTimerVerdict), 198 * 4,
+             "HlprTimerVerdict at 198");
+    CHECK_EQ(XHCI_POLL_TMR_SRC_NOT_FOUND, 3, "timer sources");
+    CHECK_EQ(XHCI_POLL_TMR_THREAD_JOINED, 3, "timer thread states");
+    CHECK_EQ(XHCI_POLL_TMR_CAUSE_STOP, 4, "release causes");
+    CHECK_EQ(XHCI_HLPR_SVC_NOT_ASKED, 4, "service verdicts");
+    /* 38.10's thirty-four (xhcisnap.c, quirk_counter_names and
+     * print_hcd_quirks): the fourteen packed words in XHCI_QK_* order,
+     * the revision and the PCI id, then the counts. */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkMsiAvoid), 199 * 4,
+             "QuirkMsiAvoid at 199");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkStreamsOff), 200 * 4,
+             "QuirkStreamsOff at 200");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkResumeReinit), 201 * 4,
+             "QuirkResumeReinit at 201");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutdownToEhci), 202 * 4,
+             "QuirkShutdownToEhci at 202");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutdownReset), 203 * 4,
+             "QuirkShutdownReset at 203");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkHaltDelay), 204 * 4,
+             "QuirkHaltDelay at 204");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkHaltTimeout), 205 * 4,
+             "QuirkHaltTimeout at 205");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkAsmediaFlow), 206 * 4,
+             "QuirkAsmediaFlow at 206");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkTiIntervalCap), 207 * 4,
+             "QuirkTiIntervalCap at 207");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkStuckLinkReset), 208 * 4,
+             "QuirkStuckLinkReset at 208");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkStreamRingPad), 209 * 4,
+             "QuirkStreamRingPad at 209");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkControlLinkNoOp), 210 * 4,
+             "QuirkControlLinkNoOp at 210");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkIsochSuccess), 211 * 4,
+             "QuirkIsochSuccess at 211");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkAmdSuspendBit), 212 * 4,
+             "QuirkAmdSuspendBit at 212");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkPciRevision), 213 * 4,
+             "QuirkPciRevision at 213");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkIdentity), 214 * 4,
+             "QuirkIdentity at 214");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkMsiRefused), 215 * 4,
+             "QuirkMsiRefused at 215");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkHaltsLong), 216 * 4,
+             "QuirkHaltsLong at 216");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkHaltDelays), 217 * 4,
+             "QuirkHaltDelays at 217");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkSavesSkipped), 218 * 4,
+             "QuirkSavesSkipped at 218");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkStuckLinkResets), 219 * 4,
+             "QuirkStuckLinkResets at 219");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkPaddedBlocks), 220 * 4,
+             "QuirkPaddedBlocks at 220");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkLinkNoOps), 221 * 4,
+             "QuirkLinkNoOps at 221");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkIsochDropped), 222 * 4,
+             "QuirkIsochDropped at 222");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkTiCapped), 223 * 4,
+             "QuirkTiCapped at 223");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkAsmWrites), 224 * 4,
+             "QuirkAsmWrites at 224");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkAsmGiveUps), 225 * 4,
+             "QuirkAsmGiveUps at 225");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkAmdBitClears), 226 * 4,
+             "QuirkAmdBitClears at 226");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkAmdBitSkips), 227 * 4,
+             "QuirkAmdBitSkips at 227");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutEhciWrites), 228 * 4,
+             "QuirkShutEhciWrites at 228");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutResets), 229 * 4,
+             "QuirkShutResets at 229");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutFlushes), 230 * 4,
+             "QuirkShutFlushes at 230");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutFlushSinkOff),
+             231 * 4, "QuirkShutFlushSinkOff at 231");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, QuirkShutFlushUnacked),
+             232 * 4, "QuirkShutFlushUnacked at 232");
+    CHECK_EQ(XHCI_QK_COUNT, 14, "one packed word per quirk");
+    /* 38.10's eight (xhcisnap.c, rings_counter_names and
+     * print_hcd_rings). */
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, PoolRingsInUse), 233 * 4,
+             "PoolRingsInUse at 233");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, RingsRetained), 234 * 4,
+             "RingsRetained at 234");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, RingsPinned), 235 * 4,
+             "RingsPinned at 235");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, RingsReleased), 236 * 4,
+             "RingsReleased at 236");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectsReattached), 237 * 4,
+             "SelectsReattached at 237");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectStallSuccesses),
+             238 * 4, "SelectStallSuccesses at 238");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectRollbacks), 239 * 4,
+             "SelectRollbacks at 239");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SelectRollbacksReopened),
+             240 * 4, "SelectRollbacksReopened at 240");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeSelects), 241 * 4,
+             "CompositeSelects at 241");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeSelectRefused),
+             242 * 4, "CompositeSelectRefused at 242");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeRewrites), 243 * 4,
+             "CompositeRewrites at 243");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeMismatches),
+             244 * 4, "CompositeMismatches at 244");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, CompositeIntervals), 245 * 4,
+             "CompositeIntervals at 245");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 246 * 4, "246 words in all");
 }
 
 /* 36.38: selective suspend's stage B header words and the counters

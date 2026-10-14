@@ -650,6 +650,8 @@ code:
 
   The derived/assumed provenance moves only when the Configure Endpoint commits, and `IsoCadenceMismatches` is split into assumed and derived because a derived-cadence mismatch is by design - usbport stamps High-Speed packets per microframe whatever the descriptor says.
 
+- **A pool ring, and a stream block, are returned only once a command proves the controller has given them up** (roadmap-hcd task 38.10; design record 20 section 5; Linux's rule, `xhci_check_bandwidth` and `xhci_reset_bandwidth`). The proofs: a successful Configure Endpoint that drops the endpoint, a Reset Device, the deconfigure reading every endpoint Disabled or the slot not Configured, a Disable Slot, an HCRST or the slot's going. A refused Configure Endpoint changed nothing (xHCI 1.2c 4.6.6), so the rings it would have added are freed and the old pipes put back; one whose completion was never seen holds everything it named until the slot goes. A closed pipe whose ring a context may still name is held on its device's `Retained` list, its DCI marked stale for the next command to drop (`hcd_cfg.c`, `hcdCfgRetain`); ownership is tracked per allocation, never read back from an endpoint's current state, since a Drop-and-Add leaves the DCI Running on its new context while the old ring is free. The decisions are `xhci_own.c`'s (host suite `test_own`). An interface switch's own command's drops are a reservation the per-device cap does not count (`XhciPoolAcquireReserved`). The bound that follows: every enabled non-EP0 context holds one pooled ring, so the controller is never asked for more than 32 + 32 contexts (Panther Point's limit).
+
 ## Hub Paths
 
 - Route String is zero only for devices attached directly to xHCI root ports.
@@ -661,7 +663,11 @@ code:
 
 - Under Option A, `usbport.sys` owns the host FDO and hands the miniport its translated resources (BAR, interrupt) at the start-controller callback - the miniport does not process `IRP_MN_START_DEVICE` itself. Use those translated resources for BAR mapping; never rediscover the BAR from PCI config space. (Under the Option B fallback, the same applies but via `IRP_MN_START_DEVICE`.)
 - PCI config space reads are for identification and quirk selection, not normal BAR discovery.
-- **Config space writes above the standard header are a kind of access of their own, and there is one** (since `2.1.1.0`, roadmap-hcd task 34.3, design record 16): the Intel port switchover writes `USB3_PSSEN` (0xD8) and `XUSB2PR` (0xD0) in the xHCI function's own config space, on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 only, gated by `XhciIntelPortSwitch`, through `HcdSvcConfigSpace` at PASSIVE_LEVEL under no spin lock, at each start, at each return to D0, at every stop and refused start, and at a system shutdown's D3. It is the HCD's second config-space writer, after the quiesce path's Bus Master Enable, and the only one above the header. The BAR rule above stands as it is: the switchover reads and writes no BAR.
+- **Config space writes above the standard header are a kind of access of their own, and there are three** (the first since `2.1.1.0`, roadmap-hcd task 34.3, design record 16; the other two since task 38.10, design record 20). Each is made in the xHCI function's own config space through `HcdSvcConfigSpace` at PASSIVE_LEVEL under no spin lock, and none reads or writes a BAR, so the BAR rule above stands as it is:
+  - **The Intel port switchover** writes `USB3_PSSEN` (0xD8) and `XUSB2PR` (0xD0), on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 only, gated by `XhciIntelPortSwitch`, at each start, at each return to D0, at every stop and refused start, and at a system shutdown's D3. It was the HCD's second config-space writer, after the quiesce path's Bus Master Enable, and the first above the header.
+  - **`XhciIntelShutdownToEhci`** (Linux's `XHCI_SPURIOUS_REBOOT`, record 20 section 4.4) writes the same two registers 0, `USB3_PSSEN` (0xD8) first, and reads each back, at a system shutdown's D3 only, on Intel 1E31, 9C31 and 9CB1 only, after the switchover's release and **whatever `XhciIntelPortSwitch` says** - the one write those registers take at `XhciIntelPortSwitch` 0 (record 16 section 5). Made only on a started lifetime with its BAR mapped, in D0, on a window that decodes; a failure is logged and the shutdown goes on (`hcd_quirk.c`, `HcdQuirkShutdown`).
+  - **`XhciAsmediaFlowControl`** (Linux's `XHCI_ASMEDIA_MODIFY_FLOWCONTROL`, record 20 section 4.8) makes the ASM1042A's vendor write, on 1B21:1142 only, through 0xE0 (a control byte whose bit 1 is the write bit, polled until clear, at most 1000 times 50 us, given up on a read of FFh), 0xF8 and 0xFC (two data dwords): command and address, the write bit, a wait, data and pseudo-data, the write bit - six writes and two bounded waits - after the start's `XhciInitController`, after each successful in-place recovery (once the IRQL is lowered, before the poller's grant) and at the end of each successful resume, either branch, under the power gate (`hcd_quirk.c`, `HcdQuirkAsmFlow`). A wait that gives up or a failed access skips the rest; service goes on.
+  - **Not one of them:** the same task's `XhciAmdSuspendBitClear` is a BAR write, not a configuration write: bit 17 of BAR offset C12Ch cleared before each suspend on AMD 15E5, only with the window at least C130h bytes long (record 20 section 4.15).
 - Resource acquisition and release should be symmetric: map/allocate on start-controller, quiesce/free on stop-controller, following the lifecycle `usbport.sys` drives.
 
 ## Interrupt Delivery
@@ -676,7 +682,10 @@ resource list and the pin: the line (INTx) where it works; polling
 interrupt resource, under mode 2, or after the watcher finds a line that
 never arrives; and on Vista and 7 a message (MSI or MSI-X) where Windows
 grants one - through `IoConnectInterruptEx` on amd64 and through the
-`xhcimsi.sys` helper on x86. Mode 1 asks for the line and keeps the
+`xhcihlpr.sys` helper on x86 (`xhcimsi.sys`, Vista and 7 only, until task
+38.3; the renamed helper loads on 2000 and XP too and carries a second
+service, the finer timer's `ExSetTimerResolution`, design record 18
+section 15). Mode 1 asks for the line and keeps the
 refusal below for a controller that has none, on 98 SE to XP and on x86
 Vista and 7 with no helper bound and no line offered; on Vista and 7 a
 message granted anyway is used, and one that cannot be connected polls

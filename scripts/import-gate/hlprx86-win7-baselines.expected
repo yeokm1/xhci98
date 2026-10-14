@@ -1,0 +1,13 @@
+# Authenticated Windows 7 SP1 x86 kernel/HAL export baselines, for the
+# import gate's hlprx86 profile (xhcihlpr.sys, design record 18 section
+# 15.11; until task 38.3 nt6x86-win7-baselines.expected, the nt6x86 profile
+# of xhcimsi.sys); hlprx86-vista-baselines.expected is its Vista sibling and
+# its header applies here unchanged, the ntkrnlpa.exe row owed included.
+#
+# Source: tools\win7-x86-extracted, measured 2026-10-10.
+#
+# Format:
+#   PACKED OUTPUT PROVIDER VERSION LENGTH SHA256
+
+ntoskrnl.exe ntoskrnl.exe ntoskrnl.exe 6.1.7601.17514 3911040 D74E389D1A3ED4C79FFC7C0AF1C092102F13E67168AB66A9296CDDE62A2C6CF8
+hal.dll hal.dll hal.dll 6.1.7601.17514 194432 F8B007E41157452E8C2D262F37260EB662CB2099E22ACFFDF9D89836A6290264

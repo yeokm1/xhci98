@@ -4,8 +4,8 @@
  *
  * The bus serves every hub itself (hcd_hub.c, hcd_sshub.c); what changes in
  * 33.4 is only the presentation. A hub's PDO (hcd_pdo.c, an HCD_DEVICE_PDO
- * with Hub set, under the project-owned ids XHCI98\HUB or XHCI98\HUB30) is
- * bound by this driver's own INF, and AddDevice - decided as for the root
+ * with Hub set, under the project-owned ids USB\XHCI98_HUB or
+ * USB\XHCI98_HUB30) is bound by this driver's own INF, and AddDevice - decided as for the root
  * hub by the PDO's driver object - attaches this FDO over it. Its
  * BusRelations are the PDOs presented under that hub (ParentSerial), its
  * door the hub IOCTLs of the Power tab for the hub's own ports
@@ -26,7 +26,7 @@
  * A composite device's FDO, the fourth role (task 36.43; design record 13
  * section 10.12), is this code too, told apart by its kind
  * (HCD_KIND_COMPOSITE_FDO): attached over a composite-parent PDO
- * (XHCI98\COMPOSITE), its BusRelations are the device's function PDOs, and
+ * (USB\XHCI98_COMPOSITE), its BusRelations are the device's function PDOs, and
  * it has no door - no name, no interface, no IOCTL (hcd_entry.c refuses
  * them). Its remove lets go of the functions as a hub FDO's lets go of its
  * children, but its start re-presents them in place (HcdDevicePdoRepresentAsk)
@@ -245,6 +245,18 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     XHCI_DBG_VALUE("hcd: hub FDO PnP minor", stack->MinorFunction);
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
+        if (hcdIsComposite(fdo)) {
+            /* The unconfigure down its own stack before the REMOVE, as
+             * ReactOS's usbccgp sends it, while the stack is started (a
+             * stopped or surprise-removed parent PDO answers nothing); the
+             * record forgotten either way (task 38.12; design record 13
+             * section 10.14.4). */
+            if (fdo->Common.PnpState == HCD_PNP_STARTED) {
+                HcdCompositeSelectDown(fdo->LowerDevice, hcdHubPdoOf(fdo), 1);
+            } else {
+                HcdCompositeForget(hcdHubPdoOf(fdo));
+            }
+        }
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdHubIoLeave(fdo);
@@ -291,6 +303,14 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
             fdo->Common.DevicePower = PowerDeviceD0;
             d0.DeviceState = PowerDeviceD0;
             (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState, d0);
+            if (hcdIsComposite(fdo)) {
+                /* The composite select down its own stack, before the
+                 * re-presentation is asked, so every function this start
+                 * presents selects after it (task 38.12; design record 13
+                 * section 10.14.2). Never fails the START. */
+                HcdCompositeSelectDown(fdo->LowerDevice, hcdHubPdoOf(fdo),
+                                       0);
+            }
             hcdHubStarted(fdo);
             if (!hcdIsComposite(fdo)) {
                 (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);

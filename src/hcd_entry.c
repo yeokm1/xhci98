@@ -180,6 +180,10 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
         return STATUS_NO_SUCH_DEVICE;
     }
 
+    /* Task 38.10 (design record 20 section 4.1): on NT 6 the identity and
+     * XhciMsiAvoid for this FDO's first requirements filter, through the PCI
+     * PDO now that the stack exists. */
+    HcdQuirkAddDevice(hc);
     HcdSerialControllerAdd(hc);
     fdo->Flags |= DO_POWER_PAGABLE;
     fdo->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -253,9 +257,13 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO &&
         major == IRP_MJ_INTERNAL_DEVICE_CONTROL) {
         /* A hub's PDO takes no URB: the bus owns the hub, and nothing
-         * above its FDO sends one (task 33.4). Nor does a composite
-         * parent's: its functions' PDOs carry the device's traffic, and
-         * the parent is presentation only (task 36.43). */
+         * above its FDO sends one (task 33.4). A composite parent's takes
+         * only its own FDO's descriptor reads and SELECT_CONFIGURATION
+         * (task 38.12, design record 13 section 10.14); its functions'
+         * PDOs carry the device's traffic (task 36.43). */
+        if (((PHCD_DEVICE_PDO)common)->Composite) {
+            return HcdCompositePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
+        }
         if (HcdPdoIsParent((PHCD_DEVICE_PDO)common)) {
             return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);
         }

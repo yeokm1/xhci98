@@ -211,8 +211,10 @@ typedef struct _XHCIHC_COUNTERS {
      * IoConnectInterruptEx pair came from (HCD_MSI_ROUTINES_*); the
      * messages connected and the capability read (XHCI_POLL_DELIVERY_*);
      * the connection's NTSTATUS; the raw list's message descriptors; the
-     * x86 helper's binding (XHCI_MSI86_STATE_*), its looks, the last
-     * look's NTSTATUS and refusal (XHCI_MSI86_REFUSE_*) and the helper's
+     * x86 helper's binding (XHCI_HLPR_STATE_*), its looks, the last
+     * look's NTSTATUS and refusal (XHCI_HLPR_REFUSE_*; until task 38.3
+     * XHCI_MSI86_REFUSE_*, whose 4, a bad routine pair, is now the MSI
+     * service's verdict, HlprMsiVerdict at word 197) and the helper's
      * version; the last requirements filter's sequence, the list's class
      * (XHCI_MSI_CLASS_*), the outcome (XHCI_MSI_OUT_*), the mode it used
      * as read (XHCI_POLL_NOT_FOUND when not found), its configurations,
@@ -345,9 +347,142 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG QemuStreamResyncs;
     ULONG QemuStreamResyncFailed;
     ULONG QemuStreamRestops;
+    /* Controllers below xHCI 1.0 (task 38.11; design record 17 section
+     * 4.14.7), appended at word 173, each 0xFFFFFFFF from HcdCountersStart
+     * until written ("not read"): the versions (XhciVersionPairWord - bits
+     * 15:0 the register's HCIVERSION, 31:16 the effective one, written from
+     * the step 0c read whether or not its check refused); XhciAccept096 as
+     * read (the DWORD, or 0xFFFFFFFF absent or of another type); and the
+     * policy (XhciVersionPolicyWord - the floor, the TD Size form, the qemu
+     * override, and bit 21 once the versions word was written, which is what
+     * tells a register that read all ones from one never read). The start's
+     * writes. */
+    ULONG HciVersions;
+    ULONG HciAccept096Value;
+    ULONG HciVersionPolicy;
+    /* A finer system timer while polling (task 38.3; design record 15
+     * section 7.2.9), appended contiguous at word 176: XhciPollFineTimer as
+     * read (XHCI_POLL_NOT_FOUND when not found) and in effect; where the
+     * routine came from (XHCI_POLL_TMR_SRC_*) and the timer thread's state
+     * (XHCI_POLL_TMR_THREAD_*); whether a request is held, the holds, the
+     * releases, those a boundary forced, the holds a boundary raced, and
+     * the poll runs whose interval crossed a call; the value asked (100 ns)
+     * and what the last TRUE and the last FALSE returned; the last
+     * release's cause (XHCI_POLL_TMR_CAUSE_*); the time held in this start
+     * in whole ms, saturating; the phase observations, RELEASED then HELD,
+     * each its count, sum in whole ms (saturating) and late intervals; and
+     * the x86 helper's two service verdicts (XHCI_HLPR_SVC_*; record 18
+     * section 15.3). The thread's writes under the controller lock, the
+     * DPC's under it and PollLock, the start's before the thread. */
+    ULONG TmrSwitchRead;
+    ULONG TmrSwitch;
+    ULONG TmrSource;
+    ULONG TmrThread;
+    ULONG TmrHeld;
+    ULONG TmrHolds;
+    ULONG TmrReleases;
+    ULONG TmrReleasesForced;
+    ULONG TmrHoldsRaced;
+    ULONG TmrObsCrossed;
+    ULONG TmrDesired;
+    ULONG TmrActualHeld;
+    ULONG TmrActualReleased;
+    ULONG TmrReleaseCause;
+    ULONG TmrHeldMs;
+    ULONG TmrObsReleasedCount;
+    ULONG TmrObsReleasedSumMs;
+    ULONG TmrObsReleasedLate;
+    ULONG TmrObsHeldCount;
+    ULONG TmrObsHeldSumMs;
+    ULONG TmrObsHeldLate;
+    ULONG HlprMsiVerdict;
+    ULONG HlprTimerVerdict;
+    /* Linux's xHCI controller quirks (task 38.10; design record 20 section
+     * 6.4), appended contiguous at word 199: one packed word per value in
+     * xhci_quirk.h's order (XHCI_QK_*: the mode, its normalization, the
+     * match, the effective policy, an override, the last outcome and its
+     * reason, the value read - xhci_quirk.h, "One packed word"), written at
+     * each start and at each action; then the PCI revision (configuration
+     * byte 08h, logged, never matched) and the vendor and device dword the
+     * lists were matched against; then the counts, copied from the
+     * extension's quirk state by the thread's poll (hcd_log.c): messages
+     * XhciMsiAvoid refused, suspend halts past 32 ms, the halt delays made,
+     * the suspends that skipped their save, the stuck links warm-reset, the
+     * padded stream blocks, the No Ops placed, the isochronous Successes
+     * dropped, the interrupt endpoints XhciTiIntervalCap capped, the
+     * ASMedia writes made and given up, the AMD bit's clears and skips, the
+     * shutdown's EHCI writes and HCRSTs, and its log flushes acknowledged
+     * drained, acknowledged with the sink off, and not acknowledged. */
+    ULONG QuirkMsiAvoid;
+    ULONG QuirkStreamsOff;
+    ULONG QuirkResumeReinit;
+    ULONG QuirkShutdownToEhci;
+    ULONG QuirkShutdownReset;
+    ULONG QuirkHaltDelay;
+    ULONG QuirkHaltTimeout;
+    ULONG QuirkAsmediaFlow;
+    ULONG QuirkTiIntervalCap;
+    ULONG QuirkStuckLinkReset;
+    ULONG QuirkStreamRingPad;
+    ULONG QuirkControlLinkNoOp;
+    ULONG QuirkIsochSuccess;
+    ULONG QuirkAmdSuspendBit;
+    ULONG QuirkPciRevision;
+    ULONG QuirkIdentity;
+    ULONG QuirkMsiRefused;
+    ULONG QuirkHaltsLong;
+    ULONG QuirkHaltDelays;
+    ULONG QuirkSavesSkipped;
+    ULONG QuirkStuckLinkResets;
+    ULONG QuirkPaddedBlocks;
+    ULONG QuirkLinkNoOps;
+    ULONG QuirkIsochDropped;
+    ULONG QuirkTiCapped;
+    ULONG QuirkAsmWrites;
+    ULONG QuirkAsmGiveUps;
+    ULONG QuirkAmdBitClears;
+    ULONG QuirkAmdBitSkips;
+    ULONG QuirkShutEhciWrites;
+    ULONG QuirkShutResets;
+    ULONG QuirkShutFlushes;
+    ULONG QuirkShutFlushSinkOff;
+    ULONG QuirkShutFlushUnacked;
+    /* Endpoint rings held until the controller drops them (task 38.10;
+     * design record 20 section 5), appended at word 233: the pool rings
+     * held now, copied at each poll from the pool's own array - flat across
+     * any number of interface switches that end where they began; pipes
+     * held closed for an endpoint the controller may still have enabled
+     * (stale), and held after a command whose completion was never seen
+     * (pinned, until the slot goes); stale ones a later proof released;
+     * selects that put the old pipes back after a refused or unissued
+     * command; SELECT_INTERFACEs a one-setting STALL ended in success
+     * through the clears; the rollbacks issued after a STALL, and those
+     * whose clears completed so the old pipes were put back. The thread's
+     * plain writes, the first under the controller lock at the poll. */
+    ULONG PoolRingsInUse;
+    ULONG RingsRetained;
+    ULONG RingsPinned;
+    ULONG RingsReleased;
+    ULONG SelectsReattached;
+    ULONG SelectStallSuccesses;
+    ULONG SelectRollbacks;
+    ULONG SelectRollbacksReopened;
+    /* The composite devnode's own SELECT_CONFIGURATION (task 38.12; design
+     * record 13 section 10.14.6), appended at word 241: selects the parent
+     * PDO recorded; selects it refused, and composite FDO starts whose own
+     * sequence failed before the select reached it; endpoints of recorded
+     * selects whose matched bInterval differs from the device's, and those
+     * that did not match at all; function endpoints built from a record's
+     * byte that differs from the device's. The parent's dispatch counts the
+     * first four interlocked; the thread the last, plainly. */
+    ULONG CompositeSelects;
+    ULONG CompositeSelectRefused;
+    ULONG CompositeRewrites;
+    ULONG CompositeMismatches;
+    ULONG CompositeIntervals;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 173 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 246 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

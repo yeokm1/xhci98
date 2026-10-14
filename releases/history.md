@@ -12,6 +12,89 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 2.4.0.0 - 2026-10-14
+
+Every system `2.3.1.0` supports is supported, from the same four
+directories. Every change was read in QEMU virtual machines, or rests on
+host tests where QEMU models no such device or controller; none has
+been read on real hardware. The release notes say what was read on
+which system.
+
+### What changed
+
+- The download's tools are in one `tools\` directory: `tools\xhciqual\`,
+  `tools\xhcisnap\`, `tools\portsw\`, `tools\silent\` and
+  `tools\xhcicln\`. The top level holds only the driver directories,
+  this readme and the licence.
+- Field reports in one command each: `QUALREP.BAT` beside `XHCIQUAL.EXE`
+  writes a read-only probe log named from the DOS clock, and
+  `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` beside `XHCISNAP.EXE`
+  turn the log on, take the report (now with a `.DEV` file of the
+  controller's status, resources and driver versions) and turn it off.
+- The silent install on Windows 98 SE and ME, off by default: with
+  `XhciSilentInstall` at `1`, a device of a listed class installs with no
+  Add New Hardware wizard. `tools\silent\` carries the list and
+  `silent-on.bat` and `silent-off.bat`.
+- Windows 2000 from the F6 floppy: a USB keyboard, mouse or stick used in
+  text-mode Setup stopped the new system at its first start (STOP
+  c000026c), with `2.3.1.0` as well. The floppy now has a Windows 2000
+  entry, "xHCI98 USB 3.x Host Controller (32-bit Windows 2000, files from
+  CD)": copy `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` from the
+  `I386` folder of your own Windows 2000 CD to the floppy, as they are,
+  and pick that entry. This package does not carry those files. Read with
+  Windows 2000 SP4 in virtual machines to the desktop and again after a
+  restart: with a USB keyboard and mouse behind a hub doing every Setup
+  page and the desktop, and with a USB stick and a PS/2 keyboard, the
+  stick readable from the desktop.
+- On 32-bit XP the F6 floppy's `txtsetup.oem` names the helper
+  `xhcihlpr.sys`, so GUI-mode Setup installs the controller from the
+  floppy's copies; a pre-release build without it left the controller
+  with no driver. Read on XP SP3 through to the desktop. GUI-mode Setup
+  on XP and XP x64 still asks about the unsigned driver before a USB
+  keyboard works, as before.
+- Controllers below xHCI 1.0 (the 0.96 NEC/Renesas uPD720200 and
+  uPD720200A, ASMedia ASM1042) start, driven as 1.0 ones but for the
+  fields Linux writes differently on them; `XhciAccept096` at `0` refuses
+  them as before. Read only with QEMU's 1.0 controller made to report
+  0.96 by a test build.
+- A finer system timer while the controller is polled, on Windows 2000
+  and later (`XhciPollFineTimer`), off by default: in QEMU virtual
+  machines it slowed the guest's clock and USB keyboard input was lost,
+  and with it off the clock kept time. Set it to `1` to try it; not read
+  on real hardware.
+- The 32-bit helper is now `xhcihlpr.sys`, and 32-bit 2000 and XP get it
+  too; on 2000 and XP the install asks for no restart. It replaces
+  `xhcimsi.sys`, which an update on Vista and 7 deletes at once; the
+  restart that update asks for is still needed there.
+- The root hub, the hubs and the composite devices are named under
+  `USB\` (`USB\XHCI98_ROOT_HUB` and the rest) instead of `XHCI98\`. An
+  update from `2.3.x` or earlier finds each of them once more as new
+  hardware, and with them each device that has no serial number (most
+  mice and keyboards); on XP, XP x64 and 98 SE have a keyboard and mouse
+  that do not go through this driver before updating. `tools\xhcicln\`
+  lists the old entries left behind and, on Windows 2000 to 7, removes
+  them (`XHCICL64.EXE` on x64); on 98 SE and ME it lists only. Read
+  updating the published `2.3.1.0` on every system.
+- hidusbf on a composite device's own entry: the composite entry
+  (`USB\XHCI98_COMPOSITE`) now selects the configuration through its own
+  entry at its start, as Windows' does, so hidusbf's "Process Parent"
+  sets every function's polling rate there; a filter on a function's own
+  entry still wins. The entry's own selection was read with QEMU's USB
+  audio device; hidusbf on a composite keyboard or mouse was not, as
+  QEMU offers none.
+- Fourteen of Linux's xHCI controller quirks, each behind a value of its
+  own under the controller's key, read on QEMU's controller as far as
+  they can act there.
+- Endpoint rings are kept until the controller has let go of them, so a
+  failed switch of an interface's alternate setting can no longer reuse a
+  ring the controller still holds. Read with the failures made on
+  purpose.
+- The documents: the release notes and this readme say what an update
+  from `2.3.x` shows on each system, and add to the known limitations
+  that Windows ME's Shut Down can hang after the controller was disabled
+  and enabled in the same session, as with `2.3.1.0`.
+- Updating from `2.3.x` or earlier: read the release notes' "From 2.3.x
+  or earlier" first.
 ## 2.3.1.0 - 2026-10-13
 
 A fix release. Every system `2.3.0.0` supports is supported, from the
