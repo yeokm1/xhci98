@@ -2038,8 +2038,19 @@ but 0, `XhciSelectiveSuspend` only at exactly 1); this gate takes
 `XhciSelectiveSuspend`'s rule, because its on direction is the one that can
 leave a device unworking with nothing said, so a stray value is taken as
 off. **Decided (O6, owner 2026-10-13).** The INFs write no value: absent is off, and an INF reinstall
-then cannot undo what `silent-on.bat` set. Read at every start, so
-`silent-off.bat`'s 0 takes effect at the next. On NT it is never read. The
+then cannot undo what `silent-on.bat` set. **Reversed for the switch on
+2026-10-14 (owner): both INFs write `XhciSilentInstall` at 0** on every
+install path (`HKR,,XhciSilentInstall,0x00010003,0`, the NT paths too, as
+every other value the driver reads is written on every path and the INF
+gate's `VAL-*` rows hold it so), so the switch is in the key where a user
+looks for it. The rule above is unchanged: 0 is off, as absent was. The
+row carries FLG_ADDREG_NOCLOBBER, so an install or update writes the 0
+only where the value is missing, and a 1 set by `silent-on.bat` survives
+an update - the flag's behaviour read on 98 SE's 16-bit engine and on 2000
+(run-34, 34.1). `silent-off.bat` still writes 0 and keeps the list. **The
+`SilentClasses` list stays unwritten by the INFs**, merged only by
+`tools\silent\` (6.11.8), so the silent install stays opt-in. Read at
+every start, so `silent-off.bat`'s 0 takes effect at the next. On NT it is never read. The
 notes, in every build flavour, are `XhciLogNote` records like the start's
 other values, so they reach the note ring only when `XhciLogVerbosity` is 2
 or more (`XHCI_LOG_VERBOSITY_RING`; below it the ring is off, `xhci_log.c`),
@@ -2562,7 +2573,9 @@ restart:
 
 - **(0) the default install** (a clean install of the package: no
   `XhciSilentInstall` under any controller's key, which the INFs never
-  write, and no `SilentClasses` key): `silent.gate.value` `0xFFFFFFFF`,
+  wrote until 2026-10-14 - since then the install writes 0 and
+  `silent.gate.value` reads 0, 6.11.3 - and no `SilentClasses` key):
+  as read on 2026-10-13, `silent.gate.value` `0xFFFFFFFF`,
   `silent.gate` 0, and no `silent.status`, `silent.entries`,
   `silent.ignored`, `silent.dropped` or `silent.pdo` note - the gate is
   read as off and the list is never read, and no PDO's decision is noted
@@ -2624,7 +2637,8 @@ note, and every install as before.
 
 O2 to O5 were decided by the owner on 2026-10-13, each as proposed; O1 is
 a fact to be read, not a choice; O6 and O7, from the gate's design,
-were decided by the owner the same day, each as proposed.
+were decided by the owner the same day, each as proposed; O8 is the
+owner's of 2026-10-14.
 
 | | Question | Decided / to read |
 |---|---|---|
@@ -2635,6 +2649,7 @@ were decided by the owner the same day, each as proposed.
 | O5 | The table's cap | 32, the excess dropped and counted (owner) |
 | O6 | `XhciSilentInstall` other than absent, 0 and 1 | off - only a DWORD of exactly 1 is on, `XhciSelectiveSuspend`'s rule (6.11.3) (owner, 2026-10-13) |
 | O7 | The batch files' names | `silent-on.bat` and `silent-off.bat`, long names as `portsw-on.bat`'s (6.11.8) (owner, 2026-10-13) |
+| O8 | Does an INF write `XhciSilentInstall`? | 0 on every install path of both INFs, FLG_ADDREG_NOCLOBBER, so a 1 survives an update; the `SilentClasses` list still written by no INF (owner, 2026-10-14, reversing O6's "the INFs write no value", 6.11.3) |
 
 #### 6.11.11 What the legs read (2026-10-13)
 

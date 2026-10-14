@@ -3640,7 +3640,8 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
         $contents += "      OFF BY DEFAULT. With XhciSilentInstall at 1 on the"
         $contents += "      controller, a device whose class is in the list installs"
         $contents += "      with no Add New Hardware wizard; at anything else, or"
-        $contents += "      absent, nothing changes. The install does not write it."
+        $contents += "      absent, nothing changes. The install writes it as 0,"
+        $contents += "      and an update keeps a 1 already there."
         $contents += "      Never on Windows 2000 and later."
         $contents += ""
         $contents += "      The list: hubs, boot keyboards and mice, and Bulk-Only"
@@ -4868,10 +4869,9 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every value this driver reads from the controller's driver key but
-XhciSilentInstall, which the install does not write (the silent install,
-above). There are thirty-five, all DWORDs, and the install writes all
-thirty-five, each at the default it states below except
+Every value this driver reads from the controller's driver key. There
+are thirty-six, all DWORDs, and the install writes all thirty-six, each
+at the default it states below except
 XhciImodInterval250ns, which it writes as 160, and XhciForceBulkOnly,
 which it writes as 0 where absent counts as 1, so every one is already
 in the key to change. The install writes
@@ -5259,6 +5259,16 @@ A value that is absent means the default each one states.
   suspended. Read in virtual machines only so far; leave it off unless
   you are testing it, and if a device misbehaves with it on, set 0.
 
+  XhciSilentInstall  -  the silent install, Windows 98 SE and ME only
+  ...................................................................
+
+  Written as 0 by the install; 0, absent or any number but 1 is off. At
+  1, a device whose class is in the SilentClasses list installs with no
+  Add New Hardware wizard. Set it with silent-on.bat and silent-off.bat
+  in TOOLS\SILENT\ (above), not by hand: silent-on.bat merges the list
+  first, and the value does nothing without it. Windows 2000 and later
+  never read it.
+
   XhciUsb2HubSpeedFallback  -  Low- and Full-Speed IDs behind a hub
   .................................................................
 
@@ -5308,8 +5318,8 @@ A value that is absent means the default each one states.
   same way:
 
       0   off on every controller.
-      1   on the controllers listed: the default for all but
-          XhciShutdownReset, whose default is 0.
+      1   on the controllers listed: the default, except
+          XhciShutdownReset, which is 0.
       2   on every controller, where the entry says so. On
           XhciIntelShutdownToEhci, XhciAsmediaFlowControl and
           XhciAmdSuspendBitClear, which write one vendor's own registers,
@@ -5382,7 +5392,7 @@ A value that is absent means the default each one states.
   recorded) and XhciLogDebugView to 1, and attach a debug-output viewer or
   a kernel debugger to the shutdown to see it.
 
-  THOSE THIRTY-FIVE ARE THE WHOLE LIST. The earlier releases'
+  THOSE THIRTY-SIX ARE THE WHOLE LIST. The earlier releases'
   XhciVirtualHSHub, XhciVirtualHSHubVid and XhciVirtualHSHubPid are not
   read: a copy left in the key by an earlier install has no effect, because
   this driver reports

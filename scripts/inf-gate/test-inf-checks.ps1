@@ -627,7 +627,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -668,8 +668,10 @@ try {
     # controller quirks (design record 20 section 6.1), each at 1 with 0 its
     # wrong one but XhciShutdownReset, at 0 with 1 its wrong one; they sit
     # after the 0.96 floor under one comment, which $tolRows carries so the
-    # anchors still reach the interval.
-    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the finer timer, the wide mapping, selective suspend, the hub speed fallback, the 0.96 floor and Linux's controller quirks, on both paths"
+    # anchors still reach the interval. XhciSilentInstall, after selective
+    # suspend, ships at 0 with 1 its wrong one (owner, 2026-10-14: written
+    # with its default like the others, design record 13 section 6.11.3).
+    Write-Step "the routing quirk, the tolerance switch, the interval cap, the Average TRB Length switch, the command size, event delivery, the finer timer, the wide mapping, selective suspend, the silent install's switch, the hub speed fallback, the 0.96 floor and Linux's controller quirks, on both paths"
     foreach ($tv in @(
         @{ Key = "maxxfer";   Row = "HKR,,XhciMaxTransferKB,0x00010003,1024`r`n"; Wrong = "HKR,,XhciMaxTransferKB,0x00010003,64`r`n"; Clob = "HKR,,XhciMaxTransferKB,0x00010001,1024`r`n" },
         @{ Key = "irqroute";  Row = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntelIrqRoute,0x00010003,0`r`n"; Clob = "HKR,,XhciIntelIrqRoute,0x00010001,1`r`n" },
@@ -682,6 +684,7 @@ try {
         @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,1`r`n"; Clob = "HKR,,XhciPollFineTimer,0x00010001,0`r`n" },
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n"; Clob = "HKR,,XhciWideMap,0x00010001,0`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n"; Clob = "HKR,,XhciSelectiveSuspend,0x00010001,0`r`n" },
+        @{ Key = "silent";    Row = "HKR,,XhciSilentInstall,0x00010003,0`r`n"; Wrong = "HKR,,XhciSilentInstall,0x00010003,1`r`n"; Clob = "HKR,,XhciSilentInstall,0x00010001,0`r`n" },
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" },
         @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n"; Clob = "HKR,,XhciMsiAvoid,0x00010001,1`r`n" },
@@ -2259,8 +2262,9 @@ try {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010003,160", "HKR,,XhciImodInterval250ns,0x00010003,500")
     } -Source $prodInfAmd64 -Arch amd64
     # Task 35-T.7's three values and the later ones on the 64-bit file, task
-    # 38.10's fourteen among them: its one AddReg section serves both of its
-    # paths, so missing and wrong-default once each.
+    # 38.10's fourteen and XhciSilentInstall among them: its one AddReg
+    # section serves both of its paths, so missing and wrong-default once
+    # each.
     foreach ($tv in @(
         @{ Key = "tolerance"; Row = "HKR,,XhciTolerance,0x00010003,1`r`n";   Wrong = "HKR,,XhciTolerance,0x00010003,0`r`n" },
         @{ Key = "intcap";    Row = "HKR,,XhciIntervalCap,0x00010003,1`r`n"; Wrong = "HKR,,XhciIntervalCap,0x00010003,0`r`n" },
@@ -2272,6 +2276,7 @@ try {
         @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,1`r`n" },
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n" },
+        @{ Key = "silent";    Row = "HKR,,XhciSilentInstall,0x00010003,0`r`n"; Wrong = "HKR,,XhciSilentInstall,0x00010003,1`r`n" },
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" },
         @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n" },

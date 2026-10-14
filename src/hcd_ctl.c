@@ -93,8 +93,10 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_ACCEPT_096    L"XhciAccept096"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
- * 0, another number, another type or a failed read is off (O6). No INF
- * writes it. Read at every start. The list it gates is a Services key. */
+ * 0, another number, another type or a failed read is off (O6). The INFs
+ * write it at 0 on every path (owner, 2026-10-14; no INF wrote it before),
+ * NOCLOBBER, so silent-on.bat's 1 survives an update. Read at every start.
+ * The list it gates is a Services key, which no INF writes. */
 #define HCD_VALUE_SILENT        L"XhciSilentInstall"
 #define HCD_SILENT_LIST         L"USB\\SilentClasses"
 #if defined(XHCI_FLAVOUR_QEMU)

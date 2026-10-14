@@ -108,6 +108,7 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
@@ -190,6 +191,7 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollActiveMs|0x00010003|1|ke
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciPollFineTimer|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciWideMap|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep

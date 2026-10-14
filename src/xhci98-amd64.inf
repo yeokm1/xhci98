@@ -165,6 +165,7 @@ HKR,,XhciPollActiveMs,0x00010003,1
 HKR,,XhciPollFineTimer,0x00010003,0
 HKR,,XhciWideMap,0x00010003,0
 HKR,,XhciSelectiveSuspend,0x00010003,0
+HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20

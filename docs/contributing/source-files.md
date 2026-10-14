@@ -351,6 +351,9 @@
 > (`hcdReadSilent`, `hcdTakeSilent`) and applied in `hcd_pdo.c`
 > (`hcdSilentDecide`, `hcdDeviceCapabilities`); and the switch's user
 > files `silent.reg`, `silent.vbs`, `silent-on.bat` and `silent-off.bat`.
+> Since the owner's change of 2026-10-14 `xhci98.inf` and
+> `xhci98-amd64.inf` write `XhciSilentInstall` at 0 on every install path;
+> the `SilentClasses` list stays `silent.reg`'s alone.
 > Task 38.11 (design record 17 section 4.14) adds no file: xHCI 0.96
 > controllers accepted behind `XhciAccept096`. The pure halves are in
 > `xhci_caps.c` (`XhciVersionFloor`, `XhciEffectiveCapDword0`,

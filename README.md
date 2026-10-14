@@ -216,7 +216,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciPollFineTimer` | While polling at `XhciPollActiveMs`, a finer system clock asked of Windows (2000 to 7; Windows 98 SE and ME ignore it); off unless set: any value but `0` turns it on (see "Polling and message-signalled interrupts") | `0` | `1` | `0` | `0` |
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | `0` |
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | `0` |
-| `XhciSilentInstall` | Windows 98 SE and ME only: `1` lets a device whose class is in the `SilentClasses` list install with no wizard; anything else is off. `silent-on.bat` in `tools\silent\` merges the list and sets `1`, `silent-off.bat` sets `0` and keeps the list. Merge it only once each listed class's drivers have been installed at least once; restart after either. Information on how the silent install is decided, and the list, from SweetLow. Read in virtual machines: on 98 SE a keyboard, mouse, stick and hub, each a device of its own, install with no wizard; ME installs those with no wizard without it; composite keyboards, mice and sticks not read | `0` | `1` | `0` | not written |
+| `XhciSilentInstall` | Windows 98 SE and ME: `1` installs a device whose class is in the `SilentClasses` list with no wizard (`silent-on.bat` and `silent-off.bat` in `tools\silent\`; see "The silent install" below) | `0` | `1` | `0` | `0` |
 
 **Hardware quirks**, each for a particular controller or chipset
 
@@ -227,7 +227,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers and the ATI Navi10's USB-C controller (`1002:7316`), `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciUsb2HubSpeedFallback` | The standard speed ID for a Low- or Full-Speed device behind a hub where the controller's USB 2.0 speed table names neither (the VIA VL805); `0` turns it off | `0` | `1` | `1` | `1` |
-| `XhciAccept096` | Controllers below xHCI 1.0 started (the 0.96 NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042), driven as 1.0 ones but for the fields Linux writes differently on them; `0` refuses them (Code 10) as `2.3.1.0` did. Untested ground | `0` | `1` | `1` | `1` |
+| `XhciAccept096` | Controllers below xHCI 1.0 started (the 0.96 NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042), driven as 1.0 ones but for the fields Linux writes differently on them; `0` refuses them (Code 10) as `2.3.1.0` did | `0` | `1` | `1` | `1` |
 
 **Linux's controller quirks**, each for the controllers Linux names (see "Linux's controller quirks" below): `0` off, `1` the controllers listed there, `2` every controller where the row says so
 
@@ -255,7 +255,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` | `0` | `4` | `0` | `0` |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-The install writes every value in these tables but `XhciSilentInstall`, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables, at the number in its last column, so each one is already in the key, ready to change. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
 
@@ -415,6 +415,21 @@ The driver can suspend an idle USB 2.0 or SuperSpeed device when Windows asks, a
 
 Restart after changing it. The release notes' "XhciSelectiveSuspend: putting idle devices to sleep" has the details.
 
+### The silent install (`XhciSilentInstall`)
+
+On Windows 98 SE, a device Windows already has drivers for still brings the Add New Hardware wizard when it is plugged into a new port. With `XhciSilentInstall` at `1`, a device whose class is in the `SilentClasses` list installs with no wizard instead. Windows 2000 and later never read it.
+
+- `0` (default): off. Any value but `1` is off.
+- `1`: on.
+
+`silent-on.bat` in `tools\silent\` merges the list (`SILENT.REG`: hubs, boot keyboards and mice, Bulk-Only storage) and then sets `1`. `silent-off.bat` sets `0` and keeps the list, as another USB stack may read it too. Restart after either. An update keeps the `1`.
+
+Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
+
+Windows ME installs a keyboard, mouse, stick or hub of its own with no wizard even without it. Read in virtual machines.
+
+SweetLow provided the information on how Windows decides a silent install, and the list.
+
 ### Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)
 
 The driver does not leave a device dead until it is replugged after a transfer, port or controller fault. This follows a tester's report of a mouse that stopped at random on an AMD AM5 board. A missed interrupt is picked up by the driver itself, and a USB transaction error is retried up to three times before the transfer fails.
@@ -465,7 +480,7 @@ Linux's xHCI driver works around faults of particular controllers, each named by
 `XhciIntervalCap` (above) also covers Linux's `XHCI_LIMIT_ENDPOINT_INTERVAL_9` on the ATI Navi10's USB-C controller, `1002:7316`.
 
 - `0`: off on every controller.
-- `1` (the default, but `0` for `XhciShutdownReset`): on the controllers in the table.
+- `1` (the default, except `XhciShutdownReset`, which is `0`): on the controllers in the table.
 - `2`: on every controller, for the quirks the settings table says so. `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear` write a vendor's own registers, so a `2` there is read as `1`.
 
 Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. `XHCISNAP`'s report has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.

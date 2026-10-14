@@ -162,7 +162,8 @@ included.
   device whose class is in the list at
   `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses`
   installs with no Add New Hardware wizard; at anything else, or absent, the
-  driver behaves as before. The install does not write it. The download's
+  driver behaves as before. The install writes it at `0`, and an update
+  keeps a `1` already there. The download's
   `tools\silent\` directory carries the list, `SILENT.REG` (hubs, boot
   keyboards and mice, Bulk-Only storage; UAS is not in it), `SILENT.VBS`,
   and `silent-on.bat` and `silent-off.bat`, which turn it on and off in one
@@ -1752,8 +1753,7 @@ by default, with nothing for the backstop to drain, and the line under
 ## Registry settings
 
 Each value is a `DWORD` in the controller's driver (software) key, and
-the install writes every value the driver reads but `XhciSilentInstall`,
-thirty-five, in this key:
+the install writes every value the driver reads, thirty-six, in this key:
 
 | Windows | Key |
 |---|---|
@@ -1772,7 +1772,7 @@ that say so, disable and enable the controller in Device Manager).
 `XhciForceBulkOnly` is the exception: it is read as each device is
 enumerated ("XhciForceBulkOnly").
 
-The install writes all thirty-five: each at the driver's own default, except
+The install writes all thirty-six: each at the driver's own default, except
 `XhciImodInterval250ns` at `160` and `XhciForceBulkOnly` at `0`, which
 the driver reads as `1` when it is absent (text-mode Setup;
 "XhciForceBulkOnly"). Each is written only where it is missing,
@@ -1789,7 +1789,9 @@ of them you had already added. `XhciPollFineTimer` (`0`),
 `XhciAccept096` (`1`) and the fourteen values of Linux's controller
 quirks ("Linux's controller quirks", below) are new in `2.4.0.0`, each
 written at its default, and an update over `2.3.0.0` or `2.3.1.0` adds
-them. Since `2.3.0.0` the
+them. `XhciSilentInstall` (`0`; "What `2.4.0.0` adds") is new in
+`2.4.0.0` too and written the same way: only Windows 98 SE and ME read it,
+but the install writes it on every system. Since `2.3.0.0` the
 install writes `XhciIntelPortSwitch` at `0`, where `2.1.1.0` and `2.2.0.0`
 wrote `1`; an update keeps the `1` they wrote, and `portsw.vbs` changes it
 ("XhciIntelPortSwitch", below). The install has written

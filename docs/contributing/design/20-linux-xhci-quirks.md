@@ -1042,7 +1042,7 @@ AddDevice, section 4.1), in the house form of `XhciIntervalCap` and
 | 0 | off: Linux's behaviour is not applied, on any controller |
 | 1 | Linux's listed controllers |
 | 2 | every controller, where the fix is generic xHCI behaviour (the "2 offered" column); for a vendor-register or vendor-specific quirk - `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl`, `XhciAmdSuspendBitClear` - a 2 is read as 1 and logged (owner, 2026-10-13) |
-| absent, another type or any other number | the default: 1, or 0 for `XhciShutdownReset`; the normalization is logged |
+| absent, another type or any other number | the default: 1, except `XhciShutdownReset`, which is 0; the normalization is logged |
 
 Absent is the default, so on by default for every value but one, unlike
 `XhciIntelPortSwitch`: text-mode Setup's F6 install writes no values
@@ -1397,8 +1397,8 @@ Fourteen REG_DWORDs in the controller's driver key, read through
 `XhciInitController`); `XhciMsiAvoid` is read earlier in the same start, in
 `hcdSettleDelivery`, and on NT 6 also at AddDevice after the attach
 (`HcdQuirkAddDevice`), for the requirements filter. Absent, another type,
-or a number other than 0, 1 and 2 is the default: 1, and 0 for
-`XhciShutdownReset`. A 2 is every controller, except on the three
+or a number other than 0, 1 and 2 is the default: 1, except
+`XhciShutdownReset`, which is 0. A 2 is every controller, except on the three
 vendor-register quirks - `XhciIntelShutdownToEhci`,
 `XhciAsmediaFlowControl`, `XhciAmdSuspendBitClear` - where it is read as 1.
 Each normalization is recorded in the value's packed word. Both INFs write

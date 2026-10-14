@@ -107,7 +107,11 @@ What it checks, grouped by the failure each rule prevents:
            XhciSuspendHaltTimeout, XhciAsmediaFlowControl, XhciTiIntervalCap,
            XhciStuckLinkReset, XhciStreamRingPad, XhciControlLinkNoOp,
            XhciIsochSpuriousSuccess and XhciAmdSuspendBitClear at 1, and
-           XhciShutdownReset at 0 (owner, 2026-10-13).
+           XhciShutdownReset at 0 (owner, 2026-10-13). Thirty-six since
+           XhciSilentInstall joined at 0 (owner, 2026-10-14, reversing
+           design record 13 section 6.11.3's "the INFs write no value"
+           for the switch alone; the SilentClasses list stays unwritten),
+           on every path though only 98 SE and ME read it.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1494,6 +1498,13 @@ $requiredValues = @(
         Default = "0"
         Why     = "roadmap-hcd task 36.33's selective suspend, stages A and B (design record 14 section 7), read at each start: only a DWORD 1 turns it on. The INF writes the 0 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 1 survives an update (owner, 2026-10-11; roadmap-hcd task 36.51)"
         DefaultWhy = "0 is the driver's own default - absent, 0, another number or another type is off, the release before it bit for bit (design record 14 section 7); shipping 1 would be a new decision"
+    },
+    @{
+        Name    = "XhciSilentInstall"
+        Type    = "0x00010003"
+        Default = "0"
+        Why     = "roadmap-hcd task 38.2's Windows 98 SE and ME silent install (design record 13 section 6.11.3), read at each start on 98 SE and ME only: only a DWORD 1 turns it on, and only with the SilentClasses list, which no INF writes. The INF writes the 0 so the value is where a user looks for it, on every path as every other value is, under 34.1's don't-overwrite rule so silent-on.bat's 1 survives an update (owner, 2026-10-14)"
+        DefaultWhy = "0 is the driver's own default - absent, 0, another number or another type is off (O6, owner, 2026-10-13); shipping 1 would turn the silent install on for every listed class on every 98 SE and ME machine that merged the list, a new decision"
     },
     @{
         Name    = "XhciUsb2HubSpeedFallback"

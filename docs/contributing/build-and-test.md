@@ -6253,8 +6253,8 @@ Rule ids are grouped by the failure they prevent:
   `HcDisableAllSelectiveSuspend`) anywhere in either file, machine-wide or
   per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
   The driver's own `XhciSelectiveSuspend` is a `VAL-*` row, not one of these.
-- `VAL-*`: every registry value the driver reads but `XhciSilentInstall`,
-  thirty-five since tasks 38.11, 38.3 and 38.10,
+- `VAL-*`: every registry value the driver reads, thirty-six since tasks
+  38.11, 38.3 and 38.10 and `XhciSilentInstall`'s 0 (owner, 2026-10-14),
   present on every install path with the required type, flags and default
   ("The registry values the driver reads", below).
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
@@ -6303,7 +6303,8 @@ are taken from the code (`src\hcd_ctl.c`'s value pass, `HcdCtlForceBulkOnly`,
 the routing quirk's and the polling's reads, `src\hcd_msi86.c`'s mode
 cache), not from other documents. Each is a `REG_DWORD` in the controller's
 driver (software) key (`IoOpenDeviceRegistryKey(PLUGPLAY_REGKEY_DRIVER)`),
-read in every flavour on every target, and taken only as a four-byte
+read in every flavour on every target (`XhciSilentInstall` on 98 SE and
+ME only, though every path writes it), and taken only as a four-byte
 `REG_DWORD` - another type reads as absent. Every INF row is
 `HKR,,<name>,0x00010003,<data>` (`FLG_ADDREG_TYPE_DWORD` with
 `FLG_ADDREG_NOCLOBBER`), so an install writes only a missing value and an
@@ -6334,6 +6335,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 0 | 0 off, any other 1 | 0 (since 38.3; 1 until the owner's change of 2026-10-14) | yes |
 | `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
 | `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
+| `XhciSilentInstall` | each start, on 98 SE and ME only | 0 | only 1 on | 0 (since the owner's change of 2026-10-14; task 38.2 wrote none) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
 | `XhciAccept096` | each start, latched for the started lifetime | 1 | 0 the 1.0 floor, any other the 0.96 floor | 1 (since 38.11) | yes |
 | `XhciMsiAvoid` | each start; on NT 6 also at AddDevice (the requirements filter's cache, record 20 section 4.1) | 1 | 0 off, 1 listed, 2 every controller; another number or type, 1 | 1 (since 38.10) | yes |
@@ -6351,9 +6353,12 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciIsochSpuriousSuccess` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
 | `XhciAmdSuspendBitClear` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
 
-Thirty-five, all written: sixteen before task 36.51, three by it,
+Thirty-six, all written: sixteen before task 36.51, three by it,
 `XhciAccept096` by task 38.11 (design record 17 section 4.14.4),
-`XhciPollFineTimer` by task 38.3 (design record 15 section 7.2.4), and
+`XhciPollFineTimer` by task 38.3 (design record 15 section 7.2.4),
+`XhciSilentInstall` by the owner's change of 2026-10-14 (design record 13
+section 6.11.3; the `SilentClasses` list it gates stays unwritten by the
+INFs, merged only by `tools\silent\`'s `silent-on.bat`), and
 fourteen by task 38.10 (Linux's controller quirks, design record 20: each
 read in `src\hcd_quirk.c`, 0 off, 1 Linux's listed controllers, 2 every
 controller where the record offers it; the log notes `quirk.<label>` and
