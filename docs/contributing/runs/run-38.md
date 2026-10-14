@@ -313,9 +313,9 @@ checkers, and the cut to `src\` byte for byte. Commits `c248e3dc` to
 don't-overwrite rule as the other values (the INF gate's `VAL-*` rules,
 thirty-six values); "the INFs write nothing" above describes the task as
 first built. The `SilentClasses` list is still written by
-`silent-on.bat` alone, never by the INFs. Owed: the VM reading of the
-fresh-install 0 and of an update keeping a 1, to be read on the signed
-asset.
+`silent-on.bat` alone, never by the INFs. The fresh-install 0 was read
+on all nine targets from the signed asset (38.final, S1 and S2); owed:
+98 SE's update keeping a 1 (S3), after publishing.
 
 **Gates.** `test\test_silent.c` (1201 checks) with the host suites; both
 builds and their gates at `d8c8fa63`; `test-package.ps1`, 1182 checks.
@@ -665,14 +665,48 @@ composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
   decisions of 2026-10-14 (`8fd25530`..`1c409399`, through four review
   rounds), then the two readings above.
 
+- **Dry cuts 6 and 7 of the version branch.** The owner's changes of
+  2026-10-14 evening merged first (`7131bd5b`..`714ec712`: both INFs
+  write `XhciSilentInstall` 0 on every path, `VAL-*` thirty-six; README
+  trims), then `53ddd829` (the readme template's and release notes'
+  status sentences for 0.96 and the quirks dropped). Dry cut 7 at
+  `53ddd829` from dry cut 6's builds of `714ec712` (`src\` and the tool
+  sources unchanged since): zip SHA-256 `2DC37472...CE2238`,
+  `hashes-7.txt`; the `verify-cut.ps1` rehearsal 30 PASS, the six
+  x64-absence FAILs; both x86 `txtsetup.oem` byte-identical to the
+  Windows 2000 legs' floppy.
+- **The owner's signed cut** at `53ddd829`: `verify-cut.ps1` 0 FAIL (48
+  zip entries, byte-identical to the tree). `xhci98-2.4.0.0.zip`,
+  1,234,974 bytes, SHA-256
+  `BF5B62DAB3772E83F69054649D5334F7314404DCE673D2601E2BA739CFD08C79`.
+  Committed as `releases/2.4.0.0` with the `releases/history.md` entry
+  (`7e13fc81`).
+- **The install legs from the asset** (`out\p38-matrix\asset-legs.md`;
+  readings in each guest's `legs\<g>\notes.txt`, "ASSET 2026-10-14"):
+  98 SE (NUSB), ME, 2000, XP, XP x64, Vista x86 and x64, 7 x86 and x64,
+  each a new overlay with the zip's files byte for byte (A0). On every
+  guest the install (A1), the controller and `USB\XHCI98_ROOT_HUB` with
+  no `XHCI98\` devnode (A2), a mouse, a stick (`fc /b` clean) and the
+  audio device (A3; the tone played whole but on 98 SE, NOT MAKEABLE as
+  before), the versions 2.4.0.0 (A4) and `XHCISNAP` with every tolerance
+  counter 0 (A7) PASS; `XhciSilentInstall` 0 with thirty-six `Xhci*`
+  values (S1), and on 98 SE and ME `silent.gate.value` 0 (S2). Signing:
+  Vista x64 and 7 x64 load the test-signed driver at a cold start with
+  no F8 (not Code 39 / 52; A5), XP x64 with no test mode (A5b); the
+  Driver tab reads "Not digitally signed", as record 19 expects. Vista
+  x64 shows no "Test Mode" watermark: both Vista overlays have fallen
+  into Vista's not-genuine state, whose text stands in that corner,
+  `bcdedit` reading `testsigning Yes` (not this driver). A6 (disable,
+  enable, remove, rescan) not run, owner 2026-10-14, for time: the dry
+  cuts' matrix read it on the same build. 98 SE's S3 (`silent-on.bat`,
+  an update, the 1 kept) runs after publishing (owner, 2026-10-14).
+
 **Left:**
 
-- XP x64's F6 install past the product key page (it needs a key).
-- A dry cut of the version branch `2.4.0.0` at its head, with the
-  Windows 2000 F6 entry.
-- The owner's: the signed cut, `verify-cut.ps1` on it, the install legs
-  from the asset on every target, the `releases/history.md` entry and
-  publishing.
+- XP x64's F6 install past the product key page, from the asset's
+  `release-x64` (owner-supplied key; running at the time of writing).
+- 98 SE's S3 (above).
+- Publishing (the owner's).
 
 ## Moved from the roadmap before the close (2026-10-14)
 
