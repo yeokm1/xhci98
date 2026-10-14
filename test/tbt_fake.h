@@ -30,6 +30,7 @@
 #define FAKE_FRAME_BYTES    512
 #define FAKE_MBOX_LOG       64
 #define FAKE_CFG_DWORDS     64
+#define FAKE_WRLOG          256
 
 /* FAKE_FRAME flags */
 #define FAKE_FLAG_BO        0x01    /* report Buffer Overflow */
@@ -73,6 +74,9 @@ typedef struct FAKE {
     unsigned long ImcWrites;
     unsigned long ImcLast;
     unsigned long Writes;           /* every BAR0 write */
+    unsigned long WrLogOff[FAKE_WRLOG];     /* the first FAKE_WRLOG of them */
+    unsigned long WrLogVal[FAKE_WRLOG];
+    unsigned long WrLogAtUs[FAKE_WRLOG];
     unsigned long FwStatusReads;
     unsigned long FwStatusNextAfter;    /* after this many reads, FwStatusNext; 0 never */
     unsigned long FwStatusNext;
@@ -390,6 +394,11 @@ static ULONG fakeRead32(PVOID ctx, ULONG off)
 static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
 {
     (void)ctx;
+    if (g_fake.Writes < FAKE_WRLOG) {
+        g_fake.WrLogOff[g_fake.Writes] = off;
+        g_fake.WrLogVal[g_fake.Writes] = v;
+        g_fake.WrLogAtUs[g_fake.Writes] = g_fake.NowUs;
+    }
     g_fake.Writes++;
     switch (off) {
     case 0x39900: g_fake.InmailData = v; return;

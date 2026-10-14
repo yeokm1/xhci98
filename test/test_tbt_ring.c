@@ -495,7 +495,8 @@ static void test_stopped_clock_and_flood(void)
     (void)ev;
     rc = TbtRingCtlRead(&g_ring, &root, TBT_CS_ROUTER, 0, 0, 1, out, 100, 0);
     CHECK_EQ(rc, TBT_E_TIMEOUT, "flood: the wait still ends");
-    CHECK(g_ring.Counters.Rx > TBT_WAIT_FRAME_BUDGET, "ended by the frame budget");
+    CHECK_EQ(g_ring.Counters.Rx, TBT_WAIT_FRAME_BUDGET,
+             "ended by the frame budget, the next frame left on the ring");
     CHECK_EQ(g_fake.NowUs, 0, "the clock never moved");
     g_fake.FloodPdf = 0;
 }
@@ -704,8 +705,52 @@ static void test_u4_geometry_and_takeover(void)
     CHECK_EQ(rc, TBT_OK, "start with the takeover");
     CHECK_EQ(g_ring.Counters.Ring0WasEnabled, 1, "ring 0 read enabled, counted");
     CHECK_EQ(g_ring.Counters.OtherRingsEnabled, 1, "ring 1 seen, counted");
-    CHECK_EQ(g_fake.Ring1Ctrl, 0x80000000UL, "and left alone");
-    CHECK(g_fake.NowUs >= TBT_RING_SETTLE_US, "at least 1 ms settled before programming");
+    {
+        /* The write order of record 22 section 4.4 steps 1 and 2: the
+         * masks, then ring 0's control, base, size and index to 0, then
+         * the settle, then the new ring; nothing written to ring 1. */
+        ULONG k;
+        ULONG lastMask = 0xFFFFFFFFUL;
+        ULONG firstDisable = 0xFFFFFFFFUL;
+        ULONG lastDisable = 0;
+        ULONG firstProgram = 0xFFFFFFFFUL;
+        ULONG ring1 = 0;
+        for (k = 0; k < g_fake.Writes && k < FAKE_WRLOG; k++) {
+            ULONG off = g_fake.WrLogOff[k];
+            if (off == 0x38208UL || off == 0x3820CUL) {
+                lastMask = k;
+            }
+            if ((off == 0x19800UL || off == 0x29800UL || off == 0x00000UL ||
+                 off == 0x00004UL || off == 0x0000CUL || off == 0x00008UL ||
+                 off == 0x08000UL || off == 0x08004UL || off == 0x0800CUL ||
+                 off == 0x08008UL) && g_fake.WrLogVal[k] == 0 &&
+                firstProgram == 0xFFFFFFFFUL) {
+                if (firstDisable == 0xFFFFFFFFUL) {
+                    firstDisable = k;
+                }
+                lastDisable = k;
+            }
+            if (off == 0x00000UL && g_fake.WrLogVal[k] != 0 &&
+                firstProgram == 0xFFFFFFFFUL) {
+                firstProgram = k;
+            }
+            if (off == 0x19820UL || off == 0x29820UL || off == 0x00010UL ||
+                off == 0x08010UL) {
+                ring1++;
+            }
+        }
+        CHECK(lastMask != 0xFFFFFFFFUL && lastMask < firstDisable,
+              "interrupts masked before the takeover");
+        CHECK(firstDisable != 0xFFFFFFFFUL && g_fake.WrLogOff[firstDisable] == 0x19800UL,
+              "TX ring 0's control cleared first");
+        CHECK_EQ(lastDisable - firstDisable + 1, 10,
+                 "both controls, bases, sizes and indexes written 0");
+        CHECK(firstProgram != 0xFFFFFFFFUL && firstProgram > lastDisable, "then programmed");
+        CHECK(firstProgram != 0xFFFFFFFFUL &&
+              g_fake.WrLogAtUs[firstProgram] - g_fake.WrLogAtUs[lastDisable] >=
+              TBT_RING_SETTLE_US, "at least 1 ms after the last disabling write");
+        CHECK_EQ(ring1, 0, "no write to ring 1");
+    }
     CHECK_EQ(g_fake.HiResetWrites, 0, "no Host Interface Reset");
     CHECK_EQ(g_fake.TxSize, 16, "TX ring of 16");
     CHECK_EQ(g_fake.RxSizeReg, 0x01000010UL, "RX ring of 16, 256-byte buffers");
@@ -767,6 +812,19 @@ static void test_u4_write_and_read(void)
     CHECK(g_fake.TxLogAtUs[1] - g_fake.TxLogAtUs[0] >= TBT_CTL_TIMEOUT_US,
           "after 100 ms");
 
+    /* A request descriptor never consumed: 10 ms on the USB4 transport
+     * (record 22 section 5.2), not the ICM client's 100 ms. */
+    CHECK_EQ(u4Setup(0), TBT_OK, "start");
+    g_fake.TxConsume = 0;
+    {
+        ULONG t0 = g_fake.NowUs;
+        rc = TbtCtlRead1(&g_ctl, &dev, TBT_CS_ROUTER, 0, 0, out);
+        CHECK_EQ(rc, TBT_E_HW, "a stuck ring fails the request");
+        CHECK(g_fake.NowUs - t0 >= TBT_TX_CONSUME_U4_US &&
+              g_fake.NowUs - t0 < TBT_TX_CONSUME_MS * 1000UL, "after 10 ms, not 100");
+    }
+    g_fake.TxConsume = 1;
+
     /* Never answered: 4 attempts of 100 ms. */
     CHECK_EQ(u4Setup(3), TBT_OK, "start");
     rc = TbtCtlRead1(&g_ctl, &dev, TBT_CS_ROUTER, 0, 0, out);
@@ -780,6 +838,85 @@ static void test_u4_write_and_read(void)
              "a write of nothing refused");
     CHECK_EQ(TbtRingCtlTransfer(&g_ring, TBT_PDF_NOTIFY, &dev, 0, 0, 0, 1, out,
                                 1000, 1), TBT_E_PARAM, "only reads and writes");
+}
+
+static ULONG g_echoMode;
+
+static void echoResponder(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                          unsigned long words)
+{
+    unsigned long r[4];
+
+    (void)fk;
+    if (pdf != TBT_PDF_WRITE && pdf != TBT_PDF_READ) {
+        return;
+    }
+    (void)words;
+    r[0] = dw[0] | 0x80000000UL;
+    r[1] = dw[1];
+    /* another adapter in the echo, then (mode 1) the right one */
+    r[2] = (dw[2] & ~(0x3FUL << 19)) | (((dw[2] >> 19) + 1UL) & 0x3FUL) << 19;
+    r[3] = 0x12345678UL;
+    fakeQueue(pdf, r, pdf == TBT_PDF_READ ? 4 : 3, 0, 0);
+    if (g_echoMode == 1) {
+        r[2] = dw[2];
+        fakeQueue(pdf, r, pdf == TBT_PDF_READ ? 4 : 3, 10, 0);
+    }
+}
+
+static void test_u4_echo(void)
+{
+    TBT_ROUTE dev = { 0, 1 };
+    ULONG v[1];
+    LONG rc;
+
+    /* Adapter space: a response naming another adapter is not ours. */
+    CHECK_EQ(u4Setup(0), TBT_OK, "start");
+    g_fake.OnTx = echoResponder;
+    g_echoMode = 0;
+    rc = TbtCtlWrite1(&g_ctl, &dev, TBT_CS_ADAPTER, 3, 4, 0);
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "a write response for another adapter is refused");
+    CHECK(g_ring.Counters.CtlStale >= 1, "counted as stale");
+    g_echoMode = 1;
+    rc = TbtCtlWrite1(&g_ctl, &dev, TBT_CS_ADAPTER, 3, 4, 0);
+    CHECK_EQ(rc, TBT_OK, "the right echo is taken");
+    g_echoMode = 0;
+    rc = TbtCtlRead1(&g_ctl, &dev, TBT_CS_PATH, 3, 16, v);
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "a path-space read response for another adapter refused");
+    /* Router space: the arrival adapter is accepted (Table 6-3, and
+     * usb4-emu's write responses). */
+    g_echoMode = 0;
+    rc = TbtCtlWrite1(&g_ctl, &dev, TBT_CS_ROUTER, 0, 4, 0);
+    CHECK_EQ(rc, TBT_OK, "router space: arrival adapter accepted");
+}
+
+static void test_u4_budget(void)
+{
+    TBT_ROUTE root = { 0, 0 };
+    TBT_HP_EVENT e;
+    ULONG out[1];
+    LONG rc;
+
+    /* A flood with a stopped clock: the wait ends by the budget, and the
+     * frame that would pass it is left on the ring, not lost. */
+    CHECK_EQ(u4Setup(3), TBT_OK, "start");
+    g_fake.ClockStopped = 1;
+    g_fake.FloodPdf = TBT_PDF_HOTPLUG;
+    g_fake.FloodWords = 3;
+    g_fake.FloodDw[0] = 0x80000000UL;
+    g_fake.FloodDw[1] = 0;
+    g_fake.FloodDw[2] = 1;
+    g_ctl.Attempts = 1;
+    rc = TbtCtlRead1(&g_ctl, &root, TBT_CS_ROUTER, 0, 0, out);
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "flood: the wait ends");
+    CHECK_EQ(g_ring.Counters.Rx, TBT_WAIT_FRAME_BUDGET, "exactly the budget taken");
+    CHECK_EQ(g_ring.Counters.Unsolicited, TBT_WAIT_FRAME_BUDGET,
+             "every frame taken was handed over, none dropped");
+    CHECK_EQ(g_ctl.Counters.HotPlugDuplicates, TBT_WAIT_FRAME_BUDGET - 1,
+             "each acknowledged and the copies dropped");
+    CHECK(TbtCtlNextHotPlug(&g_ctl, &e), "the event queued (once)");
+    g_fake.FloodPdf = 0;
+    g_fake.ClockStopped = 0;
 }
 
 static void test_u4_notifications(void)
@@ -1072,6 +1209,8 @@ int main(void)
     test_routes();
     test_u4_geometry_and_takeover();
     test_u4_write_and_read();
+    test_u4_echo();
+    test_u4_budget();
     test_u4_notifications();
     test_u4_hotplug();
     test_u4_waits();

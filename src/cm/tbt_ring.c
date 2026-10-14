@@ -450,6 +450,19 @@ LONG TbtRingStartEx(PTBT_RING ring,
     ring->Paths = paths;
 
     ring->Programmed = TRUE;
+
+    /* Every cause masked first: this driver polls (record 21 section 4.3)
+     * and has no handler for a cause a predecessor left enabled (record
+     * 22 section 4.4 step 1). */
+    n = TBT_HI_IMR_DWORDS(paths);
+    for (i = 0; i < n; i++) {
+        if ((flags & TBT_RING_START_MASK_IMC) != 0) {
+            TBT_WR(ring, TBT_HI_IMC + 4UL * i, 0xFFFFFFFFUL);
+        } else {
+            TBT_WR(ring, TBT_HI_IMR + 4UL * i, 0);
+        }
+    }
+
     if ((flags & TBT_RING_START_TAKEOVER) != 0) {
         tbtRingTakeOver(ring, paths);
     }
@@ -468,16 +481,6 @@ LONG TbtRingStartEx(PTBT_RING ring,
 
     for (i = 0; i < need; i++) {
         ring->Va[i] = 0;
-    }
-
-    /* Every cause masked: this driver polls (record 21 section 4.3). */
-    n = TBT_HI_IMR_DWORDS(paths);
-    for (i = 0; i < n; i++) {
-        if ((flags & TBT_RING_START_MASK_IMC) != 0) {
-            TBT_WR(ring, TBT_HI_IMC + 4UL * i, 0xFFFFFFFFUL);
-        } else {
-            TBT_WR(ring, TBT_HI_IMR + 4UL * i, 0);
-        }
     }
 
     /* TX ring 0, Spec 12.6.3.2: base and size (each resets the indexes),
@@ -765,6 +768,7 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
     ULONG words;
     ULONG frames;
     ULONG ev;
+    ULONG echo;
     LONG rc;
     TBT_FRAME f;
     TBT_WAIT w;
@@ -776,6 +780,10 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
     }
     if (attempts == 0) {
         attempts = 1;
+    }
+    echo = TBT_CTL_ECHO_MASK;
+    if (cs != TBT_CS_ROUTER) {
+        echo |= TBT_CTL_ADP_MASK << TBT_CTL_ADP_SHIFT;
     }
     /* Spec 6.4.2.3's note: Adapter Num 0 for the router space. */
     if (cs == TBT_CS_ROUTER) {
@@ -802,13 +810,20 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
         if (attempt != 0) {
             ring->Counters.CtlRetries++;
         }
-        rc = TbtRingSend(ring, pdf, req, words);
+        rc = TbtRingSendUs(ring, pdf, req, words,
+                           ring->TxConsumeUs != 0 ? ring->TxConsumeUs :
+                           TBT_TX_CONSUME_MS * 1000UL);
         if (rc != TBT_OK) {
             return rc;
         }
         TbtWaitStart(&w, ring->Host, timeoutUs, FALSE);
         frames = 0;
         for (;;) {
+            /* The budget is checked before a frame is taken, so the frame
+             * that would pass it stays on the ring for the next drain. */
+            if (frames >= TBT_WAIT_FRAME_BUDGET) {
+                break;
+            }
             if (!TbtRingReceive(ring, &f)) {
                 if (TbtWaitDone(&w, ring->Host)) {
                     break;
@@ -816,9 +831,7 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
                 TbtWaitStep(&w, ring->Host, 0);
                 continue;
             }
-            if (++frames > TBT_WAIT_FRAME_BUDGET) {
-                break;
-            }
+            frames++;
             if (f.Words == 0) {
                 if (TbtWaitDone(&w, ring->Host)) {
                     break;
@@ -854,7 +867,7 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
                 }
                 continue;
             }
-            if ((f.Dw[2] & TBT_CTL_ECHO_MASK) != (want & TBT_CTL_ECHO_MASK)) {
+            if ((f.Dw[2] & echo) != (want & echo)) {
                 ring->Counters.CtlStale++;
                 if (TbtWaitDone(&w, ring->Host)) {
                     break;
@@ -1088,6 +1101,7 @@ VOID TbtCtlInit(PTBT_CTL ctl, PTBT_RING ring)
         p[i] = 0;
     }
     ctl->Ring = ring;
+    ring->TxConsumeUs = TBT_TX_CONSUME_U4_US;
     ctl->TimeoutUs = TBT_CTL_TIMEOUT_US;
     ctl->Attempts = TBT_CTL_ATTEMPTS;
     TbtRingSetUnsolicited(ring, tbtCtlReceive, ctl);

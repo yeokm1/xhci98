@@ -218,6 +218,7 @@ typedef struct _TBT_RING {
     ULONG TxNext;           /* next TX descriptor to fill */
     ULONG RxNext;           /* next RX descriptor to examine */
     ULONG Seq;              /* 2-bit Sequence Number, Spec 6.4.2.3 */
+    ULONG TxConsumeUs;      /* a request's consumption bound; 0: TBT_TX_CONSUME_MS */
     BOOLEAN Running;
     BOOLEAN Programmed;     /* the last start wrote ring registers */
 
@@ -384,8 +385,15 @@ LONG TbtRingCtlRead(PTBT_RING ring,
  * The general form (Spec 6.4.2.3 to 6.4.2.6): `pdf` TBT_PDF_READ or
  * TBT_PDF_WRITE, `buf` the DWs read or the DWs to write, each attempt
  * bounded by `timeoutUs` on the microsecond clock (a maximum), `attempts`
- * in all (at least one). A Write Response echoes the request's DW 3 and
- * carries no data.
+ * in all (at least one), each request's descriptor consumed within
+ * TxConsumeUs. A response echoes the request's Address, Size, CS and SN,
+ * and its Adapter Num too outside the router space (Spec Tables 6-3 and
+ * 6-5). In the router space the Adapter Num of a Read Response is the
+ * arrival adapter (Table 6-3); a Write Response's should echo the
+ * request's 0 (Table 6-5), but usb4-emu's fabric answers both with the
+ * arrival adapter (hw/usb4/usb4-fabric.c send_response), so in that
+ * space alone it is not compared - the route, address, size, space and
+ * sequence number still are. A Write Response carries no data.
  */
 LONG TbtRingCtlTransfer(PTBT_RING ring,
                         ULONG pdf,
@@ -502,7 +510,8 @@ typedef struct _TBT_CTL {
 ULONG TbtCtlClassify(ULONG code);
 
 /* Bind `ctl` to a started or stopped `ring` and install its receiver of
- * unsolicited frames; record 22's timeout and attempts. */
+ * unsolicited frames; record 22's timeout and attempts, and its 10 ms bound
+ * on a request descriptor's consumption (section 5.2). */
 VOID TbtCtlInit(PTBT_CTL ctl, PTBT_RING ring);
 VOID TbtCtlSetAckForm(PTBT_CTL ctl, TBT_CTL_ACK_FORM fn, PVOID context);
 VOID TbtCtlSetSafePoint(PTBT_CTL ctl, TBT_CTL_SAFE_POINT fn, PVOID context);
