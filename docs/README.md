@@ -198,6 +198,9 @@ reachable from here or from `AGENTS.md`'s repository layout.
   lists, and on Windows 2000 to 7 removes, the devnodes a driver before
   `2.4.0.0` left under `XHCI98\` (roadmap-hcd task 38.8, design record 13
   section 10.13.8); published as the tool's `readme.txt`.
+- [`xhciinst/README.TXT`](../xhciinst/README.TXT) - the install, update and
+  uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.6,
+  design record 23); published as the tool's `readme.txt`.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.

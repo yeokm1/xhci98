@@ -728,6 +728,93 @@ Windows 2000 note: the first Update Driver after a cancelled Found New
 Hardware Wizard was once seen to leave the controller with no driver; a
 second Update Driver filled it.
 
+### Installing, updating and uninstalling with INSTALL.BAT (new in `3.0.0.0`)
+
+From `3.0.0.0` the download carries `INSTALL.BAT` at its top level and the
+program it runs in `tools\xhciinst\`: `XHCIINST.EXE` for 32-bit Windows and
+`XHCIIN64.EXE` for 64-bit Windows, which `INSTALL.BAT` chooses, with the
+`release-` directory of the same architecture. Unzip the whole download
+first: the program refuses to run from anywhere but its own place in an
+unzipped package, and refuses a driver directory whose files are not all
+this release's, this architecture's and this build's. Then run
+`INSTALL.BAT` from the top directory: double-click it on Windows 98 SE and
+ME; run it as an administrator on Windows 2000 and XP; on Vista and 7
+right-click it and choose Run as administrator.
+
+It shows the devices it found and what it will do with each, asks about a
+few of the driver's options (below), asks once (`Y`), and then:
+
+- **Windows 2000, XP, XP x64, Vista and 7**: it installs or updates every
+  driver of the package on the devices present, with the routine Windows
+  documents for a driver package's own installer
+  (`UpdateDriverForPlugAndPlayDevices`) - the controller first, then its
+  root hub, hubs and composite entries, then UAS disks, then a Thunderbolt
+  or USB4 controller and its tunnel ports - and stages every INF of the
+  package so a device plugged in later finds its driver with no question
+  about where. It copies the package to a folder of its own under
+  `XHCI98` in the Windows directory first and installs from there, so a
+  later device never asks for the CD or stick the package came on. It
+  leaves alone any controller or disk another vendor's driver runs, never
+  replaces a newer release unless told to (`/force`), and does what the
+  update steps below otherwise ask of you: Windows 2000's Have Disk, the
+  root hub's own update, and on Vista and 7 a build with the same
+  `DriverVer` (it says so, and `/restage` replaces the stored one).
+  Windows' own unsigned-driver questions still appear; answer them. It
+  says when to restart, and when to run it again after the restart (32-bit
+  Vista and 7 after an update from `2.3.x`, for the new root hub). On XP
+  and XP x64 after an update from `2.3.x` or earlier, it stops while
+  Windows' Found New Hardware windows wait for an answer; answer them with
+  a keyboard and mouse that do not go through this driver, then run it
+  again. On Vista x64 and 7 x64 it says whether it could confirm
+  test-signing mode, and never changes it.
+- **Windows 98 SE and ME**: no program can install a driver on a device
+  there. It copies the package to that same folder, adds the folder to
+  `DevicePath`, the list of places Windows' hardware wizards search, and
+  prints the Device Manager clicks that remain for each device, with the
+  folder to type if a wizard does not find the driver by itself. Run it
+  again after the restart to see the result and set the options.
+
+At the end, if an update from `2.3.x` or earlier left old `XHCI98\`
+entries, it offers to run `XHCICLN` ("From 2.3.x or earlier"); only `y`
+runs it.
+
+**The options it asks about** are a few of the "Registry settings" below,
+each only where the hardware or the Windows it affects is present:
+`XhciIntelPortSwitch` (only with an Intel 7-, 8- or 9-series controller),
+`XhciInterruptMode`, `XhciPollFineTimer` (Windows 2000 and later),
+`XhciSelectiveSuspend`, `XhciForceBulkOnly`, and `XhciCmMode`,
+`XhciCmApprove` and `XhciCmSafeEject` (only with a Thunderbolt or USB4
+controller). Each shows the value now, the default and the values
+allowed, with a warning where the setting has one; Enter keeps the value,
+and only an answer changes it. An answer applies from the driver's next
+start: on a new Thunderbolt install the first start runs with the
+defaults, so devices connected before the restart are approved.
+`/defaults` asks nothing, and `/set Name=Value` sets a value without
+asking.
+
+**Switches**: `/list` shows what it would do and changes nothing (no log
+either); `/yes` skips the confirmation; `/uninstall` removes the drivers
+(below); `/force`, `/restage`, `/clean`, `/debug` (the `debug-` directory,
+only if a maintainer asks), `/nopause` and `/log path` are in
+`tools\xhciinst\readme.txt`. **Exit codes**: 0 done; 1 refused or
+cancelled, nothing changed; 2 something failed (the screen and the log say
+what was done); 3 done, restart Windows; 4 done as far as it can, with the
+steps left printed. **The log**: every run but `/list` adds to
+`XHCIINST.LOG` at the root of the system drive; attach it to a report
+about an install.
+
+**Uninstall**: `INSTALL.BAT /uninstall` warns first that on a machine
+whose only USB controller is xHCI the USB keyboard and mouse stop working
+until another driver is installed, and goes on only when you type
+`REMOVE`. On Windows 2000 to 7 it removes, in order and stopping at the
+first step that fails or needs a restart (run it again after the
+restart): this package's filter from a Thunderbolt port (the port goes
+back to Windows' own driver), every device entry of the package, its
+INFs, its services and its driver files, and its copies of the package.
+It never removes Windows' own `usbd.sys` and `usbui.dll`, which Windows
+supplied and other USB drivers use. On Windows 98 SE and ME it removes
+what it placed itself and prints the Device Manager steps for the rest.
+
 ### Installing Windows 2000 or XP, or using the Recovery Console: the F6 floppy
 
 From `2.1.0.0` every flavour directory carries `txtsetup.oem`, for a machine
@@ -959,6 +1046,11 @@ upgrade, so a setting kept on a device's own entry, such as SweetLow's
 hidusbf's polling rate, has to be applied again (see "SweetLow's hidusbf").
 
 ### Updating from 2.y.y.y
+
+From `3.0.0.0`, `INSTALL.BAT` does what follows on Windows 2000 to 7 and
+prepares it on 98 SE and ME ("Installing, updating and uninstalling with
+INSTALL.BAT"); this section is the route by hand, and what each system
+does either way.
 
 **From `2.3.x` or earlier to `2.4.0.0` or later, read "From 2.3.x or
 earlier" (below) first**: that update finds each root hub, hub and
@@ -1749,6 +1841,11 @@ by default, with nothing for the backstop to drain, and the line under
 `XhciInterruptMode` `1`. MSI-X has not been read on real hardware.
 
 ## Registry settings
+
+From `3.0.0.0`, `INSTALL.BAT` asks about eight of these values where the
+hardware they affect is present, and sets them on request
+("Installing, updating and uninstalling with INSTALL.BAT"); everything
+below can still be set by hand.
 
 Each value is a `DWORD` in the controller's driver (software) key, and
 the install writes every value the driver reads, thirty-six, in this key:

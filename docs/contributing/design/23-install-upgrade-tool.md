@@ -1,6 +1,6 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 3, 2026-10-15, reviewed and revised twice the same day;
+Status: revision 4, 2026-10-15, reviewed and revised three times the same day;
 the code is written against it (task 40.6). Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
 package gains an install and upgrade script, `INSTALL.BAT`, in front of a
@@ -340,13 +340,18 @@ code reads the package on Windows 98.
 ### 5.3 Reading the devices
 
 On NT every devnode, present or not, comes from `SetupDiGetClassDevs` with
-`DIGCF_ALLCLASSES` and no `DIGCF_PRESENT`, walked to `ERROR_NO_MORE_ITEMS`:
-its instance id, `HardwareID` and `CompatibleIDs`, `Service`, `Driver`,
-`UpperFilters` and `DeviceDesc`. Every property that decides anything -
-the ids, `Service`, `Driver`, `UpperFilters` - has three answers, as
-`XHCICLN`'s reads do: read, absent (`ERROR_INVALID_DATA`, SetupAPI's
-answer for a property the devnode does not have), or unreadable (any
-other failure). Presence has three too: `CM_Get_DevNode_Status` answering
+`DIGCF_ALLCLASSES` and no `DIGCF_PRESENT`, walked to `ERROR_NO_MORE_ITEMS`,
+for its instance id and `DeviceDesc`. Every property that decides
+anything - `HardwareID`, `CompatibleIDs`, `Service`, `Driver`,
+`UpperFilters` - is read from the devnode's own key under
+`HKLM\SYSTEM\CurrentControlSet\Enum\<instance id>`, not through
+`SetupDiGetDeviceRegistryProperty`, whose `ERROR_INVALID_DATA` means
+"absent **or** invalid" (Microsoft's documentation). Each has three
+answers, as `XHCICLN`'s reads do: read - the type expected (`REG_SZ` or
+`REG_MULTI_SZ`), fitting the buffer, and terminated by the tool whatever
+was stored; absent - `ERROR_FILE_NOT_FOUND` for the value, the one answer
+that proves it; or unreadable - the key not opening, another type, data
+too long. Presence has three too: `CM_Get_DevNode_Status` answering
 is present, `CR_NO_SUCH_DEVINST` is absent, anything else is unknown. A
 failure to build or walk the set, more devnodes than the tool holds, an
 instance id that cannot be read, or any unreadable property or unknown
@@ -388,6 +393,14 @@ problem code turns it into an install. Then:
 The controller's model id is the class id `PCI\CC_0C0330`, so every xHCI
 controller in the machine is matched; one running another vendor's driver
 is foreign and left. The same holds for a UAS device another driver holds.
+
+**A missing or older payload is repaired.** When the group's installed
+binary is missing or older than the package's - or, for `xhci98` on 32-bit
+NT, `xhcihlpr.sys` is - while a device's driver key says "current", that
+device is reinstalled from its INF (for `xhci98`, its controllers: their
+install sections are the ones that copy and register both files), so the
+INF puts the files back. The cases "current driver key, missing file" and
+"current driver key, older file" are legs (section 12).
 
 **The verdict per service group.** The devnodes of one service share one
 binary: every devnode bound to `xhci98` - each controller, root hub, hub
@@ -440,7 +453,8 @@ called:
 
 ### 5.6 Pre-staging: `SetupCopyOEMInf`
 
-Every INF of the package is copied into the system's INF store with
+Every INF of the package whose service group is not refused (section 5.4)
+is copied into the system's INF store with
 `SetupCopyOEMInfA(inf, localCopy, SPOST_PATH, 0, ...)` from the local copy
 (section 4.4) before any device is touched, so a device that appears later
 - a UAS disk plugged next week, a hub, the root hub after an update from
@@ -482,13 +496,23 @@ run INSTALL.BAT /restage to replace it" and ends with exit 4. With
 or not, whose driver key's `InfPath` is that `oemNN.inf`, and the
 confirmation:
 
+0. **The precondition**: every devnode, present or not, whose driver key's
+   `InfPath` names that `oemNN.inf` must be present, so each can be moved
+   to the new package in this run, and every `InfPath` must be readable;
+   otherwise `/restage` refuses that INF ("connect it first") and the trap
+   stays reported (exit 4). Forcing the package out from under a device
+   that cannot be reinstalled now is never done;
 1. the local copy is in place (section 4.4), so the replacement's source
    cannot vanish;
-2. the work owed is written down first: `%windir%\XHCI98\RESTAGE.LST`
-   names the INF whose devices are to be reinstalled. A run that finds the
-   file reinstalls every present device of each INF it names, whatever its
-   `DriverVersion` says, whether or not a trap is still detectable - an
-   interrupted `/restage` is finished by the next ordinary run;
+2. the work owed is written down first, flushed and closed before anything
+   is removed: `%windir%\XHCI98\RESTAGE.LST` holds `PKG` and the local
+   copy's directory name (the package identity), `INF` with the INF's slot
+   and the removed `oemNN.inf`, and one `DEV` line per devnode that named
+   it. A later run reads it first: an unreadable or malformed file refuses
+   the run (exit 1); a file naming another package's copy refuses it too,
+   with that package named ("run that package's INSTALL.BAT"); the same
+   package's run reinstalls every `DEV` device present, whatever its
+   `DriverVersion` says and whether or not the trap is still detectable;
 3. `SetupUninstallOEMInfA(oemNN.inf, SUOI_FORCEDELETE, NULL)`, which
    removes the package even while devices reference it (Microsoft's
    documentation; that is why the plan names them first);
@@ -497,13 +521,14 @@ confirmation:
    which stages from the same local copy and, by the work file, reinstalls
    - the devices keep running the files already in `system32\drivers`
    meanwhile;
-5. every present device of that INF is reinstalled, and the INF leaves the
-   work file once every present device of it runs the package's version
-   with no problem code. A device not present then keeps a driver key that
-   names the removed `oemNN.inf`; it runs the group's one binary, which the
-   reinstall replaced, when it returns, and the report says how many such
-   devices there are. `UpdateDriverForPlugAndPlayDevices` reaches present
-   devices only, so nothing more is attempted for them.
+5. every listed device is reinstalled. A `DEV` line goes only when its
+   device is present, its driver key no longer names the removed INF, and
+   it runs the package's version with no problem code; the `INF` line goes
+   when none of its devices is left; the file goes when nothing is. A
+   listed device absent at a later run - unplugged after the precondition
+   held - keeps its line, is reported, and sets the steps flag
+   ("connect it and run INSTALL.BAT"): completion is never claimed for a
+   device that was not seen moved.
 
 Released packages never meet the trap - each release has its own
 `DriverVer` - so this is a development-build route and is said to be. On
@@ -528,6 +553,17 @@ ids, so step 8 updates them as section 5.4 says: each is bound to `xhci98`
 with an older driver key, which is what the release notes' "then on xHCI98
 USB 3.x Root Hub" does by hand. From `2.3.x` they are new devnodes after
 the controller's update (record 13 section 10.13.4):
+
+**Every dependent phase has the same barrier.** Installing a root hub or a
+hub shows the hubs behind it, a UAS disk may show children, an NHI shows
+its ports. So step 8 runs per INF, repeated while new targets appear (at
+most four passes): before each pass `CMP_WaitNoPendingInstallEvents` (60
+seconds) must answer "none" and the devices are read and planned again,
+with every safeguard of sections 5.4 and 5.5 applied afresh; a timeout or
+a failed question stops the run with "finish or cancel the windows Windows
+shows, then run INSTALL.BAT again" (exit 4), and the next run continues
+from what it finds - a root hub whose wizard was cancelled is a device
+with no driver, installed then.
 
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question. `CMP_WaitNoPendingInstallEvents` then times out, because the
@@ -633,10 +669,16 @@ its 2 adds a failure, and its 1 (refused) changes nothing.
 
 ### 6.2 The route
 
-1. The local copy (section 4.4) in `%windir%\XHCI98`.
-2. Append `;%windir%\XHCI98` (expanded) to `DevicePath` if it is not
-   already in the list, compared without case; never reorder or remove
-   another entry; keep the value's type.
+1. The local copy (section 4.4): this package's own directory under
+   `%windir%\XHCI98\`, which holds the INFs - the parent holds none, and no
+   recursive search is assumed.
+2. `DevicePath` names that directory: every entry under
+   `%windir%\XHCI98\` (an earlier run's copy, which the tool itself added)
+   is taken out of the list and this copy's directory appended, compared
+   without case; no other entry is reordered or removed, and the value
+   keeps its type. So the wizards search this release's copy alone; the
+   earlier copies stay on disk, where an INF Windows installed from one may
+   still look for its files, until the uninstall.
 3. The device installer then finds the package's INFs in a directory it
    searches by itself, and an INF found there takes its files from its own
    directory. **Unread until the legs**: whether the 98 SE and ME wizards
@@ -644,7 +686,8 @@ its 2 adds a failure, and its 1 (refused) changes nothing.
    whether their driver database is rebuilt for it, and where the files
    are copied from (section 12). Until those readings, the printed steps
    name both routes: the search with no box ticked, and "Specify a
-   location" with `%windir%\XHCI98` typed once, which needs no package
+   location" with the copy's directory typed once (the tool prints it in
+   full), which needs no package
    media either.
 4. The OS's own files the INF asks for through `LayoutFile=layout.inf`
    (`usbd.sys`, `usbui.dll`; and `hidclass.sys` for the first HID device)
@@ -753,7 +796,7 @@ read.
 | `CM_Locate_DevNodeA`, `CM_Get_Child`, `CM_Get_Sibling`, `CM_Get_Device_IDA`, `CM_Get_DevNode_Status`, `CM_Get_DevNode_Registry_PropertyA` | `cfgmgr32.dll` | all | 5.3, 6.3 |
 | `CMP_WaitNoPendingInstallEvents` | `cfgmgr32.dll` (where `XHCICLN` resolves it, read on 2000 by task 38.8's legs), else `setupapi.dll` | 2000 onward | 5.1 |
 | `GetFileVersionInfoSizeA`, `GetFileVersionInfoA`, `VerQueryValueA` | `version.dll` | all | 4.2, 5.4 |
-| `SetupDiBuildDriverInfoList`, `SetupDiEnumDriverInfoA`, `SetupDiGetDriverInfoDetailA`, `SetupDiGetDriverInstallParams`, `SetupDiSetSelectedDriverA`, `SetupDiDestroyDriverInfoList` | `setupapi.dll` | 2000 onward | 9.2 |
+| `SetupDiBuildDriverInfoList`, `SetupDiEnumDriverInfoA`, `SetupDiGetDriverInfoDetailA`, `SetupDiGetDriverInstallParamsA`, `SetupDiSetSelectedDriverA`, `SetupDiDestroyDriverInfoList`, `SetupDiSetDeviceInstallParamsA` | `setupapi.dll` | 2000 onward | 9.2 |
 | `IsWow64Process` | `kernel32.dll` | XP SP2 onward, absent is not WOW64 | 3 |
 
 Every one is looked up at run time, and the log records where each
@@ -949,14 +992,24 @@ after it, reports what was done, and tells the user to restart and run
    empty is deleted with the same call and a zero length - the whole value
    is never removed while another name is in it). Then the port, if
    present, is given back to a driver that is not this package's **by the
-   documented per-device route**, not an ID-wide call: its compatible
-   driver list (`SetupDiBuildDriverInfoList`, `SPDIT_COMPATDRIVER`), the
-   best-ranked node (`SetupDiGetDriverInstallParams`' `Rank`) whose INF
-   (`SetupDiGetDriverInfoDetail`) is not this package's - Windows' own
-   `machine.inf` node, or a vendor's - selected
-   (`SetupDiSetSelectedDriver`) and installed
-   (`SetupDiCallClassInstaller(DIF_INSTALLDEVICE)`). No such node, or a
-   failure, stops the run before step 2. A port not present cannot be
+   documented per-device route**, not an ID-wide call: the device's
+   install parameters get `DI_FLAGSEX_ALLOWEXCLUDEDDRVS`
+   (`SetupDiGetDeviceInstallParamsA`, `SetupDiSetDeviceInstallParamsA`),
+   because Windows' own bridge node may be an excluded driver; its
+   compatible driver list is built (`SetupDiBuildDriverInfoList`,
+   `SPDIT_COMPATDRIVER`); the best-ranked node
+   (`SetupDiGetDriverInstallParamsA`'s `Rank`) whose INF
+   (`SetupDiGetDriverInfoDetailA`) is not this package's - Windows' own
+   `machine.inf` node, or a vendor's - is selected
+   (`SetupDiSetSelectedDriverA`) and installed
+   (`SetupDiCallClassInstaller(DIF_INSTALLDEVICE)`), and the restart flags
+   are read after it (unreadable stops). **The postconditions**, read back
+   from the devnode's key and its driver key: the same function driver as
+   before; `UpperFilters` equal to the edited value - the other filters
+   kept, and set back if the reinstall changed them (a restart then); and
+   an `InfPath` that is readable and not this package's. No such node, a
+   failure, or a postcondition not met stops the run before step 2. A port
+   not present cannot be
    reinstalled: its filter name is removed and the run stops (exit 4)
    with "connect the dock and run INSTALL.BAT /uninstall again" - the
    port is still a filter host by its `InfPath`, so the next run finds it.
@@ -1118,13 +1171,13 @@ installed `.sys` with the package's, and Device Manager.
 
 | Leg | Systems | What it reads |
 |---|---|---|
-| F, fresh install | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | NT: one run installs the controller and root hub; the routines resolved; the restart reported (32-bit Vista and 7); a UAS disk plugged after the run installs from the staged INF with no question about where. 98 and ME: `DevicePath` written; the wizard finds the controller with no box ticked, or by the typed path; the files come from `%windir%\XHCI98`; the CD prompt for `usbd.sys` (98 SE); a UAS disk plugged later finds `xhciuas.inf` |
+| F, fresh install | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | NT: one run installs the controller and root hub; the routines resolved; the restart reported (32-bit Vista and 7); a UAS disk plugged after the run installs from the staged INF with no question about where. 98 and ME: `DevicePath` written; the wizard finds the controller with no box ticked, or by the typed path the tool printed; the files come from the copy's directory under `%windir%\XHCI98\`; the CD prompt for `usbd.sys` (98 SE); a UAS disk plugged later finds `xhciuas.inf` |
 | U24, update over `2.4.0.0` | the nine | NT: the controller, root hub, hubs and composite entries updated, each driver key's version the new one, every `.sys` equal to the package's; 2000 with no Have Disk; the Vista and 7 trap - this branch's INFs are byte-identical to `2.4.0.0`'s until the `3.0.0.0` restamp, so a leg with the unrestamped package reads the trap's detection and `/restage`, and a leg with a restamped package the normal update; 98 and ME: the update wizard finds the new driver by search |
 | U23, update over `2.3.1.0` | 98 SE, 2000, XP, XP x64, 7 x64 | the new devnodes of record 13 section 10.13.4; on XP and XP x64 the wizard stop and the second run (section 5.8); on 7 x64 installed by step 8 or by Windows; the `XHCICLN` question and its run after the restart, on a run that changes nothing |
 | UN, uninstall and reinstall | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | the warning and the word; every devnode, the OEM INFs (2000: the manual route; XP onward: `SetupUninstallOEMInf`, which systems resolve it), the services and files gone or pending; the gate after a pending removal and the resumed second run; a restart; the controller back as an unknown device; `INSTALL.BAT` installing it again. 98 SE and ME: the steps printed and followed |
 | R, registry questions | 98 SE (after the install and restart), 2000 | each applicable question shown with now, default and allowed; a non-applicable one not shown (no Intel switchover controller in QEMU, no NHI); an answer written to the controller's driver key and not to the root hub's, Enter keeping, `/set` and `/defaults` |
 | L, `/list` and the refusals | every leg's first run | nothing changed (a registry and file listing before and after, no log written); the ZIP-folder refusal, a mixed architecture, a mis-versioned INF, a stale `.sys`, a swapped flavour |
-| M, moved source | 2000, XP | an installation made the old way first - Have Disk from a CD image, so the staged INF's `.pnf` names the CD - then the tool run on the identical package, then the CD image removed, then a UAS disk never seen before plugged: it must install with no prompt (section 5.6) |
+| M, moved source | 2000, XP | an installation made the old way first - Have Disk from a CD image for the controller **and** for a UAS disk, so the staged `xhciuas.inf`'s `.pnf` names the CD - then the tool run on the identical package, then the CD image removed, then a UAS disk never seen before plugged: it must install with no prompt (section 5.6). XP x64 is not covered by this leg, and the release notes say so |
 
 What each system's legs settle that nothing here has read:
 
@@ -1136,7 +1189,8 @@ What each system's legs settle that nothing here has read:
   the `.pnf` route of section 9.2; where `CMP_WaitNoPendingInstallEvents`
   resolves.
 - **XP and XP x64**: the wizard stop and the second run (section 5.8);
-  that an identical INF is no trap there (5.7); the source refresh (5.6);
+  that an identical INF is no trap there (5.7); the source refresh (5.6;
+  XP only, leg M);
   `SetupUninstallOEMInf` on XP SP3 and XP x64 SP2.
 - **Vista and 7**: the trap's detection and `/restage`; the restart on
   32-bit; `SystemStartOptions`' `TESTSIGNING` on the x64 guests in
@@ -1158,7 +1212,9 @@ the user.
 - **D1** The executables in `tools\xhciinst\`, `INSTALL.BAT` at the root;
   one batch file, the uninstall behind `/uninstall` (section 2).
 - **D2** Windows 98 SE and ME through `DevicePath` and the local copy in
-  `%windir%\XHCI98`, never `INF\OTHER` or `SETUPX` (section 6).
+  in this package's own directory under `%windir%\XHCI98\`, which
+  `DevicePath` names in place of an earlier copy's, never `INF\OTHER` or
+  `SETUPX` (section 6).
 - **D3** A device bound to another vendor's driver is listed and left,
   including an xHCI controller, whatever its problem code; Device Manager
   remains the way to replace a vendor driver (section 5.4).

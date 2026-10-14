@@ -343,6 +343,17 @@
 > elevation request), `build.cmd`, `selftest.cmd` (the `-selftest` that
 > `build-driver.cmd` runs when the EXE is built) and `README.TXT` (the text
 > of the published `readme.txt`).
+> Task 40.6 (roadmap-usb4.md, design record 23) adds the install tool's
+> tree beside it: `xhciinst\xhciinst.c` (the system half), `inst_core.c` /
+> `inst_core.h` (the pure half: the INF reader, the models section per
+> system, the action per device and per service group, the registry value
+> table and its applicability, the switches and exit codes; host suite
+> `test_inst`), `xhciinst.rc` and `xhciinst.manifest` (the elevation
+> request), `build.cmd` (`XHCIINST.EXE` with MSVC 6.0, `XHCIIN64.EXE` with
+> WDK 7.1 amd64, both also compiling `src\xhci_psw.c` for the driver's own
+> switchover gate), `selftest.cmd` (the `/selftest`, the switch refusals
+> and the import-table check `build-driver.cmd` runs), `INSTALL.BAT` (staged
+> at the package root) and `README.TXT` (the published `readme.txt`).
 > Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
 > `xhci_silent.h` (the Windows 98 SE and ME silent install: the
 > `XhciSilentInstall` gate's rule, the `SilentClasses` table's admission,

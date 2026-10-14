@@ -207,6 +207,8 @@ static int testSigningConfirmed;
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
 static char srcDir[INST_PATH_CHARS];
 static int restagePending[INST_INF_COUNT];
+static int restageOk[INST_INF_COUNT];
+static int restage_listed(const char *id);
 
 static DEVREC *devs;
 static int devCount;
@@ -716,6 +718,52 @@ static int sd_prop(HDEVINFO set, PSP_DEVINFO_DATA data, DWORD prop,
     return r;
 }
 
+/* A value of the devnode's own Enum key (record 23 section 5.3): 1 read,
+ * with the type expected and terminated; 0 absent (ERROR_FILE_NOT_FOUND,
+ * the one answer that proves it); -1 unreadable (the key did not open, the
+ * type is another, the data is too long). SetupAPI's ERROR_INVALID_DATA
+ * means "absent or invalid", so it is not used for these. */
+static int enum_value(const char *id, const char *name, DWORD wantType,
+                      char *buf, DWORD cap, DWORD *bytes)
+{
+    char path[INST_ID_CHARS + 64];
+    HKEY k;
+    DWORD type;
+    DWORD n = cap - 2;
+    LONG r;
+
+    memset(buf, 0, cap);
+    if (bytes != NULL) {
+        *bytes = 0;
+    }
+    inst_copy(path, "SYSTEM\\CurrentControlSet\\Enum\\", sizeof(path));
+    if (strlen(path) + strlen(id) >= sizeof(path)) {
+        return -1;
+    }
+    strcat(path, id);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_QUERY_VALUE, &k) !=
+        ERROR_SUCCESS) {
+        return -1;
+    }
+    r = RegQueryValueExA(k, name, NULL, &type, (LPBYTE)buf, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        memset(buf, 0, cap);
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || type != wantType) {
+        memset(buf, 0, cap);
+        return -1;
+    }
+    /* Terminated whatever was stored: two NULs follow the data. */
+    buf[n < cap - 2 ? n : cap - 2] = '\0';
+    buf[(n < cap - 2 ? n : cap - 2) + 1] = '\0';
+    if (bytes != NULL) {
+        *bytes = n;
+    }
+    return 1;
+}
+
 /* NT: every devnode, present or not (the uninstall needs the phantoms). A
  * set that cannot be walked to its end, an id that cannot be read, or a
  * safety-relevant property or presence answer that cannot be read refuses
@@ -764,16 +812,16 @@ static int scan_nt(void)
             api.Destroy(set);
             return 0;
         }
-        if (sd_prop(set, &data, SPDRP_HARDWAREID, d->Hw, sizeof(d->Hw),
-                    &d->HwBytes) < 0 ||
-            sd_prop(set, &data, SPDRP_COMPATIBLEIDS, d->Compat,
-                    sizeof(d->Compat), &d->CompatBytes) < 0 ||
-            sd_prop(set, &data, SPDRP_SERVICE, d->Service, sizeof(d->Service),
-                    NULL) < 0 ||
-            sd_prop(set, &data, SPDRP_DRIVER, d->Driver, sizeof(d->Driver),
-                    NULL) < 0 ||
-            sd_prop(set, &data, SPDRP_UPPERFILTERS, d->Upper, sizeof(d->Upper),
-                    &d->UpperBytes) < 0) {
+        if (enum_value(d->Id, "HardwareID", REG_MULTI_SZ, d->Hw, sizeof(d->Hw),
+                       &d->HwBytes) < 0 ||
+            enum_value(d->Id, "CompatibleIDs", REG_MULTI_SZ, d->Compat,
+                       sizeof(d->Compat), &d->CompatBytes) < 0 ||
+            enum_value(d->Id, "Service", REG_SZ, d->Service, sizeof(d->Service),
+                       NULL) < 0 ||
+            enum_value(d->Id, "Driver", REG_SZ, d->Driver, sizeof(d->Driver),
+                       NULL) < 0 ||
+            enum_value(d->Id, "UpperFilters", REG_MULTI_SZ, d->Upper,
+                       sizeof(d->Upper), &d->UpperBytes) < 0) {
             out("  unreadable: a property of %s\n", d->Id);
             unreadable++;
         }
@@ -893,11 +941,13 @@ static void group_verdicts(void)
     int newer;
     int unknown;
     int binary;
+    int repair;
     int r;
     INST_U32 v[4];
     char path[INST_PATH_CHARS];
 
     for (g = 0; g < INST_GROUPS; g++) {
+        repair = 0;
         newer = 0;
         unknown = 0;
         for (i = 0; i < devCount; i++) {
@@ -926,10 +976,15 @@ static void group_verdicts(void)
                 hb = r == 0 ? -2 : r < 0 ? 2 : inst_ver_cmp(v, pkgVersion);
                 if (hb == 2 || (hb == 1 && binary != 2)) {
                     binary = hb;
+                } else if (hb < 0) {
+                    repair = 1;   /* the helper missing or older */
                 }
             }
         }
         groupVerdict[g] = inst_group_verdict(newer, unknown, binary, opts.Force);
+        if (binary < 0) {
+            repair = 1;   /* the group's driver file missing or older */
+        }
         for (i = 0; i < devCount; i++) {
             DEVREC *d = &devs[i];
             if (d->Inf < 0 || group_of_inf(d->Inf) != g) {
@@ -939,6 +994,12 @@ static void group_verdicts(void)
             if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN) {
                 d->Refused = 1;
                 d->Runs = 0;
+            } else if (repair && envNow.Nt && d->Present &&
+                       d->Action == INST_ACT_CURRENT &&
+                       (g != 0 || is_controller(d))) {
+                /* Record 23 section 5.4: a current driver key over a missing
+                 * or older file is reinstalled, so the INF puts it back. */
+                d->Runs = 1;
             }
         }
     }
@@ -1005,8 +1066,8 @@ static void plan(void)
         d->Runs = inst_action_runs(d->Action, opts.Force);
         /* /restage: a confirmed binary mismatch reinstalls the INF's devices,
          * whatever their DriverVersion says (record 23 section 5.7). */
-        if (((opts.Restage && trapOem[d->Inf][0] != '\0') ||
-             restagePending[d->Inf]) &&
+        if (((opts.Restage && trapOem[d->Inf][0] != '\0' && restageOk[d->Inf]) ||
+             restage_listed(d->Id)) &&
             (d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_UPDATE)) {
             d->Runs = 1;
         }
@@ -1584,6 +1645,13 @@ static int package_tag(INST_U32 *tag)
     return 1;
 }
 
+static void local_copy_name(INST_U32 tag, char *name, size_t cap)
+{
+    _snprintf(name, cap - 1, "%s-%s-%08lX", XHCIINST_VERSION, opts.Dir,
+              (unsigned long)tag);
+    name[cap - 1] = '\0';
+}
+
 static int make_local_copy(void)
 {
     char rootDir[INST_PATH_CHARS];
@@ -1603,9 +1671,7 @@ static int make_local_copy(void)
         return 0;
     }
     CreateDirectoryA(rootDir, NULL);
-    _snprintf(name, sizeof(name) - 1, "%s-%s-%08lX", XHCIINST_VERSION,
-              opts.Dir, (unsigned long)tag);
-    name[sizeof(name) - 1] = '\0';
+    local_copy_name(tag, name, sizeof(name));
     join(srcDir, sizeof(srcDir), rootDir, name);
     join(lst, sizeof(lst), srcDir, "XHCIINST.LST");
     join(pattern, sizeof(pattern), pkgDir, "*.*");
@@ -1667,8 +1733,20 @@ static int make_local_copy(void)
     return 1;
 }
 
-/* The /restage work file (record 23 section 5.7): the INFs whose devices
- * still owe a reinstall after their stored package was replaced. */
+/* The /restage work file (record 23 section 5.7), %windir%\XHCI98\
+ * RESTAGE.LST, written before a stored package is removed:
+ *   PKG <the local copy's directory name>
+ *   INF <slot> <the removed oemNN.inf>
+ *   DEV <slot> <instance id>      one per device that named it
+ * A run resumes only the same package; the entries go as each device is
+ * seen reinstalled from this package. */
+#define INST_MAX_RDEV 64
+static char restagePkg[INST_PATH_CHARS];
+static char restageOem[INST_INF_COUNT][64];
+static int restageDevInf[INST_MAX_RDEV];
+static char restageDevId[INST_MAX_RDEV][INST_ID_CHARS];
+static int restageDevCount;
+
 static void restage_path(char *path, size_t cap)
 {
     char rootDir[INST_PATH_CHARS];
@@ -1680,26 +1758,72 @@ static void restage_path(char *path, size_t cap)
     join(path, cap, rootDir, "RESTAGE.LST");
 }
 
-static void restage_read(void)
+/* 1 read (or no file), 0 unreadable or malformed: the run refuses. */
+static int restage_read(void)
 {
     char path[INST_PATH_CHARS];
     char *text;
+    char *p;
+    char *nl;
     int k;
 
     memset(restagePending, 0, sizeof(restagePending));
+    memset(restageOem, 0, sizeof(restageOem));
+    restagePkg[0] = '\0';
+    restageDevCount = 0;
     restage_path(path, sizeof(path));
-    text = path[0] ? read_file(path, NULL) : NULL;
-    if (text == NULL) {
-        return;
+    if (path[0] == '\0' || GetFileAttributesA(path) == 0xFFFFFFFFUL) {
+        return 1;
     }
-    for (k = 0; k < INST_INF_COUNT; k++) {
-        if (strstr(text, instInfFile[k]) != NULL) {
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        out("%s cannot be read.\n", path);
+        return 0;
+    }
+    for (p = text; *p != '\0'; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            nl = p + strlen(p);
+        } else {
+            *nl++ = '\0';
+        }
+        if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+            p[strlen(p) - 1] = '\0';
+        }
+        if (p[0] == '\0') {
+            continue;
+        }
+        if (strncmp(p, "PKG ", 4) == 0) {
+            inst_copy(restagePkg, p + 4, sizeof(restagePkg));
+        } else if (strncmp(p, "INF ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
+                   p[5] == ' ') {
+            k = p[4] - '0';
             restagePending[k] = 1;
-            out("Unfinished /restage work: every device of %s is reinstalled.\n",
-                instInfFile[k]);
+            inst_copy(restageOem[k], p + 6, sizeof(restageOem[k]));
+        } else if (strncmp(p, "DEV ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
+                   p[5] == ' ' && restageDevCount < INST_MAX_RDEV) {
+            restageDevInf[restageDevCount] = p[4] - '0';
+            inst_copy(restageDevId[restageDevCount], p + 6, INST_ID_CHARS);
+            restageDevCount++;
+        } else {
+            out("%s is not in the form this tool writes.\n", path);
+            free(text);
+            return 0;
         }
     }
     free(text);
+    if (restagePkg[0] == '\0') {
+        out("%s names no package.\n", path);
+        return 0;
+    }
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (restagePending[k]) {
+            out("Unfinished /restage work of %s: %s was removed from the driver "
+                "store, and its\ndevices are reinstalled from that package.\n",
+                restagePkg, restageOem[k]);
+        }
+    }
+    return 1;
 }
 
 static int restage_write(void)
@@ -1708,6 +1832,7 @@ static int restage_write(void)
     char path[INST_PATH_CHARS];
     FILE *f;
     int k;
+    int i;
     int any = 0;
 
     restage_path(path, sizeof(path));
@@ -1715,8 +1840,9 @@ static int restage_write(void)
         any |= restagePending[k];
     }
     if (!any) {
-        if (path[0]) {
-            DeleteFileA(path);
+        if (path[0] && GetFileAttributesA(path) != 0xFFFFFFFFUL &&
+            !DeleteFileA(path)) {
+            return 0;
         }
         return 1;
     }
@@ -1728,13 +1854,135 @@ static int restage_write(void)
     if (f == NULL) {
         return 0;
     }
+    fprintf(f, "PKG %s\n", restagePkg);
     for (k = 0; k < INST_INF_COUNT; k++) {
         if (restagePending[k]) {
-            fprintf(f, "%s\n", instInfFile[k]);
+            fprintf(f, "INF %d %s\n", k, restageOem[k]);
         }
     }
-    fclose(f);
+    for (i = 0; i < restageDevCount; i++) {
+        if (restageDevId[i][0] != '\0') {
+            fprintf(f, "DEV %d %s\n", restageDevInf[i], restageDevId[i]);
+        }
+    }
+    if (fflush(f) != 0) {
+        fclose(f);
+        return 0;
+    }
+    return fclose(f) == 0;
+}
+
+static int restage_listed(const char *id)
+{
+    int i;
+
+    for (i = 0; i < restageDevCount; i++) {
+        if (restageDevId[i][0] != '\0' && inst_eq(restageDevId[i], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* After the installs: an entry goes when its device is present, no longer
+ * names the removed INF, runs the package's version with no problem; an INF
+ * goes when none of its entries is left. Entries of absent devices stay. */
+static void restage_settle(void)
+{
+    int i;
+    int j;
+    int k;
+    int left;
+
+    for (i = 0; i < restageDevCount; i++) {
+        const DEVREC *d = NULL;
+        if (restageDevId[i][0] == '\0') {
+            continue;
+        }
+        for (j = 0; j < devCount; j++) {
+            if (inst_eq(devs[j].Id, restageDevId[i])) {
+                d = &devs[j];
+                break;
+            }
+        }
+        if (d == NULL || !d->Present) {
+            out("  %s is not present: its reinstall is still owed (connect it "
+                "and run INSTALL.BAT).\n", restageDevId[i]);
+            flagSteps = 1;
+            continue;
+        }
+        if (d->InfPathState > 0 &&
+            !inst_eq(d->InfPath, restageOem[restageDevInf[i]]) &&
+            d->VersionState == INST_VS_HAVE &&
+            inst_ver_cmp(d->Version, pkgVersion) == 0 && d->Problem == 0) {
+            restageDevId[i][0] = '\0';
+        }
+    }
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (!restagePending[k]) {
+            continue;
+        }
+        left = 0;
+        for (i = 0; i < restageDevCount; i++) {
+            if (restageDevId[i][0] != '\0' && restageDevInf[i] == k) {
+                left++;
+            }
+        }
+        if (left == 0) {
+            restagePending[k] = 0;
+        } else {
+            flagSteps = 1;
+        }
+    }
+}
+
+/* /restage's precondition (record 23 section 5.7): every devnode that names
+ * the stored INF is present, so each can be moved to the new package now.
+ * 0 refuses the replacement of that INF. */
+static int restage_movable(int k)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].InfPathState < 0) {
+            out("/restage: %s's driver key cannot be read: %s is not "
+                "replaced.\n", devs[i].Id, trapOem[k]);
+            return 0;
+        }
+        if (devs[i].InfPathState > 0 && inst_eq(devs[i].InfPath, trapOem[k])) {
+            if (!devs[i].Present) {
+                out("/restage: %s names %s and is not connected: connect it "
+                    "first, or it would be left\non a removed package. %s is "
+                    "not replaced.\n", devs[i].Id, trapOem[k], trapOem[k]);
+                return 0;
+            }
+            n++;
+        }
+    }
     return 1;
+}
+
+static int restage_record(int k)
+{
+    int i;
+    char *slash = strrchr(srcDir, '\\');
+
+    inst_copy(restagePkg, slash != NULL ? slash + 1 : srcDir, sizeof(restagePkg));
+    restagePending[k] = 1;
+    inst_copy(restageOem[k], trapOem[k], sizeof(restageOem[k]));
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].InfPathState > 0 && inst_eq(devs[i].InfPath, trapOem[k]) &&
+            !restage_listed(devs[i].Id)) {
+            if (restageDevCount >= INST_MAX_RDEV) {
+                return 0;
+            }
+            restageDevInf[restageDevCount] = k;
+            inst_copy(restageDevId[restageDevCount], devs[i].Id, INST_ID_CHARS);
+            restageDevCount++;
+        }
+    }
+    return restage_write();
 }
 /* Vista and 7, read only (record 23 section 5.7): an oem*.inf byte-identical
  * to the package's INF whose stored package's files differ from ours. */
@@ -1840,18 +2088,16 @@ static int stage_nt(void)
             continue;
         }
         if (trapOem[k][0] != '\0') {
-            if (!opts.Restage) {
+            if (!opts.Restage || !restageOk[k]) {
                 infTrap[k] = 1;
                 flagSteps = 1;
                 continue;
             }
             /* The reinstall owed is recorded before the stored package goes,
              * so an interrupted run resumes it (record 23 section 5.7). */
-            restagePending[k] = 1;
-            if (!restage_write()) {
+            if (!restage_record(k)) {
                 out("/restage: the work file could not be written; nothing "
                     "removed.\n");
-                restagePending[k] = 0;
                 return 0;
             }
             if (api.UninstallOem == NULL ||
@@ -2273,23 +2519,6 @@ static int confirm(const char *what)
     return 0;
 }
 
-/* 1 when a present device of the INF still does not run this package's
- * version, so the /restage reinstall is still owed. */
-static int restage_left(int inf)
-{
-    int i;
-
-    for (i = 0; i < devCount; i++) {
-        const DEVREC *d = &devs[i];
-        if (d->Present && d->Inf == inf &&
-            (d->VersionState != INST_VS_HAVE ||
-             inst_ver_cmp(d->Version, pkgVersion) != 0 || d->Problem != 0)) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 /* Record 23 section 5.1: no installation in progress before the first
  * change. 1 clear; 0 stop (pending, or the answer unknown). */
 static int nothing_pending(void)
@@ -2314,17 +2543,71 @@ static int nothing_pending(void)
     return 0;
 }
 
+/* The barrier between dependent phases (record 23 sections 5.1 and 5.8):
+ * nothing pending, then the devices read and planned again. 0 stops. */
+static int barrier(void)
+{
+    if (!wait_installs()) {
+        return 0;
+    }
+    if (!scan()) {
+        flagFailed = 1;
+        return 0;
+    }
+    plan();
+    return 1;
+}
+
+static int any_runs(int inf, int controllers)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (d->Present && d->Inf == inf && d->Runs && !d->Done &&
+            !infTrap[inf] && (controllers < 0 || is_controller(d) == controllers)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int run_install_nt(void)
 {
     int k;
     int runs = 0;
     int i;
+    int pass;
+    INST_U32 tag;
+    char name[INST_PATH_CHARS];
 
     if (!scan()) {
         return INST_EXIT_REFUSED;
     }
+    if (!restage_read()) {
+        out("REFUSED: the /restage work file is unreadable; nothing is "
+            "changed.\n");
+        return INST_EXIT_REFUSED;
+    }
+    if (restagePkg[0] != '\0') {
+        if (!package_tag(&tag)) {
+            return INST_EXIT_REFUSED;
+        }
+        local_copy_name(tag, name, sizeof(name));
+        if (!inst_eq(name, restagePkg)) {
+            out("REFUSED: an unfinished /restage of another package (%s) is "
+                "recorded. Run that\npackage's INSTALL.BAT to finish it; this "
+                "one is %s.\n", restagePkg, name);
+            return INST_EXIT_REFUSED;
+        }
+    }
     trap_scan();
-    restage_read();
+    memset(restageOk, 0, sizeof(restageOk));
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (opts.Restage && trapOem[k][0] != '\0') {
+            restageOk[k] = restage_movable(k);
+        }
+    }
     plan();
     print_plan();
     for (i = 0; i < devCount; i++) {
@@ -2355,54 +2638,31 @@ static int run_install_nt(void)
         out("A controller's update failed: the rest is not attempted.\n");
         return inst_exit_code(0, 1, flagRestart, flagSteps);
     }
-    if (flagChanged && !wait_installs()) {
-        if (scan()) {
-            plan();
-            check_results();
-        }
-        return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
-    }
-    /* After a 2.3.x update the root hub and the hubs are new devnodes. */
-    if (!scan()) {
-        flagFailed = 1;
-        return inst_exit_code(0, 1, flagRestart, flagSteps);
-    }
-    plan();
+    /* After a 2.3.x update the root hub and the hubs are new devnodes; an
+     * installed root hub or hub shows the hubs behind it; a UAS disk or an
+     * NHI may show children too. Each phase waits and reads again. */
     for (k = 0; k < INST_INF_COUNT; k++) {
         if (infText[k] == NULL) {
             continue;
         }
-        install_inf(k, k == INST_INF_XHCI ? 0 : -1);
+        for (pass = 0; pass < 4; pass++) {
+            if (!barrier()) {
+                goto stopped;
+            }
+            if (!any_runs(k, k == INST_INF_XHCI ? 0 : -1)) {
+                break;
+            }
+            install_inf(k, k == INST_INF_XHCI ? 0 : -1);
+        }
     }
-    if (scan()) {
-        plan();
-        write_values();
-        check_results();
-        for (k = 0; k < INST_INF_COUNT; k++) {
-            if (restagePending[k] && !restage_left(k)) {
-                restagePending[k] = 0;
-            }
-            if (opts.Restage && trapOem[k][0] != '\0') {
-                int absent = 0;
-                for (i = 0; i < devCount; i++) {
-                    if (!devs[i].Present && devs[i].InfPathState > 0 &&
-                        inst_eq(devs[i].InfPath, trapOem[k])) {
-                        absent++;
-                    }
-                }
-                if (absent) {
-                    out("%d device(s) not present still name the removed %s; "
-                        "they run this\npackage's %s when they return.\n",
-                        absent, trapOem[k],
-                        groupService[group_of_inf(k)]);
-                }
-            }
-        }
-        if (!restage_write()) {
-            out("The /restage work file could not be updated.\n");
-            flagFailed = 1;
-        }
-    } else {
+    if (!barrier()) {
+        goto stopped;
+    }
+    write_values();
+    check_results();
+    restage_settle();
+    if (!restage_write()) {
+        out("The /restage work file could not be updated.\n");
         flagFailed = 1;
     }
     if (flagRestart) {
@@ -2412,8 +2672,16 @@ static int run_install_nt(void)
     }
     offer_cleanup();
     return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
-}
 
+stopped:
+    if (scan()) {
+        plan();
+        check_results();
+    }
+    out("\nStopped before every device was done: run INSTALL.BAT again to go "
+        "on.\n");
+    return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+}
 /* ======================================================================== */
 /* 98 SE and ME (record 23 section 6)                                        */
 /* ======================================================================== */
@@ -2685,6 +2953,9 @@ typedef BOOL (WINAPI *PFN_DRVPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
 typedef BOOL (WINAPI *PFN_SETSELDRV)(HDEVINFO, PSP_DEVINFO_DATA,
                                      PSP_DRVINFO_DATA_A);
 typedef BOOL (WINAPI *PFN_DESTROYDRV)(HDEVINFO, PSP_DEVINFO_DATA, DWORD);
+typedef BOOL (WINAPI *PFN_SETDIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                       PSP_DEVINSTALL_PARAMS_A);
+#define INST_DI_FLAGSEX_ALLOWEXCLUDEDDRVS 0x00000800UL
 
 /* Give a present port back to the best-ranked driver node that is not this
  * package's (Windows' own machine.inf, or a vendor's), per device. */
@@ -2693,7 +2964,7 @@ static int reinstall_without_ours(HDEVINFO set, PSP_DEVINFO_DATA data)
     PFN_BUILDDRV build = (PFN_BUILDDRV)proc(api.SetupApi, "setupapi", "SetupDiBuildDriverInfoList");
     PFN_ENUMDRV enumDrv = (PFN_ENUMDRV)proc(api.SetupApi, "setupapi", "SetupDiEnumDriverInfoA");
     PFN_DRVDETAIL detail = (PFN_DRVDETAIL)proc(api.SetupApi, "setupapi", "SetupDiGetDriverInfoDetailA");
-    PFN_DRVPARAMS params = (PFN_DRVPARAMS)proc(api.SetupApi, "setupapi", "SetupDiGetDriverInstallParams");
+    PFN_DRVPARAMS params = (PFN_DRVPARAMS)proc(api.SetupApi, "setupapi", "SetupDiGetDriverInstallParamsA");
     PFN_SETSELDRV select = (PFN_SETSELDRV)proc(api.SetupApi, "setupapi", "SetupDiSetSelectedDriverA");
     PFN_DESTROYDRV destroy = (PFN_DESTROYDRV)proc(api.SetupApi, "setupapi", "SetupDiDestroyDriverInfoList");
     SP_DRVINFO_DATA_A drv;
@@ -2707,9 +2978,24 @@ static int reinstall_without_ours(HDEVINFO set, PSP_DEVINFO_DATA data)
     int found = 0;
     char *text;
 
+    PFN_SETDIPARAMS setDi = (PFN_SETDIPARAMS)proc(api.SetupApi, "setupapi", "SetupDiSetDeviceInstallParamsA");
+
     if (build == NULL || enumDrv == NULL || detail == NULL || params == NULL ||
-        select == NULL || destroy == NULL) {
+        select == NULL || destroy == NULL || setDi == NULL) {
         out("the per-device installation routines are missing.\n");
+        return 0;
+    }
+    /* Windows' own bridge node may be an excluded driver: let the list carry
+     * it (DI_FLAGSEX_ALLOWEXCLUDEDDRVS, Microsoft's driver-list remarks). */
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (!api.GetDiParams(set, data, &ip)) {
+        out("its install parameters cannot be read.\n");
+        return 0;
+    }
+    ip.FlagsEx |= INST_DI_FLAGSEX_ALLOWEXCLUDEDDRVS;
+    if (!setDi(set, data, &ip)) {
+        out("its install parameters cannot be set.\n");
         return 0;
     }
     if (!build(set, data, SPDIT_COMPATDRIVER)) {
@@ -2762,14 +3048,63 @@ static int reinstall_without_ours(HDEVINFO set, PSP_DEVINFO_DATA data)
     }
     memset(&ip, 0, sizeof(ip));
     ip.cbSize = sizeof(ip);
-    if (api.GetDiParams(set, data, &ip) &&
-        (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+    if (!api.GetDiParams(set, data, &ip)) {
+        out("done, but whether it needs a restart cannot be read.\n");
+        destroy(set, data, SPDIT_COMPATDRIVER);
+        return 0;
+    }
+    if ((ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
         out("done, restart needed.\n");
         flagRestart = 1;
     } else {
         out("done.\n");
     }
     destroy(set, data, SPDIT_COMPATDRIVER);
+    return 1;
+}
+
+/* The port's state after it was given back (record 23 section 9.2 step 1):
+ * the same function driver, the other filters kept, no INF of ours. */
+static int unfilter_verify(HDEVINFO set, PSP_DEVINFO_DATA data,
+                           const DEVREC *d, const char *msz, size_t mszBytes)
+{
+    char svc[64];
+    char upper[512];
+    DWORD upperBytes;
+    char drv[128];
+    char path[INST_PATH_CHARS];
+    char infPath[64];
+    int r;
+
+    if (enum_value(d->Id, "Service", REG_SZ, svc, sizeof(svc), NULL) < 0 ||
+        enum_value(d->Id, "UpperFilters", REG_MULTI_SZ, upper, sizeof(upper),
+                   &upperBytes) < 0 ||
+        enum_value(d->Id, "Driver", REG_SZ, drv, sizeof(drv), NULL) <= 0) {
+        out("  the port cannot be read back.\n");
+        return 0;
+    }
+    if (!inst_eq(svc, d->Service)) {
+        out("  the port's function driver is now %s, not %s.\n", svc, d->Service);
+        return 0;
+    }
+    if (inst_msz_has(upper, upperBytes, "xhcicm") ||
+        (mszBytes > 0 && (upperBytes < mszBytes || memcmp(upper, msz, mszBytes) != 0)) ||
+        (mszBytes == 0 && upper[0] != '\0')) {
+        out("  its filters changed with the reinstall: set back to the others.\n");
+        if (!api.SetRegProp(set, data, SPDRP_UPPERFILTERS,
+                            mszBytes ? (const BYTE *)msz : NULL, (DWORD)mszBytes)) {
+            out("  FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+            return 0;
+        }
+        flagRestart = 1;
+    }
+    join(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Control\\Class", drv);
+    r = reg_text3(HKEY_LOCAL_MACHINE, path, "InfPath", infPath, sizeof(infPath));
+    if (r < 0 || (r > 0 && inf_path_is_ours(infPath) != 0)) {
+        out("  its driver key still names this package's INF, or cannot be "
+            "read.\n");
+        return 0;
+    }
     return 1;
 }
 
@@ -2811,7 +3146,10 @@ static int unfilter_nt(HDEVINFO set, const DEVREC *d)
         return 0;
     }
     out("Giving the port back to Windows' own driver ... ");
-    return reinstall_without_ours(set, &data);
+    if (!reinstall_without_ours(set, &data)) {
+        return 0;
+    }
+    return unfilter_verify(set, &data, d, msz, n);
 }
 
 /* Section 9.2 step 2. 0 when the run must stop (failed or deferred). */

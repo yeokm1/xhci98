@@ -99,9 +99,11 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `tools\silent\` | Windows 98 SE and ME | `SILENT.REG`, `SILENT.VBS`, `silent-on.bat` and `silent-off.bat`, the silent install's list and its switch (see "Tuning") |
 | `tools\xhcicln\` | Windows | `XHCICLN.EXE` (32-bit) and `XHCICL64.EXE` (64-bit), an optional tool that lists the old `XHCI98\` entries an update from `2.3.x` or earlier leaves behind and, on Windows 2000 to 7, removes them; nothing needs it |
+| `INSTALL.BAT` | Windows | installs, updates or uninstalls the drivers; see "Install" below |
+| `tools\xhciinst\` | Windows | `XHCIINST.EXE` (32-bit) and `XHCIIN64.EXE` (64-bit), the program `INSTALL.BAT` runs |
 | `readme.txt` | | the release notes in plain text |
 
-Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`. So are `tools\silent\` and `tools\xhcicln\`.
+Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`. So are `tools\silent\` and `tools\xhcicln\`. `INSTALL.BAT` and `tools\xhciinst\` are new in `3.0.0.0`.
 
 In each driver directory:
 
@@ -114,6 +116,15 @@ In each driver directory:
 `release-x86\` or `release-x64\` is the one to install.
 
 ### Install
+
+**The easy way, from `3.0.0.0`: `INSTALL.BAT`.** Unzip the whole package, then run `INSTALL.BAT` from its top directory: double-click it on Windows 98 SE and ME, run it as an administrator on 2000 and XP, right-click it and choose Run as administrator on Vista and 7. It shows what it will do, asks about a few of the driver's options where the hardware they affect is present (Enter keeps the value), asks once, and then:
+
+- **Windows 2000, XP, XP x64, Vista and 7**: installs or updates every driver of the package on the devices present - the controller, its root hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages the rest so a device plugged in later finds its driver. It takes care of the update traps below (Windows 2000's Have Disk, the root hub's update, Vista and 7's same `DriverVer`) and says when to restart. Windows' own unsigned-driver questions still appear; answer them.
+- **Windows 98 SE and ME**: no program can install a driver on a device there, so it copies the package to the `XHCI98` folder of your Windows directory, where the hardware wizards search by themselves, and prints the Device Manager clicks that remain. Run it again after the restart to see the result and set the options.
+
+`INSTALL /list` shows what it would do and changes nothing; `INSTALL /uninstall` removes the drivers again (it warns first that on an xHCI-only machine the USB keyboard and mouse stop working, and wants the word REMOVE). Every run but `/list` adds to `XHCIINST.LOG` at the root of the system drive: attach it to a bug report about an install. `tools\xhciinst\readme.txt` has the switches and the exit codes. From `2.3.x` or earlier on Windows XP, XP x64 and 98 SE the keyboard-and-mouse advice of "Upgrading the driver" below applies to it too.
+
+**By hand**, the way every release before `3.0.0.0` was installed:
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder.
 2. Install the prerequisites above. On Windows 98 SE the order for a fresh install is NUSB, then xhci98, then the UAS disk.
@@ -167,6 +178,8 @@ The [release notes](docs/using/release-notes.md) have the limits.
 The controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
 
 ### Upgrading the driver
+From `3.0.0.0`, `INSTALL.BAT` (see "Install") does the update below for you on Windows 2000 to 7, and stages it on 98 SE and ME. By hand:
+
 Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory.
 
 **From `2.3.x` or earlier, read the release notes' "From 2.3.x or earlier" first.** The root hub, every hub and every composite device are found again as new hardware, once, under their `2.4.0.0` names: update the controller only (the new root hub installs by itself), and on Windows XP, XP x64 and 98 SE have a keyboard and mouse that do not go through this driver (PS/2, a laptop's built-in ones, or a USB controller another driver runs), because the new-hardware questions come before the USB keyboard and mouse behind the new root hub work (on 98 SE: the update wizard's last page, and after the restart the wizard for a mouse found again). A device without a serial number (most mice and keyboards) is found again too, and loses what was kept on its old entry (a hidusbf setting, a friendly name). The download's `tools\xhcicln\` lists the old entries and, on Windows 2000 to 7, removes them; nothing needs it.
@@ -616,6 +629,7 @@ The drivers are C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64
    - `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier. It needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points), the only tool installed normally on the host; the drivers never use it.
    - `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
    - `xhcicln\build.cmd` produces `XHCICLN.EXE` with the in-repo MSVC 6.0 and `XHCICL64.EXE` with the in-repo WDK 7.1 (`build.cmd x86` for the first alone), the cleanup tool of `2.4.0.0`.
+   - `xhciinst\build.cmd` produces `XHCIINST.EXE` and `XHCIIN64.EXE` the same way, the install tool `INSTALL.BAT` runs (`3.0.0.0`).
 
 5. Make install media. A `.sys` on its own is not install media; each INF travels with its driver, and nothing else does, because the controller's INF has Windows supply its own `usbd.sys` and `usbui.dll`.
 
@@ -642,6 +656,7 @@ xhciqual/       The DOS hardware-qualification tool (Open Watcom) and its
 xhcisnap/       The snapshot reader for the driver's log channel
 xhcicln/        The optional cleanup tool for the devnodes a driver before
                 2.4.0.0 left under XHCI98\
+xhciinst/       The install, update and uninstall tool and INSTALL.BAT
 docs/           Documentation, indexed by docs/README.md
   using/        The user-facing release notes and acceptance test
   contributing/ Roadmaps, architecture, build/test/runbooks, diagnostics,
@@ -720,6 +735,7 @@ The repository tracks no third-party binary on its own, although the tool execut
 * `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
 
 * `XHCICLN.EXE` embeds the MSVC 6.0 runtime, and `XHCICL64.EXE` the WDK 7.1 one (from `2.4.0.0`).
+* `XHCIINST.EXE` embeds the MSVC 6.0 runtime, and `XHCIIN64.EXE` the WDK 7.1 one (from `3.0.0.0`). Neither contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
