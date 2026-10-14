@@ -1738,11 +1738,14 @@ static int make_local_copy(void)
  *   PKG <the local copy's directory name>
  *   INF <slot> <the removed oemNN.inf>
  *   DEV <slot> <instance id>      one per device that named it
+ *   NEW <slot> <oemNN.inf>        the replacement, once staged and its stored
+ *                                 files checked against this package
  * A run resumes only the same package; the entries go as each device is
  * seen reinstalled from this package. */
 #define INST_MAX_RDEV 64
 static char restagePkg[INST_PATH_CHARS];
 static char restageOem[INST_INF_COUNT][64];
+static char restageNew[INST_INF_COUNT][64];
 static int restageDevInf[INST_MAX_RDEV];
 static char restageDevId[INST_MAX_RDEV][INST_ID_CHARS];
 static int restageDevCount;
@@ -1769,6 +1772,7 @@ static int restage_read(void)
 
     memset(restagePending, 0, sizeof(restagePending));
     memset(restageOem, 0, sizeof(restageOem));
+    memset(restageNew, 0, sizeof(restageNew));
     restagePkg[0] = '\0';
     restageDevCount = 0;
     restage_path(path, sizeof(path));
@@ -1800,6 +1804,9 @@ static int restage_read(void)
             k = p[4] - '0';
             restagePending[k] = 1;
             inst_copy(restageOem[k], p + 6, sizeof(restageOem[k]));
+        } else if (strncmp(p, "NEW ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
+                   p[5] == ' ') {
+            inst_copy(restageNew[p[4] - '0'], p + 6, sizeof(restageNew[0]));
         } else if (strncmp(p, "DEV ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
                    p[5] == ' ' && restageDevCount < INST_MAX_RDEV) {
             restageDevInf[restageDevCount] = p[4] - '0';
@@ -1858,6 +1865,9 @@ static int restage_write(void)
     for (k = 0; k < INST_INF_COUNT; k++) {
         if (restagePending[k]) {
             fprintf(f, "INF %d %s\n", k, restageOem[k]);
+            if (restageNew[k][0] != '\0') {
+                fprintf(f, "NEW %d %s\n", k, restageNew[k]);
+            }
         }
     }
     for (i = 0; i < restageDevCount; i++) {
@@ -1911,8 +1921,10 @@ static void restage_settle(void)
             flagSteps = 1;
             continue;
         }
-        if (d->InfPathState > 0 &&
-            !inst_eq(d->InfPath, restageOem[restageDevInf[i]]) &&
+        /* Complete only on the verified replacement, whatever its name - it
+         * may reuse the removed one's (record 23 section 5.7). */
+        if (d->InfPathState > 0 && restageNew[restageDevInf[i]][0] != '\0' &&
+            inst_eq(d->InfPath, restageNew[restageDevInf[i]]) &&
             d->VersionState == INST_VS_HAVE &&
             inst_ver_cmp(d->Version, pkgVersion) == 0 && d->Problem == 0) {
             restageDevId[i][0] = '\0';
@@ -2067,6 +2079,35 @@ static void trap_scan(void)
     }
 }
 
+/* Vista and 7: 1 when the stored package of oemName holds exactly this
+ * package's files, 0 when not, -1 when it cannot be asked. */
+static int store_matches(int k, const char *oemName)
+{
+    char store[INST_PATH_CHARS];
+    char name[INST_PATH_CHARS];
+    char a[INST_PATH_CHARS];
+    char b[INST_PATH_CHARS];
+    char *slash;
+    int i;
+
+    if (api.StoreLocation == NULL ||
+        !api.StoreLocation(oemName, NULL, NULL, store, sizeof(store), NULL)) {
+        return -1;
+    }
+    slash = strrchr(store, '\\');
+    if (slash != NULL) {
+        *slash = '\0';
+    }
+    for (i = 0; inst_inf_source_file(infText[k], i, name, sizeof(name)); i++) {
+        join(a, sizeof(a), pkgDir, name);
+        join(b, sizeof(b), store, name);
+        if (!same_file(a, b)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int stage_nt(void)
 {
     int k;
@@ -2123,6 +2164,20 @@ static int stage_nt(void)
         }
         out("Staged %s as %s.\n", instInfFile[k], component ? component : dest);
         flagChanged = 1;
+        if (restagePending[k]) {
+            const char *nm = component ? component : dest;
+            if (store_matches(k, nm) != 1) {
+                out("/restage: the staged %s does not hold this package's files; "
+                    "the reinstall is not\nstarted. Run INSTALL.BAT /restage "
+                    "again.\n", nm);
+                return 0;
+            }
+            inst_copy(restageNew[k], nm, sizeof(restageNew[k]));
+            if (!restage_write()) {
+                out("/restage: the work file could not be updated.\n");
+                return 0;
+            }
+        }
     }
     out("\n");
     return 1;
@@ -2657,6 +2712,19 @@ static int run_install_nt(void)
     }
     if (!barrier()) {
         goto stopped;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && devs[i].Inf >= 0 && devs[i].Runs &&
+            !devs[i].Refused && !infTrap[devs[i].Inf]) {
+            out("Not finished: %s (%s) still needs its driver.\n",
+                devs[i].Desc[0] ? devs[i].Desc : devs[i].Id,
+                inst_action_text(devs[i].Action));
+            flagSteps = 1;
+            pass = -1;
+        }
+    }
+    if (pass == -1) {
+        out("Run INSTALL.BAT again to go on.\n");
     }
     write_values();
     check_results();

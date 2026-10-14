@@ -749,11 +749,16 @@ few of the driver's options (below), asks once (`Y`), and then:
   documents for a driver package's own installer
   (`UpdateDriverForPlugAndPlayDevices`) - the controller first, then its
   root hub, hubs and composite entries, then UAS disks, then a Thunderbolt
-  or USB4 controller and its tunnel ports - and stages every INF of the
-  package so a device plugged in later finds its driver with no question
-  about where. It copies the package to a folder of its own under
-  `XHCI98` in the Windows directory first and installs from there, so a
-  later device never asks for the CD or stick the package came on. It
+  or USB4 controller and its tunnel ports - and stages the package's INFs
+  (all but one whose driver is a newer release, which it leaves) so a
+  device plugged in later finds its driver. It copies the package to a
+  folder of its own under `XHCI98` in the Windows directory first and
+  installs from there, so the files a later device needs are on the hard
+  disk. On Windows 2000, XP and XP x64, if an earlier install of the same
+  release was made by hand from a CD or a stick, Windows may still look
+  there for a later device; keep that medium at hand (whether the tool's
+  run moves that to the hard disk is read on 2000 and XP in virtual
+  machines, not on XP x64). It
   leaves alone any controller or disk another vendor's driver runs, never
   replaces a newer release unless told to (`/force`), and does what the
   update steps below otherwise ask of you: Windows 2000's Have Disk, the
@@ -767,8 +772,9 @@ few of the driver's options (below), asks once (`Y`), and then:
   a keyboard and mouse that do not go through this driver, then run it
   again. On Vista x64 and 7 x64 it says whether it could confirm
   test-signing mode, and never changes it.
-- **Windows 98 SE and ME**: no program can install a driver on a device
-  there. It copies the package to that same folder, adds the folder to
+- **Windows 98 SE and ME**: the tool stages the files and you finish the
+  installation in Device Manager. It copies the package to that same
+  folder, adds the folder to
   `DevicePath`, the list of places Windows' hardware wizards search, and
   prints the Device Manager clicks that remain for each device, with the
   folder to type if a wizard does not find the driver by itself. Run it
@@ -809,7 +815,7 @@ until another driver is installed, and goes on only when you type
 `REMOVE`. On Windows 2000 to 7 it removes, in order and stopping at the
 first step that fails or needs a restart (run it again after the
 restart): this package's filter from a Thunderbolt port (the port goes
-back to Windows' own driver), every device entry of the package, its
+back to a suitable Windows or vendor driver), every device entry of the package, its
 INFs, its services and its driver files, and its copies of the package.
 It never removes Windows' own `usbd.sys` and `usbui.dll`, which Windows
 supplied and other USB drivers use. On Windows 98 SE and ME it removes

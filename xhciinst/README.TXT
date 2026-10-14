@@ -14,10 +14,11 @@ in Device Manager, including the traps of an update (Windows 2000 keeping
 the old driver unless Have Disk is used; Vista and 7 keeping an old build
 of the same version; the root hub's own update).
 
-On Windows 98 SE and ME no program can install a driver on a device, so
-it copies the package to C:\WINDOWS\XHCI98 (your Windows directory),
-adds that directory to the places the hardware wizards search, and prints
-the clicks that remain.
+On Windows 98 SE and ME the tool stages the files and you finish the
+installation in Device Manager: it copies the package to a folder under
+C:\WINDOWS\XHCI98 (your Windows directory), adds that folder to the places
+the hardware wizards search, and prints the clicks that remain, with the
+folder to type if a wizard does not find the driver by itself.
 
 It uses only routines Windows documents for this. It is not devcon, and
 this package carries no Microsoft file.

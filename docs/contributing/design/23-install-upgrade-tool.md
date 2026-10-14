@@ -1,6 +1,6 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 4, 2026-10-15, reviewed and revised three times the same day;
+Status: revision 5, 2026-10-15, reviewed and revised four times the same day;
 the code is written against it (task 40.6). Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
 package gains an install and upgrade script, `INSTALL.BAT`, in front of a
@@ -521,9 +521,16 @@ confirmation:
    which stages from the same local copy and, by the work file, reinstalls
    - the devices keep running the files already in `system32\drivers`
    meanwhile;
-5. every listed device is reinstalled. A `DEV` line goes only when its
-   device is present, its driver key no longer names the removed INF, and
-   it runs the package's version with no problem code; the `INF` line goes
+5. the replacement is checked before any device is moved to it: its
+   stored package (`SetupGetInfDriverStoreLocationA` on the name staging
+   returned) must hold exactly this package's files, and that name is then
+   journalled as `NEW` - it may be the removed `oemNN.inf`'s own name, which
+   Windows does not promise never to reuse. A mismatch stops the run with
+   the journal kept;
+6. every listed device is reinstalled. A `DEV` line goes only when its
+   device is present, its driver key names the verified replacement (the
+   `NEW` name, whatever it is), and it runs the package's version with no
+   problem code; the `INF` line goes
    when none of its devices is left; the file goes when nothing is. A
    listed device absent at a later run - unplugged after the precondition
    held - keeps its line, is reported, and sets the steps flag
@@ -563,7 +570,10 @@ with every safeguard of sections 5.4 and 5.5 applied afresh; a timeout or
 a failed question stops the run with "finish or cancel the windows Windows
 shows, then run INSTALL.BAT again" (exit 4), and the next run continues
 from what it finds - a root hub whose wizard was cancelled is a device
-with no driver, installed then.
+with no driver, installed then. Completion is only declared after a last
+barrier and a fresh plan: a device the plan would still install - one the
+last allowed pass exposed - is listed as "not finished", the steps flag is
+set and the run ends with exit 4 and "run INSTALL.BAT again".
 
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question. `CMP_WaitNoPendingInstallEvents` then times out, because the
@@ -1177,6 +1187,7 @@ installed `.sys` with the package's, and Device Manager.
 | UN, uninstall and reinstall | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | the warning and the word; every devnode, the OEM INFs (2000: the manual route; XP onward: `SetupUninstallOEMInf`, which systems resolve it), the services and files gone or pending; the gate after a pending removal and the resumed second run; a restart; the controller back as an unknown device; `INSTALL.BAT` installing it again. 98 SE and ME: the steps printed and followed |
 | R, registry questions | 98 SE (after the install and restart), 2000 | each applicable question shown with now, default and allowed; a non-applicable one not shown (no Intel switchover controller in QEMU, no NHI); an answer written to the controller's driver key and not to the root hub's, Enter keeping, `/set` and `/defaults` |
 | L, `/list` and the refusals | every leg's first run | nothing changed (a registry and file listing before and after, no log written); the ZIP-folder refusal, a mixed architecture, a mis-versioned INF, a stale `.sys`, a swapped flavour |
+| P, payload repair | XP, 7 x86 | a current installation whose `xhci98.sys` is deleted, then (separately) replaced by the earlier release's, and on 7 x86 `xhcihlpr.sys` deleted: `INSTALL.BAT` reinstalls the controller, the files compare equal to the package's afterwards, and the restart it reports is honoured (section 5.4) |
 | M, moved source | 2000, XP | an installation made the old way first - Have Disk from a CD image for the controller **and** for a UAS disk, so the staged `xhciuas.inf`'s `.pnf` names the CD - then the tool run on the identical package, then the CD image removed, then a UAS disk never seen before plugged: it must install with no prompt (section 5.6). XP x64 is not covered by this leg, and the release notes say so |
 
 What each system's legs settle that nothing here has read:
