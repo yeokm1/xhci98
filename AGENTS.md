@@ -284,11 +284,14 @@ Phases 0-16 (the initial release);
 `docs/contributing/roadmap-miniport-updates.md` has Phases 17-24, the
 miniport's public updates after it, closed with the `1.2.0.0`
 cut that froze it; `docs/contributing/roadmap-hcd.md` has Phases 25
-onward, the host controller driver, the open phase included; and
-`docs/contributing/roadmap-usb4.md` (opened 2026-10-14) has the USB4 and
-Thunderbolt 3 connection-manager work, a driver beside `xhci98.sys` whose
-test bed is the `usb4-emu` repository, read there and never modified, with
-design record 21 as its first plan. The miniport is
+onward of the host controller driver, a USB phase opened later included; and
+`docs/contributing/roadmap-usb4.md` (opened 2026-10-14) has Phases 39
+onward, the USB4 and Thunderbolt connection-manager work: a driver beside
+`xhci98.sys` whose test bed is the `usb4-emu` repository, read there and
+never modified, with design record 21 as Phase 39's plan (the Thunderbolt
+firmware connection manager client) and design record 22 as Phase 40's
+(the USB4 software connection manager); both phases opened 2026-10-15 and
+ship together as `3.0.0.0`. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
 ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
@@ -300,7 +303,8 @@ authority.
 The exceptions are the bench clauses the owner reads after a cut: the E.1
 clauses of Phases 28 to 31, after the `2.0.0.0` cut, and Phase 35's 35-E,
 after the `2.2.0.0` cut (`roadmap-hcd.md`, decisions table, "Cut before the
-bench" and "`2.2.0.0`: cut before the bench").
+bench" and "`2.2.0.0`: cut before the bench"), and Phase 39's 39-E, after
+the `3.0.0.0` cut (`roadmap-usb4.md`, decision D13).
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
 

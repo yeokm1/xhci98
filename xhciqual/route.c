@@ -16,8 +16,13 @@
  * xHCI/LPC pairs are the driver's own table (src/xhci_pirq.c), so the
  * report and the driver's quirk cannot disagree about which chipsets carry
  * these registers. Host-tested by xhciqual/test/test_route.c.
+ *
+ * The second half (task 39-0.6, at the end of this file) parses the BIOS
+ * PCI IRQ routing table, "$PIR", which is machine-wide and read once per
+ * run, and names whether device 00:1C has an entry in it.
  */
 
+#include <stdio.h>
 #include <string.h>
 #include "qual.h"
 #include "../src/xhci_pirq.h"
@@ -252,4 +257,360 @@ void report_route(const ROUTEINFO *r, long gsi, QPRINTF_FN pf)
            pirq < 0 ? "no PIRQ selected"
                     : "neither an APIC input 16-23 nor a routable 8259 IRQ");
     }
+}
+
+/*
+ * Task 39-0.6: the BIOS PCI IRQ routing table, "$PIR".
+ *
+ * Layout from Microsoft's public "PCI IRQ Routing Table Specification",
+ * version 1.0 (formerly at microsoft.com/whdc/archive/pciirq.mspx). The
+ * table sits on a 16-byte boundary in F0000h-FFFFFh. Header, 32 bytes:
+ * 00h "$PIR"; 04h version (word, 0100h for 1.0, the only version the
+ * specification defines); 06h table size in bytes (word; above 32 and a
+ * multiple of 16); 08h the interrupt router's bus, 09h its device/function;
+ * 0Ah the PCI-exclusive IRQ bitmap (word, bit n = IRQ n); 0Ch the
+ * compatible interrupt router (vendor word, device word); 10h miniport data
+ * (dword); 14h 11 reserved bytes; 1Fh a checksum that makes every byte of
+ * the table sum to 0 mod 256. Then one 16-byte slot entry per device: 00h
+ * bus, 01h device (bits 7:3; function bits 2:0 are not a part of it), then
+ * for INTA-INTD in turn a link value byte (0 = not connected; the rest are
+ * the router's own) and an IRQ bitmap word (bit n = IRQ n may be used), at
+ * 02h, 05h, 08h and 0Bh; 0Eh the slot number (0 for a device on the
+ * board); 0Fh reserved.
+ *
+ * Pure, like everything above: pir_scan is handed an image of the BIOS
+ * area and pci.c's pir_read fills the 00:1C functions. Every offset is
+ * checked against the area before it is read and the table against its own
+ * size before it is summed. The whole table is copied (its size is a word,
+ * so it fits PIR_COPY_MAX) and searched; only the dump stops at
+ * PIR_DUMP_MAX entries. Host-tested by xhciqual/test/test_route.c.
+ */
+
+static u16 pir_rd16(const u8 *p)
+{
+    return (u16)(p[0] | ((u16)p[1] << 8));
+}
+
+static u32 pir_rd32(const u8 *p)
+{
+    return (u32)p[0] | ((u32)p[1] << 8) | ((u32)p[2] << 16) |
+           ((u32)p[3] << 24);
+}
+
+/* One candidate at `p`, `room` bytes from it to the end of the area. */
+static int pir_check(const u8 *p, u32 room, u16 *version, u16 *size)
+{
+    u32 i;
+    u8 sum;
+
+    *version = 0;
+    *size = 0;
+    if (room < PIR_HDR_LEN)
+        return PIR_TRUNCATED;
+    *version = pir_rd16(p + 4);
+    *size = pir_rd16(p + 6);
+    if (*version != 0x0100)
+        return PIR_BAD_VERSION;
+    if (*size <= PIR_HDR_LEN || (*size % PIR_SLOT_LEN) != 0)
+        return PIR_BAD_SIZE;
+    if ((u32)*size > room)
+        return PIR_TRUNCATED;
+    sum = 0;
+    for (i = 0; i < (u32)*size; i++)
+        sum = (u8)(sum + p[i]);
+    return sum == 0 ? PIR_OK : PIR_BAD_CHECKSUM;
+}
+
+int pir_scan(const u8 *area, u32 len, u32 area_phys, PIRINFO *pi)
+{
+    u32 off;
+    int st, first_st;
+    u16 ver, size, first_ver, first_size;
+    u32 first_off, keep_off;
+
+    pi->state = PIR_NONE;
+    pi->phys = 0;
+    pi->version = 0;
+    pi->size = 0;
+    pi->nslots = 0;
+    pi->candidates = 0;
+    first_st = PIR_NONE;
+    first_ver = first_size = 0;
+    first_off = 0;
+    keep_off = 0;
+    st = PIR_NONE;
+    for (off = 0; len >= 4 && off <= len - 4; off += 16) {
+        if (memcmp(area + off, "$PIR", 4) != 0)
+            continue;
+        pi->candidates++;
+        st = pir_check(area + off, len - off, &ver, &size);
+        if (st == PIR_OK)
+            break;
+        if (first_st == PIR_NONE) {
+            first_st = st;
+            first_ver = ver;
+            first_size = size;
+            first_off = off;
+        }
+    }
+    if (st == PIR_OK) {
+        keep_off = off;
+    } else if (first_st != PIR_NONE) {
+        st = first_st;
+        ver = first_ver;
+        size = first_size;
+        keep_off = first_off;
+    } else {
+        return PIR_NONE;
+    }
+
+    pi->state = st;
+    pi->phys = area_phys + keep_off;
+    pi->version = ver;
+    pi->size = size;
+    if (st != PIR_OK && st != PIR_BAD_CHECKSUM)
+        return st;
+    /* The size passed every bound and is a word: the whole table fits. */
+    pi->nslots = ((u32)size - PIR_HDR_LEN) / PIR_SLOT_LEN;
+    memcpy(pi->table, area + keep_off, size);
+    return st;
+}
+
+static int pir_parsed(const PIRINFO *pi)
+{
+    return pi->state == PIR_OK || pi->state == PIR_BAD_CHECKSUM;
+}
+
+static const u8 *pir_slot(const PIRINFO *pi, u32 i)
+{
+    return pi->table + PIR_HDR_LEN + i * PIR_SLOT_LEN;
+}
+
+int pir_find(const PIRINFO *pi, u8 bus, u8 dev, int *count)
+{
+    u32 i;
+    int first, n;
+    const u8 *s;
+
+    first = -1;
+    n = 0;
+    if (pir_parsed(pi)) {
+        for (i = 0; i < pi->nslots; i++) {
+            s = pir_slot(pi, i);
+            if (s[0] == bus && (u8)(s[1] >> 3) == dev) {
+                if (first < 0)
+                    first = (int)i;
+                n++;
+            }
+        }
+    }
+    if (count != 0)
+        *count = n;
+    return first;
+}
+
+/* "IRQ 9 10 11" for a bitmap, or "none". out holds 64 bytes. */
+static void pir_irq_list(u16 map, char *out)
+{
+    int i;
+    size_t n;
+
+    out[0] = '\0';
+    for (i = 0; i < 16; i++) {
+        if ((map & (1U << i)) == 0)
+            continue;
+        n = strlen(out);
+        sprintf(out + n, "%s%d", n == 0 ? "IRQ " : " ", i);
+    }
+    if (out[0] == '\0')
+        strcpy(out, "none");
+}
+
+/* An entry's pin as link/bitmap, "--/----" for link 0. out holds 16. */
+static void pir_pin_text(const u8 *s, int pin, char *out)
+{
+    u8 link;
+
+    link = s[2 + pin * 3];
+    if (link == 0)
+        strcpy(out, "--/----");
+    else
+        sprintf(out, "%02X/%04X", link, pir_rd16(s + 3 + pin * 3));
+}
+
+static const char *pir_state_text(int state)
+{
+    switch (state) {
+    case PIR_BAD_VERSION:
+        return "version is not 1.0";
+    case PIR_BAD_SIZE:
+        return "table size is not above 32 and a multiple of 16";
+    case PIR_TRUNCATED:
+        return "the table runs past FFFFFh";
+    case PIR_BAD_CHECKSUM:
+        return "checksum FAILS";
+    default:
+        return "checksum OK";
+    }
+}
+
+/* 00:1C named explicitly: the entry or its absence (or that there is no
+ * table to look in), then each function configuration space showed, which
+ * pci.c reads whatever the table's state. Only this table is described: a
+ * listed pin still needs a link and an IRQ bitmap that are not 0. */
+static void report_pir_rp(const PIRINFO *pi, QPRINTF_FN pf)
+{
+    int idx, count, fn, any, pin;
+    const u8 *s;
+    char text[48];
+
+    idx = -1;
+    if (!pir_parsed(pi)) {
+        pf("  00:%02X: no usable table to look in\n", PIR_RP_DEV);
+    } else {
+        idx = pir_find(pi, 0, PIR_RP_DEV, &count);
+        if (idx < 0) {
+            /* Only bus 0 device 1C is looked up: the specification also
+             * lets a table describe a device on a bus behind a bridge
+             * directly, so say how many entries are on other buses. */
+            u32 i, other;
+
+            other = 0;
+            for (i = 0; i < pi->nslots; i++)
+                if (pir_slot(pi, i)[0] != 0)
+                    other++;
+            pf("  00:%02X: NO ENTRY for bus 00 device %02X (%lu entries on "
+               "other buses)\n", PIR_RP_DEV, PIR_RP_DEV, other);
+        } else if (count == 1)
+            pf("  00:%02X: listed, entry %d\n", PIR_RP_DEV, idx + 1);
+        else
+            pf("  00:%02X: listed %d times, first at entry %d\n",
+               PIR_RP_DEV, count, idx + 1);
+    }
+    if (!pi->rp_read)
+        return;
+    any = 0;
+    for (fn = 0; fn < 8; fn++) {
+        /* No function 0, no device (pci.c reads no further). */
+        if ((pi->rp_id[fn] & 0xFFFFUL) == 0xFFFFUL) {
+            if (fn == 0)
+                break;
+            continue;
+        }
+        any = 1;
+        pin = (pi->rp_pin[fn] >= 1 && pi->rp_pin[fn] <= 4)
+                  ? pi->rp_pin[fn] : 0;
+        if (!pir_parsed(pi)) {
+            strcpy(text, "no table");
+        } else if (idx < 0) {
+            strcpy(text, "no entry");
+        } else if (pin == 0) {
+            strcpy(text, "no pin");
+        } else {
+            s = pir_slot(pi, (u32)idx);
+            pir_pin_text(s, pin - 1, text);
+            if (s[2 + (pin - 1) * 3] == 0)
+                strcat(text, " (link 0: not connected)");
+            else if (pir_rd16(s + 3 + (pin - 1) * 3) == 0)
+                strcat(text, " (no IRQ allowed)");
+        }
+        pf("    00:%02X.%d %04lX:%04lX%s pin %s%c line %u: %s\n",
+           PIR_RP_DEV, fn, pi->rp_id[fn] & 0xFFFFUL,
+           (pi->rp_id[fn] >> 16) & 0xFFFFUL,
+           (pi->rp_hdr[fn] & 0x7F) == 1 ? " bridge," : ",",
+           pin ? "INT" : "none", pin ? (char)('A' + pin - 1) : ' ',
+           (unsigned)pi->rp_line[fn], text);
+        /* A function 0 that is not multi-function has no others. */
+        if (fn == 0 && (pi->rp_hdr[0] & 0x80) == 0)
+            break;
+    }
+    if (!any)
+        pf("    no function at 00:%02X.0 in configuration space\n",
+           PIR_RP_DEV);
+}
+
+void report_pir(const PIRINFO *pi, QPRINTF_FN pf)
+{
+    const u8 *t;
+    const u8 *s;
+    u32 i, shown;
+    char irqs[64];
+    char a[16], b[16], c[16], d[16];
+
+    switch (pi->state) {
+    case PIR_NOT_READ:
+        return;
+    case PIR_NONE:
+        pf("PCI IRQ routing table ($PIR, read only): none in "
+           "F0000h-FFFFFh\n");
+        report_pir_rp(pi, pf);
+        return;
+    case PIR_OK:
+    case PIR_BAD_CHECKSUM:
+        break;
+    default:
+        pf("PCI IRQ routing table ($PIR, read only): at %05lXh, UNUSABLE\n",
+           pi->phys);
+        pf("  version %u.%u, size %u: %s; nothing parsed\n",
+           (unsigned)(pi->version >> 8), (unsigned)(pi->version & 0xFF),
+           (unsigned)pi->size, pir_state_text(pi->state));
+        report_pir_rp(pi, pf);
+        return;
+    }
+
+    t = pi->table;
+    pf("PCI IRQ routing table ($PIR, read only): at %05lXh, version %u.%u, "
+       "%u bytes\n", pi->phys, (unsigned)(pi->version >> 8),
+       (unsigned)(pi->version & 0xFF), (unsigned)pi->size);
+    pf("  %lu slot entries, %s; router %02X:%02X.%X, compatible "
+       "%04X:%04X\n", pi->nslots, pir_state_text(pi->state), t[8],
+       t[9] >> 3, t[9] & 7, pir_rd16(t + 12), pir_rd16(t + 14));
+    if (pi->state == PIR_BAD_CHECKSUM)
+        pf("  (the specification requires the sum; the entries are shown "
+           "as found)\n");
+    pir_irq_list(pir_rd16(t + 10), irqs);
+    pf("  exclusive PCI IRQs %04X: %s; miniport data %08lX\n",
+       pir_rd16(t + 10), irqs, pir_rd32(t + 16));
+    pf("  #   bus:dev slot INTA    INTB    INTC    INTD   (link/IRQ "
+       "bitmap)\n");
+    shown = pi->nslots > PIR_DUMP_MAX ? PIR_DUMP_MAX : pi->nslots;
+    for (i = 0; i < shown; i++) {
+        s = pir_slot(pi, i);
+        pir_pin_text(s, 0, a);
+        pir_pin_text(s, 1, b);
+        pir_pin_text(s, 2, c);
+        pir_pin_text(s, 3, d);
+        pf("  %-3lu %02X:%02X   %-4u %s %s %s %s%s\n", i + 1, s[0],
+           s[1] >> 3, (unsigned)s[14], a, b, c, d,
+           (s[1] & 7) != 0 ? " fn bits set" : "");
+    }
+    if (shown < pi->nslots)
+        pf("  %lu more entries not shown (00:%02X is searched in all)\n",
+           pi->nslots - shown, PIR_RP_DEV);
+    report_pir_rp(pi, pf);
+}
+
+void report_pir_short(const PIRINFO *pi, QPRINTF_FN pf)
+{
+    int idx;
+
+    switch (pi->state) {
+    case PIR_NOT_READ:
+        return;
+    case PIR_NONE:
+        pf("IRQ table: no $PIR in F0000h-FFFFFh\n");
+        return;
+    case PIR_OK:
+    case PIR_BAD_CHECKSUM:
+        break;
+    default:
+        pf("IRQ table: $PIR at %05lXh unusable (%s)\n", pi->phys,
+           pi->state == PIR_BAD_VERSION ? "version"
+           : pi->state == PIR_BAD_SIZE  ? "size" : "truncated");
+        return;
+    }
+    idx = pir_find(pi, 0, PIR_RP_DEV, 0);
+    pf("IRQ table: $PIR at %05lXh, %lu entries%s; 00:%02X %s\n", pi->phys,
+       pi->nslots, pi->state == PIR_BAD_CHECKSUM ? ", checksum FAILS" : "",
+       PIR_RP_DEV, idx >= 0 ? "listed" : "NOT LISTED");
 }
