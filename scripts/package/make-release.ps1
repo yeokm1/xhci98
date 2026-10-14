@@ -626,13 +626,15 @@ function Get-LegPublishable {
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
 # The Thunderbolt 3 connection manager's three files (roadmap-usb4.md task
-# 39-A.1): its NHI INF, its NT-only tunnel-bridge filter INF and the binary,
+# 39-A.1): its NHI INF, its NT-only tunnel-port filter INF and the binary,
 # published beside the UAS pair on the same terms - its own INFs declare
 # them, its own gate (scripts\inf-gate\check-cm-inf.ps1) checks them in
 # place, and the binary is held to every refusal xhciuas.sys is
-# (Assert-CmPublished). A version published before 3.0.0.0 has none, so
-# -UploadSetOnly gates them where present and does not require them.
-$cmPublishable = @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")
+# (Assert-CmPublished). The filter INF is in the flavour directory's nt\
+# subdirectory, out of Windows 98's and ME's way (runs/run-39.md, 39-0.4;
+# the gate's CM-NO9XBRIDGE). A version published before 3.0.0.0 has none,
+# so -UploadSetOnly gates them where present and does not require them.
+$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")
 
 # The text-mode Setup driver description (roadmap task 33.3), published at the
 # root of every flavour directory a cut writes, where text-mode Setup of
@@ -1671,8 +1673,9 @@ function Assert-PackageMatchesDeclaredMedia {
         [hashtable]$PublishedPaths,
         [string]$InfName,
         [string]$Flavor,
-        # Files accepted at the package root beside the declared set: the UAS
-        # pair, which its own INF declares and its own gate checks.
+        # Files accepted beside the declared set, by their path relative to
+        # the package root: the UAS pair, which its own INF declares and its
+        # own gate checks, and the connection manager's three (one in nt\).
         [string[]]$Also = @()
     )
 
@@ -1688,7 +1691,7 @@ function Assert-PackageMatchesDeclaredMedia {
             # comes from the published tree, not from the package.
             continue
         }
-        if ($key -in $alsoKeys -and $relative.ToLowerInvariant() -eq $key) {
+        if ($relative.ToLowerInvariant() -in $alsoKeys) {
             continue
         }
         if (-not $Expected.ContainsKey($key) -or
@@ -2301,12 +2304,21 @@ $gateOut
         # all three, so a reconstruction never publishes the NHI's installer
         # without the filter's, or an INF without its binary.
         $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        # The filter INF anywhere but nt\ is refused whatever else is there:
+        # Windows 98 SE and ME read a $Windows NT$ INF beside the one they are
+        # pointed at (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE).
+        foreach ($item in @(Get-ChildItem -LiteralPath $uploadFlavorDir -Recurse -Force -File -Filter "xhcicmf.inf")) {
+            $rel = $item.FullName.Substring($uploadFlavorDir.TrimEnd('\').Length + 1)
+            if ($rel -ine "nt\xhcicmf.inf") {
+                throw "CM-NO9XBRIDGE (scripts\inf-gate\check-cm-inf.ps1's rule): the assembled upload set's $f\ directory holds $rel; the connection manager's filter INF is published in nt\ alone, out of Windows 98's and ME's way."
+            }
+        }
         $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
         if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
             $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })
             throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the three files go together."
         }
-        foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "xhcicmf.inf"; Extra = @("-Filter") })) {
+        foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
             $cmInfPath = Join-Path $uploadFlavorDir $cmInf.Name
             if (Test-Path -LiteralPath $cmInfPath) {
                 $savedEap = $ErrorActionPreference
@@ -3048,6 +3060,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             if (-not (Test-Path -LiteralPath $src)) {
                 throw "make-package.ps1 produced no '$name' in '$pkgDir'."
             }
+            Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
             Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
         }
 
@@ -3752,7 +3765,8 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      xhcicm.inf   (the Thunderbolt 3 connection manager's INF)"
-        $contents += "      xhcicmf.inf  (its tunnel-port filter's INF; Windows 2000 and later)"
+        $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
+        $contents += "                   later only: never point Windows 98 or ME at nt\)"
         $contents += ("      xhcicm.sys   {0:N0} bytes" -f $s.CmLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.CmSha256)

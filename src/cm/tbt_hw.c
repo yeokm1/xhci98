@@ -249,9 +249,10 @@ LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
         !power->ForcePowerSetHere) {
         return TBT_OK;
     }
-    /* Record 21 section 1.4.2: an inert instance clears it only where its
-     * own firmware-ready poll failed, so nothing came up through it. */
-    if (!active && !power->FwReadyFailed) {
+    /* Record 21 sections 1.4.2 and 5.6: an inert instance never clears
+     * it, not even after its own firmware-ready timeout - a timeout is not
+     * evidence that nothing depends on the controller. */
+    if (!active) {
         return TBT_OK;
     }
     v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_22);

@@ -3143,3 +3143,47 @@ needs are Windows' own and are copied by Windows from your own installation
 source. On Windows 98 SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a
 filter on the UAS device; the file is named, never shipped, and NUSB's
 mass-storage install places it.
+
+## What `3.0.0.0` adds (draft)
+
+*This section is a draft for the `3.0.0.0` cut; it is completed before
+the cut.*
+
+### Thunderbolt 3: which devices get a tunnel, and what that means
+
+A Thunderbolt 3 device - a dock, an enclosure, an NVMe case - reaches the
+machine through a PCI Express tunnel that the controller's firmware builds
+only when the operating system approves the device. Windows 98, ME, 2000
+and XP have no Thunderbolt control panel, and this project does not add
+one, so `xhcicm.sys` decides by one registry value, `XhciCmApprove`, in
+the Thunderbolt host interface's driver (software) key:
+
+| Value | What the driver does |
+|---|---|
+| `1` (the default) | Approves every Thunderbolt device the firmware announces and does not mark rejected, as soon as it is announced: plug it in and it gets its tunnel. |
+| `0` | Approves nothing. A device that already has its tunnel - one the BIOS tunnelled before Windows started (pre-boot support), or one approved before the driver was disabled and enabled again - keeps it and works. A newly plugged device is logged and left without a tunnel. |
+
+**Read this before you leave it at `1`.** A device with a PCI Express
+tunnel can read and write all of the machine's memory: none of these
+machines has an IOMMU that this driver or Windows uses to fence a device
+off. At `1`, anything plugged into the Thunderbolt port gets that access,
+whatever it is and whoever plugged it in. That is the state every device
+tunnelled by the BIOS's pre-boot support is already in on these systems,
+and it is what the owner chose as the default; set `XhciCmApprove` to `0`
+on a machine where the port is within reach of people you do not trust.
+
+**Nothing is remembered.** The driver keeps no list of devices, so there
+is no "approve only devices I have seen before". The firmware itself keeps
+a device's approval and its tunnel until the device is unplugged or the
+machine is powered off - across a disable and enable of the driver, and
+across standby - and the controller's own memory holds the list the BIOS
+uses for pre-boot tunnelling, which this driver never changes. After a
+re-plug, or a restart without pre-boot support, a device is announced
+unapproved again, and the value above decides again.
+
+The Ice Lake to Meteor Lake integrated controllers have no approve
+message at all: on them a device works only if the firmware tunnelled it
+by itself, whatever `XhciCmApprove` says.
+
+`XhciCmMode` `0` turns the whole driver off without uninstalling it: it
+binds the Thunderbolt host interface, logs it and touches nothing.

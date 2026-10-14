@@ -84,14 +84,14 @@ static void test_profiles(void)
         { 0x1575, CM_PROFILE_ICM_AR },  { 0x1577, CM_PROFILE_ICM_AR },
         { 0x15BF, CM_PROFILE_ICM_AR },  { 0x15D2, CM_PROFILE_ICM_AR },
         { 0x15D9, CM_PROFILE_ICM_AR },  { 0x15E8, CM_PROFILE_ICM_TR },
-        { 0x15EB, CM_PROFILE_ICM_TR },  { 0x1134, CM_PROFILE_ICM_TR },
-        { 0x1137, CM_PROFILE_ICM_TR },  { 0x8A0D, CM_PROFILE_ICM_ICL },
-        { 0x8A17, CM_PROFILE_ICM_ICL }, { 0x9A1B, CM_PROFILE_ICM_ICL },
-        { 0x9A1D, CM_PROFILE_ICM_ICL }, { 0x9A1F, CM_PROFILE_ICM_ICL },
-        { 0x9A21, CM_PROFILE_ICM_ICL }, { 0x463E, CM_PROFILE_ICM_ICL },
-        { 0x466D, CM_PROFILE_ICM_ICL }, { 0xA73E, CM_PROFILE_ICM_ICL },
-        { 0xA76D, CM_PROFILE_ICM_ICL }, { 0x7EB2, CM_PROFILE_ICM_ICL },
-        { 0x7EC2, CM_PROFILE_ICM_ICL }, { 0x7EC3, CM_PROFILE_ICM_ICL },
+        { 0x15EB, CM_PROFILE_ICM_TR },  { 0x1134, CM_PROFILE_ICM_MR },
+        { 0x1137, CM_PROFILE_ICM_MR },  { 0x8A0D, CM_PROFILE_ICM_ICL },
+        { 0x8A17, CM_PROFILE_ICM_ICL }, { 0x9A1B, CM_PROFILE_ICM_TGL },
+        { 0x9A1D, CM_PROFILE_ICM_TGL }, { 0x9A1F, CM_PROFILE_ICM_TGL },
+        { 0x9A21, CM_PROFILE_ICM_TGL }, { 0x463E, CM_PROFILE_ICM_TGL },
+        { 0x466D, CM_PROFILE_ICM_TGL }, { 0xA73E, CM_PROFILE_ICM_TGL },
+        { 0xA76D, CM_PROFILE_ICM_TGL }, { 0x7EB2, CM_PROFILE_ICM_TGL },
+        { 0x7EC2, CM_PROFILE_ICM_TGL }, { 0x7EC3, CM_PROFILE_ICM_TGL },
         { 0xA833, CM_PROFILE_USB4 },    { 0xA834, CM_PROFILE_USB4 },
         { 0xE333, CM_PROFILE_USB4 },    { 0xE334, CM_PROFILE_USB4 },
         { 0xE433, CM_PROFILE_USB4 },    { 0xE434, CM_PROFILE_USB4 },
@@ -221,14 +221,33 @@ static void test_decision(void)
     ar = 1UL << CM_PROFILE_ICM_AR;
     all = 0xFFFFFFFFUL;
     CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_AR, 1, CM_PROFILES_BUILT),
-             CM_INERT_NOT_BUILT, "the scaffold builds no client: inert");
-    CHECK_EQ(CM_PROFILES_BUILT, 0, "and claims none");
+             CM_INERT_NONE, "task 39-A.4 builds the Alpine Ridge client");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_FR, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Falcon Ridge's");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_TR, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Titan Ridge's");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_ICL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Ice Lake's");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_USB4, 0, CM_PROFILES_BUILT),
+             CM_INERT_NOT_BUILT, "but not the software CM (Phase 40)");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_MR, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Maple Ridge's, on Titan Ridge's messages");
+    CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "and Tiger Lake's, on Ice Lake's");
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NOT_BUILT, "so mode 3 is inert in this build");
+    CHECK_EQ(CmStartDecision(2, CM_PROFILE_UNKNOWN, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "mode 2 on an unlisted Intel id runs AR");
     CHECK_EQ(CmStartDecision(0, CM_PROFILE_ICM_AR, 1, all), CM_INERT_MODE_OFF,
              "mode 0 is inert whatever is built");
-    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_ICL, 1, ar), CM_INERT_NOT_BUILT,
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_TGL, 1, ar), CM_INERT_NOT_BUILT,
              "mode 3 forces the software CM, not built yet: inert");
-    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_ICL, 1, 1UL << CM_PROFILE_USB4),
-             CM_INERT_NONE, "mode 3 on an integrated host once it is built");
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_TGL, 1, 1UL << CM_PROFILE_USB4),
+             CM_INERT_NONE, "mode 3 on Tiger Lake to Meteor Lake once it is built");
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_MR, 1, 1UL << CM_PROFILE_USB4),
+             CM_INERT_NONE, "and on Maple Ridge");
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_ICL, 1, all), CM_INERT_FORCE_REFUSED,
+             "but never on Ice Lake, a generation 3 host router");
     CHECK_EQ(CmStartDecision(3, CM_PROFILE_USB4, 0, 1UL << CM_PROFILE_USB4),
              CM_INERT_NONE, "and on a USB4 host");
     CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_AR, 1, all), CM_INERT_FORCE_REFUSED,
