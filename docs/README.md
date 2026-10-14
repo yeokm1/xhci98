@@ -66,6 +66,11 @@ source comments, scripts, and other docs use these same locations.
   audio test (23.5 and 23.9), the cut's tasks (23.6 to 23.8) and the
   post-release matrix (23.10), as the roadmap carried them, with the roadmap
   entry as it stood while the phase was open.
+- [Phase 39 record](contributing/runs/run-39.md) - the Thunderbolt 3 and USB4
+  work's virtual-machine vehicle on `usb4-emu` (task 39-0.7: the launch lines,
+  the `scripts\usb4` launcher, the device trees and ids each guest sees) and the
+  NT filter's install route (task 39-0.4, decision D2: the device-specific route,
+  and the reading that Windows 98 SE and ME read ` NT$` INFs).
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against

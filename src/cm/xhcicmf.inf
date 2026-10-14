@@ -1,26 +1,28 @@
-; xhcicmf.inf - xhcicm.sys as the upper filter of the Thunderbolt 3 tunnel
-; bridge, the 32-bit package's NT-only filter INF (design record 21
-; sections 3.2, 3.3 and 6.2, decision D2; roadmap-usb4.md task 39-A.1).
+; xhcicmf.inf - xhcicm.sys as the upper filter of the Thunderbolt and USB4
+; tunnel ports, the 32-bit package's NT-only filter INF (design record 21
+; sections 3.2, 3.3 and 6.2, decision D2; design record 22 section 3.7;
+; roadmap-usb4.md tasks 39-A.1 and 40-0.2).
 ;
-; NT targets only, by its signature: Windows 98 SE's and ME's engine ignores
-; a "$Windows NT$" INF outright, which is what keeps this driver off every
-; bridge there - a WDM driver on a bridge devnode breaks the bridge on
-; Windows 98 (record 21 section 6.1). Windows 2000 and XP read the
-; undecorated [CmFilterModels]; Vista and 7 the .NTx86.6.0 one. No INF of
-; this driver that Windows 98 reads names a bridge (CM-NO9XBRIDGE).
+; NT targets only. Windows 98 SE's and ME's engines DO read a "$Windows NT$"
+; INF (runs/run-39.md, 39-0.4): a plain VEN&DEV line was installed on a
+; bridge there, and a WDM driver on a bridge devnode breaks the bridge on
+; Windows 98 (record 21 section 6.1). So this file has no undecorated
+; install section, every model line is in the &CC_0604 form (which 98 SE's
+; and ME's automatic search did not choose), and the package stages it in
+; an nt\ subdirectory of each flavour directory, never beside xhcicm.inf
+; where a 98 user points the wizard (CM-NO9XBRIDGE). Its one source disk
+; is that directory's parent, where xhcicm.sys is.
 ;
-; DRAFT, pending task 39-0.4, which reads the install route on the guests:
-; the model lines are the Thunderbolt switches' port ids (each port of a
-; switch carries its switch's id; the filter attaches to each and acts only
-; on the one the NHI names), and the install sections keep pci.sys as the
-; bridge's function driver by including and needing machine.inf's
-; PCI-to-PCI bridge section, adding xhcicm as a device-specific
-; UpperFilters value and its service. Which section name machine.inf gives
-; the bridge on each target, and whether the vendor-id match outranks
-; pci.inf's own install without displacing it, is what that reading
-; settles. The lines and the two Include/Needs pairs are the only places
-; that change. Every line must carry &CC_0604: the driver takes the filter
-; role by that class (src\cm\cm_vals.c).
+; Decision D2, read by task 39-0.4: the device-specific route. The install
+; sections keep pci.sys as the port's service by including and needing
+; machine.inf's PCI_DRV, PCI_DRV.HW and PCI_DRV.Services and add xhcicm as
+; a device-specific UpperFilters value; Windows 2000 takes the INF
+; unforced, XP and 7 only forced (the unsigned INF ranks 0x8005 against
+; machine.inf's 0x2004): the installer forces it, a user by hand uses Have
+; Disk. Each port of a switch carries its switch's id; the filter attaches
+; to each and acts only on the ports the NHI verifies and assigns. Every
+; line must carry &CC_0604: the driver takes the filter role by that class
+; (src\cm\cm_vals.c).
 ;
 ; The filter reads no registry value; the NHI's values are xhcicm.inf's.
 ;
@@ -74,8 +76,21 @@ DriverVer=10/14/2026,2.4.0.0
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_A76E&CC_0604
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_A71F&CC_0604
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_A72F&CC_0604
-; PLACEHOLDER: the emulator's stand-in tunnel bridges, if they need an id
-; of their own (task 39-0.7's reading); every line must carry &CC_0604.
+; Design record 22 section 3.7 (task 40-0.2): the USB4-only hosts' tunnel
+; ports where pci.ids 2026.10.14 labels a port as such - the Barlow Ridge
+; host bridges, AMD's USB4 PCIe tunnel ports and bridge, ASMedia's ASM4242
+; downstream port. Lunar, Panther and Wildcat Lake name none; their sets
+; come from XhciCmTunnelBridge. All untested.
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_5780&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_5783&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_1022&DEV_14CD&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_1022&DEV_14EF&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_1022&DEV_150A&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
+; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
+; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
+%TunnelDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_1B36&DEV_000C&CC_0604
 
 [CmFilterModels.NTx86.6.0]
 ; Record 21 section 3.3's list. The discrete controllers' switch ports;
@@ -112,11 +127,24 @@ DriverVer=10/14/2026,2.4.0.0
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A76E&CC_0604
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A71F&CC_0604
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A72F&CC_0604
-; PLACEHOLDER: the emulator's stand-in tunnel bridges, if they need an id
-; of their own (task 39-0.7's reading); every line must carry &CC_0604.
+; Design record 22 section 3.7 (task 40-0.2): the USB4-only hosts' tunnel
+; ports where pci.ids 2026.10.14 labels a port as such - the Barlow Ridge
+; host bridges, AMD's USB4 PCIe tunnel ports and bridge, ASMedia's ASM4242
+; downstream port. Lunar, Panther and Wildcat Lake name none; their sets
+; come from XhciCmTunnelBridge. All untested.
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_5780&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_5783&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14CD&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14EF&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_1022&DEV_150A&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
+; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
+; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
+%TunnelDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_0001&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_000C&CC_0604
 
 [SourceDisksNames]
-1=%DiskName%,xhcicm.sys,,
+1=%DiskName%,xhcicm.sys,,..
 
 [SourceDisksFiles]
 xhcicm.sys=1
@@ -133,6 +161,8 @@ Needs=PCI_DRV
 CopyFiles=CmFilter.CopyFiles
 
 [CmF.Dev.NTx86.HW]
+Include=machine.inf
+Needs=PCI_DRV.HW
 AddReg=CmFilter.HW.AddReg
 
 [CmF.Dev.NTx86.Services]
@@ -148,6 +178,8 @@ Needs=PCI_DRV
 CopyFiles=CmFilter.CopyFiles
 
 [CmF.Dev6.NTx86.HW]
+Include=machine.inf
+Needs=PCI_DRV.HW
 AddReg=CmFilter.HW.AddReg
 
 [CmF.Dev6.NTx86.Services]

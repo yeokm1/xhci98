@@ -1501,10 +1501,11 @@ try {
         Write-Step "the upload set gates the connection manager's three files, all or none"
         $cmFiles = @{
             "xhcicm.inf"  = (Join-Path $repo "src\cm\xhcicm.inf")
-            "xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
+            "nt\xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
         }
         $putCm = {
             foreach ($fl in @("release", "debug")) {
+                Ensure-Directory (Join-Path $pubRoot "$fl\nt")
                 foreach ($n in $cmFiles.Keys) { Copy-Item -LiteralPath $cmFiles[$n] -Destination (Join-Path $pubRoot "$fl\$n") -Force }
                 [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhcicm.sys"),
                     [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $fl flavour"))
@@ -1516,15 +1517,15 @@ try {
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the connection manager present:`n" + $r.Output)
-        Assert-True ($r.Output -match "carries the connection manager's xhcicmf\.inf") `
+        Assert-True ($r.Output -match "carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected the connection manager's INFs to be gated by their own gate. Output:`n" + $r.Output)
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "xhcicmf.inf")) {
+            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
             }
         }
-        foreach ($drop in @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")) {
+        foreach ($drop in @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "release\$drop") -Force
             if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
             if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
@@ -1534,18 +1535,30 @@ try {
             Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around an incomplete connection manager ($drop missing)."
             & $putCm
         }
-        $cmBad = [System.IO.File]::ReadAllText($cmFiles["xhcicmf.inf"]).Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"')
-        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\xhcicmf.inf"), [System.Text.Encoding]::ASCII.GetBytes($cmBad))
+        $cmBad = [System.IO.File]::ReadAllText($cmFiles["nt\xhcicmf.inf"]).Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"')
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\nt\xhcicmf.inf"), [System.Text.Encoding]::ASCII.GetBytes($cmBad))
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -ne 0) "a published filter INF Windows 98 would read was assembled into the asset."
         Assert-True ($r.Output -match "check-cm-inf") ("expected the refusal to name the connection manager's INF gate. Output:`n" + $r.Output)
+        & $putCm
+        # The filter INF beside xhcicm.inf, where a 98 wizard is pointed, is
+        # refused even with the right one in nt\ (CM-NO9XBRIDGE, 39-0.4).
+        Copy-Item -LiteralPath $cmFiles["nt\xhcicmf.inf"] -Destination (Join-Path $pubRoot "release\xhcicmf.inf") -Force
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a filter INF beside xhcicm.inf, where a 98 wizard is pointed, was assembled into the asset."
+        Assert-True ($r.Output -match "check-cm-inf") ("expected the refusal to name the connection manager's INF gate. Output:`n" + $r.Output)
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "xhcicmf.inf")) {
+            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
                 Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\$name") -Force
             }
+            Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\nt") -Recurse -Force
+            if (Test-Path -LiteralPath (Join-Path $pubRoot "$fl\xhcicmf.inf")) { Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhcicmf.inf") -Force }
         }
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
@@ -2689,7 +2702,7 @@ try {
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
         @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable';
            Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's three files and txtsetup.oem" },
-        @{ Find = '$cmPublishable = @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")';
+        @{ Find = '$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")';
            Why  = "the connection manager's NHI INF, filter INF and binary (roadmap-usb4.md task 39-A.1) are no longer what a flavour directory publishes for it" },
         @{ Find = 'Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version';
            Why  = "the published xhcicm.sys is no longer held to the refusals xhciuas.sys is" },
