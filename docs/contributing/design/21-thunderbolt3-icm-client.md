@@ -997,8 +997,10 @@ and FR key it by link and depth; section 1.4.4). On `device connected`:
   outcome is settled by this announcement (`approved` = 1, a tunnel up;
   0, unapproved); then, where the announcement says `approved` = 0 and the
   entry is not rejected, apply the approval policy as for a new device.
-  So each fresh announcement earns at most one more approve; nothing is
-  retried between announcements.
+  Each fresh announcement starts at most one approval operation,
+  including its bounded timeout retries (section 5.5); after that
+  operation finishes, no new approval operation starts until another
+  announcement.
 - A known UUID at the same link and depth (TR and ICL: route string) and
   approval state, needing no recovery: refresh key, id
   and route, nothing else (the resume case, [obs] section 6.5).
