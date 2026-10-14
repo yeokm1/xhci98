@@ -378,8 +378,8 @@ competing connection manager.
 
 #### 1.4.6 What the client does where a row is wrong
 
-Only the AR row has been seen working; every other row is code written to
-a structure. The contract, which `test_tbt_icm` is to check against frames
+Only the AR row has been seen working; every other row is a planned
+implementation derived from Linux's layouts, captured nowhere. The contract, which `test_tbt_icm` is to check against frames
 synthesised from those structures (proving only that the code follows
 them):
 
@@ -402,11 +402,15 @@ them):
   processes the request, before it answers [obs] `ICM-PROTOCOL` section
   4.3, so a lost or late response can follow a tunnel that is up. The
   entry is marked "approve outcome unknown", no further approve is sent
-  for it, and the tunnel-up poll of section 6.5 runs anyway: a member of
-  the tunnel set turning present makes it a tunnel up, re-enumerated as
-  any other; none within the poll's 2 s leaves the entry unknown until a
-  later announcement (with `approved` = 1, a tunnel up; with 0, the
-  policy again), a disconnect or the reconciliation settles it.
+  for it, and the tunnel-up poll of section 6.5 runs anyway, after which
+  every member of the domain's verified set is re-enumerated whether or
+  not a reading changed - a port another device already keeps up shows no
+  transition, and a rescan of an unchanged bus is harmless. The entry
+  stays "unknown" whatever that finds, since another member turning
+  present proves nothing about this device: only an announcement for it
+  (`approved` = 1, a tunnel up; 0, the policy again, with no second
+  approve while the state is unknown), its disconnect, or the
+  reconciliation after the next `driver ready` settles it.
 - **A bind step that fails** after activation (no answer to `driver ready`
   after its tries, a ring that will not start, the `0x23` handshake) is
   section 1.4.2's failure after activation: rings stopped and drained,
@@ -891,7 +895,7 @@ done.
    Windows 98 SE and Windows 2000 (its header comment, 26-A.2).
 2. Read host capabilities. All ones: inert (test 2). Ring count below 1, or
    an interface version the row does not accept (test 4: 0 on AR [obs];
-   below `0x40` on the others [linux]): inert, the value in the log. A
+   below `0x40` on the others, this project's policy): inert, the value in the log. A
    host router that wants Linux's version-2 reset is not this record's.
 3. Read firmware status (Intel candidates only, test 3). ICM enabled
    clear in a valid read: inert - except on the Maple Ridge and Tiger Lake
@@ -932,7 +936,9 @@ done.
    `device connected` events that arrive meanwhile [inf, consistent with the
    observed 580 ms hold]. Never answered: log it and carry on - the events
    are what matter, and the emulator's R8 says config requests are delayed,
-   never dropped.
+   never dropped. This is the one bounded step whose exhaustion is not a
+   failure, at bind or at resume: the reconciliation window of section 5.3
+   then starts at the poll's exhaustion instead of its success.
 10. Process the queued events (section 5.3).
 
 What is not done at bind, by design: no host-router enumeration, no
@@ -999,7 +1005,8 @@ section 6.5. No matching entry is section 1.4's unmatched disconnect on
 every row. The firmware sends
 nothing for an unplug while the driver was unloaded [obs] section 6.6, so
 after every `driver ready` the table is reconciled: an entry not re-announced
-within 500 ms of the host-router poll succeeding is treated as gone and the
+within 500 ms of the host-router poll succeeding, or of its 50 tries running
+out (section 5.1 step 9), is treated as gone and the
 tunnel-down sequence runs for it [inf, the client's own 500 ms check].
 
 ### 5.4 Approval policy (decision D4, taken 2026-10-14)
@@ -1011,7 +1018,7 @@ not write one, so approval is a policy, the registry value `XhciCmApprove`:
 
 | Value | Meaning |
 |---|---|
-| 1 (default) | approve every announced device that is not rejected, at once, on every announcement with `approved` = 0 |
+| 1 (default) | approve every announced device that is not rejected, at once, on every announcement with `approved` = 0, on every row with an approve operation (the ICL row has none, section 1.4.4, and behaves as 0) |
 | 0 | approve nothing; devices tunnelled by pre-boot or approved by an earlier driver keep their tunnels and are used; a newly plugged device is logged and left unapproved |
 
 **Nothing is remembered** (owner, 2026-10-14). The driver keeps no list of
@@ -1041,8 +1048,10 @@ its `nhi` service key [obs] section 10.3 - has no dialog to accept a device
 in on these targets, so it could only be filled by hand from the log's
 UUIDs. It is listed as a later option under D4, not a value of this cut.
 
-`approve` carries the UUID, connection key and id of the announcement, waits
-10 s, and on error flags leaves the entry unapproved with a log line. A
+`approve` carries the fields of the announcement its row names (section
+1.4.4: UUID, connection key and id on FR and AR; UUID, route and id on
+TR), waits 10 s, and on error flags leaves the entry unapproved with a log
+line; no answer is section 1.4.6's unknown outcome. A
 success means the firmware built the PCIe tunnel while processing the
 request [obs] section 4.3, so the tunnel-up sequence of section 6.5 follows
 at once.
@@ -1056,10 +1065,18 @@ systems, and what the Windows 11 service does for a device it has seen once
 
 ### 5.5 Timeouts, retries and faults
 
-5 s per command, three retries on timeout, 10 s for `approve` [inf]. A
-command that never answers after its retries fails the operation, never the
-driver: the start fails only on the bind steps of section 5.1; a later
-failure logs, drops the device entry if any, and leaves the thread polling.
+5 s per command, three retries on timeout, 10 s for `approve` [inf], and the
+`driver ready` timeouts and tries of section 1.4.4 where a row names them.
+A command that never answers after its retries fails the operation, never
+the driver: a bind step of section 5.1 gives the inert start or the
+failure after activation (section 1.4.2); a later failure is logged and
+the thread goes on polling, with the device table changed only as each
+case says. `approve`: an error flag leaves the entry unapproved, kept; no
+answer leaves it "outcome unknown", kept (section 1.4.6). A failed route
+request (`get route`, FR's topology query) leaves the entry unrouted and
+unapproved, kept, and the next announcement retries it. Entries are
+removed only by a disconnect, by the reconciliation, or by a replacing
+announcement at the same place (section 5.3).
 A frame longer than its buffer, a response with an unexpected code, or a
 CRC mismatch on a command the firmware reports as an error are counted, not
 acted on. Counters: section 8.
@@ -1092,8 +1109,10 @@ instance, in the order the capture or the client shows:
   suspend operation for it, and this project treating suspend with an
   integrated controller as unsupported (section 1.4.3). Resume to D0: on
   the integrated family the force power, firmware-ready poll and LTR of
-  section 1.4.3 first; then the bind sequence of section 5.1 from step 6,
-  without the mailbox `0x23` [inf] section 6.5 (the one place the
+  section 1.4.3 first; then the rings reinitialised and restarted in the
+  common buffer kept since start (section 4.2 allocates it once; suspend
+  only stopped the rings), and the bind sequence of section 5.1 from step
+  8, without the mailbox `0x23` [inf] section 6.5 (the one place the
   runtime-resume capture is taken as the model, because no system-resume
   capture exists; Linux's `icm_complete` likewise sends only `driver
   ready` and the host-router poll), and the reconciliation of section
@@ -1210,18 +1229,21 @@ The filter does no device work: PnP IRPs other than the five it watches
 go down with `IoSkipCurrentIrpStackLocation`; power IRPs go down the way
 NT 5.x requires of a filter, `PoStartNextPowerIrp` then
 `IoSkipCurrentIrpStackLocation` and `PoCallDriver` (the experiment's
-`reenum.c` `Power` routine), except a device `IRP_MN_SET_POWER` to D0 on an
-active member while the NHI is resuming, which is passed down with a
-completion routine and retained as section 6.3's resume ordering says,
+`reenum.c` `Power` routine), except a device `IRP_MN_SET_POWER` to D0 on a
+member the NHI has marked **held** (section 6.3), which is passed down
+with a completion routine and retained as section 6.3's resume ordering
+says,
 `PoStartNextPowerIrp` and the completion following its release; `IRP_MN_START_DEVICE` is passed down with a
 completion wait and the entry published only on success;
 `IRP_MN_STOP_DEVICE` and `IRP_MN_SURPRISE_REMOVAL` withdraw the entry;
 `IRP_MN_REMOVE_DEVICE` withdraws it, waits for the rundown of section 3.2,
 passes the IRP down, detaches and deletes the device object;
 `IRP_MN_QUERY_DEVICE_RELATIONS` for `BusRelations` is passed down with a
-completion wait and, on an active bridge only, read on its way back for
-section 7.4's child filters before it is completed - the list is read and
-never changed. Its
+completion wait and read on its way back on every bridge from the
+filter's start, whatever its active mark and `XhciCmSafeEject` say, to
+keep section 7.4's baseline and snapshot; only on an active bridge with
+safe eject on does that reading also attach child filters, before the
+request is completed - the list is read and never changed. Its
 `AddDevice` attaches to any PDO the INF put it on; the location it
 publishes is what the NHI matches.
 
@@ -1279,21 +1301,31 @@ in this order, each recorded per member as its source:
    integrated tunnel-port ids for the same processor family as the NHI.
    Never any other root port, however hot-plug capable: a machine's other
    root ports (a card reader, a slot) are not tunnel ports. Source:
-   "listed root port". Each port belongs to one domain or to none. With
-   one NHI of that family started on the machine, its set is every listed
-   port present. With two (Ice Lake to Meteor Lake carry two NHIs, Linux's
-   `*_NHI0` and `*_NHI1`) and no source saying which ports are whose -
-   Linux takes that from ACPI and checks that a port references the
-   particular NHI (`acpi.c`, `tb_acpi_add_link`) - the ports are
-   **ambiguous** and stay out of both sets: inactive, never re-enumerated
-   or marked by this driver, the candidates logged per domain, until the
-   override assigns them. Ownership, the active mark, safe eject and the
-   resume retention therefore always have exactly one domain behind
-   them.
+   "listed root port". Each port belongs to one domain or to none, and
+   that is decided from the hardware, not from which driver instances
+   happen to be running: the NHI reads every function of its root bus
+   (`HalGetBusData`) and counts the NHIs of its own family present,
+   started, disabled or failed alike. With one, its set is every listed
+   port present. With two (Ice Lake to Meteor Lake carry two NHIs,
+   Linux's `*_NHI0` and `*_NHI1`) and no source saying which ports are
+   whose - Linux takes that from ACPI and checks that a port references
+   the particular NHI (`acpi.c`, `tb_acpi_add_link`) - the listed ports
+   are **ambiguous** and stay out of both sets: inactive, never
+   re-enumerated or marked by this driver, the candidates logged per
+   domain, until the override assigns them.
 4. **The emulator**: a sibling of the NHI's parent, or of the NHI on bus 0,
    that carries an SHPC capability (id `0x0C`; `usb4-emu`'s
    `usb4-tb3-tunnel-bridge`, and its `usb4-generic` layout with the host and
    the bridge siblings on bus 0). Source: "SHPC".
+
+**Exclusive ownership.** Before any member is activated, each domain
+publishes its claimed ports, with their sources, in the registration
+list under its lock; a port claimed by two domains by any combination of
+sources (override against override, override against discovery,
+discovery against discovery) is ambiguous for both, inactive and logged,
+until an override on one side alone names it. Ownership, the active
+mark, safe eject and the resume hold therefore always have exactly one
+domain behind them.
 
 With no override and an empty set, the driver logs the bridges it saw and
 runs with re-enumeration disabled (section 6.4); it never falls back to an
@@ -1309,8 +1341,9 @@ the tunnel, `04:02.0` the xHCI; `ICM-PROTOCOL` section 1 and the Windows 98
 BIOS matrix": root bridge at `00:06.0`, switch ports `01:01.0`, `02:00.0`,
 `02:01.0`, `02:02.0`) - and against synthetic ones: a two-port discrete
 switch, an integrated layout with listed and unlisted hot-plug root ports,
-two domains sharing a list, a foreign hot-plug bridge beside the switch,
-and the override.
+two NHIs of one family with only the first started and with the second
+disabled (both ambiguous either way), an override against a discovered
+claim, a foreign hot-plug bridge beside the switch, and the override.
 
 **A set of more than one.** Which member a device's tunnel uses is not
 read (the fabric mapping above is the firmware's), so every tunnel change
@@ -1339,11 +1372,13 @@ driver makes one:
   either **succeeded** (section 5.6's resume sequence and the
   reconciliation of section 5.3 done, the tunnels re-announced) or
   **failed** (any step's bound exhausted, the failure after activation
-  of section 1.4.2). Failure is not taken for restoration: the thread
-  releases the IRP and at once asks the filter for an invalidation, so
-  `pci.sys` reports the functions that did not come back as missing, the
-  outcome of an unplug during sleep, rather than letting their drivers run
-  against an absent tunnel.
+  of section 1.4.2; the host-router poll's exhaustion is not one, section
+  5.1 step 9). Failure is not taken for restoration: the thread releases
+  the IRP and at once asks the filter for an invalidation, so `pci.sys`
+  reports the functions that did not come back as missing. An
+  invalidation only requests later PnP processing and is not a barrier,
+  so the drivers below may resume against an absent tunnel before their
+  removal - the failure path limits that window and does not close it.
 - The bound is the NHI's own resume path's, the sum of its steps'
   timeouts and tries for its row (the AR row: four 5 s `driver ready`
   attempts and the 50-try host-router poll; the ICL row's 20 s attempts
@@ -1352,10 +1387,14 @@ driver makes one:
 - An NHI that does not resume at all (removed, or refused at resume)
   takes the failure path for every held member at its removal.
 
-Leg `39-V.2` reads it where the guest offers S3. On Windows 98 there is no
-such hook; Windows 98 on the APM machines this project runs rarely reaches
-S3, and suspend with a tunnelled device attached is a release-notes
-limitation there.
+Because of that window, **system suspend with a tunnelled device attached
+is unsupported in this release on every target**, and the release notes
+say so: the hold orders the successful resume, and nothing yet orders a
+failed one. Leg `39-V.2` reads, where the guest offers S3, a resume that
+succeeds, one that fails (the firmware not answering `driver ready`), an
+unplug during sleep, and the watchdog's expiry. On Windows 98 there is no
+such hook at all; Windows 98 on the APM machines this project runs rarely
+reaches S3.
 
 ### 6.4 When re-enumeration cannot be done
 
@@ -1659,7 +1698,8 @@ reading of D10 for the owner to confirm.
    arrives, which also invalidates the entry's cache; after an eject no
    statement is sent at the unplug, none being due.
 6. **The switch.** `XhciCmSafeEject` 0 (section 8) attaches no child
-   filter, and the bridge filter then reads `BusRelations` for nothing.
+   filter. The bridge filter keeps its baseline and snapshot all the same,
+   since activation (and so re-enumeration) waits on the baseline.
 
 **Windows 98 SE and ME, best effort.** Section 6.1's rule stands: nothing
 goes on the bridge, and the devices behind it are `PCI.VXD` devnodes with
@@ -1728,7 +1768,7 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
 | `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and clamped to 250 while the `nvme98` statement is enabled (section 7.2) |
-| `XhciCmCmdTimeoutMs` | 5000 | the ICM command timeout (section 5.5), held to 1000 to 60000; retries stay 3 |
+| `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
 
@@ -1858,7 +1898,10 @@ snapshot rule's vectors in `test_tbt_topo`):
 - topology: the two captured layouts of section 6.3, the generic layout,
   a two-port switch (both members, source "switch"), an integrated layout
   with listed and unlisted hot-plug root ports (only the listed ones), two
-  domains sharing a root-port list, a foreign hot-plug bridge beside the
+  NHIs of one family with the first started alone and with the second
+  disabled (the listed ports ambiguous both times), an override against a
+  discovered claim (ambiguous), safe eject off with activation and
+  re-enumeration still working, a foreign hot-plug bridge beside the
   switch (not a member), no member at all (re-enumeration disabled), and
   the override list, including an entry that is not a bridge;
 - the bridge filter's snapshot rule of section 7.4, pure: a first
@@ -2045,9 +2088,10 @@ its half of "observed on both" is the VM leg, as for every HCD phase.
 Whether the bench is read before or after the cut is not a standing
 permission: `AGENTS.md` names the phases that were allowed to cut first
 (28 to 31, 35), one decision each. Decision D13 (owner, 2026-10-15) grants
-the same to Phase 39, with the pre-cut gates being everything else in this
-section and the post-cut closure being `39-E.1` and `39-E.2`, a failure
-there a re-cut. The cut is `3.0.0.0`, which by decision D7 is `40.final`'s
+the same to Phase 39, with the pre-cut gates being the host suites, the
+gates and the VM legs of sections 10.1 to 10.3 and `39.final`'s dry
+build, and the post-cut closure being this section's `39-E.1` and
+`39-E.2`, a failure there a re-cut. The cut is `3.0.0.0`, which by decision D7 is `40.final`'s
 and carries Phase 40 too, so the bench is read after that cut.
 
 ## 11. The owner's decisions
@@ -2112,8 +2156,10 @@ revised to it in draft 6.
   `Removable` and `SurpriseRemovalOK` set decides the 2000 path; the 9x
   half rests on `Change_DevNode_Status` setting `DN_REMOVABLE` and on what
   ME's applet lists, both unread.
-- **Resume ordering** (section 6.3): the NT retention of a tunnel port's D0
-  is unread; Windows 98 has no such hook.
+- **Resume ordering** (section 6.3): the NT hold orders a successful
+  resume and is unread; a failed one is not ordered, so suspend with a
+  tunnelled device attached is unsupported on every target in this
+  release; Windows 98 has no such hook.
 - **The dock's PCIe switch** (`8086:15d3`, `ICM-PROTOCOL` section 10.1) and
   its five downstream ports appear behind the tunnel on the real machine,
   where the emulator shows one NVMe: `pci.sys` and `PCI.VXD` enumerate
