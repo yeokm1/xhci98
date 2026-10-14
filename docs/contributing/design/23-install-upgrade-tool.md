@@ -1,7 +1,8 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 5, 2026-10-15, reviewed and revised four times the same day;
-the code is written against it (task 40.6). Written for the task group the
+Status: revision 7, 2026-10-15, reviewed and revised five times the same day;
+the code is written against it (task 40.6) and was reviewed and revised
+against it the same day. Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
 package gains an install and upgrade script, `INSTALL.BAT`, in front of a
 console tool of this project's own, `XHCIINST.EXE` (x86) and
@@ -157,7 +158,9 @@ stages it from `xhciinst\INSTALL.BAT`.
   has no such routine; a routine missing that a step needs refuses that
   step, says which routine, and never substitutes another (section 7.3).
   `xhciinst\selftest.cmd` holds the import table to those two names
-  (`link -dump -imports`), the tool's import gate (section 11).
+  (`xhciinst\check-imports.ps1`, which reads the PE import directory
+  itself: every module name, whatever its characters, and no delay-load
+  table), the tool's import gate (section 11).
 - **A manifest** asking for elevation (`requireAdministrator`), embedded
   as resource 1 of type 24 through `xhciinst.rc`, as `xhcicln.manifest` is;
   98, ME, 2000 and XP ignore it, and on Vista and 7 every run asks, `/list`
@@ -257,7 +260,11 @@ updated; and on 98 SE and ME the directory is what `DevicePath` names
 digits, an FNV-1a hash of every file's relative name and bytes (an 8.3
 name, which 98 SE's "Copy files from" box takes as typed, section 6.2) -
 holds an `XHCIINST.LST` naming the files the tool
-put there, and is never rewritten: a run whose package is already there
+put there, and is never rewritten. A copy is built in `<name>.NEW` and
+published by renaming it only once every file and the list's closing `END`
+line are written, so a failed copy never passes for a finished one; a
+directory whose list lacks the `END` line (an interrupted run) is removed
+and built again. A finished copy is never rewritten: a run whose package is already there
 checks the files are byte-identical and uses them, and a run of another
 package makes another directory. So an older package run for one driver
 cannot replace the files a newer installed package's INF still names, and
@@ -493,7 +500,11 @@ too, without changing anything:
    with the package's.
 
 All equal: nothing to do, the store holds this package. Any difference is
-the trap. Without `/restage` the tool installs nothing from that INF,
+the trap. "No trap" is a verified answer only: a store that cannot be
+inspected - the routine missing, a location query failing, an `oem*.inf`
+or the directory that cannot be read, an unusable source entry - leaves
+the INFs it may concern uninstalled, says so and ends with exit 4, like
+the trap, but `/restage` does not replace what it could not read. Without `/restage` the tool installs nothing from that INF,
 reports "the driver store holds a different build under an identical INF;
 run INSTALL.BAT /restage to replace it" and ends with exit 4. With
 `/restage` (decision D5), after the plan has named every devnode, present
@@ -512,8 +523,13 @@ confirmation:
    is removed: `%windir%\XHCI98\RESTAGE.LST` holds `PKG` and the local
    copy's directory name (the package identity), `INF` with the INF's slot
    and the removed `oemNN.inf`, and one `DEV` line per devnode that named
-   it. A later run reads it first: an unreadable or malformed file refuses
-   the run (exit 1); a file naming another package's copy refuses it too,
+   it, and a closing `END` line with the number of `INF` and `DEV` lines.
+   Every update is written to `RESTAGE.TMP`, flushed to the disk and moved
+   over `RESTAGE.LST` in one step (`MoveFileEx`, replace, write-through),
+   so an interrupted write leaves the previous complete journal. A later
+   run reads it first: an unreadable, malformed or incomplete file (no
+   `END` line, counts that differ, a line after it, a `DEV` or `NEW` of no
+   recorded `INF`) refuses the run (exit 1); a file naming another package's copy refuses it too,
    with that package named ("run that package's INSTALL.BAT"); the same
    package's run reinstalls every `DEV` device present, whatever its
    `DriverVersion` says and whether or not the trap is still detectable;
@@ -1302,7 +1318,7 @@ the user.
 | `xhciinst\xhciinst.c` | the tool: the system half |
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 10) |
 | `xhciinst\xhciinst.rc`, `xhciinst.manifest` | the elevation manifest |
-| `xhciinst\build.cmd`, `selftest.cmd` | the two builds; the self-test and the import check |
+| `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the two builds; the self-test and the import check |
 | `xhciinst\INSTALL.BAT` | staged at the package root |
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |

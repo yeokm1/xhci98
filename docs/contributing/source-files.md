@@ -352,7 +352,8 @@
 > request), `build.cmd` (`XHCIINST.EXE` with MSVC 6.0, `XHCIIN64.EXE` with
 > WDK 7.1 amd64, both also compiling `src\xhci_psw.c` for the driver's own
 > switchover gate), `selftest.cmd` (the `/selftest`, the switch refusals
-> and the import-table check `build-driver.cmd` runs), `INSTALL.BAT` (staged
+> and the import-table check `build-driver.cmd` runs, through
+> `check-imports.ps1`, which reads the PE import directory), `INSTALL.BAT` (staged
 > at the package root) and `README.TXT` (the published `readme.txt`).
 > Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
 > `xhci_silent.h` (the Windows 98 SE and ME silent install: the
