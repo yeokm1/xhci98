@@ -645,6 +645,9 @@ size, configuration space and sequence number but not on the adapter field
 | ring 0 disabled before reprogramming | 1 ms settle | Guide 5.7.3, 3.5 note 1 |
 | Host Router Reset (explicit cleaning only) | rings disabled at least 1 ms before; HRR untouched for 50 ms, then 0 within 500 ms | Guide 3.5; [linux] `nhi.c` `nhi_reset` |
 | force power FW_READY | 1.05 s | section 4.2 |
+| TMU time posting (Post Time back to 0) | 100 ms, a project bound (Linux polls 100 times 5 to 10 us apart) | section 6.6 |
+| TMU convergence before a USB3 path | 50 ms | Guide 7.4.3.1 step 4 |
+| a PCIe adapter's LTSSM in a transitional state | 2 s before it counts as a loss | section 7.1 item 4 |
 | `NVM_AUTH_DONE` (Tiger Lake to Meteor Lake, Maple Ridge) | 10 ms | section 3.3 |
 | Router Ready after enumeration | 500 ms | Guide 3.2.1 note; [linux] `usb4_switch_setup` |
 | a router operation's OV clear | 500 ms | [linux] `usb4.c` `usb4_native_switch_op` |
@@ -870,8 +873,11 @@ Following Guide 7.1, with Linux's preconditions ([linux] `switch.c`
       bits 10 to 12) clear, and the link's TMU mode Off. Off is the
       Guide's Table 7-2 row, read on both routers of the link: the
       downstream (device) router's TMU_RTR_CS_3 TSPacketInterval 0, and on
-      both lane 0 adapters TMU_ADP_CS_3 EnableUniDirectionalMode 0 and
-      TMU_ADP_CS_8 Enable Enhanced Uni-Directional Mode 0 (the TMU Router
+      both lane 0 adapters TMU_ADP_CS_3 EnableUniDirectionalMode 0, and
+      TMU_ADP_CS_8 Enable Enhanced Uni-Directional Mode 0 only where both
+      routers report USB4 Version 2.0 (a version 2 field; on older routers
+      enhanced mode is taken as absent, as [linux] `tmu.c`
+      `tb_switch_tmu_enhanced_is_supported` does) (the TMU Router
       and Adapter Configuration Capabilities, Spec 8.2.1.2 and 8.2.2.2,
       found by the capability walks; [linux] `tmu.c` `tmu_mode_init` reads
       the router's rate the same way). A router this driver enumerated
@@ -898,62 +904,92 @@ Following Guide 7.1, with Linux's preconditions ([linux] `switch.c`
    lane 0 port and on the device's upstream port ([linux] `usb4.c`
    `usb4_port_configure`, `switch.c` `tb_switch_configure_link`).
 
-### 6.6 Configuration Valid
+### 6.6 Configuration Valid, and the TMU before it
 
-One read-modify-write of ROUTER_CS_5 on the device router: PTO (bit 24)
-when the host's port has a PCIe Down adapter and the device a PCIe Up one;
-UTO (bit 25) when both USB3 adapters exist and the link is a USB4 link
-(PORT_CS_18 TCM, bit 9, clear on the host's port; [linux] `usb4.c`
-`link_is_usb4`); HCO (bit 26) never; CNS (bit 23) left 0, as Linux leaves
-it. Then CV (bit 31) in a second write, and Configuration Ready (ROUTER_CS_6
-bit 25) within 500 ms (Guide 3.2.3; [linux] `usb4.c` `usb4_switch_setup`,
-`usb4_switch_configuration_valid`). UTO is set whatever `XhciCmUsb3Tunnel`
-says when the router supports it, because the Guide says the connection
-manager "must" (3.2.3); with the value at 0 the USB3 adapters are then
-disconnected (section 6.9).
+The sequence on a device router, after bonding (section 6.5):
 
-**TMU** (Guide 7.4). PCIe has no accuracy requirement; a router that
+1. **ROUTER_CS_5**, one read-modify-write: PTO (bit 24) when the host's
+   port has a PCIe Down adapter and the device a PCIe Up one; UTO (bit 25)
+   when both USB3 adapters exist and the link is a USB4 link (PORT_CS_18
+   TCM, bit 9, clear on the host's port; [linux] `usb4.c` `link_is_usb4`);
+   HCO (bit 26) never; CNS (bit 23) left 0, as Linux leaves it. UTO is set
+   whatever `XhciCmUsb3Tunnel` says when the router supports it, because
+   the Guide says the connection manager "must" (3.2.3); with the value at
+   0 the USB3 adapters are then disconnected (section 6.9).
+2. **The TMU**, where a USB3 tunnel will be built (below).
+3. **CV** (bit 31) in a second write, then Configuration Ready (ROUTER_CS_6
+   bit 25) within 500 ms (Guide 3.2.3; [linux] `usb4.c`
+   `usb4_switch_setup`, `usb4_switch_configuration_valid`). The TMU comes
+   before CV as Linux orders it ([linux] `tb.c` `tb_scan_port`:
+   "Configuration valid needs to be set after the TMU has been enabled for
+   the upstream port"; Guide 7.4.3 says the same of a version 2 connection
+   manager's adapter fields).
+
+**The TMU** (Guide 7.4). PCIe has no accuracy requirement; a router that
 tunnels USB3 needs accuracy level 1 or more (Guide 7.4.2), since a USB3
 adapter that supports the TMU corrects its timestamps with the domain's
 time (Spec 9.1.1.7). So the TMU is configured on a link exactly when this
-driver will build a USB3 tunnel over it, and never on a link it preserves:
+driver will build a USB3 tunnel over it and finds it Off, and never on a
+link it preserves:
 
 1. **At connection** (Guide 7.4.3.1): Disable Time Sync (TMU_ADP_CS_6) set
    on the host's lane 0 adapter and the device's upstream lane 0 adapter,
-   so no TMU packet crosses the link until it is configured. A router whose
-   TMU Router Configuration Capability reports Time Synchronization
-   Protocol Not Supported gets no TMU on that link (Guide 7.4; the USB4 2.0
-   ECN "Configuration and Behavior When TMU is Disabled"), and its USB3
+   so no TMU packet crosses the link until it is configured - on a router
+   this driver enumerates itself, whose TMU starts Off. A router whose TMU
+   Router Configuration Capability reports Time Synchronization Protocol
+   Not Supported gets no TMU on that link (Guide 7.4; the USB4 2.0 ECN
+   "Configuration and Behavior When TMU is Disabled"), and its USB3
    tunnel, if any, is built without it, since its adapter has no time to
    correct.
-2. **The mode** (Guide 7.4.3): HiFi-Bi, since this connection manager is a
-   version 1 one and never enables CLx; Linux makes the same choice on a
-   version 1 link without CL1 ([linux] `tb.c` `tb_enable_tmu`). Never on
-   two single-lane links (Guide 7.4.3.1): after bonding, or over lane 0
-   alone once lane 1 is disabled.
-3. **Enable**, before Configuration Valid as Linux orders it ([linux]
-   `tb.c` `tb_scan_port`: "Configuration valid needs to be set after the
-   TMU has been enabled for the upstream port"; Guide 7.4.3 says the same
-   of a version 2 connection manager's adapter fields): the device router's
-   local time posted from the host router's time (Guide 7.4.3.1 step 1:
-   Post Local Time, Post Time low 1 and high `0xFFFFFFFF`, then high 0,
-   Post Time polled to 0 within 100 ms; [linux] `tmu.c`
-   `tb_switch_tmu_post_time`); the downstream router's parameters per Guide
-   Table 7-3 (Freq Measurement Window 800, the averaging constants 8); the
-   HiFi-Bi enable of Guide 7.4.3.4.1 step 3 (EnableUniDirectionalMode 0 on
-   both ports, TSPacketInterval 16 in the downstream router, Disable Time
-   Sync 0 upstream then downstream); then 50 ms before any USB3 path
-   (Guide 7.4.3.1 step 4). The host router's own TMU is enabled once at
-   start, as Linux's `tb_start` does for the root ([linux] `tb.c`
-   `tb_start`, `tmu.c` `tb_switch_tmu_enable`), unless the host router is
-   preserved with its TMU already running, which is then left as found.
-4. **A failure** in any TMU step: the TMU on that link is disabled again
-   (Guide 7.4.3.4.2, with section 7.3's quarantine rule where that fails),
-   no USB3 tunnel is built over the link, and the PCIe tunnel proceeds;
-   the reason is logged.
-5. **Disable**, at unplug (section 7.3 step 5) on the host's port, and when
-   this driver tears down the last USB3 tunnel over a link it configured:
-   Guide 7.4.3.4.2's HiFi-Bi branch, as far as the routers that remain.
+2. **The current mode is read first** on both routers of the link (Guide
+   Table 7-2's fields: the downstream router's TMU_RTR_CS_3
+   TSPacketInterval, both lane 0 adapters' TMU_ADP_CS_3
+   EnableUniDirectionalMode and TMU_ADP_CS_6 Disable Time Sync, and
+   TMU_ADP_CS_8 Enable Enhanced Uni-Directional Mode only where both
+   routers report USB4 Version 2.0, the field being a version 2 one;
+   elsewhere enhanced mode is taken as absent ([linux] `tmu.c`
+   `tb_switch_tmu_enhanced_is_supported` gates it the same way)). A link
+   already in a mode other than Off - an adopted router with no tunnels
+   whose predecessor configured it - has accuracy level 1 or more already
+   (Guide Table 7-1) and is left as found. A reading that cannot be taken:
+   no TMU change and no USB3 tunnel on that link.
+3. **The mode** (Guide 7.4.3), from Off: HiFi-Bi, since this connection
+   manager is a version 1 one and never enables CLx; Linux makes the same
+   choice on a version 1 link without CL1 ([linux] `tb.c` `tb_enable_tmu`).
+   Never on two single-lane links (Guide 7.4.3.1): after bonding, or over
+   lane 0 alone once lane 1 is disabled.
+4. **Enable, inside a time disruption** (Spec 8.2.1.2 TMU_RTR_CS_0 Time
+   Disruption; Guide 7.4.3.4 steps 2 and 7; [linux] `tmu.c`
+   `tb_switch_tmu_post_time`, `tb_switch_tmu_enable`): set the device
+   router's Time Disruption bit; post its local time from the host
+   router's time (Guide 7.4.3.1 step 1: Post Local Time, Post Time low 1
+   and high `0xFFFFFFFF`, then high 0, Post Time polled to 0 - Linux polls
+   100 times 5 to 10 us apart, this driver for up to 100 ms, a project
+   bound); set the downstream router's parameters per Guide Table 7-3
+   (Freq Measurement Window 800, the averaging constants 8); the HiFi-Bi
+   enable of Guide 7.4.3.4.1 step 3 (EnableUniDirectionalMode 0 on both
+   ports, TSPacketInterval 16 in the downstream router, Disable Time Sync 0
+   upstream then downstream); clear the Time Disruption bit; then 50 ms
+   before any USB3 path (Guide 7.4.3.1 step 4). The host router's own TMU
+   is enabled once at start, inside its own time disruption, as Linux's
+   `tb_start` does for the root ([linux] `tb.c` `tb_start`, `tmu.c`
+   `tb_switch_tmu_enable`), unless the host router is preserved with its
+   TMU already running, which is then left as found.
+5. **A failure** in any TMU step: the Time Disruption bit cleared again on
+   every router this driver set it on, the link's TMU disabled again (item
+   6), no USB3 tunnel over the link, the PCIe tunnel proceeding; the
+   reason is logged, and a step that cannot be undone is recorded as the
+   port's TMU quarantine (no USB3 on that port until it clears, re-tried
+   each idle tick).
+6. **Disable** on a link this driver configured, when its last USB3 tunnel
+   is torn down with both routers present: Guide 7.4.3.4.2's HiFi-Bi branch
+   (the downstream router's TSPacketInterval 0) and then Disable Time Sync
+   1 on both lane 0 adapters, inside a time disruption. **At unplug**,
+   with the downstream router gone, only the host's port remains: its lane
+   0 adapter gets EnableUniDirectionalMode 0 and Disable Time Sync 1, and
+   the host router's own rate is left alone ([linux] `tmu.c`
+   `tb_switch_tmu_disable` disables time sync on the parent's downstream
+   port the same way); a failure there is the port's TMU quarantine.
 
 Exact register offsets and field positions of the TMU capabilities are
 transcribed by task 40-0.1 from Spec 8.2.1.2 and 8.2.2.2 with [linux]
@@ -1159,20 +1195,31 @@ named in the table for the Thunderbolt 3 routers of section 8.
    of one of its ports.
 2. The idle poll's port scan: each tick reads lane 0's LANE_ADP_CS_1 and
    ADP_CS_4 for every host port, two reads per port (Guide 3.1.1 and 3.4.1
-   allow periodic scanning in place of events), and, for a port with a
-   PCIe tunnel up, the host PCIe Down adapter's ADP_PCIE_CS_0, a third.
+   allow periodic scanning in place of events); for a port with a PCIe
+   tunnel up, the host PCIe Down adapter's ADP_PCIE_CS_0, a third; and,
+   where the connection's `nvme98` recipient is cached (record 21 section
+   7.2), one PCI configuration read of that endpoint's vendor and device id
+   through `HalGetBusData`, the presence sample of section 10.3.
 3. ERR_CONN or ERR_LOCK answering a request to a device router's route
    (Spec 6.4.3.2: a disconnected adapter, or a connected one that is locked
    again, meaning it was disconnected since).
-4. **The PCIe tunnel lost with the router still there**: the host PCIe
-   Down adapter's LTSSM read out of L0 (or Path Enable read clear) on a port
-   whose router is still connected and unchanged. The tunnel is down
-   though nothing was unplugged (the emulator's admin-down is such a case,
-   `ARCHITECTURE` section 4.3). The port's PCIe tunnel is then torn down in
-   the orderly form of section 9.3 step 1 (both ends reachable), followed
-   by section 7.3 steps 2, 3 and 6 for the PCI side and the statement, and
-   the port is FAILED for PCIe until a re-plug; its USB3 tunnel, if any,
-   is left up.
+4. **The PCIe tunnel lost with the router still there**: on a port whose
+   router is still connected and unchanged, the host PCIe Down adapter's
+   Path Enable read clear, or its LTSSM (ADP_PCIE_CS_0 bits 28:25, Spec
+   8.2.2.7 and its LTSSM encodings) read Detect (0). L0 (6), L1 (7),
+   Recovery (4) and Recovery.Idle (5) are a live link - a PCIe power state
+   or a link recovery, which disabling USB4 CLx does not prevent - and any
+   other encoding is transitional: re-read at each idle tick, and a loss
+   only if it persists for 2 s. On a loss the tunnel is down though nothing
+   was unplugged (the emulator's admin-down is such a case, `ARCHITECTURE`
+   section 4.3). Its PCIe tunnel, and only that, is then torn down: the
+   orderly form of section 9.3 step 1 (both ends reachable), followed by
+   section 7.3 step 1's read-back (sub-step 3: Path Enable 0 on both
+   adapters, every entry's Valid 0 and Pending Packets 0, the host
+   adapter's LTSSM in Detect), then section 7.3 steps 2, 3 and 6 for the
+   PCI side, the statement and the removal. The port is FAILED for PCIe
+   until a re-plug; its USB3 tunnel, if any, stays up and remains an
+   obligation of section 7.6.
 
 Each only queues a **port check**, and the check decides from registers,
 never from an event's polarity: lane 0's class (section 6.4 step 1); Lock set again on a
@@ -1216,7 +1263,7 @@ One state per host USB4 port, on the thread:
 | CONFIGURING | section 6.6 | Configuration Ready: TUNNELLING; timeout: FAILED |
 | TUNNELLING | sections 6.8 and 6.9, then the PCI side (section 7.6) | the PCIe tunnel up and its tunnel ports re-enumerated, or approval 0 with USB3 handled: UP; failure: FAILED |
 | UP | tunnels up, or preserved from before (section 9) | an unplug: TEARDOWN |
-| HELD | a port whose configuration did not verify and showed no removal evidence: found so at start (section 9.2), or a previously UP port at resume (section 7.6); left exactly as found | an unplug: TEARDOWN of whatever this driver can read of it, host side only |
+| HELD | a port whose configuration did not verify and showed no removal evidence: found so at start (section 9.2), or a port holding a resume obligation at resume (section 7.6); left exactly as found; a live preserved tunnel on it remains an obligation | an unplug: TEARDOWN of whatever this driver can read of it, host side only |
 | FAILED | enumerated, but some step failed; whatever did succeed (a USB3 tunnel, say) stays | an unplug: TEARDOWN; only a re-plug retries |
 | UNSUPPORTED | a router this driver will not drive | an unplug: EMPTY |
 | TEARDOWN | section 7.3 | done: EMPTY, then a check (the lane may already be connected again) |
@@ -1268,9 +1315,8 @@ in this one order, everything the `nvme98` statement depends on first
    below 900 Mb/s each way ([linux] `usb4.c`
    `usb4_usb3_port_release_bandwidth`) when HCA answers.
 5. **The port's lane adapters back to their defaults** where this driver
-   changed them (Guide 3.4.1: the TMU disabled on the host's port as the
-   TMU paragraph of section 6.6 says, uni-directional mode back to its
-   default; USB4
+   changed them (Guide 3.4.1: the TMU disabled on the host's port as
+   section 6.6's TMU item 6 says for an unplug; USB4
    Port is Configured, cleared on the host's port; Link Credits, which the
    router reloads itself, Spec 4.4.5.2): Target Link Width and Lane Bonding
    restored, and lane 1's Lane Disable cleared if section 6.5 set it
@@ -1401,8 +1447,12 @@ profile:
   the sleep (the device router uninitialised, its link connected again)
   and the port is one this driver built, rebuilt through sections 6.4 to
   6.9 with the Detect gate of section 6.8, before the hold is released; or
-  its port showing removal evidence (section 7.1), torn down (section
-  7.3), the device being gone and the OS removing it.
+  its port showing removal evidence of the router (section 7.1 items 1 to
+  3: CLd, Lock set again, a changed identity, ERR_CONN), torn down
+  (section 7.3), the device being gone and the OS removing it. Section 7.1
+  item 4's loss of the PCIe tunnel alone discharges only the PCIe
+  obligation, through its own teardown and removal; a USB3 obligation on
+  the same port still has to be verified.
 - **Failed** is any obligation not met: a rebuild that fails; a
   verification that fails without removal evidence (the port is then
   HELD, untouched); a HELD port's preserved tunnel that did not survive,
@@ -1411,13 +1461,14 @@ profile:
   release the IRP and at once ask the filter for an invalidation, so the
   functions that did not come back are reported missing; nothing is torn
   down without removal evidence. Decision U15 records this window.
-- **The NHI's resume bound** under this profile is the sum of section 5.2's
-  bounds over its steps: platform preparation (1.05 s), and per previously
-  obligation the verification reads or the rebuild (enumeration with its 20
-  retries, Router Ready, Get Capabilities, Buffer Allocation, bonding,
-  Configuration Ready, the Detect gate, the paths, L0), each request within
-  its 400 ms worst case; the driver computes it from the port count at
-  suspend.
+- **The NHI's resume bound** under this profile is the sum of section
+  5.2's bounds over its steps: platform preparation (1.05 s), and per
+  obligation the verification reads or the rebuild (enumeration with its
+  20 retries, Router Ready, Get Capabilities, Buffer Allocation, bonding,
+  the TMU's posting and 50 ms convergence where a USB3 obligation needs
+  it, Configuration Ready, the Detect gate, the paths, L0, the USB3
+  bandwidth handshake), each request within its 400 ms worst case; the
+  driver computes it at suspend from the obligations it recorded.
 
 Record 21 section 6.3's conclusion stands for this profile too: the hold
 orders a successful resume and cannot close the window of a failed one,
@@ -1744,27 +1795,27 @@ reading) passes 5 s. So the statement has a deadline of its own:
 - **The order** is section 7.3's: the PCIe host side and its read-back,
   the PCI-side reading, then the statement; USB3 cleanup, lane defaults,
   removal and re-enumeration come after.
-- **The anchor** is the time of the last reading that showed this
-  connection's PCIe tunnel itself up: the latest read of the host PCIe Down
-  adapter's ADP_PCIE_CS_0 with Path Enable set and LTSSM in L0, for the
-  same connection generation, timestamped on section 5.3's clock when that
-  read was **sent**, not when it answered, so the time the request spent
-  in flight counts against the allowance. The tunnelled PCIe link was in
-  L0 then, so `nvme98`'s presence loss is no earlier than the anchor. A
-  router reading (lane 0 connected, Lock clear, the same UUID) is not
-  enough: the router can stay connected while the tunnel or the
-  emulator's access gate is down (`ARCHITECTURE` sections 4.3 and 4.4).
-  Nor is an event's arrival time: a router may hold an event it cannot
-  send and must hold the next until the previous is acknowledged (Spec
-  6.8; Guide 4.3), so an event's age at decode is unbounded. The idle
-  tick's scan reads every UP port's PCIe adapter (section 7.1 item 2), so
-  the anchor is normally no older than one idle period (250 ms, the clamp
-  of record 21 section 8 while the statement is enabled) before the
-  removal is found; a delayed scan only makes it older and the allowance
-  below smaller. However the removal is found - an event, the scan,
-  ERR_CONN, a changed identity, or section 7.1 item 4's lost tunnel - the
-  anchor is that last L0 reading; a connection with no such reading has no
-  anchor and gets no statement.
+- **The anchor** is the time of the last sample that showed the
+  endpoint itself present: the latest configuration read of the cached
+  recipient's function (section 7.1 item 2, one `HalGetBusData` read of
+  its vendor and device id per idle tick) that returned that function's
+  ids, for the same connection generation, timestamped on section 5.3's
+  clock when the read was **issued**, so the time it spent counts against
+  the allowance. The endpoint answered its own configuration cycle then,
+  so `nvme98`'s presence loss, which is its own registers reading
+  all-ones, is no earlier than the anchor; and the emulator closes
+  configuration access with MMIO at stage 1 of every down transition
+  (`ARCHITECTURE` section 4.4), so its samples go all-ones with the gate.
+  Nothing on the fabric side serves: a router reading or the host
+  adapter's L0 shows the tunnel's own link, not an endpoint behind the
+  device's internal switch, and an event's age at decode is unbounded (a
+  router may hold an event, Spec 6.8; Guide 4.3). The sample rides the
+  idle tick, so the anchor is normally no older than one idle period
+  (250 ms, the clamp of record 21 section 8 while the statement is
+  enabled) before the removal is found; a delayed sample only makes it
+  older and the allowance below smaller. A connection with no such sample
+  (no recipient cached yet, or no sample taken since) has no anchor and
+  gets no statement.
 - **The deadline**: the statement, delivery included, must complete
   within 3 s of the anchor. Queueing behind another port's teardown,
   section 7.3 step 1, the PCI-side reading and the recipient lookup all
@@ -1780,8 +1831,8 @@ reading) passes 5 s. So the statement has a deadline of its own:
 | queueing behind another teardown, section 7.3 step 1, the PCI-side reading, the recipient, delivery | together within what is left of the 3 s, or no statement |
 
 So a statement that is delivered at all is delivered within 3 s of the
-last moment the tunnel was seen in L0, so within 3 s of the endpoint's
-presence loss, inside `nvme98`'s 5 s; task 39-A.7's qualification measures
+last moment the endpoint was seen present, so within 3 s of its presence
+loss, inside `nvme98`'s 5 s; task 39-A.7's qualification measures
 it per OS, saturated, with the disconnect injected at every point section
 7.4 names.
 
@@ -1817,8 +1868,9 @@ stays down until its device is unplugged and plugged again.
   not in the first cut; a domain that loses power across the sleep comes
   back with its device routers uninitialised.
 - **Resume to D0**: section 4.2's force power and LTR where they apply, the
-  host interface and rings, then per previously UP port section 7.6's
-  restoration - verified and preserved, rebuilt where the domain lost its
+  host interface and rings, then section 7.6's restoration of every
+  resume obligation (each tunnel up at suspend, whatever its port's state)
+  - verified and preserved, rebuilt where the domain lost its
   configuration, torn down on removal evidence, or HELD on a failed
   verification - and the NT filter's held D0 IRPs released on success or
   through the failure path (section 7.6); only then are other ports'
