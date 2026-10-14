@@ -265,7 +265,8 @@ typedef struct _CM_FILTER {
     /* ---- child ---- */
     struct _CM_FILTER *Bridge;
     ULONG QueryRemoved;     /* a query-remove not cancelled                */
-    ULONG QueryEpoch;       /* the bridge's EjectEpoch at that query       */
+    ULONG QueryEpoch;       /* the bridge's EjectEpoch at the child's
+                               creation: the connection it belongs to     */
     ULONG SurpriseRemoved;
 } CM_FILTER, *PCM_FILTER;
 

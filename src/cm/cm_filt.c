@@ -217,7 +217,6 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     case IRP_MN_QUERY_REMOVE_DEVICE:
         if (child) {
             filter->QueryRemoved = 1;
-            CmRegChildQueryRemove(filter);
         }
         break;
 

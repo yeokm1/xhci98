@@ -75,6 +75,13 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 #define CM_FIND_TRIES       3UL
 #define CM_FIND_RETRY_MS    100UL
 
+/* An owed re-enumeration is retried no faster than this. */
+#define CM_MISSED_RETRY_MS  5000UL
+
+/* An empty set is looked for again this often, this far apart. */
+#define CM_REDISCOVER_TRIES 30UL
+#define CM_REDISCOVER_MS    2000UL
+
 /* The 98 devnode walk's bounds. */
 #define CM_WALK_STACK       64UL
 #define CM_WALK_NODES       2048UL
@@ -93,6 +100,7 @@ static ULONG cmRegRefused;
 static ULONG cmRegWatchdogs;
 
 static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo);
+static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmHoldDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2);
 
 /* ====================================================================== */
@@ -515,6 +523,7 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     PDEVICE_OBJECT lower;
     PCM_FILTER child;
     NTSTATUS status;
+    KIRQL irql;
 
     if (pdo->AttachedDevice != NULL) {
         return STATUS_DEVICE_BUSY;
@@ -531,6 +540,11 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     child->Common.Pdo = pdo;
     child->Outstanding = 1;
     child->Bridge = bridge;
+    /* The connection this child belongs to: the bridge's eject epoch now,
+     * which every tunnel change advances (cmEjectsVoid). */
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    child->QueryEpoch = bridge->EjectEpoch;
+    KeReleaseSpinLock(&cmRegLock, irql);
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(child);
@@ -571,18 +585,6 @@ static BOOLEAN cmEjectReady(PCM_FILTER bridge)
     return TRUE;
 }
 
-VOID CmRegChildQueryRemove(PCM_FILTER child)
-{
-    KIRQL irql;
-
-    if (child->Bridge == NULL) {
-        return;
-    }
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    child->QueryEpoch = child->Bridge->EjectEpoch;
-    KeReleaseSpinLock(&cmRegLock, irql);
-}
-
 /*
  * A child filter's device has been removed: its REMOVE_DEVICE completed
  * below and the filter detached from the PDO. `ejected` when that removal
@@ -604,8 +606,8 @@ VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
-    /* A removal whose query came before a tunnel change is of the old
-     * connection: not an eject of this one. */
+    /* A child created before a tunnel change belongs to the old
+     * connection: its removal is never an eject of the current one. */
     if (ejected && child->QueryEpoch == bridge->EjectEpoch) {
         bridge->EjectSeen = 1;
     }
@@ -1028,11 +1030,13 @@ static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
     r = &nhi->Reenum;
     bridge = cmFindDevnode(nhi, i);
     if (bridge == 0) {
-        /* Not retried by Missed on every pass: the next tunnel change
-         * walks again. */
+        /* Owed (Missed) and retried by CmReenumService no faster than
+         * CM_MISSED_RETRY_MS; logged once per member. */
         r->CallFailures++;
-        CmLogNote(nhi, "cm.reenum.9x.no-devnode", r->Port[i].Bdf);
-        return TRUE;
+        if (!r->Port[i].WalkLogged) {
+            CmLogNote(nhi, "cm.reenum.9x.no-devnode", r->Port[i].Bdf);
+        }
+        return FALSE;
     }
     if (removeVanished) {
         idCount = cmBusIds(r->Port[i].Bdf, ids, CM_BUS_FUNCTIONS);
@@ -1294,6 +1298,10 @@ static VOID cmDiscover(PCM_NHI nhi)
         cmSleep(nhi, CM_FIND_RETRY_MS);
     }
     CmLogNote(nhi, "cm.reenum.topo", r->Topo.Outcome);
+    CmLogNote(nhi, "cm.reenum.topo.parent", r->Topo.Parent);
+    CmLogNote(nhi, "cm.reenum.topo.search-bus", r->Topo.SearchBus);
+    CmLogNote(nhi, "cm.reenum.topo.siblings", r->Topo.Siblings);
+    CmLogNote(nhi, "cm.reenum.topo.unread", r->Topo.Unread);
     CmLogNote(nhi, "cm.reenum.topo.candidates", r->Topo.Candidates);
     for (i = 0; i < r->Topo.Candidates && i < XHCI_TBT_MAX_CANDIDATES; i++) {
         CmLogNote(nhi, "cm.reenum.topo.candidate", r->Topo.Cand[i]);
@@ -1312,9 +1320,7 @@ static VOID cmDiscover(PCM_NHI nhi)
 VOID CmReenumStart(PCM_NHI nhi)
 {
     PCM_REENUM r;
-    KIRQL irql;
     ULONG i;
-    ULONG active;
 
     r = &nhi->Reenum;
     r->Starts++;
@@ -1342,12 +1348,38 @@ VOID CmReenumStart(PCM_NHI nhi)
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
         return;
     }
+    r->RediscoverLeft = CM_REDISCOVER_TRIES;
+    cmDiscoverAndList(nhi);
+}
+
+/*
+ * The discovery, and with a set the domain's listing. An empty set is
+ * tried again from CmReenumService (CM_REDISCOVER_TRIES, CM_REDISCOVER_MS
+ * apart): on Windows 98 the NHI can start during the boot before the
+ * configuration space behind its bridges reads back as it will (a 98 SE
+ * leg found no candidate at boot where the same machine found the tunnel
+ * port once the desktop was up).
+ */
+static VOID cmDiscoverAndList(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    KIRQL irql;
+    ULONG i;
+    ULONG active;
+
+    r = &nhi->Reenum;
     cmDiscover(nhi);
+    r->RediscoverAt = cmNow(nhi);
     if (r->Members == 0) {
         r->Why = CM_NOROUTE_NO_SET;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
+        if (r->RediscoverLeft != 0) {
+            r->RediscoverLeft--;
+        }
         return;
     }
+    r->RediscoverLeft = 0;
+    r->Why = CM_NOROUTE_NONE;
 
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         r->Route = CM_ROUTE_FILTER;
@@ -1519,6 +1551,10 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
+    if (!r->Listed && r->RediscoverLeft != 0 &&
+        cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
+        cmDiscoverAndList(nhi);
+    }
     if (!r->Listed) {
         return;
     }
@@ -1572,7 +1608,9 @@ VOID CmReenumService(PCM_NHI nhi)
     /* A change skipped while a member was not active, now that it is;
      * the debt stays until a call is actually made. */
     for (i = 0; i < r->Members && r->Reenum != 0; i++) {
-        if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE)) {
+        if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
+            cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
+            r->Port[i].MissedAt = cmNow(nhi);
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
@@ -1734,6 +1772,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG watchdogs;
 
     r = &nhi->Reenum;
+    r->RediscoverLeft = 0;
     if (!r->Listed && r->Route == CM_ROUTE_NONE) {
         r->Members = 0;
         return;

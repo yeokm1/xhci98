@@ -45,8 +45,11 @@
  *   CmReenumSuspend  at the system suspend's D3, before the client sends
  *                    anything to the firmware: the held mark on every
  *                    active member (section 6.3, resume ordering), and the
- *                    filters' watchdog bound, taken from the client's own
- *                    resume bound plus 10 s.
+ *                    filters' watchdog: a fixed five minutes
+ *                    (CM_PORTS_HOLD_MAX_MS, below the power-IRP watchdog),
+ *                    past which the failure path runs; the client's own
+ *                    resume bound is computed and logged as a diagnostic
+ *                    only.
  *   CmReenumResumed  at the D0 after it, once the client's resume and
  *                    reconciliation have run (ok TRUE) or failed (ok
  *                    FALSE): release the held members' retained D0 IRPs;
@@ -154,6 +157,7 @@ typedef struct _CM_REENUM_PORT {
     ULONG Marked;           /* 98: children marked removable              */
     ULONG AskedSerial;      /* NT: the filter publication a baseline was
                                last asked of                              */
+    ULONG MissedAt;         /* NowMs of the last retry of Missed          */
     ULONG Missed;           /* a tunnel change came while the member was
                                exclusive but not active, or its call could
                                not be made: re-enumerated once it is      */
@@ -228,6 +232,8 @@ typedef struct _CM_REENUM {
     CM_CFGMG Cfgmg;
     ULONG CfgmgOwed;        /* the route opens at the first Action or
                                Service, after the NHI's start completed  */
+    ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
+    ULONG RediscoverAt;     /* NowMs of the last                          */
     ULONG Known[XHCI_TBT_MAX_TUNNELS][CM_REENUM_MAX_KNOWN];
     ULONG KnownCount[XHCI_TBT_MAX_TUNNELS];
     ULONG MarkFrom;         /* NowMs when the window opened               */
@@ -318,12 +324,6 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
  * STATUS_PENDING), FALSE when the caller passes it down as usual.
  * <= DISPATCH_LEVEL. */
 BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
-
-/* A child filter received IRP_MN_QUERY_REMOVE_DEVICE: it takes the
- * bridge's eject epoch, which a tunnel change (CmReenumAction) advances,
- * so its eventual removal counts as an eject only if no tunnel changed in
- * between. PASSIVE_LEVEL. */
-VOID CmRegChildQueryRemove(struct _CM_FILTER *child);
 
 /* A child filter's device has been removed, its REMOVE_DEVICE passed
  * down and finished below; `ejected` when a query-remove preceded it and
