@@ -991,11 +991,14 @@ and FR key it by link and depth; section 1.4.4). On `device connected`:
 
 - `rejected` set: log and ignore, as the client does [inf].
 - A known UUID at the same place whose entry needs recovery - left
-  unrouted by a failed route request, or "approve outcome unknown"
-  (section 5.5): refresh key and id; retry the route if it is missing; an
-  unknown outcome is settled by this announcement (`approved` = 1, a
-  tunnel up; 0, unapproved); then apply the approval policy where the
-  entry is unapproved, as for a new device.
+  unrouted by a failed route request, "approve outcome unknown", or
+  unapproved after an approve answered with the error flag (section 5.5):
+  refresh key and id; retry the route if it is missing; an unknown
+  outcome is settled by this announcement (`approved` = 1, a tunnel up;
+  0, unapproved); then, where the announcement says `approved` = 0 and the
+  entry is not rejected, apply the approval policy as for a new device.
+  So each fresh announcement earns at most one more approve; nothing is
+  retried between announcements.
 - A known UUID at the same link and depth (TR and ICL: route string) and
   approval state, needing no recovery: refresh key, id
   and route, nothing else (the resume case, [obs] section 6.5).
@@ -1881,7 +1884,7 @@ snapshot rule's vectors in `test_tbt_topo`):
   timeouts, a route-carrying announcement with no `get route`, a packet
   index of 1 ignored, an ICL RTD3 veto logged and an ICL announcement with
   `approved` = 0 left without an approve, an approve answered with the
-  error flag (entry unapproved) and one executed by the firmware whose
+  error flag (entry unapproved, then an identical announcement earning one new approve) and one executed by the firmware whose
   response is lost (outcome unknown; the verified set re-enumerated after
   the poll whether or not a reading changed, with the port already present
   and with an unrelated member turning present, neither settling it; then
@@ -2072,8 +2075,13 @@ read after the cut as the owner reads every bench:
 2. Unplug and re-plug the dock at the desktop.
 3. Pre-boot on: the dock's tree at boot with no driver, then the driver
    installed and a hot-plug cycle.
-4. **The `$PIR` dump**: whether the P14s BIOS lists `00:1c.4`. If it does
-   not, a function hot-added behind the tunnel gets Code 29 on Windows 98:
+4. **The `$PIR` dump**, by the procedure in `xhciqual/hardware-testing.md`
+   ("ThinkPad P14s Gen 1 - does the `$PIR` list the Thunderbolt root
+   port?"): whether the P14s BIOS lists `00:1c.4`, which routing source
+   Windows 98 uses there, and an actual hot-add. A missing entry, with
+   Windows on the `$PIR` source, is evidence for the failure the emulator
+   reproduces, not proof of it: the hot-add decides. Where it fails, a
+   function hot-added behind the tunnel gets Code 29 on Windows 98:
    `WIN98-TEST` ("Hot-added NVMe gets no IRQ behind 00:1c") read that as
    no IRQ **and no BAR assigned and a driver that never starts**, so
    polling is no remedy for it - design record 15's polled delivery acts
@@ -2083,9 +2091,9 @@ read after the cut as the owner reads every bench:
    that on such a machine a hot-added Thunderbolt device needs pre-boot
    tunnelling. Only a controller that does start without a usable line
    (Code 0, dead interrupt) is where record 15's fallback applies, and
-   that is a separate reading. `XHCIQUAL` does not dump `$PIR` today;
-   `39-0.6` adds the dump to its routing report (`xhciqual\route.c`) so
-   the bench has it.
+   that is a separate reading. Task `39-0.6` added the dump to
+   `XHCIQUAL`'s routing report (`xhciqual\route.c`); only the P14s
+   reading remains, `39-E.2`'s.
 5. The log emission at a driver disable, on the flavour decision D12
    chooses (the `debug` flavour and DebugView by default).
 6. Safe eject, where `39-A.8`'s 9x half shipped: the dock's devnodes as
@@ -2129,11 +2137,13 @@ revised to it in draft 6.
 
 ## 12. What is open, and what is a risk
 
-- **The P14s `$PIR`** (section 10.4): the one fact that decides whether a
-  device hot-added behind the tunnel is started at all on Windows 98 on the
-  real machine; Code 29 there is a devnode never started, which no driver
-  below it can mitigate. The pre-boot path, where the BIOS assigns the
-  dock's resources, is the fallback the release notes would name.
+- **The P14s `$PIR`** (section 10.4): the fact most likely to decide
+  whether a device hot-added behind the tunnel is started at all on
+  Windows 98 on the real machine. A missing entry is evidence, and the
+  hot-add the bench performs decides; Code 29 there is a devnode never
+  started, which no driver below it can mitigate. The pre-boot path,
+  where the BIOS assigns the dock's resources, is the fallback the
+  release notes would name.
 - **The G3 statement** (section 7.1): withheld on every OS until the
   emulator's ordering check exists there (on i440FX through the documented
   stage-3 surprise-removal presence change, or on q35 through a real Link
