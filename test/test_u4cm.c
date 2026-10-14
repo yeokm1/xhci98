@@ -897,28 +897,45 @@ static void test_dp_preserved(void)
     memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
     g_fab.R[0].Adp[8].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
     g_fab.R[dev].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
-    /* DP IN 5's video path out of lane 1 at HopID 12 */
-    g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 12UL | (1UL << 11);
-    /* and its device end, the whole DP tunnel: lane 1's HopID 12 on to a
-     * DP OUT adapter's HopID 8, its AUX back out of lane 1 at HopID 13 and
-     * the host's lane 1 HopID 13 entry back to DP IN 5 */
+    /* A whole DP tunnel (Guide 5.4.3.3 Table 5-3; Linux tunnel.c
+     * tb_tunnel_alloc_dp): the main link from DP IN 5's HopID 9 out of
+     * lane 1 at 12 to DP OUT 8's HopID 9; AUX from DP IN's HopID 8 at 13 to
+     * DP OUT's HopID 8; AUX back from DP OUT's HopID 8 at 14 to DP IN's
+     * HopID 8. */
     fabAddDpOut(&g_fab, dev, 8);
-    g_fab.R[dev].Adp[1].Path[2 * 12] = 0x80000000UL | 8UL | (8UL << 11);
-    g_fab.R[dev].Adp[8].Path[2 * 8] = 0x80000000UL | 13UL | (1UL << 11);
-    g_fab.R[0].Adp[1].Path[2 * 13] = 0x80000000UL | 9UL | (5UL << 11);
+    g_fab.R[0].Adp[5].Path[2 * 9] = 0x80000000UL | 12UL | (1UL << 11);
+    g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 13UL | (1UL << 11);
+    g_fab.R[dev].Adp[1].Path[2 * 12] = 0x80000000UL | 9UL | (8UL << 11);
+    g_fab.R[dev].Adp[1].Path[2 * 13] = 0x80000000UL | 8UL | (8UL << 11);
+    g_fab.R[dev].Adp[8].Path[2 * 8] = 0x80000000UL | 14UL | (1UL << 11);
+    g_fab.R[0].Adp[1].Path[2 * 14] = 0x80000000UL | 8UL | (5UL << 11);
+    /* hot plug disabled on the port as the pre-OS manager left it */
+    g_fab.R[0].Adp[1].Cs[5] |= TBT_ADP5_DHP;
     g_fab.RxQCount = 0;
     cfgDefault(&c);
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     p = TbtU4Port(&g_cm, 1);
     CHECK(p->DpPreserved, "the DisplayPort tunnel noted");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "PCIe built beside it: UP");
-    CHECK(p->Pcie.Up && p->Pcie.Hd != 12 && p->Pcie.Hu != 12, "around its HopID");
     CHECK(!p->Usb3.Up, "no USB3 beside DisplayPort");
-    CHECK(g_fab.R[0].Adp[5].Path[2 * 8] & 0x80000000UL, "the DP path untouched");
-    CHECK(g_fab.R[dev].Adp[1].Path[2 * 12] & 0x80000000UL, "its device end untouched");
-    CHECK(g_fab.R[dev].Adp[8].Path[2 * 8] & 0x80000000UL, "its AUX untouched");
-    CHECK(g_fab.R[0].Adp[1].Path[2 * 13] & 0x80000000UL, "and the host's return");
-    CHECK(p->Pcie.Hu != 13 && p->Pcie.Hd != 12, "PCIe around the DP HopIDs");
+    CHECK(g_fab.R[0].Adp[5].Path[2 * 9] & 0x80000000UL, "the main path untouched");
+    CHECK(g_fab.R[0].Adp[5].Path[2 * 8] & 0x80000000UL, "the AUX path untouched");
+    CHECK(g_fab.R[dev].Adp[1].Path[2 * 12] & 0x80000000UL, "the device ends untouched");
+    CHECK(g_fab.R[dev].Adp[1].Path[2 * 13] & 0x80000000UL, "both of them");
+    CHECK(g_fab.R[dev].Adp[8].Path[2 * 8] & 0x80000000UL, "the AUX return untouched");
+    CHECK(g_fab.R[0].Adp[1].Path[2 * 14] & 0x80000000UL, "and its host end");
+    CHECK(p->Pcie.Hd != 12 && p->Pcie.Hd != 13 && p->Pcie.Hu != 14,
+          "PCIe around every DP HopID on the lane");
+    CHECK(g_fab.R[0].Adp[1].Cs[5] & TBT_ADP5_DHP, "hot plug left as found (section 6.1)");
+
+    /* Unplugged and re-plugged with the DP paths still there: no bonding
+     * over them; they are left alone. */
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(state(&g_cm, 1) != TBT_U4_UP, "re-plug deferred around the kept paths");
+    CHECK(g_fab.R[0].Adp[5].Path[2 * 9] & 0x80000000UL, "the kept DP paths untouched");
 
     /* The same with PCIe Tunneling On clear on the device: no PCIe tunnel
      * built beside it, HELD (no handshake runs on a preserved router). */
@@ -980,7 +997,12 @@ static void test_statement(void)
     poll(&g_cm, &g_fab, 1);
     fabPlug(&g_fab, 1, dev);
     poll(&g_cm, &g_fab, 2);
-    CHECK(p->Pcie.Up && p->Pcie.Hu != 9, "HopID 9 skipped while quarantined");
+    CHECK(!p->Pcie.Up && g_cm.Counters.ConnectsDeferred > 0,
+          "no bonding while an entry through the port is still pending (Guide 7.1)");
+    g_fab.R[0].Adp[lane].PpStuck[9] = 0;
+    g_fab.R[0].Adp[lane].Path[2 * 9 + 1] &= ~0x10000000UL;
+    poll(&g_cm, &g_fab, 3);
+    CHECK(p->Pcie.Up, "connected once it drained");
 
     /* A later step failing (the USB3 bandwidth release): the statement's
      * prerequisites still hold. */
@@ -2369,7 +2391,7 @@ static void test_review4(void)
     int lane;
     int hu;
     LONG rc;
-    unsigned long t0;
+    unsigned long t0 = 0;
     const TBT_U4_PORT *p;
 
     cfgDefault(&c);
@@ -2421,9 +2443,11 @@ static void test_review4(void)
     CHECK(p->HostResidual, "its sweep owed");
     CHECK(fabPath0(&g_fab, 0, lane, 11) & 0x80000000UL, "its lane entry still there");
     g_fab.Hook = NULL;
+    t0 = g_fab.NowUs;
     poll(&g_cm, &g_fab, 2);
     CHECK(!p->HostResidual, "swept once readable");
     CHECK(hostClean(&g_fab, 1), "the host side clean, USB3 included");
+    CHECK(p->Usb3GapValid && p->LastUsb3TeardownUs >= t0, "the USB3 gap from the sweep");
 
     /* Unplugged during the resume's own verification, both tunnels owed:
      * one teardown, one removal, nothing left deferred. */
@@ -2500,6 +2524,135 @@ static void test_review4(void)
     CHECK(p->PcSetHost, "its PC still owned for the teardown");
 }
 
+static int g_stage;
+static int g_stageLane;
+static int g_stageJump;
+
+/* After the host's lane 1 is written (the resume's host restore), the
+ * next reads of lane 0's state (the rebuild's first) are lost, or move
+ * the clock past the budget. */
+static int stageHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)n;
+    (void)data;
+    if (router != 0 || cs != TBT_CS_ADAPTER || addr != FAB_CAP_LANE + 1) {
+        return FAB_HOOK_GO;
+    }
+    if (g_stage == 0 && pdf == TBT_PDF_WRITE && adp == (unsigned long)g_stageLane + 1) {
+        g_stage = 1;
+        return FAB_HOOK_GO;
+    }
+    if (g_stage >= 1 && pdf == TBT_PDF_READ && adp == (unsigned long)g_stageLane) {
+        g_stage = 2;
+        if (g_stageJump) {
+            f->NowUs += 1000000000UL;
+            return FAB_HOOK_GO;
+        }
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+static unsigned long g_recoverAt;
+static int g_recoverAdp;
+
+/* The host's PCIe adapter back in L0 once the clock passes g_recoverAt. */
+static int recoverHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                       unsigned long adp, unsigned long addr, unsigned long n,
+                       const unsigned long *data)
+{
+    (void)pdf;
+    (void)cs;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (router == 0 && adp == (unsigned long)g_recoverAdp && f->NowUs >= g_recoverAt) {
+        f->R[0].Adp[g_recoverAdp].LtssmForce = 0;
+    }
+    return FAB_HOOK_GO;
+}
+
+static void test_review5(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int k;
+    LONG rc;
+    ULONG gen;
+    const TBT_U4_PORT *p;
+
+    cfgDefault(&c);
+
+    /* A coarse but running clock: a transitional LTSSM recovering at
+     * 1.95 s is not lost. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.TickUs = 10000UL;
+    g_fab.Host.TickUs = 10000UL;
+    g_recoverAdp = fabPortPcie(&g_fab, 1);
+    g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 1 + 2;
+    g_recoverAt = g_fab.NowUs + 1950000UL;
+    g_fab.Hook = recoverHook;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 0;
+    g_fab.TickUs = 0;
+    g_fab.Host.TickUs = 0;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Pcie.Up && fabPcieUp(&g_fab, 1), "recovered at 1.95 s: kept");
+    CHECK_EQ(rc, TBT_OK, "and verified");
+
+    /* Lock set again across the sleep with the router still configured:
+     * never verified as unchanged. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[4] |= 0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "re-locked, still configured: the failure path");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
+
+    /* A preserved tunnel whose router lost its configuration: HELD, and
+     * that known loss alone never tears it down at the next ticks. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Pcie.Preserved, "preserved");
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Rcs[3] &= ~0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "lost under a preserved tunnel: the failure path");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
+    gen = p->Generation;
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "still HELD at the next ticks");
+    CHECK_EQ(p->Generation, gen, "not torn down and reconnected");
+
+    /* The rebuild's first lane read lost, then the same with the budget
+     * spent there: HELD both times, the rebuild reached. */
+    for (k = 0; k < 2; k++) {
+        dev = setupMinimal(1, NULL);
+        TbtU4Suspend(&g_cm);
+        fabPowerCycle(&g_fab);
+        g_stage = 0;
+        g_stageLane = fabPortLane0(&g_fab, 1);
+        g_stageJump = k;
+        g_fab.Hook = stageHook;
+        rc = TbtU4Resume(&g_cm);
+        g_fab.Hook = NULL;
+        CHECK_EQ(g_stage, 2, "the rebuild's lane read reached");
+        CHECK_EQ(rc, TBT_E_STATE, "the failure path");
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD, never EMPTY without evidence");
+    }
+    (void)dev;
+}
+
 int main(void)
 {
     test_cold_minimal();
@@ -2536,6 +2689,7 @@ int main(void)
     test_review2_restore();
     test_review3();
     test_review4();
+    test_review5();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

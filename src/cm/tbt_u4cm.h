@@ -262,6 +262,8 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN HostResidual;   /* host entries never read at a teardown: swept
                              * before the port connects again */
     BOOLEAN BwReleaseOwed;  /* a USB3 allocation not yet released: retried */
+    BOOLEAN LostKnown;      /* a resume found its configuration lost (TopologyID
+                             * Valid clear): that alone is no new evidence */
     TBT_U4_ROUTER Dev;
 
     /* Lane fields this driver changed (section 6.5), restored at unplug. */
@@ -448,6 +450,7 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG QuarantineLifted;
     ULONG PortsPreserved;
     ULONG PortsHeld;
+    ULONG ConnectsDeferred;
     ULONG ResumeBudgetsSpent;
     ULONG PortsCleaned;
     ULONG DownstreamPortResets;
