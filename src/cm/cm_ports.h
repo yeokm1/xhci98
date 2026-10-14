@@ -84,9 +84,15 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
  * `hostPollMs`, the reconciliation's `reconcileMs`, and for each of
  * `devices` re-announced devices one ordinary command (the route query)
  * and one approve, each over 1 + `retries` attempts of `cmdMs` and
- * `approveMs`. Held to CM_PORTS_HOLD_MAX_MS, so no timeout can overflow;
- * the cap is far above any bound the client's own limits allow (sixteen
- * devices at the longest timeouts come to about two hours).
+ * `approveMs`. Held to CM_PORTS_HOLD_MAX_MS, which is not arithmetic
+ * saturation but the operating system's own limit: a device power IRP
+ * retained much longer meets the power-IRP watchdog (Microsoft's bug check
+ * 0x9F, DRIVER_POWER_STATE_FAILURE, about ten minutes), so the hold ends
+ * at five minutes whatever the client's configured timeouts would allow.
+ * A client still working at that point is treated as failed: the IRP is
+ * released and the bridge invalidated (record 21 section 6.3's failure
+ * path), which is the bounded, recoverable outcome; a hang of the power
+ * transition is not.
  */
 typedef struct _CM_PORTS_RESUME {
     ULONG ReadyMs;
@@ -102,7 +108,7 @@ typedef struct _CM_PORTS_RESUME {
 
 #define CM_PORTS_HOLD_EXTRA_MS      10000UL
 #define CM_PORTS_HOLD_PLATFORM_MS   5000UL
-#define CM_PORTS_HOLD_MAX_MS        86400000UL  /* a day: saturation only */
+#define CM_PORTS_HOLD_MAX_MS        300000UL    /* 5 min: the OS's limit */
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
 
 #endif /* CM_PORTS_H */

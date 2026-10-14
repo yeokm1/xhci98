@@ -265,6 +265,12 @@ VOID CmReenumAction(struct _CM_NHI *nhi, const TBT_ICM_ACTION *action);
 VOID CmReenumService(struct _CM_NHI *nhi);
 VOID CmReenumSuspend(struct _CM_NHI *nhi);
 VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
+/* A resume the thread will not run (the D0 IRP failed below, or no
+ * thread to queue it to): every held member released by the failure path
+ * at once, so no bridge's D0 waits for the watchdog. The exception to the
+ * thread contract: any context at <= DISPATCH_LEVEL, idempotent, and
+ * harmless where nothing is held. */
+VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 VOID CmReenumStop(struct _CM_NHI *nhi);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,

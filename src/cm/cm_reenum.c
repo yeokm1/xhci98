@@ -1352,6 +1352,38 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
     }
 }
 
+/*
+ * A tunnel change voids every eject of the domain, posted or about to be:
+ * which port a device used is not known, and the bridge's BusRelations
+ * that would show the new population comes later, asynchronously, so an
+ * eject of the old connection could otherwise be handed off against the
+ * new one. Each member's bridge starts a new generation and forgets the
+ * orderly removal it saw.
+ */
+static VOID cmEjectsVoid(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    KIRQL irql;
+    PCM_FILTER f;
+    ULONG i;
+
+    r = &nhi->Reenum;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (r->EjectPending != 0) {
+        r->EjectsStale++;
+    }
+    r->EjectPending = 0;
+    for (i = 0; i < r->Members; i++) {
+        r->Port[i].Flags &= ~CM_PORT_EJECTED;
+        f = cmRegFind(r->Port[i].Bdf);
+        if (f != NULL && f->Owner == nhi) {
+            f->RelGen++;
+            f->EjectSeen = 0;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
     PCM_REENUM r;
@@ -1359,6 +1391,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 
     r = &nhi->Reenum;
     cmCfgmgLate(nhi);
+    cmEjectsVoid(nhi);
     if (action->Kind == TBT_ICM_ACT_TUNNEL_UP) {
         r->Ups++;
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -1508,9 +1541,9 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     r->Suspends++;
     /* Every synchronous stage of the client's resume (cm_ports.h), with
      * every device the client's table can hold re-announced and approved
-     * (a dock plugged during the sleep can add several): the watchdog is
-     * the safety net for a client that never answers, not a deadline for
-     * one still working, so it errs long. */
+     * (a dock plugged during the sleep can add several), held to the
+     * operating system's limit on a retained power IRP: past it the
+     * failure path runs, never a stalled power transition. */
     profile = nhi->Icm.Profile;
     resume.ReadyMs = nhi->Icm.CmdTimeoutMs;
     resume.ReadyRetries = 0;
@@ -1549,7 +1582,9 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 
 /*
  * Every member this domain holds released; `fail` takes section 6.3's
- * failure path, an invalidation of each released member.
+ * failure path, an invalidation of each released member. Spin locks,
+ * IoCompleteRequest, PoStartNextPowerIrp and IoInvalidateDeviceRelations
+ * only: callable at <= DISPATCH_LEVEL (CmReenumResumeFailed's use).
  */
 static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail)
 {
@@ -1591,6 +1626,13 @@ static VOID cmReleaseHeld(PCM_NHI nhi, BOOLEAN fail)
             (VOID)cmInvalidate(nhi, i, FALSE);
         }
     }
+}
+
+VOID CmReenumResumeFailed(PCM_NHI nhi)
+{
+    nhi->Reenum.ResumeFailures++;
+    CmLogNote(nhi, "cm.reenum.resume-failed", nhi->Reenum.Members);
+    cmReleaseHeld(nhi, TRUE);
 }
 
 VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
