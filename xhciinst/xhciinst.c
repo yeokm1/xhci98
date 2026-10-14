@@ -204,14 +204,17 @@ static int groupVerdict[INST_GROUPS];
 /* The devices this run reached, by instance id, kept across the barriers'
  * fresh scans: an entry is never reached twice in one run. State 1: an
  * install call was made for it (changedReboot holds that call's restart
- * answer); 0: it was left (shared id, another build stored). */
+ * answer; 2 once it succeeded, 3 when it failed); 0: it was left (shared
+ * id, another build stored). */
 #define INST_MAX_CHANGED INST_MAX_DEVS
 static char changedId[INST_MAX_CHANGED][INST_ID_CHARS];
 static int changedInf[INST_MAX_CHANGED];
 static int changedState[INST_MAX_CHANGED];
 static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
+static int walkErrors;      /* 98/ME: entries the scan could not read */
 static int was_changed(const char *id);
+static int was_installed(const char *id);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
@@ -459,18 +462,29 @@ static void join(char *outPath, size_t cap, const char *a, const char *b)
     }
 }
 
-static int same_file(const char *a, const char *b)
+/* 1 the two files hold the same bytes, 0 they differ, -1 one of them
+ * cannot be read (which is never "different"). */
+static int same_file3(const char *a, const char *b)
 {
     DWORD na;
     DWORD nb;
     char *ba = read_file(a, &na);
     char *bb = read_file(b, &nb);
-    int same = (ba != NULL && bb != NULL && na == nb &&
-                memcmp(ba, bb, na) == 0);
+    int r;
 
+    if (ba == NULL || bb == NULL) {
+        r = -1;
+    } else {
+        r = (na == nb && memcmp(ba, bb, na) == 0) ? 1 : 0;
+    }
     free(ba);
     free(bb);
-    return same;
+    return r;
+}
+
+static int same_file(const char *a, const char *b)
+{
+    return same_file3(a, b) == 1;
 }
 
 static int reg_text(HKEY rootKey, const char *path, const char *name,
@@ -647,14 +661,20 @@ static void dev_driver_values(DEVREC *d)
         strncat(d->VersionText, text, sizeof(d->VersionText) - 6);
     }
     if (!envNow.Nt && d->Service[0] == '\0') {
-        /* 98 and ME bind a WDM driver by the driver key's NTMPDriver. */
-        if (reg_text(HKEY_LOCAL_MACHINE, path, "NTMPDriver", text,
-                     sizeof(text), NULL)) {
+        /* 98 and ME bind a WDM driver by the driver key's NTMPDriver; an
+         * unreadable one is unknown ownership, never "no driver", and the
+         * scan refuses (record 23 section 6.3). */
+        r = reg_text3(HKEY_LOCAL_MACHINE, path, "NTMPDriver", text,
+                      sizeof(text));
+        if (r > 0) {
             char *dot = strchr(text, '.');
             if (dot != NULL) {
                 *dot = '\0';
             }
             inst_copy(d->Service, text, sizeof(d->Service));
+        } else if (r < 0) {
+            out("  unreadable: the driver of %s\n", d->Id);
+            walkErrors++;
         }
     }
 }
@@ -683,12 +703,15 @@ static DWORD cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
     return cr;
 }
 
-/* A value of HKLM\Enum\<id> on 98 and ME: 1 read (buf replaced), 0 absent,
+/* A value of HKLM\Enum\<id> on 98 and ME: 1 read (buf replaced), 0 absent
+ * (no such value, or no such key - a devnode the registry does not hold),
  * -1 unreadable; buf is left as it was unless the value was read. */
 static int reg9x_value(const char *id, const char *name, char *buf, DWORD cap)
 {
     char path[INST_ID_CHARS + 16];
     char tmp[INST_MSZ_BYTES];
+    HKEY k;
+    LONG e;
     int r;
 
     inst_copy(path, "Enum\\", sizeof(path));
@@ -699,6 +722,11 @@ static int reg9x_value(const char *id, const char *name, char *buf, DWORD cap)
     if (cap - 2 > sizeof(tmp)) {
         return -1;
     }
+    e = RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k);
+    if (e != ERROR_SUCCESS) {
+        return e == ERROR_FILE_NOT_FOUND ? 0 : -1;
+    }
+    RegCloseKey(k);
     r = reg_text3(HKEY_LOCAL_MACHINE, path, name, tmp, cap - 2);
     if (r > 0) {
         memset(buf, 0, cap);
@@ -707,24 +735,26 @@ static int reg9x_value(const char *id, const char *name, char *buf, DWORD cap)
     return r;
 }
 
-/* A property of a 98/ME devnode: the registry's comma list is the whole
- * list (what the configuration manager answers was read on 98 SE to stop
- * at the first id), the configuration manager's answer the fallback. 0 when
- * neither source gives a usable answer and neither proves it absent. */
+/* A property of a 98/ME devnode. The registry is the authority: its comma
+ * list is the whole list (what the configuration manager answers was read
+ * on 98 SE to stop at the first id). The configuration manager's answer is
+ * kept only where the registry proves the value absent (no such value, or a
+ * devnode with no Enum key of its own); a registry value that cannot be
+ * read is an error whatever the configuration manager says. 0 on that
+ * error. */
 static int prop9x(DWORD dn, const char *id, ULONG prop, const char *name,
                   char *buf, DWORD cap)
 {
     DWORD cr = cm_prop(dn, prop, buf, cap, NULL);
     int r = reg9x_value(id, name, buf, cap);
 
-    if (r > 0 || cr == INST_CR_SUCCESS) {
-        return 1;
+    (void)cr;
+    if (r < 0) {
+        memset(buf, 0, cap);
+        return 0;
     }
-    /* Neither read it: absent only when one of them says so. */
-    return r == 0 || cr == INST_CR_NO_SUCH_VALUE;
+    return 1;
 }
-
-static int walkErrors;
 
 /* 98 and ME: the device tree. A devnode whose id, status or properties
  * cannot be read, or a child or sibling link that answers anything but
@@ -1935,10 +1965,16 @@ static int package_files(PKG_EACH each, void *ctx)
         join(pattern, sizeof(pattern), pkgDir, pass == 0 ? "*.*" : "nt\\*.*");
         h = FindFirstFileA(pattern, &fd);
         if (h == INVALID_HANDLE_VALUE) {
-            if (pass == 0) {
-                return 0;
+            /* Only an absent nt\ is "nothing there"; any other failure,
+             * and any failure of the flavour directory, is an error. */
+            DWORD e = GetLastError();
+            if (pass == 1 &&
+                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)) {
+                continue;
             }
-            continue;
+            out("%s could not be listed (error %lu).\n", pattern,
+                (unsigned long)e);
+            return 0;
         }
         do {
             if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
@@ -1954,6 +1990,11 @@ static int package_files(PKG_EACH each, void *ctx)
                 return 0;
             }
         } while (FindNextFileA(h, &fd));
+        if (GetLastError() != ERROR_NO_MORE_FILES) {
+            out("%s could not be listed to its end.\n", pattern);
+            FindClose(h);
+            return 0;
+        }
         FindClose(h);
     }
     return 1;
@@ -2055,19 +2096,26 @@ static int copy_one(const char *rel, void *ctx)
     return 1;
 }
 
-/* 1 when a copy's list ends with the END line make_local_copy writes last:
- * the copy was completed and published. */
+/* A copy's state: 1 complete (its list ends with the END line
+ * make_local_copy writes last), 0 incomplete (no directory, no list, or a
+ * list without END - proven, not guessed), -1 unknown (the directory or the
+ * list cannot be read): never removed on an unknown. */
 static int local_committed(const char *dir)
 {
     char lst[INST_PATH_CHARS];
     char *text;
     size_t n;
     int r;
+    DWORD e;
 
     join(lst, sizeof(lst), dir, "XHCIINST.LST");
+    if (GetFileAttributesA(lst) == 0xFFFFFFFFUL) {
+        e = GetLastError();
+        return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? 0 : -1;
+    }
     text = read_file(lst, NULL);
     if (text == NULL) {
-        return 0;
+        return -1;
     }
     n = strlen(text);
     while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r')) {
@@ -2094,6 +2142,7 @@ static int make_local_copy(void)
     COPY_CTX c;
     INST_U32 tag;
     int ok;
+    int committed;
 
     if (!local_dir(rootDir, sizeof(rootDir)) || !package_tag(&tag)) {
         out("The local copy could not be prepared.\n");
@@ -2102,7 +2151,12 @@ static int make_local_copy(void)
     CreateDirectoryA(rootDir, NULL);
     local_copy_name(tag, name, sizeof(name));
     join(srcDir, sizeof(srcDir), rootDir, name);
-    if (local_committed(srcDir)) {
+    committed = local_committed(srcDir);
+    if (committed < 0) {
+        out("%s cannot be read: refused, nothing changed.\n", srcDir);
+        return 0;
+    }
+    if (committed > 0) {
         /* The same content is already there: never rewritten, only checked. */
         if (!package_files(check_one, NULL)) {
             return 0;
@@ -2435,8 +2489,11 @@ static void restage_settle(void)
             continue;
         }
         /* Complete only on the verified replacement, whatever its name - it
-         * may reuse the removed one's (record 23 section 5.7). */
-        if (d->InfPathState > 0 && restageNew[restageDevInf[i]][0] != '\0' &&
+         * may reuse the removed one's - and only for a device this run
+         * reinstalled with a call that succeeded: an unchanged device can
+         * already read the same name and version (record 23 section 5.7). */
+        if (was_installed(d->Id) &&
+            d->InfPathState > 0 && restageNew[restageDevInf[i]][0] != '\0' &&
             inst_eq(d->InfPath, restageNew[restageDevInf[i]]) &&
             d->VersionState == INST_VS_HAVE &&
             inst_ver_cmp(d->Version, pkgVersion) == 0 && d->Problem == 0) {
@@ -2563,6 +2620,8 @@ static void trap_scan(void)
                 }
                 for (k = 0; k < INST_INF_COUNT; k++) {
                     int differs = 0;
+                    int unread = 0;
+                    int s;
                     int r;
                     if (infText[k] == NULL || strcmp(text, infText[k]) != 0) {
                         continue;
@@ -2584,12 +2643,18 @@ static void trap_scan(void)
                         char rel[INST_PATH_CHARS];
                         inst_inf_source_path(infText[k], i, rel, sizeof(rel));
                         join(b, sizeof(b), store, rel);
-                        if (!same_file(a, b)) {
+                        s = same_file3(a, b);
+                        if (s == 0) {
                             logonly("%s differs from %s\n", a, b);
                             differs = 1;
+                        } else if (s < 0) {
+                            out("%s or %s cannot be read.\n", a, b);
+                            unread = 1;
                         }
                     }
-                    if (r < 0) {
+                    /* Only a verified difference is the trap; what could
+                     * not be read is never replaced (section 5.7). */
+                    if (r < 0 || unread) {
                         trapUnknown[k] = 1;
                     } else if (differs) {
                         inst_copy(trapOem[k], fd.cFileName, sizeof(trapOem[k]));
@@ -2641,6 +2706,7 @@ static int store_matches(int k, const char *oemName)
     char *slash;
     int i;
     int r;
+    int s;
 
     if (api.StoreLocation == NULL ||
         !api.StoreLocation(oemName, NULL, NULL, store, sizeof(store), NULL)) {
@@ -2655,8 +2721,9 @@ static int store_matches(int k, const char *oemName)
         char rel[INST_PATH_CHARS];
         inst_inf_source_path(infText[k], i, rel, sizeof(rel));
         join(b, sizeof(b), store, rel);
-        if (!same_file(a, b)) {
-            return 0;
+        s = same_file3(a, b);
+        if (s <= 0) {
+            return s;
         }
     }
     return r < 0 ? -1 : 1;
@@ -2873,15 +2940,21 @@ static int install_inf(int inf, int controllers)
         if (api.UpdateDriver(NULL, hwid, path, INST_INSTALLFLAG_FORCE, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
             flagChanged = 1;
-            if (reboot) {
-                flagRestart = 1;
-                for (j = 0; j < n; j++) {
+            for (j = 0; j < n; j++) {
+                changedState[callIdx[j]] = 2;   /* the call succeeded */
+                if (reboot) {
                     changedReboot[callIdx[j]] = 1;
                 }
+            }
+            if (reboot) {
+                flagRestart = 1;
             }
             continue;
         }
         err = GetLastError();
+        for (j = 0; j < n; j++) {
+            changedState[callIdx[j]] = 3;       /* the call failed */
+        }
         out("FAILED (error 0x%08lX).\n", (unsigned long)err);
         if (err == ERROR_IN_WOW64) {
             out("  A 32-bit program cannot install drivers on 64-bit Windows; "
@@ -2964,7 +3037,15 @@ static int was_changed(const char *id)
 {
     int c = reached(id);
 
-    return c >= 0 && changedState[c];
+    return c >= 0 && changedState[c] != 0;
+}
+
+/* 1 when an install call for the device succeeded in this run. */
+static int was_installed(const char *id)
+{
+    int c = reached(id);
+
+    return c >= 0 && changedState[c] == 2;
 }
 
 /* NT: whether a root hub of this driver is a present child of the
@@ -3258,6 +3339,47 @@ static int nothing_pending(void)
     return 0;
 }
 
+/* A refused group leaves work undone whether or not one of its devices is
+ * present (record 23 sections 5.4 and 7.4): every plan, the first and each
+ * barrier's, sets the steps flag for it, and a refusal first seen after a
+ * barrier - a member newly exposed or connected - is reported with the
+ * member responsible. */
+static int refusalSeen[INST_GROUPS];
+
+static void note_refusals(int first)
+{
+    int g;
+    int i;
+
+    for (g = 0; g < INST_GROUPS; g++) {
+        if (groupVerdict[g] == INST_GROUP_OK) {
+            continue;
+        }
+        flagSteps = 1;
+        if (refusalSeen[g]) {
+            continue;
+        }
+        refusalSeen[g] = 1;
+        if (first) {
+            continue;   /* print_plan has said it */
+        }
+        out("%s.sys is now LEFT: %s.\n", groupService[g],
+            groupVerdict[g] == INST_GROUP_REFUSED_UNKNOWN ?
+            "a version of this driver could not be read" :
+            "a newer release of this driver is installed");
+        for (i = 0; i < devCount; i++) {
+            const DEVREC *d = &devs[i];
+            if (group_of(d) == g &&
+                (d->VersionState == INST_VS_UNREADABLE ||
+                 (d->VersionState == INST_VS_HAVE &&
+                  inst_ver_cmp(d->Version, pkgVersion) > 0))) {
+                out("  %s %s%s\n", d->Id, d->VersionText,
+                    d->Present ? "" : " (not present)");
+            }
+        }
+    }
+}
+
 /* The barrier between dependent phases (record 23 sections 5.1 and 5.8):
  * nothing pending, then the devices read and planned again. 0 stops. */
 static int barrier(void)
@@ -3270,6 +3392,7 @@ static int barrier(void)
         return 0;
     }
     plan();
+    note_refusals(0);
     return 1;
 }
 
@@ -3328,13 +3451,8 @@ static int run_install_nt(void)
     for (i = 0; i < devCount; i++) {
         runs += devs[i].Runs;
     }
-    /* A refused group leaves work undone whether or not one of its devices
-     * is present (record 23 sections 5.4 and 7.4). */
-    for (k = 0; k < INST_GROUPS; k++) {
-        if (groupVerdict[k] != INST_GROUP_OK) {
-            flagSteps = 1;
-        }
-    }
+    memset(refusalSeen, 0, sizeof(refusalSeen));
+    note_refusals(1);
     testsigning_note();
     ask_values();
     if (opts.List) {
@@ -3983,13 +4101,26 @@ static int remove_own_infs(void)
     join(pattern, sizeof(pattern), win, "inf\\*.inf");
     h = FindFirstFileA(pattern, &fd);
     if (h == INVALID_HANDLE_VALUE) {
-        return 1;
+        /* An empty directory is the only "nothing to do" (section 9.2). */
+        if (GetLastError() == ERROR_FILE_NOT_FOUND) {
+            return 1;
+        }
+        out("%s could not be listed.\n", pattern);
+        return 0;
     }
     do {
         join(path, sizeof(path), win, "inf");
         join(path, sizeof(path), path, fd.cFileName);
         text = read_file(path, NULL);
-        if (text == NULL || !inst_inf_is_ours(text)) {
+        if (text == NULL) {
+            /* Whose it is cannot be established: the run stops before the
+             * services and files. */
+            out("%s cannot be read: whether it is this package's is "
+                "unknown.\n", path);
+            ok = 0;
+            continue;
+        }
+        if (!inst_inf_is_ours(text)) {
             free(text);
             continue;
         }
@@ -4035,6 +4166,10 @@ static int remove_own_infs(void)
             ok = 0;
         }
     } while (FindNextFileA(h, &fd));
+    if (GetLastError() != ERROR_NO_MORE_FILES) {
+        out("%s could not be listed to its end.\n", pattern);
+        ok = 0;
+    }
     FindClose(h);
     return ok;
 }
@@ -4284,7 +4419,14 @@ static int run_uninstall_9x(void)
         "device, so this\ntool removes what it placed itself and lists the "
         "rest.\n\n");
     if (!opts.List) {
-        devicepath_update(NULL);
+        /* The copies go only once DevicePath no longer names them: a search
+         * path must never point at a removed source. */
+        if (!devicepath_update(NULL)) {
+            out("DevicePath could not be updated: the copies in %s stay.\n",
+                dir);
+            flagFailed = 1;
+            return inst_exit_code(0, flagFailed, flagRestart, 1);
+        }
         local_remove_all();
     } else {
         out("(/list) the copies in %s and their DevicePath entry would be "

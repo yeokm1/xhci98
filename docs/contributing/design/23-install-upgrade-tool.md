@@ -264,7 +264,10 @@ put there, and is never rewritten. A copy is built in `<name>.NEW` and
 published by renaming it only once every file and the list's closing `END`
 line are written, so a failed copy never passes for a finished one; a
 directory whose list lacks the `END` line (an interrupted run) is removed
-and built again. A finished copy is never rewritten: a run whose package is already there
+and built again; one whose list cannot be read refuses the run (it is
+never removed on a guess), and a listing of the package that does not
+reach its end never publishes a copy. A finished copy is never rewritten:
+a run whose package is already there
 checks the files are byte-identical and uses them, and a run of another
 package makes another directory. So an older package run for one driver
 cannot replace the files a newer installed package's INF still names, and
@@ -548,7 +551,9 @@ confirmation:
    Windows does not promise never to reuse. A mismatch stops the run with
    the journal kept;
 6. every listed device is reinstalled. A `DEV` line goes only when its
-   device is present, its driver key names the verified replacement (the
+   device was reinstalled by this run with a call that succeeded (an
+   unchanged device can read the same name and version), is present, its
+   driver key names the verified replacement (the
    `NEW` name, whatever it is), and it runs the package's version with no
    problem code; the `INF` line goes
    when none of its devices is left; the file goes when nothing is. A
@@ -1082,7 +1087,10 @@ after it, reports what was done, and tells the user to restart and run
    is this package's and whose install sections name one of the three
    services (`AddService`) or files (`NTMPDriver`), read with the tool's
    own parser - the staged `oemNN.inf` copies, and the plain copies the
-   INFs' own `DefaultInstall` sections make through directory id 17. Where
+   INFs' own `DefaultInstall` sections make through directory id 17. An
+   INF that cannot be read, or a listing of `%windir%\inf` that does not
+   reach its end, leaves ownership unestablished and stops the run before
+   step 5. Where
    `SetupUninstallOEMInfA` resolves (Windows XP onward, Microsoft's
    documentation; the legs read which systems have it), it removes each
    `oemNN.inf`, flags 0, so a package still referenced is refused and
@@ -1124,9 +1132,11 @@ No documented interface removes a devnode there: `CM_Uninstall_DevNode`
 is a stub on both (record 13 section 10.13.8, read statically from each
 system's `CFGMGR32.DLL`). So the tool:
 
-1. removes what it owns: its entries in `DevicePath`, the files each
-   copy's `XHCIINST.LST` names under `%windir%\XHCI98`, and each directory
-   if it is then empty;
+1. removes what it owns: its entries in `DevicePath`, then - only once
+   that write succeeded, so no search path is left naming a removed
+   source - the files each copy's `XHCIINST.LST` names under
+   `%windir%\XHCI98`, and each directory if it is then empty (a failed
+   `DevicePath` update keeps the copies and ends with exit 2);
 2. lists the INF files in `INF` and `INF\OTHER` whose `Provider` is this
    package's and that install one of its drivers (the rule of section 9.2
    step 4) - the device installer's own copies, and the plain copies the
