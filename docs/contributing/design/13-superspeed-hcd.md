@@ -6955,8 +6955,8 @@ Where a function's pipes are already open when a record arrives (Windows 98
 SE and ME, where disabling the parent may `STOP` it and leave its children
 running, 10.12 item 3, then `START` it again), the open pipes are **left as
 they are** (D5): the record applies at each function's next select or
-`SELECT_INTERFACE`, and a log record says the select came with functions
-open. Nothing re-opens a live pipe for an interval. So on 98 SE and ME a
+`SELECT_INTERFACE` (the `comp.interval` records of those selects show
+when the rate took effect). Nothing re-opens a live pipe for an interval. So on 98 SE and ME a
 changed filter setting reaches a running function only once that function
 selects again - its own devnode restarted, or the device replugged - and
 the legs read it so (a review, round 1).
@@ -7155,6 +7155,47 @@ under the owner's instruction to proceed after review**:
   document for no case the legs cannot read.
 - **D13 The legs' stand-in**: a passthrough composite HID device; without
   one, the regression legs on `usb-audio` and the rest owed to the bench.
+
+The design was reviewed to convergence on 2026-10-14 (three rounds: a P1
+and four lesser findings in the first - the select had been pended for the
+thread, where a containment could park it under the FDO's `REMOVE` - three
+in the second, a wording point in the third); no decision changed. D9's
+"as `usbccgp` does" reads, after round 1, as ReactOS's `usbccgp` does
+(XP's caller of `ParentCloseConfiguration` was not traced).
+
+#### 10.14.10 As built (2026-10-14)
+
+On branch `p38-compsel` from `phase-38` (roadmap-hcd 38.12), as designed,
+with these particulars:
+
+- **Where.** The parent PDO's dispatch, the record and the composite FDO's
+  sequence are one block at the end of `hcd_urb.c`
+  (`HcdCompositePdoInternalIoctl`, `HcdCompositeSelectDown`,
+  `HcdCompositeForget`, `HcdCompRecordRef`, `HcdCompRecordRelease`): the
+  sequence builds `usbdi.h` structures, which that file alone includes.
+  `hcd_entry.c` routes a composite parent's internal IOCTLs there (a hub
+  PDO's are still refused); `hcd_hubfdo.c` calls the sequence after a
+  composite FDO's `START` has come back up and before `hcdHubStarted`,
+  and at its `REMOVE` sends the unconfigure only while the FDO is started
+  (else forgets the record directly); `hcd_pdo.c`'s deletion forgets it.
+- **The record** is `HCD_COMP_RECORD` (`hcd.h`), on
+  `HCD_DEVICE_PDO.CompRecord`; the thread references it in
+  `HcdCfgService` around a function's `SELECT_CONFIGURATION` and
+  `SELECT_INTERFACE` and hands it to `hcdCfgFunctionEndpoint`, which calls
+  the pure `XhciPipeFunctionEndpointFrom` and counts and logs a rule-2
+  endpoint. A device PDO's `SELECT_INTERFACE` is unchanged.
+- **The pure helpers** (`xhci_pipe.c`): `XhciPipeFunctionEndpointFrom`
+  (`XhciPipeFunctionEndpoint` is now its caller-only form),
+  `XhciPipeParentPlan`, `XhciPipeRecordCheck`, `XhciPipeRecordTally`;
+  `test_pipe`'s `test_composite_record`.
+- **Counters** at words 241 to 245 (`XHCI_SNAPSHOT_HCD_COUNTER_WORDS` 246,
+  `test_snap` pinned); the stop's lines `composite.selects`,
+  `composite.refused`, `composite.rewrites`, `composite.mismatches`,
+  `composite.intervals`; `XHCISNAP`'s "composite selects" section and
+  names (its counter self-test: all 246 words agree).
+- **No import change**: `IoAllocateIrp`, `IoFreeIrp`, `IoCallDriver` and
+  `KeWaitForSingleObject` were imported already; `InterlockedExchangePointer`
+  is the DDK's macro over `InterlockedExchange` on x86.
 
 ## 11. The transfer-buffer policy (task 25.7)
 

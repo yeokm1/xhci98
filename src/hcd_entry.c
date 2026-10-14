@@ -257,9 +257,13 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_DEVICE_PDO &&
         major == IRP_MJ_INTERNAL_DEVICE_CONTROL) {
         /* A hub's PDO takes no URB: the bus owns the hub, and nothing
-         * above its FDO sends one (task 33.4). Nor does a composite
-         * parent's: its functions' PDOs carry the device's traffic, and
-         * the parent is presentation only (task 36.43). */
+         * above its FDO sends one (task 33.4). A composite parent's takes
+         * only its own FDO's descriptor reads and SELECT_CONFIGURATION
+         * (task 38.12, design record 13 section 10.14); its functions'
+         * PDOs carry the device's traffic (task 36.43). */
+        if (((PHCD_DEVICE_PDO)common)->Composite) {
+            return HcdCompositePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
+        }
         if (HcdPdoIsParent((PHCD_DEVICE_PDO)common)) {
             return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);
         }

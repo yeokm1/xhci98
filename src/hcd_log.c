@@ -347,6 +347,16 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
                   1);
     XhciLogAppend(log, "composite.represented",
                   hc->Counters.CompositeRepresented, 1);
+    /* Task 38.12: the composite devnode's own selects. */
+    XhciLogAppend(log, "composite.selects", hc->Counters.CompositeSelects, 1);
+    XhciLogAppend(log, "composite.refused",
+                  hc->Counters.CompositeSelectRefused, 1);
+    XhciLogAppend(log, "composite.rewrites", hc->Counters.CompositeRewrites,
+                  1);
+    XhciLogAppend(log, "composite.mismatches",
+                  hc->Counters.CompositeMismatches, 1);
+    XhciLogAppend(log, "composite.intervals",
+                  hc->Counters.CompositeIntervals, 1);
     /* Issue 18's behind-hub speed IDs. */
     XhciLogAppend(log, "hub.speed.nospeed",
                   hc->Counters.TopoBehindHubNoSpeed, 1);

@@ -575,6 +575,9 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
     /* Its USB device interface off and its link freed (task 36.17): the
      * one place every deletion passes, before the object goes. */
     HcdDoorDeviceStop(pdo, 1);
+    /* A composite parent's record (task 38.12): its own reference dropped;
+     * a select still holding one keeps the bytes until it is done. */
+    HcdCompositeForget(pdo);
     pdo->Deleted = 1;
     pdo->Controller = NULL;
     if (keep) {

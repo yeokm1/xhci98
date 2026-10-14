@@ -4789,6 +4789,14 @@ Untested ground:
     raised one under this driver yet. XhciIntervalCap and XhciAvgTrbEsit
     have been read on no AMD or other real controller.
 
+  * HIDUSBF ON A COMPOSITE DEVICE'S OWN ENTRY (xHCI98 USB Composite
+    Device, new in this release). Each function takes its polling rate
+    from the rate set there, unless a filter on the function's own entry
+    sets another. QEMU has no keyboard-and-mouse composite device, so this
+    is read on no virtual machine; a new rate reaches a function when it
+    next starts (on 98 SE and ME restart the function's entry too, or
+    replug the device).
+
   * LINUX'S CONTROLLER QUIRKS (XhciMsiAvoid and the thirteen others,
     section 9). Built from Linux's handling and the xHCI specification;
     none has been read on a controller it lists, and QEMU's controller is

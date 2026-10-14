@@ -52,7 +52,12 @@
 > 13 section 10.12), with the parent's ids
 > in the pure `xhci_func.c` (`XhciFuncParentId`, host suite `test_func`) and
 > the parent, its functions and their in-place re-presentation in
-> `hcd_pdo.c`. Task 34.3 adds the pure
+> `hcd_pdo.c`. Task 38.12 has that FDO select the configuration down its
+> own stack at its start, and the parent PDO answer it and keep the
+> caller's descriptor as the record a function's select takes its
+> `bInterval` from (`hcd_urb.c`, its last block; the pure precedence and
+> checks in `xhci_pipe.c`, host suite `test_pipe`; design record 13
+> section 10.14). Task 34.3 adds the pure
 > `xhci_psw.c` / `xhci_psw.h` (the Intel EHCI-to-xHCI port switchover: the
 > device-id gate, the board exemption, the `XhciIntelPortSwitch` rule, and the
 > route and release sequences over two caller-supplied configuration-space

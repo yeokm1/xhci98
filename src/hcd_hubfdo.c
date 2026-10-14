@@ -245,6 +245,18 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
     XHCI_DBG_VALUE("hcd: hub FDO PnP minor", stack->MinorFunction);
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
+        if (hcdIsComposite(fdo)) {
+            /* The unconfigure down its own stack before the REMOVE, as
+             * ReactOS's usbccgp sends it, while the stack is started (a
+             * stopped or surprise-removed parent PDO answers nothing); the
+             * record forgotten either way (task 38.12; design record 13
+             * section 10.14.4). */
+            if (fdo->Common.PnpState == HCD_PNP_STARTED) {
+                HcdCompositeSelectDown(fdo->LowerDevice, hcdHubPdoOf(fdo), 1);
+            } else {
+                HcdCompositeForget(hcdHubPdoOf(fdo));
+            }
+        }
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdHubIoLeave(fdo);
@@ -291,6 +303,14 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
             fdo->Common.DevicePower = PowerDeviceD0;
             d0.DeviceState = PowerDeviceD0;
             (VOID)PoSetPowerState(fdo->Common.Self, DevicePowerState, d0);
+            if (hcdIsComposite(fdo)) {
+                /* The composite select down its own stack, before the
+                 * re-presentation is asked, so every function this start
+                 * presents selects after it (task 38.12; design record 13
+                 * section 10.14.2). Never fails the START. */
+                HcdCompositeSelectDown(fdo->LowerDevice, hcdHubPdoOf(fdo),
+                                       0);
+            }
             hcdHubStarted(fdo);
             if (!hcdIsComposite(fdo)) {
                 (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 1);

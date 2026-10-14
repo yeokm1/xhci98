@@ -2519,6 +2519,222 @@ static void test_caller_interval(void)
 }
 
 /*
+ * Task 38.12 (design record 13 section 10.14): the composite devnode's own
+ * select. Its planner (the interfaces at alternate 0 the composite FDO
+ * names), the record's header check and tally, and the precedence a
+ * function's endpoint takes its bInterval by: the function's own caller's
+ * where it differs from the device's, else the record's where that
+ * differs, else the device's own.
+ */
+static void test_composite_record(void)
+{
+    static const UCHAR hidFunc[] = {
+        0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0x80, 0x32,
+        0x09, 0x04, 0x02, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00,
+        0x09, 0x21, 0x10, 0x01, 0x00, 0x01, 0x22, 0x20, 0x00,
+        0x07, 0x05, 0x83, 0x03, 0x08, 0x00, 0x0A,
+        0x07, 0x05, 0x04, 0x03, 0x08, 0x00, 0x0A
+    };
+    static const UCHAR none[] = {
+        0x09, 0x02, 0x09, 0x00, 0x00, 0x01, 0x00, 0x80, 0x32
+    };
+    static const UCHAR ssDev[] = {
+        9, 2, 53, 0, 2, 1, 0, 0x80, 50,
+        9, 4, 0, 0, 1, 8, 6, 0x50, 0,
+        7, 5, 0x82, 2, 0x00, 0x04, 0,
+        6, 0x30, 15, 0, 0, 0,
+        9, 4, 1, 0, 1, 3, 0, 0, 0,
+        7, 5, 0x81, 3, 0x00, 0x04, 4,
+        6, 0x30, 1, 0, 0x00, 0x08
+    };
+    UCHAR dev[sizeof(audio)];
+    UCHAR rec[sizeof(audio)];
+    UCHAR fn[sizeof(hidFunc)];
+    UCHAR ss[sizeof(ssDev)];
+    UCHAR ssRec[sizeof(ssDev)];
+    UCHAR numbers[32];
+    ULONG pipes[32];
+    XHCI_PIPE_IFACE f;
+    XHCI_PIPE_IFACE g;
+    XHCI_PIPE_EP ep;
+    XHCI_PIPE_EP want;
+    ULONG count;
+    ULONG source;
+    ULONG rewrites;
+    ULONG mismatches;
+    ULONG off;
+
+    copy_bytes(dev, audio, sizeof(audio));
+    set_total(dev, sizeof(audio));
+
+    /* The planner. */
+    CHECK_EQ(XhciPipeParentPlan(dev, sizeof(dev), numbers, pipes, &count),
+             XHCI_PIPE_OK, "the audio composite planned");
+    CHECK_EQ(count, 3, "three interfaces, each once");
+    CHECK_EQ(numbers[0], 0, "AudioControl first");
+    CHECK_EQ(pipes[0], 0, "no endpoint");
+    CHECK_EQ(numbers[1], 1, "AudioStreaming at alternate 0");
+    CHECK_EQ(pipes[1], 0, "its zero-bandwidth alternate 0, not alternate 1");
+    CHECK_EQ(numbers[2], 2, "the HID interface");
+    CHECK_EQ(pipes[2], 2, "two endpoints");
+    CHECK_EQ(XhciPipeParentPlan(none, sizeof(none), numbers, pipes, &count),
+             XHCI_PIPE_NOT_FOUND, "no interface at all");
+    CHECK_EQ(count, 0, "none counted");
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[70] = 32;                       /* the HID interface's number     */
+    CHECK_EQ(XhciPipeParentPlan(rec, sizeof(rec), numbers, pipes, &count),
+             XHCI_PIPE_MALFORMED, "an interface number of 32");
+    copy_bytes(rec, dev, sizeof(rec));
+    set_total(rec, sizeof(rec) + 1);
+    CHECK_EQ(XhciPipeParentPlan(rec, sizeof(rec), numbers, pipes, &count),
+             XHCI_PIPE_MALFORMED, "a wTotalLength past the bytes");
+    CHECK_EQ(XhciPipeParentPlan(NULL, 0, numbers, pipes, &count),
+             XHCI_PIPE_BAD_PARAM, "no descriptor");
+
+    /* The record's header. */
+    CHECK_EQ(XhciPipeRecordCheck(dev, sizeof(dev), 1), XHCI_PIPE_OK,
+             "the device's own configuration");
+    CHECK_EQ(XhciPipeRecordCheck(dev, sizeof(dev), 2), XHCI_PIPE_MALFORMED,
+             "another configuration value");
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[1] = 4;
+    CHECK_EQ(XhciPipeRecordCheck(rec, sizeof(rec), 1), XHCI_PIPE_MALFORMED,
+             "not a configuration descriptor");
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[0] = 8;
+    CHECK_EQ(XhciPipeRecordCheck(rec, sizeof(rec), 1), XHCI_PIPE_MALFORMED,
+             "a header bLength of 8");
+    copy_bytes(rec, dev, sizeof(rec));
+    set_total(rec, 8);
+    CHECK_EQ(XhciPipeRecordCheck(rec, sizeof(rec), 1), XHCI_PIPE_MALFORMED,
+             "a wTotalLength of 8");
+    CHECK_EQ(XhciPipeRecordCheck(dev, sizeof(dev) - 1, 1),
+             XHCI_PIPE_MALFORMED, "a wTotalLength past the length");
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[86] = 0x06;                     /* 0x83's bLength below 7         */
+    CHECK_EQ(XhciPipeRecordCheck(rec, sizeof(rec), 1), XHCI_PIPE_MALFORMED,
+             "a broken walk");
+    CHECK_EQ(XhciPipeRecordCheck(NULL, 0, 1), XHCI_PIPE_BAD_PARAM, "NULL");
+
+    /* The tally. */
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[92] = 1;                        /* 0x83's bInterval, hidusbf-style */
+    rewrites = 0;
+    mismatches = 0;
+    CHECK_EQ(XhciPipeRecordTally(dev, sizeof(dev), rec, sizeof(rec), 2, 0,
+                                 &rewrites, &mismatches),
+             XHCI_PIPE_OK, "the HID interface tallied");
+    CHECK_EQ(rewrites, 1, "one rewritten");
+    CHECK_EQ(mismatches, 0, "none unmatched");
+    rec[90] = 0x10;                     /* 0x83's wMaxPacketSize too      */
+    CHECK_EQ(XhciPipeRecordTally(dev, sizeof(dev), rec, sizeof(rec), 2, 0,
+                                 &rewrites, &mismatches),
+             XHCI_PIPE_OK, "again, added to");
+    CHECK_EQ(rewrites, 1, "a changed wMaxPacketSize is no rewrite");
+    CHECK_EQ(mismatches, 1, "but a mismatch");
+    CHECK_EQ(XhciPipeRecordTally(dev, sizeof(dev), rec, sizeof(rec), 0, 0,
+                                 &rewrites, &mismatches),
+             XHCI_PIPE_OK, "an interface with no endpoint");
+    CHECK_EQ(rewrites + mismatches, 2, "adds nothing");
+    CHECK_EQ(XhciPipeRecordTally(dev, sizeof(dev), rec, sizeof(rec), 5, 0,
+                                 &rewrites, &mismatches),
+             XHCI_PIPE_NOT_FOUND, "an interface the device lacks");
+
+    /* The precedence. */
+    CHECK_EQ(XhciPipeFindInterface(dev, sizeof(dev), 2, 0, &f), XHCI_PIPE_OK,
+             "the device's HID interface");
+    off = f.EndpointOffset[0];
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[92] = 1;
+    copy_bytes(fn, hidFunc, sizeof(fn));
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, fn, rec,
+                                          sizeof(rec), 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "an unmodified function copy and a record");
+    CHECK_EQ(source, XHCI_PIPE_FROM_RECORD, "the record's byte");
+    CHECK_EQ(ep.BInterval, 1, "1 ms");
+    CHECK_EQ(ep.Interval, 3, "Interval 3");
+    fn[33] = 2;                         /* the function's own filter      */
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, fn, rec,
+                                          sizeof(rec), 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "both rewritten");
+    CHECK_EQ(source, XHCI_PIPE_FROM_CALLER, "the function's own wins");
+    CHECK_EQ(ep.BInterval, 2, "2 ms");
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, NULL, rec,
+                                          sizeof(rec), 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "a SELECT_INTERFACE's form");
+    CHECK_EQ(source, XHCI_PIPE_FROM_RECORD, "takes the record");
+    CHECK_EQ(ep.BInterval, 1, "1 ms there too");
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, NULL, NULL,
+                                          0, 2, 0, XHCI_PIPE_SPEED_FULL, 0,
+                                          &ep, &source),
+             XHCI_PIPE_OK, "no caller, no record");
+    CHECK_EQ(source, XHCI_PIPE_FROM_DEVICE, "the device's own");
+    CHECK_EQ(ep.BInterval, 10, "10 ms");
+    copy_bytes(rec, dev, sizeof(rec));
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, hidFunc, rec,
+                                          sizeof(rec), 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "a record with the device's own byte");
+    CHECK_EQ(source, XHCI_PIPE_FROM_DEVICE, "is no rewrite, not counted");
+    rec[92] = 1;
+    rec[90] = 0x10;
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, hidFunc, rec,
+                                          sizeof(rec), 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "a record that changed wMaxPacketSize as well");
+    CHECK_EQ(source, XHCI_PIPE_FROM_DEVICE, "takes nothing from it");
+    CHECK_EQ(ep.BInterval, 10, "the device's 10 ms");
+    CHECK_EQ(ep.MaxPacketSize, 8, "and its wMaxPacketSize");
+    copy_bytes(rec, dev, sizeof(rec));
+    rec[92] = 129;                      /* a mode 4 code                  */
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, hidFunc, rec,
+                                          sizeof(rec), 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "a code in the record");
+    CHECK_EQ(ep.BInterval, 129, "kept for the fast-poll mode to key on");
+    CHECK_EQ(ep.FastPoll, 0, "not applied here");
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), off, NULL, NULL,
+                                          0, 2, 0, XHCI_PIPE_SPEED_FULL, 0,
+                                          &ep, NULL),
+             XHCI_PIPE_OK, "no source asked for");
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(dev, sizeof(dev), sizeof(dev) - 6,
+                                          NULL, NULL, 0, 2, 0,
+                                          XHCI_PIPE_SPEED_FULL, 0, &ep,
+                                          &source),
+             XHCI_PIPE_BAD_PARAM, "an offset with no 7 bytes behind it");
+
+    /* SuperSpeed: the companion from the device, the byte from the
+     * record, through the rebase. */
+    copy_bytes(ss, ssDev, sizeof(ss));
+    copy_bytes(ssRec, ssDev, sizeof(ssRec));
+    CHECK_EQ(XhciPipeFindInterface(ss, sizeof(ss), 1, 0, &g), XHCI_PIPE_OK,
+             "the SuperSpeed HID interface");
+    ssRec[g.EndpointOffset[0] + 6] = 1;
+    CHECK_EQ(XhciPipeEndpointParamsAt(ss, sizeof(ss), g.EndpointOffset[0],
+                                      XHCI_PIPE_SPEED_SUPER, 0, &want),
+             XHCI_PIPE_OK, "the device's own parse");
+    CHECK_EQ(XhciPipeFunctionEndpointFrom(ss, sizeof(ss), g.EndpointOffset[0],
+                                          NULL, ssRec, sizeof(ssRec), 1, 0,
+                                          XHCI_PIPE_SPEED_SUPER, 0, &ep,
+                                          &source),
+             XHCI_PIPE_OK, "a SuperSpeed record");
+    CHECK_EQ(source, XHCI_PIPE_FROM_RECORD, "the record's byte");
+    CHECK_EQ(ep.BInterval, 1, "bInterval 1");
+    CHECK_EQ(ep.Interval, 0, "Interval 0 at SuperSpeed");
+    CHECK_EQ(ep.MaxEsitPayload, want.MaxEsitPayload, "the companion kept");
+    CHECK_EQ(ep.MaxBurstSize, want.MaxBurstSize, "Max Burst kept");
+}
+
+/*
  * Task 36.12: RESET_PIPE in xHCI 1.2c 4.6.8 order. The order is transcribed
  * from the spec's "reset a pipe" list (p.116), not from the code: Reset
  * Endpoint, CLEAR_TT_BUFFER (control or bulk, behind a TT), the device's
@@ -2940,6 +3156,7 @@ int main(void)
     test_fast_codes();
     test_rebase();
     test_caller_interval();
+    test_composite_record();
     test_walk_surplus();
     test_play2_async();
 

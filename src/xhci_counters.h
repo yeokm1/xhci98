@@ -467,9 +467,22 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG SelectStallSuccesses;
     ULONG SelectRollbacks;
     ULONG SelectRollbacksReopened;
+    /* The composite devnode's own SELECT_CONFIGURATION (task 38.12; design
+     * record 13 section 10.14.6), appended at word 241: selects the parent
+     * PDO recorded; selects it refused, and composite FDO starts whose own
+     * sequence failed before the select reached it; endpoints of recorded
+     * selects whose matched bInterval differs from the device's, and those
+     * that did not match at all; function endpoints built from a record's
+     * byte that differs from the device's. The parent's dispatch counts the
+     * first four interlocked; the thread the last, plainly. */
+    ULONG CompositeSelects;
+    ULONG CompositeSelectRefused;
+    ULONG CompositeRewrites;
+    ULONG CompositeMismatches;
+    ULONG CompositeIntervals;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 241 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 246 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */
