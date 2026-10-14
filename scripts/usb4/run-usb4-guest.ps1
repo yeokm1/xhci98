@@ -316,8 +316,8 @@ while ($i -lt $Extra.Count) {
     # No backend, and no path at all: a property such as usb-mouse's pcap=
     # opens a file for writing, so any value with a path separator or a
     # drive colon is refused along with the named backends.
-    if ($v -match '(^|,)(drive|file|filename|chardev|netdev|romfile|pcap|path|logfile|events)=' -or
-        $v -match '^-' -or $v -match '[\/:]') {
+    if ($v -match '(^|[,.])(drive|file|filename|chardev|netdev|romfile|pcap|path|logfile|events)=' -or
+        $v -match '^-' -or $v -match '[\\/:]') {
         throw "-Extra $x $v names a backend, a file or a path; the launcher owns those"
     }
     $i += 2
