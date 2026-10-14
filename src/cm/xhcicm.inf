@@ -1,6 +1,6 @@
 ; xhcicm.inf - the Thunderbolt 3 connection manager, xhcicm.sys (design
-; record 21; roadmap-usb4.md task 39-A.1), on the Thunderbolt or USB4 NHI
-; (the native host interface): the 32-bit package's NHI INF.
+; record 21; roadmap-usb4.md task 39-A.1), on the Thunderbolt NHI (the
+; native host interface): the 32-bit package's NHI INF.
 ;
 ; It binds the driver as the NHI's function driver and never names a
 ; bridge: the tunnel bridge's filter is installed by xhcicmf.inf, an NT-only
@@ -8,13 +8,14 @@
 ; reads the undecorated models section this file shares with Windows 98
 ; (record 21 section 3.3; the gate's CM-NO9XBRIDGE rule).
 ;
-; The NHI ids are Intel's Thunderbolt and USB4 NHIs as Linux's
-; drivers/thunderbolt/nhi.h names them, and any USB4 NHI by class (owner's
-; decision D9 as widened on 2026-10-15); src\cm\cm_vals.c maps each to its
-; connection manager. Only 15BF (Alpine Ridge LP, the ThinkPad P14s Gen 1's)
-; has been read by this project; every other line is untested. A user who
-; needs another id adds a model line to a copy of this file (record 21
-; section 8, XhciCmMode 2).
+; The NHI ids are record 21 section 3.3's list (decision D9, owner
+; 2026-10-15): every Intel firmware-connection-manager host Linux's
+; drivers/thunderbolt addresses; src\cm\cm_vals.c maps each to its
+; profile. Only 15BF (Alpine Ridge LP, the ThinkPad P14s Gen 1's) has been
+; read by this project; every other line is untested. The hosts with no
+; firmware connection manager (class 0C0340) are Phase 40's and not here.
+; A user who needs another id adds a model line to a copy of this file
+; (record 21 section 8, XhciCmMode 2).
 ;
 ; Three install paths, as xhci98.inf: Windows 98 SE and ME read the
 ; undecorated sections and load the driver through *NTKERN/NTMPDriver;
@@ -24,10 +25,10 @@
 ; and every path copies the driver alone.
 ;
 ; Every registry value the driver reads (record 21 section 8) is written by
-; every install path at the driver's own default under
-; FLG_ADDREG_NOCLOBBER (0x00010003 for a REG_DWORD, 0x00000002 for a
-; REG_SZ), so a value a user set survives a reinstall and a written default
-; reads exactly as an absent one.
+; every install path at the driver's own default as a REG_DWORD under
+; FLG_ADDREG_NOCLOBBER (0x00010003), so a value a user set survives a
+; reinstall and a written default reads exactly as an absent one - except
+; XhciCmTunnelBridge, whose absence is meaningful and which no INF writes.
 ;
 ; scripts\inf-gate\check-cm-inf.ps1 gates this file on every build.
 ;
@@ -45,8 +46,8 @@ DriverVer=10/14/2026,2.4.0.0
 %Mfg%=CmModels,NTx86.6.0
 
 [CmModels]
-; The firmware connection manager (ICM) NHIs. 15BF has been read by this
-; project; every other line is untested.
+; Record 21 section 3.3's list: Intel's firmware connection manager hosts.
+; 15BF has been read by this project; every other line is untested.
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_156A
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_156C
@@ -58,8 +59,8 @@ DriverVer=10/14/2026,2.4.0.0
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15EB
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1134
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1137
-%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A0D
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A17
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A0D
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1B
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1D
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1F
@@ -71,27 +72,10 @@ DriverVer=10/14/2026,2.4.0.0
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EB2
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC2
 %NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
-; The USB4 software connection manager's NHIs (Phase 40): until it lands
-; the driver starts on them and does nothing (AMD's from FreeBSD's
-; nhi_reg.h). Untested. The class line
-; takes any USB4 NHI (class 0C/03/40); whether Windows 98's engine
-; matches a PCI\CC_ id is unread.
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A833
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A834
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E333
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E334
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E433
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E434
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_4D33
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5781
-%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5784
-%Usb4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1668
-%Usb4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1669
-%Usb4Desc%=Cm.Dev,PCI\CC_0C0340
 
 [CmModels.NTx86.6.0]
-; The firmware connection manager (ICM) NHIs. 15BF has been read by this
-; project; every other line is untested.
+; Record 21 section 3.3's list: Intel's firmware connection manager hosts.
+; 15BF has been read by this project; every other line is untested.
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156A
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156C
@@ -103,8 +87,8 @@ DriverVer=10/14/2026,2.4.0.0
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15EB
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1134
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1137
-%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A0D
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A17
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A0D
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1B
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1D
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1F
@@ -116,23 +100,6 @@ DriverVer=10/14/2026,2.4.0.0
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EB2
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC2
 %NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
-; The USB4 software connection manager's NHIs (Phase 40): until it lands
-; the driver starts on them and does nothing (AMD's from FreeBSD's
-; nhi_reg.h). Untested. The class line
-; takes any USB4 NHI (class 0C/03/40); whether Windows 98's engine
-; matches a PCI\CC_ id is unread.
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E334
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E433
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E434
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_4D33
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5781
-%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
-%Usb4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
-%Usb4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
-%Usb4Desc%=Cm.Dev6,PCI\CC_0C0340
 
 [SourceDisksNames]
 1=%DiskName%,xhcicm.sys,,
@@ -177,7 +144,7 @@ AddService=xhcicm,0x00000002,Cm.AddService
 ; --- Shared -----------------------------------------------------------------
 
 ; The driver's values (record 21 section 8), each at the driver's default.
-; XhciCmTunnelBridge is written empty: no override of the bridge discovery.
+; XhciCmTunnelBridge is not written: its absence means no override.
 [Cm.Values]
 HKR,,XhciCmMode,0x00010003,1
 HKR,,XhciCmApprove,0x00010003,1
@@ -185,7 +152,7 @@ HKR,,XhciCmReenum,0x00010003,1
 HKR,,XhciCmPollIdleMs,0x00010003,200
 HKR,,XhciCmCmdTimeoutMs,0x00010003,5000
 HKR,,XhciCmApproveTimeoutMs,0x00010003,10000
-HKR,,XhciCmTunnelBridge,0x00000002,""
+HKR,,XhciCmSafeEject,0x00010003,1
 HKR,,XhciLogVerbosity,0x00010003,0
 
 [Cm.AddService]
@@ -217,5 +184,4 @@ Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
 NhiDesc="xHCI98 Thunderbolt 3 Host Interface"
-Usb4Desc="xHCI98 USB4 Host Interface"
 CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"

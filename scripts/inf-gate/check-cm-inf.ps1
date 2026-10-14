@@ -35,14 +35,17 @@ rule named as the other gates name their families.
            (PATH-NT6). amd64 (xhcicm-amd64.inf): [Manufacturer] exactly
            CmModels,NTamd64,NTamd64.6.0 and no undecorated models, install
            or right-click section (PATH-NO9X).
-  CM-ID    Every NHI model binds an Intel (8086) or AMD (1022) device id or the
-           USB4 NHI class PCI\CC_0C0340 and nothing else, and
-           every models section of the file binds the same set (CM-IDSET).
+  CM-ID    Every NHI model binds PCI\VEN_8086&DEV_xxxx and nothing else
+           (record 21 section 3.3; the software connection manager's hosts
+           are Phase 40's), every models section of the file binds the same
+           set (CM-IDSET), and that set is exactly the ICM rows of
+           src\cm\cm_vals.c's Intel table (CM-IDLIST).
   VAL-*    Every install path writes every value the driver reads, each once,
            at the driver's own default (read from src\cm\cm_vals.c's rule
-           table) under FLG_ADDREG_NOCLOBBER, and no other Xhci* value
-           (VAL-MISSING, VAL-DEFAULT, VAL-FLAG, VAL-EXTRA; the 2026-10-11
-           rule). XhciCmTunnelBridge is a REG_SZ written empty.
+           table) as a REG_DWORD under FLG_ADDREG_NOCLOBBER, and no other
+           Xhci* value (VAL-MISSING, VAL-DEFAULT, VAL-FLAG, VAL-EXTRA; the
+           2026-10-11 rule). XhciCmTunnelBridge is the one value read and
+           never written: its absence is meaningful (record 21 section 8).
   CM-NHIHW No [<install>.HW] section: the NHI writes nothing to its
            hardware key, so no filter value can ride on it.
   CM-TMPNAME (x86) xhcicm.sys is copied with no temporary-file name.
@@ -106,8 +109,10 @@ $msFiles = @("pci.sys", "usbd.sys", "usbhub.sys", "usbport.sys", "usbui.dll", "u
              "machine.inf", "pci.inf", "configmg.vxd", "ntkern.vxd", "isapnp.sys")
 # Intel Thunderbolt bridge (switch port) device ids: Linux
 # drivers/thunderbolt/nhi.h's PCI_DEVICE_ID_INTEL_*_BRIDGE (Falcon, Win,
-# Alpine, Titan and Barlow Ridge), which no $CHICAGO$ INF may bind.
-$knownBridgeDevs = @("156B", "156D", "157E", "1576", "1578", "15C0", "15D3", "15DA", "15E7", "15EA", "15EF", "5786", "57A4")
+# Alpine, Titan and Barlow Ridge) and the Maple Ridge bridges of record 21
+# section 3.3's list, which no $CHICAGO$ INF may bind; with every id the
+# filter INFs bind, read from them below.
+$knownBridgeDevs = @("156B", "156D", "157E", "1576", "1578", "15C0", "15D3", "15DA", "15E7", "15EA", "15EF", "1133", "1136", "5786", "57A4")
 
 function Read-InfText {
     param([string]$Text)
@@ -146,8 +151,6 @@ function Get-CmValueTable {
     foreach ($m in [regex]::Matches($SourceText, '(?m)^\s*\{\s*(\d+)\s*,[^}]*\}\s*,?\s*/\*\s*(Xhci[A-Za-z0-9]+)\s*\*/')) {
         $table[$m.Groups[2].Value] = @{ Flag = "0x00010003"; Data = $m.Groups[1].Value }
     }
-    # The one REG_SZ (cm_vals.h, CM_TUNNEL_BRIDGE_CHARS): written empty.
-    $table["XhciCmTunnelBridge"] = @{ Flag = "0x00000002"; Data = '""' }
     return $table
 }
 
@@ -271,6 +274,12 @@ function Test-CmInfText {
                     & $add "CM-TMPNAME" "[$name] gives $binary the temporary name '$($fields[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded."
                 }
                 $copied[$file.ToLowerInvariant()] = $destOf[$name.ToLowerInvariant()]
+                # Every copy of the driver is held to its directory where it
+                # is made, so one path's right destination cannot mask
+                # another's wrong one.
+                if ($file -ieq $binary -and $destOf.ContainsKey($name.ToLowerInvariant()) -and $destOf[$name.ToLowerInvariant()] -ne "10,System32\Drivers") {
+                    & $add "BOTH-DEST" "$where copies $binary through [$name] to '$($destOf[$name.ToLowerInvariant()])', not 10,System32\Drivers."
+                }
                 $file.ToLowerInvariant()
             }
         }
@@ -297,6 +306,7 @@ function Test-CmInfText {
             if ($f.Count -lt 3 -or $f[0] -ine "HKR" -or $f[1] -ne "") { continue }
             $name = $f[2]
             if ($name -notmatch '^Xhci') { continue }
+            if ($name -ieq "XhciCmTunnelBridge") { & $add "VAL-EXTRA" "$where writes XhciCmTunnelBridge, whose absence is meaningful: no INF writes it (record 21 section 8)."; continue }
             if (-not $valueTable.Contains($name)) { & $add "VAL-EXTRA" "$where writes $name, which the driver does not read."; continue }
             if ($seen.ContainsKey($name)) { & $add "VAL-EXTRA" "$where writes $name twice."; continue }
             $seen[$name] = $true
@@ -366,7 +376,7 @@ function Test-CmInfText {
                 if ($Kind -eq "filter") {
                     if ($id -notmatch '(?i)^PCI\\VEN_[0-9A-F]{4}&DEV_[0-9A-F]{4}&CC_0604$') { & $add "CM-FILTER" "model binds '$id'; the filter binds PCI\VEN_xxxx&DEV_xxxx&CC_0604 ids alone (the code takes the filter role by class 06/04)." }
                 } else {
-                    if ($id -notmatch '(?i)^PCI\\VEN_(8086|1022)&DEV_[0-9A-F]{4}$' -and $id -ine 'PCI\CC_0C0340') { & $add "CM-ID" "model binds '$id'; an NHI model binds PCI\VEN_8086&DEV_xxxx, PCI\VEN_1022&DEV_xxxx or the USB4 NHI class PCI\CC_0C0340 alone." }
+                    if ($id -notmatch '(?i)^PCI\\VEN_8086&DEV_[0-9A-F]{4}$') { & $add "CM-ID" "model binds '$id'; an NHI model binds PCI\VEN_8086&DEV_xxxx alone (record 21 section 3.3; the software connection manager's hosts are Phase 40's)." }
                 }
                 if ($isChicago) {
                     $isBridge = ($id -match '(?i)CC_06') -or ($FilterIds -contains $id.ToUpperInvariant())
@@ -378,6 +388,22 @@ function Test-CmInfText {
         $idSets[$ms.Name] = (@($ids | Sort-Object -Unique) -join "|")
     }
     if (@($idSets.Values | Sort-Object -Unique).Count -gt 1) { & $add "CM-IDSET" "the models sections bind different ids; every target of this file must see the same set." }
+    # CM-IDLIST: the NHI ids are exactly the ICM rows of cm_vals.c's Intel
+    # table, so the INF and the profile the code gives each id cannot drift.
+    if ($Kind -eq "nhi") {
+        $tableIds = @()
+        $tm = [regex]::Match($ValsText, '(?s)cmIntelNhi\[\]\s*=\s*\{(.*?)\};')
+        if ($tm.Success) {
+            $tableIds = @([regex]::Matches($tm.Groups[1].Value, '\{\s*0x([0-9A-Fa-f]{4})\s*,\s*CM_PROFILE_ICM_[A-Z]+\s*\}') | ForEach-Object { $_.Groups[1].Value.ToUpperInvariant() } | Sort-Object -Unique)
+        }
+        if ($tableIds.Count -eq 0) { & $add "CM-IDLIST" "src\cm\cm_vals.c's cmIntelNhi table could not be read." }
+        foreach ($ms in $modelSets) {
+            if (-not $idSets.ContainsKey($ms.Name)) { continue }
+            $infIds = @($idSets[$ms.Name] -split '\|' | Where-Object { $_ -match 'DEV_[0-9A-F]{4}$' } | ForEach-Object { $_.Substring($_.Length - 4) } | Sort-Object -Unique)
+            foreach ($d in $tableIds) { if ($infIds -notcontains $d) { & $add "CM-IDLIST" "[$($ms.Name)] does not bind DEV_$d, an ICM row of src\cm\cm_vals.c." } }
+            foreach ($d in $infIds) { if ($tableIds -notcontains $d) { & $add "CM-IDLIST" "[$($ms.Name)] binds DEV_$d, which src\cm\cm_vals.c gives no ICM profile." } }
+        }
+    }
 
     foreach ($inst in @($installs | ForEach-Object { "$($_.Name)|$($_.Nt6)" } | Sort-Object -Unique)) {
         $name = $inst.Split('|')[0]
@@ -417,9 +443,13 @@ function Test-CmInfText {
             if ($null -eq $s9) { & $add "PATH-9X" "no undecorated [$name] for Windows 98." }
             else {
                 $haveLoader = $false; $haveMp = $false
+                # The whole entry: HKR, no subkey, a REG_SZ flag (empty or 0,
+                # FLG_ADDREG_TYPE_SZ), the value - a subkey or another type
+                # is a value the 9x loader never reads.
                 foreach ($f in @(& $regLines $s9 "[$name]")) {
-                    if ($f.Count -ge 5 -and $f[0] -ieq "HKR" -and $f[2] -ieq "DevLoader" -and $f[4] -ieq "*NTKERN") { $haveLoader = $true }
-                    if ($f.Count -ge 5 -and $f[0] -ieq "HKR" -and $f[2] -ieq "NTMPDriver" -and $f[4] -ieq $binary) { $haveMp = $true }
+                    $sz = ($f.Count -eq 5 -and $f[0] -ieq "HKR" -and $f[1] -eq "" -and @("", "0", "0x0", "0x00000000") -contains $f[3])
+                    if ($sz -and $f[2] -ieq "DevLoader" -and $f[4] -ieq "*NTKERN") { $haveLoader = $true }
+                    if ($sz -and $f[2] -ieq "NTMPDriver" -and $f[4] -ieq $binary) { $haveMp = $true }
                 }
                 if (-not $haveLoader) { & $add "PATH-9X" "[$name] writes no HKR,,DevLoader,,*NTKERN." }
                 if (-not $haveMp) { & $add "PATH-9X" "[$name] writes no HKR,,NTMPDriver,,$binary." }
@@ -545,6 +575,9 @@ if ($SelfTest) {
                     @{ Rule = "PATH-MFGDEC";    Text = $t.Replace("%Mfg%=CmModels,NTx86.6.0", "%Mfg%=CmModels,NTx86,NTx86.6.0") },
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,NTMPDriver,,xhcicm.sys", "HKR,,NTMPDriver,,other.sys") },
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,DevLoader,,*NTKERN", "HKR,,DevLoader,,*CONFIGMG") },
+                    @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,DevLoader,,*NTKERN", "HKR,Wrong,DevLoader,,*NTKERN") },
+                    @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,NTMPDriver,,xhcicm.sys", "HKR,,NTMPDriver,0x00010001,xhcicm.sys") },
+                    @{ Rule = "BOTH-DEST";      Text = $t.Replace("[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values`r`nCopyFiles=Cm.CopyFiles", "[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values`r`nCopyFiles=Cm.CopyFiles9").Replace("Cm.CopyFiles=10,System32\Drivers", "Cm.CopyFiles=10,System32\Drivers`r`nCm.CopyFiles9=10,System").Replace("[Inf.CopyFiles]", "[Cm.CopyFiles9]`r`nxhcicm.sys`r`n`r`n[Inf.CopyFiles]") },
                     @{ Rule = "PATH-NT";        Text = $t.Replace("[Cm.Dev.NTx86.Services]", "[Cm.Dev.NTx86.Svc]") },
                     @{ Rule = "PATH-NT";        Text = $t.Replace("AddService=xhcicm,0x00000002,Cm.AddService`r`n`r`n; --- Windows Vista", "AddService=xhcicm,,Cm.AddService`r`n`r`n; --- Windows Vista") },
                     @{ Rule = "PATH-NT6";       Text = $t.Replace("[Cm.Dev6.NTx86]", "[Cm.Dev6.NTx86.Old]") },
@@ -553,7 +586,11 @@ if ($SelfTest) {
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmPollIdleMs,0x00010003,200", "XhciCmPollIdleMs,0x00010003,250") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmMode,0x00010003,1", "XhciCmMode,0x00010003,0") },
                     @{ Rule = "VAL-FLAG";       Text = $t.Replace("XhciCmApprove,0x00010003,1", "XhciCmApprove,0x00010001,1") },
-                    @{ Rule = "VAL-FLAG";       Text = $t.Replace('XhciCmTunnelBridge,0x00000002,""', 'XhciCmTunnelBridge,0,""') },
+                    @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciLogVerbosity,0x00010003,0", "HKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciCmTunnelBridge,0x00000002,`"`"") },
+                    @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmSafeEject,0x00010003,1`r`n", "") },
+                    @{ Rule = "CM-IDLIST";      Text = $t.Replace("%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3`r`n", "").Replace("%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3`r`n", "") },
+                    @{ Rule = "CM-IDLIST";      Text = $t.Replace("%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n", "%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833`r`n").Replace("%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n", "%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833`r`n") },
+                    @{ Rule = "CM-ID";          Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%NhiDesc%=Cm.Dev,PCI\CC_0C0340`r`n") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciLogVerbosity,0x00010003,0", "HKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciCmUsb3Tunnel,0x00010003,1") },
                     @{ Rule = "CM-NHIHW";       Text = $t.Replace("[Cm.Dev.NTx86.Services]", "[Cm.Dev.NTx86.HW]`r`nAddReg=Cm.AddReg`r`n`r`n[Cm.Dev.NTx86.Services]") },
                     @{ Rule = "CM-TMPNAME";     Text = $t.Replace("[Cm.CopyFiles]`r`nxhcicm.sys", "[Cm.CopyFiles]`r`nxhcicm.sys,,xhcicm.tmp") },

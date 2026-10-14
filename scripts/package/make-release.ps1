@@ -2280,7 +2280,15 @@ $gateOut
         # (roadmap-usb4.md task 39-A.1). Required of a directory this cut
         # built; gated where present in one -UploadSetOnly reads, since a
         # version published before 3.0.0.0 has none.
+        # The three files go together: a directory holding any of them holds
+        # all three, so a reconstruction never publishes the NHI's installer
+        # without the filter's, or an INF without its binary.
         $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
+        if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
+            $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })
+            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the three files go together."
+        }
         foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "xhcicmf.inf"; Extra = @("-Filter") })) {
             $cmInfPath = Join-Path $uploadFlavorDir $cmInf.Name
             if (Test-Path -LiteralPath $cmInfPath) {

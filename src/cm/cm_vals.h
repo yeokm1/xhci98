@@ -122,10 +122,11 @@ ULONG CmProfileFor(const CM_IDS *ids);
 ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 
 /*
- * The values, by index. Each is a REG_DWORD in the device's driver
- * (software) key, written by every install path of xhcicm.inf and
- * xhcicm-amd64.inf at the default below under FLG_ADDREG_NOCLOBBER, so a
- * written default reads exactly as an absent value does.
+ * The values, by index (record 21 section 8). Each is a REG_DWORD in the
+ * NHI's driver (software) key, written by every install path of
+ * xhcicm.inf and xhcicm-amd64.inf at the default below under
+ * FLG_ADDREG_NOCLOBBER, so a written default reads exactly as an absent
+ * value does.
  */
 #define CM_VAL_MODE               0  /* XhciCmMode, D11                     */
 #define CM_VAL_APPROVE            1  /* XhciCmApprove, D4                   */
@@ -133,8 +134,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_POLL_IDLE_MS       3  /* XhciCmPollIdleMs, D3                */
 #define CM_VAL_CMD_TIMEOUT_MS     4  /* XhciCmCmdTimeoutMs                  */
 #define CM_VAL_APPROVE_TIMEOUT_MS 5  /* XhciCmApproveTimeoutMs              */
-#define CM_VAL_LOG_VERBOSITY      6  /* XhciLogVerbosity, the shared ladder */
-#define CM_VAL_COUNT              7
+#define CM_VAL_SAFE_EJECT         6  /* XhciCmSafeEject, D10 (task 39-A.8)  */
+#define CM_VAL_LOG_VERBOSITY      7  /* XhciLogVerbosity, the shared ladder */
+#define CM_VAL_COUNT              8
 
 /* XhciCmMode (record 21 section 8, decision D11). */
 #define CM_MODE_OFF       0  /* bind, log, touch nothing                    */
@@ -144,12 +146,15 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_MODE_MAX       3
 
 /*
- * XhciCmTunnelBridge, REG_SZ, "bb:dd.f" (record 21 section 6.3's
- * override). The install writes it empty, which means no override. Held
- * here unparsed; task 39-A.5 parses it. A longer string than this is
- * refused, not truncated.
+ * XhciCmTunnelBridge, REG_SZ, a comma-separated list of "bb:dd.f" bridges
+ * that replaces record 21 section 6.3's discovery as the domain's whole
+ * tunnel-port set. No INF writes it: its absence is meaningful (record 21
+ * section 8), so absent and empty both mean no override. Held here
+ * unparsed; task 39-A.5 parses it. A string of this many characters or
+ * more (seven bridges and their separators fit) is refused, not
+ * truncated.
  */
-#define CM_TUNNEL_BRIDGE_CHARS 16
+#define CM_TUNNEL_BRIDGE_CHARS 64
 
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */

@@ -1492,6 +1492,67 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the UAS pair was removed:`n" + $r.Output)
 
+        # --- the connection manager's three files (roadmap-usb4.md 39-A.1) --
+        #
+        # Gated in place by check-cm-inf.ps1 where present, carried into the
+        # asset, and all three or none: a directory missing any one of them
+        # is refused. Not required in this mode (no version before 3.0.0.0
+        # has them).
+        Write-Step "the upload set gates the connection manager's three files, all or none"
+        $cmFiles = @{
+            "xhcicm.inf"  = (Join-Path $repo "src\cm\xhcicm.inf")
+            "xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
+        }
+        $putCm = {
+            foreach ($fl in @("release", "debug")) {
+                foreach ($n in $cmFiles.Keys) { Copy-Item -LiteralPath $cmFiles[$n] -Destination (Join-Path $pubRoot "$fl\$n") -Force }
+                [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhcicm.sys"),
+                    [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $fl flavour"))
+            }
+        }
+        & $putCm
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the connection manager present:`n" + $r.Output)
+        Assert-True ($r.Output -match "carries the connection manager's xhcicmf\.inf") `
+            ("expected the connection manager's INFs to be gated by their own gate. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "xhcicmf.inf")) {
+                Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
+                    "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
+            }
+        }
+        foreach ($drop in @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")) {
+            Remove-Item -LiteralPath (Join-Path $pubRoot "release\$drop") -Force
+            if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+            if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+            $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                                   "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+            Assert-True ($r.ExitCode -ne 0) "a published directory missing $drop of the connection manager was assembled into the asset."
+            Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around an incomplete connection manager ($drop missing)."
+            & $putCm
+        }
+        $cmBad = [System.IO.File]::ReadAllText($cmFiles["xhcicmf.inf"]).Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"')
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\xhcicmf.inf"), [System.Text.Encoding]::ASCII.GetBytes($cmBad))
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published filter INF Windows 98 would read was assembled into the asset."
+        Assert-True ($r.Output -match "check-cm-inf") ("expected the refusal to name the connection manager's INF gate. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "xhcicmf.inf")) {
+                Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\$name") -Force
+            }
+        }
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the connection manager was removed:`n" + $r.Output)
+
         # --- txtsetup.oem (roadmap task 33.3) --------------------------------
         #
         # Gated in place against the INF beside it where present, carried into

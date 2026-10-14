@@ -25,6 +25,7 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 200,   50,   5000,        CM_RULE_CLAMP  }, /* XhciCmPollIdleMs       */
     { 5000,  1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmCmdTimeoutMs     */
     { 10000, 1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmApproveTimeoutMs */
+    { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmSafeEject        */
     { 0,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }  /* XhciLogVerbosity       */
 };
 

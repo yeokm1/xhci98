@@ -26,8 +26,8 @@ DriverVer=10/14/2026,2.4.0.0
 %Mfg%=CmFilterModels,NTamd64,NTamd64.6.0
 
 [CmFilterModels.NTamd64]
-; Thunderbolt switch ports (Linux drivers/thunderbolt/nhi.h's *_BRIDGE
-; ids). 15C0 has been read by this project; every other line is untested.
+; Record 21 section 3.3's list. The discrete controllers' switch ports;
+; 15C0 has been read by this project, every other line is untested.
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_156B&CC_0604
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_156D&CC_0604
@@ -37,12 +37,35 @@ DriverVer=10/14/2026,2.4.0.0
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15DA&CC_0604
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15E7&CC_0604
 %TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15EA&CC_0604
-; PLACEHOLDER: the integrated controllers' (Ice Lake and later) tunnel
-; root ports, once record 21 settles how they are found.
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_1133&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_1136&CC_0604
+; The integrated controllers' tunnel root ports (Ice Lake to Raptor Lake),
+; untested; the filter acts only on ports the NHI verifies and assigns.
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A1D&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A1F&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A21&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_8A23&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A23&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A25&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A27&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A29&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A2B&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A2D&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A2F&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_9A31&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_466E&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_463F&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_462F&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_461F&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_A76E&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_A71F&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_A72F&CC_0604
+; PLACEHOLDER: the emulator's stand-in tunnel bridges, if they need an id
+; of their own (task 39-0.7's reading); every line must carry &CC_0604.
 
 [CmFilterModels.NTamd64.6.0]
-; Thunderbolt switch ports (Linux drivers/thunderbolt/nhi.h's *_BRIDGE
-; ids). 15C0 has been read by this project; every other line is untested.
+; Record 21 section 3.3's list. The discrete controllers' switch ports;
+; 15C0 has been read by this project, every other line is untested.
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15C0&CC_0604
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156B&CC_0604
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156D&CC_0604
@@ -52,8 +75,31 @@ DriverVer=10/14/2026,2.4.0.0
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15DA&CC_0604
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15E7&CC_0604
 %TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15EA&CC_0604
-; PLACEHOLDER: the integrated controllers' (Ice Lake and later) tunnel
-; root ports, once record 21 settles how they are found.
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1136&CC_0604
+; The integrated controllers' tunnel root ports (Ice Lake to Raptor Lake),
+; untested; the filter acts only on ports the NHI verifies and assigns.
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A1D&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A1F&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A21&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A23&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A25&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A27&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A29&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A2B&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A2D&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A2F&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_9A31&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_466E&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_463F&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_462F&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_461F&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A76E&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A71F&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_A72F&CC_0604
+; PLACEHOLDER: the emulator's stand-in tunnel bridges, if they need an id
+; of their own (task 39-0.7's reading); every line must carry &CC_0604.
 
 [SourceDisksNames]
 1=%DiskName%,xhcicm.sys,,

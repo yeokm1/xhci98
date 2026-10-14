@@ -73,6 +73,7 @@ static VOID cmNhiStart(PCM_NHI nhi)
               nhi->Values.Value[CM_VAL_CMD_TIMEOUT_MS]);
     CmLogNote(nhi, "cm.approve.timeout.ms",
               nhi->Values.Value[CM_VAL_APPROVE_TIMEOUT_MS]);
+    CmLogNote(nhi, "cm.safe.eject", nhi->Values.Value[CM_VAL_SAFE_EJECT]);
     CmLogNote(nhi, "cm.bridge.override", nhi->Values.TunnelBridgeChars);
     CmLogNote(nhi, "cm.bridge.refused", nhi->Values.TunnelBridgeRefused);
     nhi->Inert = CmStartDecision(nhi->Values.Value[CM_VAL_MODE], nhi->Profile,

@@ -8,7 +8,8 @@
  *
  * The rules each value is held to are cm_vals.c's; this file only fetches.
  * A value absent, unreadable or of another type is "not found" and its
- * default stands, which is also what the written default reads as.
+ * default stands, which is also what the written default reads as. The
+ * one value no INF writes, XhciCmTunnelBridge, is read from the same key.
  *
  * IRQL: PASSIVE_LEVEL, in the system thread PnP's start runs in, as
  * IoOpenDeviceRegistryKey needs.
@@ -23,9 +24,11 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmPollIdleMs",
     L"XhciCmCmdTimeoutMs",
     L"XhciCmApproveTimeoutMs",
+    L"XhciCmSafeEject",
     L"XhciLogVerbosity"
 };
 
+/* Not written by any INF (record 21 section 8): absent is no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
 
 typedef struct _CM_TAKE {

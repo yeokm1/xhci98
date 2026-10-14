@@ -152,6 +152,7 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_POLL_IDLE_MS], 200, "XhciCmPollIdleMs defaults to 200");
     CHECK_EQ(v.Value[CM_VAL_CMD_TIMEOUT_MS], 5000, "XhciCmCmdTimeoutMs defaults to 5000");
     CHECK_EQ(v.Value[CM_VAL_APPROVE_TIMEOUT_MS], 10000, "XhciCmApproveTimeoutMs defaults to 10000");
+    CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 1, "XhciCmSafeEject defaults to 1 (D10)");
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 0, "XhciLogVerbosity defaults to 0");
     CHECK_EQ(v.Found | v.Refused | v.Clamped, 0, "nothing found yet");
     CHECK_EQ(v.TunnelBridgeChars, 0, "no bridge override");
@@ -174,6 +175,11 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_APPROVE], 0, "approve 0 is taken");
     CmValuesTake(&v, CM_VAL_APPROVE, 0, 0);
     CHECK_EQ(v.Value[CM_VAL_APPROVE], 1, "absent is the default");
+
+    CmValuesTake(&v, CM_VAL_SAFE_EJECT, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 0, "safe eject 0 is taken");
+    CmValuesTake(&v, CM_VAL_SAFE_EJECT, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 1, "safe eject 2 is refused");
 
     CmValuesTake(&v, CM_VAL_POLL_IDLE_MS, 1, 10);
     CHECK_EQ(v.Value[CM_VAL_POLL_IDLE_MS], 50, "the idle poll is held to 50 ms");

@@ -1,9 +1,11 @@
 /*
  * cm_filt.c - the tunnel bridge's upper filter (record 21 section 3.2,
  * role 2), NT targets only. It sits above the PDO pci.sys made for each
- * port of the Thunderbolt switch that xhcicmf.inf names and does nothing
- * to what it sees: every IRP goes down unchanged, and its own work is to
- * attach, and to detach and delete itself on removal.
+ * Thunderbolt switch port or tunnel root port that xhcicmf.inf names and
+ * does nothing to what it sees: every IRP goes down unchanged (a
+ * device-usage notification with the power flags mimicked, as a filter
+ * must), and its own work is to attach, and to detach and delete itself
+ * on removal.
  *
  * Task 39-A.5 adds what it exists for: the registration list entry
  * published after its start has completed below it, withdrawn on stop,
@@ -50,13 +52,48 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     return STATUS_SUCCESS;
 }
 
+/*
+ * A device-usage notification (paging, hibernation or dump file on a
+ * device below this bridge) changes the power flags of the stack. A filter
+ * mimics the device below it: DO_POWER_PAGABLE set on the way down where
+ * nothing above is non-pageable, cleared on the way up where the device
+ * below cleared it (the WDM contract for IRP_MN_DEVICE_USAGE_NOTIFICATION).
+ * IRQL: <= DISPATCH_LEVEL (a completion routine).
+ */
+static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
+                                  PVOID context)
+{
+    PCM_FILTER filter;
+
+    UNREFERENCED_PARAMETER(context);
+    filter = (PCM_FILTER)device->DeviceExtension;
+    if (irp->PendingReturned) {
+        IoMarkIrpPending(irp);
+    }
+    if ((filter->Common.Lower->Flags & DO_POWER_PAGABLE) == 0) {
+        device->Flags &= ~DO_POWER_PAGABLE;
+    }
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
+    PDEVICE_OBJECT self;
     NTSTATUS status;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     switch (stack->MinorFunction) {
+    case IRP_MN_DEVICE_USAGE_NOTIFICATION:
+        self = filter->Common.Self;
+        if (self->AttachedDevice == NULL ||
+            (self->AttachedDevice->Flags & DO_POWER_PAGABLE) != 0) {
+            self->Flags |= DO_POWER_PAGABLE;
+        }
+        IoCopyCurrentIrpStackLocationToNext(irp);
+        CM_SET_COMPLETION_ALWAYS(irp, cmFilterUsageDone, NULL);
+        return IoCallDriver(filter->Common.Lower, irp);
+
     case IRP_MN_START_DEVICE:
         status = CmForwardSync(&filter->Common, irp);
         if (NT_SUCCESS(status)) {
