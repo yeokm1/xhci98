@@ -1331,9 +1331,12 @@ in this order, each recorded per member as its source:
 
 1. **The override**, `XhciCmTunnelBridge` (section 8), read from the NHI's
    own device key, so per domain: a list of `bb:dd.f` entries. When
-   present it is the whole set; a listed address that is not a PCI-to-PCI
-   bridge is logged and dropped, and an address another domain's override
-   also names is ambiguous and dropped from both. On Windows 98 the
+   present it is the whole set; a listed address where no function
+   answers, that is not a PCI-to-PCI bridge, or that repeats an entry is
+   logged and dropped, and an address another domain's override also
+   names is ambiguous and dropped from both. A listed address that cannot
+   be read is never dropped: it makes the result **INCOMPLETE** (below).
+   On Windows 98 the
    override is all a port needs, since CONFIGMG reaches any devnode. On NT
    a port is re-enumerated and its children marked only through the
    filter of section 3.2, which attaches only where `xhcicmf.inf` matched
@@ -1361,8 +1364,10 @@ in this order, each recorded per member as its source:
    that is decided from the hardware, not from which driver instances
    happen to be running: the NHI reads every function of its root bus
    (`HalGetBusData`) and counts the NHIs of its own family present,
-   started, disabled or failed alike. With one, its set is every listed
-   port present. With two (Ice Lake to Meteor Lake carry two NHIs,
+   started, disabled or failed alike, by the family's NHI id list. That
+   list must hold this NHI's own id: a list that does not proves nothing
+   about the bus, and the source then takes nothing. With one NHI of the
+   family, and it this one, its set is every listed port present. With two (Ice Lake to Meteor Lake carry two NHIs,
    Linux's `*_NHI0` and `*_NHI1`) and no source saying which ports are
    whose - Linux takes that from ACPI and checks that a port references
    the particular NHI (`acpi.c`, `tb_acpi_add_link`) - the listed ports
@@ -1372,7 +1377,16 @@ in this order, each recorded per member as its source:
 4. **The emulator**: a sibling of the NHI's parent, or of the NHI on bus 0,
    that carries an SHPC capability (id `0x0C`; `usb4-emu`'s
    `usb4-tb3-tunnel-bridge`, and its `usb4-generic` layout with the host and
-   the bridge siblings on bus 0). Source: "SHPC".
+   the bridge siblings on bus 0). Source: "SHPC". Finding the capability
+   needs reads alone; reading a slot's presence (section 6.5) needs a
+   byte write of the capability's DWORD Select into the bridge's
+   configuration space, and is made only where the driver half has
+   qualified a byte writer for a bridge's configuration space on that
+   target (`HalSetBusDataByOffset` writes to a bridge header carry
+   restrictions Microsoft documents, and Windows 98's HAL exports are
+   fewer). Each such read puts back the DWORD Select value it found, and
+   one that cannot is a failed reading; with no qualified
+   writer an SHPC member gives no presence reading.
 
 **Exclusive ownership.** Before any member is activated, each domain
 publishes its claimed ports, with their sources, in the registration
@@ -1389,13 +1403,37 @@ With no override and an empty set, the driver logs the bridges it saw and
 runs with re-enumeration disabled (section 6.4); it never falls back to an
 arbitrary bridge.
 
+**INCOMPLETE.** A discovery that could not read every function it had to
+- an override entry, or any function on a bus the walk searches, whose
+configuration access failed or whose capability list could not be walked
+- ends **INCOMPLETE with an empty set**, never with a set that might lack
+a port, and is tried again; an unreadable override entry is never treated
+as dropped. Until a discovery completes the domain runs as with an empty
+set. The other outcomes beside a set are: the override naming no bridge,
+no candidate at all, hot-plug bridges seen but none a source names (the
+override is the way), listed root ports ambiguous between NHIs, and more
+members than the set has room for (empty, logged).
+
+The layouts the walk and the readings decode are the public
+specifications', cited by section in `tbt_topo.h`: the PCI Local Bus
+Specification 3.0 sections 6.1 (the common header) and 6.7 (the
+capabilities list), the PCI-to-PCI Bridge Architecture Specification 1.2
+section 3.2 (the type 1 header's bus numbers), the PCI Express Base
+Specification 4.0 section 7.5.3 (the PCI Express Capability: Link
+Capabilities, Link Status, Slot Capabilities and Slot Status) and the PCI
+Standard Hot-Plug Controller and Subsystem Specification 1.0 section 4.2
+(the SHPC capability). None of the four is kept in `docs/references/`, and
+`docs/references/README.md` has no row for them: they are cited by
+section only.
+
 The walk is a pure routine `tbt_topo.c` over caller-supplied config
 accessors (`HalGetBusData` reads of PCI headers in the driver, from the
 NHI's own location by `IoGetDeviceProperty` `DevicePropertyBusNumber` and
 `DevicePropertyAddress`), to be host-tested against the two captured topologies
 - the P14s (`03:00.0` upstream, `04:00.0` to the NHI on bus 5, `04:01.0`
 the tunnel, `04:02.0` the xHCI; `ICM-PROTOCOL` section 1 and the Windows 98
-`PCIDUMP.TXT` matrix) and the emulator's i440FX stand-in (`WIN98-TEST`, "P14s
+`PCIDUMP.TXT` matrix, whose `OFF_OFF` and `OFF_ON` captures are reproduced
+unedited in `test\tbt_topo_p14s.h`, `legal-provenance.md` section 4) and the emulator's i440FX stand-in (`WIN98-TEST`, "P14s
 BIOS matrix": root bridge at `00:06.0`, switch ports `01:01.0`, `02:00.0`,
 `02:01.0`, `02:02.0`) - and against synthetic ones: a two-port discrete
 switch, an integrated layout with listed and unlisted hot-plug root ports,
@@ -1405,13 +1443,28 @@ claim, a foreign hot-plug bridge beside the switch, and the override.
 
 **A set of more than one.** Which member a device's tunnel uses is not
 read (the fabric mapping above is the firmware's), so every tunnel change
-acts on the whole set: the tunnel-up poll of section 6.5 ends when any
-member's reading turns from absent to present, or after 2 s, and every
-member is re-enumerated - an invalidation or a `Reenumerate_DevNode` of a
-bus that did not change is harmless; the tunnel-down reading is taken on
-every member; and the `nvme98` statement, which needs the one port its
+acts on the whole set. The tunnel-up poll of section 6.5 takes each
+member's reading when it starts and ends only when a port actually comes
+up - a member that read absent, mixed or gone then reads present - or
+when every member reads present, or after 2 s; a member already up when
+the poll started never ends it, so an existing tunnel on another port
+does not cut the settling window short. The tunnel-down poll ends only
+when every member reads down (or down and one gone): the departed
+device's port is not known, so the reading must be affirmative on all of
+them; with another device still tunnelled it runs to its 2 s and the
+reading counts as not clear. Every member is re-enumerated either way -
+an invalidation or a `Reenumerate_DevNode` of a bus that did not change
+is harmless - and the `nvme98` statement, which needs the one port its
 condition is read on, is not sent while the set has more than one member
 (section 7.2).
+
+Four of the choices above were taken by the orchestrator on 2026-10-15
+with task `39-A.5`'s pure half, for the owner to confirm: the INCOMPLETE
+outcome (an unread function or override entry gives an empty set, never a
+partial one); source 3 taking nothing unless the family's NHI list holds
+this NHI's own id; the set polls (up only on a port that actually came
+up, down only when every member reads down); and the SHPC presence read
+only with a qualified byte writer.
 
 **Resume ordering.** Linux uses the ACPI links above to resume the tunnel
 ports only after the NHI, so the tunnels are back before the devices
@@ -2076,6 +2129,13 @@ The vehicle is `usb4-emu`'s QEMU fork and `scripts/run-win98.sh` on the
 - `-trace 'usb4_*' -D <VM_DIR>\usb4-trace.log` on every leg; the trace
   decodes every ring 0 frame both ways and is the oracle for "what the
   client sent".
+- One emulator observation, modelled only and not yet read in a guest:
+  on the q35 profile `usb4-emu`'s `usb4-tb3-dsp` downstream ports keep
+  QEMU's default `hotplug=on`, so every one of them is Hot-Plug Capable
+  and section 6.3's switch source puts the port carrying the dock's xHCI
+  in the set beside the tunnel port. A set of two there is section 6.3's "set of more
+  than one", harmless but withholding the `nvme98` statement; the q35
+  legs read the set the guest's log names and confirm it.
 
 The Windows 98 SE legs (`39-V.1`), each from a fresh overlay:
 
