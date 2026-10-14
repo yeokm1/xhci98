@@ -2287,6 +2287,15 @@ $gateOut
         # all three, so a reconstruction never publishes the NHI's installer
         # without the filter's, or an INF without its binary.
         $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        # The filter INF anywhere but nt\ is refused whatever else is there:
+        # Windows 98 SE and ME read a $Windows NT$ INF beside the one they are
+        # pointed at (runs/run-39.md, 39-0.4; the gate's CM-NO9XBRIDGE).
+        foreach ($item in @(Get-ChildItem -LiteralPath $uploadFlavorDir -Recurse -Force -File -Filter "xhcicmf.inf")) {
+            $rel = $item.FullName.Substring($uploadFlavorDir.TrimEnd('\').Length + 1)
+            if ($rel -ine "nt\xhcicmf.inf") {
+                throw "the assembled upload set's $f\ directory holds $rel; the connection manager's filter INF is published in nt\ alone, out of Windows 98's and ME's way."
+            }
+        }
         $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
         if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
             $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })

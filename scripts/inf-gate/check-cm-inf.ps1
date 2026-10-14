@@ -464,7 +464,8 @@ function Test-CmInfText {
             else {
                 $own = @(& $checkCopy ((& $directive $nt "CopyFiles") -join ',') "[$name$ntSuffix]")
                 if ($own -notcontains $binary) { & $add $pathRule "[$name$ntSuffix] does not copy $binary." }
-                if (@(& $directive $nt "Include") -notcontains "machine.inf" -or @(& $directive $nt "Needs").Count -ne 1) { & $add "CM-FILTER" "[$name$ntSuffix] must include and need machine.inf's PCI-to-PCI bridge section, so pci.sys stays the bridge's function driver." }
+                $needs = @(& $directive $nt "Needs")
+                if (@(& $directive $nt "Include") -notcontains "machine.inf" -or $needs.Count -ne 1 -or $needs[0] -ne "PCI_DRV") { & $add "CM-FILTER" "[$name$ntSuffix] must include machine.inf and need PCI_DRV alone (the 39-0.4 shape), so pci.sys stays the port's service." }
                 if (@(& $regLines $nt "[$name$ntSuffix]").Count -ne 0) { & $add "CM-FILTER" "[$name$ntSuffix] writes registry values; the filter reads none." }
             }
             $shw = & $get "$name$ntSuffix.HW"
@@ -473,12 +474,14 @@ function Test-CmInfText {
                 $hw = @(& $regLines $shw "[$name$ntSuffix.HW]")
                 $good = @($hw | Where-Object { $_.Count -eq 5 -and $_[0] -ieq "HKR" -and $_[1] -eq "" -and $_[2] -ieq "UpperFilters" -and $_[3] -ieq "0x00010008" -and $_[4] -ieq ('"' + $service + '"') })
                 if ($good.Count -ne 1 -or $hw.Count -ne 1) { & $add "CM-FILTER" "[$name$ntSuffix.HW] must write HKR,,UpperFilters,0x00010008,`"$service`" and nothing else." }
-                if (@(& $directive $shw "Include") -notcontains "machine.inf" -or @(& $directive $shw "Needs") -notcontains "PCI_DRV.HW") { & $add "CM-FILTER" "[$name$ntSuffix.HW] must include machine.inf and need PCI_DRV.HW (the 39-0.4 shape), so the port's own hardware-key values stay." }
+                $needs = @(& $directive $shw "Needs")
+                if (@(& $directive $shw "Include") -notcontains "machine.inf" -or $needs.Count -ne 1 -or $needs[0] -ne "PCI_DRV.HW") { & $add "CM-FILTER" "[$name$ntSuffix.HW] must include machine.inf and need PCI_DRV.HW alone (the 39-0.4 shape), so the port's own hardware-key values stay." }
                 foreach ($d in @($shw.Lines | Where-Object { @("AddReg", "Include", "Needs") -notcontains $_.Key })) { & $add "CM-FILTER" "[$name$ntSuffix.HW] carries '$($d.Raw)'." }
             }
             if ($null -eq $ssv) { & $add $pathRule "no [$name$ntSuffix.Services]." }
             else {
-                if (@(& $directive $ssv "Include") -notcontains "machine.inf" -or @(& $directive $ssv "Needs").Count -ne 1) { & $add "CM-FILTER" "[$name$ntSuffix.Services] must include and need machine.inf's bridge services section, or the bridge loses pci.sys." }
+                $needs = @(& $directive $ssv "Needs")
+                if (@(& $directive $ssv "Include") -notcontains "machine.inf" -or $needs.Count -ne 1 -or $needs[0] -ne "PCI_DRV.Services") { & $add "CM-FILTER" "[$name$ntSuffix.Services] must include machine.inf and need PCI_DRV.Services alone, or the port loses pci.sys as its service." }
                 & $checkService $ssv "[$name$ntSuffix.Services]" $false
             }
             continue
@@ -533,12 +536,25 @@ function Test-CmInfText {
     $sdf = & $get "SourceDisksFiles"
     $listed = @()
     if ($null -eq $sdf) { & $add "BOTH-SDF" "no [SourceDisksFiles] section." }
-    else { $listed = @($sdf.Lines | ForEach-Object { $_.Key.ToLowerInvariant() }) }
+    else {
+        $listed = @($sdf.Lines | ForEach-Object { $_.Key.ToLowerInvariant() })
+        # The whole source mapping: disk 1, no per-file subdirectory, no size
+        # field - where the file is, is the disk's own path.
+        foreach ($l in $sdf.Lines) {
+            if (($l.Value -replace '\s', '') -ne "1") { & $add "BOTH-SDF" "[SourceDisksFiles] maps '$($l.Key)' to '$($l.Value)'; every file is on disk 1 with no subdirectory." }
+        }
+    }
+    # A decorated source section would override the plain one on its platform.
+    foreach ($s in $sections) {
+        if ($s.Name -match '(?i)^SourceDisks(Names|Files)\.') { & $add "BOTH-SDF" "[$($s.Name)]: a decorated source section overrides the one this gate reads; there is none." }
+    }
     $sdn = & $get "SourceDisksNames"
     if ($null -eq $sdn) { & $add "BOTH-SDF" "no [SourceDisksNames] section." }
     elseif ($Kind -eq "filter") {
         $paths = @($sdn.Lines | ForEach-Object { $f = @($_.Value -split ','); if ($f.Count -ge 4) { $f[3].Trim() } else { "" } })
-        if ($sdn.Lines.Count -ne 1 -or $paths[0] -ne "..") { & $add "CM-FILTER" "[SourceDisksNames] must name one disk whose path is '..': the package stages this INF in nt\ and xhcicm.sys in the flavour directory above it." }
+        if ($sdn.Lines.Count -ne 1 -or $sdn.Lines[0].Key -ne "1" -or $paths[0] -ne "..") { & $add "CM-FILTER" "[SourceDisksNames] must name one disk, 1, whose path is '..': the package stages this INF in nt\ and xhcicm.sys in the flavour directory above it." }
+    } elseif ($sdn.Lines.Count -ne 1 -or $sdn.Lines[0].Key -ne "1") {
+        & $add "BOTH-SDF" "[SourceDisksNames] must name one disk, 1."
     }
     foreach ($want in $sdfWant) {
         if ($listed -notcontains $want) { & $add "BOTH-SDF" "[SourceDisksFiles] does not list $want." }
@@ -710,6 +726,12 @@ if ($SelfTest) {
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("PCI\VEN_8086&DEV_5783&CC_0604", "PCI\VEN_8086&DEV_5786&CC_0604") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("PCI\VEN_8086&DEV_15EA&CC_0604", "PCI\VEN_8086&DEV_15EF&CC_0604") },
                     @{ Rule = "CM-FILTER";      Text = $t.Replace("1=%DiskName%,xhcicm.sys,,..", "1=%DiskName%,xhcicm.sys,,") },
+                    @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.sys=1", "xhcicm.sys=2") },
+                    @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.sys=1", "xhcicm.sys=1,missing") },
+                    @{ Rule = "BOTH-SDF";       Text = $t.Replace("[SourceDisksFiles]", "[SourceDisksFiles.x86]`r`nxhcicm.sys=1`r`n`r`n[SourceDisksFiles]") },
+                    @{ Rule = "CM-FILTER";      Text = $t.Replace("[CmF.Dev.NTx86]`r`nInclude=machine.inf`r`nNeeds=PCI_DRV`r`n", "[CmF.Dev.NTx86]`r`nInclude=machine.inf`r`nNeeds=MISSING`r`n") },
+                    @{ Rule = "CM-FILTER";      Text = $t.Replace("Needs=PCI_DRV.Services", "Needs=MISSING.Services") },
+                    @{ Rule = "CM-FILTER";      Text = $t.Replace("Needs=PCI_DRV.HW", "Needs=PCI_DRV.HW`r`nNeeds=OTHER.HW") },
                     @{ Rule = "CM-FILTER";      Text = $t.Replace("[CmF.Dev.NTx86.HW]`r`nInclude=machine.inf`r`nNeeds=PCI_DRV.HW", "[CmF.Dev.NTx86.HW]") },
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmF.Dev.NTx86.HW]", "[CmF.Dev.HW]`r`nAddReg=CmFilter.HW.AddReg`r`n`r`n[CmF.Dev.NTx86.HW]") },
                     @{ Rule = "CM-FILTER";      Text = $t.Replace('UpperFilters,0x00010008,"xhcicm"', 'LowerFilters,0x00010008,"xhcicm"') },

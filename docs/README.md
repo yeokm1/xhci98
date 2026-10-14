@@ -70,7 +70,7 @@ source comments, scripts, and other docs use these same locations.
   work's virtual-machine vehicle on `usb4-emu` (task 39-0.7: the launch lines,
   the `scripts\usb4` launcher, the device trees and ids each guest sees) and the
   NT filter's install route (task 39-0.4, decision D2: the device-specific route,
-  and the reading that Windows 98 SE and ME read ` NT$` INFs).
+  and the reading that Windows 98 SE and ME read `$Windows NT$` INFs).
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against

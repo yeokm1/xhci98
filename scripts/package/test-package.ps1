@@ -1560,6 +1560,16 @@ try {
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\nt") -Recurse -Force
             if (Test-Path -LiteralPath (Join-Path $pubRoot "$fl\xhcicmf.inf")) { Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhcicmf.inf") -Force }
         }
+        # A filter INF alone, beside where xhcicm.inf would be, with none of
+        # the trio: refused all the same.
+        Copy-Item -LiteralPath $cmFiles["nt\xhcicmf.inf"] -Destination (Join-Path $pubRoot "release\xhcicmf.inf") -Force
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a lone filter INF outside nt\ was assembled into the asset."
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a lone filter INF outside nt\."
+        Remove-Item -LiteralPath (Join-Path $pubRoot "release\xhcicmf.inf") -Force
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
         if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
