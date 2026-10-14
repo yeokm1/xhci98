@@ -620,6 +620,26 @@ The miniport's upward interface, the undocumented
 and its bit-exact companion `docs/usb-xhci-info/usbport-miniport-abi.md`;
 they describe the `1.2.0.0` sources and bind nothing in `src/`.
 
+The Thunderbolt 3 and USB4 work (`docs/contributing/roadmap-usb4.md`,
+design record 21, `src\cm\`) has its own references:
+
+- `usb4-emu`'s `docs/ICM-PROTOCOL.md` is the contract, cited by section,
+  with the P14s Gen 1 captures behind each [obs].
+- The USB4 Specification 2.0 and Connection Manager Guide 2.0
+  (`docs/references/README.md`) are the generic host interface.
+- `usb4-emu`'s `tools/usb4cm` (MIT) is lifted with its notices kept
+  (`legal-provenance.md` section 2a).
+- Since 2026-10-15 (owner), Linux's `drivers/thunderbolt` and FreeBSD's
+  `sys/dev/thunderbolt` are interface documentation for this work under
+  the mirror rule here. Device ids, message codes and layouts, register
+  offsets, constants, sequences and controller quirks are taken and cited
+  by file and symbol. No function body of either tree is copied into
+  `src/` or the docs.
+
+The mirrors and their pinned commits are in `external/README.md`;
+`legal-provenance.md` section 3 records the rule and section 4 the fact
+classes taken.
+
 ---
 
 ## Third-Party Material and Provenance
