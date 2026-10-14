@@ -2336,18 +2336,20 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
     h = &cm->HostRouter;
     d = &p->Dev;
     *next = TBT_U4_FAILED;
-    for (a = p->Lane0; a <= p->Lane0 + 1; a++) {
-        rc = tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4, &v[0]);
-        if (rc == TBT_OK && (v[0] & TBT_ADP4_LOCK) != 0) {
-            rc = tbtU4Wr(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4,
-                         v[0] & ~TBT_ADP4_LOCK);
-        }
-        if (rc != TBT_OK && a == p->Lane0) {
-            p->Why = TBT_U4_WHY_ENUMERATION;
-            return rc;
-        }
+    /* Lane 0 only: writing Lock in a lane 1 adapter is undefined
+     * behaviour (Spec 8.2.2.1, ADP_CS_4). */
+    a = p->Lane0;
+    rc = tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4, &v[0]);
+    if (rc == TBT_OK && (v[0] & TBT_ADP4_LOCK) != 0) {
+        rc = tbtU4Wr(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4,
+                     v[0] & ~TBT_ADP4_LOCK);
+    }
+    if (rc != TBT_OK) {
+        p->Why = TBT_U4_WHY_ENUMERATION;
+        return rc;
     }
     p->Unlocked = TRUE;
+    p->RelockSeen = FALSE;
 
     tbtU4Zero(d, sizeof(*d));
     d->Route.Hi = 0;
@@ -3410,6 +3412,8 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
     p->AnchorValid = FALSE;
     p->UnplugPending = FALSE;
     p->LostKnown = FALSE;
+    p->RelockSeen = FALSE;
+    p->HostCloseOwed = FALSE;
     p->State = TBT_U4_EMPTY;
     p->Why = TBT_U4_WHY_NONE;
     p->CheckPending = TRUE;
@@ -3502,6 +3506,9 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls)
     }
     if (p->Unlocked && (cs4 & TBT_ADP4_LOCK) != 0) {
         return TRUE;
+    }
+    if (p->RelockSeen && !p->LostKnown) {
+        return TRUE;    /* seen by a resume that could not finish */
     }
     if (!d->Present) {
         return FALSE;
@@ -3874,6 +3881,16 @@ static BOOLEAN tbtU4PcieLive(PTBT_U4CM cm, PTBT_U4_PORT p)
             s == TBT_LTSSM_RECOVERY_IDLE) {
             p->Transitional = FALSE;
             return TRUE;
+        }
+        /* Transitional: one deadline on the clock from the first such
+         * sample, an earlier check's included, recorded at once and
+         * checked at every sample. */
+        if (!p->Transitional) {
+            p->Transitional = TRUE;
+            p->TransitionalSinceUs = tbtU4Now(cm);
+        }
+        if (tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US) {
+            return FALSE;
         }
         if (TbtWaitDone(&w, cm->Host)) {
             /* Transitional since the wait began at the latest. Only the
@@ -5153,6 +5170,16 @@ VOID TbtU4Poll(PTBT_U4CM cm)
         if (p->State == TBT_U4_EMPTY && p->HostResidual) {
             (void)tbtU4ResidualClear(cm, p);
         }
+        if (p->HostCloseOwed && p->State == TBT_U4_HELD && tbtU4ResidualClear(cm, p)) {
+            /* A resume's host closure, interrupted, finished here: the
+             * tunnels are down; the hold itself stays. */
+            p->HostCloseOwed = FALSE;
+            p->Usb3.Up = FALSE;
+            p->Pcie.Up = FALSE;
+            if (p->BwReleaseOwed && p->Usb3Down != 0 && !p->BwQuarantine) {
+                (void)tbtU4ReleaseBw(cm, p);
+            }
+        }
         tbtU4Check(cm, p);
     }
     tbtU4CheckLinks(cm);
@@ -5270,13 +5297,16 @@ static BOOLEAN tbtU4HostClose(PTBT_U4CM cm, PTBT_U4_PORT p)
     BOOLEAN ok;
 
     h = &cm->HostRouter;
+    p->HostCloseOwed = TRUE;
     ok = tbtU4HostSweep(cm, p, TRUE, TRUE);
     if (!ok) {
-        p->HostResidual = TRUE;
+        p->HostResidual = TRUE;     /* retried at the idle tick, HELD or not */
     } else {
-        /* Proven closed on the host: no USB3 tunnel is up whatever else
-         * fails below, so an owed release may be retried. */
+        /* Proven closed on the host: no tunnel is up whatever else fails
+         * below, so an owed release may be retried. */
+        p->HostCloseOwed = FALSE;
         p->Usb3.Up = FALSE;
+        p->Pcie.Up = FALSE;
     }
     if (ok && p->PcieDown != 0 && h->Adp[p->PcieDown].CapAdp != 0) {
         ok = tbtU4WaitDetect(cm, NULL, 0, h, p->PcieDown, TBT_U4_DETECT_US);
@@ -5299,11 +5329,14 @@ static BOOLEAN tbtU4HostClose(PTBT_U4CM cm, PTBT_U4_PORT p)
 
 /*
  * The router behind a port after the sleep. Removal evidence is section
- * 7.1's (CLd, ERR_CONN, another identity); a router that lost power with
- * the domain reads TopologyID Valid clear under its own UUID, which is not
- * removal - and Lock, which a powered-down host port sets again, is no
- * evidence here: it is cleared, as section 6.4 step 2 does, so that the
- * router can be read at all.
+ * 7.1's (CLd, ERR_CONN, another identity, lane 0's Lock set again). A
+ * router that lost power with the domain reads TopologyID Valid clear
+ * under its own UUID: that is a lost configuration, not removal, and it
+ * explains a Lock set again too. Lane 0's Lock is cleared so that the
+ * router can be read at all (section 6.4 step 2, lane 0 only), after the
+ * observation is kept on the port (RelockSeen): with the router still
+ * configured it is a removal, and a classification interrupted after the
+ * clear still acts on it (tbtU4Evidence).
  */
 static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
@@ -5315,7 +5348,6 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
     ULONG u[4];
     ULONG a;
     ULONG cls;
-    BOOLEAN relocked;
     LONG rc;
     TBT_WAIT w;
 
@@ -5338,19 +5370,20 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
         tbtU4Pause(cm, &w);
     }
-    relocked = FALSE;
-    for (a = p->Lane0; a <= p->Lane0 + 1; a++) {
-        if (tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4, &cs4) != TBT_OK) {
+    /* Lane 0 only (Spec 8.2.2.1: Lock in a lane 1 adapter is not to be
+     * written). Seen set, it is kept on the port before it is cleared, so
+     * that a classification interrupted after this point never loses it. */
+    a = p->Lane0;
+    if (tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4, &cs4) != TBT_OK) {
+        return TBT_U4_RES_UNKNOWN;
+    }
+    if ((cs4 & TBT_ADP4_LOCK) != 0) {
+        p->RelockSeen = TRUE;
+        if (tbtU4Wr(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4,
+                    cs4 & ~TBT_ADP4_LOCK) != TBT_OK ||
+            tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4, &cs4) != TBT_OK ||
+            (cs4 & TBT_ADP4_LOCK) != 0) {
             return TBT_U4_RES_UNKNOWN;
-        }
-        if ((cs4 & TBT_ADP4_LOCK) != 0) {
-            relocked = TRUE;
-            if (tbtU4Wr(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4,
-                        cs4 & ~TBT_ADP4_LOCK) != TBT_OK ||
-                tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_4, &cs4) != TBT_OK ||
-                (cs4 & TBT_ADP4_LOCK) != 0) {
-                return TBT_U4_RES_UNKNOWN;
-            }
         }
     }
     p->Unlocked = TRUE;
@@ -5382,9 +5415,10 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
     }
     if ((v[3] & TBT_RTR3_V) == 0) {
+        p->RelockSeen = FALSE;  /* the lost configuration explains it */
         return TBT_U4_RES_LOST;
     }
-    if (relocked) {
+    if (p->RelockSeen) {
         /* Lock set again across the sleep is section 7.1's removal
          * evidence: with the router still configured it is not the lost
          * configuration above, so the connection is discharged as removed

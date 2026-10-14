@@ -532,6 +532,9 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         return;
     }
     if (addr == 4) {
+        if (t == 1 && (ad->Cs[FAB_CAP_LANE] & 0xFFUL) != FAB_CAP_PORT) {
+            f->Lane1LockWrites++;
+        }
         ad->Cs[4] = (old & ~0x800003FFUL) | (v & 0x800003FFUL);
         return;
     }

@@ -2746,6 +2746,111 @@ static void test_review5(void)
     (void)dev;
 }
 
+static int g_closeDev;
+static int g_closeLane;
+static int g_closeStage;
+
+/* After the device's header is read (the resume's classification), the
+ * first read of the host lane's entries (the host sweep) moves the clock
+ * past the budget. */
+static int closeHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)n;
+    (void)data;
+    if (g_closeStage == 0 && pdf == TBT_PDF_READ && router == g_closeDev &&
+        cs == TBT_CS_ROUTER && addr == 0) {
+        g_closeStage = 1;
+    } else if (g_closeStage == 1 && pdf == TBT_PDF_READ && router == 0 &&
+               cs == TBT_CS_PATH && adp == (unsigned long)g_closeLane) {
+        g_closeStage = 2;
+        f->NowUs += 1000000000UL;
+    }
+    return FAB_HOOK_GO;
+}
+
+static void test_review7(void)
+{
+    int dev;
+    LONG rc;
+    ULONG gen;
+    const TBT_U4_PORT *p;
+
+    /* Lock is never written in a lane 1 adapter (Spec 8.2.2.1). */
+    dev = setupMinimal(1, NULL);
+    CHECK_EQ(g_fab.Lane1LockWrites, 0, "connect: lane 1's ADP_CS_4 never written");
+
+    /* Only lane 1's Lock set across the sleep: no evidence, verified. */
+    (void)countActions(&g_cm, 0);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[0].Adp[fabPortLane0(&g_fab, 1) + 1].Cs[4] |= 0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "lane 1 Lock alone: verified");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "still UP");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "no removal");
+    CHECK_EQ(g_fab.Lane1LockWrites, 0, "resume: lane 1's ADP_CS_4 never written");
+
+    /* Lane 0's Lock seen and cleared, then the classification cut short:
+     * the evidence kept, acted on once reads work again. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    (void)countActions(&g_cm, 0);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[4] |= 0x80000000UL;
+    armSwallow(&g_fab, dev, TBT_CS_ROUTER, 0, 0, 0, 0, 0, 100000UL);
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "cut short: the failure path");
+    CHECK(p->RelockSeen, "the re-lock kept");
+    gen = p->Generation;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(p->Generation != gen, "acted on: torn down and connected afresh");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "one removal");
+
+    /* A resume's host closure cut short by the budget: finished at the
+     * idle ticks while the port stays HELD, the release with it. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    g_closeDev = dev;
+    g_closeLane = fabPortLane0(&g_fab, 1);
+    g_closeStage = 0;
+    g_fab.Hook = closeHook;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(g_closeStage, 2, "the budget spent inside the host sweep");
+    CHECK_EQ(rc, TBT_E_STATE, "cut short: the failure path");
+    CHECK(p->HostCloseOwed, "the closure owed");
+    gen = p->Generation;
+    poll(&g_cm, &g_fab, 3);
+    CHECK(!p->HostCloseOwed && !p->HostResidual, "finished at the idle ticks");
+    CHECK(!p->BwReleaseOwed, "the release with it");
+    CHECK(!p->Pcie.Up && !p->Usb3.Up, "its tunnels down");
+    CHECK(hostClean(&g_fab, 1), "the host side clean");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "still HELD");
+    CHECK_EQ(p->Generation, gen, "no reconnection");
+
+    /* Transitional since a tick before the sleep: the deadline runs from
+     * then; a recovery 2.5 s after the first sample is a loss. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    g_recoverAdp = fabPortPcie(&g_fab, 1);
+    g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 1 + 2;
+    poll(&g_cm, &g_fab, 1);
+    CHECK(p->Transitional, "seen transitional at a tick");
+    g_fab.Host.Sleep(g_fab.Host.Context, 1500);
+    TbtU4Suspend(&g_cm);
+    g_recoverAt = g_fab.NowUs + 1000000UL;
+    g_fab.Hook = recoverHook;
+    (void)TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 0;
+    CHECK(!p->Pcie.Up, "transitional across the sleep past 2 s: lost");
+    (void)dev;
+}
+
 int main(void)
 {
     test_cold_minimal();
@@ -2783,6 +2888,7 @@ int main(void)
     test_review3();
     test_review4();
     test_review5();
+    test_review7();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

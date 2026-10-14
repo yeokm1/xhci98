@@ -168,6 +168,8 @@ typedef struct FAB {
     unsigned long HpAcks;
     unsigned long Notifications;    /* error notifications sent */
     unsigned long WrCount;
+    unsigned long Lane1LockWrites;  /* ADP_CS_4 of a lane 1 adapter written:
+                                     * undefined behaviour (Spec 8.2.2.1) */
     int WrRouter[FAB_WRLOG];
     unsigned long WrCs[FAB_WRLOG];
     unsigned long WrAdp[FAB_WRLOG];

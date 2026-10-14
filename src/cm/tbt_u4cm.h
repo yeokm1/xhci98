@@ -262,6 +262,9 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN HostResidual;   /* host entries never read at a teardown: swept
                              * before the port connects again */
     BOOLEAN BwReleaseOwed;  /* a USB3 allocation not yet released: retried */
+    BOOLEAN RelockSeen;     /* lane 0's Lock found set again (and cleared):
+                             * removal evidence kept until it is acted on */
+    BOOLEAN HostCloseOwed;  /* a resume's host closure not yet proven */
     BOOLEAN LostKnown;      /* a resume found its configuration lost (TopologyID
                              * Valid clear): that alone is no new evidence */
     TBT_U4_ROUTER Dev;
