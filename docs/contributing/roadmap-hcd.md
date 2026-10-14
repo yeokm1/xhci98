@@ -859,12 +859,12 @@ the 0.96 floor change how controllers start; and it ends in a release.
 - [x] 38.5 a 32-bit Vista or 7 reinstall needs a restart, said in the documents. Done 2026-10-13 (run-38, "38.5"): an update through Have Disk asks for it on both
 - [x] 38.6 `portsw-on.bat` and `portsw-off.bat` print "RESTART WINDOWS" once. Done 2026-10-13 (run-38, "38.6")
 - [x] 38.7 the USB device interface off external hubs (issue 17 item 3). Done 2026-10-13 (`c4c2bab4`..`b113f3b4`; record 13 section 8.10; run-38, "38.7"): the stock reading on 2000, XP and 7, the legs on 2000, XP, XP x64 and 7 x64
-- [x] 38.8 the bus's own ids under `USB\` (`USB\XHCI98_ROOT_HUB`, `_HUB`, `_HUB30`, `_COMPOSITE`; issue 17 item 10) and the cleanup tool `XHCICLN.EXE` / `XHCICL64.EXE`. Done 2026-10-14 (record 13 section 10.13; merged `73d6a005`; run-38, "38.8"): a fresh install and an update over `2.3.1.0` on every target, the tool on every target, the controller's veto read on every NT target but XP x64. Owed after the cut: a High Speed and a USB 3 hub, 98 SE's chain of five hubs. Before the cut (38.final): XP x64's veto read, or NT 5.2 set to list only, or the owner's waiver
+- [x] 38.8 the bus's own ids under `USB\` (`USB\XHCI98_ROOT_HUB`, `_HUB`, `_HUB30`, `_COMPOSITE`; issue 17 item 10) and the cleanup tool `XHCICLN.EXE` / `XHCICL64.EXE`. Done 2026-10-14 (record 13 section 10.13; merged `73d6a005`; run-38, "38.8"): a fresh install and an update over `2.3.1.0` on every target, the tool on every target, the controller's veto read on every NT target, XP x64's with two project controllers (2026-10-14, under 38.final), so removal stays enabled on each. Owed after the cut: a High Speed and a USB 3 hub, 98 SE's chain of five hubs
 - [x] 38.9 the release's tools in `tools\`. Done 2026-10-13 (`fc58af43`..`2af5ec79`; run-38, "38.9")
 - [x] 38.10 Linux's xHCI controller quirks, fourteen registry values, and the endpoint-ring ownership fix. Done 2026-10-14 (design record 20; merged `e1727c3c` and `59879e2d`; run-38, "38.10"): each value read on QEMU's controller as far as it can act there, the ring fix's faults injected on 2000 and XP. Owed after the cut: each quirk on a controller it names
 - [x] 38.11 xHCI 0.96 controllers accepted, `XhciAccept096` (default 1). Done 2026-10-14 (record 17 section 4.14; `5e192d2d`..`855276cb`; run-38, "38.11"): the gate at 1 and 0, and QEMU's controller reporting 0.96 through the `qemu` flavour. Owed after the cut: a real 0.96 controller
 - [x] 38.12 the composite devnode's own `SELECT_CONFIGURATION` (issue 17 item 11). Done 2026-10-14 (record 13 section 10.14; merged `667ae804`; run-38, "38.12"): the regression read with QEMU's audio device on 98 SE, ME, 2000, XP, XP x64 and 7 x64. Owed after the cut: hidusbf on a composite HID device (owner, 2026-10-14)
-- [ ] 38.final the builds, cut and check of `2.4.0.0`. Stamped and dry-cut 2026-10-14 (`b4b8237c`; run-38, "38.final"); the XP F6 install the matrix found broken fixed (`f0c28bc6`..`d967daa2`); Windows 2000 from the F6 floppy fixed by its own `txtsetup.oem` entry with the user's three files from the CD (merged `b8e48823`; `docs/issues/16-w2k-f6-first-gui-boot-usbd.md`). Left: a dry cut with it and the F6 legs from that cut, 2000's and XP x64's past the product key page; 38.8's XP x64 veto; the documents pass of the matrix's readings (run-38, "38.final"); then the owner's signed cut, the install legs from the asset, the `releases/history.md` entry and publishing
+- [ ] 38.final the builds, cut and check of `2.4.0.0`. Stamped and dry-cut 2026-10-14 (`b4b8237c`; run-38, "38.final"); the XP F6 install the matrix found broken fixed (`f0c28bc6`..`d967daa2`); Windows 2000 from the F6 floppy fixed by its own `txtsetup.oem` entry with the user's three files from the CD (merged `b8e48823`; `docs/issues/16-w2k-f6-first-gui-boot-usbd.md`), read to the desktop and one restart; 38.8's XP x64 veto read; the documents pass of the matrix's readings done (run-38, "38.final"). Left: XP x64's F6 install past the product key page; a dry cut of the version branch; then the owner's signed cut, the install legs from the asset, the `releases/history.md` entry and publishing
 
 Checkpoint: the design-first tasks (38.2, 38.3, 38.8, 38.11 and 38.12)
 decided by the owner and reviewed to convergence before their code; each
@@ -917,14 +917,14 @@ machines.
 Status: not opened, unnumbered and unversioned. Listed by the owner on
 2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
 each task's "Owed after the cut"); the release notes' "Untested ground"
-names B24.1 to B24.5 meanwhile.
+names B24.1 to B24.5 meanwhile. A sixth item, `XHCICLN`'s veto on XP x64,
+was read before the cut (task 38.8) and left the list.
 
 - [ ] B24.1 Linux's controller quirks (task 38.10, design record 20) on the controllers they name, each value read on a controller it lists
 - [ ] B24.2 a real xHCI 0.96 controller (task 38.11, design record 17 section 4.14): its start at `XhciAccept096` 1 and its refusal at 0, a device of each speed, and audit items A14 and A21
 - [ ] B24.3 hidusbf on a composite HID device (task 38.12, design record 13 section 10.14.8): on the composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86
 - [ ] B24.4 a High Speed and a USB 3 hub under the `2.4.0.0` ids, `USB\XHCI98_HUB` and `USB\XHCI98_HUB30` (task 38.8, design record 13 section 10.13, D13 and D14), by passthrough or on the bench
 - [ ] B24.5 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
-- [ ] B24.6 `XHCICLN`'s veto on XP x64 (task 38.8), if it is not read before the cut
 
 ## Planned - A Refused Interface's Device Id
 

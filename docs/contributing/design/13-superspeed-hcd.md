@@ -832,7 +832,18 @@ The limits, all of them the user's to know:
    `x2a-g05`, `x2b-g03`) and the legs on the built package are in
    `lessons.md`, "A `txtsetup.oem` disk is always read from drive A:
    ..."; the addresses in `legal-provenance.md` section 4. `OEM-W2K`
-   holds the shape. Picking `XHCI98` on Windows 2000 still stops as
+   holds the shape. The built package was then carried past the product
+   key page to the desktop and one ordinary restart (runtime, QEMU, runs
+   86 to 92 in `out\p38-matrix\legs\f6w2k\notes.txt`): with a hub, USB
+   keyboard, mouse and audio device, every Setup page and the desktop on
+   USB input; with a stick at a root port and PS/2 input, the stick
+   readable; on both Device Manager with no problem and no event-log
+   error, both boots. After GUI-mode Setup the `xhci98` service is at
+   `Start` 3 (the PnP install rewrote text mode's 0), `xhcihlpr` at 0,
+   `usbd`, `hidclass` and `hidparse` at 3. The stick-only run reset the
+   guest once during "Installing Components", cause not captured; a
+   watched re-run and every later boot did not. Picking `XHCI98` on
+   Windows 2000 still stops as
    above (release notes, "Known limitations"). Issue 16
    (`docs/issues/16-w2k-f6-first-gui-boot-usbd.md`) is the write-up.
 
@@ -6376,7 +6387,7 @@ project for its run:
    static); **whether it does so for this controller on each NT target
    was unread when this was written**, and was read in the legs before the
    tool may remove anything there (10.13.10; the readings are under "The
-   veto table" in the as-built list below, XP x64's still owed); on a
+   veto table" in the as-built list below); on a
    target where it is not, removal is disabled for that OS version in the
    shipped tool, which then lists only.
 5. **Re-check**: immediately before each removal the tool repeats the
@@ -6718,10 +6729,15 @@ designed, with these particulars:
   rollback on XP; on 32-bit Vista and 7 Windows itself defers every update
   of the controller to the restart, and on 32-bit 7 every rollback too
   (the control without the tool identical in each), so the hold is not
-  needed there; Vista's rollback was not run. No target showed a
-  missing veto, so the table stands; XP x64's cells are unread (its
-  stock-controller configuration could not be reached) and stay owed
-  before the cut (roadmap-hcd 38.final).
+  needed there; Vista's rollback was not run. XP x64's stock-controller
+  configuration could not be reached; it was read instead with two
+  project controllers (an addendum, the same day, 18:36, the owner's
+  decision): `XHCICL64` at its question holding both, a disable, an
+  update (Have Disk, `2.4.0.0` over `2.4.0.0`) and a rollback (`2.4.0.0`
+  to `2.3.1.0`) of one controller were each vetoed - the controller not
+  restarted, the change held to the restart - and each took effect at
+  once in its control without the tool. No target showed a missing
+  veto, so the table stands as built, NT 5.2 included.
 - **Packaging.** `make-release.ps1` stages `tools\xhcicln\` with both
   executables (freshness against `.c`, `.h`, `.rc`, `.manifest` and
   `src\xhci_version.h`; `XHCICLN_VERSION` held to the shared macro;

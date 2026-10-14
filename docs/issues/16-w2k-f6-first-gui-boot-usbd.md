@@ -4,11 +4,10 @@ Status: **fixed in `2.4.0.0` (roadmap-hcd 38.final) by a second F6 entry
 for Windows 2000, "xHCI98 USB 3.x Host Controller (32-bit Windows 2000,
 files from CD)", which copies three files the user puts on the F6 floppy
 from their own Windows 2000 CD.** Read in QEMU only (QEMU 11.1.0, TCG,
-development host A), on Windows 2000 SP4, through text mode and the first
-start into GUI-mode Setup up to its product key page. Real hardware is
-unread. The first entry, "(32-bit Windows 2000/XP)", still stops on
-Windows 2000 as described here, and the release notes keep that as a known
-limitation.
+development host A), on Windows 2000 SP4, through text mode and GUI-mode
+Setup to the desktop and one ordinary restart. Real hardware is unread.
+The first entry, "(32-bit Windows 2000/XP)", still stops on Windows 2000
+as described here, and the release notes keep that as a known limitation.
 
 Targets affected: Windows 2000 (read on SP4) installed through the F6
 floppy on a machine whose USB is on an xHCI controller, when a USB
@@ -141,11 +140,36 @@ for XP):
 - 32-bit XP SP3 with the first entry on the same package: GUI-mode Setup
   installed the controller from `OemDir` with no copy error (`xw-g06`).
 
+The two Windows 2000 disks were then carried on from the product key
+page, on the same package, to the desktop and one ordinary restart
+(runtime, runs 86-92, the key typed into the key page only):
+
+- The hub with the USB keyboard, mouse and audio device: every remaining
+  Setup page and the desktop driven from the USB keyboard and mouse (QEMU
+  trace, no PS/2 key event); at the first boot and after the restart,
+  Device Manager with no problem (controller, root hub, hub, composite
+  device, the HID keyboard and mouse, the USB audio device), the System
+  log holding only the event log service's own events, and `XHCISNAP`
+  `2.4.0.0` reading the driver `2.4.0.0` (`wad-*`, `snap-86\WAD.*`).
+- The stick at a root port, with PS/2 input: the stick readable from the
+  desktop at both boots, Device Manager with no problem, the System log
+  clean, `XHCISNAP` `2.4.0.0` (`wbd-*`, `snap-86\WBD.*`). Text mode had
+  lettered the stick `C:` at the partition screen, so Windows went onto
+  `E:` and the stick was `F:` on the desktop.
+- Read off both disks afterwards: `usbd`, `hidclass` and `hidparse` at
+  `Start` 3 as in section 4, `xhci98` at `Start` 3 (GUI-mode Setup's
+  install of the controller rewrote text mode's 0, and both boots went
+  on with it), and `xhcihlpr` at `Start` 0 with its file installed
+  (`XhciPollFineTimer` is 0, so the driver did not look for it); the
+  installed files are the floppy's, and the three Windows files the
+  expansion of the CD's.
+- The stick-only run reset the guest once by itself during GUI-mode
+  Setup's "Installing Components"; no stop screen was caught and no
+  dump written that early. It did not recur in a watched re-run from
+  the same disk or at any later boot; the cause is unknown.
+
 ## 6. What is not read
 
-- Anything past the product key page on Windows 2000: the medium demands a
-  key and none was entered, so the desktop, the first normal boot and the
-  helper `xhcihlpr.sys` running were not reached on this route.
 - An unattended install through `$OEM$\TEXTMODE`, whose files text mode
   reads from the install source rather than drive A:.
 - A slipstreamed CD carried through.
@@ -165,7 +189,8 @@ records the decision as fact.
 
 - `out\p38-matrix\legs\f6w2k\` (git-ignored, development host A):
   `notes.txt` (runs 1-8 and 41-49, the stop; 61-66, the investigation;
-  71-72, the slipstream attempt; 81-85, the built package), the shots
+  71-72, the slipstream attempt; 81-85, the built package; 86-92, its
+  desktop and restart), the shots
   named above, the hive and file listings;
   `out\p38-matrix\legs\f6xp\` for the XP leg.
 - `docs/contributing/lessons.md`, "Windows 2000 from the F6 floppy with a

@@ -10027,7 +10027,12 @@ floppy holding them swapped in (QEMU `change`) let the copy go on; 32-bit
 XP SP3 with the first entry went into GUI-mode Setup with the controller
 installed from `OemDir` and no copy error. The gate (`OEM-W2K`,
 `PKG-MSFILE` with the compressed names) holds the shape and keeps the
-files off the package.
+files off the package. Both Windows 2000 disks were later carried past
+the product key page to the desktop and one ordinary restart on the same
+package (runs 86-92; issue 16 section 5): no stop, Device Manager clean,
+the USB keyboard and mouse driving every page on the hub disk, the stick
+readable on the other; after GUI-mode Setup `xhci98` is at `Start` 3,
+the PnP install having rewritten text mode's 0.
 
 A slipstream was tried once on the side: an `[InputDevicesSupport]`
 entry for `xhci98` in a copy of the CD's `TXTSETUP.SIF`, with its own

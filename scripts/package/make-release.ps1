@@ -4313,8 +4313,7 @@ does not touch it.
   XP and XP x64 installed to the desktop this way; and Windows 2000 SP4
   with the Windows 2000 entry and the three files, with a USB keyboard
   and mouse behind a hub and with a USB stick alone, through text mode
-  and the first start into GUI-mode Setup up to its product key page
-  (no key was entered). On real
+  and GUI-mode Setup to the desktop, and again after a restart. On real
   hardware: Windows XP x64 Setup started from a USB stick on a Dell
   Latitude E7250's xHCI controller, with this driver integrated into the
   install, ran to the desktop on this release's code. Nothing else of

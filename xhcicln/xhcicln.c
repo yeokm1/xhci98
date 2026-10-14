@@ -46,13 +46,14 @@
  * On Windows 98 SE and ME this release LISTS ONLY (decision D8, as narrowed
  * by the design's review): those systems check no open handle at a
  * query-remove, so nothing excludes an older image loading during a run, and
- * CM_Uninstall_DevNode, the route that would remove an entry there, waits on
- * readings of its own (section 10.13.8). Never a direct registry deletion.
+ * CM_Uninstall_DevNode, the route that would remove an entry there, is a
+ * stub on both, returning success and removing nothing (static, from each
+ * system's CFGMGR32.DLL; section 10.13.8). Never a direct registry deletion.
  *
  * Removal on each NT version is enabled by cln_removal_enabled's table,
  * which the legs' reading of the controller's veto (a disable, an update and
- * a rollback refused while the tool holds the door) settles: a version where
- * no veto is read is set to list only before the cut.
+ * a rollback refused while the tool holds the door) settled: a veto was read
+ * on every NT target, so removal stays enabled on each.
  *
  * TARGETS AND BUILDS. ANSI C89, one file, built with the in-repo MSVC 6.0 as
  * XHCICLN.EXE, which starts on 98 SE, ME, 2000, XP and 32-bit Vista and 7,
@@ -400,10 +401,11 @@ static int cln_exit_code(int refused, int stopped, int removed, int pending)
 /*
  * Which NT versions may remove (section 10.13.8, step 4): those where the
  * legs read the controller's query-remove vetoed while the tool holds its
- * door. PROVISIONAL (2026-10-14): every NT target of this project is on,
- * pending those readings; one where no veto is read is set to 0 here before
- * the cut, and the tool then lists only there. Any other NT version (Windows
- * 8 and later, which this project does not target) lists only. Pure.
+ * door. Read 2026-10-14 on every NT target of this project, 2000 to 7 and
+ * XP x64 among them, and none showed a missing veto, so every one is on; a
+ * version where a veto went missing would be set to 0 here, and the tool
+ * would then list only there. Any other NT version (Windows 8 and later,
+ * which this project does not target) lists only. Pure.
  */
 static int cln_removal_enabled(unsigned long major, unsigned long minor)
 {
