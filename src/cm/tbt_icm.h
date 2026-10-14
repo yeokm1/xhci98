@@ -315,18 +315,25 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
 
 #define TBT_ICM_ACT_TUNNEL_UP       1UL
 #define TBT_ICM_ACT_TUNNEL_DOWN     2UL
+/* A tunnel change was lost to a full queue: rescan every tunnel port of
+ * this domain (record 21 section 6) as if each had changed. */
+#define TBT_ICM_ACT_RESYNC          3UL
 
 #define TBT_ICM_WHY_APPROVED        1UL     /* approve succeeded */
 #define TBT_ICM_WHY_ANNOUNCED       2UL     /* announced already approved, new to the table */
 #define TBT_ICM_WHY_DISCONNECTED    3UL     /* a device-disconnected event */
 #define TBT_ICM_WHY_RECONCILED      4UL     /* not re-announced after driver ready */
 #define TBT_ICM_WHY_REPLACED        5UL     /* another announcement took its place */
+#define TBT_ICM_WHY_LOST            6UL     /* RESYNC: an action or announcement did not fit */
 
 /*
  * One tunnel change for the driver's thread to act on (record 21 section
  * 6.5), a snapshot of the entry when it was queued. Every entry that
  * leaves the table queues exactly one TUNNEL_DOWN, approved or not
  * (WasApproved says which); a TUNNEL_UP is queued only for an approved one.
+ * A disconnect takes the devices below the one named with it. If the queue
+ * is ever full, a stale TUNNEL_UP is given up first, and anything else that
+ * does not fit turns into one TBT_ICM_ACT_RESYNC after the queue drains.
  */
 typedef struct _TBT_ICM_ACTION {
     ULONG Kind;             /* TBT_ICM_ACT_* */
@@ -428,6 +435,7 @@ typedef struct _TBT_ICM {
     ULONG WaitSerial;           /* 0 when it is for none */
     BOOLEAN WaitGone;           /* that entry was dropped during the wait */
     BOOLEAN SettleExtend;       /* a device-connected event arrived in the window */
+    BOOLEAN ResyncPending;      /* something did not fit: a RESYNC is owed */
 
     TBT_ICM_READY Ready;
     ULONG NextSerial;

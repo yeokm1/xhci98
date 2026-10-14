@@ -190,7 +190,12 @@ LONG TbtHwPlatformInit(const TBT_HW_PROFILE *hw,
     }
 
     /* Linux pci.c icl_nhi_set_ltr: the same maximum for snoop and no-snoop. */
-    v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_16) & 0xFFFFUL;
+    v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_16);
+    if (v == 0xFFFFFFFFUL) {
+        tbtHwLog(host, "tbt.hw.cfg-unreadable", TBT_ICL_VS_CAP_16);
+        return TBT_E_HW;
+    }
+    v &= 0xFFFFUL;
     cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_15, (v << 16) | v);
     return TBT_OK;
 }
@@ -373,6 +378,11 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
             tbtHwInert(out, TBT_INERT_NOT_AUTHENTICATED, host);
             return;
         }
+        if ((fw & TBT_ICM_FW_ICM_ENABLED) == 0) {
+            /* Enabled, then not: conflicting evidence (decision B'). */
+            tbtHwInert(out, TBT_INERT_CONFLICT, host);
+            return;
+        }
     }
     out->FwStatus = fw;
     tbtHwLog(host, "tbt.hw.fw-status", fw);
@@ -400,6 +410,10 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
     out->FwStatus = fw;
     if (fw == 0xFFFFFFFFUL || (fw & TBT_ICM_FW_NVM_AUTH_DONE) == 0) {
         tbtHwInert(out, TBT_INERT_NOT_AUTHENTICATED, host);
+        return;
+    }
+    if ((fw & TBT_ICM_FW_ICM_ENABLED) == 0) {
+        tbtHwInert(out, TBT_INERT_CONFLICT, host);
         return;
     }
     m = tbtHwRead(host, TBT_ICM_OUTMAIL);

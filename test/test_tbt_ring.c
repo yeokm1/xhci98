@@ -56,6 +56,7 @@ static void test_start(void)
 
     fakeReset();
     g_fake.Imr[0] = 0x00001001UL;   /* the Linux client's value, ICM 2.1 */
+    g_fake.Imr[1] = 0x00000001UL;   /* a vacancy cause left enabled */
     rc = startRing(0);
     CHECK_EQ(rc, TBT_OK, "start");
     CHECK_EQ(g_ring.Paths, 12, "12 paths from 0x0000000c");
@@ -69,7 +70,8 @@ static void test_start(void)
     CHECK_EQ(g_fake.RxPdf, 0xFFFFFFFFUL, "PDF masks as the capture");
     CHECK_EQ(g_fake.RxCons, 9, "RX consumer one behind: nine descriptors given");
     CHECK_EQ(g_fake.Imr[0], 0, "ring interrupts masked (Intel: mask written)");
-    CHECK_EQ(g_fake.ImrWrites, 1, "ceil(2N/32) = 1 mask DW for 12 paths");
+    CHECK_EQ(g_fake.Imr[1], 0, "the vacancy causes too");
+    CHECK_EQ(g_fake.ImrWrites, 2, "ceil(3N/32) = 2 mask DWs for 12 paths");
     CHECK_EQ(g_fake.ImcWrites, 0, "no Mask Clear on the Intel contract");
     CHECK_EQ(g_fake.HiResetWrites, 0, "no host interface reset unless asked");
     m = fakeMem();
@@ -84,7 +86,7 @@ static void test_start(void)
     fakeReset();
     rc = startRing(TBT_RING_START_MASK_IMC | TBT_RING_START_RESET_HI);
     CHECK_EQ(rc, TBT_OK, "start, generic contract and reset");
-    CHECK_EQ(g_fake.ImcWrites, 1, "Mask Clear on the generic contract");
+    CHECK_EQ(g_fake.ImcWrites, 2, "Mask Clear on the generic contract, both DWs");
     CHECK_EQ(g_fake.ImcLast, 0xFFFFFFFFUL, "every cause cleared");
     CHECK_EQ(g_fake.ImrWrites, 0, "mask register untouched");
     CHECK_EQ(g_fake.HiResetWrites, 1, "reset when asked");
@@ -476,15 +478,19 @@ static void test_stopped_clock_and_flood(void)
     CHECK_EQ(rc, TBT_E_TIMEOUT, "stopped clock: still a timeout");
     CHECK_EQ(g_reads, 2, "both attempts");
 
-    /* A host interface that floods unsolicited frames with a stopped clock:
-     * the frame budget ends the wait. */
+    /* A host interface that never stops sending unsolicited frames, with a
+     * stopped clock: no wait is ever asked for, so only the frame budget
+     * can end the read. */
     readSetup(1);
     g_fake.ClockStopped = 1;
-    for (i = 0; i < FAKE_RXQ; i++) {
-        fakeQueue(TBT_PDF_ICM_EVENT, ev, 2, 0, 0);
-    }
+    g_fake.FloodPdf = TBT_PDF_ICM_EVENT;
+    (void)i;
+    (void)ev;
     rc = TbtRingCtlRead(&g_ring, &root, TBT_CS_ROUTER, 0, 0, 1, out, 100, 0);
     CHECK_EQ(rc, TBT_E_TIMEOUT, "flood: the wait still ends");
+    CHECK(g_ring.Counters.Rx > TBT_WAIT_FRAME_BUDGET, "ended by the frame budget");
+    CHECK_EQ(g_fake.NowUs, 0, "the clock never moved");
+    g_fake.FloodPdf = 0;
 }
 
 static void test_stop(void)

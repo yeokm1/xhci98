@@ -502,6 +502,35 @@ static BOOLEAN tbtIcmByRoute(PTBT_ICM icm)
     return (BOOLEAN)((icm->Profile->Caps & TBT_ICM_CAP_ROUTE_IN_EVENTS) != 0);
 }
 
+/*
+ * When the action queue is full, a queued TUNNEL_UP whose entry is gone is
+ * the one action that can be given up (its TUNNEL_DOWN is queued or will
+ * be). Anything else that does not fit is not dropped silently: the
+ * driver is owed a TBT_ICM_ACT_RESYNC once the queue drains.
+ */
+static BOOLEAN tbtIcmMakeRoom(PTBT_ICM icm)
+{
+    ULONG i;
+    ULONG keep;
+    ULONG n;
+    PTBT_ICM_ACTION a;
+
+    n = icm->ActionCount;
+    keep = 0;
+    for (i = 0; i < n; i++) {
+        a = &icm->Actions[(icm->ActionHead + i) % TBT_ICM_ACTION_QUEUE];
+        if (a->Kind == TBT_ICM_ACT_TUNNEL_UP && !TbtIcmActionLive(icm, a)) {
+            continue;
+        }
+        if (keep != i) {
+            icm->Actions[(icm->ActionHead + keep) % TBT_ICM_ACTION_QUEUE] = *a;
+        }
+        keep++;
+    }
+    icm->ActionCount = keep;
+    return (BOOLEAN)(keep < TBT_ICM_ACTION_QUEUE);
+}
+
 static VOID tbtIcmQueueAction(PTBT_ICM icm, ULONG kind, ULONG why, ULONG slot,
                               BOOLEAN linkDownSent)
 {
@@ -509,8 +538,9 @@ static VOID tbtIcmQueueAction(PTBT_ICM icm, ULONG kind, ULONG why, ULONG slot,
     const TBT_ICM_DEVICE *d;
     ULONG i;
 
-    if (icm->ActionCount >= TBT_ICM_ACTION_QUEUE) {
+    if (icm->ActionCount >= TBT_ICM_ACTION_QUEUE && !tbtIcmMakeRoom(icm)) {
         icm->Counters.ActionOverflows++;
+        icm->ResyncPending = TRUE;
         tbtIcmLog(icm, "tbt.icm.action-overflow", kind);
         return;
     }
@@ -541,7 +571,15 @@ static VOID tbtIcmQueueAction(PTBT_ICM icm, ULONG kind, ULONG why, ULONG slot,
 BOOLEAN TbtIcmNextAction(PTBT_ICM icm, PTBT_ICM_ACTION out)
 {
     if (icm->ActionCount == 0) {
-        return FALSE;
+        if (!icm->ResyncPending) {
+            return FALSE;
+        }
+        icm->ResyncPending = FALSE;
+        tbtIcmZero(out, sizeof(*out));
+        out->Kind = TBT_ICM_ACT_RESYNC;
+        out->Why = TBT_ICM_WHY_LOST;
+        out->Slot = TBT_ICM_NO_SLOT;
+        return TRUE;
     }
     *out = icm->Actions[icm->ActionHead];
     icm->ActionHead = (icm->ActionHead + 1) % TBT_ICM_ACTION_QUEUE;
@@ -572,10 +610,60 @@ static VOID tbtIcmDrop(PTBT_ICM icm, ULONG slot, ULONG why, BOOLEAN linkDownSent
     d->Serial = 0;
 }
 
+/*
+ * Whether an address lies at or below a disconnected one. Linux icm.c's
+ * disconnect handlers remove the switch through remove_switch, and
+ * switch.c tb_switch_remove takes every switch below it with it. By route:
+ * the disconnected route is a prefix (its levels equal, the rest deeper).
+ * By link and depth: the same physical port, deeper or equal (a chain on
+ * one port, Linux tb_phy_port_from_link).
+ */
+static BOOLEAN tbtIcmAtOrUnder(PTBT_ICM icm, BOOLEAN routeValid,
+                               const TBT_ROUTE *route, ULONG link, ULONG depth,
+                               const TBT_ICM_GONE *g)
+{
+    ULONG gd;
+    ULONG i;
+
+    if (tbtIcmByRoute(icm)) {
+        if (!routeValid || !g->RouteValid) {
+            return FALSE;
+        }
+        gd = TbtRouteDepth(&g->Route);
+        if (gd == 0 || TbtRouteDepth(route) < gd) {
+            return FALSE;
+        }
+        for (i = 0; i < gd; i++) {
+            if (TbtRouteLevel(route, i) != TbtRouteLevel(&g->Route, i)) {
+                return FALSE;
+            }
+        }
+        return TRUE;
+    }
+    if (link == g->Link && depth == g->Depth) {
+        return TRUE;
+    }
+    return (BOOLEAN)(depth > g->Depth &&
+                     tbtIcmPhyPort(link) == tbtIcmPhyPort(g->Link));
+}
+
 static VOID tbtIcmEnqueue(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
 {
+    ULONG i;
+    TBT_ICM_ANNOUNCE *q;
+
+    /* The latest announcement of a device replaces one still queued. */
+    for (i = 0; i < icm->QueueCount; i++) {
+        q = &icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE];
+        if (tbtIcmUuidEqual(q->Uuid, a->Uuid)) {
+            *q = *a;
+            icm->Counters.EventsQueued++;
+            return;
+        }
+    }
     if (icm->QueueCount >= TBT_ICM_EVENT_QUEUE) {
         icm->Counters.QueueOverflows++;
+        icm->ResyncPending = TRUE;
         tbtIcmLog(icm, "tbt.icm.queue-overflow", a->LinkInfo);
         return;
     }
@@ -584,26 +672,20 @@ static VOID tbtIcmEnqueue(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
     icm->Counters.EventsQueued++;
 }
 
-/* A disconnect also cancels an announcement of the same address still
- * waiting in the queue, which would otherwise bring the device back. */
+/* A disconnect also cancels the queued announcements at or below it, which
+ * would otherwise bring those devices back. */
 static VOID tbtIcmPurgeQueued(PTBT_ICM icm, const TBT_ICM_GONE *g)
 {
     ULONG i;
     ULONG n;
     ULONG keep;
     TBT_ICM_ANNOUNCE *a;
-    BOOLEAN same;
 
     n = icm->QueueCount;
     keep = 0;
     for (i = 0; i < n; i++) {
         a = &icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE];
-        if (tbtIcmByRoute(icm)) {
-            same = (BOOLEAN)(a->RouteValid && TbtRouteEqual(&a->Route, &g->Route));
-        } else {
-            same = (BOOLEAN)(a->Link == g->Link && a->Depth == g->Depth);
-        }
-        if (!same) {
+        if (!tbtIcmAtOrUnder(icm, a->RouteValid, &a->Route, a->Link, a->Depth, g)) {
             if (keep != i) {
                 icm->Queue[(icm->QueueHead + keep) % TBT_ICM_EVENT_QUEUE] = *a;
             }
@@ -619,24 +701,45 @@ static VOID tbtIcmPurgeQueued(PTBT_ICM icm, const TBT_ICM_GONE *g)
 
 static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a);
 
+/* A device-disconnected event: the device and everything below it leave,
+ * deepest first, each with its link-down upcall and its TUNNEL_DOWN. */
 static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
 {
     ULONG slot;
+    ULONG i;
+    ULONG deepest;
+    ULONG found;
+    PTBT_ICM_DEVICE d;
 
     tbtIcmPurgeQueued(icm, g);
-    slot = tbtIcmFindAt(icm, tbtIcmByRoute(icm), &g->Route, g->Link,
-                        g->Depth, FALSE);
-    if (slot == TBT_ICM_NO_SLOT) {
+    found = 0;
+    for (;;) {
+        slot = TBT_ICM_NO_SLOT;
+        deepest = 0;
+        for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+            d = &icm->Devices[i];
+            if (d->InUse &&
+                tbtIcmAtOrUnder(icm, d->RouteValid, &d->Route, d->Link, d->Depth, g) &&
+                (slot == TBT_ICM_NO_SLOT || d->Depth > deepest)) {
+                slot = i;
+                deepest = d->Depth;
+            }
+        }
+        if (slot == TBT_ICM_NO_SLOT) {
+            break;
+        }
+        found++;
+        if (icm->LinkDown != NULL) {
+            icm->LinkDown(icm->LinkDownContext, &icm->Devices[slot], icm->InWait);
+        }
+        tbtIcmDrop(icm, slot, TBT_ICM_WHY_DISCONNECTED,
+                   (BOOLEAN)(icm->LinkDown != NULL));
+    }
+    if (found == 0) {
         icm->Counters.DisconnectUnknown++;
         tbtIcmLog(icm, "tbt.icm.disconnect-unknown",
                   g->RouteValid ? g->Route.Lo : TBT_ICM_LI_MAKE(g->Link, g->Depth));
-        return;
     }
-    if (icm->LinkDown != NULL) {
-        icm->LinkDown(icm->LinkDownContext, &icm->Devices[slot], icm->InWait);
-    }
-    tbtIcmDrop(icm, slot, TBT_ICM_WHY_DISCONNECTED,
-               (BOOLEAN)(icm->LinkDown != NULL));
 }
 
 static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
@@ -1013,7 +1116,11 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
     d = &icm->Devices[slot];
     words = icm->Profile->EncodeApprove(d, req);
     icm->Counters.ApprovalsSent++;
-    rc = tbtIcmCommand(icm, req, words, 4, resp, TBT_ICM_APPROVE_MAX_WORDS, &n,
+    /* The response repeats the request (ICM 4.3 [obs] T:34154; Linux
+     * reads the reply as the request's own structure): every word must
+     * match, so a late answer to an earlier connection of the same device
+     * - another key, id or route - is never taken for this one. */
+    rc = tbtIcmCommand(icm, req, words, words - 1, resp, TBT_ICM_APPROVE_MAX_WORDS, &n,
                        icm->ApproveTimeoutMs, icm->Retries, slot, d->Serial,
                        FALSE);
     if (rc == TBT_OK && d->InUse) {
@@ -1059,13 +1166,41 @@ static VOID tbtIcmFill(PTBT_ICM_DEVICE d, const TBT_ICM_ANNOUNCE *a)
     }
 }
 
+/* Record 21 section 5.4: an announced, unapproved, unrejected device is
+ * approved when the policy says so - on every such announcement, a refresh
+ * included, so an approval that failed is tried again when the firmware
+ * announces the device again. */
+static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot)
+{
+    PTBT_ICM_DEVICE d;
+    BOOLEAN approve;
+
+    d = &icm->Devices[slot];
+    if ((icm->Profile->Caps & TBT_ICM_CAP_APPROVE) == 0 ||
+        icm->Profile->EncodeApprove == NULL) {
+        icm->Counters.ApprovalsUnsupported++;
+        tbtIcmLog(icm, "tbt.icm.approve-unsupported", slot);
+        return;
+    }
+    if (icm->ApproveHook != NULL) {
+        approve = icm->ApproveHook(icm->ApproveHookContext, d);
+    } else {
+        approve = icm->ApproveAll;
+    }
+    if (!approve) {
+        icm->Counters.ApprovalsWithheld++;
+        tbtIcmLog(icm, "tbt.icm.approve-withheld", slot);
+        return;
+    }
+    tbtIcmApprove(icm, slot);
+}
+
 static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
 {
     ULONG i;
     ULONG slot;
     BOOLEAN byRoute;
     BOOLEAN same;
-    BOOLEAN approve;
     PTBT_ICM_DEVICE d;
     LONG rc;
 
@@ -1116,6 +1251,9 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
                     icm->Counters.RouteFailures++;
                     tbtIcmLog(icm, "tbt.icm.route-failed", a->LinkInfo);
                 }
+            }
+            if (d->InUse && !d->Approved) {
+                tbtIcmPolicy(icm, slot);
             }
             return;
         }
@@ -1175,23 +1313,7 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
                           slot, FALSE);
         return;
     }
-    if ((icm->Profile->Caps & TBT_ICM_CAP_APPROVE) == 0 ||
-        icm->Profile->EncodeApprove == NULL) {
-        icm->Counters.ApprovalsUnsupported++;
-        tbtIcmLog(icm, "tbt.icm.approve-unsupported", slot);
-        return;
-    }
-    if (icm->ApproveHook != NULL) {
-        approve = icm->ApproveHook(icm->ApproveHookContext, d);
-    } else {
-        approve = icm->ApproveAll;
-    }
-    if (!approve) {
-        icm->Counters.ApprovalsWithheld++;
-        tbtIcmLog(icm, "tbt.icm.approve-withheld", slot);
-        return;
-    }
-    tbtIcmApprove(icm, slot);
+    tbtIcmPolicy(icm, slot);
 }
 
 static VOID tbtIcmDrainQueue(PTBT_ICM icm, ULONG budget)
@@ -1287,6 +1409,7 @@ static VOID tbtIcmTearDown(PTBT_ICM icm)
     icm->Session = FALSE;
     icm->Bound = FALSE;
     icm->InWait = FALSE;
+    icm->QueueCount = 0;
 }
 
 /* After driver ready on a resume: every entry not re-announced in the
@@ -1294,14 +1417,17 @@ static VOID tbtIcmTearDown(PTBT_ICM icm)
  * icm_postpone_rescan), is gone. */
 static VOID tbtIcmReconcile(PTBT_ICM icm)
 {
-    TBT_DEADLINE total;
+    ULONG windows;
     ULONG i;
 
-    TbtDeadlineStart(&total, icm->Host, TBT_ICM_RECONCILE_MAX_MS);
+    /* A finite number of windows, so the bound holds with a stopped clock. */
+    windows = 0;
     do {
         icm->SettleExtend = FALSE;
         tbtIcmServiceFor(icm, TBT_ICM_RECONCILE_MS);
-    } while (icm->SettleExtend && !TbtDeadlinePassed(&total, icm->Host));
+        windows++;
+    } while (icm->SettleExtend &&
+             windows < TBT_ICM_RECONCILE_MAX_MS / TBT_ICM_RECONCILE_MS);
     tbtIcmDrainQueue(icm, TBT_ICM_EVENT_QUEUE * 2);
     for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
         if (icm->Devices[i].InUse && icm->Devices[i].Stale) {
@@ -1426,6 +1552,10 @@ VOID TbtIcmSuspend(PTBT_ICM icm)
     TbtRingStop(icm->Ring);
     icm->Started = FALSE;
     icm->Bound = FALSE;
+    /* An announcement of this session means nothing after the sleep: the
+     * device may have left meanwhile (ICM 6.6 [obs]); the resume's
+     * reconciliation asks again. */
+    icm->QueueCount = 0;
     if (!icm->Session) {
         return;
     }

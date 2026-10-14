@@ -209,6 +209,7 @@ BOOLEAN TbtHwReadHostUuid(const TBT_HW_PROFILE *hw,
 #define TBT_INERT_NOT_AUTHENTICATED 7UL     /* NVM authentication never done */
 #define TBT_INERT_MODE              8UL     /* authentication, endpoint or unknown mode */
 #define TBT_INERT_FORCED_UNSUPPORTED 9UL    /* XhciCmMode 3 on a host that is not USB4 */
+#define TBT_INERT_CONFLICT          10UL    /* ICM enable read set, then clear */
 
 typedef struct _TBT_HW_SELECTION {
     ULONG Outcome;      /* TBT_SEL_* */

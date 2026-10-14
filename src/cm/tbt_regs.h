@@ -151,17 +151,18 @@
  * an interrupt, default 0; the specification packs 3N causes (TX, RX, RX
  * vacancy). ICM 2.1 calls the first DW "ring interrupt enable 0" and reads
  * it 0x00001001 with the Linux client bound, 0 unbound [obs]. This driver
- * polls (record 21 section 4.3, decision D3) and masks every ring cause by
- * each host's own contract (Linux nhi.c nhi_mask_interrupt, called from
- * nhi_disable_interrupts over RING_INTERRUPT_REG_COUNT, the 2N TX and RX
- * causes; the vacancy causes stay at their default 0): on Intel hosts,
- * whose interrupt status clears itself (pci.c nhi_pci_check_quirks,
+ * polls (record 21 section 4.3, decision D3) and masks every cause the
+ * specification packs - TX, RX and RX vacancy, 3N bits (Spec 12.5.1, Figure
+ * 12-8), since a start with no reset cannot rely on the defaults (Linux
+ * nhi.c nhi_disable_interrupts covers 2N, RING_INTERRUPT_REG_COUNT) - by
+ * each host's own contract (Linux nhi.c nhi_mask_interrupt): on Intel
+ * hosts, whose interrupt status clears itself (pci.c nhi_pci_check_quirks,
  * QUIRK_AUTO_CLEAR_INT), by writing the mask register itself; elsewhere
  * through Interrupt Mask Clear (Spec 12.6.3.4.5, Table 12-32).
  */
 #define TBT_HI_IMR                  0x38200UL   /* REG_RING_INTERRUPT_BASE */
 #define TBT_HI_IMC                  0x38208UL   /* REG_RING_INTERRUPT_MASK_CLEAR_BASE */
-#define TBT_HI_IMR_DWORDS(paths)    ((2UL * (ULONG)(paths) + 31UL) / 32UL)
+#define TBT_HI_IMR_DWORDS(paths)    ((3UL * (ULONG)(paths) + 31UL) / 32UL)
 /* Interrupt Status, Spec 12.6.3.4.1: read-to-clear unless auto-clear is
  * disabled, so never read by this driver (ICM 2.1 notes the capture tool
  * skipped it for the same reason). */

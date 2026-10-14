@@ -74,6 +74,11 @@ typedef struct FAKE {
     unsigned long ImcLast;
     unsigned long Writes;           /* every BAR0 write */
     unsigned long FwStatusReads;
+    unsigned long FwStatusNextAfter;    /* after this many reads, FwStatusNext; 0 never */
+    unsigned long FwStatusNext;
+    unsigned long FloodPdf;         /* nonzero: the receive queue never runs dry */
+    unsigned long FloodWords;       /* with FloodDw: the frame it repeats */
+    unsigned long FloodDw[64];
 
     unsigned long TxBaseLo, TxBaseHi, TxSize, TxCtrl, TxProd, TxCons;
     int TxConsume;                  /* the host interface fetches TX */
@@ -182,13 +187,26 @@ static void fakeQueue(unsigned long pdf, const unsigned long *dw,
     unsigned long i;
     unsigned long crc;
 
+    unsigned long at;
+    unsigned long pos;
+
     if (g_fake.RxQCount >= FAKE_RXQ) {
         return;
     }
-    fr = &g_fake.RxQ[g_fake.RxQCount++];
+    /* Kept in arrival order: by time, and in queueing order for equal
+     * times. */
+    /* With the clock stopped, everything arrives now. */
+    at = g_fake.ClockStopped ? g_fake.NowUs : g_fake.NowUs + delayUs;
+    pos = g_fake.RxQCount;
+    while (pos > 0 && g_fake.RxQ[pos - 1].AtUs > at) {
+        g_fake.RxQ[pos] = g_fake.RxQ[pos - 1];
+        pos--;
+    }
+    g_fake.RxQCount++;
+    fr = &g_fake.RxQ[pos];
     memset(fr, 0, sizeof(*fr));
     fr->Pdf = pdf;
-    fr->AtUs = g_fake.NowUs + delayUs;
+    fr->AtUs = at;
     fr->Flags = flags;
     for (i = 0; i < words && 4 * i + 8 <= FAKE_FRAME_BYTES; i++) {
         fakePutBe(fr->Bytes + 4 * i, dw[i]);
@@ -228,6 +246,17 @@ static void fakePump(void)
     unsigned long copy;
     unsigned long dw2;
     FAKE_FRAME *fr;
+
+    if (g_fake.FloodPdf != 0 && g_fake.RxQCount == 0) {
+        if (g_fake.FloodWords != 0) {
+            fakeQueue(g_fake.FloodPdf, g_fake.FloodDw, g_fake.FloodWords, 0, 0);
+        } else {
+            unsigned long ev[2];
+            ev[0] = 0x01000099UL;
+            ev[1] = 0;
+            fakeQueue(g_fake.FloodPdf, ev, 2, 0, 0);
+        }
+    }
 
     while (g_fake.RxQCount != 0 && g_fake.RxQ[0].AtUs <= g_fake.NowUs) {
         fr = &g_fake.RxQ[0];
@@ -321,7 +350,13 @@ static ULONG fakeRead32(PVOID ctx, ULONG off)
     fakePump();
     switch (off) {
     case 0x39640: return g_fake.Caps;
-    case 0x39944: g_fake.FwStatusReads++; return g_fake.FwStatus;
+    case 0x39944:
+        g_fake.FwStatusReads++;
+        if (g_fake.FwStatusNextAfter != 0 &&
+            g_fake.FwStatusReads > g_fake.FwStatusNextAfter) {
+            g_fake.FwStatus = g_fake.FwStatusNext;
+        }
+        return g_fake.FwStatus;
     case 0x3990C: return g_fake.Outmail;
     case 0x39900: return g_fake.InmailData;
     case 0x39904: return g_fake.InmailCmd;
@@ -384,7 +419,7 @@ static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
         g_fake.ImrWrites++;
         return;
     }
-    if (off >= 0x38208 && off < 0x38218) {
+    if (off >= 0x38208 && off < 0x38210) {
         g_fake.ImcWrites++;
         g_fake.ImcLast = v;
     }

@@ -133,6 +133,15 @@ static void test_platform(void)
 
     fakeReset();
     memset(&pw, 0, sizeof(pw));
+    g_fake.Vs9ReadyAfterReads = 1;
+    g_fake.Cfg[0xE4 / 4] = 0xFFFFFFFFUL;
+    g_fake.Cfg[0xE0 / 4] = 0x12345678UL;
+    CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_E_HW,
+             "VS_CAP_16 unreadable: not ready");
+    CHECK_EQ(g_fake.Cfg[0xE0 / 4], 0x12345678UL, "no LTR written from it");
+
+    fakeReset();
+    memset(&pw, 0, sizeof(pw));
     g_fake.CfgAllOnes = 1;
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_E_HW, "unreadable");
     CHECK_EQ(g_fake.CfgWrites, 0, "nothing written");
@@ -261,6 +270,18 @@ static void test_select(void)
     g_fake.FwStatus = 0x00000000UL;
     doSelect(mr, TRUE, FALSE, FALSE, &s);
     CHECK_EQ(s.Outcome, TBT_SEL_SOFTWARE, "Maple Ridge, ICM disabled, not authenticated: software CM");
+    fakeReset();
+    g_fake.FwStatus = 0x00000001UL;
+    g_fake.FwStatusNextAfter = 2;
+    g_fake.FwStatusNext = 0x80000000UL;
+    doSelect(tgl, TRUE, FALSE, FALSE, &s);
+    CHECK_EQ(s.Reason, TBT_INERT_CONFLICT, "enabled, then authenticated but disabled: conflict");
+    fakeReset();
+    g_fake.FwStatus = 0x000001A1UL;
+    g_fake.FwStatusNextAfter = 3;
+    g_fake.FwStatusNext = 0x800001A0UL;
+    doSelect(ar, TRUE, FALSE, FALSE, &s);
+    CHECK_EQ(s.Reason, TBT_INERT_CONFLICT, "Alpine Ridge: enable drops during the auth poll");
     fakeReset();
     g_fake.FwStatus = 0xFFFFFFFFUL;
     doSelect(tgl, TRUE, FALSE, FALSE, &s);

@@ -1082,6 +1082,233 @@ static void test_falcon_ridge(void)
     CHECK_EQ(g_fake.MboxLog[1], 0x07, "0x07");
 }
 
+/* ------------------------------------------------------------------ */
+/* Races, subtrees, overflow, session boundaries                      */
+/* ------------------------------------------------------------------ */
+
+static void test_late_reply_same_device(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long old[6];
+
+    /* Approve of connection 6 never answered; the device leaves inside the
+     * wait and comes back as connection 7, whose approve fails - while the
+     * firmware's answer to connection 6 arrives inside that second wait. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    g_fw.DisconnectInApproveUs = 1000000UL;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(1400);
+    CHECK_EQ(g_icm.Counters.ApprovalsAbandoned, 1, "first approve abandoned");
+    actions(act, 8);
+
+    g_fw.ApproveMode = MODE_ERROR;
+    g_fw.ApproveDelayUs = 2000000UL;
+    old[0] = 0x01000004UL;
+    memcpy(&old[1], kUuid, 16);
+    old[5] = 0x00000610UL;          /* connection 6's words */
+    arConnected(7, 0, 1, 1, kUuid, 0);
+    fakeQueue(TBT_PDF_ICM_RESP, old, 6, 500000UL, 0);
+    idle(2600);
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 0, "the old answer approves nothing");
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "connection 7 failed on its own answer");
+    CHECK(g_icm.Counters.Strays >= 1, "the old answer was a stray");
+    CHECK(TbtIcmDevice(&g_icm, 0) != NULL && !TbtIcmDevice(&g_icm, 0)->Approved,
+          "left unapproved");
+    CHECK_EQ(actions(act, 8), 0, "no tunnel up");
+}
+
+static void test_subtree_disconnect(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* Alpine Ridge: a chain on link 1 (depths 1 and 2) and a device on
+     * link 3; the depth-1 device leaves. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    arConnected(6, 1, 1, 2, kUuid2, 0);
+    {
+        unsigned long u3[4] = { 0x11111111UL, 0x22222222UL, 0xffffffffUL, 0xffffffffUL };
+        arConnected(7, 1, 3, 1, u3, 0);
+    }
+    idle(200);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 3, "three devices");
+    actions(act, 8);
+    arDisconnected(1, 1, 0);
+    idle(200);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the chain below went with it");
+    CHECK_EQ(g_linkDowns, 2, "a link-down for each");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnels down");
+    CHECK_EQ(act[0].Depth, 2, "deepest first");
+    CHECK_EQ(act[1].Depth, 1, "then the device named");
+    CHECK_EQ(g_icm.Counters.DisconnectUnknown, 0, "nothing unknown");
+
+    /* Titan Ridge: route 0x0301 lies below route 1. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    trConnected(5, 1, 1, kUuid, 0, 0);
+    trConnected(6, 1, 0x0301, kUuid2, 0, 0);
+    idle(200);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "two devices");
+    actions(act, 8);
+    trDisconnected(1, 0);
+    idle(200);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "both gone");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnels down");
+    CHECK_EQ(act[0].Route.Lo, 0x0301, "the deeper one first");
+}
+
+static void test_queue_overflow_and_coalescing(void)
+{
+    TBT_ICM_ACTION act[64];
+    unsigned long n;
+    unsigned long i;
+    unsigned long u[4];
+    int resync;
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    /* The same device announced twice inside the wait: one queued entry. */
+    arConnected(2, 1, 3, 1, kUuid2, 100000UL);
+    arConnected(3, 1, 3, 1, kUuid2, 200000UL);
+    /* Then seventeen more devices: the queue holds sixteen. */
+    u[2] = 0xffffffffUL;
+    u[3] = 0xffffffffUL;
+    for (i = 0; i < 16; i++) {
+        u[0] = 0x5000UL + i;
+        u[1] = 0x6000UL + i;
+        arConnected(10 + i, 1, 3, 2 + (i % 4), u, 300000UL + 10000UL * i);
+    }
+    fakePump();
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_icm.Counters.QueueOverflows, 1, "one did not fit");
+    CHECK(g_icm.Counters.EventsQueued >= 17, "the rest queued, one coalesced");
+    resync = 0;
+    n = actions(act, 64);
+    for (i = 0; i < n && i < 64; i++) {
+        if (act[i].Kind == TBT_ICM_ACT_RESYNC) {
+            resync++;
+            CHECK_EQ(i, n - 1, "the resync comes after the queued actions");
+        }
+    }
+    CHECK_EQ(resync, 1, "one resync owed and delivered");
+    CHECK(!TbtIcmNextAction(&g_icm, &act[0]), "and only once");
+}
+
+static void test_action_overflow(void)
+{
+    TBT_ICM_ACTION a;
+    unsigned long i;
+    unsigned long downs;
+    unsigned long ups;
+    int resync;
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    for (i = 0; i < TBT_ICM_ACTION_QUEUE + 1; i++) {
+        arConnected(5 + i, 1, 1, 1, kUuid, 0);
+        arDisconnected(1, 1, 1000);
+        idle(200);
+    }
+    CHECK_EQ(g_icm.Counters.ActionOverflows, 1, "the forty-ninth down did not fit");
+    downs = 0;
+    ups = 0;
+    resync = 0;
+    while (TbtIcmNextAction(&g_icm, &a)) {
+        if (a.Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
+            downs++;
+        } else if (a.Kind == TBT_ICM_ACT_TUNNEL_UP) {
+            ups++;
+        } else if (a.Kind == TBT_ICM_ACT_RESYNC) {
+            resync++;
+        }
+    }
+    CHECK_EQ(ups, 0, "stale tunnel-ups were given up first");
+    CHECK_EQ(downs, TBT_ICM_ACTION_QUEUE, "every tunnel-down that fitted kept");
+    CHECK_EQ(resync, 1, "the lost one became a resync");
+}
+
+static void test_session_boundary(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long i;
+    int found;
+
+    /* An announcement drained by the driver's own wait before a suspend is
+     * not processed after the resume. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    arConnected(9, 1, 3, 1, kUuid2, 0);
+    fakePump();
+    TbtIcmService(&g_icm);
+    CHECK_EQ(g_icm.QueueCount, 1, "queued by the service drain");
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(g_icm.QueueCount, 0, "retired at the suspend");
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    found = 0;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (TbtIcmDevice(&g_icm, i) != NULL &&
+            TbtIcmDevice(&g_icm, i)->Uuid[0] == kUuid2[0]) {
+            found = 1;
+        }
+    }
+    CHECK(!found, "no phantom device");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the dock, re-announced, stays");
+}
+
+static void test_refresh_reapplies_policy(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(600);
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "first approve failed");
+    g_fw.ApproveMode = MODE_ANSWER;
+    arConnected(7, 0, 1, 1, kUuid, 0);
+    idle(800);
+    CHECK_EQ(g_icm.Counters.Refreshes, 1, "a refresh");
+    CHECK_EQ(g_fw.Approves, 2, "and the policy ran again");
+    CHECK_EQ(g_fw.LastApprove[5], 0x00000710UL, "with the new connection id");
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "tunnel up");
+}
+
+static void test_reconcile_bounded(void)
+{
+    unsigned long dw[61];
+
+    /* Resume with a stopped clock and the firmware announcing without
+     * end: the reconciliation's windows are finite. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fake.ClockStopped = 1;
+    g_fw.HoldUs = 0;
+    dw[0] = 0x0100b103UL;
+    memcpy(&dw[1], kUuid, 16);
+    dw[5] = 0x09110710UL;
+    nameBlock(&dw[6], 55);
+    memcpy(g_fake.FloodDw, dw, sizeof(dw));
+    g_fake.FloodWords = 61;
+    g_fake.FloodPdf = TBT_PDF_ICM_EVENT;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume returns");
+    g_fake.FloodPdf = 0;
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the dock kept");
+}
+
 static void test_settings(void)
 {
     setup(GEN_AR, 0, 0);
@@ -1115,6 +1342,13 @@ int main(void)
     test_titan_ridge();
     test_ice_lake();
     test_falcon_ridge();
+    test_late_reply_same_device();
+    test_subtree_disconnect();
+    test_queue_overflow_and_coalescing();
+    test_action_overflow();
+    test_session_boundary();
+    test_refresh_reapplies_policy();
+    test_reconcile_bounded();
     test_settings();
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
