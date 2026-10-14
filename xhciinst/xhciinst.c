@@ -3290,9 +3290,8 @@ static void note_old_entries(void)
     if (n == 0) {
         return;
     }
-    out("\n%d old XHCI98\\ entries (left by an update from 2.3.x or earlier) "
-        "are still recorded.\nNothing needs them removed; if you want, "
-        "tools\\xhcicln\\ lists and removes them\n(see its readme.txt).\n", n);
+    out("\n%d old XHCI98\\ entries from 2.3.x remain; harmless - "
+        "tools\\xhcicln\\ removes them if you want.\n", n);
 }
 
 static void testsigning_note(void)
@@ -3753,6 +3752,7 @@ static int run_install_9x(void)
     }
     write_values();
     steps_9x(srcDir);
+    note_old_entries();
     return inst_exit_code(0, flagFailed, flagRestart, 1);
 }
 
