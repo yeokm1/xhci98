@@ -6786,6 +6786,12 @@ its `START`, after the `START` has come back up from below and before the
 existing re-presentation request and settle (10.12): **the composite
 select**, at PASSIVE_LEVEL, on the `START`'s own thread, synchronous:
 
+0. the parent PDO's record is **forgotten** first, by a direct call into
+   the PDO's code (`HcdCompositeForget`, the same driver's own extension),
+   so whatever happens below, a start that does not complete the sequence
+   leaves no record, and the functions fall back to today's behaviour (a
+   review, round 1: a Windows 98 `STOP` keeps the record, and a start whose
+   sequence fails must not leave the old one standing);
 1. `GET_DESCRIPTOR_FROM_DEVICE` for the device descriptor (18 bytes);
 2. `GET_DESCRIPTOR_FROM_DEVICE` for the configuration descriptor, first
    its 9-byte header, then the whole at the header's `wTotalLength` (at
@@ -6794,64 +6800,73 @@ select**, at PASSIVE_LEVEL, on the `START`'s own thread, synchronous:
    back up through the stack**, so a lower filter that rewrites the
    `GET_DESCRIPTOR` answer is honoured as well as one that rewrites the
    select - with one `USBD_INTERFACE_INFORMATION` for each interface number
-   the descriptor carries, at alternate 0, each with room for that
-   alternate's endpoints, `MaximumTransferSize` left at the default the
-   `usbd.sys` builders write (`USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE`).
+   the descriptor carries, at alternate 0, in the order of their
+   descriptors, each with room for that alternate's endpoints,
+   `MaximumTransferSize` left at the default the `usbd.sys` builders write
+   (`USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE`). A pure planner,
+   `XhciPipeParentPlan` (`xhci_pipe.c`), lists the interface numbers and
+   their endpoint counts so the host suite covers it; the URB is built by
+   hand (the HCD imports nothing from `usbd.sys`).
 
 Each is an `IOCTL_INTERNAL_USB_SUBMIT_URB` IRP the FDO builds with
 `IoAllocateIrp` at its lower device's stack size and sends to
 `fdo->LowerDevice` - the top of the stack below it, a lower filter
 included - waiting on an event its completion routine signals
-(`STATUS_MORE_PROCESSING_REQUIRED`, the IRP freed by the FDO). The URB
-built by hand (the HCD imports nothing from `usbd.sys`); `IoAllocateIrp`,
-`IoFreeIrp`, `IoCallDriver` and `KeWaitForSingleObject` are in the HCD's
-imports already (`hcd_svc.c`), so the import gate is unchanged. A pure
-builder, `XhciFuncParentSelectBuild` (`xhci_func.c`), sizes and fills the
-select URB from the descriptor so the host suite covers it.
+(`STATUS_MORE_PROCESSING_REQUIRED`, the IRP freed by the FDO).
+`IoAllocateIrp`, `IoFreeIrp`, `IoCallDriver` and `KeWaitForSingleObject`
+are in the HCD's imports already (`hcd_svc.c`), so the import gate is
+unchanged.
 
 **A failure anywhere in the three steps never fails the `START`** (D4): the
-device works as it does today, with no composite record; the failure is
-counted and logged (10.14.6). The `START` waits on its own requests only,
-so no step can wait on the controller thread while that thread waits on
-PnP.
+device works as it does today, with no composite record (step 0); the
+failure is counted and logged (10.14.6).
 
-**The parent PDO** answers, of all internal IOCTLs, `SUBMIT_URB` with three
-functions (D11); everything else stays `STATUS_NOT_SUPPORTED`, as today:
+**The parent PDO answers everything here at once, in its dispatch, with no
+queue and no controller thread** (a review, round 1, P1: a select pended
+for the thread can be parked by a containment, `HcdCfgQueue`, and the
+composite FDO's `REMOVE`, waiting on its unconfigure before it passes the
+`REMOVE` down, would then never reach the `REMOVE` that releases it). Of
+all internal IOCTLs it answers `SUBMIT_URB` with three functions (D11);
+everything else stays `STATUS_NOT_SUPPORTED`, as today:
 
 - `GET_DESCRIPTOR_FROM_DEVICE` for a device descriptor (type 1) and a
-  configuration descriptor (type 2, index 0): answered at once from the
-  PDO's own copies (`DeviceDesc`, `Config`, fixed at creation), bounded by
-  the request's buffer and by the copy, with `TransferBufferLength` set to
-  what was copied; no bus traffic. Any other type or index:
+  configuration descriptor (type 2, index 0): answered from the PDO's own
+  copies (`DeviceDesc`, `Config`, fixed at creation), bounded by the
+  request's buffer and by the copy, with `TransferBufferLength` set to what
+  was copied; no bus traffic. Any other type or index:
   `USBD_STATUS_INVALID_PARAMETER`, `STATUS_INVALID_PARAMETER`.
 - `SELECT_CONFIGURATION`, non-NULL: **the composite record**, below.
 - `SELECT_CONFIGURATION`, NULL descriptor: the record forgotten (10.14.4).
 
+The dispatch takes the PDO's `Busy` as a device PDO's internal IOCTL
+dispatch does and refuses once the PDO is `Closing` (`STATUS_DELETE_PENDING`)
+or orphaned (`Controller` NULL: `STATUS_NO_SUCH_DEVICE`), at any IRQL up to
+DISPATCH_LEVEL, since a filter may send from there; nothing in it waits.
 Being presentation-only (10.12) still holds in the sense that matters: no
 data-path URB, no pipe and no device traffic ever comes through the parent;
 what it answers is descriptors it holds and a record it keeps.
 
-**The composite record** (the `SELECT_CONFIGURATION` at the parent PDO).
-Pended for the controller thread like every select (`HcdCfgService`), so it
-is serialised with the functions' selects, `SELECT_INTERFACE`s, releases
-and the `RESET_PORT` replay. It needs no hardware: it sends nothing to the
-device, opens and closes no endpoint, and runs whether the device's link is
-suspended or not. The thread:
+**The composite record** (the `SELECT_CONFIGURATION` at the parent PDO):
 
-1. **Validates** the request structurally (`XhciFuncParentSelectCheck`, pure):
-   the descriptor's header (type 2, `bLength` 9 or more, `wTotalLength` at
-   least 9), its `bConfigurationValue` equal to
-   the device's (`ConfigValue`), and every `USBD_INTERFACE_INFORMATION`
-   within the URB's `Length`, naming an interface number and alternate the
-   **device's own** configuration (`dev->Selected`) carries, each interface
-   once, with room for that alternate's pipes. A failure refuses the
-   select (`USBD_STATUS_INVALID_PARAMETER`, `STATUS_INVALID_PARAMETER`; too
-   small a `Length`, `USBD_STATUS_BUFFER_TOO_SMALL`) and forgets any
-   earlier record (D3).
-2. **Copies** the caller's descriptor (its `wTotalLength` bytes) into pool
-   owned by the parent PDO, replacing any earlier copy: the record. No
-   field of it is used except through the match below.
-3. **Fills the URB** as a select would: per interface, `Class`,
+1. **Validated** against the parent PDO's own copy of the configuration
+   (`Config`, the device's, fixed at creation; the device has one
+   configuration, 10.8): the caller's descriptor (`XhciPipeRecordCheck`)
+   is a configuration descriptor whose `wTotalLength` is at least 9, whose
+   `bConfigurationValue` is the copy's, and whose descriptors walk
+   cleanly; every `USBD_INTERFACE_INFORMATION` lies within the URB's
+   `Length`, names an interface number and alternate the copy carries,
+   each interface once, with room for that alternate's pipes. A failure
+   refuses the select (`USBD_STATUS_INVALID_PARAMETER`,
+   `STATUS_INVALID_PARAMETER`; too small a `Length`,
+   `USBD_STATUS_BUFFER_TOO_SMALL`) and forgets any earlier record (D3).
+   The caller's descriptor is read to its own `wTotalLength`, the bound
+   every port driver trusts in a select.
+2. **Copied** into a reference-counted pool block (`HCD_COMP_RECORD`: a
+   count, a length, the bytes), which replaces the PDO's earlier one under
+   `PdoListLock`; the earlier one's reference is dropped after the lock,
+   and a block is freed when its last reference goes. No field of it is
+   used except through the match of 10.14.3.
+3. **The URB filled** as a select would fill it: per interface, `Class`,
    `SubClass`, `Protocol`, `InterfaceHandle` (the same cookie a function's
    select returns), `NumberOfPipes`, and per pipe its `EndpointAddress`,
    `PipeType`, `MaximumPacketSize` and `Interval` - the **effective**
@@ -6859,8 +6874,8 @@ suspended or not. The thread:
    `PipeHandle` NULL (no pipe is opened for the composite; nothing below
    the composite FDO sends a transfer); `ConfigurationHandle` a non-NULL
    cookie of the parent's. Success.
-4. **Counts and logs** it: endpoints matched with a byte that differs from
-   the device's (the rewrites), endpoints that did not match (10.14.5).
+4. **Counted and logged** (10.14.6): endpoints matched with a byte that
+   differs from the device's (the rewrites), endpoints that did not match.
 
 **It does not configure anything.** The device was configured by the bus
 before any PDO of the group existed (10.8: `SET_CONFIGURATION`, every
@@ -6868,14 +6883,19 @@ interface at alternate 0, no endpoint open); that stays the bus's, with no
 second `SET_CONFIGURATION`. The record only changes which `bInterval` each
 function's endpoints are opened with, at the functions' own selects.
 
-**Where the record lives** (D10): on the parent PDO (`HCD_DEVICE_PDO`,
-`CompSelected` and `CompSelectedLength`), written and read by the thread
-only, freed with the PDO's other pool copies at its deletion. So it
-survives a `RESET_PORT` (the parent untouched, 10.12), the in-place
-re-presentation of the functions (10.12 item 3) and Windows 98's dormant
-path (the group kept and revived whole, 10.12 item 5); it goes with the
-group (unplug, `CYCLE_PORT`, a failed `RESET_PORT`, the controller's stop),
-whose next presentation brings a new parent PDO and a new composite `START`.
+**Where the record lives, and who reads it** (D10): on the parent PDO
+(`HCD_DEVICE_PDO.CompRecord`), so it survives a `RESET_PORT` (the parent
+untouched, 10.12), the in-place re-presentation of the functions (10.12
+item 3) and Windows 98's dormant path (the group kept and revived whole,
+10.12 item 5); it goes with the group (unplug, `CYCLE_PORT`, a failed
+`RESET_PORT`, the controller's stop), whose next presentation brings a new
+parent PDO and a new composite `START`. The controller thread reads it at a
+function's select or `SELECT_INTERFACE` through `dev->Pdo` - the group's
+first PDO, the parent, which the thread alone clears before any deleter
+frees it (`hcd_pdo.c`) - taking a reference under `PdoListLock` for the
+length of the select, so a record replaced or forgotten meanwhile stays
+whole until that select has finished with it. The PDO's deletion drops the
+PDO's own reference.
 
 #### 10.14.3 Precedence at a function's select
 
@@ -6927,20 +6947,29 @@ SE and ME, where disabling the parent may `STOP` it and leave its children
 running, 10.12 item 3, then `START` it again), the open pipes are **left as
 they are** (D5): the record applies at each function's next select or
 `SELECT_INTERFACE`, and a log record says the select came with functions
-open. Nothing re-opens a live pipe for an interval.
+open. Nothing re-opens a live pipe for an interval. So on 98 SE and ME a
+changed filter setting reaches a running function only once that function
+selects again - its own devnode restarted, or the device replugged - and
+the legs read it so (a review, round 1).
 
 #### 10.14.4 Re-select, unconfigure, reset, recovery and power
 
 - **A second composite select** replaces the record whole (step 2), after
   its own validation; a refused one forgets it (D3). Every composite
-  `START` sends one, so a filter added, changed or removed takes effect at
-  the parent's next start (hidusbf's Setup restarts the device it changes).
+  `START` forgets the record and sends one, so a filter added, changed or
+  removed is in the record from the parent's next start, and reaches each
+  function at that function's next select: on NT at once, since disabling
+  the parent removes its functions and its start re-presents them (10.12
+  item 3); on 98 SE and ME, where the parent may only `STOP`, once the
+  function restarts or the device is replugged (10.14.3).
 - **The unconfigure from the composite** (a NULL descriptor): the record is
   forgotten; **the device stays configured** and no function is touched
   (D9) - the bus owns the configuration (10.8), and under 10.12 item 3 a
   disabled parent leaves the device configured with no client already. The
   composite FDO sends it at its `REMOVE`, before passing the `REMOVE`
-  down, as `usbccgp` does, so a filter sees the same sequence; at a
+  down, as ReactOS's `usbccgp` does (XP's `ParentCloseConfiguration` was
+  read, its callers not), so a filter sees that sequence, and forgets the
+  record directly as well, whatever the filter does with it; at a
   `SURPRISE_REMOVAL` it sends nothing. The `STOP` of 98 SE and ME sends
   nothing (the record kept; the next `START` replaces it).
 - **`RESET_PORT`** from a function: unchanged (10.9, 10.12): the device is
@@ -7003,36 +7032,41 @@ contiguous block:
 | Word | Counter | Counts |
 |---|---|---|
 | 241 | `CompositeSelects` | composite selects recorded (step 2) |
-| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own three-step sequence failed |
+| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own three-step sequence failed (each also forgets the record) |
 | 243 | `CompositeRewrites` | endpoints of a recorded select whose matched `bInterval` differs from the device's |
 | 244 | `CompositeMismatches` | endpoints of a recorded select that did not match the device's (10.14.5) |
-| 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2), at a select or a `SELECT_INTERFACE` |
+| 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2) where it differs from the device's, at a select or a `SELECT_INTERFACE`; an endpoint whose record byte equals the device's is rule 3's and not counted |
 
 The log (the ring, `XhciLogVerbosity` 2 or more, as `fastpoll.*`):
 `comp.select` (slot, interfaces, rewrites, mismatches, and whether a
 function had pipes open), `comp.refused` (slot, the reason code),
 `comp.fdo` (the FDO's own sequence: the step that failed and its status),
 `comp.unconfig` (slot), and `comp.interval` (slot, DCI, the device's byte,
-the record's byte) per rule-2 endpoint. The stop's counter lines gain
+the record's byte) per rule-2 endpoint counted in `CompositeIntervals`. The stop's counter lines gain
 `composite.selects`, `composite.refused`, `composite.rewrites`,
 `composite.mismatches` and `composite.intervals`. `XHCISNAP` names the five
 words (its name table and `check-counter-names.ps1`).
 
 #### 10.14.7 Host tests
 
-- `test_pipe`: the precedence of 10.14.3 (`XhciPipeFunctionEndpoint` with
-  a record argument): function rewrite wins; equal function byte falls to
-  the record; no record falls to the device; a record endpoint differing
-  in `wMaxPacketSize` is not taken; a SuperSpeed function keeps its
-  companion and takes the record's byte through the rebase; mode 4's
-  codes from the record reach `hcdCfgFastPoll`'s input unchanged; the
-  `SELECT_INTERFACE` form (rule 2 then 3).
-- `test_func`: `XhciFuncParentSelectBuild` (sizes, alternate 0 only, every
-  interface once, an interface with no endpoints, IAD-grouped interfaces,
-  a descriptor too short); `XhciFuncParentSelectCheck` (each refusal: bad
-  header, wrong configuration value, unknown interface or alternate, a
-  repeat, an entry past `Length`, too few pipe slots; the counts of
-  rewrites and mismatches).
+All in `test_pipe` (the helpers are `xhci_pipe.c`'s):
+
+- the precedence of 10.14.3 (`XhciPipeFunctionEndpointFrom` and its
+  source): function rewrite wins; an equal function byte falls to the
+  record; no record, or a record byte equal to the device's, falls to the
+  device; a record endpoint differing in `wMaxPacketSize` is not taken; a
+  SuperSpeed function keeps its companion and takes the record's byte
+  through the rebase; a mode 4 code from the record lands in `BInterval`
+  for `hcdCfgFastPoll`; the `SELECT_INTERFACE` form (no caller);
+- `XhciPipeParentPlan`: alternate 0 only, every interface once in
+  descriptor order, an interface with no endpoints, IAD-grouped
+  interfaces, a malformed set, none, an interface number of 32;
+- `XhciPipeRecordCheck` (a wrong type, a short `bLength`, `wTotalLength`
+  below 9 or past the length, another configuration value, a broken walk)
+  and `XhciPipeRecordTally` (rewrites and mismatches counted). The URB
+  side of the validation (an interface or alternate the copy lacks, a
+  repeat, an entry past `Length`, too few pipe slots) is the dispatch's,
+  with `XhciPipeFindInterface` as a function's select uses it.
 
 #### 10.14.8 Legs (for the VM matrix)
 
@@ -7051,14 +7085,20 @@ endpoints only. So:
    device's own. Expect: `comp.select` with rewrites equal to the HID
    interrupt endpoints, `CompositeIntervals` up by those endpoints at the
    functions' selects, `comp.interval` records with the rate chosen, and a
-   rate tool reading it on the mouse function. Then a disable and enable of
-   the composite devnode: a new `comp.unconfig` (NT) then `comp.select`.
+   rate tool reading it on the mouse function. Then change the rate and
+   disable and enable the composite devnode: on NT a `comp.unconfig`, then
+   `comp.select` with the new rate, the functions re-presented and the rate
+   tool reading the new rate; on 98 SE the new `comp.select`, and the new
+   rate on the mouse only after its own devnode is restarted or the device
+   replugged (10.14.3, D5).
 2. **The function route for comparison**, the same device: the filter on
    the mouse function's devnode alone - today's behaviour, no
    `comp.interval` for that function; then on both, the function's rate
    winning on its own endpoints (rule 1).
 3. **No filter**: `comp.select` with zero rewrites and zero mismatches,
-   `CompositeIntervals` zero, every rate the device's - the regression
+   `CompositeIntervals` unchanged and no `comp.interval` record (a record
+   byte equal to the device's is rule 3's), every rate the device's - the
+   regression
    reading, also on QEMU's `usb-audio` on 98 SE, ME, 2000, XP, XP x64 and 7
    x64 (audio plays to its end, the composite select recorded with no
    interrupt endpoint).
