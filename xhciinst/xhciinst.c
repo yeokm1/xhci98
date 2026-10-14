@@ -211,11 +211,26 @@ static int changedState[INST_MAX_CHANGED];
 static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
-static int tunnelChanged;   /* 2000: a port's first filter install succeeded */
+/* Windows 2000's first filter install on a tunnel port (the unforced
+ * call): the ports it reached and every device below them, read before
+ * the call - the only devices whose loss or Code 12 after it is excused
+ * as "may recover after a restart" (record 23 section 5.9). */
+#define INST_MAX_AFFECTED 128
+static char affectedId[INST_MAX_AFFECTED][INST_ID_CHARS];
+static int affectedCount;
+static int affectedOverflow;
+/* The recovery owed: devices excused that way, journalled so the run after
+ * the restart checks they came back (RECOVER.LST). */
+#define INST_MAX_RECOVER 64
+static char recoverId[INST_MAX_RECOVER][INST_ID_CHARS];
+static int recoverInf[INST_MAX_RECOVER];
+static int recoverCount;
+static int recoverOverflow;
 static int was_changed(const char *id);
 static int was_installed(const char *id);
 static int result_ok(const DEVREC *d, int inf);
 static int idle_filtered_port(const DEVREC *d, int inf);
+static void affected_add_subtree(const char *portId);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
@@ -1944,6 +1959,8 @@ static void local_remove_all(void)
     }
     join(sub, sizeof(sub), rootDir, "RESTAGE.LST");
     DeleteFileA(sub);
+    join(sub, sizeof(sub), rootDir, "RECOVER.LST");
+    DeleteFileA(sub);
     if (RemoveDirectoryA(rootDir)) {
         out("%s removed.\n", rootDir);
     }
@@ -2995,8 +3012,10 @@ static int install_inf(int inf, int controllers)
                 (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
                  inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
                 int c;
-                if (idle_filtered_port(&devs[j], inf)) {
-                    /* Reached but not a target: no evidence of an install. */
+                if (flags == 0 && idle_filtered_port(&devs[j], inf)) {
+                    /* An unforced call may leave it as it is: reached, but
+                     * no evidence of an install. A forced call reinstalls
+                     * it, so it is a target like the others. */
                     devs[j].Done = 1;
                     note_changed(&devs[j], 0);
                     continue;
@@ -3019,16 +3038,21 @@ static int install_inf(int inf, int controllers)
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
             d->Desc[0] ? d->Desc : d->Id);
         reboot = FALSE;
+        if (flags == 0) {
+            /* Before the call: the reached ports and their subtrees. */
+            for (j = 0; j < devCount; j++) {
+                if (devs[j].Present && devs[j].Inf == inf &&
+                    (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                     inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
+                    affected_add_subtree(devs[j].Id);
+                }
+            }
+        }
         logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", %s)\n",
                 hwid, path, flags ? "FORCE" : "0");
         if (api.UpdateDriver(NULL, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
             flagChanged = 1;
-            if (flags == 0) {
-                /* Only the filter's first install on Windows 2000 goes
-                 * unforced (call_flags): the case read on the 2000 leg. */
-                tunnelChanged = 1;
-            }
             for (j = 0; j < n; j++) {
                 changedState[callIdx[j]] = 2;   /* the call succeeded */
                 if (reboot) {
@@ -3152,6 +3176,221 @@ static int result_ok(const DEVREC *d, int inf)
            (d->Status & INST_DN_STARTED) != 0 && d->Problem == 0;
 }
 
+/* result_ok() without the started and problem-code clauses: the binding
+ * and the version alone. */
+static int bound_ok(const DEVREC *d, int inf)
+{
+    return (inf == INST_INF_CMF ?
+            (inst_eq(d->Service, "pci") &&
+             inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
+             d->InfPathState > 0 && inf_path_is_ours(d->InfPath) == 1) :
+            inst_eq(d->Service, instInfService[inf])) &&
+           d->VersionState == INST_VS_HAVE &&
+           inst_ver_cmp(d->Version, pkgVersion) == 0;
+}
+
+static int affected(const char *id)
+{
+    int i;
+
+    for (i = 0; i < affectedCount; i++) {
+        if (inst_eq(affectedId[i], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void affected_put(const char *id)
+{
+    if (affected(id)) {
+        return;
+    }
+    if (affectedCount >= INST_MAX_AFFECTED) {
+        affectedOverflow = 1;
+        return;
+    }
+    inst_copy(affectedId[affectedCount++], id, INST_ID_CHARS);
+}
+
+static void affected_walk(DWORD dn, int depth)
+{
+    DWORD child;
+    char id[INST_ID_CHARS];
+
+    if (depth > 16 || api.Child(&child, dn, 0) != INST_CR_SUCCESS) {
+        return;
+    }
+    for (;;) {
+        if (api.DeviceId(child, id, sizeof(id), 0) == INST_CR_SUCCESS) {
+            affected_put(id);
+        }
+        affected_walk(child, depth + 1);
+        if (api.Sibling(&child, child, 0) != INST_CR_SUCCESS) {
+            return;
+        }
+    }
+}
+
+/* The port and every device below it, read from the configuration
+ * manager before the port's driver changes. */
+static void affected_add_subtree(const char *portId)
+{
+    DWORD dn;
+    char want[INST_ID_CHARS];
+
+    affected_put(portId);
+    if (api.Locate == NULL || api.Child == NULL || api.Sibling == NULL ||
+        api.DeviceId == NULL) {
+        return;
+    }
+    inst_copy(want, portId, sizeof(want));
+    if (api.Locate(&dn, want, 0) == INST_CR_SUCCESS) {
+        affected_walk(dn, 0);
+    }
+}
+
+/* Owe a device's recovery; 0 when the journal is full (no excuse then). */
+static int recover_add(const char *id, int inf)
+{
+    int i;
+
+    if (affectedOverflow) {
+        return 0;
+    }
+    for (i = 0; i < recoverCount; i++) {
+        if (inst_eq(recoverId[i], id)) {
+            return 1;
+        }
+    }
+    if (recoverCount >= INST_MAX_RECOVER) {
+        recoverOverflow = 1;
+        return 0;
+    }
+    inst_copy(recoverId[recoverCount], id, INST_ID_CHARS);
+    recoverInf[recoverCount] = inf;
+    recoverCount++;
+    return 1;
+}
+
+static void recover_path(char *path, size_t cap)
+{
+    char rootDir[INST_PATH_CHARS];
+
+    if (!local_dir(rootDir, sizeof(rootDir))) {
+        path[0] = '\0';
+        return;
+    }
+    join(path, cap, rootDir, "RECOVER.LST");
+}
+
+/* The recovery owed by an earlier run (RECOVER.LST: "DEV <inf> <id>" lines
+ * and "END <n>"): each device must now be present and pass result_ok.
+ * Reads the devices of the last scan. 0 when the file is unreadable or
+ * malformed. */
+static int recover_check(void)
+{
+    char path[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+    int lines = 0;
+    int end = -1;
+    int i;
+
+    recover_path(path, sizeof(path));
+    if (path[0] == '\0' || GetFileAttributesA(path) == 0xFFFFFFFFUL) {
+        return 1;
+    }
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        out("%s cannot be read.\n", path);
+        return 0;
+    }
+    for (p = text; *p != '\0'; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            nl = p + strlen(p);
+        } else {
+            *nl++ = '\0';
+        }
+        if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+            p[strlen(p) - 1] = '\0';
+        }
+        if (p[0] == '\0') {
+            continue;
+        }
+        if (end >= 0) {
+            end = -2;
+            break;
+        }
+        if (strncmp(p, "DEV ", 4) == 0 && p[4] >= '0' &&
+            p[4] < '0' + INST_INF_COUNT && p[5] == ' ' && p[6] != '\0') {
+            const DEVREC *d = NULL;
+            lines++;
+            for (i = 0; i < devCount; i++) {
+                if (inst_eq(devs[i].Id, p + 6)) {
+                    d = &devs[i];
+                    break;
+                }
+            }
+            if (d != NULL && d->Present && result_ok(d, p[4] - '0')) {
+                out("  %s came back after the restart and runs.\n",
+                    d->Desc[0] ? d->Desc : d->Id);
+            } else {
+                out("  %s did not come back after the restart as installed: "
+                    "%s.\n", p + 6, d == NULL || !d->Present ? "not present" :
+                    "not started, or not bound to this package");
+                flagFailed = 1;
+            }
+        } else if (strncmp(p, "END ", 4) == 0) {
+            end = atoi(p + 4);
+        } else {
+            end = -2;
+            break;
+        }
+    }
+    free(text);
+    if (end != lines) {
+        out("%s is not in the form this tool writes.\n", path);
+        return 0;
+    }
+    return 1;
+}
+
+/* The recovery this run owes, journalled (or the file removed when none). */
+static int recover_write(void)
+{
+    char path[INST_PATH_CHARS];
+    char rootDir[INST_PATH_CHARS];
+    FILE *f;
+    int i;
+
+    recover_path(path, sizeof(path));
+    if (path[0] == '\0') {
+        return 0;
+    }
+    if (recoverCount == 0) {
+        if (GetFileAttributesA(path) != 0xFFFFFFFFUL && !DeleteFileA(path)) {
+            return 0;
+        }
+        return 1;
+    }
+    if (!local_dir(rootDir, sizeof(rootDir))) {
+        return 0;
+    }
+    CreateDirectoryA(rootDir, NULL);
+    f = fopen(path, "w");
+    if (f == NULL) {
+        return 0;
+    }
+    for (i = 0; i < recoverCount; i++) {
+        fprintf(f, "DEV %d %s\n", recoverInf[i], recoverId[i]);
+    }
+    fprintf(f, "END %d\n", recoverCount);
+    return fclose(f) == 0;
+}
+
 /* 1 when an install call for the device succeeded in this run. */
 static int was_installed(const char *id)
 {
@@ -3242,11 +3481,13 @@ static void check_results(void)
             }
         }
         if (d == NULL || !d->Present) {
-            if (tunnelChanged &&
-                (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF)) {
+            if (affected(changedId[c]) &&
+                (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF) &&
+                recover_add(changedId[c], changedInf[c])) {
                 /* On Windows 2000 a tunnel port's first filter install took
                  * the switch's subtree away until the restart (read on the
-                 * 2000 leg, 2026-10-15); it may come back then. */
+                 * 2000 leg, 2026-10-15); it may come back then, and the run
+                 * after the restart checks that it did. */
                 out("  %s is not present after a tunnel port's filter "
                     "install; it may come\n  back after a restart: restart, "
                     "then run INSTALL.BAT again.\n", changedId[c]);
@@ -3278,11 +3519,9 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (tunnelChanged && changedInf[c] == INST_INF_CMF &&
-                   d->Problem == 12UL && inst_eq(d->Service, "pci") &&
-                   inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
-                   d->VersionState == INST_VS_HAVE &&
-                   inst_ver_cmp(d->Version, pkgVersion) == 0) {
+        } else if (changedInf[c] == INST_INF_CMF && d->Problem == 12UL &&
+                   affected(d->Id) && bound_ok(d, changedInf[c]) &&
+                   recover_add(d->Id, changedInf[c])) {
             /* The filter is in place; on the 2000 leg (2026-10-15) the port
              * started after the restart. It may, not must. */
             out("  %s has the filter but reports problem 12 (resources); "
@@ -3595,7 +3834,15 @@ static int run_install_nt(void)
         out("Run INSTALL.BAT again to go on.\n");
     }
     write_values();
+    if (!recover_check()) {
+        flagFailed = 1;
+    }
     check_results();
+    if (!recover_write()) {
+        out("The recovery list %%windir%%\\XHCI98\\RECOVER.LST could not be "
+            "written.\n");
+        flagFailed = 1;
+    }
     restage_settle();
     if (!restage_write()) {
         out("The /restage work file could not be updated.\n");
@@ -3612,7 +3859,13 @@ static int run_install_nt(void)
 stopped:
     if (scan()) {
         plan();
+        if (!recover_check()) {
+            flagFailed = 1;
+        }
         check_results();
+        if (!recover_write()) {
+            flagFailed = 1;
+        }
     }
     out("\nStopped before every device was done: run INSTALL.BAT again to go "
         "on.\n");
