@@ -493,7 +493,8 @@ section 15.14 are the as-built.
 **Off by default** (owner, 2026-10-14, after the matrix's clock reading
 above): both INFs write `XhciPollFineTimer` 0 under the don't-overwrite
 rule, an absent, unreadable or other-type value is off; record 15 section
-7.2.4's amendment, the documents, `XHCISNAP`'s "off (the default)"
+7.2.4's amendment, the documents, `XHCISNAP`'s "not set; in effect off (the
+default)" for an absent value and "0; in effect off" for a written 0
 (`17888a97`, review fixes `6eff1869`, `76327494`, `64d2801f`). Real
 hardware is unread, and the default is reconsidered on a reading there.
 
