@@ -18,7 +18,8 @@ families.
            and [Config.hidparse] (OEM-W2K), the amd64 file none of them.
            "scsi" is the one component class F6 offers; a keyboard,
            computer, display or mouse section is refused by name.
-  OEM-QUOTE  A quote anywhere is balanced and wraps its whole field.
+  OEM-QUOTE  A quote anywhere is balanced and wraps its whole field, with no
+           space just inside it (Setup keeps that space; this parser trims it).
   OEM-DEFAULT  [Defaults] is "scsi = XHCI98" alone, and [scsi] names XHCI98
            alone (x86: XHCI98 and then XHCI98W2K, whose description names
            Windows 2000 and not XP), each with a quoted description.
@@ -214,6 +215,14 @@ function Split-OemFields {
         $bad = $false
         if ($n -ne 0 -and ($n -ne 2 -or -not ($raw.StartsWith('"') -and $raw.EndsWith('"')))) { $bad = $true }
         if ($k -eq $fields.Count - 1 -and $inQuote) { $bad = $true }
+        # Space just inside the quotes is part of the string to Setup
+        # (" USB\XHCI98_ROOT_HUB" is another id, " \usbd.sy_" another
+        # path), and this parser trims it: refused, so no comparison below
+        # reads a different string as the same one (a review, 2026-10-14).
+        if ($quoted -and -not $bad -and $raw.Length -gt 2) {
+            $inner = $raw.Substring(1, $raw.Length - 2)
+            if ($inner -ne $inner.Trim()) { $bad = $true }
+        }
         $text = $raw
         if ($quoted -and -not $bad) { $text = $raw.Substring(1, $raw.Length - 2).Trim() }
         elseif ($quoted) { $text = $raw.Replace('"', '').Trim() }
@@ -844,6 +853,9 @@ if ($SelfTest) {
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.usbd" "value = `"`", Start" "value = `" `", Start") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.usbd" "value = `"`", Start" "value = `"`", `" Start `"") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.hidparse" "value = `"`", Start" "value = `"`", start") }
+            $cases += @{ Rule = "OEM-QUOTE"; Text = (& $inSec "HardwareIds.scsi.$w2kOption" "id = `"USB\XHCI98_ROOT_HUB`"" "id = `" USB\XHCI98_ROOT_HUB`"") }
+            $cases += @{ Rule = "OEM-QUOTE"; Text = $text.Replace(", \usbd.sy_, \", ", `" \usbd.sy_`", \") }
+            $cases += @{ Rule = "OEM-QUOTE"; Text = (& $inSec "HardwareIds.scsi.$w2kOption" "`"xhci98`"" "`"xhci98 `"") }
             $cases += @{ Rule = "OEM-SECTION"; Text = (& $inSec "Config.hidparse" "[Config.hidparse]`r`nvalue = `"`", Start, REG_DWORD, 3`r`n" "") }
             $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace(", \usbd.sy_, \", ", \usbd.sys, \") }
             $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace(", \usbd.sy_, \", ", \usbd.sy_, \i386") }
