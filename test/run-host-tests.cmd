@@ -202,7 +202,9 @@ rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows
 rem                  against Linux's structure layouts
 rem   test_tbt_hw  - the hardware profiles, the Ice Lake family's force-power
 rem                  sequence and the connection manager's selection
-rem                  (src\cm\tbt_hw.c, task 39-A.3): every outcome and inert
+rem                  (src\cm\tbt_hw.c, task 39-A.3), and its id table checked
+rem                  against cm_vals.c's for every Intel and AMD id (task
+rem                  39-A.4); every outcome and inert
 rem                  reason
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
@@ -431,7 +433,7 @@ rem profiles and the selection over both, since each profile names its
 rem ICM message row.
 call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
-call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).

@@ -149,6 +149,20 @@ from `2.4.0.0` `releases/<version>/tools/xhcicln/XHCICLN.EXE` and
 qualifier carries an embedded DOS extender and an Open Watcom runtime, the
 reader and the cleanup tool statically linked Microsoft C runtimes.
 
+This section also records the other way third-party code enters the
+tree: source files of this project that carry code taken from elsewhere,
+each with its notices. For the Thunderbolt and USB4 work (`src/cm/`) there
+are two kinds. The first is the files lifted from `usb4-emu`'s
+`tools/usb4cm` while that repository was MIT ("Source files lifted from
+`usb4cm`" below), which keep the MIT notice of the commit they came from.
+The second, since 2026-10-15, is any file adapted under section 3's rule
+for the Thunderbolt and USB4 mirrors from `usb4-emu` (at `3c74189` or
+later, GPL-2.0-only), from Linux `drivers/thunderbolt`, from FreeBSD
+`sys/dev/thunderbolt` or from Intel's tbtools data ("Source files adapted
+for the Thunderbolt and USB4 work" below): one entry per file, naming the
+source file, the pinned commit actually read and what was adapted, added
+in the change that adapts it.
+
 #### XHCIQUAL.EXE
 
 `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` is built from `xhciqual/`'s own C
@@ -271,8 +285,8 @@ paths that commit is identical to `eba0cf1`, the commit record 21 cites.
 | `core/u4hi.c` | 522 | `d5f705ed29d12ee42af16c4f0d97e5aab31ea342` | written from scratch from USB4 Specification 2.0 sections 6.4, 12.3, 12.4 and 12.6 | roadmap-usb4 task 39-A.2, as `src/cm/tbt_ring.c` |
 | `core/u4regs.h` | 168 | `f4d4a15c775591c73e847f2d91d563b04d629eb8` | written from scratch from Specification 2.0 sections 12.6 and 8, "field positions cross-checked against tbtools registers.json" | 39-0.2 and 39-A.2, as `src/cm/tbt_regs.h` |
 | `core/u4types.h` | 29 | `184e46e41f451abc18cfc9ac775c0fa3e03ef4d6` | written from scratch | 39-A.2 (design record 21 section 9) |
-| `core/u4cm.c` | 754 | `826722d9c202e1b06439ddffb869c78979cd578c` | written from scratch from the Connection Manager Guide 2.0 and Specification 2.0 | Phase 40 (task 40.2) |
-| `core/usb4cm.h` | 224 | `6be9bab78443e7e8d6238ccf17287f7a23d9556d` | written from scratch from Specification 2.0 and the Connection Manager Guide 2.0 | Phase 40 (task 40.2) |
+| `core/u4cm.c` | 754 | `826722d9c202e1b06439ddffb869c78979cd578c` | written from scratch from the Connection Manager Guide 2.0 and Specification 2.0 | Phase 40 (task 40-A.3); if taken from `3c74189` or later, entered below as an adaptation instead |
+| `core/usb4cm.h` | 224 | `6be9bab78443e7e8d6238ccf17287f7a23d9556d` | written from scratch from Specification 2.0 and the Connection Manager Guide 2.0 | Phase 40 (task 40-A.3); if taken from `3c74189` or later, entered below as an adaptation instead |
 
 Not lifted, and not to be: `dos/usb4cm.c`, a DOS front end whose build links
 the DOS/32A extender and the Open Watcom runtime; `host/cm-host-test.c`,
@@ -325,6 +339,25 @@ that files generated from `registers.json` carry the tbtools notice.
 `u4regs.h` carries no tbtools notice and does not say it was generated. Task
 39-A.2 reads the file against that rule before it lands, and records what
 it finds here.
+
+`usb4-emu`'s `main` was relicensed to GPL-2.0-only at `3c74189`
+(2026-10-15). The files above that have landed (`u4hi.c` as
+`src/cm/tbt_ring.c` and `u4regs.h` as `src/cm/tbt_regs.h`, task 39-A.2)
+were lifted from `a68bc74`, where they carry the MIT notice, and keep it.
+The others are planned: a file taken from `3c74189` or later is an
+adaptation under section 3's rule and is entered in the subsection below
+instead.
+
+#### Source files adapted for the Thunderbolt and USB4 work
+
+Not a binary either: the files adapted under section 3's rule for the
+Thunderbolt and USB4 mirrors, from 2026-10-15. One row per adapted file,
+added in the change that adapts it; the notices it keeps are the ones that
+rule names.
+
+| File in this tree | Source file | Commit read | What was adapted | Notices kept | Task |
+|---|---|---|---|---|---|
+| (none yet) | | | | | |
 
 ### The third-party PDFs
 
@@ -542,24 +575,72 @@ xHCI mirrors above:
 
 What is taken: device ids, message codes and layouts, register and field
 offsets, constants, sequences and controller quirks. Each is cited by file
-and symbol where it is used, and section 4 records the classes. What is not
-taken: no function body of either tree is copied into `src/` or into the
-documents. The copy exception above for Linux's xHCI quirks does not
-reach these trees: the owner's decision for them names reading and
-citing, not copying. A copy would need a decision of its own, recorded
-here first.
+and symbol where it is used, and section 4 records the classes.
+
+The owner's first decision of 2026-10-15 named reading and citing only,
+with no function body of either tree copied. Later that day the owner
+widened it, through the `usb4-emu` maintainer's note, to take effect when
+`usb4-emu`'s relicensing from MIT to GPL-2.0-only landed on its `main`. It
+landed at `3c74189` (2026-10-15), whose handoff (`docs/XHCI98-HANDOFF.md`
+section 3) reads: "xhci98 may adapt code directly from this repo
+(`tools/usb4cm` included) and from Linux `drivers/thunderbolt`
+(GPL-2.0-only), as well as FreeBSD `sys/dev/thunderbolt` (BSD-2) and Intel
+tbtools data (MIT). Keep the notices of whatever you adapt: the copyright
+lines of the source file, its SPDX tag, and an entry in xhci98's
+provenance record naming the source file and pinned commit". The rule this
+project keeps for that, for the Thunderbolt and USB4 work only (roadmap-usb4
+Phases 39 and 40, design records 21 and 22, `src/cm/`):
+
+- Code may be adapted from those four sources. The facts above are still
+  cited by file and symbol where they are used.
+- Every adapted file keeps the copyright lines of each source file it came
+  from and that file's SPDX tag. A file adapted from Linux or from
+  `usb4-emu` at or after `3c74189` carries
+  `SPDX-License-Identifier: GPL-2.0-only` with the source's copyright
+  lines; a file adapted from FreeBSD keeps its BSD-2-Clause copyright line,
+  conditions and disclaimer verbatim; tbtools data keeps its MIT copyright
+  and permission notice verbatim; a `usb4cm` file lifted from a commit
+  before `3c74189` keeps the MIT notice of that commit (section 2a, "Source
+  files lifted from `usb4cm`"). The file is marked as changed, with the
+  date, and its header names the source file.
+- Each adapted file gets an entry in section 2a, "Source files adapted for
+  the Thunderbolt and USB4 work", naming the source file, the commit
+  actually read (Linux `c6859eed755df351a3978b33cb92365f9b3e8f06` and
+  FreeBSD `9d50245a0f1333e10cc1c4dda16878cd79a7c42b`, `external/README.md`'s
+  pins; the `usb4-emu` commit read, `3c74189` or later; the tbtools commit
+  read), what was adapted and where it landed, in the same change.
+- Adapting is translating: the code is still C89, safe on Windows 98 and
+  2000, free of 64-bit arithmetic and in `AGENTS.md`'s style, never a
+  paste of a Linux kernel API.
+- Behaviour taken from Linux alone stays tagged [linux], unconfirmed,
+  until a hardware capture shows it; adapting the code that implements it
+  does not change the tag.
+- Nothing moves from this repository or from `usb4-emu` into `nvme98`,
+  which is BSD-3-Clause.
+- A release whose binary carries adapted code says so in its notices,
+  naming the source files and their copyright holders, and offers its
+  corresponding source as the Linux xHCI exception above does (taken over
+  from that exception as an orchestrator decision of 2026-10-15, for the
+  owner to confirm).
+- The overlap audit above treats the recorded entries as known overlap;
+  any other verbatim overlap with these mirrors is still a finding.
+
+Every other mirror, and Linux and FreeBSD outside the Thunderbolt and
+USB4 work, stays under the do-not-copy rule, with the xHCI quirk
+exception above as the only other one.
 
 Both mirrors are in `external/` (git-ignored), and `external/README.md`
 records how to fetch them. On 2026-10-15 every mirrored file matched the
 upstream blob at its pinned commit once CR-LF was normalised to LF. Linux
 has no `include/uapi/linux/thunderbolt.h` at that commit, so the mirror
-has no such file. `usb4-emu`'s clean-room process still governs that
-repository, and `ICM-PROTOCOL.md` stays the contract record 21 cites
-first. A statement it tags [inf] - what Linux's client does - may now be
-checked against `icm.c` and cited there as well.
+has no such file. `usb4-emu`'s `ICM-PROTOCOL.md`, written clean-room under
+that repository's former rule and stated there to remain accurate, stays
+the contract record 21 cites first. A statement it tags [inf] - what
+Linux's client does - may be checked against `icm.c` and cited there as
+well.
 
-This records the decision and what was fetched; it draws no legal
-conclusion.
+This records the decisions, the text they rest on and what was fetched;
+it draws no legal conclusion.
 
 ## 4. Facts read out of shipping binaries: a source-method inventory
 
@@ -1098,6 +1179,8 @@ written, then the three task 22.12 (b) readings of 2026-09-18.
 | **Linux and FreeBSD: NHI register offsets and fields, and control-packet framing** - Linux `nhi_regs.h`, `tb_regs.h` and `ctl.c` (the frame, `tb_crc`); FreeBSD `nhi_reg.h` and `tb_reg.h` | static (a source read of the pinned mirrors; nothing executed). These are cross-readings of USB4 2.0 section 12 and `usb4cm`'s `u4regs.h` (section 2a), each offset cited by file and symbol | `src\cm\tbt_regs.h` and design record 21 section 4, as each lands |
 | **Linux `drivers/thunderbolt`: controller quirks** - `quirks.c`'s `tb_quirks[]` and the generation-specific handling in `icm.c` and `nhi.c` | static (a source read of the pinned mirror; nothing executed). A quirk is taken as a description, the ids and the register effect, cited by file and symbol, and written fresh; no quirk code is copied (section 3's Thunderbolt paragraph) | design record 21 and `src\cm\`, as each lands |
 | **The PCI ID Repository: the Thunderbolt NHI, switch-port and tunnel root-port ids and their listed names** (design record 21 section 3.3, decision D9) - `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids> (the listing at <https://pci-ids.ucw.cz/>, vendor `8086`), version `2026.10.14`, dated 2026-10-14 03:15:02, fetched 2026-10-15, 1,671,991 B, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`; the file's header offers it under GPL-2.0-or-later or BSD-3-Clause and says its copyright covers only the aggregation and formatting of factual data | static (a text listing read; nothing executed). Ids only: the vendor and device ids and the names listed beside them, cross-checked against Linux `pci_ids.h` and `nhi.h`; the file is not tracked and nothing else of it is taken | design record 21 section 3.3 |
+| **The ThinkPad P14s Gen 1's PCI configuration space, as the owner captured it, used as host-test vectors** (roadmap-usb4 task 39-A.5, design record 21 section 6.3) - `usb4-emu` `main` `a68bc74` (MIT at that commit, GPL-2.0-only from `3c74189`), `tests/captures/p14s-gen1/win98/OFF_OFF/PCIDUMP.TXT` (BIOS Assist off, pre-boot off; SHA-256 `c0ddd4ee4501b2ad21ffa01eb5ad5b55e3cd9a384039a17daff43b540a44b9cd`) and `.../OFF_ON/PCIDUMP.TXT` (pre-boot on, the dock tunnelled before POST; SHA-256 `03c1448c9d5cb56ecd456cafa2c1b7118889327dbcd116885f42e96b3b6ec1be`), read under DOS with PCI mechanism #1 on the owner's own machine, 256 bytes per function | a hardware capture, neither static nor runtime in this section's sense: the owner's machine read under DOS, not by this driver and not out of a binary. Every function's 256 bytes are reproduced unedited in `test\tbt_topo_p14s.h`, which names both files and both SHA-256s in its header, for `test_tbt_topo`'s P14s vectors | `test\tbt_topo_p14s.h`, `test\test_tbt_topo.c`; design record 21 section 6.3 |
+| **Linux `drivers/thunderbolt`: how a domain's PCI side is associated** - `icm.c` `get_upstream_port` (the discrete switch known by its ids), `acpi.c` `tb_acpi_add_links` and `tb_acpi_add_link` (the `usb4-host-interface` references from root ports to the NHI), `usb4.c` `usb4_switch_map_pcie_down` and `tb.c` `tb_find_pcie_down` (the fabric mapping, which names an adapter and no PCI location) | static (a source read of the pinned mirror; nothing executed). Taken as descriptions of what each source can and cannot say, cited by file and symbol; nothing of them is adapted into `tbt_topo.c` | design record 21 section 6.3; `src\cm\tbt_topo.c` and `tbt_topo.h` |
 
 ## 5. Microsoft binaries: what is published, and through which channel
 
