@@ -3506,6 +3506,19 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls)
     if (*cls == TBT_U4_LANE_DISCONNECTED) {
         return TRUE;
     }
+    if (p->ClassifyPending && d->Present && (cs4 & TBT_ADP4_LOCK) != 0) {
+        /* A port a resume left unclassified, Lock still set (its clear
+         * failed then): the re-lock kept, lane 0 unlocked and read back
+         * before anything counts - the router cannot be read through a
+         * Lock (ERR_LOCK). Not cleared: still unresolved, no evidence. */
+        p->RelockSeen = TRUE;
+        if (tbtU4Wr(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4,
+                    cs4 & ~TBT_ADP4_LOCK) != TBT_OK ||
+            tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4, &cs4) != TBT_OK ||
+            (cs4 & TBT_ADP4_LOCK) != 0) {
+            return FALSE;
+        }
+    }
     if (p->Unlocked && (cs4 & TBT_ADP4_LOCK) != 0) {
         return TRUE;
     }

@@ -2773,6 +2773,7 @@ static int closeHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
 static void test_review7(void)
 {
     int dev;
+    int k;
     LONG rc;
     ULONG gen;
     const TBT_U4_PORT *p;
@@ -2894,6 +2895,46 @@ static void test_review7(void)
         CHECK(p->LostKnown && !p->ClassifyPending, "the loss known");
         CHECK_EQ(p->Generation, gen, "no teardown, no reconnection");
         CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "no removal");
+    }
+
+    /* The same with the resume unable to clear Lock at all: classified at
+     * the next readable tick, unlocking first - a lost configuration stays
+     * HELD; a router still configured is one removal. */
+    for (k = 0; k < 2; k++) {
+        TBT_U4_CONFIG c;
+
+        cfgDefault(&c);
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_USB4);
+        fabPlug(&g_fab, 1, dev);
+        fabPreos(&g_fab, 1, 0);
+        g_fab.RxQCount = 0;
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        p = TbtU4Port(&g_cm, 1);
+        (void)countActions(&g_cm, 0);
+        TbtU4Suspend(&g_cm);
+        if (k == 0) {
+            g_fab.R[dev].Rcs[3] &= ~0x80000000UL;
+        }
+        g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[4] |= 0x80000000UL;
+        armSwallow(&g_fab, 0, TBT_CS_ADAPTER, (unsigned long)fabPortLane0(&g_fab, 1), 4, 1,
+                   0, 0, 100000UL);
+        rc = TbtU4Resume(&g_cm);
+        g_fab.Hook = NULL;
+        CHECK_EQ(rc, TBT_E_STATE, "Lock not cleared: the failure path");
+        CHECK(p->ClassifyPending, "left unclassified");
+        gen = p->Generation;
+        poll(&g_cm, &g_fab, 3);
+        if (k == 0) {
+            CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "lost configuration: still HELD");
+            CHECK(p->LostKnown, "the loss known");
+            CHECK_EQ(p->Generation, gen, "no teardown, no reconnection");
+            CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "no removal");
+        } else {
+            CHECK(p->Generation != gen, "still configured, re-locked: torn down");
+            CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "one removal");
+        }
     }
 
     /* Thunderbolt 3: lane 0's Lock written, lane 1's never. */
