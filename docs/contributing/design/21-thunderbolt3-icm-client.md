@@ -1,6 +1,8 @@
 # Design Record 21 - Thunderbolt 3 Firmware Connection Manager Client and Tunnel Re-enumeration
 
-Status: draft 1, 2026-10-14, before code and before review. Written for the
+Status: draft 2, 2026-10-14, before code; Codex review round 1 (session
+`01a13afc`, 13 findings) folded in, and the owner's decisions of the same
+day on approval and the master switch (section 11). Written for the
 planned work `TB3` in `roadmap-usb4.md` ("Planned - Thunderbolt 3: the ICM
 Client and Tunnel Re-enumeration"), which takes the next free phase number
 when the owner opens it. Nothing in `src\` implements it yet. Section 11 lists
@@ -99,6 +101,52 @@ Out, each with where it goes:
 - The dock's own devices: nothing here drives an xHCI, an NVMe or a NIC. The
   xHCI behind the tunnel is `xhci98.sys`'s by class, as any other.
 
+### 1.4 How generic a Thunderbolt 3 client can be (owner's question, 2026-10-14)
+
+The owner asked for a best effort at a generic Thunderbolt 3 and USB4
+driver. Three layers, with three different answers:
+
+- **The host interface and the re-enumeration are generic.** The NHI ring
+  registers follow the USB4 specification's common layout (section 4.1), the
+  ring code is the one the USB4 software connection manager will use
+  (section 13), and the tunnel-bridge discovery and both re-enumeration
+  routes (section 6) do not depend on which controller sits above the
+  tunnel. Nothing in them is Intel's.
+- **The ICM client is generic across devices and per-generation across
+  hosts.** The firmware owns the device side, so every Thunderbolt 3 dock,
+  enclosure or cable works through the same client with no per-device code
+  (the handoff, section 2, "Other Thunderbolt 3 hosts"). The host side is
+  Intel's by definition - no other vendor made a Thunderbolt 3 host
+  controller, and a board sold with Thunderbolt 3 carries an Intel chip -
+  and it differs by Intel generation: Alpine Ridge (this record, captured)
+  and Titan Ridge use different driver-ready, device-addressing, approve
+  and disconnect layouts (`ICM-PROTOCOL` section 4.9), and the Ice Lake and
+  later integrated controllers add messages and platform methods of their
+  own (the RTD3 veto event, force power through ACPI). The state machine of
+  section 5 is the same for all of them; what changes is a per-generation
+  message table selected by the NHI's device id at `AddDevice`. The design
+  therefore keeps the encoders and decoders of section 5.2 behind one
+  table from the start, so that a Titan Ridge or integrated-controller row
+  is an addition, not a fork; but each row needs a capture of that
+  generation before it can be claimed, and only Alpine Ridge has one
+  (decision D9 is the id list for this generation alone; `XhciCmMode` 2 in
+  section 8 lets an uncaptured Intel id try the Alpine Ridge row at the
+  user's own risk).
+- **Real USB4 hosts are not this at all.** AMD, ASMedia and Intel under the
+  operating system's native control run a software connection manager,
+  which is the `U4CM` work; whether a USB4 BIOS booted through a CSM runs a
+  firmware connection manager for a legacy operating system, and with which
+  message set, is uncaptured (`PLATFORM-MATRIX` section 4). The kind is
+  decided at `AddDevice` from the NHI's class code (`0x0880` an Intel
+  Thunderbolt host interface, `0x0C0340` a USB4 host interface) and
+  confirmed by the firmware status's ICM-enabled bit, so a USB4 host whose
+  firmware does run a connection manager for a legacy OS would still take
+  the ICM path.
+
+So the honest claim for the first cut is "any Thunderbolt 3 device, on an
+Alpine Ridge host"; "any Intel Thunderbolt 3 host" is one capture per
+generation away, on the same driver.
+
 ## 2. The platform, as captured
 
 What a driver on the P14s faces, from `PLATFORM-MATRIX` section 2 and
@@ -192,41 +240,74 @@ experiment and as `hcd_entry.c` tells its roles apart:
    downstream port. It does nothing to the IRPs it sees; it exists to hold a
    pointer to that PDO so that the NHI FDO can ask it to call
    `IoInvalidateDeviceRelations(Pdo, BusRelations)` (section 6.2). It is
-   installed by the `.NTx86` and `.NTamd64` halves of the INFs as a
-   device-specific `UpperFilters` value on the port's id (section 3.3,
-   decision D2), and never by the undecorated half: on Windows 98 a WDM
-   driver on a bridge devnode breaks the bridge (section 6.1).
+   installed by a separate NT-only INF as a device-specific `UpperFilters`
+   value on the port's id (section 3.3, decision D2), and never by any INF
+   Windows 98's engine reads: on Windows 98 a WDM driver on a bridge devnode
+   breaks the bridge (section 6.1).
 
-The two roles find each other through a list in the driver's own image, under
-a spin lock: a filter instance registers its PDO's bus, device and function
-(`IoGetDeviceProperty` `DevicePropertyBusNumber` and `DevicePropertyAddress`,
-which the experiment read on both targets) when it is added, and the NHI FDO
-picks the one whose location matches the tunnel bridge it discovered (section
-6.3). An NHI without a matching filter, or a filter without an NHI, is not a
-fault: the filter does nothing until asked, and the NHI falls back to logging
-that it cannot re-enumerate (section 6.4). One binary, chosen at run time by
+The two roles find each other through a registration list in the driver's
+own image. The lifetime protocol, which review round 1 asked for: a filter
+instance publishes its entry (its PDO, its device object, and its bus,
+device and function from `IoGetDeviceProperty` `DevicePropertyBusNumber`
+and `DevicePropertyAddress`, which the experiment read on both targets)
+only after its `IRP_MN_START_DEVICE` has completed below it successfully;
+it withdraws the entry on `IRP_MN_STOP_DEVICE`, `IRP_MN_SURPRISE_REMOVAL`
+and `IRP_MN_REMOVE_DEVICE` (the experiment's `reenum.c` stops its work on
+all three), and the withdrawal waits for in-flight use to drain before the
+filter detaches and deletes itself. The NHI thread takes an entry under
+the list's spin lock, increments its in-flight count, releases the lock,
+makes the call, and decrements; a withdrawal sets a gone flag under the
+lock, then waits on a rundown event the last decrement signals. The lock
+is never held across the call itself. An NHI without a matching filter, or
+a filter without an NHI, is not a fault: the filter does nothing until
+asked, and the NHI falls back to logging that it cannot re-enumerate
+(section 6.4). Concurrent tunnel work and a bridge removal is a leg on the
+Windows 2000 SMP guest (section 10.2). One binary, chosen at run time by
 `IoIsWdmVersionAvailable(1, 0x10)` exactly as `docs/usb-xhci-info/win98-wdm.md`
 prescribes it: FALSE is Windows 98 SE or ME and the CONFIGMG route; TRUE is
 an NT target and the filter route.
 
 ### 3.3 The INFs
 
-`xhcicm.inf` follows `xhci98.inf`'s shape: `Signature="$CHICAGO$"`, one
-`[Manufacturer]` line `%Mfg%=CmModels,NTx86.6.0`, undecorated sections with
-`DevLoader=*NTKERN` and `NTMPDriver=xhcicm.sys` for Windows 98's 16-bit
-engine, `.NTx86` sections with `AddService` for 2000 and XP, `.NTx86.6.0`
-sections for Vista and 7 that copy the driver alone. `xhcicm-amd64.inf`
-carries the `NTamd64,NTamd64.6.0` pair and no undecorated section, held by
-the gate's `PATH-NO9X` and `PATH-MFGDEC` rules as the other amd64 INF is.
-`LayoutFile` is not needed: the driver imports nothing the OS has to supply.
+Three INFs, because of a fact review round 1 raised: Windows 2000 reads the
+**undecorated** Models section and decorates only the DDInstall section
+(which is why `xhci98.inf` shares `[XhciModels]` between 9x and NT 5.x), so
+a Models section that is safe for Windows 98 cannot also carry a line for
+the bridge on Windows 2000. The split:
 
-Model lines:
+- `xhcicm.inf`, the NHI's, follows `xhci98.inf`'s shape:
+  `Signature="$CHICAGO$"`, one `[Manufacturer]` line
+  `%Mfg%=CmModels,NTx86.6.0`, one undecorated `[CmModels]` with the NHI line
+  alone, undecorated DDInstall sections with `DevLoader=*NTKERN` and
+  `NTMPDriver=xhcicm.sys` for Windows 98's 16-bit engine, `.NTx86` sections
+  with `AddService` for 2000 and XP, `.NTx86.6.0` sections for Vista and 7
+  that copy the driver alone. It never names a bridge.
+- `xhcicmf.inf`, the filter's, NT only: `Signature="$Windows NT$"`, which
+  Windows 98's engine ignores outright - the INF gate's own `BOTH-VERSION`
+  text records that fact (`check-inf.ps1`), and `TB3-0.4` reads it on 98 SE
+  and ME with the file present beside the other - with an undecorated
+  `[CmFilterModels]` carrying
+  `%TunnelDesc%=CmFilter.Dev,PCI\VEN_8086&DEV_15C0&CC_0604` for Windows
+  2000, and `.NTx86.6.0` sections for Vista and 7. Its DDInstall adds the
+  `UpperFilters` value and the service and installs no function driver.
+- `xhcicm-amd64.inf`, the 64-bit package's, carries the `NTamd64,NTamd64.6.0`
+  pair for the NHI and no undecorated section, held by the gate's
+  `PATH-NO9X` and `PATH-MFGDEC` rules as the other amd64 INF is; the filter's
+  64-bit half is `xhcicmf-amd64.inf` on the same pattern.
 
-| Section | Line | Why |
-|---|---|---|
-| `[CmModels]` (Windows 98, ME) | `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` | the NHI alone |
-| `[CmModels.NTx86]`, `[CmModels.NTamd64]` | the same NHI line, plus `%TunnelDesc%=CmFilter.Dev,PCI\VEN_8086&DEV_15C0&CC_0604` | the filter on the switch ports |
-| `[CmModels.NTx86.6.0]`, `[CmModels.NTamd64.6.0]` | the same two with `.Dev6` sections | Vista and 7 |
+`LayoutFile` is not needed by any of them: the driver imports nothing the OS
+has to supply. The gate for the pair is `check-cm-inf.ps1`, with the rule
+`CM-NO9XBRIDGE`: no bridge id in any `$CHICAGO$` INF of this driver, and
+the filter INF's signature held to `$Windows NT$`.
+
+Model lines, as the engines see them:
+
+| Engine | What it finds |
+|---|---|
+| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`; `xhcicmf.inf` ignored by signature |
+| Windows 2000, XP | the same NHI line through `Cm.Dev.NTx86`; `xhcicmf.inf` `[CmFilterModels]`: the bridge line |
+| Vista, 7 | the `.NTx86.6.0` halves of both |
+| x64 | the two amd64 INFs |
 
 The filter line matches all three downstream ports and the upstream port,
 since the captured switch gives every port the same id [obs] `ICM-PROTOCOL`
@@ -234,12 +315,13 @@ section 1. The filter attaches to each and acts only on the one the NHI
 names, so matching the siblings costs nothing. Whether a vendor-id match
 from this INF can add an `UpperFilters` value to a port that `pci.inf`
 already serves, without displacing `pci.inf`'s own install, is the
-`TB3-0` reading that decision D2 waits on: the candidate shapes are an INF
+`TB3-0.4` reading that decision D2 waits on: the candidate shapes are an INF
 section that includes and needs `machine.inf`'s PCI-to-PCI bridge section
 and adds the value, or a class filter, which must then be boot-start or the
 next boot stops with `0x7B` (`REENUM-EXPERIMENT`, "Windows 2000 SP4",
 mechanism A). The device-specific route is the one to prove first, because a
-System-class filter touches every bus on the machine.
+System-class filter touches every bus on the machine. The packaging stage
+and `make-package.ps1`'s footprint files carry both INFs per flavour.
 
 Only `15BF` is matched in the first cut, since it is the one NHI id this
 project has read [obs]. The other Alpine Ridge NHI ids are taken, if the
@@ -336,11 +418,31 @@ PASSIVE_LEVEL, as `hcd_ctl.c`'s controller thread is, with the same Windows
 98 care around `PsCreateSystemThread`'s handle (the `IoIsWdmVersionAvailable`
 branches at `hcd_ctl.c:2514`). Every ICM command, every mailbox handshake,
 every wait and every re-enumeration call runs on it; nothing else touches
-the rings. PnP and power requests hand it work through a small queue under
-a spin lock and wait on events, which is the only way the CONFIGMG calls of
-section 6.1 can be made (they must come from a passive thread of the system
-VM, `REENUM-EXPERIMENT` "Caveats") and the only way the busy-polls can be
-bounded without blocking a dispatch routine.
+the rings. Work reaches it through a small queue under a spin lock. PnP
+requests (start, stop, remove) queue their work and wait on an event, as
+PnP dispatch may. **Power requests never wait**: a power IRP is pended,
+its work queued, and the IRP completed from the thread when the work is
+done - `PoStartNextPowerIrp` then `PoCallDriver` for the S-IRP and the
+D-IRP pass-down, the D3 quiescence (section 5.6) done before the D3 IRP is
+forwarded, and the D0 reinitialisation run after the lower stack has
+completed the D0 IRP, from a completion routine that queues it. Waiting on
+a kernel event in a power dispatch routine is forbidden on NT (Microsoft's
+"Passing Power IRPs"), and the experiment's `reenum.c` `Power` routine
+shows the NT 5.x pass-down shape. The thread is the only way the CONFIGMG
+calls of section 6.1 can be made (they must come from a passive thread of
+the system VM, `REENUM-EXPERIMENT` "Caveats") and the only way the
+busy-polls can be bounded without blocking a dispatch routine.
+
+Priority inside the thread (review round 1, finding 8): the busy-poll of an
+outstanding command services every RX frame as it lands, so an event
+arriving during a command is decoded at once, not after the command. A
+`device disconnected` decoded during a command runs its link-down
+notification (section 7) immediately, inside the wait, and queues the
+removal and re-enumeration of section 6 for after the command completes.
+That bounds the notification's latency to one RX poll interval of the busy
+loop (tens of microseconds) plus the slot read of section 6.5, whatever
+`approve`'s 10 s is doing; `nvme98`'s gone deadline is 5 s in its test
+build.
 
 ## 5. The ICM client
 
@@ -399,9 +501,13 @@ disconnected` (`T:21087`). Frame type 11 out, 12 and 10 in; the CRC-32C
 trailer is appended to every command and stripped unchecked from every
 response and event, as the Linux client does [inf] and the emulator sends it
 anyway. One command outstanding at a time; a response matches by frame type
-and code; an event arriving while a command is outstanding is queued, not
-dropped. Error is bit 0 of the response flags; an unknown event code is
-logged and ignored.
+and code; an event arriving while a command is outstanding is decoded at
+once and acted on as section 4.4 says, never dropped. Error is bit 0 of the
+response flags; an unknown event code is logged and ignored. The encoders
+and decoders sit behind one per-generation table (section 1.4) with the
+Alpine Ridge row filled; the table is indexed by the NHI device id at
+`AddDevice`, and `XhciCmMode` 2 maps an unknown Intel id onto the Alpine
+Ridge row.
 
 ### 5.3 Events and the device table
 
@@ -424,7 +530,7 @@ after every `driver ready` the table is reconciled: an entry not re-announced
 within 500 ms of the host-router poll succeeding is treated as gone and the
 tunnel-down sequence runs for it [inf, the client's own 500 ms check].
 
-### 5.4 Approval policy (decision D4)
+### 5.4 Approval policy (decision D4, taken 2026-10-14)
 
 The domain's security level is `user` on the P14s [obs]: every newly plugged
 device is announced unapproved and gets its tunnel only on `approve`.
@@ -433,8 +539,23 @@ not write one, so approval is a policy, the registry value `XhciCmApprove`:
 
 | Value | Meaning |
 |---|---|
-| 1 (default, recommended) | approve every announced device that is not rejected, at once, on every announcement with `approved` = 0 |
+| 1 (default) | approve every announced device that is not rejected, at once, on every announcement with `approved` = 0 |
 | 0 | approve nothing; devices tunnelled by pre-boot or approved by an earlier driver keep their tunnels and are used; a newly plugged device is logged and left unapproved |
+
+**Nothing is remembered** (owner, 2026-10-14). The driver keeps no list of
+devices across reboots, and that is harmless because the state that
+matters is held elsewhere: the firmware keeps an approval and its tunnel
+for the power cycle (across driver unload, disable, resume and rebind, the
+device re-announced with `approved` = 1 [obs] section 7), and the
+controller's NVM holds the boot ACL the BIOS uses for pre-boot tunnelling,
+which this driver reads for the log and never writes. Across a reboot or a
+re-plug the device comes back unapproved; at 1 it is approved again at
+once, at 0 it stays unapproved, and a remembered list would change neither.
+The one policy a list would enable - "approve only devices accepted
+before", what the Windows 11 service does with the list under its `nhi`
+service key [obs] section 10.3 - has no dialog to accept a device in on
+these targets, so it could only be filled by hand from the log's UUIDs. It
+is listed as a later option under D4, not a value of this cut.
 
 `approve` carries the UUID, connection key and id of the announcement, waits
 10 s, and on error flags leaves the entry unapproved with a log line. A
@@ -447,10 +568,7 @@ Thunderbolt 3 device plugged into the machine gets PCIe access, which on a
 machine without an IOMMU (every target here) is access to all of memory.
 That is the state every pre-boot-tunnelled device is already in on these
 systems, and what the Windows 11 service does for a device it has seen once
-[inf] section 10.3, but it is an owner decision and a documented one. A
-per-device remembered list is not in the first cut (the Windows 11 driver
-keeps one under its service key [obs] section 10.3); it is the natural
-second value of the switch if wanted.
+[inf] section 10.3, but it is an owner decision and a documented one.
 
 ### 5.5 Timeouts, retries and faults
 
@@ -464,20 +582,31 @@ acted on. Counters: section 8.
 
 ### 5.6 Stop, remove, disable, suspend and resume
 
-- Stop and remove: mailbox `0x07` driver unloads (tunnels and approvals
-  survive it [obs] section 2.3), ring options cleared, the thread ended, the
-  common buffer freed. The dock keeps working across a driver disable, as it
-  does under Linux's unbind [obs] section 6.7. Nothing behind the tunnel is
-  removed by this driver at its own stop.
-- Shutdown: `driver unloads` alone, if the stop has not already sent it.
-- Suspend (`IRP_MN_SET_POWER` to D3 for S3 or S4): `driver unloads` and the
-  rings stopped. Resume to D0: the bind sequence from step 6 without the
-  mailbox `0x23` [inf] section 6.5, and the reconciliation of section 5.3,
-  so a device unplugged during the sleep is torn down and one that stayed is
-  refreshed. Windows 98 on the APM machines this project runs rarely reaches
-  S3; the Windows 2000 and later guests do, and the VM legs read it there.
-- Runtime D3 (RTD3): never requested by this driver, whatever the
-  driver-ready flags say.
+Three cases the contract keeps apart (review round 1, finding 3), each in
+the order the capture or the client shows:
+
+- **Unbind** (stop, remove, disable): ring 0 stopped (options cleared,
+  interrupts already 0), then mailbox `0x07` driver unloads [obs] section
+  6.7, that order; the thread ended, the common buffer freed. Tunnels and
+  approvals survive it [obs] section 2.3, so the dock keeps working across a
+  driver disable, as it does under Linux's unbind. Nothing behind the tunnel
+  is removed by this driver at its own stop.
+- **Shutdown**: the unbind sequence, if the stop has not already run it.
+- **System suspend** (`IRP_MN_SET_POWER` to D3 for S3 or S4): rings stopped,
+  then mailbox `0x05` save devices, then `0x07` [inf] section 2.3 - the
+  client's system-suspend order, not the runtime-suspend order of section
+  6.5, which has no `0x05`. Resume to D0: the bind sequence from step 6
+  without the mailbox `0x23` [inf] section 6.5 (the one place the
+  runtime-resume capture is taken as the model, because no system-resume
+  capture exists), and the reconciliation of section 5.3, so a device
+  unplugged during the sleep is torn down and one that stayed is refreshed.
+  Both [inf] steps are tolerated as a mailbox error or a timeout if the
+  firmware refuses them. Windows 98 on the APM machines this project runs
+  rarely reaches S3; the Windows 2000 and later guests do, and the VM legs
+  read it there.
+- **Runtime suspend** (RTD3): never requested by this driver, whatever the
+  driver-ready flags say, so the `0x07`-alone sequence of section 6.5 is
+  never sent.
 
 ## 6. Re-enumeration: making the OS see what the tunnel changed
 
@@ -574,11 +703,17 @@ reports the vanished one missing (surprise removal, with the "Unsafe Removal
 of Device" dialog on every tunnel down, which the experiment saw on every
 cycle and this record accepts for the first cut; section 7.4).
 
-The filter does no IRP work: it passes every IRP down with
-`IoSkipCurrentIrpStackLocation`, handles `IRP_MN_REMOVE_DEVICE` by detaching
-and deleting itself after unregistering from the list, and handles
-`IRP_MN_START_DEVICE` by registering. Its `AddDevice` attaches to any PDO
-the INF put it on; the location it registers is what the NHI matches.
+The filter does no device work: PnP IRPs other than the four it watches
+go down with `IoSkipCurrentIrpStackLocation`; power IRPs go down the way
+NT 5.x requires of a filter, `PoStartNextPowerIrp` then
+`IoSkipCurrentIrpStackLocation` and `PoCallDriver` (the experiment's
+`reenum.c` `Power` routine); `IRP_MN_START_DEVICE` is passed down with a
+completion wait and the entry published only on success;
+`IRP_MN_STOP_DEVICE` and `IRP_MN_SURPRISE_REMOVAL` withdraw the entry;
+`IRP_MN_REMOVE_DEVICE` withdraws it, waits for the rundown of section 3.2,
+passes the IRP down, detaches and deletes the device object. Its
+`AddDevice` attaches to any PDO the INF put it on; the location it
+publishes is what the NHI matches.
 
 ### 6.3 Finding the tunnel bridge
 
@@ -617,21 +752,35 @@ experiment) is a fallback this record does not ship.
 
 ### 6.5 Ordering: when the sequences run
 
+Two registers of the tunnel port's PCI Express capability are read, and
+they are not the same register (review round 1, finding 4): **Link Status**
+(capability offset `0x12`, bit 13 Data Link Layer Link Active, valid only
+where Link Capabilities bit 20, Data Link Layer Link Active Reporting
+Capable, is set) and **Slot Status** (offset `0x1A`, bit 6 Presence Detect
+State, bit 8 Data Link Layer State Changed), valid only where the
+capability's Slot Implemented bit is set. Both through `HalGetBusData`
+reads of the port's header; the pure `tbt_topo.c` decodes them over the
+same accessors and host vectors cover a port without either capability bit.
+The emulator's i440FX tunnel bridge has no PCI Express capability; there
+the SHPC slot's presence bit is the only reading.
+
 - **Tunnel up**: after a successful `approve` (section 5.4), or after a
   `device connected` with `approved` = 1 that was not in the table (a device
   tunnelled before the driver bound: pre-boot, an earlier driver instance, a
-  resume). Before re-enumerating, poll the tunnel bridge's slot: on real
-  hardware the PCIe slot status's Presence Detect State and Data Link Layer
-  Active, on the emulator the SHPC slot's presence, until the secondary bus
-  answers a vendor-id read for some function or 2 s pass. The firmware
+  resume). Before re-enumerating, poll the tunnel port until Link Status
+  reads Link Active and Slot Status reads Presence Detect (real hardware), or
+  the SHPC slot reads present (the emulator), or 2 s pass. The firmware
   brings the link up about 0.3 s before it answers `approve` [obs] section
   4.3, so the poll normally ends at once; it exists for the emulator's
   settle timeout on a re-plug (`ARCHITECTURE` section 4.4) and for real
   hardware's link training.
 - **Tunnel down**: after a `device disconnected`, or after the reconciliation
   of section 5.3 finds an entry gone. The link is already down when the event
-  arrives [obs] section 6.3. Section 7's notification, where wired, comes
-  first; then the removal and re-enumeration of sections 6.1 or 6.2.
+  arrives [obs] section 6.3. The driver then reads the tunnel port: Link
+  Status Link Active clear and Presence Detect clear on real hardware, the
+  SHPC presence bit clear on the emulator, polled up to 2 s. Section 7's
+  notification, where wired, comes after that reading and before the
+  removal and re-enumeration of sections 6.1 or 6.2.
 - Both run on the connection-manager thread, serialised with the ICM
   traffic, so a tunnel down arriving during a tunnel up's slot poll is
   handled after it and sees the bus empty.
@@ -657,12 +806,24 @@ mailbox `0x06` (every PCIe tunnel at once), which it never sends. Obligation
 1 therefore holds by construction: every tunnel up follows either a fresh
 `approve` of a freshly announced device (whose previous link, if any, went
 down at its unplug) or a re-announcement of a tunnel that never went down.
-Obligation 2 reduces to: say "link down" only after the `device disconnected`
-event, and after reading the tunnel bridge's slot or secondary bus as empty,
-which is what section 6.5 does before any removal call. The emulator's
-observable boundary is the end of its stage 2 (`ARCHITECTURE` section 4.4,
-the endpoint reset/quiesce trace event), and gate G3's qualification checks
-in the host trace that the notification's marker is later than it.
+Obligation 2 is the harder one, and review round 1 (finding 7) corrected
+the first draft's answer: an empty secondary-bus read is not evidence of
+anything (config reads go all-ones at the emulator's stage 1, while
+endpoint DMA can run until stage 2 ends; `nvme98`'s PLAN says the same of
+all-ones). The condition this driver sends the statement on is the one
+assumption A1 itself rests on: **the tunnel downstream port's Data Link
+Layer Link Active bit reading 0** (section 6.5). A link in DL_Down carries
+no transaction in either direction, and A1 says the component below it is
+reset (PCIe Base 2.9.1, as `nvme98`'s PLAN cites it). That is a real-hardware
+condition, and the P14s is where it is first read. The emulator's i440FX
+bridge has no such bit, and its SHPC presence bit's timing against stage 2
+is not documented; so on the emulator the statement is **withheld** until
+gate G3's qualification has shown, in the host trace, that the marker of a
+statement sent on the port reading (or on an emulator-side condition the
+`usb4-emu` maintainer names) is later than the stage-2 endpoint
+reset/quiesce event. Until that qualification exists on an OS, no
+statement is sent there and `nvme98`'s gone deadline (its decision MD-1)
+is the fallback, as its PLAN already provides.
 
 ### 7.2 The notification channel (proposal, decision D6)
 
@@ -675,8 +836,13 @@ NT `IOCTL_SCSI_MINIPORT` with an `nvme98` signature. This record proposes:
   `nvme98`'s signature and a "report your PCI location" function; the port
   whose answer matches the vanished function's bus, device and function gets
   a second `IOCTL_SCSI_MINIPORT`, "link down", sent synchronously from the
-  connection-manager thread before the filter's invalidation. The IOCTL must
-  not queue behind held SRBs (G3's third clause); that is `nvme98`'s side.
+  connection-manager thread before the filter's invalidation, and from
+  inside a command wait if the disconnect landed during one (section 4.4),
+  so the sender's latency is bounded to the slot read, well inside the gone
+  deadline. The IOCTL must not queue behind held SRBs (G3's third clause);
+  that is `nvme98`'s side. A disconnect that arrives after `pci.sys`'s own
+  native hot-plug (Windows 7 on real PCIe) has already started removal is
+  a case the per-OS qualification reads, not one this record resolves.
 - **Windows 98 and ME**: `nvme98`'s own VxD (the base ships `NVMEVSD.VXD`)
   exports one service, "link down for bus:dev.fn", under a VxD id `nvme98`
   chooses; this driver reaches it through the same dynalink thunk it uses
@@ -715,11 +881,24 @@ its default under the don't-overwrite flag, each read once at start:
 
 | Value | Default | Meaning |
 |---|---|---|
-| `XhciCmApprove` | 1 | section 5.4 |
-| `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000 |
+| `XhciCmMode` | 1 | the master switch (decision D11): 0 off - the driver binds the NHI, logs it, touches no ring, approves nothing, re-enumerates nothing; 1 auto - the ICM client where the firmware status reads ICM enabled and the mode reads 3, the USB4 software connection manager once `U4CM` exists, and until then off with a log line; 2 force the ICM client on any NHI the INF matched, an uncaptured Intel id included, with the Alpine Ridge message table, at the user's own risk (the `XhciIntelPortSwitch` 2 pattern, said in the same words in the README and release notes); 3 force the software CM (reserved; the same as 0 until `U4CM`) |
+| `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | `bb:dd.f`, overrides section 6.3's discovery |
+| `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000 |
+| `XhciCmCmdTimeoutMs` | 5000 | the ICM command timeout (section 5.5), held to 1000 to 60000; retries stay 3 |
+| `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
+
+Installing the package is already the user's choice of this driver, so the
+master switch defaults to on: a driver that installs and does nothing until
+a second step is the trap the "every value visible" rule exists to avoid.
+What the switch is for is turning the whole thing off on a machine that
+misbehaves without uninstalling, and forcing the kind on a machine where
+auto-detection guesses wrong. Values the `U4CM` work will add beside these,
+named now so the convention holds: `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`,
+`XhciCmPreOsCleanup`. Later, not in this cut: `XhciCmInterruptMode` (0 poll,
+1 INTx once read on hardware) and a safe-eject switch.
 
 Counters, in the driver's extension and emitted at stop through the log
 sink, named `cm.*`: commands sent, responses, timeouts, retries, errors;
@@ -727,16 +906,24 @@ events by code; approvals sent, succeeded, failed; tunnel ups and downs;
 re-enumerations run, skipped (and why), and their `CONFIGRET` or status;
 mailbox commands and their outcomes; idle polls.
 
-The log is the pure ring of `xhci_log.c`, compiled in by path, with the HCD's
-sink rules: producers record from the thread, the sink emits from the
-thread at PASSIVE_LEVEL, `DbgPrint` is reached only through the one sink
-site the allowlist admits, and the `qemu` flavour alone has the port-`0xE9`
-mirror. `XHCISNAP` does not read this driver in the first cut: the door is
-`xhci98.sys`'s, and a `\DosDevices\` link and region of this driver's own is
-a later revision if the counters are wanted off a real machine. On Windows
-98 that leaves the stop-time emission to DebugView as the one route, which
-is the HCD's state before task 13-L too, and the bench procedure of section
-10.4 is written for it.
+The log is the pure ring of `xhci_log.c`, compiled in by path: producers
+record from the thread, and the ring is emitted at stop from the thread at
+PASSIVE_LEVEL. **How it is emitted is decision D12**, because `AGENTS.md`
+("Coding Style") admits an unguarded `DbgPrint` at exactly two sites,
+`hcd_log.c`'s `XhciLogDebugView` sink and the qemu trace, and says not to
+widen it to a third. The default this record is written to: in the
+`release` flavour `xhcicm.sys` prints nothing, as `xhciuas.sys` prints
+nothing; in `debug` and `qemu` the emission is under `#if DBG` through the
+qemu flavour's port-`0xE9` mirror and `DbgPrint`, so a Windows 98 bare-metal
+reading needs the `debug` flavour installed and DebugView, which is the
+HCD's state before task 13-L. The alternative the owner may choose instead
+is a separately gated, opt-in, PASSIVE-level sink of this driver's own
+under a value of its own (`XhciCmDebugView`), with the rule in `AGENTS.md`
+amended to name it; that is the richer field route and the one that
+widens the rule. `XHCISNAP` does not read this driver in the first cut: the
+door is `xhci98.sys`'s, and a `\DosDevices\` link and region of this
+driver's own is a later revision if the counters are wanted off a real
+machine.
 
 ## 9. Provenance and licence
 
@@ -829,23 +1016,30 @@ The Windows 98 SE legs (`TB3-V.1`), each from a fresh overlay:
 |---|---|---|---|
 | V.1.1 install | `OFF_OFF` | 1 | the NHI's Found New Hardware, the INF taken, Code 0; the log's bind sequence; the dock announced unapproved, approved, the tunnel up (`usb4_tunnel_transition`), the bridge re-enumerated, the NVMe found by nvme9x (already on the base image) and its volume mounted, with no Device Manager Refresh |
 | V.1.2 unplug and re-plug | `OFF_OFF` | 1 | `device_del`: the disconnect event, the volume gone, the devnode removed; `device_add`: announced, approved, the volume back |
-| V.1.3 boot-tunnelled device | `OFF_ON` and `ON_ON` | 1 | the volume present at boot with no driver action; the driver binds, the device re-announced approved and left alone; then V.1.2's cycle |
-| V.1.4 nothing at boot | `OFF_OFF`, `ON_OFF` | 0 | the driver binds with an empty table; `device_add` goes through V.1.1's path |
-| V.1.5 Assist, no device | `ON_ON` | 0 | the controller absent; nothing to bind; the release notes' limitation read as true |
-| V.1.6 disable and enable | `OFF_OFF` | 1 | Device Manager disable: `driver unloads`, the volume stays; enable: the rebind, the device re-announced approved |
-| V.1.7 `XhciCmApprove` 0 | `OFF_OFF` | 1 | announced, not approved, no tunnel, logged |
-| V.1.8 the dock's xHCI | `OFF_OFF` | 1 | with `usb4-device dock=on` if the tb3 dialect supports it on the i440FX profile (a `TB3-0` reading), or on the bench: the xHCI behind the tunnel bound by `xhci98.sys` and a USB device on it |
+| V.1.3 boot-tunnelled device | `OFF_ON` and `ON_ON` | 1 | the NVMe is present at POST, and an NVMe with a namespace at POST hangs Windows 98's GUI boot at the logo (SeaBIOS hooks it into INT 13h; `WIN98-TEST`, "`x-force-tunnel=on` at boot"; the BIOS matrix there used a blank disk and DOS only). The overlay for this leg therefore carries one of the handoff's three workarounds, chosen by `TB3-0.7`: `BootGUI=0` and `win` from `AUTOEXEC.BAT` (the route `usb4cm`'s validation used after a DOS-side tunnel), `-boot strict=on` with a boot index on the IDE disk, or a SeaBIOS without NVMe. Then: the volume present with no driver action; the driver binds, the device re-announced approved and left alone; then V.1.2's cycle |
+| V.1.4 nothing at boot, controller present | `OFF_OFF`, `OFF_ON` | 0 | the driver binds with an empty table; `device_add` goes through V.1.1's path (with Assist on and nothing attached the controller is absent, section 2, so `ON_*` cannot test this) |
+| V.1.5 Assist, no device | `ON_OFF`, `ON_ON` | 0 | the controller absent; nothing to bind; the release notes' limitation read as true |
+| V.1.6 disable and enable | `OFF_OFF` | 1 | Device Manager disable: the rings stopped then `driver unloads`, the volume stays; enable: the rebind, the device re-announced approved |
+| V.1.7 `XhciCmApprove` 0 and `XhciCmMode` 0 | `OFF_OFF` | 1 | approve 0: announced, not approved, no tunnel, logged; mode 0: bound, nothing sent, nothing announced |
+| V.1.8 the dock's xHCI | `OFF_OFF` | 1 | with `usb4-device dock=on` if the tb3 dialect supports it on the i440FX profile (a `TB3-0.7` reading), or on the bench: the xHCI behind the tunnel bound by `xhci98.sys` and a USB device on it |
 
 The Windows 2000 legs (`TB3-V.2`) run the same table on the Alpine Ridge
 tree the experiment used (`TOPO=ar`, `tools/reenum-test/run2k.sh`'s
 device lines, taken into this project's own launcher with its own overlay
 of `usb4-emu/vms/win2k/win2k-xonly.qcow2` and its own ports; the Windows
 2000 image has a Dvorak layout, which the QMP key helper has a switch for),
-plus the filter's install through the INF, its boot-start question, and
-S3 if the guest offers it. `TB3-V.3` reads the install and V.1.1's cycle on
-ME, XP, XP x64 (no q35: the i440FX tree), Vista x86 and x64, 7 x86 and x64,
-under the no-tax rule; on 7 x64 the native hot-plug path may do the filter's
-work first, which is a reading, not a fault.
+plus the filter's install through the INF, its boot-start question, S3 if
+the guest offers it, and on the SMP guest under Driver Verifier a bridge
+removal (`device_del` of the tunnel bridge's parent is not possible, so the
+filter's disable through Device Manager) concurrent with tunnel work, for
+the rundown of section 3.2. `TB3-V.3` reads the install and V.1.1's cycle
+on ME, XP, XP x64 (no q35: the i440FX tree), Vista x86 and x64, 7 x86 and
+x64. Those tiers carry no checkpoint tax: the legs are read and recorded,
+and a failure on one is a release-notes line, not a checkpoint failure;
+what the cut does require on every target is the install leg from the
+asset, which is `TB3.final`'s, as it is for every release. On 7 x64 the
+native hot-plug path may do the filter's work first, which is a reading,
+not a fault.
 
 ### 10.3 The import gates and the INF gates
 
@@ -873,17 +1067,31 @@ read after the cut as the owner reads every bench:
 3. Pre-boot on: the dock's tree at boot with no driver, then the driver
    installed and a hot-plug cycle.
 4. **The `$PIR` dump**: whether the P14s BIOS lists `00:1c.4`. If it does
-   not, a hot-added function behind the tunnel gets no IRQ on Windows 98
-   (Code 29), and the dock's xHCI runs only through `xhci98.sys`'s polled
-   delivery (design record 15's automatic mode moves to polling when the
-   line is dead), which is then the reading to take and the release notes'
-   line to write. `XHCIQUAL` does not dump `$PIR` today; a `TB3-0` task
-   adds the dump to its routing report (`xhciqual\route.c`) so the bench
-   has it.
-5. The DebugView emission at a driver disable, as the Windows 98 log route.
+   not, a function hot-added behind the tunnel gets Code 29 on Windows 98:
+   `WIN98-TEST` ("Hot-added NVMe gets no IRQ behind 00:1c") read that as
+   no IRQ **and no BAR assigned and a driver that never starts**, so
+   polling is no remedy for it - design record 15's polled delivery acts
+   inside a controller `xhci98.sys` was started on, and Code 29 is a
+   devnode `PCI.VXD` never started. That outcome is a bench blocker to be
+   recorded as such, and the first cut's release notes would then say
+   that on such a machine a hot-added Thunderbolt device needs pre-boot
+   tunnelling. Only a controller that does start without a usable line
+   (Code 0, dead interrupt) is where record 15's fallback applies, and
+   that is a separate reading. `XHCIQUAL` does not dump `$PIR` today;
+   `TB3-0.6` adds the dump to its routing report (`xhciqual\route.c`) so
+   the bench has it.
+5. The log emission at a driver disable, on the flavour decision D12
+   chooses (the `debug` flavour and DebugView by default).
 
 Windows 2000 has never run on the P14s (Setup bugchecks, `AGENTS.md`), so
 its half of "observed on both" is the VM leg, as for every HCD phase.
+
+Whether the bench is read before or after the cut is not a standing
+permission: `AGENTS.md` names the phases that were allowed to cut first
+(28 to 31, 35), one decision each. This record asks for the same for `TB3`
+as decision D13, with the pre-cut gates being everything else in this
+section and the post-cut closure being `TB3-E.1` and `TB3-E.2`, a failure
+there a re-cut; without that decision the bench comes before the cut.
 
 ## 11. Decisions for the owner
 
@@ -893,22 +1101,31 @@ changes the sections named.
 | Id | Decision | Recommendation | Sections |
 |---|---|---|---|
 | D1 | One binary or two | a second binary, `xhcicm.sys` in `src\cm\`, with its own INFs, allowlists and gate | 3.1 |
-| D2 | How the NT filter is installed | device-specific `UpperFilters` on the switch port id from this INF, proved by the `TB3-0` reading; a class filter only if that route cannot be made to install, and then boot-start | 3.2, 3.3, 6.2 |
+| D2 | How the NT filter is installed | a separate NT-only INF (`$Windows NT$`, undecorated Models for Windows 2000) adding a device-specific `UpperFilters` on the switch port id, proved by the `TB3-0.4` reading; a class filter only if that route cannot be made to install, and then boot-start | 3.2, 3.3, 6.2 |
 | D3 | Interrupts | none: polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware | 4.3 |
-| D4 | Approval policy | `XhciCmApprove` 1, approve everything, stated plainly as a security property in the release notes; 0 approves nothing; no remembered list in the first cut | 5.4 |
+| D4 | Approval policy | **Taken, owner 2026-10-14**: `XhciCmApprove` 0 and 1 only, 1 the default, approve everything, stated plainly as a security property in the release notes; nothing remembered, and the record says why that is harmless; "approve known devices only, from a UUID list under the service key, filled by hand" listed as a later option, not a value | 5.4 |
 | D5 | What to do about a controller absent at boot (Assist on, nothing attached) | nothing; a known limitation; force power is an ACPI WMI method out of reach on 98 and unread on NT | 1.3, 2 |
-| D6 | The `nvme98` notification channel | the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `TB3-A.7` | 7.2 |
+| D6 | The `nvme98` notification channel | the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `TB3-A.7`; the statement withheld on any OS until gate G3's ordering is qualified there | 7.1, 7.2 |
 | D7 | The version and the cut | the branch is already `3.0.0.0`; cut it after this work's checkpoint, with the USB4 software CM as the next minor, rather than holding the release for both | `roadmap-usb4.md` |
-| D8 | Names | `xhcicm.sys`, `xHCI98 Thunderbolt 3 Host Interface`, `xHCI98 Thunderbolt 3 Tunnel Port Filter`, class System | 3.3 |
-| D9 | Other Alpine Ridge NHI ids | `15BF` alone until another is read, or a public-id-list row with its source if the owner wants the family | 3.3 |
+| D8 | Names | `xhcicm.sys`, `xhcicm.inf` and `xhcicmf.inf`, `xHCI98 Thunderbolt 3 Host Interface`, `xHCI98 Thunderbolt 3 Tunnel Port Filter`, class System | 3.3 |
+| D9 | Other Alpine Ridge NHI ids | `15BF` alone until another is read, or a public-id-list row with its source if the owner wants the family; `XhciCmMode` 2 covers an unlisted id meanwhile | 1.4, 3.3 |
 | D10 | Safe eject | not in the first cut; a known limitation | 7.4 |
+| D11 | A master switch for the whole driver | `XhciCmMode`, default 1 (auto), 0 off, 2 force the ICM client at the user's own risk, 3 reserved for the software CM; the install is the real opt-in, so the default is on | 8 |
+| D12 | The log emission | nothing in `release`, `#if DBG` in `debug` and `qemu` (the default, keeping `AGENTS.md`'s two-site `DbgPrint` rule as it is); or an opt-in PASSIVE-level sink of this driver's own with the rule amended to name it | 8 |
+| D13 | Cut before the bench for `TB3` | asked for, as Phases 28 to 31 and 35 had it: the VM legs and gates before the cut, `TB3-E.1` and `TB3-E.2` after it on the asset, a failure there a re-cut | 10.4 |
 
 ## 12. What is open, and what is a risk
 
 - **The P14s `$PIR`** (section 10.4): the one fact that decides whether a
-  hot-added device behind the tunnel gets an interrupt on Windows 98 on the
-  real machine. Mitigated for the dock's xHCI by polled delivery; not
-  mitigated for a NIC or an NVMe whose driver needs the line.
+  device hot-added behind the tunnel is started at all on Windows 98 on the
+  real machine; Code 29 there is a devnode never started, which no driver
+  below it can mitigate. The pre-boot path, where the BIOS assigns the
+  dock's resources, is the fallback the release notes would name.
+- **The G3 statement on the emulator** (section 7.1): the i440FX bridge has
+  no Link Active bit, so the condition this record sends the statement on
+  cannot be read there; qualification needs either an emulator-side
+  condition the `usb4-emu` maintainer names or a q35 topology, and until
+  then the statement is withheld on every OS.
 - **The NT filter's INF route** (D2): untested; the experiment typed a class
   filter by hand.
 - **The dock's PCIe switch** (`8086:15d3`, `ICM-PROTOCOL` section 10.1) and
