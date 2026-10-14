@@ -469,10 +469,19 @@ static void report_pir_rp(const PIRINFO *pi, QPRINTF_FN pf)
         pf("  00:%02X: no usable table to look in\n", PIR_RP_DEV);
     } else {
         idx = pir_find(pi, 0, PIR_RP_DEV, &count);
-        if (idx < 0)
-            pf("  00:%02X: NO ENTRY - this table routes nothing behind a "
-               "root port there\n", PIR_RP_DEV);
-        else if (count == 1)
+        if (idx < 0) {
+            /* Only bus 0 device 1C is looked up: the specification also
+             * lets a table describe a device on a bus behind a bridge
+             * directly, so say how many entries are on other buses. */
+            u32 i, other;
+
+            other = 0;
+            for (i = 0; i < pi->nslots; i++)
+                if (pir_slot(pi, i)[0] != 0)
+                    other++;
+            pf("  00:%02X: NO ENTRY for bus 00 device %02X (%lu entries on "
+               "other buses)\n", PIR_RP_DEV, PIR_RP_DEV, other);
+        } else if (count == 1)
             pf("  00:%02X: listed, entry %d\n", PIR_RP_DEV, idx + 1);
         else
             pf("  00:%02X: listed %d times, first at entry %d\n",

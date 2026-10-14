@@ -1099,6 +1099,9 @@ Windows on the `$PIR` source, is the QEMU reproduction's condition, so a
 function hot-added behind the tunnel is expected to get no IRQ and
 pre-boot tunnelling (the device attached before power-on) to be the route
 on Windows 98; confirm it with a hot-add on the machine. `listed` is
-necessary rather than sufficient: the `00:1C` entry in the dump must show a
-link that is not 0 and an IRQ bitmap that is not empty for the pin the
-hot-added function's pin swizzles to, and a hot-add is still the proof.
+not sufficient: the `00:1C` entry in the dump must show a link that is not
+0 and an IRQ bitmap that is not empty for the pin the hot-added function's
+pin swizzles to, and a hot-add is still the proof. Note any entries on
+other buses the `NO ENTRY` line counts: a table may describe a device
+behind a bridge directly, and whether such an entry matches a function
+behind the tunnel depends on the bus number that function is given.

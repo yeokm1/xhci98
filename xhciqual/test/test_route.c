@@ -365,8 +365,8 @@ static void test_pir_valid(void)
           "entry 1 dumped");
     CHECK(has("  6   00:06   5    61/DEF8 62/DEF8 63/DEF8 60/DEF8\n"),
           "entry 6 dumped, links rotated");
-    CHECK(has("  00:1C: NO ENTRY - this table routes nothing behind a root "
-              "port there\n"), "00:1C named as absent");
+    CHECK(has("  00:1C: NO ENTRY for bus 00 device 1C (0 entries on other "
+              "buses)\n"), "00:1C named as absent");
     CHECK(!has("more entries not shown"), "every entry dumped");
     CHECK(!has("no function at"), "configuration space not read: silent");
 
@@ -676,6 +676,52 @@ static void test_pir_edges(void)
     out[0] = '\0';
     report_pir_short(&pir, cap);
     CHECK(has("130 entries; 00:1C listed\n"), "short: listed past the cap");
+
+    /* No 00:1C entry, but a device behind a bridge described directly on
+     * its own bus (the specification allows it): counted, not hidden. */
+    t = pir_build(PIR_AT, 6);
+    pir_entry(t + PIR_HDR_LEN + 4 * PIR_SLOT_LEN, 4, 0x00, 0x60, 7);
+    pir_entry(t + PIR_HDR_LEN + 5 * PIR_SLOT_LEN, 2, 0x08, 0x61, 0);
+    pir_sum(t, 128);
+    CHECK(pir_scan_area() == PIR_OK, "downstream-bus table parses");
+    CHECK(pir_find(&pir, 4, 0, &n) == 4 && n == 1, "04:00 found");
+    out[0] = '\0';
+    report_pir(&pir, cap);
+    CHECK(has("  5   04:00   7    60/DEF8"), "04:00 dumped");
+    CHECK(has("  00:1C: NO ENTRY for bus 00 device 1C (2 entries on other "
+              "buses)\n"), "other-bus entries counted");
+
+    /* The largest table a word size allows, FFF0h bytes (4093 entries),
+     * at 0010h so it ends exactly at FFFFFh, its only 00:1C entry last. */
+    memset(area, 0, sizeof(area));
+    t = area + 0x10;
+    memcpy(t, "$PIR", 4);
+    put16(t + 4, 0x0100);
+    put16(t + 6, 0xFFF0);
+    t[9] = 0x08;
+    for (n = 0; n < 4093; n++)
+        pir_entry(t + PIR_HDR_LEN + n * PIR_SLOT_LEN, 0, 0x08, 0x60, 0);
+    pir_entry(t + PIR_HDR_LEN + 4092 * PIR_SLOT_LEN, 0, 0xE0, 0x63, 9);
+    pir_sum(t, 0xFFF0);
+    CHECK(pir_scan_area() == PIR_OK, "a FFF0h-byte table parses");
+    CHECK(pir.phys == 0xF0010UL && pir.size == 0xFFF0, "where, size");
+    CHECK(pir.nslots == 4093, "4093 entries");
+    CHECK(memcmp(pir.table, t, 0xFFF0) == 0, "the whole table copied");
+    CHECK(pir_find(&pir, 0, 0x1C, &n) == 4092 && n == 1,
+          "00:1C found as the last entry");
+    out[0] = '\0';
+    report_pir(&pir, cap);
+    CHECK(has("  3965 more entries not shown (00:1C is searched in all)\n"),
+          "the rest counted");
+    CHECK(has("00:1C: listed, entry 4093"), "listed as the last entry");
+    out[0] = '\0';
+    report_pir_short(&pir, cap);
+    CHECK(has("4093 entries; 00:1C listed\n"), "short: listed, last entry");
+    /* The same size 16 bytes later runs past FFFFFh. */
+    memmove(area + 0x20, area + 0x10, 0xFFE0);
+    memset(area + 0x10, 0, 16);
+    CHECK(pir_scan_area() == PIR_TRUNCATED, "FFF0h at 0020h: truncated");
+    CHECK(pir.phys == 0xF0020UL && pir.nslots == 0, "truncated, not parsed");
 }
 
 int main(void)

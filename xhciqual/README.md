@@ -1275,9 +1275,13 @@ What it prints:
   (`--/----` for link 0, not connected). An entry whose device byte has
   function bits set is flagged, since the specification uses only bits
   7:3;
-- **`00:1C` by name**: `listed, entry N` (or `listed K times`), `NO ENTRY`
-  (this table routes nothing behind a root port there), or `no usable
-  table to look in`. Under that, whatever the table's state, each `00:1C`
+- **`00:1C` by name**: `listed, entry N` (or `listed K times`), `NO ENTRY
+  for bus 00 device 1C` with the number of entries on other buses, or `no
+  usable table to look in`. Only bus 0 device 1C is looked up: the
+  specification also lets a table describe a device behind a bridge on
+  its own bus, so entries on other buses are counted and dumped, and a
+  missing `00:1C` entry matters only for routing that relies on it (as a
+  hot-added function swizzled up to the root port does). Under that, whatever the table's state, each `00:1C`
   function found in configuration space is listed with its id, whether it
   is a bridge, its pin and line, and that pin's `link/bitmap` from the
   entry, marked `(link 0: not connected)` or `(no IRQ allowed)` when the
@@ -1299,7 +1303,7 @@ PCI IRQ routing table ($PIR, read only): at F55A0h, version 1.0, 128 bytes
   4   00:04   3    63/DEF8 60/DEF8 61/DEF8 62/DEF8
   5   00:05   4    60/DEF8 61/DEF8 62/DEF8 63/DEF8
   6   00:06   5    61/DEF8 62/DEF8 63/DEF8 60/DEF8
-  00:1C: NO ENTRY - this table routes nothing behind a root port there
+  00:1C: NO ENTRY for bus 00 device 1C (0 entries on other buses)
     00:1C.0 1B36:0001 bridge, pin INTA line 11: no entry
 ```
 
@@ -1308,7 +1312,9 @@ failure (router `8086:122E`, bus 0 devices 1 to 6, links `60`-`63`
 rotated, bitmap `DEF8`, at `F55A0h`). It was read on 2026-10-15 under
 QEMU on development host A. The host suite pins the same table and every
 branch QEMU does not reach: `00:1C` listed once and twice and only past
-the dump's 128 entries, a pin with link 0 or an empty bitmap, a bad
+the dump's 128 entries and as the last of the largest table a word size
+allows (`FFF0h` bytes, ending at `FFFFFh`), entries on other buses, a pin
+with link 0 or an empty bitmap, a bad
 checksum, a truncated table and header, bad sizes and versions (1.1
 included), no table, an invalid candidate ahead of a valid one, function
 bits, and the `00:1C` functions printed with no table and with an unusable
@@ -1316,8 +1322,8 @@ one.
 
 Two things it does not read. Windows 98 can also take routing from the PCI
 BIOS (INT 1Ah `B10Eh`, "Get PCI Interrupt Routing Options"), which this
-tool does not call. And it does not read ACPI's `_PRT`, which an ACPI-mode
-or NT system uses instead. The block answers the `$PIR` question only.
+tool does not call. And it does not read ACPI's `_PRT`, which a system in
+ACPI mode uses instead. The block answers the `$PIR` question only.
 
 ## The system description in the header
 
