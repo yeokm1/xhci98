@@ -907,7 +907,7 @@ Status: not opened, unnumbered and unversioned. Deferred by the owner on
 2026-10-14 from task 38.3's legs (T8); the default stays 50. The partial
 table is `runs/run-38.md`, "38.3".
 
-- [ ] IDLE.1 `XhciPollIdleMs` 50 against 500 on every target (owner, 2026-10-14): under mode 2, the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute. The partial reading on 2026-10-14 (XP, XP x64, 2000 and 2000 SMP, Vista x86 and x64) showed plug-to-working 0.3 to 0.7 s and remote wake working at both values, Vista x86's idle host load halved at 500 (12.7 to 5.4 %) and Vista x64's about 30 % lower, and no difference beyond noise elsewhere; 98 SE, ME and 7 x86 and x64 not taken. The default is decided on the full reading
+- [ ] IDLE.1 `XhciPollIdleMs` 50 against 500 on every target (owner, 2026-10-14): under mode 2, the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute. The partial reading on 2026-10-14 (XP, XP x64, 2000 and 2000 SMP, Vista x86 and x64) showed plug-to-working 0.3 to 0.7 s at both values, remote wake working at both on the x86 guests (the test client is x86; not applicable on XP x64 and Vista x64), Vista x86's idle host load halved at 500 (12.7 to 5.4 %) and Vista x64's about 30 % lower, and no difference beyond noise elsewhere; 98 SE, ME and 7 x86 and x64 not taken. The default is decided on the full reading
 
 ## Planned - Bench Follow-Up After `2.4.0.0`
 
@@ -917,7 +917,7 @@ machines.
 Status: not opened, unnumbered and unversioned. Listed by the owner on
 2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
 each task's "Owed after the cut"); the release notes' "Untested ground"
-names each meanwhile.
+names B24.1 to B24.5 meanwhile.
 
 - [ ] B24.1 Linux's controller quirks (task 38.10, design record 20) on the controllers they name, each value read on a controller it lists
 - [ ] B24.2 a real xHCI 0.96 controller (task 38.11, design record 17 section 4.14): its start at `XhciAccept096` 1 and its refusal at 0, a device of each speed, and audit items A14 and A21
