@@ -450,10 +450,13 @@ function Test-OemText {
         if ($null -eq (& $get $n)) { & $add "OEM-SECTION" "no [$n] section." }
     }
     # One line's fields as Setup reads them, for comparing whole lines:
-    # each field marked quoted (q) or bare (u) and kept apart by '|', so a
-    # quoted field holding a comma ("usbd.sys,usbd") never compares equal
-    # to two fields (a review, 2026-10-14).
-    $norm = { param($l) $l.Key.ToLowerInvariant() + "=" + ((@(Split-OemFields -Value $l.Value) | ForEach-Object { $(if ($_.Quoted) { "q" } else { "u" }) + $_.Text.ToLowerInvariant() }) -join "|") }
+    # the key and each field length-prefixed and marked quoted (q) or bare
+    # (u), so no character inside a field - a comma in quotes, a '|' -
+    # can make two fields read as three (a review, 2026-10-14).
+    $norm = { param($l) $out = $l.Key.ToLowerInvariant().Length.ToString() + ":" + $l.Key.ToLowerInvariant(); foreach ($x in @(Split-OemFields -Value $l.Value)) { $t = $x.Text.ToLowerInvariant(); $out += ";" + $(if ($x.Quoted) { "q" } else { "u" }) + $t.Length.ToString() + ":" + $t }; return $out }
+    $normOf = { param($k, $fields) $out = $k.Length.ToString() + ":" + $k; foreach ($t in $fields) { $out += ";u" + $t.Length.ToString() + ":" + $t }; return $out }
+    # Two line lists equal, line by line.
+    $sameLines = { param($a, $b) if (@($a).Count -ne @($b).Count) { return $false }; for ($i = 0; $i -lt @($a).Count; $i++) { if (@($a)[$i] -cne @($b)[$i]) { return $false } }; return $true }
 
     foreach ($s in $parsed) {
         foreach ($l in $s.Lines) {
@@ -631,20 +634,20 @@ function Test-OemText {
     # of the three services set to demand start.
     $w2kAllowed = @{}
     if ($w2k) {
-        $d2Lines = @($w2kFiles | ForEach-Object { "driver=ud2|u" + $_.File + "|u" + $_.Key })
+        $d2Lines = @($w2kFiles | ForEach-Object { & $normOf "driver" @("d2", $_.File, $_.Key) })
         $d2Shown = @($w2kFiles | ForEach-Object { "driver = d2, " + $_.File + ", " + $_.Key })
         foreach ($d in $d2Lines) { $w2kAllowed[$d] = $true }
         $wf = & $get "Files.scsi.$w2kOption"
         if ($null -ne $files -and $null -ne $wf) {
             $expect = @($files.Lines | ForEach-Object { & $norm $_ }) + $d2Lines
             $got = @($wf.Lines | ForEach-Object { & $norm $_ })
-            if (($got -join "|") -ne ($expect -join "|")) {
+            if (-not (& $sameLines $got $expect)) {
                 & $add "OEM-W2K" "[Files.scsi.$w2kOption] must be [Files.scsi.$optionId]'s lines in order and then exactly '$($d2Shown -join "', '")' - setupldr loads the first driver line, and these are the three files hidusb.sys and usbstor.sys import that Windows 2000's text mode does not copy."
             }
         }
         $wh = & $get "HardwareIds.scsi.$w2kOption"
         if ($null -ne $hw -and $null -ne $wh) {
-            if ((@($hw.Lines | ForEach-Object { & $norm $_ }) -join "|") -ne (@($wh.Lines | ForEach-Object { & $norm $_ }) -join "|")) {
+            if (-not (& $sameLines @($hw.Lines | ForEach-Object { & $norm $_ }) @($wh.Lines | ForEach-Object { & $norm $_ }))) {
                 & $add "OEM-W2K" "[HardwareIds.scsi.$w2kOption] must map exactly [HardwareIds.scsi.$optionId]'s ids, in order."
             }
         }
@@ -826,6 +829,10 @@ if ($SelfTest) {
             # DriverKey, and setupldr drops the option.
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, `"usbd.sys,usbd`"") }
             $cases += @{ Rule = "OEM-MSFILE"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, `"usbd.sys,usbd`"") }
+            # A literal '|' or ';' is part of a field: two fields stay two.
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, usbd.sys|uusbd") }
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, usbd.sys;u4:usbd") }
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "HardwareIds.scsi.$w2kOption" "id = `"USB\XHCI98_HUB`", `"xhci98`"" "id = `"USB\XHCI98_HUB|qxhci98`"") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, hidparse.sys, hidparse" "driver = d2, hidparse.sys, hidparse`r`ndriver = d2, usbstor.sys, usbstor") }
             $cases += @{ Rule = "OEM-MSFILE"; Text = (& $inSec $w2kFilesSec "driver = d2, hidparse.sys, hidparse" "driver = d2, hidparse.sys, hidparse`r`ndriver = d2, usbstor.sys, usbstor") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d1, xhci98.sys, xhci98`r`ndll    = d1, xhcihlpr.sys`r`ninf    = d1, xhci98.inf`r`ndriver = d2, usbd.sys, usbd" "driver = d2, usbd.sys, usbd`r`ndriver = d1, xhci98.sys, xhci98`r`ndll    = d1, xhcihlpr.sys`r`ninf    = d1, xhci98.inf") }
