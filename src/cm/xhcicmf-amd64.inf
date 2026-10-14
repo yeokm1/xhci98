@@ -1,0 +1,123 @@
+; xhcicmf-amd64.inf - xhcicm.sys as the upper filter of the Thunderbolt 3
+; tunnel bridge, the 64-bit package's NT-only filter INF (design record 21
+; section 3.3; roadmap-usb4.md task 39-A.1).
+;
+; The amd64 counterpart of src\cm\xhcicmf.inf, on the pattern of
+; xhcicm-amd64.inf: [Manufacturer] carries the NTamd64,NTamd64.6.0 pair and
+; there is no undecorated models or install section, which a 32-bit engine
+; would fall back to. The model line and the install sections are
+; xhcicmf.inf's, with the same DRAFT status pending task 39-0.4 (see that
+; file's header). make-package.ps1 stages this file as xhcicmf.inf.
+;
+; scripts\inf-gate\check-cm-inf.ps1 -Filter -Arch amd64 gates this file on
+; every build.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$Windows NT$"
+Class=System
+ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+; Must equal src\xhci_version.h.
+DriverVer=10/14/2026,2.4.0.0
+
+[Manufacturer]
+%Mfg%=CmFilterModels,NTamd64,NTamd64.6.0
+
+[CmFilterModels.NTamd64]
+; Thunderbolt switch ports (Linux drivers/thunderbolt/nhi.h's *_BRIDGE
+; ids). 15C0 has been read by this project; every other line is untested.
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_156B&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_156D&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_1576&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_1578&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15D3&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15DA&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15E7&CC_0604
+%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15EA&CC_0604
+; PLACEHOLDER: the integrated controllers' (Ice Lake and later) tunnel
+; root ports, once record 21 settles how they are found.
+
+[CmFilterModels.NTamd64.6.0]
+; Thunderbolt switch ports (Linux drivers/thunderbolt/nhi.h's *_BRIDGE
+; ids). 15C0 has been read by this project; every other line is untested.
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15C0&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156B&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156D&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1576&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1578&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15D3&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15DA&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15E7&CC_0604
+%TunnelDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15EA&CC_0604
+; PLACEHOLDER: the integrated controllers' (Ice Lake and later) tunnel
+; root ports, once record 21 settles how they are found.
+
+[SourceDisksNames]
+1=%DiskName%,xhcicm.sys,,
+
+[SourceDisksFiles]
+xhcicm.sys=1
+
+[DestinationDirs]
+DefaultDestDir=10
+CmFilter.CopyFiles=10,System32\Drivers
+
+; --- Windows XP x64 and Server 2003 x64 -------------------------------------
+
+[CmF.Dev.NTamd64]
+Include=machine.inf
+Needs=PCI_DRV
+CopyFiles=CmFilter.CopyFiles
+
+[CmF.Dev.NTamd64.HW]
+AddReg=CmFilter.HW.AddReg
+
+[CmF.Dev.NTamd64.Services]
+Include=machine.inf
+Needs=PCI_DRV.Services
+AddService=xhcicm,,CmFilter.AddService
+
+; --- Windows Vista x64 and 7 x64 --------------------------------------------
+
+[CmF.Dev6.NTamd64]
+Include=machine.inf
+Needs=PCI_DRV
+CopyFiles=CmFilter.CopyFiles
+
+[CmF.Dev6.NTamd64.HW]
+AddReg=CmFilter.HW.AddReg
+
+[CmF.Dev6.NTamd64.Services]
+Include=machine.inf
+Needs=PCI_DRV.Services
+AddService=xhcicm,,CmFilter.AddService
+
+; --- Shared -----------------------------------------------------------------
+
+; The bridge devnode's hardware key: this driver above pci.sys, by service
+; name, as a device-specific filter (not a class filter), appended to the
+; value (FLG_ADDREG_APPEND) so a filter already there is kept.
+[CmFilter.HW.AddReg]
+HKR,,UpperFilters,0x00010008,"xhcicm"
+
+; The same service as the NHI's, demand-started with the devnode it filters.
+[CmFilter.AddService]
+DisplayName=%CmSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcicm.sys
+LoadOrderGroup=Base
+
+[CmFilter.CopyFiles]
+xhcicm.sys,,xhcicm.tmp
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+TunnelDesc="xHCI98 Thunderbolt 3 Tunnel Port Filter"
+CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"

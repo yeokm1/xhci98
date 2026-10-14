@@ -2626,8 +2626,12 @@ try {
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
-        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $oemPublishable';
-           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair and txtsetup.oem" },
+        @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable';
+           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's three files and txtsetup.oem" },
+        @{ Find = '$cmPublishable = @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")';
+           Why  = "the connection manager's NHI INF, filter INF and binary (roadmap-usb4.md task 39-A.1) are no longer what a flavour directory publishes for it" },
+        @{ Find = 'Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version';
+           Why  = "the published xhcicm.sys is no longer held to the refusals xhciuas.sys is" },
         @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
            Why  = "a signed x64 leg no longer publishes xhci98-test.cer beside the binaries it signed (design record 19)" },
         @{ Find = '$pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")';

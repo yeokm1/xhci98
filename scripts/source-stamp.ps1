@@ -49,7 +49,10 @@ Which binary: `xhci98` (the default; `src\`, `xhci98.srcstamp` beside
 (`src\uas\`, `xhciuas.srcstamp` beside `xhciuas.sys`). The UAS driver's
 set is `src\uas\sources`' list, every header in `src\uas\` and, because it
 includes `xhci_compat.h`, `xhci_version.h` and `xhci98_streams.h` from
-`src\`, every header in `src\` too - over-covering, as above.
+`src\`, every header in `src\` too - over-covering, as above. `xhcicm`, the
+Thunderbolt 3 connection manager of roadmap-usb4.md task 39-A.1
+(`src\cm\`, `xhcicm.srcstamp` beside `xhcicm.sys`), is stamped the same
+way, its `SOURCES` entry `..\xhci_log.c` hashed by path.
 
 .PARAMETER Write
 The `src\obj*\i386` (or `src\uas\obj*\<arch>`) directory holding the
@@ -73,7 +76,7 @@ Both take the directory, not the file: the stamp is written beside
 param(
     [string]$Write = "",
     [string]$Check = "",
-    [ValidateSet("xhci98", "xhciuas", "xhcihlpr")]
+    [ValidateSet("xhci98", "xhciuas", "xhcihlpr", "xhcicm")]
     [string]$Driver = "xhci98"
 )
 
@@ -100,6 +103,15 @@ if ($Driver -eq "xhcihlpr") {
     $srcDir = Join-Path $repo "src\hlpr"
     $stampName = "xhcihlpr.srcstamp"
     $binaryName = "xhcihlpr.sys"
+    $parentHeaders = $true
+}
+# The Thunderbolt 3 connection manager (roadmap-usb4.md task 39-A.1):
+# src\cm, whose SOURCES names the shared ..\xhci_log.c and which includes
+# src\xhci_compat.h, xhci_log.h and xhci_version.h.
+if ($Driver -eq "xhcicm") {
+    $srcDir = Join-Path $repo "src\cm"
+    $stampName = "xhcicm.srcstamp"
+    $binaryName = "xhcicm.sys"
     $parentHeaders = $true
 }
 # Prefixed rather than listed like a source file, so the source comparison

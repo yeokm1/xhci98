@@ -1,0 +1,185 @@
+; xhcicm-amd64.inf - the Thunderbolt 3 connection manager, xhcicm.sys, on
+; the Thunderbolt or USB4 NHI: the 64-bit package's NHI INF (design record 21
+; section 3.3; roadmap-usb4.md task 39-A.1).
+;
+; The amd64 counterpart of src\cm\xhcicm.inf, for the reason
+; src\xhci98-amd64.inf is xhci98.inf's: a second binary from a second
+; toolchain (WDK 7.1) in a second package, with no Windows 98 path - an
+; undecorated section here is one a 32-bit engine falls back to, which would
+; put an amd64 binary on a 32-bit machine. [Manufacturer] carries the
+; NTamd64,NTamd64.6.0 pair: NT 5.2 x64 reads the first, Vista and 7 x64 the
+; second, and both copy the driver alone. The ids, the values and the names
+; are xhcicm.inf's; only 15BF has been read by this project. make-package.ps1
+; stages this file as xhcicm.inf, the name [SourceDisksFiles] gives it.
+;
+; scripts\inf-gate\check-cm-inf.ps1 -Arch amd64 gates this file on every
+; build.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=System
+ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+; Must equal src\xhci_version.h.
+DriverVer=10/14/2026,2.4.0.0
+
+[Manufacturer]
+%Mfg%=CmModels,NTamd64,NTamd64.6.0
+
+[CmModels.NTamd64]
+; The firmware connection manager (ICM) NHIs. 15BF has been read by this
+; project; every other line is untested.
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_156A
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_156C
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1575
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1577
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D2
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D9
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15E8
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15EB
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1134
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1137
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A0D
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_8A17
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1B
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1D
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A1F
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_9A21
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_463E
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_466D
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_A73E
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_A76D
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EB2
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC2
+%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
+; The USB4 software connection manager's NHIs (Phase 40): until it lands
+; the driver starts on them and does nothing (AMD's from FreeBSD's
+; nhi_reg.h). Untested. The class line
+; takes any USB4 NHI (class 0C/03/40); whether Windows 98's engine
+; matches a PCI\CC_ id is unread.
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A833
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_A834
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E333
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E334
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E433
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E434
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_4D33
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5781
+%Usb4Desc%=Cm.Dev,PCI\VEN_8086&DEV_5784
+%Usb4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1668
+%Usb4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%Usb4Desc%=Cm.Dev,PCI\CC_0C0340
+
+[CmModels.NTamd64.6.0]
+; The firmware connection manager (ICM) NHIs. 15BF has been read by this
+; project; every other line is untested.
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156A
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_156C
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1575
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1577
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D2
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15D9
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15E8
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15EB
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1134
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1137
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A0D
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_8A17
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1B
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1D
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A1F
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_9A21
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_463E
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_466D
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A73E
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A76D
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EB2
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC2
+%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
+; The USB4 software connection manager's NHIs (Phase 40): until it lands
+; the driver starts on them and does nothing (AMD's from FreeBSD's
+; nhi_reg.h). Untested. The class line
+; takes any USB4 NHI (class 0C/03/40); whether Windows 98's engine
+; matches a PCI\CC_ id is unread.
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E334
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E433
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E434
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_4D33
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5781
+%Usb4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
+%Usb4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
+%Usb4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%Usb4Desc%=Cm.Dev6,PCI\CC_0C0340
+
+[SourceDisksNames]
+1=%DiskName%,xhcicm.sys,,
+
+[SourceDisksFiles]
+xhcicm.sys=1
+xhcicm.inf=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Cm.CopyFiles=10,System32\Drivers
+
+; --- Windows XP x64 and Server 2003 x64 -------------------------------------
+
+[Cm.Dev.NTamd64]
+AddReg=Cm.Values
+CopyFiles=Cm.CopyFiles
+
+[Cm.Dev.NTamd64.Services]
+AddService=xhcicm,0x00000002,Cm.AddService
+
+; --- Windows Vista x64 and 7 x64 --------------------------------------------
+
+[Cm.Dev6.NTamd64]
+AddReg=Cm.Values
+CopyFiles=Cm.CopyFiles
+
+[Cm.Dev6.NTamd64.Services]
+AddService=xhcicm,0x00000002,Cm.AddService
+
+; --- Shared -----------------------------------------------------------------
+
+; The driver's values (record 21 section 8), each at the driver's default,
+; as in xhcicm.inf.
+[Cm.Values]
+HKR,,XhciCmMode,0x00010003,1
+HKR,,XhciCmApprove,0x00010003,1
+HKR,,XhciCmReenum,0x00010003,1
+HKR,,XhciCmPollIdleMs,0x00010003,200
+HKR,,XhciCmCmdTimeoutMs,0x00010003,5000
+HKR,,XhciCmApproveTimeoutMs,0x00010003,10000
+HKR,,XhciCmTunnelBridge,0x00000002,""
+HKR,,XhciLogVerbosity,0x00010003,0
+
+[Cm.AddService]
+DisplayName=%CmSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcicm.sys
+LoadOrderGroup=Base
+
+[Cm.CopyFiles]
+xhcicm.sys,,xhcicm.tmp
+
+; Right-click Install pre-stages the driver with no device present.
+[DefaultInstall.NTamd64]
+CopyFiles=Cm.CopyFiles
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+NhiDesc="xHCI98 Thunderbolt 3 Host Interface"
+Usb4Desc="xHCI98 USB4 Host Interface"
+CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"

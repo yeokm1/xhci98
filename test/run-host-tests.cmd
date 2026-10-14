@@ -170,6 +170,12 @@ rem                  allocator's order and refusals, the walk for the UAS
 rem                  alternate setting and its Pipe Usage descriptors at High
 rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
 rem                  CDB direction table and the storage id strings
+rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
+rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
+rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
+rem                  filter), the vendor, device and class parsed from them,
+rem                  the NHI profile table, and the registry values'
+rem                  defaults, refusals and bounds
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -386,6 +392,9 @@ rem test_own links nothing else: who holds an endpoint's ring across an
 rem interface switch - each step's decision, the one-setting walk - is pure,
 rem and the suite drives it over a modelled controller and pool (task 38.10).
 call :run test_own "test_own.c ..\src\xhci_own.c"
+rem test_cm links nothing else: xhcicm.sys's role choice, its NHI profile
+rem table and its registry values' rules are pure (task 39-A.1).
+call :run test_cm "test_cm.c ..\src\cm\cm_vals.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
