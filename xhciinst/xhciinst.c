@@ -215,6 +215,7 @@ static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
 static int was_changed(const char *id);
 static int was_installed(const char *id);
+static int result_ok(const DEVREC *d, int inf);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
@@ -641,6 +642,12 @@ static void dev_driver_values(DEVREC *d)
         d->InfPathState = -1;
         inst_copy(d->VersionText, "(driver key unreadable)",
                   sizeof(d->VersionText));
+        if (!envNow.Nt) {
+            /* 98 and ME name the driver in that key (NTMPDriver): its
+             * owner is unknown, never "no driver" (section 6.3). */
+            out("  unreadable: the driver key of %s\n", d->Id);
+            walkErrors++;
+        }
         return;
     }
     RegCloseKey(k);
@@ -1968,8 +1975,12 @@ static int package_files(PKG_EACH each, void *ctx)
             /* Only an absent nt\ is "nothing there"; any other failure,
              * and any failure of the flavour directory, is an error. */
             DWORD e = GetLastError();
+            /* nt\ may be absent only when the validated package has no
+             * INF there (the filter INF's place, 39-0.4). */
             if (pass == 1 &&
-                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)) {
+                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) &&
+                !(infText[INST_INF_CMF] != NULL &&
+                  inst_starts(infRel[INST_INF_CMF], "nt\\"))) {
                 continue;
             }
             out("%s could not be listed (error %lu).\n", pattern,
@@ -2492,11 +2503,9 @@ static void restage_settle(void)
          * may reuse the removed one's - and only for a device this run
          * reinstalled with a call that succeeded: an unchanged device can
          * already read the same name and version (record 23 section 5.7). */
-        if (was_installed(d->Id) &&
+        if (was_installed(d->Id) && result_ok(d, restageDevInf[i]) &&
             d->InfPathState > 0 && restageNew[restageDevInf[i]][0] != '\0' &&
-            inst_eq(d->InfPath, restageNew[restageDevInf[i]]) &&
-            d->VersionState == INST_VS_HAVE &&
-            inst_ver_cmp(d->Version, pkgVersion) == 0 && d->Problem == 0) {
+            inst_eq(d->InfPath, restageNew[restageDevInf[i]])) {
             restageDevId[i][0] = '\0';
         }
     }
@@ -3040,6 +3049,22 @@ static int was_changed(const char *id)
     return c >= 0 && changedState[c] != 0;
 }
 
+/* Record 23 section 5.9's postcondition for a device installed from INF
+ * inf: bound (the filter: pci with xhcicm above it and our INF in its
+ * driver key), at the package version, started, no problem. The results
+ * check and the /restage settlement share it. */
+static int result_ok(const DEVREC *d, int inf)
+{
+    return (inf == INST_INF_CMF ?
+            (inst_eq(d->Service, "pci") &&
+             inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
+             d->InfPathState > 0 && inf_path_is_ours(d->InfPath) == 1) :
+            inst_eq(d->Service, instInfService[inf])) &&
+           d->VersionState == INST_VS_HAVE &&
+           inst_ver_cmp(d->Version, pkgVersion) == 0 &&
+           (d->Status & INST_DN_STARTED) != 0 && d->Problem == 0;
+}
+
 /* 1 when an install call for the device succeeded in this run. */
 static int was_installed(const char *id)
 {
@@ -3135,14 +3160,7 @@ static void check_results(void)
             continue;
         }
         ctrl = changedInf[c] == INST_INF_XHCI && is_controller(d);
-        ok = (changedInf[c] == INST_INF_CMF ?
-              (inst_eq(d->Service, "pci") &&
-               inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
-               d->InfPathState > 0 && inf_path_is_ours(d->InfPath) == 1) :
-              inst_eq(d->Service, instInfService[changedInf[c]])) &&
-             d->VersionState == INST_VS_HAVE &&
-             inst_ver_cmp(d->Version, pkgVersion) == 0 &&
-             (d->Status & INST_DN_STARTED) && d->Problem == 0;
+        ok = result_ok(d, changedInf[c]);
         if (ok) {
             if (ctrl && !changedReboot[c]) {
                 /* Section 5.8: a started controller shows its root hub. */
