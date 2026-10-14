@@ -1,7 +1,7 @@
 # Design Record 21 - Thunderbolt 3 Firmware Connection Manager Client and Tunnel Re-enumeration
 
-Status: draft 3, 2026-10-14, before code; Codex review rounds 1 and 2
-(session `01a13afc`, 13 and 10 findings) folded in, and the owner's
+Status: draft 4, 2026-10-14, before code; Codex review rounds 1 to 3
+(session `01a13afc`, 13, 10 and 5 findings) folded in, and the owner's
 decisions of the same day on approval and the master switch (section 11).
 Written for the
 planned work `TB3` in `roadmap-usb4.md` ("Planned - Thunderbolt 3: the ICM
@@ -444,7 +444,10 @@ device IRP is marked pending and forwarded with a completion routine that
 queues the reinitialisation to the thread and **retains** the IRP until
 that work finishes, and only then `PoStartNextPowerIrp` and the
 completion. `hcd_power.c` at its D0 branch (`hcdD0Done`, `hcdD0Finish`)
-is the model line for line, and `win98-wdm.md`'s "Power Management" says
+is the model for the completion ordering - with one difference, that the
+HCD runs its D0 work in the completion routine when it finds itself at
+PASSIVE_LEVEL and queues it otherwise, while this driver's hardware work
+is always queued to its thread - and `win98-wdm.md`'s "Power Management" says
 why Windows 98 would not show a mistake here: its implementation is a
 no-op, so only the NT guests read the ordering. Waiting on a kernel event
 in a power dispatch routine is forbidden on NT (Microsoft's "Passing Power
@@ -573,10 +576,17 @@ device re-announced with `approved` = 1 [obs] section 7), and the
 controller's NVM holds the boot ACL the BIOS uses for pre-boot tunnelling,
 which this driver reads for the log and never writes. After a re-plug the
 device comes back unapproved [obs] section 7; after a reboot it comes back
-unapproved unless pre-boot support is on and it is in the boot ACL, in
-which case the firmware tunnels it before the OS and announces it with
-`approved` = 1 and `boot` = 1 [obs] sections 7 and 12.1, R25, and the
-policy table's row for a pre-boot-tunnelled device applies. At 1 an
+unapproved unless pre-boot support is on, in which case the firmware
+tunnels it before the OS and the OS finds it authorised with `boot` = 1
+[obs] section 12.1 (a driverless Windows 98 saw the dock's PCIe tree, and
+Linux reported `authorized` 1 and `boot` 1 with no approve command). What
+is inferred rather than observed: that boot-ACL membership is the
+criterion (section 12.1 says so in as many words [inf]), and the
+announcement's fields themselves, `approved` = 1 with link-info bit 10
+set, since the Linux tracepoints of that run started after boot [inf];
+R25 is the emulator's contract for that announcement, written to the
+inference. Either way the policy table's row for a pre-boot-tunnelled
+device applies. At 1 an
 unapproved return is approved again at once, at 0 it stays unapproved, and
 a remembered list would change neither. The one policy a list would enable
 - "approve only devices accepted before", which is what the Windows 11
@@ -861,13 +871,20 @@ is in:
   raises a request first and is not that signal). That is the condition
   `TB3-A.7` qualifies on i440FX; a q35 topology with a real Link Active bit
   is the alternative.
-- **On hardware**, a reading of the completed-reset boundary itself: the
-  P14s with an NVMe enclosure, and with one that has an internal switch,
-  reading how long after Link Active clears the endpoint answers as a fresh
-  controller (CC.EN 0, RDY 0), and a delay or a second condition derived
-  from it. Until that reading exists no hardware statement is sent.
+- **On hardware, the boundary is unresolved by this record.** Once the
+  link is down nothing below it can be read, so no register of the
+  endpoint can say when its reset completed during the disconnected
+  interval; reading CC.EN and RDY after a reconnection corroborates A1
+  after the fact and establishes nothing about the interval (review round
+  3, finding 6). An observation method that is available while the tunnel
+  is down, or a bound agreed with `nvme98` on other grounds, is a question
+  for `nvme98`'s own hardware verification of MD-2 (the P14s with an NVMe
+  enclosure and with one that has an internal switch) and the owner, not
+  one this driver can answer alone. Until it is answered, **no hardware
+  statement is sent**, on any OS.
 
-Until both exist on an OS, no statement is sent there and `nvme98`'s gone
+Until the emulator qualification exists on an OS, and the hardware
+boundary is resolved, no statement is sent there and `nvme98`'s gone
 deadline (its decision MD-1) is the fallback, as its PLAN already provides.
 
 ### 7.2 The notification channel (proposal, decision D6)
@@ -891,22 +908,29 @@ NT `IOCTL_SCSI_MINIPORT` with an `nvme98` signature. This record proposes:
   hot-plug (Windows 7 on real PCIe) has already started removal is a case
   the per-OS qualification reads, not one this record resolves.
 
-**The latency budget** (review round 2, finding 7). `nvme98` measures its
-gone deadline from its own presence loss, 5 s in its test build, and
-requires delivery inside it under queue saturation. The sender's budget is
-therefore end to end, and every part of it is bounded while the statement
-is enabled:
+**The latency budget** (review rounds 2 and 3, findings 7). `nvme98`
+measures its gone deadline from its own presence loss, 5 s in its test
+build, and requires delivery inside it at every injection point and under
+queue saturation. The sender's budget is therefore end to end, every part
+of it is bounded while the statement is enabled, and every piece of thread
+work that could sit in front of the statement is made interruptible by a
+disconnect:
 
 | Part | Bound |
 |---|---|
 | noticing the event | the idle RX poll: `XhciCmPollIdleMs`, which the driver clamps to 250 ms whenever the statement is enabled on that OS, whatever the registry says (the 5000 ms ceiling of section 8 is for a machine with the statement off) |
 | a command in flight | none added: the event is decoded inside the wait (section 4.4) |
+| a tunnel-up poll in flight (section 6.5) | none added: the poll services RX frames too, and a `device disconnected` for the device it is waiting on abandons the poll - the event says the device is gone |
+| a recipient discovery in flight | none added: discovery is a sequence of IOCTLs between which the thread services RX frames, and a disconnect abandons the sequence |
 | the port reading | 2 s at most (section 6.5), and the firmware's event already follows the link drop, so the normal cost is one read |
-| the recipient | none: resolved and cached at tunnel up |
-| delivery | one synchronous IOCTL or VxD call, which `nvme98` commits to not queueing |
+| the recipient | none when cached; **when the cache is not ready** (the disconnect came before discovery finished) **no statement is sent** and MD-1 applies - a late statement is worth less than none, since `nvme98` would act on it after its own deadline |
+| delivery | one synchronous IOCTL or VxD call, whose execution bound is `nvme98`'s to state in the interface (the proposal asks for 100 ms, with the call never queued behind held SRBs) |
 
-Worst case about 2.3 s, half the deadline; `TB3-A.7`'s qualification
-measures it on each OS, saturated.
+So about 2.25 s plus the delivery bound in the worst case, as an
+**estimate**, not a measurement: `TB3-A.7`'s qualification measures it on
+each OS, saturated, with the disconnect injected during idle, during a
+command wait, during a tunnel-up poll and during discovery, as gate G3's
+"every injection point" asks.
 - **Windows 98 and ME**: `nvme98`'s own VxD (the base ships `NVMEVSD.VXD`)
   exports one service, "link down for bus:dev.fn", under a VxD id `nvme98`
   chooses; this driver reaches it through the same dynalink thunk it uses
@@ -1185,12 +1209,12 @@ changes the sections named.
   real machine; Code 29 there is a devnode never started, which no driver
   below it can mitigate. The pre-boot path, where the BIOS assigns the
   dock's resources, is the fallback the release notes would name.
-- **The G3 statement** (section 7.1): withheld on every OS until two
-  qualifications exist - the emulator's ordering check (on i440FX through
-  the documented stage-3 surprise-removal presence change, or on q35
-  through a real Link Active bit) and a hardware reading of the
-  completed-reset boundary on the P14s, with a switched enclosure among
-  the devices.
+- **The G3 statement** (section 7.1): withheld on every OS until the
+  emulator's ordering check exists there (on i440FX through the documented
+  stage-3 surprise-removal presence change, or on q35 through a real Link
+  Active bit), and withheld on hardware until the completed-reset
+  boundary - unobservable through a down link, so unresolved by this
+  record - is settled by `nvme98`'s MD-2 verification and the owner.
 - **The NT filter's INF route** (D2): untested; the experiment typed a class
   filter by hand.
 - **The dock's PCIe switch** (`8086:15d3`, `ICM-PROTOCOL` section 10.1) and
