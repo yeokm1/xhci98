@@ -59,6 +59,35 @@
 /* The thread's half                                                    */
 /* ---------------------------------------------------------------------- */
 
+/*
+ * TbtHwPlatformInit through the driver's configuration route, its
+ * refusals counted: FALSE unless every step finished and every write was
+ * taken. The ownership record follows the hardware rather than the
+ * attempt: a claim of force power this call made (ForcePowerSetHere newly
+ * TRUE) stands only where the bit then reads set, so a refused write never
+ * leaves a claim a later stop would act on; a claim that held while a later
+ * step (LTR) failed is kept. IRQL: PASSIVE_LEVEL, the thread.
+ */
+BOOLEAN CmNhiPlatformInit(PCM_NHI nhi)
+{
+    ULONG before;
+    ULONG v;
+    BOOLEAN owned;
+    LONG rc;
+
+    before = nhi->CfgWriteFailures;
+    owned = nhi->Power.ForcePowerSetHere;
+    rc = TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host, &nhi->Power);
+    if (!owned && nhi->Power.ForcePowerSetHere) {
+        v = CmCfgRead32(nhi, TBT_ICL_VS_CAP_22);
+        if (v == 0xFFFFFFFFUL || (v & TBT_ICL_VS_CAP_22_FORCE_POWER) == 0) {
+            nhi->Power.ForcePowerSetHere = FALSE;
+            CmLogNote(nhi, "cm.force-power.not-taken", v);
+        }
+    }
+    return (BOOLEAN)(rc == TBT_OK && nhi->CfgWriteFailures == before);
+}
+
 /* The system IRP whose device transition has finished. IRQL:
  * PASSIVE_LEVEL on the thread, or <= DISPATCH_LEVEL from the request
  * callback when the thread is not there (cmSystemDeviceDone). */
@@ -76,16 +105,6 @@ static BOOLEAN cmLive(PCM_NHI nhi)
                      nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended);
 }
 
-/*
- * The quiescence of record 21 section 5.6 before the function leaves D0
- * (or, PoRequestPowerIrp having failed, before the system sleeps with it
- * still in D0): at shutdown the unbind, with the Bus Master bit and the
- * force power this driver set restored (an inert instance leaves force
- * power as it is, even after its own readiness timeout: orchestrator
- * decision of 2026-10-15, owner to confirm); at a sleep the held marks,
- * then the client's suspend - rings stopped, then mailbox 0x05 and 0x07
- * where the row sends them. IRQL: PASSIVE_LEVEL, the thread.
- */
 /*
  * Force power given back by an active instance (TbtHwPlatformShutdown with
  * active TRUE): where the configuration write is refused, the ownership
@@ -106,6 +125,16 @@ VOID CmNhiPlatformRelease(PCM_NHI nhi)
     }
 }
 
+/*
+ * The quiescence of record 21 section 5.6 before the function leaves D0
+ * (or, PoRequestPowerIrp having failed, before the system sleeps with it
+ * still in D0): at shutdown the unbind, with the Bus Master bit and the
+ * force power this driver set restored (an inert instance leaves force
+ * power as it is, even after its own readiness timeout: orchestrator
+ * decision of 2026-10-15, owner to confirm); at a sleep the held marks,
+ * then the client's suspend - rings stopped, then mailbox 0x05 and 0x07
+ * where the row sends them. IRQL: PASSIVE_LEVEL, the thread.
+ */
 VOID CmNhiQuiesce(PCM_NHI nhi)
 {
     if (nhi->DevicePower != PowerDeviceD0) {
@@ -154,7 +183,6 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
 {
     BOOLEAN ok;
     LONG rc;
-    ULONG before;
 
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
@@ -165,13 +193,7 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     }
     nhi->Counters.Resumes++;
     CmLogNote(nhi, "cm.resume", (ULONG)nhi->SystemPower);
-    ok = TRUE;
-    before = nhi->CfgWriteFailures;
-    if (TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host, &nhi->Power) !=
-            TBT_OK ||
-        nhi->CfgWriteFailures != before) {
-        ok = FALSE;
-    }
+    ok = CmNhiPlatformInit(nhi);
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
     }
@@ -341,7 +363,10 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     nhi = (PCM_NHI)Context;
     stack = IoGetCurrentIrpStackLocation(Irp);
     if (NT_SUCCESS(Irp->IoStatus.Status)) {
-        nhi->SystemPower = stack->Parameters.Power.State.SystemState;
+        /* Published under WorkLock: the sleep gate a start in progress or
+         * about to open the queue reads (CmNhiStartWork, CmNhiBind), so no
+         * client is activated once a sleep or shutdown has been taken. */
+        CmPowerSetSystem(nhi, stack->Parameters.Power.State.SystemState);
     }
     want = (nhi->SystemPower == PowerSystemWorking) ? PowerDeviceD0
                                                      : PowerDeviceD3;

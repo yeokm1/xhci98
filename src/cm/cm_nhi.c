@@ -258,11 +258,15 @@ static ULONG cmProfileOfHw(const TBT_HW_PROFILE *hw)
     if (hw->Icm == &TbtIcmProfileAlpineRidge) {
         return CM_PROFILE_ICM_AR;
     }
+    /* Maple Ridge and Tiger Lake to Meteor Lake: the Titan Ridge and Ice
+     * Lake messages under the NVM-authentication predicate. */
     if (hw->Icm == &TbtIcmProfileTitanRidge) {
-        return CM_PROFILE_ICM_TR;
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_MR
+                                                     : CM_PROFILE_ICM_TR;
     }
     if (hw->Icm == &TbtIcmProfileIceLake) {
-        return CM_PROFILE_ICM_ICL;
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_TGL
+                                                     : CM_PROFILE_ICM_ICL;
     }
     return CM_PROFILE_USB4;
 }
@@ -325,7 +329,8 @@ VOID CmNhiStartWork(PCM_NHI nhi)
 
     /* (b) Nothing is activated out of D0: a D3 queued beside the start
      * runs after it and quiesces what it made (cm_thr.c). */
-    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended) {
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
+        CmPowerSleeping(nhi)) {
         cmInert(nhi, CM_INERT_POWER);
         return;
     }
@@ -336,10 +341,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         nhi->StartStatus = STATUS_INSUFFICIENT_RESOURCES;
         return;
     }
-    v = nhi->CfgWriteFailures;
-    ready = (BOOLEAN)(TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host,
-                                        &nhi->Power) == TBT_OK &&
-                      nhi->CfgWriteFailures == v);
+    ready = CmNhiPlatformInit(nhi);
     CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
 
     /* (c), (d) */
@@ -392,7 +394,10 @@ VOID CmNhiBind(PCM_NHI nhi)
 {
     LONG rc;
 
-    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended) {
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
+        CmPowerSleeping(nhi)) {
+        /* The sleep or shutdown was taken while the selection ran: the
+         * rings are never started; the stop gives the buffer back. */
         cmInert(nhi, CM_INERT_POWER);
         return;
     }

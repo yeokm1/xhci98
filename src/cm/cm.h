@@ -231,6 +231,7 @@ VOID CmNhiDrainActions(PCM_NHI nhi);
 BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on);
 VOID CmNhiQuiesce(PCM_NHI nhi);
 VOID CmNhiPlatformRelease(PCM_NHI nhi);
+BOOLEAN CmNhiPlatformInit(PCM_NHI nhi);
 BOOLEAN CmNhiReinit(PCM_NHI nhi);
 
 /* cm_thr.c */
@@ -254,6 +255,8 @@ VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp);
 BOOLEAN CmPowerHold(PCM_NHI nhi);
 VOID CmPowerRelease(PCM_NHI nhi);
 VOID CmPowerDrain(PCM_NHI nhi);
+VOID CmPowerSetSystem(PCM_NHI nhi, SYSTEM_POWER_STATE state);
+BOOLEAN CmPowerSleeping(PCM_NHI nhi);
 
 /* cm_filt.c */
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);

@@ -72,12 +72,17 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out);
 #define CM_PROFILE_UNKNOWN  0  /* ids unread (Windows 98) or not listed     */
 #define CM_PROFILE_ICM_FR   1  /* Falcon Ridge (Thunderbolt 2) ICM          */
 #define CM_PROFILE_ICM_AR   2  /* Alpine Ridge ICM: the captured one        */
-#define CM_PROFILE_ICM_TR   3  /* Titan Ridge ICM; Maple Ridge, TR messages */
-#define CM_PROFILE_ICM_ICL  4  /* integrated ICM (Ice Lake to Meteor Lake),
-                                  the USB4 software CM when no firmware CM
-                                  runs                                      */
-#define CM_PROFILE_USB4     5  /* the USB4 software CM (Phase 40): an NHI of
-                                  class 0C0340 not listed above             */
+#define CM_PROFILE_ICM_TR   3  /* Titan Ridge ICM                           */
+#define CM_PROFILE_ICM_ICL  4  /* Ice Lake's integrated ICM, ICM only       */
+#define CM_PROFILE_USB4     5  /* the USB4 software CM alone (Phase 40):
+                                  Lunar, Panther and Wildcat Lake, Barlow
+                                  Ridge, AMD, and any other NHI of class
+                                  0C0340 not listed                         */
+#define CM_PROFILE_ICM_MR   6  /* Maple Ridge: the ICM with Titan Ridge's
+                                  messages, or the USB4 software CM         */
+#define CM_PROFILE_ICM_TGL  7  /* Tiger Lake to Meteor Lake: the ICM with
+                                  Ice Lake's messages, or the USB4 software
+                                  CM (design record 22 section 3.1)         */
 
 #define CM_CLASS_USB4_NHI   0x0C0340UL
 
@@ -96,7 +101,8 @@ ULONG CmProfileFor(const CM_IDS *ids);
 #define CM_INERT_MODE_OFF        1  /* XhciCmMode 0                        */
 #define CM_INERT_PROFILE_UNKNOWN 2  /* no profile for the ids (or unread)  */
 #define CM_INERT_NOT_BUILT       3  /* the profile's client is not built   */
-#define CM_INERT_FORCE_REFUSED   4  /* XhciCmMode 3 on a Thunderbolt 3 host */
+#define CM_INERT_FORCE_REFUSED   4  /* XhciCmMode 3 on a host whose router
+                                       is not a USB4 router               */
 /* The reasons found after start (cm_nhi.c, task 39-A.4). */
 #define CM_INERT_CONFIG          5  /* configuration space unreadable       */
 #define CM_INERT_SELECTION       6  /* tbt_hw.c TbtHwSelect said INERT: its
@@ -116,14 +122,18 @@ ULONG CmProfileFor(const CM_IDS *ids);
 
 /*
  * The profiles whose client this build carries, one bit per CM_PROFILE_*:
- * the four ICM rows since task 39-A.4 (tbt_icm.c's Falcon, Alpine and
- * Titan Ridge and Ice Lake tables). Phase 40 adds the USB4 one; until then
- * a start the software connection manager would take is inert.
+ * every ICM profile since task 39-A.4 (tbt_icm.c's Falcon, Alpine and
+ * Titan Ridge and Ice Lake message tables; Maple Ridge and Tiger Lake to
+ * Meteor Lake on the Titan Ridge and Ice Lake tables, where tbt_hw.c's
+ * selection finds their ICM running). Phase 40 adds the USB4 one; until
+ * then a start the software connection manager would take is inert.
  */
 #define CM_PROFILES_BUILT ((1UL << CM_PROFILE_ICM_FR) |                    \
                            (1UL << CM_PROFILE_ICM_AR) |                    \
                            (1UL << CM_PROFILE_ICM_TR) |                    \
-                           (1UL << CM_PROFILE_ICM_ICL))
+                           (1UL << CM_PROFILE_ICM_ICL) |                   \
+                           (1UL << CM_PROFILE_ICM_MR) |                    \
+                           (1UL << CM_PROFILE_ICM_TGL))
 
 /*
  * The inert reason for a start in `mode` (XhciCmMode as taken) on an NHI
@@ -132,8 +142,9 @@ ULONG CmProfileFor(const CM_IDS *ids);
  * does not list as Alpine Ridge (record 21 section 8): `intel` says
  * whether the vendor is Intel's. XhciCmMode 3 is the one forced route to
  * the USB4 software CM (orchestrator's decision of 2026-10-15, owner to
- * confirm): refused on the Falcon, Alpine and Titan Ridge hosts, whose
- * routers are not USB4 routers, and on ids unread; and it bypasses none of
+ * confirm; design record 22 section 3.6): refused on the Falcon, Alpine
+ * and Titan Ridge hosts and on Ice Lake, whose host routers are not USB4
+ * routers, and on ids unread; and it bypasses none of
  * the after-start tests of task 39-A.4 (failed platform init, unreadable
  * registers, a running firmware CM where the register says so, an
  * unsupported protocol, tunnel preservation). The Intel firmware status is

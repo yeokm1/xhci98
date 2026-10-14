@@ -445,6 +445,30 @@ VOID CmPowerRelease(PCM_NHI nhi)
     KeReleaseSpinLock(&nhi->WorkLock, irql);
 }
 
+/* The system state, published under WorkLock (cm_power.c's sleep gate).
+ * IRQL: <= DISPATCH_LEVEL. */
+VOID CmPowerSetSystem(PCM_NHI nhi, SYSTEM_POWER_STATE state)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    nhi->SystemPower = state;
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+}
+
+/* Whether the system is (or is going) anywhere but S0, read under
+ * WorkLock: then no client is activated. IRQL: <= DISPATCH_LEVEL. */
+BOOLEAN CmPowerSleeping(PCM_NHI nhi)
+{
+    KIRQL irql;
+    BOOLEAN sleeping;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    sleeping = (BOOLEAN)(nhi->SystemPower != PowerSystemWorking);
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    return sleeping;
+}
+
 /* The removal's half: admission closed, every held IRP waited for, then
  * the lock taken once more, so the last release has left it before the
  * extension is freed. IRQL: PASSIVE_LEVEL. */

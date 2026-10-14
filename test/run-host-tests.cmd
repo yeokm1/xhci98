@@ -170,12 +170,6 @@ rem                  allocator's order and refusals, the walk for the UAS
 rem                  alternate setting and its Pipe Usage descriptors at High
 rem                  Speed and SuperSpeed, REPORT LUNS, the status fold, the
 rem                  CDB direction table and the storage id strings
-rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
-rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
-rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
-rem                  filter), the vendor, device and class parsed from them,
-rem                  the NHI profile table, and the registry values'
-rem                  defaults, refusals and bounds
 rem   test_tbt_topo - the Thunderbolt tunnel ports' pure half (src\cm\tbt_topo.c,
 rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
 rem                  and 6.5): the P14s Gen 1's configuration space as
@@ -186,6 +180,12 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
+rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
+rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
+rem                  filter), the vendor, device and class parsed from them,
+rem                  the NHI profile table, and the registry values'
+rem                  defaults, refusals and bounds
 rem
 rem   test_tbt_ring - xhcicm.sys's host interface ring 0 (src\cm\tbt_ring.c,
 rem                  task 39-A.2): the USB4 2.0 Appendix A.2 CRC-32C vectors,

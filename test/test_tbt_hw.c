@@ -388,11 +388,15 @@ static ULONG hwProfile(const TBT_HW_PROFILE *hw)
     if (hw->Icm == &TbtIcmProfileAlpineRidge) {
         return CM_PROFILE_ICM_AR;
     }
+    /* Maple Ridge and Tiger Lake to Meteor Lake: the Titan Ridge and Ice
+     * Lake messages under the NVM-authentication predicate. */
     if (hw->Icm == &TbtIcmProfileTitanRidge) {
-        return CM_PROFILE_ICM_TR;
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_MR
+                                                     : CM_PROFILE_ICM_TR;
     }
     if (hw->Icm == &TbtIcmProfileIceLake) {
-        return CM_PROFILE_ICM_ICL;
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_TGL
+                                                     : CM_PROFILE_ICM_ICL;
     }
     return CM_PROFILE_USB4;
 }
