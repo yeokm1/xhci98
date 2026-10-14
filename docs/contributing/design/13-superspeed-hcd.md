@@ -6791,7 +6791,9 @@ select**, at PASSIVE_LEVEL, on the `START`'s own thread, synchronous:
    so whatever happens below, a start that does not complete the sequence
    leaves no record, and the functions fall back to today's behaviour (a
    review, round 1: a Windows 98 `STOP` keeps the record, and a start whose
-   sequence fails must not leave the old one standing);
+   sequence fails must not leave the old one standing), and forgotten
+   again at any failure of the steps below - a filter may fail the select
+   on its way back up after the parent published the record (round 2);
 1. `GET_DESCRIPTOR_FROM_DEVICE` for the device descriptor (18 bytes);
 2. `GET_DESCRIPTOR_FROM_DEVICE` for the configuration descriptor, first
    its 9-byte header, then the whole at the header's `wTotalLength` (at
@@ -6818,8 +6820,8 @@ are in the HCD's imports already (`hcd_svc.c`), so the import gate is
 unchanged.
 
 **A failure anywhere in the three steps never fails the `START`** (D4): the
-device works as it does today, with no composite record (step 0); the
-failure is counted and logged (10.14.6).
+device works as it does today, with no composite record (step 0 and the
+forget at the failure); the failure is counted and logged (10.14.6).
 
 **The parent PDO answers everything here at once, in its dispatch, with no
 queue and no controller thread** (a review, round 1, P1: a select pended
@@ -6862,10 +6864,14 @@ what it answers is descriptors it holds and a record it keeps.
    The caller's descriptor is read to its own `wTotalLength`, the bound
    every port driver trusts in a select.
 2. **Copied** into a reference-counted pool block (`HCD_COMP_RECORD`: a
-   count, a length, the bytes), which replaces the PDO's earlier one under
-   `PdoListLock`; the earlier one's reference is dropped after the lock,
-   and a block is freed when its last reference goes. No field of it is
-   used except through the match of 10.14.3.
+   count, a length, the bytes), and the answer below filled from the
+   PDO's copy and the new block, **all before the block is published**: it
+   then replaces the PDO's earlier one under `PdoListLock`, and the
+   publisher never touches it again (a review, round 2: a concurrent
+   select may replace it at once). The earlier one's reference is dropped
+   after the lock; a block is freed by whoever drops its last reference,
+   the interlocked decrement deciding. No field of it is used except
+   through the match of 10.14.3.
 3. **The URB filled** as a select would fill it: per interface, `Class`,
    `SubClass`, `Protocol`, `InterfaceHandle` (the same cookie a function's
    select returns), `NumberOfPipes`, and per pipe its `EndpointAddress`,
@@ -6891,10 +6897,13 @@ item 3) and Windows 98's dormant path (the group kept and revived whole,
 `RESET_PORT`, the controller's stop), whose next presentation brings a new
 parent PDO and a new composite `START`. The controller thread reads it at a
 function's select or `SELECT_INTERFACE` through `dev->Pdo` - the group's
-first PDO, the parent, which the thread alone clears before any deleter
-frees it (`hcd_pdo.c`) - taking a reference under `PdoListLock` for the
-length of the select, so a record replaced or forgotten meanwhile stays
-whole until that select has finished with it. The PDO's deletion drops the
+first PDO, the parent - taking a reference under `PdoListLock`, which also
+covers the read of `dev->Pdo` itself, for the length of the select, so a
+record replaced or forgotten meanwhile stays whole until that select has
+finished with it. `dev->Pdo` is cleared by the thread before a group's PDOs
+are deleted, and by `HcdDevicePdoReleaseAll` at the root hub's removal
+only after `HcdEnumDetach` has had the thread drop every device, so no
+function select is in flight then (round 2). The PDO's deletion drops the
 PDO's own reference.
 
 #### 10.14.3 Precedence at a function's select
@@ -7038,10 +7047,10 @@ contiguous block:
 | 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2) where it differs from the device's, at a select or a `SELECT_INTERFACE`; an endpoint whose record byte equals the device's is rule 3's and not counted |
 
 The log (the ring, `XhciLogVerbosity` 2 or more, as `fastpoll.*`):
-`comp.select` (slot, interfaces, rewrites, mismatches, and whether a
-function had pipes open), `comp.refused` (slot, the reason code),
-`comp.fdo` (the FDO's own sequence: the step that failed and its status),
-`comp.unconfig` (slot), and `comp.interval` (slot, DCI, the device's byte,
+`comp.select` (the parent's serial, interfaces, rewrites, mismatches, a
+byte each), `comp.refused` (the serial, the USBD status's low 24 bits),
+`comp.fdo` (the FDO's own sequence: the step that failed, 1 to 6, in the top four bits, the status below),
+`comp.unconfig` (the serial), and `comp.interval` (slot, DCI, the device's byte,
 the record's byte) per rule-2 endpoint counted in `CompositeIntervals`. The stop's counter lines gain
 `composite.selects`, `composite.refused`, `composite.rewrites`,
 `composite.mismatches` and `composite.intervals`. `XHCISNAP` names the five
