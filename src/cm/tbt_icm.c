@@ -652,18 +652,27 @@ static VOID tbtIcmEnqueue(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
     ULONG i;
     TBT_ICM_ANNOUNCE *q;
 
-    /* The latest announcement of a device replaces one still queued. */
+    /* The latest announcement of a device supersedes one still queued: the
+     * earlier copy leaves the queue and the latest joins its tail, so the
+     * events between them keep their order. */
     for (i = 0; i < icm->QueueCount; i++) {
         q = &icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE];
         if (tbtIcmUuidEqual(q->Uuid, a->Uuid)) {
-            *q = *a;
-            icm->Counters.EventsQueued++;
-            return;
+            for (; i + 1 < icm->QueueCount; i++) {
+                icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE] =
+                    icm->Queue[(icm->QueueHead + i + 1) % TBT_ICM_EVENT_QUEUE];
+            }
+            icm->QueueCount--;
+            break;
         }
     }
     if (icm->QueueCount >= TBT_ICM_EVENT_QUEUE) {
+        /* An announcement is not acknowledged and is not sent again (ICM
+         * 3 [obs]); only another driver ready makes the firmware announce
+         * every attached device anew (ICM 6.2, 6.5 [obs]). The idle poll
+         * does that (tbtIcmRediscover). */
         icm->Counters.QueueOverflows++;
-        icm->ResyncPending = TRUE;
+        icm->RediscoverPending = TRUE;
         tbtIcmLog(icm, "tbt.icm.queue-overflow", a->LinkInfo);
         return;
     }
@@ -701,9 +710,11 @@ static VOID tbtIcmPurgeQueued(PTBT_ICM icm, const TBT_ICM_GONE *g)
 
 static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a);
 
-/* A device-disconnected event: the device and everything below it leave,
- * deepest first, each with its link-down upcall and its TUNNEL_DOWN. */
-static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
+/* Every entry at or below `g` leaves, deepest first, each with its
+ * TUNNEL_DOWN and, when `linkDown`, its link-down upcall first. Returns
+ * how many left. */
+static ULONG tbtIcmDropSubtree(PTBT_ICM icm, const TBT_ICM_GONE *g, ULONG why,
+                               BOOLEAN linkDown)
 {
     ULONG slot;
     ULONG i;
@@ -711,7 +722,6 @@ static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
     ULONG found;
     PTBT_ICM_DEVICE d;
 
-    tbtIcmPurgeQueued(icm, g);
     found = 0;
     for (;;) {
         slot = TBT_ICM_NO_SLOT;
@@ -729,13 +739,45 @@ static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
             break;
         }
         found++;
-        if (icm->LinkDown != NULL) {
+        if (linkDown && icm->LinkDown != NULL) {
             icm->LinkDown(icm->LinkDownContext, &icm->Devices[slot], icm->InWait);
         }
-        tbtIcmDrop(icm, slot, TBT_ICM_WHY_DISCONNECTED,
-                   (BOOLEAN)(icm->LinkDown != NULL));
+        tbtIcmDrop(icm, slot, why, (BOOLEAN)(linkDown && icm->LinkDown != NULL));
     }
-    if (found == 0) {
+    return found;
+}
+
+/* The address of a table entry, as a disconnect would name it. */
+static VOID tbtIcmAddressOf(const TBT_ICM_DEVICE *d, PTBT_ICM_GONE g)
+{
+    g->Link = d->Link;
+    g->Depth = d->Depth;
+    g->Route = d->Route;
+    g->RouteValid = d->RouteValid;
+}
+
+/* An entry being replaced takes its subtree with it (Linux icm.c:
+ * remove_switch for a moved UUID or a stale occupant, and switch.c
+ * tb_switch_remove's recursion). The queue is left alone: what is queued
+ * belongs to the topology that replaces it. */
+static VOID tbtIcmReplace(PTBT_ICM icm, ULONG slot)
+{
+    TBT_ICM_GONE g;
+
+    tbtIcmAddressOf(&icm->Devices[slot], &g);
+    if (tbtIcmByRoute(icm) && !g.RouteValid) {
+        tbtIcmDrop(icm, slot, TBT_ICM_WHY_REPLACED, FALSE);
+        return;
+    }
+    (VOID)tbtIcmDropSubtree(icm, &g, TBT_ICM_WHY_REPLACED, FALSE);
+}
+
+/* A device-disconnected event: the device and everything below it leave,
+ * deepest first, each with its link-down upcall and its TUNNEL_DOWN. */
+static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
+{
+    tbtIcmPurgeQueued(icm, g);
+    if (tbtIcmDropSubtree(icm, g, TBT_ICM_WHY_DISCONNECTED, TRUE) == 0) {
         icm->Counters.DisconnectUnknown++;
         tbtIcmLog(icm, "tbt.icm.disconnect-unknown",
                   g->RouteValid ? g->Route.Lo : TBT_ICM_LI_MAKE(g->Link, g->Depth));
@@ -1258,14 +1300,14 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
             return;
         }
         /* Moved, or approved differently: the old entry is gone. */
-        tbtIcmDrop(icm, slot, TBT_ICM_WHY_REPLACED, FALSE);
+        tbtIcmReplace(icm, slot);
     }
 
     /* Anything still at that address is stale (Linux icm.c: by link and
      * depth, the port's other link included, or by route). */
     slot = tbtIcmFindAt(icm, byRoute, &a->Route, a->Link, a->Depth, TRUE);
     if (slot != TBT_ICM_NO_SLOT) {
-        tbtIcmDrop(icm, slot, TBT_ICM_WHY_REPLACED, FALSE);
+        tbtIcmReplace(icm, slot);
     }
 
     for (slot = 0; slot < TBT_ICM_MAX_DEVICES; slot++) {
@@ -1437,17 +1479,13 @@ static VOID tbtIcmReconcile(PTBT_ICM icm)
     }
 }
 
+static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale);
+static VOID tbtIcmFinishAnnounce(PTBT_ICM icm, BOOLEAN reconcile);
+
 static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
                           BOOLEAN resume)
 {
-    ULONG req[1];
-    ULONG resp[8];
-    ULONG n;
-    ULONG i;
-    ULONG v;
-    BOOLEAN reconcile;
     LONG rc;
-    TBT_ROUTE root;
 
     rc = TbtRingStart(icm->Ring, icm->Host, va, phys, bytes,
                       TBT_RX_PDF_ALL_ONES, icm->RingFlags);
@@ -1467,24 +1505,46 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
         }
     }
 
-    reconcile = FALSE;
-    if (resume) {
+    icm->Session = TRUE;
+    rc = tbtIcmAnnounceAll(icm, resume);
+    if (rc != TBT_OK) {
+        tbtIcmTearDown(icm);
+        return rc;
+    }
+    icm->Bound = TRUE;
+    tbtIcmFinishAnnounce(icm, resume);
+    return TBT_OK;
+}
+
+/*
+ * Driver ready and the host-router poll: the firmware then announces every
+ * attached device (ICM 6.2 [obs]). With `markStale` every table entry is
+ * first marked to be reconciled.
+ */
+static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
+{
+    ULONG req[1];
+    ULONG resp[8];
+    ULONG n;
+    ULONG i;
+    ULONG v;
+    LONG rc;
+    TBT_ROUTE root;
+
+    if (markStale) {
         for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
             if (icm->Devices[i].InUse) {
                 icm->Devices[i].Stale = TRUE;
-                reconcile = TRUE;
             }
         }
     }
 
     req[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_DRIVER_READY);
-    icm->Session = TRUE;
     rc = tbtIcmCommand(icm, req, 1, 0, resp, 8, &n,
                        icm->Profile->ReadyTimeoutMs,
                        icm->Profile->ReadyRetries, TBT_ICM_NO_SLOT, 0, FALSE);
     if (rc != TBT_OK) {
         tbtIcmLog(icm, "tbt.icm.driver-ready-failed", (ULONG)(-rc));
-        tbtIcmTearDown(icm);
         return rc;
     }
     if (!icm->Profile->DecodeReady(resp, n, &icm->Ready)) {
@@ -1518,13 +1578,61 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
     if (rc != TBT_OK) {
         tbtIcmLog(icm, "tbt.icm.host-poll-unanswered", i);
     }
-    icm->Bound = TRUE;
+    return TBT_OK;
+}
 
-    if (reconcile) {
+/* After an announce-all: the reconciliation if entries were marked, then
+ * the announcements collected. */
+static VOID tbtIcmFinishAnnounce(PTBT_ICM icm, BOOLEAN reconcile)
+{
+    ULONG i;
+    BOOLEAN any;
+
+    any = FALSE;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (icm->Devices[i].InUse && icm->Devices[i].Stale) {
+            any = TRUE;
+        }
+    }
+    if (reconcile && any) {
         tbtIcmReconcile(icm);
     }
     tbtIcmDrainQueue(icm, TBT_ICM_EVENT_QUEUE * 2);
-    return TBT_OK;
+}
+
+/*
+ * An announcement was lost to a full queue: ask the firmware for all of
+ * them again with another driver ready, as a resume does, without
+ * restarting the rings or sending 0x23. Tunnels survive it (ICM 2.3, 7
+ * [obs]). Bounded: TBT_ICM_REDISCOVER_MAX in a row, then logged and left.
+ */
+static VOID tbtIcmRediscover(PTBT_ICM icm)
+{
+    LONG rc;
+
+    icm->RediscoverPending = FALSE;
+    if (icm->RediscoverRun >= TBT_ICM_REDISCOVER_MAX) {
+        icm->ResyncPending = TRUE;
+        tbtIcmLog(icm, "tbt.icm.rediscover-gave-up", icm->RediscoverRun);
+        return;
+    }
+    icm->RediscoverRun++;
+    icm->Counters.Rediscoveries++;
+    rc = tbtIcmAnnounceAll(icm, TRUE);
+    if (rc != TBT_OK) {
+        /* The rings still run and the session stays; the stale marks are
+         * cleared so nothing is reconciled away on a failed request. */
+        ULONG i;
+
+        for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+            icm->Devices[i].Stale = FALSE;
+        }
+        return;
+    }
+    tbtIcmFinishAnnounce(icm, TRUE);
+    if (!icm->RediscoverPending) {
+        icm->RediscoverRun = 0;
+    }
 }
 
 LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes)
@@ -1592,6 +1700,9 @@ VOID TbtIcmPoll(PTBT_ICM icm)
         tbtIcmFrame(icm, &f);
     }
     tbtIcmDrainQueue(icm, TBT_ICM_POLL_EVENTS);
+    if (icm->RediscoverPending && icm->Bound) {
+        tbtIcmRediscover(icm);
+    }
 }
 
 VOID TbtIcmService(PTBT_ICM icm)

@@ -182,6 +182,8 @@
 /* How much one TbtIcmPoll takes before it returns to the driver. */
 #define TBT_ICM_POLL_FRAMES         64UL
 #define TBT_ICM_POLL_EVENTS         32UL
+/* Driver readys in a row to recover lost announcements, then a RESYNC. */
+#define TBT_ICM_REDISCOVER_MAX      3UL
 
 
 /* ---------------------------------------------------------------------- */
@@ -331,9 +333,11 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
  * 6.5), a snapshot of the entry when it was queued. Every entry that
  * leaves the table queues exactly one TUNNEL_DOWN, approved or not
  * (WasApproved says which); a TUNNEL_UP is queued only for an approved one.
- * A disconnect takes the devices below the one named with it. If the queue
- * is ever full, a stale TUNNEL_UP is given up first, and anything else that
- * does not fit turns into one TBT_ICM_ACT_RESYNC after the queue drains.
+ * A disconnect, or a replacement, takes the devices below the one named
+ * with it. If the queue is ever full, a stale TUNNEL_UP is given up first,
+ * and anything else that does not fit turns into one TBT_ICM_ACT_RESYNC
+ * after the queue drains. A lost announcement is recovered differently:
+ * the next idle poll sends driver ready again and reconciles.
  */
 typedef struct _TBT_ICM_ACTION {
     ULONG Kind;             /* TBT_ICM_ACT_* */
@@ -409,6 +413,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG HostPollTries;
     ULONG HostPollAnswered;
     ULONG IdlePolls;
+    ULONG Rediscoveries;
 } TBT_ICM_COUNTERS;
 
 typedef struct _TBT_ICM {
@@ -435,7 +440,9 @@ typedef struct _TBT_ICM {
     ULONG WaitSerial;           /* 0 when it is for none */
     BOOLEAN WaitGone;           /* that entry was dropped during the wait */
     BOOLEAN SettleExtend;       /* a device-connected event arrived in the window */
-    BOOLEAN ResyncPending;      /* something did not fit: a RESYNC is owed */
+    BOOLEAN ResyncPending;      /* an action did not fit: a RESYNC is owed */
+    BOOLEAN RediscoverPending;  /* an announcement did not fit: driver ready again */
+    ULONG RediscoverRun;        /* rediscoveries in a row */
 
     TBT_ICM_READY Ready;
     ULONG NextSerial;

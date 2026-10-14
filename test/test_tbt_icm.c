@@ -58,6 +58,7 @@ typedef struct FW {
     int Approved;               /* its tunnel exists */
     unsigned long ConnId;
     int ApproveMode;
+    unsigned long ErrorApproves;    /* the first this many approves fail */
     unsigned long ApproveDelayUs;
     unsigned long DisconnectInApproveUs;
     int RouteMode;
@@ -284,6 +285,9 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         }
         memcpy(r, dw, 4 * words);
         r[0] = 0x01000004UL | (g_fw.ApproveMode == MODE_ERROR ? 0x100UL : 0);
+        if (g_fw.Approves <= g_fw.ErrorApproves) {
+            r[0] |= 0x100UL;
+        }
         if (g_fw.ApproveMode == MODE_ANSWER) {
             g_fw.Approved = 1;
         }
@@ -1147,6 +1151,24 @@ static void test_subtree_disconnect(void)
     CHECK_EQ(act[1].Depth, 1, "then the device named");
     CHECK_EQ(g_icm.Counters.DisconnectUnknown, 0, "nothing unknown");
 
+    /* A parent replaced (another device announced at its address) takes
+     * its child with it. */
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    arConnected(6, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    actions(act, 8);
+    {
+        unsigned long u4[4] = { 0x44444444UL, 0x55555555UL, 0xffffffffUL, 0xffffffffUL };
+        arConnected(8, 1, 1, 1, u4, 0);
+    }
+    idle(200);
+    n = actions(act, 8);
+    CHECK_EQ(n, 3, "the old parent and its child down, the new one up");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_REPLACED, "child replaced");
+    CHECK_EQ(act[0].Depth, 2, "deepest first");
+    CHECK_EQ(act[1].Why, TBT_ICM_WHY_REPLACED, "parent replaced");
+    CHECK_EQ(act[2].Kind, TBT_ICM_ACT_TUNNEL_UP, "the new device up");
+
     /* Titan Ridge: route 0x0301 lies below route 1. */
     setup(GEN_TR, 0, 0);
     CHECK_EQ(start(), TBT_OK, "bind");
@@ -1166,40 +1188,79 @@ static void test_subtree_disconnect(void)
 static void test_queue_overflow_and_coalescing(void)
 {
     TBT_ICM_ACTION act[64];
-    unsigned long n;
     unsigned long i;
     unsigned long u[4];
-    int resync;
+    const TBT_ICM_DEVICE *d;
+    int found;
 
+    /* Device X's approve fails after 3 s; inside that wait the firmware
+     * announces kUuid2 twice and then sixteen more devices, the last of
+     * them the dock (kUuid, unapproved): seventeen distinct devices for a
+     * queue of sixteen, so the dock's announcement is lost. The next driver
+     * ready makes the firmware announce the dock again (the model announces
+     * it on every driver ready), and it is approved. */
     setup(GEN_AR, 0, 0);
     CHECK_EQ(start(), TBT_OK, "bind");
-    g_fw.ApproveMode = MODE_NEVER;
-    arConnected(6, 0, 1, 1, kUuid, 0);
-    /* The same device announced twice inside the wait: one queued entry. */
-    arConnected(2, 1, 3, 1, kUuid2, 100000UL);
-    arConnected(3, 1, 3, 1, kUuid2, 200000UL);
-    /* Then seventeen more devices: the queue holds sixteen. */
+    g_fw.ErrorApproves = 1;
+    g_fw.ApproveDelayUs = 3000000UL;
     u[2] = 0xffffffffUL;
     u[3] = 0xffffffffUL;
-    for (i = 0; i < 16; i++) {
+    u[0] = 0x7777UL;
+    u[1] = 0x8888UL;
+    arConnected(6, 0, 2, 1, u, 0);
+    arConnected(2, 1, 3, 1, kUuid2, 100000UL);
+    arConnected(3, 1, 3, 1, kUuid2, 200000UL);
+    for (i = 0; i < 15; i++) {
         u[0] = 0x5000UL + i;
         u[1] = 0x6000UL + i;
         arConnected(10 + i, 1, 3, 2 + (i % 4), u, 300000UL + 10000UL * i);
     }
+    arConnected(5, 0, 1, 1, kUuid, 600000UL);
+    g_fw.Present = 1;
+    g_fw.Approved = 0;
     fakePump();
     TbtIcmPoll(&g_icm);
     CHECK_EQ(g_icm.Counters.QueueOverflows, 1, "one did not fit");
-    CHECK(g_icm.Counters.EventsQueued >= 17, "the rest queued, one coalesced");
-    resync = 0;
-    n = actions(act, 64);
-    for (i = 0; i < n && i < 64; i++) {
-        if (act[i].Kind == TBT_ICM_ACT_RESYNC) {
-            resync++;
-            CHECK_EQ(i, n - 1, "the resync comes after the queued actions");
+    CHECK_EQ(g_icm.Counters.EventsQueued, 18, "seventeen queued in the wait, the re-announcement in the second host poll");
+    CHECK_EQ(g_icm.Counters.Rediscoveries, 1, "driver ready sent again");
+    CHECK_EQ(g_fw.Ready, 2, "the firmware saw a second driver ready");
+    CHECK_EQ(g_fake.MboxCount, 1, "no 0x23 and no ring restart for it");
+    found = 0;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        d = TbtIcmDevice(&g_icm, i);
+        if (d != NULL && d->Uuid[0] == kUuid[0]) {
+            found = 1;
+            CHECK(d->Approved, "the lost device recovered and approved");
         }
     }
-    CHECK_EQ(resync, 1, "one resync owed and delivered");
-    CHECK(!TbtIcmNextAction(&g_icm, &act[0]), "and only once");
+    CHECK(found, "the lost device is in the table");
+    CHECK(!g_icm.RediscoverPending, "nothing left pending");
+    actions(act, 64);
+
+    /* Coalescing keeps the order of what lies between: A@1, B@1, A@1 again
+     * must end with A at link 1, not B. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ErrorApproves = 1;
+    g_fw.ApproveDelayUs = 1000000UL;
+    u[0] = 0x7777UL;
+    u[1] = 0x8888UL;
+    arConnected(6, 0, 2, 1, u, 0);
+    arConnected(7, 1, 1, 1, kUuid, 100000UL);
+    arConnected(8, 1, 1, 1, kUuid2, 200000UL);
+    arConnected(9, 1, 1, 1, kUuid, 300000UL);
+    fakePump();
+    TbtIcmPoll(&g_icm);
+    found = 0;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        d = TbtIcmDevice(&g_icm, i);
+        if (d != NULL && d->Link == 1) {
+            CHECK_EQ(d->Uuid[0], kUuid[0], "the latest occupant of link 1 wins");
+            CHECK_EQ(d->ConnectionId, 9, "with its latest connection id");
+            found++;
+        }
+    }
+    CHECK_EQ(found, 1, "one device at link 1");
 }
 
 static void test_action_overflow(void)
