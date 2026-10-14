@@ -299,6 +299,14 @@ Space Enable clear, Tier B is unavailable and the report says the read-only
 probe left MSE unchanged; use an active mode only after the inventory is
 captured.
 
+Under the system description, before any controller, the report prints
+the BIOS PCI IRQ routing table (`$PIR`; the README's "The BIOS PCI IRQ
+routing table" has the format): where it is, whether its checksum holds,
+every entry, and then `00:1C` by name, `listed` or `NO ENTRY`, with each
+`00:1C` function found in configuration space. `none in F0000h-FFFFFh` and
+`UNUSABLE` are results too. Record them; a machine whose BIOS keeps no
+`$PIR` leaves Windows 98's IRQ steering with nothing to read from it.
+
 Each xHCI report opens with its `quirks:` lines, from Linux's quirk list
 (the README's "The `quirks:` lines" has the forms). A quirk the driver
 takes is printed as the driver's registry value with the Linux flag
@@ -767,6 +775,7 @@ Build stamp (from run header):
 Controller FACT lines:
 USB 3 PSI warning (issue 11): yes/no, PSIC per protocol:
 Physical port -> controller mapping:
+$PIR: at <address> / none / UNUSABLE; 00:1C listed / NO ENTRY; 00:1C functions:
 
 XPOLL:  completed / fault, C2, C3, C6 (C4 SKIP), PROVISIONAL
 XEMPTY: completed / fault, C2, C3, C4, C6
@@ -1045,3 +1054,40 @@ told (the controller id under which Device Manager or `lsusb -t` lists the
 device on a current system), and send both with the driver's `XHCISNAP`
 reports (`docs/contributing/failure-diagnosis.md`, "A device stops until
 it is replugged").
+
+### ThinkPad P14s Gen 1 - does the `$PIR` list the Thunderbolt root port?
+
+Roadmap-usb4 tasks 39-0.6 and 39-E.2. On the P14s the Thunderbolt 3
+controller sits behind the PCH root port `00:1C.4`. Windows 98 there runs
+with PCI IRQ steering, which routes a function from `$PIR` when POST gave
+it no Interrupt Line. A device hot-added behind the tunnel gets no line
+from POST, so it gets an IRQ only if `$PIR` has an entry for device
+`00:1C`. Without one, Device Manager shows Code 29 (`usb4-emu`
+`docs/WIN98-TEST.md`, "Hot-added NVMe gets no IRQ behind 00:1c", where
+QEMU reproduces it). The captures on file do not include the P14s's
+`$PIR`, so the answer is not known yet.
+
+To read it, boot the P14s to DOS (the same boot medium as the procedure
+above, Thunderbolt BIOS settings as for the Windows 98 runs) and run:
+
+```bat
+XHCIQUAL --probe-only --no-page --log PIR.LOG
+```
+
+or `QUALREP.BAT`, whose log carries the same block. The screen line of the
+quick scan (`IRQ table: ... 00:1C listed` or `NOT LISTED`) is enough to
+answer the question on the spot. Keep the log, since the entry's link
+values and IRQ bitmaps are what a later fix would need. Record under
+`results/p14s-gen1-<date>/README.md`:
+
+- the `$PIR` header lines (address, version, size, checksum, router);
+- the `00:1C` line, and the `00:1C.4` function line under it (id, pin,
+  line, `link/bitmap` or `no entry`);
+- the BIOS version from the system description, since a BIOS update can
+  change the table.
+
+What the answer means is task 39-E.2's to write into the release notes.
+`listed` means a function hot-added behind the tunnel can be given an IRQ
+by Windows 98. `NO ENTRY` means it cannot, so on that machine pre-boot
+tunnelling (the device attached before power-on) is the route on Windows
+98.

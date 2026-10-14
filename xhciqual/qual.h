@@ -173,6 +173,53 @@ typedef struct {
  * of the RCBA page; no write of any kind. */
 void route_read(const PCIINFO *p, ROUTEINFO *r);
 
+/*
+ * Task 39-0.6: the BIOS PCI IRQ routing table ("$PIR"; Microsoft, "PCI IRQ
+ * Routing Table Specification", version 1.0), read once per run (route.c
+ * parses, pci.c's pir_read reads). Machine-wide, not per controller: it is
+ * the table Windows 98's PCI IRQ steering routes a function from when POST
+ * gave it no Interrupt Line, and the question it answers on the bench is
+ * whether a device number has an entry at all (00:1C, the PCH root ports,
+ * the Thunderbolt root port's on the ThinkPad P14s Gen 1).
+ */
+#define PIR_NOT_READ      0   /* not looked at                             */
+#define PIR_NONE          1   /* no "$PIR" on a 16-byte boundary           */
+#define PIR_OK            2   /* found, and every check passed             */
+#define PIR_BAD_VERSION   3   /* a "$PIR" whose version is not 1.x         */
+#define PIR_BAD_SIZE      4   /* table size not above 32 or not a multiple
+                                 of 16                                     */
+#define PIR_TRUNCATED     5   /* the table runs past the end of the area   */
+#define PIR_BAD_CHECKSUM  6   /* bytes do not sum to 0 (dumped anyway)     */
+
+#define PIR_HDR_LEN       32
+#define PIR_SLOT_LEN      16
+#define PIR_MAX_SLOTS     128 /* entries kept; more are counted, not shown */
+#define PIR_COPY_MAX      (PIR_HDR_LEN + PIR_SLOT_LEN * PIR_MAX_SLOTS)
+#define PIR_RP_DEV        0x1C /* the device number named in the report   */
+
+typedef struct {
+    int state;
+    u32 phys;           /* where the table (or the failing candidate) is   */
+    u16 version;        /* its 04h: 0100h for 1.0                          */
+    u16 size;           /* its 06h, bytes                                  */
+    u32 nslots;         /* (size - 32) / 16 when the size is usable        */
+    u32 kept;           /* the entries copied below, at most PIR_MAX_SLOTS */
+    int candidates;     /* "$PIR" signatures seen on 16-byte boundaries    */
+    u8  table[PIR_COPY_MAX];
+    /* 00:1C.0-7 as found in configuration space (pci.c), reads only:
+     * rp_id 0FFFFFFFFh for an absent function. */
+    int rp_read;
+    u32 rp_id[8];
+    u8  rp_hdr[8];      /* 0Eh, header type                                */
+    u8  rp_pin[8];      /* 3Dh                                             */
+    u8  rp_line[8];     /* 3Ch                                             */
+} PIRINFO;
+
+/* pci.c: the F0000h-FFFFFh image read directly (linear == physical below
+ * 1 MB) and 00:1C.0-7's ids, header types and interrupt registers through
+ * 0xCF8/0xCFC; no write of any kind. */
+void pir_read(PIRINFO *pi);
+
 /* ------------------------------------------------------------------ */
 /* Quirk table (quirks.c)                                             */
 /* ------------------------------------------------------------------ */
@@ -912,6 +959,19 @@ int  route_compare(const ROUTEINFO *r, long gsi);
 void report_route(const ROUTEINFO *r, long gsi, QPRINTF_FN pf);
 /* One phrase for the quick scan's screen. Never NULL. */
 const char *route_summary(const ROUTEINFO *r, long gsi);
+
+/* Task 39-0.6, pure. Scan `len` bytes at `area` (physical `area_phys`) on
+ * 16-byte boundaries for "$PIR"; the first candidate that passes every
+ * check wins, else the first candidate's failure is kept. Returns state. */
+int  pir_scan(const u8 *area, u32 len, u32 area_phys, PIRINFO *pi);
+/* The first kept entry (0-based) for bus/device, or -1; *count, when not
+ * NULL, gets how many kept entries name it. Only for a parsed table
+ * (PIR_OK or PIR_BAD_CHECKSUM). */
+int  pir_find(const PIRINFO *pi, u8 bus, u8 dev, int *count);
+/* The block: header, every kept entry, and 00:1C named explicitly. */
+void report_pir(const PIRINFO *pi, QPRINTF_FN pf);
+/* One line for the quick scan's screen, at most 79 characters. */
+void report_pir_short(const PIRINFO *pi, QPRINTF_FN pf);
 
 /* ------------------------------------------------------------------ */
 /* sysinfo.c (pure, host-tested) and sysprobe.c (DOS): the system     */
