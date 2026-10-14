@@ -49,7 +49,8 @@ SOURCES=cm_vals.c      \
 # The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
 # derives them for xhci98.sys (design record 08), so the same flavour
 # marker check and packaging refusals apply to this binary. The qemu flavour
-# differs from debug only in its marker: this driver has no port-0xE9 trace.
+# differs from debug in its marker and in cm_log.c's port-0xE9 mirror of the
+# log emission (decision D12), whose WRITE_PORT_UCHAR import is a qemu row.
 #
 !IF "$(BUILD_ALT_DIR)" == "chk_qemu"
 C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU

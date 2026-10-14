@@ -6,8 +6,10 @@
  * the ring (xhci_log.h). Emission is decision D12's default: the release
  * flavour emits nothing and imports no DbgPrint, as xhciuas.sys prints
  * nothing; the debug and qemu flavours hand the ring to DbgPrint at each
- * stop, under #if DBG, so a reading needs a checked flavour and DebugView.
- * This file is the one DbgPrint site of the binary (SITES=cm_log.obj in
+ * stop, under #if DBG, so a reading needs a checked flavour and DebugView;
+ * the qemu flavour also mirrors the same bytes to port 0xE9, the
+ * emulator's debug console. This file is the one DbgPrint site and the one
+ * port-0xE9 site of the binary (SITES=cm_log.obj in
  * the allowlists, debug and qemu rows only), and AGENTS.md's two-site
  * rule for an unguarded DbgPrint is untouched.
  *
@@ -20,6 +22,24 @@
 /* The drain's stack buffer: small, because a large local costs __chkstk,
  * which the Windows 2000 DDK's driver libraries do not provide. */
 #define CM_LOG_CHUNK 128
+
+#if defined(XHCI_FLAVOUR_QEMU)
+/*
+ * The qemu flavour's port-0xE9 mirror (decision D12, record 21 section 8):
+ * the emulator's debug console takes the bytes as they are emitted. Its
+ * import, HAL.dll!WRITE_PORT_UCHAR, is a qemu row of the x86 allowlist
+ * alone (design record 08: the flavour that carries it is never
+ * published). IRQL: PASSIVE_LEVEL (CmLogEmit's).
+ */
+static VOID cmLogMirrorE9(const UCHAR *bytes, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        WRITE_PORT_UCHAR((PUCHAR)0xE9, bytes[i]);
+    }
+}
+#endif
 
 VOID CmLogInit(PCM_NHI nhi)
 {
@@ -77,6 +97,9 @@ VOID CmLogEmit(PCM_NHI nhi, ULONG reason)
         }
         staging[chunk] = 0;
         DbgPrint("%s", (char *)staging);
+#if defined(XHCI_FLAVOUR_QEMU)
+        cmLogMirrorE9(staging, chunk);
+#endif
         emitted += chunk;
     }
     KeAcquireSpinLock(&nhi->LogLock, &irql);

@@ -58,6 +58,10 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
  * mimics the device below it: DO_POWER_PAGABLE set on the way down where
  * nothing above is non-pageable, cleared on the way up where the device
  * below cleared it (the WDM contract for IRP_MN_DEVICE_USAGE_NOTIFICATION).
+ * The completion needs no removal guard: the notification is a PnP IRP,
+ * and the PnP manager sends a device stack one PnP IRP at a time, so
+ * IRP_MN_REMOVE_DEVICE (and the detach and delete in it) cannot reach this
+ * filter until the notification has completed back through this routine.
  * IRQL: <= DISPATCH_LEVEL (a completion routine).
  */
 static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
