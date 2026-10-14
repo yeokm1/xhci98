@@ -57,6 +57,7 @@ typedef void (*FAKE_ON_TX)(struct FAKE *f, unsigned long pdf,
 typedef struct FAKE {
     unsigned long NowUs;
     int ClockStopped;
+    unsigned long AskedUs;          /* every stall and sleep asked for, clock or not */
 
     /* BAR0 */
     unsigned long Caps;
@@ -444,6 +445,7 @@ static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
 static void fakeStall(PVOID ctx, ULONG us)
 {
     (void)ctx;
+    g_fake.AskedUs += us;
     if (!g_fake.ClockStopped) {
         g_fake.NowUs += us;
     }
@@ -454,6 +456,7 @@ static void fakeStall(PVOID ctx, ULONG us)
 static void fakeSleep(PVOID ctx, ULONG ms)
 {
     (void)ctx;
+    g_fake.AskedUs += ms * 1000UL;
     if (!g_fake.ClockStopped) {
         g_fake.NowUs += ms * 1000UL;
     }

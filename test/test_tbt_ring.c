@@ -1146,8 +1146,16 @@ static void test_u4_waits(void)
     /* A stopped clock: the waits asked for end both kinds. */
     g_fake.NowUs = 0;
     g_fake.ClockStopped = 1;
+    g_fake.AskedUs = 0;
     TbtWaitMin(&h, 10000);
     CHECK_EQ(g_fake.NowUs, 0, "the clock stood still and the minimum still ended");
+    CHECK(g_fake.AskedUs >= 10000UL, "only after 10 ms of waits were asked for");
+    CHECK(g_fake.AskedUs < 10000UL + 1000UL, "and not much more");
+    TbtWaitStart(&w, &h, 10000, TRUE);
+    w.WaitedUs = 9999;
+    CHECK(!TbtWaitDone(&w, &h), "1 us short of the sum: not satisfied");
+    w.WaitedUs = 10000;
+    CHECK(TbtWaitDone(&w, &h), "the full sum: satisfied");
     g_fake.ClockStopped = 0;
 
     /* A sub-millisecond minimum is stalled, not slept. */
