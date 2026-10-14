@@ -89,6 +89,7 @@ static NTSTATUS cmFilterAcquire(PCM_FILTER filter)
     return status;
 }
 
+/* IRQL: <= DISPATCH_LEVEL (the completion below calls it). */
 static VOID cmFilterRelease(PCM_FILTER filter)
 {
     if (InterlockedDecrement(&filter->Outstanding) == 0) {
@@ -96,6 +97,7 @@ static VOID cmFilterRelease(PCM_FILTER filter)
     }
 }
 
+/* IRQL: <= DISPATCH_LEVEL (a completion routine). */
 static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
                                   PVOID context)
 {
