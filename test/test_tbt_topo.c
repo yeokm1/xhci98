@@ -1,6 +1,7 @@
 /*
- * test_tbt_topo.c - host tests for src\cm\tbt_topo.c (roadmap-usb4.md task
- * 39-A.5; design record 21 sections 6.3, 6.5 and 10.1).
+ * test_tbt_topo.c - host tests for src\cm\tbt_topo.c (roadmap-usb4.md tasks
+ * 39-A.5 and 40-A.4; design record 21 sections 6.3, 6.5 and 10.1, design
+ * record 22 section 7.6).
  *
  * Driven over a modelled machine: every function's 256 bytes of
  * configuration space, and for a bridge with a Standard Hot-Plug
@@ -30,7 +31,13 @@
  *     exclusive ownership across domains;
  *   - a foreign hot-plug bridge beside the switch, a port without the
  *     capability bits, the parent search off bus 0's hierarchy, sets and
- *     their fold, failures at every read, and the poll.
+ *     their fold, failures at every read, and the poll;
+ *   - the USB4 profile's correspondence: router-named members on the
+ *     generic hosts (added, bound, refused, conflicting, past the
+ *     override, beside an incomplete discovery, beside the P14s's
+ *     parent, among ambiguous root ports) and the learned one (a
+ *     secondary bus gaining a function, none, several, inactive,
+ *     unreadable, moved, conflicting with a naming).
  *
  * The emulator layouts are modelled from usb4-emu main at a68bc74 (the run
  * scripts and the device types its QEMU patch defines); their capability
@@ -1659,6 +1666,634 @@ static void test_failures(void)
              "next time it reads");
 }
 
+/* ---- the USB4 profile's correspondence (record 22 section 7.6) --------- */
+
+static XHCI_TBT_BINDS binds;
+
+/* A device behind a tunnel port: function 0 of device `dev` on `bus`. */
+static VOID dev_at(ULONG bus, ULONG dev, ULONG on)
+{
+    MODEL_FN *f = mfind(B(bus, dev, 0));
+
+    if (f == NULL) {
+        if (!on) {
+            return;
+        }
+        f = mdev(bus, dev, 0, 0x144D, 0xA808, 0x010802UL);
+    }
+    put16(f, 0x00, on ? 0x144D : 0xFFFF);
+}
+
+#define dev_on(bus)     dev_at((bus), 0, 1)
+#define dev_off(bus)    dev_at((bus), 0, 0)
+
+static ULONG named(ULONG port, ULONG bdf)
+{
+    return XhciTbtTopoAddNamed(&io, &topo, &binds, port, bdf);
+}
+
+static ULONG member(ULONG port)
+{
+    return XhciTbtPortMember(&topo, &binds, port);
+}
+
+static ULONG learn(ULONG port, const ULONG *active)
+{
+    return XhciTbtLearn(&io, &topo, &binds, port, active);
+}
+
+static VOID up(ULONG port)
+{
+    XhciTbtLearnUp(&binds, port);
+}
+
+static ULONG arm(VOID)
+{
+    return XhciTbtLearnArm(&io, &topo, &binds);
+}
+
+static void test_named(void)
+{
+    MODEL_FN *f;
+    ULONG over[2];
+    ULONG i;
+    ULONG reads;
+
+    /* The emulator's q35 generic host with two unlisted hot-plug root
+     * ports: discovery takes neither; the minimal host model answers the
+     * mapping operation with each tunnel port's routing id. */
+    two_hp();
+    mdev(0, 0, 0, 0x8086, 0x29C0, 0x060000UL);
+    XhciTbtBindsInit(&binds);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_UNLISTED,
+             "named: the generic host's discovery takes nothing");
+    CHECK_EQ(topo.FindOutcome, XHCI_TBT_TOPO_UNLISTED,
+             "named: FindOutcome is the discovery's");
+    CHECK_EQ(member(1), XHCI_TBT_NO_MEMBER,
+             "named: no port known before any naming");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 1's bridge joins the set");
+    CHECK_EQ(topo.Outcome, XHCI_TBT_TOPO_SET, "named: the outcome is SET");
+    CHECK_EQ(topo.FindOutcome, XHCI_TBT_TOPO_UNLISTED,
+             "named: the discovery's outcome kept");
+    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 5, 0) &&
+          topo.Source[0] == XHCI_TBT_SRC_ROUTER &&
+          topo.Tunnel == B(0, 5, 0), "named: 00:05.0, source ROUTER");
+    CHECK(binds.Count == 1 && binds.Port[0] == 1 &&
+          binds.Bdf[0] == B(0, 5, 0) &&
+          binds.How[0] == XHCI_TBT_CORR_NAMED && topo.Named == 1,
+          "named: port 1's, by naming");
+    CHECK(topo.Pick.Bdf == B(0, 5, 0) &&
+          (topo.Pick.Flags & XHCI_TBT_BR_HOTPLUG) &&
+          (topo.Pick.Flags & XHCI_TBT_BR_MEMBER), "named: the pick read");
+    CHECK(sibling(B(0, 5, 0)) != NULL &&
+          (sibling(B(0, 5, 0))->Flags & XHCI_TBT_BR_MEMBER) &&
+          !(sibling(B(0, 6, 0))->Flags & XHCI_TBT_BR_MEMBER),
+          "named: the log's MEMBER flag follows");
+    CHECK_EQ(member(1), 0, "named: port 1 -> member 0");
+    CHECK_EQ(member(2), XHCI_TBT_NO_MEMBER, "named: port 2 not known");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_KNOWN,
+             "named: the same naming again is KNOWN");
+    CHECK(topo.Tunnels == 1 && binds.Count == 1, "named: not added twice");
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 2's bridge");
+    CHECK(topo.Tunnels == 2 && topo.Named == 2 && member(2) == 1,
+          "named: port 2 -> member 1");
+    CHECK_EQ(XhciTbtSetRead(&io, &topo, XHCI_TBT_WANT_DOWN),
+             XHCI_TBT_PORT_DOWN, "named: the set reads as any set");
+
+    /* A rediscovery keeps the bindings; naming again restores the set. */
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_UNLISTED,
+             "named: rediscovered");
+    CHECK(topo.Tunnels == 0 && member(1) == XHCI_TBT_NO_MEMBER,
+          "named: no member answers until the set holds it");
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 2 named again");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 1 named again");
+    CHECK(binds.Count == 2 && member(1) == 1 && member(2) == 0,
+          "named: the bindings by location, the order the set's");
+
+    /* A bridge named for two ports: neither correspondence is kept. */
+    CHECK_EQ(named(3, B(0, 5, 0)), XHCI_TBT_MAP_CONFLICT,
+             "named: 00:05.0 for port 3 too");
+    CHECK(member(1) == XHCI_TBT_NO_MEMBER && member(3) == XHCI_TBT_NO_MEMBER,
+          "named: ports 1 and 3 unknown");
+    CHECK_EQ(member(2), 0, "named: port 2 untouched");
+    CHECK(topo.Tunnels == 2 && topo.Source[1] == XHCI_TBT_SRC_ROUTER,
+          "named: the member stays in the set");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_CONFLICT,
+             "named: never known again (port 1)");
+    CHECK_EQ(named(4, B(0, 5, 0)), XHCI_TBT_MAP_CONFLICT,
+             "named: never known again (the bridge)");
+    CHECK_EQ(member(4), XHCI_TBT_NO_MEMBER, "named: port 4 unknown");
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_CONFLICT,
+             "named: a conflict outlives a rediscovery");
+    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 5, 0) &&
+          member(1) == XHCI_TBT_NO_MEMBER,
+          "named: the bridge still joins the set, its port unknown");
+    over[0] = B(0, 5, 0);
+    CHECK_EQ(XhciTbtExclusive(topo.Set, topo.Tunnels, over, 1, list), 1,
+             "named: and another domain's claim on it still counts");
+
+    /* A port named for two bridges: the first withdrawn, the second not
+     * added. */
+    two_hp();
+    f = mbridge(0, 8, 0, 0x1B36, 0x000C, 3, 3);
+    mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, XHCI_TBT_LINKCAP_DLLLARC, 0,
+          XHCI_TBT_SLOTCAP_HPC, 0);
+    XhciTbtBindsInit(&binds);
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 1 -> 00:05.0");
+    CHECK_EQ(named(1, B(0, 6, 0)), XHCI_TBT_MAP_CONFLICT,
+             "named: port 1 -> 00:06.0 as well");
+    CHECK(topo.Tunnels == 2 && topo.Set[1] == B(0, 6, 0) &&
+          topo.Source[1] == XHCI_TBT_SRC_ROUTER &&
+          member(1) == XHCI_TBT_NO_MEMBER,
+          "named: 00:06.0 a member, port 1 unknown");
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_CONFLICT,
+             "named: 00:06.0 conflicted too");
+    CHECK_EQ(named(3, B(0, 8, 0)), XHCI_TBT_MAP_ADDED,
+             "named: another port still named");
+    CHECK_EQ(member(3), 2, "named: port 3 -> member 2");
+
+    /* What is not a bridge, or cannot be read. */
+    two_hp();
+    mdev(0, 0, 0, 0x8086, 0x29C0, 0x060000UL);
+    XhciTbtBindsInit(&binds);
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    CHECK_EQ(named(1, B(0, 9, 0)), XHCI_TBT_MAP_NO_BRIDGE,
+             "named: nothing answers there");
+    CHECK_EQ(named(1, B(0, 0, 0)), XHCI_TBT_MAP_NO_BRIDGE,
+             "named: a type 0 function");
+    CHECK_EQ(named(1, B(0, 4, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: the NHI itself");
+    CHECK(binds.Count == 0 && topo.Tunnels == 0 &&
+          topo.Outcome == XHCI_TBT_TOPO_UNLISTED, "named: nothing taken");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 1 taken");
+    model.FailBdf = B(0, 6, 0);
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_UNREAD,
+             "named: a failed identity read after one taken");
+    CHECK(topo.Outcome == XHCI_TBT_TOPO_INCOMPLETE && topo.Tunnels == 0 &&
+          topo.Tunnel == XHCI_TBT_NO_BDF && member(1) == XHCI_TBT_NO_MEMBER,
+          "named: the discovery voided, never a partial set");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: nothing more until a rediscovery");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_UNREAD,
+             "named: a failed header read");
+    CHECK_EQ(topo.Outcome, XHCI_TBT_TOPO_INCOMPLETE, "named: voided too");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 1 again after the rediscovery");
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 2 once it reads");
+    CHECK_EQ(named(0, B(0, 6, 0)), XHCI_TBT_MAP_BAD_PARAM, "named: port 0");
+    CHECK_EQ(named(XHCI_TBT_MAX_PORTS + 1, B(0, 6, 0)),
+             XHCI_TBT_MAP_BAD_PARAM, "named: port 33");
+    CHECK_EQ(named(2, 0x10000UL), XHCI_TBT_MAP_BAD_PARAM,
+             "named: a location past 16 bits");
+    CHECK_EQ(XhciTbtTopoAddNamed(&io, NULL, &binds, 2, B(0, 6, 0)),
+             XHCI_TBT_MAP_BAD_PARAM, "named: no topo");
+    CHECK_EQ(XhciTbtTopoAddNamed(&io, &topo, NULL, 2, B(0, 6, 0)),
+             XHCI_TBT_MAP_BAD_PARAM, "named: no binds");
+    CHECK_EQ(XhciTbtTopoAddNamed(NULL, &topo, &binds, 2, B(0, 6, 0)),
+             XHCI_TBT_MAP_BAD_PARAM, "named: no accessors");
+    CHECK_EQ(member(0), XHCI_TBT_NO_MEMBER, "named: port 0, no member");
+    CHECK_EQ(XhciTbtPortMember(NULL, &binds, 1), XHCI_TBT_NO_MEMBER,
+             "named: no topo, no member");
+    CHECK_EQ(XhciTbtPortMember(&topo, NULL, 1), XHCI_TBT_NO_MEMBER,
+             "named: no binds, no member");
+
+    /* Port 32 is a port. */
+    XhciTbtBindsInit(&binds);
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    CHECK_EQ(named(XHCI_TBT_MAX_PORTS, B(0, 6, 0)), XHCI_TBT_MAP_ADDED,
+             "named: port 32");
+    CHECK_EQ(member(XHCI_TBT_MAX_PORTS), 0, "named: port 32 -> member 0");
+
+    /* The override is the whole set: a named member is bound, anything
+     * else refused. */
+    XhciTbtBindsInit(&binds);
+    over[0] = B(0, 5, 0);
+    CHECK_EQ(findin(B(0, 4, 0), over, 1), XHCI_TBT_TOPO_OVERRIDE,
+             "named: an override of 00:05.0");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_KNOWN,
+             "named: the override's member is port 1's");
+    CHECK(topo.Source[0] == XHCI_TBT_SRC_OVERRIDE && member(1) == 0 &&
+          topo.Named == 0, "named: its source stays OVERRIDE");
+    CHECK_EQ(named(2, B(0, 6, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: no member past the override");
+    CHECK_EQ(topo.Tunnels, 1, "named: the override's set unchanged");
+    over[0] = B(0, 9, 0);
+    CHECK_EQ(findin(B(0, 4, 0), over, 1), XHCI_TBT_TOPO_OVERRIDE_BAD,
+             "named: an override naming nothing");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: refused under OVERRIDE_BAD");
+
+    /* An incomplete or overfull discovery takes nothing. */
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "named: an unread function on the bus");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: refused under INCOMPLETE");
+    CHECK_EQ(topo.Tunnels, 0, "named: still empty");
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    topo.Outcome = XHCI_TBT_TOPO_MANY;
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: refused under MANY");
+    topo.Outcome = XHCI_TBT_TOPO_NONE;
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: refused with no discovery");
+
+    /* A member by discovery keeps its source; the naming binds it. The
+     * i440FX generic layout: the SHPC bridge 00:05.0. */
+    mreset();
+    XhciTbtBindsInit(&binds);
+    mdev(0, 4, 0, 0x1B36, 0x00F4, 0x0C0340UL);
+    f = mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
+    mshpc(f, 0x48, 31, 0);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "named: the SHPC bridge by discovery");
+    CHECK_EQ(named(1, B(0, 5, 0)), XHCI_TBT_MAP_KNOWN, "named: and named");
+    CHECK(topo.Source[0] == XHCI_TBT_SRC_SHPC && member(1) == 0 &&
+          topo.Named == 0, "named: still SHPC, now port 1's");
+
+    /* No room: four SHPC members, a fifth bridge named voids the set. */
+    for (i = 0; i < 3; i++) {
+        f = mbridge(0, 6 + i, 0, 0x1B36, 0x0001, 2 + i, 2 + i);
+        mshpc(f, 0x48, 1, 0);
+    }
+    f = mbridge(0, 0x0A, 0, 0x1B36, 0x000C, 6, 6);
+    mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, 0, 0, XHCI_TBT_SLOTCAP_HPC, 0);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "named: four SHPC members");
+    CHECK_EQ(named(2, B(0, 0x0A, 0)), XHCI_TBT_MAP_FULL,
+             "named: no room for a fifth");
+    CHECK(topo.Outcome == XHCI_TBT_TOPO_MANY && topo.Tunnels == 0 &&
+          member(1) == XHCI_TBT_NO_MEMBER,
+          "named: voided MANY, never a truncated set");
+
+    /* The NHI's parent is never a tunnel port: the P14s, Assist on. */
+    mreset();
+    XhciTbtBindsInit(&binds);
+    mload(tbt_p14s_off_on,
+          sizeof(tbt_p14s_off_on) / sizeof(tbt_p14s_off_on[0]));
+    CHECK_EQ(find(B(5, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "named: the P14s's switch port");
+    CHECK_EQ(named(1, B(4, 0, 0)), XHCI_TBT_MAP_REFUSED,
+             "named: the NHI's parent refused");
+    CHECK_EQ(named(1, B(4, 1, 0)), XHCI_TBT_MAP_KNOWN,
+             "named: the switch member bound");
+    CHECK(topo.Source[0] == XHCI_TBT_SRC_SWITCH && member(1) == 0,
+          "named: still SWITCH");
+
+    /* Two NHIs of an integrated family: the listed root ports are
+     * ambiguous; the one the router names joins this domain's set, the
+     * other stays out, and exclusive ownership decides as for any claim. */
+    integrated(2);
+    family_ic(1);
+    XhciTbtBindsInit(&binds);
+    mdev(0, 0x0D, 3, 0x8086, TEST_NHI_ID2 >> 16, 0x0C0340UL);
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_AMBIGUOUS,
+             "named: two NHIs, ambiguous ports");
+    CHECK_EQ(named(1, B(0, 7, 1)), XHCI_TBT_MAP_ADDED,
+             "named: the router names 00:07.1");
+    CHECK(topo.Outcome == XHCI_TBT_TOPO_SET &&
+          topo.FindOutcome == XHCI_TBT_TOPO_AMBIGUOUS &&
+          topo.Tunnels == 1 && topo.Set[0] == B(0, 7, 1) &&
+          topo.Source[0] == XHCI_TBT_SRC_ROUTER,
+          "named: one member, ROUTER, 00:07.0 still out");
+    over[0] = B(0, 7, 1);
+    CHECK_EQ(XhciTbtExclusive(topo.Set, topo.Tunnels, over, 1, list), 1,
+             "named: the other NHI's router names it too: inactive");
+    CHECK_EQ(list[0], 0, "named: inactive for this domain");
+    family_ar();
+
+    /* XhciTbtLearn does not read for a named port. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    named(1, B(0, 5, 0));
+    reads = io.Reads;
+    up(1);
+    CHECK_EQ(binds.Pending, 0, "named: a named port is never pending");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_KNOWN,
+             "named: learning a named port is KNOWN");
+    CHECK_EQ(io.Reads, reads, "named: with no read");
+}
+
+static void test_learned(void)
+{
+    ULONG over[2];
+    ULONG active[2];
+    ULONG reads;
+
+    /* Two override members, 00:05.0 (bus 1) and 00:06.0 (bus 2); the
+     * router answered no mapping. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    over[0] = B(0, 5, 0);
+    over[1] = B(0, 6, 0);
+    CHECK_EQ(findin(B(0, 4, 0), over, 2), XHCI_TBT_TOPO_OVERRIDE,
+             "learned: two members by the override");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_UP,
+             "learned: no tunnel came up on port 1");
+    up(1);
+    CHECK_EQ(binds.Pending, 1, "learned: port 1 pending");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_ARMED,
+             "learned: nothing armed: armed now");
+    CHECK(binds.Armed && binds.BaseCount == 2 && binds.BaseBus[0] == 1 &&
+          binds.BaseBus[1] == 2 && binds.BaseSeen[0] == 0 &&
+          binds.BaseSeen[1] == 0, "learned: both secondary buses empty");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "learned: nothing yet");
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "learned: bus 1 gained a device: 00:05.0 is port 1's");
+    CHECK(member(1) == 0 && binds.How[0] == XHCI_TBT_CORR_LEARNED &&
+          binds.BaseSeen[0] == 1 && binds.Pending == 0,
+          "learned: bound, the baseline moved, no longer pending");
+    CHECK_EQ(topo.Source[0], XHCI_TBT_SRC_OVERRIDE,
+             "learned: the source unchanged");
+    reads = io.Reads;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_KNOWN,
+             "learned: for the life of the instance");
+    CHECK_EQ(io.Reads, reads, "learned: with no read");
+
+    /* Port 2, with port 1's device still there. */
+    up(2);
+    dev_on(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "learned: 00:06.0 is port 2's");
+    CHECK_EQ(member(2), 1, "learned: port 2 -> member 1");
+
+    /* A rediscovery keeps what was learned, by location. */
+    over[0] = B(0, 6, 0);
+    over[1] = B(0, 5, 0);
+    CHECK_EQ(findin(B(0, 4, 0), over, 2), XHCI_TBT_TOPO_OVERRIDE,
+             "learned: rediscovered, the order turned round");
+    CHECK(member(1) == 1 && member(2) == 0,
+          "learned: still known, at their new indices");
+    up(3);
+    CHECK_EQ(learn(3, NULL), XHCI_TBT_MAP_NOT_ARMED,
+             "learned: a baseline over another set is retaken");
+    CHECK(binds.BaseBdf[0] == B(0, 6, 0) && binds.BaseSeen[0] == 1 &&
+          binds.BaseSeen[1] == 1, "learned: over the set as it is");
+    XhciTbtLearnDown(&binds, 3);
+    CHECK_EQ(binds.Pending, 0, "learned: port 3 down, not pending");
+    over[0] = B(0, 5, 0);
+    over[1] = B(0, 6, 0);
+    findin(B(0, 4, 0), over, 2);
+
+    /* A device returning on a bound bridge is its own port's: it explains
+     * nothing for another port. */
+    dev_off(1);
+    CHECK_EQ(arm(), 0, "learned: armed after port 1's tunnel went down");
+    up(3);
+    dev_on(1);
+    CHECK_EQ(learn(3, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "learned: port 1's bridge regaining is no gain for port 3");
+    CHECK(member(1) == 0 && member(2) == 1 &&
+          member(3) == XHCI_TBT_NO_MEMBER, "learned: nothing changed");
+    XhciTbtLearnDown(&binds, 3);
+
+    /* A device on another device number than 0 (the emulator's SHPC
+     * slots: the NVMe at 01:01.0). */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    arm();
+    up(1);
+    dev_at(1, 1, 1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "learned: a device at 01:01.0");
+    CHECK_EQ(binds.BaseSeen[0], 2, "learned: device 1 in the baseline");
+
+    /* Two tunnels drained in one batch: nothing learned while both are
+     * pending. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    arm();
+    up(1);
+    up(2);
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SEVERAL,
+             "learned: one gain, two tunnels pending");
+    CHECK(binds.Count == 0 && binds.Pending == 3,
+          "learned: not attributed, both still pending");
+    dev_on(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "learned: nor the second");
+    XhciTbtLearnDown(&binds, 1);
+    XhciTbtLearnDown(&binds, 2);
+    arm();
+    CHECK_EQ(binds.Pending, 0, "learned: both down");
+
+    /* Two buses gain at once. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    arm();
+    up(1);
+    dev_on(1);
+    dev_on(2);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_SEVERAL,
+             "learned: two members gained");
+    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Count == 0 &&
+          binds.Pending == 1, "learned: neither bound, port 1 pending");
+
+    /* A delayed endpoint: port 1's device answers only after port 2's
+     * tunnel came up. Port 1 still pending, nothing is attributed. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    arm();
+    up(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "learned: port 1's device not answering yet");
+    up(2);
+    dev_on(1);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "learned: port 1's late device is never port 2's");
+    CHECK(member(2) == XHCI_TBT_NO_MEMBER && member(1) ==
+          XHCI_TBT_NO_MEMBER, "learned: nothing bound");
+    dev_on(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_SEVERAL,
+             "learned: nor later, while port 1 is pending");
+    XhciTbtLearnDown(&binds, 1);
+    dev_off(1);
+    arm();
+    dev_off(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_NOT_GAINED,
+             "learned: port 1 down, port 2 alone pending");
+    dev_on(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_LEARNED,
+             "learned: then port 2's own device is learned");
+    CHECK_EQ(member(2), 1, "learned: port 2 -> member 1");
+
+    /* The member that gained is another domain's. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    active[0] = 0;
+    active[1] = 1;
+    arm();
+    up(1);
+    dev_on(1);
+    CHECK_EQ(learn(1, active), XHCI_TBT_MAP_INACTIVE,
+             "learned: an inactive member is never learned");
+    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Pending == 1,
+          "learned: port 1 unknown, still pending");
+    up(2);
+    dev_on(2);
+    CHECK_EQ(learn(2, active), XHCI_TBT_MAP_SEVERAL,
+             "learned: port 1's live tunnel still blocks port 2");
+    CHECK_EQ(member(2), XHCI_TBT_NO_MEMBER, "learned: port 2 unknown");
+    XhciTbtLearnDown(&binds, 1);
+    dev_off(2);
+    arm();
+    CHECK_EQ(learn(2, active), XHCI_TBT_MAP_NOT_GAINED,
+             "learned: port 1 proven down");
+    dev_on(2);
+    CHECK_EQ(learn(2, active), XHCI_TBT_MAP_LEARNED,
+             "learned: port 2 then learned");
+
+    /* Unreadable: a failed access, a bus number that moved, a bridge with
+     * no secondary bus. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    arm();
+    up(1);
+    dev_on(1);
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "learned: the other member's bus numbers unread");
+    model.FailBdf = B(2, 5, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "learned: a function on the other bus unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "learned: the baseline survives an unread reading");
+
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    arm();
+    up(1);
+    mfind(B(0, 5, 0))->Cfg[0x19] = 7;
+    mfind(B(0, 5, 0))->Cfg[0x1A] = 7;
+    dev_on(7);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_UNREAD,
+             "learned: a secondary bus that changed since the arm");
+
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    mfind(B(0, 6, 0))->Cfg[0x19] = 0;
+    findin(B(0, 4, 0), over, 2);
+    CHECK_EQ(arm(), XHCI_TBT_MAP_UNREAD,
+             "learned: a member with no secondary bus cannot be armed");
+    CHECK_EQ(binds.Armed, 0, "learned: not armed");
+    up(1);
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_NOT_ARMED,
+             "learned: and nothing is learned beside it");
+
+    /* A gain on a conflicted bridge: the port conflicts too. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    named(2, B(0, 5, 0));
+    named(3, B(0, 5, 0));
+    CHECK_EQ(named(4, B(0, 6, 0)), XHCI_TBT_MAP_ADDED,
+             "learned: port 4 named on 00:06.0");
+    arm();
+    up(1);
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_CONFLICT,
+             "learned: port 1 gained on the conflicted 00:05.0");
+    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Pending == 1,
+          "learned: port 1 unknown for good, its tunnel still pending");
+    CHECK_EQ(member(4), 1, "learned: port 4 kept");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_CONFLICT,
+             "learned: a conflicted port is never learned");
+    XhciTbtLearnDown(&binds, 1);
+    up(1);
+    CHECK_EQ(binds.Pending, 1,
+             "learned: a conflicted port's next tunnel is recorded");
+    up(4);
+    CHECK_EQ(binds.Pending, 1, "learned: a named port's is not");
+
+    /* The table's room: past it, nothing is known any more. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 2);
+    binds.Count = XHCI_TBT_MAX_BINDS;
+    arm();
+    up(1);
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_CONFLICT,
+             "learned: no room for the binding");
+    CHECK(binds.Overflow && member(1) == XHCI_TBT_NO_MEMBER,
+          "learned: overflowed, nothing known");
+    up(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_CONFLICT,
+             "learned: and nothing learned after");
+
+    /* Bad parameters; an empty set. */
+    two_hp();
+    XhciTbtBindsInit(&binds);
+    findin(B(0, 4, 0), over, 1);
+    CHECK_EQ(XhciTbtLearnArm(NULL, &topo, &binds), XHCI_TBT_MAP_BAD_PARAM,
+             "learned: arm with no accessors");
+    CHECK_EQ(XhciTbtLearnArm(&io, NULL, &binds), XHCI_TBT_MAP_BAD_PARAM,
+             "learned: arm with no topo");
+    CHECK_EQ(XhciTbtLearnArm(&io, &topo, NULL), XHCI_TBT_MAP_BAD_PARAM,
+             "learned: arm with no binds");
+    CHECK_EQ(learn(0, NULL), XHCI_TBT_MAP_BAD_PARAM, "learned: port 0");
+    CHECK_EQ(learn(XHCI_TBT_MAX_PORTS + 1, NULL), XHCI_TBT_MAP_BAD_PARAM,
+             "learned: port 33");
+    CHECK_EQ(XhciTbtLearn(&io, &topo, NULL, 1, NULL),
+             XHCI_TBT_MAP_BAD_PARAM, "learned: no binds");
+    up(0);
+    up(XHCI_TBT_MAX_PORTS + 1);
+    XhciTbtLearnUp(NULL, 1);
+    XhciTbtLearnDown(NULL, 1);
+    CHECK_EQ(binds.Pending, 0, "learned: bad ports never pending");
+    up(XHCI_TBT_MAX_PORTS);
+    CHECK_EQ(binds.Pending, 0x80000000UL, "learned: port 32 pending");
+    XhciTbtLearnDown(&binds, XHCI_TBT_MAX_PORTS);
+    CHECK_EQ(arm(), 0, "learned: one member");
+    up(1);
+    dev_on(1);
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_LEARNED,
+             "learned: one member learned");
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    CHECK_EQ(arm(), XHCI_TBT_MAP_BAD_PARAM,
+             "learned: an empty set has nothing to arm");
+    up(2);
+    CHECK_EQ(learn(2, NULL), XHCI_TBT_MAP_NOT_ARMED,
+             "learned: and nothing to learn");
+    CHECK_EQ(member(1), XHCI_TBT_NO_MEMBER,
+             "learned: a bridge out of the set answers for no port");
+}
+
 int main(void)
 {
     test_decoders();
@@ -1674,6 +2309,8 @@ int main(void)
     test_sets();
     test_failures();
     test_poll();
+    test_named();
+    test_learned();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }
