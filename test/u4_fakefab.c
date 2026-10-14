@@ -1496,6 +1496,14 @@ static void fabSetPath(FAB *f, int r, unsigned a, unsigned hop, unsigned outAdp,
     ad->Path[2 * hop + 1] = 1UL | (3UL << 8) | 0x01000000UL;
 }
 
+void fabAddDpOut(FAB *f, int router, unsigned adp)
+{
+    fabProto(&f->R[router], adp, 0x0E0102UL);
+    f->R[router].Adp[adp].Path[2 * 8] = 0;
+    f->R[router].Adp[adp].Path[2 * 8 + 1] = 0;
+    fabFinish(&f->R[router]);
+}
+
 void fabPreos(FAB *f, int port, int usb3)
 {
     int a = fabPortLane0(f, port);

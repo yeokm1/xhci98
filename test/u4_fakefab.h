@@ -205,6 +205,8 @@ void fabUnplugChild(FAB *f, int dev);
  * HopIDs 8 and 9, Path Enable both ends; `usb3` adds a USB3 tunnel at 10
  * and 11. */
 void fabPreos(FAB *f, int port, int usb3);
+/* A DisplayPort OUT adapter added to a router (its adapter count grown). */
+void fabAddDpOut(FAB *f, int router, unsigned adp);
 
 /* The whole domain loses power across a sleep (Spec 3.3): every router,
  * the host's included, back to its power-on state; links stay connected,

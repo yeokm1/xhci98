@@ -261,6 +261,7 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN RemovalOwed;    /* a PCIe teardown's step 6 is owed */
     BOOLEAN HostResidual;   /* host entries never read at a teardown: swept
                              * before the port connects again */
+    BOOLEAN BwReleaseOwed;  /* a USB3 allocation not yet released: retried */
     TBT_U4_ROUTER Dev;
 
     /* Lane fields this driver changed (section 6.5), restored at unplug. */

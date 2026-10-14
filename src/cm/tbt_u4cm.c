@@ -102,9 +102,11 @@ static BOOLEAN tbtU4Spent(PTBT_U4CM cm)
     /* The core's own pauses, plus every wait of the ring's loops - a
      * request's attempts, whether they ended in an answer or not, and
      * each acknowledgement's consumption. */
-    waited = cm->BudgetWaitedUs;
-    if (cm->Ring->WaitedUs >= cm->BudgetRingBase) {
-        waited += cm->Ring->WaitedUs - cm->BudgetRingBase;
+    /* Unsigned differences: the ring's sum may wrap during the resume,
+     * the interval itself never comes near 2^32 us. */
+    waited = cm->BudgetWaitedUs + (cm->Ring->WaitedUs - cm->BudgetRingBase);
+    if (waited < cm->BudgetWaitedUs) {
+        waited = 0xFFFFFFFFUL;
     }
     if (!cm->BudgetSpent &&
         (TbtClockUs(cm->Host) - cm->BudgetStartUs >= cm->BudgetUs ||
@@ -358,7 +360,7 @@ static VOID tbtU4Pause(PTBT_U4CM cm, PTBT_WAIT w)
 {
     TbtWaitStep(w, cm->Host, TBT_U4_POLL_STEP_US);
     if (cm->Budgeted) {
-        cm->BudgetWaitedUs += TBT_U4_POLL_STEP_US;
+        cm->BudgetWaitedUs += TBT_U4_POLL_STEP_US + cm->Host->TickUs;
     }
     TbtCtlSafePoint(&cm->Ctl);
 }
@@ -1216,7 +1218,7 @@ static BOOLEAN tbtU4Invalidate(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
         }
         TbtWaitStep(&w, cm->Host, TBT_U4_POLL_STEP_US);
         if (cm->Budgeted) {
-            cm->BudgetWaitedUs += TBT_U4_POLL_STEP_US;
+            cm->BudgetWaitedUs += TBT_U4_POLL_STEP_US + cm->Host->TickUs;
         }
     }
     TbtWaitMin(cm->Host, TBT_U4_TEARDOWN_GAP_US);
@@ -2087,7 +2089,14 @@ fallback:
 
 configured:
     if (tbtU4Configured(cm, p) != TBT_OK) {
+        /* What it set stays owned (PcSetHost, PcSetDev) for the
+         * teardown; no tunnel is built over an unconfigured link. */
         tbtU4Log(cm, "u4.port-configured.failed", p->Index);
+        if (!TBT_U4_LIVE(p, gen)) {
+            return TBT_E_GONE;
+        }
+        p->Why = TBT_U4_WHY_BONDING;
+        return TBT_E_STATE;
     }
     return TBT_U4_LIVE(p, gen) ? TBT_OK : TBT_E_GONE;
 }
@@ -2569,9 +2578,11 @@ static BOOLEAN tbtU4HostSweep(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN pcie, BOOLEA
             ok = FALSE;
             continue;
         }
-        if ((e[0] & TBT_PATH0_VALID) == 0) {
-            continue;   /* a pending one is never allocated (tbtU4ScanLane) */
+        if ((e[0] & TBT_PATH0_VALID) == 0 && (e[1] & TBT_PATH1_PP) == 0) {
+            continue;
         }
+        /* Valid, or invalid with packets still pending: either way the
+         * path is closed only once drained (sections 7.3, 10.2). */
         out = TBT_PATH0_OUT_ADP(e[0]);
         if ((pcie && p->PcieDown != 0 && out == p->PcieDown) ||
             (usb3 && p->Usb3Down != 0 && out == p->Usb3Down)) {
@@ -3027,10 +3038,16 @@ static BOOLEAN tbtU4ReleaseBw(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
     if (tbtU4Cmr(cm, p, FALSE) != TBT_OK) {
         p->BwQuarantine = TRUE;
+        p->BwReleaseOwed = TRUE;
         return FALSE;
     }
     if (rc == TBT_OK) {
         p->Usb3.Written &= ~TBT_U4_E_BANDWIDTH;
+        p->BwReleaseOwed = FALSE;
+    } else {
+        /* The release itself failed: owed past this record's end, the
+         * whole handshake retried at the idle tick. */
+        p->BwReleaseOwed = TRUE;
     }
     return (BOOLEAN)(rc == TBT_OK);
 }
@@ -3067,8 +3084,8 @@ static LONG tbtU4Usb3Tunnel(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     if (dp == 0 || h->Adp[p->Usb3Down].CapAdp == 0 || d->Adp[dp].CapAdp == 0) {
         return TBT_E_STATE;
     }
-    if (p->BwQuarantine || !tbtU4AdapterFree(cm, h, p->Usb3Down) || !p->TmuOk ||
-        !cm->HostTmuOk) {
+    if (p->BwQuarantine || p->BwReleaseOwed || !tbtU4AdapterFree(cm, h, p->Usb3Down) ||
+        !p->TmuOk || !cm->HostTmuOk) {
         tbtU4Log(cm, "u4.usb3.not-now", p->Index);
         return TBT_E_STATE;
     }
@@ -3295,7 +3312,8 @@ static VOID tbtU4TeardownHead(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN nested)
     p->State = TBT_U4_TEARDOWN;
     cm->Counters.Unplugs++;
     hadPcie = (BOOLEAN)(p->Pcie.Up || p->Pcie.Written != 0);
-    p->RemovalOwed = FALSE;
+    /* A removal already owed (an earlier head whose tail has not run)
+     * stays owed: only the tail consumes it. */
     if (hadPcie && p->PcieDown != 0) {
         closed = tbtU4PcieHostDown(cm, p);
         cm->Counters.PcieTornDown++;
@@ -3333,12 +3351,15 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
         if ((p->Usb3.Written & TBT_U4_E_HOST_LANE) != 0) {
             (void)tbtU4Invalidate(cm, p->Index, &h->Route, p->Lane0, p->Usb3.Hu);
         }
+        if (p->Usb3.Incomplete && !tbtU4HostSweep(cm, p, FALSE, TRUE)) {
+            p->HostResidual = TRUE;     /* swept before the next connection */
+        }
         cm->Counters.Usb3TornDown++;
         p->LastUsb3TeardownUs = tbtU4Now(cm);
         p->Usb3GapValid = TRUE;
     }
     if ((p->Usb3.Written & TBT_U4_E_BANDWIDTH) != 0 && p->Usb3Down != 0) {
-        (void)tbtU4ReleaseBw(cm, p);
+        (void)tbtU4ReleaseBw(cm, p);    /* owed (BwReleaseOwed) if it fails */
     }
     tbtU4Zero(&p->Usb3, sizeof(p->Usb3));
     if (p->TmuConfigured) {
@@ -3417,7 +3438,12 @@ static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p)
 
 static VOID tbtU4Teardown(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
-    tbtU4TeardownHead(cm, p, FALSE);
+    if (p->Index != 0 && p->Index <= TBT_U4_MAX_PORTS && cm->DeferredTail[p->Index - 1]) {
+        /* Its head already ran, nested at a safe point: the tail once. */
+        cm->DeferredTail[p->Index - 1] = 0;
+    } else {
+        tbtU4TeardownHead(cm, p, FALSE);
+    }
     tbtU4TeardownTail(cm, p);
 }
 
@@ -3546,8 +3572,18 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
             break;
         }
         if (cls != TBT_U4_LANE_TRANSITIONAL || TbtWaitDone(&w, cm->Host)) {
-            p->State = TBT_U4_EMPTY;
             cm->ActivePort = 0;
+            if (cls == TBT_U4_LANE_UNKNOWN && tbtU4Spent(cm)) {
+                /* A read refused by a spent resume budget is no
+                 * disconnection: the failure path, nothing assumed. */
+                p->State = TBT_U4_HELD;
+                p->Why = TBT_U4_WHY_RESUME;
+                return;
+            }
+            p->State = TBT_U4_EMPTY;
+            if (cls == TBT_U4_LANE_UNKNOWN) {
+                p->CheckPending = TRUE;
+            }
             return;
         }
         tbtU4Pause(cm, &w);
@@ -3773,9 +3809,13 @@ static BOOLEAN tbtU4PcieLive(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
         if (s == TBT_LTSSM_L0 || s == TBT_LTSSM_L1 || s == TBT_LTSSM_RECOVERY ||
             s == TBT_LTSSM_RECOVERY_IDLE) {
+            p->Transitional = FALSE;
             return TRUE;
         }
         if (TbtWaitDone(&w, cm->Host)) {
+            /* Its whole 2 s observed: the loss handling decides at once. */
+            p->Transitional = TRUE;
+            p->TransitionalSinceUs = tbtU4Now(cm) - TBT_U4_TRANSITIONAL_US;
             return FALSE;
         }
         tbtU4Pause(cm, &w);
@@ -4171,6 +4211,7 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
         return;
     }
     if (cfgOk && other && tp.Written == 0 && tu.Written == 0 &&
+        (d->Tbt3 || (v[5] & TBT_RTR5_PTO) != 0) &&
         tbtU4ProtoEmpty(cm, h, p->PcieDown) && tbtU4ProtoEmpty(cm, h, p->Usb3Down) &&
         tbtU4DevProtoFree(cm, d)) {
         /* Only tunnels this driver does not build: reserved; a missing
@@ -4683,9 +4724,11 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
         return;
     }
     s = TBT_PCIE0_LTSSM(v);
-    if (watch) {
+    if (watch && !(p->Transitional &&
+                   tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US)) {
         /* No later tick will look again (a resume): a transitional state
-         * is watched here to its 2 s, the answer decided now. */
+         * not already watched to its 2 s is watched here, the answer
+         * decided now. */
         TbtWaitStart(&w, cm->Host, TBT_U4_TRANSITIONAL_US, FALSE);
         while ((v & TBT_PCIE0_PE) != 0 && s != TBT_LTSSM_DETECT &&
                s != TBT_LTSSM_L0 && s != TBT_LTSSM_L1 && s != TBT_LTSSM_RECOVERY &&
@@ -5016,6 +5059,9 @@ VOID TbtU4Poll(PTBT_U4CM cm)
         if (p->BwQuarantine && p->Usb3Down != 0 && tbtU4Cmr(cm, p, FALSE) == TBT_OK) {
             p->BwQuarantine = FALSE;
         }
+        if (p->BwReleaseOwed && p->Usb3Down != 0 && !p->Usb3.Up && !p->BwQuarantine) {
+            (void)tbtU4ReleaseBw(cm, p);
+        }
         if (p->State == TBT_U4_EMPTY &&
             (p->PcSetHost || p->LaneWritten || p->Lane1Disabled)) {
             (void)tbtU4HostRestore(cm, p);
@@ -5152,8 +5198,7 @@ static BOOLEAN tbtU4HostClose(PTBT_U4CM cm, PTBT_U4_PORT p)
         p->Usb3GapValid = TRUE;
     }
     if ((p->Usb3.Written & TBT_U4_E_BANDWIDTH) != 0 && !tbtU4ReleaseBw(cm, p)) {
-        p->BwQuarantine = TRUE;
-        ok = FALSE;
+        ok = FALSE;     /* owed (BwReleaseOwed), retried at the idle tick */
     }
     return ok;
 }
@@ -5381,10 +5426,11 @@ LONG TbtU4Resume(PTBT_U4CM cm)
             allMet = FALSE;
             continue;
         }
-        if (TbtClockUs(cm->Host) - cm->BudgetStartUs >= cm->BudgetUs) {
-            cm->BudgetSpent = TRUE;
-        }
+        (void)tbtU4Spent(cm);
         met = FALSE;
+        /* The port's own sequence: a safe point inside it never nests
+         * this port's teardown (section 7.4). */
+        cm->ActivePort = p->Index;
         if (p->State == TBT_U4_EMPTY) {
             met = TRUE;     /* already torn down on removal evidence */
         } else if (p->Generation != o->Generation) {
@@ -5428,6 +5474,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                 }
             }
         }
+        cm->ActivePort = 0;
         if (!met) {
             allMet = FALSE;
             if (p->State != TBT_U4_EMPTY && p->State != TBT_U4_HELD) {

@@ -217,6 +217,13 @@ VOID TbtWaitStep(PTBT_WAIT w, const TBT_HOST *host, ULONG stepUs)
         ms = stepUs / 1000UL;
         host->Sleep(host->Context, ms);
         stepUs = ms * 1000UL;
+        if (!w->Minimum) {
+            /* A sleep may last to the next tick (record 22 section 5.3):
+             * a maximum's waited sum counts that overshoot, so that on a
+             * clock that does not move it still ends within its bound. A
+             * minimum's does not: it must never end early. */
+            stepUs += host->TickUs;
+        }
     }
     if (w->WaitedUs < w->LimitUs) {
         w->WaitedUs += stepUs;
