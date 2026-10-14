@@ -1124,8 +1124,9 @@ architectures (design record 13 section 10.13 is the design):
   device without a serial number.
 - **Windows XP** shows "will not work until you restart" at the end of the
   controller's update, and then a System Settings Change box offering a
-  restart, although `2.4.0.0` already runs; restart then, as the old
-  entries' removal waits for that restart anyway. **64-bit Vista and 7**
+  restart, although `2.4.0.0` already runs; on XP `XHCICLN` already found
+  every check passed before that restart (its removal was read after
+  it). **64-bit Vista and 7**
   show the same "will not work until you restart", and `2.4.0.0` runs at
   once there too. **32-bit Vista and 7** keep the earlier release running
   until the restart they ask for, as above.

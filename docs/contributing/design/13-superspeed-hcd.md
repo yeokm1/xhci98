@@ -6447,14 +6447,18 @@ and ME legs find one that tells the old entry from the new by more than
 its name; otherwise it says that nothing needs the entries removed
 (10.13.6). Never (b), a direct registry deletion (D8).
 
-**Read (2026-10-14, the Phase 38 VM matrix, leg I8; runtime):** on 98 SE
-and on ME, `CM_LOCATE_DEVNODE_PHANTOM` located an old entry, and
-`CM_Uninstall_DevNode` is a stub there: it returned success and removed
-nothing. Route (a) therefore cannot work on either system, whatever the
+**Read (2026-10-14, the Phase 38 VM matrix, leg I8).** Static, from each
+guest's own `CFGMGR32.DLL` copied out (`legal-provenance.md` section 4):
+on 98 SE and on ME `CM_Uninstall_DevNode` is a stub - it returns
+`CR_SUCCESS` for any non-zero devnode and removes nothing - while
+`CM_Locate_DevNodeA` honours `CM_LOCATE_DEVNODE_PHANTOM` by a registry
+lookup. Route (a) therefore cannot work on either system, whatever the
 other readings show; the tool stays list-only there, as built, and a
-removal route on 98 SE and ME would need another call. The
-`HKEY_DYN_DATA` walk found no live `XHCI98\` entry, and `-remove` before
-the restart refused (exit 1) (`docs/contributing/runs/run-38.md`).
+removal route on 98 SE and ME would need another call. Runtime, the tool
+on both guests: the old entries listed "not present", nothing removed,
+exit 0; `-remove` before the restart refused (exit 1); and an export of
+`HKEY_DYN_DATA\Config Manager\Enum` named no live `XHCI98\` devnode,
+agreeing with the tool (`docs/contributing/runs/run-38.md`).
 
 **What it prints** (D9). With no argument it lists and removes nothing:
 each candidate's instance id, its `DeviceDesc`, its driver key and why it
@@ -6651,7 +6655,7 @@ Windows 98 SE and ME in this release (2026-10-13).
 | D5 | The serial-less devices' new devnodes (10.13.5): the settings and COM numbers left on the old ones | (a) document it; (b) the tool also removes old children tied to an old parent by its `ParentIdPrefix` value; (c) carry the settings over | **(a) documented only**; the tool leaves every device and function devnode |
 | D6 | The tool's name and place | (a) `XHCICLN.EXE`, source `xhcicln\`, shipped `tools\xhcicln\`; (b) a mode of `XHCISNAP` | **(a)** |
 | D7 | The 64-bit targets | (a) a second, amd64 build `XHCICL64.EXE`; (b) the 32-bit build only | **(a), by design** (owner, after the review's opinion, replacing "only if the x64 leg shows the 32-bit build refused"): `XHCICL64.EXE` ships; the 32-bit build lists but refuses removal under WOW64; the 64-bit build tested on XP x64, Vista x64 and 7 x64 |
-| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: on 98 SE and ME the tool lists only in this release, since those systems give no exclusion against an older image loading during a run; (a) is enabled only once it, the `HKEY_DYN_DATA` walk and such an exclusion have been read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8). Read 2026-10-14: `CM_Uninstall_DevNode` is a stub on both systems (success, nothing removed), so (a) cannot work there; list only stands (10.13.8) |
+| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: on 98 SE and ME the tool lists only in this release, since those systems give no exclusion against an older image loading during a run; (a) is enabled only once it, the `HKEY_DYN_DATA` walk and such an exclusion have been read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8). Read 2026-10-14 (static): `CM_Uninstall_DevNode` is a stub on both systems (success, nothing removed), so (a) cannot work there; list only stands (10.13.8) |
 | D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes | **as written** (10.13.8), the exit codes now 0, 1, 2 and 3 (restart pending), a pending restart kept in the final report even when a later removal fails |
 | D10 | The global refusals | (a) both (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`); (b) only the first | **(a) both**; after the review every project controller must be started, with a started `USB\XHCI98_ROOT_HUB` child and its door held open, and any test answering unknown refuses (10.13.8) |
 | D11 | If the refused device id moves: does the tool also remove old refused devnodes? | (a) yes; (b) no | **left to NOX.1** (38.12 deferred), whose decision 4 is that the tool leaves them (10.13.9) |

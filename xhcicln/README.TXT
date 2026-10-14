@@ -69,7 +69,8 @@ On Windows 98 SE and ME this release lists the old entries and removes
 nothing. Those systems do not refuse to stop a driver whose device is held
 open, so nothing would keep an older driver from loading during a run, and
 the system call that would remove an entry there (CM_Uninstall_DevNode)
-answers success and removes nothing on both, as read in virtual machines.
+answers success and removes nothing on both, as read in each system's own
+CFGMGR32.DLL.
 The entries are inert; leave them.
 
 Exit codes

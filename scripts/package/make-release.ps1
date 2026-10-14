@@ -4384,7 +4384,6 @@ itself - read FROM 2.3.x below first.) As read in virtual machines:
   WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update takes effect at
   once. Windows may still say the device will not work until you
   restart, and XP then offers a restart: the new driver already runs.
-  From 2.3.x, restart anyway before running TOOLS\XHCICLN.
 
   TWO CONTROLLERS: an update of one makes both run the new driver at once
   (they share the one file), but the other controller's Driver tab keeps
