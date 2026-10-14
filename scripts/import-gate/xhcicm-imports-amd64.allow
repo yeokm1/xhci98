@@ -37,6 +37,17 @@ ntoskrnl.exe!KeInitializeEvent             all    required  nt52-amd64-export; t
 ntoskrnl.exe!KeSetEvent                    all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!KeWaitForSingleObject         all    required  nt52-amd64-export; twin of the x86 row
 
+# --- The tunnel ports and their re-enumeration (cm_reenum.c, tasks
+# 39-A.5 and 39-A.8): configuration space of the tunnel ports through
+# the HAL, the bridge filters' invalidation, and the resume hold's
+# watchdog. Each row is xhci98.sys's own, its evidence verbatim. ---
+ntoskrnl.exe!KeInitializeDpc               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInitializeTimer             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeSetTimer                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeCancelTimer                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoInvalidateDeviceRelations   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+HAL.dll!HalGetBusData                     all  required  nt52-amd64-export; twin of the x86 row (task 36.3); also in WDK 7.1's wlh and win7 amd64 hal.lib
+
 # --- The log ring's lock (cm_log.c) ---
 ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
 ntoskrnl.exe!KeReleaseSpinLock             all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)

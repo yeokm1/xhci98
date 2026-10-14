@@ -53,6 +53,17 @@ ntoskrnl.exe!KeInitializeEvent               all  required  w2k-export; win98-pr
 ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetEvent, hint 8E) (+42 other 98 SE); ntkern-name
 ntoskrnl.exe!KeWaitForSingleObject           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeWaitForSingleObject, hint 95) (+51 other 98 SE); ntkern-name
 
+# --- The tunnel ports and their re-enumeration (cm_reenum.c, tasks
+# 39-A.5 and 39-A.8): configuration space of the tunnel ports through
+# the HAL, the bridge filters' invalidation, and the resume hold's
+# watchdog. Each row is xhci98.sys's own, its evidence verbatim. ---
+ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
+ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeTimer, hint 78) (+20 other 98 SE)
+ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
+ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
+ntoskrnl.exe!IoInvalidateDeviceRelations     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInvalidateDeviceRelations, hint 4F) (+3 other 98 SE); ntkern-name
+HAL.dll!HalGetBusData                       all  required  w2k-export; ntkern-name (ntkern.vxd's hal.dll name block, beside KfAcquireSpinLock; legal-provenance.md section 4); task 36.3, 00:14.0 and 00:1F.0 read from offset 0
+
 # --- The log ring's lock (cm_log.c) ---
 ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
 HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name

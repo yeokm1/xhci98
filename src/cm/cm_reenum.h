@@ -151,11 +151,46 @@ typedef struct _CM_REENUM_PORT {
     ULONG LastStatus;       /* the last call's NTSTATUS or CONFIGRET      */
     ULONG Devnode;          /* 98: the bridge devnode, 0 until found      */
     ULONG Marked;           /* 98: children marked removable              */
+    ULONG AskedSerial;      /* NT: the filter publication a baseline was
+                               last asked of                              */
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
-/* Children of one tunnel port remembered on 98 as already marked, so that
+/* Children of one tunnel port remembered on 98 as already seen, so that
  * a re-enumeration marks only what is new (section 7.4). */
 #define CM_REENUM_MAX_KNOWN 16UL
+
+/* CM_CFGMG.Why: why the CONFIGMG route did not open. */
+#define CM_CFGMG_WHY_NONE       0UL
+#define CM_CFGMG_WHY_THUNK      1UL /* no non-paged block for the thunks */
+#define CM_CFGMG_WHY_VERSION    2UL /* Get_Version's high byte not 4     */
+#define CM_CFGMG_WHY_ROOT       3UL /* the root devnode did not read back */
+#define CM_CFGMG_WHY_ARCH       4UL /* a build with no thunk (amd64)     */
+
+/* The CONFIGMG route of one domain (cm_cfgmg.c), Windows 98 SE and ME. */
+typedef struct _CM_CFGMG {
+    PUCHAR Thunks;          /* non-paged; the VMM patches it in place     */
+    ULONG Open;             /* both guards passed                         */
+    ULONG Why;              /* CM_CFGMG_WHY_*                             */
+    ULONG Version;          /* Get_Version's AX                           */
+    ULONG Root;             /* the root devnode                           */
+} CM_CFGMG, *PCM_CFGMG;
+
+/* cm_cfgmg.c. Every call but Open and Close returns the service's
+ * CONFIGRET, or CR_FAILURE (13h) where the route is not open.
+ * PASSIVE_LEVEL, on the connection-manager thread, Windows 98 SE and ME
+ * only. */
+BOOLEAN CmCfgmgOpen(PCM_CFGMG cfg);
+VOID CmCfgmgClose(PCM_CFGMG cfg);
+ULONG CmCfgmgChild(PCM_CFGMG cfg, ULONG devnode, PULONG child);
+ULONG CmCfgmgSibling(PCM_CFGMG cfg, ULONG devnode, PULONG sibling);
+ULONG CmCfgmgDeviceId(PCM_CFGMG cfg, ULONG devnode, char *buffer,
+                      ULONG bytes);
+ULONG CmCfgmgQueryRemove(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgRemove(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgReenumerate(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgStatus(PCM_CFGMG cfg, ULONG devnode, PULONG status,
+                    PULONG problem);
+ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
 
 typedef struct _CM_REENUM {
     /* The registration list's link (cm_reenum.c), and whether this domain
@@ -180,10 +215,16 @@ typedef struct _CM_REENUM {
     /* The filters' watchdog for a held D0 IRP, ms (CmReenumSuspend). */
     ULONG HoldBoundMs;
 
-    /* 98: the root devnode, and each port's children already marked. */
-    ULONG RootDevnode;
+    /* 98: the CONFIGMG route, each port's children already seen, and the
+     * window after a tunnel up in which CmReenumService looks for new
+     * children to mark (the re-enumeration is not synchronous). */
+    CM_CFGMG Cfgmg;
+    ULONG CfgmgOwed;        /* the route opens at the first Action or
+                               Service, after the NHI's start completed  */
     ULONG Known[XHCI_TBT_MAX_TUNNELS][CM_REENUM_MAX_KNOWN];
     ULONG KnownCount[XHCI_TBT_MAX_TUNNELS];
+    ULONG MarkFrom;         /* NowMs when the window opened               */
+    ULONG MarkOpen;
 
     /* tbt_topo.c's discovery and port state (too large for a stack). */
     XHCI_TBT_TOPO Topo;
@@ -230,6 +271,14 @@ ULONG CmReenumPorts(struct _CM_NHI *nhi, PULONG ports, ULONG capacity);
 
 /* Once, from DriverEntry, before any AddDevice. Any IRQL. */
 VOID CmRegInit(VOID);
+
+/* The registration fields of a new bridge or child filter's extension,
+ * from its AddDevice or creation, before it is attached. Any IRQL. */
+VOID CmRegFilterInit(struct _CM_FILTER *filter);
+
+/* The registration list's counters, for the NHI's log at stop. */
+VOID CmRegCounters(PULONG attached, PULONG skipped, PULONG refused,
+                   PULONG watchdogs);
 
 /* The bridge filter's start has completed below it successfully: publish
  * its entry under its bus, device and function (IoGetDeviceProperty). A

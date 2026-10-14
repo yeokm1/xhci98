@@ -16,17 +16,20 @@
  *                39-A.4).
  *   [CM_FILTER]  the tunnel bridge's upper filter, NT targets only
  *                (xhcicmf.inf; IoIsWdmVersionAvailable(1, 0x10) TRUE):
- *                cm_filt.c. Passes every IRP down unchanged; task 39-A.5
- *                adds the registration list the NHI asks it through.
+ *                cm_filt.c, with the registration list of cm_reenum.c the
+ *                NHI asks it through (task 39-A.5).
+ *   [CM_CHILD]   safe eject's child filter (task 39-A.8), NT only,
+ *                created by a bridge filter above a device newly reported
+ *                on an active tunnel bridge: cm_filt.c.
  *
  * FILES. cm_entry.c (DriverEntry, AddDevice, the dispatch table),
- * cm_nhi.c, cm_thr.c, cm_power.c, cm_reenum.c (the re-enumeration seam of
- * cm_reenum.h, task 39-A.5; cm_reenum_stub.c stands in for it until that
- * is merged), cm_filt.c, cm_reg.c (the one
+ * cm_nhi.c, cm_thr.c, cm_power.c, cm_reenum.c (the re-enumeration and
+ * safe eject of cm_reenum.h, tasks 39-A.5 and 39-A.8, with its pure half
+ * cm_ports.c and the CONFIGMG calls of cm_cfgmg.c), cm_filt.c, cm_reg.c (the one
  * registry site), cm_log.c (the shared log ring of src\xhci_log.c and its
  * emission, decision D12), cm_pool.c (the one pool and DMA site,
  * AGENTS.md's named-sites rule), cm_vals.c (pure: roles and value rules),
- * and the pure core tbt_ring.c, tbt_icm.c and tbt_hw.c.
+ * and the pure core tbt_ring.c, tbt_icm.c, tbt_hw.c and tbt_topo.c.
  *
  * IRQL: as each file's header says; every object this driver creates is
  * DO_POWER_PAGABLE (the filter copies its lower device's power flags).
@@ -55,6 +58,7 @@
 
 #define CM_KIND_NHI    0x4E4D4358UL  /* 'XCMN' */
 #define CM_KIND_FILTER 0x464D4358UL  /* 'XCMF' */
+#define CM_KIND_CHILD  0x434D4358UL  /* 'XCMC' (record 21 section 3.2 role 3) */
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
@@ -192,6 +196,16 @@ typedef struct _CM_NHI {
     CM_COUNTERS Counters;
 } CM_NHI, *PCM_NHI;
 
+/* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
+#define CM_SNAP_MAX 32
+
+/*
+ * Both filter roles (record 21 section 3.2): the tunnel bridge's
+ * (CM_KIND_FILTER, from AddDevice) and the child filter safe eject puts on
+ * a device newly reported on an active bridge (CM_KIND_CHILD, created by
+ * the bridge filter, cm_reenum.c). One structure, so both share the
+ * remove lock and the device-usage handling of cm_filt.c.
+ */
 typedef struct _CM_FILTER {
     CM_COMMON Common;
     ULONG Started;
@@ -202,6 +216,39 @@ typedef struct _CM_FILTER {
     ULONG Removing;
     LONG Outstanding;
     KEVENT Drained;
+
+    /* ---- bridge: the registration entry (cm_reenum.c), every field
+     * under the registration list's lock but Rundown, the timer and the
+     * DPC, which are its objects ---- */
+    LIST_ENTRY RegLink;
+    ULONG Published;        /* on the list                                 */
+    ULONG Serial;           /* this publication's, list-wide               */
+    ULONG Bdf;              /* XHCI_TBT_BDF of the bridge                  */
+    ULONG Gone;             /* withdrawn: no new call is started on it     */
+    ULONG InFlight;         /* calls and holds in progress                 */
+    KEVENT Rundown;         /* set by the last release once Gone           */
+    ULONG Baseline;         /* its first BusRelations after the start done */
+    ULONG Active;           /* an active member of Owner's set             */
+    ULONG SafeEject;        /* Owner's XhciCmSafeEject                     */
+    struct _CM_NHI *Owner;
+    ULONG OwnerIndex;       /* the member's index in Owner's set           */
+    /* The resume hold (record 21 section 6.3). */
+    ULONG Held;
+    struct _CM_NHI *HeldBy;
+    ULONG HoldReenum;       /* invalidate on the watchdog's failure path   */
+    ULONG HoldLeftS;        /* the watchdog's seconds still to run         */
+    PIRP HeldIrp;           /* the retained device D0 IRP                  */
+    ULONG TimerArmed;
+    KTIMER HoldTimer;
+    KDPC HoldDpc;
+    /* The snapshot of section 7.4: the PnP dispatch alone touches it. */
+    ULONG SnapCount;
+    PVOID Snap[CM_SNAP_MAX];
+
+    /* ---- child ---- */
+    struct _CM_FILTER *Bridge;
+    ULONG QueryRemoved;     /* a query-remove not cancelled                */
+    ULONG SurpriseRemoved;
 } CM_FILTER, *PCM_FILTER;
 
 /* cm_entry.c */

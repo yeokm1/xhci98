@@ -186,6 +186,14 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
+rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
+rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
+rem                  switch port and root port ids, checked against
+rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
+rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
+rem                  the bridge filter's snapshot, and the resume hold's
+rem                  watchdog bound
 rem
 rem   test_tbt_ring - xhcicm.sys's host interface ring 0 (src\cm\tbt_ring.c,
 rem                  task 39-A.2): the USB4 2.0 Appendix A.2 CRC-32C vectors,
@@ -438,6 +446,11 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_cm_ports links nothing else: the re-enumeration's own pure half,
+rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
+rem Windows 98's PCI device ids, the bridge filter's snapshot and the
+rem resume hold's bound (39-A.5 driver half, 39-A.8).
+call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
