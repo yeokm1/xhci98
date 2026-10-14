@@ -32,15 +32,17 @@ The sources, and the tag each fact carries below:
   13 (12th gen) capture behind the `intel-adl` host model, the Windows 11
   and Linux runs on `preos-cm=on`, the `USB4CM.EXE` runs in Windows 98.
 - **[ref]** what the reference connection manager `usb4cm` does
-  (`usb4-emu/tools/usb4cm`, MIT): its `README.md` and `core/u4cm.c`,
+  (`usb4-emu/tools/usb4cm`, MIT at `a68bc74`, GPL-2.0-only from
+  `3c74189`): its `README.md` and `core/u4cm.c`,
   `u4hi.c`, `u4regs.h`, `usb4cm.h`, `u4types.h`.
 - **[linux]** and **[bsd]** Linux `drivers/thunderbolt` (mirror pinned at
   `c6859eed755df351a3978b33cb92365f9b3e8f06`, with `include/linux/pci_ids.h`)
   and FreeBSD `sys/dev/thunderbolt` (mirror pinned at
   `9d50245a0f1333e10cc1c4dda16878cd79a7c42b`), both under the git-ignored
-  `external\`, read as interface documentation under the owner's rule of
-  2026-10-15 (section 13): ids, layouts, constants, sequences and quirks
-  are taken and cited by file and symbol; no function body is copied. In
+  `external\`, read under the owner's rule of 2026-10-15 (section 13):
+  ids, layouts, constants, sequences and quirks are taken and cited by
+  file and symbol, and since `usb4-emu`'s relicensing landed the same day
+  their code may be adapted with its notices kept. In
   the Linux snapshot the PCI glue (`nhi_ids[]`, the host quirks, the Intel
   integrated-host power hooks) lives in `pci.c`.
 
@@ -218,9 +220,8 @@ removal on the emulator (section 10.2).
 tunnel up from the Windows 98 DOS prompt on both host models [obs]
 (`tools/usb4cm/README.md`, "Validation"; `NVME-DRIVER-EVAL`, "Host types":
 `intel-adl` paired PCIe Down 8 with port 1, 306 control packets, 0
-retries). Its sequence is the starting point; its code is adapted under
-section 13's gate (until then, the core is written from this record with
-`usb4cm` as the behavioural reference). Its steps: host interface reset, ring 0 raw mode, control packets
+retries). Its sequence is the starting point, and its code may be adapted
+under section 13's rule, changed as the table below says. Its steps: host interface reset, ring 0 raw mode, control packets
 with sequence numbers and CRC-32C, hot plug acknowledgement and queue, host
 router enumeration and adapter discovery by capability walk, a device router
 per port found by lane 0 in CL0, Lock cleared, enumeration at depth 1, the
@@ -525,7 +526,7 @@ failed - a readiness timeout is not evidence that nothing on the domain
 depends on the controller, and Linux describes firmware readiness apart
 from the platform's power management ([linux] `pci.c`
 `icl_nhi_force_power`) - so it leaves the bit set and logs it (record 21
-section 1.4.2 says otherwise; section 17). The refinement, where the driver's own stop leaves tunnels up (section 11): an
+section 1.4.2 now says the same, for every profile). The refinement, where the driver's own stop leaves tunnels up (section 11): an
 active instance clears a bit it set, at stop or shutdown after its rings
 are stopped, only when no device router is connected on any of its ports
 at that moment - the condition under which Linux itself powers the host
@@ -1941,31 +1942,48 @@ log's emission is record 21's decision D12, unchanged.
 
 | Source | Licence | Use | Record |
 |---|---|---|---|
-| `usb4-emu/tools/usb4cm/core/u4cm.c`, `usb4cm.h` (with `u4hi.c`, `u4regs.h`, `u4types.h`, record 21's) | MIT at `a68bc74`; GPL-2.0-only at `3c74189` | read and cited until section 13's gate opens; then adapted into `src\cm\` under the licence of the commit taken from, notices kept, changed as section 2.2 says | none while read only; then `legal-provenance.md` section 2a rows per adapted file |
+| `usb4-emu/tools/usb4cm/core/u4cm.c`, `usb4cm.h` (with `u4hi.c`, `u4regs.h`, `u4types.h`, record 21's) | MIT at `a68bc74`; GPL-2.0-only at `3c74189` | adapted into `src\cm\` under the licence of the commit taken from, notices kept, changed as section 2.2 says | a `legal-provenance.md` section 2a entry per adapted file |
 | USB4 Specification 2.0, Connection Manager Guide 2.0, the USB4 2.0 ECN on a disabled TMU, the USB4 DROM Specification (USB-IF, November 2025 bundle) | USB-IF terms, documents only | every register field, sequence and bound cited by section | `docs/references/README.md`, rows of 2026-10-14 |
-| Linux `drivers/thunderbolt` and `include/linux/pci_ids.h`, pinned `c6859eed755df351a3978b33cb92365f9b3e8f06` | GPL-2.0 | interface documentation under the owner's rule of 2026-10-15, as design record 20's Linux reading: ids, register fields, constants, sequences, timeouts and quirk tables taken and cited by file and symbol; no function body copied | `legal-provenance.md` section 3, the row record 21 section 9 names |
-| FreeBSD `sys/dev/thunderbolt`, pinned `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` | BSD-2-Clause | the same: the Ice Lake tunnel port ids, the AMD host ids, the reset timing | the same row |
-| `usb4-emu`'s documents | MIT | the test bed's behaviour, cited [model] or [obs] | record 21's rows |
+| Linux `drivers/thunderbolt` and `include/linux/pci_ids.h`, pinned `c6859eed755df351a3978b33cb92365f9b3e8f06` | GPL-2.0 | under the owner's rule of 2026-10-15: ids, register fields, constants, sequences, timeouts and quirk tables taken and cited by file and symbol; code adapted with its copyright lines and SPDX tag kept (the rule below) | `legal-provenance.md` section 3, the subsection record 21 section 9 names, and a section 2a entry per adapted file |
+| FreeBSD `sys/dev/thunderbolt`, pinned `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` | BSD-2-Clause | the same: the Ice Lake tunnel port ids, the AMD host ids, the reset timing; code adapted with its BSD-2-Clause notice kept verbatim | the same |
+| `usb4-emu`'s documents | MIT at `a68bc74`; GPL-2.0-only from `3c74189` | the test bed's behaviour, cited [model] or [obs] | record 21's rows |
 | A public PCI id listing (`pci-ids.ucw.cz`) | its own terms; ids are facts | tunnel port ids the mirrors do not name (section 3.7's filter list) | a `legal-provenance.md` row per batch with the listing's revision, as decision D9's |
 
-One gate governs every code source of this record, the owner's
-instruction of 2026-10-15 (the brief's addendum 5): **until the
-orchestrator announces that `usb4-emu`'s relicensing to GPL-2.0-only has
-landed, `usb4-emu`'s code - `tools/usb4cm` included - and Linux and
-FreeBSD are read and cited only**; the implementation is written from this
-record and the Spec, with `usb4cm` as the behavioural reference. Once it is
-announced, `usb4-emu`'s code may be adapted under its new licence, and
-Linux code adapted directly with attribution, its copyright notices kept
-and a `legal-provenance.md` row per adapted file. `usb4-emu`'s `main` at
-`3c74189`, read on 2026-10-15, carries the relicensing and its handoff
-update, so the announcement is expected; this record's design does not
-change with it - only what the code may take. Record 21 section 9 lifts
-`usb4cm`'s MIT files now, without that gate; the two instructions
-conflict, and section 17 asks the orchestrator to settle it (the
-announcement settles it for both).
+The owner's instruction of 2026-10-15 held every code source of this
+record to reading and citing until `usb4-emu`'s relicensing to
+GPL-2.0-only landed. It landed that day: `usb4-emu`'s `main` at `3c74189`
+is GPL-2.0-only, and its handoff's section 3 says that this project may
+adapt code directly from `usb4-emu` (`tools/usb4cm` included), from Linux
+`drivers/thunderbolt`, from FreeBSD `sys/dev/thunderbolt` and from Intel's
+tbtools data, keeping the notices of whatever it adapts. The rule this
+record's code follows, for the Thunderbolt and USB4 work only
+(`legal-provenance.md` section 3, "The Thunderbolt and USB4 mirrors";
+`AGENTS.md`, "Reference Implementations"):
+
+- Code from those sources may be adapted into `src\cm\`. Adapting is
+  translating: C89, safe on Windows 98 and 2000, no 64-bit arithmetic,
+  `AGENTS.md`'s style, never a paste of a Linux kernel API; `usb4cm`'s
+  code changes as section 2.2 says.
+- Every adapted file keeps each source file's copyright lines and SPDX tag:
+  `SPDX-License-Identifier: GPL-2.0-only` with Linux's or `usb4-emu`'s
+  lines; FreeBSD's BSD-2-Clause notice, or tbtools' MIT notice, verbatim.
+  It names its source file and is marked as changed, with the date.
+- Each adapted file gets a `legal-provenance.md` section 2a entry naming
+  the source file, the pinned commit actually read (Linux `c6859eed`,
+  FreeBSD `9d50245a`, `usb4-emu` `3c74189` or the commit read) and what was
+  adapted, in the same change.
+- Nothing moves from this repository or `usb4-emu` into `nvme98`, which is
+  BSD-3-Clause.
+
+This record's design does not change with the relicensing - only what the
+code may take. The conflict section 17 raised with record 21 section 9's
+immediate lift is settled by it for both records: the `usb4cm` files
+record 21's task `39-A.2` lifted from `a68bc74` keep their MIT notice, and
+a file taken from `3c74189` or later is an adaptation under the rule above
+(an orchestrator decision of 2026-10-15, for the owner to confirm).
 
 Behaviour taken from Linux alone stays tagged [linux], unconfirmed, until a
-hardware capture shows it.
+hardware capture shows it, whether or not its code was adapted.
 
 ## 14. Verification
 
@@ -2153,7 +2171,10 @@ U1, U2, U6, U8 and U13 from their first form, as each row says.
 Record 21 draft 6 (merged into `3.0.0.0` at `59685574`) already carries
 the shared selection, hardware profiles, reset and takeover rules,
 tunnel-port sets and provenance this record builds on. For the
-orchestrator to apply to it (this record does not edit it):
+orchestrator to apply to it (this record does not edit it). On
+2026-10-15 the second, third and fourth items were applied to record 21
+(sections 1.4.2, 9 and 6.3); the others remain for the tasks that need
+them:
 
 - Section 8's `XhciCmMode` row: value 3 now points to this record's
   section 3.6; the Phase 40 values named there are defined in this
@@ -2164,11 +2185,11 @@ orchestrator to apply to it (this record does not edit it):
   this record's section 4.2), and this record's refinement for the USB4
   profile (an active instance does not clear force power it set while a
   device router is connected).
-- Section 9: its immediate lift of `usb4cm`'s MIT files conflicts with the
-  owner's instruction that `usb4-emu`'s code, `tools/usb4cm` included, is
-  read and cited only until the relicensing is announced (this record's
-  section 13); the orchestrator settles which holds, and the announcement
-  settles it for both records.
+- Section 9: its immediate lift of `usb4cm`'s MIT files conflicted with
+  the owner's instruction that `usb4-emu`'s code, `tools/usb4cm` included,
+  is read and cited only until the relicensing is announced; the
+  relicensing landed (`3c74189`) and settles it for both records (this
+  record's section 13).
 - Section 6.3's failed-resume path (release, then invalidate) and its
   "system suspend with a tunnelled device attached is unsupported" are an
   exception to the coverage plan's requirement that tunnels be restored

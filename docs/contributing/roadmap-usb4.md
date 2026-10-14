@@ -64,7 +64,7 @@ recommendation; the owner's answers are recorded here as
 | Decision | Taken |
 |---|---|
 | Generic by best effort | Owner, 2026-10-14: the Thunderbolt 3 and USB4 work is made as generic as the evidence allows; on 2026-10-15, as many controllers as possible. Record 21 section 1.4 is the answer: the host interface and re-enumeration are generic; the ICM client is generic across devices and per-generation across the Intel firmware-ICM hosts it addresses, through a hardware profile and a message and lifecycle profile per generation; real USB4 hosts are the software connection manager (Phase 40, design record 22), and an unknown firmware connection manager is unsupported |
-| Phase numbers | Owner, 2026-10-15: `TB3` is Phase 39 (`39-0.n`, `39-A.n`, `39-V.n`, `39-E.n`, `39.final`), `U4CM` is Phase 40 (`40.n`, `40.final`) |
+| Phase numbers | Owner, 2026-10-15: `TB3` is Phase 39 (`39-0.n`, `39-A.n`, `39-V.n`, `39-E.n`, `39.final`), `U4CM` is Phase 40 (`40.n`, `40.final`); after 40.1, Phase 40's work is split into `40-0.n`, `40-A.n` and `40-V.n` as Phase 39's is (orchestrator, 2026-10-15, for the owner to confirm) |
 | Sources | Owner, 2026-10-15: Linux `drivers/thunderbolt` and FreeBSD `sys/dev/thunderbolt` may be read as interface documentation, under the rule design record 20's reading of Linux's xHCI quirks followed (no function body copied); record 21 section 9 |
 | One binary (D1) | Owner, 2026-10-15, as recommended: `xhcicm.sys` in `src\cm\` with its own INFs, allowlists and gate |
 | The NT filter's install (D2) | Owner, 2026-10-15, as recommended: a separate NT-only INF adding a device-specific `UpperFilters`, proved by `39-0.4`; a boot-start class filter only if that cannot be made to install |
@@ -184,10 +184,13 @@ connection manager: the second step of the handoff's order, after Phase
 39. Contract: the USB4 Specification 2.0 and Connection Manager Guide 2.0,
 `usb4-emu/docs/ARCHITECTURE.md` sections 4, 5 and 7 and `WINDOWS-DEBUG.md`
 ("What the Windows CM required of the model"), and Linux's and FreeBSD's
-drivers as interface documentation. Start from
-`usb4-emu/tools/usb4cm/core` (MIT, C89, polling, 32-bit DMA, about 1.3
-thousand lines; it brought a tunnel up from the Windows 98 DOS prompt on
-2026-10-14), in the same binary as the ICM client, admitted by the
+drivers, whose code, like `usb4-emu`'s, may be adapted with its notices
+kept since `usb4-emu`'s relicensing to GPL-2.0-only landed on 2026-10-15
+(`AGENTS.md`, "Reference Implementations"; `legal-provenance.md` section
+3). Start from `usb4-emu/tools/usb4cm/core` (GPL-2.0-only from `3c74189`,
+C89, polling, 32-bit DMA, about 1.3 thousand lines; it brought a tunnel up
+from the Windows 98 DOS prompt on 2026-10-14), in the same binary as the
+ICM client, admitted by the
 positive software-connection-manager rule record 21 section 1.4.2 outlines
 and design record 22 defines. Test on `usb4-generic` with both host models
 (`minimal`, `intel-adl`) and with `preos-cm=on` (the pre-OS tunnel cleanup
@@ -206,13 +209,27 @@ Status: open. Opened 2026-10-15 by the owner, from the planned work
 for the ORICO USB4 enclosure capture except task 40.4, which adds a real
 device-router preset and a conformance check.
 
-- [ ] 40.1 the design record (design record 22): the connection manager's state machine from `u4cm.c` (host router, adapters, device router per port, DROM by router operation, the CV/CR handshake, lane bonding, the PCIe tunnel's four path entries, the optional USB3 tunnel), hot-plug events and unplug handling (which `usb4cm` lacks), the positive admission and the preservation of every existing tunnel and link power state (record 21 sections 1.4.2 and 1.4.5), the router quirks record 21 section 10.1 assigns to it, a Thunderbolt 3 device behind a USB4 host (legacy routers configured router by router, PCIe tunnel first), the pre-OS cleanup, and what the two profiles share
-- [ ] 40.2 the core lifted into the pure core with host suites, against the `usb4-emu` fabric model as `tools/usb4cm/host` runs it
-- [ ] 40.3 the driver half and the legs on `usb4-generic`, both host models, `preos-cm=on`, hot-plug, unplug during I/O, and `USB3=1` (a USB device behind the tunnel appearing on the host's own xHCI under `xhci98.sys`)
+- [x] 40.1 the design record (design record 22): the connection manager's state machine from `u4cm.c` (host router, adapters, device router per port, DROM by router operation, the CV/CR handshake, lane bonding, the PCIe tunnel's four path entries, the optional USB3 tunnel), hot-plug events and unplug handling (which `usb4cm` lacks), the positive admission and the preservation of every existing tunnel and link power state (record 21 sections 1.4.2 and 1.4.5), the router quirks record 21 section 10.1 assigns to it, a Thunderbolt 3 device behind a USB4 host (legacy routers configured router by router, PCIe tunnel first), the pre-OS cleanup, and what the two profiles share (done 2026-10-15: design record 22 (draft 2), reviewed and revised to convergence; decisions U1-U16 taken by the orchestrator, for the owner to confirm)
+- [ ] 40-0.1 the transcription: `tbt_regs.h` gains every router, adapter, path, TMU, PCIe, USB3 and notification field record 22 uses, each cited to the USB4 Specification 2.0 section and cross-checked against Linux `tb_regs.h`; the `legal-provenance.md` rows for the Linux and FreeBSD reading and the `usb4cm` and Linux adaptation rows
+- [ ] 40-0.2 the USB4 ids: the Lunar Lake, Panther Lake, Wildcat Lake, Barlow Ridge, AMD and ASM4242 tunnel-port ids read from `pci.ids` 2026.10.14 with a provenance row; `xhcicm.inf` and `xhcicm-amd64.inf` gain `PCI\CC_0C0340`, the Lunar Lake, Panther Lake, Wildcat Lake and Barlow Ridge NHI ids and `1022:1668` and `1022:1669`; `xhcicmf.inf` and `xhcicmf-amd64.inf` gain those port ids and `1B36:0001` and `1B36:000C`; `check-cm-inf.ps1` gains the class-line, no-device-router-id and `&CC_0604` rules with its self-test
+- [ ] 40-0.3 the launcher reading: whether `-global usb4-host.host-model`, `.preos-cm`, `.usb3-xhci`, `.usb3-port1` and `-global usb4-device.usb3-dev` reach their properties through 39-0.7's launcher, and how `docs/HARNESS.md`'s injection points drive leg U.4
+- [ ] 40-A.1 the transport, pure: `tbt_ring.c` gains control packets, record 22 section 5.1's notification classes, plain and enhanced acknowledgements, the hot-plug acknowledgement, the `clock_us` and safe-point callbacks, and maximum-versus-minimum waits; `test_tbt_ring` grows to match
+- [ ] 40-A.2 the selection, pure: record 21 section 1.4.2 and record 22 section 3 (in `tbt_hw.c`'s selection or a `tbt_select.c`, as the code decides); host tests with every negative case and every AUTH_DONE and ICM_EN combination
+- [ ] 40-A.3 the connection-manager core, pure: `tbt_u4cm.c`, record 22 sections 6, 7.1 to 7.5 and 9 (credits, quarantine, the TMU, the quirk table, discovery and preservation); host suite `test_u4cm` against a C89 fake fabric with the `minimal` and `intel-adl` presets, two domains and a Thunderbolt 3 router
+- [ ] 40-A.4 `tbt_topo.c` gains the router-named source and the learned correspondence; `test_tbt_topo` grows to match
+- [ ] 40-A.5 the `usb4-emu` fabric cross-check script, recorded as a reading
+- [ ] 40-A.6 the driver half: the profile chosen at start, Ice Lake to Wildcat Lake force power and LTR with the ownership record, the ring takeover, the resume obligations and the filter hold, `XhciCmMode` 3, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding` and `XhciCmPreOsCleanup` written by every INF path, the `u4.*` counters, `KeTickCount` and `KeQueryTimeIncrement` in the import allowlists with record 13's evidence
+- [ ] 40-A.7 the `nvme98` statement under the USB4 profile (the endpoint-presence anchor and the 3 s deadline), with 39-A.7
+- [ ] 40-A.8 Thunderbolt 3 device routers behind a USB4 host, record 22 section 8 (PCIe first; the DROM by bit-bang as a second pass)
+- [ ] 40-A.9 the safe-eject entry point for 39-A.8
+- [ ] 40-V.1 Windows 98 SE, legs U.1 to U.13 of record 22 section 14.2
+- [ ] 40-V.2 Windows 2000, the same legs plus the filter on `1B36:0001`
+- [ ] 40-V.3 ME, XP, XP x64, Vista and 7: the install and one plug cycle each, with no checkpoint tax
 - [ ] 40.4 real USB4 devices, after the maintainer's ORICO capture
+- [ ] 40.5 onward: the install and upgrade tool, design record 23 (`p40-inst`)
 - [ ] 40.final the `3.0.0.0` cut: the release notes for both phases (`39.final`'s drafts, the safe-eject and untested-hosts lines among them, and Phase 40's), `README.md`, `source-files.md`, `docs/README.md`'s table; the builds, the gates, the dry cut and the owner's signed cut of `3.0.0.0`, with the install legs read from the asset on every target. Task 40.4 is not a condition of the cut: it waits on the ORICO capture and is carried into a later release if the capture is not in hand (an orchestrator decision of 2026-10-15, for the owner to confirm)
 
-Checkpoint: design record 22 converged before 40.2's code; the host suites
-green with the gates on both architectures; 40.3's legs read on the `qemu`
+Checkpoint: design record 22 converged before 40-A's code; the host suites
+green with the gates on both architectures; 40-V.1's and 40-V.2's legs read on the `qemu`
 flavour and the `release` flavour of the dry cut; the cut with the install
 leg from the asset on every target; then Phase 39's bench (39-E) after it.
