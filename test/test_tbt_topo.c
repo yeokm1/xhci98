@@ -16,18 +16,21 @@
  *     BIOS matrix": root bridge 00:06.0 with SHPC, switch ports 01:01.0,
  *     02:00.0, 02:01.0 the SHPC tunnel bridge, 02:02.0);
  *   - the emulator's generic layouts with no switch: i440FX (NHI 00:04.0,
- *     SHPC tunnel bridge 00:05.0) and q35 (NHI 00:04.0, PCI Express
- *     tunnel root port 00:05.0), whose root-bus candidate is learned at a
- *     tunnel up rather than taken on the rule;
+ *     SHPC tunnel bridge 00:05.0, a member by its SHPC) and q35 (NHI
+ *     00:04.0, PCI Express tunnel root port 00:05.0, unlisted, so learned
+ *     at a tunnel up or named by the override);
  *   - the emulator's q35 switch (scripts/run-linux.sh TOPOLOGY=switch),
- *     whose plain downstream ports keep QEMU's default hotplug=on, so the
- *     set holds two ports of the switch, and the override that narrows it;
- *   - an integrated host's shape (an NHI on bus 0, its tunnel ports root
- *     ports beside it with an unrelated hot-plug root port of the
- *     platform's), with no table, a table, an override list and learning;
- *   - several candidates, none, a port without the capability bits, the
- *     override, the parent search off bus 0's hierarchy, sets and their
- *     fold, and the poll.
+ *     whose plain downstream ports keep QEMU's default hotplug=on and carry
+ *     the switch's id, so the set holds two ports, and the override that
+ *     narrows it;
+ *   - an integrated host's shape (an NHI on bus 0, its tunnel root ports
+ *     beside it with an unrelated hot-plug root port of the platform's):
+ *     with and without the family's root port ids, with a second NHI of
+ *     the family (ambiguous) and of another, override lists, learning, and
+ *     exclusive ownership across domains;
+ *   - a foreign hot-plug bridge beside the switch, a port without the
+ *     capability bits, the parent search off bus 0's hierarchy, sets and
+ *     their fold, failures at every read, and the poll.
  *
  * The emulator layouts are modelled from usb4-emu main at a68bc74 (the run
  * scripts and the device types its QEMU patch defines); their capability
@@ -330,10 +333,51 @@ static XHCI_TBT_TOPO topo;
 static XHCI_TBT_PORT port;
 
 static XHCI_TBT_TOPO_IN in;
-static ULONG single = 1;
 
-static ULONG findin(ULONG nhi, const ULONG *over, ULONG overs,
-                    const XHCI_TBT_TABLE_ENTRY *table, ULONG tableCount)
+/*
+ * The family lists a discovery is given (record 21 section 3.3's tables
+ * stand behind the real ones). The Alpine Ridge family's by default: the
+ * P14s's NHI and switch ids, and the 4C part's port id for the synthetic
+ * switches; the integrated family's are this suite's own placeholders.
+ */
+#define TEST_TBT_RP     0xFFF08086UL    /* an integrated tunnel root port */
+#define TEST_PCH_RP     0xFFF18086UL    /* a platform root port           */
+#define TEST_NHI_ID     0x9A1B8086UL    /* the integrated NHI             */
+#define TEST_NHI_ID2    0x9A1D8086UL    /* its family's second NHI        */
+
+static const ULONG arNhi[2] = { 0x15BF8086UL, 0x15D28086UL };
+static const ULONG arPort[2] = { 0x15C08086UL, 0x15D38086UL };
+static const ULONG icNhi[2] = { TEST_NHI_ID, TEST_NHI_ID2 };
+static const ULONG icPort[1] = { TEST_TBT_RP };
+
+static const ULONG *famNhi = arNhi;
+static ULONG famNhiN = 2;
+static const ULONG *famSw = arPort;
+static ULONG famSwN = 2;
+static const ULONG *famRp = NULL;
+static ULONG famRpN = 0;
+
+static VOID family_ar(VOID)
+{
+    famNhi = arNhi;
+    famNhiN = 2;
+    famSw = arPort;
+    famSwN = 2;
+    famRp = NULL;
+    famRpN = 0;
+}
+
+static VOID family_ic(ULONG withPorts)
+{
+    famNhi = icNhi;
+    famNhiN = 2;
+    famSw = NULL;
+    famSwN = 0;
+    famRp = withPorts ? icPort : NULL;
+    famRpN = withPorts ? 1UL : 0UL;
+}
+
+static ULONG findin(ULONG nhi, const ULONG *over, ULONG overs)
 {
     ULONG i;
 
@@ -343,16 +387,18 @@ static ULONG findin(ULONG nhi, const ULONG *over, ULONG overs,
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         in.Override[i] = i < overs ? over[i] : 0;
     }
-    in.Table = table;
-    in.TableCount = tableCount;
-    in.SingleDomain = single;
+    in.FamilyNhiIds = famNhi;
+    in.FamilyNhiIdCount = famNhiN;
+    in.SwitchPortIds = famSw;
+    in.SwitchPortIdCount = famSwN;
+    in.RootPortIds = famRp;
+    in.RootPortIdCount = famRpN;
     return XhciTbtTopoFind(&io, &in, &topo);
 }
 
 static ULONG find(ULONG nhi, ULONG override)
 {
-    return findin(nhi, &override, override == XHCI_TBT_NO_BDF ? 0UL : 1UL,
-                  NULL, 0);
+    return findin(nhi, &override, override == XHCI_TBT_NO_BDF ? 0UL : 1UL);
 }
 
 static const XHCI_TBT_BRIDGE *sibling(ULONG bdf)
@@ -470,6 +516,7 @@ static void test_findcap(void)
 static void test_p14s(void)
 {
     const XHCI_TBT_BRIDGE *br;
+    MODEL_FN *f;
     ULONG pass;
 
     for (pass = 0; pass < 2; pass++) {
@@ -487,25 +534,26 @@ static void test_p14s(void)
         CHECK_EQ(topo.SearchBus, 4, "P14s: siblings on bus 4");
         CHECK_EQ(topo.Tunnel, B(4, 1, 0), "P14s: the tunnel 04:01.0");
         CHECK_EQ(topo.Siblings, 2, "P14s: 04:01.0 and 04:02.0");
-        CHECK_EQ(topo.Candidates, 1, "P14s: one candidate");
-        CHECK(topo.Tunnels == 1 && topo.Source[0] == XHCI_TBT_SRC_SWITCH &&
-              topo.Switch == 1, "P14s: verified by the switch");
-        CHECK(topo.ParentType == XHCI_TBT_PCIE_TYPE_DOWN &&
-              topo.Upstream == B(3, 0, 0) &&
-              topo.UpstreamType == XHCI_TBT_PCIE_TYPE_UP,
-              "P14s: downstream port under upstream port 03:00.0");
+        CHECK_EQ(topo.Candidates, 2, "P14s: two listed ports seen");
+        CHECK(topo.Tunnels == 1 && topo.Source[0] == XHCI_TBT_SRC_SWITCH,
+              "P14s: by the switch's id and its hot-plug slot");
+        CHECK_EQ(topo.ParentType, XHCI_TBT_PCIE_TYPE_DOWN,
+                 "P14s: the parent a downstream port");
         CHECK_EQ(topo.Pick.Bdf, B(4, 1, 0), "P14s: the pick's reading");
         CHECK_EQ(topo.Pick.Id, 0x15C08086UL, "P14s: 8086:15c0");
         CHECK_EQ(topo.Pick.Flags,
                  XHCI_TBT_BR_PCIE | XHCI_TBT_BR_SLOT | XHCI_TBT_BR_HOTPLUG |
                  XHCI_TBT_BR_SURPRISE | XHCI_TBT_BR_LINKREPORT |
-                 XHCI_TBT_BR_CANDIDATE,
+                 XHCI_TBT_BR_CANDIDATE | XHCI_TBT_BR_LISTED |
+                 XHCI_TBT_BR_MEMBER,
                  "P14s: hot-plug and surprise capable, link reported");
         CHECK_EQ((topo.Pick.Buses >> 8) & 0xFFFF, 0x2A06,
                  "P14s: tunnel buses 06-2a");
         br = sibling(B(4, 2, 0));
-        CHECK(br != NULL && br->Flags == (XHCI_TBT_BR_PCIE | XHCI_TBT_BR_SLOT),
-              "P14s: 04:02.0 a slot without hot-plug");
+        CHECK(br != NULL && br->Flags == (XHCI_TBT_BR_PCIE | XHCI_TBT_BR_SLOT |
+                                          XHCI_TBT_BR_LISTED |
+                                          XHCI_TBT_BR_CANDIDATE),
+              "P14s: 04:02.0 listed, a slot without hot-plug: no member");
         CHECK(sibling(B(4, 0, 0)) == NULL, "P14s: the parent is no sibling");
         CHECK_EQ(io.Writes, 0, "P14s: discovery writes nothing");
         CHECK(model.MaxBusRead <= 0x2E,
@@ -543,10 +591,11 @@ static void test_p14s(void)
     CHECK_EQ(find(B(5, 0, 0), B(4, 2, 0)), XHCI_TBT_TOPO_OVERRIDE,
              "P14s: the override wins over a unique pick");
     CHECK_EQ(topo.Tunnel, B(4, 2, 0), "P14s: overridden to 04:02.0");
-    CHECK_EQ(topo.Candidates, 1, "P14s: the discovery still ran");
+    CHECK_EQ(topo.Candidates, 2, "P14s: the discovery still ran");
     CHECK_EQ(topo.Pick.Bdf, B(4, 2, 0), "P14s: the pick is the override's");
     CHECK_EQ(find(B(5, 0, 0), B(5, 0, 0)), XHCI_TBT_TOPO_OVERRIDE_BAD,
-             "P14s: an override naming the NHI is refused");
+             "P14s: an override naming the NHI alone names no bridge");
+    CHECK_EQ(topo.Dropped, 1, "P14s: the entry dropped");
     CHECK_EQ(topo.Tunnel, XHCI_TBT_NO_BDF, "P14s: no fallback");
     CHECK_EQ(find(B(5, 0, 0), B(4, 3, 0)), XHCI_TBT_TOPO_OVERRIDE_BAD,
              "P14s: an override naming nothing is refused");
@@ -563,6 +612,27 @@ static void test_p14s(void)
              XHCI_TBT_TOPO_BAD_PARAM, "no question");
     CHECK(topo.Tunnel == XHCI_TBT_NO_BDF && topo.Tunnels == 0,
           "and no tunnel bridge");
+    /* Without the family's ids the switch rule takes nothing. */
+    famSw = NULL;
+    famSwN = 0;
+    CHECK_EQ(find(B(5, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+             "P14s: no switch ids, no member");
+    family_ar();
+    /* A hot-plug bridge of another id beside the switch's ports. */
+    f = &model.Fn[model.Count++];
+    *f = *mfind(B(4, 1, 0));
+    f->Bdf = B(4, 3, 0);
+    put16(f, 0x02, 0x1234);
+    CHECK_EQ(find(B(5, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "P14s + a foreign hot-plug bridge");
+    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(4, 1, 0),
+          "P14s: the foreign bridge is no member");
+    CHECK(sibling(B(4, 3, 0)) != NULL &&
+          (sibling(B(4, 3, 0))->Flags & XHCI_TBT_BR_CANDIDATE) &&
+          !(sibling(B(4, 3, 0))->Flags & XHCI_TBT_BR_MEMBER),
+          "P14s: logged as a hot-plug candidate");
+    model.Count--;
+    find(B(5, 0, 0), XHCI_TBT_NO_BDF);
     in.Overrides = XHCI_TBT_MAX_TUNNELS + 1;
     CHECK_EQ(XhciTbtTopoFind(&io, &in, &topo),
              XHCI_TBT_TOPO_BAD_PARAM, "too many overrides");
@@ -617,34 +687,20 @@ static void test_emu_i440fx(void)
 
     for (pass = 0; pass < 4; pass++) {
         emu_i440fx_switch(pass & 1, (pass >> 1) & 1);
-        /* Conventional bridges carry no switch evidence: learned. */
-        CHECK_EQ(find(B(3, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-                 "i440FX switch: a candidate, not verified");
+        CHECK_EQ(find(B(3, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+                 "i440FX switch: the emulator's SHPC bridge");
         CHECK_EQ(topo.Parent, B(2, 0, 0), "i440FX switch: parent 02:00.0");
-        CHECK(topo.Switch == 0 && topo.ParentType == 0 &&
-              topo.Upstream == B(1, 1, 0), "i440FX switch: no PCIe types");
-        CHECK(topo.Candidates == 1 && topo.Cand[0] == B(2, 1, 0),
-              "i440FX switch: 02:01.0 the candidate");
+        CHECK_EQ(topo.ParentType, 0, "i440FX switch: no PCI Express");
+        CHECK(topo.Tunnels == 1 && topo.Set[0] == B(2, 1, 0) &&
+              topo.Source[0] == XHCI_TBT_SRC_SHPC,
+              "i440FX switch: 02:01.0, by its SHPC");
         CHECK_EQ(topo.Siblings, 2, "i440FX switch: two siblings");
-        CHECK_EQ(sibling(B(2, 1, 0))->Flags,
-                 XHCI_TBT_BR_SHPC | XHCI_TBT_BR_CANDIDATE,
-                 "i440FX switch: by its SHPC");
-        XhciTbtLearnArm(&io, &topo);
-        CHECK_EQ(topo.LearnArmed, 1, "i440FX switch: armed");
-        mfind(B(2, 1, 0))->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
-        if ((pass >> 1) & 1) {
-            CHECK_EQ(XhciTbtLearn(&io, &topo), 0,
-                     "i440FX switch: a slot full before is not learned");
-        } else {
-            CHECK_EQ(XhciTbtLearn(&io, &topo), 1,
-                     "i440FX switch: learned at the tunnel up");
-            CHECK(topo.Tunnel == B(2, 1, 0) &&
-                  topo.Source[0] == XHCI_TBT_SRC_LEARNED,
-                  "i440FX switch: 02:01.0, learned");
-        }
         br = sibling(B(2, 2, 0));
-        CHECK(br != NULL && br->Flags == 0,
-              "i440FX switch: the shpc=off stand-in carries nothing");
+        CHECK(br != NULL &&
+              br->Flags == (XHCI_TBT_BR_LISTED | XHCI_TBT_BR_CANDIDATE),
+              "i440FX switch: the shpc=off stand-in, listed, no slot");
+        XhciTbtLearnArm(&io, &topo);
+        CHECK_EQ(topo.LearnArmed, 0, "i440FX switch: no learning on a set");
     }
 
     /* The tunnel bridge's slot 0 (device 1), empty and then a card. */
@@ -712,34 +768,19 @@ static void test_emu_generic(void)
     f = mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
     mshpc(f, 0x48, 31, 0);
     mslotid(f, 0x40);
-    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "i440FX generic: a root-bus candidate is not taken on the rule");
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "i440FX generic: the SHPC bridge beside the NHI on bus 0");
     CHECK_EQ(topo.Parent, XHCI_TBT_NO_BDF, "i440FX generic: a root bus");
-    CHECK_EQ(topo.Switch, 0, "i440FX generic: no switch");
     CHECK_EQ(topo.SearchBus, 0, "i440FX generic: bus 0's bridges");
-    CHECK(topo.Candidates == 1 && topo.Tunnels == 0 &&
-          topo.Tunnel == XHCI_TBT_NO_BDF, "i440FX generic: nothing verified");
+    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 5, 0) &&
+          topo.Source[0] == XHCI_TBT_SRC_SHPC, "i440FX generic: 00:05.0");
     CHECK_EQ(model.MaxBusRead, 0, "i440FX generic: bus 0 alone is read");
-
-    /* Learned at the first tunnel up: the SHPC slot fills. */
-    XhciTbtLearnArm(&io, &topo);
-    CHECK_EQ(topo.LearnArmed, 1, "i440FX generic: armed");
-    CHECK_EQ(topo.Before[0], XHCI_TBT_PORT_DOWN, "i440FX generic: empty");
+    CHECK_EQ(XhciTbtSetRead(&io, &topo, XHCI_TBT_WANT_DOWN),
+             XHCI_TBT_PORT_DOWN, "i440FX generic: the set reads down");
     f->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
-    CHECK_EQ(XhciTbtLearn(&io, &topo), 1, "i440FX generic: learned");
-    CHECK(topo.Outcome == XHCI_TBT_TOPO_SET && topo.Tunnels == 1 &&
-          topo.Set[0] == B(0, 5, 0) &&
-          topo.Source[0] == XHCI_TBT_SRC_LEARNED,
-          "i440FX generic: 00:05.0, learned");
-    CHECK_EQ(topo.LearnArmed, 0, "i440FX generic: disarmed");
-    CHECK_EQ(XhciTbtLearn(&io, &topo), 0, "i440FX generic: not armed again");
     CHECK_EQ(XhciTbtSetRead(&io, &topo, XHCI_TBT_WANT_UP), XHCI_TBT_PORT_UP,
-             "i440FX generic: the set reads up");
+             "i440FX generic: and up");
     CHECK_EQ(topo.Last[0], XHCI_TBT_PORT_UP, "i440FX generic: per-port state");
-    XhciTbtLearnArm(&io, &topo);
-    CHECK_EQ(XhciTbtLearn(&io, &topo), 0,
-             "i440FX generic: a port already learned is not learned twice");
-    CHECK_EQ(topo.Tunnels, 1, "i440FX generic: still one");
 
     /* q35: usb4-host 00:04.0, usb4-tunnel-port 00:05.0 (pcie-root-port) */
     mreset();
@@ -753,7 +794,7 @@ static void test_emu_generic(void)
     mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, XHCI_TBT_LINKCAP_DLLLARC, 0,
           XHCI_TBT_SLOTCAP_HPC | XHCI_TBT_SLOTCAP_HPS, 0);
     CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "q35 generic: one candidate root port, to be learned");
+             "q35 generic: an unlisted hot-plug root port is no member");
     CHECK_EQ(topo.Sibling[0].Flags,
              XHCI_TBT_BR_PCIE | XHCI_TBT_BR_SLOT | XHCI_TBT_BR_HOTPLUG |
              XHCI_TBT_BR_SURPRISE | XHCI_TBT_BR_LINKREPORT |
@@ -851,7 +892,6 @@ static void test_emu_q35_switch(void)
              "q35 switch: two hot-plug ports of one switch");
     CHECK(topo.Source[0] == XHCI_TBT_SRC_SWITCH &&
           topo.Source[1] == XHCI_TBT_SRC_SWITCH, "q35 switch: by the switch");
-    CHECK_EQ(topo.Switch, 1, "q35 switch: a PCI Express switch");
     CHECK_EQ(topo.Parent, B(2, 0, 0), "q35 switch: parent 02:00.0");
     CHECK_EQ(topo.ParentType, XHCI_TBT_PCIE_TYPE_DOWN,
              "q35 switch: the parent a downstream port");
@@ -877,8 +917,9 @@ static void test_emu_q35_switch(void)
 
     emu_q35_switch(0);
     CHECK_EQ(find(B(3, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
-             "q35 switch with hotplug=off on the plain ports: unique");
-    CHECK_EQ(topo.Tunnel, B(2, 1, 0), "q35 switch: then 02:01.0");
+             "q35 switch with hotplug=off on the plain ports");
+    CHECK(topo.Tunnels == 1 && topo.Tunnel == B(2, 1, 0),
+          "q35 switch: then 02:01.0 alone");
 }
 
 /* ---- the generic rule's edges ------------------------------------------ */
@@ -895,9 +936,10 @@ static void test_generic_edges(void)
     mshpc(f, 0x48, 31, 0);
     f = mbridge(0, 7, 0, 0x1B36, 0x0001, 2, 2);
     mshpc(f, 0x48, 31, 0);
-    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "two SHPC siblings on a root bus: none taken");
-    CHECK_EQ(topo.Tunnel, XHCI_TBT_NO_BDF, "no tunnel bridge");
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "two SHPC siblings: a set of two");
+    CHECK(topo.Tunnels == 2 && topo.Source[1] == XHCI_TBT_SRC_SHPC,
+          "both by their SHPC");
 
     /* A bridge with no capability at all: none. */
     mreset();
@@ -954,16 +996,13 @@ static void test_generic_edges(void)
     }
     f = mbridge(0, 21, 0, 0x1B36, 0x0001, 21, 21);
     mshpc(f, 0x48, 1, 0);
-    CHECK_EQ(find(B(0, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "21 siblings, one candidate past the kept 16");
+    CHECK_EQ(find(B(0, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "21 siblings, the member past the kept 16");
     CHECK_EQ(topo.Siblings, 21, "all counted");
     CHECK_EQ(topo.Candidates, 1, "the candidate counted");
+    CHECK_EQ(topo.Cand[0], B(0, 21, 0), "and kept apart from the log");
     CHECK_EQ(topo.Sibling[15].Bdf, B(0, 16, 0), "the sixteenth kept");
-    XhciTbtLearnArm(&io, &topo);
-    f->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
-    CHECK_EQ(XhciTbtLearn(&io, &topo), 1,
-             "candidates are kept apart from the sixteen logged siblings");
-    CHECK_EQ(topo.Tunnel, B(0, 21, 0), "00:21.0 learned");
+    CHECK_EQ(topo.Tunnel, B(0, 21, 0), "00:21.0 the member");
 
     /* A vendor of zero reads as no function. */
     mreset();
@@ -988,18 +1027,17 @@ static void test_parent_search(void)
     f = mbridge(0x80, 1, 0, 0x8086, 0x3333, 0x84, 0x84);
     mshpc(f, 0x48, 1, 0);
     mdev(0x81, 0, 0, 0x8086, 0x15BF, 0x088000UL);
-    CHECK_EQ(find(B(0x81, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+    CHECK_EQ(find(B(0x81, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
              "a parent off bus 0's hierarchy is still found");
     CHECK_EQ(topo.Parent, B(0x80, 0, 0), "parent 80:00.0");
-    CHECK(topo.Candidates == 1 && topo.Cand[0] == B(0x80, 1, 0),
-          "candidate 80:01.0, not verified beside a conventional bridge");
+    CHECK_EQ(topo.Tunnel, B(0x80, 1, 0), "its SHPC sibling 80:01.0");
 
     /* The NHI on that root bus itself: its own bus's bridges. */
     mreset();
     mdev(0x40, 4, 0, 0x1B36, 0x00F4, 0x0C0340UL);
     f = mbridge(0x40, 5, 0, 0x1B36, 0x0001, 0x41, 0x41);
     mshpc(f, 0x48, 1, 0);
-    CHECK_EQ(find(B(0x40, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+    CHECK_EQ(find(B(0x40, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
              "a NHI on a root bus other than 0");
     CHECK_EQ(topo.Parent, XHCI_TBT_NO_BDF, "no parent");
     CHECK_EQ(topo.SearchBus, 0x40, "its own bus");
@@ -1016,10 +1054,10 @@ static void test_parent_search(void)
     mshpc(f, 0x48, 1, 0);
     mbridge(2, 2, 0, 0x8086, 0x1111, 4, 4);
     mdev(4, 0, 0, 0x8086, 0x15BF, 0x088000UL);
-    CHECK_EQ(find(B(4, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+    CHECK_EQ(find(B(4, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
              "loops and an unconfigured bridge are walked past");
     CHECK_EQ(topo.Parent, B(2, 2, 0), "parent 02:02.0");
-    CHECK_EQ(topo.Cand[0], B(2, 1, 0), "candidate 02:01.0");
+    CHECK_EQ(topo.Tunnel, B(2, 1, 0), "member 02:01.0");
 }
 
 /* ---- XhciCmTunnelBridge ------------------------------------------------ */
@@ -1209,12 +1247,8 @@ static void test_poll(void)
  * The shape of an integrated controller (Ice Lake onward): the NHI a root
  * complex function on bus 0 and its tunnel ports PCIe root ports beside it,
  * with the platform's own root ports, one of them hot-plug capable, on the
- * same bus. The ids are this suite's own placeholders, not any part's.
+ * same bus. The root port ids are this suite's own placeholders.
  */
-#define TEST_TBT_RP     0xFFF08086UL
-#define TEST_PCH_RP     0xFFF18086UL
-#define TEST_NHI_ID     0xFFF38086UL
-
 static VOID integrated(ULONG ports)
 {
     MODEL_FN *f;
@@ -1233,7 +1267,7 @@ static VOID integrated(ULONG ports)
         mmulti(0, 7);
     }
     mdev(0, 0x0D, 0, 0x8086, 0x9A13, 0x0C0330UL);
-    mdev(0, 0x0D, 2, 0x8086, 0x9A1B, 0x0C0340UL);
+    mdev(0, 0x0D, 2, 0x8086, TEST_NHI_ID >> 16, 0x0C0340UL);
     mmulti(0, 0x0D);
     f = mbridge(0, 0x1C, 0, 0x8086, TEST_PCH_RP >> 16, 0x90, 0x90);
     mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, 0, 0, hp, 0);
@@ -1243,84 +1277,106 @@ static VOID integrated(ULONG ports)
 
 static void test_integrated(void)
 {
-    static const XHCI_TBT_TABLE_ENTRY ids[1] = {
-        { 0, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_NO_BDF }
-    };
-    static const XHCI_TBT_TABLE_ENTRY pch[1] = {
-        { 0, XHCI_TBT_NO_BDF, TEST_PCH_RP, XHCI_TBT_NO_BDF }
-    };
-    static const XHCI_TBT_TABLE_ENTRY other[1] = {
-        { TEST_NHI_ID, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_NO_BDF }
-    };
     ULONG over[2];
+    MODEL_FN *f;
+    MODEL_FN *t;
 
     integrated(4);
+    family_ic(0);
     CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "integrated: five hot-plug root ports, no id list");
+             "integrated: five hot-plug root ports, no root port ids");
     CHECK(topo.Parent == XHCI_TBT_NO_BDF && topo.SearchBus == 0,
           "integrated: no parent, no switch assumed");
     CHECK(topo.Candidates == 5 && topo.Tunnels == 0 &&
           topo.Tunnel == XHCI_TBT_NO_BDF, "integrated: nothing taken");
+    CHECK_EQ(topo.FamilyNhis, 1, "integrated: one NHI of the family");
 
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, ids, 1), XHCI_TBT_TOPO_SET,
+    family_ic(1);
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
              "integrated: the listed root ports form the set");
-    CHECK(topo.Tunnels == 4 && topo.Listed == 4 &&
-          topo.Set[0] == B(0, 7, 0) && topo.Set[3] == B(0, 7, 3),
-          "integrated: 00:07.0 to 00:07.3");
-    CHECK(topo.Source[0] == XHCI_TBT_SRC_TABLE &&
-          topo.Source[3] == XHCI_TBT_SRC_TABLE, "integrated: by the table");
+    CHECK(topo.Tunnels == 4 && topo.Set[0] == B(0, 7, 0) &&
+          topo.Set[3] == B(0, 7, 3), "integrated: 00:07.0 to 00:07.3");
+    CHECK(topo.Source[0] == XHCI_TBT_SRC_ROOTPORT &&
+          topo.Source[3] == XHCI_TBT_SRC_ROOTPORT,
+          "integrated: as listed root ports");
     XhciTbtLearnArm(&io, &topo);
-    CHECK_EQ(topo.LearnArmed, 0, "a table's set is not learned into");
+    CHECK_EQ(topo.LearnArmed, 0, "a listed set is not learned into");
     CHECK(sibling(B(0, 0x1C, 0)) != NULL &&
-          !(sibling(B(0, 0x1C, 0))->Flags & XHCI_TBT_BR_LISTED),
-          "integrated: the PCH's hot-plug port logged, not taken");
+          !(sibling(B(0, 0x1C, 0))->Flags & XHCI_TBT_BR_MEMBER),
+          "integrated: the platform's hot-plug root port is never a member");
     CHECK(topo.Pick.Flags & XHCI_TBT_BR_LISTED,
           "integrated: a listed port flagged");
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, other, 1), XHCI_TBT_TOPO_LEARN,
-             "integrated: an entry for another NHI id does not match");
 
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, pch, 1), XHCI_TBT_TOPO_SET,
-             "integrated: a table naming one port takes it");
-    CHECK_EQ(topo.Tunnel, B(0, 0x1C, 0), "integrated: the listed one");
+    /* A listed root port need not be hot-plug capable. */
+    mfind(B(0, 7, 3))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "integrated: still four");
+    CHECK_EQ(topo.Tunnels, 4, "integrated: 00:07.3 by its id alone");
 
     over[0] = B(0, 7, 0);
     over[1] = B(0, 7, 1);
-    CHECK_EQ(findin(B(0, 0x0D, 2), over, 2, NULL, 0),
-             XHCI_TBT_TOPO_OVERRIDE, "integrated: an override of two");
-    CHECK(topo.Tunnels == 2 && topo.Set[1] == B(0, 7, 1),
-          "integrated: both taken");
+    CHECK_EQ(findin(B(0, 0x0D, 2), over, 2), XHCI_TBT_TOPO_OVERRIDE,
+             "integrated: an override of two is the whole set");
+    CHECK(topo.Tunnels == 2 && topo.Set[1] == B(0, 7, 1) &&
+          topo.Source[0] == XHCI_TBT_SRC_OVERRIDE, "integrated: both taken");
     over[1] = B(0, 0x0D, 0);
-    CHECK_EQ(findin(B(0, 0x0D, 2), over, 2, NULL, 0),
-             XHCI_TBT_TOPO_OVERRIDE_BAD,
-             "integrated: one bad location refuses the whole value");
-    CHECK(topo.Tunnels == 0 && topo.Tunnel == XHCI_TBT_NO_BDF,
-          "integrated: nothing kept");
+    CHECK_EQ(findin(B(0, 0x0D, 2), over, 2), XHCI_TBT_TOPO_OVERRIDE,
+             "integrated: a non-bridge entry is dropped, the rest kept");
+    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 7, 0) &&
+          topo.Dropped == 1, "integrated: 00:07.0 kept, one dropped");
+    over[1] = B(0, 7, 0);
+    CHECK_EQ(findin(B(0, 0x0D, 2), over, 2), XHCI_TBT_TOPO_OVERRIDE,
+             "integrated: a repeated entry");
+    CHECK(topo.Tunnels == 1 && topo.Dropped == 1, "integrated: once");
 
-    /* A two-port host whose platform has no other hot-plug port. */
+    /* Two NHIs of the family: the second disabled answers config all the
+     * same, and the listed ports are whose, nobody here can say. */
+    t = mdev(0, 0x0D, 3, 0x8086, TEST_NHI_ID2 >> 16, 0x0C0340UL);
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_AMBIGUOUS,
+             "integrated, two NHIs: ambiguous");
+    CHECK(topo.FamilyNhis == 2 && topo.Ambiguous == 4 && topo.Tunnels == 0,
+          "integrated, two NHIs: four listed ports, none taken");
+    CHECK(sibling(B(0, 7, 1))->Flags & XHCI_TBT_BR_AMBIGUOUS,
+          "integrated, two NHIs: flagged");
+    XhciTbtLearnArm(&io, &topo);
+    CHECK_EQ(topo.LearnArmed, 0, "integrated, two NHIs: never learned");
+    CHECK_EQ(find(B(0, 0x0D, 3), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_AMBIGUOUS,
+             "integrated, two NHIs: for the other domain too");
+    over[0] = B(0, 7, 2);
+    over[1] = B(0, 7, 3);
+    CHECK_EQ(findin(B(0, 0x0D, 3), over, 2), XHCI_TBT_TOPO_OVERRIDE,
+             "integrated, two NHIs: the override assigns");
+    CHECK_EQ(topo.Tunnels, 2, "integrated, two NHIs: two");
+    /* Another family's NHI on the bus does not count. */
+    put16(t, 0x02, 0x1234);
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "integrated: a function of another id is no second NHI");
+
+    /* A two-port host whose platform has no other hot-plug port: with no
+     * root port ids, learning, one tunnel at a time. */
     integrated(2);
+    family_ic(0);
     mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
     CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "integrated, two ports: not a set without the table");
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, ids, 1), XHCI_TBT_TOPO_SET,
-             "integrated, two ports: the set with it");
-    CHECK_EQ(topo.Tunnels, 2, "integrated, two ports: two");
-
-    /* Learning both ports of a two-port host, one tunnel at a time. */
-    find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF);
+             "integrated, two ports, no ids: learn");
+    f = mfind(B(0, 7, 0));
+    t = mfind(B(0, 7, 1));
     XhciTbtLearnArm(&io, &topo);
-    put16(mfind(B(0, 7, 1)), 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
-    put16(mfind(B(0, 7, 1)), 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    put16(t, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
+    put16(t, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
     CHECK_EQ(XhciTbtLearn(&io, &topo), 1, "integrated: 00:07.1 learned");
     XhciTbtLearnArm(&io, &topo);
-    put16(mfind(B(0, 7, 0)), 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
-    put16(mfind(B(0, 7, 0)), 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    put16(f, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
+    put16(f, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
     CHECK_EQ(XhciTbtLearn(&io, &topo), 1, "integrated: 00:07.0 learned too");
     CHECK(topo.Tunnels == 2 && topo.Set[0] == B(0, 7, 1) &&
-          topo.Set[1] == B(0, 7, 0), "integrated: both, in learning order");
+          topo.Set[1] == B(0, 7, 0) &&
+          topo.Source[1] == XHCI_TBT_SRC_LEARNED,
+          "integrated: both, in learning order");
     CHECK_EQ(XhciTbtSetRead(&io, &topo, XHCI_TBT_WANT_DOWN),
              XHCI_TBT_PORT_MIXED, "integrated: the set not down");
-    put16(mfind(B(0, 7, 1)), 0x40 + 0x1A, 0);
-    put16(mfind(B(0, 7, 1)), 0x40 + 0x12, 0);
+    put16(t, 0x40 + 0x1A, 0);
+    put16(t, 0x40 + 0x12, 0);
     /* A second tunnel coming up beside an existing one: the existing
      * tunnel on 00:07.0 does not end the settling window. */
     XhciTbtSetArm(&io, &topo);
@@ -1330,25 +1386,38 @@ static void test_integrated(void)
              XHCI_TBT_PORT_MIXED, "integrated: an old tunnel is no progress");
     CHECK(topo.Last[0] == XHCI_TBT_PORT_DOWN &&
           topo.Last[1] == XHCI_TBT_PORT_UP, "integrated: per-port state");
-    put16(mfind(B(0, 7, 1)), 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
-    put16(mfind(B(0, 7, 1)), 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    put16(t, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
+    put16(t, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
     CHECK_EQ(XhciTbtSetRead(&io, &topo, XHCI_TBT_WANT_UP), XHCI_TBT_PORT_UP,
              "integrated: the new port made progress");
     topo.BaseArmed = 0;
-    put16(mfind(B(0, 7, 0)), 0x40 + 0x1A, 0);
-    put16(mfind(B(0, 7, 0)), 0x40 + 0x12, 0);
+    put16(f, 0x40 + 0x1A, 0);
+    put16(f, 0x40 + 0x12, 0);
     CHECK_EQ(XhciTbtSetRead(&io, &topo, XHCI_TBT_WANT_UP),
              XHCI_TBT_PORT_MIXED,
              "integrated: with no baseline, up only when all are");
 
-    /* One port: not taken on the rule either. */
-    integrated(1);
-    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
-    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "integrated, one port: learned, not assumed");
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, ids, 1), XHCI_TBT_TOPO_SET,
-             "integrated, one port: the table takes it");
-    CHECK_EQ(topo.Tunnel, B(0, 7, 0), "integrated, one port: 00:07.0");
+    /* Exclusive ownership across domains. */
+    {
+        ULONG mine[3];
+        ULONG theirs[2];
+        ULONG act[3];
+
+        mine[0] = B(0, 7, 0);
+        mine[1] = B(0, 7, 1);
+        mine[2] = B(0, 7, 2);
+        theirs[0] = B(0, 7, 1);
+        theirs[1] = B(0, 7, 3);
+        CHECK_EQ(XhciTbtExclusive(mine, 3, theirs, 2, act), 1,
+                 "one port claimed by both domains");
+        CHECK(act[0] == 1 && act[1] == 0 && act[2] == 1,
+              "it is inactive, the others active");
+        CHECK_EQ(XhciTbtExclusive(mine, 3, NULL, 0, act), 0,
+                 "no other claims");
+        CHECK(act[1] == 1, "all active");
+        CHECK_EQ(XhciTbtExclusive(NULL, 3, theirs, 2, act), 0, "no set");
+    }
+    family_ar();
 }
 
 /* ---- sets ---------------------------------------------------------------- */
@@ -1446,19 +1515,28 @@ static void test_sets(void)
              XHCI_TBT_PORT_NONE, "no set");
 }
 
-/* ---- failures, ownership and the learning's limits -------------------- */
+/* ---- failures and the learning's limits -------------------------------- */
 
-/* Two SHPC bridges beside a root-bus NHI, both empty. */
-static VOID two_shpc(VOID)
+/* Two unlisted hot-plug root ports beside a root-bus NHI, both empty. */
+static VOID two_hp(VOID)
 {
     MODEL_FN *f;
+    ULONG hp = XHCI_TBT_SLOTCAP_HPC | XHCI_TBT_SLOTCAP_HPS;
 
     mreset();
     mdev(0, 4, 0, 0x1B36, 0x00F4, 0x0C0340UL);
-    f = mbridge(0, 5, 0, 0x1B36, 0x0001, 1, 1);
-    mshpc(f, 0x48, 1, 0);
-    f = mbridge(0, 6, 0, 0x1B36, 0x0001, 2, 2);
-    mshpc(f, 0x48, 1, 0);
+    f = mbridge(0, 5, 0, 0x1B36, 0x000C, 1, 1);
+    mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, XHCI_TBT_LINKCAP_DLLLARC, 0,
+          hp, 0);
+    f = mbridge(0, 6, 0, 0x1B36, 0x000C, 2, 2);
+    mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, XHCI_TBT_LINKCAP_DLLLARC, 0,
+          hp, 0);
+}
+
+static VOID port_up(MODEL_FN *f, ULONG up)
+{
+    put16(f, 0x40 + 0x12, up ? XHCI_TBT_LINKSTA_DLLLA : 0);
+    put16(f, 0x40 + 0x1A, up ? XHCI_TBT_SLOTSTA_PDS : 0);
 }
 
 static void test_failures(void)
@@ -1468,24 +1546,15 @@ static void test_failures(void)
     ULONG off;
     ULONG i;
     XHCI_TBT_POLL p;
-    static const XHCI_TBT_TABLE_ENTRY wild[1] = {
-        { 0, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_NO_BDF }
-    };
-    static const XHCI_TBT_TABLE_ENTRY two[2] = {
-        { TEST_NHI_ID, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_NO_BDF },
-        { 0xFFF48086UL, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_NO_BDF }
-    };
-    static const XHCI_TBT_TABLE_ENTRY placed[2] = {
-        { TEST_NHI_ID, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_BDF(0, 7, 0) },
-        { 0xFFF48086UL, XHCI_TBT_NO_BDF, TEST_TBT_RP, XHCI_TBT_BDF(0, 7, 1) }
-    };
 
     /* A baseline read that failed spoils the learning: the port already
      * up all along must not be learned when its access recovers. */
-    two_shpc();
+    two_hp();
+    f = mfind(B(0, 5, 0));
     t = mfind(B(0, 6, 0));
-    t->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
-    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    port_up(t, 1);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+             "two candidates");
     model.FailBdf = B(0, 6, 0);
     XhciTbtLearnArm(&io, &topo);
     CHECK_EQ(topo.LearnArmed, 0, "a failed baseline read does not arm");
@@ -1494,39 +1563,85 @@ static void test_failures(void)
     XhciTbtLearnArm(&io, &topo);
     CHECK_EQ(topo.LearnArmed, 1, "armed once reads work");
     model.FailBdf = B(0, 6, 0);
-    mfind(B(0, 5, 0))->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
+    port_up(f, 1);
     CHECK_EQ(XhciTbtLearn(&io, &topo), 0, "a failed read at the end: none");
     model.FailBdf = XHCI_TBT_NO_BDF;
     CHECK_EQ(topo.Tunnels, 0, "the set still empty");
 
-    /* A capability walk that failed at discovery disables learning. */
-    two_shpc();
+    /* A competing port up from an uncertain reading: nothing learned. */
+    two_hp();
+    f = mfind(B(0, 5, 0));
+    t = mfind(B(0, 6, 0));
+    put16(f, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    find(B(0, 4, 0), XHCI_TBT_NO_BDF);
+    XhciTbtLearnArm(&io, &topo);
+    CHECK(topo.LearnArmed && topo.Before[0] == XHCI_TBT_PORT_MIXED &&
+          topo.Before[1] == XHCI_TBT_PORT_DOWN, "MIXED and DOWN");
+    port_up(f, 1);
+    port_up(t, 1);
+    CHECK_EQ(XhciTbtLearn(&io, &topo), 0,
+             "the DOWN one rose, but so did the uncertain one");
+    CHECK_EQ(topo.Tunnels, 0, "nothing learned");
+
+    /* Discovery reads that fail: incomplete, nothing taken, no learning. */
+    two_hp();
     model.FailBdf = B(0, 6, 0);
-    model.FailOffset = 0x48;
+    model.FailOffset = 0x40;
     CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
-             "an unread sibling");
+             "a capability walk failing");
     CHECK(topo.Unread == 1 && (sibling(B(0, 6, 0))->Flags &
                                XHCI_TBT_BR_UNREAD), "flagged unread");
     model.FailBdf = XHCI_TBT_NO_BDF;
     model.FailOffset = XHCI_TBT_NO_BDF;
     XhciTbtLearnArm(&io, &topo);
-    CHECK_EQ(topo.LearnArmed, 0, "learning refused with an unread sibling");
+    CHECK_EQ(topo.LearnArmed, 0, "learning refused");
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "a header unread");
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "an identity unread");
+    CHECK(topo.Unread != 0 && topo.Tunnels == 0, "counted, nothing taken");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+
+    /* An identity that fails only on the second pass over a root bus (the
+     * first counts the family's NHIs): incomplete, never a partial set. */
+    integrated(2);
+    family_ic(1);
+    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
+    model.FailBdf = B(0, 7, 1);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    model.FailNth = 2;
+    model.FailSeen = 0;
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "a listed port unread on the second pass");
+    CHECK_EQ(topo.Tunnels, 0, "no partial set");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    model.FailNth = 0;
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_SET,
+             "and whole on the next try");
+    CHECK_EQ(topo.Tunnels, 2, "both ports");
+    family_ar();
 
     /* More candidates than are kept: no learning, so two ports coming up
      * either side of the limit cannot make the kept one look unique. */
     mreset();
     mdev(0, 0, 0, 0x1B36, 0x00F4, 0x0C0340UL);
     for (i = 1; i < 19; i++) {
-        f = mbridge(0, i, 0, 0x1B36, 0x0001, i, i);
-        mshpc(f, 0x48, 1, 0);
+        f = mbridge(0, i, 0, 0x1B36, 0x000C, i, i);
+        mpcie(f, 0x40, XHCI_TBT_PCIE_TYPE_ROOT, 1, XHCI_TBT_LINKCAP_DLLLARC,
+              0, XHCI_TBT_SLOTCAP_HPC, 0);
     }
     CHECK_EQ(find(B(0, 0, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
              "eighteen candidates");
     CHECK_EQ(topo.Candidates, 18, "all counted");
     XhciTbtLearnArm(&io, &topo);
     CHECK_EQ(topo.LearnArmed, 0, "more than kept: not armed");
-    mfind(B(0, 1, 0))->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
-    mfind(B(0, 18, 0))->Shpc[XHCI_TBT_SHPC_SLOT0] = SHPC_CARD;
+    port_up(mfind(B(0, 1, 0)), 1);
+    port_up(mfind(B(0, 18, 0)), 1);
     CHECK_EQ(XhciTbtLearn(&io, &topo), 0, "and nothing learned");
 
     /* A capability walk failing in a port read is ERROR, not NONE, and a
@@ -1569,94 +1684,6 @@ static void test_failures(void)
     model.FailWriteAt = 0;
     CHECK_EQ(XhciTbtPortRead(&io, B(2, 1, 0), &port), XHCI_TBT_PORT_UP,
              "next time it reads");
-
-    /* Two domains on one bus sharing root port ids: a table entry
-     * without a location is not used; one with a location is. */
-    integrated(2);
-    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
-    put16(mfind(B(0, 0x0D, 2)), 0x02, TEST_NHI_ID >> 16);
-    mdev(0, 0x0D, 3, 0x8086, 0xFFF4, 0x0C0340UL);
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_LEARN,
-             "a second USB4-class NHI on the bus: a wildcard entry unused");
-    CHECK(topo.OtherNhi == 1 && topo.Ambiguous == 1, "said so");
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, two, 2), XHCI_TBT_TOPO_LEARN,
-             "two domains' NHIs on the bus: id-only entries are ambiguous");
-    CHECK_EQ(topo.Ambiguous, 1, "said so again");
-    put32(mfind(B(0, 0x0D, 3)), 0x08, 0x0C033000UL);
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_SET,
-             "the other function no NHI after all: the wildcard serves");
-    single = 0;
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_LEARN,
-             "but only when the caller vouches for one domain");
-    single = 1;
-    put32(mfind(B(0, 0x0D, 3)), 0x08, 0x0C034000UL);
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, placed, 2), XHCI_TBT_TOPO_SET,
-             "entries with locations settle it");
-    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 7, 0),
-          "this domain's port alone");
-    CHECK_EQ(findin(B(0, 0x0D, 3), NULL, 0, placed, 2), XHCI_TBT_TOPO_SET,
-             "the other domain");
-    CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 7, 1),
-          "its port alone");
-    in.Table = NULL;
-    in.TableCount = 1;
-    CHECK_EQ(XhciTbtTopoFind(&io, &in, &topo), XHCI_TBT_TOPO_BAD_PARAM,
-             "a count without a table");
-
-    /* A header that cannot be read, at discovery: incomplete. */
-    two_shpc();
-    model.FailBdf = B(0, 6, 0);
-    model.FailOffset = XHCI_TBT_CFG_HEADER;
-    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
-             "a header unread");
-    CHECK(topo.Unread != 0 && topo.Tunnels == 0, "counted, nothing taken");
-    XhciTbtLearnArm(&io, &topo);
-    CHECK_EQ(topo.LearnArmed, 0, "and no learning");
-    model.FailBdf = B(0, 6, 0);
-    model.FailOffset = XHCI_TBT_CFG_ID;
-    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
-             "an identity unread");
-    model.FailOffset = XHCI_TBT_CFG_CLASS;
-    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
-             "a class unread");
-    model.FailBdf = XHCI_TBT_NO_BDF;
-    model.FailOffset = XHCI_TBT_NO_BDF;
-
-    /* A candidate that fails only when the set is taken: incomplete, not
-     * a set without it. */
-    integrated(2);
-    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
-    model.FailBdf = B(0, 7, 1);
-    model.FailOffset = XHCI_TBT_CFG_ID;
-    model.FailNth = 2;      /* the walk's probe passes, the take's fails */
-    model.FailSeen = 0;
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1),
-             XHCI_TBT_TOPO_INCOMPLETE, "a candidate unread at the take");
-    CHECK_EQ(topo.Tunnels, 0, "no partial set");
-    model.FailBdf = XHCI_TBT_NO_BDF;
-    model.FailOffset = XHCI_TBT_NO_BDF;
-    model.FailNth = 0;
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_SET,
-             "and whole on the next try");
-    CHECK_EQ(topo.Tunnels, 2, "both ports");
-
-    /* A competing port up from an uncertain reading: nothing learned. */
-    integrated(2);
-    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
-    f = mfind(B(0, 7, 0));
-    t = mfind(B(0, 7, 1));
-    put16(f, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
-    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
-             "two candidates");
-    XhciTbtLearnArm(&io, &topo);
-    CHECK(topo.LearnArmed && topo.Before[0] == XHCI_TBT_PORT_MIXED &&
-          topo.Before[1] == XHCI_TBT_PORT_DOWN, "MIXED and DOWN");
-    put16(f, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
-    put16(t, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
-    put16(t, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
-    CHECK_EQ(XhciTbtLearn(&io, &topo), 0,
-             "the DOWN one rose, but so did the uncertain one");
-    CHECK_EQ(topo.Tunnels, 0, "nothing learned");
 }
 
 int main(void)

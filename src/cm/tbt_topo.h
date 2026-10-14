@@ -7,21 +7,22 @@
  * accessors the caller supplies (the driver passes HalGetBusData-backed
  * ones on every target; the host suite passes a modelled machine):
  *
- *   - the discovery of record 21 section 6.3, widened to multi-port and
- *     integrated controllers: the SET of a domain's verified tunnel ports
- *     (PCI bridges whose secondary side a PCIe tunnel populates), each with
- *     the provenance that verified it - a hot-plug sibling port of the
- *     controller's own switch, a platform table of root port ids, the
- *     XhciCmTunnelBridge list, or learned at a tunnel up. A hot-plug root
- *     port beside an integrated NHI is never taken on the rule alone: the
- *     PCI association is ACPI's ("usb4-host-interface", Linux
- *     drivers/thunderbolt/acpi.c tb_acpi_add_links), which this driver
- *     cannot read on Windows 98, and the fabric mapping (USB4 port to PCIe
- *     down adapter, Linux usb4.c usb4_switch_map_pcie_down and tb.c
- *     tb_find_pcie_down) gives no PCI location. When the event-to-port
- *     mapping is unknown the caller rescans every port of the set;
- *   - the learning step for a domain with candidates and nothing verified:
- *     the one candidate whose reading went to up across a tunnel up;
+ *   - the discovery of record 21 section 6.3: a domain's tunnel-port SET,
+ *     each member with the source that put it there - the override list
+ *     XhciCmTunnelBridge, a hot-plug port of the controller's own switch by
+ *     the family's port ids, an integrated host's root port by the
+ *     family's root port ids when it is the bus's only NHI of the family,
+ *     or the emulator's SHPC bridge - and its own state. Any other bridge,
+ *     however hot-plug capable, is never a member: the PCI association is
+ *     ACPI's ("usb4-host-interface", Linux drivers/thunderbolt/acpi.c
+ *     tb_acpi_add_links), which this driver does not read, and the fabric
+ *     mapping (USB4 port to PCIe down adapter, Linux usb4.c
+ *     usb4_switch_map_pcie_down and tb.c tb_find_pcie_down) names no PCI
+ *     location. Every tunnel change acts on the whole set; exclusive
+ *     ownership across domains is the caller's, with XhciTbtExclusive;
+ *   - learning, beyond the record's sources, for a domain with hot-plug
+ *     candidates and no member: the one candidate whose reading went from
+ *     down to up across a tunnel up;
  *   - the port reading of section 6.5: Link Status Data Link Layer Link
  *     Active where Link Capabilities says it is reported, Slot Status
  *     Presence Detect State where the slot is implemented, and an SHPC
@@ -86,9 +87,6 @@
 #define XHCI_TBT_CFG_ID             0x00UL  /* vendor 15:0, device 31:16    */
 #define XHCI_TBT_CFG_STATUS         0x04UL  /* Status in 31:16              */
 #define XHCI_TBT_CFG_STATUS_CAPLIST 0x00100000UL /* the dword's bit 20     */
-#define XHCI_TBT_CFG_CLASS          0x08UL  /* revision 7:0, class 31:8     */
-#define XHCI_TBT_CLASS_USB4         0x0C0340UL /* serial bus, USB, USB4
-                                                  host interface            */
 #define XHCI_TBT_CFG_HEADER         0x0CUL  /* Header Type in 23:16         */
 #define XHCI_TBT_CFG_BUSES          0x18UL  /* primary 7:0, secondary 15:8,
                                                subordinate 23:16            */
@@ -225,16 +223,18 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 
 /* XHCI_TBT_TOPO.Outcome. */
 #define XHCI_TBT_TOPO_NONE          0UL /* not run                          */
-#define XHCI_TBT_TOPO_SET           1UL /* a verified set                   */
-#define XHCI_TBT_TOPO_OVERRIDE      2UL /* XhciCmTunnelBridge named it      */
-#define XHCI_TBT_TOPO_NO_CANDIDATE  3UL /* no sibling bridge qualifies      */
-#define XHCI_TBT_TOPO_MANY          4UL /* verified ports past the room     */
-#define XHCI_TBT_TOPO_OVERRIDE_BAD  5UL /* the value names a non-bridge     */
+#define XHCI_TBT_TOPO_SET           1UL /* a set, by discovery              */
+#define XHCI_TBT_TOPO_OVERRIDE      2UL /* XhciCmTunnelBridge's set         */
+#define XHCI_TBT_TOPO_NO_CANDIDATE  3UL /* no member, no hot-plug bridge    */
+#define XHCI_TBT_TOPO_MANY          4UL /* members past the set's room      */
+#define XHCI_TBT_TOPO_OVERRIDE_BAD  5UL /* the override named no bridge     */
 #define XHCI_TBT_TOPO_NHI_ABSENT    6UL /* nothing answers at the NHI       */
 #define XHCI_TBT_TOPO_BAD_PARAM     7UL
-#define XHCI_TBT_TOPO_LEARN         8UL /* candidates, none verified yet    */
+#define XHCI_TBT_TOPO_LEARN         8UL /* no member; hot-plug bridges seen */
 #define XHCI_TBT_TOPO_INCOMPLETE    9UL /* a function on the search bus
                                            could not be read: try again     */
+#define XHCI_TBT_TOPO_AMBIGUOUS     10UL /* listed root ports, but more than
+                                            one NHI of the family: none     */
 
 /* XHCI_TBT_BRIDGE.Flags. */
 #define XHCI_TBT_BR_PCIE            0x001UL /* a PCI Express capability    */
@@ -242,17 +242,23 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 #define XHCI_TBT_BR_HOTPLUG         0x004UL /* Hot-Plug Capable            */
 #define XHCI_TBT_BR_SURPRISE        0x008UL /* Hot-Plug Surprise           */
 #define XHCI_TBT_BR_SHPC            0x010UL /* an SHPC capability          */
-#define XHCI_TBT_BR_CANDIDATE       0x020UL /* HOTPLUG or SHPC             */
+#define XHCI_TBT_BR_CANDIDATE       0x020UL /* HOTPLUG, SHPC or LISTED     */
 #define XHCI_TBT_BR_LINKREPORT      0x040UL /* Link Active reported        */
-#define XHCI_TBT_BR_LISTED          0x080UL /* the platform table names it */
+#define XHCI_TBT_BR_LISTED          0x080UL /* its id is in the family's
+                                               switch or root port list    */
 #define XHCI_TBT_BR_UNREAD          0x100UL /* a capability walk failed    */
+#define XHCI_TBT_BR_AMBIGUOUS       0x200UL /* a listed root port left out:
+                                               two NHIs of the family      */
+#define XHCI_TBT_BR_MEMBER          0x400UL /* in the set                  */
 
-/* XHCI_TBT_TOPO.Source[]: what verified a tunnel port. */
-#define XHCI_TBT_SRC_SWITCH         1UL /* a hot-plug port of the NHI's own
-                                           PCI Express switch               */
-#define XHCI_TBT_SRC_TABLE          2UL /* the platform table               */
+/* XHCI_TBT_TOPO.Source[]: what put a port in the set (record 21 6.3). */
+#define XHCI_TBT_SRC_SWITCH         1UL /* a listed hot-plug port beside the
+                                           NHI's parent                     */
+#define XHCI_TBT_SRC_ROOTPORT       2UL /* a listed root port beside an
+                                           integrated NHI, its only NHI     */
 #define XHCI_TBT_SRC_OVERRIDE       3UL /* XhciCmTunnelBridge               */
 #define XHCI_TBT_SRC_LEARNED        4UL /* came up across a tunnel up       */
+#define XHCI_TBT_SRC_SHPC           5UL /* an SHPC bridge (the emulator)    */
 
 #define XHCI_TBT_MAX_SIBLINGS       16UL    /* kept for the log             */
 #define XHCI_TBT_MAX_CANDIDATES     16UL    /* kept for learning            */
@@ -260,7 +266,7 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
  * ports, an integrated host's root ports. */
 #define XHCI_TBT_MAX_TUNNELS        4UL
 
-/* One type 1 function on the search bus, for the pick and the log. */
+/* One type 1 function on the search bus, for the set and the log. */
 typedef struct _XHCI_TBT_BRIDGE {
     ULONG Bdf;
     ULONG Id;           /* vendor 15:0, device 31:16                        */
@@ -273,34 +279,20 @@ typedef struct _XHCI_TBT_BRIDGE {
 } XHCI_TBT_BRIDGE, *PXHCI_TBT_BRIDGE;
 
 /*
- * One platform table entry: a root port that is a given controller's
- * tunnel port. PortId is required (vendor 15:0, device 31:16); NhiId 0
- * and the two locations XHCI_TBT_NO_BDF are wildcards. Ids come from a
- * public listing, recorded where the table is kept; a location is a
- * platform fact and needs its own evidence.
+ * What a discovery is asked. The id lists are the NHI's family's, from
+ * record 21 section 3.3's tables (each id vendor 15:0, device 31:16); the
+ * caller picks the family by the NHI's own id. A NULL list is empty.
  */
-typedef struct _XHCI_TBT_TABLE_ENTRY {
-    ULONG NhiId;        /* the NHI's vendor/device, 0 for any               */
-    ULONG Nhi;          /* the NHI's location, XHCI_TBT_NO_BDF for any      */
-    ULONG PortId;       /* the root port's vendor/device                    */
-    ULONG Port;         /* its location, XHCI_TBT_NO_BDF for any            */
-} XHCI_TBT_TABLE_ENTRY, *PXHCI_TBT_TABLE_ENTRY;
-
-/* What a discovery is asked. */
 typedef struct _XHCI_TBT_TOPO_IN {
     ULONG Nhi;          /* the NHI's location                               */
     ULONG Overrides;    /* how many XhciCmTunnelBridge named, 0 for none    */
     ULONG Override[XHCI_TBT_MAX_TUNNELS];
-    const XHCI_TBT_TABLE_ENTRY *Table;  /* the platform table, or NULL      */
-    ULONG TableCount;
-    /*
-     * 1 only when the caller has platform evidence that the machine has
-     * exactly one domain: a complete inventory of its NHIs, or a verified
-     * platform fact recorded beside the table. A controller generation's
-     * identity alone is not such evidence. 0 when unknown. Table entries
-     * without a Port location are used only when it is 1.
-     */
-    ULONG SingleDomain;
+    const ULONG *FamilyNhiIds;      /* the family's NHI ids                 */
+    ULONG FamilyNhiIdCount;
+    const ULONG *SwitchPortIds;     /* its discrete switch port ids         */
+    ULONG SwitchPortIdCount;
+    const ULONG *RootPortIds;       /* its integrated tunnel root port ids  */
+    ULONG RootPortIdCount;
 } XHCI_TBT_TOPO_IN, *PXHCI_TBT_TOPO_IN;
 
 /*
@@ -315,22 +307,18 @@ typedef struct _XHCI_TBT_TOPO {
     ULONG Parent;       /* the NHI's parent bridge, or XHCI_TBT_NO_BDF when
                            the NHI is on a root bus                         */
     ULONG ParentType;   /* its PCI Express port type, 0 for none            */
-    ULONG Upstream;     /* the bridge above the search bus, or NO_BDF       */
-    ULONG UpstreamType; /* its PCI Express port type, 0 for none            */
-    ULONG Switch;       /* 1: parent and siblings are one PCI Express
-                           switch's downstream ports                        */
     ULONG SearchBus;    /* the bus the siblings were read on                */
+    ULONG FamilyNhis;   /* on a root bus: NHIs of the family there, this
+                           one included, started or not                     */
     ULONG Siblings;     /* type 1 siblings seen, the parent excluded; those
                            past XHCI_TBT_MAX_SIBLINGS are counted, not kept */
     XHCI_TBT_BRIDGE Sibling[XHCI_TBT_MAX_SIBLINGS];
-    ULONG Candidates;   /* siblings that qualified                          */
+    ULONG Candidates;   /* siblings hot-plug capable, SHPC or listed        */
     ULONG Cand[XHCI_TBT_MAX_CANDIDATES];    /* their locations, in bus order */
-    ULONG Listed;       /* candidates the platform table names              */
-    ULONG Unread;       /* siblings whose capability walk failed            */
-    ULONG OtherNhi;     /* 1: another domain's NHI shares the search bus   */
-    ULONG Ambiguous;    /* 1: a table entry matched but, lacking a Port
-                           location, could not be used                      */
-    /* the set of verified tunnel ports */
+    ULONG Ambiguous;    /* listed root ports left out (FamilyNhis > 1)      */
+    ULONG Unread;       /* functions not read completely                    */
+    ULONG Dropped;      /* override entries dropped (no bridge, repeated)   */
+    /* the set */
     ULONG Tunnels;      /* how many                                         */
     ULONG Tunnel;       /* the first, or XHCI_TBT_NO_BDF                    */
     ULONG Set[XHCI_TBT_MAX_TUNNELS];        /* their locations              */
@@ -348,50 +336,57 @@ typedef struct _XHCI_TBT_TOPO {
 } XHCI_TBT_TOPO, *PXHCI_TBT_TOPO;
 
 /*
- * Discovers the tunnel ports of the domain whose NHI is at in->Nhi. No
- * controller generation's layout is assumed; each test reads capabilities:
+ * Discovers the tunnel-port set of the domain whose NHI is at in->Nhi,
+ * record 21 section 6.3's sources in its order. No layout is assumed;
+ * each test reads the hardware:
  *
- *   - the NHI's parent is the type 1 function whose secondary bus is the
- *     NHI's bus; none means the NHI is on a root bus (an integrated NHI, or
- *     the emulator's generic layout);
- *   - the candidates are the parent's type 1 siblings (the root bus's own
- *     bridges when there is no parent) with Hot-Plug Capable in an
- *     implemented slot, or an SHPC capability;
- *   - when the parent is a PCI Express Downstream Port and the bridge above
- *     the search bus a PCI Express Upstream Port, the parent and its
- *     siblings are one switch's downstream ports - the controller's own,
- *     since the NHI hangs off it (Linux drivers/thunderbolt/icm.c
- *     get_upstream_port walks to that upstream port) - and every candidate
- *     is verified, SRC_SWITCH: the P14s's one tunnel port, a two-port
- *     part's two (MANY past XHCI_TBT_MAX_TUNNELS);
- *   - anywhere else (a root bus, beside a root port, behind conventional
- *     bridges such as the emulator's i440FX stand-ins, or a parent whose
- *     type could not be read) only candidates a platform table entry
- *     matches are verified, SRC_TABLE: the entry's PortId, and its NhiId,
- *     Nhi and Port where given. An entry without a Port location is used
- *     only when in->SingleDomain is 1 and no other domain's NHI shares
- *     the search bus (a function with this NHI's id, a table NhiId or the
- *     USB4 host interface class; OtherNhi), since two domains could share
- *     such root ports (Ambiguous). With nothing verified the outcome is
- *     LEARN;
- *   - a function on the search bus that could not be read completely (its
- *     identity, header, class or capability list; or a candidate that
- *     reads differently when the set is taken) makes the outcome
- *     INCOMPLETE with an empty set, never a set that might lack a port;
- *   - in->Override wins over all of it, SRC_OVERRIDE, but only if a type 1
- *     function answers at every location it names; otherwise OVERRIDE_BAD
- *     and an empty set: the value is the user's statement and is not
- *     second-guessed by a fallback.
+ *   1. in->Override (XhciCmTunnelBridge): when given it is the whole set,
+ *      SRC_OVERRIDE. An entry that is not a type 1 function, or repeats
+ *      one, is dropped (Dropped); with every entry dropped the outcome is
+ *      OVERRIDE_BAD and the set empty. The discovery below still runs, so
+ *      the log can name what it saw.
+ *   2. The discrete switch: the NHI's parent is the type 1 function whose
+ *      secondary bus is the NHI's bus; a member is a type 1 sibling of the
+ *      parent (not the parent) whose id is in in->SwitchPortIds and which
+ *      is Hot-Plug Capable in an implemented slot, SRC_SWITCH. The id test
+ *      makes the set the controller's own switch and nothing else on the
+ *      bus (Linux drivers/thunderbolt/icm.c get_upstream_port knows the
+ *      switch by its ids too).
+ *   3. The integrated root ports: the NHI on a root bus (no parent); a
+ *      member is a type 1 function on that bus whose id is in
+ *      in->RootPortIds, SRC_ROOTPORT, hot-plug capable or not - but only
+ *      when the bus carries one NHI of the family (FamilyNhis, counting
+ *      every function whose id is in in->FamilyNhiIds, started, disabled
+ *      or failed alike, and this NHI). With two, every listed root port
+ *      is AMBIGUOUS and left out: which is whose is ACPI's to say (Linux
+ *      acpi.c tb_acpi_add_link), unread here.
+ *   4. The emulator: a type 1 sibling of the parent, or of the NHI on a
+ *      root bus, with an SHPC capability, SRC_SHPC.
  *
- * The discovery runs whatever the override says, so the log can name the
- * candidates. Returns topo->Outcome. topo->Set holds topo->Tunnels ports
- * for SET and OVERRIDE and none otherwise; an empty set means
- * re-enumeration is disabled until one is learned (record 21 section
- * 6.4). When the event-to-port mapping is unknown the caller rescans every
- * port of the set.
+ * Any other bridge, however hot-plug capable, is never a member; with no
+ * member the outcome is LEARN (hot-plug bridges were seen; XhciTbtLearn
+ * may add one), AMBIGUOUS, or NO_CANDIDATE, and re-enumeration stays
+ * disabled (record 21 section 6.4). A function on the search bus that
+ * could not be read completely makes it INCOMPLETE with an empty set,
+ * never a set that might lack a port. More than XHCI_TBT_MAX_TUNNELS
+ * members is MANY, empty. Exclusive ownership across domains is decided
+ * after this, from every domain's claims (XhciTbtExclusive).
+ *
+ * Returns topo->Outcome; topo->Set holds topo->Tunnels ports for SET and
+ * OVERRIDE and none otherwise.
  */
 ULONG XhciTbtTopoFind(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
                       PXHCI_TBT_TOPO topo);
+
+/*
+ * Exclusive ownership (record 21 section 6.3): for each of this domain's
+ * `count` members in set[], active[i] is 1 when no other domain claims it
+ * (others[0..otherCount-1], every other domain's claims by any source
+ * together) and 0 when one does: a port two domains claim is inactive for
+ * both until only one does. Returns the number left inactive.
+ */
+ULONG XhciTbtExclusive(const ULONG *set, ULONG count, const ULONG *others,
+                       ULONG otherCount, PULONG active);
 
 /*
  * Parses XhciCmTunnelBridge, a REG_SZ of one to XHCI_TBT_MAX_TUNNELS
@@ -404,14 +399,15 @@ ULONG XhciTbtParseBdfList(PCWSTR text, ULONG chars, PULONG list,
                           ULONG capacity);
 
 /*
- * Learning, for a LEARN domain or one whose every port was learned:
- * XhciTbtLearnArm reads every candidate before a tunnel up; XhciTbtLearn
- * reads them again after it (once the caller's poll has ended) and adds to
- * the set, SRC_LEARNED, the one candidate not yet in it that read DOWN
- * when armed and UP now. Nothing is learned when two or more did, when
- * another came up from an uncertain reading (MIXED, GONE or NONE), when
- * any candidate's reading failed at either end, when discovery was not
- * complete, or when there were more candidates than are kept: the
+ * Learning, a step beyond record 21 section 6.3's sources, for a LEARN
+ * domain (or one whose every member was learned): XhciTbtLearnArm reads
+ * every candidate before a tunnel up; XhciTbtLearn reads them again after
+ * it (once the caller's poll has ended) and adds to the set, SRC_LEARNED,
+ * the one candidate not yet in it that read DOWN when armed and UP now.
+ * Nothing is learned when two or more did, when another came up from an
+ * uncertain reading (MIXED, GONE or NONE), when any candidate's reading
+ * failed at either end, when discovery was not complete or left listed
+ * ports ambiguous, or when there were more candidates than are kept: the
  * uniqueness could not be judged. Returns the number learned, 0 or 1, and
  * disarms either way.
  */

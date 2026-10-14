@@ -175,8 +175,9 @@ rem                  roadmap-usb4.md 39-A.5, design record 21 sections 6.3
 rem                  and 6.5): the P14s Gen 1's configuration space as
 rem                  captured, the emulator's i440FX, q35 and switch layouts,
 rem                  an integrated host's root ports, the set and its
-rem                  provenance (switch, platform table, the XhciCmTunnelBridge
-rem                  list, learned), the Link Status, Slot Status and SHPC
+rem                  sources (switch ids, root port ids, SHPC, the
+rem                  XhciCmTunnelBridge list, learned), the Link Status, Slot
+rem                  Status and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
 rem
