@@ -395,68 +395,81 @@ int inst_ver_cmp(const INST_U32 a[4], const INST_U32 b[4])
 /* Models sections                                                           */
 /* ======================================================================== */
 
-/* A decoration "NT[arch][.major[.minor[...]]]". Returns 1 when it applies to
- * the system, with its rank (version, then arch-specific) in *rank. */
-static int inst_decoration(const char *d, const INST_ENV *env, INST_U32 *rank)
+/* A decoration's own number field: 1 to 3 digits, at most 255. */
+static const char *inst_deco_number(const char *s, INST_U32 *value)
 {
-    char arch[INST_NAME_CHARS];
-    const char *s;
-    size_t n = 0;
-    INST_U32 major = 0;
-    INST_U32 minor = 0;
-    int specific;
+    INST_U32 v = 0;
+    int n = 0;
 
+    while (*s >= '0' && *s <= '9') {
+        if (++n > 3) {
+            return NULL;
+        }
+        v = v * 10UL + (INST_U32)(*s - '0');
+        s++;
+    }
+    if (n == 0 || v > 255UL) {
+        return NULL;
+    }
+    *value = v;
+    return s;
+}
+
+int inst_decoration_parse(const char *d, int *arch, INST_U32 *major,
+                          INST_U32 *minor)
+{
+    const char *s;
+
+    *arch = 0;
+    *major = 0;
+    *minor = 0;
     if (!inst_starts(d, "NT")) {
         return 0;
     }
     s = d + 2;
-    while (*s != '\0' && *s != '.' && n + 1 < sizeof(arch)) {
-        arch[n++] = *s++;
-    }
-    arch[n] = '\0';
-    specific = (n != 0);
-    if (specific) {
-        if (inst_eq(arch, "x86")) {
-            if (env->Arch != INST_ARCH_X86) {
-                return 0;
-            }
-        } else if (inst_eq(arch, "amd64")) {
-            if (env->Arch != INST_ARCH_AMD64) {
-                return 0;
-            }
-        } else {
-            return 0;
-        }
+    if (inst_starts(s, "x86")) {
+        *arch = INST_DECO_X86;
+        s += 3;
+    } else if (inst_starts(s, "amd64")) {
+        *arch = INST_DECO_AMD64;
+        s += 5;
     }
     if (*s == '.') {
-        s++;
-        if (*s < '0' || *s > '9') {
+        s = inst_deco_number(s + 1, major);
+        if (s == NULL) {
             return 0;
         }
-        while (*s >= '0' && *s <= '9') {
-            major = major * 10UL + (INST_U32)(*s - '0');
-            if (major > 255UL) {
+        if (*s == '.') {
+            s = inst_deco_number(s + 1, minor);
+            if (s == NULL) {
                 return 0;
             }
-            s++;
         }
-        if (*s == '.') {
-            s++;
-            if (*s >= '0' && *s <= '9') {
-                while (*s >= '0' && *s <= '9') {
-                    minor = minor * 10UL + (INST_U32)(*s - '0');
-                    if (minor > 255UL) {
-                        return 0;
-                    }
-                    s++;
-                }
-            }
-        }
+    }
+    /* Nothing follows: no other architecture, no product-type or suite
+     * field (record 23 sections 4.2 item 5 and 5.2). */
+    return *s == '\0';
+}
+
+/* A decoration "NT[arch][.major[.minor]]". Returns 1 when it applies to
+ * the system, with its rank (version, then arch-specific) in *rank. */
+static int inst_decoration(const char *d, const INST_ENV *env, INST_U32 *rank)
+{
+    int arch;
+    INST_U32 major;
+    INST_U32 minor;
+
+    if (!inst_decoration_parse(d, &arch, &major, &minor)) {
+        return 0;
+    }
+    if ((arch == INST_DECO_X86 && env->Arch != INST_ARCH_X86) ||
+        (arch == INST_DECO_AMD64 && env->Arch != INST_ARCH_AMD64)) {
+        return 0;
     }
     if (major > env->Major || (major == env->Major && minor > env->Minor)) {
         return 0;
     }
-    *rank = (major << 17) | (minor << 1) | (INST_U32)(specific ? 1 : 0);
+    *rank = (major << 17) | (minor << 1) | (INST_U32)(arch != 0 ? 1 : 0);
     return 1;
 }
 
@@ -569,14 +582,20 @@ int inst_inf_arch_ok(const char *text, int arch)
         }
         lines++;
         for (i = 1; inst_inf_field(value, i, field, sizeof(field)); i++) {
-            if (inst_starts(field, "NTamd64")) {
+            int da;
+            INST_U32 dmaj;
+            INST_U32 dmin;
+            /* The whole token, by the parser the selection uses: a
+             * decoration it does not know is refused, not guessed. */
+            if (!inst_decoration_parse(field, &da, &dmaj, &dmin)) {
+                return 0;
+            }
+            if (da == INST_DECO_AMD64) {
                 amd64 = 1;
                 if (arch == INST_ARCH_X86) {
                     return 0;
                 }
-            } else if (arch == INST_ARCH_AMD64) {
-                return 0;
-            } else if (!inst_starts(field, "NTx86")) {
+            } else if (arch == INST_ARCH_AMD64 || da != INST_DECO_X86) {
                 return 0;
             }
         }
@@ -718,9 +737,10 @@ int inst_inf_source_path(const char *text, int index, char *out, size_t cap)
         }
         inst_disk_path(text, disk, dpath, sizeof(dpath));
         out[0] = '\0';
-        if (!inst_path_join(out, cap, dpath) || !inst_path_join(out, cap, sub) ||
-            !inst_path_join(out, cap, key)) {
-            return 0;
+        if (key[0] == '\0' || !inst_path_join(out, cap, dpath) ||
+            !inst_path_join(out, cap, sub) || !inst_path_join(out, cap, key)) {
+            out[0] = '\0';
+            return -1;
         }
         for (i = 0; out[i] != '\0'; i++) {
             if (out[i] == '/') {
@@ -728,7 +748,7 @@ int inst_inf_source_path(const char *text, int index, char *out, size_t cap)
             }
         }
         if (strchr(out, ':') != NULL) {
-            return 0;
+            return -1;
         }
         return 1;
     }

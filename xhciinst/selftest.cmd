@@ -13,9 +13,9 @@ rem
 rem THE IMPORT GATE FOR THE TOOL: each executable's import table must name
 rem KERNEL32.dll and ADVAPI32.dll and nothing else - every SetupAPI, newdev,
 rem configuration-manager and version routine is looked up at run time, which
-rem is what lets the one image start on Windows 98 SE. MSVC 6.0's link reads
-rem the 32-bit image; WDK 7.1's amd64 link the x64 one (MSVC 6.0's prints no
-rem import section for an amd64 image and exits 0, which would pass).
+rem is what lets the one image start on Windows 98 SE. check-imports.ps1
+rem reads the PE import directory of either image itself (a linker's dump,
+rem filtered by a pattern, once let names with other characters through).
 rem
 rem Exit code 0 = every case behaved. Run it after build.cmd.
 setlocal
@@ -31,10 +31,10 @@ if not exist XHCIINST.EXE (
     exit /b 1
 )
 
-call :imports XHCIINST.EXE "%MSVC6%\VC98\Bin\link.exe" "%MSVC6%\Common\MSDev98\Bin"
+call :imports XHCIINST.EXE
 if errorlevel 1 exit /b 1
 if exist XHCIIN64.EXE (
-    call :imports XHCIIN64.EXE "%WDK71%\bin\x86\amd64\link.exe" "%WDK71%\bin\x86"
+    call :imports XHCIIN64.EXE
     if errorlevel 1 exit /b 1
 )
 
@@ -56,31 +56,10 @@ echo OK: xhciinst self-tests passed
 exit /b 0
 
 :imports
-if not exist "%~2" (
-    echo ERROR: %~2 is missing; the import table of %~1 cannot be read
-    exit /b 1
-)
-set "OUT=%TEMP%\xhciinst-imports-%RANDOM%%RANDOM%.txt"
-setlocal
-set "PATH=%~3;%PATH%"
-"%~2" -dump -imports "%~1" > "%OUT%" 2>&1
-endlocal
-findstr /i /r /c:"^ *[A-Za-z0-9_]*\.dll$" "%OUT%" > "%OUT%.dll"
-findstr /i /v /x /c:"    KERNEL32.dll" /c:"    ADVAPI32.dll" "%OUT%.dll" >nul
-if not errorlevel 1 (
-    echo ERROR: %~1 imports a DLL other than KERNEL32 and ADVAPI32:
-    type "%OUT%.dll"
-    del /q "%OUT%" "%OUT%.dll" 2>nul
-    exit /b 1
-)
-findstr /i /x /c:"    KERNEL32.dll" "%OUT%.dll" >nul
-if errorlevel 1 (
-    echo ERROR: no import section read from %~1
-    del /q "%OUT%" "%OUT%.dll" 2>nul
-    exit /b 1
-)
-del /q "%OUT%" "%OUT%.dll" 2>nul
-echo %~1: imports KERNEL32 and ADVAPI32 alone
+rem check-imports.ps1 reads the image's import directory itself: every
+rem module name, whatever its characters, and no delay-load table.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0check-imports.ps1" -Path "%~1"
+if errorlevel 1 exit /b 1
 exit /b 0
 
 :one

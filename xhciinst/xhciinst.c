@@ -201,10 +201,18 @@ static const char *const groupService[INST_GROUPS] = {
 static int groupVerdict[INST_GROUPS];
 
 /* The devices a step changed, by instance id, for the results check. */
-#define INST_MAX_CHANGED 64
+/* The devices this run reached, by instance id, kept across the barriers'
+ * fresh scans: an entry is never reached twice in one run. State 1: an
+ * install call was made for it (changedReboot holds that call's restart
+ * answer); 0: it was left (shared id, another build stored). */
+#define INST_MAX_CHANGED INST_MAX_DEVS
 static char changedId[INST_MAX_CHANGED][INST_ID_CHARS];
 static int changedInf[INST_MAX_CHANGED];
+static int changedState[INST_MAX_CHANGED];
+static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
+static int was_changed(const char *id);
+static int reached(const char *id);
 
 static int testSigningConfirmed;
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
@@ -230,6 +238,7 @@ static char pkgDir[INST_PATH_CHARS];
 static char *infText[INST_INF_COUNT];
 static INST_IDLIST infIds[INST_INF_COUNT];
 static int infTrap[INST_INF_COUNT];
+static int trapUnknown[INST_INF_COUNT];  /* the store could not be inspected */
 static INST_U32 pkgVersion[4];
 static int haveCm;
 
@@ -548,7 +557,10 @@ static int file_version(const char *path, INST_U32 v[4])
     int ok = -1;
 
     if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
-        return 0;
+        /* Only "not found" proves the file absent; access denied or an I/O
+         * error leaves its version unknown (record 23 section 5.4). */
+        DWORD e = GetLastError();
+        return (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? 0 : -1;
     }
     if (ver == NULL) {
         ver = LoadLibraryA("version.dll");
@@ -647,40 +659,82 @@ static void dev_driver_values(DEVREC *d)
     }
 }
 
-static void cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
+#define INST_CR_NO_SUCH_VALUE       0x00000025UL
+
+/* A configuration-manager property; returns the CR code (0xFFFFFFFF when
+ * the routine is missing). buf is empty unless it was read. */
+static DWORD cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
 {
     ULONG type;
     ULONG n = cap - 2;
+    DWORD cr = 0xFFFFFFFFUL;
 
     memset(buf, 0, cap);
-    if (api.Property == NULL ||
-        api.Property(dn, prop, &type, buf, &n, 0) != INST_CR_SUCCESS) {
-        buf[0] = '\0';
+    if (api.Property != NULL) {
+        cr = api.Property(dn, prop, &type, buf, &n, 0);
+    }
+    if (cr != INST_CR_SUCCESS) {
+        memset(buf, 0, cap);
         n = 0;
     }
     if (bytes != NULL) {
         *bytes = n;
     }
+    return cr;
 }
 
-static void reg9x_value(const char *id, const char *name, char *buf, DWORD cap)
+/* A value of HKLM\Enum\<id> on 98 and ME: 1 read (buf replaced), 0 absent,
+ * -1 unreadable; buf is left as it was unless the value was read. */
+static int reg9x_value(const char *id, const char *name, char *buf, DWORD cap)
 {
     char path[INST_ID_CHARS + 16];
-    DWORD type;
+    char tmp[INST_MSZ_BYTES];
+    int r;
 
     inst_copy(path, "Enum\\", sizeof(path));
     if (strlen(path) + strlen(id) >= sizeof(path)) {
-        return;
+        return -1;
     }
     strcat(path, id);
-    if (!reg_text(HKEY_LOCAL_MACHINE, path, name, buf, cap - 2, &type)) {
-        buf[0] = '\0';
+    if (cap - 2 > sizeof(tmp)) {
+        return -1;
     }
+    r = reg_text3(HKEY_LOCAL_MACHINE, path, name, tmp, cap - 2);
+    if (r > 0) {
+        memset(buf, 0, cap);
+        inst_copy(buf, tmp, cap - 2);
+    }
+    return r;
 }
+
+/* A property of a 98/ME devnode: the registry's comma list is the whole
+ * list (what the configuration manager answers was read on 98 SE to stop
+ * at the first id), the configuration manager's answer the fallback. 0 when
+ * neither source gives a usable answer and neither proves it absent. */
+static int prop9x(DWORD dn, const char *id, ULONG prop, const char *name,
+                  char *buf, DWORD cap)
+{
+    DWORD cr = cm_prop(dn, prop, buf, cap, NULL);
+    int r = reg9x_value(id, name, buf, cap);
+
+    if (r > 0 || cr == INST_CR_SUCCESS) {
+        return 1;
+    }
+    /* Neither read it: absent only when one of them says so. */
+    return r == 0 || cr == INST_CR_NO_SUCH_VALUE;
+}
+
+static int walkErrors;
+
+/* 98 and ME: the device tree. A devnode whose id, status or properties
+ * cannot be read, or a child or sibling link that answers anything but
+ * "none", counts as an error, and the run refuses on an incomplete picture
+ * (record 23 section 6.3). */
 static void walk_cm(DWORD dn, int depth)
 {
     DWORD child;
     DWORD sib;
+    DWORD cr;
     DEVREC *d;
     ULONG status;
     ULONG problem;
@@ -692,33 +746,29 @@ static void walk_cm(DWORD dn, int depth)
         }
         d = &devs[devCount];
         memset(d, 0, sizeof(*d));
-        if (api.DeviceId(dn, d->Id, sizeof(d->Id), 0) == INST_CR_SUCCESS) {
-            cm_prop(dn, INST_CM_DRP_HARDWAREID, d->Hw, sizeof(d->Hw), &d->HwBytes);
-            cm_prop(dn, INST_CM_DRP_COMPATIBLEIDS, d->Compat, sizeof(d->Compat),
-                    &d->CompatBytes);
-            if (!envNow.Nt) {
-                /* 98 and ME keep the lists as one comma-separated string in
-                 * HKLM\Enum\<device id>; read them there when the
-                 * configuration manager does not answer. */
-                /* The registry's comma list is the whole list; what the
-                 * configuration manager answers was read on 98 SE to stop at
-                 * the first id. */
-                reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw));
-                reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat));
-                if (d->Driver[0] == '\0') {
-                    reg9x_value(d->Id, "Driver", d->Driver, sizeof(d->Driver));
-                }
-                if (d->Desc[0] == '\0') {
-                    reg9x_value(d->Id, "DeviceDesc", d->Desc, sizeof(d->Desc));
-                }
-                d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
-                d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
+        if (api.DeviceId(dn, d->Id, sizeof(d->Id), 0) != INST_CR_SUCCESS) {
+            logonly("devnode 0x%08lX: its id cannot be read\n", (unsigned long)dn);
+            walkErrors++;
+        } else {
+            if (!prop9x(dn, d->Id, INST_CM_DRP_HARDWAREID, "HardwareID", d->Hw,
+                        sizeof(d->Hw)) ||
+                !prop9x(dn, d->Id, INST_CM_DRP_COMPATIBLEIDS, "CompatibleIDs",
+                        d->Compat, sizeof(d->Compat)) ||
+                !prop9x(dn, d->Id, INST_CM_DRP_DRIVER, "Driver", d->Driver,
+                        sizeof(d->Driver))) {
+                out("  unreadable: a property of %s\n", d->Id);
+                walkErrors++;
             }
-            cm_prop(dn, INST_CM_DRP_DRIVER, d->Driver, sizeof(d->Driver), NULL);
-            cm_prop(dn, INST_CM_DRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
+            prop9x(dn, d->Id, INST_CM_DRP_DEVICEDESC, "DeviceDesc", d->Desc,
+                   sizeof(d->Desc));
+            d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
+            d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
             if (api.Status(&status, &problem, dn, 0) == INST_CR_SUCCESS) {
                 d->Status = status;
                 d->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
+            } else {
+                out("  unreadable: the state of %s\n", d->Id);
+                walkErrors++;
             }
             d->Present = 1;
             d->Inf = -1;
@@ -726,10 +776,26 @@ static void walk_cm(DWORD dn, int depth)
             logonly("devnode %s | %s | %s | %s | %s\n", d->Id, d->Hw, d->Compat, d->Service, d->Driver);
             devCount++;
         }
-        if (depth < 32 && api.Child(&child, dn, 0) == INST_CR_SUCCESS) {
-            walk_cm(child, depth + 1);
+        cr = api.Child(&child, dn, 0);
+        if (cr == INST_CR_SUCCESS) {
+            if (depth >= 32) {
+                out("  the device tree is deeper than this tool reads.\n");
+                walkErrors++;
+            } else {
+                walk_cm(child, depth + 1);
+            }
+        } else if (cr != INST_CR_NO_SUCH_DEVINST) {
+            out("  the device tree could not be walked (0x%08lX).\n",
+                (unsigned long)cr);
+            walkErrors++;
         }
-        if (api.Sibling(&sib, dn, 0) != INST_CR_SUCCESS) {
+        cr = api.Sibling(&sib, dn, 0);
+        if (cr != INST_CR_SUCCESS) {
+            if (cr != INST_CR_NO_SUCH_DEVINST) {
+                out("  the device tree could not be walked (0x%08lX).\n",
+                    (unsigned long)cr);
+                walkErrors++;
+            }
             return;
         }
         dn = sib;
@@ -905,30 +971,48 @@ static void registry_controllers_9x(void)
     DWORD i;
     DWORD j;
     DWORD n;
+    LONG r;
     int k;
     DEVREC *d;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\PCI", 0, KEY_READ, &pci) !=
-        ERROR_SUCCESS) {
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\PCI", 0, KEY_READ, &pci);
+    if (r != ERROR_SUCCESS) {
+        if (r != ERROR_FILE_NOT_FOUND) {
+            out("  unreadable: HKLM\\Enum\\PCI (%ld)\n", (long)r);
+            walkErrors++;
+        }
         return;
     }
     for (i = 0;; i++) {
         n = sizeof(devName);
-        if (RegEnumKeyExA(pci, i, devName, &n, NULL, NULL, NULL, NULL) !=
-            ERROR_SUCCESS) {
+        r = RegEnumKeyExA(pci, i, devName, &n, NULL, NULL, NULL, NULL);
+        if (r != ERROR_SUCCESS) {
+            if (r != ERROR_NO_MORE_ITEMS) {
+                out("  unreadable: HKLM\\Enum\\PCI entry %lu (%ld)\n",
+                    (unsigned long)i, (long)r);
+                walkErrors++;
+            }
             break;
         }
         if (RegOpenKeyExA(pci, devName, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            out("  unreadable: HKLM\\Enum\\PCI\\%s\n", devName);
+            walkErrors++;
             continue;
         }
         for (j = 0;; j++) {
             int known = 0;
             n = sizeof(instName);
-            if (RegEnumKeyExA(dev, j, instName, &n, NULL, NULL, NULL, NULL) !=
-                ERROR_SUCCESS) {
+            r = RegEnumKeyExA(dev, j, instName, &n, NULL, NULL, NULL, NULL);
+            if (r != ERROR_SUCCESS) {
+                if (r != ERROR_NO_MORE_ITEMS) {
+                    out("  unreadable: HKLM\\Enum\\PCI\\%s entry %lu (%ld)\n",
+                        devName, (unsigned long)j, (long)r);
+                    walkErrors++;
+                }
                 break;
             }
             if (devCount >= INST_MAX_DEVS) {
+                devTruncated = 1;
                 break;
             }
             d = &devs[devCount];
@@ -943,9 +1027,13 @@ static void registry_controllers_9x(void)
             if (known) {
                 continue;
             }
-            reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw));
-            reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat));
-            reg9x_value(d->Id, "Driver", d->Driver, sizeof(d->Driver));
+            if (reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw)) < 0 ||
+                reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat)) < 0 ||
+                reg9x_value(d->Id, "Driver", d->Driver, sizeof(d->Driver)) < 0) {
+                out("  unreadable: a value of HKLM\\Enum\\%s\n", d->Id);
+                walkErrors++;
+                continue;
+            }
             reg9x_value(d->Id, "DeviceDesc", d->Desc, sizeof(d->Desc));
             d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
             d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
@@ -960,6 +1048,9 @@ static void registry_controllers_9x(void)
             devCount++;
         }
         RegCloseKey(dev);
+        if (devTruncated) {
+            break;
+        }
     }
     RegCloseKey(pci);
 }
@@ -969,6 +1060,7 @@ static int scan_9x(void)
 
     devCount = 0;
     devTruncated = 0;
+    walkErrors = 0;
     if (api.Locate == NULL || api.Child == NULL || api.Sibling == NULL ||
         api.DeviceId == NULL || api.Status == NULL) {
         out("The configuration manager's routines are missing; the devices "
@@ -983,7 +1075,17 @@ static int scan_9x(void)
     if (!devTruncated) {
         registry_controllers_9x();
     }
-    return !devTruncated;
+    if (devTruncated) {
+        out("More than %d devices: the list is cut short, and nothing is "
+            "changed.\n", INST_MAX_DEVS);
+        return 0;
+    }
+    if (walkErrors) {
+        out("%d device entries could not be read whole: nothing is changed "
+            "(record 23 section 6.3).\n", walkErrors);
+        return 0;
+    }
+    return 1;
 }
 
 static int scan(void)
@@ -1184,6 +1286,9 @@ static void plan(void)
             (d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_UPDATE)) {
             d->Runs = 1;
         }
+        /* A device this run already reached is not reached again after a
+         * barrier's fresh scan; newly exposed devices stay eligible. */
+        d->Done = reached(d->Id) >= 0;
     }
     group_verdicts();
 }
@@ -1191,6 +1296,7 @@ static void plan(void)
 static void print_plan(void)
 {
     int i;
+    int g;
     int any = 0;
 
     out("The devices this package's INFs match:\n");
@@ -1223,6 +1329,30 @@ static void print_plan(void)
     if (!any) {
         out("  none present. The INFs are still staged for devices that "
             "appear later.\n");
+    }
+    /* Section 5.4: a group's verdict, and the members not present that it
+     * covers - they run the same binary, so a refusal or a /force going
+     * back reaches them too. */
+    for (g = 0; g < INST_GROUPS; g++) {
+        if (groupVerdict[g] == INST_GROUP_OK && !opts.Force) {
+            continue;
+        }
+        if (groupVerdict[g] != INST_GROUP_OK) {
+            out("  %s.sys: LEFT - %s.\n", groupService[g],
+                groupVerdict[g] == INST_GROUP_REFUSED_UNKNOWN ?
+                "a version of this driver (a device's, or the installed file's) "
+                "could not be read" :
+                "a newer release of this driver is installed (/force goes back)");
+        }
+        for (i = 0; i < devCount; i++) {
+            const DEVREC *d = &devs[i];
+            if (d->Present || group_of(d) != g) {
+                continue;
+            }
+            out("    %s %s (not present)%s\n", d->Id,
+                d->VersionText[0] ? d->VersionText : "(no version)",
+                groupVerdict[g] == INST_GROUP_OK ? " - /force reaches it" : "");
+        }
     }
     out("\n");
 }
@@ -1259,7 +1389,7 @@ static int refuse(const char *a, const char *b)
 
 /* The i-th source file of INF k: its path under base (the package's or the
  * local copy's flavour directory) in path, its name in name. 1 found, 0 no
- * more, -1 a path that leaves base. */
+ * more, -1 an entry that cannot be used or a path that leaves base. */
 static int inf_source(int k, int i, const char *base, char *path, size_t cap,
                       char *name, size_t nameCap)
 {
@@ -1269,9 +1399,15 @@ static int inf_source(int k, int i, const char *base, char *path, size_t cap,
     char baseFull[INST_PATH_CHARS];
     char *slash;
     char *part;
+    int r = inst_inf_source_path(infText[k], i, rel, sizeof(rel));
 
-    if (!inst_inf_source_path(infText[k], i, rel, sizeof(rel))) {
+    if (r == 0) {
         return 0;
+    }
+    if (r < 0) {
+        /* A malformed or too long entry is an error, not the list's end. */
+        inst_copy(name, "(an unusable [SourceDisksFiles] entry)", nameCap);
+        return -1;
     }
     slash = strrchr(rel, '\\');
     inst_copy(name, slash != NULL ? slash + 1 : rel, nameCap);
@@ -1723,7 +1859,8 @@ static void local_remove(const char *dir)
             if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
                 p[strlen(p) - 1] = '\0';
             }
-            if (p[0] == '\0' || strchr(p, ':') != NULL || strstr(p, "..") != NULL ||
+            if (p[0] == '\0' || strcmp(p, "END") == 0 ||
+                strchr(p, ':') != NULL || strstr(p, "..") != NULL ||
                 (strchr(p, '\\') != NULL && !inst_starts(p, "nt\\")) ||
                 strchr(p + (inst_starts(p, "nt\\") ? 3 : 0), '\\') != NULL) {
                 continue;
@@ -1886,6 +2023,7 @@ static int check_one(const char *rel, void *ctx)
 
 typedef struct _COPY_CTX {
     FILE *List;
+    const char *Dir;
     int Count;
 } COPY_CTX;
 
@@ -1896,14 +2034,18 @@ static int copy_one(const char *rel, void *ctx)
     char to[INST_PATH_CHARS];
 
     join(from, sizeof(from), pkgDir, rel);
-    join(to, sizeof(to), srcDir, rel);
+    join(to, sizeof(to), c->Dir, rel);
     if (inst_starts(rel, "nt\\")) {
         char sub[INST_PATH_CHARS];
-        join(sub, sizeof(sub), srcDir, "nt");
+        join(sub, sizeof(sub), c->Dir, "nt");
         CreateDirectoryA(sub, NULL);
     }
-    fprintf(c->List, "%s\n", rel);
-    if (!CopyFileA(from, to, TRUE)) {
+    /* Listed before it is copied, so a cleanup finds every file. */
+    if (fprintf(c->List, "%s\n", rel) < 0 || fflush(c->List) != 0) {
+        out("The copy's list could not be written.\n");
+        return 0;
+    }
+    if (!CopyFileA(from, to, FALSE)) {
         out("%s could not be copied (error %lu).\n", rel,
             (unsigned long)GetLastError());
         return 0;
@@ -1913,11 +2055,42 @@ static int copy_one(const char *rel, void *ctx)
     return 1;
 }
 
+/* 1 when a copy's list ends with the END line make_local_copy writes last:
+ * the copy was completed and published. */
+static int local_committed(const char *dir)
+{
+    char lst[INST_PATH_CHARS];
+    char *text;
+    size_t n;
+    int r;
+
+    join(lst, sizeof(lst), dir, "XHCIINST.LST");
+    text = read_file(lst, NULL);
+    if (text == NULL) {
+        return 0;
+    }
+    n = strlen(text);
+    while (n > 0 && (text[n - 1] == '\n' || text[n - 1] == '\r')) {
+        n--;
+    }
+    text[n] = '\0';
+    r = (n == 3 && strcmp(text, "END") == 0) ||
+        (n > 3 && strcmp(text + n - 4, "\nEND") == 0);
+    free(text);
+    return r;
+}
+
+/* Record 23 section 4.4: the copy is built in <name>.NEW and published
+ * under <name> only once every file and the list are written, so a failed
+ * copy never passes for a finished, immutable one; an unfinished one (from
+ * an interrupted run, or an earlier build of this tool) is removed and
+ * built again. */
 static int make_local_copy(void)
 {
     char rootDir[INST_PATH_CHARS];
     char name[INST_PATH_CHARS];
     char lst[INST_PATH_CHARS];
+    char work[INST_PATH_CHARS];
     COPY_CTX c;
     INST_U32 tag;
     int ok;
@@ -1929,8 +2102,7 @@ static int make_local_copy(void)
     CreateDirectoryA(rootDir, NULL);
     local_copy_name(tag, name, sizeof(name));
     join(srcDir, sizeof(srcDir), rootDir, name);
-    join(lst, sizeof(lst), srcDir, "XHCIINST.LST");
-    if (GetFileAttributesA(lst) != 0xFFFFFFFFUL) {
+    if (local_committed(srcDir)) {
         /* The same content is already there: never rewritten, only checked. */
         if (!package_files(check_one, NULL)) {
             return 0;
@@ -1938,16 +2110,47 @@ static int make_local_copy(void)
         out("The local copy %s is this package already.\n", srcDir);
         return 1;
     }
-    CreateDirectoryA(srcDir, NULL);
+    if (GetFileAttributesA(srcDir) != 0xFFFFFFFFUL) {
+        out("An unfinished local copy is removed first.\n");
+        local_remove(srcDir);
+        if (GetFileAttributesA(srcDir) != 0xFFFFFFFFUL) {
+            out("%s could not be removed.\n", srcDir);
+            return 0;
+        }
+    }
+    inst_copy(work, srcDir, sizeof(work));
+    if (strlen(work) + 4 >= sizeof(work)) {
+        return 0;
+    }
+    strcat(work, ".NEW");
+    if (GetFileAttributesA(work) != 0xFFFFFFFFUL) {
+        local_remove(work);
+    }
+    CreateDirectoryA(work, NULL);
+    join(lst, sizeof(lst), work, "XHCIINST.LST");
     c.List = fopen(lst, "w");
+    c.Dir = work;
     c.Count = 0;
     if (c.List == NULL) {
         out("%s could not be written.\n", lst);
         return 0;
     }
     ok = package_files(copy_one, &c);
-    fclose(c.List);
+    if (ok && (fprintf(c.List, "END\n") < 0 || fflush(c.List) != 0)) {
+        ok = 0;
+    }
+    if (fclose(c.List) != 0) {
+        ok = 0;
+    }
     if (!ok) {
+        out("The local copy was not completed; it is removed.\n");
+        local_remove(work);
+        return 0;
+    }
+    if (!MoveFileA(work, srcDir)) {
+        out("The local copy could not be put in place (error %lu).\n",
+            (unsigned long)GetLastError());
+        local_remove(work);
         return 0;
     }
     out("Copied %d files to %s; the install takes them from there.\n", c.Count,
@@ -1990,6 +2193,12 @@ static int restage_read(void)
     char *p;
     char *nl;
     int k;
+    int i;
+    int infLines = 0;
+    int ended = 0;
+    int endInf = -1;
+    int endDev = -1;
+    int bad = 0;
 
     memset(restagePending, 0, sizeof(restagePending));
     memset(restageOem, 0, sizeof(restageOem));
@@ -1997,15 +2206,24 @@ static int restage_read(void)
     restagePkg[0] = '\0';
     restageDevCount = 0;
     restage_path(path, sizeof(path));
-    if (path[0] == '\0' || GetFileAttributesA(path) == 0xFFFFFFFFUL) {
-        return 1;
+    if (path[0] == '\0') {
+        out("The Windows directory cannot be read.\n");
+        return 0;
+    }
+    if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
+        DWORD e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) {
+            return 1;
+        }
+        out("%s cannot be read (error %lu).\n", path, (unsigned long)e);
+        return 0;
     }
     text = read_file(path, NULL);
     if (text == NULL) {
         out("%s cannot be read.\n", path);
         return 0;
     }
-    for (p = text; *p != '\0'; p = nl) {
+    for (p = text; *p != '\0' && !bad; p = nl) {
         nl = strchr(p, '\n');
         if (nl == NULL) {
             nl = p + strlen(p);
@@ -2018,31 +2236,53 @@ static int restage_read(void)
         if (p[0] == '\0') {
             continue;
         }
-        if (strncmp(p, "PKG ", 4) == 0) {
+        if (ended) {
+            bad = 1;    /* nothing follows END */
+        } else if (strncmp(p, "PKG ", 4) == 0 && restagePkg[0] == '\0') {
             inst_copy(restagePkg, p + 4, sizeof(restagePkg));
-        } else if (strncmp(p, "INF ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
-                   p[5] == ' ') {
+        } else if (strncmp(p, "INF ", 4) == 0 && p[4] >= '0' &&
+                   p[4] < '0' + INST_INF_COUNT && p[5] == ' ' &&
+                   p[6] != '\0' && !restagePending[p[4] - '0']) {
             k = p[4] - '0';
             restagePending[k] = 1;
             inst_copy(restageOem[k], p + 6, sizeof(restageOem[k]));
-        } else if (strncmp(p, "NEW ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
-                   p[5] == ' ') {
+            infLines++;
+        } else if (strncmp(p, "NEW ", 4) == 0 && p[4] >= '0' &&
+                   p[4] < '0' + INST_INF_COUNT && p[5] == ' ' &&
+                   p[6] != '\0' && restagePending[p[4] - '0'] &&
+                   restageNew[p[4] - '0'][0] == '\0') {
             inst_copy(restageNew[p[4] - '0'], p + 6, sizeof(restageNew[0]));
-        } else if (strncmp(p, "DEV ", 4) == 0 && p[4] >= '0' && p[4] < '0' + INST_INF_COUNT &&
-                   p[5] == ' ' && restageDevCount < INST_MAX_RDEV) {
+        } else if (strncmp(p, "DEV ", 4) == 0 && p[4] >= '0' &&
+                   p[4] < '0' + INST_INF_COUNT && p[5] == ' ' &&
+                   p[6] != '\0' && restagePending[p[4] - '0'] &&
+                   restageDevCount < INST_MAX_RDEV) {
             restageDevInf[restageDevCount] = p[4] - '0';
             inst_copy(restageDevId[restageDevCount], p + 6, INST_ID_CHARS);
             restageDevCount++;
+        } else if (strncmp(p, "END ", 4) == 0 &&
+                   sscanf(p + 4, "%d %d", &endInf, &endDev) == 2) {
+            ended = 1;
         } else {
-            out("%s is not in the form this tool writes.\n", path);
-            free(text);
-            return 0;
+            bad = 1;
         }
     }
     free(text);
-    if (restagePkg[0] == '\0') {
-        out("%s names no package.\n", path);
+    /* Complete only with its END line, whose counts match what was read:
+     * a cut-short file never passes for a smaller piece of work. */
+    if (bad || !ended || endInf != infLines || endDev != restageDevCount ||
+        restagePkg[0] == '\0') {
+        out("%s is not complete, or not in the form this tool writes: "
+            "nothing is changed.\n", path);
+        restagePkg[0] = '\0';
+        restageDevCount = 0;
+        memset(restagePending, 0, sizeof(restagePending));
         return 0;
+    }
+    for (i = 0; i < restageDevCount; i++) {
+        if (!restagePending[restageDevInf[i]]) {
+            out("%s names a device of no recorded INF.\n", path);
+            return 0;
+        }
     }
     for (k = 0; k < INST_INF_COUNT; k++) {
         if (restagePending[k]) {
@@ -2054,22 +2294,54 @@ static int restage_read(void)
     return 1;
 }
 
+static int restage_put(char *buf, size_t cap, const char *a, int k,
+                       const char *b)
+{
+    char line[INST_PATH_CHARS + 32];
+
+    if (k >= 0) {
+        _snprintf(line, sizeof(line) - 1, "%s %d %s\r\n", a, k, b);
+    } else {
+        _snprintf(line, sizeof(line) - 1, "%s %s\r\n", a, b);
+    }
+    line[sizeof(line) - 1] = '\0';
+    if (strlen(buf) + strlen(line) >= cap) {
+        return 0;
+    }
+    strcat(buf, line);
+    return 1;
+}
+
+/* The journal is published whole or not at all: written to RESTAGE.TMP,
+ * flushed to the disk, then moved over RESTAGE.LST in one step, so an
+ * interrupted write leaves the previous complete journal; its END line
+ * carries the counts the reader checks (record 23 section 5.7). */
 static int restage_write(void)
 {
+    static char buf[(INST_MAX_RDEV + 3 * INST_INF_COUNT + 4) *
+                    (INST_ID_CHARS + 32)];
     char rootDir[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
-    FILE *f;
+    char tmp[INST_PATH_CHARS];
+    char end[32];
+    HANDLE h;
+    DWORD put;
     int k;
     int i;
     int any = 0;
+    int infs = 0;
+    int devsN = 0;
+    int ok = 1;
 
     restage_path(path, sizeof(path));
+    if (path[0] == '\0') {
+        return 0;
+    }
     for (k = 0; k < INST_INF_COUNT; k++) {
         any |= restagePending[k];
     }
     if (!any) {
-        if (path[0] && GetFileAttributesA(path) != 0xFFFFFFFFUL &&
-            !DeleteFileA(path)) {
+        if (GetFileAttributesA(path) != 0xFFFFFFFFUL && !DeleteFileA(path)) {
             return 0;
         }
         return 1;
@@ -2078,29 +2350,49 @@ static int restage_write(void)
         return 0;
     }
     CreateDirectoryA(rootDir, NULL);
-    f = fopen(path, "w");
-    if (f == NULL) {
-        return 0;
-    }
-    fprintf(f, "PKG %s\n", restagePkg);
+    buf[0] = '\0';
+    ok &= restage_put(buf, sizeof(buf), "PKG", -1, restagePkg);
     for (k = 0; k < INST_INF_COUNT; k++) {
         if (restagePending[k]) {
-            fprintf(f, "INF %d %s\n", k, restageOem[k]);
+            ok &= restage_put(buf, sizeof(buf), "INF", k, restageOem[k]);
+            infs++;
             if (restageNew[k][0] != '\0') {
-                fprintf(f, "NEW %d %s\n", k, restageNew[k]);
+                ok &= restage_put(buf, sizeof(buf), "NEW", k, restageNew[k]);
             }
         }
     }
     for (i = 0; i < restageDevCount; i++) {
         if (restageDevId[i][0] != '\0') {
-            fprintf(f, "DEV %d %s\n", restageDevInf[i], restageDevId[i]);
+            ok &= restage_put(buf, sizeof(buf), "DEV", restageDevInf[i],
+                              restageDevId[i]);
+            devsN++;
         }
     }
-    if (fflush(f) != 0) {
-        fclose(f);
+    _snprintf(end, sizeof(end) - 1, "%d %d", infs, devsN);
+    end[sizeof(end) - 1] = '\0';
+    ok &= restage_put(buf, sizeof(buf), "END", -1, end);
+    if (!ok) {
         return 0;
     }
-    return fclose(f) == 0;
+    join(tmp, sizeof(tmp), rootDir, "RESTAGE.TMP");
+    h = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    if (!WriteFile(h, buf, (DWORD)strlen(buf), &put, NULL) ||
+        put != (DWORD)strlen(buf) || !FlushFileBuffers(h)) {
+        CloseHandle(h);
+        DeleteFileA(tmp);
+        return 0;
+    }
+    CloseHandle(h);
+    if (!MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING |
+                                MOVEFILE_WRITE_THROUGH)) {
+        DeleteFileA(tmp);
+        return 0;
+    }
+    return 1;
 }
 
 static int restage_listed(const char *id)
@@ -2230,61 +2522,98 @@ static void trap_scan(void)
     char b[INST_PATH_CHARS];
     WIN32_FIND_DATAA fd;
     HANDLE h;
+    DWORD e;
     char *text;
     char *slash;
     int k;
     int i;
+    int all = 0;
 
     memset(trapOem, 0, sizeof(trapOem));
-    if (!envNow.Nt || envNow.Major < 6 || api.StoreLocation == NULL ||
-        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+    memset(trapUnknown, 0, sizeof(trapUnknown));
+    if (!envNow.Nt || envNow.Major < 6) {
         return;
     }
-    join(pattern, sizeof(pattern), win, "inf\\oem*.inf");
-    h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        return;
+    /* "No trap" is a verified answer only: a store that cannot be inspected
+     * blocks the INFs it may hold another build of (record 23 section 5.7). */
+    if (api.StoreLocation == NULL || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        out("The driver store cannot be inspected (%s).\n",
+            api.StoreLocation == NULL ? "SetupGetInfDriverStoreLocationA is "
+                                        "missing" : "no Windows directory");
+        all = 1;
+    } else {
+        join(pattern, sizeof(pattern), win, "inf\\oem*.inf");
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            e = GetLastError();
+            if (e != ERROR_FILE_NOT_FOUND) {
+                out("%%windir%%\\inf cannot be listed (error %lu).\n",
+                    (unsigned long)e);
+                all = 1;
+            }
+        } else {
+            do {
+                join(path, sizeof(path), win, "inf");
+                join(path, sizeof(path), path, fd.cFileName);
+                text = read_file(path, NULL);
+                if (text == NULL) {
+                    out("%s cannot be read.\n", path);
+                    all = 1;
+                    continue;
+                }
+                for (k = 0; k < INST_INF_COUNT; k++) {
+                    int differs = 0;
+                    int r;
+                    if (infText[k] == NULL || strcmp(text, infText[k]) != 0) {
+                        continue;
+                    }
+                    if (!api.StoreLocation(fd.cFileName, NULL, NULL, store,
+                                           sizeof(store), NULL)) {
+                        out("The stored package of %s cannot be located "
+                            "(0x%08lX).\n", fd.cFileName,
+                            (unsigned long)GetLastError());
+                        trapUnknown[k] = 1;
+                        continue;
+                    }
+                    slash = strrchr(store, '\\');
+                    if (slash != NULL) {
+                        *slash = '\0';
+                    }
+                    for (i = 0; (r = inf_source(k, i, pkgDir, a, sizeof(a), name,
+                                                sizeof(name))) > 0; i++) {
+                        char rel[INST_PATH_CHARS];
+                        inst_inf_source_path(infText[k], i, rel, sizeof(rel));
+                        join(b, sizeof(b), store, rel);
+                        if (!same_file(a, b)) {
+                            logonly("%s differs from %s\n", a, b);
+                            differs = 1;
+                        }
+                    }
+                    if (r < 0) {
+                        trapUnknown[k] = 1;
+                    } else if (differs) {
+                        inst_copy(trapOem[k], fd.cFileName, sizeof(trapOem[k]));
+                    }
+                }
+                free(text);
+            } while (FindNextFileA(h, &fd));
+            e = GetLastError();
+            FindClose(h);
+            if (e != ERROR_NO_MORE_FILES) {
+                out("%%windir%%\\inf could not be listed to its end.\n");
+                all = 1;
+            }
+        }
     }
-    do {
-        join(path, sizeof(path), win, "inf");
-        join(path, sizeof(path), path, fd.cFileName);
-        text = read_file(path, NULL);
-        if (text == NULL) {
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (all && infText[k] != NULL) {
+            trapUnknown[k] = 1;
+        }
+        if (trapUnknown[k]) {
+            out("Whether the driver store holds another build of %s cannot be "
+                "verified: its\ndevices are left.\n\n", instInfFile[k]);
             continue;
         }
-        for (k = 0; k < INST_INF_COUNT; k++) {
-            int differs = 0;
-            if (infText[k] == NULL || strcmp(text, infText[k]) != 0) {
-                continue;
-            }
-            if (!api.StoreLocation(fd.cFileName, NULL, NULL, store,
-                                   sizeof(store), NULL)) {
-                logonly("SetupGetInfDriverStoreLocation(%s): 0x%08lX\n",
-                        fd.cFileName, (unsigned long)GetLastError());
-                continue;
-            }
-            slash = strrchr(store, '\\');
-            if (slash != NULL) {
-                *slash = '\0';
-            }
-            for (i = 0; inf_source(k, i, pkgDir, a, sizeof(a), name,
-                                   sizeof(name)) > 0; i++) {
-                char rel[INST_PATH_CHARS];
-                inst_inf_source_path(infText[k], i, rel, sizeof(rel));
-                join(b, sizeof(b), store, rel);
-                if (!same_file(a, b)) {
-                    logonly("%s differs from %s\n", a, b);
-                    differs = 1;
-                }
-            }
-            if (differs) {
-                inst_copy(trapOem[k], fd.cFileName, sizeof(trapOem[k]));
-            }
-        }
-        free(text);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    for (k = 0; k < INST_INF_COUNT; k++) {
         if (trapOem[k][0] == '\0') {
             continue;
         }
@@ -2311,6 +2640,7 @@ static int store_matches(int k, const char *oemName)
     char b[INST_PATH_CHARS];
     char *slash;
     int i;
+    int r;
 
     if (api.StoreLocation == NULL ||
         !api.StoreLocation(oemName, NULL, NULL, store, sizeof(store), NULL)) {
@@ -2320,8 +2650,8 @@ static int store_matches(int k, const char *oemName)
     if (slash != NULL) {
         *slash = '\0';
     }
-    for (i = 0; inf_source(k, i, pkgDir, a, sizeof(a), name, sizeof(name)) > 0;
-         i++) {
+    for (i = 0; (r = inf_source(k, i, pkgDir, a, sizeof(a), name,
+                                sizeof(name))) > 0; i++) {
         char rel[INST_PATH_CHARS];
         inst_inf_source_path(infText[k], i, rel, sizeof(rel));
         join(b, sizeof(b), store, rel);
@@ -2329,7 +2659,7 @@ static int store_matches(int k, const char *oemName)
             return 0;
         }
     }
-    return 1;
+    return r < 0 ? -1 : 1;
 }
 
 static int stage_nt(void)
@@ -2351,6 +2681,11 @@ static int stage_nt(void)
         if (groupVerdict[group_of_inf(k)] != INST_GROUP_OK) {
             out("%s is not staged: its driver's installed version is newer or "
                 "unknown.\n", instInfFile[k]);
+            continue;
+        }
+        if (trapUnknown[k]) {
+            infTrap[k] = 1;
+            flagSteps = 1;
             continue;
         }
         if (trapOem[k][0] != '\0') {
@@ -2435,13 +2770,29 @@ static int hwid_clear(const char *hwid, int inf)
     return 1;
 }
 
-static void note_changed(const DEVREC *d)
+/* The entry of a device in the reached list, added when new; -1 when the
+ * list is full (it holds as many entries as the scan admits devices). */
+static int note_changed(const DEVREC *d, int state)
 {
-    if (changedCount < INST_MAX_CHANGED) {
-        inst_copy(changedId[changedCount], d->Id, INST_ID_CHARS);
-        changedInf[changedCount] = d->Inf;
-        changedCount++;
+    int c;
+
+    for (c = 0; c < changedCount; c++) {
+        if (inst_eq(changedId[c], d->Id)) {
+            if (state) {
+                changedState[c] = 1;
+                changedInf[c] = d->Inf;
+            }
+            return c;
+        }
     }
+    if (changedCount >= INST_MAX_CHANGED) {
+        return -1;
+    }
+    inst_copy(changedId[changedCount], d->Id, INST_ID_CHARS);
+    changedInf[changedCount] = d->Inf;
+    changedState[changedCount] = state;
+    changedReboot[changedCount] = 0;
+    return changedCount++;
 }
 
 /* Install or update the planned devices of one INF; controllers selects the
@@ -2449,10 +2800,13 @@ static void note_changed(const DEVREC *d)
  * (-1). Returns 0 when a failure leaves the order meaningless. */
 static int install_inf(int inf, int controllers)
 {
+    static int callIdx[INST_MAX_DEVS];
     char path[INST_PATH_CHARS];
     char hwid[INST_ID_CHARS];
     int i;
     int j;
+    int n;
+    int full;
     BOOL reboot;
     DWORD err;
     int ok = 1;
@@ -2470,29 +2824,45 @@ static int install_inf(int inf, int controllers)
             continue;
         }
         if (infTrap[inf]) {
-            out("Left (the driver store holds another build): %s\n", d->Desc);
+            out("Left (the driver store holds another build, or it cannot be "
+                "inspected): %s\n", d->Desc);
             d->Done = 1;
+            note_changed(d, 0);
             continue;
         }
         inst_copy(hwid, first_hw(d), sizeof(hwid));
         if (!hwid_clear(hwid, inf)) {
             d->Done = 1;
+            note_changed(d, 0);
             flagSteps = 1;
             continue;
-        }
-        /* One call reaches every device carrying the id. */
-        for (j = 0; j < devCount; j++) {
-            if (devs[j].Present && devs[j].Inf == inf &&
-                (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
-                 inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
-                devs[j].Done = 1;
-                note_changed(&devs[j]);
-            }
         }
         if (api.UpdateDriver == NULL) {
             out("UpdateDriverForPlugAndPlayDevicesA is missing.\n");
             flagFailed = 1;
             return 0;
+        }
+        /* One call reaches every device carrying the id: each is tracked
+         * for the results check, or the call is not made. */
+        n = 0;
+        full = 0;
+        for (j = 0; j < devCount; j++) {
+            if (devs[j].Present && devs[j].Inf == inf &&
+                (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                 inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
+                int c = note_changed(&devs[j], 1);
+                devs[j].Done = 1;
+                if (c < 0) {
+                    full = 1;
+                } else {
+                    callIdx[n++] = c;
+                }
+            }
+        }
+        if (full) {
+            out("Too many devices to follow: %s is not changed.\n", hwid);
+            flagFailed = 1;
+            continue;
         }
         out("%s %s ... ", d->Action == INST_ACT_INSTALL ? "Installing" :
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
@@ -2505,6 +2875,9 @@ static int install_inf(int inf, int controllers)
             flagChanged = 1;
             if (reboot) {
                 flagRestart = 1;
+                for (j = 0; j < n; j++) {
+                    changedReboot[callIdx[j]] = 1;
+                }
             }
             continue;
         }
@@ -2573,37 +2946,85 @@ static int inf_path_is_ours(const char *infPath)
     return r;
 }
 
-static int was_changed(const char *id)
+/* The device's entry in the reached list, or -1. */
+static int reached(const char *id)
 {
     int c;
 
     for (c = 0; c < changedCount; c++) {
         if (inst_eq(changedId[c], id)) {
-            return 1;
+            return c;
         }
     }
-    return 0;
+    return -1;
+}
+
+/* 1 when an install call was made for the device in this run. */
+static int was_changed(const char *id)
+{
+    int c = reached(id);
+
+    return c >= 0 && changedState[c];
+}
+
+/* NT: whether a root hub of this driver is a present child of the
+ * controller: 1 yes, 0 no, -1 the tree cannot be read. */
+static int root_hub_below(const char *ctrlId)
+{
+    DWORD dn;
+    DWORD child;
+    DWORD cr;
+    ULONG status;
+    ULONG problem;
+    char id[INST_ID_CHARS];
+    char want[INST_ID_CHARS];
+
+    if (api.Locate == NULL || api.Child == NULL || api.Sibling == NULL ||
+        api.DeviceId == NULL || api.Status == NULL) {
+        return -1;
+    }
+    inst_copy(want, ctrlId, sizeof(want));
+    if (api.Locate(&dn, want, 0) != INST_CR_SUCCESS) {
+        return -1;
+    }
+    cr = api.Child(&child, dn, 0);
+    if (cr == INST_CR_NO_SUCH_DEVINST) {
+        return 0;
+    }
+    if (cr != INST_CR_SUCCESS) {
+        return -1;
+    }
+    for (;;) {
+        if (api.DeviceId(child, id, sizeof(id), 0) != INST_CR_SUCCESS) {
+            return -1;
+        }
+        if (inst_bus_id(id) == 1 && inst_starts(id, "USB\\XHCI98_ROOT_HUB") &&
+            api.Status(&status, &problem, child, 0) == INST_CR_SUCCESS) {
+            return 1;
+        }
+        cr = api.Sibling(&child, child, 0);
+        if (cr == INST_CR_NO_SUCH_DEVINST) {
+            return 0;
+        }
+        if (cr != INST_CR_SUCCESS) {
+            return -1;
+        }
+    }
 }
 
 /* Record 23 section 5.9: each changed device bound, at the package version,
- * started, with no problem; otherwise the reason decides the flag. */
+ * started, with no problem; otherwise the reason decides the flag. The
+ * restart exceptions are each device's own: the restart its install call
+ * answered, never another device's. */
 static void check_results(void)
 {
     int c;
     int i;
-    int ctrlStarted = 0;
-    int rootHub = 0;
 
     out("\nAfterwards:\n");
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
-        if (!d->Present) {
-            continue;
-        }
-        if (inst_bus_id(d->Id) == 1 && inst_starts(d->Id, "USB\\XHCI98_ROOT_HUB")) {
-            rootHub = 1;
-        }
-        if (d->Inf < 0) {
+        if (!d->Present || d->Inf < 0) {
             continue;
         }
         out("  %s: %s %s%s", d->Desc[0] ? d->Desc : d->Id,
@@ -2617,6 +3038,10 @@ static void check_results(void)
     for (c = 0; c < changedCount; c++) {
         const DEVREC *d = NULL;
         int ok;
+        int ctrl;
+        if (!changedState[c]) {
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             if (inst_eq(devs[i].Id, changedId[c])) {
                 d = &devs[i];
@@ -2628,6 +3053,7 @@ static void check_results(void)
             flagFailed = 1;
             continue;
         }
+        ctrl = changedInf[c] == INST_INF_XHCI && is_controller(d);
         ok = (changedInf[c] == INST_INF_CMF ?
               (inst_eq(d->Service, "pci") &&
                inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
@@ -2637,16 +3063,26 @@ static void check_results(void)
              inst_ver_cmp(d->Version, pkgVersion) == 0 &&
              (d->Status & INST_DN_STARTED) && d->Problem == 0;
         if (ok) {
-            if (changedInf[c] == INST_INF_XHCI && is_controller(d)) {
-                ctrlStarted = 1;
+            if (ctrl && !changedReboot[c]) {
+                /* Section 5.8: a started controller shows its root hub. */
+                int r = root_hub_below(d->Id);
+                if (r == 0) {
+                    out("  %s started, but no root hub of this driver is "
+                        "present below it.\n", d->Desc);
+                    flagFailed = 1;
+                } else if (r < 0) {
+                    out("  Whether %s shows its root hub cannot be read.\n",
+                        d->Desc);
+                    flagFailed = 1;
+                }
             }
             continue;
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 &&
+        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
-                   flagRestart) {
+                   changedReboot[c]) {
             /* 32-bit Vista and 7 hold the controller until the helper's
              * restart (release notes, "Installing", step 3). */
         } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
@@ -2655,8 +3091,8 @@ static void check_results(void)
             out("  %s does not load: test-signing mode is needed (see the "
                 "note above).\n", d->Desc);
             flagSteps = 1;
-        } else if (flagRestart && d->Problem == 0) {
-            /* The old release runs until the restart asked for. */
+        } else if (changedReboot[c] && d->Problem == 0) {
+            /* The old release runs until the restart its install asked for. */
         } else {
             out("  %s did not end as installed (problem %lu, %s).\n",
                 d->Desc, (unsigned long)d->Problem, d->VersionText);
@@ -2678,11 +3114,6 @@ static void check_results(void)
                 d->Desc, (unsigned long)d->Problem);
             flagSteps = 1;
         }
-    }
-    if (ctrlStarted && !rootHub && !flagRestart) {
-        out("  A controller started but no root hub of this driver is "
-            "present.\n");
-        flagFailed = 1;
     }
 }
 
@@ -2896,7 +3327,11 @@ static int run_install_nt(void)
     print_plan();
     for (i = 0; i < devCount; i++) {
         runs += devs[i].Runs;
-        if (devs[i].Refused) {
+    }
+    /* A refused group leaves work undone whether or not one of its devices
+     * is present (record 23 sections 5.4 and 7.4). */
+    for (k = 0; k < INST_GROUPS; k++) {
+        if (groupVerdict[k] != INST_GROUP_OK) {
             flagSteps = 1;
         }
     }
@@ -2944,7 +3379,7 @@ static int run_install_nt(void)
     }
     for (i = 0; i < devCount; i++) {
         if (devs[i].Present && devs[i].Inf >= 0 && devs[i].Runs &&
-            !devs[i].Refused && !infTrap[devs[i].Inf]) {
+            !devs[i].Done && !devs[i].Refused && !infTrap[devs[i].Inf]) {
             out("Not finished: %s (%s) still needs its driver.\n",
                 devs[i].Desc[0] ? devs[i].Desc : devs[i].Id,
                 inst_action_text(devs[i].Action));
@@ -3409,9 +3844,11 @@ static int unfilter_verify(HDEVINFO set, PSP_DEVINFO_DATA data,
     }
     join(path, sizeof(path), "SYSTEM\\CurrentControlSet\\Control\\Class", drv);
     r = reg_text3(HKEY_LOCAL_MACHINE, path, "InfPath", infPath, sizeof(infPath));
-    if (r < 0 || (r > 0 && inf_path_is_ours(infPath) != 0)) {
-        out("  its driver key still names this package's INF, or cannot be "
-            "read.\n");
+    /* A readable InfPath that is not this package's: absence proves nothing
+     * (record 23 section 9.2 step 1). */
+    if (r <= 0 || inf_path_is_ours(infPath) != 0) {
+        out("  its driver key still names this package's INF, names none, or "
+            "cannot be read.\n");
         return 0;
     }
     return 1;
@@ -3489,8 +3926,13 @@ static int remove_nt(HDEVINFO set, const DEVREC *d)
     flagChanged = 1;
     memset(&ip, 0, sizeof(ip));
     ip.cbSize = sizeof(ip);
-    if (api.GetDiParams(set, &data, &ip) &&
-        (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+    if (!api.GetDiParams(set, &data, &ip)) {
+        out("removed, but whether a restart is pending cannot be read "
+            "(error 0x%08lX).\n", (unsigned long)GetLastError());
+        flagFailed = 1;
+        return 0;
+    }
+    if ((ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
         out("removed, restart pending.\n");
         flagRestart = 1;
         return 0;
@@ -3631,11 +4073,23 @@ static void remove_services_and_files(void)
         fileOk = 1;
         if (scm != NULL) {
             s = OpenServiceA(scm, instServices[i], DELETE | SERVICE_QUERY_STATUS);
-            if (s != NULL) {
-                int running = QueryServiceStatus(s, &st) &&
-                              st.dwCurrentState != SERVICE_STOPPED;
+            if (s == NULL) {
+                /* Only "no such service" lets its file go (section 9.2
+                 * steps 5 and 6); any other error keeps it. */
+                DWORD e = GetLastError();
+                if (e != ERROR_SERVICE_DOES_NOT_EXIST) {
+                    out("The service %s could not be opened (error %lu): its "
+                        "file stays.\n", instServices[i], (unsigned long)e);
+                    flagFailed = 1;
+                    fileOk = 0;
+                }
+            } else {
+                /* A state that cannot be read is taken as running: the
+                 * deletion then waits for the restart. */
+                int known = QueryServiceStatus(s, &st);
+                int running = !known || st.dwCurrentState != SERVICE_STOPPED;
                 out("Removing the service %s (%s) ... ", instServices[i],
-                    running ? "running" : "stopped");
+                    !known ? "state unreadable" : running ? "running" : "stopped");
                 if (!DeleteService(s)) {
                     DWORD e = GetLastError();
                     if (e == ERROR_SERVICE_MARKED_FOR_DELETE) {
@@ -3706,6 +4160,8 @@ static int run_uninstall_nt(void)
     int rank;
     int i;
     int ok;
+    int restartBefore;
+
     if (!warn_uninstall()) {
         return INST_EXIT_REFUSED;
     }
@@ -3729,6 +4185,7 @@ static int run_uninstall_nt(void)
         return INST_EXIT_REFUSED;
     }
     ok = 1;
+    restartBefore = flagRestart;
     for (i = 0; i < devCount && ok; i++) {
         if (is_filter_host(&devs[i])) {
             ok = unfilter_nt(set, &devs[i]);
@@ -3741,6 +4198,13 @@ static int run_uninstall_nt(void)
         }
         return stop_uninstall("a tunnel port could not be given back to "
                               "Windows' own driver.");
+    }
+    if (flagRestart && !restartBefore) {
+        /* A deferred phase stops the destructive phases after it (record 23
+         * section 9.2); the next run resumes from a fresh scan. */
+        api.Destroy(set);
+        return stop_uninstall("a tunnel port's driver change waits for a "
+                              "restart.");
     }
     for (rank = 0; rank <= 5 && ok; rank++) {
         for (i = 0; i < devCount && ok; i++) {
@@ -4003,7 +4467,12 @@ int main(int argc, char **argv)
     envNow.Minor = osv.dwMinorVersion;
     if (osv.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS) {
         envNow.Nt = 0;
-        if (!(osv.dwMajorVersion == 4 && osv.dwMinorVersion >= 10)) {
+        /* 98 SE is 4.10.2222, ME 4.90.3000; 98 (4.10.1998) and 95 are not
+         * supported (record 23 section 4.3). */
+        if (!(osv.dwMajorVersion == 4 &&
+              ((osv.dwMinorVersion == 10 &&
+                (osv.dwBuildNumber & 0xFFFFUL) >= 2222UL) ||
+               osv.dwMinorVersion == 90))) {
             out("This is not Windows 98 SE or ME.\n");
             return finish(INST_EXIT_REFUSED);
         }

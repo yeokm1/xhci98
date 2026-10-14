@@ -90,6 +90,17 @@ int inst_ver_cmp(const INST_U32 a[4], const INST_U32 b[4]);
 int inst_models_section(const char *mfgValue, const INST_ENV *env,
                         char *out, size_t cap);
 
+/* One [Manufacturer] decoration, the whole token: "NT", then "x86" or
+ * "amd64" or nothing, then ".major" and ".minor" (each 0 to 255) or less,
+ * and nothing after. 1 valid, with its parts; 0 anything else (another
+ * architecture, a product-type or suite field, trailing text). Shared by
+ * the architecture check and the section choice. */
+#define INST_DECO_NONE      0
+#define INST_DECO_X86       1
+#define INST_DECO_AMD64     2
+int inst_decoration_parse(const char *d, int *arch, INST_U32 *major,
+                          INST_U32 *minor);
+
 /* The id list of every models section the system reads, from every
  * [Manufacturer] line: each model line's fields from the second on. */
 typedef struct _INST_IDLIST {
@@ -112,8 +123,9 @@ int inst_inf_source_file(const char *text, int index, char *out, size_t cap);
 /* The index-th [SourceDisksFiles] file's path relative to the INF's own
  * directory: the [SourceDisksNames] path of its disk (field 4), its own
  * subdirectory (field 2), then its name, joined with '\'. Returns 1 when it
- * exists; a drive letter is refused (0). The caller holds the result to the
- * package directory. */
+ * exists, 0 past the last file, -1 for an entry that cannot be used (no
+ * name, a path too long, a drive letter): an error, never the list's end.
+ * The caller holds the result to the package directory. */
 int inst_inf_source_path(const char *text, int index, char *out, size_t cap);
 
 /* An HKR,,<name>,flags,value line's value in any section: the INF's default

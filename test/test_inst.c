@@ -121,6 +121,43 @@ static void test_models_rule(void)
     CHECK(inst_eq(out, "UasModels.NTamd64"), "7 x64: NTamd64 alone");
     inst_models_section("XhciModels,ntAMD64.6.0", &e, out, sizeof(out));
     CHECK(inst_eq(out, "XhciModels.ntAMD64.6.0"), "case kept, matched without");
+    /* Section 4.2 item 5: the whole token, or the decoration is unknown. */
+    e = env(1, 6, 1, INST_ARCH_X86);
+    inst_models_section("XhciModels,NTx86garbage", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels"), "NTx86garbage is not NTx86");
+    inst_models_section("XhciModels,NTx86.6.0.1", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels"), "a product-type field is not read");
+    inst_models_section("XhciModels,NTx86.6.", &e, out, sizeof(out));
+    CHECK(inst_eq(out, "XhciModels"), "a trailing dot is not a version");
+}
+
+static void test_decorations(void)
+{
+    int a;
+    INST_U32 mj;
+    INST_U32 mn;
+
+    CHECK(inst_decoration_parse("NTx86", &a, &mj, &mn) && a == INST_DECO_X86,
+          "NTx86");
+    CHECK(inst_decoration_parse("NTamd64.6.0", &a, &mj, &mn) &&
+          a == INST_DECO_AMD64 && mj == 6 && mn == 0, "NTamd64.6.0");
+    CHECK(inst_decoration_parse("NT.5", &a, &mj, &mn) && a == INST_DECO_NONE &&
+          mj == 5, "NT.5");
+    CHECK(!inst_decoration_parse("NTx86garbage", &a, &mj, &mn), "trailing text");
+    CHECK(!inst_decoration_parse("NTx86.6.0.1", &a, &mj, &mn), "product type");
+    CHECK(!inst_decoration_parse("NTx86.6.0.1.2", &a, &mj, &mn), "suite");
+    CHECK(!inst_decoration_parse("NTia64", &a, &mj, &mn), "another architecture");
+    CHECK(!inst_decoration_parse("NTx86.", &a, &mj, &mn), "an empty version");
+    CHECK(!inst_decoration_parse("NTx86.256", &a, &mj, &mn), "a version over 255");
+    CHECK(!inst_decoration_parse("Win9x", &a, &mj, &mn), "not NT");
+    CHECK(!inst_inf_arch_ok("[Manufacturer]\r\n%M%=X,NTx86garbage\r\n[X]\r\n",
+                            INST_ARCH_X86), "the architecture check refuses it");
+    CHECK(!inst_inf_arch_ok("[Manufacturer]\r\n%M%=X,NTx86.6.0.1\r\n[X]\r\n",
+                            INST_ARCH_X86), "and a product-type field");
+    CHECK(!inst_inf_arch_ok("[Manufacturer]\r\n%M%=X,NT\r\n[X]\r\n",
+                            INST_ARCH_X86), "and a decoration naming no architecture");
+    CHECK(inst_inf_arch_ok("[Manufacturer]\r\n%M%=X,NTx86.6.0\r\n[X]\r\n",
+                           INST_ARCH_X86), "NTx86.6.0 passes");
 }
 
 /* The package's INFs: what each system reads. */
@@ -330,6 +367,13 @@ static void test_parser(void)
         CHECK(!inst_inf_source_path(sd, 4, f, sizeof(f)), "four files");
         CHECK(inst_inf_source_path(up, 0, f, sizeof(f)) && inst_eq(f, "..\\a.sys"),
               ".. kept for the caller to hold to the package");
+        CHECK(inst_inf_source_path(sd, 4, f, sizeof(f)) == 0, "the end is 0");
+        CHECK(inst_inf_source_path(sd, 1, f, 6) == -1,
+              "a path too long is an error, not the end");
+        CHECK(inst_inf_source_path("[SourceDisksNames]\r\n1=%D%,a,,c:\\x\r\n"
+                                   "[SourceDisksFiles]\r\na.sys=1\r\nb.sys=1\r\n",
+                                   0, f, sizeof(f)) == -1,
+              "a drive letter is an error, not the end");
     }
     e = env(1, 5, 1, INST_ARCH_X86);
     CHECK(inst_inf_models(inf, &e, &ids) && ids.Count == 2, "XP: two ids");
@@ -681,6 +725,7 @@ int main(void)
 {
     test_versions();
     test_models_rule();
+    test_decorations();
     test_real_infs();
     test_cm_infs();
     test_parser();
