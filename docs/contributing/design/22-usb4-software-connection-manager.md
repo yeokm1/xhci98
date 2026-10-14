@@ -674,7 +674,16 @@ tick ratio. The core therefore gets one more callback, `clock_us`, a
 monotonic 32-bit microsecond counter compared only by unsigned difference
 (so its wrap after about 71 minutes is harmless, C89 `unsigned long`
 arithmetic, no 64-bit type), and every bound in section 5.2 is measured
-against it; the host suites supply a fake clock. In the driver it is the
+against it. The clock is quantised to the tick (10 to 55 ms on these
+targets), so the two kinds of bound are measured differently: a
+**maximum** (a timeout, a deadline) expires when the measured difference
+reaches it, which may be up to a tick late; a **minimum** (the 1 ms ring
+settle, the 10 ms Downstream Port Reset hold, the 50 ms TMU convergence,
+the 500 ms USB3 teardown gap, the Host Router Reset's 50 ms) is satisfied
+only when the measured difference reaches the minimum **plus one tick
+period**, since a difference of n ticks may be as little as n - 1 ticks
+of real time; minimums under a tick are busy-waited with
+`KeStallExecutionProcessor` instead; the host suites supply a fake clock. In the driver it is the
 low 32 bits of the tick count (`KeQueryTickCount`) times the tick period
 in microseconds (`KeQueryTimeIncrement`, in 100 ns units, divided by 10
 once at start). Both are imports: on x86 `KeQueryTickCount` is a macro
@@ -870,21 +879,11 @@ Following Guide 7.1, with Linux's preconditions ([linux] `switch.c`
       adapters: Target Link Width and Lane Bonding at their Spec defaults
       (not merely at the values read before step 4, which a predecessor
       may have left non-default), the CL0s, CL1 and CL2 enables (LANE_ADP_CS_1
-      bits 10 to 12) clear, and the link's TMU mode Off. Off is the
-      Guide's Table 7-2 row, read on both routers of the link: the
-      downstream (device) router's TMU_RTR_CS_3 TSPacketInterval 0, and on
-      both lane 0 adapters TMU_ADP_CS_3 EnableUniDirectionalMode 0, and
-      TMU_ADP_CS_8 Enable Enhanced Uni-Directional Mode 0 only where both
-      routers report USB4 Version 2.0 (a version 2 field; on older routers
-      enhanced mode is taken as absent, as [linux] `tmu.c`
-      `tb_switch_tmu_enhanced_is_supported` does) (the TMU Router
-      and Adapter Configuration Capabilities, Spec 8.2.1.2 and 8.2.2.2,
-      found by the capability walks; [linux] `tmu.c` `tmu_mode_init` reads
-      the router's rate the same way). A router this driver enumerated
+      bits 10 to 12) clear, and the link's TMU Off by section 6.6's
+      TMU-Off predicate (TMU item 2). A router this driver enumerated
       itself starts with its TMU Off (Guide 7.4.3.1), and the host's port
       has had its TMU disabled at the previous unplug (section 7.3 step
-      5); a reading that cannot be taken, or any field not at that row's
-      value, fails the predicate. A field not
+      5); a reading that cannot be taken, or a link not Off, fails the predicate. A field not
       at its default that this driver did not write is not rewritten here
       (the link may carry another router's configuration): the port is
       FAILED, no path built.
@@ -941,18 +940,22 @@ link it preserves:
    "Configuration and Behavior When TMU is Disabled"), and its USB3
    tunnel, if any, is built without it, since its adapter has no time to
    correct.
-2. **The current mode is read first** on both routers of the link (Guide
-   Table 7-2's fields: the downstream router's TMU_RTR_CS_3
-   TSPacketInterval, both lane 0 adapters' TMU_ADP_CS_3
-   EnableUniDirectionalMode and TMU_ADP_CS_6 Disable Time Sync, and
-   TMU_ADP_CS_8 Enable Enhanced Uni-Directional Mode only where both
-   routers report USB4 Version 2.0, the field being a version 2 one;
-   elsewhere enhanced mode is taken as absent ([linux] `tmu.c`
-   `tb_switch_tmu_enhanced_is_supported` gates it the same way)). A link
-   already in a mode other than Off - an adopted router with no tunnels
-   whose predecessor configured it - has accuracy level 1 or more already
-   (Guide Table 7-1) and is left as found. A reading that cannot be taken:
-   no TMU change and no USB3 tunnel on that link.
+2. **The current mode is read first**, as the **TMU-Off predicate** of
+   the link, which section 6.5 uses too: Off (Guide Table 7-2) when
+   TMU_RTR_CS_3 TSPacketInterval reads 0 in both routers of the link,
+   TMU_ADP_CS_3 EnableUniDirectionalMode reads 0 on both lane 0 adapters,
+   and, on each router that itself reports USB4 Version 2.0 (the fields
+   are version 2 ones, read per router; on an older router they are taken
+   as absent, as [linux] `tmu.c` `tb_switch_tmu_enhanced_is_supported`
+   decides per router), its lane 0 adapter's TMU_ADP_CS_8 Enable Enhanced
+   Uni-Directional Mode and TMU_ADP_CS_9 AdapterTimeSyncInterval read 0
+   (Spec 8.2.1.2, 8.2.2.2, found by the capability walks; [linux] `tmu.c`
+   `tmu_mode_init` reads each router's fields independently). Only a link
+   that is Off is configured by this driver. A link in any other state - an
+   adopted router whose predecessor configured some mode, complete or
+   partial, consistent or not - is left exactly as found and gets no new
+   USB3 tunnel: whether an inherited configuration really gives accuracy
+   level 1 is not judged. A reading that cannot be taken: the same.
 3. **The mode** (Guide 7.4.3), from Off: HiFi-Bi, since this connection
    manager is a version 1 one and never enables CLx; Linux makes the same
    choice on a version 1 link without CL1 ([linux] `tb.c` `tb_enable_tmu`).
@@ -1262,7 +1265,7 @@ One state per host USB4 port, on the thread:
 | BONDING | section 6.5 (section 8 item 3 for a Thunderbolt 3 router) | done or single: CONFIGURING for a USB4 router, TUNNELLING for a Thunderbolt 3 router, which has no Configuration Valid handshake (section 8 item 2); the verified fallback failing: FAILED |
 | CONFIGURING | section 6.6 | Configuration Ready: TUNNELLING; timeout: FAILED |
 | TUNNELLING | sections 6.8 and 6.9, then the PCI side (section 7.6) | the PCIe tunnel up and its tunnel ports re-enumerated, or approval 0 with USB3 handled: UP; failure: FAILED |
-| UP | tunnels up, or preserved from before (section 9) | an unplug: TEARDOWN |
+| UP | tunnels up, or preserved from before (section 9) | an unplug: TEARDOWN; the PCIe tunnel lost with the router present (section 7.1 item 4): FAILED for PCIe, the USB3 tunnel kept with its resume obligation |
 | HELD | a port whose configuration did not verify and showed no removal evidence: found so at start (section 9.2), or a port holding a resume obligation at resume (section 7.6); left exactly as found; a live preserved tunnel on it remains an obligation | an unplug: TEARDOWN of whatever this driver can read of it, host side only |
 | FAILED | enumerated, but some step failed; whatever did succeed (a USB3 tunnel, say) stays | an unplug: TEARDOWN; only a re-plug retries |
 | UNSUPPORTED | a router this driver will not drive | an unplug: EMPTY |
@@ -1638,7 +1641,9 @@ reading only:
 3. Lanes bonded, or lane 1 disconnected or disabled.
 4. The PCIe tunnel as Linux's discovery walks it ([linux] `tunnel.c`
    `tb_tunnel_discover_pci`, `path.c` `tb_path_discover`): the host's PCIe
-   Down adapter has Path Enable set and LTSSM L0; its HopID 8 entry is
+   Down adapter has Path Enable set and its LTSSM in a live state (L0, L1,
+   Recovery or Recovery.Idle, section 7.1 item 4; a transitional state
+   re-read for up to 2 s, Detect failing the check); its HopID 8 entry is
    Valid and leads to the host's lane 0 at some HopID `hd` of at least 8;
    the device's lane 0 entry `hd` is Valid and leads to the device's PCIe
    Up at HopID 8; the device's PCIe Up HopID 8 entry is Valid and leads to
