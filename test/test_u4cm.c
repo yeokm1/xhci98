@@ -2605,13 +2605,15 @@ static void test_review5(void)
     CHECK_EQ(rc, TBT_OK, "and verified");
 
     /* Lock set again across the sleep with the router still configured:
-     * never verified as unchanged. */
+     * removal evidence, discharged as a removal. */
     dev = setupMinimal(1, NULL);
+    (void)countActions(&g_cm, 0);
     TbtU4Suspend(&g_cm);
     g_fab.R[0].Adp[fabPortLane0(&g_fab, 1)].Cs[4] |= 0x80000000UL;
     rc = TbtU4Resume(&g_cm);
-    CHECK_EQ(rc, TBT_E_STATE, "re-locked, still configured: the failure path");
-    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
+    CHECK_EQ(rc, TBT_OK, "re-locked: the obligation discharged by removal");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "torn down");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "the removal told once");
 
     /* A preserved tunnel whose router lost its configuration: HELD, and
      * that known loss alone never tears it down at the next ticks. */
@@ -2649,6 +2651,97 @@ static void test_review5(void)
         CHECK_EQ(g_stage, 2, "the rebuild's lane read reached");
         CHECK_EQ(rc, TBT_E_STATE, "the failure path");
         CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD, never EMPTY without evidence");
+        gen = TbtU4Port(&g_cm, 1)->Generation;
+        poll(&g_cm, &g_fab, 3);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "still HELD at the next ticks");
+        CHECK_EQ(TbtU4Port(&g_cm, 1)->Generation, gen, "no new connection");
+    }
+
+    /* Transitional past 2 s: recovery at 2.05 s or never is a loss. */
+    for (k = 0; k < 2; k++) {
+        unsigned long t0;
+
+        dev = setupMinimal(1, NULL);
+        TbtU4Suspend(&g_cm);
+        g_fab.TickUs = 10000UL;
+        g_fab.Host.TickUs = 10000UL;
+        g_recoverAdp = fabPortPcie(&g_fab, 1);
+        g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 1 + 2;
+        t0 = g_fab.NowUs;
+        g_recoverAt = k == 0 ? t0 + 2050000UL : 0xFFFFFFFFUL;
+        g_fab.Hook = recoverHook;
+        (void)TbtU4Resume(&g_cm);
+        g_fab.Hook = NULL;
+        g_fab.R[0].Adp[g_recoverAdp].LtssmForce = 0;
+        g_fab.TickUs = 0;
+        g_fab.Host.TickUs = 0;
+        CHECK(!TbtU4Port(&g_cm, 1)->Pcie.Up, k == 0 ? "recovered only at 2.05 s: lost" :
+                                                      "never recovered: lost");
+        CHECK(g_fab.NowUs - t0 < 3000000UL, "decided on one 2 s deadline");
+    }
+
+    /* A configuration loss whose host closure fails only at the bandwidth
+     * release: the release retried at the idle ticks, no reconnection. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    armSwallow(&g_fab, 0, TBT_CS_ADAPTER, (unsigned long)fabPortUsb3(&g_fab, 1),
+               FAB_CAP_ADP + TBT_USB3_CS_3, 1, 0, 0, 100000UL);
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "the failure path");
+    CHECK(p->BwReleaseOwed, "the release owed");
+    g_fab.Hook = NULL;
+    gen = p->Generation;
+    poll(&g_cm, &g_fab, 3);
+    CHECK(!p->BwReleaseOwed, "released at the idle ticks");
+    CHECK_EQ(p->Generation, gen, "no reconnection");
+
+    /* A link's removal with the quarantine table full: a Path Enable that
+     * will not clear is retried at every pass even after its entry is
+     * invalid; done once it clears. */
+    {
+        int child;
+        int lane2;
+        int i;
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_USB4);
+        child = fabChild(&g_fab, dev);
+        fabPlug(&g_fab, 1, dev);
+        fabPreos(&g_fab, 1, 0);
+        fabPlugChild(&g_fab, dev, child, 1);
+        g_fab.R[dev].Adp[7].Path[2 * 8] = 0x80000000UL | 8UL | (3UL << 11) | (7UL << 17);
+        g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+        g_fab.R[dev].Adp[3].Path[2 * 9] = 0x80000000UL | 8UL | (7UL << 11) | (16UL << 17);
+        g_fab.RxQCount = 0;
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        lane2 = fabPortLane0(&g_fab, 2);
+        for (i = 0; i < (int)TBT_U4_QUARANTINE; i++) {
+            int a = i < 24 ? lane2 : lane2 + 1;
+            int hp = i < 24 ? 8 + i : 8 + (i - 24);
+            g_fab.R[0].Adp[a].Path[2 * hp + 1] |= 0x10000000UL;
+            g_fab.R[0].Adp[a].PpStuck[hp] = 1;
+            g_cm.Quarantine[i].Used = TRUE;
+            g_cm.Quarantine[i].Enable = FALSE;
+            g_cm.Quarantine[i].Route.Hi = 0;
+            g_cm.Quarantine[i].Route.Lo = 0;
+            g_cm.Quarantine[i].Adapter = (ULONG)a;
+            g_cm.Quarantine[i].Hop = (ULONG)hp;
+        }
+        armSwallow(&g_fab, dev, TBT_CS_ADAPTER, 7, FAB_CAP_ADP, 1, 0x80000000UL, 0, 100000UL);
+        fabUnplugChild(&g_fab, dev);
+        poll(&g_cm, &g_fab, 3);
+        CHECK(g_cm.Links[0].Used && g_cm.Links[0].RemovalPending, "pending while PE stays set");
+        CHECK_EQ(g_fab.R[dev].Adp[7].Path[2 * 8] & 0x80000000UL, 0, "its entry invalid");
+        g_fab.Hook = NULL;
+        poll(&g_cm, &g_fab, 2);
+        CHECK(!g_cm.Links[0].Used, "done once Path Enable clears");
+        CHECK_EQ(g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] & 0x80000000UL, 0, "Path Enable clear");
+        for (i = 0; i < (int)TBT_U4_QUARANTINE; i++) {
+            g_cm.Quarantine[i].Used = FALSE;
+        }
     }
     (void)dev;
 }

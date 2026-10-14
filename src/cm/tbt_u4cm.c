@@ -1029,9 +1029,10 @@ static VOID tbtU4Quarantine(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
  * every entry of every adapter of the router from HopID 8 (1 on the host
  * interface adapter) to its Max Input HopID, two DWs each, 30 entries a
  * request; an entry Valid or with Pending Packets holds its input HopID,
- * a Valid entry its output HopID on its egress adapter, and a Valid entry
- * with ingress flow control on and shared buffering off its dedicated
- * credits; the quarantine adds what it holds.
+ * its output HopID on its egress adapter, and, with ingress flow control
+ * on and shared buffering off, its dedicated credits - each counted once,
+ * from the registers. The quarantine additionally reserves the HopIDs it
+ * holds; their credits, if still held, are in the registers.
  */
 static LONG tbtU4ScanLane(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG lane,
                           PTBT_U4_USAGE u)
@@ -2560,8 +2561,8 @@ static LONG tbtU4Entry(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp, ULONG hop,
  * The host side of a port's PCIe and/or USB3 tunnels found again from the
  * registers and closed, whatever the records say: each selected protocol
  * adapter's Path Enable cleared and its HopID 8 entry invalidated and
- * drained if Valid or pending; every Valid entry of the host lane 0 that
- * leads to a selected adapter invalidated and drained. A failing step is
+ * drained if Valid or pending; every Valid or pending entry of the host
+ * lane 0 that leads to a selected adapter invalidated and drained. A failing step is
  * quarantined by tbtU4Invalidate. TRUE only when every entry was read and
  * every step proven.
  */
@@ -3609,7 +3610,6 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
         p->CheckPending = TRUE;
         return;
     }
-    p->LostKnown = FALSE;
     cm->Counters.Connects++;
     p->Generation++;
     gen = p->Generation;
@@ -3653,6 +3653,9 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     if (rc != TBT_OK) {
         goto out;
     }
+    /* The router enumerated again: a known configuration loss is over
+     * (until then it stays known, through a failed rebuild). */
+    p->LostKnown = FALSE;
     tbtU4TmuAtConnect(cm, p);
 
     p->State = TBT_U4_BONDING;
@@ -4525,14 +4528,12 @@ static VOID tbtU4RemoveLink(PTBT_U4CM cm, ULONG index)
                         complete = FALSE;   /* read again at the next tick */
                         continue;
                     }
-                    if ((e[0] & TBT_PATH0_VALID) == 0 && (e[1] & TBT_PATH1_PP) == 0) {
-                        continue;
-                    }
+                    /* The output fields stay in an invalidated entry: a
+                     * protocol adapter whose HopID 8 led into the link has
+                     * its Path Enable proven clear at every pass, even
+                     * once the entry itself is invalid and drained. */
                     into = (BOOLEAN)(TBT_PATH0_OUT_ADP(e[0]) == l->ParentLane0 ||
                                      TBT_PATH0_OUT_ADP(e[0]) == l->ParentLane0 + 1);
-                    if (!into && !from) {
-                        continue;
-                    }
                     if (into && hop == TBT_HOP_PROTOCOL && s->Adp[a].CapAdp != 0 &&
                         (s->Adp[a].Type == TBT_ADP_TYPE_PCIE_DOWN ||
                          s->Adp[a].Type == TBT_ADP_TYPE_USB3_DOWN)) {
@@ -4541,6 +4542,12 @@ static VOID tbtU4RemoveLink(PTBT_U4CM cm, ULONG index)
                             !tbtU4Quarantined(cm, &s->Route, a, 0, TRUE)) {
                             complete = FALSE;   /* no record holds it: again */
                         }
+                    }
+                    if ((e[0] & TBT_PATH0_VALID) == 0 && (e[1] & TBT_PATH1_PP) == 0) {
+                        continue;
+                    }
+                    if (!into && !from) {
+                        continue;
                     }
                     if (!tbtU4Invalidate(cm, l->Port, &s->Route, a, hop) &&
                         !tbtU4Quarantined(cm, &s->Route, a, hop, FALSE)) {
@@ -4803,11 +4810,15 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
         while ((v & TBT_PCIE0_PE) != 0 && s != TBT_LTSSM_DETECT &&
                s != TBT_LTSSM_L0 && s != TBT_LTSSM_L1 && s != TBT_LTSSM_RECOVERY &&
                s != TBT_LTSSM_RECOVERY_IDLE) {
-            if (TbtWaitDone(&w, cm->Host)) {
-                if (!p->Transitional) {
-                    p->Transitional = TRUE;
-                    p->TransitionalSinceUs = w.StartUs;
-                }
+            /* One deadline on the clock from the first transitional
+             * sample (an earlier wait's included), checked at every
+             * sample; the waited sum ends the wait but proves nothing. */
+            if (!p->Transitional) {
+                p->Transitional = TRUE;
+                p->TransitionalSinceUs = w.StartUs;
+            }
+            if (tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US ||
+                TbtWaitDone(&w, cm->Host)) {
                 break;
             }
             tbtU4Pause(cm, &w);
@@ -5262,6 +5273,10 @@ static BOOLEAN tbtU4HostClose(PTBT_U4CM cm, PTBT_U4_PORT p)
     ok = tbtU4HostSweep(cm, p, TRUE, TRUE);
     if (!ok) {
         p->HostResidual = TRUE;
+    } else {
+        /* Proven closed on the host: no USB3 tunnel is up whatever else
+         * fails below, so an owed release may be retried. */
+        p->Usb3.Up = FALSE;
     }
     if (ok && p->PcieDown != 0 && h->Adp[p->PcieDown].CapAdp != 0) {
         ok = tbtU4WaitDetect(cm, NULL, 0, h, p->PcieDown, TBT_U4_DETECT_US);
@@ -5370,9 +5385,11 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
         return TBT_U4_RES_LOST;
     }
     if (relocked) {
-        /* Lock set again across the sleep (section 7.1's evidence) yet the
-         * same router still configured: never "unchanged". */
-        return TBT_U4_RES_UNKNOWN;
+        /* Lock set again across the sleep is section 7.1's removal
+         * evidence: with the router still configured it is not the lost
+         * configuration above, so the connection is discharged as removed
+         * (torn down, the OS told), never kept as unchanged. */
+        return TBT_U4_RES_REMOVED;
     }
     return tbtU4Enumerated(d, v) ? TBT_U4_RES_SAME : TBT_U4_RES_UNKNOWN;
 }
