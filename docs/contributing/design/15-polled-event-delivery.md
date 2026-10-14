@@ -1959,7 +1959,11 @@ log lines.
 On QEMU guests, the `release` package unless a switch needs `qemu`;
 each leg records the kernel image that ran and that the boot was an
 ordinary one, as record 18 section 10 asks. Phase distributions are read
-as snapshot differences (section 7.2.9).
+as snapshot differences (section 7.2.9). Since the owner's change of
+2026-10-14 (section 7.2.4) the value is 0 by default, so a leg that
+reads the timer on (its thread, `TmrSource`, the calls, the held phase)
+sets `XhciPollFineTimer` to 1 first, on every controller it reads, and
+a leg's off case or baseline is the value 0 written explicitly.
 
 - **T1, the effect.** Polled UAS `XFERTEST VERIFY` and the 20 s
   `TONE.WAV` under mode 2 on Windows 2000 (the SMP guest, and under
