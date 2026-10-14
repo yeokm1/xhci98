@@ -24,14 +24,20 @@ this project reads and never modifies: `docs/XHCI98-HANDOFF.md` (the
 handoff), `docs/ICM-PROTOCOL.md` (the Alpine Ridge host contract, cited below
 as `ICM-PROTOCOL` with its section and requirement numbers),
 `docs/PLATFORM-MATRIX.md`, `docs/REENUM-EXPERIMENT.md`, `docs/WIN98-TEST.md`,
-`docs/ARCHITECTURE.md`, `docs/NVME-DRIVER-EVAL.md` and `tools/usb4cm/`.
+`docs/ARCHITECTURE.md`, `docs/NVME-DRIVER-EVAL.md`, `docs/HARNESS.md` (the
+fault-injection harness) and `tools/usb4cm/`. The handoff on `main` is the
+single entry point and is re-read when it changes; its maintainer has said
+that further controller models are coming (`docs/CONTROLLER-CATALOG.md`, in
+progress: likely a Titan Ridge firmware-connection-manager host and an AMD
+USB4 host), so nothing here hard-codes Alpine Ridge: the driver branches on
+the generation's profiles (section 1.4) and discovers what it can.
 Every hardware fact below keeps the tag it carries there: **[obs]** seen in a
 P14s Gen 1 capture, **[inf]** inferred from the Linux client's behaviour and
 not yet confirmed by a capture. An [inf] fact is a hypothesis this driver is
 written to tolerate being wrong, not a fact it may rely on. Draft 6 adds a
 fourth tag, **[linux]**: read in this project from the Linux Thunderbolt
 driver's structures, constants and per-id choices (section 9), not seen in
-any capture, and held to the same tolerance (section 1.4).
+any capture, and held to the same tolerance (section 1.4.6).
 
 ## 1. Purpose, scope and what it is not
 
@@ -241,14 +247,26 @@ delivered BAR0:
 
 All four positive: the ICM client runs. **The software connection
 manager is admitted only positively**, never as a fallback from a failed
-ICM, and its rule is design record 22's; in outline (these targets have
-no `_OSC` to grant native control): hardware with no firmware connection
-manager at all (a class `0x0C0340` host not of an Intel ICM-capable
-generation, and Intel's software-only generations); a Tiger Lake to
-Meteor Lake or Maple Ridge NHI that, after its platform initialisation,
-reads NVM authentication done **and** ICM enabled clear; or `XhciCmMode` 3
-on a matched host, still refused while ICM enabled reads set. In every
-case existing tunnels are discovered and preserved (section 1.4.5).
+ICM; its rule is design record 22's, and in outline (these targets have no
+`_OSC` to grant native control) it is: (1) software-connection-manager
+candidates with no supported ICM protocol - a class `0x0C0340` host not of
+an Intel ICM-capable generation (AMD, `1022:1668` and `1022:1669` among
+them, ASMedia, others) and Intel's software-only generations (Lunar Lake,
+Panther Lake, Wildcat Lake, Barlow Ridge `5781` and `5784`) - admitted once
+their hardware profile's readiness and the interface, BAR, DMA and ring
+checks pass, Intel's firmware-status register never read on a non-Intel
+host; (2) a Tiger Lake to Meteor Lake or Maple Ridge NHI whose readiness
+contract completed and whose ICM enabled bit then reads 0 in a valid read,
+a stated best-effort policy not gated on NVM authentication (which is only
+the ICM candidate predicate); (3) `XhciCmMode` 3, an experimental user
+override on hosts the software connection manager supports, which cannot
+bypass a failed platform initialisation, an unreadable required register,
+a running firmware connection manager, an unsupported protocol, tunnel
+preservation or the cleanup rules, and is refused on the FR, AR and TR
+NHIs, which are not USB4 hosts. On every route existing tunnels of every
+type are discovered and kept, and no link's power configuration is changed
+while discovering them (section 1.4.5). Conflicting or unresolved
+firmware-state evidence gives the inert start, which takes precedence.
 
 **Everything else gives the inert start**: a timeout, a register that
 cannot be read, NVM authentication never done, ICM enabled set with a
@@ -340,10 +358,14 @@ So a driver loaded late, onto a fabric whose tunnels the BIOS or an
 earlier driver built - a pre-boot-tunnelled boot disk among them -
 leaves them up: the firmware re-announces them with `approved` set at
 `driver ready` [obs] and the driver only records them. What the software
-connection manager does with existing tunnels (discover and preserve, or a
-qualified takeover before dependent devices start, else leave the domain
-alone) is design record 22's; it never resets a fabric with existing
-tunnels merely because Linux resets during probe.
+connection manager does with existing tunnels is design record 22's, to
+these acceptance criteria: every existing tunnel of every type (PCIe,
+USB3, DisplayPort; Linux's `tb_discover_tunnels`) discovered and its
+resources reserved before any new path is allocated, no link's power
+configuration (CLx and the like) changed while discovering, and no reset
+of a fabric with existing tunnels merely because Linux resets during
+probe. Existing tunnels prove a prior configuration, not a running
+competing connection manager.
 
 #### 1.4.6 What the client does where a row is wrong
 
@@ -446,7 +468,12 @@ Facts the design rests on, all from `ICM-PROTOCOL`:
   table by swizzling up to a bus 0 slot; whether the P14s BIOS lists the
   Thunderbolt root port `00:1c.4` is not captured [obs/open] `WIN98-TEST`,
   "Hot-added NVMe gets no IRQ behind 00:1c". Section 10.4 makes the `$PIR`
-  dump a bench reading.
+  dump a bench reading. The emulator's Windows 98 profile places its
+  Thunderbolt root bridge at bus 0 slot 6, inside the slots SeaBIOS's
+  `$PIR` lists, so a hot-added function there gets its IRQ, and
+  `ROOT_ADDR=0x1c` moves it back to reproduce the Code 29 failure
+  (`usb4-emu` `c9e6d80`, `WIN98-TEST`); whether the real P14s's `$PIR`
+  covers its root port stays open (`39-0.6`, `39-E.2`).
 
 ## 3. The driver: binary, roles, INFs and package
 
@@ -845,14 +872,13 @@ done.
    an interface version the row does not accept (test 4: 0 on AR [obs];
    below `0x40` on the others [linux]): inert, the value in the log. A
    host router that wants Linux's version-2 reset is not this record's.
-3. Read firmware status (Intel candidates only, test 3). On the Maple
-   Ridge and Tiger Lake to Meteor Lake ids first poll NVM authentication
-   done for 10 ms (`icm_tgl_is_supported` [linux]); never done: inert.
-   Then ICM enabled: set, the ICM admission continues; clear, inert -
-   except on the Maple Ridge and Tiger Lake to Meteor Lake ids, where NVM
-   authentication done with ICM enabled clear is the positive software
-   connection manager admission of section 1.4.2, and the start is handed
-   to design record 22's profile. This driver never starts stopped
+3. Read firmware status (Intel candidates only, test 3). ICM enabled
+   clear in a valid read: inert - except on the Maple Ridge and Tiger Lake
+   to Meteor Lake ids, where it is the positive software connection
+   manager admission (2) of section 1.4.2 and the start is handed to
+   design record 22's profile. ICM enabled set: on those ids, poll NVM
+   authentication done for 10 ms (`icm_tgl_is_supported` [linux]); never
+   done: inert; done, the ICM admission continues. This driver never starts stopped
    firmware (section 2.7 of the contract, and Linux's `start_icm` path,
    are out of scope).
 4. AR and TR rows (Maple Ridge included): poll firmware status for NVM authentication done, up to
@@ -874,7 +900,7 @@ done.
    stopped, no further mailbox) [inf, observed as the end state].
 8. Send `driver ready` (one header word, code 3, flags 0) and wait for its
    response (the AR and FR two words in 5 s, four tries; the TR and ICL
-   four words with the timeouts of section 1.4's table). Keep the flags
+   four words with the timeouts of section 1.4.4). Keep the flags
    byte, the security level, the boot-ACL fields and, on TR and ICL, the
    protocol version, NVM version and device id for the log; act on none of
    them in the first cut. No answer after the tries: the failure after
@@ -920,7 +946,7 @@ observed frames and the FR, TR and ICL rows from the Linux structures
 confirmed after start, and `XhciCmMode` 2 maps an unknown Intel id onto the
 AR row. Every decoder length-checks its frame against its row's structure
 before reading a field and hands back "malformed" rather than a partial
-decode; section 1.4's list says what the client then does. FR's topology
+decode; section 1.4.6 says what the client then does. FR's topology
 answer is the one multi-frame response this driver accepts, assembled by
 packet index (`ICM-PROTOCOL` section 3.1's rule). No frame of any row but
 AR has been observed, so `test_tbt_icm`'s FR, TR and ICL vectors are
@@ -934,7 +960,7 @@ connection key and id, link, depth, the approved, rejected and boot bits,
 the vendor and model strings from the name block, and the route string from
 `get route` (on the FR row from the topology query; on the TR and ICL rows
 from the event, with no key, and the entry keyed by route string where AR
-and FR key it by link and depth; section 1.4). On `device connected`:
+and FR key it by link and depth; section 1.4.4). On `device connected`:
 
 - `rejected` set: log and ignore, as the client does [inf].
 - A known UUID at the same link and depth (TR and ICL: route string) and
@@ -942,7 +968,7 @@ and FR key it by link and depth; section 1.4). On `device connected`:
   and route, nothing else (the resume case, [obs] section 6.5).
 - Otherwise: drop any stale entry at that place, ask for the route where
   the profile says it must be asked for (AR `get route`, FR the topology
-  query; TR and ICL carry it in the event, section 1.4), store the route,
+  query; TR and ICL carry it in the event, section 1.4.4), store the route,
   and apply the approval policy (section 5.4).
 
 On `device disconnected`: drop the entry at that link and depth, or that
@@ -1068,7 +1094,8 @@ CONFIGMG's services directly through the VMM dynalink. The call is an
 word set so the VMM patches the six bytes into a jump and a cdecl call
 reaches the service with the caller's arguments; the thunk lives in
 non-paged pool because the VMM rewrites it on first use. CONFIGMG's VxD id is
-`0x0033`; its services are cdecl and return `CONFIGRET` in `EAX`. The
+`0x0033`; its services are cdecl and return `CONFIGRET` in `EAX`, except
+`Get_Version`, which returns a `WORD` in `AX` (`cm_cfgmg.h`). The
 services used:
 
 | Service | Number | Use |
@@ -1080,6 +1107,7 @@ services used:
 | `Query_Remove_SubTree`, `Remove_SubTree` | 12, 13 | a child whose function has left the bus, before the re-enumeration |
 | `Reenumerate_DevNode` | 51 | the bridge, after a tunnel up or down |
 | `Get_DevNode_Status` | 54 | the log only |
+| `Register_Device_Driver` | 14 | not called: its `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` applies only to a devnode the caller drives (section 7.4) |
 | `Change_DevNode_Status` | 91 | safe eject's 9x half: `DN_REMOVABLE` added to a tunnelled device's devnode, never to a tunnel port's (section 7.4) |
 
 The experiment took these numbers from memory of the Windows 95/98 DDK's
@@ -1094,7 +1122,7 @@ the artifact is never tracked, reads the service table from its
 driver regardless, because a wrong number here is a call into the wrong
 VMM service.
 
-Service numbers are the only thing taken from the DDK header; no DDK code
+Numeric values only are taken from the DDK header; no DDK code
 or macro body is copied, and `legal-provenance.md` gets a row saying so.
 
 What the driver does on a tunnel change on 98 (section 6.5 says when):
@@ -1637,7 +1665,7 @@ sink, named `cm.*`: commands sent, responses, timeouts, retries, errors;
 events by code; approvals sent, succeeded, failed; tunnel ups and downs;
 re-enumerations run, skipped (and why), and their `CONFIGRET` or status;
 mailbox commands and their outcomes; idle polls; malformed and unmatched
-frames (section 1.4); child filters attached, skipped and refused (section
+frames (section 1.4.6); child filters attached, skipped and refused (section
 7.4).
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
@@ -1667,33 +1695,30 @@ work, under `AGENTS.md`'s rules and `legal-provenance.md`:
 | Source | Licence | How it is used | Record |
 |---|---|---|---|
 | `usb4-emu/docs/ICM-PROTOCOL.md` and the handoff's other documents | MIT | the clean-room contract; every ICM word layout, register and sequence is cited to it by section, as the `usb4-emu` emulator itself is written from it | a `legal-provenance.md` section 4 row per cited fact class, method `static` (a document read), with the capture's run id as the provenance behind each [obs] |
-| `usb4-emu/tools/usb4cm/core/u4hi.c`, `u4regs.h`, `u4types.h` | MIT | lifted into `src\cm\` as `tbt_ring.c`, `tbt_regs.h`; the file headers keep the original copyright line and the MIT permission notice with an SPDX tag, and `LICENSE`'s scope note names them | section 2a of `legal-provenance.md` (incorporated third-party code) |
+| `usb4-emu/tools/usb4cm/core`: `u4hi.c`, `u4regs.h`, `u4types.h` (`39-A.2`) and `u4cm.c`, `usb4cm.h` (Phase 40) | MIT | lifted into `src\cm\` (`tbt_ring.c`, `tbt_regs.h` for this record); the file headers keep the original copyright line and the MIT permission notice with an SPDX tag, and `LICENSE`'s scope note names them | notices per `legal-provenance.md` section 2a (incorporated third-party code) |
 | USB4 Specification 2.0 and Connection Manager Guide 2.0 (USB-IF, November 2025 bundle) | USB-IF terms, documents only | facts and section numbers for the generic NHI ring registers and CRC-32C; the PDFs are fetched per machine into `docs/references/usb4_202511/` | rows in `docs/references/README.md` with the bundle URL and each PDF's SHA-256, added 2026-10-14 (owner's permission to take the files from `usb4-emu`'s own references folder); the README's "USB4 2.0, November 2025 bundle" section also records that Thunderbolt 3 itself has no public specification to fetch |
-| The Windows 98 DDK's `CONFIGMG.H` | Microsoft DDK terms | the CONFIGMG service numbers alone (section 6.1) | a `docs/references/README.md` row and a `legal-provenance.md` row; never tracked |
-| Linux `drivers/thunderbolt` (`tb_msgs.h`, `icm.c`, `nhi.h`, `nhi_regs.h`, `nhi.c`, `pci.c`, `ctl.c`, `quirks.c`, `acpi.c`) and `include/linux/pci_ids.h`, at `c6859eed` | GPL-2.0 | interface documentation under `AGENTS.md`'s mirror rule (owner, 2026-10-15): the [linux] facts of sections 1.4, 3.3, 5, 6.3 and 10.1, cited by file and symbol; no function body copied | none needed while nothing is copied; a copy would need `legal-provenance.md`'s exception, which this work does not use |
-| FreeBSD `sys/dev/thunderbolt` (`nhi_reg.h`, `nhi_wmi.c`, `tb_pcib.c`) at `9d50245a` | BSD-2-Clause | the same rule: a cross-check of register offsets and ids (AMD Pink Sardine), and the WMI power mechanism named in section 1.4.3; nothing adapted | a row if anything is adapted, with its notice kept |
+| The Windows 98 DDK's `CONFIGMG.H` | Microsoft DDK terms | the CONFIGMG service numbers and flag, status and result values, each cited by line in `src\cm\cm_cfgmg.h` (sections 6.1 and 7.4) | a `docs/references/README.md` row and `legal-provenance.md` rows; never tracked |
+| Linux `drivers/thunderbolt` (GPL-2.0) and FreeBSD `sys/dev/thunderbolt` (BSD-2-Clause), at the pins of `external/README.md` | GPL-2.0; BSD-2-Clause | interface documentation since 2026-10-15 (owner): ids, message layouts, offsets, constants, sequences and quirks, cited by file and symbol; no function body copied; the [linux] facts of sections 1.4, 3.3, 5, 6.3 and 10.1 | `legal-provenance.md` section 3 |
 | The PCI ID Repository's listing (<https://pci-ids.ucw.cz/>, `pci.ids` version `2026.10.14`, fetched 2026-10-15) | GPL-2.0-or-later or BSD-3-Clause, by the file's own header | ids only: the Alpine Ridge and Titan Ridge NHI and bridge ids and their listed names, for the INFs and section 3.3 (decision D9) | a `legal-provenance.md` section 4 row, method `static`, with the URL, version and SHA-256; the file never tracked |
 
-**The Linux and FreeBSD Thunderbolt drivers are interface documentation
-(owner, 2026-10-15).** Until that day this record kept Linux's
-`drivers/thunderbolt` out of its reading list as a clean-room boundary.
-The owner then ruled that it and FreeBSD's `sys/dev/thunderbolt` may be
-read, under `AGENTS.md`'s rule for every mirror under `external/`: ids,
-structure layouts, offsets, constants, message formats, sequences,
-per-generation choices and quirks are taken and cited by file and symbol
-at the pinned commit (Linux `c6859eed755df351a3978b33cb92365f9b3e8f06`,
-FreeBSD `9d50245a0f1333e10cc1c4dda16878cd79a7c42b`; the Linux pin is
-`external/README.md`'s, the FreeBSD one is recorded here until that file
-lists the Thunderbolt mirrors),
-tagged [linux] in this record, and **no function body is copied** into
-`src\` or the docs. It is the same reading design record 20 made of
-Linux's xHCI quirks, without that record's copy exception: nothing here
-is copied, so `legal-provenance.md`'s copy table gains no row from this
-work. `ICM-PROTOCOL.md` stays the Alpine Ridge contract and its [obs] facts
-outrank any [linux] one; `usb4cm`'s MIT files stay the lifted ring code
-(row 2 above). Every [inf] statement in this record remains a behaviour of
-the Linux client in `ICM-PROTOCOL.md`'s words; every [linux] statement
-was read in the mirror by this project.
+Linux `drivers/thunderbolt` (GPL-2.0) and FreeBSD `sys/dev/thunderbolt`
+(BSD-2-Clause) are interface documentation since 2026-10-15 (owner): ids,
+message layouts, offsets, constants, sequences and quirks, cited by file
+and symbol; no function body copied (`legal-provenance.md` section 3).
+`ICM-PROTOCOL.md` stays the first-cited contract; its [inf] may be checked
+against `icm.c`. Facts read that way carry the [linux] tag (section 1.4.1).
+The pinned commits are `external/README.md`'s (Linux
+`c6859eed755df351a3978b33cb92365f9b3e8f06`, FreeBSD
+`9d50245a0f1333e10cc1c4dda16878cd79a7c42b`); Linux has no
+`include/uapi/linux/thunderbolt.h` at its pin. The `usb4-emu` maintainer
+has announced that repository's relicensing to GPL-2.0-only, which has not
+landed (its `main` at `a68bc74` is still MIT, and its handoff's section 3
+still says not to implement from Linux). Until it lands, this work reads and cites
+Linux and FreeBSD and copies nothing from them; when it lands, this
+section is revised for what it then permits - adapting `usb4-emu`'s code,
+and Linux code with its copyright notices kept and `legal-provenance.md`
+rows - and not before. A behaviour taken from Linux alone stays [linux]
+until a capture shows it.
 
 As always, no third-party document or binary enters the tree, facts are
 written re-derivably (word, bit range, capture line), and binary-derived
@@ -1726,9 +1751,10 @@ snapshot rule's vectors in `test_tbt_topo`):
   disconnect matching no entry;
 - selection, pure (section 1.4.2), as a table of register readings to
   outcomes: each row's ownership predicate passing; ICM enabled clear on
-  each row (inert, except on Maple Ridge and Tiger Lake to Meteor Lake with
-  NVM authentication done, which hands over to design record 22); NVM
-  authentication never done on those ids (inert, never handed over); host
+  each row (inert, except on Maple Ridge and Tiger Lake to Meteor Lake,
+  which hand over to design record 22 on a valid read whatever NVM
+  authentication says); ICM enabled set with NVM authentication never done
+  on those ids (inert, never handed over); host
   capabilities all ones (inert); an interface version of `0x40` (inert);
   operating modes 0, 1, 2 and 7 (safe mode, inert, inert, inert); a
   failure after activation (rings stopped, `0x07` only after `driver
@@ -1810,6 +1836,15 @@ The vehicle is `usb4-emu`'s QEMU fork and `scripts/run-win98.sh` on the
   `device_add usb4-device,...` (the hot-plug path through the ICM), never
   with `qom-set ... tunnel up`, which bypasses the connection manager and is
   for the driverless baseline only.
+- The fault-injection harness (`docs/HARNESS.md`: properties on the tunnel
+  bridge such as `x-faults`, `x-gate`, `x-hang`, set at start or by
+  `qom-set`) for the unplug-during-I/O legs and `39-A.7`'s ordering legs;
+  its gate actions are test stimuli, never evidence the driver acts on.
+- When `usb4-emu` adds the controller models its catalogue announces, the
+  legs of this section extend to them (a Titan Ridge model would give the
+  TR row its first reading); until then only the Alpine Ridge row runs on
+  an emulator. A change the legs need in the emulator is written as a
+  request for its maintainer, never made here.
 - `-trace 'usb4_*' -D <VM_DIR>\usb4-trace.log` on every leg; the trace
   decodes every ring 0 frame both ways and is the oracle for "what the
   client sent".
