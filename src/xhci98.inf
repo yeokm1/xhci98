@@ -179,9 +179,10 @@ HKR,,NTMPDriver,,xhci98.sys
 ; boot-start service that hands ExSetTimerResolution to xhci98.sys, which
 ; also loads on Windows 98 and so cannot import it. No Reboot here (owner,
 ; 2026-10-13, decision H2): setup asks for a restart only by its own rules,
-; and a polled controller keeps the clock tick until the next boot, when the
-; helper is there. No .HW section (no MSI below NT 6) and no DelService
-; (xhcimsi was never installed on these systems).
+; and a polled controller with XhciPollFineTimer 1 (0, off, by default)
+; keeps the clock tick until the next boot, when the helper is there. No
+; .HW section (no MSI below NT 6) and no DelService (xhcimsi was never
+; installed on these systems).
 [Xhci.Dev.NTx86]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI,XhciHlpr.CopyFiles

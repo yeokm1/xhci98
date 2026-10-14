@@ -1959,7 +1959,7 @@ section 6's table for `2.4.0.0` and later:
 |---|---|---|
 | `2.4`, fresh, Vista or 7 (32-bit) | no helper until the restart | section 6's first row: the restart asked; the controller held until it (R4); after it bound, MSI and the timer |
 | `2.4` over `2.3.0.0` or `2.3.1.0`, Vista or 7 (32-bit) | the old HCD and `xhcimsi.sys` until the restart (U1's reading: the old image keeps running) | the restart asked; at it the old service is gone or failing to load (section 15.7) and `xhcihlpr.sys` loads; the `2.4` HCD binds the new device |
-| `2.4`, fresh or over an earlier package, 2000 or XP | as the release before it until the next boot; no helper | no forced restart (decision H2); a polled controller keeps the tick until the next boot, when its look binds the helper |
+| `2.4`, fresh or over an earlier package, 2000 or XP | as the release before it until the next boot; no helper | no forced restart (decision H2); a polled controller with `XhciPollFineTimer` 1 (0, off, by default since 2026-10-14) keeps the tick until the next boot, when its look binds the helper |
 | the `2.4` HCD, `xhcihlpr.sys` missing or failing, `xhcimsi.sys` still loaded | the old helper idles; nothing opens it | `ABSENT`: on Vista and 7 the helper-less MSI rules (section 4.2's strip), and no timer anywhere |
 | `2.3.x` installed over `2.4` (a downgrade) | the `2.3` HCD, `xhcihlpr.sys` still boot-start, and `xhcimsi.sys` added back by the `2.3` INF (Vista and 7) | two helpers, two names, no collision; the `2.3` HCD binds `xhcimsi`; `xhcihlpr` loads and answers nobody. Section 6's downgrade hazard (`MSISupported`) stands as written |
 | a later package with channel major 3 | old HCD, new helper | the old HCD's V2 code is refused by a V3-only helper (helper-less outcome); a later helper keeps answering V2 for as long as it can serve it (the rule for a minor change) |
@@ -2242,7 +2242,11 @@ with the code:
 On QEMU guests as section 10 asks (the `release` package unless a
 switch needs `qemu`; the kernel image and an ordinary boot recorded).
 Record 15 section 7.2.12's T legs are the timer's; these are the
-helper's.
+helper's. Since the owner's change of 2026-10-14 (record 15 section
+7.2.4) the timer is off by default, so every leg below that reads the
+timer (`TmrSource`, the calls, the timer verdict) sets
+`XhciPollFineTimer` to 1 before the boot it reads; with it 0 the thread
+is never made, and nothing of the timer is read.
 
 - **N1, the helper on 2000 and XP.** Install on 2000 SP4 (uniprocessor
   and the SMP guest) and XP SP3: no restart forced (decision H2), the
