@@ -1,7 +1,7 @@
 /*
  * tbt_topo.h - finding a Thunderbolt domain's tunnel ports and reading
- * them, the pure half (roadmap-usb4.md task 39-A.5; design record 21
- * sections 6.3 and 6.5).
+ * them, the pure half (roadmap-usb4.md tasks 39-A.5 and 40-A.4; design
+ * record 21 sections 6.3 and 6.5, design record 22 section 7.6).
  *
  * Three things live here, all over PCI configuration space reached through
  * accessors the caller supplies (the driver passes HalGetBusData-backed
@@ -20,6 +20,14 @@
  *     usb4_switch_map_pcie_down and tb.c tb_find_pcie_down) names no PCI
  *     location. Every tunnel change acts on the whole set; exclusive
  *     ownership across domains is the caller's, with XhciTbtExclusive;
+ *   - under the USB4 profile (record 22 section 7.6), the router-named
+ *     source and the port-to-member correspondence: the host router's Get
+ *     PCIe Downstream Entry Mapping answer names a PCIe Down adapter's
+ *     bridge (XhciTbtTopoAddNamed), and where it does not, the member
+ *     whose secondary bus gained a function when a port's tunnel came up
+ *     is learned as that port's (XhciTbtLearnArm, XhciTbtLearn). A tunnel
+ *     change then acts on the port's own member (XhciTbtPortMember), and
+ *     on the whole set while it is not known;
  *   - the port reading of section 6.5: Link Status Data Link Layer Link
  *     Active where Link Capabilities says it is reported, Slot Status
  *     Presence Detect State where the slot is implemented, and an SHPC
@@ -256,7 +264,26 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 #define XHCI_TBT_SRC_ROOTPORT       2UL /* a listed root port beside an
                                            integrated NHI, its only NHI     */
 #define XHCI_TBT_SRC_OVERRIDE       3UL /* XhciCmTunnelBridge               */
+#define XHCI_TBT_SRC_ROUTER         4UL /* router-named: the USB4 host
+                                           router's Get PCIe Downstream
+                                           Entry Mapping (record 22 7.6)   */
 #define XHCI_TBT_SRC_SHPC           5UL /* an SHPC bridge (the emulator)    */
+
+/*
+ * XHCI_TBT_TOPO.Corr[]: how a member's USB4 port is known (record 22
+ * section 7.6). A member is the bridge of at most one port and a port has
+ * at most one member; two claims that disagree leave both unknown, for
+ * good (CONFLICT), never one picked.
+ */
+#define XHCI_TBT_CORR_NONE          0UL /* not known: the whole set acts    */
+#define XHCI_TBT_CORR_NAMED         1UL /* the router named it              */
+#define XHCI_TBT_CORR_LEARNED       2UL /* its secondary bus gained the
+                                           function at the port's tunnel up */
+#define XHCI_TBT_CORR_CONFLICT      3UL /* claims disagreed: never known    */
+
+/* USB4 ports a correspondence can name: 1 to 32 (TBT_U4_PORT.Index). */
+#define XHCI_TBT_MAX_PORTS          32UL
+#define XHCI_TBT_NO_MEMBER          0xFFFFFFFFUL
 
 #define XHCI_TBT_MAX_SIBLINGS       16UL    /* kept for the log             */
 #define XHCI_TBT_MAX_CANDIDATES     16UL    /* kept for the log             */
@@ -327,6 +354,17 @@ typedef struct _XHCI_TBT_TOPO {
     ULONG Base[XHCI_TBT_MAX_TUNNELS];       /* each one's at XhciTbtSetArm  */
     ULONG BaseArmed;
     XHCI_TBT_BRIDGE Pick;   /* the first one's reading                      */
+    /* the USB4 profile's correspondence (record 22 section 7.6) */
+    ULONG FindOutcome;  /* XhciTbtTopoFind's own outcome, kept when a
+                           router-named member turns Outcome into SET       */
+    ULONG Named;        /* members XhciTbtTopoAddNamed added                */
+    ULONG Port[XHCI_TBT_MAX_TUNNELS];   /* each one's USB4 port, 1-based,
+                                           0 when not known                 */
+    ULONG Corr[XHCI_TBT_MAX_TUNNELS];   /* XHCI_TBT_CORR_*                  */
+    ULONG PortConflict; /* bit n-1: port n had claims that disagreed        */
+    ULONG LearnPort;    /* the port XhciTbtLearnArm armed for, 0 for none   */
+    ULONG LearnBus[XHCI_TBT_MAX_TUNNELS];   /* each one's secondary bus     */
+    ULONG LearnSeen[XHCI_TBT_MAX_TUNNELS];  /* XHCI_TBT_GAIN_* at the arm   */
     /* the walk's own state */
     ULONG Visited[8];   /* one bit per bus number                           */
     UCHAR Stack[256];   /* buses still to walk                              */
@@ -373,8 +411,13 @@ typedef struct _XHCI_TBT_TOPO {
  * members is MANY, empty. Exclusive ownership across domains is decided
  * after this, from every domain's claims (XhciTbtExclusive).
  *
- * Returns topo->Outcome; topo->Set holds topo->Tunnels ports for SET and
- * OVERRIDE and none otherwise.
+ * Under the USB4 profile the router-named members join after this
+ * (XhciTbtTopoAddNamed), before the claims are published.
+ *
+ * Returns topo->Outcome, also kept in topo->FindOutcome; topo->Set holds
+ * topo->Tunnels ports for SET and OVERRIDE and none otherwise. Every
+ * port-to-member correspondence starts unknown: a discovery clears what
+ * an earlier one named or learned.
  */
 ULONG XhciTbtTopoFind(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
                       PXHCI_TBT_TOPO topo);
@@ -398,6 +441,118 @@ ULONG XhciTbtExclusive(const ULONG *set, ULONG count, const ULONG *others,
  */
 ULONG XhciTbtParseBdfList(PCWSTR text, ULONG chars, PULONG list,
                           ULONG capacity);
+
+/* ---- the USB4 profile's correspondence (record 22 section 7.6) --------- */
+
+/* XhciTbtTopoAddNamed's and XhciTbtLearn's return. */
+#define XHCI_TBT_MAP_ADDED          1UL /* named: joined the set, ROUTER    */
+#define XHCI_TBT_MAP_KNOWN          2UL /* named: already a member, now the
+                                           port's; learn: the port's member
+                                           was already known                */
+#define XHCI_TBT_MAP_LEARNED        3UL /* learn: the member is the port's  */
+#define XHCI_TBT_MAP_NO_BRIDGE      4UL /* named: no function there, or not
+                                           a PCI-to-PCI bridge              */
+#define XHCI_TBT_MAP_UNREAD         5UL /* an access failed or a header read
+                                           all-ones: nothing taken, try
+                                           again                            */
+#define XHCI_TBT_MAP_REFUSED        6UL /* named: the discovery admits no
+                                           router-named member, or it is
+                                           the NHI's own parent             */
+#define XHCI_TBT_MAP_FULL           7UL /* named: no room in the set        */
+#define XHCI_TBT_MAP_CONFLICT       8UL /* the claim disagrees with one
+                                           already made: neither is kept    */
+#define XHCI_TBT_MAP_NOT_GAINED     9UL /* learn: no member gained one      */
+#define XHCI_TBT_MAP_SEVERAL        10UL /* learn: more than one gained     */
+#define XHCI_TBT_MAP_INACTIVE       11UL /* learn: the member that gained is
+                                            not active (another domain
+                                            claims it)                      */
+#define XHCI_TBT_MAP_NOT_ARMED      12UL /* learn: no baseline for this port */
+#define XHCI_TBT_MAP_BAD_PARAM      13UL
+
+/* XHCI_TBT_TOPO.LearnSeen[]: device 0 function 0 of a secondary bus. */
+#define XHCI_TBT_GAIN_ABSENT        0UL
+#define XHCI_TBT_GAIN_PRESENT       1UL
+#define XHCI_TBT_GAIN_UNREAD        2UL /* not read, or the bridge's bus
+                                           numbers say no secondary bus     */
+
+/*
+ * The router-named source (record 22 sections 6.3 and 7.6): an entry of
+ * the host router's Get PCIe Downstream Entry Mapping answer (operation
+ * 30h, USB4 Specification Tables 8-26, 8-47 and 8-48) whose non-FPB
+ * Routing ID `bdf` (bus 15:8, device 7:3, function 2:0, the packing of
+ * XHCI_TBT_BDF and of TBT_U4_PORT.MapRid) names the bridge of the PCIe
+ * Down adapter of USB4 port `port` (1-based, TBT_U4_PORT.Index). Called
+ * after XhciTbtTopoFind, once per entry the router answered, before the
+ * set's claims are published for XhciTbtExclusive; again after every
+ * discovery acted on, since XhciTbtTopoFind clears the correspondence.
+ *
+ * What it allows, and nothing else:
+ *   - a location where a function answers and is a PCI-to-PCI bridge
+ *     (header layout 1), not the NHI's parent: otherwise NO_BRIDGE or
+ *     REFUSED; an access that fails, or a present function whose header
+ *     reads all-ones, is UNREAD and takes nothing;
+ *   - with the discovery's outcome SET, NO_CANDIDATE, UNLISTED or
+ *     AMBIGUOUS, a bridge not yet a member joins the set with source
+ *     XHCI_TBT_SRC_ROUTER (ADDED; Outcome becomes SET, FindOutcome keeps
+ *     the discovery's); an ambiguous listed root port the router names
+ *     joins too, the exclusive-ownership check deciding as for any claim;
+ *     no room is FULL;
+ *   - a bridge already a member, by any source, keeps that source and
+ *     becomes the port's (KNOWN);
+ *   - with the override (OVERRIDE), the override is the whole set: a
+ *     named member becomes the port's (KNOWN), any other location is
+ *     REFUSED; with OVERRIDE_BAD, INCOMPLETE, MANY or no discovery, all is
+ *     REFUSED;
+ *   - the port already another member's, or the member already another
+ *     port's, by naming or learning, is CONFLICT: the earlier
+ *     correspondence is withdrawn too, neither port nor member is known
+ *     again for this discovery, and a bridge not yet a member is not
+ *     added. Naming the same port and bridge again is KNOWN.
+ */
+ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG port,
+                          ULONG bdf);
+
+/*
+ * The learned correspondence (record 22 section 7.6), for a port whose
+ * bridge the router did not name. Before the port's PCIe tunnel is built,
+ * XhciTbtLearnArm reads, for every member, its secondary bus number and
+ * whether a function answers at device 0 function 0 of that bus, and
+ * binds the baseline to `port`; arming again replaces it. Returns
+ * MAP_BAD_PARAM for a bad port or an empty set, else 0.
+ */
+ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG port);
+
+/*
+ * After the tunnel of `port` came up: reads every member again. A member
+ * whose function went from absent to present, with the same secondary bus,
+ * "gained" one. The outcomes, in this order:
+ *   - the port's member already known (named or learned): KNOWN, nothing
+ *     read; its correspondence lasts for the discovery;
+ *   - the port conflicted before: CONFLICT; not armed for `port`:
+ *     NOT_ARMED;
+ *   - any member unreadable at the arm or now (a failed access; its bus
+ *     numbers reading all-ones or naming no secondary bus above its own;
+ *     the secondary bus changed since the arm): UNREAD, nothing learned;
+ *   - no member gained: NOT_GAINED, the baseline kept so the caller may
+ *     read again while the device answers Configuration Request Retry;
+ *   - more than one gained: SEVERAL, nothing learned;
+ *   - the one that gained is inactive (`active`, per member as
+ *     XhciTbtExclusive gives it; NULL for all active): INACTIVE;
+ *   - it is already another port's, or conflicted: CONFLICT, both
+ *     withdrawn as XhciTbtTopoAddNamed does;
+ *   - otherwise LEARNED: it is the port's from now on.
+ * Every outcome but NOT_GAINED and UNREAD ends the baseline.
+ */
+ULONG XhciTbtLearn(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG port,
+                   const ULONG *active);
+
+/*
+ * The index in topo->Set of USB4 port `port`'s member, named or learned,
+ * or XHCI_TBT_NO_MEMBER when it is not known (the tunnel change then acts
+ * on the whole set, and no nvme98 statement names one member of a set of
+ * more than one: record 22 sections 7.6 and 10.2).
+ */
+ULONG XhciTbtPortMember(const XHCI_TBT_TOPO *topo, ULONG port);
 
 /* ---- the port reading (record 21 section 6.5) -------------------------- */
 
