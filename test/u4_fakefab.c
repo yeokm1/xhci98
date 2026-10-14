@@ -904,6 +904,9 @@ static ULONG fabClockUs(PVOID ctx)
 {
     FAB *f = (FAB *)ctx;
 
+    if (f->ClockFrozen) {
+        return f->FrozenUs;
+    }
     if (f->TickUs != 0) {
         return (f->NowUs / f->TickUs) * f->TickUs;
     }

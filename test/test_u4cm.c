@@ -1784,6 +1784,237 @@ static void test_review_identity(void)
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* Review round 2's cases                                              */
+/* ------------------------------------------------------------------ */
+
+static int g_swRouter;
+static unsigned long g_swCs;
+static unsigned long g_swAdp;
+static unsigned long g_swAddr;
+static int g_swWrite;
+static unsigned long g_swMask;      /* a write: swallowed when (data & mask) == want */
+static unsigned long g_swWant;
+static unsigned long g_swLeft;      /* how many to swallow */
+
+static int swallowHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                       unsigned long adp, unsigned long addr, unsigned long n,
+                       const unsigned long *data)
+{
+    (void)f;
+    if (g_swLeft == 0 || router != g_swRouter || cs != g_swCs ||
+        (cs != TBT_CS_ROUTER && adp != g_swAdp) ||
+        g_swAddr < addr || g_swAddr >= addr + n) {
+        return FAB_HOOK_GO;
+    }
+    if (g_swWrite) {
+        if (pdf != TBT_PDF_WRITE || data == NULL ||
+            (data[g_swAddr - addr] & g_swMask) != g_swWant) {
+            return FAB_HOOK_GO;
+        }
+    } else if (pdf != TBT_PDF_READ) {
+        return FAB_HOOK_GO;
+    }
+    g_swLeft--;
+    return FAB_HOOK_SWALLOW;
+}
+
+static void armSwallow(FAB *f, int router, unsigned long cs, unsigned long adp,
+                       unsigned long addr, int write, unsigned long mask,
+                       unsigned long want, unsigned long count)
+{
+    g_swRouter = router;
+    g_swCs = cs;
+    g_swAdp = adp;
+    g_swAddr = addr;
+    g_swWrite = write;
+    g_swMask = mask;
+    g_swWant = want;
+    g_swLeft = count;
+    f->Hook = swallowHook;
+}
+
+/* The longest a resume may take with budgets `host` and `each` for n
+ * obligations: the bound's own margin and platform term, with these
+ * budgets in place of the defaults. */
+static unsigned long boundWith(ULONG n, unsigned long host, unsigned long each)
+{
+    return TbtU4ResumeBoundUs(n, 0) - TBT_U4_RESUME_HOST_US - n * TBT_U4_RESUME_EACH_US +
+           host + n * each;
+}
+
+static void test_review2_budget(void)
+{
+    int dev;
+    LONG rc;
+    unsigned long t0;
+
+    /* Spent before the host router answers: the host router's failure
+     * (inert after activation, section 4.4), and nothing torn down. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_cm.ResumeHostUs = 1;
+    g_cm.ResumeEachUs = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK(rc != TBT_OK, "no budget: the failure path");
+    CHECK(g_cm.Failed, "the host router not reached in its budget: inert");
+    CHECK(fabPcieUp(&g_fab, 1), "nothing torn down");
+    CHECK(g_fab.R[dev].Adp[1].Path[2 * 8] & 0x80000000UL, "the device's paths untouched");
+
+    /* Spent in the host router's discovery: the same. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_cm.ResumeHostUs = 150000UL;
+    g_cm.ResumeEachUs = 0;
+    armSwallow(&g_fab, 0, TBT_CS_ROUTER, 0, 0, 0, 0, 0, 100);
+    t0 = g_fab.NowUs;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK(rc != TBT_OK && g_cm.Failed, "spent at the host router: the failure path");
+    CHECK(g_fab.NowUs - t0 <= boundWith(2, 150000UL, 0), "within the bound");
+    CHECK(fabPcieUp(&g_fab, 1), "nothing torn down");
+
+    /* Spent in a rebuild (a router that never comes ready), on a frozen
+     * clock: the waited sum ends it, within the bound. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    g_fab.R[dev].NoRouterReady = 1;
+    g_cm.ResumeHostUs = 500000UL;
+    g_cm.ResumeEachUs = 300000UL;
+    g_fab.ClockFrozen = 1;
+    g_fab.FrozenUs = g_fab.NowUs;
+    t0 = g_fab.NowUs;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.ClockFrozen = 0;
+    CHECK_EQ(rc, TBT_E_STATE, "a frozen clock: still ends, the failure path");
+    CHECK(g_fab.NowUs - t0 <= boundWith(2, 500000UL, 300000UL), "within the bound");
+    CHECK(state(&g_cm, 1) == TBT_U4_HELD, "HELD, not torn down");
+
+    /* Spent in verification: no teardown, HELD. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Suspend(&g_cm);
+    g_cm.ResumeEachUs = 1;
+    armSwallow(&g_fab, dev, TBT_CS_ROUTER, 0, 0, 0, 0, 0, 100);
+    t0 = g_fab.NowUs;
+    rc = TbtU4Resume(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(rc, TBT_E_STATE, "spent verifying: the failure path");
+    CHECK(g_fab.NowUs - t0 <= boundWith(2, TBT_U4_RESUME_HOST_US, 1), "within the bound");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
+    CHECK(fabPcieUp(&g_fab, 1), "nothing torn down");
+}
+
+static void test_review2_identity_and_links(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int child;
+    ULONG gen;
+    const TBT_U4_PORT *p;
+
+    /* The UUID's read failing at the connect: never compared, so no false
+     * removal; the next good sample becomes the identity. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    armSwallow(&g_fab, dev, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 0, 0, 0, TBT_CTL_ATTEMPTS);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "UUID unread: UP all the same");
+    CHECK(!p->Dev.UuidValid, "its UUID not valid");
+    gen = p->Generation;
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(p->Generation, gen, "no false removal");
+    CHECK(p->Dev.UuidValid && p->Dev.Uuid[0] == g_fab.R[dev].Rcs[7], "the next sample kept");
+
+    /* A Thunderbolt 3 router below depth 1: no router operation, its LC
+     * fuse as the identity. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, dev, child, 1);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(g_cm.Counters.LinksDiscovered, 1, "the Thunderbolt 3 link");
+    CHECK(g_cm.Links[0].ChildTbt3, "known as Thunderbolt 3");
+    CHECK_EQ(g_cm.Links[0].CapsState, TBT_U4_CAPS_DEFAULT, "no Get Capabilities");
+    CHECK_EQ(fabFindWrite(&g_fab, 0, child, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_26), -1,
+             "no router operation sent to it");
+    CHECK_EQ(g_cm.Links[0].ChildUuid[0], 0xAABB0000UL + (unsigned long)child,
+             "the LC's fused UUID");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_cm.Counters.LinksRemoved, 0, "stable: kept");
+    g_fab.R[child].Rcs[FAB_RCAP_LC + 6] ^= 0xFFUL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(g_cm.Counters.LinksRemoved, 1, "another fused UUID: removed");
+}
+
+static void test_review2_restore(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int lane;
+    const TBT_U4_PORT *p;
+
+    /* Lane Disable's clearing lost at the unplug: still owed, retried at
+     * the idle tick until read back clear. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].BondPossible = 0;
+    g_fab.R[dev].Adp[1].Cs[FAB_CAP_PORT + 18] = 0;
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    CHECK(p->Lane1Disabled, "lane 1 disabled");
+    armSwallow(&g_fab, 0, TBT_CS_ADAPTER, (unsigned long)lane + 1, FAB_CAP_LANE + 1, 1,
+               0x4000UL, 0, 2 * TBT_CTL_ATTEMPTS);
+    fabUnplug(&g_fab, 1);
+    /* the fabric clears it at a disconnect; this router keeps it */
+    g_fab.R[0].Adp[lane + 1].Cs[FAB_CAP_LANE + 1] |= 0x4000UL;
+    poll(&g_cm, &g_fab, 1);
+    g_fab.Hook = NULL;
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "unplugged: EMPTY");
+    CHECK(p->Lane1Disabled, "the restore failed: still owed");
+    CHECK(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, "Lane Disable still set");
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!p->Lane1Disabled, "retried at the idle tick");
+    CHECK_EQ(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, 0,
+             "Lane Disable cleared");
+
+    /* A host lane entry unreadable when the tunnel is followed: the
+     * tunnel incomplete, so its teardown never claims the path closed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    lane = fabPortLane0(&g_fab, 1);
+    armSwallow(&g_fab, 0, TBT_CS_PATH, (unsigned long)lane, 2 * 9, 0, 0, 0, 1000);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Pcie.Incomplete, "the host lane's entry unread: incomplete");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "HELD");
+    CHECK(p->Pcie.Written & TBT_U4_E_HOST_ENABLE, "its host side owned all the same");
+    g_ldCalls = 0;
+    memset(&g_ld, 0, sizeof(g_ld));
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    CHECK(g_ldCalls == 0 || !g_ld.PathClosed, "an incomplete tunnel: never proven closed");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
+}
+
 int main(void)
 {
     test_cold_minimal();
@@ -1815,6 +2046,9 @@ int main(void)
     test_review_bandwidth_and_tmu();
     test_review_ba_and_closure();
     test_review_identity();
+    test_review2_budget();
+    test_review2_identity_and_links();
+    test_review2_restore();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

@@ -172,6 +172,7 @@ typedef struct _TBT_U4_ROUTER {
     ULONG BaMaxPcie;        /* Buffer Allocation answer, 0 when none */
     ULONG BaMaxUsb3;
     ULONG Uuid[4];          /* USB4: ROUTER_CS_7, 8; Thunderbolt 3: the LC fuse */
+    BOOLEAN UuidValid;      /* read successfully: compared, never a failed sample */
     ULONG Quirks;           /* TBT_U4_QUIRK_* */
     char VendorName[TBT_U4_NAME_LEN];
     char ModelName[TBT_U4_NAME_LEN];
@@ -194,6 +195,7 @@ typedef struct _TBT_U4_ROUTER {
 typedef struct _TBT_U4_TUNNEL {
     BOOLEAN Up;
     BOOLEAN Preserved;      /* found at start, never built here */
+    BOOLEAN Incomplete;     /* an entry could not be read: never proven closed */
     ULONG Hd;               /* lane HopID downstream */
     ULONG Hu;               /* lane HopID upstream */
     ULONG Written;          /* TBT_U4_E_* written (or found, when preserved) */
@@ -297,7 +299,9 @@ typedef struct _TBT_U4_LINK {
     ULONG ParentLane0;      /* the parent's downstream lane 0 adapter */
     ULONG ParentLaneCap;    /* its Lane Adapter Configuration Capability */
     TBT_ROUTE Child;
-    ULONG ChildUuid[2];
+    BOOLEAN ChildTbt3;      /* a Thunderbolt 3 router: no router operations */
+    ULONG ChildLc;          /* its link controller, for the fused UUID */
+    ULONG ChildUuid[4];
     ULONG CapsState;        /* TBT_U4_CAPS_* of the child (section 6.4) */
     ULONG CapsEnabled;
 } TBT_U4_LINK, *PTBT_U4_LINK;
@@ -494,9 +498,12 @@ typedef struct _TBT_U4CM {
     TBT_U4_OBLIGATION Obligations[TBT_U4_OBLIGATIONS];
     BOOLEAN ResumeHeld;     /* the last resume left an obligation unmet */
     BOOLEAN Budgeted;       /* a resume budget is running */
-    BOOLEAN BudgetSpent;    /* and ran out: sequences stop, ports HELD */
+    BOOLEAN BudgetSpent;    /* and ran out: requests refused, ports HELD */
     ULONG BudgetStartUs;
     ULONG BudgetUs;
+    ULONG BudgetWaitedUs;   /* the waits known to have passed: the backstop */
+    ULONG ResumeHostUs;     /* the budgets, TBT_U4_RESUME_* unless a test sets them */
+    ULONG ResumeEachUs;
 
     TBT_U4_ACTION Actions[TBT_U4_ACTION_QUEUE];
     ULONG ActionHead;

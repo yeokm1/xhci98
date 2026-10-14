@@ -135,6 +135,8 @@ typedef struct FAB {
     TBT_HOST Host;                  /* Context = this */
     unsigned long NowUs;
     unsigned long TickUs;           /* the clock's quantum, 0 exact */
+    int ClockFrozen;                /* the clock reads FrozenUs: it never moves */
+    unsigned long FrozenUs;
 
     /* the host interface */
     unsigned long Caps;
