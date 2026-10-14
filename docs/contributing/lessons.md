@@ -9936,4 +9936,78 @@ until the installed system has booted, and a limitation is scoped by its
 mechanism (here every class driver importing `usbd.sys`), not by the one
 driver the first stop named.** The package may not carry
 Microsoft's files, so this stands as a limitation (release notes, "Known
-limitations").
+limitations"); a fix through `txtsetup.oem` was investigated and is in the
+lesson below.
+
+## A `txtsetup.oem` disk is always read from drive A: - text mode cannot take a file from the Windows CD - and a `driver` line always makes a service
+
+Investigated 2026-10-14 for the Windows 2000 F6 limitation above, as a fix
+in the same spirit as the INFs' `LayoutFile=layout.inf`: let the option name
+the user's own Windows 2000 CD as a second disk and copy `usbd.sys`,
+`hidclass.sys` and `hidparse.sys` from it, so that the floppy still carries
+no Microsoft file. It cannot work; the reading and the legs follow.
+
+**What text mode does with a second OEM disk** (static, Windows 2000 SP4
+`SETUPDD.SYS`, `SETUPLDR.BIN` and `USETUP.EXE`, MSVC 6.0 `dumpbin /disasm`
+and WDK 7.1 `kd -z`; `legal-provenance.md` section 4 has the addresses):
+
+- Every file of an F6 option is read from `\device\floppy0`, whatever its
+  `[Disks]` entry says. The routine that copies the option's files is
+  handed `\device\floppy0` by its caller (the `$OEM$\TEXTMODE` source of an
+  unattended OEM preinstall is the only other case), and for each file it
+  calls the disk prompt with that device and the file's own disk
+  description and tag file. The prompt checks for the tag file on that
+  device without asking when it is there, and otherwise shows "Insert the
+  disk labeled: ... into drive A:" with ENTER and F3 only (escape not
+  allowed), until the tag file appears there. A disk whose tag file is
+  `\CDROM_NT.5` is therefore asked for in drive A: forever.
+- The copy opens a source name or, failing that, its compressed form (the
+  extension's last character replaced by `_`), and expands it: an option
+  line naming `usbd.sys` takes `USBD.SY_`.
+- Only `driver`, `port` and `class` lines land in `system32\drivers`
+  (`dll` goes to `system32`, where the kernel does not look for a driver's
+  import). `setupldr`'s parser refuses any of the three without a
+  `DriverKey` - the option is dropped with "File caused an unexpected error
+  (0) at line 1273 in ...\oemdisk.c" - and `setupdd` creates a service for
+  every line with one (`Type` 1, `Start` 0, the component's group,
+  `SCSI miniport` here), then writes the `[Config.<DriverKey>]` values over
+  it. `setupldr` loads only the option's first `driver`, `port`, `class`
+  or `hal` file, so the extra lines are not loaded in text mode.
+
+**Legs** (QEMU, development host A, `out\p38-matrix\legs\f6w2k\`, runs
+61-66 in `notes.txt`, git-ignored; the `2.4.0.0` dry cut 5's `release-x86`
+with only `txtsetup.oem` changed, new blank disks `vm\t38mx\f6-w2k-x*`):
+
+- `d2 = "Windows 2000 Professional CD", \CDROM_NT.5, \i386` with
+  `driver = d2, usbd.sys` and no `DriverKey`: `setupldr` dropped the
+  option at the `oemdisk.c` error (`x1-03`). With a `DriverKey` on each line:
+  the option loaded, and at the file copy text mode showed "Insert the disk
+  labeled: Windows 2000 Professional CD into drive A:", ESC did nothing
+  and ENTER asked again, with the CD in the CD drive (`x1b-06` to `-08`).
+- The same three lines with `d2`'s tag file `\usbd.sy_`, and the CD's
+  `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` copied onto the F6
+  floppy (as a user would, from the user's own CD), plus `[Config.usbd]`,
+  `[Config.hidclass]` and `[Config.hidparse]` each writing `Start` 3: no
+  prompt; `system32\drivers` held the three files expanded (SHA-256 equal to
+  `expand.exe`'s output, `usbd.sys` the `45EE7C3D...` that
+  `extract-usbd-sources.ps1` names), and the hive services `usbd`,
+  `hidclass` and `hidparse` with `Start` 3. The first GUI-mode boot went on
+  with no stop, both with a hub, USB keyboard, mouse and audio device (the
+  USB keyboard drove Regional Settings and the name page in GUI mode, no
+  PS/2 key event in the QEMU trace; `setupapi.log` installed the keyboard,
+  mouse, HID devices, hub, root hub and controller) and with a stick at
+  root port 1 and no HID (`USBSTOR\DISK` installed). Both stopped at the
+  product key page, which this medium demands (`x2a-g05`, `x2b-g03`).
+
+So the limitation can be lifted only with the three Microsoft files on the
+F6 disk, put there by the user, which the project's rule for its media
+does not allow as things stand; the option would also have to be a second
+one, for Windows 2000 only, since XP's text mode would ask for the missing
+disk with no way past it, and it leaves three inert `Start` 3 services
+behind. That is the owner's decision; nothing was changed.
+
+Rule. **A `txtsetup.oem` can name only files on a disk in drive A:, and
+every `driver`, `port` or `class` line is a service; read the loader's and
+`setupdd`'s handling of a new option shape before trying it, and expect
+`setupldr` to drop the whole option, not one line, when a line is
+malformed.**

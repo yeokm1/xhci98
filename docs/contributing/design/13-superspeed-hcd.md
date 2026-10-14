@@ -804,6 +804,23 @@ The limits, all of them the user's to know:
    has not been read. The package may not carry Microsoft's files
    (`AGENTS.md`), so it stands as a limitation, with no workaround
    (release notes, "Known limitations").
+   **A fix through this file, investigated 2026-10-14 (as built: no
+   change).** Naming the user's Windows 2000 CD as a second `[Disks]`
+   entry cannot work: text mode reads every file of an F6 option from
+   `\device\floppy0` and asks for a missing disk's tag file there,
+   "Insert the disk labeled: ... into drive A:", with no escape (static;
+   runtime, the CD in the CD drive, `x1b-06`). `USBD.SY_`,
+   `HIDCLASS.SY_` and `HIDPARSE.SY_` copied by the user from that CD
+   onto the F6 floppy, on `driver` lines with a `DriverKey` (which
+   `setupldr` requires) and `[Config.*]` values setting the services
+   those lines create to `Start` 3, did lift the stop, with a hub,
+   keyboard and mouse and with a stick and no HID device (both to the
+   product key page, `x2a-g05`, `x2b-g03`). That puts Microsoft files
+   on the F6 disk, needs a second, Windows 2000-only option (XP's
+   text mode would ask for the disk with no way past it) and leaves
+   three inert services, so it waits on the owner. `lessons.md`, "A
+   `txtsetup.oem` disk is always read from drive A: ...", has the
+   reading and the legs; `legal-provenance.md` section 4 the addresses.
 
 **What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
 `build-driver.cmd` on every build, self-tested by mutation first, and by
