@@ -340,10 +340,11 @@ and Windows 2000 (the base at hand had no `xhci98` controller).
 
 ## The VM matrix on the `2.4.0.0` dry cuts (2026-10-14)
 
-One matrix on the integrated build read every leg 38.3, 38.8, 38.10,
+One matrix on the integrated build read the legs 38.3, 38.8, 38.10,
 38.11 and 38.12 name, each guest carrying every task's legs in one
-install (Phase 36's condensed matrix). The task sections below take their
-verdicts from it.
+install (Phase 36's condensed matrix), but for the legs each task section
+below lists as not run, not makeable, deferred or owed. The task sections
+take their verdicts from it.
 
 **The vehicle.** Development host A, QEMU 11.1.0, TCG, the total of the
 guests' vCPUs kept within the host's logical processors. Kit
@@ -460,13 +461,17 @@ x64, 7 x86 (both configurations) and x64; update vetoed on 2000, XP, Vista
 x64 and 7 x64; roll back vetoed on XP. On 32-bit Vista and 7 Windows
 defers every update and rollback to the restart, with or without the
 tool, so the hold is not needed there; 2000 has no Roll Back. XP x64's
-cells are unread (the configuration was not reachable). No target showed a
-missing veto, so `cln_removal_enabled` stays as built, removal enabled on
-NT 5.0 to 6.1.
+cells are unread (the configuration was not reachable). No target read
+showed a missing veto, so removal stays enabled on NT 5.0, 5.1, 6.0 and
+6.1. On NT 5.2 `cln_removal_enabled` still enables it as built, while
+record 13 section 10.13.8 asks for the veto's reading first: before the
+cut XP x64's veto is read, NT 5.2 is set to list only, or the owner waives
+the reading (38.final).
 
 **Owed after the cut:** a High Speed and a USB 3 hub (bench or
 passthrough; `USB\XHCI98_HUB30` rests on host vectors and the INF gate),
-I4 on 98 SE, and the veto on XP x64.
+and I4 on 98 SE. Before the cut, under 38.final: the veto on XP x64, and
+XP x64's F6 install past the product key page.
 
 ## 38.3 - A finer system timer while polling, and `xhcihlpr.sys`
 
@@ -518,7 +523,7 @@ default's change with 38.12's merge: thread `01a138ad`, converged at round
 | T5, `XhciPollActiveMs` 1 and 4 | Recorded: 2000 1.2 ms and 8.3 ms, 7 x86 1.3 ms and 5.2 ms |
 | T6, the helper disabled on NT, and 98 SE and ME | PASS |
 | T7, the value 0 | PASS: no thread |
-| T8, `XhciPollIdleMs` 50 against 500 | **Deferred by the owner** (2026-10-14), the default staying 50. Partial, value 0: plug-to-working 0.3 to 0.7 s at both values everywhere, remote wake at both, idle host load halved at 500 on Vista x86 (12.7 to 5.4 %) and about 30 % lower on Vista x64, no difference beyond noise on XP, XP x64 and 2000; not taken on 98 SE, ME and 7 (`results.md` section 5) |
+| T8, `XhciPollIdleMs` 50 against 500 | **Deferred by the owner** (2026-10-14), the default staying 50. Partial, value 0: plug-to-working 0.3 to 0.7 s at both values everywhere, remote wake at both on the x86 guests (the test client is x86; XP x64 and Vista x64 not applicable), idle host load halved at 500 on Vista x86 (12.7 to 5.4 %) and about 30 % lower on Vista x64, no difference beyond noise on XP, XP x64 and 2000; not taken on 98 SE, ME and 7 (`results.md` section 5) |
 | C5b, the default on dry cut 5 | PASS on 98 SE and XP: the value 0 as installed, `TmrThread` 0 in mode 2 |
 
 **Owed after the cut:** the finer timer on real hardware, and with it the
@@ -627,7 +632,9 @@ composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
   `48DE4F12...DC9628`), 4 (`f7a409ad`, `880856F4...8EDE79`), 5
   (`64d2801f`, `F80212CC...2B9405`, `out\p38-final\dryrun-x86-5`,
   `hashes-5.txt`). On dry cut 5 the rehearsal of `verify-cut.ps1` passed
-  30 checks, its six failures the x64 files a dry cut does not sign. The
+  30 checks; its six failures are the x64 package's absence from an x86
+  dry cut (the twelve x64 files, the four drivers each checked present,
+  and the readme's section 8 listing `RELEASE-X64\` and `DEBUG-X64\`). The
   owner's cut command is `out\p38-final\cut-2.4.0.0.ps1.txt`; a draft
   history entry is `out\p38-final\releases\history.md`.
 - **The VM matrix** (above), and the XP F6 fix it called for.
@@ -635,7 +642,10 @@ composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
 **Left:**
 
 - The Windows 2000 F6 entry (branch `p38-w2kf6`, pending its merge), then
-  a dry cut 6 and the F6 legs on 2000 and XP from it.
+  a dry cut 6 and the F6 legs on 2000 and XP from it; XP x64's F6 install
+  past the product key page (it needs a key).
+- XHCICLN on XP x64: its veto read, NT 5.2 set to list only, or the
+  owner's waiver (38.8).
 - The documents pass: `results.md` section 4's points (among them the ME
   Shut Down hang after a disable and enable, not yet a known limitation;
   the update readings against the readme on 98 SE, ME, XP, Vista and 7;
