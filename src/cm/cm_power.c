@@ -296,6 +296,13 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                               stack->Parameters.Power.State);
         nhi->Counters.PowerInline++;
     }
+    /* No reinitialisation will run for this D0 (refused below, or no
+     * thread): a suspend this driver ran, or a domain still holding its
+     * tunnel bridges, is owed their release now, through the failure path,
+     * rather than at the bridge filters' watchdog (cm_reenum.h). */
+    if (nhi->Suspended || nhi->ReenumOn) {
+        CmReenumResumeFailed(nhi);
+    }
     PoStartNextPowerIrp(Irp);
     CmPowerRelease(nhi);
     return STATUS_SUCCESS;

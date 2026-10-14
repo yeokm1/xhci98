@@ -219,6 +219,7 @@ VOID CmReenumService(struct _CM_NHI *nhi);
 VOID CmReenumSuspend(struct _CM_NHI *nhi);
 VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
 VOID CmReenumStop(struct _CM_NHI *nhi);
+VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);

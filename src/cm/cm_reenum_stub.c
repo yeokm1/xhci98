@@ -60,6 +60,13 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
     CmLogNote(nhi, "cm.reenum.resumed", ok ? 1UL : 0UL);
 }
 
+/* IRQL: <= DISPATCH_LEVEL (cm_power.c's D0 completion). */
+VOID CmReenumResumeFailed(PCM_NHI nhi)
+{
+    nhi->Reenum.ResumeFailures++;
+    CmLogNote(nhi, "cm.reenum.resume-failed", nhi->Reenum.ResumeFailures);
+}
+
 VOID CmReenumStop(PCM_NHI nhi)
 {
     nhi->Reenum.Stops++;

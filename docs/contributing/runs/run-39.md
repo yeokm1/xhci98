@@ -356,15 +356,76 @@ sections, and the amd64 twin on the same pattern. Read, not yet tested: the
 append flag `0x00010008` (the readings used `0x00010000`, on ports that had
 no `UpperFilters`), the `.NTx86.6.0` Models section, and the 64-bit guests.
 
-### A side reading for the 98 legs
+### A side reading for the 98 legs: the 0028:C0031B0A fault is NUSB's usbport, not the driver
 
 On 98 SE, removing the root bridge in Device Manager while `xhci98.sys` was
 bound to the xHCI `15C1` below it stopped Windows with "A fatal exception 0E
 has occurred at 0028:C0031B0A", then Rundll32 failed and the desktop did not
 recover until a reset (`legs\win98-tb3\s18.png` to `s20.png`). Removing the
-empty tunnel bridge or the NHI alone did not. Which component faulted was not
-read; it belongs to the V.1 legs' disable and remove cases and to the HCD's
-own removal path on 98, and is recorded here only as an observation.
+empty tunnel bridge or the NHI alone did not. **Attribution, read on
+2026-10-15 (branch `p39-xrm`; evidence in `out\p39-xrm\legs\`): the fault
+belongs to NUSB 3.3's `USBPORT.SYS` teardown under the frozen `1.x`
+miniport, the known `0028:C00312EE` fault at another load address; the
+`2.x`/`3.0.0.0` host controller driver does not fault.**
+
+**What was bound in that reading.** `vm\win98.img` carries the miniport:
+the debug-console log of that run (`debugcon-ar2.log`) opens with
+`DriverEntry (built Sep  3 2026 20:24:44)`, `USBPORT_GetHciMn=57324B30` and
+`registered with usbport.sys`, so the `15C1` was driven by the `1.x`
+miniport under NUSB's 5.00.2195-lineage `usbport.sys`. The log of the boot
+that faulted stops at `cb RH_DisableIrq irql=00` (with `RH irq gate
+closes`), with no `DisableInterrupts` or `StopController` after it: the
+signature AGENTS.md's frozen miniport and `lessons.md` ("Option A works on
+Win98", "The Windows 98 teardown bugcheck belongs to the Windows
+2000-lineage usbport") record for every controller stop on that stack.
+
+| Run | Image, driver | Removal | Result |
+|---|---|---|---|
+| `98m` | a fresh overlay of `vm\win98.img`, `tb3` OFF_OFF with `-Usb3` as p39-vm ran it: the `1.x` miniport (built Sep 3 2026, debug) on `15C1` and on QEMU's xHCI, NUSB 3.3 | Device Manager, Remove on the root bridge `1B36:0001` (00:06.0) | **fatal exception 0E at 0028:C0031B0A**, reproduced; the miniport's trace ends at `cb RH_DisableIrq irql=00` for the `15C1` |
+| `98r` r1 | an overlay of `vm\t26\win98-gold.qcow2` (98 SE, NUSB 3.3, the host controller driver installed; its `AUTOEXEC.BAT` copies `D:\XHCI98.SYS` over the installed driver), the published `2.4.0.0` `release-x86` `xhci98.sys` (SHA-256 `bd5ab1ac...57be`) on `15C1`, its root hub from the `2.4.0.0` INF | the same | removed cleanly, no fault; Refresh brought the bridges, the controller and its root hub back |
+| `98r` r2 | the same overlay, `3.0.0.0` at `55936d1` `qemu` flavour (SHA-256 `b89ba192...a48f`) | the same | removed cleanly: the trace reads root hub query-remove and remove ("dropping every device"), controller `IRP_MN_QUERY_REMOVE_DEVICE` then `IRP_MN_REMOVE_DEVICE`, the controller thread stopped, eight ports unpowered, `quiesce: halted, USBSTS=00000001`, every release; Refresh restarted the controller with its root hub |
+| `2k` k2 | a fresh overlay of `vm\win2k-xonly.img`, `tb3` OFF_OFF, the same `qemu` build installed on `15C1` with `devq update` | `devq remove` (`DIF_REMOVE`, Device Manager's Remove) on the root bridge | removed cleanly, the same sequence; after the restart Windows 2000 asks for, the re-detected controller was installed again (`devq update`) and started |
+
+**Where the fault is.** With QEMU's `log int` on across the removal in `98m`,
+the one ring-0 page fault at the address is `v=0e e=0000 cpl=0
+IP=0028:c0031b0a CR2=0465057d`, `ECX=0465056d`. The bytes at the address
+are `8B 49 08 8B 49 10` (`mov ecx,[ecx+8]; mov ecx,[ecx+10h]`), the same
+two-step walk over a pointer that is already garbage that `lessons.md`
+records at `0028:C00312EE`. The return addresses on the stack, matched
+byte for byte against the files: `C0031DA7`, `C0032404` and `C003016C`
+(VMM-range code, compressed inside `VMM32.VXD`, not matched), then
+`C002CEF8`, `C002CEB5`, `C002FEA4` and `C002B818` in Windows 98 SE's
+`NTKERN.VXD` (file offsets `0x110E4`, `0x110A4`, `0x14094`, `0xFA04`
+blocks), then `FF046C6F`, `FF041EB5`, `FF04E2C7`, `FF042FF4` and
+`FF042EEF` in NUSB 3.3's `USBPORT.SYS` (SHA-256 `eec79b5a...9b55`;
+file offsets `0x51B0`, `0x400`, `0xC814`, `0x1554`, `0x1440` blocks). No
+frame is in the miniport, whose code that boot sat at `FF043xxx` to
+`FF05Exxx` by its own service pointers. So: NUSB's usbport, in the stop
+it runs before calling the miniport's `DisableInterrupts`, calls an NTKERN
+service that walks a VMM list through a stale element. The emulator, PCI's
+`CONFIG_REMOVE` ordering and the NVMe are not involved: the same removal
+on the same tree completes when the host controller driver is bound, and
+the controller is stopped while its registers are still live (Windows 98
+removes the children before the bridge).
+
+**The tunnelled endpoint alone.** With the `3.0.0.0` `qemu` build on `15C1`,
+`tunnel up` (the NVMe on bus 4) and then `usb4-qmp unplug` (`device_del
+enc0`) on 98 SE, and `plug`, `unplug` and `tunnel surprise` on 2000: no
+fault, the controller untouched (it is not behind the tunnel on this tree).
+Neither 98 SE nor 2000 has a driver for the tunnel bridge's hot-plug
+controller here, so neither noticed the NVMe come or go.
+
+**What this does not cover.** A Device Manager removal is orderly: query
+remove, remove, children first, the controller's registers readable
+throughout. A dock's xHCI vanishing on unplug is not: the registers read
+all-ones before Windows hears of it. The emulator cannot do that on
+i440FX today (`device_del tbrp`: "Device 'usb4-tunnel-bridge' does not
+support hotplugging"; the xHCI's port has no hot-plug controller; `dock=on`
+is q35-only, above), so that case stays with V.1.8 on the bench (39-E.1)
+or a future emulator change, which is requested in the `usb4-emu` request
+list of 2026-10-15 (not a tracked file). The driver's own handling of
+all-ones reads is design record 17's and was read with the `qemu`
+flavour's fault injection for `2.2.0.0`.
 
 ## 39-A.4 and 39-A.6 - The NHI driver and the approval policy
 
