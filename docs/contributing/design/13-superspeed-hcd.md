@@ -4913,7 +4913,10 @@ SET_CONFIGURATION (10.9). A device the bus does not split is left Addressed
 for its function driver to configure. **Since task 36.43 (10.12)** a split
 device is presented as a composite-parent PDO under `XHCI98\COMPOSITE`
 (`USB\XHCI98_COMPOSITE` from `2.4.0.0`, 10.13) with its function PDOs beneath it, the parent first on the group's chain; when
-and how the bus splits is unchanged.
+and how the bus splits is unchanged. **Since task 38.12 (10.14)** the
+composite FDO sends one `SELECT_CONFIGURATION` down the composite devnode's
+own stack at its start, as `usbccgp` does; the parent PDO records it and
+configures nothing, so the configuration stays the bus's as described here.
 
 **Grouping**, in this order, over the configuration's interfaces (alternate 0
 entries only); the functions are listed in the order of their first
@@ -5027,7 +5030,10 @@ and a later
 `SELECT_INTERFACE` on a function, which reads the device's configuration -
 so a client that selects an interface after its configuration loses a
 rewritten interval (no HID class driver of any target does). Host vectors:
-`test\test_pipe.c`, `test_caller_interval`.
+`test\test_pipe.c`, `test_caller_interval`. **Since task 38.12 (10.14.3)**
+a function's endpoint can also take its `bInterval` from the composite
+devnode's own select (a filter on the composite devnode), below this rule in
+precedence, and a function's later `SELECT_INTERFACE` takes that one too.
 
 Section 9.5's harness definition follows from this table: `endpoints opened`
 counts endpoints added at a function's `SELECT_CONFIGURATION` or
@@ -5460,7 +5466,10 @@ is a connection of its hub, which the hub's door already serves.
 and `hcd_pdo.c`, the dormant path, `START`'s refusal once gone) and **no
 internal IOCTL** (`STATUS_NOT_SUPPORTED`, as a hub PDO): nothing above the
 composite FDO sends a URB, and it answers no `USB_BUS_INTERFACE_USBDI`
-query. Its `START` feeds the port's machine `PDO_STARTED` (5.3), as a device
+query. (**Amended by task 38.12, 10.14:** it answers the device and
+configuration `GET_DESCRIPTOR`s from its copies and the composite FDO's own
+`SELECT_CONFIGURATION`, which it records and configures nothing with; every
+other internal IOCTL stays refused.) Its `START` feeds the port's machine `PDO_STARTED` (5.3), as a device
 PDO's does; the functions' starts feed it too, as before, and a second one
 in `Bound` is ignored.
 
@@ -6650,6 +6659,453 @@ designed, with these particulars:
 - **Not read before the legs**: everything 10.13.11 lists, and the release
   notes' update paragraphs, which state the design's expectations and take
   their "read in" sentences from the legs.
+
+### 10.14 The composite devnode's own SELECT_CONFIGURATION (task 38.12, 2026-10-14)
+
+**The request.** GitHub issue 17, item 11 (SweetLow, 2026-10-14): "Under
+Microsoft stack URB_FUNCTION_SELECT_CONFIGURATION come for composite device,
+not for separate items of this device. Not so in xHCI98 implementation."
+Under Microsoft's stack the composite parent sends one
+`SELECT_CONFIGURATION` for the whole device down the composite devnode's own
+stack, so hidusbf installed as a lower filter on the composite devnode
+(its Setup's "Process Parent") rewrites every function's `bInterval` in one
+place. Under this bus since task 36.43 the composite devnode
+(`USB\XHCI98_COMPOSITE`, 10.12 and 10.13) is bound to `xhci98.sys` itself,
+the bus configures the device internally (10.8), and the parent PDO refuses
+every internal IOCTL (10.12, "The parent PDO"), so no select crosses that
+stack and a filter there sees nothing. Each function's own select takes its
+caller's `bInterval` (10.9, "A function's polling interval is the
+caller's"), which serves a filter on the function devnode only. Opened by
+the owner on 2026-10-14 as roadmap-hcd 38.12, in `2.4.0.0`. Written before
+the code, on branch `p38-compsel`.
+
+#### 10.14.1 What each target's composite parent is, and what it sends
+
+**Which driver is the composite parent, per target** (static: the text of
+each target's `usb.inf`, the `USB\COMPOSITE` model line and its install
+section, read 2026-10-14 from `tools\*-extracted\`; nothing executed):
+
+| Target | `USB\COMPOSITE` installs | Line read |
+|---|---|---|
+| 98 SE (stock) | `usbhub.sys` | `[Composite.Dev]` `AddReg=Hub.AddReg`; `[HUB.AddReg]` `NTMPDriver,,usbhub.sys` |
+| 98 SE with NUSB 3.6 | `usbccgp.sys` | `[Composite.Dev]` `AddReg=CommonClassParent.AddReg`; `NTMPDriver,,usbccgp.sys` |
+| ME (stock) | `usbccgp.sys` | as NUSB 3.6 |
+| 2000 SP4 | `usbhub.sys` | `[Composite.Dev.NT.Services]` `AddService = usbhub` |
+| XP SP3 | `usbccgp.sys` | `[Composite.Dev.NT.Services]` `AddService = usbccgp` |
+| Vista SP2, 7 SP1 (x86) | `usbccgp.sys` | `AddService = usbccgp, 0x00000002, CommonClassParent.AddService` |
+
+So on the two primary targets the parent is the hub driver's composite code,
+and from XP (and on ME and under NUSB 3.6) it is `usbccgp.sys`.
+
+**What `usbccgp` sends, and when** (two sources, both recorded as facts
+only, no body copied):
+
+1. *ReactOS `drivers/usb/usbccgp`, interface documentation* (`reactos/reactos`
+   `0298e10d`, the commit `external/README.md` pins, read from a sparse
+   checkout of `drivers/usb/usbccgp` and `drivers/usb/usbhub` at that commit,
+   not mirrored; `fdo.c`, `pdo.c`, `descriptor.c`). The FDO's `START` is passed down and waited for; then
+   three `GET_DESCRIPTOR_FROM_DEVICE` URBs go down **the composite devnode's
+   own stack** (the next lower device object, so a lower filter sees them):
+   the device descriptor (18 bytes), the configuration descriptor's 9-byte
+   header, and the whole configuration at its `wTotalLength`. Then one
+   `SELECT_CONFIGURATION`, built by `USBD_CreateConfigurationRequestEx`
+   over that descriptor with every interface at its first (alternate 0)
+   descriptor, down the same stack; the returned interface information and
+   `ConfigurationHandle` are kept. Only then are the function PDOs created
+   and `BusRelations` invalidated, so **the composite select precedes every
+   function's existence**. A function PDO's `SELECT_CONFIGURATION` sends
+   nothing when the alternate and every pipe's `MaximumTransferSize` match
+   what the parent selected - it copies the parent's interface information
+   (pipe handles, intervals) back - and otherwise sends a
+   `SELECT_INTERFACE` down the parent's stack; a function's NULL-descriptor
+   select is completed with success and sends nothing. A function's
+   configuration descriptor (`GET_DESCRIPTOR`) is built from the FDO's
+   stored copy. Every other function URB is sent through the FDO down the
+   parent's stack. `RESET_PORT` and `CYCLE_PORT` from a function are
+   serialised by the FDO and passed down; the FDO does not select again
+   after them. At the FDO's `REMOVE`, a `SELECT_CONFIGURATION` with a NULL
+   descriptor (the unconfigure) goes down before the `REMOVE` itself.
+2. *Windows XP SP3 `usbccgp.sys` 5.1.2600.5585* (32,384 B; SHA-256 in
+   `legal-provenance.md` section 4, row of 2026-10-14), **static**: `cdb.exe -z`
+   with Microsoft's public symbols, call graphs (`uf /c`) and one listing,
+   nothing executed. `StartParentFdo` (`0x150F0`) passes the `START` down
+   (`CallDriverSync`, `+0x70`); on a first start it then calls
+   `GetDeviceDescriptor` (`+0xAD`), `GetConfigDescriptor` (`+0xC4`,
+   through `TryGetConfigDescriptor`, which submits two URBs, `+0x57` and
+   `+0x10F`), `GetParentFdoCapabilities`, `GetInterfaceList`,
+   `ParentSelectConfiguration` (`+0x12B`), and only then
+   `GetNumberFunctions` and `CreateStaticFunctionPDOs` (`+0x17F`); on a
+   start with the descriptor already held (a test of a flag byte at
+   `+0x72`) it calls `ParentSelectConfiguration` with the stored descriptor
+   and interface list alone (`+0x8C`) and returns. `SubmitUrb` (`0x107A0`)
+   allocates an IRP with `IoAllocateIrp` at the stack size of the device
+   object its extension names, writes major function `0x0F`
+   (`IRP_MJ_INTERNAL_DEVICE_CONTROL`) and `0x220003` (`SUBMIT_URB`), and
+   sends it with `CallNextDriverSync`. `ParentCloseConfiguration`
+   (`0x10A90`) submits one URB; its callers were not traced.
+   `UrbFunctionSelectConfiguration` (`0x12E90`, the function PDO's select)
+   submits one URB on some path (`+0x201`), which the ReactOS shape says is
+   the `SELECT_INTERFACE`; its conditions were not read.
+
+**What the port driver does with that select** (ReactOS `usbport`,
+interface documentation, `external/reactos/usbport/device.c`): at
+`SELECT_CONFIGURATION` it copies the caller's whole descriptor into the
+configuration handle (`device.c` 666-668) and opens every endpoint from the
+copy (`USBPORT_OpenInterface`, 273), and a later `SELECT_INTERFACE` parses
+the same copy (513). So under that shape a filter's rewrite on the
+composite devnode reaches every function's endpoints, and every later
+`SELECT_INTERFACE` too, whatever the field it rewrites.
+
+**What hidusbf does there** (documentation, plus the one static reading
+this project already holds): its `README.ENG.TXT`, entry of 2016/01/23:
+"Now Setup can install driver for Composite USB device - use checkbox
+"Process Parent". Note, there is overclocked all functional devices from
+composite device, not the mouse only. For this feature functioning
+recompiled old drivers for Win 98&ME, 2000." Its INF names it a "Lower
+Filter". The 9x build (`hidusbf.sys` 1.2.0.10) reads a `bInterval` DWORD
+from the device's driver key at `AddDevice` and rewrites the interrupt
+endpoints' `bInterval` in the `SELECT_CONFIGURATION`'s configuration
+descriptor before passing it down (static, `legal-provenance.md` section 4,
+hidusbf row, section 13.1). So on the composite devnode it acts on the
+parent's one select.
+
+**Not read**, and what binds on each:
+
+| Not read | Why it does not block the design | Read by |
+|---|---|---|
+| Windows 98 SE's and 2000's composite parent inside `usbhub.sys`: what it sends down its own stack, and when (ReactOS's `usbhub` has no composite parent; it reports `USB\COMPOSITE` for `usbccgp`) | hidusbf's 2016 note says its 98/ME/2000 builds were rebuilt for this route, which implies a select through the parent's stack there too (an inference, marked as one); the design does not copy that parent's timing, it defines its own | the 98 SE and 2000 legs (10.14.8) |
+| Vista's and 7's `usbccgp.sys` start sequence | the XP build and ReactOS agree; the bus answers whichever order arrives | the 7 x86 leg |
+| Whether hidusbf's NT builds rewrite at the select (as the 9x build does) or at the `GET_DESCRIPTOR` answers, and whether either rewrite is made in place (which would put the rewritten bytes into `usbccgp`'s stored copy and so into the functions' descriptors) | the design honours a rewrite at either place (10.14.2: the descriptor it selects with is the one its own `GET_DESCRIPTOR` brought back through the filter) | the 2000, XP and 7 legs, by the `comp.*` records |
+| Whether hidusbf's `Setup.exe` offers "Process Parent" for a parent whose id is `USB\XHCI98_COMPOSITE` | the legs install the filter by hand where Setup does not | every leg |
+| `ParentCloseConfiguration`'s callers in XP's `usbccgp` | ReactOS sends the unconfigure at the FDO's `REMOVE`; the bus treats an unconfigure from the composite as harmless at any time (10.14.4) | - |
+
+#### 10.14.2 The design: the composite FDO selects through its own stack
+
+**The composite FDO** (`hcd_hubfdo.c`, the composite role) gains a step in
+its `START`, after the `START` has come back up from below and before the
+existing re-presentation request and settle (10.12): **the composite
+select**, at PASSIVE_LEVEL, on the `START`'s own thread, synchronous:
+
+1. `GET_DESCRIPTOR_FROM_DEVICE` for the device descriptor (18 bytes);
+2. `GET_DESCRIPTOR_FROM_DEVICE` for the configuration descriptor, first
+   its 9-byte header, then the whole at the header's `wTotalLength` (at
+   least 9; at most 65,535 by the field's width);
+3. `SELECT_CONFIGURATION` over the descriptor step 2 returned - **as it came
+   back up through the stack**, so a lower filter that rewrites the
+   `GET_DESCRIPTOR` answer is honoured as well as one that rewrites the
+   select - with one `USBD_INTERFACE_INFORMATION` for each interface number
+   the descriptor carries, at alternate 0, each with room for that
+   alternate's endpoints, `MaximumTransferSize` left at the default the
+   `usbd.sys` builders write (`USBD_DEFAULT_MAXIMUM_TRANSFER_SIZE`).
+
+Each is an `IOCTL_INTERNAL_USB_SUBMIT_URB` IRP the FDO builds with
+`IoAllocateIrp` at its lower device's stack size and sends to
+`fdo->LowerDevice` - the top of the stack below it, a lower filter
+included - waiting on an event its completion routine signals
+(`STATUS_MORE_PROCESSING_REQUIRED`, the IRP freed by the FDO). The URB
+built by hand (the HCD imports nothing from `usbd.sys`); `IoAllocateIrp`,
+`IoFreeIrp`, `IoCallDriver` and `KeWaitForSingleObject` are in the HCD's
+imports already (`hcd_svc.c`), so the import gate is unchanged. A pure
+builder, `XhciFuncParentSelectBuild` (`xhci_func.c`), sizes and fills the
+select URB from the descriptor so the host suite covers it.
+
+**A failure anywhere in the three steps never fails the `START`** (D4): the
+device works as it does today, with no composite record; the failure is
+counted and logged (10.14.6). The `START` waits on its own requests only,
+so no step can wait on the controller thread while that thread waits on
+PnP.
+
+**The parent PDO** answers, of all internal IOCTLs, `SUBMIT_URB` with three
+functions (D11); everything else stays `STATUS_NOT_SUPPORTED`, as today:
+
+- `GET_DESCRIPTOR_FROM_DEVICE` for a device descriptor (type 1) and a
+  configuration descriptor (type 2, index 0): answered at once from the
+  PDO's own copies (`DeviceDesc`, `Config`, fixed at creation), bounded by
+  the request's buffer and by the copy, with `TransferBufferLength` set to
+  what was copied; no bus traffic. Any other type or index:
+  `USBD_STATUS_INVALID_PARAMETER`, `STATUS_INVALID_PARAMETER`.
+- `SELECT_CONFIGURATION`, non-NULL: **the composite record**, below.
+- `SELECT_CONFIGURATION`, NULL descriptor: the record forgotten (10.14.4).
+
+Being presentation-only (10.12) still holds in the sense that matters: no
+data-path URB, no pipe and no device traffic ever comes through the parent;
+what it answers is descriptors it holds and a record it keeps.
+
+**The composite record** (the `SELECT_CONFIGURATION` at the parent PDO).
+Pended for the controller thread like every select (`HcdCfgService`), so it
+is serialised with the functions' selects, `SELECT_INTERFACE`s, releases
+and the `RESET_PORT` replay. It needs no hardware: it sends nothing to the
+device, opens and closes no endpoint, and runs whether the device's link is
+suspended or not. The thread:
+
+1. **Validates** the request structurally (`XhciFuncParentSelectCheck`, pure):
+   the descriptor's header (type 2, `bLength` 9 or more, `wTotalLength` at
+   least 9), its `bConfigurationValue` equal to
+   the device's (`ConfigValue`), and every `USBD_INTERFACE_INFORMATION`
+   within the URB's `Length`, naming an interface number and alternate the
+   **device's own** configuration (`dev->Selected`) carries, each interface
+   once, with room for that alternate's pipes. A failure refuses the
+   select (`USBD_STATUS_INVALID_PARAMETER`, `STATUS_INVALID_PARAMETER`; too
+   small a `Length`, `USBD_STATUS_BUFFER_TOO_SMALL`) and forgets any
+   earlier record (D3).
+2. **Copies** the caller's descriptor (its `wTotalLength` bytes) into pool
+   owned by the parent PDO, replacing any earlier copy: the record. No
+   field of it is used except through the match below.
+3. **Fills the URB** as a select would: per interface, `Class`,
+   `SubClass`, `Protocol`, `InterfaceHandle` (the same cookie a function's
+   select returns), `NumberOfPipes`, and per pipe its `EndpointAddress`,
+   `PipeType`, `MaximumPacketSize` and `Interval` - the **effective**
+   `bInterval` 10.14.3 gives a function with no filter of its own - with
+   `PipeHandle` NULL (no pipe is opened for the composite; nothing below
+   the composite FDO sends a transfer); `ConfigurationHandle` a non-NULL
+   cookie of the parent's. Success.
+4. **Counts and logs** it: endpoints matched with a byte that differs from
+   the device's (the rewrites), endpoints that did not match (10.14.5).
+
+**It does not configure anything.** The device was configured by the bus
+before any PDO of the group existed (10.8: `SET_CONFIGURATION`, every
+interface at alternate 0, no endpoint open); that stays the bus's, with no
+second `SET_CONFIGURATION`. The record only changes which `bInterval` each
+function's endpoints are opened with, at the functions' own selects.
+
+**Where the record lives** (D10): on the parent PDO (`HCD_DEVICE_PDO`,
+`CompSelected` and `CompSelectedLength`), written and read by the thread
+only, freed with the PDO's other pool copies at its deletion. So it
+survives a `RESET_PORT` (the parent untouched, 10.12), the in-place
+re-presentation of the functions (10.12 item 3) and Windows 98's dormant
+path (the group kept and revived whole, 10.12 item 5); it goes with the
+group (unplug, `CYCLE_PORT`, a failed `RESET_PORT`, the controller's stop),
+whose next presentation brings a new parent PDO and a new composite `START`.
+
+#### 10.14.3 Precedence at a function's select
+
+For each endpoint of a function's `SELECT_CONFIGURATION`
+(`hcdCfgFunctionEndpoint`, `XhciPipeFunctionEndpoint`), the `bInterval` the
+endpoint is built from is, in this order (D1):
+
+1. **The function's own caller's**, when its descriptor carries the same
+   interface, alternate and endpoint with the same first six bytes as the
+   device's own and a `bInterval` that **differs from the device's** - a
+   filter on the function devnode (today's rule, 10.9, unchanged);
+2. else **the composite record's**, when the record exists and carries the
+   same interface, alternate and endpoint with the same first six bytes as
+   the device's own (the same match, `XhciPipeCallerInterval`, against the
+   record);
+3. else **the device's own**.
+
+Then everything after is as today: the SuperSpeed rebase
+(`XhciPipeRebaseInterval`, section 13.7), the interval cap, modes 2 to 4 of
+`XhciFastPollFsLs` (section 13.5, 13.7), keyed on the byte chosen here.
+
+**A function's later `SELECT_INTERFACE`** (D6) takes rule 2, then 3 (it
+carries no descriptor of its own, so rule 1 has nothing to read): the
+record's matched byte for the new alternate's endpoints. That closes, for
+the composite route, the gap 10.9 and 13.7 accepted ("a later
+`SELECT_INTERFACE` ... loses a rewritten interval"), as the port driver's
+stored copy closes it under Microsoft's stack; the function route keeps the
+gap, as decided on 2026-10-09.
+
+**What the client is told** (D7): `USBD_PIPE_INFORMATION.Interval` carries
+the byte chosen above - the composite's under rule 2, as `usbccgp` hands a
+function the parent's pipe information - and its own under rule 1, as
+today.
+
+**A function's synthesised configuration descriptor** (D8, 10.9's
+`GET_DESCRIPTOR` row) is unchanged: the device's own bytes. Rule 1 compares
+the function caller's byte with the device's own, so a class driver that
+selects with the descriptor it was given, unmodified, falls through to the
+record.
+
+**Order against the functions.** On every path where the composite FDO
+starts, its `START` - and so the composite select - completes before PnP
+asks it for `BusRelations`, so before any function devnode of that start
+exists: a first presentation, a re-presentation after a disable and enable
+of the parent (the functions re-presented in place are posted by the same
+`START`, after the select), and a hub restart that cycles the parent's port.
+Where a function's pipes are already open when a record arrives (Windows 98
+SE and ME, where disabling the parent may `STOP` it and leave its children
+running, 10.12 item 3, then `START` it again), the open pipes are **left as
+they are** (D5): the record applies at each function's next select or
+`SELECT_INTERFACE`, and a log record says the select came with functions
+open. Nothing re-opens a live pipe for an interval.
+
+#### 10.14.4 Re-select, unconfigure, reset, recovery and power
+
+- **A second composite select** replaces the record whole (step 2), after
+  its own validation; a refused one forgets it (D3). Every composite
+  `START` sends one, so a filter added, changed or removed takes effect at
+  the parent's next start (hidusbf's Setup restarts the device it changes).
+- **The unconfigure from the composite** (a NULL descriptor): the record is
+  forgotten; **the device stays configured** and no function is touched
+  (D9) - the bus owns the configuration (10.8), and under 10.12 item 3 a
+  disabled parent leaves the device configured with no client already. The
+  composite FDO sends it at its `REMOVE`, before passing the `REMOVE`
+  down, as `usbccgp` does, so a filter sees the same sequence; at a
+  `SURPRISE_REMOVAL` it sends nothing. The `STOP` of 98 SE and ME sends
+  nothing (the record kept; the next `START` replaces it).
+- **`RESET_PORT`** from a function: unchanged (10.9, 10.12): the device is
+  reset, re-addressed and re-configured by the bus, every function's
+  endpoints restored from their stored `pipe->Ep`, so each keeps the
+  interval it was opened with (13.7, "The replays"); the record, on the
+  parent PDO, is kept.
+- **`CYCLE_PORT`, a failed `RESET_PORT`, an unplug, a hub's teardown, the
+  controller's stop and record 17's recovery that takes the devices away**:
+  the group goes with its record; the device's next presentation brings a
+  new parent and a new composite select.
+- **The endpoint recycle and the other replays** rebuild from `pipe->Ep`,
+  as today.
+- **Power.** The composite select needs no device traffic, so it neither
+  resumes a suspended link nor waits for one; the parent stays outside
+  stage A (10.12, "Power"). A parent's `START` after a system resume is an
+  ordinary start of 10.12 and selects again with the same result. Windows
+  98 and ME (no `REMOVE` on a `STOP`) are the bullet above.
+- **98 SE and ME against NT.** One code path: the IRP allocation and the
+  wait are the controller's own on both (`hcd_svc.c`); 98's `IoCallDriver`
+  to a lower filter at PASSIVE_LEVEL is the route hidusbf's 9x build
+  already takes under `usbhub` and `usbccgp` there. The differences are
+  the `STOP` above and the parent drivers the legs compare against
+  (10.14.1's table).
+
+#### 10.14.5 Filters above and below, and a rewrite of anything else
+
+- **A lower filter on the composite devnode** (hidusbf's "Process Parent")
+  sits between the composite FDO and the parent PDO: it sees the three
+  `GET_DESCRIPTOR`s, the select and the unconfigure - the requests
+  `usbccgp` sends - and no data-path URB (under Microsoft's stack it would
+  also see every function's URBs, which `usbccgp` forwards through the
+  parent; no filter this project knows of needs them, and the bus routes
+  the functions' URBs directly, 10.9 - recorded, not changed).
+- **An upper filter on the composite devnode** sits above the composite
+  FDO, which completes an internal IOCTL from above
+  `STATUS_NOT_SUPPORTED`, as it does today (`hcdDispatchOther`): nothing
+  above a composite parent sends one under any stack read, and the
+  composite's record is the FDO's own select.
+- **A lower filter on a function devnode** keeps today's route, rule 1 of
+  10.14.3, and wins over the composite's.
+- **A rewrite of anything but `bInterval`** - `wMaxPacketSize`, the
+  attributes, an endpoint address, an added or removed descriptor: the
+  match is on the endpoint's first six bytes, so such an endpoint takes
+  nothing from the record and is opened from the device's own descriptor,
+  `bInterval` included; it is counted (`CompositeMismatches`) and logged
+  (D2). The select is not refused for it, and no field but `bInterval` is
+  ever taken from a filter, at the composite or a function. (Under the
+  port driver's shape such a rewrite would be programmed; here the device's
+  descriptor stays the authority, as it already is for a function's
+  select.) A structural difference the validation of 10.14.2 catches - an
+  interface or alternate the device lacks, another configuration value -
+  refuses the select (D3).
+
+#### 10.14.6 Counters, log and `XHCISNAP`
+
+Appended to the counter block after word 240 (`XHCIHC_COUNTERS`), one
+contiguous block:
+
+| Word | Counter | Counts |
+|---|---|---|
+| 241 | `CompositeSelects` | composite selects recorded (step 2) |
+| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own three-step sequence failed |
+| 243 | `CompositeRewrites` | endpoints of a recorded select whose matched `bInterval` differs from the device's |
+| 244 | `CompositeMismatches` | endpoints of a recorded select that did not match the device's (10.14.5) |
+| 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2), at a select or a `SELECT_INTERFACE` |
+
+The log (the ring, `XhciLogVerbosity` 2 or more, as `fastpoll.*`):
+`comp.select` (slot, interfaces, rewrites, mismatches, and whether a
+function had pipes open), `comp.refused` (slot, the reason code),
+`comp.fdo` (the FDO's own sequence: the step that failed and its status),
+`comp.unconfig` (slot), and `comp.interval` (slot, DCI, the device's byte,
+the record's byte) per rule-2 endpoint. The stop's counter lines gain
+`composite.selects`, `composite.refused`, `composite.rewrites`,
+`composite.mismatches` and `composite.intervals`. `XHCISNAP` names the five
+words (its name table and `check-counter-names.ps1`).
+
+#### 10.14.7 Host tests
+
+- `test_pipe`: the precedence of 10.14.3 (`XhciPipeFunctionEndpoint` with
+  a record argument): function rewrite wins; equal function byte falls to
+  the record; no record falls to the device; a record endpoint differing
+  in `wMaxPacketSize` is not taken; a SuperSpeed function keeps its
+  companion and takes the record's byte through the rebase; mode 4's
+  codes from the record reach `hcdCfgFastPoll`'s input unchanged; the
+  `SELECT_INTERFACE` form (rule 2 then 3).
+- `test_func`: `XhciFuncParentSelectBuild` (sizes, alternate 0 only, every
+  interface once, an interface with no endpoints, IAD-grouped interfaces,
+  a descriptor too short); `XhciFuncParentSelectCheck` (each refusal: bad
+  header, wrong configuration value, unknown interface or alternate, a
+  repeat, an entry past `Length`, too few pipe slots; the counts of
+  rewrites and mismatches).
+
+#### 10.14.8 Legs (for the VM matrix)
+
+QEMU has no keyboard-and-mouse composite device (10.12, "What 36.43 leaves
+open"); its `usb-audio` is a composite with one function and isochronous
+endpoints only. So:
+
+1. **A real composite HID device by passthrough** (QEMU `usb-host`, a
+   wireless keyboard-and-mouse receiver or a keyboard with a media-key
+   interface, device class 0, one configuration, two or more HID
+   interfaces): on 98 SE, 2000, XP and 7 x86, `XhciLogVerbosity` 2,
+   hidusbf's 9x or NT build (`NOPATCH`) as a lower filter **on the
+   `USB\XHCI98_COMPOSITE` devnode** (Setup's "Process Parent", or by hand:
+   `LowerFilters` on its hardware key and the `bInterval` DWORD on it and
+   on its driver key, as 13.6 does for a function), at a rate unlike the
+   device's own. Expect: `comp.select` with rewrites equal to the HID
+   interrupt endpoints, `CompositeIntervals` up by those endpoints at the
+   functions' selects, `comp.interval` records with the rate chosen, and a
+   rate tool reading it on the mouse function. Then a disable and enable of
+   the composite devnode: a new `comp.unconfig` (NT) then `comp.select`.
+2. **The function route for comparison**, the same device: the filter on
+   the mouse function's devnode alone - today's behaviour, no
+   `comp.interval` for that function; then on both, the function's rate
+   winning on its own endpoints (rule 1).
+3. **No filter**: `comp.select` with zero rewrites and zero mismatches,
+   `CompositeIntervals` zero, every rate the device's - the regression
+   reading, also on QEMU's `usb-audio` on 98 SE, ME, 2000, XP, XP x64 and 7
+   x64 (audio plays to its end, the composite select recorded with no
+   interrupt endpoint).
+4. **Mode 4**: `XhciFastPollFsLs` 4 and hidusbf on the composite at a code
+   (128 to 130): `fastpoll.open` records for the HID endpoints (13.7).
+
+Without a passthrough composite HID device the matrix reads 3 and records 1,
+2 and 4 as owed to the bench, said so in the release notes' "Untested
+ground".
+
+#### 10.14.9 Decisions
+
+Each was put as a recommendation and **recommended, adopted 2026-10-14
+under the owner's instruction to proceed after review**:
+
+- **D1 Precedence.** A filter on the function's own devnode wins on that
+  function's endpoints; else the composite's; else the device's own.
+- **D2 Rewrites other than `bInterval`.** Ignored per endpoint (the device's
+  descriptor used for it), counted and logged; never programmed, never a
+  reason to refuse the select.
+- **D3 A structurally wrong composite select** (an interface or alternate
+  the device lacks, another configuration value, a malformed descriptor or
+  list): refused, and any earlier record forgotten, so the functions fall
+  back to today's behaviour.
+- **D4 The composite FDO's own sequence failing** never fails its `START`;
+  the device works as today, counted and logged.
+- **D5 Pipes already open** when a record arrives are not re-opened; the
+  record applies at each function's next select.
+- **D6 A function's later `SELECT_INTERFACE`** takes the record's byte (new
+  for the composite route; the function route keeps the 2026-10-09 rule).
+- **D7 What the function's client is told** is the byte used: the
+  composite's when it came from there.
+- **D8 A function's synthesised configuration descriptor** keeps the
+  device's own bytes.
+- **D9 The unconfigure from the composite** forgets the record and leaves
+  the device configured; the composite FDO sends it at `REMOVE` as
+  `usbccgp` does.
+- **D10 The record lives on the parent PDO**, surviving `RESET_PORT`, the
+  re-presentation and the 98 dormant path, and going with the group.
+- **D11 The parent PDO answers only** the device and configuration
+  `GET_DESCRIPTOR`s from its copies and `SELECT_CONFIGURATION`; every
+  other internal IOCTL and URB stays `STATUS_NOT_SUPPORTED`.
+- **D12 No registry switch.** Without a filter the composite select records
+  the device's own bytes and changes nothing; a switch would add a value to
+  document for no case the legs cannot read.
+- **D13 The legs' stand-in**: a passthrough composite HID device; without
+  one, the regression legs on `usb-audio` and the rest owed to the bench.
 
 ## 11. The transfer-buffer policy (task 25.7)
 
@@ -7934,6 +8390,10 @@ SHA-256 `bd8d1fb0...f797`, not tracked), says how it gets there:
   USB stack", and the patching builds must not run under Memory Integrity.
   The entry of 2005/12/26 names the method: "patching the code of
   USBPORT.SYS on the fly".
+- The entry of 2016/01/23: Setup's "Process Parent" puts the filter on a
+  composite device's own devnode, overclocking all its functions; under
+  this bus that route needs the composite devnode's own select, task 38.12
+  (section 10.14).
 
 So (documentation, plus one inference marked as such): the filter keeps
 writing an ordinary millisecond `bInterval` into the configuration
