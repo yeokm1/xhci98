@@ -82,6 +82,7 @@ typedef struct FAKE {
 
     unsigned long TxBaseLo, TxBaseHi, TxSize, TxCtrl, TxProd, TxCons;
     int TxConsume;                  /* the host interface fetches TX */
+    unsigned long TxIndexOverride;  /* nonzero: the TX index register reads this */
     unsigned long RxBaseLo, RxBaseHi, RxSize, RxSizeReg, RxCtrl, RxPdf, RxProd, RxCons;
 
     unsigned long MemDw[FAKE_MEM_BYTES / 4];   /* DW-aligned host memory */
@@ -364,7 +365,11 @@ static ULONG fakeRead32(PVOID ctx, ULONG off)
     case 0x39864: return g_fake.HiControl;
     case 0x00000: return g_fake.TxBaseLo;
     case 0x00004: return g_fake.TxBaseHi;
-    case 0x00008: return (g_fake.TxProd << 16) | g_fake.TxCons;
+    case 0x00008:
+        if (g_fake.TxIndexOverride != 0) {
+            return g_fake.TxIndexOverride;
+        }
+        return (g_fake.TxProd << 16) | g_fake.TxCons;
     case 0x0000C: return g_fake.TxSize;
     case 0x19800: return g_fake.TxCtrl;
     case 0x08000: return g_fake.RxBaseLo;

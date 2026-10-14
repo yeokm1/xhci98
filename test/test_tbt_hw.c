@@ -110,7 +110,7 @@ static void test_platform(void)
     g_fake.Vs9Reads = 0;
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "again at D0");
     CHECK(pw.ForcePowerSetHere, "still ours");
-    TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
+    (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
     CHECK_EQ(g_fake.Cfg[0xFC / 4], 0x22000000UL, "shutdown clears what this driver set");
     CHECK(!pw.ForcePowerSetHere, "record cleared");
 
@@ -121,7 +121,7 @@ static void test_platform(void)
     g_fake.Vs9ReadyAfterReads = 1;
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "already on");
     CHECK(!pw.ForcePowerSetHere, "not ours");
-    TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
+    (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
     CHECK(g_fake.Cfg[0xFC / 4] & 0x2UL, "left on");
 
     /* Never ready: 350 polls 3 ms apart, then a timeout; an inert
@@ -132,7 +132,7 @@ static void test_platform(void)
     CHECK_EQ(g_fake.Vs9Reads, 350, "350 reads");
     CHECK(g_fake.NowUs >= 1050000UL, "about a second");
     CHECK(pw.FwReadyFailed, "recorded");
-    TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
+    (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
     CHECK_EQ(g_fake.Cfg[0xFC / 4] & 2UL, 0, "inert, never ready: cleared");
 
     /* Ready, but inert for another reason: left set. */
@@ -140,8 +140,19 @@ static void test_platform(void)
     memset(&pw, 0, sizeof(pw));
     g_fake.Vs9ReadyAfterReads = 1;
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "ready");
-    TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
+    (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
     CHECK(g_fake.Cfg[0xFC / 4] & 2UL, "inert after a ready poll: left set");
+    /* An unreadable shutdown keeps the record for another try. */
+    fakeReset();
+    memset(&pw, 0, sizeof(pw));
+    g_fake.Vs9ReadyAfterReads = 1;
+    CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_OK, "ready");
+    g_fake.CfgAllOnes = 1;
+    CHECK_EQ(TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE), TBT_E_HW, "unreadable");
+    CHECK(pw.ForcePowerSetHere, "still ours");
+    g_fake.CfgAllOnes = 0;
+    CHECK_EQ(TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE), TBT_OK, "retried");
+    CHECK_EQ(g_fake.Cfg[0xFC / 4] & 2UL, 0, "cleared on the retry");
     CHECK(TbtHwIsApple(0x106B), "Apple's subsystem vendor");
     CHECK(!TbtHwIsApple(0x17AA), "Lenovo's is not");
 

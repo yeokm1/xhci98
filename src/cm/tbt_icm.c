@@ -120,7 +120,7 @@ static VOID tbtIcmReadyHeader(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
  * ramver, security_level (u16, ICM_FR_SLEVEL_MASK). UNCAPTURED. */
 static BOOLEAN tbtIcmFrReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
 {
-    if (words < 1) {
+    if (words < 2) {
         return FALSE;
     }
     tbtIcmReadyHeader(dw, words, out);
@@ -139,7 +139,7 @@ static BOOLEAN tbtIcmArReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
 {
     ULONG info;
 
-    if (words < 1) {
+    if (words < 2) {
         return FALSE;
     }
     tbtIcmReadyHeader(dw, words, out);
@@ -157,12 +157,12 @@ static BOOLEAN tbtIcmArReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
 /* Linux struct icm_tr_pkg_driver_ready_response (Titan Ridge, and Ice
  * Lake's icm_icl_driver_ready reads the same one): reserved1, info (level
  * 2:0, protocol version 6:4, boot ACL count 12:7), nvm_version, device_id.
- * UNCAPTURED. Every field past the header is optional here. */
+ * UNCAPTURED. */
 static BOOLEAN tbtIcmTrReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
 {
     ULONG info;
 
-    if (words < 1) {
+    if (words < 4) {
         return FALSE;
     }
     tbtIcmReadyHeader(dw, words, out);
@@ -224,7 +224,7 @@ static VOID tbtIcmLinkInfo(ULONG li, PTBT_ICM_ANNOUNCE out)
 static BOOLEAN tbtIcmFrConnected(const ULONG *dw, ULONG words,
                                  PTBT_ICM_ANNOUNCE out)
 {
-    if (words < 6) {
+    if (words < TBT_ICM_FR_CONNECTED_WORDS) {
         return FALSE;
     }
     tbtIcmAnnounceCommon(dw, out);
@@ -233,7 +233,7 @@ static BOOLEAN tbtIcmFrConnected(const ULONG *dw, ULONG words,
     tbtIcmLinkInfo(dw[5] >> 16, out);
     out->Link = TBT_ICM_LI_LINK(out->LinkInfo);
     out->Depth = TBT_ICM_LI_DEPTH(out->LinkInfo);
-    TbtIcmDecodeNames(dw + 6, words - 6, &out->Names);
+    TbtIcmDecodeNames(dw + 6, TBT_ICM_FR_CONNECTED_WORDS - 6, &out->Names);
     return tbtIcmAnnounceSane(out);
 }
 
@@ -246,7 +246,7 @@ static BOOLEAN tbtIcmFrConnected(const ULONG *dw, ULONG words,
 static BOOLEAN tbtIcmTrConnected(const ULONG *dw, ULONG words,
                                  PTBT_ICM_ANNOUNCE out)
 {
-    if (words < 8) {
+    if (words < TBT_ICM_TR_CONNECTED_WORDS) {
         return FALSE;
     }
     tbtIcmAnnounceCommon(dw, out);
@@ -257,7 +257,7 @@ static BOOLEAN tbtIcmTrConnected(const ULONG *dw, ULONG words,
     tbtIcmLinkInfo(dw[7] >> 16, out);
     out->Link = TbtRouteLevel(&out->Route, 0);
     out->Depth = TbtRouteDepth(&out->Route);
-    TbtIcmDecodeNames(dw + 8, words - 8, &out->Names);
+    TbtIcmDecodeNames(dw + 8, TBT_ICM_TR_CONNECTED_WORDS - 8, &out->Names);
     return (BOOLEAN)(!tbtIcmRouteZero(&out->Route) && tbtIcmAnnounceSane(out));
 }
 
@@ -334,7 +334,7 @@ static ULONG tbtIcmTrApprove(const TBT_ICM_DEVICE *dev, PULONG dw)
  * read on this row (record 21 section 1.4.4). UNCAPTURED. */
 static BOOLEAN tbtIcmIclReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
 {
-    if (words < 1) {
+    if (words < 4) {
         return FALSE;
     }
     tbtIcmReadyHeader(dw, words, out);
@@ -357,7 +357,7 @@ const TBT_ICM_PROFILE TbtIcmProfileFalconRidge = {
     TBT_ICM_CAP_TOPOLOGY | TBT_ICM_CAP_KEY | TBT_ICM_CAP_APPROVE |
         TBT_ICM_CAP_SAVE_DEVICES | TBT_ICM_CAP_SUSPEND_UNLOAD |
         TBT_ICM_CAP_EXTRA_PACKETS,
-    TBT_ICM_CMD_TIMEOUT_MS, TBT_ICM_RETRIES,
+    0, TBT_ICM_RETRIES, 2,
     tbtIcmFrReady, tbtIcmFrConnected, tbtIcmFrDisconnected, tbtIcmFrApprove
 };
 
@@ -367,7 +367,7 @@ const TBT_ICM_PROFILE TbtIcmProfileAlpineRidge = {
     TBT_ICM_CAP_GET_ROUTE | TBT_ICM_CAP_KEY | TBT_ICM_CAP_APPROVE |
         TBT_ICM_CAP_GET_MODE | TBT_ICM_CAP_SAVE_DEVICES |
         TBT_ICM_CAP_SUSPEND_UNLOAD | TBT_ICM_CAP_EXTRA_PACKETS,
-    TBT_ICM_CMD_TIMEOUT_MS, TBT_ICM_RETRIES,
+    0, TBT_ICM_RETRIES, 2,
     tbtIcmArReady, tbtIcmFrConnected, tbtIcmFrDisconnected, tbtIcmFrApprove
 };
 
@@ -377,7 +377,7 @@ const TBT_ICM_PROFILE TbtIcmProfileTitanRidge = {
     TBT_ICM_CAP_ROUTE_IN_EVENTS | TBT_ICM_CAP_APPROVE |
         TBT_ICM_CAP_GET_MODE | TBT_ICM_CAP_SUSPEND_UNLOAD |
         TBT_ICM_CAP_EXTRA_PACKETS,
-    250UL, 10UL,
+    250UL, 10UL, 4,
     tbtIcmTrReady, tbtIcmTrConnected, tbtIcmTrDisconnected, tbtIcmTrApprove
 };
 
@@ -388,7 +388,7 @@ const TBT_ICM_PROFILE TbtIcmProfileIceLake = {
     TBT_ICM_GEN_ICE_LAKE,
     TBT_ICM_CAP_ROUTE_IN_EVENTS | TBT_ICM_CAP_FORCE_POWER |
         TBT_ICM_CAP_EXTRA_PACKETS,
-    20000UL, TBT_ICM_RETRIES,
+    20000UL, TBT_ICM_RETRIES, 4,
     tbtIcmIclReady, tbtIcmTrConnected, tbtIcmTrDisconnected, NULL
 };
 
@@ -620,7 +620,7 @@ BOOLEAN TbtIcmNextAction(PTBT_ICM icm, PTBT_ICM_ACTION out)
 
 BOOLEAN TbtIcmActionLive(const TBT_ICM *icm, const TBT_ICM_ACTION *action)
 {
-    return (BOOLEAN)(action->Slot < TBT_ICM_MAX_DEVICES &&
+    return (BOOLEAN)(icm->Bound && action->Slot < TBT_ICM_MAX_DEVICES &&
                      icm->Devices[action->Slot].InUse &&
                      icm->Devices[action->Slot].Serial == action->Serial);
 }
@@ -805,7 +805,7 @@ static VOID tbtIcmReplace(PTBT_ICM icm, ULONG slot)
 
 /* A device-disconnected event: the device and everything below it leave,
  * deepest first, each with its link-down upcall and its TUNNEL_DOWN. */
-static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
+static BOOLEAN tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
 {
     tbtIcmPurgeQueued(icm, g);
     if (tbtIcmDropSubtree(icm, g, TBT_ICM_WHY_DISCONNECTED, TRUE) == 0) {
@@ -816,7 +816,9 @@ static VOID tbtIcmDisconnected(PTBT_ICM icm, const TBT_ICM_GONE *g)
         icm->Counters.DisconnectUnknown++;
         tbtIcmLog(icm, "tbt.icm.disconnect-unknown",
                   g->RouteValid ? g->Route.Lo : TBT_ICM_LI_MAKE(g->Link, g->Depth));
+        return FALSE;
     }
+    return TRUE;
 }
 
 /* Record 21 section 1.4.6: a frame a row cannot read goes to the log
@@ -834,6 +836,7 @@ static VOID tbtIcmLogRaw(PTBT_ICM icm, const TBT_FRAME *f)
 static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
 {
     ULONG code;
+    ULONG i;
     TBT_ICM_ANNOUNCE a;
     TBT_ICM_GONE g;
 
@@ -852,6 +855,10 @@ static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
             tbtIcmLogRaw(icm, f);
             return;
         }
+        a.RawWords = f->Words < TBT_FRAME_DWORDS ? f->Words : TBT_FRAME_DWORDS;
+        for (i = 0; i < a.RawWords; i++) {
+            a.Raw[i] = f->Dw[i];
+        }
         icm->SettleExtend = TRUE;
         if (icm->InWait) {
             tbtIcmEnqueue(icm, &a);
@@ -866,7 +873,9 @@ static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
             tbtIcmLogRaw(icm, f);
             return;
         }
-        tbtIcmDisconnected(icm, &g);
+        if (!tbtIcmDisconnected(icm, &g)) {
+            tbtIcmLogRaw(icm, f);
+        }
     } else if (code == TBT_ICM_EV_RTD3_VETO) {
         /* Linux tb_msgs.h struct icm_icl_event_rtd3_veto: veto_reason in
          * DW 1, nonzero to begin a veto (icm_icl_rtd3_veto). This driver
@@ -1008,6 +1017,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
                           ULONG retries,
                           ULONG slot,
                           ULONG serial,
+                          ULONG minWords,
                           BOOLEAN topology)
 {
     ULONG attempt;
@@ -1036,6 +1046,11 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
         if (attempt != 0) {
             icm->Counters.Retries++;
         }
+        if (topology) {
+            /* Each attempt assembles its own answer: no packet of an
+             * earlier one is mixed in. */
+            icm->TopoReceived = 0;
+        }
         rc = TbtRingSend(icm->Ring, TBT_PDF_ICM_CMD, req, words);
         if (rc != TBT_OK) {
             break;
@@ -1061,16 +1076,28 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
             }
             if (topology && f.Words != 0 && f.Pdf == TBT_PDF_ICM_RESP &&
                 TBT_ICM_HDR_CODE(f.Dw[0]) == TBT_ICM_HDR_CODE(req[0])) {
-                /* Linux icm.c icm_copy: packet i at slot i, done when the
-                 * index reaches the count less one. */
+                /* Linux icm.c icm_copy places packet i at slot i. The
+                 * answer is complete when all ICM_GET_TOPOLOGY_PACKETS have
+                 * arrived, in whatever order; a packet of the wrong size or
+                 * count is logged and not kept, and an answer still
+                 * incomplete at the timeout is abandoned whole (record 21
+                 * section 1.4.6). */
                 icm->Counters.Responses++;
                 if ((TBT_ICM_HDR_FLAGS(f.Dw[0]) & TBT_ICM_FLAG_ERROR) != 0) {
                     icm->Counters.ErrorFlags++;
+                    tbtIcmLogRaw(icm, &f);
                     rc = TBT_E_ERROR_FLAG;
                     break;
                 }
+                if (f.Words < minWords ||
+                    TBT_ICM_HDR_COUNT(f.Dw[0]) != TBT_ICM_TOPO_PACKETS ||
+                    TBT_ICM_HDR_INDEX(f.Dw[0]) >= TBT_ICM_TOPO_PACKETS) {
+                    icm->Counters.EventsMalformed++;
+                    tbtIcmLogRaw(icm, &f);
+                    continue;
+                }
                 tbtIcmTopoStore(icm, &f);
-                if (TBT_ICM_HDR_INDEX(f.Dw[0]) + 1 >= TBT_ICM_HDR_COUNT(f.Dw[0])) {
+                if (icm->TopoReceived == TBT_ICM_TOPO_ALL) {
                     rc = TBT_OK;
                     break;
                 }
@@ -1086,6 +1113,14 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
                         match = FALSE;
                     }
                 }
+            }
+            if (match && f.Words < minWords) {
+                /* Shorter than the row's structure (record 21 sections
+                 * 1.4.6 and 5.2): logged, not taken; the wait goes on. */
+                icm->Counters.EventsMalformed++;
+                tbtIcmLog(icm, "tbt.icm.response-short", f.Words);
+                tbtIcmLogRaw(icm, &f);
+                continue;
             }
             if (match) {
                 n = f.Words < respMax ? f.Words : respMax;
@@ -1139,7 +1174,7 @@ static LONG tbtIcmGetRoute(PTBT_ICM icm, ULONG slot)
     req[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_GET_ROUTE);
     req[1] = TBT_ICM_LI_MAKE(d->Link, d->Depth) << 16;
     rc = tbtIcmCommand(icm, req, 2, 1, resp, 4, &n, icm->CmdTimeoutMs,
-                       icm->Retries, slot, d->Serial, FALSE);
+                       icm->Retries, slot, d->Serial, 4, FALSE);
     if (rc == TBT_OK && n < 4) {
         rc = TBT_E_HW;
     }
@@ -1165,7 +1200,7 @@ static LONG tbtIcmGetTopoRoute(PTBT_ICM icm, ULONG slot)
     icm->TopoReceived = 0;
     req[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_GET_TOPOLOGY);
     rc = tbtIcmCommand(icm, req, 1, 0, resp, 1, &n, icm->CmdTimeoutMs,
-                       icm->Retries, slot, d->Serial, TRUE);
+                       icm->Retries, slot, d->Serial, TBT_ICM_TOPO_WORDS, TRUE);
     if (rc != TBT_OK) {
         return rc;
     }
@@ -1195,7 +1230,24 @@ static BOOLEAN tbtIcmAsksRoute(PTBT_ICM icm)
                       (TBT_ICM_CAP_GET_ROUTE | TBT_ICM_CAP_TOPOLOGY)) != 0);
 }
 
-static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
+/* The capture an uncaptured row is waiting for (record 21 section 1.4.6):
+ * the approve request and the announcement it answered, word by word. */
+static VOID tbtIcmLogApprove(PTBT_ICM icm, const ULONG *req, ULONG words,
+                             const TBT_ICM_ANNOUNCE *a)
+{
+    ULONG i;
+
+    for (i = 0; i < words; i++) {
+        tbtIcmLog(icm, "tbt.icm.approve-req", req[i]);
+    }
+    if (a != NULL) {
+        for (i = 0; i < a->RawWords; i++) {
+            tbtIcmLog(icm, "tbt.icm.approve-event", a->Raw[i]);
+        }
+    }
+}
+
+static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
 {
     PTBT_ICM_DEVICE d;
     ULONG req[TBT_ICM_APPROVE_MAX_WORDS];
@@ -1214,7 +1266,7 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
      * - another key, id or route - is never taken for this one. */
     rc = tbtIcmCommand(icm, req, words, words - 1, resp, TBT_ICM_APPROVE_MAX_WORDS, &n,
                        icm->ApproveTimeoutMs, icm->Retries, slot, d->Serial,
-                       FALSE);
+                       words, FALSE);
     if (rc == TBT_OK && d->InUse) {
         d->Approved = TRUE;
         icm->Counters.ApprovalsOk++;
@@ -1236,6 +1288,7 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
         d->ApproveUnknown = TRUE;
         icm->Counters.ApprovalsUnknown++;
         tbtIcmLog(icm, "tbt.icm.approve-unknown", slot);
+        tbtIcmLogApprove(icm, req, words, a);
         tbtIcmQueueAction(icm, TBT_ICM_ACT_TUNNEL_UP, TBT_ICM_WHY_APPROVE_UNKNOWN,
                           slot, FALSE);
     } else {
@@ -1244,6 +1297,7 @@ static VOID tbtIcmApprove(PTBT_ICM icm, ULONG slot)
         d->ApproveFailed = TRUE;
         icm->Counters.ApprovalsFailed++;
         tbtIcmLog(icm, "tbt.icm.approve-failed", (ULONG)(-rc));
+        tbtIcmLogApprove(icm, req, words, a);
     }
 }
 
@@ -1277,7 +1331,7 @@ static VOID tbtIcmFill(PTBT_ICM_DEVICE d, const TBT_ICM_ANNOUNCE *a)
  * approved when the policy says so - on every such announcement, a refresh
  * included, so an approval that failed is tried again when the firmware
  * announces the device again. */
-static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot)
+static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot, const TBT_ICM_ANNOUNCE *a)
 {
     PTBT_ICM_DEVICE d;
     BOOLEAN approve;
@@ -1299,7 +1353,7 @@ static VOID tbtIcmPolicy(PTBT_ICM icm, ULONG slot)
         tbtIcmLog(icm, "tbt.icm.approve-withheld", slot);
         return;
     }
-    tbtIcmApprove(icm, slot);
+    tbtIcmApprove(icm, slot, a);
 }
 
 /* The route, where the row asks for it; FALSE (logged and counted) when
@@ -1328,7 +1382,8 @@ static BOOLEAN tbtIcmRouteOk(PTBT_ICM icm, ULONG slot)
  * leaves it unrouted and unapproved, kept, for the next announcement to
  * retry (record 21 section 5.5).
  */
-static VOID tbtIcmSettle(PTBT_ICM icm, ULONG slot, BOOLEAN routed)
+static VOID tbtIcmSettle(PTBT_ICM icm, ULONG slot, BOOLEAN routed,
+                         const TBT_ICM_ANNOUNCE *a)
 {
     PTBT_ICM_DEVICE d;
 
@@ -1344,7 +1399,7 @@ static VOID tbtIcmSettle(PTBT_ICM icm, ULONG slot, BOOLEAN routed)
         return;
     }
     if (routed) {
-        tbtIcmPolicy(icm, slot);
+        tbtIcmPolicy(icm, slot, a);
     }
 }
 
@@ -1389,7 +1444,10 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
          * unapproved after an approve answered with the error flag. */
         recovery = (BOOLEAN)(d->ApproveUnknown || d->ApproveFailed ||
                              (!d->RouteValid && tbtIcmAsksRoute(icm)));
-        if (same && (recovery || d->Approved == a->Approved)) {
+        /* A device the firmware approved and now announces unapproved was
+         * re-plugged unseen: a replacement, below, whatever else it needs. */
+        if (same && (d->Approved == a->Approved ||
+                     d->ApproveUnknown || d->ApproveFailed)) {
             if (!byRoute && d->Link != a->Link) {
                 /* Enumerated through the port's other link: the route
                  * moved with it (Linux icm.c icm_fr_device_connected). */
@@ -1411,16 +1469,17 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
             if (!d->InUse) {
                 return;
             }
-            if (d->ApproveUnknown || d->ApproveFailed || !d->Approved) {
-                /* This announcement settles the approval state. */
-                d->ApproveUnknown = FALSE;
-                d->ApproveFailed = FALSE;
-                if (d->Approved == a->Approved && d->Approved) {
-                    return;
-                }
-                d->Approved = a->Approved;
-                tbtIcmSettle(icm, slot, routed);
+            /* This announcement settles the approval state: approved = 1
+             * a tunnel up, 0 the policy (record 21 section 5.3). An entry
+             * already approved and announced approved needed only its
+             * route. */
+            if (d->Approved && a->Approved) {
+                return;
             }
+            d->ApproveUnknown = FALSE;
+            d->ApproveFailed = FALSE;
+            d->Approved = a->Approved;
+            tbtIcmSettle(icm, slot, routed, a);
             return;
         }
         /* Moved, or approved differently: the old entry is gone. */
@@ -1459,7 +1518,7 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
      * query). A failure keeps the entry, unrouted and, if the firmware has
      * not approved it, unapproved (record 21 section 5.5). */
     routed = tbtIcmRouteOk(icm, slot);
-    tbtIcmSettle(icm, slot, routed);
+    tbtIcmSettle(icm, slot, routed, a);
 }
 
 static VOID tbtIcmDrainQueue(PTBT_ICM icm, ULONG budget)
@@ -1540,6 +1599,18 @@ LONG TbtIcmMailbox(PTBT_ICM icm, ULONG code, ULONG data)
 /* Bind, resume, suspend, unbind                                          */
 /* ====================================================================== */
 
+/* Queued announcements, actions and recovery requests belong to the
+ * session that is ending: none of them is run after it. */
+static VOID tbtIcmRetirePending(PTBT_ICM icm)
+{
+    icm->QueueCount = 0;
+    icm->ActionCount = 0;
+    icm->ResyncPending = FALSE;
+    icm->ResyncWhy = 0;
+    icm->RediscoverPending = FALSE;
+    icm->RediscoverRun = 0;
+}
+
 /* A failure after activation (record 21 section 1.4.2): this driver's
  * rings stopped - nothing of theirs is pending afterwards, so the common
  * buffer may be freed - its queued work dropped, tunnels untouched. The
@@ -1553,7 +1624,7 @@ static VOID tbtIcmFail(PTBT_ICM icm)
     icm->Started = FALSE;
     icm->Bound = FALSE;
     icm->InWait = FALSE;
-    icm->QueueCount = 0;
+    tbtIcmRetirePending(icm);
     icm->Failed = TRUE;
 }
 
@@ -1572,7 +1643,7 @@ static VOID tbtIcmTearDown(PTBT_ICM icm)
     icm->Session = FALSE;
     icm->Bound = FALSE;
     icm->InWait = FALSE;
-    icm->QueueCount = 0;
+    tbtIcmRetirePending(icm);
 }
 
 /* After driver ready on a resume: every entry not re-announced in the
@@ -1612,6 +1683,10 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
                       TBT_RX_PDF_ALL_ONES, icm->RingFlags);
     if (rc != TBT_OK) {
         tbtIcmLog(icm, "tbt.icm.ring-start", (ULONG)(-rc));
+        if (icm->Ring->Programmed) {
+            /* Registers written, then refused: activated, so failed. */
+            tbtIcmFail(icm);
+        }
         return rc;
     }
     icm->Started = TRUE;
@@ -1661,9 +1736,13 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
     }
 
     req[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_DRIVER_READY);
+    /* FR and AR: the command timeout, XhciCmCmdTimeoutMs; TR and ICL: the
+     * row's own (record 21 section 1.4.4). */
     rc = tbtIcmCommand(icm, req, 1, 0, resp, 8, &n,
-                       icm->Profile->ReadyTimeoutMs,
-                       icm->Profile->ReadyRetries, TBT_ICM_NO_SLOT, 0, FALSE);
+                       icm->Profile->ReadyTimeoutMs != 0 ?
+                           icm->Profile->ReadyTimeoutMs : icm->CmdTimeoutMs,
+                       icm->Profile->ReadyRetries, TBT_ICM_NO_SLOT, 0,
+                       icm->Profile->ReadyWords, FALSE);
     if (rc != TBT_OK) {
         tbtIcmLog(icm, "tbt.icm.driver-ready-failed", (ULONG)(-rc));
         return rc;
@@ -1672,6 +1751,8 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
         tbtIcmZero(&icm->Ready, sizeof(icm->Ready));
     }
     tbtIcmLog(icm, "tbt.icm.ready-flags", icm->Ready.Flags);
+    tbtIcmLog(icm, "tbt.icm.ready-word1", n > 1 ? resp[1] : 0);
+    tbtIcmLog(icm, "tbt.icm.protocol-version", icm->Ready.ProtocolVersion);
     tbtIcmLog(icm, "tbt.icm.security-level", icm->Ready.SecurityLevel);
     tbtIcmLog(icm, "tbt.icm.boot-acl", (icm->Ready.BootAclSupported ? 0x100UL : 0) |
               icm->Ready.BootAclCount);

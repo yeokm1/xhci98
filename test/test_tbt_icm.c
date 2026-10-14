@@ -41,6 +41,9 @@
 #define MODE_ANSWER     0
 #define MODE_NEVER      1
 #define MODE_ERROR      2
+#define MODE_MISSING    3   /* topology: packet 5 never sent */
+#define MODE_REVERSE    4   /* topology: the last packet first */
+#define MODE_SPLIT      5   /* topology: half the packets per request */
 
 static const unsigned long kUuid[4] = {
     0xa0211100UL, 0x003d0efcUL, 0xffffffffUL, 0xffffffffUL  /* ICM 4.4 [obs] */
@@ -171,12 +174,21 @@ static void fwAnnounce(unsigned long delayUs)
  * 38 DWs a packet, ICM_GET_TOPOLOGY_PACKETS of them): packet 0 is the
  * host, its port 1 naming switch 1; switch 1 at route 1 names switch 2
  * at route 0x0301 on its port 3. UNCAPTURED. */
-static void fwTopology(int error)
+static void fwTopology(int mode)
 {
     unsigned long dw[38];
     unsigned long i;
+    unsigned long k;
+    int error = (mode == MODE_ERROR);
 
-    for (i = 0; i < 14; i++) {
+    for (k = 0; k < 14; k++) {
+        i = (mode == MODE_REVERSE) ? 13 - k : k;
+        if (mode == MODE_MISSING && i == 5) {
+            continue;
+        }
+        if (mode == MODE_SPLIT && ((g_fw.Topos & 1) ? i >= 7 : i < 7)) {
+            continue;
+        }
         memset(dw, 0, sizeof(dw));
         dw[0] = 0x0e000001UL | (i << 16) | (error ? 0x100UL : 0);
         if (i == 0) {
@@ -190,7 +202,7 @@ static void fwTopology(int error)
             dw[1] = 0x00000301UL;
             dw[3] = 0x02000001UL;
         }
-        fakeQueue(TBT_PDF_ICM_RESP, dw, 38, 2000 + 200 * i, 0);
+        fakeQueue(TBT_PDF_ICM_RESP, dw, 38, 2000 + 200 * k, 0);
     }
 }
 
@@ -263,7 +275,7 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
     if (code == 0x01) {
         g_fw.Topos++;
         if (g_fw.TopoMode != MODE_NEVER) {
-            fwTopology(g_fw.TopoMode == MODE_ERROR);
+            fwTopology(g_fw.TopoMode);
         }
         return;
     }
@@ -288,7 +300,7 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         if (g_fw.Approves <= g_fw.ErrorApproves) {
             r[0] |= 0x100UL;
         }
-        if (g_fw.ApproveMode == MODE_ANSWER) {
+        if (g_fw.ApproveMode == MODE_ANSWER && !(r[0] & 0x100UL)) {
             g_fw.Approved = 1;
         }
         fakeQueue(TBT_PDF_ICM_RESP, r, words, g_fw.ApproveDelayUs, 0);
@@ -462,8 +474,8 @@ static void test_frames_ar(void)
     CHECK(a.Approved, "approved again");
     CHECK_EQ(a.ConnectionId, 7, "id 7");
     CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 5, &a), "five words: refused");
-    CHECK(TbtIcmProfileAlpineRidge.DecodeConnected(ev, 6, &a), "six words: no names, decoded");
-    CHECK_EQ(a.Names.Entries, 0, "no names");
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 6, &a), "six words: refused");
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 60, &a), "sixty words: refused");
 
     /* T:21087 */
     CHECK(TbtIcmProfileAlpineRidge.DecodeDisconnected(t21087, 2, &g), "T:21087 decodes");
@@ -910,11 +922,12 @@ static void test_odd_frames(void)
 
     /* Rejected: ignored. */
     {
-        unsigned long ev[6];
+        unsigned long ev[61];
+        memset(ev, 0, sizeof(ev));
         ev[0] = 0x0100b103UL;
         memcpy(&ev[1], kUuid, 16);
         ev[5] = 0x02110510UL;
-        fakeQueue(TBT_PDF_ICM_EVENT, ev, 6, 0, 0);
+        fakeQueue(TBT_PDF_ICM_EVENT, ev, 61, 0, 0);
     }
     idle(200);
     CHECK_EQ(g_icm.Counters.Rejected, 1, "rejected counted");
@@ -1311,6 +1324,8 @@ static void test_queue_overflow_and_coalescing(void)
         }
     }
     CHECK(found, "the lost device is in the table");
+    CHECK_EQ(g_fw.LastApprove[1], kUuid[0], "approved by an approve of its own UUID");
+    CHECK_EQ(g_fw.LastApprove[5] >> 8, g_fw.ConnId, "with the connection id of the re-announcement");
     CHECK(!g_icm.RediscoverPending, "nothing left pending");
     actions(act, 64);
 
@@ -1447,6 +1462,95 @@ static void test_reconcile_bounded(void)
     CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the dock kept");
 }
 
+
+static void test_round3(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    unsigned long t0;
+    const TBT_ICM_DEVICE *d;
+
+    /* A driver-ready answer shorter than the row's structure is not taken:
+     * the wait goes on and ends in its bound. */
+    setup(GEN_TR, 0, 0);
+    g_fw.ReadyMode = MODE_NEVER;
+    {
+        unsigned long one[1] = { 0x01004003UL };
+        fakeQueue(TBT_PDF_ICM_RESP, one, 1, 1000, 0);
+    }
+    CHECK_EQ(start(), TBT_E_TIMEOUT, "a one-word TR driver ready is not an answer");
+    CHECK(g_icm.Counters.EventsMalformed >= 1, "counted as malformed");
+
+    /* FR and AR driver ready follow XhciCmCmdTimeoutMs. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetTimeouts(&g_icm, 2000, 0);
+    g_fw.ReadyMode = MODE_NEVER;
+    t0 = g_fake.NowUs;
+    CHECK_EQ(start(), TBT_E_TIMEOUT, "refused");
+    CHECK(g_fake.NowUs - t0 >= 8000000UL && g_fake.NowUs - t0 < 9000000UL,
+          "four 2 s attempts");
+
+    /* Falcon Ridge topology: one packet missing - abandoned whole. */
+    setup(GEN_FR, 1, 0);
+    g_fw.TopoMode = MODE_MISSING;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_fw.Topos, 4, "each attempt timed out incomplete");
+    CHECK_EQ(g_icm.Counters.RouteFailures, 1, "route failure");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && !d->RouteValid, "unrouted");
+    /* The last packet first: still complete. */
+    setup(GEN_FR, 1, 0);
+    g_fw.TopoMode = MODE_REVERSE;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->RouteValid && d->Route.Lo == 1, "out of order: assembled");
+    /* Two incomplete answers never combine. */
+    setup(GEN_FR, 1, 0);
+    g_fw.TopoMode = MODE_SPLIT;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && !d->RouteValid, "halves of two answers: not a route");
+
+    /* Approved and unrouted, then announced unapproved: the re-plug is a
+     * replacement and the new connection goes to the policy. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.RouteMode = MODE_NEVER;
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(200);
+    actions(act, 8);
+    g_fw.RouteMode = MODE_ANSWER;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(600);
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "the new connection approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "the old tunnel down, the new one up");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "down");
+    CHECK_EQ(act[1].Why, TBT_ICM_WHY_APPROVED, "up after approve");
+
+    /* A ring start that wrote registers and then refused: failed. */
+    setup(GEN_AR, 0, 0);
+    g_fake.TxIndexOverride = 0x00050003UL;
+    CHECK_EQ(start(), TBT_E_HW, "ring refused after programming");
+    CHECK(g_icm.Failed, "a failure after activation");
+    g_fake.TxIndexOverride = 0;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_E_STOPPED, "no second activation");
+    CHECK_EQ(g_fake.MboxCount, 0, "no mailbox: no session");
+
+    /* A failed resume and an unbind retire queued work. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(g_icm.ActionCount, 1, "a tunnel-up queued, not yet taken");
+    TbtIcmSuspend(&g_icm);
+    g_fw.ReadyMode = MODE_NEVER;
+    CHECK(TbtIcmResume(&g_icm) != TBT_OK, "resume fails");
+    CHECK(!TbtIcmNextAction(&g_icm, &act[0]), "nothing of the old session runs");
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmUnbind(&g_icm);
+    CHECK(!TbtIcmNextAction(&g_icm, &act[0]), "unbind retires the queue");
+}
+
 static void test_settings(void)
 {
     setup(GEN_AR, 0, 0);
@@ -1488,6 +1592,7 @@ int main(void)
     test_session_boundary();
     test_refresh_reapplies_policy();
     test_reconcile_bounded();
+    test_round3();
     test_settings();
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;

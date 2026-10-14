@@ -180,8 +180,9 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
  * Linux pci.c icl_nhi_shutdown does - but only when `power` says this
  * driver set it, and on an inert instance (`active` FALSE) only where its
  * firmware-ready poll failed (record 21 section 1.4.2); a force power the
- * firmware or the BIOS left on stays on. */
-VOID TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
+ * firmware or the BIOS left on stays on. TBT_E_HW when the register reads
+ * all ones: nothing restored, and the record kept for another try. */
+LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
                            PTBT_HW_POWER power, BOOLEAN active);
 
 /* The Apple platform policy's mark (record 21 section 1.4.2 test 1): the
@@ -235,9 +236,10 @@ typedef struct _TBT_HW_SELECTION {
  * Decide, after (a) and (b): `platformReady` is (b)'s result, `apple` the
  * driver's platform policy, `forceSoftware` XhciCmMode 3. Reads Host
  * Interface Capabilities, then on an Intel ICM row the firmware status by
- * the row's predicate, the interface version for the ICM (0 only, record
- * 21 section 5.1 step 2; Linux nhi.c nhi_reset resets only from
- * REG_CAPS_VERSION_2, and this driver resets nothing), and where the message
+ * the row's predicate, the interface version for the ICM (record 21
+ * section 1.4.2 test 4: 0 on Alpine Ridge, below 0x40 on the other rows;
+ * Linux nhi.c nhi_reset resets only from REG_CAPS_VERSION_2, and this
+ * driver resets nothing), and where the message
  * row reads the mode (TBT_ICM_CAP_GET_MODE: Linux icm.c icm_ar_get_mode)
  * the NVM authentication poll (60 reads 50 ms apart) and the operating
  * mode: connection-manager mode is ICM, safe mode is SAFE_MODE, any other

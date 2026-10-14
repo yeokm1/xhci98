@@ -91,7 +91,8 @@
 #define TBT_HI_CAPS_PATHS_MAX       21UL    /* Table 12-11: "shall not exceed a value of 21" */
 #define TBT_HI_CAPS_VERSION(v)      (((ULONG)(v) >> 16) & 0xFFUL) /* 23:16 Host Interface Version */
 /* Table 12-11: 000b/00000b is "USB4 Ver. 1.0 or TBT3", 010b/00000b is USB4
- * 2.0 (40h). Design record 21 section 5.1 refuses any nonzero version. */
+ * 2.0 (40h). Design record 21 section 1.4.2 test 4 takes 0 on Alpine Ridge
+ * and below 40h on the other ICM rows (tbt_hw.c). */
 #define TBT_HI_VERSION_TBT3         0x00UL
 #define TBT_HI_VERSION_2            0x40UL  /* Linux nhi_regs.h REG_CAPS_VERSION_2 */
 

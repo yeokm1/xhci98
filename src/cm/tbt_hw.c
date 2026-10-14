@@ -240,25 +240,28 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
                           TBT_ICL_LC_TIMEOUT_MS);
 }
 
-VOID TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
+LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
                            PTBT_HW_POWER power, BOOLEAN active)
 {
     ULONG v;
 
     if (hw == NULL || (hw->Flags & TBT_HW_ICL_POWER) == 0 ||
         !power->ForcePowerSetHere) {
-        return;
+        return TBT_OK;
     }
     /* Record 21 section 1.4.2: an inert instance clears it only where its
      * own firmware-ready poll failed, so nothing came up through it. */
     if (!active && !power->FwReadyFailed) {
-        return;
+        return TBT_OK;
     }
-    power->ForcePowerSetHere = FALSE;
     v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_22);
-    if (v != 0xFFFFFFFFUL) {
-        cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_22, TbtHwForcePowerValue(v, FALSE));
+    if (v == 0xFFFFFFFFUL) {
+        /* Not restored: the record keeps it for a later attempt. */
+        return TBT_E_HW;
     }
+    cfg->Write32(cfg->Context, TBT_ICL_VS_CAP_22, TbtHwForcePowerValue(v, FALSE));
+    power->ForcePowerSetHere = FALSE;
+    return TBT_OK;
 }
 
 BOOLEAN TbtHwIsApple(ULONG subsystemVendorId)

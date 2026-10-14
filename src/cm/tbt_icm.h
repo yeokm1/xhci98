@@ -179,6 +179,12 @@
 #define TBT_ICM_TOPO_PACKETS        14UL
 #define TBT_ICM_TOPO_PORTS          16UL
 #define TBT_ICM_TOPO_WORDS          38UL
+#define TBT_ICM_TOPO_ALL            0x3FFFUL    /* a bit per packet, all 14 */
+/* The device-connected structures' lengths (ICM 4.4 [obs] 61 DWs; Linux
+ * struct icm_fr_event_device_connected 61, icm_tr_event_device_connected
+ * 63). A shorter frame is malformed. */
+#define TBT_ICM_FR_CONNECTED_WORDS  61UL
+#define TBT_ICM_TR_CONNECTED_WORDS  63UL
 /* How much one TbtIcmPoll takes before it returns to the driver. */
 #define TBT_ICM_POLL_FRAMES         64UL
 #define TBT_ICM_POLL_EVENTS         32UL
@@ -233,6 +239,8 @@ typedef struct _TBT_ICM_ANNOUNCE {
     BOOLEAN RouteValid;     /* carried by the event (Titan Ridge, Ice Lake) */
     TBT_ROUTE Route;
     TBT_ICM_NAMES Names;
+    ULONG RawWords;         /* the frame as received, for the log */
+    ULONG Raw[TBT_FRAME_DWORDS];
 } TBT_ICM_ANNOUNCE, *PTBT_ICM_ANNOUNCE;
 
 /* A decoded device-disconnected event. */
@@ -288,8 +296,9 @@ typedef struct _TBT_ICM_PROFILE {
     const char *Name;
     ULONG Generation;
     ULONG Caps;
-    ULONG ReadyTimeoutMs;   /* driver ready per attempt */
+    ULONG ReadyTimeoutMs;   /* driver ready per attempt; 0: the command timeout */
     ULONG ReadyRetries;     /* after the first attempt */
+    ULONG ReadyWords;       /* the driver-ready response's structure, in DWs */
     /* Each decoder returns FALSE for a frame it cannot read; the client
      * then counts and ignores it. */
     BOOLEAN (*DecodeReady)(const ULONG *dw, ULONG words, PTBT_ICM_READY out);
@@ -337,7 +346,10 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
  * One tunnel change for the driver's thread to act on (record 21 section
  * 6.5), a snapshot of the entry when it was queued. Every entry that
  * leaves the table queues exactly one TUNNEL_DOWN, approved or not
- * (WasApproved says which); a TUNNEL_UP is queued only for an approved one.
+ * (WasApproved says which); a TUNNEL_UP is queued for an approved one, and
+ * for one whose approve was never answered (why APPROVE_UNKNOWN: the
+ * tunnel may be up, record 21 section 1.4.6). Actions of a session that
+ * ended (unbind, a failure) are retired and never live.
  * A disconnect, or a replacement, takes the devices below the one named
  * with it. If the queue is ever full, a stale TUNNEL_UP is given up first,
  * and anything else that does not fit turns into one TBT_ICM_ACT_RESYNC
@@ -545,8 +557,9 @@ VOID TbtIcmSuspend(PTBT_ICM icm);
  * block TbtIcmStart was given, then the reconciliation of section 5.3 - a
  * table entry not re-announced within TBT_ICM_RECONCILE_MS of the
  * host-router poll (pushed back by each announcement) is dropped with a
- * TUNNEL_DOWN. TBT_OK, or a negative result after which the client is
- * unbound (rings stopped, 0x07 sent).
+ * TUNNEL_DOWN. TBT_OK, or a negative result after which the instance is
+ * failed and idle (rings stopped; 0x07 left for TbtIcmUnbind). A failed
+ * instance does not resume.
  */
 LONG TbtIcmResume(PTBT_ICM icm);
 

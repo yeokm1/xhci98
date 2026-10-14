@@ -237,6 +237,7 @@ LONG TbtRingStart(PTBT_RING ring,
 
     ring->Host = host;
     ring->Running = FALSE;
+    ring->Programmed = FALSE;
     if (va == NULL || bytes < TBT_RING_DMA_BYTES ||
         (phys & (TBT_RING_DMA_ALIGN - 1)) != 0 ||
         phys > 0xFFFFFFFFUL - TBT_RING_DMA_BYTES) {
@@ -254,6 +255,7 @@ LONG TbtRingStart(PTBT_RING ring,
     }
     ring->Paths = paths;
 
+    ring->Programmed = TRUE;
     if ((flags & TBT_RING_START_RESET_HI) != 0) {
         /* Spec 12.6.3.1.3: self-clearing within tHIReset. */
         TBT_WR(ring, TBT_HI_RESET, TBT_HI_RESET_RST);

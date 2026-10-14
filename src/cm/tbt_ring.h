@@ -172,6 +172,7 @@ typedef struct _TBT_RING {
     ULONG RxNext;           /* next RX descriptor to examine */
     ULONG Seq;              /* 2-bit Sequence Number, Spec 6.4.2.3 */
     BOOLEAN Running;
+    BOOLEAN Programmed;     /* the last start wrote ring registers */
 
     TBT_RING_COUNTERS Counters;
 } TBT_RING, *PTBT_RING;
