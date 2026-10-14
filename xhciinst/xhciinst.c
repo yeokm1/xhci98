@@ -2885,6 +2885,7 @@ static int install_inf(int inf, int controllers)
     int full;
     BOOL reboot;
     DWORD err;
+    DWORD flags;
     int ok = 1;
 
     join(path, sizeof(path), srcDir, infRel[inf]);
@@ -2944,9 +2945,17 @@ static int install_inf(int inf, int controllers)
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
             d->Desc[0] ? d->Desc : d->Id);
         reboot = FALSE;
-        logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", FORCE)\n",
-                hwid, path);
-        if (api.UpdateDriver(NULL, hwid, path, INST_INSTALLFLAG_FORCE, &reboot)) {
+        /* The tunnel-port filter's first install goes unforced on Windows
+         * 2000, the route task 39-0.4 read there (2000 takes the unsigned
+         * filter INF over machine.inf by itself); XP onward rank it below
+         * machine.inf, so it is forced there, as everything else is
+         * (record 23 section 5.5; owner, 2026-10-15). */
+        flags = (inf == INST_INF_CMF && d->Action == INST_ACT_FILTER &&
+                 envNow.Major == 5 && envNow.Minor == 0) ?
+                0 : INST_INSTALLFLAG_FORCE;
+        logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", %s)\n",
+                hwid, path, flags ? "FORCE" : "0");
+        if (api.UpdateDriver(NULL, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
             flagChanged = 1;
             for (j = 0; j < n; j++) {

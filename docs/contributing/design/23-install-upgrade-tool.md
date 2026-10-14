@@ -446,12 +446,15 @@ best driver of the given INF on every present device whose hardware or
 compatible ids include `hwid`. Three properties of it decide how it is
 called:
 
-- **`INSTALLFLAG_FORCE` always.** Without it the routine installs only a
-  driver it ranks better than the installed one, and Windows 2000 does not
-  rank an unsigned driver's date (the release notes' "use Have Disk"); a
-  reinstall of the same version (`/force`, `/restage`) needs it as well.
-  The decision whether to install at all is section 5.4's, made before the
-  call.
+- **`INSTALLFLAG_FORCE`, with one exception.** Without it the routine
+  installs only a driver it ranks better than the installed one, and
+  Windows 2000 does not rank an unsigned driver's date (the release notes'
+  "use Have Disk"); a reinstall of the same version (`/force`, `/restage`)
+  needs it as well. The decision whether to install at all is section
+  5.4's, made before the call. The exception (owner, 2026-10-15): the
+  tunnel-port filter's first install on Windows 2000 is unforced, the
+  route task 39-0.4 read there (2000 takes the unsigned filter INF over
+  `machine.inf` by itself; XP and 7 rank it below and need the force).
 - **The id is the device's own first hardware id**, its most specific,
   never the INF's model id: the controller's model id `PCI\CC_0C0330`
   would reach every xHCI controller, a foreign one included. Before each

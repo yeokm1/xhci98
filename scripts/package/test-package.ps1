@@ -1492,13 +1492,13 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the UAS pair was removed:`n" + $r.Output)
 
-        # --- the connection manager's three files (roadmap-usb4.md 39-A.1) --
+        # --- the connection manager's four files (roadmap-usb4.md 39-A.1) ---
         #
         # Gated in place by check-cm-inf.ps1 where present, carried into the
-        # asset, and all three or none: a directory missing any one of them
+        # asset, and all four or none: a directory missing any one of them
         # is refused. Not required in this mode (no version before 3.0.0.0
         # has them).
-        Write-Step "the upload set gates the connection manager's three files, all or none"
+        Write-Step "the upload set gates the connection manager's four files, all or none"
         $cmFiles = @{
             "xhcicm.inf"  = (Join-Path $repo "src\cm\xhcicm.inf")
             "nt\xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
@@ -2726,9 +2726,9 @@ try {
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
         @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable';
-           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's three files and txtsetup.oem" },
-        @{ Find = '$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")';
-           Why  = "the connection manager's NHI INF, filter INF and binary (roadmap-usb4.md task 39-A.1) are no longer what a flavour directory publishes for it" },
+           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's four files and txtsetup.oem" },
+        @{ Find = '$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")';
+           Why  = "the connection manager's NHI INF, filter INF, binary and the filter INF's own copy of it in nt\ (roadmap-usb4.md task 39-A.1; Vista's and 7's driver store refuses a source outside the INF's directory) are no longer what a flavour directory publishes for it" },
         @{ Find = 'Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version';
            Why  = "the published xhcicm.sys is no longer held to the refusals xhciuas.sys is" },
         @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';

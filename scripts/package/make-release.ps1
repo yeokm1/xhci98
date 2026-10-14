@@ -625,7 +625,7 @@ function Get-LegPublishable {
 # it is present and does not require it.
 $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 
-# The Thunderbolt 3 connection manager's three files (roadmap-usb4.md task
+# The Thunderbolt 3 connection manager's four files (roadmap-usb4.md task
 # 39-A.1): its NHI INF, its NT-only tunnel-port filter INF and the binary,
 # published beside the UAS pair on the same terms - its own INFs declare
 # them, its own gate (scripts\inf-gate\check-cm-inf.ps1) checks them in
@@ -1679,7 +1679,7 @@ function Assert-PackageMatchesDeclaredMedia {
         [string]$Flavor,
         # Files accepted beside the declared set, by their path relative to
         # the package root: the UAS pair, which its own INF declares and its
-        # own gate checks, and the connection manager's three (one in nt\).
+        # own gate checks, and the connection manager's four (two in nt\).
         [string[]]$Also = @()
     )
 
@@ -2304,7 +2304,7 @@ $gateOut
         # (roadmap-usb4.md task 39-A.1). Required of a directory this cut
         # built; gated where present in one -UploadSetOnly reads, since a
         # version published before 3.0.0.0 has none.
-        # The three files go together: a directory holding any of them holds
+        # The four files go together: a directory holding any of them holds
         # all three, so a reconstruction never publishes the NHI's installer
         # without the filter's, or an INF without its binary.
         $cmGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"

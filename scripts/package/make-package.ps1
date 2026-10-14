@@ -1087,8 +1087,9 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
-    # The connection manager's three files at the root too, where both its
-    # INFs' one SourceDisksNames entry looks for them.
+    # The connection manager's NHI INF and binary at the root, where its
+    # SourceDisksNames entry looks; the filter INF in nt\ with its own copy
+    # of the binary, where the filter INF's entry looks.
     if ($stageCm) {
         Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
         Ensure-Directory (Join-Path $stageDir "nt")
