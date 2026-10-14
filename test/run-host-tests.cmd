@@ -180,6 +180,12 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
+rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
+rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
+rem                  filter), the vendor, device and class parsed from them,
+rem                  the NHI profile table, and the registry values'
+rem                  defaults, refusals and bounds
 rem
 rem   test_tbt_ring - xhcicm.sys's host interface ring 0 (src\cm\tbt_ring.c,
 rem                  task 39-A.2): the USB4 2.0 Appendix A.2 CRC-32C vectors,
@@ -414,6 +420,9 @@ rem test_own links nothing else: who holds an endpoint's ring across an
 rem interface switch - each step's decision, the one-setting walk - is pure,
 rem and the suite drives it over a modelled controller and pool (task 38.10).
 call :run test_own "test_own.c ..\src\xhci_own.c"
+rem test_cm links nothing else: xhcicm.sys's role choice, its NHI profile
+rem table and its registry values' rules are pure (task 39-A.1).
+call :run test_cm "test_cm.c ..\src\cm\cm_vals.c"
 rem test_tbt_ring, test_tbt_icm and test_tbt_hw are xhcicm.sys's pure core
 rem (src\cm\, roadmap-usb4.md tasks 39-A.2 and 39-A.3, design record 21
 rem section 10.1), driven over the modelled host interface in tbt_fake.h:

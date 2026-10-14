@@ -16,6 +16,12 @@ is this project's two files and nothing else:
                    33.3; src\txtsetup-amd64.oem under this name for amd64),
                    read from A:\ when F6 is pressed in Windows 2000 and XP
                    text-mode Setup, so it sits at the root with xhci98.sys
+    xhcicm.inf     the Thunderbolt 3 connection manager's NHI INF
+                   (roadmap-usb4.md task 39-A.1; src\cm\xhcicm-amd64.inf
+                   under this name for amd64)
+    xhcicmf.inf    its NT-only tunnel-bridge filter INF (src\cm\xhcicmf.inf,
+                   or xhcicmf-amd64.inf under this name for amd64)
+    xhcicm.sys     the connection manager, the same flavour
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
@@ -101,6 +107,24 @@ self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
 in src\uas.
 
+.PARAMETER CmInfPath
+The Thunderbolt 3 connection manager's NHI INF to stage (roadmap-usb4.md
+task 39-A.1), overriding `src\cm\xhcicm.inf` (x86) or
+`src\cm\xhcicm-amd64.inf` (amd64). Staged as `xhcicm.inf` and gated by
+scripts\inf-gate\check-cm-inf.ps1 under -Arch.
+
+.PARAMETER CmFilterInfPath
+The connection manager's NT-only tunnel-bridge filter INF, overriding
+`src\cm\xhcicmf.inf` (x86) or `src\cm\xhcicmf-amd64.inf` (amd64). Staged as
+`xhcicmf.inf` and gated by check-cm-inf.ps1 -Filter under -Arch.
+
+.PARAMETER CmDriverPath
+The connection manager to stage, overriding
+`src\cm\obj<flavour>\<archdir>\xhcicm.sys`, with the same rule as
+-UasDriverPath: both packages carry it, with both its INFs, whenever they
+are built from the default paths, and a stand-in package (one naming
+-DriverPath) carries it only when it names -CmDriverPath too.
+
 .PARAMETER HlprDriverPath
 The x86 helper to stage (design record 18; tasks 36.15 and 38.3), overriding
 `src\hlpr\obj<flavour>\i386\xhcihlpr.sys`. The 32-bit INF names it in
@@ -122,7 +146,7 @@ names -DriverPath (the self-tests' stand-ins) stages it only when it names
 
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
-sign the staged xhci98.sys and xhciuas.sys of an amd64 package with an
+sign the staged xhci98.sys, xhciuas.sys and xhcicm.sys of an amd64 package with an
 embedded Authenticode signature - SHA-1 file digest, no timestamp, no
 catalog, the INFs unchanged - and stage the certificate's public half beside
 them as xhci98-test.cer. That is what lets Vista x64 and Windows 7 x64 load
@@ -244,6 +268,9 @@ param(
     [string]$DriverPath = "",
     [string]$UasInfPath = "",
     [string]$UasDriverPath = "",
+    [string]$CmInfPath = "",
+    [string]$CmFilterInfPath = "",
+    [string]$CmDriverPath = "",
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
     [string]$TestSignPfx = "",
@@ -274,6 +301,9 @@ if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
 # question: see the -UasDriverPath help.
 #
 $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
+# The Thunderbolt 3 connection manager (roadmap-usb4.md task 39-A.1),
+# decided the same way.
+$stageCm = ($DriverPath -eq "") -or ($CmDriverPath -ne "")
 # The text-mode Setup description (task 33.3), decided the same way.
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 if ($OemPath -eq "") {
@@ -302,6 +332,21 @@ if ($UasDriverPath -eq "") {
         default   { "objfre" }
     }
     $UasDriverPath = Join-Path $repo "src\uas\$uasObjDir\$archDir\xhciuas.sys"
+}
+$cmAllow = if ($Arch -eq "amd64") { "xhcicm-imports-amd64.allow" } else { "xhcicm-imports.allow" }
+if ($CmInfPath -eq "") {
+    $CmInfPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\cm\xhcicm-amd64.inf" } else { "src\cm\xhcicm.inf" })
+}
+if ($CmFilterInfPath -eq "") {
+    $CmFilterInfPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\cm\xhcicmf-amd64.inf" } else { "src\cm\xhcicmf.inf" })
+}
+if ($CmDriverPath -eq "") {
+    $cmObjDir = switch ($Flavor) {
+        "debug"   { "objchk" }
+        "qemu"    { "objchk_qemu" }
+        default   { "objfre" }
+    }
+    $CmDriverPath = Join-Path $repo "src\cm\$cmObjDir\$archDir\xhcicm.sys"
 }
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
@@ -812,6 +857,55 @@ The package carries the UAS class driver. Build it first:
         Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
     }
 
+    # --- the Thunderbolt 3 connection manager, held to the same gates -------
+    # (roadmap-usb4.md task 39-A.1): the binary to its marker and its own
+    # allowlist, both its INFs to check-cm-inf.ps1.
+    if ($stageCm) {
+        Write-Step ("Thunderbolt 3 connection manager ({0}, {1})" -f $Flavor, $Arch)
+        if (-not (Test-Path -LiteralPath $CmDriverPath)) {
+            throw @"
+no $Flavor xhcicm.sys at '$CmDriverPath'.
+The package carries the Thunderbolt 3 connection manager. Build it first:
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        $cmFlavour = Get-ImageFlavourMarker -Path $CmDriverPath
+        if ($cmFlavour -ne $Flavor) {
+            throw "'$CmDriverPath' carries the flavour marker '$cmFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+        }
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            if (-not $SkipBinaryGates) {
+                $cmGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                "-Image", $CmDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
+                                "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") $cmAllow))
+                if ($NoTargetEvidence) { $cmGateArgs += "-NoTargetEvidence" }
+                & powershell.exe @cmGateArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "'$CmDriverPath' failed the import-compatibility gate against $cmAllow."
+                }
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1") `
+                -InfPath $CmInfPath -Arch $Arch
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$CmInfPath' failed scripts\inf-gate\check-cm-inf.ps1 - fix it before packaging."
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1") `
+                -InfPath $CmFilterInfPath -Arch $Arch -Filter
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$CmFilterInfPath' failed scripts\inf-gate\check-cm-inf.ps1 -Filter - fix it before packaging."
+            }
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+    } else {
+        Write-Warn "no connection manager staged: -DriverPath was named without -CmDriverPath (a stand-in package)."
+    }
+
     # --- the x86 helper, held to its own gates (design record 18) ---------
     if ($stageHlpr) {
         Write-Step ("x86 helper ({0})" -f $Flavor)
@@ -911,6 +1005,12 @@ The x86 package carries the x86 helper its INF names. Build it first
                             -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys"
             $UasDriverPath = $signedUas
         }
+        if ($stageCm -and (Test-Path -LiteralPath $CmDriverPath)) {
+            $signedCm = Join-Path $signDir "xhcicm.sys"
+            Invoke-TestSign -Source $CmDriverPath -Dest $signedCm -Pfx $TestSignPfx -Password $testSignPassword `
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhcicm.sys"
+            $CmDriverPath = $signedCm
+        }
         $testSignPassword = $null
     }
 
@@ -977,6 +1077,13 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     if ($stageUas) {
         Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
+    }
+    # The connection manager's three files at the root too, where both its
+    # INFs' one SourceDisksNames entry looks for them.
+    if ($stageCm) {
+        Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
+        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "xhcicmf.inf") -Force
+        Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "xhcicm.sys") -Force
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.
@@ -1099,6 +1206,23 @@ a build that was never made.
             }
             if ($LASTEXITCODE -ne 0) {
                 throw "the staged package failed scripts\inf-gate\check-uas-inf.ps1 - do not install it."
+            }
+        }
+        if ($stageCm) {
+            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "xhcicmf.inf"; Extra = @("-Filter") })) {
+                $savedEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $cmExtra = $cmInf.Extra
+                    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                        (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1") `
+                        -InfPath (Join-Path $stageDir $cmInf.Name) -PackageDir $stageDir -Arch $Arch @cmExtra
+                } finally {
+                    $ErrorActionPreference = $savedEap
+                }
+                if ($LASTEXITCODE -ne 0) {
+                    throw "the staged package failed scripts\inf-gate\check-cm-inf.ps1 on $($cmInf.Name) - do not install it."
+                }
             }
         }
         if ($stageOem) {

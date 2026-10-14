@@ -522,3 +522,23 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `build*.log` | The DDK build engine's logs. |
 
 The three flavours (`debug`, `release`, `qemu`) and what distinguishes their outputs are in [design record 08](design/08-build-flavours-and-the-log-channel.md); the build procedure is in [build-and-test.md](build-and-test.md).
+
+## The Thunderbolt 3 connection manager - `src\cm\`
+
+`xhcicm.sys`, the third driver (design record 21; `roadmap-usb4.md` Phase 39, scaffold of task 39-A.1), built by `scripts\build-driver.cmd` after `xhciuas.sys` in every x86 and amd64 run, from its own `sources` and `makefile`, in the same three flavours. One binary, two PnP roles: the NHI's function driver on every target and, on the NT targets only, the tunnel bridge's upper filter. The later pieces of Phase 39 (`tbt_ring.c`, `tbt_regs.h`, `tbt_icm.c`, `tbt_topo.c`, `cm_cfgmg.h`) land in this directory; a new `.c` file is one more line in `src\cm\sources` (and, if it is pure, a `call :run` line in `test\run-host-tests.cmd`).
+
+| File | What it is |
+|---|---|
+| `cm.h` | The driver's header: the two roles' extensions (`CM_NHI`, `CM_FILTER`), the start stages (`CM_STAGE_*`) and the cross-file entry points. |
+| `cm_vals.c` / `cm_vals.h` | The pure core (`test_cm`): the role a PDO's hardware ids name (`CmClassifyIds`: a PCI class 06/04 id is the filter's, anything else the NHI's), the vendor, device and class parsed from them, the NHI profile table (`CmProfileFor`: the firmware connection manager's generations and the USB4 software connection manager's hosts, Intel's ids from Linux `drivers/thunderbolt/nhi.h` and AMD's from FreeBSD `nhi_reg.h`), the INERT start's reasons (`CmStartDecision`), and the registry values' defaults, refusals and bounds (`CmValuesTake`; record 21 section 8). The INF gate reads the defaults out of its rule table. |
+| `cm_entry.c` | `DriverEntry`, `AddDevice` (the role decided by `IoIsWdmVersionAvailable(1, 0x10)` and the PDO's `DevicePropertyHardwareID`), the dispatch table, the flavour marker and version string. |
+| `cm_nhi.c` | The NHI function driver: attach, the start (the values read once, the INERT start logged, no hardware access in the scaffold), stop, surprise removal and removal; power passed through until task 39-A.4. |
+| `cm_filt.c` | The tunnel bridge's upper filter (NT only): attach with the lower device's flags, every IRP passed down unchanged, detach on removal. |
+| `cm_reg.c` | The one registry site: the values of record 21 section 8 from the NHI's driver key, through `IoOpenDeviceRegistryKey` and `RtlQueryRegistryValues` (`SITES=cm_reg.obj`). |
+| `cm_log.c` | The shared log ring (`..\xhci_log.c`, compiled in by path): recording by `XhciLogVerbosity`, emission at stop through `DbgPrint` under `#if DBG` only, mirrored to port 0xE9 in the qemu flavour (decision D12; `SITES=cm_log.obj`, `debug` and `qemu` rows). |
+| `cm_pool.c` | The one pool site (`ExAllocatePoolWithTag` / `ExFreePool`, `SITES=cm_pool.obj`, optional rows until task 39-A.4 allocates). |
+| `xhcicm.rc` | The version resource, from `src\xhci_version.h`. |
+| `xhcicm.inf` / `xhcicm-amd64.inf` | The NHI INFs, 32-bit (Windows 98 SE and ME, 2000 and XP, Vista and 7) and 64-bit (`NTamd64,NTamd64.6.0`), staged as `xhcicm.inf`; the NHI ids of record 21 section 3.3's list (exactly the ICM rows of `cm_vals.c`, held by the gate's `CM-IDLIST`), and every registry value the driver reads written at its default under `FLG_ADDREG_NOCLOBBER` but `XhciCmTunnelBridge`, whose absence is meaningful. |
+| `xhcicmf.inf` / `xhcicmf-amd64.inf` | The NT-only tunnel-bridge filter INFs (`$Windows NT$`), staged as `xhcicmf.inf`: a device-specific `UpperFilters` value on the Thunderbolt switch ports and the integrated controllers' tunnel root ports (record 21 section 3.3's list, every id `&CC_0604`) with `pci.sys` kept as the function driver - a draft pending task 39-0.4. |
+
+Its gates: `scripts\inf-gate\check-cm-inf.ps1` (the four INFs, with `CM-NO9XBRIDGE`), `scripts\import-gate\xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, the flavour marker check and `scripts\source-stamp.ps1 -Driver xhcicm`.
