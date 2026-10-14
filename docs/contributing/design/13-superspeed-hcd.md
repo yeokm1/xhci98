@@ -7041,7 +7041,7 @@ contiguous block:
 | Word | Counter | Counts |
 |---|---|---|
 | 241 | `CompositeSelects` | composite selects recorded (step 2) |
-| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own sequence failed - a select the parent did not refuse but that failed all the same (no IRP, a filter failing it) included, told apart by a per-parent count of its refusals (each also forgets the record) |
+| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own sequence failed - a select the parent did not refuse but that failed all the same (no IRP, a filter failing it) included, told apart by the parent's mark on a select it refused (the header's `UsbdFlags`, which the FDO sends zero) (each also forgets the record) |
 | 243 | `CompositeRewrites` | endpoints of a recorded select whose matched `bInterval` differs from the device's |
 | 244 | `CompositeMismatches` | endpoints of a recorded select that did not match the device's (10.14.5) |
 | 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2) where it differs from the device's, at a select or a `SELECT_INTERFACE`, counted once the select has succeeded and the endpoint is open; an endpoint whose record byte equals the device's is rule 3's and not counted |

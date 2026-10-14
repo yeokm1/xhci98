@@ -1867,6 +1867,10 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
 #define HCD_COMP_IFACE_COOKIE(n)                                               \
     ((USBD_INTERFACE_HANDLE)(ULONG_PTR)(0x48430000UL | (n)))
 
+/* The parent's mark on a select it refused and counted (UsbdFlags, the
+ * header field the bus owns; zero as the FDO sends it). */
+#define HCD_COMP_REFUSED_MARK   0x52504D43UL
+
 /* The FDO sequence's steps, for comp.fdo (its high nibble). */
 #define HCD_COMP_STEP_ALLOC     1UL
 #define HCD_COMP_STEP_DEVICE    2UL
@@ -2200,7 +2204,9 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 refused:
     hcdCompSwap(pdo, hc, NULL);
     hcdCount(&hc->Counters.CompositeSelectRefused);
-    hcdCount((PULONG)&pdo->CompRefusals);
+    /* Marked on the request itself, so its sender tells this refusal
+     * from a failure nobody counted (a review, round 2). */
+    urb->UrbHeader.UsbdFlags = HCD_COMP_REFUSED_MARK;
     XhciLogNote(&hc->Hc, "comp.refused",
                 ((pdo->Serial & 0xFFUL) << 24) |
                     ((ULONG)usbd & 0x00FFFFFFUL));
@@ -2359,7 +2365,6 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
     PURB urb;
     PURB sel;
     NTSTATUS status;
-    ULONG refusals;
     ULONG countIt;
     ULONG count;
     ULONG total;
@@ -2374,7 +2379,6 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
     sel = NULL;
     status = STATUS_SUCCESS;
     step = 0;
-    refusals = 0;
     countIt = !unconfigure;
     HcdCompositeForget(parent);
     urb = (PURB)HcdPoolAlloc(sizeof(URB));
@@ -2467,14 +2471,14 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
         }
         ii = (PUSBD_INTERFACE_INFORMATION)((PUCHAR)ii + one);
     }
-    refusals = parent->CompRefusals;
     status = hcdCompSend(lower, sel);
     if (!NT_SUCCESS(status)) {
         step = HCD_COMP_STEP_SELECT;
-        /* Counted here unless the parent refused it and counted it: an
-         * IRP that could not be allocated, a filter that failed it before
-         * or after the parent (a review, round 1). */
-        countIt = parent->CompRefusals == refusals;
+        /* Counted here unless the parent refused this very request and
+         * counted it, which it marks on the URB: an IRP that could not be
+         * allocated, a filter that failed it before or after the parent
+         * (a review, rounds 1 and 2). */
+        countIt = sel->UrbHeader.UsbdFlags != HCD_COMP_REFUSED_MARK;
     }
 
 cleanup:
