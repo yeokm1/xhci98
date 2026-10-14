@@ -5553,14 +5553,17 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     BOOLEAN allMet;
     PTBT_U4_OBLIGATION o;
     PTBT_U4_PORT p;
-    TBT_U4_PORT saved[TBT_U4_MAX_PORTS];
+    PTBT_U4_PORT saved;
     LONG rc;
 
     if (cm->Failed) {
         return TBT_E_STATE;
     }
     cm->Suspended = FALSE;
-    tbtU4Zero(saved, sizeof(saved));
+    /* Several kilobytes: in the instance, never on the stack (a kernel
+     * stack has no probe, __chkstk). */
+    saved = cm->ResumeSaved;
+    tbtU4Zero(saved, sizeof(cm->ResumeSaved));
     oldCount = cm->PortCount;
     for (i = 0; i < oldCount && i < TBT_U4_MAX_PORTS; i++) {
         saved[i] = cm->Ports[i];

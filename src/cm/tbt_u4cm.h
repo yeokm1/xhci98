@@ -501,6 +501,8 @@ typedef struct _TBT_U4CM {
     TBT_U4_ROUTER HostRouter;
     ULONG PortCount;
     TBT_U4_PORT Ports[TBT_U4_MAX_PORTS];
+    TBT_U4_PORT ResumeSaved[TBT_U4_MAX_PORTS];  /* TbtU4Resume's copy: kept
+                                                 * off the kernel stack */
     TBT_U4_LINK Links[TBT_U4_MAX_LINKS];
     TBT_U4_QENTRY Quarantine[TBT_U4_QUARANTINE];
 
