@@ -144,8 +144,11 @@ Check: `bcdedit /enum {current}` shows `testsigning Yes`. Turn it off: `bcdedit 
 This is for a machine whose keyboard or install medium is on the xHCI controller.
 
 1. Copy the files of `release-x86\` (`release-x64\` for XP x64) to the root of a floppy.
-2. Press F6 when text-mode Setup offers it.
-3. Press S and pick "xHCI98 USB 3.x Host Controller".
+2. **Windows 2000 only:** from the `I386` folder of the Windows 2000 CD you install from, copy `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` to the root of the same floppy, unchanged (do not expand or rename them). The package does not carry them.
+3. Press F6 when text-mode Setup offers it.
+4. Press S and pick "xHCI98 USB 3.x Host Controller (32-bit Windows 2000/XP)" (the x64 entry on XP x64), or on Windows 2000 the second entry, "xHCI98 USB 3.x Host Controller (32-bit Windows 2000, files from CD)".
+
+On Windows 2000, if a USB keyboard, mouse or stick is used during Setup, the first entry leads to `STOP c000026c` at the new system's first start; the second entry without the three files on the floppy stops Setup while it copies files, asking for them in drive A: (F3 quits). The [release notes](docs/using/release-notes.md) have the details.
 
 The same floppy serves the Recovery Console of Windows 2000 and XP. Press F6 as for an install, then R at Setup's Welcome screen (on Windows 2000, then C for the console). The USB keyboard logs in and types commands.
 

@@ -546,6 +546,11 @@ one, and `PKG-MSFILE` refuses a staged package holding one - by name, which
 covers the four, the three retired 1.0.0.0 media names and `usbhub20.sys`. A
 name list cannot see the same bytes under a name nobody thought of; what closes
 that is the packager refusing to publish anything it did not itself stage.
+Since 2.4.0.0 it refuses the CD's compressed names too (`USBD.SY_`): the
+32-bit `txtsetup.oem`'s Windows 2000 F6 entry names `usbd.sys`,
+`hidclass.sys` and `hidparse.sys`, which the user copies from their own
+Windows 2000 CD to the floppy - the media still carries none of them
+(`OEM-W2K` holds that entry's shape).
 `legal-provenance.md` section 5 records why. Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is

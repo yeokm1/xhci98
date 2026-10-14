@@ -727,9 +727,38 @@ From `2.1.0.0` every flavour directory carries `txtsetup.oem`, for a machine
 whose keyboard or install medium is on an xHCI controller. Copy the files of
 `release-x86\` (`release-x64\` for Windows XP x64) to the root of a floppy,
 press F6 when text-mode Setup offers it, press S, and pick "xHCI98 USB 3.x
-Host Controller". Setup then drives a USB keyboard, mouse and USB stick
-through its own drivers above this one. The same floppy serves everything
-that starts from the Windows CD's text mode:
+Host Controller (32-bit Windows 2000/XP)" (on XP x64, the x64 entry).
+Setup then drives a USB keyboard, mouse and USB stick through its own
+drivers above this one. **Installing Windows 2000: also copy three files
+from your Windows 2000 CD to the floppy and pick the Windows 2000 entry**
+(below); without them the install stops at its first start.
+
+**Installing Windows 2000 from the F6 floppy** (new in `2.4.0.0`):
+
+1. Copy the files of `release-x86\` to the root of a floppy.
+2. From the `I386` folder of the Windows 2000 CD you install from, copy
+   `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` to the root of the same
+   floppy, as they are: do not expand or rename them. This package does
+   not carry them; they are Windows 2000's own files.
+3. Start Setup from that CD and press F6 when it offers it; press S,
+   insert the floppy and press Enter. In the list, press the Down arrow
+   to "xHCI98 USB 3.x Host Controller (32-bit Windows 2000, files from
+   CD)" and press Enter, then Enter again to continue.
+
+Text mode copies the three files to the new system with the driver, so a
+USB keyboard, mouse or stick used during Setup works when the new system
+first starts. If they are not on the floppy, Setup stops while copying
+files with "Insert the disk labeled: USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_
+from the 32-bit Windows 2000 CD into drive A:"; put a floppy holding them
+in drive A: and press Enter, or press F3 to quit Setup. The entry is for
+Windows 2000 only: on XP pick the other one, which never asks for them
+(`docs/issues/16-w2k-f6-first-gui-boot-usbd.md` has the whole story).
+Windows 2000 keeps three inert service entries named `usbd`, `hidclass`
+and `hidparse` (set to start on demand; nothing starts them) from this
+step. Read with Windows 2000 SP4 in QEMU virtual machines (below).
+
+The same floppy serves everything that starts from the Windows CD's text
+mode:
 
 - **Installing Windows 2000 or XP.** GUI-mode Setup then installs the
   driver from `xhci98.inf` as usual, from the copies text mode made of the
@@ -740,7 +769,7 @@ that starts from the Windows CD's text mode:
   build of `2.4.0.0` left it off `txtsetup.oem`'s file list, and GUI-mode
   Setup then installed no driver on the controller (32-bit XP, read in a
   virtual machine); this release's `txtsetup.oem` names it. **Windows
-  2000: see the limit below on a USB keyboard, mouse or storage device.**
+  2000: use the Windows 2000 entry above; see the limit below.**
 - **The Recovery Console.** Press F6 as for an install, then R at Setup's
   Welcome screen (on Windows 2000, then C for the console). The USB
   keyboard logs in and types commands; the console runs in text mode
@@ -785,8 +814,10 @@ Limits:
   up to 5 seconds, for the devices plugged in at start before that first
   report (`XhciFirstEnumWaitMs`, under "Registry settings"; text-mode Setup
   always gets the defaults).
-- **Installing Windows 2000 with a USB keyboard, mouse or storage device
-  on the xHCI controller stops at the first start of GUI-mode Setup**
+- **Installing Windows 2000 with the first entry, "(32-bit Windows
+  2000/XP)", and a USB keyboard, mouse or storage device on the xHCI
+  controller stops at the first start of GUI-mode Setup** (the Windows
+  2000 entry with the three files from the CD, above, avoids it)
   with `STOP c000026c` ("Unable to Load Device Driver", error status
   `0xc0000034`), naming `\SystemRoot\System32\Drivers\hidusb.SYS` for a
   keyboard or mouse, or `usbstor.SYS` for a USB stick or disk. Windows
@@ -804,12 +835,15 @@ Limits:
   (`usbstor.SYS`). What works on Windows 2000 from the floppy, as read:
   text mode itself, and the Recovery Console; the stop comes at the first
   start of the installed system. An install with no USB keyboard, mouse
-  or storage device on the controller during text mode has not been
-  read. 32-bit XP with a USB keyboard and mouse is not affected: its text
-  mode leaves the same files out, and its first start goes on without
-  them (the XP limit above). The package cannot carry those Microsoft
-  files, and `txtsetup.oem` can copy only from its own floppy, so no
-  workaround is offered.
+  or storage device on the controller during text mode (a hub and an
+  audio device only) went on into GUI-mode Setup with no stop. 32-bit XP
+  with a USB keyboard and mouse is not affected: its text mode leaves the
+  same files out, and its first start goes on without them (the XP limit
+  above). The package does not carry those Microsoft files, and
+  `txtsetup.oem` can copy only from the floppy in drive A: (text mode
+  asks for any other disk there, with no way past it but F3), so the
+  Windows 2000 entry copies them from the floppy once you have put them
+  there.
 - GUI-mode Setup may ask for the floppy or the Windows CD.
 
 What has run, in QEMU virtual machines on development host A only; no
@@ -832,6 +866,38 @@ hardware:
   GUI-mode Setup showed no prompt and completed on that build. XP x64's
   text mode was not read again on the `2.1.0.0` build, and its Recovery
   Console not at all.
+- **Windows 2000 SP4 with the Windows 2000 entry, on the `2.4.0.0`
+  branch build** (unsigned, the steps above followed as written, the
+  three files from the SP4 CD): with a USB keyboard, mouse and audio
+  device behind a hub, every key from F6 on typed on the USB keyboard, and
+  the first start went on into GUI-mode Setup, where the USB keyboard and
+  mouse worked, up to the product key page; with a USB stick at a root
+  port and no USB keyboard or mouse, the stick was listed at the partition
+  screen and the first start went on to the product key page as well. No
+  key was entered, so the desktop was not reached on Windows 2000. With
+  the Windows 2000 entry and a floppy without the three files, Setup
+  asked for them in drive A: as described above; with a floppy holding
+  them put in its place and Enter pressed, the copy went on and text
+  mode finished. On the same build, 32-bit XP SP3 with the first entry
+  went on into GUI-mode Setup, which installed the controller from the
+  floppy's copies with no error.
+
+**Slipstreaming into a Windows 2000 CD.** If you add `xhci98.sys` to a
+copy of your Windows 2000 CD as a driver text-mode Setup loads by itself
+(entries in `I386\TXTSETUP.SIF`) instead of using the F6 floppy, the
+same stop applies: Windows 2000's `TXTSETUP.SIF` copies `usbd.sys`,
+`hidclass.sys` and `hidparse.sys` (all three already in the CD's
+`I386`) only in the file sections of its own USB controller drivers,
+`[files.openhci]` and `[files.uhcd]`, so the slipstreamed driver's own
+file section must list them too, as those sections do, or a USB
+keyboard, mouse or stick used in text mode stops the new system at its
+first start (`STOP c000026c`). What was read: those two sections in the
+SP4 CD's `TXTSETUP.SIF`, and the stop and its cure on the F6 route
+above. A slipstreamed CD itself was not carried through: one attempt,
+adding the driver as an `[InputDevicesSupport]` entry with its own file
+section, did not get the driver loaded in text mode, and that was not
+pursued. This package does not ship a slipstreamed CD or a recipe for
+one.
 
 ### Upgrading from 1.2.0.0
 
@@ -2798,17 +2864,21 @@ or says it was found by reading the code.
   device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
   shows them as `?`.** See "Devices and hubs in Device Manager".
-- **Windows 2000 installed with the F6 floppy and a USB keyboard, mouse
-  or storage device on the controller stops at the first start of
-  GUI-mode Setup** (`STOP c000026c`, `0xc0000034`, naming `hidusb.SYS` or
-  `usbstor.SYS`): text mode copies those class drivers but not the
-  Windows files they need, `usbd.sys` among them. Read with a keyboard
-  and mouse on `2.3.1.0` and `2.4.0.0` alike, and with a USB stick and no
-  keyboard or mouse on `2.4.0.0`. Text mode and the Recovery Console
-  still work, and XP with a USB keyboard and mouse is not affected; an
-  install with no USB keyboard, mouse or storage device on the controller
-  has not been read. No workaround is offered. See "Installing Windows
-  2000 or XP, or using the Recovery Console: the F6 floppy".
+- **Windows 2000 from the F6 floppy needs three files from its own CD.**
+  Picking the first entry, "(32-bit Windows 2000/XP)", with a USB
+  keyboard, mouse or storage device on the controller stops the new
+  system at its first start (`STOP c000026c`, `0xc0000034`, naming
+  `hidusb.SYS` or `usbstor.SYS`): text mode copies those class drivers
+  but not the Windows files they need, `usbd.sys` among them. Read with a
+  keyboard and mouse on `2.3.1.0` and `2.4.0.0` alike, and with a USB
+  stick and no keyboard or mouse on `2.4.0.0`. The Windows 2000 entry,
+  with `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` copied from the CD
+  to the floppy, avoids it; this package does not carry those files.
+  Text mode and the Recovery Console work with either entry, XP with a
+  USB keyboard and mouse is not affected, and an install with no USB
+  keyboard, mouse or storage device on the controller went on with no
+  stop. See "Installing Windows 2000 or XP, or using the Recovery
+  Console: the F6 floppy".
 - **Windows XP and XP x64 installed with the F6 floppy: GUI-mode Setup asks
   about the unsigned driver before the USB keyboard works.** Setup copies
   Windows' own HID and USB helper files only with Microsoft's own USB
@@ -2910,7 +2980,7 @@ information.
 | A High Speed hub and a USB 3 hub under the `2.4.0.0` ids (`USB\XHCI98_HUB`, `USB\XHCI98_HUB30`) | Built against host tests and the INF gate. Virtual machines model only a Full Speed hub, which takes the same id and code path as a High Speed one (`USB\XHCI98_HUB`) and stands for it before the release; a High Speed hub and a USB 3 hub's two halves under the new ids are read on real hardware after the release |
 | Linux's controller quirks (`XhciMsiAvoid` and the thirteen others, and `XhciIntervalCap` on `1002:7316`) | Built from Linux's handling and the xHCI specification against host tests. None has been read on a controller it lists, though the project's E460 (`9D2F`), B490 (`1E31`) and E7250 (`9CB1`) and a user's VL805 are listed for some ("Linux's controller quirks"). QEMU's controller is on no list. What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is visible only in an external capture of that shutdown |
 | hidusbf on a composite device's own entry (`USB\XHCI98_COMPOSITE`) | New in `2.4.0.0`, built against host tests. QEMU offers no keyboard-and-mouse composite device, so the rate set there reaching a function is owed to a real composite device, by passthrough or on a machine; whether hidusbf's Setup offers the entry is unread ("SweetLow's hidusbf: a mouse's polling rate") |
-| Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, and installs to the desktop on 32-bit XP and XP x64. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
+| Installing Windows 2000 or XP, or the Recovery Console, from the F6 floppy on real hardware | Read in virtual machines only: text mode on Windows 2000 and 32-bit XP, the Recovery Console on both, installs to the desktop on 32-bit XP and XP x64, and Windows 2000 with its own entry and the three files from its CD to GUI-mode Setup's product key page. Never on real hardware; a repair install, Windows 2000's Emergency Repair Disk and Windows XP's Automated System Recovery on no vehicle |
 
 ## Licensing
 

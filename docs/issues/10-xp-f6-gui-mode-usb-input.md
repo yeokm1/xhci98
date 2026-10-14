@@ -109,7 +109,9 @@ CD unprompted. Windows 2000 has a different F6 problem, its text mode
 binding only the devices of the first enumeration; that one is this
 driver's to fix and is fixed for `2.1.0.0` (the lesson "Windows 2000
 text-mode Setup binds only the USB devices of the first enumeration", in
-`docs/contributing/lessons.md`).
+`docs/contributing/lessons.md`). The same three missing files stop
+Windows 2000's first GUI-mode boot when a USB keyboard, mouse or stick was
+used in text mode (found 2026-10-14): issue 16.
 
 ## 5. What the floppy is still good for
 

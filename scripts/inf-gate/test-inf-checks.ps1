@@ -1805,7 +1805,12 @@ try {
     foreach ($case in @(
         @{ Name = "pkg-usbd98";  Extra = @("usbd98.sys") },
         @{ Name = "pkg-usbd";    Extra = @("usbd.sys") },
-        @{ Name = "pkg-usbhub";  Extra = @("usbhub.sys") }
+        @{ Name = "pkg-usbhub";  Extra = @("usbhub.sys") },
+        # The CD's compressed names, the three the Windows 2000 F6 option
+        # has the user copy among them.
+        @{ Name = "pkg-usbd-packed";     Extra = @("USBD.SY_") },
+        @{ Name = "pkg-hidclass-packed"; Extra = @("HIDCLASS.SY_") },
+        @{ Name = "pkg-hidparse-packed"; Extra = @("HIDPARSE.SY_") }
     )) {
         $pkg = New-StandInPackage -Name $case.Name -Extra $case.Extra
         $r = Invoke-Gate -Path $prodInf -PackageDir $pkg
