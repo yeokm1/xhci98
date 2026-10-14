@@ -1,9 +1,8 @@
 # Design Record 21 - Thunderbolt 3 Firmware Connection Manager Client and Tunnel Re-enumeration
 
-Status: draft 5, 2026-10-14, before code; Codex review rounds 1 to 4
-(session `01a13afc`, 13, 10, 5 and 3 findings) folded in, and the owner's
-decisions of the same day on approval and the master switch (section 11).
-Written for the
+Status: draft 5, 2026-10-14, before code, reviewed and revised the same
+day, with the owner's decisions of that day on approval and the master
+switch (section 11). Written for the
 planned work `TB3` in `roadmap-usb4.md` ("Planned - Thunderbolt 3: the ICM
 Client and Tunnel Re-enumeration"), which takes the next free phase number
 when the owner opens it. Nothing in `src\` implements it yet. Section 11 lists
@@ -258,7 +257,7 @@ experiment and as `hcd_entry.c` tells its roles apart:
    breaks the bridge (section 6.1).
 
 The two roles find each other through a registration list in the driver's
-own image. The lifetime protocol, which review round 1 asked for: a filter
+own image. The lifetime protocol: a filter
 instance publishes its entry (its PDO, its device object, and its bus,
 device and function from `IoGetDeviceProperty` `DevicePropertyBusNumber`
 and `DevicePropertyAddress`, which the experiment read on both targets)
@@ -281,7 +280,7 @@ an NT target and the filter route.
 
 ### 3.3 The INFs
 
-Four INFs, two per package, because of a fact review round 1 raised: Windows 2000 reads the
+Four INFs, two per package, because Windows 2000 reads the
 **undecorated** Models section and decorates only the DDInstall section
 (which is why `xhci98.inf` shares `[XhciModels]` between 9x and NT 5.x), so
 a Models section that is safe for Windows 98 cannot also carry a line for
@@ -434,7 +433,7 @@ the rings. Work reaches it through a small queue under a spin lock. PnP
 requests (start, stop, remove) queue their work and wait on an event, as
 PnP dispatch may. **Power requests never wait**, and the NHI FDO is the
 device's power policy owner, so its sequence is `hcd_power.c`'s, not a
-filter's pass-through (review round 2, finding 1): a system power IRP is
+filter's pass-through: a system power IRP is
 marked pending and passed down, and its completion routine requests the
 matching device power IRP (`PoRequestPowerIrp`) and completes the system
 IRP, with one `PoStartNextPowerIrp` before that completion, when the
@@ -456,7 +455,7 @@ calls of section 6.1 can be made (they must come from a passive thread of
 the system VM, `REENUM-EXPERIMENT` "Caveats") and the only way the
 busy-polls can be bounded without blocking a dispatch routine.
 
-Priority inside the thread (review round 1, finding 8): the busy-poll of an
+Priority inside the thread: the busy-poll of an
 outstanding command services every RX frame as it lands, so an event
 arriving during a command is decoded at once, not after the command. A
 `device disconnected` decoded during a command runs its link-down
@@ -620,7 +619,7 @@ acted on. Counters: section 8.
 
 ### 5.6 Stop, remove, disable, suspend and resume
 
-Three cases the contract keeps apart (review round 1, finding 3), each in
+Three cases the contract keeps apart, each in
 the order the capture or the client shows:
 
 - **Unbind** (stop, remove, disable): ring 0 stopped (options cleared,
@@ -791,7 +790,7 @@ experiment) is a fallback this record does not ship.
 ### 6.5 Ordering: when the sequences run
 
 Two registers of the tunnel port's PCI Express capability are read, and
-they are not the same register (review round 1, finding 4): **Link Status**
+they are not the same register: **Link Status**
 (capability offset `0x12`, bit 13 Data Link Layer Link Active, valid only
 where Link Capabilities bit 20, Data Link Layer Link Active Reporting
 Capable, is set) and **Slot Status** (offset `0x1A`, bit 6 Presence Detect
@@ -846,8 +845,8 @@ mailbox `0x06` (every PCIe tunnel at once), which it never sends. Obligation
 1 therefore holds by construction: every tunnel up follows either a fresh
 `approve` of a freshly announced device (whose previous link, if any, went
 down at its unplug) or a re-announcement of a tunnel that never went down.
-Obligation 2 is the harder one, and review rounds 1 and 2 (findings 7 and
-6) narrowed the first draft's answer twice. An empty secondary-bus read is
+Obligation 2 is the harder one, and the first draft's answer was narrowed
+twice. An empty secondary-bus read is
 not evidence of anything: config reads go all-ones at the emulator's stage
 1, while endpoint DMA can run until stage 2 ends, and `nvme98`'s PLAN says
 the same of all-ones. The **candidate prerequisite** this driver reads
@@ -877,8 +876,7 @@ is in:
   link is down nothing below it can be read, so no register of the
   endpoint can say when its reset completed during the disconnected
   interval; reading CC.EN and RDY after a reconnection corroborates A1
-  after the fact and establishes nothing about the interval (review round
-  3, finding 6). An observation method that is available while the tunnel
+  after the fact and establishes nothing about the interval. An observation method that is available while the tunnel
   is down, or a bound agreed with `nvme98` on other grounds, is a question
   for `nvme98`'s own hardware verification of MD-2 (the P14s with an NVMe
   enclosure and with one that has an internal switch) and the owner, not
@@ -899,19 +897,32 @@ NT `IOCTL_SCSI_MINIPORT` with an `nvme98` signature. This record proposes:
 
 - **NT**: the recipient is resolved **at tunnel up**, never at tunnel down,
   and **never on the connection-manager thread**: a synchronous IOCTL to
-  another driver's port has no cancellation and completes when that port
-  gets to it, so it must not sit in front of the ICM traffic (review round
-  4). After a re-enumeration the thread hands the work to a second system
-  thread of this driver, the discovery worker, which walks
-  `\Device\ScsiPortN` (N from 0 up to the first miss after 31) with
+  another driver's port can be cancelled (`IoCancelIrp`) but has no
+  guaranteed bounded cancellation or completion - when it completes is the
+  recipient's affair, and cancellation is never permission to free the
+  request's storage - so it must not sit in front of the ICM traffic.
+  After a re-enumeration the thread hands the work to a second system
+  thread of this driver, the discovery worker, as a **discovery context**
+  tied to one connection instance: the device-table entry's UUID and
+  connection id (section 5.3) and a **generation** the thread increments
+  at every tunnel up, so an entry reused for a re-plugged device is a new
+  generation. The context has a lifetime of its own (a count held by the
+  worker and by the table entry, freed by the last release), and the
+  recipient cache is a field of the device-table entry, not of section
+  3.2's filter registration, which the worker never touches. The worker
+  walks `\Device\ScsiPortN` (N from 0 up to the first miss after 31) with
   `IoGetDeviceObjectPointer` and an `IOCTL_SCSI_MINIPORT` carrying
   `nvme98`'s signature and a "report your PCI location" function, and
-  publishes, under the registration list's lock, the port whose answer
-  matches a function behind the tunnel, keeping the reference. A tunnel
-  down that arrives first sets the entry gone, so a result landing after
-  it is discarded and its reference dropped; the worker is joined at stop
-  after its outstanding call returns, which is the one wait the stop
-  cannot bound and the reason it is not the connection-manager thread's.
+  publishes a match under the device table's lock **only if the entry is
+  live and its generation still equals the context's**; otherwise the
+  result is discarded and the port reference dropped. A tunnel down
+  invalidates the entry's cache and bumps nothing (the next tunnel up
+  does), so a result from connection A cannot be published into
+  connection B's entry. At stop the thread closes discovery admission and
+  invalidates every context under the lock, releases the lock, joins the
+  worker after its outstanding call returns - the one wait the stop
+  cannot bound, and the reason it is not the connection-manager thread's -
+  and only then releases the contexts' storage and references.
   At tunnel down that cached port gets one
   `IOCTL_SCSI_MINIPORT`, "link down", sent synchronously from the
   connection-manager thread before the filter's invalidation, and from
@@ -921,7 +932,7 @@ NT `IOCTL_SCSI_MINIPORT` with an `nvme98` signature. This record proposes:
   hot-plug (Windows 7 on real PCIe) has already started removal is a case
   the per-OS qualification reads, not one this record resolves.
 
-**The latency budget** (review rounds 2 and 3, findings 7). `nvme98`
+**The latency budget.** `nvme98`
 measures its gone deadline from its own presence loss, 5 s in its test
 build, and requires delivery inside it at every injection point and under
 queue saturation. The sender's budget is therefore end to end, every part
@@ -934,7 +945,7 @@ disconnect:
 | noticing the event | the idle RX poll: `XhciCmPollIdleMs`, which the driver clamps to 250 ms whenever the statement is enabled on that OS, whatever the registry says (the 5000 ms ceiling of section 8 is for a machine with the statement off) |
 | a command in flight | none added: the event is decoded inside the wait (section 4.4) |
 | a tunnel-up poll in flight (section 6.5) | none added: the poll services RX frames too, and a `device disconnected` for the device it is waiting on abandons the poll - the event says the device is gone |
-| a recipient discovery in flight | none added: discovery runs on the discovery worker, not the connection-manager thread, so an IOCTL outstanding at another driver's port never sits in front of the event; a disconnect marks the entry gone and the worker's late result is discarded |
+| a recipient discovery in flight | none added: discovery runs on the discovery worker, not the connection-manager thread, so an IOCTL outstanding at another driver's port never sits in front of the event; a disconnect invalidates the entry's cache, and a result whose generation no longer matches is discarded |
 | the port reading | 2 s at most (section 6.5), and the firmware's event already follows the link drop, so the normal cost is one read |
 | the recipient | none when cached; **when the cache is not ready** (the disconnect came before discovery finished) **no statement is sent** and MD-1 applies - a late statement is worth less than none, since `nvme98` would act on it after its own deadline |
 | delivery | one synchronous IOCTL or VxD call, whose execution bound is `nvme98`'s to state in the interface (the proposal asks for 100 ms, with the call never queued behind held SRBs) |
