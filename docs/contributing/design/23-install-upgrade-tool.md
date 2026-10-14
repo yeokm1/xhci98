@@ -641,21 +641,15 @@ read too: one of this package's devices with a problem code is reported -
 "disabled in Device Manager" for Code 22, which is no failure, and
 otherwise "already had problem code N" with the steps flag set, so a
 current controller already at Code 10 is never reported as a success.
-On Windows 2000 only, a port's first filter install (the unforced call)
-may take the switch's subtree away until the restart - read on the 2000
-leg, 2026-10-15: the upstream port at Code 12 and its children gone, all
-started after the restart. So before that call the tool reads, from the
-configuration manager, the ports it reaches and every device below them;
-afterwards an NHI or port of this package among those devices that is
-gone, or such a port bound to the filter at the package version (driver
-key included) but at Code 12, sets the restart and steps flags ("it may
-come back after a restart: restart, then run INSTALL.BAT again") instead
-of a failure, and is written to `%windir%\XHCI98\RECOVER.LST`. The next
-run reads that list first: each device must be present and pass the
-results check, or the run reports it and ends with exit 2; the list is
-then rewritten with what this run owes, or removed. Everywhere else - any
-other device, any other system, a forced call - such a device is a
-failure. The uninstall removes the list with the local copies.
+On Windows 2000 only, once a port's first filter install (the unforced
+call) succeeded in the run - the case read on the 2000 leg, 2026-10-15,
+where the upstream port showed Code 12 and its children were gone until
+the restart, all started after it - an NHI or port of this package gone
+after its install, or a port that carries the filter at the package
+version with Code 12, sets the restart and steps flags ("it may come back
+after a restart: restart, then run INSTALL.BAT again") instead of a
+failure; the next run reads whether it did. Everywhere else such a device
+is a failure.
 Anything else is reported per device:
 
 | After | Meaning | Exit |
