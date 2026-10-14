@@ -28,7 +28,8 @@ rule named as the other gates name their families.
            INFs' signature held to $Windows NT$, no undecorated install
            section ([<install>], .HW, .Services), and, with -PackageDir, the
            filter INF in the flavour directory's nt\ subdirectory alone -
-           never beside xhcicm.inf, nt\ holding nothing else.
+           never beside xhcicm.inf - with its own copy of xhcicm.sys, the
+           same bytes as the flavour directory's, nt\ holding nothing else.
   CM-NOROUTER
            No device router's or device-side bridge's id, no USB-only NHI and
            no unclaimed generation's id in any INF (design record 22 section
@@ -69,8 +70,9 @@ rule named as the other gates name their families.
            and 98 SE's and ME's automatic search did not choose that form.
   CM-FILTER Each install section includes and needs machine.inf (PCI_DRV,
            PCI_DRV.HW, PCI_DRV.Services: pci.sys stays the port's service,
-           the 39-0.4 shape), copies the driver from a source disk one
-           directory up ('..', the flavour directory above nt\), writes
+           the 39-0.4 shape), copies the driver from a source disk with no
+           path (nt\'s own xhcicm.sys: Vista's and 7's driver store refuses
+           a source outside the INF's directory, error 0xA1), writes
            HKR,,UpperFilters,0x00010008,"xhcicm" in its .HW section and
            nothing else there, and adds the xhcicm service WITHOUT the
            function-driver flag; no right-click section; no Xhci* value.
@@ -552,7 +554,7 @@ function Test-CmInfText {
     if ($null -eq $sdn) { & $add "BOTH-SDF" "no [SourceDisksNames] section." }
     elseif ($Kind -eq "filter") {
         $paths = @($sdn.Lines | ForEach-Object { $f = @($_.Value -split ','); if ($f.Count -ge 4) { $f[3].Trim() } else { "" } })
-        if ($sdn.Lines.Count -ne 1 -or $sdn.Lines[0].Key -ne "1" -or $paths[0] -ne "..") { & $add "CM-FILTER" "[SourceDisksNames] must name one disk, 1, whose path is '..': the package stages this INF in nt\ and xhcicm.sys in the flavour directory above it." }
+        if ($sdn.Lines.Count -ne 1 -or $sdn.Lines[0].Key -ne "1" -or $paths[0] -ne "") { & $add "CM-FILTER" "[SourceDisksNames] must name one disk, 1, with no path: the package stages this INF in nt\ beside its own copy of xhcicm.sys (Vista's and 7's driver store refuses a source outside the INF's directory, error 0xA1)." }
     } elseif ($sdn.Lines.Count -ne 1 -or $sdn.Lines[0].Key -ne "1") {
         & $add "BOTH-SDF" "[SourceDisksNames] must name one disk, 1."
     }
@@ -587,7 +589,10 @@ function Test-CmInfText {
 # CM-NO9XBRIDGE, the package's half (runs/run-39.md, 39-0.4): Windows 98 SE
 # and ME read a "$Windows NT$" INF, so the filter INF lives only in the
 # flavour directory's nt\ subdirectory, where no 9x wizard is pointed, and
-# nowhere else; nt\ holds it alone.
+# nowhere else. nt\ holds it and its own copy of xhcicm.sys and nothing
+# else, the copy byte-identical to the flavour directory's (Vista's and 7's
+# driver store takes no source outside the INF's directory, so the INF's
+# disk has no path).
 function Test-CmLayout {
     param([string]$Package, [string]$FilterInfPath = "")
     $fail = New-Object System.Collections.ArrayList
@@ -602,10 +607,19 @@ function Test-CmLayout {
     $nt = Join-Path $root "nt"
     if (Test-Path -LiteralPath $nt) {
         foreach ($item in (Get-ChildItem -LiteralPath $nt -Force)) {
-            if ($item.Name -ine "xhcicmf.inf") { [void]$fail.Add("CM-NO9XBRIDGE nt\ holds '$($item.Name)'; it holds the filter INF alone.") }
+            if ($item.Name -ine "xhcicmf.inf" -and $item.Name -ine "xhcicm.sys") { [void]$fail.Add("CM-NO9XBRIDGE nt\ holds '$($item.Name)'; it holds the filter INF and its xhcicm.sys alone.") }
         }
     }
     if (-not (Test-Path -LiteralPath $want)) { [void]$fail.Add("CM-NO9XBRIDGE the staged package has no nt\xhcicmf.inf.") }
+    $ntSys = Join-Path $nt "xhcicm.sys"
+    $rootSys = Join-Path $root "xhcicm.sys"
+    if (-not (Test-Path -LiteralPath $ntSys -PathType Leaf)) {
+        [void]$fail.Add("CM-NO9XBRIDGE the staged package has no nt\xhcicm.sys, the filter INF's source.")
+    } elseif (-not (Test-Path -LiteralPath $rootSys -PathType Leaf)) {
+        [void]$fail.Add("CM-NO9XBRIDGE the staged package has nt\xhcicm.sys but no xhcicm.sys beside xhcicm.inf.")
+    } elseif ((Get-FileHash -LiteralPath $ntSys -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $rootSys -Algorithm SHA256).Hash) {
+        [void]$fail.Add("CM-NO9XBRIDGE nt\xhcicm.sys differs from the flavour directory's xhcicm.sys; the two must be the same bytes (signed after, or both signed).")
+    }
     if ($FilterInfPath -ne "" -and (Test-Path -LiteralPath $FilterInfPath) -and
         (Resolve-Path -LiteralPath $FilterInfPath).ProviderPath -ine $want) {
         [void]$fail.Add("CM-NO9XBRIDGE the filter INF gated against this package is not its nt\xhcicmf.inf.")
@@ -725,7 +739,7 @@ if ($SelfTest) {
                     @{ Rule = "CM-PORTCC";      Text = $t.Replace("PCI\VEN_1B36&DEV_0001&CC_0604", "PCI\CC_0604") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("PCI\VEN_8086&DEV_5783&CC_0604", "PCI\VEN_8086&DEV_5786&CC_0604") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("PCI\VEN_8086&DEV_15EA&CC_0604", "PCI\VEN_8086&DEV_15EF&CC_0604") },
-                    @{ Rule = "CM-FILTER";      Text = $t.Replace("1=%DiskName%,xhcicm.sys,,..", "1=%DiskName%,xhcicm.sys,,") },
+                    @{ Rule = "CM-FILTER";      Text = $t.Replace("1=%DiskName%,xhcicm.sys,,", "1=%DiskName%,xhcicm.sys,,..") },
                     @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.sys=1", "xhcicm.sys=2") },
                     @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.sys=1", "xhcicm.sys=1,missing") },
                     @{ Rule = "BOTH-SDF";       Text = $t.Replace("[SourceDisksFiles]", "[SourceDisksFiles.x86]`r`nxhcicm.sys=1`r`n`r`n[SourceDisksFiles]") },
@@ -783,11 +797,13 @@ if ($SelfTest) {
     # CM-NO9XBRIDGE's package half: the filter INF in nt\ alone, nowhere
     # else, and the one gated against the package is that one.
     $layouts = @(
-        @{ Name = "clean";       Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf"); Pass = $true },
-        @{ Name = "beside";      Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @("xhcicmf.inf"); Pass = $false },
+        @{ Name = "clean";       Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $true },
+        @{ Name = "beside";      Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $false },
         @{ Name = "only-beside"; Root = @("xhcicm.inf", "xhcicm.sys", "xhcicmf.inf"); Nt = @(); Pass = $false },
-        @{ Name = "nt-extra";    Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Pass = $false },
-        @{ Name = "deeper";      Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf"); Extra = "osfiles\xhcicmf.inf"; Pass = $false }
+        @{ Name = "nt-extra";    Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys", "xhcicm.inf"); Pass = $false },
+        @{ Name = "nt-no-sys";   Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf"); Pass = $false },
+        @{ Name = "nt-sys-differs"; Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); NtSysText = "another build"; Pass = $false },
+        @{ Name = "deeper";      Root = @("xhcicm.inf", "xhcicm.sys"); Nt = @("xhcicmf.inf", "xhcicm.sys"); Extra = "osfiles\xhcicmf.inf"; Pass = $false }
     )
     foreach ($lc in $layouts) {
         $total++
@@ -795,7 +811,10 @@ if ($SelfTest) {
         try {
             New-Item -ItemType Directory -Path (Join-Path $pkg "nt") -Force | Out-Null
             foreach ($f in $lc.Root) { [System.IO.File]::WriteAllText((Join-Path $pkg $f), "stand-in") }
-            foreach ($f in $lc.Nt) { [System.IO.File]::WriteAllText((Join-Path (Join-Path $pkg "nt") $f), "stand-in") }
+            foreach ($f in $lc.Nt) {
+                $body = if ($f -eq "xhcicm.sys" -and $lc.ContainsKey("NtSysText")) { $lc.NtSysText } else { "stand-in" }
+                [System.IO.File]::WriteAllText((Join-Path (Join-Path $pkg "nt") $f), $body)
+            }
             if ($lc.ContainsKey("Extra")) {
                 $x = Join-Path $pkg $lc.Extra
                 New-Item -ItemType Directory -Path (Split-Path -Parent $x) -Force | Out-Null

@@ -191,7 +191,7 @@ The tool knows the package's drivers by file, never by hardware id:
 | `xhci98.inf` | `xhci98.sys` (and `xhcihlpr.sys` in x86) | `xhci98` (`xhcihlpr`) | all | required |
 | `xhciuas.inf` | `xhciuas.sys` | `xhciuas` | all | required |
 | `xhcicm.inf` | `xhcicm.sys` | `xhcicm` | all | the set of three, all or none |
-| `nt\xhcicmf.inf` | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME | the set of three (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
+| `nt\xhcicmf.inf` | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME; beside its own copy of `xhcicm.sys`, `nt\xhcicm.sys`, the same bytes, because Vista's and 7's driver store refuses a source outside the INF's directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86) | the set of four (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
 
 The hardware ids come from the INFs themselves (section 5.2): a model line
 added to an INF reaches the tool with no change to it. A package without

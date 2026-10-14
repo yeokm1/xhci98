@@ -632,9 +632,13 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # place, and the binary is held to every refusal xhciuas.sys is
 # (Assert-CmPublished). The filter INF is in the flavour directory's nt\
 # subdirectory, out of Windows 98's and ME's way (runs/run-39.md, 39-0.4;
-# the gate's CM-NO9XBRIDGE). A version published before 3.0.0.0 has none,
-# so -UploadSetOnly gates them where present and does not require them.
-$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")
+# the gate's CM-NO9XBRIDGE), beside its own copy of the binary,
+# nt\xhcicm.sys, the same bytes as the root's: Vista's and 7's driver
+# store refuses an INF source outside the INF's directory (SetupCopyOEMInf
+# error 0xA1), and the assembly refuses two copies that differ. A version
+# published before 3.0.0.0 has none, so -UploadSetOnly gates them where
+# present and does not require them.
+$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")
 
 # The text-mode Setup driver description (roadmap task 33.3), published at the
 # root of every flavour directory a cut writes, where text-mode Setup of
@@ -2316,7 +2320,12 @@ $gateOut
         $cmHave = @($cmPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
         if ($cmHave.Count -ne 0 -and $cmHave.Count -ne $cmPublishable.Count) {
             $cmMissing = @($cmPublishable | Where-Object { $cmHave -notcontains $_ })
-            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the three files go together."
+            throw "the assembled upload set's $f\ directory carries $($cmHave -join ', ') of the connection manager but not $($cmMissing -join ', '): the four files go together."
+        }
+        if ($cmHave.Count -ne 0 -and
+            (Get-FileHash -LiteralPath (Join-Path $uploadFlavorDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $uploadFlavorDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
+            throw "the assembled upload set's $f\ directory carries an nt\xhcicm.sys that is not the same bytes as its xhcicm.sys: the filter INF's copy must be the published binary itself (signed before it is copied)."
         }
         foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
             $cmInfPath = Join-Path $uploadFlavorDir $cmInf.Name
@@ -3062,6 +3071,12 @@ runs are what stand between a broken binary and a guest that cannot boot.
             }
             Ensure-Directory (Split-Path -Parent (Join-Path $destDir $name))
             Copy-Item -LiteralPath $src -Destination (Join-Path $destDir $name) -Force
+        }
+        # The filter INF's own copy of the connection manager is the
+        # published binary itself, byte for byte (signed before the copy).
+        if ((Get-FileHash -LiteralPath (Join-Path $destDir "xhcicm.sys") -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath (Join-Path $destDir "nt\xhcicm.sys") -Algorithm SHA256).Hash) {
+            throw "the $($leg.Id) leg's nt\xhcicm.sys is not the same bytes as its xhcicm.sys; make-package.ps1 copies the one binary to both places."
         }
 
         # **Held to the INF's declared media set here, not at the assembly.**

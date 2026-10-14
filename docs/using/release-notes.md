@@ -771,7 +771,11 @@ few of the driver's options (below), asks once (`Y`), and then:
   Windows' Found New Hardware windows wait for an answer; answer them with
   a keyboard and mouse that do not go through this driver, then run it
   again. On Vista x64 and 7 x64 it says whether it could confirm
-  test-signing mode, and never changes it.
+  test-signing mode, and never changes it. The Thunderbolt and USB4
+  tunnel-port filter's INF is in each flavour directory's `nt\`, with its
+  own copy of `xhcicm.sys` (the same file as the one beside `xhcicm.inf`):
+  Windows 98 SE and ME never see it, and Vista and 7 accept it only with
+  its driver file beside it.
 - **Windows 98 SE and ME**: the tool stages the files and you finish the
   installation in Device Manager. It copies the package to that same
   folder, adds the folder to

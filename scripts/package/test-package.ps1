@@ -1509,6 +1509,9 @@ try {
                 foreach ($n in $cmFiles.Keys) { Copy-Item -LiteralPath $cmFiles[$n] -Destination (Join-Path $pubRoot "$fl\$n") -Force }
                 [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhcicm.sys"),
                     [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $fl flavour"))
+                # The filter INF's own copy beside it, the same bytes.
+                [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\nt\xhcicm.sys"),
+                    [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $fl flavour"))
             }
         }
         & $putCm
@@ -1520,12 +1523,12 @@ try {
         Assert-True ($r.Output -match "carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected the connection manager's INFs to be gated by their own gate. Output:`n" + $r.Output)
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
+            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf", "nt\xhcicm.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
             }
         }
-        foreach ($drop in @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")) {
+        foreach ($drop in @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "release\$drop") -Force
             if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
             if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
@@ -1535,6 +1538,17 @@ try {
             Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around an incomplete connection manager ($drop missing)."
             & $putCm
         }
+        # The filter INF's copy of the binary differing from the root's is
+        # refused: Vista and 7 would install the nt\ bytes from the store.
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\nt\xhcicm.sys"),
+            [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, another build"))
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published nt\xhcicm.sys differing from xhcicm.sys was assembled into the asset."
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around two different xhcicm.sys copies."
+        & $putCm
         $cmBad = [System.IO.File]::ReadAllText($cmFiles["nt\xhcicmf.inf"]).Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"')
         [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\nt\xhcicmf.inf"), [System.Text.Encoding]::ASCII.GetBytes($cmBad))
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }

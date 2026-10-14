@@ -634,8 +634,12 @@ the bridge on Windows 2000. The split:
   though their automatic searches did not choose it, was listed to a user
   browsing for a driver. So the package stages it in an `nt\`
   subdirectory of each flavour directory, never beside `xhcicm.inf` where
-  a 98 user points the wizard, and its one source disk is `..`, the
-  flavour directory where `xhcicm.sys` is.
+  a 98 user points the wizard, beside its own copy of `xhcicm.sys` (the
+  same bytes as the flavour directory's), its one source disk having no
+  path: Vista's and 7's driver store refuses a source outside the INF's
+  directory (`SetupCopyOEMInf` error `0xA1`, read on 7 SP1 x86 on
+  2026-10-15; an earlier layout with the source disk at `..` could not be
+  staged there).
 - `xhcicm-amd64.inf`, the 64-bit package's, carries the `NTamd64,NTamd64.6.0`
   pair for the NHI and no undecorated section, held by the gate's
   `PATH-NO9X` and `PATH-MFGDEC` rules as the other amd64 INF is; the filter's
@@ -645,7 +649,8 @@ the bridge on Windows 2000. The split:
 has to supply. The gate for the four is `check-cm-inf.ps1`, with the rule
 `CM-NO9XBRIDGE`: no bridge id in any `$CHICAGO$` INF of this driver, the
 filter INF's signature held to `$Windows NT$`, no undecorated install
-section in it, and in a staged package the filter INF in `nt\` alone;
+section in it, and in a staged package the filter INF in `nt\` with its
+own byte-identical `xhcicm.sys` and nothing else;
 `CM-PORTCC` holds every filter line to the `&CC_0604` form, `CM-CLASSLINE`
 the NHI INF to its one class line, and `CM-NOROUTER` every INF to no
 device router's or unclaimed controller's id.
