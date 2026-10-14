@@ -4281,10 +4281,9 @@ does not touch it.
     c000026c naming hidusb.SYS (error status 0xc0000034). Windows 2000's
     text-mode Setup copies hidusb.sys for the USB keyboard and mouse but
     not the Windows files it needs, which it copies only with Microsoft's
-    own USB controller drivers. Seen in virtual machines on this release
-    and the one before it. Text mode and the Recovery Console are not
-    affected, nor is Windows XP. This package cannot carry those files,
-    and no workaround is offered.
+    own USB controller drivers. Seen in virtual machines. Text mode and
+    the Recovery Console are not affected, nor is Windows XP. This
+    package cannot carry those files, and no workaround is offered.
 
   What has run in virtual machines: text mode with a USB keyboard and a
   USB stick on Windows 2000 and XP, and the Recovery Console on both,
