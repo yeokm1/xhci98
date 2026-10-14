@@ -270,3 +270,36 @@ void route_read(const PCIINFO *p, ROUTEINFO *r)
     dpmi_unmap_phys((void *)page);
     r->state = ROUTE_READ;
 }
+
+/*
+ * Task 39-0.6: the BIOS PCI IRQ routing table and the 00:1C functions it is
+ * asked about. Reads only: the F0000h-FFFFFh image directly (the
+ * extender's zero-based flat model maps the first megabyte 1:1, as
+ * sysprobe.c reads the SMBIOS entry point) and four configuration
+ * registers of each 00:1C function through 0xCF8/0xCFC.
+ * pci_config_write_count is untouched.
+ */
+void pir_read(PIRINFO *pi)
+{
+    int fn;
+
+    memset(pi, 0, sizeof(*pi));
+    pir_scan((const u8 *)0xF0000UL, 0x10000UL, 0xF0000UL, pi);
+    for (fn = 0; fn < 8; fn++)
+        pi->rp_id[fn] = 0xFFFFFFFFUL;
+    for (fn = 0; fn < 8; fn++) {
+        pi->rp_id[fn] = pci_read32(0, PIR_RP_DEV, (u8)fn, 0x00);
+        if ((pi->rp_id[fn] & 0xFFFFUL) == 0xFFFFUL) {
+            if (fn == 0)
+                break;
+            continue;
+        }
+        pi->rp_hdr[fn] = pci_read8(0, PIR_RP_DEV, (u8)fn, 0x0E);
+        pi->rp_line[fn] = pci_read8(0, PIR_RP_DEV, (u8)fn, 0x3C);
+        pi->rp_pin[fn] = pci_read8(0, PIR_RP_DEV, (u8)fn, 0x3D);
+        /* A function 0 that is not multi-function has no others. */
+        if (fn == 0 && (pi->rp_hdr[0] & 0x80) == 0)
+            break;
+    }
+    pi->rp_read = 1;
+}

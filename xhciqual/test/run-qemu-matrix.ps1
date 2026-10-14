@@ -283,7 +283,19 @@ $cases = @(
     # machine is read or printed - one line says the option skipped it -
     # and the run is otherwise unchanged.
     (Case "smbios_no_sysinfo" ($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) "xhciqual --serial --no-page xhci --probe-only --no-sysinfo" @("System:  not read - skipped by --no-sysinfo","PROBE-ONLY (read-only)","Probe safety: PASS - no PCI configuration writes.","Done.") "" "" 0 ($smbiosSecrets + @("XQ-Test-Maker","XQ-BIOS-Vendor","CPU:     ","RAM:     ","DOS:     ","SMBIOS 2.","SMBIOS 3."))),
-    (Case "smbios_quick"($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) $quick @("System:  XQ-Test-Maker XQ-Test-Model","Board:   XQ-Board-Maker XQ-Board-7","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 $smbiosSecrets @("System: XQ-Test-Maker XQ-Test-Model; BIOS XQ-BIOS-1.0 10/10/2026","CPU: ","; DOS 7.10"))
+    (Case "smbios_quick"($smbiosArgs + @("-device","qemu-xhci,id=hc,msi=off,msix=off")) $quick @("System:  XQ-Test-Maker XQ-Test-Model","Board:   XQ-Board-Maker XQ-Board-7","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 $smbiosSecrets @("System: XQ-Test-Maker XQ-Test-Model; BIOS XQ-BIOS-1.0 10/10/2026","CPU: ","; DOS 7.10")),
+    #
+    # Task 39-0.6: the BIOS $PIR table. SeaBIOS builds one for i440FX with
+    # its router at 00:01.0 (8086:122E) and entries for bus 0 devices 1-6
+    # only (usb4-emu docs/WIN98-TEST.md), so 00:1C is named as absent. The
+    # probe reads it in the report; the quick scan puts one line on the
+    # screen and the block on the serial line. The third case puts a
+    # pci-bridge at 00:1C.0, as a Thunderbolt root port sits there on the
+    # P14s, so the function is read from configuration space and named with
+    # no entry: the hot-add case of WIN98-TEST.md.
+    (Case "pir_probe" @("-device","qemu-xhci,id=hc,msi=off,msix=off") "xhciqual --serial --no-page xhci --probe-only" @('PCI IRQ routing table ($PIR, read only): at F',"version 1.0","slot entries, checksum OK; router 00:01.0, compatible 8086:122E","  1   00:01 ","00:1C: NO ENTRY","no function at 00:1C.0 in configuration space","Probe safety: PASS - no PCI configuration writes.","Done.")),
+    (Case "pir_quick" @("-device","qemu-xhci,id=hc,msi=off,msix=off") $quick @('PCI IRQ routing table ($PIR, read only): at F',"checksum OK; router 00:01.0","00:1C: NO ENTRY","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.") "" "" 0 @() @('IRQ table: $PIR at F',"00:1C NOT LISTED")),
+    (Case "pir_bridge_1c" @("-device","pci-bridge,id=br1c,chassis_nr=1,addr=1c.0","-device","qemu-xhci,id=hc,msi=off,msix=off") "xhciqual --serial --no-page xhci --probe-only" @('PCI IRQ routing table ($PIR, read only): at F',"00:1C: NO ENTRY","    00:1C.0 1B36:0001 bridge, pin INTA line ",": no entry","Probe safety: PASS - no PCI configuration writes.","Done."))
 )
 if ($CaseName.Count -ne 0) {
     $cases = @($cases | Where-Object { $_.Name -in $CaseName })
