@@ -990,8 +990,14 @@ from the event, with no key, and the entry keyed by route string where AR
 and FR key it by link and depth; section 1.4.4). On `device connected`:
 
 - `rejected` set: log and ignore, as the client does [inf].
+- A known UUID at the same place whose entry needs recovery - left
+  unrouted by a failed route request, or "approve outcome unknown"
+  (section 5.5): refresh key and id; retry the route if it is missing; an
+  unknown outcome is settled by this announcement (`approved` = 1, a
+  tunnel up; 0, unapproved); then apply the approval policy where the
+  entry is unapproved, as for a new device.
 - A known UUID at the same link and depth (TR and ICL: route string) and
-  approval state: refresh key, id
+  approval state, needing no recovery: refresh key, id
   and route, nothing else (the resume case, [obs] section 6.5).
 - Otherwise: drop any stale entry at that place, ask for the route where
   the profile says it must be asked for (AR `get route`, FR the topology
@@ -1323,7 +1329,9 @@ publishes its claimed ports, with their sources, in the registration
 list under its lock; a port claimed by two domains by any combination of
 sources (override against override, override against discovery,
 discovery against discovery) is ambiguous for both, inactive and logged,
-until an override on one side alone names it. Ownership, the active
+until only one domain claims it across all sources - for example an
+override on the other domain whose list replaces its discovered set and
+leaves the port out. Ownership, the active
 mark, safe eject and the resume hold therefore always have exactly one
 domain behind them.
 
@@ -1874,9 +1882,11 @@ snapshot rule's vectors in `test_tbt_topo`):
   index of 1 ignored, an ICL RTD3 veto logged and an ICL announcement with
   `approved` = 0 left without an approve, an approve answered with the
   error flag (entry unapproved) and one executed by the firmware whose
-  response is lost (outcome unknown, then the port turning present makes
-  it a tunnel up, and with no port change a later re-announcement settles
-  it), a
+  response is lost (outcome unknown; the verified set re-enumerated after
+  the poll whether or not a reading changed, with the port already present
+  and with an unrelated member turning present, neither settling it; then
+  an announcement settling it), a failed route request followed by an
+  identical announcement (the route retried, then the approve sent), a
   short frame, an all-zero UUID, a name block overrunning its frame, and a
   disconnect matching no entry;
 - selection, pure (section 1.4.2), as a table of register readings to
