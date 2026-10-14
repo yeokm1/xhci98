@@ -751,7 +751,8 @@ first starts. If they are not on the floppy, Setup stops while copying
 files with "Insert the disk labeled: USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_
 from the 32-bit Windows 2000 CD into drive A:"; put a floppy holding them
 in drive A: and press Enter, or press F3 to quit Setup. The entry is for
-Windows 2000 only: on XP pick the other one, which never asks for them.
+Windows 2000 only: on XP pick the other one, which never asks for them
+(`docs/issues/16-w2k-f6-first-gui-boot-usbd.md` has the whole story).
 Windows 2000 keeps three inert service entries named `usbd`, `hidclass`
 and `hidparse` (set to start on demand; nothing starts them) from this
 step. Read with Windows 2000 SP4 in QEMU virtual machines (below).

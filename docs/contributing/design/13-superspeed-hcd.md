@@ -832,7 +832,8 @@ The limits, all of them the user's to know:
    `lessons.md`, "A `txtsetup.oem` disk is always read from drive A:
    ..."; the addresses in `legal-provenance.md` section 4. `OEM-W2K`
    holds the shape. Picking `XHCI98` on Windows 2000 still stops as
-   above (release notes, "Known limitations").
+   above (release notes, "Known limitations"). Issue 16
+   (`docs/issues/16-w2k-f6-first-gui-boot-usbd.md`) is the write-up.
 
 **What the gate holds.** `scripts\inf-gate\check-txtsetup-oem.ps1` (run by
 `build-driver.cmd` on every build, self-tested by mutation first, and by
