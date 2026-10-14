@@ -19,17 +19,19 @@
  * power requests never wait (cm_power.c). Accepting closes when the EXIT
  * is queued: work queued before it is run before the thread leaves, and a
  * request that finds it closed takes its caller's path without the thread.
- * The thread takes every bit at each wake and runs them in CM_WORK_*
- * order, then, while a bound client runs in D0, the idle poll.
+ * The thread takes every bit at each wake and runs them in cmThread's
+ * order (the system IRP's work, D0, the start and its bind, D3, the stop,
+ * the exit), then, while a bound client runs in D0, the idle poll.
  *
- * THE CLOCK. TBT_HOST.NowMs is a millisecond count kept here from
- * KeQuerySystemTime's low word (100 ns units), whose differences are taken
- * modulo 2^32 and carried, so no 64-bit arithmetic is needed and the count
- * wraps only at 2^32 ms. It is read on the thread alone, which wakes at
- * least every poll period while a client runs; a gap longer than the low
- * word's 429 s lap (an inert or idle instance) only makes the clock run
- * slow, never backwards, and every wait in the core also counts its own
- * sleeps (tbt_ring.h, TBT_DEADLINE).
+ * THE CLOCK. TBT_HOST.NowMs is a millisecond count kept here from the
+ * tick count's low word (KeQueryTickCount) and the tick period
+ * (KeQueryTimeIncrement), record 22 section 5's clock: monotonic, unlike
+ * the system time, which can be set backwards. Tick differences are taken
+ * modulo 2^32, held to CM_CLOCK_MAX_TICKS and carried in microseconds, so
+ * no 64-bit arithmetic is needed and the count wraps only at 2^32 ms. It
+ * is read on the thread alone; a longer gap (an idle instance) only makes
+ * the clock run slow, never backwards, and every wait in the core also
+ * counts its own sleeps (tbt_ring.h, TBT_DEADLINE).
  *
  * IRQL: CmThrQueue, CmPowerHold and CmPowerRelease at <= DISPATCH_LEVEL;
  * everything else PASSIVE_LEVEL - the thread, the accessors (called on it),
@@ -42,8 +44,12 @@
 #define CM_PCI_COMMAND            0x04UL
 #define CM_PCI_COMMAND_BUS_MASTER 0x0004U
 
-/* KeQuerySystemTime's units per millisecond. */
+/* 100 ns units per millisecond, for the relative due times. */
 #define CM_CLOCK_UNITS_PER_MS 10000UL
+/* The most ticks one clock read counts: 2^32 us / 15625 us at the usual
+ * period's largest, well under the 32-bit product's limit for any period
+ * up to 15.6 ms. */
+#define CM_CLOCK_MAX_TICKS 200000UL
 
 /* ---------------------------------------------------------------------- */
 /* Configuration space                                                    */
@@ -156,27 +162,37 @@ static VOID cmCfgWrite(PVOID context, ULONG offset, ULONG value)
 /*
  * The command register's Bus Master bit (record 21 section 5.1 step 1),
  * through the PDO as the HCD sets its own. On sets it only where it was
- * clear and records that it did; off clears it only where this driver set
- * it, after the rings are stopped. IRQL: PASSIVE_LEVEL.
+ * clear and records that it did, and returns TRUE only when the bit reads
+ * set afterwards; off clears it only where this driver set it, after the
+ * rings are stopped. A command register that cannot be read is never
+ * written: its all-ones would be written back as every other bit set.
+ * IRQL: PASSIVE_LEVEL.
  */
-VOID CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
+BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
 {
     ULONG v;
     USHORT cmd;
 
-    v = CmCfgRead32(nhi, 0);
+    v = CmCfgRead32(nhi, CM_PCI_COMMAND);
     if (v == 0xFFFFFFFFUL) {
-        return;
+        CmLogNote(nhi, "cm.bus-master.unreadable", on ? 1UL : 0UL);
+        return FALSE;
     }
-    cmd = (USHORT)(CmCfgRead32(nhi, CM_PCI_COMMAND) & 0xFFFF);
+    cmd = (USHORT)(v & 0xFFFF);
     if (on) {
-        if ((cmd & CM_PCI_COMMAND_BUS_MASTER) == 0 &&
-            CmCfgWrite16(nhi, CM_PCI_COMMAND,
-                         (USHORT)(cmd | CM_PCI_COMMAND_BUS_MASTER))) {
+        if ((cmd & CM_PCI_COMMAND_BUS_MASTER) == 0) {
+            if (!CmCfgWrite16(nhi, CM_PCI_COMMAND,
+                              (USHORT)(cmd | CM_PCI_COMMAND_BUS_MASTER))) {
+                return FALSE;
+            }
             nhi->BusMasterSetHere = 1;
+            v = CmCfgRead32(nhi, CM_PCI_COMMAND);
+            if (v == 0xFFFFFFFFUL || (v & CM_PCI_COMMAND_BUS_MASTER) == 0) {
+                return FALSE;
+            }
         }
         CmLogNote(nhi, "cm.bus-master", 1);
-        return;
+        return TRUE;
     }
     if (nhi->BusMasterSetHere && (cmd & CM_PCI_COMMAND_BUS_MASTER) != 0 &&
         CmCfgWrite16(nhi, CM_PCI_COMMAND,
@@ -184,6 +200,7 @@ VOID CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
         nhi->BusMasterSetHere = 0;
         CmLogNote(nhi, "cm.bus-master", 0);
     }
+    return TRUE;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -246,20 +263,21 @@ static VOID cmSleep(PVOID context, ULONG milliseconds)
 static ULONG cmNowMs(PVOID context)
 {
     PCM_NHI nhi;
-    LARGE_INTEGER now;
+    LARGE_INTEGER ticks;
     ULONG delta;
 
     nhi = (PCM_NHI)context;
-    KeQuerySystemTime(&now);
-    delta = now.LowPart - nhi->ClockLast;
-    nhi->ClockLast = now.LowPart;
-    delta += nhi->ClockRest;
-    if (delta < nhi->ClockRest) {
-        /* The carry overflowed the low word: count what fits. */
-        delta = 0xFFFFFFFFUL;
+    KeQueryTickCount(&ticks);
+    delta = ticks.LowPart - nhi->ClockLast;
+    nhi->ClockLast = ticks.LowPart;
+    if (delta > CM_CLOCK_MAX_TICKS) {
+        /* So delta times the period stays inside 32 bits; a gap this long
+         * (over an hour at 15.6 ms ticks) only makes the clock run slow. */
+        delta = CM_CLOCK_MAX_TICKS;
     }
-    nhi->ClockMs += delta / CM_CLOCK_UNITS_PER_MS;
-    nhi->ClockRest = delta % CM_CLOCK_UNITS_PER_MS;
+    nhi->ClockRest += delta * nhi->ClockTickUs;
+    nhi->ClockMs += nhi->ClockRest / 1000UL;
+    nhi->ClockRest %= 1000UL;
     return nhi->ClockMs;
 }
 
@@ -271,7 +289,7 @@ static VOID cmHostLog(PVOID context, const char *label, ULONG value)
 /* The accessors, bound to this NHI. IRQL: PASSIVE_LEVEL. */
 VOID CmThrAccessors(PCM_NHI nhi)
 {
-    LARGE_INTEGER now;
+    LARGE_INTEGER ticks;
 
     nhi->Host.Context = nhi;
     nhi->Host.Read32 = cmBarRead;
@@ -283,8 +301,15 @@ VOID CmThrAccessors(PCM_NHI nhi)
     nhi->Cfg.Context = nhi;
     nhi->Cfg.Read32 = cmCfgRead;
     nhi->Cfg.Write32 = cmCfgWrite;
-    KeQuerySystemTime(&now);
-    nhi->ClockLast = now.LowPart;
+    /* The tick period in microseconds, once (record 22 section 5's clock:
+     * KeQueryTimeIncrement in 100 ns units). At least 1, so the clock
+     * always moves. */
+    nhi->ClockTickUs = KeQueryTimeIncrement() / 10UL;
+    if (nhi->ClockTickUs == 0) {
+        nhi->ClockTickUs = 1;
+    }
+    KeQueryTickCount(&ticks);
+    nhi->ClockLast = ticks.LowPart;
     nhi->ClockRest = 0;
 }
 
@@ -318,7 +343,7 @@ BOOLEAN CmThrQueue(PCM_NHI nhi, ULONG work, PIRP irp)
     taken = FALSE;
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     if (nhi->Accepting) {
-        if (work == CM_WORK_SYSTEM) {
+        if (work == CM_WORK_SYSTEM || work == CM_WORK_DIRECT) {
             nhi->SystemIrp = irp;
         } else if (work == CM_WORK_D3) {
             nhi->D3Irp = irp;
@@ -351,17 +376,26 @@ VOID CmThrRunPnp(PCM_NHI nhi, ULONG work)
 }
 
 /* Power IRPs this driver holds (pended, or a device IRP requested for a
- * system IRP): a removal waits until none is left (cm_nhi.c). IRQL:
- * <= DISPATCH_LEVEL. */
-VOID CmPowerHold(PCM_NHI nhi)
+ * system IRP): a removal closes admission (Removing), then waits until
+ * none is left (cm_nhi.c, CmPowerDrain). FALSE once Removing is set: the
+ * caller then passes the IRP down touching nothing of the extension's
+ * after it. The release is each holder's last access to the extension.
+ * IRQL: <= DISPATCH_LEVEL. */
+BOOLEAN CmPowerHold(PCM_NHI nhi)
 {
     KIRQL irql;
+    BOOLEAN held;
 
+    held = FALSE;
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
-    if (nhi->PowerOutstanding++ == 0) {
-        KeClearEvent(&nhi->PowerIdle);
+    if (!nhi->Removing) {
+        if (nhi->PowerOutstanding++ == 0) {
+            KeClearEvent(&nhi->PowerIdle);
+        }
+        held = TRUE;
     }
     KeReleaseSpinLock(&nhi->WorkLock, irql);
+    return held;
 }
 
 VOID CmPowerRelease(PCM_NHI nhi)
@@ -372,6 +406,22 @@ VOID CmPowerRelease(PCM_NHI nhi)
     if (--nhi->PowerOutstanding == 0) {
         (VOID)KeSetEvent(&nhi->PowerIdle, IO_NO_INCREMENT, FALSE);
     }
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+}
+
+/* The removal's half: admission closed, every held IRP waited for, then
+ * the lock taken once more, so the last release has left it before the
+ * extension is freed. IRQL: PASSIVE_LEVEL. */
+VOID CmPowerDrain(PCM_NHI nhi)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    nhi->Removing = 1;
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    (VOID)KeWaitForSingleObject(&nhi->PowerIdle, Executive, KernelMode,
+                                FALSE, NULL);
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
     KeReleaseSpinLock(&nhi->WorkLock, irql);
 }
 
@@ -420,15 +470,17 @@ static VOID NTAPI cmThread(PVOID context)
         nhi->D0Irp = NULL;
         KeReleaseSpinLock(&nhi->WorkLock, irql);
 
-        if (bits & CM_WORK_SYSTEM) {
+        if (bits & CM_WORK_DIRECT) {
+            CmPowerDirectWork(nhi, systemIrp);
+        } else if (bits & CM_WORK_SYSTEM) {
             CmPowerSystemWork(nhi, systemIrp);
-        }
-        if (bits & CM_WORK_D3) {
-            CmPowerD3Work(nhi, d3Irp);
         }
         if (bits & CM_WORK_D0) {
             CmPowerD0Work(nhi, d0Irp);
         }
+        /* The start before a D3 queued beside it, so that the D3 finds the
+         * client the start made and quiesces it; the start itself refuses
+         * to activate anything out of D0 (CmNhiStartWork). */
         if (bits & CM_WORK_START) {
             CmNhiStartWork(nhi);
             (VOID)KeSetEvent(&nhi->PnpDone, IO_NO_INCREMENT, FALSE);
@@ -436,6 +488,9 @@ static VOID NTAPI cmThread(PVOID context)
                 nhi->BindOwed = 0;
                 CmNhiBind(nhi);
             }
+        }
+        if (bits & CM_WORK_D3) {
+            CmPowerD3Work(nhi, d3Irp);
         }
         if (bits & CM_WORK_STOP) {
             CmNhiStopWork(nhi);
@@ -480,18 +535,15 @@ NTSTATUS CmThrStart(PCM_NHI nhi)
     nhi->ThreadObject = NULL;
     nhi->WorkBits = 0;
     KeClearEvent(&nhi->ThreadExited);
-    KeAcquireSpinLock(&nhi->WorkLock, &irql);
-    nhi->Accepting = 1;
-    KeReleaseSpinLock(&nhi->WorkLock, irql);
     status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
                                   NULL, cmThread, nhi);
     if (!NT_SUCCESS(status)) {
-        KeAcquireSpinLock(&nhi->WorkLock, &irql);
-        nhi->Accepting = 0;
-        nhi->WorkBits = 0;
-        KeReleaseSpinLock(&nhi->WorkLock, irql);
         return status;
     }
+    /* Opened only once the thread exists: work accepted is work run. */
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    nhi->Accepting = 1;
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
     status = STATUS_SUCCESS;
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         /* A NULL object type: PsThreadType is a data import. */

@@ -109,6 +109,10 @@ ULONG CmProfileFor(const CM_IDS *ids);
                                        thread                               */
 #define CM_INERT_RING_REFUSED   10  /* ring 0 refused before any register of
                                        it was written                       */
+#define CM_INERT_POWER          11  /* the function was not in D0 when the
+                                       start would have activated it        */
+#define CM_INERT_BUS_MASTER     12  /* Bus Master could not be set (or its
+                                       command register not read)           */
 
 /*
  * The profiles whose client this build carries, one bit per CM_PROFILE_*:

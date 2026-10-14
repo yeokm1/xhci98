@@ -292,11 +292,24 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     }
     nhi->Vendor = v & 0xFFFFUL;
     nhi->Device = (v >> 16) & 0xFFFFUL;
-    nhi->ClassCode = (CmCfgRead32(nhi, 0x08) >> 8) & 0xFFFFFFUL;
-    nhi->SubVendor = CmCfgRead32(nhi, 0x2C) & 0xFFFFUL;
     CmLogNote(nhi, "cm.cfg.ids", v);
+    /* The class and the subsystem ids, each read whole: a read refused or
+     * all ones decides nothing, and the Apple policy of test (a) needs the
+     * subsystem vendor established, not assumed. */
+    v = CmCfgRead32(nhi, 0x08);
+    if (v == 0xFFFFFFFFUL) {
+        cmInert(nhi, CM_INERT_CONFIG);
+        return;
+    }
+    nhi->ClassCode = (v >> 8) & 0xFFFFFFUL;
+    v = CmCfgRead32(nhi, 0x2C);
+    if (v == 0xFFFFFFFFUL) {
+        cmInert(nhi, CM_INERT_CONFIG);
+        return;
+    }
+    nhi->SubVendor = v & 0xFFFFUL;
     CmLogNote(nhi, "cm.cfg.class", nhi->ClassCode);
-    CmLogNote(nhi, "cm.cfg.subvendor", nhi->SubVendor);
+    CmLogNote(nhi, "cm.cfg.subsystem", v);
     nhi->Hw = TbtHwMatch(nhi->Vendor, nhi->Device, nhi->ClassCode,
                          (BOOLEAN)(mode == CM_MODE_FORCE_ICM));
     profile = cmProfileOfHw(nhi->Hw);
@@ -310,7 +323,12 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
 
-    /* (b) */
+    /* (b) Nothing is activated out of D0: a D3 queued beside the start
+     * runs after it and quiesces what it made (cm_thr.c). */
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended) {
+        cmInert(nhi, CM_INERT_POWER);
+        return;
+    }
     nhi->BarVa = (PUCHAR)MmMapIoSpace(nhi->BarPhys, nhi->BarLength,
                                       MmNonCached);
     if (nhi->BarVa == NULL) {
@@ -347,7 +365,12 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         cmInert(nhi, CM_INERT_RESOURCES);
         return;
     }
-    CmNhiSetBusMaster(nhi, TRUE);
+    if (!CmNhiSetBusMaster(nhi, TRUE)) {
+        /* No ring may be started without it; the buffer and a bit set
+         * here are given back at the stop. */
+        cmInert(nhi, CM_INERT_BUS_MASTER);
+        return;
+    }
     TbtIcmInit(&nhi->Icm, nhi->Hw->Icm, &nhi->Ring, &nhi->Host,
                TbtHwRingFlags(nhi->Hw));
     TbtIcmSetApprovePolicy(&nhi->Icm,
@@ -367,6 +390,10 @@ VOID CmNhiBind(PCM_NHI nhi)
 {
     LONG rc;
 
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended) {
+        cmInert(nhi, CM_INERT_POWER);
+        return;
+    }
     rc = TbtIcmStart(&nhi->Icm, nhi->CommonVa, nhi->CommonPa.LowPart,
                      TBT_RING_DMA_BYTES);
     CmLogNote(nhi, "cm.bind", (ULONG)(-rc));
@@ -417,7 +444,7 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     cmLogCounters(nhi);
     CmDmaClose(nhi);
     if (powered) {
-        CmNhiSetBusMaster(nhi, FALSE);
+        (VOID)CmNhiSetBusMaster(nhi, FALSE);
         if (active) {
             (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power,
                                         TRUE);
@@ -571,10 +598,10 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         cmNhiStop(nhi, stack->MinorFunction);
-        /* A power IRP this driver still holds completes without the thread
-         * (cm_power.c); none may outlive the device object. */
-        (VOID)KeWaitForSingleObject(&nhi->PowerIdle, Executive, KernelMode,
-                                    FALSE, NULL);
+        /* Power admission closed, and every power IRP this driver still
+         * holds finished (without the thread, cm_power.c): none may outlive
+         * the device object. */
+        CmPowerDrain(nhi);
         irp->IoStatus.Status = STATUS_SUCCESS;
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(nhi->Common.Lower, irp);

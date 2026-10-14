@@ -64,6 +64,9 @@
 #define CM_WORK_START  0x08UL  /* the start's selection, then the bind     */
 #define CM_WORK_STOP   0x10UL  /* the unbind                               */
 #define CM_WORK_EXIT   0x20UL  /* leave the loop                           */
+#define CM_WORK_DIRECT 0x40UL  /* the system IRP's transition made without
+                                  a device IRP (PoRequestPowerIrp failed),
+                                  then its completion                      */
 
 /* BAR0's extent this driver reads up to: the firmware status at 39944h
  * is the highest register touched (tbt_regs.h). A smaller window is
@@ -154,8 +157,9 @@ typedef struct _CM_NHI {
     /* The pure core's accessors (cm_thr.c) and its state. */
     TBT_HOST Host;
     TBT_CFG Cfg;
-    ULONG ClockLast;        /* KeQuerySystemTime's low word, 100 ns      */
-    ULONG ClockRest;        /* 100 ns units not yet a millisecond        */
+    ULONG ClockLast;        /* KeQueryTickCount's low word               */
+    ULONG ClockTickUs;      /* KeQueryTimeIncrement, in microseconds     */
+    ULONG ClockRest;        /* microseconds not yet a millisecond        */
     ULONG ClockMs;          /* the millisecond clock TBT_HOST.NowMs reads */
     TBT_RING Ring;
     TBT_ICM Icm;
@@ -188,6 +192,9 @@ typedef struct _CM_NHI {
     PIRP PendingSystemIrp;
     LONG PowerOutstanding;
     KEVENT PowerIdle;
+    ULONG Removing;         /* CmPowerDrain closed power admission        */
+    /* CM_WORK_DIRECT's target: D0, or a sleep state's D3. */
+    DEVICE_POWER_STATE DirectWant;
 
     CM_COUNTERS Counters;
 } CM_NHI, *PCM_NHI;
@@ -219,7 +226,9 @@ VOID CmNhiBind(PCM_NHI nhi);
 VOID CmNhiStopWork(PCM_NHI nhi);
 VOID CmNhiPollPass(PCM_NHI nhi);
 VOID CmNhiDrainActions(PCM_NHI nhi);
-VOID CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on);
+BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on);
+VOID CmNhiQuiesce(PCM_NHI nhi);
+BOOLEAN CmNhiReinit(PCM_NHI nhi);
 
 /* cm_thr.c */
 VOID CmThrInit(PCM_NHI nhi);
@@ -236,8 +245,10 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp);
 VOID CmPowerSystemWork(PCM_NHI nhi, PIRP irp);
 VOID CmPowerD3Work(PCM_NHI nhi, PIRP irp);
 VOID CmPowerD0Work(PCM_NHI nhi, PIRP irp);
-VOID CmPowerHold(PCM_NHI nhi);
+VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp);
+BOOLEAN CmPowerHold(PCM_NHI nhi);
 VOID CmPowerRelease(PCM_NHI nhi);
+VOID CmPowerDrain(PCM_NHI nhi);
 
 /* cm_filt.c */
 NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
