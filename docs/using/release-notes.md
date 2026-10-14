@@ -191,9 +191,8 @@ included.
   From `2.4.0.0` such a controller starts, driven as an xHCI 1.0 one but
   for the fields Linux writes differently on 0.96 parts. A new value,
   `XhciAccept096`, written by the install at `1`, turns it off at `0`
-  ("XhciAccept096", under "Registry settings"). No 0.96 controller has run
-  under this driver: it is untested ground ("Untested ground"). Read in
-  QEMU virtual machines only, whose controller is 1.0.
+  ("XhciAccept096", under "Registry settings"). Read in QEMU virtual
+  machines only, whose controller is 1.0 ("Untested ground").
 - **A finer system timer while polling, on Windows 2000 and later, off
   by default.** A polled controller was looked at no more often than
   Windows' clock ticked (10 to 15 ms on Windows 2000, XP and 7 in QEMU),
@@ -245,8 +244,7 @@ included.
   `XhciShutdownReset`, which is off) and, where it is generic, `2` every
   controller, and `XhciIntervalCap` now also covers the ATI Navi10's USB-C
   controller (`1002:7316`). The install writes each at its default, and an
-  update adds them. None has been read on a controller it lists. See
-  "Linux's controller quirks".
+  update adds them. See "Linux's controller quirks".
 - **Endpoint rings are kept until the controller has let go of them.**
   When a driver switches an interface to another alternate setting (an
   audio device starting or stopping, for one) and the switch fails part
@@ -2403,9 +2401,8 @@ On a 1.0 or later controller the value changes nothing.
 | `0` | Off: below 1.0 is refused (Code 10), as in `2.3.1.0` |
 
 Anything below 0.96 is refused at every value. Read at each start of the
-controller: restart Windows after changing it. No 0.96 controller has run
-under this driver ("Untested ground"); if one misbehaves with it on, set
-`0`, restart and report what it did, with `XHCIQUAL`'s report, which names
+controller: restart Windows after changing it. If a 0.96 controller
+misbehaves with it on, set `0`, restart and report what it did, with `XHCIQUAL`'s report, which names
 the controller's version, and `XHCISNAP`'s, which says what the driver
 decided ("controller version"). With `XhciLogDebugView` at `1`, a start the
 controller's initialization refuses (a Code 10 at any of its steps, the

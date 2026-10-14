@@ -5306,7 +5306,6 @@ A value that is absent means the default each one states.
   controller the value changes nothing. Set 0 and restart to refuse a
   controller below 1.0 again. XHCIQUAL names the controller's version,
   and XHCISNAP's "controller version" lines say what the driver decided.
-  No 0.96 controller has run under this driver yet.
 
   Linux's controller quirks  -  fourteen values
   .............................................
@@ -5329,8 +5328,7 @@ A value that is absent means the default each one states.
   matched. Read when the controller starts, so restart after changing one.
   XHCISNAP's report has a "Linux quirks" block: each value as read,
   whether this controller is listed, whether it applies, what it last did.
-  NONE HAS BEEN READ ON A CONTROLLER IT LISTS. The Linux flag is in
-  brackets.
+  The Linux flag is in brackets.
 
   XhciMsiAvoid (XHCI_BROKEN_MSI; 1B73:1000, 1B73:1400): on Vista and 7,
     no message-signalled interrupt - these controllers never raise one.

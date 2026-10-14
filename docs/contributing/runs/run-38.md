@@ -308,6 +308,15 @@ packager publishes them there alone and holds their content to the
 checkers, and the cut to `src\` byte for byte. Commits `c248e3dc` to
 `0338f690`.
 
+**Changed by the owner, 2026-10-14** (`7131bd5b`): both INFs now write
+`XhciSilentInstall` 0 on every install path, under the same
+don't-overwrite rule as the other values (the INF gate's `VAL-*` rules,
+thirty-six values); "the INFs write nothing" above describes the task as
+first built. The `SilentClasses` list is still written by
+`silent-on.bat` alone, never by the INFs. Owed: the VM reading of the
+fresh-install 0 and of an update keeping a 1, to be read on the signed
+asset.
+
 **Gates.** `test\test_silent.c` (1201 checks) with the host suites; both
 builds and their gates at `d8c8fa63`; `test-package.ps1`, 1182 checks.
 
