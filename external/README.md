@@ -19,6 +19,8 @@ redistributed by it. Re-fetch it with the commands below on any machine.
 | `reactos/usbohci/`, `reactos/usbuhci/` | `drivers/usb/usbohci/`, `usbuhci/` | USB 1.1 miniports; secondary templates showing which parts vary by controller type. |
 | `linux/` | `drivers/usb/host/` | xHCI hardware programming: `xhci-ring.c`, `xhci-mem.c`, `xhci-hub.c`, ext-caps; and the quirk references `xhci-pci.c`, `xhci-pci-renesas.c` (Renesas uPD720201/202 firmware upload), `pci-quirks.c` (BIOS handoff + Intel port switchover); and, as single files from elsewhere in the tree, `include/linux/pci_ids.h` (the vendor and device constants) and `drivers/usb/core/message.c` (`usb_set_interface`'s rollback), copied flat as `pci_ids.h` and `message.c` (2026-10-14, design record 20). |
 | `freebsd/` | `sys/dev/usb/controller/` | Secondary. Clean xHCI register-sequence reference: `xhci.c`, `xhci.h`, `xhcireg.h`, `xhci_pci.c`. |
+| `linux/thunderbolt/` | `drivers/thunderbolt/` (all 40 files), plus `include/linux/thunderbolt.h` copied in as `include-linux-thunderbolt.h` | The Thunderbolt 3 and USB4 work (`roadmap-usb4.md`, design record 21; owner, 2026-10-15): NHI and bridge ids (`nhi.h`, `pci.c`), the ICM message set per generation (`tb_msgs.h`, `icm.c`), ring and register offsets (`nhi_regs.h`, `tb_regs.h`), control-packet framing (`ctl.c`) and quirks (`quirks.c`). Interface documentation only, cited by file and symbol; `docs/contributing/legal-provenance.md` section 3. Linux has no `include/uapi/linux/thunderbolt.h` at the pinned commit |
+| `freebsd/thunderbolt/` | `sys/dev/thunderbolt/` (all 21 files), at its own commit (below) | A second reading for the same work: `nhi_reg.h` (register offsets and ids), `tb_reg.h`, `nhi.c`, `nhi_pci.c`, `hcm.c`, `router.c`. Interface documentation only |
 | `haiku/` | `src/add-ons/kernel/busses/usb/` | Secondary. Readable xHCI implementation: `xhci.cpp`, `xhci.h`, `xhci_hardware.h`, `xhci_rh.cpp`. |
 | `qemu/` | `hw/usb/` | The emulated controller this project's guests actually run against, read to settle what the model does and does not implement: `hcd-xhci.c`, `hcd-xhci.h`. Added 2026-09-20 for roadmap task 23.3, whose first question is whether QEMU models interrupt moderation at all. It does not - `imod` is stored, returned and migrated, and no code path consults it - so no interrupt-rate reading can come out of a guest. **This tree documents the emulator, not the hardware**: where it and `xhci-data-structures.md` disagree the spec wins, and the disagreements are themselves findings (the model resets IMOD to 0 where hardware resets it to 4000). |
 
@@ -46,6 +48,12 @@ only and are not to be copied into `src/`:
 - Linux, GPL 2.0. Reference for hardware behaviour only.
 - FreeBSD, BSD 2-Clause.
 - Haiku, MIT.
+- Linux `drivers/thunderbolt` and `include/linux/thunderbolt.h`, GPL-2.0
+  (SPDX `GPL-2.0` or `GPL-2.0-only` in every file). Interface
+  documentation for the Thunderbolt 3 and USB4 work: facts cited by file
+  and symbol, no function body copied (`legal-provenance.md` section 3).
+- FreeBSD `sys/dev/thunderbolt`, BSD 2-Clause (SPDX `BSD-2-Clause` or
+  `BSD-2-Clause-FreeBSD`). The same terms.
 
 ## Source revisions (as mirrored)
 
@@ -54,8 +62,9 @@ Fetched at these upstream commits:
 | Repo | Commit | Date |
 |---|---|---|
 | reactos/reactos | `0298e10d5d904a0230868be8f7bdf6436d589c62` | 2026-07-18 |
-| torvalds/linux | `c6859eed755df351a3978b33cb92365f9b3e8f06` | 2026-07-18 |
+| torvalds/linux (also `drivers/thunderbolt` and `include/linux/thunderbolt.h`, fetched 2026-10-15) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | 2026-07-18 |
 | freebsd/freebsd-src | `cb325dcedfa291c9bfe350a513694df3776a17a4` | 2026-07-18 |
+| freebsd/freebsd-src, `sys/dev/thunderbolt` only | `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` | 2026-10-14 (fetched 2026-10-15) |
 | haiku/haiku | `618e42b86da9d041c995efe240af0a11329751fe` | 2026-07-18 |
 | qemu/qemu | tag `v11.1.0`, cross-checked against master `c1c18d1e640b64292859ce9f30f3c344edfb0294` | 2026-09-20 |
 
@@ -114,6 +123,27 @@ git clone --depth 1 --filter=blob:none --sparse https://github.com/qemu/qemu "$t
 git -C "$tmp/qemu" sparse-checkout set hw/usb
 git -C "$tmp/qemu" fetch --depth 1 origin tag v11.1.0
 git -C "$tmp/qemu" checkout v11.1.0
+
+# Thunderbolt 3 / USB4 (roadmap-usb4, added 2026-10-15): Linux drivers/thunderbolt and
+# include/linux/thunderbolt.h at the pinned Linux commit, FreeBSD sys/dev/thunderbolt at
+# its own commit. Fetched by commit, not by branch tip. Every file is copied flat; the
+# Linux header is renamed include-linux-thunderbolt.h. On Windows, git's autocrlf
+# writes CR-LF: compare a copy with upstream after converting it back to LF.
+git init -q "$tmp/lxtb"
+git -C "$tmp/lxtb" remote add origin https://github.com/torvalds/linux
+git -C "$tmp/lxtb" sparse-checkout set drivers/thunderbolt include/linux
+git -C "$tmp/lxtb" fetch -q --depth 1 --filter=blob:none origin c6859eed755df351a3978b33cb92365f9b3e8f06
+git -C "$tmp/lxtb" checkout -q FETCH_HEAD
+mkdir -p linux/thunderbolt
+cp "$tmp/lxtb/drivers/thunderbolt/"* linux/thunderbolt/
+cp "$tmp/lxtb/include/linux/thunderbolt.h" linux/thunderbolt/include-linux-thunderbolt.h
+git init -q "$tmp/fbtb"
+git -C "$tmp/fbtb" remote add origin https://github.com/freebsd/freebsd-src
+git -C "$tmp/fbtb" sparse-checkout set sys/dev/thunderbolt
+git -C "$tmp/fbtb" fetch -q --depth 1 --filter=blob:none origin 9d50245a0f1333e10cc1c4dda16878cd79a7c42b
+git -C "$tmp/fbtb" checkout -q FETCH_HEAD
+mkdir -p freebsd/thunderbolt
+cp "$tmp/fbtb/sys/dev/thunderbolt/"* freebsd/thunderbolt/
 
 # Copy out just the relevant files (see the table above), then drop the clones.
 # For example, the ABI header and the port driver:
