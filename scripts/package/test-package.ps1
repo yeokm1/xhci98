@@ -2650,8 +2650,8 @@ try {
            Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install and the cleanup tool (tasks 38.9, 38.2 and 38.8)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool and the install tool (tasks 38.9, 38.2, 38.8 and 40.6)" },
         @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
            Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
         @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
@@ -2661,7 +2661,21 @@ try {
         @{ Find = '$cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })';
            Why  = "a cut no longer refuses a cleanup tool older than its sources (task 38.8)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT")';
-           Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },
+           Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },        # The install tool (roadmap-usb4.md task 40.6, design record 23).
+        @{ Find = '$instDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciinst")';
+           Why  = "a cut no longer stages XHCIINST.EXE and XHCIIN64.EXE into tools\xhciinst\ (task 40.6)" },
+        @{ Find = '$instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")';
+           Why  = "a cut no longer stages both builds of the install tool, the 64-bit one a native build by design (task 40.6)" },
+        @{ Find = 'Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force';
+           Why  = "a cut no longer puts INSTALL.BAT at the version root (task 40.6, design record 23 section 2)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"';
+           Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
+        @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
+           Why  = "a cut no longer refuses an install tool older than its sources (task 40.6)" },
+        @{ Find = 'throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."';
+           Why  = "a cut no longer refuses an INSTALL.BAT with LF endings (task 40.6)" },
+        @{ Find = 'Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT")';
+           Why  = "a cut no longer writes the NOTICE.TXT recording the install tool's statically linked runtimes (legal-provenance.md section 2a)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';

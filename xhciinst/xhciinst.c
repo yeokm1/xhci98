@@ -1,0 +1,3437 @@
+/*
+ * xhciinst.c - XHCIINST.EXE (32-bit) and XHCIIN64.EXE (x64): install,
+ * update or uninstall every driver of this package (roadmap-usb4.md tasks
+ * 40.5 to 40.7; design record 23).
+ *
+ * WHY IT EXISTS. Installing the package was Device Manager work, one device
+ * at a time, with a different trap per system on an update (Windows 2000
+ * keeps the old driver unless Have Disk is used, Vista and 7 keep the old
+ * .sys under an identical INF, the root hub needs its own update, 32-bit
+ * Vista and 7 need a restart). INSTALL.BAT at the package root runs this
+ * tool, which does on Windows 2000 to 7 what the release notes tell the
+ * user to do by hand and says what it did; on Windows 98 SE and ME, where
+ * no documented interface installs a driver on a device, it puts the
+ * package where the hardware wizard searches by itself (DevicePath) and
+ * prints the clicks that remain. It never ships or calls devcon, never
+ * drives SETUPX, and never changes a boot setting.
+ *
+ * THE ROUTES. NT: newdev.dll's UpdateDriverForPlugAndPlayDevices with
+ * INSTALLFLAG_FORCE on each device's own first hardware id, after the
+ * package's INFs are pre-staged with SetupCopyOEMInf; the controllers
+ * first, then the root hub, hubs and composite entries, xhciuas.sys's
+ * devices, the NHI and the tunnel-port filter (record 23 section 5). 98 SE
+ * and ME: a local copy in %windir%\XHCI98 named in DevicePath (section 6).
+ * The uninstall: devnodes through DIF_REMOVE, the filter's name out of
+ * UpperFilters, the OEM INFs, the services and the files on NT; on 98 SE
+ * and ME what the tool itself placed, and the steps printed (section 9).
+ *
+ * TARGETS AND BUILDS. ANSI C89, built with the in-repo MSVC 6.0 as
+ * XHCIINST.EXE and with WDK 7.1's amd64 compiler as XHCIIN64.EXE
+ * (build.cmd), as XHCICLN is. Every SetupAPI, newdev and configuration
+ * manager routine is looked up at run time, so the import table names
+ * KERNEL32 and ADVAPI32 alone (selftest.cmd holds it there) and the image
+ * starts on every target; a routine missing that a step needs refuses that
+ * step. The 32-bit build under WOW64 refuses and names XHCIIN64.EXE. The
+ * pure half is inst_core.c, which the host suite test\test_inst.c links;
+ * the port switchover's controller list is the driver's own
+ * (src\xhci_psw.c, XhciPswGate).
+ */
+
+#define WIN32_LEAN_AND_MEAN
+#define _CRT_SECURE_NO_WARNINGS
+#include <windows.h>
+#include <setupapi.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "../src/xhci_version.h"
+#include "inst_core.h"
+
+/* The driver's own switchover gate (src\xhci_psw.c), declared here rather
+ * than through xhci_psw.h, whose compatibility header is the driver's. */
+unsigned long XhciPswGate(unsigned long vendorDevice);
+
+#define XHCIINST_VERSION XHCI_VER_STR
+
+#ifdef _WIN64
+#define INST_MY_ARCH        INST_ARCH_AMD64
+#define INST_MY_NAME        "XHCIIN64.EXE"
+#define INST_OTHER_NAME     "XHCIINST.EXE"
+#define INST_DIR_SUFFIX     "-x64"
+#define INST_DEFAULT_DIR    "release-x64"
+#define INST_PE_MINE        INST_PE_AMD64
+#define INST_CLN_NAME       "XHCICL64.EXE"
+#else
+#define INST_MY_ARCH        INST_ARCH_X86
+#define INST_MY_NAME        "XHCIINST.EXE"
+#define INST_OTHER_NAME     "XHCIIN64.EXE"
+#define INST_DIR_SUFFIX     "-x86"
+#define INST_DEFAULT_DIR    "release-x86"
+#define INST_PE_MINE        INST_PE_I386
+#define INST_CLN_NAME       "XHCICLN.EXE"
+#endif
+
+/* ---- numbers not in MSVC 6.0's SDK headers (WDK 7.1's newdev.h,
+ * setupapi.h and cfgmgr32.h; Microsoft's documentation) ------------------ */
+
+#define INST_INSTALLFLAG_FORCE      0x00000001UL
+#define INST_SUOI_FORCEDELETE       0x00000001UL
+#define INST_CR_SUCCESS             0x00000000UL
+#define INST_CR_NO_SUCH_DEVINST     0x0000000DUL
+#define INST_DN_HAS_PROBLEM         0x00000400UL
+#define INST_DN_STARTED             0x00000008UL
+#define INST_PROB_NEED_RESTART      14UL
+#define INST_CM_DRP_DEVICEDESC      0x00000001UL
+#define INST_CM_DRP_HARDWAREID      0x00000002UL
+#define INST_CM_DRP_COMPATIBLEIDS   0x00000003UL
+#define INST_CM_DRP_DRIVER          0x0000000AUL
+#define INST_INSTALL_WAIT_MS        60000UL
+
+#ifndef ERROR_IN_WOW64
+#define ERROR_IN_WOW64 0xE0000235UL
+#endif
+
+#define INST_MAX_DEVS       1536
+#define INST_MSZ_BYTES      2048
+#define INST_PATH_CHARS     520
+
+/* The INF slots: file, service, systems. */
+static const char *const instInfFile[INST_INF_COUNT] = {
+    "xhci98.inf", "xhciuas.inf", "xhcicm.inf", "xhcicmf.inf"
+};
+static const char *const instInfService[INST_INF_COUNT] = {
+    "xhci98", "xhciuas", "xhcicm", "xhcicm"
+};
+
+/* ---- the routines, looked up at run time ------------------------------------- */
+
+typedef HDEVINFO (WINAPI *PFN_GETCLASSDEVS)(const GUID *, PCSTR, HWND, DWORD);
+typedef BOOL (WINAPI *PFN_ENUMINFO)(HDEVINFO, DWORD, PSP_DEVINFO_DATA);
+typedef BOOL (WINAPI *PFN_GETINSTID)(HDEVINFO, PSP_DEVINFO_DATA, PSTR, DWORD,
+                                     PDWORD);
+typedef BOOL (WINAPI *PFN_GETREGPROP)(HDEVINFO, PSP_DEVINFO_DATA, DWORD,
+                                      PDWORD, PBYTE, DWORD, PDWORD);
+typedef BOOL (WINAPI *PFN_SETREGPROP)(HDEVINFO, PSP_DEVINFO_DATA, DWORD,
+                                      const BYTE *, DWORD);
+typedef BOOL (WINAPI *PFN_DESTROY)(HDEVINFO);
+typedef BOOL (WINAPI *PFN_SETCIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                       PSP_CLASSINSTALL_HEADER, DWORD);
+typedef BOOL (WINAPI *PFN_CALLCI)(DI_FUNCTION, HDEVINFO, PSP_DEVINFO_DATA);
+typedef BOOL (WINAPI *PFN_GETDIPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                       PSP_DEVINSTALL_PARAMS_A);
+typedef BOOL (WINAPI *PFN_COPYOEM)(PCSTR, PCSTR, DWORD, DWORD, PSTR, DWORD,
+                                   PDWORD, PSTR *);
+typedef BOOL (WINAPI *PFN_UNINSTOEM)(PCSTR, DWORD, PVOID);
+typedef BOOL (WINAPI *PFN_STORELOC)(PCSTR, PVOID, PCSTR, PSTR, DWORD,
+                                    PDWORD);
+typedef BOOL (WINAPI *PFN_UPDATEDRV)(HWND, LPCSTR, LPCSTR, DWORD, PBOOL);
+typedef DWORD (WINAPI *PFN_CM_LOCATE)(DWORD *, char *, ULONG);
+typedef DWORD (WINAPI *PFN_CM_STATUS)(ULONG *, ULONG *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_REL)(DWORD *, DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_ID)(DWORD, char *, ULONG, ULONG);
+typedef DWORD (WINAPI *PFN_CM_PROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
+                                    ULONG);
+typedef DWORD (WINAPI *PFN_CM_WAIT)(DWORD);
+typedef BOOL (WINAPI *PFN_ISWOW64)(HANDLE, PBOOL);
+
+static struct {
+    HMODULE SetupApi;
+    HMODULE CfgMgr;
+    HMODULE NewDev;
+    PFN_GETCLASSDEVS GetClassDevs;
+    PFN_ENUMINFO EnumInfo;
+    PFN_GETINSTID GetInstanceId;
+    PFN_GETREGPROP GetRegProp;
+    PFN_SETREGPROP SetRegProp;
+    PFN_DESTROY Destroy;
+    PFN_SETCIPARAMS SetCiParams;
+    PFN_CALLCI CallCi;
+    PFN_GETDIPARAMS GetDiParams;
+    PFN_COPYOEM CopyOem;
+    PFN_UNINSTOEM UninstallOem;
+    PFN_STORELOC StoreLocation;
+    PFN_UPDATEDRV UpdateDriver;
+    PFN_CM_LOCATE Locate;
+    PFN_CM_STATUS Status;
+    PFN_CM_REL Child;
+    PFN_CM_REL Sibling;
+    PFN_CM_ID DeviceId;
+    PFN_CM_PROP Property;
+    PFN_CM_WAIT WaitInstall;
+} api;
+
+/* ---- state -------------------------------------------------------------------- */
+
+typedef struct _DEVREC {
+    char Id[INST_ID_CHARS];
+    char Desc[128];
+    char Service[64];
+    char Driver[128];
+    char Hw[INST_MSZ_BYTES];
+    DWORD HwBytes;
+    char Compat[INST_MSZ_BYTES];
+    DWORD CompatBytes;
+    char Upper[512];
+    DWORD UpperBytes;
+    ULONG Status;
+    ULONG Problem;
+    int Present;
+    int VersionState;       /* INST_VS_*                     */
+    INST_U32 Version[4];
+    char VersionText[64];
+    int Inf;                /* the INF that matches, -1 none */
+    int Action;
+    int Runs;
+    int Done;               /* the call was made for it      */
+    int Refused;            /* its group's verdict refused it */
+    char InfPath[64];       /* the driver key's InfPath       */
+    int InfPathState;       /* 1 read, 0 absent, -1 unreadable */
+} DEVREC;
+
+/* The service groups of record 23 section 5.4. */
+#define INST_GROUPS 3
+static const char *const groupService[INST_GROUPS] = {
+    "xhci98", "xhciuas", "xhcicm"
+};
+static int groupVerdict[INST_GROUPS];
+
+/* The devices a step changed, by instance id, for the results check. */
+#define INST_MAX_CHANGED 64
+static char changedId[INST_MAX_CHANGED][INST_ID_CHARS];
+static int changedInf[INST_MAX_CHANGED];
+static int changedCount;
+
+static int testSigningConfirmed;
+static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
+static char srcDir[INST_PATH_CHARS];
+static int restagePending[INST_INF_COUNT];
+
+static DEVREC *devs;
+static int devCount;
+static int devTruncated;
+
+static INST_OPTS opts;
+static INST_ENV envNow;
+static OSVERSIONINFOA osv;
+static FILE *logFile;
+static char logPath[INST_PATH_CHARS];
+static char root[INST_PATH_CHARS];
+static char pkgDir[INST_PATH_CHARS];
+static char *infText[INST_INF_COUNT];
+static INST_IDLIST infIds[INST_INF_COUNT];
+static int infTrap[INST_INF_COUNT];
+static INST_U32 pkgVersion[4];
+static int haveCm;
+
+static int flagFailed;
+static int flagRestart;
+static int flagSteps;
+static int flagChanged;
+
+/* The registry answers: per value, 1 when it is to be written, and what. */
+static int answerSet[16];
+static INST_U32 answerValue[16];
+
+/* ======================================================================== */
+/* Output and the log                                                        */
+/* ======================================================================== */
+
+static void out(const char *fmt, ...)
+{
+    char buf[2048];
+    va_list ap;
+
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    fputs(buf, stdout);
+    fflush(stdout);
+    if (logFile != NULL) {
+        fputs(buf, logFile);
+        fflush(logFile);
+    }
+}
+
+/* To the log alone: the calls and their results. */
+static void logonly(const char *fmt, ...)
+{
+    char buf[2048];
+    va_list ap;
+
+    if (logFile == NULL) {
+        return;
+    }
+    va_start(ap, fmt);
+    _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+    va_end(ap);
+    buf[sizeof(buf) - 1] = '\0';
+    fputs(buf, logFile);
+    fflush(logFile);
+}
+
+static void log_open(void)
+{
+    SYSTEMTIME t;
+    char drive[INST_PATH_CHARS];
+
+    if (opts.Log[0] != '\0') {
+        inst_copy(logPath, opts.Log, sizeof(logPath));
+    } else {
+        if (GetWindowsDirectoryA(drive, sizeof(drive)) < 3) {
+            inst_copy(drive, "C:\\", sizeof(drive));
+        }
+        drive[3] = '\0';
+        inst_copy(logPath, drive, sizeof(logPath));
+        strcat(logPath, "XHCIINST.LOG");
+    }
+    logFile = fopen(logPath, "a");
+    GetLocalTime(&t);
+    if (logFile == NULL) {
+        printf("The log %s could not be opened; going on without it.\n\n",
+               logPath);
+        logPath[0] = '\0';
+        return;
+    }
+    logonly("\n==== xhciinst %s, %04u-%02u-%02u %02u:%02u:%02u ====\n",
+            XHCIINST_VERSION, t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute,
+            t.wSecond);
+}
+
+/* One line of input, or 0 at end of input. */
+static int read_line(char *buf, size_t cap)
+{
+    size_t n;
+
+    if (fgets(buf, (int)cap, stdin) == NULL) {
+        buf[0] = '\0';
+        logonly("(end of input)\n");
+        return 0;
+    }
+    n = strlen(buf);
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) {
+        buf[--n] = '\0';
+    }
+    logonly("> %s\n", buf);
+    return 1;
+}
+
+/* ======================================================================== */
+/* The routines                                                              */
+/* ======================================================================== */
+
+static FARPROC proc(HMODULE module, const char *dll, const char *name)
+{
+    FARPROC p = (module != NULL) ? GetProcAddress(module, name) : NULL;
+
+    logonly("routine %s!%s: %s\n", dll, name, p != NULL ? "resolved" : "missing");
+    return p;
+}
+
+static void load_routines(void)
+{
+    api.SetupApi = LoadLibraryA("setupapi.dll");
+    api.CfgMgr = LoadLibraryA("cfgmgr32.dll");
+    api.NewDev = envNow.Nt ? LoadLibraryA("newdev.dll") : NULL;
+    api.GetClassDevs = (PFN_GETCLASSDEVS)proc(api.SetupApi, "setupapi", "SetupDiGetClassDevsA");
+    api.EnumInfo = (PFN_ENUMINFO)proc(api.SetupApi, "setupapi", "SetupDiEnumDeviceInfo");
+    api.GetInstanceId = (PFN_GETINSTID)proc(api.SetupApi, "setupapi", "SetupDiGetDeviceInstanceIdA");
+    api.GetRegProp = (PFN_GETREGPROP)proc(api.SetupApi, "setupapi", "SetupDiGetDeviceRegistryPropertyA");
+    api.SetRegProp = (PFN_SETREGPROP)proc(api.SetupApi, "setupapi", "SetupDiSetDeviceRegistryPropertyA");
+    api.Destroy = (PFN_DESTROY)proc(api.SetupApi, "setupapi", "SetupDiDestroyDeviceInfoList");
+    api.SetCiParams = (PFN_SETCIPARAMS)proc(api.SetupApi, "setupapi", "SetupDiSetClassInstallParamsA");
+    api.CallCi = (PFN_CALLCI)proc(api.SetupApi, "setupapi", "SetupDiCallClassInstaller");
+    api.GetDiParams = (PFN_GETDIPARAMS)proc(api.SetupApi, "setupapi", "SetupDiGetDeviceInstallParamsA");
+    api.CopyOem = (PFN_COPYOEM)proc(api.SetupApi, "setupapi", "SetupCopyOEMInfA");
+    api.UninstallOem = (PFN_UNINSTOEM)proc(api.SetupApi, "setupapi", "SetupUninstallOEMInfA");
+    api.StoreLocation = (PFN_STORELOC)proc(api.SetupApi, "setupapi", "SetupGetInfDriverStoreLocationA");
+    api.UpdateDriver = (PFN_UPDATEDRV)proc(api.NewDev, "newdev", "UpdateDriverForPlugAndPlayDevicesA");
+    api.Locate = (PFN_CM_LOCATE)proc(api.CfgMgr, "cfgmgr32", "CM_Locate_DevNodeA");
+    api.Status = (PFN_CM_STATUS)proc(api.CfgMgr, "cfgmgr32", "CM_Get_DevNode_Status");
+    api.Child = (PFN_CM_REL)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Child");
+    api.Sibling = (PFN_CM_REL)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Sibling");
+    api.DeviceId = (PFN_CM_ID)proc(api.CfgMgr, "cfgmgr32", "CM_Get_Device_IDA");
+    api.Property = (PFN_CM_PROP)proc(api.CfgMgr, "cfgmgr32", "CM_Get_DevNode_Registry_PropertyA");
+    api.WaitInstall = (PFN_CM_WAIT)proc(api.CfgMgr, "cfgmgr32", "CMP_WaitNoPendingInstallEvents");
+    if (api.WaitInstall == NULL) {
+        /* Windows 2000 exports it from setupapi.dll. */
+        api.WaitInstall = (PFN_CM_WAIT)proc(api.SetupApi, "setupapi", "CMP_WaitNoPendingInstallEvents");
+    }
+}
+
+static void print_routines(void)
+{
+    out("Routines this system offers:\n");
+    out("  UpdateDriverForPlugAndPlayDevicesA  %s\n", api.UpdateDriver ? "yes" : "no");
+    out("  SetupCopyOEMInfA                    %s\n", api.CopyOem ? "yes" : "no");
+    out("  SetupUninstallOEMInfA               %s\n", api.UninstallOem ? "yes" : "no");
+    out("  SetupGetInfDriverStoreLocationA     %s\n", api.StoreLocation ? "yes" : "no");
+    out("  SetupDiCallClassInstaller           %s\n", api.CallCi ? "yes" : "no");
+    out("  CMP_WaitNoPendingInstallEvents      %s\n", api.WaitInstall ? "yes" : "no");
+    out("  CM_Get_DevNode_Registry_PropertyA   %s\n\n", api.Property ? "yes" : "no");
+}
+
+/* ======================================================================== */
+/* Files and the registry                                                    */
+/* ======================================================================== */
+
+static char *read_file(const char *path, DWORD *size)
+{
+    HANDLE h;
+    DWORD n;
+    DWORD got;
+    char *buf;
+
+    h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return NULL;
+    }
+    n = GetFileSize(h, NULL);
+    if (n == 0xFFFFFFFFUL || n > 16UL * 1024UL * 1024UL) {
+        CloseHandle(h);
+        return NULL;
+    }
+    buf = (char *)malloc(n + 1);
+    if (buf == NULL) {
+        CloseHandle(h);
+        return NULL;
+    }
+    if (!ReadFile(h, buf, n, &got, NULL) || got != n) {
+        free(buf);
+        CloseHandle(h);
+        return NULL;
+    }
+    CloseHandle(h);
+    buf[n] = '\0';
+    if (size != NULL) {
+        *size = n;
+    }
+    return buf;
+}
+
+static int file_exists(const char *path, DWORD *size)
+{
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(path, &fd);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    FindClose(h);
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+        return 0;
+    }
+    if (size != NULL) {
+        *size = fd.nFileSizeLow;
+    }
+    return 1;
+}
+
+static void join(char *outPath, size_t cap, const char *a, const char *b)
+{
+    inst_copy(outPath, a, cap);
+    if (strlen(outPath) > 0 && outPath[strlen(outPath) - 1] != '\\' &&
+        strlen(outPath) + 1 < cap) {
+        strcat(outPath, "\\");
+    }
+    if (strlen(outPath) + strlen(b) < cap) {
+        strcat(outPath, b);
+    }
+}
+
+static int same_file(const char *a, const char *b)
+{
+    DWORD na;
+    DWORD nb;
+    char *ba = read_file(a, &na);
+    char *bb = read_file(b, &nb);
+    int same = (ba != NULL && bb != NULL && na == nb &&
+                memcmp(ba, bb, na) == 0);
+
+    free(ba);
+    free(bb);
+    return same;
+}
+
+static int reg_text(HKEY rootKey, const char *path, const char *name,
+                    char *outText, DWORD cap, DWORD *type)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = cap - 1;
+    LONG r;
+
+    if (RegOpenKeyExA(rootKey, path, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)outText, &n);
+    RegCloseKey(k);
+    if (r != ERROR_SUCCESS || (t != REG_SZ && t != REG_EXPAND_SZ)) {
+        return 0;
+    }
+    outText[n < cap ? n : cap - 1] = '\0';
+    if (type != NULL) {
+        *type = t;
+    }
+    return 1;
+}
+
+static int reg_dword(HKEY rootKey, const char *path, const char *name,
+                     DWORD *value)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = sizeof(DWORD);
+    LONG r;
+
+    if (RegOpenKeyExA(rootKey, path, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)value, &n);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS && t == REG_DWORD && n == sizeof(DWORD);
+}
+
+/* A string value: 1 read, 0 absent (the key opened, no such value), -1
+ * unreadable (the key did not open, or the value is not a string). */
+static int reg_text3(HKEY rootKey, const char *path, const char *name,
+                     char *outText, DWORD cap)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = cap - 1;
+    LONG r;
+
+    if (RegOpenKeyExA(rootKey, path, 0, KEY_READ, &k) != ERROR_SUCCESS) {
+        return -1;
+    }
+    r = RegQueryValueExA(k, name, NULL, &t, (LPBYTE)outText, &n);
+    RegCloseKey(k);
+    if (r == ERROR_FILE_NOT_FOUND) {
+        return 0;
+    }
+    if (r != ERROR_SUCCESS || (t != REG_SZ && t != REG_EXPAND_SZ)) {
+        return -1;
+    }
+    outText[n < cap ? n : cap - 1] = '\0';
+    return 1;
+}
+
+/* version.dll, looked up at run time like everything else. */
+typedef DWORD (WINAPI *PFN_GFVIS)(LPCSTR, LPDWORD);
+typedef BOOL (WINAPI *PFN_GFVI)(LPCSTR, DWORD, DWORD, LPVOID);
+typedef BOOL (WINAPI *PFN_VQV)(LPCVOID, LPCSTR, LPVOID *, PUINT);
+
+/* A file's version resource: 1 read, 0 the file is absent, -1 unreadable. */
+static int file_version(const char *path, INST_U32 v[4])
+{
+    static HMODULE ver;
+    PFN_GFVIS gfvis;
+    PFN_GFVI gfvi;
+    PFN_VQV vqv;
+    DWORD dummy;
+    DWORD n;
+    void *buf;
+    VS_FIXEDFILEINFO *fi;
+    UINT len;
+    int ok = -1;
+
+    if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
+        return 0;
+    }
+    if (ver == NULL) {
+        ver = LoadLibraryA("version.dll");
+    }
+    if (ver == NULL) {
+        return -1;
+    }
+    gfvis = (PFN_GFVIS)GetProcAddress(ver, "GetFileVersionInfoSizeA");
+    gfvi = (PFN_GFVI)GetProcAddress(ver, "GetFileVersionInfoA");
+    vqv = (PFN_VQV)GetProcAddress(ver, "VerQueryValueA");
+    if (gfvis == NULL || gfvi == NULL || vqv == NULL) {
+        return -1;
+    }
+    n = gfvis(path, &dummy);
+    if (n == 0) {
+        return -1;
+    }
+    buf = malloc(n);
+    if (buf == NULL) {
+        return -1;
+    }
+    if (gfvi(path, 0, n, buf) && vqv(buf, "\\", (LPVOID *)&fi, &len) &&
+        len >= sizeof(VS_FIXEDFILEINFO)) {
+        v[0] = (INST_U32)(fi->dwFileVersionMS >> 16);
+        v[1] = (INST_U32)(fi->dwFileVersionMS & 0xFFFFUL);
+        v[2] = (INST_U32)(fi->dwFileVersionLS >> 16);
+        v[3] = (INST_U32)(fi->dwFileVersionLS & 0xFFFFUL);
+        ok = 1;
+    }
+    free(buf);
+    return ok;
+}
+
+/* The driver (software) key of a devnode, relative to HKLM. */
+static void driver_key_path(const DEVREC *d, char *path, size_t cap)
+{
+    if (envNow.Nt) {
+        join(path, cap, "SYSTEM\\CurrentControlSet\\Control\\Class", d->Driver);
+    } else {
+        join(path, cap, "System\\CurrentControlSet\\Services\\Class", d->Driver);
+    }
+}
+
+/* ======================================================================== */
+/* Reading the devices (record 23 section 5.3)                               */
+/* ======================================================================== */
+
+static void dev_driver_values(DEVREC *d)
+{
+    char path[INST_PATH_CHARS];
+    char text[128];
+    HKEY k;
+    int r;
+
+    d->VersionState = INST_VS_ABSENT;
+    d->VersionText[0] = '\0';
+    if (d->Driver[0] == '\0') {
+        return;
+    }
+    driver_key_path(d, path, sizeof(path));
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        d->VersionState = INST_VS_UNREADABLE;
+        d->InfPathState = -1;
+        inst_copy(d->VersionText, "(driver key unreadable)",
+                  sizeof(d->VersionText));
+        return;
+    }
+    RegCloseKey(k);
+    d->InfPathState = reg_text3(HKEY_LOCAL_MACHINE, path, "InfPath",
+                                d->InfPath, sizeof(d->InfPath));
+    r = reg_text3(HKEY_LOCAL_MACHINE, path, "DriverVersion", text,
+                  sizeof(text));
+    if (r > 0 && inst_ver_parse(text, d->Version)) {
+        d->VersionState = INST_VS_HAVE;
+        inst_copy(d->VersionText, text, sizeof(d->VersionText));
+    } else if (r != 0) {
+        d->VersionState = INST_VS_UNREADABLE;
+        inst_copy(d->VersionText, "(version unreadable)",
+                  sizeof(d->VersionText));
+    } else if (reg_text(HKEY_LOCAL_MACHINE, path, "DriverDate", text,
+                        sizeof(text), NULL)) {
+        inst_copy(d->VersionText, "date ", sizeof(d->VersionText));
+        strncat(d->VersionText, text, sizeof(d->VersionText) - 6);
+    }
+    if (!envNow.Nt && d->Service[0] == '\0') {
+        /* 98 and ME bind a WDM driver by the driver key's NTMPDriver. */
+        if (reg_text(HKEY_LOCAL_MACHINE, path, "NTMPDriver", text,
+                     sizeof(text), NULL)) {
+            char *dot = strchr(text, '.');
+            if (dot != NULL) {
+                *dot = '\0';
+            }
+            inst_copy(d->Service, text, sizeof(d->Service));
+        }
+    }
+}
+
+static void cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
+{
+    ULONG type;
+    ULONG n = cap - 2;
+
+    memset(buf, 0, cap);
+    if (api.Property == NULL ||
+        api.Property(dn, prop, &type, buf, &n, 0) != INST_CR_SUCCESS) {
+        buf[0] = '\0';
+        n = 0;
+    }
+    if (bytes != NULL) {
+        *bytes = n;
+    }
+}
+
+static void walk_cm(DWORD dn, int depth)
+{
+    DWORD child;
+    DWORD sib;
+    DEVREC *d;
+    ULONG status;
+    ULONG problem;
+
+    for (;;) {
+        if (devCount >= INST_MAX_DEVS) {
+            devTruncated = 1;
+            return;
+        }
+        d = &devs[devCount];
+        memset(d, 0, sizeof(*d));
+        if (api.DeviceId(dn, d->Id, sizeof(d->Id), 0) == INST_CR_SUCCESS) {
+            cm_prop(dn, INST_CM_DRP_HARDWAREID, d->Hw, sizeof(d->Hw), &d->HwBytes);
+            cm_prop(dn, INST_CM_DRP_COMPATIBLEIDS, d->Compat, sizeof(d->Compat),
+                    &d->CompatBytes);
+            cm_prop(dn, INST_CM_DRP_DRIVER, d->Driver, sizeof(d->Driver), NULL);
+            cm_prop(dn, INST_CM_DRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
+            if (api.Status(&status, &problem, dn, 0) == INST_CR_SUCCESS) {
+                d->Status = status;
+                d->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
+            }
+            d->Present = 1;
+            d->Inf = -1;
+            dev_driver_values(d);
+            devCount++;
+        }
+        if (depth < 32 && api.Child(&child, dn, 0) == INST_CR_SUCCESS) {
+            walk_cm(child, depth + 1);
+        }
+        if (api.Sibling(&sib, dn, 0) != INST_CR_SUCCESS) {
+            return;
+        }
+        dn = sib;
+    }
+}
+
+/* A property: 1 read, 0 absent (ERROR_INVALID_DATA, SetupAPI's answer for a
+ * property the devnode does not have), -1 unreadable (record 23 section 5.3). */
+static int sd_prop(HDEVINFO set, PSP_DEVINFO_DATA data, DWORD prop,
+                   char *buf, DWORD cap, DWORD *bytes)
+{
+    DWORD type;
+    DWORD n = 0;
+    int r = 1;
+
+    memset(buf, 0, cap);
+    if (!api.GetRegProp(set, data, prop, &type, (PBYTE)buf, cap - 2, &n)) {
+        r = (GetLastError() == ERROR_INVALID_DATA) ? 0 : -1;
+        memset(buf, 0, cap);
+        n = 0;
+    }
+    if (bytes != NULL) {
+        *bytes = n;
+    }
+    return r;
+}
+
+/* NT: every devnode, present or not (the uninstall needs the phantoms). A
+ * set that cannot be walked to its end, an id that cannot be read, or a
+ * safety-relevant property or presence answer that cannot be read refuses
+ * the run: the plan is never made on a partial picture. */
+static int scan_nt(void)
+{
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD i;
+    DWORD err;
+    ULONG status;
+    ULONG problem;
+    DWORD cr;
+    DEVREC *d;
+    int unreadable = 0;
+
+    devCount = 0;
+    devTruncated = 0;
+    set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    if (set == INVALID_HANDLE_VALUE) {
+        out("The device list could not be read (error 0x%08lX).\n",
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    for (i = 0;; i++) {
+        data.cbSize = sizeof(data);
+        if (!api.EnumInfo(set, i, &data)) {
+            err = GetLastError();
+            if (err != ERROR_NO_MORE_ITEMS) {
+                out("The device list stopped at entry %lu (error 0x%08lX).\n",
+                    (unsigned long)i, (unsigned long)err);
+                api.Destroy(set);
+                return 0;
+            }
+            break;
+        }
+        if (devCount >= INST_MAX_DEVS) {
+            devTruncated = 1;
+            break;
+        }
+        d = &devs[devCount];
+        memset(d, 0, sizeof(*d));
+        if (!api.GetInstanceId(set, &data, d->Id, sizeof(d->Id), NULL)) {
+            out("A device's instance id could not be read (error 0x%08lX).\n",
+                (unsigned long)GetLastError());
+            api.Destroy(set);
+            return 0;
+        }
+        if (sd_prop(set, &data, SPDRP_HARDWAREID, d->Hw, sizeof(d->Hw),
+                    &d->HwBytes) < 0 ||
+            sd_prop(set, &data, SPDRP_COMPATIBLEIDS, d->Compat,
+                    sizeof(d->Compat), &d->CompatBytes) < 0 ||
+            sd_prop(set, &data, SPDRP_SERVICE, d->Service, sizeof(d->Service),
+                    NULL) < 0 ||
+            sd_prop(set, &data, SPDRP_DRIVER, d->Driver, sizeof(d->Driver),
+                    NULL) < 0 ||
+            sd_prop(set, &data, SPDRP_UPPERFILTERS, d->Upper, sizeof(d->Upper),
+                    &d->UpperBytes) < 0) {
+            out("  unreadable: a property of %s\n", d->Id);
+            unreadable++;
+        }
+        sd_prop(set, &data, SPDRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
+        cr = api.Status(&status, &problem, data.DevInst, 0);
+        if (cr == INST_CR_SUCCESS) {
+            d->Present = 1;
+            d->Status = status;
+            d->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
+        } else if (cr != INST_CR_NO_SUCH_DEVINST) {
+            out("  unreadable: whether %s is present (0x%08lX)\n", d->Id,
+                (unsigned long)cr);
+            unreadable++;
+        }
+        d->Inf = -1;
+        dev_driver_values(d);
+        devCount++;
+    }
+    api.Destroy(set);
+    if (devTruncated) {
+        out("More than %d devices: the list is cut short, and nothing is "
+            "changed.\n", INST_MAX_DEVS);
+        return 0;
+    }
+    if (unreadable) {
+        out("%d device entries could not be read whole: nothing is changed "
+            "(record 23 section 5.3).\n", unreadable);
+        return 0;
+    }
+    return 1;
+}
+static int scan_9x(void)
+{
+    DWORD rootDn;
+
+    devCount = 0;
+    devTruncated = 0;
+    if (api.Locate == NULL || api.Child == NULL || api.Sibling == NULL ||
+        api.DeviceId == NULL || api.Status == NULL) {
+        out("The configuration manager's routines are missing; the devices "
+            "cannot be read.\n");
+        return 0;
+    }
+    if (api.Locate(&rootDn, NULL, 0) != INST_CR_SUCCESS) {
+        out("The device tree's root could not be located.\n");
+        return 0;
+    }
+    walk_cm(rootDn, 0);
+    return !devTruncated;
+}
+
+static int scan(void)
+{
+    return envNow.Nt ? scan_nt() : scan_9x();
+}
+
+/* The first hardware id of a devnode. */
+static const char *first_hw(const DEVREC *d)
+{
+    return d->Hw[0] != '\0' ? d->Hw : d->Id;
+}
+
+static int is_controller(const DEVREC *d)
+{
+    return inst_msz_has(d->Compat, d->CompatBytes, "PCI\\CC_0C0330") ||
+           inst_msz_has(d->Hw, d->HwBytes, "PCI\\CC_0C0330");
+}
+
+/* ======================================================================== */
+/* The plan (record 23 section 5.4)                                          */
+/* ======================================================================== */
+
+/* The service group a devnode belongs to, or -1: its own service, or for a
+ * filter host the filter's. */
+static int group_of(const DEVREC *d)
+{
+    int g;
+
+    for (g = 0; g < INST_GROUPS; g++) {
+        if (inst_eq(d->Service, groupService[g])) {
+            return g;
+        }
+    }
+    if (inst_msz_has(d->Upper, d->UpperBytes, "xhcicm")) {
+        return 2;
+    }
+    return -1;
+}
+
+static int group_of_inf(int inf)
+{
+    return inf == INST_INF_XHCI ? 0 : inf == INST_INF_UAS ? 1 : 2;
+}
+
+/* %windir%\System32\Drivers\<service>.sys, where every INF of the package
+ * puts its driver (DestinationDirs 10,System32\Drivers) on every system. */
+static void group_binary(int g, char *path, size_t cap)
+{
+    char win[INST_PATH_CHARS];
+    char name[32];
+
+    if (g < 0 || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        path[0] = '\0';
+        return;
+    }
+    inst_copy(name, groupService[g], sizeof(name));
+    strcat(name, ".sys");
+    join(path, cap, win, "System32\\Drivers");
+    join(path, cap, path, name);
+}
+
+/* Record 23 section 5.4: one binary per service, so one verdict per group. */
+static void group_verdicts(void)
+{
+    int g;
+    int i;
+    int newer;
+    int unknown;
+    int binary;
+    int r;
+    INST_U32 v[4];
+    char path[INST_PATH_CHARS];
+
+    for (g = 0; g < INST_GROUPS; g++) {
+        newer = 0;
+        unknown = 0;
+        for (i = 0; i < devCount; i++) {
+            const DEVREC *d = &devs[i];
+            if (group_of(d) != g) {
+                continue;
+            }
+            if (d->VersionState == INST_VS_UNREADABLE) {
+                unknown = 1;
+            } else if (d->VersionState == INST_VS_HAVE &&
+                       inst_ver_cmp(d->Version, pkgVersion) > 0) {
+                newer = 1;
+            }
+        }
+        group_binary(g, path, sizeof(path));
+        r = file_version(path, v);
+        binary = r == 0 ? -2 : r < 0 ? 2 : inst_ver_cmp(v, pkgVersion);
+        if (g == 0 && INST_MY_ARCH == INST_ARCH_X86 && envNow.Nt) {
+            /* The controller's INF installs the helper too (section 5.4). */
+            int hb;
+            char hp[INST_PATH_CHARS];
+            char win[INST_PATH_CHARS];
+            if (GetWindowsDirectoryA(win, sizeof(win)) != 0) {
+                join(hp, sizeof(hp), win, "System32\\Drivers\\xhcihlpr.sys");
+                r = file_version(hp, v);
+                hb = r == 0 ? -2 : r < 0 ? 2 : inst_ver_cmp(v, pkgVersion);
+                if (hb == 2 || (hb == 1 && binary != 2)) {
+                    binary = hb;
+                }
+            }
+        }
+        groupVerdict[g] = inst_group_verdict(newer, unknown, binary, opts.Force);
+        for (i = 0; i < devCount; i++) {
+            DEVREC *d = &devs[i];
+            if (d->Inf < 0 || group_of_inf(d->Inf) != g) {
+                continue;
+            }
+            d->Refused = 0;
+            if (groupVerdict[g] != INST_GROUP_OK && d->Action != INST_ACT_FOREIGN) {
+                d->Refused = 1;
+                d->Runs = 0;
+            }
+        }
+    }
+}
+
+static void plan(void)
+{
+    int i;
+    int k;
+    INST_DEV dv;
+
+    envNow.AnyXhci = 0;
+    envNow.PswController = 0;
+    envNow.CmNhi = 0;
+    for (i = 0; i < devCount; i++) {
+        DEVREC *d = &devs[i];
+        d->Inf = -1;
+        d->Runs = 0;
+        if (!d->Present) {
+            continue;
+        }
+        if (is_controller(d)) {
+            INST_U32 vd;
+            envNow.AnyXhci = 1;
+            if (inst_pci_vendev(first_hw(d), &vd) && XhciPswGate(vd)) {
+                envNow.PswController = 1;
+            }
+        }
+        for (k = 0; k < INST_INF_COUNT; k++) {
+            if (infText[k] == NULL || (k == INST_INF_CMF && !envNow.Nt)) {
+                continue;
+            }
+            if (inst_ids_match(d->Hw, d->HwBytes, d->Compat, d->CompatBytes,
+                               &infIds[k]) >= 0) {
+                d->Inf = k;
+                break;
+            }
+        }
+        if (d->Inf < 0) {
+            continue;
+        }
+        if (d->Inf == INST_INF_CM) {
+            envNow.CmNhi = 1;
+        }
+        memset(&dv, 0, sizeof(dv));
+        dv.HasService = d->Service[0] != '\0';
+        dv.OwnService = inst_eq(d->Service, instInfService[d->Inf]);
+        dv.ServiceIsPci = inst_eq(d->Service, "pci");
+        dv.FilterInf = (d->Inf == INST_INF_CMF);
+        dv.FilterPresent = inst_msz_has(d->Upper, d->UpperBytes, "xhcicm");
+        dv.Problem = d->Problem;
+        dv.VersionState = d->VersionState;
+        memcpy(dv.Version, d->Version, sizeof(dv.Version));
+        if (!envNow.Nt && dv.OwnService && d->VersionState == INST_VS_ABSENT) {
+            /* 98 and ME keep a DriverDate only: the group's binary speaks
+             * for the device (record 23 section 6.3). */
+            char p[INST_PATH_CHARS];
+            group_binary(group_of(d), p, sizeof(p));
+            if (file_version(p, dv.Version) > 0) {
+                dv.VersionState = INST_VS_HAVE;
+            }
+        }
+        d->Action = inst_action(&dv, pkgVersion);
+        d->Runs = inst_action_runs(d->Action, opts.Force);
+        /* /restage: a confirmed binary mismatch reinstalls the INF's devices,
+         * whatever their DriverVersion says (record 23 section 5.7). */
+        if (((opts.Restage && trapOem[d->Inf][0] != '\0') ||
+             restagePending[d->Inf]) &&
+            (d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_UPDATE)) {
+            d->Runs = 1;
+        }
+    }
+    group_verdicts();
+}
+
+static void print_plan(void)
+{
+    int i;
+    int any = 0;
+
+    out("The devices this package's INFs match:\n");
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (d->Inf < 0) {
+            continue;
+        }
+        any = 1;
+        out("  %s\n", d->Desc[0] ? d->Desc : "(no description)");
+        out("    %s\n", d->Id);
+        out("    INF %s; driver %s%s%s; %s%s\n", instInfFile[d->Inf],
+            d->Service[0] ? d->Service : "none",
+            d->VersionText[0] ? " " : "", d->VersionText,
+            inst_action_text(d->Action),
+            (d->Runs && (d->Action == INST_ACT_CURRENT ||
+                         d->Action == INST_ACT_NEWER)) ? " - /force: reinstall" : "");
+        if (d->Problem != 0) {
+            out("    problem code %lu\n", (unsigned long)d->Problem);
+        }
+        if (d->Refused) {
+            out("    LEFT: %s\n",
+                groupVerdict[group_of_inf(d->Inf)] == INST_GROUP_REFUSED_UNKNOWN ?
+                "a version of this driver could not be read" :
+                "a newer release of this driver is installed (/force goes back)");
+        } else if (d->Runs && opts.Restage && trapOem[d->Inf][0] != '\0') {
+            out("    /restage: reinstalled from this package\n");
+        }
+    }
+    if (!any) {
+        out("  none present. The INFs are still staged for devices that "
+            "appear later.\n");
+    }
+    out("\n");
+}
+
+/* The input warning (record 23 section 5.8), before the confirmation. */
+static void input_warning(void)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && devs[i].Inf == INST_INF_XHCI &&
+            is_controller(&devs[i]) && devs[i].Runs) {
+            out("BEFORE YOU GO ON: the USB keyboard and mouse on this "
+                "controller stop for a\nmoment while it restarts. From 2.3.x "
+                "or earlier on Windows XP, XP x64 and\n98 SE they do not work "
+                "until Windows' questions for the new root hub and hubs\nare "
+                "answered, so have a keyboard and mouse that do not go through "
+                "this driver\n(PS/2, a laptop's built-in ones, or a USB "
+                "controller another driver runs).\n\n");
+            return;
+        }
+    }
+}
+
+/* ======================================================================== */
+/* The package (record 23 section 4)                                         */
+/* ======================================================================== */
+
+static int refuse(const char *a, const char *b)
+{
+    out("REFUSED: %s%s\n", a, b != NULL ? b : "");
+    return 0;
+}
+
+static int check_package(void)
+{
+    char self[INST_PATH_CHARS];
+    char tail[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char name[INST_PATH_CHARS];
+    size_t n;
+    size_t t;
+    int k;
+    int i;
+    int cmFiles;
+    INST_U32 v[4];
+    INST_U32 machine;
+    INST_U32 fv[4];
+    DWORD size;
+    char *buf;
+    char flavour[16];
+    const char *wantFlavour;
+    int markers;
+
+    if (GetModuleFileNameA(NULL, self, sizeof(self)) == 0) {
+        return refuse("the tool's own path could not be read.", NULL);
+    }
+    inst_copy(tail, "\\tools\\xhciinst\\", sizeof(tail));
+    strcat(tail, INST_MY_NAME);
+    n = strlen(self);
+    t = strlen(tail);
+    if (n <= t || !inst_eq(self + n - t, tail)) {
+        out("This tool runs from %s.\n", self);
+        return refuse("it must run from the package's tools\\xhciinst\\ "
+                      "directory. Unzip the WHOLE package (every directory) "
+                      "and run INSTALL.BAT from its top level.", NULL);
+    }
+    inst_copy(root, self, sizeof(root));
+    root[n - t] = '\0';
+    if (opts.Dir[0] == '\0') {
+        inst_copy(opts.Dir, INST_DEFAULT_DIR, sizeof(opts.Dir));
+    }
+    if (strchr(opts.Dir, '\\') != NULL || strchr(opts.Dir, '/') != NULL ||
+        strchr(opts.Dir, ':') != NULL || strstr(opts.Dir, "..") != NULL) {
+        return refuse("/dir names a directory of the package: ", opts.Dir);
+    }
+    n = strlen(opts.Dir);
+    if (n < 4 || !inst_eq(opts.Dir + n - 4, INST_DIR_SUFFIX)) {
+        out("%s is the %s build; %s is not its architecture's directory.\n",
+            INST_MY_NAME, INST_MY_ARCH == INST_ARCH_X86 ? "32-bit" : "x64",
+            opts.Dir);
+        return refuse("mixing architectures. Run INSTALL.BAT, which picks "
+                      "the right program and directory.", NULL);
+    }
+    if (inst_starts(opts.Dir, "release-")) {
+        wantFlavour = "RELEASE";
+    } else if (inst_starts(opts.Dir, "debug-")) {
+        wantFlavour = "DEBUG";
+        out("The debug- directory is for troubleshooting only; install it "
+            "only if asked.\n");
+    } else {
+        return refuse("not a flavour directory of the package: ", opts.Dir);
+    }
+    join(pkgDir, sizeof(pkgDir), root, opts.Dir);
+    out("Package:   %s\n", root);
+    out("Directory: %s\n\n", pkgDir);
+
+    cmFiles = 0;
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        join(path, sizeof(path), pkgDir, instInfFile[k]);
+        infText[k] = read_file(path, NULL);
+        if (k >= INST_INF_CM) {
+            cmFiles += infText[k] != NULL;
+        } else if (infText[k] == NULL) {
+            return refuse("a file of the package is missing or unreadable: ",
+                          path);
+        }
+    }
+    join(path, sizeof(path), pkgDir, "xhcicm.sys");
+    cmFiles += file_exists(path, NULL);
+    if (cmFiles != 0 && cmFiles != 3) {
+        return refuse("the package holds part of the Thunderbolt driver "
+                      "(xhcicm.inf, xhcicmf.inf and xhcicm.sys go together).",
+                      NULL);
+    }
+    haveCm = (cmFiles == 3);
+    if (!haveCm) {
+        out("This package carries no Thunderbolt or USB4 driver "
+            "(xhcicm.sys); going on without it.\n\n");
+    }
+    if (!inst_ver_parse(XHCIINST_VERSION, pkgVersion)) {
+        return refuse("the tool's own version does not parse.", NULL);
+    }
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (infText[k] == NULL) {
+            continue;
+        }
+        if (!inst_inf_driverver(infText[k], v)) {
+            return refuse("no DriverVer in ", instInfFile[k]);
+        }
+        if (inst_ver_cmp(v, pkgVersion) != 0) {
+            out("%s is %lu.%lu.%lu.%lu; this tool is %s.\n", instInfFile[k],
+                (unsigned long)v[0], (unsigned long)v[1], (unsigned long)v[2],
+                (unsigned long)v[3], XHCIINST_VERSION);
+            return refuse("an INF of another release is in the directory. "
+                          "Unzip this release's package afresh.", NULL);
+        }
+        if (!inst_inf_arch_ok(infText[k], INST_MY_ARCH)) {
+            return refuse("the INF is not this architecture's: ",
+                          instInfFile[k]);
+        }
+        for (i = 0; inst_inf_source_file(infText[k], i, name, sizeof(name)); i++) {
+            join(path, sizeof(path), pkgDir, name);
+            if (!file_exists(path, &size) || size == 0) {
+                return refuse("a file the INF names is missing or empty: ",
+                              path);
+            }
+            n = strlen(name);
+            if (n > 4 && inst_eq(name + n - 4, ".sys")) {
+                buf = read_file(path, &size);
+                if (buf == NULL ||
+                    !inst_pe_machine((const unsigned char *)buf, size, &machine) ||
+                    machine != INST_PE_MINE) {
+                    free(buf);
+                    return refuse("a driver is not this architecture's: ",
+                                  path);
+                }
+                markers = inst_flavour_marker((const unsigned char *)buf, size,
+                                              flavour, sizeof(flavour));
+                free(buf);
+                if ((markers == 0 && (inst_eq(name, "xhci98.sys") ||
+                                      inst_eq(name, "xhciuas.sys"))) ||
+                    markers > 1 ||
+                    (markers == 1 && !inst_eq(flavour, wantFlavour))) {
+                    out("%s carries %d flavour marker(s)%s%s; this directory "
+                        "is %s.\n", name, markers, markers ? ", the first " : "",
+                        flavour, wantFlavour);
+                    return refuse("a driver of another build flavour is in "
+                                  "the directory. Unzip the package afresh.",
+                                  NULL);
+                }
+                if (file_version(path, fv) <= 0 ||
+                    inst_ver_cmp(fv, pkgVersion) != 0) {
+                    return refuse("a driver is not this release's (its file "
+                                  "version differs): ", path);
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+static void load_ids(void)
+{
+    int k;
+
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        infIds[k].Count = 0;
+        if (infText[k] != NULL) {
+            inst_inf_models(infText[k], &envNow, &infIds[k]);
+        }
+    }
+}
+
+/* ======================================================================== */
+/* Registry values (record 23 section 8)                                     */
+/* ======================================================================== */
+
+/* 1 when device d takes value v's writes after this run. */
+static int value_target(const DEVREC *d, int v)
+{
+    int inf = instValues[v].Inf;
+
+    if (!d->Present || d->Inf != inf || d->Refused) {
+        return 0;
+    }
+    if (inf == INST_INF_XHCI && !is_controller(d)) {
+        return 0;
+    }
+    if (!envNow.Nt) {
+        return inst_eq(d->Service, instInfService[inf]);
+    }
+    return d->Action == INST_ACT_INSTALL || d->Action == INST_ACT_UPDATE ||
+           d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_NEWER;
+}
+
+static int value_now(const DEVREC *d, const char *name, DWORD *value)
+{
+    char path[INST_PATH_CHARS];
+
+    if (d->Driver[0] == '\0' || !inst_eq(d->Service, instInfService[d->Inf])) {
+        return -1;
+    }
+    driver_key_path(d, path, sizeof(path));
+    return reg_dword(HKEY_LOCAL_MACHINE, path, name, value) ? 1 : 0;
+}
+
+/* Ask, or take /set and /defaults (record 23 section 8.3). */
+static void ask_values(void)
+{
+    int v;
+    int i;
+    int k;
+    char line[64];
+    char mask[64];
+
+    memset(answerSet, 0, sizeof(answerSet));
+    for (k = 0; k < opts.SetCount; k++) {
+        answerSet[opts.SetIndex[k]] = 1;
+        answerValue[opts.SetIndex[k]] = opts.SetValue[k];
+    }
+    for (v = 0; v < instValueCount; v++) {
+        INST_U32 m = inst_value_asked_mask(v, &envNow);
+        INST_U32 def;
+        int targets = 0;
+        int haveDef;
+        if (infText[instValues[v].Inf] == NULL) {
+            continue;
+        }
+        haveDef = inst_inf_addreg_default(infText[instValues[v].Inf],
+                                          instValues[v].Name, &def);
+        for (i = 0; i < devCount; i++) {
+            targets += value_target(&devs[i], v);
+        }
+        if (answerSet[v]) {
+            out("%s: set to %lu by /set%s.\n", instValues[v].Name,
+                (unsigned long)answerValue[v],
+                targets ? "" : " (no device takes it now: nothing to write)");
+            if (instValues[v].Caution != NULL &&
+                (instValues[v].CautionMask == 0 ||
+                 (instValues[v].CautionMask & (1UL << answerValue[v])) != 0)) {
+                out("  NOTE: %s\n", instValues[v].Caution);
+            }
+            continue;
+        }
+        if (!inst_value_applies(v, &envNow) || targets == 0 || !haveDef) {
+            continue;
+        }
+        if (opts.Defaults && !opts.List) {
+            continue;
+        }
+        out("%s - %s\n", instValues[v].Name, instValues[v].Meaning);
+        for (i = 0; i < devCount; i++) {
+            DWORD now;
+            int r;
+            if (!value_target(&devs[i], v)) {
+                continue;
+            }
+            r = value_now(&devs[i], instValues[v].Name, &now);
+            if (r > 0) {
+                out("  now: %lu (%s)\n", (unsigned long)now, devs[i].Desc);
+            } else if (r == 0) {
+                out("  now: not set, the install writes %lu (%s)\n",
+                    (unsigned long)def, devs[i].Desc);
+            } else {
+                out("  now: new install, the default %lu (%s)\n",
+                    (unsigned long)def, devs[i].Desc);
+            }
+        }
+        inst_mask_text(m, mask, sizeof(mask));
+        out("  default: %lu     allowed: %s\n", (unsigned long)def, mask);
+        if (instValues[v].Caution != NULL &&
+            (instValues[v].CautionMask == 0 || (instValues[v].CautionMask & m) != 0)) {
+            out("  NOTE: %s\n", instValues[v].Caution);
+        }
+        if (instValues[v].Inf == INST_INF_CM) {
+            for (i = 0; i < devCount; i++) {
+                if (value_target(&devs[i], v) &&
+                    devs[i].Action == INST_ACT_INSTALL) {
+                    out("  NOTE: a new install starts with the default; your "
+                        "answer applies from the next\n  restart. Until then "
+                        "Thunderbolt devices are approved by the default: "
+                        "unplug the\n  dock until the restart if you answer "
+                        "0.\n");
+                    break;
+                }
+            }
+        }
+        if (opts.List) {
+            out("\n");
+            continue;
+        }
+        for (;;) {
+            INST_U32 a;
+            int r;
+            out("  new value [Enter keeps the value now]: ");
+            if (!read_line(line, sizeof(line))) {
+                out("\n");
+                break;
+            }
+            r = inst_value_answer(line, m, &a);
+            if (r == 0) {
+                break;
+            }
+            if (r > 0) {
+                answerSet[v] = 1;
+                answerValue[v] = a;
+                break;
+            }
+            out("  %s is not one of: %s\n", line, mask);
+        }
+        out("\n");
+    }
+}
+
+static void write_values(void)
+{
+    int v;
+    int i;
+    char path[INST_PATH_CHARS];
+    HKEY k;
+    DWORD now;
+    DWORD val;
+    int r;
+    LONG w;
+
+    for (v = 0; v < instValueCount; v++) {
+        if (!answerSet[v]) {
+            continue;
+        }
+        for (i = 0; i < devCount; i++) {
+            DEVREC *d = &devs[i];
+            if (!d->Present || d->Inf != instValues[v].Inf ||
+                (d->Inf == INST_INF_XHCI && !is_controller(d)) ||
+                !inst_eq(d->Service, instInfService[d->Inf]) ||
+                d->Driver[0] == '\0') {
+                continue;
+            }
+            r = value_now(d, instValues[v].Name, &now);
+            if (r > 0 && now == answerValue[v]) {
+                out("%s stays %lu on %s.\n", instValues[v].Name,
+                    (unsigned long)now, d->Desc);
+                continue;
+            }
+            driver_key_path(d, path, sizeof(path));
+            val = (DWORD)answerValue[v];
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_SET_VALUE, &k)
+                != ERROR_SUCCESS) {
+                out("%s could not be written on %s (its driver key did not "
+                    "open).\n", instValues[v].Name, d->Desc);
+                flagFailed = 1;
+                continue;
+            }
+            w = RegSetValueExA(k, instValues[v].Name, 0, REG_DWORD,
+                               (const BYTE *)&val, sizeof(val));
+            RegCloseKey(k);
+            if (w != ERROR_SUCCESS) {
+                out("%s could not be written on %s (error %ld).\n",
+                    instValues[v].Name, d->Desc, (long)w);
+                flagFailed = 1;
+                continue;
+            }
+            if (r > 0) {
+                out("%s set from %lu to %lu on %s.\n", instValues[v].Name,
+                    (unsigned long)now, (unsigned long)val, d->Desc);
+            } else {
+                out("%s set to %lu on %s.\n", instValues[v].Name,
+                    (unsigned long)val, d->Desc);
+            }
+            logonly("  wrote HKLM\\%s\\%s = %lu\n", path, instValues[v].Name,
+                    (unsigned long)val);
+            if (inst_eq(instValues[v].Name, "XhciForceBulkOnly")) {
+                out("  A disk takes it when it is next connected.\n");
+            } else {
+                out("  It takes effect when the driver next starts (restart "
+                    "Windows, or disable and enable the device).\n");
+                flagRestart = 1;
+            }
+        }
+    }
+}
+
+/* ======================================================================== */
+/* NT: staging, the trap, the installs (record 23 sections 5.5 to 5.9)       */
+/* ======================================================================== */
+
+/* The local copies (record 23 section 4.4): %windir%\XHCI98\<version>-<arch>-
+ * <flavour>-<content tag>, one immutable directory per package content, each
+ * with an XHCIINST.LST naming the files the tool put there. */
+static int local_dir(char *dir, size_t cap)
+{
+    char win[INST_PATH_CHARS];
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(dir, cap, win, "XHCI98");
+    return 1;
+}
+
+/* Delete the files one copy's list names, the list, and the directory if
+ * it is then empty. */
+static void local_remove(const char *dir)
+{
+    char lst[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+
+    join(lst, sizeof(lst), dir, "XHCIINST.LST");
+    text = read_file(lst, NULL);
+    if (text != NULL) {
+        for (p = text; *p != '\0'; p = nl) {
+            nl = strchr(p, '\n');
+            if (nl == NULL) {
+                nl = p + strlen(p);
+            } else {
+                *nl++ = '\0';
+            }
+            if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+                p[strlen(p) - 1] = '\0';
+            }
+            if (p[0] == '\0' || strchr(p, '\\') != NULL || strchr(p, ':') != NULL) {
+                continue;
+            }
+            join(path, sizeof(path), dir, p);
+            SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+            DeleteFileA(path);
+        }
+        free(text);
+        DeleteFileA(lst);
+    }
+    if (RemoveDirectoryA(dir)) {
+        out("%s removed.\n", dir);
+    } else if (GetFileAttributesA(dir) != 0xFFFFFFFFUL) {
+        out("%s kept: it holds files this tool did not put there.\n", dir);
+    }
+}
+
+/* Every local copy, then the work file, then %windir%\XHCI98 if empty. */
+static void local_remove_all(void)
+{
+    char rootDir[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char sub[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+
+    if (!local_dir(rootDir, sizeof(rootDir))) {
+        return;
+    }
+    join(pattern, sizeof(pattern), rootDir, "*.*");
+    h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                strcmp(fd.cFileName, ".") != 0 && strcmp(fd.cFileName, "..") != 0) {
+                join(sub, sizeof(sub), rootDir, fd.cFileName);
+                local_remove(sub);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    join(sub, sizeof(sub), rootDir, "RESTAGE.LST");
+    DeleteFileA(sub);
+    if (RemoveDirectoryA(rootDir)) {
+        out("%s removed.\n", rootDir);
+    }
+}
+
+/* The content tag: FNV-1a of each file's upper-cased name and bytes,
+ * combined by XOR so the directory listing's order does not matter. */
+static int package_tag(INST_U32 *tag)
+{
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char name[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    DWORD n;
+    char *buf;
+    INST_U32 x = 0;
+    INST_U32 one;
+    size_t i;
+
+    join(pattern, sizeof(pattern), pkgDir, "*.*");
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue;
+        }
+        inst_copy(name, fd.cFileName, sizeof(name));
+        for (i = 0; name[i] != '\0'; i++) {
+            name[i] = (char)inst_upper((unsigned char)name[i]);
+        }
+        join(path, sizeof(path), pkgDir, fd.cFileName);
+        buf = read_file(path, &n);
+        if (buf == NULL) {
+            FindClose(h);
+            return 0;
+        }
+        one = inst_fnv1a(INST_FNV_START, (const unsigned char *)name, strlen(name));
+        one = inst_fnv1a(one, (const unsigned char *)buf, n);
+        free(buf);
+        x ^= one;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    *tag = x;
+    return 1;
+}
+
+static int make_local_copy(void)
+{
+    char rootDir[INST_PATH_CHARS];
+    char name[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+    char lst[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    FILE *f;
+    INST_U32 tag;
+    int n = 0;
+
+    if (!local_dir(rootDir, sizeof(rootDir)) || !package_tag(&tag)) {
+        out("The local copy could not be prepared.\n");
+        return 0;
+    }
+    CreateDirectoryA(rootDir, NULL);
+    _snprintf(name, sizeof(name) - 1, "%s-%s-%08lX", XHCIINST_VERSION,
+              opts.Dir, (unsigned long)tag);
+    name[sizeof(name) - 1] = '\0';
+    join(srcDir, sizeof(srcDir), rootDir, name);
+    join(lst, sizeof(lst), srcDir, "XHCIINST.LST");
+    join(pattern, sizeof(pattern), pkgDir, "*.*");
+    if (GetFileAttributesA(lst) != 0xFFFFFFFFUL) {
+        /* The same content is already there: never rewritten, only checked. */
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            return 0;
+        }
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                continue;
+            }
+            join(from, sizeof(from), pkgDir, fd.cFileName);
+            join(to, sizeof(to), srcDir, fd.cFileName);
+            if (!same_file(from, to)) {
+                FindClose(h);
+                out("%s differs from this package: refused.\n", to);
+                return 0;
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        out("The local copy %s is this package already.\n", srcDir);
+        return 1;
+    }
+    CreateDirectoryA(srcDir, NULL);
+    f = fopen(lst, "w");
+    if (f == NULL) {
+        out("%s could not be written.\n", lst);
+        return 0;
+    }
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        fclose(f);
+        out("The package directory could not be listed.\n");
+        return 0;
+    }
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            continue;
+        }
+        join(from, sizeof(from), pkgDir, fd.cFileName);
+        join(to, sizeof(to), srcDir, fd.cFileName);
+        fprintf(f, "%s\n", fd.cFileName);
+        if (!CopyFileA(from, to, TRUE)) {
+            out("%s could not be copied (error %lu).\n", fd.cFileName,
+                (unsigned long)GetLastError());
+            FindClose(h);
+            fclose(f);
+            return 0;
+        }
+        SetFileAttributesA(to, FILE_ATTRIBUTE_NORMAL);
+        n++;
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    fclose(f);
+    out("Copied %d files to %s; the install takes them from there.\n", n,
+        srcDir);
+    return 1;
+}
+
+/* The /restage work file (record 23 section 5.7): the INFs whose devices
+ * still owe a reinstall after their stored package was replaced. */
+static void restage_path(char *path, size_t cap)
+{
+    char rootDir[INST_PATH_CHARS];
+
+    if (!local_dir(rootDir, sizeof(rootDir))) {
+        path[0] = '\0';
+        return;
+    }
+    join(path, cap, rootDir, "RESTAGE.LST");
+}
+
+static void restage_read(void)
+{
+    char path[INST_PATH_CHARS];
+    char *text;
+    int k;
+
+    memset(restagePending, 0, sizeof(restagePending));
+    restage_path(path, sizeof(path));
+    text = path[0] ? read_file(path, NULL) : NULL;
+    if (text == NULL) {
+        return;
+    }
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (strstr(text, instInfFile[k]) != NULL) {
+            restagePending[k] = 1;
+            out("Unfinished /restage work: every device of %s is reinstalled.\n",
+                instInfFile[k]);
+        }
+    }
+    free(text);
+}
+
+static int restage_write(void)
+{
+    char rootDir[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    FILE *f;
+    int k;
+    int any = 0;
+
+    restage_path(path, sizeof(path));
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        any |= restagePending[k];
+    }
+    if (!any) {
+        if (path[0]) {
+            DeleteFileA(path);
+        }
+        return 1;
+    }
+    if (!local_dir(rootDir, sizeof(rootDir))) {
+        return 0;
+    }
+    CreateDirectoryA(rootDir, NULL);
+    f = fopen(path, "w");
+    if (f == NULL) {
+        return 0;
+    }
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (restagePending[k]) {
+            fprintf(f, "%s\n", instInfFile[k]);
+        }
+    }
+    fclose(f);
+    return 1;
+}
+/* Vista and 7, read only (record 23 section 5.7): an oem*.inf byte-identical
+ * to the package's INF whose stored package's files differ from ours. */
+static void trap_scan(void)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char store[INST_PATH_CHARS];
+    char name[INST_PATH_CHARS];
+    char a[INST_PATH_CHARS];
+    char b[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char *text;
+    char *slash;
+    int k;
+    int i;
+
+    memset(trapOem, 0, sizeof(trapOem));
+    if (!envNow.Nt || envNow.Major < 6 || api.StoreLocation == NULL ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\oem*.inf");
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    do {
+        join(path, sizeof(path), win, "inf");
+        join(path, sizeof(path), path, fd.cFileName);
+        text = read_file(path, NULL);
+        if (text == NULL) {
+            continue;
+        }
+        for (k = 0; k < INST_INF_COUNT; k++) {
+            int differs = 0;
+            if (infText[k] == NULL || strcmp(text, infText[k]) != 0) {
+                continue;
+            }
+            if (!api.StoreLocation(fd.cFileName, NULL, NULL, store,
+                                   sizeof(store), NULL)) {
+                logonly("SetupGetInfDriverStoreLocation(%s): 0x%08lX\n",
+                        fd.cFileName, (unsigned long)GetLastError());
+                continue;
+            }
+            slash = strrchr(store, '\\');
+            if (slash != NULL) {
+                *slash = '\0';
+            }
+            for (i = 0; inst_inf_source_file(infText[k], i, name, sizeof(name));
+                 i++) {
+                join(a, sizeof(a), pkgDir, name);
+                join(b, sizeof(b), store, name);
+                if (!same_file(a, b)) {
+                    logonly("%s differs from %s\n", a, b);
+                    differs = 1;
+                }
+            }
+            if (differs) {
+                inst_copy(trapOem[k], fd.cFileName, sizeof(trapOem[k]));
+            }
+        }
+        free(text);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (trapOem[k][0] == '\0') {
+            continue;
+        }
+        out("The driver store holds a DIFFERENT build of %s under an identical "
+            "INF (%s,\nthe same DriverVer): Windows would install the stored "
+            "files, not this package's.\n", instInfFile[k], trapOem[k]);
+        if (opts.Restage) {
+            out("/restage: that package is replaced, and every device of %s "
+                "reinstalled.\n\n", instInfFile[k]);
+        } else {
+            out("Its devices are left; run INSTALL.BAT /restage to replace the "
+                "stored package.\n\n");
+        }
+    }
+}
+
+static int stage_nt(void)
+{
+    int k;
+    char path[INST_PATH_CHARS];
+    char dest[INST_PATH_CHARS];
+    char *component;
+
+    if (api.CopyOem == NULL) {
+        out("SetupCopyOEMInfA is missing: nothing can be staged.\n");
+        return 0;
+    }
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (infText[k] == NULL) {
+            continue;
+        }
+        if (groupVerdict[group_of_inf(k)] != INST_GROUP_OK) {
+            out("%s is not staged: its driver's installed version is newer or "
+                "unknown.\n", instInfFile[k]);
+            continue;
+        }
+        if (trapOem[k][0] != '\0') {
+            if (!opts.Restage) {
+                infTrap[k] = 1;
+                flagSteps = 1;
+                continue;
+            }
+            /* The reinstall owed is recorded before the stored package goes,
+             * so an interrupted run resumes it (record 23 section 5.7). */
+            restagePending[k] = 1;
+            if (!restage_write()) {
+                out("/restage: the work file could not be written; nothing "
+                    "removed.\n");
+                restagePending[k] = 0;
+                return 0;
+            }
+            if (api.UninstallOem == NULL ||
+                !api.UninstallOem(trapOem[k], INST_SUOI_FORCEDELETE, NULL)) {
+                out("/restage: the stored %s could not be removed (error "
+                    "0x%08lX).\n", trapOem[k], (unsigned long)GetLastError());
+                return 0;
+            }
+            out("/restage: the stored %s was removed.\n", trapOem[k]);
+            flagChanged = 1;
+        }
+        join(path, sizeof(path), srcDir, instInfFile[k]);
+        dest[0] = '\0';
+        component = NULL;
+        logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, srcDir);
+        if (!api.CopyOem(path, srcDir, SPOST_PATH, 0, dest, sizeof(dest), NULL,
+                         &component)) {
+            out("%s could not be staged (error 0x%08lX).%s\n", instInfFile[k],
+                (unsigned long)GetLastError(),
+                trapOem[k][0] ? " Run INSTALL.BAT again: it stages from the "
+                                "same local copy." : "");
+            return 0;
+        }
+        out("Staged %s as %s.\n", instInfFile[k], component ? component : dest);
+        flagChanged = 1;
+    }
+    out("\n");
+    return 1;
+}
+
+/* 1 when every present device carrying hwid is one this step installs. */
+static int hwid_clear(const char *hwid, int inf)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!d->Present) {
+            continue;
+        }
+        if (!inst_msz_has(d->Hw, d->HwBytes, hwid) &&
+            !inst_msz_has(d->Compat, d->CompatBytes, hwid)) {
+            continue;
+        }
+        if (d->Inf != inf || !d->Runs) {
+            out("  %s is shared with %s (%s), which this run leaves; "
+                "neither is changed.\n", hwid, d->Id, inst_action_text(d->Action));
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void note_changed(const DEVREC *d)
+{
+    if (changedCount < INST_MAX_CHANGED) {
+        inst_copy(changedId[changedCount], d->Id, INST_ID_CHARS);
+        changedInf[changedCount] = d->Inf;
+        changedCount++;
+    }
+}
+
+/* Install or update the planned devices of one INF; controllers selects the
+ * xhci98 controllers (1), the rest of xhci98's devices (0), or every device
+ * (-1). Returns 0 when a failure leaves the order meaningless. */
+static int install_inf(int inf, int controllers)
+{
+    char path[INST_PATH_CHARS];
+    char hwid[INST_ID_CHARS];
+    int i;
+    int j;
+    BOOL reboot;
+    DWORD err;
+    int ok = 1;
+
+    join(path, sizeof(path), srcDir, instInfFile[inf]);
+    for (i = 0; i < devCount; i++) {
+        DEVREC *d = &devs[i];
+        if (!d->Present || d->Inf != inf || !d->Runs || d->Done) {
+            continue;
+        }
+        if (controllers == 1 && !is_controller(d)) {
+            continue;
+        }
+        if (controllers == 0 && is_controller(d)) {
+            continue;
+        }
+        if (infTrap[inf]) {
+            out("Left (the driver store holds another build): %s\n", d->Desc);
+            d->Done = 1;
+            continue;
+        }
+        inst_copy(hwid, first_hw(d), sizeof(hwid));
+        if (!hwid_clear(hwid, inf)) {
+            d->Done = 1;
+            flagSteps = 1;
+            continue;
+        }
+        /* One call reaches every device carrying the id. */
+        for (j = 0; j < devCount; j++) {
+            if (devs[j].Present && devs[j].Inf == inf &&
+                (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                 inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
+                devs[j].Done = 1;
+                note_changed(&devs[j]);
+            }
+        }
+        if (api.UpdateDriver == NULL) {
+            out("UpdateDriverForPlugAndPlayDevicesA is missing.\n");
+            flagFailed = 1;
+            return 0;
+        }
+        out("%s %s ... ", d->Action == INST_ACT_INSTALL ? "Installing" :
+            d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
+            d->Desc[0] ? d->Desc : d->Id);
+        reboot = FALSE;
+        logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", FORCE)\n",
+                hwid, path);
+        if (api.UpdateDriver(NULL, hwid, path, INST_INSTALLFLAG_FORCE, &reboot)) {
+            out("done%s.\n", reboot ? ", restart needed" : "");
+            flagChanged = 1;
+            if (reboot) {
+                flagRestart = 1;
+            }
+            continue;
+        }
+        err = GetLastError();
+        out("FAILED (error 0x%08lX).\n", (unsigned long)err);
+        if (err == ERROR_IN_WOW64) {
+            out("  A 32-bit program cannot install drivers on 64-bit Windows; "
+                "run %s.\n", INST_OTHER_NAME);
+        } else if (err == ERROR_CANCELLED) {
+            out("  The installation was cancelled (the signature question "
+                "answered no?).\n");
+        }
+        flagFailed = 1;
+        if (controllers == 1) {
+            ok = 0;
+            break;
+        }
+    }
+    return ok;
+}
+
+/* 1 when nothing is pending; 0 when an installation is still in progress. */
+static int wait_installs(void)
+{
+    DWORD r;
+
+    if (api.WaitInstall == NULL) {
+        return 1;
+    }
+    out("Waiting for Windows to finish installing what appeared ... ");
+    r = api.WaitInstall(INST_INSTALL_WAIT_MS);
+    if (r == WAIT_OBJECT_0) {
+        out("done.\n");
+        return 1;
+    }
+    out(r == WAIT_TIMEOUT ? "still busy after a minute.\n" :
+                            "the wait failed.\n");
+    out("\nWindows is still installing something - usually a Found New "
+        "Hardware window\nwaiting for an answer. Finish or cancel those "
+        "windows, then run INSTALL.BAT\nagain: it goes on from here. (The "
+        "tool does not install under a wizard.)\n");
+    flagSteps = 1;
+    return 0;
+}
+
+/* 1 when the INF a driver key names (in %windir%\inf) is this package's, 0
+ * when it is not, -1 when it cannot be read. */
+static int inf_path_is_ours(const char *infPath)
+{
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char *text;
+    int r;
+
+    if (infPath[0] == '\0' || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return -1;
+    }
+    join(path, sizeof(path), win, "inf");
+    join(path, sizeof(path), path, infPath);
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        return -1;
+    }
+    r = inst_inf_is_ours(text);
+    free(text);
+    return r;
+}
+
+static int was_changed(const char *id)
+{
+    int c;
+
+    for (c = 0; c < changedCount; c++) {
+        if (inst_eq(changedId[c], id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Record 23 section 5.9: each changed device bound, at the package version,
+ * started, with no problem; otherwise the reason decides the flag. */
+static void check_results(void)
+{
+    int c;
+    int i;
+    int ctrlStarted = 0;
+    int rootHub = 0;
+
+    out("\nAfterwards:\n");
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!d->Present) {
+            continue;
+        }
+        if (inst_bus_id(d->Id) == 1 && inst_starts(d->Id, "USB\\XHCI98_ROOT_HUB")) {
+            rootHub = 1;
+        }
+        if (d->Inf < 0) {
+            continue;
+        }
+        out("  %s: %s %s%s", d->Desc[0] ? d->Desc : d->Id,
+            d->Service[0] ? d->Service : "no driver", d->VersionText,
+            (d->Status & INST_DN_STARTED) ? ", started" : "");
+        if (d->Problem != 0) {
+            out(", problem code %lu", (unsigned long)d->Problem);
+        }
+        out("\n");
+    }
+    for (c = 0; c < changedCount; c++) {
+        const DEVREC *d = NULL;
+        int ok;
+        for (i = 0; i < devCount; i++) {
+            if (inst_eq(devs[i].Id, changedId[c])) {
+                d = &devs[i];
+                break;
+            }
+        }
+        if (d == NULL || !d->Present) {
+            out("  %s: gone after its install.\n", changedId[c]);
+            flagFailed = 1;
+            continue;
+        }
+        ok = (changedInf[c] == INST_INF_CMF ?
+              (inst_eq(d->Service, "pci") &&
+               inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
+               d->InfPathState > 0 && inf_path_is_ours(d->InfPath) == 1) :
+              inst_eq(d->Service, instInfService[changedInf[c]])) &&
+             d->VersionState == INST_VS_HAVE &&
+             inst_ver_cmp(d->Version, pkgVersion) == 0 &&
+             (d->Status & INST_DN_STARTED) && d->Problem == 0;
+        if (ok) {
+            if (changedInf[c] == INST_INF_XHCI && is_controller(d)) {
+                ctrlStarted = 1;
+            }
+            continue;
+        }
+        if (d->Problem == INST_PROB_NEED_RESTART) {
+            flagRestart = 1;
+        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 &&
+                   (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
+                   flagRestart) {
+            /* 32-bit Vista and 7 hold the controller until the helper's
+             * restart (release notes, "Installing", step 3). */
+        } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_AMD64 &&
+                   (d->Problem == 52UL || d->Problem == 39UL) &&
+                   !testSigningConfirmed) {
+            out("  %s does not load: test-signing mode is needed (see the "
+                "note above).\n", d->Desc);
+            flagSteps = 1;
+        } else if (flagRestart && d->Problem == 0) {
+            /* The old release runs until the restart asked for. */
+        } else {
+            out("  %s did not end as installed (problem %lu, %s).\n",
+                d->Desc, (unsigned long)d->Problem, d->VersionText);
+            flagFailed = 1;
+        }
+    }
+    /* The devices this run did not change are read too: a current device
+     * already in trouble is not a success to report. */
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!d->Present || d->Inf < 0 || d->Problem == 0 || was_changed(d->Id) ||
+            group_of(d) < 0) {
+            continue;
+        }
+        if (d->Problem == 22UL) {
+            out("  %s is disabled in Device Manager.\n", d->Desc);
+        } else {
+            out("  %s already had problem code %lu, and still has.\n",
+                d->Desc, (unsigned long)d->Problem);
+            flagSteps = 1;
+        }
+    }
+    if (ctrlStarted && !rootHub && !flagRestart) {
+        out("  A controller started but no root hub of this driver is "
+            "present.\n");
+        flagFailed = 1;
+    }
+}
+
+static int old_bus_devnodes(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < devCount; i++) {
+        if (inst_bus_id(devs[i].Id) == 2) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Record 23 section 5.11. */
+static void offer_cleanup(void)
+{
+    char path[INST_PATH_CHARS];
+    char cmd[INST_PATH_CHARS + 32];
+    char line[16];
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD code;
+    int n = old_bus_devnodes();
+
+    if (n == 0) {
+        return;
+    }
+    out("\n%d old XHCI98\\ entries (left by an update from 2.3.x or earlier) "
+        "are still recorded.\nNothing needs them removed. XHCICLN lists them "
+        "and can remove them (it asks its own\nquestion, and refuses before "
+        "the restart an update needs).\n", n);
+    if (!opts.Clean) {
+        out("Run XHCICLN now? [y/N]: ");
+        if (!read_line(line, sizeof(line)) ||
+            (line[0] != 'y' && line[0] != 'Y') || line[1] != '\0') {
+            out("Not run.\n");
+            return;
+        }
+    }
+    join(path, sizeof(path), root, "tools\\xhcicln");
+    join(path, sizeof(path), path, INST_CLN_NAME);
+    if (!file_exists(path, NULL)) {
+        out("%s is not in the package; not run.\n", path);
+        return;
+    }
+    inst_copy(cmd, "\"", sizeof(cmd));
+    strcat(cmd, path);
+    strcat(cmd, "\" -remove");
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    logonly("CreateProcess(%s)\n", cmd);
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+        out("%s could not be started (error 0x%08lX).\n", INST_CLN_NAME,
+            (unsigned long)GetLastError());
+        return;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (!GetExitCodeProcess(pi.hProcess, &code)) {
+        code = 0xFFFFFFFFUL;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    out("%s ended with exit code %lu.\n", INST_CLN_NAME, (unsigned long)code);
+    if (code == 3) {
+        flagRestart = 1;
+    } else if (code == 2 || code == 0xFFFFFFFFUL) {
+        flagFailed = 1;
+    }
+}
+
+static void testsigning_note(void)
+{
+    char opt[512];
+
+    testSigningConfirmed = 0;
+    if (INST_MY_ARCH != INST_ARCH_AMD64 || envNow.Major < 6) {
+        return;
+    }
+    if (reg_text(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\Control",
+                 "SystemStartOptions", opt, sizeof(opt), NULL)) {
+        logonly("SystemStartOptions: %s\n", opt);
+        if (inst_testsigning(opt)) {
+            testSigningConfirmed = 1;
+            out("Test-signing mode is on: the test-signed x64 drivers load.\n\n");
+            return;
+        }
+    }
+    out("NOTE: test-signing mode could not be confirmed. The x64 drivers are "
+        "test-signed:\nthey load in test-signing mode (an elevated Command "
+        "Prompt:  bcdedit /set\ntestsigning on  then restart), or on a start "
+        "where F8 chose \"Disable Driver\nSignature Enforcement\". Otherwise the "
+        "controller shows Code 52 on 7, Code 39 on\nVista. This tool does not "
+        "change it (README: \"Windows Vista x64 and 7 x64:\ntest-signing "
+        "mode\"). If this start is an F8 start, go on.\n\n");
+}
+
+static int confirm(const char *what)
+{
+    char line[16];
+
+    if (opts.Yes) {
+        out("%s - going on (/yes).\n\n", what);
+        return 1;
+    }
+    out("%s? [Y/N]: ", what);
+    if (!read_line(line, sizeof(line))) {
+        out("\nNo answer: cancelled, nothing changed.\n");
+        return 0;
+    }
+    if ((line[0] == 'y' || line[0] == 'Y') && line[1] == '\0') {
+        out("\n");
+        return 1;
+    }
+    out("Cancelled, nothing changed.\n");
+    return 0;
+}
+
+/* 1 when a present device of the INF still does not run this package's
+ * version, so the /restage reinstall is still owed. */
+static int restage_left(int inf)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (d->Present && d->Inf == inf &&
+            (d->VersionState != INST_VS_HAVE ||
+             inst_ver_cmp(d->Version, pkgVersion) != 0 || d->Problem != 0)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Record 23 section 5.1: no installation in progress before the first
+ * change. 1 clear; 0 stop (pending, or the answer unknown). */
+static int nothing_pending(void)
+{
+    DWORD r;
+
+    if (api.WaitInstall == NULL) {
+        out("Whether Windows is installing something cannot be asked "
+            "(CMP_WaitNoPendingInstallEvents is missing): nothing is changed.\n");
+        flagSteps = 1;
+        return 0;
+    }
+    r = api.WaitInstall(0);
+    if (r == WAIT_OBJECT_0) {
+        return 1;
+    }
+    out("Windows is %s - usually a Found New Hardware window\nwaiting for an "
+        "answer. Finish or cancel it, then run INSTALL.BAT again.\nNothing was "
+        "changed.\n", r == WAIT_TIMEOUT ? "installing something" :
+                     "perhaps installing something (the question failed)");
+    flagSteps = 1;
+    return 0;
+}
+
+static int run_install_nt(void)
+{
+    int k;
+    int runs = 0;
+    int i;
+
+    if (!scan()) {
+        return INST_EXIT_REFUSED;
+    }
+    trap_scan();
+    restage_read();
+    plan();
+    print_plan();
+    for (i = 0; i < devCount; i++) {
+        runs += devs[i].Runs;
+        if (devs[i].Refused) {
+            flagSteps = 1;
+        }
+    }
+    testsigning_note();
+    ask_values();
+    if (opts.List) {
+        out("/list: nothing was changed.\n");
+        return INST_EXIT_DONE;
+    }
+    input_warning();
+    if (!confirm(runs ? "Install and stage the package now" :
+                        "Stage the package's INFs now (no device needs a change)")) {
+        return INST_EXIT_REFUSED;
+    }
+    if (!nothing_pending()) {
+        return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+    }
+    if (!make_local_copy() || !stage_nt()) {
+        flagFailed = 1;
+        return inst_exit_code(0, 1, flagRestart, flagSteps);
+    }
+    if (!install_inf(INST_INF_XHCI, 1)) {
+        out("A controller's update failed: the rest is not attempted.\n");
+        return inst_exit_code(0, 1, flagRestart, flagSteps);
+    }
+    if (flagChanged && !wait_installs()) {
+        if (scan()) {
+            plan();
+            check_results();
+        }
+        return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+    }
+    /* After a 2.3.x update the root hub and the hubs are new devnodes. */
+    if (!scan()) {
+        flagFailed = 1;
+        return inst_exit_code(0, 1, flagRestart, flagSteps);
+    }
+    plan();
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (infText[k] == NULL) {
+            continue;
+        }
+        install_inf(k, k == INST_INF_XHCI ? 0 : -1);
+    }
+    if (scan()) {
+        plan();
+        write_values();
+        check_results();
+        for (k = 0; k < INST_INF_COUNT; k++) {
+            if (restagePending[k] && !restage_left(k)) {
+                restagePending[k] = 0;
+            }
+            if (opts.Restage && trapOem[k][0] != '\0') {
+                int absent = 0;
+                for (i = 0; i < devCount; i++) {
+                    if (!devs[i].Present && devs[i].InfPathState > 0 &&
+                        inst_eq(devs[i].InfPath, trapOem[k])) {
+                        absent++;
+                    }
+                }
+                if (absent) {
+                    out("%d device(s) not present still name the removed %s; "
+                        "they run this\npackage's %s when they return.\n",
+                        absent, trapOem[k],
+                        groupService[group_of_inf(k)]);
+                }
+            }
+        }
+        if (!restage_write()) {
+            out("The /restage work file could not be updated.\n");
+            flagFailed = 1;
+        }
+    } else {
+        flagFailed = 1;
+    }
+    if (flagRestart) {
+        out("\nRESTART Windows to finish. If the controller was updated from "
+            "2.3.x on 32-bit\nVista or 7, run INSTALL.BAT again after the "
+            "restart for the root hub and hubs.\n");
+    }
+    offer_cleanup();
+    return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+}
+
+/* ======================================================================== */
+/* 98 SE and ME (record 23 section 6)                                        */
+/* ======================================================================== */
+
+#define INST_REG_CV "Software\\Microsoft\\Windows\\CurrentVersion"
+
+/* DevicePath (record 23 section 6.2): every entry under %windir%\XHCI98\ -
+ * an earlier copy - taken out, then addDir appended when it is not NULL. No
+ * other entry is touched, and the value keeps its type. */
+static int devicepath_update(const char *addDir)
+{
+    char list[2048];
+    char mid[2048];
+    char newList[2048];
+    char rootDir[INST_PATH_CHARS];
+    char prefix[INST_PATH_CHARS];
+    DWORD type = REG_SZ;
+    HKEY k;
+    int r;
+    LONG w;
+
+    if (!local_dir(rootDir, sizeof(rootDir)) ||
+        !reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
+                  sizeof(list), &type)) {
+        out("DevicePath could not be read.\n");
+        return 0;
+    }
+    logonly("DevicePath was: %s\n", list);
+    join(prefix, sizeof(prefix), rootDir, "");
+    if (inst_path_remove_prefix(list, prefix, mid, sizeof(mid)) < 0) {
+        out("DevicePath is too long to change.\n");
+        return 0;
+    }
+    if (addDir != NULL) {
+        r = inst_path_append(mid, addDir, newList, sizeof(newList));
+        if (r < 0) {
+            out("DevicePath is too long to change.\n");
+            return 0;
+        }
+    } else {
+        inst_copy(newList, mid, sizeof(newList));
+    }
+    if (strcmp(newList, list) == 0) {
+        out("DevicePath needs no change.\n");
+        return 1;
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_REG_CV, 0, KEY_SET_VALUE, &k)
+        != ERROR_SUCCESS) {
+        out("DevicePath could not be opened for writing.\n");
+        return 0;
+    }
+    w = RegSetValueExA(k, "DevicePath", 0, type, (const BYTE *)newList,
+                       (DWORD)strlen(newList) + 1);
+    RegCloseKey(k);
+    if (w != ERROR_SUCCESS) {
+        out("DevicePath could not be written (error %ld).\n", (long)w);
+        return 0;
+    }
+    logonly("DevicePath now: %s\n", newList);
+    out("DevicePath now reads: %s\n", newList);
+    return 1;
+}
+static void steps_9x(const char *dir)
+{
+    int i;
+    int any = 0;
+
+    out("\nWhat to do now:\n");
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!d->Present || d->Inf < 0) {
+            continue;
+        }
+        if (d->Inf == INST_INF_XHCI && !is_controller(d)) {
+            continue;
+        }
+        any = 1;
+        out("\n  %s (%s)\n", d->Desc, d->Id);
+        if (d->Refused) {
+            out("  - Left: its version could not be compared.\n");
+            continue;
+        }
+        switch (d->Action) {
+        case INST_ACT_INSTALL:
+            out("  - Device Manager: this device (under \"Other devices\" if "
+                "it has no driver),\n    Properties, Driver, Update Driver, "
+                "Next, \"Search for the best driver\", Next\n    with NO box "
+                "ticked, Next, Finish. If it finds nothing: \"Specify a\n    "
+                "location\" and type %s. Windows 98 SE may ask for its CD.\n"
+                "  - Restart when asked; on ME restart anyway.\n", dir);
+            break;
+        case INST_ACT_UPDATE:
+            if (d->Inf == INST_INF_UAS) {
+                out("  - Device Manager: this disk, Properties, Driver, Update "
+                    "Driver, Next, \"Display\n    a list of all the drivers in "
+                    "a specific location\", Have Disk, type %s.\n    (A search "
+                    "keeps an xhciuas.sys of the same DriverVer.)\n", dir);
+                break;
+            }
+            out("  - Device Manager: this device, Properties, Driver, Update "
+                "Driver, Next,\n    \"Search for a better driver\", Next with "
+                "NO box ticked, Next, Finish; if it\n    keeps the old one, "
+                "\"Specify a location\" and type %s.\n  - Restart afterwards, "
+                "although Windows does not ask.\n", dir);
+            if (d->Inf == INST_INF_XHCI) {
+                out("  - From 2.3.x or earlier: have a keyboard and mouse that "
+                    "do not go through this\n    driver first (release notes, "
+                    "\"From 2.3.x or earlier\").\n");
+            }
+            break;
+        case INST_ACT_NEWER:
+            out("  - A newer release of this driver is installed; nothing to "
+                "do.\n");
+            break;
+        case INST_ACT_CURRENT:
+            if (opts.Force) {
+                out("  - /force: Device Manager, this device, Properties, "
+                    "Driver, Update Driver, Next,\n    \"Display a list of all "
+                    "the drivers in a specific location\", Have Disk, type\n"
+                    "    %s. (A search keeps a driver of the same DriverVer.)\n",
+                    dir);
+            } else {
+                out("  - Nothing: this release runs it.\n");
+            }
+            break;
+        default:
+            out("  - Another driver runs it; this tool leaves it.\n");
+            break;
+        }
+    }
+    if (!any) {
+        out("  No device of this package is present.\n");
+    }
+    out("\nA UAS disk or a Thunderbolt controller found later finds its "
+        "driver in %s too.\nOn Windows 98 SE any disk, UAS included, needs "
+        "NUSB's mass-storage component\n(README, \"Installation Steps\"). Run "
+        "INSTALL.BAT again after the restart to see\nthe result and set the "
+        "driver's options.\n", dir);
+}
+
+static int run_install_9x(void)
+{
+    char dir[INST_PATH_CHARS];
+    int i;
+
+    if (!scan()) {
+        out("The device tree could not be read whole: nothing is changed.\n");
+        return INST_EXIT_REFUSED;
+    }
+    plan();
+    print_plan();
+    if (!local_dir(dir, sizeof(dir))) {
+        return INST_EXIT_REFUSED;
+    }
+    out("Windows 98 SE and ME have no routine that installs a driver on a "
+        "device.\nThis tool copies the package to %s and adds that directory "
+        "to\nDevicePath, the list of places the hardware wizards search by "
+        "themselves.\n\n", dir);
+    ask_values();
+    if (opts.List) {
+        out("/list: nothing was changed.\n");
+        return INST_EXIT_DONE;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].Present && devs[i].Inf == INST_INF_XHCI &&
+            is_controller(&devs[i]) && devs[i].Action == INST_ACT_UPDATE) {
+            out("BEFORE THE UPDATE: from 2.3.x or earlier on 98 SE the USB "
+                "keyboard and mouse\nbehind this controller do not answer the "
+                "update wizard's last page or the\nwizards after the restart; "
+                "have a keyboard and mouse that do not go through\nthis "
+                "driver (PS/2, a laptop's built-in ones).\n\n");
+            break;
+        }
+    }
+    if (!confirm("Copy the package and update DevicePath now")) {
+        return INST_EXIT_REFUSED;
+    }
+    if (!make_local_copy() || !devicepath_update(srcDir)) {
+        return inst_exit_code(0, 1, 0, 1);
+    }
+    write_values();
+    steps_9x(srcDir);
+    return inst_exit_code(0, flagFailed, flagRestart, 1);
+}
+
+/* ======================================================================== */
+/* Uninstall (record 23 section 9)                                           */
+/* ======================================================================== */
+
+static int warn_uninstall(void)
+{
+    char line[32];
+
+    out("*** This removes the xhci98 drivers from Windows. ***\n"
+        "On a machine whose only USB controller is xHCI, the USB keyboard and "
+        "mouse\nstop working when the controller's driver is removed, and stay "
+        "dead until\nanother driver is installed. Have a PS/2 keyboard, a "
+        "laptop's built-in one,\nor a USB controller another driver runs, "
+        "before you go on.\n");
+    if (opts.List) {
+        out("(/list: nothing will be changed.)\n\n");
+        return 1;
+    }
+    if (opts.Yes) {
+        out("/yes given: going on without the typed word.\n\n");
+        return 1;
+    }
+    out("Type REMOVE and press Enter to go on; anything else cancels: ");
+    if (!read_line(line, sizeof(line))) {
+        out("\nNo answer: refused. (/yes is the way for a script.)\n");
+        return 0;
+    }
+    if (strcmp(line, "REMOVE") != 0) {
+        out("Cancelled, nothing changed.\n");
+        return 0;
+    }
+    out("\n");
+    return 1;
+}
+
+/* The devinfo element of an instance id in an all-devnode set. */
+static int find_in_set(HDEVINFO set, const char *id, SP_DEVINFO_DATA *data)
+{
+    DWORD i;
+    char got[INST_ID_CHARS];
+
+    for (i = 0;; i++) {
+        data->cbSize = sizeof(*data);
+        if (!api.EnumInfo(set, i, data)) {
+            return 0;
+        }
+        if (api.GetInstanceId(set, data, got, sizeof(got), NULL) &&
+            inst_eq(got, id)) {
+            return 1;
+        }
+    }
+}
+
+/* A tunnel port this package's filter is on, by its UpperFilters or by its
+ * driver key naming this package's filter INF (record 23 section 9.2). */
+static int is_filter_host(const DEVREC *d)
+{
+    if (inst_own_service(d->Service)) {
+        return 0;
+    }
+    if (inst_msz_has(d->Upper, d->UpperBytes, "xhcicm")) {
+        return 1;
+    }
+    return inst_eq(d->Service, "pci") && d->InfPathState > 0 &&
+           inf_path_is_ours(d->InfPath) == 1;
+}
+
+/* 1 when the devnode is in the uninstall's set (record 23 section 9.2). */
+static int in_remove_set(const DEVREC *d)
+{
+    return inst_remove_rank(d->Id, d->Service, 0) >= 0;
+}
+
+/* The per-device installation route (SetupDiBuildDriverInfoList,
+ * SetupDiSetSelectedDriver, DIF_INSTALLDEVICE), looked up at run time. */
+typedef BOOL (WINAPI *PFN_BUILDDRV)(HDEVINFO, PSP_DEVINFO_DATA, DWORD);
+typedef BOOL (WINAPI *PFN_ENUMDRV)(HDEVINFO, PSP_DEVINFO_DATA, DWORD, DWORD,
+                                   PSP_DRVINFO_DATA_A);
+typedef BOOL (WINAPI *PFN_DRVDETAIL)(HDEVINFO, PSP_DEVINFO_DATA,
+                                     PSP_DRVINFO_DATA_A,
+                                     PSP_DRVINFO_DETAIL_DATA_A, DWORD, PDWORD);
+typedef BOOL (WINAPI *PFN_DRVPARAMS)(HDEVINFO, PSP_DEVINFO_DATA,
+                                     PSP_DRVINFO_DATA_A, PSP_DRVINSTALL_PARAMS);
+typedef BOOL (WINAPI *PFN_SETSELDRV)(HDEVINFO, PSP_DEVINFO_DATA,
+                                     PSP_DRVINFO_DATA_A);
+typedef BOOL (WINAPI *PFN_DESTROYDRV)(HDEVINFO, PSP_DEVINFO_DATA, DWORD);
+
+/* Give a present port back to the best-ranked driver node that is not this
+ * package's (Windows' own machine.inf, or a vendor's), per device. */
+static int reinstall_without_ours(HDEVINFO set, PSP_DEVINFO_DATA data)
+{
+    PFN_BUILDDRV build = (PFN_BUILDDRV)proc(api.SetupApi, "setupapi", "SetupDiBuildDriverInfoList");
+    PFN_ENUMDRV enumDrv = (PFN_ENUMDRV)proc(api.SetupApi, "setupapi", "SetupDiEnumDriverInfoA");
+    PFN_DRVDETAIL detail = (PFN_DRVDETAIL)proc(api.SetupApi, "setupapi", "SetupDiGetDriverInfoDetailA");
+    PFN_DRVPARAMS params = (PFN_DRVPARAMS)proc(api.SetupApi, "setupapi", "SetupDiGetDriverInstallParams");
+    PFN_SETSELDRV select = (PFN_SETSELDRV)proc(api.SetupApi, "setupapi", "SetupDiSetSelectedDriverA");
+    PFN_DESTROYDRV destroy = (PFN_DESTROYDRV)proc(api.SetupApi, "setupapi", "SetupDiDestroyDriverInfoList");
+    SP_DRVINFO_DATA_A drv;
+    SP_DRVINFO_DATA_A best;
+    SP_DRVINSTALL_PARAMS dp;
+    SP_DEVINSTALL_PARAMS_A ip;
+    unsigned char detailBuf[4096];
+    PSP_DRVINFO_DETAIL_DATA_A det = (PSP_DRVINFO_DETAIL_DATA_A)detailBuf;
+    DWORD bestRank = 0xFFFFFFFFUL;
+    DWORD i;
+    int found = 0;
+    char *text;
+
+    if (build == NULL || enumDrv == NULL || detail == NULL || params == NULL ||
+        select == NULL || destroy == NULL) {
+        out("the per-device installation routines are missing.\n");
+        return 0;
+    }
+    if (!build(set, data, SPDIT_COMPATDRIVER)) {
+        out("no driver list (error 0x%08lX).\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    for (i = 0;; i++) {
+        memset(&drv, 0, sizeof(drv));
+        drv.cbSize = sizeof(drv);
+        if (!enumDrv(set, data, SPDIT_COMPATDRIVER, i, &drv)) {
+            break;
+        }
+        memset(detailBuf, 0, sizeof(detailBuf));
+        det->cbSize = sizeof(SP_DRVINFO_DETAIL_DATA_A);
+        if (!detail(set, data, &drv, det, sizeof(detailBuf), NULL)) {
+            continue;
+        }
+        text = read_file(det->InfFileName, NULL);
+        if (text == NULL) {
+            continue;
+        }
+        if (inst_inf_is_ours(text)) {
+            free(text);
+            continue;
+        }
+        free(text);
+        memset(&dp, 0, sizeof(dp));
+        dp.cbSize = sizeof(dp);
+        if (!params(set, data, &drv, &dp)) {
+            continue;
+        }
+        if (!found || dp.Rank < bestRank) {
+            found = 1;
+            bestRank = dp.Rank;
+            best = drv;
+            logonly("  candidate %s rank 0x%08lX\n", det->InfFileName,
+                    (unsigned long)dp.Rank);
+        }
+    }
+    if (!found) {
+        destroy(set, data, SPDIT_COMPATDRIVER);
+        out("no driver of Windows' own or a vendor's matches it.\n");
+        return 0;
+    }
+    if (!select(set, data, &best) ||
+        !api.CallCi(DIF_INSTALLDEVICE, set, data)) {
+        out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+        destroy(set, data, SPDIT_COMPATDRIVER);
+        return 0;
+    }
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (api.GetDiParams(set, data, &ip) &&
+        (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+        out("done, restart needed.\n");
+        flagRestart = 1;
+    } else {
+        out("done.\n");
+    }
+    destroy(set, data, SPDIT_COMPATDRIVER);
+    return 1;
+}
+
+/* Section 9.2 step 1: the name out of UpperFilters, the port reinstalled
+ * from a driver node that is not this package's. 0 when the run must stop. */
+static int unfilter_nt(HDEVINFO set, const DEVREC *d)
+{
+    SP_DEVINFO_DATA data;
+    char msz[512];
+    size_t n;
+    int removed;
+
+    out("Taking xhcicm off the tunnel port %s ... ", d->Id);
+    if (opts.List) {
+        out("(/list)\n");
+        return 1;
+    }
+    if (!find_in_set(set, d->Id, &data)) {
+        out("not found.\n");
+        return 0;
+    }
+    n = inst_msz_remove(d->Upper, d->UpperBytes, "xhcicm", msz, sizeof(msz),
+                        &removed);
+    if (n == (size_t)-1) {
+        out("FAILED (the value is too long).\n");
+        return 0;
+    }
+    if (removed && !api.SetRegProp(set, &data, SPDRP_UPPERFILTERS,
+                                   n ? (const BYTE *)msz : NULL, (DWORD)n)) {
+        out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    flagChanged = 1;
+    out(removed ? "done.\n" : "not in its filters.\n");
+    if (!d->Present) {
+        out("  The port is not connected, so its driver cannot be given back "
+            "now: connect\n  the dock and run INSTALL.BAT /uninstall again.\n");
+        flagSteps = 1;
+        return 0;
+    }
+    out("Giving the port back to Windows' own driver ... ");
+    return reinstall_without_ours(set, &data);
+}
+
+/* Section 9.2 step 2. 0 when the run must stop (failed or deferred). */
+static int remove_nt(HDEVINFO set, const DEVREC *d)
+{
+    SP_DEVINFO_DATA data;
+    SP_REMOVEDEVICE_PARAMS rp;
+    SP_DEVINSTALL_PARAMS_A ip;
+
+    out("Removing %s%s ... ", d->Id, d->Present ? "" : " (not present)");
+    if (opts.List) {
+        out("(/list)\n");
+        return 1;
+    }
+    if (!find_in_set(set, d->Id, &data)) {
+        out("not found.\n");
+        return 0;
+    }
+    memset(&rp, 0, sizeof(rp));
+    rp.ClassInstallHeader.cbSize = sizeof(SP_CLASSINSTALL_HEADER);
+    rp.ClassInstallHeader.InstallFunction = DIF_REMOVE;
+    rp.Scope = DI_REMOVEDEVICE_GLOBAL;
+    if (!api.SetCiParams(set, &data, &rp.ClassInstallHeader, sizeof(rp)) ||
+        !api.CallCi(DIF_REMOVE, set, &data)) {
+        out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    flagChanged = 1;
+    memset(&ip, 0, sizeof(ip));
+    ip.cbSize = sizeof(ip);
+    if (api.GetDiParams(set, &data, &ip) &&
+        (ip.Flags & (DI_NEEDREBOOT | DI_NEEDRESTART)) != 0) {
+        out("removed, restart pending.\n");
+        flagRestart = 1;
+        return 0;
+    }
+    out("removed.\n");
+    return 1;
+}
+
+/* 1 when no devnode's driver key names the INF file, and every devnode's
+ * InfPath could be read (the manual route's prerequisite, KB 813449). */
+static int inf_unused(const char *name)
+{
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        if (devs[i].InfPathState < 0) {
+            out("  %s's driver key could not be read: %s is kept.\n",
+                devs[i].Id, name);
+            return 0;
+        }
+        if (devs[i].InfPathState > 0 && inst_eq(devs[i].InfPath, name)) {
+            out("  %s still names %s: it is kept.\n", devs[i].Id, name);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Section 9.2 step 4: this package's INFs in %windir%\inf - the staged
+ * oemNN.inf copies and the plain copies its DefaultInstall sections make.
+ * 0 when one could not be removed. */
+static int remove_own_infs(void)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char pnf[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char *text;
+    size_t n;
+    int ok = 1;
+    int oem;
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\*.inf");
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 1;
+    }
+    do {
+        join(path, sizeof(path), win, "inf");
+        join(path, sizeof(path), path, fd.cFileName);
+        text = read_file(path, NULL);
+        if (text == NULL || !inst_inf_is_ours(text)) {
+            free(text);
+            continue;
+        }
+        free(text);
+        oem = inst_starts(fd.cFileName, "oem");
+        out("Removing the INF %s ... ", fd.cFileName);
+        if (opts.List) {
+            out("(/list)\n");
+            continue;
+        }
+        if (oem && api.UninstallOem != NULL) {
+            if (api.UninstallOem(fd.cFileName, 0, NULL)) {
+                out("done.\n");
+                flagChanged = 1;
+            } else {
+                out("FAILED (error 0x%08lX).\n", (unsigned long)GetLastError());
+                ok = 0;
+            }
+            continue;
+        }
+        /* Windows 2000, and a plain copy: KB 813449's order - nothing uses
+         * it, then the .pnf, then the .inf. */
+        out("\n");
+        if (!inf_unused(fd.cFileName)) {
+            ok = 0;
+            continue;
+        }
+        inst_copy(pnf, path, sizeof(pnf));
+        n = strlen(pnf);
+        if (n > 4) {
+            strcpy(pnf + n - 4, ".pnf");
+        }
+        if (GetFileAttributesA(pnf) != 0xFFFFFFFFUL && !DeleteFileA(pnf)) {
+            out("  FAILED (the .pnf, error %lu).\n", (unsigned long)GetLastError());
+            ok = 0;
+            continue;
+        }
+        if (DeleteFileA(path)) {
+            out("  deleted (its .pnf first).\n");
+            flagChanged = 1;
+        } else {
+            out("  FAILED (error %lu).\n", (unsigned long)GetLastError());
+            ok = 0;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return ok;
+}
+static const char *const instServices[] = {
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi"
+};
+static const char *const instFiles[] = {
+    "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys"
+};
+#define INST_SVC_COUNT 5
+
+/* Section 9.2 steps 5 and 6. */
+static void remove_services_and_files(void)
+{
+    SC_HANDLE scm = NULL;
+    SC_HANDLE s;
+    SERVICE_STATUS st;
+    char sys[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    int i;
+    int fileOk;
+
+    if (!opts.List) {
+        scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+        if (scm == NULL) {
+            out("The service manager could not be opened (error %lu): the "
+                "services and files stay.\n", (unsigned long)GetLastError());
+            flagFailed = 1;
+            return;
+        }
+    }
+    if (GetSystemDirectoryA(sys, sizeof(sys)) == 0) {
+        sys[0] = '\0';
+    }
+    for (i = 0; i < INST_SVC_COUNT; i++) {
+        fileOk = 1;
+        if (scm != NULL) {
+            s = OpenServiceA(scm, instServices[i], DELETE | SERVICE_QUERY_STATUS);
+            if (s != NULL) {
+                int running = QueryServiceStatus(s, &st) &&
+                              st.dwCurrentState != SERVICE_STOPPED;
+                out("Removing the service %s (%s) ... ", instServices[i],
+                    running ? "running" : "stopped");
+                if (!DeleteService(s)) {
+                    DWORD e = GetLastError();
+                    if (e == ERROR_SERVICE_MARKED_FOR_DELETE) {
+                        out("already marked for deletion.\n");
+                        flagRestart = 1;
+                    } else {
+                        out("FAILED (error %lu): its file stays.\n",
+                            (unsigned long)e);
+                        flagFailed = 1;
+                        fileOk = 0;
+                    }
+                } else if (running) {
+                    out("marked for deletion; it goes at the restart.\n");
+                    flagRestart = 1;
+                    flagChanged = 1;
+                } else {
+                    out("done.\n");
+                    flagChanged = 1;
+                }
+                CloseServiceHandle(s);
+            }
+        } else if (opts.List) {
+            out("The service %s, if present, would be removed.\n",
+                instServices[i]);
+        }
+        if (!fileOk || sys[0] == '\0') {
+            continue;
+        }
+        join(path, sizeof(path), sys, "drivers");
+        join(path, sizeof(path), path, instFiles[i]);
+        if (!file_exists(path, NULL)) {
+            continue;
+        }
+        out("Deleting %s ... ", path);
+        if (opts.List) {
+            out("(/list)\n");
+            continue;
+        }
+        if (DeleteFileA(path)) {
+            out("done.\n");
+            flagChanged = 1;
+        } else if (MoveFileExA(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+            out("in use; deleted at the restart.\n");
+            flagRestart = 1;
+            flagChanged = 1;
+        } else {
+            out("FAILED (error %lu).\n", (unsigned long)GetLastError());
+            flagFailed = 1;
+        }
+    }
+    if (scm != NULL) {
+        CloseServiceHandle(scm);
+    }
+}
+
+static int stop_uninstall(const char *why)
+{
+    out("\nSTOPPED: %s\nNothing after this step was done. Restart Windows if "
+        "it asked, then run\nINSTALL.BAT /uninstall again: it goes on from "
+        "what is left.\n", why);
+    flagSteps = 1;
+    return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+}
+
+static int run_uninstall_nt(void)
+{
+    HDEVINFO set;
+    int rank;
+    int i;
+    int ok;
+    if (!warn_uninstall()) {
+        return INST_EXIT_REFUSED;
+    }
+    if (!scan()) {
+        return INST_EXIT_REFUSED;
+    }
+    if (!opts.List && !nothing_pending()) {
+        return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+    }
+    if (api.SetCiParams == NULL || api.CallCi == NULL || api.GetDiParams == NULL ||
+        api.SetRegProp == NULL) {
+        out("The device-removal routines are missing.\n");
+        return INST_EXIT_REFUSED;
+    }
+    out("The OS's own usbd.sys and usbui.dll stay: Windows supplied them, "
+        "and other USB\ndrivers use them. Devices of other drivers (a mouse's, "
+        "a stick's) stay too.\n\n");
+    set = api.GetClassDevs(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    if (set == INVALID_HANDLE_VALUE) {
+        out("The device list could not be opened.\n");
+        return INST_EXIT_REFUSED;
+    }
+    ok = 1;
+    for (i = 0; i < devCount && ok; i++) {
+        if (is_filter_host(&devs[i])) {
+            ok = unfilter_nt(set, &devs[i]);
+        }
+    }
+    if (!ok) {
+        api.Destroy(set);
+        if (!flagSteps) {
+            flagFailed = 1;
+        }
+        return stop_uninstall("a tunnel port could not be given back to "
+                              "Windows' own driver.");
+    }
+    for (rank = 0; rank <= 5 && ok; rank++) {
+        for (i = 0; i < devCount && ok; i++) {
+            if (inst_remove_rank(devs[i].Id, devs[i].Service, 0) == rank) {
+                ok = remove_nt(set, &devs[i]);
+            }
+        }
+    }
+    api.Destroy(set);
+    if (!ok) {
+        if (!flagRestart) {
+            flagFailed = 1;
+        }
+        return stop_uninstall("a device could not be removed, or its removal "
+                              "waits for a restart.");
+    }
+    if (opts.List) {
+        remove_own_infs();
+        remove_services_and_files();
+        out("\n/list: nothing was changed.\n");
+        return INST_EXIT_DONE;
+    }
+    /* Step 3: nothing of the package is left among the devnodes. */
+    if (!scan()) {
+        flagFailed = 1;
+        return stop_uninstall("the device list could not be read again.");
+    }
+    for (i = 0; i < devCount; i++) {
+        if (inst_own_service(devs[i].Service) || in_remove_set(&devs[i]) ||
+            is_filter_host(&devs[i])) {
+            out("Still there: %s (%s)\n", devs[i].Id, devs[i].Service);
+            if (devs[i].Present) {
+                out("Windows found the device again and installed this "
+                    "package's driver on it.\nRemove it in Device Manager "
+                    "(on Vista and 7 tick \"Delete the driver software\"),\nthen "
+                    "run INSTALL.BAT /uninstall again.\n");
+            }
+            return stop_uninstall("a device of this package is still "
+                                  "recorded.");
+        }
+    }
+    if (!remove_own_infs()) {
+        flagFailed = 1;
+        return stop_uninstall("an INF of this package could not be removed.");
+    }
+    remove_services_and_files();
+    local_remove_all();
+    if (!flagChanged) {
+        out("Nothing of this package was found.\n");
+    }
+    if (flagRestart) {
+        out("\nRESTART Windows to finish the removal.\n");
+    }
+    out("\nTo install the package again, run INSTALL.BAT.\n");
+    return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+}
+
+static int run_uninstall_9x(void)
+{
+    char dir[INST_PATH_CHARS];
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char *text;
+    int i;
+
+    if (!warn_uninstall()) {
+        return INST_EXIT_REFUSED;
+    }
+    if (!local_dir(dir, sizeof(dir)) ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return INST_EXIT_REFUSED;
+    }
+    out("Windows 98 SE and ME have no documented routine that removes a "
+        "device, so this\ntool removes what it placed itself and lists the "
+        "rest.\n\n");
+    if (!opts.List) {
+        devicepath_update(NULL);
+        local_remove_all();
+    } else {
+        out("(/list) the copies in %s and their DevicePath entry would be "
+            "removed.\n", dir);
+    }
+    out("\nThe INF copies Windows keeps for this package:\n");
+    for (i = 0; i < 2; i++) {
+        const char *sub = i == 0 ? "INF" : "INF\\OTHER";
+        join(pattern, sizeof(pattern), win, sub);
+        join(pattern, sizeof(pattern), pattern, "*.INF");
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            continue;
+        }
+        do {
+            join(path, sizeof(path), win, sub);
+            join(path, sizeof(path), path, fd.cFileName);
+            text = read_file(path, NULL);
+            if (text != NULL && inst_inf_is_ours(text)) {
+                out("  %s\n", path);
+            }
+            free(text);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    out("The driver files:\n");
+    for (i = 0; i < INST_SVC_COUNT; i++) {
+        join(path, sizeof(path), win, "SYSTEM32\\DRIVERS");
+        join(path, sizeof(path), path, instFiles[i]);
+        if (file_exists(path, NULL)) {
+            out("  %s\n", path);
+        }
+    }
+    out("\nThen, by hand, in this order:\n"
+        "  1. Device Manager: remove \"xHCI98 USB Attached SCSI Storage\" and "
+        "a Thunderbolt\n     entry if there is one; then \"xHCI98 USB 3.x "
+        "eXtensible Host Controller\"\n     (it removes the root hub and "
+        "everything beneath it).\n"
+        "  2. Delete the INF files listed above, so the restart cannot find "
+        "the driver\n     again.\n"
+        "  3. Restart. If the New Hardware wizard offers the controller, "
+        "Cancel it.\n"
+        "  4. Delete the driver files listed above, and restart once more.\n");
+    return opts.List ? INST_EXIT_DONE : INST_EXIT_STEPS;
+}
+
+/* ======================================================================== */
+/* The self-test (the pure half's own suite is test\test_inst.c)             */
+/* ======================================================================== */
+
+static int stChecks;
+static int stFailures;
+
+static void st(int ok, const char *what)
+{
+    stChecks++;
+    if (!ok) {
+        stFailures++;
+        printf("FAIL: %s\n", what);
+    }
+}
+
+static int selftest(void)
+{
+    INST_ENV e;
+    char out1[128];
+    INST_U32 v[4];
+    char *argv1[3];
+    INST_OPTS o;
+    char err[128];
+
+    memset(&e, 0, sizeof(e));
+    e.Nt = 1;
+    e.Major = 6;
+    e.Minor = 1;
+    e.Arch = INST_MY_ARCH;
+    inst_models_section("M,NTx86.6.0,NTamd64.6.0", &e, out1, sizeof(out1));
+    st(inst_eq(out1, INST_MY_ARCH == INST_ARCH_X86 ? "M.NTx86.6.0" :
+                                                     "M.NTamd64.6.0"),
+       "models section for this build's architecture");
+    st(inst_ver_parse(XHCIINST_VERSION, v), "the tool's version parses");
+    st(XhciPswGate(0x8C318086UL) == 1, "the switchover gate: Lynx Point");
+    st(XhciPswGate(0x000D1B36UL) == 0, "the switchover gate: QEMU");
+    argv1[0] = "x";
+    argv1[1] = "/list";
+    argv1[2] = "/yes";
+    st(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1, "/list /yes refused");
+    st(inst_exit_code(0, 0, 1, 0) == 3, "exit code 3");
+    st(inst_value_find("XhciIntelPortSwitch") >= 0, "the value table");
+    printf("%d checks, %d failures\n", stChecks, stFailures);
+    return stFailures == 0 ? 0 : 1;
+}
+
+/* ======================================================================== */
+/* main                                                                      */
+/* ======================================================================== */
+
+static void usage(void)
+{
+    printf(
+"Usage: INSTALL.BAT [switches]   (or %s [/dir release-...] [switches])\n"
+"\n"
+"  (none)        install or update the package's drivers, after one question\n"
+"  /list         show what would be done; change nothing\n"
+"  /yes          do not ask before going on\n"
+"  /defaults     ask no option question; keep every value\n"
+"  /set Name=Value   set one of the driver's options (repeatable)\n"
+"  /force        reinstall this release, or install it over a newer one\n"
+"  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
+"  /clean        run XHCICLN at the end without asking\n"
+"  /uninstall    remove the drivers (asks for the word REMOVE)\n"
+"  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
+"  /nopause      do not wait for Enter at the end\n"
+"  /log path     write the log there (default XHCIINST.LOG on the system "
+"drive)\n"
+"\n"
+"Exit codes: 0 done; 1 refused or cancelled, nothing changed; 2 failed\n"
+"part-way (see the log); 3 done, restart needed; 4 done, steps left for you.\n",
+        INST_MY_NAME);
+}
+
+static int finish(int code)
+{
+    char line[8];
+
+    out("\nExit code %d. The log is %s.\n", code, logPath[0] ? logPath : "(none)");
+    logonly("exit %d\n", code);
+    if (logFile != NULL) {
+        fclose(logFile);
+        logFile = NULL;
+    }
+    if (!opts.NoPause && !opts.List) {
+        printf("Press Enter to close this window.");
+        fflush(stdout);
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            printf("\n");
+        }
+    }
+    return code;
+}
+
+int main(int argc, char **argv)
+{
+    char err[256];
+    PFN_ISWOW64 isWow64;
+    BOOL wow = FALSE;
+    SC_HANDLE scm;
+    int i;
+
+    if (inst_parse_args(argc, argv, &opts, err, sizeof(err)) != 0) {
+        printf("xhciinst: %s\n\n", err);
+        usage();
+        return INST_EXIT_REFUSED;
+    }
+    if (opts.SelfTest) {
+        return selftest();
+    }
+    if (!opts.List || opts.Log[0] != '\0') {
+        log_open();
+    }
+    out("xhciinst %s - install, update or uninstall the xhci98 package\n",
+        XHCIINST_VERSION);
+    out("Log: %s\n", logPath[0] ? logPath : "none (/list writes none unless /log names one)");
+    for (i = 0; i < argc; i++) {
+        logonly("argv[%d] = %s\n", i, argv[i]);
+    }
+
+    memset(&osv, 0, sizeof(osv));
+    osv.dwOSVersionInfoSize = sizeof(osv);
+    if (!GetVersionExA(&osv)) {
+        out("The Windows version could not be read.\n");
+        return finish(INST_EXIT_REFUSED);
+    }
+    out("Windows %lu.%lu.%lu %s\n\n", (unsigned long)osv.dwMajorVersion,
+        (unsigned long)osv.dwMinorVersion,
+        (unsigned long)(osv.dwBuildNumber & 0xFFFFUL), osv.szCSDVersion);
+    memset(&envNow, 0, sizeof(envNow));
+    envNow.Arch = INST_MY_ARCH;
+    envNow.Major = osv.dwMajorVersion;
+    envNow.Minor = osv.dwMinorVersion;
+    if (osv.dwPlatformId == VER_PLATFORM_WIN32_WINDOWS) {
+        envNow.Nt = 0;
+        if (!(osv.dwMajorVersion == 4 && osv.dwMinorVersion >= 10)) {
+            out("This is not Windows 98 SE or ME.\n");
+            return finish(INST_EXIT_REFUSED);
+        }
+    } else if (osv.dwPlatformId == VER_PLATFORM_WIN32_NT) {
+        envNow.Nt = 1;
+        if (osv.dwMajorVersion < 5 ||
+            (osv.dwMajorVersion == 6 && osv.dwMinorVersion > 1) ||
+            osv.dwMajorVersion > 6) {
+            out("This Windows is not one this package supports (2000, XP, "
+                "XP x64, Vista, 7).\n");
+            return finish(INST_EXIT_REFUSED);
+        }
+        isWow64 = (PFN_ISWOW64)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                              "IsWow64Process");
+        if (isWow64 != NULL && !isWow64(GetCurrentProcess(), &wow)) {
+            wow = FALSE;
+        }
+        if (wow) {
+            out("This is 64-bit Windows: the 32-bit tool cannot install "
+                "drivers here.\n");
+            out("REFUSED: run INSTALL.BAT, which runs %s.\n", INST_OTHER_NAME);
+            return finish(INST_EXIT_REFUSED);
+        }
+    } else {
+        out("Not a Windows this tool knows.\n");
+        return finish(INST_EXIT_REFUSED);
+    }
+    if (!envNow.Nt && INST_MY_ARCH != INST_ARCH_X86) {
+        return finish(INST_EXIT_REFUSED);
+    }
+    for (i = 0; i < opts.SetCount; i++) {
+        if ((inst_value_set_mask(opts.SetIndex[i], &envNow) &
+             (1UL << opts.SetValue[i])) == 0) {
+            out("REFUSED: /set %s=%lu does not work on this Windows.\n",
+                instValues[opts.SetIndex[i]].Name,
+                (unsigned long)opts.SetValue[i]);
+            return finish(INST_EXIT_REFUSED);
+        }
+    }
+
+    devs = (DEVREC *)calloc(INST_MAX_DEVS, sizeof(DEVREC));
+    if (devs == NULL) {
+        out("Out of memory.\n");
+        return finish(INST_EXIT_REFUSED);
+    }
+    if (!check_package()) {
+        return finish(INST_EXIT_REFUSED);
+    }
+    load_routines();
+    load_ids();
+    if (opts.List) {
+        print_routines();
+    }
+    if (envNow.Nt && !opts.List) {
+        scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+        if (scm == NULL) {
+            out("REFUSED: this needs an administrator (error %lu). Run it as "
+                "an administrator.\n", (unsigned long)GetLastError());
+            return finish(INST_EXIT_REFUSED);
+        }
+        CloseServiceHandle(scm);
+    }
+    if (envNow.Nt && (api.GetClassDevs == NULL || api.EnumInfo == NULL ||
+                      api.GetInstanceId == NULL || api.GetRegProp == NULL ||
+                      api.Destroy == NULL || api.Status == NULL)) {
+        out("REFUSED: the device routines this needs are missing (the log "
+            "names them).\n");
+        return finish(INST_EXIT_REFUSED);
+    }
+    if (opts.Uninstall) {
+        return finish(envNow.Nt ? run_uninstall_nt() : run_uninstall_9x());
+    }
+    if (envNow.Nt && !opts.List && api.UpdateDriver == NULL) {
+        out("REFUSED: UpdateDriverForPlugAndPlayDevicesA is missing.\n");
+        return finish(INST_EXIT_REFUSED);
+    }
+    return finish(envNow.Nt ? run_install_nt() : run_install_9x());
+}

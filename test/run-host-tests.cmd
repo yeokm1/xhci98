@@ -159,6 +159,11 @@ rem                  rollback outcome, driven over a modelled controller and
 rem                  ring pool - no ring free while a context may name it,
 rem                  none leaked, the 64-context bound - and the one-setting
 rem                  descriptor walk
+rem   test_inst    - the install tool's pure half (xhciinst\inst_core.c, task
+rem                  40.6, design record 23): the INF reader over src\'s INFs,
+rem                  the models section per system, versions, ids, the action
+rem                  per device, the uninstall order, the registry value
+rem                  table and its applicability, the switches, exit codes
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -386,6 +391,9 @@ rem test_own links nothing else: who holds an endpoint's ring across an
 rem interface switch - each step's decision, the one-setting walk - is pure,
 rem and the suite drives it over a modelled controller and pool (task 38.10).
 call :run test_own "test_own.c ..\src\xhci_own.c"
+rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
+rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
+call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

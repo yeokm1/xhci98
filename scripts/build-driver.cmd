@@ -28,7 +28,8 @@ rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
 rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
 rem      build.cmd of its own, and a clone without Open Watcom still runs
 rem      everything else here), and the XHCICLN self-test when that one has
-rem      (task 38.8; xhcicln\build.cmd)
+rem      (task 38.8; xhcicln\build.cmd), and the XHCIINST self-test and import
+rem      check when that one has (task 40.6; xhciinst\build.cmd)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
@@ -407,6 +408,16 @@ if exist "%REPO%\xhcicln\XHCICLN.EXE" (
     echo === xhcicln self-test ===
     call "%REPO%\xhcicln\selftest.cmd"
     if errorlevel 1 goto clntestfail
+)
+
+rem The install tool (task 40.6, design record 23), when its EXE has been
+rem built: its /selftest, its switch refusals and its import table, which
+rem must name KERNEL32 and ADVAPI32 alone (xhciinst\selftest.cmd).
+if exist "%REPO%\xhciinst\XHCIINST.EXE" (
+    echo.
+    echo === xhciinst self-test ===
+    call "%REPO%\xhciinst\selftest.cmd"
+    if errorlevel 1 goto insttestfail
 )
 
 echo.
@@ -930,6 +941,13 @@ exit /b 1
 echo.
 echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
 echo 1998-era toolchain cannot read one. See the check's output above.
+endlocal
+exit /b 1
+
+:insttestfail
+echo.
+echo ERROR: xhciinst's self-test failed: its switches, its decisions or its
+echo import table cannot be trusted (xhciinst\selftest.cmd).
 endlocal
 exit /b 1
 

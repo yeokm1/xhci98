@@ -222,6 +222,18 @@ readme.txt and a NOTICE.TXT: the opt-in tool that lists, and on Windows 2000 to
 7 removes, the devnodes a driver before 2.4.0.0 left under `XHCI98\`
 (roadmap-hcd task 38.8, design record 13 section 10.13.8).
 
+.PARAMETER InstallToolDir
+Where `XHCIINST.EXE` and `XHCIIN64.EXE` are built. Defaults to `xhciinst\` in
+the repository. Both are staged into `releases\<version>\tools\xhciinst\` with
+a readme.txt and a NOTICE.TXT, and `xhciinst\INSTALL.BAT` at the version root:
+the install, update and uninstall tool (roadmap-usb4.md task 40.6, design
+record 23).
+
+.PARAMETER SkipInstallTool
+Do not stage the install tool or INSTALL.BAT. For a host that cannot build it
+(the 64-bit half needs `tools\WinDDK71`); the release is then installed by
+hand, as every release before 3.0.0.0 was, and says so on the console.
+
 .PARAMETER SkipCleanTool
 Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
 half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
@@ -331,6 +343,8 @@ param(
     [switch]$SkipSnapTool,
     [string]$CleanToolDir = "",
     [switch]$SkipCleanTool,
+    [string]$InstallToolDir = "",
+    [switch]$SkipInstallTool,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -391,6 +405,7 @@ if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
+if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -520,6 +535,7 @@ $ReleasesDir = Resolve-DirectoryArgument $ReleasesDir
 $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
+$InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
@@ -640,10 +656,11 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # tree with tools\ is held to it at any version (a dry cut before the version
 # is stamped has one), and a tree without it is accepted only before 2.4.0.0.
 # xhcicln\, the cleanup tool of task 38.8, is first published in 2.4.0.0 too,
-# and only ever under tools\.
+# and only ever under tools\. xhciinst\, the install tool of task 40.6, is
+# first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst")
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -3417,6 +3434,69 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
                    "newer than every source beside them and than that header") -f $cleanVersion)
     }
 
+    # --- the install tool (task 40.6) ----------------------------------------
+    #
+    # XHCIINST.EXE (MSVC 6.0) and XHCIIN64.EXE (WDK 7.1 amd64), built from
+    # xhciinst\ as XHCICLN is from xhcicln\ (design record 23 section 3), and
+    # INSTALL.BAT, the entry point, at the version root. The same staleness and
+    # version rules as XHCICLN's. Not drivers: the packager's test signing does
+    # not reach XHCIIN64.EXE.
+    $insttoolStaged = $null
+    if (-not $SkipInstallTool) {
+        Write-Step "install tool"
+        $instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")
+        foreach ($name in ($instExes + @("README.TXT", "INSTALL.BAT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $InstallToolDir $name) -PathType Leaf)) {
+                throw @"
+'$InstallToolDir' has no $name.
+Build the tool first:  xhciinst\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipInstallTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $instSources = @(@(Get-ChildItem -LiteralPath $InstallToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
+        foreach ($name in $instExes) {
+            $instTime = (Get-Item -LiteralPath (Join-Path $InstallToolDir $name)).LastWriteTimeUtc
+            $instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })
+            if ($instNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $InstallToolDir $name)' is older than $($instNewer.Count) of its own source file(s):
+  - $(($instNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhciinst\build.cmd) before releasing: a stale copy refuses this
+release's package, or decides with rules the source no longer has.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"
+        $instVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $instVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$instVersion", but this release is $Version.
+XHCIINST refuses a package whose INFs' DriverVer is not its own version, so the
+two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
+"@
+        }
+        $batBytes = [System.IO.File]::ReadAllBytes((Join-Path $InstallToolDir "INSTALL.BAT"))
+        for ($bi = 0; $bi -lt $batBytes.Length; $bi++) {
+            if ($batBytes[$bi] -eq 10 -and ($bi -eq 0 -or $batBytes[$bi - 1] -ne 13)) {
+                throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."
+            }
+        }
+        $instDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciinst")
+        Ensure-Directory $instDir
+        foreach ($name in $instExes) {
+            Copy-Item -LiteralPath (Join-Path $InstallToolDir $name) -Destination (Join-Path $instDir $name) -Force
+        }
+        Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force
+        $insttoolStaged = $instDir
+        Write-Ok (("XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
+    }
+
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
@@ -3614,6 +3694,22 @@ version in src\xhci_version.h and rebuild the tool (xhcicln\build.cmd).
         $contents += "      2.3.x or earlier). It lists the old, inert devnodes"
         $contents += "      under XHCI98\ and, on Windows 2000 to 7, removes them"
         $contents += "      when asked; on 98 SE and ME it lists only."
+        $contents += ""
+    }
+    if ($null -ne $insttoolStaged) {
+        $i32 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIINST.EXE")
+        $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
+        $contents += "  INSTALL.BAT     - installs, updates or uninstalls the drivers"
+        $contents += ""
+        $contents += "  TOOLS\XHCIINST\ - the program INSTALL.BAT runs"
+        $contents += ""
+        $contents += ("      XHCIINST.EXE {0:N0} bytes, for 32-bit Windows" -f $i32.Length)
+        $contents += ("      XHCIIN64.EXE {0:N0} bytes, for 64-bit Windows" -f $i64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      Section 4 has how to run it; INSTALL /list shows what"
+        $contents += "      it would do and changes nothing."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -4176,6 +4272,33 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
+THE EASY WAY: INSTALL.BAT (new in 3.0.0.0). Unzip the WHOLE package, then
+run INSTALL.BAT from its top directory: double-click it on Windows 98 SE and
+ME; run it as an administrator on Windows 2000 and XP; right-click it, Run as
+administrator, on Vista and 7. It shows what it will do, asks about a few of
+the driver's options (section 9), asks once, and then:
+
+  - on Windows 2000, XP, XP x64, Vista and 7 installs or updates every
+    driver of the package on the devices present - the controller, its root
+    hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages
+    the rest for devices plugged in later. It handles the update traps
+    below (Windows 2000's Have Disk, the root hub, Vista and 7's same
+    DriverVer) and says when to restart;
+  - on Windows 98 SE and ME copies the package to your Windows directory's
+    XHCI98 folder, where the hardware wizards search by themselves, and
+    prints the Device Manager clicks that remain.
+
+INSTALL /list shows what it would do and changes nothing. INSTALL
+/uninstall removes the drivers again (it warns first: on a machine whose
+only USB controller is xHCI, the USB keyboard and mouse stop working). Every
+run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
+report about an install. TOOLS\XHCIINST\readme.txt has the rest.
+
+On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
+keyboard and mouse that do not go through this driver, as below; the tool
+says so before it starts.
+
+BY HAND, the way every release before 3.0.0.0 was installed:
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
 
@@ -5531,6 +5654,7 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
     if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
+    if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -6248,6 +6372,63 @@ sufficient.
         Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT") `
                             -Lines ($cleanNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCICLN.EXE and XHCICL64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
+    # --- the install tool's readme and notices (task 40.6) --------------------
+    #
+    # As the cleanup tool's, above: xhciinst\README.TXT with the release's
+    # footer, and NOTICE.TXT recording the two statically linked runtimes
+    # (legal-provenance.md section 2a).
+    if ($null -ne $insttoolStaged) {
+        $instReadme = @([System.IO.File]::ReadAllText((Join-Path $InstallToolDir "README.TXT")) -split "`r?`n")
+        while ($instReadme.Count -gt 0 -and $instReadme[$instReadme.Count - 1] -eq "") {
+            $instReadme = @($instReadme | Select-Object -First ($instReadme.Count - 1))
+        }
+        $instFooter = @"
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCIINST.EXE and XHCIIN64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+"@
+        $instLines = @($instReadme) + @($instFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $insttoolStaged "readme.txt") -Lines $instLines
+        Write-Ok "readme.txt written beside XHCIINST.EXE and XHCIIN64.EXE"
+
+        $instNotice = @"
+==============================================================================
+                          x h c i 9 8   {VERSION}
+           THIRD-PARTY NOTICES FOR XHCIINST.EXE AND XHCIIN64.EXE
+==============================================================================
+
+XHCIINST.EXE and XHCIIN64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+
+They are not only this project's code. XHCIINST.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCIIN64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. You can see
+it in the import tables, which name only KERNEL32.dll and ADVAPI32.dll and
+no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient. The tools call Windows' own setup routines at run time; they
+carry no Microsoft setup program and this package carries no Microsoft file.
+"@
+        $instNotice = $instNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT") `
+                            -Lines ($instNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCIINST.EXE and XHCIIN64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
     # --- the licence the readme sends the reader to --------------------------
