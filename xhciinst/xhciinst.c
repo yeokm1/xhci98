@@ -211,10 +211,11 @@ static int changedState[INST_MAX_CHANGED];
 static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
-static int tunnelChanged;   /* a tunnel port's filter install succeeded */
+static int tunnelChanged;   /* 2000: a port's first filter install succeeded */
 static int was_changed(const char *id);
 static int was_installed(const char *id);
 static int result_ok(const DEVREC *d, int inf);
+static int idle_filtered_port(const DEVREC *d, int inf);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
@@ -2836,22 +2837,34 @@ static int hwid_clear(const char *hwid, int inf)
             !inst_msz_has(d->Compat, d->CompatBytes, hwid)) {
             continue;
         }
-        /* The ports of one Thunderbolt switch share one id: a port that
-         * already carries this release's filter is no other owner's, and
-         * the same INF reaching it again installs the same driver. */
-        if (inf == INST_INF_CMF && d->Inf == inf &&
-            d->Action == INST_ACT_CURRENT) {
+        /* The ports of one Thunderbolt switch share one id: a healthy port
+         * that already carries this release's filter and needs nothing is
+         * no other owner's; the call giving the filter to its siblings may
+         * reach it again with the same driver. */
+        if (idle_filtered_port(d, inf)) {
             continue;
         }
         if (d->Inf != inf || !d->Runs) {
             out("  %s is shared with %s (%s), which this run leaves;\n"
-                "  neither is changed. Run INSTALL.BAT /force to include it, "
-                "or update both in\n  Device Manager.\n", hwid, d->Id,
-                inst_action_text(d->Action));
+                "  neither is changed.%s\n", hwid, d->Id,
+                inst_action_text(d->Action),
+                (d->Inf == inf && (d->Action == INST_ACT_CURRENT ||
+                                   d->Action == INST_ACT_NEWER)) ?
+                " INSTALL.BAT /force includes it." :
+                " Update them in Device Manager, one by one.");
             return 0;
         }
     }
     return 1;
+}
+
+/* A tunnel port that already runs this release's filter, healthy, and that
+ * this run does not reinstall: it does not block a call that reaches its
+ * siblings, and it is never counted as installed by that call. */
+static int idle_filtered_port(const DEVREC *d, int inf)
+{
+    return inf == INST_INF_CMF && d->Inf == inf &&
+           d->Action == INST_ACT_CURRENT && !d->Runs && result_ok(d, inf);
 }
 
 /* The entry of a device in the reached list, added when new; -1 when the
@@ -2950,7 +2963,7 @@ static int install_inf(int inf, int controllers)
             if (devs[j].Present && devs[j].Inf == inf &&
                 (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
                  inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid)) &&
-                !(inf == INST_INF_CMF && devs[j].Action == INST_ACT_CURRENT) &&
+                !idle_filtered_port(&devs[j], inf) &&
                 call_flags(&devs[j], inf) != flags) {
                 mixed = 1;
             }
@@ -2981,7 +2994,14 @@ static int install_inf(int inf, int controllers)
             if (devs[j].Present && devs[j].Inf == inf &&
                 (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
                  inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
-                int c = note_changed(&devs[j], 1);
+                int c;
+                if (idle_filtered_port(&devs[j], inf)) {
+                    /* Reached but not a target: no evidence of an install. */
+                    devs[j].Done = 1;
+                    note_changed(&devs[j], 0);
+                    continue;
+                }
+                c = note_changed(&devs[j], 1);
                 devs[j].Done = 1;
                 if (c < 0) {
                     full = 1;
@@ -3004,7 +3024,9 @@ static int install_inf(int inf, int controllers)
         if (api.UpdateDriver(NULL, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
             flagChanged = 1;
-            if (inf == INST_INF_CMF) {
+            if (flags == 0) {
+                /* Only the filter's first install on Windows 2000 goes
+                 * unforced (call_flags): the case read on the 2000 leg. */
                 tunnelChanged = 1;
             }
             for (j = 0; j < n; j++) {
@@ -3222,11 +3244,12 @@ static void check_results(void)
         if (d == NULL || !d->Present) {
             if (tunnelChanged &&
                 (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF)) {
-                /* A tunnel port's driver changed under it: Windows rebuilds
-                 * the switch's subtree, on Windows 2000 at the restart (read
-                 * on the 2000 leg, 2026-10-15). */
-                out("  %s: re-enumerated with its tunnel port's change; "
-                    "restart, then run\n  INSTALL.BAT again.\n", changedId[c]);
+                /* On Windows 2000 a tunnel port's first filter install took
+                 * the switch's subtree away until the restart (read on the
+                 * 2000 leg, 2026-10-15); it may come back then. */
+                out("  %s is not present after a tunnel port's filter "
+                    "install; it may come\n  back after a restart: restart, "
+                    "then run INSTALL.BAT again.\n", changedId[c]);
                 flagRestart = 1;
                 flagSteps = 1;
             } else {
@@ -3256,11 +3279,15 @@ static void check_results(void)
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
         } else if (tunnelChanged && changedInf[c] == INST_INF_CMF &&
-                   d->Problem == 12UL) {
-            /* The port's resources are assigned again at the restart (read
-             * on the 2000 leg, 2026-10-15: started after it). */
-            out("  %s waits for a restart for its resources (problem 12); "
-                "run INSTALL.BAT\n  again after it.\n", d->Desc);
+                   d->Problem == 12UL && inst_eq(d->Service, "pci") &&
+                   inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
+                   d->VersionState == INST_VS_HAVE &&
+                   inst_ver_cmp(d->Version, pkgVersion) == 0) {
+            /* The filter is in place; on the 2000 leg (2026-10-15) the port
+             * started after the restart. It may, not must. */
+            out("  %s has the filter but reports problem 12 (resources); "
+                "it may start after\n  a restart: restart, then run "
+                "INSTALL.BAT again.\n", d->Desc);
             flagRestart = 1;
             flagSteps = 1;
         } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
