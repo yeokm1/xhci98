@@ -1552,7 +1552,7 @@ try {
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -ne 0) "a filter INF beside xhcicm.inf, where a 98 wizard is pointed, was assembled into the asset."
-        Assert-True ($r.Output -match "check-cm-inf") ("expected the refusal to name the connection manager's INF gate. Output:`n" + $r.Output)
+        Assert-True ($r.Output -match "CM-NO9XBRIDGE") ("expected the refusal to name CM-NO9XBRIDGE. Output:`n" + $r.Output)
         foreach ($fl in @("release", "debug")) {
             foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
                 Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\$name") -Force
@@ -1568,6 +1568,7 @@ try {
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -ne 0) "a lone filter INF outside nt\ was assembled into the asset."
+        Assert-True ($r.Output -match "CM-NO9XBRIDGE") ("expected the refusal to name CM-NO9XBRIDGE. Output:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around a lone filter INF outside nt\."
         Remove-Item -LiteralPath (Join-Path $pubRoot "release\xhcicmf.inf") -Force
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }

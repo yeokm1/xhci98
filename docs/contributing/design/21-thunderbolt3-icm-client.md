@@ -796,7 +796,11 @@ section 1.4.6 and the README's hardware list.
 `xhcicm.inf` and `xhcicm-amd64.inf`, under `%U4Desc%` ("xHCI98 USB4 Host
 Interface", decision U12): `PCI\VEN_8086&DEV_xxxx` for `A833`, `A834`,
 `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784`; `PCI\VEN_1022&DEV_1668`
-and `DEV_1669`; and `PCI\CC_0C0340`, which the id lines outrank. In the
+and `DEV_1669`; and `PCI\CC_0C0340`, which the id lines outrank. Windows 98
+SE matches the class line: on the emulator's generic host `1B36:00F4` (class
+`0C0340`, no id line of its own) its wizard offered `xhcicm.inf` from the
+transfer disk, and the driver started, "working properly", in its INERT
+start (task `40-0.2`, 2026-10-15, development host A). In the
 filter INFs, the USB4-only hosts' tunnel ports where the same `pci.ids`
 (`2026.10.14`) labels a port as such, and the emulator's:
 
@@ -816,7 +820,13 @@ and `E437`, is not labelled a Thunderbolt or USB4 port, and Meteor Lake's
 `7EC4` to `7EC7` of the same name are left out on the same reading); those
 machines take their set from `XhciCmTunnelBridge`. `1B36:0001` is QEMU's
 generic bridge, so on any QEMU machine the filter attaches to every such
-bridge and acts on none the NHI does not assign. The excluded ids are the
+bridge and acts on none the NHI does not assign. On the Windows 2000 guest with the
+Alpine Ridge tree, Update Driver on the tunnel port `02:01.0` pointed at the
+`nt\` directory found `xhcicmf.inf` as a closer match than `machine.inf`,
+installed it unforced with no prompt and no restart, and left the port
+"working properly" with `pci.sys` and `xhcicm.sys` as its driver files
+(task `40-0.2`, the same day; `xhcicm.sys` was already in place from the NHI's
+install, so that reading does not show the `..` source path being used). The excluded ids are the
 gate's `CM-NOROUTER` list: the device routers and device-side bridges
 (`15EF`, Goshen Ridge `0B26`, `5786`, `57A4`, AMD's `151C` and `151D`
 "USB4 Router", ASMedia's ASM2464PD `2463`), the USB-only NHIs and the
