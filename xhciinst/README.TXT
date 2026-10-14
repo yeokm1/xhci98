@@ -8,8 +8,10 @@ INSTALL.BAT, at the top of the package, runs this tool. On Windows 2000,
 XP, XP x64, Vista and 7 it installs or updates every driver of the package
 on the devices it finds - the xHCI controller first, then its root hub,
 hubs and composite entries, then UAS disks and a Thunderbolt or USB4
-controller - and puts every INF of the package where Windows finds it for
-a device plugged in later. It does what the release notes tell you to do
+controller - and puts the package's INFs (all but one whose driver has a
+newer release installed) where Windows finds them for a device plugged in
+later; the release notes say when Windows may still ask for the medium an
+earlier install came from. It does what the release notes tell you to do
 in Device Manager, including the traps of an update (Windows 2000 keeping
 the old driver unless Have Disk is used; Vista and 7 keeping an old build
 of the same version; the root hub's own update).

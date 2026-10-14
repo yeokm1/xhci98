@@ -188,7 +188,7 @@ The tool knows the package's drivers by file, never by hardware id:
 | `xhci98.inf` | `xhci98.sys` (and `xhcihlpr.sys` in x86) | `xhci98` (`xhcihlpr`) | all | required |
 | `xhciuas.inf` | `xhciuas.sys` | `xhciuas` | all | required |
 | `xhcicm.inf` | `xhcicm.sys` | `xhcicm` | all | the set of three, all or none |
-| `xhcicmf.inf` | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) | the set of three |
+| `nt\xhcicmf.inf` | `xhcicm.sys` as an upper filter | `xhcicm` | NT only (`$Windows NT$`) - in the flavour directory's `nt\` subdirectory, because Windows 98 and ME read a `$Windows NT$` INF and would offer the filter for the tunnel bridge (task 39-0.4, `runs/run-39.md`); read and copied on NT only, never on 98 or ME | the set of three (on 98 and ME, `xhcicm.inf` and `xhcicm.sys`) |
 
 The hardware ids come from the INFs themselves (section 5.2): a model line
 added to an INF reaches the tool with no change to it. A package without
@@ -210,7 +210,10 @@ Before anything is read from the system, the tool refuses (exit 1) unless:
    tool's own;
 3. every file of section 4.1's required rows is there, a regular file, not
    empty, and every file each INF names in `[SourceDisksFiles]` (and its
-   decorated forms) is there too;
+   decorated forms) is there too - found relative to that INF's own
+   directory by its disk's `[SourceDisksNames]` path and its own
+   subdirectory, as the setup engines resolve it, and refused if the path
+   leaves the flavour directory;
 4. each INF's `[Version]` `DriverVer` version field equals the tool's
    `XHCI_VER_STR`, and all of them agree - an INF from another release in
    the directory is refused by name;
@@ -250,9 +253,10 @@ which must not be a CD, a floppy or a USB stick behind the controller being
 updated; and on 98 SE and ME the directory is what `DevicePath` names
 (section 6).
 
-**The copies are immutable.** Each is named for its content -
-`<version>-<flavour directory>-<tag>`, the tag an FNV-1a hash of every
-file's name and bytes - holds an `XHCIINST.LST` naming the files the tool
+**The copies are immutable.** Each is named for its content - eight hex
+digits, an FNV-1a hash of every file's relative name and bytes (an 8.3
+name, which 98 SE's "Copy files from" box takes as typed, section 6.2) -
+holds an `XHCIINST.LST` naming the files the tool
 put there, and is never rewritten: a run whose package is already there
 checks the files are byte-identical and uses them, and a run of another
 package makes another directory. So an older package run for one driver
@@ -681,7 +685,9 @@ its 2 adds a failure, and its 1 (refused) changes nothing.
 
 1. The local copy (section 4.4): this package's own directory under
    `%windir%\XHCI98\`, which holds the INFs - the parent holds none, and no
-   recursive search is assumed.
+   recursive search is assumed. On 98 and ME it never takes the `nt\`
+   subdirectory nor a filter INF wherever it lies, so the wizards cannot
+   offer the filter for a bridge (39-0.4).
 2. `DevicePath` names that directory: every entry under
    `%windir%\XHCI98\` (an earlier run's copy, which the tool itself added)
    is taken out of the list and this copy's directory appended, compared
@@ -690,15 +696,21 @@ its 2 adds a failure, and its 1 (refused) changes nothing.
    earlier copies stay on disk, where an INF Windows installed from one may
    still look for its files, until the uninstall.
 3. The device installer then finds the package's INFs in a directory it
-   searches by itself, and an INF found there takes its files from its own
-   directory. **Unread until the legs**: whether the 98 SE and ME wizards
-   search a `DevicePath` entry other than `INF` with no box ticked,
-   whether their driver database is rebuilt for it, and where the files
-   are copied from (section 12). Until those readings, the printed steps
-   name both routes: the search with no box ticked, and "Specify a
-   location" with the copy's directory typed once (the tool prints it in
-   full), which needs no package
-   media either.
+   searches by itself. **Read on 98 SE** (2026-10-15, `runs/run-40.md`):
+   after `DevicePath` named the copy, the Add New Hardware wizard that
+   came back at the next start already named the device "xHCI98 USB 3.x
+   eXtensible Host Controller", and "Search for the best driver" with no
+   box ticked offered the copy's `XHCI98.INF` (by its short path) - the
+   search works with no typing. **The files do not come from there**: the
+   engine then asked for the "xhci98 xHCI Host Controller Disk" with
+   "Copy files from" set to the Windows source path (`D:\WIN98` on the
+   guest), not the INF's directory, and took the files once the copy's
+   directory was typed into that box; then it asked for the Windows CD for
+   `usbd.sys`, as a Have Disk install does. So the printed steps name that
+   question and the folder to type, and the copy's directory is named by
+   eight hex digits - an 8.3 name, typed as printed. A wizard cancelled
+   before the tool ran does not come back when Device Manager is
+   refreshed; it comes back at the next start. ME is read on its own leg.
 4. The OS's own files the INF asks for through `LayoutFile=layout.inf`
    (`usbd.sys`, `usbui.dll`; and `hidclass.sys` for the first HID device)
    come from the Windows CD as today; the tool says so.
@@ -713,11 +725,20 @@ these systems (`xhcisnap\README.md`, "Where the device readings come
 from"). A WDM driver is bound on 98 and ME by its driver key's
 `NTMPDriver` value, not by a `Service` value: a devnode belongs to a group
 of section 5.4 when that value names the group's `.sys` (`xhci98.sys`,
-`xhciuas.sys`, `xhcicm.sys`), and its version is the driver key's
+`xhciuas.sys`, `xhcicm.sys`), its hardware and compatible ids are read
+from its `HKLM\Enum\<device id>` key, where 98 SE keeps each list as one
+comma-separated string (read on the guest; the configuration manager's
+answer did not match there), and its version is the driver key's
 `DriverVersion` where the install wrote one; where it did not, the group's
 installed binary's file version stands for it (section 5.4: one binary
 per service), and the `DriverDate` is only shown. Neither readable: the
-device is unknown and only listed. A failed walk refuses the run.
+device is unknown and only listed. A failed walk refuses the run. A
+controller whose New Hardware wizard was cancelled has no devnode until
+the next start, only its `HKLM\Enum\PCI` entry (read on 98 SE: nothing in
+`HKEY_DYN_DATA\Config Manager\Enum`), so an `Enum\PCI` entry of an xHCI
+controller with no driver and no devnode is listed apart, as "recorded, not
+running now", with what to do if Device Manager shows it - an old entry of
+a controller that moved slot looks the same, and needs nothing.
 
 ### 6.4 What it prints
 

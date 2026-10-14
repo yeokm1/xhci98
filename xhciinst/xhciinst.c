@@ -186,6 +186,7 @@ typedef struct _DEVREC {
     int Runs;
     int Done;               /* the call was made for it      */
     int Refused;            /* its group's verdict refused it */
+    int RegOnly;            /* 98/ME: an Enum entry with no devnode */
     char InfPath[64];       /* the driver key's InfPath       */
     int InfPathState;       /* 1 read, 0 absent, -1 unreadable */
 } DEVREC;
@@ -699,12 +700,11 @@ static void walk_cm(DWORD dn, int depth)
                 /* 98 and ME keep the lists as one comma-separated string in
                  * HKLM\Enum\<device id>; read them there when the
                  * configuration manager does not answer. */
-                if (d->Hw[0] == '\0') {
-                    reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw));
-                }
-                if (d->Compat[0] == '\0') {
-                    reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat));
-                }
+                /* The registry's comma list is the whole list; what the
+                 * configuration manager answers was read on 98 SE to stop at
+                 * the first id. */
+                reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw));
+                reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat));
                 if (d->Driver[0] == '\0') {
                     reg9x_value(d->Id, "Driver", d->Driver, sizeof(d->Driver));
                 }
@@ -955,6 +955,7 @@ static void registry_controllers_9x(void)
             d->Present = 1;
             d->Inf = -1;
             dev_driver_values(d);
+            d->RegOnly = 1;
             logonly("devnode (registry only, no driver) %s\n", d->Id);
             devCount++;
         }
@@ -3056,6 +3057,13 @@ static void steps_9x(const char *dir)
         }
         any = 1;
         out("\n  %s (%s)\n", d->Desc, d->Id);
+        if (d->RegOnly) {
+            out("  - Recorded, but not running now: if Device Manager lists it under "
+                "\"Other devices\",\n    install it as below; if it does not, it "
+                "is an old entry (the device moved)\n    and needs nothing. After "
+                "a cancelled New Hardware wizard, restart: the\n    wizard comes "
+                "back and finds the driver by itself.\n");
+        }
         if (d->Refused) {
             out("  - Left: its version could not be compared.\n");
             continue;
