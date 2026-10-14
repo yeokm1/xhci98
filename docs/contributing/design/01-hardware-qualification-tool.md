@@ -138,9 +138,9 @@ Register offsets below are relative to BAR0 unless noted. Capability regs at BAR
 
 The detailed matrix below is the xHCI matrix. EHCI/OHCI reuse its C1/C2/C3/C4/C5/C6 meanings with the family-specific mechanisms described in section 2. C7 and C8 remain xHCI-only.
 
-### Automated QEMU regression matrix (50 cases)
+### Automated QEMU regression matrix (53 cases)
 
-`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, and at 50 since task 36.48's four `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (one with `--no-sysinfo`, which must print none of the machine) (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
+`xhciqual/test/run-qemu-matrix.ps1` cold-boots a fresh Win98SE (MS-DOS 7.1) QEMU process per case, the same DOS the field procedure uses. The matrix stood at 40 cases as of v0.11, at 42 since task 36.11's two `--gsi` cases, at 46 since task 36.10's four no-working-interrupt cases, at 50 since task 36.48's four `-smbios` cases, which also fail if a serial number, UUID, SKU, asset tag or part number is printed (one with `--no-sysinfo`, which must print none of the machine), and at 53 since roadmap-usb4 task 39-0.6's three cases reading SeaBIOS's `$PIR` table, one with a bridge at `00:1C.0` (`xhciqual/README.md` carries the version history). The `HCCPARAMS2` line (row B9) is pinned in the `xhci_probe_only` case, so a regression in the read-only U3C/CMC/FSC report fails the matrix.
 
 The cases are: standalone help, an isolated locked xHCI IRQ self-test, two `--probe-only` cases, and the controller/device cases. Controller presence is exhaustive across the requested families: none, xHCI, EHCI, OHCI, xHCI+EHCI, xHCI+OHCI, EHCI+OHCI, and all three. Empty and attached-device variants cover xHCI HS storage, FS HID, a hub with downstream HID, and an unmanaged SuperSpeed-only placement; EHCI HS storage and FS HID; OHCI HID and storage; pairwise mixed attachments; and all-three mixed attachments. It also covers default-all scanning, combined selectors, selecting an absent family, and --log ohci log-name/selector disambiguation.
 
@@ -155,6 +155,8 @@ The QEMU matrix is not the whole of what runs per build. `xhciqual/build.cmd` ru
 `xhciqual/test/run-host-tests.cmd` builds and runs `xhciqual/test/test_mmiodiag.c` on the Windows build host in seconds, with no VM and no DOS. It covers `xhciqual/mmiodiag.c`, the pure `PCIINFO` -> report-text logic behind the PCI Power Management block and the two dead-MMIO classifiers.
 
 Since task 36.11 it also builds `xhciqual/test/test_route.c`, over `xhciqual/route.c` and the driver's `src/xhci_pirq.c`: the routing report on the reviewed Intel chipsets, which no QEMU controller has.
+
+Since roadmap-usb4 task 39-0.6 `test_route.c` also covers the BIOS `$PIR` table parser in `route.c`: a valid table, `00:1C` listed and not, a bad checksum, a truncated table and header, bad sizes and versions, no table, `00:1C` found past the 128-entry dump cap, and the `00:1C` functions printed with no usable table.
 
 Since task 36.48 it also builds `xhciqual/test/test_sysinfo.c`, over `xhciqual/sysinfo.c`: SMBIOS entry points (2.x, 3.0, legacy DMI, bad checksums, a table above 4 GB) and tables (valid, truncated at every length, garbled, strings missing), CPUID text and the no-SMBIOS fallback, with every identifier planted and checked absent from the output.
 

@@ -26,6 +26,8 @@ static CTRL ctrls[MAX_CONTROLLERS];
 static LEGACY_CTRL legacy_ctrls[MAX_CONTROLLERS];
 /* Task 36.48: the machine, named in the header (never a serial or UUID). */
 static SYSINFO sysinfo;
+/* Task 39-0.6: the BIOS $PIR table, machine-wide, read once per run. */
+static PIRINFO pir;
 
 /*
  * Task 11-V.8. Running XHCIQUAL with no arguments used to start the **most
@@ -703,6 +705,11 @@ static int run_quick_scan(void)
         sysinfo_probe(&sysinfo);
     report_sysinfo_short(&sysinfo, qconprintf);
     report_sysinfo(&sysinfo, qlogprintf);
+    /* Task 39-0.6: one line on the screen, the table in the log and on
+     * the serial line. Reads only. */
+    pir_read(&pir);
+    report_pir_short(&pir, qconprintf);
+    report_pir(&pir, qlogprintf);
 
     n = pci_scan_usb(pcis, MAX_CONTROLLERS, HC_MASK_ALL);
     if (n == 0) {
@@ -1005,6 +1012,10 @@ int main(int argc, char **argv)
     else
         sysinfo_probe(&sysinfo);
     report_sysinfo(&sysinfo, qprintf);
+    /* Task 39-0.6: the BIOS $PIR table and 00:1C, reads only, machine-wide
+     * and so once, before any controller. */
+    pir_read(&pir);
+    report_pir(&pir, qprintf);
     if (!active)
         mode = "PROBE-ONLY (read-only)";
     else if (opt_poll_only)
