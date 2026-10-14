@@ -5,8 +5,10 @@
  * Recording follows the shared ladder: XhciLogVerbosity 2 and up fills
  * the ring (xhci_log.h). Emission is decision D12's default: the release
  * flavour emits nothing and imports no DbgPrint, as xhciuas.sys prints
- * nothing; the debug and qemu flavours hand the ring to DbgPrint at each
- * stop, under #if DBG, so a reading needs a checked flavour and DebugView;
+ * nothing; the debug and qemu flavours hand the ring to DbgPrint, under
+ * #if DBG, from the connection-manager thread after each of its passes
+ * that recorded something and from the PnP path at each stop, so a
+ * reading needs a checked flavour and DebugView;
  * the qemu flavour also mirrors the same bytes to port 0xE9, the
  * emulator's debug console. This file is the one DbgPrint site and the one
  * port-0xE9 site of the binary (SITES=cm_log.obj in
@@ -14,7 +16,8 @@
  * rule for an unguarded DbgPrint is untouched.
  *
  * IRQL: CmLogInit, CmLogApply and CmLogNote at <= DISPATCH_LEVEL;
- * CmLogEmit at PASSIVE_LEVEL only (the PnP path calls it).
+ * CmLogEmit at PASSIVE_LEVEL only (the thread, and the PnP path once the
+ * thread has ended, so the two never emit at once).
  */
 
 #include "cm.h"

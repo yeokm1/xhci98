@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "../src/cm/tbt_hw.h"
+#include "../src/cm/cm_vals.h"
 #include "tbt_fake.h"
 #include "test_harness.h"
 
@@ -124,8 +125,10 @@ static void test_platform(void)
     (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
     CHECK(g_fake.Cfg[0xFC / 4] & 0x2UL, "left on");
 
-    /* Never ready: 350 polls 3 ms apart, then a timeout; an inert
-     * instance clears the force power it set only then. */
+    /* Never ready: 350 polls 3 ms apart, then a timeout. An inert
+     * instance never clears force power, not even then: a timeout is not
+     * evidence that nothing depends on the controller (record 21 sections
+     * 1.4.2 and 5.6). */
     fakeReset();
     memset(&pw, 0, sizeof(pw));
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_E_TIMEOUT, "never ready");
@@ -133,7 +136,8 @@ static void test_platform(void)
     CHECK(g_fake.NowUs >= 1050000UL, "about a second");
     CHECK(pw.FwReadyFailed, "recorded");
     (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
-    CHECK_EQ(g_fake.Cfg[0xFC / 4] & 2UL, 0, "inert, never ready: cleared");
+    CHECK(g_fake.Cfg[0xFC / 4] & 2UL, "inert, never ready: left set");
+    CHECK(pw.ForcePowerSetHere, "and the record kept");
 
     /* Ready, but inert for another reason: left set. */
     fakeReset();
@@ -366,9 +370,73 @@ static void test_select(void)
     CHECK_EQ(s.Reason, TBT_INERT_PLATFORM, "nor a failed platform init");
 }
 
+/*
+ * The two id tables kept in step (task 39-A.4): cm_vals.c's, which the
+ * INF gate's CM-IDLIST rule reads and AddDevice logs, and tbt_hw.c's,
+ * which decides at start (cm_nhi.c, cmProfileOfHw's mapping). Every
+ * Intel and AMD device id, under the Thunderbolt class and the USB4 one,
+ * gives the same profile from both.
+ */
+static ULONG hwProfile(const TBT_HW_PROFILE *hw)
+{
+    if (hw == NULL) {
+        return CM_PROFILE_UNKNOWN;
+    }
+    if (hw->Icm == &TbtIcmProfileFalconRidge) {
+        return CM_PROFILE_ICM_FR;
+    }
+    if (hw->Icm == &TbtIcmProfileAlpineRidge) {
+        return CM_PROFILE_ICM_AR;
+    }
+    /* Maple Ridge and Tiger Lake to Meteor Lake: the Titan Ridge and Ice
+     * Lake messages under the NVM-authentication predicate. */
+    if (hw->Icm == &TbtIcmProfileTitanRidge) {
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_MR
+                                                     : CM_PROFILE_ICM_TR;
+    }
+    if (hw->Icm == &TbtIcmProfileIceLake) {
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_TGL
+                                                     : CM_PROFILE_ICM_ICL;
+    }
+    return CM_PROFILE_USB4;
+}
+
+static void test_tables(void)
+{
+    static const ULONG vendors[2] = { 0x8086, 0x1022 };
+    static const ULONG classes[2] = { 0x088000, 0x0C0340 };
+    CM_IDS ids;
+    ULONG v;
+    ULONG c;
+    ULONG d;
+    ULONG mismatches;
+
+    mismatches = 0;
+    for (v = 0; v < 2; v++) {
+        for (c = 0; c < 2; c++) {
+            for (d = 0; d < 0x10000UL; d++) {
+                ids.Role = CM_ROLE_NHI;
+                ids.Vendor = vendors[v];
+                ids.Device = d;
+                ids.ClassCode = classes[c];
+                if (CmProfileFor(&ids) !=
+                    hwProfile(TbtHwMatch(vendors[v], d, classes[c], FALSE))) {
+                    if (mismatches < 4) {
+                        printf("  table mismatch %04lX:%04lX class %06lX\n",
+                               vendors[v], d, classes[c]);
+                    }
+                    mismatches++;
+                }
+            }
+        }
+    }
+    CHECK_EQ(mismatches, 0, "cm_vals.c and tbt_hw.c name the same profiles");
+}
+
 int main(void)
 {
     test_match();
+    test_tables();
     test_platform();
     test_select();
     printf("test_tbt_hw: %d checks, %d failures\n", checks, failures);

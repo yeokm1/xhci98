@@ -43,6 +43,9 @@ SOURCES=cm_vals.c      \
         cm_log.c       \
         cm_entry.c     \
         cm_nhi.c       \
+        cm_thr.c       \
+        cm_power.c     \
+        cm_reenum_stub.c \
         cm_filt.c      \
         xhcicm.rc
 

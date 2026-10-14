@@ -178,9 +178,10 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
 
 /* Stop and shutdown on a TBT_HW_ICL_POWER profile: force power off as
  * Linux pci.c icl_nhi_shutdown does - but only when `power` says this
- * driver set it, and on an inert instance (`active` FALSE) only where its
- * firmware-ready poll failed (record 21 section 1.4.2); a force power the
- * firmware or the BIOS left on stays on. TBT_E_HW when the register reads
+ * driver set it and the instance was active; an inert instance (`active`
+ * FALSE) never clears it, not even after its own firmware-ready timeout
+ * (record 21 sections 1.4.2 and 5.6); a force power the firmware or the
+ * BIOS left on stays on. TBT_E_HW when the register reads
  * all ones: nothing restored, and the record kept for another try. */
 LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
                            PTBT_HW_POWER power, BOOLEAN active);

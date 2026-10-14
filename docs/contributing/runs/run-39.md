@@ -426,3 +426,81 @@ or a future emulator change, which is requested in the `usb4-emu` request
 list of 2026-10-15 (not a tracked file). The driver's own handling of
 all-ones reads is design record 17's and was read with the `qemu`
 flavour's fault injection for `2.2.0.0`.
+
+## 39-A.4 and 39-A.6 - The NHI driver and the approval policy
+
+**Verdict: the driver legs pass on both primary guests** (2026-10-15). The
+NHI function driver of `xhcicm.sys` bound the emulator's Alpine Ridge NHI
+on Windows 98 SE and Windows 2000, ran the ICM client's whole bind on its
+own thread, approved the announced device at `XhciCmApprove` 1 and withheld
+it at 0, handed the tunnel actions to the re-enumeration seam (a stub in
+this branch; task 39-A.5 implements it), and survived a disable, an enable
+and an unplug on both.
+
+**The vehicle.** Development host A, TCG, the `usb4-emu` fork through
+task 39-0.7's launcher (`run-usb4-guest.ps1 -Usb4Profile tb3`, `Bios
+OFF_OFF`, the device router `enc0` with its NVMe attached at power-on, the
+root bridge at slot 6), used read-only from a copy outside the tree. Guests
+`win98` and `win2k-xonly` from their own overlays (`vm\usb4\nhi-98`,
+`vm\usb4\nhi-2k`; `vm\win98.img` carries the frozen `1.x` miniport under
+NUSB, which these legs neither need nor touch, the NHI driver being a
+binary of its own), QMP and VNC on 47960 to 47963, `-trace usb4_*`, the
+package's `xhcicm.inf` and `xhcicm.sys` on the VVFAT transfer drive (D: on
+98 SE, E: on 2000). The binary was the `qemu` flavour of commit
+`4e88bf3d` (the driver after its first review round); the later rounds
+changed the power and race paths, which these legs do not reach (no guest
+here sleeps), and the readings below are what the final build owes again
+before the driver's checkpoint. Driven entirely over QMP keys and
+screendumps; on 2000 the guest's keyboard is Dvorak.
+
+**Install.** Both guests found the switch's bridges first (machine.inf on
+98 SE, a restart asked for on 2000), then the NHI: 98 SE's Add New
+Hardware wizard and 2000's Found New Hardware wizard took `xhcicm.inf`
+from the transfer drive, "xHCI98 Thunderbolt 3 Host Interface", Device
+Manager "This device is working properly" (98 SE) and no problem mark
+(2000). The INF wrote every value at its default (98 SE:
+`HKLM\System\CurrentControlSet\Services\Class\System\0034`; 2000:
+`...\Control\Class\{4D36E97D-...}\0014`).
+
+**What the emulator saw** (its `usb4_*` trace), the same on both guests:
+
+| Step | Trace |
+|---|---|
+| start, `XhciCmApprove` 1 | ring 0 TX and RX enabled raw; mailbox `0x23` ok; ICM command `0x03` driver ready (security 1, boot ACL 16 slots); device connected link 1 `approved 0`; the host-router read; get route `0x0a` link 1 depth 1 to route 1; approve `0x04` with the UUID, key `0x10`; the PCIe path up; "ICM approve link 1: tunnel up" |
+| disable (98 SE: Device Manager's "Disable in this hardware profile"; 2000: Action, Disable) | rings disabled, then mailbox `0x07` ok - in that order (record 21 section 5.6) |
+| enable | rings, `0x23`, driver ready; device connected `approved 1` (the tunnel kept across the disable); get route; no approve |
+| `device_del enc0` | device disconnected link 1 |
+| `XhciCmApprove` 0 (set in regedit, then disable and enable), `device_add enc0` | device connected `approved 0`; get route; no approve command |
+
+**What the driver logged** (`XhciLogVerbosity` 2, the `qemu` flavour's
+port-0xE9 mirror, emitted from the connection-manager thread after each
+pass): the values as read; `cm.bar.length=00040000`; `cm.cfg.ids=15BF8086`,
+`cm.cfg.class=00088000`, `cm.cfg.subsystem=22B017AA`;
+`cm.hw.profile=00000002` (Alpine Ridge); `tbt.hw.fw-status=800001A1`,
+`tbt.hw.mode=00000003`; `cm.select.outcome=00000001` (ICM); `cm.bus-master`;
+`cm.reenum.start`; `tbt.icm.security-level=00000001`; `cm.bind=00000000`;
+on the enable with the device present `cm.action.tunnel-up=00000002` (why:
+announced already approved), `cm.action.uuid0=4DE23D20` and
+`cm.reenum.not-done` (the stub); on the unplug `tbt.icm.device-gone` and
+`cm.action.tunnel-down=00000003` (why: disconnected); at `XhciCmApprove` 0
+`tbt.icm.connected` then `tbt.icm.approve-withheld`. Windows 2000's
+DbgPrint path gave the same lines.
+
+**The final build, read again.** The `qemu` flavour of the reviewed
+driver (commit `08eb9304`, built x86 `all` and `-amd64 all` with every
+gate) replaced the earlier one on the 98 SE guest through Device
+Manager's Update Driver and Have Disk: the old instance's stop stopped the
+rings and then sent `0x07`, logging the device table and its counters
+(`cm.icm.approve.withheld=00000001`); the new one bound (`0x23`, driver
+ready, the device announced `approved 0`, get route) and, at
+`XhciCmApprove` 0, withheld it; `device_del enc0` then gave
+`cm.action.tunnel-down=00000003`. The 2000 legs were not repeated on that
+build.
+
+**What is not read here.** Re-enumeration (the stub logs; 39-A.5), safe
+eject (39-A.8), the other rows (only Alpine Ridge is modelled), suspend and
+resume, shutdown, surprise removal of the NHI itself, and the `release` and
+`debug` flavours. On both guests the Thunderbolt controller's own xHCI
+`15C1`, behind the switch, raised a wizard offering the base image's
+older `xhci98` INF, which was cancelled: it is `xhci98.sys`'s device, not
+this driver's.
