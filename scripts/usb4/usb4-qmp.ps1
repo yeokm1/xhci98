@@ -51,6 +51,17 @@ $mainRoot = Split-Path -Parent ($commonDir -replace '/', '\')
 if ($Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw "bad -Name '$Name'" }
 if ($RunRoot -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or $RunRoot -eq 'bin') { throw "bad -RunRoot '$RunRoot'" }
 $runDir = Join-Path $mainRoot "vm\$RunRoot\$Name"
+# As run-usb4-guest.ps1: no junction or link between vm\ and the run
+# directory (the name checks above are lexical only).
+foreach ($p in @((Join-Path $mainRoot "vm\$RunRoot"), $runDir)) {
+    if (Test-Path -LiteralPath $p) {
+        $item = Get-Item -LiteralPath $p -Force
+        if ($item.LinkType -eq 'Junction' -or $item.LinkType -eq 'SymbolicLink' -or
+            ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            throw "$p is a junction or link"
+        }
+    }
+}
 $runJson = Join-Path $runDir 'run.json'
 if (-not (Test-Path $runJson)) { throw "no run.json for '$Name' ($runJson)" }
 $run = Get-Content $runJson -Raw | ConvertFrom-Json

@@ -188,6 +188,25 @@ function Test-Under([string]$path, [string]$root) {
     $r = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
     return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)
 }
+# Refuses a path under root that passes through a junction or symbolic link
+# (an existing component between root and path, path included): Test-Under
+# is lexical, and a reparse point could lead it outside root.
+function Assert-NoReparse([string]$path, [string]$root, [string]$what) {
+    $r = [System.IO.Path]::GetFullPath($root).TrimEnd('\')
+    $p = [System.IO.Path]::GetFullPath($path).TrimEnd('\')
+    while ($p.Length -gt $r.Length -and (Test-Under $p $r)) {
+        if (Test-Path -LiteralPath $p) {
+            $item = Get-Item -LiteralPath $p -Force
+            # LinkType, not the ReparsePoint attribute: a OneDrive cloud
+            # file carries that attribute and leads nowhere else.
+            if ($item.LinkType -eq 'Junction' -or $item.LinkType -eq 'SymbolicLink' -or
+                (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -and $item.PSIsContainer -and -not $item.LinkType)) {
+                throw "$what passes through a junction or link: $p"
+            }
+        }
+        $p = Split-Path -Parent $p
+    }
+}
 $runParent = Join-Path $vmRoot $RunRoot
 $runDir = Join-Path $runParent $Name
 $base = Join-Path $vmRoot $g.Img
@@ -203,7 +222,11 @@ if ($BaseImage) {
 $disk = Join-Path $runDir 'disk.qcow2'
 $nvme = Join-Path $runDir 'nvme.qcow2'
 if (-not (Test-Path $base)) { throw "base image missing: $base" }
-if (Test-Under $base $runDir) { throw "-BaseImage cannot sit in the run directory $runDir" }
+# A backing image never sits under the run root, where -XferImg (attached
+# writable) and the overlays live.
+if (Test-Under $base $runParent) { throw "-BaseImage cannot sit under the run root $runParent" }
+Assert-NoReparse $base $vmRoot 'the base image'
+Assert-NoReparse $runDir $vmRoot 'the run directory'
 
 # ---------------------------------------------------------------- QEMU binary
 # Default: the fork's build, copied to vm\usb4\bin under the admission lock.
@@ -229,6 +252,8 @@ if ($XferImg) {
     if (-not (Test-Under $XferImg $runParent) -or (Split-Path -Leaf $XferImg) -notmatch '^xfer[A-Za-z0-9._-]*\.img$') {
         throw "-XferImg must be a raw image named xfer*.img under $runParent (it is attached writable)"
     }
+    Assert-NoReparse $XferImg $vmRoot '-XferImg'
+    if ($XferImg -ieq $base) { throw '-XferImg cannot be the base image' }
 }
 if ($NvmeBase) {
     if (-not (Test-Path $NvmeBase -PathType Leaf)) { throw "-NvmeBase $NvmeBase does not exist" }
