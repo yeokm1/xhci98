@@ -434,9 +434,12 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
 {
     PVOID now[CM_SNAP_MAX];
     ULONG isNew[CM_SNAP_MAX];
+    ULONG filtered[CM_SNAP_MAX];
     ULONG count;
     ULONG i;
+    ULONG j;
     ULONG attach;
+    ULONG unfiltered;
     KIRQL irql;
     NTSTATUS status;
 
@@ -466,15 +469,22 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
     KeReleaseSpinLock(&cmRegLock, irql);
 
     for (i = 0; i < count; i++) {
-        if (!isNew[i]) {
-            continue;
+        /* A PDO already reported keeps what it had: a child filter or
+         * none. */
+        filtered[i] = 0;
+        for (j = 0; j < filter->SnapCount && !isNew[i]; j++) {
+            if (filter->Snap[j] == now[i]) {
+                filtered[i] = filter->SnapFiltered[j];
+            }
         }
-        if (!attach) {
+        if (!isNew[i] || !attach) {
             continue;
         }
         status = cmChildCreate(filter, (PDEVICE_OBJECT)now[i]);
         KeAcquireSpinLock(&cmRegLock, &irql);
         if (NT_SUCCESS(status)) {
+            filtered[i] = 1;
+            filter->ChildLive++;
             cmRegAttached++;
         } else if (status == STATUS_DEVICE_BUSY) {
             cmRegSkipped++;
@@ -483,12 +493,21 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
         }
         KeReleaseSpinLock(&cmRegLock, irql);
     }
+    unfiltered = 0;
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
+        filter->SnapFiltered[i] = filtered[i];
+        if (!filtered[i]) {
+            unfiltered++;
+        }
     }
     filter->SnapCount = count;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
+    filter->Unfiltered = unfiltered + (relations != NULL &&
+                                       relations->Count > CM_SNAP_MAX
+                                           ? relations->Count - CM_SNAP_MAX
+                                           : 0);
     if (filter->Published && !filter->Gone && !filter->Baseline) {
         filter->Baseline = 1;
         cmRegRecompute();
@@ -540,7 +559,17 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     return STATUS_SUCCESS;
 }
 
-VOID CmRegChildEjected(PCM_FILTER child)
+/*
+ * A child filter's device has been removed (its REMOVE_DEVICE already
+ * passed down and finished below): `ejected` when that removal followed a
+ * query-remove, not a surprise removal. The bridge counts its live child
+ * stacks; once none is left and no device it reported is without a child
+ * filter (the baseline's, which cannot be watched), a port on which an
+ * orderly removal was seen is posted to the owning domain - so the
+ * per-port entry runs only after every function behind the port has
+ * finished its removal (record 22 section 10.4). PASSIVE_LEVEL.
+ */
+VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
 {
     KIRQL irql;
     PCM_FILTER bridge;
@@ -551,9 +580,17 @@ VOID CmRegChildEjected(PCM_FILTER child)
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
+    if (bridge->ChildLive != 0) {
+        bridge->ChildLive--;
+    }
+    if (ejected) {
+        bridge->EjectSeen = 1;
+    }
     d = bridge->Owner;
-    if (bridge->Published && !bridge->Gone && d != NULL &&
-        bridge->OwnerIndex < d->Reenum.Members) {
+    if (bridge->EjectSeen && bridge->ChildLive == 0 &&
+        bridge->Unfiltered == 0 && bridge->Published && !bridge->Gone &&
+        d != NULL && bridge->OwnerIndex < d->Reenum.Members) {
+        bridge->EjectSeen = 0;
         d->Reenum.EjectPending |= 1UL << bridge->OwnerIndex;
         d->Reenum.Port[bridge->OwnerIndex].Flags |= CM_PORT_EJECTED;
     }
@@ -1071,8 +1108,15 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
     for (i = 0; i < r->Members; i++) {
         flags = cmFlags(nhi, i);
         if ((flags & CM_PORT_ACTIVE) == 0) {
+            /* An exclusive member not yet active (NT: its filter has not
+             * published or not taken its baseline) owes this change: it
+             * is re-enumerated once it becomes active (CmReenumService). */
+            if (flags & CM_PORT_EXCLUSIVE) {
+                r->Port[i].Missed = 1;
+            }
             continue;
         }
+        r->Port[i].Missed = 0;
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
                 r->CallFailures++;
@@ -1380,6 +1424,18 @@ VOID CmReenumService(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER && r->Reenum != 0) {
         cmAskBaselines(nhi);
     }
+    /* A change skipped while a member was not active, now that it is. */
+    for (i = 0; i < r->Members && r->Reenum != 0; i++) {
+        if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE)) {
+            r->Port[i].Missed = 0;
+            CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
+            if (r->Route == CM_ROUTE_FILTER) {
+                (VOID)cmInvalidate(nhi, i, TRUE);
+            } else if (r->Route == CM_ROUTE_CONFIGMG) {
+                cmCfgmgMember(nhi, i, TRUE);
+            }
+        }
+    }
     if (r->Route == CM_ROUTE_CONFIGMG && r->MarkOpen) {
         for (i = 0; i < r->Members; i++) {
             if (cmFlags(nhi, i) & CM_PORT_ACTIVE) {
@@ -1396,28 +1452,35 @@ VOID CmReenumSuspend(PCM_NHI nhi)
 {
     PCM_REENUM r;
     const TBT_ICM_PROFILE *profile;
+    CM_PORTS_RESUME resume;
     KIRQL irql;
     PCM_FILTER f;
-    ULONG ready;
-    ULONG retries;
     ULONG seconds;
     ULONG i;
 
     r = &nhi->Reenum;
     r->Suspends++;
+    /* Every synchronous stage of the client's resume (cm_ports.h): the
+     * devices in the table now are those the reconciliation expects
+     * re-announced and approved, and one more for a device plugged during
+     * the sleep. */
     profile = nhi->Icm.Profile;
-    ready = nhi->Icm.CmdTimeoutMs;
-    retries = 0;
+    resume.ReadyMs = nhi->Icm.CmdTimeoutMs;
+    resume.ReadyRetries = 0;
     if (profile != NULL) {
         if (profile->ReadyTimeoutMs != 0) {
-            ready = profile->ReadyTimeoutMs;
+            resume.ReadyMs = profile->ReadyTimeoutMs;
         }
-        retries = profile->ReadyRetries;
+        resume.ReadyRetries = profile->ReadyRetries;
     }
-    r->HoldBoundMs = CmPortsHoldBound(ready, retries,
-                                      TBT_ICM_HOSTPOLL_TRIES,
-                                      TBT_ICM_HOSTPOLL_TIMEOUT_MS,
-                                      TBT_ICM_RECONCILE_MAX_MS);
+    resume.HostPollTries = TBT_ICM_HOSTPOLL_TRIES;
+    resume.HostPollMs = TBT_ICM_HOSTPOLL_TIMEOUT_MS;
+    resume.ReconcileMs = TBT_ICM_RECONCILE_MAX_MS;
+    resume.Devices = TbtIcmDeviceCount(&nhi->Icm) + 1;
+    resume.CmdMs = nhi->Icm.CmdTimeoutMs;
+    resume.ApproveMs = nhi->Icm.ApproveTimeoutMs;
+    resume.Retries = nhi->Icm.Retries;
+    r->HoldBoundMs = CmPortsHoldBound(&resume);
     seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
     if (r->Route != CM_ROUTE_FILTER) {

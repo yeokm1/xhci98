@@ -244,11 +244,7 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         filter->Started = 0;
-        if (child) {
-            if (filter->QueryRemoved && !filter->SurpriseRemoved) {
-                CmRegChildEjected(filter);
-            }
-        } else {
+        if (!child) {
             CmRegWithdraw(filter);
         }
         /* Close acquisition, forward the removal, then drop the attach's
@@ -262,6 +258,13 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         cmFilterRelease(filter);
         (VOID)KeWaitForSingleObject(&filter->Drained, Executive, KernelMode,
                                     FALSE, NULL);
+        if (child) {
+            /* After the removal finished below: the port's eject is posted
+             * only once every function behind it is removed. */
+            CmRegChildRemoved(filter,
+                              (BOOLEAN)(filter->QueryRemoved &&
+                                        !filter->SurpriseRemoved));
+        }
         IoDetachDevice(filter->Common.Lower);
         IoDeleteDevice(filter->Common.Self);
         return status;

@@ -274,20 +274,69 @@ static void test_snapshot(void)
 
 /* ---- the hold's bound -------------------------------------------------- */
 
+static ULONG bound(ULONG readyMs, ULONG readyRetries, ULONG devices, ULONG cmdMs,
+                   ULONG approveMs, ULONG retries)
+{
+    CM_PORTS_RESUME r;
+
+    r.ReadyMs = readyMs;
+    r.ReadyRetries = readyRetries;
+    r.HostPollTries = 50;
+    r.HostPollMs = 100;
+    r.ReconcileMs = 5000;
+    r.Devices = devices;
+    r.CmdMs = cmdMs;
+    r.ApproveMs = approveMs;
+    r.Retries = retries;
+    return CmPortsHoldBound(&r);
+}
+
 static void test_bound(void)
 {
-    /* Alpine Ridge: four 5 s driver-ready attempts, the 50 x 100 ms
-     * host-router poll, the reconciliation's 5 s, plus 10 s. */
-    CHECK_EQ(CmPortsHoldBound(5000, 3, 50, 100, 5000), 20000 + 5000 + 5000 + 10000,
-             "the Alpine Ridge bound");
+    CM_PORTS_RESUME r;
+
+    /* Alpine Ridge, no device: the platform's 5 s, four 5 s driver-ready
+     * attempts, the 50 x 100 ms host-router poll, the reconciliation's
+     * 5 s, plus 10 s. */
+    CHECK_EQ(bound(5000, 3, 0, 5000, 10000, 3), 5000 + 20000 + 5000 + 5000 + 10000,
+             "the Alpine Ridge bound with no device");
+    /* One device re-announced and approved: its route query and its approve,
+     * each over four attempts. */
+    CHECK_EQ(bound(5000, 3, 1, 5000, 10000, 3),
+             5000 + 20000 + 5000 + 5000 + 4 * 5000 + 4 * 10000 + 10000,
+             "one device adds its command and its approve, with their retries");
+    /* The case a short bound lost: XhciCmApproveTimeoutMs 60000 - an approve
+     * that succeeds at 45 s is inside the bound. */
+    CHECK(bound(5000, 3, 1, 5000, 60000, 3) > 45000UL + 5000 + 20000 + 5000,
+          "a 60 s approve that answers at 45 s is inside the bound");
     /* Ice Lake: 20 s attempts. */
-    CHECK_EQ(CmPortsHoldBound(20000, 2, 50, 100, 5000), 60000 + 5000 + 5000 + 10000,
+    CHECK_EQ(bound(20000, 2, 0, 5000, 10000, 3), 5000 + 60000 + 5000 + 5000 + 10000,
              "a 20 s row's bound");
-    CHECK_EQ(CmPortsHoldBound(0, 0, 0, 0, 0), CM_PORTS_HOLD_EXTRA_MS, "nothing but the 10 s");
-    CHECK_EQ(CmPortsHoldBound(0xFFFFFFFFUL, 0xFFFFFFFFUL, 50, 100, 0), CM_PORTS_HOLD_MAX_MS,
+    r.ReadyMs = 0;
+    r.ReadyRetries = 0;
+    r.HostPollTries = 0;
+    r.HostPollMs = 0;
+    r.ReconcileMs = 0;
+    r.Devices = 0;
+    r.CmdMs = 0;
+    r.ApproveMs = 0;
+    r.Retries = 0;
+    CHECK_EQ(CmPortsHoldBound(&r), CM_PORTS_HOLD_PLATFORM_MS + CM_PORTS_HOLD_EXTRA_MS,
+             "nothing but the platform's 5 s and the 10 s");
+    CHECK_EQ(bound(0xFFFFFFFFUL, 0xFFFFFFFFUL, 0, 0, 0, 0), CM_PORTS_HOLD_MAX_MS,
              "a huge timeout is held to the cap, without overflow");
-    CHECK_EQ(CmPortsHoldBound(60000, 9, 0xFFFFFFFFUL, 0xFFFFFFFFUL, 0xFFFFFFFFUL),
-             CM_PORTS_HOLD_MAX_MS, "every term at its maximum is the cap");
+    CHECK_EQ(bound(60000, 9, 16, 60000, 60000, 9), CM_PORTS_HOLD_MAX_MS,
+             "sixteen devices at the longest timeouts reach the cap");
+    r.ReadyMs = 0xFFFFFFFFUL;
+    r.ReadyRetries = 0xFFFFFFFFUL;
+    r.HostPollTries = 0xFFFFFFFFUL;
+    r.HostPollMs = 0xFFFFFFFFUL;
+    r.ReconcileMs = 0xFFFFFFFFUL;
+    r.Devices = 0xFFFFFFFFUL;
+    r.CmdMs = 0xFFFFFFFFUL;
+    r.ApproveMs = 0xFFFFFFFFUL;
+    r.Retries = 0xFFFFFFFFUL;
+    CHECK_EQ(CmPortsHoldBound(&r), CM_PORTS_HOLD_MAX_MS, "every term at its maximum is the cap");
 }
 
 int main(void)

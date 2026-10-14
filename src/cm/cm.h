@@ -244,6 +244,14 @@ typedef struct _CM_FILTER {
     /* The snapshot of section 7.4: the PnP dispatch alone touches it. */
     ULONG SnapCount;
     PVOID Snap[CM_SNAP_MAX];
+    ULONG SnapFiltered[CM_SNAP_MAX];    /* a child filter was attached   */
+    /* Safe eject's per-port accounting, under the registration list's
+     * lock: child stacks alive, reported devices without a child filter
+     * (as of the last BusRelations), and an orderly removal seen since the
+     * last eject was posted. */
+    ULONG ChildLive;
+    ULONG Unfiltered;
+    ULONG EjectSeen;
 
     /* ---- child ---- */
     struct _CM_FILTER *Bridge;

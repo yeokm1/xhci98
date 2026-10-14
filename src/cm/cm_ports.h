@@ -75,16 +75,33 @@ ULONG CmPortsNewPdos(PVOID const *old, ULONG oldCount, PVOID const *now,
                      ULONG nowCount, PULONG isNew);
 
 /*
- * The resume hold's watchdog (section 6.3): the NHI's own resume bound -
- * driver ready's `readyMs` per attempt over 1 + `readyRetries` attempts,
- * the host-router poll's `hostPollTries` x `hostPollMs`, the
- * reconciliation's `reconcileMs` - plus CM_PORTS_HOLD_EXTRA_MS, held to
- * CM_PORTS_HOLD_MAX_MS so a large timeout cannot overflow.
+ * The resume hold's watchdog (section 6.3): the NHI's own resume bound
+ * plus CM_PORTS_HOLD_EXTRA_MS. The resume is every synchronous stage of
+ * the client's bring-up: the platform's readiness (CM_PORTS_HOLD_PLATFORM_MS,
+ * the integrated hosts' force power and firmware-ready wait with the NVM
+ * authentication poll, tbt_hw.h), driver ready's `readyMs` per attempt over
+ * 1 + `readyRetries` attempts, the host-router poll's `hostPollTries` x
+ * `hostPollMs`, the reconciliation's `reconcileMs`, and for each of
+ * `devices` re-announced devices one ordinary command (the route query)
+ * and one approve, each over 1 + `retries` attempts of `cmdMs` and
+ * `approveMs`. Held to CM_PORTS_HOLD_MAX_MS, so no timeout can overflow;
+ * a bound that reaches the cap is the cap, never less.
  */
-#define CM_PORTS_HOLD_EXTRA_MS  10000UL
-#define CM_PORTS_HOLD_MAX_MS    600000UL
-ULONG CmPortsHoldBound(ULONG readyMs, ULONG readyRetries,
-                       ULONG hostPollTries, ULONG hostPollMs,
-                       ULONG reconcileMs);
+typedef struct _CM_PORTS_RESUME {
+    ULONG ReadyMs;
+    ULONG ReadyRetries;
+    ULONG HostPollTries;
+    ULONG HostPollMs;
+    ULONG ReconcileMs;
+    ULONG Devices;
+    ULONG CmdMs;
+    ULONG ApproveMs;
+    ULONG Retries;
+} CM_PORTS_RESUME;
+
+#define CM_PORTS_HOLD_EXTRA_MS      10000UL
+#define CM_PORTS_HOLD_PLATFORM_MS   5000UL
+#define CM_PORTS_HOLD_MAX_MS        1800000UL
+ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
 
 #endif /* CM_PORTS_H */

@@ -153,6 +153,9 @@ typedef struct _CM_REENUM_PORT {
     ULONG Marked;           /* 98: children marked removable              */
     ULONG AskedSerial;      /* NT: the filter publication a baseline was
                                last asked of                              */
+    ULONG Missed;           /* a tunnel change came while the member was
+                               exclusive but not active: re-enumerated
+                               once it is                                 */
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -304,8 +307,11 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
  * <= DISPATCH_LEVEL. */
 BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
 
-/* A child filter's device is being removed after a query-remove (not a
- * surprise removal): post the eject to the owning domain. PASSIVE_LEVEL. */
-VOID CmRegChildEjected(struct _CM_FILTER *child);
+/* A child filter's device has been removed, its REMOVE_DEVICE passed
+ * down and finished below; `ejected` when a query-remove preceded it and
+ * no surprise removal did. Once no live child stack and no unwatched
+ * device is left on the port, an orderly removal seen there is posted to
+ * the owning domain as an eject. PASSIVE_LEVEL. */
+VOID CmRegChildRemoved(struct _CM_FILTER *child, BOOLEAN ejected);
 
 #endif /* CM_REENUM_H */

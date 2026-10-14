@@ -316,18 +316,31 @@ static ULONG cmMulCap(ULONG a, ULONG b)
     return r;
 }
 
-ULONG CmPortsHoldBound(ULONG readyMs, ULONG readyRetries,
-                       ULONG hostPollTries, ULONG hostPollMs,
-                       ULONG reconcileMs)
+/* 1 + n attempts, held to 1000. */
+static ULONG cmAttempts(ULONG retries)
 {
-    ULONG attempts;
-    ULONG bound;
+    return retries >= 1000UL ? 1000UL : retries + 1;
+}
 
-    attempts = readyRetries >= 1000UL ? 1000UL : readyRetries + 1;
-    bound = cmMulCap(readyMs, attempts);
-    bound = cmAddCap(bound, cmMulCap(hostPollMs,
-                                     hostPollTries >= 1000UL ? 1000UL
-                                                             : hostPollTries));
-    bound = cmAddCap(bound, reconcileMs);
+ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume)
+{
+    ULONG bound;
+    ULONG perDevice;
+
+    bound = CM_PORTS_HOLD_PLATFORM_MS;
+    bound = cmAddCap(bound, cmMulCap(resume->ReadyMs,
+                                     cmAttempts(resume->ReadyRetries)));
+    bound = cmAddCap(bound, cmMulCap(resume->HostPollMs,
+                                     resume->HostPollTries >= 1000UL
+                                         ? 1000UL
+                                         : resume->HostPollTries));
+    bound = cmAddCap(bound, resume->ReconcileMs);
+    perDevice = cmAddCap(cmMulCap(resume->CmdMs, cmAttempts(resume->Retries)),
+                         cmMulCap(resume->ApproveMs,
+                                  cmAttempts(resume->Retries)));
+    bound = cmAddCap(bound, cmMulCap(perDevice,
+                                     resume->Devices >= 1000UL
+                                         ? 1000UL
+                                         : resume->Devices));
     return cmAddCap(bound, CM_PORTS_HOLD_EXTRA_MS);
 }
