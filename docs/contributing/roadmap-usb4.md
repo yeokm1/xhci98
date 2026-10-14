@@ -40,10 +40,14 @@ reads and never modifies, and whose QEMU processes it never stops:
 (`ICM-PROTOCOL.md`, `PLATFORM-MATRIX.md`, `REENUM-EXPERIMENT.md`,
 `WIN98-TEST.md`, `ARCHITECTURE.md`, `NVME-DRIVER-EVAL.md`, `tools/usb4cm`,
 `scripts/run-win98.sh`). Since 2026-10-15 (owner) Linux's
-`drivers/thunderbolt` and FreeBSD's `sys/dev/thunderbolt` are interface
-documentation for this work under `AGENTS.md`'s mirror rule (ids,
-layouts, offsets, constants, sequences and quirks cited by file and
-symbol, no function body copied; `legal-provenance.md` section 3). The
+`drivers/thunderbolt` and FreeBSD's `sys/dev/thunderbolt` are references
+for this work (ids, layouts, offsets, constants, sequences and quirks
+cited by file and symbol), and since `usb4-emu`'s relicensing to
+GPL-2.0-only landed the same day (`3c74189`) their code and `usb4-emu`'s
+may be adapted, each adapted file keeping its source's copyright lines
+and SPDX tag and gaining a `legal-provenance.md` section 2a entry with the
+pinned commit (`AGENTS.md`, "Reference Implementations";
+`legal-provenance.md` section 3). The
 NVMe driver behind the tunnel is `nvme98`
 (`D:\OneDrive\git-projects\nvme98`, `docs/PLAN.md`), read-only here too;
 what it asks of this connection manager is design record 21 section 7.
@@ -65,7 +69,7 @@ recommendation; the owner's answers are recorded here as
 |---|---|
 | Generic by best effort | Owner, 2026-10-14: the Thunderbolt 3 and USB4 work is made as generic as the evidence allows; on 2026-10-15, as many controllers as possible. Record 21 section 1.4 is the answer: the host interface and re-enumeration are generic; the ICM client is generic across devices and per-generation across the Intel firmware-ICM hosts it addresses, through a hardware profile and a message and lifecycle profile per generation; real USB4 hosts are the software connection manager (Phase 40, design record 22), and an unknown firmware connection manager is unsupported |
 | Phase numbers | Owner, 2026-10-15: `TB3` is Phase 39 (`39-0.n`, `39-A.n`, `39-V.n`, `39-E.n`, `39.final`), `U4CM` is Phase 40 (`40.n`, `40.final`); after 40.1, Phase 40's work is split into `40-0.n`, `40-A.n` and `40-V.n` as Phase 39's is (orchestrator, 2026-10-15, for the owner to confirm) |
-| Sources | Owner, 2026-10-15: Linux `drivers/thunderbolt` and FreeBSD `sys/dev/thunderbolt` may be read as interface documentation, under the rule design record 20's reading of Linux's xHCI quirks followed (no function body copied); record 21 section 9 |
+| Sources | Owner, 2026-10-15: Linux `drivers/thunderbolt` and FreeBSD `sys/dev/thunderbolt` may be read as interface documentation, under the rule design record 20's reading of Linux's xHCI quirks followed (no function body copied); record 21 section 9. Widened the same day, through the `usb4-emu` maintainer's note, once `usb4-emu`'s relicensing to GPL-2.0-only landed (`3c74189`): code from `usb4-emu` (`tools/usb4cm` included), Linux and FreeBSD may be adapted for this work, notices and SPDX tags kept, a `legal-provenance.md` section 2a entry per adapted file; behaviour from Linux alone stays [linux]; nothing moves into `nvme98` (`legal-provenance.md` section 3) |
 | One binary (D1) | Owner, 2026-10-15, as recommended: `xhcicm.sys` in `src\cm\` with its own INFs, allowlists and gate |
 | The NT filter's install (D2) | Owner, 2026-10-15, as recommended: a separate NT-only INF adding a device-specific `UpperFilters`, proved by `39-0.4`; a boot-start class filter only if that cannot be made to install |
 | Interrupts (D3) | Owner, 2026-10-15, as recommended: none, polling only, 200 ms idle |

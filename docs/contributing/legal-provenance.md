@@ -341,8 +341,10 @@ that files generated from `registers.json` carry the tbtools notice.
 it finds here.
 
 `usb4-emu`'s `main` was relicensed to GPL-2.0-only at `3c74189`
-(2026-10-15). The files above were lifted from `a68bc74`, where they carry
-the MIT notice, and keep it; a file taken from `3c74189` or later is an
+(2026-10-15). The files above that have landed (`u4hi.c` as
+`src/cm/tbt_ring.c` and `u4regs.h` as `src/cm/tbt_regs.h`, task 39-A.2)
+were lifted from `a68bc74`, where they carry the MIT notice, and keep it.
+The others are planned: a file taken from `3c74189` or later is an
 adaptation under section 3's rule and is entered in the subsection below
 instead.
 

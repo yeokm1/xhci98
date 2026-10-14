@@ -7,8 +7,14 @@ Written for Phase 39 of `roadmap-usb4.md` ("Phase 39 - The Thunderbolt 3
 ICM Client, Tunnel Re-enumeration and Safe Eject"), the planned work `TB3`
 until the owner opened it on 2026-10-15; its task ids are `39-0.n`,
 `39-A.n`, `39-V.n`, `39-E.n` and `39.final`, and the USB4 software
-connection manager that follows is Phase 40 (planned as `U4CM`). Nothing in
-`src\` implements it yet. Section 12 lists what is open. Draft 6 adds, by
+connection manager that follows is Phase 40 (planned as `U4CM`). Since it
+was written, the pure core has landed in `src\cm\` (`tbt_ring.c`,
+`tbt_icm.c`, `tbt_hw.c`, `tbt_topo.c`, tasks `39-A.2`, `39-A.3` and
+`39-A.5`'s pure half, with their host suites); the driver around it and
+the virtual-machine legs are still to come. Revised on 2026-10-15 for the
+`usb4-emu` relicensing (section 9), the decisions shared with design
+record 22 (sections 1.4.2 and 6.3) and the pure core's behaviour
+(sections 4, 5.3 to 5.5, 6.3 and 10). Section 12 lists what is open. Draft 6 adds, by
 the owner's decisions of 2026-10-15, the per-generation profiles and the id
 list of every Intel firmware-connection-manager host the Linux driver
 addresses, read from Linux under the owner's source rule of the same day
@@ -312,7 +318,12 @@ Linux describes firmware readiness apart from the platform's power
 management ([linux] `pci.c` `icl_nhi_force_power`). It leaves the bit set
 and logs it. A bit the BIOS had already set is left set by every
 instance. (Record 22 section 4.2's rule, which this record follows; an
-orchestrator decision of 2026-10-15, for the owner to confirm.)
+orchestrator decision of 2026-10-15, for the owner to confirm.) The pure
+core as first merged predates this rule: `tbt_hw.c`'s
+`TbtHwPlatformShutdown` still clears a bit an inert instance set after a
+failed firmware-ready poll, and `test_tbt_hw` expects it to. Both change
+to this rule with task `39-A.4`, which brings the hardware profile into
+the driver.
 
 A Code 10 refusal is kept for the cases where starting would mislead:
 BAR0 not delivered or not mappable.
@@ -1035,10 +1046,12 @@ route string on the TR and ICL rows, then run the tunnel-down sequence of
 section 6.5. No matching entry is section 1.4's unmatched disconnect on
 every row. A disconnect, and a replacing announcement at the same place
 (the last case of the list above), also removes every entry below the
-device it names, deepest first, each with its own tunnel-down sequence,
-and cancels any queued announcement at or below that place: a device
-cannot stay behind a router that left (Linux's `tb_switch_remove` takes
-the switches below it [linux]).
+device it names, deepest first, each with its own tunnel-down sequence:
+a device cannot stay behind a router that left (Linux's
+`tb_switch_remove` takes the switches below it [linux]). A disconnect
+also cancels any queued announcement at or below that place; a
+replacement does not, since announcements queued behind it describe the
+topology that replaced the old one.
 
 An announcement can be lost when it arrives with this driver's event
 queue full. It is not dropped silently: at the next idle poll the driver
@@ -1403,13 +1416,20 @@ With no override and an empty set, the driver logs the bridges it saw and
 runs with re-enumeration disabled (section 6.4); it never falls back to an
 arbitrary bridge.
 
-**INCOMPLETE.** A discovery that could not read every function it had to
-- an override entry, or any function on a bus the walk searches, whose
-configuration access failed or whose capability list could not be walked
-- ends **INCOMPLETE with an empty set**, never with a set that might lack
-a port, and is tried again; an unreadable override entry is never treated
-as dropped. Until a discovery completes the domain runs as with an empty
-set. The other outcomes beside a set are: the override naming no bridge,
+**INCOMPLETE.** A discovery that could not read what it had to ends
+**INCOMPLETE with an empty set**, never with a set that might lack a
+port, and is tried again. With the override, that is an entry whose
+identity or header could not be read (a failed access, or a present
+function whose header reads all ones); such an entry is never treated as
+dropped. An entry that is a bridge is taken whatever its capability list
+reads, since only its port readings depend on the capabilities, and a
+failed reading there is an error (section 6.5), never "absent"; and an
+override's outcome stands in place of the automatic discovery's, so an
+INCOMPLETE automatic walk beside a complete override is logged only.
+Without the override, it is any function on a bus the walk searches whose
+configuration access failed, whose header reads all ones, or whose
+capability list could not be walked. Until a discovery completes the
+domain runs as with an empty set. The other outcomes beside a set are: the override naming no bridge,
 no candidate at all, hot-plug bridges seen but none a source names (the
 override is the way), listed root ports ambiguous between NHIs, and more
 members than the set has room for (empty, logged).
@@ -2035,7 +2055,8 @@ vectors):
   failure after activation (rings stopped, `0x07` only after `driver
   ready`, no `0x06`); an integrated force power whose firmware-ready bit
   never sets (inert, and the bit this driver set left set at stop and
-  logged), one the BIOS had set (left set at stop), and an active
+  logged; the vector as first merged expects it cleared, and changes with
+  section 1.4.2's code), one the BIOS had set (left set at stop), and an active
   instance's own bit (cleared after the unbind); an
   Apple subsystem id; a non-Intel candidate, whose firmware-status
   register is never read; and the inert state's own vector - after it no
