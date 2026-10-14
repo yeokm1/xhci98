@@ -941,9 +941,15 @@ link it preserves:
    tunnel, if any, is built without it, since its adapter has no time to
    correct.
 2. **The current mode is read first**, as the **TMU-Off predicate** of
-   the link, which section 6.5 uses too: Off (Guide Table 7-2) when
-   TMU_RTR_CS_3 TSPacketInterval reads 0 in both routers of the link,
-   TMU_ADP_CS_3 EnableUniDirectionalMode reads 0 on both lane 0 adapters,
+   the link, which section 6.5 uses too. It is a property of the link, not
+   of the routers: the upstream (host) router's TSPacketInterval is shared
+   by all its links, runs for the host router's own TMU (item 4) and is
+   never required to be 0 nor cleared by this driver. Off (Guide Table 7-2
+   and 7.4.3.4.2) when the **downstream** router's TMU_RTR_CS_3
+   TSPacketInterval reads 0 (the field that drives a bi-directional link),
+   TMU_ADP_CS_3 EnableUniDirectionalMode reads 0 on both lane 0 adapters
+   (so the upstream router's rate drives no uni-directional mode on this
+   link),
    and, on each router that itself reports USB4 Version 2.0 (the fields
    are version 2 ones, read per router; on an older router they are taken
    as absent, as [linux] `tmu.c` `tb_switch_tmu_enhanced_is_supported`
@@ -1464,14 +1470,19 @@ profile:
   release the IRP and at once ask the filter for an invalidation, so the
   functions that did not come back are reported missing; nothing is torn
   down without removal evidence. Decision U15 records this window.
-- **The NHI's resume bound** under this profile is the sum of section
-  5.2's bounds over its steps: platform preparation (1.05 s), and per
+- **The NHI's resume bound** under this profile is the sum, over its
+  steps, of their implemented costs, each rounded as section 5.3 measures
+  it - a maximum wait counted at its bound plus one tick, a minimum wait at
+  its minimum plus two ticks (the extra tick it waits and the tick it may
+  overshoot), a request attempt at 100 ms plus one tick, times its
+  attempts - with the tick period read at suspend; the steps: platform preparation (1.05 s), and per
   obligation the verification reads or the rebuild (enumeration with its
   20 retries, Router Ready, Get Capabilities, Buffer Allocation, bonding,
   the TMU's posting and 50 ms convergence where a USB3 obligation needs
   it, Configuration Ready, the Detect gate, the paths, L0, the USB3
-  bandwidth handshake), each request within its 400 ms worst case; the
-  driver computes it at suspend from the obligations it recorded.
+  bandwidth handshake), with each step's repetition count (retries,
+  polls, the obligations recorded at suspend); record 21's 10 s is added on
+  top as the watchdog's margin.
 
 Record 21 section 6.3's conclusion stands for this profile too: the hold
 orders a successful resume and cannot close the window of a failed one,
@@ -1822,7 +1833,9 @@ reading) passes 5 s. So the statement has a deadline of its own:
   (no recipient cached yet, or no sample taken since) has no anchor and
   gets no statement.
 - **The deadline**: the statement, delivery included, must complete
-  within 3 s of the anchor. Queueing behind another port's teardown,
+  within 3 s of the anchor, as measured on section 5.3's clock; a maximum
+  measured on that clock may expire up to one tick late (55 ms at most on
+  these targets), which the 2 s margin to `nvme98`'s 5 s covers. Queueing behind another port's teardown,
   section 7.3 step 1, the PCI-side reading and the recipient lookup all
   spend that one allowance; each step is given only the time left, not
   its own section 5.2 bound; a step that would overrun ends the attempt,
@@ -1835,9 +1848,9 @@ reading) passes 5 s. So the statement has a deadline of its own:
 | from the anchor to the removal being found | normally one idle period; counted against the allowance either way |
 | queueing behind another teardown, section 7.3 step 1, the PCI-side reading, the recipient, delivery | together within what is left of the 3 s, or no statement |
 
-So a statement that is delivered at all is delivered within 3 s of the
-last moment the endpoint was seen present, so within 3 s of its presence
-loss, inside `nvme98`'s 5 s; task 39-A.7's qualification measures
+So a statement that is delivered at all is delivered within 3 s (plus at
+most one tick of clock quantisation) of the last moment the endpoint was
+seen present, so within that of its presence loss, inside `nvme98`'s 5 s; task 39-A.7's qualification measures
 it per OS, saturated, with the disconnect injected at every point section
 7.4 names.
 
