@@ -1083,18 +1083,18 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
                  * incomplete at the timeout is abandoned whole (record 21
                  * section 1.4.6). */
                 icm->Counters.Responses++;
-                if ((TBT_ICM_HDR_FLAGS(f.Dw[0]) & TBT_ICM_FLAG_ERROR) != 0) {
-                    icm->Counters.ErrorFlags++;
-                    tbtIcmLogRaw(icm, &f);
-                    rc = TBT_E_ERROR_FLAG;
-                    break;
-                }
                 if (f.Words < minWords ||
                     TBT_ICM_HDR_COUNT(f.Dw[0]) != TBT_ICM_TOPO_PACKETS ||
                     TBT_ICM_HDR_INDEX(f.Dw[0]) >= TBT_ICM_TOPO_PACKETS) {
                     icm->Counters.EventsMalformed++;
                     tbtIcmLogRaw(icm, &f);
                     continue;
+                }
+                if ((TBT_ICM_HDR_FLAGS(f.Dw[0]) & TBT_ICM_FLAG_ERROR) != 0) {
+                    icm->Counters.ErrorFlags++;
+                    tbtIcmLogRaw(icm, &f);
+                    rc = TBT_E_ERROR_FLAG;
+                    break;
                 }
                 tbtIcmTopoStore(icm, &f);
                 if (icm->TopoReceived == TBT_ICM_TOPO_ALL) {
@@ -1106,21 +1106,25 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
             match = FALSE;
             if (f.Words != 0 && f.Pdf == TBT_PDF_ICM_RESP &&
                 TBT_ICM_HDR_CODE(f.Dw[0]) == TBT_ICM_HDR_CODE(req[0]) &&
-                TBT_ICM_HDR_INDEX(f.Dw[0]) == 0 && f.Words > echo) {
+                TBT_ICM_HDR_INDEX(f.Dw[0]) == 0) {
+                if (f.Words < minWords || f.Words <= echo) {
+                    /* Shorter than the row's structure (record 21
+                     * sections 1.4.6 and 5.2): logged whole, not acted on,
+                     * its flags included; the wait goes on. */
+                    icm->Counters.EventsMalformed++;
+                    tbtIcmLog(icm, "tbt.icm.response-short", f.Words);
+                    tbtIcmLogRaw(icm, &f);
+                    if (TbtDeadlinePassed(&d, icm->Host)) {
+                        break;
+                    }
+                    continue;
+                }
                 match = TRUE;
                 for (k = 1; k <= echo; k++) {
                     if (f.Dw[k] != req[k]) {
                         match = FALSE;
                     }
                 }
-            }
-            if (match && f.Words < minWords) {
-                /* Shorter than the row's structure (record 21 sections
-                 * 1.4.6 and 5.2): logged, not taken; the wait goes on. */
-                icm->Counters.EventsMalformed++;
-                tbtIcmLog(icm, "tbt.icm.response-short", f.Words);
-                tbtIcmLogRaw(icm, &f);
-                continue;
             }
             if (match) {
                 n = f.Words < respMax ? f.Words : respMax;
@@ -1445,9 +1449,11 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
         recovery = (BOOLEAN)(d->ApproveUnknown || d->ApproveFailed ||
                              (!d->RouteValid && tbtIcmAsksRoute(icm)));
         /* A device the firmware approved and now announces unapproved was
-         * re-plugged unseen: a replacement, below, whatever else it needs. */
-        if (same && (d->Approved == a->Approved ||
-                     d->ApproveUnknown || d->ApproveFailed)) {
+         * re-plugged unseen: a replacement, below, whatever else it needs.
+         * Every other recovery (unrouted, unknown, failed) is settled in
+         * place, its subtree kept. */
+        if (same && (d->Approved == a->Approved || recovery) &&
+            !(d->Approved && !a->Approved)) {
             if (!byRoute && d->Link != a->Link) {
                 /* Enumerated through the port's other link: the route
                  * moved with it (Linux icm.c icm_fr_device_connected). */

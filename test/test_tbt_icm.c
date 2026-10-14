@@ -66,6 +66,7 @@ typedef struct FW {
     unsigned long DisconnectInApproveUs;
     int RouteMode;
     int TopoMode;
+    int TopoShortFirst;     /* a header-only error answer before the real one */
     unsigned long Ready;
     unsigned long Approves;
     unsigned long Routes;
@@ -274,6 +275,11 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
     }
     if (code == 0x01) {
         g_fw.Topos++;
+        if (g_fw.TopoShortFirst) {
+            unsigned long hdr[1];
+            hdr[0] = 0x0e000101UL;
+            fakeQueue(TBT_PDF_ICM_RESP, hdr, 1, 500, 0);
+        }
         if (g_fw.TopoMode != MODE_NEVER) {
             fwTopology(g_fw.TopoMode);
         }
@@ -875,8 +881,10 @@ static void test_wrong_layout(void)
     ev[5] = 0x08110510UL;
     CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "zero UUID: refused");
     memcpy(&ev[1], kUuid, 16);
-    ev[6] = 0x00000140UL;           /* an entry of 0x40 bytes in a 4-byte block */
-    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 7, &a), "name block past the frame: refused");
+    ev[6] = 0x000001F0UL;           /* an entry of 240 bytes in the 220-byte block */
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "name block past the frame: refused");
+    ev[6] = 0;
+    CHECK(TbtIcmProfileAlpineRidge.DecodeConnected(ev, 61, &a), "the same frame, empty names: read");
     memset(ev, 0, sizeof(ev));
     ev[0] = 0x0100b103UL;
     memcpy(&ev[1], kUuid, 16);
@@ -1527,6 +1535,48 @@ static void test_round3(void)
     CHECK_EQ(n, 2, "the old tunnel down, the new one up");
     CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "down");
     CHECK_EQ(act[1].Why, TBT_ICM_WHY_APPROVED, "up after approve");
+
+    /* Unrouted and unapproved, then announced approved: recovered in
+     * place, the child below it kept. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApprovePolicy(&g_icm, FALSE);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.RouteMode = MODE_NEVER;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(200);
+    g_fw.RouteMode = MODE_ANSWER;
+    arConnected(6, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    actions(act, 8);
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(200);
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action: the parent's tunnel up, nothing down");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_UP, "up");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "the child kept");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->RouteValid && d->Approved, "routed and approved");
+
+    /* Short responses are dropped before anything is read from them: a
+     * header-only error answer to the topology query, then the real one. */
+    setup(GEN_FR, 1, 0);
+    g_fw.TopoShortFirst = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    d = TbtIcmDevice(&g_icm, 0);
+    CHECK(d != NULL && d->RouteValid, "the short error answer did not end the query");
+    /* A truncated approve answer is logged as malformed, not a stray. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    {
+        unsigned long tr[3] = { 0x01000004UL, 0xa0211100UL, 0x003d0efcUL };
+        fakeQueue(TBT_PDF_ICM_RESP, tr, 3, 1000000UL, 0);
+    }
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    fakePump();
+    t0 = g_icm.Counters.EventsMalformed;
+    TbtIcmPoll(&g_icm);
+    CHECK(g_icm.Counters.EventsMalformed > t0, "truncated approve answer: malformed");
 
     /* A ring start that wrote registers and then refused: failed. */
     setup(GEN_AR, 0, 0);
