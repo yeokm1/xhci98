@@ -1,6 +1,7 @@
 # Design Record 21 - Thunderbolt 3 Firmware Connection Manager Client and Tunnel Re-enumeration
 
-Status: draft 6, 2026-10-15, before code, reviewed and revised; the
+Status: draft 6, 2026-10-15, reviewed and revised; the pure core landed,
+the driver integration pending; the
 owner's decisions D1 to D13 taken (D4 on 2026-10-14, the rest on
 2026-10-15) and written into section 11 and the sections each one names.
 Written for Phase 39 of `roadmap-usb4.md` ("Phase 39 - The Thunderbolt 3
@@ -1059,8 +1060,10 @@ sends another `driver ready`, without restarting the rings or sending
 `0x23`, as a resume does, and the firmware announces every device again
 (tunnels survive it [obs] `ICM-PROTOCOL` sections 2.3 and 7); the
 reconciliation then runs as after any `driver ready`. At most three such
-`driver ready`s in a row; after the third the driver gives up, logs it and
-treats every tunnel port of the domain as changed (a RESYNC, section 6),
+`driver ready`s in a row (the count starts again once one recovers
+without another loss); if another loss would need a fourth, the next idle
+poll logs the exhaustion and treats every tunnel port of the domain as
+changed (a RESYNC, section 6),
 as it does for a tunnel action that did not fit its queue and for an
 unmatched disconnect. The firmware sends
 nothing for an unplug while the driver was unloaded [obs] section 6.6, so
