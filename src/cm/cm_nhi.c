@@ -122,7 +122,7 @@ static const char *const cmNhiCounterNames[] = {
     "cm.actions.resync", "cm.actions.not-live", "cm.reenum.skipped",
     "cm.config.failures", "cm.suspends", "cm.resumes", "cm.resume.failures",
     "cm.shutdowns", "cm.power.request-failures", "cm.power.inline",
-    "cm.buffers.kept"
+    "cm.buffers.kept", "cm.power.wakes-unpowered"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,
@@ -336,8 +336,10 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         nhi->StartStatus = STATUS_INSUFFICIENT_RESOURCES;
         return;
     }
+    v = nhi->CfgWriteFailures;
     ready = (BOOLEAN)(TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host,
-                                        &nhi->Power) == TBT_OK);
+                                        &nhi->Power) == TBT_OK &&
+                      nhi->CfgWriteFailures == v);
     CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
 
     /* (c), (d) */
@@ -425,7 +427,10 @@ VOID CmNhiStopWork(PCM_NHI nhi)
 
     active = (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE ||
                        nhi->Stage == CM_STAGE_FAILED);
-    powered = (BOOLEAN)(nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended);
+    /* The bus's state, not the client's: a client suspended while the
+     * function stayed in D0 (cm_power.c's direct transition) is still
+     * unbound and its ownership still discharged. */
+    powered = (BOOLEAN)(nhi->DevicePower == PowerDeviceD0);
     if (nhi->ReenumOn) {
         CmReenumStop(nhi);
         nhi->ReenumOn = 0;
@@ -443,12 +448,13 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     cmLogTable(nhi);
     cmLogCounters(nhi);
     CmDmaClose(nhi);
-    if (powered) {
+    if (powered && active) {
         (VOID)CmNhiSetBusMaster(nhi, FALSE);
-        if (active) {
-            (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power,
-                                        TRUE);
-        }
+        CmNhiPlatformRelease(nhi);
+    } else if (nhi->BusMasterSetHere) {
+        /* An inert stop writes nothing: a bit set before the start went
+         * inert (its verification, or the ring's refusal) stays set. */
+        CmLogNote(nhi, "cm.bus-master.kept", nhi->Stage);
     }
     if (nhi->BarVa != NULL) {
         MmUnmapIoSpace(nhi->BarVa, nhi->BarLength);
@@ -531,9 +537,13 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->Inert = CM_INERT_NONE;
     nhi->Stage = CM_STAGE_INERT;
     nhi->Suspended = 0;
-    nhi->DevicePower = PowerDeviceD0;
-    d0.DeviceState = PowerDeviceD0;
-    (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState, d0);
+    /* The state the power path recorded stands: a D3 taken before the
+     * queue opened was published under WorkLock (CmThrQueueOrRecord), and
+     * the selection activates nothing out of D0. */
+    if (nhi->DevicePower == PowerDeviceD0) {
+        d0.DeviceState = PowerDeviceD0;
+        (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState, d0);
+    }
     CmThrAccessors(nhi);
     nhi->Started = 1;
 

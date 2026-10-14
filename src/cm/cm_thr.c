@@ -33,9 +33,10 @@
  * the clock run slow, never backwards, and every wait in the core also
  * counts its own sleeps (tbt_ring.h, TBT_DEADLINE).
  *
- * IRQL: CmThrQueue, CmPowerHold and CmPowerRelease at <= DISPATCH_LEVEL;
- * everything else PASSIVE_LEVEL - the thread, the accessors (called on it),
- * CmThrStart, CmThrStop and CmThrRunPnp (the PnP path).
+ * IRQL: CmThrQueue, CmThrQueueOrRecord, CmPowerHold, CmPowerRelease and
+ * cmConfigDone at <= DISPATCH_LEVEL, as their own tags say; everything
+ * else PASSIVE_LEVEL - the thread, the accessors (called on it), CmThrStart,
+ * CmThrStop, CmThrRunPnp and CmPowerDrain (the PnP path).
  */
 
 #include "cm.h"
@@ -55,6 +56,7 @@
 /* Configuration space                                                    */
 /* ---------------------------------------------------------------------- */
 
+/* The configuration IRP's completion. IRQL: <= DISPATCH_LEVEL. */
 static NTSTATUS NTAPI cmConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                    PVOID Context)
 {
@@ -148,15 +150,22 @@ static ULONG cmCfgRead(PVOID context, ULONG offset)
     return CmCfgRead32((PCM_NHI)context, offset);
 }
 
+/* TBT_CFG.Write32 has no result, so a refused write is counted in
+ * CfgWriteFailures, which the platform steps compare before and after
+ * (cm_nhi.c, cm_power.c). IRQL: PASSIVE_LEVEL. */
 static VOID cmCfgWrite(PVOID context, ULONG offset, ULONG value)
 {
+    PCM_NHI nhi;
     UCHAR b[4];
 
+    nhi = (PCM_NHI)context;
     b[0] = (UCHAR)(value & 0xFF);
     b[1] = (UCHAR)((value >> 8) & 0xFF);
     b[2] = (UCHAR)((value >> 16) & 0xFF);
     b[3] = (UCHAR)((value >> 24) & 0xFF);
-    (VOID)cmConfig((PCM_NHI)context, FALSE, b, offset, 4);
+    if (!cmConfig(nhi, FALSE, b, offset, 4)) {
+        nhi->CfgWriteFailures++;
+    }
 }
 
 /*
@@ -335,30 +344,57 @@ VOID CmThrInit(PCM_NHI nhi)
  * EXIT already queued): the caller then goes on without it. An EXIT closes
  * the queue. IRQL: <= DISPATCH_LEVEL.
  */
+/* The queue's body, WorkLock held. The thread is signalled under the
+ * lock, so it cannot take and finish the work - and a removal free the
+ * extension - before the signal is made. */
+static BOOLEAN cmQueueLocked(PCM_NHI nhi, ULONG work, PIRP irp)
+{
+    if (!nhi->Accepting) {
+        return FALSE;
+    }
+    if (work == CM_WORK_SYSTEM || work == CM_WORK_DIRECT) {
+        nhi->SystemIrp = irp;
+    } else if (work == CM_WORK_D3) {
+        nhi->D3Irp = irp;
+    } else if (work == CM_WORK_D0) {
+        nhi->D0Irp = irp;
+    } else if (work == CM_WORK_EXIT) {
+        nhi->Accepting = 0;
+    }
+    nhi->WorkBits |= work;
+    (VOID)KeSetEvent(&nhi->WorkEvent, IO_NO_INCREMENT, FALSE);
+    return TRUE;
+}
+
 BOOLEAN CmThrQueue(PCM_NHI nhi, ULONG work, PIRP irp)
 {
     KIRQL irql;
     BOOLEAN taken;
 
-    taken = FALSE;
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
-    if (nhi->Accepting) {
-        if (work == CM_WORK_SYSTEM || work == CM_WORK_DIRECT) {
-            nhi->SystemIrp = irp;
-        } else if (work == CM_WORK_D3) {
-            nhi->D3Irp = irp;
-        } else if (work == CM_WORK_D0) {
-            nhi->D0Irp = irp;
-        } else if (work == CM_WORK_EXIT) {
-            nhi->Accepting = 0;
-        }
-        nhi->WorkBits |= work;
-        taken = TRUE;
+    taken = cmQueueLocked(nhi, work, irp);
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    return taken;
+}
+
+/*
+ * A device power IRP's work queued, or - with no thread to take it - its
+ * new state recorded in the same hold of WorkLock, so that a start opening
+ * the queue meanwhile (CmThrStart) finds the state already published and
+ * activates nothing out of D0. IRQL: <= DISPATCH_LEVEL.
+ */
+BOOLEAN CmThrQueueOrRecord(PCM_NHI nhi, ULONG work, PIRP irp,
+                           DEVICE_POWER_STATE state)
+{
+    KIRQL irql;
+    BOOLEAN taken;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    taken = cmQueueLocked(nhi, work, irp);
+    if (!taken) {
+        nhi->DevicePower = state;
     }
     KeReleaseSpinLock(&nhi->WorkLock, irql);
-    if (taken) {
-        (VOID)KeSetEvent(&nhi->WorkEvent, IO_NO_INCREMENT, FALSE);
-    }
     return taken;
 }
 

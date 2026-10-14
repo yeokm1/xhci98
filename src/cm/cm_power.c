@@ -59,7 +59,9 @@
 /* The thread's half                                                    */
 /* ---------------------------------------------------------------------- */
 
-/* The system IRP whose device transition has finished. */
+/* The system IRP whose device transition has finished. IRQL:
+ * PASSIVE_LEVEL on the thread, or <= DISPATCH_LEVEL from the request
+ * callback when the thread is not there (cmSystemDeviceDone). */
 VOID CmPowerSystemWork(PCM_NHI nhi, PIRP irp)
 {
     PoStartNextPowerIrp(irp);
@@ -84,11 +86,33 @@ static BOOLEAN cmLive(PCM_NHI nhi)
  * then the client's suspend - rings stopped, then mailbox 0x05 and 0x07
  * where the row sends them. IRQL: PASSIVE_LEVEL, the thread.
  */
+/*
+ * Force power given back by an active instance (TbtHwPlatformShutdown with
+ * active TRUE): where the configuration write is refused, the ownership
+ * record is kept for a later attempt rather than taken as discharged.
+ * IRQL: PASSIVE_LEVEL, the thread.
+ */
+VOID CmNhiPlatformRelease(PCM_NHI nhi)
+{
+    ULONG before;
+    BOOLEAN owned;
+
+    before = nhi->CfgWriteFailures;
+    owned = nhi->Power.ForcePowerSetHere;
+    (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power, TRUE);
+    if (owned && nhi->CfgWriteFailures != before) {
+        nhi->Power.ForcePowerSetHere = TRUE;
+        CmLogNote(nhi, "cm.force-power.kept", nhi->CfgWriteFailures);
+    }
+}
+
 VOID CmNhiQuiesce(PCM_NHI nhi)
 {
-    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended) {
+    if (nhi->DevicePower != PowerDeviceD0) {
         return;
     }
+    /* At shutdown a client already suspended in D0 (the direct
+     * transition) still owes its unbind and its ownership cleanup. */
     if (nhi->SystemPower == PowerSystemShutdown) {
         if (nhi->Stage != CM_STAGE_ACTIVE && nhi->Stage != CM_STAGE_FAILED) {
             return;
@@ -102,7 +126,7 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
         TbtIcmUnbind(&nhi->Icm);
         CmNhiDrainActions(nhi);
         (VOID)CmNhiSetBusMaster(nhi, FALSE);
-        (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power, TRUE);
+        CmNhiPlatformRelease(nhi);
         return;
     }
     if (!cmLive(nhi)) {
@@ -130,8 +154,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
 {
     BOOLEAN ok;
     LONG rc;
+    ULONG before;
 
-    if (!nhi->Suspended) {
+    if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
     }
     nhi->Suspended = 0;
@@ -141,8 +166,10 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     nhi->Counters.Resumes++;
     CmLogNote(nhi, "cm.resume", (ULONG)nhi->SystemPower);
     ok = TRUE;
+    before = nhi->CfgWriteFailures;
     if (TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host, &nhi->Power) !=
-        TBT_OK) {
+            TBT_OK ||
+        nhi->CfgWriteFailures != before) {
         ok = FALSE;
     }
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
@@ -213,6 +240,9 @@ VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp)
 {
     CmLogNote(nhi, "cm.power.direct", (ULONG)nhi->DirectWant);
     if (nhi->DirectWant == PowerDeviceD0) {
+        /* CmNhiReinit acts only on a client suspended in D0; a function
+         * the bus has not powered keeps its suspension (cmSystemDone never
+         * queues that case). */
         (VOID)CmNhiReinit(nhi);
     } else {
         CmNhiQuiesce(nhi);
@@ -224,6 +254,7 @@ VOID CmPowerDirectWork(PCM_NHI nhi, PIRP irp)
 /* Dispatch and completion                                                */
 /* ---------------------------------------------------------------------- */
 
+/* IRQL: <= DISPATCH_LEVEL (a completion routine). */
 static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                PVOID Context)
 {
@@ -233,15 +264,13 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     UNREFERENCED_PARAMETER(DeviceObject);
 
     nhi = (PCM_NHI)Context;
-    if (NT_SUCCESS(Irp->IoStatus.Status) &&
-        CmThrQueue(nhi, CM_WORK_D0, Irp)) {
-        return STATUS_MORE_PROCESSING_REQUIRED;
-    }
-    /* Refused below, or no thread to reinitialise anything: the IRP
-     * completes as it came back, the state recorded where it succeeded. */
     if (NT_SUCCESS(Irp->IoStatus.Status)) {
+        if (CmThrQueueOrRecord(nhi, CM_WORK_D0, Irp, PowerDeviceD0)) {
+            return STATUS_MORE_PROCESSING_REQUIRED;
+        }
+        /* No thread to reinitialise anything: the IRP completes as it came
+         * back, its state recorded (under WorkLock, by the call above). */
         stack = IoGetCurrentIrpStackLocation(Irp);
-        nhi->DevicePower = PowerDeviceD0;
         (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);
         nhi->Counters.PowerInline++;
@@ -251,7 +280,8 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_SUCCESS;
 }
 
-/* The device IRP a system IRP asked for has finished. */
+/* The device IRP a system IRP asked for has finished. IRQL:
+ * <= DISPATCH_LEVEL. */
 static VOID NTAPI cmSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
                                      UCHAR MinorFunction,
                                      POWER_STATE PowerState, PVOID Context,
@@ -279,7 +309,8 @@ static VOID NTAPI cmSystemDeviceDone(PDEVICE_OBJECT DeviceObject,
     }
 }
 
-/* The system IRP goes on with no device transition of this driver's. */
+/* The system IRP goes on with no device transition of this driver's.
+ * IRQL: <= DISPATCH_LEVEL (cmSystemDone's). */
 static NTSTATUS cmSystemPass(PCM_NHI nhi, PIRP irp)
 {
     PoStartNextPowerIrp(irp);
@@ -287,13 +318,15 @@ static NTSTATUS cmSystemPass(PCM_NHI nhi, PIRP irp)
     return STATUS_SUCCESS;
 }
 
-/* The direct transition, on the thread; FALSE when there is none. */
+/* The direct transition, on the thread; FALSE when there is none. IRQL:
+ * <= DISPATCH_LEVEL (cmSystemDone's). */
 static BOOLEAN cmSystemDirect(PCM_NHI nhi, PIRP irp, DEVICE_POWER_STATE want)
 {
     nhi->DirectWant = want;
     return CmThrQueue(nhi, CM_WORK_DIRECT, irp);
 }
 
+/* IRQL: <= DISPATCH_LEVEL (a completion routine). */
 static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                    PVOID Context)
 {
@@ -333,6 +366,13 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
          * one, on the thread, before the system IRP completes. */
         nhi->PendingSystemIrp = NULL;
         nhi->Counters.PowerRequestFailures++;
+        if (want == PowerDeviceD0) {
+            /* Toward S0 with the function really out of D0: nothing
+             * touches hardware the bus has not powered (hcd_power.c's
+             * rule); the client stays suspended, and the wake is counted. */
+            nhi->Counters.WakesUnpowered++;
+            return cmSystemPass(nhi, Irp);
+        }
         if (cmSystemDirect(nhi, Irp, want)) {
             return STATUS_MORE_PROCESSING_REQUIRED;
         }
@@ -345,13 +385,26 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
 
+    NTSTATUS status;
+
     stack = IoGetCurrentIrpStackLocation(irp);
-    if (stack->MinorFunction != IRP_MN_SET_POWER || !CmPowerHold(nhi)) {
-        /* Every request but SET_POWER, and any once the removal has
-         * closed admission, passes down as a filter's would. */
+    if (!CmPowerHold(nhi)) {
+        /* The removal has closed admission and may free the extension at
+         * any moment: only the IRP is touched. */
+        PoStartNextPowerIrp(irp);
+        irp->IoStatus.Status = STATUS_DELETE_PENDING;
+        irp->IoStatus.Information = 0;
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        return STATUS_DELETE_PENDING;
+    }
+    if (stack->MinorFunction != IRP_MN_SET_POWER) {
+        /* Every request but SET_POWER passes down as a filter's would,
+         * held until PoCallDriver returns. */
         PoStartNextPowerIrp(irp);
         IoSkipCurrentIrpStackLocation(irp);
-        return PoCallDriver(nhi->Common.Lower, irp);
+        status = PoCallDriver(nhi->Common.Lower, irp);
+        CmPowerRelease(nhi);
+        return status;
     }
     if (stack->Parameters.Power.Type == SystemPowerState) {
         IoMarkIrpPending(irp);
@@ -368,12 +421,13 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp)
         return STATUS_PENDING;
     }
     IoMarkIrpPending(irp);
-    if (CmThrQueue(nhi, CM_WORK_D3, irp)) {
+    if (CmThrQueueOrRecord(nhi, CM_WORK_D3, irp,
+                           stack->Parameters.Power.State.DeviceState)) {
         return STATUS_PENDING;
     }
     /* No thread: nothing of this driver's runs on the hardware, so the
-     * transition needs nothing but its record. */
-    nhi->DevicePower = stack->Parameters.Power.State.DeviceState;
+     * transition needs nothing but its record, published by the call
+     * above under WorkLock before a start could open the queue. */
     (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState,
                           stack->Parameters.Power.State);
     PoStartNextPowerIrp(irp);

@@ -100,6 +100,7 @@ typedef struct _CM_COUNTERS {
     ULONG PowerRequestFailures;
     ULONG PowerInline;      /* a power IRP finished without the thread     */
     ULONG BuffersKept;      /* a common buffer not freed: rings unproven   */
+    ULONG WakesUnpowered;   /* S0 with no D0 IRP, the function not in D0   */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -157,6 +158,7 @@ typedef struct _CM_NHI {
     /* The pure core's accessors (cm_thr.c) and its state. */
     TBT_HOST Host;
     TBT_CFG Cfg;
+    ULONG CfgWriteFailures; /* TBT_CFG.Write32 refused (cm_thr.c)         */
     ULONG ClockLast;        /* KeQueryTickCount's low word               */
     ULONG ClockTickUs;      /* KeQueryTimeIncrement, in microseconds     */
     ULONG ClockRest;        /* microseconds not yet a millisecond        */
@@ -228,6 +230,7 @@ VOID CmNhiPollPass(PCM_NHI nhi);
 VOID CmNhiDrainActions(PCM_NHI nhi);
 BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on);
 VOID CmNhiQuiesce(PCM_NHI nhi);
+VOID CmNhiPlatformRelease(PCM_NHI nhi);
 BOOLEAN CmNhiReinit(PCM_NHI nhi);
 
 /* cm_thr.c */
@@ -235,6 +238,8 @@ VOID CmThrInit(PCM_NHI nhi);
 NTSTATUS CmThrStart(PCM_NHI nhi);
 VOID CmThrStop(PCM_NHI nhi);
 BOOLEAN CmThrQueue(PCM_NHI nhi, ULONG work, PIRP irp);
+BOOLEAN CmThrQueueOrRecord(PCM_NHI nhi, ULONG work, PIRP irp,
+                           DEVICE_POWER_STATE state);
 VOID CmThrRunPnp(PCM_NHI nhi, ULONG work);
 VOID CmThrAccessors(PCM_NHI nhi);
 ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset);
