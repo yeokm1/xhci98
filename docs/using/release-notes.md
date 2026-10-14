@@ -784,9 +784,10 @@ few of the driver's options (below), asks once (`Y`), and then:
   folder to type if a wizard does not find the driver by itself. Run it
   again after the restart to see the result and set the options.
 
-At the end, if an update from `2.3.x` or earlier left old `XHCI98\`
-entries, it offers to run `XHCICLN` ("From 2.3.x or earlier"); only `y`
-runs it.
+It never runs `XHCICLN`. At the end, if an update from `2.3.x` or earlier
+left old `XHCI98\` entries, it says so in one line: nothing needs them
+removed, and `tools\xhcicln\` lists and removes them if you want ("From
+2.3.x or earlier").
 
 **The options it asks about** are a few of the "Registry settings" below,
 each only where the hardware or the Windows it affects is present:
@@ -804,7 +805,7 @@ asking.
 
 **Switches**: `/list` shows what it would do and changes nothing (no log
 either); `/yes` skips the confirmation; `/uninstall` removes the drivers
-(below); `/force`, `/restage`, `/clean`, `/debug` (the `debug-` directory,
+(below); `/force`, `/restage`, `/debug` (the `debug-` directory,
 only if a maintainer asks), `/nopause` and `/log path` are in
 `tools\xhciinst\readme.txt`. **Exit codes**: 0 done; 1 refused or
 cancelled, nothing changed; 2 something failed (the screen and the log say

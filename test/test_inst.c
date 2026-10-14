@@ -696,6 +696,7 @@ static void test_args(void)
     const char *a9[] = { "x", "/set", "XhciCmMode=0", "/set", "xhcicmmode=1" };
     const char *a10[] = { "x", "/dir" };
     const char *a11[] = { "x", "/uninstall", "/yes", "/nopause", "/log", "C:\\L" };
+    const char *a12[] = { "x", "/clean" };
 
     CHECK_EQ(parse(4, a1, &o), 0, "/dir /list");
     CHECK(o.List && inst_eq(o.Dir, "release-x86"), "fields");
@@ -713,6 +714,9 @@ static void test_args(void)
     CHECK_EQ(parse(2, a10, &o), 1, "/dir without a name");
     CHECK_EQ(parse(6, a11, &o), 0, "/uninstall /yes /nopause /log");
     CHECK(o.Uninstall && o.Yes && o.NoPause && inst_eq(o.Log, "C:\\L"), "fields");
+    /* Owner, 2026-10-15: the installer never runs XHCICLN, so the switch
+     * that once did is gone - an unknown argument. */
+    CHECK_EQ(parse(2, a12, &o), 1, "/clean is no switch");
 
     CHECK_EQ(inst_exit_code(0, 0, 0, 0), 0, "done");
     CHECK_EQ(inst_exit_code(1, 1, 1, 1), 1, "refused first");

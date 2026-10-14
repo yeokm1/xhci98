@@ -62,7 +62,6 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 #define INST_DIR_SUFFIX     "-x64"
 #define INST_DEFAULT_DIR    "release-x64"
 #define INST_PE_MINE        INST_PE_AMD64
-#define INST_CLN_NAME       "XHCICL64.EXE"
 #else
 #define INST_MY_ARCH        INST_ARCH_X86
 #define INST_MY_NAME        "XHCIINST.EXE"
@@ -70,7 +69,6 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 #define INST_DIR_SUFFIX     "-x86"
 #define INST_DEFAULT_DIR    "release-x86"
 #define INST_PE_MINE        INST_PE_I386
-#define INST_CLN_NAME       "XHCICLN.EXE"
 #endif
 
 /* ---- numbers not in MSVC 6.0's SDK headers (WDK 7.1's newdev.h,
@@ -3283,60 +3281,18 @@ static int old_bus_devnodes(void)
 }
 
 /* Record 23 section 5.11. */
-static void offer_cleanup(void)
+static void note_old_entries(void)
 {
-    char path[INST_PATH_CHARS];
-    char cmd[INST_PATH_CHARS + 32];
-    char line[16];
-    STARTUPINFOA si;
-    PROCESS_INFORMATION pi;
-    DWORD code;
     int n = old_bus_devnodes();
 
+    /* Owner, 2026-10-15: the installer never runs XHCICLN; it only says
+     * the separate tool exists (record 23 section 5.11). */
     if (n == 0) {
         return;
     }
     out("\n%d old XHCI98\\ entries (left by an update from 2.3.x or earlier) "
-        "are still recorded.\nNothing needs them removed. XHCICLN lists them "
-        "and can remove them (it asks its own\nquestion, and refuses before "
-        "the restart an update needs).\n", n);
-    if (!opts.Clean) {
-        out("Run XHCICLN now? [y/N]: ");
-        if (!read_line(line, sizeof(line)) ||
-            (line[0] != 'y' && line[0] != 'Y') || line[1] != '\0') {
-            out("Not run.\n");
-            return;
-        }
-    }
-    join(path, sizeof(path), root, "tools\\xhcicln");
-    join(path, sizeof(path), path, INST_CLN_NAME);
-    if (!file_exists(path, NULL)) {
-        out("%s is not in the package; not run.\n", path);
-        return;
-    }
-    inst_copy(cmd, "\"", sizeof(cmd));
-    strcat(cmd, path);
-    strcat(cmd, "\" -remove");
-    memset(&si, 0, sizeof(si));
-    si.cb = sizeof(si);
-    logonly("CreateProcess(%s)\n", cmd);
-    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-        out("%s could not be started (error 0x%08lX).\n", INST_CLN_NAME,
-            (unsigned long)GetLastError());
-        return;
-    }
-    WaitForSingleObject(pi.hProcess, INFINITE);
-    if (!GetExitCodeProcess(pi.hProcess, &code)) {
-        code = 0xFFFFFFFFUL;
-    }
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    out("%s ended with exit code %lu.\n", INST_CLN_NAME, (unsigned long)code);
-    if (code == 3) {
-        flagRestart = 1;
-    } else if (code == 2 || code == 0xFFFFFFFFUL) {
-        flagFailed = 1;
-    }
+        "are still recorded.\nNothing needs them removed; if you want, "
+        "tools\\xhcicln\\ lists and removes them\n(see its readme.txt).\n", n);
 }
 
 static void testsigning_note(void)
@@ -3591,7 +3547,7 @@ static int run_install_nt(void)
             "2.3.x on 32-bit\nVista or 7, run INSTALL.BAT again after the "
             "restart for the root hub and hubs.\n");
     }
-    offer_cleanup();
+    note_old_entries();
     return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
 
 stopped:
@@ -4607,7 +4563,6 @@ static void usage(void)
 "  /set Name=Value   set one of the driver's options (repeatable)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
-"  /clean        run XHCICLN at the end without asking\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
 "  /nopause      do not wait for Enter at the end\n"

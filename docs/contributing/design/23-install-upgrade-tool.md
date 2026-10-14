@@ -314,7 +314,8 @@ if empty.
 10. Read the devnodes a last time and check each changed device's result
     (section 5.9): bound to this package's service at the package version,
     started, or a stated reason why not.
-11. Report the restart (section 5.9), and offer `XHCICLN` (section 5.11).
+11. Report the restart (section 5.9), and, where old `XHCI98\` entries
+    exist, one line naming `tools\xhcicln\` (section 5.11).
 
 Steps 6 to 8 stop at the first failure that leaves the order meaningless
 (a controller update failed), report what was done and exit 2; a failure
@@ -664,20 +665,17 @@ Vista. The run goes on if the user confirms. The tool never runs
 `bcdedit`. What the value holds in test-signing mode and on an F8 start is
 read on the legs (section 12).
 
-### 5.11 `XHCICLN` at the end
+### 5.11 `XHCICLN` stays the user's (owner, 2026-10-15)
 
-Whenever `XHCI98\` devnodes exist (the walk of section 5.3 sees them) -
-after a run that changed something, and also after a run that changed
-nothing, such as the second run after the restart, when the cleanup first
-becomes possible - the tool asks, last, "Run XHCICLN to list and remove
-the old entries an update from 2.3.x left? [y/N]"; only `y` runs it.
-`/yes` does not answer this question (never by default); `/clean` answers
-it yes. It starts `..\xhcicln\XHCICLN.EXE` (`XHCICL64.EXE` from the x64
-tool) with `-remove` in the same console and waits; `XHCICLN` asks its own
-question and keeps every refusal of record 13 section 10.13.8, so a run
-before the restart it needs removes nothing and says why. Its exit code is
-reported; its 3 (a restart pending) adds a restart to this tool's result,
-its 2 adds a failure, and its 1 (refused) changes nothing.
+The tool never runs `XHCICLN`: no question, no switch, no call path.
+`XHCICLN` stays a separate tool the user runs by hand (record 13 section
+10.13.8). Whenever `XHCI98\` devnodes exist (the walk of section 5.3 sees
+them) - left by an update from `2.3.x` or earlier - the tool prints one
+line last: nothing needs them removed, and `tools\xhcicln\` lists and
+removes them if the user wants. The line changes no exit code. The
+uninstall (section 9) does not run `XHCICLN` either: it removes the old
+bus's devnodes itself, through the same `DIF_REMOVE` route, as part of
+its set.
 
 ## 6. The Windows 98 SE and ME route
 
@@ -811,12 +809,11 @@ these systems.
 |---|---|
 | (none) | install or update, with the plan shown and one confirmation |
 | `/list` | the plan, the store trap, the questions that would be asked and their current values, and with `/uninstall` the uninstall plan; reads only: no confirmation, no question, no local copy, no staging, no log unless `/log` names one, no pause; exit 0 (or 1 on a refusal) |
-| `/yes` | no confirmation, and with `/uninstall` no typed word (section 9.1); never answers the `XHCICLN` question |
+| `/yes` | no confirmation, and with `/uninstall` no typed word (section 9.1) |
 | `/defaults` | ask no registry question, keep every current value (the INF's default on a new install) |
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
-| `/clean` | answer the `XHCICLN` question yes |
 | `/uninstall` | section 9 |
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
 | `/nopause` | do not wait for Enter before closing |
@@ -824,7 +821,7 @@ these systems.
 
 An unknown switch, `/set` with an unknown name or a value outside its
 allowed set, or a contradiction (`/defaults` with `/set`, `/list` with
-`/yes`, `/clean` or `/restage`, `/uninstall` with an install switch) is
+`/yes` or `/restage`, `/uninstall` with an install switch) is
 refused with exit 1 before anything is read. `/set Name Value` (two
 arguments, as `COMMAND.COM` delivers it) is joined back. Every run but
 `/list` waits for Enter before it exits, because Explorer and the Vista
@@ -1233,7 +1230,7 @@ installed `.sys` with the package's, and Device Manager.
 |---|---|---|
 | F, fresh install | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | NT: one run installs the controller and root hub; the routines resolved; the restart reported (32-bit Vista and 7); a UAS disk plugged after the run installs from the staged INF with no question about where. 98 and ME: `DevicePath` written; the wizard finds the controller with no box ticked, or by the typed path the tool printed; the files come from the copy's directory under `%windir%\XHCI98\`; the CD prompt for `usbd.sys` (98 SE); a UAS disk plugged later finds `xhciuas.inf` |
 | U24, update over `2.4.0.0` | the nine | NT: the controller, root hub, hubs and composite entries updated, each driver key's version the new one, every `.sys` equal to the package's; 2000 with no Have Disk; the Vista and 7 trap - this branch's INFs are byte-identical to `2.4.0.0`'s until the `3.0.0.0` restamp, so a leg with the unrestamped package reads the trap's detection and `/restage`, and a leg with a restamped package the normal update; 98 and ME: the update wizard finds the new driver by search |
-| U23, update over `2.3.1.0` | 98 SE, 2000, XP, XP x64, 7 x64 | the new devnodes of record 13 section 10.13.4; on XP and XP x64 the wizard stop and the second run (section 5.8); on 7 x64 installed by step 8 or by Windows; the `XHCICLN` question and its run after the restart, on a run that changes nothing |
+| U23, update over `2.3.1.0` | 98 SE, 2000, XP, XP x64, 7 x64 | the new devnodes of record 13 section 10.13.4; on XP and XP x64 the wizard stop and the second run (section 5.8); on 7 x64 installed by step 8 or by Windows; the one line naming `tools\xhcicln\` after the restart, on a run that changes nothing, and no `XHCICLN` run |
 | UN, uninstall and reinstall | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | the warning and the word; every devnode, the OEM INFs (2000: the manual route; XP onward: `SetupUninstallOEMInf`, which systems resolve it), the services and files gone or pending; the gate after a pending removal and the resumed second run; a restart; the controller back as an unknown device; `INSTALL.BAT` installing it again. 98 SE and ME: the steps printed and followed |
 | R, registry questions | 98 SE (after the install and restart), 2000 | each applicable question shown with now, default and allowed; a non-applicable one not shown (no Intel switchover controller in QEMU, no NHI); an answer written to the controller's driver key and not to the root hub's, Enter keeping, `/set` and `/defaults` |
 | L, `/list` and the refusals | every leg's first run | nothing changed (a registry and file listing before and after, no log written); the ZIP-folder refusal, a mixed architecture, a mis-versioned INF, a stale `.sys`, a swapped flavour |
@@ -1292,8 +1289,8 @@ the user.
   `/list` (section 7.5).
 - **D9** The curated registry set of section 8.1, asked only where it
   applies, written only on an explicit answer.
-- **D10** `XHCICLN` is offered last whenever old entries exist, asked,
-  never by default (section 5.11).
+- **D10** (owner, 2026-10-15) The tool never runs `XHCICLN`; where old
+  entries exist it prints one line naming `tools\xhcicln\` (section 5.11).
 - **D11** The uninstall leaves the OS's `usbd.sys` and `usbui.dll`, other
   drivers' devnodes and every filter host's devnode, gates each phase on
   the one before, uses `SetupUninstallOEMInf` without force, and on

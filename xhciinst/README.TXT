@@ -58,9 +58,12 @@ architecture and this build.
 Other switches: /defaults (ask no option question), /set Name=Value (set
 an option, repeatable), /force (reinstall this release, or go back to it
 from a newer one), /restage (Vista and 7: replace a stored development
-build with the same DriverVer), /clean (run XHCICLN at the end without
-asking), /debug (the debug- directory, only if a maintainer asks),
-/nopause, /log path.
+build with the same DriverVer), /debug (the debug- directory, only if a
+maintainer asks), /nopause, /log path.
+
+It never runs XHCICLN. After an update from 2.3.x or earlier it says, in
+one line, when old XHCI98\ entries are still recorded; nothing needs them
+removed, and tools\xhcicln\ lists and removes them if you want.
 
 Before you start
 ----------------

@@ -308,7 +308,6 @@ typedef struct _INST_OPTS {
     int Defaults;
     int Force;
     int Restage;
-    int Clean;
     int Uninstall;
     int NoPause;
     int SelfTest;

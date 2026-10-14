@@ -1544,8 +1544,6 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Force = 1;
         } else if (inst_switch(a, "restage")) {
             opts->Restage = 1;
-        } else if (inst_switch(a, "clean")) {
-            opts->Clean = 1;
         } else if (inst_switch(a, "uninstall")) {
             opts->Uninstall = 1;
         } else if (inst_switch(a, "nopause")) {
@@ -1630,9 +1628,9 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         inst_err(err, errCap, "/selftest takes no other argument", NULL);
         return 1;
     }
-    if (opts->List && (opts->Yes || opts->Clean || opts->Restage)) {
-        inst_err(err, errCap, "/list changes nothing: it takes no /yes, "
-                 "/clean or /restage", NULL);
+    if (opts->List && (opts->Yes || opts->Restage)) {
+        inst_err(err, errCap, "/list changes nothing: it takes no /yes "
+                 "or /restage", NULL);
         return 1;
     }
     if (opts->Defaults && opts->SetCount != 0) {
@@ -1640,7 +1638,7 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         return 1;
     }
     if (opts->Uninstall && (opts->Defaults || opts->SetCount != 0 ||
-                            opts->Restage || opts->Clean || opts->Force)) {
+                            opts->Restage || opts->Force)) {
         inst_err(err, errCap, "/uninstall takes only /list, /yes, /nopause, "
                  "/log and /dir", NULL);
         return 1;

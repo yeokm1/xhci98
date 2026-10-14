@@ -86,6 +86,12 @@ if not "%ERRORLEVEL%"=="1" (
     echo ERROR: %~1 with an unknown switch was not refused with exit 1
     exit /b 1
 )
+rem The installer never runs XHCICLN (owner, 2026-10-15): /clean is gone.
+".\%~1" /clean >nul 2>&1
+if not "%ERRORLEVEL%"=="1" (
+    echo ERROR: %~1 /clean was not refused with exit 1
+    exit /b 1
+)
 ".\%~1" /set Bogus=1 >nul 2>&1
 if not "%ERRORLEVEL%"=="1" (
     echo ERROR: %~1 /set Bogus=1 was not refused with exit 1
