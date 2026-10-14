@@ -25,7 +25,9 @@ source comments, scripts, and other docs use these same locations.
   entries of Phases 17-24, the rest of the miniport's life, are in
   [its second file](contributing/roadmap-miniport-updates.md), and Phases 25
   onward, the successor host controller driver's, in
-  [its third](contributing/roadmap-hcd.md).
+  [its third](contributing/roadmap-hcd.md); the USB4 and Thunderbolt 3
+  connection-manager work, planned and not yet opened, is in
+  [its fourth](contributing/roadmap-usb4.md).
 - [Source files](contributing/source-files.md) - what every file in `src/` is
   for, and which belong to the host-tested pure core.
 - [Architecture](contributing/architecture.md) - component boundaries and data

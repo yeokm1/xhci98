@@ -279,12 +279,16 @@ but not every input; see
 ### Where to start
 
 Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
-The roadmap is three files: that one has the status, the conventions and
+The roadmap is four files: that one has the status, the conventions and
 Phases 0-16 (the initial release);
 `docs/contributing/roadmap-miniport-updates.md` has Phases 17-24, the
 miniport's public updates after it, closed with the `1.2.0.0`
-cut that froze it; and `docs/contributing/roadmap-hcd.md` has Phases 25
-onward, the host controller driver, the open phase included. The miniport is
+cut that froze it; `docs/contributing/roadmap-hcd.md` has Phases 25
+onward, the host controller driver, the open phase included; and
+`docs/contributing/roadmap-usb4.md` (opened 2026-10-14) has the USB4 and
+Thunderbolt 3 connection-manager work, a driver beside `xhci98.sys` whose
+test bed is the `usb4-emu` repository, read there and never modified, with
+design record 21 as its first plan. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
 ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
