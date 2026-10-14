@@ -3,11 +3,15 @@
 The detail behind `docs/contributing/roadmap-hcd.md`, "Phase 38". The
 roadmap entry carries the goal, the status, the task list and the
 checkpoint; this file carries what each task did and what each reading
-said. Where the two disagree about a clause, the roadmap wins.
+said. Where the two disagree about a clause, the roadmap wins. The
+roadmap's full task text before it was condensed is at the end, "Moved
+from the roadmap before the close".
 
 **On task numbers.** They follow the roadmap's numbering after the
 renumbering of 2026-10-13 (the decisions table's Phase 38 row); commits
-of that day before it use the old numbers.
+of that day before it use the old numbers. The 38.12 of 2026-10-13 is
+the refused interface's device id, "Planned work" NOX.1 since that day;
+from 2026-10-14 38.12 is the composite devnode's own select.
 
 **On `out\...` and `vm\...` paths in this file.** They say where a reading
 was kept on the host that took it; they are not files a clone has.
@@ -333,3 +337,372 @@ notes `out\p38-2\legs\notes.txt`. What was read is record 13 section
 Not read: a composite keyboard, mouse or stick (no QEMU device offers one),
 on ME the (a), (b), refusal and parent re-enable legs, the case with no CD,
 and Windows 2000 (the base at hand had no `xhci98` controller).
+
+## The VM matrix on the `2.4.0.0` dry cuts (2026-10-14)
+
+One matrix on the integrated build read every leg 38.3, 38.8, 38.10,
+38.11 and 38.12 name, each guest carrying every task's legs in one
+install (Phase 36's condensed matrix). The task sections below take their
+verdicts from it.
+
+**The vehicle.** Development host A, QEMU 11.1.0, TCG, the total of the
+guests' vCPUs kept within the host's logical processors. Kit
+`out\p38-matrix\kit`; plan `out\p38-matrix\plan.md`. Guests, each on its
+own overlay under `vm\t38mx` of a read-only base: 98 SE under NUSB 3.3 and
+under SweetLow's stack, ME on its stock stack, 2000 SP4 (uniprocessor, and
+the ACPI multiprocessor HAL with Driver Verifier), XP SP3, XP x64, Vista
+SP2 x86 and x64, 7 SP1 x86 and x64; for the update legs, overlays with
+`2.3.1.0` installed (and `2.3.0.0` on 32-bit Vista and 7), kept read-only.
+Three builds, every staged file checked against its cut's hashes each
+time:
+
+| Build | Commit | What it is |
+|---|---|---|
+| Dry cut 3 | `86a0f6d3` | The stamped `2.4.0.0`, `DriverVer` `10/14/2026`, with 38.3, 38.8, 38.10 and 38.11 (`out\p38-final\dryrun-x86-3`, `pkg-x64`, `pkg-qemu-*`, `hashes.txt`); the bulk of the matrix |
+| Dry cut 4 | `f7a409ad` | The XP F6 fix (below); the F6 re-runs |
+| Dry cut 5 | `64d2801f` | 38.12 and `XhciPollFineTimer` off by default (`hashes-5.txt`); 38.12's legs, the timer's default, the composite re-runs |
+
+Evidence: `out\p38-matrix\results.md` (every leg's verdict, the veto
+table, the defects and their attributions), `legs\<guest>\notes.txt`,
+`reports\`, `fails.md`, `progress.md`.
+
+**What it found, and how each was attributed:**
+
+| Finding | Attribution |
+|---|---|
+| XP SP3 from the F6 floppy: GUI-mode Setup installs the controller from `OemDir`, the INF's copy of `xhcihlpr.sys` fails (`txtsetup.oem` named no such file), the controller gets the NULL driver, nothing asked | **New in `2.4.0.0`** (38.3's helper on XP). Fixed in `f0c28bc6`..`d967daa2`: `txtsetup.oem` carries `xhcihlpr.sys` on a `dll` line, which text mode copies and does not load, and the gate rule `OEM-COPY` ties the option's files to the INF's NT 5.x `CopyFiles` (the reading of 2000 SP4's and XP SP3's `setupdd.sys` and `setupldr.bin` is `legal-provenance.md` section 4). Review: Codex thread `01a1377a`, clean at round 3. Read on dry cut 4: XP F6 to the desktop, the helper copied in text mode and running at the first boot, the USB keyboard typing in GUI mode |
+| Windows 2000 from the F6 floppy: STOP `c000026c` at the first GUI-mode boot (`hidusb.SYS` with a USB keyboard or mouse, `usbstor.SYS` with a stick alone), `0xc0000034` | **Pre-existing**: the same on `2.3.1.0` with both triggers. Text mode lays down the class driver but not `usbd.sys`, `hidclass.sys` or `hidparse.sys`, which it imports. Documented as a known limitation (`1afcd46f`, `8653ad50`). A Windows 2000 entry in `txtsetup.oem`, the user copying those three files from their own Windows 2000 CD onto the floppy (owner, 2026-10-14; the release carries no Microsoft file), is on branch `p38-w2kf6` with its gate and issue record 16, reviewed (Codex thread `01a1398f`, converged at round 5), **pending its merge**; its legs on that branch's package reached the product key page with a keyboard and mouse behind the hub and with a stick |
+| Windows 98 SE under SweetLow's stack: exception 0E at `0028:FF0AA6E0` once | **Not reproduced**: `2.4.0.0` 0 of 6 runs (3 with `usb-audio`, 3 without; 90 dialogs), `2.3.1.0` 0 of 3; the first run 1 of 1. Unattributed, no regression pattern |
+| Mode 2 with the finer timer held: the guest's clock slows and USB key presses are lost at QEMU's queue | Accepted; the owner shipped `XhciPollFineTimer` off (38.3). Guest clock over host clock, the timer held against off: 7 x64 0.23 to 0.42 (0 to 67 of 199 keys arrived; PS/2, the value 0 and mode 0 199 of 199), 7 x86 0.62 idle and 0.11 with the mouse moving against 1.00, Vista x86 0.50 idle and 0.27 under a copy against 1.000, XP 0.975 and 0.904, 2000 0.967 and 0.994; 98 SE and ME 0.99 to 1.00 (no finer timer there). Off by default read on dry cut 5 on 98 SE and XP |
+| ME: Shut Down hangs (black screen, the processor busy) after a controller disable and enable with the devices attached | **Pre-existing**: `2.3.1.0` 2 of 2, dry cut 3 1 of 1, dry cut 5 2 of 2; without the cycle dry cut 5 shut down in 7 s. Not yet among the known limitations |
+| Windows 98 SE: `usb-audio` hot-added, or audio during an update, wedges the desktop | Known (run-36, 36.41 and 36.44), on the published `2.3.1.0` too; 98 SE audio play not makeable (accepted) |
+| Windows 2000: the controller stopped with problem 31 until the restart after an update, once | Not reproduced, 0 of 3 |
+
+No other driver failure. The readings that disagree with a document,
+not with the driver, are `results.md` section 4's ten points, for the
+documents pass at 38.final.
+
+## 38.11 - xHCI 0.96 controllers accepted
+
+**Verdict: done** (2026-10-14). A controller whose HCIVERSION is 0.96 or
+above starts while `XhciAccept096` is 1 (the default; `0` restores the 1.0
+floor), the floor latched per start; below 1.0 HCCPARAMS2 is read as 0, TD
+Size is in Linux's KiB form (the last TRB included), the Setup TRB's
+Transfer Type and the isochronous TBC and TLBPC are written 0, and every
+isochronous TD takes SIA (D8 taken (b), owner); three counter words, the
+refused start's diagnosis flushed to DebugView (D5), the `qemu` flavour's
+`XhciQemuHciVersion` (D7), the INF rows and gate, `XHCISNAP`'s and
+`XHCIQUAL`'s lines and host tests. Design record 17 section 4.14 (merged
+`113cdf2c`, `8f6644ec`), code `5e192d2d`, `14831c6c`, `855276cb`.
+
+**Review.** The design: Codex thread `01a135e2`, converged at round 4. The
+code: thread `01a13634`, converged at round 2. `855276cb` (a stale
+sentence about D8 in record 17) was not reviewed.
+
+**Owner's answers to the audit** (2026-10-14): Transfer State Preserve on
+Reset Endpoint and Suspend on Stop Endpoint stay as on 1.0 (as Linux), to
+be recorded in record 17 section 4.14; record 20's `XHCI_NEC_HOST` row
+gains a note only (Linux rings the command doorbell after Run and takes
+vendor event 48 as a command completion; the driver needs neither). Both
+are for the documents pass at 38.final.
+
+**The legs** (the matrix, dry cut 3):
+
+| Leg | Guests | Result |
+|---|---|---|
+| L1, `XhciAccept096` absent then 1 | 98 SE, 2000, XP, Vista x86, 7 x86 | PASS: starts, devices work, "xHCI 1.00: XhciAccept096 not applicable" |
+| L2, `XhciAccept096` 0 | the same | PASS: "floor 1.00", unchanged |
+| L3, the controller reporting 0.96 (`XhciQemuHciVersion` 0x96), the gate 1 | 98 SE, 2000 (`qemu` flavour) | PASS: starts, devices work, the 0.96 lines |
+| L4, as L3 with the gate 0 | the same | PASS: Code 10; DebugView `hc.versions 00960100`, `hc.accept096 0`, `hc.version.policy 00300100`, `init.step 4`, `init.status 4` |
+| L5, 0.96 with `XhciWideMap` 1 and big UAS copies | 2000 | Not makeable (accepted): with `XhciQemuBigRefuse` 1 a 1 MiB read aborts QEMU (`dev-uas.c:895`); with it 0 the 1 MiB requests went as one 256-TRB TD, nothing bad |
+
+**Owed after the cut:** a real 0.96 controller (the release notes'
+"Untested ground"). A14 and A21 of the audit are unread on silicon.
+
+## 38.8 - The bus's own ids under `USB\`, and `XHCICLN`
+
+**Verdict: done** (2026-10-14). The root hub, hub and composite ids are
+`USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and
+`USB\XHCI98_COMPOSITE` with their `&VID_`, `&PID_` and `&REV_` forms,
+spelled once in `src\xhci_hub.h`; the INFs and both `.oem` files name only
+the new ids, the root hub's install copies nothing (D3); gates `HCD-USBRES`,
+`HCD-IDSRC` and `OEM-USBID`. The cleanup tool `XHCICLN.EXE` (MSVC 6.0) and
+`XHCICL64.EXE` (WDK 7.1 amd64), source `xhcicln\`, shipped in
+`tools\xhcicln\`: it lists by default and removes on `-remove`, on NT only.
+Design record 13 section 10.13 (merged `4c5567af`, decisions `f85cbc5a`);
+code `ffdeebee`..`0009d1ed`, merged `73d6a005` with `60124cff`; record 13
+section 10.13.13 is the as-built.
+
+**Review.** The design: Codex thread `01a135b5`, converged at round 5. The
+code: thread `01a13644`, round 1 a P1 (`%token%` ids slipping past the
+scan) and three P2, round 2 one P3, round 3 clean.
+
+**The legs** (the matrix, dry cut 3; 98 SE's composite part on dry cut 5):
+
+| Leg | Result |
+|---|---|
+| I1, a fresh install, on 98 SE (NUSB and SweetLow), ME, 2000, XP, XP x64, Vista and 7 x86 and x64 | PASS: the root hub under `USB\XHCI98_ROOT_HUB`, its install copying no file; a hub and a composite device each with one driver node; `XHCICLN` (`XHCICL64`) "nothing to do", exit 0 |
+| I2, an update over `2.3.1.0` on the same ten | PASS: devices with a serial number (the sticks, the serial audio device, the hub) keep their devnodes; the serial-less mouse, keyboard and audio device (composite and function) are new, the mouse losing its mark value; one root hub; the old entries non-present (hidden view, Safe Mode) |
+| I3, serial-less USB input alone through the update | Recorded: on XP the root hub's wizard cannot be answered with USB input, PS/2 answers all, a keyboard on a second controller does not help (its root hub is new too); on 98 SE USB input works until the update wizard's last page, which needs Finish from other input, and after the restart the serial-less mouse's HID wizard cannot be answered with USB |
+| I4, 98 SE, a chain of five serial-less hubs ending in a composite device | Not run (owed) |
+| I5, XP with two controllers | Recorded: one update ran `2.4.0.0` on both at once; the second's driver key keeps `DriverVersion` `2.3.1.0` until an uninstall and rescan |
+| I6, the tool on 2000, XP (both configurations), XP x64, Vista and 7 x86 and x64 | PASS: the list, `-remove` ("4 removed."), a second run with nothing, the refusals before the restart and with the controller disabled, and on XP after a return to `2.3.1.0`. With two project controllers on XP, one uninstalled and not rescanned, the tool did not refuse, as its readme says (it refuses only when no project controller is running); the checklist's wording disagrees |
+| I7, the 32-bit tool under WOW64 | PASS on XP x64, Vista x64 and 7 x64: `XHCICLN.EXE` refuses naming `XHCICL64.EXE`, which removes |
+| I8, 98 SE and ME | PASS: lists only, `-remove` before the restart exit 1, the `HKEY_DYN_DATA` walk finding no live `XHCI98\` devnode. `CM_Uninstall_DevNode` is a stub on both (returns success, removes nothing); `CM_LOCATE_DEVNODE_PHANTOM` works |
+| I9, F6 with the input behind the hub | XP PASS on dry cut 4; XP x64 PASS to the product key page; 2000 the pre-existing STOP (above) |
+| I10, a High Speed and a USB 3 hub | After the cut (owner, 2026-10-13) |
+
+**The controller's veto**, with the tool holding the door (the keyboard
+detached, since a present USB keyboard alone makes Windows veto a
+disable; a control without the tool in each cell): disable vetoed on 2000,
+XP (a stock UHCI beside it, and two project controllers), Vista x86 and
+x64, 7 x86 (both configurations) and x64; update vetoed on 2000, XP, Vista
+x64 and 7 x64; roll back vetoed on XP. On 32-bit Vista and 7 Windows
+defers every update and rollback to the restart, with or without the
+tool, so the hold is not needed there; 2000 has no Roll Back. XP x64's
+cells are unread (the configuration was not reachable). No target showed a
+missing veto, so `cln_removal_enabled` stays as built, removal enabled on
+NT 5.0 to 6.1.
+
+**Owed after the cut:** a High Speed and a USB 3 hub (bench or
+passthrough; `USB\XHCI98_HUB30` rests on host vectors and the INF gate),
+I4 on 98 SE, and the veto on XP x64.
+
+## 38.3 - A finer system timer while polling, and `xhcihlpr.sys`
+
+**Verdict: done** (2026-10-14). Under a poll delivery on Windows 2000 and
+later a timer thread of the controller's asks `ExSetTimerResolution` for
+`XhciPollActiveMs` x 10000 while the poller is active and releases it
+when the poller leaves that state, when the controller stops or leaves D0,
+and at S3, S4 and S5;
+`XhciPollFineTimer` turns it on. The x86 image reaches the routine through
+the helper, renamed from `xhcimsi.sys` to `xhcihlpr.sys`, its device
+`\Device\Xhci98Helper` and channel V2, built with WDK 7.1's `WXP`
+environment at subsystem 5.00 and loading on 2000 and XP as well as Vista
+and 7; an update deletes `xhcimsi`. Counter words for the timer and the
+helper. Design record 15 section 7.2 and record 18 section 15 (merged
+`3d77d318`, decisions `b70d4087`); code `317d005e`..`2acf4e10`, merged
+`7aa959e4` with `a1ae5c39`; record 15 section 7.2.14 and record 18
+section 15.14 are the as-built.
+
+**Off by default** (owner, 2026-10-14, after the matrix's clock reading
+above): both INFs write `XhciPollFineTimer` 0 under the don't-overwrite
+rule, an absent, unreadable or other-type value is off; record 15 section
+7.2.4's amendment, the documents, `XHCISNAP`'s "off (the default)"
+(`17888a97`, review fixes `6eff1869`, `76327494`, `64d2801f`). Real
+hardware is unread, and the default is reconsidered on a reading there.
+
+**Review.** The design: Codex thread `01a135b1`, converged at round 6. The
+code: thread `01a13649`, round 1 four P2 and a P3, round 2 a P2 and two
+P3, round 3 clean; the merge's delta, thread `01a1368e`, clean. The
+default's change with 38.12's merge: thread `01a138ad`, converged at round
+4. `a1ae5c39` (one README phrase) was not reviewed.
+
+**The legs** (the matrix, dry cut 3; the default on dry cut 5):
+
+| Leg | Result |
+|---|---|
+| K0, the kernel image and an ordinary boot | Recorded on every guest |
+| N1, the install on 2000, an update on 2000 SMP, XP | PASS: no forced restart; from the next boot the helper runs as a boot driver |
+| N2, Driver Verifier on both drivers, 2000 SMP | PASS (`/flags 0x1B` writes level 0 on 2000) |
+| N3, the helper's injected faults | PASS: 7 x86 values 1 to 9, XP 7 and 8 |
+| M and H, the MSI legs through channel V2 | PASS on 7 x86 and Vista x86 |
+| U3, uninstall | PASS on 2000 and 7 x86 |
+| U4, an update from `2.3.0.0` and `2.3.1.0` on Vista x86 and 7 x86 | Recorded: `xhcimsi.sys` deleted at once, no `PendingFileRenameOperations` (the checklist expected it queued), no event 7026, the helper bound, MSI |
+| U5, `2.3.1.0` over `2.4.0.0` on 7 x86 | PASS |
+| U6, `2.4.0.0` over `2.3.1.0` on 2000 and XP, and a boot with the helper disabled | PASS |
+| D2, D3, from new media | PASS: no helper on 98 SE, ME or x64; the helper on 2000, XP, Vista and 7 |
+| T1, T2, polled transfers and the timer's hold with the value 1 | Not run: off by default, and the owner asked for no more readings with it on; the clock reading above stands for T1 |
+| T3, a stop with the timer held | Recorded on 7 x86 (`qemu`): cause 4, `TmrThread` 3, held 0, no bugcheck, the next start from zero; `qemu.stop.dx` is not reachable by a disable (Windows removes the children first) |
+| T4, S4 and S5 | PASS on 2000 SMP with Verifier, Vista x86, 7 x86 (with Verifier on hibernate), 7 x64, XP S5, 2000 shutdown; S3 not makeable on any NT base |
+| T5, `XhciPollActiveMs` 1 and 4 | Recorded: 2000 1.2 ms and 8.3 ms, 7 x86 1.3 ms and 5.2 ms |
+| T6, the helper disabled on NT, and 98 SE and ME | PASS |
+| T7, the value 0 | PASS: no thread |
+| T8, `XhciPollIdleMs` 50 against 500 | **Deferred by the owner** (2026-10-14), the default staying 50. Partial, value 0: plug-to-working 0.3 to 0.7 s at both values everywhere, remote wake at both, idle host load halved at 500 on Vista x86 (12.7 to 5.4 %) and about 30 % lower on Vista x64, no difference beyond noise on XP, XP x64 and 2000; not taken on 98 SE, ME and 7 (`results.md` section 5) |
+| C5b, the default on dry cut 5 | PASS on 98 SE and XP: the value 0 as installed, `TmrThread` 0 in mode 2 |
+
+**Owed after the cut:** the finer timer on real hardware, and with it the
+default; T8 on every target; S3.
+
+## 38.10 - Linux's xHCI controller quirks, and the endpoint rings
+
+**Verdict: done** (2026-10-14). Fourteen registry values (design record 20
+sections 4 and 6), each matched by vendor and device id, the revision only
+logged: `XhciMsiAvoid`, `XhciStreamsOff`, `XhciResumeReinit`,
+`XhciIntelShutdownToEhci`, `XhciShutdownReset`, `XhciSuspendHaltDelay`,
+`XhciSuspendHaltTimeout`, `XhciAsmediaFlowControl`, `XhciTiIntervalCap`,
+`XhciStuckLinkReset`, `XhciStreamRingPad`, `XhciControlLinkNoOp`,
+`XhciIsochSpuriousSuccess`, `XhciAmdSuspendBitClear`, and `1002:7316`
+under `XhciIntervalCap`; their INF rows and gate, the counter block's quirk
+words, `XHCISNAP`'s and `XHCIQUAL`'s rows, host vectors. Every quirk was
+written fresh from Linux's handling and the xHCI specification, no Linux
+code copied, so `legal-provenance.md` gained no row; 38.final's check of
+the release notices reads record 20 section 13.6. Code `68c756dd`..`72995562`, merged
+`e1727c3c` with `b14edbed`.
+
+**The endpoint rings** (record 20 section 5): a ring or a stream block is
+returned to the pool only when a command proves the controller has given
+it up, `SELECT_INTERFACE` an ownership switch (`src\xhci_own.c`), a
+reserved pool; a STALLed `SET_INTERFACE` on an interface with one
+alternate setting is a success after `CLEAR_FEATURE(ENDPOINT_HALT)` to
+each new non-isochronous endpoint, as Linux does (owner, 2026-10-14;
+record 20 revision 7). Code `ac5bf01f`..`2fd452c6`, merged `59879e2d`;
+`31f3a929` regenerated the offset tables for the merged counter block (241
+words then), not reviewed.
+
+**Review.** The survey: Codex thread `01a135c5`, converged at round 5. The
+quirks' code: thread `01a13639`, round 1 four findings (two P2), round 2
+three (one P2), round 3 three P3, round 4 clean. The ring fix: thread
+`01a13619`, the amendment clean at round 2, the code round 1 three P3, a
+confirmation round and two full adversarial rounds clean. `b14edbed` (one
+counter-total phrase) was not reviewed.
+
+**The legs** (the matrix, dry cut 3; the ring on dry cut 5 too):
+
+| Leg | Result |
+|---|---|
+| Q1, every value deleted | PASS on 98 SE, 2000, 7 x86: each at its default, QEMU's `1B36:000D` named by none |
+| Q2, the INF's values | PASS on the same and Vista x86 |
+| Q3, each value at 2 in turn | PASS: `XhciMsiAvoid` (7 x86, Vista x86: the line under mode 0, `QuirkMsiRefused` 1, mode 3 overridden), `XhciResumeReinit` (ME, Vista x86 S4; XP has no standby on its base), `XhciStreamsOff` (its High Speed half not makeable), `XhciStreamRingPad`, `XhciControlLinkNoOp`, `XhciSuspendHaltDelay`, `XhciSuspendHaltTimeout`, `XhciStuckLinkReset`, `XhciIsochSpuriousSuccess`, `XhciShutdownReset` (its DebugView half not makeable on 2000); `XhciTiIntervalCap` recorded (QEMU's High Speed mouse at Interval 6, the capped half not makeable) |
+| Q4, the three vendor-register values at 2 | PASS: "a 2 read as 1", nothing acts |
+| Q5, `XHCIQUAL` under MS-DOS | PASS: `1B36:000D` "none known" |
+| R1, `usb-audio` started and stopped about 20 times | PASS on ME, XP x64, Vista x64, 7 x86 and x64 (dry cut 3), XP, 2000, 7 x64 (dry cut 5): the pool back after each stop; 98 SE not makeable (accepted) |
+| R2 to R6, the injected select faults | PASS on XP and 2000 (`qemu`); R2 on 7 x86 |
+
+**Owed after the cut:** each quirk on a controller it names; none has been
+read on real hardware. The owner's decision of 2026-10-14 drops the
+"Untested ground" rows for the controller-fault handling on real hardware
+and `XhciIntervalCap` on AMD (the documents pass at 38.final).
+
+## 38.12 - The composite devnode's own `SELECT_CONFIGURATION`
+
+**Verdict: done** (2026-10-14). Opened by the owner on 2026-10-14 from
+GitHub issue 17 item 11, in `2.4.0.0`. The composite FDO's `START`, after
+the `START` has come back up, sends down its own stack - a lower filter
+included - `GET_DESCRIPTOR` for the device and the configuration and one
+`SELECT_CONFIGURATION`, as `usbccgp` does; the parent PDO answers from its
+copies and records the select, configuring nothing; a function's select
+takes each endpoint's `bInterval` from its own caller, else from the
+record, else the device's. Counters at words 241 to 245, `comp.*` log
+records, `XHCISNAP`'s "composite selects" section, host tests. Design
+record 13 section 10.14, its decisions D1 to D13 recommended and adopted
+under the owner's instruction to proceed after review (2026-10-14); code
+`785a5f08`..`151a6eaa`, merged `667ae804`; section 10.14.10 is the
+as-built.
+
+**Review.** The design: Codex thread `01a137cb`, converged at round 3. The
+code: thread `01a137f4`, converged at round 4. The merge: thread
+`01a138ad` (with the timer's default), converged at round 4.
+
+**The legs** (the matrix, dry cut 5):
+
+| Leg | Result |
+|---|---|
+| C5a, the regression with QEMU's `usb-audio`, no filter, on 98 SE, ME, 2000, XP, XP x64 and 7 x64 | PASS: `CompositeSelects` one per select, every `comp.select` with 0 rewrites and 0 mismatches, the other composite counters 0, no `comp.interval`; `TONE.WAV` whole from both audio devices; the composite and the controller disabled and enabled recover; 98 SE's play not makeable. The serial-less audio device's slot now reads "configured" at once (on `2.3.1.0` and dry cut 3 "addressed" until its first stream) |
+| C5c, the composite re-runs of the other tasks' legs | PASS on 98 SE, 2000, XP and 7 x64 |
+| hidusbf on the composite devnode and on the mouse function's | Not makeable: QEMU has no composite HID device. Owed to the bench after the cut (owner, 2026-10-14) |
+
+**Owed after the cut:** hidusbf on a composite HID device, on the
+composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
+
+## 38.final - So far
+
+**Verdict: open.** What is done, all 2026-10-14:
+
+- **The stamp.** `b4b8237c`: `2.4.0.0`, `DriverVer` `10/14/2026`, the four
+  INFs and the release notes' header; `2fd6a25a` and `86a0f6d3`, the
+  readme template (ME needs no USB 2.0 stack, the helper's row, 98 SE's
+  Stand by under the known limitations). Review: Codex thread `01a1372e`,
+  converged at round 4 (round 5 and thread `01a137da` on `cd51c188` and
+  `f7a409ad`, the Windows 2000 F6 limitation's wording, clean).
+- **The integration.** Every task merged on `phase-38` (above), the
+  merges' own reviews (threads `01a1368e`, `01a136ab`, `01a136b2`,
+  `01a136ea`, `01a13706`) converged.
+- **The dry cuts.** Built and gated, x86 and amd64, all three flavours
+  each, with the host tests, the tools rebuilt first (a fresh checkout
+  leaves their sources newer than the executables, which the cut
+  refuses); an x86 dry cut through
+  `make-release.ps1`, unsigned x64 and `qemu` packages beside it, every
+  file's hash recorded. Dry cut 3 (`86a0f6d3`, zip SHA-256
+  `48DE4F12...DC9628`), 4 (`f7a409ad`, `880856F4...8EDE79`), 5
+  (`64d2801f`, `F80212CC...2B9405`, `out\p38-final\dryrun-x86-5`,
+  `hashes-5.txt`). On dry cut 5 the rehearsal of `verify-cut.ps1` passed
+  30 checks, its six failures the x64 files a dry cut does not sign. The
+  owner's cut command is `out\p38-final\cut-2.4.0.0.ps1.txt`; a draft
+  history entry is `out\p38-final\releases\history.md`.
+- **The VM matrix** (above), and the XP F6 fix it called for.
+
+**Left:**
+
+- The Windows 2000 F6 entry (branch `p38-w2kf6`, pending its merge), then
+  a dry cut 6 and the F6 legs on 2000 and XP from it.
+- The documents pass: `results.md` section 4's points (among them the ME
+  Shut Down hang after a disable and enable, not yet a known limitation;
+  the update readings against the readme on 98 SE, ME, XP, Vista and 7;
+  `CM_Uninstall_DevNode` a stub on 9x in record 13 section 10.13.8;
+  `XHCISNAP`'s wording when the value is written 0), the owner's
+  decisions of 2026-10-14 (the two "Untested ground" rows dropped, the
+  `XHCI_NEC_HOST` note in record 20, Transfer State Preserve and Suspend
+  on 0.96 in record 17 section 4.14), and the as-built sections' "legs
+  owed" sentences.
+- The owner's: the signed cut, `verify-cut.ps1` on it, the install legs
+  from the asset on every target, the `releases/history.md` entry and
+  publishing.
+
+## Moved from the roadmap before the close (2026-10-14)
+
+On 2026-10-14, before the phase closed, the owner had Phase 38's roadmap
+entry cut to a line or two a task (`roadmap-hcd.md`, "Phase 38"), as the
+earlier phases' are. The entry as it stood then follows verbatim, so the
+decisions, the reviewed design facts and the evidence pointers inside the
+task text stay on record.
+
+**Phase 38 - The Planned Work After `2.3.1.0`: the Field-Report Batch Files, the 98 SE and ME Silent Install, Pinned Containment, the Polling Timer and the Tools Directory**
+
+Goal: the reporters' helper batch files; the Windows 98 SE and ME silent
+install; the transfers kept by a pinned containment released on proof; a
+finer system timer while polling; the release's tools moved into a
+`tools\` directory; Linux's xHCI controller quirks, each behind a registry
+gate; and the documents the `2.3.1.0` legs found wanting.
+
+Status: open. Opened 2026-10-13 (owner) with every task then in "Planned
+work", numbered in the order it was listed. On branch `phase-38`; the
+version is `2.4.0.0` (owner, 2026-10-13). The same day (owner): two tasks joined
+from SweetLow's comments on GitHub issue 17 of 2026-10-12 (38.7 and 38.8),
+and the tools directory (38.9), and later the Linux quirk population (38.10, first 37.17); the real-hardware bench tasks were
+removed, what they would have read staying under "Untested ground" in the
+README and the release notes; the UAS class driver's fold into
+`xhci98.sys` was removed; and the tasks left were numbered in order. The
+decisions table's Phase 38 row maps placeholder ids and old numbers to new. Later the same day (owner): 38.12 was
+deferred to "Planned work" (NOX.1) and 38.3 too (PCR.1), the tasks after 38.3
+were numbered down by one, and the acceptance of xHCI 0.96 controllers
+joined as 38.11. On 2026-10-14 (owner) the composite devnode's own
+`SELECT_CONFIGURATION` joined as 38.12, from SweetLow's item 11 of GitHub
+issue 17.
+
+- [x] 38.1 (in Phase 37 until 2026-10-12) helper batch files for the field reports (owner, 2026-10-12). Done 2026-10-13 (`bbc4aafd` to `512546e5`; Codex clean at round 5 and on the leg fixes; legs on MS-DOS, 98 SE, ME, 2000, XP, XP x64, 7 x86 and 7 x64, two defects found and fixed, `runs/run-38.md`, "38.1"): one command each that gathers what the field reports (37.2) ask their reporters for, so a reporter runs a batch and attaches one output instead of following a list. On Windows (98 SE and ME under COMMAND.COM, 2000 to 7 under cmd.exe, so each batch runs under both): the controller's Device Manager status and problem code, its assigned resources, the installed xhci98 version and file hashes, and an `XHCISNAP` dump (channel on, restart, reproduce, dump, channel off), with what a stock 98 SE or ME cannot report said in the output; under MS-DOS: an `XHCIQUAL` reading with its log kept. Every output is saved in the current directory, never under `C:\`, and its name carries the date and time so a second run does not overwrite the first (owner, 2026-10-12); a batch cannot build that name (COMMAND.COM on 98 SE and ME has no `%DATE%` or `%TIME%`, cmd.exe's follow the locale), so `XHCISNAP` builds it from the local clock, 8.3-safe, prints the names it wrote, and never overwrites a dump from the same minute, its self-test gaining the rule. Each batch's last line names the files to attach. 8.3 names, ASCII, CRLF, only tools a stock install of each target has; shipped in the release beside the tool each one runs - the Windows batches in `tools\xhcisnap\`, the MS-DOS one in `tools\xhciqual\` (owner, 2026-10-13) - and gated as `portsw-on.bat` and `portsw-off.bat` are (COMMAND.COM-safe, line endings), and named in the readme template and the user documents. Decided at the task's start (owner, 2026-10-13): `XHCISNAP` itself reads the controller's status and problem code and its allocated resources (the configuration manager, loaded at run time) and the SHA-256 of the installed files, so every target reports the same, rather than each batch using what that target's stock tools reach; the Windows side is three batches, `SNAPON.BAT` (channel on), `SNAPGET.BAT` (the report and the dump, the channel left on) and `SNAPOFF.BAT` (channel off), with `SNAPON.BAT` taking an optional verbosity (1 to 4, default 2) and `SNAPGET.BAT` an optional name to save to (an 8.3 base in the current directory, refused rather than overwritten when any of its files exists; without it, the clock-built name) (owner, 2026-10-13); and `XHCIQUAL` builds its log's name from the DOS clock under the same rule, since a batch cannot. Legs: each batch on 98 SE, ME, 2000, XP, XP x64 and 7, the output checked against what the reporters were asked
+- [x] 38.2 (in Phase 37 until 2026-10-12) the Windows 98 SE and ME silent install (issue 17 item 4, the one item of that issue Phase 36 did not take; owner, 2026-10-09). Done 2026-10-13 (`c248e3dc` to `0338f690`; record 13 section 6.11, read in 6.11.11; Codex clean on the design, the code, the packaging and the documents; legs on 98 SE and ME: 98 SE silent for a keyboard, mouse, stick and hub and a matching composite with the switch on, ME silent for the four without it, so ME needs no list for them; composite keyboards, mice and sticks not read, no QEMU device offering one; `runs/run-38.md`, "38.2"). **Unblocked 2026-10-12.** The rule: a device PDO reports `SilentInstall` TRUE in `IRP_MN_QUERY_CAPABILITIES` (today FALSE on every PDO: `hcd_pdo.c`, `hcd_rh.c`, `src\uas\uas_pdo.c`) when any interface descriptor of its configuration matches an entry of `HKLM\System\CurrentControlSet\Services\USB\SilentClasses`, the key already in use on these systems, so an existing `.reg` and a machine that merged it work unchanged (owner, 2026-10-12). Each entry is a 4-byte `REG_BINARY`, its name ignored: byte 0 a control byte (0x80 match on a device that is not composite, 0x40 on one that is, 0x01 compare the subclass, 0x02 compare the protocol; an entry with neither 0x80 nor 0x40 is ignored), then class, subclass and protocol. Decisions (owner, 2026-10-12): **Windows 98 SE and ME only**, never on 2000 and later; **opt-in**: the INFs write nothing, and a missing, empty or unreadable list means nothing is silent; the list is read once per controller start into the bus's own storage (no per-device registry read or allocation), descriptors are walked by `bLength`, and composite means what the bus's own composite split decides. Two traps to avoid: an absent list must not be dereferenced at the first interface, and a flag test must mask before it casts to `BOOLEAN`. The package carries six entries (hubs alone; boot keyboard and mouse alone or composite; Bulk-Only SCSI storage alone or composite), as a `.reg` in its own directory under 38.9's `tools\` (owner, 2026-10-13, replacing the `release-x86` placement of 2026-10-12), `tools\silent\`, which `Assert-ToolsLayout`'s list of tool directories then names: never in a flavour directory, never at the version root, with a readme section on when to merge it: once the classes' drivers have been installed at least once, because a silent install on 98 SE asks for no CD (a keyboard needs `kbdhid.vxd` from it, run-36 K5) and a class with no driver ends unworking with nothing said; a class this package's own INFs install (UAS) is not in the list. **Gated by the driver too** (owner, 2026-10-13, after the design draft): a value `XhciSilentInstall` under the controller's driver key, read at each controller start, **off by default**, so the list alone silences nothing; `tools\silent\` carries `silent-on.bat`, which sets the value to 1 on every xhci98 controller and imports the list, and `silent-off.bat`, which sets it to 0 and leaves the list (another stack may share the key), both COMMAND.COM-safe and gated as `portsw-on.bat` is, with the restart they need said. 37.1's stock-ME reading installed the mouse, hub and stick silently with no list (the wizard came only for UAS and composite audio), so whether ME needs the list is read, not assumed. Design text in record 13 first, a review loop, host tests of the match (control bits, composite, subclass and protocol, empty and malformed lists), both builds. Legs on 98 SE and ME, each without the list and then with it merged: a device installed once and moved to another port, a hub, a boot keyboard and mouse, a composite device, a stick; the readme then says whether ME needs the list. The README, the release notes and the readme template credit SweetLow for the information on how the silent install is decided and for the list (owner, 2026-10-13)
+- [ ] 38.3 (in Phase 37 until 2026-10-12) a finer system timer while polling, on Windows 2000 and later (owner, 2026-10-12). Under a poll delivery the active period of 1 ms runs at the clock tick, about 10 ms on a uniprocessor HAL and 15.6 ms on an ACPI or multiprocessor one (design record 15 section 7), so polled storage completes about once a tick. `ExSetTimerResolution` raises the tick for the whole system; record 15 section 7 left it as "the next question" (no allowlist row, no Windows 98 export). The design (record 15 section 7.2, reviewed to convergence 2026-10-13): request `XhciPollActiveMs` x 10000 only while the poller is in its active state and release it when the poller leaves that state - the idle period, `XhciPollIdleMs`, the only linger (owner, 2026-10-13) - when the delivery leaves polling, the controller stops or leaves D0, and at S3, S4 and S5; one request per controller at most, every TRUE paired with its FALSE, a boundary generation forcing the release across any power transition, recovery or stop; from a timer thread of the controller's at PASSIVE_LEVEL, created after a successful start and joined at the stop after the children's power IRPs are settled (owner, 2026-10-13), never the poll DPC or the controller thread. A registry value, `XhciPollFineTimer`, turns it off, **on by default** (owner, 2026-10-12): polling runs only when interrupts failed or the user chose it, and the cost lasts only while the poller is active. `XhciPollIdleMs` keeps its default of 50; the legs measure 50 against 500 on every target, 98 SE and ME included (CPU, hot-plug and hub latency, USB 2.0 remote wake, the timer's toggles; Function Wake unread on QEMU), and the default is decided on that reading; an update keeps an existing value (owner, 2026-10-13). How the x86 image reaches the routine: it loads on Windows 98 SE and ME too, so it may import neither `ExSetTimerResolution` nor `MmGetSystemRoutineAddress`; it goes through `xhcimsi.sys` (design record 18), extended to load on Windows 2000 and XP (owner, 2026-10-13), and **renamed `xhcihlpr.sys`** in the same task, since the helper will do more than MSI (owner, 2026-10-13): the image, its service, its source directory, its device object (`\Device\Xhci98Helper`) and its channel (V2, MSI and the timer negotiated apart), so an old and a new helper loaded in one boot never collide (owner, 2026-10-13), and every reader of the name - the driver's lookup of the helper, the INFs' file and service rows, `txtsetup.oem`, the build, the import, INF and footprint gates and the import allowlist, the packager and its self-tests, the release notes, the README, `source-files.md` and the design records that name it - with an update from `2.3.0.0` or `2.3.1.0` leaving no `xhcimsi` service or file active beside the new one (`DelService=xhcimsi` and a deferred `DelFiles` of `xhcimsi.sys` on the 32-bit Vista and 7 path; owner, 2026-10-13), read on Vista and 7 as part of the mixed-version legs below; published releases and run records keep the old name, and a release cut before the rename is reconstructed from its own cut commit; the amd64 image asks `MmGetSystemRoutineAddress` as it does for MSI. An export-table walk is undocumented internals and is not the route. The helper cannot load on 2000 or XP today (the review, 2026-10-13: its static Vista imports, its NT 6 entry check and its NT 6-only install rows), so the extension resolves the MSI routines at run time, negotiates the timer separately from MSI, which stays Vista and 7 only, audits every import of the linked libraries against 2000 and XP with a missing baseline fatal for a release, builds the helper with WDK 7.1's `WXP` environment at subsystem 5.00 with the target checked in the build log (owner, 2026-10-13), and widens the INF rows and the install, INF and import gates; the 2000 and XP install asks for no restart of its own, the finer timer working from the next boot, documented (owner, 2026-10-13); mixed helper and driver versions are read across updates and restarts; F6 Setup is documented as keeping the clock tick until the installed system's own install brings the helper (owner, 2026-10-13). Microsoft warns that `ExSetTimerResolution` can deadlock against a power IRP, so no power IRP's completion may depend, directly or indirectly, on the call completing: the release at a power transition is made asynchronously, with the lifetime of what it uses kept safe; the request is balanced across several controllers. Record 15 gains the section first, then the import gate's evidence, a review loop, and legs: polled UAS VERIFY and TONE on 2000, XP, XP x64 and 7 with the switch on and off against the readings of record 15 section 11; the tick read back by phase observations of short requests (`KeQueryTimeIncrement` is not the current resolution; the poll interval counters of record 15 section 8 are) against a switch-off baseline; the release seen at idle, stop (with a child's power IRP outstanding and the timer call delayed), S3/S4 and shutdown; two controllers asking different values; and the idle period measured at 50 and 500. **Changed by the owner, 2026-10-14: `XhciPollFineTimer` ships off by default (opt-in)**: both INFs write 0 on every path, under the same don't-overwrite rule, and an absent, unreadable or other-type value is off; the test matrix read on QEMU guests under TCG, polled (`XhciInterruptMode` 2), on 7 x64, 7 x86 and Vista x86, that with the finer timer held the guest's clock ran at 0.1 to 0.7 of real time and USB keyboard input was lost, and with the value 0 or under an interrupt the clock ran at real time and nothing was lost; real hardware unread, and the default is reconsidered on a reading there (design record 15 section 7.2.4's amendment)
+- [x] 38.4 (from the `2.3.1.0` legs, 2026-10-13, run-37 "37.final") the readme and release notes on a UAS disk's install under Windows 7: they say the Found New Hardware wizard asks for `xhciuas.inf`, but Windows 7 shows no wizard - it searches Windows Update, reports the device was not installed, and the driver goes in through Device Manager, Update Driver Software -> Browse my computer -> the `release` directory. Also on Vista the wizard names the device by its own product string (QEMU's "USB Attached SCSI HBA"), not "xHCI98 USB Attached SCSI Storage", which is the name once installed. Documents only (the readme template in `make-release.ps1`, the release notes' UAS section, the acceptance test's 5.7); a later cut carries it. Done 2026-10-13 (run-38, "38.4"): the three documents, and the release notes' install steps
+- [x] 38.5 (from the `2.3.1.0` legs, 2026-10-13) 32-bit Vista after a controller remove and rescan: the controller came back at Code 1 until a restart and no restart prompt was shown, only an "installed successfully" balloon (32-bit Windows 7 prompted on the same path; the first install prompts on both). The restart is the INF's flag for `xhcimsi.sys`, unchanged since `2.3.0.0`. Say in the release notes and the readme that a 32-bit Vista or 7 reinstall needs a restart whether or not Windows asks; read whether Vista's missing prompt also shows on an update over an installed `xhcimsi.sys`. Done 2026-10-13 (run-38, "38.5"): the documents say it; on an update through Have Disk, 32-bit Vista and 7 both asked for the restart, so the prompt goes missing only on remove and rescan. Found on the way: Browse my computer with the folder typed in keeps `2.3.0.0` on both; the update sections now give Have Disk
+- [x] 38.6 (from the `2.3.1.0` legs, 2026-10-13) `portsw-on.bat` and `portsw-off.bat` print "RESTART WINDOWS" twice, once from `portsw.vbs` and once from the batch file's own echo; drop one, keeping the batch files COMMAND.COM-safe, and read the output on 98 SE or ME and on one NT target. Cosmetic. Done 2026-10-13 (run-38, "38.6"): the batch files' echo dropped, the package self-tests refuse it; read once on 98 SE and on XP
+- [x] 38.7 the USB device interface off external hubs (GitHub issue 17 item 3, reopened by SweetLow on 2026-10-12: `GUID_DEVINTERFACE_USB_DEVICE` is for "all USB devices except hubs", a hub carrying `GUID_DEVINTERFACE_USB_HUB` alone). Since 36.17 `HcdDoorDeviceStart` (`hcd_door.c`) registers it on every device PDO and every external hub's PDO, which record 13 section 8.10 says is "as usbhub registers it", with no reading behind it. First the reading, per target as AGENTS.md requires: on Windows 2000, XP and 7 with the stock stack, a USB 2.0 hub with a device behind it, which devnodes carry the interface (`SetupDiGetClassDevs` with `DIGCF_DEVICEINTERFACE`, or the `DeviceClasses` key), and with it the other two of SweetLow's list (owner, 2026-10-13): `GUID_DEVINTERFACE_USB_HUB` (`{F18A0E88-C30C-11D0-8815-00A0C906BED8}`, every hub, root and external) and `GUID_DEVINTERFACE_USB_HOST_CONTROLLER` (`{3ABF6F2D-71C4-462A-8A92-1E6861E6AF27}`, the controller). If hubs carry none, the hub PDO stops registering it; record 13's paragraph is corrected either way. A review loop, host tests where the rule is testable, both builds. Legs: the interface enumerated on 2000, XP, XP x64 and 7 x64 with QEMU's hub (Full Speed) and a device behind it, which suffices (owner, 2026-10-13): the rule turns on the hub flag every hub's PDO gets at its creation, whatever the hub's speed, so a USB 2.0 hub and both halves of a USB 3 hub take the same path, which the review checked statically: the devices listed, the hubs not; the hub interface on the root hub and each hub alone; the host controller interface on the controller alone; `usbview` and Device Manager unchanged. Done 2026-10-13 (`c4c2bab4` to `b113f3b4`; Codex `01a133b3`, clean at round 1; run-38, "38.7"): the stock reading on 2000, XP and 7 showed the device interface on devices only, the hub interface on hubs only and the host controller interface on the controller only (on 2000 on none, the bus keeping it there, owner); the hub PDO now registers no device interface; the legs read on 2000, XP, XP x64 and 7 x64
+- [ ] 38.8 the bus's own device ids under `USB\` (GitHub issue 17 item 10, SweetLow, 2026-10-12: there is no `XHCI98` bus): `XHCI98\ROOT_HUB`, `XHCI98\HUB`, `XHCI98\HUB30` and `XHCI98\COMPOSITE`, with their `&VID_`, `&PID_` and `&REV_` forms (`hcd_rh.c`, `xhci_hub.c`, `xhci_func.c`), become `USB\XHCI98_ROOT_HUB`, `USB\XHCI98_HUB`, `USB\XHCI98_HUB30` and `USB\XHCI98_COMPOSITE`. The private ids are meant to keep every stock row from matching those too, which the design verifies by audit, so the root hub still never binds to `USB\ROOT_HUB` and no OS composite parent comes back (record 13 section 10.12). The device id's first component names the enumerator, so every root hub, external hub and composite devnode moves from `Enum\XHCI98` to `Enum\USB`. First a design section in record 13: the update over an installed `XHCI98\` tree on every install path (9x, NT 5.x, NT 6.x, amd64), what becomes of the old devnodes and what removes them; Windows 98 SE's and ME's handling of `Enum\USB`, with and without SweetLow's stack; and every reader of the ids (both INFs, `txtsetup.oem`, the INF and package gates, the import gate's evidence list, the VM matrix scripts, the host tests, the documents). The owner decides the design, then a review loop; the code, host tests, both builds with the INF gate. Decided already (owner, 2026-10-13): the whole task in this phase, and the old `XHCI98\` devnodes removed by an opt-in tool under the release's `tools\` (its source tracked in the tree), which removes only non-present devnodes of this project through supported PnP routes, an install needing no run of it. From Codex's review: changed parent ids need the parents installed anew and may change the instances and settings of the devices beneath, so the design measures both the serial-number and the location-based cases (record 13 section 10.13; on 98 SE as well as NT, whose location-form key carries the parent's path, record 13 section 10.7.1); the private hardware ids and the empty compatible-id lists stay, and stock and vendor INF matches are audited, not assumed impossible; both F6 files and their gates change. Decided on the design (owner, 2026-10-13; record 13 section 10.13, reviewed to convergence): the task stays in `2.4.0.0` with its update costs; no old `XHCI98\` id as a further hardware id, and the INFs and `txtsetup.oem` files drop the old ids (a clean move: on 98 SE and ME no new hub or composite device is connected before the restart); the root hub's install sections copy nothing; the prompts the update brings on XP, XP x64 and 98 SE need a keyboard and mouse independent of the updated driver (PS/2, or a controller another stack drives), and the new devnodes and lost settings of serial-less devices are documented, not worked around; the tool is `XHCICLN.EXE` with a native `XHCICL64.EXE` (source `xhcicln\`, shipped `tools\xhcicln\`), the 32-bit build listing but refusing removal under WOW64; it lists by default and removes on `-remove` after one question (`-yes` skips it), only conclusively absent `XHCI98\` devnodes of the four old forms, with every project controller started, its new root hub started and its door held open for the run, re-checked around each removal, through `DIF_REMOVE` with no fallback; on 98 SE and ME it lists only in this release, `CM_Uninstall_DevNode` there waiting on readings of its exports, the configuration manager's devnode list and an exclusion during a run; old refused-interface devnodes are NOX.1's and the tool leaves them. Legs: a fresh install and an update over `2.3.1.0` on 98 SE (stock and under SweetLow's stack), ME, 2000, XP, XP x64, Vista and 7 x86 and x64, with a hub and a composite device, and on each a device with a serial number and one on the location form, at a root port and behind the hub, a composite's function in both forms; Device Manager clean (one current root hub per controller), the old entries read in the hidden view (NT, `DEVMGR_SHOW_NONPRESENT_DEVICES=1`) and in Safe Mode (98 SE, ME) before and after the tool, and no stale devnode claiming a device; on 98 SE and XP a serial-less USB keyboard and mouse as the only input; on 98 SE a chain of five serial-less hubs ending in a serial-less composite device, its keys read before and after; a two-controller update; the tool listed and run on every target, its refusals forced (a present old devnode, a disabled controller, no present controller), the controller's veto read on each NT target, `XHCICL64.EXE` on XP x64, Vista x64 and 7 x64; F6 installs on 2000, XP and XP x64 with the input behind the hub and a composite bound. QEMU's hub is Full Speed: it stands for the USB 2.0 hub's id before the cut (owner, 2026-10-13); a High Speed hub and a USB 3 hub are read on the owner's bench or by passthrough after the cut, and `USB\XHCI98_HUB30` rests until then on host vectors and the INF gate
+- [x] 38.9 the release's tools in a `tools\` directory (owner, 2026-10-13). Done 2026-10-13 (`fc58af43` to `2af5ec79`; Codex `01a13334`, clean at round 4; legs on MS-DOS, Windows 98 SE and XP from a local dry cut, `runs/run-38.md`, "38.9"): `xhciqual\`, `xhcisnap\` and `portsw\` move from the version root to `tools\xhciqual\`, `tools\xhcisnap\` and `tools\portsw\`, so the root holds only the driver directories, the readme and the licence; 38.1's batch files go inside `tools\xhcisnap\` and `tools\xhciqual\`, beside the tool each one runs (owner, 2026-10-13), not loose in `tools\`. Releases already published keep their layout. Every reader of the paths changes with it: `make-package.ps1`, `make-release.ps1` and its readme template, `test-package.ps1` and the package self-tests, `build-driver.cmd`, the release notes, the acceptance test, the README, `xhciqual\README.md`, `xhcisnap\README.md`, design record 16 (37.5 placed `portsw\` at the version root, revision 6) and `source-files.md`; run records keep the paths they read. Legs: the package tree read; `XHCIQUAL` from `tools\xhciqual\` under MS-DOS, `XHCISNAP` from `tools\xhcisnap\`, and `portsw-on.bat` and `portsw-off.bat` from `tools\portsw\` on 98 SE or ME and on one NT target
+- [ ] 38.10 the Linux xHCI quirk population in the driver, each behind a registry gate for the controllers it names (owner, 2026-10-13; first opened as 37.17 on 2026-10-12 and removed from Phase 37 the same day). Linux is already the stated authority for the quirk population of `xhciqual/quirks.c` (`legal-provenance.md`, the mirrors); the driver itself carries only its own (the routing quirk `XhciIntelIrqRoute`, the port switch `XhciIntelPortSwitch`, the interval cap `XhciIntervalCap`). First a survey, written as a design record: every quirk flag Linux's xHCI host driver sets by vendor and device id (PCI and its quirk table), from the pinned mirror in `external/` with the commit named; for each, what the controller does wrong, the controllers, whether it applies to this driver's targets and code paths at all (a quirk for a feature the driver does not use, such as LPM or a platform glue, is listed and set aside), whether the driver already covers it another way (Phase 35's tolerance, design record 17, among them), and the proposed gate and default. The owner decides which are taken and each default. Then the taken ones are implemented, adapted from Linux's code where that is the clearer source (owner, 2026-10-13: Linux's xHCI files are GPL-2.0 and so is this project), under the conditions of `legal-provenance.md`'s exception for Linux's quirks (every upstream copyright, licence and disclaimer notice kept, the change marked and dated, a row per copy, the release notices naming it and the release's tag offered as its source, checked at 38.final; no file under another licence), and checked against the xHCI specification, each with its registry value under the controller's key, matched by vendor and device id (no revision matching; the revision is logged; owner, 2026-10-13), reported by `XHCISNAP` and `XHCIQUAL` (which already names them), and a host test of the match. The survey and the decisions: design record 20, reviewed to convergence 2026-10-14 - fourteen values named for their effect (one widening `XhciIntervalCap`), value 2 (every controller) only where the fix is generic xHCI behaviour and a 2 read as 1 on the vendor-register ones, the forced BIOS handoff dropped on the specification, Etron's Reset Device left as it is, platforms with no CSM not applicable and those whose CSM is not established deferred pending evidence (owner, 2026-10-13); and the endpoint-ring ownership fix the survey exposed (record 20 section 5: a ring is returned to the pool only when a command proves the controller has given it up, Linux's rule; the old alternate setting re-instated after a STALLed SET_INTERFACE), which bounds Panther Point's 64 endpoint contexts by the pool, so it needs no quirk of its own (owner, 2026-10-13). Legs: QEMU for what it can show, which is little, since its controller carries no quirk, and each quirk's registry value documented with the controllers it was read on
+- [ ] 38.11 xHCI 0.96 controllers accepted (owner, 2026-10-13): today `XhciCheckCapDword0` (`xhci_caps.c`) refuses a controller whose HCIVERSION is below 1.0, so its start fails, which is where the first-generation NEC/Renesas uPD720200 and uPD720200A (`1033:0194`) and other 0.96 parts stop. The floor becomes 0.96 behind a registry value under the controller's driver key, on by default, `0` restoring the 1.0 floor. A 0.96 controller is driven as a 1.0 one but for the rules Linux applies below 1.0 (owner, 2026-10-13): the TD Size field in the units the controller's version defines - remaining packets from 1.0, remaining bytes divided by 1024 on 0.96 (each capped at 31), Linux's form on the last TRB; the Setup TRB's Transfer Type and the isochronous TBC and TLBPC written 0; HCCPARAMS2 treated as 0; and SIA on every isochronous TD, never a Frame ID (design record 17 section 4.14, D1 to D4 and D8) - checked against xHCI 1.2c Appendix G ("0.96 Exceptions") and Linux's handling of 0.96 parts, since no official public copy of the 0.96 specification was found (Intel distributed the draft under a contributor agreement; design record 17 section 4.14, `docs/references/README.md`); the other 0.96-era quirks Linux applies (NEC's isochronous Link TRB chaining, the AMD 0x96 rules; design record 20) are not taken, and any other behaviour of 1.0 the driver depends on that 0.96 lacks is found by an audit against that specification and put to the owner. Design record 17 section 4.14 first (reviewed to convergence 2026-10-13; a refused start's diagnosis carried by the counters and flushed to DebugView at every refusal of the initial start, D5; a `qemu`-flavour `XhciQemuHciVersion` letting a guest's controller report 0.96, D7), a review loop, host tests of the floor, the gate and both TD Size forms, both builds with the INF gate (the value's row), `XHCISNAP` and `XHCIQUAL` naming the version and the gate. No virtual machine presents a 0.96 controller (QEMU's reports 1.0), so the legs are the gate's default and `0` on QEMU, unchanged, and a 0.96 controller is read on real hardware, after the cut if not before, said so in the release notes
+- [ ] 38.12 the composite devnode's own `SELECT_CONFIGURATION` (GitHub issue 17 item 11, SweetLow, 2026-10-14: \"Under Microsoft stack URB_FUNCTION_SELECT_CONFIGURATION come for composite device, not for separate items of this device. Not so in xHCI98 implementation.\"; opened 2026-10-14 by the owner from that item, in `2.4.0.0`). Under Microsoft's stack the composite parent (`usbccgp.sys` from XP and on ME, `usbhub.sys` on 98 SE and 2000) selects the whole configuration down the composite devnode's own stack - read for `usbccgp` (ReactOS's, and XP SP3's statically: before it creates its function PDOs); 98 SE's and 2000's `usbhub` composite code is not read, hidusbf's notes implying the same route there - so hidusbf as a lower filter on the composite devnode (its Setup's \"Process Parent\") rewrites every function's `bInterval` there; under this bus since 36.43 the `USB\XHCI98_COMPOSITE` devnode is bound to `xhci98.sys`, the bus configures the device itself (record 13 section 10.8) and the parent PDO refuses every URB, so a filter there sees nothing, and only a filter on a function devnode reaches a function (10.9). The design (record 13 section 10.14, reviewed to convergence before the code; its decisions D1 to D13 recommended and adopted 2026-10-14 under the owner's instruction to proceed after review): the composite FDO's `START`, after the `START` has come back up, sends down its own stack - a lower filter included - `GET_DESCRIPTOR` for the device and the configuration and one `SELECT_CONFIGURATION` over the descriptor that came back, every interface at alternate 0, as `usbccgp` does (ReactOS's `usbccgp` and a static read of XP SP3's, `legal-provenance.md` section 4), the old record forgotten first; a failure never fails the start. The parent PDO answers those two `GET_DESCRIPTOR`s from its copies and records the select in its dispatch, with no queue and no controller thread - validated against the device's own configuration, the caller's descriptor kept on the parent PDO as a reference-counted copy, nothing configured, no `SET_CONFIGURATION`, no endpoint touched - and answers an unconfigure, which the FDO sends at its `REMOVE` as ReactOS's `usbccgp` does, by forgetting the record. A function's select then takes each endpoint's `bInterval` from its own caller where that differs from the device's (today's rule), else from the record where the endpoint's first six bytes match the device's, else the device's own; a function's later `SELECT_INTERFACE` takes the record's too; a rewrite of anything but `bInterval` is ignored per endpoint and counted; open pipes are never re-opened for a record that arrives after them. Counters appended after word 240, `comp.*` log records, the stop's counter lines, `XHCISNAP`'s names; host tests of the precedence, the select's builder and its validation; both builds with every gate; a full review loop on the code. Legs: hidusbf on the composite devnode, and for comparison on the mouse function's devnode, with a composite HID device by passthrough on 98 SE, 2000, XP and 7 x86 (QEMU offers no keyboard-and-mouse composite); with no filter, the regression on QEMU's `usb-audio` on every target; and mode 4's codes from the composite. Without a passthrough device the matrix reads the regression and the rest is owed to the bench, said so in the release notes
+- [ ] 38.final the builds, cut and check of `2.4.0.0` (owner, 2026-10-13). Stamped with the version and a `DriverVer` of the cut's date; built and gated, x86 and amd64, all three flavours each (the INF, import and package gates and the host tests); cut by the owner to `releases\<version>\` in 38.9's layout, signed and verified, the zip's SHA-256 recorded; the install legs read from the asset on every target (the release notes' row "Every target, from the release package"), with the legs each task above leaves to the cut; "Untested ground" in the README and the release notes keeping only design-level gaps (the owner removed the suspend, standby, remote wake and real-hardware bench rows from both on 2026-10-13); the `releases/history.md` entry; then publishing
+
+Checkpoint: the design-first tasks (38.2, 38.3, 38.8, 38.11 and 38.12)
+decided by the owner and reviewed to convergence before their code; 38.7's
+reading taken on 2000, XP and 7 before the hub's interface changes; each
+task's legs read as it names them; 38.4 to 38.6 in the readme template
+and the release notes; and 38.final's install legs read from the asset; and 38.8's High Speed and USB 3 hub readings, taken after the cut, said so in the release notes' "Untested ground"; and 38.12's composite-devnode filter read on a composite HID device, or owed to the bench and said so there.
+
+Records: `runs/run-38.md`; design record 13 (sections 8.10 and 10.12, and
+the sections 38.2 and 38.8 add); `design/15-polled-event-delivery.md`;
+`design/16-intel-port-switchover.md`; `design/17-controller-tolerance.md`;
+`design/18-msi-helper-x86.md`; `docs/contributing/legal-provenance.md`;
+`runs/run-37.md`, where 38.4 to 38.6 come from; GitHub issue 17;
+`docs/using/release-notes.md`.
