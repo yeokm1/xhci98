@@ -99,7 +99,6 @@ param(
     [string]$Qemu,
     [string]$Tag,
     [switch]$NewOverlay,
-    [switch]$NoAdmission,
     [int]$AdmitTimeoutSec = 900,
     [switch]$DryRun,
     [string[]]$Extra = @()
@@ -173,25 +172,11 @@ $nvme = Join-Path $runDir 'nvme.qcow2'
 if (-not (Test-Path $base)) { throw "base image missing: $base" }
 
 # ---------------------------------------------------------------- QEMU binary
+# Default: the fork's build, copied to vm\usb4\bin under the admission lock.
+$qemuIsCopy = $false
 if (-not $Qemu) {
     $Qemu = Join-Path $usb4Root 'bin\qemu-system-x86_64.exe'
-    $srcInfo = Get-Item $emuQemu
-    $copy = $true
-    if (Test-Path $Qemu) {
-        $have = Get-Item $Qemu
-        $copy = ($have.Length -ne $srcInfo.Length -or $have.LastWriteTimeUtc -lt $srcInfo.LastWriteTimeUtc)
-    }
-    if ($copy -and -not $DryRun) {
-        $running = @(Get-CimInstance Win32_Process -Filter "Name like 'qemu-system%'" |
-                     Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $Qemu) })
-        if ($running.Count -gt 0) {
-            Write-Warning "a newer fork binary exists but $Qemu is in use; keeping the old copy"
-        } else {
-            New-Item -ItemType Directory -Force (Split-Path $Qemu) | Out-Null
-            Copy-Item $emuQemu $Qemu -Force
-            Write-Host "copied $emuQemu ($($srcInfo.LastWriteTime)) to $Qemu"
-        }
-    }
+    $qemuIsCopy = $true
 }
 $env:PATH = "$emuBin;$env:PATH"
 
@@ -200,32 +185,30 @@ function Invoke-QemuImg([string[]]$a) {
     if ($LASTEXITCODE -ne 0) { throw "qemu-img $($a -join ' ') failed: $out" }
 }
 
-# ---------------------------------------------------------------- overlays
-if (-not $DryRun) {
-    New-Item -ItemType Directory -Force $runDir | Out-Null
-    if ($NewOverlay) {
-        foreach ($f in @($disk, $nvme)) { if (Test-Path $f) { Remove-Item $f -Force } }
-    }
-    if (-not (Test-Path $disk)) {
-        Invoke-QemuImg @('create', '-q', '-f', 'qcow2', '-b', $base, '-F', 'qcow2', $disk)
-        Write-Host "overlay $disk over $base"
-    }
-    if ($Usb4Profile -ne 'none' -and -not (Test-Path $nvme)) {
-        if ($NvmeBase) {
-            Invoke-QemuImg @('create', '-q', '-f', 'qcow2', '-b', (Resolve-Path $NvmeBase).Path, '-F', 'qcow2', $nvme)
-        } else {
-            Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $nvme, $NvmeSize)
-        }
-    }
-    if (-not $XferImg) {
-        if (-not $XferDir) { $XferDir = Join-Path $runDir 'xfer' }
-        New-Item -ItemType Directory -Force $XferDir | Out-Null
-    }
-} elseif (-not $XferImg -and -not $XferDir) {
-    $XferDir = Join-Path $runDir 'xfer'
+# ---------------------------------------------------------------- disks
+# A writable transfer image must be a raw xfer*.img under vm\usb4\, so no
+# base image (vm\*.img) and nothing in usb4-emu can be attached writable; an
+# NVMe base is only ever a qcow2 backing file.
+function Test-Under([string]$path, [string]$root) {
+    $p = [System.IO.Path]::GetFullPath($path).TrimEnd('\') + '\'
+    $r = [System.IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+    return $p.StartsWith($r, [System.StringComparison]::OrdinalIgnoreCase)
 }
+if ($XferImg) {
+    if (-not (Test-Path $XferImg -PathType Leaf)) { throw "-XferImg $XferImg does not exist" }
+    $XferImg = (Resolve-Path $XferImg).Path
+    if (-not (Test-Under $XferImg $usb4Root) -or (Split-Path -Leaf $XferImg) -notmatch '^xfer[A-Za-z0-9._-]*\.img$') {
+        throw "-XferImg must be a raw image named xfer*.img under $usb4Root (it is attached writable)"
+    }
+}
+if ($NvmeBase) {
+    if (-not (Test-Path $NvmeBase -PathType Leaf)) { throw "-NvmeBase $NvmeBase does not exist" }
+    $NvmeBase = (Resolve-Path $NvmeBase).Path
+}
+if (-not $XferImg -and -not $XferDir) { $XferDir = Join-Path $runDir 'xfer' }
+$ustor = $null
+$udisk = $null
 
-# ---------------------------------------------------------------- command line
 $dbg = Join-Path $runDir "debugcon-$Tag.log"
 $ser = Join-Path $runDir "serial-$Tag.log"
 $trc = Join-Path $runDir "trace-$Tag.log"
@@ -250,7 +233,7 @@ if ($BootStrict) {
     Add @('-boot', 'c')
 }
 if ($XferImg) {
-    Add @('-drive', "if=ide,index=1,format=raw,file=$((Resolve-Path $XferImg).Path)")
+    Add @('-drive', "if=ide,index=1,format=raw,file=$XferImg")
 } else {
     Add @('-drive', "if=ide,index=1,format=raw,snapshot=on,file=fat:16:$XferDir")
 }
@@ -268,7 +251,6 @@ if ($Usb4Profile -ne 'none') {
     $encExtra = ''
     if ($Usb3) {
         $ustor = Join-Path $runDir 'ustor.qcow2'
-        if (-not $DryRun -and -not (Test-Path $ustor)) { Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $ustor, '256M') }
         Add @('-device', 'qemu-xhci,id=u4x,bus=pci.0,addr=0x7')
         Add @('-drive', "if=none,id=ustor,format=qcow2,file=$ustor")
         Add @('-device', 'usb-storage,id=ustor0,bus=u4x.0,port=1,drive=ustor,serial=USB3EMU01')
@@ -277,7 +259,6 @@ if ($Usb4Profile -ne 'none') {
     }
     if ($Dock) {
         $udisk = Join-Path $runDir 'usbdisk.qcow2'
-        if (-not $DryRun -and -not (Test-Path $udisk)) { Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $udisk, '256M') }
         Add @('-blockdev', "driver=qcow2,node-name=usbdisk,file.driver=file,file.filename=$udisk")
         Add @('-netdev', 'user,id=docknet,restrict=on')
         $encExtra += ',dock=on,nic-netdev=docknet,usb-drive=usbdisk'
@@ -311,8 +292,15 @@ if ($Usb4Profile -ne 'none') {
     if ($DeviceAtBoot -eq 1) { Add @('-device', $enc0) }
 }
 if ($Trace) {
-    foreach ($t in $TracePattern) { Add @('-trace', $t) }
+    foreach ($t in (($TracePattern -join ',') -split ',')) { Add @('-trace', $t) }
     Add @('-D', $trc)
+}
+# -Extra may not take over what this script owns: the monitor and display
+# ports, the disks, and the vCPU and memory counts the admission check budgets.
+$refused = @('-qmp', '-monitor', '-vnc', '-spice', '-drive', '-blockdev', '-hda', '-hdb', '-hdc', '-hdd',
+             '-cdrom', '-smp', '-m', '-pidfile', '-incoming', '-loadvm', '-snapshot', '-accel', '-machine')
+foreach ($x in $Extra) {
+    if ($refused -contains $x.ToLowerInvariant()) { throw "-Extra may not carry $x (the launcher owns it)" }
 }
 Add $Extra
 
@@ -334,42 +322,61 @@ foreach ($p in @($QmpPort, $VncPort)) {
 }
 
 # ---------------------------------------------------------------- admission
+# Everything that changes shared state - the guest lock, the binary copy, the
+# overlays, the launch - happens while this script holds _admit, so two
+# launches (of this script or of another worker's) are serialised.
 New-Item -ItemType Directory -Force $lockRoot | Out-Null
 $admit = Join-Path $lockRoot '_admit'
 $guestLock = Join-Path $lockRoot "usb4-$Name.lock"
 $runJson = Join-Path $runDir 'run.json'
+$token = [guid]::NewGuid().ToString('N')
 
 function Test-PidAlive([int]$procId) {
     if ($procId -le 0) { return $false }
     return [bool](Get-Process -Id $procId -ErrorAction SilentlyContinue)
 }
-if (Test-Path $guestLock) {
-    $old = Get-Content $guestLock -Raw
-    $oldPid = 0
-    if ($old -match 'pid=(\d+)') { $oldPid = [int]$Matches[1] }
-    if (Test-PidAlive $oldPid) { throw "$Name is already running (pid $oldPid, $guestLock)" }
-    if ($old -match 'pid=') { Remove-Item $guestLock -Force }
-    else { throw "$guestLock exists and names no pid; remove it by hand if stale" }
+# vCPUs a running QEMU uses, from its -smp argument; $null when unknown.
+function Get-QemuVcpus([string]$cl) {
+    if (-not $cl) { return $null }
+    if ($cl -notmatch '-smp\s+"?([^\s"]+)') { return 1 }
+    $v = $Matches[1]
+    if ($v -match '^(\d+)(,|$)') { return [int]$Matches[1] }
+    if ($v -match '(^|,)cpus=(\d+)') { return [int]$Matches[2] }
+    $n = 1
+    foreach ($k in @('sockets', 'dies', 'clusters', 'cores', 'threads')) {
+        if ($v -match "(^|,)$k=(\d+)") { $n *= [int]$Matches[2] }
+    }
+    return $n
 }
 
 $admitted = $false
-if (-not $NoAdmission) {
-    $deadline = (Get-Date).AddSeconds($AdmitTimeoutSec)
-    while (-not $admitted) {
-        try { New-Item -ItemType Directory $admit -ErrorAction Stop | Out-Null; $admitted = $true }
-        catch {
-            if ((Get-Date) -gt $deadline) { throw "admission lock $admit not free after $AdmitTimeoutSec s" }
-            Start-Sleep -Seconds 3
-        }
+$deadline = (Get-Date).AddSeconds($AdmitTimeoutSec)
+while (-not $admitted) {
+    try { New-Item -ItemType Directory $admit -ErrorAction Stop | Out-Null; $admitted = $true }
+    catch {
+        if ((Get-Date) -gt $deadline) { throw "admission lock $admit not free after $AdmitTimeoutSec s" }
+        Start-Sleep -Seconds 3
     }
 }
+$lockOwned = $false
 $launched = $false
 try {
+    if (Test-Path $guestLock) {
+        $old = Get-Content $guestLock -Raw
+        if ($old -notmatch 'pid=(\d+)') { throw "$guestLock exists and names no pid; remove it by hand if stale" }
+        $oldPid = [int]$Matches[1]
+        if (Test-PidAlive $oldPid) { throw "$Name is already running (pid $oldPid, $guestLock)" }
+        if ($oldPid -eq 0 -and (Get-Item $guestLock).LastWriteTime -gt (Get-Date).AddMinutes(-10)) {
+            throw "$guestLock records a launch in progress (pid=0, under 10 minutes old)"
+        }
+        Remove-Item $guestLock -Force
+    }
+
     $cpus = (Get-CimInstance Win32_Processor | Measure-Object NumberOfLogicalProcessors -Sum).Sum
     $used = 0
     foreach ($q in @(Get-CimInstance Win32_Process -Filter "Name like 'qemu-system%'")) {
-        $n = 1
-        if ($q.CommandLine -match '-smp\s+"?(?:cpus=)?(\d+)') { $n = [int]$Matches[1] }
+        $n = Get-QemuVcpus $q.CommandLine
+        if ($null -eq $n) { throw "cannot read the command line of qemu pid $($q.ProcessId); vCPU budget unknown" }
         $used += $n
     }
     $freeMB = [int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1024)
@@ -377,7 +384,51 @@ try {
     if ($used + $Smp -gt $cpus) { throw "vCPU budget: $used running + $Smp > $cpus logical processors; wait for a guest to stop" }
     if ($freeMB - $MemMB -lt 6144) { throw "RAM: $freeMB MB free, $MemMB MB for this guest would leave less than 6 GB" }
 
-    Set-Content -Path $guestLock -Value "branch=$branch name=$Name guest=$Guest pid=0 started=$(Get-Date -Format s)" -Encoding ASCII
+    Set-Content -Path $guestLock -Value "branch=$branch name=$Name guest=$Guest pid=0 token=$token started=$(Get-Date -Format s)" -Encoding ASCII
+    $lockOwned = $true
+
+    # The fork's binary, copied so a rebuild in usb4-emu is never blocked.
+    if ($qemuIsCopy) {
+        $srcInfo = Get-Item $emuQemu
+        $copy = $true
+        if (Test-Path $Qemu) {
+            $have = Get-Item $Qemu
+            $copy = ($have.Length -ne $srcInfo.Length -or $have.LastWriteTimeUtc -lt $srcInfo.LastWriteTimeUtc)
+        }
+        if ($copy) {
+            $running = @(Get-CimInstance Win32_Process -Filter "Name like 'qemu-system%'" |
+                         Where-Object { $_.ExecutablePath -and ($_.ExecutablePath -ieq $Qemu) })
+            if ($running.Count -gt 0) {
+                Write-Warning "a newer fork binary exists but $Qemu is in use; keeping the old copy"
+            } else {
+                New-Item -ItemType Directory -Force (Split-Path $Qemu) | Out-Null
+                Copy-Item $emuQemu $Qemu -Force
+                Write-Host "copied $emuQemu ($($srcInfo.LastWriteTime)) to $Qemu"
+            }
+        }
+    }
+    if (-not (Test-Path $Qemu)) { throw "QEMU binary missing: $Qemu" }
+
+    # Overlays: the base images are only ever backing files.
+    New-Item -ItemType Directory -Force $runDir | Out-Null
+    if ($NewOverlay) {
+        foreach ($f in @($disk, $nvme)) { if (Test-Path $f) { Remove-Item $f -Force } }
+    }
+    if (-not (Test-Path $disk)) {
+        Invoke-QemuImg @('create', '-q', '-f', 'qcow2', '-b', $base, '-F', 'qcow2', $disk)
+        Write-Host "overlay $disk over $base"
+    }
+    if ($Usb4Profile -ne 'none' -and -not (Test-Path $nvme)) {
+        if ($NvmeBase) {
+            Invoke-QemuImg @('create', '-q', '-f', 'qcow2', '-b', $NvmeBase, '-F', 'qcow2', $nvme)
+        } else {
+            Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $nvme, $NvmeSize)
+        }
+    }
+    foreach ($f in @($ustor, $udisk)) {
+        if ($f -and -not (Test-Path $f)) { Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $f, '256M') }
+    }
+    if (-not $XferImg) { New-Item -ItemType Directory -Force $XferDir | Out-Null }
 
     # A generated batch file carries PATH (the fork's DLLs) and the
     # redirections; WMI starts it so QEMU is not a child of this shell and
@@ -401,28 +452,35 @@ try {
         }
         if ($qpid -eq 0 -and -not (Test-PidAlive ([int]$r.ProcessId)) -and (Test-Path $out) -and (Get-Item $out).Length -gt 0) { break }
     }
-    if ($qpid -eq 0 -or -not (Test-PidAlive $qpid)) {
+    $proc = $null
+    if ($qpid -gt 0) { $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $qpid" }
+    if (-not $proc -or -not $proc.CommandLine -or $proc.CommandLine -notlike "*tcp:127.0.0.1:$QmpPort,*") {
         $msg = ''
         if (Test-Path $out) { $msg = Get-Content $out -Raw }
         throw "QEMU did not start; $out says: $msg"
     }
+    $created = $proc.CreationDate.ToUniversalTime().ToString('o')
     $launched = $true
-    Set-Content -Path $guestLock -Value "branch=$branch name=$Name guest=$Guest pid=$qpid started=$(Get-Date -Format s)" -Encoding ASCII
+    Set-Content -Path $guestLock -Value "branch=$branch name=$Name guest=$Guest pid=$qpid token=$token started=$(Get-Date -Format s)" -Encoding ASCII
+
+    $info = [ordered]@{
+        name = $Name; guest = $Guest; profile = $Usb4Profile; bios = $Bios; deviceAtBoot = $DeviceAtBoot
+        hostModel = $HostModel; preosCm = [bool]$PreosCm; usb3 = [bool]$Usb3; dock = [bool]$Dock
+        bootStrict = [bool]$BootStrict; dvorak = ($Guest -like 'win2k*')
+        qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; created = $created; qemu = $Qemu
+        token = $token; branch = $branch; tag = $Tag
+        runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
+        debugcon = $dbg; serial = $ser; trace = $(if ($Trace) { $trc } else { $null }); out = $out
+        started = (Get-Date -Format s)
+    }
+    Set-Content -Path $runJson -Value ($info | ConvertTo-Json) -Encoding ASCII
 } finally {
-    if (-not $launched -and (Test-Path $guestLock)) { Remove-Item $guestLock -Force }
-    if ($admitted) { Remove-Item $admit -Force -ErrorAction SilentlyContinue }
+    if ($lockOwned -and -not $launched -and (Test-Path $guestLock)) {
+        if ((Get-Content $guestLock -Raw) -match "token=$token\b") { Remove-Item $guestLock -Force }
+    }
+    Remove-Item $admit -Force -ErrorAction SilentlyContinue
 }
 
-$info = [ordered]@{
-    name = $Name; guest = $Guest; profile = $Usb4Profile; bios = $Bios; deviceAtBoot = $DeviceAtBoot
-    hostModel = $HostModel; preosCm = [bool]$PreosCm; usb3 = [bool]$Usb3; dock = [bool]$Dock
-    bootStrict = [bool]$BootStrict; dvorak = ($Guest -like 'win2k*')
-    qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; branch = $branch; tag = $Tag
-    runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
-    debugcon = $dbg; serial = $ser; trace = $(if ($Trace) { $trc } else { $null }); out = $out
-    started = (Get-Date -Format s)
-}
-Set-Content -Path $runJson -Value ($info | ConvertTo-Json) -Encoding ASCII
 Write-Host "started $Name (pid $qpid): QMP 127.0.0.1:$QmpPort, VNC 127.0.0.1:$VncPort"
 Write-Host "  debugcon $dbg"
 if ($Trace) { Write-Host "  trace    $trc" }

@@ -51,16 +51,43 @@ if (-not (Test-Path $runJson)) { throw "no run.json for '$Name' ($runJson)" }
 $run = Get-Content $runJson -Raw | ConvertFrom-Json
 if ($run.qmpPort -lt 47900 -or $run.qmpPort -gt 47999) { throw "run.json names port $($run.qmpPort), outside 47900-47999" }
 
+# True only for the very QEMU process run-usb4-guest.ps1 started: same pid,
+# same creation time, same executable, and listening on this run's QMP port.
+# A recycled pid or a stale run.json never qualifies.
 function Test-PidAlive([int]$procId) {
     if ($procId -le 0) { return $false }
-    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-    return [bool]($p -and $p.ProcessName -like 'qemu-system*')
-}
-function Clear-Lock {
-    if ($run.lock -and (Test-Path $run.lock)) {
-        $t = Get-Content $run.lock -Raw
-        if ($t -match "pid=$($run.pid)\b") { Remove-Item $run.lock -Force; Write-Host "freed $($run.lock)" }
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+    if (-not $p -or $p.Name -notlike 'qemu-system*') { return $false }
+    if (-not $p.CommandLine -or $p.CommandLine -notlike "*tcp:127.0.0.1:$($run.qmpPort),*") { return $false }
+    if ($run.PSObject.Properties['qemu'] -and $run.qemu -and $p.ExecutablePath -ine $run.qemu) { return $false }
+    if ($run.PSObject.Properties['created'] -and $run.created) {
+        if ($p.CreationDate.ToUniversalTime().ToString('o') -ne $run.created) { return $false }
     }
+    return $true
+}
+# Frees the guest lock only if it is still this run's (its token), under the
+# host's admission lock so a launch that is replacing it cannot interleave.
+function Clear-Lock {
+    if (-not $run.lock -or -not (Test-Path $run.lock)) { return }
+    $admit = Join-Path (Split-Path $run.lock) '_admit'
+    $got = $false
+    $deadline = (Get-Date).AddSeconds(120)
+    while (-not $got) {
+        try { New-Item -ItemType Directory $admit -ErrorAction Stop | Out-Null; $got = $true }
+        catch {
+            if ((Get-Date) -gt $deadline) { Write-Warning "admission lock busy; $($run.lock) left in place"; return }
+            Start-Sleep -Seconds 2
+        }
+    }
+    try {
+        if (Test-Path $run.lock) {
+            $t = Get-Content $run.lock -Raw
+            $mine = $false
+            if ($run.PSObject.Properties['token'] -and $run.token) { $mine = ($t -match "token=$($run.token)\b") }
+            else { $mine = ($t -match "pid=$($run.pid)\b") }
+            if ($mine) { Remove-Item $run.lock -Force; Write-Host "freed $($run.lock)" }
+        }
+    } finally { Remove-Item $admit -Force -ErrorAction SilentlyContinue }
 }
 
 # ---------------------------------------------------------------- QMP
