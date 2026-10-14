@@ -67,6 +67,9 @@ typedef struct _MODEL {
     ULONG FailOffset;       /* ... at this offset, or all when NO_BDF       */
     ULONG FailWrites;       /* every write fails                            */
     ULONG FailWriteAt;      /* the write with this 1-based ordinal fails    */
+    ULONG FailNth;          /* only the Nth access at FailBdf/FailOffset
+                               fails, 0 for every one                       */
+    ULONG FailSeen;         /* accesses counted for FailNth                 */
     ULONG StrayWrites;      /* writes anywhere but an SHPC DWORD Select     */
     ULONG Reads;
     ULONG Writes;
@@ -109,9 +112,14 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
     if (XHCI_TBT_BDF_BUS(bdf) > model.MaxBusRead) {
         model.MaxBusRead = XHCI_TBT_BDF_BUS(bdf);
     }
-    if ((bdf == model.FailBdf && (model.FailOffset == XHCI_TBT_NO_BDF ||
-                                  model.FailOffset == offset)) ||
-        (offset & 3) != 0 || offset > 0xFC) {
+    if (bdf == model.FailBdf && (model.FailOffset == XHCI_TBT_NO_BDF ||
+                                 model.FailOffset == offset)) {
+        model.FailSeen++;
+        if (model.FailNth == 0 || model.FailNth == model.FailSeen) {
+            return 0;
+        }
+    }
+    if ((offset & 3) != 0 || offset > 0xFC) {
         return 0;
     }
     f = mfind(bdf);
@@ -322,6 +330,7 @@ static XHCI_TBT_TOPO topo;
 static XHCI_TBT_PORT port;
 
 static XHCI_TBT_TOPO_IN in;
+static ULONG single = 1;
 
 static ULONG findin(ULONG nhi, const ULONG *over, ULONG overs,
                     const XHCI_TBT_TABLE_ENTRY *table, ULONG tableCount)
@@ -336,6 +345,7 @@ static ULONG findin(ULONG nhi, const ULONG *over, ULONG overs,
     }
     in.Table = table;
     in.TableCount = tableCount;
+    in.SingleDomain = single;
     return XhciTbtTopoFind(&io, &in, &topo);
 }
 
@@ -1493,7 +1503,7 @@ static void test_failures(void)
     two_shpc();
     model.FailBdf = B(0, 6, 0);
     model.FailOffset = 0x48;
-    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
              "an unread sibling");
     CHECK(topo.Unread == 1 && (sibling(B(0, 6, 0))->Flags &
                                XHCI_TBT_BR_UNREAD), "flagged unread");
@@ -1566,11 +1576,20 @@ static void test_failures(void)
     mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
     put16(mfind(B(0, 0x0D, 2)), 0x02, TEST_NHI_ID >> 16);
     mdev(0, 0x0D, 3, 0x8086, 0xFFF4, 0x0C0340UL);
-    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_SET,
-             "an id-only entry with no other domain's NHI id named");
+    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_LEARN,
+             "a second USB4-class NHI on the bus: a wildcard entry unused");
+    CHECK(topo.OtherNhi == 1 && topo.Ambiguous == 1, "said so");
     CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, two, 2), XHCI_TBT_TOPO_LEARN,
              "two domains' NHIs on the bus: id-only entries are ambiguous");
-    CHECK_EQ(topo.Ambiguous, 1, "said so");
+    CHECK_EQ(topo.Ambiguous, 1, "said so again");
+    put32(mfind(B(0, 0x0D, 3)), 0x08, 0x0C033000UL);
+    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_SET,
+             "the other function no NHI after all: the wildcard serves");
+    single = 0;
+    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_LEARN,
+             "but only when the caller vouches for one domain");
+    single = 1;
+    put32(mfind(B(0, 0x0D, 3)), 0x08, 0x0C034000UL);
     CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, placed, 2), XHCI_TBT_TOPO_SET,
              "entries with locations settle it");
     CHECK(topo.Tunnels == 1 && topo.Set[0] == B(0, 7, 0),
@@ -1583,6 +1602,61 @@ static void test_failures(void)
     in.TableCount = 1;
     CHECK_EQ(XhciTbtTopoFind(&io, &in, &topo), XHCI_TBT_TOPO_BAD_PARAM,
              "a count without a table");
+
+    /* A header that cannot be read, at discovery: incomplete. */
+    two_shpc();
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "a header unread");
+    CHECK(topo.Unread != 0 && topo.Tunnels == 0, "counted, nothing taken");
+    XhciTbtLearnArm(&io, &topo);
+    CHECK_EQ(topo.LearnArmed, 0, "and no learning");
+    model.FailBdf = B(0, 6, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "an identity unread");
+    model.FailOffset = XHCI_TBT_CFG_CLASS;
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_INCOMPLETE,
+             "a class unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+
+    /* A candidate that fails only when the set is taken: incomplete, not
+     * a set without it. */
+    integrated(2);
+    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
+    model.FailBdf = B(0, 7, 1);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    model.FailNth = 2;      /* the walk's probe passes, the take's fails */
+    model.FailSeen = 0;
+    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1),
+             XHCI_TBT_TOPO_INCOMPLETE, "a candidate unread at the take");
+    CHECK_EQ(topo.Tunnels, 0, "no partial set");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    model.FailNth = 0;
+    CHECK_EQ(findin(B(0, 0x0D, 2), NULL, 0, wild, 1), XHCI_TBT_TOPO_SET,
+             "and whole on the next try");
+    CHECK_EQ(topo.Tunnels, 2, "both ports");
+
+    /* A competing port up from an uncertain reading: nothing learned. */
+    integrated(2);
+    mfind(B(0, 0x1C, 0))->Cfg[0x40 + XHCI_TBT_PCIE_SLOTCAP] = 0;
+    f = mfind(B(0, 7, 0));
+    t = mfind(B(0, 7, 1));
+    put16(f, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    CHECK_EQ(find(B(0, 0x0D, 2), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_LEARN,
+             "two candidates");
+    XhciTbtLearnArm(&io, &topo);
+    CHECK(topo.LearnArmed && topo.Before[0] == XHCI_TBT_PORT_MIXED &&
+          topo.Before[1] == XHCI_TBT_PORT_DOWN, "MIXED and DOWN");
+    put16(f, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
+    put16(t, 0x40 + 0x12, XHCI_TBT_LINKSTA_DLLLA);
+    put16(t, 0x40 + 0x1A, XHCI_TBT_SLOTSTA_PDS);
+    CHECK_EQ(XhciTbtLearn(&io, &topo), 0,
+             "the DOWN one rose, but so did the uncertain one");
+    CHECK_EQ(topo.Tunnels, 0, "nothing learned");
 }
 
 int main(void)

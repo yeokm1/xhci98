@@ -86,6 +86,9 @@
 #define XHCI_TBT_CFG_ID             0x00UL  /* vendor 15:0, device 31:16    */
 #define XHCI_TBT_CFG_STATUS         0x04UL  /* Status in 31:16              */
 #define XHCI_TBT_CFG_STATUS_CAPLIST 0x00100000UL /* the dword's bit 20     */
+#define XHCI_TBT_CFG_CLASS          0x08UL  /* revision 7:0, class 31:8     */
+#define XHCI_TBT_CLASS_USB4         0x0C0340UL /* serial bus, USB, USB4
+                                                  host interface            */
 #define XHCI_TBT_CFG_HEADER         0x0CUL  /* Header Type in 23:16         */
 #define XHCI_TBT_CFG_BUSES          0x18UL  /* primary 7:0, secondary 15:8,
                                                subordinate 23:16            */
@@ -230,6 +233,8 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 #define XHCI_TBT_TOPO_NHI_ABSENT    6UL /* nothing answers at the NHI       */
 #define XHCI_TBT_TOPO_BAD_PARAM     7UL
 #define XHCI_TBT_TOPO_LEARN         8UL /* candidates, none verified yet    */
+#define XHCI_TBT_TOPO_INCOMPLETE    9UL /* a function on the search bus
+                                           could not be read: try again     */
 
 /* XHCI_TBT_BRIDGE.Flags. */
 #define XHCI_TBT_BR_PCIE            0x001UL /* a PCI Express capability    */
@@ -288,6 +293,12 @@ typedef struct _XHCI_TBT_TOPO_IN {
     ULONG Override[XHCI_TBT_MAX_TUNNELS];
     const XHCI_TBT_TABLE_ENTRY *Table;  /* the platform table, or NULL      */
     ULONG TableCount;
+    /*
+     * 1 when the caller knows the platform has exactly one domain (its
+     * generation's profile says so); table entries without a Port location
+     * are used only then.
+     */
+    ULONG SingleDomain;
 } XHCI_TBT_TOPO_IN, *PXHCI_TBT_TOPO_IN;
 
 /*
@@ -314,8 +325,9 @@ typedef struct _XHCI_TBT_TOPO {
     ULONG Cand[XHCI_TBT_MAX_CANDIDATES];    /* their locations, in bus order */
     ULONG Listed;       /* candidates the platform table names              */
     ULONG Unread;       /* siblings whose capability walk failed            */
-    ULONG Ambiguous;    /* 1: another domain's NHI on the search bus made a
-                           wildcard-location table entry unusable           */
+    ULONG OtherNhi;     /* 1: another domain's NHI shares the search bus   */
+    ULONG Ambiguous;    /* 1: a table entry matched but, lacking a Port
+                           location, could not be used                      */
     /* the set of verified tunnel ports */
     ULONG Tunnels;      /* how many                                         */
     ULONG Tunnel;       /* the first, or XHCI_TBT_NO_BDF                    */
@@ -354,10 +366,16 @@ typedef struct _XHCI_TBT_TOPO {
  *     bridges such as the emulator's i440FX stand-ins, or a parent whose
  *     type could not be read) only candidates a platform table entry
  *     matches are verified, SRC_TABLE: the entry's PortId, and its NhiId,
- *     Nhi and Port where given. An entry without a Port location is not
- *     used when another function on the search bus carries the NhiId of
- *     any entry (two domains could share such root ports; Ambiguous). With
- *     nothing verified the outcome is LEARN;
+ *     Nhi and Port where given. An entry without a Port location is used
+ *     only when in->SingleDomain is set and no other domain's NHI shares
+ *     the search bus (a function with this NHI's id, a table NhiId or the
+ *     USB4 host interface class; OtherNhi), since two domains could share
+ *     such root ports (Ambiguous). With nothing verified the outcome is
+ *     LEARN;
+ *   - a function on the search bus that could not be read completely (its
+ *     identity, header, class or capability list; or a candidate that
+ *     reads differently when the set is taken) makes the outcome
+ *     INCOMPLETE with an empty set, never a set that might lack a port;
  *   - in->Override wins over all of it, SRC_OVERRIDE, but only if a type 1
  *     function answers at every location it names; otherwise OVERRIDE_BAD
  *     and an empty set: the value is the user's statement and is not
@@ -388,9 +406,10 @@ ULONG XhciTbtParseBdfList(PCWSTR text, ULONG chars, PULONG list,
  * XhciTbtLearnArm reads every candidate before a tunnel up; XhciTbtLearn
  * reads them again after it (once the caller's poll has ended) and adds to
  * the set, SRC_LEARNED, the one candidate not yet in it that read DOWN
- * when armed and UP now. Nothing is learned when two or more did, when any
- * candidate's reading failed at either end, when a capability walk failed
- * at discovery, or when there were more candidates than are kept: the
+ * when armed and UP now. Nothing is learned when two or more did, when
+ * another came up from an uncertain reading (MIXED, GONE or NONE), when
+ * any candidate's reading failed at either end, when discovery was not
+ * complete, or when there were more candidates than are kept: the
  * uniqueness could not be judged. Returns the number learned, 0 or 1, and
  * disarms either way.
  */
