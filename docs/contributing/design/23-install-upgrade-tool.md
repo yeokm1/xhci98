@@ -1,7 +1,7 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 2, 2026-10-15, reviewed and revised the same day; the
-code is written against it (task 40.6). Written for the task group the
+Status: revision 3, 2026-10-15, reviewed and revised twice the same day;
+the code is written against it (task 40.6). Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
 package gains an install and upgrade script, `INSTALL.BAT`, in front of a
 console tool of this project's own, `XHCIINST.EXE` (x86) and
@@ -116,7 +116,10 @@ arguments on:
   is the batch file's own when it is started from Explorer, passes `%1` to
   `%9`, and the tool checks its own location (section 4). `COMMAND.COM`
   splits an argument at `=`, so `/set Name=Value` arrives as two
-  arguments; the tool joins them (section 7.1).
+  arguments; the tool joins them (section 7.1). A tenth argument would be
+  lost silently, so the batch file refuses any command line that uses
+  `%9` at all, and names `TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86`
+  as the way to pass more.
 - `Windows_NT`, `PROCESSOR_ARCHITECTURE` or `PROCESSOR_ARCHITEW6432` equal
   to `AMD64`: `XHCIIN64.EXE`, `release-x64`, the arguments passed with
   `%*`.
@@ -240,15 +243,24 @@ or 98 SE is refused too: it is not a target of this package.
 ### 4.4 The local copy
 
 Every run that changes anything first copies the flavour directory's files
-to `%windir%\XHCI98`, a directory of this project's own, replacing the
-files an earlier run put there and recording their names in
-`%windir%\XHCI98\XHCIINST.LST`, and stages and installs from that copy
-(decision D7). Two reasons: on Windows 2000 and XP a device found later
-takes its files from where the INF was staged from, which must not be a
-CD, a floppy or a USB stick behind the controller being updated; and on 98
-SE and ME the directory is what `DevicePath` names (section 6). The
-uninstall removes the files the list names and the directory only if it
-is then empty.
+to a directory of this project's own under `%windir%\XHCI98\`, and stages
+and installs from that copy (decision D7). Two reasons: on Windows 2000 and
+XP a device found later takes its files from where the INF was staged from,
+which must not be a CD, a floppy or a USB stick behind the controller being
+updated; and on 98 SE and ME the directory is what `DevicePath` names
+(section 6).
+
+**The copies are immutable.** Each is named for its content -
+`<version>-<flavour directory>-<tag>`, the tag an FNV-1a hash of every
+file's name and bytes - holds an `XHCIINST.LST` naming the files the tool
+put there, and is never rewritten: a run whose package is already there
+checks the files are byte-identical and uses them, and a run of another
+package makes another directory. So an older package run for one driver
+cannot replace the files a newer installed package's INF still names, and
+a run that changes only a registry value replaces nothing. The copies are
+kept while anything may name them, and only the uninstall removes them:
+the files each list names, then each directory and `%windir%\XHCI98` only
+if empty.
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
 
@@ -268,9 +280,13 @@ is then empty.
    (`Y`; anything else, or end of input, cancels with exit 1 and changes
    nothing). `/yes` skips the confirmation; `/defaults` and `/set` answer
    the registry questions without asking.
-5. Copy the package locally (section 4.4) and pre-stage every INF from the
-   copy (section 5.6); with `/restage`, replace a stored package the trap
-   holds (section 5.7).
+5. Ask Windows whether an installation is in progress
+   (`CMP_WaitNoPendingInstallEvents` with no wait, Microsoft's "Checking
+   for In-Progress Installations"): only "none" goes on; "pending" or a
+   failed question stops the run with nothing changed (exit 4). Then copy
+   the package locally (section 4.4) and pre-stage every INF from the copy
+   whose service group is not refused (sections 5.4 and 5.6); with
+   `/restage`, replace a stored package the trap holds (section 5.7).
 6. Update the controllers (`xhci98.inf`).
 7. Wait for the system to finish installing what the update made appear
    (`CMP_WaitNoPendingInstallEvents`, 60 seconds), and read the devnodes
@@ -324,16 +340,23 @@ code reads the package on Windows 98.
 ### 5.3 Reading the devices
 
 On NT every devnode, present or not, comes from `SetupDiGetClassDevs` with
-`DIGCF_ALLCLASSES` and no `DIGCF_PRESENT`, read whole: its instance id,
-`HardwareID` and `CompatibleIDs`, `Service`, `Driver`, `UpperFilters` and
-`DeviceDesc`; a devnode is present when `CM_Get_DevNode_Status` answers for
-it, and its status and problem code come from that call. A failure to
-build or walk the set, more devnodes than the tool holds, or an instance
-id that cannot be read refuses the run (exit 1): the plan is never made on
-a partial picture. On 98 and ME the tree comes from `cfgmgr32.dll`, the
-walk `XHCISNAP` makes (section 6.3).
+`DIGCF_ALLCLASSES` and no `DIGCF_PRESENT`, walked to `ERROR_NO_MORE_ITEMS`:
+its instance id, `HardwareID` and `CompatibleIDs`, `Service`, `Driver`,
+`UpperFilters` and `DeviceDesc`. Every property that decides anything -
+the ids, `Service`, `Driver`, `UpperFilters` - has three answers, as
+`XHCICLN`'s reads do: read, absent (`ERROR_INVALID_DATA`, SetupAPI's
+answer for a property the devnode does not have), or unreadable (any
+other failure). Presence has three too: `CM_Get_DevNode_Status` answering
+is present, `CR_NO_SUCH_DEVINST` is absent, anything else is unknown. A
+failure to build or walk the set, more devnodes than the tool holds, an
+instance id that cannot be read, or any unreadable property or unknown
+presence refuses the run (exit 1), naming the devnode: the plan is never
+made on a partial picture, and an absent `Service` is only trusted when
+it was read as absent. On 98 and ME the tree comes from `cfgmgr32.dll`,
+the walk `XHCISNAP` makes (section 6.3).
 
-A driver key's values (`DriverVersion`, `DriverDate`, `InfPath`,
+A driver key's values (`DriverVersion`, `DriverDate`, `InfPath` - the
+uninstall's reference check, section 9.2 -
 `ProviderName`, and on 98 and ME `NTMPDriver`) are read from
 `HKLM\SYSTEM\CurrentControlSet\Control\Class\<Driver>` on NT and
 `HKLM\System\CurrentControlSet\Services\Class\<Driver>` on 98 and ME. Each
@@ -375,8 +398,12 @@ controllers"). So replacing the file for one device replaces it for all,
 and the decision is made per group (`xhci98`, `xhciuas`, `xhcicm` with its
 NHIs and filtered ports):
 
-- the group's installed binary, `%windir%\system32\drivers\<service>.sys`,
-  has its file version read (`version.dll`); unreadable is unknown;
+- the group's installed binary, `%windir%\system32\drivers\<service>.sys`
+  (and for `xhci98` on 32-bit NT also `xhcihlpr.sys`, which the
+  controller's INF installs), has its file version read (`version.dll`):
+  a file that is not there is "not installed" - a fresh install, or a file
+  to put back - and never refuses; a file whose version cannot be read is
+  unknown;
 - the group is **refused** when any of its devnodes, present or not, is
   newer or unknown, or the installed binary is newer or unknown: nothing of
   that group is installed, and the group's devices are listed with the
@@ -457,16 +484,26 @@ confirmation:
 
 1. the local copy is in place (section 4.4), so the replacement's source
    cannot vanish;
-2. `SetupUninstallOEMInfA(oemNN.inf, SUOI_FORCEDELETE, NULL)`, which
+2. the work owed is written down first: `%windir%\XHCI98\RESTAGE.LST`
+   names the INF whose devices are to be reinstalled. A run that finds the
+   file reinstalls every present device of each INF it names, whatever its
+   `DriverVersion` says, whether or not a trap is still detectable - an
+   interrupted `/restage` is finished by the next ordinary run;
+3. `SetupUninstallOEMInfA(oemNN.inf, SUOI_FORCEDELETE, NULL)`, which
    removes the package even while devices reference it (Microsoft's
    documentation; that is why the plan names them first);
-3. the package is staged again from the local copy; if that fails, the
+4. the package is staged again from the local copy; if that fails, the
    run stops (exit 2) with the instruction to run `INSTALL.BAT` again,
-   which stages from the same local copy - the devices keep running the
-   files already in `system32\drivers` meanwhile;
-4. every device of that INF is reinstalled, whatever its `DriverVersion`
-   says: a confirmed binary mismatch makes the group's plan a reinstall,
-   which is what equal versions would otherwise hide.
+   which stages from the same local copy and, by the work file, reinstalls
+   - the devices keep running the files already in `system32\drivers`
+   meanwhile;
+5. every present device of that INF is reinstalled, and the INF leaves the
+   work file once every present device of it runs the package's version
+   with no problem code. A device not present then keeps a driver key that
+   names the removed `oemNN.inf`; it runs the group's one binary, which the
+   reinstall replaced, when it returns, and the report says how many such
+   devices there are. `UpdateDriverForPlugAndPlayDevices` reaches present
+   devices only, so nothing more is attempted for them.
 
 Released packages never meet the trap - each release has its own
 `DriverVer` - so this is a development-build route and is said to be. On
@@ -494,7 +531,8 @@ the controller's update (record 13 section 10.13.4):
 
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
   question. `CMP_WaitNoPendingInstallEvents` then times out, because the
-  wizard waits for the user. **A timeout stops the run** (exit 4) with
+  wizard waits for the user. **A timeout, or a failed question, stops the
+  run** (exit 4) with
   "finish or cancel the Found New Hardware windows, then run INSTALL.BAT
   again": an installation in progress is not the tool's to compete with
   (Microsoft's "Checking for In-Progress Installations"). The second run
@@ -510,9 +548,17 @@ the controller's update (record 13 section 10.13.4):
 
 ### 5.9 Results and restart
 
-Each device a step changed is read again at the end and must be bound to
-the group's service, with the package's `DriverVersion`, started, and with
-no problem code. Anything else is reported per device:
+Each device a step changed is read again at the end and checked by its
+role: a controller, hub, UAS disk or NHI must be bound to the group's
+service; a tunnel port must keep its function driver (`pci`), carry
+`xhcicm` in `UpperFilters` and name this package's filter INF in its
+driver key's `InfPath`; each must have the package's `DriverVersion`, be
+started and have no problem code. The devices the run did not change are
+read too: one of this package's devices with a problem code is reported -
+"disabled in Device Manager" for Code 22, which is no failure, and
+otherwise "already had problem code N" with the steps flag set, so a
+current controller already at Code 10 is never reported as a success.
+Anything else is reported per device:
 
 | After | Meaning | Exit |
 |---|---|---|
@@ -615,8 +661,10 @@ from"). A WDM driver is bound on 98 and ME by its driver key's
 `NTMPDriver` value, not by a `Service` value: a devnode belongs to a group
 of section 5.4 when that value names the group's `.sys` (`xhci98.sys`,
 `xhciuas.sys`, `xhcicm.sys`), and its version is the driver key's
-`DriverVersion` where the install wrote one, else its `DriverDate`, which
-is shown and not compared. A failed walk refuses the run.
+`DriverVersion` where the install wrote one; where it did not, the group's
+installed binary's file version stands for it (section 5.4: one binary
+per service), and the `DriverDate` is only shown. Neither readable: the
+device is unknown and only listed. A failed walk refuses the run.
 
 ### 6.4 What it prints
 
@@ -637,12 +685,14 @@ For each xHCI controller (`PCI\CC_0C0330` among its ids):
   date until it is updated the same way;
 - **another vendor's driver**: left (decision D3).
 
-For each UAS device and NHI already bound to an older release of this
+For each UAS device and NHI present with no driver, the install route of
+the first item. For each one already bound to an older release of this
 package, the same Update Driver route on its entry; and because a search
 keeps an `xhciuas.sys` with the same `DriverVer` (release notes, "Updating
-xhciuas.sys over an older one"), the Have Disk route for it: "Display a
-list of all the drivers in a specific location", Have Disk, the local
-directory. The storage prerequisite stays as the README says: on 98 SE,
+xhciuas.sys over an older one"), the Have Disk route for an older UAS
+disk, and for any current device when `/force` asks for a reinstall:
+"Display a list of all the drivers in a specific location", Have Disk,
+the local directory. The storage prerequisite stays as the README says: on 98 SE,
 NUSB's mass-storage component for any disk, UAS included. The first UAS
 disk and the first NHI found later find `xhciuas.inf` and `xhcicm.inf` in
 the same directory. The run ends with exit 4: staged, steps left for the
@@ -703,6 +753,7 @@ read.
 | `CM_Locate_DevNodeA`, `CM_Get_Child`, `CM_Get_Sibling`, `CM_Get_Device_IDA`, `CM_Get_DevNode_Status`, `CM_Get_DevNode_Registry_PropertyA` | `cfgmgr32.dll` | all | 5.3, 6.3 |
 | `CMP_WaitNoPendingInstallEvents` | `cfgmgr32.dll` (where `XHCICLN` resolves it, read on 2000 by task 38.8's legs), else `setupapi.dll` | 2000 onward | 5.1 |
 | `GetFileVersionInfoSizeA`, `GetFileVersionInfoA`, `VerQueryValueA` | `version.dll` | all | 4.2, 5.4 |
+| `SetupDiBuildDriverInfoList`, `SetupDiEnumDriverInfoA`, `SetupDiGetDriverInfoDetailA`, `SetupDiGetDriverInstallParams`, `SetupDiSetSelectedDriverA`, `SetupDiDestroyDriverInfoList` | `setupapi.dll` | 2000 onward | 9.2 |
 | `IsWow64Process` | `kernel32.dll` | XP SP2 onward, absent is not WOW64 | 3 |
 
 Every one is looked up at run time, and the log records where each
@@ -815,6 +866,15 @@ XhciSelectiveSuspend - put idle USB devices to sleep (0 off, 1 on)
 
 `now` is the value in each device's driver key, or "not set" (the
 install's `AddReg` then writes the default), or "new install: the default".
+A value with a caution shows it under the question, and `/set` prints it
+when it sets the value the caution is about: `XhciIntelPortSwitch` 2 writes
+registers of unknown meaning on an Intel controller without the switch
+registers (release notes, "Value 2"); `XhciSelectiveSuspend` 1 has not been
+read on a real machine, "leave it off unless you are testing it";
+`XhciForceBulkOnly` is read as each device is connected, and on Windows
+2000 and later a disk already installed keeps its driver until it is
+uninstalled in Device Manager and plugged in again; `XhciInterruptMode` 1
+and 3 refuse a controller Windows gives no line or no message.
 Two controllers with different values are listed apart and asked once: the
 answer goes to both. Enter keeps each device's value. An answer outside the
 allowed set is asked again; end of input keeps every value.
@@ -842,7 +902,7 @@ connected meanwhile are approved. The question for those two values says
 so on a new install, before the confirmation, and suggests disconnecting
 the dock until the restart when the answer is 0 (decision D12).
 `XhciForceBulkOnly` is read as each device is enumerated instead
-(release notes, "XhciForceBulkOnly"): a disk reconnected takes it.
+(release notes, "XhciForceBulkOnly"), with the caution of section 8.3.
 
 ## 9. Uninstall (owner, 2026-10-15)
 
@@ -870,27 +930,38 @@ The set is every devnode, present or not, bound to `xhci98`, `xhciuas` or
 `xhcicm`, and every devnode whose device id is one of the bus's own forms
 (`USB\XHCI98_ROOT_HUB` and the other three bases; `XHCI98\ROOT_HUB` and
 the three old forms, record 13 section 10.13.8's rule 1). A devnode that
-merely carries `xhcicm` in its `UpperFilters` - a tunnel port, whose
-function driver is `pci.sys` - is **not** in that set: it is a filter
-host, and it is never removed.
+carries `xhcicm` in its `UpperFilters`, or whose function driver is
+another's (`pci`) while its driver key's `InfPath` names this package's
+filter INF - a tunnel port, its filter half-removed by an interrupted run
+included - is **not** in that set: it is a filter host, and it is never
+removed.
 
-Each phase must finish cleanly before the next starts; a failure or a
-deferred result stops the destructive phases after it, reports what was
-done, and tells the user to restart and run `INSTALL.BAT /uninstall`
-again, which resumes from what is left.
+Before the first change the tool asks whether an installation is in
+progress, as the install does (section 5.1 step 5); anything but "none"
+stops with nothing changed. Each phase must then finish cleanly before the
+next starts; a failure or a deferred result stops the destructive phases
+after it, reports what was done, and tells the user to restart and run
+`INSTALL.BAT /uninstall` again, which resumes from what is left.
 
-1. **The filter hosts.** For each tunnel port with `xhcicm` in its
-   `UpperFilters`: `xhcicm` is removed from the multi-string and the rest
-   kept in order (`SetupDiSetDeviceRegistryPropertyA(SPDRP_UPPERFILTERS)`;
-   a value left empty is deleted with the same call and a zero length - the
-   whole value is never removed while another name is in it). Then the
-   port is reinstalled from the OS's own `machine.inf`
-   (`UpdateDriverForPlugAndPlayDevices` with `%windir%\inf\machine.inf`
-   and the port's first hardware id), so its driver node no longer names
-   `xhcicmf.inf`, and read again: `UpperFilters` without `xhcicm` and an
-   `InfPath` that is not this package's. A failure, or a port still naming
-   either, stops the run before step 2. This is unread in any guest here
-   (no Thunderbolt port in QEMU; section 12) and is held to that gate.
+1. **The filter hosts.** For each: `xhcicm` is removed from its
+   `UpperFilters` multi-string and the rest kept in order
+   (`SetupDiSetDeviceRegistryPropertyA(SPDRP_UPPERFILTERS)`; a value left
+   empty is deleted with the same call and a zero length - the whole value
+   is never removed while another name is in it). Then the port, if
+   present, is given back to a driver that is not this package's **by the
+   documented per-device route**, not an ID-wide call: its compatible
+   driver list (`SetupDiBuildDriverInfoList`, `SPDIT_COMPATDRIVER`), the
+   best-ranked node (`SetupDiGetDriverInstallParams`' `Rank`) whose INF
+   (`SetupDiGetDriverInfoDetail`) is not this package's - Windows' own
+   `machine.inf` node, or a vendor's - selected
+   (`SetupDiSetSelectedDriver`) and installed
+   (`SetupDiCallClassInstaller(DIF_INSTALLDEVICE)`). No such node, or a
+   failure, stops the run before step 2. A port not present cannot be
+   reinstalled: its filter name is removed and the run stops (exit 4)
+   with "connect the dock and run INSTALL.BAT /uninstall again" - the
+   port is still a filter host by its `InfPath`, so the next run finds it.
+   This is unread in any guest here (no Thunderbolt port in QEMU; section
+   12) and is held to these gates.
 2. **The devnodes**, children before parents (UAS devices, composite and
    hub entries, root hubs, NHIs, controllers last), each with
    `SetupDiCallClassInstaller(DIF_REMOVE)` and `DI_REMOVEDEVICE_GLOBAL`,
@@ -902,31 +973,38 @@ again, which resumes from what is left.
    restart pending, stops the run before step 3.
 3. **The check.** The devnodes are read again (section 5.3). Any devnode,
    present or not, still bound to one of the three services, still in the
-   set, or still naming `xhcicm` as a filter stops the run before step 4:
-   a present one means Windows found the hardware again and reinstalled
-   it, which a restart and a second run settle.
-4. **The OEM INFs**: every `oemNN.inf` in `%windir%\inf` whose `[Version]`
-   `Provider` is this package's and whose install sections name one of the
-   three services (`AddService`) or files (`NTMPDriver`), read with the
-   tool's own parser. Where `SetupUninstallOEMInfA` resolves (Windows XP
-   onward, Microsoft's documentation; the legs read which systems have
-   it), it removes each, flags 0, so a package still referenced is refused
-   and reported rather than forced; on Vista and 7 that also removes the
-   driver-store package. Where it does not (Windows 2000), Microsoft's
-   documented manual route (KB 813449): with step 3 having shown that no
-   devnode uses it, delete `oemNN.pnf`, then `oemNN.inf`.
+   set, or still a filter host stops the run before step 4. A present one
+   means Windows found the hardware again and installed this package's
+   driver on it: the run stops (exit 4) and says to remove that device in
+   Device Manager (on Vista and 7 with "Delete the driver software"
+   ticked) and run the uninstall again; the tool does not loop.
+4. **The INFs**: every INF in `%windir%\inf` whose `[Version]` `Provider`
+   is this package's and whose install sections name one of the three
+   services (`AddService`) or files (`NTMPDriver`), read with the tool's
+   own parser - the staged `oemNN.inf` copies, and the plain copies the
+   INFs' own `DefaultInstall` sections make through directory id 17. Where
+   `SetupUninstallOEMInfA` resolves (Windows XP onward, Microsoft's
+   documentation; the legs read which systems have it), it removes each
+   `oemNN.inf`, flags 0, so a package still referenced is refused and
+   reported rather than forced; on Vista and 7 that also removes the
+   driver-store package. Otherwise - Windows 2000, and every plain copy -
+   Microsoft's documented manual route (KB 813449): first every devnode,
+   present or not, has its driver key's `InfPath` read, and an INF any of
+   them names, or any `InfPath` that cannot be read, is kept and stops
+   the run; then the `.pnf`, then the `.inf`.
 5. **The services** `xhci98`, `xhciuas`, `xhcicm`, `xhcihlpr` and the
    `2.3.x` `xhcimsi`, each with `DeleteService` (advapi32), the handle
-   closed at once. A service that is running, or has other open handles,
-   is only marked and goes when the last handle closes - at the next start
-   for a running driver; the tool reports the state it read (running or
-   stopped) beside "marked for deletion", and a running one sets the
+   closed at once. Microsoft's documentation: the service is deleted once
+   it has stopped **and** every handle to it is closed - for a running
+   driver, at the next start. The tool reports the state it read (running
+   or stopped) beside "marked for deletion", and a running one sets the
    restart flag.
 6. **The files** in `%windir%\system32\drivers`: `xhci98.sys`,
    `xhciuas.sys`, `xhcicm.sys`, `xhcihlpr.sys`, `xhcimsi.sys`, each only once
    step 5 has shown its service deleted or marked. A file in use is
    scheduled with `MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)` and
-   reported as pending. Then the local copy (section 4.4).
+   reported as pending. A service whose deletion failed keeps its file.
+   Then the local copies and the `/restage` work file (section 4.4).
 
 ### 9.3 What it never removes
 
@@ -946,17 +1024,18 @@ No documented interface removes a devnode there: `CM_Uninstall_DevNode`
 is a stub on both (record 13 section 10.13.8, read statically from each
 system's `CFGMGR32.DLL`). So the tool:
 
-1. removes what it owns: the entry in `DevicePath`, the files
-   `XHCIINST.LST` names in `%windir%\XHCI98`, and the directory if it is
-   then empty;
-2. lists the `INF\OTHER` files whose `Provider` is this package's and that
-   install one of its drivers (the rule of section 9.2 step 4), and the
-   driver files present;
+1. removes what it owns: its entries in `DevicePath`, the files each
+   copy's `XHCIINST.LST` names under `%windir%\XHCI98`, and each directory
+   if it is then empty;
+2. lists the INF files in `INF` and `INF\OTHER` whose `Provider` is this
+   package's and that install one of its drivers (the rule of section 9.2
+   step 4) - the device installer's own copies, and the plain copies the
+   INFs' `DefaultInstall` sections make - and the driver files present;
 3. prints the steps, dependants first: in Device Manager remove "xHCI98
    USB Attached SCSI Storage" and a Thunderbolt entry if there is one,
    then "xHCI98 USB 3.x eXtensible Host Controller" (which removes the root
-   hub and everything beneath it); then delete the listed `INF\OTHER`
-   files, so the restart cannot find the driver again; then restart, and
+   hub and everything beneath it); then delete the listed INF files, so
+   the restart cannot find the driver again; then restart, and
    cancel the New Hardware wizard if it offers the controller; then
    delete the driver files listed and restart once more.
 
@@ -1045,7 +1124,7 @@ installed `.sys` with the package's, and Device Manager.
 | UN, uninstall and reinstall | 98 SE, ME, 2000, XP, XP x64, Vista x86, Vista x64, 7 x86, 7 x64 | the warning and the word; every devnode, the OEM INFs (2000: the manual route; XP onward: `SetupUninstallOEMInf`, which systems resolve it), the services and files gone or pending; the gate after a pending removal and the resumed second run; a restart; the controller back as an unknown device; `INSTALL.BAT` installing it again. 98 SE and ME: the steps printed and followed |
 | R, registry questions | 98 SE (after the install and restart), 2000 | each applicable question shown with now, default and allowed; a non-applicable one not shown (no Intel switchover controller in QEMU, no NHI); an answer written to the controller's driver key and not to the root hub's, Enter keeping, `/set` and `/defaults` |
 | L, `/list` and the refusals | every leg's first run | nothing changed (a registry and file listing before and after, no log written); the ZIP-folder refusal, a mixed architecture, a mis-versioned INF, a stale `.sys`, a swapped flavour |
-| M, moved source | XP | the package staged from a CD image, then the CD removed; a UAS disk plugged later installs with no prompt (section 5.6) |
+| M, moved source | 2000, XP | an installation made the old way first - Have Disk from a CD image, so the staged INF's `.pnf` names the CD - then the tool run on the identical package, then the CD image removed, then a UAS disk never seen before plugged: it must install with no prompt (section 5.6) |
 
 What each system's legs settle that nothing here has read:
 
@@ -1069,7 +1148,10 @@ Thunderbolt half. No NHI or tunnel port exists in QEMU here, so
 shown; the install on an NHI and a tunnel port, the filter removal of
 section 9.2 step 1 and a failed filter removal are read on `usb4-emu`'s
 guests or the P14s. Also owed: two controllers of different versions
-(the group verdict), an interrupted `/restage`, a refused package removal.
+(the group verdict), an interrupted `/restage` and its resumption by the
+work file, a refused package removal, a disconnected tunnel port during
+the uninstall, and runs that combine a failure, a restart and steps for
+the user.
 
 ## 13. Decisions taken in writing this (orchestrator decisions, owner to confirm)
 
@@ -1086,8 +1168,9 @@ guests or the P14s. Also owed: two controllers of different versions
   `/restage`, which reinstalls the group's devices (section 5.7).
 - **D6** Test-signing mode is read and reported, never changed
   (section 5.10).
-- **D7** Every changing run copies the package to `%windir%\XHCI98` and
-  installs from there, on every system (section 4.4).
+- **D7** Every changing run copies the package to an immutable directory
+  of its own content under `%windir%\XHCI98\` and installs from there, on
+  every system; only the uninstall removes the copies (section 4.4).
 - **D8** The log at the root of the system drive, appended; not written by
   `/list` (section 7.5).
 - **D9** The curated registry set of section 8.1, asked only where it
@@ -1101,8 +1184,13 @@ guests or the P14s. Also owed: two controllers of different versions
 - **D12** A registry answer applies from the next start of the driver; a
   new NHI's first start runs with the INF's defaults until then, and the
   question says so (section 8.4).
-- **D13** A wizard still pending after the controller's update stops the
-  run; the tool never installs under it (section 5.8).
+- **D13** An installation in progress - before the first change, or after
+  the controller's update - stops the run; the tool never installs under
+  a wizard (sections 5.1 and 5.8).
+- **D14** A filter host is given back to a driver that is not this
+  package's by the per-device driver-node route, never by an ID-wide
+  call; a disconnected one stops the uninstall until it is connected
+  (section 9.2).
 
 ## 14. Open, and the risks
 
