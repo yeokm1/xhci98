@@ -2871,6 +2871,18 @@ static int note_changed(const DEVREC *d, int state)
     return changedCount++;
 }
 
+/* The flags of the install call for a device of INF inf: forced, except
+ * the tunnel-port filter's first install on Windows 2000, unforced - the
+ * route task 39-0.4 read there (2000 takes the unsigned filter INF over
+ * machine.inf by itself; XP onward rank it below and need the force;
+ * record 23 section 5.5, owner 2026-10-15). */
+static DWORD call_flags(const DEVREC *x, int inf)
+{
+    return (inf == INST_INF_CMF && x->Action == INST_ACT_FILTER &&
+            envNow.Major == 5 && envNow.Minor == 0) ?
+           0 : INST_INSTALLFLAG_FORCE;
+}
+
 /* Install or update the planned devices of one INF; controllers selects the
  * xhci98 controllers (1), the rest of xhci98's devices (0), or every device
  * (-1). Returns 0 when a failure leaves the order meaningless. */
@@ -2886,6 +2898,7 @@ static int install_inf(int inf, int controllers)
     BOOL reboot;
     DWORD err;
     DWORD flags;
+    int mixed;
     int ok = 1;
 
     join(path, sizeof(path), srcDir, infRel[inf]);
@@ -2919,8 +2932,39 @@ static int install_inf(int inf, int controllers)
             flagFailed = 1;
             return 0;
         }
-        /* One call reaches every device carrying the id: each is tracked
-         * for the results check, or the call is not made. */
+        /* One call reaches every device carrying the id, with one set of
+         * flags: a group whose devices need different flags (on 2000 a
+         * port's first filter install, unforced, beside a filter update,
+         * forced) is left, and said (record 23 section 5.5). */
+        flags = call_flags(d, inf);
+        mixed = 0;
+        for (j = 0; j < devCount; j++) {
+            if (devs[j].Present && devs[j].Inf == inf &&
+                (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                 inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid)) &&
+                call_flags(&devs[j], inf) != flags) {
+                mixed = 1;
+            }
+        }
+        if (mixed) {
+            out("Left: %s - devices sharing it need a first filter install "
+                "and an update at once,\n  which one call cannot do on "
+                "Windows 2000. Update the ports with the filter in Device\n"
+                "  Manager (Have Disk, the package's nt\\ directory), then "
+                "run INSTALL.BAT again.\n", hwid);
+            for (j = 0; j < devCount; j++) {
+                if (devs[j].Present && devs[j].Inf == inf &&
+                    (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                     inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
+                    devs[j].Done = 1;
+                    note_changed(&devs[j], 0);
+                }
+            }
+            flagSteps = 1;
+            continue;
+        }
+        /* Each device the call reaches is tracked for the results check,
+         * or the call is not made. */
         n = 0;
         full = 0;
         for (j = 0; j < devCount; j++) {
@@ -2945,14 +2989,6 @@ static int install_inf(int inf, int controllers)
             d->Action == INST_ACT_FILTER ? "Adding the filter to" : "Updating",
             d->Desc[0] ? d->Desc : d->Id);
         reboot = FALSE;
-        /* The tunnel-port filter's first install goes unforced on Windows
-         * 2000, the route task 39-0.4 read there (2000 takes the unsigned
-         * filter INF over machine.inf by itself); XP onward rank it below
-         * machine.inf, so it is forced there, as everything else is
-         * (record 23 section 5.5; owner, 2026-10-15). */
-        flags = (inf == INST_INF_CMF && d->Action == INST_ACT_FILTER &&
-                 envNow.Major == 5 && envNow.Minor == 0) ?
-                0 : INST_INSTALLFLAG_FORCE;
         logonly("\nUpdateDriverForPlugAndPlayDevices(\"%s\", \"%s\", %s)\n",
                 hwid, path, flags ? "FORCE" : "0");
         if (api.UpdateDriver(NULL, hwid, path, flags, &reboot)) {
@@ -2974,7 +3010,14 @@ static int install_inf(int inf, int controllers)
             changedState[callIdx[j]] = 3;       /* the call failed */
         }
         out("FAILED (error 0x%08lX).\n", (unsigned long)err);
-        if (err == ERROR_IN_WOW64) {
+        if (flags == 0 && err == ERROR_NO_MORE_ITEMS) {
+            out("  Windows declined the filter: it ranks its own driver for "
+                "the port higher, and\n  on Windows 2000 the filter's first "
+                "install is never forced (/force does not\n  change that). "
+                "The port keeps Windows' driver without the filter; Device\n"
+                "  Manager's Have Disk on the package's nt\\ directory "
+                "installs it by hand.\n");
+        } else if (err == ERROR_IN_WOW64) {
             out("  A 32-bit program cannot install drivers on 64-bit Windows; "
                 "run %s.\n", INST_OTHER_NAME);
         } else if (err == ERROR_CANCELLED) {
