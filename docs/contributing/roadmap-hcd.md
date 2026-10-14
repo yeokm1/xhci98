@@ -887,6 +887,45 @@ Not phases yet: each takes the next free phase number when the owner opens
 it, and its placeholder ids take that number then (owner, 2026-10-06; the
 decisions table).
 
+## Planned - Slipstreaming xhci98 Into a Windows 2000 CD
+
+Goal: Windows 2000 Setup from a CD whose `TXTSETUP.SIF` carries xhci98,
+with no F6 floppy.
+
+Status: not opened, unnumbered and unversioned. Deferred by the owner on
+2026-10-14, when Phase 38's Windows 2000 F6 entry was merged; the one
+attempt is `docs/issues/16-w2k-f6-first-gui-boot-usbd.md` section 3 and
+`lessons.md`.
+
+- [ ] SLIP.1 xhci98 slipstreamed into a copy of a Windows 2000 CD (owner, 2026-10-14). One attempt during 38.final, an `[InputDevicesSupport]` entry for `xhci98` in the copy's `TXTSETUP.SIF` with its own file section listing `usbd.sys`, `hidclass.sys` and `hidparse.sys` and the driver in its `I386`, did not load the driver in text mode (no slot addressed, an empty port-0xE9 log from the `qemu` flavour; issue 16, runs 71 and 72); an `$OEM$\TEXTMODE` preinstall was not tried. Read first why text mode did not load it, then decide whether the documents describe a route
+
+## Planned - The Idle Poll Period, 50 Against 500 ms
+
+Goal: `XhciPollIdleMs`'s default decided on a full reading.
+
+Status: not opened, unnumbered and unversioned. Deferred by the owner on
+2026-10-14 from task 38.3's legs (T8); the default stays 50. The partial
+table is `runs/run-38.md`, "38.3".
+
+- [ ] IDLE.1 `XhciPollIdleMs` 50 against 500 on every target (owner, 2026-10-14): under mode 2, the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute. The partial reading on 2026-10-14 (XP, XP x64, 2000 and 2000 SMP, Vista x86 and x64) showed plug-to-working 0.3 to 0.7 s and remote wake working at both values, Vista x86's idle host load halved at 500 (12.7 to 5.4 %) and Vista x64's about 30 % lower, and no difference beyond noise elsewhere; 98 SE, ME and 7 x86 and x64 not taken. The default is decided on the full reading
+
+## Planned - Bench Follow-Up After `2.4.0.0`
+
+Goal: on real hardware, what Phase 38 could read only in virtual
+machines.
+
+Status: not opened, unnumbered and unversioned. Listed by the owner on
+2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
+each task's "Owed after the cut"); the release notes' "Untested ground"
+names each meanwhile.
+
+- [ ] B24.1 Linux's controller quirks (task 38.10, design record 20) on the controllers they name, each value read on a controller it lists
+- [ ] B24.2 a real xHCI 0.96 controller (task 38.11, design record 17 section 4.14): its start at `XhciAccept096` 1 and its refusal at 0, a device of each speed, and audit items A14 and A21
+- [ ] B24.3 hidusbf on a composite HID device (task 38.12, design record 13 section 10.14.8): on the composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86
+- [ ] B24.4 a High Speed and a USB 3 hub under the `2.4.0.0` ids, `USB\XHCI98_HUB` and `USB\XHCI98_HUB30` (task 38.8, design record 13 section 10.13, D13 and D14), by passthrough or on the bench
+- [ ] B24.5 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
+- [ ] B24.6 `XHCICLN`'s veto on XP x64 (task 38.8), if it is not read before the cut
+
 ## Planned - A Refused Interface's Device Id
 
 Goal: the read-first task deferred from Phase 38 (owner, 2026-10-13).
