@@ -2155,8 +2155,21 @@ static void test_learned(void)
     dev_on(1);
     CHECK_EQ(learn(1, active), XHCI_TBT_MAP_INACTIVE,
              "learned: an inactive member is never learned");
-    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Pending == 0,
-          "learned: port 1 unknown, no longer pending");
+    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Pending == 1,
+          "learned: port 1 unknown, still pending");
+    up(2);
+    dev_on(2);
+    CHECK_EQ(learn(2, active), XHCI_TBT_MAP_SEVERAL,
+             "learned: port 1's live tunnel still blocks port 2");
+    CHECK_EQ(member(2), XHCI_TBT_NO_MEMBER, "learned: port 2 unknown");
+    XhciTbtLearnDown(&binds, 1);
+    dev_off(2);
+    arm();
+    CHECK_EQ(learn(2, active), XHCI_TBT_MAP_NOT_GAINED,
+             "learned: port 1 proven down");
+    dev_on(2);
+    CHECK_EQ(learn(2, active), XHCI_TBT_MAP_LEARNED,
+             "learned: port 2 then learned");
 
     /* Unreadable: a failed access, a bus number that moved, a bridge with
      * no secondary bus. */
@@ -2215,11 +2228,17 @@ static void test_learned(void)
     dev_on(1);
     CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_CONFLICT,
              "learned: port 1 gained on the conflicted 00:05.0");
-    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Pending == 0,
-          "learned: port 1 unknown for good");
+    CHECK(member(1) == XHCI_TBT_NO_MEMBER && binds.Pending == 1,
+          "learned: port 1 unknown for good, its tunnel still pending");
     CHECK_EQ(member(4), 1, "learned: port 4 kept");
+    CHECK_EQ(learn(1, NULL), XHCI_TBT_MAP_CONFLICT,
+             "learned: a conflicted port is never learned");
+    XhciTbtLearnDown(&binds, 1);
     up(1);
-    CHECK_EQ(binds.Pending, 0, "learned: a conflicted port is never pending");
+    CHECK_EQ(binds.Pending, 1,
+             "learned: a conflicted port's next tunnel is recorded");
+    up(4);
+    CHECK_EQ(binds.Pending, 1, "learned: a named port's is not");
 
     /* The table's room: past it, nothing is known any more. */
     two_hp();

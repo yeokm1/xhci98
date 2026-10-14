@@ -319,6 +319,7 @@ if ($Usb4Profile -ne 'none') {
     $encExtra = ''
     if ($Usb3) {
         $ustor = Join-Path $runDir 'ustor.qcow2'
+        Assert-SoleFile $ustor 'the USB3 disk'
         Add @('-device', 'qemu-xhci,id=u4x,bus=pci.0,addr=0x7')
         Add @('-drive', "if=none,id=ustor,format=qcow2,file=$ustor")
         Add @('-device', 'usb-storage,id=ustor0,bus=u4x.0,port=1,drive=ustor,serial=USB3EMU01')
@@ -327,6 +328,7 @@ if ($Usb4Profile -ne 'none') {
     }
     if ($Dock) {
         $udisk = Join-Path $runDir 'usbdisk.qcow2'
+        Assert-SoleFile $udisk 'the dock disk'
         Add @('-blockdev', "driver=qcow2,node-name=usbdisk,file.driver=file,file.filename=$udisk")
         Add @('-netdev', 'user,id=docknet,restrict=on')
         $encExtra += ',dock=on,nic-netdev=docknet,usb-drive=usbdisk'
@@ -523,9 +525,11 @@ try {
     # A generated batch file carries PATH (the fork's DLLs) and the
     # redirections; WMI starts it so QEMU is not a child of this shell and
     # survives the shell that launched it.
-    if (Test-Path $pidFile) { Remove-Item $pidFile -Force }
     $bat = Join-Path $runDir "launch-$Tag.cmd"
     $out = Join-Path $runDir "qemu-$Tag.out"
+    # Every file written here is itself, as the disks are.
+    foreach ($f in @($pidFile, $bat, $out, $dbg, $ser, $trc, $runJson)) { Assert-SoleFile $f 'an output file' }
+    if (Test-Path $pidFile) { Remove-Item $pidFile -Force }
     $batText = "@echo off`r`nset `"PATH=$emuBin;%PATH%`"`r`ncd /d `"$runDir`"`r`n$cmdline > `"$out`" 2>&1`r`n"
     [System.IO.File]::WriteAllText($bat, $batText, [System.Text.Encoding]::ASCII)
     Set-Content -Path (Join-Path $runDir 'qemu.cmdline') -Value $cmdline -Encoding ASCII

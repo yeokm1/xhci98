@@ -557,12 +557,16 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
 /*
  * The tunnels not yet attributed. The driver half calls XhciTbtLearnUp for
  * EVERY TBT_U4_ACT_TUNNEL_UP of a drained batch before it calls
- * XhciTbtLearn for any of them (a port already bound or conflicted is not
- * recorded), and XhciTbtLearnDown when a port's PCIe tunnel goes down or
- * is torn down (then arms again). A port stays pending until it is
- * learned or goes down, and while any other port is pending no gain is
- * attributed: an earlier tunnel whose device has not answered yet could
- * explain it.
+ * XhciTbtLearn for any of them (a port already bound is not recorded; a
+ * conflicted one is, its device being unattributable), and
+ * XhciTbtLearnDown only on affirmative evidence that the port's PCIe
+ * tunnel is closed for that generation - a teardown whose read-back
+ * proved the path closed (TBT_U4_LINKDOWN.PathClosed) or the router's
+ * removal evidence (record 22 section 7.1 items 1 to 3) - never on a
+ * TBT_U4_ACT_TUNNEL_DOWN alone (an eject whose teardown failed queues one
+ * too); then arms again. A port stays pending until it is learned or
+ * proven down, and while any other port is pending no gain is attributed:
+ * an earlier tunnel whose device has not answered yet could explain it.
  */
 VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port);
 VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port);
@@ -582,11 +586,12 @@ VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port);
  *     reading; then, counting gains on bridges not bound to another port:
  *     none: NOT_GAINED (the device may still answer Configuration Request
  *     Retry; the port stays pending); more than one, or another port
- *     pending: SEVERAL (the port stays pending); else the port is no
- *     longer pending and: the bridge that gained inactive (`active`, per
+ *     pending: SEVERAL; the bridge that gained inactive (`active`, per
  *     member as XhciTbtExclusive gives it; NULL for all active):
- *     INACTIVE; conflicted: CONFLICT; else LEARNED, the port's bridge for
- *     the instance.
+ *     INACTIVE; conflicted or bound elsewhere: CONFLICT; else LEARNED,
+ *     the port's bridge for the instance. Only LEARNED (and KNOWN) ends
+ *     the port's pending mark; every other outcome leaves it pending
+ *     until XhciTbtLearnDown.
  */
 ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
                    PXHCI_TBT_BINDS binds, ULONG port, const ULONG *active);

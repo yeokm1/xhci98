@@ -1128,10 +1128,11 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
 VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port)
 {
     if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS ||
-        xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER ||
-        (binds->PortConflict & xhciTbtPortBit(port))) {
+        xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER) {
         return;
     }
+    /* A conflicted port's tunnel is recorded too: it can never be learned,
+     * but its device could still be taken for another port's. */
     binds->Pending |= xhciTbtPortBit(port);
 }
 
@@ -1162,6 +1163,7 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
     ULONG seen[XHCI_TBT_MAX_TUNNELS];
     ULONG gained = 0;
     ULONG member = XHCI_TBT_NO_MEMBER;
+    ULONG result;
 
     if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
         port == 0 || port > XHCI_TBT_MAX_PORTS ||
@@ -1174,7 +1176,6 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
         return XHCI_TBT_MAP_KNOWN;
     }
     if (binds->Overflow || (binds->PortConflict & bit)) {
-        binds->Pending &= ~bit;
         return XHCI_TBT_MAP_CONFLICT;
     }
     if (!(binds->Pending & bit)) {
@@ -1211,12 +1212,17 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
         /* Another tunnel not yet attributed could explain the gain. */
         return XHCI_TBT_MAP_SEVERAL;
     }
-    binds->Pending &= ~bit;
+    /* Only a binding resolves the tunnel: an inactive or conflicting
+     * attribution leaves it pending until it is proven down. */
     if (active != NULL && !active[member]) {
         return XHCI_TBT_MAP_INACTIVE;
     }
-    return xhciTbtClaim(binds, port, topo->Set[member],
-                        XHCI_TBT_CORR_LEARNED, XHCI_TBT_MAP_LEARNED);
+    result = xhciTbtClaim(binds, port, topo->Set[member],
+                          XHCI_TBT_CORR_LEARNED, XHCI_TBT_MAP_LEARNED);
+    if (result == XHCI_TBT_MAP_LEARNED) {
+        binds->Pending &= ~bit;
+    }
+    return result;
 }
 
 ULONG XhciTbtPortMember(const XHCI_TBT_TOPO *topo,
