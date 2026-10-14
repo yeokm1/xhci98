@@ -4371,10 +4371,11 @@ what this release's design expects; the rest, as read in virtual machines:
   WINDOWS 2000 AND XP: the install and an update copy the helper
   xhcihlpr.sys and ask for no restart of their own. The controller runs as
   before; the helper starts at the next restart, and from then a polled
-  controller asks Windows for a finer clock while it is busy (section 9,
-  XhciPollFineTimer). Text-mode Setup through F6 copies the helper from
-  the floppy and does not load it: it arrives with the installed system's
-  own install of the controller.
+  controller can ask Windows for a finer clock while it is busy, when
+  XhciPollFineTimer is set to 1 (section 9; off by default). Text-mode
+  Setup through F6 copies the helper from the floppy and does not load
+  it: it arrives with the installed system's own install of the
+  controller.
 
   REMOVING THE HELPER: uninstalling the controller leaves xhcihlpr, a
   boot-start service that then loads and idles. Remove it with
@@ -4800,6 +4801,12 @@ Untested ground:
     next starts (on 98 SE and ME restart the function's entry too, or
     replug the device).
 
+  * A FINER SYSTEM TIMER WHILE POLLING (XhciPollFineTimer, section 9; off
+    by default). Read only in QEMU virtual machines without hardware
+    acceleration, polling, on Windows 7 and Vista, where while it was held
+    the guest's clock ran at a tenth to seven tenths of real time and USB
+    keyboard input was lost. Read on no real machine.
+
   * LINUX'S CONTROLLER QUIRKS (XhciMsiAvoid and the thirteen others,
     section 9). Built from Linux's handling and the xHCI specification;
     none has been read on a controller it lists, and QEMU's controller is
@@ -5154,16 +5161,21 @@ A value that is absent means the default each one states.
   Polling adds up to one period to each transfer's completion. Neither
   value matters while the interrupt works.
 
-  XhciPollFineTimer, default 1: while the controller is polled and busy,
-  the driver asks Windows for a finer clock - XhciPollActiveMs in
-  milliseconds - so a polled disk is not held to one transfer per clock
-  tick (10 to 15.6 ms), and gives the request back once the controller has
-  been idle for XhciPollIdleMs. It is Windows 2000 and later only: on
-  32-bit systems through the helper xhcihlpr.sys, from the restart after
-  the install; on 98 SE and ME the value is read and does nothing. 0 turns
-  it off. The clock is the whole system's, so other programs see it too
-  while it is held. Read when the controller starts; an update keeps the
-  number already in the key.
+  XhciPollFineTimer, default 0 (off): set to 1, while the controller is
+  polled and busy the driver asks Windows for a finer clock -
+  XhciPollActiveMs in milliseconds - so a polled disk is not held to one
+  transfer per clock tick (10 to 15.6 ms), and gives the request back
+  once the controller has been idle for XhciPollIdleMs. It is Windows
+  2000 and later only: on 32-bit systems through the helper xhcihlpr.sys,
+  from the restart after the install; on 98 SE and ME the value is read
+  and does nothing. Any value but 0 turns it on. The clock is the whole
+  system's, so other programs see it too while it is held. Read when the
+  controller starts; an update keeps the number already in the key. It
+  ships off because in virtual machines (QEMU without hardware
+  acceleration, polling, on Windows 7 and Vista) the guest's clock ran at
+  a tenth to seven tenths of real time while it was held, and USB
+  keyboard input was lost; real hardware is unread (section 7, Untested
+  ground).
 
   XhciMaxTransferKB  -  the UAS command size
   ..........................................

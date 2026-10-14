@@ -1373,8 +1373,10 @@ when the poller leaves it, the delivery leaves polling, the controller
 stops or leaves D0, and at S3, S4 and S5; at most one request per
 controller, every `TRUE` paired with its `FALSE`; the call made at
 PASSIVE_LEVEL from a thread, never from the poll DPC; a registry value
-that turns it off, on by default (owner, 2026-10-12); and no power IRP
-whose completion depends, directly or indirectly, on the call completing.
+that turns it off, on by default (owner, 2026-10-12; off by default
+since the owner's amendment of decision T4 on 2026-10-14, section
+7.2.4); and no power IRP whose completion depends, directly or
+indirectly, on the call completing.
 
 Not asked: Windows 98 SE and ME. Their kernel has no `ExSetTimerResolution`
 (the roadmap's "no Windows 98 export"), the 32-bit image may not import
@@ -1471,17 +1473,33 @@ resolution in effect after the call) are the documented contract.
 
 #### 7.2.4 The switch
 
-`XhciPollFineTimer` (owner, 2026-10-13, decision T4), a `REG_DWORD` in
-the controller's driver key, read at each start with section 3's values
-and by the same strict reader: 1, absent, unreadable or not a four-byte
-DWORD is on; 0 is off; any other value runs as 1 and the value read is
-recorded. Both INFs write it on every install path with
-`FLG_ADDREG_NOCLOBBER`, value 1, beside `XhciPollActiveMs`, so it is where
-a user looks and an update keeps a 0 a user set (task 34.1's rule; the
-INF gate's value-policy table, `check-inf.ps1` ~1323, and its footprint
-gain the row). Windows 98 SE and ME read it and do nothing with it. A
-change takes effect at the next start (a disable and enable), as the
-other poll values do.
+`XhciPollFineTimer` (owner, 2026-10-13, decision T4; amended by the
+owner 2026-10-14, below), a `REG_DWORD` in the controller's driver key,
+read at each start with section 3's values and by the same strict
+reader: 1 is on; 0, absent, unreadable or not a four-byte DWORD is off;
+any other value runs as 1 and the value read is recorded. Both INFs write
+it on every install path with `FLG_ADDREG_NOCLOBBER`, value 0, beside
+`XhciPollActiveMs`, so it is where a user looks and an update keeps a 1 a
+user set (task 34.1's rule; the INF gate's value-policy table,
+`check-inf.ps1` ~1323, and its footprint gain the row). Windows 98 SE and
+ME read it and do nothing with it. A change takes effect at the next
+start (a disable and enable), as the other poll values do.
+
+**Amended by the owner, 2026-10-14: off by default (opt-in).** As first
+decided the value was on by default: 1 written by the INFs, and absent,
+unreadable or another type read as on. The test matrix's reading on
+QEMU guests under TCG (no hardware acceleration), polled
+(`XhciInterruptMode` 2), on Windows 7 x64, 7 x86 and Vista x86: with the
+finer timer held, the guest's clock ran at 0.1 to 0.7 of real time (a
+guest ticker read against the host's clock), and keys typed through
+QEMU's USB keyboard were lost (132 to 199 of 199 per round on 7 x64);
+with the value 0, or under an interrupt delivery (mode 0), the clock ran
+at real time and no key was lost, on the same guest and boot. The
+driver's own poll stayed within its periods in guest time; the guest was
+starved of timer ticks. Real hardware is unread. So both INFs write 0,
+and absent, unreadable or another type is off; a non-zero value still
+turns it on. The rest of this section stands. Whether the default flips
+back is decided on a reading on real hardware.
 
 #### 7.2.5 Who calls: a timer thread of the controller's
 
@@ -1929,7 +1947,8 @@ skip before `hcdSuspTake`, and the `qemu.*`, `poll.timer.call` and `poll.timer.r
 new object); `scripts/import-gate/xhci98-imports-amd64.allow` (the
 `MmGetSystemRoutineAddress` row's `SITES` gains `hcd_tmr.obj`; the 32-bit
 allowlist is unchanged); `scripts/inf-gate/check-inf.ps1`'s value-policy
-table (~1323, a `XhciPollFineTimer` row: type `0x00010003`, default 1)
+table (~1323, a `XhciPollFineTimer` row: type `0x00010003`, default 1;
+0 since the owner's amendment of 2026-10-14, section 7.2.4)
 and its mutations in `test-inf-checks.ps1`, and the footprint; `xhcisnap`
 (the names); `test/test_poll.c`; and section 8's catalogue,
 `source-files.md`, the release notes' poll rows, and `build-and-test.md`'s
@@ -2064,7 +2083,9 @@ Answered before review, then revised by the owner after review round 1
   50 against 500 on every target and the default is decided on that
   reading (section 7.2.6a). (The first answer moved it to 500; withdrawn
   after review round 1.)
-- **T4:** `XhciPollFineTimer`, 1 by default (section 7.2.4).
+- **T4:** `XhciPollFineTimer`, 1 by default (section 7.2.4). **Amended
+  by the owner 2026-10-14: 0 by default (opt-in)**, after the matrix's
+  reading on QEMU guests (section 7.2.4's amendment).
 - **T5: (a)**, an update keeps an existing value (section 7.2.6a).
 
 The helper's decisions (H1 to H5) are record 18 section 15.13's.
@@ -2516,7 +2537,8 @@ Taken by the owner on 2026-10-05, each from options with a recommendation:
    ACTIVE and given back when it is not, the idle period the only linger,
    `XhciPollIdleMs` kept at 50 and measured against 500 on every target
    before any change (section 7.2.6a); T4, `XhciPollFineTimer`, on by
-   default; T5, an update keeps an existing value. The helper's H1 to H5
+   default (amended by the owner 2026-10-14: off by default, section
+   7.2.4); T5, an update keeps an existing value. The helper's H1 to H5
    are design record 18 section 15.13's.
 
 ## 13. The reviews

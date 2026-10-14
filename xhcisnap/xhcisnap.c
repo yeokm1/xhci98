@@ -3365,7 +3365,7 @@ static void print_hcd_timer(const unsigned char *image,
     v = get32(k, 0);
     if (v == SNAP_POLL_NOT_FOUND) {
         comp("  XhciPollFineTimer      not set; in effect %s\n",
-             get32(k, 4) != 0 ? "ON (the default)" : "off");
+             get32(k, 4) != 0 ? "ON" : "off (the default)");
     } else {
         comp("  XhciPollFineTimer      %lu; in effect %s\n", v,
              get32(k, 4) != 0 ? "ON" : "off");
@@ -5726,8 +5726,10 @@ static int selftest_version(void)
 /*
  * `-selftest-timer`: task 38.3's decode over a canned counter block: a
  * polled 32-bit controller whose helper answered the timer and not MSI,
- * with a release by a power transition and both phases observed; then a
- * driver from before 38.3, which prints none of it.
+ * with a release by a power transition and both phases observed, the
+ * switch set to 1; then the switch absent, off by default since the
+ * owner's change of 2026-10-14; then a driver from before 38.3, which
+ * prints none of it.
  */
 static int selftest_timer(void)
 {
@@ -5743,7 +5745,7 @@ static int selftest_timer(void)
     put32(image, 20, SNAP_TMR_AT + SNAP_TMR_WORDS);
     put32(image, 24, 32);
     k = image + 32 + SNAP_TMR_AT * 4;
-    put32(k, 0, SNAP_POLL_NOT_FOUND);
+    put32(k, 0, 1);
     put32(k, 1 * 4, 1);
     put32(k, 2 * 4, 1);
     put32(k, 3 * 4, 3);
@@ -5766,6 +5768,10 @@ static int selftest_timer(void)
     put32(k, 21 * 4, 4);
     put32(k, 22 * 4, 1);
     companion = NULL;
+    print_hcd(image, sizeof(image));
+    comp("[absent]\n");
+    put32(k, 0, SNAP_POLL_NOT_FOUND);
+    put32(k, 1 * 4, 0);
     print_hcd(image, sizeof(image));
     comp("[pre-38.3]\n");
     put32(image, 20, SNAP_TMR_AT);

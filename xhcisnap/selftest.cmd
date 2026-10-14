@@ -340,14 +340,15 @@ if errorlevel 1 (
 )
 rem Task 38.3's finer timer from a canned counter block (design record 15
 rem section 7.2.9): a polled 32-bit controller whose helper answered the
-rem timer, a barred release, both phases; and a driver from before 38.3,
-rem which prints none of it.
+rem timer, a barred release, both phases, the switch set to 1; the switch
+rem absent, off by default (owner, 2026-10-14); and a driver from before
+rem 38.3, which prints none of it.
 "%~dp0XHCISNAP.EXE" -selftest-timer > "%BASE%.timer.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-timer exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("XhciPollFineTimer      not set; in effect ON (the default)" "the helper xhcihlpr.sys (32-bit)" "joined (the controller stopped)" "asks for               10000 (100 ns units); held now no" "holds 12, releases 12 (2 forced by a boundary); holds raced 1" "Windows answered       10032 at the last hold, 156250 at the last release" "a power transition (the controller left D0)" "held in this start     4321 ms" "7 crossed a call" "released  40 interval(s), mean 15.5 ms, 38 late" "held      400 interval(s), mean 1.0 ms, 3 late" "MSI not asked (before Vista); timer accepted") do (
+for %%S in ("XhciPollFineTimer      1; in effect ON" "XhciPollFineTimer      not set; in effect off (the default)" "the helper xhcihlpr.sys (32-bit)" "joined (the controller stopped)" "asks for               10000 (100 ns units); held now no" "holds 12, releases 12 (2 forced by a boundary); holds raced 1" "Windows answered       10032 at the last hold, 156250 at the last release" "a power transition (the controller left D0)" "held in this start     4321 ms" "7 crossed a call" "released  40 interval(s), mean 15.5 ms, 38 late" "held      400 interval(s), mean 1.0 ms, 3 late" "MSI not asked (before Vista); timer accepted") do (
     findstr /C:%%S "%BASE%.timer.log" > nul
     if errorlevel 1 (
         echo FAIL: the timer decode does not say %%S
@@ -357,6 +358,11 @@ for %%S in ("XhciPollFineTimer      not set; in effect ON (the default)" "the he
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$t = Get-Content -Raw '%BASE%.timer.log'; $i = $t.IndexOf('[pre-38.3]'); if ($i -lt 0 -or $t.Substring($i).Contains('finer system timer')) { exit 1 }; exit 0"
 if errorlevel 1 (
     echo FAIL: a counter block from before 38.3 printed the timer section
+    set FAILED=1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$t = Get-Content -Raw '%BASE%.timer.log'; $i = $t.IndexOf('[absent]'); $j = $t.IndexOf('[pre-38.3]'); if ($i -lt 0 -or $j -lt $i -or -not $t.Substring($i, $j - $i).Contains('in effect off (the default)') -or $t.Substring(0, $i).Contains('(the default)')) { exit 1 }; exit 0"
+if errorlevel 1 (
+    echo FAIL: the absent switch did not read off by default in its own case
     set FAILED=1
 )
 

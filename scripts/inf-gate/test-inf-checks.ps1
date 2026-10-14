@@ -627,7 +627,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,1`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -662,8 +662,9 @@ try {
     # XhciSelectiveSuspend at 0, whose wrong one is 1, and
     # XhciUsb2HubSpeedFallback at 1, whose wrong one is 0. Task 38.11 adds
     # XhciAccept096 at 1, whose wrong one is 0 (the 1.0 floor of 2.3.1.0).
-    # Task 38.3 adds XhciPollFineTimer at 1, whose wrong one is 0 (design
-    # record 15 section 7.2.4). Task 38.10 adds fourteen of Linux's
+    # Task 38.3 adds XhciPollFineTimer at 0, whose wrong one is 1 (design
+    # record 15 section 7.2.4; 1 until the owner made it opt-in on
+    # 2026-10-14). Task 38.10 adds fourteen of Linux's
     # controller quirks (design record 20 section 6.1), each at 1 with 0 its
     # wrong one but XhciShutdownReset, at 0 with 1 its wrong one; they sit
     # after the 0.96 floor under one comment, which $tolRows carries so the
@@ -678,7 +679,7 @@ try {
         @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n"; Clob = "HKR,,XhciInterruptMode,0x00010001,0`r`n" },
         @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n"; Clob = "HKR,,XhciPollIdleMs,0x00010001,50`r`n" },
         @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n"; Clob = "HKR,,XhciPollActiveMs,0x00010001,1`r`n" },
-        @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Clob = "HKR,,XhciPollFineTimer,0x00010001,1`r`n" },
+        @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,1`r`n"; Clob = "HKR,,XhciPollFineTimer,0x00010001,0`r`n" },
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n"; Clob = "HKR,,XhciWideMap,0x00010001,0`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n"; Clob = "HKR,,XhciSelectiveSuspend,0x00010001,0`r`n" },
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
@@ -2263,7 +2264,7 @@ try {
         @{ Key = "intrmode";  Row = "HKR,,XhciInterruptMode,0x00010003,0`r`n"; Wrong = "HKR,,XhciInterruptMode,0x00010003,2`r`n" },
         @{ Key = "pollidle";  Row = "HKR,,XhciPollIdleMs,0x00010003,50`r`n"; Wrong = "HKR,,XhciPollIdleMs,0x00010003,5000`r`n" },
         @{ Key = "pollactive"; Row = "HKR,,XhciPollActiveMs,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollActiveMs,0x00010003,0`r`n" },
-        @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,1`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,0`r`n" },
+        @{ Key = "finetimer"; Row = "HKR,,XhciPollFineTimer,0x00010003,0`r`n"; Wrong = "HKR,,XhciPollFineTimer,0x00010003,1`r`n" },
         @{ Key = "widemap";   Row = "HKR,,XhciWideMap,0x00010003,0`r`n"; Wrong = "HKR,,XhciWideMap,0x00010003,1`r`n" },
         @{ Key = "selsusp";   Row = "HKR,,XhciSelectiveSuspend,0x00010003,0`r`n"; Wrong = "HKR,,XhciSelectiveSuspend,0x00010003,1`r`n" },
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },

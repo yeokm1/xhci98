@@ -193,27 +193,32 @@ included.
   ("XhciAccept096", under "Registry settings"). No 0.96 controller has run
   under this driver: it is untested ground ("Untested ground"). Read in
   QEMU virtual machines only, whose controller is 1.0.
-- **A finer system timer while polling, on Windows 2000 and later, on by
-  default.** A polled controller was looked at no more often than
+- **A finer system timer while polling, on Windows 2000 and later, off
+  by default.** A polled controller was looked at no more often than
   Windows' clock ticked (10 to 15 ms on Windows 2000, XP and 7 in QEMU),
-  however short
-  `XhciPollActiveMs` was. The driver now asks Windows for a clock of
+  however short `XhciPollActiveMs` was. With a new value,
+  `XhciPollFineTimer`, set to `1`, the driver asks Windows for a clock of
   `XhciPollActiveMs` while it polls at that period, and gives it back one
-  idle period after, when the controller sleeps, and when it stops. A new
-  value, `XhciPollFineTimer`, `1` by default, turns it off at `0`. Never
-  on Windows 98 SE and ME, which have no such call ("XhciPollFineTimer: a
+  idle period after, when the controller sleeps, and when it stops. The
+  value is `0`, off, by default: in QEMU virtual machines the finer clock
+  slowed the guest's own (below, and "Untested ground"). Never on
+  Windows 98 SE and ME, which have no such call ("XhciPollFineTimer: a
   finer system timer while polling").
 - **The 32-bit helper is now `xhcihlpr.sys`, and 2000 and XP get it too.**
   It replaces `2.3.x`'s `xhcimsi.sys`: on 32-bit Vista and 7 it still
   connects the message-signalled interrupt, and on 32-bit 2000, XP, Vista
   and 7 it carries the finer timer. On 2000 and XP the install asks for no
-  restart, and the timer starts at the next boot; on Vista and 7 the
+  restart, and the timer, when turned on, starts at the next boot; on Vista and 7 the
   restart it asks for also removes `xhcimsi.sys` ("Updating from
   2.y.y.y"). To remove it after an uninstall, `sc delete xhcihlpr`, or on
   Windows 2000 its key ("Windows Vista and 7: message-signalled
   interrupts").
-- Neither the finer timer nor the renamed helper has been read on any
-  guest or machine yet: both are owed to the test matrix ("Untested
+- The finer timer has been read only in QEMU virtual machines without
+  hardware acceleration, polling (`XhciInterruptMode` `2`), on 7 x64,
+  7 x86 and Vista x86: while it was held the guest's clock ran at a tenth
+  to seven tenths of real time and USB keyboard input was lost; with it
+  off, or under an interrupt, the clock kept time and nothing was lost.
+  So it ships off. It has not been read on real hardware ("Untested
   ground").
 - **The root hub, the hubs and the composite devices are named under
   `USB\`.** Their device ids move from `XHCI98\ROOT_HUB`, `XHCI98\HUB`,
@@ -676,7 +681,7 @@ same drivers built for troubleshooting. No Microsoft file is in the package.
    yet read). From `2.4.0.0` 32-bit Windows 2000 and XP install the helper
    too, with no restart asked for: the controller runs at once, and the
    helper's finer timer ("XhciPollFineTimer: a finer system timer while
-   polling") starts at the next boot. A reinstall on 32-bit Vista and 7 (the controller removed
+   polling"), off by default, can start from the next boot. A reinstall on 32-bit Vista and 7 (the controller removed
    in Device Manager and found again) needs the restart too, whether or not
    Windows asks: 32-bit Vista showed only an "installed successfully"
    balloon and held the controller at Code 1 until a restart. After any
@@ -969,14 +974,14 @@ their defaults and keeps the rest ("Registry settings"). On 32-bit Vista
 and 7 it also installs `xhcimsi.sys` and asks for a restart ("Windows
 Vista and 7: message-signalled interrupts").
 
-**An update to `2.4.0.0` adds `XhciPollFineTimer`** at `1` and keeps the
-rest. On 32-bit Vista and 7 it installs `xhcihlpr.sys`, deletes the
+**An update to `2.4.0.0` adds `XhciPollFineTimer`** at `0` (off) and
+keeps the rest. On 32-bit Vista and 7 it installs `xhcihlpr.sys`, deletes the
 `xhcimsi` service of `2.3.0.0` or `2.3.1.0`, and asks for a restart, at
 which the loaded `xhcimsi.sys` file is deleted; the old and the new helper
 never conflict, even in the boot between. On 32-bit Windows 2000 and XP it
 installs `xhcihlpr.sys` and asks for no restart; the finer timer
-("XhciPollFineTimer: a finer system timer while polling") starts at the
-next boot. Not yet read on any system.
+("XhciPollFineTimer: a finer system timer while polling"), when set to
+`1`, starts at the next boot. Not yet read on any system.
 
 **Deleting the driver keeps the older packages.** On Vista and 7,
 uninstalling the controller in Device Manager with "Delete the driver
@@ -1666,7 +1671,7 @@ default, set it by hand, or delete the value and update the driver.
 them. `XhciWideMap` (`0`), `XhciSelectiveSuspend` (`0`) and
 `XhciUsb2HubSpeedFallback` (`1`) are read by `2.3.0.0` and written by its
 install too, at the value that reads as a missing one; an update keeps any
-of them you had already added. `XhciPollFineTimer` (`1`),
+of them you had already added. `XhciPollFineTimer` (`0`),
 `XhciAccept096` (`1`) and the fourteen values of Linux's controller
 quirks ("Linux's controller quirks", below) are new in `2.4.0.0`, each
 written at its default, and an update over `2.3.0.0` or `2.3.1.0` adds
@@ -1721,7 +1726,7 @@ Vista and 7: message-signalled interrupts").
 |---|---|---|
 | `XhciPollIdleMs` | `50` | While polling, how often (in ms) the driver looks when nothing is outstanding. `0` runs as `50`; above `5000` is held to `5000`. A device plugged in waits at most this long to be seen |
 | `XhciPollActiveMs` | `1` | While polling, how often (in ms) it looks while transfers are outstanding. `0` runs as `1`; a value above the idle period is held to it. When the only transfers outstanding are periodic ones (a mouse's or keyboard's interrupt endpoint), the driver looks at that endpoint's interval instead, held between the active and the idle period: 8 ms with QEMU's mouse, on every system. Windows runs the timer no faster than its clock tick, so `1` means "as often as Windows allows"; 1 ms was read with transfers outstanding on a busy XP, Vista and 7 in QEMU |
-| `XhciPollFineTimer` | `1` | New in `2.4.0.0`. While polling at the active period, ask Windows 2000 and later for a finer system clock, of `XhciPollActiveMs` ("XhciPollFineTimer: a finer system timer while polling", below). `0` off; any other value, absent, or not a `DWORD` runs as `1`. Windows 98 SE and ME read it and do nothing |
+| `XhciPollFineTimer` | `0` | New in `2.4.0.0`. While polling at the active period, ask Windows 2000 and later for a finer system clock, of `XhciPollActiveMs` ("XhciPollFineTimer: a finer system timer while polling", below). `0`, absent, or not a `DWORD` is off; any other value runs as `1`. Windows 98 SE and ME read it and do nothing |
 
 A start that `1` or `3` refuses records why: with `XhciLogDebugView` set,
 DebugView shows the counter dump's `intr.reason` line (14: a message
@@ -1751,8 +1756,9 @@ you install: check the machine").
 
 ### XhciPollFineTimer: a finer system timer while polling
 
-New in `2.4.0.0`; the install writes `1` on every path of both INFs, and
-an update keeps a value already there. Read at each start of the
+New in `2.4.0.0`, **off by default**: the install writes `0` on every
+path of both INFs, and an update keeps a value already there; set it to
+`1` to turn it on. Read at each start of the
 controller: disable and enable it, or restart Windows. A polled
 controller is looked at no more often than Windows' clock ticks: at
 best every 10 to 15 ms with `XhciPollActiveMs` `1` in QEMU on Windows
@@ -1791,8 +1797,13 @@ request is held, and how many were made and given back. Text-mode Setup
 own install brings it; the 32-bit floppy carries the file for that
 install, and text mode copies it without loading it.
 
-**Not yet read on any system**: the timer's effect, its release, and the
-install of `xhcihlpr.sys` on 2000 and XP are owed to the test matrix
+**Why it ships off.** It has been read only in QEMU virtual machines
+without hardware acceleration, under polling (`XhciInterruptMode` `2`),
+on Windows 7 x64, 7 x86 and Vista x86: while the finer clock was held the
+guest's clock ran at a tenth to seven tenths of real time, and keys typed
+on a USB keyboard were lost; with the value `0`, or under an interrupt,
+the clock kept real time and no key was lost. Whether real hardware does
+the same is unread, so it is off until a machine has been read
 ("Untested ground"). The `2.3.x` readings of polling above are of the
 clock tick alone.
 
@@ -2894,7 +2905,7 @@ information.
 | `XhciIntelPortSwitch` `2` on an unlisted Intel controller | Built and host-tested; read on no unlisted Intel controller. At your own risk: on one without the switch registers it writes registers of unknown meaning ("Value 2") |
 | The controller-fault handling on real hardware | Each fault was made on purpose at a root port in QEMU virtual machines, under Windows 98 SE and Windows 2000; QEMU has no SuperSpeed hub, so nothing was read behind one. No real controller has raised one under this driver yet, so none of the behaviours has been seen to act on real hardware ("Controller faults: what the driver does about them") |
 | `XhciIntervalCap` on an AMD controller, and `XhciAvgTrbEsit` at `1` | Built against host tests. In virtual machines, on QEMU's controller, which is not AMD: `XhciIntervalCap` `2` capped the 255 ms status endpoint of QEMU's hub, and `XhciAvgTrbEsit` `1` left the mouse, the hub and a stick working, on Windows 98 SE; `XhciIntervalCap` `1` did not apply, on Windows 2000. Neither has been read on an AMD controller or on any real controller |
-| A finer system timer while polling (`XhciPollFineTimer`), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. Unread on every guest and every machine, owed to the test matrix: the timer's effect and its release, at a stop, a sleep and a recovery; two controllers; the helper's install on 2000 and XP and its replacement of `xhcimsi.sys` on Vista and 7 ("XhciPollFineTimer: a finer system timer while polling") |
+| A finer system timer while polling (`XhciPollFineTimer`, off by default), and the helper `xhcihlpr.sys` | New in `2.4.0.0`, built against host tests and static checks: the helper's imports were read in the kernels and HALs of 32-bit Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1, statically. The finer timer was read only in QEMU virtual machines without hardware acceleration, polling, on 7 x64, 7 x86 and Vista x86, where while it was held it slowed the guest's clock to a tenth to seven tenths of real time and USB keyboard input was lost; so it ships off. Real hardware is unread. Owed to the test matrix as well: the timer's release at a stop, a sleep and a recovery; two controllers; the helper's install on 2000 and XP and its replacement of `xhcimsi.sys` on Vista and 7 ("XhciPollFineTimer: a finer system timer while polling") |
 | A High Speed hub and a USB 3 hub under the `2.4.0.0` ids (`USB\XHCI98_HUB`, `USB\XHCI98_HUB30`) | Built against host tests and the INF gate. Virtual machines model only a Full Speed hub, which takes the same id and code path as a High Speed one (`USB\XHCI98_HUB`) and stands for it before the release; a High Speed hub and a USB 3 hub's two halves under the new ids are read on real hardware after the release |
 | Linux's controller quirks (`XhciMsiAvoid` and the thirteen others, and `XhciIntervalCap` on `1002:7316`) | Built from Linux's handling and the xHCI specification against host tests. None has been read on a controller it lists, though the project's E460 (`9D2F`), B490 (`1E31`) and E7250 (`9CB1`) and a user's VL805 are listed for some ("Linux's controller quirks"). QEMU's controller is on no list. What `XhciIntelShutdownToEhci` and `XhciShutdownReset` do at shutdown is visible only in an external capture of that shutdown |
 | hidusbf on a composite device's own entry (`USB\XHCI98_COMPOSITE`) | New in `2.4.0.0`, built against host tests. QEMU offers no keyboard-and-mouse composite device, so the rate set there reaching a function is owed to a real composite device, by passthrough or on a machine; whether hidusbf's Setup offers the entry is unread ("SweetLow's hidusbf: a mouse's polling rate") |

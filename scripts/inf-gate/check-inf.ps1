@@ -98,8 +98,9 @@ What it checks, grouped by the failure each rule prevents:
            driver reads is written with its own default. Task 38.11 made it
            twenty: XhciAccept096 at 1, the xHCI 0.96 floor (design record 17
            section 4.14.4; owner, 2026-10-13). Task 38.3 made it
-           twenty-one: XhciPollFineTimer at 1, a finer system timer while
-           polling (design record 15 section 7.2.4). Task 38.10 made it
+           twenty-one: XhciPollFineTimer at 0 (1 until the owner's change of
+           2026-10-14), a finer system timer while polling (design record
+           15 section 7.2.4). Task 38.10 made it
            thirty-five: fourteen of Linux's xHCI controller quirks (design
            record 20 section 6.1) - XhciMsiAvoid, XhciStreamsOff,
            XhciResumeReinit, XhciIntelShutdownToEhci, XhciSuspendHaltDelay,
@@ -1476,9 +1477,9 @@ $requiredValues = @(
     @{
         Name    = "XhciPollFineTimer"
         Type    = "0x00010003"
-        Default = "1"
-        Why     = "roadmap-hcd task 38.3's finer system timer while polling (design record 15 section 7.2.4), read at each start: only a DWORD 0 turns it off. The INF writes the 1 so the value is where a user looks for it, beside XhciPollActiveMs, under 34.1's don't-overwrite rule so a user's 0 survives an update"
-        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on (owner, 2026-10-12, decision T4); Windows 98 SE and ME read it and do nothing"
+        Default = "0"
+        Why     = "roadmap-hcd task 38.3's finer system timer while polling (design record 15 section 7.2.4), read at each start: only a non-zero DWORD turns it on. The INF writes the 0 so the value is where a user looks for it, beside XhciPollActiveMs, under 34.1's don't-overwrite rule so a user's 1 survives an update"
+        DefaultWhy = "0 is the driver's own default - absent, 0 or another type is off (owner, 2026-10-12, decision T4, amended by the owner 2026-10-14: opt-in after the virtual machines' reading, design record 15 section 7.2.4); Windows 98 SE and ME read it and do nothing"
     },
     @{
         Name    = "XhciWideMap"

@@ -1249,14 +1249,15 @@ static NTSTATUS hcdSettleDelivery(PHCD_CONTROLLER hc)
     XhciPollValues(&hc->PollValues, modeFound, modeValue, idleFound,
                    idleValue, activeFound, activeValue);
     /* Record 15 section 7.2.4: the finer timer's switch and the value it
-     * asks, the active period in effect in 100 ns. */
+     * asks, the active period in effect in 100 ns. Off unless a non-zero
+     * value is read (opt-in, the owner's change of 2026-10-14). */
     value2 = 0;
     if (NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_POLL_FINE_TIMER, &value2))) {
         hc->Counters.TmrSwitchRead = value2;
         hc->Tmr.Switch = (value2 == 0) ? 0UL : 1UL;
     } else {
         hc->Counters.TmrSwitchRead = XHCI_POLL_NOT_FOUND;
-        hc->Tmr.Switch = 1;
+        hc->Tmr.Switch = 0;
     }
     hc->Counters.TmrSwitch = hc->Tmr.Switch;
     hc->Tmr.Desired = hc->PollValues.ActiveMs * XHCI_POLL_TICKS_PER_MS;

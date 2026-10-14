@@ -6316,7 +6316,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciInterruptMode` | each start; on NT 6 also at AddDevice (record 18's mode cache) | 0 | 0 automatic, 1 line, 2 polling, 3 and above as 0 | 0 | yes |
 | `XhciPollIdleMs` | each start | 50 | 1-5000; 0 as 50 | 50 | yes |
 | `XhciPollActiveMs` | each start | 1 | 1 to the idle period; 0 as 1 | 1 | yes |
-| `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 1 | 0 off, any other 1 | 1 (since 38.3) | yes |
+| `XhciPollFineTimer` | each start; read on 98 SE and ME and no effect there | 0 | 0 off, any other 1 | 0 (since 38.3; 1 until the owner's change of 2026-10-14) | yes |
 | `XhciWideMap` | each start; takes effect on 2000 and later only | 0 | 0 off, any other on | 0 (since 36.51) | yes |
 | `XhciSelectiveSuspend` | each start | 0 | only 1 on | 0 (since 36.51) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
