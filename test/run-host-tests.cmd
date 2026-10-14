@@ -177,6 +177,24 @@ rem                  filter), the vendor, device and class parsed from them,
 rem                  the NHI profile table, and the registry values'
 rem                  defaults, refusals and bounds
 rem
+rem   test_tbt_ring - xhcicm.sys's host interface ring 0 (src\cm\tbt_ring.c,
+rem                  task 39-A.2): the USB4 2.0 Appendix A.2 CRC-32C vectors,
+rem                  start and stop, transmit and receive across the wrap,
+rem                  both rings' exhaustion, a frame over its buffer, bad
+rem                  trailers, the control read's sequence numbers, stale
+rem                  answers, timeouts, retries and notifications
+rem   test_tbt_icm - the firmware connection manager client (src\cm\tbt_icm.c,
+rem                  task 39-A.3): every Alpine Ridge frame ICM-PROTOCOL.md
+rem                  quotes as observed, the bind, plug, approve, unplug,
+rem                  resume and reconciliation sequences, a disconnect inside
+rem                  a 10 s approve, timeouts, retries, the error flag, and
+rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows
+rem                  against Linux's structure layouts
+rem   test_tbt_hw  - the hardware profiles, the Ice Lake family's force-power
+rem                  sequence and the connection manager's selection
+rem                  (src\cm\tbt_hw.c, task 39-A.3): every outcome and inert
+rem                  reason
+rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
 rem and its usbport callback surface). Their last copies are on branch
@@ -395,6 +413,15 @@ call :run test_own "test_own.c ..\src\xhci_own.c"
 rem test_cm links nothing else: xhcicm.sys's role choice, its NHI profile
 rem table and its registry values' rules are pure (task 39-A.1).
 call :run test_cm "test_cm.c ..\src\cm\cm_vals.c"
+rem test_tbt_ring, test_tbt_icm and test_tbt_hw are xhcicm.sys's pure core
+rem (src\cm\, roadmap-usb4.md tasks 39-A.2 and 39-A.3, design record 21
+rem section 10.1), driven over the modelled host interface in tbt_fake.h:
+rem the ring alone; the ICM client over the ring it drives; the hardware
+rem profiles and the selection over both, since each profile names its
+rem ICM message row.
+call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
