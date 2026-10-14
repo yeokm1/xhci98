@@ -2955,6 +2955,81 @@ static void test_review7(void)
     (void)dev;
 }
 
+/* usb4-emu's `asm4242` host model (ASMedia ASM4242, AM5 X870): the CSM
+ * desktop case where this software CM is the only CM. */
+static void test_asm4242(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int dev2;
+    int lane;
+    unsigned long cr;
+    const TBT_U4_PORT *p;
+
+    cfgDefault(&c);
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    dev2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    g_ldCalls = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    CHECK_EQ(g_cm.PortCount, 2, "asm4242: two USB4 ports");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "asm4242: a cold device UP");
+    CHECK(p->Pcie.Up && p->Usb3.Up && p->Bonded, "PCIe and USB3, bonded");
+    CHECK_EQ(p->PcieDown, 8, "PCIe Down 8 on port 1 (found, not assumed)");
+    CHECK_EQ(p->Usb3Down, 10, "USB3 Down 10 on port 1");
+    CHECK(p->MapValid && p->MapRid == 0x0200, "the tunnel port from the mapping: 02:00.0");
+    cr = (fabPath0(&g_fab, 0, lane, p->Pcie.Hu) >> 17) & 0x7F;
+    CHECK(cr != 0 && cr <= 32, "host lane credits from Buffer Allocation");
+    CHECK_EQ(g_fab.Lane1LockWrites, 0, "lane 1 Lock never written");
+
+    fabPlug(&g_fab, 2, dev2);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "asm4242: hot plug on port 2 UP");
+    CHECK_EQ(TbtU4Port(&g_cm, 2)->PcieDown, 9, "PCIe Down 9 on port 2");
+    CHECK_EQ(TbtU4Port(&g_cm, 2)->MapRid, 0x0208, "its tunnel port 02:01.0");
+    fabUnplug(&g_fab, 2);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_EMPTY, "its unplug EMPTY");
+    CHECK(hostClean(&g_fab, 2), "its host side clean");
+    CHECK(g_ld.PathClosed, "the path proven closed");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "port 1 untouched");
+
+    /* A device router whose lanes and Buffer Allocation exceed the 7-bit
+     * credit field: clamped to 127, never truncated. */
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].BaData[0] = 4UL | (600UL << 16);
+    fabPlug(&g_fab, 1, dev);
+    /* after the plug, which resets the router's lanes */
+    g_fab.R[dev].Adp[1].Cs[4] = (g_fab.R[dev].Adp[1].Cs[4] & ~(0x3FFUL << 20)) | (1000UL << 20);
+    g_fab.R[dev].Adp[2].Cs[4] = (g_fab.R[dev].Adp[2].Cs[4] & ~(0x3FFUL << 20)) | (1000UL << 20);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "UP");
+    cr = (fabPath0(&g_fab, dev, 1, p->Pcie.Hd) >> 17) & 0x7F;
+    CHECK_EQ(cr, 127, "device lane credits clamped to 127 (not 600 & 0x7F)");
+
+    /* The pre-OS case on asm4242 (the model's preos-cm=on): preserved. */
+    fabInit(&g_fab);
+    fabHostAsm4242(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 1);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved, "asm4242 pre-OS: preserved");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug EMPTY");
+    CHECK(hostClean(&g_fab, 1), "its host side clean, USB3 included");
+}
+
 int main(void)
 {
     test_cold_minimal();
@@ -2993,6 +3068,7 @@ int main(void)
     test_review4();
     test_review5();
     test_review7();
+    test_asm4242();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

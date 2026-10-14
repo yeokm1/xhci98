@@ -2798,6 +2798,17 @@ static LONG tbtU4Paths(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PTBT_U4_TUNNEL t
     availD = availD > resD ? availD - resD : 0;
     t->CreditsHost = prefH < availH ? prefH : availH;
     t->CreditsDev = prefD < availD ? prefD : availD;
+    /* PATH_CS_0's Initial Credits is 7 bits (bits 23:17, TBT_PATH0_CREDITS): a
+     * router whose lanes report more buffers (the ASMedia ASM4242's 174,
+     * usb4-emu docs/USB4-HOSTS.md section 5 quirk c, from a Linux
+     * credit-clamp patch) must never have the figure truncated into the
+     * field. */
+    if (t->CreditsHost > TBT_PATH_CREDITS_MAX) {
+        t->CreditsHost = TBT_PATH_CREDITS_MAX;
+    }
+    if (t->CreditsDev > TBT_PATH_CREDITS_MAX) {
+        t->CreditsDev = TBT_PATH_CREDITS_MAX;
+    }
     if (t->CreditsHost < TBT_CREDITS_MIN_PCIE || t->CreditsDev < TBT_CREDITS_MIN_PCIE) {
         p->Why = TBT_U4_WHY_CREDITS;
         tbtU4Log(cm, "u4.credits.short", (t->CreditsHost << 16) | t->CreditsDev);

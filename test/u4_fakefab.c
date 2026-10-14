@@ -568,10 +568,16 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
                 if ((ad->Cs[5] & 0x80000000UL) == 0) {
                     fabHotPlug(f, ri, a + 1, 1);
                 }
-                /* Total Buffers doubles on a bonded link (Spec 5.3.2.1). */
-                ad->Cs[4] = (ad->Cs[4] & ~(0x3FFUL << 20)) | (120UL << 20);
-                f->R[d].Adp[ad->PeerAdp].Cs[4] =
-                    (f->R[d].Adp[ad->PeerAdp].Cs[4] & ~(0x3FFUL << 20)) | (120UL << 20);
+                /* Total Buffers doubles on a bonded link (Spec 5.3.2.1):
+                 * the generic figure 60 to 120; a preset or test that set
+                 * its own figure (asm4242's 174) keeps it. */
+                if (((ad->Cs[4] >> 20) & 0x3FFUL) == 60UL) {
+                    ad->Cs[4] = (ad->Cs[4] & ~(0x3FFUL << 20)) | (120UL << 20);
+                }
+                if (((f->R[d].Adp[ad->PeerAdp].Cs[4] >> 20) & 0x3FFUL) == 60UL) {
+                    f->R[d].Adp[ad->PeerAdp].Cs[4] =
+                        (f->R[d].Adp[ad->PeerAdp].Cs[4] & ~(0x3FFUL << 20)) | (120UL << 20);
+                }
             }
         }
         return;
@@ -1102,6 +1108,64 @@ int fabHostAdl(FAB *f)
     h->BaData[0] = 4UL | (28UL << 16);
     h->BaData[1] = 1UL | (14UL << 16);
     h->DpPlugEvents = 1;
+    return 0;
+}
+
+/*
+ * usb4-emu's `asm4242` host model (its docs/USB4-HOSTS.md section 5 and
+ * hw/usb4/usb4-router-asm.c, from public sources only, nothing captured):
+ * router 174c:2428, USB4 1.0; lanes 1-4, DP IN 5-6, the Host Interface 7
+ * (the upstream adapter), PCIe Down 8-9, USB3 Down 10-11; lanes reporting
+ * 174 Total Buffers and baMaxHI 32 (quirk c); a Host Interface path whose
+ * Valid is cleared keeps Pending Packets set (quirk a); Buffer Allocation
+ * USB3 32, DP AUX 1, DP main 18, PCIe 32; the mapping operation as the
+ * minimal router answers it, with the switch topology's tunnel ports
+ * 02:00.0 and 02:01.0.
+ */
+int fabHostAsm4242(FAB *f)
+{
+    FAB_ROUTER *h = &f->R[0];
+    unsigned a;
+    unsigned k;
+
+    memset(h, 0, sizeof(*h));
+    h->Parent = -1;
+    fabRouterBase(h, 0x174C, 0x2428, 0x20);   /* USB4 1.0 */
+    fabTmuRouter(h);
+    fabLane(h, 1, 1, 1);
+    fabLane(h, 2, 0, 1);
+    fabLane(h, 3, 1, 1);
+    fabLane(h, 4, 0, 1);
+    for (a = 1; a <= 4; a++) {
+        h->Adp[a].Cs[4] = (h->Adp[a].Cs[4] & ~(0x3FFUL << 20)) | (174UL << 20);
+    }
+    fabProto(h, 5, 0x0E0101UL);
+    fabProto(h, 6, 0x0E0101UL);
+    fabAdpNew(h, 7, 0x000002UL, 12);
+    for (k = 0; k < FAB_HOPS; k++) {
+        h->Adp[7].PpStuck[k] = 1;
+    }
+    fabProto(h, 8, 0x100101UL);
+    fabProto(h, 9, 0x100101UL);
+    fabProto(h, 10, 0x200101UL);
+    fabProto(h, 11, 0x200101UL);
+    h->UpAdp = 0;
+    fabFinish(h);
+    h->RopMode[FAB_OP_DROM] = FAB_ROP_NS;
+    h->RopMode[FAB_OP_MAP] = FAB_ROP_OK;
+    h->RopMode[FAB_OP_CAPS] = FAB_ROP_OK;
+    h->RopMode[FAB_OP_BA] = FAB_ROP_OK;
+    h->MapEntries = 2;
+    h->MapData[0][0] = 8UL << 1;
+    h->MapData[0][1] = 0x0200UL;    /* bus 2, device 0 */
+    h->MapData[1][0] = 9UL << 1;
+    h->MapData[1][1] = 0x0208UL;    /* bus 2, device 1 */
+    h->BaLen = 5;
+    h->BaData[0] = 1UL | (32UL << 16);
+    h->BaData[1] = 2UL | (1UL << 16);
+    h->BaData[2] = 3UL | (18UL << 16);
+    h->BaData[3] = 4UL | (32UL << 16);
+    h->BaData[4] = 5UL | (32UL << 16);
     return 0;
 }
 

@@ -698,6 +698,7 @@
 #define TBT_PATH0_CREDITS(v)        (((ULONG)(v) >> 17) & 0x7FUL)
 #define TBT_PATH0_CREDITS_SHIFT     17
 #define TBT_PATH0_CREDITS_MASK      0x00FE0000UL
+#define TBT_PATH_CREDITS_MAX        0x7FUL      /* the 7-bit field's largest value */
 #define TBT_PATH0_VALID             0x80000000UL
 /* PATH_CS_1. */
 #define TBT_PATH1_WEIGHT_MASK       0x0000000FUL

@@ -274,9 +274,33 @@ a second instance over the configured fabric; nothing attached.
 CRC and frame checks on every packet included. The same run at the core's
 first complete version (`452151c4` with its first corrections) read 30601
 checks, 0 failures. Read again at `167f43f8` against a newer usb4-emu
-checkout (`main` `fdcca32`, QEMU fork `53f8fc7`, whose router model moved
-its assembly helpers into `usb4-router-asm.c`, which the script now links
-when present): 32449 checks, 0 failures.
+checkout (`main` `fdcca32`, QEMU fork `53f8fc7`, which adds the
+`asm4242` host model in `usb4-router-asm.c`; the script links it when
+present): 32449 checks, 0 failures.
+
+**The `asm4242` host model** (usb4-emu `main` `ce13e0e`, a descendant of
+the `a50c19e` the handoff names; its `docs/USB4-HOSTS.md` section 5: the
+ASMedia ASM4242 of AM5 X870 boards, router `174c:2428`, from public
+sources only, nothing captured, with its three quirks on). The CSM
+desktop case where this connection manager is the only one. The same
+cases on it, plus the run before: 45469 checks, 0 failures.
+
+- `asm4242`: PCIe Down 8 and USB3 Down 10 found on port 1 by discovery
+  (lanes 1-4, DP IN 5-6, Host Interface 7, PCIe Down 8-9, USB3 Down
+  10-11), both tunnels up and bonded over lanes reporting 174 Total
+  Buffers (the path credits taken from Buffer Allocation, never the lane
+  figure, and clamped to the 7-bit field in any case); hot plug, unplug
+  with the path proven closed, re-plug; the pre-OS tunnel preserved with
+  no transition. 897 control requests, 0 retries, 0 timeouts. The Host
+  Interface Pending Packets quirk is never met: this connection manager
+  never invalidates a Host Interface path. The host suite's fake fabric
+  has the same preset (`fabHostAsm4242`, written from that document).
+- Linux's quirk table (`quirks.c`, at the pinned revision) has no
+  ASMedia row; its only ASMedia code is the NVM version read (`nvm.c`),
+  which this connection manager does not use. The three quirks come from
+  mailing-list patches, not merged; their behaviours are met by the
+  design itself (bounded drains with quarantine, ring 0 only without
+  end-to-end flow control, credits clamped).
 
 - `minimal`: port 1 UP at start, PCIe at lane HopIDs 8 and 9 and USB3 at
   10 and 11 (`u4.pcie.up 00010809`, `u4.usb3.up 00010a0b`), bonded, the

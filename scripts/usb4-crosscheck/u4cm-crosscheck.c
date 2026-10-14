@@ -409,8 +409,18 @@ static void new_fabric(USB4HostModel model, bool preos)
         .profile = USB4_PROFILE_USB4_GENERIC, .dialect = USB4_DIALECT_USB4,
         .router_vendor_id = 0x46f4, .router_device_id = 0x4040,
         .num_usb4_ports = 2, .host_model = model, .preos_cm = preos,
+        /* asm4242's defaults, as usb4-emu's usb4-host properties and its
+         * fabric-test.c ASM_CFG_DEFAULT set them: the quirks on */
+        .asm4242 = { .adp_dp = 5, .adp_hi = 7, .adp_pcie = 8, .adp_usb3 = 10,
+                     .quirk_pending = true, .quirk_credits = true,
+                     .nvm_version = 0x200011, .nvm_date = 0x250708 },
     };
     ShimFrame *f;
+
+    if (model == USB4_HOST_MODEL_ASM4242) {
+        cfg.router_vendor_id = 0x174c;
+        cfg.router_device_id = 0x2428;
+    }
 
     if (fab) {
         usb4_fabric_free(fab);
@@ -449,7 +459,8 @@ static USB4Device dev2 = { .serial = "USB4EMU02" };
 
 static const char *model_name(USB4HostModel m)
 {
-    return m == USB4_HOST_MODEL_INTEL_ADL ? "intel-adl" : "minimal";
+    return m == USB4_HOST_MODEL_INTEL_ADL ? "intel-adl" :
+           m == USB4_HOST_MODEL_ASM4242 ? "asm4242" : "minimal";
 }
 
 /* U.1 and U.2 of record 22 section 14.2, on the model: a cold device, a
@@ -475,6 +486,12 @@ static void test_cold_hot_unplug(USB4HostModel model)
         CHECK(!xc_get(XC_HOST_ADP_PRESENT, 10) && !xc_get(XC_HOST_ADP_PRESENT, 11),
               "intel-adl: adapters 10 and 11 not present");
         CHECK(xc_get(XC_HOST_QUIRKS, 0) & xc_quirk_usb3(), "the 8087:463E quirk");
+    }
+    if (model == USB4_HOST_MODEL_ASM4242) {
+        CHECK(xc_get(XC_PCIE_DOWN, 1) == 8, "asm4242: PCIe Down 8 on port 1 (%lu)",
+              xc_get(XC_PCIE_DOWN, 1));
+        CHECK(xc_get(XC_HOST_ADP_PRESENT, 10) && xc_get(XC_HOST_ADP_PRESENT, 11),
+              "asm4242: USB3 Down 10 and 11 present");
     }
 
     CHECK(usb4_fabric_attach(fab, 2, &dev2, NULL), "attach 2");
@@ -567,6 +584,8 @@ int main(int argc, char **argv)
     test_cold_hot_unplug(USB4_HOST_MODEL_INTEL_ADL);
     test_preos(USB4_HOST_MODEL_MINIMAL);
     test_preos(USB4_HOST_MODEL_INTEL_ADL);
+    test_cold_hot_unplug(USB4_HOST_MODEL_ASM4242);
+    test_preos(USB4_HOST_MODEL_ASM4242);
     test_restart();
     test_empty();
     printf("%d checks, %d failures\n", checks, failures);

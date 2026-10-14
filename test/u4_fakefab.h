@@ -187,6 +187,7 @@ typedef struct FAB {
 void fabInit(FAB *f);
 int  fabHostMinimal(FAB *f);        /* usb4-emu `minimal`: returns the host index 0 */
 int  fabHostAdl(FAB *f);            /* usb4-emu `intel-adl` */
+int  fabHostAsm4242(FAB *f);        /* usb4-emu `asm4242`: ASMedia, public sources */
 int  fabDevice(FAB *f, int kind);   /* a device router, unplugged; its index */
 int  fabChild(FAB *f, int dev);     /* a USB4 router behind a device's downstream port */
 
