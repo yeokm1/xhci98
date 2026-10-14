@@ -18,8 +18,9 @@
 #   shot <file.png>        screendump (PNG)
 #   hmp <command...>       any HMP command, e.g. hmp info pci
 #   key <keys...>          HMP sendkey for each chord, e.g. key ctrl-esc ret
-#   type <text>            types text (US-Dvorak mapping applied on the
-#                          Windows 2000 guests, -Layout overrides)
+#   type <text>            types text (US-Dvorak mapping applied on the NT
+#                          guests - the 2000, XP and 7 images were read as
+#                          Dvorak, 98 SE and ME as QWERTY - -Layout overrides)
 #   run <command line>     Win+R, types the line, Enter (the Run box)
 #   powerdown              ACPI power button
 #   quit                   QEMU quit, then waits for the process and frees

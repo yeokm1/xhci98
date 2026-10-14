@@ -488,7 +488,7 @@ try {
     $info = [ordered]@{
         name = $Name; guest = $Guest; profile = $Usb4Profile; bios = $Bios; deviceAtBoot = $DeviceAtBoot
         hostModel = $HostModel; preosCm = [bool]$PreosCm; usb3 = [bool]$Usb3; dock = [bool]$Dock
-        bootStrict = [bool]$BootStrict; dvorak = ($Guest -like 'win2k*')
+        bootStrict = [bool]$BootStrict; dvorak = [bool]$g.Nt
         qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; created = $created; qemu = $proc.ExecutablePath
         token = $token; branch = $branch; tag = $Tag
         runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
