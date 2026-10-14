@@ -2949,9 +2949,10 @@ static int install_inf(int inf, int controllers)
         if (mixed) {
             out("Left: %s - devices sharing it need a first filter install "
                 "and an update at once,\n  which one call cannot do on "
-                "Windows 2000. Update the ports with the filter in Device\n"
-                "  Manager (Have Disk, the package's nt\\ directory), then "
-                "run INSTALL.BAT again.\n", hwid);
+                "Windows 2000. In Device Manager install the filter on\n"
+                "  EVERY port with this id - those without it too - "
+                "(Update Driver, Have Disk,\n  the package's nt\\ "
+                "directory), then run INSTALL.BAT again.\n", hwid);
             for (j = 0; j < devCount; j++) {
                 if (devs[j].Present && devs[j].Inf == inf &&
                     (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
