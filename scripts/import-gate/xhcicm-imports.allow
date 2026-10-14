@@ -43,6 +43,10 @@ ntoskrnl.exe!IoIsWdmVersionAvailable        all  required  w2k-export; win98-pre
 # The PDO's hardware ids, read on the NT targets only (cm_entry.c).
 ntoskrnl.exe!IoGetDeviceProperty             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceProperty, hint 49) (+7 other 98 SE); ntkern-name
 
+# --- The filter's count of device-usage notifications in flight (cm_filt.c) ---
+ntoskrnl.exe!InterlockedIncrement            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28) (+35 other 98 SE); ntkern-name
+ntoskrnl.exe!InterlockedDecrement           all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedDecrement, hint 26) (+33 other 98 SE); ntkern-name
+
 # --- The forwarded start and its wait ---
 ntoskrnl.exe!KeInitializeEvent               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeEvent, hint 74) (+48 other 98 SE); ntkern-name
 ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetEvent, hint 8E) (+42 other 98 SE); ntkern-name
