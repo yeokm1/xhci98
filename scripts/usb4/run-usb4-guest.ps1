@@ -227,6 +227,20 @@ if (-not (Test-Path $base)) { throw "base image missing: $base" }
 if (Test-Under $base $runParent) { throw "-BaseImage cannot sit under the run root $runParent" }
 Assert-NoReparse $base $vmRoot 'the base image'
 Assert-NoReparse $runDir $vmRoot 'the run directory'
+# A file attached writable (or deleted by -NewOverlay) must be itself: no
+# junction or link on its path (Assert-NoReparse checks the leaf too) and
+# no second hard link, which could alias a base image. fsutil lists every
+# name of the file; a failure to list is a refusal.
+function Assert-SoleFile([string]$path, [string]$what) {
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    Assert-NoReparse $path $vmRoot $what
+    $names = @(& fsutil hardlink list $path 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $names.Count -ne 1) {
+        throw "$what $path has other hard links (or they could not be listed)"
+    }
+}
+Assert-SoleFile $disk 'the overlay'
+Assert-SoleFile $nvme 'the NVMe overlay'
 
 # ---------------------------------------------------------------- QEMU binary
 # Default: the fork's build, copied to vm\usb4\bin under the admission lock.
@@ -252,7 +266,7 @@ if ($XferImg) {
     if (-not (Test-Under $XferImg $runParent) -or (Split-Path -Leaf $XferImg) -notmatch '^xfer[A-Za-z0-9._-]*\.img$') {
         throw "-XferImg must be a raw image named xfer*.img under $runParent (it is attached writable)"
     }
-    Assert-NoReparse $XferImg $vmRoot '-XferImg'
+    Assert-SoleFile $XferImg '-XferImg'
     if ($XferImg -ieq $base) { throw '-XferImg cannot be the base image' }
 }
 if ($NvmeBase) {

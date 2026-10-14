@@ -1020,12 +1020,11 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
         return XHCI_TBT_MAP_NO_BRIDGE;
     }
 
-    /* A claim that disagrees with one already made adds nothing. */
+    /* A claim that disagrees with one already made binds nothing, but
+     * the router still names the bridge as a tunnel port: it joins the set
+     * all the same, its port unknown (the whole set acts for it). */
     claim = xhciTbtClaim(binds, port, bdf, XHCI_TBT_CORR_NAMED,
                          XHCI_TBT_MAP_ADDED);
-    if (claim == XHCI_TBT_MAP_CONFLICT) {
-        return claim;
-    }
     if (topo->Tunnels >= XHCI_TBT_MAX_TUNNELS) {
         xhciTbtSetVoid(topo, XHCI_TBT_TOPO_MANY);
         return XHCI_TBT_MAP_FULL;
@@ -1038,7 +1037,8 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
     topo->Named++;
     topo->Outcome = XHCI_TBT_TOPO_SET;
     xhciTbtMarkMembers(topo);
-    return XHCI_TBT_MAP_ADDED;
+    return claim == XHCI_TBT_MAP_CONFLICT ? XHCI_TBT_MAP_CONFLICT
+                                          : XHCI_TBT_MAP_ADDED;
 }
 
 /*
@@ -1125,26 +1125,60 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
     return 0;
 }
 
+VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS ||
+        xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER ||
+        (binds->PortConflict & xhciTbtPortBit(port))) {
+        return;
+    }
+    binds->Pending |= xhciTbtPortBit(port);
+}
+
+VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port)
+{
+    if (binds == NULL || port == 0 || port > XHCI_TBT_MAX_PORTS) {
+        return;
+    }
+    binds->Pending &= ~xhciTbtPortBit(port);
+}
+
+/* 1 when a gain on the bridge at `bdf` is its own bound port's. */
+static ULONG xhciTbtExplained(const XHCI_TBT_BINDS *binds, ULONG bdf)
+{
+    ULONG e = xhciTbtBindOfBdf(binds, bdf);
+
+    return (e != XHCI_TBT_NO_MEMBER &&
+            (binds->How[e] == XHCI_TBT_CORR_NAMED ||
+             binds->How[e] == XHCI_TBT_CORR_LEARNED)) ? 1UL : 0UL;
+}
+
 ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
-                   PXHCI_TBT_BINDS binds, ULONG port, ULONG ups,
-                   const ULONG *active)
+                   PXHCI_TBT_BINDS binds, ULONG port, const ULONG *active)
 {
     ULONG i;
+    ULONG bit;
     ULONG bus[XHCI_TBT_MAX_TUNNELS];
     ULONG seen[XHCI_TBT_MAX_TUNNELS];
     ULONG gained = 0;
     ULONG member = XHCI_TBT_NO_MEMBER;
 
     if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
-        port == 0 || port > XHCI_TBT_MAX_PORTS || ups == 0 ||
+        port == 0 || port > XHCI_TBT_MAX_PORTS ||
         topo->Tunnels > XHCI_TBT_MAX_TUNNELS) {
         return XHCI_TBT_MAP_BAD_PARAM;
     }
+    bit = xhciTbtPortBit(port);
     if (xhciTbtBindOfPort(binds, port) != XHCI_TBT_NO_MEMBER) {
+        binds->Pending &= ~bit;
         return XHCI_TBT_MAP_KNOWN;
     }
-    if (binds->Overflow || (binds->PortConflict & xhciTbtPortBit(port))) {
+    if (binds->Overflow || (binds->PortConflict & bit)) {
+        binds->Pending &= ~bit;
         return XHCI_TBT_MAP_CONFLICT;
+    }
+    if (!(binds->Pending & bit)) {
+        return XHCI_TBT_MAP_NOT_UP;
     }
     if (topo->Tunnels == 0) {
         binds->Armed = 0;
@@ -1163,18 +1197,21 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
         }
     }
     for (i = 0; i < topo->Tunnels; i++) {
-        if (seen[i] & ~binds->BaseSeen[i]) {
+        if ((seen[i] & ~binds->BaseSeen[i]) &&
+            !xhciTbtExplained(binds, topo->Set[i])) {
             gained++;
             member = i;
         }
         binds->BaseSeen[i] = seen[i];
     }
-    if (ups != 1 || gained > 1) {
-        return XHCI_TBT_MAP_SEVERAL;
-    }
     if (gained == 0) {
         return XHCI_TBT_MAP_NOT_GAINED;
     }
+    if (gained > 1 || binds->Pending != bit) {
+        /* Another tunnel not yet attributed could explain the gain. */
+        return XHCI_TBT_MAP_SEVERAL;
+    }
+    binds->Pending &= ~bit;
     if (active != NULL && !active[member]) {
         return XHCI_TBT_MAP_INACTIVE;
     }

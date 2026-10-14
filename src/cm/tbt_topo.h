@@ -454,6 +454,8 @@ typedef struct _XHCI_TBT_BINDS {
     ULONG How[XHCI_TBT_MAX_BINDS];      /* XHCI_TBT_CORR_*                  */
     ULONG PortConflict; /* bit n-1: port n had claims that disagreed        */
     ULONG Overflow;     /* a claim found no room: no port is known          */
+    ULONG Pending;      /* bit n-1: port n's PCIe tunnel came up, its bridge
+                           not yet learned (XhciTbtLearnUp)                 */
     /* the learning baseline: each member's secondary bus and the devices
        whose function 0 answered there (bit d for device d) */
     ULONG Armed;
@@ -484,13 +486,15 @@ typedef struct _XHCI_TBT_BINDS {
                                            already made: neither is kept    */
 #define XHCI_TBT_MAP_NOT_GAINED     9UL /* learn: no member gained a device */
 #define XHCI_TBT_MAP_SEVERAL        10UL /* learn: more than one gained, or
-                                            more than one tunnel came up    */
+                                            another tunnel is pending       */
 #define XHCI_TBT_MAP_INACTIVE       11UL /* learn: the member that gained is
                                             not active (another domain
                                             claims it)                      */
 #define XHCI_TBT_MAP_NOT_ARMED      12UL /* learn: no baseline over this set;
                                             one is taken now                */
 #define XHCI_TBT_MAP_BAD_PARAM      13UL
+#define XHCI_TBT_MAP_NOT_UP         14UL /* learn: no XhciTbtLearnUp for the
+                                            port pending                    */
 
 /* Zeroes `binds`: nothing known, nothing armed. */
 VOID XhciTbtBindsInit(PXHCI_TBT_BINDS binds);
@@ -525,9 +529,10 @@ VOID XhciTbtBindsInit(PXHCI_TBT_BINDS binds);
  *     discovers again; one more member than the set has room for voids
  *     it as MANY (FULL). Never a set that might lack a named port.
  *   - The port bound to another bridge, or the bridge to another port, by
- *     naming or learning: CONFLICT, both withdrawn for the instance, and
- *     a bridge not yet a member is not added. The same naming again is
- *     KNOWN.
+ *     naming or learning: CONFLICT, both withdrawn for the instance; a
+ *     valid bridge not yet a member still joins the set (membership is
+ *     not correspondence: the whole set acts for it). The same naming
+ *     again is KNOWN.
  */
 ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
                           PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf);
@@ -536,7 +541,9 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
  * The learned correspondence (record 22 section 7.6), for a port whose
  * bridge the router did not name: the member whose secondary bus gained a
  * device (any device number's function 0 newly answering) while that
- * port's PCIe tunnel, and no other, came up.
+ * port's PCIe tunnel, and no other not yet attributed, had come up. A
+ * gain on a bridge bound to another port (named or learned) is that
+ * port's own and explains nothing here.
  *
  * XhciTbtLearnArm takes the baseline: for every member, its secondary bus
  * and which devices answer there. The caller arms after each discovery it
@@ -548,29 +555,41 @@ ULONG XhciTbtLearnArm(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
                       PXHCI_TBT_BINDS binds);
 
 /*
- * For the PCIe tunnel of `port` that came up (the driver half calls it for
- * each TBT_U4_ACT_TUNNEL_UP it drains whose port and generation are still
- * live). `ups` is how many PCIe tunnels came up since the baseline, this
- * one included (the TUNNEL_UP actions drained since the last arm or
- * learn): only 1 can attribute a gain. The outcomes, in this order:
+ * The tunnels not yet attributed. The driver half calls XhciTbtLearnUp for
+ * EVERY TBT_U4_ACT_TUNNEL_UP of a drained batch before it calls
+ * XhciTbtLearn for any of them (a port already bound or conflicted is not
+ * recorded), and XhciTbtLearnDown when a port's PCIe tunnel goes down or
+ * is torn down (then arms again). A port stays pending until it is
+ * learned or goes down, and while any other port is pending no gain is
+ * attributed: an earlier tunnel whose device has not answered yet could
+ * explain it.
+ */
+VOID XhciTbtLearnUp(PXHCI_TBT_BINDS binds, ULONG port);
+VOID XhciTbtLearnDown(PXHCI_TBT_BINDS binds, ULONG port);
+
+/*
+ * For the PCIe tunnel of `port` that came up (each TBT_U4_ACT_TUNNEL_UP
+ * whose port and generation are still live; again later while it returns
+ * NOT_GAINED). The outcomes, in this order:
  *   - the port already bound (named or learned): KNOWN, nothing read;
  *   - the port conflicted, or the table overflowed: CONFLICT;
+ *   - the port not pending (no XhciTbtLearnUp): NOT_UP, nothing read;
  *   - no baseline, or one taken over another set: NOT_ARMED, and one is
  *     taken now;
  *   - a member that cannot be read, or whose secondary bus moved: UNREAD,
  *     the baseline kept;
  *   - otherwise every member is read and the baseline moves to this
- *     reading; then: `ups` not 1, or more than one member gained: SEVERAL;
- *     none gained: NOT_GAINED (the device may still answer Configuration
- *     Request Retry: call again, with `ups` 1, before any other tunnel
- *     comes up); the one that gained inactive (`active`, per member as
- *     XhciTbtExclusive gives it; NULL for all active): INACTIVE; bound to
- *     another port or conflicted: CONFLICT, both withdrawn; else LEARNED,
- *     the port's bridge for the instance.
+ *     reading; then, counting gains on bridges not bound to another port:
+ *     none: NOT_GAINED (the device may still answer Configuration Request
+ *     Retry; the port stays pending); more than one, or another port
+ *     pending: SEVERAL (the port stays pending); else the port is no
+ *     longer pending and: the bridge that gained inactive (`active`, per
+ *     member as XhciTbtExclusive gives it; NULL for all active):
+ *     INACTIVE; conflicted: CONFLICT; else LEARNED, the port's bridge for
+ *     the instance.
  */
 ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
-                   PXHCI_TBT_BINDS binds, ULONG port, ULONG ups,
-                   const ULONG *active);
+                   PXHCI_TBT_BINDS binds, ULONG port, const ULONG *active);
 
 /*
  * The index in topo->Set of USB4 port `port`'s bridge, named or learned,
