@@ -2052,6 +2052,13 @@ $retiredMediaNames = @("usbd98.sys", "usbd2k.sys", "usbhub98.sys")
 $osNeverNamedNames = @($osNeverNamed | ForEach-Object { $_.File.ToLowerInvariant() })
 $pkgRefusedNames = @($osSuppliedNames + $retiredMediaNames + $osNeverNamedNames |
                      Sort-Object -Unique)
+# And the same files under the compressed names the Windows CD carries
+# (USBD.SY_), with the three the Windows 2000 F6 option names
+# (src\txtsetup.oem, XHCI98W2K): the user copies those from the CD to the
+# floppy, and the package never carries them (legal-provenance.md section 5).
+$pkgRefusedNames = @($pkgRefusedNames + @("usbd.sy_", "hidclass.sy_", "hidparse.sy_") +
+                     @($pkgRefusedNames | ForEach-Object { $_.Substring(0, $_.Length - 1) + "_" }) |
+                     Sort-Object -Unique)
 
 # ---- BOTH-SOURCE: files, SourceDisksFiles, SourceDisksNames --------
 

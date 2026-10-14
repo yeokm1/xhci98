@@ -1015,6 +1015,27 @@ asset rather than a tracked file for the same reason (an asset can be
 withdrawn, and a git blob cannot be without rewriting history), and it was
 withdrawn before it carried anything.
 
+### The Windows 2000 F6 option: files the user copies, not the media
+
+Decided by the owner on 2026-10-14. Windows 2000's text-mode Setup lays
+down `hidusb.sys` and `usbstor.sys` for a USB keyboard, mouse or stick on
+the xHCI controller but not `usbd.sys`, `hidclass.sys` or `hidparse.sys`,
+which they import, and the first GUI-mode boot stops (design record 13
+section 5.6, limit 7). From `2.4.0.0` the 32-bit `txtsetup.oem` has a
+second F6 entry, for Windows 2000 only, that copies those three files from
+the F6 floppy; the release notes tell the user to copy them there,
+`USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` unchanged, from the `I386`
+folder of the user's own Windows 2000 CD. What is published is
+`txtsetup.oem` naming the three files, and the instructions. The release
+download and this repository carry none of the three, under either name:
+the release still carries no Microsoft file, `PKG-MSFILE` (in
+`check-inf.ps1` and `check-txtsetup-oem.ps1`) refuses a staged package
+holding any of them or the compressed name of any file it refuses, and
+`OEM-W2K` admits the three names in `txtsetup.oem` only on that entry's
+lines. The legs that read the route used copies taken from the
+development machine's own Windows 2000 SP4 CD image, in a git-ignored
+directory (`out\p38-matrix\legs\f6w2k\`).
+
 ### The GitHub release download carried three of them, until 1.0.0.1
 
 Decided by the maintainer for the two `usbd.sys` builds, extended to
