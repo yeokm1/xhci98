@@ -486,6 +486,17 @@ announced already approved), `cm.action.uuid0=4DE23D20` and
 `tbt.icm.connected` then `tbt.icm.approve-withheld`. Windows 2000's
 DbgPrint path gave the same lines.
 
+**The final build, read again.** The `qemu` flavour of the reviewed
+driver (commit `08eb9304`, built x86 `all` and `-amd64 all` with every
+gate) replaced the earlier one on the 98 SE guest through Device
+Manager's Update Driver and Have Disk: the old instance's stop stopped the
+rings and then sent `0x07`, logging the device table and its counters
+(`cm.icm.approve.withheld=00000001`); the new one bound (`0x23`, driver
+ready, the device announced `approved 0`, get route) and, at
+`XhciCmApprove` 0, withheld it; `device_del enc0` then gave
+`cm.action.tunnel-down=00000003`. The 2000 legs were not repeated on that
+build.
+
 **What is not read here.** Re-enumeration (the stub logs; 39-A.5), safe
 eject (39-A.8), the other rows (only Alpine Ridge is modelled), suspend and
 resume, shutdown, surprise removal of the NHI itself, and the `release` and
