@@ -36,6 +36,8 @@
 #
 # Under powershell -File, a value that starts with '-' needs the colon form,
 # -Extra:-S; -TracePattern takes a comma-separated list ('usb4_*,pci_nvme_*').
+# Several -Extra values need -Command: powershell -Command "& scripts\usb4\
+# run-usb4-guest.ps1 -Guest win98 -Extra '-device','usb4-debug-port'".
 param(
     [Parameter(Mandatory = $true)]
     [ValidateSet('win98', 'winme', 'win2k-xonly', 'win2k-smp', 'winxp', 'winxp64',
@@ -298,12 +300,23 @@ if ($Trace) {
     foreach ($t in (($TracePattern -join ',') -split ',')) { Add @('-trace', $t) }
     Add @('-D', $trc)
 }
-# -Extra may not take over what this script owns: the monitor and display
-# ports, the disks, and the vCPU and memory counts the admission check budgets.
-$refused = @('-qmp', '-monitor', '-vnc', '-spice', '-drive', '-blockdev', '-hda', '-hdb', '-hdc', '-hdd',
-             '-cdrom', '-smp', '-m', '-pidfile', '-incoming', '-loadvm', '-snapshot', '-accel', '-machine')
-foreach ($x in $Extra) {
-    if ($refused -contains $x.ToLowerInvariant()) { throw "-Extra may not carry $x (the launcher owns it)" }
+# -Extra is an allowlist, so it cannot take over what this script owns (the
+# monitor and display ports, the disks, the vCPU and memory counts the
+# admission check budgets): -S alone, and -device, -global, -trace and -d
+# each with one value that names no drive, file or chardev.
+$i = 0
+while ($i -lt $Extra.Count) {
+    $x = $Extra[$i]
+    if ($x -ceq '-S') { $i++; continue }
+    if (@('-device', '-global', '-trace', '-d') -cnotcontains $x) {
+        throw "-Extra may carry only -S, -device, -global, -trace and -d (got $x)"
+    }
+    if ($i + 1 -ge $Extra.Count) { throw "-Extra $x needs a value" }
+    $v = $Extra[$i + 1]
+    if ($v -match '(^|,)(drive|file|filename|chardev|netdev|romfile)=' -or $v -match '^-') {
+        throw "-Extra $x $v names a backend or file; the launcher owns those"
+    }
+    $i += 2
 }
 Add $Extra
 
@@ -345,6 +358,8 @@ function Get-QemuVcpus([string]$cl) {
     $v = $Matches[1]
     if ($v -match '^(\d+)(,|$)') { return [int]$Matches[1] }
     if ($v -match '(^|,)cpus=(\d+)') { return [int]$Matches[2] }
+    # QEMU starts maxcpus vCPUs when cpus is omitted
+    if ($v -match '(^|,)maxcpus=(\d+)') { return [int]$Matches[2] }
     $n = 1
     foreach ($k in @('sockets', 'dies', 'clusters', 'cores', 'threads')) {
         if ($v -match "(^|,)$k=(\d+)") { $n *= [int]$Matches[2] }
@@ -470,7 +485,7 @@ try {
         name = $Name; guest = $Guest; profile = $Usb4Profile; bios = $Bios; deviceAtBoot = $DeviceAtBoot
         hostModel = $HostModel; preosCm = [bool]$PreosCm; usb3 = [bool]$Usb3; dock = [bool]$Dock
         bootStrict = [bool]$BootStrict; dvorak = ($Guest -like 'win2k*')
-        qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; created = $created; qemu = $Qemu
+        qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; created = $created; qemu = $proc.ExecutablePath
         token = $token; branch = $branch; tag = $Tag
         runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
         debugcon = $dbg; serial = $ser; trace = $(if ($Trace) { $trc } else { $null }); out = $out

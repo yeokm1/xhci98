@@ -51,19 +51,26 @@ if (-not (Test-Path $runJson)) { throw "no run.json for '$Name' ($runJson)" }
 $run = Get-Content $runJson -Raw | ConvertFrom-Json
 if ($run.qmpPort -lt 47900 -or $run.qmpPort -gt 47999) { throw "run.json names port $($run.qmpPort), outside 47900-47999" }
 
-# True only for the very QEMU process run-usb4-guest.ps1 started: same pid,
-# same creation time, same executable, and listening on this run's QMP port.
-# A recycled pid or a stale run.json never qualifies.
-function Test-PidAlive([int]$procId) {
-    if ($procId -le 0) { return $false }
+# Is the recorded process still the very QEMU run-usb4-guest.ps1 started?
+#   ours  - same pid, creation time and executable, listening on this
+#           run's QMP port
+#   gone  - no process with that pid, or one created at another time (the
+#           guest exited and the pid was reused)
+#   other - a process with that pid whose identity cannot be confirmed
+#           (also every run.json without the identity fields); nothing is
+#           sent to it and its lock is left alone
+function Get-RunState {
+    $procId = [int]$run.pid
+    if ($procId -le 0) { return 'gone' }
     $p = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
-    if (-not $p -or $p.Name -notlike 'qemu-system*') { return $false }
-    if (-not $p.CommandLine -or $p.CommandLine -notlike "*tcp:127.0.0.1:$($run.qmpPort),*") { return $false }
-    if ($run.PSObject.Properties['qemu'] -and $run.qemu -and $p.ExecutablePath -ine $run.qemu) { return $false }
-    if ($run.PSObject.Properties['created'] -and $run.created) {
-        if ($p.CreationDate.ToUniversalTime().ToString('o') -ne $run.created) { return $false }
-    }
-    return $true
+    if (-not $p) { return 'gone' }
+    $hasId = ($run.PSObject.Properties['created'] -and $run.created -and $run.PSObject.Properties['qemu'] -and $run.qemu)
+    if (-not $hasId) { return 'other' }
+    if ($p.CreationDate.ToUniversalTime().ToString('o') -ne $run.created) { return 'gone' }
+    if (-not $p.ExecutablePath -or
+        [System.IO.Path]::GetFullPath($p.ExecutablePath) -ine [System.IO.Path]::GetFullPath($run.qemu)) { return 'other' }
+    if (-not $p.CommandLine -or $p.CommandLine -notlike "*tcp:127.0.0.1:$($run.qmpPort),*") { return 'other' }
+    return 'ours'
 }
 # Frees the guest lock only if it is still this run's (its token), under the
 # host's admission lock so a launch that is replacing it cannot interleave.
@@ -162,17 +169,20 @@ function Get-Key([char]$c, [bool]$dvorak) {
 # ---------------------------------------------------------------- verbs
 switch ($Verb) {
     'release' {
-        if (Test-PidAlive ([int]$run.pid)) { throw "pid $($run.pid) still runs; use quit" }
+        $st = Get-RunState
+        if ($st -ne 'gone') { throw "pid $($run.pid) still runs ($st); use quit, or stop it by hand" }
         Clear-Lock; return
     }
     'wait' {
         $deadline = (Get-Date).AddSeconds($TimeoutSec)
-        while ((Test-PidAlive ([int]$run.pid)) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-        if (Test-PidAlive ([int]$run.pid)) { throw "pid $($run.pid) still runs after $TimeoutSec s" }
+        while ((Get-RunState) -ne 'gone' -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+        if ((Get-RunState) -ne 'gone') { throw "pid $($run.pid) still runs after $TimeoutSec s" }
         Clear-Lock; return
     }
 }
-if (-not (Test-PidAlive ([int]$run.pid))) { Clear-Lock; throw "$Name (pid $($run.pid)) is not running" }
+$state = Get-RunState
+if ($state -eq 'gone') { Clear-Lock; throw "$Name (pid $($run.pid)) is not running" }
+if ($state -ne 'ours') { throw "pid $($run.pid) cannot be confirmed as the QEMU this launcher started for $Name; nothing sent" }
 
 Open-Qmp
 try {
@@ -235,8 +245,8 @@ try {
             try { [void](Invoke-Qmp 'quit' $null) } catch { Write-Verbose $_.Exception.Message }
             Close-Qmp
             $deadline = (Get-Date).AddSeconds($TimeoutSec)
-            while ((Test-PidAlive ([int]$run.pid)) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-            if (Test-PidAlive ([int]$run.pid)) { throw "pid $($run.pid) did not exit" }
+            while ((Get-RunState) -eq 'ours' -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+            if ((Get-RunState) -ne 'gone') { throw "pid $($run.pid) did not exit" }
             Clear-Lock
             Write-Output "$Name stopped"
         }
