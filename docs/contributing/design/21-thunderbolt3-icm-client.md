@@ -617,15 +617,25 @@ the bridge on Windows 2000. The split:
   lines alone (one per id of the list below), undecorated DDInstall sections with `DevLoader=*NTKERN` and
   `NTMPDriver=xhcicm.sys` for Windows 98's 16-bit engine, `.NTx86` sections
   with `AddService` for 2000 and XP, `.NTx86.6.0` sections for Vista and 7
-  that copy the driver alone. It never names a bridge.
-- `xhcicmf.inf`, the filter's, NT only: `Signature="$Windows NT$"`, which
-  Windows 98's engine ignores outright - the INF gate's own `BOTH-VERSION`
-  text records that fact (`check-inf.ps1`), and `39-0.4` reads it on 98 SE
-  and ME with the file present beside the other - with an undecorated
-  `[CmFilterModels]` carrying one line per bridge id of the list below, for
-  example `%TunnelDesc%=CmFilter.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`, for
-  Windows 2000, and `.NTx86.6.0` sections for Vista and 7. Its DDInstall adds the
-  `UpperFilters` value and the service and installs no function driver.
+  that copy the driver alone. It never names a bridge. Since task `40-0.2`
+  it also carries design record 22 section 3.7's USB4 lines: the Intel
+  hosts with no firmware connection manager, AMD's `1022:1668` and
+  `1022:1669`, and the class line `PCI\CC_0C0340` the id lines outrank.
+- `xhcicmf.inf`, the filter's, NT only: `Signature="$Windows NT$"`, with an
+  undecorated `[CmFilterModels]` carrying one line per tunnel-port id of
+  the lists below, each in the `&CC_0604` form, for example
+  `%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`, for Windows 2000,
+  and `.NTx86.6.0` sections for Vista and 7; no undecorated install
+  section. Its DDInstall adds the `UpperFilters` value and the service and
+  installs no function driver. **The signature does not keep it from
+  Windows 98 SE and ME** (`39-0.4`, `runs/run-39.md`): both engines read a
+  `$Windows NT$` INF; a plain `PCI\VEN_8086&DEV_15C0` line was installed
+  outright on the tunnel bridge of a 98 SE guest, and the `&CC_0604` form,
+  though their automatic searches did not choose it, was listed to a user
+  browsing for a driver. So the package stages it in an `nt\`
+  subdirectory of each flavour directory, never beside `xhcicm.inf` where
+  a 98 user points the wizard, and its one source disk is `..`, the
+  flavour directory where `xhcicm.sys` is.
 - `xhcicm-amd64.inf`, the 64-bit package's, carries the `NTamd64,NTamd64.6.0`
   pair for the NHI and no undecorated section, held by the gate's
   `PATH-NO9X` and `PATH-MFGDEC` rules as the other amd64 INF is; the filter's
@@ -633,14 +643,18 @@ the bridge on Windows 2000. The split:
 
 `LayoutFile` is not needed by any of them: the driver imports nothing the OS
 has to supply. The gate for the four is `check-cm-inf.ps1`, with the rule
-`CM-NO9XBRIDGE`: no bridge id in any `$CHICAGO$` INF of this driver, and
-the filter INF's signature held to `$Windows NT$`.
+`CM-NO9XBRIDGE`: no bridge id in any `$CHICAGO$` INF of this driver, the
+filter INF's signature held to `$Windows NT$`, no undecorated install
+section in it, and in a staged package the filter INF in `nt\` alone;
+`CM-PORTCC` holds every filter line to the `&CC_0604` form, `CM-CLASSLINE`
+the NHI INF to its one class line, and `CM-NOROUTER` every INF to no
+device router's or unclaimed controller's id.
 
 Model lines, as the engines see them:
 
 | Engine | What it finds |
 |---|---|
-| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` and a line of the same shape for each other NHI id; `xhcicmf.inf` ignored by signature |
+| Windows 98, ME | `xhcicm.inf` `[CmModels]`: `%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF` and a line of the same shape for each other NHI id, the USB4 lines and the class line; `xhcicmf.inf` not on their path (it is in `nt\`; they would read it there too, `39-0.4`) |
 | Windows 2000, XP | the same NHI lines through `Cm.Dev.NTx86`; `xhcicmf.inf` `[CmFilterModels]`: the bridge lines |
 | Vista, 7 | the `.NTx86.6.0` halves of both |
 | x64 | the two amd64 INFs |
@@ -654,16 +668,24 @@ get the filter too. The filter attaches to each and acts only on the ones
 the NHI marks active (section 3.2), which are its own controller's tunnel
 ports (section 6.3) and never a device's, so matching the others costs
 nothing. On an integrated controller the lines match PCI Express root
-ports of the processor; the same rule holds. Whether a vendor-id match
-from this INF can add an `UpperFilters` value to a port that `pci.inf`
-already serves, without displacing `pci.inf`'s own install, is the
-`39-0.4` reading that decision D2 waits on: the candidate shapes are an INF
-section that includes and needs `machine.inf`'s PCI-to-PCI bridge section
-and adds the value, or a class filter, which must then be boot-start or the
-next boot stops with `0x7B` (`REENUM-EXPERIMENT`, "Windows 2000 SP4",
-mechanism A). The device-specific route is the one to prove first, because a
-System-class filter touches every bus on the machine. The packaging stage
-and `make-package.ps1`'s footprint files carry both INFs per flavour.
+ports of the processor; the same rule holds. **Decision D2 is answered by
+`39-0.4` (`runs/run-39.md`): the device-specific route.** An INF whose
+DDInstall includes `machine.inf` and needs `PCI_DRV`, `PCI_DRV.HW` and
+`PCI_DRV.Services` (the section names of both the 2000 SP4 and the XP SP3
+`machine.inf`) adds a device-specific `UpperFilters` value without
+displacing `pci.sys` as the port's service, on 2000, XP and 7: no class
+filter, no boot start, no `0x7B` across restarts. Windows 2000 takes the
+INF unforced; XP and 7 rank the unsigned INF `0x8005` against
+`machine.inf`'s signed `0x2004` and keep `machine.inf` unless the install
+is forced, which the installer does (`UpdateDriverForPlugAndPlayDevices`
+with `INSTALLFLAG_FORCE`, the install tool of task `40.5`, design record 23) and a user by hand does
+through Update Driver, "Don't search", Have Disk. A port that first
+appears after the install (a controller absent at boot) gets `machine.inf`
+again on XP and later, so the install route is re-run, or the filter
+re-applied, once the tree exists. Read on the 32-bit guests only; the
+append flag `0x00010008`, the `.NTx86.6.0` models section and the 64-bit
+guests are not read yet. The packaging stage carries both INFs per
+flavour, the filter's in `nt\`.
 
 **The id list (decision D9, owner 2026-10-15, widened the same day to
 every Intel firmware-connection-manager host Linux addresses).** Two sources,
@@ -756,18 +778,59 @@ which it binds only by class and an Apple subsystem id, as software
 connection manager targets, not ICM rows; Apple machines, excluded as a
 platform policy (section 1.4.2 test 1), not by id; the USB controllers of
 every part,
-which are `xhci98.sys`'s by class; and the USB4 hosts with no firmware
+which are `xhci98.sys`'s by class. The USB4 hosts with no firmware
 connection manager (Lunar Lake `A833`, `A834`, Panther Lake `E333`,
 `E334`, `E433`, `E434`, Wildcat Lake `4D33`, Barlow Ridge `5781`, `5784`,
 and any class `0x0C0340` host, AMD's Pink Sardine `1022:1668` and
-`1022:1669`, named in FreeBSD's `nhi_reg.h`, among them), which are Phase
-40's (design record 22). A
+`1022:1669`, named in FreeBSD's `nhi_reg.h`, among them) are Phase 40's
+(design record 22); task `40-0.2` added their lines to the INFs (below).
+A
 name in either source is not evidence that a part behaves like the one
 captured; that is what "untested" means in the last column. A part with
 two Thunderbolt ports (the DSL6540, for one, where the DSL6340 has one)
 has two tunnel ports, which section 6.3's rule takes as a set; the set is
 discovered on the machine, never assumed from the part's name. The warnings are the release-notes line of
 section 1.4.6 and the README's hardware list.
+
+**The USB4 lines (task `40-0.2`, design record 22 section 3.7).** In
+`xhcicm.inf` and `xhcicm-amd64.inf`, under `%U4Desc%` ("xHCI98 USB4 Host
+Interface", decision U12): `PCI\VEN_8086&DEV_xxxx` for `A833`, `A834`,
+`E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784`; `PCI\VEN_1022&DEV_1668`
+and `DEV_1669`; and `PCI\CC_0C0340`, which the id lines outrank. Windows 98
+SE matches the class line: on the emulator's generic host `1B36:00F4` (class
+`0C0340`, no id line of its own) its wizard offered `xhcicm.inf` from the
+transfer disk, and the driver started, "working properly", in its INERT
+start (task `40-0.2`, 2026-10-15, development host A). In the
+filter INFs, the USB4-only hosts' tunnel ports where the same `pci.ids`
+(`2026.10.14`) labels a port as such, and the emulator's:
+
+| Id | pci.ids name | With | Read here |
+|---|---|---|---|
+| `8086:5780` | JHL9580 Thunderbolt 5 80/120G Bridge [Barlow Ridge Host 80G 2023] | Barlow Ridge `5781` | untested |
+| `8086:5783` | JHL9540 Thunderbolt 4 Bridge [Barlow Ridge Host 40G 2023] | Barlow Ridge `5784` | untested |
+| `1022:14CD`, `1022:14EF` | Family 19h USB4/Thunderbolt PCIe tunnel | AMD's USB4 hosts | untested |
+| `1022:150A` | Strix/Strix Halo PCIe USB4 Bridge | AMD's USB4 hosts | untested |
+| `1B21:2423` | ASM4242 PCIe Switch Downstream Port | ASMedia ASM4242 (class `0C0340` host) | untested |
+| `1B36:0001` | the emulator's i440FX `usb4-tunnel-bridge` (QEMU's PCI-to-PCI bridge id) | `usb4-emu` | [obs] `runs/run-39.md` 39-0.7 |
+| `1B36:000C` | the emulator's q35 `usb4-tunnel-port` (QEMU's PCIe root port id) | `usb4-emu` | not read here |
+
+The listing labels no tunnel port of Lunar Lake, Panther Lake or Wildcat
+Lake (Panther Lake's "USB Type-C Subsystem PCIe Root Port #24", `E337`
+and `E437`, is not labelled a Thunderbolt or USB4 port, and Meteor Lake's
+`7EC4` to `7EC7` of the same name are left out on the same reading); those
+machines take their set from `XhciCmTunnelBridge`. `1B36:0001` is QEMU's
+generic bridge, so on any QEMU machine the filter attaches to every such
+bridge and acts on none the NHI does not assign. On the Windows 2000 guest with the
+Alpine Ridge tree, Update Driver on the tunnel port `02:01.0` pointed at the
+`nt\` directory found `xhcicmf.inf` as a closer match than `machine.inf`,
+installed it unforced with no prompt and no restart, and left the port
+"working properly" with `pci.sys` and `xhcicm.sys` as its driver files
+(task `40-0.2`, the same day; `xhcicm.sys` was already in place from the NHI's
+install, so that reading does not show the `..` source path being used). The excluded ids are the
+gate's `CM-NOROUTER` list: the device routers and device-side bridges
+(`15EF`, Goshen Ridge `0B26`, `5786`, `57A4`, AMD's `151C` and `151D`
+"USB4 Router", ASMedia's ASM2464PD `2463`), the USB-only NHIs and the
+unclaimed generations above.
 
 Class and names: `Class=System` with its GUID on the NT paths and `Class=System`
 undecorated for 98 (which also knows that class); device descriptions
@@ -1296,6 +1359,11 @@ reports the vanished one missing (surprise removal, with Windows 2000's
 "Unsafe Removal of Device" dialog on every tunnel down that was not
 preceded by an eject, which the experiment saw on every cycle; section 7.4
 says what safe eject changes).
+
+The filter is installed by `xhcicmf.inf` from the package's `nt\`
+directory, the device-specific route of decision D2 (section 3.3): unforced
+on Windows 2000, forced on XP and 7 by the installer, which the unsigned
+INF's rank requires (`39-0.4`).
 
 The filter does no device work: PnP IRPs other than the five it watches
 go down with `IoSkipCurrentIrpStackLocation`; power IRPs go down the way
@@ -1904,7 +1972,7 @@ its default under the don't-overwrite flag, each read once at start:
 
 | Value | Default | Meaning |
 |---|---|---|
-| `XhciCmMode` | 1 | the master switch (decision D11): 0 off - the inert start of section 1.4.2: the driver binds the NHI, logs it, touches no ring, approves nothing, re-enumerates nothing; 1 auto - section 1.4.2's selection: the ICM client where its four tests pass, design record 22's software connection manager where that record's selection takes the start, and the inert start otherwise; 2 the experimental route for an Intel NHI id the profile table does not list: the ICM client with the Alpine Ridge table, at the user's own risk (the `XhciIntelPortSwitch` 2 pattern, said in the same words in the README and release notes). A registry value cannot make PnP bind a driver to an id its INF does not name, so 2 also needs the id matched: the user adds a model line for it to a copy of `xhcicm.inf` and installs through Have Disk, a procedure the README spells out. What 2 bypasses is the id-to-candidate lookup alone; the readiness, ownership and version tests of section 1.4.2 still give the inert start when they fail; 3 the software connection manager's own selection on any matched NHI (design record 22's to define; never a takeover of a domain whose ICM test passed) |
+| `XhciCmMode` | 1 | the master switch (decision D11): 0 off - the inert start of section 1.4.2: the driver binds the NHI, logs it, touches no ring, approves nothing, re-enumerates nothing; 1 auto - section 1.4.2's selection: the ICM client where its four tests pass, design record 22's software connection manager where that record's selection takes the start, and the inert start otherwise; 2 the experimental route for an Intel NHI id the profile table does not list: the ICM client with the Alpine Ridge table, at the user's own risk (the `XhciIntelPortSwitch` 2 pattern, said in the same words in the README and release notes). A registry value cannot make PnP bind a driver to an id its INF does not name, so 2 also needs the id matched: the user adds a model line for it to a copy of `xhcicm.inf` and installs through Have Disk, a procedure the README spells out. What 2 bypasses is the id-to-candidate lookup alone; the readiness, ownership and version tests of section 1.4.2 still give the inert start when they fail; 3 the experimental user override that forces design record 22's software connection manager (its section 3.6, decision U1), at the user's own risk: refused on the Falcon, Alpine and Titan Ridge hosts and on Ice Lake, whose host routers are not USB4 routers, and on an NHI whose ids were not read; never a takeover of a domain whose firmware connection manager runs (`ICM_EN` read set vetoes it on the Intel rows); and it bypasses none of the readiness, protocol, tunnel-preservation and DMA-cleanup tests |
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
@@ -2286,7 +2354,7 @@ revised to it in draft 6.
 | Id | Decision | Taken | Sections |
 |---|---|---|---|
 | D1 | One binary or two | **Owner, 2026-10-15, as recommended**: a second binary, `xhcicm.sys` in `src\cm\`, with its own INFs, allowlists and gate | 3.1 |
-| D2 | How the NT filter is installed | **Owner, 2026-10-15, as recommended**: a separate NT-only INF (`$Windows NT$`, undecorated Models for Windows 2000) adding a device-specific `UpperFilters` on the switch port ids, proved by the `39-0.4` reading; a class filter only if that route cannot be made to install, and then boot-start | 3.2, 3.3, 6.2 |
+| D2 | How the NT filter is installed | **Owner, 2026-10-15, as recommended; answered by `39-0.4`**: the device-specific route - a separate NT-only INF (`$Windows NT$`, undecorated Models for Windows 2000, `&CC_0604` lines only, no undecorated install section) whose DDInstall includes `machine.inf` and needs `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services`, adding a device-specific `UpperFilters` with `pci.sys` kept as the service; unforced on 2000, forced on XP and 7 (the unsigned INF ranks `0x8005` against `machine.inf`'s `0x2004`; the installer forces it, a user by hand uses Have Disk); staged in `nt\`, since Windows 98 SE and ME read `$Windows NT$` INFs. No class filter | 3.2, 3.3, 6.2 |
 | D3 | Interrupts | **Owner, 2026-10-15, as recommended**: none; polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware | 4.3 |
 | D4 | Approval policy | **Owner, 2026-10-14**: `XhciCmApprove` 0 and 1 only, 1 the default, approve everything, stated plainly as a security property in the release notes; nothing remembered, and the record says why that is harmless; "approve known devices only, from a UUID list under the service key, filled by hand" listed as a later option, not a value | 5.4 |
 | D5 | What to do about a controller absent at boot (Assist on, nothing attached) | **Owner, 2026-10-15, as recommended**: nothing; a known limitation; force power is an ACPI WMI method out of reach on 98 and unread on NT | 1.3, 2 |
