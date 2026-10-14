@@ -442,7 +442,9 @@ task 39-0.7's launcher (`run-usb4-guest.ps1 -Usb4Profile tb3`, `Bios
 OFF_OFF`, the device router `enc0` with its NVMe attached at power-on, the
 root bridge at slot 6), used read-only from a copy outside the tree. Guests
 `win98` and `win2k-xonly` from their own overlays (`vm\usb4\nhi-98`,
-`vm\usb4\nhi-2k`), QMP and VNC on 47960 to 47963, `-trace usb4_*`, the
+`vm\usb4\nhi-2k`; `vm\win98.img` carries the frozen `1.x` miniport under
+NUSB, which these legs neither need nor touch, the NHI driver being a
+binary of its own), QMP and VNC on 47960 to 47963, `-trace usb4_*`, the
 package's `xhcicm.inf` and `xhcicm.sys` on the VVFAT transfer drive (D: on
 98 SE, E: on 2000). The binary was the `qemu` flavour of commit
 `4e88bf3d` (the driver after its first review round); the later rounds
