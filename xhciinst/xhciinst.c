@@ -190,6 +190,8 @@ typedef struct _DEVREC {
     int InfPathState;       /* 1 read, 0 absent, -1 unreadable */
 } DEVREC;
 
+static int is_controller(const DEVREC *d);
+
 /* The service groups of record 23 section 5.4. */
 #define INST_GROUPS 3
 static const char *const groupService[INST_GROUPS] = {
@@ -657,6 +659,20 @@ static void cm_prop(DWORD dn, ULONG prop, char *buf, DWORD cap, DWORD *bytes)
     }
 }
 
+static void reg9x_value(const char *id, const char *name, char *buf, DWORD cap)
+{
+    char path[INST_ID_CHARS + 16];
+    DWORD type;
+
+    inst_copy(path, "Enum\\", sizeof(path));
+    if (strlen(path) + strlen(id) >= sizeof(path)) {
+        return;
+    }
+    strcat(path, id);
+    if (!reg_text(HKEY_LOCAL_MACHINE, path, name, buf, cap - 2, &type)) {
+        buf[0] = '\0';
+    }
+}
 static void walk_cm(DWORD dn, int depth)
 {
     DWORD child;
@@ -676,6 +692,25 @@ static void walk_cm(DWORD dn, int depth)
             cm_prop(dn, INST_CM_DRP_HARDWAREID, d->Hw, sizeof(d->Hw), &d->HwBytes);
             cm_prop(dn, INST_CM_DRP_COMPATIBLEIDS, d->Compat, sizeof(d->Compat),
                     &d->CompatBytes);
+            if (!envNow.Nt) {
+                /* 98 and ME keep the lists as one comma-separated string in
+                 * HKLM\Enum\<device id>; read them there when the
+                 * configuration manager does not answer. */
+                if (d->Hw[0] == '\0') {
+                    reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw));
+                }
+                if (d->Compat[0] == '\0') {
+                    reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat));
+                }
+                if (d->Driver[0] == '\0') {
+                    reg9x_value(d->Id, "Driver", d->Driver, sizeof(d->Driver));
+                }
+                if (d->Desc[0] == '\0') {
+                    reg9x_value(d->Id, "DeviceDesc", d->Desc, sizeof(d->Desc));
+                }
+                d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
+                d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
+            }
             cm_prop(dn, INST_CM_DRP_DRIVER, d->Driver, sizeof(d->Driver), NULL);
             cm_prop(dn, INST_CM_DRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
             if (api.Status(&status, &problem, dn, 0) == INST_CR_SUCCESS) {
@@ -685,6 +720,7 @@ static void walk_cm(DWORD dn, int depth)
             d->Present = 1;
             d->Inf = -1;
             dev_driver_values(d);
+            logonly("devnode %s | %s | %s | %s | %s\n", d->Id, d->Hw, d->Compat, d->Service, d->Driver);
             devCount++;
         }
         if (depth < 32 && api.Child(&child, dn, 0) == INST_CR_SUCCESS) {
@@ -853,6 +889,76 @@ static int scan_nt(void)
     }
     return 1;
 }
+/* 98 and ME: an xHCI controller whose New Hardware wizard was cancelled has
+ * no devnode until the next start, only its HKLM\Enum\PCI entry. List such
+ * an entry as a controller with no driver, so the printed steps name it;
+ * nothing is installed on 98 and ME either way (record 23 section 6). */
+static void registry_controllers_9x(void)
+{
+    HKEY pci;
+    HKEY dev;
+    char devName[INST_ID_CHARS];
+    char instName[INST_ID_CHARS];
+    DWORD i;
+    DWORD j;
+    DWORD n;
+    int k;
+    DEVREC *d;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "Enum\\PCI", 0, KEY_READ, &pci) !=
+        ERROR_SUCCESS) {
+        return;
+    }
+    for (i = 0;; i++) {
+        n = sizeof(devName);
+        if (RegEnumKeyExA(pci, i, devName, &n, NULL, NULL, NULL, NULL) !=
+            ERROR_SUCCESS) {
+            break;
+        }
+        if (RegOpenKeyExA(pci, devName, 0, KEY_READ, &dev) != ERROR_SUCCESS) {
+            continue;
+        }
+        for (j = 0;; j++) {
+            int known = 0;
+            n = sizeof(instName);
+            if (RegEnumKeyExA(dev, j, instName, &n, NULL, NULL, NULL, NULL) !=
+                ERROR_SUCCESS) {
+                break;
+            }
+            if (devCount >= INST_MAX_DEVS) {
+                break;
+            }
+            d = &devs[devCount];
+            memset(d, 0, sizeof(*d));
+            _snprintf(d->Id, sizeof(d->Id) - 1, "PCI\\%s\\%s", devName, instName);
+            for (k = 0; k < devCount; k++) {
+                if (inst_eq(devs[k].Id, d->Id)) {
+                    known = 1;
+                    break;
+                }
+            }
+            if (known) {
+                continue;
+            }
+            reg9x_value(d->Id, "HardwareID", d->Hw, sizeof(d->Hw));
+            reg9x_value(d->Id, "CompatibleIDs", d->Compat, sizeof(d->Compat));
+            reg9x_value(d->Id, "Driver", d->Driver, sizeof(d->Driver));
+            reg9x_value(d->Id, "DeviceDesc", d->Desc, sizeof(d->Desc));
+            d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
+            d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
+            if (!is_controller(d) || d->Driver[0] != '\0') {
+                continue;
+            }
+            d->Present = 1;
+            d->Inf = -1;
+            dev_driver_values(d);
+            logonly("devnode (registry only, no driver) %s\n", d->Id);
+            devCount++;
+        }
+        RegCloseKey(dev);
+    }
+    RegCloseKey(pci);
+}
 static int scan_9x(void)
 {
     DWORD rootDn;
@@ -870,6 +976,9 @@ static int scan_9x(void)
         return 0;
     }
     walk_cm(rootDn, 0);
+    if (!devTruncated) {
+        registry_controllers_9x();
+    }
     return !devTruncated;
 }
 

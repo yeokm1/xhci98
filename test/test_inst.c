@@ -335,6 +335,16 @@ static void test_ids(void)
     CHECK(inst_msz_has(hw, sizeof(hw), "pci\\ven_8086&dev_8c31"), "msz, no case");
     CHECK(!inst_msz_has(hw, sizeof(hw), "PCI\\VEN_8086"), "whole entries only");
     CHECK(!inst_msz_has(NULL, 0, "x"), "NULL msz");
+    {
+        char s98[64];
+        size_t nb;
+        strcpy(s98, "PCI\\VEN_1B36&DEV_000D,PCI\\CC_0C0330");
+        nb = inst_ids_split(s98, sizeof(s98));
+        CHECK(inst_msz_has(s98, nb, "PCI\\CC_0C0330"), "98's comma list split");
+        CHECK(inst_msz_has(s98, nb, "PCI\\VEN_1B36&DEV_000D"), "its first id");
+        s98[0] = '\0';
+        CHECK_EQ(inst_ids_split(s98, sizeof(s98)), 0, "an empty list");
+    }
     ids.Count = 1;
     ids.Overflow = 0;
     strcpy(ids.Id[0], "PCI\\CC_0C0330");

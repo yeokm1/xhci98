@@ -125,6 +125,12 @@ int inst_inf_is_ours(const char *text);
  * bytes) holds id, compared without case. */
 int inst_msz_has(const char *msz, size_t bytes, const char *id);
 
+/* Windows 98 SE and ME answer a hardware or compatible id list as one
+ * comma-separated string: split it into a multi-string in place (ids hold no
+ * comma). cap is the buffer's size; returns the multi-string's length in
+ * bytes, the final NUL pair included. */
+size_t inst_ids_split(char *buf, size_t cap);
+
 /* The first id of the hardware or compatible list that ids holds, or -1. */
 int inst_ids_match(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const INST_IDLIST *ids);
