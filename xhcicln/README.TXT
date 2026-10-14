@@ -56,9 +56,11 @@ controller's, or any file, driver package or service.
 It removes nothing at all - and says why - when an old devnode is present
 (the old driver is running), when no controller of this project is present
 and started with its new root hub, or when a check cannot be answered for
-certain. For its whole run it keeps each controller's device open, so
-Windows refuses to stop or replace the driver while it works, and it checks
-the controllers again around each removal.
+certain. One such controller is enough: with two, one of them uninstalled
+and the other running, it removes the old entries of both. For its whole
+run it keeps each controller's device open, so Windows refuses to stop or
+replace the driver while it works, and it checks the controllers again
+around each removal.
 
 Windows 98 SE and ME: list only
 -------------------------------
@@ -66,7 +68,8 @@ Windows 98 SE and ME: list only
 On Windows 98 SE and ME this release lists the old entries and removes
 nothing. Those systems do not refuse to stop a driver whose device is held
 open, so nothing would keep an older driver from loading during a run, and
-the route that would remove an entry there has not yet been read on them.
+the system call that would remove an entry there (CM_Uninstall_DevNode)
+answers success and removes nothing on both, as read in virtual machines.
 The entries are inert; leave them.
 
 Exit codes

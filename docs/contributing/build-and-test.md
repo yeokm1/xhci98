@@ -6777,7 +6777,11 @@ for each PDO with a Dx still pended), `qemu.susp.done` (each D-IRP the
 executor's paths complete, with the claiming path), and the timer thread's
 `poll.timer.call` (before the injected delay) and `poll.timer.return`
 (after the call), each with the start's serial and the call's sequence
-number.
+number. Read in the Phase 38 VM matrix (2026-10-14): with
+`XhciQemuSuspHoldDx` 1 the shutdown's Dx IRP is held as well and the
+shutdown hangs, so clear it before a shutdown; and `qemu.stop.dx` never
+appeared, since Windows removed the children before the controller's
+stop (design record 15 section 7.2's leg T3).
 
 **The `M86` trace** (`qemu` flavour; record 18 section 9). The
 requirements filter writes every list it receives (`R`), rewrites (`I`)

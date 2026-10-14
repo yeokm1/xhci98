@@ -2309,6 +2309,15 @@ From review round 1, answered by the owner the same day:
   conservative policy. Recommended (b): whether 0.96 defines or honours a
   Frame ID, and what bit 11 means there, are unread (4.14.6).
 
+Confirmed by the owner on 2026-10-14:
+
+- **TSP in a Reset Endpoint command and SP in a Stop Endpoint command
+  below 1.0: kept as on 1.0.** A 0.96 controller gets the same TSP
+  (`XHCI_TRB_TSP`, the HCD's soft retry) and SP (`XHCI_TRB_SP`) as a 1.0
+  one, as Linux sets both with no version test (`xhci-ring.c:4459-4471`,
+  TSP on a soft reset; `4447-4457`, SP as its caller asks). What 0.96
+  defines for either bit is unread.
+
 #### 4.14.12 As built (2026-10-14)
 
 The code follows sections 4.14.4 to 4.14.10; what it adds or settles:

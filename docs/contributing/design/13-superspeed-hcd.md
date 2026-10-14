@@ -797,7 +797,8 @@ The limits, all of them the user's to know:
    ..."). `hidusb.SYS` read on the published `2.3.1.0` and on `2.4.0.0`,
    with a keyboard, a mouse and an audio device behind a hub and with a
    keyboard and a stick at root ports; `usbstor.SYS` read on `2.4.0.0`
-   with a stick at root port 1 and an audio device behind a hub
+   and on the published `2.3.1.0` (control `c3`, shot `k09`), with a
+   stick at root port 1 and an audio device behind a hub
    (`files-4b.txt`: `usbstor.sys` on the disk, no `usbd.sys`). Text mode
    and the Recovery Console are unaffected; an install with no USB
    keyboard, mouse or storage device on the controller during text mode
@@ -6443,6 +6444,15 @@ and ME legs find one that tells the old entry from the new by more than
 its name; otherwise it says that nothing needs the entries removed
 (10.13.6). Never (b), a direct registry deletion (D8).
 
+**Read (2026-10-14, the Phase 38 VM matrix, leg I8; runtime):** on 98 SE
+and on ME, `CM_LOCATE_DEVNODE_PHANTOM` located an old entry, and
+`CM_Uninstall_DevNode` is a stub there: it returned success and removed
+nothing. Route (a) therefore cannot work on either system, whatever the
+other readings show; the tool stays list-only there, as built, and a
+removal route on 98 SE and ME would need another call. The
+`HKEY_DYN_DATA` walk found no live `XHCI98\` entry, and `-remove` before
+the restart refused (exit 1) (`docs/contributing/runs/run-38.md`).
+
 **What it prints** (D9). With no argument it lists and removes nothing:
 each candidate's instance id, its `DeviceDesc`, its driver key and why it
 qualifies, then each refused, unknown or skipped entry and why. `-remove`
@@ -6550,14 +6560,21 @@ this design adds:
   the restart, on 98 SE (10.13.4).
 - **Two controllers**: one update leg on a two-controller guest (2000 or
   XP), the running versions read on both controllers before and after
-  (10.13.4).
+  (10.13.4). Read on XP (2026-10-14): one update made both controllers run
+  the new image at once; the second controller's driver key kept
+  `DriverVersion` `2.3.1.0` until an uninstall and rescan - an
+  observation, not a defect, since both run the one `xhci98.sys`.
 - **The tool**, on every target: its listing, `-remove`, the hidden view
   and `Enum` again; its global refusals forced once (run before the
   restart on 98 SE; run with the controller disabled, a present but
   unholdable controller, on one NT target; and run on one NT target
   with no present project controller - the controller uninstalled in
   Device Manager and not rescanned - while the old entries remain, the
-  refusal read before any question);
+  refusal read before any question; with a second project controller
+  still present and started the tool does not refuse, as its readme says
+  - "no controller of this project is present and started" is the
+  condition - and removes the uninstalled controller's old root hub
+  with the rest, read on XP 2026-10-14);
   on each NT target, whether a disable, an update and a rollback of the
   controller are vetoed while the tool holds its door open (10.13.8) - the
   result deciding whether removal is enabled there - with a stock
@@ -6631,7 +6648,7 @@ Windows 98 SE and ME in this release (2026-10-13).
 | D5 | The serial-less devices' new devnodes (10.13.5): the settings and COM numbers left on the old ones | (a) document it; (b) the tool also removes old children tied to an old parent by its `ParentIdPrefix` value; (c) carry the settings over | **(a) documented only**; the tool leaves every device and function devnode |
 | D6 | The tool's name and place | (a) `XHCICLN.EXE`, source `xhcicln\`, shipped `tools\xhcicln\`; (b) a mode of `XHCISNAP` | **(a)** |
 | D7 | The 64-bit targets | (a) a second, amd64 build `XHCICL64.EXE`; (b) the 32-bit build only | **(a), by design** (owner, after the review's opinion, replacing "only if the x64 leg shows the 32-bit build refused"): `XHCICL64.EXE` ships; the 32-bit build lists but refuses removal under WOW64; the 64-bit build tested on XP x64, Vista x64 and 7 x64 |
-| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: on 98 SE and ME the tool lists only in this release, since those systems give no exclusion against an older image loading during a run; (a) is enabled only once it, the `HKEY_DYN_DATA` walk and such an exclusion have been read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8) |
+| D8 | The route on 98 SE and ME | (a) `CM_Locate_DevNode` with `CM_LOCATE_DEVNODE_PHANTOM` and `CM_Uninstall_DevNode`; (b) a direct registry deletion; (c) list and point at Safe Mode's Device Manager | **(a), with (c) as the fallback** where the reading or the call refuses; never (b). After the review: on 98 SE and ME the tool lists only in this release, since those systems give no exclusion against an older image loading during a run; (a) is enabled only once it, the `HKEY_DYN_DATA` walk and such an exclusion have been read on both systems, and (c) names a Device Manager procedure only if the legs find one that tells the old entry from the new by more than its name (10.13.8). Read 2026-10-14: `CM_Uninstall_DevNode` is a stub on both systems (success, nothing removed), so (a) cannot work there; list only stands (10.13.8) |
 | D9 | The switches | no argument lists; `-remove` asks then removes; `-yes` skips the question; exit codes | **as written** (10.13.8), the exit codes now 0, 1, 2 and 3 (restart pending), a pending restart kept in the final report even when a later removal fails |
 | D10 | The global refusals | (a) both (an `XHCI98\` devnode present; no present `USB\XHCI98_ROOT_HUB`); (b) only the first | **(a) both**; after the review every project controller must be started, with a started `USB\XHCI98_ROOT_HUB` child and its door held open, and any test answering unknown refuses (10.13.8) |
 | D11 | If the refused device id moves: does the tool also remove old refused devnodes? | (a) yes; (b) no | **left to NOX.1** (38.12 deferred), whose decision 4 is that the tool leaves them (10.13.9) |

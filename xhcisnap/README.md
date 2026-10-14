@@ -768,7 +768,10 @@ counter dump goes to DebugView with `XhciLogDebugView` `1`.
 Task 38.3's twenty-three follow (176 to 198, `TmrSwitchRead` to
 `HlprTimerVerdict`; design record 15 section 7.2.9, record 18 section
 15.3), with a section of their own, **"the finer system timer while
-polling"**: `XhciPollFineTimer` as read and in effect, where
+polling"**: `XhciPollFineTimer` as read and in effect (a value present
+prints its number and "in effect off" or "ON", so the install's `0` reads
+"0; in effect off" after the name; "not set; in effect off (the
+default)" is printed only when the value is absent), where
 `ExSetTimerResolution` came from (the helper, `MmGetSystemRoutineAddress`,
 not found, or none on Windows 98 SE and ME), the timer thread's state, the
 value asked and whether a request is held now, the holds and releases

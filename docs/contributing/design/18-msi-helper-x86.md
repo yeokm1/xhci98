@@ -2005,6 +2005,18 @@ deletion included (section 15.12). The alternative, `StartType` 4 (disabled) by 
 `AddService` for `xhcimsi`, keeps a disabled service key on every updated
 machine for good, and is decision H3's other option.
 
+**Read (2026-10-14, the Phase 38 VM matrix, leg U4; runtime):** on Vista
+SP2 x86 and 7 SP1 x86, from the published `2.3.0.0` and `2.3.1.0`, the
+deletion was not queued: before the restart `xhcimsi.sys` was already
+gone from `System32\Drivers` and no `PendingFileRenameOperations` value
+existed, the `DelFiles` entry with `0x00010000` having deleted the loaded
+image at once; `Services\xhcimsi` read `Start` 4 with `DeleteFlag` 1. At
+the first boot after the restart there was no `xhcimsi` service, no event
+7026, `xhcihlpr` bound and the controller on its message. The design's
+outcome holds; its "at the restart" for the file does not, and the
+release notes say "at once" (`docs/contributing/runs/run-38.md`, evidence
+`out\p38-matrix\legs\vx86\up-prerestart.txt`, `up-b2-state.txt`).
+
 ### 15.8 The INF
 
 `src\xhci98.inf` only; the 64-bit INF still carries no helper.
@@ -2279,6 +2291,8 @@ is never made, and nothing of the timer is read.
   device, `XHCISNAP`'s file list); a second boot (no `xhcimsi` service
   key, no `xhcimsi.sys`). Under
   decision H3's other option, the service read disabled instead.
+  (Read: no deletion was queued, the file being deleted at once; section
+  15.7.)
 - **U5, the downgrade**: `2.3.1.0` over `2.4` on 7 x86 without
   uninstalling: both helpers load, the `2.3` HCD bound to `xhcimsi`,
   MSI as `2.3.1.0` had it.
@@ -2319,8 +2333,10 @@ is never made, and nothing of the timer is read.
 ### 15.14 As built (code, 2026-10-14)
 
 Written with the code (branch `p38-timer`); the design above stands
-except where this list says otherwise. Nothing of it has run in a guest:
-every leg of section 15.12 is owed.
+except where this list says otherwise. Nothing of it had run in a guest
+when it was written; most of section 15.12's legs were then read in the Phase 38
+VM matrix (`docs/contributing/runs/run-38.md`; U4's reading is in section
+15.7).
 
 - **The helper** (`src\hlpr\hlpr_entry.c`): `DriverEntry` as section 15.2,
   in its order - the `IoIsWdmVersionAvailable(1, 0x10)` refusal, the qemu

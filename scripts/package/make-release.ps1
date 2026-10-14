@@ -4300,7 +4300,8 @@ does not touch it.
     stick it used, but not the Windows files they need, such as
     usbd.sys, which it copies only with Microsoft's own USB controller
     drivers. The Windows 2000 entry, with the three files from the CD
-    on the floppy (above), copies them. Seen in virtual machines. Text
+    on the floppy (above), copies them. Seen in virtual machines, and
+    an earlier release's first entry does the same. Text
     mode and the Recovery Console work with either entry, Windows XP
     with a USB keyboard and mouse is not affected, and an install with
     no USB keyboard, mouse or storage device on the controller went on
@@ -4328,8 +4329,7 @@ Install over it with Update Driver on "xHCI98 USB 3.x eXtensible Host
 Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the same
 directory as a new install. Nothing needs renaming first. (From 2.3.x or
 earlier the controller alone: the root hub is a new one and installs by
-itself - read FROM 2.3.x below first.) The four FROM 2.3.x paragraphs are
-what this release's design expects; the rest, as read in virtual machines:
+itself - read FROM 2.3.x below first.) As read in virtual machines:
 
   FROM 2.3.x OR EARLIER, ONCE: EACH ROOT HUB, HUB AND COMPOSITE DEVICE IS
   FOUND AGAIN AS NEW HARDWARE. From this release they are named under USB\
@@ -4346,11 +4346,14 @@ what this release's design expects; the rest, as read in virtual machines:
   MOUSE THAT DO NOT GO THROUGH THIS DRIVER: PS/2, a laptop's built-in
   ones, or a USB controller another driver runs. Windows XP and XP x64 ask
   Found New Hardware and the unsigned-driver question for the new root
-  hub, each hub and each composite device, and Windows 98 SE runs the Add
-  New Hardware wizard for each device found again (it may ask for the
-  Windows CD); until they are answered the USB keyboard and mouse behind
-  the new root hub do nothing. A second controller running this driver
-  does not help: after the restart its root hub is new too.
+  hub, each hub and each composite device, and until they are answered
+  the USB keyboard and mouse behind the new root hub do nothing. A second
+  controller running this driver does not help: its root hub is new too.
+  On Windows 98 SE the USB keyboard and mouse do nothing while the update
+  wizard's last page is up, so its Finish needs another keyboard or
+  mouse; after the restart the Add New Hardware wizard for a mouse
+  without a serial number, found again, cannot be answered with that
+  mouse. The 98 SE update itself may ask for the Windows CD.
 
   WINDOWS 98 SE AND ME: CONNECT NO NEW HUB OR COMPOSITE DEVICE BETWEEN
   THE UPDATE AND THE RESTART. The earlier release still runs until then
@@ -4367,15 +4370,25 @@ what this release's design expects; the rest, as read in virtual machines:
   The new file waits to replace the old one at the next start, and until
   then the earlier release keeps running. Under SweetLow's stack the
   controller showed a problem for a minute or two after Finish; on ME it
-  shows one until the restart, while the devices keep working.
+  shows one until the restart, while the devices keep working. From 2.3.x
+  ME asked nothing during the update, and one wizard after the restart,
+  for a USB audio device without a serial number.
 
   WINDOWS 2000: USE HAVE DISK. Letting Windows search answers that a
   suitable driver is already installed and keeps the earlier release. Use
-  "Display a list of the known drivers" -> Have Disk, as below.
+  "Display a list of the known drivers" -> Have Disk, as below. Use Have
+  Disk again for a reinstall: after an uninstall and a scan for hardware
+  changes, Windows 2000 installed the earlier release from the package it
+  still held, since it ignores the dates of unsigned drivers.
 
-  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update took effect at
-  once, with no restart. (Read with a command-line driver update rather
-  than Device Manager.)
+  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update takes effect at
+  once. Windows may still say the device will not work until you
+  restart, and XP then offers a restart: the new driver already runs.
+  From 2.3.x, restart anyway before running TOOLS\XHCICLN.
+
+  TWO CONTROLLERS: an update of one makes both run the new driver at once
+  (they share the one file), but the other controller's Driver tab keeps
+  the old version until it is uninstalled and found again (read on XP).
 
   WINDOWS VISTA AND 7: USE HAVE DISK. Browse my computer with the folder
   typed in answers that the best driver is already installed and keeps
@@ -4387,8 +4400,8 @@ what this release's design expects; the rest, as read in virtual machines:
   one, for the helper xhcihlpr.sys (above). Until then the earlier release
   keeps running and Device Manager says the device needs a restart. An
   update over a release that installed the earlier helper, xhcimsi.sys,
-  also removes it: its service is deleted, and its file goes at that
-  restart.
+  also removes it: its file is deleted at once, during the update, and
+  its service is gone after that restart.
 
   WINDOWS 2000 AND XP: the install and an update copy the helper
   xhcihlpr.sys and ask for no restart of their own. The controller runs as
@@ -4729,6 +4742,12 @@ May be addressed in a later release:
   * WINDOWS VISTA AND 7: THE CONTROLLER'S ADVANCED TAB SHOWS NO BANDWIDTH.
     The figure comes from a query this driver does not answer.
 
+  * WINDOWS ME: SHUT DOWN CAN HANG AFTER THE CONTROLLER WAS DISABLED AND
+    ENABLED in Device Manager in the same session (a black screen that
+    stays). Seen in virtual machines, with an earlier release too. After
+    such a cycle, save your work before shutting down; if Shut Down hangs,
+    switch the computer off.
+
   * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
 
   * A DEVICE THE CONTROLLER FAULTS ON IS RE-ENUMERATED BY THE DRIVER, as if
@@ -4808,18 +4827,13 @@ Untested ground:
     those parts are the least certain. Set XhciAccept096 to 0 to refuse
     such a controller, as the releases before it did.
 
-  * THE CONTROLLER-FAULT HANDLING ON REAL HARDWARE (XhciTolerance, section
-    9). Each fault was made on purpose at a root port in QEMU virtual
-    machines, under Windows 98 SE and Windows 2000; QEMU has no
-    SuperSpeed hub, so nothing was read behind one. No real controller has
-    raised one under this driver yet. XhciIntervalCap and XhciAvgTrbEsit
-    have been read on no AMD or other real controller.
-
   * HIDUSBF ON A COMPOSITE DEVICE'S OWN ENTRY (xHCI98 USB Composite
     Device, new in this release). Each function takes its polling rate
     from the rate set there, unless a filter on the function's own entry
     sets another. QEMU has no keyboard-and-mouse composite device, so this
-    is read on no virtual machine; a new rate reaches a function when it
+    is read on no virtual machine (the composite entry's own selection
+    was, with USB audio devices) and is owed to a real device after the
+    release; a new rate reaches a function when it
     next starts (on 98 SE and ME restart the function's entry too, or
     replug the device).
 

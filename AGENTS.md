@@ -518,8 +518,9 @@ and 2.3.1.0 shipped it as `xhcimsi.sys`, the MSI half alone, for Vista and 7
 alone. `src/xhci98.inf` installs it as a boot-start service from
 `[Xhci.Dev.NTx86]` (2000 and XP: no `Reboot`, no `.HW`) and from
 `[Xhci.Dev6.NTx86]` (Vista and 7: the controller's `.HW` request for one
-message, a `Reboot`, and `DelService=xhcimsi` with the old file deleted at
-the restart) and nowhere else; the INF gate's `HLPR-*` and `MSI-*` rules
+message, a `Reboot`, and `DelService=xhcimsi` with the old file deleted,
+which the VM matrix read happen at once, during the update) and nowhere
+else; the INF gate's `HLPR-*` and `MSI-*` rules
 hold it there, and the 64-bit package never carries it. Its imports are
 gated by the import gate's `-GateProfile hlprx86` against
 `xhcihlpr-imports.allow` and the x86 kernels' and HALs' export tables of

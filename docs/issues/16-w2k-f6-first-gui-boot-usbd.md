@@ -34,7 +34,11 @@ GUI-mode Setup) stops with:
 
 for a USB keyboard or mouse, and the same naming `usbstor.SYS` for a USB
 stick with no keyboard or mouse (runtime: `out\p38-matrix\legs\f6w2k\`,
-shots `g01`, `c1-18`, `c2-08`, `y12`, `b08`, `k09`).
+shots `g01`, `c1-18`, `c2-08`, `y12`, `b08`, `k09`). Both stops are
+older than `2.4.0.0`: each was read on the published `2.3.1.0` with the
+same devices on a blank disk, `hidusb.SYS` with a keyboard, a mouse and
+an audio device behind a hub (`c1-18`) and `usbstor.SYS` with a stick at
+a root port and an audio device behind a hub (`k09`, control `c3`).
 
 ## 2. Root cause
 

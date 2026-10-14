@@ -2037,6 +2037,15 @@ a leg's off case or baseline is the value 0 written explicitly.
   the order it saw; if neither reaches the stop's entry with the IRP
   outstanding, this half of T3 is owed, and section 7.2.7's point 3 then
   rests on the stop's static order (section 7.2.5) alone, said so.
+  **Read (2026-10-14, the Phase 38 VM matrix, 7 x86 on the `qemu`
+  flavour; runtime):** `qemu.stop.dx` never appeared - Windows removed
+  the children before the controller stopped - so this half of T3 is
+  owed and point 3 rests on the static order. The stop itself released
+  the timer (release cause 4, `TmrThread` 3, nothing held, no bugcheck,
+  the next start from zero). `XhciQemuSuspHoldDx` 1 also holds the
+  shutdown's Dx IRP, so a shutdown under it hangs: a `qemu`-only switch
+  for the stop legs, cleared before a shutdown
+  (`docs/contributing/runs/run-38.md`).
 - **T4, S3, S4 and S5.** Where a guest sleeps (XP, Vista and 7 hibernate
   and the guests that stand by, as task 36.28's legs): a copy running,
   then the transition; after the resume `TmrReleaseCause` 3 from before
