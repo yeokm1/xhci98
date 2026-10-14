@@ -312,6 +312,25 @@ static void test_parser(void)
     CHECK(inst_inf_source_file(inf, 1, f, sizeof(f)) && inst_eq(f, "b.sys"),
           "decorated [SourceDisksFiles]");
     CHECK(!inst_inf_source_file(inf, 2, f, sizeof(f)), "two files");
+    {
+        static const char sd[] =
+            "[SourceDisksNames]\r\n1=%D%,a.sys,,\r\n2=%D%,b.sys,,\\nt\r\n"
+            "[SourceDisksFiles]\r\na.sys=1\r\nb.sys=2\r\nc.sys=1,sub\r\nd.sys=3\r\n"
+            "[Strings]\r\nD=\"x\"\r\n";
+        static const char up[] =
+            "[SourceDisksNames]\r\n1=%D%,a.sys,,..\r\n[SourceDisksFiles]\r\na.sys=1\r\n";
+        CHECK(inst_inf_source_path(sd, 0, f, sizeof(f)) && inst_eq(f, "a.sys"),
+              "no disk path: beside the INF");
+        CHECK(inst_inf_source_path(sd, 1, f, sizeof(f)) && inst_eq(f, "nt\\b.sys"),
+              "the disk's path");
+        CHECK(inst_inf_source_path(sd, 2, f, sizeof(f)) && inst_eq(f, "sub\\c.sys"),
+              "the file's subdirectory");
+        CHECK(inst_inf_source_path(sd, 3, f, sizeof(f)) && inst_eq(f, "d.sys"),
+              "an unknown disk: beside the INF");
+        CHECK(!inst_inf_source_path(sd, 4, f, sizeof(f)), "four files");
+        CHECK(inst_inf_source_path(up, 0, f, sizeof(f)) && inst_eq(f, "..\\a.sys"),
+              ".. kept for the caller to hold to the package");
+    }
     e = env(1, 5, 1, INST_ARCH_X86);
     CHECK(inst_inf_models(inf, &e, &ids) && ids.Count == 2, "XP: two ids");
     e = env(1, 6, 0, INST_ARCH_X86);

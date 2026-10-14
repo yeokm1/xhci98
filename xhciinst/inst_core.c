@@ -627,6 +627,113 @@ int inst_inf_source_file(const char *text, int index, char *out, size_t cap)
     return 0;
 }
 
+/* The [SourceDisksNames] path of disk id (field 4), or "". */
+static void inst_disk_path(const char *text, const char *disk, char *out,
+                           size_t cap)
+{
+    char line[INST_LINE_CHARS];
+    char name[INST_LINE_CHARS];
+    char key[INST_LINE_CHARS];
+    char value[INST_LINE_CHARS];
+    const char *p = text;
+    int in = 0;
+
+    out[0] = '\0';
+    while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {
+        if (inst_header(line, name, sizeof(name))) {
+            in = inst_eq(name, "SourceDisksNames") ||
+                 inst_starts(name, "SourceDisksNames.");
+            continue;
+        }
+        if (in && inst_inf_kv(line, key, sizeof(key), value, sizeof(value)) &&
+            inst_eq(key, disk)) {
+            if (!inst_inf_field(value, 3, out, cap)) {
+                out[0] = '\0';
+            }
+            return;
+        }
+    }
+}
+
+static int inst_path_join(char *out, size_t cap, const char *part)
+{
+    size_t n = strlen(out);
+
+    while (*part == '\\' || *part == '/') {
+        part++;
+    }
+    if (part[0] == '\0') {
+        return 1;
+    }
+    if (n > 0 && out[n - 1] != '\\') {
+        if (n + 1 >= cap) {
+            return 0;
+        }
+        out[n++] = '\\';
+        out[n] = '\0';
+    }
+    if (n + strlen(part) >= cap) {
+        return 0;
+    }
+    strcat(out, part);
+    return 1;
+}
+
+int inst_inf_source_path(const char *text, int index, char *out, size_t cap)
+{
+    char line[INST_LINE_CHARS];
+    char name[INST_LINE_CHARS];
+    char key[INST_LINE_CHARS];
+    char value[INST_LINE_CHARS];
+    char disk[INST_LINE_CHARS];
+    char sub[INST_LINE_CHARS];
+    char dpath[INST_LINE_CHARS];
+    const char *p = text;
+    int in = 0;
+    int n = 0;
+    size_t i;
+
+    while ((p = inst_raw_line(p, line, sizeof(line))) != NULL) {
+        if (inst_header(line, name, sizeof(name))) {
+            in = inst_eq(name, "SourceDisksFiles") ||
+                 inst_starts(name, "SourceDisksFiles.");
+            continue;
+        }
+        if (!in || line[0] == '\0') {
+            continue;
+        }
+        if (n++ != index) {
+            continue;
+        }
+        value[0] = '\0';
+        if (!inst_inf_kv(line, key, sizeof(key), value, sizeof(value))) {
+            inst_copy(key, line, sizeof(key));
+        }
+        inst_unquote(key);
+        if (!inst_inf_field(value, 0, disk, sizeof(disk))) {
+            disk[0] = '\0';
+        }
+        if (!inst_inf_field(value, 1, sub, sizeof(sub))) {
+            sub[0] = '\0';
+        }
+        inst_disk_path(text, disk, dpath, sizeof(dpath));
+        out[0] = '\0';
+        if (!inst_path_join(out, cap, dpath) || !inst_path_join(out, cap, sub) ||
+            !inst_path_join(out, cap, key)) {
+            return 0;
+        }
+        for (i = 0; out[i] != '\0'; i++) {
+            if (out[i] == '/') {
+                out[i] = '\\';
+            }
+        }
+        if (strchr(out, ':') != NULL) {
+            return 0;
+        }
+        return 1;
+    }
+    return 0;
+}
 int inst_inf_addreg_default(const char *text, const char *name,
                             INST_U32 *value)
 {

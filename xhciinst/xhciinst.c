@@ -208,6 +208,9 @@ static int changedCount;
 static int testSigningConfirmed;
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
 static char srcDir[INST_PATH_CHARS];
+/* Each INF relative to the flavour directory: the NT-only filter INF is in
+ * nt\ (39-0.4), where Windows 98's search never meets it. */
+static char infRel[INST_INF_COUNT][32];
 static int restagePending[INST_INF_COUNT];
 static int restageOk[INST_INF_COUNT];
 static int restage_listed(const char *id);
@@ -1253,6 +1256,43 @@ static int refuse(const char *a, const char *b)
     return 0;
 }
 
+/* The i-th source file of INF k: its path under base (the package's or the
+ * local copy's flavour directory) in path, its name in name. 1 found, 0 no
+ * more, -1 a path that leaves base. */
+static int inf_source(int k, int i, const char *base, char *path, size_t cap,
+                      char *name, size_t nameCap)
+{
+    char rel[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char full[INST_PATH_CHARS];
+    char baseFull[INST_PATH_CHARS];
+    char *slash;
+    char *part;
+
+    if (!inst_inf_source_path(infText[k], i, rel, sizeof(rel))) {
+        return 0;
+    }
+    slash = strrchr(rel, '\\');
+    inst_copy(name, slash != NULL ? slash + 1 : rel, nameCap);
+    join(dir, sizeof(dir), base, infRel[k]);
+    slash = strrchr(dir, '\\');
+    if (slash != NULL) {
+        *slash = '\0';
+    }
+    join(dir, sizeof(dir), dir, rel);
+    if (GetFullPathNameA(dir, sizeof(full), full, &part) == 0 ||
+        GetFullPathNameA(base, sizeof(baseFull), baseFull, &part) == 0) {
+        return -1;
+    }
+    if (strlen(full) <= strlen(baseFull) ||
+        !inst_eqn(full, baseFull, strlen(baseFull)) ||
+        (full[strlen(baseFull)] != '\\' && baseFull[strlen(baseFull) - 1] != '\\')) {
+        return -1;
+    }
+    inst_copy(path, full, cap);
+    return 1;
+}
+
 static int check_package(void)
 {
     char self[INST_PATH_CHARS];
@@ -1272,6 +1312,7 @@ static int check_package(void)
     char flavour[16];
     const char *wantFlavour;
     int markers;
+    int r;
 
     if (GetModuleFileNameA(NULL, self, sizeof(self)) == 0) {
         return refuse("the tool's own path could not be read.", NULL);
@@ -1318,7 +1359,19 @@ static int check_package(void)
 
     cmFiles = 0;
     for (k = 0; k < INST_INF_COUNT; k++) {
-        join(path, sizeof(path), pkgDir, instInfFile[k]);
+        inst_copy(infRel[k], instInfFile[k], sizeof(infRel[k]));
+        if (k == INST_INF_CMF) {
+            join(path, sizeof(path), pkgDir, "nt\\xhcicmf.inf");
+            if (file_exists(path, NULL)) {
+                inst_copy(infRel[k], "nt\\xhcicmf.inf", sizeof(infRel[k]));
+            }
+            if (!envNow.Nt) {
+                /* 98 and ME never read the NT filter INF. */
+                infText[k] = NULL;
+                continue;
+            }
+        }
+        join(path, sizeof(path), pkgDir, infRel[k]);
         infText[k] = read_file(path, NULL);
         if (k >= INST_INF_CM) {
             cmFiles += infText[k] != NULL;
@@ -1329,6 +1382,9 @@ static int check_package(void)
     }
     join(path, sizeof(path), pkgDir, "xhcicm.sys");
     cmFiles += file_exists(path, NULL);
+    if (!envNow.Nt && cmFiles == 2) {
+        cmFiles = 3;
+    }
     if (cmFiles != 0 && cmFiles != 3) {
         return refuse("the package holds part of the Thunderbolt driver "
                       "(xhcicm.inf, xhcicmf.inf and xhcicm.sys go together).",
@@ -1360,8 +1416,12 @@ static int check_package(void)
             return refuse("the INF is not this architecture's: ",
                           instInfFile[k]);
         }
-        for (i = 0; inst_inf_source_file(infText[k], i, name, sizeof(name)); i++) {
-            join(path, sizeof(path), pkgDir, name);
+        for (i = 0; (r = inf_source(k, i, pkgDir, path, sizeof(path), name,
+                                    sizeof(name))) != 0; i++) {
+            if (r < 0) {
+                return refuse("a file the INF names lies outside the package: ",
+                              name);
+            }
             if (!file_exists(path, &size) || size == 0) {
                 return refuse("a file the INF names is missing or empty: ",
                               path);
@@ -1662,7 +1722,9 @@ static void local_remove(const char *dir)
             if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
                 p[strlen(p) - 1] = '\0';
             }
-            if (p[0] == '\0' || strchr(p, '\\') != NULL || strchr(p, ':') != NULL) {
+            if (p[0] == '\0' || strchr(p, ':') != NULL || strstr(p, "..") != NULL ||
+                (strchr(p, '\\') != NULL && !inst_starts(p, "nt\\")) ||
+                strchr(p + (inst_starts(p, "nt\\") ? 3 : 0), '\\') != NULL) {
                 continue;
             }
             join(path, sizeof(path), dir, p);
@@ -1671,6 +1733,8 @@ static void local_remove(const char *dir)
         }
         free(text);
         DeleteFileA(lst);
+        join(path, sizeof(path), dir, "nt");
+        RemoveDirectoryA(path);
     }
     if (RemoveDirectoryA(dir)) {
         out("%s removed.\n", dir);
@@ -1712,68 +1776,150 @@ static void local_remove_all(void)
 
 /* The content tag: FNV-1a of each file's upper-cased name and bytes,
  * combined by XOR so the directory listing's order does not matter. */
-static int package_tag(INST_U32 *tag)
+/* The files the local copy takes, as names relative to the flavour
+ * directory: its own files, and on NT those of nt\ (the filter INF). 98 and
+ * ME never get an nt\ file, nor a filter INF wherever it lies, so their
+ * hardware wizards cannot offer it for a bridge (39-0.4). Calls each(rel). */
+typedef int (*PKG_EACH)(const char *rel, void *ctx);
+
+static int package_files(PKG_EACH each, void *ctx)
 {
     char pattern[INST_PATH_CHARS];
-    char path[INST_PATH_CHARS];
-    char name[INST_PATH_CHARS];
+    char rel[INST_PATH_CHARS];
     WIN32_FIND_DATAA fd;
     HANDLE h;
+    int pass;
+
+    for (pass = 0; pass < 2; pass++) {
+        if (pass == 1 && !envNow.Nt) {
+            break;
+        }
+        join(pattern, sizeof(pattern), pkgDir, pass == 0 ? "*.*" : "nt\\*.*");
+        h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            if (pass == 0) {
+                return 0;
+            }
+            continue;
+        }
+        do {
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                continue;
+            }
+            if (!envNow.Nt && inst_eq(fd.cFileName, "xhcicmf.inf")) {
+                continue;
+            }
+            inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));
+            strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
+            if (!each(rel, ctx)) {
+                FindClose(h);
+                return 0;
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    return 1;
+}
+
+static int tag_one(const char *rel, void *ctx)
+{
+    INST_U32 *x = (INST_U32 *)ctx;
+    char path[INST_PATH_CHARS];
+    char name[INST_PATH_CHARS];
     DWORD n;
     char *buf;
-    INST_U32 x = 0;
     INST_U32 one;
     size_t i;
 
-    join(pattern, sizeof(pattern), pkgDir, "*.*");
-    h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) {
+    inst_copy(name, rel, sizeof(name));
+    for (i = 0; name[i] != '\0'; i++) {
+        name[i] = (char)inst_upper((unsigned char)name[i]);
+    }
+    join(path, sizeof(path), pkgDir, rel);
+    buf = read_file(path, &n);
+    if (buf == NULL) {
         return 0;
     }
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            continue;
-        }
-        inst_copy(name, fd.cFileName, sizeof(name));
-        for (i = 0; name[i] != '\0'; i++) {
-            name[i] = (char)inst_upper((unsigned char)name[i]);
-        }
-        join(path, sizeof(path), pkgDir, fd.cFileName);
-        buf = read_file(path, &n);
-        if (buf == NULL) {
-            FindClose(h);
-            return 0;
-        }
-        one = inst_fnv1a(INST_FNV_START, (const unsigned char *)name, strlen(name));
-        one = inst_fnv1a(one, (const unsigned char *)buf, n);
-        free(buf);
-        x ^= one;
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
+    one = inst_fnv1a(INST_FNV_START, (const unsigned char *)name, strlen(name));
+    one = inst_fnv1a(one, (const unsigned char *)buf, n);
+    free(buf);
+    *x ^= one;
+    return 1;
+}
+
+/* The content tag: FNV-1a of each file's upper-cased relative name and
+ * bytes, combined by XOR so the listing's order does not matter. */
+static int package_tag(INST_U32 *tag)
+{
+    INST_U32 x = 0;
+
+    if (!package_files(tag_one, &x)) {
+        return 0;
+    }
     *tag = x;
     return 1;
 }
 
 static void local_copy_name(INST_U32 tag, char *name, size_t cap)
 {
-    _snprintf(name, cap - 1, "%s-%s-%08lX", XHCIINST_VERSION, opts.Dir,
-              (unsigned long)tag);
+    /* Eight hex digits: an 8.3 name, which the 98 SE path box takes as typed
+     * (the version is in the INFs; the tag names the content). */
+    _snprintf(name, cap - 1, "%08lX", (unsigned long)tag);
     name[cap - 1] = '\0';
+}
+
+static int check_one(const char *rel, void *ctx)
+{
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+
+    (void)ctx;
+    join(from, sizeof(from), pkgDir, rel);
+    join(to, sizeof(to), srcDir, rel);
+    if (!same_file(from, to)) {
+        out("%s differs from this package: refused.\n", to);
+        return 0;
+    }
+    return 1;
+}
+
+typedef struct _COPY_CTX {
+    FILE *List;
+    int Count;
+} COPY_CTX;
+
+static int copy_one(const char *rel, void *ctx)
+{
+    COPY_CTX *c = (COPY_CTX *)ctx;
+    char from[INST_PATH_CHARS];
+    char to[INST_PATH_CHARS];
+
+    join(from, sizeof(from), pkgDir, rel);
+    join(to, sizeof(to), srcDir, rel);
+    if (inst_starts(rel, "nt\\")) {
+        char sub[INST_PATH_CHARS];
+        join(sub, sizeof(sub), srcDir, "nt");
+        CreateDirectoryA(sub, NULL);
+    }
+    fprintf(c->List, "%s\n", rel);
+    if (!CopyFileA(from, to, TRUE)) {
+        out("%s could not be copied (error %lu).\n", rel,
+            (unsigned long)GetLastError());
+        return 0;
+    }
+    SetFileAttributesA(to, FILE_ATTRIBUTE_NORMAL);
+    c->Count++;
+    return 1;
 }
 
 static int make_local_copy(void)
 {
     char rootDir[INST_PATH_CHARS];
     char name[INST_PATH_CHARS];
-    char pattern[INST_PATH_CHARS];
-    char from[INST_PATH_CHARS];
-    char to[INST_PATH_CHARS];
     char lst[INST_PATH_CHARS];
-    WIN32_FIND_DATAA fd;
-    HANDLE h;
-    FILE *f;
+    COPY_CTX c;
     INST_U32 tag;
-    int n = 0;
+    int ok;
 
     if (!local_dir(rootDir, sizeof(rootDir)) || !package_tag(&tag)) {
         out("The local copy could not be prepared.\n");
@@ -1783,65 +1929,30 @@ static int make_local_copy(void)
     local_copy_name(tag, name, sizeof(name));
     join(srcDir, sizeof(srcDir), rootDir, name);
     join(lst, sizeof(lst), srcDir, "XHCIINST.LST");
-    join(pattern, sizeof(pattern), pkgDir, "*.*");
     if (GetFileAttributesA(lst) != 0xFFFFFFFFUL) {
         /* The same content is already there: never rewritten, only checked. */
-        h = FindFirstFileA(pattern, &fd);
-        if (h == INVALID_HANDLE_VALUE) {
+        if (!package_files(check_one, NULL)) {
             return 0;
         }
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                continue;
-            }
-            join(from, sizeof(from), pkgDir, fd.cFileName);
-            join(to, sizeof(to), srcDir, fd.cFileName);
-            if (!same_file(from, to)) {
-                FindClose(h);
-                out("%s differs from this package: refused.\n", to);
-                return 0;
-            }
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
         out("The local copy %s is this package already.\n", srcDir);
         return 1;
     }
     CreateDirectoryA(srcDir, NULL);
-    f = fopen(lst, "w");
-    if (f == NULL) {
+    c.List = fopen(lst, "w");
+    c.Count = 0;
+    if (c.List == NULL) {
         out("%s could not be written.\n", lst);
         return 0;
     }
-    h = FindFirstFileA(pattern, &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        fclose(f);
-        out("The package directory could not be listed.\n");
+    ok = package_files(copy_one, &c);
+    fclose(c.List);
+    if (!ok) {
         return 0;
     }
-    do {
-        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-            continue;
-        }
-        join(from, sizeof(from), pkgDir, fd.cFileName);
-        join(to, sizeof(to), srcDir, fd.cFileName);
-        fprintf(f, "%s\n", fd.cFileName);
-        if (!CopyFileA(from, to, TRUE)) {
-            out("%s could not be copied (error %lu).\n", fd.cFileName,
-                (unsigned long)GetLastError());
-            FindClose(h);
-            fclose(f);
-            return 0;
-        }
-        SetFileAttributesA(to, FILE_ATTRIBUTE_NORMAL);
-        n++;
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-    fclose(f);
-    out("Copied %d files to %s; the install takes them from there.\n", n,
+    out("Copied %d files to %s; the install takes them from there.\n", c.Count,
         srcDir);
     return 1;
 }
-
 /* The /restage work file (record 23 section 5.7), %windir%\XHCI98\
  * RESTAGE.LST, written before a stored package is removed:
  *   PKG <the local copy's directory name>
@@ -2155,10 +2266,11 @@ static void trap_scan(void)
             if (slash != NULL) {
                 *slash = '\0';
             }
-            for (i = 0; inst_inf_source_file(infText[k], i, name, sizeof(name));
-                 i++) {
-                join(a, sizeof(a), pkgDir, name);
-                join(b, sizeof(b), store, name);
+            for (i = 0; inf_source(k, i, pkgDir, a, sizeof(a), name,
+                                   sizeof(name)) > 0; i++) {
+                char rel[INST_PATH_CHARS];
+                inst_inf_source_path(infText[k], i, rel, sizeof(rel));
+                join(b, sizeof(b), store, rel);
                 if (!same_file(a, b)) {
                     logonly("%s differs from %s\n", a, b);
                     differs = 1;
@@ -2207,9 +2319,11 @@ static int store_matches(int k, const char *oemName)
     if (slash != NULL) {
         *slash = '\0';
     }
-    for (i = 0; inst_inf_source_file(infText[k], i, name, sizeof(name)); i++) {
-        join(a, sizeof(a), pkgDir, name);
-        join(b, sizeof(b), store, name);
+    for (i = 0; inf_source(k, i, pkgDir, a, sizeof(a), name, sizeof(name)) > 0;
+         i++) {
+        char rel[INST_PATH_CHARS];
+        inst_inf_source_path(infText[k], i, rel, sizeof(rel));
+        join(b, sizeof(b), store, rel);
         if (!same_file(a, b)) {
             return 0;
         }
@@ -2220,6 +2334,7 @@ static int store_matches(int k, const char *oemName)
 static int stage_nt(void)
 {
     int k;
+    char media[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     char dest[INST_PATH_CHARS];
     char *component;
@@ -2259,11 +2374,15 @@ static int stage_nt(void)
             out("/restage: the stored %s was removed.\n", trapOem[k]);
             flagChanged = 1;
         }
-        join(path, sizeof(path), srcDir, instInfFile[k]);
+        join(path, sizeof(path), srcDir, infRel[k]);
         dest[0] = '\0';
         component = NULL;
-        logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, srcDir);
-        if (!api.CopyOem(path, srcDir, SPOST_PATH, 0, dest, sizeof(dest), NULL,
+        inst_copy(media, path, sizeof(media));
+        if (strrchr(media, '\\') != NULL) {
+            *strrchr(media, '\\') = '\0';
+        }
+        logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
+        if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
                          &component)) {
             out("%s could not be staged (error 0x%08lX).%s\n", instInfFile[k],
                 (unsigned long)GetLastError(),
@@ -2337,7 +2456,7 @@ static int install_inf(int inf, int controllers)
     DWORD err;
     int ok = 1;
 
-    join(path, sizeof(path), srcDir, instInfFile[inf]);
+    join(path, sizeof(path), srcDir, infRel[inf]);
     for (i = 0; i < devCount; i++) {
         DEVREC *d = &devs[i];
         if (!d->Present || d->Inf != inf || !d->Runs || d->Done) {
@@ -2947,8 +3066,11 @@ static void steps_9x(const char *dir)
                 "it has no driver),\n    Properties, Driver, Update Driver, "
                 "Next, \"Search for the best driver\", Next\n    with NO box "
                 "ticked, Next, Finish. If it finds nothing: \"Specify a\n    "
-                "location\" and type %s. Windows 98 SE may ask for its CD.\n"
-                "  - Restart when asked; on ME restart anyway.\n", dir);
+                "location\" and type %s.\n"
+                "  - When Windows asks for the \"xhci98 xHCI Host Controller Disk\", "
+                "type\n    %s under \"Copy files from\" and OK. For its own "
+                "files (usbd.sys) it asks\n    for the Windows CD.\n"
+                "  - Restart when asked; on ME restart anyway.\n", dir, dir);
             break;
         case INST_ACT_UPDATE:
             if (d->Inf == INST_INF_UAS) {
@@ -2961,7 +3083,9 @@ static void steps_9x(const char *dir)
             out("  - Device Manager: this device, Properties, Driver, Update "
                 "Driver, Next,\n    \"Search for a better driver\", Next with "
                 "NO box ticked, Next, Finish; if it\n    keeps the old one, "
-                "\"Specify a location\" and type %s.\n  - Restart afterwards, "
+                "\"Specify a location\" and type %s.\n  - When Windows asks for "
+                "the \"xhci98 xHCI Host Controller Disk\", type the same\n    "
+                "folder under \"Copy files from\".\n  - Restart afterwards, "
                 "although Windows does not ask.\n", dir);
             if (d->Inf == INST_INF_XHCI) {
                 out("  - From 2.3.x or earlier: have a keyboard and mouse that "

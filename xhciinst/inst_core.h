@@ -109,6 +109,13 @@ int inst_inf_arch_ok(const char *text, int arch);
  * one: the index-th, copied to out. Returns 1 when it exists. */
 int inst_inf_source_file(const char *text, int index, char *out, size_t cap);
 
+/* The index-th [SourceDisksFiles] file's path relative to the INF's own
+ * directory: the [SourceDisksNames] path of its disk (field 4), its own
+ * subdirectory (field 2), then its name, joined with '\'. Returns 1 when it
+ * exists; a drive letter is refused (0). The caller holds the result to the
+ * package directory. */
+int inst_inf_source_path(const char *text, int index, char *out, size_t cap);
+
 /* An HKR,,<name>,flags,value line's value in any section: the INF's default
  * for that value. Returns 1 when found. */
 int inst_inf_addreg_default(const char *text, const char *name,
