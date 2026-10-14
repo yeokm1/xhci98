@@ -912,6 +912,10 @@ typedef struct _HCD_DEVICE_PDO {
      * under the same lock (HcdCompRecordRef). The PDO's deletion drops its
      * reference. */
     struct _HCD_COMP_RECORD *CompRecord;
+    /* Composite selects this parent refused, interlocked: its FDO tells a
+     * refusal the parent counted from a failure it must count itself
+     * (HcdCompositeSelectDown). */
+    volatile ULONG CompRefusals;
 } HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* A composite record (task 38.12): reference-counted, so a function select

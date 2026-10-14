@@ -1989,7 +1989,9 @@ static NTSTATUS hcdCompDescriptor(PHCD_DEVICE_PDO pdo, PIRP irp, PURB urb)
     ULONG n;
     ULONG i;
 
-    if (HcdUrbIoRequest(urb, &req) != USBD_STATUS_SUCCESS ||
+    if ((ULONG)urb->UrbHeader.Length <
+            sizeof(struct _URB_CONTROL_DESCRIPTOR_REQUEST) ||
+        HcdUrbIoRequest(urb, &req) != USBD_STATUS_SUCCESS ||
         req.Setup[2] != 0 || (req.Setup[3] != 1 && req.Setup[3] != 2)) {
         return hcdUrbComplete(irp, urb, USBD_STATUS_INVALID_PARAMETER,
                               STATUS_INVALID_PARAMETER);
@@ -2102,7 +2104,13 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     end = (PUCHAR)urb + urb->UrbHeader.Length;
     named = 0;
     entries = 0;
-    for (p = (PUCHAR)&sc->Interface; p + fixed <= end; p += ii->Length) {
+    for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {
+        /* Every byte to the URB's end is an entry (a review, round 1): a
+         * tail too short for one is refused, never skipped. */
+        if (p + fixed > end) {
+            usbd = USBD_STATUS_INVALID_PARAMETER;
+            goto refused;
+        }
         ii = (PUSBD_INTERFACE_INFORMATION)p;
         if (ii->Length < fixed || p + ii->Length > end ||
             ii->InterfaceNumber >= 32 ||
@@ -2142,7 +2150,7 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
      * opened for the composite. */
     rewrites = 0;
     mismatches = 0;
-    for (p = (PUCHAR)&sc->Interface; p + fixed <= end; p += ii->Length) {
+    for (p = (PUCHAR)&sc->Interface; p < end; p += ii->Length) {
         ii = (PUSBD_INTERFACE_INFORMATION)p;
         (VOID)XhciPipeFindInterface(pdo->Config, pdo->ConfigLength,
                                     ii->InterfaceNumber, ii->AlternateSetting,
@@ -2192,6 +2200,7 @@ static NTSTATUS hcdCompSelect(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 refused:
     hcdCompSwap(pdo, hc, NULL);
     hcdCount(&hc->Counters.CompositeSelectRefused);
+    hcdCount((PULONG)&pdo->CompRefusals);
     XhciLogNote(&hc->Hc, "comp.refused",
                 ((pdo->Serial & 0xFFUL) << 24) |
                     ((ULONG)usbd & 0x00FFFFFFUL));
@@ -2228,6 +2237,13 @@ NTSTATUS HcdCompositePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
             IOCTL_INTERNAL_USB_SUBMIT_URB ||
         urb == NULL) {
         status = HcdCompleteIrp(irp, STATUS_NOT_SUPPORTED, 0);
+        goto done;
+    }
+    if (hc == NULL) {
+        /* Orphaned (HcdDevicePdoReleaseAll): nothing is answered for a
+         * device the bus no longer holds (a review, round 1). */
+        status = hcdUrbComplete(irp, urb, (USBD_STATUS)HCD_USBD_DEVICE_GONE,
+                                STATUS_NO_SUCH_DEVICE);
         goto done;
     }
     switch (urb->UrbHeader.Function) {
@@ -2343,6 +2359,8 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
     PURB urb;
     PURB sel;
     NTSTATUS status;
+    ULONG refusals;
+    ULONG countIt;
     ULONG count;
     ULONG total;
     ULONG size;
@@ -2356,6 +2374,8 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
     sel = NULL;
     status = STATUS_SUCCESS;
     step = 0;
+    refusals = 0;
+    countIt = !unconfigure;
     HcdCompositeForget(parent);
     urb = (PURB)HcdPoolAlloc(sizeof(URB));
     if (urb == NULL) {
@@ -2447,9 +2467,14 @@ VOID HcdCompositeSelectDown(PDEVICE_OBJECT lower, PHCD_DEVICE_PDO parent,
         }
         ii = (PUSBD_INTERFACE_INFORMATION)((PUCHAR)ii + one);
     }
+    refusals = parent->CompRefusals;
     status = hcdCompSend(lower, sel);
     if (!NT_SUCCESS(status)) {
         step = HCD_COMP_STEP_SELECT;
+        /* Counted here unless the parent refused it and counted it: an
+         * IRP that could not be allocated, a filter that failed it before
+         * or after the parent (a review, round 1). */
+        countIt = parent->CompRefusals == refusals;
     }
 
 cleanup:
@@ -2459,8 +2484,7 @@ cleanup:
         HcdCompositeForget(parent);
         hc = hcdCompEnter(parent);
         if (hc != NULL) {
-            if (!unconfigure && step != HCD_COMP_STEP_SELECT) {
-                /* A select that reached the parent was counted there. */
+            if (countIt) {
                 hcdCount(&hc->Counters.CompositeSelectRefused);
             }
             XhciLogNote(&hc->Hc, "comp.fdo",

@@ -7041,17 +7041,17 @@ contiguous block:
 | Word | Counter | Counts |
 |---|---|---|
 | 241 | `CompositeSelects` | composite selects recorded (step 2) |
-| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own three-step sequence failed (each also forgets the record) |
+| 242 | `CompositeSelectRefused` | composite selects refused by the validation, and composite `START`s whose own sequence failed - a select the parent did not refuse but that failed all the same (no IRP, a filter failing it) included, told apart by a per-parent count of its refusals (each also forgets the record) |
 | 243 | `CompositeRewrites` | endpoints of a recorded select whose matched `bInterval` differs from the device's |
 | 244 | `CompositeMismatches` | endpoints of a recorded select that did not match the device's (10.14.5) |
-| 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2) where it differs from the device's, at a select or a `SELECT_INTERFACE`; an endpoint whose record byte equals the device's is rule 3's and not counted |
+| 245 | `CompositeIntervals` | function endpoints opened at the record's byte (rule 2) where it differs from the device's, at a select or a `SELECT_INTERFACE`, counted once the select has succeeded and the endpoint is open; an endpoint whose record byte equals the device's is rule 3's and not counted |
 
 The log (the ring, `XhciLogVerbosity` 2 or more, as `fastpoll.*`):
 `comp.select` (the parent's serial, interfaces, rewrites, mismatches, a
 byte each), `comp.refused` (the serial, the USBD status's low 24 bits),
 `comp.fdo` (the FDO's own sequence: the step that failed, 1 to 6, in the top four bits, the status below),
-`comp.unconfig` (the serial), and `comp.interval` (slot, DCI, the device's byte,
-the record's byte) per rule-2 endpoint counted in `CompositeIntervals`. The stop's counter lines gain
+`comp.unconfig` (the serial), and `comp.interval` (slot, DCI, the byte
+used) per rule-2 endpoint counted in `CompositeIntervals`. The stop's counter lines gain
 `composite.selects`, `composite.refused`, `composite.rewrites`,
 `composite.mismatches` and `composite.intervals`. `XHCISNAP` names the five
 words (its name table and `check-counter-names.ps1`).
