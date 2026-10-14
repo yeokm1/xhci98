@@ -294,9 +294,11 @@ typedef struct _XHCI_TBT_TOPO_IN {
     const XHCI_TBT_TABLE_ENTRY *Table;  /* the platform table, or NULL      */
     ULONG TableCount;
     /*
-     * 1 when the caller knows the platform has exactly one domain (its
-     * generation's profile says so); table entries without a Port location
-     * are used only then.
+     * 1 only when the caller has platform evidence that the machine has
+     * exactly one domain: a complete inventory of its NHIs, or a verified
+     * platform fact recorded beside the table. A controller generation's
+     * identity alone is not such evidence. 0 when unknown. Table entries
+     * without a Port location are used only when it is 1.
      */
     ULONG SingleDomain;
 } XHCI_TBT_TOPO_IN, *PXHCI_TBT_TOPO_IN;
@@ -367,7 +369,7 @@ typedef struct _XHCI_TBT_TOPO {
  *     type could not be read) only candidates a platform table entry
  *     matches are verified, SRC_TABLE: the entry's PortId, and its NhiId,
  *     Nhi and Port where given. An entry without a Port location is used
- *     only when in->SingleDomain is set and no other domain's NHI shares
+ *     only when in->SingleDomain is 1 and no other domain's NHI shares
  *     the search bus (a function with this NHI's id, a table NhiId or the
  *     USB4 host interface class; OtherNhi), since two domains could share
  *     such root ports (Ambiguous). With nothing verified the outcome is
