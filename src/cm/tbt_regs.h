@@ -69,7 +69,11 @@
  * driver's TBT_ prefix; the receive descriptor's Buffer Overflow bit, the
  * Total Paths limit, the Interrupt Mask register and the Ring Control
  * fields were added from the specification; the Alpine Ridge registers
- * were added from ICM-PROTOCOL.md.
+ * were added from ICM-PROTOCOL.md. On 2026-10-15 (roadmap-usb4.md task
+ * 40-0.1) the router, adapter, path, TMU, PCIe, USB3, USB4 port and
+ * notification fields design record 22 uses were added at the end, each
+ * cited to the specification and cross-checked against Linux tb_regs.h and
+ * tb_msgs.h, with the Thunderbolt 3 vendor capabilities from Linux alone.
  */
 
 #ifndef TBT_REGS_H
@@ -334,5 +338,425 @@
 #define TBT_ICL_LC_GO2SX_NO_WAKE    0x03UL
 #define TBT_ICL_LC_PREPARE_FOR_RESET 0x21UL
 #define TBT_ICL_LC_TIMEOUT_MS       500UL
+
+/* ====================================================================== */
+/* The USB4 software connection manager (Phase 40, task 40-0.1)           */
+/* ====================================================================== */
+
+/*
+ * Everything below is what design record 22 uses, transcribed from the USB4
+ * Specification 2.0 ("Spec", November 2025) by section and table, and
+ * cross-checked field by field against Linux drivers/thunderbolt/tb_regs.h
+ * and tb_msgs.h (mirror pinned at c6859eed755df351a3978b33cb92365f9b3e8f06,
+ * GPL-2.0; facts only, no code). Where the two differ the specification
+ * wins and the difference is noted. The Thunderbolt 3 router's vendor
+ * capabilities (Plug Events, link controller) are Linux's alone ("Linux
+ * tb_regs.h"), since the specification does not define them. "Guide" is
+ * the USB4 Connection Manager Guide 2.0 of the same bundle.
+ */
+
+/* ---------------------------------------------------------------------- */
+/* Control packets, Spec 6.4.2 (USB4 additions)                           */
+/* ---------------------------------------------------------------------- */
+
+/* PDF of the Enhanced Notification Acknowledgement, Spec 6.4.2.9 Table 6-8
+ * (Linux has no such packet). */
+#define TBT_PDF_NOTIFY_ACK_ENH      0x8UL
+
+/*
+ * Notification Packet DW 3, Spec 6.4.2.7 Table 6-6 (Linux tb_msgs.h
+ * struct cfg_error_pkg: error 8 bits, port 6, reserved 16, pg 2): Event
+ * Code 7:0, Event Info 13:8 (the adapter for most codes, Table 6-12),
+ * Sequence 14, PG 31:30.
+ */
+#define TBT_NOTIFY_INFO(v)          (((ULONG)(v) >> 8) & 0x3FUL)
+#define TBT_NOTIFY_INFO_SHIFT       8
+#define TBT_NOTIFY_SQ               0x00004000UL
+#define TBT_NOTIFY_PG_SHIFT         30
+#define TBT_NOTIFY_PG_PLUG          2UL     /* Table 6-6: 10b Hot Plug Event */
+#define TBT_NOTIFY_PG_UNPLUG        3UL     /* 11b Hot Unplug Event; Linux TB_CFG_ERROR_PG_HOT_* */
+/* Enhanced Notification Acknowledgement DW 2: Sequence in bit 0 (Table 6-8). */
+#define TBT_NOTIFY_ACK_ENH_SQ       0x00000001UL
+
+/* Hot Plug Event Packet DW 2, Spec 6.4.2.10 Table 6-9 (Linux struct
+ * cfg_event_pkg): Adapter Num 5:0, UPG 31 (1 = unplug). */
+#define TBT_HOTPLUG_ADAPTER(v)      ((ULONG)(v) & 0x3FUL)
+#define TBT_HOTPLUG_UPG             0x80000000UL
+
+/* Notification event codes, Spec Table 6-12 (Linux tb_msgs.h enum
+ * tb_cfg_error names the same values; it lacks ERR_NUA, ERR_LEN and
+ * ERR_PLUG, which the specification defines). */
+#define TBT_EV_ERR_CONN             0UL
+#define TBT_EV_ERR_LINK             1UL
+#define TBT_EV_ERR_ADDR             2UL
+#define TBT_EV_ERR_ADP              4UL
+#define TBT_EV_HP_ACK               7UL
+#define TBT_EV_ERR_ENUM             8UL
+#define TBT_EV_ERR_NUA              9UL
+#define TBT_EV_ERR_LEN              11UL
+#define TBT_EV_ERR_HEC              12UL
+#define TBT_EV_ERR_FC               13UL
+#define TBT_EV_ERR_PLUG             14UL
+#define TBT_EV_ERR_LOCK             15UL
+#define TBT_EV_DP_BW                32UL
+#define TBT_EV_ROP_CMPLT            33UL
+#define TBT_EV_POP_CMPLT            34UL
+#define TBT_EV_PCIE_WAKE            35UL
+#define TBT_EV_DP_CON_CHANGE        36UL
+#define TBT_EV_DPTX_DISCOVERY       37UL
+#define TBT_EV_LINK_RECOVERY        38UL
+#define TBT_EV_ASYM_LINK            39UL
+
+/* ---------------------------------------------------------------------- */
+/* Router configuration space, Spec 8.2.1.1 Table 8-3                     */
+/* ---------------------------------------------------------------------- */
+
+#define TBT_ROUTER_CS_0             0UL     /* 15:0 Vendor ID, 31:16 Product ID */
+#define TBT_ROUTER_CS_1             1UL
+#define TBT_ROUTER_CS_2             2UL     /* TopologyID Low */
+#define TBT_ROUTER_CS_3             3UL
+#define TBT_ROUTER_CS_4             4UL
+#define TBT_ROUTER_CS_5             5UL
+#define TBT_ROUTER_CS_6             6UL
+#define TBT_ROUTER_CS_7             7UL     /* UUID (High) */
+#define TBT_ROUTER_CS_8             8UL     /* UUID (Low) */
+#define TBT_ROUTER_CS_9             9UL     /* first of 16 Router Operation data DWs */
+#define TBT_ROUTER_CS_25            25UL    /* Metadata */
+#define TBT_ROUTER_CS_26            26UL    /* Opcode, Status, ONS, OV */
+
+#define TBT_RTR0_VENDOR(v)          ((ULONG)(v) & 0xFFFFUL)
+#define TBT_RTR0_DEVICE(v)          (((ULONG)(v) >> 16) & 0xFFFFUL)
+/* ROUTER_CS_1 (Linux struct tb_regs_switch_header DWORD 1, same fields). */
+#define TBT_RTR1_NEXT_CAP(v)        ((ULONG)(v) & 0xFFUL)           /* 7:0 */
+#define TBT_RTR1_UP_ADP(v)          (((ULONG)(v) >> 8) & 0x3FUL)    /* 13:8 Upstream Adapter */
+#define TBT_RTR1_MAX_ADP(v)         (((ULONG)(v) >> 14) & 0x3FUL)   /* 19:14 Max Adapter */
+#define TBT_RTR1_DEPTH_SHIFT        20                              /* 22:20 Depth, R/W */
+#define TBT_RTR1_DEPTH_MASK         0x00700000UL
+#define TBT_RTR1_DEPTH(v)           (((ULONG)(v) >> 20) & 0x7UL)
+/* ROUTER_CS_3: TopologyID High 23:0, TopologyID Valid 31 (Linux
+ * ROUTER_CS_3_V). */
+#define TBT_RTR3_TOPOLOGY_MASK      0x00FFFFFFUL
+#define TBT_RTR3_V                  0x80000000UL
+/* ROUTER_CS_4: Notification Timeout 7:0, CMUV 15:8, USB4 Version 31:24
+ * (major 31:29, minor 28:24, Spec 8.2.1.1). CMUV 10h is "USB4 1.0" (Linux
+ * ROUTER_CS_4_CMUV_V1). Design record 22 section 3.5: 20h is USB4 1.0 and
+ * 40h USB4 2.0, 00h is a Thunderbolt 3 router, every other value reserved
+ * (Linux USB4_VERSION_MAJOR_MASK reads the major only). */
+#define TBT_RTR4_NOTIFY_TIMEOUT_MASK 0x000000FFUL
+#define TBT_RTR4_NOTIFY_TIMEOUT_MAX 0xFFUL      /* Guide 3.2.1; Linux plug_events_delay = 0xff */
+#define TBT_RTR4_CMUV_MASK          0x0000FF00UL
+#define TBT_RTR4_CMUV_1_0           0x00001000UL
+#define TBT_RTR4_VERSION(v)         (((ULONG)(v) >> 24) & 0xFFUL)
+#define TBT_USB4_VERSION_TBT3       0x00UL
+#define TBT_USB4_VERSION_1_0        0x20UL
+#define TBT_USB4_VERSION_2_0        0x40UL
+/* ROUTER_CS_5 (Linux ROUTER_CS_5_*). */
+#define TBT_RTR5_CNS                0x00800000UL    /* 23 CM TBT3 Not Supported */
+#define TBT_RTR5_PTO                0x01000000UL    /* 24 PCIe Tunneling On */
+#define TBT_RTR5_UTO                0x02000000UL    /* 25 USB3 Tunneling On */
+#define TBT_RTR5_HCO                0x04000000UL    /* 26 Internal Host Controller On */
+#define TBT_RTR5_CV                 0x80000000UL    /* 31 Configuration Valid */
+/* ROUTER_CS_6 (Linux ROUTER_CS_6_RR, _CR). */
+#define TBT_RTR6_RR                 0x01000000UL    /* 24 Router Ready */
+#define TBT_RTR6_CR                 0x02000000UL    /* 25 Configuration Ready */
+/* ROUTER_CS_26, Spec 8.3.1 (Linux ROUTER_CS_26_*). */
+#define TBT_RTR26_OPCODE_MASK       0x0000FFFFUL
+#define TBT_RTR26_STATUS(v)         (((ULONG)(v) >> 24) & 0x3FUL)
+#define TBT_RTR26_ONS               0x40000000UL
+#define TBT_RTR26_OV                0x80000000UL
+
+/* Router Operations, Spec 8.3.1 Table 8-26 (Linux enum usb4_switch_op has
+ * 24h and 33h; 30h and 31h are the specification's alone). */
+#define TBT_ROP_DROM_READ           0x24UL
+#define TBT_ROP_PCIE_DOWN_MAPPING   0x30UL
+#define TBT_ROP_GET_CAPABILITIES    0x31UL
+#define TBT_ROP_BUFFER_ALLOC        0x33UL
+#define TBT_ROP_DATA_DWORDS         16UL
+/* DROM Read metadata, Table 8-43 (Linux usb4.c USB4_DROM_ADDRESS_MASK,
+ * USB4_DROM_SIZE_MASK): DW address 14:2, Read Size 19:15 (1 to 16). */
+#define TBT_ROP_DROM_ADDR_SHIFT     2
+#define TBT_ROP_DROM_ADDR_MASK      0x00007FFCUL
+#define TBT_ROP_DROM_SIZE_SHIFT     15
+#define TBT_ROP_DROM_SIZE_MASK      0x000F8000UL
+/* Get PCIe Downstream Entry Mapping completion metadata, Table 8-47:
+ * Total Number of Entries 7:0, Entry Index 15:8; data, Table 8-48: DW 0
+ * Native PCIe Link 0, PCIe Adapter Number 6:1, PCIE Segment ID Valid 15,
+ * Segment ID 31:16; DW 1 Non-FPB Routing ID 15:0, FPB Routing ID 31:16. */
+#define TBT_ROP_MAP_TOTAL(v)        ((ULONG)(v) & 0xFFUL)
+#define TBT_ROP_MAP_INDEX(v)        (((ULONG)(v) >> 8) & 0xFFUL)
+#define TBT_ROP_MAP_NATIVE          0x00000001UL
+#define TBT_ROP_MAP_ADAPTER(v)      (((ULONG)(v) >> 1) & 0x3FUL)
+#define TBT_ROP_MAP_SEG_VALID       0x00008000UL
+#define TBT_ROP_MAP_RID(v)          ((ULONG)(v) & 0xFFFFUL)
+/* Get Capabilities, Tables 8-49 to 8-51: metadata Capability Index 7:0;
+ * completion metadata Max Capability Index 7:0, Capability Index 15:8,
+ * Supported 30, Enabled 31; for index 0 the data DWs hold a 2-bit entry
+ * per capability n at DW n/16, bit 2(n%16) supported and the next enabled. */
+#define TBT_ROP_CAP_MAX_INDEX(v)    ((ULONG)(v) & 0xFFUL)
+#define TBT_CAP_HOT_PLUG_FAILURE    1UL     /* 8.3.1.3.2.1 */
+#define TBT_CAP_NOTIFY_SEQUENCE     2UL     /* 8.3.1.3.2.2 */
+#define TBT_CAP_BA_PER_PORT         3UL     /* 8.3.1.3.2.3 */
+#define TBT_CAP_RETRY_LIMIT         4UL     /* 8.3.1.3.2.4 */
+#define TBT_CAP_CLX_LATENCY         5UL     /* 8.3.1.3.2.5 */
+/* Buffer Allocation Request, Tables 8-56 to 8-58 (Linux usb4.c
+ * USB4_BA_LENGTH_MASK, USB4_BA_INDEX_MASK, USB4_BA_VALUE_MASK): metadata
+ * Lane Adapter Number 5:0; completion metadata Length 7:0; each data DW
+ * Parameter Index 15:0 and value 31:16. */
+#define TBT_ROP_BA_LENGTH(v)        ((ULONG)(v) & 0xFFUL)
+#define TBT_ROP_BA_INDEX(v)         ((ULONG)(v) & 0xFFFFUL)
+#define TBT_ROP_BA_VALUE(v)         (((ULONG)(v) >> 16) & 0xFFFFUL)
+#define TBT_BA_MAX_USB3             1UL
+#define TBT_BA_MIN_DP_AUX           2UL
+#define TBT_BA_MIN_DP_MAIN          3UL
+#define TBT_BA_MAX_PCIE             4UL
+#define TBT_BA_MAX_HI               5UL
+
+/* Router capability ids, Spec Table 8-2 (Linux enum tb_switch_cap). */
+#define TBT_RCAP_TMU                0x03UL
+#define TBT_RCAP_VSC                0x05UL  /* VSC and VSEC share the id */
+/* Vendor specific capability headers (Spec 8.2.1.3, 8.2.1.4; Linux
+ * struct tb_cap_extended_short and _long): DW 0 Next 7:0, Capability ID
+ * 15:8, VSEC ID 23:16, Length 31:24; a Length of 0 is the long form whose
+ * Next is DW 1 bits 15:0. */
+#define TBT_CAP_NEXT(v)             ((ULONG)(v) & 0xFFUL)
+#define TBT_CAP_ID(v)               (((ULONG)(v) >> 8) & 0xFFUL)
+#define TBT_CAP_VSEC_ID(v)          (((ULONG)(v) >> 16) & 0xFFUL)
+#define TBT_CAP_VSEC_LENGTH(v)      (((ULONG)(v) >> 24) & 0xFFUL)
+#define TBT_CAP_LONG_NEXT(v)        ((ULONG)(v) & 0xFFFFUL)
+/* The walk's bound: a pointer at or past this ends it (Linux cap.c
+ * VSE_CAP_OFFSET_MAX for the long form; the router space's DW address is
+ * 13 bits, Spec Table 6-2). */
+#define TBT_CAP_WALK_LIMIT          16UL
+/* Linux tb_regs.h enum tb_switch_vse_cap: Thunderbolt 3 vendor capabilities. */
+#define TBT_VSEC_PLUG_EVENTS        0x01UL
+#define TBT_VSEC_LINK_CONTROLLER    0x06UL
+
+/* TMU Router Configuration Capability, Spec 8.2.1.2 (Linux TMU_RTR_CS_*). */
+#define TBT_TMU_RTR_CS_0            0UL
+#define TBT_TMU_RTR0_FREQ_WIND_SHIFT 16                 /* 26:16 Freq Measurement Window */
+#define TBT_TMU_RTR0_FREQ_WIND_MASK 0x07FF0000UL
+#define TBT_TMU_RTR0_TD             0x08000000UL        /* 27 Time Disruption */
+#define TBT_TMU_RTR0_TSP_NS         0x20000000UL        /* 29 Time Sync Protocol Not Supported */
+#define TBT_TMU_RTR0_UCAP           0x40000000UL        /* 30 Uni-Directional Capability */
+#define TBT_TMU_RTR_CS_1            1UL     /* LocalTime Low: 31:16 the ns part (Linux) */
+#define TBT_TMU_RTR_CS_2            2UL     /* LocalTime Middle */
+#define TBT_TMU_RTR_CS_3            3UL     /* LocalTime High 15:0, TSPacketInterval 31:16 */
+#define TBT_TMU_RTR3_INTERVAL_SHIFT 16
+#define TBT_TMU_RTR3_INTERVAL_MASK  0xFFFF0000UL
+#define TBT_TMU_RTR_CS_15           15UL    /* FreqAvg 5:0, DelayAvg 11:6, OffsetAvg 17:12, ErrorAvg 23:18 */
+#define TBT_TMU_RTR15_AVG_MASK      0x00FFFFFFUL
+#define TBT_TMU_RTR_CS_18           18UL    /* DeltaAvgConst 23:16 (version 2 routers) */
+#define TBT_TMU_RTR18_DELTA_MASK    0x00FF0000UL
+#define TBT_TMU_RTR_CS_22           22UL    /* Post Local Time Low */
+#define TBT_TMU_RTR_CS_23           23UL    /* Post Local Time High */
+#define TBT_TMU_RTR_CS_24           24UL    /* Post Time Low */
+#define TBT_TMU_RTR_CS_25           25UL    /* Post Time High: writing it starts the post */
+/* Spec 8.2.1.2's connection manager note: TSPacketInterval TMU_OFF 0,
+ * HiFi 16, LowRes 1000 (Linux tmu.c tmu_rates). Guide Table 7-3 and
+ * Linux tmu_params for HiFi: window 800, averaging constants 8. */
+#define TBT_TMU_INTERVAL_OFF        0UL
+#define TBT_TMU_INTERVAL_HIFI       16UL
+#define TBT_TMU_FREQ_WINDOW_HIFI    800UL
+#define TBT_TMU_AVG_CONST_HIFI      8UL
+
+/* ---------------------------------------------------------------------- */
+/* Adapter configuration space, Spec 8.2.2.1 Table 8-9 (DW 0 to 5)       */
+/* ---------------------------------------------------------------------- */
+
+#define TBT_ADP_CS_0                0UL
+#define TBT_ADP_CS_1                1UL     /* 7:0 Next Capability Pointer */
+#define TBT_ADP_CS_2                2UL     /* 23:0 Adapter Type */
+#define TBT_ADP_CS_3                3UL
+#define TBT_ADP_CS_4                4UL
+#define TBT_ADP_CS_5                5UL
+#define TBT_ADP_BASIC_DWORDS        6UL
+#define TBT_ADP1_NEXT_CAP(v)        ((ULONG)(v) & 0xFFUL)
+#define TBT_ADP2_TYPE(v)            ((ULONG)(v) & 0x00FFFFFFUL)
+/* Adapter Type (Protocol 23:16, Version 15:8, Sub-type 7:0), Spec 8.2.2.1;
+ * Linux enum tb_port_type. */
+#define TBT_ADP_TYPE_UNUSED         0x000000UL
+#define TBT_ADP_TYPE_LANE           0x000001UL
+#define TBT_ADP_TYPE_HI             0x000002UL
+#define TBT_ADP_TYPE_DP_IN          0x0E0101UL
+#define TBT_ADP_TYPE_DP_OUT         0x0E0102UL
+#define TBT_ADP_TYPE_PCIE_DOWN      0x100101UL
+#define TBT_ADP_TYPE_PCIE_UP        0x100102UL
+#define TBT_ADP_TYPE_USB3_DOWN      0x200101UL
+#define TBT_ADP_TYPE_USB3_UP        0x200102UL
+/* ADP_CS_4 (Linux ADP_CS_4_*): Non Flow Controlled Buffers 9:0, Total
+ * Buffers 29:20, Plugged 30, Lock 31. */
+#define TBT_ADP4_NFC_BUFFERS(v)     ((ULONG)(v) & 0x3FFUL)
+#define TBT_ADP4_TOTAL_BUFFERS(v)   (((ULONG)(v) >> 20) & 0x3FFUL)
+#define TBT_ADP4_PLUGGED            0x40000000UL
+#define TBT_ADP4_LOCK               0x80000000UL
+/* ADP_CS_5: Max Input HopID 6:0, Max Output HopID 17:11, Link Credits
+ * Allocated 28:22, Disable Hot Plug Events 31. Linux's struct
+ * tb_regs_port_header gives the HopID fields 11 bits each (10:0, 21:11),
+ * the Thunderbolt 3 width; bits 10:7 are reserved in USB4, so the
+ * specification's 7-bit fields are read here. Linux ADP_CS_5_LCA_MASK,
+ * ADP_CS_5_DHP agree. */
+#define TBT_ADP5_MAX_IN_HOP(v)      ((ULONG)(v) & 0x7FUL)
+#define TBT_ADP5_MAX_OUT_HOP(v)     (((ULONG)(v) >> 11) & 0x7FUL)
+#define TBT_ADP5_LCA(v)             (((ULONG)(v) >> 22) & 0x7FUL)
+#define TBT_ADP5_DHP                0x80000000UL
+
+/* Adapter capability ids, Spec 8.2.2 (Linux enum tb_port_cap). */
+#define TBT_ACAP_LANE               0x01UL
+#define TBT_ACAP_TMU                0x03UL
+#define TBT_ACAP_ADAPTER            0x04UL  /* PCIe, USB3, DP: "Adapter Configuration Capability" */
+#define TBT_ACAP_VSC                0x05UL
+#define TBT_ACAP_USB4_PORT          0x06UL
+
+/* TMU Adapter Configuration Capability, Spec 8.2.2.2 (Linux TMU_ADP_CS_*). */
+#define TBT_TMU_ADP_CS_3            3UL
+#define TBT_TMU_ADP3_UDM            0x20000000UL    /* 29 EnableUniDirectionalMode */
+#define TBT_TMU_ADP_CS_6            6UL
+#define TBT_TMU_ADP6_DTS            0x00000002UL    /* 1 Disable Time Sync */
+#define TBT_TMU_ADP_CS_8            8UL
+#define TBT_TMU_ADP8_EUDM           0x00008000UL    /* 15 Enable Enhanced Uni-Directional Mode */
+#define TBT_TMU_ADP_CS_9            9UL
+#define TBT_TMU_ADP9_INTERVAL_MASK  0xFFFF0000UL    /* 31:16 AdapterTimeSyncInterval */
+
+/* Lane Adapter Configuration Capability, Spec 8.2.2.3 (Linux LANE_ADP_CS_*). */
+#define TBT_LANE_CS_0               0UL
+#define TBT_LANE0_SLW_X2            0x00200000UL    /* 21: x2 supported (Linux SUPPORTED_WIDTH_DUAL at 20) */
+#define TBT_LANE_CS_1               1UL
+#define TBT_LANE1_TLW_MASK          0x00000030UL    /* 5:4 Target Link Width */
+#define TBT_LANE1_TLW_SINGLE        0x00000010UL    /* 01b, the default */
+#define TBT_LANE1_TLW_DUAL          0x00000030UL    /* 11b */
+#define TBT_LANE1_CL0S_EN           0x00000400UL    /* 10 */
+#define TBT_LANE1_CL1_EN            0x00000800UL    /* 11 */
+#define TBT_LANE1_CL2_EN            0x00001000UL    /* 12 */
+#define TBT_LANE1_CLX_EN            0x00001C00UL
+#define TBT_LANE1_LD                0x00004000UL    /* 14 Lane Disable */
+#define TBT_LANE1_LB                0x00008000UL    /* 15 Lane Bonding */
+#define TBT_LANE1_SPEED(v)          (((ULONG)(v) >> 16) & 0xFUL)    /* 19:16 Current Link Speed */
+#define TBT_LANE_SPEED_GEN2         0x8UL
+#define TBT_LANE_SPEED_GEN3         0x4UL
+#define TBT_LANE_SPEED_GEN4         0x2UL
+#define TBT_LANE1_NLW(v)            (((ULONG)(v) >> 20) & 0x3FUL)   /* 25:20 Negotiated Link Width */
+#define TBT_LANE_WIDTH_X1           0x01UL
+#define TBT_LANE_WIDTH_X2           0x02UL
+#define TBT_LANE1_STATE(v)          (((ULONG)(v) >> 26) & 0xFUL)    /* 29:26 Adapter State */
+#define TBT_LANE_STATE_DISABLED     0UL
+#define TBT_LANE_STATE_TRAINING     1UL
+#define TBT_LANE_STATE_CL0          2UL
+#define TBT_LANE_STATE_CL0S_TX      3UL
+#define TBT_LANE_STATE_CL0S_RX      4UL
+#define TBT_LANE_STATE_CL1          5UL
+#define TBT_LANE_STATE_CL2          6UL
+#define TBT_LANE_STATE_CLD          7UL
+
+/* USB4 Port Capability, Spec 8.2.2.4 (Linux PORT_CS_18_*, PORT_CS_19_*). */
+#define TBT_PORT_CS_18              18UL
+#define TBT_PORT18_BE               0x00000100UL    /* 8 Bonding Enabled */
+#define TBT_PORT18_TCM              0x00000200UL    /* 9 TBT3-Compatible Mode */
+#define TBT_PORT_CS_19              19UL
+#define TBT_PORT19_DPR              0x00000001UL    /* 0 Downstream Port Reset */
+#define TBT_PORT19_PC               0x00000008UL    /* 3 USB4 Port is Configured */
+
+/* PCIe Adapter Configuration Capability, Spec 8.2.2.7 (Linux
+ * ADP_PCIE_CS_0_*, enum tb_pcie_ltssm_state). */
+#define TBT_PCIE_CS_0               0UL
+#define TBT_PCIE0_LTSSM(v)          (((ULONG)(v) >> 25) & 0xFUL)    /* 28:25 */
+#define TBT_PCIE0_PE                0x80000000UL    /* 31 Path Enable */
+#define TBT_LTSSM_DETECT            0x0UL
+#define TBT_LTSSM_RECOVERY          0x4UL
+#define TBT_LTSSM_RECOVERY_IDLE     0x5UL
+#define TBT_LTSSM_L0                0x6UL
+#define TBT_LTSSM_L1                0x7UL
+
+/* USB3 Adapter Configuration Capability, Spec 8.2.2.5 (Linux ADP_USB3_CS_*). */
+#define TBT_USB3_CS_0               0UL
+#define TBT_USB3_0_V                0x40000000UL    /* 30 Valid */
+#define TBT_USB3_0_PE               0x80000000UL    /* 31 Path Enable */
+#define TBT_USB3_CS_1               1UL
+#define TBT_USB3_1_CUBW(v)          ((ULONG)(v) & 0xFFFUL)          /* 11:0 consumed up */
+#define TBT_USB3_1_CDBW(v)          (((ULONG)(v) >> 12) & 0xFFFUL)  /* 23:12 consumed down */
+#define TBT_USB3_1_HCA              0x80000000UL    /* 31 Host Controller Ack */
+#define TBT_USB3_CS_2               2UL
+#define TBT_USB3_2_BW_MASK          0x00FFFFFFUL    /* allocated up 11:0, down 23:12 */
+#define TBT_USB3_2_ADBW_SHIFT       12
+#define TBT_USB3_2_CMR              0x80000000UL    /* 31 Connection Manager Request */
+#define TBT_USB3_CS_3               3UL
+#define TBT_USB3_3_SCALE(v)         ((ULONG)(v) & 0x3FUL)           /* 5:0 */
+#define TBT_USB3_CS_4               4UL
+#define TBT_USB3_4_MSLR(v)          (((ULONG)(v) >> 12) & 0x7FUL)   /* 18:12 Maximum Supported Link Rate */
+#define TBT_USB3_MSLR_20G           0x1UL   /* Linux ADP_USB3_CS_4_MSLR_20G; anything else 10 Gb/s */
+
+/* ---------------------------------------------------------------------- */
+/* Path configuration space, Spec 8.2.3: 2 DWs per HopID                  */
+/* ---------------------------------------------------------------------- */
+
+/* PATH_CS_0 (Linux struct tb_regs_hop DWORD 0, whose next_hop is 11 bits;
+ * the specification's Output HopID is 6:0). */
+#define TBT_PATH0_OUT_HOP(v)        ((ULONG)(v) & 0x7FUL)
+#define TBT_PATH0_OUT_HOP_MASK      0x0000007FUL
+#define TBT_PATH0_OUT_ADP(v)        (((ULONG)(v) >> 11) & 0x3FUL)
+#define TBT_PATH0_OUT_ADP_SHIFT     11
+#define TBT_PATH0_OUT_ADP_MASK      0x0001F800UL
+#define TBT_PATH0_CREDITS(v)        (((ULONG)(v) >> 17) & 0x7FUL)
+#define TBT_PATH0_CREDITS_SHIFT     17
+#define TBT_PATH0_CREDITS_MASK      0x00FE0000UL
+#define TBT_PATH0_VALID             0x80000000UL
+/* PATH_CS_1. */
+#define TBT_PATH1_WEIGHT_MASK       0x0000000FUL
+#define TBT_PATH1_PRIO_SHIFT        8
+#define TBT_PATH1_PRIO_MASK         0x00000700UL
+#define TBT_PATH1_IFC               0x01000000UL
+#define TBT_PATH1_EFC               0x02000000UL
+#define TBT_PATH1_ISE               0x04000000UL
+#define TBT_PATH1_ESE               0x08000000UL
+#define TBT_PATH1_PP                0x10000000UL    /* 28 Pending Packets */
+/* Guide Table 6-1 and Linux tunnel.c: PCIe and USB3 priority 3; weight 1
+ * for PCIe (TB_PCI_WEIGHT), 2 for USB3 (TB_USB3_WEIGHT). */
+#define TBT_PATH_PRIORITY_TUNNEL    3UL
+#define TBT_PATH_WEIGHT_PCIE        1UL
+#define TBT_PATH_WEIGHT_USB3        2UL
+/* The first HopID a tunnelled path may use (Spec 8.2.3.2), the protocol
+ * adapters' HopID (Linux TB_PCI_HOPID, TB_USB3_HOPID), and the floor
+ * below which no PCIe path is built (Linux TB_MIN_PCIE_CREDITS). */
+#define TBT_HOP_FIRST               8UL
+#define TBT_HOP_PROTOCOL            8UL
+#define TBT_HOP_MAX                 127UL
+#define TBT_CREDITS_MIN_PCIE        6UL
+
+/* ---------------------------------------------------------------------- */
+/* Thunderbolt 3 vendor capabilities (Linux tb_regs.h, lc.c, switch.c)    */
+/* ---------------------------------------------------------------------- */
+
+/* Plug Events VSEC, DW 1 (VSC_CS_1): bits 6:2 the plug events, bit 2 the
+ * USB disable (Linux TB_PLUG_EVENTS_USB_DISABLE; switch.c
+ * tb_plug_events_active clears 6:2 and sets bit 2 except on Alpine Ridge). */
+#define TBT_PLUG_EVENTS_CS_1        1UL
+#define TBT_PLUG_EVENTS_MASK        0x0000007CUL
+#define TBT_PLUG_EVENTS_USB_DISABLE 0x00000004UL
+/* Link controller VSEC (Linux TB_LC_*): the common block. */
+#define TBT_LC_DESC                 0x02UL
+#define TBT_LC_DESC_SIZE(v)         (((ULONG)(v) >> 8) & 0xFFUL)        /* start of the per-port blocks */
+#define TBT_LC_DESC_PORT_SIZE(v)    (((ULONG)(v) >> 16) & 0xFFFUL)
+#define TBT_LC_FUSE                 0x03UL      /* four DWs of UUID (lc.c tb_lc_read_uuid) */
+/* The per-port block of physical port (adapter - 1) / 2 (Linux
+ * thunderbolt.h tb_phy_port_from_link). */
+#define TBT_LC_PORT_ATTR            0x8DUL
+#define TBT_LC_PORT_ATTR_BE         0x00001000UL    /* 12 bonding possible */
+#define TBT_LC_SX_CTRL              0x96UL
+#define TBT_LC_SX_CTRL_L1C          0x00010000UL    /* 16 odd adapter configured */
+#define TBT_LC_SX_CTRL_L2C          0x00100000UL    /* 20 even adapter configured */
+#define TBT_LC_SX_CTRL_UPSTREAM     0x40000000UL    /* 30 */
+/* Linux switch.c tb_init_port: a Thunderbolt 3 lane adapter's control path
+ * credits when its HopID 0 entry does not report them. */
+#define TBT_TBT3_CTL_CREDITS        2UL
+/* Linux tunnel.c tb_pci_init_credits: the protocol adapter's credits on a
+ * router without USB4 credit allocation, and the lane defaults. */
+#define TBT_TBT3_PROTO_CREDITS      7UL
+#define TBT_CREDITS_BONDED          32UL
+#define TBT_CREDITS_SINGLE          16UL
+
+/* ---------------------------------------------------------------------- */
+/* Host Router Reset, Spec 12.6.3.1.2 and Guide 3.5                       */
+/* ---------------------------------------------------------------------- */
+
+#define TBT_HI_HR_RESET_HRR         0x00000001UL
 
 #endif /* TBT_REGS_H */

@@ -188,6 +188,11 @@ rem   test_tbt_hw  - the hardware profiles, the Ice Lake family's force-power
 rem                  sequence and the connection manager's selection
 rem                  (src\cm\tbt_hw.c, task 39-A.3): every outcome and inert
 rem                  reason
+rem   test_tbt_select - the selection as design record 22 section 3 has it
+rem                  (src\cm\tbt_hw.c, task 40-A.2): every row of its table,
+rem                  every NVM_AUTH_DONE/ICM_EN combination, test (d)'s
+rem                  interface and router versions, and each negative case
+rem                  inert, never the other profile
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -413,6 +418,7 @@ rem ICM message row.
 call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

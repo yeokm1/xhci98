@@ -241,7 +241,7 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
 }
 
 LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
-                           PTBT_HW_POWER power, BOOLEAN active)
+                           PTBT_HW_POWER power, BOOLEAN mayClear)
 {
     ULONG v;
 
@@ -249,9 +249,10 @@ LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
         !power->ForcePowerSetHere) {
         return TBT_OK;
     }
-    /* Record 21 section 1.4.2: an inert instance clears it only where its
-     * own firmware-ready poll failed, so nothing came up through it. */
-    if (!active && !power->FwReadyFailed) {
+    /* Record 22 section 4.2, settled over record 21 section 1.4.2 on
+     * 2026-10-15: an inert instance leaves it set, even after its own
+     * FW_READY poll failed; so does an active one with a router up. */
+    if (!mayClear) {
         return TBT_OK;
     }
     v = cfg->Read32(cfg->Context, TBT_ICL_VS_CAP_22);
@@ -287,6 +288,45 @@ BOOLEAN TbtHwReadHostUuid(const TBT_HW_PROFILE *hw,
 /* Selection                                                              */
 /* ---------------------------------------------------------------------- */
 
+BOOLEAN TbtHwSoftwareNhiVersion(ULONG caps)
+{
+    return (BOOLEAN)(TBT_HI_CAPS_VERSION(caps) == TBT_HI_VERSION_TBT3 ||
+                     TBT_HI_CAPS_VERSION(caps) == TBT_HI_VERSION_2);
+}
+
+ULONG TbtHwRouterVersion(ULONG usb4Version)
+{
+    if (usb4Version == TBT_USB4_VERSION_1_0 ||
+        usb4Version == TBT_USB4_VERSION_2_0) {
+        return TBT_HW_ROUTER_USB4;
+    }
+    if (usb4Version == TBT_USB4_VERSION_TBT3) {
+        return TBT_HW_ROUTER_TBT3;
+    }
+    return TBT_HW_ROUTER_RESERVED;
+}
+
+/* The software admission, with test (d)'s interface version. */
+static VOID tbtHwSoftware(PTBT_HW_SELECTION out, ULONG route,
+                          BOOLEAN forced, const TBT_HOST *host)
+{
+    if (!TbtHwSoftwareNhiVersion(out->Caps)) {
+        out->Outcome = TBT_SEL_INERT;
+        out->Reason = TBT_INERT_NHI_VERSION;
+        tbtHwLog(host, "tbt.hw.inert", TBT_INERT_NHI_VERSION);
+        return;
+    }
+    out->Outcome = TBT_SEL_SOFTWARE;
+    out->Route = route;
+    out->Forced = forced;
+    if (route == TBT_SW_ROUTE_ICM_DISABLED &&
+        (out->FwStatus & TBT_ICM_FW_NVM_AUTH_DONE) != 0) {
+        out->Experimental = TRUE;
+        tbtHwLog(host, "tbt.hw.software-cm-experimental", out->FwStatus);
+    }
+    tbtHwLog(host, "tbt.hw.software-cm", route);
+}
+
 static VOID tbtHwInert(PTBT_HW_SELECTION out, ULONG reason,
                        const TBT_HOST *host)
 {
@@ -317,6 +357,9 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
     out->Caps = 0;
     out->FwStatus = 0;
     out->Mode = 0xFFFFFFFFUL;
+    out->Route = TBT_SW_ROUTE_NONE;
+    out->Experimental = FALSE;
+    out->Forced = FALSE;
 
     if (hw == NULL || !platformReady) {
         tbtHwInert(out, TBT_INERT_PLATFORM, host);
@@ -334,12 +377,11 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
         return;
     }
 
-    /* No firmware CM by identity (decision B'1): admitted once (b) and the
-     * register checks passed. The Intel firmware status is not read. Which
-     * interface versions the software CM supports is Phase 40's check. */
+    /* No firmware CM by identity (decision B'1): admitted once (b), the
+     * register checks and test (d)'s interface version passed. The Intel
+     * firmware status is not read; XhciCmMode 3 changes nothing here. */
     if (hw->Icm == NULL || hw->Ownership == TBT_HW_OWN_NONE) {
-        out->Outcome = TBT_SEL_SOFTWARE;
-        tbtHwLog(host, "tbt.hw.software-cm", 1);
+        tbtHwSoftware(out, TBT_SW_ROUTE_IDENTITY, forceSoftware, host);
         return;
     }
 
@@ -366,8 +408,7 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
          * when icm_firmware_running says so, and its other path restarts
          * the firmware, which this driver never does. */
         if (hw->Ownership == TBT_HW_OWN_AUTH_DONE) {
-            out->Outcome = TBT_SEL_SOFTWARE;
-            tbtHwLog(host, "tbt.hw.software-cm", 2);
+            tbtHwSoftware(out, TBT_SW_ROUTE_ICM_DISABLED, forceSoftware, host);
             return;
         }
         tbtHwInert(out, TBT_INERT_ICM_NOT_RUNNING, host);

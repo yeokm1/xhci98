@@ -24,7 +24,7 @@
 #include "../src/cm/tbt_ring.h"
 
 #define FAKE_PHYS           0x00200000UL
-#define FAKE_MEM_BYTES      8192
+#define FAKE_MEM_BYTES      16384
 #define FAKE_RXQ            128
 #define FAKE_TXLOG          512
 #define FAKE_FRAME_BYTES    512
@@ -84,6 +84,7 @@ typedef struct FAKE {
     int TxConsume;                  /* the host interface fetches TX */
     unsigned long TxIndexOverride;  /* nonzero: the TX index register reads this */
     unsigned long RxBaseLo, RxBaseHi, RxSize, RxSizeReg, RxCtrl, RxPdf, RxProd, RxCons;
+    unsigned long Ring1Ctrl;        /* TX Ring Control of ring 1, read only */
 
     unsigned long MemDw[FAKE_MEM_BYTES / 4];   /* DW-aligned host memory */
 
@@ -372,6 +373,7 @@ static ULONG fakeRead32(PVOID ctx, ULONG off)
         return (g_fake.TxProd << 16) | g_fake.TxCons;
     case 0x0000C: return g_fake.TxSize;
     case 0x19800: return g_fake.TxCtrl;
+    case 0x19820: return g_fake.Ring1Ctrl;
     case 0x08000: return g_fake.RxBaseLo;
     case 0x08004: return g_fake.RxBaseHi;
     case 0x08008: return (g_fake.RxProd << 16) | g_fake.RxCons;
@@ -456,6 +458,12 @@ static ULONG fakeNowMs(PVOID ctx)
     return g_fake.NowUs / 1000UL;
 }
 
+static ULONG fakeClockUs(PVOID ctx)
+{
+    (void)ctx;
+    return g_fake.NowUs;
+}
+
 static void fakeLog(PVOID ctx, const char *label, ULONG value)
 {
     (void)ctx;
@@ -465,7 +473,8 @@ static void fakeLog(PVOID ctx, const char *label, ULONG value)
 }
 
 static const TBT_HOST g_fakeHost = {
-    NULL, fakeRead32, fakeWrite32, fakeStall, fakeSleep, fakeNowMs, fakeLog
+    NULL, fakeRead32, fakeWrite32, fakeStall, fakeSleep, fakeNowMs, fakeLog,
+    fakeClockUs, 0
 };
 
 /* An Alpine Ridge at rest (ICM-PROTOCOL.md 2.1 [obs]). */
