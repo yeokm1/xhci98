@@ -2429,7 +2429,7 @@ Every value reads the same way:
 |---|---|
 | `0` | Off on every controller |
 | `1` | On the controllers listed for it below: the default, except for `XhciShutdownReset`, whose default is `0` |
-| `2` | On every controller, where the entry below says so. On `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear`, which write one vendor's own registers, a `2` is read as `1` |
+| `2` | On every controller, except `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear`, which are vendor-specific (a `2` there is read as `1`) |
 | absent, not a `DWORD`, or any other number | The default |
 
 A controller is matched by its vendor and device ID alone; its revision is

@@ -5320,10 +5320,9 @@ A value that is absent means the default each one states.
       0   off on every controller.
       1   on the controllers listed: the default, except
           XhciShutdownReset, which is 0.
-      2   on every controller, where the entry says so. On
-          XhciIntelShutdownToEhci, XhciAsmediaFlowControl and
-          XhciAmdSuspendBitClear, which write one vendor's own registers,
-          2 is read as 1.
+      2   on every controller, except XhciIntelShutdownToEhci,
+          XhciAsmediaFlowControl and XhciAmdSuspendBitClear, which are
+          vendor-specific (a 2 there is read as 1).
       Absent, not a DWORD or any other number is the default.
 
   Matched by vendor and device ID alone; the revision is logged, never

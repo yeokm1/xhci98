@@ -481,7 +481,7 @@ Linux's xHCI driver works around faults of particular controllers, each named by
 
 - `0`: off on every controller.
 - `1` (the default, except `XhciShutdownReset`, which is `0`): on the controllers in the table.
-- `2`: on every controller, for the quirks the settings table says so. `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear` write a vendor's own registers, so a `2` there is read as `1`.
+- `2`: on every controller, except `XhciIntelShutdownToEhci`, `XhciAsmediaFlowControl` and `XhciAmdSuspendBitClear`, which are vendor-specific (a `2` there is read as `1`).
 
 Absent, not a `DWORD`, or any other number is the default. The revision of the controller is logged but never matched. Each value is read when the controller starts, so restart after changing one. `XHCISNAP`'s report has a "Linux quirks" block: each value as read, whether this controller is listed, whether the quirk applies, and what it last did.
 
