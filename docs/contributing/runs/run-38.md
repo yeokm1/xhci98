@@ -314,8 +314,8 @@ don't-overwrite rule as the other values (the INF gate's `VAL-*` rules,
 thirty-six values); "the INFs write nothing" above describes the task as
 first built. The `SilentClasses` list is still written by
 `silent-on.bat` alone, never by the INFs. The fresh-install 0 was read
-on all nine targets from the signed asset (38.final, S1 and S2); owed:
-98 SE's update keeping a 1 (S3), after publishing.
+on all nine targets from the signed asset (38.final, S1 and S2), and
+98 SE's update keeping a 1 (S3).
 
 **Gates.** `test\test_silent.c` (1201 checks) with the host suites; both
 builds and their gates at `d8c8fa63`; `test-package.ps1`, 1182 checks.
@@ -627,7 +627,7 @@ composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
 
 ## 38.final - So far
 
-**Verdict: open.** What is done, all 2026-10-14:
+**Verdict: done.** What was done, all 2026-10-14:
 
 - **The stamp.** `b4b8237c`: `2.4.0.0`, `DriverVer` `10/14/2026`, the four
   INFs and the release notes' header; `2fd6a25a` and `86a0f6d3`, the
@@ -701,12 +701,25 @@ composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86.
   cuts' matrix read it on the same build. 98 SE's S3 (`silent-on.bat`,
   an update, the 1 kept) runs after publishing (owner, 2026-10-14).
 
-**Left:**
+- **XP x64 from the F6 floppy past the product key page** (owner-supplied
+  key, never recorded), the floppy the asset's `release-x64` byte for
+  byte, a new disk (`legs\f6xp64\notes.txt`, "F6 PAST KEY
+  2026-10-14"): text mode on the USB keyboard behind the hub, no PS/2
+  event; GUI mode's five Installing Devices Logo prompts answered with
+  PS/2 (the USB keyboard has no HID driver yet there, as in the morning's
+  run and as the release notes say); from Regional Settings on, the key
+  page included, USB only; the desktop, a restart (the owner's Start-menu
+  shutdown, event 6006 and no 6008, then a cold start) and the desktop
+  again with USB input; the controller "working properly", no warning
+  mark. PASS.
+- **98 SE's S3** (after publishing was cleared): `silent-on.bat` set 1
+  and merged the six entries; an update from the asset's `release-x86`
+  through Have Disk kept the 1 (`silent.gate.value` 1, thirty-six
+  values); `silent-off.bat` set 0 and kept the list. PASS. Re-adding the
+  audio device with the switch on met the known 98 SE audio-load wedge
+  (36.41), so the update ran with the mouse and the stick.
 
-- XP x64's F6 install past the product key page, from the asset's
-  `release-x64` (owner-supplied key; running at the time of writing).
-- 98 SE's S3 (above).
-- Publishing (the owner's).
+**Verdict: done** (2026-10-14). Left: publishing (the owner's).
 
 ## Moved from the roadmap before the close (2026-10-14)
 
