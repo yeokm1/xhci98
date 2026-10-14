@@ -453,9 +453,14 @@ static void fabRouterOp(FAB *f, int ri)
         r->Rcs[9] = r->CapsData;
         break;
     case FAB_OP_BA:
-        r->Rcs[25] = r->BaLen;
+        r->BaLastMeta = meta;
+        r->Rcs[25] = r->BaLen | ((meta & 0x3FUL) << 8);
         for (i = 0; i < r->BaLen; i++) {
             r->Rcs[9 + i] = r->BaData[i];
+            if ((r->BaData[i] & 0xFFFFUL) == 4 && (meta & 0x3FUL) < FAB_MAX_ADP &&
+                r->BaPerLane[meta & 0x3FUL] != 0) {
+                r->Rcs[9 + i] = 4UL | (r->BaPerLane[meta & 0x3FUL] << 16);
+            }
         }
         break;
     }
@@ -671,15 +676,19 @@ static void fabRequest(FAB *f, unsigned long pdf, const unsigned long *dw,
     unsigned long i;
     int errRouter;
     int r;
+    int drop;
 
     f->Requests++;
     if (f->Stopped) {
         return;
     }
     r = fabResolve(f, dw[0] & 0xFFFFFFUL, dw[1], &errRouter, &code, &errAdp);
-    if (f->Hook != NULL &&
-        f->Hook(f, pdf, r, cs, adp, addr, n, pdf == TBT_PDF_WRITE ? dw + 3 : NULL)) {
-        return;     /* the hook answered (or swallowed) it */
+    drop = 0;
+    if (f->Hook != NULL) {
+        drop = f->Hook(f, pdf, r, cs, adp, addr, n, pdf == TBT_PDF_WRITE ? dw + 3 : NULL);
+        if (drop == FAB_HOOK_SWALLOW) {
+            return;
+        }
     }
     r = fabResolve(f, dw[0] & 0xFFFFFFUL, dw[1], &errRouter, &code, &errAdp);
     if (r < 0) {
@@ -737,7 +746,9 @@ static void fabRequest(FAB *f, unsigned long pdf, const unsigned long *dw,
                 fabPathWrite(f, r, (unsigned)adp, addr + i, dw[3 + i]);
             }
         }
-        fabQueue(f, TBT_PDF_WRITE, resp, 3, 40);
+        if (drop != FAB_HOOK_DROP_ANSWER) {
+            fabQueue(f, TBT_PDF_WRITE, resp, 3, 40);
+        }
     }
 }
 
@@ -1392,6 +1403,34 @@ void fabUnplug(FAB *f, int port)
     if ((f->R[0].Adp[a].Cs[5] & 0x80000000UL) == 0) {
         fabHotPlug(f, 0, (unsigned long)a, 1);
     }
+}
+
+void fabPowerCycle(FAB *f)
+{
+    int i;
+    unsigned a;
+
+    for (i = 1; i < FAB_MAX_ROUTERS; i++) {
+        if (f->R[i].Used) {
+            fabResetRouter(f, i);
+        }
+    }
+    fabResetRouter(f, 0);
+    for (a = 1; a <= f->R[0].MaxAdp; a++) {
+        if (f->R[0].Adp[a].Present && (f->R[0].Adp[a].Cs[2] & 0xFFFFFFUL) == 1) {
+            f->R[0].Adp[a].Cs[4] |= 0x80000000UL;
+            if (f->R[0].Adp[a].Peer >= 0) {
+                setLaneWidth(&f->R[0].Adp[a], 1);
+            }
+        }
+    }
+    for (i = 1; i < FAB_MAX_ROUTERS; i++) {
+        if (f->R[i].Used && f->R[i].Connected) {
+            setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp], 1);
+            setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp + 1], 1);
+        }
+    }
+    f->RxQCount = 0;
 }
 
 void fabSwapQuiet(FAB *f, int port, int dev)

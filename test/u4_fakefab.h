@@ -96,6 +96,8 @@ typedef struct FAB_ROUTER {
     unsigned long CapsData;         /* Get Capabilities index 0, DW 0 */
     unsigned long BaData[5];
     unsigned BaLen;
+    unsigned long BaPerLane[FAB_MAX_ADP];   /* nonzero: baMaxPCIe for that lane 0 */
+    unsigned long BaLastMeta;
     unsigned char Drom[256];
     unsigned DromLen;
     unsigned long MapData[4][2];
@@ -117,6 +119,12 @@ typedef struct FAB_FRAME {
     unsigned long AtUs;
     unsigned long Dw[64];
 } FAB_FRAME;
+
+/* A hook's answer: 0 go on, 1 swallow the request (nothing applied, no
+ * answer), 2 apply it and lose the answer. */
+#define FAB_HOOK_GO         0
+#define FAB_HOOK_SWALLOW    1
+#define FAB_HOOK_DROP_ANSWER 2
 
 struct FAB;
 typedef int (*FAB_HOOK)(struct FAB *f, unsigned long pdf, int router,
@@ -195,6 +203,11 @@ void fabUnplugChild(FAB *f, int dev);
  * HopIDs 8 and 9, Path Enable both ends; `usb3` adds a USB3 tunnel at 10
  * and 11. */
 void fabPreos(FAB *f, int port, int usb3);
+
+/* The whole domain loses power across a sleep (Spec 3.3): every router,
+ * the host's included, back to its power-on state; links stay connected,
+ * the host's lane adapters locked again. */
+void fabPowerCycle(FAB *f);
 
 /* Queries */
 int  fabPortLane0(const FAB *f, int port);

@@ -100,6 +100,12 @@
 #define TBT_U4_HRR_DONE_US          500000UL
 #define TBT_U4_POLL_STEP_US         1000UL      /* a register poll's pace */
 #define TBT_U4_STATEMENT_US         3000000UL   /* record 22 section 10.3 */
+/* Section 7.6: the resume's own budgets, enforced on the clock (the
+ * domain's host router again, then each obligation), and the margin for
+ * the one wait or request already running when a budget runs out. */
+#define TBT_U4_RESUME_HOST_US       10000000UL
+#define TBT_U4_RESUME_EACH_US       20000000UL
+#define TBT_U4_USB3_MAX_MBPS        80000UL     /* above any USB4 link: unrepresentable */
 
 /* USB3 bandwidth (record 22 section 6.9; Linux usb4.c, tunnel.c, quirks.c). */
 #define TBT_U4_USB3_QUIRK_MBPS      16376UL
@@ -247,6 +253,8 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN PcieFailed;     /* no PCIe until a re-plug */
     BOOLEAN Ejected;
     BOOLEAN DpPreserved;    /* a DisplayPort tunnel found at start */
+    ULONG HostBaPcie;       /* the host router's Buffer Allocation for this port */
+    ULONG HostBaUsb3;
     BOOLEAN RemovalOwed;    /* a PCIe teardown's step 6 is owed */
     TBT_U4_ROUTER Dev;
 
@@ -290,6 +298,8 @@ typedef struct _TBT_U4_LINK {
     ULONG ParentLaneCap;    /* its Lane Adapter Configuration Capability */
     TBT_ROUTE Child;
     ULONG ChildUuid[2];
+    ULONG CapsState;        /* TBT_U4_CAPS_* of the child (section 6.4) */
+    ULONG CapsEnabled;
 } TBT_U4_LINK, *PTBT_U4_LINK;
 
 /* A path entry not proven invalid and drained, or a protocol adapter
@@ -298,6 +308,7 @@ typedef struct _TBT_U4_QENTRY {
     BOOLEAN Used;
     BOOLEAN Enable;         /* a Path Enable, not an entry */
     ULONG Port;             /* 0 for the host router alone */
+    ULONG Generation;       /* a device router's entries: its connection's */
     TBT_ROUTE Route;
     ULONG Adapter;
     ULONG Hop;
@@ -482,6 +493,10 @@ typedef struct _TBT_U4CM {
 
     TBT_U4_OBLIGATION Obligations[TBT_U4_OBLIGATIONS];
     BOOLEAN ResumeHeld;     /* the last resume left an obligation unmet */
+    BOOLEAN Budgeted;       /* a resume budget is running */
+    BOOLEAN BudgetSpent;    /* and ran out: sequences stop, ports HELD */
+    ULONG BudgetStartUs;
+    ULONG BudgetUs;
 
     TBT_U4_ACTION Actions[TBT_U4_ACTION_QUEUE];
     ULONG ActionHead;
@@ -540,7 +555,11 @@ VOID TbtU4Suspend(PTBT_U4CM cm);
  * failure path), another negative result when the domain failed. */
 LONG TbtU4Resume(PTBT_U4CM cm);
 /* The resume bound of section 7.6 in microseconds for `obligations`
- * tunnels at the clock's tick, the platform preparation included. */
+ * tunnels at the clock's tick: the platform preparation (1.05 s and a
+ * tick), the budgets TbtU4Resume enforces on the clock (the host router,
+ * then each obligation), and the margin for the one wait or request
+ * running when a budget runs out - after which TbtU4Resume stops, marks
+ * what is left HELD and returns the failure path. */
 ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs);
 
 /* Stop (section 11): rings stopped, nothing on the fabric changed.
