@@ -1,6 +1,7 @@
 # Design Record 22 - USB4 Software Connection Manager
 
-Status: draft 1, 2026-10-15, before code. Written for Phase 40 of
+Status: draft 2, 2026-10-15, before code, reviewed and revised the same
+day. Written for Phase 40 of
 `roadmap-usb4.md` ("USB4: the Software Connection Manager", planned as
 `U4CM` until the owner numbered it on 2026-10-15), task 40.1. Nothing in
 `src\` implements it yet. The owner's decision D7 of 2026-10-15 puts this
