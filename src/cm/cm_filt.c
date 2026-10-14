@@ -38,6 +38,7 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     filter->Common.Self = self;
     filter->Common.Pdo = pdo;
     filter->Outstanding = 1;
+    KeInitializeSpinLock(&filter->Lock);
     KeInitializeEvent(&filter->Drained, NotificationEvent, FALSE);
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
@@ -62,13 +63,32 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
  * below cleared it (the WDM contract for IRP_MN_DEVICE_USAGE_NOTIFICATION).
  * A notification can also come from a child stack propagating its own
  * usage to this one, outside the PnP manager's serialisation, so each one
- * holds a reference on the filter from dispatch to the completion's last
- * access, and removal drains them (cmFilterRelease, CM_FILTER.Outstanding)
- * before it detaches and deletes - a remove lock of this driver's own, the
- * IO_REMOVE_LOCK family being absent on Windows 98 (the allowlist's deny
- * set), though only the NT targets ever create a filter.
- * IRQL: <= DISPATCH_LEVEL (a completion routine).
+ * holds a reference on the filter from before its dispatch touches the
+ * filter to the completion's last access, and removal drains them - a
+ * remove lock of this driver's own (the IO_REMOVE_LOCK family is absent on
+ * Windows 98, the allowlist's deny set, though only the NT targets ever
+ * create a filter), with IoAcquireRemoveLock's and
+ * IoReleaseRemoveLockAndWait's order: no reference is taken once removal
+ * has begun, and removal forwards the IRP before it waits.
+ * IRQL: <= DISPATCH_LEVEL.
  */
+static NTSTATUS cmFilterAcquire(PCM_FILTER filter)
+{
+    KIRQL irql;
+    NTSTATUS status;
+
+    status = STATUS_SUCCESS;
+    KeAcquireSpinLock(&filter->Lock, &irql);
+    if (filter->Removing) {
+        status = STATUS_DELETE_PENDING;
+    } else {
+        /* Interlocked: the release decrements without the lock. */
+        (VOID)InterlockedIncrement(&filter->Outstanding);
+    }
+    KeReleaseSpinLock(&filter->Lock, irql);
+    return status;
+}
+
 static VOID cmFilterRelease(PCM_FILTER filter)
 {
     if (InterlockedDecrement(&filter->Outstanding) == 0) {
@@ -99,16 +119,20 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     PIO_STACK_LOCATION stack;
     PDEVICE_OBJECT self;
     NTSTATUS status;
+    KIRQL irql;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     switch (stack->MinorFunction) {
     case IRP_MN_DEVICE_USAGE_NOTIFICATION:
+        status = cmFilterAcquire(filter);
+        if (!NT_SUCCESS(status)) {
+            return CmCompleteIrp(irp, status, 0);
+        }
         self = filter->Common.Self;
         if (self->AttachedDevice == NULL ||
             (self->AttachedDevice->Flags & DO_POWER_PAGABLE) != 0) {
             self->Flags |= DO_POWER_PAGABLE;
         }
-        (VOID)InterlockedIncrement(&filter->Outstanding);
         IoCopyCurrentIrpStackLocationToNext(irp);
         CM_SET_COMPLETION_ALWAYS(irp, cmFilterUsageDone, NULL);
         return IoCallDriver(filter->Common.Lower, irp);
@@ -127,13 +151,17 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         filter->Started = 0;
-        /* Drop the attach's reference and wait for every notification in
-         * flight to finish with the filter. */
+        /* Close acquisition, forward the removal, then drop the attach's
+         * reference and wait for every notification in flight to finish
+         * with the filter before it is detached and deleted. */
+        KeAcquireSpinLock(&filter->Lock, &irql);
+        filter->Removing = 1;
+        KeReleaseSpinLock(&filter->Lock, irql);
+        IoSkipCurrentIrpStackLocation(irp);
+        status = IoCallDriver(filter->Common.Lower, irp);
         cmFilterRelease(filter);
         (VOID)KeWaitForSingleObject(&filter->Drained, Executive, KernelMode,
                                     FALSE, NULL);
-        IoSkipCurrentIrpStackLocation(irp);
-        status = IoCallDriver(filter->Common.Lower, irp);
         IoDetachDevice(filter->Common.Lower);
         IoDeleteDevice(filter->Common.Self);
         return status;

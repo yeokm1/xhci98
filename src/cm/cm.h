@@ -93,8 +93,11 @@ typedef struct _CM_NHI {
 typedef struct _CM_FILTER {
     CM_COMMON Common;
     ULONG Started;
-    /* 1 for the attach, plus one per device-usage notification in flight;
-     * removal drops the first and waits on Drained (cm_filt.c). */
+    /* The filter's remove lock (cm_filt.c): 1 for the attach, plus one per
+     * device-usage notification in flight, taken under Lock and refused
+     * once Removing is set; removal drops the first and waits on Drained. */
+    KSPIN_LOCK Lock;
+    ULONG Removing;
     LONG Outstanding;
     KEVENT Drained;
 } CM_FILTER, *PCM_FILTER;
