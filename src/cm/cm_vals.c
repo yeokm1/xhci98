@@ -169,21 +169,21 @@ static const CM_NHI_ROW cmIntelNhi[] = {
     { 0x15D9, CM_PROFILE_ICM_AR },   /* Alpine Ridge C 2C                 */
     { 0x15E8, CM_PROFILE_ICM_TR },   /* Titan Ridge 2C                    */
     { 0x15EB, CM_PROFILE_ICM_TR },   /* Titan Ridge 4C                    */
-    { 0x1134, CM_PROFILE_ICM_TR },   /* Maple Ridge 2C                    */
-    { 0x1137, CM_PROFILE_ICM_TR },   /* Maple Ridge 4C                    */
+    { 0x1134, CM_PROFILE_ICM_MR },   /* Maple Ridge 2C                    */
+    { 0x1137, CM_PROFILE_ICM_MR },   /* Maple Ridge 4C                    */
     { 0x8A0D, CM_PROFILE_ICM_ICL },  /* Ice Lake                          */
     { 0x8A17, CM_PROFILE_ICM_ICL },
-    { 0x9A1B, CM_PROFILE_ICM_ICL },  /* Tiger Lake                        */
-    { 0x9A1D, CM_PROFILE_ICM_ICL },
-    { 0x9A1F, CM_PROFILE_ICM_ICL },  /* Tiger Lake H                      */
-    { 0x9A21, CM_PROFILE_ICM_ICL },
-    { 0x463E, CM_PROFILE_ICM_ICL },  /* Alder Lake                        */
-    { 0x466D, CM_PROFILE_ICM_ICL },
-    { 0xA73E, CM_PROFILE_ICM_ICL },  /* Raptor Lake                       */
-    { 0xA76D, CM_PROFILE_ICM_ICL },
-    { 0x7EB2, CM_PROFILE_ICM_ICL },  /* Meteor Lake M                     */
-    { 0x7EC2, CM_PROFILE_ICM_ICL },  /* Meteor Lake P                     */
-    { 0x7EC3, CM_PROFILE_ICM_ICL },
+    { 0x9A1B, CM_PROFILE_ICM_TGL },  /* Tiger Lake                        */
+    { 0x9A1D, CM_PROFILE_ICM_TGL },
+    { 0x9A1F, CM_PROFILE_ICM_TGL },  /* Tiger Lake H                      */
+    { 0x9A21, CM_PROFILE_ICM_TGL },
+    { 0x463E, CM_PROFILE_ICM_TGL },  /* Alder Lake                        */
+    { 0x466D, CM_PROFILE_ICM_TGL },
+    { 0xA73E, CM_PROFILE_ICM_TGL },  /* Raptor Lake                       */
+    { 0xA76D, CM_PROFILE_ICM_TGL },
+    { 0x7EB2, CM_PROFILE_ICM_TGL },  /* Meteor Lake M                     */
+    { 0x7EC2, CM_PROFILE_ICM_TGL },  /* Meteor Lake P                     */
+    { 0x7EC3, CM_PROFILE_ICM_TGL },
     { 0xA833, CM_PROFILE_USB4 },     /* Lunar Lake                        */
     { 0xA834, CM_PROFILE_USB4 },
     { 0xE333, CM_PROFILE_USB4 },     /* Panther Lake M                    */
@@ -245,7 +245,7 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built)
          * hosts' routers are not USB4 routers, and ids unread give no
          * host at all. */
         if (profile == CM_PROFILE_ICM_FR || profile == CM_PROFILE_ICM_AR ||
-            profile == CM_PROFILE_ICM_TR) {
+            profile == CM_PROFILE_ICM_TR || profile == CM_PROFILE_ICM_ICL) {
             return CM_INERT_FORCE_REFUSED;
         }
         if (profile != CM_PROFILE_UNKNOWN) {

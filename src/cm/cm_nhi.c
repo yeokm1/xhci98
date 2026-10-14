@@ -122,7 +122,7 @@ static const char *const cmNhiCounterNames[] = {
     "cm.actions.resync", "cm.actions.not-live", "cm.reenum.skipped",
     "cm.config.failures", "cm.suspends", "cm.resumes", "cm.resume.failures",
     "cm.shutdowns", "cm.power.request-failures", "cm.power.inline",
-    "cm.buffers.kept"
+    "cm.buffers.kept", "cm.power.wakes-unpowered"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,
@@ -239,11 +239,19 @@ VOID CmNhiPollPass(PCM_NHI nhi)
 /* The start                                                              */
 /* ---------------------------------------------------------------------- */
 
+/* The inert start, before anything is activated. A domain the
+ * re-enumeration seam was already started for withdraws its claims at
+ * once (CmReenumStop writes nothing to the NHI), so an instance that never
+ * bound holds no tunnel port. */
 static VOID cmInert(PCM_NHI nhi, ULONG reason)
 {
     nhi->Inert = reason;
     nhi->Stage = CM_STAGE_INERT;
     CmLogNote(nhi, "cm.inert", reason);
+    if (nhi->ReenumOn) {
+        CmReenumStop(nhi);
+        nhi->ReenumOn = 0;
+    }
 }
 
 /* Which CM_PROFILE_* a hardware row is, for CmStartDecision. */
@@ -258,11 +266,15 @@ static ULONG cmProfileOfHw(const TBT_HW_PROFILE *hw)
     if (hw->Icm == &TbtIcmProfileAlpineRidge) {
         return CM_PROFILE_ICM_AR;
     }
+    /* Maple Ridge and Tiger Lake to Meteor Lake: the Titan Ridge and Ice
+     * Lake messages under the NVM-authentication predicate. */
     if (hw->Icm == &TbtIcmProfileTitanRidge) {
-        return CM_PROFILE_ICM_TR;
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_MR
+                                                     : CM_PROFILE_ICM_TR;
     }
     if (hw->Icm == &TbtIcmProfileIceLake) {
-        return CM_PROFILE_ICM_ICL;
+        return hw->Ownership == TBT_HW_OWN_AUTH_DONE ? CM_PROFILE_ICM_TGL
+                                                     : CM_PROFILE_ICM_ICL;
     }
     return CM_PROFILE_USB4;
 }
@@ -292,11 +304,24 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     }
     nhi->Vendor = v & 0xFFFFUL;
     nhi->Device = (v >> 16) & 0xFFFFUL;
-    nhi->ClassCode = (CmCfgRead32(nhi, 0x08) >> 8) & 0xFFFFFFUL;
-    nhi->SubVendor = CmCfgRead32(nhi, 0x2C) & 0xFFFFUL;
     CmLogNote(nhi, "cm.cfg.ids", v);
+    /* The class and the subsystem ids, each read whole: a read refused or
+     * all ones decides nothing, and the Apple policy of test (a) needs the
+     * subsystem vendor established, not assumed. */
+    v = CmCfgRead32(nhi, 0x08);
+    if (v == 0xFFFFFFFFUL) {
+        cmInert(nhi, CM_INERT_CONFIG);
+        return;
+    }
+    nhi->ClassCode = (v >> 8) & 0xFFFFFFUL;
+    v = CmCfgRead32(nhi, 0x2C);
+    if (v == 0xFFFFFFFFUL) {
+        cmInert(nhi, CM_INERT_CONFIG);
+        return;
+    }
+    nhi->SubVendor = v & 0xFFFFUL;
     CmLogNote(nhi, "cm.cfg.class", nhi->ClassCode);
-    CmLogNote(nhi, "cm.cfg.subvendor", nhi->SubVendor);
+    CmLogNote(nhi, "cm.cfg.subsystem", v);
     nhi->Hw = TbtHwMatch(nhi->Vendor, nhi->Device, nhi->ClassCode,
                          (BOOLEAN)(mode == CM_MODE_FORCE_ICM));
     profile = cmProfileOfHw(nhi->Hw);
@@ -310,7 +335,13 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
 
-    /* (b) */
+    /* (b) Nothing is activated out of D0: a D3 queued beside the start
+     * runs after it and quiesces what it made (cm_thr.c). */
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
+        CmPowerSleeping(nhi)) {
+        cmInert(nhi, CM_INERT_POWER);
+        return;
+    }
     nhi->BarVa = (PUCHAR)MmMapIoSpace(nhi->BarPhys, nhi->BarLength,
                                       MmNonCached);
     if (nhi->BarVa == NULL) {
@@ -318,8 +349,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         nhi->StartStatus = STATUS_INSUFFICIENT_RESOURCES;
         return;
     }
-    ready = (BOOLEAN)(TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host,
-                                        &nhi->Power) == TBT_OK);
+    ready = CmNhiPlatformInit(nhi);
     CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
 
     /* (c), (d) */
@@ -347,7 +377,12 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         cmInert(nhi, CM_INERT_RESOURCES);
         return;
     }
-    CmNhiSetBusMaster(nhi, TRUE);
+    if (!CmNhiSetBusMaster(nhi, TRUE)) {
+        /* No ring may be started without it; the buffer and a bit set
+         * here are given back at the stop. */
+        cmInert(nhi, CM_INERT_BUS_MASTER);
+        return;
+    }
     TbtIcmInit(&nhi->Icm, nhi->Hw->Icm, &nhi->Ring, &nhi->Host,
                TbtHwRingFlags(nhi->Hw));
     TbtIcmSetApprovePolicy(&nhi->Icm,
@@ -367,6 +402,13 @@ VOID CmNhiBind(PCM_NHI nhi)
 {
     LONG rc;
 
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
+        CmPowerSleeping(nhi)) {
+        /* The sleep or shutdown was taken while the selection ran: the
+         * rings are never started; the stop gives the buffer back. */
+        cmInert(nhi, CM_INERT_POWER);
+        return;
+    }
     rc = TbtIcmStart(&nhi->Icm, nhi->CommonVa, nhi->CommonPa.LowPart,
                      TBT_RING_DMA_BYTES);
     CmLogNote(nhi, "cm.bind", (ULONG)(-rc));
@@ -398,7 +440,10 @@ VOID CmNhiStopWork(PCM_NHI nhi)
 
     active = (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE ||
                        nhi->Stage == CM_STAGE_FAILED);
-    powered = (BOOLEAN)(nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended);
+    /* The bus's state, not the client's: a client suspended while the
+     * function stayed in D0 (cm_power.c's direct transition) is still
+     * unbound and its ownership still discharged. */
+    powered = (BOOLEAN)(nhi->DevicePower == PowerDeviceD0);
     if (nhi->ReenumOn) {
         CmReenumStop(nhi);
         nhi->ReenumOn = 0;
@@ -416,12 +461,13 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     cmLogTable(nhi);
     cmLogCounters(nhi);
     CmDmaClose(nhi);
-    if (powered) {
-        CmNhiSetBusMaster(nhi, FALSE);
-        if (active) {
-            (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power,
-                                        TRUE);
-        }
+    if (powered && active) {
+        (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        CmNhiPlatformRelease(nhi);
+    } else if (nhi->BusMasterSetHere) {
+        /* An inert stop writes nothing: a bit set before the start went
+         * inert (its verification, or the ring's refusal) stays set. */
+        CmLogNote(nhi, "cm.bus-master.kept", nhi->Stage);
     }
     if (nhi->BarVa != NULL) {
         MmUnmapIoSpace(nhi->BarVa, nhi->BarLength);
@@ -504,9 +550,13 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->Inert = CM_INERT_NONE;
     nhi->Stage = CM_STAGE_INERT;
     nhi->Suspended = 0;
-    nhi->DevicePower = PowerDeviceD0;
-    d0.DeviceState = PowerDeviceD0;
-    (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState, d0);
+    /* The state the power path recorded stands: a D3 taken before the
+     * queue opened was published under WorkLock (CmThrQueueOrRecord), and
+     * the selection activates nothing out of D0. */
+    if (nhi->DevicePower == PowerDeviceD0) {
+        d0.DeviceState = PowerDeviceD0;
+        (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState, d0);
+    }
     CmThrAccessors(nhi);
     nhi->Started = 1;
 
@@ -571,10 +621,10 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         cmNhiStop(nhi, stack->MinorFunction);
-        /* A power IRP this driver still holds completes without the thread
-         * (cm_power.c); none may outlive the device object. */
-        (VOID)KeWaitForSingleObject(&nhi->PowerIdle, Executive, KernelMode,
-                                    FALSE, NULL);
+        /* Power admission closed, and every power IRP this driver still
+         * holds finished (without the thread, cm_power.c): none may outlive
+         * the device object. */
+        CmPowerDrain(nhi);
         irp->IoStatus.Status = STATUS_SUCCESS;
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(nhi->Common.Lower, irp);

@@ -83,6 +83,7 @@ ntoskrnl.exe!ObReferenceObjectByHandle    all  required  nt52-amd64-export; twin
 ntoskrnl.exe!ObfDereferenceObject         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
 HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeQueryTimeIncrement          all  required  nt52-amd64-export; the clock's tick period (cm_thr.c); KeQueryTickCount is inline on amd64
 
 [deny]
 

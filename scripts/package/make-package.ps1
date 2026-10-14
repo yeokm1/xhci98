@@ -19,8 +19,12 @@ is this project's two files and nothing else:
     xhcicm.inf     the Thunderbolt 3 connection manager's NHI INF
                    (roadmap-usb4.md task 39-A.1; src\cm\xhcicm-amd64.inf
                    under this name for amd64)
-    xhcicmf.inf    its NT-only tunnel-bridge filter INF (src\cm\xhcicmf.inf,
-                   or xhcicmf-amd64.inf under this name for amd64)
+    nt\xhcicmf.inf its NT-only tunnel-port filter INF (src\cm\xhcicmf.inf,
+                   or xhcicmf-amd64.inf under this name for amd64), in a
+                   subdirectory of its own because Windows 98 SE and ME read
+                   a $Windows NT$ INF beside the one they are pointed at
+                   (runs/run-39.md, 39-0.4); its source disk is the
+                   directory above, where xhcicm.sys is
     xhcicm.sys     the connection manager, the same flavour
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
@@ -116,7 +120,7 @@ scripts\inf-gate\check-cm-inf.ps1 under -Arch.
 .PARAMETER CmFilterInfPath
 The connection manager's NT-only tunnel-bridge filter INF, overriding
 `src\cm\xhcicmf.inf` (x86) or `src\cm\xhcicmf-amd64.inf` (amd64). Staged as
-`xhcicmf.inf` and gated by check-cm-inf.ps1 -Filter under -Arch.
+`nt\xhcicmf.inf` and gated by check-cm-inf.ps1 -Filter under -Arch.
 
 .PARAMETER CmDriverPath
 The connection manager to stage, overriding
@@ -1082,7 +1086,8 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     # INFs' one SourceDisksNames entry looks for them.
     if ($stageCm) {
         Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
-        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "xhcicmf.inf") -Force
+        Ensure-Directory (Join-Path $stageDir "nt")
+        Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "nt\xhcicmf.inf") -Force
         Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "xhcicm.sys") -Force
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
@@ -1209,7 +1214,7 @@ a build that was never made.
             }
         }
         if ($stageCm) {
-            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "xhcicmf.inf"; Extra = @("-Filter") })) {
+            foreach ($cmInf in @(@{ Name = "xhcicm.inf"; Extra = @() }, @{ Name = "nt\xhcicmf.inf"; Extra = @("-Filter") })) {
                 $savedEap = $ErrorActionPreference
                 $ErrorActionPreference = "Continue"
                 try {

@@ -269,7 +269,8 @@ VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
  * thread to queue it to): every held member released by the failure path
  * at once, so no bridge's D0 waits for the watchdog. The exception to the
  * thread contract: any context at <= DISPATCH_LEVEL, idempotent, and
- * harmless where nothing is held. */
+ * harmless where nothing is held. IRQL: <= DISPATCH_LEVEL, any context
+ * (cm_power.c's D0 completion calls it). */
 VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 VOID CmReenumStop(struct _CM_NHI *nhi);
 
