@@ -449,8 +449,11 @@ function Test-OemText {
     foreach ($n in $want) {
         if ($null -eq (& $get $n)) { & $add "OEM-SECTION" "no [$n] section." }
     }
-    # One line's fields as Setup reads them, for comparing whole lines.
-    $norm = { param($l) $l.Key.ToLowerInvariant() + "=" + ((@(Split-OemFields -Value $l.Value) | ForEach-Object { $_.Text.ToLowerInvariant() }) -join ",") }
+    # One line's fields as Setup reads them, for comparing whole lines:
+    # each field marked quoted (q) or bare (u) and kept apart by '|', so a
+    # quoted field holding a comma ("usbd.sys,usbd") never compares equal
+    # to two fields (a review, 2026-10-14).
+    $norm = { param($l) $l.Key.ToLowerInvariant() + "=" + ((@(Split-OemFields -Value $l.Value) | ForEach-Object { $(if ($_.Quoted) { "q" } else { "u" }) + $_.Text.ToLowerInvariant() }) -join "|") }
 
     foreach ($s in $parsed) {
         foreach ($l in $s.Lines) {
@@ -628,14 +631,15 @@ function Test-OemText {
     # of the three services set to demand start.
     $w2kAllowed = @{}
     if ($w2k) {
-        $d2Lines = @($w2kFiles | ForEach-Object { "driver=d2," + $_.File + "," + $_.Key })
+        $d2Lines = @($w2kFiles | ForEach-Object { "driver=ud2|u" + $_.File + "|u" + $_.Key })
+        $d2Shown = @($w2kFiles | ForEach-Object { "driver = d2, " + $_.File + ", " + $_.Key })
         foreach ($d in $d2Lines) { $w2kAllowed[$d] = $true }
         $wf = & $get "Files.scsi.$w2kOption"
         if ($null -ne $files -and $null -ne $wf) {
             $expect = @($files.Lines | ForEach-Object { & $norm $_ }) + $d2Lines
             $got = @($wf.Lines | ForEach-Object { & $norm $_ })
             if (($got -join "|") -ne ($expect -join "|")) {
-                & $add "OEM-W2K" "[Files.scsi.$w2kOption] must be [Files.scsi.$optionId]'s lines in order and then exactly '$($d2Lines -join "', '")' - setupldr loads the first driver line, and these are the three files hidusb.sys and usbstor.sys import that Windows 2000's text mode does not copy."
+                & $add "OEM-W2K" "[Files.scsi.$w2kOption] must be [Files.scsi.$optionId]'s lines in order and then exactly '$($d2Shown -join "', '")' - setupldr loads the first driver line, and these are the three files hidusb.sys and usbstor.sys import that Windows 2000's text mode does not copy."
             }
         }
         $wh = & $get "HardwareIds.scsi.$w2kOption"
@@ -672,9 +676,16 @@ function Test-OemText {
             $isTag = ($w2k -and $s.Name -ieq "Disks" -and $l.Key -eq "d2")
             foreach ($x in @(Split-OemFields -Value $l.Value)) {
                 $leaf = ($x.Text -split '\\')[-1].ToLowerInvariant()
-                if ($isTag -and $x.Text -eq $w2kTag) { continue }
-                if ($msFiles -contains $leaf -or $msPacked -contains $leaf) {
-                    & $add "OEM-MSFILE" "[$($s.Name)] names '$($x.Text)'; Setup loads it from its own source."
+                # d2's whole line (its description names the files; OEM-DISK
+                # holds the tag and the directory).
+                if ($isTag) { continue }
+                # Every name in the field, a quoted one holding commas or
+                # spaces included.
+                foreach ($tok in @($x.Text.ToLowerInvariant() -split '[\\,\s]+')) {
+                    if ($msFiles -contains $tok -or $msPacked -contains $tok) {
+                        & $add "OEM-MSFILE" "[$($s.Name)] names '$($x.Text)'; Setup loads it from its own source."
+                        break
+                    }
                 }
                 if ($x.Text -match '\.' -and -not $x.Quoted -and -not (Test-Is83 -Name $leaf)) { & $add "OEM-83" "[$($s.Name)] names '$($x.Text)', not an 8.3 name." }
             }
@@ -811,6 +822,10 @@ if ($SelfTest) {
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, hidparse.sys, hidparse`r`n" "") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, usbd.sys, usbdx") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "class = d2, usbd.sys, usbd") }
+            # A quoted field holding the comma is one field to Setup: no
+            # DriverKey, and setupldr drops the option.
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, `"usbd.sys,usbd`"") }
+            $cases += @{ Rule = "OEM-MSFILE"; Text = (& $inSec $w2kFilesSec "driver = d2, usbd.sys, usbd" "driver = d2, `"usbd.sys,usbd`"") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d2, hidparse.sys, hidparse" "driver = d2, hidparse.sys, hidparse`r`ndriver = d2, usbstor.sys, usbstor") }
             $cases += @{ Rule = "OEM-MSFILE"; Text = (& $inSec $w2kFilesSec "driver = d2, hidparse.sys, hidparse" "driver = d2, hidparse.sys, hidparse`r`ndriver = d2, usbstor.sys, usbstor") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec $w2kFilesSec "driver = d1, xhci98.sys, xhci98`r`ndll    = d1, xhcihlpr.sys`r`ninf    = d1, xhci98.inf`r`ndriver = d2, usbd.sys, usbd" "driver = d2, usbd.sys, usbd`r`ndriver = d1, xhci98.sys, xhci98`r`ndll    = d1, xhcihlpr.sys`r`ninf    = d1, xhci98.inf") }
