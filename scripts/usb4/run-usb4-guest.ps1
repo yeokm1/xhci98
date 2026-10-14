@@ -303,7 +303,7 @@ if ($Trace) {
 # -Extra is an allowlist, so it cannot take over what this script owns (the
 # monitor and display ports, the disks, the vCPU and memory counts the
 # admission check budgets): -S alone, and -device, -global, -trace and -d
-# each with one value that names no drive, file or chardev.
+# each with one value that names no backend, file or path.
 $i = 0
 while ($i -lt $Extra.Count) {
     $x = $Extra[$i]
@@ -313,8 +313,12 @@ while ($i -lt $Extra.Count) {
     }
     if ($i + 1 -ge $Extra.Count) { throw "-Extra $x needs a value" }
     $v = $Extra[$i + 1]
-    if ($v -match '(^|,)(drive|file|filename|chardev|netdev|romfile)=' -or $v -match '^-') {
-        throw "-Extra $x $v names a backend or file; the launcher owns those"
+    # No backend, and no path at all: a property such as usb-mouse's pcap=
+    # opens a file for writing, so any value with a path separator or a
+    # drive colon is refused along with the named backends.
+    if ($v -match '(^|,)(drive|file|filename|chardev|netdev|romfile|pcap|path|logfile|events)=' -or
+        $v -match '^-' -or $v -match '[\/:]') {
+        throw "-Extra $x $v names a backend, a file or a path; the launcher owns those"
     }
     $i += 2
 }

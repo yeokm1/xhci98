@@ -62,7 +62,9 @@ if ($run.qmpPort -lt 47900 -or $run.qmpPort -gt 47999) { throw "run.json names p
 function Get-RunState {
     $procId = [int]$run.pid
     if ($procId -le 0) { return 'gone' }
-    $p = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction SilentlyContinue
+    # 'gone' only when the query itself succeeded and found nothing
+    try { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $procId" -ErrorAction Stop }
+    catch { return 'other' }
     if (-not $p) { return 'gone' }
     $hasId = ($run.PSObject.Properties['created'] -and $run.created -and $run.PSObject.Properties['qemu'] -and $run.qemu)
     if (-not $hasId) { return 'other' }
