@@ -1091,7 +1091,7 @@ it was already suspended in D0; and where `hcdSystemDone` finds the
 function already in the state the shutdown wants, so asks for no device
 IRP at all - there the system IRP is deferred to the work item, which
 latches and flushes at PASSIVE_LEVEL under the power gate and then
-completes it (Codex review of this design, round 1, finding 2). The pure
+completes it (a review of this design, round 1, finding 2). The pure
 decision is `XhciTolShutLatch` (`xhci_tol.c`):
 only the shutdown state latches, so S1 to S4 keep today's
 hold-until-resume. A D0 clears it, under the same lock, before the resume
@@ -1874,7 +1874,7 @@ read follows a `RESET_PIPE`'s new context.
 
 ### 6.11 The Windows 98 SE and ME silent install (task 38.2, 2026-10-13)
 
-**Status: design approved by the owner (2026-10-13) after three Codex
+**Status: design approved by the owner (2026-10-13) after three
 review rounds, the third with no P1 or P2; code follows. O1 stays a fact
 for the first 98 SE leg to read.** The rule and the
 decisions are the owner's (roadmap-hcd task 38.2, 2026-10-12 and
