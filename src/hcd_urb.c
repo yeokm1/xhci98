@@ -2205,8 +2205,11 @@ refused:
     hcdCompSwap(pdo, hc, NULL);
     hcdCount(&hc->Counters.CompositeSelectRefused);
     /* Marked on the request itself, so its sender tells this refusal
-     * from a failure nobody counted (a review, round 2). */
-    urb->UrbHeader.UsbdFlags = HCD_COMP_REFUSED_MARK;
+     * from a failure nobody counted (a review, round 2) - only where the
+     * URB's stated length covers the field (round 3). */
+    if ((ULONG)urb->UrbHeader.Length >= sizeof(struct _URB_HEADER)) {
+        urb->UrbHeader.UsbdFlags = HCD_COMP_REFUSED_MARK;
+    }
     XhciLogNote(&hc->Hc, "comp.refused",
                 ((pdo->Serial & 0xFFUL) << 24) |
                     ((ULONG)usbd & 0x00FFFFFFUL));
