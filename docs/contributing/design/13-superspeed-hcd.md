@@ -6083,10 +6083,11 @@ apply to this update: the root hub is new and installs from the new INF.
 | Windows 98 SE and ME (`Xhci.Dev`, `RootHub.Dev`, `Hub.Dev`, `Comp.Dev`) | at the next start: the new `xhci98.sys` cannot replace the running one, which keeps running until the restart (release notes, "Updating from 2.y.y.y") | expected silently from the new INF, as each new hub and composite devnode installs today (6.11's opening, run-36 98 SE K2 and G1, run-37 for ME); the root hub's section copies `xhci98.sys` (8.6), so at that start the engine would copy over the file the running driver is: the root-hub sections copy nothing from this release (D3) | the legs |
 | Windows 2000 (`*.NTx86`) | read at once for `2.1.0.0` over `2.0.0.0` (release notes: "It runs at once, with no restart"); for this release's package, with 38.3's helper extended to 2000 and XP, read at once too (2026-10-14, the VM matrix: over `2.3.0.0` and `2.3.1.0`, no restart asked; one unrepeated stop at problem 31 until the restart, in the boot that first installed a stock UHCI controller) | no wizard, as for the hubs and composite parents (10.12, "What it buys") | the legs |
 | 32-bit XP (`*.NTx86`) and XP x64 (`*.NTamd64`) | read at once for `2.1.0.0`; for this release's package read at once on XP (2026-10-14, the VM matrix), although the controller's wizard says "will not work until you restart" and a System Settings Change box offers one | **Found New Hardware and the unsigned-driver warning, once per new devnode**: the root hub (the `1.2.0.0` upgrade read "a second wizard follows for the root hub", release notes, "Upgrading from 1.2.0.0"), each hub half and each composite parent (10.12; run-36 XP K2 and G1); documented, with its input trap (D4) | the legs |
-| 32-bit Vista and 7 (`*.Dev6.NTx86`) | at the restart the update asks for, for the MSI helper (task 38.5; renamed `xhcihlpr.sys` by 38.3); until it, the earlier release runs | from the package Have Disk put in the driver store; no wizard expected (unread for a new devnode of an already-staged package) | the legs |
+| 32-bit Vista and 7 (`*.Dev6.NTx86`) | at the restart the update asks for, for the MSI helper (task 38.5; renamed `xhcihlpr.sys` by 38.3); until it, the earlier release runs | from the package Have Disk put in the driver store; no wizard expected (unread when written; read with no wizard on 32-bit Vista and 7, 2026-10-14) | the legs |
 | Vista x64 and 7 x64 (`*.Dev6.NTamd64`) | at once, in test-signing mode or an F8 boot (AGENTS.md) | as 32-bit Vista and 7 | the legs |
 
-**The timing in the table is the earlier releases'.** Task 38.3 extends the
+**The timing in the table was the earlier releases' when it was written**
+(the 2000 and XP cells now carry this release's reading). Task 38.3 extends the
 helper to 2000 and XP and changes what an update installs there, and on a
 machine with two controllers the image stays loaded while either still
 runs it; so when the new ids appear on 2000 and XP is read on this
@@ -6372,10 +6373,12 @@ project for its run:
    after a query-remove and vetoes it (Microsoft's "Handling an
    IRP_MN_QUERY_REMOVE_DEVICE Request"; the veto type
    `PNP_VetoOutstandingOpen` is declared in the Windows 2000 DDK's `cfg.h`,
-   static); **whether it does so for this controller on each NT target is
-   unread**, and is read in the legs before the tool may remove anything
-   there (10.13.10); on a target where it is not, removal is disabled for
-   that OS version in the shipped tool, which then lists only.
+   static); **whether it does so for this controller on each NT target
+   was unread when this was written**, and was read in the legs before the
+   tool may remove anything there (10.13.10; the readings are under "The
+   veto table" in the as-built list below, XP x64's still owed); on a
+   target where it is not, removal is disabled for that OS version in the
+   shipped tool, which then lists only.
 5. **Re-check**: immediately before each removal the tool repeats the
    global tests, steps 1 and 2 (the same controllers, by instance id, at
    least one, all still started with their root hubs, each still held by
@@ -6701,7 +6704,7 @@ designed, with these particulars:
   repeated in each re-check; it refuses `-remove` (exit 1) even when no
   entry qualifies, as on 98 SE and ME. A removal whose restart flags cannot
   be read is counted as restart-pending and stops the run (exit 2).
-- **The veto table, provisional.** Step 4's readings are not yet taken, so
+- **The veto table, provisional when built.** Step 4's readings were not yet taken, so
   `cln_removal_enabled` enables removal on NT 5.0, 5.1, 5.2, 6.0 and 6.1
   (any other version lists only); a version whose leg shows no veto is set
   to list only before the cut (decided provisionally, 2026-10-14, so that
@@ -6709,8 +6712,9 @@ designed, with these particulars:
   matrix):** the disable was vetoed on 2000, 32-bit XP, Vista and 7 in
   both architectures, the update on 2000, XP, Vista x64 and 7 x64, and the
   rollback on XP; on 32-bit Vista and 7 Windows itself defers every update
-  and rollback of the controller to the restart (the control without the
-  tool identical), so the hold is not needed there. No target showed a
+  of the controller to the restart, and on 32-bit 7 every rollback too
+  (the control without the tool identical in each), so the hold is not
+  needed there; Vista's rollback was not run. No target showed a
   missing veto, so the table stands; XP x64's cells are unread (its
   stock-controller configuration could not be reached) and stay owed
   before the cut (roadmap-hcd 38.final).
