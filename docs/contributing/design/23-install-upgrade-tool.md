@@ -462,7 +462,13 @@ called:
   call the tool checks that every present device carrying that id among
   its ids is one this step was going to install or update; if not - two
   identical controllers, one with another vendor's driver - the call is
-  not made for that id and the devices are reported (exit 4).
+  not made for that id and the devices are reported (exit 4), with the
+  way on (`/force`, or Device Manager). One exception: the ports of one
+  Thunderbolt switch share one id, and a port that already carries this
+  release's filter does not block the call that gives the filter to its
+  siblings - the same INF reaches it again with the same driver (read on
+  the 2000 leg, 2026-10-15, where the downstream ports were otherwise
+  never filtered).
 - **`hwndParent` NULL**: the signature question (XP's "has not passed
   Windows Logo testing", Vista's and 7's "cannot verify the publisher") is
   Windows' own dialog, answered by the user; the tool never changes the
@@ -633,6 +639,13 @@ read too: one of this package's devices with a problem code is reported -
 "disabled in Device Manager" for Code 22, which is no failure, and
 otherwise "already had problem code N" with the steps flag set, so a
 current controller already at Code 10 is never reported as a success.
+When a tunnel port's filter install succeeded in the run, the switch's
+subtree is rebuilt by Windows - on Windows 2000 at the restart (read on
+the 2000 leg, 2026-10-15: the upstream port at Code 12 and its children
+gone until the restart, all started after it) - so an NHI or port of this
+package gone after its install, or a filtered port at Code 12, sets the
+restart and steps flags ("restart, then run INSTALL.BAT again") instead
+of a failure.
 Anything else is reported per device:
 
 | After | Meaning | Exit |

@@ -211,6 +211,7 @@ static int changedState[INST_MAX_CHANGED];
 static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
+static int tunnelChanged;   /* a tunnel port's filter install succeeded */
 static int was_changed(const char *id);
 static int was_installed(const char *id);
 static int result_ok(const DEVREC *d, int inf);
@@ -2835,9 +2836,18 @@ static int hwid_clear(const char *hwid, int inf)
             !inst_msz_has(d->Compat, d->CompatBytes, hwid)) {
             continue;
         }
+        /* The ports of one Thunderbolt switch share one id: a port that
+         * already carries this release's filter is no other owner's, and
+         * the same INF reaching it again installs the same driver. */
+        if (inf == INST_INF_CMF && d->Inf == inf &&
+            d->Action == INST_ACT_CURRENT) {
+            continue;
+        }
         if (d->Inf != inf || !d->Runs) {
-            out("  %s is shared with %s (%s), which this run leaves; "
-                "neither is changed.\n", hwid, d->Id, inst_action_text(d->Action));
+            out("  %s is shared with %s (%s), which this run leaves;\n"
+                "  neither is changed. Run INSTALL.BAT /force to include it, "
+                "or update both in\n  Device Manager.\n", hwid, d->Id,
+                inst_action_text(d->Action));
             return 0;
         }
     }
@@ -2940,6 +2950,7 @@ static int install_inf(int inf, int controllers)
             if (devs[j].Present && devs[j].Inf == inf &&
                 (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
                  inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid)) &&
+                !(inf == INST_INF_CMF && devs[j].Action == INST_ACT_CURRENT) &&
                 call_flags(&devs[j], inf) != flags) {
                 mixed = 1;
             }
@@ -2993,6 +3004,9 @@ static int install_inf(int inf, int controllers)
         if (api.UpdateDriver(NULL, hwid, path, flags, &reboot)) {
             out("done%s.\n", reboot ? ", restart needed" : "");
             flagChanged = 1;
+            if (inf == INST_INF_CMF) {
+                tunnelChanged = 1;
+            }
             for (j = 0; j < n; j++) {
                 changedState[callIdx[j]] = 2;   /* the call succeeded */
                 if (reboot) {
@@ -3206,8 +3220,19 @@ static void check_results(void)
             }
         }
         if (d == NULL || !d->Present) {
-            out("  %s: gone after its install.\n", changedId[c]);
-            flagFailed = 1;
+            if (tunnelChanged &&
+                (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF)) {
+                /* A tunnel port's driver changed under it: Windows rebuilds
+                 * the switch's subtree, on Windows 2000 at the restart (read
+                 * on the 2000 leg, 2026-10-15). */
+                out("  %s: re-enumerated with its tunnel port's change; "
+                    "restart, then run\n  INSTALL.BAT again.\n", changedId[c]);
+                flagRestart = 1;
+                flagSteps = 1;
+            } else {
+                out("  %s: gone after its install.\n", changedId[c]);
+                flagFailed = 1;
+            }
             continue;
         }
         ctrl = changedInf[c] == INST_INF_XHCI && is_controller(d);
@@ -3230,6 +3255,14 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
+        } else if (tunnelChanged && changedInf[c] == INST_INF_CMF &&
+                   d->Problem == 12UL) {
+            /* The port's resources are assigned again at the restart (read
+             * on the 2000 leg, 2026-10-15: started after it). */
+            out("  %s waits for a restart for its resources (problem 12); "
+                "run INSTALL.BAT\n  again after it.\n", d->Desc);
+            flagRestart = 1;
+            flagSteps = 1;
         } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
                    changedReboot[c]) {
