@@ -3,7 +3,7 @@
  * them, the pure half (roadmap-usb4.md task 39-A.5; design record 21
  * sections 6.3 and 6.5).
  *
- * Four things live here, all over PCI configuration space reached through
+ * Three things live here, all over PCI configuration space reached through
  * accessors the caller supplies (the driver passes HalGetBusData-backed
  * ones on every target; the host suite passes a modelled machine):
  *
@@ -20,9 +20,6 @@
  *     usb4_switch_map_pcie_down and tb.c tb_find_pcie_down) names no PCI
  *     location. Every tunnel change acts on the whole set; exclusive
  *     ownership across domains is the caller's, with XhciTbtExclusive;
- *   - learning, beyond the record's sources, for a domain with hot-plug
- *     candidates and no member: the one candidate whose reading went from
- *     down to up across a tunnel up;
  *   - the port reading of section 6.5: Link Status Data Link Layer Link
  *     Active where Link Capabilities says it is reported, Slot Status
  *     Presence Detect State where the slot is implemented, and an SHPC
@@ -230,7 +227,9 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 #define XHCI_TBT_TOPO_OVERRIDE_BAD  5UL /* the override named no bridge     */
 #define XHCI_TBT_TOPO_NHI_ABSENT    6UL /* nothing answers at the NHI       */
 #define XHCI_TBT_TOPO_BAD_PARAM     7UL
-#define XHCI_TBT_TOPO_LEARN         8UL /* no member; hot-plug bridges seen */
+#define XHCI_TBT_TOPO_UNLISTED      8UL /* no member; hot-plug bridges seen,
+                                           none a source names: the
+                                           override is the way              */
 #define XHCI_TBT_TOPO_INCOMPLETE    9UL /* a function on the search bus
                                            could not be read: try again     */
 #define XHCI_TBT_TOPO_AMBIGUOUS     10UL /* listed root ports, but more than
@@ -257,11 +256,10 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
 #define XHCI_TBT_SRC_ROOTPORT       2UL /* a listed root port beside an
                                            integrated NHI, its only NHI     */
 #define XHCI_TBT_SRC_OVERRIDE       3UL /* XhciCmTunnelBridge               */
-#define XHCI_TBT_SRC_LEARNED        4UL /* came up across a tunnel up       */
 #define XHCI_TBT_SRC_SHPC           5UL /* an SHPC bridge (the emulator)    */
 
 #define XHCI_TBT_MAX_SIBLINGS       16UL    /* kept for the log             */
-#define XHCI_TBT_MAX_CANDIDATES     16UL    /* kept for learning            */
+#define XHCI_TBT_MAX_CANDIDATES     16UL    /* kept for the log             */
 /* Tunnel ports one domain can have: a two-port part's two downstream
  * ports, an integrated host's root ports. */
 #define XHCI_TBT_MAX_TUNNELS        4UL
@@ -287,7 +285,9 @@ typedef struct _XHCI_TBT_TOPO_IN {
     ULONG Nhi;          /* the NHI's location                               */
     ULONG Overrides;    /* how many XhciCmTunnelBridge named, 0 for none    */
     ULONG Override[XHCI_TBT_MAX_TUNNELS];
-    const ULONG *FamilyNhiIds;      /* the family's NHI ids                 */
+    const ULONG *FamilyNhiIds;      /* the family's NHI ids, complete and
+                                       holding this NHI's own, or source 3
+                                       takes nothing                        */
     ULONG FamilyNhiIdCount;
     const ULONG *SwitchPortIds;     /* its discrete switch port ids         */
     ULONG SwitchPortIdCount;
@@ -327,9 +327,6 @@ typedef struct _XHCI_TBT_TOPO {
     ULONG Base[XHCI_TBT_MAX_TUNNELS];       /* each one's at XhciTbtSetArm  */
     ULONG BaseArmed;
     XHCI_TBT_BRIDGE Pick;   /* the first one's reading                      */
-    /* learning: each candidate's reading at XhciTbtLearnArm */
-    ULONG LearnArmed;
-    ULONG Before[XHCI_TBT_MAX_CANDIDATES];
     /* the walk's own state */
     ULONG Visited[8];   /* one bit per bus number                           */
     UCHAR Stack[256];   /* buses still to walk                              */
@@ -341,10 +338,11 @@ typedef struct _XHCI_TBT_TOPO {
  * each test reads the hardware:
  *
  *   1. in->Override (XhciCmTunnelBridge): when given it is the whole set,
- *      SRC_OVERRIDE. An entry that is not a type 1 function, or repeats
- *      one, is dropped (Dropped); with every entry dropped the outcome is
- *      OVERRIDE_BAD and the set empty. The discovery below still runs, so
- *      the log can name what it saw.
+ *      SRC_OVERRIDE. An entry with no function there, not a type 1
+ *      function, or repeating one, is dropped (Dropped); with every entry
+ *      dropped the outcome is OVERRIDE_BAD and the set empty. An entry
+ *      that cannot be read makes it INCOMPLETE, empty. The discovery
+ *      below still runs, so the log can name what it saw.
  *   2. The discrete switch: the NHI's parent is the type 1 function whose
  *      secondary bus is the NHI's bus; a member is a type 1 sibling of the
  *      parent (not the parent) whose id is in in->SwitchPortIds and which
@@ -355,18 +353,21 @@ typedef struct _XHCI_TBT_TOPO {
  *   3. The integrated root ports: the NHI on a root bus (no parent); a
  *      member is a type 1 function on that bus whose id is in
  *      in->RootPortIds, SRC_ROOTPORT, hot-plug capable or not - but only
- *      when the bus carries one NHI of the family (FamilyNhis, counting
- *      every function whose id is in in->FamilyNhiIds, started, disabled
- *      or failed alike, and this NHI). With two, every listed root port
- *      is AMBIGUOUS and left out: which is whose is ACPI's to say (Linux
- *      acpi.c tb_acpi_add_link), unread here.
+ *      when the bus carries exactly one NHI of the family and it is this
+ *      one (FamilyNhis counts every function whose id is in
+ *      in->FamilyNhiIds, started, disabled or failed alike; a list that
+ *      does not hold this NHI's id proves nothing and takes nothing).
+ *      Otherwise every listed root port is AMBIGUOUS and left out: which
+ *      is whose is ACPI's to say (Linux acpi.c tb_acpi_add_link), unread
+ *      here.
  *   4. The emulator: a type 1 sibling of the parent, or of the NHI on a
  *      root bus, with an SHPC capability, SRC_SHPC.
  *
  * Any other bridge, however hot-plug capable, is never a member; with no
- * member the outcome is LEARN (hot-plug bridges were seen; XhciTbtLearn
- * may add one), AMBIGUOUS, or NO_CANDIDATE, and re-enumeration stays
- * disabled (record 21 section 6.4). A function on the search bus that
+ * member the outcome is UNLISTED (hot-plug bridges were seen and logged;
+ * only the override can name one), AMBIGUOUS, or NO_CANDIDATE, and
+ * re-enumeration stays disabled (record 21 section 6.4). The log's MEMBER
+ * flags are set from the final set. A function on the search bus that
  * could not be read completely makes it INCOMPLETE with an empty set,
  * never a set that might lack a port. More than XHCI_TBT_MAX_TUNNELS
  * members is MANY, empty. Exclusive ownership across domains is decided
@@ -397,22 +398,6 @@ ULONG XhciTbtExclusive(const ULONG *set, ULONG count, const ULONG *others,
  */
 ULONG XhciTbtParseBdfList(PCWSTR text, ULONG chars, PULONG list,
                           ULONG capacity);
-
-/*
- * Learning, a step beyond record 21 section 6.3's sources, for a LEARN
- * domain (or one whose every member was learned): XhciTbtLearnArm reads
- * every candidate before a tunnel up; XhciTbtLearn reads them again after
- * it (once the caller's poll has ended) and adds to the set, SRC_LEARNED,
- * the one candidate not yet in it that read DOWN when armed and UP now.
- * Nothing is learned when two or more did, when another came up from an
- * uncertain reading (MIXED, GONE or NONE), when any candidate's reading
- * failed at either end, when discovery was not complete or left listed
- * ports ambiguous, or when there were more candidates than are kept: the
- * uniqueness could not be judged. Returns the number learned, 0 or 1, and
- * disarms either way.
- */
-VOID XhciTbtLearnArm(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo);
-ULONG XhciTbtLearn(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo);
 
 /* ---- the port reading (record 21 section 6.5) -------------------------- */
 

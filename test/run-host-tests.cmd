@@ -176,8 +176,8 @@ rem                  and 6.5): the P14s Gen 1's configuration space as
 rem                  captured, the emulator's i440FX, q35 and switch layouts,
 rem                  an integrated host's root ports, the set and its
 rem                  sources (switch ids, root port ids, SHPC, the
-rem                  XhciCmTunnelBridge list, learned), the Link Status, Slot
-rem                  Status and SHPC
+rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
+rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
 rem

@@ -477,7 +477,11 @@ static ULONG xhciTbtSource(const XHCI_TBT_TOPO_IN *in, PXHCI_TBT_TOPO topo,
         }
     } else if (xhciTbtInList(in->RootPortIds, in->RootPortIdCount, br->Id)) {
         br->Flags |= XHCI_TBT_BR_LISTED | XHCI_TBT_BR_CANDIDATE;
-        if (topo->FamilyNhis == 1) {
+        /* Exactly one NHI of the family, and this one is it: a family
+         * list without this NHI's id proves nothing (fails closed). */
+        if (topo->FamilyNhis == 1 &&
+            xhciTbtInList(in->FamilyNhiIds, in->FamilyNhiIdCount,
+                          topo->NhiId)) {
             return XHCI_TBT_SRC_ROOTPORT;
         }
         br->Flags |= XHCI_TBT_BR_AMBIGUOUS;
@@ -536,8 +540,7 @@ static VOID xhciTbtWalkBus(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
                 continue;
             }
             if (pass == 0) {
-                if (bdf == topo->Nhi ||
-                    xhciTbtInList(in->FamilyNhiIds, in->FamilyNhiIdCount,
+                if (xhciTbtInList(in->FamilyNhiIds, in->FamilyNhiIdCount,
                                   id)) {
                     topo->FamilyNhis++;
                 }
@@ -560,12 +563,9 @@ static VOID xhciTbtWalkBus(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
             if (br.Flags & XHCI_TBT_BR_AMBIGUOUS) {
                 topo->Ambiguous++;
             }
-            if (source != 0 && !(br.Flags & XHCI_TBT_BR_UNREAD)) {
-                if (xhciTbtSetAdd(topo, &br, source)) {
-                    br.Flags |= XHCI_TBT_BR_MEMBER;
-                } else {
-                    *overflow = 1;
-                }
+            if (source != 0 && !(br.Flags & XHCI_TBT_BR_UNREAD) &&
+                !xhciTbtSetAdd(topo, &br, source)) {
+                *overflow = 1;
             }
             if (topo->Siblings < XHCI_TBT_MAX_SIBLINGS) {
                 topo->Sibling[topo->Siblings] = br;
@@ -581,14 +581,78 @@ static VOID xhciTbtWalkBus(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
     }
 }
 
+/*
+ * Source 1, the override: the whole set. An entry with no function, a
+ * function that is not a bridge, or a repeat is dropped; an entry that
+ * cannot be read (a failed access, or a present function whose header
+ * reads all-ones) makes the outcome INCOMPLETE with an empty set, since
+ * dropping it would lose a port the user named.
+ */
+static VOID xhciTbtOverride(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
+                            PXHCI_TBT_TOPO topo)
+{
+    ULONG i;
+    ULONG id;
+    ULONG hdr;
+    ULONG probe;
+    XHCI_TBT_BRIDGE br;
+
+    xhciTbtSetClear(topo);
+    for (i = 0; i < in->Overrides; i++) {
+        probe = xhciTbtProbe(io, in->Override[i], &id);
+        if (probe == 2) {
+            goto unread;
+        }
+        if (probe == 0 || xhciTbtInSet(topo, in->Override[i])) {
+            topo->Dropped++;
+            continue;
+        }
+        hdr = xhciTbtHeader(io, in->Override[i]);
+        if (hdr == XHCI_TBT_ALL_ONES) {
+            goto unread;
+        }
+        if (XHCI_TBT_HDR_LAYOUT(hdr) != XHCI_TBT_HDR_BRIDGE) {
+            topo->Dropped++;
+            continue;
+        }
+        xhciTbtClassify(io, in->Override[i], id, &br);
+        xhciTbtSetAdd(topo, &br, XHCI_TBT_SRC_OVERRIDE);
+    }
+    topo->Outcome = topo->Tunnels != 0 ? XHCI_TBT_TOPO_OVERRIDE
+                                       : XHCI_TBT_TOPO_OVERRIDE_BAD;
+    return;
+
+unread:
+    topo->Unread++;
+    xhciTbtSetClear(topo);
+    topo->Outcome = XHCI_TBT_TOPO_INCOMPLETE;
+}
+
+/* The log's MEMBER flags, from the final set. */
+static VOID xhciTbtMarkMembers(PXHCI_TBT_TOPO topo)
+{
+    ULONG i;
+    ULONG kept;
+
+    kept = topo->Siblings < XHCI_TBT_MAX_SIBLINGS ? topo->Siblings
+                                                  : XHCI_TBT_MAX_SIBLINGS;
+    for (i = 0; i < kept; i++) {
+        topo->Sibling[i].Flags &= ~XHCI_TBT_BR_MEMBER;
+        if (xhciTbtInSet(topo, topo->Sibling[i].Bdf)) {
+            topo->Sibling[i].Flags |= XHCI_TBT_BR_MEMBER;
+        }
+    }
+    if (topo->Tunnels != 0) {
+        topo->Pick.Flags |= XHCI_TBT_BR_MEMBER;
+    }
+}
+
 ULONG XhciTbtTopoFind(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
                       PXHCI_TBT_TOPO topo)
 {
     ULONG id;
-    ULONG hdr;
     ULONG i;
     ULONG overflow = 0;
-    XHCI_TBT_BRIDGE br;
 
     if (topo == NULL) {
         return XHCI_TBT_TOPO_BAD_PARAM;
@@ -639,31 +703,15 @@ ULONG XhciTbtTopoFind(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO_IN *in,
     } else if (topo->Ambiguous != 0) {
         topo->Outcome = XHCI_TBT_TOPO_AMBIGUOUS;
     } else if (topo->Candidates != 0) {
-        topo->Outcome = XHCI_TBT_TOPO_LEARN;
+        topo->Outcome = XHCI_TBT_TOPO_UNLISTED;
     } else {
         topo->Outcome = XHCI_TBT_TOPO_NO_CANDIDATE;
     }
 
-    if (in->Overrides == 0) {
-        return topo->Outcome;
+    if (in->Overrides != 0) {
+        xhciTbtOverride(io, in, topo);
     }
-    xhciTbtSetClear(topo);
-    for (i = 0; i < in->Overrides; i++) {
-        hdr = XHCI_TBT_ALL_ONES;
-        if (xhciTbtPresent(io, in->Override[i], &id)) {
-            hdr = xhciTbtHeader(io, in->Override[i]);
-        }
-        if (hdr == XHCI_TBT_ALL_ONES ||
-            XHCI_TBT_HDR_LAYOUT(hdr) != XHCI_TBT_HDR_BRIDGE ||
-            xhciTbtInSet(topo, in->Override[i])) {
-            topo->Dropped++;
-            continue;
-        }
-        xhciTbtClassify(io, in->Override[i], id, &br);
-        xhciTbtSetAdd(topo, &br, XHCI_TBT_SRC_OVERRIDE);
-    }
-    topo->Outcome = topo->Tunnels != 0 ? XHCI_TBT_TOPO_OVERRIDE
-                                       : XHCI_TBT_TOPO_OVERRIDE_BAD;
+    xhciTbtMarkMembers(topo);
     return topo->Outcome;
 }
 
@@ -684,103 +732,6 @@ ULONG XhciTbtExclusive(const ULONG *set, ULONG count, const ULONG *others,
         }
     }
     return off;
-}
-
-/* ---- learning ---------------------------------------------------------- */
-
-/*
- * 1 when learning may add to this domain's set: no source put a port in
- * it, discovery was complete and left nothing ambiguous, every candidate
- * is kept, and there is room.
- */
-static ULONG xhciTbtLearnable(const XHCI_TBT_TOPO *topo)
-{
-    ULONG i;
-
-    if (topo->Outcome != XHCI_TBT_TOPO_LEARN &&
-        topo->Outcome != XHCI_TBT_TOPO_SET) {
-        return 0;
-    }
-    if (topo->Candidates > XHCI_TBT_MAX_CANDIDATES || topo->Unread != 0 ||
-        topo->Ambiguous != 0 || topo->Tunnels >= XHCI_TBT_MAX_TUNNELS) {
-        return 0;
-    }
-    for (i = 0; i < topo->Tunnels; i++) {
-        if (topo->Source[i] != XHCI_TBT_SRC_LEARNED) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
-VOID XhciTbtLearnArm(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo)
-{
-    ULONG i;
-    XHCI_TBT_PORT port;
-
-    if (topo == NULL) {
-        return;
-    }
-    topo->LearnArmed = 0;
-    if (io == NULL || io->Read == NULL || !xhciTbtLearnable(topo)) {
-        return;
-    }
-    for (i = 0; i < topo->Candidates; i++) {
-        topo->Before[i] = XhciTbtPortRead(io, topo->Cand[i], &port);
-        if (topo->Before[i] == XHCI_TBT_PORT_ERROR) {
-            return;
-        }
-    }
-    topo->LearnArmed = 1;
-}
-
-ULONG XhciTbtLearn(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo)
-{
-    ULONG i;
-    ULONG now;
-    ULONG found = XHCI_TBT_NO_BDF;
-    ULONG rose = 0;
-    ULONG unsure = 0;
-    ULONG id;
-    XHCI_TBT_PORT port;
-    XHCI_TBT_BRIDGE br;
-
-    if (topo == NULL) {
-        return 0;
-    }
-    if (io == NULL || io->Read == NULL || !topo->LearnArmed ||
-        !xhciTbtLearnable(topo)) {
-        topo->LearnArmed = 0;
-        return 0;
-    }
-    topo->LearnArmed = 0;
-    for (i = 0; i < topo->Candidates; i++) {
-        now = XhciTbtPortRead(io, topo->Cand[i], &port);
-        if (now == XHCI_TBT_PORT_ERROR) {
-            return 0;
-        }
-        if (xhciTbtInSet(topo, topo->Cand[i])) {
-            continue;
-        }
-        if (now != XHCI_TBT_PORT_UP || topo->Before[i] == XHCI_TBT_PORT_UP) {
-            continue;
-        }
-        if (topo->Before[i] == XHCI_TBT_PORT_DOWN) {
-            rose++;
-            found = topo->Cand[i];
-        } else {
-            /* Up now from MIXED, GONE or NONE: it may be the event's port
-             * just as well, so nothing is unique. */
-            unsure++;
-        }
-    }
-    if (rose != 1 || unsure != 0 || !xhciTbtPresent(io, found, &id)) {
-        return 0;
-    }
-    xhciTbtClassify(io, found, id, &br);
-    xhciTbtSetAdd(topo, &br, XHCI_TBT_SRC_LEARNED);
-    topo->Outcome = XHCI_TBT_TOPO_SET;
-    return 1;
 }
 
 /* ---- the override's text ----------------------------------------------- */
