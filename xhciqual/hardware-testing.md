@@ -299,6 +299,15 @@ Space Enable clear, Tier B is unavailable and the report says the read-only
 probe left MSE unchanged; use an active mode only after the inventory is
 captured.
 
+Under the system description, before any controller, the report prints
+the BIOS PCI IRQ routing table (`$PIR`; the README's "The BIOS PCI IRQ
+routing table" has the format): where it is, whether its checksum holds,
+every entry, and then `00:1C` by name, `listed` or `NO ENTRY`, with each
+`00:1C` function found in configuration space. `none in F0000h-FFFFFh` and
+`UNUSABLE` are results too. Record them; a machine whose BIOS keeps no
+usable `$PIR` gives Windows 98's IRQ steering nothing to read from that
+source.
+
 Each xHCI report opens with its `quirks:` lines, from Linux's quirk list
 (the README's "The `quirks:` lines" has the forms). A quirk the driver
 takes is printed as the driver's registry value with the Linux flag
@@ -767,6 +776,7 @@ Build stamp (from run header):
 Controller FACT lines:
 USB 3 PSI warning (issue 11): yes/no, PSIC per protocol:
 Physical port -> controller mapping:
+$PIR: at <address> / none / UNUSABLE; 00:1C listed / NO ENTRY; 00:1C functions:
 
 XPOLL:  completed / fault, C2, C3, C6 (C4 SKIP), PROVISIONAL
 XEMPTY: completed / fault, C2, C3, C4, C6
@@ -1045,3 +1055,53 @@ told (the controller id under which Device Manager or `lsusb -t` lists the
 device on a current system), and send both with the driver's `XHCISNAP`
 reports (`docs/contributing/failure-diagnosis.md`, "A device stops until
 it is replugged").
+
+### ThinkPad P14s Gen 1 - does the `$PIR` list the Thunderbolt root port?
+
+Roadmap-usb4 tasks 39-0.6 and 39-E.2. On the P14s the Thunderbolt 3
+controller sits behind the PCH root port `00:1C.4`. Windows 98 there runs
+with PCI IRQ steering (its Enum has "IRQ Holder for PCI Steering"), which
+can route a function that POST gave no Interrupt Line from `$PIR`. A
+device hot-added behind the tunnel gets no line from POST. In the QEMU
+reproduction (`usb4-emu` `docs/WIN98-TEST.md`, "Hot-added NVMe gets no IRQ
+behind 00:1c"), Windows 98 read its routing from `$PIR`, the table had no
+entry for the root port's device, and the hot-added function showed Code
+29. The captures on file do not include the P14s's `$PIR`, so whether the
+same holds there is not known yet.
+
+To read it, boot the P14s to DOS (the same boot medium as the procedure
+above, Thunderbolt BIOS settings as for the Windows 98 runs) and run:
+
+```bat
+XHCIQUAL --probe-only --no-page --log PIR.LOG
+```
+
+or `QUALREP.BAT`, whose log carries the same block. The screen line of the
+quick scan (`IRQ table: ... 00:1C listed` or `NOT LISTED`) is enough to
+answer the question on the spot. Keep the log, since the entry's link
+values and IRQ bitmaps are what a later fix would need. Record under
+`results/p14s-gen1-<date>/README.md`:
+
+- the `$PIR` header lines (address, version, size, checksum, router);
+- the `00:1C` line, and the `00:1C.4` function line under it (id, pin,
+  line, `link/bitmap` or `no entry`);
+- the BIOS version from the system description, since a BIOS update can
+  change the table.
+
+Also record which routing source Windows 98 uses there: Device Manager,
+System devices, PCI bus, the IRQ Steering tab, and the status line it
+shows (`IRQ Table read from MS IRQ Routing Specification` is `$PIR`; the
+tab can also name ACPI or a PCI BIOS call, which this tool does not read).
+
+What the answer means is task 39-E.2's to write into the release notes,
+and it is evidence about this table, not a guarantee. `NO ENTRY`, with
+Windows on the `$PIR` source, is the QEMU reproduction's condition, so a
+function hot-added behind the tunnel is expected to get no IRQ and
+pre-boot tunnelling (the device attached before power-on) to be the route
+on Windows 98; confirm it with a hot-add on the machine. `listed` is
+not sufficient: the `00:1C` entry in the dump must show a link that is not
+0 and an IRQ bitmap that is not empty for the pin the hot-added function's
+pin swizzles to, and a hot-add is still the proof. Note any entries on
+other buses the `NO ENTRY` line counts: a table may describe a device
+behind a bridge directly, and whether such an entry matches a function
+behind the tunnel depends on the bus number that function is given.
