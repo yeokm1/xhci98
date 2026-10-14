@@ -476,8 +476,9 @@ the ones `INCS_DDK.INF`'s `[DestinationDirs]` and `[WIN98_Files1]` give:
 - Licence: `LICENSE.TXT` is Microsoft's end-user licence agreement for the
   "Windows 98 Driver Development Kit". It states that the product is
   licensed, not sold; grants the making, installing and use of up to ten
-  copies "to design, develop, and test software products, including but
-  not limited to device drivers"; allows the sample source code to be
+  copies on computers "residing on your premises", "to design, develop,
+  and test software products, including but not limited to device drivers
+  ... for use with Microsoft Windows and/or Windows NT"; allows the sample source code to be
   modified and redistributed on the conditions it lists; and reserves every
   right not expressly granted. What this project takes from the package is
   the numeric values `src/cm/cm_cfgmg.h` cites, under names of its own; no

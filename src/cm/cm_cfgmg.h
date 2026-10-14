@@ -39,12 +39,16 @@
 
 /*
  * Service numbers. CONFIGMG.H's service table opens at line 532
- * (Begin_Service_Table(CONFIGMG, VxD)) and VMM.H line 353 numbers its
- * entries from 0 in order, so the entry on line 533 + n is service n. The
- * table, lines 532-663, holds no conditional; its only non-entry lines are
- * the "4.0 OPK2 Services" (625) and "4.1 Services" (646) comments.
- * Get_Version returns a WORD in AX; every other service returns a CR_ value
- * in EAX and is C-callable (CONFIGMG.H lines 2775-2777).
+ * (Begin_Service_Table(CONFIGMG, VxD)) and VMM.H lines 353-358 number its
+ * Declare_Service entries from 0 in order, one per entry. The table, lines
+ * 532-663, holds 124 entries and no conditional; its only other lines are
+ * two three-line comments, "4.0 OPK2 Services" (624-626) and "4.1 Services"
+ * (645-647). So service n is the entry on line 533 + n up to line 623,
+ * 530 + n from 627 to 644, and 527 + n from 648. The header's own name
+ * array (DEBUG_SERVICE_NAMES, lines 671 on) lists the same 124 in the same
+ * order. Get_Version returns a WORD read from AX (lines 2791-2797); every
+ * other service returns a CR_ value in EAX and is C-callable (lines
+ * 2775-2777).
  */
 #define CMG_SVC_GET_VERSION             0   /* line 533, _CONFIGMG_Get_Version */
 #define CMG_SVC_LOCATE_DEVNODE          2   /* line 535, _CONFIGMG_Locate_DevNode */
@@ -55,6 +59,7 @@
 #define CMG_SVC_GET_DEVICE_ID           7   /* line 540, _CONFIGMG_Get_Device_ID */
 #define CMG_SVC_QUERY_REMOVE_SUBTREE    12  /* line 545, _CONFIGMG_Query_Remove_SubTree */
 #define CMG_SVC_REMOVE_SUBTREE          13  /* line 546, _CONFIGMG_Remove_SubTree */
+#define CMG_SVC_REGISTER_DEVICE_DRIVER  14  /* line 547, _CONFIGMG_Register_Device_Driver */
 #define CMG_SVC_LOCK                    22  /* line 555, _CONFIGMG_Lock */
 #define CMG_SVC_UNLOCK                  23  /* line 556, _CONFIGMG_Unlock */
 #define CMG_SVC_REENUMERATE_DEVNODE     51  /* line 584, _CONFIGMG_Reenumerate_DevNode */
@@ -63,8 +68,8 @@
 #define CMG_SVC_DISABLE_DEVNODE         64  /* line 597, _CONFIGMG_Disable_DevNode */
 #define CMG_SVC_ENABLE_DEVNODE          65  /* line 598, _CONFIGMG_Enable_DevNode */
 #define CMG_SVC_BROADCAST_DEVICE_CHANGE 88  /* line 621, _CONFIGMG_Broadcast_Device_Change_Message */
-#define CMG_SVC_CHANGE_DEVNODE_STATUS   94  /* line 627, _CONFIGMG_Change_DevNode_Status, first of the "4.0 OPK2" group */
-#define CMG_SVC_SET_DEVNODE_PROBLEM     128 /* line 661, _CONFIGMG_Set_DevNode_Problem, in the "4.1 Services" group */
+#define CMG_SVC_CHANGE_DEVNODE_STATUS   91  /* line 627, _CONFIGMG_Change_DevNode_Status, first of the "4.0 OPK2" group */
+#define CMG_SVC_SET_DEVNODE_PROBLEM     122 /* line 661, _CONFIGMG_Set_DevNode_Problem, in the "4.1 Services" group */
 
 /*
  * Get_Version. CONFIGMG.H lines 27 and 37 define CONFIGMG_VERSION as
@@ -95,6 +100,7 @@
 #define CMG_QUERY_REMOVE_UI_NOT_OK  0x01    /* line 1181, CM_QUERY_REMOVE_UI_NOT_OK */
 #define CMG_REMOVE_UI_OK            0x00    /* line 1184, CM_REMOVE_UI_OK */
 #define CMG_REMOVE_UI_NOT_OK        0x01    /* line 1185, CM_REMOVE_UI_NOT_OK */
+#define CMG_REGISTER_DRIVER_REMOVABLE 0x02  /* line 1156, CM_REGISTER_DEVICE_DRIVER_REMOVABLE */
 #define CMG_SETUP_DEVNODE_READY     0x00    /* line 1188, CM_SETUP_DEVNODE_READY */
 #define CMG_DISABLE_POLITE          0x00    /* line 1232, CM_DISABLE_POLITE */
 #define CMG_DISABLE_ABSOLUTE        0x01    /* line 1233, CM_DISABLE_ABSOLUTE */
