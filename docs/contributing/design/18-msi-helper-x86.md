@@ -1939,6 +1939,8 @@ needed by its own rules, as for the release before it. The controller
 starts as before, and a polled controller keeps the clock tick until the
 next boot, when the helper is there and the timer thread's look finds
 it; the release notes say "the finer timer works from the next restart".
+(Since the owner's change of 2026-10-14 the timer is off by default,
+record 15 section 7.2.4, so this holds once `XhciPollFineTimer` is 1.)
 The options not taken stay on record: a `Reboot` on every 2000 and XP
 install and update (the owner's first answer, withdrawn after the review
 found it a disruption on a primary target for an optional improvement),

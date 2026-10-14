@@ -208,11 +208,11 @@ included.
   It replaces `2.3.x`'s `xhcimsi.sys`: on 32-bit Vista and 7 it still
   connects the message-signalled interrupt, and on 32-bit 2000, XP, Vista
   and 7 it carries the finer timer. On 2000 and XP the install asks for no
-  restart, and the timer, when turned on, starts at the next boot; on Vista and 7 the
-  restart it asks for also removes `xhcimsi.sys` ("Updating from
-  2.y.y.y"). To remove it after an uninstall, `sc delete xhcihlpr`, or on
-  Windows 2000 its key ("Windows Vista and 7: message-signalled
-  interrupts").
+  restart, and the timer, when turned on, starts at the next boot; on
+  Vista and 7 the restart it asks for also removes `xhcimsi.sys`
+  ("Updating from 2.y.y.y"). To remove it after an uninstall, `sc delete
+  xhcihlpr`, or on Windows 2000 its key ("Windows Vista and 7:
+  message-signalled interrupts").
 - The finer timer has been read only in QEMU virtual machines without
   hardware acceleration, polling (`XhciInterruptMode` `2`), on 7 x64,
   7 x86 and Vista x86: while it was held the guest's clock ran at a tenth
@@ -2839,7 +2839,8 @@ or says it was found by reading the code.
   scan, 32-bit Vista showed only an "installed successfully" balloon, the
   controller at Code 1 until a restart (read with `xhcimsi.sys`).
 - **32-bit Windows 2000 and XP: the finer timer waits for the next boot**
-  (since `2.4.0.0`). The install brings the helper `xhcihlpr.sys` with no
+  (since `2.4.0.0`), when `XhciPollFineTimer` is set to `1` (it is off
+  by default). The install brings the helper `xhcihlpr.sys` with no
   restart asked for, and a polled controller keeps the clock tick until
   the helper loads at the next start of Windows ("XhciPollFineTimer: a
   finer system timer while polling"). Text-mode Setup (F6) copies the

@@ -111,8 +111,9 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 #define HCD_VALUE_POLL_IDLE     L"XhciPollIdleMs"
 #define HCD_VALUE_POLL_ACTIVE   L"XhciPollActiveMs"
 /* Task 38.3 (design record 15 section 7.2.4): the finer system timer while
- * polling - 1, absent, unreadable or not a DWORD is on, 0 off, any other
- * value runs as 1. Read at every start; both INFs write 1 under
+ * polling - 1 is on; 0, absent, unreadable or not a DWORD is off; any
+ * other value runs as 1 (off by default since the owner's change of
+ * 2026-10-14). Read at every start; both INFs write 0 under
  * FLG_ADDREG_NOCLOBBER. Windows 98 SE and ME read it and do nothing. */
 #define HCD_VALUE_POLL_FINE_TIMER L"XhciPollFineTimer"
 #if defined(XHCI_FLAVOUR_QEMU)
