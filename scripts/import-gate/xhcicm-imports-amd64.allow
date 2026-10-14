@@ -1,0 +1,65 @@
+# xhcicm.sys import allowlist (amd64) - the Thunderbolt 3 connection
+# manager's 64-bit build (roadmap-usb4.md task 39-A.1), held to NT 5.2 amd64
+# evidence (winxp64-baselines.expected), as xhciuas-imports-amd64.allow holds
+# xhciuas.sys. scripts\build-driver.cmd passes it with -AllowPath on every
+# -amd64 link of src\cm. Format and rules: xhci98-imports.allow's header;
+# the amd64 evidence rule: xhci98-imports-amd64.allow's.
+#
+# Every row is the amd64 twin of a row in xhcicm-imports.allow, except where
+# the architecture changes the pair: KeInitializeSpinLock is an inline on
+# amd64, and the Kf* spin-lock pair is KeAcquireSpinLockRaiseToDpc /
+# KeReleaseSpinLock there; WDK 7.1's checked headers import RtlAssert (debug
+# and qemu only); and /GS imports KeBugCheckEx, exactly as in
+# xhci98-imports-amd64.allow, whose comments say why each is accepted. The
+# SITES rules are the x86 file's.
+
+[imports]
+
+# --- Compiler- and header-added pairs, as in xhci98-imports-amd64.allow ---
+ntoskrnl.exe!KeBugCheckEx                  all    required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
+ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+
+# --- PnP: the NHI's FDO and the tunnel bridge's filter ---
+ntoskrnl.exe!IoCreateDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDeleteDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoAttachDeviceToDeviceStack   all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDetachDevice                all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IofCallDriver                 all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IofCompleteRequest            all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!PoStartNextPowerIrp           all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!PoCallDriver                  all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoIsWdmVersionAvailable       all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoGetDeviceProperty           all    required  nt52-amd64-export; twin of the x86 row
+
+# --- The forwarded start and its wait ---
+ntoskrnl.exe!KeInitializeEvent             all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeSetEvent                    all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!KeWaitForSingleObject         all    required  nt52-amd64-export; twin of the x86 row
+
+# --- The log ring's lock (cm_log.c) ---
+ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
+ntoskrnl.exe!KeReleaseSpinLock             all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
+
+# --- The registry values: cm_reg.obj only ---
+ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=cm_reg.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj nt52-amd64-export; twin of the x86 row
+
+# --- The log's emission, checked flavours only (decision D12): cm_log.obj ---
+ntoskrnl.exe!DbgPrint                      debug  required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!DbgPrint                      qemu   required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
+
+# --- Pool: cm_pool.obj only, optional until task 39-A.4 allocates ---
+ntoskrnl.exe!ExAllocatePoolWithTag         all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ExFreePool                    all    optional  SITES=cm_pool.obj nt52-amd64-export; twin of the x86 row
+
+[deny]
+
+ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag.
+ExFreePoolWithTag           No Windows 98 evidence, and the x86 and amd64 sources are one tree: free with ExFreePool on both.
+IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000, and the x86 and amd64 sources are one tree. Use IoCallDriver plus a completion routine that signals a KEVENT.
+IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000, as above.
+IoCsqInitialize             Cancel-safe queues arrived with the XP DDK and are not in the Win2K DDK's libraries.
+IoCsqInsertIrp              Cancel-safe queue family - not in the Win2K DDK.
+IoCsqRemoveNextIrp          Cancel-safe queue family - not in the Win2K DDK.

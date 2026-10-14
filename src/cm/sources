@@ -1,0 +1,70 @@
+#
+# sources - Windows 2000 DDK (x86) and WDK 7.1 (amd64) build description
+# for xhcicm.sys, the Thunderbolt 3 connection manager (design record 21;
+# roadmap-usb4.md task 39-A.1), a second driver beside xhci98.sys with its
+# own INFs (xhcicm.inf for the NHI, xhcicmf.inf for the NT tunnel-bridge
+# filter, and their -amd64 twins).
+#
+# Build with scripts\build-driver.cmd, which builds this directory after
+# src\uas for every flavour and runs the import gate on the result against
+# scripts\import-gate\xhcicm-imports.allow (x86) or
+# xhcicm-imports-amd64.allow (amd64). Output: src\cm\objfre\<arch>\
+# xhcicm.sys (release), src\cm\objchk (debug), src\cm\objchk_qemu (qemu).
+#
+# THE PURE CORE: cm_vals.c (test\test_cm.c); the host interface ring 0,
+# the ICM client and the hardware profiles, tbt_ring.c, tbt_icm.c and
+# tbt_hw.c (test_tbt_ring, test_tbt_icm, test_tbt_hw); and the shared log
+# ring ..\xhci_log.c (test\test_log.c), compiled in by path. All DDK-free.
+# cm_pool.c is the one file that allocates pool; cm_reg.c the one that
+# opens a registry key; cm_log.c the one DbgPrint site (debug and qemu
+# only). The allowlists hold each to its file with SITES=.
+#
+# ADDING A FILE. A new .c is one more line in SOURCES below (a file of
+# src\ by path, as ..\xhci_log.c is); scripts\source-stamp.ps1 reads this
+# list, so the stamp follows. Reserved for a later task of Phase 39:
+# tbt_topo.c (39-A.5); headers (tbt_regs.h, cm_cfgmg.h) need no line. A
+# pure file also gets a host suite line in test\run-host-tests.cmd, as
+# test_cm has.
+#
+
+TARGETNAME=xhcicm
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
+
+SOURCES=cm_vals.c      \
+        tbt_ring.c     \
+        tbt_icm.c      \
+        tbt_hw.c       \
+        ..\xhci_log.c  \
+        cm_pool.c      \
+        cm_reg.c       \
+        cm_log.c       \
+        cm_entry.c     \
+        cm_nhi.c       \
+        cm_filt.c      \
+        xhcicm.rc
+
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!ERROR XHCI_EXTRA_DEFINES is set, and xhcicm.sys has no diagnostic builds. Clear it before building.
+!ENDIF
+
+#
+# The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
+# derives them for xhci98.sys (design record 08), so the same flavour
+# marker check and packaging refusals apply to this binary. The qemu flavour
+# differs from debug in its marker and in cm_log.c's port-0xE9 mirror of the
+# log emission (decision D12), whose WRITE_PORT_UCHAR import is a qemu row.
+#
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ENDIF
+
+LINKER_FLAGS=-merge:.rdata=.text
