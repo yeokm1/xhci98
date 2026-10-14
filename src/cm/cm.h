@@ -159,6 +159,7 @@ typedef struct _CM_NHI {
     TBT_HOST Host;
     TBT_CFG Cfg;
     ULONG CfgWriteFailures; /* TBT_CFG.Write32 refused (cm_thr.c)         */
+    ULONG ForcePowerWriteRefused; /* a VS_CAP_22 write refused, this call */
     ULONG ClockLast;        /* KeQueryTickCount's low word               */
     ULONG ClockTickUs;      /* KeQueryTimeIncrement, in microseconds     */
     ULONG ClockRest;        /* microseconds not yet a millisecond        */

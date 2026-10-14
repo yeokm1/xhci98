@@ -62,28 +62,27 @@
 /*
  * TbtHwPlatformInit through the driver's configuration route, its
  * refusals counted: FALSE unless every step finished and every write was
- * taken. The ownership record follows the hardware rather than the
- * attempt: a claim of force power this call made (ForcePowerSetHere newly
- * TRUE) stands only where the bit then reads set, so a refused write never
- * leaves a claim a later stop would act on; a claim that held while a later
- * step (LTR) failed is kept. IRQL: PASSIVE_LEVEL, the thread.
+ * taken. The ownership record follows the force-power write itself: a
+ * claim this call made (ForcePowerSetHere newly TRUE) stands only where
+ * that write to VS_CAP_22 was taken (cm_thr.c's cmCfgWrite records its
+ * refusal), so a refused write never leaves a claim a later stop would act
+ * on, and a claim whose write was taken is kept whatever a later step
+ * (LTR) did. IRQL: PASSIVE_LEVEL, the thread.
  */
 BOOLEAN CmNhiPlatformInit(PCM_NHI nhi)
 {
     ULONG before;
-    ULONG v;
     BOOLEAN owned;
     LONG rc;
 
     before = nhi->CfgWriteFailures;
     owned = nhi->Power.ForcePowerSetHere;
+    nhi->ForcePowerWriteRefused = 0;
     rc = TbtHwPlatformInit(nhi->Hw, &nhi->Cfg, &nhi->Host, &nhi->Power);
-    if (!owned && nhi->Power.ForcePowerSetHere) {
-        v = CmCfgRead32(nhi, TBT_ICL_VS_CAP_22);
-        if (v == 0xFFFFFFFFUL || (v & TBT_ICL_VS_CAP_22_FORCE_POWER) == 0) {
-            nhi->Power.ForcePowerSetHere = FALSE;
-            CmLogNote(nhi, "cm.force-power.not-taken", v);
-        }
+    if (!owned && nhi->Power.ForcePowerSetHere &&
+        nhi->ForcePowerWriteRefused) {
+        nhi->Power.ForcePowerSetHere = FALSE;
+        CmLogNote(nhi, "cm.force-power.not-taken", nhi->CfgWriteFailures);
     }
     return (BOOLEAN)(rc == TBT_OK && nhi->CfgWriteFailures == before);
 }

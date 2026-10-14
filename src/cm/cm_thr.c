@@ -165,6 +165,9 @@ static VOID cmCfgWrite(PVOID context, ULONG offset, ULONG value)
     b[3] = (UCHAR)((value >> 24) & 0xFF);
     if (!cmConfig(nhi, FALSE, b, offset, 4)) {
         nhi->CfgWriteFailures++;
+        if (offset == TBT_ICL_VS_CAP_22) {
+            nhi->ForcePowerWriteRefused = 1;
+        }
     }
 }
 

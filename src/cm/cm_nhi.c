@@ -239,11 +239,19 @@ VOID CmNhiPollPass(PCM_NHI nhi)
 /* The start                                                              */
 /* ---------------------------------------------------------------------- */
 
+/* The inert start, before anything is activated. A domain the
+ * re-enumeration seam was already started for withdraws its claims at
+ * once (CmReenumStop writes nothing to the NHI), so an instance that never
+ * bound holds no tunnel port. */
 static VOID cmInert(PCM_NHI nhi, ULONG reason)
 {
     nhi->Inert = reason;
     nhi->Stage = CM_STAGE_INERT;
     CmLogNote(nhi, "cm.inert", reason);
+    if (nhi->ReenumOn) {
+        CmReenumStop(nhi);
+        nhi->ReenumOn = 0;
+    }
 }
 
 /* Which CM_PROFILE_* a hardware row is, for CmStartDecision. */
