@@ -444,3 +444,49 @@ the parts accept. Design record 17 section 4.14.2 lists what a reading of
 the 0.96 text would settle. If a copy is ever obtained from Intel, record
 it here with its filename, SHA-256 and the licence limit it states, and
 keep it untracked like every document in this directory.
+
+## Windows 98 DDK (roadmap-usb4 task 39-0.3): kept in `tools/`, not here
+
+Design record 21 section 6.1 calls the Windows 98 and ME configuration
+manager (CONFIGMG) from ring 0 by VxD service number. Those numbers, and
+the flag, status and result values the calls take and return, are read
+from this DDK's `CONFIGMG.H`, `VMM.H` and `VMM.INC` into
+`src/cm/cm_cfgmg.h`, each value cited there by header and line. The DDK is
+a toolchain-shaped input, so it lives beside `tools/WIN2KDDK.EXE` in the
+git-ignored `tools/` rather than in this directory; this section is where
+its identity is recorded. Nothing of it is tracked.
+
+| Save as | Version | SHA-256 | Source |
+|---|---|---|---|
+| `tools/win98ddk/win98se_ddk.exe` | Microsoft Windows 98 Second Edition DDK, a self-extracting cabinet of 26,377,712 bytes holding 107 files, the newest dated 1999-05-25; its `PRODUCT.INI` names it "98 DDK" and its `BUILD.TXT` says it is "synched to Windows98 Build bld1998.6" | `08318354cbac0b17d2e976a70b901ceb336947e76e4af8c869efdc6327a6a5dc` | Internet Archive item [`win98se_ddk.exe`](https://archive.org/details/win98se_ddk.exe), "Windows 98 Second Edition DDK", file `https://archive.org/download/win98se_ddk.exe/win98se_ddk.exe`; the item's own SHA-1 (`fc1d96765b768c06a30ae5da61d42323d909d1e7`) and MD5 (`acbd703d59d240601c21422386fbf70e`) matched the download on 2026-10-15 |
+
+What was read. The package was extracted with 7-Zip into the git-ignored
+`tools/win98ddk-extracted/` (the outer cabinet into `layer1/`, its
+`INCS_DDK.CAB` into `incs/`); no installer was run. The install paths are
+the ones `INCS_DDK.INF`'s `[DestinationDirs]` and `[WIN98_Files1]` give:
+
+| File, as installed | Member | Bytes | SHA-256 |
+|---|---|---|---|
+| `INCS_DDK.CAB` | of `win98se_ddk.exe` | 1,688,070 | `8f6beaa457727b600bc807bd32cd62ffc65f94ba436084ed03450be7b17a624c` |
+| `inc\win98\configmg.h` | `INC_WIN98_CONFIGMG.H` of `INCS_DDK.CAB` | 106,882 | `e540ecb80a28f16f733be2280a3d99287aea1e9d3e89b473352d8ab40751d999` |
+| `inc\win98\vmm.h` | `INC_WIN98_VMM.H` of `INCS_DDK.CAB` | 188,260 | `1c8a6f7637ffa7ba97b095cc543c6bb89092bbc41fa32b5a980870e219fc6727` |
+| `inc\win98\vmm.inc` | `INC_WIN98_VMM.INC` of `INCS_DDK.CAB` | 93,146 | `713fa2d33e417ca553ce2aef64681dae26ca756ad90dc9bbd7401a044c5be072` |
+| `LICENSE.TXT` | of `win98se_ddk.exe` | 11,803 | `89f90f047aa98c71a405bf75a377ca075a6dfab3540692e0e6a65655ee2b4019` |
+
+- Licence: `LICENSE.TXT` is Microsoft's end-user licence agreement for the
+  "Windows 98 Driver Development Kit". It states that the product is
+  licensed, not sold; grants the making, installing and use of up to ten
+  copies on computers "residing on your premises", "to design, develop,
+  and test software products, including but not limited to device drivers
+  ... for use with Microsoft Windows and/or Windows NT"; allows the sample source code to be
+  modified and redistributed on the conditions it lists; and reserves every
+  right not expressly granted. What this project takes from the package is
+  the numeric values `src/cm/cm_cfgmg.h` cites, under names of its own; no
+  declaration, macro body, comment or sample code is reproduced
+  (`docs/contributing/legal-provenance.md` section 4, the CONFIGMG row).
+  Fetched, never tracked.
+- The Internet Archive item is a third-party upload, not a Microsoft
+  distribution, so the SHA-256 above is what identifies the file: another
+  copy of the same package is checked against it, not trusted by its name.
+  Other public copies exist (WinWorld; the Internet Archive's `DDK-9x-ME`
+  and MSDN disc images); none was fetched, and nothing here depends on them.
