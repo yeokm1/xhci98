@@ -656,9 +656,10 @@ function Test-OemText {
             if ($null -eq $c) { continue }
             $ok = ($c.Lines.Count -eq 1 -and $c.Lines[0].Key -eq "value")
             if ($ok) {
-                $f = @(Split-OemFields -Value $c.Lines[0].Value)
-                $ok = ($f.Count -eq 4 -and $f[0].Quoted -and $f[0].Text -eq "" -and $f[1].Text -eq "Start" -and
-                       $f[2].Text -eq "REG_DWORD" -and $f[3].Text -eq "3")
+                # The raw text, not the parsed fields: Split-OemFields trims
+                # inside quotes, and " " or " Start " name another key or
+                # value to Setup (a review, 2026-10-14).
+                $ok = ($c.Lines[0].Value -cmatch '^""\s*,\s*Start\s*,\s*REG_DWORD\s*,\s*3$')
             }
             if (-not $ok) {
                 & $add "OEM-W2K" "[Config.$($wfile.Key)] must be 'value = `"`", Start, REG_DWORD, 3' alone: setupdd creates the service boot-start, and only the kernel's import load may bring the file in."
@@ -840,6 +841,9 @@ if ($SelfTest) {
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "HardwareIds.scsi.$w2kOption" "id = `"USB\XHCI98_COMPOSITE`", `"xhci98`"`r`n" "") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.usbd" "REG_DWORD, 3" "REG_DWORD, 0") }
             $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.hidclass" "value = `"`", Start" "value = `"Parameters`", Start") }
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.usbd" "value = `"`", Start" "value = `" `", Start") }
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.usbd" "value = `"`", Start" "value = `"`", `" Start `"") }
+            $cases += @{ Rule = "OEM-W2K"; Text = (& $inSec "Config.hidparse" "value = `"`", Start" "value = `"`", start") }
             $cases += @{ Rule = "OEM-SECTION"; Text = (& $inSec "Config.hidparse" "[Config.hidparse]`r`nvalue = `"`", Start, REG_DWORD, 3`r`n" "") }
             $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace(", \usbd.sy_, \", ", \usbd.sys, \") }
             $cases += @{ Rule = "OEM-DISK"; Text = $text.Replace(", \usbd.sy_, \", ", \usbd.sy_, \i386") }
