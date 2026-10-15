@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 5, 2026-10-16, reviewed and revised four times the same night;
+Status: revision 6, 2026-10-16, reviewed and revised five times the same night;
 the code is written against it. Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
@@ -453,54 +453,47 @@ Exit codes follow XHCIINST's (record 23 section 10).
 
 ## 8. Install, upgrade and uninstall
 
-- XHCIINST owns the tool's file (and its `.NEW` and `.DEL` forms) and the
-  Run value, outside the per-package `XHCIINST.LST` lists; its removal of
-  `%windir%\XHCI98\` counts them as its own.
+- XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`
+  forms) and the Run value, outside the per-package `XHCIINST.LST` lists;
+  its removal of `%windir%\XHCI98\` counts them as its own. Nothing is
+  ever left pending for a restart on 98 SE or ME, and XHCIINST never
+  edits `WININIT.INI`.
 - **One at a time.** XHCIINST holds a machine-wide maintenance mutex
   (`Global\XhciinstMaint` on NT, `XhciinstMaint` on 98 SE and ME, with the
-  shared mutex's security) for everything in this section: reading the
-  versions, reconciling pending operations, the quit event, the copy and
-  the Run value. A second XHCIINST waits up to 60 s for it, then refuses;
-  it reads every version again once it holds it.
+  shared mutex's security) for everything in this section. A second
+  XHCIINST waits up to 60 s for it, then refuses; it reads every version
+  again once it holds it.
+- **Leftovers first.** A `.TMP` is deleted. A `.BAK` with no tool beside
+  it is an interrupted replacement: it is renamed back, and if that fails
+  the run stops before any version is compared ("steps left"). A `.BAK`
+  beside a tool is deleted.
 - **Copy.** On an install or upgrade run, the tool for the machine's
   architecture goes to `%windir%\XHCI98\XHCITR.EXE` (`XHCITR64.EXE` on
-  x64) when the package's file version is newer than both the installed
-  file's and a pending `.NEW`'s (section "Pending operations"), or the
-  file is missing; otherwise it is left alone. The Run value is written
-  only after the file is in place. `/notray` writes no Run value and
-  removes an existing one. There is no new question (owner: start at
-  login).
+  x64) when the file is missing or the package's file version is newer
+  than the installed file's; otherwise it is left alone. The new file is
+  first copied to `.TMP` and compared with the package's; then NT
+  replaces the tool with `MoveFileEx` (replace existing), and 98 SE and ME
+  rename the tool to `.BAK`, `.TMP` to the tool, and delete `.BAK`,
+  renaming `.BAK` back on a failure. The Run value is written only after
+  the file is in place. `/notray` writes no Run value and removes an
+  existing one. There is no new question (owner: start at login).
 - **Closing running copies.** Before replacing or deleting the file,
   XHCIINST sets the quit event (section 7.1), which every session's tray
   sees, and posts `WM_CLOSE` to the `Xhci98TrTray` window in its own
-  session, then waits up to 15 s for the file to become replaceable, then
-  clears the event. It never ends a process.
-- **Still in use.** NT: the new file is copied beside it as `XHCITR.NEW`
-  and moved over it at the next restart (`MoveFileEx`, replace, delay
-  until reboot); 98 SE and ME: a `[rename]` line in `WININIT.INI` with
-  8.3 paths, every existing line kept. XHCIINST says the new tool takes
-  effect after a restart.
-- **Uninstall.** Closes it as above, deletes the Run value and the file;
-  a file still in use is renamed to `XHCITR.DEL` and deleted at the next
-  restart on NT, or deleted by a `NUL=` line in `WININIT.INI` on 98 SE
-  and ME.
-- **Pending operations.** A pending `XHCITR.NEW` counts as installed at
-  its own version. An install that copies a newer tool first stages it
-  (as the file itself, or as a new `.NEW` written and verified under a
-  temporary name and then renamed over the old `.NEW`), and only then
-  drops what it supersedes: on 98 SE and ME its own `[rename]` and `NUL=`
-  lines for the tool in `WININIT.INI`, every other line kept (an NT
-  delayed move whose source is gone does nothing at restart). An install
-  that leaves the tool alone leaves a newer pending `.NEW` alone. Every
-  successful install, whether it copied or not, removes a pending
-  deletion of the tool (its own `NUL=` line on 98 SE and ME; on NT an
-  uninstall deferred only `XHCITR.DEL`, never the tool's own name), so a
-  same-version reinstall after a deferred uninstall keeps the file the Run
-  value names. Only an
-  uninstall cancels a pending `.NEW` outright (deletes it and its 9x
-  line). An upgrade after an upgrade, an older package after a newer one,
-  or an uninstall then a reinstall, therefore never lets an older copy or
-  a stale deletion land on a newer file.
+  session, then waits up to 15 s for the file to become replaceable. It
+  never ends a process.
+- **Still in use.** If the file still cannot be replaced, XHCIINST leaves
+  the installed tool as it is, deletes its `.TMP`, says to close the
+  xHCI98 USB Tree (or restart) and run it again, and ends with "steps
+  left"; the drivers' part of the run is unaffected. No replacement is
+  deferred to a restart, so no older copy can ever land on a newer one.
+- **Uninstall.** Closes it as above, deletes the Run value and the file.
+  On NT a file still in use is renamed to `.DEL` and deleted at the next
+  restart (`MoveFileEx`, delay until reboot), and the next install or
+  uninstall deletes a leftover `.DEL`. On 98 SE and ME a file still in use
+  is left, reported, and deleted by the next uninstall; the Run value is
+  gone, so it no longer starts. A failure to delete the Run value is
+  reported and fails the run.
 - The packager carries both executables under `tools\xhcitr\` with
   XHCIINST's freshness and version checks; `test-package.ps1` checks the
   layout.
