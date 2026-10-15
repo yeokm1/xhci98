@@ -1748,6 +1748,7 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_FILTER f;
     ULONG pending;
     ULONG stale;
+    ULONG taken;
     ULONG i;
 
     r = &nhi->Reenum;
@@ -1759,6 +1760,7 @@ VOID CmReenumService(PCM_NHI nhi)
         return;
     }
     stale = 0;
+    taken = 0;
     cmCfgmgLate(nhi);
     /* Each eject is checked again at the hand-off, under the lock: the
      * same publication of the bridge, still this domain's, the same
@@ -1773,9 +1775,13 @@ VOID CmReenumService(PCM_NHI nhi)
             continue;
         }
         f = cmRegFind(r->Port[i].Bdf);
-        if (f != NULL && f->Owner == nhi && f->Unsettled) {
+        if ((f != NULL && f->Owner == nhi && f->Unsettled) ||
+            (nhi->U4On && taken)) {
             /* Deferred to a later pass: the bridge has not shown its
-             * population since the last tunnel change. */
+             * population since the last tunnel change; or, under the USB4
+             * profile, one eject has already been taken this pass - its
+             * hook tears a tunnel down and may take seconds, so every
+             * other is checked again after the next pass's actions. */
             pending &= ~(1UL << i);
             r->EjectPending |= 1UL << i;
             continue;
@@ -1786,6 +1792,8 @@ VOID CmReenumService(PCM_NHI nhi)
             f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
             pending &= ~(1UL << i);
             stale |= 1UL << i;
+        } else {
+            taken = 1;
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
