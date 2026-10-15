@@ -18,7 +18,7 @@
  * without the lock, by the entry's sequence (cm_nvlink.c).
  *
  * WINDOWS 98 SE AND ME. No callback object: the rendezvous is the record
- * cm_nvlink.h describes, under HKEY_DYN_DATA, written through the VMM's
+ * cm_nvlink.h describes, under HKEY_LOCAL_MACHINE, written through the VMM's
  * registry services (_RegCreateKey 14Ah, _RegSetValueEx 152h, _RegCloseKey
  * 149h: their places in the Windows 98 DDK's VMM.H service table, counted
  * from Get_VMM_Version, service 0, and checked against VMM.INC) reached by
@@ -52,7 +52,7 @@ static PNVME98LS_TABLE cmNvTable;
 static KSPIN_LOCK cmNvLock;
 static CM_NV_SHADOW cmNvShadow[NVME98LS_ENTRIES];
 static BOOLEAN cmNvNt;
-static BOOLEAN cmNvOsQualified; /* 2000, XP, XP x64 (record 21 7.2)      */
+static BOOLEAN cmNvOsQualified; /* 2000 x86, XP x64 (record 21 7.2)      */
 static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
 static LONG cmNvQueries;
@@ -347,7 +347,7 @@ VOID CmNvlinkUnload(VOID)
 #define CM_NV_SVC_CLOSE_KEY     0x0149  /* _RegCloseKey                  */
 #define CM_NV_SVC_CREATE_KEY    0x014A  /* _RegCreateKey                 */
 #define CM_NV_SVC_SET_VALUE     0x0152  /* _RegSetValueEx                */
-#define CM_NV_HKEY_DYN_DATA     0x80000006UL
+#define CM_NV_HKEY_LOCAL_MACHINE 0x80000002UL
 #define CM_NV_REG_BINARY        3UL
 
 typedef ULONG (__cdecl *CM_NV_FN1)(ULONG a);
@@ -370,8 +370,8 @@ static VOID cmNvThunk(PUCHAR t, ULONG service)
 /* The record, once per load: 0 or the VMM's registry error. */
 static ULONG cmNvWriteRecord(ULONG clock)
 {
-    static char key[] = CM_NVLINK_DYN_KEY;
-    static char value[] = CM_NVLINK_DYN_VALUE;
+    static char key[] = CM_NVLINK_REC_KEY;
+    static char value[] = CM_NVLINK_REC_VALUE;
     UCHAR record[CM_NVLINK_RECORD_BYTES];
     PUCHAR t;
     ULONG hkey;
@@ -394,7 +394,7 @@ static ULONG cmNvWriteRecord(ULONG clock)
     CmNvlinkRecordEncode(record, (ULONG)(ULONG_PTR)cmNvTable,
                          sizeof(NVME98LS_TABLE), cookie);
     hkey = 0;
-    error = ((CM_NV_FN3)t)(CM_NV_HKEY_DYN_DATA, (ULONG)(ULONG_PTR)key,
+    error = ((CM_NV_FN3)t)(CM_NV_HKEY_LOCAL_MACHINE, (ULONG)(ULONG_PTR)key,
                            (ULONG)(ULONG_PTR)&hkey);
     if (error == 0) {
         error = ((CM_NV_FN6)(t + 8))(hkey, (ULONG)(ULONG_PTR)value, 0,
@@ -566,6 +566,10 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
     if (cmNvTable == NULL) {
         return 0;
     }
+    /* A statement this domain made is acknowledged (or timed out) before
+     * any exposure can retire it or start a removal: a USB4 DOWN hook may
+     * have marked one ahead of an UP action in the same batch. */
+    CmNvlinkAwait(nhi);
     ready = cmNvEnsure(nhi);
     bus = cmNvSecondary(bridge);
     /* Every exposure retires the statements behind the bridge first, by
@@ -769,12 +773,14 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     ULONG pending;
     ULONG start;
     ULONG now;
+    ULONG rounds;
     KIRQL irql;
 
     if (cmNvTable == NULL) {
         return;
     }
     start = cmNvNow(nhi);
+    rounds = 0;
     for (;;) {
         pending = 0;
         now = cmNvNow(nhi);
@@ -783,6 +789,7 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
             if (cmNvShadow[i].Owner != nhi || !cmNvShadow[i].Waiting) {
                 continue;
             }
+            rounds |= 0x80000000UL;
             if (CmNvlinkAcked(cmNvTable, i)) {
                 cmNvShadow[i].Waiting = 0;
                 cmNvAcked++;
@@ -806,9 +813,12 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
         if (pending == 0) {
             break;
         }
+        rounds++;
         cmNvPause(nhi);
     }
-    CmLogNote(nhi, "cm.nvlink.await", cmNvNow(nhi) - start);
+    if (rounds != 0) {
+        CmLogNote(nhi, "cm.nvlink.await", cmNvNow(nhi) - start);
+    }
 }
 
 ULONG CmNvlinkOrderlyRemove(PCM_NHI nhi, ULONG devnode, ULONG bdf)
@@ -888,12 +898,12 @@ VOID CmNvlinkStop(PCM_NHI nhi)
             cmNvShadow[i].Waiting = 0;
         }
     }
-    KeReleaseSpinLock(&cmNvLock, irql);
     for (i = 0; i < CM_NV_DOMAINS; i++) {
         if (cmNvU4[i].Nhi == nhi) {
             cmNvU4[i].Nhi = NULL;
         }
     }
+    KeReleaseSpinLock(&cmNvLock, irql);
     CmLogNote(nhi, "cm.nvlink.ups", cmNvUps);
     CmLogNote(nhi, "cm.nvlink.full", cmNvUpsFull);
     CmLogNote(nhi, "cm.nvlink.sent", cmNvSent);
@@ -924,36 +934,44 @@ ULONG CmNvlinkIdleMs(ULONG configured)
 /* ====================================================================== */
 
 
+/* This domain's slot, claimed (and initialised before it is published)
+ * under cmNvLock when `create`; only the owning domain's thread uses the
+ * slot's fields afterwards. */
 static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create)
 {
     ULONG i;
     ULONG k;
+    CM_NV_U4 *u;
+    KIRQL irql;
 
-    for (i = 0; i < CM_NV_DOMAINS; i++) {
+    u = NULL;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    for (i = 0; i < CM_NV_DOMAINS && u == NULL; i++) {
         if (cmNvU4[i].Nhi == nhi) {
-            return &cmNvU4[i];
+            u = &cmNvU4[i];
         }
     }
-    if (!create) {
-        return NULL;
-    }
-    for (i = 0; i < CM_NV_DOMAINS; i++) {
+    for (i = 0; i < CM_NV_DOMAINS && u == NULL && create; i++) {
         if (cmNvU4[i].Nhi == NULL) {
-            cmNvU4[i].Nhi = nhi;
             for (k = 0; k <= TBT_U4_MAX_PORTS; k++) {
                 cmNvU4[i].Gen[k] = 0;
                 cmNvU4[i].Seen[k] = 0;
             }
-            return &cmNvU4[i];
+            cmNvU4[i].Nhi = nhi;
+            u = &cmNvU4[i];
         }
     }
-    return NULL;
+    KeReleaseSpinLock(&cmNvLock, irql);
+    return u;
 }
+
+static ULONG cmNvU4Bridge(PCM_NHI nhi, ULONG port);
 
 VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
 {
     PCM_NHI nhi;
     CM_NV_U4 *u;
+    ULONG bridge;
 
     nhi = (PCM_NHI)context;
     u = cmNvU4Of(nhi, TRUE);
@@ -961,11 +979,23 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
         u->Gen[action->Port] = action->Generation;
         u->Seen[action->Port] = 1;
     }
-    /* The UP itself is the seam's (CmNvlinkExpose, before the
-     * re-enumeration that this action is about to cause). */
     CmLogNote(nhi, "cm.nvlink.u4-up",
               ((action->Port & 0xFFUL) << 16) |
                   (action->Generation & 0xFFFFUL));
+    /* The new establishment's UP now, where the port's member is known:
+     * this hook runs before anything can expose the endpoint, also on the
+     * resume path, before held D0 requests are released. Where it is not
+     * known the seam's exposure publishes it before its re-enumeration.
+     * The seam's later fresh exposure of the same bridge counts the
+     * generation once more; a newer generation with no link-down between
+     * is harmless to the reader rule (a DOWN_QUIESCED of a generation at
+     * or above the one an instance recorded is still about its link). */
+    if (action->Port >= 1 && action->Port <= XHCI_TBT_MAX_PORTS) {
+        bridge = cmNvU4Bridge(nhi, action->Port);
+        if (bridge != XHCI_TBT_NO_BDF) {
+            (VOID)CmNvlinkExpose(nhi, bridge, TRUE);
+        }
+    }
 }
 
 ULONG CmNvlinkU4Down(PVOID context, const TBT_U4_LINKDOWN *info)
@@ -1013,6 +1043,7 @@ VOID CmNvlinkService(PCM_NHI nhi)
     ULONG i;
     ULONG id;
     ULONG issued;
+    ULONG entries;
     BOOLEAN matched;
 
     if (cmNvTable == NULL || !nhi->U4On) {
@@ -1030,16 +1061,26 @@ VOID CmNvlinkService(PCM_NHI nhi)
         if (bridge == XHCI_TBT_NO_BDF) {
             continue;
         }
+        /* One sample per port, timestamped at its first read and matched
+         * only when every UP entry behind the port answered with its own
+         * ids: the port's anchor is then no later than any recipient's
+         * last sign of presence. */
+        entries = 0;
+        matched = TRUE;
+        issued = TbtClockUs(&nhi->Host);
         for (i = 0; i < NVME98LS_ENTRIES; i++) {
             if (cmNvShadow[i].Owner != nhi || cmNvShadow[i].Bridge != bridge ||
                 (cmNvTable->Entry[i].Flags & NVME98LS_UP) == 0) {
                 continue;
             }
-            issued = TbtClockUs(&nhi->Host);
-            matched = (BOOLEAN)(cmNvCfg(cmNvTable->Entry[i].BusNumber,
-                                        cmNvTable->Entry[i].SlotNumber, 0,
-                                        &id) &&
-                                id == cmNvShadow[i].Id);
+            entries++;
+            if (!cmNvCfg(cmNvTable->Entry[i].BusNumber,
+                         cmNvTable->Entry[i].SlotNumber, 0, &id) ||
+                id != cmNvShadow[i].Id) {
+                matched = FALSE;
+            }
+        }
+        if (entries != 0) {
             TbtU4PresenceSample(&nhi->U4, port, u->Gen[port], issued,
                                 matched);
         }

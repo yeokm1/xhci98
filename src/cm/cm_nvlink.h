@@ -19,12 +19,17 @@
  * \Callback\Nvme98LinkState (ExCreateCallback, OBJ_PERMANENT) with one
  * callback that answers NVME98LS_QUERY with the table's address; nvme98
  * opens it once in HwFindAdapter. Windows 98 SE and ME: a registry record
- * written once per boot under HKEY_DYN_DATA (memory-resident, rebuilt at
- * every boot, so a record never outlives the boot whose pool it names -
- * nvme98 PLAN MD-5, "never trust a pointer across boots"), through the VMM
- * registry services: key CM_NVLINK_DYN_KEY, REG_BINARY value
- * CM_NVLINK_DYN_VALUE, CM_NVLINK_RECORD_BYTES long, laid out as
- * CmNvlinkRecordEncode writes it. nvme98cm.h defines the NT rendezvous
+ * written at each boot, before the first UP, through the VMM registry
+ * services: HKEY_LOCAL_MACHINE key CM_NVLINK_REC_KEY (G3.md's option 2),
+ * REG_BINARY value CM_NVLINK_REC_VALUE, CM_NVLINK_RECORD_BYTES long, laid
+ * out as CmNvlinkRecordEncode writes it. HKEY_DYN_DATA, which would not
+ * outlive the boot, refuses a static key (the VMM answered error 5 on 98
+ * SE, run-39.md), so the record persists, and a reader must never trust
+ * it across boots (MD-5): it checks the pages are present
+ * (_PageCheckLinRange) before it reads the table, then the signature,
+ * version and the cookie the table's Reserved field repeats; a record of
+ * an earlier boot whose CM did not run this boot fails one of those.
+ * nvme98cm.h defines the NT rendezvous
  * only; the 9x record and the REMOVE_PENDING request below are this
  * driver's PROPOSAL for nvme98 to adopt into nvme98cm.h, and nothing on
  * nvme98's side reads either yet (MD-5: designed, not prototyped).
@@ -42,11 +47,13 @@
  *     endpoint's link-down reset has completed, read on the conditions the
  *     record qualifies (record 21 section 7.1, record 22 section 10.2):
  *     ICM profile, CmNvlinkIcmDown - the domain's tunnel-port set has one
- *     member, it is the emulator's bridge (an SHPC capability and no PCI
- *     Express capability; its presence bit clearing after a disconnect is
- *     the documented later-than-stage-2 signal), the operating system is
- *     one the ordering is qualified on (Windows 2000, XP and XP x64; not
- *     Vista or 7, whose native hot plug races the connection manager, and
+ *     member, it is the emulator's bridge (it or the bus-0 bridge above it
+ *     carries QEMU's vendor id 1B36h, and it has an SHPC capability and no
+ *     PCI Express capability; its presence bit clearing after a disconnect
+ *     is the documented later-than-stage-2 signal), the operating system
+ *     and architecture are a pair the ordering is qualified on (Windows
+ *     2000 on x86, XP x64 on amd64; not XP x86 until gate G3 runs there,
+ *     not Vista or 7, whose native hot plug races the connection manager,
  *     not 98 SE or ME, where nothing here reads the SHPC slot), and the
  *     channel's own reading of the slot came DOWN within 2 s. USB4
  *     profile, CmNvlinkPortDown from the CM_U4_DOWN_HOOK - the same, plus
@@ -164,8 +171,8 @@
 #define CM_NVLINK_OR_REMOVE_FAILED  6UL /* Remove_SubTree failed            */
 
 /* The 9x record (proposal; see the file header). */
-#define CM_NVLINK_DYN_KEY       "Nvme98LinkState"
-#define CM_NVLINK_DYN_VALUE     "Table"
+#define CM_NVLINK_REC_KEY       "System\\CurrentControlSet\\Services\\nvme98"
+#define CM_NVLINK_REC_VALUE     "LinkState"
 #define CM_NVLINK_RECORD_BYTES  20UL
 #define CM_NVLINK_RECORD_VER    1UL
 
@@ -214,10 +221,10 @@ BOOLEAN CmNvlinkAcked(const NVME98LS_TABLE *t, ULONG index);
 
 /* The ICM profile's condition (record 21 section 7.1): the set's member
  * count, the member's source (XHCI_TBT_SRC_*), whether the member is the
- * emulator's bridge (an SHPC capability and no PCI Express capability: a
- * conventional PCI hot-plug bridge, which no Thunderbolt or USB4 port is;
- * the only bridge whose slot-empty reading is the documented
- * later-than-stage-2 signal), whether the operating system is one the
+ * emulator's bridge (QEMU's 1B36h on it or the bus-0 bridge above it, an
+ * SHPC capability and no PCI Express capability; the only bridge whose
+ * slot-empty reading is the documented later-than-stage-2 signal),
+ * whether the operating system is one the
  * ordering is qualified on, the channel's reading's end (XHCI_TBT_POLL_*)
  * and its last verdict (XHCI_TBT_PORT_*). */
 ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, BOOLEAN emulator,

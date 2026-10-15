@@ -1755,16 +1755,24 @@ side.
   the connection manager writes at each boot, never a pointer trusted
   across boots). `nvme98cm.h` defines the NT rendezvous only, so the record
   is **this driver's proposal for `nvme98` to adopt**: key
-  `HKEY_DYN_DATA\Nvme98LinkState`, `REG_BINARY` value `Table`, 20 bytes of
-  little-endian `ULONG`s - signature `N98L`, version 1, the table's linear
-  address, its size, and a cookie also written into the table's
-  `Reserved` field. `HKEY_DYN_DATA` lives in memory and is rebuilt at every
-  boot, so a record never outlives the pool it names. It is written through
-  the VMM's `_RegCreateKey`, `_RegSetValueEx` and `_RegCloseKey` (services
-  14Ah, 152h and 149h, their places in the Windows 98 DDK's `VMM.H`
-  table), reached by the INT 20h dynalink of section 6.1, at the first
-  tunnel action of the boot (no registry service runs while the NHI's own
-  start is pending). Nothing on `nvme98`'s side reads it yet.
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\nvme98` (G3.md's
+  option 2), `REG_BINARY` value `LinkState`, 20 bytes of little-endian
+  `ULONG`s - signature `N98L`, version 1, the table's linear address, its
+  size, and a cookie also written into the table's `Reserved` field. It is
+  written through the VMM's `_RegCreateKey`, `_RegSetValueEx` and
+  `_RegCloseKey` (services 14Ah, 152h and 149h, their places in the Windows
+  98 DDK's `VMM.H` table), reached by the INT 20h dynalink of section 6.1,
+  at the first tunnel action of the boot (no registry service runs while
+  the NHI's own start is pending), and no `UP` is published on 9x until it
+  is. `HKEY_DYN_DATA`, which lives in memory and would not outlive the
+  boot, was the first choice; its root refuses a static key (the VMM
+  answered error 5 on 98 SE), and a dynamic key would need a ring-0
+  provider in this image. So the record persists, and the reader must
+  never trust it across boots: it checks that the table's pages are
+  present (`_PageCheckLinRange`) before it reads them, then the signature,
+  the version and the cookie the table repeats; a record left by an
+  earlier boot whose connection manager did not run this time fails one of
+  those. Nothing on `nvme98`'s side reads the record yet.
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
