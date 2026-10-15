@@ -122,7 +122,7 @@ static const char *const cmIcmCounterNames[] = {
     "cm.icm.reconciled", "cm.icm.mailbox.sent", "cm.icm.mailbox.ok",
     "cm.icm.mailbox.errors", "cm.icm.mailbox.timeouts",
     "cm.icm.hostpoll.tries", "cm.icm.hostpoll.answered", "cm.icm.idle-polls",
-    "cm.icm.rediscoveries"
+    "cm.icm.rediscoveries", "cm.icm.resume-budget-expired"
 };
 
 static const char *const cmRingCounterNames[] = {
@@ -606,6 +606,63 @@ static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
     }
 }
 
+/* Whether the core holds a quarantined entry or blocked enable of `port`
+ * (record 22 section 7.3): a path not proven invalid and drained. */
+static BOOLEAN cmU4Quarantined(PCM_NHI nhi, ULONG port)
+{
+    ULONG k;
+
+    for (k = 0; k < TBT_U4_QUARANTINE; k++) {
+        if (nhi->U4.Quarantine[k].Used && nhi->U4.Quarantine[k].Port == port) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*
+ * The learning marks reconciled with the core's port state before any
+ * attribution of a pass (tbt_topo.h's rule: a gain is attributed only
+ * while one port is pending). A port that may carry a live PCIe path not
+ * yet attributed - a tunnel up or found, any entry or enable written and
+ * not proven closed, an incomplete inventory, a residual, a quarantined
+ * entry, a HELD port - is pending, whatever events were or were not seen
+ * for it (a tunnel whose activation and rollback both failed queues no
+ * UP). A pending port whose state proves no path at all - EMPTY, no
+ * router, nothing written, nothing incomplete, residual or quarantined -
+ * is released (XhciTbtLearnDown) and the baseline taken again: that state
+ * is the core's own read-back evidence that nothing of the port can reach
+ * a bridge, never a TUNNEL_DOWN alone.
+ */
+static VOID cmU4Reconcile(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    ULONG port;
+    ULONG bit;
+    BOOLEAN uncertain;
+
+    for (port = 1; port <= nhi->U4.PortCount && port <= XHCI_TBT_MAX_PORTS;
+         port++) {
+        p = TbtU4Port(&nhi->U4, port);
+        if (p == NULL) {
+            continue;
+        }
+        bit = 1UL << (port - 1);
+        uncertain = (BOOLEAN)(p->Pcie.Up || p->Pcie.Written != 0 ||
+                              p->Pcie.Incomplete || p->HostResidual ||
+                              p->State == TBT_U4_HELD || p->AsFoundOwed ||
+                              cmU4Quarantined(nhi, port));
+        if (uncertain) {
+            XhciTbtLearnUp(&nhi->Binds, port);
+        } else if ((nhi->Binds.Pending & bit) != 0 &&
+                   p->State == TBT_U4_EMPTY && !p->Dev.Present) {
+            XhciTbtLearnDown(&nhi->Binds, port);
+            nhi->ArmOwed = 1;
+            CmLogNote(nhi, "u4.learn.released", port);
+        }
+    }
+}
+
 /* Every port whose tunnel came up and is not attributed yet, tried again
  * at each idle tick: its device may answer Configuration Request Retry for
  * a while (tbt_topo.h, XhciTbtLearn). */
@@ -613,6 +670,10 @@ static VOID cmU4LearnPending(PCM_NHI nhi)
 {
     ULONG port;
 
+    cmU4Reconcile(nhi);
+    if (nhi->ArmOwed) {
+        cmU4Arm(nhi);
+    }
     if (nhi->Binds.Pending == 0) {
         return;
     }
@@ -712,6 +773,9 @@ static VOID cmU4Deliver(PCM_NHI nhi)
     ULONG i;
 
     n = nhi->U4BatchCount;
+    /* Before any XhciTbtLearn of this batch: every port that may carry a
+     * live unattributed path is pending (cmU4Reconcile). */
+    cmU4Reconcile(nhi);
     for (i = 0; i < n; i++) {
         u = &nhi->U4Batch[i];
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
@@ -847,7 +911,9 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
  * forces a removal, the run brief's addendum 10, and this hook is then
  * never called). The port whose bridge corresponds to `bdf` (named or
  * learned) has its tunnels torn down in the orderly way of section 9.3
- * step 1 (TbtU4Eject), and stays down until its device is unplugged and
+ * step 1 for PCIe alone (TbtU4EjectPcie: a USB3 tunnel on the port, the
+ * host xHCI's devices, stays up), and stays down until its device is
+ * unplugged and
  * plugged again; the TUNNEL_DOWN it queues is drained at the next pass, not
  * here (the seam is the caller). A bridge no port corresponds to, or a
  * domain not running: the tunnel stays up and the user unplugs, as under
@@ -907,7 +973,9 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
                                              (p != NULL ? (p->Generation & 0xFFFFUL) : 0));
         return;
     }
-    rc = TbtU4Eject(&nhi->U4, port);
+    /* The PCIe tunnel alone: a USB3 tunnel on the same port carries the
+     * host xHCI's devices, which this eject never asked to stop. */
+    rc = TbtU4EjectPcie(&nhi->U4, port);
     CmLogNote(nhi, "u4.eject", (port << 8) | ((ULONG)(-rc) & 0xFFUL));
     if (rc != TBT_OK) {
         nhi->Counters.U4EjectsFailed++;
@@ -1175,6 +1243,12 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
     if (nhi->Sel.Outcome == TBT_SEL_SOFTWARE) {
+        if (mode == CM_MODE_FORCE_ICM) {
+            /* XhciCmMode 2 asks for the ICM client: a host whose ICM is
+             * not running is inert, never the software CM. */
+            cmInert(nhi, CM_INERT_FORCE_ICM_REFUSED);
+            return;
+        }
         cmU4Activate(nhi);
         return;
     }

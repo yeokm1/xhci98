@@ -85,19 +85,24 @@
  *     7.1) and by the Detect gate under the USB4 profile (record 22 section
  *     10.1); nothing here.
  *
- * 9x CM-CONTROLLED REMOVAL (MD-5). CmNvlinkOrderlyRemove, for a removal of
- * a PRESENT NVMe function that this driver itself starts on Windows 98 SE
- * or ME: Query_Remove_SubTree first (the file system's quiescence and the
- * configuration manager's veto: a refusal is final, nothing is forced),
- * then REMOVE_PENDING on the entry with a fresh request sequence, then a
- * wait of CM_NVLINK_REMOVE_MS for nvme98's answer to that sequence; only a
- * CLEAN answer is followed by Remove_SubTree, anything else (not clean,
- * failed, no answer) cancels the request and leaves the devnode as it is.
- * Under the ICM there is no per-device teardown (record 21 section 7.4),
- * so nothing in that profile calls it; it is the call a 9x eject of the
- * USB4 profile makes, if that half lands.
- *
- * DDK-FREE PART. The functions under "pure" below use nothing but the
+ * 9x ORDERLY REMOVAL (MD-5). On Windows 98 SE and ME every CONFIGMG call
+ * is the domain's worker's (cm_cfgwk.c), never the connection-manager
+ * thread's, and the worker's removal step (cmWkRemoveChild) wraps the
+ * handshake around a removal of a function still present: Query_Remove_
+ * SubTree first (the file system's quiescence and the configuration
+ * manager's veto: a refusal is final, nothing is forced); then, accepted,
+ * CmNvlinkWkRequest sets REMOVE_PENDING with a fresh request sequence and
+ * the worker waits, without servicing any ring, up to CM_NVLINK_REMOVE_MS
+ * for nvme98's answer (CmNvlinkWkAnswer), ending early when its request
+ * goes stale; then Remove_SubTree ALWAYS follows, clean answer or not,
+ * because Windows 98 cannot cancel an accepted query (a device left
+ * query-removed stays quiesced) - the outcome is logged, and only a clean
+ * answer is a clean removal; CmNvlinkWkWithdraw clears the request. MD-5's
+ * "a timeout aborts the orderly eject" therefore cannot hold after an
+ * accepted query on 9x; the handshake comes as early as that rule allows.
+ * The children the worker removes today are functions that vanished,
+ * which get no request (nothing to flush); a present one does.
+ * * DDK-FREE PART. The functions under "pure" below use nothing but the
  * table and their arguments; test\test_cm_nvlink.c runs them on the host
  * (XHCI_HOST_TEST). The rest is cm_nvlinkos.c.
  *
@@ -171,14 +176,6 @@
 #define CM_NVLINK_RM_ISOLATED       2UL /* isolated, not clean            */
 #define CM_NVLINK_RM_FAILED         3UL
 
-/* CmNvlinkOrderlyRemove's result. */
-#define CM_NVLINK_OR_REMOVED        1UL /* clean answer, Remove_SubTree ok */
-#define CM_NVLINK_OR_VETOED         2UL /* Query_Remove_SubTree refused    */
-#define CM_NVLINK_OR_NOT_CLEAN      3UL /* answered, not clean: cancelled  */
-#define CM_NVLINK_OR_TIMEOUT        4UL /* no answer: cancelled            */
-#define CM_NVLINK_OR_NO_CHANNEL     5UL /* no record or no entry: nothing
-                                           asked of nvme98, nothing removed */
-#define CM_NVLINK_OR_REMOVE_FAILED  6UL /* Remove_SubTree failed            */
 
 /* The 9x record (proposal; see the file header). */
 #define CM_NVLINK_REC_KEY       "System\\CurrentControlSet\\Services\\nvme98"
@@ -333,10 +330,19 @@ ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
  * nothing of this domain's is awaited. */
 VOID CmNvlinkAwait(struct _CM_NHI *nhi);
 
-/* Windows 98 SE and ME: the CM-controlled orderly removal of the present
- * NVMe function `bdf` whose devnode is `devnode` (MD-5). Returns
- * CM_NVLINK_OR_*. */
-ULONG CmNvlinkOrderlyRemove(struct _CM_NHI *nhi, ULONG devnode, ULONG bdf);
+/* Windows 98 SE and ME, the CONFIGMG worker's removal step (see the file
+ * header). CmNvlinkWkRequest: for the present function `id` (vendor 15:0,
+ * device 31:16) behind tunnel port `bridge`, REMOVE_PENDING with a fresh
+ * sequence (written to `*sequence`); returns the entry, or CM_NVLINK_NONE
+ * when there is no record, no UP entry published for that id behind that
+ * bridge, or the function no longer answers. CmNvlinkWkAnswer: the answer
+ * to that sequence (CM_NVLINK_RM_*). CmNvlinkWkWithdraw: the request
+ * cleared. Any thread at <= DISPATCH_LEVEL but CmNvlinkWkRequest
+ * (PASSIVE_LEVEL: a configuration read); no ring is serviced and nothing
+ * waits. */
+ULONG CmNvlinkWkRequest(ULONG bridge, ULONG id, PULONG sequence);
+ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence);
+VOID CmNvlinkWkWithdraw(ULONG index);
 
 /* The idle poll period: XhciCmPollIdleMs as read, held to at most
  * CM_NVLINK_IDLE_MS while any entry reads UP (a tunnelled NVMe function is

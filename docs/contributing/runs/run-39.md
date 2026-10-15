@@ -689,3 +689,132 @@ x86, Vista and 7 (not admitted: the statement is withheld there by
 design); the `REMOVE_PENDING` handshake (no receiver, and no caller in
 the ICM profile); a hardware tunnel port (no statement by design); the
 `release` and `debug` flavours in a guest.
+## 39-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
+
+**Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
+not run** (2026-10-15). On each of the four, the package installed through
+`INSTALL.BAT`, the tunnel-port filter from `nt\` included; a device router
+plugged on `tb3-alpine-ridge` was approved and its NVMe appeared with no
+Refresh and no "Scan for hardware changes", left on unplug and came back on
+a re-plug; and the NVMe was listed in "Safely Remove Hardware", stopped
+there, unplugged with no dialog, listed again after a re-plug, and a plain
+unplug showed no dialog either. ME is not in this section (another run).
+
+**Not run: Vista x64 and 7 x64.** Both load only a signed driver (or one
+started from an F8 boot with enforcement off), and the x64 package is
+test-signed only by the packager with the project key, whose password was
+not available to this run; nothing was signed by hand. They stay owed,
+with 7 x64's reading of whether `pci.sys`'s own hot-plug acts before the
+filter. XP x64 does not check kernel-mode signatures, so its legs ran on
+the unsigned `release-x64` package.
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-RunRoot v-xp7` (`-Usb4Profile tb3 -Bios OFF_OFF -DeviceAtBoot 0`, the
+root bridge at slot 6, `-Trace`), each guest from a fresh overlay of its
+`vm\<guest>.img`, two vCPUs, QMP and VNC on 47946/47947 (XP and XP x64:
+47956/47957), 47966/47967 (Vista) and 47986/47987 (7). The NVMe behind the
+tunnel was an overlay of `usb4-emu`'s `vms\win98\nvme32.qcow2` (one FAT32
+volume, `NVME32`), read-only. The QEMU binary: XP and 7 x86 ran on the copy
+in `vm\usb4\bin` (the `a50c19e` build); Vista x86 and XP x64 on the
+`usb4-emu` `main` `5ba7f60` build (QEMU fork `20655c3`) staged in
+`vm\usb4\bin-5ba7f60`. Driven over QMP keys and screendumps; device state
+read with a throwaway SetupAPI tool (`devq`, task 39-0.4's, rebuilt 64-bit
+for XP x64) whose output went to the guest's COM1, that is the serial log.
+
+**The package.** Built on branch `v-xp7` at `6fa331d4` (the `3.0.0.0` tip
+of the run): `build-driver.cmd all` and `all -amd64`, every gate passing;
+`make-package.ps1 -Flavor release` for x86 and amd64 (amd64 unsigned), and
+`XHCIINST.EXE` and `XHCIIN64.EXE` from `xhciinst\build.cmd` of the same
+tree, staged with `INSTALL.BAT` in the release layout
+(`out\v-xp7\xfer-x86\PKG`, `out\v-xp7\xfer-x64\PKG`; hashes in
+`out\v-xp7\pkg-*-sha256.txt`). The binaries are not restamped, so Windows
+shows them as 2.4.0.0. That build predates the new Device Manager names:
+the NHI showed as "xHCI98 Thunderbolt 3 Host Interface" and the ports as
+"xHCI98 Thunderbolt 3 Tunnel Port Filter"; the names of the later build
+were not read here. The NVMe driver was `nvme98` 0.1.1.0 (its published x86
+and amd64 builds, read-only), installed after the first plug with
+`UpdateDriverForPlugAndPlayDevices` and `INSTALLFLAG_FORCE`.
+
+**Install.** `INSTALL /defaults /yes /nopause` from the transfer drive (an
+elevated prompt on Vista and 7). On every guest the tool staged
+`xhci98.inf`, `xhciuas.inf`, `xhcicm.inf` and `nt\xhcicmf.inf`, installed
+the Alpine Ridge xHCI `15C1` and its root hub, `xhcicm.sys` on the NHI
+`15BF`, and the filter on the four `15C0` ports and the emulator's root
+bridge `1B36:0001`, after Windows' unsigned-driver questions; the
+`nt\` copy of `xhcicm.sys` installed on Vista and 7 with no `0xA1`. On XP
+x64 the root hub's Found New Hardware wizard stopped the first run with
+exit 4 as designed; answered, a second run finished. Every run ended
+"Changes were made. Please restart Windows now.", exit 3. After the
+restart every port read `Service` `pci`, `UpperFilters` `xhcicm`, started,
+and the NHI `xhcicm`, started, problem 0.
+
+| Leg | XP SP3 | XP x64 SP2 | Vista SP2 x86 | 7 SP1 x86 |
+|---|---|---|---|---|
+| Install, filter from `nt\` | pass | pass (two runs) | pass | pass |
+| Plug: approved, NVMe with no Refresh | pass | pass | pass | pass |
+| Volume `NVME32` mounted (`nvme98`) | pass | pass | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass | pass | pass |
+| Re-plug: back, no wizard | pass | pass | pass | pass |
+| Listed in "Safely Remove Hardware" | yes | yes | yes | yes |
+| Stop: "Safe To Remove Hardware", device at Code 47 | pass | pass | pass (see below) | pass |
+| Unplug after the stop: dialog | none | none | none | none |
+| Re-plug after the eject: listed again | yes | yes | yes | yes |
+| Plain unplug, no eject: dialog | none | none | none | none |
+| Result | **PASS** | **PASS** | **PASS** | **PASS** |
+
+What the emulator saw (`trace-*.log`), the same on each: per plug the ICM
+event `device connected ... approved 0`, the approve command, `PCIe tunnel
+up reason 0`, `tp_insert`; per unplug `tunnel down reason 3`,
+`device disconnected`, `tp_removed` - three cycles on each guest.
+
+**Readings.**
+
+- **The dialog.** No Unsafe Removal dialog on XP, XP x64, Vista or 7 after
+  a plain unplug of a device marked `Removable` alone: the dialog is a
+  Windows 2000 matter (39-V.2), and the release-notes line of record 21
+  section 7.4 stays 2000's.
+- **Vista's veto.** The first Stop on Vista was refused - "Windows can't
+  stop your 'Generic volume' device because it is in use" - while an
+  Explorer window that AutoPlay had opened on F: was open; with it closed
+  the Stop went through. The ordinary veto of section 7.4 step 3, nothing
+  forced.
+- **Code 47.** After the Stop the NVMe stayed reported (status
+  `0x01806400`, problem 47) with the tunnel up until the unplug, as
+  section 7.4 says for XP and later.
+
+**Evidence.** `vm\v-xp7\xp-tb3\`, `xp64-tb3\`, `vx86-tb3\`, `w7-tb3\`:
+`notes.txt` (the leg's narrative and the screenshot it cites), the
+screendumps `s*.png`, the serial log (`G <tag>` device dumps and the
+installer log), `trace-*.log` and `debugcon-*.log`.
+
+### The 98 SE worker, the resume deadline and the hold cap (2026-10-15)
+
+**Verdict: passes.** On Windows 98 SE a CONFIGMG call made while an Add New
+Hardware wizard is open blocks until the wizard closes; made on the
+connection-manager thread it left ring 0 unserviced (an unplug unseen until
+the wizard was cancelled, found under the USB4 profile in run 40). Every
+CONFIGMG call is now the 98 worker's (`cm_cfgwk.c`); the connection-manager
+thread only posts requests (latest per member wins). The ICM client bounds
+its own resume at 270 s, and the bridges' hold is a fixed 5-minute cap under
+either profile (record 21 section 6.3). The 98 SE listing rule of NUSB's
+"Unplug or Eject Hardware" was read (record 21 section 7.4).
+
+| Leg | Guest | Reading |
+|---|---|---|
+| Wizard open (`reenum-adl`, the `u98-adl3` setup) | 98 SE, `usb4-generic`, `intel-adl`, `preos-cm=on`; the NVMe "PCI Card" wizard left open | unplug: `u4.linkdown=01000109`, the tunnel-down action, `cm.reenum.down.poll=00000404`; re-plug: `u4.router.up`, `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, the tunnel-up action, `cm.reenum.up.poll=00000404` - all with the wizard still open; after Cancel the worker drained: `query-remove=0` (accepted), `remove=5` (the devnode already gone), the stale removal's own `reenumerate=2800`, the up request's `reenumerate=2800`, `removable=0`, and the wizard came back for the re-plugged device |
+| tb3 cycle (`reenum-98`) | 98 SE, Alpine Ridge model, `nvme98` installed | plug: approved, `cm.reenum.up.poll=00000404`, `reenumerate=00020800`; unplug: `query-remove=0`, `remove=0`, `reenumerate=00020800`; re-plug: `reenumerate=00020800`, no wizard, no error |
+| 2000 cycle (`reenum-2k`) | 2000 SP4, Alpine Ridge model, the filter and `nvme98` installed | plug: tunnel up, the NVMe found, the "Unplug or Eject Hardware" icon in the tray; unplug without a stop: the device removed, the Unsafe Removal dialog listing "NVM Express Controller (nvme98)" and its disk (as recorded above for 2000); re-plug: tunnel up, the icon back |
+
+The first wizard-open run (before the fix to the removal step) showed the
+worker's Query_Remove_SubTree blocking behind the wizard while a re-plug
+made the request stale, after which the accepted query went without its
+Remove_SubTree; 98 has no service to cancel an accepted query, so the step
+now always completes it, and follows a stale one with its own rescan. Host
+checks: `test_tbt_icm` (the 270 s deadline: clipping, expiry mid-drain, the
+last attempt, a stopped and a partway-stopped clock, a frame flood during the
+host poll) and `test_cm_ports` (the fixed watchdog, the known-children
+pruning). The x86 `qemu` build passes every gate.
+
+98 SE's applet (NUSB's `HOTPLUG.DLL`) lists a device only when a device
+interface of NUSB's class is registered on its parent; our devices, marked
+`DN_REMOVABLE`, are not listed (record 21 section 7.4). ME was not read.

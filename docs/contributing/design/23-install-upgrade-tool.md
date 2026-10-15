@@ -1,6 +1,6 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 7, 2026-10-15, reviewed and revised five times the same day;
+Status: revision 8, 2026-10-15, reviewed and revised six times the same day;
 the code is written against it (task 40.6) and was reviewed and revised
 against it the same day. Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
@@ -274,7 +274,11 @@ cannot replace the files a newer installed package's INF still names, and
 a run that changes only a registry value replaces nothing. The copies are
 kept while anything may name them, and only the uninstall removes them:
 the files each list names, then each directory and `%windir%\XHCI98` only
-if empty.
+if empty. With each listed INF goes its `.PNF`, which the device installer
+of 98 SE writes beside an INF it reads in place (the 98 SE uninstall leg,
+2026-10-15: without it the directory could not be removed, and the
+reinstall refused); a copy whose list is already gone loses only the
+`.PNF`s of this package's INFs, never another file.
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
 
@@ -292,12 +296,25 @@ if empty.
    stops here, exit 0, having written nothing (section 7.1).
 4. Ask the registry questions (section 8), then ask once whether to go on
    (`Y`; anything else, or end of input, cancels with exit 1 and changes
-   nothing). `/yes` skips the confirmation; `/defaults` and `/set` answer
-   the registry questions without asking.
+   nothing; an empty answer cancels too). `/yes` skips the confirmation
+   and asks no registry question either - a run nobody answers keeps every
+   value `/set` does not name, as `/defaults` does (decided 2026-10-15
+   from the 98 SE leg, where `/set ... /yes` still asked); `/defaults` and
+   `/set` answer the registry questions without asking.
 5. Ask Windows whether an installation is in progress
    (`CMP_WaitNoPendingInstallEvents` with no wait, Microsoft's "Checking
-   for In-Progress Installations"): only "none" goes on; "pending" or a
-   failed question stops the run with nothing changed (exit 4). The
+   for In-Progress Installations") and let one finish: the settle of
+   section 5.8, bounded at a minute; still "pending" then, devices that
+   never stand still, or a failed question, stop the run with nothing
+   changed (exit 4). Then - every time, since Windows may have changed a
+   device while the question was open - the devices, the driver store's
+   trap (section 5.7) and `/restage`'s precondition are read again and
+   planned again; if they no longer match the plan the user confirmed
+   (each device of the package with its driver, version, problem, filters,
+   action and decision, and every device, present or not, naming a trapped
+   INF), the run stops, nothing changed, with "run INSTALL.BAT again to see
+   the new plan" (exit 4). The uninstall waits before it reads the devices
+   at all. The
    message also says to restart first when no wizard is open: on Windows
    2000 a cancelled Found New Hardware wizard stays pending until the next
    start (read on the 2000 leg, 2026-10-15: a windowless `rundll32.exe`,
@@ -307,7 +324,7 @@ if empty.
    `/restage`, replace a stored package the trap holds (section 5.7).
 6. Update the controllers (`xhci98.inf`).
 7. Wait for the system to finish installing what the update made appear
-   (`CMP_WaitNoPendingInstallEvents`, 60 seconds), and read the devnodes
+   (the settle of section 5.8, up to 10 minutes), and read the devnodes
    again: after an update from `2.3.x` the root hub, hubs and composite
    devices are new devnodes (record 13 section 10.13.4). A wait that times
    out stops the run here (section 5.8).
@@ -607,21 +624,55 @@ the controller's update (record 13 section 10.13.4):
 **Every dependent phase has the same barrier.** Installing a root hub or a
 hub shows the hubs behind it, a UAS disk may show children, an NHI shows
 its ports. So step 8 runs per INF, repeated while new targets appear (at
-most four passes): before each pass `CMP_WaitNoPendingInstallEvents` (60
-seconds) must answer "none" and the devices are read and planned again,
-with every safeguard of sections 5.4 and 5.5 applied afresh; a timeout or
-a failed question stops the run with "finish or cancel the windows Windows
-shows, then run INSTALL.BAT again" (exit 4), and the next run continues
-from what it finds - a root hub whose wizard was cancelled is a device
-with no driver, installed then. Completion is only declared after a last
+most four passes): before each pass the system must settle, and the
+devices are read and planned again, with every safeguard of sections 5.4
+and 5.5 applied afresh; a timeout or a failed question stops the run with
+"finish or cancel the windows Windows shows, then run INSTALL.BAT again"
+(exit 4), and the next run continues from what it finds - a root hub
+whose wizard was cancelled is a device with no driver, installed then.
+
+**The settle** (read on the 2000 leg, 2026-10-15: the controller updated
+from `2.3.1.0`, a single `CMP_WaitNoPendingInstallEvents` answered "none"
+before the new root hub had appeared; the tool's install call for it then
+met Windows' own Found New Hardware install of the same devnode, failed
+with `0x20` (`ERROR_SHARING_VIOLATION`), Windows' install ended at Code 28
+and the keyboard behind it stopped; a second run installed it). The tool
+asks `CMP_WaitNoPendingInstallEvents` with no wait every half second and
+reads a signature of the devnodes below this package's controllers (ids,
+started, problem code - the problem number taken only when the status
+reports one, as `CM_Get_DevNode_Status` specifies). A reading that fails
+anywhere (an id, a child or a sibling other than "none"), or a walk cut
+short by its bounds (a subtree deeper than eight levels, more than 2048
+devnodes), is not a reading: it restarts the quiet stretch. It goes on only after three seconds with
+nothing pending and the signature read whole and unchanged - at the bound
+too: devices still moving there are "unsteady", which stops the run like
+a timeout - and not while a device is expected:
+a controller this run updated is started but shows no root hub of this
+driver yet, or a device of the bus (`USB\XHCI98_...`) has Code 1 or 18
+(not configured yet) - each waited for at most 20 seconds. While Windows
+has an install pending the tool waits (10 minutes at the barrier, a
+minute before the first change) and, after 20 seconds, says once that
+Windows has opened its own Found New Hardware window, perhaps behind the
+tool's, and to answer it. A device Windows installs that way is found
+current at the next reading and not touched again. An install call that
+still meets Windows' own install (`0x20`) is no failure the first two
+times: the device stays eligible, and after the next barrier's settle the
+call is made again if the device still needs it, controllers included;
+the third such answer is a failure. One call reaches every device of its
+id, so it is made again only while every device it reaches has tries
+left, and a call is not made at all - before anything is noted - while a
+device of its id has spent its tries, so a member that appears later
+cannot buy an earlier one another try. The pure half holds the settle's
+state machine and the retry rule (section 10). Completion is only declared after a last
 barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is
 set and the run ends with exit 4 and "run INSTALL.BAT again".
 
 - **XP and XP x64** show Found New Hardware for each, and the unsigned
-  question. `CMP_WaitNoPendingInstallEvents` then times out, because the
-  wizard waits for the user. **A timeout, or a failed question, stops the
-  run** (exit 4) with
+  question; Windows 2000 can too (the leg above). The settle waits while
+  the wizard waits for the user, and says so; answered, the run goes on
+  and finds the devices current. **A timeout, or a failed question, stops
+  the run** (exit 4) with
   "finish or cancel the Found New Hardware windows, then run INSTALL.BAT
   again": an installation in progress is not the tool's to compete with
   (Microsoft's "Checking for In-Progress Installations"). The second run
@@ -648,14 +699,23 @@ read too: one of this package's devices with a problem code is reported -
 otherwise "already had problem code N" with the steps flag set, so a
 current controller already at Code 10 is never reported as a success.
 A device gone after its install, or left with a problem code, is a
-failure everywhere. One reading adds a hint, not an excuse: on Windows
-2000 a port's first filter install (the unforced call) took the
-Thunderbolt switch's other devices away and left the upstream port at
-Code 12 until the restart, all started after it (the 2000 leg,
-2026-10-15). So when such a call succeeded in the run and an NHI or port
-of this package then fails its check, the tool adds, once, that the
-switch's devices can come back after a restart, and asks for the restart
-and a second run, which reads them as any run does; the exit stays 2.
+failure everywhere but in one case: on Windows 2000 a port's first filter
+install (the unforced call) took the Thunderbolt switch's other devices
+away and left the upstream port at Code 12 until the restart, all started
+after it (the 2000 leg, 2026-10-15). The owner's decision (2026-10-15):
+the filter goes on both the upstream and the downstream ports, and the
+run asks for that restart. So when such a call succeeded in the run, a
+device of the connection manager's INFs that is gone, or at Code 12, is
+reported as waiting for the restart - not a failure - and the tool says
+once that the restart brings them back and to run INSTALL.BAT again after
+it: the restart flag is set, and the run ends with the restart line and
+exit 3 unless another device set the failed or steps flag (section 7.4's
+order). The same holds for such a device this run did not change. Any
+other problem code stays what it is elsewhere: on a device the run
+changed a failure (exit 2, with the restart advice when the hint was
+given), on one it did not change "already had problem code N" (steps,
+exit 4). The release notes carry
+the same reading for a filter installed by hand from `nt\`.
 Anything else is reported per device:
 
 | After | Meaning | Exit |
@@ -667,7 +727,10 @@ Anything else is reported per device:
 
 The flags are kept apart - failed, restart, steps for the user - and the
 exit code is derived at the end (section 7.4); a later failure never
-erases an earlier restart. A registry value written to a running device
+erases an earlier restart. The results print each device's state from one
+rule: a problem code is printed as such and never beside "started", and
+an empty field is never printed (the 2000 leg read "no driver, started,
+problem code 28" and "(problem 28, )"). A registry value written to a running device
 (section 8.4) adds "restart, or disable and enable the device". The tool
 never restarts the machine; it says so last.
 
@@ -681,10 +744,20 @@ options the loader was started with, and looks for the word
 `TESTSIGNING`. Present: "test-signing mode is on". Absent or unreadable:
 "test-signing mode could not be confirmed" - not a definite negative,
 since the value is a reading and not a documented contract, and an F8
-start does not set it - followed by the README section's instructions
-(`bcdedit /set testsigning on` and a restart, or F8 at every start), and
-the note that otherwise the controller shows Code 52 on 7 or Code 39 on
-Vista. The run goes on if the user confirms. The tool never runs
+start does not set it - followed by the instructions of the package's
+`readme.txt` section "WINDOWS VISTA X64 AND WINDOWS 7 X64: TEST-SIGNING
+MODE", which it names by that exact heading (`bcdedit /set testsigning on`
+and a restart, or F8 at every start), and the note that otherwise the
+controller shows Code 52 on 7 or Code 39 on Vista. The note calls the
+drivers test-signed only when they are: the tool reads the x64
+`xhci98.sys`'s security directory - inside the optional header, with a
+size, pointing to a certificate table inside the file (structure only, no
+cryptographic check). A package built without the project's key - a
+clone's - carries none, and the note then says so and that only an F8
+start loads it (test-signing mode is not enough); a directory that cannot
+be read, or points outside the file, gives a note that names both cases.
+In either case test-signing mode never counts as confirmed.
+The run goes on if the user confirms. The tool never runs
 `bcdedit`. What the value holds in test-signing mode and on an F8 start is
 read on the legs (section 12).
 
@@ -782,8 +855,17 @@ controller whose New Hardware wizard was cancelled has no devnode until
 the next start, only its `HKLM\Enum\PCI` entry (read on 98 SE: nothing in
 `HKEY_DYN_DATA\Config Manager\Enum`), so an `Enum\PCI` entry of an xHCI
 controller with no driver and no devnode is listed apart, as "recorded, not
-running now", with what to do if Device Manager shows it - an old entry of
-a controller that moved slot looks the same, and needs nothing.
+running now", with what to do if Device Manager shows it. An old entry of
+a controller that moved slot looks the same and needs nothing (read on the
+98 SE and ME legs: the controller moved from `DEV_04` to `DEV_03` after the
+first start, and every later run planned the old entry as an install). A
+hardware id cannot tell that old slot from a second, identical controller
+whose wizard was cancelled, so (orchestrator decision 2026-10-15, owner to
+confirm) such an entry - one whose first hardware id a present controller
+with a driver carries - stays listed with what to do in either case and
+stays a step (exit 4), but does not make the confirmation speak of an
+install; the run on an otherwise current machine changes nothing and says
+"No changes were made."
 
 ### 6.4 What it prints
 
@@ -825,7 +907,35 @@ disk, and for any current device when `/force` asks for a reinstall:
 the local directory. The storage prerequisite stays as the README says: on 98 SE,
 NUSB's mass-storage component for any disk, UAS included. The first UAS
 disk and the first NHI found later find `xhciuas.inf` and `xhcicm.inf` in
-the same directory. The run ends with exit 4: staged, steps left for the
+the same directory. A device of the package that needs a step - an
+install, an update, a refused version, an entry of section 6.3 that may be
+a cancelled wizard's controller - ends the run with exit 4 (staged, steps
+left for the user); with none (every device current), the run
+changes nothing where the copy and `DevicePath` are already in place and
+ends "No changes were made." with exit 0, or, where it wrote a setting,
+with the restart line and exit 3 (section 7.4). The confirmation names
+what will happen: the copy and `DevicePath`, the changed settings, or a
+check of the copy and `DevicePath`; with an entry of section 6.3 left as
+a step, it claims neither that every device is current nor that none
+needs a driver, and points at the entry listed apart. The steps also say, for a UAS disk's
+Have Disk, that Windows asks for the "xhci98 xHCI Host Controller Disk"
+(the same folder), and on ME, for the root hub, that a "Select Other
+Driver" list may name the driver twice (one copy under `INF\OTHER`),
+either being the same driver (both read on the legs).
+
+A UAS entry at Code 2 with no `USBNTMAP.SYS` in `System32\Drivers` (the
+upper filter `xhciuas.inf` names) gets a step of its own, in the plan and
+in the steps, in place of "Nothing" when it is current: on ME, plug in any
+ordinary stick once (ME copies its own storage files from its cabinets
+when its first Bulk-Only device installs) and then unplug and replug the
+disk; on 98 SE, NUSB's mass-storage component, the disk starting at the
+next boot (release notes, "Known limitations", the ME entry, and
+"Windows 98 SE and ME: the stock install, and storage"). Code 2 with the
+file present has another cause and gets no such step. On ME with no
+`USBNTMAP.SYS` yet, the steps end with the same advice before any UAS
+disk is plugged in (the ME leg of 2026-10-15: a UAS disk as the first
+storage device installed silently from the staged INF and sat at Code 2,
+through a restart, as the release notes say). The run ends with exit 4: staged, steps left for the
 user.
 
 ### 6.5 After the restart
@@ -843,7 +953,7 @@ these systems.
 |---|---|
 | (none) | install or update, with the plan shown and one confirmation |
 | `/list` | the plan, the store trap, the questions that would be asked and their current values, and with `/uninstall` the uninstall plan; reads only: no confirmation, no question, no local copy, no staging, no log unless `/log` names one, no pause; exit 0 (or 1 on a refusal) |
-| `/yes` | no confirmation, and with `/uninstall` no typed word (section 9.1) |
+| `/yes` | no confirmation, no registry question (every value `/set` does not name is kept), and with `/uninstall` no typed word (section 9.1) |
 | `/defaults` | ask no registry question, keep every current value (the INF's default on a new install) |
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
@@ -894,11 +1004,11 @@ section 4 gains a row when a reading rests on one).
 
 | Code | Meaning |
 |---|---|
-| 0 | done: everything current or installed, no restart; or `/list` |
+| 0 | done, nothing needed a change; or `/list` |
 | 1 | refused before any change: location, architecture, rights, a routine missing, a bad switch, a partial device list, cancelled |
 | 2 | failed: a step failed or a result was wrong (section 5.9); the log and the report say what was done |
-| 3 | done, restart needed (and, where said, run `INSTALL.BAT` again after it) |
-| 4 | done as far as the tool can: steps remain for the user - Windows 98 SE and ME always; on NT a group refused as newer or unknown, a device left by the trap (5.7), an id shared with a foreign device (5.5), a wizard to finish (5.8), test-signing to turn on (5.9) |
+| 3 | done, something changed: restart needed (and, where said, run `INSTALL.BAT` again after it) |
+| 4 | done as far as the tool can: steps remain for the user - on Windows 98 SE and ME whenever a device needs a step (section 6.4); on NT a group refused as newer or unknown, a device left by the trap (5.7), an id shared with a foreign device (5.5), a wizard to finish (5.8), test-signing to turn on (5.9) |
 
 Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
@@ -908,12 +1018,26 @@ restart says so. `INSTALL.BAT` passes the code on.
 **The last line before the exit code** (owner, 2026-10-15): when the run
 changed anything - a driver installed, updated or removed, a filter added
 or removed, an INF staged or removed, the local copy or `DevicePath`
-written, a registry value written (the silent install included) - "Changes
-were made. Please restart Windows now.", on every system, whether or not
-Windows itself asked for a restart; when it changed nothing (`/list`, every
-answer kept, a refusal) "No changes were made." The exit code is not
-changed by it: 3 still says that Windows, or this tool's own result check,
-found the restart necessary.
+written, a registry value written (the silent install included) - and
+finished, "Changes were made. Please restart Windows now.", on every
+system, whether or not Windows itself asked for a restart; when it changed
+nothing (`/list`, every answer kept, every INF staged already byte for
+byte, a value already as asked, a refusal) "No changes were made." The
+line and the exit code agree (orchestrator decision 2026-10-15, owner to
+confirm; it replaces "the exit code is not changed by it"): a finished run
+that asks for the restart exits 3, so 0 means nothing needed a change. A
+run that changed something but stopped with steps left (2 or 4) does not
+also ask for a restart beside "run INSTALL.BAT again": it ends "Changes
+were made, but not everything is done: do what is said above first, then
+restart Windows.", its code unchanged (a change under a refusal's code is
+reported as 2). The 2000 leg read the restart line on an unchanged rerun
+and beside a stop; the rule lives in the pure half (section 10).
+
+**The confirmation says what will happen**: "Install and stage the package
+now" when a device changes; "Write the changed settings now (no device
+needs a new driver)" when only option values change; otherwise that every
+device is current and no setting changes, and the staged INFs are checked
+(any missing staged).
 
 ### 7.5 The log
 
@@ -1009,11 +1133,16 @@ XhciForceBulkOnly - Bulk-Only instead of UAS for a disk that offers both
 `now` is the value in each device's driver key, or "not set" (the
 install's `AddReg` then writes the default), or "new install: the default".
 A value with a caution shows it under the question, and `/set` prints it
-when it sets the value the caution is about: `XhciIntelPortSwitch` 2 writes
-registers of unknown meaning on an Intel controller without the switch
-registers (release notes, "Value 2"); `XhciSelectiveSuspend` 1 (set with
-`/set` only) has not been read on a real machine, "leave it off unless you
-are testing it"; `XhciSilentInstall`, before its question every time: turn
+when it sets the value the caution is about. The tool's text is practical
+guidance only: it never speaks of virtual machines, emulators, or what has
+or has not been tested or read (owner, 2026-10-15). `XhciIntelPortSwitch`
+2 forces the switch writes on an Intel controller without the switch
+registers, "use it only if the release notes' "Value 2" section applies to
+your machine"; `XhciSelectiveSuspend` 1 (set with `/set` only): "leave it
+off unless a device needs it; if a device stops responding after idling,
+set it back to 0"; `XhciCmMode` 2 and 3 force one connection manager,
+"use them only on the release notes' advice"; `XhciSilentInstall`, before
+its question every time: turn
 it on only once each listed class's drivers have been installed at least
 once, otherwise 98 SE asks for its CD with no wizard, and restart Windows
 after changing it; `XhciForceBulkOnly` is read as each device is connected, and on Windows
@@ -1204,7 +1333,9 @@ system's `CFGMGR32.DLL`). So the tool:
    step 4) - the device installer's own copies, and the plain copies the
    INFs' `DefaultInstall` sections make - and the driver files present;
 3. prints the steps, dependants first: in Device Manager remove "xHCI98
-   USB Attached SCSI Storage" and a Thunderbolt entry if there is one,
+   USB Attached SCSI Storage" and an "xHCI98 Thunderbolt 2 Controller",
+   "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" if
+   there is one,
    then "xHCI98 USB 3.x eXtensible Host Controller" (which removes the root
    hub and everything beneath it); then delete the listed INF files, so
    the restart cannot find the driver again; then restart, and
@@ -1229,11 +1360,15 @@ and the tool links the same file:
 - id matching against hardware and compatible id multi-strings;
 - section 5.4's action table (ownership first, unknown refused) and its
   group verdict, and section 9.2's devnode selection and order;
-- the PE machine read and the flavour marker search over a file buffer;
+- the PE machine read, the embedded-signature test (section 5.10) and the
+  flavour marker search over a file buffer;
 - the `DevicePath` append and removal (section 6.2);
 - the `UpperFilters` edit (section 9.2 step 1);
 - `SystemStartOptions`' test-signing word;
-- the switch parser, `/set`'s validation and section 7.4's exit code;
+- the switch parser, `/set`'s validation and section 7.4's exit code,
+  last line and confirmation wording;
+- section 5.8's settle state machine and busy-retry rule, section 5.9's
+  device state text, and section 5.6's "staged already" test;
 - the registry value table, its applicability (section 8.2) and its
   answer parser.
 
@@ -1361,8 +1496,12 @@ the user.
   new NHI's first start runs with the INF's defaults until then, and the
   question says so (section 8.4).
 - **D13** An installation in progress - before the first change, or after
-  the controller's update - stops the run; the tool never installs under
-  a wizard (sections 5.1 and 5.8).
+  the controller's update - is waited for (the settle, bounded) and stops
+  the run if it does not end; the tool never installs under a wizard, and
+  a call that meets Windows' own install is made again only after it has
+  ended and only if still needed (sections 5.1 and 5.8).
+- **D15** The last line and the exit code agree: a finished run that
+  changed something asks for the restart and exits 3 (section 7.4).
 - **D14** A filter host is given back to a driver that is not this
   package's by the per-device driver-node route, never by an ID-wide
   call; a disconnected one stops the uninstall until it is connected

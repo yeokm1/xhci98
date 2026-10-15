@@ -580,6 +580,10 @@ VOID TbtU4PresenceSample(PTBT_U4CM cm, ULONG port, ULONG generation,
 /* Section 10.4: the orderly teardown of one port's tunnels (section 9.3
  * step 1, both ends), the port staying down until a re-plug. */
 LONG TbtU4Eject(PTBT_U4CM cm, ULONG port);
+/* The same for the PCIe tunnel alone: a USB3 tunnel on the port stays up,
+ * its devices being the host xHCI's, which the PCI-side eject never asked
+ * to stop (task 40-A.9's entry point). */
+LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port);
 
 /* Section 7.6 and 11: record every tunnel up as an obligation, then stop
  * the rings. */

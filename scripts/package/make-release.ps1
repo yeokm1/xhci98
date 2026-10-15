@@ -5132,6 +5132,14 @@ Untested ground:
     none has been read on a controller it lists, and QEMU's controller is
     on no list.
 
+  * WINDOWS 2000: A THUNDERBOLT PORT SHOWS CODE 12 AFTER ITS FILTER IS
+    INSTALLED BY HAND, UNTIL A RESTART. Installing the tunnel-port filter
+    from NT\ through Device Manager (Update Driver, Have Disk) leaves the
+    upstream port at Code 12, and the Thunderbolt device's own entries
+    gone, until Windows is restarted; after the restart they all start.
+    INSTALL.BAT puts the filter on the upstream and the downstream ports
+    and asks for that restart itself. Seen in a virtual machine.
+
 
 ==============================================================================
  8. WHAT IS IN THIS DIRECTORY

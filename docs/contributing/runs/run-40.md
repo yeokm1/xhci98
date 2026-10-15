@@ -361,3 +361,274 @@ software connection manager admitted and `nvme98`'s G3 prototype bound
 age at the statement, the statement after the cutoff, the
 acknowledgement before the invalidation, the 5 s bound with an idle
 receiver; and the 9x half once `nvme98` has one.
+## 40.5 onward - The install, upgrade and uninstall tool (INSTALL.BAT, XHCIINST, XHCIIN64)
+
+**Verdict: done** (2026-10-15): the legs below pass on the tool as it
+stands, with the 98 SE re-reads at the end. Design record 23 is the design; this section
+is what the legs read. Development host A, TCG, one vCPU per guest unless
+said, the p40-inst kit (`out\p40-inst\kit`, QEMU `-name "p40i ..."`),
+overlays under `vm\t40i\` (some early ones under `vm\p40-inst-c\`, moved
+there from another drive), evidence and per-leg notes in
+`out\p40-inst\legs\<guest>\notes.txt` with the console logs
+(`C:\XHCIINST.LOG` copied out) and screenshots beside them.
+
+**The packages.** `pkg24`: the published 2.4.0.0 drivers with the tool at
+2.4.0.0. `pkg30`, `pkg30c`, `pkg30d`: this branch restamped 3.0.0.0 in a
+throwaway worktree (the stamp is never committed), x64 unsigned (F8 at
+every start on Vista x64 and 7 x64). Each leg's notes name the tool's
+commit and the SHA-256 of the `XHCIINST.EXE` it staged; the tool changed
+during the day, and each defect below was read on the tool named with it.
+
+**The legs.** F: a first install from `pkg24` (then the population: a
+mouse, a stick, a UAS disk). R: the registry questions. U24: an update
+from 2.4.0.0 to 3.0.0.0. UN: `/uninstall`, the checks after the restart,
+then a reinstall. U23: an update over the 2.3.1.0 baselines of Phase 38
+(`vm\t38mx\mtx-<g>-u231.qcow2`, read-only backing) with their population
+(a hub with a keyboard, sticks and audio behind it). NC: a run on a
+current machine. L: the 32-bit tool run alone or on the wrong directory.
+
+| Guest | Leg | Result |
+|---|---|---|
+| 98 SE | F | pass: copy + `DevicePath`, exit 4 with the steps; after the restart the wizard named the controller and found the INF by itself; the "xhci98 xHCI Host Controller Disk" prompt took the printed directory; the CD for `usbd.sys` |
+| 98 SE | R | pass: only `XhciInterruptMode`, `XhciSilentInstall` and `XhciForceBulkOnly` asked; the answer written to the controller's key, none to the root hub's |
+| 98 SE | U24 | pass: Update Driver's search found the new copy by itself; driver date and binary the package's |
+| 98 SE | U23 | pass: the controller updated by the printed steps, the new `USB\XHCI98_*` devnodes installed, the one line naming `tools\xhcicln\`, no `XHCICLN` run |
+| 98 SE | silent install | pass: `XhciSilentInstall` 1 merged `SILENT.REG`'s list and set the switch; a mouse plugged in after the restart got no wizard (one CD prompt for `hidusb.sys`, the documented caveat) |
+| 98 SE | UN | uninstall as designed; the reinstall after it failed on the tool of that hour (the local copy held Windows' `xhci98.PNF`, so the tool kept it and then could not remove it, exit 2); fixed (the removal takes the device installer's `.PNF`), re-read below |
+| ME | F, U24 | pass: ME installed the controller with no prompt at all; U24 by Update Driver's automatic search |
+| 2000 | F, R, U24, UN | pass (F with no Windows prompt; UN left no INF, service, file or local copy of the package, `usbd.sys` and `usbui.dll` kept; the reinstall installed) |
+| 2000 | U23 | first run pass (07:38); a later run (U23b, tool 3164e913) failed: the root hub install met Windows' own Found New Hardware install of it (`0x20`), the hub ended at Code 28 and the keyboard behind it stopped; a second run installed it. Fixed by the settle of record 23 section 5.8 |
+| 2000 | U23c, U23d (tool e5b6b42d) | pass, twice: after the controller's update the tool waited ("devices moved", settled after 18 and 17 seconds) while Windows installed the root hub silently; no wizard, no busy retry; every device 3.0.0.0 started, the USB keyboard typed; "Changes were made. Please restart Windows now.", exit 3 |
+| 2000 | NC (tool e5b6b42d) | pass: `/defaults /yes` on a current machine: each INF "staged already", "No changes were made.", exit 0; a settings-only `/set` asked "Write the changed settings now", exit 3; `/defaults /yes` again exit 0 |
+| 2000 | XHCICLN | pass: the banner reads 3.0.0.0 (an earlier test package carried the 2.4.0.0 binary; the release script checks the version) |
+| 2000 SMP | F, U24 | pass (over a base carrying the 1.0.0.x miniport, updated in place) |
+| XP | F, U24, UN | pass: the root hub's Found New Hardware wizard made the first run stop with exit 4 as designed, the second finish |
+| XP x64 | F, U24, L | pass |
+| Vista x86 | F, L, U24 | pass (U24 failed once on a package whose filter INF lacked a catalog line for the store; the package was fixed and U24 re-read) |
+| Vista x64 | F, U24 | pass (U24's run after the restart not read) |
+| 7 x86 | F, U24, UN | pass |
+| 7 x64 | F, UN (over 2.4.0.0), U24, U23 | pass; the x64 note cited a section name the package's `readme.txt` does not carry and called an unsigned package test-signed: fixed |
+
+**What the legs changed in the tool** (each in record 23): the settle
+beside Windows' own installer and the retry of a call that meets it
+(section 5.8); the last line and the exit code agreeing, and no restart
+request beside "run INSTALL.BAT again" (section 7.4); an unchanged rerun
+saying "No changes were made." (sections 5.6 and 8.4); the confirmation
+naming what will happen; the results never printing "started" beside a
+problem code; the x64 note reading the drivers' signature (section 5.10);
+on 98 SE and ME the root hub's own update step, the 2.3.x warning only
+over 2.3.x on 98 SE, the `.PNF` beside a local copy, an old slot's entry
+kept as a step but out of the confirmation's wording, the UAS disk's disk
+prompt and ME's "Select Other Driver" list in the steps (sections 4.4,
+6.3, 6.4); `/yes` asking nothing (section 7.1); and on Windows 2000 a
+first filter install's Code 12 waiting for the restart the run asks for
+(section 5.9, owner).
+
+**The 98 SE re-reads on the fixed tool** (tool 62d7b22f, `pkg30d`). NC9,
+on the U23 overlay: the old slot's `DEV_04` entry listed with its
+guidance; the confirmation "Check the local copy and DevicePath now (see
+the entry listed apart above)"; "No changes were made.", exit 4 (that
+entry is a step, by design); `/set XhciForceBulkOnly=1 /yes` and back to 0
+asked nothing and wrote the controller's key ("Changes were made, but not
+everything is done ...", exit 4); `/defaults /yes` "No changes were
+made.". UN9, on the UN overlay: the install copied and staged normally;
+after the wizard and the restart a second run changed nothing;
+`/uninstall` restored `DevicePath` and removed every local copy - the one
+holding Windows' `xhci98.PNF` included - and `%windir%\XHCI98`; after the
+printed steps `USBD.SYS` and `USBUI.DLL` were present; the reinstall after
+it copied and staged with no refusal. Pass. A copy of an earlier package
+stays beside the new one until the uninstall (record 23 decision D7).
+
+### Owed
+
+- Vista x64: U24's run after the restart; 7 x64: UN over 3.0.0.0.
+- The filter install on Windows 2000 through the tool (the upstream
+  port's Code 12 now answered with the restart): not re-read on the
+  Thunderbolt vehicle with this tool.
+
+## 40-A.6, 40-A.8 and 40-A.9 - The driver half, read on the emulator
+
+**Verdict: the USB4 profile runs end to end on Windows 98 SE and Windows
+2000** (2026-10-15), on `usb4-generic` with `host-model=minimal` and
+`intel-adl`, a cold device, hot plug, unplug and re-plug, the pre-OS
+connection manager's tunnel preserved, a USB3 tunnel, the policy values,
+and on 2000 the safe eject tearing the tunnel down before "Safe To Remove
+Hardware". One fault was found outside this task's code: on Windows 98 SE
+the re-enumeration seam's CONFIGMG call blocks the connection-manager
+thread while an Add New Hardware wizard is open on a tunnelled device
+(below).
+
+**The vehicle.** Development host A, TCG, the `usb4-emu` fork in
+`vm\usb4\bin` (the `a50c19e` build), through task 39-0.7's launcher with
+`-RunRoot p40-drv`, `-BootStrict` and `-trace usb4_*`; QMP and VNC on
+47984 to 47989. 98 SE from overlays of `vm\t26\win98-gold.qcow2`
+(`u98-*`), 2000 from an overlay of `vm\win2k-xonly.img` (`u2k-min`), one
+vCPU each. The `qemu` flavour of `xhcicm.sys` from this branch, staged with
+`xhcicm.inf` on the transfer drive (D: on 98 SE, E: on 2000) in a copy that
+writes `XhciLogVerbosity` 2 (and, for leg U.10, the policy values); its
+port-0xE9 lines are the "log" below. The binary was the integration of this
+branch with task 39-A.5's `cm_reenum.c` (the trial merge `p40-drv-legs`,
+then this branch after it merged `3.0.0.0` at `c2c9ca3d`), except where a
+leg names the earlier stub build. Driven over QMP keys and screendumps.
+
+**Install.** 98 SE: the tunnel bridge through 98 SE's wizard
+(`MACHINE2.INF`), then the host interface: Add New Hardware, "Specify a
+location" D:\, "xHCI98 USB4 Host Interface" from `xhcicm.inf` by its class
+line `PCI\CC_0C0340`, no restart. 2000: `devq update E:\xhcicm.inf
+"PCI\VEN_1B36&DEV_00F4&CC_0C0340"` (OK, `reboot=0`; Windows 2000's
+`UpdateDriverForPlugAndPlayDevices` finds the device only by a hardware id,
+and `PCI\CC_0C0340` is a compatible one, so the class line is reached
+through the `&CC_0C0340` hardware id), then the filter `devq update
+E:\nt\xhcicmf.inf "PCI\VEN_1B36&DEV_0001&CC_0604"` (OK, `reboot=0`), and
+for the NVMe `nvme98` 0.1.1.0 (its published x86 build, read-only) by
+`devq update ... "PCI\VEN_1B36&DEV_0010&CC_010802"` after the first tunnel.
+
+**The selection** (log, every guest): `cm.select.outcome=00000004`
+(SOFTWARE), `u4.select.route=00000001` (no firmware CM by identity),
+`cm.select.caps=00000010`; on `minimal` the host router `46F4:4040` with
+two ports (lanes 1-2 and 3-4, PCIe Down 6 and 7); on `intel-adl`
+`8087:463E`, PCIe Down 8 and 9, `u4.quirk=463E0001` (the USB3 bandwidth
+row). On both models the mapping operation answered: port 1 named
+`00:05.0` (`u4.named=01002802`, KNOWN: the tunnel bridge was already the
+set's member by its SHPC source) and port 2 a location with no bridge
+(`02000004`, NO_BRIDGE; these guests carry one tunnel bridge).
+
+| Leg | Guest, setup | What was read |
+|---|---|---|
+| U.1 cold device | 98 SE, `minimal`, device at power-on, no pre-OS CM (`u98-leg`) | trace: ring 0 disabled then programmed (no Host Interface Reset), host router enumerated, mapping (`30h`), Get Capabilities (`31h`), Buffer Allocation (`33h`) on the host and the device router, DROM Read (`24h`), bonding (lane 1's hot plug event acknowledged), TMU posting, Configuration Valid, the four PCIe entries, Path Enable both ends, `PCIe tunnel up`, and a USB3 tunnel beside it; log `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, `u4.action=01010001`, `cm.reenum.9x.reenumerate=00002800` (CR_SUCCESS); Add New Hardware for "PCI Card" (the NVMe) with no refresh |
+| U.3 unplug, re-plug | the same guest | unplug: `u4.linkdown=01000109` (path proven closed), `u4.action=02010001`, the bridge re-enumerated, both host-side tunnels invalidated and the USB3 bandwidth released in the trace; re-plug: generation 2, `PCIe tunnel up`, "PCI Card" again |
+| U.2 hot plug | 2000, `minimal`, nothing at power-on, filter installed (`u2k-min`) | `device_add enc0`: the tunnels built, `u4.action=01010001`, the filter's invalidation, Found New Hardware for the NVMe at once, `nvme98` bound, the "Unplug or Eject Hardware" icon in the tray |
+| 40-A.9 safe eject | the same guest | the NVMe listed ("NVM Express Controller (nvme98) at PCI Slot 4"); Stop, OK: `cm.reenum.eject=00000028`, `u4.eject.bridge=00000028`, `u4.eject=00000100` (port 1, TBT_OK), the trace `PCIe tunnel down reason 1 (admin-down)` before "Safe To Remove Hardware"; `device_del enc0` then: no dialog and no further action (the port stays down until the re-plug); `device_add enc0`: generation 2, the tunnels rebuilt, the NVMe listed again. That build tore the port's USB3 tunnel down with the PCIe one; the driver was then changed to tear down the PCIe tunnel alone (a USB3 tunnel carries the host xHCI's devices, which the eject never asked to stop), host-tested and not read here again |
+| U.5 and U.6 | 98 SE, `intel-adl` with `preos-cm=on` and `USB3=1` (`u98-adl`, `u98-adl2`, `u98-adl3`) | `u4.preserved=00010809`: the pre-OS tunnel preserved (port UP, `hd` 8, `hu` 9), no reset, no transition and no reset of any kind in the trace after the driver's ring takeover, nothing re-enumerated; unplug (stub build): `u4.linkdown=01000109` and the host side torn down; re-plug: built here with bonding, the USB3 tunnel and its Host Controller Ack, the USB disk attached to the tunnel's `qemu-xhci` at 5000 Mb/s (`info usb`) - U.8's fabric half |
+| U.10 policy values | 98 SE, `minimal`, `USB3=1`, `XhciCmApprove` 0, `XhciCmUsb3Tunnel` 0, `XhciCmLaneBonding` 0 (`u98-pol`) | the router enumerated and Configuration Valid, the port UP with no PCIe tunnel and no USB3 tunnel (`usb3_want ... attached=0`), the host's lane 1 written with Lane Disable (LANE_ADP_CS_1 bit 14) |
+
+**The fault (task 39-A.5's code, not this task's).** On 98 SE with
+`cm_reenum.c`, while an Add New Hardware wizard is open on a tunnel port's
+child (the NVMe, no driver on this image), a CONFIGMG call the seam makes
+on the connection-manager thread blocks until the wizard closes: the
+thread stops, ring 0 is not serviced, the routers' hot plug events
+overflow the RX ring and an unplug is not seen. Cancelling the wizard
+unblocked it at once, and the queued unplug and re-plug then ran in order
+(`cm.reenum.9x.query-remove=00000000`, the removal, the re-enumeration,
+the tunnel up). The stub build in the same setup kept polling throughout.
+Reported to the orchestrator for task 39-A.5.
+
+**Not read here.** U.4 (unplug during I/O, the harness), U.7 (pre-OS
+cleaning), U.9 (disable and enable), U.11 (two tunnel bridges), U.12 (a
+daisy chain), U.13 (inert starts), the `asm4242` host model, suspend and
+resume, ME and the NT 5.1 and 6.x guests (40-V.3), and a Thunderbolt 3
+device router behind a USB4 host, for which the emulator has no preset
+(record 22 section 8; task 40-A.8 is host-tested only). The NVMe's volume
+was not mounted on 98 SE (no NVMe driver on the image). The 2000 legs'
+INF copy also carried a test-only `PCI\VEN_1B36&DEV_00F4` model line; which
+model line ranked there was not read. Evidence in
+`vm\p40-drv\<run>\` (traces, debug-console logs, screendumps).
+
+## 40.6 - Windows ME: a UAS disk as the first storage device after `INSTALL.BAT`
+
+**Verdict: not a regression; the tool now names the step** (2026-10-15).
+The installer's first-install leg on Windows ME read a UAS disk that
+installed silently from the staged `xhciuas.inf` and stayed at Code 2, with
+a yellow mark, through a restart. That is the limitation the release notes
+carry since `2.0.0.0` ("Known limitations", "Windows ME: a UAS drive as the
+first USB storage device shows Code 2"; the owner's ruling of 2026-10-04,
+`roadmap-hcd.md` decisions table, and `runs/run-31.md`, "Windows ME: a UAS
+drive first"), and the same leg read it with the published `2.4.0.0`
+drivers: the leg's first device reading, before any `3.0.0.0` file was
+staged, listed the UAS entry as `xhciuas 2.4.0.0; current (this release)`
+at problem code 2. `2.4.0.0` behaves the same.
+
+**The cause, read on the leg's own overlay** (a fresh overlay over
+`vm\p40-inst-c\ovl\mtx-me-f3.qcow2`, nothing written to it; the mouse and
+the UAS disk plugged in after the desktop, on the leg's ports; readings in
+`vm\me-uas\legs\serial-r2.log`). The UAS devnode
+(`Enum\USB\VID_46F4&PID_0003\27842-0000:00:03.0-3`) holds
+`upperfilters = "USBNTMAP.SYS"`; its driver key (`Class\USB\0002`) holds
+`DevLoader = *NTKERN`, `NTMPDriver = xhciuas.sys`, `InfSection = Uas.Dev`,
+`MatchingDeviceId = USB\Class_08&SubClass_06&Prot_62` and an `InfPath` that
+is the package's own `xhciuas.inf` as ME's `INF\OTHER` copy of it: the
+silent install took the expected INF, with the expected entries.
+`System32\Drivers` held `XHCIUAS.SYS` and no `USBNTMAP.SYS` or
+`USBSTOR.SYS`, and `System\IOSUBSYS` no `USBMPHLP.PDR`. ME ships the three
+in its cabinets (`BASE2.CAB` and the cabinets after it, the ME CD read with
+7-Zip, nothing executed) and its `usbstor.inf` copies `USBSTOR.SYS` and
+`USBNTMAP.SYS` only when a Bulk-Only device installs; with the named upper
+filter missing, NTKERN cannot load the devnode's drivers, which Device
+Manager shows as Code 2. A Bulk-Only stick plugged into the same guest
+installed silently, with no CD and no restart, and placed all three files;
+the UAS disk, unplugged and plugged back in, then worked.
+
+**The change** (branch `me-uas`, `1c481f33` and `97d0eff0`; reviewed and
+revised). `INSTALL.BAT` said nothing about it, and for a current UAS entry
+at Code 2 printed "Nothing: this release runs it". On 98 SE and ME, a
+present UAS entry at Code 2 while `System32\Drivers` holds no
+`USBNTMAP.SYS` now gets the release notes' recovery in the plan and in the
+steps: on ME, plug in any ordinary stick once, then unplug and replug the
+disk; on 98 SE, NUSB's mass-storage component, the disk starting at the
+next boot. Code 2 with the file present gets no such step. On ME with no
+`USBNTMAP.SYS` the steps end with the same advice before any UAS disk is
+plugged in. The decision is the pure `inst_uas_fix_9x` (`inst_core.c`,
+host suite `test_inst`). No driver or INF changed: the copy of the two
+files through `xhciuas.inf` stays parked by the owner's 2026-10-04 ruling,
+since the 98 SE CD's `layout.inf` names neither file and 98 SE prompted for
+both.
+
+**The legs** (development host A, QEMU 11.1.0, TCG, `pc`, `pentium3`, one
+processor, 256 MB, `qemu-xhci,p2=4,p3=4`; the `release-x86` package staged
+from the branch, with its `INSTALL.BAT` and tool; devices hot-plugged after
+the desktop, the UAS disk as `usb-uas` plus `scsi-hd` on a VVFAT directory,
+attached explicitly; readings and shots in `vm\me-uas\legs\` and
+`vm\me-uas\shots\`):
+
+| Leg | Result |
+| --- | --- |
+| ME, first install, a fresh overlay of the stock ME base (`vm\t37me\winme-stock-base.qcow2`) | The New Hardware wizard for "PCI Universal Serial Bus" cancelled; `INSTALL`, Y: the package copied, DevicePath set, the steps ending with the ME advice to plug a stick before the first UAS disk; after the restart ME installed the controller with no wizard and asked for a restart. The UAS disk plugged in first installed silently and showed Code 2 (yellow mark); `/list` and `INSTALL` gave the ME step for it, `INSTALL` with it in place of "Nothing". The step followed: a Bulk-Only stick installed silently and placed `USBNTMAP.SYS`, `USBSTOR.SYS` and `USBMPHLP.PDR`; the UAS disk unplugged and plugged back in on the same port worked with no restart: no yellow mark, `/list` with no problem code, its file read, a 1 MiB file written and compared with `fc /b`, no differences. **PASS** |
+| 98 SE (NUSB), first install, a fresh overlay of `vm\t26\win98-clean.qcow2` | `USBNTMAP.SYS` present from NUSB; `INSTALL`, Y: no ME line in the steps; the controller from the wizard by search, the "xhci98 xHCI Host Controller Disk" and the 98 SE CD prompts, restart; the UAS disk through the wizard by search from the staged copy, F: at once; its file read, the 1 MiB write compared clean; `/list` with no problem code and no Code 2 step. **PASS**, unchanged |
+
+Both legs ran the tool unstamped, so it and the drivers read `2.4.0.0`, the
+version the branch carried; the change touches the tool alone.
+
+## 40-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
+
+**Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
+not run** (2026-10-15). On `usb4-generic` with `host-model=intel-adl`, each
+guest from a fresh overlay installed the package through `INSTALL.BAT` -
+`xhcicm.sys` on the USB4 host interface `1B36:00F4` by its class line
+`PCI\CC_0C0340`, the filter from `nt\` on the tunnel bridge `1B36:0001` -
+and one plug cycle (plug, unplug, re-plug) brought the NVMe up with no
+Refresh, removed it and brought it back. ME is not in this section.
+
+**Not run: Vista x64 and 7 x64**, for the reason `run-39.md`'s 39-V.3
+section gives (no test-signed amd64 package on this run). XP x64 ran the
+unsigned package.
+
+**The vehicle and the package** are 39-V.3's (`run-39.md`): the same
+builds, staging, NVMe image, tools and ports; `-Usb4Profile generic
+-HostModel intel-adl -DeviceAtBoot 0`. XP ran on `vm\usb4\bin` (the
+`a50c19e` build); 7 x86, Vista x86 and XP x64 on the `5ba7f60` build in
+`vm\usb4\bin-5ba7f60`.
+
+| Leg | XP SP3 | XP x64 SP2 | Vista SP2 x86 | 7 SP1 x86 |
+|---|---|---|---|---|
+| Install: host `xhcicm` started, bridge `UpperFilters` `xhcicm` | pass | pass | pass | pass |
+| Plug: tunnel up, NVMe with no Refresh, `NVME32` mounted | pass | pass | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass | pass | pass |
+| Re-plug: back | pass | pass | pass | pass |
+| Result | **PASS** | **PASS** | **PASS** | **PASS** |
+
+The trace on each: the hot plug events of the router's lanes, `PCIe tunnel
+up reason 0` and `tp_insert` per plug, `tunnel down reason 3` per unplug.
+The host interface showed as "xHCI98 USB4 Host Interface" (the build
+before the new Device Manager names).
+
+**A reading, not this driver's.** On XP and 7 "Safely Remove Hardware"
+also lists the host interface itself, beside the NVMe. Its devnode reads
+`DN_REMOVABLE` (status `0x01806400`) before any driver of this project was
+installed (XP's dump before the install), so the flag is the platform's
+for that function on bus 0 of this emulator, not the child filters'
+mark (which only ever goes on devices reported on a tunnel bridge). Why
+the platform reports it so was not read. The Alpine Ridge NHI behind the
+switch reads `0x0180200a`, with no such flag.
+
+**Evidence.** `vm\v-xp7\xp-gen\`, `xp64-gen\`, `vx86-gen\`, `w7-gen\`,
+as for 39-V.3.

@@ -3763,7 +3763,11 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     }
 
     p->State = TBT_U4_TUNNELLING;
+    /* Never on a port whose PCIe tunnel was ejected (TbtU4EjectPcie): only
+     * an unplug and re-plug clears that (record 22 section 10.4), not a
+     * rebuild of its USB3 tunnel at resume. */
     pcieWanted = (BOOLEAN)(cm->Config.Approve && p->PcieDown != 0 &&
+                           !p->Ejected &&
                            tbtU4FirstOf(&p->Dev, TBT_ADP_TYPE_PCIE_UP) != 0);
     if (pcieWanted) {
         rc = tbtU4PcieTunnel(cm, p, gen);
@@ -5323,6 +5327,32 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
         cm->Counters.PcieTornDown++;
         tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
     }
+    p->Ejected = TRUE;
+    p->PcieFailed = TRUE;
+    p->State = TBT_U4_FAILED;
+    p->Why = TBT_U4_WHY_EJECTED;
+    return closed ? TBT_OK : TBT_E_STATE;
+}
+
+LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
+{
+    PTBT_U4_PORT p;
+    BOOLEAN closed;
+
+    p = tbtU4PortOf(cm, port);
+    if (p == NULL || cm->Failed || !p->Dev.Present) {
+        return TBT_E_PARAM;
+    }
+    cm->Counters.Ejects++;
+    closed = TRUE;
+    if (p->Pcie.Up || p->Pcie.Written != 0) {
+        p->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
+        closed = tbtU4TunnelDown(cm, p, &p->Pcie, FALSE);
+        cm->Counters.PcieTornDown++;
+        tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
+    }
+    /* The USB3 tunnel stays, as on a port FAILED for PCIe alone (record 22
+     * section 7.2): its devices are the host xHCI's, never asked to stop. */
     p->Ejected = TRUE;
     p->PcieFailed = TRUE;
     p->State = TBT_U4_FAILED;

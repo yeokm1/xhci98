@@ -254,6 +254,12 @@ static void test_decision(void)
              CM_INERT_NONE, "so mode 3 reaches the selection in this build");
     CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_AR, 1, CM_PROFILES_BUILT),
              CM_INERT_FORCE_REFUSED, "and is still refused on Alpine Ridge");
+    CHECK_EQ(CmStartDecision(2, CM_PROFILE_USB4, 0, CM_PROFILES_BUILT),
+             CM_INERT_FORCE_ICM_REFUSED, "mode 2 on a USB4-only host: refused, never the software CM");
+    CHECK_EQ(CmStartDecision(2, CM_PROFILE_USB4, 1, CM_PROFILES_BUILT),
+             CM_INERT_FORCE_ICM_REFUSED, "mode 2 on an Intel USB4-only host: refused too");
+    CHECK_EQ(CmStartDecision(2, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
+             CM_INERT_NONE, "mode 2 on a Tiger Lake class host reaches the selection");
     CHECK_EQ(CmStartDecision(2, CM_PROFILE_UNKNOWN, 1, CM_PROFILES_BUILT),
              CM_INERT_NONE, "mode 2 on an unlisted Intel id runs AR");
     CHECK_EQ(CmStartDecision(0, CM_PROFILE_ICM_AR, 1, all), CM_INERT_MODE_OFF,

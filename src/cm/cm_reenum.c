@@ -21,8 +21,10 @@
  *
  * THE ROUTES. NT: IoInvalidateDeviceRelations(BusRelations) on each
  * active member's PDO, through its filter (section 6.2). Windows 98 SE
- * and ME: CONFIGMG through cm_cfgmg.c (section 6.1) - the bridge's devnode
- * found by its BUS_&DEV_&FUNC_ instance, vanished children removed with
+ * and ME: CONFIGMG (section 6.1), every call made by the domain's worker
+ * thread (cm_cfgwk.c) and never by this one, since a CONFIGMG service
+ * blocks while the configuration manager is busy - the bridge's devnode
+ * found by its instance id, vanished children removed with
  * Query_Remove_SubTree and Remove_SubTree, then Reenumerate_DevNode.
  * Either way every tunnel change acts on every active member (section
  * 6.3, "a set of more than one"), after the bounded port poll of section
@@ -38,10 +40,10 @@
  * child answers IRP_MN_QUERY_CAPABILITIES with Removable (cm_filt.c). A
  * child removed after a query-remove posts an eject to the owning domain,
  * which CmReenumService hands to the per-port entry of record 22 section
- * 10.4 when one is set. 98 SE and ME, best effort: after a tunnel up, for
- * a window of CM_MARK_WINDOW_MS, CmReenumService walks each active
- * member's children and adds DN_REMOVABLE (Change_DevNode_Status) to each
- * new one, never to a tunnel port itself.
+ * 10.4 when one is set. 98 SE and ME, best effort: after a tunnel up the
+ * worker, for a window, walks each active member's children and adds
+ * DN_REMOVABLE (Change_DevNode_Status) to each new one, never to a tunnel
+ * port itself.
  *
  * PCI configuration space is read through HalGetBusData from offset 0 on
  * every target (the ...ByOffset form has no Windows 98 evidence; hcd_ctl.c
@@ -74,10 +76,6 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
                              ULONG SlotNumber, PVOID Buffer, ULONG Length);
 #endif
 
-/* How long after a tunnel up CmReenumService looks for new children to
- * mark on 98 (Reenumerate_DevNode is not synchronous). */
-#define CM_MARK_WINDOW_MS   10000UL
-
 /* A discovery that could not read every function is retried this often. */
 #define CM_FIND_TRIES       3UL
 #define CM_FIND_RETRY_MS    100UL
@@ -88,13 +86,6 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 /* An empty set is looked for again this often, this far apart. */
 #define CM_REDISCOVER_TRIES 30UL
 #define CM_REDISCOVER_MS    2000UL
-
-/* The 98 devnode walk's bounds. */
-#define CM_WALK_STACK       64UL
-#define CM_WALK_NODES       2048UL
-
-/* What still answers on a secondary bus, for 98's vanished children. */
-#define CM_BUS_FUNCTIONS    64UL
 
 /* The registration list. */
 static KSPIN_LOCK cmRegLock;
@@ -863,453 +854,39 @@ static ULONG cmNhiLocation(PCM_NHI nhi)
 /* ---- Windows 98: CONFIGMG --------------------------------------------- */
 
 /*
- * The 98 path of the function at `bdf` (cm_ports.h CmPortsIdPath): its
- * devfn, then each parent bridge's up to the root bus, then the root bus
- * number. A parent is the type 1 function whose secondary bus is the
- * child's bus, found by reading every lower bus's functions; a bus with no
- * such parent is a root bus. FALSE where the path outgrows its room.
- * PASSIVE_LEVEL.
+ * Every CONFIGMG call is the worker's (cm_cfgwk.c): this thread only posts.
+ * The members the domain owns, as the worker's `active` mask.
  */
-static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
-{
-    ULONG n;
-    ULONG cur;
-    ULONG bus;
-    ULONG b;
-    ULONG d;
-    ULONG f;
-    ULONG id;
-    ULONG hdr;
-    ULONG buses;
-    ULONG parent;
-    ULONG incomplete;
-
-    n = 0;
-    cur = bdf;
-    while (n < CM_PORTS_PATH_MAX - 1) {
-        path[n++] = cur & 0xFFUL;
-        bus = XHCI_TBT_BDF_BUS(cur);
-        if (bus == 0) {
-            path[n++] = 0;
-            *count = n;
-            return TRUE;
-        }
-        parent = XHCI_TBT_NO_BDF;
-        incomplete = 0;
-        for (b = 0; b < bus && parent == XHCI_TBT_NO_BDF; b++) {
-            for (d = 0; d < 32UL && parent == XHCI_TBT_NO_BDF; d++) {
-                for (f = 0; f < 8UL; f++) {
-                    if (!cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f), 0, &id)) {
-                        /* A bus the HAL does not know is no parent's;
-                         * a bus 0 that cannot be read leaves it open. */
-                        if (b == 0) {
-                            incomplete = 1;
-                        }
-                        d = 32UL;
-                        break;
-                    }
-                    if (id == 0xFFFFFFFFUL) {
-                        if (f == 0) {
-                            break;
-                        }
-                        continue;
-                    }
-                    if (!cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f),
-                                   XHCI_TBT_CFG_HEADER, &hdr)) {
-                        incomplete = 1;
-                        break;
-                    }
-                    if (XHCI_TBT_HDR_LAYOUT(hdr >> 16) ==
-                            XHCI_TBT_HDR_BRIDGE &&
-                        cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f),
-                                  XHCI_TBT_CFG_BUSES, &buses) &&
-                        ((buses >> 8) & 0xFFUL) == bus) {
-                        parent = XHCI_TBT_BDF(b, d, f);
-                        break;
-                    }
-                    if (f == 0 && ((hdr >> 16) & XHCI_TBT_HDR_MF) == 0) {
-                        break;
-                    }
-                }
-            }
-        }
-        if (parent == XHCI_TBT_NO_BDF) {
-            /* No bridge leads to this bus: a root bus of its own (a host
-             * with more than one), whose number ends the path as 00 ends
-             * one under bus 0 - but only after a scan that read every
-             * function it met; otherwise the path is not known. */
-            if (incomplete) {
-                return FALSE;
-            }
-            path[n++] = bus;
-            *count = n;
-            return TRUE;
-        }
-        cur = parent;
-    }
-    return FALSE;
-}
-
-/* Whether a 98 device id names the bridge at `bdf`, in either instance
- * form, its expected path given. */
-static BOOLEAN cmIdNames(const char *id, ULONG bdf, const ULONG *want,
-                         ULONG wantCount)
-{
-    ULONG at;
-    ULONG path[CM_PORTS_PATH_MAX];
-    ULONG n;
-    ULONG i;
-
-    if (CmPortsIdLocation(id, CMG_MAX_DEVICE_ID_LEN, &at)) {
-        return (BOOLEAN)(at == bdf);
-    }
-    if (wantCount == 0 ||
-        !CmPortsIdPath(id, CMG_MAX_DEVICE_ID_LEN, path, CM_PORTS_PATH_MAX,
-                       &n) ||
-        n != wantCount) {
-        return FALSE;
-    }
-    for (i = 0; i < n; i++) {
-        if (path[i] != want[i]) {
-            return FALSE;
-        }
-    }
-    return TRUE;
-}
-
-/*
- * The walk's diagnostic, once per member: the instance part of a vendor
- * 8086 PCI device id whose location did not parse, as up to three words of
- * four characters, so a reading shows what form Windows 98 gave it.
- */
-static VOID cmLogInstance(PCM_NHI nhi, const char *id)
+static ULONG cmOwnedMask(PCM_NHI nhi)
 {
     ULONG i;
-    ULONG k;
-    ULONG w;
-    ULONG n;
-    ULONG id32;
+    ULONG mask;
 
-    if (!CmPortsIdVenDev(id, CMG_MAX_DEVICE_ID_LEN, &id32) ||
-        (id32 & 0xFFFFUL) != 0x8086UL) {
-        return;
-    }
-    for (i = 4; i < CMG_MAX_DEVICE_ID_LEN && id[i] != 0 && id[i] != '\\';
-         i++) {
-    }
-    if (i >= CMG_MAX_DEVICE_ID_LEN || id[i] == 0) {
-        return;
-    }
-    i++;
-    CmLogNote(nhi, "cm.reenum.9x.walk.id", id32);
-    for (k = 0; k < 3 && id[i] != 0; k++) {
-        w = 0;
-        for (n = 0; n < 4 && id[i] != 0; n++) {
-            w = (w << 8) | (ULONG)(UCHAR)id[i];
-            i++;
+    mask = 0;
+    for (i = 0; i < nhi->Reenum.Members; i++) {
+        if (cmFlags(nhi, i) & CM_PORT_EXCLUSIVE) {
+            mask |= 1UL << i;
         }
-        CmLogNote(nhi, "cm.reenum.9x.walk.inst", w);
     }
+    return mask;
 }
 
 /*
- * The devnode of the bridge at `bdf`: the cached one while its id still
- * names that location, else a walk of the tree from the root. 0 for none.
+ * Every post to the worker, on the CM thread: the owned-member mask read
+ * once, sent, and recorded as the one the worker holds (WkActive), so the
+ * Service's comparison is always against what the worker was last given.
  */
-static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
+static VOID cmWkPost(PCM_NHI nhi, ULONG reenum, ULONG vanish, BOOLEAN mark)
 {
     PCM_REENUM r;
-    ULONG stack[CM_WALK_STACK];
-    ULONG depth;
-    ULONG nodes;
-    ULONG node;
-    ULONG next;
-    ULONG at;
-    ULONG pci;
-    ULONG dropped;
-    ULONG cr;
-    PULONG want;
-    ULONG wantCount;
-    char id[CMG_MAX_DEVICE_ID_LEN + 1];
 
-    r = &nhi->Reenum;
-    /* The member's expected path, read once (its parents do not move). */
-    if (!r->Port[index].PathRead) {
-        /* Cached once read; a failed read is tried again at the next walk
-         * (the callers' retries are themselves bounded). */
-        if (cmPciPath(r->Port[index].Bdf, r->Port[index].Path,
-                      &r->Port[index].PathCount)) {
-            r->Port[index].PathRead = 1;
-        } else {
-            r->Port[index].PathCount = 0;
-        }
-    }
-    want = r->Port[index].Path;
-    wantCount = r->Port[index].PathCount;
-    if (r->Port[index].Devnode != 0 &&
-        CmCfgmgDeviceId(&r->Cfgmg, r->Port[index].Devnode, id,
-                        sizeof(id)) == CMG_CR_SUCCESS &&
-        cmIdNames(id, r->Port[index].Bdf, want, wantCount)) {
-        return r->Port[index].Devnode;
-    }
-    r->Port[index].Devnode = 0;
-    depth = 0;
-    nodes = 0;
-    pci = 0;
-    dropped = 0;
-    stack[depth++] = r->Cfgmg.Root;
-    while (depth > 0 && nodes < CM_WALK_NODES) {
-        node = stack[--depth];
-        nodes++;
-        cr = CmCfgmgDeviceId(&r->Cfgmg, node, id, sizeof(id));
-        if (cr == CMG_CR_SUCCESS &&
-            cmIdNames(id, r->Port[index].Bdf, want, wantCount)) {
-            r->Port[index].Devnode = node;
-            return node;
-        }
-        if (cr == CMG_CR_SUCCESS && CmPortsIdLocation(id, sizeof(id), &at)) {
-            pci++;
-        } else if (cr == CMG_CR_SUCCESS && !r->Port[index].WalkLogged) {
-            cmLogInstance(nhi, id);
-        }
-        if (CmCfgmgChild(&r->Cfgmg, node, &next) != CMG_CR_SUCCESS) {
-            continue;
-        }
-        while (next != 0) {
-            if (depth == CM_WALK_STACK) {
-                dropped++;
-                break;
-            }
-            stack[depth++] = next;
-            if (CmCfgmgSibling(&r->Cfgmg, next, &next) != CMG_CR_SUCCESS) {
-                break;
-            }
-        }
-    }
-    /* Nothing matched: the path is read again at the next walk, in case
-     * the configuration space it came from was not yet as it is. */
-    r->Port[index].PathRead = 0;
-    /* Why the walk did not find it, once per member: devnodes visited,
-     * PCI locations parsed, and siblings the stack could not hold. */
-    if (!r->Port[index].WalkLogged) {
-        r->Port[index].WalkLogged = 1;
-        CmLogNote(nhi, "cm.reenum.9x.walk.nodes", nodes);
-        CmLogNote(nhi, "cm.reenum.9x.walk.pci", pci);
-        CmLogNote(nhi, "cm.reenum.9x.walk.dropped", dropped);
-        CmLogNote(nhi, "cm.reenum.9x.walk.path-len", wantCount);
-    }
-    return 0;
-}
-
-/* The children of `devnode`, up to `room`, into `out`. */
-static ULONG cmChildren(PCM_NHI nhi, ULONG devnode, PULONG out, ULONG room)
-{
-    ULONG n;
-    ULONG node;
-
-    n = 0;
-    if (CmCfgmgChild(&nhi->Reenum.Cfgmg, devnode, &node) != CMG_CR_SUCCESS) {
-        return 0;
-    }
-    while (node != 0 && n < room) {
-        out[n++] = node;
-        if (CmCfgmgSibling(&nhi->Reenum.Cfgmg, node, &node) !=
-            CMG_CR_SUCCESS) {
-            break;
-        }
-    }
-    return n;
-}
-
-/* The ids of every function answering on the bridge's secondary bus, up
- * to `room`; returns how many, or room + 1 when the bus could not be read
- * (nothing is then taken for vanished). */
-static ULONG cmBusIds(ULONG bridge, PULONG ids, ULONG room)
-{
-    ULONG buses;
-    ULONG bus;
-    ULONG dev;
-    ULONG fn;
-    ULONG id;
-    ULONG hdr;
-    ULONG n;
-
-    if (!cmCfgRead(NULL, bridge, XHCI_TBT_CFG_BUSES, &buses) ||
-        buses == 0xFFFFFFFFUL) {
-        return room + 1;
-    }
-    bus = (buses >> 8) & 0xFFUL;
-    if (bus == 0) {
-        return room + 1;
-    }
-    n = 0;
-    for (dev = 0; dev < 32UL; dev++) {
-        for (fn = 0; fn < 8UL; fn++) {
-            if (!cmCfgRead(NULL, XHCI_TBT_BDF(bus, dev, fn), 0, &id)) {
-                return room + 1;
-            }
-            if (id == 0xFFFFFFFFUL || (id & 0xFFFFUL) == 0xFFFFUL) {
-                if (fn == 0) {
-                    break;
-                }
-                continue;
-            }
-            if (n == room) {
-                return room + 1;
-            }
-            ids[n++] = id;
-            if (fn == 0) {
-                /* A header that cannot be read leaves functions 1 to 7
-                 * unknown: the inventory is incomplete, not single. */
-                if (!cmCfgRead(NULL, XHCI_TBT_BDF(bus, dev, 0),
-                               XHCI_TBT_CFG_HEADER, &hdr) ||
-                    hdr == 0xFFFFFFFFUL) {
-                    return room + 1;
-                }
-                if (((hdr >> 16) & XHCI_TBT_HDR_MF) == 0) {
-                    break;
-                }
-            }
-        }
-    }
-    return n;
-}
-
-/*
- * Section 6.1 on one member: the vanished children removed (tunnel down
- * and RESYNC), then Reenumerate_DevNode. TRUE when that succeeded.
- */
-static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
-{
-    PCM_REENUM r;
-    ULONG bridge;
-    ULONG children[CM_REENUM_MAX_KNOWN];
-    ULONG ids[CM_BUS_FUNCTIONS];
-    ULONG count;
-    ULONG idCount;
-    ULONG c;
-    ULONG k;
-    ULONG id;
-    ULONG answers;
-    ULONG cr;
-    char text[CMG_MAX_DEVICE_ID_LEN + 1];
-
-    r = &nhi->Reenum;
-    /* No removal while an nvme98 statement awaits its acknowledgement. */
+    /* Nothing posted - no removal begun - while an nvme98 statement of
+     * this domain awaits its acknowledgement (cm_nvlink.h; the wait
+     * services the ring, so it is this thread's, never the worker's). */
     CmNvlinkAwait(nhi);
-    bridge = cmFindDevnode(nhi, i);
-    if (bridge == 0) {
-        /* Owed (Missed) and retried by CmReenumService no faster than
-         * CM_MISSED_RETRY_MS; logged once per member. */
-        r->CallFailures++;
-        if (!r->Port[i].WalkLogged) {
-            CmLogNote(nhi, "cm.reenum.9x.no-devnode", r->Port[i].Bdf);
-        }
-        return FALSE;
-    }
-    if (removeVanished) {
-        idCount = cmBusIds(r->Port[i].Bdf, ids, CM_BUS_FUNCTIONS);
-        count = idCount <= CM_BUS_FUNCTIONS
-                    ? cmChildren(nhi, bridge, children, CM_REENUM_MAX_KNOWN)
-                    : 0;
-        for (c = 0; c < count; c++) {
-            if (CmCfgmgDeviceId(&r->Cfgmg, children[c], text,
-                                sizeof(text)) != CMG_CR_SUCCESS ||
-                !CmPortsIdVenDev(text, sizeof(text), &id)) {
-                continue;
-            }
-            answers = 0;
-            for (k = 0; k < idCount; k++) {
-                if (ids[k] == id) {
-                    answers = 1;
-                }
-            }
-            if (answers) {
-                continue;
-            }
-            cr = CmCfgmgQueryRemove(&r->Cfgmg, children[c]);
-            CmLogNote(nhi, "cm.reenum.9x.query-remove", cr);
-            if (cr != CMG_CR_SUCCESS) {
-                /* A refusal is respected (a driver with open files, the
-                 * usb4-emu handoff's rule): no Remove_SubTree, nothing
-                 * forced, the devnode left as it is and the refusal
-                 * logged and counted. The function is physically gone, so
-                 * its driver meets an absent device; the re-enumeration
-                 * below only asks PCI.VXD to read the bus again, and what
-                 * the configuration manager does with a refused, vanished
-                 * devnode is its own decision, not a removal made here. */
-                r->Vetoed++;
-                continue;
-            }
-            cr = CmCfgmgRemove(&r->Cfgmg, children[c]);
-            CmLogNote(nhi, "cm.reenum.9x.remove", cr);
-            if (cr == CMG_CR_SUCCESS) {
-                r->Removed++;
-            }
-        }
-    }
-    cr = CmCfgmgReenumerate(&r->Cfgmg, bridge);
-    r->Port[i].LastStatus = cr;
-    r->Port[i].Reenums++;
-    r->Calls++;
-    if (cr != CMG_CR_SUCCESS) {
-        r->CallFailures++;
-    }
-    CmLogNote(nhi, "cm.reenum.9x.reenumerate", (r->Port[i].Bdf << 8) | cr);
-    return (BOOLEAN)(cr == CMG_CR_SUCCESS);
-}
-
-/*
- * Safe eject's 9x half (section 7.4) on one member: each child not seen
- * before gets DN_REMOVABLE; `mark` FALSE only records the children (the
- * start's baseline: a device tunnelled before is not marked).
- */
-static VOID cmCfgmgMark(PCM_NHI nhi, ULONG i, BOOLEAN mark)
-{
-    PCM_REENUM r;
-    ULONG bridge;
-    ULONG children[CM_REENUM_MAX_KNOWN];
-    ULONG count;
-    ULONG c;
-    ULONG k;
-    ULONG known;
-    ULONG status;
-    ULONG problem;
-    ULONG cr;
-
     r = &nhi->Reenum;
-    bridge = cmFindDevnode(nhi, i);
-    if (bridge == 0) {
-        return;
-    }
-    count = cmChildren(nhi, bridge, children, CM_REENUM_MAX_KNOWN);
-    for (c = 0; c < count && mark; c++) {
-        known = 0;
-        for (k = 0; k < r->KnownCount[i]; k++) {
-            if (r->Known[i][k] == children[c]) {
-                known = 1;
-            }
-        }
-        if (known) {
-            continue;
-        }
-        cr = CmCfgmgStatus(&r->Cfgmg, children[c], &status, &problem);
-        if (cr == CMG_CR_SUCCESS && (status & CMG_DN_REMOVABLE) != 0) {
-            continue;
-        }
-        cr = CmCfgmgAddRemovable(&r->Cfgmg, children[c]);
-        CmLogNote(nhi, "cm.reenum.9x.removable", cr);
-        if (cr == CMG_CR_SUCCESS) {
-            r->Marked++;
-            r->Port[i].Marked++;
-        } else {
-            r->MarkFailures++;
-        }
-    }
-    for (c = 0; c < count; c++) {
-        r->Known[i][c] = children[c];
-    }
-    r->KnownCount[i] = count;
+    r->WkActive = cmOwnedMask(nhi);
+    CmCfgwkPost(r->Wk, reenum, vanish, r->WkActive, mark);
 }
 
 /* ---- NT: the filters -------------------------------------------------- */
@@ -1477,10 +1054,10 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
                 r->CallFailures++;
                 r->Port[i].Missed = 1;
             }
-        } else if (r->Route == CM_ROUTE_CONFIGMG) {
-            if (!cmCfgmgMember(nhi, i, removeVanished)) {
-                r->Port[i].Missed = 1;
-            }
+        } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+            /* Posted: the worker makes the call, and retries it itself. */
+            cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, FALSE);
+            r->Calls++;
         }
     }
 }
@@ -1696,14 +1273,18 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
 }
 
 /*
- * The CONFIGMG route of a Windows 98 SE or ME domain, opened after the
- * NHI's start: the guards of section 6.1, then the members' children
- * recorded unmarked (a device tunnelled before is not marked).
+ * The CONFIGMG route of a Windows 98 SE or ME domain, after the NHI's
+ * start: its worker started (cm_cfgwk.c), which opens the route, runs
+ * section 6.1's guards and records the members' children unmarked (a
+ * device tunnelled before is not marked). The route counts as CONFIGMG at
+ * once, so requests posted before the opening queue behind it; a failed
+ * opening (CmReenumService reads it) takes the route away again.
  */
 static VOID cmCfgmgLate(PCM_NHI nhi)
 {
     PCM_REENUM r;
     KIRQL irql;
+    ULONG bdf[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
 
     r = &nhi->Reenum;
@@ -1711,27 +1292,60 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
         return;
     }
     r->CfgmgOwed = 0;
-    if (!CmCfgmgOpen(&r->Cfgmg)) {
-        CmLogNote(nhi, "cm.reenum.9x.version", r->Cfgmg.Version);
-        r->Why = r->Cfgmg.Why == CM_CFGMG_WHY_VERSION ? CM_NOROUTE_CFGMG_VER
-                 : r->Cfgmg.Why == CM_CFGMG_WHY_ROOT  ? CM_NOROUTE_CFGMG_ROOT
-                 : r->Cfgmg.Why == CM_CFGMG_WHY_ARCH  ? CM_NOROUTE_ARCH
-                                                       : CM_NOROUTE_CFGMG_THUNK;
+    for (i = 0; i < r->Members; i++) {
+        bdf[i] = r->Port[i].Bdf;
+    }
+    r->WkActive = cmOwnedMask(nhi);
+    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive);
+    if (r->Wk == NULL) {
+        r->Why = CM_NOROUTE_CFGMG_THUNK;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
         return;
     }
-    CmLogNote(nhi, "cm.reenum.9x.version", r->Cfgmg.Version);
     KeAcquireSpinLock(&cmRegLock, &irql);
     r->Route = CM_ROUTE_CONFIGMG;
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
-    for (i = 0; i < r->Members; i++) {
-        CmLogNote(nhi, "cm.reenum.member.flags",
-                  (r->Port[i].Bdf << 8) | cmFlags(nhi, i));
-        if (cmFlags(nhi, i) & CM_PORT_ACTIVE) {
-            cmCfgmgMark(nhi, i, FALSE);
-        }
+}
+
+/*
+ * The worker's opening, read back once: a failed one takes the route away
+ * (section 6.4) with its reason.
+ */
+static VOID cmCfgmgOpened(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    KIRQL irql;
+    ULONG state;
+    ULONG why;
+    ULONG version;
+    ULONG i;
+
+    r = &nhi->Reenum;
+    if (r->Wk == NULL || r->Route != CM_ROUTE_CONFIGMG || r->WkOpenSeen) {
+        return;
     }
+    state = CmCfgwkOpenState(r->Wk, &why, &version);
+    if (state == CM_CFGWK_OPEN_PENDING) {
+        return;
+    }
+    r->WkOpenSeen = 1;
+    if (state == CM_CFGWK_OPEN_OK) {
+        for (i = 0; i < r->Members; i++) {
+            CmLogNote(nhi, "cm.reenum.member.flags",
+                      (r->Port[i].Bdf << 8) | cmFlags(nhi, i));
+        }
+        return;
+    }
+    r->Why = why == CM_CFGMG_WHY_VERSION ? CM_NOROUTE_CFGMG_VER
+             : why == CM_CFGMG_WHY_ROOT  ? CM_NOROUTE_CFGMG_ROOT
+             : why == CM_CFGMG_WHY_ARCH  ? CM_NOROUTE_ARCH
+                                         : CM_NOROUTE_CFGMG_THUNK;
+    CmLogNote(nhi, "cm.reenum.no-route", r->Why);
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    r->Route = CM_ROUTE_NONE;
+    cmRegRecompute();
+    KeReleaseSpinLock(&cmRegLock, irql);
 }
 
 /*
@@ -1760,7 +1374,21 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
              * population, and no eject is handed off meanwhile. */
             f->Unsettled = 1;
             f->ChangeSeq++;
+            if (nhi->U4On) {
+                /* The USB4 profile (cm_reenum.h): a connection changed on
+                 * some port, so an orderly removal seen before it belongs
+                 * to an old connection and is forgotten, whatever the
+                 * bridge's population shows later. */
+                f->EjectSeen = 0;
+            }
         }
+        if (nhi->U4On) {
+            r->Port[i].Flags &= ~CM_PORT_EJECTED;
+        }
+    }
+    if (nhi->U4On && r->EjectPending != 0) {
+        r->EjectPending = 0;
+        r->EjectsStale++;
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -1784,6 +1412,13 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         /* The set is still being looked for: the change is owed to every
          * member the rediscovery finds (cmDiscoverAndList). */
         r->DebtPending = 1;
+    }
+    if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
+        r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        /* Whatever XhciCmReenum says: the known children are pruned to
+         * those present, so a child the user removed is forgotten before
+         * a re-plug reuses its handle (section 7.4). */
+        CmCfgwkPrune(r->Wk);
     }
     if (r->Route == CM_ROUTE_NONE || r->Reenum == 0) {
         r->NotDone++;
@@ -1823,10 +1458,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         CmNvlinkAwait(nhi);
         cmReenumAll(nhi, TRUE, TRUE);
     }
-    if (r->Route == CM_ROUTE_CONFIGMG && r->SafeEject != 0 &&
-        action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
-        r->MarkOpen = 1;
-        r->MarkFrom = cmNow(nhi);
+    if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
+        r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
+        /* The worker's marking window (section 7.4). */
+        cmWkPost(nhi, 0, 0, TRUE);
     }
 }
 
@@ -1837,6 +1472,8 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_FILTER f;
     ULONG pending;
     ULONG stale;
+    ULONG mask;
+    ULONG taken;
     ULONG i;
 
     r = &nhi->Reenum;
@@ -1851,7 +1488,18 @@ VOID CmReenumService(PCM_NHI nhi)
         return;
     }
     stale = 0;
+    taken = 0;
     cmCfgmgLate(nhi);
+    if (r->Wk != NULL) {
+        mask = cmOwnedMask(nhi);
+        if (mask != r->WkActive) {
+            /* A claim won or lost with no request: the worker learns it
+             * at once, so an operation in progress on a lost member
+             * stops. */
+            r->WkActive = mask;
+            CmCfgwkPost(r->Wk, 0, 0, mask, FALSE);
+        }
+    }
     /* Each eject is checked again at the hand-off, under the lock: the
      * same publication of the bridge, still this domain's, the same
      * population, and still no function with a stack behind it. One that
@@ -1865,9 +1513,13 @@ VOID CmReenumService(PCM_NHI nhi)
             continue;
         }
         f = cmRegFind(r->Port[i].Bdf);
-        if (f != NULL && f->Owner == nhi && f->Unsettled) {
+        if ((f != NULL && f->Owner == nhi && f->Unsettled) ||
+            (nhi->U4On && taken)) {
             /* Deferred to a later pass: the bridge has not shown its
-             * population since the last tunnel change. */
+             * population since the last tunnel change; or, under the USB4
+             * profile, one eject has already been taken this pass - its
+             * hook tears a tunnel down and may take seconds, so every
+             * other is checked again after the next pass's actions. */
             pending &= ~(1UL << i);
             r->EjectPending |= 1UL << i;
             continue;
@@ -1878,6 +1530,8 @@ VOID CmReenumService(PCM_NHI nhi)
             f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
             pending &= ~(1UL << i);
             stale |= 1UL << i;
+        } else {
+            taken = 1;
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -1915,32 +1569,19 @@ VOID CmReenumService(PCM_NHI nhi)
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
                 }
-            } else if (r->Route == CM_ROUTE_CONFIGMG) {
-                if (cmCfgmgMember(nhi, i, TRUE)) {
-                    r->Port[i].Missed = 0;
-                    if (r->SafeEject != 0) {
-                        /* The re-enumeration was late: so is the marking
-                         * of what it brought (section 7.4). */
-                        r->MarkOpen = 1;
-                        r->MarkFrom = cmNow(nhi);
-                    }
-                }
+            } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+                /* Posted with a marking window: the re-enumeration is
+                 * late, so is the marking of what it brings. */
+                cmWkPost(nhi, 1UL << i, 1UL << i,
+                         (BOOLEAN)(r->SafeEject != 0));
+                r->Port[i].Missed = 0;
             }
             if (!r->Port[i].Missed) {
                 CmLogNote(nhi, "cm.reenum.missed", r->Port[i].Bdf);
             }
         }
     }
-    if (r->Route == CM_ROUTE_CONFIGMG && r->MarkOpen) {
-        for (i = 0; i < r->Members; i++) {
-            if (cmFlags(nhi, i) & CM_PORT_ACTIVE) {
-                cmCfgmgMark(nhi, i, TRUE);
-            }
-        }
-        if (cmNow(nhi) - r->MarkFrom >= CM_MARK_WINDOW_MS) {
-            r->MarkOpen = 0;
-        }
-    }
+    cmCfgmgOpened(nhi);
 }
 
 VOID CmReenumSuspend(PCM_NHI nhi)
@@ -1952,6 +1593,7 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     PCM_FILTER f;
     ULONG seconds;
     ULONG i;
+    BOOLEAN over;
 
     r = &nhi->Reenum;
     r->Suspends++;
@@ -1982,13 +1624,17 @@ VOID CmReenumSuspend(PCM_NHI nhi)
      * many announcements), and past the limit the failure path is the
      * policy (cm_ports.h). */
     CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
-    r->HoldBoundMs = CM_PORTS_HOLD_MAX_MS;
-    if (nhi->U4On && nhi->U4ResumeBoundMs + 10000UL > r->HoldBoundMs) {
-        /* The USB4 client's bound plus record 21's 10 s (cm_reenum.h). */
-        r->HoldBoundMs = nhi->U4ResumeBoundMs + 10000UL;
-    }
+    /* The fixed five-minute outer cap, under either profile; under USB4
+     * the client's bound is logged, and a bound that with record 21's
+     * 10 s would pass the cap is logged as such (cm_reenum.h). */
+    r->HoldBoundMs = CmPortsHoldWatchdog(nhi->U4On ? nhi->U4ResumeBoundMs
+                                                   : 0, &over);
     if (nhi->U4On) {
         CmLogNote(nhi, "cm.reenum.hold.u4-ms", nhi->U4ResumeBoundMs);
+        if (over) {
+            CmLogNote(nhi, "cm.reenum.hold.u4-over-cap",
+                      nhi->U4ResumeBoundMs);
+        }
     }
     seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
@@ -2104,9 +1750,22 @@ VOID CmReenumStop(PCM_NHI nhi)
     r->EjectPending = 0;
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
-    if (r->Route == CM_ROUTE_CONFIGMG) {
-        CmCfgmgClose(&r->Cfgmg);
+    if (r->Wk != NULL) {
+        CM_CFGWK_COUNTERS wc;
+
+        CmCfgwkStop(r->Wk, &wc);
+        r->Wk = NULL;
+        r->Removed += wc.Removed;
+        r->Vetoed += wc.Vetoed;
+        r->Marked += wc.Marked;
+        r->MarkFailures += wc.MarkFailures;
+        r->CallFailures += wc.CallFailures;
+        if (wc.Detached) {
+            CmLogNote(nhi, "cm.reenum.9x.worker-detached", 1);
+        }
     }
+    r->WkOpenSeen = 0;
+    r->WkActive = 0;
     r->Route = CM_ROUTE_NONE;
     r->Members = 0;
     r->MarkOpen = 0;

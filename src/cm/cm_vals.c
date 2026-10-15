@@ -257,6 +257,10 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built)
     } else if (profile == CM_PROFILE_UNKNOWN && mode == CM_MODE_FORCE_ICM &&
                intel) {
         profile = CM_PROFILE_ICM_AR;
+    } else if (profile == CM_PROFILE_USB4 && mode == CM_MODE_FORCE_ICM) {
+        /* The ICM experiment on a host with no ICM row (record 22 section
+         * 12): refused, never the software CM in its place. */
+        return CM_INERT_FORCE_ICM_REFUSED;
     }
     if (profile == CM_PROFILE_UNKNOWN) {
         return CM_INERT_PROFILE_UNKNOWN;

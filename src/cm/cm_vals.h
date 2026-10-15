@@ -120,6 +120,9 @@ ULONG CmProfileFor(const CM_IDS *ids);
                                        start would have activated it        */
 #define CM_INERT_BUS_MASTER     12  /* Bus Master could not be set (or its
                                        command register not read)           */
+#define CM_INERT_FORCE_ICM_REFUSED 13 /* XhciCmMode 2 on a host with no ICM
+                                       row, or whose selection found no ICM
+                                       running: never the software CM     */
 
 /*
  * The profiles whose client this build carries, one bit per CM_PROFILE_*:

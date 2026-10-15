@@ -444,9 +444,14 @@ Windows 98 section, `.NTx86`, `.NTx86.6.0`, the amd64 pair) and with the
 same install sections and service: `%U4Desc%=Cm.Dev,PCI\CC_0C0340`; one
 line per Intel id of section 3.1's "USB4 only" rows
 (`PCI\VEN_8086&DEV_xxxx`), the "ICM or USB4" ids being in record 21
-section 3.3's list already, under its description; and `PCI\VEN_1022&DEV_1668` and `DEV_1669`,
+section 3.3's list already; and `PCI\VEN_1022&DEV_1668` and `DEV_1669`,
 named beside the class line so the INF says which AMD hosts are meant
-(decision U12: `U4Desc` = `xHCI98 USB4 Host Interface`). The id lines rank
+(decision U12: `U4Desc` = `xHCI98 USB4 Host Router`). The description
+names the hardware's generation, not the connection manager running it,
+so the "ICM or USB4" ids (Maple Ridge, Tiger Lake to Meteor Lake) carry
+`U4Desc` too and a controller keeps its name whichever manager takes it;
+the ports the filter attaches to on these hosts read `xHCI98 USB4 PCI
+Bridge` (record 21 section 3.3, "Class and names"). The id lines rank
 above the class line, which is what makes section 3's tables apply to
 them. Windows 98's PCI enumerator offers the class compatible id, as
 `xhci98.inf`'s `PCI\CC_0C0330` line already shows. No device-router id
@@ -1448,8 +1453,10 @@ itself removable.
 filter is shared: at its own system suspend the NHI marks every active
 member held; a D0 IRP reaching a held member's filter is passed down and
 retained in its completion routine; the NHI releases it when its resume
-has **succeeded** or **failed**; the filter's watchdog is the NHI's resume
-bound plus 10 s and its expiry is the failure path, never success; an NHI
+has **succeeded** or **failed**; the filter's watchdog is record 21's
+fixed 5-minute cap, never longer (the NHI's resume bound plus 10 s is
+logged, and logged as over the cap when it would pass it), and its expiry
+is the failure path, never success; an NHI
 that does not resume takes the failure path at its removal. Under this
 profile:
 
@@ -1759,7 +1766,7 @@ hook, at the core's statement upcall, makes or withholds the statement
 on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
 ME a removal of a present NVMe function that this driver starts itself
 would go through record 21 section 7.2's `REMOVE_PENDING` handshake
-(`CmNvlinkOrderlyRemove`); no such removal exists yet (section 10.4's 9x
+(on the CONFIGMG worker's removal step, `cm_cfgwk.c`); no such removal exists yet (section 10.4's 9x
 half is best effort and every 9x child removal is the seam's removal of a
 vanished function).
 
@@ -1890,7 +1897,10 @@ profile exposes it as a per-port entry point on the thread, and task
 port have been removed, so the tunnel is down before the user is told the
 device may be unplugged; on Windows 98 and ME, where 39-A.8's half is best
 effort, the same call follows if that half lands. A port ejected this way
-stays down until its device is unplugged and plugged again.
+stays down until its device is unplugged and plugged again. The eject
+tears down the PCIe tunnel alone: a USB3 tunnel on the same port carries
+devices of the host's own xHCI tree, which the eject never asked to stop,
+so it stays up, as on a port FAILED for PCIe (section 7.2).
 
 ## 11. Stop, remove, disable, suspend, resume
 
@@ -2139,7 +2149,7 @@ U1, U2, U6, U8 and U13 from their first form, as each row says.
 | U9 | Safe eject under the software connection manager | an orderly per-port teardown that 39-A.8's mechanism calls, for the children of associated tunnel ports only | 10.4 |
 | U10 | Cutting with the USB4 profile emulator-only | yes: `3.0.0.0` carries it, the release notes saying "run on the emulator only" and every real host id untested but active by default | 14.4 |
 | U11 | The host suites' fabric | a C89 fake fabric of this project's own as the gate, plus the `usb4-emu` fabric cross-check as a recorded reading | 14.1 |
-| U12 | The device description | `xHCI98 USB4 Host Interface`, the same service and binary | 3.7 |
+| U12 | The device description | Changed by the owner, 2026-10-15 (first form: `xHCI98 USB4 Host Interface`): `xHCI98 USB4 Host Router` for every USB4-generation host whichever connection manager runs it (the "ICM or USB4" ids included), `xHCI98 USB4 PCI Bridge` for its tunnel ports, the same service and binary | 3.7 |
 | U13 | `XhciCmTunnelBridge` with more than one tunnel port | Changed (first form: a list indexed by USB4 port): record 21 section 6.3's per-domain override, an unordered set; the port-to-bridge correspondence is router-named or learned (section 7.6), never taken from list order | 7.6, 12 |
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
 | U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |

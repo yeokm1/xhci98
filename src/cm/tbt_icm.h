@@ -171,6 +171,14 @@
  * 500 ms on every device-connected event). The pushes are capped here. */
 #define TBT_ICM_RECONCILE_MS        500UL
 #define TBT_ICM_RECONCILE_MAX_MS    5000UL
+
+/* The whole resume's budget (record 21 section 6.3, owner's decision
+ * 2026-10-15): bring-up, every command and its retries, the host-router
+ * poll, the reconciliation and the announcements drained, measured from
+ * TbtIcmResume's entry. Every wait is clipped to what is left of it, and
+ * an announcement does not extend it. 30 s below the bridge filters'
+ * fixed 5-minute hold (cm_ports.h CM_PORTS_HOLD_MAX_MS). */
+#define TBT_ICM_RESUME_BUDGET_MS    270000UL
 /* The NVM-authentication wait a Tiger Lake class row confirms with (Linux
  * icm.c icm_tgl_is_supported: 10 ms); tbt_hw.c's. */
 #define TBT_ICM_AUTH_CONFIRM_MS     10UL
@@ -432,6 +440,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG HostPollAnswered;
     ULONG IdlePolls;
     ULONG Rediscoveries;
+    ULONG ResumeBudgetExpired;  /* resumes abandoned at their budget */
 } TBT_ICM_COUNTERS;
 
 typedef struct _TBT_ICM {
@@ -463,6 +472,17 @@ typedef struct _TBT_ICM {
     BOOLEAN Failed;             /* a failure after activation: stays idle */
     BOOLEAN RediscoverPending;  /* an announcement did not fit: driver ready again */
     ULONG RediscoverRun;        /* rediscoveries in a row */
+    /* The resume's budget (TBT_ICM_RESUME_BUDGET_MS): on only inside
+     * TbtIcmResume; Spent once a wait found nothing left of it. */
+    BOOLEAN BudgetOn;
+    BOOLEAN BudgetSpent;
+    ULONG BudgetMarkMs;         /* the clock when last read for it         */
+    ULONG BudgetMs;
+    ULONG BudgetUsedMs;         /* spent: the clock's progress, plus what
+                                   each wait waited beyond it (a clock
+                                   that stops still ends the budget, as
+                                   TbtDeadline's own fallback does)       */
+    ULONG ResumeBudgetMs;       /* the budget the next resume gets */
 
     TBT_ICM_READY Ready;
     ULONG NextSerial;
@@ -502,6 +522,10 @@ VOID TbtIcmSetApprovePolicy(PTBT_ICM icm, BOOLEAN approveAll);
 VOID TbtIcmSetApproveHook(PTBT_ICM icm, TBT_ICM_APPROVE_HOOK fn, PVOID context);
 /* Each held to TBT_ICM_TIMEOUT_MIN_MS..MAX_MS; 0 means the default. */
 VOID TbtIcmSetTimeouts(PTBT_ICM icm, ULONG cmdMs, ULONG approveMs);
+
+/* The budget of the next resumes, ms; 0 means TBT_ICM_RESUME_BUDGET_MS.
+ * For the host suite: the driver keeps the default. */
+VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms);
 
 
 /* One NHI mailbox command (ICM 2.3; Linux nhi.c nhi_mailbox_cmd): TBT_OK,
@@ -560,6 +584,14 @@ VOID TbtIcmSuspend(PTBT_ICM icm);
  * TUNNEL_DOWN. TBT_OK, or a negative result after which the instance is
  * failed and idle (rings stopped; 0x07 left for TbtIcmUnbind). A failed
  * instance does not resume.
+ *
+ * The whole of it runs within TBT_ICM_RESUME_BUDGET_MS of its entry: every
+ * command attempt, poll and settling window is clipped to what is left,
+ * and the announcement drain stops when nothing is. A resume that ran out
+ * is abandoned whole - TBT_E_TIMEOUT, the instance failed as above, its
+ * queued work and actions retired, nothing reconciled away for want of
+ * time - so the caller's failure path (the bridges' holds released, their
+ * buses invalidated) follows at once, before the filters' fixed hold.
  */
 LONG TbtIcmResume(PTBT_ICM icm);
 

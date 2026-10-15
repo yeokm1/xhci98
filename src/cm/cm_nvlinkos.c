@@ -69,7 +69,15 @@ typedef struct _CM_NV_U4 {
     PCM_NHI Nhi;
     ULONG Gen[TBT_U4_MAX_PORTS + 1];
     ULONG Seen[TBT_U4_MAX_PORTS + 1];
+    /* 98 SE and ME: a member whose fresh exposure found its bus silent,
+     * scanned again each pass until CM_NV_LATE_MS after the exposure (the
+     * endpoint answered on 98 SE only after Reenumerate_DevNode). */
+    ULONG LateBridge[XHCI_TBT_MAX_TUNNELS];
+    ULONG LateFrom[XHCI_TBT_MAX_TUNNELS];
+    ULONG LateOn[XHCI_TBT_MAX_TUNNELS];
 } CM_NV_U4;
+
+#define CM_NV_LATE_MS 10000UL
 
 static CM_NV_U4 cmNvU4[CM_NV_DOMAINS];
 
@@ -503,6 +511,39 @@ static BOOLEAN cmNvReceiver(VOID)
 /* The obligations                                                        */
 /* ====================================================================== */
 
+static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create);
+
+/* 98 SE and ME: `bridge`'s bus was silent at a fresh exposure; scan it
+ * again each pass for CM_NV_LATE_MS (CmNvlinkService). The UP so
+ * published follows the operating system's enumeration: an nvme98
+ * instance bound before it finds its entry later, and the retirement
+ * before the exposure kept any old statement away from it. */
+static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge)
+{
+    CM_NV_U4 *u;
+    ULONG k;
+
+    u = cmNvU4Of(nhi, TRUE);
+    if (u == NULL) {
+        return;
+    }
+    for (k = 0; k < XHCI_TBT_MAX_TUNNELS; k++) {
+        if (u->LateOn[k] && u->LateBridge[k] == bridge) {
+            break;
+        }
+    }
+    if (k == XHCI_TBT_MAX_TUNNELS) {
+        for (k = 0; k < XHCI_TBT_MAX_TUNNELS && u->LateOn[k]; k++) {
+        }
+    }
+    if (k == XHCI_TBT_MAX_TUNNELS) {
+        return;
+    }
+    u->LateBridge[k] = bridge;
+    u->LateFrom[k] = cmNvNow(nhi);
+    u->LateOn[k] = 1;
+}
+
 /* Obligation 1's scan of one secondary bus: UP for each NVMe function
  * answering there. Returns (functions answering << 16) | entries UP. */
 static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
@@ -657,6 +698,9 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
         }
         CmLogNote(nhi, "cm.nvlink.up.waited",
                   ((cmNvNow(nhi) - start) << 8) | (r >> 16));
+    }
+    if ((r >> 16) == 0 && fresh && !cmNvNt) {
+        cmNvLateArm(nhi, bridge);
     }
     return r & 0xFFFFUL;
 }
@@ -880,68 +924,68 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     }
 }
 
-ULONG CmNvlinkOrderlyRemove(PCM_NHI nhi, ULONG devnode, ULONG bdf)
+/*
+ * The 9x orderly-removal handshake (MD-5), as the CONFIGMG worker's
+ * removal step uses it (cm_cfgwk.c, cmWkRemoveChild): no CONFIGMG call
+ * and no ring service here - the worker makes the CONFIGMG calls and does
+ * the waiting. Only for a function still present behind its bridge whose
+ * entry reads UP and was published for the id the devnode names.
+ */
+ULONG CmNvlinkWkRequest(ULONG bridge, ULONG id, PULONG sequence)
 {
+    ULONG i;
     ULONG index;
-    ULONG cr;
-    ULONG seq;
-    ULONG answer;
-    ULONG start;
-    ULONG result;
+    ULONG read;
     KIRQL irql;
 
+    *sequence = 0;
+    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0) {
+        return CM_NVLINK_NONE;
+    }
     index = CM_NVLINK_NONE;
-    if (cmNvTable != NULL && !cmNvNt && cmNvRecord != 0) {
-        index = CmNvlinkFind(cmNvTable, XHCI_TBT_BDF_BUS(bdf),
-                             XHCI_TBT_BDF_DEV(bdf) |
-                                 (XHCI_TBT_BDF_FN(bdf) << 5));
+    for (i = 0; i < NVME98LS_ENTRIES && index == CM_NVLINK_NONE; i++) {
+        if (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Bridge == bridge &&
+            cmNvShadow[i].Id == id &&
+            (cmNvTable->Entry[i].Flags & NVME98LS_UP) != 0 &&
+            cmNvCfg(cmNvTable->Entry[i].BusNumber,
+                    cmNvTable->Entry[i].SlotNumber, 0, &read) &&
+            read == id) {
+            index = i;
+        }
     }
-    if (index == CM_NVLINK_NONE ||
-        (cmNvTable->Entry[index].Flags & NVME98LS_UP) == 0) {
-        CmLogNote(nhi, "cm.nvlink.remove", CM_NVLINK_OR_NO_CHANNEL);
-        return CM_NVLINK_OR_NO_CHANNEL;
-    }
-    /* The file system's quiescence and the veto first: a refusal is
-     * final, nothing is forced (MD-5; the usb4-emu handoff's rule). */
-    cr = CmCfgmgQueryRemove(&nhi->Reenum.Cfgmg, devnode);
-    if (cr != CMG_CR_SUCCESS) {
-        CmLogNote(nhi, "cm.nvlink.remove", (cr << 8) | CM_NVLINK_OR_VETOED);
-        return CM_NVLINK_OR_VETOED;
+    if (index == CM_NVLINK_NONE) {
+        return CM_NVLINK_NONE;
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
     cmNvRemoveSeq = (cmNvRemoveSeq + 1) & 0x00FFFFFFUL;
     if (cmNvRemoveSeq == 0) {
         cmNvRemoveSeq = 1;
     }
-    seq = cmNvRemoveSeq;
-    (VOID)CmNvlinkRemoveRequest(cmNvTable, index, seq);
-    KeReleaseSpinLock(&cmNvLock, irql);
-    start = cmNvNow(nhi);
-    answer = CM_NVLINK_RM_NONE;
-    for (;;) {
-        answer = CmNvlinkRemoveAnswer(cmNvTable, index, seq);
-        if (answer != CM_NVLINK_RM_NONE ||
-            CmNvlinkLeft(start, cmNvNow(nhi), CM_NVLINK_REMOVE_MS) == 0) {
-            break;
-        }
-        cmNvPause(nhi);
+    *sequence = cmNvRemoveSeq;
+    if (!CmNvlinkRemoveRequest(cmNvTable, index, *sequence)) {
+        index = CM_NVLINK_NONE;
+        *sequence = 0;
     }
-    if (answer == CM_NVLINK_RM_CLEAN) {
-        cr = CmCfgmgRemove(&nhi->Reenum.Cfgmg, devnode);
-        result = cr == CMG_CR_SUCCESS ? CM_NVLINK_OR_REMOVED
-                                      : CM_NVLINK_OR_REMOVE_FAILED;
-    } else {
-        result = answer == CM_NVLINK_RM_NONE ? CM_NVLINK_OR_TIMEOUT
-                                             : CM_NVLINK_OR_NOT_CLEAN;
-        cr = 0;
+    KeReleaseSpinLock(&cmNvLock, irql);
+    return index;
+}
+
+ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence)
+{
+    return CmNvlinkRemoveAnswer(cmNvTable, index, sequence);
+}
+
+VOID CmNvlinkWkWithdraw(ULONG index)
+{
+    KIRQL irql;
+
+    if (cmNvTable == NULL || index >= NVME98LS_ENTRIES) {
+        return;
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
     CmNvlinkRemoveCancel(cmNvTable, index);
     KeReleaseSpinLock(&cmNvLock, irql);
-    CmLogNote(nhi, "cm.nvlink.remove", (answer << 16) | (cr << 8) | result);
-    return result;
 }
-
 VOID CmNvlinkStop(PCM_NHI nhi)
 {
     ULONG i;
@@ -1015,6 +1059,9 @@ static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create)
             for (k = 0; k <= TBT_U4_MAX_PORTS; k++) {
                 cmNvU4[i].Gen[k] = 0;
                 cmNvU4[i].Seen[k] = 0;
+            }
+            for (k = 0; k < XHCI_TBT_MAX_TUNNELS; k++) {
+                cmNvU4[i].LateOn[k] = 0;
             }
             cmNvU4[i].Nhi = nhi;
             u = &cmNvU4[i];
@@ -1109,13 +1156,32 @@ VOID CmNvlinkService(PCM_NHI nhi)
     ULONG id;
     ULONG issued;
     ULONG entries;
+    ULONG bus;
     BOOLEAN matched;
 
-    if (cmNvTable == NULL || !nhi->U4On) {
+    if (cmNvTable == NULL) {
         return;
     }
     u = cmNvU4Of(nhi, FALSE);
     if (u == NULL) {
+        return;
+    }
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS && !cmNvNt; i++) {
+        if (!u->LateOn[i]) {
+            continue;
+        }
+        bus = cmNvSecondary(u->LateBridge[i]);
+        if (bus != CM_NVLINK_NONE && cmNvExclusive(nhi, u->LateBridge[i]) &&
+            (cmNvScan(nhi, u->LateBridge[i], bus, FALSE) >> 16) != 0) {
+            u->LateOn[i] = 0;
+            CmLogNote(nhi, "cm.nvlink.up.late",
+                      ((cmNvNow(nhi) - u->LateFrom[i]) << 8) | i);
+        } else if (cmNvNow(nhi) - u->LateFrom[i] >= CM_NV_LATE_MS) {
+            u->LateOn[i] = 0;
+            CmLogNote(nhi, "cm.nvlink.up.late-none", u->LateBridge[i]);
+        }
+    }
+    if (!nhi->U4On) {
         return;
     }
     for (port = 1; port <= TBT_U4_MAX_PORTS; port++) {
