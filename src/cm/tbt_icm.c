@@ -1921,6 +1921,11 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
         if (icm->Started || icm->Ring->DmaMayRun) {
             TbtRingStop(icm->Ring);
         }
+        if (icm->Ring->DmaMayRun) {
+            /* No verified stop: the buffer is not reused (cm_live.h). */
+            tbtIcmLog(icm, "tbt.icm.recover-unverified", 1);
+            return TBT_E_STATE;
+        }
         icm->Started = FALSE;
         icm->Bound = FALSE;
         icm->Session = FALSE;
@@ -1931,6 +1936,20 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
     }
     if (!icm->Started || !icm->Bound) {
         return TBT_E_STOPPED;
+    }
+    /* Frames the old session left on the ring are not this recovery's
+     * answers: every completed one is taken back unread before driver
+     * ready goes out, the queue retired with them. */
+    {
+        TBT_FRAME f;
+        ULONG n;
+
+        n = 0;
+        while (n <= icm->Ring->Entries && TbtRingReceive(icm->Ring, &f)) {
+            n++;
+        }
+        tbtIcmLog(icm, "tbt.icm.recover-drained", n);
+        tbtIcmRetirePending(icm);
     }
     rc = tbtIcmAnnounceAll(icm, TRUE);
     if (rc != TBT_OK) {

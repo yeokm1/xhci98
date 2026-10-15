@@ -1618,6 +1618,126 @@ static void test_settings(void)
     CHECK_EQ(g_fake.Writes, 0, "an unbind before any start touches nothing");
 }
 
+/* ------------------------------------------------------------------ */
+/* The host interface lost, cancelled and recovered (cm_live.h)       */
+/* ------------------------------------------------------------------ */
+
+static int g_ones;
+static int g_cancel;
+static TBT_HOST g_liveHost;
+
+static ULONG liveRead32(PVOID ctx, ULONG off)
+{
+    if (g_ones) {
+        return 0xFFFFFFFFUL;
+    }
+    return fakeRead32(ctx, off);
+}
+
+static BOOLEAN liveCancelled(PVOID ctx)
+{
+    (void)ctx;
+    return g_cancel ? TRUE : FALSE;
+}
+
+static void setupLive(int present, int approved)
+{
+    setup(GEN_AR, present, approved);
+    g_ones = 0;
+    g_cancel = 0;
+    g_liveHost = g_fakeHost;
+    g_liveHost.Read32 = liveRead32;
+    g_liveHost.Cancelled = liveCancelled;
+    TbtIcmInit(&g_icm, rowFor(GEN_AR), &g_ring, &g_liveHost, 0);
+    TbtIcmSetLinkDown(&g_icm, onLinkDown, NULL);
+}
+
+static void test_lost_and_recover(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    unsigned long before;
+    unsigned long stale[2];
+    unsigned long t0;
+    TBT_FRAME f;
+
+    /* Lost: every entry leaves as UNAVAILABLE, a RESYNC follows, nothing
+     * is written to the host interface. */
+    setupLive(1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK(g_ring.DmaMayRun, "a started ring may DMA");
+    actions(act, 8);
+    before = g_fake.Writes;
+    TbtIcmLost(&g_icm);
+    CHECK_EQ(g_fake.Writes, before, "lost writes nothing");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "table emptied");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "a tunnel-down and a resync");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "tunnel down first");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_UNAVAILABLE, "why unavailable");
+    CHECK(act[0].WasApproved, "it carried a tunnel");
+    CHECK_EQ(act[1].Kind, TBT_ICM_ACT_RESYNC, "then the domain");
+    CHECK_EQ(act[1].Why, TBT_ICM_WHY_UNAVAILABLE, "resync unavailable");
+    TbtIcmLost(&g_icm);
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "an empty table still resyncs");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_RESYNC, "resync alone");
+    CHECK_EQ(g_icm.Counters.Lost, 2, "counted");
+
+    /* Light: a stale frame of the old session is drained unread, driver
+     * ready goes out again, no 0x23, the device comes back announced. */
+    stale[0] = 0x01000003UL;
+    stale[1] = 0x00000000UL;
+    fakeQueue(TBT_PDF_ICM_RESP, stale, 2, 0, 0);
+    fakePump();
+    CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_OK, "light recovery");
+    CHECK_EQ(g_fw.Ready, 2, "driver ready again");
+    CHECK_EQ(g_fake.MboxCount, 1, "no 0x23 on a light recovery");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "re-announced");
+    n = actions(act, 8);
+    CHECK(n >= 1 && act[0].Kind == TBT_ICM_ACT_TUNNEL_UP, "its tunnel up again");
+
+    /* Full, after a power cycle reset the rings: restarted on the same
+     * buffer, 0x23 again, the session rebuilt. */
+    g_fake.TxCtrl = 0;
+    g_fake.RxCtrl = 0;
+    g_fake.TxBaseLo = 0;
+    g_fake.RxSizeReg = 0;
+    CHECK_EQ(TbtIcmRecover(&g_icm, TRUE), TBT_OK, "full recovery");
+    CHECK_EQ(g_fake.MboxLog[g_fake.MboxCount - 1], 0x23, "allow-all on the reset ICM");
+    CHECK_EQ(g_fake.TxBaseLo, FAKE_PHYS, "TX base programmed again");
+    CHECK(g_icm.Bound, "bound");
+    CHECK_EQ(g_icm.Counters.Recoveries, 2, "two recoveries");
+
+    /* A verified stop clears DmaMayRun; an unverified one keeps it, and a
+     * full recovery then refuses to reuse the buffer. */
+    TbtIcmUnbind(&g_icm);
+    CHECK(!g_ring.DmaMayRun, "verified stop");
+    setupLive(1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_ones = 1;
+    TbtIcmUnbind(&g_icm);
+    CHECK(g_ring.DmaMayRun, "unanswered read-back keeps DmaMayRun");
+    CHECK_EQ(g_ring.Counters.StopUnverified, 1, "counted");
+    g_fake.TxBaseLo = 0x1234UL;
+    CHECK_EQ(TbtIcmRecover(&g_icm, TRUE), TBT_E_STATE, "full recovery refused");
+    CHECK_EQ(g_fake.TxBaseLo, 0x1234UL, "no base reprogrammed");
+
+    /* Cancelled: a mailbox wait ends at once, the receive takes nothing. */
+    setupLive(0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fake.MboxMode = FAKE_MBOX_HANG;
+    g_cancel = 1;
+    t0 = g_fake.NowUs;
+    CHECK_EQ(TbtIcmMailbox(&g_icm, 0x07, 0), TBT_E_TIMEOUT, "cancelled mailbox");
+    CHECK(g_fake.NowUs - t0 < 100000UL, "within 100 ms");
+    fakeQueue(TBT_PDF_ICM_RESP, stale, 2, 0, 0);
+    fakePump();
+    CHECK(!TbtRingReceive(&g_ring, &f), "no descriptor taken when cancelled");
+    g_cancel = 0;
+    CHECK(TbtRingReceive(&g_ring, &f), "taken once admitted");
+}
+
 int main(void)
 {
     test_frames_ar();
@@ -1644,6 +1764,7 @@ int main(void)
     test_reconcile_bounded();
     test_round3();
     test_settings();
+    test_lost_and_recover();
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

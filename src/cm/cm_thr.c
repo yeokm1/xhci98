@@ -90,6 +90,12 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
             p[i] = 0;
         }
     }
+    /* After a surprise removal no configuration access either (cm_live.h):
+     * refused like any failed request. */
+    if (nhi->Live.Revoked) {
+        nhi->Counters.ConfigFailures++;
+        return FALSE;
+    }
     irp = IoAllocateIrp(nhi->Common.Pdo->StackSize, FALSE);
     if (irp == NULL) {
         nhi->Counters.ConfigFailures++;

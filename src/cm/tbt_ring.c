@@ -687,6 +687,12 @@ BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame)
     if (!ring->Running) {
         return FALSE;
     }
+    /* The transport's own entry gate: no descriptor is taken or reposted
+     * once the host interface may not be accessed (TBT_HOST.Cancelled). */
+    if (ring->Host->Cancelled != NULL &&
+        ring->Host->Cancelled(ring->Host->Context)) {
+        return FALSE;
+    }
     i = ring->RxNext;
     d = tbtRxDesc(ring, i);
     dw2 = tbtLoadLe32(d + TBT_DESC_DW2);

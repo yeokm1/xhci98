@@ -292,6 +292,7 @@ typedef struct _CM_NHI {
     ULONG AccessClass;
     ULONG LiveIds;
     ULONG LiveBar0;
+    ULONG LiveBar0Hi;
     ULONG CfgStrict;        /* cm_thr.c's cmConfig checks the length read */
 
     /* Power (cm_power.c). */

@@ -484,6 +484,8 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
 {
     TBT_HW_SELECTION sel;
     ULONG v;
+    ULONG hi;
+    ULONG cmd;
 
     nhi->CfgStrict = 1;
     v = CmCfgRead32(nhi, 0x00);
@@ -493,16 +495,44 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
         return FALSE;
     }
     v = CmCfgRead32(nhi, 0x10);
+    hi = 0;
+    if ((nhi->LiveBar0 & 0x6UL) == 0x4UL) {
+        hi = CmCfgRead32(nhi, 0x14);
+    }
+    cmd = CmCfgRead32(nhi, 0x04);
     nhi->CfgStrict = 0;
-    if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL)) {
-        /* Reassigned or reset: only a PnP stop and start can map it. */
+    /* Both from configuration space, the bus address against the one the
+     * healthy start read there: attribute bits masked, a 64-bit BAR's
+     * high DW too. Reassigned or reset: only a PnP stop and start can map
+     * it. */
+    if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL) ||
+        hi != nhi->LiveBar0Hi) {
         CmLogNote(nhi, "cm.live.bar-changed", v);
+        return FALSE;
+    }
+    if (cmd == 0xFFFFFFFFUL || (cmd & 0x2UL) == 0) {
+        /* Memory decoding off: the mapping no longer reaches it. */
+        CmLogNote(nhi, "cm.live.decode-off", cmd);
+        return FALSE;
+    }
+    if ((cmd & 0x4UL) == 0 && !CmNhiSetBusMaster(nhi, TRUE)) {
+        CmLogNote(nhi, "cm.live.bus-master", cmd);
         return FALSE;
     }
     if (CmThrProbe32(nhi, TBT_HI_CAPS) == 0xFFFFFFFFUL) {
         return FALSE;
     }
     if (nhi->U4On) {
+        return FALSE;
+    }
+    if (!nhi->Live.Full &&
+        (CmThrProbe32(nhi, TBT_TX_RING(0) + TBT_RING_BASE_LO) != nhi->Ring.Phys ||
+         CmThrProbe32(nhi, TBT_TX_RING(0) + TBT_RING_SIZE_REG) !=
+             nhi->Ring.Entries)) {
+        /* A light recovery keeps the rings: both must still hold what this
+         * driver programmed, else the full one is owed and not admitted
+         * here (a new episode re-arms it). */
+        CmLogNote(nhi, "cm.live.rings-changed", 1);
         return FALSE;
     }
     nhi->AccessClass = CM_ACCESS_PROBE;
@@ -1312,8 +1342,13 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     nhi->Device = (v >> 16) & 0xFFFFUL;
     nhi->LiveIds = v;
     CmLogNote(nhi, "cm.cfg.ids", v);
-    /* BAR0 as the healthy start found it, for a recovery's precondition. */
+    /* BAR0 as the healthy start found it, for a recovery's precondition:
+     * the bus address in configuration space, both DWs of a 64-bit BAR. */
     nhi->LiveBar0 = CmCfgRead32(nhi, 0x10);
+    nhi->LiveBar0Hi = 0;
+    if ((nhi->LiveBar0 & 0x6UL) == 0x4UL) {
+        nhi->LiveBar0Hi = CmCfgRead32(nhi, 0x14);
+    }
     /* The class and the subsystem ids, each read whole: a read refused or
      * all ones decides nothing, and the Apple policy of test (a) needs the
      * subsystem vendor established, not assumed. */
