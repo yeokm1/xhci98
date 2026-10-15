@@ -458,11 +458,11 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
-call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
-call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
+call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
