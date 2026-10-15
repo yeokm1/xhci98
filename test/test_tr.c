@@ -1484,6 +1484,21 @@ int main(void)
     test_keys_args_report();
     test_sizes();
     test_desc_lengths();
+    {
+        char s[128];
+        CHECK(strcmp(tr_plural(1), "") == 0 && strcmp(tr_plural(0), "s") == 0 &&
+              strcmp(tr_plural(2), "s") == 0, "plural");
+        strcpy(s, "Windows has stopped the card\r\nreaders.\r\n\r\nYou can now\nunplug it.");
+        tr_join_lines(s);
+        CHECK(strcmp(s, "Windows has stopped the card readers.\r\n\r\nYou can now unplug it.") == 0,
+              "join: wrapped lines joined, the paragraph kept");
+        strcpy(s, "one line");
+        tr_join_lines(s);
+        CHECK(strcmp(s, "one line") == 0, "join: nothing to join");
+        strcpy(s, "a\n   b\r\n");
+        tr_join_lines(s);
+        CHECK(strcmp(s, "a b ") == 0, "join: indentation after a break dropped");
+    }
     printf("test_tr: %d checks, %d failures\n", checks, failures);
     return failures;
 }

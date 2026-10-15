@@ -1531,3 +1531,48 @@ void tr_report_node(TR_TEXT *t, int depth, const char *label,
         tr_ch(t, '\n');
     }
 }
+
+const char *tr_plural(long n)
+{
+    return n == 1 ? "" : "s";
+}
+
+void tr_join_lines(char *s)
+{
+    char *w = s;
+    const char *r = s;
+
+    while (*r != '\0') {
+        if (*r == '\r' && r[1] == '\n') {
+            r++;
+        }
+        if (*r == '\n') {
+            const char *n = r + 1;
+            if (*n == '\r' && n[1] == '\n') {
+                n++;
+            }
+            if (*n == '\n') {
+                /* A paragraph break: kept as one CR LF pair twice. */
+                *w++ = '\r';
+                *w++ = '\n';
+                *w++ = '\r';
+                *w++ = '\n';
+                r = n + 1;
+                while (*r == '\r' || *r == '\n') {
+                    r++;
+                }
+                continue;
+            }
+            if (w > s && w[-1] != ' ') {
+                *w++ = ' ';
+            }
+            r++;
+            while (*r == ' ') {
+                r++;
+            }
+            continue;
+        }
+        *w++ = *r++;
+    }
+    *w = '\0';
+}
