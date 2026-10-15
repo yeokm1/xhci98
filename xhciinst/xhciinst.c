@@ -1611,6 +1611,21 @@ static int check_package(void)
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
+    /* The bundled nvme98 driver (0.1.x in nvme98\, later at the root):
+     * named here, never installed by this tool. */
+    join(path, sizeof(path), pkgDir, "nvme98\\nvme98-LICENSE.txt");
+    if (file_exists(path, NULL)) {
+        out("The NVMe driver nvme98, a separate project, is in %s\\nvme98\\;\n"
+            "this tool does not install it (nvme98-readme.txt there says how).\n\n",
+            opts.Dir);
+    } else {
+        join(path, sizeof(path), pkgDir, "nvme98-LICENSE.txt");
+        if (file_exists(path, NULL)) {
+            out("The NVMe driver nvme98, a separate project, is in %s (nvme98.inf);\n"
+                "this tool does not install it (nvme98-readme.txt there says how).\n\n",
+                opts.Dir);
+        }
+    }
 
     cmFiles = 0;
     for (k = 0; k < INST_INF_COUNT; k++) {
@@ -2272,6 +2287,11 @@ static int package_files(PKG_EACH each, void *ctx)
                 continue;
             }
             if (!envNow.Nt && inst_eq(fd.cFileName, "xhcicmf.inf")) {
+                continue;
+            }
+            /* The bundled nvme98 driver is not this tool's to install, and
+             * a copy of its INF on DevicePath would install it unasked. */
+            if (inst_bundled_file(fd.cFileName)) {
                 continue;
             }
             inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));

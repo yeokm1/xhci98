@@ -1281,6 +1281,33 @@ already has. Instead, Update Driver on "xHCI98 USB Attached SCSI Storage",
 choose "Display a list of all the drivers in a specific location", then Have
 Disk, and point it at the package directory.
 
+### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
+
+This download bundles nvme98 `(version: filled in at the cut)`.
+
+An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of
+its own, which none of these systems has. The download's `release-x86\`
+and `release-x64\` directories carry nvme98: a separate project under its
+own licence (BSD-3-Clause), bundled as one of its released builds,
+unchanged, with its `LICENSE`, `NOTICE.TXT` and `readme.txt` beside it as
+`nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`. Its
+readme is its install guide and lists its known limits; read it before
+installing. The `debug-` directories do not carry it, and `INSTALL.BAT`
+does not install it.
+
+When the drive's NVMe controller shows in Device Manager without a driver,
+Update Driver, Have Disk, and point it at:
+
+| Bundled nvme98 | Windows 98 SE, ME | Windows 2000, XP, Vista, 7 (32-bit) | Windows XP x64, Vista x64, 7 x64 |
+|---|---|---|---|
+| `0.2.0.0` and later | `release-x86\` | `release-x86\` | `release-x64\` |
+| `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
+
+The 64-bit nvme98 is test-signed by its own project (SHA-1, no
+timestamp), and `nvme98-test.cer` beside it is the public half of that
+project's certificate, not of this one's: on Vista x64 and 7 x64 it loads
+in test-signing mode, as `xhci98.sys` does.
+
 ## Devices and hubs in Device Manager
 
 New in `2.1.0.0`. Every reading below is a QEMU reading on development host

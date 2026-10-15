@@ -39,6 +39,7 @@ Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driv
   - [Installing Windows 2000 or XP, or using the Recovery Console](#installing-windows-2000-or-xp-or-using-the-recovery-console)
   - [Upgrading the driver](#upgrading-the-driver)
   - [Updating xhciuas.sys over an older one](#updating-xhciuassys-over-an-older-one)
+  - [NVMe drives behind Thunderbolt or USB4](#nvme-drives-behind-thunderbolt-or-usb4)
 - [Tuning](#tuning)
   - [The interrupt moderation interval (`XhciImodInterval250ns`)](#the-interrupt-moderation-interval-xhciimodinterval250ns)
   - [Forcing Bulk-Only instead of UAS (`XhciForceBulkOnly`)](#forcing-bulk-only-instead-of-uas-xhciforcebulkonly)
@@ -148,6 +149,7 @@ In each driver directory:
 - `xhcihlpr.sys` (32-bit only): the helper. 32-bit Windows 2000, XP, Vista and 7 use this small second driver for a finer system timer while the controller is polled (see "Polling and message-signalled interrupts"), and 32-bit Vista and 7 also to give the controller a message-signalled interrupt. The INF installs it on those four systems, as a service that starts at boot; Vista and 7 ask for a restart for it, 2000 and XP do not, and the finer timer, when `XhciPollFineTimer` is set to `1` (it is off by default), starts there at the next boot. Windows 98 SE and ME ignore it. Releases `2.3.0.0` and `2.3.1.0` carried the MSI half alone, as `xhcimsi.sys`, for Vista and 7 only.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
+- `nvme98` files (`release-x86\` and `release-x64\` only): the bundled NVMe driver, a separate project; see "NVMe drives behind Thunderbolt or USB4".
 
 `release-x86\` or `release-x64\` is the one to install.
 
@@ -237,6 +239,19 @@ The release notes' "From 2.3.x or earlier" has the details. `tools\xhcicln\` lis
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF.
 
 Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
+
+### NVMe drives behind Thunderbolt or USB4
+
+An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of its own. The package's `release-x86\` and `release-x64\` directories carry one: nvme98, a separate project with its own licence (BSD-3-Clause), bundled as one of its released builds, unchanged. Its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`; the readme is its install guide and lists its known limits. The release notes name the version bundled. `INSTALL.BAT` does not install it.
+
+When the drive's NVMe controller shows in Device Manager without a driver, Update Driver -> Have Disk, pointed at:
+
+| Bundled nvme98 | Windows 98 SE, ME | Windows 2000, XP, Vista, 7 (32-bit) | Windows XP x64, Vista x64, 7 x64 |
+|---|---|---|---|
+| `0.2.0.0` and later | `release-x86\` | `release-x86\` | `release-x64\` |
+| `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
+
+The 64-bit nvme98 is test-signed by its own project, as `xhci98.sys` is by this one, and loads on Vista x64 and 7 x64 in test-signing mode; its readme has the details.
 
 ## Tuning
 
@@ -781,6 +796,8 @@ The repository tracks no third-party binary on its own, although the tool execut
 * `XHCIINST.EXE` embeds the MSVC 6.0 runtime, and `XHCIIN64.EXE` the WDK 7.1 one. Neither contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
+
+The release download's `release-x86\` and `release-x64\` carry nvme98, a released build of a separate BSD-3-Clause project, unchanged; its `LICENSE` and `NOTICE.TXT` ship beside it as `nvme98-LICENSE.txt` and `nvme98-NOTICE.txt`. The repository tracks none of its files.
 
 The release download carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. On Windows 98, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a filter on the UAS device; the file is named, never shipped, and NUSB's mass-storage install places it.
 

@@ -784,6 +784,11 @@ static int inst_own_file(const char *file)
            inst_eq(file, "xhcicm.sys");
 }
 
+int inst_bundled_file(const char *name)
+{
+    return inst_starts(name, "nvme98");
+}
+
 int inst_own_service(const char *service)
 {
     return inst_eq(service, "xhci98") || inst_eq(service, "xhciuas") ||

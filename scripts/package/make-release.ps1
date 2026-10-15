@@ -319,6 +319,32 @@ before anything is built. Refused with -UploadSetOnly, which stages nothing,
 and with an -Arch that has no x64. The x86 binaries are never signed. Where
 the key is held and how it was made: design record 19.
 
+.PARAMETER Nvme98Version
+The nvme98 build the download bundles (owner, 2026-10-15), with
+-Nvme98Dir, -Nvme98SumsSha256 and -Nvme98InterfaceVersion: the four pins go
+together and mean what make-package.ps1's parameters of the same names mean,
+and -Nvme98AllowInterfaceMismatch is passed through to it. Without them the
+cut bundles no nvme98, as every cut before 3.0.0.0 did. With them each
+release-x86 and release-x64 package is built with the build's files (the
+debug directories carry none), and the upload set's release-x86\ and
+release-x64\ carry them; releases\<version>\ does not, since nvme98 is a
+third-party binary and nothing third-party is tracked. The release notes
+must name the version ("nvme98 `<version>`", in place of the placeholder
+the cut fills in), the generated readme lists it, and -UploadSetOnly
+re-assembles a bundled release only with the same pins.
+
+.PARAMETER Nvme98Dir
+See -Nvme98Version.
+
+.PARAMETER Nvme98SumsSha256
+See -Nvme98Version.
+
+.PARAMETER Nvme98InterfaceVersion
+See -Nvme98Version.
+
+.PARAMETER Nvme98AllowInterfaceMismatch
+See -Nvme98Version; the override is printed, and passed to each package run.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 
@@ -353,7 +379,12 @@ param(
     [switch]$NoTargetEvidence,
     [switch]$AllowUnstampedDriver,
     [string]$TestLabel = "",
-    [string]$TestSignPfx = ""
+    [string]$TestSignPfx = "",
+    [string]$Nvme98Version = "",
+    [string]$Nvme98Dir = "",
+    [string]$Nvme98SumsSha256 = "",
+    [string]$Nvme98InterfaceVersion = "",
+    [switch]$Nvme98AllowInterfaceMismatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -1044,6 +1075,11 @@ function Assert-ReportBatchContent {
                $What, ($faults -join "`n  - "))
     }
 }
+
+# The line the generated readme carries when the download bundles nvme98
+# (package-common.ps1, "nvme98, the bundled NVMe driver"), which is how
+# -UploadSetOnly knows which build a published release was cut with.
+$nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.'
 
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
@@ -1997,6 +2033,9 @@ function New-UploadSet {
         [string]$UploadDir,
         [string]$Repo,
         [string[]]$Publishable,
+        # The verified nvme98 build (Resolve-Nvme98Input) the release-
+        # directories bundle, or $null for none.
+        $Nvme98 = $null,
         # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
         # caller moves the result onto the final names with Publish-UploadSet
         # once its publish has succeeded, or drops it with
@@ -2059,6 +2098,8 @@ function New-UploadSet {
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
 
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
+    # Full paths (lower case) of the bundled nvme98 files copied below.
+    $nvUploaded = @{}
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
     # **Which directories have to be completed is read off the tree, not taken
@@ -2180,6 +2221,26 @@ their defaults.
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
         $mediaPaths = @{}
+        # The bundled nvme98 files of a release- directory: copied here from
+        # the pinned release folder (releases\ holds none), each refused if
+        # it would replace a file and held to SHA256SUMS.txt once copied.
+        $nvFiles = @()
+        if ($null -ne $Nvme98 -and $f -like "release-*") {
+            $nvFiles = @(Get-Nvme98PackageFiles -Release $Nvme98 -Arch $LegArches[$f])
+            foreach ($nf in $nvFiles) {
+                $nvDest = Join-Path $uploadFlavorDir $nf.Dest
+                if (Test-Path -LiteralPath $nvDest) {
+                    throw "nvme98's '$($nf.Source)' would land at '$f\$($nf.Dest)' in the upload set, where the published tree already has a file."
+                }
+                Ensure-Directory (Split-Path -Parent $nvDest)
+                Copy-Item -LiteralPath (Join-Path $Nvme98.Dir $nf.Source) -Destination $nvDest
+                $nvUploaded[([System.IO.Path]::GetFullPath($nvDest)).ToLowerInvariant()] = $true
+                if ((Get-FileHash -LiteralPath $nvDest -Algorithm SHA256).Hash -ne $nf.Sha256) {
+                    throw "the upload set's copy of nvme98's '$($nf.Source)' does not match SHA256SUMS.txt."
+                }
+            }
+            Write-Ok ("{0}\ bundles nvme98 {1}: {2} file(s), each matching SHA256SUMS.txt" -f $f, $Nvme98.Version, $nvFiles.Count)
+        }
 
         if ($null -ne $pkgDir) {
             # The ordinary cut: the backstop for the check the build loop
@@ -2187,7 +2248,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }))
+                                               -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable } else { @() }) + @($nvFiles | ForEach-Object { $_.Dest }))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2423,7 +2484,10 @@ $gateOut
     # And what they say, before anything is archived: the cut checked them
     # when it staged them, but -UploadSetOnly reads a tree it did not stage.
     Assert-ReportBatchContent -Root $uploadRoot -Batches $reportBatches -What "the upload set '$uploadRoot'"
+    # The bundled nvme98 files keep their own DriverVer date and their own
+    # file times: they are another project's release, copied unchanged.
     $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
+                  Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) } |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
     if ($infDates.Count -ne 1) {
         throw "the assembled upload set's INFs declare $($infDates.Count) DriverVer dates ($($infDates -join ', ')), not one: the release has no single date to give its files."
@@ -2431,6 +2495,7 @@ $gateOut
     $fileStamp = [datetime]::ParseExact($infDates[0], 'yyyy-MM-dd',
         [Globalization.CultureInfo]::InvariantCulture).AddHours(12)
     foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse)) {
+        if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }
         $item.LastWriteTime = $fileStamp
     }
     Write-Ok ("every file dated {0:yyyy-MM-dd HH:mm}, the INFs' DriverVer date" -f $fileStamp)
@@ -2585,6 +2650,27 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
 "@
     }
 
+    # --- the bundled nvme98 build, verified before anything is built --------
+    #
+    # make-package.ps1 verifies it again for each release leg; this run
+    # verifies it once up front, so a wrong pin costs nothing, and holds the
+    # result for the upload set, which copies the files from the release
+    # folder itself, never from releases\ (nothing third-party is tracked).
+    $nvme98 = Resolve-Nvme98Input -Version $Nvme98Version -Dir $Nvme98Dir -SumsSha256 $Nvme98SumsSha256 `
+                                  -InterfaceVersion $Nvme98InterfaceVersion `
+                                  -HeaderPath (Join-Path $repo "src\cm\nvme98cm.h") `
+                                  -Allow:$Nvme98AllowInterfaceMismatch
+    if ($null -ne $nvme98) {
+        Write-Ok ("nvme98 {0} ({1} layout): SHA256SUMS.txt is the pinned {2}, and every file matches it" -f `
+            $nvme98.Version, $nvme98.Layout, $nvme98.SumsSha256)
+        if ($nvme98.Overridden) {
+            Write-Warn ("nvme98 INTERFACE MISMATCH OVERRIDDEN (-Nvme98AllowInterfaceMismatch): {0}" -f $nvme98.Mismatch)
+        }
+        if ($Flavor -notcontains "release") {
+            throw "nvme98 is bundled into the release- directories only, and this run publishes none (-Flavor $($Flavor -join ','))."
+        }
+    }
+
     # --- the version, from the INF ------------------------------------------
     $infVersion = Get-InfDriverVersion -Path $infPath
     if ($Version -eq "") {
@@ -2736,10 +2822,25 @@ To cut one, run this script without it.
             Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
         }
 
+        # A release cut with nvme98 says so in its readme; it is re-assembled
+        # only with the same build, and one cut without it only without.
+        $pubReadme = Join-Path $finalRoot "readme.txt"
+        $pubNvme98 = ""
+        if (Test-Path -LiteralPath $pubReadme) {
+            $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $nvme98ReadmePattern)
+            if ($m.Success) { $pubNvme98 = $m.Groups[1].Value }
+        }
+        $askNvme98 = if ($null -ne $nvme98) { $nvme98.Version } else { "" }
+        if ($pubNvme98 -ne $askNvme98) {
+            $was = if ($pubNvme98 -ne "") { "nvme98 $pubNvme98" } else { "no nvme98" }
+            $now = if ($askNvme98 -ne "") { "nvme98 $askNvme98" } else { "no nvme98" }
+            throw "'$finalRoot' was cut with $was (its readme.txt says so), and this run was given $now. Re-assemble it with the pins it was cut with."
+        }
+
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable
+                             -Publishable $publishable -Nvme98 $nvme98
 
         Write-Step "Done"
         Write-Host "Upload:     $($set.Zip)"
@@ -2918,6 +3019,18 @@ the result in place of the marker, then cut again. The first:
 "@
     }
     Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
+    # The bundled nvme98 version is recorded in the release notes (nvme98's
+    # maintainers): the cut fills the placeholder there, and a release whose
+    # notes name another version, or none, is refused. A TEST cut is warned.
+    if ($null -ne $nvme98) {
+        $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
+        if (-not $notesText.Contains("nvme98 ``" + $nvme98.Version + "``")) {
+            $why = "docs\using\release-notes.md does not name the bundled nvme98 ``$($nvme98.Version)``: write it in place of the placeholder in 'NVMe drives behind Thunderbolt or USB4'."
+            if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
+        } else {
+            Write-Ok ("the release notes name the bundled nvme98 {0}" -f $nvme98.Version)
+        }
+    }
 
 
     # --- where the INF puts this project's own two files ---------------------
@@ -3026,6 +3139,15 @@ the result in place of the marker, then cut again. The first:
             }
             $pkgArgs += @("-TestSignPfx", $TestSignPfx)
         }
+        # The bundled nvme98 build, in the release legs only; its files are
+        # accepted beside the declared set by exactly the paths it lands at.
+        $legNvme98 = @()
+        if ($null -ne $nvme98 -and $f -eq "release") {
+            $pkgArgs += @("-Nvme98Version", $nvme98.Version, "-Nvme98Dir", $nvme98.Dir,
+                          "-Nvme98SumsSha256", $nvme98.SumsSha256, "-Nvme98InterfaceVersion", $nvme98.Interface)
+            if ($Nvme98AllowInterfaceMismatch) { $pkgArgs += "-Nvme98AllowInterfaceMismatch" }
+            $legNvme98 = @(Get-Nvme98PackageFiles -Release $nvme98 -Arch $leg.PkgArch | ForEach-Object { $_.Dest })
+        }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the 2026-09-07
         # audit's H17. In Windows PowerShell 5.1 a native command's stderr line
@@ -3088,8 +3210,16 @@ runs are what stand between a broken binary and a guest that cannot boot.
         Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                            -PublishedPaths $declaredPublished[$leg.Arch] `
                                            -InfName "xhci98.inf" -Flavor $leg.Id `
-                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }))
+                                           -Also ($uasPublishable + $cmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable } else { @() }) + $legNvme98)
         Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
+        # The bundled nvme98 files are in the package, and stay out of
+        # releases\<version>\ ($legCopy names this project's files alone):
+        # the upload set takes them from the pinned release folder.
+        foreach ($nvRel in $legNvme98) {
+            if (-not (Test-Path -LiteralPath (Join-Path $pkgDir $nvRel) -PathType Leaf)) {
+                throw "make-package.ps1 produced no nvme98 '$nvRel' in '$pkgDir'."
+            }
+        }
         # The certificate beside a signed leg's binaries must be this key's
         # public half, byte for byte - the one a user would inspect or import.
         if ($legSigned) {
@@ -3937,6 +4067,36 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
     $contents += "  what in the wider project is third-party material and is NOT"
     $contents += "  covered by it. The LICENCE section at the end points here."
     $contents += ""
+
+    # The bundled nvme98 build: in the download's release- directories only
+    # (not in releases\, where nothing third-party is tracked). The first
+    # line is the one -UploadSetOnly reads ($nvme98ReadmePattern).
+    if ($null -ne $nvme98) {
+        $contents += ("  Bundled in this download: nvme98 {0}." -f $nvme98.Version)
+        $contents += ""
+        if ($nvme98.Layout -eq "old") {
+            $contents += "  RELEASE-X86\NVME98\ and RELEASE-X64\NVME98\ hold nvme98, an NVMe"
+            $contents += "  storage driver for NVMe drives such as one in a Thunderbolt or USB4"
+            $contents += "  enclosure. It is a separate project with its own licence"
+            $contents += "  (BSD-3-Clause): nvme98-LICENSE.txt and nvme98-NOTICE.txt are beside"
+            $contents += "  it, and nvme98-readme.txt is its own guide. INSTALL.BAT does not"
+            $contents += "  install it. In the hardware wizard (Have Disk), point at"
+            $contents += "  RELEASE-X86\NVME98\WIN9X on Windows 98 SE and ME,"
+            $contents += "  RELEASE-X86\NVME98\X86 on 32-bit Windows 2000 to 7, or"
+            $contents += "  RELEASE-X64\NVME98\AMD64 on 64-bit Windows (test-signed; see"
+            $contents += "  nvme98-readme.txt)."
+        } else {
+            $contents += "  RELEASE-X86 and RELEASE-X64 hold nvme98, an NVMe storage driver for"
+            $contents += "  NVMe drives such as one in a Thunderbolt or USB4 enclosure:"
+            $contents += "  nvme98.inf and the files beside it whose names start with nvme98."
+            $contents += "  It is a separate project with its own licence (BSD-3-Clause):"
+            $contents += "  nvme98-LICENSE.txt and nvme98-NOTICE.txt are beside it, and"
+            $contents += "  nvme98-readme.txt is its own guide. INSTALL.BAT does not install"
+            $contents += "  it. In the hardware wizard (Have Disk), point at RELEASE-X86 on"
+            $contents += "  32-bit Windows and RELEASE-X64 on 64-bit Windows."
+        }
+        $contents += ""
+    }
 
     #
     # **The install section names the directories this cut actually wrote.**
@@ -6692,7 +6852,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable -Staged
+                             -Publishable $publishable -Staged -Nvme98 $nvme98
         $stagedUpload = $set
     }
 

@@ -810,3 +810,308 @@ function Get-SilentRegFaults {
     if ($Text -cne $want) { $faults += "it is not REGEDIT4, the SilentClasses key and its six values, exactly" }
     return $faults
 }
+
+# ---- nvme98, the bundled NVMe driver ----------------------------------------
+#
+# nvme98 is a separate project under BSD-3-Clause. A release package may
+# carry one of its released builds, copied unchanged from that build's
+# release folder at packaging time: never its source, and never through git
+# (nothing of it is tracked here, and make-release.ps1 copies it into the
+# upload set only, not into releases\). The input is pinned three ways: the
+# version, the folder, and the SHA-256 of the folder's SHA256SUMS.txt, which
+# in turn pins every file. There are two layouts:
+#
+#   0.1.x, from 0.1.1.0 (old): win9x\, x86\ and amd64\, each with its own
+#       nvme98.inf, bundled unchanged under nvme98\ in the flavour directory:
+#       nvme98\win9x\ and nvme98\x86\ in an x86 package, nvme98\amd64\ in an
+#       amd64 one;
+#   0.2.0.0 and later (new): x86\ (one $CHICAGO$ INF, nvme98.mpd for 98 and
+#       ME and nvme98.sys for 2000 to 7) copied to an x86 package's root, and
+#       x64\ to an amd64 package's root; every name there starts with
+#       "nvme98", so none can clash with this project's own files.
+#
+# LICENSE, NOTICE.TXT and readme.txt go beside the driver files as
+# nvme98-LICENSE.txt, nvme98-NOTICE.txt and nvme98-readme.txt. 0.1.0.0 is
+# never bundled: it installed nvme98 as a boot-start driver. The package
+# checks that would otherwise judge these files as this project's own are
+# given exactly the list Get-Nvme98PackageFiles returns, and nothing wider.
+
+$script:Nvme98RefusedVersions = @("0.1.0.0")
+$script:Nvme98OldLayoutFrom = [version]"0.1.1.0"
+$script:Nvme98NewLayoutFrom = [version]"0.2.0.0"
+$script:Nvme98RenamedTop = [ordered]@{
+    "LICENSE"    = "nvme98-LICENSE.txt"
+    "NOTICE.TXT" = "nvme98-NOTICE.txt"
+    "readme.txt" = "nvme98-readme.txt"
+}
+# A copy of the interface header a release may carry; used for the
+# interface check only and never shipped.
+$script:Nvme98ReleaseHeader = "include\nvme98cm.h"
+
+function Get-Nvme98Layout {
+    # "old" or "new" for a version a package may bundle; throws otherwise.
+    param([string]$Version)
+    if ($Version -notmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$') {
+        throw "-Nvme98Version '$Version' is not a four-part version such as 0.1.1.0: the bundled nvme98 build is pinned explicitly."
+    }
+    if ($script:Nvme98RefusedVersions -contains $Version) {
+        throw "nvme98 $Version is never bundled: it installed nvme98 as a boot-start driver, and Windows 7 x64 then fails to start without test-signing mode (nvme98's release history, 0.1.1.0)."
+    }
+    $v = [version]$Version
+    if ($v -lt $script:Nvme98OldLayoutFrom) {
+        throw "nvme98 $Version is older than 0.1.1.0, the first build a package may bundle."
+    }
+    if ($v -ge $script:Nvme98NewLayoutFrom) { return "new" }
+    return "old"
+}
+
+function Read-Nvme98Sums {
+    # SHA256SUMS.txt, "<sha256>  <path>" or "<sha256> *<path>" per line, with
+    # / or \ separators. Returns an ordered map of relative path (with \) to
+    # upper-case hash; refuses anything else.
+    param([string]$Path)
+    $map = [ordered]@{}
+    $seen = @{}
+    $n = 0
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $n++
+        if ($line.Trim() -eq "") { continue }
+        if ($line -notmatch '^([0-9A-Fa-f]{64}) [ *](.+)$') {
+            throw "SHA256SUMS.txt line $n is not '<sha256>  <path>': $line"
+        }
+        $hash = $Matches[1].ToUpperInvariant()
+        $rel = $Matches[2].Trim().Replace('/', '\')
+        $parts = @($rel.Split('\'))
+        if ($rel -eq "" -or $rel.StartsWith('\') -or $rel.Contains(':') -or
+            ($parts -contains '..') -or ($parts -contains '.') -or ($parts -contains '')) {
+            throw "SHA256SUMS.txt line $n names '$rel', which is not a plain path inside the release folder."
+        }
+        if ($rel -ieq "SHA256SUMS.txt") {
+            throw "SHA256SUMS.txt lists itself (line $n)."
+        }
+        $key = $rel.ToLowerInvariant()
+        if ($seen.ContainsKey($key)) {
+            throw "SHA256SUMS.txt lists '$rel' twice (line $n)."
+        }
+        $seen[$key] = $true
+        $map[$rel] = $hash
+    }
+    if ($map.Count -eq 0) { throw "SHA256SUMS.txt lists no file." }
+    return $map
+}
+
+function Get-Nvme98InfVersion {
+    param([string]$Path)
+    $text = [System.IO.File]::ReadAllText($Path)
+    $m = [regex]::Match($text, '(?m)^\s*DriverVer\s*=\s*[^,\r\n]+,\s*([0-9.]+)')
+    if (-not $m.Success) { return "" }
+    return $m.Groups[1].Value
+}
+
+function Assert-Nvme98Release {
+    # The pinned release folder, verified: SHA256SUMS.txt's own hash first,
+    # then every file against it, every file on disk listed, the layout's
+    # files present and nothing it does not know, and every INF's DriverVer
+    # at the pinned version. Returns what the package step needs; throws on
+    # any mismatch, before anything is copied.
+    param([string]$Dir, [string]$Version, [string]$SumsSha256)
+
+    $layout = Get-Nvme98Layout -Version $Version
+    if ($SumsSha256 -notmatch '^[0-9A-Fa-f]{64}$') {
+        throw "-Nvme98SumsSha256 must be the SHA-256 (64 hex digits) of the release folder's SHA256SUMS.txt."
+    }
+    if ($Dir -eq "" -or -not (Test-Path -LiteralPath $Dir -PathType Container)) {
+        throw "no nvme98 release folder at '$Dir' (-Nvme98Dir)."
+    }
+    $Dir = (Resolve-Path -LiteralPath $Dir).ProviderPath.TrimEnd('\')
+    $sumsPath = Join-Path $Dir "SHA256SUMS.txt"
+    if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) {
+        throw "'$Dir' has no SHA256SUMS.txt, so nothing in it can be checked; it is not an nvme98 release folder."
+    }
+    $sumsHash = (Get-FileHash -LiteralPath $sumsPath -Algorithm SHA256).Hash
+    if ($sumsHash -ne $SumsSha256.ToUpperInvariant()) {
+        throw "'$sumsPath' hashes to $sumsHash, not the pinned $($SumsSha256.ToUpperInvariant()): this is not the nvme98 $Version release that was pinned. Nothing was copied."
+    }
+    $sums = Read-Nvme98Sums -Path $sumsPath
+    $listed = @{}
+    foreach ($rel in $sums.Keys) {
+        $listed[$rel.ToLowerInvariant()] = $rel
+        $full = Join-Path $Dir $rel
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+            throw "SHA256SUMS.txt lists '$rel', which is not in '$Dir'."
+        }
+        $h = (Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash
+        if ($h -ne $sums[$rel]) {
+            throw "'$rel' in '$Dir' hashes to $h, not the $($sums[$rel]) SHA256SUMS.txt lists. Release folders are write-once; this one has changed. Nothing was copied."
+        }
+    }
+    foreach ($item in @(Get-ChildItem -LiteralPath $Dir -File -Recurse -Force)) {
+        $rel = $item.FullName.Substring($Dir.Length + 1)
+        if ($rel -ieq "SHA256SUMS.txt") { continue }
+        if (-not $listed.ContainsKey($rel.ToLowerInvariant())) {
+            throw "'$rel' is in '$Dir' but not in its SHA256SUMS.txt, so it is not part of the release."
+        }
+    }
+
+    if ($layout -eq "old") {
+        $archDirs = @("win9x", "x86", "amd64")
+        $required = @("win9x\nvme98.inf", "win9x\nvme98.mpd", "x86\nvme98.inf", "x86\nvme98.sys",
+                      "amd64\nvme98.inf", "amd64\nvme98.sys", "amd64\nvme98-test.cer", "LICENSE", "NOTICE.TXT")
+    } else {
+        $archDirs = @("x86", "x64")
+        $required = @("x86\nvme98.inf", "x86\nvme98.mpd", "x86\nvme98.sys",
+                      "x64\nvme98.inf", "x64\nvme98.sys", "LICENSE", "NOTICE.TXT")
+    }
+    foreach ($r in $required) {
+        if (-not $listed.ContainsKey($r.ToLowerInvariant())) {
+            throw "the nvme98 $Version release has no '$r', which its $layout layout carries (version $Version selects the $layout layout)."
+        }
+    }
+    $header = $null
+    foreach ($rel in $sums.Keys) {
+        $parts = @($rel.Split('\'))
+        if ($rel -ieq $script:Nvme98ReleaseHeader) {
+            $header = Join-Path $Dir $rel
+            continue
+        }
+        if ($parts.Count -eq 1) {
+            if (-not ($script:Nvme98RenamedTop.Keys | Where-Object { $_ -ieq $rel })) {
+                throw "the nvme98 $Version release has '$rel' at its top, which this script does not know where to put. Update scripts\package\package-common.ps1 for the new layout rather than bundling a file blind."
+            }
+            continue
+        }
+        if ($parts.Count -ne 2 -or -not ($archDirs -contains $parts[0].ToLowerInvariant())) {
+            throw "the nvme98 $Version release has '$rel', outside the $($archDirs -join '\, ')\ directories of its $layout layout."
+        }
+        if ($layout -eq "new" -and -not $parts[1].StartsWith("nvme98", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "the nvme98 $Version release has '$rel': in the new layout every file goes to the package root, and a name not starting with nvme98 could clash with this project's own files."
+        }
+    }
+    foreach ($rel in $sums.Keys) {
+        if ($rel -notmatch '(?i)\.inf$') { continue }
+        $infVer = Get-Nvme98InfVersion -Path (Join-Path $Dir $rel)
+        if ($infVer -ne $Version) {
+            throw "'$rel' of the nvme98 release declares DriverVer '$infVer', not the pinned $Version."
+        }
+    }
+    return [pscustomobject]@{
+        Dir        = $Dir
+        Version    = $Version
+        Layout     = $layout
+        Sums       = $sums
+        SumsSha256 = $sumsHash
+        Header     = $header
+    }
+}
+
+function Get-Nvme98PackageFiles {
+    # The nvme98 files one package carries: Source (relative to the release
+    # folder), Dest (relative to the package root) and Sha256. -Arch is the
+    # packager's: x86 or amd64.
+    param($Release, [ValidateSet("x86", "amd64")][string]$Arch)
+    if ($Release.Layout -eq "old") {
+        $dirs = if ($Arch -eq "amd64") { @("amd64") } else { @("win9x", "x86") }
+        $prefix = "nvme98\"
+    } else {
+        $dirs = if ($Arch -eq "amd64") { @("x64") } else { @("x86") }
+        $prefix = ""
+    }
+    $out = @()
+    $dests = @{}
+    foreach ($rel in $Release.Sums.Keys) {
+        $parts = @($rel.Split('\'))
+        $dest = $null
+        if ($parts.Count -eq 1) {
+            $top = @($script:Nvme98RenamedTop.Keys | Where-Object { $_ -ieq $rel })
+            if ($top.Count -eq 1) { $dest = $prefix + $script:Nvme98RenamedTop[$top[0]] }
+        } elseif ($parts.Count -eq 2 -and ($dirs -contains $parts[0].ToLowerInvariant())) {
+            $dest = if ($Release.Layout -eq "old") { $prefix + $rel } else { $parts[1] }
+        }
+        if ($null -eq $dest) { continue }
+        $key = $dest.ToLowerInvariant()
+        if ($dests.ContainsKey($key)) {
+            throw "two files of the nvme98 $($Release.Version) release would land at '$dest' in the $Arch package."
+        }
+        $dests[$key] = $true
+        $out += [pscustomobject]@{ Source = $rel; Dest = $dest; Sha256 = $Release.Sums[$rel] }
+    }
+    return $out
+}
+
+function Get-Nvme98HeaderVersion {
+    # NVME98LS_VERSION of an nvme98cm.h, or "" where it has none.
+    param([string]$Path)
+    $m = [regex]::Match([System.IO.File]::ReadAllText($Path), '(?m)^\s*#\s*define\s+NVME98LS_VERSION\s+(\d+)\b')
+    if (-not $m.Success) { return "" }
+    return $m.Groups[1].Value
+}
+
+function Test-Nvme98Interface {
+    # The pinned build's link-state interface version (NVME98LS_VERSION, or
+    # "none" for a build with no receiver, such as 0.1.x) against the header
+    # xhci98 compiles against; and, where the release carries its header, the
+    # two byte for byte. Returns "" when they agree, else why not.
+    param($Release, [string]$Pinned, [string]$HeaderPath)
+    if ($Pinned -notmatch '^(none|\d+)$') {
+        throw "-Nvme98InterfaceVersion is the pinned build's NVME98LS_VERSION (a number), or 'none' for a build with no link-state receiver (0.1.x)."
+    }
+    $have = ($HeaderPath -ne "") -and (Test-Path -LiteralPath $HeaderPath -PathType Leaf)
+    $ours = if ($have) { Get-Nvme98HeaderVersion -Path $HeaderPath } else { "" }
+    if ($have -and $ours -eq "") {
+        return "'$HeaderPath' defines no NVME98LS_VERSION."
+    }
+    if ($null -ne $Release.Header) {
+        if (-not $have) {
+            return "the nvme98 $($Release.Version) release carries $($script:Nvme98ReleaseHeader), and xhci98 has no '$HeaderPath' to compare it with."
+        }
+        $a = [System.IO.File]::ReadAllBytes($Release.Header)
+        $b = [System.IO.File]::ReadAllBytes($HeaderPath)
+        if ([Convert]::ToBase64String($a) -ne [Convert]::ToBase64String($b)) {
+            return "$($script:Nvme98ReleaseHeader) of the nvme98 $($Release.Version) release is not byte for byte '$HeaderPath'."
+        }
+        $theirs = Get-Nvme98HeaderVersion -Path $Release.Header
+        if ($Pinned -ne $theirs) {
+            return "the nvme98 $($Release.Version) release's header declares interface version '$theirs', and -Nvme98InterfaceVersion pins '$Pinned'."
+        }
+    }
+    if ($Pinned -eq "none") {
+        if ($have) {
+            return "xhci98 compiles against nvme98cm.h interface version $ours ('$HeaderPath'), and nvme98 $($Release.Version) is pinned as having no link-state receiver ('none')."
+        }
+        return ""
+    }
+    if (-not $have) {
+        return "nvme98 $($Release.Version) is pinned at interface version $Pinned, and xhci98 has no '$HeaderPath' (it compiles against no nvme98 interface)."
+    }
+    if ($ours -ne $Pinned) {
+        return "nvme98 $($Release.Version) is pinned at interface version $Pinned, and '$HeaderPath' declares NVME98LS_VERSION $ours."
+    }
+    return ""
+}
+
+function Resolve-Nvme98Input {
+    # The packaging scripts' one entry point: $null when no nvme98 input was
+    # named (the package is built as before, with no nvme98), else the
+    # verified release with its interface verdict. The four pins go
+    # together; a mismatch of the interface is refused unless -Allow, and the
+    # override is reported, never silent.
+    param([string]$Version, [string]$Dir, [string]$SumsSha256, [string]$InterfaceVersion,
+          [string]$HeaderPath, [switch]$Allow)
+    $named = @(@($Version, $Dir, $SumsSha256, $InterfaceVersion) | Where-Object { $_ -ne "" })
+    if ($named.Count -eq 0) {
+        if ($Allow) { throw "-Nvme98AllowInterfaceMismatch was given with no nvme98 input to apply it to." }
+        return $null
+    }
+    if ($named.Count -ne 4) {
+        throw "the bundled nvme98 build is pinned explicitly: -Nvme98Version, -Nvme98Dir, -Nvme98SumsSha256 and -Nvme98InterfaceVersion go together, and only $($named.Count) of them were given."
+    }
+    $release = Assert-Nvme98Release -Dir $Dir -Version $Version -SumsSha256 $SumsSha256
+    $why = Test-Nvme98Interface -Release $release -Pinned $InterfaceVersion -HeaderPath $HeaderPath
+    if ($why -ne "" -and -not $Allow) {
+        throw "the nvme98 interface does not match: $why Bundle a build whose interface matches, or pass -Nvme98AllowInterfaceMismatch to bundle it anyway (the override is logged)."
+    }
+    $release | Add-Member -NotePropertyName Interface -NotePropertyValue $InterfaceVersion
+    $release | Add-Member -NotePropertyName Mismatch -NotePropertyValue $why
+    $release | Add-Member -NotePropertyName Overridden -NotePropertyValue ($why -ne "")
+    return $release
+}
