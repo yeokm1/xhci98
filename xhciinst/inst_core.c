@@ -1322,13 +1322,23 @@ const INST_VALUE instValues[] = {
       "only, 2 polling always, 3 message-signalled only)",
       "1 and 3 refuse to start a controller Windows gives no line or no "
       "message (Code 10).", 0xAUL },
-    { "XhciPollFineTimer", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x3UL, 0x3UL,
+    /* Owner, 2026-10-15: never asked (Asked 0); /set Name=Value only. */
+    { "XhciPollFineTimer", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x0UL, 0x3UL,
       "a finer system clock while the controller is polled (0 off, 1 on)",
       NULL, 0 },
-    { "XhciSelectiveSuspend", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL,
+    { "XhciSelectiveSuspend", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
       0x3UL, "put idle USB devices to sleep (0 off, 1 on)",
       "no real machine has been read with it on: leave it off unless you are "
       "testing it.", 0x2UL },
+    /* Owner, 2026-10-15: asked on 98 SE and ME only, default off; on is
+     * tools\silent\silent-on.bat's effect (the SILENT.REG list, then the
+     * switch), off silent-off.bat's (the switch, the list left). */
+    { "XhciSilentInstall", INST_INF_XHCI, INST_APPLY_9X_XHCI, 0x3UL, 0x3UL,
+      "install hubs, boot keyboards and mice and Bulk-Only storage with no "
+      "Add New Hardware\n  wizard (0 off, 1 on)",
+      "turn it on only once each listed class's drivers have been installed "
+      "at least\n  once: otherwise 98 SE asks for its CD, with no wizard. "
+      "Restart Windows after\n  changing it.", 0 },
     { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3UL, 0x3UL,
       "Bulk-Only instead of UAS for a disk that offers both (0 UAS where "
       "offered, 1 Bulk-Only)",
@@ -1365,6 +1375,9 @@ int inst_value_applies(int index, const INST_ENV *env)
     if (index < 0 || index >= instValueCount) {
         return 0;
     }
+    if (instValues[index].Asked == 0) {
+        return 0;   /* settable with /set only, never asked */
+    }
     switch (instValues[index].Apply) {
     case INST_APPLY_ANY_XHCI:
         return env->AnyXhci ? 1 : 0;
@@ -1374,6 +1387,8 @@ int inst_value_applies(int index, const INST_ENV *env)
         return (env->Nt && env->AnyXhci) ? 1 : 0;
     case INST_APPLY_CM:
         return env->CmNhi ? 1 : 0;
+    case INST_APPLY_9X_XHCI:
+        return (!env->Nt && env->AnyXhci) ? 1 : 0;
     default:
         return 0;
     }
@@ -1402,6 +1417,9 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
         return 0;
     }
     mask = instValues[index].Settable;
+    if (instValues[index].Apply == INST_APPLY_9X_XHCI && env->Nt) {
+        return 0;   /* a 98 SE and ME value: /set refuses it on NT */
+    }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {
         mask &= ~0x8UL;

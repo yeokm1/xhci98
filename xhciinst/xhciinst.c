@@ -1789,6 +1789,112 @@ static void ask_values(void)
     }
 }
 
+#define INST_SILENT_KEY "System\\CurrentControlSet\\Services\\USB\\SilentClasses"
+
+/* silent-on.bat's first half (owner, 2026-10-15): the package's own
+ * tools\silent\SILENT.REG - the single source of the list - merged into
+ * HKLM\System\CurrentControlSet\Services\USB\SilentClasses, and every value
+ * read back as written. 1 when the list is in place; 0 refuses the switch. */
+static int silent_list_merge(void)
+{
+    char path[INST_PATH_CHARS];
+    char *text;
+    char *p;
+    char *nl;
+    char *q;
+    char name[32];
+    unsigned char data[64];
+    unsigned char back[64];
+    DWORD n;
+    DWORD bn;
+    DWORD type;
+    HKEY k;
+    int in = 0;
+    int values = 0;
+    int ok = 1;
+
+    join(path, sizeof(path), root, "tools\\silent\\SILENT.REG");
+    text = read_file(path, NULL);
+    if (text == NULL) {
+        out("%s cannot be read: the silent install is not turned on.\n", path);
+        return 0;
+    }
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_SILENT_KEY, 0, NULL, 0,
+                        KEY_SET_VALUE | KEY_QUERY_VALUE, NULL, &k, NULL) !=
+        ERROR_SUCCESS) {
+        out("The SilentClasses list cannot be opened: the silent install is "
+            "not turned on.\n");
+        free(text);
+        return 0;
+    }
+    for (p = text; *p != '\0' && ok; p = nl) {
+        nl = strchr(p, '\n');
+        if (nl == NULL) {
+            nl = p + strlen(p);
+        } else {
+            *nl++ = '\0';
+        }
+        if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+            p[strlen(p) - 1] = '\0';
+        }
+        if (p[0] == '[') {
+            in = inst_eq(p, "[HKEY_LOCAL_MACHINE\\" INST_SILENT_KEY "]");
+            continue;
+        }
+        if (!in || p[0] != '"') {
+            continue;
+        }
+        /* "name"=hex:aa,bb,... */
+        q = strchr(p + 1, '"');
+        if (q == NULL || (size_t)(q - p - 1) >= sizeof(name) ||
+            strncmp(q, "\"=hex:", 6) != 0) {
+            ok = 0;
+            break;
+        }
+        memcpy(name, p + 1, (size_t)(q - p - 1));
+        name[q - p - 1] = '\0';
+        n = 0;
+        for (q += 6; *q != '\0'; ) {
+            unsigned int b;
+            if (n >= sizeof(data) || sscanf(q, "%2x", &b) != 1) {
+                ok = 0;
+                break;
+            }
+            data[n++] = (unsigned char)b;
+            q += 2;
+            if (*q == ',') {
+                q++;
+            } else if (*q != '\0') {
+                ok = 0;
+                break;
+            }
+        }
+        if (!ok || n == 0) {
+            ok = 0;
+            break;
+        }
+        bn = sizeof(back);
+        if (RegSetValueExA(k, name, 0, REG_BINARY, data, n) != ERROR_SUCCESS ||
+            RegQueryValueExA(k, name, NULL, &type, back, &bn) != ERROR_SUCCESS ||
+            type != REG_BINARY || bn != n || memcmp(back, data, n) != 0) {
+            ok = 0;
+            break;
+        }
+        values++;
+    }
+    RegCloseKey(k);
+    free(text);
+    if (!ok || values == 0) {
+        out("The SilentClasses list did not read back as %s: the silent "
+            "install is not\nturned on (the list may be merged in part).\n",
+            path);
+        return 0;
+    }
+    out("The SilentClasses list of SILENT.REG is in place (%d values).\n",
+        values);
+    return 1;
+}
+
 static void write_values(void)
 {
     int v;
@@ -1801,6 +1907,7 @@ static void write_values(void)
     LONG w;
 
     for (v = 0; v < instValueCount; v++) {
+        int listDone = 0;
         if (!answerSet[v]) {
             continue;
         }
@@ -1817,6 +1924,21 @@ static void write_values(void)
                 out("%s stays %lu on %s.\n", instValues[v].Name,
                     (unsigned long)now, d->Desc);
                 continue;
+            }
+            /* The silent install on: the list first, then the switch, as
+             * silent-on.bat; off is the switch alone, the list left, as
+             * silent-off.bat. Never on NT (/set refuses it there). */
+            if (inst_eq(instValues[v].Name, "XhciSilentInstall")) {
+                if (envNow.Nt) {
+                    continue;
+                }
+                if (answerValue[v] == 1 && listDone == 0) {
+                    listDone = silent_list_merge() ? 1 : -1;
+                }
+                if (answerValue[v] == 1 && listDone < 0) {
+                    flagFailed = 1;
+                    continue;
+                }
             }
             driver_key_path(d, path, sizeof(path));
             val = (DWORD)answerValue[v];
@@ -1836,6 +1958,7 @@ static void write_values(void)
                 flagFailed = 1;
                 continue;
             }
+            flagChanged = 1;
             if (r > 0) {
                 out("%s set from %lu to %lu on %s.\n", instValues[v].Name,
                     (unsigned long)now, (unsigned long)val, d->Desc);
@@ -2219,6 +2342,7 @@ static int make_local_copy(void)
         local_remove(work);
         return 0;
     }
+    flagChanged = 1;
     out("Copied %d files to %s; the install takes them from there.\n", c.Count,
         srcDir);
     return 1;
@@ -3090,7 +3214,9 @@ static int wait_installs(void)
     out("\nWindows is still installing something - usually a Found New "
         "Hardware window\nwaiting for an answer. Finish or cancel those "
         "windows, then run INSTALL.BAT\nagain: it goes on from here. (The "
-        "tool does not install under a wizard.)\n");
+        "tool does not install under a wizard.) If no such\nwindow is open "
+        "(Windows 2000 keeps a cancelled one pending until the next\nstart), "
+        "restart Windows first.\n");
     flagSteps = 1;
     return 0;
 }
@@ -3413,8 +3539,10 @@ static int nothing_pending(void)
         return 1;
     }
     out("Windows is %s - usually a Found New Hardware window\nwaiting for an "
-        "answer. Finish or cancel it, then run INSTALL.BAT again.\nNothing was "
-        "changed.\n", r == WAIT_TIMEOUT ? "installing something" :
+        "answer. Finish or cancel it, then run INSTALL.BAT again.\nIf no such "
+        "window is open (Windows 2000 keeps a cancelled one pending until\n"
+        "the next start), restart Windows first. Nothing was changed.\n",
+        r == WAIT_TIMEOUT ? "installing something" :
                      "perhaps installing something (the question failed)");
     flagSteps = 1;
     return 0;
@@ -3673,6 +3801,7 @@ static int devicepath_update(const char *addDir)
     }
     logonly("DevicePath now: %s\n", newList);
     out("DevicePath now reads: %s\n", newList);
+    flagChanged = 1;
     return 1;
 }
 static void steps_9x(const char *dir)
@@ -4633,6 +4762,16 @@ static int finish(int code)
 {
     char line[8];
 
+    /* Owner, 2026-10-15: a restart after every change, on every system,
+     * whatever Windows itself says; the exit code still tells whether
+     * Windows (or this tool) found a restart necessary. */
+    if (!opts.SelfTest) {
+        if (flagChanged && !opts.List) {
+            out("\nChanges were made. Please restart Windows now.\n");
+        } else {
+            out("\nNo changes were made.\n");
+        }
+    }
     out("\nExit code %d. The log is %s.\n", code, logPath[0] ? logPath : "(none)");
     logonly("exit %d\n", code);
     if (logFile != NULL) {

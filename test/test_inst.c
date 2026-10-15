@@ -246,8 +246,11 @@ static void test_real_infs(void)
               instValues[i].Name);
         CHECK_EQ(d86, d64, instValues[i].Name);
         CHECK_EQ(d86, 0, instValues[i].Name);
-        CHECK((instValues[i].Asked & (1UL << d86)) != 0,
+        CHECK(instValues[i].Asked == 0 ||
+              (instValues[i].Asked & (1UL << d86)) != 0,
               "the default is an offered answer");
+        CHECK((instValues[i].Settable & (1UL << d86)) != 0,
+              "the default is a value /set takes");
     }
 
     free(x86);
@@ -620,7 +623,13 @@ static void test_values(void)
     CHECK(!inst_value_applies(psw, &e), "98, no Intel 7-9: no port switch");
     CHECK(inst_value_applies(im, &e), "98: interrupt mode");
     CHECK(!inst_value_applies(ft, &e), "98: no fine timer");
-    CHECK(inst_value_applies(ss, &e), "98: selective suspend");
+    /* Owner, 2026-10-15: the fine timer and selective suspend are never
+     * asked; /set Name=Value still sets them. */
+    CHECK(!inst_value_applies(ss, &e), "98: selective suspend not asked");
+    CHECK(inst_value_set("XhciSelectiveSuspend=1", &idx, &v) == 1 &&
+          idx == ss && v == 1, "/set still sets selective suspend");
+    CHECK(inst_value_set("XhciPollFineTimer=1", &idx, &v) == 1 &&
+          idx == ft && v == 1, "/set still sets the fine timer");
     CHECK(!inst_value_applies(cm, &e), "no NHI: no cm values");
     CHECK_EQ(inst_value_asked_mask(im, &e), 0x7, "98: interrupt mode 0-2");
     e.PswController = 1;
@@ -629,7 +638,28 @@ static void test_values(void)
     CHECK(inst_value_applies(cm, &e), "an NHI: cm values");
     e = env(1, 5, 0, INST_ARCH_X86);
     e.AnyXhci = 1;
-    CHECK(inst_value_applies(ft, &e), "2000: fine timer");
+    CHECK(!inst_value_applies(ft, &e), "2000: the fine timer not asked");
+    CHECK(!inst_value_applies(ss, &e), "2000: selective suspend not asked");
+    /* Owner, 2026-10-15: the silent install is asked on 98 SE and ME only,
+     * and /set refuses it on NT. */
+    {
+        int si = inst_value_find("XhciSilentInstall");
+        INST_ENV e9 = env(0, 4, 10, INST_ARCH_X86);
+        e9.AnyXhci = 1;
+        CHECK(si >= 0, "the silent install's row");
+        CHECK(!inst_value_applies(si, &e), "2000: the silent install not asked");
+        CHECK_EQ(inst_value_set_mask(si, &e), 0, "2000: /set refuses it");
+        CHECK(inst_value_applies(si, &e9), "98 SE: the silent install asked");
+        CHECK_EQ(inst_value_asked_mask(si, &e9), 0x3, "98 SE: 0 and 1");
+        CHECK_EQ(inst_value_set_mask(si, &e9), 0x3, "98 SE: /set takes 0 and 1");
+        e9.Major = 4;
+        e9.Minor = 90;
+        CHECK(inst_value_applies(si, &e9), "ME: the silent install asked");
+        e9.AnyXhci = 0;
+        CHECK(!inst_value_applies(si, &e9), "no controller: not asked");
+        CHECK(instValues[si].Caution != NULL &&
+              instValues[si].CautionMask == 0, "its caveat shown every time");
+    }
     CHECK_EQ(inst_value_asked_mask(im, &e), 0x7, "2000: no MSI");
     e = env(1, 6, 1, INST_ARCH_AMD64);
     e.AnyXhci = 1;

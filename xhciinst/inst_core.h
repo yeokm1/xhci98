@@ -254,6 +254,7 @@ int inst_testsigning(const char *options);
 #define INST_APPLY_PSW      1
 #define INST_APPLY_NT_XHCI  2
 #define INST_APPLY_CM       3
+#define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 
 typedef struct _INST_VALUE {
     const char *Name;
@@ -277,7 +278,8 @@ extern const int instValueCount;
 /* The index of a value by name (without case), or -1. */
 int inst_value_find(const char *name);
 
-/* 1 when the question is shown on this system with this hardware. */
+/* 1 when the question is shown on this system with this hardware (never
+ * for a value whose Asked mask is 0: /set only). */
 int inst_value_applies(int index, const INST_ENV *env);
 
 /* The values offered when asked on this system (the Asked mask narrowed:

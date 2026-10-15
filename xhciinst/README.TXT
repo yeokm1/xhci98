@@ -86,11 +86,16 @@ Before it changes anything it asks about a few of the driver's options,
 each only where the hardware it affects is present, showing the value now,
 the default and the values allowed; Enter keeps the value. They are
 XhciIntelPortSwitch (only with an Intel 7-, 8- or 9-series controller),
-XhciInterruptMode, XhciPollFineTimer (Windows 2000 and later),
-XhciSelectiveSuspend, XhciForceBulkOnly, and XhciCmMode, XhciCmApprove and
+XhciInterruptMode, XhciForceBulkOnly, XhciSilentInstall (Windows 98 SE and
+ME only, off by default: on does what tools\silent\silent-on.bat does,
+and it says first when to turn it on), and XhciCmMode, XhciCmApprove and
 XhciCmSafeEject (only with a Thunderbolt or USB4 controller). The release
 notes, "Registry settings", say what each does. An answer applies from the
-driver's next start.
+driver's next start. XhciPollFineTimer and XhciSelectiveSuspend are never
+asked; /set Name=Value still sets them.
+
+At the end it says "Changes were made. Please restart Windows now." when
+it changed anything, and "No changes were made." when it did not.
 
 Uninstall
 ---------

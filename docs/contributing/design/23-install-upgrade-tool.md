@@ -297,7 +297,11 @@ if empty.
 5. Ask Windows whether an installation is in progress
    (`CMP_WaitNoPendingInstallEvents` with no wait, Microsoft's "Checking
    for In-Progress Installations"): only "none" goes on; "pending" or a
-   failed question stops the run with nothing changed (exit 4). Then copy
+   failed question stops the run with nothing changed (exit 4). The
+   message also says to restart first when no wizard is open: on Windows
+   2000 a cancelled Found New Hardware wizard stays pending until the next
+   start (read on the 2000 leg, 2026-10-15: a windowless `rundll32.exe`,
+   the answer "pending" at every run). Then copy
    the package locally (section 4.4) and pre-stage every INF from the copy
    whose service group is not refused (sections 5.4 and 5.6); with
    `/restage`, replace a stored package the trap holds (section 5.7).
@@ -888,6 +892,16 @@ set, else 4 when steps is set, else 3 when restart is set, else 0. The
 console says every flag that is set, so a 2 or a 4 that also needs a
 restart says so. `INSTALL.BAT` passes the code on.
 
+**The last line before the exit code** (owner, 2026-10-15): when the run
+changed anything - a driver installed, updated or removed, a filter added
+or removed, an INF staged or removed, the local copy or `DevicePath`
+written, a registry value written (the silent install included) - "Changes
+were made. Please restart Windows now.", on every system, whether or not
+Windows itself asked for a restart; when it changed nothing (`/list`, every
+answer kept, a refusal) "No changes were made." The exit code is not
+changed by it: 3 still says that Windows, or this tool's own result check,
+found the restart necessary.
+
 ### 7.5 The log
 
 Every run but `/list` appends to `XHCIINST.LOG` at the root of the system
@@ -915,8 +929,9 @@ user-visible effect, off or on by default for a reason the user can judge
 |---|---|---|---|---|---|
 | `XhciIntelPortSwitch` | `xhci98.inf`, the controller's | a present controller passes the driver's `XhciPswGate` (Intel 7-, 8- and 9-series, C610) | 0, 1 | 0, 1, 2 (2 is the README's "at your own risk" setting for other Intel controllers) | route the shared connectors from the EHCI controller to this driver |
 | `XhciInterruptMode` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1, 2; 3 on Vista and 7 only | 0, 1, 2; 3 on Vista and 7 only (it fails the start elsewhere) | automatic, line only, polling always, message only |
-| `XhciPollFineTimer` | `xhci98.inf`, the controller's | 2000 onward | 0, 1 | 0, 1 | a finer system clock while polling |
-| `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1 | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
+| `XhciPollFineTimer` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | a finer system clock while polling |
+| `XhciSelectiveSuspend` | `xhci98.inf`, the controller's | never (owner, 2026-10-15) | - | 0, 1 | put idle devices to sleep (off by default; read on the release notes' terms) |
+| `XhciSilentInstall` | `xhci98.inf`, the controller's | 98 SE and ME with an xHCI controller (owner, 2026-10-15); never on 2000 and later | 0, 1 | 0, 1 on 98 and ME; refused on NT | install hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard; on is `tools\silent\silent-on.bat`'s effect, off `silent-off.bat`'s (section 8.4) |
 | `XhciForceBulkOnly` | `xhci98.inf`, the controller's | any xHCI controller | 0, 1 | 0, 1 | Bulk-Only instead of UAS for a disk that offers both, from its next connection; a UAS-only disk is not affected |
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
@@ -928,9 +943,10 @@ restart the user is told about), the fourteen Linux quirk values (record
 interval, `XhciMaxTransferKB`, `XhciWideMap`, `XhciFirstEnum*`,
 `XhciIntelIrqRoute` (a repair that is on by default and turned off only to
 diagnose), `XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`,
-`XhciAccept096`, `XhciUsb2HubSpeedFallback`, and `XhciSilentInstall`,
-which needs its class list beside it (`tools\silent\`'s batch files set
-both). Any of them stays settable by hand, as today.
+`XhciAccept096` and `XhciUsb2HubSpeedFallback`; and, by the owner's
+decision of 2026-10-15, `XhciPollFineTimer` and `XhciSelectiveSuspend`,
+which stay settable with `/set Name=Value` only, their INF defaults
+unchanged. Any of them stays settable by hand, as today.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
@@ -951,8 +967,9 @@ there; `/set` may still set any value, within the system's allowed set:
   the driver's own list, compiled in from `src\xhci_psw.c` (section 3);
   the `XhciCm*` values when a present device is matched by `xhcicm.inf`'s
   models for the system (section 5.2).
-- **System**: `XhciPollFineTimer` from Windows 2000 on (98 and ME read it
-  and do nothing); `XhciInterruptMode`'s value 3 on Vista and 7 only.
+- **System**: `XhciInterruptMode`'s value 3 on Vista and 7 only;
+  `XhciSilentInstall` on 98 SE and ME only (the driver never reads it on
+  2000 and later, and `/set` refuses it there).
 - **The configuration owner**: an `xhci98.inf` value belongs to the
   controllers' driver keys - the controller install sections are the ones
   that write it, and a root hub, hub or composite entry bound to the same
@@ -970,7 +987,7 @@ present ids, and is host-tested row by row (section 10).
 Per value, once, for every device it applies to:
 
 ```
-XhciSelectiveSuspend - put idle USB devices to sleep (0 off, 1 on)
+XhciForceBulkOnly - Bulk-Only instead of UAS for a disk that offers both
   now: 0 (xHCI98 USB 3.x eXtensible Host Controller)
   default: 0     allowed: 0, 1
   new value [Enter keeps the value now]:
@@ -981,9 +998,12 @@ install's `AddReg` then writes the default), or "new install: the default".
 A value with a caution shows it under the question, and `/set` prints it
 when it sets the value the caution is about: `XhciIntelPortSwitch` 2 writes
 registers of unknown meaning on an Intel controller without the switch
-registers (release notes, "Value 2"); `XhciSelectiveSuspend` 1 has not been
-read on a real machine, "leave it off unless you are testing it";
-`XhciForceBulkOnly` is read as each device is connected, and on Windows
+registers (release notes, "Value 2"); `XhciSelectiveSuspend` 1 (set with
+`/set` only) has not been read on a real machine, "leave it off unless you
+are testing it"; `XhciSilentInstall`, before its question every time: turn
+it on only once each listed class's drivers have been installed at least
+once, otherwise 98 SE asks for its CD with no wizard, and restart Windows
+after changing it; `XhciForceBulkOnly` is read as each device is connected, and on Windows
 2000 and later a disk already installed keeps its driver until it is
 uninstalled in Device Manager and plugged in again; `XhciInterruptMode` 1
 and 3 refuse a controller Windows gives no line or no message.
@@ -1015,6 +1035,18 @@ so on a new install, before the confirmation, and suggests disconnecting
 the dock until the restart when the answer is 0 (decision D12).
 `XhciForceBulkOnly` is read as each device is enumerated instead
 (release notes, "XhciForceBulkOnly"), with the caution of section 8.3.
+
+**The silent install** (owner, 2026-10-15) does exactly what the
+package's `tools\silent\` scripts do, with their files as the one source:
+on (an answer of 1, or `/set XhciSilentInstall=1`, on 98 SE and ME) first
+merges the package's own `tools\silent\SILENT.REG` into
+`HKLM\System\CurrentControlSet\Services\USB\SilentClasses` and reads
+every value back, and only then writes the switch at 1 on each
+controller's driver key, as `silent-on.bat` does; a list that cannot be
+read or does not read back leaves the switch unchanged (exit 2). Off (an
+explicit 0 when the switch is on) writes the switch at 0 and leaves the
+list, as `silent-off.bat` does. Enter keeps the state; the default answer
+is off.
 
 ## 9. Uninstall (owner, 2026-10-15)
 

@@ -792,16 +792,22 @@ removed, and `tools\xhcicln\` lists and removes them if you want ("From
 **The options it asks about** are a few of the "Registry settings" below,
 each only where the hardware or the Windows it affects is present:
 `XhciIntelPortSwitch` (only with an Intel 7-, 8- or 9-series controller),
-`XhciInterruptMode`, `XhciPollFineTimer` (Windows 2000 and later),
-`XhciSelectiveSuspend`, `XhciForceBulkOnly`, and `XhciCmMode`,
-`XhciCmApprove` and `XhciCmSafeEject` (only with a Thunderbolt or USB4
-controller). Each shows the value now, the default and the values
-allowed, with a warning where the setting has one; Enter keeps the value,
-and only an answer changes it. An answer applies from the driver's next
-start: on a new Thunderbolt install the first start runs with the
-defaults, so devices connected before the restart are approved.
+`XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (Windows 98
+SE and ME only, off by default; on does exactly what
+`tools\silent\silent-on.bat` does, off what `silent-off.bat` does, and the
+question first says to turn it on only once each listed class's drivers
+have been installed at least once, and to restart after), and
+`XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` (only with a
+Thunderbolt or USB4 controller). Each shows the value now, the default
+and the values allowed, with a warning where the setting has one; Enter
+keeps the value, and only an answer changes it. An answer applies from
+the driver's next start: on a new Thunderbolt install the first start runs
+with the defaults, so devices connected before the restart are approved.
 `/defaults` asks nothing, and `/set Name=Value` sets a value without
-asking.
+asking. `XhciPollFineTimer` and `XhciSelectiveSuspend` are never asked;
+`/set` still sets them. **At the end** it says "Changes were made. Please
+restart Windows now." whenever it changed anything, on every Windows, and
+"No changes were made." when it did not.
 
 **Switches**: `/list` shows what it would do and changes nothing (no log
 either); `/yes` skips the confirmation; `/uninstall` removes the drivers
