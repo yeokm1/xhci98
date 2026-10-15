@@ -3763,7 +3763,11 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     }
 
     p->State = TBT_U4_TUNNELLING;
+    /* Never on a port whose PCIe tunnel was ejected (TbtU4EjectPcie): only
+     * an unplug and re-plug clears that (record 22 section 10.4), not a
+     * rebuild of its USB3 tunnel at resume. */
     pcieWanted = (BOOLEAN)(cm->Config.Approve && p->PcieDown != 0 &&
+                           !p->Ejected &&
                            tbtU4FirstOf(&p->Dev, TBT_ADP_TYPE_PCIE_UP) != 0);
     if (pcieWanted) {
         rc = tbtU4PcieTunnel(cm, p, gen);

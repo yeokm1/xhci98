@@ -3182,6 +3182,25 @@ static void test_eject_pcie(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "eject-pcie: the unplug EMPTY");
     CHECK(hostClean(&g_fab, 1), "eject-pcie: the host side clean, USB3 included");
     CHECK_EQ(TbtU4EjectPcie(&g_cm, 1), TBT_E_PARAM, "eject-pcie: nothing to eject on an empty port");
+
+    /* Ejected, then a sleep in which the router lost its configuration:
+     * the USB3 obligation rebuilt, the ejected PCIe tunnel not. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    (void)TbtU4EjectPcie(&g_cm, 1);
+    (void)countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN);
+    TbtU4Suspend(&g_cm);
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    g_fab.RxQCount = 0;
+    (void)TbtU4Resume(&g_cm);
+    CHECK(p->Usb3.Up, "eject-pcie, resume: the USB3 tunnel rebuilt");
+    CHECK(!p->Pcie.Up && !fabPcieUp(&g_fab, 1), "eject-pcie, resume: PCIe still down");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "eject-pcie, resume: no PCIe tunnel up");
 }
 
 int main(void)
