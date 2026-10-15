@@ -265,6 +265,36 @@ static void test_ids(void)
     CHECK(!CmPortsIdLocation(bridge, 20, &v), "the length bounds the id");
     CHECK(!CmPortsIdLocation(NULL, 64, &v), "NULL is refused");
 
+    {
+        ULONG path[CM_PORTS_PATH_MAX];
+        ULONG n;
+        static const char port[] =
+            "PCI\\VEN_8086&DEV_15C0&SUBSYS_00000000&REV_01\\08083000";
+        static const char nhi[] =
+            "PCI\\VEN_8086&DEV_15BF&SUBSYS_22B017AA&REV_01\\0000083000";
+
+        n = 0;
+        CHECK(CmPortsIdPath(port, sizeof(port), path, CM_PORTS_PATH_MAX, &n),
+              "98 SE's path form parses (02:01.0, read on the emulator)");
+        CHECK(n == 4 && path[0] == 0x08 && path[1] == 0x08 && path[2] == 0x30 &&
+              path[3] == 0x00,
+              "02:01.0: its devfn 08, the upstream port's 08, the root bridge's 30, root bus 00");
+        CHECK(CmPortsIdPath(nhi, sizeof(nhi), path, CM_PORTS_PATH_MAX, &n) && n == 5 &&
+              path[0] == 0x00 && path[1] == 0x00, "03:00.0 behind 02:00.0");
+        CHECK(CmPortsIdPath(hot, sizeof(hot), path, CM_PORTS_PATH_MAX, &n) && n == 3 &&
+              path[0] == 0x08 && path[1] == 0x28,
+              "the experiment's hot-added 082800 is the same form");
+        CHECK(!CmPortsIdPath(bridge, sizeof(bridge), path, CM_PORTS_PATH_MAX, &n),
+              "the BUS_ form is not a path");
+        CHECK(!CmPortsIdPath("PCI\\VEN_8086&DEV_15C0\\08083", 64, path, CM_PORTS_PATH_MAX, &n),
+              "an odd digit count is refused");
+        CHECK(!CmPortsIdPath("PCI\\VEN_8086&DEV_15C0\\08", 64, path, CM_PORTS_PATH_MAX, &n),
+              "one element is refused");
+        CHECK(!CmPortsIdPath("PCI\\VEN_8086&DEV_15C0\\0808300G", 64, path, CM_PORTS_PATH_MAX, &n),
+              "a non-digit is refused");
+        CHECK(!CmPortsIdPath(port, sizeof(port), path, 3, &n),
+              "a path longer than the room is refused");
+    }
     CHECK(CmPortsIdVenDev(hot, sizeof(hot), &v), "the NVMe's vendor and device parse");
     CHECK_EQ(v, CM_PORTS_ID(0x144D, 0xA808), "144D:A808");
     CHECK(CmPortsIdVenDev(lower, sizeof(lower), &v), "case is ignored");

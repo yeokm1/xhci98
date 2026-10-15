@@ -69,6 +69,22 @@ ULONG CmPortsUnpairedAt(ULONG n);
  * is ignored throughout.
  */
 BOOLEAN CmPortsIdLocation(const char *id, ULONG chars, PULONG bdf);
+
+/*
+ * The other instance form Windows 98 SE gives a PCI function behind a
+ * PCI-to-PCI bridge (read on the emulator's Alpine Ridge tree, 2026-10-15:
+ * "083000" for 01:01.0 behind the root bridge 00:06.0, "08083000" for
+ * 02:01.0 behind it, "0000083000" for 03:00.0 behind 02:00.0): the
+ * function's path, two hexadecimal digits per element, leaf first - its own
+ * device/function byte (device in 7:3, function in 2:0), then each parent
+ * bridge's, up to the bridge on the root bus, then the root bus number.
+ * CmPortsIdPath: TRUE with the elements in path[0..*count-1] when the
+ * instance part is an even number (four or more) of hexadecimal digits and
+ * nothing else; FALSE otherwise. At most `capacity` elements.
+ */
+#define CM_PORTS_PATH_MAX   16UL
+BOOLEAN CmPortsIdPath(const char *id, ULONG chars, PULONG path,
+                      ULONG capacity, PULONG count);
 BOOLEAN CmPortsIdVenDev(const char *id, ULONG chars, PULONG id32);
 
 /*

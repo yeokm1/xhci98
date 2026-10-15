@@ -260,12 +260,12 @@ typedef struct _CM_FILTER {
     ULONG RelGen;           /* bumped when the reported population changes */
     ULONG EjectSeen;        /* an orderly child removal since the last
                                eject was posted                           */
-    ULONG EjectEpoch;       /* advanced by every tunnel change            */
+    ULONG Unsettled;        /* a tunnel change since its last BusRelations */
 
     /* ---- child ---- */
     struct _CM_FILTER *Bridge;
     ULONG QueryRemoved;     /* a query-remove not cancelled                */
-    ULONG QueryEpoch;       /* the bridge's EjectEpoch at the child's
+    ULONG QueryEpoch;       /* the bridge's RelGen at the child's
                                creation: the connection it belongs to     */
     ULONG SurpriseRemoved;
 } CM_FILTER, *PCM_FILTER;

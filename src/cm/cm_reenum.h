@@ -164,6 +164,9 @@ typedef struct _CM_REENUM_PORT {
     ULONG EjectSerial;      /* the eject's bridge publication and          */
     ULONG EjectGen;         /* population generation, checked at hand-off */
     ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
+    ULONG PathRead;         /* 98: Path read (cmPciPath)                  */
+    ULONG PathCount;        /* 98: its elements, 0 for none               */
+    ULONG Path[16];         /* 98: the instance path, cm_ports.h's form   */
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -233,6 +236,7 @@ typedef struct _CM_REENUM {
     ULONG CfgmgOwed;        /* the route opens at the first Action or
                                Service, after the NHI's start completed  */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
+    ULONG DebtPending;      /* a tunnel change came while it was empty    */
     ULONG RediscoverAt;     /* NowMs of the last                          */
     ULONG Known[XHCI_TBT_MAX_TUNNELS][CM_REENUM_MAX_KNOWN];
     ULONG KnownCount[XHCI_TBT_MAX_TUNNELS];

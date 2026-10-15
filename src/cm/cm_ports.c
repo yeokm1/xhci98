@@ -283,6 +283,52 @@ BOOLEAN CmPortsIdLocation(const char *id, ULONG chars, PULONG bdf)
     return TRUE;
 }
 
+BOOLEAN CmPortsIdPath(const char *id, ULONG chars, PULONG path,
+                      ULONG capacity, PULONG count)
+{
+    ULONG len;
+    ULONG at;
+    ULONG slash;
+    ULONG n;
+    ULONG hi;
+    ULONG lo;
+
+    if (id == NULL || path == NULL || count == NULL) {
+        return FALSE;
+    }
+    len = cmLen(id, chars);
+    if (!cmAt(id, len, 0, "PCI\\")) {
+        return FALSE;
+    }
+    slash = 0;
+    for (at = 4; at < len; at++) {
+        if (id[at] == '\\') {
+            slash = at;
+            break;
+        }
+    }
+    if (slash == 0) {
+        return FALSE;
+    }
+    at = slash + 1;
+    if (len - at < 4 || ((len - at) & 1UL) != 0 ||
+        (len - at) / 2 > capacity) {
+        return FALSE;
+    }
+    n = 0;
+    while (at < len) {
+        hi = cmHex(id[at]);
+        lo = cmHex(id[at + 1]);
+        if (hi > 15 || lo > 15) {
+            return FALSE;
+        }
+        path[n++] = (hi << 4) | lo;
+        at += 2;
+    }
+    *count = n;
+    return TRUE;
+}
+
 BOOLEAN CmPortsIdVenDev(const char *id, ULONG chars, PULONG id32)
 {
     ULONG len;

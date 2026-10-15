@@ -468,10 +468,17 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
                            (PVOID const *)now, count, isNew);
 
     /* Whether this answer is one an active bridge with safe eject sees:
-     * read before the baseline below can make the bridge active. */
+     * read before the baseline below can make the bridge active. A changed
+     * population starts a new generation (RelGen), the connection the new
+     * children belong to, and invalidates an eject of the old one; the
+     * answer settles the bridge after a tunnel change (Unsettled). */
     KeAcquireSpinLock(&cmRegLock, &irql);
     attach = filter->Published && !filter->Gone && filter->Active &&
              filter->SafeEject != 0;
+    if (fresh != 0 || count != filter->SnapCount) {
+        filter->RelGen++;
+    }
+    filter->Unsettled = 0;
     KeReleaseSpinLock(&cmRegLock, irql);
 
     for (i = 0; i < count; i++) {
@@ -491,13 +498,8 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
     }
 
     /* The snapshot is replaced under the lock, since the eject's
-     * eligibility (cmEjectReady) reads it from the child's removal. A
-     * changed population starts a new generation, which invalidates an
-     * eject posted against the old one. */
+     * eligibility (cmEjectReady) reads it from the child's removal. */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (fresh != 0 || count != filter->SnapCount) {
-        filter->RelGen++;
-    }
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
     }
@@ -540,10 +542,11 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     child->Common.Pdo = pdo;
     child->Outstanding = 1;
     child->Bridge = bridge;
-    /* The connection this child belongs to: the bridge's eject epoch now,
-     * which every tunnel change advances (cmEjectsVoid). */
+    /* The connection this child belongs to: its bridge's population
+     * generation, which only a change of that bridge's own population
+     * advances (CmRegRelations). */
     KeAcquireSpinLock(&cmRegLock, &irql);
-    child->QueryEpoch = bridge->EjectEpoch;
+    child->QueryEpoch = bridge->RelGen;
     KeReleaseSpinLock(&cmRegLock, irql);
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
@@ -606,9 +609,9 @@ VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
-    /* A child created before a tunnel change belongs to the old
+    /* A child of an earlier population of its bridge belongs to an old
      * connection: its removal is never an eject of the current one. */
-    if (ejected && child->QueryEpoch == bridge->EjectEpoch) {
+    if (ejected && child->QueryEpoch == bridge->RelGen) {
         bridge->EjectSeen = 1;
     }
     d = bridge->Owner;
@@ -831,6 +834,103 @@ static ULONG cmNhiLocation(PCM_NHI nhi)
 /* ---- Windows 98: CONFIGMG --------------------------------------------- */
 
 /*
+ * The 98 path of the function at `bdf` (cm_ports.h CmPortsIdPath): its
+ * devfn, then each parent bridge's up to the root bus, then the root bus
+ * number. A parent is the type 1 function whose secondary bus is the
+ * child's bus, found by reading every bus's functions. FALSE where a
+ * parent cannot be found within the path's room. PASSIVE_LEVEL.
+ */
+static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
+{
+    ULONG n;
+    ULONG cur;
+    ULONG bus;
+    ULONG b;
+    ULONG d;
+    ULONG f;
+    ULONG id;
+    ULONG hdr;
+    ULONG buses;
+    ULONG parent;
+
+    n = 0;
+    cur = bdf;
+    while (n < CM_PORTS_PATH_MAX - 1) {
+        path[n++] = cur & 0xFFUL;
+        bus = XHCI_TBT_BDF_BUS(cur);
+        if (bus == 0) {
+            path[n++] = 0;
+            *count = n;
+            return TRUE;
+        }
+        parent = XHCI_TBT_NO_BDF;
+        for (b = 0; b < bus && parent == XHCI_TBT_NO_BDF; b++) {
+            for (d = 0; d < 32UL && parent == XHCI_TBT_NO_BDF; d++) {
+                for (f = 0; f < 8UL; f++) {
+                    if (!cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f), 0, &id)) {
+                        d = 32UL;
+                        break;
+                    }
+                    if (id == 0xFFFFFFFFUL) {
+                        if (f == 0) {
+                            break;
+                        }
+                        continue;
+                    }
+                    if (!cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f),
+                                   XHCI_TBT_CFG_HEADER, &hdr)) {
+                        break;
+                    }
+                    if (XHCI_TBT_HDR_LAYOUT(hdr >> 16) ==
+                            XHCI_TBT_HDR_BRIDGE &&
+                        cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f),
+                                  XHCI_TBT_CFG_BUSES, &buses) &&
+                        ((buses >> 8) & 0xFFUL) == bus) {
+                        parent = XHCI_TBT_BDF(b, d, f);
+                        break;
+                    }
+                    if (f == 0 && ((hdr >> 16) & XHCI_TBT_HDR_MF) == 0) {
+                        break;
+                    }
+                }
+            }
+        }
+        if (parent == XHCI_TBT_NO_BDF) {
+            return FALSE;
+        }
+        cur = parent;
+    }
+    return FALSE;
+}
+
+/* Whether a 98 device id names the bridge at `bdf`, in either instance
+ * form, its expected path given. */
+static BOOLEAN cmIdNames(const char *id, ULONG bdf, const ULONG *want,
+                         ULONG wantCount)
+{
+    ULONG at;
+    ULONG path[CM_PORTS_PATH_MAX];
+    ULONG n;
+    ULONG i;
+
+    if (CmPortsIdLocation(id, CMG_MAX_DEVICE_ID_LEN, &at)) {
+        return (BOOLEAN)(at == bdf);
+    }
+    if (wantCount == 0 ||
+        !CmPortsIdPath(id, CMG_MAX_DEVICE_ID_LEN, path, CM_PORTS_PATH_MAX,
+                       &n) ||
+        n != wantCount) {
+        return FALSE;
+    }
+    for (i = 0; i < n; i++) {
+        if (path[i] != want[i]) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
+/*
  * The walk's diagnostic, once per member: the instance part of a vendor
  * 8086 PCI device id whose location did not parse, as up to three words of
  * four characters, so a reading shows what form Windows 98 gave it.
@@ -881,13 +981,25 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
     ULONG pci;
     ULONG dropped;
     ULONG cr;
+    PULONG want;
+    ULONG wantCount;
     char id[CMG_MAX_DEVICE_ID_LEN + 1];
 
     r = &nhi->Reenum;
+    /* The member's expected path, read once (its parents do not move). */
+    if (!r->Port[index].PathRead) {
+        r->Port[index].PathRead = 1;
+        if (!cmPciPath(r->Port[index].Bdf, r->Port[index].Path,
+                       &r->Port[index].PathCount)) {
+            r->Port[index].PathCount = 0;
+        }
+    }
+    want = r->Port[index].Path;
+    wantCount = r->Port[index].PathCount;
     if (r->Port[index].Devnode != 0 &&
         CmCfgmgDeviceId(&r->Cfgmg, r->Port[index].Devnode, id,
                         sizeof(id)) == CMG_CR_SUCCESS &&
-        CmPortsIdLocation(id, sizeof(id), &at) && at == r->Port[index].Bdf) {
+        cmIdNames(id, r->Port[index].Bdf, want, wantCount)) {
         return r->Port[index].Devnode;
     }
     r->Port[index].Devnode = 0;
@@ -900,11 +1012,12 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
         node = stack[--depth];
         nodes++;
         cr = CmCfgmgDeviceId(&r->Cfgmg, node, id, sizeof(id));
+        if (cr == CMG_CR_SUCCESS &&
+            cmIdNames(id, r->Port[index].Bdf, want, wantCount)) {
+            r->Port[index].Devnode = node;
+            return node;
+        }
         if (cr == CMG_CR_SUCCESS && CmPortsIdLocation(id, sizeof(id), &at)) {
-            if (at == r->Port[index].Bdf) {
-                r->Port[index].Devnode = node;
-                return node;
-            }
             pci++;
         } else if (cr == CMG_CR_SUCCESS && !r->Port[index].WalkLogged) {
             cmLogInstance(nhi, id);
@@ -930,6 +1043,7 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
         CmLogNote(nhi, "cm.reenum.9x.walk.nodes", nodes);
         CmLogNote(nhi, "cm.reenum.9x.walk.pci", pci);
         CmLogNote(nhi, "cm.reenum.9x.walk.dropped", dropped);
+        CmLogNote(nhi, "cm.reenum.9x.walk.path-len", wantCount);
     }
     return 0;
 }
@@ -1061,6 +1175,14 @@ static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
             cr = CmCfgmgQueryRemove(&r->Cfgmg, children[c]);
             CmLogNote(nhi, "cm.reenum.9x.query-remove", cr);
             if (cr != CMG_CR_SUCCESS) {
+                /* A refusal is respected (a driver with open files, the
+                 * usb4-emu handoff's rule): no Remove_SubTree, nothing
+                 * forced, the devnode left as it is and the refusal
+                 * logged and counted. The function is physically gone, so
+                 * its driver meets an absent device; the re-enumeration
+                 * below only asks PCI.VXD to read the bus again, and what
+                 * the configuration manager does with a refused, vanished
+                 * devnode is its own decision, not a removal made here. */
                 r->Vetoed++;
                 continue;
             }
@@ -1380,6 +1502,15 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
     }
     r->RediscoverLeft = 0;
     r->Why = CM_NOROUTE_NONE;
+    if (r->DebtPending) {
+        /* Tunnel changes came while the set was unknown: every member owes
+         * a re-enumeration (CmReenumService pays it once it is active). */
+        r->DebtPending = 0;
+        for (i = 0; i < r->Members; i++) {
+            r->Port[i].Missed = 1;
+        }
+        CmLogNote(nhi, "cm.reenum.debt", r->Members);
+    }
 
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         r->Route = CM_ROUTE_FILTER;
@@ -1456,12 +1587,13 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
 }
 
 /*
- * A tunnel change voids every eject of the domain, posted or about to be:
- * which port a device used is not known, and the bridge's BusRelations
- * that would show the new population comes later, asynchronously, so an
- * eject of the old connection could otherwise be handed off against the
- * new one. Each member's bridge starts a new generation and forgets the
- * orderly removal it saw.
+ * A tunnel change unsettles every member's bridge: which port a device
+ * used is not known, and the BusRelations answer that would show the new
+ * population comes later, asynchronously. An eject posted or seen meanwhile
+ * is not handed off until its bridge has settled, and then only if the
+ * bridge's population generation is still the one it was posted against
+ * (an unplug and replug on that port changes it; a change on another port
+ * does not).
  */
 static VOID cmEjectsVoid(PCM_NHI nhi)
 {
@@ -1472,17 +1604,13 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (r->EjectPending != 0) {
-        r->EjectsStale++;
-    }
-    r->EjectPending = 0;
     for (i = 0; i < r->Members; i++) {
-        r->Port[i].Flags &= ~CM_PORT_EJECTED;
         f = cmRegFind(r->Port[i].Bdf);
         if (f != NULL && f->Owner == nhi) {
-            f->RelGen++;
-            f->EjectEpoch++;
-            f->EjectSeen = 0;
+            /* Which port changed is not known: every member's bridge is
+             * unsettled until its next BusRelations answer shows its
+             * population, and no eject is handed off meanwhile. */
+            f->Unsettled = 1;
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -1502,6 +1630,11 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         r->Downs++;
     } else {
         r->Resyncs++;
+    }
+    if (r->Members == 0 && r->RediscoverLeft != 0 && r->Reenum != 0) {
+        /* The set is still being looked for: the change is owed to every
+         * member the rediscovery finds (cmDiscoverAndList). */
+        r->DebtPending = 1;
     }
     if (r->Route == CM_ROUTE_NONE || r->Reenum == 0) {
         r->NotDone++;
@@ -1572,8 +1705,15 @@ VOID CmReenumService(PCM_NHI nhi)
         if ((pending & (1UL << i)) == 0) {
             continue;
         }
-        r->Port[i].Flags &= ~CM_PORT_EJECTED;
         f = cmRegFind(r->Port[i].Bdf);
+        if (f != NULL && f->Owner == nhi && f->Unsettled) {
+            /* Deferred to a later pass: the bridge has not shown its
+             * population since the last tunnel change. */
+            pending &= ~(1UL << i);
+            r->EjectPending |= 1UL << i;
+            continue;
+        }
+        r->Port[i].Flags &= ~CM_PORT_EJECTED;
         if (f == NULL || f->Owner != nhi ||
             f->Serial != r->Port[i].EjectSerial ||
             f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
@@ -1618,6 +1758,12 @@ VOID CmReenumService(PCM_NHI nhi)
             } else if (r->Route == CM_ROUTE_CONFIGMG) {
                 if (cmCfgmgMember(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
+                    if (r->SafeEject != 0) {
+                        /* The re-enumeration was late: so is the marking
+                         * of what it brought (section 7.4). */
+                        r->MarkOpen = 1;
+                        r->MarkFrom = cmNow(nhi);
+                    }
                 }
             }
             if (!r->Port[i].Missed) {
