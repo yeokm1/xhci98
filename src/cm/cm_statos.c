@@ -153,6 +153,9 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
             in->Cm = CM_ST_CM_USB4;
         } else if (nhi->Icm.Ring != NULL) {
             in->Cm = CM_ST_CM_ICM;
+            in->IcmNoUsb3 = (ULONG)(nhi->Profile == CM_PROFILE_ICM_FR ||
+                                    nhi->Profile == CM_PROFILE_ICM_AR ||
+                                    nhi->Profile == CM_PROFILE_ICM_TR);
         }
     }
     if (!nhi->ReenumOn) {

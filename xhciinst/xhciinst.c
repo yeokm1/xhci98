@@ -48,6 +48,7 @@
 
 #include "../src/xhci_version.h"
 #include "inst_core.h"
+#include "../src/cm/cm_status.h"
 
 /* The driver's own switchover gate (src\xhci_psw.c), declared here rather
  * than through xhci_psw.h, whose compatibility header is the driver's. */
@@ -5407,8 +5408,1100 @@ static int selftest(void)
     st(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1, "/list /yes refused");
     st(inst_exit_code(0, 0, 1, 0) == 3, "exit code 3");
     st(inst_value_find("XhciIntelPortSwitch") >= 0, "the value table");
+    argv1[1] = "/eject";
+    argv1[2] = "/yes";
+    st(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 1,
+       "/eject /yes without id= refused");
+    st(inst_tb_candidate("PCI\\VEN_8086&DEV_15C0&CC_0604\0", 31),
+       "a Thunderbolt port id");
+    st(inst_eject_code(INST_EJ_VETO) == INST_EXIT_STEPS, "a veto is exit 4");
     printf("%d checks, %d failures\n", stChecks, stFailures);
     return stFailures == 0 ? 0 : 1;
+}
+
+/* ======================================================================== */
+/* The Thunderbolt and USB4 device viewer and eject (design record 24)      */
+/* ======================================================================== */
+
+#define INST_CM_DRP_SERVICE         0x00000005UL
+#define INST_CM_DRP_CAPABILITIES    0x00000010UL
+#define INST_CM_DRP_BUSNUMBER       0x00000016UL
+#define INST_CM_DRP_ADDRESS         0x0000001DUL
+#define INST_CM_DEVCAP_REMOVABLE    0x00000004UL
+#define INST_CM_DEVCAP_SURPRISEOK   0x00000080UL
+#define INST_DN_REMOVABLE           0x00004000UL
+#define INST_UI_NOT_OK              0x00000001UL
+#define INST_TB_MAX_NHI             4
+#define INST_TB_ASK_WAIT_MS         3000UL
+#define INST_TB_TUNNEL_WAIT_MS      10000UL
+
+typedef DWORD (WINAPI *PFN_CM_QREMOVE)(DWORD, ULONG);
+typedef DWORD (WINAPI *PFN_CM_EJECT)(DWORD, PULONG, LPSTR, ULONG, ULONG);
+
+typedef struct _TBNODE {
+    DWORD Dn;
+    int Parent;
+    DEVREC R;
+    ULONG Caps;
+    int HasCaps;
+    ULONG Bus;
+    ULONG Addr;
+    int HasLoc;
+    int IsNhi;
+    int IsUsbHc;
+    int Candidate;
+    int Verified;           /* a verified tunnel port */
+    int VNhi;               /* ... of this NHI record */
+    int VPort;              /* ... its port index     */
+    int Prot;
+    int UnitOf;
+    int Number;             /* the /eject number, 0 for none */
+} TBNODE;
+
+typedef struct _TBNHI {
+    char Id[INST_ID_CHARS];
+    int Node;               /* in the current reading, -1 when gone */
+    unsigned char Rec[CM_ST_MAX_BYTES];
+    DWORD Bytes;
+    int Valid;              /* the record checks                   */
+    int Confirmed;          /* it echoes this run's ask            */
+    int Asked;              /* the ask was written                 */
+    INST_U32 Ask;
+    INST_U32 Gen;           /* the generation it was confirmed at  */
+    char DrvPath[INST_PATH_CHARS];
+} TBNHI;
+
+static TBNODE *tbn;
+static int tbnCount;
+static int tbnBad;          /* reads that failed, or a cut-short walk */
+static TBNHI tbh[INST_TB_MAX_NHI];
+static int tbhCount;
+static int tbUnits;
+static int tbChanging;      /* a record moved during the reading      */
+static const char *devLast; /* the device modes' last line            */
+static PFN_CM_QREMOVE tbQueryRemove;
+static PFN_CM_QREMOVE tbRemove;
+static PFN_CM_EJECT tbEject;
+
+static void tb_routines(void)
+{
+    tbQueryRemove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "cfgmgr32", "CM_Query_Remove_SubTree");
+    tbRemove = (PFN_CM_QREMOVE)proc(api.CfgMgr, "cfgmgr32", "CM_Remove_SubTree");
+    tbEject = (PFN_CM_EJECT)proc(api.CfgMgr, "cfgmgr32", "CM_Request_Device_EjectA");
+    if (tbEject == NULL) {
+        /* Windows 2000 exports it from setupapi.dll alone (record 24
+         * section 7.2). */
+        tbEject = (PFN_CM_EJECT)proc(api.SetupApi, "setupapi", "CM_Request_Device_EjectA");
+    }
+}
+
+static DWORD tb_dword_prop(DWORD dn, ULONG prop, ULONG *value)
+{
+    ULONG type;
+    ULONG n = sizeof(ULONG);
+
+    if (api.Property == NULL) {
+        return 0xFFFFFFFFUL;
+    }
+    return api.Property(dn, prop, &type, value, &n, 0);
+}
+
+/* One devnode read; 0 when a reading failed. */
+static int tb_read(TBNODE *t)
+{
+    DEVREC *d = &t->R;
+    ULONG status;
+    ULONG problem;
+    DWORD bytes;
+    int before = walkErrors;
+    int ok = 1;
+
+    memset(d, 0, sizeof(*d));
+    if (api.DeviceId(t->Dn, d->Id, sizeof(d->Id), 0) != INST_CR_SUCCESS) {
+        return 0;
+    }
+    if (envNow.Nt) {
+        cm_prop(t->Dn, INST_CM_DRP_HARDWAREID, d->Hw, sizeof(d->Hw), &bytes);
+        d->HwBytes = bytes;
+        cm_prop(t->Dn, INST_CM_DRP_COMPATIBLEIDS, d->Compat, sizeof(d->Compat),
+                &bytes);
+        d->CompatBytes = bytes;
+        cm_prop(t->Dn, INST_CM_DRP_DRIVER, d->Driver, sizeof(d->Driver), NULL);
+        cm_prop(t->Dn, INST_CM_DRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
+        cm_prop(t->Dn, INST_CM_DRP_SERVICE, d->Service, sizeof(d->Service),
+                NULL);
+        t->HasCaps = tb_dword_prop(t->Dn, INST_CM_DRP_CAPABILITIES,
+                                   &t->Caps) == INST_CR_SUCCESS;
+        t->HasLoc = tb_dword_prop(t->Dn, INST_CM_DRP_BUSNUMBER, &t->Bus) ==
+                        INST_CR_SUCCESS &&
+                    tb_dword_prop(t->Dn, INST_CM_DRP_ADDRESS, &t->Addr) ==
+                        INST_CR_SUCCESS;
+    } else {
+        if (!prop9x(t->Dn, d->Id, INST_CM_DRP_HARDWAREID, "HardwareID", d->Hw,
+                    sizeof(d->Hw)) ||
+            !prop9x(t->Dn, d->Id, INST_CM_DRP_COMPATIBLEIDS, "CompatibleIDs",
+                    d->Compat, sizeof(d->Compat)) ||
+            !prop9x(t->Dn, d->Id, INST_CM_DRP_DRIVER, "Driver", d->Driver,
+                    sizeof(d->Driver))) {
+            ok = 0;
+        }
+        prop9x(t->Dn, d->Id, INST_CM_DRP_DEVICEDESC, "DeviceDesc", d->Desc,
+               sizeof(d->Desc));
+        d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
+        d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
+    }
+    if (api.Status(&status, &problem, t->Dn, 0) == INST_CR_SUCCESS) {
+        d->Status = status;
+        d->Problem = (status & INST_DN_HAS_PROBLEM) ? problem : 0;
+    } else {
+        ok = 0;
+    }
+    d->Present = 1;
+    outQuiet = 1;
+    dev_driver_values(d);
+    outQuiet = 0;
+    if (walkErrors != before) {
+        walkErrors = before;
+        ok = 0;
+    }
+    return ok;
+}
+
+static void tb_walk(DWORD dn, int parent, int depth)
+{
+    DWORD child;
+    DWORD sib;
+    DWORD cr;
+    int me;
+
+    for (;;) {
+        if (tbnCount >= INST_MAX_DEVS) {
+            tbnBad++;
+            return;
+        }
+        me = tbnCount++;
+        memset(&tbn[me], 0, sizeof(tbn[me]));
+        tbn[me].Dn = dn;
+        tbn[me].Parent = parent;
+        tbn[me].UnitOf = -1;
+        tbn[me].VNhi = -1;
+        if (!tb_read(&tbn[me])) {
+            logonly("devnode 0x%08lX: not read whole\n", (unsigned long)dn);
+            tbnBad++;
+        }
+        cr = api.Child(&child, dn, 0);
+        if (cr == INST_CR_SUCCESS) {
+            if (depth >= 32) {
+                tbnBad++;
+            } else {
+                tb_walk(child, me, depth + 1);
+            }
+        } else if (cr != INST_CR_NO_SUCH_DEVINST) {
+            tbnBad++;
+        }
+        cr = api.Sibling(&sib, dn, 0);
+        if (cr != INST_CR_SUCCESS) {
+            if (cr != INST_CR_NO_SUCH_DEVINST) {
+                tbnBad++;
+            }
+            return;
+        }
+        dn = sib;
+    }
+}
+
+static int tb_started(const TBNODE *t)
+{
+    return (t->R.Status & INST_DN_STARTED) != 0 && t->R.Problem == 0;
+}
+
+/* The record of an NHI: its hardware key's value XhciCmStatus. */
+static int tb_read_record(TBNHI *h)
+{
+    char path[INST_PATH_CHARS];
+    char base[INST_PATH_CHARS];
+    HKEY k;
+    DWORD type;
+    DWORD n = sizeof(h->Rec);
+
+    h->Valid = 0;
+    h->Bytes = 0;
+    if (h->Node < 0) {
+        return 0;
+    }
+    if (envNow.Nt) {
+        join(base, sizeof(base), "SYSTEM\\CurrentControlSet\\Enum",
+             tbn[h->Node].R.Id);
+        join(path, sizeof(path), base, "Device Parameters");
+    } else {
+        join(path, sizeof(path), "Enum", tbn[h->Node].R.Id);
+    }
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    if (RegQueryValueExA(k, "XhciCmStatus", NULL, &type, h->Rec, &n) ==
+            ERROR_SUCCESS &&
+        type == REG_BINARY) {
+        h->Bytes = n;
+        h->Valid = inst_st_check(h->Rec, n);
+    }
+    RegCloseKey(k);
+    return h->Valid;
+}
+
+/* The ask (record 24 section 3.3): a fresh nonzero value in the NHI's
+ * driver key; the record is confirmed once it echoes it. */
+static void tb_ask(TBNHI *h)
+{
+    HKEY k;
+    DWORD v;
+    static INST_U32 seq;
+
+    driver_key_path(&tbn[h->Node].R, h->DrvPath, sizeof(h->DrvPath));
+    seq++;
+    h->Ask = (GetTickCount() ^ (GetCurrentProcessId() << 12) ^ (seq << 24)) |
+             1UL;
+    v = h->Ask;
+    if (tbn[h->Node].R.Driver[0] == '\0' ||
+        RegOpenKeyExA(HKEY_LOCAL_MACHINE, h->DrvPath, 0, KEY_SET_VALUE, &k) !=
+            ERROR_SUCCESS) {
+        logonly("ask: the driver key %s is not writable\n", h->DrvPath);
+        return;
+    }
+    h->Asked = RegSetValueExA(k, "XhciCmStatusAsk", 0, REG_DWORD,
+                              (const BYTE *)&v, sizeof(v)) == ERROR_SUCCESS;
+    RegCloseKey(k);
+    logonly("ask 0x%08lX to %s: %s\n", (unsigned long)v, h->DrvPath,
+            h->Asked ? "written" : "refused");
+}
+
+static void tb_unask(void)
+{
+    HKEY k;
+    int i;
+
+    for (i = 0; i < tbhCount; i++) {
+        if (tbh[i].Asked &&
+            RegOpenKeyExA(HKEY_LOCAL_MACHINE, tbh[i].DrvPath, 0, KEY_SET_VALUE,
+                          &k) == ERROR_SUCCESS) {
+            RegDeleteValueA(k, "XhciCmStatusAsk");
+            RegCloseKey(k);
+        }
+    }
+}
+
+/* The verified ports, the protection and the units of the reading. */
+static int tb_derive(void)
+{
+    int *buf;
+    int *parent;
+    int *isNhi;
+    int *isHc;
+    int *verified;
+    int *prot;
+    int *units;
+    int i;
+    int k;
+    INST_U32 j;
+
+    for (k = 0; k < tbhCount; k++) {
+        INST_U32 count;
+        INST_U32 active;
+        if (!tbh[k].Confirmed) {
+            continue;
+        }
+        count = inst_get32(tbh[k].Rec, CM_ST_O_PORT_COUNT);
+        active = inst_get32(tbh[k].Rec, CM_ST_O_PORT_ACTIVE);
+        for (j = 0; j < count && j < CM_ST_MAX_PORTS; j++) {
+            INST_U32 bdf;
+            const unsigned char *path;
+            if ((active & (1UL << j)) == 0) {
+                continue;
+            }
+            bdf = inst_get32(tbh[k].Rec, CM_ST_O_PORTS + 4 * j);
+            path = tbh[k].Rec + CM_ST_O_PATHS + CM_ST_PATH_BYTES * j;
+            for (i = 0; i < tbnCount; i++) {
+                int match;
+                if (!inst_starts(tbn[i].R.Id, "PCI\\")) {
+                    continue;
+                }
+                if (envNow.Nt) {
+                    match = tbn[i].HasLoc &&
+                            tbn[i].Bus == CM_ST_BDF_BUS(bdf) &&
+                            tbn[i].Addr == ((CM_ST_BDF_DEV(bdf) << 16) |
+                                            CM_ST_BDF_FN(bdf));
+                } else {
+                    match = inst_tb_loc_match(tbn[i].R.Id, bdf, path + 1,
+                                              (int)path[0]);
+                }
+                if (match) {
+                    tbn[i].Verified = 1;
+                    tbn[i].VNhi = k;
+                    tbn[i].VPort = (int)j;
+                }
+            }
+        }
+    }
+    buf = (int *)calloc((size_t)(tbnCount + 1) * 6, sizeof(int));
+    if (buf == NULL) {
+        out("Out of memory.\n");
+        return 0;
+    }
+    parent = buf;
+    isNhi = parent + tbnCount + 1;
+    isHc = isNhi + tbnCount + 1;
+    verified = isHc + tbnCount + 1;
+    prot = verified + tbnCount + 1;
+    units = prot + tbnCount + 1;
+    for (i = 0; i < tbnCount; i++) {
+        parent[i] = tbn[i].Parent;
+        isNhi[i] = tbn[i].IsNhi;
+        isHc[i] = tbn[i].IsUsbHc;
+        verified[i] = tbn[i].Verified;
+    }
+    inst_tb_protect(parent, isNhi, isHc, tbnCount, prot);
+    inst_tb_units(parent, verified, tbnCount, units);
+    tbUnits = 0;
+    for (i = 0; i < tbnCount; i++) {
+        tbn[i].Prot = prot[i];
+        tbn[i].UnitOf = units[i];
+        tbn[i].Number = 0;
+    }
+    for (i = 0; i < tbnCount; i++) {
+        if (units[i] == i &&
+            !inst_tb_unit_blocked(units, prot, tbnCount, i)) {
+            tbn[i].Number = ++tbUnits;
+        }
+    }
+    free(buf);
+    return 1;
+}
+
+/* A full reading. `first`: the NHIs are found, asked and waited for;
+ * otherwise (a later reading in the same run) each is found again by its
+ * instance id and confirmed only by the same ask at the same generation.
+ * 0 when the routines are missing. */
+static int tb_scan(int first)
+{
+    DWORD root;
+    DWORD start;
+    int i;
+    int k;
+    int waiting;
+
+    tbnCount = 0;
+    tbnBad = 0;
+    tbChanging = 0;
+    if (api.Locate == NULL || api.Child == NULL || api.Sibling == NULL ||
+        api.DeviceId == NULL || api.Status == NULL) {
+        out("The configuration manager's routines are missing; the devices "
+            "cannot be read.\n");
+        return 0;
+    }
+    if (api.Locate(&root, NULL, 0) != INST_CR_SUCCESS) {
+        out("The device tree's root could not be located.\n");
+        return 0;
+    }
+    tb_walk(root, -1, 0);
+    for (i = 0; i < tbnCount; i++) {
+        TBNODE *t = &tbn[i];
+        t->IsNhi = inst_tb_is_nhi(t->R.Hw, t->R.HwBytes, t->R.Compat,
+                                  t->R.CompatBytes, t->R.Service);
+        t->IsUsbHc = inst_tb_is_usbhc(t->R.Hw, t->R.HwBytes, t->R.Compat,
+                                      t->R.CompatBytes, t->R.Service);
+        t->Candidate = inst_tb_candidate(t->R.Hw, t->R.HwBytes);
+    }
+    if (first) {
+        tbhCount = 0;
+        for (i = 0; i < tbnCount && tbhCount < INST_TB_MAX_NHI; i++) {
+            if (inst_eq(tbn[i].R.Service, "xhcicm") &&
+                inst_starts(tbn[i].R.Id, "PCI\\")) {
+                memset(&tbh[tbhCount], 0, sizeof(tbh[tbhCount]));
+                tbh[tbhCount].Node = i;
+                inst_copy(tbh[tbhCount].Id, tbn[i].R.Id,
+                          sizeof(tbh[tbhCount].Id));
+                if (tb_started(&tbn[i])) {
+                    tb_ask(&tbh[tbhCount]);
+                }
+                tbhCount++;
+            }
+        }
+        start = GetTickCount();
+        for (;;) {
+            waiting = 0;
+            for (k = 0; k < tbhCount; k++) {
+                if (tbh[k].Confirmed) {
+                    continue;
+                }
+                if (tb_read_record(&tbh[k]) && tbh[k].Asked &&
+                    inst_st_confirmed(tbh[k].Rec, tbh[k].Ask)) {
+                    tbh[k].Confirmed = 1;
+                    tbh[k].Gen = inst_get32(tbh[k].Rec, CM_ST_O_GENERATION);
+                } else if (tbh[k].Asked) {
+                    waiting = 1;
+                }
+            }
+            if (!waiting || GetTickCount() - start >= INST_TB_ASK_WAIT_MS) {
+                break;
+            }
+            Sleep(100);
+        }
+    } else {
+        for (k = 0; k < tbhCount; k++) {
+            int wasConfirmed = tbh[k].Confirmed;
+            tbh[k].Node = -1;
+            tbh[k].Confirmed = 0;
+            for (i = 0; i < tbnCount; i++) {
+                if (inst_eq(tbn[i].R.Id, tbh[k].Id)) {
+                    tbh[k].Node = i;
+                }
+            }
+            if (wasConfirmed && tb_read_record(&tbh[k]) &&
+                inst_st_confirmed(tbh[k].Rec, tbh[k].Ask)) {
+                if (inst_get32(tbh[k].Rec, CM_ST_O_GENERATION) == tbh[k].Gen) {
+                    tbh[k].Confirmed = 1;
+                } else {
+                    tbChanging = 1;
+                }
+            } else if (wasConfirmed) {
+                tbChanging = 1;
+            }
+        }
+    }
+    return tb_derive();
+}
+
+/* The whole reading of record 24 section 3.3: asked and confirmed, then
+ * walked and the records read again; a record that moved during the walk
+ * is confirmed at its new generation and the walk taken again, at most
+ * three times, after which nothing is taken as confirmed. */
+static int tb_read_all(void)
+{
+    int tries;
+    int k;
+
+    if (!tb_scan(1)) {
+        return 0;
+    }
+    for (tries = 0; tries < 3; tries++) {
+        if (!tb_scan(0)) {
+            return 0;
+        }
+        if (!tbChanging) {
+            return 1;
+        }
+        for (k = 0; k < tbhCount; k++) {
+            if (tbh[k].Valid && tbh[k].Asked &&
+                inst_st_confirmed(tbh[k].Rec, tbh[k].Ask)) {
+                tbh[k].Confirmed = 1;
+                tbh[k].Gen = inst_get32(tbh[k].Rec, CM_ST_O_GENERATION);
+            }
+        }
+    }
+    tbChanging = 1;
+    for (k = 0; k < tbhCount; k++) {
+        tbh[k].Confirmed = 0;
+    }
+    (void)tb_derive();
+    return 1;
+}
+
+/* ---- the viewer ---------------------------------------------------------- */
+
+static const char *tb_tun_text(INST_U32 v)
+{
+    switch (v & 0xFUL) {
+    case CM_ST_TUN_NONE:
+        return "none";
+    case CM_ST_TUN_UP:
+        return "up";
+    case CM_ST_TUN_PRESERVED:
+        return "up (found at start)";
+    case CM_ST_TUN_FAILED:
+        return "failed";
+    case CM_ST_TUN_EJECTED:
+        return "closed after an eject";
+    default:
+        return "not known";
+    }
+}
+
+static const char *tb_appr_text(INST_U32 v)
+{
+    switch (v) {
+    case CM_ST_APPR_APPROVED:
+        return "approved";
+    case CM_ST_APPR_BOOT:
+        return "approved before Windows started";
+    case CM_ST_APPR_FAILED:
+        return "approval refused by the controller";
+    case CM_ST_APPR_UNANSWERED:
+        return "approval not answered";
+    case CM_ST_APPR_PENDING:
+        return "not approved";
+    case CM_ST_APPR_HELD:
+        return "connection held or failed";
+    default:
+        return "approval not known";
+    }
+}
+
+static void tb_name(const unsigned char *e, size_t off, char *out1, size_t cap)
+{
+    size_t i;
+
+    for (i = 0; i + 1 < cap && i < CM_ST_NAME_BYTES - 1 && e[off + i] != 0; i++) {
+        out1[i] = (char)e[off + i];
+    }
+    out1[i] = '\0';
+}
+
+static void tb_print_unit(int u, int indent)
+{
+    const TBNODE *t = &tbn[u];
+    int i;
+    char state[96];
+
+    inst_state_text(state, sizeof(state),
+                    t->R.Service[0] ? t->R.Service : NULL, NULL,
+                    tb_started(t), t->R.Problem);
+    if (t->Number) {
+        out("%*s[%d] %s  -  %s\n", indent, "", t->Number,
+            t->R.Desc[0] ? t->R.Desc : "(no name)", state);
+    } else {
+        out("%*s- %s  -  %s\n", indent, "",
+            t->R.Desc[0] ? t->R.Desc : "(no name)", state);
+    }
+    out("%*s    %s\n", indent, "", first_hw(&t->R));
+    if (envNow.Nt) {
+        out("%*s    removable: %s; surprise removal OK: %s%s\n", indent, "",
+            t->HasCaps ? ((t->Caps & INST_CM_DEVCAP_REMOVABLE) ? "yes" : "no")
+                       : "not known",
+            t->HasCaps ? ((t->Caps & INST_CM_DEVCAP_SURPRISEOK) ? "yes" : "no")
+                       : "not known",
+            (t->HasCaps && (t->Caps & INST_CM_DEVCAP_REMOVABLE) &&
+             !(t->Caps & INST_CM_DEVCAP_SURPRISEOK))
+                ? " (listed in Safely Remove Hardware)"
+                : (t->Number ? " (not listed in Safely Remove Hardware; "
+                               "XHCIINST /eject asks Windows to stop it)"
+                             : ""));
+    } else {
+        out("%*s    %s\n", indent, "",
+            (t->R.Status & INST_DN_REMOVABLE)
+                ? "marked removable by the Thunderbolt driver"
+                : "not marked removable");
+    }
+    if (t->Number) {
+        out("%*s    instance %s\n", indent, "", t->R.Id);
+    } else if (t->UnitOf == u) {
+        out("%*s    not offered: it holds the Thunderbolt controller's own "
+            "functions\n", indent, "");
+    }
+    for (i = u + 1; i < tbnCount; i++) {
+        if (tbn[i].UnitOf == u && i != u) {
+            inst_state_text(state, sizeof(state),
+                            tbn[i].R.Service[0] ? tbn[i].R.Service : NULL, NULL,
+                            tb_started(&tbn[i]), tbn[i].R.Problem);
+            out("%*s      %s  -  %s\n", indent, "",
+                tbn[i].R.Desc[0] ? tbn[i].R.Desc : first_hw(&tbn[i].R), state);
+        }
+    }
+}
+
+static void tb_print_children_of(int port, int indent)
+{
+    int i;
+    int any = 0;
+
+    for (i = port + 1; i < tbnCount; i++) {
+        if (tbn[i].Parent == port) {
+            tb_print_unit(i, indent);
+            any = 1;
+        }
+    }
+    if (!any) {
+        out("%*s(nothing behind it now)\n", indent, "");
+    }
+}
+
+static void tb_print_routers(const TBNHI *h)
+{
+    INST_U32 n = inst_get32(h->Rec, CM_ST_O_ROUTER_COUNT);
+    INST_U32 r;
+    char vendor[CM_ST_NAME_BYTES];
+    char model[CM_ST_NAME_BYTES];
+
+    if (n == 0) {
+        out("  Nothing is connected to its Thunderbolt or USB4 ports.\n");
+        return;
+    }
+    for (r = 0; r < n; r++) {
+        const unsigned char *e = h->Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
+        INST_U32 kind = inst_get32(e, CM_ST_E_KIND);
+        INST_U32 place = inst_get32(e, CM_ST_E_PLACE);
+        INST_U32 gen = inst_get32(e, CM_ST_E_GEN);
+        INST_U32 tun = inst_get32(e, CM_ST_E_TUNNELS);
+        INST_U32 lanes = inst_get32(e, CM_ST_E_LANES);
+        INST_U32 sid = inst_get32(e, CM_ST_E_SHORT_ID);
+        INST_U32 ids = inst_get32(e, CM_ST_E_IDS);
+        INST_U32 bridge = inst_get32(e, CM_ST_E_BRIDGE);
+
+        tb_name(e, CM_ST_E_VENDOR, vendor, sizeof(vendor));
+        tb_name(e, CM_ST_E_MODEL, model, sizeof(model));
+        out("\n  Device: %s%s%s", vendor[0] ? vendor : "",
+            vendor[0] && model[0] ? " " : "",
+            model[0] ? model : (vendor[0] ? "" : "(no name given)"));
+        if (sid != CM_ST_UNKNOWN) {
+            out("  (id ending %04lx)", (unsigned long)sid);
+        }
+        out("\n");
+        out("    %s", (gen & 0xFFUL) == CM_ST_GEN_TBT3 ? "Thunderbolt 3"
+                      : (gen & 0xFFUL) == CM_ST_GEN_USB4 ? "USB4"
+                                                        : "generation not known");
+        if ((gen & 0xFFUL) == CM_ST_GEN_USB4 && ((gen >> 8) & 0xFFUL) != 0) {
+            out(" (version %lu.%lu)", (unsigned long)((gen >> 12) & 0xFUL),
+                (unsigned long)((gen >> 8) & 0xFUL));
+        }
+        out(", %s %lu", kind == CM_ST_KIND_ICM ? "link" : "port",
+            (unsigned long)(place & 0xFFUL));
+        if (kind != CM_ST_KIND_USB4_LINK) {
+            out(", depth %lu", (unsigned long)((place >> 8) & 0xFFUL));
+        } else {
+            out(", behind another device");
+        }
+        out(", %s\n", tb_appr_text(inst_get32(e, CM_ST_E_APPROVAL)));
+        if (ids != CM_ST_UNKNOWN) {
+            out("    %s %04lX:%04lX\n",
+                kind == CM_ST_KIND_ICM ? "Thunderbolt vendor and model"
+                                       : "router",
+                (unsigned long)(ids & 0xFFFFUL), (unsigned long)(ids >> 16));
+        }
+        out("    link: %s; speed not known\n",
+            lanes == CM_ST_LANES_BONDED ? "two lanes bonded"
+            : lanes == CM_ST_LANES_SINGLE ? "one lane" : "lanes not known");
+        out("    connections: PCIe %s, USB3 %s, DisplayPort %s\n",
+            tb_tun_text(tun), tb_tun_text(tun >> 4), tb_tun_text(tun >> 8));
+        if (bridge != CM_ST_UNKNOWN) {
+            out("    its PCIe connection reaches the port at PCI %02lX:%02lX.%lu\n",
+                (unsigned long)CM_ST_BDF_BUS(bridge),
+                (unsigned long)CM_ST_BDF_DEV(bridge),
+                (unsigned long)CM_ST_BDF_FN(bridge));
+        }
+    }
+}
+
+static void tb_print(void)
+{
+    int k;
+    int i;
+    int shownCandidates = 0;
+
+    if (tbhCount == 0) {
+        out("No Thunderbolt or USB4 controller driven by this package was "
+            "found.\n");
+    }
+    for (k = 0; k < tbhCount; k++) {
+        const TBNHI *h = &tbh[k];
+        const TBNODE *t = h->Node >= 0 ? &tbn[h->Node] : NULL;
+        INST_U32 cm;
+
+        if (t == NULL) {
+            continue;
+        }
+        out("Controller: %s\n", t->R.Desc[0] ? t->R.Desc : first_hw(&t->R));
+        out("  %s\n", first_hw(&t->R));
+        if (!tb_started(t)) {
+            out("  not started (problem code %lu)\n", (unsigned long)t->R.Problem);
+        }
+        if (!h->Valid) {
+            out("  The Thunderbolt driver has not published its device list "
+                "(it is older than\n  this package, not started, or still "
+                "starting).\n\n");
+            continue;
+        }
+        cm = inst_get32(h->Rec, CM_ST_O_CM);
+        out("  %s",
+            cm == CM_ST_CM_ICM ? "firmware connection manager"
+            : cm == CM_ST_CM_USB4 ? "USB4 software connection manager"
+            : inst_get32(h->Rec, CM_ST_O_STAGE) == CM_ST_STAGE_INERT
+                ? "no connection manager running (the driver stays idle)"
+                : "no connection manager running");
+        if (inst_get32(h->Rec, CM_ST_O_SECURITY) != CM_ST_UNKNOWN) {
+            out(", security level %lu",
+                (unsigned long)inst_get32(h->Rec, CM_ST_O_SECURITY));
+        }
+        out("\n");
+        if (h->Confirmed) {
+            out("  information from the driver: confirmed now (changed %lu "
+                "times since it started)\n",
+                (unsigned long)inst_get32(h->Rec, CM_ST_O_GENERATION));
+        } else {
+            FILETIME ft;
+            GetSystemTimeAsFileTime(&ft);
+            out("  information from the driver: NOT confirmed by the running "
+                "driver%s%s\n",
+                h->Asked ? "" : envNow.Nt ? " (run as an administrator to "
+                                            "confirm it)" : "",
+                inst_st_fresh(inst_get32(h->Rec, CM_ST_O_UPTIME_S),
+                              inst_get32(h->Rec, CM_ST_O_SYSTIME_LO),
+                              inst_get32(h->Rec, CM_ST_O_SYSTIME_HI),
+                              ft.dwLowDateTime, ft.dwHighDateTime,
+                              GetTickCount())
+                    ? ""
+                    : "; it is from an earlier start of Windows");
+        }
+        tb_print_routers(h);
+        out("\n");
+        for (i = 0; i < tbnCount; i++) {
+            if (tbn[i].Verified && tbn[i].VNhi == k) {
+                out("  Behind the Thunderbolt port %s:\n",
+                    tbn[i].R.Desc[0] ? tbn[i].R.Desc : first_hw(&tbn[i].R));
+                out("    PCI %02lX:%02lX.%lu  %s\n",
+                    (unsigned long)CM_ST_BDF_BUS(inst_get32(
+                        h->Rec, CM_ST_O_PORTS + 4 * tbn[i].VPort)),
+                    (unsigned long)CM_ST_BDF_DEV(inst_get32(
+                        h->Rec, CM_ST_O_PORTS + 4 * tbn[i].VPort)),
+                    (unsigned long)CM_ST_BDF_FN(inst_get32(
+                        h->Rec, CM_ST_O_PORTS + 4 * tbn[i].VPort)),
+                    tbn[i].R.Id);
+                tb_print_children_of(i, 4);
+            }
+        }
+        out("\n");
+    }
+    for (i = 0; i < tbnCount; i++) {
+        int c;
+        int hasChild = 0;
+        if (!tbn[i].Candidate || tbn[i].Verified || tbn[i].Prot) {
+            continue;
+        }
+        for (c = i + 1; c < tbnCount; c++) {
+            if (tbn[c].Parent == i && !tbn[c].Candidate && !tbn[c].Prot) {
+                hasChild = 1;
+            }
+        }
+        if (!hasChild) {
+            continue;
+        }
+        if (!shownCandidates) {
+            out("Other Thunderbolt or USB4 ports (not confirmed as carrying a "
+                "connection;\nshown only):\n");
+            shownCandidates = 1;
+        }
+        out("  %s\n    %s\n", tbn[i].R.Desc[0] ? tbn[i].R.Desc : "(no name)",
+            tbn[i].R.Id);
+        for (c = i + 1; c < tbnCount; c++) {
+            if (tbn[c].Parent == i && !tbn[c].Prot) {
+                tb_print_unit(c, 4);
+            }
+        }
+    }
+    if (tbnBad) {
+        out("\nSome device entries could not be read whole (%d); the list may "
+            "be incomplete.\n", tbnBad);
+    }
+    if (tbChanging) {
+        out("\nDevices were changing while this was read.\n");
+    }
+    if (tbUnits > 0) {
+        for (i = 0; i < tbnCount; i++) {
+            if (tbn[i].Number == 1) {
+                out("\nTo eject: INSTALL /eject 1   (or XHCIINST /eject 1)\n"
+                    "  in a script: INSTALL /eject id=%s /yes\n", tbn[i].R.Id);
+            }
+        }
+    }
+}
+
+static int run_devices(void)
+{
+    if (!tb_read_all()) {
+        tb_unask();
+        return INST_EXIT_REFUSED;
+    }
+    tb_print();
+    tb_unask();
+    return INST_EXIT_DONE;
+}
+
+/* ---- the eject ------------------------------------------------------------ */
+
+static int tb_find_unit(const char *id)
+{
+    int i;
+
+    for (i = 0; i < tbnCount; i++) {
+        if (tbn[i].Number != 0 && inst_eq(tbn[i].R.Id, id)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* After an accepted eject: the port read again, and section 5.4's advice. */
+static int tb_after(const char *portId, int nhiK, int portIndex, int single)
+{
+    int i;
+    int port = -1;
+    int others = 0;
+    INST_U32 usb3 = CM_ST_TUN_UNKNOWN;
+    INST_U32 bdf;
+    INST_U32 r;
+    INST_U32 n;
+    int whole;
+
+    whole = tb_scan(0) && tbnBad == 0;
+    for (i = 0; i < tbnCount; i++) {
+        if (inst_eq(tbn[i].R.Id, portId)) {
+            port = i;
+        }
+    }
+    if (port >= 0) {
+        for (i = port + 1; i < tbnCount; i++) {
+            if (tbn[i].Parent == port) {
+                others = 1;
+            }
+        }
+    } else {
+        whole = 0;
+    }
+    if (nhiK >= 0 && tbh[nhiK].Valid &&
+        inst_st_confirmed(tbh[nhiK].Rec, tbh[nhiK].Ask)) {
+        bdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
+        n = inst_get32(tbh[nhiK].Rec, CM_ST_O_ROUTER_COUNT);
+        for (r = 0; r < n; r++) {
+            const unsigned char *e =
+                tbh[nhiK].Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
+            if (inst_get32(e, CM_ST_E_BRIDGE) == bdf) {
+                usb3 = (inst_get32(e, CM_ST_E_TUNNELS) >> 4) & 0xFUL;
+            }
+        }
+    }
+    return inst_unplug_kind(whole, others, single, usb3);
+}
+
+/* Under the USB4 profile, the record watched for the router's PCIe tunnel
+ * closed after the eject (record 24 section 5.2). */
+static void tb_watch_tunnel(int nhiK, int portIndex)
+{
+    DWORD start = GetTickCount();
+    INST_U32 bdf;
+    INST_U32 r;
+    INST_U32 n;
+
+    if (nhiK < 0 || inst_get32(tbh[nhiK].Rec, CM_ST_O_CM) != CM_ST_CM_USB4) {
+        return;
+    }
+    bdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
+    for (;;) {
+        if (tb_read_record(&tbh[nhiK]) &&
+            inst_st_confirmed(tbh[nhiK].Rec, tbh[nhiK].Ask)) {
+            n = inst_get32(tbh[nhiK].Rec, CM_ST_O_ROUTER_COUNT);
+            for (r = 0; r < n; r++) {
+                const unsigned char *e =
+                    tbh[nhiK].Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
+                if (inst_get32(e, CM_ST_E_BRIDGE) == bdf &&
+                    (inst_get32(e, CM_ST_E_TUNNELS) & 0xFUL) ==
+                        CM_ST_TUN_EJECTED) {
+                    out("The PCIe tunnel was closed.\n");
+                    return;
+                }
+            }
+        }
+        if (GetTickCount() - start >= INST_TB_TUNNEL_WAIT_MS) {
+            out("The Thunderbolt driver has not confirmed that the PCIe tunnel "
+                "was closed.\n");
+            return;
+        }
+        Sleep(250);
+    }
+}
+
+static int run_eject(void)
+{
+    char line[64];
+    char id[INST_ID_CHARS];
+    char portId[INST_ID_CHARS];
+    char desc[128];
+    int u;
+    int i;
+    int nhiK;
+    int portIndex;
+    int single;
+    int outcome;
+    const char *text;
+    INST_U32 n;
+    DWORD cr;
+
+    if (envNow.Nt ? tbEject == NULL
+                  : (tbQueryRemove == NULL || tbRemove == NULL)) {
+        out("REFUSED: %s is missing on this Windows.\n",
+            envNow.Nt ? "CM_Request_Device_EjectA"
+                      : (tbQueryRemove == NULL ? "CM_Query_Remove_SubTree"
+                                               : "CM_Remove_SubTree"));
+        return INST_EXIT_REFUSED;
+    }
+    if (!tb_read_all()) {
+        tb_unask();
+        return INST_EXIT_REFUSED;
+    }
+    tb_print();
+    if (tbnBad != 0 || tbChanging) {
+        out("\nThe device list could not be read whole and steady, so nothing "
+            "is ejected.\n");
+        tb_unask();
+        return INST_EXIT_REFUSED;
+    }
+    if (tbUnits == 0) {
+        for (i = 0; i < tbhCount; i++) {
+            if (!tbh[i].Confirmed && tbh[i].Node >= 0) {
+                out("\nThe Thunderbolt driver has not confirmed which ports "
+                    "carry tunnels, so nothing\ncan be ejected safely from "
+                    "here.%s\n",
+                    (envNow.Nt && !tbh[i].Asked)
+                        ? " Run it as an administrator."
+                        : "");
+                tb_unask();
+                return INST_EXIT_REFUSED;
+            }
+        }
+        out("\nThere is nothing to eject.\n");
+        tb_unask();
+        return INST_EXIT_REFUSED;
+    }
+    u = -1;
+    if (opts.EjectId[0] != '\0') {
+        u = tb_find_unit(opts.EjectId);
+        if (u < 0) {
+            out("\nNo device behind a Thunderbolt port has the instance id "
+                "%s.\n", opts.EjectId);
+            tb_unask();
+            return INST_EXIT_REFUSED;
+        }
+    } else {
+        n = opts.EjectNum;
+        if (n == 0) {
+            out("\nWhich device? Type its number and Enter (Enter alone "
+                "cancels): ");
+            if (!read_line(line, sizeof(line)) || line[0] == '\0') {
+                out("\nCancelled.\n");
+                tb_unask();
+                return INST_EXIT_REFUSED;
+            }
+            n = (INST_U32)strtoul(line, NULL, 10);
+        }
+        for (i = 0; i < tbnCount; i++) {
+            if (tbn[i].Number != 0 && (INST_U32)tbn[i].Number == n) {
+                u = i;
+            }
+        }
+        if (u < 0) {
+            out("\nThere is no device number %lu.\n", (unsigned long)n);
+            tb_unask();
+            return INST_EXIT_REFUSED;
+        }
+    }
+    inst_copy(id, tbn[u].R.Id, sizeof(id));
+    inst_copy(desc, tbn[u].R.Desc[0] ? tbn[u].R.Desc : first_hw(&tbn[u].R),
+              sizeof(desc));
+    inst_copy(portId, tbn[tbn[u].Parent].R.Id, sizeof(portId));
+    nhiK = tbn[tbn[u].Parent].VNhi;
+    portIndex = tbn[tbn[u].Parent].VPort;
+    single = 1;
+    for (i = u + 1; i < tbnCount; i++) {
+        if (tbn[i].UnitOf == u) {
+            single = 0;
+        }
+    }
+    if (tbn[u].IsUsbHc || tbn[u].Candidate) {
+        single = 0;
+    }
+    out("\nDevice %d: %s\n  %s\n", tbn[u].Number, desc, id);
+    if (!(opts.Yes && opts.EjectId[0] != '\0')) {
+        out("Eject it now? Type Y and Enter (anything else cancels): ");
+        if (!read_line(line, sizeof(line)) ||
+            !(line[0] == 'Y' || line[0] == 'y') || line[1] != '\0') {
+            out("\nCancelled.\n");
+            tb_unask();
+            return INST_EXIT_REFUSED;
+        }
+    }
+    /* Revalidation (record 24 section 7.3), immediately before the call. */
+    if (!tb_scan(0) || tbnBad != 0 || tbChanging) {
+        out("\nThe device list changed; nothing was ejected.\n");
+        tb_unask();
+        return INST_EXIT_REFUSED;
+    }
+    u = tb_find_unit(id);
+    if (u < 0 || !inst_eq(tbn[tbn[u].Parent].R.Id, portId)) {
+        out("\nThe device list changed; nothing was ejected.\n");
+        tb_unask();
+        return INST_EXIT_REFUSED;
+    }
+    out("\n");
+    if (envNow.Nt) {
+        ULONG veto = 0;
+        char vetoName[MAX_PATH];
+        int withName;
+        vetoName[0] = '\0';
+        cr = tbEject(tbn[u].Dn, &veto, vetoName, MAX_PATH, 0);
+        logonly("CM_Request_Device_EjectA(%s) = 0x%08lX, veto %lu %s\n", id,
+                (unsigned long)cr, (unsigned long)veto, vetoName);
+        outcome = inst_eject_nt(cr, veto, &text, &withName);
+        if (outcome != INST_EJ_DONE) {
+            if (withName) {
+                char name[MAX_PATH + 16];
+                if (veto == 0 || vetoName[0] == '\0') {
+                    _snprintf(name, sizeof(name) - 1, "veto %lu",
+                              (unsigned long)veto);
+                    name[sizeof(name) - 1] = '\0';
+                } else {
+                    inst_copy(name, vetoName, sizeof(name));
+                }
+                out(text, name);
+                out("\n");
+            } else {
+                out("%s\n", text);
+            }
+            if (outcome == INST_EJ_FAILED) {
+                out("(code 0x%08lX)\n", (unsigned long)cr);
+            }
+            tb_unask();
+            return inst_eject_code(outcome);
+        }
+        out("Windows has stopped %s.\n", desc);
+        tb_watch_tunnel(nhiK, portIndex);
+    } else {
+        cr = tbQueryRemove(tbn[u].Dn, INST_UI_NOT_OK);
+        logonly("CM_Query_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
+        outcome = inst_eject9x_query(cr, &text);
+        if (outcome != INST_EJ_DONE) {
+            out("%s\n", text);
+            if (cr != INST_CR_REMOVE_VETOED && outcome == INST_EJ_VETO) {
+                out("(code 0x%08lX)\n", (unsigned long)cr);
+            }
+            tb_unask();
+            return inst_eject_code(outcome);
+        }
+        /* Accepted: the removal always follows (record 24 section 7.1). */
+        cr = tbRemove(tbn[u].Dn, INST_UI_NOT_OK);
+        logonly("CM_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
+        outcome = inst_eject9x_remove(cr, &text);
+        if (outcome != INST_EJ_DONE) {
+            out("%s\n(code 0x%08lX)\n", text, (unsigned long)cr);
+            tb_unask();
+            devLast = "Windows could not finish stopping the device.";
+            return inst_eject_code(outcome);
+        }
+        out("Windows has stopped %s.\n", desc);
+        out("Until you unplug it, Device Manager's Refresh, or the "
+            "Thunderbolt driver looking\nat the port again, can start it "
+            "again.\n");
+    }
+    devLast = inst_unplug_text(tb_after(portId, nhiK, portIndex, single));
+    tb_unask();
+    return INST_EXIT_DONE;
 }
 
 /* ======================================================================== */
@@ -5432,6 +6525,9 @@ static void usage(void)
 "  /nopause      do not wait for Enter at the end\n"
 "  /log path     write the log there (default XHCIINST.LOG on the system "
 "drive)\n"
+"  /devices      show the connected Thunderbolt and USB4 devices\n"
+"  /eject [N]    remove one of them safely (/eject id=<instance id> for "
+"scripts)\n"
 "\n"
 "Exit codes: 0 done, nothing needed a change; 1 refused or cancelled, nothing\n"
 "changed; 2 failed part-way (see the log); 3 done, restart needed; 4 done,\n"
@@ -5449,7 +6545,11 @@ static int finish(int code)
      * (record 23 section 7.4, orchestrator decision 2026-10-15): a finished
      * run that changed anything asks for the restart and exits 3; a run
      * that stopped short says to finish the steps above first. */
-    if (!opts.SelfTest) {
+    if (opts.Devices || opts.Eject) {
+        /* The device modes' exception (record 23 section 7.4, record 24
+         * section 8.2): the eject's own last line, no restart. */
+        out("\n%s\n", devLast != NULL ? devLast : "No changes were made.");
+    } else if (!opts.SelfTest) {
         code = inst_final(flagChanged, opts.List, code, &last);
         out("\n%s\n", inst_final_text(last));
     }
@@ -5459,7 +6559,7 @@ static int finish(int code)
         fclose(logFile);
         logFile = NULL;
     }
-    if (!opts.NoPause && !opts.List) {
+    if (!opts.NoPause && !opts.List && !opts.Devices) {
         printf("Press Enter to close this window.");
         fflush(stdout);
         if (fgets(line, sizeof(line), stdin) == NULL) {
@@ -5485,12 +6585,14 @@ int main(int argc, char **argv)
     if (opts.SelfTest) {
         return selftest();
     }
-    if (!opts.List || opts.Log[0] != '\0') {
+    if ((!opts.List && !opts.Devices) || opts.Log[0] != '\0') {
         log_open();
     }
-    out("xhciinst %s - install, update or uninstall the xhci98 package\n",
-        XHCIINST_VERSION);
-    out("Log: %s\n", logPath[0] ? logPath : "none (/list writes none unless /log names one)");
+    out("xhciinst %s - %s\n", XHCIINST_VERSION,
+        (opts.Devices || opts.Eject)
+            ? "Thunderbolt and USB4 devices"
+            : "install, update or uninstall the xhci98 package");
+    out("Log: %s\n", logPath[0] ? logPath : "none (/list and /devices write none unless /log names one)");
     for (i = 0; i < argc; i++) {
         logonly("argv[%d] = %s\n", i, argv[i]);
     }
@@ -5534,8 +6636,9 @@ int main(int argc, char **argv)
             wow = FALSE;
         }
         if (wow) {
-            out("This is 64-bit Windows: the 32-bit tool cannot install "
-                "drivers here.\n");
+            out("This is 64-bit Windows: the 32-bit tool cannot %s here.\n",
+                (opts.Devices || opts.Eject) ? "read the devices"
+                                             : "install drivers");
             out("REFUSED: run INSTALL.BAT, which runs %s.\n", INST_OTHER_NAME);
             return finish(INST_EXIT_REFUSED);
         }
@@ -5560,6 +6663,20 @@ int main(int argc, char **argv)
     if (devs == NULL) {
         out("Out of memory.\n");
         return finish(INST_EXIT_REFUSED);
+    }
+    if (opts.Devices || opts.Eject) {
+        /* Record 24: no package is read, and no administrator test is made
+         * first (each call's answer is reported). */
+        free(devs);
+        devs = NULL;
+        tbn = (TBNODE *)calloc(INST_MAX_DEVS, sizeof(TBNODE));
+        if (tbn == NULL) {
+            out("Out of memory.\n");
+            return finish(INST_EXIT_REFUSED);
+        }
+        load_routines();
+        tb_routines();
+        return finish(opts.Devices ? run_devices() : run_eject());
     }
     if (!check_package()) {
         return finish(INST_EXIT_REFUSED);

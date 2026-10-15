@@ -182,9 +182,13 @@ static VOID cmStIcm(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
                     : CM_ST_UNKNOWN);
         cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_TBT3);
         cmStPut(e, CM_ST_E_LANES, CM_ST_LANES_UNKNOWN);
+        /* A Thunderbolt 3 host carries USB inside the PCIe tunnel (the
+         * device's own controller): it has no USB3 tunnel to report. */
         cmStPut(e, CM_ST_E_TUNNELS,
                 (d->Approved ? CM_ST_TUN_UP : CM_ST_TUN_NONE) |
-                    (CM_ST_TUN_UNKNOWN << 4) | (CM_ST_TUN_UNKNOWN << 8));
+                    ((in->IcmNoUsb3 ? CM_ST_TUN_NONE : CM_ST_TUN_UNKNOWN)
+                     << 4) |
+                    (CM_ST_TUN_UNKNOWN << 8));
         cmStPut(e, CM_ST_E_BRIDGE, d->Approved ? bridge : CM_ST_UNKNOWN);
         cmStPut(e, CM_ST_E_SHORT_ID, cmStShortId(TRUE, d->Uuid));
         if (d->Names.Present & TBT_ICM_NAMES_VENDOR) {

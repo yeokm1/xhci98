@@ -1425,7 +1425,24 @@ const INST_VALUE instValues[] = {
       "approve Thunderbolt devices automatically (0 no, 1 yes)", NULL, 0 },
     { "XhciCmSafeEject", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
       "offer Safely Remove for the devices behind a dock (0 no, 1 yes)",
-      NULL, 0 }
+      NULL, 0 },
+    /* Owner, 2026-10-15: never asked, /set Name=Value only (record 23
+     * section 8.1, record 24 section 11). */
+    { "XhciCmReenum", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "make Windows look for devices after each Thunderbolt or USB4 "
+      "change (0 no, 1 yes)",
+      "0 is for diagnosing a machine where that misbehaves: devices then "
+      "appear only\n  after a Device Manager refresh.", 0x1UL },
+    { "XhciCmUsb3Tunnel", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: carry a device's USB over a USB3 connection (0 no, 1 yes)",
+      NULL, 0 },
+    { "XhciCmLaneBonding", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: bond the two lanes of a link (0 no, 1 yes)", NULL, 0 },
+    { "XhciCmPreOsCleanup", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x7UL,
+      "USB4: connections found at start (0 kept, 1 cleaned where they do "
+      "not verify, 2\n  all cleaned)",
+      "1 and 2 may drop a device the firmware connected before Windows "
+      "started.", 0x6UL }
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
@@ -1695,6 +1712,50 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             /* INSTALL.BAT chose the directory; nothing more to do here. */
         } else if (inst_switch(a, "selftest")) {
             opts->SelfTest = 1;
+        } else if (inst_switch(a, "devices")) {
+            opts->Devices = 1;
+        } else if (inst_switch(a, "eject")) {
+            const char *v;
+            if (opts->Eject) {
+                inst_err(err, errCap, "/eject given twice", NULL);
+                return 1;
+            }
+            opts->Eject = 1;
+            if (i + 1 < argc && argv[i + 1][0] != '/' && argv[i + 1][0] != '-') {
+                i++;
+                v = argv[i];
+                if (v[0] >= '0' && v[0] <= '9') {
+                    INST_U32 n = 0;
+                    const char *q = v;
+                    while (*q >= '0' && *q <= '9' && n < 100000UL) {
+                        n = n * 10UL + (INST_U32)(*q - '0');
+                        q++;
+                    }
+                    if (*q != '\0' || n == 0 || n >= 100000UL) {
+                        inst_err(err, errCap, "/eject: not a device number: ", v);
+                        return 1;
+                    }
+                    opts->EjectNum = n;
+                } else if (inst_eq(v, "id") && i + 1 < argc) {
+                    /* COMMAND.COM splits id=... at '=': take the next. */
+                    i++;
+                    if (argv[i][0] == '\0' ||
+                        strlen(argv[i]) >= sizeof(opts->EjectId)) {
+                        inst_err(err, errCap, "/eject: id= needs an instance id", NULL);
+                        return 1;
+                    }
+                    inst_copy(opts->EjectId, argv[i], sizeof(opts->EjectId));
+                } else if (inst_eqn(v, "id=", 3)) {
+                    if (v[3] == '\0' || strlen(v + 3) >= sizeof(opts->EjectId)) {
+                        inst_err(err, errCap, "/eject: id= needs an instance id", NULL);
+                        return 1;
+                    }
+                    inst_copy(opts->EjectId, v + 3, sizeof(opts->EjectId));
+                } else {
+                    inst_err(err, errCap, "/eject takes a number or id=<instance id>: ", v);
+                    return 1;
+                }
+            }
         } else if (inst_switch(a, "dir") || inst_switch(a, "log")) {
             int isDir = inst_switch(a, "dir");
             if (i + 1 >= argc) {
@@ -1778,6 +1839,22 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->Defaults && opts->SetCount != 0) {
         inst_err(err, errCap, "/defaults and /set contradict each other", NULL);
+        return 1;
+    }
+    if ((opts->Devices || opts->Eject) &&
+        (opts->List || opts->Defaults || opts->SetCount != 0 ||
+         opts->Force || opts->Restage || opts->Uninstall)) {
+        inst_err(err, errCap, "/devices and /eject take only /yes, /nopause, "
+                 "/log and /dir", NULL);
+        return 1;
+    }
+    if (opts->Devices && opts->Eject) {
+        inst_err(err, errCap, "/devices and /eject: one at a time", NULL);
+        return 1;
+    }
+    if (opts->Eject && opts->Yes && opts->EjectId[0] == '\0') {
+        inst_err(err, errCap, "/eject takes /yes only with id=<instance id>: "
+                 "a number is always confirmed", NULL);
         return 1;
     }
     if (opts->Uninstall && (opts->Defaults || opts->SetCount != 0 ||
@@ -2105,4 +2182,483 @@ int inst_remove_rank(const char *instanceId, const char *service,
         return 5;
     }
     return 3;
+}
+
+/* ======================================================================== */
+/* The Thunderbolt and USB4 device viewer and eject (record 24)              */
+/* ======================================================================== */
+
+/* src\cm\xhcicmf.inf's model ids, in its order; test_inst compares them. */
+const char *const instTbPortIds[] = {
+    "PCI\\VEN_8086&DEV_15C0&CC_0604", "PCI\\VEN_8086&DEV_156B&CC_0604",
+    "PCI\\VEN_8086&DEV_156D&CC_0604", "PCI\\VEN_8086&DEV_1576&CC_0604",
+    "PCI\\VEN_8086&DEV_1578&CC_0604", "PCI\\VEN_8086&DEV_15D3&CC_0604",
+    "PCI\\VEN_8086&DEV_15DA&CC_0604", "PCI\\VEN_8086&DEV_15E7&CC_0604",
+    "PCI\\VEN_8086&DEV_15EA&CC_0604", "PCI\\VEN_8086&DEV_1133&CC_0604",
+    "PCI\\VEN_8086&DEV_1136&CC_0604", "PCI\\VEN_8086&DEV_8A1D&CC_0604",
+    "PCI\\VEN_8086&DEV_8A1F&CC_0604", "PCI\\VEN_8086&DEV_8A21&CC_0604",
+    "PCI\\VEN_8086&DEV_8A23&CC_0604", "PCI\\VEN_8086&DEV_9A23&CC_0604",
+    "PCI\\VEN_8086&DEV_9A25&CC_0604", "PCI\\VEN_8086&DEV_9A27&CC_0604",
+    "PCI\\VEN_8086&DEV_9A29&CC_0604", "PCI\\VEN_8086&DEV_9A2B&CC_0604",
+    "PCI\\VEN_8086&DEV_9A2D&CC_0604", "PCI\\VEN_8086&DEV_9A2F&CC_0604",
+    "PCI\\VEN_8086&DEV_9A31&CC_0604", "PCI\\VEN_8086&DEV_466E&CC_0604",
+    "PCI\\VEN_8086&DEV_463F&CC_0604", "PCI\\VEN_8086&DEV_462F&CC_0604",
+    "PCI\\VEN_8086&DEV_461F&CC_0604", "PCI\\VEN_8086&DEV_A76E&CC_0604",
+    "PCI\\VEN_8086&DEV_A71F&CC_0604", "PCI\\VEN_8086&DEV_A72F&CC_0604",
+    "PCI\\VEN_8086&DEV_5780&CC_0604", "PCI\\VEN_8086&DEV_5783&CC_0604",
+    "PCI\\VEN_1022&DEV_14CD&CC_0604", "PCI\\VEN_1022&DEV_14EF&CC_0604",
+    "PCI\\VEN_1022&DEV_150A&CC_0604", "PCI\\VEN_1B21&DEV_2423&CC_0604",
+    "PCI\\VEN_1B36&DEV_0001&CC_0604", "PCI\\VEN_1B36&DEV_000C&CC_0604"
+};
+const int instTbPortIdCount =
+    (int)(sizeof(instTbPortIds) / sizeof(instTbPortIds[0]));
+
+int inst_tb_candidate(const char *hw, size_t hwBytes)
+{
+    int i;
+
+    for (i = 0; i < instTbPortIdCount; i++) {
+        if (inst_msz_has(hw, hwBytes, instTbPortIds[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* 1 when an id of the list has "CC_" followed by `cls` at a field start. */
+static int inst_msz_class(const char *msz, size_t bytes, const char *cls)
+{
+    size_t off = 0;
+    size_t n;
+    size_t k;
+    size_t c = strlen(cls);
+
+    if (msz == NULL) {
+        return 0;
+    }
+    while (off < bytes && msz[off] != '\0') {
+        n = 0;
+        while (off + n < bytes && msz[off + n] != '\0') {
+            n++;
+        }
+        for (k = 0; k + 3 + c <= n; k++) {
+            if ((k == 0 || msz[off + k - 1] == '&' || msz[off + k - 1] == '\\') &&
+                inst_eqn(msz + off + k, "CC_", 3) &&
+                inst_eqn(msz + off + k + 3, cls, c)) {
+                return 1;
+            }
+        }
+        off += n + 1;
+    }
+    return 0;
+}
+
+int inst_tb_is_nhi(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes, const char *service)
+{
+    if (service != NULL && inst_eq(service, "xhcicm")) {
+        return 1;
+    }
+    return inst_msz_class(hw, hwBytes, "0C0340") ||
+           inst_msz_class(compat, compatBytes, "0C0340") ||
+           inst_msz_class(hw, hwBytes, "0880") ||
+           inst_msz_class(compat, compatBytes, "0880");
+}
+
+int inst_tb_is_usbhc(const char *hw, size_t hwBytes, const char *compat,
+                     size_t compatBytes, const char *service)
+{
+    if (inst_tb_is_nhi(hw, hwBytes, compat, compatBytes, service)) {
+        return 0;
+    }
+    return inst_msz_class(hw, hwBytes, "0C03") ||
+           inst_msz_class(compat, compatBytes, "0C03");
+}
+
+static const char *inst_last_part(const char *id)
+{
+    const char *p = strrchr(id, '\\');
+
+    return p != NULL ? p + 1 : id;
+}
+
+static int inst_hex2(const char *s, INST_U32 *v)
+{
+    int a = inst_hexval(s[0]);
+    int b = inst_hexval(s[1]);
+
+    if (a < 0 || b < 0) {
+        return 0;
+    }
+    *v = (INST_U32)(a * 16 + b);
+    return 1;
+}
+
+int inst_id_location(const char *id, INST_U32 *bdf)
+{
+    const char *s = inst_last_part(id);
+    INST_U32 bus;
+    INST_U32 dev;
+    INST_U32 fn;
+
+    if (strlen(s) != 21 || !inst_eqn(s, "BUS_", 4) ||
+        !inst_eqn(s + 6, "&DEV_", 5) || !inst_eqn(s + 13, "&FUNC_", 6) ||
+        !inst_hex2(s + 4, &bus) || !inst_hex2(s + 11, &dev) ||
+        !inst_hex2(s + 19, &fn) || dev > 31 || fn > 7) {
+        return 0;
+    }
+    *bdf = (bus << 8) | (dev << 3) | fn;
+    return 1;
+}
+
+int inst_id_path(const char *id, unsigned char *path, int *count, int room)
+{
+    const char *s = inst_last_part(id);
+    size_t n = strlen(s);
+    size_t i;
+    INST_U32 v;
+
+    if (n < 4 || (n % 2) != 0 || n / 2 > (size_t)room) {
+        return 0;
+    }
+    for (i = 0; i < n / 2; i++) {
+        if (!inst_hex2(s + 2 * i, &v)) {
+            return 0;
+        }
+        path[i] = (unsigned char)v;
+    }
+    *count = (int)(n / 2);
+    return 1;
+}
+
+int inst_tb_loc_match(const char *id, INST_U32 bdf, const unsigned char *path,
+                      int pathCount)
+{
+    INST_U32 at;
+    unsigned char got[16];
+    int n;
+    int i;
+
+    if (inst_id_location(id, &at)) {
+        return at == bdf;
+    }
+    if (pathCount <= 0 || !inst_id_path(id, got, &n, 16) || n != pathCount) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (got[i] != path[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+INST_U32 inst_get32(const unsigned char *b, size_t offset)
+{
+    return (INST_U32)b[offset] | ((INST_U32)b[offset + 1] << 8) |
+           ((INST_U32)b[offset + 2] << 16) | ((INST_U32)b[offset + 3] << 24);
+}
+
+/* The record's layout (src\cm\cm_status.h), repeated here as numbers so
+ * the pure half needs no driver header; test_inst checks them against it. */
+#define INST_ST_MAGIC       0x534D4358UL
+#define INST_ST_HDR         128UL
+#define INST_ST_ENTRY       128UL
+#define INST_ST_MAX_ROUTERS 24UL
+
+int inst_st_check(const unsigned char *b, size_t n)
+{
+    INST_U32 count;
+    INST_U32 i;
+
+    if (n < INST_ST_HDR || inst_get32(b, 0) != INST_ST_MAGIC ||
+        inst_get32(b, 4) != 1UL || inst_get32(b, 76) != INST_ST_ENTRY) {
+        return 0;
+    }
+    count = inst_get32(b, 72);
+    if (count > INST_ST_MAX_ROUTERS || inst_get32(b, 48) > 4UL ||
+        inst_get32(b, 8) != INST_ST_HDR + count * INST_ST_ENTRY ||
+        (size_t)inst_get32(b, 8) != n) {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        if (b[84 + 8 * i] > 7) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* 64-bit helpers over two 32-bit words, for the pure half's C89. */
+static void inst_mul32(INST_U32 a, INST_U32 b, INST_U32 *hi, INST_U32 *lo)
+{
+    INST_U32 al = a & 0xFFFFUL;
+    INST_U32 ah = a >> 16;
+    INST_U32 bl = b & 0xFFFFUL;
+    INST_U32 bh = b >> 16;
+    INST_U32 ll = al * bl;
+    INST_U32 lh = al * bh;
+    INST_U32 hl = ah * bl;
+    INST_U32 hh = ah * bh;
+    INST_U32 mid = (ll >> 16) + (lh & 0xFFFFUL) + (hl & 0xFFFFUL);
+
+    *lo = (ll & 0xFFFFUL) | ((mid & 0xFFFFUL) << 16);
+    *hi = hh + (lh >> 16) + (hl >> 16) + (mid >> 16);
+}
+
+/* (aHi:aLo - bHi:bLo) >> 24, as a signed 32-bit count of 1.68 s units
+ * (2^24 x 100 ns); the difference of two boot times stays small. */
+static long inst_boot_units(INST_U32 tHi, INST_U32 tLo, INST_U32 uHi,
+                            INST_U32 uLo)
+{
+    INST_U32 lo = tLo - uLo;
+    INST_U32 hi = tHi - uHi - (tLo < uLo ? 1UL : 0UL);
+
+    return (long)((hi << 8) | (lo >> 24));
+}
+
+int inst_st_fresh(INST_U32 recUptimeS, INST_U32 recTimeLo, INST_U32 recTimeHi,
+                  INST_U32 nowLo, INST_U32 nowHi, INST_U32 tickMs)
+{
+    INST_U32 hi;
+    INST_U32 lo;
+    long rec;
+    long now;
+    long d;
+
+    inst_mul32(recUptimeS, 10000000UL, &hi, &lo);
+    rec = inst_boot_units(recTimeHi, recTimeLo, hi, lo);
+    inst_mul32(tickMs, 10000UL, &hi, &lo);
+    now = inst_boot_units(nowHi, nowLo, hi, lo);
+    d = rec - now;
+    if (d < 0) {
+        d = -d;
+    }
+    /* Five minutes: 300 s / 1.6777216 s, rounded down. */
+    return d <= 178L;
+}
+
+int inst_st_confirmed(const unsigned char *b, INST_U32 ask)
+{
+    return ask != 0 && inst_get32(b, 124) == ask;
+}
+
+static int inst_grand(const int *parent, int n, int i)
+{
+    int p;
+
+    if (i < 0 || i >= n) {
+        return -1;
+    }
+    p = parent[i];
+    if (p < 0 || p >= n) {
+        return -1;
+    }
+    return parent[p];
+}
+
+void inst_tb_protect(const int *parent, const int *isNhi, const int *isUsbHc,
+                     int n, int *prot)
+{
+    int i;
+    int j;
+    int a;
+    int g;
+
+    for (i = 0; i < n; i++) {
+        prot[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (!isNhi[i]) {
+            continue;
+        }
+        for (a = i; a >= 0 && a < n && !prot[a]; a = parent[a]) {
+            prot[a] = 1;
+        }
+        g = inst_grand(parent, n, i);
+        for (j = 0; j < n; j++) {
+            if (isUsbHc[j] && inst_grand(parent, n, j) == g) {
+                prot[j] = 1;
+            }
+        }
+    }
+}
+
+void inst_tb_units(const int *parent, const int *verified, int n,
+                   int *unitOf)
+{
+    int i;
+    int p;
+
+    for (i = 0; i < n; i++) {
+        unitOf[i] = -1;
+        p = parent[i];
+        if (p < 0 || p >= i || verified[i]) {
+            continue;
+        }
+        unitOf[i] = verified[p] ? i : unitOf[p];
+    }
+}
+
+int inst_tb_unit_blocked(const int *unitOf, const int *prot, int n, int u)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (unitOf[i] == u && prot[i]) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_eject_code(int outcome)
+{
+    switch (outcome) {
+    case INST_EJ_DONE:
+        return INST_EXIT_DONE;
+    case INST_EJ_VETO:
+        return INST_EXIT_STEPS;
+    case INST_EJ_FAILED:
+        return INST_EXIT_FAILED;
+    default:
+        return INST_EXIT_REFUSED;
+    }
+}
+
+int inst_eject9x_query(INST_U32 cr, const char **text)
+{
+    if (cr == 0) {
+        *text = "";
+        return INST_EJ_DONE;
+    }
+    if (cr == INST_CR_REMOVE_VETOED) {
+        *text = "Windows refused: the device is in use (a program may have a "
+                "file open on it,\nor its driver refused). Close any program "
+                "using it and try again.";
+        return INST_EJ_VETO;
+    }
+    if (cr == INST_CR_INVALID_DEVNODE || cr == INST_CR_NO_SUCH_DEVNODE) {
+        *text = "The device list changed; nothing was ejected.";
+        return INST_EJ_CHANGED;
+    }
+    if (cr == INST_CR_CALL_NOT_IMPLEMENTED) {
+        *text = "This Windows does not offer the removal this needs.";
+        return INST_EJ_UNSUPPORTED;
+    }
+    *text = "Windows refused the removal.";
+    return INST_EJ_VETO;
+}
+
+int inst_eject9x_remove(INST_U32 cr, const char **text)
+{
+    if (cr == 0) {
+        *text = "";
+        return INST_EJ_DONE;
+    }
+    *text = "Windows began to stop the device but could not finish. It is not "
+            "safe to unplug\nit now. Shut down Windows, then unplug it.";
+    return INST_EJ_FAILED;
+}
+
+/* PNP_VETO_TYPE (cfg.h). */
+#define INST_VETO_LEGACY_DEVICE     1UL
+#define INST_VETO_PENDING_CLOSE     2UL
+#define INST_VETO_WINDOWS_APP       3UL
+#define INST_VETO_WINDOWS_SERVICE   4UL
+#define INST_VETO_OUTSTANDING_OPEN  5UL
+#define INST_VETO_DEVICE            6UL
+#define INST_VETO_DRIVER            7UL
+#define INST_VETO_ILLEGAL_REQUEST   8UL
+#define INST_VETO_NON_DISABLEABLE   10UL
+#define INST_VETO_LEGACY_DRIVER     11UL
+#define INST_VETO_RIGHTS            12UL
+
+int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
+                  int *withName)
+{
+    *withName = 0;
+    if (cr == 0) {
+        *text = "";
+        return INST_EJ_DONE;
+    }
+    if (cr == INST_CR_ACCESS_DENIED) {
+        *text = "Windows did not allow this account to remove the device. "
+                "Run it as an administrator.";
+        return INST_EJ_RIGHTS;
+    }
+    if (cr == INST_CR_INVALID_DEVNODE || cr == INST_CR_NO_SUCH_DEVNODE) {
+        *text = "The device list changed; nothing was ejected.";
+        return INST_EJ_CHANGED;
+    }
+    if (cr == INST_CR_CALL_NOT_IMPLEMENTED) {
+        *text = "This Windows does not offer the removal this needs.";
+        return INST_EJ_UNSUPPORTED;
+    }
+    if (cr != INST_CR_REMOVE_VETOED) {
+        *text = "Windows could not eject the device.";
+        return INST_EJ_FAILED;
+    }
+    switch (vetoType) {
+    case INST_VETO_OUTSTANDING_OPEN:
+        *text = "Windows refused: a program is using the device. Close it "
+                "and try again.";
+        break;
+    case INST_VETO_DEVICE:
+    case INST_VETO_DRIVER:
+        *text = "Windows refused: %s did not allow it.";
+        *withName = 1;
+        break;
+    case INST_VETO_PENDING_CLOSE:
+        *text = "Windows refused: the device is still being closed. Try "
+                "again in a moment.";
+        break;
+    case INST_VETO_WINDOWS_APP:
+    case INST_VETO_WINDOWS_SERVICE:
+        *text = "Windows refused: %s is using the device.";
+        *withName = 1;
+        break;
+    case INST_VETO_RIGHTS:
+        *text = "Windows did not allow this account to remove the device. "
+                "Run it as an administrator.";
+        break;
+    case INST_VETO_ILLEGAL_REQUEST:
+    case INST_VETO_NON_DISABLEABLE:
+    case INST_VETO_LEGACY_DEVICE:
+    case INST_VETO_LEGACY_DRIVER:
+        *text = "Windows does not allow this device to be removed.";
+        break;
+    default:
+        *text = "Windows refused the removal (%s).";
+        *withName = 1;
+        break;
+    }
+    return INST_EJ_VETO;
+}
+
+int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
+                     INST_U32 usb3)
+{
+    if (othersLeft) {
+        return INST_UNPLUG_OTHERS;
+    }
+    if (walkWhole && singleFunction && usb3 == 0) {
+        return INST_UNPLUG_NOW;
+    }
+    return INST_UNPLUG_CHECK;
+}
+
+const char *inst_unplug_text(int kind)
+{
+    switch (kind) {
+    case INST_UNPLUG_NOW:
+        return "You can now unplug the device.";
+    case INST_UNPLUG_OTHERS:
+        return "Other devices behind the same Thunderbolt port are still "
+               "running: eject them\ntoo before you unplug it.";
+    default:
+        return "Before you unplug it, make sure none of its other devices "
+               "(USB ports, card\nreaders, network) is in use; stop them in "
+               "Windows first.";
+    }
 }

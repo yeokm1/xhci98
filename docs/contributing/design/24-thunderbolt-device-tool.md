@@ -143,7 +143,7 @@ version it does not know.
 | 24 | ids | the Thunderbolt vendor and model ids where the DROM's Intel entry carried them | the router's PCI-style vendor and device | unknown |
 | 28 | generation: 1 Thunderbolt 3, 2 USB4 (version in 15:8) | 1 | from the router | from the link record |
 | 32 | lanes: 0 unknown, 1 single, 2 bonded | 0 | where configured or verified | 0 |
-| 36 | tunnels, 4 bits each: PCIe (3:0), USB3 (7:4), DisplayPort (11:8); 0 none, 1 up, 2 found at start and kept, 3 failed, 4 torn down after an eject, 5 unknown | PCIe up while approved, else none; USB3 and DisplayPort unknown | from the port | all unknown |
+| 36 | tunnels, 4 bits each: PCIe (3:0), USB3 (7:4), DisplayPort (11:8); 0 none, 1 up, 2 found at start and kept, 3 failed, 4 torn down after an eject, 5 unknown | PCIe up while approved, else none; USB3 none on the Thunderbolt 3 rows (Falcon, Alpine and Titan Ridge: a Thunderbolt 3 device carries USB inside its PCIe tunnel, through its own controller), unknown on the integrated rows; DisplayPort unknown | from the port | all unknown |
 | 40 | the tunnel port its PCIe tunnel reaches (bus/device/function) | the domain's single active member when it has exactly one, else unknown | the port-to-bridge correspondence (`XHCI_TBT_BINDS`, record 22 section 7.6), else unknown | unknown |
 | 44 | the UUID's last 16 bits | yes | where read | where read |
 | 48 | reserved, 0 | | | |

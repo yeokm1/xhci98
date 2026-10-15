@@ -339,6 +339,10 @@ typedef struct _INST_OPTS {
     int Uninstall;
     int NoPause;
     int SelfTest;
+    int Devices;            /* /devices (record 24)                     */
+    int Eject;              /* /eject                                   */
+    INST_U32 EjectNum;      /* /eject N: N, 0 for none                  */
+    char EjectId[INST_ID_CHARS];  /* /eject id=...: the instance id     */
     char Dir[INST_NAME_CHARS];
     char Log[260];
     int SetCount;
@@ -498,5 +502,111 @@ int inst_own_service(const char *service);
 /* The removal rank: lower goes first. -1 when the devnode is not removed. */
 int inst_remove_rank(const char *instanceId, const char *service,
                      int filterPresent);
+
+/* ---- the Thunderbolt and USB4 device viewer and eject (record 24) ------------- */
+
+/* The filter INF's model ids (src\cm\xhcicmf.inf), the candidate tunnel
+ * ports: the host suite checks the table against the INF both ways. */
+extern const char *const instTbPortIds[];
+extern const int instTbPortIdCount;
+
+/* 1 when the hardware id list holds one of instTbPortIds. */
+int inst_tb_candidate(const char *hw, size_t hwBytes);
+
+/* Record 24 section 4.3's host functions: inst_tb_is_nhi - the service
+ * xhcicm, or an id of class 0880 or 0C0340; inst_tb_is_usbhc - an id of
+ * class 0C03 (a USB host controller) that is not an NHI. */
+int inst_tb_is_nhi(const char *hw, size_t hwBytes, const char *compat,
+                   size_t compatBytes, const char *service);
+int inst_tb_is_usbhc(const char *hw, size_t hwBytes, const char *compat,
+                     size_t compatBytes, const char *service);
+
+/* Windows 98's PCI instance ids (runs/run-39.md): the last component is
+ * BUS_bb&DEV_dd&FUNC_ff on bus 0, else the devfn path in hex, leaf first,
+ * ending with the root bus. inst_id_location: 1 with bus 15:8, device 7:3,
+ * function 2:0 for the BUS_ form. inst_id_path: 1 with up to `room` path
+ * elements for the path form. */
+int inst_id_location(const char *id, INST_U32 *bdf);
+int inst_id_path(const char *id, unsigned char *path, int *count, int room);
+
+/* 1 when a 98 instance id names the member at `bdf` whose record path is
+ * path[0..pathCount-1] (pathCount 0: unknown, so only the BUS_ form can
+ * match). */
+int inst_tb_loc_match(const char *id, INST_U32 bdf, const unsigned char *path,
+                      int pathCount);
+
+/* The status record (src\cm\cm_status.h). */
+INST_U32 inst_get32(const unsigned char *b, size_t offset);
+
+/* 1 when the record's magic, version, sizes and counts check, for `n`
+ * bytes read. */
+int inst_st_check(const unsigned char *b, size_t n);
+
+/* Diagnostic only (record 24 section 3.3): 1 when the boot time a record
+ * implies (its system time less its uptime) is within five minutes of the
+ * one the tool computes (now less the tick count). Times are FILETIME
+ * words (100 ns since 1601). Currency is the echo's, never this. */
+int inst_st_fresh(INST_U32 recUptimeS, INST_U32 recTimeLo, INST_U32 recTimeHi,
+                  INST_U32 nowLo, INST_U32 nowHi, INST_U32 tickMs);
+
+/* The echo check (record 24 section 3.3): 1 when the record answers the
+ * ask the tool wrote (a nonzero ask equal to the echo at offset 124). */
+int inst_st_confirmed(const unsigned char *b, INST_U32 ask);
+
+/* A walked tree, nodes in walk order (a parent before its children),
+ * parent[i] -1 for the root (record 24 section 4.3).
+ * inst_tb_protect: prot[i] set for every NHI and its ancestors, and for a
+ * USB host controller whose grandparent is an NHI's grandparent.
+ * inst_tb_units: unitOf[i] the index of the unit node i belongs to (i
+ * itself for a unit: a child of a verified port that is not itself one),
+ * or -1. inst_tb_unit_blocked: 1 when unit u's subtree holds a protected
+ * node. */
+void inst_tb_protect(const int *parent, const int *isNhi, const int *isUsbHc,
+                     int n, int *prot);
+void inst_tb_units(const int *parent, const int *verified, int n,
+                   int *unitOf);
+int inst_tb_unit_blocked(const int *unitOf, const int *prot, int n, int u);
+
+/* The outcomes of an eject, with their exit codes (record 24 sections 7
+ * and 8.2). */
+#define INST_EJ_DONE            0   /* stopped: exit 0                       */
+#define INST_EJ_VETO            1   /* refused by Windows: exit 4            */
+#define INST_EJ_CHANGED         2   /* the list changed: exit 1              */
+#define INST_EJ_UNSUPPORTED     3   /* the call is not offered: exit 1       */
+#define INST_EJ_RIGHTS          4   /* access denied: exit 1                 */
+#define INST_EJ_FAILED          5   /* failed after acceptance, or unknown: 2 */
+int inst_eject_code(int outcome);
+
+#define INST_CR_INVALID_DEVNODE         0x05UL
+#define INST_CR_NO_SUCH_DEVNODE         0x0DUL
+#define INST_CR_REMOVE_VETOED           0x17UL
+#define INST_CR_ACCESS_DENIED           0x33UL
+#define INST_CR_CALL_NOT_IMPLEMENTED    0x34UL
+
+/* 98 SE and ME: the outcome of a query-remove that was not accepted, and
+ * its text. */
+int inst_eject9x_query(INST_U32 cr, const char **text);
+
+/* NT: the outcome of CM_Request_Device_EjectA's answer and its text; for a
+ * veto, `vetoType` (PNP_VETO_TYPE) chooses the text, and *withName says
+ * whether the text takes the veto name (one %s). */
+int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
+                  int *withName);
+
+/* 98 SE and ME: the outcome of the removal that follows an accepted
+ * query, and its text (record 24 section 7.1 item 4). */
+int inst_eject9x_remove(INST_U32 cr, const char **text);
+
+/* The advice after a successful eject (record 24 section 5.4):
+ * INST_UNPLUG_NOW only when the walk after it was whole, no other unit
+ * remains behind the port, the unit was a single function, and the
+ * router's USB3 tunnel is known to be none (usb3: CM_ST_TUN_* of a
+ * confirmed record, 5 when unknown). */
+#define INST_UNPLUG_NOW     0
+#define INST_UNPLUG_OTHERS  1
+#define INST_UNPLUG_CHECK   2
+int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
+                     INST_U32 usb3);
+const char *inst_unplug_text(int kind);
 
 #endif /* INST_CORE_H */

@@ -28,6 +28,8 @@ typedef struct _CM_STATUS_IN {
     ULONG PathCount[CM_ST_MAX_PORTS];   /* 0 where unknown                 */
     ULONG Path[CM_ST_MAX_PORTS][CM_ST_PATH_MAX];
     ULONG Echo;             /* the ask last read (record 24 section 3.3)   */
+    ULONG IcmNoUsb3;        /* a Thunderbolt 3 ICM row (Falcon, Alpine or
+                               Titan Ridge): no USB3 tunnel exists        */
 } CM_STATUS_IN, *PCM_STATUS_IN;
 
 /*

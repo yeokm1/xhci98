@@ -123,6 +123,11 @@ static void test_icm(void)
     CHECK_EQ(get32(e, CM_ST_E_IDS), 0x20310109UL, "Thunderbolt ids");
     CHECK_EQ(get32(e, CM_ST_E_GEN), CM_ST_GEN_TBT3, "Thunderbolt 3");
     CHECK_EQ(get32(e, CM_ST_E_TUNNELS), 0x551UL, "PCIe up, the rest unknown");
+    in.IcmNoUsb3 = 1;
+    (void)CmStatusBuild(rec2, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(entry(rec2, 0), CM_ST_E_TUNNELS), 0x501UL,
+             "a Thunderbolt 3 row: PCIe up, no USB3 tunnel");
+    in.IcmNoUsb3 = 0;
     CHECK_EQ(get32(e, CM_ST_E_BRIDGE), 0x0208UL, "the single active member");
     CHECK_EQ(get32(e, CM_ST_E_SHORT_ID), 0x3A7CUL, "16-bit UUID suffix");
     CHECK(strcmp((const char *)e + CM_ST_E_VENDOR, "Lenovo") == 0, "vendor");
