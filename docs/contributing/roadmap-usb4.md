@@ -89,7 +89,8 @@ recommendation; the owner's answers are recorded here as
 
 Phase 39 is the Thunderbolt firmware-connection-manager client, tunnel
 re-enumeration and safe eject; Phase 40 the USB4 software connection
-manager; both ship as `3.0.0.0`. Real USB4 devices follow the ORICO capture
+manager; Phase 41 the graphical tree, eject and tray tool XHCITR; all
+three ship as `3.0.0.0`. Real USB4 devices follow the ORICO capture
 and are task 40.4 until they need more. The order is the handoff's: the
 Thunderbolt 3 client is provable on real hardware the owner holds; the
 software connection manager is provable, for now, only against the
@@ -237,6 +238,35 @@ Checkpoint: design record 22 converged before 40-A's code; the host suites
 green with the gates on both architectures; 40-V.1's and 40-V.2's legs read on the `qemu`
 flavour and the `release` flavour of the dry cut; the cut with the install
 leg from the asset on every target; then Phase 39's bench (39-E) after it.
+
+## Phase 41 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
+
+Goal: a graphical tool for every target that shows every USB controller,
+hub and device and every Thunderbolt 3 / USB4 host, router, tunnel and
+the Windows devices behind it, with their details, ejects a tunnelled
+device as Windows' own Safely Remove Hardware does, and sits in the
+notification area, starting at login. `INSTALL /devices` and
+`INSTALL /eject` (design record 24) stay as they are.
+
+Status: open. Opened 2026-10-16 by the owner, who held `3.0.0.0` for it;
+it ships in `3.0.0.0` with Phases 39 and 40, and `40.final`'s cut comes
+after `41.final`. Its design record is design record 25.
+
+- [ ] 41-0.1 the design record (design record 25), reviewed until it converges; the icon `xhcitr\xhcitr.ico`
+- [ ] 41-A.1 `xhcicm.sys`: the query device `\\.\XHCICM<n>` and `IOCTL_XHCICM_QUERY` (record 25 section 4), the router extension cache (link rate and width, link state), the pure builder `cm_query.c` with host tests in `test_cm`
+- [ ] 41-A.2 `tr_core.c`, pure: query and record parsing, descriptor decoding, speed names, the tray event diff, tree keys, the report text; host suite `test_tr`
+- [ ] 41-A.3 the window: tree, details pane, View check boxes, refresh on device change, Save Report, Copy, Properties (record 25 section 3), and the USB branch (section 5)
+- [ ] 41-A.4 the eject from the window: record 24's units fed from the query, the confirmation, the call per system, the answers (record 25 section 6)
+- [ ] 41-A.5 the tray icon: menus, single instance, events and balloons, the tooltip on 98 SE and ME (record 25 section 7)
+- [ ] 41-A.6 install, upgrade and uninstall in XHCIINST (the copy, the Run value, closing a running copy, `/notray`), the packager's `tools\xhcitr\`, the import allowlist, `test-package.ps1` (record 25 sections 8 and 9)
+- [ ] 41-V.1 legs T.1 to T.6 of record 25 section 11 on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x86 (Vista x64 and 7 x64 with the test-signed package)
+- [ ] 41.final `README.md`, the release notes, `source-files.md`, `docs/README.md`; merged into `3.0.0.0` before `40.final`
+
+Checkpoint: design record 25 converged before 41-A's code; the host
+suites green with the gates on both architectures; legs T.1 to T.6 read on
+the dry cut's `release` flavour; then `40.final`.
+
+---
 
 # Planned work
 
