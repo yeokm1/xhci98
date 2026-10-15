@@ -1366,6 +1366,27 @@ every log a user sends back. Make it read: #define $Macro XHCI_VER_STR
     }
 }
 
+function Assert-ToolFileVersion {
+    # **A staged tool's numeric file version is the release's.** XHCIINST
+    # compares the VS_FIXEDFILEINFO file version of the package's XHCITR with
+    # the installed one's and replaces only an older one (design record 25
+    # section 8), so a tool built with a stale or missing version resource
+    # would never be installed over the last release's, or would replace a
+    # newer one. The macro check above reads the source; this reads the EXE.
+    param([string]$Path, [string]$Version)
+    $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+    $got = "{0}.{1}.{2}.{3}" -f $info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart
+    $v = [version]$Version
+    $want = "{0}.{1}.{2}.{3}" -f $v.Major, $v.Minor, [math]::Max($v.Build, 0), [math]::Max($v.Revision, 0)
+    if ($got -ne $want) {
+        throw @"
+'$Path' carries the file version $got in its version resource, but this release is $want.
+XHCIINST installs the tool over an installed one only when this number is newer,
+so the two must agree. Rebuild the tool against src\xhci_version.h.
+"@
+    }
+}
+
 function Get-PackageRelativePath {
     # $FullName expressed relative to $PackageDir, refused rather than guessed.
     #
@@ -3873,6 +3894,9 @@ drivers' answers with a layout or rules the source no longer has.
 XHCIINST replaces an installed XHCITR only with a newer version, so the tool must
 carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
 "@
+        }
+        foreach ($name in $trayExes) {
+            Assert-ToolFileVersion -Path (Join-Path $TrayToolDir $name) -Version $Version
         }
         $trayDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcitr")
         Ensure-Directory $trayDir

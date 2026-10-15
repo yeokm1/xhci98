@@ -672,6 +672,13 @@ int inst_tb_answer(const char *line, int defaultYes);
  * included) or XHCITR64.EXE. */
 const char *inst_tray_file(int arch);
 
+/* The 8.3 path WININIT.INI names for the tool (isNew 0) or its pending
+ * replacement (isNew 1, the name with .NEW): the directory's 8.3 path and
+ * the file name, which is 8.3 already, so it is right whether or not the
+ * file exists. 1, or 0 when it does not fit or name is not a .EXE. */
+int inst_tray_wininit_path(const char *shortDir, const char *name, int isNew,
+                           char *out, size_t cap);
+
 /* The Run value's data, "\"<exe>\" /tray": 1, or 0 when it does not fit
  * or exe holds a quote. */
 int inst_tray_run_data(const char *exe, char *out, size_t cap);
