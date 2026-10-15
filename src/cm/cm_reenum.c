@@ -1343,6 +1343,12 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             r->PollTimeouts++;
         }
         cmReenumAll(nhi, TRUE);
+        if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+            /* Whatever XhciCmReenum says: the known children are pruned
+             * to those present, so a child the user removed is forgotten
+             * before a re-plug reuses its handle (section 7.4). */
+            CmCfgwkPrune(r->Wk);
+        }
     } else {
         cmReenumAll(nhi, TRUE);
     }

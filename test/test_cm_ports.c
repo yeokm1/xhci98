@@ -406,6 +406,25 @@ static void test_bound(void)
     CHECK_EQ(CmPortsHoldBound(&r), CM_PORTS_HOLD_MAX_MS, "every term at its maximum is the cap");
 }
 
+static void test_keep_present(void)
+{
+    ULONG known[4];
+    ULONG present[3];
+
+    /* A child removed by the user (handle 0x20) is forgotten at the next
+     * walk, so its handle, reused by a re-plug, reads as new. */
+    known[0] = 0x10; known[1] = 0x20; known[2] = 0x30;
+    present[0] = 0x30; present[1] = 0x10;
+    CHECK_EQ(CmPortsKeepPresent(known, 3, present, 2), 2, "the absent one dropped");
+    CHECK_EQ(known[0], 0x10, "order kept");
+    CHECK_EQ(known[1], 0x30, "order kept (2)");
+    CHECK_EQ(CmPortsKeepPresent(known, 2, present, 0), 0, "none present: none kept");
+    known[0] = 0x40;
+    present[0] = 0x40;
+    CHECK_EQ(CmPortsKeepPresent(known, 1, present, 1), 1, "present: kept");
+    CHECK_EQ(CmPortsKeepPresent(known, 0, present, 1), 0, "an empty set stays empty");
+}
+
 static void test_watchdog(void)
 {
     BOOLEAN over;
@@ -433,6 +452,7 @@ int main(void)
     test_snapshot();
     test_bound();
     test_watchdog();
+    test_keep_present();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

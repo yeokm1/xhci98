@@ -144,4 +144,16 @@ ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume);
  */
 ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over);
 
+/*
+ * Windows 98 and ME: a member's known children (devnode handles) kept only
+ * while present among `present`, in order; returns the new count.
+ * CONFIGMG reuses a freed devnode's handle, so an identity must be
+ * forgotten as soon as its devnode leaves, however it left (the worker's
+ * removal, the user's, Windows' own), or a re-plug given the same handle
+ * is taken for the old child and never marked DN_REMOVABLE (record 21
+ * section 7.4).
+ */
+ULONG CmPortsKeepPresent(PULONG known, ULONG count, const ULONG *present,
+                         ULONG presentCount);
+
 #endif /* CM_PORTS_H */

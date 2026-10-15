@@ -383,6 +383,9 @@ VOID CmCfgwkPost(struct _CM_CFGWK *w, ULONG reenum, ULONG vanish,
 /* CM_CFGWK_OPEN_*, with CM_CFGMG_WHY_* and Get_Version's AX. <=
  * DISPATCH_LEVEL. */
 ULONG CmCfgwkOpenState(struct _CM_CFGWK *w, PULONG why, PULONG version);
+/* A walk of every member forgetting the known children no longer present
+ * (a tunnel down: a child the user removed is gone by then). */
+VOID CmCfgwkPrune(struct _CM_CFGWK *w);
 
 /* Ends the worker: waits for it when it is between calls (and frees it);
  * when it is inside a CONFIGMG call, which may be waiting for this very

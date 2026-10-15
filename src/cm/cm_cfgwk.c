@@ -30,8 +30,8 @@
  * removal, may not return until that removal has finished - the stop does
  * not wait (waiting there would deadlock): the worker frees its block and
  * closes its thunks itself when the call returns, making no further call
- * (but the removal that completes a query already accepted,
- * cmWkRemoveChild).
+ * (but the removal that completes a query already accepted, and its
+ * rescan of the bridge, cmWkRemoveChild).
  * Because such a worker may outlive its NHI for as long as CONFIGMG
  * blocks, a driver that has started one has no unload routine (the image
  * stays resident until the restart); CmCfgwkDrain remains for the unload
@@ -90,6 +90,7 @@ typedef struct _CM_CFGWK {
     ULONG ReqReenum;        /* members to re-enumerate                    */
     ULONG ReqVanish;        /* ... removing vanished children first       */
     ULONG ReqMark;          /* a marking window to open                   */
+    ULONG ReqPrune;         /* a walk forgetting the children gone        */
     ULONG Retry;            /* member calls owed after a failure          */
     ULONG RetryVanish;
     ULONG RetryAt;          /* ms clock of the last failure               */
@@ -196,8 +197,8 @@ static VOID cmWkOp(PCM_CFGWK w, ULONG i, ULONG gen)
  * once the stop asked the worker to leave or, inside a member's operation
  * (cmWkOp), once that operation went stale (cmWkCurrent). An operation in
  * progress when either came makes no further call after its current one
- * returns - but the Remove_SubTree that completes an accepted query
- * (cmWkRemoveChild).
+ * returns - but the Remove_SubTree that completes an accepted query, and
+ * its rescan (cmWkRemoveChild).
  */
 static BOOLEAN cmWkGo(PCM_CFGWK w)
 {
@@ -502,20 +503,62 @@ static VOID cmWkForget(CM_WK_PORT *p, ULONG devnode)
 }
 
 /*
+ * Member i's known children kept only while present (CmPortsKeepPresent):
+ * every walk of a bridge's children prunes the set, so a child that left
+ * by any removal - the user's included - is forgotten before a re-plug
+ * can reuse its handle.
+ */
+static VOID cmWkKeepPresent(PCM_CFGWK w, ULONG i, const ULONG *children,
+                            ULONG count)
+{
+    CM_WK_PORT *p;
+
+    p = &w->Port[i];
+    if (cmWkGo(w)) {
+        p->KnownCount = CmPortsKeepPresent(p->Known, p->KnownCount,
+                                           children, count);
+    }
+}
+
+/* A prune walk of member i alone (CmCfgwkPrune). */
+static VOID cmWkPrune(PCM_CFGWK w, ULONG i)
+{
+    ULONG bridge;
+    ULONG children[CM_WK_KNOWN];
+    ULONG count;
+
+    bridge = cmWkFindDevnode(w, i);
+    if (bridge == 0 || !cmWkGo(w)) {
+        return;
+    }
+    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN);
+    if (count < CM_WK_KNOWN) {
+        /* Complete only: a list cut at its room is not taken as the
+         * present set. */
+        cmWkKeepPresent(w, i, children, count);
+    }
+}
+
+/*
  * The single removal step of a vanished child of member i, on the worker:
  * Query_Remove_SubTree, and Remove_SubTree only when that was accepted (a
  * refusal - a driver with open files - is respected: nothing forced,
  * logged and counted). The request is checked to be current before the
  * query only: a query once accepted is always followed by its removal,
- * stale or not, because Windows 98 has no service that cancels an
- * accepted query and a driver left query-removed stays quiesced (a
- * re-plugged device removed this way comes back at the re-enumeration
- * that follows). FALSE when the request had gone stale before the query
- * (the caller stops), TRUE otherwise, whatever the outcome. Any
+ * stale or not, even after a stop, because Windows 98 has no service that
+ * cancels an accepted query and a driver left query-removed stays
+ * quiesced. A removal so completed for a request gone stale meanwhile
+ * (a newer request, a lost claim, a stop - after which another worker may
+ * already have rescanned the bridge) is followed here by its own
+ * Reenumerate_DevNode of `bridge`, so a device re-plugged meanwhile and
+ * removed with the old child comes back whoever else has rescanned.
+ * Returns TRUE while the request is current (the caller goes on); FALSE
+ * when it went stale, before the query (nothing done) or after a
+ * completed removal and its rescan: the caller abandons the rest. Any
  * orderly-remove handshake with the child's driver wraps this function.
  */
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
-                               ULONG devnode)
+                               ULONG bridge, ULONG devnode)
 {
     ULONG cr;
 
@@ -540,17 +583,30 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
     }
-    return cmWkCurrent(w, i, gen);
+    if (cmWkCurrent(w, i, gen)) {
+        return TRUE;
+    }
+    /* Stale since the query: the rescan that the removal owes is made
+     * here, not left to a request that may already have run. */
+    cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
+    w->C.Calls++;
+    if (cr != CMG_CR_SUCCESS) {
+        w->C.CallFailures++;
+    }
+    cmWkLog(w, "cm.reenum.9x.reenumerate", (w->Port[i].Bdf << 8) | cr);
+    return FALSE;
 }
 
 /*
  * Section 6.1 on member i: the vanished children removed
- * (cmWkRemoveChild) (a refusal respected, never forced), then Reenumerate_DevNode.
- * TRUE when the devnode was found and the re-enumeration succeeded, or the
- * request went stale meanwhile (a newer one redoes it). Before each call
- * the request is checked to be current (cmWkCurrent): a stop, a newer post
- * for the member or a lost claim ends it, and no removal is made on an
- * inventory a reconnection may have outdated.
+ * (cmWkRemoveChild: a refusal respected, never forced), then
+ * Reenumerate_DevNode. TRUE when the devnode was found and the
+ * re-enumeration succeeded, or the request went stale meanwhile (a newer
+ * one redoes it). Before each call the request is checked to be current
+ * (cmWkCurrent): a stop, a newer post for the member or a lost claim ends
+ * it, and no removal is begun on an inventory a reconnection may have
+ * outdated - the one exception being the Remove_SubTree, and its rescan,
+ * that complete a query already accepted (cmWkRemoveChild).
  */
 static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
                           ULONG gen)
@@ -583,6 +639,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         count = idCount <= CM_WK_BUS_FUNCTIONS
                     ? cmWkChildren(w, bridge, children, CM_WK_KNOWN)
                     : 0;
+        if (idCount <= CM_WK_BUS_FUNCTIONS && count < CM_WK_KNOWN) {
+            cmWkKeepPresent(w, i, children, count);
+        }
         for (c = 0; c < count; c++) {
             if (!cmWkCurrent(w, i, gen)) {
                 return TRUE;
@@ -601,7 +660,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
             if (answers) {
                 continue;
             }
-            if (!cmWkRemoveChild(w, i, gen, children[c])) {
+            if (!cmWkRemoveChild(w, i, gen, bridge, children[c])) {
                 return TRUE;
             }
         }
@@ -747,6 +806,7 @@ static VOID cmWkThread(PVOID context)
     ULONG gen[XHCI_TBT_MAX_TUNNELS];
     ULONG retried;
     ULONG done;
+    ULONG prune;
     ULONG i;
     BOOLEAN open;
     BOOLEAN go;
@@ -782,6 +842,8 @@ static VOID cmWkThread(PVOID context)
             w->MarkOpen = 1;
             w->MarkFrom = cmWkNowTicks();
         }
+        prune = w->ReqPrune;
+        w->ReqPrune = 0;
         w->InCall = 1;
         KeReleaseSpinLock(&w->Lock, irql);
 
@@ -793,7 +855,18 @@ static VOID cmWkThread(PVOID context)
         failedVanish = 0;
         done = 0;
         go = TRUE;
-        if (w->OpenState == CM_CFGWK_OPEN_OK) {
+        if (w->OpenState == CM_CFGWK_OPEN_OK && prune) {
+            for (i = 0; i < w->Members && go; i++) {
+                cmWkOp(w, i, cmWkGenOf(w, i));
+                cmWkLeave(w);
+                go = cmWkEnter(w);
+                if (go && cmWkGo(w)) {
+                    cmWkPrune(w, i);
+                }
+            }
+            cmWkOp(w, CM_WK_NO_OP, 0);
+        }
+        if (go && w->OpenState == CM_CFGWK_OPEN_OK) {
             for (i = 0; i < w->Members; i++) {
                 if ((reenum & (1UL << i)) == 0 ||
                     !cmWkCurrent(w, i, gen[i])) {
@@ -951,6 +1024,16 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
         w->ReqMark = 1;
         w->MarkWanted = 1;
     }
+    KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
+VOID CmCfgwkPrune(PCM_CFGWK w)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->ReqPrune = 1;
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&w->Lock, irql);
 }
