@@ -1101,32 +1101,29 @@ static void registry_controllers_9x(void)
     }
     RegCloseKey(pci);
 }
-/* 98 SE and ME (record 23 section 6.3, decided 2026-10-15): an Enum\PCI
- * entry with no devnode and no driver whose hardware id a present
- * controller with a driver carries is the same controller's old slot (it
- * moved between starts), not a device to install: it is left out. One
- * whose id no present controller carries - the controller of a cancelled
- * New Hardware wizard - stays. */
-static void drop_old_slots_9x(void)
+/* 98 SE and ME (record 23 section 6.3): an Enum\PCI entry with no devnode
+ * and no driver whose first hardware id a present controller with a driver
+ * carries may be that controller's old slot (it moved between starts, as
+ * on the 98 SE and ME legs) or a second, identical controller whose New
+ * Hardware wizard was cancelled: the id cannot tell. It stays listed, with
+ * what to do in either case, and stays a step; it only does not make the
+ * confirmation speak of an install (orchestrator decision 2026-10-15,
+ * owner to confirm). 1 when d is such an entry. */
+static int old_slot_suspect(const DEVREC *d)
 {
-    int i;
     int j;
 
-    for (i = 0; i < devCount; i++) {
-        DEVREC *d = &devs[i];
-        if (!d->RegOnly || !d->Present) {
-            continue;
-        }
-        for (j = 0; j < devCount; j++) {
-            const DEVREC *o = &devs[j];
-            if (j != i && o->Present && !o->RegOnly && o->Driver[0] != '\0' &&
-                is_controller(o) && inst_eq(first_hw(o), first_hw(d))) {
-                d->Present = 0;
-                logonly("old slot of %s, left out: %s\n", o->Id, d->Id);
-                break;
-            }
+    if (!d->RegOnly || !d->Present) {
+        return 0;
+    }
+    for (j = 0; j < devCount; j++) {
+        const DEVREC *o = &devs[j];
+        if (o != d && o->Present && !o->RegOnly && o->Driver[0] != '\0' &&
+            is_controller(o) && inst_eq(first_hw(o), first_hw(d))) {
+            return 1;
         }
     }
+    return 0;
 }
 
 static int scan_9x(void)
@@ -1150,7 +1147,6 @@ static int scan_9x(void)
     if (!devTruncated) {
         registry_controllers_9x();
     }
-    drop_old_slots_9x();
     if (devTruncated) {
         out("More than %d devices: the list is cut short, and nothing is "
             "changed.\n", INST_MAX_DEVS);
@@ -4498,6 +4494,7 @@ static int run_install_9x(void)
     char dir[INST_PATH_CHARS];
     int i;
     int runs;
+    int steps;
 
     if (!scan()) {
         out("The device tree could not be read whole: nothing is changed.\n");
@@ -4537,10 +4534,14 @@ static int run_install_9x(void)
         }
     }
     runs = 0;
+    steps = 0;
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
         if (d->Present && d->Inf >= 0 && (d->Runs || d->Refused)) {
-            runs = 1;
+            steps = 1;
+            if (!old_slot_suspect(d)) {
+                runs = 1;
+            }
         }
     }
     if (!confirm(inst_confirm_text(runs, values_to_write(), 0))) {
@@ -4553,8 +4554,9 @@ static int run_install_9x(void)
     steps_9x(srcDir);
     note_old_entries();
     /* Steps are left only where a device needs one (Update Driver, Have
-     * Disk, a refused version): a current machine ends without them. */
-    return inst_exit_code(0, flagFailed, flagRestart, runs);
+     * Disk, a refused version, an entry that may be a cancelled wizard's
+     * controller): a current machine ends without them. */
+    return inst_exit_code(0, flagFailed, flagRestart, steps);
 }
 
 /* ======================================================================== */

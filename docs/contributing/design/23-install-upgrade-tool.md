@@ -858,11 +858,14 @@ controller with no driver and no devnode is listed apart, as "recorded, not
 running now", with what to do if Device Manager shows it. An old entry of
 a controller that moved slot looks the same and needs nothing (read on the
 98 SE and ME legs: the controller moved from `DEV_04` to `DEV_03` after the
-first start, and every later run planned the old entry as an install). So
-(decided 2026-10-15) such an entry whose first hardware id a present
-controller with a driver carries is the same controller's old slot and is
-left out; one whose id no present controller carries - the cancelled
-wizard's controller - stays.
+first start, and every later run planned the old entry as an install). A
+hardware id cannot tell that old slot from a second, identical controller
+whose wizard was cancelled, so (orchestrator decision 2026-10-15, owner to
+confirm) such an entry - one whose first hardware id a present controller
+with a driver carries - stays listed with what to do in either case and
+stays a step (exit 4), but does not make the confirmation speak of an
+install; the run on an otherwise current machine changes nothing and says
+"No changes were made."
 
 ### 6.4 What it prints
 
@@ -905,8 +908,9 @@ the local directory. The storage prerequisite stays as the README says: on 98 SE
 NUSB's mass-storage component for any disk, UAS included. The first UAS
 disk and the first NHI found later find `xhciuas.inf` and `xhcicm.inf` in
 the same directory. A device of the package that needs a step - an
-install, an update, a refused version - ends the run with exit 4 (staged,
-steps left for the user); with none (every device current), the run
+install, an update, a refused version, an entry of section 6.3 that may be
+a cancelled wizard's controller - ends the run with exit 4 (staged, steps
+left for the user); with none (every device current), the run
 changes nothing where the copy and `DevicePath` are already in place and
 ends "No changes were made." with exit 0, or, where it wrote a setting,
 with the restart line and exit 3 (section 7.4). The confirmation names
