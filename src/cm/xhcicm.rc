@@ -1,6 +1,6 @@
 /*
- * xhcicm.rc - the file version resource of xhcicm.sys, the Thunderbolt 3
- * connection manager (roadmap-usb4.md task 39-A.1). The version is the
+ * xhcicm.rc - the file version resource of xhcicm.sys, the Thunderbolt and
+ * USB4 connection manager (roadmap-usb4.md task 39-A.1). The version is the
  * package's, from src\xhci_version.h, so the binaries of one package
  * cannot disagree, and the DriverVer of xhcicm.inf and xhcicmf.inf (and
  * of their -amd64 twins) is checked against the same header.
@@ -27,7 +27,7 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName",      "Yeo Kheng Meng\0"
-            VALUE "FileDescription",  "xhci98 Thunderbolt 3 Connection Manager\0"
+            VALUE "FileDescription",  "xhci98 Thunderbolt and USB4 Connection Manager\0"
             VALUE "FileVersion",      XHCI_VER_STR "\0"
             VALUE "InternalName",     "xhcicm.sys\0"
             VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"

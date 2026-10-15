@@ -1204,7 +1204,9 @@ system's `CFGMGR32.DLL`). So the tool:
    step 4) - the device installer's own copies, and the plain copies the
    INFs' `DefaultInstall` sections make - and the driver files present;
 3. prints the steps, dependants first: in Device Manager remove "xHCI98
-   USB Attached SCSI Storage" and a Thunderbolt entry if there is one,
+   USB Attached SCSI Storage" and an "xHCI98 Thunderbolt 2 Controller",
+   "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" if
+   there is one,
    then "xHCI98 USB 3.x eXtensible Host Controller" (which removes the root
    hub and everything beneath it); then delete the listed INF files, so
    the restart cannot find the driver again; then restart, and

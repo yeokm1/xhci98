@@ -3160,6 +3160,30 @@ mass-storage install places it.
 *This section is a draft for the `3.0.0.0` cut; it is completed before
 the cut.*
 
+### Thunderbolt and USB4 in Device Manager
+
+`xhcicm.sys` names a controller by its generation, the same whichever
+connection manager runs it:
+
+| Device Manager shows | For |
+|---|---|
+| `xHCI98 Thunderbolt 2 Controller` | Intel Falcon Ridge |
+| `xHCI98 Thunderbolt 3 Controller` | Intel Alpine Ridge, Titan Ridge and Ice Lake |
+| `xHCI98 USB4 Host Router` | Intel Maple Ridge, Tiger Lake to Meteor Lake, Lunar, Panther and Wildcat Lake, Barlow Ridge; AMD's and any other USB4 host |
+
+On Windows 2000, XP, Vista and 7 the PCI bridge ports the filter attaches
+to - the controller's own switch ports or, on the integrated
+controllers, its PCI Express root ports - are shown with the xHCI98
+bridge names in place of the name Windows gave them:
+`xHCI98 Thunderbolt PCI Bridge` on a Thunderbolt 2 or 3 controller,
+`xHCI98 USB4 PCI Bridge` on a USB4 one, and `xHCI98 PCI Bridge` on the
+emulator's generic bridges. They are still ordinary PCI bridges run by
+Windows's own `pci.sys`; the name says this package's filter sits on
+them. Every port of one switch carries the same name, upstream and
+downstream alike. Windows 98 SE and ME install no filter, so their
+bridges keep their names. The driver's service is
+`xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)`.
+
 ### Thunderbolt 3: which devices get a tunnel, and what that means
 
 A Thunderbolt 3 device - a dock, an enclosure, an NVMe case - reaches the
