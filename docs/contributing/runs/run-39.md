@@ -718,7 +718,8 @@ a re-plug; and the NVMe was listed in "Safely Remove Hardware", stopped
 there, unplugged with no dialog, listed again after a re-plug, and a plain
 unplug showed no dialog either. ME is not in this section (another run).
 
-**Not run: Vista x64 and 7 x64.** Both load only a signed driver (or one
+**Not run here: Vista x64 and 7 x64** (read on 2026-10-16, the section
+"39-V.3 on Vista x64 and 7 x64" below). Both load only a signed driver (or one
 started from an F8 boot with enforcement off), and the x64 package is
 test-signed only by the packager with the project key, whose password was
 not available to this run; nothing was signed by hand. They stay owed,
@@ -1055,3 +1056,105 @@ the `release` flavour on 98 SE, a removal refused by an open file.
 **Evidence.** `vm\v-9x\t98\` and `vm\v-9x\me\` (screendumps, `debugcon-*`,
 `trace-*`), `vm\v-9x\notes.txt` (the leg list with the screendump each
 reading cites).
+
+## 39-V.3 on Vista x64 and 7 x64 - The test-signed package (2026-10-16)
+
+**Verdict: pass on Vista x64 and 7 x64, on a pre-cut signed package**
+(2026-10-16). The legs 39-V.3 owed above, read the way the four NT tiers
+were: the install through `INSTALL.BAT` with the filter from `nt\`, a
+device router plugged on `tb3-alpine-ridge` approved and its NVMe up with
+no Refresh, a plain unplug and a re-plug, and the safe-eject cycle - once
+through "Safely Remove Hardware" and once through `INSTALL /eject` - then
+a plain unplug. **What this reading is:** the platform and the recipe on
+the owner's test-signed x64 package of the night of 2026-10-15 to 16,
+built from branch `3.0.0.0` (drivers identical to `dcdac455`), not the
+`3.0.0.0` release's own x64 binaries: the drivers change again before the
+cut, so `40.final`'s install leg from the asset, and X64.1 below, still
+read the signed package the cut publishes.
+
+**The package.** `out\x64-signed` as the owner signed it with the project
+key: `xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and `nt\xhcicm.sys`
+(identical bytes), each file version 3.0.0.0 and carrying the embedded
+signature of "xhci98 project test signing (not trusted)"; nothing was
+signed or re-signed by this run. Staged as `out\v-x64\xfer\PKG` in the
+release layout: `INSTALL.BAT`, `readme.txt`, `LICENSE` and `tools\` from
+the dry cut of `dcdac455` (its `XHCIIN64.EXE`), and `release-x64` copied
+from `out\x64-signed`. Before use every staged file was compared with
+`out\x64-signed` by SHA-256 (all identical) and each `.sys` read with
+`Get-AuthenticodeSignature` for its signer and version
+(`out\v-x64\stage-proof.txt`). The NVMe driver was `nvme98` 0.1.1.0's
+amd64 build, which carries `nvme98`'s own test signature.
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-RunRoot v-x64` (`-Usb4Profile tb3 -Bios OFF_OFF -DeviceAtBoot 0`,
+`-Trace`), two vCPUs per guest, on the `usb4-emu` `main` `5ba7f60` build
+in `vm\usb4\bin-5ba7f60`, QMP and VNC on 47970/47971 (Vista x64) and
+47990/47991 (7 x64). **Test-signing mode:** each guest's base is a
+copy-on-write overlay of `vm\vista-x64.img` or `vm\win7-x64.img`
+(`vm\v-x64-base\vx64-ts\`, `w7x64-ts\`, read-only once made) in which
+`bcdedit /set testsigning on` was run from an elevated prompt, and the
+images' `advancedoptions` (the F8 menu at every start) deleted, then one
+restart; every leg ran on a fresh overlay of that. Windows showed "Test
+Mode" on Vista, and the tool printed "Test-signing mode is on: the
+test-signed x64 drivers load." on both. The NVMe image, the `devq` dumps
+to COM1 and the driving are 39-V.3's above.
+
+**Install.** `INSTALL /defaults /yes /nopause` from an elevated prompt;
+Windows asked "Windows can't verify the publisher of this driver
+software" for each INF (the package has no catalog, as the release notes
+say) and was answered "Install this driver software anyway". On both the
+tool staged the four INFs, installed the Alpine Ridge xHCI `15C1` and its
+root hub, `xhcicm.sys` on the NHI `15BF` and the filter on the four `15C0`
+ports and the root bridge `1B36:0001`, and ended "Changes were made.
+Please restart Windows now.", exit 3. After the restart every port read
+`Service` `pci`, `UpperFilters` `xhcicm`, problem 0, and the NHI
+`xhcicm`, problem 0. `INSTALL /devices` before the plug: the controller,
+"firmware connection manager, security level 1", nothing connected.
+
+**The Device Manager names on a clean install** (7 x64, Device Manager,
+and the same strings in each device's `DeviceDesc` on both guests):
+"xHCI98 Thunderbolt 3 Controller" (the NHI), "xHCI98 Thunderbolt PCI
+Bridge" (each `15C0` port), "xHCI98 PCI Bridge" (the emulator's root
+bridge `1B36:0001`) under System devices; "xHCI98 USB 3.x eXtensible Host
+Controller" and "xHCI98 USB 3.x Root Hub" under Universal Serial Bus
+controllers.
+
+| Leg | Vista SP2 x64 | 7 SP1 x64 |
+|---|---|---|
+| Install, filter from `nt\`, test-signing mode | pass | pass |
+| Plug: approved, NVMe with no Refresh | pass | pass |
+| Volume `NVME32` mounted (`nvme98`) | pass | pass |
+| `INSTALL /devices`: the router, the NVMe "removable: yes" | pass | pass |
+| Plain unplug: devnode and volume gone, dialog | none | none |
+| Re-plug: back, no wizard | pass | pass |
+| Listed in "Safely Remove Hardware" | yes (the NVMe alone) | yes (the NVMe alone) |
+| Stop: device at Code 47 | pass | pass |
+| Unplug after the stop: dialog | none | none |
+| `INSTALL /eject 1`: "Windows has stopped ...", exit 0, Code 47 | pass | pass |
+| Unplug after the eject: dialog | none | none |
+| Re-plug, then plain unplug: dialog | none | none |
+| Result | **PASS** | **PASS** |
+
+What the emulator saw (`trace-a.log`), the same on each: per plug the ICM
+event `device connected ... approved 0`, the approve, `PCIe tunnel up
+reason 0`, `tp_insert`; per unplug `tunnel down reason 3` - four cycles on
+each guest.
+
+**Readings.**
+
+- At the first plug the NVMe's devnode was there at once, before any
+  driver: Vista raised Found New Hardware for a "PCI Device" (problem 1
+  while it waited), 7 reported "Device driver software was not
+  successfully installed" (problem 28). Whether `pci.sys`'s own hot plug
+  acts before the filter on 7 x64 was not told apart from this: the
+  device came up with no Refresh either way.
+- After the Stop and after `INSTALL /eject` the NVMe stayed reported at
+  Code 47 (status `0x01806400`) until the unplug, as on the 32-bit tiers.
+- The confirmation dialog of the Stop listed the NVMe, its "Generic
+  volume - (F:)" and the disk, and no other device.
+
+**Evidence.** `vm\v-x64\vx64-tb3\`, `w7x64-tb3\`: `notes.txt` (the leg's
+narrative and the screendump each reading cites), the screendumps
+`s*.png`, `serial-a.log` (the `G <tag>` dumps, `INSTALL /devices` and the
+installer logs), `trace-a.log`; the staging proof
+`out\v-x64\stage-proof.txt`.

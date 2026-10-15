@@ -442,7 +442,8 @@ stays beside the new one until the uninstall (record 23 decision D7).
 
 ### Owed
 
-- Vista x64: U24's run after the restart; 7 x64: UN over 3.0.0.0.
+- Vista x64: U24's run after the restart; 7 x64: UN over 3.0.0.0 (both
+  read on 2026-10-16 on a pre-cut signed package, the last section below).
 - The filter install on Windows 2000 through the tool (the upstream
   port's Code 12 now answered with the restart): not re-read on the
   Thunderbolt vehicle with this tool.
@@ -599,7 +600,8 @@ guest from a fresh overlay installed the package through `INSTALL.BAT` -
 and one plug cycle (plug, unplug, re-plug) brought the NVMe up with no
 Refresh, removed it and brought it back. ME is not in this section.
 
-**Not run: Vista x64 and 7 x64**, for the reason `run-39.md`'s 39-V.3
+**Not run here: Vista x64 and 7 x64** (read on 2026-10-16, the last
+section below), for the reason `run-39.md`'s 39-V.3
 section gives (no test-signed amd64 package on this run). XP x64 ran the
 unsigned package.
 
@@ -887,3 +889,61 @@ and enable with the tunnel preserved), U.11 and U.12 (the launcher's
 reading of the controller-unavailable route.
 
 **Evidence.** `vm\v-9x\g98\` and `vm\v-9x\me\`, `vm\v-9x\notes.txt`.
+
+## 40-V.3 on Vista x64 and 7 x64, and the installer legs owed - The test-signed package (2026-10-16)
+
+**Verdict: pass** (2026-10-16): 40-V.3 on Vista x64 and 7 x64, Vista x64's
+update from 2.4.0.0 read after its restart, and 7 x64's uninstall over
+`3.0.0.0` with the reinstall after it. **What this reading is:** as
+`run-39.md`'s section "39-V.3 on Vista x64 and 7 x64" says - the owner's
+test-signed x64 package of the night of 2026-10-15 to 16 (drivers
+identical to `dcdac455`), a platform and recipe reading, not the release's
+own x64 binaries, which change before the cut. The package, its staging
+and SHA-256 and signature proof, the test-signing overlays, the QEMU
+build and the driving are that section's.
+
+### 40-V.3 on `usb4-generic`
+
+`-Usb4Profile generic -HostModel intel-adl -DeviceAtBoot 0`, a fresh
+overlay of each test-signing base, QMP and VNC on 47900/47901 (Vista x64)
+and 47902/47903 (7 x64).
+
+| Leg | Vista SP2 x64 | 7 SP1 x64 |
+|---|---|---|
+| Install: host `xhcicm` started, bridge `UpperFilters` `xhcicm` | pass | pass |
+| Plug: tunnel up, NVMe with no Refresh, `NVME32` mounted | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass |
+| Re-plug: back | pass | pass |
+| Result | **PASS** | **PASS** |
+
+`INSTALL /defaults /yes /nopause` installed `xhcicm.sys` on the host
+interface `1B36:00F4` (class `0C0340`), shown as "xHCI98 USB4 Host
+Router", and the filter on the tunnel bridge `1B36:0001`, "xHCI98 PCI
+Bridge"; exit 3, and after the restart both problem 0. `INSTALL /devices`
+read "USB4 software connection manager" and, with the device plugged,
+"USB4 (version 2.0), port 1, depth 1, approved", two lanes bonded, PCIe
+and USB3 up, the NVMe "removable: yes". The trace per plug: `PCIe tunnel
+up reason 0` and `tp_insert`; per unplug `tunnel down reason 3` and
+`tp_removed`.
+
+**A wording reading, not a fault.** `INSTALL /devices` heads the USB4
+host's tunnel bridge "Behind the Thunderbolt port xHCI98 PCI Bridge", the
+word it uses for the Thunderbolt 3 hosts' ports; left as it is (the tool's
+text is not this run's to change).
+
+### The installer legs owed by 40.5 onward
+
+`-Usb4Profile none -Xhci` for Vista x64 (QMP 47900), the 39-V.3 overlay
+for 7 x64 (QMP 47902). The 2.4.0.0 baseline is `out\p40-inst\pkg24` (the
+published 2.4.0.0 x64 drivers, test-signed with the same key, which load
+in test-signing mode).
+
+| Guest | Leg | Result |
+|---|---|---|
+| Vista x64 | U24 | pass: from 2.4.0.0 (controller and root hub started), the run copied the package, staged `xhci98.inf` and `xhciuas.inf`, updated both, "Changes were made. Please restart Windows now.", exit 3; **after the restart** a second run read every device "current (this release)", the local copy "this package already", both INFs "staged already", both 3.0.0.0 started, "No changes were made.", exit 0 |
+| 7 x64 | UN over 3.0.0.0 | pass: over the 39-V.3 install (controller, `xhcicm`, the filter on five ports, `nvme98`), `/uninstall` and the word REMOVE took `xhcicm` off the five tunnel ports and gave them back to `pci`, removed the root hub, NHI and controller devnodes and the four INFs, the services `xhci98` and `xhcicm` and their files, and the local copy; exit 3. After the restart no project service (`sc query`: 1060), no `xhci*.sys`, no `%windir%\XHCI98`, no project INF in `pnputil -e`, every port `UpperFilters` none and problem 0; `usbd.sys` and `usbui.dll` present |
+| 7 x64 | reinstall after UN | pass: `INSTALL /defaults /yes /nopause` installed everything again (exit 3); after the restart every device problem 0 and the five bridges `UpperFilters` `xhcicm` |
+
+**Evidence.** `vm\v-x64\vx64-gen\`, `w7x64-gen\`, `vx64-u24\` and
+`w7x64-tb3\` (the UN leg, tag `b`): `notes.txt`, the screendumps, the
+serial logs with the `G` dumps and the installer logs.
