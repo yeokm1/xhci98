@@ -1240,6 +1240,12 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
     if (nhi->Sel.Outcome == TBT_SEL_SOFTWARE) {
+        if (mode == CM_MODE_FORCE_ICM) {
+            /* XhciCmMode 2 asks for the ICM client: a host whose ICM is
+             * not running is inert, never the software CM. */
+            cmInert(nhi, CM_INERT_FORCE_ICM_REFUSED);
+            return;
+        }
         cmU4Activate(nhi);
         return;
     }
