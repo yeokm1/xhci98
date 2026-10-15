@@ -246,6 +246,15 @@ typedef struct _TR_QUERY {
  * counts, offsets or sizes that disagree, an epoch of 0. */
 int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q);
 
+/* Whether an answer belongs to the NHI devnode devId (record 25 section
+ * 4.2): its instance ID equals devId; or, only when the answer gives no
+ * instance ID (Windows 98 SE and ME), the record's NHI vendor and device
+ * equal devId's VEN_ and DEV_ and nameUnique says no other NHI devnode of
+ * the same reading carries the same query-device name. 1 when it does,
+ * *byName 1 for the second rule. */
+int tr_query_matches(const TR_QUERY *q, const char *devId, int nameUnique,
+                     int *byName);
+
 /* Display only: the last pass is younger than CM_Q_CURRENT_MS. */
 int tr_query_current(const TR_QUERY *q);
 

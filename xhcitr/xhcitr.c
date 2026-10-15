@@ -197,6 +197,8 @@ typedef struct _NHI {
     char Id[INST_ID_CHARS];
     int Node;
     char QName[24];
+    int NameUnique;         /* no other NHI of the reading has QName       */
+    int ByName;             /* the answer had no instance ID (98 SE, ME)   */
     unsigned char *QBuf;
     TR_QUERY Q;
     int HaveQ;              /* the query answered and names this NHI       */
@@ -700,7 +702,8 @@ static HANDLE open_device(const char *name)
  * into q, and only when the answer names the NHI the caller expects.
  * 1 when it did. */
 static int query_read(const char *qname, const char *expectId,
-                      unsigned char **buf, TR_QUERY *q)
+                      unsigned char **buf, TR_QUERY *q, int nameUnique,
+                      int *byName)
 {
     HANDLE h;
     DWORD size = CM_Q_ASK_BYTES;
@@ -736,7 +739,8 @@ static int query_read(const char *qname, const char *expectId,
         break;
     }
     CloseHandle(h);
-    if (r == 1 && expectId != NULL && !tr_eq(q->Id, expectId)) {
+    if (r == 1 && (expectId == NULL ||
+                   !tr_query_matches(q, expectId, nameUnique, byName))) {
         r = 0;
     }
     if (r != 1) {
@@ -791,7 +795,8 @@ static void nhi_read(NHI *h)
                  sizeof(h->QName)) <= 0) {
         h->QName[0] = '\0';
     }
-    if (h->QName[0] != '\0' && query_read(h->QName, h->Id, &h->QBuf, &h->Q)) {
+    if (h->QName[0] != '\0' &&
+        query_read(h->QName, h->Id, &h->QBuf, &h->Q, h->NameUnique, &h->ByName)) {
         h->HaveQ = 1;
         h->R = h->Q.Rec;
         return;
@@ -811,6 +816,33 @@ static void nhi_read(NHI *h)
     }
 }
 
+/* 1 when no NHI devnode of the reading but nhiId carries the query-device
+ * name qname: the condition for matching an answer without an instance ID
+ * (tr_query_matches). */
+static int name_unique(const WALK *w, const char *nhiId, const char *qname)
+{
+    int i;
+
+    if (qname[0] == '\0') {
+        return 0;
+    }
+    for (i = 0; i < w->Count; i++) {
+        char path[INST_ID_CHARS + 96];
+        char other[24];
+        if (!tr_eq(w->N[i].Service, "xhcicm") || !inst_starts(w->N[i].Id, "PCI\\") ||
+            tr_eq(w->N[i].Id, nhiId)) {
+            continue;
+        }
+        nhi_hw_key(w->N[i].Id, path, sizeof(path));
+        if (reg_text(HKEY_LOCAL_MACHINE, path, CM_Q_NAME_VALUE, other,
+                     sizeof(other)) > 0 &&
+            tr_eq(other, qname)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void nhi_find(const WALK *w)
 {
     int i;
@@ -819,9 +851,16 @@ static void nhi_find(const WALK *w)
     for (i = 0; i < w->Count && nhiCount < TR_SNAP_NHI; i++) {
         if (tr_eq(w->N[i].Service, "xhcicm") && inst_starts(w->N[i].Id, "PCI\\")) {
             NHI *h = &nhi[nhiCount++];
+            char path[INST_ID_CHARS + 96];
             memset(h, 0, sizeof(*h));
             h->Node = i;
             tr_copy(h->Id, w->N[i].Id, sizeof(h->Id));
+            nhi_hw_key(h->Id, path, sizeof(path));
+            if (reg_text(HKEY_LOCAL_MACHINE, path, CM_Q_NAME_VALUE, h->QName,
+                         sizeof(h->QName)) <= 0) {
+                h->QName[0] = '\0';
+            }
+            h->NameUnique = name_unique(w, h->Id, h->QName);
             nhi_read(h);
         }
     }
@@ -1751,7 +1790,9 @@ static void details_nhi(TR_TEXT *t, int k)
     tr_printf(t, "  Source:              %s\n",
               h->HaveQ ? "the driver's query device" : "the registry record (shown only)");
     if (h->HaveQ) {
-        tr_printf(t, "  Query device:        %s\n", h->QName);
+        tr_printf(t, "  Query device:        %s%s\n", h->QName,
+                  h->ByName ? " (matched by name; this system gives no "
+                              "instance ID)" : "");
         tr_printf(t, "  Last pass:           %lu, %lu ms ago%s\n",
                   (unsigned long)h->Q.Pass, (unsigned long)h->Q.AgeMs,
                   tr_query_current(&h->Q) ? "" : " (not current)");
@@ -2254,6 +2295,8 @@ typedef struct _EJREQ {
     char PortId[INST_ID_CHARS];
     char NhiId[INST_ID_CHARS];
     char QName[24];
+    int NameUnique;         /* the condition of a match by name           */
+    int ByName;
     char Desc[128];
     TR_U32 EpochLo;
     TR_U32 EpochHi;
@@ -2282,6 +2325,8 @@ static int ej_prepare(int u, EJREQ *q)
     tr_copy(q->PortId, gw.N[d->Parent].Id, sizeof(q->PortId));
     tr_copy(q->NhiId, nhi[k].Id, sizeof(q->NhiId));
     tr_copy(q->QName, nhi[k].QName, sizeof(q->QName));
+    q->NameUnique = nhi[k].NameUnique;
+    q->ByName = nhi[k].ByName;
     tr_copy(q->Desc, dn_name(d), sizeof(q->Desc));
     q->EpochLo = nhi[k].Q.EpochLo;
     q->EpochHi = nhi[k].Q.EpochHi;
@@ -2358,7 +2403,7 @@ static int ej_confirm(HWND owner, const EJREQ *q)
 /* The query of the request's NHI: 1 when it answered for that NHI. */
 static int ej_query(const EJREQ *q, unsigned char **buf, TR_QUERY *a)
 {
-    return query_read(q->QName, q->NhiId, buf, a);
+    return query_read(q->QName, q->NhiId, buf, a, q->NameUnique, NULL);
 }
 
 /* The unit in a fresh walk, checked against what the user confirmed. */
@@ -2664,6 +2709,11 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         }
         if (!tr_query_eject_ready(&q3, &why)) {
             tr_printf(&t, "%s Nothing was stopped.", why);
+            goto out;
+        }
+        if (q->ByName && !name_unique(&w, q->NhiId, q->QName)) {
+            tr_put(&t, "Another Thunderbolt controller now has the same query "
+                       "device name; nothing was stopped.");
             goto out;
         }
         if (tr_query_same_content(&q2, &q3)) {
@@ -3657,7 +3707,7 @@ static void poll(void)
         } else {
             base = nhi[k].HaveQ ? &nhi[k].Q : NULL;
         }
-        if (nhi[k].QName[0] == '\0' || !query_read(nhi[k].QName, nhi[k].Id, &b, &q)) {
+        if (nhi[k].QName[0] == '\0' || !query_read(nhi[k].QName, nhi[k].Id, &b, &q, nhi[k].NameUnique, NULL)) {
             if (base != NULL) {
                 changed = 1;    /* it answered before: read it all again */
             }
