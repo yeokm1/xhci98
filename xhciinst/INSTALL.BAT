@@ -7,6 +7,8 @@ rem
 rem   INSTALL            install or update, after one question
 rem   INSTALL /list      show what would be done; change nothing
 rem   INSTALL /uninstall remove the drivers (asks for the word REMOVE)
+rem   INSTALL /thunderbolt  include the Thunderbolt 3 / USB4 support without
+rem                      asking (otherwise it is asked)
 rem   INSTALL /devices   show the connected Thunderbolt and USB4 devices
 rem   INSTALL /eject     remove one of them safely (Windows 98 SE and ME:
 rem                      the way to do it; 2000 and later: also for a

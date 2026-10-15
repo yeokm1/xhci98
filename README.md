@@ -123,7 +123,7 @@ Not supported: daisy chains (a device behind another device), DisplayPort over t
 
 ### Installing for Thunderbolt and USB4
 
-Run `INSTALL.BAT` (see "Install with INSTALL.BAT"). It installs `xhcicm.sys` with the other drivers. On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf` in each driver directory), which is what lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when it asks: on Windows 2000 the first install of the filter needs that restart before the controller is used.
+Run `INSTALL.BAT` (see "Install with INSTALL.BAT") and answer Y to "Install Thunderbolt 3 / USB4 support?" (Enter answers Y when the controller is present; `INSTALL /thunderbolt` skips the question). It installs `xhcicm.sys` with the other drivers. On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf` in each driver directory), which is what lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when it asks: on Windows 2000 the first install of the filter needs that restart before the controller is used.
 
 On Windows 98 SE and ME, `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device) from the driver directory, as for the xHCI controller. These systems need no filter.
 
@@ -230,6 +230,8 @@ Unzip the whole package and run `INSTALL.BAT` from its top directory: double-cli
 - **Windows 98 SE and ME:** it copies the package under `XHCI98` in the Windows directory, adds that folder to the wizards' search path and prints the Device Manager steps left. Run it again after the restart; it then also offers the silent install (off by default; see "Tuning").
 
 When a run changed anything and finished, it ends with "Changes were made. Please restart Windows now." If it stopped with steps left for you (a Found New Hardware window to answer, for instance) it says so instead; do them and run it again. It never runs `XHCICLN`.
+
+It also asks "Install Thunderbolt 3 / USB4 support?": Enter answers Y when a Thunderbolt or USB4 controller is present and N when none is found. Some laptops show their controller only while a device is plugged in, or only with a BIOS setting, so answer Y if yours has the port; `INSTALL /thunderbolt` includes it without asking. N leaves a Thunderbolt driver already installed as it is.
 
 `INSTALL /list` shows the plan and changes nothing. `INSTALL /uninstall` removes the drivers after a warning and the word REMOVE. Each run but `/list` writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report. `tools\xhciinst\readme.txt` lists the switches and exit codes.
 

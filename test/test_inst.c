@@ -1512,6 +1512,69 @@ static void test_tb_units(void)
     }
 }
 
+/* Record 23 section 8.5: the Thunderbolt 3 / USB4 question (owner,
+ * 2026-10-15). */
+static void test_tb_question(void)
+{
+    int ask;
+    int def;
+    char *argv1[4];
+    INST_OPTS o;
+    char err[256];
+
+    /* A controller present: asked, default yes; /yes installs it. */
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 0, &ask, &def), 0, "present: asked");
+    CHECK(ask && def, "present: default yes");
+    CHECK_EQ(inst_tb_decide(1, 1, 1, 0, 0, &ask, &def), 1, "present, /yes: yes");
+    CHECK(!ask, "present, /yes: not asked");
+    /* None found: still asked, default no; /yes skips it. */
+    CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 0, &ask, &def), 0, "absent: asked");
+    CHECK(ask && !def, "absent: default no");
+    CHECK_EQ(inst_tb_decide(1, 0, 1, 0, 0, &ask, &def), 0, "absent, /yes: no");
+    CHECK(!ask, "absent, /yes: not asked");
+    /* /thunderbolt: yes, unasked, present or not, /yes or not. */
+    CHECK_EQ(inst_tb_decide(1, 0, 0, 1, 0, &ask, &def), 1, "/thunderbolt, absent");
+    CHECK(!ask, "/thunderbolt: not asked");
+    CHECK_EQ(inst_tb_decide(1, 0, 1, 1, 0, &ask, &def), 1, "/thunderbolt /yes");
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 1, 0, &ask, &def), 1, "/thunderbolt, present");
+    /* /list: not asked, the default shown. */
+    CHECK_EQ(inst_tb_decide(1, 1, 0, 0, 1, &ask, &def), 1, "/list, present");
+    CHECK_EQ(inst_tb_decide(1, 0, 0, 0, 1, &ask, &def), 0, "/list, absent");
+    CHECK(!ask, "/list: not asked");
+    /* A package without the Thunderbolt driver: nothing, whatever the
+     * switches. */
+    CHECK_EQ(inst_tb_decide(0, 1, 0, 1, 0, &ask, &def), 0, "no driver: no");
+    CHECK(!ask, "no driver: not asked");
+
+    /* The answers. */
+    CHECK_EQ(inst_tb_answer("", 1), 1, "Enter: the default yes");
+    CHECK_EQ(inst_tb_answer("", 0), 0, "Enter: the default no");
+    CHECK_EQ(inst_tb_answer(" y", 0), 1, "y");
+    CHECK_EQ(inst_tb_answer("YES", 0), 1, "YES");
+    CHECK_EQ(inst_tb_answer("n", 1), 0, "n");
+    CHECK_EQ(inst_tb_answer("No", 1), 0, "No");
+    CHECK_EQ(inst_tb_answer("maybe", 1), -1, "not an answer");
+    CHECK_EQ(inst_tb_answer("yx", 1), -1, "not an answer either");
+
+    /* The switch. */
+    argv1[0] = "x";
+    argv1[1] = "/thunderbolt";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Thunderbolt,
+          "/thunderbolt");
+    argv1[2] = "/yes";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 && o.Yes,
+          "/thunderbolt /yes");
+    argv1[2] = "/list";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0,
+          "/thunderbolt /list");
+    argv1[2] = "/uninstall";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
+             "/thunderbolt /uninstall refused");
+    argv1[2] = "/devices";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
+             "/thunderbolt /devices refused");
+}
+
 static void test_tb_eject(void)
 {
     const char *text;
@@ -1657,6 +1720,7 @@ int main(void)
     test_tb_record();
     test_tb_units();
     test_tb_eject();
+    test_tb_question();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

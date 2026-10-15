@@ -3411,6 +3411,12 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
 | `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
 
+The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
+answers Y with a Thunderbolt or USB4 controller present and N with none
+found (a laptop may show its controller only while a device is plugged
+in); `INSTALL /thunderbolt` includes it without asking, and N leaves a
+Thunderbolt driver already installed as it is.
+
 `INSTALL.BAT` asks about `XhciCmMode`, `XhciCmApprove` and
 `XhciCmSafeEject` where a Thunderbolt or USB4 controller is present. It
 never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`

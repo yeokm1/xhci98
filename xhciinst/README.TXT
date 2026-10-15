@@ -56,6 +56,22 @@ architecture and this build.
   INSTALL /yes         asks nothing: goes on, and keeps every option
                        /set does not name
   INSTALL /uninstall   removes the drivers (see below)
+  INSTALL /thunderbolt installs the Thunderbolt 3 / USB4 support without
+                       asking (for unattended installs, with /yes)
+
+Thunderbolt 3 / USB4 support: the tool asks "Install Thunderbolt 3 / USB4
+support?". With a Thunderbolt or USB4 controller present Enter (and /yes)
+answers Y; with none found it is still asked, and Enter (and /yes)
+answers N - some laptops show their controller only while a device is
+plugged in, or only with a BIOS setting, so answer Y if yours has the
+port. With it, a device plugged into that port is approved automatically
+and gets a PCI Express connection, which lets it read and write the
+computer's memory: these systems have no Thunderbolt control panel to ask
+first. On a computer whose port is within reach of people you do not
+trust, set XhciCmApprove to 0 (INSTALL /set XhciCmApprove=0); devices then
+get no connection unless the BIOS already gave them one. N leaves a
+Thunderbolt driver already installed as it is, and keeps this package's
+out of Windows' reach.
 
 Other switches: /defaults (ask no option question), /set Name=Value (set
 an option, repeatable), /force (reinstall this release, or go back to it
