@@ -307,6 +307,12 @@ static int shellV5;
 static int iconAdded;
 static int trayV3;          /* NIM_SETVERSION 3 took: WM_CONTEXTMENU comes */
 static TR_SNAP snapOld;
+/* The poll's last answer per NHI, kept apart from the model the tree and
+ * the details were built from (they change only with a refresh). */
+static unsigned char *pollBuf[TR_SNAP_NHI];
+static TR_QUERY pollQ[TR_SNAP_NHI];
+static char pollId[TR_SNAP_NHI][INST_ID_CHARS];
+static int viewStale;       /* the poll saw a change the tree does not show */
 static int pollCount;
 static char lastEvent[128];
 static char trayUnitIds[64][INST_ID_CHARS];
@@ -1377,6 +1383,18 @@ static void build_usb(int root)
 /* The Thunderbolt branch (record 25 section 3.2)                            */
 /* ======================================================================== */
 
+/* A router entry of the model's record for NHI k, or NULL when k or r is
+ * outside it. */
+static const unsigned char *router_entry(int k, int r)
+{
+    if (k < 0 || k >= nhiCount || nhi[k].R == NULL || r < 0 ||
+        (TR_U32)r >= inst_get32(nhi[k].R, CM_ST_O_ROUTER_COUNT) ||
+        (TR_U32)r >= CM_ST_MAX_ROUTERS) {
+        return NULL;
+    }
+    return nhi[k].R + CM_ST_HDR_BYTES + (TR_U32)r * CM_ST_ENTRY_BYTES;
+}
+
 static void router_key(const NHI *h, const unsigned char *e, char *out,
                        size_t cap)
 {
@@ -1757,20 +1775,31 @@ static void details_nhi(TR_TEXT *t, int k)
 
 static void details_router(TR_TEXT *t, int k, int r)
 {
-    const NHI *h = &nhi[k];
-    const unsigned char *e = h->R + CM_ST_HDR_BYTES + (TR_U32)r * CM_ST_ENTRY_BYTES;
-    TR_U32 kind = inst_get32(e, CM_ST_E_KIND);
-    TR_U32 place = inst_get32(e, CM_ST_E_PLACE);
-    TR_U32 ids = inst_get32(e, CM_ST_E_IDS);
-    TR_U32 tun = inst_get32(e, CM_ST_E_TUNNELS);
-    TR_U32 bridge = inst_get32(e, CM_ST_E_BRIDGE);
+    const NHI *h;
+    const unsigned char *e = router_entry(k, r);
+    TR_U32 kind;
+    TR_U32 place;
+    TR_U32 ids;
+    TR_U32 tun;
+    TR_U32 bridge;
     TR_EXT x;
-    int haveX = h->HaveQ && tr_query_ext(&h->Q, (TR_U32)r, &x);
+    int haveX;
     char name[TR_NAME_CHARS];
     char gen[32];
     char link[96];
     int i;
 
+    if (e == NULL) {
+        tr_put(t, "This device is no longer in the list; press F5.\n");
+        return;
+    }
+    h = &nhi[k];
+    kind = inst_get32(e, CM_ST_E_KIND);
+    place = inst_get32(e, CM_ST_E_PLACE);
+    ids = inst_get32(e, CM_ST_E_IDS);
+    tun = inst_get32(e, CM_ST_E_TUNNELS);
+    bridge = inst_get32(e, CM_ST_E_BRIDGE);
+    haveX = h->HaveQ && tr_query_ext(&h->Q, (TR_U32)r, &x);
     tr_router_name(e, name, sizeof(name));
     tr_gen_text(inst_get32(e, CM_ST_E_GEN), gen, sizeof(gen));
     tr_link_text(kind, inst_get32(e, CM_ST_E_LANES), haveX ? &x : NULL, link,
@@ -2260,22 +2289,27 @@ static const char *ej_why_not(int u)
     return NULL;
 }
 
+/* Every devnode the request holds is listed; a list that does not fit is
+ * refused, never shortened (nothing is stopped that was not shown). */
 static int ej_confirm(HWND owner, const EJREQ *q)
 {
-    char text[2048];
+    static char text[TR_EJ_DEVS * (INST_ID_CHARS + 8) + 512];
     TR_TEXT t;
     int i;
 
     tr_text_init(&t, text, sizeof(text));
     tr_printf(&t, "Stop %s?\n\nThese devices will stop:\n", q->Desc);
-    for (i = 0; i < q->DevCount && i < 16; i++) {
+    for (i = 0; i < q->DevCount; i++) {
         int n = walk_find_id(&gw, q->Devs[i]);
         tr_printf(&t, "    %s\n", n >= 0 ? dn_name(&gw.N[n]) : q->Devs[i]);
     }
-    if (q->DevCount > 16) {
-        tr_printf(&t, "    and %d more\n", q->DevCount - 16);
-    }
     tr_put(&t, "\nClose any program that uses them first.");
+    if (t.Overflow) {
+        MessageBoxA(owner, "The list of devices to stop is too long to show, so "
+                    "nothing is stopped from here.", "Stop a Thunderbolt device",
+                    MB_OK | MB_ICONWARNING | MB_SETFOREGROUND);
+        return 0;
+    }
     return MessageBoxA(owner, text, "Stop a Thunderbolt device",
                        MB_OKCANCEL | MB_ICONQUESTION | MB_SETFOREGROUND) == IDOK;
 }
@@ -2892,11 +2926,14 @@ static int unit_of_node(int i)
         return gw.N[n->Dn].UnitOf;
     }
     if (n->Kind == K_ROUTER || n->Kind == K_TUNNEL) {
-        const unsigned char *e = nhi[n->A].R + CM_ST_HDR_BYTES +
-                                 (TR_U32)n->B * CM_ST_ENTRY_BYTES;
-        TR_U32 bdf = inst_get32(e, CM_ST_E_BRIDGE);
+        const unsigned char *e = router_entry(n->A, n->B);
+        TR_U32 bdf;
         int k;
         int found = -1;
+        if (e == NULL) {
+            return -1;
+        }
+        bdf = inst_get32(e, CM_ST_E_BRIDGE);
         for (k = 0; k < gw.Count; k++) {
             if (gw.N[k].PortNhi == n->A && port_bdf(&gw, nhi, k) == bdf) {
                 int c;
@@ -2931,8 +2968,9 @@ static void update_status(void)
 {
     char text[128];
 
-    tr_sprintf(text, sizeof(text), "%d USB devices, %d Thunderbolt/USB4 devices",
-               usbDevices, tbDevices);
+    tr_sprintf(text, sizeof(text), "%d USB devices, %d Thunderbolt/USB4 devices%s",
+               usbDevices, tbDevices,
+               viewStale ? " - changed, press F5" : "");
     SendMessageA(hStatus, SB_SETTEXTA, 0, (LPARAM)text);
 }
 
@@ -3037,6 +3075,7 @@ static void refresh_window(void)
     if (hMain != NULL) {
         keep_state();
     }
+    viewStale = 0;
     refresh_model(hMain != NULL);
     if (hMain != NULL) {
         fill_tree();
@@ -3550,18 +3589,26 @@ static void poll(void)
         unsigned char *b;
         TR_QUERY q;
         TR_U32 g;
+        const TR_QUERY *base;
+        if (pollBuf[k] != NULL && tr_eq(pollId[k], nhi[k].Id)) {
+            base = &pollQ[k];
+        } else {
+            base = nhi[k].HaveQ ? &nhi[k].Q : NULL;
+        }
         if (nhi[k].QName[0] == '\0' || !query_read(nhi[k].QName, nhi[k].Id, &b, &q)) {
-            if (nhi[k].HaveQ) {
+            if (base != NULL) {
                 changed = 1;    /* it answered before: read it all again */
             }
+            free(pollBuf[k]);
+            pollBuf[k] = NULL;
             continue;
         }
         g = inst_get32(q.Rec, CM_ST_O_GENERATION);
-        if (!nhi[k].HaveQ || g != inst_get32(nhi[k].Q.Rec, CM_ST_O_GENERATION) ||
-            q.ContentGen != nhi[k].Q.ContentGen || q.Flags != nhi[k].Q.Flags ||
-            q.Live != nhi[k].Q.Live || q.EpochLo != nhi[k].Q.EpochLo ||
-            q.EpochHi != nhi[k].Q.EpochHi ||
-            tr_query_current(&q) != tr_query_current(&nhi[k].Q)) {
+        if (base == NULL || g != inst_get32(base->Rec, CM_ST_O_GENERATION) ||
+            q.ContentGen != base->ContentGen || q.Flags != base->Flags ||
+            q.Live != base->Live || q.EpochLo != base->EpochLo ||
+            q.EpochHi != base->EpochHi ||
+            tr_query_current(&q) != tr_query_current(base)) {
             changed = 1;
         }
         routers += (int)inst_get32(q.Rec, CM_ST_O_ROUTER_COUNT);
@@ -3569,16 +3616,10 @@ static void poll(void)
          * reading of the tree may change. */
         tr_snap_add(now, inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
                                     strlen(nhi[k].Id)), &q);
-        if (nhi[k].HaveQ) {
-            /* The cached answer follows the poll: the details pane and the
-             * next comparison read this one. */
-            free(nhi[k].QBuf);
-            nhi[k].QBuf = b;
-            nhi[k].Q = q;
-            nhi[k].R = q.Rec;
-        } else {
-            free(b);
-        }
+        free(pollBuf[k]);
+        pollBuf[k] = b;
+        pollQ[k] = q;
+        tr_copy(pollId[k], nhi[k].Id, sizeof(pollId[k]));
     }
     count = tr_diff(&snapOld, now, ev, 8);
     for (i = 0; i < count; i++) {
@@ -3593,10 +3634,14 @@ static void poll(void)
         /* The NHIs' state is read again with the devices. */
         if (hMain != NULL && (viewFlags & TR_V_AUTO)) {
             refresh_window();
-        } else if (hMain == NULL) {
+        } else if (hMain != NULL) {
+            /* The model stays the one the tree shows until F5. */
+            viewStale = 1;
+            update_status();
+        } else {
             refresh_model(0);
         }
-        tbDevices = routers;
+        (void)routers;
         tray_update();
     }
 }
