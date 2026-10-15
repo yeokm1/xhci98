@@ -2614,6 +2614,28 @@ try {
             "make-release.ps1 no longer carries bcdedit's {current}; this test's lower-case case has lost its subject, so revisit it."
     }
 
+    # **The cut's version-literal guard, run here on the real template.** The
+    # guard (make-release.ps1, $allowedTemplateVersions) runs only at a cut, so
+    # a release named by hand in the template got as far as the 3.0.0.0 dry
+    # cut before anything refused it ("(new in 3.0.0.0)"), the same failure
+    # class as the 2.4.0.0 cut. The pattern and the allow-list are read from
+    # the guard itself, so the two cannot drift apart.
+    Write-Step "the readme template names no release by hand (the cut's version-literal guard)"
+    $verGuard = [regex]::Match($releaserText, "\`$templateVersions = @\(\[regex\]::Matches\(\`$template, '([^']+)'\)")
+    $verAllow = [regex]::Match($releaserText, "\`$allowedTemplateVersions = @\{([^}]*)\}")
+    Assert-True ($verGuard.Success -and $verAllow.Success) `
+        "make-release.ps1 no longer has the template version-literal guard as this test reads it; the template is unchecked until the anchor is fixed."
+    if ($verGuard.Success -and $verAllow.Success -and $tplStart -ge 0 -and $tplEnd -gt $tplStart) {
+        Assert-True ("THE EASY WAY: INSTALL.BAT (new in 3.0.0.0)." -match $verGuard.Groups[1].Value) `
+            ("the guard's pattern '" + $verGuard.Groups[1].Value + "' no longer matches a four-part version.")
+        $verAllowed = @([regex]::Matches($verAllow.Groups[1].Value, '"(\d+\.\d+\.\d+\.\d+)"') | ForEach-Object { $_.Groups[1].Value })
+        $verBody = $tplText.Substring($tplText.IndexOf("@'") + 2)
+        $verNamed = @([regex]::Matches($verBody, $verGuard.Groups[1].Value) | ForEach-Object { $_.Value } | Sort-Object -Unique |
+                      Where-Object { $verAllowed -notcontains $_ })
+        Assert-True ($verNamed.Count -eq 0) (
+            "the readme template names version(s) " + ($verNamed -join ', ') + " by hand, and the cut would refuse it: write it with {VERSION}, or put the sentence in history.md.")
+    }
+
     Write-Step "the readme template carries neither of the two forbidden claims"
     foreach ($forbidden in @("WINDOWS 98 ONLY", "redistributes nothing")) {
         Assert-True ($releaserText -notmatch [regex]::Escape($forbidden)) `
