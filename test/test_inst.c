@@ -979,11 +979,16 @@ static void test_flow(void)
     CHECK_EQ(inst_staged_again(0, 0, "", "oem0.inf"), 0, "none before");
 
     /* The confirmation says what will happen. */
-    CHECK(strcmp(inst_confirm_text(1, 0), "Install and stage the package now")
+    CHECK(strcmp(inst_confirm_text(1, 0, 1), "Install and stage the package now")
           == 0, "runs");
-    CHECK(strstr(inst_confirm_text(0, 1), "settings") != NULL, "a setting");
-    CHECK(strstr(inst_confirm_text(0, 0), "Every device is current") != NULL,
+    CHECK(strstr(inst_confirm_text(0, 1, 1), "settings") != NULL, "a setting");
+    CHECK(strstr(inst_confirm_text(0, 0, 1), "Every device is current") != NULL,
           "nothing");
+    CHECK(strcmp(inst_confirm_text(1, 0, 0),
+                 "Copy the package and update DevicePath now") == 0, "9x runs");
+    CHECK(strstr(inst_confirm_text(0, 1, 0), "settings") != NULL, "9x setting");
+    CHECK(strstr(inst_confirm_text(0, 0, 0), "DevicePath now") != NULL,
+          "9x nothing");
 }
 
 /* A PE image's embedded signature: the security directory, inside the

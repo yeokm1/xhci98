@@ -49,10 +49,12 @@ architecture and this build.
   Windows Vista, 7:  right-click INSTALL.BAT, Run as administrator.
 
   INSTALL              shows what it will do, asks the questions below,
-                       then asks once (Y) before it changes anything
+                       then asks once (Y) before it changes anything;
+                       any other answer, an empty one too, cancels
   INSTALL /list        shows what it would do; changes nothing, asks
                        nothing, writes no log
-  INSTALL /yes         does not ask before going on
+  INSTALL /yes         asks nothing: goes on, and keeps every option
+                       /set does not name
   INSTALL /uninstall   removes the drivers (see below)
 
 Other switches: /defaults (ask no option question), /set Name=Value (set

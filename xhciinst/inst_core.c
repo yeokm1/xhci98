@@ -1375,10 +1375,10 @@ const INST_VALUE instValues[] = {
     { "XhciIntelPortSwitch", INST_INF_XHCI, INST_APPLY_PSW, 0x3UL, 0x7UL,
       "route the shared connectors from the EHCI controller to this driver "
       "(0 off, 1 on)",
-      "2 is at your own risk: on an Intel controller without the switch "
-      "registers it\n  writes registers of unknown meaning at every start, "
-      "resume, stop and shutdown,\n  and the result is unknown (release "
-      "notes, \"Value 2\").", 0x4UL },
+      "2 forces the switch writes on an Intel controller that does not "
+      "have the switch\n  registers, at every start, resume, stop and "
+      "shutdown; use it only if the\n  release notes' \"Value 2\" section "
+      "applies to your machine.", 0x4UL },
     { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0xFUL, 0xFUL,
       "how the controller's events arrive (0 automatic, 1 interrupt line "
       "only, 2 polling always, 3 message-signalled only)",
@@ -1390,8 +1390,8 @@ const INST_VALUE instValues[] = {
       NULL, 0 },
     { "XhciSelectiveSuspend", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
       0x3UL, "put idle USB devices to sleep (0 off, 1 on)",
-      "no real machine has been read with it on: leave it off unless you are "
-      "testing it.", 0x2UL },
+      "leave it off unless a device needs it; if a device stops responding "
+      "after idling,\n  set it back to 0.", 0x2UL },
     /* Owner, 2026-10-15: asked on 98 SE and ME only, default off; on is
      * tools\silent\silent-on.bat's effect (the SILENT.REG list, then the
      * switch), off silent-off.bat's (the switch, the list left). */
@@ -1410,8 +1410,8 @@ const INST_VALUE instValues[] = {
       "UAS.", 0 },
     { "XhciCmMode", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0xFUL,
       "the Thunderbolt and USB4 connection manager (0 off, 1 automatic)",
-      "2 and 3 are the overrides of design record 21 section 8, for testing "
-      "only.", 0xCUL },
+      "2 and 3 force one connection manager whatever the controller "
+      "reports; use them\n  only on the release notes' advice.", 0xCUL },
     { "XhciCmApprove", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
       "approve Thunderbolt devices automatically (0 no, 1 yes)", NULL, 0 },
     { "XhciCmSafeEject", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
@@ -2041,16 +2041,19 @@ int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
     return inst_eq(before, name);
 }
 
-const char *inst_confirm_text(int runs, int writes)
+const char *inst_confirm_text(int runs, int writes, int nt)
 {
     if (runs) {
-        return "Install and stage the package now";
+        return nt ? "Install and stage the package now" :
+                    "Copy the package and update DevicePath now";
     }
     if (writes) {
         return "Write the changed settings now (no device needs a new driver)";
     }
-    return "Every device is current and no setting changes. Check the "
-           "staged INFs (and\nstage any missing) now";
+    return nt ? "Every device is current and no setting changes. Check the "
+                "staged INFs (and\nstage any missing) now" :
+                "Every device is current and no setting changes. Check the "
+                "local copy and\nDevicePath now";
 }
 
 /* ======================================================================== */

@@ -296,8 +296,11 @@ reinstall refused); a copy whose list is already gone loses only the
    stops here, exit 0, having written nothing (section 7.1).
 4. Ask the registry questions (section 8), then ask once whether to go on
    (`Y`; anything else, or end of input, cancels with exit 1 and changes
-   nothing). `/yes` skips the confirmation; `/defaults` and `/set` answer
-   the registry questions without asking.
+   nothing; an empty answer cancels too). `/yes` skips the confirmation
+   and asks no registry question either - a run nobody answers keeps every
+   value `/set` does not name, as `/defaults` does (decided 2026-10-15
+   from the 98 SE leg, where `/set ... /yes` still asked); `/defaults` and
+   `/set` answer the registry questions without asking.
 5. Ask Windows whether an installation is in progress
    (`CMP_WaitNoPendingInstallEvents` with no wait, Microsoft's "Checking
    for In-Progress Installations") and let one finish: the settle of
@@ -704,10 +707,14 @@ the filter goes on both the upstream and the downstream ports, and the
 run asks for that restart. So when such a call succeeded in the run, a
 device of the connection manager's INFs that is gone, or at Code 12, is
 reported as waiting for the restart - not a failure - and the tool says
-once that the restart brings them back and a run after it reads them
-again: the restart flag is set and the run ends with the restart line
-(exit 3, section 7.4). Any other problem code on such a device stays a
-failure (exit 2), with the same restart advice. The release notes carry
+once that the restart brings them back and to run INSTALL.BAT again after
+it: the restart flag is set, and the run ends with the restart line and
+exit 3 unless another device set the failed or steps flag (section 7.4's
+order). The same holds for such a device this run did not change. Any
+other problem code stays what it is elsewhere: on a device the run
+changed a failure (exit 2, with the restart advice when the hint was
+given), on one it did not change "already had problem code N" (steps,
+exit 4). The release notes carry
 the same reading for a filter installed by hand from `nt\`.
 Anything else is reported per device:
 
@@ -848,8 +855,14 @@ controller whose New Hardware wizard was cancelled has no devnode until
 the next start, only its `HKLM\Enum\PCI` entry (read on 98 SE: nothing in
 `HKEY_DYN_DATA\Config Manager\Enum`), so an `Enum\PCI` entry of an xHCI
 controller with no driver and no devnode is listed apart, as "recorded, not
-running now", with what to do if Device Manager shows it - an old entry of
-a controller that moved slot looks the same, and needs nothing.
+running now", with what to do if Device Manager shows it. An old entry of
+a controller that moved slot looks the same and needs nothing (read on the
+98 SE and ME legs: the controller moved from `DEV_04` to `DEV_03` after the
+first start, and every later run planned the old entry as an install). So
+(decided 2026-10-15) such an entry whose first hardware id a present
+controller with a driver carries is the same controller's old slot and is
+left out; one whose id no present controller carries - the cancelled
+wizard's controller - stays.
 
 ### 6.4 What it prints
 
@@ -891,8 +904,18 @@ disk, and for any current device when `/force` asks for a reinstall:
 the local directory. The storage prerequisite stays as the README says: on 98 SE,
 NUSB's mass-storage component for any disk, UAS included. The first UAS
 disk and the first NHI found later find `xhciuas.inf` and `xhcicm.inf` in
-the same directory. The run ends with exit 4: staged, steps left for the
-user.
+the same directory. A device of the package that needs a step - an
+install, an update, a refused version - ends the run with exit 4 (staged,
+steps left for the user); with none (every device current), the run
+changes nothing where the copy and `DevicePath` are already in place and
+ends "No changes were made." with exit 0, or, where it wrote a setting,
+with the restart line and exit 3 (section 7.4). The confirmation names
+what will happen: the copy and `DevicePath`, the changed settings, or a
+check of the copy and `DevicePath`. The steps also say, for a UAS disk's
+Have Disk, that Windows asks for the "xhci98 xHCI Host Controller Disk"
+(the same folder), and on ME, for the root hub, that a "Select Other
+Driver" list may name the driver twice (one copy under `INF\OTHER`),
+either being the same driver (both read on the legs).
 
 ### 6.5 After the restart
 
@@ -909,7 +932,7 @@ these systems.
 |---|---|
 | (none) | install or update, with the plan shown and one confirmation |
 | `/list` | the plan, the store trap, the questions that would be asked and their current values, and with `/uninstall` the uninstall plan; reads only: no confirmation, no question, no local copy, no staging, no log unless `/log` names one, no pause; exit 0 (or 1 on a refusal) |
-| `/yes` | no confirmation, and with `/uninstall` no typed word (section 9.1) |
+| `/yes` | no confirmation, no registry question (every value `/set` does not name is kept), and with `/uninstall` no typed word (section 9.1) |
 | `/defaults` | ask no registry question, keep every current value (the INF's default on a new install) |
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
@@ -964,7 +987,7 @@ section 4 gains a row when a reading rests on one).
 | 1 | refused before any change: location, architecture, rights, a routine missing, a bad switch, a partial device list, cancelled |
 | 2 | failed: a step failed or a result was wrong (section 5.9); the log and the report say what was done |
 | 3 | done, something changed: restart needed (and, where said, run `INSTALL.BAT` again after it) |
-| 4 | done as far as the tool can: steps remain for the user - Windows 98 SE and ME always; on NT a group refused as newer or unknown, a device left by the trap (5.7), an id shared with a foreign device (5.5), a wizard to finish (5.8), test-signing to turn on (5.9) |
+| 4 | done as far as the tool can: steps remain for the user - on Windows 98 SE and ME whenever a device needs a step (section 6.4); on NT a group refused as newer or unknown, a device left by the trap (5.7), an id shared with a foreign device (5.5), a wizard to finish (5.8), test-signing to turn on (5.9) |
 
 Failed, restart and steps are three flags; the code is 2 when failed is
 set, else 4 when steps is set, else 3 when restart is set, else 0. The
@@ -1089,11 +1112,16 @@ XhciForceBulkOnly - Bulk-Only instead of UAS for a disk that offers both
 `now` is the value in each device's driver key, or "not set" (the
 install's `AddReg` then writes the default), or "new install: the default".
 A value with a caution shows it under the question, and `/set` prints it
-when it sets the value the caution is about: `XhciIntelPortSwitch` 2 writes
-registers of unknown meaning on an Intel controller without the switch
-registers (release notes, "Value 2"); `XhciSelectiveSuspend` 1 (set with
-`/set` only) has not been read on a real machine, "leave it off unless you
-are testing it"; `XhciSilentInstall`, before its question every time: turn
+when it sets the value the caution is about. The tool's text is practical
+guidance only: it never speaks of virtual machines, emulators, or what has
+or has not been tested or read (owner, 2026-10-15). `XhciIntelPortSwitch`
+2 forces the switch writes on an Intel controller without the switch
+registers, "use it only if the release notes' "Value 2" section applies to
+your machine"; `XhciSelectiveSuspend` 1 (set with `/set` only): "leave it
+off unless a device needs it; if a device stops responding after idling,
+set it back to 0"; `XhciCmMode` 2 and 3 force one connection manager,
+"use them only on the release notes' advice"; `XhciSilentInstall`, before
+its question every time: turn
 it on only once each listed class's drivers have been installed at least
 once, otherwise 98 SE asks for its CD with no wizard, and restart Windows
 after changing it; `XhciForceBulkOnly` is read as each device is connected, and on Windows

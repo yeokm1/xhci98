@@ -1101,6 +1101,34 @@ static void registry_controllers_9x(void)
     }
     RegCloseKey(pci);
 }
+/* 98 SE and ME (record 23 section 6.3, decided 2026-10-15): an Enum\PCI
+ * entry with no devnode and no driver whose hardware id a present
+ * controller with a driver carries is the same controller's old slot (it
+ * moved between starts), not a device to install: it is left out. One
+ * whose id no present controller carries - the controller of a cancelled
+ * New Hardware wizard - stays. */
+static void drop_old_slots_9x(void)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < devCount; i++) {
+        DEVREC *d = &devs[i];
+        if (!d->RegOnly || !d->Present) {
+            continue;
+        }
+        for (j = 0; j < devCount; j++) {
+            const DEVREC *o = &devs[j];
+            if (j != i && o->Present && !o->RegOnly && o->Driver[0] != '\0' &&
+                is_controller(o) && inst_eq(first_hw(o), first_hw(d))) {
+                d->Present = 0;
+                logonly("old slot of %s, left out: %s\n", o->Id, d->Id);
+                break;
+            }
+        }
+    }
+}
+
 static int scan_9x(void)
 {
     DWORD rootDn;
@@ -1122,6 +1150,7 @@ static int scan_9x(void)
     if (!devTruncated) {
         registry_controllers_9x();
     }
+    drop_old_slots_9x();
     if (devTruncated) {
         out("More than %d devices: the list is cut short, and nothing is "
             "changed.\n", INST_MAX_DEVS);
@@ -1737,7 +1766,9 @@ static void ask_values(void)
         if (!inst_value_applies(v, &envNow) || targets == 0 || !haveDef) {
             continue;
         }
-        if (opts.Defaults && !opts.List) {
+        /* /defaults, and /yes (a run nobody answers), ask nothing: the
+         * values not named by /set keep what they are. */
+        if ((opts.Defaults || opts.Yes) && !opts.List) {
             continue;
         }
         out("%s - %s\n", instValues[v].Name, instValues[v].Meaning);
@@ -3725,6 +3756,20 @@ static int root_hub_below(const char *ctrlId)
     }
 }
 
+/* Read on the 2000 leg (2026-10-15): after a port's first filter install
+ * the upstream port showed Code 12 and the switch's other devices were gone
+ * until the restart, all started after it. The owner (2026-10-15): the
+ * filter goes on both ports and the run asks for that restart; Code 12 or
+ * a device gone there is the restart's to clear (record 23 section 5.9). */
+static void tunnel_restart_hint(void)
+{
+    out("  On Windows 2000 a tunnel port's first filter install shows Code 12 "
+        "on the\n  upstream port, and takes the Thunderbolt switch's devices "
+        "away, until a\n  restart. Restart Windows, then run INSTALL.BAT again: "
+        "it reads them again.\n");
+    flagRestart = 1;
+}
+
 /* Record 23 section 5.9: each changed device bound, at the package version,
  * started, with no problem; otherwise the reason decides the flag. The
  * restart exceptions are each device's own: the restart its install call
@@ -3821,17 +3866,7 @@ static void check_results(void)
         }
     }
     if (tunnelHint) {
-        /* Read on the 2000 leg (2026-10-15): after a port's first filter
-         * install the upstream port showed Code 12 and the switch's other
-         * devices were gone until the restart, all started after it. The
-         * owner (2026-10-15): the filter goes on both ports and the run asks
-         * for that restart; Code 12 or a device gone there is the restart's
-         * to clear, any other problem stays a failure. */
-        out("  On Windows 2000 a tunnel port's first filter install shows Code "
-            "12 on the\n  upstream port, and takes the Thunderbolt switch's "
-            "devices away, until a\n  restart. Restart Windows; INSTALL.BAT run "
-            "again afterwards reads them.\n");
-        flagRestart = 1;
+        tunnel_restart_hint();
     }
     /* The devices this run did not change are read too: a current device
      * already in trouble is not a success to report. */
@@ -3847,12 +3882,9 @@ static void check_results(void)
                                        d->Problem)) {
             out("  %s: Code 12 until the restart.\n", d->Desc);
             if (!tunnelHint) {
-                out("  On Windows 2000 a tunnel port's first filter install "
-                    "shows Code 12 on the\n  upstream port until a restart. "
-                    "Restart Windows.\n");
+                tunnel_restart_hint();
                 tunnelHint = 1;
             }
-            flagRestart = 1;
         } else {
             out("  %s already had problem code %lu, and still has.\n",
                 d->Desc, (unsigned long)d->Problem);
@@ -4202,7 +4234,7 @@ static int run_install_nt(void)
         return INST_EXIT_DONE;
     }
     input_warning();
-    if (!confirm(inst_confirm_text(runs, values_to_write()))) {
+    if (!confirm(inst_confirm_text(runs, values_to_write(), 1))) {
         return INST_EXIT_REFUSED;
     }
     before = devs_signature();
@@ -4407,7 +4439,10 @@ static void steps_9x(const char *dir)
                 out("  - Device Manager: this disk, Properties, Driver, Update "
                     "Driver, Next, \"Display\n    a list of all the drivers in "
                     "a specific location\", Have Disk, type %s.\n    (A search "
-                    "keeps an xhciuas.sys of the same DriverVer.)\n", dir);
+                    "keeps an xhciuas.sys of the same DriverVer.)\n"
+                    "  - When Windows asks for the \"xhci98 xHCI Host Controller "
+                    "Disk\", type the same\n    folder under \"Copy files "
+                    "from\".\n", dir);
                 break;
             }
             out("  - Device Manager: this device, Properties, Driver, Update "
@@ -4417,6 +4452,11 @@ static void steps_9x(const char *dir)
                 "the \"xhci98 xHCI Host Controller Disk\", type the same\n    "
                 "folder under \"Copy files from\".\n  - Restart afterwards, "
                 "although Windows does not ask.\n", dir);
+            if (envNow.Minor == 90 && !is_controller(d)) {
+                out("  - On ME a \"Select Other Driver\" list may name this "
+                    "driver twice (one copy\n    under INF\\OTHER): either "
+                    "is the same driver.\n");
+            }
             if (d->Inf == INST_INF_XHCI && is_controller(d) && old23) {
                 out("  - From 2.3.x or earlier: have a keyboard and mouse that "
                     "do not go through this\n    driver first (release notes, "
@@ -4457,6 +4497,7 @@ static int run_install_9x(void)
 {
     char dir[INST_PATH_CHARS];
     int i;
+    int runs;
 
     if (!scan()) {
         out("The device tree could not be read whole: nothing is changed.\n");
@@ -4495,7 +4536,14 @@ static int run_install_9x(void)
             break;
         }
     }
-    if (!confirm("Copy the package and update DevicePath now")) {
+    runs = 0;
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (d->Present && d->Inf >= 0 && (d->Runs || d->Refused)) {
+            runs = 1;
+        }
+    }
+    if (!confirm(inst_confirm_text(runs, values_to_write(), 0))) {
         return INST_EXIT_REFUSED;
     }
     if (!make_local_copy() || !devicepath_update(srcDir)) {
@@ -4504,7 +4552,9 @@ static int run_install_9x(void)
     write_values();
     steps_9x(srcDir);
     note_old_entries();
-    return inst_exit_code(0, flagFailed, flagRestart, 1);
+    /* Steps are left only where a device needs one (Update Driver, Have
+     * Disk, a refused version): a current machine ends without them. */
+    return inst_exit_code(0, flagFailed, flagRestart, runs);
 }
 
 /* ======================================================================== */
@@ -5311,7 +5361,7 @@ static void usage(void)
 "\n"
 "  (none)        install or update the package's drivers, after one question\n"
 "  /list         show what would be done; change nothing\n"
-"  /yes          do not ask before going on\n"
+"  /yes          ask nothing: go on, keep every value /set does not name\n"
 "  /defaults     ask no option question; keep every value\n"
 "  /set Name=Value   set one of the driver's options (repeatable)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
