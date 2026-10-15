@@ -302,7 +302,9 @@ typedef struct _CM_NHI {
     ULONG AccessClass;
     ULONG LiveIds;
     ULONG LiveBar0;
+    ULONG LiveBar0Hi;
     ULONG CfgStrict;        /* cm_thr.c's cmConfig checks the length read */
+    ULONG LiveNeedBm;       /* the validation found Bus Master clear      */
 
     /* Power (cm_power.c). */
     DEVICE_POWER_STATE DevicePower;
@@ -439,6 +441,11 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile);
     (TBT_RING_U4_ENTRIES | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT))
 VOID CmNhiRevoke(PCM_NHI nhi);
 BOOLEAN CmNhiHwAccess(PCM_NHI nhi);
+/* The ICM client's arming after a bind or a resume: ACTIVE against RX ring
+ * 0's size register read now when it holds what the start programmed;
+ * against 0 (all-ones detection only) when it reads otherwise; not armed
+ * when it reads all ones. */
+VOID CmNhiLiveArm(PCM_NHI nhi);
 
 /* cm_thr.c */
 VOID CmThrInit(PCM_NHI nhi);

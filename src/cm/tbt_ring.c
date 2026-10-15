@@ -470,6 +470,12 @@ LONG TbtRingStartEx(PTBT_RING ring,
         tbtLog(host, "tbt.ring.memory", bytes);
         return TBT_E_MEMORY;
     }
+    if (ring->DmaMayRun && ring->Va == (volatile UCHAR *)va) {
+        /* The host interface may still own this buffer (no verified stop
+         * since its rings ran): nothing is cleared or reprogrammed in it. */
+        tbtLog(host, "tbt.ring.reuse-unverified", 1);
+        return TBT_E_STATE;
+    }
     ring->Va = (volatile UCHAR *)va;
     ring->Phys = phys;
     ring->Entries = entries;
@@ -559,6 +565,24 @@ LONG TbtRingStartEx(PTBT_RING ring,
     }
     ring->Running = TRUE;
     return TBT_OK;
+}
+
+BOOLEAN TbtRingIntact(PTBT_RING ring)
+{
+    ULONG valid;
+
+    valid = TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW;
+    return (BOOLEAN)(
+        TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_BASE_LO) == ring->Phys &&
+        TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_BASE_HI) == 0 &&
+        TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_SIZE_REG) == ring->Entries &&
+        (TBT_RD(ring, TBT_TX_CTRL(0)) & valid) == valid &&
+        TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_BASE_LO) ==
+            ring->Phys + tbtRxDescOff(ring) &&
+        TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_BASE_HI) == 0 &&
+        TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_SIZE_REG) ==
+            (ring->Entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT)) &&
+        (TBT_RD(ring, TBT_RX_CTRL(0)) & valid) == valid);
 }
 
 VOID TbtRingStop(PTBT_RING ring)
@@ -685,6 +709,12 @@ BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame)
     UCHAR tmp[TBT_RING_BUF_BYTES];
 
     if (!ring->Running) {
+        return FALSE;
+    }
+    /* The transport's own entry gate: no descriptor is taken or reposted
+     * once the host interface may not be accessed (TBT_HOST.Cancelled). */
+    if (ring->Host->Cancelled != NULL &&
+        ring->Host->Cancelled(ring->Host->Context)) {
         return FALSE;
     }
     i = ring->RxNext;

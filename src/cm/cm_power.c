@@ -274,6 +274,14 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     }
     nhi->Counters.Resumes++;
     CmLogNote(nhi, "cm.resume", (ULONG)nhi->SystemPower);
+    if (!nhi->U4On && !CmNhiHwAccess(nhi)) {
+        /* Suspended while the liveness gate was closed: nothing is written
+         * to it on the way back; the failure path below (U15's order). */
+        CmLogNote(nhi, "cm.resume.no-access", nhi->Live.State);
+        ok = FALSE;
+        held = FALSE;
+        goto resumed;
+    }
     ok = CmNhiPlatformInit(nhi);
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
@@ -327,12 +335,10 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             ok = FALSE;
         } else {
-            (VOID)CmLiveArm(&nhi->Live,
-                            CmThrProbe32(nhi, TBT_RX_RING(0) +
-                                                  TBT_RING_SIZE_REG),
-                            nhi->Host.NowMs(nhi));
+            CmNhiLiveArm(nhi);
         }
     }
+resumed:
     if (!ok) {
         /* The client stopped its rings (TbtIcmResume's or TbtU4Resume's
          * failure), or never restarted them (the platform or Bus Master

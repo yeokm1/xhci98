@@ -349,6 +349,10 @@ LONG TbtRingStartEx(PTBT_RING ring,
 /* Stop ring 0: both Ring Control registers to their default 0, then the RX
  * Consumer Index to its default (Spec 12.6.3.3.3's note). Idempotent. */
 VOID TbtRingStop(PTBT_RING ring);
+/* Both ring 0 configurations as the last start programmed them: bases,
+ * sizes, and Valid and Raw Mode set (a recovery that keeps the rings
+ * requires it, cm_live.h). */
+BOOLEAN TbtRingIntact(PTBT_RING ring);
 
 /* The receiver of frames a control transfer does not want. */
 VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context);

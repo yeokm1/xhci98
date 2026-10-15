@@ -496,8 +496,29 @@ BOOLEAN CmNhiHwAccess(PCM_NHI nhi)
  * wait (TBT_HOST.Cancelled). IRQL: PASSIVE_LEVEL. */
 VOID CmNhiRevoke(PCM_NHI nhi)
 {
+    KIRQL irql;
+
+    /* Under WorkLock, as the recovery's publication is (cmLiveRecover):
+     * a publication either happens before this or not at all. */
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
     CmLiveRevoke(&nhi->Live);
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
     CmLogNote(nhi, "cm.live.revoked", nhi->Live.State);
+}
+
+VOID CmNhiLiveArm(PCM_NHI nhi)
+{
+    ULONG v;
+    ULONG want;
+
+    v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+    want = nhi->Ring.Entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT);
+    CmLogNote(nhi, "cm.live.baseline", v);
+    if (v == 0xFFFFFFFFUL) {
+        CmLogNote(nhi, "cm.live.unarmed", v);
+        return;
+    }
+    (VOID)CmLiveArm(&nhi->Live, v == want ? v : 0, nhi->Host.NowMs(nhi));
 }
 
 /* The USB4 profile's containment (record 22 section 3.5): transport,
@@ -619,6 +640,8 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
 {
     TBT_HW_SELECTION sel;
     ULONG v;
+    ULONG hi;
+    ULONG cmd;
 
     nhi->CfgStrict = 1;
     v = CmCfgRead32(nhi, 0x00);
@@ -628,12 +651,29 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
         return FALSE;
     }
     v = CmCfgRead32(nhi, 0x10);
+    hi = 0;
+    if ((nhi->LiveBar0 & 0x6UL) == 0x4UL) {
+        hi = CmCfgRead32(nhi, 0x14);
+    }
+    cmd = CmCfgRead32(nhi, 0x04);
     nhi->CfgStrict = 0;
-    if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL)) {
-        /* Reassigned or reset: only a PnP stop and start can map it. */
+    /* Both from configuration space, the bus address against the one the
+     * healthy start read there: attribute bits masked, a 64-bit BAR's
+     * high DW too. Reassigned or reset: only a PnP stop and start can map
+     * it. */
+    if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL) ||
+        hi != nhi->LiveBar0Hi) {
         CmLogNote(nhi, "cm.live.bar-changed", v);
         return FALSE;
     }
+    if (cmd == 0xFFFFFFFFUL || (cmd & 0x2UL) == 0) {
+        /* Memory decoding off: the mapping no longer reaches it. */
+        CmLogNote(nhi, "cm.live.decode-off", cmd);
+        return FALSE;
+    }
+    /* Bus Master is restored by the recovery itself, under its own access
+     * class, never before the precondition has passed. */
+    nhi->LiveNeedBm = (cmd & 0x4UL) == 0 ? 1UL : 0UL;
     if (CmThrProbe32(nhi, TBT_HI_CAPS) == 0xFFFFFFFFUL) {
         return FALSE;
     }
@@ -641,6 +681,14 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
         return FALSE;
     }
     nhi->AccessClass = CM_ACCESS_PROBE;
+    if (!nhi->Live.Full && !TbtRingIntact(&nhi->Ring)) {
+        /* A light recovery keeps the rings: both must still hold what this
+         * driver programmed, else the full one is owed and not admitted
+         * here (a new episode re-arms it). */
+        nhi->AccessClass = CM_ACCESS_ORDINARY;
+        CmLogNote(nhi, "cm.live.rings-changed", 1);
+        return FALSE;
+    }
     TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, TbtHwIsApple(nhi->SubVendor),
                 FALSE, &sel);
     nhi->AccessClass = CM_ACCESS_ORDINARY;
@@ -654,23 +702,42 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
 static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
 {
     ULONG episode;
+    ULONG v;
     LONG rc;
     BOOLEAN ok;
+    BOOLEAN published;
+    KIRQL irql;
 
     episode = CmLiveEpisode(&nhi->Live);
     CmLiveTransition(&nhi->Live, TRUE);
     nhi->AccessClass = CM_ACCESS_RECOVERY;
-    rc = TbtIcmRecover(&nhi->Icm, full);
+    rc = TBT_OK;
+    if (nhi->LiveNeedBm && !CmNhiSetBusMaster(nhi, TRUE)) {
+        rc = TBT_E_STATE;
+    }
+    if (rc == TBT_OK) {
+        rc = TbtIcmRecover(&nhi->Icm, full);
+    }
     nhi->AccessClass = CM_ACCESS_ORDINARY;
     CmLiveTransition(&nhi->Live, FALSE);
     ok = (BOOLEAN)(rc == TBT_OK);
     CmLogNote(nhi, "cm.live.recover", (full ? 0x100UL : 0) | (ULONG)(-rc));
-    if (CmLiveRecovered(&nhi->Live, episode, ok,
-                        CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG),
-                        nhi->Host.NowMs(nhi))) {
+    v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    published = CmLiveRecovered(&nhi->Live, episode, ok, v,
+                                nhi->Host.NowMs(nhi));
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    if (published) {
         CmLogNote(nhi, "cm.live.active", episode);
         CmNhiDrainActions(nhi);
+        return;
     }
+    if (nhi->Live.Revoked) {
+        /* Revoked meanwhile: what the recovery queued belongs to nothing. */
+        TbtIcmLost(&nhi->Icm);
+        return;
+    }
+    CmNhiLiveActions(nhi, CmLiveReconcileOwed(&nhi->Live) | CM_LIVE_ACT_LOG);
 }
 
 VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions)
@@ -697,9 +764,9 @@ VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions)
     }
     if (actions & CM_LIVE_ACT_VALIDATE) {
         more = CmLiveValidated(&nhi->Live, cmLiveValidate(nhi));
-        if (more & CM_LIVE_ACT_LOG) {
-            CmLogNote(nhi, "cm.live.state",
-                      (CmLiveEpisode(&nhi->Live) << 8) | nhi->Live.State);
+        if (more & (CM_LIVE_ACT_LOG | CM_LIVE_ACT_RECONCILE)) {
+            CmNhiLiveActions(nhi, more & (CM_LIVE_ACT_LOG |
+                                          CM_LIVE_ACT_RECONCILE));
         }
         if (more & (CM_LIVE_ACT_RECOVER_LIGHT | CM_LIVE_ACT_RECOVER_FULL)) {
             cmLiveRecover(nhi,
@@ -1487,8 +1554,13 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     nhi->Device = (v >> 16) & 0xFFFFUL;
     nhi->LiveIds = v;
     CmLogNote(nhi, "cm.cfg.ids", v);
-    /* BAR0 as the healthy start found it, for a recovery's precondition. */
+    /* BAR0 as the healthy start found it, for a recovery's precondition:
+     * the bus address in configuration space, both DWs of a 64-bit BAR. */
     nhi->LiveBar0 = CmCfgRead32(nhi, 0x10);
+    nhi->LiveBar0Hi = 0;
+    if ((nhi->LiveBar0 & 0x6UL) == 0x4UL) {
+        nhi->LiveBar0Hi = CmCfgRead32(nhi, 0x14);
+    }
     /* The class and the subsystem ids, each read whole: a read refused or
      * all ones decides nothing, and the Apple policy of test (a) needs the
      * subsystem vendor established, not assumed. */
@@ -1591,7 +1663,6 @@ VOID CmNhiStartWork(PCM_NHI nhi)
 VOID CmNhiBind(PCM_NHI nhi)
 {
     LONG rc;
-    ULONG v;
 
     if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
         CmPowerSleeping(nhi)) {
@@ -1608,10 +1679,8 @@ VOID CmNhiBind(PCM_NHI nhi)
                      TBT_RING_DMA_BYTES);
     CmLogNote(nhi, "cm.bind", (ULONG)(-rc));
     if (rc == TBT_OK) {
-        /* Monitored from here, against the size register's value now. */
-        v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
-        (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
-        CmLogNote(nhi, "cm.live.baseline", v);
+        /* Monitored from here (cm_live.h). */
+        CmNhiLiveArm(nhi);
         CmLogNote(nhi, "cm.driver-ready", nhi->Icm.Ready.Flags);
         CmLogNote(nhi, "cm.dev.count", TbtIcmDeviceCount(&nhi->Icm));
         CmNhiDrainActions(nhi);
