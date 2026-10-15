@@ -92,10 +92,26 @@ static ULONG tbtU4Now(PTBT_U4CM cm)
  * it open). Once spent, every request is refused before it is sent, so
  * whatever sequence is running ends at its next request.
  */
+/* Section 7.7: contained, or the driver's gate closed under the current
+ * access class (TBT_HOST.Cancelled: the loss or a surprise removal
+ * arrived inside a sequence) - no request reaches the transport. */
+static BOOLEAN tbtU4Off(PTBT_U4CM cm)
+{
+    return (BOOLEAN)(cm->Contained ||
+                     (cm->Host->Cancelled != NULL &&
+                      cm->Host->Cancelled(cm->Host->Context)));
+}
+
 static BOOLEAN tbtU4Spent(PTBT_U4CM cm)
 {
     ULONG waited;
 
+    /* A contained instance is a budget spent for good - every request
+     * refused before the transport, every wait of the core's own ended -
+     * without the resume's accounting. */
+    if (tbtU4Off(cm)) {
+        return TRUE;
+    }
     if (!cm->Budgeted) {
         return FALSE;
     }
@@ -122,6 +138,9 @@ static LONG tbtU4RdN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
                      ULONG addr, ULONG n, PULONG v)
 {
     if (tbtU4Spent(cm)) {
+        if (tbtU4Off(cm)) {
+            cm->Counters.ContainedRefused++;
+        }
         return TBT_E_STOPPED;
     }
     return TbtCtlRead(&cm->Ctl, r, cs, adp, addr, n, v);
@@ -137,6 +156,9 @@ static LONG tbtU4WrN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
                      ULONG addr, ULONG n, const ULONG *v)
 {
     if (tbtU4Spent(cm)) {
+        if (tbtU4Off(cm)) {
+            cm->Counters.ContainedRefused++;
+        }
         return TBT_E_STOPPED;
     }
     return TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
@@ -470,6 +492,9 @@ static VOID tbtU4SafePoint(PVOID context)
     ULONG cls;
 
     cm = (PTBT_U4CM)context;
+    if (tbtU4Off(cm)) {
+        return;     /* section 7.7: the ring is not serviced */
+    }
     if (!cm->Budgeted) {
         TbtCtlService(&cm->Ctl);
     } else if (!tbtU4Spent(cm)) {
@@ -922,7 +947,9 @@ static VOID tbtU4GetCapabilities(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
         rt->CapsState = TBT_U4_CAPS_UNKNOWN;
         tbtU4Log(cm, "u4.caps.unknown", (ULONG)rc);
     }
-    TbtCtlSettle(&cm->Ctl, &rt->Route);
+    if (!tbtU4Off(cm)) {
+        TbtCtlSettle(&cm->Ctl, &rt->Route);
+    }
 }
 
 /* Buffer Allocation Request (opcode 33h; Spec Tables 8-56 to 8-58; Linux
@@ -3378,6 +3405,12 @@ static VOID tbtU4LinkDownUpcall(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN closed,
     ULONG age;
     ULONG r;
 
+    if (tbtU4Off(cm)) {
+        /* Section 7.7: nothing read after the loss proves a path closed;
+         * the driver reports presence lost itself. */
+        cm->Counters.StatementsWithheld++;
+        return;
+    }
     info.Port = p->Index;
     info.Generation = p->Generation;
     info.PcieDown = p->PcieDown;
@@ -3870,10 +3903,12 @@ out:
      * registers (tbtU4Live), and a spent resume budget is told apart. */
     if (tbtU4Spent(cm) && p->Generation == gen) {
         /* Section 7.6: nothing is torn down without removal evidence;
-         * the port is HELD, the failure path. */
+         * the port is HELD, the failure path. Section 7.7: the same for a
+         * sequence the containment stopped - left as it was, never
+         * touched again. */
         cm->ActivePort = 0;
         p->State = TBT_U4_HELD;
-        p->Why = TBT_U4_WHY_RESUME;
+        p->Why = tbtU4Off(cm) ? TBT_U4_WHY_CONTAINED : TBT_U4_WHY_RESUME;
         return;
     }
     gone = (BOOLEAN)(rc == TBT_E_GONE || !TBT_U4_LIVE(p, gen));
@@ -4530,7 +4565,9 @@ static VOID tbtU4LinkCaps(PTBT_U4CM cm, PTBT_U4_PORT p)
         tbtU4GetCapabilities(cm, s);
         cm->Links[i].CapsState = s->CapsState;
         cm->Links[i].CapsEnabled = s->CapsEnabled;
-        TbtCtlSettle(&cm->Ctl, &cm->Links[i].Child);
+        if (!tbtU4Off(cm)) {
+            TbtCtlSettle(&cm->Ctl, &cm->Links[i].Child);
+        }
     }
     tbtU4Zero(s, sizeof(*s));
     s->Route = keep;
@@ -5147,7 +5184,9 @@ VOID TbtU4SetLinkDown(PTBT_U4CM cm, TBT_U4_LINKDOWN_FN fn, PVOID context)
  * theirs is pending - and the fabric left as it is. */
 static LONG tbtU4Fail(PTBT_U4CM cm, LONG rc)
 {
-    TbtRingStop(cm->Ring);
+    if (!cm->Contained) {
+        TbtRingStop(cm->Ring);
+    }
     cm->Failed = TRUE;
     if (cm->InertReason == TBT_INERT_NONE) {
         cm->InertReason = TBT_INERT_PROTOCOL;
@@ -5256,6 +5295,12 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     LONG rc;
     PTBT_U4_PORT p;
 
+    if (tbtU4Off(cm)) {
+        /* Section 7.7: a contained instance never starts again; a new one
+         * (TbtU4Init) does. Nothing changed, nothing touched. */
+        cm->Counters.ContainedRefused++;
+        return TBT_E_STOPPED;
+    }
     cm->Va = va;
     cm->Phys = phys;
     cm->Bytes = bytes;
@@ -5309,7 +5354,8 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     ULONG i;
     PTBT_U4_PORT p;
 
-    if (cm->Failed || cm->Stage != TBT_U4_STAGE_RUNNING || cm->Suspended) {
+    if (cm->Failed || cm->Stage != TBT_U4_STAGE_RUNNING || cm->Suspended ||
+        cm->Contained) {
         return;
     }
     TbtCtlService(&cm->Ctl);
@@ -5382,7 +5428,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
 
 BOOLEAN TbtU4NextAction(PTBT_U4CM cm, PTBT_U4_ACTION out)
 {
-    if (cm->ActionCount == 0) {
+    if (cm->ActionCount == 0 || cm->Contained) {
         return FALSE;
     }
     *out = cm->Actions[cm->ActionHead];
@@ -5398,7 +5444,7 @@ VOID TbtU4PresenceSample(PTBT_U4CM cm, ULONG port, ULONG generation,
 
     p = tbtU4PortOf(cm, port);
     if (p == NULL || !matched || generation != p->Generation ||
-        p->State == TBT_U4_EMPTY) {
+        p->State == TBT_U4_EMPTY || cm->Contained) {
         return;
     }
     if (!p->AnchorValid || p->AnchorGeneration != generation ||
@@ -5414,6 +5460,10 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
     PTBT_U4_PORT p;
     BOOLEAN closed;
 
+    if (cm->Contained) {
+        cm->Counters.ContainedRefused++;
+        return TBT_E_STOPPED;
+    }
     p = tbtU4PortOf(cm, port);
     if (p == NULL || cm->Failed || !p->Dev.Present) {
         return TBT_E_PARAM;
@@ -5442,6 +5492,10 @@ LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
     PTBT_U4_PORT p;
     BOOLEAN closed;
 
+    if (cm->Contained) {
+        cm->Counters.ContainedRefused++;
+        return TBT_E_STOPPED;
+    }
     p = tbtU4PortOf(cm, port);
     if (p == NULL || cm->Failed || !p->Dev.Present) {
         return TBT_E_PARAM;
@@ -5470,6 +5524,12 @@ VOID TbtU4Suspend(PTBT_U4CM cm)
     PTBT_U4_PORT p;
     PTBT_U4_OBLIGATION o;
 
+    if (cm->Contained) {
+        /* Section 7.7: the obligations stay as recorded; nothing written. */
+        cm->Counters.ContainedRefused++;
+        cm->Suspended = TRUE;
+        return;
+    }
     tbtU4Zero(cm->Obligations, sizeof(cm->Obligations));
     k = 0;
     for (i = 0; i < cm->PortCount; i++) {
@@ -5719,6 +5779,10 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     PTBT_U4_PORT saved;
     LONG rc;
 
+    if (cm->Contained) {
+        cm->Counters.ContainedRefused++;
+        return TBT_E_STOPPED;
+    }
     if (cm->Failed) {
         return TBT_E_STATE;
     }
@@ -5899,8 +5963,32 @@ ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs)
 
 VOID TbtU4Stop(PTBT_U4CM cm)
 {
-    TbtRingStop(cm->Ring);
+    if (!cm->Contained) {
+        TbtRingStop(cm->Ring);
+    }
     cm->Stage = TBT_U4_STAGE_NONE;
+}
+
+VOID TbtU4Contain(PTBT_U4CM cm)
+{
+    ULONG i;
+
+    if (cm->Contained) {
+        return;
+    }
+    cm->Contained = TRUE;
+    cm->Counters.ContainedRetired += cm->ActionCount;
+    cm->ActionCount = 0;
+    cm->ActionHead = 0;
+    cm->ResyncPending = FALSE;
+    for (i = 0; i < TBT_U4_MAX_PORTS; i++) {
+        if (cm->DeferredTail[i]) {
+            cm->DeferredTail[i] = 0;
+            cm->Counters.ContainedRetired++;
+        }
+        cm->Ports[i].AnchorValid = FALSE;
+    }
+    tbtU4Log(cm, "u4.contained", cm->Stage);
 }
 
 BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm)
@@ -5909,7 +5997,7 @@ BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm)
     ULONG lane;
 
     if (cm->Failed || cm->Suspended || cm->Stage != TBT_U4_STAGE_RUNNING ||
-        cm->PortCount == 0) {
+        cm->PortCount == 0 || cm->Contained) {
         return FALSE;
     }
     for (i = 0; i < cm->PortCount; i++) {
@@ -5925,6 +6013,9 @@ BOOLEAN TbtU4AnyRouterConnected(const TBT_U4CM *cm)
 {
     ULONG i;
 
+    if (cm->Contained) {
+        return TRUE;    /* section 7.7: unknown is not "nothing connected" */
+    }
     for (i = 0; i < cm->PortCount; i++) {
         if (cm->Ports[i].Dev.Present || cm->Ports[i].State == TBT_U4_HELD) {
             return TRUE;
