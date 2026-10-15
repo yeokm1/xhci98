@@ -14,6 +14,7 @@
 
 #include "cm.h"
 #include "../xhci_version.h"
+#include "cm_nvlink.h"
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define CM_FLAVOUR_NAME "XHCI98_FLAVOUR_QEMU"
@@ -119,6 +120,7 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 static VOID cmUnload(PDRIVER_OBJECT driver)
 {
     UNREFERENCED_PARAMETER(driver);
+    CmNvlinkUnload();
 }
 
 static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
@@ -161,6 +163,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     }
     CmDriverObject = DriverObject;
     CmRegInit();
+    CmNvlinkInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = cmDispatchOther;
     }

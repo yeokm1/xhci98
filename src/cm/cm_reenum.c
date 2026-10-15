@@ -59,6 +59,13 @@
 #include "cm.h"
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
+#include "cm_nvlink.h"
+
+/* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
+ * cmU4ToIcm); its nvme98 statement is made at the core's upcall, not here. */
+#ifndef CM_U4_WHY_BASE
+#define CM_U4_WHY_BASE 0x80UL
+#endif
 
 /* HalGetBusData: as hcd_ctl.c restates it for amd64 builds whose headers
  * leave it out. */
@@ -1354,8 +1361,76 @@ static VOID cmAskBaselines(PCM_NHI nhi)
     }
 }
 
-/* ---- both routes ------------------------------------------------------ */
+/* ---- NT: a configuration write to a member's bridge ------------------- */
 
+static NTSTATUS NTAPI cmCfgWriteDone(PDEVICE_OBJECT device, PIRP irp,
+                                     PVOID context)
+{
+    UNREFERENCED_PARAMETER(device);
+    UNREFERENCED_PARAMETER(irp);
+    (VOID)KeSetEvent((PKEVENT)context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
+                         ULONG value)
+{
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    PIO_STACK_LOCATION next;
+    KEVENT done;
+    PIRP irp;
+    UCHAR b[4];
+    ULONG i;
+    ULONG index;
+    NTSTATUS status;
+
+    if (width != 1 && width != 2 && width != 4) {
+        return FALSE;
+    }
+    if (offset < 0x40UL) {
+        /* A bridge's header is pci.sys's; only its capabilities here. */
+        return FALSE;
+    }
+    for (index = 0; index < nhi->Reenum.Members; index++) {
+        if (nhi->Reenum.Port[index].Bdf == bdf) {
+            break;
+        }
+    }
+    if (index == nhi->Reenum.Members ||
+        !cmRegTake(nhi, index, FALSE, &f, &pdo)) {
+        return FALSE;
+    }
+    for (i = 0; i < width; i++) {
+        b[i] = (UCHAR)((value >> (8 * i)) & 0xFFUL);
+    }
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    irp = IoAllocateIrp(pdo->StackSize, FALSE);
+    if (irp != NULL) {
+        irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+        irp->IoStatus.Information = 0;
+        next = IoGetNextIrpStackLocation(irp);
+        next->MajorFunction = IRP_MJ_PNP;
+        next->MinorFunction = IRP_MN_WRITE_CONFIG;
+        next->Parameters.ReadWriteConfig.WhichSpace = PCI_WHICHSPACE_CONFIG;
+        next->Parameters.ReadWriteConfig.Buffer = b;
+        next->Parameters.ReadWriteConfig.Offset = offset;
+        next->Parameters.ReadWriteConfig.Length = width;
+        KeInitializeEvent(&done, NotificationEvent, FALSE);
+        CM_SET_COMPLETION_ALWAYS(irp, cmCfgWriteDone, &done);
+        status = IoCallDriver(pdo, irp);
+        if (status == STATUS_PENDING) {
+            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
+                                        NULL);
+        }
+        status = irp->IoStatus.Status;
+        IoFreeIrp(irp);
+    }
+    cmRegRelease(f);
+    return (BOOLEAN)NT_SUCCESS(status);
+}
+
+/* ---- both routes ------------------------------------------------------ */
 /* Every active member re-enumerated by the domain's route. */
 static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
 {
@@ -1375,6 +1450,9 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
             }
             continue;
         }
+        /* nvme98's UP for what the call is about to expose (cm_nvlink.h,
+         * obligation 1). */
+        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf);
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
                 /* Lost its filter or its exclusivity since it was read
@@ -1509,6 +1587,7 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->Cfg.Reads = 0;
     r->Cfg.Writes = 0;
 
+    CmNvlinkStart(nhi);
     r->Nhi = cmNhiLocation(nhi);
     CmLogNote(nhi, "cm.reenum.nhi", r->Nhi);
     if (r->Nhi == XHCI_TBT_NO_BDF) {
@@ -1710,8 +1789,15 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
              * every port is rescanned all the same. */
             r->PollTimeouts++;
         }
+        /* nvme98's statement, then its acknowledgement, before the removal
+         * (cm_nvlink.h, obligations 2 and 3). */
+        if ((action->Why & CM_U4_WHY_BASE) == 0) {
+            (VOID)CmNvlinkIcmDown(nhi, state);
+        }
+        CmNvlinkAwait(nhi);
         cmReenumAll(nhi, TRUE);
     } else {
+        CmNvlinkAwait(nhi);
         cmReenumAll(nhi, TRUE);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->SafeEject != 0 &&
@@ -1798,6 +1884,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
             r->Port[i].MissedAt = cmNow(nhi);
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf);
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
@@ -1965,6 +2052,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG watchdogs;
 
     r = &nhi->Reenum;
+    CmNvlinkStop(nhi);
     r->RediscoverLeft = 0;
     if (!r->Listed && r->Route == CM_ROUTE_NONE) {
         r->Members = 0;

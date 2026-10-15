@@ -108,6 +108,8 @@
 #define CM_NVLINK_DELIVERY_MS   100UL
 /* The 9x orderly removal's wait for nvme98's answer (MD-5). */
 #define CM_NVLINK_REMOVE_MS     5000UL
+/* The idle poll's ceiling while an entry is UP (record 21 section 8). */
+#define CM_NVLINK_IDLE_MS       250UL
 /* Between reads of an acknowledgement. */
 #define CM_NVLINK_POLL_MS       20UL
 
@@ -271,6 +273,11 @@ VOID CmNvlinkAwait(struct _CM_NHI *nhi);
  * NVMe function `bdf` whose devnode is `devnode` (MD-5). Returns
  * CM_NVLINK_OR_*. */
 ULONG CmNvlinkOrderlyRemove(struct _CM_NHI *nhi, ULONG devnode, ULONG bdf);
+
+/* The idle poll period: XhciCmPollIdleMs as read, held to at most
+ * CM_NVLINK_IDLE_MS while any entry reads UP (a tunnelled NVMe function is
+ * there to be noticed leaving: record 21 section 7.2's budget). Any IRQL. */
+ULONG CmNvlinkIdleMs(ULONG configured);
 
 /* At the NHI's stop (CmReenumStop): this domain's entries are left as
  * they read (a tunnel the firmware keeps up stays UP) and disowned, so a

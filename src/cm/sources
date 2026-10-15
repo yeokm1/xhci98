@@ -43,6 +43,7 @@ SOURCES=cm_vals.c      \
         tbt_u4cm.c     \
         tbt_topo.c     \
         cm_ports.c     \
+        cm_nvlink.c    \
         ..\xhci_log.c  \
         cm_pool.c      \
         cm_reg.c       \
@@ -54,6 +55,7 @@ SOURCES=cm_vals.c      \
         cm_reenum.c    \
         cm_cfgmg.c     \
         cm_filt.c      \
+        cm_nvlinkos.c  \
         xhcicm.rc
 
 !IF "$(XHCI_EXTRA_DEFINES)" != ""

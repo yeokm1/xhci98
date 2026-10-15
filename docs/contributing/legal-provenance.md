@@ -396,6 +396,25 @@ project from the specification and from `usb4-emu`'s documents; it adapts
 no code. `usb4-emu`'s fabric model (`src/qemu/hw/usb4/`) is compiled in
 place, never copied, by the cross-check of task 40-A.5.
 
+#### Third-party headers incorporated unchanged
+
+Not a binary either, and not an adaptation: a header another project
+publishes as an interface definition, carried in this tree byte for byte
+with its own licence notice, so that this driver and the other project
+build against one definition. It is never edited here; a change is made in
+its own repository and copied in again, with this row updated.
+
+| File in this tree | Source | Commit read | SHA-256 | Licence | Why | Task |
+|---|---|---|---|---|---|---|
+| `src/cm/nvme98cm.h` | `nvme98` `include/nvme98cm.h` | `d08ddadb579326ff483912b2c7d5e73bd43abe06` (the header's last change; `nvme98` `main` was at `52f2ad67` when read, 2026-10-15) | `a079b055c8961b785afddd4e9c43f3e5e000c8b621710053838791f67efd99a9` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table and callback object `nvme98` adopted as its connection-manager interface (its decision MD-6, gate G3); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side | 39-A.7, 40-A.7 |
+
+The file uses `//` comments, which AGENTS.md's C89 rule forbids in this
+project's own source. It is the recorded exception: a third-party header
+carried unchanged. Both compilers accept it as it is - MSVC 6.0 under the
+DDK's flags for every x86 flavour, under the host suites' `/Za /W3 /WX`,
+and WDK 7.1's amd64 compiler - so no wrapper is needed. Nothing from this
+repository moves the other way: `nvme98` is BSD-3-Clause, and this
+project's code stays out of it.
 ### The third-party PDFs
 
 Both PDFs were tracked in this repository for a time. The xHCI specification

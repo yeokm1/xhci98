@@ -969,10 +969,11 @@ busy-polls can be bounded without blocking a dispatch routine.
 Priority inside the thread: the busy-poll of an
 outstanding command services every RX frame as it lands, so an event
 arriving during a command is decoded at once, not after the command. A
-`device disconnected` decoded during a command runs its link-down
-notification (section 7) immediately, inside the wait, and queues the
-removal and re-enumeration of section 6 for after the command completes.
-That removes the one blockage a command wait would add. The end-to-end
+`device disconnected` decoded during a command queues its tunnel-down
+action for after the command completes, and the action's sequence (the
+port reading, the `nvme98` statement of section 7.2, then the removal and
+re-enumeration of section 6) runs then; a command adds no more than its
+own bound to that path. The end-to-end
 budget for the statement, against `nvme98`'s gone deadline (5 s in its
 test build, measured from the endpoint's own presence loss), is section
 7.2's; it needs more than this paragraph, since the idle poll, the port
@@ -1721,89 +1722,108 @@ no statement is sent until that and the hardware boundary are both
 settled. Wherever a statement is not sent, `nvme98`'s gone deadline (its
 decision MD-1) is the fallback, as its PLAN already provides.
 
-### 7.2 The notification channel (proposal, decision D6)
+### 7.2 The channel: `nvme98`'s link-state table (decision D6, as adopted)
 
-The interface is "to be agreed" (handoff section 6b) and `nvme98`'s gate G3
-names the candidate shapes: on 9x a VxD service or a registered callback, on
-NT `IOCTL_SCSI_MINIPORT` with an `nvme98` signature. This record proposes:
+`nvme98` chose the interface on 2026-10-15 (its decision MD-6, gate G3):
+**a link-state table the connection manager owns**, defined in
+`nvme98`'s `include/nvme98cm.h`, which this tree carries unchanged as
+`src/cm/nvme98cm.h` (BSD-3-Clause; `legal-provenance.md` section 2a). The
+first draft's `IOCTL_SCSI_MINIPORT` route was measured by G3 and rejected
+as the carrier: the port starts it only when the addressed unit has a free
+slot, so under a saturated queue it arrived after `nvme98`'s gone deadline,
+and once the disk is gone it fails. The discovery worker, the recipient
+cache and the per-connection discovery context this section proposed go
+with it; nothing in this driver looks for `nvme98`. `src/cm/cm_nvlink.c`
+(the pure entry protocol, host-tested) and `cm_nvlinkos.c` implement this
+side.
 
-- **NT**: the recipient is resolved **at tunnel up**, never at tunnel down,
-  and **never on the connection-manager thread**: a synchronous IOCTL to
-  another driver's port can be cancelled (`IoCancelIrp`) but has no
-  guaranteed bounded cancellation or completion - when it completes is the
-  recipient's affair, and cancellation is never permission to free the
-  request's storage - so it must not sit in front of the ICM traffic.
-  After a re-enumeration the thread hands the work to a second system
-  thread of this driver, the discovery worker, as a **discovery context**
-  tied to one connection instance: the device-table entry's UUID and
-  connection id (section 5.3) and a **generation** the thread increments
-  at every tunnel up, so an entry reused for a re-plugged device is a new
-  generation. The context has a lifetime of its own (a count held by the
-  worker and by the table entry, freed by the last release), and the
-  recipient cache is a field of the device-table entry, not of section
-  3.2's filter registration, which the worker never touches. The worker
-  walks `\Device\ScsiPortN` (N from 0 up to the first miss after 31) with
-  `IoGetDeviceObjectPointer` and an `IOCTL_SCSI_MINIPORT` carrying
-  `nvme98`'s signature and a "report your PCI location" function, and
-  publishes a match under the device table's lock **only if the entry is
-  live and its generation still equals the context's**; otherwise the
-  result is discarded and the port reference dropped. A tunnel down
-  invalidates the entry's cache and bumps nothing (the next tunnel up
-  does), so a result from connection A cannot be published into
-  connection B's entry. At stop the thread closes discovery admission and
-  invalidates every context under the lock, releases the lock, joins the
-  worker after its outstanding call returns - the one wait the stop
-  cannot bound, and the reason it is not the connection-manager thread's -
-  and only then releases the contexts' storage and references.
-  At tunnel down that cached port gets one
-  `IOCTL_SCSI_MINIPORT`, "link down", sent synchronously from the
-  connection-manager thread before the filter's invalidation, and from
-  inside a command wait if the disconnect landed during one (section 4.4).
-  The IOCTL must not queue behind held SRBs (G3's third clause); that is
-  `nvme98`'s side. A disconnect that arrives after `pci.sys`'s own native
-  hot-plug (Windows 7 on real PCIe) has already started removal is a case
-  the per-OS qualification reads, not one this record resolves.
+- **The table.** One `NVME98LS_TABLE` in non-paged pool, allocated at
+  `DriverEntry` and **never freed**, not even at unload, so a pointer
+  `nvme98` took never dangles. Eight entries, one per tunnelled NVMe
+  function, keyed by bus (the tunnel bridge's secondary bus) and
+  `PCI_SLOT_NUMBER`; each carries a `LinkGeneration`, `Flags` (`IN_USE`,
+  `UP`, `DOWN_QUIESCED`), `AckGeneration` (the only field `nvme98` writes)
+  and a `Sequence` that is odd while this driver writes the entry. A
+  reload of this driver allocates a new table; an `nvme98` instance bound
+  before the reload keeps the old one, frozen, and gets no statement.
+- **NT rendezvous.** At `DriverEntry` the callback object
+  `\Callback\Nvme98LinkState` is created (`ExCreateCallback`,
+  `OBJ_PERMANENT`) with one callback that answers `NVME98LS_QUERY` with the
+  table's address; `nvme98` opens it in `HwFindAdapter`, once. The unload
+  unregisters the callback and keeps the table.
+- **Windows 98 SE and ME rendezvous** (`nvme98`'s MD-5: a registry record
+  the connection manager writes at each boot, never a pointer trusted
+  across boots). `nvme98cm.h` defines the NT rendezvous only, so the record
+  is **this driver's proposal for `nvme98` to adopt**: key
+  `HKEY_DYN_DATA\Nvme98LinkState`, `REG_BINARY` value `Table`, 20 bytes of
+  little-endian `ULONG`s - signature `N98L`, version 1, the table's linear
+  address, its size, and a cookie also written into the table's
+  `Reserved` field. `HKEY_DYN_DATA` lives in memory and is rebuilt at every
+  boot, so a record never outlives the pool it names. It is written through
+  the VMM's `_RegCreateKey`, `_RegSetValueEx` and `_RegCloseKey` (services
+  14Ah, 152h and 149h, their places in the Windows 98 DDK's `VMM.H`
+  table), reached by the INT 20h dynalink of section 6.1, at the first
+  tunnel action of the boot (no registry service runs while the NHI's own
+  start is pending). Nothing on `nvme98`'s side reads it yet.
+- **UP before the enumeration.** For each active member, before the call
+  that exposes its secondary bus (the invalidation of section 6.2,
+  `Reenumerate_DevNode` of section 6.1) after a tunnel up, a RESYNC or an
+  owed re-enumeration, the driver scans that bus and publishes `UP` for
+  each function of class 01h subclass 08h that answers: an entry already
+  `UP` keeps its generation (its link never went down), any other gets
+  `LinkGeneration` + 1. Where the SHPC slot reads a card present and
+  nothing answers yet, the scan waits up to 1 s for it.
+- **The statement** is the entry's move to `DOWN_QUIESCED`, made on section
+  7.1's condition alone. The seam's tunnel-down poll reads nothing on the
+  emulator's SHPC bridge (no writer for its DWORD Select, run-39 39-A.5),
+  so the channel reads the member itself: tbt_topo.c's port reading over
+  `HalGetBusData`, with the select byte written by `IRP_MN_WRITE_CONFIG` to
+  the bridge's PDO through its filter's registration (a capability offset,
+  never the header). Windows 98 SE and ME have no such writer, so no SHPC
+  reading and no statement there. The condition: a TUNNEL_DOWN of the ICM
+  profile, the domain's set has exactly one member, it is an SHPC bridge,
+  and its slot reads empty within 2 s. Otherwise the entries on that member
+  whose function no longer answers move to `IN_USE` alone (`UP` cleared,
+  no `DOWN_QUIESCED`), which `nvme98` ignores, and its gone deadline (MD-1)
+  stands; a function still answering keeps its `UP`.
+- **The acknowledgement before the removal.** Before the removal call of a
+  tunnel down or a RESYNC, the thread waits until every entry this domain
+  marked reads `AckGeneration` = `LinkGeneration`, or 5 s from the mark
+  (`nvme98`'s gone deadline in its test build; the header gives no number),
+  servicing the ICM between reads. On NT it does not wait while no driver
+  has ever asked for the table (no `nvme98` is loaded, so none can answer);
+  on 9x it does not wait where the record was not written.
+- **A removal this driver starts on 9x** (MD-5): `Query_Remove_SubTree`
+  first (the file system's quiescence and the veto - a refusal is final,
+  nothing is forced), then a `REMOVE_PENDING` request on the entry with a
+  fresh 24-bit sequence, then up to 5 s for `nvme98`'s answer to that
+  sequence; only a clean answer is followed by `Remove_SubTree`, anything
+  else withdraws the request and leaves the devnode. The request is the
+  table's `Flags` bit 3, the sequence in `Reserved[0]` and the answer in
+  `Reserved[1]` (sequence in bits 31:8, outcome in 7:0: clean, isolated not
+  clean, failed) - a proposal, not in `nvme98cm.h`, and `nvme98`'s half is
+  not built (MD-5: designed, not prototyped). Under the ICM no such removal
+  exists (section 7.4: no per-device teardown), so nothing calls it in this
+  profile.
 
-**The latency budget.** `nvme98`
-measures its gone deadline from its own presence loss, 5 s in its test
-build, and requires delivery inside it at every injection point and under
-queue saturation. The sender's budget is therefore end to end, every part
-of it is bounded while the statement is enabled, and every piece of thread
-work that could sit in front of the statement is made interruptible by a
-disconnect:
+**The budget.** `nvme98` measures its gone deadline from its own presence
+loss. The parts: the event noticed by the idle poll, which is held to at
+most 250 ms while any entry reads `UP`, whatever `XhciCmPollIdleMs` says;
+a command in flight adds nothing (the event is decoded inside the wait and
+the tunnel-down action queued); the seam's tunnel-down poll (it ends at
+once on the SHPC bridge, which it does not read); the channel's own
+reading, 2 s at most and normally one read once stage 3 has run; the entry
+write, a few stores. About 2.3 s in the worst case, as an estimate; nothing
+on the path waits for `nvme98`, which polls the table itself. The
+acknowledgement wait comes after the statement and delays only the
+removal.
 
-| Part | Bound |
-|---|---|
-| noticing the event | the idle RX poll: `XhciCmPollIdleMs`, which the driver clamps to 250 ms whenever the statement is enabled on that OS, whatever the registry says (the 5000 ms ceiling of section 8 is for a machine with the statement off) |
-| a command in flight | none added: the event is decoded inside the wait (section 4.4) |
-| a tunnel-up poll in flight (section 6.5) | none added: the poll services RX frames too, and a `device disconnected` for the device it is waiting on abandons the poll - the event says the device is gone |
-| a recipient discovery in flight | none added: discovery runs on the discovery worker, not the connection-manager thread, so an IOCTL outstanding at another driver's port never sits in front of the event; a disconnect invalidates the entry's cache, and a result whose generation no longer matches is discarded |
-| the port reading | 2 s at most (section 6.5), and the firmware's event already follows the link drop, so the normal cost is one read |
-| the recipient | none when cached; **when the cache is not ready** (the disconnect came before discovery finished) **no statement is sent** and MD-1 applies - a late statement is worth less than none, since `nvme98` would act on it after its own deadline |
-| delivery | one synchronous IOCTL or VxD call, whose execution bound is `nvme98`'s to state in the interface (the proposal asks for 100 ms, with the call never queued behind held SRBs) |
-
-So about 2.25 s plus the delivery bound in the worst case, as an
-**estimate**, not a measurement: `39-A.7`'s qualification measures it on
-each OS, saturated, with the disconnect injected during idle, during a
-command wait, during a tunnel-up poll, and while an individual discovery
-IOCTL is pending at the port, as gate G3's "every injection point" asks.
-- **Windows 98 and ME**: `nvme98`'s own VxD (the base ships `NVMEVSD.VXD`)
-  exports one service, "link down for bus:dev.fn", under a VxD id `nvme98`
-  chooses; this driver reaches it through the same dynalink thunk it uses
-  for CONFIGMG, guarded by that VxD's `Get_Version`, and sends it before
-  `Query_Remove_SubTree`. The call is a no-op when the VxD is not loaded (the
-  dynalink fails to resolve, which the thunk detects by the VMM leaving the
-  bytes unpatched - to be read; a safer guard is a registry flag the VxD
-  writes at load).
-
-Both halves ship after the first checkpoint (`39-A.7`), once `nvme98` has
-chosen; until then `nvme98` completes held requests after its gone deadline
-(its decision MD-1), and this driver's removal calls are what the operating
-system already does on a surprise removal. The release notes say which
-state the pair is in. No statement is sent for a disconnect that matches
-no device-table entry (section 1.4's Titan Ridge case) or while the
-controller's tunnel set has more than one member (section 6.3): the
-condition is read on one port and the recipient is cached in one entry.
+No statement is sent for a disconnect that matches no device-table entry
+(no TUNNEL_DOWN is queued for it) or while the set has more than one
+member: the condition is read on one port. The release notes say which
+state the pair is in: on the emulator the ordering is read per OS against
+the stage-2 event (`39-A.7`'s legs); on hardware no statement is made
+(section 7.1).
 
 ### 7.3 What this driver never claims
 
@@ -1905,13 +1925,12 @@ reading of D10 for the owner to confirm.
    filter. A device ejected and never unplugged stays held until it is
    unplugged or the machine restarts; another device's tunnel change
    re-enumerates the same bus and changes nothing for it.
-5. **The `nvme98` recipient** (section 7.2, task `39-A.7`) must not hold an
-   eject back: the reference the discovery worker keeps on the port device
-   is taken with a target-device-change notification registered on its
-   file object (`IoRegisterPlugPlayNotification`,
-   `EventCategoryTargetDeviceChange`) and dropped when a query-remove
-   arrives, which also invalidates the entry's cache; after an eject no
-   statement is sent at the unplug, none being due.
+5. **The `nvme98` channel** (section 7.2, task `39-A.7`) holds no reference
+   on any device of `nvme98`'s - `nvme98` polls the table this driver owns -
+   so nothing of it can hold an eject back. After an eject the function's
+   entry stays `UP` until the unplug, whose tunnel-down path makes the
+   statement or withholds it as for any unplug; the ejected driver is
+   gone by then, and an acknowledgement nobody gives costs the wait alone.
 6. **The switch.** `XhciCmSafeEject` 0 (section 8) attaches no child
    filter. The bridge filter keeps its baseline and snapshot all the same,
    since activation (and so re-enumeration) waits on the baseline.
@@ -1982,7 +2001,7 @@ its default under the don't-overwrite flag, each read once at start:
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
-| `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and clamped to 250 while the `nvme98` statement is enabled (section 7.2) |
+| `XhciCmPollIdleMs` | 200 | the idle RX poll period, held to 50 to 5000, and held to at most 250 while any entry of the `nvme98` link-state table reads `UP` (section 7.2) |
 | `XhciCmCmdTimeoutMs` | 5000 | the ordinary ICM command timeout (section 5.5), held to 1000 to 60000, retries 3; the TR and ICL `driver ready` timeouts and tries of section 1.4.4 take precedence for that command |
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
@@ -2363,7 +2382,7 @@ revised to it in draft 6.
 | D3 | Interrupts | **Owner, 2026-10-15, as recommended**: none; polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware | 4.3 |
 | D4 | Approval policy | **Owner, 2026-10-14**: `XhciCmApprove` 0 and 1 only, 1 the default, approve everything, stated plainly as a security property in the release notes; nothing remembered, and the record says why that is harmless; "approve known devices only, from a UUID list under the service key, filled by hand" listed as a later option, not a value | 5.4 |
 | D5 | What to do about a controller absent at boot (Assist on, nothing attached) | **Owner, 2026-10-15, as recommended**: nothing; a known limitation; force power is an ACPI WMI method out of reach on 98 and unread on NT | 1.3, 2 |
-| D6 | The `nvme98` notification channel | **Owner, 2026-10-15, as recommended**: the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `39-A.7`; the statement withheld on any OS until gate G3's ordering is qualified there | 7.1, 7.2 |
+| D6 | The `nvme98` notification channel | **Owner, 2026-10-15, as recommended**: the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `39-A.7`; the statement withheld on any OS until gate G3's ordering is qualified there. Settled by `nvme98` on 2026-10-15 (its MD-6): the link-state table of section 7.2 replaced the proposal | 7.1, 7.2 |
 | D7 | The version and the cut | **Owner, 2026-10-15, changed**: `3.0.0.0` ships both this work and the USB4 software connection manager (Phase 40), not the latter as the next minor. `39.final` closes Phase 39 with its legs and a dry build and cuts nothing; `40.final` carries the `3.0.0.0` cut, the release notes for both phases and the install legs from the asset | 1.2, 10.2, 10.4, `roadmap-usb4.md` |
 | D8 | Names | **Owner, 2026-10-15, as recommended**: `xhcicm.sys`, `xhcicm.inf` and `xhcicmf.inf`, `xHCI98 Thunderbolt 3 Host Interface`, `xHCI98 Thunderbolt 3 Tunnel Port Filter`, class System | 3.3 |
 | D9 | Other Alpine Ridge NHI ids | **Owner, 2026-10-15, changed**, then widened the same day: every Alpine Ridge NHI id and the Titan Ridge NHI ids are claimed, ids from the public PCI id listing with the source in `legal-provenance.md`, with the matching port ids for the filter INF; Titan Ridge gets a best-effort row; every id but `15BF` is untested, the README and release notes say so plainly, and the untested ids act by default with that warning (`XhciCmMode` 1). By the owner's source rule of the same day (section 9) the profiles are read from Linux, and the coverage became every Intel firmware-connection-manager host Linux addresses - Falcon Ridge, Alpine Ridge, Titan Ridge, Maple Ridge, Ice Lake to Meteor Lake - with four-test selection, an inert start, hardware profiles apart from message profiles, per-domain tunnel-port sets and a no-reset policy (sections 1.4.2 to 1.4.6, 3.3, 6.3); the widening, the selection and the inert start are orchestrator decisions of 2026-10-15 for the owner to confirm. `XhciCmMode` 2 with a user-edited INF copy stays the route for an id the list does not carry | 1.3, 1.4, 3.3, 5.1, 5.2, 5.3, 6.3, 8, 9, 10.1 |
@@ -2474,6 +2493,10 @@ assume them, and poll completions with timeouts.
   (branch `main`, `eba0cf1`, read 2026-10-14).
 - `nvme98/docs/PLAN.md` section 0.10, gate G3 and decisions MD-1 and MD-2
   (branch `main`, read 2026-10-14).
+- `nvme98/include/nvme98cm.h` (commit `d08ddadb`, carried unchanged as
+  `src/cm/nvme98cm.h`), `nvme98/docs/gates/G3.md` and `docs/PLAN.md`'s
+  decisions MD-5 and MD-6 (`main` at `52f2ad67`, read 2026-10-15): the
+  adopted channel of section 7.2.
 - This repository: `AGENTS.md`; design records 13 (sections 5.1, 5.2, 7.5),
   15, 18 and 19; `docs/usb-xhci-info/win98-wdm.md`; `src\hcd_entry.c`,
   `src\hcd_svc.c`, `src\hcd_ctl.c`, `src\uas\sources`, `src\xhci98.inf`.
