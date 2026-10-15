@@ -24,6 +24,8 @@ typedef struct _RX {
     ULONG Recorded;
     ULONG Applied;      /* statements applied */
     ULONG Ignored;
+    ULONG Done;         /* this instance applied one already (its own state,
+                           never the shared AckGeneration) */
 } RX;
 
 /* The header's seqlock read: TRUE with a consistent copy. */
@@ -47,6 +49,7 @@ static void rxFind(RX *rx, const NVME98LS_TABLE *t, ULONG bus, ULONG slot)
     rx->Slot = slot;
     rx->Applied = 0;
     rx->Ignored = 0;
+    rx->Done = 0;
     rx->Index = CmNvlinkFind(t, bus, slot);
     rx->Recorded = 0;
     if (rx->Index != CM_NVLINK_NONE && rxRead(t, rx->Index, &e)) {
@@ -64,8 +67,9 @@ static void rxPoll(RX *rx, NVME98LS_TABLE *t)
     }
     if ((e.Flags & NVME98LS_DOWN_QUIESCED) != 0 &&
         e.LinkGeneration >= rx->Recorded) {
-        if (e.AckGeneration != e.LinkGeneration) {
+        if (!rx->Done) {
             rx->Applied++;
+            rx->Done = 1;
             t->Entry[rx->Index].AckGeneration = e.LinkGeneration;
         }
         return;
@@ -340,8 +344,14 @@ static void test_fresh(void)
     rxPoll(&rx, &table);
     CHECK_EQ(rx.Applied, 1, "the older instance still applies the newer DOWN");
 
-    /* A statement left in place, then a re-plug the scan could not see
-     * yet: the retirement keeps the binding instance off the old DOWN. */
+    /* A statement left in place, acknowledged: a new instance binding to
+     * it applies it at once (the reader rule has no other guard) - the
+     * hazard the retirement exists for. */
+    rxFind(&rx, &table, 4, 0);
+    rxPoll(&rx, &table);
+    CHECK_EQ(rx.Applied, 1, "an unretired old statement reaches a new instance");
+
+    /* Retired before the exposure: the binding instance stays off it. */
     CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "one entry retired");
     CHECK_EQ(table.Entry[i].Flags, NVME98LS_IN_USE, "IN_USE alone");
     CHECK_EQ(table.Entry[i].LinkGeneration, 3, "a new generation with no DOWN");
@@ -350,6 +360,9 @@ static void test_fresh(void)
     rxPoll(&rx, &table);
     CHECK_EQ(rx.Applied, 0, "and applies nothing");
     CHECK_EQ(CmNvlinkRetire(&table, 5), 0, "another bus: nothing");
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an entry already retired: nothing");
+    CHECK(!CmNvlinkRetireEntry(&table, i), "nor by index");
+    CHECK(!CmNvlinkRetireEntry(&table, NVME98LS_ENTRIES), "an index past the table");
     i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an UP entry is not retired");
     CHECK_EQ(CmNvlinkRetire(NULL, 4), 0, "no table");

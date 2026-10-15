@@ -88,27 +88,40 @@ static BOOLEAN cmNvFree(const NVME98LS_ENTRY *e)
     return (BOOLEAN)((e->Flags & NVME98LS_IN_USE) == 0 && e->Sequence == 0);
 }
 
+BOOLEAN CmNvlinkRetireEntry(PNVME98LS_TABLE t, ULONG index)
+{
+    PNVME98LS_ENTRY e;
+
+    if (t == NULL || index >= NVME98LS_ENTRIES) {
+        return FALSE;
+    }
+    e = &t->Entry[index];
+    if ((e->Flags & NVME98LS_IN_USE) == 0 || (e->Flags & NVME98LS_UP) != 0 ||
+        e->Flags == NVME98LS_IN_USE) {
+        /* Unused, UP, or already retired (nothing a reader could apply). */
+        return FALSE;
+    }
+    cmNvBegin(e);
+    e->LinkGeneration = e->LinkGeneration + 1;
+    e->Flags = NVME98LS_IN_USE;
+    cmNvEnd(e);
+    return TRUE;
+}
+
 ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus)
 {
     ULONG i;
     ULONG n;
-    PNVME98LS_ENTRY e;
 
     n = 0;
     if (t == NULL) {
         return 0;
     }
     for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        e = &t->Entry[i];
-        if ((e->Flags & NVME98LS_IN_USE) == 0 || e->BusNumber != bus ||
-            (e->Flags & NVME98LS_UP) != 0) {
-            continue;
+        if ((t->Entry[i].Flags & NVME98LS_IN_USE) != 0 &&
+            t->Entry[i].BusNumber == bus && CmNvlinkRetireEntry(t, i)) {
+            n++;
         }
-        cmNvBegin(e);
-        e->LinkGeneration = e->LinkGeneration + 1;
-        e->Flags = NVME98LS_IN_USE;
-        cmNvEnd(e);
-        n++;
     }
     return n;
 }

@@ -1773,10 +1773,15 @@ side.
   keeps its generation on a tunnel down's re-enumeration. After a tunnel
   up, a RESYNC or an owed re-enumeration the exposure is fresh: presence
   on the bus does not prove the link stayed up in between, so even an
-  entry that reads `UP` gets a new generation, and before such a fresh exposure every
-  entry on that bus not `UP` is retired (`IN_USE` alone, generation + 1),
-  so an `nvme98` instance that binds to a function the scan could not see
-  never records a generation carrying an old statement. An entry, once
+  entry that reads `UP` gets a new generation. Before every exposure,
+  fresh or not (it follows the acknowledgement wait), every entry behind
+  that bridge that carries a statement is retired (`IN_USE` alone,
+  generation + 1), found by the bus and by the bridge it was last published
+  or marked for, so an `nvme98` instance that binds after the exposure -
+  to a function the scan could not see, or one that came back between the
+  scan and the enumeration - never records a generation carrying an old
+  statement. On Windows 98 SE and ME no `UP` is published while the
+  record is not written. An entry, once
   given to a bus and slot, is never given to another: an `nvme98` instance
   may still hold it. Where the SHPC slot reads a card present and nothing
   answers yet, the scan waits up to 1 s for it. Only functions on the
@@ -1793,15 +1798,17 @@ side.
   never the header). Windows 98 SE and ME have no such writer, so no SHPC
   reading and no statement there. The condition: a TUNNEL_DOWN of the ICM
   profile, the domain's set has exactly one member, it is an SHPC bridge,
-  and its slot reads empty within 2 s; the member is the emulator's bridge
-  (an SHPC capability and no PCI Express capability - a conventional PCI
-  hot-plug bridge, which no Thunderbolt or USB4 port is); and the operating
-  system is one the ordering is qualified on: Windows 2000, XP and XP x64
-  (WDM 1.10 to 1.30), where gate G3 ran and where nothing but this driver
-  removes the device; not Vista or 7, whose native hot plug races the
-  connection manager (G3 not run there), and not 98 SE or ME (no reading).
-  This qualification list is an orchestrator decision of 2026-10-15 for the
-  owner to confirm. Otherwise the entries on that member
+  and its slot reads empty within 2 s; the member is the emulator's bridge,
+  admitted explicitly: it, or the bus-0 bridge whose bus range holds it,
+  carries QEMU's vendor id 1B36h (the emulator's root bridge on i440FX,
+  its tunnel bridge on the generic profile), and it has an SHPC capability
+  and no PCI Express capability; and the operating system and architecture
+  are a pair the ordering is qualified on: Windows 2000 (x86) and XP x64
+  (amd64), where gate G3 passed and where nothing but this driver removes
+  the device - not XP x86 (G3 not run there yet), not Vista or 7 (native
+  hot plug races the connection manager; G3 not run), not 98 SE or ME (no
+  reading). This qualification list is an orchestrator decision of
+  2026-10-15 for the owner to confirm. Otherwise the entries on that member
   whose function no longer answers move to `IN_USE` alone (`UP` cleared,
   no `DOWN_QUIESCED`), which `nvme98` ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
@@ -1835,9 +1842,11 @@ own polls; the seam's tunnel-down poll (it ends at once on the SHPC
 bridge, which it does not read); the channel's own reading, 2 s at most
 and normally one read once stage 3 has run; the entry write, a few
 stores. With nothing queued ahead and no command in flight that is about
-2.3 s; a command or earlier actions add their own bounds, and a statement
-that comes after `nvme98`'s deadline has passed changes nothing there
-(MD-1 has already run). Nothing on the path waits for `nvme98`, which
+2.3 s; a command or earlier actions add their own bounds. A statement that
+comes after `nvme98`'s deadline misses the deadline's purpose (MD-1 has
+already completed the held requests), but `nvme98` may still apply it as
+valid evidence, to release memory it quarantined for instance. Nothing on
+the path waits for `nvme98`, which
 polls the table itself. The acknowledgement wait comes after the
 statement and delays only the removal.
 

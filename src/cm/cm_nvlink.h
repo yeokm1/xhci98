@@ -190,13 +190,17 @@ ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
                         BOOLEAN fresh, PULONG outcome);
 
 /*
- * Before a fresh exposure of `bus`: every entry there that is not UP (a
- * statement made, or withheld) becomes IN_USE alone with LinkGeneration
- * + 1, so an nvme98 instance binding to a function the scan could not
- * publish (it did not answer yet) records a generation that carries no
- * DOWN_QUIESCED, never an old statement. Returns how many.
+ * Before every exposure of `bus` (after the acknowledgement wait): every
+ * entry there that carries a statement (DOWN_QUIESCED, not UP) becomes
+ * IN_USE alone with LinkGeneration + 1, so an nvme98 instance that binds
+ * after the exposure - to a function the scan could not publish, or one
+ * that came back between the scan and the operating system's enumeration
+ * - records a generation that carries no DOWN_QUIESCED, never an old
+ * statement. An entry already IN_USE alone carries nothing and is left.
+ * Returns how many; CmNvlinkRetireEntry does one entry, TRUE when it did.
  */
 ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus);
+BOOLEAN CmNvlinkRetireEntry(PNVME98LS_TABLE t, ULONG index);
 
 /* An UP entry leaves UP: Flags = IN_USE | DOWN_QUIESCED when `quiesced`,
  * IN_USE alone otherwise. FALSE (nothing written) for an entry not UP. */
@@ -270,10 +274,13 @@ VOID CmNvlinkUnload(VOID);
 VOID CmNvlinkStart(struct _CM_NHI *nhi);
 
 /* Obligation 1 for tunnel port `bridge` (XHCI_TBT_BDF): before every
- * re-enumeration call that exposes its secondary bus. `fresh` TRUE after a
- * tunnel up, a RESYNC or an owed re-enumeration (CmNvlinkRetire first,
- * then a new generation for every NVMe function found); FALSE on a tunnel
- * down's (nothing retired, an entry UP left as it is). Only functions on
+ * re-enumeration call that exposes its secondary bus. Every exposure
+ * first retires the statements on that bus (and on every entry last
+ * published or marked for `bridge`, should the bus not read). `fresh` TRUE
+ * after a tunnel up, a RESYNC or an owed re-enumeration: a new generation
+ * for every NVMe function found; FALSE on a tunnel down's: an entry UP is
+ * left as it is. Windows 98 SE and ME: no UP while the record is not
+ * written (the channel is unavailable to that exposure). Only functions on
  * the secondary bus itself are seen: an NVMe function behind an
  * enclosure's own PCIe switch is not, gets no entry and so no statement
  * (nvme98's gone deadline stands); nor does one that has not answered by

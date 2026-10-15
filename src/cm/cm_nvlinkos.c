@@ -156,16 +156,73 @@ static ULONG cmNvRead(PCM_NHI nhi, ULONG bridge, ULONG want, ULONG budgetMs,
     start = cmNvNow(nhi);
     for (;;) {
         verdict = XhciTbtPortRead(&io, bridge, &port);
-        *emulator = (BOOLEAN)(port.ShpcCap != 0 && port.PcieCap == 0);
         if (verdict == want || verdict == XHCI_TBT_PORT_NONE ||
             verdict == XHCI_TBT_PORT_ERROR ||
             CmNvlinkLeft(start, cmNvNow(nhi), budgetMs) <
                 XHCI_TBT_POLL_STEP_MS) {
+            *emulator = (BOOLEAN)(port.ShpcCap != 0 && port.PcieCap == 0 &&
+                                  cmNvEmulator(bridge));
             return verdict;
         }
         TbtIcmService(&nhi->Icm);
         nhi->Host.Sleep(nhi->Host.Context, XHCI_TBT_POLL_STEP_MS);
     }
+}
+
+/*
+ * Whether `bridge` is the emulator's tunnel bridge: the bridge itself, or
+ * a bridge on bus 0 whose bus range holds it, has QEMU's vendor id 1B36h
+ * (usb4-emu's i440FX root bridge `usb4-tunnel-bridge` is 1B36:0001; the
+ * generic profile's tunnel bridge is that device itself). Together with
+ * the reading's own test (an SHPC capability, no PCI Express capability)
+ * this is the explicit admission of the one platform whose slot-empty
+ * reading is qualified (record 21 section 7.1); no Thunderbolt or USB4
+ * hardware sits below a 1B36 bridge.
+ */
+#define CM_NV_QEMU_VENDOR 0x1B36UL
+
+static BOOLEAN cmNvEmulator(ULONG bridge)
+{
+    ULONG bus;
+    ULONG dev;
+    ULONG fn;
+    ULONG id;
+    ULONG cls;
+    ULONG hdr;
+    ULONG buses;
+    ULONG slot;
+
+    if (cmNvCfg(XHCI_TBT_BDF_BUS(bridge),
+                XHCI_TBT_BDF_DEV(bridge) | (XHCI_TBT_BDF_FN(bridge) << 5), 0,
+                &id) &&
+        (id & 0xFFFFUL) == CM_NV_QEMU_VENDOR) {
+        return TRUE;
+    }
+    bus = XHCI_TBT_BDF_BUS(bridge);
+    for (dev = 0; dev < 32UL; dev++) {
+        for (fn = 0; fn < 8UL; fn++) {
+            slot = dev | (fn << 5);
+            if (!cmNvCfg(0, slot, 0, &id) || (id & 0xFFFFUL) == 0xFFFFUL) {
+                if (fn == 0) {
+                    break;
+                }
+                continue;
+            }
+            if ((id & 0xFFFFUL) == CM_NV_QEMU_VENDOR &&
+                cmNvCfg(0, slot, 8, &cls) &&
+                ((cls >> 16) & 0xFFFFUL) == 0x0604UL &&
+                cmNvCfg(0, slot, XHCI_TBT_CFG_BUSES, &buses) &&
+                bus >= ((buses >> 8) & 0xFFUL) &&
+                bus <= ((buses >> 16) & 0xFFUL)) {
+                return TRUE;
+            }
+            if (fn == 0 && (!cmNvCfg(0, slot, 0x0C, &hdr) ||
+                            ((hdr >> 16) & XHCI_TBT_HDR_MF) == 0)) {
+                break;
+            }
+        }
+    }
+    return FALSE;
 }
 
 /* The source of member `bridge` of this domain's set, or 0. */
@@ -220,8 +277,15 @@ VOID CmNvlinkInit(VOID)
 
     KeInitializeSpinLock(&cmNvLock);
     cmNvNt = IoIsWdmVersionAvailable(1, 0x10);
-    /* WDM 1.10 is 2000, 1.20 XP, 1.30 XP x64 and Server 2003; 6.0 Vista. */
+    /* The OS and architecture pairs gate G3 qualified: Windows 2000 (x86:
+     * WDM 1.10, not 1.20) and XP x64 (amd64: below WDM 6.0, Vista). XP
+     * x86 (1.20), Vista and 7 are not admitted until their own
+     * qualification exists (record 21 section 7.2). */
+#if defined(_WIN64)
     cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(6, 0));
+#else
+    cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(1, 0x20));
+#endif
     cmNvTable = (PNVME98LS_TABLE)CmAlloc(sizeof(NVME98LS_TABLE));
     if (cmNvTable == NULL) {
         return;
@@ -334,14 +398,17 @@ static ULONG cmNvWriteRecord(ULONG clock)
  * than at the start: no registry service is called while the NHI's own
  * start is still pending in the configuration manager (the CONFIGMG
  * route's rule, cm_reenum.c). Before any UP, so before nvme98 can look. */
-static VOID cmNvEnsure(PCM_NHI nhi)
+static BOOLEAN cmNvEnsure(PCM_NHI nhi)
 {
     KIRQL irql;
     ULONG mine;
     ULONG start;
 
-    if (cmNvNt || cmNvTable == NULL) {
-        return;
+    if (cmNvTable == NULL) {
+        return FALSE;
+    }
+    if (cmNvNt) {
+        return TRUE;
     }
     KeAcquireSpinLock(&cmNvLock, &irql);
     mine = cmNvRecordTried == 0 ? 1UL : 0UL;
@@ -350,14 +417,15 @@ static VOID cmNvEnsure(PCM_NHI nhi)
     }
     KeReleaseSpinLock(&cmNvLock, irql);
     if (!mine) {
-        /* Another domain's thread is writing it: no UP of this one before
-         * the record exists (or failed), within a bound. */
+        /* Another domain's thread is writing it: wait for it, within a
+         * bound; still unwritten after that, this exposure publishes no UP
+         * (the channel is unavailable to it) and the next one asks again. */
         start = cmNvNow(nhi);
         while (cmNvRecordTried != 2 &&
                CmNvlinkLeft(start, cmNvNow(nhi), 2000UL) != 0) {
             nhi->Host.Sleep(nhi->Host.Context, CM_NVLINK_POLL_MS);
         }
-        return;
+        return (BOOLEAN)(cmNvRecordTried == 2 && cmNvRecord != 0);
     }
 #if defined(_X86_)
     cmNvRecordError = cmNvWriteRecord(cmNvNow(nhi));
@@ -368,6 +436,7 @@ static VOID cmNvEnsure(PCM_NHI nhi)
     cmNvRecordTried = 2;
     CmLogNote(nhi, "cm.nvlink.9x.record",
               (cmNvRecord << 31) | (cmNvRecordError & 0xFFFFUL));
+    return (BOOLEAN)(cmNvRecord != 0);
 }
 
 VOID CmNvlinkStart(PCM_NHI nhi)
@@ -473,25 +542,40 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
     ULONG r;
     ULONG start;
     ULONG retired;
+    ULONG i;
     BOOLEAN emulator;
+    BOOLEAN ready;
     KIRQL irql;
 
     if (cmNvTable == NULL) {
         return 0;
     }
-    cmNvEnsure(nhi);
+    ready = cmNvEnsure(nhi);
     bus = cmNvSecondary(bridge);
+    /* Every exposure retires the statements behind the bridge first, by
+     * its bus and by the entries last published or marked for it. */
+    retired = 0;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    if (bus != CM_NVLINK_NONE) {
+        retired = CmNvlinkRetire(cmNvTable, bus);
+    }
+    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+        if (cmNvShadow[i].Bridge == bridge && cmNvShadow[i].Owner != NULL &&
+            CmNvlinkRetireEntry(cmNvTable, i)) {
+            retired++;
+        }
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    if (retired != 0) {
+        CmLogNote(nhi, "cm.nvlink.retired", (bridge << 8) | retired);
+    }
     if (bus == CM_NVLINK_NONE) {
         CmLogNote(nhi, "cm.nvlink.up.no-bus", bridge);
         return 0;
     }
-    if (fresh) {
-        KeAcquireSpinLock(&cmNvLock, &irql);
-        retired = CmNvlinkRetire(cmNvTable, bus);
-        KeReleaseSpinLock(&cmNvLock, irql);
-        if (retired != 0) {
-            CmLogNote(nhi, "cm.nvlink.retired", (bus << 8) | retired);
-        }
+    if (!ready) {
+        CmLogNote(nhi, "cm.nvlink.up.no-channel", bridge);
+        return 0;
     }
     r = cmNvScan(nhi, bridge, bus, fresh);
     if ((r >> 16) == 0 && cmNvSource(nhi, bridge) == XHCI_TBT_SRC_SHPC &&
