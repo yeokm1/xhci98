@@ -319,12 +319,14 @@ Linux describes firmware readiness apart from the platform's power
 management ([linux] `pci.c` `icl_nhi_force_power`). It leaves the bit set
 and logs it. A bit the BIOS had already set is left set by every
 instance. (Record 22 section 4.2's rule, which this record follows; an
-orchestrator decision of 2026-10-15, for the owner to confirm.) The pure
-core as first merged predates this rule: `tbt_hw.c`'s
-`TbtHwPlatformShutdown` still clears a bit an inert instance set after a
-failed firmware-ready poll, and `test_tbt_hw` expects it to. Both change
-to this rule with task `39-A.4`, which brings the hardware profile into
-the driver.
+orchestrator decision of 2026-10-15, for the owner to confirm.) Task
+`39-A.4` brought the pure core to this rule: `tbt_hw.c`'s
+`TbtHwPlatformShutdown` clears only a bit this instance set, and only
+when its caller says it may - an active instance, and under the USB4
+profile one with no device router connected. A force-power write the
+hardware did not take is not taken as ownership: only a bit that reads
+back set after this driver's write is recorded as set here (an
+orchestrator decision of 2026-10-15, for the owner to confirm).
 
 A Code 10 refusal is kept for the cases where starting would mislead:
 BAR0 not delivered or not mappable.
@@ -962,8 +964,9 @@ read: it clears on read unless auto-clear is disabled (Spec 12.6.3.4.1).
 
 ### 4.4 The connection-manager thread
 
-One system thread per NHI, created at start and ended at stop, at
-PASSIVE_LEVEL, as `hcd_ctl.c`'s controller thread is, with the same Windows
+One system thread per NHI, created at start and ended at the first of the
+stop, the surprise removal or the removal (the start waits on it only
+until the selection is made), at PASSIVE_LEVEL, as `hcd_ctl.c`'s controller thread is, with the same Windows
 98 care around `PsCreateSystemThread`'s handle (the `IoIsWdmVersionAvailable`
 branches at `hcd_ctl.c:2514`). Every ICM command, every mailbox handshake,
 every wait and every re-enumeration call runs on it; nothing else touches
@@ -1019,7 +1022,10 @@ done.
    ready: inert (section 1.4.2 test 2) [linux].
 1. Enable Bus Master in the NHI's command register through
    `IRP_MN_WRITE_CONFIG` to its own PDO, the route `hcd_svc.c` proved on
-   Windows 98 SE and Windows 2000 (its header comment, 26-A.2).
+   Windows 98 SE and Windows 2000 (its header comment, 26-A.2). As built,
+   the write is made only once the selection has chosen the ICM client
+   (after steps 2 to 5), so an inert start leaves the command register as
+   it found it.
 2. Read host capabilities. All ones: inert (test 2). Ring count below 1, or
    an interface version the row does not accept (test 4: 0 on AR [obs];
    below `0x40` on the others, this project's policy): inert, the value in the log. A
@@ -1536,6 +1542,13 @@ domain runs as with an empty set. The other outcomes beside a set are: the overr
 no candidate at all, hot-plug bridges seen but none a source names (the
 override is the way), listed root ports ambiguous between NHIs, and more
 members than the set has room for (empty, logged).
+
+Under the USB4 profile a fifth source, the bridges the host router names,
+adds members once these outcomes are known, and a learned correspondence
+binds a port to a member; design record 22 section 7.6 says when a named
+bridge may join (never after the override's own failure, an INCOMPLETE
+discovery or one with too many members, and never the NHI or its parent)
+and that a named bridge that cannot be read voids the set as INCOMPLETE.
 
 The layouts the walk and the readings decode are the public
 specifications', cited by section in `tbt_topo.h`: the PCI Local Bus
@@ -2067,7 +2080,8 @@ frames (section 1.4.6); child filters attached, skipped and refused (section
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
 record from the thread, and the ring is emitted at stop from the thread at
-PASSIVE_LEVEL. **How it is emitted is decision D12** (taken 2026-10-15:
+PASSIVE_LEVEL, and in the checked flavours (`debug` and `qemu`) after each
+pass of the thread as well. **How it is emitted is decision D12** (taken 2026-10-15:
 the default below), because `AGENTS.md`
 ("Coding Style") admits an unguarded `DbgPrint` at exactly two sites,
 `hcd_log.c`'s `XhciLogDebugView` sink and the qemu trace, and says not to
@@ -2083,6 +2097,10 @@ amended to name it - was not taken. `XHCISNAP` does not read this driver in the 
 door is `xhci98.sys`'s, and a `\DosDevices\` link and region of this
 driver's own is a later revision if the counters are wanted off a real
 machine.
+
+The clock behind every wait and every time in the log is the tick count,
+`KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,
+unlike the system time, which a user or a time service may set.
 
 ## 9. Provenance and licence
 
@@ -2279,10 +2297,19 @@ The vehicle is `usb4-emu`'s QEMU fork and `scripts/run-win98.sh` on the
   `qom-set`) for the unplug-during-I/O legs and `39-A.7`'s ordering legs;
   its gate actions are test stimuli, never evidence the driver acts on.
 - When `usb4-emu` adds the controller models its catalogue announces, the
-  legs of this section extend to them (a Titan Ridge model would give the
-  TR row its first reading); until then only the Alpine Ridge row runs on
-  an emulator. A change the legs need in the emulator is written as a
-  request for its maintainer, never made here.
+  legs of this section extend to them. Since its `main` at `a50c19e`
+  (2026-10-15) `profile=tb3-titan-ridge` is a real Titan Ridge model,
+  written from Linux's description (route-string addressing, approval
+  keyed by UUID and route; `ports=1` gives the single-port part), so the
+  TR row is testable on an emulator; the other rows still run on none. A
+  change the legs need in the emulator is written as a request for its
+  maintainer, never made here.
+- The machines this is for: the legacy operating systems need a CSM, so
+  the realistic targets are Thunderbolt 3 laptops with a CSM (the P14s),
+  Intel desktop boards with discrete Thunderbolt and a CSM (the firmware
+  connection manager), and AM5 X870 boards with a CSM (ASMedia's ASM4242,
+  design record 22's software connection manager). The Framework laptop
+  is UEFI-only: its capture is a reference, not a run target.
 - `-trace 'usb4_*' -D <VM_DIR>\usb4-trace.log` on every leg; the trace
   decodes every ring 0 frame both ways and is the oracle for "what the
   client sent".
@@ -2452,7 +2479,8 @@ revised to it in draft 6.
 - **Every row but AR is uncaptured** (section 1.4): FR, TR, Maple Ridge and
   the ICL row are to be code written to Linux's structures [linux],
   host-tested against frames synthesised from those structures, and read
-  on no hardware and no emulator (`usb4-emu` models Alpine Ridge only). The
+  on no hardware, and on no emulator but the TR row, which `usb4-emu`'s
+  Titan Ridge model (section 10.2), itself written from Linux, runs. The
   inert start and the tolerance rules of sections 1.4.2 and 1.4.6 bound
   the damage of a wrong row to "does nothing, says why"; they do not make
   a row work.
