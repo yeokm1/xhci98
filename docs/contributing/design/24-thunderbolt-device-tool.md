@@ -1,7 +1,7 @@
 # Design Record 24 - The Thunderbolt and USB4 Device Viewer and Eject
 
-Status: revision 2, 2026-10-15, before code, reviewed and revised the same
-day. Written for the owner's instructions of 2026-10-15: Windows 98 SE and
+Status: revision 3, 2026-10-15, before code, reviewed and revised twice the
+same day. Written for the owner's instructions of 2026-10-15: Windows 98 SE and
 ME have no way to safely remove a device behind a Thunderbolt or USB4
 tunnel, and no target system has a way to see what is connected to one.
 The answer is a viewer of the connected Thunderbolt 3 and USB4 devices,
@@ -129,7 +129,7 @@ version it does not know.
 | 80 | flags: bit 0, more routers than entries | - |
 | 84 | four 8-byte paths: each port's Windows 98 instance path, a count (0 for unknown, at most 7) then its elements, leaf first (section 4.3) | count 0 |
 | 116 | the system time at the write, as `KeQuerySystemTime` returned it, low word then high word at 120 (100 ns units since 1601; the driver does no arithmetic on it) | - |
-| 124 | reserved, 0 | - |
+| 124 | the echo: the last `XhciCmStatusAsk` the driver read (section 3.3) | 0 |
 
 **A router entry** (128 bytes):
 
@@ -175,33 +175,48 @@ glance; it can collide, and nothing selects or authorises by it.
   on that system. The value therefore survives a restart on every target,
   and the stamp (section 3.3) is what tells this boot's record from an
   earlier one's.
+- **The keys are opened in the start**, in the PnP start's own dispatch,
+  right after `CmReadValues` opens the driver key there (`cm_nhi.c`'s
+  `cmNhiStart`, one call, `CmStatusOpen`): the hardware key for writing
+  and the driver key for reading the ask. That is the one place this
+  driver already opens a key on 98 SE and ME, in the thread the
+  configuration manager's start runs in. On 98 SE and ME
+  `IoOpenDeviceRegistryKey` is a configuration-manager service, and one
+  called from the connection-manager thread could wait for as long as
+  the configuration manager is busy (an Add New Hardware wizard left open
+  holds it, `cm_cfgwk.c`'s reading), stalling the ring; with the handles
+  opened in the start, the thread only writes and reads values on them,
+  which are registry services alone. The same dispatch writes a first
+  record at once (stage stopped, no routers, generation 0), so a record
+  of an earlier start is replaced before anything can read it as
+  current. The handles are closed after the stop's last write.
 - **When**: on the connection-manager thread at `PASSIVE_LEVEL`, once per
   pass, after the actions and the re-enumeration service (`cm_thr.c`): the
-  record is built, compared with the last one written (without the
-  generation and the stamp) and written only when it differs or when the
-  last write failed (each failure counted as `cm.status.fail` and tried
-  again at the next pass); and once after the stop's work (stage stopped,
-  no routers) when this load has written one. On 98 SE and ME the first
-  write is in the pass that also opens the CONFIGMG route
-  (`cm_reenum.c`'s rule: after the start's work, never inside it). An
-  inert instance's thread waits with no timeout, so its only pass is its
-  start's: its record is written there or not at all, which the viewer
-  shows as "not published".
+  ask is read (at most every 500 ms), the record is built, compared with
+  the last one written (without the generation and the stamp) and written
+  when it differs or when the last write failed (each failure counted as
+  `cm.status.fail` and tried again at the next pass); and once after the
+  stop's work (stage stopped, no routers). An inert instance's thread
+  waits with no timeout, so its only pass is its start's: its record says
+  inert, and it never answers an ask, which the viewer shows (section
+  3.3).
 - **The 98 path** of each port (offset 84) is computed by the driver from
   configuration space through the re-enumeration's own reader, by the walk
   `cm_reenum.c`'s `cmPciPath` makes, in a pure function of `cm_status.c`
-  over that reader (host-tested with a fake bus), on 98 SE and ME only, and
-  only when the set changes.
+  over that reader (host-tested with a fake bus), on 98 SE and ME only:
+  once for each member location, and again at most every 5 s while it is
+  unknown, so a transient read failure does not leave it unknown.
 - **The files**: `src\cm\cm_status.c` (with `cm_statb.h`) builds the
   record from `TBT_ICM` or `TBT_U4CM`, the domain's set and the binds,
   pure and DDK-free, host-tested by `test\test_cm_status.c`;
-  `src\cm\cm_statos.c` writes it. The hooks are two calls in `cm_thr.c`
-  (each pass, and after the stop's work) and one field in `CM_NHI`
-  (`cm.h`); nothing in `cm_nhi.c`, `tbt_icm.c`, `cm_reenum.c` or
-  `cm_cfgwk.c` changes. The import allowlists gain `ZwSetValueKey`,
-  `RtlInitUnicodeString` and `KeQuerySystemTime` rows (each a pair
-  `xhci98.sys` imports, with its evidence) with `SITES=cm_statos.obj`, and
-  `cm_statos.obj` joins the `SITES` of `IoOpenDeviceRegistryKey` and
+  `src\cm\cm_statos.c` opens, writes and closes. The hooks are one call
+  in `cm_nhi.c` (`CmStatusOpen`, in the start), two in `cm_thr.c` (each
+  pass, and after the stop's work) and one field in `CM_NHI` (`cm.h`);
+  nothing in `tbt_icm.c`, `cm_reenum.c` or `cm_cfgwk.c` changes. The
+  import allowlists gain `ZwSetValueKey`, `RtlInitUnicodeString` and
+  `KeQuerySystemTime` rows (each a pair `xhci98.sys` imports, with its
+  evidence) with `SITES=cm_statos.obj`, and `cm_statos.obj` joins the
+  `SITES` of `IoOpenDeviceRegistryKey`, `RtlQueryRegistryValues` and
   `ZwClose`.
 
 ### 3.3 How the tool reads it, and what it trusts it for
@@ -211,22 +226,32 @@ glance; it can collide, and nothing selects or authorises by it.
   refused when its magic, version, size, entry size or counts do not check
   (size exactly 128 + count x 128, count at most 24, ports at most 4,
   each path count at most 7).
-- **Fresh** means written during this boot: the boot time the record
-  implies (its system time minus its uptime) is within five minutes of the
-  boot time the tool computes (`GetSystemTimeAsFileTime` minus
-  `GetTickCount`). Anything else - an earlier boot's record, a clock
-  changed since, `GetTickCount` wrapped after 49.7 days - is **not fresh**:
-  shown as "earlier information, possibly out of date", and never used for
-  an eject.
-- **Generation**: the tool reads the record, walks the devices, and reads
-  the record again; a different generation means a change during the walk,
-  and the whole reading is taken again, at most three times, then shown
-  with "devices were changing while this was read" and with no eject
-  offered.
-- No record, or not fresh: the viewer shows the PCI and Windows side
-  alone, marks every bridge "not verified", and `/eject` refuses (exit 1)
-  with "The Thunderbolt driver has not said which ports carry tunnels, so
-  nothing can be ejected safely from here."
+- **Confirmed** means the running driver answered this run: the tool
+  writes a fresh nonzero `XhciCmStatusAsk` (`REG_DWORD`) to the NHI's
+  driver key, and waits up to three seconds for a record whose echo
+  (offset 124) equals it. Only the connection-manager thread of the
+  driver now bound to that NHI can produce that echo, and it writes it
+  into a record it builds after reading the ask, so a confirmed record is
+  this session's and current at that moment: an earlier boot's, an
+  earlier load's, or one whose writes have been failing is never
+  confirmed. Writing the ask needs write access to the driver key: on 98
+  SE and ME always; on NT an administrator (the elevated run on Vista and
+  7). The ask is a value the tool owns; the driver only reads it.
+- **Generation**: after the confirmation the tool walks the devices and
+  reads the record again; a different generation or echo means a change
+  during the walk, and the whole reading is taken again, at most three
+  times, then shown with "devices were changing while this was read" and
+  with no eject offered. Generation numbers are this session's alone (the
+  start resets them); the echo is what ties them to the session.
+- **The stamp** (uptime and system time) is diagnostic only: an
+  unconfirmed record is shown, labelled "not confirmed by the running
+  driver" and, where the boot time it implies is more than five minutes
+  from this boot's, "from an earlier start of Windows".
+- An unconfirmed record (no answer, an inert driver, no rights to ask) or
+  none at all: the viewer shows the PCI and Windows side and whatever
+  record there is, labelled, marks every bridge "not verified", and
+  `/eject` refuses (exit 1) with "The Thunderbolt driver has not confirmed
+  which ports carry tunnels, so nothing can be ejected safely from here."
 
 ## 4. Finding the devices
 
@@ -243,7 +268,7 @@ refuses.
 ### 4.2 Verified tunnel ports, and candidates
 
 - A **verified tunnel port** is a bridge devnode whose location equals an
-  **active** member of a fresh record's set (section 3.3). Its location is
+  **active** member of a confirmed record's set (section 3.3). Its location is
   `CM_DRP_BUSNUMBER` and `CM_DRP_ADDRESS` on NT; on 98 and ME its instance
   id, which names a function on bus 0 as `BUS_00&DEV_dd&FUNC_ff` and one
   behind a bridge by its devfn path (`runs/run-39.md`, "98 SE's instance
@@ -270,11 +295,25 @@ numbered. Their descendants are listed beneath them, each with its
 description, first hardware id, driver (the `Service` on NT; on 98 and ME
 the driver key's `NTMPDriver` or `DevLoader`) and problem code.
 
-Two exclusions, whatever the tree says: a child of a verified port that is
-a host function - an NHI (class `0880` or `0C0340`, or bound to `xhcicm`)
-or a USB host controller (class `0C03`) whose own parent is not a
-verified port - is never a unit, and its whole subtree is pruned from the
-units; and a unit is never a bridge in the record's set itself.
+**The host's own functions are protected** independently of which ports
+are verified, because an override (`XhciCmTunnelBridge`) can name any
+bridge:
+
+- every NHI - a devnode bound to `xhcicm`, or of class `0880` or `0C0340` -
+  and every ancestor of one, up to the root;
+- every USB host controller (class `0C03`) whose grandparent is an NHI's
+  grandparent: the xHCI of a discrete Thunderbolt controller sits on a
+  downstream port of the same switch as its NHI, and an integrated
+  controller's xHCI on the same root bus as its NHI. A dock's own xHCI
+  sits below the dock's switch, two or more levels further down, and is
+  not caught; a bare USB controller card tunnelled directly onto a host
+  downstream port would be, and is then shown and not ejected - the
+  conservative side of the rule.
+
+A unit whose subtree contains a protected devnode is shown with "contains
+the Thunderbolt controller's own functions" and is not numbered; a unit is
+never a bridge in the record's set itself. The host suite covers an
+override naming the host xHCI's port and a unit with an NHI nested in it.
 
 On 98 and ME every unit is offered, marked or not, with "marked removable
 by the Thunderbolt driver" or "not marked removable" beside it (the mark
@@ -340,15 +379,18 @@ under the ICM the eject is logged and the tunnel left up (record 21 section
 separates the two: the eject's success is Windows' answer; then, under
 the USB4 profile, the tool watches the record for up to ten seconds for
 the router's PCIe tunnel to read "torn down after an eject" and says
-which it saw ("The Thunderbolt connection was closed." or "Windows has
-stopped the device; the Thunderbolt driver has not confirmed that the
-connection is closed."). Neither changes whether the unit is safe to
-unplug: its drivers are stopped either way. A unit with no child filter
-reaches nothing in `xhcicm.sys`; its tunnel stays up until the unplug.
+which it saw ("The PCIe tunnel was closed." or "The Thunderbolt driver has
+not confirmed that the PCIe tunnel was closed."). Neither changes what
+Windows answered, and neither is the unplug advice of section 5.4. A unit
+with no child filter reaches nothing in `xhcicm.sys`; its tunnel stays up
+until the unplug.
 
-Record 22 section 10.4 says the tunnel is down before the user is told to
-unplug; under this tool that holds only where the record confirms it, and
-the inconsistency is reported to the connection-manager work.
+Record 22 section 10.4 says the tunnel is down before the user is told the
+device may be unplugged. For an eject this tool makes, that ordering is
+not established: the PCIe tunnel line above reports what the record shows,
+and this record supersedes record 22 section 10.4's ordering clause for
+the tool's ejects; the clause itself is reported to the connection-manager
+work to be narrowed to what the applet's eject can promise too.
 
 ### 5.3 `nvme98`
 
@@ -372,20 +414,29 @@ any eject.
 ### 5.4 The rest of the device
 
 A unit is one PCI subtree. A dock can carry more than one unit behind the
-same port, and under USB4 its USB devices reach the host's own USB
-controller through the USB3 tunnel, outside every unit. So after an eject
-the tool reads the port again and says only what it knows:
+same port, and its USB devices may reach the host's own USB controller
+outside every unit - through a USB4 USB3 tunnel, or over the cable's USB
+2.0 pair, which no record describes. So after an eject the tool says
+first what Windows did ("Windows has stopped <unit>."), then reads the
+port again, and gives the unconditional advice only when everything it
+needs is positively established:
 
-- every unit behind that port removed, and the router's USB3 tunnel not up
-  in the record: "You can now unplug the device.";
-- another unit behind that port still running: "Windows has stopped
-  <unit>. <other unit> behind the same Thunderbolt port is still running:
-  eject it too before you unplug." (exit 0: the asked eject succeeded);
-- the router's USB3 tunnel up, or unknown under the ICM for a router that
-  has one in its DROM: "...If the device also has USB devices (a dock's
-  ports, its card reader), stop them in Windows first, then unplug." The
-  ICM row cannot tell (section 3.1), so under the ICM this sentence is
-  always added for a router whose units include a USB host controller.
+- **"You can now unplug the device."** only when the walk after the eject
+  was read whole, no other unit behind that port remains, the removed
+  unit was a single function with no bridge and no USB host controller in
+  its subtree (an NVMe enclosure's controller, not a dock), and the
+  record, confirmed, does not show a USB3 tunnel up for that port's
+  router;
+- another unit behind that port still present: "Other devices behind the
+  same Thunderbolt port are still running: eject them too before you
+  unplug it.";
+- otherwise (a dock-shaped unit, a USB3 tunnel up or not known, the walk
+  incomplete): "Before you unplug it, make sure none of its other devices
+  (USB ports, card readers, network) is in use; stop them in Windows
+  first."
+
+The exit code is 0 in all three: the asked eject succeeded. The legs read
+the first; the others have no vehicle here (section 12).
 
 ## 6. What `/devices` prints
 
@@ -394,7 +445,7 @@ Per controller, for example:
 ```
 Thunderbolt 3 controller: xHCI98 Thunderbolt 3 Host Interface
   PCI 8086:15BF, driver xhcicm, firmware connection manager, security 1
-  information from the driver: current (changed 7 times since it started)
+  information from the driver: confirmed now (changed 7 times since it started)
 
   Device: Lenovo ThinkPad Thunderbolt 3 Dock  (id ending 3a7c)
     Thunderbolt 3, link 1, depth 1, approved
@@ -402,12 +453,17 @@ Thunderbolt 3 controller: xHCI98 Thunderbolt 3 Host Interface
     behind Thunderbolt port PCI 02:01.0:
       [1] NVM Express Controller         nvme98     working
           PCI\VEN_1B36&DEV_0010   marked removable by the Thunderbolt driver
+          instance PCI\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02\0008083000
 
   Other Thunderbolt ports (not carrying a connection now): 02:00.0, 02:02.0
+
+  To eject: INSTALL /eject 1   or, in a script:
+            INSTALL /eject id=PCI\VEN_1B36&DEV_0010&SUBSYS_11001AF4&REV_02\0008083000 /yes
 ```
 
 The numbers in brackets are the `/eject` numbers, assigned in tree order on
-each run (section 7.3).
+each run (section 7.3); the full instance id is printed beside every
+numbered unit for `/eject id=`.
 
 ## 7. The eject
 
@@ -416,17 +472,20 @@ each run (section 7.3).
 1. `CM_Query_Remove_SubTree(unit, CM_QUERY_REMOVE_UI_NOT_OK)`: Windows' own
    dialogs are not shown; the tool says what happened.
 2. Not accepted - nothing else is done:
-   - `CR_REMOVE_VETOED`: "Windows refused: a program is using the device.
-     Close it and try again." Exit 4.
+   - `CR_REMOVE_VETOED`: "Windows refused: the device is in use (a program
+     may have a file open on it, or its driver refused). Close any program
+     using it and try again." The answer names no cause, so the text
+     claims none. Exit 4.
    - `CR_INVALID_DEVNODE` or `CR_NO_SUCH_DEVNODE`: "The device list
      changed; nothing was ejected." Exit 1.
    - `CR_CALL_NOT_IMPLEMENTED`: "This Windows does not offer the removal
      this needs." Exit 1.
-   - anything else: "Windows refused (code 0x...)." Exit 4.
+   - anything else: "Windows refused the removal (code 0x...)." Exit 4.
 3. Accepted: `CM_Remove_SubTree(unit, CM_REMOVE_UI_NOT_OK)` at once, always
    (an accepted query cannot be cancelled on 9x, and a driver left
-   query-removed stays quiesced: section 5.3). Then section 5.4's message.
-   Exit 0.
+   query-removed stays quiesced: section 5.3). Then section 5.4's message,
+   and "Until you unplug it, Device Manager's Refresh, or the Thunderbolt
+   driver looking at the port again, can start it again." Exit 0.
 4. A removal that fails after an accepted query: "Windows began to stop
    the device but could not finish (code 0x...). It is not safe to unplug
    it now. Shut down Windows, then unplug it." Exit 2.
@@ -450,7 +509,8 @@ has read it on a system, the eject is not described as working there
    2026-10-15 from the 2000 guest image's `system32` export tables;
    static). The veto outputs are initialised (`PNP_VetoTypeUnknown`, an
    empty name) and read only when the call returns `CR_REMOVE_VETOED`.
-2. Vetoed, by type, each with "nothing was changed" and exit 4:
+2. Vetoed (`CR_REMOVE_VETOED`), by type, each with "nothing was changed"
+   and exit 4:
    - `PNP_VetoOutstandingOpen`: "Windows refused: a program is using the
      device. Close it and try again.";
    - `PNP_VetoDevice`, `PNP_VetoDriver`: "Windows refused: <name> did not
@@ -473,8 +533,14 @@ has read it on a system, the eject is not described as working there
 
 Rights: Microsoft's reference for the call names the privileges it needs
 (`SeUndockPrivilege` for a dock, and `SeLoadDriverPrivilege` for some
-callers); the tool does not test for an administrator first, and reports
-what the call answers. On Vista and 7 the manifest elevates every run.
+callers); the device modes skip record 23 section 7.2's administrator
+test, and report what the call answers. The confirmation of section 3.3
+needs write access to the driver key, which on 2000 and XP is an
+administrator's, so in practice an eject there runs as one. On Vista and
+7 the manifest elevates every run. After an accepted eject Windows holds a
+removable device as ejected until it is unplugged (Code 47 on XP and
+later, "held for eject"); what it does with a device that is not
+removable is leg E4's reading, and no rescan advice is printed on NT.
 
 Whether the call accepts a unit whose capabilities do not say `Removable`
 (the case of section 1.1) is not documented and is read by leg E4 on each
@@ -493,10 +559,12 @@ answers. No fallback forces a removal.
 - **`/eject id=<instance id>`** names the unit by its device instance id,
   as `/devices` prints it, compared without case; it may take `/yes`, for
   scripts.
-- Immediately before the call the tool reads the chosen devnode again: its
-  instance id must be the one chosen, its parent the same verified port,
-  and the record still fresh with the generation it was chosen under;
-  otherwise "The device list changed; nothing was ejected." (exit 1).
+- Immediately before the call (after the confirmation) the tool reads the
+  chosen devnode again: its instance id must be the one chosen, its parent
+  the same verified port, its subtree still free of protected devnodes,
+  and the record still confirmed with the echo and generation it was
+  chosen under; otherwise "The device list changed; nothing was ejected."
+  (exit 1).
 - One unit per run; never a forced removal: no `CM_Remove_SubTree` without
   an accepted query, no `CM_Query_And_Remove_SubTree`, no `DIF_REMOVE`.
 
@@ -525,15 +593,19 @@ refused with exit 1 before anything is read. On 98 and ME
 Record 23 section 7.4's codes, with the device modes' exception written
 there:
 
-| Code | `/devices` | `/eject` |
-|---|---|---|
-| 0 | listed | ejected (the last line is section 5.4's message) |
-| 1 | refused: a bad switch, a routine missing | refused before any request: as for `/devices`, cancelled, no fresh record, an incomplete walk, the list changed, the call unavailable, access denied |
-| 2 | - | failed after Windows accepted the request (9x), or an NT answer that leaves the state unknown |
-| 3 | - | - (an eject never needs a restart) |
-| 4 | - | Windows refused (a veto): nothing changed, a step remains for the user |
+One outcome table, shared by both systems' routes and by record 23's
+exception:
 
-A viewer run and every refusal end "No changes were made."
+| Outcome | Code | Last line |
+|---|---|---|
+| listed (`/devices`) | 0 | "No changes were made." |
+| ejected | 0 | section 5.4's message |
+| refused before any request (a bad switch, a routine missing, cancelled, no confirmed record, an incomplete walk, the list changed at revalidation) | 1 | "No changes were made." |
+| rejected by the call (the device list changed, the call not offered, access denied or insufficient rights) | 1 | "No changes were made." |
+| vetoed (the device in use, a driver or service refused) | 4 | "No changes were made." |
+| uncertain (9x: the removal failed after an accepted query; NT: an answer that leaves the state unknown) | 2 | the failure text of section 7.1 item 4, or 7.2 item 3 |
+
+Code 3 never occurs: an eject needs no restart.
 
 ## 9. Messages
 
@@ -542,11 +614,12 @@ virtual machines, emulators or what was tested (the owner's rule):
 
 - "No Thunderbolt or USB4 controller driven by this package was found."
 - "Nothing is connected to the Thunderbolt or USB4 ports."
-- "Windows refused: a program is using the device. Close it and try
-  again."
+- "Windows refused: the device is in use ..." (98 SE and ME) and the veto
+  texts of section 7.2 (NT).
 - "You can now unplug the device." and the qualified forms of section 5.4.
-- "Until you unplug it, Device Manager's Refresh or Scan for hardware
-  changes starts it again." (after every eject)
+- "Until you unplug it, Device Manager's Refresh, or the Thunderbolt
+  driver looking at the port again, can start it again." (98 SE and ME,
+  after an eject)
 - "This device is not listed in Safely Remove Hardware because Windows
   does not see it as removable. XHCIINST /eject asks Windows to stop it."
   (NT, a unit without `Removable`)
@@ -567,16 +640,21 @@ In `xhciinst\inst_core.c` (host suite `test\test_inst.c`):
   `src\cm\xhcicmf.inf`'s model lines both ways;
 - the 98 instance-id location parser (the `BUS_` form and the path form)
   and the location compare with a record's member;
-- the unit selection over a mock tree with parents: the enclosure and the
-  dock shapes, the host switch with its NHI and xHCI under unverified
-  candidates, a host function under a verified port pruned with its
-  subtree, an incomplete walk;
+- the unit selection and protection over a mock tree with parents: the
+  enclosure and the dock shapes, the host switch with its NHI and xHCI
+  under unverified candidates, an override that verifies the host xHCI's
+  port, an NHI nested inside a unit, an incomplete walk;
 - the record's decoder and checks (magic, version, sizes, counts, path
-  counts), the freshness rule (boot times within five minutes, a clock
-  change, a wrapped tick count), and the generation compare - against
-  records built by the driver's own `cm_status.c`, which the suite links;
-- the 9x result texts, the NT veto texts, the exit code and last line per
-  outcome, and section 5.4's message per port state;
+  counts), the confirmation (an echo that matches, one that does not, a
+  record of an earlier session with the same generation), and the
+  diagnostic boot-time label (two boots minutes apart, a wrapped tick
+  count) - against records built by the driver's own `cm_status.c`;
+- the eject sequences with injected answers: a 9x query refused, accepted
+  then removed, accepted then the removal failing (the removal always
+  attempted after an accepted query, never after a refused one); each NT
+  answer and veto type; the exit code and last line per outcome; section
+  5.4's message for each input, an unknown USB3 state and an incomplete
+  walk among them;
 - the value rows of section 11 against `xhcicm.inf`'s defaults, and `/set`
   accepting each allowed value and refusing the next one up.
 
@@ -585,8 +663,9 @@ from an ICM table and from a USB4 port set and its links - names cut and
 filtered, the UUID cut to 16 bits and no `Key` byte anywhere in the record,
 each approval and tunnel state, the port mapping (one active member, a
 bind, a conflicted bind), the change compare that ignores the stamp, the
-entry limit and its flag - and the 98 path over a fake configuration space
-(bus 0, a bridge chain, an unreadable bus).
+echo, the entry limit and its flag - and the 98 path over a fake
+configuration space (bus 0, a bridge chain, an unreadable bus, a read
+that fails once and then succeeds).
 
 `xhciinst\selftest.cmd` adds `/devices /list`, `/eject x` and `/eject 1
 /yes` to the refusals it checks.
@@ -619,20 +698,21 @@ and, after the re-plug, reads it back and compares it.
 
 | Leg | Systems | What it reads |
 |---|---|---|
-| D, viewer | 98 SE, 2000; XP or 7 where a slot allows | the controller, the router with its names, approval and tunnels from the record, the unit with its driver; the generation moving at a re-plug; the record read as not fresh after a restart until the driver writes it |
+| D, viewer | 98 SE, 2000; XP or 7 where a slot allows | the controller, the router with its names, approval and tunnels from the record, the unit with its driver; the confirmation; the generation moving at a re-plug; after a restart, the first record a new start wrote, never the earlier boot's |
 | E1, eject idle | 98 SE, 2000 | the eject accepted, the last line, the unit gone (98) or held (2000), the unplug with no dialog and no fault |
 | E2, refused | 98 SE, 2000 | a file held open on the NVMe volume: the refusal text, exit 4, the unit still started and the file still readable and writable; closed, then the eject accepted |
 | E3, re-plug | 98 SE | after an eject and the unplug, the device back at the next plug with its driver started, the file compared, and whether it is marked `DN_REMOVABLE` (section 5.1) |
 | E4, not removable | 2000 | the device disabled and enabled in Device Manager: missing from Unplug or Eject Hardware, its capabilities as shown, what `CM_Request_Device_EjectA` answers, and if accepted whether the unit stays removed until the unplug |
-| E5, a stale choice | 98 SE | `/eject 1` after the unit was unplugged: "The device list changed", exit 1 |
-| E6, USB4 | 2000 or 98 SE, the `usb4-generic` profile | the viewer from the USB4 record; on 2000 the eject and section 5.2's tunnel line |
+| E5, a stale choice | 98 SE | `/eject 1`, the unit unplugged while the confirmation waits, then Y: "The device list changed", exit 1 |
+| E6, USB4 | 2000, the `usb4-generic` profile | the viewer from the USB4 record, the eject and section 5.2's PCIe tunnel line |
 | E7, ME | ME, if an image with `xhcicm.sys` installed is available | D, E1 and E2: ME's IOS and the missing stop callback are the reason it is not covered by 98 SE |
 
 What a leg does not read stays unclaimed: the eject on a system with no
 passing E1 and E2 is described in the README and release notes as not
-read there; ME without E7 is said to be untested; a failed removal after
-an accepted query, a write failure of the record and a dock with two units
-have no vehicle here and are owed to the bench.
+read there; ME without E7 is said to be untested. A failed removal after
+an accepted query, a failed record write, a stale session and a dock with
+two units are covered by the host suites' injected answers (section 10)
+and have no live vehicle here; they are owed to the bench.
 
 ## 13. Decisions taken in writing this
 
@@ -640,13 +720,15 @@ have no vehicle here and are owed to the bench.
   third executable (section 2).
 - **E2** The driver publishes a status record per NHI as a value of its
   hardware key on every target, not a volatile key, so that `xhcicm.sys`
-  takes no import `xhci98.sys` does not; freshness comes from the stamp
-  (sections 3.2 and 3.3). The owner's instruction asked for a volatile key
-  on NT; this is the deviation, for the owner to confirm.
+  takes no import `xhci98.sys` does not; currency comes from the ask and
+  its echo, the stamp being diagnostic (sections 3.2 and 3.3). The owner's
+  instruction asked for a volatile key on NT; this is the deviation, for
+  the owner to confirm.
 - **E3** The UUID is shown as its last 16 bits, a display hint only; no
   authentication material is published (section 3.1).
-- **E4** Only units of verified, active tunnel ports in a fresh record are
-  ejected; candidates are shown only (section 4.2).
+- **E4** Only units of verified, active tunnel ports in a confirmed record
+  are ejected, and never one holding the host's own functions; candidates
+  are shown only (sections 4.2 and 4.3).
 - **E5** On 98 SE and ME a unit not marked `DN_REMOVABLE` is still offered,
   with a note (section 4.3).
 - **E6** On NT the eject is `CM_Request_Device_EjectA`, the applet's own
@@ -654,9 +736,13 @@ have no vehicle here and are owed to the bench.
   reading, not a promise (section 7.2).
 - **E7** One unit per run; `/eject N` always confirms; `/yes` only with
   `id=`; never forced (section 7.3).
-- **E8** The worker change of section 5.1 and record 22's 9x and NT
-  teardown wording (sections 5.1 and 5.2) are reported to the
-  connection-manager work, not made here.
+- **E8** The worker change of section 5.1 is reported to the
+  connection-manager work, not made here; for the tool's ejects this record
+  supersedes record 22 section 10.4's ordering clause (section 5.2), and
+  the clause is reported for narrowing.
+- **E9** The status keys are opened in the PnP start's dispatch and the
+  thread only reads and writes values on them (section 3.2): the one
+  `cm_nhi.c` call.
 
 ## 14. Open
 
@@ -679,8 +765,8 @@ have no vehicle here and are owed to the bench.
 |---|---|
 | `src\cm\cm_status.h` | the record's layout, shared with the tool |
 | `src\cm\cm_statb.h`, `cm_status.c` | the record built from the connection manager's state, and the 98 path (pure) |
-| `src\cm\cm_statos.c` | its publication |
-| `src\cm\cm_thr.c`, `cm.h`, `sources` | the two calls, the field, the source lines |
+| `src\cm\cm_statos.c` | the keys, the ask, the writes |
+| `src\cm\cm_nhi.c`, `cm_thr.c`, `cm.h`, `sources` | the three calls, the field, the source lines |
 | `scripts\import-gate\xhcicm-imports*.allow` | the registry and time rows for `cm_statos.obj` |
 | `test\test_cm_status.c`, `test\run-host-tests.cmd` | the record's host suite |
 | `xhciinst\xhciinst.c`, `inst_core.c`, `inst_core.h` | the modes |

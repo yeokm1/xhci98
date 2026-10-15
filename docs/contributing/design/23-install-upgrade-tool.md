@@ -980,7 +980,8 @@ On Vista and 7 the manifest asks for elevation, for every run. On 2000 and
 XP the tool opens the service control manager with
 `SC_MANAGER_ALL_ACCESS`; a failure refuses (exit 1) with "run it as an
 administrator". `/list` runs without that check and says what it could not
-read.
+read, and so do `/devices` and `/eject`, which report what each call
+answers (design record 24 section 7.2).
 
 ### 7.3 The routines
 
@@ -1040,9 +1041,10 @@ and beside a stop; the rule lives in the pure half (section 10).
 eject that Windows accepted and finished changes the device's state but
 never needs a restart, so it ends with the eject's own last line ("You
 can now unplug the device." or its qualified forms) and exit 0; a refusal
-ends "No changes were made.", exit 4; a removal that failed after an
-accepted query ends with record 24's failure text, exit 2. The pure half's
-final-line rule takes the mode.
+before or by the call ends "No changes were made.", exit 1; a veto the
+same, exit 4; an uncertain result (a removal that failed after an accepted
+query) ends with record 24's failure text, exit 2 - record 24 section
+8.2's outcome table. The pure half's final-line rule takes the mode.
 
 **The confirmation says what will happen**: "Install and stage the package
 now" when a device changes; "Write the changed settings now (no device
