@@ -1315,6 +1315,18 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
          * member the rediscovery finds (cmDiscoverAndList). */
         r->DebtPending = 1;
     }
+    if (action->Why == TBT_ICM_WHY_UNAVAILABLE &&
+        r->Route == CM_ROUTE_CONFIGMG) {
+        /* The host interface lost (CmReenumUnavailable): counted, ejects
+         * voided above, and nothing else - no bridge polled, no request
+         * posted. The worker's CONTROLLER_UNAVAILABLE request is this
+         * episode's reconciliation; an ordinary scan or re-enumeration
+         * here would read the bridge headers the loss may have reset, or
+         * run ahead of its removal. */
+        CmLogNote(nhi, "cm.reenum.9x.unavailable.action",
+                  (action->Kind << 8) | action->Why);
+        return;
+    }
     if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
         r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
         /* Whatever XhciCmReenum says: the known children are pruned to

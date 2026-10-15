@@ -949,6 +949,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
     ULONG hash;
     ULONG vetoed;
     ULONG removed;
+    ULONG calls;
     ULONG egen;
     ULONG k;
     ULONG c;
@@ -1025,13 +1026,15 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
         }
         vetoed = w->C.Vetoed;
         removed = w->C.Removed;
+        calls = w->C.Calls;
         current = cmWkRemoveChild(w, i, gen, bridge, node);
+        if (w->C.Calls != calls) {
+            /* The helper rescanned the bridge (stale after an accepted
+             * query, whether or not the removal succeeded). */
+            p->PubGen++;
+        }
         if (w->C.Removed != removed) {
             cmWkIdsDrop(&p->Gone, k);
-            if (!current) {
-                /* Stale after the removal: the helper rescanned. */
-                p->PubGen++;
-            }
         } else if (w->C.Vetoed != vetoed) {
             /* Refused: settled for this request, kept retained. */
             cmWkIdsDrop(&p->Gone, k);
@@ -1133,6 +1136,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     ULONG answers;
     ULONG cr;
     ULONG removed;
+    ULONG calls;
     BOOLEAN complete;
     BOOLEAN current;
     CM_WK_RETIRED retired;
@@ -1183,12 +1187,14 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
              * entries back only if the removal did not happen. */
             cmWkRetire(p, children[c], &retired);
             removed = w->C.Removed;
+            calls = w->C.Calls;
             current = cmWkRemoveChild(w, i, gen, bridge, children[c]);
+            if (w->C.Calls != calls) {
+                /* The helper rescanned the bridge. */
+                p->PubGen++;
+            }
             if (w->C.Removed == removed) {
                 cmWkRestore(p, children[c], &retired);
-            } else if (!current) {
-                /* Stale after the removal: the helper rescanned. */
-                p->PubGen++;
             }
             if (!current) {
                 return TRUE;
