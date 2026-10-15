@@ -3935,6 +3935,7 @@ static void steps_9x(const char *dir)
         }
         if (d->Refused) {
             out("  - Left: its version could not be compared.\n");
+            print_uas_fix(fix, "  - ");
             continue;
         }
         switch (d->Action) {
