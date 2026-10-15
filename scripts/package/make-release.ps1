@@ -234,6 +234,18 @@ Do not stage the install tool or INSTALL.BAT. For a host that cannot build it
 (the 64-bit half needs `tools\WinDDK71`); the release is then installed by
 hand only, the readme's BY HAND steps, and says so on the console.
 
+.PARAMETER TrayToolDir
+Where `XHCITR.EXE` and `XHCITR64.EXE` are built. Defaults to `xhcitr\` in the
+repository. Both are staged into `releases\<version>\tools\xhcitr\` with a
+readme.txt and a NOTICE.TXT: the xHCI98 USB Tree, which `XHCIINST` copies
+into the Windows directory and starts at login (roadmap-usb4.md task 41-A.6,
+design record 25).
+
+.PARAMETER SkipTrayTool
+Do not stage the USB tree tool. For a host that cannot build it; `XHCIINST`
+then says in one line that the package has none, and the release says so on
+the console and in its readme.
+
 .PARAMETER SkipCleanTool
 Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
 half needs `tools\WinDDK71`); nothing needs the tool, so the release is whole
@@ -371,6 +383,8 @@ param(
     [switch]$SkipCleanTool,
     [string]$InstallToolDir = "",
     [switch]$SkipInstallTool,
+    [string]$TrayToolDir = "",
+    [switch]$SkipTrayTool,
     [string]$UploadDir = "",
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
@@ -437,6 +451,7 @@ if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
 if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 if ($CleanToolDir -eq "") { $CleanToolDir = Join-Path $repo "xhcicln" }
 if ($InstallToolDir -eq "") { $InstallToolDir = Join-Path $repo "xhciinst" }
+if ($TrayToolDir -eq "") { $TrayToolDir = Join-Path $repo "xhcitr" }
 # The one place the version is edited (task 14.1.10). Both tools expand a macro
 # out of it, so it is both what their declared version is read from and an input
 # their staged binaries have to be newer than.
@@ -567,6 +582,7 @@ $QualtoolDir = Resolve-DirectoryArgument $QualtoolDir
 $SnapToolDir = Resolve-DirectoryArgument $SnapToolDir
 $CleanToolDir = Resolve-DirectoryArgument $CleanToolDir
 $InstallToolDir = Resolve-DirectoryArgument $InstallToolDir
+$TrayToolDir = Resolve-DirectoryArgument $TrayToolDir
 $PackageRoot = Resolve-DirectoryArgument $PackageRoot
 $UploadDir   = Resolve-DirectoryArgument $UploadDir
 
@@ -703,10 +719,11 @@ $pswPublishable = @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")
 # is stamped has one), and a tree without it is accepted only before 2.4.0.0.
 # xhcicln\, the cleanup tool of task 38.8, is first published in 2.4.0.0 too,
 # and only ever under tools\. xhciinst\, the install tool of task 40.6, is
-# first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root.
+# first published in 3.0.0.0, under tools\, with INSTALL.BAT at the root,
+# and so is xhcitr\, the USB tree tool of task 41-A.6 that XHCIINST installs.
 $toolsDirName = "tools"
 $toolsLayoutVersion = [version]"2.4.0.0"
-$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst")
+$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")
 
 # The silent install's list and its switch's scripts (roadmap-hcd task 38.2,
 # design record 13 section 6.11.8): copied once from src\ into tools\silent\
@@ -3807,6 +3824,65 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
         Write-Ok (("XHCIINST.EXE and XHCIIN64.EXE staged at version {0}, INSTALL.BAT at the root") -f $instVersion)
     }
 
+    # --- the USB tree tool (task 41-A.6) -------------------------------------
+    #
+    # XHCITR.EXE (MSVC 6.0) and XHCITR64.EXE (WDK 7.1 amd64), built from
+    # xhcitr\ (design record 25 section 9), which XHCIINST copies from
+    # tools\xhcitr\ into the Windows directory and starts at login (record 25
+    # section 8, record 23 section 9.5). The same staleness and version rules
+    # as XHCIINST's; its sources include the pure half it links from
+    # xhciinst\ and the query layout it reads. Not drivers: the packager's test
+    # signing does not reach XHCITR64.EXE.
+    $traytoolStaged = $null
+    if (-not $SkipTrayTool) {
+        Write-Step "USB tree tool"
+        $trayExes = @("XHCITR.EXE", "XHCITR64.EXE")
+        foreach ($name in ($trayExes + @("README.TXT"))) {
+            if (-not (Test-Path -LiteralPath (Join-Path $TrayToolDir $name) -PathType Leaf)) {
+                throw @"
+'$TrayToolDir' has no $name.
+Build the tool first:  xhcitr\build.cmd
+It uses the in-repo MSVC 6.0 and WDK 7.1 and installs nothing. -SkipTrayTool
+cuts without the tool on a host that cannot build it.
+"@
+            }
+        }
+        $traySources = @(@(Get-ChildItem -LiteralPath $TrayToolDir -File |
+            Where-Object { $_.Extension -in @(".c", ".h", ".rc", ".manifest", ".ico") }) +
+            @(Get-Item -LiteralPath $versionHeader) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")))
+        foreach ($name in $trayExes) {
+            $trayTime = (Get-Item -LiteralPath (Join-Path $TrayToolDir $name)).LastWriteTimeUtc
+            $trayNewer = @($traySources | Where-Object { $_.LastWriteTimeUtc -gt $trayTime })
+            if ($trayNewer.Count -gt 0) {
+                throw @"
+'$(Join-Path $TrayToolDir $name)' is older than $($trayNewer.Count) of its own source file(s):
+  - $(($trayNewer | ForEach-Object { $_.Name }) -join "`n  - ")
+Rebuild it (xhcitr\build.cmd) before releasing: a stale copy reads the
+drivers' answers with a layout or rules the source no longer has.
+"@
+            }
+        }
+        Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "xhcitr.c") -Macro "XHCITR_VERSION"
+        $trayVersion = Get-DeclaredVersion -Path $versionHeader
+        if (-not (Test-DriverVersionMatches -Reported $trayVersion -Declared $Version)) {
+            throw @"
+'$versionHeader' declares the version as "$trayVersion", but this release is $Version.
+XHCIINST replaces an installed XHCITR only with a newer version, so the tool must
+carry this release's. Bump the version and rebuild the tool (xhcitr\build.cmd).
+"@
+        }
+        $trayDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcitr")
+        Ensure-Directory $trayDir
+        foreach ($name in $trayExes) {
+            Copy-Item -LiteralPath (Join-Path $TrayToolDir $name) -Destination (Join-Path $trayDir $name) -Force
+        }
+        $traytoolStaged = $trayDir
+        Write-Ok (("XHCITR.EXE and XHCITR64.EXE staged at version {0}") -f $trayVersion)
+    }
+
     # --- the port switchover's scripts ---------------------------------------
     #
     # Once, into tools\portsw\ beside the other tools' directories (roadmap-hcd
@@ -4026,6 +4102,21 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
         $contents += ""
         $contents += "      Section 4 has how to run it; INSTALL /list shows what"
         $contents += "      it would do and changes nothing."
+        $contents += ""
+    }
+    if ($null -ne $traytoolStaged) {
+        $t32 = Get-Item -LiteralPath (Join-Path $traytoolStaged "XHCITR.EXE")
+        $t64 = Get-Item -LiteralPath (Join-Path $traytoolStaged "XHCITR64.EXE")
+        $contents += "  TOOLS\XHCITR\   - the xHCI98 USB Tree"
+        $contents += ""
+        $contents += ("      XHCITR.EXE   {0:N0} bytes, for 32-bit Windows" -f $t32.Length)
+        $contents += ("      XHCITR64.EXE {0:N0} bytes, for 64-bit Windows" -f $t64.Length)
+        $contents += "      readme.txt"
+        $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
+        $contents += ""
+        $contents += "      INSTALL.BAT copies the one for your Windows into the"
+        $contents += "      Windows directory's XHCI98 folder and starts it at"
+        $contents += "      each login (section 4)."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
@@ -4650,6 +4741,16 @@ INSTALL /list shows what it would do and changes nothing. INSTALL
 only USB controller is xHCI, the USB keyboard and mouse stop working). Every
 run adds to XHCIINST.LOG at the root of the system drive; attach it to a bug
 report about an install. TOOLS\XHCIINST\readme.txt has the rest.
+
+INSTALL.BAT also installs the xHCI98 USB Tree (XHCITR) in the Windows
+directory's XHCI98 folder and starts it at each login. Its window shows
+every USB controller, hub and device, and the Thunderbolt and USB4 devices
+with what is connected behind them; its icon in the notification area of
+the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
+Safely Remove Hardware icon does for other devices. It needs no
+administrator to run. INSTALL /notray installs it without starting it at
+login; INSTALL /uninstall removes it with the drivers.
+TOOLS\XHCITR\readme.txt has the rest.
 
 On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
 keyboard and mouse that do not go through this driver, as below; the tool
@@ -6020,6 +6121,7 @@ which XHCISNAP matches this driver by that number; correct the sentence.
     if ($null -eq $snaptoolStaged) { $missingTools += "TOOLS\XHCISNAP\ (the report tool of section 6)" }
     if ($null -eq $cleantoolStaged) { $missingTools += "TOOLS\XHCICLN\ (the optional cleanup tool of section 4)" }
     if ($null -eq $insttoolStaged) { $missingTools += "INSTALL.BAT and TOOLS\XHCIINST\ (the install tool of section 4)" }
+    if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
         # Leading blank line included, so an empty substitution leaves the
@@ -6796,6 +6898,62 @@ carry no Microsoft setup program and this package carries no Microsoft file.
         Write-Ok "NOTICE.TXT written beside XHCIINST.EXE and XHCIIN64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
     }
 
+    # --- the USB tree tool's readme and notices (task 41-A.6) -----------------
+    #
+    # As the install tool's, above: xhcitr\README.TXT with the release's
+    # footer, and NOTICE.TXT recording the two statically linked runtimes
+    # (legal-provenance.md section 2a).
+    if ($null -ne $traytoolStaged) {
+        $trayReadme = @([System.IO.File]::ReadAllText((Join-Path $TrayToolDir "README.TXT")) -split "`r?`n")
+        while ($trayReadme.Count -gt 0 -and $trayReadme[$trayReadme.Count - 1] -eq "") {
+            $trayReadme = @($trayReadme | Select-Object -First ($trayReadme.Count - 1))
+        }
+        $trayFooter = @"
+
+------------------------------------------------------------------------------
+Part of the xhci98 {VERSION} release. See the readme.txt two directories up
+for the driver itself.
+
+This project's own code is under the GNU GPL v2 - see the LICENSE file two
+directories up. XHCITR.EXE and XHCITR64.EXE are not only this project's
+code: a C runtime is statically linked into each, which NOTICE.TXT beside
+this file records.
+"@
+        $trayLines = @($trayReadme) + @($trayFooter.Replace("{VERSION}", $Version) -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $traytoolStaged "readme.txt") -Lines $trayLines
+        Write-Ok "readme.txt written beside XHCITR.EXE and XHCITR64.EXE"
+
+        $trayNotice = @"
+==============================================================================
+                          x h c i 9 8   {VERSION}
+            THIRD-PARTY NOTICES FOR XHCITR.EXE AND XHCITR64.EXE
+==============================================================================
+
+XHCITR.EXE and XHCITR64.EXE are built from this project's own C source,
+which is under the GNU GPL v2 - see the LICENSE file two directories up.
+Their icon was drawn for this project.
+
+They are not only this project's code. XHCITR.EXE is compiled with
+Microsoft Visual C++ 6.0 and linked against that compiler's STATIC C
+runtime; XHCITR64.EXE is compiled with the Windows Driver Kit 7.1's amd64
+compiler and linked against that kit's STATIC C runtime (LIBCMT). Those
+runtime modules are bound into each executable rather than loaded from a
+DLL when it runs, which is what makes each tool a single file. Its import
+tables name only Windows' own system DLLs and no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0 and the Windows
+Driver Kit 7.1. What this file records is the linkage; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.
+Nothing in this file is a statement that the arrangement is or is not
+sufficient.
+"@
+        $trayNotice = $trayNotice.Replace("{VERSION}", $Version)
+        Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT") `
+                            -Lines ($trayNotice -split "`r?`n")
+        Write-Ok "NOTICE.TXT written beside XHCITR.EXE and XHCITR64.EXE (static MSVC 6.0 and WDK 7.1 C runtimes)"
+    }
+
     # --- the licence the readme sends the reader to --------------------------
     #
     # **The generated guide says "GNU GPL v2 - see LICENSE", so LICENSE has to
@@ -7018,6 +7176,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     if ($null -eq $cleantoolStaged) {
         Write-Warn "no tools\xhcicln\ in this release (-SkipCleanTool) - nothing needs it, but the readme's update section names it."
+    }
+    if ($null -eq $traytoolStaged) {
+        Write-Warn "no tools\xhcitr\ in this release (-SkipTrayTool) - INSTALL.BAT installs no USB tree tool from it."
     }
 
     Write-Step "Done"

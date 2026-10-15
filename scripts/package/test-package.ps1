@@ -3000,8 +3000,8 @@ try {
            Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool and the install tool (tasks 38.9, 38.2, 38.8 and 40.6)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool, the install tool and the USB tree tool (tasks 38.9, 38.2, 38.8, 40.6 and 41-A.6)" },
         @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
            Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
         @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
@@ -3026,6 +3026,26 @@ try {
            Why  = "a cut no longer refuses an INSTALL.BAT with LF endings (task 40.6)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT")';
            Why  = "a cut no longer writes the NOTICE.TXT recording the install tool's statically linked runtimes (legal-provenance.md section 2a)" },
+        # The USB tree tool (roadmap-usb4.md task 41-A.6, design record 25
+        # sections 8 and 9): XHCIINST copies it from tools\xhcitr\.
+        @{ Find = '$trayDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcitr")';
+           Why  = "a cut no longer stages XHCITR.EXE and XHCITR64.EXE into tools\xhcitr\, where XHCIINST looks for them (task 41-A.6)" },
+        @{ Find = '$trayExes = @("XHCITR.EXE", "XHCITR64.EXE")';
+           Why  = "a cut no longer stages both builds of the USB tree tool (task 41-A.6)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "xhcitr.c") -Macro "XHCITR_VERSION"';
+           Why  = "a cut no longer holds the USB tree tool's version to the shared macro, on which XHCIINST's replace-only-when-older rule depends (task 41-A.6)" },
+        @{ Find = '$trayNewer = @($traySources | Where-Object { $_.LastWriteTimeUtc -gt $trayTime })';
+           Why  = "a cut no longer refuses a USB tree tool older than its sources (task 41-A.6)" },
+        @{ Find = '@(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +';
+           Why  = "the USB tree tool's freshness no longer counts the pure half it links from xhciinst\ (task 41-A.6)" },
+        @{ Find = 'Write-GeneratedText -Path (Join-Path $traytoolStaged "readme.txt") -Lines $trayLines';
+           Why  = "a cut no longer writes the USB tree tool's readme.txt (task 41-A.6)" },
+        @{ Find = 'Write-GeneratedText -Path (Join-Path $traytoolStaged "NOTICE.TXT")';
+           Why  = "a cut no longer writes the NOTICE.TXT recording the USB tree tool's statically linked runtimes (legal-provenance.md section 2a)" },
+        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
+           Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
+        @{ Find = 'INSTALL /notray installs it without starting it at';
+           Why  = "the readme's section 4 no longer describes the xHCI98 USB Tree INSTALL.BAT installs, or /notray (task 41-A.6)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
@@ -3229,7 +3249,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "$d\xhci98.inf"), "; stand-in")
         }
-        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")) {
+        foreach ($name in @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst", "xhcitr")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $tlCut "tools\$name") | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $tlCut "tools\$name\readme.txt"), "stand-in")
         }
@@ -3253,6 +3273,7 @@ try {
         Assert-True ((Get-ToolDirName -Name "xhciqual") -eq "tools\xhciqual") "Get-ToolDirName does not put the qualifier under tools\ at the cut."
         Assert-True ((Get-ToolDirName -Name "xhcisnap") -eq "tools\xhcisnap") "Get-ToolDirName does not put XHCISNAP under tools\ at the cut."
         Assert-True ((Get-ToolDirName -Name "xhcicln") -eq "tools\xhcicln") "Get-ToolDirName does not put the cleanup tool under tools\ at the cut."
+        Assert-True ((Get-ToolDirName -Name "xhcitr") -eq "tools\xhcitr") "Get-ToolDirName does not put the USB tree tool under tools\ at the cut."
 
         # The accepted layout, for the cut and for every published version.
         foreach ($v in @("", "2.3.1.0", "2.4.0.0", "2.4.0.1")) {
@@ -3267,6 +3288,7 @@ try {
             @{ Name = "root-tool";    Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "xhcisnap") | Out-Null }; Says = "xhcisnap\\ is at the version root" },
             @{ Name = "root-portsw";  Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\portsw") -Destination (Join-Path $t "portsw") }; Says = "portsw\\ is at the version root" },
             @{ Name = "root-xhcicln"; Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\xhcicln") -Destination (Join-Path $t "xhcicln") }; Says = "xhcicln\\ is at the version root" },
+            @{ Name = "root-xhcitr";  Do = { param($t) Move-Item -LiteralPath (Join-Path $t "tools\xhcitr") -Destination (Join-Path $t "xhcitr") }; Says = "xhcitr\\ is at the version root" },
             @{ Name = "stranger-file"; Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "tools\readme.txt"), "x") }; Says = "tools\\readme\.txt is not one of" },
             @{ Name = "stranger-dir"; Do = { param($t) New-Item -ItemType Directory -Path (Join-Path $t "tools\release-x86") | Out-Null }; Says = "tools\\release-x86 is not one of" },
             @{ Name = "tool-as-file"; Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "tools\xhciqual") -Recurse; [System.IO.File]::WriteAllText((Join-Path $t "tools\xhciqual"), "x") }; Says = "tools\\xhciqual is not one of" },
