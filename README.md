@@ -260,7 +260,7 @@ To install by hand:
 
 ### Windows Vista x64 and 7 x64: test-signing mode
 
-The 64-bit `xhci98.sys` and `xhciuas.sys` are test-signed, so on Windows Vista x64 and Windows 7 x64 the driver can run in test-signing mode instead of disabling driver signature enforcement with F8 at every boot. Once:
+The 64-bit `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` are test-signed, so on Windows Vista x64 and Windows 7 x64 the driver can run in test-signing mode instead of disabling driver signature enforcement with F8 at every boot. Once:
 
 1. Open an elevated Command Prompt: Start, type `cmd`, right-click it, Run as administrator.
 2. `bcdedit /set testsigning on` - a boot setting of the current Windows entry, so it stays on for every boot until it is turned off; no F8 is needed.

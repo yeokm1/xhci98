@@ -58,8 +58,10 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 
 ## 3. What is signed, and how
 
-- **The files:** `xhci98.sys` and `xhciuas.sys` of both published x64
-  flavours. The `qemu` flavour may be signed for a guest
+- **The files:** `xhci98.sys`, `xhciuas.sys` and, since the Thunderbolt 3
+  connection manager joined the package, `xhcicm.sys` of both published
+  x64 flavours; `nt\xhcicm.sys`, the filter INF's own copy, is the signed
+  file staged a second time, the same bytes. The `qemu` flavour may be signed for a guest
   (`make-package.ps1 -Flavor qemu -Arch amd64 -TestSignPfx ...`) and is
   never published either way.
 - **Never the x86 binaries.** 32-bit Windows does not enforce kernel-mode
@@ -179,8 +181,8 @@ password are not.
   section 10 records - `$script:TestSignThumbprint` in
   `package-common.ps1`), lets the import gates read the build where it was
   linked (their `SITES` rule needs the objects, or for LTCG objects the
-  sources, beside the image), and then signs **copies** of `xhci98.sys`
-  and `xhciuas.sys` in a temporary folder before staging. Each copy is
+  sources, beside the image), and then signs **copies** of `xhci98.sys`,
+  `xhciuas.sys` and `xhcicm.sys` in a temporary folder before staging. Each copy is
   held to two checks before it is used: its parsed signature is the
   project certificate's by thumbprint, an Authenticode PE-image signature
   (content `SPC_INDIRECT_DATA`, data `SPC_PE_IMAGE_DATA`, the
@@ -206,8 +208,8 @@ password are not.
   this record. With the key, it opens the .pfx once (so a wrong password
   costs a prompt, not two builds), hands the password to each x64 leg's
   `make-package.ps1` through `XHCI98_TESTSIGN_PW`, set in its own process
-  environment around that one call and restored after it, and then holds each published x64 `xhci98.sys` and
-  `xhciuas.sys` to the same two checks against the build output beside its
+  environment around that one call and restored after it, and then holds each published x64 `xhci98.sys`,
+  `xhciuas.sys` and `xhcicm.sys` to the same two checks against the build output beside its
   source stamp (`Assert-TestSigned`), and the published `xhci98-test.cer`
   to the key's public half byte for byte. The x86 legs are held, as
   before, to staged bytes equal to the build's.
@@ -302,8 +304,9 @@ on. The release notes say so beside the tier.
 
 ## 9. The rule
 
-Every published x64 package directory carries `xhci98.sys` and
-`xhciuas.sys` with an embedded Authenticode signature by the project test
+Every published x64 package directory carries `xhci98.sys`, `xhciuas.sys`
+and `xhcicm.sys` (and its `nt\xhcicm.sys` copy) with an embedded
+Authenticode signature by the project test
 certificate - SHA-1 file digest, no timestamp, no catalog, the INFs
 unchanged - applied by `make-package.ps1 -TestSignPfx` at staging and
 never by hand, and `make-release.ps1` refuses a cut that would publish an

@@ -71,7 +71,7 @@ own INFs, for Windows XP x64, Vista x64 and Windows 7 x64. Picking the wrong
 directory is harmless: Windows finds no driver in it and says so.
 
 **From `2.3.0.0` the 64-bit `xhci98.sys` and `xhciuas.sys` are
-test-signed, so on Windows Vista x64 and Windows 7 x64 the driver can run
+test-signed, and from `3.0.0.0` `xhcicm.sys` too, so on Windows Vista x64 and Windows 7 x64 the driver can run
 in test-signing mode instead of disabling driver signature enforcement with
 F8 at every boot.** Those systems refuse a kernel-mode driver without a
 signature they accept; up to `2.2.0.0` the drivers were not signed, and

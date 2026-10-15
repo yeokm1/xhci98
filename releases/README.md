@@ -423,8 +423,10 @@ project test certificate's `.pfx`, held only on the maintainer's disk
 (`scripts\local\testsign\`, git-ignored, or a folder outside the tree); its
 password comes from the `XHCI98_TESTSIGN_PW` environment variable or a
 prompt that does not echo, once per cut, and is never stored. Each x64 leg's
-`make-package.ps1` run signs `xhci98.sys` and `xhciuas.sys` (SHA-1 file
-digest, no timestamp, no catalog) and stages `xhci98-test.cer` beside them;
+`make-package.ps1` run signs `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
+(SHA-1 file digest, no timestamp, no catalog), stages the signed
+`xhcicm.sys` again as `nt\xhcicm.sys`, the same bytes, and stages
+`xhci98-test.cer` beside them;
 the cut then holds each published x64 binary to that signature by the key's
 thumbprint and to the build's bytes. The x86 legs are never signed. A clone
 without the key can cut `-Arch x86` only. Record 19 section 4 has the
