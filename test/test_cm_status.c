@@ -338,6 +338,7 @@ static void test_u4(void)
  * 00:06.0 (secondary 1), the upstream port 01:01.0 (secondary 2), the
  * downstream ports 02:00.0, 02:01.0 (secondary 4), 02:02.0. */
 static ULONG fakeUnreadableBus;
+static ULONG fakeFailBuses;     /* the bus-number register of this bdf + 1 */
 
 static ULONG fake_read(PVOID context, ULONG bdf, ULONG offset, PULONG value)
 {
@@ -350,6 +351,9 @@ static ULONG fake_read(PVOID context, ULONG bdf, ULONG offset, PULONG value)
     dev = (bdf >> 3) & 0x1FUL;
     fn = bdf & 7UL;
     if (fakeUnreadableBus != 0xFFUL && bus == fakeUnreadableBus) {
+        return 0;
+    }
+    if (fakeFailBuses == bdf + 1UL && offset == XHCI_TBT_CFG_BUSES) {
         return 0;
     }
     *value = 0xFFFFFFFFUL;
@@ -402,6 +406,14 @@ static void test_path(void)
     CHECK(!CmStatusPciPath(&cfg, XHCI_TBT_BDF(2, 1, 0), path, &n,
                            CM_ST_PATH_MAX), "bus 0 unreadable: unknown");
     fakeUnreadableBus = 0xFFUL;
+    fakeFailBuses = XHCI_TBT_BDF(1, 1, 0) + 1UL;
+    CHECK(!CmStatusPciPath(&cfg, XHCI_TBT_BDF(2, 1, 0), path, &n,
+                           CM_ST_PATH_MAX),
+          "the parent's bus numbers unreadable: unknown, not a root bus");
+    fakeFailBuses = 0;
+    CHECK(CmStatusPciPath(&cfg, XHCI_TBT_BDF(2, 1, 0), path, &n,
+                          CM_ST_PATH_MAX) && n == 4,
+          "readable again: the path");
     CHECK(CmStatusPciPath(&cfg, XHCI_TBT_BDF(9, 0, 0), path, &n,
                           CM_ST_PATH_MAX) && n == 2 && path[1] == 9,
           "a bus with no parent is a root bus");

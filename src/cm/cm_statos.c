@@ -31,8 +31,10 @@
  * RtlQueryRegistryValues and ZwClose.
  *
  * IRQL: PASSIVE_LEVEL. CmStatusOpen in the PnP start's dispatch, before the
- * thread's start work; the rest on the NHI's connection-manager thread
- * only, no lock held.
+ * thread's start work; CmStatusClose in the removal's dispatch, after the
+ * stop (a start that failed before the thread ran leaves its handles to
+ * it, or to the next CmStatusOpen); the rest on the NHI's
+ * connection-manager thread only, no lock held.
  */
 
 #include "cm.h"
@@ -61,7 +63,9 @@ static ULONG cmStUptimeS(PCM_NHI nhi)
     KeQueryTickCount(&ticks);
     q = ticks.LowPart / 1000000UL;
     r = ticks.LowPart % 1000000UL;
-    return q * tickUs + (r * (tickUs / 1000UL)) / 1000UL;
+    /* ticks x tickUs / 10^6, in words: each product below 2^32. */
+    return q * tickUs + (r * (tickUs / 1000UL)) / 1000UL +
+           (r * (tickUs % 1000UL)) / 1000000UL;
 }
 
 /* A REG_DWORD, and nothing else, is taken (as cm_reg.c's). */
@@ -263,10 +267,18 @@ VOID CmStatusOpen(PCM_NHI nhi)
     /* The first record, at once: an earlier start's is replaced before
      * anything can take it for this one's (generation 0, no echo). */
     CmZero(&in, sizeof(in));
-    in.NhiId = (nhi->Vendor & 0xFFFFUL) | ((nhi->Device & 0xFFFFUL) << 16);
+    /* AddDevice's ids: configuration space is read later in the start
+     * (zero on 98 SE and ME, where AddDevice reads none). */
+    in.NhiId = (nhi->Ids.Vendor & 0xFFFFUL) |
+               ((nhi->Ids.Device & 0xFFFFUL) << 16);
     in.Stage = CM_ST_STAGE_STOPPED;
     bytes = CmStatusBuild(s->Built, &in, NULL, NULL, NULL);
     cmStPublish(nhi, bytes, TRUE);
+}
+
+VOID CmStatusClose(PCM_NHI nhi)
+{
+    cmStClose(&nhi->StatusPub);
 }
 
 VOID CmStatusPass(PCM_NHI nhi)

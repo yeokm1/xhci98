@@ -5506,6 +5506,12 @@ static DWORD tb_dword_prop(DWORD dn, ULONG prop, ULONG *value)
     return api.Property(dn, prop, &type, value, &n, 0);
 }
 
+/* A property read or absent (CR_NO_SUCH_VALUE). */
+static int tb_prop_ok(DWORD cr)
+{
+    return cr == INST_CR_SUCCESS || cr == INST_CR_NO_SUCH_VALUE;
+}
+
 /* One devnode read; 0 when a reading failed. */
 static int tb_read(TBNODE *t)
 {
@@ -5521,15 +5527,25 @@ static int tb_read(TBNODE *t)
         return 0;
     }
     if (envNow.Nt) {
-        cm_prop(t->Dn, INST_CM_DRP_HARDWAREID, d->Hw, sizeof(d->Hw), &bytes);
+        /* What classifies a devnode must be read, or be absent: any other
+         * answer makes the reading incomplete (record 24 section 4.1). */
+        if (!tb_prop_ok(cm_prop(t->Dn, INST_CM_DRP_HARDWAREID, d->Hw,
+                                sizeof(d->Hw), &bytes))) {
+            ok = 0;
+        }
         d->HwBytes = bytes;
-        cm_prop(t->Dn, INST_CM_DRP_COMPATIBLEIDS, d->Compat, sizeof(d->Compat),
-                &bytes);
+        if (!tb_prop_ok(cm_prop(t->Dn, INST_CM_DRP_COMPATIBLEIDS, d->Compat,
+                                sizeof(d->Compat), &bytes))) {
+            ok = 0;
+        }
         d->CompatBytes = bytes;
-        cm_prop(t->Dn, INST_CM_DRP_DRIVER, d->Driver, sizeof(d->Driver), NULL);
+        if (!tb_prop_ok(cm_prop(t->Dn, INST_CM_DRP_DRIVER, d->Driver,
+                                sizeof(d->Driver), NULL)) ||
+            !tb_prop_ok(cm_prop(t->Dn, INST_CM_DRP_SERVICE, d->Service,
+                                sizeof(d->Service), NULL))) {
+            ok = 0;
+        }
         cm_prop(t->Dn, INST_CM_DRP_DEVICEDESC, d->Desc, sizeof(d->Desc), NULL);
-        cm_prop(t->Dn, INST_CM_DRP_SERVICE, d->Service, sizeof(d->Service),
-                NULL);
         t->HasCaps = tb_dword_prop(t->Dn, INST_CM_DRP_CAPABILITIES,
                                    &t->Caps) == INST_CR_SUCCESS;
         t->HasLoc = tb_dword_prop(t->Dn, INST_CM_DRP_BUSNUMBER, &t->Bus) ==
@@ -5652,16 +5668,28 @@ static int tb_read_record(TBNHI *h)
 
 /* The ask (record 24 section 3.3): a fresh nonzero value in the NHI's
  * driver key; the record is confirmed once it echoes it. */
+static int tb_read_record(TBNHI *h);
+
 static void tb_ask(TBNHI *h)
 {
     HKEY k;
     DWORD v;
     static INST_U32 seq;
 
+    INST_U32 old = h->Ask;
+    INST_U32 echo = 0;
+
     driver_key_path(&tbn[h->Node].R, h->DrvPath, sizeof(h->DrvPath));
-    seq++;
-    h->Ask = (GetTickCount() ^ (GetCurrentProcessId() << 12) ^ (seq << 24)) |
-             1UL;
+    if (tb_read_record(h)) {
+        echo = inst_get32(h->Rec, CM_ST_O_ECHO);
+    }
+    do {
+        seq++;
+        h->Ask = (GetTickCount() ^ (GetCurrentProcessId() << 12) ^
+                  (seq << 24) ^ (seq * 0x9E3779B1UL)) | 1UL;
+    } while (h->Ask == old || h->Ask == echo);
+    h->Asked = 0;
+    h->Confirmed = 0;
     v = h->Ask;
     if (tbn[h->Node].R.Driver[0] == '\0' ||
         RegOpenKeyExA(HKEY_LOCAL_MACHINE, h->DrvPath, 0, KEY_SET_VALUE, &k) !=
@@ -5853,11 +5881,12 @@ static int tb_scan(int first)
             tbh[k].Node = -1;
             tbh[k].Confirmed = 0;
             for (i = 0; i < tbnCount; i++) {
-                if (inst_eq(tbn[i].R.Id, tbh[k].Id)) {
+                if (inst_eq(tbn[i].R.Id, tbh[k].Id) && tb_started(&tbn[i]) &&
+                    inst_eq(tbn[i].R.Service, "xhcicm")) {
                     tbh[k].Node = i;
                 }
             }
-            if (wasConfirmed && tb_read_record(&tbh[k]) &&
+            if (wasConfirmed && tbh[k].Node >= 0 && tb_read_record(&tbh[k]) &&
                 inst_st_confirmed(tbh[k].Rec, tbh[k].Ask)) {
                 if (inst_get32(tbh[k].Rec, CM_ST_O_GENERATION) == tbh[k].Gen) {
                     tbh[k].Confirmed = 1;
@@ -5905,6 +5934,52 @@ static int tb_read_all(void)
     }
     (void)tb_derive();
     return 1;
+}
+
+/* A fresh ask to every confirmed NHI, waited for: the revalidation's
+ * proof that the running driver still publishes (record 24 section 7.3).
+ * 1 when every one answered. */
+static int tb_reconfirm(void)
+{
+    DWORD start;
+    int k;
+    int waiting;
+    int all = 1;
+
+    for (k = 0; k < tbhCount; k++) {
+        if (tbh[k].Confirmed && tbh[k].Node >= 0) {
+            tb_ask(&tbh[k]);
+            tbh[k].Gen = 0;
+            if (!tbh[k].Asked) {
+                all = 0;
+            }
+        }
+    }
+    start = GetTickCount();
+    for (;;) {
+        waiting = 0;
+        for (k = 0; k < tbhCount; k++) {
+            if (!tbh[k].Asked || tbh[k].Confirmed) {
+                continue;
+            }
+            if (tb_read_record(&tbh[k]) &&
+                inst_st_confirmed(tbh[k].Rec, tbh[k].Ask)) {
+                tbh[k].Confirmed = 1;
+                tbh[k].Gen = inst_get32(tbh[k].Rec, CM_ST_O_GENERATION);
+            } else {
+                waiting = 1;
+            }
+        }
+        if (!waiting) {
+            break;
+        }
+        if (GetTickCount() - start >= INST_TB_ASK_WAIT_MS) {
+            all = 0;
+            break;
+        }
+        Sleep(100);
+    }
+    return all;
 }
 
 /* ---- the viewer ---------------------------------------------------------- */
@@ -6207,11 +6282,30 @@ static void tb_print(void)
     if (tbUnits > 0) {
         for (i = 0; i < tbnCount; i++) {
             if (tbn[i].Number == 1) {
-                out("\nTo eject: INSTALL /eject 1   (or XHCIINST /eject 1)\n"
-                    "  in a script: INSTALL /eject id=%s /yes\n", tbn[i].R.Id);
+                out("\nTo eject: INSTALL /eject 1   (or XHCIINST /eject 1)\n");
+                out(envNow.Nt ? "  in a script: INSTALL /eject \"id=%s\" /yes\n"
+                              : "  in a script: INSTALL /eject id=%s /yes\n",
+                    tbn[i].R.Id);
             }
         }
     }
+}
+
+/* One device-mode run at a time on the machine: the ask in each NHI's
+ * driver key is shared (record 24 section 3.3). */
+static HANDLE tbMutex;
+
+static int tb_lock(void)
+{
+    tbMutex = CreateMutexA(NULL, FALSE, envNow.Nt ? "Global\\XhciinstTbAsk"
+                                                   : "XhciinstTbAsk");
+    if (tbMutex == NULL ||
+        WaitForSingleObject(tbMutex, 10000) == WAIT_TIMEOUT) {
+        out("Another XHCIINST /devices or /eject is running; try again when it "
+            "has finished.\n");
+        return 0;
+    }
+    return 1;
 }
 
 static int run_devices(void)
@@ -6239,17 +6333,23 @@ static int tb_find_unit(const char *id)
     return -1;
 }
 
-/* After an accepted eject: the port read again, and section 5.4's advice. */
-static int tb_after(const char *portId, int nhiK, int portIndex, int single)
+/* After an accepted eject: the port read again, and section 5.4's advice.
+ * The port and the router are found again by location in the fresh
+ * reading; anything not established gives the qualified advice. */
+static int tb_after(const char *portId, const char *unitId, int nhiK,
+                    INST_U32 portBdf, int single)
 {
     int i;
     int port = -1;
     int others = 0;
     INST_U32 usb3 = CM_ST_TUN_UNKNOWN;
-    INST_U32 bdf;
     INST_U32 r;
     INST_U32 n;
+    INST_U32 j;
+    INST_U32 count;
+    INST_U32 active;
     int whole;
+    int portKnown = 0;
 
     whole = tb_scan(0) && tbnBad == 0;
     for (i = 0; i < tbnCount; i++) {
@@ -6259,21 +6359,40 @@ static int tb_after(const char *portId, int nhiK, int portIndex, int single)
     }
     if (port >= 0) {
         for (i = port + 1; i < tbnCount; i++) {
-            if (tbn[i].Parent == port) {
+            /* The ejected unit, held by Windows until the unplug, is not
+             * another device; a device still started is. */
+            if (tbn[i].Parent == port && !inst_eq(tbn[i].R.Id, unitId) &&
+                tb_started(&tbn[i])) {
                 others = 1;
+            }
+            if (tbn[i].Parent == port && inst_eq(tbn[i].R.Id, unitId) &&
+                tb_started(&tbn[i])) {
+                /* Started again: nothing is established. */
+                whole = 0;
             }
         }
     } else {
         whole = 0;
     }
-    if (nhiK >= 0 && tbh[nhiK].Valid &&
+    if (nhiK >= 0 && tbh[nhiK].Node >= 0 && tb_read_record(&tbh[nhiK]) &&
         inst_st_confirmed(tbh[nhiK].Rec, tbh[nhiK].Ask)) {
-        bdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
+        count = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORT_COUNT);
+        active = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORT_ACTIVE);
+        for (j = 0; j < count && j < CM_ST_MAX_PORTS; j++) {
+            if ((active & (1UL << j)) != 0 &&
+                inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * j) == portBdf) {
+                portKnown = 1;
+            }
+        }
         n = inst_get32(tbh[nhiK].Rec, CM_ST_O_ROUTER_COUNT);
-        for (r = 0; r < n; r++) {
+        for (r = 0; portKnown && r < n; r++) {
             const unsigned char *e =
                 tbh[nhiK].Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
-            if (inst_get32(e, CM_ST_E_BRIDGE) == bdf) {
+            if (inst_get32(e, CM_ST_E_BRIDGE) == portBdf) {
+                if (usb3 != CM_ST_TUN_UNKNOWN) {
+                    usb3 = CM_ST_TUN_UNKNOWN;   /* two routers: ambiguous */
+                    break;
+                }
                 usb3 = (inst_get32(e, CM_ST_E_TUNNELS) >> 4) & 0xFUL;
             }
         }
@@ -6281,19 +6400,42 @@ static int tb_after(const char *portId, int nhiK, int portIndex, int single)
     return inst_unplug_kind(whole, others, single, usb3);
 }
 
+/* A storage function with no PCI function below it, neither a bridge nor
+ * a USB controller (the single-function shape of record 24 section 5.4). */
+static int tb_single(int u)
+{
+    int i;
+    char cls[8];
+
+    if (tbn[u].IsUsbHc || tbn[u].Candidate ||
+        inst_msz_has_class(tbn[u].R.Hw, tbn[u].R.HwBytes, "0604") ||
+        inst_msz_has_class(tbn[u].R.Compat, tbn[u].R.CompatBytes, "0604")) {
+        return 0;
+    }
+    inst_copy(cls, "01", sizeof(cls));
+    if (!inst_msz_has_class(tbn[u].R.Hw, tbn[u].R.HwBytes, cls) &&
+        !inst_msz_has_class(tbn[u].R.Compat, tbn[u].R.CompatBytes, cls)) {
+        return 0;
+    }
+    for (i = u + 1; i < tbnCount; i++) {
+        if (tbn[i].UnitOf == u && inst_starts(tbn[i].R.Id, "PCI\\")) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Under the USB4 profile, the record watched for the router's PCIe tunnel
  * closed after the eject (record 24 section 5.2). */
-static void tb_watch_tunnel(int nhiK, int portIndex)
+static void tb_watch_tunnel(int nhiK, INST_U32 bdf)
 {
     DWORD start = GetTickCount();
-    INST_U32 bdf;
     INST_U32 r;
     INST_U32 n;
 
     if (nhiK < 0 || inst_get32(tbh[nhiK].Rec, CM_ST_O_CM) != CM_ST_CM_USB4) {
         return;
     }
-    bdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
     for (;;) {
         if (tb_read_record(&tbh[nhiK]) &&
             inst_st_confirmed(tbh[nhiK].Rec, tbh[nhiK].Ask)) {
@@ -6328,6 +6470,7 @@ static int run_eject(void)
     int i;
     int nhiK;
     int portIndex;
+    INST_U32 portBdf;
     int single;
     int outcome;
     const char *text;
@@ -6408,15 +6551,7 @@ static int run_eject(void)
     inst_copy(portId, tbn[tbn[u].Parent].R.Id, sizeof(portId));
     nhiK = tbn[tbn[u].Parent].VNhi;
     portIndex = tbn[tbn[u].Parent].VPort;
-    single = 1;
-    for (i = u + 1; i < tbnCount; i++) {
-        if (tbn[i].UnitOf == u) {
-            single = 0;
-        }
-    }
-    if (tbn[u].IsUsbHc || tbn[u].Candidate) {
-        single = 0;
-    }
+    portBdf = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS + 4 * portIndex);
     out("\nDevice %d: %s\n  %s\n", tbn[u].Number, desc, id);
     if (!(opts.Yes && opts.EjectId[0] != '\0')) {
         out("Eject it now? Type Y and Enter (anything else cancels): ");
@@ -6427,18 +6562,23 @@ static int run_eject(void)
             return INST_EXIT_REFUSED;
         }
     }
-    /* Revalidation (record 24 section 7.3), immediately before the call. */
-    if (!tb_scan(0) || tbnBad != 0 || tbChanging) {
+    /* Revalidation (record 24 section 7.3), immediately before the call:
+     * a fresh ask answered, then the tree read again at that generation. */
+    if (!tb_reconfirm() || !tb_scan(0) || tbnBad != 0 || tbChanging) {
         out("\nThe device list changed; nothing was ejected.\n");
         tb_unask();
         return INST_EXIT_REFUSED;
     }
     u = tb_find_unit(id);
-    if (u < 0 || !inst_eq(tbn[tbn[u].Parent].R.Id, portId)) {
+    if (u < 0 || !inst_eq(tbn[tbn[u].Parent].R.Id, portId) ||
+        tbn[tbn[u].Parent].VNhi != nhiK ||
+        inst_get32(tbh[nhiK].Rec, CM_ST_O_PORTS +
+                                      4 * tbn[tbn[u].Parent].VPort) != portBdf) {
         out("\nThe device list changed; nothing was ejected.\n");
         tb_unask();
         return INST_EXIT_REFUSED;
     }
+    single = tb_single(u);
     out("\n");
     if (envNow.Nt) {
         ULONG veto = 0;
@@ -6466,12 +6606,13 @@ static int run_eject(void)
             }
             if (outcome == INST_EJ_FAILED) {
                 out("(code 0x%08lX)\n", (unsigned long)cr);
+                devLast = text;
             }
             tb_unask();
             return inst_eject_code(outcome);
         }
         out("Windows has stopped %s.\n", desc);
-        tb_watch_tunnel(nhiK, portIndex);
+        tb_watch_tunnel(nhiK, portBdf);
     } else {
         cr = tbQueryRemove(tbn[u].Dn, INST_UI_NOT_OK);
         logonly("CM_Query_Remove_SubTree(%s) = 0x%08lX\n", id, (unsigned long)cr);
@@ -6491,7 +6632,7 @@ static int run_eject(void)
         if (outcome != INST_EJ_DONE) {
             out("%s\n(code 0x%08lX)\n", text, (unsigned long)cr);
             tb_unask();
-            devLast = "Windows could not finish stopping the device.";
+            devLast = text;
             return inst_eject_code(outcome);
         }
         out("Windows has stopped %s.\n", desc);
@@ -6499,7 +6640,7 @@ static int run_eject(void)
             "Thunderbolt driver looking\nat the port again, can start it "
             "again.\n");
     }
-    devLast = inst_unplug_text(tb_after(portId, nhiK, portIndex, single));
+    devLast = inst_unplug_text(tb_after(portId, id, nhiK, portBdf, single));
     tb_unask();
     return INST_EXIT_DONE;
 }
@@ -6676,6 +6817,9 @@ int main(int argc, char **argv)
         }
         load_routines();
         tb_routines();
+        if (!tb_lock()) {
+            return finish(INST_EXIT_REFUSED);
+        }
         return finish(opts.Devices ? run_devices() : run_eject());
     }
     if (!check_package()) {

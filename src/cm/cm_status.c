@@ -437,12 +437,18 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
                         break;
                     }
                     if (XHCI_TBT_HDR_LAYOUT(hdr >> 16) ==
-                            XHCI_TBT_HDR_BRIDGE &&
-                        cfg->Read(cfg->Context, XHCI_TBT_BDF(b, d, f),
-                                  XHCI_TBT_CFG_BUSES, &buses) &&
-                        ((buses >> 8) & 0xFFUL) == bus) {
-                        parent = XHCI_TBT_BDF(b, d, f);
-                        break;
+                        XHCI_TBT_HDR_BRIDGE) {
+                        /* A bridge whose bus numbers cannot be read might
+                         * be the parent: the path stays unknown. */
+                        if (!cfg->Read(cfg->Context, XHCI_TBT_BDF(b, d, f),
+                                       XHCI_TBT_CFG_BUSES, &buses)) {
+                            incomplete = 1;
+                            break;
+                        }
+                        if (((buses >> 8) & 0xFFUL) == bus) {
+                            parent = XHCI_TBT_BDF(b, d, f);
+                            break;
+                        }
                     }
                     if (f == 0 && ((hdr >> 16) & XHCI_TBT_HDR_MF) == 0) {
                         break;

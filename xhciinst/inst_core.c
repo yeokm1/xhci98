@@ -2253,6 +2253,11 @@ static int inst_msz_class(const char *msz, size_t bytes, const char *cls)
     return 0;
 }
 
+int inst_msz_has_class(const char *msz, size_t bytes, const char *cls)
+{
+    return inst_msz_class(msz, bytes, cls);
+}
+
 int inst_tb_is_nhi(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const char *service)
 {
@@ -2596,7 +2601,8 @@ int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
         return INST_EJ_UNSUPPORTED;
     }
     if (cr != INST_CR_REMOVE_VETOED) {
-        *text = "Windows could not eject the device.";
+        *text = "Windows could not eject the device, and its state is not "
+                "known. Do not unplug\nit until Windows has been shut down.";
         return INST_EJ_FAILED;
     }
     switch (vetoType) {
@@ -2621,7 +2627,7 @@ int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
     case INST_VETO_RIGHTS:
         *text = "Windows did not allow this account to remove the device. "
                 "Run it as an administrator.";
-        break;
+        return INST_EJ_RIGHTS;
     case INST_VETO_ILLEGAL_REQUEST:
     case INST_VETO_NON_DISABLEABLE:
     case INST_VETO_LEGACY_DEVICE:

@@ -1547,7 +1547,7 @@ static void test_tb_eject(void)
              INST_EJ_VETO, "a driver");
     CHECK(withName, "names the driver");
     CHECK_EQ(inst_eject_nt(INST_CR_REMOVE_VETOED, 12, &text, &withName),
-             INST_EJ_VETO, "insufficient rights is a veto");
+             INST_EJ_RIGHTS, "insufficient rights: exit 1, as access denied");
     CHECK(strstr(text, "administrator") != NULL, "says administrator");
     CHECK_EQ(inst_eject_nt(INST_CR_ACCESS_DENIED, 0, &text, &withName),
              INST_EJ_RIGHTS, "access denied");
@@ -1555,6 +1555,7 @@ static void test_tb_eject(void)
              INST_EJ_CHANGED, "the list changed");
     CHECK_EQ(inst_eject_nt(0x1F, 0, &text, &withName), INST_EJ_FAILED,
              "unknown state");
+    CHECK(strstr(text, "shut down") != NULL, "an unknown state: shut down first");
     CHECK_EQ(inst_eject_code(INST_EJ_DONE), INST_EXIT_DONE, "done 0");
     CHECK_EQ(inst_eject_code(INST_EJ_VETO), INST_EXIT_STEPS, "veto 4");
     CHECK_EQ(inst_eject_code(INST_EJ_CHANGED), INST_EXIT_REFUSED, "changed 1");

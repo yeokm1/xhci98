@@ -1529,6 +1529,7 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         cmNhiStop(nhi, stack->MinorFunction);
+        CmStatusClose(nhi);
         /* Power admission closed, and every power IRP this driver still
          * holds finished (without the thread, cm_power.c): none may outlive
          * the device object. */

@@ -435,8 +435,9 @@ VOID CmReadValues(PCM_NHI nhi);
 
 /* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
  * first record); CmStatusPass once per thread pass; CmStatusStopped after
- * the stop's work. */
+ * the stop's work; CmStatusClose in the removal (idempotent). */
 VOID CmStatusOpen(PCM_NHI nhi);
+VOID CmStatusClose(PCM_NHI nhi);
 VOID CmStatusPass(PCM_NHI nhi);
 VOID CmStatusStopped(PCM_NHI nhi);
 

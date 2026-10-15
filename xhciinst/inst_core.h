@@ -518,6 +518,8 @@ int inst_tb_candidate(const char *hw, size_t hwBytes);
  * class 0C03 (a USB host controller) that is not an NHI. */
 int inst_tb_is_nhi(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const char *service);
+/* 1 when an id of the list has CC_<cls...> at a field start. */
+int inst_msz_has_class(const char *msz, size_t bytes, const char *cls);
 int inst_tb_is_usbhc(const char *hw, size_t hwBytes, const char *compat,
                      size_t compatBytes, const char *service);
 
@@ -599,9 +601,10 @@ int inst_eject9x_remove(INST_U32 cr, const char **text);
 
 /* The advice after a successful eject (record 24 section 5.4):
  * INST_UNPLUG_NOW only when the walk after it was whole, no other unit
- * remains behind the port, the unit was a single function, and the
- * router's USB3 tunnel is known to be none (usb3: CM_ST_TUN_* of a
- * confirmed record, 5 when unknown). */
+ * behind the port is still running, the unit was a single storage
+ * function (singleFunction: no PCI function below it, not a bridge or a
+ * USB controller, of class 01), and the router's USB3 tunnel is known to
+ * be none (usb3: CM_ST_TUN_* of a confirmed record, 5 when unknown). */
 #define INST_UNPLUG_NOW     0
 #define INST_UNPLUG_OTHERS  1
 #define INST_UNPLUG_CHECK   2
