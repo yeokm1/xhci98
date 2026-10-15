@@ -1396,7 +1396,7 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
-    if (!r->Listed && r->RediscoverLeft != 0 &&
+    if (!r->Listed && r->RediscoverLeft != 0 && !r->LossSeen &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
         cmDiscoverAndList(nhi);
     }
@@ -1721,8 +1721,10 @@ VOID CmReenumStop(PCM_NHI nhi)
 VOID CmReenumLossBegin(PCM_NHI nhi)
 {
     nhi->Reenum.LossDrain = 1;
-    if (nhi->Reenum.CfgmgOwed) {
-        /* The 98 worker not started yet (cmCfgmgLate): it never is. */
+    if (nhi->Reenum.Wk == NULL) {
+        /* No 98 worker running (not started yet, or the set still being
+         * looked for): none is started, and no rediscovery is made, for
+         * this instance (cmCfgmgLate, CmReenumService). */
         nhi->Reenum.LossSeen = 1;
     }
 }
