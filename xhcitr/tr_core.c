@@ -1542,37 +1542,40 @@ void tr_join_lines(char *s)
     char *w = s;
     const char *r = s;
 
+    /* Never writes more bytes than it has read: w never passes r. */
     while (*r != '\0') {
-        if (*r == '\r' && r[1] == '\n') {
+        const char *start = r;
+        int breaks = 0;
+        if (*r != '\r' && *r != '\n') {
+            *w++ = *r++;
+            continue;
+        }
+        while (*r == '\r' || *r == '\n') {
+            if (*r == '\n') {
+                breaks++;
+            }
             r++;
         }
-        if (*r == '\n') {
-            const char *n = r + 1;
-            if (*n == '\r' && n[1] == '\n') {
-                n++;
-            }
-            if (*n == '\n') {
-                /* A paragraph break: kept as one CR LF pair twice. */
+        if (breaks >= 2) {
+            /* A paragraph break: CR LF twice when that many bytes were
+             * read, else LF twice (at least two were read). */
+            if (r - start >= 4) {
                 *w++ = '\r';
                 *w++ = '\n';
                 *w++ = '\r';
                 *w++ = '\n';
-                r = n + 1;
-                while (*r == '\r' || *r == '\n') {
-                    r++;
-                }
-                continue;
-            }
-            if (w > s && w[-1] != ' ') {
-                *w++ = ' ';
-            }
-            r++;
-            while (*r == ' ') {
-                r++;
+            } else {
+                *w++ = '\n';
+                *w++ = '\n';
             }
             continue;
         }
-        *w++ = *r++;
+        if (w > s && w[-1] != ' ') {
+            *w++ = ' ';
+        }
+        while (*r == ' ') {
+            r++;
+        }
     }
     *w = '\0';
 }
