@@ -1824,7 +1824,12 @@ side.
   to a function the scan could not see, or one that came back between the
   scan and the enumeration - never records a generation carrying an old
   statement. On Windows 98 SE and ME no `UP` is published while the
-  record is not written. An entry, once
+  record is not written. There the tunnel's bus did not answer before
+  `Reenumerate_DevNode` (98 SE, run-39): a fresh exposure that finds it
+  silent leaves the bus to be scanned again on each pass for 10 s, and the
+  scan that finds the function publishes the new generation the exposure
+  owed - after the enumeration, which the retirement before it makes
+  harmless. An entry, once
   given to a bus and slot, is never given to another: an `nvme98` instance
   may still hold it. Where the SHPC slot reads a card present and nothing
   answers yet, the scan waits up to 1 s for it. Only functions on the
@@ -1899,6 +1904,10 @@ side.
   its 9x deadline still to come. The children the worker removes today are
   functions that vanished, which get no request; under the ICM nothing
   removes a present one (section 7.4: no per-device teardown).
+  `REMOVE_PENDING` is a flush request, made only after an accepted query
+  and only to a function still answering with the identity its `UP` was
+  published for - never a reset claim - so it is safe on any removal path
+  of the worker's, a lost controller's included.
 
 **The budget, an estimate and not an enforced deadline.** `nvme98`
 measures its gone deadline from its own presence loss. The parts: the

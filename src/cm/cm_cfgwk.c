@@ -689,8 +689,14 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
      * here on the worker (no ring is serviced) and ended early when the
      * request goes stale. The removal below follows whatever the answer:
      * Windows 98 cannot cancel the query just accepted. */
-    entry = id != 0 ? CmNvlinkWkRequest(w->Port[i].Bdf, id, &seq)
-                    : CM_NVLINK_NONE;
+    entry = CM_NVLINK_NONE;
+    seq = 0;
+    if (id != 0 && cmWkCurrent(w, i, gen)) {
+        /* Only for a request still current, and bound to this domain's
+         * entry at the generation it has now; a stale one completes the
+         * accepted query's removal without asking nvme98 anything. */
+        entry = CmNvlinkWkRequest(w->Nhi, w->Port[i].Bdf, id, &seq);
+    }
     if (entry != CM_NVLINK_NONE) {
         start = cmWkNowTicks();
         answer = CM_NVLINK_RM_NONE;
@@ -706,7 +712,7 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
             pause.HighPart = -1;
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
         }
-        CmNvlinkWkWithdraw(entry);
+        CmNvlinkWkWithdraw(entry, seq);
         cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
     }
     cr = CmCfgmgRemove(&w->Cfgmg, devnode);

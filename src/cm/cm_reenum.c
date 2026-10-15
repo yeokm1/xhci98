@@ -1477,8 +1477,10 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
-    /* The USB4 profile's presence samples for the nvme98 statement's
-     * anchor (record 22 section 10.3); nothing under the ICM. */
+    /* The nvme98 channel's per-pass work: on 98 SE and ME the rescan of a
+     * bus a fresh exposure found silent; under the USB4 profile the
+     * presence samples for the statement's anchor (record 22 section
+     * 10.3). */
     CmNvlinkService(nhi);
     if (!r->Listed && r->RediscoverLeft != 0 &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {

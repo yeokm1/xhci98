@@ -75,7 +75,8 @@
  *     invalidation that reports the endpoint missing on NT,
  *     Query_Remove_SubTree and Remove_SubTree on 9x). It waits until every
  *     entry this domain marked DOWN_QUIESCED reads AckGeneration ==
- *     LinkGeneration, or CM_NVLINK_ACK_MS since its mark, servicing the
+ *     LinkGeneration, or CmNvlinkAckBoundMs since its mark (5 s on NT, a
+ *     provisional 3 s on 9x), servicing the
  *     connection manager between reads. On NT it does not wait while no
  *     receiver has ever asked for the table (no nvme98 is loaded, so none
  *     can acknowledge); on 9x it does not wait where the record was never
@@ -102,7 +103,8 @@
  * accepted query on 9x; the handshake comes as early as that rule allows.
  * The children the worker removes today are functions that vanished,
  * which get no request (nothing to flush); a present one does.
- * * DDK-FREE PART. The functions under "pure" below use nothing but the
+ *
+ * DDK-FREE PART. The functions under "pure" below use nothing but the
  * table and their arguments; test\test_cm_nvlink.c runs them on the host
  * (XHCI_HOST_TEST). The rest is cm_nvlinkos.c.
  *
@@ -333,16 +335,20 @@ VOID CmNvlinkAwait(struct _CM_NHI *nhi);
 /* Windows 98 SE and ME, the CONFIGMG worker's removal step (see the file
  * header). CmNvlinkWkRequest: for the present function `id` (vendor 15:0,
  * device 31:16) behind tunnel port `bridge`, REMOVE_PENDING with a fresh
- * sequence (written to `*sequence`); returns the entry, or CM_NVLINK_NONE
- * when there is no record, no UP entry published for that id behind that
- * bridge, or the function no longer answers. CmNvlinkWkAnswer: the answer
- * to that sequence (CM_NVLINK_RM_*). CmNvlinkWkWithdraw: the request
- * cleared. Any thread at <= DISPATCH_LEVEL but CmNvlinkWkRequest
+ * sequence (written to `*sequence`) on the entry domain `owner` published
+ * - selected under the lock, the function read outside it, and owner, UP,
+ * generation and the absence of another request checked again before it
+ * is written; returns the entry, or CM_NVLINK_NONE when there is no
+ * record, no such entry, or the function no longer answers with that id.
+ * CmNvlinkWkAnswer: the answer to that sequence (CM_NVLINK_RM_*).
+ * CmNvlinkWkWithdraw: that request cleared, and only that one. Any thread
+ * at <= DISPATCH_LEVEL but CmNvlinkWkRequest
  * (PASSIVE_LEVEL: a configuration read); no ring is serviced and nothing
  * waits. */
-ULONG CmNvlinkWkRequest(ULONG bridge, ULONG id, PULONG sequence);
+ULONG CmNvlinkWkRequest(struct _CM_NHI *owner, ULONG bridge, ULONG id,
+                        PULONG sequence);
 ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence);
-VOID CmNvlinkWkWithdraw(ULONG index);
+VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence);
 
 /* The idle poll period: XhciCmPollIdleMs as read, held to at most
  * CM_NVLINK_IDLE_MS while any entry reads UP (a tunnelled NVMe function is

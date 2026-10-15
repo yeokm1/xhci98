@@ -514,11 +514,13 @@ static BOOLEAN cmNvReceiver(VOID)
 static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create);
 
 /* 98 SE and ME: `bridge`'s bus was silent at a fresh exposure; scan it
- * again each pass for CM_NV_LATE_MS (CmNvlinkService). The UP so
+ * again each pass for CM_NV_LATE_MS (CmNvlinkService), the fresh
+ * exposure's new generation still owed; `arm` FALSE: it answered, the
+ * debt is paid. The UP so
  * published follows the operating system's enumeration: an nvme98
  * instance bound before it finds its entry later, and the retirement
  * before the exposure kept any old statement away from it. */
-static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge)
+static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge, BOOLEAN arm)
 {
     CM_NV_U4 *u;
     ULONG k;
@@ -531,6 +533,12 @@ static VOID cmNvLateArm(PCM_NHI nhi, ULONG bridge)
         if (u->LateOn[k] && u->LateBridge[k] == bridge) {
             break;
         }
+    }
+    if (!arm) {
+        if (k != XHCI_TBT_MAX_TUNNELS) {
+            u->LateOn[k] = 0;
+        }
+        return;
     }
     if (k == XHCI_TBT_MAX_TUNNELS) {
         for (k = 0; k < XHCI_TBT_MAX_TUNNELS && u->LateOn[k]; k++) {
@@ -699,8 +707,10 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
         CmLogNote(nhi, "cm.nvlink.up.waited",
                   ((cmNvNow(nhi) - start) << 8) | (r >> 16));
     }
-    if ((r >> 16) == 0 && fresh && !cmNvNt) {
-        cmNvLateArm(nhi, bridge);
+    if (fresh && !cmNvNt) {
+        /* Silent: owed a fresh publication when it answers. Answered: any
+         * such debt is paid (no second count for it later). */
+        cmNvLateArm(nhi, bridge, (BOOLEAN)((r >> 16) == 0));
     }
     return r & 0xFFFFUL;
 }
@@ -931,40 +941,65 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
  * the waiting. Only for a function still present behind its bridge whose
  * entry reads UP and was published for the id the devnode names.
  */
-ULONG CmNvlinkWkRequest(ULONG bridge, ULONG id, PULONG sequence)
+ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG bridge, ULONG id,
+                        PULONG sequence)
 {
     ULONG i;
     ULONG index;
     ULONG read;
+    ULONG bus;
+    ULONG slot;
+    ULONG gen;
     KIRQL irql;
 
     *sequence = 0;
-    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0) {
+    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL) {
         return CM_NVLINK_NONE;
     }
+    /* A snapshot under the lock: this domain's UP entry behind the bridge,
+     * published for that id, with no request outstanding. */
     index = CM_NVLINK_NONE;
+    bus = 0;
+    slot = 0;
+    gen = 0;
+    KeAcquireSpinLock(&cmNvLock, &irql);
     for (i = 0; i < NVME98LS_ENTRIES && index == CM_NVLINK_NONE; i++) {
-        if (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Bridge == bridge &&
+        if (cmNvShadow[i].Owner == owner && cmNvShadow[i].Bridge == bridge &&
             cmNvShadow[i].Id == id &&
-            (cmNvTable->Entry[i].Flags & NVME98LS_UP) != 0 &&
-            cmNvCfg(cmNvTable->Entry[i].BusNumber,
-                    cmNvTable->Entry[i].SlotNumber, 0, &read) &&
-            read == id) {
+            (cmNvTable->Entry[i].Flags &
+             (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) == NVME98LS_UP) {
             index = i;
+            bus = cmNvTable->Entry[i].BusNumber;
+            slot = cmNvTable->Entry[i].SlotNumber;
+            gen = cmNvTable->Entry[i].LinkGeneration;
         }
     }
+    KeReleaseSpinLock(&cmNvLock, irql);
     if (index == CM_NVLINK_NONE) {
         return CM_NVLINK_NONE;
     }
-    KeAcquireSpinLock(&cmNvLock, &irql);
-    cmNvRemoveSeq = (cmNvRemoveSeq + 1) & 0x00FFFFFFUL;
-    if (cmNvRemoveSeq == 0) {
-        cmNvRemoveSeq = 1;
+    /* The function still answers with that id (outside the lock). */
+    if (!cmNvCfg(bus, slot, 0, &read) || read != id) {
+        return CM_NVLINK_NONE;
     }
-    *sequence = cmNvRemoveSeq;
-    if (!CmNvlinkRemoveRequest(cmNvTable, index, *sequence)) {
+    /* Revalidated before publication: same owner, still UP, the same
+     * generation, still no request. */
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    if (cmNvShadow[index].Owner != owner ||
+        (cmNvTable->Entry[index].Flags &
+         (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) != NVME98LS_UP ||
+        cmNvTable->Entry[index].LinkGeneration != gen) {
         index = CM_NVLINK_NONE;
-        *sequence = 0;
+    } else {
+        cmNvRemoveSeq = (cmNvRemoveSeq + 1) & 0x00FFFFFFUL;
+        if (cmNvRemoveSeq == 0) {
+            cmNvRemoveSeq = 1;
+        }
+        *sequence = cmNvRemoveSeq;
+        if (!CmNvlinkRemoveRequest(cmNvTable, index, *sequence)) {
+            index = CM_NVLINK_NONE;
+            *sequence = 0;
+        }
     }
     KeReleaseSpinLock(&cmNvLock, irql);
     return index;
@@ -975,15 +1010,19 @@ ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence)
     return CmNvlinkRemoveAnswer(cmNvTable, index, sequence);
 }
 
-VOID CmNvlinkWkWithdraw(ULONG index)
+VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence)
 {
     KIRQL irql;
 
-    if (cmNvTable == NULL || index >= NVME98LS_ENTRIES) {
+    if (cmNvTable == NULL || index >= NVME98LS_ENTRIES || sequence == 0) {
         return;
     }
+    /* Only this request: another worker's later one is left alone. */
     KeAcquireSpinLock(&cmNvLock, &irql);
-    CmNvlinkRemoveCancel(cmNvTable, index);
+    if ((cmNvTable->Entry[index].Flags & CM_NVLINK_REMOVE_PENDING) != 0 &&
+        cmNvTable->Entry[index].Reserved[0] == sequence) {
+        CmNvlinkRemoveCancel(cmNvTable, index);
+    }
     KeReleaseSpinLock(&cmNvLock, irql);
 }
 VOID CmNvlinkStop(PCM_NHI nhi)
@@ -1172,7 +1211,7 @@ VOID CmNvlinkService(PCM_NHI nhi)
         }
         bus = cmNvSecondary(u->LateBridge[i]);
         if (bus != CM_NVLINK_NONE && cmNvExclusive(nhi, u->LateBridge[i]) &&
-            (cmNvScan(nhi, u->LateBridge[i], bus, FALSE) >> 16) != 0) {
+            (cmNvScan(nhi, u->LateBridge[i], bus, TRUE) >> 16) != 0) {
             u->LateOn[i] = 0;
             CmLogNote(nhi, "cm.nvlink.up.late",
                       ((cmNvNow(nhi) - u->LateFrom[i]) << 8) | i);
