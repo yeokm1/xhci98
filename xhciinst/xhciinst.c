@@ -2138,7 +2138,7 @@ static int local_dir(char *dir, size_t cap)
 }
 
 /* ======================================================================== */
-/* Objects shared with XHCITR, and the tool itself (record 23 section 9.6;   */
+/* Objects shared with XHCITR, and the tool itself (record 23 section 9.5;   */
 /* record 25 sections 6 and 8)                                               */
 /* ======================================================================== */
 
@@ -2596,7 +2596,7 @@ static void tray_put(const char *from, const char *dir, const char *exe,
     out("%s is in use: the new copy takes effect after a restart.\n", exe);
 }
 
-/* Record 23 section 9.6: the tool for this machine's architecture into
+/* Record 23 section 9.5: the tool for this machine's architecture into
  * %windir%\XHCI98, and the Run value that starts it at login (none with
  * /notray). Under /list, what would be done. */
 static void tray_install(void)
@@ -2677,7 +2677,7 @@ static void tray_install(void)
     }
 }
 
-/* Record 23 section 9.6: the uninstall's half. The tool, its .NEW and .DEL
+/* Record 23 section 9.5: the uninstall's half. The tool, its .NEW and .DEL
  * and the Run value are this tool's own, outside every XHCIINST.LST, and go
  * before %windir%\XHCI98 itself; a locked copy is deleted at the restart
  * (trayDeferred), and on NT the directory with it. */

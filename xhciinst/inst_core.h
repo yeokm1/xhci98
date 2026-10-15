@@ -656,7 +656,7 @@ int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
  * answer (asked again). */
 int inst_tb_answer(const char *line, int defaultYes);
 
-/* ---- the USB tree tool (record 23 section 9.6, record 25 section 8) ---------- */
+/* ---- the USB tree tool (record 23 section 9.5, record 25 section 8) ---------- */
 
 /* The contract with XHCITR: its hidden tray window's class, the event that
  * asks every running copy to quit (NT: in the Global namespace, so a copy

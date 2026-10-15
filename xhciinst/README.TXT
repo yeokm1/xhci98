@@ -58,6 +58,8 @@ architecture and this build.
   INSTALL /uninstall   removes the drivers (see below)
   INSTALL /thunderbolt installs the Thunderbolt 3 / USB4 support without
                        asking (for unattended installs, with /yes)
+  INSTALL /notray      installs without starting the xHCI98 USB Tree at
+                       login (and stops an earlier install's start)
 
 Thunderbolt 3 / USB4 support: the tool asks "Install Thunderbolt 3 / USB4
 support?". With a Thunderbolt or USB4 controller present Enter (and /yes)

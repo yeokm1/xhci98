@@ -2751,7 +2751,7 @@ int inst_tb_answer(const char *line, int defaultYes)
 }
 
 /* ======================================================================== */
-/* The USB tree tool (record 23 section 9.6, record 25 section 8)            */
+/* The USB tree tool (record 23 section 9.5, record 25 section 8)            */
 /* ======================================================================== */
 
 const char *inst_tray_file(int arch)

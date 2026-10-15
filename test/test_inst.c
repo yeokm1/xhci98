@@ -1705,7 +1705,7 @@ static void test_tb_eject(void)
              "/eject /uninstall refused");
 }
 
-/* The USB tree tool (record 23 section 9.6, record 25 section 8): its name
+/* The USB tree tool (record 23 section 9.5, record 25 section 8): its name
  * per architecture, the Run value's data, when it is copied, what becomes
  * of the Run value, /notray, and WININIT.INI's [rename] lines. */
 static void test_tray(void)

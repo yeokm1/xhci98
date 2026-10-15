@@ -1,6 +1,7 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 8, 2026-10-15, reviewed and revised six times the same day;
+Status: revision 9, 2026-10-16 (the USB tree tool; see below);
+revision 8, 2026-10-15, reviewed and revised six times the same day;
 the code is written against it (task 40.6) and was reviewed and revised
 against it the same day. Written for the task group the
 owner added to Phase 40 of `roadmap-usb4.md` on 2026-10-15: the `3.0.0.0`
@@ -13,6 +14,13 @@ curated set of the drivers' registry values, each asked only where the
 hardware it affects is present. It ships in `3.0.0.0` (the no-cuts rule).
 Section 13 lists the decisions taken in writing it, each an orchestrator
 decision for the owner to confirm; section 14 what is open.
+
+Revision 9, 2026-10-16 (roadmap-usb4.md task 41-A.6): the tool also
+installs, starts at login and removes the xHCI98 USB Tree, `XHCITR.EXE` /
+`XHCITR64.EXE` (design record 25 section 8): section 9.5, the `/notray`
+switch in section 7.1, the packaging in section 11. The `/devices` and
+`/eject` lock (record 24 section 3.3) is now opened before it is created,
+and created with a security an unelevated `XHCITR` can use (section 9.5).
 
 The tool never ships `devcon` or any other Microsoft file, never drives
 Windows 98's 16-bit setup engine (`SETUPX`) through anything undocumented,
@@ -973,6 +981,7 @@ these systems.
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
 | `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
+| `/notray` | install without the Run value that starts the xHCI98 USB Tree at login, and delete one an earlier run wrote (section 9.5); refused with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
@@ -1438,6 +1447,67 @@ system's `CFGMGR32.DLL`). So the tool:
 Whether the wizard offers the controller again after step 3's restart, and
 what it finds, is read on the legs. Exit 4.
 
+### 9.5 The xHCI98 USB Tree (`XHCITR`)
+
+Design record 25 section 8 is the source; this is how the tool does it.
+The tool's file (`XHCITR.EXE` on 32-bit Windows, 98 SE and ME included;
+`XHCITR64.EXE` on x64), its `.NEW` and `.DEL` forms and the Run value
+`HKLM\Software\Microsoft\Windows\CurrentVersion\Run`, `xHCI98 USB
+Tree` = `"<path>" /tray`, are this tool's own, outside every copy's
+`XHCIINST.LST`. The file sits in `%windir%\XHCI98\` itself, beside the
+local copies (section 4.4).
+
+- **Install and update.** Every run that passes its confirmation, on both
+  routes, after the drivers (NT: after the results and `/restage`'s work
+  file; 98 SE and ME: after the registry values, before the printed
+  steps), and under `/list` as one line of what would be done. A package
+  without `tools\xhcitr\<name>` (an older or a development one) is said
+  in one line and nothing of the tool is touched.
+  1. Its own pending operations are taken back first: a leftover `.NEW`
+     is deleted (an NT delayed move whose source is gone does nothing),
+     and on 98 SE and ME its `[rename]` lines for the tool, `NUL=<target>`
+     and `<target>=<new>` in 8.3 form, leave `WININIT.INI`, every other
+     line kept as it was.
+  2. The file is copied when the installed one is missing, when its
+     version resource is unreadable while the package's is read, or when
+     it is older; an equal or newer one is left (`inst_tray_copy_needed`).
+  3. Before the copy, running copies are closed: the manual-reset event
+     `Global\Xhci98TrQuit` (`Xhci98TrQuit` on 98 SE and ME), opened or
+     else created with every user allowed to wait on it and SYSTEM and the
+     Administrators allowed everything, is set; `WM_CLOSE` goes to the
+     `Xhci98TrTray` window of this session (`FindWindowA` and
+     `PostMessageA` looked up in `user32.dll` at run time); the tool waits
+     up to 15 s until the file opens for writing with no sharing, then
+     resets the event. No process is ever ended.
+  4. A file still in use: the new one is copied beside it as `.NEW` and
+     moved over it at the restart (NT: `MoveFileExA`, replace, delay until
+     reboot, looked up at run time; 98 SE and ME: a `<target>=<new>` line
+     in `WININIT.INI`'s `[rename]`), and the run says the new tool takes
+     effect after a restart.
+  5. The Run value is written when the file is in place and the value is
+     not already the one wanted; `/notray` writes none and deletes an
+     existing one (`inst_tray_run_action`).
+- **Uninstall.** As part of the removal of `%windir%\XHCI98` (both
+  routes, after everything else; under `/list` one line each), the Run
+  value is deleted, the pending operations are taken back as above, the
+  running copies are closed as above and the file is deleted. A file
+  still in use is, on NT, renamed `.DEL` (a running image can be renamed
+  on its volume) and that name deleted at the restart, or failing that
+  the file itself; on 98 SE and ME a `NUL=<target>` line goes into
+  `WININIT.INI`. Either is reported, and on NT the then-empty
+  `%windir%\XHCI98` is scheduled for removal at the restart too.
+- **The lock shared with `XHCITR`.** `/devices` and `/eject` take
+  `Global\XhciinstTbAsk` (`XhciinstTbAsk` on 98 SE and ME), which
+  `XHCITR`'s eject takes too: opened first with `SYNCHRONIZE` and
+  `MUTEX_MODIFY_STATE`, else created with every user allowed those and
+  SYSTEM and the Administrators everything, a lost race opening the
+  winner's; `WAIT_ABANDONED` counts as taken; after 10 s the run is
+  refused. The security routines (`AllocateAndInitializeSid`,
+  `InitializeAcl`, `AddAccessAllowedAce`, `InitializeSecurityDescriptor`,
+  `SetSecurityDescriptorDacl`, `FreeSid`) are looked up in `advapi32.dll`
+  at run time on NT only, so the import table and 98 SE's advapi32 are
+  untouched.
+
 ## 10. The pure half and the host suite
 
 `xhciinst\inst_core.c` (with `inst_core.h`) holds everything that is a
@@ -1495,6 +1565,12 @@ built, as it runs `XHCICLN`'s.
   top-level layout check admits `INSTALL.BAT`. `make-package.ps1` is
   unchanged: it stages flavour directories, which the tool is not part of.
 - **test-package.ps1**: the mutation cases `XHCICLN` has, for the new tool.
+- **The USB tree tool** (revision 9): `make-release.ps1` stages
+  `tools\xhcitr\` with `XHCITR.EXE`, `XHCITR64.EXE`, `readme.txt` from
+  `xhcitr\README.TXT` and a generated `NOTICE.TXT`, with the same
+  freshness and version checks (`XHCITR_VERSION` expanding
+  `XHCI_VER_STR`) and a `-SkipTrayTool` switch; `$toolNames` names the
+  directory; `test-package.ps1` holds those lines and the layout.
 - **Documents**: README "Installation Steps", "The package" and "Upgrading
   the driver"; the release notes' "Installing", "Updating from 2.y.y.y",
   "Registry settings" (the tool as a second way to set the curated
