@@ -449,3 +449,18 @@ should still be right from the first byte.
 Status: not opened, unnumbered and unversioned.
 
 - [ ] QINR.1 seed the query device from the thread's actual wait state, or expose it only after the first publication
+
+## Planned - A Sign-Only Packaging Mode
+
+Goal: `make-package.ps1 -TestSignPfx` re-runs the host test suite and the
+import gate that `build-driver.cmd` already ran on the same binaries, so
+the owner's signing step takes minutes on a loaded host. A sign-only mode
+refuses unless each binary's SHA-256 equals the one a gated
+`build-driver.cmd` run recorded for it, skips the repeated suites, still
+runs the INF gate against the staged package, and signs. The guarantee
+that only a tested binary is signed stays; the time goes. Agreed by the
+owner on 2026-10-16, after the `3.0.0.0` cut.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash
