@@ -40,9 +40,9 @@ the NHI with a handle open turned every later query into error 1617
 | Leg | 98 SE | ME | 2000 | XP | XP x64 | Vista x86 | 7 x86 | Vista x64 | 7 x64 |
 |---|---|---|---|---|---|---|---|---|---|
 | T.1 window, USB tree, descriptors, `/report`, standard user | pass | pass (no USB device) | pass | pass | pass | pass | pass | pass | pass |
-| T.2 Thunderbolt branch | shown, not confirmed (ICM) | shown, not confirmed (ICM, USB4) | pass (USB4) | pass (ICM) | - | pass (ICM) | pass (USB4) | fallback pass | fallback pass |
-| T.3 Safely Remove, window and tray | FAIL: no query answer | - | pass | pass | - | - | pass | eject refused, as designed | eject refused, as designed |
-| T.4 balloons | tooltip not read | none: no query answer | pass | pass | - | - | pass | - | - |
+| T.2 Thunderbolt branch | pass (ICM), after the fix | pass (ICM), after the fix | pass (USB4) | pass (ICM) | - | pass (ICM) | pass (USB4) | fallback pass | fallback pass |
+| T.3 Safely Remove, window and tray | pass, after the fix | pass, after the fix | pass | pass | - | - | pass | eject refused, as designed | eject refused, as designed |
+| T.4 balloons | tooltip not read | pass, after the fix | pass | pass | - | - | pass | - | - |
 | T.5 install, login start, uninstall | pass | - | install, login start | install, login start | install | install | pass (in-use upgrade not read) | - | - |
 | T.6 `INSTALL /devices`, `/eject` | pass | - | pass | pass | - | - | pass | - | - |
 
@@ -107,7 +107,7 @@ the NHI with a handle open turned every later query into error 1617
 
 ### Windows 98 SE and ME
 
-**The query device did not answer the tool on either system.** Every
+**In the first build the query device did not answer the tool on either system.** Every
 reading shows the controller's state from the registry record, "not
 confirmed: eject unavailable (its query device did not answer for it)",
 although ME's NHI hardware key names `XHCICM0`; it held after a restart
@@ -138,6 +138,31 @@ on the same machine read a confirmed record and stopped the unit.
 - On ME `INSTALL /yes` did not see the NHI on the first run and answered
   No to the Thunderbolt question (as `v-9x` read before); `/thunderbolt`
   installed it.
+**The cause, and the fix.** A probe in the 98 SE guest read the query
+device working: `\\.\XHCICM0` opened with no access rights, the IOCTL
+answered 352 bytes (pass 731, age 41 ms, live ACTIVE, the record and one
+extension, 20 Gbit/s per lane x2), a 32-byte buffer failed with error 122
+and 64 bytes returned the header. But the answer's instance ID was empty
+and its bus, device and function unknown: on Windows 98 the driver gets
+neither. The tool rejected every answer whose ID did not equal the NHI's
+(`PCI\VEN_8086&DEV_15BF&SUBSYS_22B017AA&REV_01\0000083000`). The tool now
+accepts an answer with an empty ID when the record's NHI vendor and
+device equal the devnode's and no other NHI carries the same
+`XhciCmQueryName`; an answer with an ID still has to match it (`85f3fb90`).
+
+**With the fixed tool** (98 SE and ME, the Thunderbolt 3 controller, with
+no disk in the BIOS's view at power-on, which avoids an emulator hang at
+the 98 logo): the controller's details read "Source: the driver's query
+device", "Query device: XHCICM0 (matched by name ...)", the last pass and
+its age, "Liveness: answering", the start epoch, and the router "20
+Gbit/s per lane, x2 (reported by the firmware)". Safely Remove from a
+right click on the unit, from the Action menu, from the tray's menu and
+with `XHCITR /eject id=` showed the confirmation and "Windows has stopped
+NVM Express Controller (nvme98). ... You can now unplug the device."; the
+unit left the tree; unplug and re-plug brought it back. On ME the
+balloons read "... was disconnected." and "... connected (Thunderbolt
+3)." A plain USB device's Safely Remove is greyed. Not read: the 98 SE
+tooltip text, `/eject`'s exit code there, USB4 on 98 SE.
 
 ## Defects found and fixed in these legs
 
