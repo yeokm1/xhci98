@@ -1712,6 +1712,8 @@ static void test_tray(void)
 {
     static const INST_U32 v300[4] = { 3, 0, 0, 0 };
     static const INST_U32 v301[4] = { 3, 0, 0, 1 };
+    static const INST_U32 v302[4] = { 3, 0, 0, 2 };
+    char ini[512];
     char buf[512];
     char small[8];
     INST_OPTS o;
@@ -1736,18 +1738,47 @@ static void test_tray(void)
              "a quote in the path");
     CHECK_EQ(inst_tray_run_data("", buf, sizeof(buf)), 0, "an empty path");
 
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v300), 1, "absent: copied");
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, -1, NULL), 1,
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, 0, NULL, 1, v300), 1,
+             "absent: copied");
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, 0, NULL, -1, NULL), 1,
              "absent, package unread: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301), 1, "older: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300), 0, "equal: left");
-    CHECK_EQ(inst_tray_copy_needed(1, v301, 1, v300), 0, "newer: left");
-    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 1, v300), 1,
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v302, 1, v300), 1,
+             "absent beside a newer pending one: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, 1, v301), 1,
+             "older: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, 1, v300), 0,
+             "equal: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v301, 0, NULL, 1, v300), 0,
+             "newer: left");
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 0, NULL, 1, v300), 1,
              "installed unreadable: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL), 0,
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, -1, NULL), 0,
              "package unreadable: left");
-    CHECK_EQ(inst_tray_copy_needed(-1, NULL, -1, NULL), 0,
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 0, NULL, -1, NULL), 0,
              "both unreadable: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301, 1, v301), 0,
+             "a pending one at the package's version: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v302, 1, v301), 0,
+             "a newer pending one: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301, 1, v302), 1,
+             "newer than both: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL, 1, v301), 1,
+             "an unreadable pending one counts as older");
+
+    CHECK_EQ(inst_tray_drop_pending(1, 1, v300, 0, NULL, 1, v301), 0,
+             "copied, nothing pending");
+    CHECK_EQ(inst_tray_drop_pending(1, 1, v300, 1, v300, 1, v301), 1,
+             "copied: an older pending one cancelled");
+    CHECK_EQ(inst_tray_drop_pending(1, 0, NULL, 1, v302, 1, v301), 0,
+             "copied where missing: a newer pending one kept");
+    CHECK_EQ(inst_tray_drop_pending(1, 1, v300, -1, NULL, 1, v301), 1,
+             "copied: an unreadable pending one cancelled");
+    CHECK_EQ(inst_tray_drop_pending(0, 1, v300, 1, v302, 1, v301), 0,
+             "left: a newer pending one kept");
+    CHECK_EQ(inst_tray_drop_pending(0, 1, v301, 1, v300, 1, v300), 1,
+             "left: a pending one older than the installed one cancelled");
+    CHECK_EQ(inst_tray_drop_pending(0, 1, v300, -1, NULL, 1, v300), 0,
+             "left: an unreadable pending one kept");
 
     CHECK_EQ(inst_tray_run_action(0, 0, 1), INST_TRAY_RUN_SET, "absent: set");
     CHECK_EQ(inst_tray_run_action(0, 2, 1), INST_TRAY_RUN_SET, "other: set");
@@ -1808,6 +1839,31 @@ static void test_tray(void)
     CHECK(strcmp(buf, "[rename]\n") == 0, "header kept");
     CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\n", "NUL", "C:\\B",
                                small, sizeof(small)), -1, "too small to keep");
+
+    /* Record 25 section 8 on 98 SE and ME: an uninstall that found the tool
+     * in use leaves NUL=<tool>; a same-version reinstall before the restart
+     * takes that line (and no other) back, leaves the file, and writes the
+     * Run value again, so the restart keeps the file the value names. */
+    CHECK_EQ(inst_wininit_add("[rename]\r\nNUL=C:\\WINDOWS\\TEMP\\X.TMP\r\n",
+                              "NUL", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE", ini,
+                              sizeof(ini)), 1, "deferred uninstall");
+    CHECK_EQ(inst_wininit_drop(ini, "NUL", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
+                               buf, sizeof(buf)), 1, "reinstall: line taken back");
+    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\WINDOWS\\TEMP\\X.TMP\r\n") == 0,
+          "the other deletion kept");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, 1, v300), 0,
+             "reinstall: the file left");
+    CHECK_EQ(inst_tray_run_action(0, 0, 1), INST_TRAY_RUN_SET,
+             "reinstall: the Run value written again");
+    /* A deferred replacement on 98 SE and ME: <tool>=<.NEW>, cancelled by
+     * its exact line. */
+    CHECK_EQ(inst_wininit_add("", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
+                              "C:\\WINDOWS\\XHCI98\\XHCITR.NEW", ini,
+                              sizeof(ini)), 1, "deferred replacement");
+    CHECK_EQ(inst_wininit_drop(ini, "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
+                               "C:\\WINDOWS\\XHCI98\\XHCITR.NEW", buf,
+                               sizeof(buf)), 1, "replacement cancelled");
+    CHECK(strcmp(buf, "[rename]\r\n") == 0, "the section left empty");
 }
 
 int main(void)

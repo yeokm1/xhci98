@@ -676,14 +676,27 @@ const char *inst_tray_file(int arch);
  * or exe holds a quote. */
 int inst_tray_run_data(const char *exe, char *out, size_t cap);
 
-/* Whether the package's tool is copied over the installed one. installed:
+/* Whether the package's tool is copied (record 25 section 8). installed:
  * the installed copy's version as file_version answers it (1 read, 0 the
- * file absent, -1 unreadable), pkg the same for the package's copy. Copied
- * when the installed copy is absent, when its version is unreadable while
- * the package's is read, or when it is older; an equal or newer one is
- * left, and so is any copy when the package's version cannot be read. */
-int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
+ * file absent, -1 unreadable); pending the same for a replacement waiting
+ * for the restart (.NEW), which counts as installed at its own version;
+ * pkg the same for the package's copy. Copied when the installed copy is
+ * absent, or when the package's version is read and is newer than both the
+ * installed copy's and the pending one's (an unreadable one counts as
+ * older); otherwise left. */
+int inst_tray_copy_needed(int installed, const INST_U32 instVer[4],
+                          int pending, const INST_U32 newVer[4], int pkg,
                           const INST_U32 pkgVer[4]);
+
+/* Whether a pending replacement (.NEW) is cancelled by an install. copied:
+ * the package's tool was just copied in place (a copy staged as a new .NEW
+ * replaces the old one itself). After a copy, a pending one is cancelled
+ * unless it is newer than the package's; without one, only a pending one
+ * older than the installed copy is (it would undo it at the restart). An
+ * unreadable pending one is cancelled only by a copy. */
+int inst_tray_drop_pending(int copied, int installed, const INST_U32 instVer[4],
+                           int pending, const INST_U32 newVer[4], int pkg,
+                           const INST_U32 pkgVer[4]);
 
 /* What becomes of the Run value. runState: 0 absent, 1 the wanted data, 2
  * other data; inPlace: the tool's file is at its installed path (the value

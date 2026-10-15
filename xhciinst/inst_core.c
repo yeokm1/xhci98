@@ -2772,7 +2772,8 @@ int inst_tray_run_data(const char *exe, char *out, size_t cap)
     return 1;
 }
 
-int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
+int inst_tray_copy_needed(int installed, const INST_U32 instVer[4],
+                          int pending, const INST_U32 newVer[4], int pkg,
                           const INST_U32 pkgVer[4])
 {
     if (installed == 0) {
@@ -2781,10 +2782,27 @@ int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
     if (pkg != 1) {
         return 0;
     }
-    if (installed != 1) {
-        return 1;
+    if (installed == 1 && inst_ver_cmp(instVer, pkgVer) >= 0) {
+        return 0;
     }
-    return inst_ver_cmp(instVer, pkgVer) < 0;
+    if (pending == 1 && inst_ver_cmp(newVer, pkgVer) >= 0) {
+        return 0;
+    }
+    return 1;
+}
+
+int inst_tray_drop_pending(int copied, int installed, const INST_U32 instVer[4],
+                           int pending, const INST_U32 newVer[4], int pkg,
+                           const INST_U32 pkgVer[4])
+{
+    if (pending == 0) {
+        return 0;
+    }
+    if (copied) {
+        return pending != 1 || pkg != 1 || inst_ver_cmp(newVer, pkgVer) <= 0;
+    }
+    return pending == 1 && installed == 1 &&
+           inst_ver_cmp(newVer, instVer) < 0;
 }
 
 int inst_tray_run_action(int noTray, int runState, int inPlace)
