@@ -53,9 +53,9 @@ ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all    required  nt52-amd64-export; K
 ntoskrnl.exe!KeReleaseSpinLock             all    required  nt52-amd64-export; KeAcquireSpinLock/KeReleaseSpinLock on amd64 (the x86 HAL.dll Kf* rows)
 
 # --- The registry values: cm_reg.obj only ---
-ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=cm_reg.obj nt52-amd64-export; twin of the x86 row
-ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj nt52-amd64-export; twin of the x86 row
-ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
 
 # --- The log's emission, checked flavours only (decision D12): cm_log.obj ---
 ntoskrnl.exe!DbgPrint                      debug  required  SITES=cm_log.obj nt52-amd64-export; twin of the x86 row
@@ -88,6 +88,11 @@ ntoskrnl.exe!KeQueryTimeIncrement          all  required  nt52-amd64-export; the
 ntoskrnl.exe!ExCreateCallback              all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ExRegisterCallback            all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ExUnregisterCallback          all    required  SITES=cm_nvlinkos.obj nt52-amd64-export; twin of the x86 row
+
+# --- the status record (cm_statos.c, design record 24 section 3.2);
+# KeQuerySystemTime is inline on amd64 ---
+ntoskrnl.exe!ZwSetValueKey                 all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlInitUnicodeString          all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
 
 [deny]
 

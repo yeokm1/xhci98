@@ -59,6 +59,8 @@ SOURCES=cm_vals.c      \
         cm_filt.c      \
         cm_live.c      \
         cm_nvlinkos.c  \
+        cm_status.c    \
+        cm_statos.c    \
         xhcicm.rc
 
 !IF "$(XHCI_EXTRA_DEFINES)" != ""

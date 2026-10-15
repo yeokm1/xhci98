@@ -664,6 +664,7 @@ static VOID NTAPI cmThread(PVOID context)
         }
         if (bits & CM_WORK_STOP) {
             CmNhiStopWork(nhi);
+            CmStatusStopped(nhi);
             (VOID)KeSetEvent(&nhi->PnpDone, IO_NO_INCREMENT, FALSE);
         }
         if (bits & CM_WORK_EXIT) {
@@ -679,6 +680,7 @@ static VOID NTAPI cmThread(PVOID context)
         if (nhi->ReenumOn) {
             CmReenumService(nhi);
         }
+        CmStatusPass(nhi);
         /* The checked flavours' emission (decision D12), from here at
          * PASSIVE_LEVEL after each pass that recorded something; the
          * release flavour's CmLogEmit does nothing. */

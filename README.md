@@ -238,6 +238,14 @@ When the package's `xhciuas.sys` carries the same `DriverVer` as the one install
 
 Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
 
+### Safe removal of Thunderbolt and USB4 devices
+
+`INSTALL /devices` (or `tools\xhciinst\XHCIINST /devices`, `XHCIIN64` on 64-bit Windows) shows the Thunderbolt and USB4 devices connected now: each device's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which, and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it.
+
+- **Windows 98 SE and ME:** `INSTALL /eject` is the way to remove a Thunderbolt or USB4 device safely; these systems have no other. Until you unplug it, Device Manager's Refresh can start the device again.
+- **Windows 2000, XP, Vista and 7:** Unplug or Eject Hardware (2000) and Safely Remove Hardware (XP onward) work as usual. A device that was connected before the Thunderbolt driver started, or that was disabled and enabled, may be missing from them until it is plugged in again; `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device at all: the tool says so, and after a restart with the device connected it is listed for removal again. On 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation.
+- `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question, for scripts.
+
 ## Tuning
 
 Each value below is a `DWORD` in the controller's driver (software) key. Here is where to find the key:

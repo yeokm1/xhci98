@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../xhciinst/inst_core.h"
+#include "../src/cm/cm_status.h"
 #include "test_harness.h"
 
 static char *load(const char *path)
@@ -337,12 +338,19 @@ static void test_cm_infs(void)
           has_id(&ids, "PCI\\VEN_8086&DEV_15BF"), "XP: the captured NHI");
     for (i = 0; i < instValueCount; i++) {
         INST_U32 d;
+        INST_U32 d64;
+        INST_U32 offered;
         if (instValues[i].Inf != INST_INF_CM) {
             continue;
         }
         CHECK(inst_inf_addreg_default(cm, instValues[i].Name, &d),
               instValues[i].Name);
-        CHECK((instValues[i].Asked & (1UL << d)) != 0,
+        CHECK(inst_inf_addreg_default(c64, instValues[i].Name, &d64) &&
+                  d64 == d, "the amd64 INF writes the same default");
+        /* A never-asked row (Asked 0) offers its default through /set. */
+        offered = instValues[i].Asked != 0 ? instValues[i].Asked
+                                           : instValues[i].Settable;
+        CHECK(d < 32 && (offered & (1UL << d)) != 0,
               "the cm default is an offered answer");
     }
     free(cm);
@@ -763,6 +771,42 @@ static void test_values(void)
     CHECK(instValues[ss].Caution != NULL, "selective suspend carries its caution");
     CHECK_EQ(inst_value_set("=1", &idx, &v), -2, "no name");
     CHECK_EQ(inst_value_set("XhciCmMode", &idx, &v), -2, "no value");
+
+    /* Owner, 2026-10-15 (record 24 section 11): four connection-manager
+     * values never asked, /set only, each allowed set cm_vals.c's. */
+    {
+        static const char *const names[4] = {
+            "XhciCmReenum", "XhciCmUsb3Tunnel", "XhciCmLaneBonding",
+            "XhciCmPreOsCleanup"
+        };
+        static const INST_U32 top[4] = { 1, 1, 1, 2 };
+        char arg[64];
+        int k;
+        int ix;
+        INST_ENV en = env(0, 4, 10, INST_ARCH_X86);
+        en.CmNhi = 1;
+        for (k = 0; k < 4; k++) {
+            ix = inst_value_find(names[k]);
+            CHECK(ix >= 0, names[k]);
+            if (ix < 0) {
+                continue;
+            }
+            CHECK_EQ(instValues[ix].Asked, 0, "never asked");
+            CHECK(!inst_value_applies(ix, &en), "not asked with an NHI present");
+            CHECK_EQ(instValues[ix].Settable, (2UL << top[k]) - 1,
+                     "the allowed set is 0 to the rule's maximum");
+            sprintf(arg, "%s=%lu", names[k], (unsigned long)top[k]);
+            CHECK(inst_value_set(arg, &idx, &v) == 1 && idx == ix &&
+                      v == top[k], "/set takes the maximum");
+            sprintf(arg, "%s=0", names[k]);
+            CHECK(inst_value_set(arg, &idx, &v) == 1 && v == 0, "/set takes 0");
+            sprintf(arg, "%s=%lu", names[k], (unsigned long)(top[k] + 1));
+            CHECK_EQ(inst_value_set(arg, &idx, &v), -1,
+                     "/set refuses one past the maximum");
+            CHECK_EQ(inst_value_set_mask(ix, &en), instValues[ix].Settable,
+                     "settable on 98 SE");
+        }
+    }
 
     inst_mask_text(0x7, text, sizeof(text));
     CHECK(inst_eq(text, "0, 1, 2"), "mask text");
@@ -1228,6 +1272,370 @@ static void test_tree_sig(void)
     CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 1, "leaf");
 }
 
+/* ---- record 24: the Thunderbolt and USB4 device viewer and eject ---- */
+
+static void put32(unsigned char *b, size_t o, unsigned long v)
+{
+    b[o] = (unsigned char)(v & 0xFF);
+    b[o + 1] = (unsigned char)((v >> 8) & 0xFF);
+    b[o + 2] = (unsigned char)((v >> 16) & 0xFF);
+    b[o + 3] = (unsigned char)((v >> 24) & 0xFF);
+}
+
+static void test_tb_ids(void)
+{
+    char *cf = load("..\\src\\cm\\xhcicmf.inf");
+    char msz[64];
+    INST_U32 bdf;
+    unsigned char path[16];
+    unsigned char want[4];
+    int n;
+    int i;
+    int found;
+
+    /* The candidate table against xhcicmf.inf, both ways. */
+    if (cf != NULL) {
+        const char *p = cf;
+        int lines = 0;
+        while ((p = strstr(p, "=CmF.Dev,")) != NULL) {
+            char id[64];
+            size_t m = 0;
+            p += 9;
+            while (p[m] != '\r' && p[m] != '\n' && p[m] != '\0' &&
+                   p[m] != ' ' && p[m] != ';' && m + 1 < sizeof(id)) {
+                id[m] = p[m];
+                m++;
+            }
+            id[m] = '\0';
+            lines++;
+            found = 0;
+            for (i = 0; i < instTbPortIdCount; i++) {
+                if (inst_eq(instTbPortIds[i], id)) {
+                    found = 1;
+                }
+            }
+            CHECK(found, "every xhcicmf.inf model id is in the tool's table");
+        }
+        CHECK_EQ(lines, instTbPortIdCount,
+                 "the table holds exactly the INF's undecorated model ids");
+        for (i = 0; i < instTbPortIdCount; i++) {
+            char pat[80];
+            strcpy(pat, "=CmF.Dev,");
+            strcat(pat, instTbPortIds[i]);
+            CHECK(strstr(cf, pat) != NULL, "every table id is an INF model id");
+        }
+        free(cf);
+    } else {
+        printf("test_inst: xhcicmf.inf not in this tree; the table check skipped\n");
+    }
+    memset(msz, 0, sizeof(msz));
+    strcpy(msz, "PCI\\VEN_8086&DEV_15C0&CC_0604");
+    CHECK(inst_tb_candidate(msz, sizeof(msz)), "a candidate");
+    strcpy(msz, "PCI\\VEN_8086&DEV_15C0");
+    CHECK(!inst_tb_candidate(msz, sizeof(msz)), "the bare id is not");
+
+    /* Host functions. */
+    memset(msz, 0, sizeof(msz));
+    strcpy(msz, "PCI\\VEN_8086&DEV_15BF&CC_088000");
+    CHECK(inst_tb_is_nhi(msz, sizeof(msz), NULL, 0, ""), "class 0880 is an NHI");
+    CHECK(!inst_tb_is_usbhc(msz, sizeof(msz), NULL, 0, ""), "not a USB controller");
+    strcpy(msz, "PCI\\VEN_1B36&DEV_00F4&CC_0C0340");
+    CHECK(inst_tb_is_nhi(msz, sizeof(msz), NULL, 0, ""), "class 0C0340 is an NHI");
+    CHECK(!inst_tb_is_usbhc(msz, sizeof(msz), NULL, 0, ""), "an NHI is no USB controller");
+    strcpy(msz, "PCI\\VEN_8086&DEV_15C1&CC_0C0330");
+    CHECK(inst_tb_is_usbhc(msz, sizeof(msz), NULL, 0, ""), "an xHCI");
+    CHECK(!inst_tb_is_nhi(msz, sizeof(msz), NULL, 0, ""), "not an NHI");
+    strcpy(msz, "PCI\\VEN_1B36&DEV_0010&CC_010802");
+    CHECK(!inst_tb_is_nhi(msz, sizeof(msz), NULL, 0, "") &&
+              !inst_tb_is_usbhc(msz, sizeof(msz), NULL, 0, ""),
+          "an NVMe controller is neither");
+    CHECK(inst_tb_is_nhi(msz, sizeof(msz), NULL, 0, "XHCICM"),
+          "bound to xhcicm is an NHI");
+    strcpy(msz, "PCI\\VEN_1234&DEV_0C03");
+    CHECK(!inst_tb_is_usbhc(msz, sizeof(msz), NULL, 0, ""),
+          "a device id 0C03 is no class");
+
+    /* Windows 98's instance ids (runs/run-39.md). */
+    CHECK(inst_id_location("PCI\\VEN_1B36&DEV_0001&SUBSYS_00000000&REV_00\\BUS_00&DEV_06&FUNC_00",
+                           &bdf) && bdf == 0x0030, "BUS_00&DEV_06&FUNC_00");
+    CHECK(!inst_id_location("PCI\\VEN_8086&DEV_15C0\\08083000", &bdf),
+          "a path is no BUS_ form");
+    CHECK(inst_id_path("PCI\\VEN_8086&DEV_15C0&SUBSYS_00000000&REV_01\\08083000",
+                       path, &n, 16) && n == 4 && path[0] == 0x08 &&
+              path[2] == 0x30 && path[3] == 0, "08 08 30 00");
+    CHECK(!inst_id_path("PCI\\X\\0808300", path, &n, 16), "odd length");
+    CHECK(!inst_id_path("PCI\\X\\08G83000", path, &n, 16), "not hex");
+    want[0] = 0x08;
+    want[1] = 0x08;
+    want[2] = 0x30;
+    want[3] = 0x00;
+    CHECK(inst_tb_loc_match("PCI\\VEN_8086&DEV_15C0&SUBSYS_00000000&REV_01\\08083000",
+                            0x0208, want, 4), "02:01.0 by its path");
+    CHECK(!inst_tb_loc_match("PCI\\VEN_8086&DEV_15C0&SUBSYS_00000000&REV_01\\10083000",
+                             0x0210, want, 4), "02:02.0 is not that path");
+    CHECK(!inst_tb_loc_match("PCI\\VEN_8086&DEV_15C0&SUBSYS_00000000&REV_01\\08083000",
+                             0x0208, want, 0), "an unknown path matches nothing");
+    CHECK(inst_tb_loc_match("PCI\\VEN_1B36&DEV_0001\\BUS_00&DEV_05&FUNC_00",
+                            0x0028, want, 0), "a bus 0 member by its BUS_ form");
+}
+
+static void test_tb_record(void)
+{
+    unsigned char r[CM_ST_MAX_BYTES];
+    size_t n;
+
+    /* The pure half's numbers against cm_status.h. */
+    CHECK_EQ(CM_ST_HDR_BYTES, 128, "header size");
+    CHECK_EQ(CM_ST_ENTRY_BYTES, 128, "entry size");
+    CHECK_EQ(CM_ST_O_ROUTER_COUNT, 72, "count offset");
+    CHECK_EQ(CM_ST_O_ENTRY_BYTES, 76, "entry size offset");
+    CHECK_EQ(CM_ST_O_PATHS, 84, "paths offset");
+    CHECK_EQ(CM_ST_O_ECHO, 124, "echo offset");
+    CHECK_EQ(CM_ST_MAX_ROUTERS, 24, "router limit");
+
+    memset(r, 0, sizeof(r));
+    put32(r, CM_ST_O_MAGIC, CM_ST_MAGIC);
+    put32(r, CM_ST_O_VERSION, CM_ST_VERSION);
+    put32(r, CM_ST_O_ROUTER_COUNT, 1);
+    put32(r, CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
+    put32(r, CM_ST_O_BYTES, CM_ST_HDR_BYTES + CM_ST_ENTRY_BYTES);
+    put32(r, CM_ST_O_PORT_COUNT, 2);
+    n = CM_ST_HDR_BYTES + CM_ST_ENTRY_BYTES;
+    CHECK(inst_st_check(r, n), "a record checks");
+    CHECK(!inst_st_check(r, n - 1), "a short read");
+    put32(r, CM_ST_O_VERSION, 2);
+    CHECK(!inst_st_check(r, n), "an unknown version");
+    put32(r, CM_ST_O_VERSION, 1);
+    put32(r, CM_ST_O_ROUTER_COUNT, 25);
+    CHECK(!inst_st_check(r, n), "too many routers");
+    put32(r, CM_ST_O_ROUTER_COUNT, 1);
+    put32(r, CM_ST_O_PORT_COUNT, 5);
+    CHECK(!inst_st_check(r, n), "too many ports");
+    put32(r, CM_ST_O_PORT_COUNT, 2);
+    r[CM_ST_O_PATHS + 8] = 8;
+    CHECK(!inst_st_check(r, n), "a path count over 7");
+    r[CM_ST_O_PATHS + 8] = 4;
+    put32(r, CM_ST_O_MAGIC, 0);
+    CHECK(!inst_st_check(r, n), "no magic");
+    put32(r, CM_ST_O_MAGIC, CM_ST_MAGIC);
+
+    /* The echo is the confirmation; the generation alone is not. */
+    CHECK(!inst_st_confirmed(r, 0x1234), "no echo");
+    put32(r, CM_ST_O_ECHO, 0x1234);
+    CHECK(inst_st_confirmed(r, 0x1234), "the echo of this ask");
+    CHECK(!inst_st_confirmed(r, 0x1235), "another session's echo");
+    CHECK(!inst_st_confirmed(r, 0), "a zero ask is never confirmed");
+
+    /* The diagnostic boot-time label. Now = 2026-10-15 at FILETIME
+     * 0x01DD3D5F:00000000 (any value), uptime 600 s in the record and
+     * 600,000 ms in the tick count: the same boot. */
+    CHECK(inst_st_fresh(600, 0x00000000UL, 0x01DD3D5FUL, 0x00000000UL,
+                        0x01DD3D5FUL, 600000UL), "the same boot");
+    /* Written 10 minutes before a restart that happened 2 minutes ago:
+     * the boots are 12 minutes apart. */
+    CHECK(!inst_st_fresh(1200, 0x00000000UL, 0x01DD3D5FUL,
+                         0x00000000UL + 0x8F0D1800UL, 0x01DD3D5FUL + 1UL,
+                         120000UL), "an earlier boot");
+    /* Boots three minutes apart pass the label: it is diagnostic only. */
+    CHECK(inst_st_fresh(60, 0x00000000UL, 0x01DD3D5FUL, 0x6B49D200UL,
+                        0x01DD3D5FUL, 60000UL), "three minutes apart: labelled same");
+}
+
+static void test_tb_units(void)
+{
+    /* The emulator's Alpine Ridge tree on 98 SE:
+     *  0 root
+     *  1  PCI bus
+     *  2   00:06.0 root bridge (candidate 1B36:0001)
+     *  3    01:01.0 upstream port (15C0)
+     *  4     02:00.0 (15C0)
+     *  5      03:00.0 NHI
+     *  6     02:01.0 (15C0) - the verified tunnel port
+     *  7      04:00.0 NVMe
+     *  8     02:02.0 (15C0)
+     *  9      05:00.0 xHCI (the host's)
+     * 10       its root hub
+     */
+    int parent[16] = { -1, 0, 1, 2, 3, 4, 3, 6, 3, 8, 9 };
+    int isNhi[16] = { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
+    int isHc[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0 };
+    int verified[16] = { 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+    int prot[16];
+    int unitOf[16];
+    int n = 11;
+
+    inst_tb_protect(parent, isNhi, isHc, n, prot);
+    CHECK(prot[5] && prot[4] && prot[3] && prot[2] && prot[1] && prot[0],
+          "the NHI and its ancestors are protected");
+    CHECK(prot[9], "the host's xHCI beside the NHI is protected");
+    CHECK(!prot[7] && !prot[6], "the tunnelled NVMe and its port are not");
+    inst_tb_units(parent, verified, n, unitOf);
+    CHECK_EQ(unitOf[7], 7, "the NVMe is a unit");
+    CHECK_EQ(unitOf[9], -1, "the xHCI is no unit");
+    CHECK(!inst_tb_unit_blocked(unitOf, prot, n, 7), "the NVMe is offered");
+
+    /* An override naming the host xHCI's port 02:02.0. */
+    verified[8] = 1;
+    inst_tb_units(parent, verified, n, unitOf);
+    CHECK_EQ(unitOf[9], 9, "the xHCI becomes a unit under the override");
+    CHECK_EQ(unitOf[10], 9, "its root hub is inside it");
+    CHECK(inst_tb_unit_blocked(unitOf, prot, n, 9),
+          "but it holds a protected node and is not offered");
+    verified[8] = 0;
+
+    /* An override naming the NHI's own port 02:00.0. */
+    verified[4] = 1;
+    inst_tb_units(parent, verified, n, unitOf);
+    CHECK_EQ(unitOf[5], 5, "the NHI as a unit");
+    CHECK(inst_tb_unit_blocked(unitOf, prot, n, 5), "is never offered");
+    verified[4] = 0;
+
+    /* A dock: 02:01.0 -> dock upstream port 6.. with its own xHCI two
+     * levels down, and an NHI nested inside (a dock carrying a host). */
+    {
+        int dp[16] = { -1, 0, 1, 2, 3, 4, 3, 6, 7, 8, 7, 10 };
+        int dn[16] = { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
+        int dh[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0 };
+        int dv[16] = { 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0 };
+        /* 7 dock upstream, 8 its downstream, 9 the dock's xHCI, 10 its
+         * other downstream, 11 a network controller. */
+        inst_tb_protect(dp, dn, dh, 12, prot);
+        CHECK(!prot[9], "a dock's own xHCI is not the host's");
+        inst_tb_units(dp, dv, 12, unitOf);
+        CHECK(unitOf[7] == 7 && unitOf[9] == 7 && unitOf[11] == 7,
+              "the dock is one unit with everything below it");
+        CHECK(!inst_tb_unit_blocked(unitOf, prot, 12, 7), "and is offered");
+        dn[11] = 1;
+        inst_tb_protect(dp, dn, dh, 12, prot);
+        CHECK(inst_tb_unit_blocked(unitOf, prot, 12, 7),
+              "an NHI nested in a unit blocks it");
+    }
+}
+
+static void test_tb_eject(void)
+{
+    const char *text;
+    int withName;
+    char *argv1[6];
+    INST_OPTS o;
+    char err[256];
+
+    /* 98 SE and ME: a refused query is never followed by a removal; an
+     * accepted one always is. */
+    CHECK_EQ(inst_eject9x_query(0, &text), INST_EJ_DONE, "accepted: remove next");
+    CHECK_EQ(inst_eject9x_query(INST_CR_REMOVE_VETOED, &text), INST_EJ_VETO,
+             "vetoed");
+    CHECK(strstr(text, "in use") != NULL && strstr(text, "program is using") == NULL,
+          "the 9x veto names no cause");
+    CHECK_EQ(inst_eject9x_query(INST_CR_NO_SUCH_DEVNODE, &text), INST_EJ_CHANGED,
+             "gone");
+    CHECK_EQ(inst_eject9x_query(INST_CR_CALL_NOT_IMPLEMENTED, &text),
+             INST_EJ_UNSUPPORTED, "not offered");
+    CHECK_EQ(inst_eject9x_query(0x1F, &text), INST_EJ_VETO, "anything else");
+    CHECK_EQ(inst_eject9x_remove(0, &text), INST_EJ_DONE, "removed");
+    CHECK_EQ(inst_eject9x_remove(0x1F, &text), INST_EJ_FAILED,
+             "a removal failing after an accepted query");
+    CHECK(strstr(text, "Shut down Windows") != NULL, "says shut down first");
+
+    /* NT. */
+    CHECK_EQ(inst_eject_nt(0, 5, &text, &withName), INST_EJ_DONE,
+             "the veto type is read only with CR_REMOVE_VETOED");
+    CHECK_EQ(inst_eject_nt(INST_CR_REMOVE_VETOED, 5, &text, &withName),
+             INST_EJ_VETO, "an open handle");
+    CHECK(!withName && strstr(text, "program") != NULL, "says a program");
+    CHECK_EQ(inst_eject_nt(INST_CR_REMOVE_VETOED, 7, &text, &withName),
+             INST_EJ_VETO, "a driver");
+    CHECK(withName, "names the driver");
+    CHECK_EQ(inst_eject_nt(INST_CR_REMOVE_VETOED, 12, &text, &withName),
+             INST_EJ_RIGHTS, "insufficient rights: exit 1, as access denied");
+    CHECK(strstr(text, "administrator") != NULL, "says administrator");
+    CHECK_EQ(inst_eject_nt(INST_CR_ACCESS_DENIED, 0, &text, &withName),
+             INST_EJ_RIGHTS, "access denied");
+    CHECK_EQ(inst_eject_nt(INST_CR_INVALID_DEVNODE, 0, &text, &withName),
+             INST_EJ_CHANGED, "the list changed");
+    CHECK_EQ(inst_eject_nt(0x1F, 0, &text, &withName), INST_EJ_FAILED,
+             "unknown state");
+    CHECK(strstr(text, "shut down") != NULL, "an unknown state: shut down first");
+    CHECK(inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x0),
+          "an illegal request on a unit that is not removable: query and remove");
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x4),
+          "not for a removable unit");
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x80),
+          "not for a unit that is surprise-removal OK");
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 0, 0x0),
+          "not when the capabilities are not known");
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 5, 1, 0x0),
+          "never past an open handle");
+    CHECK(!inst_eject_nt_fallback(0, 8, 1, 0x0), "not after a success");
+    CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED), "not safe") != NULL,
+          "a unit that started again is not safe to unplug");
+    CHECK_EQ(inst_eject_code(INST_EJ_DONE), INST_EXIT_DONE, "done 0");
+    CHECK_EQ(inst_eject_code(INST_EJ_VETO), INST_EXIT_STEPS, "veto 4");
+    CHECK_EQ(inst_eject_code(INST_EJ_CHANGED), INST_EXIT_REFUSED, "changed 1");
+    CHECK_EQ(inst_eject_code(INST_EJ_RIGHTS), INST_EXIT_REFUSED, "rights 1");
+    CHECK_EQ(inst_eject_code(INST_EJ_UNSUPPORTED), INST_EXIT_REFUSED, "unsupported 1");
+    CHECK_EQ(inst_eject_code(INST_EJ_FAILED), INST_EXIT_FAILED, "uncertain 2");
+
+    /* The advice after an eject. */
+    CHECK_EQ(inst_unplug_kind(1, 0, 1, CM_ST_TUN_NONE), INST_UNPLUG_NOW,
+             "an enclosure alone, no USB3 tunnel: unplug now");
+    CHECK_EQ(inst_unplug_kind(1, 1, 1, CM_ST_TUN_NONE), INST_UNPLUG_OTHERS,
+             "another unit left");
+    CHECK_EQ(inst_unplug_kind(1, 0, 0, CM_ST_TUN_NONE), INST_UNPLUG_CHECK,
+             "a dock-shaped unit");
+    CHECK_EQ(inst_unplug_kind(1, 0, 1, CM_ST_TUN_UNKNOWN), INST_UNPLUG_CHECK,
+             "USB3 not known");
+    CHECK_EQ(inst_unplug_kind(1, 0, 1, CM_ST_TUN_UP), INST_UNPLUG_CHECK,
+             "USB3 up");
+    CHECK_EQ(inst_unplug_kind(0, 0, 1, CM_ST_TUN_NONE), INST_UNPLUG_CHECK,
+             "the walk after it incomplete");
+    CHECK(inst_eq(inst_unplug_text(INST_UNPLUG_NOW),
+                  "You can now unplug the device."), "the owner's words");
+
+    /* The switches. */
+    argv1[0] = "x";
+    argv1[1] = "/devices";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Devices,
+          "/devices");
+    argv1[1] = "/eject";
+    CHECK(inst_parse_args(2, argv1, &o, err, sizeof(err)) == 0 && o.Eject &&
+              o.EjectNum == 0, "/eject alone");
+    argv1[2] = "2";
+    CHECK(inst_parse_args(3, argv1, &o, err, sizeof(err)) == 0 &&
+              o.EjectNum == 2, "/eject 2");
+    argv1[3] = "/yes";
+    CHECK_EQ(inst_parse_args(4, argv1, &o, err, sizeof(err)), 1,
+             "/eject 2 /yes refused");
+    argv1[2] = "id=PCI\\VEN_1B36&DEV_0010\\0008083000";
+    CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 0 && o.Yes &&
+              inst_eq(o.EjectId, "PCI\\VEN_1B36&DEV_0010\\0008083000"),
+          "/eject id=... /yes");
+    argv1[2] = "id";
+    argv1[3] = "PCI\\X\\00";
+    argv1[4] = "/yes";
+    CHECK(inst_parse_args(5, argv1, &o, err, sizeof(err)) == 0 &&
+              inst_eq(o.EjectId, "PCI\\X\\00"), "COMMAND.COM's split id= joined");
+    argv1[2] = "0";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1, "number 0");
+    argv1[2] = "x";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1, "a word");
+    argv1[1] = "/devices";
+    argv1[2] = "/list";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
+             "/devices /list refused");
+    argv1[2] = "/eject";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
+             "/devices /eject refused");
+    argv1[2] = "/dir";
+    argv1[3] = "release-x86";
+    CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 0,
+          "INSTALL.BAT's /dir is accepted");
+    argv1[1] = "/eject";
+    argv1[2] = "/uninstall";
+    CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
+             "/eject /uninstall refused");
+}
+
 int main(void)
 {
     test_versions();
@@ -1245,6 +1653,10 @@ int main(void)
     test_flow();
     test_pe_signed();
     test_tree_sig();
+    test_tb_ids();
+    test_tb_record();
+    test_tb_units();
+    test_tb_eject();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

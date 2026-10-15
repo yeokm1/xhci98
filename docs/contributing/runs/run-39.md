@@ -915,3 +915,55 @@ re-plug); `nvme98`'s presence-lost statement (its link-state channel has
 none in this build; owed);
 the 98 SE, ME and NT 5.1/6.x tiers (39-V.1, 39-V.3); the `release` and
 `debug` flavours.
+
+## 39-A.8 follow-up - The device viewer and eject (`XHCIINST /devices`, `/eject`)
+
+**Verdict: passes on Windows 98 SE and Windows 2000** (2026-10-15), design
+record 24. On 98 SE the tool listed the tunnelled NVMe enclosure from the
+driver's confirmed status record, ejected it while idle, refused while a
+file was held open on its volume and left the volume working, ejected it
+once the file was closed, and the device came back at the re-plug with its
+data intact. On 2000 the same, through `CM_Request_Device_EjectA`, with no
+Unsafe Removal dialog at the unplug; a device Windows does not see as
+removable cannot be stopped there at all, and the tool says so.
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-Usb4Profile tb3 -Bios OFF_OFF`, run root `vm\eject9x\`, QMP and VNC
+47970/47971 (98 SE) and 47972/47973 (2000). The emulator binary was
+`vm\usb4\bin-5ba7f60\qemu-system-x86_64.exe` (`v11.1.2-161-g20655c3`)
+for every leg, passed with `-Qemu`. The NVMe behind the tunnel was an
+overlay of `usb4-emu`'s `vms\win98\nvme32.qcow2` (FAT32), opened read-only
+as a backing file. Guests: 98 SE from a copy of the `vm\usb4\reenum-98`
+overlay (`vm\t26\win98-gold.qcow2` below it; `xhcicm.sys` bound to the
+NHI, `nvme98` on the NVMe), `xhcicm.sys` replaced by this branch's `qemu`
+flavour; 2000 from a copy of `vm\usb4\reenum-2k` (`xhcicm.sys` and the
+tunnel-port filter, `nvme98` 0.1.0.0), the same replacement. The tool was
+this branch's `XHCIINST.EXE`, run from the transfer disk with its output
+redirected to a file; on 98 SE the confirmation answered through
+`echo Y|`.
+
+| Leg | Windows 98 SE | Windows 2000 |
+|---|---|---|
+| D, viewer, nothing plugged | the controller, "firmware connection manager, security level 1", "confirmed now", "Nothing is connected", the verified port 02:01.0 found by its 98 path `08083000`, "(nothing behind it now)" | - |
+| D, viewer, plugged | the router "QEMU USB4 NVMe Enclosure", Thunderbolt 3, link 1, depth 1, approved, Thunderbolt ids `46F4:0004`, PCIe up; unit [1] "NVM Express Controller (nvme98)" with its disk entry, "marked removable by the Thunderbolt driver", its instance id `...\0808083000` | the same router; the port by bus and address; unit [1] with "removable: yes; surprise removal OK: no (listed in Safely Remove Hardware)" |
+| E1, eject idle | `CM_Query_Remove_SubTree` then `CM_Remove_SubTree` accepted, "Windows has stopped NVM Express Controller (nvme98).", exit 0; the unplug: `tbt.icm.device-gone`, `cm.action.tunnel-down`, the worker's re-enumeration, no fault | `CM_Request_Device_EjectA` (from `setupapi.dll`: `cfgmgr32.dll` does not export it, the log's routine lines) accepted, "You can now unplug the device.", exit 0; `xhcicm.sys` logged `cm.reenum.eject` and `cm.reenum.eject.tunnel-left-up` (the child filter's hand-off, as after the applet); the unplug: no Unsafe Removal dialog |
+| E2, a file held open (`type con`/`copy con` to the NVMe volume) | "Windows refused: the device is in use (...)", exit 4; the held file closed, read back, a test file written, then the eject accepted | `CR_REMOVE_VETOED` with the volume named ("Windows refused: STORAGE\Volume\... did not allow it."), exit 4; the file closed, then the eject accepted |
+| E3, re-plug after the eject and unplug | the device back at the plug, `nvme98` started, marked removable; `fc` of the test file against the original: no differences | (the same plug brought the device back, listed again) |
+| E4, disabled and enabled in Device Manager | - | the unit's capabilities read `Removable` no; `CM_Request_Device_EjectA` answered `CR_REMOVE_VETOED`, veto 8 (`PNP_VetoIllegalDeviceRequest`); `CM_Query_And_Remove_SubTreeA` answered `CR_CALL_NOT_IMPLEMENTED` from `cfgmgr32.dll` and from `setupapi.dll`; the tool's step text, exit 4, the device still started. After a restart with the device connected its capabilities read `Removable` again |
+
+**Readings taken by the legs, and changed in the code the same day:** the
+viewer showed "no driver" for an IOS miniport on 98 SE (it now shows the
+driver key's `PortDriver`, or `DevLoader` for a disk); the record said
+"USB3 not known" for Alpine Ridge on 98 SE, because the AddDevice profile
+it was taken from is not read on 98 (it now takes the running ICM row's
+generation: the 2000 leg read "USB3 none"); the 2000 tree's root devnode
+answers no property of its own and was counted as an unread entry (it no
+longer is); on 2000 the query-and-remove routine is not implemented, so
+the not-removable case gets a step rather than an error.
+
+**Not read here.** ME (no ME image with `xhcicm.sys` installed on this
+host); XP, Vista and 7, and so the not-removable case there; the USB4
+profile (`usb4-generic`); a dock with several units; a removal that fails
+after an accepted query; leg E5 (a unit unplugged between the confirmation
+and the call), which the host suite covers with injected answers; the
+`release` and `debug` flavours.

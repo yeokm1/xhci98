@@ -198,6 +198,11 @@ rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
 rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
 rem                  the bridge filter's snapshot, and the resume hold's
 rem                  watchdog bound
+rem   test_cm_status - the status record xhcicm.sys publishes for the install
+rem                  tool's viewer (src\cm\cm_status.c, design record 24
+rem                  section 3): the record from an ICM table and a USB4
+rem                  port set, nothing secret copied, the change compare,
+rem                  and the Windows 98 instance path
 rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
 rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
 rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
@@ -490,6 +495,9 @@ rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
 rem resume hold's bound (39-A.5 driver half, 39-A.8).
 call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
+rem test_cm_status links the status record's builder alone (design record
+rem 24 section 3), over its own fake configuration space.
+call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

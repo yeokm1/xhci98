@@ -7,6 +7,10 @@ rem
 rem   INSTALL            install or update, after one question
 rem   INSTALL /list      show what would be done; change nothing
 rem   INSTALL /uninstall remove the drivers (asks for the word REMOVE)
+rem   INSTALL /devices   show the connected Thunderbolt and USB4 devices
+rem   INSTALL /eject     remove one of them safely (Windows 98 SE and ME:
+rem                      the way to do it; 2000 and later: also for a
+rem                      device Safely Remove Hardware does not list)
 rem   INSTALL /debug     use the debug- directory (troubleshooting only)
 rem
 rem tools\xhciinst\readme.txt has the rest. ASCII, CRLF line endings: MS-DOS
