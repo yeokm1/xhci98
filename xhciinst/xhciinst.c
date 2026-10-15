@@ -6879,7 +6879,10 @@ static void tb_later_note(const char *dir)
             "the Thunderbolt ports get their\nfilter too.\n");
     } else {
         out("\nThe Thunderbolt driver is in %s: when the controller appears, the "
-            "hardware\nwizard finds xhcicm.inf there by itself.\n", dir);
+            "hardware\nwizard finds xhcicm.inf there by itself (\"Search for "
+            "the best driver\", no box\nticked). When Windows then asks for "
+            "the \"xhci98 xHCI Host Controller Disk\", type\n%s under "
+            "\"Copy files from\" and OK.\n", dir, dir);
     }
 }
 

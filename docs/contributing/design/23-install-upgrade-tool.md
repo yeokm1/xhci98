@@ -1246,7 +1246,14 @@ it is.
   take only by an install the tool forces on XP and 7 (record 21 section
   3.3), comes from running `INSTALL.BAT` again then, which the run says.
   On 98 SE and ME `xhcicm.inf` stays in the local copy `DevicePath` names
-  (section 6.2), where the hardware wizard finds it.
+  (section 6.2), where the hardware wizard finds it; as for the
+  controller, the files then come from the copy's directory typed under
+  "Copy files from", and the run's closing note names that directory.
+  **Read on 98 SE** (2026-10-15): a Y with no controller, then the
+  controller at the next start - the wizard offered `XHCICM.INF` from the
+  copy with no box ticked, asked for the "xhci98 xHCI Host Controller
+  Disk" at `D:\WIN98`, and installed the host interface once the copy's
+  directory was typed.
 - **N**: the three files are left out of this run - not planned, not
   staged in the driver store, not copied into the local copy (so no wizard
   and no store offers them), and no `XhciCm*` question asked. A
