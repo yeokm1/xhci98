@@ -466,6 +466,9 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_cm_live links nothing else: the host-interface liveness monitor's
+rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
+call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"

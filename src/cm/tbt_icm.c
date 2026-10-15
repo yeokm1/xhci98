@@ -1889,6 +1889,60 @@ VOID TbtIcmUnbind(PTBT_ICM icm)
     tbtIcmTearDown(icm);
 }
 
+VOID TbtIcmLost(PTBT_ICM icm)
+{
+    ULONG i;
+
+    icm->QueueCount = 0;
+    icm->RediscoverPending = FALSE;
+    icm->RediscoverRun = 0;
+    icm->InWait = FALSE;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (icm->Devices[i].InUse) {
+            tbtIcmDrop(icm, i, TBT_ICM_WHY_UNAVAILABLE, FALSE);
+        }
+    }
+    icm->ResyncPending = TRUE;
+    icm->ResyncWhy = TBT_ICM_WHY_UNAVAILABLE;
+    icm->Counters.Lost++;
+    tbtIcmLog(icm, "tbt.icm.lost", icm->ActionCount);
+}
+
+LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
+{
+    LONG rc;
+    ULONG i;
+
+    if (icm->Ring->Va == NULL) {
+        return TBT_E_STOPPED;
+    }
+    icm->Counters.Recoveries++;
+    if (full) {
+        if (icm->Started || icm->Ring->DmaMayRun) {
+            TbtRingStop(icm->Ring);
+        }
+        icm->Started = FALSE;
+        icm->Bound = FALSE;
+        icm->Session = FALSE;
+        icm->Failed = FALSE;
+        tbtIcmRetirePending(icm);
+        return tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
+                             TBT_RING_DMA_BYTES, FALSE);
+    }
+    if (!icm->Started || !icm->Bound) {
+        return TBT_E_STOPPED;
+    }
+    rc = tbtIcmAnnounceAll(icm, TRUE);
+    if (rc != TBT_OK) {
+        for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+            icm->Devices[i].Stale = FALSE;
+        }
+        return rc;
+    }
+    tbtIcmFinishAnnounce(icm, TRUE);
+    return TBT_OK;
+}
+
 /* ====================================================================== */
 /* The idle poll                                                          */
 /* ====================================================================== */

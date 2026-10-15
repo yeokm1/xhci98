@@ -121,7 +121,7 @@ static const char *const cmIcmCounterNames[] = {
     "cm.icm.reconciled", "cm.icm.mailbox.sent", "cm.icm.mailbox.ok",
     "cm.icm.mailbox.errors", "cm.icm.mailbox.timeouts",
     "cm.icm.hostpoll.tries", "cm.icm.hostpoll.answered", "cm.icm.idle-polls",
-    "cm.icm.rediscoveries"
+    "cm.icm.rediscoveries", "cm.icm.lost", "cm.icm.recoveries"
 };
 
 static const char *const cmRingCounterNames[] = {
@@ -130,7 +130,7 @@ static const char *const cmRingCounterNames[] = {
     "cm.ring.tx-stuck", "cm.ring.ctl.reads", "cm.ring.ctl.retries",
     "cm.ring.ctl.timeouts", "cm.ring.ctl.notify", "cm.ring.ctl.stale",
     "cm.ring.unsolicited", "cm.ring.ctl.writes", "cm.ring.ring0-was-enabled",
-    "cm.ring.other-rings-enabled"
+    "cm.ring.other-rings-enabled", "cm.ring.stop-unverified"
 };
 
 static const char *const cmNhiCounterNames[] = {
@@ -422,7 +422,9 @@ BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
     ULONG i;
 
     if (!nhi->U4On) {
-        return TRUE;
+        /* Never from a host interface the liveness gate closed: what
+         * depends on its power is unknown (record 21 section 5.6). */
+        return CmNhiHwAccess(nhi);
     }
     if (!nhi->U4ClearOk || nhi->Stage != CM_STAGE_ACTIVE || nhi->Suspended ||
         nhi->U4.Failed || nhi->U4.Suspended || nhi->Power.FwReadyFailed ||
@@ -443,6 +445,132 @@ BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
         }
     }
     return TRUE;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Liveness (cm_live.h, record 21 sections 5.5 and 5.6)                   */
+/* ---------------------------------------------------------------------- */
+
+BOOLEAN CmNhiHwAccess(PCM_NHI nhi)
+{
+    return CmLiveTransport(&nhi->Live);
+}
+
+/* From the PnP dispatch: the gate shut for good before the stop's work is
+ * queued, so a sequence the thread is inside ends at its next access or
+ * wait (TBT_HOST.Cancelled). IRQL: PASSIVE_LEVEL. */
+VOID CmNhiRevoke(PCM_NHI nhi)
+{
+    CmLiveRevoke(&nhi->Live);
+    CmLogNote(nhi, "cm.live.revoked", nhi->Live.State);
+}
+
+/* The USB4 profile's containment (record 22 section 3.5): transport,
+ * lifecycle, ejects and deferred work refused until a PnP stop and start;
+ * DMA memory, force power, reservations and obligations kept. The gate
+ * already refuses every access; the profile's own containment of its
+ * queued and deferred work is task u4-live's. */
+VOID CmNhiU4Contain(PCM_NHI nhi)
+{
+    CmLogNote(nhi, "u4.contained", CmLiveEpisode(&nhi->Live));
+}
+
+/* The precondition of a recovery: the function still the one the healthy
+ * start found (identity and BAR0 through configuration space), the host
+ * interface answering, and - for the ICM client - the selection's tests
+ * again on reads alone, the outcome unchanged. A read refused or unknown
+ * refuses the recovery, never the containment before it. */
+static BOOLEAN cmLiveValidate(PCM_NHI nhi)
+{
+    TBT_HW_SELECTION sel;
+    ULONG v;
+
+    nhi->CfgStrict = 1;
+    v = CmCfgRead32(nhi, 0x00);
+    if (v != nhi->LiveIds) {
+        nhi->CfgStrict = 0;
+        CmLogNote(nhi, "cm.live.ids-changed", v);
+        return FALSE;
+    }
+    v = CmCfgRead32(nhi, 0x10);
+    nhi->CfgStrict = 0;
+    if (v == 0xFFFFFFFFUL || (v & ~0xFUL) != (nhi->LiveBar0 & ~0xFUL)) {
+        /* Reassigned or reset: only a PnP stop and start can map it. */
+        CmLogNote(nhi, "cm.live.bar-changed", v);
+        return FALSE;
+    }
+    if (CmThrProbe32(nhi, TBT_HI_CAPS) == 0xFFFFFFFFUL) {
+        return FALSE;
+    }
+    if (nhi->U4On) {
+        return FALSE;
+    }
+    nhi->AccessClass = CM_ACCESS_PROBE;
+    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, TbtHwIsApple(nhi->SubVendor),
+                FALSE, &sel);
+    nhi->AccessClass = CM_ACCESS_ORDINARY;
+    CmLogNote(nhi, "cm.live.select", sel.Outcome);
+    return (BOOLEAN)(sel.Outcome == TBT_SEL_ICM);
+}
+
+/* The recovery the monitor admitted, on the retained buffer, under the
+ * RECOVERY class; ACTIVE again only for this episode and only if nothing
+ * revoked it meanwhile (CmLiveRecovered). */
+static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
+{
+    ULONG episode;
+    LONG rc;
+    BOOLEAN ok;
+
+    episode = CmLiveEpisode(&nhi->Live);
+    CmLiveTransition(&nhi->Live, TRUE);
+    nhi->AccessClass = CM_ACCESS_RECOVERY;
+    rc = TbtIcmRecover(&nhi->Icm, full);
+    nhi->AccessClass = CM_ACCESS_ORDINARY;
+    CmLiveTransition(&nhi->Live, FALSE);
+    ok = (BOOLEAN)(rc == TBT_OK);
+    CmLogNote(nhi, "cm.live.recover", (full ? 0x100UL : 0) | (ULONG)(-rc));
+    if (CmLiveRecovered(&nhi->Live, episode, ok,
+                        CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG),
+                        nhi->Host.NowMs(nhi))) {
+        CmLogNote(nhi, "cm.live.active", episode);
+        CmNhiDrainActions(nhi);
+    }
+}
+
+VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions)
+{
+    ULONG more;
+
+    if (actions & CM_LIVE_ACT_LOG) {
+        CmLogNote(nhi, "cm.live.state",
+                  (CmLiveEpisode(&nhi->Live) << 8) | nhi->Live.State);
+    }
+    if (actions & CM_LIVE_ACT_CONTAIN) {
+        CmNhiU4Contain(nhi);
+        return;
+    }
+    if ((actions & CM_LIVE_ACT_RECONCILE) && !nhi->U4On) {
+        /* Presence lost, nothing about the endpoint proven: every entry
+         * goes as UNAVAILABLE and the seam is told (record 21 section
+         * 7.3); no register is touched. */
+        TbtIcmLost(&nhi->Icm);
+        CmNhiDrainActions(nhi);
+        if (nhi->ReenumOn) {
+            CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
+        }
+    }
+    if (actions & CM_LIVE_ACT_VALIDATE) {
+        more = CmLiveValidated(&nhi->Live, cmLiveValidate(nhi));
+        if (more & CM_LIVE_ACT_LOG) {
+            CmLogNote(nhi, "cm.live.state",
+                      (CmLiveEpisode(&nhi->Live) << 8) | nhi->Live.State);
+        }
+        if (more & (CM_LIVE_ACT_RECOVER_LIGHT | CM_LIVE_ACT_RECOVER_FULL)) {
+            cmLiveRecover(nhi,
+                          (BOOLEAN)((more & CM_LIVE_ACT_RECOVER_FULL) != 0));
+        }
+    }
 }
 
 /* The tunnel-port set the re-enumeration seam discovered, readable: its
@@ -1165,6 +1293,9 @@ VOID CmNhiStartWork(PCM_NHI nhi)
 
     nhi->StartStatus = STATUS_SUCCESS;
     nhi->BindOwed = 0;
+    /* A new start, new resources: the monitor begins OFF, unrevoked. */
+    CmLiveInit(&nhi->Live, 0, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+    nhi->AccessClass = CM_ACCESS_ORDINARY;
     mode = nhi->Values.Value[CM_VAL_MODE];
     if (mode == CM_MODE_OFF) {
         cmInert(nhi, CM_INERT_MODE_OFF);
@@ -1179,7 +1310,10 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     }
     nhi->Vendor = v & 0xFFFFUL;
     nhi->Device = (v >> 16) & 0xFFFFUL;
+    nhi->LiveIds = v;
     CmLogNote(nhi, "cm.cfg.ids", v);
+    /* BAR0 as the healthy start found it, for a recovery's precondition. */
+    nhi->LiveBar0 = CmCfgRead32(nhi, 0x10);
     /* The class and the subsystem ids, each read whole: a read refused or
      * all ones decides nothing, and the Apple policy of test (a) needs the
      * subsystem vendor established, not assumed. */
@@ -1282,6 +1416,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
 VOID CmNhiBind(PCM_NHI nhi)
 {
     LONG rc;
+    ULONG v;
 
     if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
         CmPowerSleeping(nhi)) {
@@ -1298,6 +1433,10 @@ VOID CmNhiBind(PCM_NHI nhi)
                      TBT_RING_DMA_BYTES);
     CmLogNote(nhi, "cm.bind", (ULONG)(-rc));
     if (rc == TBT_OK) {
+        /* Monitored from here, against the size register's value now. */
+        v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+        (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
+        CmLogNote(nhi, "cm.live.baseline", v);
         CmLogNote(nhi, "cm.driver-ready", nhi->Icm.Ready.Flags);
         CmLogNote(nhi, "cm.dev.count", TbtIcmDeviceCount(&nhi->Icm));
         CmNhiDrainActions(nhi);
@@ -1342,7 +1481,14 @@ VOID CmNhiStopWork(PCM_NHI nhi)
         }
         CmNhiDrainActions(nhi);
     } else if (nhi->Icm.Ring != NULL) {
-        if (powered) {
+        if (powered && !CmNhiHwAccess(nhi)) {
+            /* The liveness gate is closed (record 21 section 5.6): no ring
+             * stop and no 0x07 to a host interface that stopped answering
+             * or was removed; the buffer is kept unless a stop was
+             * verified (cm_pool.c). */
+            CmLogNote(nhi, "cm.unbind.no-access", nhi->Live.State);
+            powered = FALSE;
+        } else if (powered) {
             TbtIcmUnbind(&nhi->Icm);
         } else {
             /* Out of D0 the rings were stopped by the suspend's sequence
@@ -1353,6 +1499,11 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     }
     cmLogTable(nhi);
     cmLogCounters(nhi);
+    CmLogNote(nhi, "cm.live.final", (CmLiveEpisode(&nhi->Live) << 8) |
+                                        nhi->Live.State);
+    CmLogNote(nhi, "cm.live.refused",
+              (nhi->Live.Counters.RefusedWrites << 16) |
+                  (nhi->Live.Counters.RefusedReads & 0xFFFFUL));
     CmDmaClose(nhi);
     if (powered && active) {
         (VOID)CmNhiSetBusMaster(nhi, FALSE);
@@ -1366,6 +1517,7 @@ VOID CmNhiStopWork(PCM_NHI nhi)
         MmUnmapIoSpace(nhi->BarVa, nhi->BarLength);
         nhi->BarVa = NULL;
     }
+    CmLiveDisarm(&nhi->Live);
     nhi->Stage = CM_STAGE_STOPPED;
 }
 
@@ -1522,6 +1674,11 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
 
     case IRP_MN_STOP_DEVICE:
     case IRP_MN_SURPRISE_REMOVAL:
+        if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
+            /* The function is gone: no access of any class from now, even
+             * inside a sequence the thread is running (cm_live.h). */
+            CmNhiRevoke(nhi);
+        }
         cmNhiStop(nhi, stack->MinorFunction);
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;

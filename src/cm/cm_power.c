@@ -189,9 +189,16 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
             CmReenumStop(nhi);
             nhi->ReenumOn = 0;
         }
-        CmNhiUnbind(nhi);
-        CmNhiDrainActions(nhi);
-        (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        if (nhi->U4On || CmNhiHwAccess(nhi)) {
+            CmNhiUnbind(nhi);
+            CmNhiDrainActions(nhi);
+            (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        } else {
+            /* The liveness gate is closed: nothing is written to a host
+             * interface that stopped answering (record 21 section 5.6). */
+            CmLogNote(nhi, "cm.shutdown.no-access", nhi->Live.State);
+            CmNhiDrainActions(nhi);
+        }
         CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
         return;
     }
@@ -210,6 +217,12 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     }
     if (nhi->ReenumOn) {
         CmReenumSuspend(nhi);
+    }
+    /* A monitored instance stops being sampled; one the gate closed stays
+     * closed, so its suspend and its resume touch nothing and the resume
+     * takes the failure path (U15's order). */
+    if (CmNhiHwAccess(nhi)) {
+        CmLiveDisarm(&nhi->Live);
     }
     if (nhi->U4On) {
         cmU4Suspend(nhi);
@@ -267,6 +280,11 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         if (rc != TBT_OK) {
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             ok = FALSE;
+        } else {
+            (VOID)CmLiveArm(&nhi->Live,
+                            CmThrProbe32(nhi, TBT_RX_RING(0) +
+                                                  TBT_RING_SIZE_REG),
+                            nhi->Host.NowMs(nhi));
         }
     }
     if (!ok) {

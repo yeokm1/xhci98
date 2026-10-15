@@ -55,6 +55,7 @@ SOURCES=cm_vals.c      \
         cm_reenum.c    \
         cm_cfgmg.c     \
         cm_filt.c      \
+        cm_live.c      \
         xhcicm.rc
 
 !IF "$(XHCI_EXTRA_DEFINES)" != ""

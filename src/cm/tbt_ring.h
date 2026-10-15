@@ -72,6 +72,11 @@ typedef struct _TBT_HOST {
     VOID  (*Log)(PVOID context, const char *label, ULONG value);
     ULONG (*ClockUs)(PVOID context);
     ULONG TickUs;
+    /* TRUE once the host interface may no longer be accessed (cm_live.h:
+     * the gate closed, or the device revoked): every deadline and wait of
+     * the core ends at once, so no sequence keeps polling a register the
+     * gate refuses. NULL: never. */
+    BOOLEAN (*Cancelled)(PVOID context);
 } TBT_HOST, *PTBT_HOST;
 
 /* ---------------------------------------------------------------------- */
@@ -203,6 +208,8 @@ typedef struct _TBT_RING_COUNTERS {
     ULONG CtlWrites;
     ULONG Ring0WasEnabled;  /* takeover: ring 0 read enabled (TX or RX) */
     ULONG OtherRingsEnabled;/* takeover: rings 1 and up read enabled, left alone */
+    ULONG StopUnverified;   /* a stop whose read-back did not show both
+                               controls disabled: DmaMayRun kept */
 } TBT_RING_COUNTERS;
 
 typedef struct _TBT_RING {
@@ -221,6 +228,11 @@ typedef struct _TBT_RING {
     ULONG TxConsumeUs;      /* a request's consumption bound; 0: TBT_TX_CONSUME_MS */
     BOOLEAN Running;
     BOOLEAN Programmed;     /* the last start wrote ring registers */
+    /* Set before the first write that enables a ring, cleared only by a
+     * stop whose read-back, after the settle, shows both ring 0 controls
+     * readable and disabled: until then the host interface may still DMA
+     * into the common buffer, which is therefore never freed (cm_pool.c). */
+    BOOLEAN DmaMayRun;
 
     /* The error notification that ended the last request with
      * TBT_E_NOTIFY (Spec 6.4.3): its event code, Event Info and the route

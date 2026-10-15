@@ -331,6 +331,17 @@ VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
  * (cm_power.c's D0 completion calls it). */
 VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 VOID CmReenumStop(struct _CM_NHI *nhi);
+/*
+ * The host interface lost (cm_live.h, CM_LIVE_ACT_RECONCILE) in that
+ * episode: called once per episode after the client's TUNNEL_DOWN and
+ * RESYNC actions (why TBT_ICM_WHY_UNAVAILABLE) were handed over. On NT
+ * those actions' invalidations are the reconciliation and this records the
+ * episode; on 98 SE and ME it is the CONFIGMG worker's CONTROLLER_UNAVAILABLE
+ * route, which removes the children recorded at tunnel up without reading
+ * the bridge headers the loss may have reset. Writes nothing to the NHI.
+ * IRQL: PASSIVE_LEVEL, the connection-manager thread.
+ */
+VOID CmReenumUnavailable(struct _CM_NHI *nhi, ULONG episode);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);

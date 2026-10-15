@@ -341,6 +341,10 @@ VOID TbtIcmDecodeNames(const ULONG *dw, ULONG words, PTBT_ICM_NAMES out);
 #define TBT_ICM_WHY_LOST            6UL     /* RESYNC: an action did not fit */
 #define TBT_ICM_WHY_APPROVE_UNKNOWN 7UL     /* TUNNEL_UP: approve unanswered, tunnel may be up */
 #define TBT_ICM_WHY_UNMATCHED       8UL     /* RESYNC: a disconnect that matched no entry */
+/* TUNNEL_DOWN and RESYNC: the host interface stopped answering or lost
+ * its configuration (cm_live.h). Presence lost, nothing proven about the
+ * endpoint: never a quiescence statement (record 21 section 7.3). */
+#define TBT_ICM_WHY_UNAVAILABLE     9UL
 
 /*
  * One tunnel change for the driver's thread to act on (record 21 section
@@ -432,6 +436,8 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG HostPollAnswered;
     ULONG IdlePolls;
     ULONG Rediscoveries;
+    ULONG Lost;             /* TbtIcmLost: the host interface lost */
+    ULONG Recoveries;       /* TbtIcmRecover called */
 } TBT_ICM_COUNTERS;
 
 typedef struct _TBT_ICM {
@@ -562,6 +568,21 @@ VOID TbtIcmSuspend(PTBT_ICM icm);
  * instance does not resume.
  */
 LONG TbtIcmResume(PTBT_ICM icm);
+/*
+ * The host interface lost (cm_live.h, CM_LIVE_ACT_RECONCILE): no register
+ * is touched; the session's queued work is retired, every entry leaves the
+ * table with one TUNNEL_DOWN of why UNAVAILABLE, and a RESYNC of the same
+ * why follows even when the table was empty.
+ */
+VOID TbtIcmLost(PTBT_ICM icm);
+/*
+ * The recovery (record 21 section 5.6), on the retained common buffer:
+ * light - driver ready and the reconciliation on the running rings; full -
+ * the rings stopped and restarted, mailbox 0x23 on the rows that read the
+ * mode, driver ready, the host-router poll and the reconciliation. TBT_OK
+ * only when the session answered.
+ */
+LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full);
 
 /* Unbind (stop, remove, disable, shutdown): rings stopped, then mailbox
  * 0x07 (ICM 6.7 [obs]; Linux icm.c icm_stop). Tunnels and approvals

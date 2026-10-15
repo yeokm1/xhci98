@@ -142,6 +142,9 @@ BOOLEAN TbtDeadlinePassed(const TBT_DEADLINE *d, const TBT_HOST *host)
 {
     ULONG elapsed;
 
+    if (host->Cancelled != NULL && host->Cancelled(host->Context)) {
+        return TRUE;
+    }
     elapsed = host->NowMs(host->Context) - d->StartMs;
     if (elapsed >= d->LimitMs) {
         return TRUE;
@@ -193,6 +196,9 @@ BOOLEAN TbtWaitDone(const TBT_WAIT *w, const TBT_HOST *host)
     ULONG need;
 
     if (w->WaitedUs >= w->LimitUs) {
+        return TRUE;
+    }
+    if (host->Cancelled != NULL && host->Cancelled(host->Context)) {
         return TRUE;
     }
     elapsed = TbtClockUs(host) - w->StartUs;
@@ -368,6 +374,26 @@ VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context)
  * predecessor left it in, before any descriptor address is written, then
  * the settle. Rings 1 and up are only looked at.
  */
+/* DmaMayRun cleared only on evidence: after the settle, both ring 0
+ * controls read back, readable (not all ones) and with Valid clear. A
+ * refused or unanswered read leaves it set (cm_live.h, cm_pool.c). */
+static VOID tbtRingVerifyStopped(PTBT_RING ring)
+{
+    ULONG tx;
+    ULONG rx;
+
+    TbtWaitMin(ring->Host, TBT_RING_SETTLE_US);
+    tx = TBT_RD(ring, TBT_TX_CTRL(0));
+    rx = TBT_RD(ring, TBT_RX_CTRL(0));
+    if (tx != 0xFFFFFFFFUL && rx != 0xFFFFFFFFUL &&
+        (tx & TBT_RING_CTRL_VALID) == 0 && (rx & TBT_RING_CTRL_VALID) == 0) {
+        ring->DmaMayRun = FALSE;
+    } else {
+        ring->Counters.StopUnverified++;
+        tbtLog(ring->Host, "tbt.ring.stop-unverified", rx);
+    }
+}
+
 static VOID tbtRingTakeOver(PTBT_RING ring, ULONG paths)
 {
     ULONG n;
@@ -495,6 +521,7 @@ LONG TbtRingStartEx(PTBT_RING ring,
     TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_BASE_LO, phys);
     TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_BASE_HI, 0);
     TBT_WR(ring, TBT_TX_RING(0) + TBT_RING_SIZE_REG, entries);
+    ring->DmaMayRun = TRUE;
     TBT_WR(ring, TBT_TX_CTRL(0), TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW);
 
     /* RX ring 0, Spec 12.6.3.3: every descriptor ready before the ring is
@@ -525,6 +552,7 @@ LONG TbtRingStartEx(PTBT_RING ring,
             TBT_WR(ring, TBT_TX_CTRL(0), 0);
             TBT_WR(ring, TBT_RX_CTRL(0), 0);
             TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
+            tbtRingVerifyStopped(ring);
             return TBT_E_HW;
         }
         ring->TxNext = TBT_RING_PROD(idx);
@@ -535,13 +563,14 @@ LONG TbtRingStartEx(PTBT_RING ring,
 
 VOID TbtRingStop(PTBT_RING ring)
 {
-    if (!ring->Running) {
+    if (!ring->Running && !ring->DmaMayRun) {
         return;
     }
     TBT_WR(ring, TBT_TX_CTRL(0), 0);
     TBT_WR(ring, TBT_RX_CTRL(0), 0);
     TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
     ring->Running = FALSE;
+    tbtRingVerifyStopped(ring);
 }
 
 /* ---------------------------------------------------------------------- */

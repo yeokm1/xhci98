@@ -2042,3 +2042,15 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);
 }
+
+/*
+ * The host interface lost (cm_reenum.h). On NT the client's TUNNEL_DOWN
+ * and RESYNC actions handed over just before are the reconciliation (the
+ * bridge filters' invalidations); this records the episode. The 98 SE and
+ * ME CONFIGMG route of the CONTROLLER_UNAVAILABLE reconciliation is the
+ * worker's (cm_cfgwk.c) and lands with it. IRQL: PASSIVE_LEVEL.
+ */
+VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
+{
+    CmLogNote(nhi, "cm.reenum.unavailable", episode);
+}

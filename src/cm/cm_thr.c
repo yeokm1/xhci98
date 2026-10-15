@@ -112,6 +112,14 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
                                     NULL);
     }
     status = irp->IoStatus.Status;
+    /* Under a recovery's validation (CfgStrict), a read that answered
+     * fewer bytes than asked is not an answer: its zero fill would pass
+     * for the identity. Not applied elsewhere: whether every target's bus
+     * driver reports the length is not read. */
+    if (NT_SUCCESS(status) && read && nhi->CfgStrict &&
+        irp->IoStatus.Information < length) {
+        status = STATUS_UNSUCCESSFUL;
+    }
     IoFreeIrp(irp);
     if (!NT_SUCCESS(status)) {
         nhi->Counters.ConfigFailures++;
@@ -220,13 +228,21 @@ BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on)
 /* ---------------------------------------------------------------------- */
 
 /* BAR0, one DW; all ones past the mapping, as a window that does not
- * decode reads. IRQL: PASSIVE_LEVEL (the thread). */
+ * decode reads. Every access of the core passes the liveness gate
+ * (cm_live.h) under the class the thread set (AccessClass): a refused read
+ * is all ones and a refused write is dropped, both counted, so nothing
+ * reaches a host interface that stopped answering, lost its configuration
+ * or was surprise-removed. IRQL: PASSIVE_LEVEL (the thread). */
 static ULONG cmBarRead(PVOID context, ULONG offset)
 {
     PCM_NHI nhi;
 
     nhi = (PCM_NHI)context;
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3)) {
+        return 0xFFFFFFFFUL;
+    }
+    if (!CmLiveAdmits(&nhi->Live, nhi->AccessClass)) {
+        nhi->Live.Counters.RefusedReads++;
         return 0xFFFFFFFFUL;
     }
     return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
@@ -240,7 +256,30 @@ static VOID cmBarWrite(PVOID context, ULONG offset, ULONG value)
     if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3)) {
         return;
     }
+    if (nhi->AccessClass == CM_ACCESS_PROBE ||
+        !CmLiveAdmits(&nhi->Live, nhi->AccessClass)) {
+        nhi->Live.Counters.RefusedWrites++;
+        return;
+    }
     WRITE_REGISTER_ULONG((PULONG)(nhi->BarVa + offset), value);
+}
+
+ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset)
+{
+    if (nhi->BarVa == NULL || offset > nhi->BarLength - 4 || (offset & 3) ||
+        !CmLiveAdmits(&nhi->Live, CM_ACCESS_PROBE)) {
+        return 0xFFFFFFFFUL;
+    }
+    return READ_REGISTER_ULONG((PULONG)(nhi->BarVa + offset));
+}
+
+/* TBT_HOST.Cancelled: the gate closed for the current class. */
+static BOOLEAN cmCancelled(PVOID context)
+{
+    PCM_NHI nhi;
+
+    nhi = (PCM_NHI)context;
+    return (BOOLEAN)!CmLiveAdmits(&nhi->Live, nhi->AccessClass);
 }
 
 static VOID cmStall(PVOID context, ULONG microseconds)
@@ -339,6 +378,8 @@ VOID CmThrAccessors(PCM_NHI nhi)
     }
     nhi->Host.ClockUs = cmClockUs;
     nhi->Host.TickUs = nhi->ClockTickUs;
+    nhi->Host.Cancelled = cmCancelled;
+    nhi->AccessClass = CM_ACCESS_ORDINARY;
     KeQueryTickCount(&ticks);
     nhi->ClockLast = ticks.LowPart;
     nhi->ClockRest = 0;
@@ -512,11 +553,39 @@ VOID CmPowerDrain(PCM_NHI nhi)
 /* ---------------------------------------------------------------------- */
 
 /* A client to poll: bound (the ICM's) or running (the USB4 profile's), in
- * D0, not failed. */
+ * D0, not failed, and its transport admitted by the liveness gate. */
 static BOOLEAN cmPolling(PCM_NHI nhi)
 {
     return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && CmNhiRunning(nhi) &&
-                     nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended);
+                     nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended &&
+                     CmLiveTransport(&nhi->Live));
+}
+
+/*
+ * The liveness monitor's sample (cm_live.h, record 21 section 5.5): only
+ * for an active instance in D0 with the system working, by elapsed time,
+ * one PROBE read of RX ring 0's size register; never on a command, ring or
+ * router path. The actions it asks for run here, on the thread.
+ */
+VOID CmThrLiveness(PCM_NHI nhi)
+{
+    ULONG now;
+    ULONG v;
+    ULONG act;
+
+    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->DevicePower != PowerDeviceD0 ||
+        nhi->Suspended || CmPowerSleeping(nhi)) {
+        return;
+    }
+    now = cmNowMs(nhi);
+    if (!CmLiveDue(&nhi->Live, now)) {
+        return;
+    }
+    v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+    act = CmLiveSample(&nhi->Live, now, v);
+    if (act != 0) {
+        CmNhiLiveActions(nhi, act);
+    }
 }
 
 static VOID NTAPI cmThread(PVOID context)
@@ -533,6 +602,11 @@ static VOID NTAPI cmThread(PVOID context)
     for (;;) {
         if (cmPolling(nhi)) {
             cmRelativeMs(&due, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+            (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
+                                        KernelMode, FALSE, &due);
+        } else if (CmLiveWaitMs(&nhi->Live) != 0) {
+            /* No transport, but a monitored state: the slow probes. */
+            cmRelativeMs(&due, CmLiveWaitMs(&nhi->Live));
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else {
@@ -582,6 +656,7 @@ static VOID NTAPI cmThread(PVOID context)
         if (bits & CM_WORK_EXIT) {
             break;
         }
+        CmThrLiveness(nhi);
         if (cmPolling(nhi)) {
             nhi->Counters.Polls++;
             CmNhiPollPass(nhi);

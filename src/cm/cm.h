@@ -47,6 +47,7 @@
 #include "tbt_hw.h"
 #include "tbt_u4cm.h"
 #include "cm_reenum.h"
+#include "cm_live.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -282,6 +283,17 @@ typedef struct _CM_NHI {
     NTSTATUS StartStatus;
     ULONG BindOwed;
 
+    /* The host interface's liveness (cm_live.h, record 21 sections 5.5
+     * and 5.6): the monitor's state, the class the BAR accessors are asked
+     * under (CM_ACCESS_ORDINARY but inside a recovery), and the identity
+     * captured at the healthy start that a recovery must find again: the
+     * configuration space's first DW and BAR0's low DW. */
+    CM_LIVE Live;
+    ULONG AccessClass;
+    ULONG LiveIds;
+    ULONG LiveBar0;
+    ULONG CfgStrict;        /* cm_thr.c's cmConfig checks the length read */
+
     /* Power (cm_power.c). */
     DEVICE_POWER_STATE DevicePower;
     SYSTEM_POWER_STATE SystemPower;
@@ -396,6 +408,21 @@ VOID CmNhiWaitService(PCM_NHI nhi);
 BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action);
 ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action);
 
+/*
+ * The liveness monitor's driver half (cm_live.h). On the thread: the
+ * actions a sample or a validation asked for (CmNhiLiveActions), the USB4
+ * profile's containment (CmNhiU4Contain, record 22 section 3.5). From the
+ * PnP dispatch, before the stop's work is queued: CmNhiRevoke on a surprise
+ * removal (the gate closed for good, at once). Anywhere: CmNhiHwAccess,
+ * whether ordinary register access and lifecycle work may run now - every
+ * exit path (stop, shutdown, suspend, eject, failure cleanup) asks it
+ * before touching the host interface.
+ */
+VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions);
+VOID CmNhiU4Contain(PCM_NHI nhi);
+VOID CmNhiRevoke(PCM_NHI nhi);
+BOOLEAN CmNhiHwAccess(PCM_NHI nhi);
+
 /* cm_thr.c */
 VOID CmThrInit(PCM_NHI nhi);
 NTSTATUS CmThrStart(PCM_NHI nhi);
@@ -406,6 +433,12 @@ BOOLEAN CmThrQueueOrRecord(PCM_NHI nhi, ULONG work, PIRP irp,
 VOID CmThrRunPnp(PCM_NHI nhi, ULONG work);
 VOID CmThrAccessors(PCM_NHI nhi);
 ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset);
+/* One BAR0 DW under the PROBE class (the monitor's and the validation's
+ * reads): refused, all ones, only once revoked. IRQL: PASSIVE_LEVEL. */
+ULONG CmThrProbe32(PCM_NHI nhi, ULONG offset);
+/* The monitor's sample and its actions, on the thread between the queued
+ * work and the poll. IRQL: PASSIVE_LEVEL. */
+VOID CmThrLiveness(PCM_NHI nhi);
 BOOLEAN CmCfgWrite16(PCM_NHI nhi, ULONG offset, USHORT value);
 
 /* cm_power.c */
