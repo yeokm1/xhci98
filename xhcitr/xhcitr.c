@@ -240,6 +240,8 @@ typedef struct _UPORT {
     unsigned char *Bos;
     DWORD BosN;
     char Str[3][128];
+    unsigned char StrRaw[3][256];
+    DWORD StrN[3];
     int HaveStr[3];
 } UPORT;
 
@@ -299,12 +301,14 @@ static HFONT hFixed;
 static HACCEL hAccel;
 static HICON hIconBig;
 static HICON hIconSmall;
-static int splitX = 300;
+static int splitX = 300;     /* as the user set it, stored             */
+static int drawnSplit = 300; /* as drawn: splitX clamped to the window  */
 static int dragging;
 static UINT msgTaskbarCreated;
 static UINT msgShow;
 static int shellV5;
 static int iconAdded;
+static int trayNoClick;     /* the button-up after a double click */
 static int trayV3;          /* NIM_SETVERSION 3 took: WM_CONTEXTMENU comes */
 static TR_SNAP snapOld;
 /* The poll's last answer per NHI, kept apart from the model the tree and
@@ -870,8 +874,9 @@ static int derive(WALK *w, NHI *list, int count)
                 if (match) {
                     w->N[i].PortNhi = k;
                     w->N[i].PortIdx = (int)j;
-                    w->N[i].Verified = list[k].HaveQ &&
-                                       (active & (1UL << j)) != 0;
+                    /* Display units come from any record; only a query
+                     * makes them ejectable (record 25 section 7.1). */
+                    w->N[i].Verified = (active & (1UL << j)) != 0;
                 }
             }
         }
@@ -898,7 +903,10 @@ static int derive(WALK *w, NHI *list, int count)
         w->N[i].Prot = prot[i];
         w->N[i].UnitOf = units[i];
         w->N[i].Ejectable = units[i] == i &&
-                            !inst_tb_unit_blocked(units, prot, w->Count, i);
+                            !inst_tb_unit_blocked(units, prot, w->Count, i) &&
+                            w->N[i].Parent >= 0 &&
+                            w->N[w->N[i].Parent].PortNhi >= 0 &&
+                            list[w->N[w->N[i].Parent].PortNhi].HaveQ;
     }
     free(buf);
     return 1;
@@ -1042,6 +1050,10 @@ static void usb_fetch(UPORT *p)
         }
         n = usb_desc(p->Hub, p->Conn.Port, 3, idx, lang, 255, &b);
         p->HaveStr[i] = tr_dec_string(b, n, p->Str[i], sizeof(p->Str[i]));
+        if (b != NULL && n <= sizeof(p->StrRaw[i])) {
+            memcpy(p->StrRaw[i], b, n);
+            p->StrN[i] = n;
+        }
         free(b);
     }
     if (((unsigned int)p->Conn.Dev[2] | ((unsigned int)p->Conn.Dev[3] << 8)) >=
@@ -1681,6 +1693,8 @@ static void details_devnode(TR_TEXT *t, int dn)
     }
 }
 
+static const char *ej_why_not(int u);
+
 static void details_unit(TR_TEXT *t, int dn)
 {
     const DNODE *d = &gw.N[dn];
@@ -1691,11 +1705,10 @@ static void details_unit(TR_TEXT *t, int dn)
         return;
     }
     tr_printf(t, "\nUnit behind a Thunderbolt port: %s\n", dn_name(&gw.N[u]));
-    if (gw.N[u].Ejectable) {
+    if (ej_why_not(u) == NULL) {
         tr_put(t, "  It can be stopped here (Action > Safely Remove).\n");
     } else {
-        tr_put(t, "  It cannot be stopped here: it holds the Thunderbolt "
-                  "controller's own functions.\n");
+        tr_printf(t, "  It cannot be stopped here now: %s.\n", ej_why_not(u));
     }
     if (envNt && gw.N[u].HasCaps) {
         if ((gw.N[u].Caps & TR_CM_DEVCAP_REMOVABLE) &&
@@ -1818,7 +1831,8 @@ static void details_router(TR_TEXT *t, int k, int r)
               : kind == CM_ST_KIND_USB4_PORT ? "router on a host USB4 port"
                                              : "router behind another router");
     tr_printf(t, "  Generation:    %s\n", gen);
-    tr_printf(t, "  %s %lu, depth %lu\n", kind == CM_ST_KIND_ICM ? "Link:         " : "Port:         ",
+    tr_printf(t, "  Position:      %s %lu, depth %lu\n",
+              kind == CM_ST_KIND_ICM ? "link" : "port",
               (unsigned long)(place & 0xFFUL), (unsigned long)((place >> 8) & 0xFFUL));
     tr_printf(t, "  Route:         %08lX%08lX\n",
               (unsigned long)inst_get32(e, CM_ST_E_ROUTE_HI),
@@ -1946,6 +1960,16 @@ static void details_uport(TR_TEXT *t, int i, int fetch)
         if (p->Bos != NULL) {
             tr_dec_bos(t, p->Bos, p->BosN);
         }
+        for (k = 0; k < 3; k++) {
+            if (p->StrN[k] != 0) {
+                tr_printf(t, "String descriptor %u (%s)\n",
+                          (unsigned int)p->Conn.Dev[14 + k],
+                          k == 0 ? "manufacturer" : k == 1 ? "product"
+                                                         : "serial number");
+                tr_printf(t, "  \"%s\"\n", p->HaveStr[k] ? p->Str[k] : "(malformed)");
+                tr_hex(t, p->StrRaw[k], p->StrN[k], 2);
+            }
+        }
         for (k = 0; k < p->Conn.PipeCount; k++) {
             tr_printf(t, "Open pipe: endpoint 0x%02X\n", (unsigned int)p->Conn.Pipe[k][2]);
         }
@@ -1994,8 +2018,8 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         details_devnode(t, n->Dn);
         break;
     case K_USBROOT:
-        tr_printf(t, "%d USB host controllers, %d USB devices.\n", ucCount,
-                  usbDevices);
+        tr_printf(t, "%d USB host controller%s, %d USB device%s.\n", ucCount,
+                  ucCount == 1 ? "" : "s", usbDevices, usbDevices == 1 ? "" : "s");
         if (hcdOpenError != 0) {
             tr_printf(t, "\\\\.\\HCD0 did not open (error %lu).\n",
                       (unsigned long)hcdOpenError);
@@ -3068,6 +3092,7 @@ static void fill_tree(void)
     if (select != NULL) {
         TreeView_SelectItem(hTree, select);
         TreeView_EnsureVisible(hTree, select);
+        SendMessageA(hTree, WM_HSCROLL, SB_LEFT, 0);
     }
     SendMessageA(hTree, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(hTree, NULL, TRUE);
@@ -3100,20 +3125,25 @@ static void layout(void)
         return;
     }
     GetClientRect(hMain, &rc);
+    if (IsIconic(hMain) || rc.right < 130) {
+        /* Minimised (width 0): nothing to lay out, and splitX is kept. */
+        return;
+    }
     SendMessageA(hStatus, WM_SIZE, 0, 0);
     GetWindowRect(hStatus, &sb);
     h = rc.bottom - (sb.bottom - sb.top);
     if (h < 0) {
         h = 0;
     }
-    if (splitX > rc.right - 60) {
-        splitX = rc.right - 60;
+    drawnSplit = splitX;
+    if (drawnSplit > rc.right - 60) {
+        drawnSplit = rc.right - 60;
     }
-    if (splitX < 60) {
-        splitX = 60;
+    if (drawnSplit < 60) {
+        drawnSplit = 60;
     }
-    MoveWindow(hTree, 0, 0, splitX, h, TRUE);
-    MoveWindow(hEdit, splitX + 4, 0, rc.right - splitX - 4, h, TRUE);
+    MoveWindow(hTree, 0, 0, drawnSplit, h, TRUE);
+    MoveWindow(hEdit, drawnSplit + 4, 0, rc.right - drawnSplit - 4, h, TRUE);
 }
 
 static void save_report_dialog(void)
@@ -3354,21 +3384,31 @@ static LRESULT CALLBACK main_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             POINT p;
             GetCursorPos(&p);
             ScreenToClient(w, &p);
-            if (p.x >= splitX && p.x < splitX + 4) {
+            if (p.x >= drawnSplit && p.x < drawnSplit + 4) {
                 SetCursor(LoadCursor(NULL, IDC_SIZEWE));
                 return TRUE;
             }
         }
         break;
     case WM_LBUTTONDOWN:
-        if ((short)LOWORD(lp) >= splitX - 2 && (short)LOWORD(lp) < splitX + 6) {
+        if ((short)LOWORD(lp) >= drawnSplit - 2 &&
+            (short)LOWORD(lp) < drawnSplit + 6) {
             dragging = 1;
             SetCapture(w);
         }
         return 0;
     case WM_MOUSEMOVE:
         if (dragging) {
-            splitX = (short)LOWORD(lp);
+            RECT rc;
+            int x = (short)LOWORD(lp);
+            GetClientRect(w, &rc);
+            if (x > rc.right - 60) {
+                x = rc.right - 60;
+            }
+            if (x < 60) {
+                x = 60;
+            }
+            splitX = x;
             layout();
         }
         return 0;
@@ -3781,10 +3821,16 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TRAYICON:
         switch (LOWORD(lp)) {
         case WM_LBUTTONUP:
+            if (trayNoClick) {
+                /* The button-up that ends a double click opens nothing. */
+                trayNoClick = 0;
+                break;
+            }
             SetTimer(w, TIMER_CLICK, GetDoubleClickTime(), NULL);
             break;
         case WM_LBUTTONDBLCLK:
             KillTimer(w, TIMER_CLICK);
+            trayNoClick = 1;
             open_window();
             break;
         case WM_USER + 1:       /* NIN_KEYSELECT: the keyboard's click */
