@@ -518,6 +518,7 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
     ULONG i;
     ULONG gen;
     BOOLEAN known;
+    KIRQL irql;
 
     if (!nhi->U4On || nhi->U4ContainDone) {
         return;
@@ -583,6 +584,17 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
      * the stop's path: that runs inside a PnP request, and the seam's
      * CONFIGMG route on Windows 98 and ME calls CONFIGMG synchronously;
      * the removal under way and the next start's discovery stand for it. */
+    /* Nor while a PnP request waits for this thread: a surprise removal
+     * revoked the gate, or a stop or the exit is queued behind the work
+     * running now (the resume, the bind). */
+    if (reconcile) {
+        KeAcquireSpinLock(&nhi->WorkLock, &irql);
+        if (nhi->Live.Revoked || nhi->Live.State == CM_LIVE_REVOKED ||
+            (nhi->WorkBits & (CM_WORK_STOP | CM_WORK_EXIT)) != 0) {
+            reconcile = FALSE;
+        }
+        KeReleaseSpinLock(&nhi->WorkLock, irql);
+    }
     if (!reconcile) {
         CmLogNote(nhi, "u4.contained.no-reconcile", nhi->Live.State);
     } else if (nhi->ReenumOn) {

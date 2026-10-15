@@ -1572,12 +1572,14 @@ to the NHI:
    filters' invalidation, on Windows 98 and ME through the CONFIGMG
    route record 21 gives that reason - with a removal a driver refused
    never forced, and with `XhciCmReenum` 0 nothing requested. The seam's
-   pending ejects are voided by it (section 7.6). On the stop's path (a
-   surprise removal, or a loss found at the stop) this step is not taken:
-   the stop runs inside a PnP request, the seam's Windows 98 and ME route
-   calls CONFIGMG synchronously, and the removal under way and the next
-   start's discovery stand for it; steps 1 to 3 and 5 still run, before
-   the seam is closed.
+   pending ejects are voided by it (section 7.6). This step is not taken
+   while a PnP request waits for the thread - on the stop's path (a
+   surprise removal, or a loss found at the stop), after a surprise
+   removal revoked the gate, or with a stop queued behind the work running
+   (a resume, a bind): the seam's Windows 98 and ME route calls CONFIGMG
+   synchronously, and the removal under way and the next start's
+   discovery stand for it; steps 1 to 3 and 5 still run, before the seam
+   is closed.
 5. Logged once with the monitor's state and episode, and counted
    (`u4.drv.contained`; the core's `u4.contained.refused` and
    `u4.contained.retired`).
@@ -1627,8 +1629,9 @@ which never resets it.
   returns through section 7.6's failure path, within the resume bound.
   Every resume under this profile, whatever its outcome - the platform
   step or the Bus Master bit failing included - then reads the size
-  register once: all ones, a value other than the one programmed after a
-  resume that restarted the rings, or the gate revoked meanwhile, and the
+  register once: all ones, the gate revoked meanwhile, or - once the
+  resume itself ran, which programs the rings again over a size the
+  suspend's stop kept - any value other than the one programmed, and the
   core is contained at once (nothing it rebuilt is published), the hold
   released through the failure path, then the driver's containment. A
   resume that fails with the host interface still answering is the
@@ -2269,8 +2272,9 @@ that every real host id acts untested.
 
 Each was taken by the orchestrator of the 2026-10-15 run on this record's
 recommendation, so that code can proceed; each is the **owner's to
-confirm**. The Linux and FreeBSD reading and the coverage review changed
-U1, U2, U6, U8 and U13 from their first form, as each row says.
+confirm**, except U17, which the owner took on 2026-10-15. The Linux and
+FreeBSD reading and the coverage review changed U1, U2, U6, U8 and U13
+from their first form, as each row says.
 
 | Id | Decision | Taken (orchestrator decision, owner to confirm) | Sections |
 |---|---|---|---|
@@ -2290,7 +2294,7 @@ U1, U2, U6, U8 and U13 from their first form, as each row says.
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
 | U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
 | U16 | The TMU | configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
-| U17 | A host interface lost under this profile | containment only: a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in this release | 7.7 |
+| U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in this release | 7.7 |
 
 ## 16. What is open, and what is a risk
 

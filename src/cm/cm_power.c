@@ -246,6 +246,7 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     BOOLEAN ok;
     BOOLEAN held;
     BOOLEAN lost;
+    BOOLEAN ran;
     LONG rc;
     ULONG v;
 
@@ -279,7 +280,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     }
     held = FALSE;
     lost = FALSE;
+    ran = FALSE;
     if (ok && nhi->U4On) {
+        ran = TRUE;
         rc = TbtU4Resume(&nhi->U4);
         if (rc == TBT_E_STATE && !nhi->U4.Failed) {
             /* Record 22 section 7.6: the domain runs, but an obligation
@@ -296,14 +299,16 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     }
     if (nhi->U4On) {
         /* Record 22 section 7.7: every USB4 resume, whatever its outcome,
-         * reads the size register once. All ones, or not the value this
-         * driver programs (the rings were restarted only on success), or
-         * the gate revoked meanwhile: the host interface is gone and the
-         * instance is contained, after the hold's failure path below. A
-         * success, held or not, arms the monitor only on that value. */
+         * reads the size register once. All ones, the gate revoked
+         * meanwhile, or - once the resume itself ran, which programs the
+         * rings again (and the suspend's stop kept the size) - anything
+         * but the value this driver programs: the host interface is gone
+         * and the instance is contained, after the hold's failure path
+         * below. A success, held or not, arms the monitor only on that
+         * value. */
         v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
         if (!CmNhiHwAccess(nhi) || v == 0xFFFFFFFFUL ||
-            (ok && v != CM_U4_RX_SIZE_VALUE)) {
+            (ran && v != CM_U4_RX_SIZE_VALUE)) {
             lost = TRUE;
             /* The core at once, so nothing it rebuilt is published (UP)
              * by the take below; the driver's half after the release. */
