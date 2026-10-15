@@ -1904,10 +1904,15 @@ side.
   its 9x deadline still to come. The children the worker removes today are
   functions that vanished, which get no request; under the ICM nothing
   removes a present one (section 7.4: no per-device teardown).
-  `REMOVE_PENDING` is a flush request, made only after an accepted query
-  and only to a function still answering with the identity its `UP` was
-  published for - never a reset claim - so it is safe on any removal path
-  of the worker's, a lost controller's included.
+  `REMOVE_PENDING` asks `nvme98` for an orderly stop (its flushes and
+  shutdown), never makes a reset claim, and is made only after an accepted
+  query, only while the request is current, and only to the function the
+  queried devnode itself names - the entry identified before the query by
+  matching its function's path against the devnode's instance id, still
+  `UP` at the same generation and still answering with the same ids; where
+  that identity cannot be established, no request is made and the removal
+  goes on. So it is safe on any removal path of the worker's, a lost
+  controller's included.
 
 **The budget, an estimate and not an enforced deadline.** `nvme98`
 measures its gone deadline from its own presence loss. The parts: the

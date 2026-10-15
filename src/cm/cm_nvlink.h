@@ -333,20 +333,26 @@ ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
 VOID CmNvlinkAwait(struct _CM_NHI *nhi);
 
 /* Windows 98 SE and ME, the CONFIGMG worker's removal step (see the file
- * header). CmNvlinkWkRequest: for the present function `id` (vendor 15:0,
- * device 31:16) behind tunnel port `bridge`, REMOVE_PENDING with a fresh
- * sequence (written to `*sequence`) on the entry domain `owner` published
- * - selected under the lock, the function read outside it, and owner, UP,
- * generation and the absence of another request checked again before it
- * is written; returns the entry, or CM_NVLINK_NONE when there is no
- * record, no such entry, or the function no longer answers with that id.
+ * header). CmNvlinkWkCandidate: whether entry `index` is one domain
+ * `owner` published UP behind tunnel port `bridge` for ids `id` (vendor
+ * 15:0, device 31:16) with no request outstanding, and its bus, slot and
+ * generation - the worker matches that function's path against the
+ * devnode's instance id BEFORE its query, so the request names the very
+ * devnode the query accepted. CmNvlinkWkRequest: REMOVE_PENDING with a
+ * fresh sequence (written to `*sequence`) on that entry, only while the
+ * function still answers with `id` and owner, UP, generation `gen` and the
+ * absence of another request are unchanged; returns the entry, or
+ * CM_NVLINK_NONE.
  * CmNvlinkWkAnswer: the answer to that sequence (CM_NVLINK_RM_*).
  * CmNvlinkWkWithdraw: that request cleared, and only that one. Any thread
  * at <= DISPATCH_LEVEL but CmNvlinkWkRequest
  * (PASSIVE_LEVEL: a configuration read); no ring is serviced and nothing
  * waits. */
-ULONG CmNvlinkWkRequest(struct _CM_NHI *owner, ULONG bridge, ULONG id,
-                        PULONG sequence);
+BOOLEAN CmNvlinkWkCandidate(struct _CM_NHI *owner, ULONG bridge, ULONG id,
+                            ULONG index, PULONG bus, PULONG slot,
+                            PULONG gen);
+ULONG CmNvlinkWkRequest(struct _CM_NHI *owner, ULONG index, ULONG gen,
+                        ULONG id, PULONG sequence);
 ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence);
 VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence);
 

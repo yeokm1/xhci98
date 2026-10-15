@@ -654,6 +654,13 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     ULONG seq;
     ULONG answer;
     ULONG start;
+    ULONG k;
+    ULONG n;
+    ULONG cbus;
+    ULONG cslot;
+    ULONG cgen;
+    ULONG egen;
+    ULONG want[CM_PORTS_PATH_MAX];
     LARGE_INTEGER pause;
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
@@ -670,6 +677,37 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     }
     if (!cmWkCurrent(w, i, gen)) {
         return FALSE;
+    }
+    /* The nvme98 entry this very devnode names, established before the
+     * query: an entry of this domain behind this bridge, published for the
+     * devnode's ids, whose function's path - its devfn, then the bridge's
+     * path - is the one the devnode's instance id spells. Not established
+     * (no such entry, two candidates, the bridge's path unread): no
+     * handshake, the removal goes on. */
+    entry = CM_NVLINK_NONE;
+    egen = 0;
+    if (id != 0 && w->Port[i].PathRead && w->Port[i].PathCount != 0 &&
+        w->Port[i].PathCount < CM_PORTS_PATH_MAX) {
+        for (k = 0; k < NVME98LS_ENTRIES; k++) {
+            if (!CmNvlinkWkCandidate(w->Nhi, w->Port[i].Bdf, id, k, &cbus,
+                                     &cslot, &cgen)) {
+                continue;
+            }
+            want[0] = ((cslot & 0x1FUL) << 3) | ((cslot >> 5) & 0x7UL);
+            for (n = 0; n < w->Port[i].PathCount; n++) {
+                want[n + 1] = w->Port[i].Path[n];
+            }
+            if (cmWkIdNames(text, XHCI_TBT_BDF(cbus, cslot & 0x1FUL,
+                                               (cslot >> 5) & 0x7UL),
+                            want, w->Port[i].PathCount + 1)) {
+                if (entry != CM_NVLINK_NONE) {
+                    entry = CM_NVLINK_NONE;
+                    break;
+                }
+                entry = k;
+                egen = cgen;
+            }
+        }
     }
     /* A vanished child leaves the known set whatever follows: CONFIGMG
      * reuses a freed devnode's handle, so a re-plug's devnode can come
@@ -689,13 +727,15 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
      * here on the worker (no ring is serviced) and ended early when the
      * request goes stale. The removal below follows whatever the answer:
      * Windows 98 cannot cancel the query just accepted. */
-    entry = CM_NVLINK_NONE;
     seq = 0;
-    if (id != 0 && cmWkCurrent(w, i, gen)) {
-        /* Only for a request still current, and bound to this domain's
-         * entry at the generation it has now; a stale one completes the
-         * accepted query's removal without asking nvme98 anything. */
-        entry = CmNvlinkWkRequest(w->Nhi, w->Port[i].Bdf, id, &seq);
+    if (entry != CM_NVLINK_NONE && cmWkCurrent(w, i, gen)) {
+        /* Only for a request still current, and only for the identity
+         * established before the query, unchanged since; a stale one
+         * completes the accepted query's removal without asking nvme98
+         * anything. */
+        entry = CmNvlinkWkRequest(w->Nhi, entry, egen, id, &seq);
+    } else {
+        entry = CM_NVLINK_NONE;
     }
     if (entry != CM_NVLINK_NONE) {
         start = cmWkNowTicks();

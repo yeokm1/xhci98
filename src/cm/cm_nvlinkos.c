@@ -941,70 +941,69 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
  * the waiting. Only for a function still present behind its bridge whose
  * entry reads UP and was published for the id the devnode names.
  */
-ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG bridge, ULONG id,
+BOOLEAN CmNvlinkWkCandidate(PCM_NHI owner, ULONG bridge, ULONG id,
+                            ULONG index, PULONG bus, PULONG slot, PULONG gen)
+{
+    BOOLEAN ok;
+    KIRQL irql;
+
+    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL ||
+        index >= NVME98LS_ENTRIES) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    ok = (BOOLEAN)(cmNvShadow[index].Owner == owner &&
+                   cmNvShadow[index].Bridge == bridge &&
+                   cmNvShadow[index].Id == id &&
+                   (cmNvTable->Entry[index].Flags &
+                    (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) == NVME98LS_UP);
+    if (ok) {
+        *bus = cmNvTable->Entry[index].BusNumber;
+        *slot = cmNvTable->Entry[index].SlotNumber;
+        *gen = cmNvTable->Entry[index].LinkGeneration;
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    return ok;
+}
+
+ULONG CmNvlinkWkRequest(PCM_NHI owner, ULONG index, ULONG gen, ULONG id,
                         PULONG sequence)
 {
-    ULONG i;
-    ULONG index;
     ULONG read;
-    ULONG bus;
-    ULONG slot;
-    ULONG gen;
+    ULONG result;
     KIRQL irql;
 
     *sequence = 0;
-    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL) {
-        return CM_NVLINK_NONE;
-    }
-    /* A snapshot under the lock: this domain's UP entry behind the bridge,
-     * published for that id, with no request outstanding. */
-    index = CM_NVLINK_NONE;
-    bus = 0;
-    slot = 0;
-    gen = 0;
-    KeAcquireSpinLock(&cmNvLock, &irql);
-    for (i = 0; i < NVME98LS_ENTRIES && index == CM_NVLINK_NONE; i++) {
-        if (cmNvShadow[i].Owner == owner && cmNvShadow[i].Bridge == bridge &&
-            cmNvShadow[i].Id == id &&
-            (cmNvTable->Entry[i].Flags &
-             (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) == NVME98LS_UP) {
-            index = i;
-            bus = cmNvTable->Entry[i].BusNumber;
-            slot = cmNvTable->Entry[i].SlotNumber;
-            gen = cmNvTable->Entry[i].LinkGeneration;
-        }
-    }
-    KeReleaseSpinLock(&cmNvLock, irql);
-    if (index == CM_NVLINK_NONE) {
+    if (cmNvTable == NULL || cmNvNt || cmNvRecord == 0 || owner == NULL ||
+        index >= NVME98LS_ENTRIES) {
         return CM_NVLINK_NONE;
     }
     /* The function still answers with that id (outside the lock). */
-    if (!cmNvCfg(bus, slot, 0, &read) || read != id) {
+    if (!cmNvCfg(cmNvTable->Entry[index].BusNumber,
+                 cmNvTable->Entry[index].SlotNumber, 0, &read) ||
+        read != id) {
         return CM_NVLINK_NONE;
     }
-    /* Revalidated before publication: same owner, still UP, the same
-     * generation, still no request. */
+    /* The identity the worker established before its query, unchanged:
+     * same owner, still UP at the same generation, no other request. */
+    result = CM_NVLINK_NONE;
     KeAcquireSpinLock(&cmNvLock, &irql);
-    if (cmNvShadow[index].Owner != owner ||
+    if (cmNvShadow[index].Owner == owner && cmNvShadow[index].Id == id &&
         (cmNvTable->Entry[index].Flags &
-         (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) != NVME98LS_UP ||
-        cmNvTable->Entry[index].LinkGeneration != gen) {
-        index = CM_NVLINK_NONE;
-    } else {
+         (NVME98LS_UP | CM_NVLINK_REMOVE_PENDING)) == NVME98LS_UP &&
+        cmNvTable->Entry[index].LinkGeneration == gen) {
         cmNvRemoveSeq = (cmNvRemoveSeq + 1) & 0x00FFFFFFUL;
         if (cmNvRemoveSeq == 0) {
             cmNvRemoveSeq = 1;
         }
-        *sequence = cmNvRemoveSeq;
-        if (!CmNvlinkRemoveRequest(cmNvTable, index, *sequence)) {
-            index = CM_NVLINK_NONE;
-            *sequence = 0;
+        if (CmNvlinkRemoveRequest(cmNvTable, index, cmNvRemoveSeq)) {
+            *sequence = cmNvRemoveSeq;
+            result = index;
         }
     }
     KeReleaseSpinLock(&cmNvLock, irql);
-    return index;
+    return result;
 }
-
 ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence)
 {
     return CmNvlinkRemoveAnswer(cmNvTable, index, sequence);
