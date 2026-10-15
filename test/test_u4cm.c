@@ -2977,6 +2977,7 @@ static void test_asm4242(void)
     p = TbtU4Port(&g_cm, 1);
     lane = fabPortLane0(&g_fab, 1);
     CHECK_EQ(g_cm.PortCount, 2, "asm4242: two USB4 ports");
+    CHECK_EQ((fabRtr(&g_fab, 0, 1) >> 8) & 0x3FUL, 7, "the Host Interface 7 as the upstream adapter");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "asm4242: a cold device UP");
     CHECK(p->Pcie.Up && p->Usb3.Up && p->Bonded, "PCIe and USB3, bonded");
     CHECK_EQ(p->PcieDown, 8, "PCIe Down 8 on port 1 (found, not assumed)");

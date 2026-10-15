@@ -41,11 +41,11 @@ gcc $c89 -c "$here/u4cm-glue.c" -o "$out/u4cm-glue.o"
 
 python3 "$qemu/tests/usb4/gen-trace-stub.py" "$qemu/hw/usb4/trace-events" \
     "$out/trace/trace-hw_usb4.h"
-# Newer fabric models split the router's assembly helpers into their own
-# file; linked when the checkout has it.
-asm=""
-if [ -f "$qemu/hw/usb4/usb4-router-asm.c" ]; then
-    asm="$qemu/hw/usb4/usb4-router-asm.c"
+# usb4-router-asm.c is the asm4242 host model, which the cases use: the
+# checkout must have it (usb4-emu main a50c19e or later).
+if [ ! -f "$qemu/hw/usb4/usb4-router-asm.c" ]; then
+    echo "usb4-emu checkout too old: no hw/usb4/usb4-router-asm.c (asm4242)" >&2
+    exit 1
 fi
 gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
     -Wno-sign-compare -Wno-missing-field-initializers \
@@ -61,6 +61,6 @@ gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
     "$qemu/hw/usb4/usb4-router-adl.c" "$qemu/hw/usb4/usb4-preos.c" \
     "$qemu/hw/usb4/usb4-drom.c" \
     "$qemu/hw/usb4/usb4-tunnel.c" "$qemu/hw/usb4/usb4-fabric-usb3.c" \
-    $asm \
+    "$qemu/hw/usb4/usb4-router-asm.c" \
     $(pkg-config --libs glib-2.0) -o "$out/u4cm-crosscheck"
 "$out/u4cm-crosscheck"

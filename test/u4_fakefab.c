@@ -1149,7 +1149,7 @@ int fabHostAsm4242(FAB *f)
     fabProto(h, 9, 0x100101UL);
     fabProto(h, 10, 0x200101UL);
     fabProto(h, 11, 0x200101UL);
-    h->UpAdp = 0;
+    h->UpAdp = 7;       /* the Host Interface, as usb4-emu's model sets it */
     fabFinish(h);
     h->RopMode[FAB_OP_DROM] = FAB_ROP_NS;
     h->RopMode[FAB_OP_MAP] = FAB_ROP_OK;
