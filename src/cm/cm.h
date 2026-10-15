@@ -13,7 +13,9 @@
  *                and the accessors the pure core is given), cm_power.c
  *                (the power policy owner's sequence of section 4.4).
  *                Owns BAR0, ring 0, the ICM client and the thread (task
- *                39-A.4).
+ *                39-A.4), or in its place the USB4 software connection
+ *                manager of design record 22 (tbt_u4cm.c, task 40-A.6),
+ *                whichever tbt_hw.c's selection admits.
  *   [CM_FILTER]  the tunnel bridge's upper filter, NT targets only
  *                (xhcicmf.inf; IoIsWdmVersionAvailable(1, 0x10) TRUE):
  *                cm_filt.c, with the registration list of cm_reenum.c the
@@ -29,7 +31,8 @@
  * registry site), cm_log.c (the shared log ring of src\xhci_log.c and its
  * emission, decision D12), cm_pool.c (the one pool and DMA site,
  * AGENTS.md's named-sites rule), cm_vals.c (pure: roles and value rules),
- * and the pure core tbt_ring.c, tbt_icm.c, tbt_hw.c and tbt_topo.c.
+ * and the pure core tbt_ring.c, tbt_icm.c, tbt_hw.c, tbt_u4cm.c and
+ * tbt_topo.c.
  *
  * IRQL: as each file's header says; every object this driver creates is
  * DO_POWER_PAGABLE (the filter copies its lower device's power flags).
@@ -42,6 +45,7 @@
 #include "../xhci_log.h"
 #include "cm_vals.h"
 #include "tbt_hw.h"
+#include "tbt_u4cm.h"
 #include "cm_reenum.h"
 
 #define CM_POOL_TAG 'mChX'
@@ -50,7 +54,8 @@
 #define CM_STAGE_STOPPED 0  /* not started, or stopped                    */
 #define CM_STAGE_INERT   1  /* started, pre-activation: no ring, protocol
                                session or connection-manager mailbox      */
-#define CM_STAGE_ACTIVE  2  /* the selection said ICM: resources taken,
+#define CM_STAGE_ACTIVE  2  /* the selection said ICM, or admitted the
+                               USB4 software CM (U4On): resources taken,
                                the bind running or done                   */
 #define CM_STAGE_FAILED  3  /* a failure after activation (record 21
                                section 1.4.2): rings stopped, the instance
@@ -76,6 +81,29 @@
  * is the highest register touched (tbt_regs.h). A smaller window is
  * "BAR0 not delivered", record 21 section 1.4.2's Code 10. */
 #define CM_BAR0_MIN_BYTES 0x3A000UL
+
+/*
+ * The nvme98 link-down channel's seam under the USB4 profile (record 22
+ * section 10; nvme98's include/nvme98cm.h and gate G3; task 40-A.7, which
+ * implements the channel in cm_nvlink.c - nothing here does). Both run on
+ * the connection-manager thread at PASSIVE_LEVEL, no lock held, and call
+ * nothing of tbt_u4cm.c's:
+ *   CM_U4_UP_HOOK    for every TBT_U4_ACT_TUNNEL_UP, before the action
+ *                    reaches the re-enumeration seam, so before the
+ *                    operating system can expose the endpoint (the
+ *                    channel's UP is published first);
+ *   CM_U4_DOWN_HOOK  from the core's statement upcall, after section 7.3
+ *                    step 1 of a PCIe teardown, with TBT_U4_LINKDOWN
+ *                    (PathClosed, the anchor, the time left of the 3 s),
+ *                    before the TUNNEL_DOWN it queues is drained to the
+ *                    seam (the removal); possibly nested at a safe point.
+ *                    DOWN_QUIESCED may be set only with PathClosed and the
+ *                    endpoint's reset complete; returns TBT_U4_STMT_*.
+ * Unregistered (NULL), the statement is withheld and counted.
+ */
+typedef VOID (*CM_U4_UP_HOOK)(PVOID context, const TBT_U4_ACTION *action);
+typedef ULONG (*CM_U4_DOWN_HOOK)(PVOID context,
+                                 const TBT_U4_LINKDOWN *info);
 
 /* The head of both extensions: Kind is the first field, read by the
  * dispatch routines before they know which role a device object plays. */
@@ -105,6 +133,24 @@ typedef struct _CM_COUNTERS {
     ULONG PowerInline;      /* a power IRP finished without the thread     */
     ULONG BuffersKept;      /* a common buffer not freed: rings unproven   */
     ULONG WakesUnpowered;   /* S0 with no D0 IRP, the function not in D0   */
+    /* The USB4 profile's driver half (task 40-A.6), emitted as u4.drv.*. */
+    ULONG U4Starts;         /* TbtU4Start called                           */
+    ULONG U4ActionsUp;
+    ULONG U4ActionsDown;
+    ULONG U4ActionsResync;
+    ULONG U4ActionsDeep;    /* a router below depth 1 left                 */
+    ULONG U4Named;          /* XhciTbtTopoAddNamed ADDED or KNOWN          */
+    ULONG U4NameRefused;    /* any other answer                            */
+    ULONG U4Learned;        /* XhciTbtLearn LEARNED                        */
+    ULONG U4LearnTries;
+    ULONG U4LinkDowns;      /* the statement upcall                        */
+    ULONG U4PathsClosed;    /* ... with the path proven closed             */
+    ULONG U4NoChannel;      /* statements withheld: no nvme98 channel      */
+    ULONG U4Ejects;         /* the eject hook called                       */
+    ULONG U4EjectsUnmapped; /* ... for a bridge no port corresponds to     */
+    ULONG U4EjectsFailed;   /* TbtU4Eject not TBT_OK                       */
+    ULONG U4ResumeHeld;     /* TbtU4Resume: an obligation not met          */
+    ULONG U4ForcePowerKept; /* a router connected at stop: force power kept */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -170,6 +216,49 @@ typedef struct _CM_NHI {
     ULONG ClockMs;          /* the millisecond clock TBT_HOST.NowMs reads */
     TBT_RING Ring;
     TBT_ICM Icm;
+    /* The common buffer's size: the ICM's ten-entry rings, or the USB4
+     * profile's sixteen (cm_pool.c). */
+    ULONG DmaBytes;
+
+    /* The USB4 software connection manager (design record 22, task
+     * 40-A.6), run where TbtHwSelect admitted it: U4On from the selection
+     * to the stop, the core over the same Ring and Host as the ICM's.
+     * Binds is the domain's port-to-bridge correspondence (tbt_topo.h,
+     * record 22 section 7.6), kept for the instance beside the
+     * re-enumeration seam's tunnel-port set (Reenum.Topo); ArmOwed asks the
+     * next drain to take the learning baseline again after a path proven
+     * closed. U4Batch is one drain's actions, off the stack. */
+    ULONG U4On;
+    TBT_U4CM U4;
+    TBT_U4_CONFIG U4Cfg;
+    XHCI_TBT_BINDS Binds;
+    ULONG ArmOwed;
+    ULONG U4BatchCount;
+    TBT_U4_ACTION U4Batch[TBT_U4_ACTION_QUEUE];
+    /* Per USB4 port, the connection generation whose PCIe path the
+     * statement upcall saw proven closed (bit n-1 of U4ClosedValid for
+     * port n): a TUNNEL_UP of that generation still queued is stale. */
+    ULONG U4ClosedGen[TBT_U4_MAX_PORTS];
+    ULONG U4ClosedValid;
+    /* Per USB4 port, the connection generation of the last action handed
+     * to the re-enumeration seam (or of the tunnel found up at start): an
+     * eject is honoured only while the port still carries it. */
+    ULONG U4SeamGen[TBT_U4_MAX_PORTS];
+    ULONG U4SeamValid;
+    /* The USB4 profile's resume bound in ms for the most obligations a
+     * domain can hold (TbtU4ResumeBoundUs, rounded up), set before
+     * CmReenumSuspend: the hold's watchdog must be at least this plus
+     * record 21's 10 s (cm_reenum.h). */
+    ULONG U4ResumeBoundMs;
+    /* Every port read disconnected (TbtU4AllPortsDisconnected) by the
+     * unbind just before it stopped the rings: the fresh evidence
+     * CmNhiMayClearPower requires. */
+    ULONG U4ClearOk;
+    /* The nvme98 channel's two moments (CmNhiSetU4Hooks), NULL until task
+     * 40-A.7's cm_nvlink.c registers them. */
+    CM_U4_UP_HOOK U4UpHook;
+    CM_U4_DOWN_HOOK U4DownHook;
+    PVOID U4HookContext;
     /* The resume owed by a suspend this driver ran (cm_power.c). */
     ULONG Suspended;
     /* CmReenumStart was called and CmReenumStop is owed. */
@@ -286,9 +375,26 @@ VOID CmNhiPollPass(PCM_NHI nhi);
 VOID CmNhiDrainActions(PCM_NHI nhi);
 BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on);
 VOID CmNhiQuiesce(PCM_NHI nhi);
-VOID CmNhiPlatformRelease(PCM_NHI nhi);
+VOID CmNhiPlatformRelease(PCM_NHI nhi, BOOLEAN mayClear);
 BOOLEAN CmNhiPlatformInit(PCM_NHI nhi);
 BOOLEAN CmNhiReinit(PCM_NHI nhi);
+BOOLEAN CmNhiFailed(PCM_NHI nhi);
+BOOLEAN CmNhiRunning(PCM_NHI nhi);
+VOID CmNhiUnbind(PCM_NHI nhi);
+BOOLEAN CmNhiMayClearPower(PCM_NHI nhi);
+/* The nvme98 channel's registration (CM_U4_UP_HOOK, CM_U4_DOWN_HOOK); on
+ * the thread, or before the start. */
+VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
+                     PVOID context);
+/* For cm_reenum.c, profile-neutral (cm_reenum.h, "THE USB4 PROFILE"). */
+VOID CmNhiNamePorts(PCM_NHI nhi);
+VOID CmNhiSetChanged(PCM_NHI nhi);
+/* cm_power.c's resume: the USB4 batch taken and its UPs published before
+ * the held bridges are released (cm_nhi.c, cmU4Drain). */
+VOID CmNhiU4Take(PCM_NHI nhi);
+VOID CmNhiWaitService(PCM_NHI nhi);
+BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action);
+ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action);
 
 /* cm_thr.c */
 VOID CmThrInit(PCM_NHI nhi);

@@ -4370,6 +4370,11 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
         p->Bonded = FALSE;
         p->SingleLane = FALSE;
         cm->Counters.PortsPreserved++;
+        if (cm->Config.DeferFirstPoll && cm->Stage != TBT_U4_STAGE_RUNNING) {
+            /* Built by the caller's first poll, as found (TbtU4Poll). */
+            p->AsFoundOwed = TRUE;
+            return;
+        }
         tbtU4Connect(cm, p, TRUE);
         if (p->Dev.Present) {
             tbtU4DiscoverLinks(cm, p);
@@ -4799,6 +4804,9 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
     h = &cm->HostRouter;
     cm->Counters.PortsCleaned++;
     tbtU4Log(cm, "u4.clean", p->Index);
+    /* A deferred as-found connect (DeferFirstPoll) was for the preserved
+     * configuration this cleaning removes: the port connects normally. */
+    p->AsFoundOwed = FALSE;
     hadPcie = (BOOLEAN)(p->Pcie.Written != 0);
     closed = TRUE;
     if (p->Pcie.Written != 0) {
@@ -5183,7 +5191,9 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     }
     tbtU4HotPlugEnable(cm);
     cm->Stage = TBT_U4_STAGE_RUNNING;
-    TbtU4Poll(cm);
+    if (!cm->Config.DeferFirstPoll) {
+        TbtU4Poll(cm);
+    }
     return TBT_OK;
 }
 
@@ -5211,6 +5221,15 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     tbtU4RetryQuarantine(cm);
     for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
+        if (p->AsFoundOwed) {
+            /* TBT_U4_CONFIG.DeferFirstPoll: the discovery's connect on the
+             * link as found, made here instead of in the start. */
+            p->AsFoundOwed = FALSE;
+            tbtU4Connect(cm, p, TRUE);
+            if (p->Dev.Present) {
+                tbtU4DiscoverLinks(cm, p);
+            }
+        }
         if (p->TmuQuarantine && p->State != TBT_U4_EMPTY && p->Dev.Present &&
             p->TmuConfigured) {
             if (tbtU4TmuDisable(cm, p) == TBT_OK) {
@@ -5749,6 +5768,24 @@ VOID TbtU4Stop(PTBT_U4CM cm)
 {
     TbtRingStop(cm->Ring);
     cm->Stage = TBT_U4_STAGE_NONE;
+}
+
+BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm)
+{
+    ULONG i;
+    ULONG lane;
+
+    if (cm->Failed || cm->Suspended || cm->Stage != TBT_U4_STAGE_RUNNING ||
+        cm->PortCount == 0) {
+        return FALSE;
+    }
+    for (i = 0; i < cm->PortCount; i++) {
+        if (tbtU4LaneRd(cm, &cm->HostRouter, cm->Ports[i].Lane0, &lane) != TBT_OK ||
+            TbtU4LaneClass(TBT_LANE1_STATE(lane)) != TBT_U4_LANE_DISCONNECTED) {
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 BOOLEAN TbtU4AnyRouterConnected(const TBT_U4CM *cm)

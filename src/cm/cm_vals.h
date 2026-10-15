@@ -108,9 +108,10 @@ ULONG CmProfileFor(const CM_IDS *ids);
 #define CM_INERT_SELECTION       6  /* tbt_hw.c TbtHwSelect said INERT: its
                                        reason is the log's cm.select.reason */
 #define CM_INERT_SAFE_MODE       7  /* the firmware is in safe mode         */
-#define CM_INERT_SOFTWARE_CM     8  /* TbtHwSelect admitted the USB4 software
-                                       connection manager, which this build
-                                       does not carry (Phase 40)            */
+#define CM_INERT_SOFTWARE_CM     8  /* no longer given: the USB4 software
+                                       connection manager runs where
+                                       TbtHwSelect admits it (task 40-A.6);
+                                       the number stays reserved            */
 #define CM_INERT_RESOURCES       9  /* no common buffer below 4 GB, or no
                                        thread                               */
 #define CM_INERT_RING_REFUSED   10  /* ring 0 refused before any register of
@@ -125,13 +126,16 @@ ULONG CmProfileFor(const CM_IDS *ids);
  * every ICM profile since task 39-A.4 (tbt_icm.c's Falcon, Alpine and
  * Titan Ridge and Ice Lake message tables; Maple Ridge and Tiger Lake to
  * Meteor Lake on the Titan Ridge and Ice Lake tables, where tbt_hw.c's
- * selection finds their ICM running). Phase 40 adds the USB4 one; until
- * then a start the software connection manager would take is inert.
+ * selection finds their ICM running), and since task 40-A.6 the USB4
+ * software connection manager (tbt_u4cm.c, design record 22), which also
+ * takes Maple Ridge and Tiger Lake to Meteor Lake where tbt_hw.c's
+ * selection admits it.
  */
 #define CM_PROFILES_BUILT ((1UL << CM_PROFILE_ICM_FR) |                    \
                            (1UL << CM_PROFILE_ICM_AR) |                    \
                            (1UL << CM_PROFILE_ICM_TR) |                    \
                            (1UL << CM_PROFILE_ICM_ICL) |                   \
+                           (1UL << CM_PROFILE_USB4) |                      \
                            (1UL << CM_PROFILE_ICM_MR) |                    \
                            (1UL << CM_PROFILE_ICM_TGL))
 
@@ -153,7 +157,8 @@ ULONG CmProfileFor(const CM_IDS *ids);
 ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 
 /*
- * The values, by index (record 21 section 8). Each is a REG_DWORD in the
+ * The values, by index (record 21 section 8; the last three record 22
+ * section 12's). Each is a REG_DWORD in the
  * NHI's driver (software) key, written by every install path of
  * xhcicm.inf and xhcicm-amd64.inf at the default below under
  * FLG_ADDREG_NOCLOBBER, so a written default reads exactly as an absent
@@ -167,13 +172,17 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_VAL_APPROVE_TIMEOUT_MS 5  /* XhciCmApproveTimeoutMs              */
 #define CM_VAL_SAFE_EJECT         6  /* XhciCmSafeEject, D10 (task 39-A.8)  */
 #define CM_VAL_LOG_VERBOSITY      7  /* XhciLogVerbosity, the shared ladder */
-#define CM_VAL_COUNT              8
+/* The USB4 profile's (design record 22 section 12, task 40-A.6). */
+#define CM_VAL_USB3_TUNNEL        8  /* XhciCmUsb3Tunnel, decision U3       */
+#define CM_VAL_LANE_BONDING       9  /* XhciCmLaneBonding, decision U4      */
+#define CM_VAL_PREOS_CLEANUP     10  /* XhciCmPreOsCleanup, decision U2     */
+#define CM_VAL_COUNT             11
 
 /* XhciCmMode (record 21 section 8, decision D11). */
 #define CM_MODE_OFF       0  /* bind, log, touch nothing                    */
 #define CM_MODE_AUTO      1  /* the default                                 */
 #define CM_MODE_FORCE_ICM 2  /* the ICM client on an unlisted Intel id      */
-#define CM_MODE_FORCE_SW  3  /* force the USB4 software CM (Phase 40)       */
+#define CM_MODE_FORCE_SW  3  /* force the USB4 software CM (record 22 3.6)  */
 #define CM_MODE_MAX       3
 
 /*

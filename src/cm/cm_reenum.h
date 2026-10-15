@@ -78,6 +78,52 @@
  *                    tunnels to one port at a time and wants the PCI side
  *                    of its correspondence (record 22 section 7.6).
  *
+ * THE USB4 PROFILE (task 40-A.6; CM_NHI.U4On). The NHI hands every
+ * TBT_U4_ACTION to CmReenumAction in the TBT_ICM_ACTION form (cm_nhi.c,
+ * cmU4ToIcm): Kind TUNNEL_UP, TUNNEL_DOWN or RESYNC (a router removed below
+ * depth 1 is a RESYNC), Link the USB4 port (TBT_U4_PORT.Index, 1-based),
+ * Serial its connection generation, Why CM_U4_WHY_BASE (80h) or the USB4
+ * kind; no ICM table entry stands behind it. CmReenumStart is called from
+ * the bind, after TbtU4Start, so that the host router's mapping answer is
+ * known. An implementation, for both profiles:
+ *   - calls CmNhiWaitService(nhi) and CmNhiActionLive(nhi, action) where
+ *     this contract says TbtIcmService and TbtIcmActionLive (they forward
+ *     to those under the ICM client);
+ *   - may act on the one member CmNhiActionMember(nhi, action) returns,
+ *     the index in Topo.Set of the port's own bridge (record 22 section
+ *     7.6, router-named or learned); the whole set is always correct, and
+ *     is what XHCI_TBT_NO_MEMBER (always, under the ICM client) asks for;
+ *   - calls CmNhiNamePorts(nhi) after each XhciTbtTopoFind it acts on and
+ *     before it fills Port[] from Topo.Set and publishes the claims: the
+ *     router-named members join the set there (XhciTbtTopoAddNamed, which
+ *     may void the discovery INCOMPLETE or MANY: discover again), and
+ *     CmNhiSetChanged(nhi) once the set and its claims are rebuilt, so
+ *     the learning baseline is taken again over the set as it now is;
+ *   - keeps Port[i] for Topo.Set[i], i below Topo.Tunnels, its Flags'
+ *     CM_PORT_ACTIVE read by the NHI's learning (XhciTbtLearn's `active`)
+ *     and its eject hook's bridge-to-port lookup.
+ * Under the USB4 profile the NHI hands every action to CmReenumAction
+ * whatever XhciCmReenum says (at 0 the seam re-enumerates nothing), and the
+ * seam voids every eject notification pending on the domain at any action
+ * (the port's connection changed: its successor's children were never
+ * removed in order); the NHI's eject hook also refuses a port whose
+ * connection generation is no longer the one last handed to the seam.
+ * The NHI keeps the correspondence (CM_NHI.Binds) and drives the learning
+ * itself. At a suspend under U4On, CM_NHI.U4ResumeBoundMs holds the USB4
+ * client's resume bound (TbtU4ResumeBoundUs for the most obligations a
+ * domain holds, rounded up) before CmReenumSuspend is called; the hold's
+ * watchdog must be at least that plus record 21's 10 s (a fixed watchdog
+ * longer than both, below the power manager's own limit, satisfies it),
+ * and CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
+ * USB4 client's bound. CmReenumResumed's `ok` is FALSE whenever an
+ * obligation was not met, though the domain keeps running.
+ *
+ * Removal on Windows 98 and ME: every Query_Remove_SubTree and
+ * Remove_SubTree of a tunnel port's child is this seam's own (cm_reenum.c),
+ * for both profiles; the NHI never calls CONFIGMG, and its eject hook runs
+ * only after a removal the seam made in order (a refused query-remove is
+ * respected and the hook is not called).
+ *
  * CONTRACT. Every call above runs on the NHI's connection-manager thread
  * at PASSIVE_LEVEL with no lock held, serialised with the ICM traffic
  * (section 6.5); none is called concurrently with another for the same

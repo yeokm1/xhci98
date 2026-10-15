@@ -1495,9 +1495,9 @@ static ULONG cmPoll(PCM_NHI nhi, const TBT_ICM_ACTION *action, ULONG want)
         if (state != XHCI_TBT_POLL_RUNNING) {
             break;
         }
-        TbtIcmService(&nhi->Icm);
-        if (want == XHCI_TBT_WANT_UP &&
-            !TbtIcmActionLive(&nhi->Icm, action)) {
+        /* Profile-neutral (cm_reenum.h, "THE USB4 PROFILE"). */
+        CmNhiWaitService(nhi);
+        if (want == XHCI_TBT_WANT_UP && !CmNhiActionLive(nhi, action)) {
             state = XhciTbtPollAbandon(&r->Poll, cmNow(nhi));
             break;
         }
@@ -1547,6 +1547,9 @@ static VOID cmDiscover(PCM_NHI nhi)
         }
         cmSleep(nhi, CM_FIND_RETRY_MS);
     }
+    /* The USB4 profile's router-named members join the set here, before
+     * Port[] is filled and the claims are published (cm_reenum.h). */
+    CmNhiNamePorts(nhi);
     CmLogNote(nhi, "cm.reenum.topo", r->Topo.Outcome);
     CmLogNote(nhi, "cm.reenum.topo.parent", r->Topo.Parent);
     CmLogNote(nhi, "cm.reenum.topo.search-bus", r->Topo.SearchBus);
@@ -1674,6 +1677,9 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER && r->Reenum != 0) {
         cmAskBaselines(nhi);
     }
+    /* The set and its claims rebuilt: the USB4 profile's learning
+     * baseline taken again over it (cm_reenum.h). */
+    CmNhiSetChanged(nhi);
 }
 
 /*
@@ -1961,6 +1967,13 @@ VOID CmReenumSuspend(PCM_NHI nhi)
      * policy (cm_ports.h). */
     CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
     r->HoldBoundMs = CM_PORTS_HOLD_MAX_MS;
+    if (nhi->U4On && nhi->U4ResumeBoundMs + 10000UL > r->HoldBoundMs) {
+        /* The USB4 client's bound plus record 21's 10 s (cm_reenum.h). */
+        r->HoldBoundMs = nhi->U4ResumeBoundMs + 10000UL;
+    }
+    if (nhi->U4On) {
+        CmLogNote(nhi, "cm.reenum.hold.u4-ms", nhi->U4ResumeBoundMs);
+    }
     seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
     if (r->Route != CM_ROUTE_FILTER) {

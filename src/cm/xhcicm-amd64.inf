@@ -150,7 +150,7 @@ AddService=xhcicm,0x00000002,Cm.AddService
 
 ; --- Shared -----------------------------------------------------------------
 
-; The driver's values (record 21 section 8), each at the driver's default,
+; The driver's values (record 21 section 8, record 22 section 12), each at the driver's default,
 ; as in xhcicm.inf.
 [Cm.Values]
 HKR,,XhciCmMode,0x00010003,1
@@ -161,6 +161,10 @@ HKR,,XhciCmCmdTimeoutMs,0x00010003,5000
 HKR,,XhciCmApproveTimeoutMs,0x00010003,10000
 HKR,,XhciCmSafeEject,0x00010003,1
 HKR,,XhciLogVerbosity,0x00010003,0
+; The USB4 profile's (design record 22 section 12).
+HKR,,XhciCmUsb3Tunnel,0x00010003,1
+HKR,,XhciCmLaneBonding,0x00010003,1
+HKR,,XhciCmPreOsCleanup,0x00010003,0
 
 [Cm.AddService]
 DisplayName=%CmSvcDesc%
