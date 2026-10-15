@@ -47,8 +47,8 @@
 #include "tbt_hw.h"
 #include "tbt_u4cm.h"
 #include "cm_reenum.h"
-#include "cm_live.h"
 #include "cm_statb.h"
+#include "cm_live.h"
 
 #define CM_POOL_TAG 'mChX'
 
