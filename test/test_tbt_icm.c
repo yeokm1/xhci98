@@ -1618,6 +1618,84 @@ static void test_settings(void)
     CHECK_EQ(g_fake.Writes, 0, "an unbind before any start touches nothing");
 }
 
+/*
+ * The resume's budget (record 21 section 6.3; TBT_ICM_RESUME_BUDGET_MS):
+ * every wait clipped to what is left of it, the drain stopped when it is
+ * spent, the resume then abandoned whole.
+ */
+static void test_resume_budget(void)
+{
+    TBT_ICM_ACTION act[4];
+    unsigned long t0;
+    unsigned long ms;
+    LONG rc;
+
+    CHECK_EQ(TBT_ICM_RESUME_BUDGET_MS, 270000UL,
+             "270 s, 30 s inside the bridges' fixed 5-minute hold");
+
+    /* Clipping: driver ready never answered, a 3 s budget - the first
+     * 5 s attempt is cut at 3 s and no retry follows. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.ReadyMode = MODE_NEVER;
+    TbtIcmSetResumeBudget(&g_icm, 3000);
+    t0 = g_fake.NowUs;
+    rc = TbtIcmResume(&g_icm);
+    ms = (g_fake.NowUs - t0) / 1000UL;
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "the resume ran out of its budget");
+    CHECK(ms >= 3000UL, "it waited the budget");
+    CHECK(ms < 3200UL, "and no more (the 5 s attempt clipped)");
+    CHECK_EQ(g_fw.Ready, 2, "one driver ready on resume, not retried past the budget");
+    CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 1, "counted");
+    CHECK(g_icm.Failed, "the instance failed (record 21 section 1.4.2)");
+    CHECK(!g_icm.BudgetOn, "the budget runs only inside a resume");
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_E_STOPPED, "and stays idle");
+
+    /* Under the default budget the same silent firmware fails on its own
+     * bound (four 5 s attempts), not on the budget. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.ReadyMode = MODE_NEVER;
+    t0 = g_fake.NowUs;
+    rc = TbtIcmResume(&g_icm);
+    ms = (g_fake.NowUs - t0) / 1000UL;
+    CHECK(rc != TBT_OK, "the resume fails");
+    CHECK(ms >= 20000UL && ms < 21000UL, "after its four 5 s attempts");
+    CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 0, "not on the budget");
+
+    /* Expiry mid-drain: a device plugged during the sleep is announced on
+     * resume; its approve is never answered (10 s attempts) and the 15 s
+     * budget ends during the second - the drain stops, the resume is
+     * abandoned, its actions retired. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.Present = 1;
+    g_fw.Approved = 0;
+    g_fw.ApproveMode = MODE_NEVER;
+    TbtIcmSetResumeBudget(&g_icm, 15000);
+    t0 = g_fake.NowUs;
+    rc = TbtIcmResume(&g_icm);
+    ms = (g_fake.NowUs - t0) / 1000UL;
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "abandoned at the budget");
+    CHECK(ms >= 15000UL && ms < 15300UL, "at 15 s, not after four 10 s approves");
+    CHECK_EQ(g_fw.Approves, 2, "the second approve attempt was the one cut");
+    CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 1, "counted");
+    CHECK_EQ(actions(act, 4), 0, "no action of the abandoned resume runs");
+
+    /* A resume inside its budget is unchanged (the earlier legs), and an
+     * idle poll after a bind is never clipped. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    TbtIcmSetResumeBudget(&g_icm, 0);
+    CHECK_EQ(g_icm.ResumeBudgetMs, TBT_ICM_RESUME_BUDGET_MS, "0 is the default");
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 0, "within its budget");
+}
+
 int main(void)
 {
     test_frames_ar();
@@ -1644,6 +1722,7 @@ int main(void)
     test_reconcile_bounded();
     test_round3();
     test_settings();
+    test_resume_budget();
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

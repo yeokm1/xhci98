@@ -1168,6 +1168,20 @@ static ULONG cmBusIds(ULONG bridge, PULONG ids, ULONG room)
     return n;
 }
 
+/* Drops `devnode` from member i's known children (98). */
+static VOID cmForget(PCM_REENUM r, ULONG i, ULONG devnode)
+{
+    ULONG k;
+
+    for (k = 0; k < r->KnownCount[i]; k++) {
+        if (r->Known[i][k] == devnode) {
+            r->Known[i][k] = r->Known[i][r->KnownCount[i] - 1];
+            r->KnownCount[i]--;
+            return;
+        }
+    }
+}
+
 /*
  * Section 6.1 on one member: the vanished children removed (tunnel down
  * and RESYNC), then Reenumerate_DevNode. TRUE when that succeeded.
@@ -1218,6 +1232,11 @@ static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
             if (answers) {
                 continue;
             }
+            /* A vanished child leaves the member's known set whatever
+             * follows: CONFIGMG reuses a freed devnode's handle, so a
+             * re-plug's new devnode can come back under the same value
+             * and must be marked as new (section 7.4). */
+            cmForget(r, i, children[c]);
             cr = CmCfgmgQueryRemove(&r->Cfgmg, children[c]);
             CmLogNote(nhi, "cm.reenum.9x.query-remove", cr);
             if (cr != CMG_CR_SUCCESS) {

@@ -412,6 +412,7 @@ VOID TbtIcmInit(PTBT_ICM icm,
     icm->ApproveAll = TRUE;
     icm->CmdTimeoutMs = TBT_ICM_CMD_TIMEOUT_MS;
     icm->ApproveTimeoutMs = TBT_ICM_APPROVE_TIMEOUT_MS;
+    icm->ResumeBudgetMs = TBT_ICM_RESUME_BUDGET_MS;
     icm->Retries = TBT_ICM_RETRIES;
     icm->WaitSlot = TBT_ICM_NO_SLOT;
     ring->Host = host;
@@ -453,6 +454,43 @@ VOID TbtIcmSetTimeouts(PTBT_ICM icm, ULONG cmdMs, ULONG approveMs)
 {
     icm->CmdTimeoutMs = tbtIcmClamp(cmdMs, TBT_ICM_CMD_TIMEOUT_MS);
     icm->ApproveTimeoutMs = tbtIcmClamp(approveMs, TBT_ICM_APPROVE_TIMEOUT_MS);
+}
+
+VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms)
+{
+    icm->ResumeBudgetMs = ms != 0 ? ms : TBT_ICM_RESUME_BUDGET_MS;
+}
+
+/*
+ * A wait of `ms` clipped to what is left of the resume's budget, when one
+ * runs; 0 once it is spent (and the budget marked so). Outside a resume,
+ * `ms` unchanged. The clock is the host's millisecond clock, its
+ * differences taken modulo 2^32.
+ */
+static ULONG tbtIcmClip(PTBT_ICM icm, ULONG ms)
+{
+    ULONG elapsed;
+    ULONG left;
+
+    if (!icm->BudgetOn) {
+        return ms;
+    }
+    if (icm->BudgetSpent) {
+        return 0;
+    }
+    elapsed = icm->Host->NowMs(icm->Host->Context) - icm->BudgetStartMs;
+    if (elapsed >= icm->BudgetMs) {
+        icm->BudgetSpent = TRUE;
+        return 0;
+    }
+    left = icm->BudgetMs - elapsed;
+    return ms < left ? ms : left;
+}
+
+/* TRUE when a resume's budget runs and nothing is left of it. */
+static BOOLEAN tbtIcmBudgetGone(PTBT_ICM icm)
+{
+    return (BOOLEAN)(icm->BudgetOn && tbtIcmClip(icm, 1) == 0);
 }
 
 /* ====================================================================== */
@@ -1043,6 +1081,11 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
             rc = TBT_E_GONE;
             break;
         }
+        if (tbtIcmBudgetGone(icm)) {
+            /* The resume's budget is spent: no further attempt. */
+            rc = TBT_E_TIMEOUT;
+            break;
+        }
         if (attempt != 0) {
             icm->Counters.Retries++;
         }
@@ -1057,7 +1100,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
         }
         icm->Counters.CommandsSent++;
         rc = TBT_E_TIMEOUT;
-        TbtDeadlineStart(&d, icm->Host, timeoutMs);
+        TbtDeadlineStart(&d, icm->Host, tbtIcmClip(icm, timeoutMs));
         frames = 0;
         for (;;) {
             if (icm->WaitGone) {
@@ -1532,7 +1575,8 @@ static VOID tbtIcmDrainQueue(PTBT_ICM icm, ULONG budget)
     TBT_ICM_ANNOUNCE a;
     ULONG n;
 
-    for (n = 0; n < budget && icm->QueueCount != 0; n++) {
+    for (n = 0; n < budget && icm->QueueCount != 0 && !tbtIcmBudgetGone(icm);
+         n++) {
         a = icm->Queue[icm->QueueHead];
         icm->QueueHead = (icm->QueueHead + 1) % TBT_ICM_EVENT_QUEUE;
         icm->QueueCount--;
@@ -1550,7 +1594,7 @@ static VOID tbtIcmServiceFor(PTBT_ICM icm, ULONG ms)
 
     saved = icm->InWait;
     icm->InWait = TRUE;
-    TbtDeadlineStart(&d, icm->Host, ms);
+    TbtDeadlineStart(&d, icm->Host, tbtIcmClip(icm, ms));
     frames = 0;
     while (!TbtDeadlinePassed(&d, icm->Host)) {
         if (frames < TBT_WAIT_FRAME_BUDGET && TbtRingReceive(icm->Ring, &f)) {
@@ -1666,9 +1710,15 @@ static VOID tbtIcmReconcile(PTBT_ICM icm)
         icm->SettleExtend = FALSE;
         tbtIcmServiceFor(icm, TBT_ICM_RECONCILE_MS);
         windows++;
-    } while (icm->SettleExtend &&
+    } while (icm->SettleExtend && !tbtIcmBudgetGone(icm) &&
              windows < TBT_ICM_RECONCILE_MAX_MS / TBT_ICM_RECONCILE_MS);
     tbtIcmDrainQueue(icm, TBT_ICM_EVENT_QUEUE * 2);
+    if (tbtIcmBudgetGone(icm)) {
+        /* An entry may be unannounced only because the time ran out: the
+         * resume is abandoned instead (TbtIcmResume), and nothing is
+         * dropped. */
+        return;
+    }
     for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
         if (icm->Devices[i].InUse && icm->Devices[i].Stale) {
             icm->Counters.Reconciled++;
@@ -1770,9 +1820,13 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
     root.Lo = 0;
     icm->InWait = TRUE;
     for (i = 0; i < TBT_ICM_HOSTPOLL_TRIES; i++) {
+        if (tbtIcmBudgetGone(icm)) {
+            rc = TBT_E_TIMEOUT;
+            break;
+        }
         icm->Counters.HostPollTries++;
         rc = TbtRingCtlRead(icm->Ring, &root, TBT_CS_ROUTER, 0, 0, 1, &v,
-                            TBT_ICM_HOSTPOLL_TIMEOUT_MS, 0);
+                            tbtIcmClip(icm, TBT_ICM_HOSTPOLL_TIMEOUT_MS), 0);
         if (rc == TBT_OK) {
             icm->Counters.HostPollAnswered++;
             break;
@@ -1850,11 +1904,30 @@ LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes)
 
 LONG TbtIcmResume(PTBT_ICM icm)
 {
+    LONG rc;
+
     if (icm->Ring->Va == NULL || icm->Started || icm->Failed) {
         return TBT_E_STOPPED;
     }
-    return tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
-                         TBT_RING_DMA_BYTES, TRUE);
+    icm->BudgetOn = TRUE;
+    icm->BudgetSpent = FALSE;
+    icm->BudgetMs = icm->ResumeBudgetMs;
+    icm->BudgetStartMs = icm->Host->NowMs(icm->Host->Context);
+    rc = tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
+                       TBT_RING_DMA_BYTES, TRUE);
+    if (icm->BudgetSpent) {
+        /* Abandoned whole: whatever this resume reached (approvals sent,
+         * a part of the queue drained) is not taken for a resume; its
+         * queued work and actions are retired with the instance. */
+        icm->Counters.ResumeBudgetExpired++;
+        tbtIcmLog(icm, "tbt.icm.resume-budget-expired", icm->BudgetMs);
+        if (!icm->Failed) {
+            tbtIcmFail(icm);
+        }
+        rc = TBT_E_TIMEOUT;
+    }
+    icm->BudgetOn = FALSE;
+    return rc;
 }
 
 /* Linux icm.c icm_suspend: save devices where the row has it, then driver
