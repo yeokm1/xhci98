@@ -560,3 +560,44 @@ The three flavours (`debug`, `release`, `qemu`) and what distinguishes their out
 | `cm_cfgwk.c` | The Windows 98 SE and ME CONFIGMG worker: one system thread per domain that makes every CONFIGMG call of the re-enumeration and of safe eject's 9x half (the route's opening and guards, the bridge devnode walk, the vanished children's query-remove and remove, `Reenumerate_DevNode`, `DN_REMOVABLE`), so the connection-manager thread never blocks when CONFIGMG does (an Add New Hardware wizard open); requests posted and collapsed per member; a stop that finds it inside a call leaves it to free itself. |
 
 Its gates: `scripts\inf-gate\check-cm-inf.ps1` (the four INFs, with `CM-NO9XBRIDGE`), `scripts\import-gate\xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, the flavour marker check and `scripts\source-stamp.ps1 -Driver xhcicm`.
+
+### `src\cm\`'s pure core
+
+The DDK-free half of `xhcicm.sys`, compiled into the driver from `src\cm\sources` and into the host suites below by `test\run-host-tests.cmd`. Each file names its sources in its header; `legal-provenance.md` section 2a lists the files lifted from `usb4cm` and those adapted from `usb4-emu` and Linux.
+
+| File | What it is |
+|---|---|
+| `tbt_regs.h` | The host interface's registers, ring descriptor and control-packet fields, the firmware connection manager's status, mode and mailbox registers (task 39-0.2, record 21 section 4.1), and the router, adapter, path, TMU, PCIe, USB3 and notification fields the USB4 connection manager uses (task 40-0.1), each cited to the USB4 Specification 2.0 or the source it was checked against. Lifted from `usb4cm`'s `u4regs.h`, its MIT notice kept. |
+| `tbt_ring.c` / `tbt_ring.h` | Ring 0 in Raw Mode, CRC-32C and the control transport with sequence numbers, timeouts and retries (task 39-A.2, record 21 sections 4.2 and 4.3), grown for the USB4 connection manager (task 40-A.1, record 22 sections 5.1 to 5.3): write requests, notifications, plain, enhanced and hot-plug acknowledgements, bounded waits and safe points; host suite `test_tbt_ring`. Lifted from `usb4cm`'s `u4hi.c`. |
+| `tbt_icm.c` / `tbt_icm.h` | The firmware connection manager's client (task 39-A.3, record 21 sections 1.4 and 5): the ICM frames behind a per-generation table (Falcon Ridge, Alpine Ridge, Titan Ridge and Maple Ridge, Ice Lake), the bind, events, the device table, approval, the reconciliation and the resume refresh; host suite `test_tbt_icm`. Written for this project from `ICM-PROTOCOL.md` and Linux's layouts, cited. |
+| `tbt_hw.c` / `tbt_hw.h` | The hardware profiles (the integrated controllers' force power, firmware-ready poll and LTR, with the power-ownership record), platform readiness and the four-test selection of the connection manager, the inert start included (tasks 39-A.3 and 40-A.2, record 21 section 1.4.2, record 22 section 3); host suites `test_tbt_hw` and `test_tbt_select`. |
+| `tbt_topo.c` / `tbt_topo.h` | A domain's tunnel-port set and its sources, the `XhciCmTunnelBridge` list, the PCI Express Link and Slot Status and SHPC readings and the port poll (task 39-A.5, record 21 sections 6.3 and 6.5), and the router-named source and learned correspondence of the USB4 profile (task 40-A.4, record 22 section 7.6), over configuration-space accessors the caller supplies; host suite `test_tbt_topo`. |
+| `tbt_u4cm.c` / `tbt_u4cm.h` | The USB4 software connection manager (tasks 40-A.3 and 40-A.8's pure part, record 22 sections 6 to 9): the host and device routers, lane bonding, the TMU, Configuration Valid, paths, the PCIe and USB3 tunnels, hot plug and teardown, the quirk table, discovery and preservation of tunnels found at start, and Thunderbolt 3 routers behind a USB4 host; host suite `test_u4cm`. Adapted from `usb4-emu`'s `u4cm.c` and Linux's `drivers/thunderbolt`, notices kept. |
+| `cm_cfgmg.h` | CONFIGMG's VxD id, service numbers, flags and result values for the Windows 98 SE and ME route (task 39-0.3, record 21 sections 6.1 and 7.4), each read from the Windows 98 SE DDK's `CONFIGMG.H` with its line; values only. |
+
+### `src\cm\`'s host suites
+
+In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs before any DDK build.
+
+| File | What it is |
+|---|---|
+| `test_cm.c` | `cm_vals.c`: the role a PDO's ids name, the profile table, the inert start's reasons, the registry values' defaults and bounds. |
+| `test_cm_ports.c` | `cm_ports.c`: the families' ids against both INFs, Windows 98's PCI device ids, the bridge filter's snapshot, the resume hold's bound. |
+| `test_tbt_ring.c` | `tbt_ring.c`, with the specification's Appendix A.2 CRC vectors, wrap, exhaustion and the USB4 transport. |
+| `test_tbt_icm.c` | `tbt_icm.c` over the ring: every frame `ICM-PROTOCOL.md` quotes, the other generations' frames synthesised from Linux's structures, and a disconnect during an approve. |
+| `test_tbt_hw.c`, `test_tbt_select.c` | `tbt_hw.c`: the hardware profiles and their id table against `cm_vals.c`'s, and the selection, every `NVM_AUTH_DONE` and `ICM_EN` combination among its cases. |
+| `test_tbt_topo.c` | `tbt_topo.c` on the P14s and emulator layouts, a generic layout, two-port switches, listed and unlisted root ports, two domains and the override list. |
+| `test_u4cm.c` | `tbt_u4cm.c` over the fake fabric, with the `minimal`, `intel-adl` and `asm4242` presets and two domains. |
+| `tbt_fake.h` | The modelled host interface `test_tbt_ring`, `test_tbt_icm` and `test_tbt_hw` drive, from the USB4 Specification 2.0 and `ICM-PROTOCOL.md`. |
+| `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
+| `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
+| `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
+
+### Scripts for the Thunderbolt and USB4 work
+
+| File | What it is |
+|---|---|
+| `scripts\inf-gate\check-cm-inf.ps1` | The INF gate for `xhcicm.sys`'s four INFs, with its self-test (record 21 sections 3.3 and 10.3, record 22 section 3.7). |
+| `scripts\usb4\run-usb4-guest.ps1` | Boots one of this project's guests on the `usb4-emu` QEMU fork with its Thunderbolt 3 and USB4 device models, on this project's own overlays and ports 47900 to 47999 (task 39-0.7, record 21 section 10.2). |
+| `scripts\usb4\usb4-qmp.ps1` | Drives such a guest over QMP: its state, the device router's unplug and plug, the rest of its verbs in its header. |
+| `scripts\usb4-crosscheck\run-crosscheck.sh`, `u4cm-crosscheck.c`, `u4cm-glue.c`, `u4cm-glue.h` | Task 40-A.5's cross-check: `tbt_ring.c` and `tbt_u4cm.c` built strictly as C89 and run against `usb4-emu`'s fabric model, read in place and never modified (record 22 section 14.1). |
