@@ -507,21 +507,33 @@ VOID CmNhiRevoke(PCM_NHI nhi)
  * queued and deferred work is task u4-live's. */
 VOID CmNhiU4Contain(PCM_NHI nhi)
 {
+    CmNhiU4ContainEx(nhi, TRUE);
+}
+
+VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
+{
     TBT_U4_LINKDOWN info;
     TBT_ICM_ACTION a;
     const TBT_U4_PORT *p;
     ULONG i;
+    ULONG gen;
+    BOOLEAN known;
 
-    if (!nhi->U4On || nhi->U4.Contained) {
+    if (!nhi->U4On || nhi->U4ContainDone) {
         return;
     }
+    nhi->U4ContainDone = 1;
     /* 1: the core contained - requests refused, waits ended, actions and
      * deferred tails retired, anchors invalidated - with no access. */
     TbtU4Contain(&nhi->U4);
-    /* The gate closed for good too, whatever made the call (the monitor's
-     * sample, or a resume that found the host interface gone while the
-     * monitor was off): no access of the ordinary class from now. */
-    if (nhi->Live.State != CM_LIVE_REVOKED) {
+    /* The gate closed for good too, whatever made the call. A loss the
+     * monitor did not record (a resume or a bind that found the host
+     * interface gone while it was off) is recorded here as its episode,
+     * once; one the monitor recorded, or a revocation, stands as it is. */
+    if (nhi->Live.State != CM_LIVE_REVOKED &&
+        nhi->Live.State != CM_LIVE_CONTAINED) {
+        nhi->Live.Episode++;
+        nhi->Live.Counters.Contained++;
         nhi->Live.State = CM_LIVE_CONTAINED;
     }
     nhi->Counters.U4Contained++;
@@ -535,25 +547,45 @@ VOID CmNhiU4Contain(PCM_NHI nhi)
      * so no statement can follow (record 21 section 7.3); the channel's
      * own gone deadline stands. */
     if (nhi->U4DownHook != NULL) {
-        for (i = 1; i <= nhi->U4.PortCount; i++) {
+        for (i = 1; i <= nhi->U4.PortCount && i <= TBT_U4_MAX_PORTS; i++) {
             p = TbtU4Port(&nhi->U4, i);
-            if (p == NULL || (!p->Pcie.Up && p->Pcie.Written == 0)) {
+            if (p == NULL) {
                 continue;
             }
+            /* Every connection the channel was told UP for and not told
+             * down, whatever the core's records say now (a teardown that
+             * failed clears them without proving anything); and any the
+             * core still holds live. */
+            known = (BOOLEAN)((nhi->U4UpValid & (1UL << (i - 1))) != 0);
+            if (!known && !p->Pcie.Up && p->Pcie.Written == 0) {
+                continue;
+            }
+            gen = known ? nhi->U4UpGen[i - 1] : p->Generation;
             CmZero(&info, sizeof(info));
-            info.Port = p->Index;
-            info.Generation = p->Generation;
+            info.Port = i;
+            info.Generation = gen;
             info.PcieDown = p->PcieDown;
             info.MapValid = p->MapValid;
             info.MapRid = p->MapRid;
             (VOID)nhi->U4DownHook(nhi->U4HookContext, &info);
+            if (known && gen != p->Generation &&
+                (p->Pcie.Up || p->Pcie.Written != 0)) {
+                info.Generation = p->Generation;
+                (VOID)nhi->U4DownHook(nhi->U4HookContext, &info);
+            }
         }
+        nhi->U4UpValid = 0;
     }
     /* 4: one reconciliation, reason "controller unavailable": every member
      * of the tunnel-port set as changed (CmReenumAction's RESYNC, which
      * also voids the pending ejects), then the seam's own route for the
-     * loss (CmReenumUnavailable). XhciCmReenum 0 requests nothing. */
-    if (nhi->ReenumOn) {
+     * loss (CmReenumUnavailable). XhciCmReenum 0 requests nothing. Not on
+     * the stop's path: that runs inside a PnP request, and the seam's
+     * CONFIGMG route on Windows 98 and ME calls CONFIGMG synchronously;
+     * the removal under way and the next start's discovery stand for it. */
+    if (!reconcile) {
+        CmLogNote(nhi, "u4.contained.no-reconcile", nhi->Live.State);
+    } else if (nhi->ReenumOn) {
         CmZero(&a, sizeof(a));
         a.Kind = TBT_ICM_ACT_RESYNC;
         a.Why = TBT_ICM_WHY_UNAVAILABLE;
@@ -979,8 +1011,13 @@ VOID CmNhiU4Take(PCM_NHI nhi)
             cmU4ToIcm(u, &a);
             if (CmNhiActionLive(nhi, &a)) {
                 /* The nvme98 channel's UP, before the endpoint is exposed;
-                 * never for a connection that has already gone. */
+                 * never for a connection that has already gone. Kept until
+                 * the channel is told down (CmNhiU4ContainEx). */
                 nhi->U4UpHook(nhi->U4HookContext, u);
+                if (u->Port >= 1 && u->Port <= TBT_U4_MAX_PORTS) {
+                    nhi->U4UpGen[u->Port - 1] = u->Generation;
+                    nhi->U4UpValid |= 1UL << (u->Port - 1);
+                }
             }
         }
     }
@@ -1113,6 +1150,10 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
         }
     }
     if (nhi->U4DownHook != NULL) {
+        if (info->Port >= 1 && info->Port <= TBT_U4_MAX_PORTS &&
+            nhi->U4UpGen[info->Port - 1] == info->Generation) {
+            nhi->U4UpValid &= ~(1UL << (info->Port - 1));
+        }
         r = nhi->U4DownHook(nhi->U4HookContext, info);
         return r == TBT_U4_STMT_SENT ? TBT_U4_STMT_SENT
                                      : TBT_U4_STMT_WITHHELD;
@@ -1356,8 +1397,15 @@ static VOID cmU4Bind(PCM_NHI nhi)
     /* Monitored from here, against the size register's value now (record
      * 21 section 5.5): sixteen entries, 256-byte buffers. */
     v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
-    (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
     CmLogNote(nhi, "cm.live.baseline", v);
+    if (v != CM_U4_RX_SIZE_VALUE) {
+        /* Record 22 section 7.7: the host interface went between the ring
+         * start and this read - all ones, or not what was programmed.
+         * Nothing was announced yet, so nothing is reconciled. */
+        CmNhiU4Contain(nhi);
+        return;
+    }
+    (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;
     CmReenumSetEject(nhi, cmU4Eject, nhi);
@@ -1583,6 +1631,12 @@ VOID CmNhiStopWork(PCM_NHI nhi)
      * function stayed in D0 (cm_power.c's direct transition) is still
      * unbound and its ownership still discharged. */
     powered = (BOOLEAN)(nhi->DevicePower == PowerDeviceD0);
+    if (cmU4Contained(nhi)) {
+        /* A surprise removal (the gate revoked) or a loss not yet acted
+         * on: the driver's containment, the nvme98 channel told, before
+         * the seam closes; no reconciliation from inside the PnP request. */
+        CmNhiU4ContainEx(nhi, FALSE);
+    }
     if (nhi->ReenumOn) {
         CmReenumStop(nhi);
         nhi->ReenumOn = 0;
@@ -1725,6 +1779,8 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->U4SeamValid = 0;
     nhi->U4ResumeBoundMs = 0;
     nhi->U4ClearOk = 0;
+    nhi->U4ContainDone = 0;
+    nhi->U4UpValid = 0;
     nhi->U4BatchCount = 0;
     nhi->DmaBytes = 0;
     nhi->Hw = NULL;

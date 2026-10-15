@@ -1523,16 +1523,20 @@ outside ACTIVE (and before the monitor is armed, OFF), and its `Cancelled`
 answer ends every wait of the transport. Under the ICM client those
 states lead to a recovery once the platform restores access. **Under this
 profile there is no recovery in this release** (decision U17): the first
-of SUSPECT, ABSENT or CONFIG_LOST, a surprise removal, or a resume that
-fails with the size register all ones or changed, puts the instance in a
-terminal state, CONTAINED, until a PnP stop and start or a reboot. A
+of SUSPECT, ABSENT or CONFIG_LOST, a surprise removal, or a bind or a
+resume that reads the size register all ones or other than the value it
+programs, puts the instance in a terminal state, CONTAINED, until a PnP
+stop and start or a reboot. A
 matching sample later, or a system resume, never reactivates it.
 Recovery may be deferred; containment may not, since it is what stops
 this driver acting on a fabric it can no longer see.
 
 The monitor is armed by the bind's success (section 4.4 step 6) and by
-every resume that leaves the rings running, a held one included; it never
-samples during a resume (record 21 section 5.5's transitions).
+every resume that leaves the rings running, a held one included, each
+only once the size register reads back the value programmed; it never
+samples during a resume (record 21 section 5.5's transitions). The gate's
+rule covers the NHI's PCI configuration writes as well as BAR0: none is
+made to a function revoked, lost or contained.
 
 **Entering CONTAINED**, once, on the thread, with no register access of
 any kind - no ring stop, no router request, no PCI configuration write
@@ -1552,8 +1556,10 @@ to the NHI:
 2. A batch of actions the driver took and has not delivered (the resume's
    ordering, section 7.6) is discarded: no TUNNEL_UP reaches the
    re-enumeration seam or the `nvme98` channel after the loss.
-3. The `nvme98` channel is told, for each connection that may be up,
-   that presence was lost with nothing proven: the down moment with the
+3. The `nvme98` channel is told, for each connection it was told UP for
+   and not yet told down (kept apart from the core's tunnel records, which
+   a teardown that failed clears without proving anything), and each the
+   core still holds live, that presence was lost with nothing proven: the down moment with the
    path not closed and no anchor, never a statement. Section 10.2's
    statement needs section 7.3 step 1's read-back on the host router, and
    a host router that does not answer proves nothing about the path or
@@ -1566,7 +1572,12 @@ to the NHI:
    filters' invalidation, on Windows 98 and ME through the CONFIGMG
    route record 21 gives that reason - with a removal a driver refused
    never forced, and with `XhciCmReenum` 0 nothing requested. The seam's
-   pending ejects are voided by it (section 7.6).
+   pending ejects are voided by it (section 7.6). On the stop's path (a
+   surprise removal, or a loss found at the stop) this step is not taken:
+   the stop runs inside a PnP request, the seam's Windows 98 and ME route
+   calls CONFIGMG synchronously, and the removal under way and the next
+   start's discovery stand for it; steps 1 to 3 and 5 still run, before
+   the seam is closed.
 5. Logged once with the monitor's state and episode, and counted
    (`u4.drv.contained`; the core's `u4.contained.refused` and
    `u4.contained.retired`).
@@ -1596,6 +1607,7 @@ which never resets it.
 | Actions: TUNNEL_UP to the seam, the `nvme98` UP, the learned and router-named correspondence | retired at entry; none taken after |
 | Safe eject (section 10.4) | refused before any request; the seam's pending ejects voided |
 | System suspend (section 11) | nothing written and no hold published: a contained instance has no tunnel it could restore |
+| Start again (the core's start) | refused before anything is changed; only a new instance starts |
 | Resume, and the restart of the platform step, Bus Master and rings | refused; a hold already published at the suspend is released through section 7.6's failure path (decision U15's order: release, then invalidate) |
 | Stop, surprise removal, removal, shutdown | software teardown only: no fresh port reading for force power (a router request), no ring stop, no Bus Master or force power write; the common buffer as `DmaMayRun` says; BAR0 unmapped; the thread ended |
 
@@ -1612,11 +1624,18 @@ which never resets it.
   statement), and its TUNNEL_DOWN is retired by the containment, the
   reconciliation of step 4 standing for it.
 - *Inside a resume*: the resume's requests fail or are refused and it
-  returns through section 7.6's failure path, within the resume bound;
-  the size register is then read once, and all ones or changed contains
-  the instance after the hold's release. A resume that fails for any
-  other reason is the failure after activation of section 3.5, as
-  before.
+  returns through section 7.6's failure path, within the resume bound.
+  Every resume under this profile, whatever its outcome - the platform
+  step or the Bus Master bit failing included - then reads the size
+  register once: all ones, a value other than the one programmed after a
+  resume that restarted the rings, or the gate revoked meanwhile, and the
+  core is contained at once (nothing it rebuilt is published), the hold
+  released through the failure path, then the driver's containment. A
+  resume that fails with the host interface still answering is the
+  failure after activation of section 3.5, as before.
+- *Between the ring start and the bind's arming*: the size register read
+  then is the check; all ones or another value contains the instance
+  before anything is announced.
 - *At stop*: the stop's own fresh reading of the ports (section 4.2) is
   a router request and is not made, so force power stays; the rings'
   stop is a write and is not made, so the buffer is kept unless

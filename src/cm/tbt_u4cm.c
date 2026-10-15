@@ -5192,6 +5192,12 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     LONG rc;
     PTBT_U4_PORT p;
 
+    if (tbtU4Off(cm)) {
+        /* Section 7.7: a contained instance never starts again; a new one
+         * (TbtU4Init) does. Nothing changed, nothing touched. */
+        cm->Counters.ContainedRefused++;
+        return TBT_E_STOPPED;
+    }
     cm->Va = va;
     cm->Phys = phys;
     cm->Bytes = bytes;

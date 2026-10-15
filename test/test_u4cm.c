@@ -3284,6 +3284,8 @@ static void checkSilent(const char *what)
     CHECK(!TbtU4NextAction(&g_cm, &a), what);
     TbtU4Stop(&g_cm);
     TbtU4Contain(&g_cm);
+    CHECK_EQ(TbtU4Start(&g_cm, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES),
+             TBT_E_STOPPED, what);
     CHECK_EQ(g_fab.MmioReads, reads, what);
     CHECK_EQ(g_fab.MmioWrites, writes, what);
     CHECK_EQ(g_fab.Requests, requests, what);
@@ -3418,6 +3420,15 @@ static void test_contain(void)
     dev = setupMinimal(1, NULL);
     TbtU4Contain(&g_cm);
     CHECK(g_cm.Contained, "restart: contained");
+    g_fab.Gone = 0;
+    g_fab.Cancel = 0;
+    {
+        unsigned long before = g_fab.MmioReads + g_fab.MmioWrites;
+
+        CHECK_EQ(TbtU4Start(&g_cm, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES),
+                 TBT_E_STOPPED, "restart: contained, the host answering: no start");
+        CHECK_EQ(g_fab.MmioReads + g_fab.MmioWrites, before, "restart: nothing touched");
+    }
     TbtU4Init(&g_cm, &g_ring, &g_fab.Host, NULL);
     CHECK(!g_cm.Contained, "restart: a fresh instance is not");
     (void)dev;

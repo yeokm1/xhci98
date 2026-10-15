@@ -257,13 +257,15 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         /* Record 22 section 7.7: a contained instance is never restarted
          * - no platform step, no Bus Master write, no ring; a hold the
          * suspend published is released through the failure path
-         * (decision U15's order: release, then invalidate). */
+         * (decision U15's order: release, then invalidate), then the
+         * driver's containment if it has not run. */
         TbtU4Contain(&nhi->U4);
         nhi->Counters.U4ContainRefused++;
         CmLogNote(nhi, "u4.resume.contained", nhi->Live.State);
         if (nhi->ReenumOn) {
             CmReenumResumed(nhi, FALSE);
         }
+        CmNhiU4Contain(nhi);
         return FALSE;
     }
     if (nhi->Stage != CM_STAGE_ACTIVE || CmNhiFailed(nhi)) {
@@ -290,23 +292,29 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             CmLogNote(nhi, "u4.inert-reason", nhi->U4.InertReason);
             ok = FALSE;
-            /* Record 22 section 7.7: a resume that failed because the host
-             * interface is gone (the size register all ones, or not the
-             * value this driver programs) is contained, after the hold's
-             * failure path below. */
-            v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
-            if (v == 0xFFFFFFFFUL ||
-                (nhi->Live.Baseline != 0 && v != nhi->Live.Baseline)) {
-                lost = TRUE;
-            }
         }
-        if (ok) {
-            /* The rings run again: monitored, the USB4 rule kept (a loss
-             * contains). A held resume runs too and is monitored. */
-            (VOID)CmLiveArm(&nhi->Live,
-                            CmThrProbe32(nhi, TBT_RX_RING(0) +
-                                                  TBT_RING_SIZE_REG),
-                            nhi->Host.NowMs(nhi));
+    }
+    if (nhi->U4On) {
+        /* Record 22 section 7.7: every USB4 resume, whatever its outcome,
+         * reads the size register once. All ones, or not the value this
+         * driver programs (the rings were restarted only on success), or
+         * the gate revoked meanwhile: the host interface is gone and the
+         * instance is contained, after the hold's failure path below. A
+         * success, held or not, arms the monitor only on that value. */
+        v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+        if (!CmNhiHwAccess(nhi) || v == 0xFFFFFFFFUL ||
+            (ok && v != CM_U4_RX_SIZE_VALUE)) {
+            lost = TRUE;
+            /* The core at once, so nothing it rebuilt is published (UP)
+             * by the take below; the driver's half after the release. */
+            TbtU4Contain(&nhi->U4);
+            if (ok) {
+                CmLogNote(nhi, "cm.resume-failed", v);
+                ok = FALSE;
+                held = FALSE;
+            }
+        } else if (ok) {
+            (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
         }
     } else if (ok) {
         rc = TbtIcmResume(&nhi->Icm);

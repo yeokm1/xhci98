@@ -257,6 +257,14 @@ typedef struct _CM_NHI {
      * unbind just before it stopped the rings: the fresh evidence
      * CmNhiMayClearPower requires. */
     ULONG U4ClearOk;
+    /* Record 22 section 7.7: the driver's half of the containment done
+     * (CmNhiU4Contain ran once this start); and, per USB4 port, the
+     * connection generation the nvme98 channel was last told UP for and
+     * not yet told down (bit n-1 of U4UpValid for port n), kept apart from
+     * the core's tunnel records, which a failed teardown clears. */
+    ULONG U4ContainDone;
+    ULONG U4UpGen[TBT_U4_MAX_PORTS];
+    ULONG U4UpValid;
     /* The nvme98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;
@@ -422,6 +430,13 @@ ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action);
  */
 VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions);
 VOID CmNhiU4Contain(PCM_NHI nhi);
+/* The same with the reconciliation chosen: FALSE on the stop's path, which
+ * never calls into PnP from inside a PnP request (record 22 section 7.7). */
+VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile);
+/* The value RX ring 0's size register holds under the USB4 profile: what
+ * the bind and every resume must read back before the monitor is armed. */
+#define CM_U4_RX_SIZE_VALUE \
+    (TBT_RING_U4_ENTRIES | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT))
 VOID CmNhiRevoke(PCM_NHI nhi);
 BOOLEAN CmNhiHwAccess(PCM_NHI nhi);
 
