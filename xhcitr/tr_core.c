@@ -619,7 +619,7 @@ void tr_dec_config(TR_TEXT *t, const unsigned char *d, size_t n)
     size_t o = 0;
     size_t total;
 
-    if (n < 9 || d[1] != 0x02 || d[0] < 9) {
+    if (n < 9 || d[1] != 0x02 || d[0] < 9 || d[0] > n) {
         tr_put(t, "Configuration descriptor: short or malformed\n");
         tr_hex(t, d, n, 2);
         return;
@@ -661,7 +661,7 @@ void tr_dec_bos(TR_TEXT *t, const unsigned char *d, size_t n)
     size_t o;
     size_t total;
 
-    if (n < 5 || d[1] != 0x0F || d[0] < 5) {
+    if (n < 5 || d[1] != 0x0F || d[0] < 5 || d[0] > n) {
         tr_put(t, "BOS descriptor: short or malformed\n");
         tr_hex(t, d, n, 2);
         return;
@@ -747,7 +747,7 @@ int tr_bos_ssp_text(const unsigned char *d, size_t n, char *out, size_t cap)
     int found = 0;
 
     tr_text_init(&t, out, cap);
-    if (n < 5 || d[1] != 0x0F || d[0] < 5) {
+    if (n < 5 || d[1] != 0x0F || d[0] < 5 || d[0] > n) {
         return 0;
     }
     total = tr_w16(d + 2);
@@ -800,7 +800,7 @@ void tr_dec_hub(TR_TEXT *t, const unsigned char *d, size_t n)
 {
     unsigned int ch;
 
-    if (n < 7 || (d[1] != 0x29 && d[1] != 0x2A)) {
+    if (n < 7 || (d[1] != 0x29 && d[1] != 0x2A) || d[0] < 7 || d[0] > n) {
         tr_put(t, "Hub descriptor: short or not reported\n");
         tr_hex(t, d, n, 2);
         return;
@@ -819,7 +819,7 @@ void tr_dec_hub(TR_TEXT *t, const unsigned char *d, size_t n)
     }
     tr_printf(t, "  %-20s %u ms\n", "bPwrOn2PwrGood", (unsigned int)d[5] * 2U);
     tr_printf(t, "  %-20s %u mA\n", "bHubContrCurrent", (unsigned int)d[6]);
-    tr_hex(t, d, n < (size_t)d[0] || d[0] == 0 ? n : (size_t)d[0], 2);
+    tr_hex(t, d, (size_t)d[0], 2);
 }
 
 int tr_dec_string(const unsigned char *d, size_t n, char *out, size_t cap)
@@ -1104,16 +1104,33 @@ void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
     } else if (lanes == CM_ST_LANES_SINGLE) {
         width = 1;
     }
+    if (x != NULL && x->Rate != 0 && kind == CM_ST_KIND_ICM) {
+        /* The ICM's device-connected event carries the rate and width; the
+         * lane adapter is read only where the flag says so. */
+        const char *src = (x->Flags & CM_Q_XF_RATE_READ)
+                              ? "read from the lane adapter"
+                              : "reported by the firmware";
+        if (width != 0) {
+            tr_sprintf(out, cap, "%lu Gbit/s per lane, x%lu (%s)",
+                       (unsigned long)x->Rate, (unsigned long)width, src);
+        } else {
+            tr_sprintf(out, cap, "%lu Gbit/s per lane, lanes not known (%s)",
+                       (unsigned long)x->Rate, src);
+        }
+        return;
+    }
     if (x != NULL && x->Rate != 0) {
         const char *gen = x->Rate == 10 ? "Gen 2 " : x->Rate == 20 ? "Gen 3 "
                           : x->Rate == 40 ? "Gen 4 " : "";
+        const char *src = (x->Flags & CM_Q_XF_RATE_READ)
+                              ? " (read from the lane adapter)" : "";
         if (width != 0) {
-            tr_sprintf(out, cap, "USB4 %sx%lu (%lu Gbit/s)", gen,
+            tr_sprintf(out, cap, "USB4 %sx%lu (%lu Gbit/s)%s", gen,
                        (unsigned long)width,
-                       (unsigned long)(x->Rate * width));
+                       (unsigned long)(x->Rate * width), src);
         } else {
-            tr_sprintf(out, cap, "USB4 %s(%lu Gbit/s per lane), lanes not known",
-                       gen, (unsigned long)x->Rate);
+            tr_sprintf(out, cap, "USB4 %s(%lu Gbit/s per lane), lanes not known%s",
+                       gen, (unsigned long)x->Rate, src);
         }
         return;
     }
