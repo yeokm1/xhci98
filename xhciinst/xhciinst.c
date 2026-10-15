@@ -6416,14 +6416,15 @@ static int tb_after(const char *portId, const char *unitId, int nhiK,
             }
             if (tbn[i].Parent == port && inst_eq(tbn[i].R.Id, unitId) &&
                 tb_started(&tbn[i])) {
-                /* Started again: nothing is established. */
-                whole = 0;
+                /* Started again: it has to be stopped again. */
+                return INST_UNPLUG_RESTARTED;
             }
         }
     } else {
         whole = 0;
     }
-    if (nhiK >= 0 && tbh[nhiK].Node >= 0 && tb_read_record(&tbh[nhiK]) &&
+    /* The record the stable walk was checked against, not a later read. */
+    if (whole && nhiK >= 0 && tbh[nhiK].Confirmed &&
         inst_st_confirmed(tbh[nhiK].Rec, tbh[nhiK].Ask)) {
         count = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORT_COUNT);
         active = inst_get32(tbh[nhiK].Rec, CM_ST_O_PORT_ACTIVE);
@@ -6638,10 +6639,7 @@ static int run_eject(void)
         cr = tbEject(tbn[u].Dn, &veto, vetoName, MAX_PATH, 0);
         logonly("CM_Request_Device_EjectA(%s) = 0x%08lX, veto %lu %s\n", id,
                 (unsigned long)cr, (unsigned long)veto, vetoName);
-        if (inst_eject_nt_fallback(cr, veto,
-                                   tbn[u].HasCaps &&
-                                       (tbn[u].Caps &
-                                        INST_CM_DEVCAP_REMOVABLE) != 0) &&
+        if (inst_eject_nt_fallback(cr, veto, tbn[u].HasCaps, tbn[u].Caps) &&
             tbQueryAndRemove != NULL) {
             /* Not removable in Windows' eyes (record 24 section 7.2): the
              * same query-remove and remove an eject runs, by the routine
@@ -6718,9 +6716,10 @@ static int run_eject(void)
             "Thunderbolt driver looking\nat the port again, can start it "
             "again.\n");
     }
-    devLast = inst_unplug_text(tb_after(portId, id, nhiK, portBdf, single));
+    i = tb_after(portId, id, nhiK, portBdf, single);
+    devLast = inst_unplug_text(i);
     tb_unask();
-    return INST_EXIT_DONE;
+    return i == INST_UNPLUG_RESTARTED ? INST_EXIT_STEPS : INST_EXIT_DONE;
 }
 
 /* ======================================================================== */

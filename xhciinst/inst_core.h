@@ -596,10 +596,12 @@ int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
                   int *withName);
 
 /* NT: 1 when an eject request refused as PNP_VetoIllegalDeviceRequest is
- * for a unit whose capabilities do not say Removable, so the same
- * query-remove and remove are asked by CM_Query_And_Remove_SubTreeA (the
- * 2000 reading of record 24 section 7.2; a veto still stops that call). */
-int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int removable);
+ * for a unit whose capabilities were read and say neither Removable nor
+ * SurpriseRemovalOK, so the same query-remove and remove are asked by
+ * CM_Query_And_Remove_SubTreeA (record 24 section 7.2; a veto still stops
+ * that call). */
+int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int capsKnown,
+                           INST_U32 caps);
 
 /* The step when that routine is not implemented either (Windows 2000, read
  * on the leg): exit 4, nothing changed. */
@@ -618,6 +620,7 @@ int inst_eject9x_remove(INST_U32 cr, const char **text);
 #define INST_UNPLUG_NOW     0
 #define INST_UNPLUG_OTHERS  1
 #define INST_UNPLUG_CHECK   2
+#define INST_UNPLUG_RESTARTED 3 /* the ejected unit started again: exit 4 */
 int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
                      INST_U32 usb3);
 const char *inst_unplug_text(int kind);

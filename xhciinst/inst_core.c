@@ -2579,10 +2579,14 @@ int inst_eject9x_remove(INST_U32 cr, const char **text)
 #define INST_VETO_LEGACY_DRIVER     11UL
 #define INST_VETO_RIGHTS            12UL
 
-int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int removable)
+int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int capsKnown,
+                           INST_U32 caps)
 {
+    /* CM_DEVCAP_REMOVABLE 0x4, CM_DEVCAP_SURPRISEREMOVALOK 0x80: the
+     * routine is for devices with neither (Microsoft's reference). */
     return cr == INST_CR_REMOVE_VETOED &&
-           vetoType == INST_VETO_ILLEGAL_REQUEST && !removable;
+           vetoType == INST_VETO_ILLEGAL_REQUEST && capsKnown &&
+           (caps & 0x84UL) == 0;
 }
 
 const char *inst_not_removable_text(void)
@@ -2677,6 +2681,9 @@ const char *inst_unplug_text(int kind)
     case INST_UNPLUG_OTHERS:
         return "Other devices behind the same Thunderbolt port are still "
                "running: eject them\ntoo before you unplug it.";
+    case INST_UNPLUG_RESTARTED:
+        return "The device has started again, so it is not safe to unplug. "
+               "Close the programs\nusing it and run INSTALL /eject again.";
     default:
         return "Before you unplug it, make sure none of its other devices "
                "(USB ports, card\nreaders, network) is in use; stop them in "

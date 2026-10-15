@@ -456,7 +456,12 @@ needs is positively established:
   first."
 
 The exit code is 0 in all three: the asked eject succeeded. The legs read
-the first; the others have no vehicle here (section 12).
+the first; the others have no vehicle here (section 12). If the ejected
+unit itself is running again in the reading after the eject (re-enumerated
+meanwhile), the line is instead "The device has started again, so it is
+not safe to unplug. Close the programs using it and run INSTALL /eject
+again." and the exit code 4. The router and port facts are taken from the
+same record the stable walk was checked against, never from a later read.
 
 ## 6. What `/devices` prints
 
@@ -570,9 +575,12 @@ Read on Windows 2000 (leg E4, 2026-10-15): after the NVMe controller was
 disabled and enabled in Device Manager its capabilities said `Removable`
 no, and `CM_Request_Device_EjectA` answered `CR_REMOVE_VETOED` with
 `PNP_VetoIllegalDeviceRequest` (8), the device still started. For exactly
-that answer on a unit whose capabilities do not say `Removable`, the tool
+that answer on a unit whose capabilities were read and say neither
+`Removable` nor `SurpriseRemovalOK` (Microsoft's reference limits the
+routine to such devices; it also needs `SeLoadDriverPrivilege`, an
+administrator's), the tool
 asks `CM_Query_And_Remove_SubTreeA(unit, &veto, name, MAX_PATH,
-CM_REMOVE_UI_NOT_OK)` (`cfgmgr32.dll` on every NT target, read in 2000's
+CM_REMOVE_UI_NOT_OK)` (from `setupapi.dll`, else `cfgmgr32.dll`; read in 2000's
 export table): the same query-remove - which every driver of the subtree,
 the volume's included, may veto as for an eject - and then the remove. Its
 answers go through the table of item 2 and 3; nothing overrides a veto.

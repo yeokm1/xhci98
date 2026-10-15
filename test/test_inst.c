@@ -1556,13 +1556,19 @@ static void test_tb_eject(void)
     CHECK_EQ(inst_eject_nt(0x1F, 0, &text, &withName), INST_EJ_FAILED,
              "unknown state");
     CHECK(strstr(text, "shut down") != NULL, "an unknown state: shut down first");
-    CHECK(inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 0),
+    CHECK(inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x0),
           "an illegal request on a unit that is not removable: query and remove");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1),
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x4),
           "not for a removable unit");
-    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 5, 0),
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 1, 0x80),
+          "not for a unit that is surprise-removal OK");
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 8, 0, 0x0),
+          "not when the capabilities are not known");
+    CHECK(!inst_eject_nt_fallback(INST_CR_REMOVE_VETOED, 5, 1, 0x0),
           "never past an open handle");
-    CHECK(!inst_eject_nt_fallback(0, 8, 0), "not after a success");
+    CHECK(!inst_eject_nt_fallback(0, 8, 1, 0x0), "not after a success");
+    CHECK(strstr(inst_unplug_text(INST_UNPLUG_RESTARTED), "not safe") != NULL,
+          "a unit that started again is not safe to unplug");
     CHECK_EQ(inst_eject_code(INST_EJ_DONE), INST_EXIT_DONE, "done 0");
     CHECK_EQ(inst_eject_code(INST_EJ_VETO), INST_EXIT_STEPS, "veto 4");
     CHECK_EQ(inst_eject_code(INST_EJ_CHANGED), INST_EXIT_REFUSED, "changed 1");
