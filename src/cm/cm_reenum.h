@@ -232,9 +232,11 @@ typedef struct _CM_REENUM {
     /* 98: the CONFIGMG route, each port's children already seen, and the
      * window after a tunnel up in which CmReenumService looks for new
      * children to mark (the re-enumeration is not synchronous). */
-    CM_CFGMG Cfgmg;
-    ULONG CfgmgOwed;        /* the route opens at the first Action or
+    CM_CFGMG Cfgmg;         /* unused since the worker (cm_cfgwk.c)       */
+    ULONG CfgmgOwed;        /* the worker starts at the first Action or
                                Service, after the NHI's start completed  */
+    struct _CM_CFGWK *Wk;   /* 98: the CONFIGMG worker (cm_cfgwk.c)       */
+    ULONG WkOpenSeen;       /* its opening read back                      */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
     ULONG DebtPending;      /* a tunnel change came while it was empty    */
     ULONG RediscoverAt;     /* NowMs of the last                          */
@@ -291,6 +293,58 @@ VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
 /* Writes up to `capacity` active members' locations into `ports` and
  * returns how many were written. */
 ULONG CmReenumPorts(struct _CM_NHI *nhi, PULONG ports, ULONG capacity);
+
+/* ---- Windows 98 SE and ME: the CONFIGMG worker (cm_cfgwk.c) --------- */
+
+/*
+ * Every CONFIGMG call of a 98 domain is made on a worker thread of its
+ * own, never on the connection-manager thread: a CONFIGMG service blocks
+ * while the configuration manager is busy (an Add New Hardware wizard
+ * open, read on 98 SE), and the connection manager must keep servicing its
+ * ring meanwhile. The connection-manager thread posts requests, collapsed
+ * per member (bit i of a mask is member i), and reads the route's opening
+ * back.
+ */
+#define CM_CFGWK_OPEN_PENDING   0UL
+#define CM_CFGWK_OPEN_OK        1UL
+#define CM_CFGWK_OPEN_FAILED    2UL
+
+typedef struct _CM_CFGWK_COUNTERS {
+    ULONG Calls;            /* Reenumerate_DevNode made                   */
+    ULONG CallFailures;     /* ... failed, or no devnode for the bridge  */
+    ULONG Removed;          /* vanished children removed                  */
+    ULONG Vetoed;           /* Query_Remove_SubTree refused, respected    */
+    ULONG Marked;           /* DN_REMOVABLE added                         */
+    ULONG MarkFailures;
+    ULONG Detached;         /* the stop found it inside a call            */
+} CM_CFGWK_COUNTERS, *PCM_CFGWK_COUNTERS;
+
+/* Creates the worker for `members` bridges at bdf[] (members the domain
+ * owns in `active`) and asks it to open the route. NULL on failure.
+ * PASSIVE_LEVEL. */
+struct _CM_CFGWK *CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf,
+                               ULONG members, ULONG active);
+
+/* Asks for the members in `reenum` to be re-enumerated (those also in
+ * `vanish` with their vanished children removed first) and, with `mark`,
+ * for a marking window; `active` replaces the owned members. Returns at
+ * once. <= DISPATCH_LEVEL. */
+VOID CmCfgwkPost(struct _CM_CFGWK *w, ULONG reenum, ULONG vanish,
+                 ULONG active, BOOLEAN mark);
+
+/* CM_CFGWK_OPEN_*, with CM_CFGMG_WHY_* and Get_Version's AX. <=
+ * DISPATCH_LEVEL. */
+ULONG CmCfgwkOpenState(struct _CM_CFGWK *w, PULONG why, PULONG version);
+
+/* Ends the worker: waits for it when it is between calls (and frees it);
+ * when it is inside a CONFIGMG call, which may be waiting for this very
+ * stop, leaves it to free itself. `counters` gets its counts (Detached
+ * set, the rest zero, in the second case). PASSIVE_LEVEL. */
+VOID CmCfgwkStop(struct _CM_CFGWK *w, PCM_CFGWK_COUNTERS counters);
+
+/* From the driver's unload: waits, bounded, for every worker to have
+ * left. PASSIVE_LEVEL. */
+VOID CmCfgwkDrain(VOID);
 
 /* ---- the registration list, for cm_filt.c (NT only) ------------------ */
 
