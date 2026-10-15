@@ -1498,7 +1498,6 @@ static void build_tb(int root)
         ports = inst_get32(h->R, CM_ST_O_PORT_COUNT);
         active = inst_get32(h->R, CM_ST_O_PORT_ACTIVE);
         n = inst_get32(h->R, CM_ST_O_ROUTER_COUNT);
-        tbDevices += (int)n;
         placed = (int *)calloc(n + 1, sizeof(int));
         if (placed == NULL) {
             continue;
@@ -1582,6 +1581,11 @@ static void refresh_model(int withUsb)
     }
     nhi_find(&gw);
     derive(&gw, nhi, nhiCount);
+    for (root = 0; root < nhiCount; root++) {
+        if (nhi[root].R != NULL) {
+            tbDevices += (int)inst_get32(nhi[root].R, CM_ST_O_ROUTER_COUNT);
+        }
+    }
     if (!withUsb) {
         return;
     }
