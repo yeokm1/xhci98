@@ -55,6 +55,8 @@ static ULONG cmStUptimeS(PCM_NHI nhi)
     ULONG tickUs;
     ULONG q;
     ULONG r;
+    ULONG a;
+    ULONG c;
 
     tickUs = nhi->ClockTickUs;
     if (tickUs == 0) {
@@ -63,9 +65,12 @@ static ULONG cmStUptimeS(PCM_NHI nhi)
     KeQueryTickCount(&ticks);
     q = ticks.LowPart / 1000000UL;
     r = ticks.LowPart % 1000000UL;
-    /* ticks x tickUs / 10^6, in words: each product below 2^32. */
-    return q * tickUs + (r * (tickUs / 1000UL)) / 1000UL +
-           (r * (tickUs % 1000UL)) / 1000000UL;
+    /* ticks x tickUs / 10^6, in words, each product below 2^32: a in ms,
+     * c in us, their remainders added before the last division. */
+    a = r * (tickUs / 1000UL);
+    c = r * (tickUs % 1000UL);
+    return q * tickUs + a / 1000UL + c / 1000000UL +
+           ((a % 1000UL) * 1000UL + c % 1000000UL) / 1000000UL;
 }
 
 /* A REG_DWORD, and nothing else, is taken (as cm_reg.c's). */

@@ -6365,8 +6365,23 @@ static int tb_after(const char *portId, const char *unitId, int nhiK,
     INST_U32 active;
     int whole;
     int portKnown = 0;
+    int routers = 0;
+    int tries;
 
-    whole = tb_scan(0) && tbnBad == 0;
+    /* A stable reading after the eject: the record's generation taken as
+     * the baseline, the tree walked, and the walk repeated while the
+     * record moved during it (the eject itself may move it once). */
+    whole = 0;
+    for (tries = 0; tries < 3 && !whole; tries++) {
+        if (nhiK < 0 || tbh[nhiK].Node < 0 || !tb_read_record(&tbh[nhiK]) ||
+            !inst_st_confirmed(tbh[nhiK].Rec, tbh[nhiK].Ask)) {
+            break;
+        }
+        tbh[nhiK].Confirmed = 1;
+        tbh[nhiK].Gen = inst_get32(tbh[nhiK].Rec, CM_ST_O_GENERATION);
+        whole = tb_scan(0) && tbnBad == 0 && !tbChanging &&
+                tbh[nhiK].Confirmed;
+    }
     for (i = 0; i < tbnCount; i++) {
         if (inst_eq(tbn[i].R.Id, portId)) {
             port = i;
@@ -6404,12 +6419,12 @@ static int tb_after(const char *portId, const char *unitId, int nhiK,
             const unsigned char *e =
                 tbh[nhiK].Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
             if (inst_get32(e, CM_ST_E_BRIDGE) == portBdf) {
-                if (usb3 != CM_ST_TUN_UNKNOWN) {
-                    usb3 = CM_ST_TUN_UNKNOWN;   /* two routers: ambiguous */
-                    break;
-                }
+                routers++;
                 usb3 = (inst_get32(e, CM_ST_E_TUNNELS) >> 4) & 0xFUL;
             }
+        }
+        if (routers != 1) {
+            usb3 = CM_ST_TUN_UNKNOWN;   /* none, or ambiguous */
         }
     }
     return inst_unplug_kind(whole, others, single, usb3);
