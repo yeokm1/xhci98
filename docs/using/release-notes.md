@@ -3217,9 +3217,14 @@ Thunderbolt driver looking at the port again, can start the device again.
 Windows 2000, XP, Vista and 7: Unplug or Eject Hardware and Safely Remove
 Hardware work as before. `XHCIINST /eject` makes the same request they
 make, and also for a device they do not list (connected before the
-Thunderbolt driver started, or disabled and enabled since); what Windows
-answers for such a device is reported as it is. It needs an administrator
-on 2000 and XP.
+Thunderbolt driver started, or disabled and enabled since): Windows
+refuses to eject such a device, and the tool then asks for the same
+query-remove and remove by the routine meant for devices that are not
+removable, a program with a file open still refusing it. Windows 2000
+offers no such routine (read in a virtual machine on 2026-10-15): there
+the tool says the device cannot be stopped, and after a restart with it
+connected it is listed for removal again. XP, Vista and 7 have not been
+read for this case. It needs an administrator on 2000 and XP.
 
 `XHCIINST /devices`, on every system, shows each connected device's name,
 generation, link, approval and connections (PCIe, USB3, DisplayPort) as
