@@ -803,15 +803,17 @@ For each xHCI controller (`PCI\CC_0C0330` among its ids):
   old release); and, only when the installed `xhci98.sys` is from `2.3.x`
   or earlier and only on 98 SE, the keyboard-and-mouse paragraph of "From
   2.3.x or earlier", printed before the confirmation as on NT (section
-  5.8);
+  5.8) and as a line of the controller's step;
 - **current**: nothing;
 - **another vendor's driver**: left (decision D3).
 
-An `Enum\PCI` entry with no driver whose first hardware id is a present
-controller's is that controller's old slot (the 9x leg, 2026-10-15: the
-controller moved from `DEV_04` to `DEV_03` after the first start) and is
-not listed; an entry of a controller with no devnode at all stays listed
-(section 6.3's cancelled-wizard controller).
+An `Enum\PCI` entry of a controller with no driver and no devnode is
+listed as "recorded, but not running now", with both readings it can have:
+a cancelled wizard's controller (section 6.3) to install, or an old slot's
+entry (the 9x leg, 2026-10-15: the controller moved from `DEV_04` to
+`DEV_03` after the first start) that needs nothing. The tool does not
+guess between them: two identical controllers share a hardware id, so the
+id alone proves neither.
 
 For each UAS device and NHI present with no driver, the install route of
 the first item. For each one already bound to an older release of this

@@ -1080,21 +1080,6 @@ static void registry_controllers_9x(void)
             if (!is_controller(d) || d->Driver[0] != '\0') {
                 continue;
             }
-            /* An old slot's entry of a controller that runs under another
-             * entry now (the 9x leg, 2026-10-15: DEV_04 after the
-             * controller moved to DEV_03) is no device to install. */
-            for (k = 0; k < devCount; k++) {
-                if (!devs[k].RegOnly && devs[k].Present &&
-                    inst_eq(first_hw(&devs[k]), first_hw(d))) {
-                    known = 1;
-                    break;
-                }
-            }
-            if (known) {
-                logonly("Enum entry %s: an old slot of a present controller\n",
-                        d->Id);
-                continue;
-            }
             d->Present = 1;
             d->Inf = -1;
             dev_driver_values(d);
@@ -3868,6 +3853,16 @@ static void steps_9x(const char *dir)
 {
     int i;
     int any = 0;
+    int old23;
+    INST_U32 bv[4];
+    char bin[INST_PATH_CHARS];
+    static const INST_U32 v24[4] = { 2, 4, 0, 0 };
+
+    /* The 2.3.x keyboard-and-mouse advice: 98 SE only, and only over an
+     * installed xhci98.sys older than 2.4.0.0. */
+    group_binary(0, bin, sizeof(bin));
+    old23 = envNow.Minor == 10 && file_version(bin, bv) > 0 &&
+            inst_ver_cmp(bv, v24) < 0;
 
     out("\nWhat to do now:\n");
     for (i = 0; i < devCount; i++) {
@@ -3924,7 +3919,7 @@ static void steps_9x(const char *dir)
                 "the \"xhci98 xHCI Host Controller Disk\", type the same\n    "
                 "folder under \"Copy files from\".\n  - Restart afterwards, "
                 "although Windows does not ask.\n", dir);
-            if (d->Inf == INST_INF_XHCI) {
+            if (d->Inf == INST_INF_XHCI && is_controller(d) && old23) {
                 out("  - From 2.3.x or earlier: have a keyboard and mouse that "
                     "do not go through this\n    driver first (release notes, "
                     "\"From 2.3.x or earlier\").\n");
