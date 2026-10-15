@@ -241,6 +241,10 @@ typedef struct _CM_NHI {
      * CmReenumSuspend: the hold's watchdog must be at least this plus
      * record 21's 10 s (cm_reenum.h). */
     ULONG U4ResumeBoundMs;
+    /* Every port read disconnected (TbtU4AllPortsDisconnected) by the
+     * unbind just before it stopped the rings: the fresh evidence
+     * CmNhiMayClearPower requires. */
+    ULONG U4ClearOk;
     /* The nvme98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;

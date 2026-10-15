@@ -606,6 +606,13 @@ VOID TbtU4Stop(PTBT_U4CM cm);
  * 4.2's condition for clearing force power at stop). */
 BOOLEAN TbtU4AnyRouterConnected(const TBT_U4CM *cm);
 
+/* A fresh reading, on the running rings, before TbtU4Stop: TRUE only when
+ * every host USB4 port's lane 0 reads its Adapter State as CLd (record 22
+ * section 6.4 step 1) - each read answered, none connected, transitional,
+ * disabled or reserved. FALSE when failed, suspended or not running. The
+ * evidence record 22 section 4.2 asks before force power is cleared. */
+BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm);
+
 /* A port by its 1-based index, for the log and the snapshot. */
 const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port);
 

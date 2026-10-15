@@ -990,6 +990,41 @@ static void test_dp_preserved(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "deferred: the first poll builds it: UP");
     CHECK(!p->AsFoundOwed, "deferred: the owed connect made");
     CHECK(g_fab.R[0].Adp[5].Path[2 * 9] & 0x80000000UL, "deferred: the DP main path untouched");
+
+    /* Deferred and XhciCmPreOsCleanup 2 on a version 1 host: the cleaning
+     * removes the preserved configuration, so no as-found connect is owed
+     * and the port connects normally. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[0].Adp[8].Path + 16, 0, 8);
+    memset(g_fab.R[0].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
+    g_fab.R[0].Adp[8].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.R[dev].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    fabAddDpOut(&g_fab, dev, 8);
+    g_fab.R[0].Adp[5].Path[2 * 9] = 0x80000000UL | 12UL | (1UL << 11);
+    g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 13UL | (1UL << 11);
+    g_fab.R[dev].Adp[1].Path[2 * 12] = 0x80000000UL | 9UL | (8UL << 11);
+    g_fab.R[dev].Adp[1].Path[2 * 13] = 0x80000000UL | 8UL | (8UL << 11);
+    g_fab.R[dev].Adp[8].Path[2 * 8] = 0x80000000UL | 14UL | (1UL << 11);
+    g_fab.R[0].Adp[1].Path[2 * 14] = 0x80000000UL | 8UL | (5UL << 11);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    c.DeferFirstPoll = TRUE;
+    c.PreOsCleanup = 2;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(g_cm.Counters.PortsCleaned, 1, "deferred, cleanup 2: the DP port cleaned");
+    CHECK(!p->AsFoundOwed, "deferred, cleanup 2: no as-found connect owed");
+    CHECK(!p->DpPreserved, "deferred, cleanup 2: nothing preserved any more");
+    poll(&g_cm, &g_fab, 3);
+    CHECK(!p->AsFoundOwed && p->State != TBT_U4_UP,
+          "deferred, cleanup 2: no as-found connect made (the normal path, which "
+          "waits while the kept DP paths hold the lane, as without the deferral)");
 }
 
 /* ------------------------------------------------------------------ */
@@ -3098,6 +3133,23 @@ static void test_defer_first_poll(void)
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Pcie.Preserved,
           "deferred: a pre-OS tunnel preserved by the start itself");
+    CHECK(!TbtU4AllPortsDisconnected(&g_cm), "a router connected: not all disconnected");
+
+    /* TbtU4AllPortsDisconnected: a fresh reading of every lane 0. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(TbtU4AllPortsDisconnected(&g_cm), "nothing plugged: every lane 0 in CLd");
+    g_fab.Stopped = 1;
+    CHECK(!TbtU4AllPortsDisconnected(&g_cm), "a lane unreadable: no evidence");
+    g_fab.Stopped = 0;
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 2, dev);
+    CHECK(!TbtU4AllPortsDisconnected(&g_cm),
+          "a router plugged since the last check: read connected");
+    TbtU4Stop(&g_cm);
+    CHECK(!TbtU4AllPortsDisconnected(&g_cm), "stopped: no reading");
 }
 
 int main(void)

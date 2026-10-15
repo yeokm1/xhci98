@@ -384,8 +384,17 @@ BOOLEAN CmNhiRunning(PCM_NHI nhi)
 VOID CmNhiUnbind(PCM_NHI nhi)
 {
     if (nhi->U4On) {
+        /* Record 22 section 4.2's evidence, read fresh on the rings before
+         * they stop: only then may force power this instance set be
+         * cleared (CmNhiMayClearPower). */
+        nhi->U4ClearOk = 0;
+        if (nhi->Power.ForcePowerSetHere && nhi->Stage == CM_STAGE_ACTIVE &&
+            !nhi->Suspended && TbtU4AllPortsDisconnected(&nhi->U4)) {
+            nhi->U4ClearOk = 1;
+        }
         TbtU4Stop(&nhi->U4);
-        CmLogNote(nhi, "u4.stop", nhi->U4.Failed ? 1UL : 0UL);
+        CmLogNote(nhi, "u4.stop", (nhi->U4.Failed ? 1UL : 0UL) |
+                                      (nhi->U4ClearOk ? 2UL : 0UL));
         return;
     }
     TbtIcmUnbind(&nhi->Icm);
@@ -412,8 +421,8 @@ BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
     if (!nhi->U4On) {
         return TRUE;
     }
-    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->Suspended || nhi->U4.Failed ||
-        nhi->U4.Suspended || nhi->Power.FwReadyFailed ||
+    if (!nhi->U4ClearOk || nhi->Stage != CM_STAGE_ACTIVE || nhi->Suspended ||
+        nhi->U4.Failed || nhi->U4.Suspended || nhi->Power.FwReadyFailed ||
         nhi->U4.PortCount == 0 || TbtU4AnyRouterConnected(&nhi->U4)) {
         return FALSE;
     }
@@ -1316,6 +1325,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->ArmOwed = 0;
     nhi->U4ClosedValid = 0;
     nhi->U4ResumeBoundMs = 0;
+    nhi->U4ClearOk = 0;
     nhi->U4BatchCount = 0;
     nhi->DmaBytes = 0;
     nhi->Hw = NULL;
