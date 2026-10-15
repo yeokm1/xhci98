@@ -1685,6 +1685,33 @@ static void test_resume_budget(void)
     CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 1, "counted");
     CHECK_EQ(actions(act, 4), 0, "no action of the abandoned resume runs");
 
+    /* The budget ending in the last approve attempt, with nothing queued
+     * after it: still abandoned (no check follows the wait otherwise). */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.Present = 1;
+    g_fw.Approved = 0;
+    g_fw.ApproveMode = MODE_NEVER;
+    TbtIcmSetResumeBudget(&g_icm, 39500);
+    rc = TbtIcmResume(&g_icm);
+    CHECK_EQ(g_fw.Approves, 4, "the fourth approve attempt ran, clipped");
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "and the resume is abandoned all the same");
+    CHECK_EQ(actions(act, 4), 0, "its approve-unknown action retired");
+
+    /* A clock that does not move: the budget still ends, by the waits
+     * granted under it. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.ReadyMode = MODE_NEVER;
+    g_fake.ClockStopped = 1;
+    TbtIcmSetResumeBudget(&g_icm, 3000);
+    rc = TbtIcmResume(&g_icm);
+    g_fake.ClockStopped = 0;
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "a stopped clock still ends the budget");
+    CHECK_EQ(g_fw.Ready, 2, "after one clipped driver-ready attempt");
+
     /* A resume inside its budget is unchanged (the earlier legs), and an
      * idle poll after a bind is never clipped. */
     setup(GEN_AR, 1, 1);

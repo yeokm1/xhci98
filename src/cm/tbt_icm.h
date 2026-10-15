@@ -478,6 +478,9 @@ typedef struct _TBT_ICM {
     BOOLEAN BudgetSpent;
     ULONG BudgetStartMs;
     ULONG BudgetMs;
+    ULONG BudgetStalledMs;      /* waits made under it while the clock did
+                                   not move: the fallback that still ends
+                                   it then (as TbtDeadline's does)         */
     ULONG ResumeBudgetMs;       /* the budget the next resume gets */
 
     TBT_ICM_READY Ready;

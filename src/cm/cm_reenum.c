@@ -1178,7 +1178,8 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
     for (i = 0; i < r->Members; i++) {
         bdf[i] = r->Port[i].Bdf;
     }
-    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, cmOwnedMask(nhi));
+    r->WkActive = cmOwnedMask(nhi);
+    r->Wk = CmCfgwkStart(nhi, bdf, r->Members, r->WkActive);
     if (r->Wk == NULL) {
         r->Why = CM_NOROUTE_CFGMG_THUNK;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
@@ -1338,6 +1339,12 @@ VOID CmReenumService(PCM_NHI nhi)
     }
     stale = 0;
     cmCfgmgLate(nhi);
+    if (r->Wk != NULL && cmOwnedMask(nhi) != r->WkActive) {
+        /* A claim won or lost with no request: the worker learns it at
+         * once, so an operation in progress on a lost member stops. */
+        r->WkActive = cmOwnedMask(nhi);
+        CmCfgwkPost(r->Wk, 0, 0, r->WkActive, FALSE);
+    }
     /* Each eject is checked again at the hand-off, under the lock: the
      * same publication of the bridge, still this domain's, the same
      * population, and still no function with a stack behind it. One that
@@ -1580,6 +1587,7 @@ VOID CmReenumStop(PCM_NHI nhi)
         }
     }
     r->WkOpenSeen = 0;
+    r->WkActive = 0;
     r->Route = CM_ROUTE_NONE;
     r->Members = 0;
     r->MarkOpen = 0;

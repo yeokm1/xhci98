@@ -462,35 +462,61 @@ VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms)
 }
 
 /*
+ * What is left of the resume's budget, ms: by the host's millisecond clock
+ * (its differences taken modulo 2^32) or, when more, by the time waited
+ * under it while that clock did not move (tbtIcmCharge), so a stopped
+ * clock still ends it, as every wait's own deadline is ended by the waits
+ * it made (TbtDeadlinePassed). 0 once spent, the budget then marked so.
+ */
+static ULONG tbtIcmBudgetLeft(PTBT_ICM icm)
+{
+    ULONG elapsed;
+
+    if (icm->BudgetSpent) {
+        return 0;
+    }
+    elapsed = icm->Host->NowMs(icm->Host->Context) - icm->BudgetStartMs;
+    if (icm->BudgetStalledMs > elapsed) {
+        elapsed = icm->BudgetStalledMs;
+    }
+    if (elapsed >= icm->BudgetMs) {
+        icm->BudgetSpent = TRUE;
+        return 0;
+    }
+    return icm->BudgetMs - elapsed;
+}
+
+/*
  * A wait of `ms` clipped to what is left of the resume's budget, when one
- * runs; 0 once it is spent (and the budget marked so). Outside a resume,
- * `ms` unchanged. The clock is the host's millisecond clock, its
- * differences taken modulo 2^32.
+ * runs; 0 once it is spent. Outside a resume, `ms` unchanged.
  */
 static ULONG tbtIcmClip(PTBT_ICM icm, ULONG ms)
 {
-    ULONG elapsed;
     ULONG left;
 
     if (!icm->BudgetOn) {
         return ms;
     }
-    if (icm->BudgetSpent) {
-        return 0;
-    }
-    elapsed = icm->Host->NowMs(icm->Host->Context) - icm->BudgetStartMs;
-    if (elapsed >= icm->BudgetMs) {
-        icm->BudgetSpent = TRUE;
-        return 0;
-    }
-    left = icm->BudgetMs - elapsed;
+    left = tbtIcmBudgetLeft(icm);
     return ms < left ? ms : left;
+}
+
+/*
+ * After a clipped wait: what it waited is charged to the budget only when
+ * the clock did not move across it (the clock counts it otherwise).
+ */
+static VOID tbtIcmCharge(PTBT_ICM icm, ULONG startMs, ULONG waitedMs)
+{
+    if (icm->BudgetOn &&
+        icm->Host->NowMs(icm->Host->Context) == startMs) {
+        icm->BudgetStalledMs += waitedMs;
+    }
 }
 
 /* TRUE when a resume's budget runs and nothing is left of it. */
 static BOOLEAN tbtIcmBudgetGone(PTBT_ICM icm)
 {
-    return (BOOLEAN)(icm->BudgetOn && tbtIcmClip(icm, 1) == 0);
+    return (BOOLEAN)(icm->BudgetOn && tbtIcmBudgetLeft(icm) == 0);
 }
 
 /* ====================================================================== */
@@ -1190,6 +1216,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
                 break;
             }
         }
+        tbtIcmCharge(icm, d.StartMs, d.WaitedUs / 1000UL);
         if (rc != TBT_E_TIMEOUT) {
             break;
         }
@@ -1604,6 +1631,7 @@ static VOID tbtIcmServiceFor(PTBT_ICM icm, ULONG ms)
         }
         TbtDeadlineWait(&d, icm->Host);
     }
+    tbtIcmCharge(icm, d.StartMs, d.WaitedUs / 1000UL);
     icm->InWait = saved;
 }
 
@@ -1780,6 +1808,8 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
     ULONG n;
     ULONG i;
     ULONG v;
+    ULONG pollMs;
+    ULONG pollAt;
     LONG rc;
     TBT_ROUTE root;
 
@@ -1825,8 +1855,14 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
             break;
         }
         icm->Counters.HostPollTries++;
+        pollMs = tbtIcmClip(icm, TBT_ICM_HOSTPOLL_TIMEOUT_MS);
+        pollAt = icm->Host->NowMs(icm->Host->Context);
         rc = TbtRingCtlRead(icm->Ring, &root, TBT_CS_ROUTER, 0, 0, 1, &v,
-                            tbtIcmClip(icm, TBT_ICM_HOSTPOLL_TIMEOUT_MS), 0);
+                            pollMs, 0);
+        if (rc == TBT_E_TIMEOUT) {
+            /* A timed-out read waited what it was given. */
+            tbtIcmCharge(icm, pollAt, pollMs);
+        }
         if (rc == TBT_OK) {
             icm->Counters.HostPollAnswered++;
             break;
@@ -1911,10 +1947,14 @@ LONG TbtIcmResume(PTBT_ICM icm)
     }
     icm->BudgetOn = TRUE;
     icm->BudgetSpent = FALSE;
+    icm->BudgetStalledMs = 0;
     icm->BudgetMs = icm->ResumeBudgetMs;
     icm->BudgetStartMs = icm->Host->NowMs(icm->Host->Context);
     rc = tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
                        TBT_RING_DMA_BYTES, TRUE);
+    /* Read once more: the last wait may have used what was left with no
+     * check after it. */
+    (VOID)tbtIcmBudgetGone(icm);
     if (icm->BudgetSpent) {
         /* Abandoned whole: whatever this resume reached (approvals sent,
          * a part of the queue drained) is not taken for a resume; its

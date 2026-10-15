@@ -237,6 +237,7 @@ typedef struct _CM_REENUM {
                                Service, after the NHI's start completed  */
     struct _CM_CFGWK *Wk;   /* 98: the CONFIGMG worker (cm_cfgwk.c)       */
     ULONG WkOpenSeen;       /* its opening read back                      */
+    ULONG WkActive;         /* the owned-member mask it was last given    */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
     ULONG DebtPending;      /* a tunnel change came while it was empty    */
     ULONG RediscoverAt;     /* NowMs of the last                          */

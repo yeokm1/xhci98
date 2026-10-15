@@ -29,8 +29,11 @@
  * block; when it is inside a CONFIGMG call - which, during the NHI's own
  * removal, may not return until that removal has finished - the stop does
  * not wait (waiting there would deadlock): the worker frees its block and
- * closes its thunks itself when the call returns. The driver's unload
- * waits, bounded, for every worker to have left (CmCfgwkDrain).
+ * closes its thunks itself when the call returns, making no further call.
+ * Because such a worker may outlive its NHI for as long as CONFIGMG
+ * blocks, a driver that has started one has no unload routine (the image
+ * stays resident until the restart); CmCfgwkDrain remains for the unload
+ * routine of a driver that never started one.
  *
  * IRQL: CmCfgwkStart, CmCfgwkStop and the worker at PASSIVE_LEVEL;
  * CmCfgwkPost and CmCfgwkOpenState at <= DISPATCH_LEVEL.
@@ -75,6 +78,9 @@ typedef struct _CM_CFGWK {
     ULONG Members;
     CM_WK_PORT Port[XHCI_TBT_MAX_TUNNELS];
     ULONG Active;           /* members the domain owns (bit per index)    */
+    ULONG Gen[XHCI_TBT_MAX_TUNNELS]; /* each member's request generation:
+                               bumped by every post naming it            */
+    ULONG MarkWanted;       /* safe eject on: a retry's success marks too */
     ULONG ReqReenum;        /* members to re-enumerate                    */
     ULONG ReqVanish;        /* ... removing vanished children first       */
     ULONG ReqMark;          /* a marking window to open                   */
@@ -153,6 +159,35 @@ static VOID cmWkLog(PCM_CFGWK w, const char *label, ULONG value)
         CmLogNote(w->Nhi, label, value);
     }
     KeReleaseSpinLock(&w->Lock, irql);
+}
+
+/* FALSE once the stop asked the worker to leave: checked before every
+ * CONFIGMG call of an operation, so an operation in progress when the
+ * stop came makes no further call after its current one returns. */
+static BOOLEAN cmWkGo(PCM_CFGWK w)
+{
+    KIRQL irql;
+    BOOLEAN go;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    go = (BOOLEAN)!w->Exit;
+    KeReleaseSpinLock(&w->Lock, irql);
+    return go;
+}
+
+/* TRUE while member i's request is still the one taken (`gen`) and the
+ * domain still owns the member: a newer post or a lost claim makes the
+ * operation in progress stale. */
+static BOOLEAN cmWkCurrent(PCM_CFGWK w, ULONG i, ULONG gen)
+{
+    KIRQL irql;
+    BOOLEAN ok;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    ok = (BOOLEAN)(!w->Exit && w->Gen[i] == gen &&
+                   (w->Active & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return ok;
 }
 
 /* ---- the 98 devnode tree ---------------------------------------------- */
@@ -300,6 +335,9 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
     dropped = 0;
     stack[depth++] = w->Cfgmg.Root;
     while (depth > 0 && nodes < CM_WK_WALK_NODES) {
+        if (!cmWkGo(w)) {
+            return 0;
+        }
         node = stack[--depth];
         nodes++;
         cr = CmCfgmgDeviceId(&w->Cfgmg, node, id, sizeof(id));
@@ -346,6 +384,9 @@ static ULONG cmWkChildren(PCM_CFGWK w, ULONG devnode, PULONG out, ULONG room)
     }
     while (node != 0 && n < room) {
         out[n++] = node;
+        if (!cmWkGo(w)) {
+            break;
+        }
         if (CmCfgmgSibling(&w->Cfgmg, node, &node) != CMG_CR_SUCCESS) {
             break;
         }
@@ -418,11 +459,57 @@ static VOID cmWkForget(CM_WK_PORT *p, ULONG devnode)
 }
 
 /*
- * Section 6.1 on member i: the vanished children query-removed and
- * removed (a refusal respected, never forced), then Reenumerate_DevNode.
- * TRUE when the devnode was found and the re-enumeration succeeded.
+ * The single removal step of a vanished child of member i, on the worker:
+ * Query_Remove_SubTree, and Remove_SubTree only when that was accepted (a
+ * refusal - a driver with open files - is respected: nothing forced,
+ * logged and counted). The request is checked to be current before each
+ * call. FALSE when it went stale (the caller stops), TRUE otherwise,
+ * whatever the outcome. Any orderly-remove handshake with the child's
+ * driver wraps this function.
  */
-static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished)
+static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
+                               ULONG devnode)
+{
+    ULONG cr;
+
+    if (!cmWkCurrent(w, i, gen)) {
+        return FALSE;
+    }
+    /* A vanished child leaves the known set whatever follows: CONFIGMG
+     * reuses a freed devnode's handle, so a re-plug's devnode can come
+     * back under the same value and must be marked as new (section
+     * 7.4). */
+    cmWkForget(&w->Port[i], devnode);
+    cr = CmCfgmgQueryRemove(&w->Cfgmg, devnode);
+    cmWkLog(w, "cm.reenum.9x.query-remove", cr);
+    if (cr != CMG_CR_SUCCESS) {
+        /* The re-enumeration after it only asks PCI.VXD to read the bus
+         * again. */
+        w->C.Vetoed++;
+        return TRUE;
+    }
+    if (!cmWkCurrent(w, i, gen)) {
+        return FALSE;
+    }
+    cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+    cmWkLog(w, "cm.reenum.9x.remove", cr);
+    if (cr == CMG_CR_SUCCESS) {
+        w->C.Removed++;
+    }
+    return TRUE;
+}
+
+/*
+ * Section 6.1 on member i: the vanished children removed
+ * (cmWkRemoveChild) (a refusal respected, never forced), then Reenumerate_DevNode.
+ * TRUE when the devnode was found and the re-enumeration succeeded, or the
+ * request went stale meanwhile (a newer one redoes it). Before each call
+ * the request is checked to be current (cmWkCurrent): a stop, a newer post
+ * for the member or a lost claim ends it, and no removal is made on an
+ * inventory a reconnection may have outdated.
+ */
+static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
+                          ULONG gen)
 {
     CM_WK_PORT *p;
     ULONG bridge;
@@ -439,6 +526,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished)
 
     p = &w->Port[i];
     bridge = cmWkFindDevnode(w, i);
+    if (!cmWkCurrent(w, i, gen)) {
+        return TRUE;
+    }
     if (bridge == 0) {
         w->C.CallFailures++;
         return FALSE;
@@ -463,27 +553,13 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished)
             if (answers) {
                 continue;
             }
-            /* A vanished child leaves the known set whatever follows:
-             * CONFIGMG reuses a freed devnode's handle, so a re-plug's
-             * devnode can come back under the same value and must be
-             * marked as new (section 7.4). */
-            cmWkForget(p, children[c]);
-            cr = CmCfgmgQueryRemove(&w->Cfgmg, children[c]);
-            cmWkLog(w, "cm.reenum.9x.query-remove", cr);
-            if (cr != CMG_CR_SUCCESS) {
-                /* A refusal is respected (a driver with open files): no
-                 * Remove_SubTree, nothing forced, logged and counted. The
-                 * re-enumeration below only asks PCI.VXD to read the bus
-                 * again. */
-                w->C.Vetoed++;
-                continue;
-            }
-            cr = CmCfgmgRemove(&w->Cfgmg, children[c]);
-            cmWkLog(w, "cm.reenum.9x.remove", cr);
-            if (cr == CMG_CR_SUCCESS) {
-                w->C.Removed++;
+            if (!cmWkRemoveChild(w, i, gen, children[c])) {
+                return TRUE;
             }
         }
+    }
+    if (!cmWkCurrent(w, i, gen)) {
+        return TRUE;
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
     w->C.Calls++;
@@ -516,6 +592,9 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
     }
     count = cmWkChildren(w, bridge, children, CM_WK_KNOWN);
     for (c = 0; c < count && mark; c++) {
+        if (!cmWkGo(w)) {
+            return;
+        }
         known = 0;
         for (k = 0; k < p->KnownCount; k++) {
             if (p->Known[k] == children[c]) {
@@ -596,9 +675,11 @@ static VOID cmWkThread(PVOID context)
     KIRQL irql;
     ULONG reenum;
     ULONG vanish;
-    ULONG active;
     ULONG failed;
     ULONG failedVanish;
+    ULONG gen[XHCI_TBT_MAX_TUNNELS];
+    ULONG retried;
+    ULONG done;
     ULONG i;
     BOOLEAN open;
     BOOLEAN go;
@@ -618,18 +699,22 @@ static VOID cmWkThread(PVOID context)
         vanish = w->ReqVanish;
         w->ReqReenum = 0;
         w->ReqVanish = 0;
+        retried = 0;
         if (w->Retry != 0 && cmWkSince(w->RetryAt) >= CM_WK_RETRY_MS) {
+            retried = w->Retry & ~reenum;
             reenum |= w->Retry;
             vanish |= w->RetryVanish;
             w->Retry = 0;
             w->RetryVanish = 0;
+        }
+        for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+            gen[i] = w->Gen[i];
         }
         if (w->ReqMark) {
             w->ReqMark = 0;
             w->MarkOpen = 1;
             w->MarkFrom = cmWkNowTicks();
         }
-        active = w->Active;
         w->InCall = 1;
         KeReleaseSpinLock(&w->Lock, irql);
 
@@ -638,11 +723,12 @@ static VOID cmWkThread(PVOID context)
         }
         failed = 0;
         failedVanish = 0;
+        done = 0;
         go = TRUE;
         if (w->OpenState == CM_CFGWK_OPEN_OK) {
             for (i = 0; i < w->Members; i++) {
                 if ((reenum & (1UL << i)) == 0 ||
-                    (active & (1UL << i)) == 0) {
+                    !cmWkCurrent(w, i, gen[i])) {
                     continue;
                 }
                 /* Between members the stop may take its turn. */
@@ -651,9 +737,13 @@ static VOID cmWkThread(PVOID context)
                     go = FALSE;
                     break;
                 }
-                if (!cmWkMember(w, i, (BOOLEAN)((vanish >> i) & 1UL))) {
+                if (!cmWkMember(w, i, (BOOLEAN)((vanish >> i) & 1UL),
+                                gen[i])) {
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
+                } else if (cmWkCurrent(w, i, gen[i])) {
+                    /* Done, not merely gone stale. */
+                    done |= 1UL << i;
                 }
             }
             if (go && w->MarkOpen) {
@@ -662,7 +752,9 @@ static VOID cmWkThread(PVOID context)
             }
             if (go && w->MarkOpen) {
                 for (i = 0; i < w->Members; i++) {
-                    if (active & (1UL << i)) {
+                    /* Ownership read again per member: a claim lost since
+                     * the request ends its marking. */
+                    if (cmWkCurrent(w, i, w->Gen[i])) {
                         cmWkMark(w, i, TRUE);
                     }
                 }
@@ -674,12 +766,20 @@ static VOID cmWkThread(PVOID context)
 
         KeAcquireSpinLock(&w->Lock, &irql);
         w->InCall = 0;
-        if (failed != 0) {
-            /* Owed, tried again later; a newer request for the member
-             * supersedes it. */
-            w->Retry |= failed;
-            w->RetryVanish |= failedVanish;
-            w->RetryAt = cmWkNowTicks();
+        for (i = 0; i < w->Members; i++) {
+            /* A failure is owed only while its request is still the
+             * member's latest: a newer post redoes it anyway. */
+            if ((failed & (1UL << i)) != 0 && w->Gen[i] == gen[i]) {
+                w->Retry |= 1UL << i;
+                w->RetryVanish |= failedVanish & (1UL << i);
+                w->RetryAt = cmWkNowTicks();
+            }
+        }
+        if ((done & retried) != 0 && w->MarkWanted) {
+            /* An owed re-enumeration came late: so does the marking of
+             * what it brings. */
+            w->MarkOpen = 1;
+            w->MarkFrom = cmWkNowTicks();
         }
         timed = (BOOLEAN)(w->Retry != 0 || w->MarkOpen);
         if (w->Exit) {
@@ -740,6 +840,12 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
     }
     w->Active = active;
     w->OpenState = CM_CFGWK_OPEN_PENDING;
+    /* A worker the stop cannot wait for (inside a CONFIGMG call) runs this
+     * image's code after its NHI is gone, for as long as CONFIGMG blocks:
+     * no timeout makes an unload safe then, so a driver that has run one
+     * is not unloaded at all (no DriverUnload: the image stays resident
+     * until the restart). Windows 98 SE and ME only. */
+    CmDriverObject->DriverUnload = NULL;
     (VOID)InterlockedIncrement(&cmWkLive);
     status = PsCreateSystemThread(&handle, THREAD_ALL_ACCESS, NULL, NULL,
                                   NULL, cmWkThread, w);
@@ -756,19 +862,27 @@ VOID CmCfgwkPost(PCM_CFGWK w, ULONG reenum, ULONG vanish, ULONG active,
                  BOOLEAN mark)
 {
     KIRQL irql;
+    ULONG i;
 
     KeAcquireSpinLock(&w->Lock, &irql);
     w->ReqReenum |= reenum;
     w->ReqVanish |= vanish;
-    /* A newer request for a member supersedes its owed retry. */
+    /* A newer request for a member supersedes its owed retry and any
+     * operation on it in progress (its generation). */
     w->Retry &= ~reenum;
     w->RetryVanish &= ~reenum;
+    for (i = 0; i < w->Members; i++) {
+        if (reenum & (1UL << i)) {
+            w->Gen[i]++;
+        }
+    }
     w->Active = active;
     if (mark) {
         w->ReqMark = 1;
+        w->MarkWanted = 1;
     }
-    KeReleaseSpinLock(&w->Lock, irql);
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
 }
 
 ULONG CmCfgwkOpenState(PCM_CFGWK w, PULONG why, PULONG version)
@@ -797,8 +911,10 @@ VOID CmCfgwkStop(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
     if (!wait) {
         w->Detached = 1;
     }
-    KeReleaseSpinLock(&w->Lock, irql);
+    /* Signalled under the lock: once it is released a detached worker
+     * may free the block. */
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
+    KeReleaseSpinLock(&w->Lock, irql);
     if (!wait) {
         /* Inside a CONFIGMG call that may be waiting for this very stop to
          * finish: not waited for; the worker frees its own block. */
