@@ -759,6 +759,13 @@ and, after the re-plug, reads it back and compares it.
 | E6, USB4 | 2000, the `usb4-generic` profile | the viewer from the USB4 record, the eject and section 5.2's PCIe tunnel line |
 | E7, ME | ME, if an image with `xhcicm.sys` installed is available | D, E1 and E2: ME's IOS and the missing stop callback are the reason it is not covered by 98 SE |
 
+**Run on 2026-10-15** (`runs/run-39.md`, "39-A.8 follow-up"): D, E1, E2
+and E3 on 98 SE and D, E1, E2 and E4 on 2000 passed, the 2000 E4 reading
+being that the not-removable case cannot be stopped there (section 7.2).
+E5, E6 and E7 were not run: E5 is covered by the host suite's injected
+answers, and no ME image with `xhcicm.sys` installed and no USB4-profile
+guest with `nvme98` were at hand.
+
 What a leg does not read stays unclaimed: the eject on a system with no
 passing E1 and E2 is described in the README and release notes as not
 read there; ME without E7 is said to be untested. A failed removal after
