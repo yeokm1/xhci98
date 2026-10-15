@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 3, 2026-10-16, reviewed and revised twice the same night;
+Status: revision 5, 2026-10-16, reviewed and revised four times the same night;
 the code is written against it. Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
@@ -394,17 +394,17 @@ whole transaction itself and exits.
   `TaskbarCreated` broadcast reaches it and the icon is re-added after an
   Explorer restart; `WM_CLOSE` to it ends the program cleanly.
 - **Quit event** (for the installer, section 8): a manual-reset event
-  `Global\Xhci98TrQuit` on NT, `Xhci98TrQuit` on 98 SE and ME. The tray
-  waits on it in its message loop; when it is set, the tray finishes an
-  eject transaction in progress, removes the icon and exits. A tray that
-  starts while it is set waits up to 20 s for it to clear before it
-  shows the icon. On NT whoever creates it gives it a security descriptor
-  granting everyone `SYNCHRONIZE` and SYSTEM and Administrators full
-  access. The tray opens it with `SYNCHRONIZE` alone, creating it if it
-  is absent and opening it again if that create loses a race; XHCIINST
-  opens it with `EVENT_MODIFY_STATE`. A tray that can neither open nor
-  create it runs without it, and XHCIINST's `WM_CLOSE` and deferred
-  replacement (section 8) cover that tray.
+  `Global\Xhci98TrQuit` on NT, `Xhci98TrQuit` on 98 SE and ME, created
+  only by XHCIINST, set, and closed when its run ends (so it exists only
+  during an install or uninstall). The tray never creates it: once a
+  second, with its query poll, it opens it with `SYNCHRONIZE` alone; when
+  it exists and is set, the tray finishes an eject transaction in
+  progress, removes the icon and exits. On NT XHCIINST gives it a security
+  descriptor granting everyone `SYNCHRONIZE` and SYSTEM and
+  Administrators full access. A local user who creates the name first
+  could close other sessions' trays; that is the whole of the exposure,
+  and XHCIINST's `WM_CLOSE` and deferred replacement (section 8) still
+  cover a tray that misses the event.
 
 ### 7.2 Events and keys
 
@@ -456,10 +456,17 @@ Exit codes follow XHCIINST's (record 23 section 10).
 - XHCIINST owns the tool's file (and its `.NEW` and `.DEL` forms) and the
   Run value, outside the per-package `XHCIINST.LST` lists; its removal of
   `%windir%\XHCI98\` counts them as its own.
+- **One at a time.** XHCIINST holds a machine-wide maintenance mutex
+  (`Global\XhciinstMaint` on NT, `XhciinstMaint` on 98 SE and ME, with the
+  shared mutex's security) for everything in this section: reading the
+  versions, reconciling pending operations, the quit event, the copy and
+  the Run value. A second XHCIINST waits up to 60 s for it, then refuses;
+  it reads every version again once it holds it.
 - **Copy.** On an install or upgrade run, the tool for the machine's
   architecture goes to `%windir%\XHCI98\XHCITR.EXE` (`XHCITR64.EXE` on
-  x64) when it is missing or its file version is older than the
-  package's; an equal version is left alone. The Run value is written
+  x64) when the package's file version is newer than both the installed
+  file's and a pending `.NEW`'s (section "Pending operations"), or the
+  file is missing; otherwise it is left alone. The Run value is written
   only after the file is in place. `/notray` writes no Run value and
   removes an existing one. There is no new question (owner: start at
   login).
@@ -477,13 +484,23 @@ Exit codes follow XHCIINST's (record 23 section 10).
   a file still in use is renamed to `XHCITR.DEL` and deleted at the next
   restart on NT, or deleted by a `NUL=` line in `WININIT.INI` on 98 SE
   and ME.
-- **Pending operations.** Before it copies and before it uninstalls,
-  XHCIINST reconciles its own pending operations for the tool: it deletes
-  a leftover `XHCITR.NEW` (an NT delayed move whose source is gone does
-  nothing at restart) and, on 98 SE and ME, removes its own `[rename]` and
-  `NUL=` lines for the tool from `WININIT.INI`, keeping every other line.
-  An upgrade after an upgrade, or an uninstall then a reinstall, therefore
-  never lets an older pending copy or deletion land on a newer file.
+- **Pending operations.** A pending `XHCITR.NEW` counts as installed at
+  its own version. An install that copies a newer tool first stages it
+  (as the file itself, or as a new `.NEW` written and verified under a
+  temporary name and then renamed over the old `.NEW`), and only then
+  drops what it supersedes: on 98 SE and ME its own `[rename]` and `NUL=`
+  lines for the tool in `WININIT.INI`, every other line kept (an NT
+  delayed move whose source is gone does nothing at restart). An install
+  that leaves the tool alone leaves a newer pending `.NEW` alone. Every
+  successful install, whether it copied or not, removes a pending
+  deletion of the tool (its own `NUL=` line on 98 SE and ME; on NT an
+  uninstall deferred only `XHCITR.DEL`, never the tool's own name), so a
+  same-version reinstall after a deferred uninstall keeps the file the Run
+  value names. Only an
+  uninstall cancels a pending `.NEW` outright (deletes it and its 9x
+  line). An upgrade after an upgrade, an older package after a newer one,
+  or an uninstall then a reinstall, therefore never lets an older copy or
+  a stale deletion land on a newer file.
 - The packager carries both executables under `tools\xhcitr\` with
   XHCIINST's freshness and version checks; `test-package.ps1` checks the
   layout.

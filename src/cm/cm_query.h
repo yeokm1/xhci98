@@ -74,7 +74,7 @@
                                            but the pass counter, its age and
                                            the record's own generation,
                                            uptime, time and echo changes;
-                                           never 0; per start *\/
+                                           never 0; per start */
 
 #define CM_Q_F_INERT            0x01UL  /* the thread waits with no timeout */
 #define CM_Q_F_TRUNCATED        0x02UL  /* more routers than the record holds */
