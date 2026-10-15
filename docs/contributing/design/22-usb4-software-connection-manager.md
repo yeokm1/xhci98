@@ -198,7 +198,14 @@ profile; on `usb4-generic` there is no Intel id, so section 3's Intel tests
 never run there.
 
 More host models are coming (its maintainer's note of 2026-10-15: an AMD
-USB4 host, in `docs/CONTROLLER-CATALOG.md`, in progress). The connection
+USB4 host, in `docs/CONTROLLER-CATALOG.md`, in progress). Since its `main`
+at `a50c19e` a third host model is there, `host-model=asm4242` (ASMedia's
+ASM4242 of AM5 X870 boards, from public sources only), a host with no
+firmware connection manager: under a CSM, this record's connection
+manager is the only one it can have. The legacy operating systems need a
+CSM, so the realistic USB4 targets are such AM5 X870 boards; the
+Framework laptop behind `intel-adl` is UEFI-only, a reference capture and
+not a run target. The connection
 manager is therefore developed against `minimal` and `intel-adl` and
 branches only on what it discovers - adapter types, capability chains,
 router operation answers, the router's vendor and device for the quirk
@@ -1466,6 +1473,38 @@ and one rule:
 - **Learned correspondence**: when a tunnel comes up on a port whose
   bridge is not router-named, the member whose secondary bus gained the
   new function is recorded as that port's, for the life of the instance.
+
+As built (task 40-A.4, `tbt_topo.c`'s `XhciTbtTopoAddNamed` and its
+learning calls), with the choices marked as the orchestrator's of
+2026-10-15, for the owner to confirm:
+
+- A router-named bridge joins the set only when the discovery's outcome
+  was a set (`SET`), no candidate (`NO_CANDIDATE`), hot-plug bridges no
+  source names (`UNLISTED`) or ambiguous listed root ports (`AMBIGUOUS`),
+  and only where a PCI-to-PCI bridge answers that is neither the NHI nor
+  its parent. A bridge already a member keeps its own source and is bound
+  to the port (orchestrator). An ambiguous listed root port the router
+  names joins too, and record 21's exclusive ownership decides it as any
+  claim (orchestrator). Under the override, the override stays the whole
+  set: a named member is bound, any other location refused. After
+  `OVERRIDE_BAD`, `INCOMPLETE` or `MANY`, or with no discovery, every
+  naming is refused.
+- A named location that cannot be read voids the discovery as
+  `INCOMPLETE`, and one member past the set's room voids it as `MANY`:
+  the set is emptied and found again, never left without a named port.
+- Learning is a new device (a function 0 newly answering) on one member's
+  secondary bus while that port is the only PCIe tunnel up and not yet
+  attributed. A port stays pending until it is learned or proven down - a
+  teardown whose read-back proved the path closed, or the router's removal
+  evidence of section 7.1 items 1 to 3; a tunnel-down action alone is not
+  proof - and while another port is pending no gain is attributed. A
+  member with no secondary bus blocks learning for the domain, and a
+  conflicted port's live tunnel blocks it until that tunnel is proven down
+  (orchestrator).
+- Bindings, named or learned, are kept by bridge for the instance's life.
+  A port bound to two bridges, or a bridge to two ports, withdraws both
+  bindings for the rest of the instance (orchestrator); the bridges keep
+  their membership, so the whole set acts for them.
 
 A tunnel change acts on the port's own member when the correspondence is
 known (router-named or learned), and on the whole set otherwise, as record
