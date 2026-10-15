@@ -218,7 +218,10 @@ int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
 int inst_pe_machine(const unsigned char *buf, size_t len, INST_U32 *machine);
 
 /* Whether a PE image carries an embedded (Authenticode) signature: its
- * security directory has a size. 1 yes, 0 no, -1 not a readable image. */
+ * security directory, inside the optional header, has a size and points to
+ * a certificate table inside the buffer (the whole file). 1 yes, 0 no, -1
+ * not a readable image or a table outside it. Structure only: no
+ * cryptographic check. */
 int inst_pe_signed(const unsigned char *buf, size_t len);
 
 /* list;dir appended unless dir is already an entry (without case).
@@ -425,10 +428,14 @@ typedef struct _INST_TREE_OPS {
 /* The problem number as reported: 0 unless the status has a problem. */
 INST_U32 inst_dn_problem(INST_U32 status, INST_U32 problem);
 
-/* The devnodes below dn into the signature *h (ids, started, problem), at
- * most depth 8 and *nodes 512 in all; *expect set for a device of the bus
- * (USB\XHCI98_...) not configured yet (Code 1 or 18). 1 when read whole,
- * 0 when a reading failed (the signature is then not to be trusted). */
+/* The devnodes below dn into the signature *h (ids, started, problem);
+ * *expect set for a device of the bus (USB\XHCI98_...) not configured yet
+ * (Code 1 or 18). 1 when read whole; 0 when a reading failed or the walk
+ * was cut short (a subtree below INST_TREE_DEPTH, more than
+ * INST_TREE_NODES devnodes in *nodes): the signature is then not to be
+ * trusted. */
+#define INST_TREE_DEPTH         8
+#define INST_TREE_NODES         2048
 int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
                   INST_U32 *h, int *expect, int *nodes);
 
@@ -438,6 +445,11 @@ int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
  * answers so far, this one included. */
 #define INST_BUSY_TRIES         3
 int inst_busy_retry(INST_U32 error, int tries);
+
+/* 1 when a device a call would reach has had INST_BUSY_TRIES busy answers
+ * already: the whole call is not made (one call reaches the whole id
+ * group, a member that joined later included). */
+int inst_busy_spent(const int *tries, int n);
 
 /* A device's state as the results print it: "xhci98 3.0.0.0, started",
  * "no driver, problem code 28", "xhci98 2.3.1.0, not started". A device

@@ -930,6 +930,15 @@ static void test_flow(void)
     CHECK_EQ(inst_busy_retry(0x20UL, 2), 1, "busy twice: again");
     CHECK_EQ(inst_busy_retry(0x20UL, 3), 0, "busy three times: failed");
     CHECK_EQ(inst_busy_retry(0x5UL, 1), 0, "another error: failed");
+    {
+        /* A spent member blocks a call a newer member would start. */
+        int tries[3];
+        tries[0] = 0; tries[1] = 2; tries[2] = 0;
+        CHECK_EQ(inst_busy_spent(tries, 3), 0, "two busy answers: one more");
+        tries[1] = 3;
+        CHECK_EQ(inst_busy_spent(tries, 3), 1, "a spent member blocks");
+        CHECK_EQ(inst_busy_spent(tries, 0), 0, "nobody");
+    }
 
     /* The results' state text: never "started" with a problem code, never
      * an empty field. */
@@ -961,10 +970,19 @@ static void test_flow(void)
           "nothing");
 }
 
-/* A PE image's embedded signature: the security directory's size. */
+/* A PE image's embedded signature: the security directory, inside the
+ * optional header, pointing to a table inside the file. */
+static void pe_set32(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)(v & 0xFF);
+    p[1] = (unsigned char)((v >> 8) & 0xFF);
+    p[2] = (unsigned char)((v >> 16) & 0xFF);
+    p[3] = (unsigned char)((v >> 24) & 0xFF);
+}
+
 static void test_pe_signed(void)
 {
-    static unsigned char pe[512];
+    static unsigned char pe[1024];
     unsigned off = 0x80;
     unsigned opt = off + 24;
 
@@ -974,20 +992,30 @@ static void test_pe_signed(void)
     pe[0x3C] = (unsigned char)off;
     pe[off] = 'P';
     pe[off + 1] = 'E';
+    pe[off + 20] = 240;                 /* SizeOfOptionalHeader, PE32+ */
     pe[opt] = 0x0B;
     pe[opt + 1] = 0x02;                 /* PE32+ */
     pe[opt + 112 - 4] = 16;             /* NumberOfRvaAndSizes */
     CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 0, "PE32+ unsigned");
-    pe[opt + 112 + 4 * 8 + 4] = 0x40;   /* security directory size */
+    pe_set32(pe + opt + 112 + 4 * 8, 0x300);    /* table at 0x300 */
+    pe_set32(pe + opt + 112 + 4 * 8 + 4, 0x40);
     CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 1, "PE32+ signed");
+    CHECK_EQ(inst_pe_signed(pe, 0x320), -1, "table cut off by the file's end");
+    CHECK_EQ(inst_pe_signed(pe, 0x2F0), -1, "table past the file's end");
+    pe[off + 20] = 100;
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), -1,
+             "directory outside the optional header");
+    pe[off + 20] = 240;
     pe[opt + 112 - 4] = 4;
     CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 0, "four directories: none");
     memset(pe + opt, 0, sizeof(pe) - opt);
+    pe[off + 20] = 224;                 /* PE32 */
     pe[opt] = 0x0B;
-    pe[opt + 1] = 0x01;                 /* PE32 */
+    pe[opt + 1] = 0x01;
     pe[opt + 96 - 4] = 16;
     CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 0, "PE32 unsigned");
-    pe[opt + 96 + 4 * 8 + 4] = 0x10;
+    pe_set32(pe + opt + 96 + 4 * 8, 0x200);
+    pe_set32(pe + opt + 96 + 4 * 8 + 4, 0x10);
     CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 1, "PE32 signed");
     CHECK_EQ(inst_pe_signed(pe, opt + 100), -1, "cut short");
     pe[0] = 'X';
@@ -1138,6 +1166,18 @@ static void test_tree_sig(void)
     h = INST_FNV_START; expect = 0; nodes = 0;
     CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 0, "id fails");
     CHECK_EQ(expect, 0, "an unread id is never inspected");
+    /* Cut short: a subtree below the depth bound, or more devnodes than
+     * the bound, is never whole. */
+    mock_init(&t);
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 0, INST_TREE_DEPTH, &h, &expect, &nodes), 0,
+             "children below the depth bound: not whole");
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 2, INST_TREE_DEPTH, &h, &expect, &nodes), 1,
+             "a leaf at the depth bound: whole");
+    h = INST_FNV_START; expect = 0; nodes = INST_TREE_NODES - 1;
+    CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 0,
+             "the node bound reached: not whole");
     /* No children at all: whole. */
     mock_init(&t);
     t.ChildOf[0] = -1;

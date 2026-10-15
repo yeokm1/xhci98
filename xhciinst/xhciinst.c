@@ -257,6 +257,7 @@ static int flagFailed;
 static int flagRestart;
 static int flagSteps;
 static int flagChanged;
+static int outQuiet;        /* a reading repeated: its text to the log only */
 
 /* The registry answers: per value, 1 when it is to be written, and what. */
 static int answerSet[16];
@@ -275,8 +276,10 @@ static void out(const char *fmt, ...)
     _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
     va_end(ap);
     buf[sizeof(buf) - 1] = '\0';
-    fputs(buf, stdout);
-    fflush(stdout);
+    if (!outQuiet) {
+        fputs(buf, stdout);
+        fflush(stdout);
+    }
     if (logFile != NULL) {
         fputs(buf, logFile);
         fflush(logFile);
@@ -3165,6 +3168,7 @@ static DWORD call_flags(const DEVREC *x, int inf)
 static int install_inf(int inf, int controllers)
 {
     static int callIdx[INST_MAX_DEVS];
+    static int busyTries[INST_MAX_DEVS];
     char path[INST_PATH_CHARS];
     char hwid[INST_ID_CHARS];
     int i;
@@ -3240,6 +3244,32 @@ static int install_inf(int inf, int controllers)
                 }
             }
             flagSteps = 1;
+            continue;
+        }
+        /* A device of the id whose busy tries are spent - an earlier
+         * member - blocks the call before anything is noted or called, so
+         * a member that joined later cannot buy it another try. */
+        n = 0;
+        for (j = 0; j < devCount; j++) {
+            if (devs[j].Present && devs[j].Inf == inf &&
+                (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                 inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
+                int c = reached(devs[j].Id);
+                busyTries[n++] = c >= 0 ? changedBusy[c] : 0;
+            }
+        }
+        if (inst_busy_spent(busyTries, n)) {
+            out("Left: %s - Windows was installing a device of this id each "
+                "time the tool\n  tried (%d times). Run INSTALL.BAT again once "
+                "Windows has finished.\n", hwid, INST_BUSY_TRIES);
+            for (j = 0; j < devCount; j++) {
+                if (devs[j].Present && devs[j].Inf == inf &&
+                    (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
+                     inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
+                    devs[j].Done = 1;
+                }
+            }
+            flagFailed = 1;
             continue;
         }
         /* Each device the call reaches is tracked for the results check,
@@ -3849,6 +3879,17 @@ static void testsigning_note(void)
             testSigningConfirmed = 1;
         }
     }
+    if (pkgSigned < 0) {
+        testSigningConfirmed = 0;
+        out("NOTE: whether the x64 drivers carry a signature could not be read. "
+            "Test-signed\nones load in test-signing mode (bcdedit /set "
+            "testsigning on, then restart);\nunsigned ones only on a start "
+            "where F8 chose \"Disable Driver Signature\nEnforcement\". "
+            "Otherwise the controller shows Code 52 on 7, Code 39 on Vista\n"
+            "(the package's readme.txt, \"WINDOWS VISTA X64 AND WINDOWS 7 X64: "
+            "TEST-SIGNING\nMODE\"). If this start is an F8 start, go on.\n\n");
+        return;
+    }
     if (pkgSigned == 0) {
         /* A build without the project's key (a clone): nothing signed. */
         testSigningConfirmed = 0;
@@ -3988,15 +4029,32 @@ static int barrier(void)
     return 1;
 }
 
-/* The devices of this package as read and planned (plan() first): what
- * the plan rests on (record 23 section 5.1). */
+/* What the confirmed plan rests on (record 23 section 5.1), read after
+ * plan(): each present device of this package with its driver, version,
+ * problem, filters, action and run decision, and every device - present or
+ * not - whose driver key names an INF the trap holds (/restage's
+ * precondition). */
 static INST_U32 devs_signature(void)
 {
     INST_U32 h = INST_FNV_START;
     int i;
+    int k;
 
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
+        int trapRef = 0;
+        for (k = 0; k < INST_INF_COUNT; k++) {
+            if (trapOem[k][0] != '\0' && d->InfPathState > 0 &&
+                inst_eq(d->InfPath, trapOem[k])) {
+                trapRef = 1;
+            }
+        }
+        if (trapRef || d->InfPathState < 0) {
+            h = sig_text(h, d->Id);
+            h = sig_number(h, (INST_U32)d->Present);
+            h = sig_number(h, (INST_U32)(d->InfPathState + 1));
+            h = sig_text(h, d->InfPath);
+        }
         if (!d->Present || d->Inf < 0) {
             continue;
         }
@@ -4004,26 +4062,48 @@ static INST_U32 devs_signature(void)
         h = sig_text(h, d->Service);
         h = sig_text(h, d->VersionText);
         h = sig_number(h, (INST_U32)d->Problem);
+        h = sig_number(h, (INST_U32)d->Action);
+        h = sig_number(h, (INST_U32)d->Runs);
         h = inst_fnv1a(h, (const unsigned char *)d->Upper, d->UpperBytes);
     }
     return h;
 }
 
-/* After the first wait: when Windows did something meanwhile, the devices
- * are read again, and a plan they no longer match is not carried out. 1
- * go on; 0 stop, nothing changed. */
-static int plan_still_holds(int waited, INST_U32 before)
+/* After the first wait - every time, since Windows may have changed a
+ * device while the question was open - the devices, the driver store's
+ * trap and /restage's precondition are read again, and a plan they no
+ * longer match is not carried out. 1 go on; 0 stop, nothing changed. */
+static int plan_still_holds(INST_U32 before)
 {
-    if (waited != 2) {
-        return 1;
-    }
+    static char oemBefore[INST_INF_COUNT][INST_PATH_CHARS];
+    int unknownBefore[INST_INF_COUNT];
+    int k;
+    int same = 1;
+
+    memcpy(oemBefore, trapOem, sizeof(oemBefore));
+    memcpy(unknownBefore, trapUnknown, sizeof(unknownBefore));
     if (!scan()) {
         out("The devices could not be read again: nothing was changed.\n");
         flagFailed = 1;
         return 0;
     }
+    logonly("[the devices read again after the first wait]\n");
+    outQuiet = 1;   /* the plan's text was shown; the repeat goes to the log */
+    trap_scan();
+    for (k = 0; k < INST_INF_COUNT; k++) {
+        if (!inst_eq(oemBefore[k], trapOem[k]) ||
+            unknownBefore[k] != trapUnknown[k]) {
+            same = 0;
+        }
+        /* /restage: a store the plan was to replace must still be movable;
+         * one that was not stays left. */
+        if (restageOk[k] && !restage_movable(k)) {
+            same = 0;
+        }
+    }
+    outQuiet = 0;
     plan();
-    if (devs_signature() != before) {
+    if (!same || devs_signature() != before) {
         out("Windows changed the devices while the tool waited, so the plan "
             "shown is out of\ndate. Nothing was changed: run INSTALL.BAT again "
             "to see the new plan.\n");
@@ -4053,7 +4133,6 @@ static int run_install_nt(void)
     int runs = 0;
     int i;
     int pass;
-    int waited;
     INST_U32 before;
     INST_U32 tag;
     char name[INST_PATH_CHARS];
@@ -4103,8 +4182,7 @@ static int run_install_nt(void)
         return INST_EXIT_REFUSED;
     }
     before = devs_signature();
-    waited = nothing_pending();
-    if (!waited || !plan_still_holds(waited, before)) {
+    if (!nothing_pending() || !plan_still_holds(before)) {
         return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
     }
     if (!make_local_copy() || !stage_nt()) {

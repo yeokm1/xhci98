@@ -1148,6 +1148,9 @@ int inst_pe_signed(const unsigned char *buf, size_t len)
     INST_U32 opt;
     INST_U32 dirs;
     INST_U32 count;
+    INST_U32 optSize;
+    INST_U32 certOff;
+    INST_U32 certSize;
     unsigned magic;
 
     if (len < 0x40 || buf[0] != 'M' || buf[1] != 'Z') {
@@ -1158,29 +1161,41 @@ int inst_pe_signed(const unsigned char *buf, size_t len)
         buf[off + 2] != 0 || buf[off + 3] != 0) {
         return -1;
     }
+    optSize = (INST_U32)buf[off + 20] | ((INST_U32)buf[off + 21] << 8);
     opt = off + 24;
     if (len - opt < 2) {
         return -1;
     }
     magic = (unsigned)buf[opt] | ((unsigned)buf[opt + 1] << 8);
     if (magic == 0x10BU) {
-        dirs = opt + 96;
+        dirs = 96;
     } else if (magic == 0x20BU) {
-        dirs = opt + 112;
+        dirs = 112;
     } else {
         return -1;
     }
-    /* NumberOfRvaAndSizes sits just before the directories. */
-    if (len < dirs || len - dirs < 5 * 8) {
+    /* NumberOfRvaAndSizes sits just before the directories; directory 4
+     * must lie inside both the optional header and the buffer. */
+    if (optSize < dirs + 5 * 8 || len - opt < optSize) {
         return -1;
     }
+    dirs += opt;
     count = inst_le32(buf + dirs - 4);
     if (count < 5) {
         return 0;
     }
-    /* Directory 4, IMAGE_DIRECTORY_ENTRY_SECURITY: a file offset and a
-     * size; an embedded signature has a size. */
-    return inst_le32(buf + dirs + 4 * 8 + 4) != 0 ? 1 : 0;
+    /* Directory 4, IMAGE_DIRECTORY_ENTRY_SECURITY: a FILE offset and a
+     * size. An embedded signature has a size, and its table lies inside
+     * the file; one that points past the end is no signature to rely on. */
+    certOff = inst_le32(buf + dirs + 4 * 8);
+    certSize = inst_le32(buf + dirs + 4 * 8 + 4);
+    if (certSize == 0) {
+        return 0;
+    }
+    if (certOff == 0 || certOff > len || certSize > len - certOff) {
+        return -1;
+    }
+    return 1;
 }
 
 /* The next ';' entry of list from *pos, trimmed, into out. 0 at the end. */
@@ -1894,19 +1909,17 @@ int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
     char id[INST_ID_CHARS];
     int r;
 
-    if (depth > 8) {
-        return 1;
-    }
     r = ops->Child(ops->Ctx, dn, &child);
     if (r == INST_TREE_NONE) {
         return 1;
     }
-    if (r != INST_TREE_OK) {
+    if (r != INST_TREE_OK || depth >= INST_TREE_DEPTH) {
+        /* Below the depth bound a subtree is there but unread: not whole. */
         return 0;
     }
     for (;;) {
-        if (++*nodes > 512) {
-            return 1;
+        if (++*nodes > INST_TREE_NODES) {
+            return 0;
         }
         if (ops->Id(ops->Ctx, child, id, sizeof(id)) != INST_TREE_OK ||
             ops->Status(ops->Ctx, child, &status, &problem) != INST_TREE_OK) {
@@ -1937,6 +1950,18 @@ int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
 int inst_busy_retry(INST_U32 error, int tries)
 {
     return error == 0x20UL && tries >= 1 && tries < INST_BUSY_TRIES;
+}
+
+int inst_busy_spent(const int *tries, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (tries[i] >= INST_BUSY_TRIES) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static void inst_cat(char *out, size_t cap, const char *s)
