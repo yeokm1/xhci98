@@ -1800,7 +1800,15 @@ side.
   secondary bus itself are seen: an NVMe function behind an enclosure's
   own PCIe switch, or one that has not answered by the end of the scan,
   gets no entry, so no statement, and the gone deadline (MD-1) stands for
-  it.
+  it. The bridges published are the domain's exclusive members, whether or
+  not the NT filter has taken its baseline yet (the baseline's own
+  `BusRelations` answer may report the endpoint, so the driver publishes
+  before it asks for one). A device tunnelled before this driver started -
+  before boot, or before an install - was enumerated by the operating
+  system before any `UP` could exist; it gets its entry at the domain's
+  first exposure, and an `nvme98` instance that found none at
+  `HwFindAdapter` has no recorded generation for it (the statement then
+  depends on `nvme98` looking the entry up later; MD-1 otherwise).
 - **The statement** is the entry's move to `DOWN_QUIESCED`, made on section
   7.1's condition alone. The seam's tunnel-down poll reads nothing on the
   emulator's SHPC bridge (no writer for its DWORD Select, run-39 39-A.5),

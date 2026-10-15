@@ -1361,6 +1361,11 @@ static VOID cmAskBaselines(PCM_NHI nhi)
             serial = f->Serial;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
+        if (serial != 0) {
+            /* The baseline answer may already report an endpoint: its
+             * nvme98 UP first (cm_nvlink.h, obligation 1). */
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
+        }
         if (serial != 0 && cmInvalidate(nhi, i, FALSE)) {
             /* Recorded once asked, so a failed call is asked again. */
             r->Port[i].AskedSerial = serial;

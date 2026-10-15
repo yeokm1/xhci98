@@ -240,15 +240,18 @@ static BOOLEAN cmNvEmulator(ULONG bridge)
     return FALSE;
 }
 
-/* Whether `bridge` is an active member of this domain's set (exclusive,
- * and on NT its filter published with its baseline). */
+/* Whether `bridge` is this domain's own: a member of its set that no
+ * other domain claims (CM_PORT_EXCLUSIVE). Not CM_PORT_ACTIVE: on NT a
+ * bridge is exclusive before its filter's first BusRelations answer (the
+ * baseline) makes it active, and that answer may already report the
+ * endpoint, so its UP must not wait for it. */
 static BOOLEAN cmNvActive(PCM_NHI nhi, ULONG bridge)
 {
     ULONG i;
 
     for (i = 0; i < nhi->Reenum.Members; i++) {
         if (nhi->Reenum.Port[i].Bdf == bridge &&
-            (nhi->Reenum.Port[i].Flags & CM_PORT_ACTIVE) != 0) {
+            (nhi->Reenum.Port[i].Flags & CM_PORT_EXCLUSIVE) != 0) {
             return TRUE;
         }
     }
@@ -591,8 +594,8 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
     if (cmNvTable == NULL) {
         return 0;
     }
-    /* Only an active member of this domain's set: a bridge another domain
-     * also claims is inactive for both, and its entries are not ours. */
+    /* Only a bridge this domain owns exclusively: one another domain also
+     * claims is ambiguous for both, and its entries are not ours. */
     if (!cmNvActive(nhi, bridge)) {
         CmLogNote(nhi, "cm.nvlink.up.not-member", bridge);
         return 0;
