@@ -1499,6 +1499,137 @@ release on every target**, and the release notes say so. On Windows 98 no
 filter sits on a bridge (record 21 section 6.1) and there is no hold at
 all.
 
+### 7.7 The host interface lost: containment
+
+Everything above assumes the host interface answers. It can stop
+answering without any PnP request reaching this driver: the platform
+powers the controller off or resets its PCI subtree, and BAR0 reads all
+ones, or reads values this driver never wrote (record 21 section 5.5,
+from `usb4-emu`'s `ICM-PROTOCOL` R27 and R32 and the P14s readings; the
+same platform behaviour is possible behind any host whose power the
+firmware manages). Nothing in sections 5 to 7.6 notices it: the idle
+tick's requests time out one by one, each a failed step and never a
+failed driver (section 5.1), and every sequence after them - a teardown,
+a quarantine retry, an eject, a resume - would go on writing to a
+function that is no longer the one this driver programmed.
+
+Record 21 section 5.5's liveness monitor serves both profiles: one
+sample each idle period of RX ring 0's size register (`0x0800C`), against
+the value read after the ring start (`0x01000010` under this profile:
+sixteen entries, 256-byte buffers); one all-ones sample is SUSPECT, three
+are ABSENT, a readable value other than that one is CONFIG_LOST. Its
+access gate sits at the BAR accessors and refuses the ordinary class
+outside ACTIVE (and before the monitor is armed, OFF), and its `Cancelled`
+answer ends every wait of the transport. Under the ICM client those
+states lead to a recovery once the platform restores access. **Under this
+profile there is no recovery in this release** (decision U17): the first
+of SUSPECT, ABSENT or CONFIG_LOST, a surprise removal, or a resume that
+fails with the size register all ones or changed, puts the instance in a
+terminal state, CONTAINED, until a PnP stop and start or a reboot. A
+matching sample later, or a system resume, never reactivates it.
+Recovery may be deferred; containment may not, since it is what stops
+this driver acting on a fabric it can no longer see.
+
+The monitor is armed by the bind's success (section 4.4 step 6) and by
+every resume that leaves the rings running, a held one included; it never
+samples during a resume (record 21 section 5.5's transitions).
+
+**Entering CONTAINED**, once, on the thread, with no register access of
+any kind - no ring stop, no router request, no PCI configuration write
+to the NHI:
+
+1. The core is contained: every request it would send is refused before
+   it reaches the transport, and so is every request while the gate is
+   closed, so a sequence running when a surprise removal arrives stops at
+   its next request or wait (the transport's waits end at the gate's
+   cancellation) and leaves its port HELD, its reason "contained", with
+   what it had written recorded (section 7.4); nothing of it is undone,
+   since undoing is writing. The safe point services no ring, the
+   capability settle sends no acknowledgement. The queued actions are
+   retired, the deferred teardown tails (section 7.4) abandoned, the
+   pending resync dropped, and every port's anchor (section 10.3)
+   invalidated, so no statement can be made from it.
+2. A batch of actions the driver took and has not delivered (the resume's
+   ordering, section 7.6) is discarded: no TUNNEL_UP reaches the
+   re-enumeration seam or the `nvme98` channel after the loss.
+3. The `nvme98` channel is told, for each connection that may be up,
+   that presence was lost with nothing proven: the down moment with the
+   path not closed and no anchor, never a statement. Section 10.2's
+   statement needs section 7.3 step 1's read-back on the host router, and
+   a host router that does not answer proves nothing about the path or
+   the endpoint's reset (record 21 section 7.3). `nvme98`'s own gone
+   deadline (MD-1) stands.
+4. One reconciliation is requested of the re-enumeration seam, the
+   reason "controller unavailable" (record 21 section 5.5): every member
+   of the domain's tunnel-port set as changed, so the operating system
+   removes what it can no longer reach - on NT through the bridge
+   filters' invalidation, on Windows 98 and ME through the CONFIGMG
+   route record 21 gives that reason - with a removal a driver refused
+   never forced, and with `XhciCmReenum` 0 nothing requested. The seam's
+   pending ejects are voided by it (section 7.6).
+5. Logged once with the monitor's state and episode, and counted
+   (`u4.drv.contained`; the core's `u4.contained.refused` and
+   `u4.contained.retired`).
+
+**What CONTAINED keeps.** The common buffer and its adapter, unless a
+verified stop had already cleared record 21 section 5.5's DMA record
+(`DmaMayRun`, set before the first ring-enable write, cleared only by a
+stop whose read-back shows both ring 0 controls readable and disabled):
+a ring never proven stopped may still be written by the controller, so
+the block is kept until the next boot. Force power, which a contained
+instance never clears (section 4.2: a host this driver cannot read is not
+"nothing connected"). The Bus Master bit, which is not written either.
+Every port's records - its state, tunnels, quarantine and resume
+obligations - as the last reading left them: they describe what may still
+be live on a fabric this driver cannot see, and they are never acted on,
+since this instance builds nothing again. **USB4 router state is never
+read or written once the instance is contained**; the next instance,
+after the PnP stop and start, finds the fabric afresh under section 9.2,
+which never resets it.
+
+**What CONTAINED refuses**, each where it starts as well as at the gate:
+
+| Path | Under CONTAINED |
+|---|---|
+| The idle tick: transport service, port scan and checks, connects, lane bonding, the TMU, Configuration Valid, path setup and teardown, lane restore, bandwidth release, quarantine retries | not run; the thread waits for work only |
+| Deferred teardown tails (section 7.4) | abandoned at entry |
+| Actions: TUNNEL_UP to the seam, the `nvme98` UP, the learned and router-named correspondence | retired at entry; none taken after |
+| Safe eject (section 10.4) | refused before any request; the seam's pending ejects voided |
+| System suspend (section 11) | nothing written and no hold published: a contained instance has no tunnel it could restore |
+| Resume, and the restart of the platform step, Bus Master and rings | refused; a hold already published at the suspend is released through section 7.6's failure path (decision U15's order: release, then invalidate) |
+| Stop, surprise removal, removal, shutdown | software teardown only: no fresh port reading for force power (a router request), no ring stop, no Bus Master or force power write; the common buffer as `DmaMayRun` says; BAR0 unmapped; the thread ended |
+
+**A loss in the middle of something**, by section 7.4's waits:
+
+- *Inside a tunnel's setup* (sections 6.4 to 6.9): with the gate closed
+  (a surprise removal) the next request is refused and the port is HELD,
+  its reason "contained"; with the controller silent and the gate still
+  open (a power-off between samples) the requests time out, the port
+  ends FAILED with what it had written recorded, and the next idle
+  sample contains the instance. No tunnel is claimed up either way.
+- *Inside an eject*: the teardown's requests fail, the eject reports
+  failure, no closure is claimed (the path not proven closed, so no
+  statement), and its TUNNEL_DOWN is retired by the containment, the
+  reconciliation of step 4 standing for it.
+- *Inside a resume*: the resume's requests fail or are refused and it
+  returns through section 7.6's failure path, within the resume bound;
+  the size register is then read once, and all ones or changed contains
+  the instance after the hold's release. A resume that fails for any
+  other reason is the failure after activation of section 3.5, as
+  before.
+- *At stop*: the stop's own fresh reading of the ports (section 4.2) is
+  a router request and is not made, so force power stays; the rings'
+  stop is a write and is not made, so the buffer is kept unless
+  `DmaMayRun` was already clear.
+
+**Recovery is owed** (section 16). A contained host stays contained until
+PnP restarts the driver. Recovering it in place would need record 21
+section 5.6's validation (identity, BAR0 still assigned, section 3's
+tests re-run with the same outcome), the rings restarted in the kept
+buffer, and then section 9.2's discovery over a fabric whose host
+interface lost its rings but whose routers may still carry tunnels -
+never a reset (section 9.1); that is not built.
+
 ## 8. Thunderbolt 3 device routers behind a USB4 host
 
 Linux keeps the software connection manager for a Thunderbolt 3 device
@@ -2039,6 +2170,15 @@ hardware capture shows it, whether or not its code was adapted.
   Capabilities answered, Not Supported, failing and blocked on a preserved
   router (unknown state: no Buffer Allocation, no acknowledgements); an inert start after activation draining before
   freeing.
+- **`test_u4cm`, containment** (section 7.7): the fake fabric's host
+  interface can be lost at any request (reads all ones, writes dropped,
+  nothing consumed), with or without the gate's cancellation. Cases:
+  containment between ticks with an action, a deferred tail and a resync
+  queued; a loss inside a tunnel's setup, inside an eject and inside a
+  resume, each with and without the cancellation; a loss at stop beside a
+  healthy stop. Each must end within its bound, claim no tunnel up and no
+  closure, and once contained make not one register access, request,
+  action or statement from any entry point, the DMA record unchanged.
 - **`test_tbt_topo`** (record 21) gains the tunnel-port set: two ports with
   two tunnel bridges, the mapping operation's routing ids, a discrete
   controller's downstream ports, an integrated host's listed root ports
@@ -2077,6 +2217,7 @@ same table on Windows 2000 (40-V.2):
 | U.11 two ports | a second tunnel bridge on `tunnel-port2` and a device on port 2 | each port's tunnel re-enumerates its own bridge on `minimal` (mapping operation); on `intel-adl` both verified ports are rescanned |
 | U.12 a daisy chain | `CHAIN=1`'s device lines | the depth-2 router left uninitialised, its plug event acknowledged and counted |
 | U.13 inert | the `tb3-alpine-ridge` profile's NHI id forced through a copy of the INF onto a USB4 row, and a `usb4-generic` host with `XhciCmMode` 0 | each start inert with its reason logged, no ring built (the trace shows no ring 0 traffic) |
+| U.14 host interface lost | U.1, then the NHI taken away with no PnP removal, as far as the emulator allows (its gate closed beneath a gated root bridge, or a surprise removal of the function); with I/O running on the volume | section 7.7: the instance contained at the first sample, no bugcheck and no hang, the guest still running; the trace shows no ring 0 traffic and no router request after the loss; the volume removed by the reconciliation where the operating system allows |
 
 40-V.3 reads the install and U.1 to U.3 on ME, XP, XP x64, Vista and 7 in
 both architectures, with no checkpoint tax, as record 21's V.3 tiers; on 7
@@ -2130,6 +2271,7 @@ U1, U2, U6, U8 and U13 from their first form, as each row says.
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
 | U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": the NT hold is released through record 21's failure path (release, then invalidation), since holding a bridge's D0 for ever would hang the system's resume; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
 | U16 | The TMU | configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
+| U17 | A host interface lost under this profile | containment only: a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in this release | 7.7 |
 
 ## 16. What is open, and what is a risk
 
@@ -2172,6 +2314,12 @@ U1, U2, U6, U8 and U13 from their first form, as each row says.
   resume until the tunnel is back.
 - **The `nvme98` statement on hardware**: unresolved, as record 21 section
   7.1.
+- **A host interface lost** (section 7.7): contained, never recovered in
+  this release; the domain stays without a connection manager until a PnP
+  stop and start or a reboot, and its unproven DMA buffer stays allocated
+  until the next boot. Which real USB4 hosts lose power or their PCI
+  configuration without a PnP removal under a legacy operating system is
+  unread.
 - **Daisy chains, DisplayPort, CLx, sleep per Guide chapter 8**: out of
   this cut.
 
