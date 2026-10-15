@@ -160,6 +160,8 @@ Unzip the whole package and run `INSTALL.BAT` from its top directory: double-cli
 
 When a run changed anything and finished, it ends with "Changes were made. Please restart Windows now." If it stopped with steps left for you (a Found New Hardware window to answer, for instance) it says so instead; do them and run it again. It never runs `XHCICLN`.
 
+It also asks "Install Thunderbolt 3 / USB4 support?": Enter answers Y when a Thunderbolt or USB4 controller is present and N when none is found. Some laptops show their controller only while a device is plugged in, or only with a BIOS setting, so answer Y if yours has the port; `INSTALL /thunderbolt` includes it without asking. N leaves a Thunderbolt driver already installed as it is.
+
 `INSTALL /list` shows the plan and changes nothing. `INSTALL /uninstall` removes the drivers after a warning and the word REMOVE. Each run but `/list` writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report. `tools\xhciinst\readme.txt` lists the switches and exit codes.
 
 ### Install
@@ -237,6 +239,10 @@ The release notes' "From 2.3.x or earlier" has the details. `tools\xhcicln\` lis
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF.
 
 Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
+
+### Thunderbolt and USB4 support
+
+With the Thunderbolt 3 / USB4 support installed, a device plugged into a Thunderbolt or USB4 port is approved automatically and gets a PCI Express connection, which lets it read and write the computer's memory: these systems have no Thunderbolt control panel to ask you first. Set `XhciCmApprove` to `0` in the Thunderbolt controller's driver key (or `INSTALL /set XhciCmApprove=0`) on a computer whose port is within reach of people you do not trust; devices then get no connection unless the BIOS already gave them one. The release notes, "Thunderbolt 3: which devices get a tunnel", have the details.
 
 ### Safe removal of Thunderbolt and USB4 devices
 

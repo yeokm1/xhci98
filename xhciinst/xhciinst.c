@@ -253,6 +253,10 @@ static int infTrap[INST_INF_COUNT];
 static int trapUnknown[INST_INF_COUNT];  /* the store could not be inspected */
 static INST_U32 pkgVersion[4];
 static int haveCm;
+static int tbInclude = 1;   /* the Thunderbolt question's answer (section 8.5) */
+static int tbNhiPresent;
+static void tb_question(void);
+static void tb_later_note(const char *dir);
 
 static int flagFailed;
 static int flagRestart;
@@ -2275,6 +2279,13 @@ static int package_files(PKG_EACH each, void *ctx)
             if (!envNow.Nt && inst_eq(fd.cFileName, "xhcicmf.inf")) {
                 continue;
             }
+            /* A No to the Thunderbolt question: none of its files in the
+             * copy, so no wizard and no store offers them (section 8.5). */
+            if (!tbInclude && (inst_eq(fd.cFileName, "xhcicm.inf") ||
+                               inst_eq(fd.cFileName, "xhcicmf.inf") ||
+                               inst_eq(fd.cFileName, "xhcicm.sys"))) {
+                continue;
+            }
             inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));
             strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
             if (!each(rel, ctx)) {
@@ -4237,6 +4248,7 @@ static int run_install_nt(void)
     if (!scan()) {
         return INST_EXIT_REFUSED;
     }
+    tb_question();
     if (!restage_read()) {
         out("REFUSED: the /restage work file is unreadable; nothing is "
             "changed.\n");
@@ -4349,6 +4361,7 @@ static int run_install_nt(void)
             "7, run INSTALL.BAT again after the restart for the root hub and "
             "hubs." : "");
     }
+    tb_later_note(srcDir);
     note_old_entries();
     return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
 
@@ -4559,6 +4572,7 @@ static int run_install_9x(void)
         out("The device tree could not be read whole: nothing is changed.\n");
         return INST_EXIT_REFUSED;
     }
+    tb_question();
     plan();
     print_plan();
     if (!local_dir(dir, sizeof(dir))) {
@@ -4612,6 +4626,7 @@ static int run_install_9x(void)
     }
     write_values();
     steps_9x(srcDir);
+    tb_later_note(srcDir);
     note_old_entries();
     /* Steps are left only where a device needs one (Update Driver, Have
      * Disk, a refused version, an entry that may be a cancelled wizard's
@@ -6729,6 +6744,108 @@ static int run_eject(void)
 }
 
 /* ======================================================================== */
+/* The Thunderbolt 3 / USB4 question (record 23 section 8.5)                 */
+/* ======================================================================== */
+
+/* Asked after the first scan, before the plan is shown. A No takes the
+ * Thunderbolt INFs out of this run: their devices are not planned, not
+ * staged, not copied and not asked about; a Thunderbolt driver already
+ * installed is left exactly as it is. */
+static void tb_question(void)
+{
+    int ask;
+    int def;
+    int r;
+    int k;
+    int i;
+    int installed = 0;
+    char line[16];
+
+    plan();
+    tbNhiPresent = envNow.CmNhi;
+    tbInclude = inst_tb_decide(haveCm, tbNhiPresent, opts.Yes,
+                               opts.Thunderbolt, opts.List, &ask, &def);
+    if (!haveCm) {
+        tbInclude = 0;
+        return;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (inst_eq(devs[i].Service, "xhcicm") ||
+            inst_msz_has(devs[i].Upper, devs[i].UpperBytes, "xhcicm")) {
+            installed = 1;
+        }
+    }
+    out("Thunderbolt 3 / USB4 support\n");
+    if (tbNhiPresent) {
+        out("  A Thunderbolt or USB4 controller is present.\n");
+    } else {
+        out("  No Thunderbolt or USB4 controller was found. Some computers show "
+            "theirs only\n  while a device is plugged in, or only with a BIOS "
+            "setting: answer Y if this\n  computer has a Thunderbolt or USB4 "
+            "port.\n");
+    }
+    out("  With it, a device plugged into that port is approved automatically "
+        "and can\n  reach the computer's memory (the setting XhciCmApprove; "
+        "README, \"Thunderbolt\n  and USB4 support\").\n");
+    if (installed) {
+        out("  Answering N keeps the Thunderbolt driver already installed as it "
+            "is.\n");
+    }
+    if (ask) {
+        for (;;) {
+            out("Install Thunderbolt 3 / USB4 support? [%s]: ",
+                def ? "Y/n" : "y/N");
+            if (!read_line(line, sizeof(line))) {
+                r = def;
+                out("\n");
+                break;
+            }
+            r = inst_tb_answer(line, def);
+            if (r >= 0) {
+                break;
+            }
+            out("  Type Y or N, or Enter for %s.\n", def ? "Y" : "N");
+        }
+        tbInclude = r;
+    } else if (opts.Thunderbolt) {
+        out("  /thunderbolt: installed without asking.\n");
+    } else if (opts.List) {
+        out("  /list: it would be asked; Enter would answer %s.\n",
+            def ? "Y" : "N");
+    } else {
+        out("  /yes: %s.\n", tbInclude ? "Y, a controller is present"
+                                       : "N, none was found (/thunderbolt "
+                                         "installs it anyway)");
+    }
+    out("\n");
+    logonly("thunderbolt: present %d, installed %d, asked %d, default %d, "
+            "include %d\n", tbNhiPresent, installed, ask, def, tbInclude);
+    if (!tbInclude) {
+        for (k = INST_INF_CM; k <= INST_INF_CMF; k++) {
+            free(infText[k]);
+            infText[k] = NULL;
+        }
+        plan();
+    }
+}
+
+/* After a Yes with no controller present (section 8.5). */
+static void tb_later_note(const char *dir)
+{
+    if (!haveCm || !tbInclude || tbNhiPresent || opts.List) {
+        return;
+    }
+    if (envNow.Nt) {
+        out("\nThe Thunderbolt driver is staged: when the controller appears, "
+            "Windows installs\nit by itself. Run INSTALL.BAT again then, so "
+            "the Thunderbolt ports get their\nfilter too.\n");
+    } else {
+        out("\nThe Thunderbolt driver is in %s: when the controller appears, the "
+            "hardware\nwizard finds xhcicm.inf there by itself.\n", dir);
+    }
+}
+
+/* ======================================================================== */
 /* main                                                                      */
 /* ======================================================================== */
 
@@ -6743,6 +6860,7 @@ static void usage(void)
 "  /defaults     ask no option question; keep every value\n"
 "  /set Name=Value   set one of the driver's options (repeatable)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
+"  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"

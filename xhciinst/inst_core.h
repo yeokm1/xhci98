@@ -337,6 +337,7 @@ typedef struct _INST_OPTS {
     int Force;
     int Restage;
     int Uninstall;
+    int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -624,5 +625,28 @@ int inst_eject9x_remove(INST_U32 cr, const char **text);
 int inst_unplug_kind(int walkWhole, int othersLeft, int singleFunction,
                      INST_U32 usb3);
 const char *inst_unplug_text(int kind);
+
+/* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
+
+/* Whether the run installs and stages the Thunderbolt driver (xhcicm.inf,
+ * nt\xhcicmf.inf, xhcicm.sys). haveCm: the package carries it; nhiPresent:
+ * a device xhcicm.inf matches is present. Returns the decision when no
+ * question is asked (*ask 0), else 0 with *ask 1 and *defaultYes the
+ * answer Enter gives:
+ *   no driver in the package     no question, not included;
+ *   /thunderbolt                 no question, included;
+ *   /yes, /list                  no question, the default (present: yes,
+ *                                absent: no);
+ *   otherwise                    asked, default yes when present, no when
+ *                                absent (a laptop may show its controller
+ *                                only when a device is connected).
+ * A no never removes or updates a Thunderbolt driver already installed: it
+ * only leaves this package's out of the copy, the store and the run. */
+int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
+                   int optList, int *ask, int *defaultYes);
+
+/* The answer to the question: 1 yes, 0 no (Enter: the default), -1 not an
+ * answer (asked again). */
+int inst_tb_answer(const char *line, int defaultYes);
 
 #endif /* INST_CORE_H */

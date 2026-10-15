@@ -3262,6 +3262,12 @@ never the Thunderbolt controller's own functions. Unique ids are shown as
 their last four digits; no key material is ever written. Design record 24
 is the reference.
 
+The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
+answers Y with a Thunderbolt or USB4 controller present and N with none
+found (a laptop may show its controller only while a device is plugged
+in); `INSTALL /thunderbolt` includes it without asking, and N leaves a
+Thunderbolt driver already installed as it is.
+
 Four connection-manager values are never asked by the install tool and
 can be set with `INSTALL /set Name=Value`: `XhciCmReenum` (0 or 1),
 `XhciCmUsb3Tunnel` (0 or 1), `XhciCmLaneBonding` (0 or 1) and
