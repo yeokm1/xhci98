@@ -1938,8 +1938,11 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
         return TBT_E_STOPPED;
     }
     /* Frames the old session left on the ring are not this recovery's
-     * answers: every completed one is taken back unread before driver
-     * ready goes out, the queue retired with them. */
+     * answers: every completed one is taken back unread, then a quiet
+     * period must pass with nothing more arriving before driver ready goes
+     * out - a late answer to an earlier command would otherwise pass for
+     * the new one. A ring that keeps delivering refuses the light recovery
+     * (the full one restarts the rings). */
     {
         TBT_FRAME f;
         ULONG n;
@@ -1949,6 +1952,14 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
             n++;
         }
         tbtIcmLog(icm, "tbt.icm.recover-drained", n);
+        if (n > icm->Ring->Entries) {
+            return TBT_E_STATE;
+        }
+        icm->Host->Sleep(icm->Host->Context, TBT_ICM_RECOVER_QUIET_MS);
+        if (TbtRingReceive(icm->Ring, &f)) {
+            tbtIcmLog(icm, "tbt.icm.recover-not-quiet", f.Pdf);
+            return TBT_E_STATE;
+        }
         tbtIcmRetirePending(icm);
     }
     rc = tbtIcmAnnounceAll(icm, TRUE);

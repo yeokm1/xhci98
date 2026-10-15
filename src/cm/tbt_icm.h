@@ -583,6 +583,9 @@ VOID TbtIcmLost(PTBT_ICM icm);
  * only when the session answered.
  */
 LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full);
+/* The light recovery's quiet period after its drain (twice the default
+ * idle poll): no frame may arrive in it. */
+#define TBT_ICM_RECOVER_QUIET_MS    400UL
 
 /* Unbind (stop, remove, disable, shutdown): rings stopped, then mailbox
  * 0x07 (ICM 6.7 [obs]; Linux icm.c icm_stop). Tunnels and approvals

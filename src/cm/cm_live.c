@@ -47,11 +47,12 @@ VOID CmLiveInit(PCM_LIVE live, ULONG usb4, ULONG periodMs)
 
 BOOLEAN CmLiveArm(PCM_LIVE live, ULONG baseline, ULONG nowMs)
 {
-    if (cmLiveRevoked(live) || live->State == CM_LIVE_CONTAINED) {
+    if (cmLiveRevoked(live) || live->State == CM_LIVE_CONTAINED ||
+        baseline == CM_LIVE_ONES) {
         return FALSE;
     }
     live->State = CM_LIVE_ACTIVE;
-    live->Baseline = baseline == CM_LIVE_ONES ? 0 : baseline;
+    live->Baseline = baseline;
     live->Ones = 0;
     live->LastMs = nowMs;
     live->HaveLast = 1;
@@ -245,7 +246,9 @@ ULONG CmLiveValidated(PCM_LIVE live, BOOLEAN ok)
         live->State = CM_LIVE_RECOVERY_FAILED;
         live->Rearm = 0;
         live->Counters.RecoveryFailed++;
-        return CM_LIVE_ACT_LOG;
+        /* The old generations are retired whichever way recovery failed,
+         * once per episode, so none stays advertised. */
+        return cmLiveReconcile(live) | CM_LIVE_ACT_LOG;
     }
     live->State = CM_LIVE_RECOVERING;
     live->Counters.Recoveries++;
@@ -261,14 +264,17 @@ BOOLEAN CmLiveRecovered(PCM_LIVE live, ULONG episode, BOOLEAN ok,
         live->Counters.LateCompletions++;
         return FALSE;
     }
-    if (!ok) {
+    if (!ok || baseline == CM_LIVE_ONES ||
+        (live->Baseline != 0 && baseline != live->Baseline)) {
+        /* Not answered, or the final sample is not what the recovery
+         * programmed: a failure, never an ACTIVE without detection. */
         live->State = CM_LIVE_RECOVERY_FAILED;
         live->Rearm = 0;
         live->Counters.RecoveryFailed++;
         return FALSE;
     }
     live->State = CM_LIVE_ACTIVE;
-    live->Baseline = baseline == CM_LIVE_ONES ? 0 : baseline;
+    live->Baseline = baseline;
     live->Ones = 0;
     live->LastMs = nowMs;
     live->HaveLast = 1;
@@ -306,4 +312,12 @@ BOOLEAN CmLiveTransport(const CM_LIVE *live)
 ULONG CmLiveEpisode(const CM_LIVE *live)
 {
     return live->Episode;
+}
+
+ULONG CmLiveReconcileOwed(PCM_LIVE live)
+{
+    if (cmLiveRevoked(live) || live->State != CM_LIVE_RECOVERY_FAILED) {
+        return 0;
+    }
+    return cmLiveReconcile(live);
 }

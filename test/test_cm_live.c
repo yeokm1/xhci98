@@ -127,8 +127,27 @@ static void test_config_lost_full(void)
     CmLiveInit(&l, 0, 200);
     CHECK(CmLiveArm(&l, 0, 1000), "arm without baseline");
     CHECK_EQ(CmLiveSample(&l, 1200, 0x1234), 0, "no mismatch detection");
-    CHECK(CmLiveArm(&l, ONES, 1000), "all-ones baseline taken as 0");
-    CHECK_EQ(l.Baseline, 0, "baseline 0");
+    CmLiveInit(&l, 0, 200);
+    CHECK(!CmLiveArm(&l, ONES, 1000), "an all-ones baseline is refused");
+    CHECK_EQ(l.State, CM_LIVE_OFF, "still off");
+
+    /* a final sample that is not the programmed one fails the recovery */
+    arm(&l, 0);
+    (VOID)CmLiveSample(&l, 1200, 0);
+    (VOID)CmLiveValidated(&l, TRUE);
+    CHECK(!CmLiveRecovered(&l, CmLiveEpisode(&l), TRUE, 0, 1300),
+          "a reset register after recovery is a failure");
+    CHECK_EQ(l.State, CM_LIVE_RECOVERY_FAILED, "failed");
+    CHECK_EQ(CmLiveReconcileOwed(&l), 0, "already reconciled in this episode");
+    arm(&l, 0);
+    (VOID)CmLiveSample(&l, 1200, ONES);
+    (VOID)CmLiveSample(&l, 1400, BASE);
+    (VOID)CmLiveValidated(&l, TRUE);
+    CHECK(!CmLiveRecovered(&l, CmLiveEpisode(&l), TRUE, ONES, 1500),
+          "an unanswered final sample is a failure");
+    CHECK_EQ(CmLiveReconcileOwed(&l), CM_LIVE_ACT_RECONCILE,
+             "the failed light recovery retires the old generations");
+    CHECK_EQ(CmLiveReconcileOwed(&l), 0, "once");
 }
 
 static void test_failure_and_rearm(void)
@@ -137,8 +156,14 @@ static void test_failure_and_rearm(void)
     ULONG a;
 
     arm(&l, 0);
+    (VOID)CmLiveSample(&l, 1200, ONES);
+    a = CmLiveSample(&l, 1400, BASE);
+    a = CmLiveValidated(&l, FALSE);
+    CHECK(a & CM_LIVE_ACT_RECONCILE, "a refused validation from suspect reconciles");
+    arm(&l, 0);
     (VOID)CmLiveSample(&l, 1200, 0);
     a = CmLiveValidated(&l, FALSE);
+    CHECK(!(a & CM_LIVE_ACT_RECONCILE), "config lost already reconciled");
     CHECK_EQ(l.State, CM_LIVE_RECOVERY_FAILED, "validation refused");
     CHECK(!CmLiveTransport(&l), "no transport after failure");
     CHECK(!CmLiveAdmits(&l, CM_ACCESS_RECOVERY), "no recovery access");

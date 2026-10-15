@@ -90,9 +90,13 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
             p[i] = 0;
         }
     }
-    /* After a surprise removal no configuration access either (cm_live.h):
-     * refused like any failed request. */
-    if (nhi->Live.Revoked) {
+    /* After a surprise removal no configuration access either, and no
+     * configuration write the liveness gate does not admit for the current
+     * class (cm_live.h; the BAR accessors' rule): refused like any failed
+     * request. Reads stay open for the validation until revoked. */
+    if (nhi->Live.Revoked ||
+        (!read && (nhi->AccessClass == CM_ACCESS_PROBE ||
+                   !CmLiveAdmits(&nhi->Live, nhi->AccessClass)))) {
         nhi->Counters.ConfigFailures++;
         return FALSE;
     }

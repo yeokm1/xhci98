@@ -1688,6 +1688,17 @@ static void test_lost_and_recover(void)
      * ready goes out again, no 0x23, the device comes back announced. */
     stale[0] = 0x01000003UL;
     stale[1] = 0x00000000UL;
+    CHECK(TbtRingIntact(&g_ring), "both rings as programmed");
+    g_fake.RxCtrl = 0;
+    CHECK(!TbtRingIntact(&g_ring), "an RX control cleared is noticed");
+    g_fake.RxCtrl = 0xC0000000UL;
+    g_fake.TxBaseHi = 1;
+    CHECK(!TbtRingIntact(&g_ring), "a TX high base is noticed");
+    g_fake.TxBaseHi = 0;
+    CHECK(TbtRingIntact(&g_ring), "intact again");
+    fakeQueue(TBT_PDF_ICM_RESP, stale, 2, 300000UL, 0);
+    CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_E_STATE,
+             "a frame arriving in the quiet period refuses the light recovery");
     fakeQueue(TBT_PDF_ICM_RESP, stale, 2, 0, 0);
     fakePump();
     CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_OK, "light recovery");
@@ -1707,7 +1718,7 @@ static void test_lost_and_recover(void)
     CHECK_EQ(g_fake.MboxLog[g_fake.MboxCount - 1], 0x23, "allow-all on the reset ICM");
     CHECK_EQ(g_fake.TxBaseLo, FAKE_PHYS, "TX base programmed again");
     CHECK(g_icm.Bound, "bound");
-    CHECK_EQ(g_icm.Counters.Recoveries, 2, "two recoveries");
+    CHECK_EQ(g_icm.Counters.Recoveries, 3, "three recoveries, one refused");
 
     /* A verified stop clears DmaMayRun; an unverified one keeps it, and a
      * full recovery then refuses to reuse the buffer. */
@@ -1722,6 +1733,9 @@ static void test_lost_and_recover(void)
     g_fake.TxBaseLo = 0x1234UL;
     CHECK_EQ(TbtIcmRecover(&g_icm, TRUE), TBT_E_STATE, "full recovery refused");
     CHECK_EQ(g_fake.TxBaseLo, 0x1234UL, "no base reprogrammed");
+    g_ones = 0;
+    CHECK(TbtIcmResume(&g_icm) != TBT_OK, "nor a resume on the same buffer");
+    CHECK_EQ(g_fake.TxBaseLo, 0x1234UL, "still nothing reprogrammed");
 
     /* Cancelled: a mailbox wait ends at once, the receive takes nothing. */
     setupLive(0, 0);

@@ -115,8 +115,8 @@ typedef struct _CM_LIVE {
 VOID CmLiveInit(PCM_LIVE live, ULONG usb4, ULONG periodMs);
 
 /* After a bind or a resume succeeded: ACTIVE with `baseline` (the sample
- * read after the ring start; all ones is taken as 0). Refused (FALSE) once
- * REVOKED or CONTAINED. */
+ * read after the ring start; 0 detects all ones only). Refused (FALSE) for
+ * an all-ones baseline, and once REVOKED or CONTAINED. */
 BOOLEAN CmLiveArm(PCM_LIVE live, ULONG baseline, ULONG nowMs);
 
 /* A stop, a suspend or a failure: OFF, keeping REVOKED and CONTAINED. */
@@ -136,13 +136,17 @@ ULONG CmLiveWaitMs(const CM_LIVE *live);
 ULONG CmLiveSample(PCM_LIVE live, ULONG nowMs, ULONG value);
 
 /* The precondition's result after CM_LIVE_ACT_VALIDATE: TRUE -> RECOVERING
- * and RECOVER_LIGHT or RECOVER_FULL returned; FALSE -> RECOVERY_FAILED. */
+ * and RECOVER_LIGHT or RECOVER_FULL returned; FALSE -> RECOVERY_FAILED,
+ * with RECONCILE if this episode had none yet. */
 ULONG CmLiveValidated(PCM_LIVE live, BOOLEAN ok);
 
 /* The recovery's result for `episode` (CmLiveEpisode when it began):
- * success with the new baseline -> ACTIVE (TRUE returned: publish); a
- * failure -> RECOVERY_FAILED. A result for another episode, or after
- * REVOKED, is dropped (FALSE). */
+ * success with a final sample equal to the baseline (any readable value
+ * where it was 0) -> ACTIVE (TRUE returned: publish); a failure, an
+ * all-ones or a differing final sample -> RECOVERY_FAILED (then ask
+ * CmLiveReconcileOwed). A result for another episode, or after REVOKED,
+ * is dropped (FALSE). The caller serialises this call against
+ * CmLiveRevoke so a publication cannot follow a revocation. */
 BOOLEAN CmLiveRecovered(PCM_LIVE live, ULONG episode, BOOLEAN ok,
                         ULONG baseline, ULONG nowMs);
 
@@ -159,5 +163,9 @@ BOOLEAN CmLiveTransport(const CM_LIVE *live);
 
 /* The current episode, for CmLiveRecovered. */
 ULONG CmLiveEpisode(const CM_LIVE *live);
+
+/* After a failed recovery: RECONCILE if this episode had none yet, so the
+ * old generations are retired; 0 otherwise. */
+ULONG CmLiveReconcileOwed(PCM_LIVE live);
 
 #endif /* CM_LIVE_H */
