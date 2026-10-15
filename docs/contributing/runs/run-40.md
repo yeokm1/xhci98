@@ -236,3 +236,88 @@ fabric-side rule in `usb4-emu`.
 - The "Unknown Device" (Code 28) on the 98 SE gold image is not identified.
 - No leg here installed a connection manager; U.1 to U.13 are 40-V.1 and
   40-V.2's.
+
+## 40.5 onward - The install, upgrade and uninstall tool (INSTALL.BAT, XHCIINST, XHCIIN64)
+
+**Verdict: done** (2026-10-15): the legs below pass on the tool as it
+stands, with the 98 SE re-reads at the end. Design record 23 is the design; this section
+is what the legs read. Development host A, TCG, one vCPU per guest unless
+said, the p40-inst kit (`out\p40-inst\kit`, QEMU `-name "p40i ..."`),
+overlays under `vm\t40i\` (some early ones under `vm\p40-inst-c\`, moved
+there from another drive), evidence and per-leg notes in
+`out\p40-inst\legs\<guest>\notes.txt` with the console logs
+(`C:\XHCIINST.LOG` copied out) and screenshots beside them.
+
+**The packages.** `pkg24`: the published 2.4.0.0 drivers with the tool at
+2.4.0.0. `pkg30`, `pkg30c`, `pkg30d`: this branch restamped 3.0.0.0 in a
+throwaway worktree (the stamp is never committed), x64 unsigned (F8 at
+every start on Vista x64 and 7 x64). Each leg's notes name the tool's
+commit and the SHA-256 of the `XHCIINST.EXE` it staged; the tool changed
+during the day, and each defect below was read on the tool named with it.
+
+**The legs.** F: a first install from `pkg24` (then the population: a
+mouse, a stick, a UAS disk). R: the registry questions. U24: an update
+from 2.4.0.0 to 3.0.0.0. UN: `/uninstall`, the checks after the restart,
+then a reinstall. U23: an update over the 2.3.1.0 baselines of Phase 38
+(`vm\t38mx\mtx-<g>-u231.qcow2`, read-only backing) with their population
+(a hub with a keyboard, sticks and audio behind it). NC: a run on a
+current machine. L: the 32-bit tool run alone or on the wrong directory.
+
+| Guest | Leg | Result |
+|---|---|---|
+| 98 SE | F | pass: copy + `DevicePath`, exit 4 with the steps; after the restart the wizard named the controller and found the INF by itself; the "xhci98 xHCI Host Controller Disk" prompt took the printed directory; the CD for `usbd.sys` |
+| 98 SE | R | pass: only `XhciInterruptMode`, `XhciSilentInstall` and `XhciForceBulkOnly` asked; the answer written to the controller's key, none to the root hub's |
+| 98 SE | U24 | pass: Update Driver's search found the new copy by itself; driver date and binary the package's |
+| 98 SE | U23 | pass: the controller updated by the printed steps, the new `USB\XHCI98_*` devnodes installed, the one line naming `tools\xhcicln\`, no `XHCICLN` run |
+| 98 SE | silent install | pass: `XhciSilentInstall` 1 merged `SILENT.REG`'s list and set the switch; a mouse plugged in after the restart got no wizard (one CD prompt for `hidusb.sys`, the documented caveat) |
+| 98 SE | UN | uninstall as designed; the reinstall after it failed on the tool of that hour (the local copy held Windows' `xhci98.PNF`, so the tool kept it and then could not remove it, exit 2); fixed (the removal takes the device installer's `.PNF`), re-read below |
+| ME | F, U24 | pass: ME installed the controller with no prompt at all; U24 by Update Driver's automatic search |
+| 2000 | F, R, U24, UN | pass (F with no Windows prompt; UN left no INF, service, file or local copy of the package, `usbd.sys` and `usbui.dll` kept; the reinstall installed) |
+| 2000 | U23 | first run pass (07:38); a later run (U23b, tool 3164e913) failed: the root hub install met Windows' own Found New Hardware install of it (`0x20`), the hub ended at Code 28 and the keyboard behind it stopped; a second run installed it. Fixed by the settle of record 23 section 5.8 |
+| 2000 | U23c, U23d (tool e5b6b42d) | pass, twice: after the controller's update the tool waited ("devices moved", settled after 18 and 17 seconds) while Windows installed the root hub silently; no wizard, no busy retry; every device 3.0.0.0 started, the USB keyboard typed; "Changes were made. Please restart Windows now.", exit 3 |
+| 2000 | NC (tool e5b6b42d) | pass: `/defaults /yes` on a current machine: each INF "staged already", "No changes were made.", exit 0; a settings-only `/set` asked "Write the changed settings now", exit 3; `/defaults /yes` again exit 0 |
+| 2000 | XHCICLN | pass: the banner reads 3.0.0.0 (an earlier test package carried the 2.4.0.0 binary; the release script checks the version) |
+| 2000 SMP | F, U24 | pass (over a base carrying the 1.0.0.x miniport, updated in place) |
+| XP | F, U24, UN | pass: the root hub's Found New Hardware wizard made the first run stop with exit 4 as designed, the second finish |
+| XP x64 | F, U24, L | pass |
+| Vista x86 | F, L, U24 | pass (U24 failed once on a package whose filter INF lacked a catalog line for the store; the package was fixed and U24 re-read) |
+| Vista x64 | F, U24 | pass (U24's run after the restart not read) |
+| 7 x86 | F, U24, UN | pass |
+| 7 x64 | F, UN (over 2.4.0.0), U24, U23 | pass; the x64 note cited a section name the package's `readme.txt` does not carry and called an unsigned package test-signed: fixed |
+
+**What the legs changed in the tool** (each in record 23): the settle
+beside Windows' own installer and the retry of a call that meets it
+(section 5.8); the last line and the exit code agreeing, and no restart
+request beside "run INSTALL.BAT again" (section 7.4); an unchanged rerun
+saying "No changes were made." (sections 5.6 and 8.4); the confirmation
+naming what will happen; the results never printing "started" beside a
+problem code; the x64 note reading the drivers' signature (section 5.10);
+on 98 SE and ME the root hub's own update step, the 2.3.x warning only
+over 2.3.x on 98 SE, the `.PNF` beside a local copy, an old slot's entry
+kept as a step but out of the confirmation's wording, the UAS disk's disk
+prompt and ME's "Select Other Driver" list in the steps (sections 4.4,
+6.3, 6.4); `/yes` asking nothing (section 7.1); and on Windows 2000 a
+first filter install's Code 12 waiting for the restart the run asks for
+(section 5.9, owner).
+
+**The 98 SE re-reads on the fixed tool** (tool 62d7b22f, `pkg30d`). NC9,
+on the U23 overlay: the old slot's `DEV_04` entry listed with its
+guidance; the confirmation "Check the local copy and DevicePath now (see
+the entry listed apart above)"; "No changes were made.", exit 4 (that
+entry is a step, by design); `/set XhciForceBulkOnly=1 /yes` and back to 0
+asked nothing and wrote the controller's key ("Changes were made, but not
+everything is done ...", exit 4); `/defaults /yes` "No changes were
+made.". UN9, on the UN overlay: the install copied and staged normally;
+after the wizard and the restart a second run changed nothing;
+`/uninstall` restored `DevicePath` and removed every local copy - the one
+holding Windows' `xhci98.PNF` included - and `%windir%\XHCI98`; after the
+printed steps `USBD.SYS` and `USBUI.DLL` were present; the reinstall after
+it copied and staged with no refusal. Pass. A copy of an earlier package
+stays beside the new one until the uninstall (record 23 decision D7).
+
+### Owed
+
+- Vista x64: U24's run after the restart; 7 x64: UN over 3.0.0.0.
+- The filter install on Windows 2000 through the tool (the upstream
+  port's Code 12 now answered with the restart): not re-read on the
+  Thunderbolt vehicle with this tool.
