@@ -3099,6 +3099,210 @@ static void test_asm4242(void)
     CHECK(hostClean(&g_fab, 1), "its host side clean, USB3 included");
 }
 
+/* No Lane Adapter Configuration write turned on a CL state (LANE_ADP_CS_1
+ * bits 12:10, CL0s, CL1 and CL2) anywhere. */
+static int noClxWritten(const FAB *f)
+{
+    unsigned long i;
+
+    for (i = 0; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrCs[i] == TBT_CS_ADAPTER && f->WrAddr[i] == FAB_CAP_LANE + 1 &&
+            (f->WrVal[i] & 0x1C00UL) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* What every ASM2464 case must leave unchanged: no error path, no retry
+ * storm, nothing toward the unused adapter (record 22 section 6.11). */
+static void asmQuiet(const TBT_U4CM *cm, const FAB *f, int dev, const char *what)
+{
+    CHECK(cm->Counters.RopFailed == 0 && cm->Counters.RopTimeouts == 0 &&
+          cm->Counters.RopBlocked == 0, what);
+    CHECK(cm->Ctl.Counters.Retries == 0 && cm->Ctl.Counters.Timeouts == 0, what);
+    CHECK(cm->Counters.ConfigReadyTimeouts == 0 && cm->Counters.PcieFailed == 0, what);
+    CHECK(cm->Counters.Usb3Built == 0 && cm->Counters.Usb3Failed == 0, what);
+    CHECK(cm->Counters.TmuEnabled == 0 && cm->Counters.TmuFailures == 0, what);
+    CHECK(cm->Counters.DromCrcFailures == 0, what);
+    CHECK_EQ(f->R[dev].AdpTouches[4], 0, what);
+    CHECK_EQ(f->R[dev].NvmOps, 0, what);
+    CHECK(noClxWritten(f), what);
+}
+
+/*
+ * The ASMedia ASM2464PD (usb4-emu's `asm2464` device model, the ORICO
+ * AAGM2-U4 capture) behind the `intel-adl` host, USB3 tunnelling on:
+ * record 22 section 6.11's quirks one by one.
+ */
+static void test_asm2464(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int dev2;
+    int lane;
+    const TBT_U4_PORT *p;
+    unsigned long before;
+
+    cfgDefault(&c);
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    g_ldCalls = 0;
+    CHECK_EQ(start(&g_fab, &g_ring, &g_cm, &c), TBT_OK, "asm2464: start");
+    p = TbtU4Port(&g_cm, 1);
+    lane = fabPortLane0(&g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "asm2464: a cold device UP");
+    CHECK(p->Pcie.Up && fabPcieUp(&g_fab, 1), "asm2464: the PCIe tunnel up");
+    CHECK(p->Bonded, "asm2464: bonded");
+    CHECK(!p->Usb3.Up && !fabUsb3Up(&g_fab, 1), "asm2464: no USB3 tunnel to the unused adapter");
+    CHECK_EQ(p->Dev.DromRevision, 1, "asm2464: the Thunderbolt 3 compatible DROM read");
+    CHECK_EQ(p->Dev.DromUnused[0], 1UL << 4, "asm2464: adapter 4 unused by the DROM");
+    CHECK(!p->Dev.Adp[4].Present && p->Dev.Adp[3].Present,
+          "asm2464: adapter 4 left out, PCIe Up 3 used");
+    CHECK(strcmp(p->Dev.VendorName, "ASMedia") == 0 && strcmp(p->Dev.ModelName, "246x") == 0,
+          "asm2464: the names from the revision 1 entries (byte 22 on)");
+    CHECK_EQ(fabRtr(&g_fab, dev, 5) & 0x83000000UL, 0x81000000UL,
+             "asm2464: CV and PTO, no UTO without a USB3 Up adapter");
+    CHECK_EQ(p->Dev.CapTmu, 0xC0, "asm2464: the TMU capability found at C0h by the walk");
+    CHECK(p->Dev.CapLc == 0 && p->Dev.CapPlugEvents == 0,
+          "asm2464: its vendor capabilities 1 and 6 not taken for Thunderbolt 3 ones");
+    CHECK_EQ(fabRtr(&g_fab, dev, 0xC0 + 3) >> 16, 0, "asm2464: its TMU left off (no USB3)");
+    CHECK_EQ(p->Dev.Adp[1].MaxInHop, 27, "asm2464: Max HopID 27");
+    CHECK(p->Dev.BaValid && p->Dev.BaMaxPcie == 64 && p->Dev.BaMaxUsb3 == 0,
+          "asm2464: Buffer Allocation PCIe 64 alone");
+    CHECK_EQ((fabPath0(&g_fab, dev, 1, p->Pcie.Hd) >> 17) & 0x7F, 64,
+             "asm2464: 64 lane credits (66 buffers less the control path's 2)");
+    CHECK_EQ(fabPath0(&g_fab, dev, 3, 8) & 0x00FE0000UL, 0,
+             "asm2464: the PCIe Up ingress credits kept as read (Linux path.c)");
+    CHECK_EQ(g_cm.Counters.RoutersEnumerated, 2,
+             "asm2464: the host and the device enumerated once each, Router Ready waited");
+    CHECK_EQ(g_fab.Lane1LockWrites, 0, "asm2464: lane 1 Lock never written");
+    asmQuiet(&g_cm, &g_fab, dev, "asm2464 cold: quiet");
+
+    /* Unplug and re-plug: the same, again. */
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "asm2464: its unplug EMPTY");
+    CHECK(hostClean(&g_fab, 1) && g_ld.PathClosed, "asm2464: host side clean, path closed");
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "asm2464: re-plug UP");
+    CHECK(!p->Usb3.Up && p->Pcie.Up, "asm2464: re-plug PCIe alone");
+    asmQuiet(&g_cm, &g_fab, dev, "asm2464 re-plug: quiet");
+
+    /* Two of them, the second hot plugged on port 2. */
+    dev2 = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 2, dev2);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "asm2464: a second one hot plugged on port 2 UP");
+    CHECK(!TbtU4Port(&g_cm, 2)->Usb3.Up, "asm2464: and no USB3 there either");
+    asmQuiet(&g_cm, &g_fab, dev2, "asm2464 port 2: quiet");
+    (void)lane;
+
+    /* Router Ready late: 450 ms (inside the 500 ms bound) costs nothing;
+     * 700 ms costs one bounded wait and the enumeration's re-read, never a
+     * second enumeration write. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    g_fab.R[dev].RrDelayUs = 450000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "asm2464 RR 450 ms: UP");
+    asmQuiet(&g_cm, &g_fab, dev, "asm2464 RR 450 ms: quiet");
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    g_fab.R[dev].RrDelayUs = 700000UL;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "asm2464 RR 700 ms: UP after the re-read");
+    CHECK_EQ(g_cm.Counters.RoutersEnumerated, 2,
+             "asm2464 RR 700 ms: one enumeration write each, host and device");
+
+    /* The pre-OS tunnel preserved; then XhciCmPreOsCleanup 2: a Downstream
+     * Port Reset, the link down for 594 ms, the router rebuilt afresh. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Preserved, "asm2464 pre-OS: preserved");
+    CHECK_EQ(g_cm.Counters.DownstreamPortResets, 0, "asm2464 pre-OS: no reset");
+    CHECK_EQ(g_fab.R[dev].AdpTouches[4], 0, "asm2464 pre-OS: adapter 4 never addressed");
+    CHECK(strcmp(p->Dev.ModelName, "246x") == 0, "asm2464 pre-OS: named from its DROM");
+
+    c.PreOsCleanup = 2;
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.RxQCount = 0;
+    before = g_fab.NowUs;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(g_cm.Counters.DownstreamPortResets, 1, "asm2464 cleaning: one port reset");
+    CHECK(g_fab.NowUs - before >= 594000UL, "asm2464 cleaning: the 594 ms waited out");
+    poll(&g_cm, &g_fab, 3);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && !p->Pcie.Preserved && fabPcieUp(&g_fab, 1),
+          "asm2464 cleaning: built afresh");
+    CHECK_EQ(g_cm.Counters.Connects, 1, "asm2464 cleaning: one connect, no retry");
+    CHECK_EQ(g_cm.Counters.RoutersEnumerated, 1,
+             "asm2464 cleaning: one enumeration (the host's was preserved)");
+    asmQuiet(&g_cm, &g_fab, dev, "asm2464 cleaning: quiet");
+    c.PreOsCleanup = 0;
+
+    /* The rule is the DROM's, not the device's: a USB4 (revision 3) DROM
+     * marking the generic device router's USB3 Up adapter 6 unused stops
+     * its USB3 tunnel too; the same DROM with a bad CRC is not believed. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabDromMarkUnused(&g_fab, dev, 6);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Pcie.Up && !p->Usb3.Up,
+          "USB4 DROM: adapter 6 unused, no USB3");
+    CHECK(strcmp(p->Dev.ModelName, "USB4 NVMe Enclosure") == 0, "USB4 DROM: still named");
+    CHECK_EQ(g_fab.R[dev].AdpTouches[6], 0, "USB4 DROM: adapter 6 never addressed");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabDromMarkUnused(&g_fab, dev, 6);
+    g_fab.R[dev].Drom[9] ^= 0x01;
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Usb3.Up && p->Dev.DromUnused[0] == 0,
+          "bad DROM CRC: nothing believed, every adapter used");
+    /* A malformed entry list (an entry running past the data): nothing
+     * kept, every adapter used. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_ASM2464);
+    g_fab.R[dev].Drom[71] = 0x10;   /* the last entry one byte past the data */
+    {
+        unsigned long crc = fabCrcOf(g_fab.R[dev].Drom + 13, 86 - 13);
+
+        g_fab.R[dev].Drom[9] = (unsigned char)crc;
+        g_fab.R[dev].Drom[10] = (unsigned char)(crc >> 8);
+        g_fab.R[dev].Drom[11] = (unsigned char)(crc >> 16);
+        g_fab.R[dev].Drom[12] = (unsigned char)(crc >> 24);
+    }
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && p->Dev.DromUnused[0] == 0 &&
+          p->Dev.VendorName[0] == 0, "malformed DROM entries: nothing kept");
+}
+
 /* TBT_U4_CONFIG.DeferFirstPoll (task 40-A.6): the start connects nothing
  * found empty; the caller's first poll does, and a preserved tunnel is
  * preserved either way. */
@@ -3244,6 +3448,7 @@ int main(void)
     test_review5();
     test_review7();
     test_asm4242();
+    test_asm2464();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }
