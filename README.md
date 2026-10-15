@@ -136,7 +136,20 @@ By default (`XhciCmApprove` `1`) every device plugged into the port is approved 
 
 ### Removing a device safely
 
-Close the files open on the device first, as for any removable disk. On every system `INSTALL /devices` shows the connected Thunderbolt and USB4 devices: each one's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which one and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it. On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation. (`tools\xhciinst\XHCIINST` takes the same switches, `XHCIIN64` on 64-bit Windows.)
+Close the files open on the device first, as for any removable disk.
+
+`INSTALL /devices` shows the connected Thunderbolt and USB4 devices, on every system:
+
+- each one's name, generation, approval and connections
+- the Windows devices behind it, with their drivers
+
+`INSTALL /eject` removes one of them safely:
+
+1. It lists the devices and asks which one.
+2. It asks Windows to stop it. If a program has a file open on the device, Windows refuses and nothing changes: close the program and try again.
+3. When it says "You can now unplug the device.", unplug it.
+
+On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation. `tools\xhciinst\XHCIINST` takes the same switches (`XHCIIN64` on 64-bit Windows).
 
 - **Windows 98 SE and ME:** use `INSTALL /eject`; these systems have no other way. Until you unplug the device, Device Manager's Refresh can start it again.
 - **Windows 2000:** stop the device in "Unplug or Eject Hardware", then unplug it. Without the stop, Windows 2000 shows its "Unsafe Removal of Device" warning.
