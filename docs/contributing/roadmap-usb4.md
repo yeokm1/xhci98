@@ -254,7 +254,7 @@ Status: open. Opened 2026-10-16 by the owner, who held `3.0.0.0` for it;
 it ships in `3.0.0.0` with Phases 39 and 40, and `40.final`'s cut comes
 after `41.final`. Its design record is design record 25.
 
-- [ ] 41-0.1 the design record (design record 25), reviewed until it converges; the icon `xhcitr\xhcitr.ico`
+- [x] 41-0.1 the design record (design record 25), reviewed until it converges; the icon `xhcitr\xhcitr.ico` (done 2026-10-16: revision 5, reviewed and revised four times, converged; the icon drawn in the 16 VGA colours)
 - [ ] 41-A.1 `xhcicm.sys`: the query device `\\.\XHCICM<n>` and `IOCTL_XHCICM_QUERY` (record 25 section 4), the router extension cache (link rate and width, link state), the pure builder `cm_query.c` with host tests in `test_cm`
 - [ ] 41-A.2 `tr_core.c`, pure: query and record parsing, descriptor decoding, speed names, the tray event diff, tree keys, the report text; host suite `test_tr`
 - [ ] 41-A.3 the window: tree, details pane, View check boxes, refresh on device change, Save Report, Copy, Properties (record 25 section 3), and the USB branch (section 5)
