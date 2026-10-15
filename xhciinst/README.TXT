@@ -94,8 +94,16 @@ notes, "Registry settings", say what each does. An answer applies from the
 driver's next start. XhciPollFineTimer and XhciSelectiveSuspend are never
 asked; /set Name=Value still sets them.
 
-At the end it says "Changes were made. Please restart Windows now." when
-it changed anything, and "No changes were made." when it did not.
+When Windows starts installing a device by itself while the tool runs - a
+Found New Hardware window, perhaps behind the tool's - the tool waits for
+it (up to 10 minutes) and goes on afterwards; answer that window. It never
+installs a device while Windows' own install of it is under way.
+
+At the end it says "Changes were made. Please restart Windows now." (exit
+code 3) when it changed anything and finished, "Changes were made, but not
+everything is done" when it stopped with steps left for you (do those
+first; the next run asks for the restart), and "No changes were made."
+when it changed nothing.
 
 Uninstall
 ---------
@@ -113,10 +121,11 @@ removes what it placed itself and prints the Device Manager steps.
 Exit codes
 ----------
 
-  0  done (or /list)
+  0  done, nothing needed a change (or /list)
   1  refused or cancelled; nothing was changed
   2  something failed; the screen and the log say what was done
-  3  done; restart Windows (and run INSTALL.BAT again if it says so)
+  3  done, something changed; restart Windows (and run INSTALL.BAT again
+     after it if it says so)
   4  done as far as the tool can; it printed what is left for you
 
 The log

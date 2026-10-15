@@ -338,6 +338,81 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
 
 int inst_exit_code(int refused, int failed, int restart, int steps);
 
+/* The last line before the exit code, and the code it goes with (record 23
+ * section 7.4): nothing changed (or /list) - "No changes were made.", the
+ * code as it is; a change and a run that finished (0 or 3) - "Changes were
+ * made. Please restart Windows now.", always 3; a change and a run that
+ * did not finish (2 or 4) - "Changes were made, but not everything is
+ * done ...", the code as it is; a change under a refusal's code (1) is
+ * reported as failed part-way (2). Returns the final code. */
+#define INST_FINAL_NO_CHANGES   0
+#define INST_FINAL_RESTART      1
+#define INST_FINAL_UNFINISHED   2
+int inst_final(int changed, int list, int code, int *line);
+const char *inst_final_text(int line);
+
+/* ---- installing beside Windows' own installer (record 23 section 5.8) ------------ */
+
+/* The settle: CMP_WaitNoPendingInstallEvents asked with no wait every
+ * INST_SETTLE_POLL_MS, and a signature of the devices below this package's
+ * controllers read each time. Settled once nothing has been pending and the
+ * signature has not moved for INST_SETTLE_QUIET_MS - and, while a device is
+ * expected (a controller this run updated shows no root hub yet, a device
+ * of the bus not configured yet), not before ExpectMs. Pending at LimitMs
+ * is a timeout; not pending at LimitMs is settled (the next reading of the
+ * devices decides). */
+#define INST_SETTLE_POLL_MS     500UL
+#define INST_SETTLE_QUIET_MS    3000UL
+
+#define INST_SETTLE_WAIT        0   /* poll again                            */
+#define INST_SETTLE_DONE        1   /* settled                               */
+#define INST_SETTLE_TELL        2   /* poll again; say why the wait, once    */
+#define INST_SETTLE_TIMEOUT     3   /* still pending at the limit            */
+#define INST_SETTLE_FAILED      4   /* the question failed                   */
+
+typedef struct _INST_SETTLE {
+    INST_U32 LimitMs;       /* overall bound                              */
+    INST_U32 TellMs;        /* pending this long: TELL, once              */
+    INST_U32 ExpectMs;      /* how long an expected device is waited for  */
+    INST_U32 QuietFrom;     /* when the quiet stretch began               */
+    INST_U32 PendingFrom;   /* when the pending stretch began             */
+    INST_U32 Sig;
+    int Quiet;              /* in a quiet stretch                         */
+    int Pending;            /* in a pending stretch                       */
+    int Told;
+} INST_SETTLE;
+
+void inst_settle_init(INST_SETTLE *s, INST_U32 limitMs, INST_U32 tellMs,
+                      INST_U32 expectMs);
+
+/* One poll: nowMs since the settle began, pending 1 / 0 / -1 (the question
+ * failed), sig the signature now, expect 1 while a device is expected. */
+int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
+                     INST_U32 sig, int expect);
+
+/* An install call that failed because Windows was installing the same
+ * device at that moment (ERROR_SHARING_VIOLATION, 0x20, read on the 2000
+ * leg): 1 when it is tried again after a settle; tries counts the busy
+ * answers so far, this one included. */
+#define INST_BUSY_TRIES         3
+int inst_busy_retry(INST_U32 error, int tries);
+
+/* A device's state as the results print it: "xhci98 3.0.0.0, started",
+ * "no driver, problem code 28", "xhci98 2.3.1.0, not started". A device
+ * with a problem code is never called started. */
+void inst_state_text(char *out, size_t cap, const char *service,
+                     const char *version, int started, INST_U32 problem);
+
+/* 1 when SetupCopyOEMInf's answer (a name, or a path whose last part is the
+ * name) is the oem*.inf found byte-identical before the call, from a local
+ * copy this run did not make: staged already, which is no change. */
+int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
+                      const char *answer);
+
+/* The confirmation question: devices to change, else option values to
+ * write, else neither. */
+const char *inst_confirm_text(int runs, int writes);
+
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
 
 /* 1 when the service is one of this package's (xhci98, xhciuas, xhcicm). */

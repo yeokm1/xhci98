@@ -807,6 +807,129 @@ static void test_args(void)
     CHECK_EQ(inst_exit_code(0, 0, 1, 0), 3, "restart");
 }
 
+/* The last line agrees with the exit code; the settle; the busy retry; the
+ * results' state text; staged again; the confirmation's wording. */
+static void test_flow(void)
+{
+    int line = -1;
+    INST_SETTLE s;
+    char t[64];
+
+    /* /defaults /yes over current devices, the INFs staged already: no
+     * change, "No changes were made.", exit 0 (the 2000 leg read "Changes
+     * were made" there). */
+    CHECK_EQ(inst_final(0, 0, inst_exit_code(0, 0, 0, 0), &line), 0,
+             "no change: 0");
+    CHECK_EQ(line, INST_FINAL_NO_CHANGES, "no change: its line");
+    CHECK(strcmp(inst_final_text(line), "No changes were made.") == 0,
+          "no change: the text");
+    CHECK_EQ(inst_final(1, 1, 0, &line), 0, "/list: 0");
+    CHECK_EQ(line, INST_FINAL_NO_CHANGES, "/list: no change");
+    CHECK_EQ(inst_final(0, 0, 4, &line), 4, "no change, steps: 4 kept");
+    CHECK_EQ(line, INST_FINAL_NO_CHANGES, "no change, steps: its line");
+    /* A change in a finished run asks for the restart and exits 3. */
+    CHECK_EQ(inst_final(1, 0, 0, &line), 3, "change, done: 3");
+    CHECK_EQ(line, INST_FINAL_RESTART, "change, done: restart line");
+    CHECK(strstr(inst_final_text(line), "Please restart Windows now") != NULL,
+          "restart text");
+    CHECK_EQ(inst_final(1, 0, 3, &line), 3, "change, restart: 3");
+    CHECK_EQ(line, INST_FINAL_RESTART, "change, restart: restart line");
+    /* A change in a run that stopped: no bare restart request beside
+     * "run INSTALL.BAT again". */
+    CHECK_EQ(inst_final(1, 0, 2, &line), 2, "change, failed: 2");
+    CHECK_EQ(line, INST_FINAL_UNFINISHED, "change, failed: unfinished");
+    CHECK_EQ(inst_final(1, 0, 4, &line), 4, "change, steps: 4");
+    CHECK_EQ(line, INST_FINAL_UNFINISHED, "change, steps: unfinished");
+    CHECK(strstr(inst_final_text(line), "Please restart") == NULL,
+          "unfinished: no restart request");
+    CHECK_EQ(inst_final(1, 0, 1, &line), 2, "change under a refusal: 2");
+
+    /* Settle: quiet for 3 s, nothing expected. */
+    inst_settle_init(&s, 60000UL, 20000UL, 20000UL);
+    CHECK_EQ(inst_settle_step(&s, 0, 0, 7, 0), INST_SETTLE_WAIT, "quiet 0");
+    CHECK_EQ(inst_settle_step(&s, 2500, 0, 7, 0), INST_SETTLE_WAIT, "quiet 2.5");
+    CHECK_EQ(inst_settle_step(&s, 3000, 0, 7, 0), INST_SETTLE_DONE, "quiet 3");
+    /* The tree moves: the quiet stretch starts again. */
+    inst_settle_init(&s, 60000UL, 20000UL, 20000UL);
+    inst_settle_step(&s, 0, 0, 7, 0);
+    CHECK_EQ(inst_settle_step(&s, 2500, 0, 8, 0), INST_SETTLE_WAIT, "moved");
+    CHECK_EQ(inst_settle_step(&s, 5000, 0, 8, 0), INST_SETTLE_WAIT, "moved 2.5");
+    CHECK_EQ(inst_settle_step(&s, 5500, 0, 8, 0), INST_SETTLE_DONE, "moved 3");
+    /* The 2000 race: the controller updated, no root hub yet (expected),
+     * Windows picks it up (pending), its wizard waits, then ends. */
+    inst_settle_init(&s, 600000UL, 20000UL, 20000UL);
+    CHECK_EQ(inst_settle_step(&s, 0, 0, 1, 1), INST_SETTLE_WAIT, "no hub yet");
+    CHECK_EQ(inst_settle_step(&s, 3500, 0, 1, 1), INST_SETTLE_WAIT,
+             "quiet but a hub expected");
+    CHECK_EQ(inst_settle_step(&s, 4000, 0, 2, 0), INST_SETTLE_WAIT, "hub seen");
+    CHECK_EQ(inst_settle_step(&s, 4500, 1, 2, 0), INST_SETTLE_WAIT,
+             "Windows installs it");
+    CHECK_EQ(inst_settle_step(&s, 24000, 1, 2, 0), INST_SETTLE_WAIT,
+             "pending 19.5 s");
+    CHECK_EQ(inst_settle_step(&s, 24500, 1, 2, 0), INST_SETTLE_TELL,
+             "pending 20 s: the wizard is named");
+    CHECK_EQ(inst_settle_step(&s, 25000, 1, 2, 0), INST_SETTLE_WAIT,
+             "told once");
+    CHECK_EQ(inst_settle_step(&s, 90000, 0, 3, 0), INST_SETTLE_WAIT,
+             "wizard finished");
+    CHECK_EQ(inst_settle_step(&s, 93000, 0, 3, 0), INST_SETTLE_DONE,
+             "settled after it");
+    /* An expected device that never comes: bounded by ExpectMs. */
+    inst_settle_init(&s, 600000UL, 20000UL, 20000UL);
+    inst_settle_step(&s, 0, 0, 1, 1);
+    CHECK_EQ(inst_settle_step(&s, 19500, 0, 1, 1), INST_SETTLE_WAIT,
+             "expected 19.5 s");
+    CHECK_EQ(inst_settle_step(&s, 20000, 0, 1, 1), INST_SETTLE_DONE,
+             "expected: bound");
+    /* Pending at the limit: timeout; not pending at the limit: done. */
+    inst_settle_init(&s, 60000UL, 5000UL, 0UL);
+    CHECK_EQ(inst_settle_step(&s, 0, 1, 1, 0), INST_SETTLE_WAIT, "pending 0");
+    CHECK_EQ(inst_settle_step(&s, 5000, 1, 1, 0), INST_SETTLE_TELL, "tell 5");
+    CHECK_EQ(inst_settle_step(&s, 60000, 1, 1, 0), INST_SETTLE_TIMEOUT,
+             "pending at the limit");
+    inst_settle_init(&s, 60000UL, 5000UL, 0UL);
+    inst_settle_step(&s, 59000, 0, 1, 0);
+    CHECK_EQ(inst_settle_step(&s, 60000, 0, 2, 0), INST_SETTLE_DONE,
+             "moving, not pending, at the limit");
+    CHECK_EQ(inst_settle_step(&s, 60500, -1, 2, 0), INST_SETTLE_FAILED,
+             "question failed");
+
+    /* The busy answer: tried again twice, then a failure. */
+    CHECK_EQ(inst_busy_retry(0x20UL, 1), 1, "busy once: again");
+    CHECK_EQ(inst_busy_retry(0x20UL, 2), 1, "busy twice: again");
+    CHECK_EQ(inst_busy_retry(0x20UL, 3), 0, "busy three times: failed");
+    CHECK_EQ(inst_busy_retry(0x5UL, 1), 0, "another error: failed");
+
+    /* The results' state text: never "started" with a problem code, never
+     * an empty field. */
+    inst_state_text(t, sizeof(t), "", "", 1, 28UL);
+    CHECK(strcmp(t, "no driver, problem code 28") == 0, "U23b's root hub");
+    inst_state_text(t, sizeof(t), "xhci98", "3.0.0.0", 1, 0UL);
+    CHECK(strcmp(t, "xhci98 3.0.0.0, started") == 0, "started");
+    inst_state_text(t, sizeof(t), "xhci98", "2.3.1.0", 0, 0UL);
+    CHECK(strcmp(t, "xhci98 2.3.1.0, not started") == 0, "not started");
+    inst_state_text(t, sizeof(t), "xhci98", "3.0.0.0", 0, 10UL);
+    CHECK(strcmp(t, "xhci98 3.0.0.0, problem code 10") == 0, "code 10");
+    inst_state_text(t, 8, "xhci98", "3.0.0.0", 1, 0UL);
+    CHECK(strcmp(t, "xhci98 ") == 0, "bounded");
+
+    /* Staged again: the name, or a path ending in it; never after a new
+     * local copy or without an identical oem*.inf. */
+    CHECK_EQ(inst_staged_again(1, 0, "oem0.inf", "oem0.inf"), 1, "name");
+    CHECK_EQ(inst_staged_again(1, 0, "oem0.inf", "C:\\WINNT\\inf\\OEM0.INF"), 1,
+             "path");
+    CHECK_EQ(inst_staged_again(1, 0, "oem0.inf", "oem4.inf"), 0, "new name");
+    CHECK_EQ(inst_staged_again(1, 1, "oem0.inf", "oem0.inf"), 0, "new copy");
+    CHECK_EQ(inst_staged_again(0, 0, "", "oem0.inf"), 0, "none before");
+
+    /* The confirmation says what will happen. */
+    CHECK(strcmp(inst_confirm_text(1, 0), "Install and stage the package now")
+          == 0, "runs");
+    CHECK(strstr(inst_confirm_text(0, 1), "settings") != NULL, "a setting");
+    CHECK(strstr(inst_confirm_text(0, 0), "Every device is current") != NULL,
+          "nothing");
+}
+
 int main(void)
 {
     test_versions();
@@ -821,6 +944,7 @@ int main(void)
     test_helpers();
     test_values();
     test_args();
+    test_flow();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

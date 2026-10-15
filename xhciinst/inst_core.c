@@ -1735,6 +1735,167 @@ int inst_exit_code(int refused, int failed, int restart, int steps)
     return INST_EXIT_DONE;
 }
 
+int inst_final(int changed, int list, int code, int *line)
+{
+    if (list || !changed) {
+        *line = INST_FINAL_NO_CHANGES;
+        return code;
+    }
+    if (code == INST_EXIT_DONE || code == INST_EXIT_RESTART) {
+        *line = INST_FINAL_RESTART;
+        return INST_EXIT_RESTART;
+    }
+    *line = INST_FINAL_UNFINISHED;
+    return code == INST_EXIT_REFUSED ? INST_EXIT_FAILED : code;
+}
+
+const char *inst_final_text(int line)
+{
+    switch (line) {
+    case INST_FINAL_RESTART:
+        return "Changes were made. Please restart Windows now.";
+    case INST_FINAL_UNFINISHED:
+        return "Changes were made, but not everything is done: do what is "
+               "said above first,\nthen restart Windows.";
+    default:
+        return "No changes were made.";
+    }
+}
+
+/* ======================================================================== */
+/* Installing beside Windows' own installer                                  */
+/* ======================================================================== */
+
+void inst_settle_init(INST_SETTLE *s, INST_U32 limitMs, INST_U32 tellMs,
+                      INST_U32 expectMs)
+{
+    memset(s, 0, sizeof(*s));
+    s->LimitMs = limitMs;
+    s->TellMs = tellMs;
+    s->ExpectMs = expectMs;
+}
+
+int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
+                     INST_U32 sig, int expect)
+{
+    if (pending < 0) {
+        return INST_SETTLE_FAILED;
+    }
+    if (pending) {
+        s->Quiet = 0;
+        if (!s->Pending) {
+            s->Pending = 1;
+            s->PendingFrom = nowMs;
+        }
+        if (nowMs >= s->LimitMs) {
+            return INST_SETTLE_TIMEOUT;
+        }
+        if (!s->Told && nowMs - s->PendingFrom >= s->TellMs) {
+            s->Told = 1;
+            return INST_SETTLE_TELL;
+        }
+        return INST_SETTLE_WAIT;
+    }
+    s->Pending = 0;
+    if (!s->Quiet || sig != s->Sig) {
+        s->Quiet = 1;
+        s->QuietFrom = nowMs;
+        s->Sig = sig;
+    }
+    if (nowMs >= s->LimitMs) {
+        return INST_SETTLE_DONE;
+    }
+    if (nowMs - s->QuietFrom >= INST_SETTLE_QUIET_MS &&
+        (!expect || nowMs >= s->ExpectMs)) {
+        return INST_SETTLE_DONE;
+    }
+    return INST_SETTLE_WAIT;
+}
+
+int inst_busy_retry(INST_U32 error, int tries)
+{
+    return error == 0x20UL && tries >= 1 && tries < INST_BUSY_TRIES;
+}
+
+static void inst_cat(char *out, size_t cap, const char *s)
+{
+    size_t n = strlen(out);
+
+    while (*s != '\0' && n + 1 < cap) {
+        out[n++] = *s++;
+    }
+    out[n] = '\0';
+}
+
+static void inst_cat_number(char *out, size_t cap, INST_U32 v)
+{
+    char digits[12];
+    int n = 0;
+    char one[2];
+
+    do {
+        digits[n++] = (char)('0' + (int)(v % 10UL));
+        v /= 10UL;
+    } while (v != 0 && n < (int)sizeof(digits));
+    one[1] = '\0';
+    while (n > 0) {
+        one[0] = digits[--n];
+        inst_cat(out, cap, one);
+    }
+}
+
+void inst_state_text(char *out, size_t cap, const char *service,
+                     const char *version, int started, INST_U32 problem)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, (service != NULL && service[0] != '\0') ?
+                       service : "no driver");
+    if (version != NULL && version[0] != '\0') {
+        inst_cat(out, cap, " ");
+        inst_cat(out, cap, version);
+    }
+    if (problem != 0) {
+        inst_cat(out, cap, ", problem code ");
+        inst_cat_number(out, cap, problem);
+    } else {
+        inst_cat(out, cap, started ? ", started" : ", not started");
+    }
+}
+
+int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
+                      const char *answer)
+{
+    const char *name;
+    const char *p;
+
+    if (!hadIdentical || copiedNow || before == NULL || answer == NULL ||
+        before[0] == '\0') {
+        return 0;
+    }
+    name = answer;
+    for (p = answer; *p != '\0'; p++) {
+        if (*p == '\\' || *p == '/' || *p == ':') {
+            name = p + 1;
+        }
+    }
+    return inst_eq(before, name);
+}
+
+const char *inst_confirm_text(int runs, int writes)
+{
+    if (runs) {
+        return "Install and stage the package now";
+    }
+    if (writes) {
+        return "Write the changed settings now (no device needs a new driver)";
+    }
+    return "Every device is current and no setting changes. Check the "
+           "staged INFs (and\nstage any missing) now";
+}
+
 /* ======================================================================== */
 /* The uninstall's selection and order                                       */
 /* ======================================================================== */

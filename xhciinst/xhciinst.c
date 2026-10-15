@@ -85,7 +85,10 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 #define INST_CM_DRP_HARDWAREID      0x00000002UL
 #define INST_CM_DRP_COMPATIBLEIDS   0x00000003UL
 #define INST_CM_DRP_DRIVER          0x0000000AUL
-#define INST_INSTALL_WAIT_MS        60000UL
+#define INST_INSTALL_WAIT_MS        600000UL   /* the barrier: a wizard answered */
+#define INST_FIRST_WAIT_MS          60000UL    /* before the first change      */
+#define INST_PROB_NOT_CONFIGURED    1UL
+#define INST_PROB_REINSTALL         18UL
 
 #ifndef ERROR_IN_WOW64
 #define ERROR_IN_WOW64 0xE0000235UL
@@ -201,15 +204,19 @@ static int groupVerdict[INST_GROUPS];
 
 /* The devices a step changed, by instance id, for the results check. */
 /* The devices this run reached, by instance id, kept across the barriers'
- * fresh scans: an entry is never reached twice in one run. State 1: an
- * install call was made for it (changedReboot holds that call's restart
- * answer; 2 once it succeeded, 3 when it failed); 0: it was left (shared
- * id, another build stored). */
+ * fresh scans: an entry is never reached twice in one run, except after
+ * a busy answer. State 1: an install call was made for it (changedReboot
+ * holds that call's restart answer; 2 once it succeeded, 3 when it failed,
+ * 4 when it met Windows' own install of the device and is made again after
+ * the next barrier, if still needed); 0: it was left (shared id, another
+ * build stored). */
 #define INST_MAX_CHANGED INST_MAX_DEVS
 static char changedId[INST_MAX_CHANGED][INST_ID_CHARS];
 static int changedInf[INST_MAX_CHANGED];
 static int changedState[INST_MAX_CHANGED];
 static int changedReboot[INST_MAX_CHANGED];
+static int changedBusy[INST_MAX_CHANGED];   /* busy answers (0x20) so far */
+#define INST_CS_BUSY 4  /* the call met Windows' own install: eligible again */
 static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
 static int copiedNow;       /* this run made a new local copy */
@@ -1328,7 +1335,10 @@ static void plan(void)
         }
         /* A device this run already reached is not reached again after a
          * barrier's fresh scan; newly exposed devices stay eligible. */
-        d->Done = reached(d->Id) >= 0;
+        {
+            int c = reached(d->Id);
+            d->Done = c >= 0 && changedState[c] != INST_CS_BUSY;
+        }
     }
     group_verdicts();
 }
@@ -1857,12 +1867,20 @@ static int silent_list_merge(void)
         }
         n = (DWORD)dn;
         bn = sizeof(back);
+        /* A value already as SILENT.REG has it is not written again: an
+         * unchanged rerun says "No changes were made." */
+        if (RegQueryValueExA(k, name, NULL, &type, back, &bn) == ERROR_SUCCESS &&
+            type == REG_BINARY && bn == n && memcmp(back, data, n) == 0) {
+            values++;
+            continue;
+        }
         if (RegSetValueExA(k, name, 0, REG_BINARY, data, n) == ERROR_SUCCESS) {
             flagChanged = 1;    /* a write happened, whatever follows */
         } else {
             ok = 0;
             break;
         }
+        bn = sizeof(back);
         if (RegQueryValueExA(k, name, NULL, &type, back, &bn) != ERROR_SUCCESS ||
             type != REG_BINARY || bn != n || memcmp(back, data, n) != 0) {
             ok = 0;
@@ -1966,6 +1984,35 @@ static void write_values(void)
             }
         }
     }
+}
+
+/* How many values write_values would write now (a device whose value reads
+ * other than the answer, or not at all): the confirmation's wording. */
+static int values_to_write(void)
+{
+    int v;
+    int i;
+    int n = 0;
+    DWORD now;
+
+    for (v = 0; v < instValueCount; v++) {
+        if (!answerSet[v] || (envNow.Nt &&
+                              inst_eq(instValues[v].Name, "XhciSilentInstall"))) {
+            continue;
+        }
+        for (i = 0; i < devCount; i++) {
+            const DEVREC *d = &devs[i];
+            if (!value_target(d, v) || d->Driver[0] == '\0' ||
+                !inst_eq(d->Service, instInfService[d->Inf])) {
+                continue;
+            }
+            if (value_now(d, instValues[v].Name, &now) <= 0 ||
+                now != answerValue[v]) {
+                n++;
+            }
+        }
+    }
+    return n;
 }
 
 /* ======================================================================== */
@@ -3003,7 +3050,8 @@ static int stage_nt(void)
                                 "same local copy." : "");
             return 0;
         }
-        if (had && !copiedNow && inst_eq(before, component ? component : dest)) {
+        if (inst_staged_again(had, copiedNow, before,
+                              component ? component : dest)) {
             out("%s is staged already, as %s.\n", instInfFile[k], before);
         } else {
             out("Staged %s as %s.\n", instInfFile[k],
@@ -3095,6 +3143,7 @@ static int note_changed(const DEVREC *d, int state)
     changedInf[changedCount] = d->Inf;
     changedState[changedCount] = state;
     changedReboot[changedCount] = 0;
+    changedBusy[changedCount] = 0;
     return changedCount++;
 }
 
@@ -3126,6 +3175,7 @@ static int install_inf(int inf, int controllers)
     DWORD err;
     DWORD flags;
     int mixed;
+    int again;
     int ok = 1;
 
     join(path, sizeof(path), srcDir, infRel[inf]);
@@ -3249,8 +3299,27 @@ static int install_inf(int inf, int controllers)
             continue;
         }
         err = GetLastError();
+        /* Windows' own installer had the device at that moment (2000 leg,
+         * 2026-10-15: the new root hub, 0x20, while its Found New Hardware
+         * ran): the call is made again after the next barrier's settle, if
+         * the device still needs it then - never over Windows' install. */
+        again = 0;
+        if (err == ERROR_SHARING_VIOLATION) {
+            for (j = 0; j < n; j++) {
+                if (inst_busy_retry(err, ++changedBusy[callIdx[j]])) {
+                    again = 1;
+                }
+            }
+        }
         for (j = 0; j < n; j++) {
-            changedState[callIdx[j]] = 3;       /* the call failed */
+            changedState[callIdx[j]] = again ? INST_CS_BUSY : 3;
+        }
+        if (again) {
+            out("busy (error 0x%08lX).\n  Windows is installing it at the "
+                "same moment. The tool lets Windows finish,\n  reads the "
+                "devices again and, if it still needs its driver, tries "
+                "again.\n", (unsigned long)err);
+            continue;
         }
         out("FAILED (error 0x%08lX).\n", (unsigned long)err);
         if (flags == 0 && err == ERROR_NO_MORE_ITEMS) {
@@ -3276,22 +3345,169 @@ static int install_inf(int inf, int controllers)
     return ok;
 }
 
-/* 1 when nothing is pending; 0 when an installation is still in progress. */
+static int root_hub_below(const char *ctrlId);
+
+static INST_U32 sig_text(INST_U32 h, const char *s)
+{
+    return inst_fnv1a(h, (const unsigned char *)s, strlen(s) + 1);
+}
+
+static INST_U32 sig_number(INST_U32 h, INST_U32 v)
+{
+    unsigned char b[4];
+
+    b[0] = (unsigned char)(v & 0xFFUL);
+    b[1] = (unsigned char)((v >> 8) & 0xFFUL);
+    b[2] = (unsigned char)((v >> 16) & 0xFFUL);
+    b[3] = (unsigned char)((v >> 24) & 0xFFUL);
+    return inst_fnv1a(h, b, sizeof(b));
+}
+
+/* The devnodes below dn: each one's id, started and problem state into the
+ * signature; a device of the bus (USB\XHCI98_...) that Windows has not
+ * configured yet (Code 1 or 18) is expected to be installed by Windows. */
+static void settle_walk(DWORD dn, int depth, INST_U32 *h, int *expect,
+                        int *nodes)
+{
+    DWORD child;
+    ULONG status;
+    ULONG problem;
+    char id[INST_ID_CHARS];
+
+    if (depth > 8 || api.Child(&child, dn, 0) != INST_CR_SUCCESS) {
+        return;
+    }
+    for (;;) {
+        if (++*nodes > 512) {
+            return;
+        }
+        if (api.DeviceId(child, id, sizeof(id), 0) == INST_CR_SUCCESS) {
+            *h = sig_text(*h, id);
+        }
+        if (api.Status(&status, &problem, child, 0) == INST_CR_SUCCESS) {
+            *h = sig_number(*h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
+            *h = sig_number(*h, problem);
+            if (inst_bus_id(id) == 1 && (status & INST_DN_HAS_PROBLEM) &&
+                (problem == INST_PROB_NOT_CONFIGURED ||
+                 problem == INST_PROB_REINSTALL)) {
+                *expect = 1;
+            }
+        }
+        settle_walk(child, depth + 1, h, expect, nodes);
+        if (api.Sibling(&child, child, 0) != INST_CR_SUCCESS) {
+            return;
+        }
+    }
+}
+
+/* The signature of the trees below this package's controllers, and whether
+ * a device is expected: a controller this run updated is started but shows
+ * no root hub yet, or a device of the bus waits for its install. */
+static void settle_signature(INST_U32 *sig, int *expect)
+{
+    INST_U32 h = INST_FNV_START;
+    DWORD dn;
+    ULONG status;
+    ULONG problem;
+    char id[INST_ID_CHARS];
+    int nodes = 0;
+    int i;
+
+    *expect = 0;
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!d->Present || d->Inf != INST_INF_XHCI || !is_controller(d)) {
+            continue;
+        }
+        inst_copy(id, d->Id, sizeof(id));
+        h = sig_text(h, id);
+        if (api.Locate(&dn, id, 0) != INST_CR_SUCCESS ||
+            api.Status(&status, &problem, dn, 0) != INST_CR_SUCCESS) {
+            h = sig_text(h, "gone");
+            continue;
+        }
+        h = sig_number(h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
+        h = sig_number(h, problem);
+        if (was_installed(d->Id) && (status & INST_DN_STARTED) &&
+            problem == 0 && root_hub_below(d->Id) == 0) {
+            *expect = 1;
+        }
+        settle_walk(dn, 0, &h, expect, &nodes);
+    }
+    *sig = h;
+}
+
+/* Wait until Windows' own installer has nothing pending and the devices
+ * below the controllers stand still (record 23 section 5.8). 1 settled; 0
+ * still pending at the limit; -1 the question failed. Without the
+ * routines it answers 1: a run without CMP_WaitNoPendingInstallEvents is
+ * refused earlier (nothing_pending). */
+static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
+                  int first)
+{
+    INST_SETTLE s;
+    DWORD t0;
+    DWORD w;
+    INST_U32 sig;
+    int expect;
+    int r;
+    int told = 0;
+
+    if (api.WaitInstall == NULL || api.Locate == NULL || api.Child == NULL ||
+        api.Sibling == NULL || api.DeviceId == NULL || api.Status == NULL) {
+        return api.WaitInstall == NULL ? 1 :
+               (api.WaitInstall(limitMs) == WAIT_OBJECT_0 ? 1 : 0);
+    }
+    inst_settle_init(&s, limitMs, tellMs, expectMs);
+    t0 = GetTickCount();
+    for (;;) {
+        w = api.WaitInstall(0);
+        settle_signature(&sig, &expect);
+        r = inst_settle_step(&s, (INST_U32)(GetTickCount() - t0),
+                             w == WAIT_OBJECT_0 ? 0 :
+                             (w == WAIT_TIMEOUT ? 1 : -1), sig, expect);
+        if (r == INST_SETTLE_DONE) {
+            if (told) {
+                out("Windows has finished; going on.\n");
+            }
+            return 1;
+        }
+        if (r == INST_SETTLE_TIMEOUT) {
+            return 0;
+        }
+        if (r == INST_SETTLE_FAILED) {
+            return -1;
+        }
+        if (r == INST_SETTLE_TELL) {
+            told = 1;
+            if (first) {
+                out("\nWindows is installing something; waiting up to a minute "
+                    "for it to finish ...\n");
+            } else {
+                out("\nWindows is installing a device itself, usually with a "
+                    "Found New Hardware\nwindow - it may be behind this one. "
+                    "Answer it: the driver is staged, so let it\nsearch, "
+                    "answer Yes or Continue to its questions, then Finish. "
+                    "This tool waits\n(up to 10 minutes) and goes on by itself; "
+                    "it never installs over Windows' own\ninstall.\n");
+            }
+        }
+        Sleep(INST_SETTLE_POLL_MS);
+    }
+}
+
+/* The barrier's wait: 1 settled; 0 stops the run (exit 4). */
 static int wait_installs(void)
 {
-    DWORD r;
+    int r;
 
-    if (api.WaitInstall == NULL) {
-        return 1;
-    }
     out("Waiting for Windows to finish installing what appeared ... ");
-    r = api.WaitInstall(INST_INSTALL_WAIT_MS);
-    if (r == WAIT_OBJECT_0) {
+    r = settle(INST_INSTALL_WAIT_MS, 20000UL, 20000UL, 0);
+    if (r > 0) {
         out("done.\n");
         return 1;
     }
-    out(r == WAIT_TIMEOUT ? "still busy after a minute.\n" :
-                            "the wait failed.\n");
+    out(r == 0 ? "still busy after 10 minutes.\n" : "the wait failed.\n");
     out("\nWindows is still installing something - usually a Found New "
         "Hardware window\nwaiting for an answer. Finish or cancel those "
         "windows, then run INSTALL.BAT\nagain: it goes on from here. (The "
@@ -3423,6 +3639,7 @@ static void check_results(void)
 {
     int c;
     int i;
+    char state[160];
 
     out("\nAfterwards:\n");
     for (i = 0; i < devCount; i++) {
@@ -3430,14 +3647,9 @@ static void check_results(void)
         if (!d->Present || d->Inf < 0) {
             continue;
         }
-        out("  %s: %s%s%s%s", d->Desc[0] ? d->Desc : d->Id,
-            d->Service[0] ? d->Service : "no driver",
-            d->VersionText[0] ? " " : "", d->VersionText,
-            (d->Status & INST_DN_STARTED) ? ", started" : "");
-        if (d->Problem != 0) {
-            out(", problem code %lu", (unsigned long)d->Problem);
-        }
-        out("\n");
+        inst_state_text(state, sizeof(state), d->Service, d->VersionText,
+                        (d->Status & INST_DN_STARTED) != 0, d->Problem);
+        out("  %s: %s\n", d->Desc[0] ? d->Desc : d->Id, state);
     }
     for (c = 0; c < changedCount; c++) {
         const DEVREC *d = NULL;
@@ -3493,8 +3705,10 @@ static void check_results(void)
         } else if (changedReboot[c] && d->Problem == 0) {
             /* The old release runs until the restart its install asked for. */
         } else {
-            out("  %s did not end as installed (problem %lu, %s).\n",
-                d->Desc, (unsigned long)d->Problem, d->VersionText);
+            inst_state_text(state, sizeof(state), d->Service, d->VersionText,
+                            (d->Status & INST_DN_STARTED) != 0, d->Problem);
+            out("  %s did not end as installed: %s.\n", d->Desc[0] ? d->Desc :
+                d->Id, state);
             flagFailed = 1;
             tunnelHint |= tunnelChanged &&
                 (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF);
@@ -3607,7 +3821,7 @@ static int confirm(const char *what)
  * change. 1 clear; 0 stop (pending, or the answer unknown). */
 static int nothing_pending(void)
 {
-    DWORD r;
+    int r;
 
     if (api.WaitInstall == NULL) {
         out("Whether Windows is installing something cannot be asked "
@@ -3615,16 +3829,17 @@ static int nothing_pending(void)
         flagSteps = 1;
         return 0;
     }
-    r = api.WaitInstall(0);
-    if (r == WAIT_OBJECT_0) {
+    /* Windows' own installs are let finish first, for a minute at most. */
+    r = settle(INST_FIRST_WAIT_MS, 5000UL, 0UL, 1);
+    if (r > 0) {
         return 1;
     }
     out("Windows is %s - usually a Found New Hardware window\nwaiting for an "
         "answer. Finish or cancel it, then run INSTALL.BAT again.\nIf no such "
         "window is open (Windows 2000 keeps a cancelled one pending until\n"
         "the next start), restart Windows first. Nothing was changed.\n",
-        r == WAIT_TIMEOUT ? "installing something" :
-                     "perhaps installing something (the question failed)");
+        r == 0 ? "still installing something after a minute" :
+                 "perhaps installing something (the question failed)");
     flagSteps = 1;
     return 0;
 }
@@ -3750,8 +3965,7 @@ static int run_install_nt(void)
         return INST_EXIT_DONE;
     }
     input_warning();
-    if (!confirm(runs ? "Install and stage the package now" :
-                        "Stage the package's INFs now (no device needs a change)")) {
+    if (!confirm(inst_confirm_text(runs, values_to_write()))) {
         return INST_EXIT_REFUSED;
     }
     if (!nothing_pending()) {
@@ -3761,9 +3975,19 @@ static int run_install_nt(void)
         flagFailed = 1;
         return inst_exit_code(0, 1, flagRestart, flagSteps);
     }
-    if (!install_inf(INST_INF_XHCI, 1)) {
-        out("A controller's update failed: the rest is not attempted.\n");
-        return inst_exit_code(0, 1, flagRestart, flagSteps);
+    /* The controllers; one that met Windows' own install (busy) is tried
+     * again after a barrier, as section 5.8's devices are. */
+    for (pass = 0; pass < INST_BUSY_TRIES; pass++) {
+        if (pass > 0 && !barrier()) {
+            goto stopped;
+        }
+        if (!any_runs(INST_INF_XHCI, 1)) {
+            break;
+        }
+        if (!install_inf(INST_INF_XHCI, 1)) {
+            out("A controller's update failed: the rest is not attempted.\n");
+            return inst_exit_code(0, 1, flagRestart, flagSteps);
+        }
     }
     /* After a 2.3.x update the root hub and the hubs are new devnodes; an
      * installed root hub or hub shows the hubs behind it; a UAS disk or an
@@ -4858,24 +5082,25 @@ static void usage(void)
 "  /log path     write the log there (default XHCIINST.LOG on the system "
 "drive)\n"
 "\n"
-"Exit codes: 0 done; 1 refused or cancelled, nothing changed; 2 failed\n"
-"part-way (see the log); 3 done, restart needed; 4 done, steps left for you.\n",
+"Exit codes: 0 done, nothing needed a change; 1 refused or cancelled, nothing\n"
+"changed; 2 failed part-way (see the log); 3 done, restart needed; 4 done,\n"
+"steps left for you.\n",
         INST_MY_NAME);
 }
 
 static int finish(int code)
 {
     char line[8];
+    int last;
 
     /* Owner, 2026-10-15: a restart after every change, on every system,
-     * whatever Windows itself says; the exit code still tells whether
-     * Windows (or this tool) found a restart necessary. */
+     * whatever Windows itself says. The last line and the exit code agree
+     * (record 23 section 7.4, orchestrator decision 2026-10-15): a finished
+     * run that changed anything asks for the restart and exits 3; a run
+     * that stopped short says to finish the steps above first. */
     if (!opts.SelfTest) {
-        if (flagChanged && !opts.List) {
-            out("\nChanges were made. Please restart Windows now.\n");
-        } else {
-            out("\nNo changes were made.\n");
-        }
+        code = inst_final(flagChanged, opts.List, code, &last);
+        out("\n%s\n", inst_final_text(last));
     }
     out("\nExit code %d. The log is %s.\n", code, logPath[0] ? logPath : "(none)");
     logonly("exit %d\n", code);

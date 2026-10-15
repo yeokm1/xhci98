@@ -158,7 +158,7 @@ Unzip the whole package and run `INSTALL.BAT` from its top directory: double-cli
 - **Windows 2000 to 7:** it installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Have Disk on 2000, the root hub's update and Vista and 7's same `DriverVer`. Answer Windows' unsigned-driver questions.
 - **Windows 98 SE and ME:** it copies the package under `XHCI98` in the Windows directory, adds that folder to the wizards' search path and prints the Device Manager steps left. Run it again after the restart; it then also offers the silent install (off by default; see "Tuning").
 
-When a run changed anything it ends with "Changes were made. Please restart Windows now." It never runs `XHCICLN`.
+When a run changed anything and finished, it ends with "Changes were made. Please restart Windows now." If it stopped with steps left for you (a Found New Hardware window to answer, for instance) it says so instead; do them and run it again. It never runs `XHCICLN`.
 
 `INSTALL /list` shows the plan and changes nothing. `INSTALL /uninstall` removes the drivers after a warning and the word REMOVE. Each run but `/list` writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report. `tools\xhciinst\readme.txt` lists the switches and exit codes.
 
