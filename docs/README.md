@@ -7,6 +7,8 @@ source comments, scripts, and other docs use these same locations.
 
 - [Release notes](using/release-notes.md) - what the driver does, what it does
   not, and its known limitations.
+- [Tuning](using/tuning.md) - every registry setting of the controller
+  driver: where it is, its range and default, and what it does.
 - [Release acceptance test](using/release-acceptance-test.md) - the fixed
   procedure a stranger runs against a published release on a machine this
   project has never seen: nine steps, the longer ones a checklist table of
