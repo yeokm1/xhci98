@@ -1726,11 +1726,34 @@ static void test_resume_budget(void)
     g_fw.ReadyMode = MODE_NEVER;
     g_fw.StopClockAtReady = 3;
     TbtIcmSetResumeBudget(&g_icm, 13000);
+    t0 = g_fake.AskedUs;
     rc = TbtIcmResume(&g_icm);
+    ms = (g_fake.AskedUs - t0) / 1000UL;
     g_fake.ClockStopped = 0;
+    CHECK(ms >= 13000UL && ms < 13200UL,
+          "13 s of waits asked for in all: the third attempt clipped");
     CHECK_EQ(rc, TBT_E_TIMEOUT, "the clock's share and the waits' add up");
     CHECK_EQ(g_fw.Ready, 4, "three driver-ready attempts, the third clipped");
     CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 1, "on the budget");
+
+    /* Host polls cut short by a flood of frames (each read ends at its
+     * frame budget, having waited little): the budget is charged what
+     * was waited, not each read's timeout. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.HoldUs = 3000000UL;
+    g_fake.FloodPdf = TBT_PDF_ICM_EVENT;
+    g_fake.FloodWords = 0;
+    t0 = g_fake.NowUs;
+    rc = TbtIcmResume(&g_icm);
+    ms = (g_fake.NowUs - t0) / 1000UL;
+    g_fake.FloodPdf = 0;
+    CHECK(g_icm.Counters.HostPollTries >= 2, "host polls ran in the flood");
+    CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 0, "the budget not spent");
+    CHECK(g_icm.BudgetUsedMs <= ms + 1UL,
+          "charged no more than the time that passed");
+    CHECK_EQ(rc, TBT_OK, "and the resume completes");
 
     /* A resume inside its budget is unchanged (the earlier legs), and an
      * idle poll after a bind is never clipped. */

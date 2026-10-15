@@ -1820,6 +1820,7 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
     ULONG v;
     ULONG pollMs;
     ULONG pollAt;
+    ULONG pollWaited;
     LONG rc;
     TBT_ROUTE root;
 
@@ -1867,12 +1868,13 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
         icm->Counters.HostPollTries++;
         pollMs = tbtIcmClip(icm, TBT_ICM_HOSTPOLL_TIMEOUT_MS);
         pollAt = icm->Host->NowMs(icm->Host->Context);
+        pollWaited = icm->Ring->WaitedUs;
         rc = TbtRingCtlRead(icm->Ring, &root, TBT_CS_ROUTER, 0, 0, 1, &v,
                             pollMs, 0);
-        if (rc == TBT_E_TIMEOUT) {
-            /* A timed-out read waited what it was given. */
-            tbtIcmCharge(icm, pollAt, pollMs);
-        }
+        /* What the read actually waited (the ring's own sum), whatever
+         * ended it: a timeout, a frame budget spent, an answer. */
+        tbtIcmCharge(icm, pollAt,
+                     (icm->Ring->WaitedUs - pollWaited) / 1000UL);
         if (rc == TBT_OK) {
             icm->Counters.HostPollAnswered++;
             break;

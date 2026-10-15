@@ -703,6 +703,13 @@ static VOID cmWkLeave(PCM_CFGWK w)
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
+/*
+ * The opening: CmCfgmgOpen's read-only services (Get_Version, the root's
+ * Locate_DevNode, its Get_Device_ID) run as one unit, with no check
+ * between them - the one exception to "no further call after a stop":
+ * they change nothing, and the image stays resident (CmCfgwkStart). The
+ * baseline after them is checked before each call as every operation is.
+ */
 static VOID cmWkOpen(PCM_CFGWK w)
 {
     ULONG state;
