@@ -240,6 +240,21 @@ static BOOLEAN cmNvEmulator(ULONG bridge)
     return FALSE;
 }
 
+/* Whether `bridge` is an active member of this domain's set (exclusive,
+ * and on NT its filter published with its baseline). */
+static BOOLEAN cmNvActive(PCM_NHI nhi, ULONG bridge)
+{
+    ULONG i;
+
+    for (i = 0; i < nhi->Reenum.Members; i++) {
+        if (nhi->Reenum.Port[i].Bdf == bridge &&
+            (nhi->Reenum.Port[i].Flags & CM_PORT_ACTIVE) != 0) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /* The source of member `bridge` of this domain's set, or 0. */
 static ULONG cmNvSource(PCM_NHI nhi, ULONG bridge)
 {
@@ -518,7 +533,17 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
                 ((cls >> 16) & 0xFFFFUL) == CM_NVLINK_CLASS_NVM) {
                 outcome = CM_NVLINK_UP_BAD;
                 KeAcquireSpinLock(&cmNvLock, &irql);
-                index = CmNvlinkPublishUp(cmNvTable, bus, slot, fresh, &outcome);
+                index = CmNvlinkFind(cmNvTable, bus, slot);
+                if (index != CM_NVLINK_NONE &&
+                    cmNvShadow[index].Owner != NULL &&
+                    cmNvShadow[index].Owner != nhi &&
+                    cmNvShadow[index].Waiting) {
+                    /* Another domain's statement is awaited there. */
+                    index = CM_NVLINK_NONE;
+                } else {
+                    index = CmNvlinkPublishUp(cmNvTable, bus, slot, fresh,
+                                              &outcome);
+                }
                 if (index != CM_NVLINK_NONE) {
                     cmNvShadow[index].Owner = nhi;
                     cmNvShadow[index].Bridge = bridge;
@@ -566,6 +591,12 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
     if (cmNvTable == NULL) {
         return 0;
     }
+    /* Only an active member of this domain's set: a bridge another domain
+     * also claims is inactive for both, and its entries are not ours. */
+    if (!cmNvActive(nhi, bridge)) {
+        CmLogNote(nhi, "cm.nvlink.up.not-member", bridge);
+        return 0;
+    }
     /* A statement this domain made is acknowledged (or timed out) before
      * any exposure can retire it or start a removal: a USB4 DOWN hook may
      * have marked one ahead of an UP action in the same batch. */
@@ -576,13 +607,19 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
      * its bus and by the entries last published or marked for it. */
     retired = 0;
     KeAcquireSpinLock(&cmNvLock, &irql);
-    if (bus != CM_NVLINK_NONE) {
-        retired = CmNvlinkRetire(cmNvTable, bus);
-    }
     for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        if (cmNvShadow[i].Bridge == bridge && cmNvShadow[i].Owner != NULL &&
-            CmNvlinkRetireEntry(cmNvTable, i)) {
-            retired++;
+        if (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Owner != nhi &&
+            cmNvShadow[i].Waiting) {
+            /* Another domain's statement, still awaited: never ours. */
+            continue;
+        }
+        if ((cmNvShadow[i].Bridge == bridge && cmNvShadow[i].Owner != NULL) ||
+            (bus != CM_NVLINK_NONE &&
+             (cmNvTable->Entry[i].Flags & NVME98LS_IN_USE) != 0 &&
+             cmNvTable->Entry[i].BusNumber == bus)) {
+            if (CmNvlinkRetireEntry(cmNvTable, i)) {
+                retired++;
+            }
         }
     }
     KeReleaseSpinLock(&cmNvLock, irql);
@@ -639,6 +676,9 @@ static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
     ULONG now;
     KIRQL irql;
 
+    if (!cmNvActive(nhi, bridge)) {
+        return 0;
+    }
     now = cmNvNow(nhi);
     bus = cmNvSecondary(bridge);
     marked = 0;
@@ -646,7 +686,8 @@ static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
     for (i = 0; i < NVME98LS_ENTRIES; i++) {
         if ((cmNvTable->Entry[i].Flags & NVME98LS_UP) == 0 ||
             (cmNvShadow[i].Bridge != bridge &&
-             cmNvTable->Entry[i].BusNumber != bus)) {
+             cmNvTable->Entry[i].BusNumber != bus) ||
+            (cmNvShadow[i].Owner != NULL && cmNvShadow[i].Owner != nhi)) {
             continue;
         }
         seen++;
@@ -781,6 +822,17 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
     KIRQL irql;
 
     if (cmNvTable == NULL) {
+        return;
+    }
+    pending = 0;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+        if (cmNvShadow[i].Owner == nhi && cmNvShadow[i].Waiting) {
+            pending++;
+        }
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    if (pending == 0) {
         return;
     }
     start = cmNvNow(nhi);

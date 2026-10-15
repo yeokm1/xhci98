@@ -1768,11 +1768,12 @@ side.
   boot, was the first choice; its root refuses a static key (the VMM
   answered error 5 on 98 SE), and a dynamic key would need a ring-0
   provider in this image. So the record persists, and it is a locator,
-  not proof that the table belongs to this boot: a reader that checks the
-  pages are present (`_PageCheckLinRange`) and the signature, version and
-  cookie reads safely and rules out most stale records, but retained
-  memory at a mapped address could still hold an old table with its old
-  cookie. A current-boot proof - a dynamic key this driver hosts
+  not proof that the table belongs to this boot: checking that the pages
+  are present (`_PageCheckLinRange`) and the signature, version and cookie
+  are preliminary rejection checks only - they establish neither the
+  allocation's lifetime nor the current boot (retained memory at a mapped
+  address could still hold an old table with its old cookie) - so a
+  reader may accept the pointer only once a current-boot proof exists. A current-boot proof - a dynamic key this driver hosts
   (`_RegCreateDynKey`, its provider in this image and the key deleted at
   unload) or an independent boot-identity token - is open, for `nvme98`
   and the owner. Nothing on `nvme98`'s side reads the record yet.

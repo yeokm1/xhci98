@@ -26,10 +26,11 @@
  * outlive the boot, refuses a static key (the VMM answered error 5 on 98
  * SE, run-39.md), so the record persists: it is a LOCATOR, not proof that
  * the table belongs to this boot. Checking that the pages are present
- * (_PageCheckLinRange) and that signature, version and cookie match makes
- * the read safe and rules out most stale records, but cannot prove the
- * current boot: retained memory at a mapped address could still hold an
- * old table and its old cookie. A current-boot proof - a CM-hosted dynamic
+ * (_PageCheckLinRange) and that signature, version and cookie match are
+ * preliminary rejection checks only: they establish neither the
+ * allocation's lifetime nor the current boot (retained memory at a mapped
+ * address could still hold an old table and its old cookie), so a reader
+ * may accept the pointer only once a current-boot proof exists - a CM-hosted dynamic
  * key (_RegCreateDynKey, its provider in this image and deleted at
  * unload) or an independent boot-identity token - is open, for nvme98 and
  * the owner (MD-5 says never trust a pointer across boots).

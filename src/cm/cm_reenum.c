@@ -1321,9 +1321,11 @@ static BOOLEAN cmInvalidate(PCM_NHI nhi, ULONG i, BOOLEAN activeOnly)
     PCM_FILTER f;
     PDEVICE_OBJECT pdo;
 
-    /* No invalidation while an nvme98 statement of this domain awaits its
-     * acknowledgement (cm_nvlink.h, obligation 3). */
-    CmNvlinkAwait(nhi);
+    /* No wait here: CmReenumResumeFailed reaches this at DISPATCH_LEVEL.
+     * The thread's callers wait for nvme98's acknowledgement before they
+     * get here (CmNvlinkExpose, cmAskBaselines, CmReenumResumed); the
+     * failure release runs only where the thread did not run the resume,
+     * so no statement of the resume is pending then. */
     if (!cmRegTake(nhi, i, activeOnly, &f, &pdo)) {
         return FALSE;
     }
@@ -1348,6 +1350,7 @@ static VOID cmAskBaselines(PCM_NHI nhi)
     ULONG i;
     ULONG serial;
 
+    CmNvlinkAwait(nhi);
     r = &nhi->Reenum;
     for (i = 0; i < r->Members; i++) {
         serial = 0;
