@@ -371,7 +371,7 @@ try {
         @{ Find = 'if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }'; Why = "nvme98's file times would be rewritten" },
         @{ Find = '-Publishable $publishable -Staged -Nvme98 $nvme98'; Why = "the ordinary cut's upload set no longer bundles nvme98" },
         @{ Find = '$askNvme98 = Get-Nvme98PinText -Release $nvme98'; Why = "-UploadSetOnly no longer holds a re-assembly to the recorded pins" },
-        @{ Find = '" -Nvme98SumsSha256 " + $script:nvme98.SumsSha256'; Why = "the repair command no longer carries the nvme98 pins" }
+        @{ Find = '" -Nvme98SumsSha256 " + $nv.SumsSha256'; Why = "the repair command no longer carries the nvme98 pins" }
     )) {
         Assert-True ($nvRelText.Contains($anchor.Find)) ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }

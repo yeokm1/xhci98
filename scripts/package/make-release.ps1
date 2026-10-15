@@ -1577,10 +1577,13 @@ function Get-UploadSetRepairCommand {
     if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir " + (& $quote $ReleasesDir) }
     if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
     # A bundled release is re-assembled only with the pins it was cut with.
-    if ($null -ne $script:nvme98) {
-        $cmd += " -Nvme98Version " + $script:nvme98.Version + " -Nvme98Dir " + (& $quote $script:nvme98.Dir) +
-                " -Nvme98SumsSha256 " + $script:nvme98.SumsSha256 + " -Nvme98InterfaceVersion " + $script:nvme98.Interface
-        if ($script:nvme98.Overridden) { $cmd += " -Nvme98AllowInterfaceMismatch" }
+    # Read without StrictMode's unset-variable error: the self-tests render
+    # this helper in a scope that has no $nvme98.
+    $nv = Get-Variable -Name nvme98 -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $nv) {
+        $cmd += " -Nvme98Version " + $nv.Version + " -Nvme98Dir " + (& $quote $nv.Dir) +
+                " -Nvme98SumsSha256 " + $nv.SumsSha256 + " -Nvme98InterfaceVersion " + $nv.Interface
+        if ($nv.Overridden) { $cmd += " -Nvme98AllowInterfaceMismatch" }
     }
     return $cmd
 }
