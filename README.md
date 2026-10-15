@@ -12,7 +12,8 @@ The driver replaces Windows' own USB port and hub drivers with its own, so it is
 
 This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far.
 
-No guarantees have been made on xHCI implementations from other vendors, although best effort has been made to be compatible with the quirks of controllers from Fresco Logic, ASMedia, AMD, TI, Etron, VIA and some Intel controllers, even ones built to the xHCI 0.96 draft standard.
+No guarantees have been made on xHCI implementations from other vendors.
+Best effort has been made to be compatible with the quirks of controllers from Fresco Logic, ASMedia, AMD, TI, Etron, VIA and some Intel controllers, even ones built to the xHCI 0.96 draft standard.
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
