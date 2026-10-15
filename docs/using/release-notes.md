@@ -3165,9 +3165,7 @@ mass-storage install places it.
 ## What `3.0.0.0` adds
 
 <!-- 40.final: fill in the bundled nvme98 version below; move this section
-above "What `2.4.0.0` adds" with the opening line's bump; fold the device
-tool's own subsection (design record 24), when it lands at the end of this
-section, into "Removing a Thunderbolt or USB4 device safely". Remove this
+above "What `2.4.0.0` adds" with the opening line's bump. Remove this
 comment. -->
 
 `3.0.0.0` adds a third driver, `xhcicm.sys`, for Thunderbolt and USB4
@@ -3296,15 +3294,20 @@ and works: `xhcicm.sys` never resets a tunnel it finds at its start
 
 ### Removing a Thunderbolt or USB4 device safely
 
-Close the files open on the device first, as for any removable disk.
+Close the files open on the device first, as for any removable disk. On
+every system `INSTALL /devices` shows what is connected and
+`INSTALL /eject` removes one device safely (`XHCIINST`, or `XHCIIN64` on
+64-bit Windows, in `tools\xhciinst\` takes the same switches).
 
-- **Windows 98 SE and ME:** run `INSTALL /eject` (`XHCIINST /eject` in
-  `tools\xhciinst\`). It lists the devices, asks which one, and asks
-  Windows to stop it; a program with a file open on it refuses, and
-  nothing changes. When it says the device can be unplugged, unplug it.
-  NUSB's "Unplug or Eject Hardware" applet does not list a device behind a
-  Thunderbolt port. Until it is unplugged, Device Manager's Refresh can
-  start the device again.
+- **Windows 98 SE and ME:** run `INSTALL /eject`; these systems have no
+  other way, since the "Unplug or Eject Hardware" applet NUSB installs
+  does not list a device behind a Thunderbolt port. The tool lists the
+  devices, asks which one, and asks Windows to query the device's
+  removal (a volume with a file open on it refuses, and the tool says so
+  and changes nothing) and, once Windows has agreed, to remove it; then it
+  says whether the device can be unplugged. Until it is unplugged, Device
+  Manager's Refresh, or the Thunderbolt driver looking at the port again,
+  can start the device again.
 - **Windows 2000:** "Unplug or Eject Hardware" lists the device; stop it,
   then unplug it. Unplugged without a stop, the device is removed all the
   same and Windows 2000 shows its "Unsafe Removal of Device" dialog.
@@ -3318,19 +3321,38 @@ Close the files open on the device first, as for any removable disk.
 - **A device missing from the list**: one connected before the driver
   started, or disabled and enabled since, or whose driver was installed
   or updated since, is not listed until it is unplugged and plugged in
-  again. `INSTALL /eject` still asks Windows to stop it on XP, Vista and 7;
-  on Windows 2000 it cannot, and after a restart with the device connected
-  it is listed again.
+  again. `INSTALL /eject` still asks Windows to stop it: Windows refuses
+  to eject such a device, and the tool then asks for the same
+  query-remove and remove by the routine meant for devices that are not
+  removable, a program with a file open still refusing it. Windows 2000
+  offers no such routine (read in a virtual machine on 2026-10-15): there
+  the tool says the device cannot be stopped; after a restart with it
+  connected it is listed for removal again, or it can be unplugged with
+  the computer off. XP, Vista and 7 have not been read for this case.
+
+On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
+asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
+one question, and `INSTALL /eject id=<instance id> /yes`, with the
+instance id `/devices` prints, does it with no question, for scripts;
+`tools\xhciinst\README.TXT` has the exit codes.
+
+`INSTALL /devices` shows each connected device's name, generation, link,
+approval and connections (PCIe, USB3, DisplayPort) as `xhcicm.sys` knows
+them, and the PCI functions and Windows devices behind each Thunderbolt
+port with their drivers and problem codes. The driver writes what it
+knows to the registry value `XhciCmStatus` of the Thunderbolt host
+interface's hardware key, and the tool trusts it only after the running
+driver has answered it (`XhciCmStatusAsk` in the driver key); it ejects
+only devices behind a port the driver has confirmed, and never the
+Thunderbolt controller's own functions. Unique ids are shown as their
+last four digits; no key material is ever written. Design record 24 is
+the reference.
 
 Under a firmware connection manager the stop ends the device's drivers
 and leaves its tunnel up, since the firmware has no way to drop one
 tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
 connection manager on Windows 2000 to 7 the stop also takes the PCI
 Express tunnel down (the USB3 tunnel stays).
-
-<!-- After the device tool's branch lands, its subsection "Seeing and
-safely removing Thunderbolt and USB4 devices" (design record 24) follows
-at the end of this section; merge the two at the cut. -->
 
 ### NVMe drives behind a tunnel
 
@@ -3390,8 +3412,10 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
 
 `INSTALL.BAT` asks about `XhciCmMode`, `XhciCmApprove` and
-`XhciCmSafeEject` where a Thunderbolt or USB4 controller is present, and
-`INSTALL /set Name=Value` sets any of them.
+`XhciCmSafeEject` where a Thunderbolt or USB4 controller is present. It
+never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`
+(each `0` or `1`) and `XhciCmPreOsCleanup` (`0`, `1` or `2`).
+`INSTALL /set Name=Value` sets any of these seven.
 
 ### Where `3.0.0.0` was read
 
@@ -3554,44 +3578,3 @@ by itself, whatever `XhciCmApprove` says.
 
 `XhciCmMode` `0` turns the whole driver off without uninstalling it: it
 binds the Thunderbolt host interface, logs it and touches nothing.
-
-### Seeing and safely removing Thunderbolt and USB4 devices
-
-Windows 98 SE and ME: to remove a Thunderbolt or USB4 device safely, run
-`XHCIINST /eject` (`INSTALL /eject` from the package's top directory).
-These systems have no other way: the "Unplug or Eject Hardware" applet
-NUSB installs does not list devices behind a Thunderbolt port. The tool
-asks Windows to query the device's removal - a volume with a file open on
-it refuses, and the tool says so and changes nothing - and, once Windows
-has agreed, to remove it; then it says whether the device can be
-unplugged. Until it is unplugged, Device Manager's Refresh, or the
-Thunderbolt driver looking at the port again, can start the device again.
-
-Windows 2000, XP, Vista and 7: Unplug or Eject Hardware and Safely Remove
-Hardware work as before. `XHCIINST /eject` makes the same request they
-make, and also for a device they do not list (connected before the
-Thunderbolt driver started, or disabled and enabled since): Windows
-refuses to eject such a device, and the tool then asks for the same
-query-remove and remove by the routine meant for devices that are not
-removable, a program with a file open still refusing it. Windows 2000
-offers no such routine (read in a virtual machine on 2026-10-15): there
-the tool says the device cannot be stopped, and after a restart with it
-connected it is listed for removal again. XP, Vista and 7 have not been
-read for this case. It needs an administrator on 2000 and XP.
-
-`XHCIINST /devices`, on every system, shows each connected device's name,
-generation, link, approval and connections (PCIe, USB3, DisplayPort) as
-`xhcicm.sys` knows them, and the PCI functions and Windows devices behind
-each Thunderbolt port with their drivers and problem codes. The driver
-writes what it knows to the registry value `XhciCmStatus` of the
-Thunderbolt host interface's hardware key, and the tool trusts it only
-after the running driver has answered it (`XhciCmStatusAsk` in the driver
-key); it ejects only devices behind a port the driver has confirmed, and
-never the Thunderbolt controller's own functions. Unique ids are shown as
-their last four digits; no key material is ever written. Design record 24
-is the reference.
-
-Four connection-manager values are never asked by the install tool and
-can be set with `INSTALL /set Name=Value`: `XhciCmReenum` (0 or 1),
-`XhciCmUsb3Tunnel` (0 or 1), `XhciCmLaneBonding` (0 or 1) and
-`XhciCmPreOsCleanup` (0, 1 or 2).
