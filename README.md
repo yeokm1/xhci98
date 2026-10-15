@@ -417,7 +417,13 @@ Two more values set the polling periods, in ms:
 - `XhciPollIdleMs` (default `50`): with nothing outstanding.
 - `XhciPollActiveMs` (default `1`): with transfers outstanding. Windows runs the timer no faster than its clock allows: on the E7250 under XP x64, every 15 to 62 ms.
 
-New in `2.4.0.0`, `XhciPollFineTimer` (default `0`, off; set it to `1` to try it) asks Windows 2000, XP, Vista and 7 to run their clock at `XhciPollActiveMs` while the driver polls at that period, and gives the request back when it stops polling that fast (one idle period, `XhciPollIdleMs`, after the last transfer), and when the controller sleeps or stops. It applies only while the controller is polled, and it is read at each start (disable and enable the controller, or restart). On 32-bit Windows it comes through `xhcihlpr.sys`, so on 2000 and XP it starts at the first boot after the install. Windows 98 SE and ME have no such call and keep their clock. It ships off because in virtual machines (QEMU without hardware acceleration, polling, on Windows 7 and Vista) the guest's clock ran at a tenth to seven tenths of real time while it was held, and USB keyboard input was lost; with it off the clock kept time. Not yet tried on any real machine.
+`XhciPollFineTimer` (default `0`, off; set it to `1` to try it) asks Windows 2000, XP, Vista and 7 to run their clock at `XhciPollActiveMs` while the driver polls at that period.
+
+It gives the request back when it stops polling that fast (one idle period, `XhciPollIdleMs`, after the last transfer), and when the controller sleeps or stops. It applies only while the controller is polled, and it is read at each start (disable and enable the controller, or restart).
+
+On 32-bit Windows it comes through `xhcihlpr.sys`, so on 2000 and XP it starts at the first boot after the install. Windows 98 SE and ME have no such call and keep their clock.
+
+It ships off because, while the finer clock is held, the system clock can fall behind real time and USB keyboard input can be lost. With it off the clock keeps time.
 
 The release notes' "Windows Vista and 7: message-signalled interrupts", "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" and "XhciPollFineTimer" have the details.
 
@@ -463,7 +469,7 @@ On Windows 98 SE, a device Windows already has drivers for still brings the Add 
 
 Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
 
-Read in virtual machines: on 98 SE a keyboard, mouse, stick and hub, each a device of its own, install with no wizard once it is on. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks have not been read on either.
+With it on, Windows 98 SE installs a keyboard, mouse, stick and hub, each a device of its own, with no wizard. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks may still bring up the wizard.
 
 SweetLow provided the information on how Windows decides a silent install, and the list.
 
