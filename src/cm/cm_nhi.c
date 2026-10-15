@@ -67,6 +67,7 @@
  */
 
 #include "cm.h"
+#include "cm_nvlink.h"
 
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
                         const CM_IDS *ids)
@@ -573,12 +574,7 @@ VOID CmNhiU4Contain(PCM_NHI nhi)
 
 VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
 {
-    TBT_U4_LINKDOWN info;
     TBT_ICM_ACTION a;
-    const TBT_U4_PORT *p;
-    ULONG i;
-    ULONG gen;
-    BOOLEAN known;
     KIRQL irql;
 
     if (!nhi->U4On || nhi->U4ContainDone) {
@@ -604,40 +600,17 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
                                        (nhi->Live.State & 0xFFUL));
     /* 2: a batch taken and not delivered never reaches the seam. */
     nhi->U4BatchCount = 0;
-    /* 3: the nvme98 channel told that each connection it may hold as up
-     * lost presence, with nothing proven: PathClosed FALSE and no anchor,
-     * so no statement can follow (record 21 section 7.3); the channel's
-     * own gone deadline stands. */
-    if (nhi->U4DownHook != NULL) {
-        for (i = 1; i <= nhi->U4.PortCount && i <= TBT_U4_MAX_PORTS; i++) {
-            p = TbtU4Port(&nhi->U4, i);
-            if (p == NULL) {
-                continue;
-            }
-            /* Every connection the channel was told UP for and not told
-             * down, whatever the core's records say now (a teardown that
-             * failed clears them without proving anything); and any the
-             * core still holds live. */
-            known = (BOOLEAN)((nhi->U4UpValid & (1UL << (i - 1))) != 0);
-            if (!known && !p->Pcie.Up && p->Pcie.Written == 0) {
-                continue;
-            }
-            gen = known ? nhi->U4UpGen[i - 1] : p->Generation;
-            CmZero(&info, sizeof(info));
-            info.Port = i;
-            info.Generation = gen;
-            info.PcieDown = p->PcieDown;
-            info.MapValid = p->MapValid;
-            info.MapRid = p->MapRid;
-            (VOID)nhi->U4DownHook(nhi->U4HookContext, &info);
-            if (known && gen != p->Generation &&
-                (p->Pcie.Up || p->Pcie.Written != 0)) {
-                info.Generation = p->Generation;
-                (VOID)nhi->U4DownHook(nhi->U4HookContext, &info);
-            }
-        }
-        nhi->U4UpValid = 0;
+    /* 3: the nvme98 channel told presence was lost, nothing proven
+     * (record 21 section 7.3), through its own loss route (cm_nvlink.h CmNvlinkLost, as the ICM
+     * client's unavailable TUNNEL_DOWN takes it on NT): each UP entry of
+     * the set's buses as CM_NVLINK_LOST - cleared only where its function
+     * reads absent, never DOWN_QUIESCED. On Windows 98 and ME, where the
+     * loss reads no bridge, nothing is read and no entry changed: the
+     * gone deadline applies. */
+    if (IoIsWdmVersionAvailable(1, 0x10) && nhi->ReenumOn) {
+        CmNvlinkLost(nhi);
     }
+    nhi->U4UpValid = 0;
     /* 4: one reconciliation, reason "controller unavailable": every member
      * of the tunnel-port set as changed (CmReenumAction's RESYNC, which
      * also voids the pending ejects), then the seam's own route for the
@@ -1489,6 +1462,8 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
+    /* The nvme98 channel's two moments (task 40-A.7, cm_nvlink.h). */
+    CmNhiSetU4Hooks(nhi, CmNvlinkU4Up, CmNvlinkU4Down, nhi);
     XhciTbtBindsInit(&nhi->Binds);
     nhi->ArmOwed = 0;
     nhi->U4On = 1;

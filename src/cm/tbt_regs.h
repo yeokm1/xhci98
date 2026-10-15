@@ -478,6 +478,21 @@
 #define TBT_ROP_DROM_ADDR_MASK      0x00007FFCUL
 #define TBT_ROP_DROM_SIZE_SHIFT     15
 #define TBT_ROP_DROM_SIZE_MASK      0x000F8000UL
+/* The DROM's layout (USB4 DROM Specification; Linux eeprom.c struct
+ * tb_drom_header, TB_DROM_HEADER_SIZE, USB4_DROM_HEADER_SIZE, struct
+ * tb_drom_entry_header): byte 13 the revision, entries from byte 16 in a
+ * USB4 DROM (revision 3) and from byte 22 in the Thunderbolt 3 compatible
+ * one (revision 1). An entry: length, then index 5:0, adapter disabled 6
+ * (adapter entries only), adapter entry 7 (else generic). */
+#define TBT_DROM_REV_TBT3           1UL
+#define TBT_DROM_REV_USB4           3UL
+#define TBT_DROM_ENTRIES_TBT3       22UL
+#define TBT_DROM_ENTRIES_USB4       16UL
+#define TBT_DROM_ENTRY_INDEX        0x3FUL
+#define TBT_DROM_ENTRY_DISABLED     0x40UL
+#define TBT_DROM_ENTRY_ADAPTER      0x80UL
+#define TBT_DROM_GENERIC_VENDOR     1UL
+#define TBT_DROM_GENERIC_MODEL      2UL
 /* Get PCIe Downstream Entry Mapping completion metadata, Table 8-47:
  * Total Number of Entries 7:0, Entry Index 15:8; data, Table 8-48: DW 0
  * Native PCIe Link 0, PCIe Adapter Number 6:1, PCIE Segment ID Valid 15,

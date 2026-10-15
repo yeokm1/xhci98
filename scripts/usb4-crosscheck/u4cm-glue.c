@@ -75,6 +75,12 @@ static ULONG xcLinkDown(PVOID ctx, const TBT_U4_LINKDOWN *info)
 long xc_start(const XC_OPS *ops, void *arena, unsigned long phys,
               unsigned long bytes, int usb3)
 {
+    return xc_start_clean(ops, arena, phys, bytes, usb3, 0);
+}
+
+long xc_start_clean(const XC_OPS *ops, void *arena, unsigned long phys,
+                    unsigned long bytes, int usb3, unsigned long preOsCleanup)
+{
     TBT_U4_CONFIG c;
     UCHAR *p;
     ULONG i;
@@ -82,6 +88,7 @@ long xc_start(const XC_OPS *ops, void *arena, unsigned long phys,
     xcOps = ops;
     TbtU4DefaultConfig(&c);
     c.Usb3Tunnel = (BOOLEAN)(usb3 != 0);
+    c.PreOsCleanup = preOsCleanup;
     c.RingFlags = TBT_RING_START_MASK_IMC;
     p = (UCHAR *)&xcRing;
     for (i = 0; i < sizeof(xcRing); i++) {
@@ -129,8 +136,40 @@ unsigned long xc_get(int what, unsigned long port)
     case XC_ACKS: return xcCm.Ctl.Counters.AcksPlain + xcCm.Ctl.Counters.AcksEnhanced;
     case XC_HOST_ADP_PRESENT:
         return port < TBT_U4_MAX_ADP ? xcCm.HostRouter.Adp[port].Present : 0;
+    case XC_DEV_ADP_PRESENT:
+        p = TbtU4Port(&xcCm, port >> 8);
+        return p != NULL && (port & 0xFFUL) < TBT_U4_MAX_ADP ?
+               p->Dev.Adp[port & 0xFFUL].Present : 0;
+    case XC_ROP_ISSUED: return xcCm.Counters.RopIssued;
+    case XC_ROP_FAILED: return xcCm.Counters.RopFailed;
+    case XC_ROP_TIMEOUTS: return xcCm.Counters.RopTimeouts;
+    case XC_DPR: return xcCm.Counters.DownstreamPortResets;
+    case XC_CR_TIMEOUTS: return xcCm.Counters.ConfigReadyTimeouts;
+    case XC_USB3_BUILT: return xcCm.Counters.Usb3Built;
+    case XC_USB3_FAILED: return xcCm.Counters.Usb3Failed;
+    case XC_PCIE_BUILT: return xcCm.Counters.PcieBuilt;
+    case XC_CONNECTS: return xcCm.Counters.Connects;
+    case XC_DROM_CRC: return xcCm.Counters.DromCrcFailures;
+    case XC_TMU_ENABLED: return xcCm.Counters.TmuEnabled;
+    case XC_ENUMERATED: return xcCm.Counters.RoutersEnumerated;
     }
     return 0;
+}
+
+const char *xc_vendor_name(unsigned long port)
+{
+    const TBT_U4_PORT *p;
+
+    p = TbtU4Port(&xcCm, port);
+    return p != NULL ? p->Dev.VendorName : "";
+}
+
+const char *xc_model_name(unsigned long port)
+{
+    const TBT_U4_PORT *p;
+
+    p = TbtU4Port(&xcCm, port);
+    return p != NULL ? p->Dev.ModelName : "";
 }
 
 int xc_state_up(void)

@@ -491,4 +491,13 @@ BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
  * the owning domain as an eject. PASSIVE_LEVEL. */
 VOID CmRegChildRemoved(struct _CM_FILTER *child, BOOLEAN ejected);
 
+/* NT: `width` bytes (1, 2 or 4) of `value` written at `offset` (0x40 or
+ * above: a capability, never the header) of the configuration space of
+ * this domain's member `bdf`, by IRP_MN_WRITE_CONFIG to its bridge's PDO
+ * through the filter's registration (the SHPC DWORD Select byte of the
+ * nvme98 channel's reading, cm_nvlinkos.c). FALSE where the member has no
+ * published filter (Windows 98 SE and ME have none). PASSIVE_LEVEL. */
+BOOLEAN CmRegConfigWrite(struct _CM_NHI *nhi, ULONG bdf, ULONG offset,
+                         ULONG width, ULONG value);
+
 #endif /* CM_REENUM_H */

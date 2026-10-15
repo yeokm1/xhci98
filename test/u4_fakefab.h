@@ -15,8 +15,9 @@
  * documented behaviour (record 22 section 2.1), not from the code under
  * test. Presets: usb4-emu's `minimal` and `intel-adl` host models, a USB4
  * device router, a Thunderbolt 3 device router (Titan Ridge or Alpine
- * Ridge, with the Plug Events and link controller capabilities), and the
- * pre-OS connection manager's leftovers.
+ * Ridge, with the Plug Events and link controller capabilities), the
+ * ASMedia ASM2464PD device router of usb4-emu's `asm2464` model (its
+ * captured quirks), and the pre-OS connection manager's leftovers.
  *
  * A virtual clock in microseconds advances only when the code under test
  * stalls or sleeps. Test-only code; C89 with the C library.
@@ -60,12 +61,14 @@
 #define FAB_OP_MAP          1
 #define FAB_OP_CAPS         2
 #define FAB_OP_BA           3
-#define FAB_OPS             4
+#define FAB_OP_NVM          4       /* NVM Sector Size, 25h: the ASM2464 preset only */
+#define FAB_OPS             5
 
 /* Device kinds */
 #define FAB_DEV_USB4        1
 #define FAB_DEV_TBT3_TR     2       /* Titan Ridge DD 8086:15EF */
 #define FAB_DEV_TBT3_AR     3       /* Alpine Ridge LP bridge 8086:15C0 */
+#define FAB_DEV_ASM2464     4       /* ASMedia ASM2464PD 174C:2463, the ORICO capture */
 
 typedef struct FAB_ADP {
     int Present;
@@ -112,6 +115,20 @@ typedef struct FAB_ROUTER {
     int BondNoWidth;                /* Lane Bonding never reaches x2 */
     int Lane1NoDisable;             /* Lane Disable never takes */
     int DpPlugEvents;               /* intel-adl: an event per DP IN at enumeration */
+    unsigned TmuAt;                 /* the router TMU capability's offset, 0 none */
+    unsigned long FailStatus;       /* FAB_ROP_FAIL's Status (0: 1) */
+    unsigned long RrDelayUs;        /* Router Ready this long after Enumerated */
+    int RrPending;
+    unsigned long RrAtUs;
+    unsigned long LinkDelayUs;      /* a Downstream Port Reset: the link back this
+                                     * long after the reset (0: at once) */
+    int ReconnectPending;           /* the link down since a reset */
+    int ReconnectArmed;             /* the reset released: ReconnectAtUs runs */
+    unsigned long ReconnectAtUs;
+    unsigned long DprReleasedAtUs;  /* the last such release */
+    unsigned long ReconnectedAtUs;  /* and the link back after it */
+    unsigned long NvmOps;           /* NVM Sector Size requests */
+    unsigned long AdpTouches[FAB_MAX_ADP];  /* requests addressed to each adapter */
 } FAB_ROUTER;
 
 typedef struct FAB_FRAME {
@@ -220,6 +237,9 @@ void fabUnplugChild(FAB *f, int dev);
 void fabPreos(FAB *f, int port, int usb3);
 /* A DisplayPort OUT adapter added to a router (its adapter count grown). */
 void fabAddDpOut(FAB *f, int router, unsigned adp);
+/* An adapter entry with its disabled bit added to a router's DROM (the
+ * USB4 layout fabDevice builds), its length and CRC-32 fixed. */
+void fabDromMarkUnused(FAB *f, int router, unsigned adp);
 
 /* The whole domain loses power across a sleep (Spec 3.3): every router,
  * the host's included, back to its power-on state; links stay connected,
@@ -243,6 +263,9 @@ long fabFindWrite(const FAB *f, long from, int router, unsigned long cs,
 
 /* A frame from the fabric, now (a notification, a hot plug event). */
 void fabInject(FAB *f, unsigned long pdf, const unsigned long *dw, unsigned long words);
+
+/* The DROM's CRC-32C (as the routers' DROMs carry it). */
+unsigned long fabCrcOf(const unsigned char *p, unsigned long n);
 
 /* The block for TbtU4Start */
 void *fabMem(FAB *f);

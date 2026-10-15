@@ -182,6 +182,8 @@ typedef struct _TBT_U4_ROUTER {
     ULONG Quirks;           /* TBT_U4_QUIRK_* */
     char VendorName[TBT_U4_NAME_LEN];
     char ModelName[TBT_U4_NAME_LEN];
+    ULONG DromRevision;     /* DROM byte 13: 1 Thunderbolt 3 layout, 3 USB4; 0 unread */
+    ULONG DromUnused[2];    /* bit n: the DROM's adapter entry n marks it unused */
     TBT_U4_ADP Adp[TBT_U4_MAX_ADP];
 } TBT_U4_ROUTER, *PTBT_U4_ROUTER;
 
@@ -326,6 +328,8 @@ typedef struct _TBT_U4_LINK {
     ULONG ChildUuid[4];
     ULONG CapsState;        /* TBT_U4_CAPS_* of the child (section 6.4) */
     ULONG CapsEnabled;
+    BOOLEAN ChildDromRead;  /* the child's DROM asked once (a USB4 child) */
+    ULONG ChildDromUnused[2];   /* its unused adapters (TBT_U4_ROUTER.DromUnused) */
 } TBT_U4_LINK, *PTBT_U4_LINK;
 
 /* A path entry not proven invalid and drained, or a protocol adapter
