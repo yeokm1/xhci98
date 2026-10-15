@@ -2966,7 +2966,10 @@ or says it was found by reading the code.
   On a fresh Windows ME, ME has not yet copied its own `USBNTMAP.SYS` and
   `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is
   plugged in. Plug in any ordinary USB stick once, then unplug the UAS drive
-  and plug it back in; no Remove and no restart are needed.
+  and plug it back in; no Remove and no restart are needed. From `3.0.0.0`
+  `INSTALL.BAT` gives this step for a UAS drive it finds at Code 2, and on a
+  Windows ME that has not yet copied the file it says so before the first
+  UAS drive is plugged in.
 - **Windows Vista and 7: the controller's Advanced tab shows no bandwidth.**
   The figure comes from a query the driver does not answer, and stays at
   zero. See "The controller's Advanced tab and the root hub's Power tab".

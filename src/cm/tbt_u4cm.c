@@ -3763,7 +3763,11 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     }
 
     p->State = TBT_U4_TUNNELLING;
+    /* Never on a port whose PCIe tunnel was ejected (TbtU4EjectPcie): only
+     * an unplug and re-plug clears that (record 22 section 10.4), not a
+     * rebuild of its USB3 tunnel at resume. */
     pcieWanted = (BOOLEAN)(cm->Config.Approve && p->PcieDown != 0 &&
+                           !p->Ejected &&
                            tbtU4FirstOf(&p->Dev, TBT_ADP_TYPE_PCIE_UP) != 0);
     if (pcieWanted) {
         rc = tbtU4PcieTunnel(cm, p, gen);
@@ -4370,6 +4374,11 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
         p->Bonded = FALSE;
         p->SingleLane = FALSE;
         cm->Counters.PortsPreserved++;
+        if (cm->Config.DeferFirstPoll && cm->Stage != TBT_U4_STAGE_RUNNING) {
+            /* Built by the caller's first poll, as found (TbtU4Poll). */
+            p->AsFoundOwed = TRUE;
+            return;
+        }
         tbtU4Connect(cm, p, TRUE);
         if (p->Dev.Present) {
             tbtU4DiscoverLinks(cm, p);
@@ -4799,6 +4808,9 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
     h = &cm->HostRouter;
     cm->Counters.PortsCleaned++;
     tbtU4Log(cm, "u4.clean", p->Index);
+    /* A deferred as-found connect (DeferFirstPoll) was for the preserved
+     * configuration this cleaning removes: the port connects normally. */
+    p->AsFoundOwed = FALSE;
     hadPcie = (BOOLEAN)(p->Pcie.Written != 0);
     closed = TRUE;
     if (p->Pcie.Written != 0) {
@@ -5183,7 +5195,9 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     }
     tbtU4HotPlugEnable(cm);
     cm->Stage = TBT_U4_STAGE_RUNNING;
-    TbtU4Poll(cm);
+    if (!cm->Config.DeferFirstPoll) {
+        TbtU4Poll(cm);
+    }
     return TBT_OK;
 }
 
@@ -5211,6 +5225,15 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     tbtU4RetryQuarantine(cm);
     for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
+        if (p->AsFoundOwed) {
+            /* TBT_U4_CONFIG.DeferFirstPoll: the discovery's connect on the
+             * link as found, made here instead of in the start. */
+            p->AsFoundOwed = FALSE;
+            tbtU4Connect(cm, p, TRUE);
+            if (p->Dev.Present) {
+                tbtU4DiscoverLinks(cm, p);
+            }
+        }
         if (p->TmuQuarantine && p->State != TBT_U4_EMPTY && p->Dev.Present &&
             p->TmuConfigured) {
             if (tbtU4TmuDisable(cm, p) == TBT_OK) {
@@ -5304,6 +5327,32 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
         cm->Counters.PcieTornDown++;
         tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
     }
+    p->Ejected = TRUE;
+    p->PcieFailed = TRUE;
+    p->State = TBT_U4_FAILED;
+    p->Why = TBT_U4_WHY_EJECTED;
+    return closed ? TBT_OK : TBT_E_STATE;
+}
+
+LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
+{
+    PTBT_U4_PORT p;
+    BOOLEAN closed;
+
+    p = tbtU4PortOf(cm, port);
+    if (p == NULL || cm->Failed || !p->Dev.Present) {
+        return TBT_E_PARAM;
+    }
+    cm->Counters.Ejects++;
+    closed = TRUE;
+    if (p->Pcie.Up || p->Pcie.Written != 0) {
+        p->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
+        closed = tbtU4TunnelDown(cm, p, &p->Pcie, FALSE);
+        cm->Counters.PcieTornDown++;
+        tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
+    }
+    /* The USB3 tunnel stays, as on a port FAILED for PCIe alone (record 22
+     * section 7.2): its devices are the host xHCI's, never asked to stop. */
     p->Ejected = TRUE;
     p->PcieFailed = TRUE;
     p->State = TBT_U4_FAILED;
@@ -5749,6 +5798,24 @@ VOID TbtU4Stop(PTBT_U4CM cm)
 {
     TbtRingStop(cm->Ring);
     cm->Stage = TBT_U4_STAGE_NONE;
+}
+
+BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm)
+{
+    ULONG i;
+    ULONG lane;
+
+    if (cm->Failed || cm->Suspended || cm->Stage != TBT_U4_STAGE_RUNNING ||
+        cm->PortCount == 0) {
+        return FALSE;
+    }
+    for (i = 0; i < cm->PortCount; i++) {
+        if (tbtU4LaneRd(cm, &cm->HostRouter, cm->Ports[i].Lane0, &lane) != TBT_OK ||
+            TbtU4LaneClass(TBT_LANE1_STATE(lane)) != TBT_U4_LANE_DISCONNECTED) {
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 BOOLEAN TbtU4AnyRouterConnected(const TBT_U4CM *cm)

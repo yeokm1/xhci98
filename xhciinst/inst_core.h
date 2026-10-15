@@ -207,6 +207,19 @@ const char *inst_action_text(int action);
 
 int inst_group_verdict(int anyNewer, int anyUnknown, int binary, int force);
 
+/* 98 SE and ME: a UAS entry at Code 2 (CM_PROB_DEVLOADER_FAILED) while
+ * System32\Drivers holds no USBNTMAP.SYS, the upper filter xhciuas.inf names.
+ * minor: 10 for 98 SE, 90 for ME. INST_UASFIX_ME_STICK: ME copies the file
+ * from its own cabinets when its first ordinary stick installs, so a stick
+ * and then a replug of the disk; INST_UASFIX_NUSB: 98 SE has it only from
+ * NUSB's mass-storage component. Anything else: INST_UASFIX_NONE. */
+#define INST_UASFIX_NONE            0
+#define INST_UASFIX_ME_STICK        1
+#define INST_UASFIX_NUSB            2
+
+int inst_uas_fix_9x(int nt, INST_U32 minor, int isUas, INST_U32 problem,
+                    int ntmapPresent);
+
 /* The XHCI98_FLAVOUR_* markers in an image: their count, and the first's
  * suffix (RELEASE, DEBUG, QEMU) in out. */
 int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
@@ -216,6 +229,13 @@ int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
 
 /* The PE header's machine field from the file's first bytes. 1 on success. */
 int inst_pe_machine(const unsigned char *buf, size_t len, INST_U32 *machine);
+
+/* Whether a PE image carries an embedded (Authenticode) signature: its
+ * security directory, inside the optional header, has a size and points to
+ * a certificate table inside the buffer (the whole file). 1 yes, 0 no, -1
+ * not a readable image or a table outside it. Structure only: no
+ * cryptographic check. */
+int inst_pe_signed(const unsigned char *buf, size_t len);
 
 /* list;dir appended unless dir is already an entry (without case).
  * Returns 0 present (out = list), 1 appended, -1 out too small. */
@@ -337,6 +357,138 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
 #define INST_EXIT_STEPS     4
 
 int inst_exit_code(int refused, int failed, int restart, int steps);
+
+/* The last line before the exit code, and the code it goes with (record 23
+ * section 7.4): nothing changed (or /list) - "No changes were made.", the
+ * code as it is; a change and a run that finished (0 or 3) - "Changes were
+ * made. Please restart Windows now.", always 3; a change and a run that
+ * did not finish (2 or 4) - "Changes were made, but not everything is
+ * done ...", the code as it is; a change under a refusal's code (1) is
+ * reported as failed part-way (2). Returns the final code. */
+#define INST_FINAL_NO_CHANGES   0
+#define INST_FINAL_RESTART      1
+#define INST_FINAL_UNFINISHED   2
+int inst_final(int changed, int list, int code, int *line);
+const char *inst_final_text(int line);
+
+/* ---- installing beside Windows' own installer (record 23 section 5.8) ------------ */
+
+/* The settle: CMP_WaitNoPendingInstallEvents asked with no wait every
+ * INST_SETTLE_POLL_MS, and a signature of the devices below this package's
+ * controllers read each time. Settled once nothing has been pending and the
+ * signature has been read whole and has not moved for INST_SETTLE_QUIET_MS
+ * - and, while a device is expected (a controller this run updated shows
+ * no root hub yet, a device of the bus not configured yet), not before
+ * ExpectMs. At LimitMs: pending is a timeout; not pending but not settled
+ * (moving, or not readable whole) is unsteady. Never settled without the
+ * quiet stretch. */
+#define INST_SETTLE_POLL_MS     500UL
+#define INST_SETTLE_QUIET_MS    3000UL
+
+#define INST_SETTLE_WAIT        0   /* poll again                            */
+#define INST_SETTLE_DONE        1   /* settled                               */
+#define INST_SETTLE_TELL        2   /* poll again; say why the wait, once    */
+#define INST_SETTLE_TIMEOUT     3   /* still pending at the limit            */
+#define INST_SETTLE_FAILED      4   /* the question failed                   */
+#define INST_SETTLE_UNSTEADY    5   /* not pending, never quiet, at the limit */
+
+typedef struct _INST_SETTLE {
+    INST_U32 LimitMs;       /* overall bound                              */
+    INST_U32 TellMs;        /* pending this long: TELL, once              */
+    INST_U32 ExpectMs;      /* how long an expected device is waited for  */
+    INST_U32 QuietFrom;     /* when the quiet stretch began               */
+    INST_U32 PendingFrom;   /* when the pending stretch began             */
+    INST_U32 Sig;
+    int Quiet;              /* in a quiet stretch                         */
+    int Pending;            /* in a pending stretch                       */
+    int Told;
+    int Polls;
+    int Moved;              /* pending seen, or the signature moved, or a
+                               reading incomplete: something happened     */
+} INST_SETTLE;
+
+void inst_settle_init(INST_SETTLE *s, INST_U32 limitMs, INST_U32 tellMs,
+                      INST_U32 expectMs);
+
+/* One poll: nowMs since the settle began, pending 1 / 0 / -1 (the question
+ * failed), sig the signature now and complete 1 when it was read whole,
+ * expect 1 while a device is expected. */
+int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
+                     INST_U32 sig, int complete, int expect);
+
+/* The device tree as the settle reads it, through the configuration
+ * manager's routines (or a test's): each returns INST_TREE_OK,
+ * INST_TREE_NONE (CR_NO_SUCH_DEVINST: no child, no further sibling) or
+ * INST_TREE_ERROR (anything else). Status's problem is only meaningful
+ * with INST_DN_HAS_PROBLEM set, so the walk masks it. */
+#define INST_TREE_OK            0
+#define INST_TREE_NONE          1
+#define INST_TREE_ERROR         2
+
+#define INST_DN_STARTED         0x00000008UL
+#define INST_DN_HAS_PROBLEM     0x00000400UL
+#define INST_PROB_NOT_CONFIGURED 1UL
+#define INST_PROB_REINSTALL     18UL
+
+typedef struct _INST_TREE_OPS {
+    void *Ctx;
+    int (*Child)(void *ctx, INST_U32 dn, INST_U32 *child);
+    int (*Sibling)(void *ctx, INST_U32 dn, INST_U32 *sibling);
+    int (*Id)(void *ctx, INST_U32 dn, char *id, size_t cap);
+    int (*Status)(void *ctx, INST_U32 dn, INST_U32 *status, INST_U32 *problem);
+} INST_TREE_OPS;
+
+/* The problem number as reported: 0 unless the status has a problem. */
+INST_U32 inst_dn_problem(INST_U32 status, INST_U32 problem);
+
+/* The devnodes below dn into the signature *h (ids, started, problem);
+ * *expect set for a device of the bus (USB\XHCI98_...) not configured yet
+ * (Code 1 or 18). 1 when read whole; 0 when a reading failed or the walk
+ * was cut short (a subtree below INST_TREE_DEPTH, more than
+ * INST_TREE_NODES devnodes in *nodes): the signature is then not to be
+ * trusted. */
+#define INST_TREE_DEPTH         8
+#define INST_TREE_NODES         2048
+int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
+                  INST_U32 *h, int *expect, int *nodes);
+
+/* An install call that failed because Windows was installing the same
+ * device at that moment (ERROR_SHARING_VIOLATION, 0x20, read on the 2000
+ * leg): 1 when it is tried again after a settle; tries counts the busy
+ * answers so far, this one included. */
+#define INST_BUSY_TRIES         3
+int inst_busy_retry(INST_U32 error, int tries);
+
+/* 1 when a device a call would reach has had INST_BUSY_TRIES busy answers
+ * already: the whole call is not made (one call reaches the whole id
+ * group, a member that joined later included). */
+int inst_busy_spent(const int *tries, int n);
+
+/* Windows 2000 after a tunnel port's first filter install succeeded in
+ * this run (owner, 2026-10-15): a device of the connection manager's INFs
+ * (inf INST_INF_CM or INST_INF_CMF) that is gone, or at Code 12, is waiting
+ * for the restart - read on the 2000 leg, all started after it - not a
+ * failure. 1 when it is so. */
+int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,
+                        INST_U32 problem);
+
+/* A device's state as the results print it: "xhci98 3.0.0.0, started",
+ * "no driver, problem code 28", "xhci98 2.3.1.0, not started". A device
+ * with a problem code is never called started. */
+void inst_state_text(char *out, size_t cap, const char *service,
+                     const char *version, int started, INST_U32 problem);
+
+/* 1 when SetupCopyOEMInf's answer (a name, or a path whose last part is the
+ * name) is the oem*.inf found byte-identical before the call, from a local
+ * copy this run did not make: staged already, which is no change. */
+int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
+                      const char *answer);
+
+/* The confirmation question: devices to change, else option values to
+ * write, else neither; nt 0 for 98 SE and ME (the copy and DevicePath);
+ * unsure 1 when an entry listed apart may still need a step (98 SE and
+ * ME, record 23 section 6.3): then no claim that every device is current. */
+const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
 
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
 

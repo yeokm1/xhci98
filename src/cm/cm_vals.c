@@ -17,7 +17,7 @@ typedef struct _CM_RULE {
     ULONG Kind;
 } CM_RULE;
 
-/* Record 21 section 8, in CM_VAL_* order. */
+/* Record 21 section 8 and record 22 section 12, in CM_VAL_* order. */
 static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 1,     0,    CM_MODE_MAX, CM_RULE_SWITCH }, /* XhciCmMode             */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmApprove          */
@@ -26,7 +26,10 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 5000,  1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmCmdTimeoutMs     */
     { 10000, 1000, 60000,       CM_RULE_CLAMP  }, /* XhciCmApproveTimeoutMs */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmSafeEject        */
-    { 0,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }  /* XhciLogVerbosity       */
+    { 0,     0,    0xFFFFFFFF,  CM_RULE_SWITCH }, /* XhciLogVerbosity       */
+    { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmUsb3Tunnel       */
+    { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLaneBonding      */
+    { 0,     0,    2,           CM_RULE_SWITCH }  /* XhciCmPreOsCleanup     */
 };
 
 static WCHAR cmUpper(WCHAR c)
@@ -254,6 +257,10 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built)
     } else if (profile == CM_PROFILE_UNKNOWN && mode == CM_MODE_FORCE_ICM &&
                intel) {
         profile = CM_PROFILE_ICM_AR;
+    } else if (profile == CM_PROFILE_USB4 && mode == CM_MODE_FORCE_ICM) {
+        /* The ICM experiment on a host with no ICM row (record 22 section
+         * 12): refused, never the software CM in its place. */
+        return CM_INERT_FORCE_ICM_REFUSED;
     }
     if (profile == CM_PROFILE_UNKNOWN) {
         return CM_INERT_PROFILE_UNKNOWN;
