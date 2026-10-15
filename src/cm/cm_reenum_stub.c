@@ -6,8 +6,11 @@
  * discovered, nothing is re-enumerated, and a tunnel change reaches the
  * operating system only through a Device Manager refresh or "Scan for
  * hardware changes" (record 21 section 6.4). The registration list's
- * calls (cm_filt.c's) and CmReenumSetEject / CmReenumPorts are not
- * provided: nothing in this branch calls them.
+ * calls (cm_filt.c's) are not provided: nothing in this branch calls
+ * them. CmReenumSetEject keeps the USB4 profile's hook (never called: no
+ * filter posts an eject here), CmReenumPorts reports no member, and
+ * CmReenumStart offers the router-named ports (CmNhiNamePorts) at the
+ * point cm_reenum.h's USB4 contract names, with no discovery to join.
  *
  * REMOVED, with its line in sources, when task 39-A.5's cm_reenum.c is
  * merged.
@@ -23,7 +26,22 @@ VOID CmReenumStart(PCM_NHI nhi)
     nhi->Reenum.Reenum = nhi->Values.Value[CM_VAL_REENUM];
     nhi->Reenum.SafeEject = nhi->Values.Value[CM_VAL_SAFE_EJECT];
     nhi->Reenum.Route = CM_ROUTE_NONE;
+    CmNhiNamePorts(nhi);
     CmLogNote(nhi, "cm.reenum.start", nhi->Reenum.Starts);
+}
+
+VOID CmReenumSetEject(PCM_NHI nhi, CM_REENUM_EJECT hook, PVOID context)
+{
+    nhi->Reenum.EjectHook = hook;
+    nhi->Reenum.EjectContext = context;
+}
+
+ULONG CmReenumPorts(PCM_NHI nhi, PULONG ports, ULONG capacity)
+{
+    UNREFERENCED_PARAMETER(nhi);
+    UNREFERENCED_PARAMETER(ports);
+    UNREFERENCED_PARAMETER(capacity);
+    return 0;
 }
 
 VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)

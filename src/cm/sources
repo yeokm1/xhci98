@@ -23,8 +23,9 @@
 #
 # ADDING A FILE. A new .c is one more line in SOURCES below (a file of
 # src\ by path, as ..\xhci_log.c is); scripts\source-stamp.ps1 reads this
-# list, so the stamp follows. Reserved for a later task of Phase 39:
-# tbt_topo.c (39-A.5); headers (tbt_regs.h, cm_cfgmg.h) need no line. A
+# list, so the stamp follows. tbt_topo.c (test_tbt_topo) is linked since
+# task 40-A.6 calls its port-to-bridge correspondence; headers
+# (tbt_regs.h, cm_cfgmg.h) need no line. A
 # pure file also gets a host suite line in test\run-host-tests.cmd, as
 # test_cm has.
 #
@@ -40,6 +41,7 @@ SOURCES=cm_vals.c      \
         tbt_icm.c      \
         tbt_hw.c       \
         tbt_u4cm.c     \
+        tbt_topo.c     \
         ..\xhci_log.c  \
         cm_pool.c      \
         cm_reg.c       \

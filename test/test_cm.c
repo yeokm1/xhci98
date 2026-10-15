@@ -154,6 +154,9 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_APPROVE_TIMEOUT_MS], 10000, "XhciCmApproveTimeoutMs defaults to 10000");
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 1, "XhciCmSafeEject defaults to 1 (D10)");
     CHECK_EQ(v.Value[CM_VAL_LOG_VERBOSITY], 0, "XhciLogVerbosity defaults to 0");
+    CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 1, "XhciCmUsb3Tunnel defaults to 1 (U3)");
+    CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 1, "XhciCmLaneBonding defaults to 1 (U4)");
+    CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 0, "XhciCmPreOsCleanup defaults to 0 (U2)");
     CHECK_EQ(v.Found | v.Refused | v.Clamped, 0, "nothing found yet");
     CHECK_EQ(v.TunnelBridgeChars, 0, "no bridge override");
     for (i = 0; i < CM_VAL_COUNT; i++) {
@@ -180,6 +183,19 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 0, "safe eject 0 is taken");
     CmValuesTake(&v, CM_VAL_SAFE_EJECT, 1, 2);
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 1, "safe eject 2 is refused");
+    CmValuesTake(&v, CM_VAL_USB3_TUNNEL, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 0, "USB3 tunnel 0 is taken");
+    CmValuesTake(&v, CM_VAL_USB3_TUNNEL, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 1, "USB3 tunnel 2 is refused");
+    CmValuesTake(&v, CM_VAL_LANE_BONDING, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 0, "lane bonding 0 is taken");
+    CmValuesTake(&v, CM_VAL_LANE_BONDING, 1, 7);
+    CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 1, "lane bonding 7 is refused");
+    CmValuesTake(&v, CM_VAL_PREOS_CLEANUP, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 2, "pre-OS cleanup 2 is taken");
+    CmValuesTake(&v, CM_VAL_PREOS_CLEANUP, 1, 3);
+    CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 0, "pre-OS cleanup 3 is refused");
+    CHECK(v.Refused & (1UL << CM_VAL_PREOS_CLEANUP), "and the refusal is recorded");
 
     CmValuesTake(&v, CM_VAL_POLL_IDLE_MS, 1, 10);
     CHECK_EQ(v.Value[CM_VAL_POLL_IDLE_MS], 50, "the idle poll is held to 50 ms");
@@ -229,13 +245,15 @@ static void test_decision(void)
     CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_ICL, 1, CM_PROFILES_BUILT),
              CM_INERT_NONE, "and Ice Lake's");
     CHECK_EQ(CmStartDecision(1, CM_PROFILE_USB4, 0, CM_PROFILES_BUILT),
-             CM_INERT_NOT_BUILT, "but not the software CM (Phase 40)");
+             CM_INERT_NONE, "and the software CM's (task 40-A.6)");
     CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_MR, 1, CM_PROFILES_BUILT),
              CM_INERT_NONE, "and Maple Ridge's, on Titan Ridge's messages");
     CHECK_EQ(CmStartDecision(1, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
              CM_INERT_NONE, "and Tiger Lake's, on Ice Lake's");
     CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_TGL, 1, CM_PROFILES_BUILT),
-             CM_INERT_NOT_BUILT, "so mode 3 is inert in this build");
+             CM_INERT_NONE, "so mode 3 reaches the selection in this build");
+    CHECK_EQ(CmStartDecision(3, CM_PROFILE_ICM_AR, 1, CM_PROFILES_BUILT),
+             CM_INERT_FORCE_REFUSED, "and is still refused on Alpine Ridge");
     CHECK_EQ(CmStartDecision(2, CM_PROFILE_UNKNOWN, 1, CM_PROFILES_BUILT),
              CM_INERT_NONE, "mode 2 on an unlisted Intel id runs AR");
     CHECK_EQ(CmStartDecision(0, CM_PROFILE_ICM_AR, 1, all), CM_INERT_MODE_OFF,

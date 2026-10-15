@@ -39,14 +39,20 @@
  *   D3, system sleep: the held marks (CmReenumSuspend), then the client's
  *     suspend - rings stopped, then mailbox 0x05 and 0x07 where the row
  *     sends them. An integrated controller's sleep is unsupported (section
- *     1.4.3): its rings are stopped and nothing is sent.
+ *     1.4.3): its rings are stopped and nothing is sent. Under the USB4
+ *     profile (record 22 sections 7.6 and 11) TbtU4Suspend instead: every
+ *     tunnel up recorded as a resume obligation, then the rings stopped;
+ *     nothing is sent to the fabric (no Guide chapter 8 sleep flow).
  *   D3, shutdown: the unbind, if the stop has not already run it, and the
  *     Bus Master bit and platform power restored as at a stop.
  *   D0 after a suspend this driver ran: the integrated family's force
  *     power, firmware-ready poll and LTR again, the Bus Master bit, then
- *     the client's resume and reconciliation, then the held marks released
- *     (CmReenumResumed). A resume that fails is the failure after
- *     activation of section 1.4.2.
+ *     the client's resume and reconciliation (the USB4 profile: TbtU4Resume,
+ *     every obligation verified, rebuilt, torn down on removal evidence or
+ *     held), then the held marks released (CmReenumResumed) - by success
+ *     only when every obligation was met, else by the failure path (record
+ *     22 section 7.6, decision U15). A resume that fails is the failure
+ *     after activation of section 1.4.2.
  *
  * IRQL: CmNhiPower at PASSIVE_LEVEL (the FDO is DO_POWER_PAGABLE); the
  * completion routines and the request callback at <= DISPATCH_LEVEL; the
@@ -100,28 +106,60 @@ VOID CmPowerSystemWork(PCM_NHI nhi, PIRP irp)
 /* An active, unfailed client in D0: the one a suspend acts on. */
 static BOOLEAN cmLive(PCM_NHI nhi)
 {
-    return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && !nhi->Icm.Failed &&
+    return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && !CmNhiFailed(nhi) &&
                      nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended);
 }
 
 /*
- * Force power given back by an active instance (TbtHwPlatformShutdown with
- * active TRUE): where the configuration write is refused, the ownership
- * record is kept for a later attempt rather than taken as discharged.
- * IRQL: PASSIVE_LEVEL, the thread.
+ * Force power given back by an active instance (TbtHwPlatformShutdown),
+ * where `mayClear` allows (CmNhiMayClearPower: the ICM's unbind done, or a
+ * USB4 instance with its rings stopped and no device router connected,
+ * record 22 section 4.2): where the configuration write is refused, the
+ * ownership record is kept for a later attempt rather than taken as
+ * discharged. IRQL: PASSIVE_LEVEL, the thread.
  */
-VOID CmNhiPlatformRelease(PCM_NHI nhi)
+VOID CmNhiPlatformRelease(PCM_NHI nhi, BOOLEAN mayClear)
 {
     ULONG before;
     BOOLEAN owned;
 
     before = nhi->CfgWriteFailures;
     owned = nhi->Power.ForcePowerSetHere;
-    (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power, TRUE);
+    if (owned && !mayClear) {
+        /* Record 22 section 4.2: a router is still connected on a port
+         * of this domain; the bit stays set and the record with it. */
+        nhi->Counters.U4ForcePowerKept++;
+        CmLogNote(nhi, "u4.force-power.kept", 1);
+    }
+    (VOID)TbtHwPlatformShutdown(nhi->Hw, &nhi->Cfg, &nhi->Power, mayClear);
     if (owned && nhi->CfgWriteFailures != before) {
         nhi->Power.ForcePowerSetHere = TRUE;
         CmLogNote(nhi, "cm.force-power.kept", nhi->CfgWriteFailures);
     }
+}
+
+/*
+ * The USB4 profile's suspend (record 22 sections 7.6 and 11): the
+ * obligations recorded and the rings stopped (TbtU4Suspend), and the
+ * resume bound for them logged at the tick read now - the hold's own
+ * watchdog is the re-enumeration seam's (cm_reenum.h, CmReenumSuspend).
+ * IRQL: PASSIVE_LEVEL, the thread.
+ */
+static VOID cmU4Suspend(PCM_NHI nhi)
+{
+    ULONG i;
+    ULONG n;
+
+    TbtU4Suspend(&nhi->U4);
+    n = 0;
+    for (i = 0; i < TBT_U4_OBLIGATIONS; i++) {
+        if (nhi->U4.Obligations[i].Used) {
+            n++;
+        }
+    }
+    CmLogNote(nhi, "u4.suspend.obligations", n);
+    CmLogNote(nhi, "u4.resume.bound-ms",
+              TbtU4ResumeBoundUs(n, nhi->ClockTickUs) / 1000UL);
 }
 
 /*
@@ -151,10 +189,10 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
             CmReenumStop(nhi);
             nhi->ReenumOn = 0;
         }
-        TbtIcmUnbind(&nhi->Icm);
+        CmNhiUnbind(nhi);
         CmNhiDrainActions(nhi);
         (VOID)CmNhiSetBusMaster(nhi, FALSE);
-        CmNhiPlatformRelease(nhi);
+        CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
         return;
     }
     if (!cmLive(nhi)) {
@@ -165,7 +203,11 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     if (nhi->ReenumOn) {
         CmReenumSuspend(nhi);
     }
-    TbtIcmSuspend(&nhi->Icm);
+    if (nhi->U4On) {
+        cmU4Suspend(nhi);
+    } else {
+        TbtIcmSuspend(&nhi->Icm);
+    }
     nhi->Suspended = 1;
     CmNhiDrainActions(nhi);
 }
@@ -181,13 +223,14 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
 BOOLEAN CmNhiReinit(PCM_NHI nhi)
 {
     BOOLEAN ok;
+    BOOLEAN held;
     LONG rc;
 
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
     }
     nhi->Suspended = 0;
-    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->Icm.Failed) {
+    if (nhi->Stage != CM_STAGE_ACTIVE || CmNhiFailed(nhi)) {
         return TRUE;
     }
     nhi->Counters.Resumes++;
@@ -196,7 +239,22 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
     }
-    if (ok) {
+    held = FALSE;
+    if (ok && nhi->U4On) {
+        rc = TbtU4Resume(&nhi->U4);
+        if (rc == TBT_E_STATE && !nhi->U4.Failed) {
+            /* Record 22 section 7.6: the domain runs, but an obligation
+             * was not met (a port HELD, a budget spent): the hold is
+             * released by the failure path, nothing is torn down. */
+            nhi->Counters.U4ResumeHeld++;
+            CmLogNote(nhi, "u4.resume.held", 1);
+            held = TRUE;
+        } else if (rc != TBT_OK) {
+            CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
+            CmLogNote(nhi, "u4.inert-reason", nhi->U4.InertReason);
+            ok = FALSE;
+        }
+    } else if (ok) {
         rc = TbtIcmResume(&nhi->Icm);
         if (rc != TBT_OK) {
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
@@ -204,15 +262,17 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         }
     }
     if (!ok) {
-        /* The client stopped its rings (TbtIcmResume's failure), or never
-         * restarted them (the platform or Bus Master step): nothing of
+        /* The client stopped its rings (TbtIcmResume's or TbtU4Resume's
+         * failure), or never restarted them (the platform or Bus Master
+         * step; the USB4 profile's rings stay stopped since its suspend,
+         * and its common buffer is freed only at the stop): nothing of
          * this driver's runs on the hardware, and the stop sends 0x07 only
          * where the session was left open. */
         nhi->Counters.ResumeFailures++;
         nhi->Stage = CM_STAGE_FAILED;
     }
     if (nhi->ReenumOn) {
-        CmReenumResumed(nhi, ok);
+        CmReenumResumed(nhi, (BOOLEAN)(ok && !held));
     }
     CmNhiDrainActions(nhi);
     return ok;

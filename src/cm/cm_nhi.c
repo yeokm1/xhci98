@@ -21,13 +21,26 @@
  *   (c) and (d): TbtHwSelect - ownership by the row's own predicate, the
  *       host interface version.
  *
+ * USB4 (TBT_SEL_SOFTWARE, design record 22 section 3.4's admission; task
+ * 40-A.6): the common buffer for sixteen-entry rings, the Bus Master bit,
+ * the core (tbt_u4cm.c) initialised with XhciCmApprove, XhciCmUsb3Tunnel,
+ * XhciCmLaneBonding and XhciCmPreOsCleanup; the PnP path is released and
+ * the bind (TbtU4Start: ring 0 taken over, never reset; the host router;
+ * tunnels found at start discovered and preserved; hot plug; cold
+ * devices) runs on the thread, then the re-enumeration seam starts with
+ * the router-named ports offered to its discovery (CmNhiNamePorts), the
+ * eject entry registered (task 40-A.9) and the learning baseline taken.
+ * Each idle tick runs TbtU4Poll, drains its actions to the seam and learns
+ * the port-to-bridge correspondence (tbt_topo.h); the statement upcall
+ * withholds the nvme98 statement (no channel yet, task 40-A.7) and ends a
+ * port's learning only on a path proven closed.
+ *
  * ICM: the common buffer (cm_pool.c), the Bus Master bit, the client
  * initialised with XhciCmApprove (decision D4) and the two timeouts, the
  * re-enumeration seam started; the PnP path is released, and the bind
  * (TbtIcmStart: ring 0, mailbox 0x23 where the row sends it, driver ready,
  * the host-router poll) runs on the thread after it, so a firmware that
- * answers slowly holds no PnP request. Safe mode, the USB4 software
- * connection manager (Phase 40, not in this build) and every INERT
+ * answers slowly holds no PnP request. Safe mode and every INERT
  * outcome: the inert start - the devnode started, the reason logged and
  * counted, nothing written to the hardware (the integrated family's own
  * power-up of test (b) excepted, which the power record of section 1.4.2
@@ -36,9 +49,11 @@
  * THE STOP (stop, surprise removal, removal; section 5.6's unbind, in its
  * order): the re-enumeration seam stopped, then the client's unbind - ring
  * 0 stopped, its queued actions retired, mailbox 0x07 only where driver
- * ready was sent - the common buffer freed after the rings, the Bus Master
- * bit and the integrated family's force power restored where this driver
- * set them, BAR0 unmapped, then the thread ended. An inert instance has
+ * ready was sent; under the USB4 profile TbtU4Stop, the rings stopped and
+ * the fabric left as it is - the common buffer freed after the rings, the
+ * Bus Master bit and the integrated family's force power restored where
+ * this driver set them (the USB4 profile's only with no device router
+ * connected, record 22 section 4.2), BAR0 unmapped, then the thread ended. An inert instance has
  * nothing to undo: it never clears force power, even after its own
  * readiness timeout (a timeout is not evidence that nothing depends on the
  * controller; orchestrator decision of 2026-10-15, owner to confirm). Tunnels and
@@ -123,7 +138,13 @@ static const char *const cmNhiCounterNames[] = {
     "cm.actions.resync", "cm.actions.not-live", "cm.reenum.skipped",
     "cm.config.failures", "cm.suspends", "cm.resumes", "cm.resume.failures",
     "cm.shutdowns", "cm.power.request-failures", "cm.power.inline",
-    "cm.buffers.kept", "cm.power.wakes-unpowered"
+    "cm.buffers.kept", "cm.power.wakes-unpowered", "u4.drv.starts",
+    "u4.drv.actions.up", "u4.drv.actions.down", "u4.drv.actions.resync",
+    "u4.drv.actions.deep", "u4.drv.named", "u4.drv.name-refused",
+    "u4.drv.learned", "u4.drv.learn-tries", "u4.drv.linkdowns",
+    "u4.drv.paths-closed", "u4.drv.statement.no-channel", "u4.drv.ejects",
+    "u4.drv.ejects.unmapped", "u4.drv.ejects.failed", "u4.drv.resume.held",
+    "u4.drv.force-power.kept"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,
@@ -175,10 +196,21 @@ static VOID cmLogTable(PCM_NHI nhi)
     }
 }
 
+static VOID cmU4LogCounters(PCM_NHI nhi);
+static VOID cmU4Drain(PCM_NHI nhi);
+static VOID cmU4LearnPending(PCM_NHI nhi);
+
 static VOID cmLogCounters(PCM_NHI nhi)
 {
     cmLogBlock(nhi, cmNhiCounterNames, (const ULONG *)&nhi->Counters,
                sizeof(CM_COUNTERS) / sizeof(ULONG));
+    if (nhi->U4On) {
+        cmLogBlock(nhi, cmRingCounterNames,
+                   (const ULONG *)&nhi->Ring.Counters,
+                   sizeof(TBT_RING_COUNTERS) / sizeof(ULONG));
+        cmU4LogCounters(nhi);
+        return;
+    }
     if (nhi->Icm.Ring != NULL) {
         cmLogBlock(nhi, cmRingCounterNames,
                    (const ULONG *)&nhi->Ring.Counters,
@@ -194,11 +226,16 @@ static VOID cmLogCounters(PCM_NHI nhi)
 /* ---------------------------------------------------------------------- */
 
 /* Every queued tunnel change, oldest first, to the re-enumeration seam
- * (cm_reenum.h), unless XhciCmReenum is 0. */
+ * (cm_reenum.h), unless XhciCmReenum is 0; the USB4 profile's through
+ * cmU4Drain. */
 VOID CmNhiDrainActions(PCM_NHI nhi)
 {
     TBT_ICM_ACTION a;
 
+    if (nhi->U4On) {
+        cmU4Drain(nhi);
+        return;
+    }
     if (nhi->Icm.Ring == NULL) {
         return;
     }
@@ -232,6 +269,18 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
 
 VOID CmNhiPollPass(PCM_NHI nhi)
 {
+    if (nhi->U4On) {
+        TbtU4Poll(&nhi->U4);
+        CmNhiDrainActions(nhi);
+        cmU4LearnPending(nhi);
+        if (nhi->U4.Failed && nhi->Stage == CM_STAGE_ACTIVE) {
+            /* A failure after activation inside the tick (record 22
+             * section 3.5): the core stopped its rings. */
+            nhi->Stage = CM_STAGE_FAILED;
+            CmLogNote(nhi, "u4.failed", nhi->U4.InertReason);
+        }
+        return;
+    }
     TbtIcmPoll(&nhi->Icm);
     CmNhiDrainActions(nhi);
 }
@@ -278,6 +327,601 @@ static ULONG cmProfileOfHw(const TBT_HW_PROFILE *hw)
                                                      : CM_PROFILE_ICM_ICL;
     }
     return CM_PROFILE_USB4;
+}
+
+/* ---------------------------------------------------------------------- */
+/* The USB4 profile (design record 22, task 40-A.6)                       */
+/* ---------------------------------------------------------------------- */
+
+/* Labels in the order of TBT_U4_COUNTERS' fields (tbt_u4cm.h). */
+static const char *const cmU4CounterNames[] = {
+    "u4.port-checks", "u4.connects", "u4.routers.enumerated",
+    "u4.routers.adopted", "u4.routers.refused", "u4.routers.tbt3",
+    "u4.rop.issued", "u4.rop.unsupported", "u4.rop.failed",
+    "u4.rop.timeouts", "u4.rop.blocked", "u4.drom.reads",
+    "u4.drom.crc-failures", "u4.bond.attempts", "u4.bond.x2",
+    "u4.bond.single", "u4.lane1-disabled", "u4.config-ready.timeouts",
+    "u4.tmu.enabled", "u4.tmu.failures", "u4.pcie.built", "u4.pcie.failed",
+    "u4.pcie.torn-down", "u4.pcie.lost", "u4.usb3.built", "u4.usb3.failed",
+    "u4.usb3.torn-down", "u4.usb3.disconnected", "u4.detect.timeouts",
+    "u4.pending.timeouts", "u4.hca.timeouts", "u4.quarantined",
+    "u4.quarantine.lifted", "u4.ports.preserved", "u4.ports.held",
+    "u4.connects.deferred", "u4.resume.budgets-spent", "u4.ports.cleaned",
+    "u4.dpr", "u4.hrr", "u4.quirks", "u4.statements.sent",
+    "u4.statements.withheld", "u4.unplugs", "u4.unplugs.nested",
+    "u4.quick-replugs", "u4.hotplug.lane0", "u4.hotplug.other",
+    "u4.hotplug.downstream", "u4.links.discovered", "u4.links.removed",
+    "u4.action-overflows", "u4.ejects"
+};
+
+XHCI_C_ASSERT(cm_u4_counter_names,
+              sizeof(cmU4CounterNames) / sizeof(cmU4CounterNames[0]) ==
+                  sizeof(TBT_U4_COUNTERS) / sizeof(ULONG));
+
+/* ICM-row tag in TBT_ICM_ACTION.Why for an action synthesized from a USB4
+ * one (cmU4ToIcm): above every TBT_ICM_WHY_*, the USB4 kind in bits 3:0. */
+#define CM_U4_WHY_BASE 0x80UL
+
+BOOLEAN CmNhiFailed(PCM_NHI nhi)
+{
+    return nhi->U4On ? nhi->U4.Failed : nhi->Icm.Failed;
+}
+
+/* A client the idle poll serves: the ICM bound, or the USB4 profile
+ * running (its start done, not failed, not suspended). */
+BOOLEAN CmNhiRunning(PCM_NHI nhi)
+{
+    if (nhi->U4On) {
+        return (BOOLEAN)(nhi->U4.Stage == TBT_U4_STAGE_RUNNING &&
+                         !nhi->U4.Failed && !nhi->U4.Suspended);
+    }
+    return nhi->Icm.Bound;
+}
+
+/* The client's unbind: the ICM's (ring 0 stopped, mailbox 0x07 where
+ * driver ready was sent), or the USB4 profile's stop (rings stopped,
+ * nothing on the fabric changed: record 22 section 11, decision U7). */
+VOID CmNhiUnbind(PCM_NHI nhi)
+{
+    if (nhi->U4On) {
+        TbtU4Stop(&nhi->U4);
+        CmLogNote(nhi, "u4.stop", nhi->U4.Failed ? 1UL : 0UL);
+        return;
+    }
+    TbtIcmUnbind(&nhi->Icm);
+}
+
+/*
+ * Whether an active instance may clear the force power it set, after its
+ * unbind (record 22 section 4.2): the ICM's always (Linux pci.c
+ * icl_nhi_shutdown after the unbind); the USB4 profile's only when it knew
+ * its ports and found no device router connected on any of them (Linux
+ * pci.c icl_nhi_suspend returns early while one is). A USB4 instance that
+ * failed before or after learning its ports keeps the bit: what is behind
+ * them is unknown, and an unknown is not "nothing connected".
+ */
+BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
+{
+    if (!nhi->U4On) {
+        return TRUE;
+    }
+    return (BOOLEAN)(!nhi->U4.Failed && nhi->U4.PortCount != 0 &&
+                     !TbtU4AnyRouterConnected(&nhi->U4));
+}
+
+/* The tunnel-port set the re-enumeration seam discovered, readable: its
+ * configuration accessor bound and at least one member. */
+static BOOLEAN cmTopoUsable(PCM_NHI nhi)
+{
+    return (BOOLEAN)(nhi->ReenumOn && nhi->Reenum.Cfg.Read != NULL &&
+                     nhi->Reenum.Topo.Tunnels != 0);
+}
+
+/*
+ * The router-named source (record 22 sections 6.3 and 7.6): each USB4
+ * port whose PCIe Down adapter the host router's mapping operation named
+ * offers its bridge to the domain's set (XhciTbtTopoAddNamed). Called by
+ * the re-enumeration seam after each discovery it acts on and before it
+ * publishes the set's claims (cm_reenum.h); nothing under the ICM client.
+ */
+VOID CmNhiNamePorts(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    ULONG i;
+    ULONG rc;
+
+    if (!nhi->U4On || nhi->Reenum.Cfg.Read == NULL) {
+        return;
+    }
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p == NULL || !p->MapValid || p->PcieDown == 0) {
+            continue;
+        }
+        rc = XhciTbtTopoAddNamed(&nhi->Reenum.Cfg, &nhi->Reenum.Topo,
+                                 &nhi->Binds, p->Index, p->MapRid);
+        if (rc == XHCI_TBT_MAP_ADDED || rc == XHCI_TBT_MAP_KNOWN) {
+            nhi->Counters.U4Named++;
+        } else {
+            nhi->Counters.U4NameRefused++;
+        }
+        CmLogNote(nhi, "u4.named",
+                  (p->Index << 24) | ((p->MapRid & 0xFFFFUL) << 8) |
+                      (rc & 0xFFUL));
+    }
+}
+
+/*
+ * Between the readings of a re-enumeration poll (cm_reenum.h): the ICM's
+ * frames serviced, so a disconnect inside the wait is seen. Under the USB4
+ * profile nothing is sent or taken here - no request is outstanding, the
+ * routers retransmit an unacknowledged hot plug event (Guide 4.3) and the
+ * next idle tick takes it - so the poll's 2 s bound is all it costs.
+ */
+VOID CmNhiWaitService(PCM_NHI nhi)
+{
+    if (!nhi->U4On) {
+        TbtIcmService(&nhi->Icm);
+    }
+}
+
+/* Whether the device an action names is still the one it named: the
+ * ICM's table entry, or the USB4 port's connection generation with its
+ * router present (and, for a tunnel up, its PCIe tunnel still up). */
+BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
+{
+    const TBT_U4_PORT *p;
+
+    if (!nhi->U4On) {
+        return TbtIcmActionLive(&nhi->Icm, action);
+    }
+    p = TbtU4Port(&nhi->U4, action->Link);
+    return (BOOLEAN)(p != NULL && !nhi->U4.Failed &&
+                     p->Generation == action->Serial && p->Dev.Present &&
+                     (action->Kind != TBT_ICM_ACT_TUNNEL_UP || p->Pcie.Up));
+}
+
+/* The index in Reenum.Topo.Set of the member an action's port corresponds
+ * to (named or learned, record 22 section 7.6), or XHCI_TBT_NO_MEMBER: the
+ * whole set then acts, as it always does under the ICM client. */
+ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
+{
+    if (!nhi->U4On || !cmTopoUsable(nhi) ||
+        action->Kind == TBT_ICM_ACT_RESYNC) {
+        return XHCI_TBT_NO_MEMBER;
+    }
+    return XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, action->Link);
+}
+
+/* A USB4 action in the re-enumeration seam's form: Link the USB4 port,
+ * Serial its connection generation, Slot the port again (CmNhiActionLive
+ * reads the port, never the ICM's table). A router removed below depth 1
+ * re-enumerates the whole set, as a RESYNC: its function sat below the
+ * depth-1 router's own switch (record 22 section 7.1). */
+static VOID cmU4ToIcm(const TBT_U4_ACTION *u, PTBT_ICM_ACTION a)
+{
+    CmZero(a, sizeof(*a));
+    if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
+        a->Kind = TBT_ICM_ACT_TUNNEL_UP;
+    } else if (u->Kind == TBT_U4_ACT_TUNNEL_DOWN) {
+        a->Kind = TBT_ICM_ACT_TUNNEL_DOWN;
+    } else {
+        a->Kind = TBT_ICM_ACT_RESYNC;
+    }
+    a->Why = CM_U4_WHY_BASE | (u->Kind & 0xFUL);
+    a->Slot = u->Port;
+    a->Serial = u->Generation;
+    a->Link = u->Port;
+    a->Depth = (u->Kind == TBT_U4_ACT_DEEP_REMOVED) ? 2UL : 1UL;
+    a->WasApproved = TRUE;
+}
+
+/* The learning baseline taken again (tbt_topo.h, XhciTbtLearnArm): after a
+ * discovery, and after a tunnel down this driver handled. */
+static VOID cmU4Arm(PCM_NHI nhi)
+{
+    ULONG rc;
+
+    nhi->ArmOwed = 0;
+    if (!cmTopoUsable(nhi)) {
+        return;
+    }
+    rc = XhciTbtLearnArm(&nhi->Reenum.Cfg, &nhi->Reenum.Topo, &nhi->Binds);
+    if (rc != 0) {
+        CmLogNote(nhi, "u4.learn.arm", rc);
+    }
+}
+
+/* The learned correspondence for `port`'s PCIe tunnel (XhciTbtLearn): the
+ * members' active marks as the seam keeps them, member by member. */
+static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
+{
+    ULONG active[XHCI_TBT_MAX_TUNNELS];
+    ULONG i;
+    ULONG rc;
+
+    if (!cmTopoUsable(nhi)) {
+        return;
+    }
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        active[i] = (i < nhi->Reenum.Topo.Tunnels &&
+                     (nhi->Reenum.Port[i].Flags & CM_PORT_ACTIVE) != 0)
+                        ? 1UL
+                        : 0UL;
+    }
+    nhi->Counters.U4LearnTries++;
+    rc = XhciTbtLearn(&nhi->Reenum.Cfg, &nhi->Reenum.Topo, &nhi->Binds,
+                      port, active);
+    if (rc == XHCI_TBT_MAP_LEARNED) {
+        nhi->Counters.U4Learned++;
+    }
+    if (rc != XHCI_TBT_MAP_NOT_GAINED) {
+        CmLogNote(nhi, "u4.learn", (port << 8) | (rc & 0xFFUL));
+    }
+}
+
+/* Every port whose tunnel came up and is not attributed yet, tried again
+ * at each idle tick: its device may answer Configuration Request Retry for
+ * a while (tbt_topo.h, XhciTbtLearn). */
+static VOID cmU4LearnPending(PCM_NHI nhi)
+{
+    ULONG port;
+
+    if (nhi->Binds.Pending == 0) {
+        return;
+    }
+    for (port = 1; port <= nhi->U4.PortCount && port <= XHCI_TBT_MAX_PORTS;
+         port++) {
+        if (nhi->Binds.Pending & (1UL << (port - 1))) {
+            cmU4Learn(nhi, port);
+        }
+    }
+}
+
+/* The router a port's action concerns, for the log (task 40-A.8: a
+ * Thunderbolt 3 device router behind this USB4 host is named as one). */
+static VOID cmU4LogRouter(PCM_NHI nhi, ULONG port)
+{
+    const TBT_U4_PORT *p;
+
+    p = TbtU4Port(&nhi->U4, port);
+    if (p == NULL || !p->Dev.Present) {
+        return;
+    }
+    CmLogNote(nhi, "u4.router.id", (p->Dev.Vendor << 16) | p->Dev.Device);
+    CmLogNote(nhi, "u4.router.kind",
+              (port << 24) | (p->Dev.Usb4Version & 0xFFUL) |
+                  (p->Dev.Tbt3 ? 0x100UL : 0) |
+                  (p->Dev.Preserved ? 0x200UL : 0) |
+                  (p->Bonded ? 0x400UL : 0) | (p->SingleLane ? 0x800UL : 0) |
+                  (p->Usb3.Up ? 0x1000UL : 0));
+}
+
+/*
+ * One drain of the USB4 profile's actions (record 22 section 7.6, tbt_topo.h
+ * learning rules): the batch taken off the core's queue; XhciTbtLearnUp for
+ * every tunnel up of it first; then each action, oldest first, to the
+ * re-enumeration seam in its form (unless XhciCmReenum is 0), a tunnel up
+ * then learned for its port, a tunnel down arming the baseline again.
+ */
+static VOID cmU4Drain(PCM_NHI nhi)
+{
+    TBT_ICM_ACTION a;
+    PTBT_U4_ACTION u;
+    ULONG n;
+    ULONG i;
+
+    n = 0;
+    while (n < TBT_U4_ACTION_QUEUE &&
+           TbtU4NextAction(&nhi->U4, &nhi->U4Batch[n])) {
+        n++;
+    }
+    nhi->U4BatchCount = n;
+    if (cmTopoUsable(nhi)) {
+        for (i = 0; i < n; i++) {
+            if (nhi->U4Batch[i].Kind == TBT_U4_ACT_TUNNEL_UP &&
+                nhi->U4Batch[i].Port >= 1 &&
+                nhi->U4Batch[i].Port <= XHCI_TBT_MAX_PORTS) {
+                XhciTbtLearnUp(&nhi->Binds, nhi->U4Batch[i].Port);
+            }
+        }
+    }
+    for (i = 0; i < n; i++) {
+        u = &nhi->U4Batch[i];
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
+            nhi->Counters.U4ActionsUp++;
+        } else if (u->Kind == TBT_U4_ACT_TUNNEL_DOWN) {
+            nhi->Counters.U4ActionsDown++;
+        } else if (u->Kind == TBT_U4_ACT_DEEP_REMOVED) {
+            nhi->Counters.U4ActionsDeep++;
+        } else {
+            nhi->Counters.U4ActionsResync++;
+        }
+        CmLogNote(nhi, "u4.action",
+                  (u->Kind << 24) | ((u->Port & 0xFFUL) << 16) |
+                      (u->Generation & 0xFFFFUL));
+        CmLogNote(nhi, "u4.action.map",
+                  u->MapValid ? (0x80000000UL | (u->MapRid & 0xFFFFUL))
+                              : (u->PcieDown & 0xFFUL));
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
+            cmU4LogRouter(nhi, u->Port);
+        }
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && nhi->U4UpHook != NULL) {
+            /* The nvme98 channel's UP, before the endpoint is exposed. */
+            nhi->U4UpHook(nhi->U4HookContext, u);
+        }
+        cmU4ToIcm(u, &a);
+        if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
+            nhi->Counters.ReenumSkipped++;
+        } else if (nhi->ReenumOn) {
+            CmReenumAction(nhi, &a);
+        }
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && CmNhiActionLive(nhi, &a)) {
+            cmU4Learn(nhi, u->Port);
+        } else if (u->Kind == TBT_U4_ACT_TUNNEL_DOWN ||
+                   u->Kind == TBT_U4_ACT_DEEP_REMOVED) {
+            nhi->ArmOwed = 1;
+        }
+    }
+    if (nhi->ArmOwed) {
+        cmU4Arm(nhi);
+    }
+}
+
+/*
+ * Record 22 section 7.3 steps 2 and 3, the driver's half, called by the
+ * core after step 1 of a PCIe teardown (possibly nested at a safe point;
+ * it calls nothing of tbt_u4cm.c's). A path proven closed ends the port's
+ * pending learning for that generation (tbt_topo.h: XhciTbtLearnDown only
+ * on that evidence, never on a TUNNEL_DOWN alone) and owes a new baseline.
+ * The nvme98 statement is the channel's (task 40-A.7, CM_U4_DOWN_HOOK in
+ * cm.h), handed this moment with PathClosed and the anchor; with no
+ * channel registered it is withheld and nvme98's MD-1 gone deadline
+ * stands.
+ */
+static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
+{
+    PCM_NHI nhi;
+    ULONG r;
+
+    nhi = (PCM_NHI)context;
+    nhi->Counters.U4LinkDowns++;
+    CmLogNote(nhi, "u4.linkdown",
+              ((info->Port & 0xFFUL) << 24) |
+                  ((info->Generation & 0xFFFFUL) << 8) |
+                  (info->PathClosed ? 0x01UL : 0) |
+                  (info->AnchorValid ? 0x02UL : 0) |
+                  (info->Nested ? 0x04UL : 0) |
+                  (info->MapValid ? 0x08UL : 0));
+    if (info->PathClosed) {
+        nhi->Counters.U4PathsClosed++;
+        if (info->Port >= 1 && info->Port <= XHCI_TBT_MAX_PORTS) {
+            XhciTbtLearnDown(&nhi->Binds, info->Port);
+            nhi->ArmOwed = 1;
+        }
+    }
+    if (nhi->U4DownHook != NULL) {
+        r = nhi->U4DownHook(nhi->U4HookContext, info);
+        return r == TBT_U4_STMT_SENT ? TBT_U4_STMT_SENT
+                                     : TBT_U4_STMT_WITHHELD;
+    }
+    nhi->Counters.U4NoChannel++;
+    return TBT_U4_STMT_WITHHELD;
+}
+
+VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
+                     PVOID context)
+{
+    nhi->U4UpHook = up;
+    nhi->U4DownHook = down;
+    nhi->U4HookContext = context;
+}
+
+/*
+ * The per-port eject (record 22 section 10.4, decision U9; task 40-A.9),
+ * the re-enumeration seam's hook: called on the thread once the children
+ * of tunnel port `bdf` were removed in an orderly way - on NT a
+ * query-remove then a remove, on Windows 98 and ME only where CONFIGMG's
+ * Query_Remove_SubTree was granted (a refusal is respected: the seam never
+ * forces a removal, the run brief's addendum 10, and this hook is then
+ * never called). The port whose bridge corresponds to `bdf` (named or
+ * learned) has its tunnels torn down in the orderly way of section 9.3
+ * step 1 (TbtU4Eject), and stays down until its device is unplugged and
+ * plugged again; the TUNNEL_DOWN it queues is drained at the next pass, not
+ * here (the seam is the caller). A bridge no port corresponds to, or a
+ * domain not running: the tunnel stays up and the user unplugs, as under
+ * the ICM client (record 21 section 7.4).
+ */
+static VOID cmU4Eject(PVOID context, ULONG bdf)
+{
+    PCM_NHI nhi;
+    ULONG member;
+    ULONG port;
+    ULONG i;
+    LONG rc;
+
+    nhi = (PCM_NHI)context;
+    nhi->Counters.U4Ejects++;
+    CmLogNote(nhi, "u4.eject.bridge", bdf);
+    if (!nhi->U4On || !CmNhiRunning(nhi) || nhi->Suspended ||
+        nhi->DevicePower != PowerDeviceD0) {
+        nhi->Counters.U4EjectsUnmapped++;
+        CmLogNote(nhi, "u4.eject.not-running", nhi->Stage);
+        return;
+    }
+    port = 0;
+    member = XHCI_TBT_NO_MEMBER;
+    if (cmTopoUsable(nhi)) {
+        for (i = 0; i < nhi->Reenum.Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS;
+             i++) {
+            if (nhi->Reenum.Topo.Set[i] == bdf) {
+                member = i;
+            }
+        }
+    }
+    if (member != XHCI_TBT_NO_MEMBER) {
+        for (i = 1; i <= nhi->U4.PortCount; i++) {
+            if (XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, i) ==
+                member) {
+                port = i;
+                break;
+            }
+        }
+    }
+    if (port == 0) {
+        nhi->Counters.U4EjectsUnmapped++;
+        CmLogNote(nhi, "u4.eject.unmapped", bdf);
+        return;
+    }
+    rc = TbtU4Eject(&nhi->U4, port);
+    CmLogNote(nhi, "u4.eject", (port << 8) | ((ULONG)(-rc) & 0xFFUL));
+    if (rc != TBT_OK) {
+        nhi->Counters.U4EjectsFailed++;
+    }
+}
+
+/* The domain's state at stop, port by port (record 22 section 12's
+ * snapshot through the log): the host router, then each USB4 port's state,
+ * reason, generation, router and tunnels. */
+static VOID cmU4LogPorts(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    ULONG i;
+
+    CmLogNote(nhi, "u4.host.id",
+              (nhi->U4.HostRouter.Vendor << 16) | nhi->U4.HostRouter.Device);
+    CmLogNote(nhi, "u4.host.version", nhi->U4.HostRouter.Usb4Version);
+    CmLogNote(nhi, "u4.host.ports", nhi->U4.PortCount);
+    CmLogNote(nhi, "u4.stage", nhi->U4.Stage);
+    CmLogNote(nhi, "u4.inert-reason", nhi->U4.InertReason);
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p == NULL) {
+            continue;
+        }
+        CmLogNote(nhi, "u4.port",
+                  (p->Index << 24) | ((p->State & 0xFFUL) << 16) |
+                      ((p->Why & 0xFFUL) << 8) | (p->Lane0 & 0xFFUL));
+        CmLogNote(nhi, "u4.port.gen", p->Generation);
+        CmLogNote(nhi, "u4.port.adapters",
+                  ((p->PcieDown & 0xFFUL) << 8) | (p->Usb3Down & 0xFFUL));
+        CmLogNote(nhi, "u4.port.map",
+                  p->MapValid ? (0x80000000UL | (p->MapRid & 0xFFFFUL)) : 0);
+        CmLogNote(nhi, "u4.port.member",
+                  cmTopoUsable(nhi)
+                      ? XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, i)
+                      : XHCI_TBT_NO_MEMBER);
+        CmLogNote(nhi, "u4.port.tunnels",
+                  (p->Pcie.Up ? 0x01UL : 0) | (p->Usb3.Up ? 0x02UL : 0) |
+                      (p->Pcie.Preserved ? 0x04UL : 0) |
+                      (p->Usb3.Preserved ? 0x08UL : 0) |
+                      (p->DpPreserved ? 0x10UL : 0) |
+                      (p->Ejected ? 0x20UL : 0) |
+                      (p->PcieFailed ? 0x40UL : 0));
+        cmU4LogRouter(nhi, i);
+    }
+}
+
+/*
+ * The USB4 profile's activation, on the thread, once TbtHwSelect admitted
+ * the software connection manager (record 22 section 3.4): the common
+ * buffer for its sixteen-entry rings, the Bus Master bit, the core
+ * initialised with the values of section 12 and the selection's Host
+ * Interface Capabilities, the statement upcall bound, the correspondence
+ * cleared. Nothing is written to the host interface here: the ring
+ * takeover and everything after it are the bind's (TbtU4Start), after the
+ * PnP path is released. A failure here is the inert start before
+ * activation.
+ */
+static VOID cmU4Activate(PCM_NHI nhi)
+{
+    CmLogNote(nhi, "u4.select.route", nhi->Sel.Route);
+    CmLogNote(nhi, "u4.select.experimental", nhi->Sel.Experimental ? 1UL : 0);
+    CmLogNote(nhi, "u4.select.forced", nhi->Sel.Forced ? 1UL : 0);
+    nhi->DmaBytes = TBT_RING_U4_DMA_BYTES;
+    if (!NT_SUCCESS(CmDmaOpen(nhi))) {
+        cmInert(nhi, CM_INERT_RESOURCES);
+        return;
+    }
+    if (!CmNhiSetBusMaster(nhi, TRUE)) {
+        cmInert(nhi, CM_INERT_BUS_MASTER);
+        return;
+    }
+    TbtU4DefaultConfig(&nhi->U4Cfg);
+    nhi->U4Cfg.Approve = (BOOLEAN)(nhi->Values.Value[CM_VAL_APPROVE] != 0);
+    nhi->U4Cfg.Usb3Tunnel =
+        (BOOLEAN)(nhi->Values.Value[CM_VAL_USB3_TUNNEL] != 0);
+    nhi->U4Cfg.LaneBonding =
+        (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
+    nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
+    nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
+    nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
+    TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
+    TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
+    XhciTbtBindsInit(&nhi->Binds);
+    nhi->ArmOwed = 0;
+    nhi->U4On = 1;
+    nhi->Inert = CM_INERT_NONE;
+    nhi->Stage = CM_STAGE_ACTIVE;
+    nhi->BindOwed = 1;
+}
+
+/*
+ * The USB4 profile's bind, on the thread after the PnP path was released
+ * (record 22 section 4.4 steps 2 to 6): TbtU4Start - ring 0 taken over,
+ * never reset; test (d)'s router half; the host router; the discovery and
+ * preservation of section 9.2 (or the user's cleaning of 9.3); hot plug
+ * enabled; cold devices connected. Then the re-enumeration seam started,
+ * now that the router has named what it names (CmNhiNamePorts runs inside
+ * its discovery), the eject entry registered, the learning baseline taken,
+ * and the actions the start queued drained.
+ */
+static VOID cmU4Bind(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    LONG rc;
+    ULONG i;
+
+    nhi->Counters.U4Starts++;
+    rc = TbtU4Start(&nhi->U4, nhi->CommonVa, nhi->CommonPa.LowPart,
+                    nhi->DmaBytes);
+    CmLogNote(nhi, "u4.start", (ULONG)(-rc));
+    if (rc != TBT_OK) {
+        if (nhi->U4.Failed || nhi->Ring.Running) {
+            /* Failure after activation (record 22 section 3.5): the core
+             * stopped its rings; tunnels are left as found. */
+            nhi->Stage = CM_STAGE_FAILED;
+            CmLogNote(nhi, "u4.failed", nhi->U4.InertReason);
+            return;
+        }
+        cmInert(nhi, CM_INERT_RING_REFUSED);
+        return;
+    }
+    CmLogNote(nhi, "u4.host.id",
+              (nhi->U4.HostRouter.Vendor << 16) | nhi->U4.HostRouter.Device);
+    CmLogNote(nhi, "u4.host.ports", nhi->U4.PortCount);
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p != NULL) {
+            CmLogNote(nhi, "u4.port.start",
+                      (p->Index << 24) | ((p->State & 0xFFUL) << 16) |
+                          ((p->PcieDown & 0xFFUL) << 8) |
+                          (p->MapValid ? 1UL : 0));
+        }
+    }
+    CmReenumStart(nhi);
+    nhi->ReenumOn = 1;
+    CmReenumSetEject(nhi, cmU4Eject, nhi);
+    cmU4Arm(nhi);
+    CmNhiDrainActions(nhi);
+}
+
+/* The USB4 profile's counters and port snapshot, at stop. */
+static VOID cmU4LogCounters(PCM_NHI nhi)
+{
+    cmLogBlock(nhi, cmU4CounterNames, (const ULONG *)&nhi->U4.Counters,
+               sizeof(TBT_U4_COUNTERS) / sizeof(ULONG));
+    cmU4LogPorts(nhi);
 }
 
 /* The selection, on the thread. Sets StartStatus (a Code 10 refusal only
@@ -366,7 +1010,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
     if (nhi->Sel.Outcome == TBT_SEL_SOFTWARE) {
-        cmInert(nhi, CM_INERT_SOFTWARE_CM);
+        cmU4Activate(nhi);
         return;
     }
     if (nhi->Sel.Outcome != TBT_SEL_ICM) {
@@ -410,6 +1054,10 @@ VOID CmNhiBind(PCM_NHI nhi)
         cmInert(nhi, CM_INERT_POWER);
         return;
     }
+    if (nhi->U4On) {
+        cmU4Bind(nhi);
+        return;
+    }
     rc = TbtIcmStart(&nhi->Icm, nhi->CommonVa, nhi->CommonPa.LowPart,
                      TBT_RING_DMA_BYTES);
     CmLogNote(nhi, "cm.bind", (ULONG)(-rc));
@@ -449,7 +1097,15 @@ VOID CmNhiStopWork(PCM_NHI nhi)
         CmReenumStop(nhi);
         nhi->ReenumOn = 0;
     }
-    if (nhi->Icm.Ring != NULL) {
+    if (nhi->U4On) {
+        if (powered) {
+            CmNhiUnbind(nhi);
+        } else {
+            /* Out of D0 the suspend stopped the rings (TbtU4Suspend). */
+            CmLogNote(nhi, "cm.unbind.unpowered", nhi->DevicePower);
+        }
+        CmNhiDrainActions(nhi);
+    } else if (nhi->Icm.Ring != NULL) {
         if (powered) {
             TbtIcmUnbind(&nhi->Icm);
         } else {
@@ -464,7 +1120,7 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     CmDmaClose(nhi);
     if (powered && active) {
         (VOID)CmNhiSetBusMaster(nhi, FALSE);
-        CmNhiPlatformRelease(nhi);
+        CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
     } else if (nhi->BusMasterSetHere) {
         /* An inert stop writes nothing: a bit set before the start went
          * inert (its verification, or the ring's refusal) stays set. */
@@ -531,6 +1187,10 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmLogNote(nhi, "cm.approve.timeout.ms",
               nhi->Values.Value[CM_VAL_APPROVE_TIMEOUT_MS]);
     CmLogNote(nhi, "cm.safe.eject", nhi->Values.Value[CM_VAL_SAFE_EJECT]);
+    CmLogNote(nhi, "cm.usb3.tunnel", nhi->Values.Value[CM_VAL_USB3_TUNNEL]);
+    CmLogNote(nhi, "cm.lane.bonding", nhi->Values.Value[CM_VAL_LANE_BONDING]);
+    CmLogNote(nhi, "cm.preos.cleanup",
+              nhi->Values.Value[CM_VAL_PREOS_CLEANUP]);
     CmLogNote(nhi, "cm.bridge.override", nhi->Values.TunnelBridgeChars);
     CmLogNote(nhi, "cm.bridge.refused", nhi->Values.TunnelBridgeRefused);
 
@@ -547,6 +1207,12 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmZero(&nhi->Ring, sizeof(nhi->Ring));
     CmZero(&nhi->Sel, sizeof(nhi->Sel));
     CmZero(&nhi->Counters, sizeof(nhi->Counters));
+    CmZero(&nhi->U4, sizeof(nhi->U4));
+    CmZero(&nhi->Binds, sizeof(nhi->Binds));
+    nhi->U4On = 0;
+    nhi->ArmOwed = 0;
+    nhi->U4BatchCount = 0;
+    nhi->DmaBytes = 0;
     nhi->Hw = NULL;
     nhi->Inert = CM_INERT_NONE;
     nhi->Stage = CM_STAGE_INERT;

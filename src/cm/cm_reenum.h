@@ -74,6 +74,33 @@
  *                    tunnels to one port at a time and wants the PCI side
  *                    of its correspondence (record 22 section 7.6).
  *
+ * THE USB4 PROFILE (task 40-A.6; CM_NHI.U4On). The NHI hands every
+ * TBT_U4_ACTION to CmReenumAction in the TBT_ICM_ACTION form (cm_nhi.c,
+ * cmU4ToIcm): Kind TUNNEL_UP, TUNNEL_DOWN or RESYNC (a router removed below
+ * depth 1 is a RESYNC), Link the USB4 port (TBT_U4_PORT.Index, 1-based),
+ * Serial its connection generation, Why CM_U4_WHY_BASE (80h) or the USB4
+ * kind; no ICM table entry stands behind it. CmReenumStart is called from
+ * the bind, after TbtU4Start, so that the host router's mapping answer is
+ * known. An implementation, for both profiles:
+ *   - calls CmNhiWaitService(nhi) and CmNhiActionLive(nhi, action) where
+ *     this contract says TbtIcmService and TbtIcmActionLive (they forward
+ *     to those under the ICM client);
+ *   - acts on the one member CmNhiActionMember(nhi, action) returns, the
+ *     index in Topo.Set of the port's own bridge (record 22 section 7.6,
+ *     router-named or learned), and on the whole set when it returns
+ *     XHCI_TBT_NO_MEMBER (always, under the ICM client);
+ *   - calls CmNhiNamePorts(nhi) after each XhciTbtTopoFind it acts on and
+ *     before it fills Port[] from Topo.Set and publishes the claims: the
+ *     router-named members join the set there (XhciTbtTopoAddNamed, which
+ *     may void the discovery INCOMPLETE or MANY: discover again);
+ *   - keeps Port[i] for Topo.Set[i], i below Topo.Tunnels, its Flags'
+ *     CM_PORT_ACTIVE read by the NHI's learning (XhciTbtLearn's `active`)
+ *     and its eject hook's bridge-to-port lookup.
+ * The NHI keeps the correspondence (CM_NHI.Binds) and drives the learning
+ * itself; CmReenumSuspend's bound is the ICM's only (the USB4 profile logs
+ * TbtU4ResumeBoundUs itself) and must not read CM_NHI.Icm's profile while
+ * U4On.
+ *
  * CONTRACT. Every call above runs on the NHI's connection-manager thread
  * at PASSIVE_LEVEL with no lock held, serialised with the ICM traffic
  * (section 6.5); none is called concurrently with another for the same

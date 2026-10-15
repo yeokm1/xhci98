@@ -8,12 +8,15 @@
  * carry the pool pair as optional rows.
  *
  * The ring block (record 21 section 4.2): one common buffer of
- * TBT_RING_DMA_BYTES, from the adapter IoGetDmaAdapter returns on the NHI's
+ * CM_NHI.DmaBytes - TBT_RING_DMA_BYTES for the ICM client's ten-entry
+ * rings, TBT_RING_U4_DMA_BYTES for the USB4 profile's sixteen (record 22
+ * section 4.4 step 3) - from the adapter IoGetDmaAdapter returns on the NHI's
  * PDO with the description hcd_dma.c passes (Windows 98 SE's own
  * openhci.sys and uhcd.sys pass it too: Master, ScatterGather,
  * Dma32BitAddresses, PCIBus), cache-enabled as AGENTS.md's DMA rule asks,
  * below 4 GB - checked, not assumed - and 16-byte aligned (tbt_ring.h).
- * Allocated once at a start whose selection said ICM, freed at the stop
+ * Allocated once at a start whose selection said ICM or admitted the USB4
+ * software connection manager, freed at the stop
  * after the client's rings are stopped, and kept (counted) if they cannot
  * be shown stopped.
  *
@@ -55,7 +58,10 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
     desc.ScatterGather = TRUE;
     desc.Dma32BitAddresses = TRUE;
     desc.InterfaceType = PCIBus;
-    desc.MaximumLength = TBT_RING_DMA_BYTES;
+    if (nhi->DmaBytes == 0) {
+        nhi->DmaBytes = TBT_RING_DMA_BYTES;
+    }
+    desc.MaximumLength = nhi->DmaBytes;
 
     mapRegisters = 0;
     nhi->Dma = IoGetDmaAdapter(nhi->Common.Pdo, &desc, &mapRegisters);
@@ -65,12 +71,12 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
     pa.LowPart = 0;
     pa.HighPart = 0;
     va = nhi->Dma->DmaOperations->AllocateCommonBuffer(
-        nhi->Dma, TBT_RING_DMA_BYTES, &pa, TRUE);
+        nhi->Dma, nhi->DmaBytes, &pa, TRUE);
     if (va != NULL &&
         (pa.HighPart != 0 || (pa.LowPart & (TBT_RING_DMA_ALIGN - 1)) != 0 ||
          ((ULONG_PTR)va & (TBT_RING_DMA_ALIGN - 1)) != 0)) {
         nhi->Dma->DmaOperations->FreeCommonBuffer(
-            nhi->Dma, TBT_RING_DMA_BYTES, pa, va, TRUE);
+            nhi->Dma, nhi->DmaBytes, pa, va, TRUE);
         va = NULL;
     }
     if (va == NULL) {
@@ -78,7 +84,7 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
         nhi->Dma = NULL;
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    CmZero(va, TBT_RING_DMA_BYTES);
+    CmZero(va, nhi->DmaBytes);
     nhi->CommonVa = va;
     nhi->CommonPa = pa;
     return STATUS_SUCCESS;
@@ -101,7 +107,7 @@ VOID CmDmaClose(PCM_NHI nhi)
             return;
         }
         nhi->Dma->DmaOperations->FreeCommonBuffer(
-            nhi->Dma, TBT_RING_DMA_BYTES, nhi->CommonPa, nhi->CommonVa, TRUE);
+            nhi->Dma, nhi->DmaBytes, nhi->CommonPa, nhi->CommonVa, TRUE);
         nhi->CommonVa = NULL;
     }
     nhi->Dma->DmaOperations->PutDmaAdapter(nhi->Dma);
