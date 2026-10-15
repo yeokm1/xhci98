@@ -3054,13 +3054,16 @@ Both layouts also carry the release's `LICENSE`, `NOTICE.TXT` and
 `readme.txt` as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and
 `nvme98-readme.txt` beside the driver files, and the amd64 package the
 build's own `nvme98-test.cer` with its test-signed `nvme98.sys`. The
-`debug-` directories carry none of it. A cut also needs the release notes
-to name the bundled version in place of their "NVMe drives behind
-Thunderbolt or USB4" placeholder, and a cut without nvme98 refuses while
-that placeholder is still there (a `-TestLabel` cut is only warned of
-either). The generated readme records the version, the SHA-256 of
-`SHA256SUMS.txt` and the interface version (and an override), which is how
-`-UploadSetOnly` holds a re-assembly to the same pins; `-Nvme98HeaderPath`,
+`debug-` directories carry none of it. A cut also needs the release notes'
+one declaration line ("NVMe drives behind Thunderbolt or USB4") to agree
+with it: "This download bundles nvme98 `<version>`." (a note in brackets
+may follow the version, such as "(dry cut only)") or "This download
+bundles no nvme98."; the unfilled placeholder or a disagreement is refused
+(a `-TestLabel` cut is only warned). The generated readme records the
+version, the SHA-256 of `SHA256SUMS.txt` and the interface version, and an
+override with the mismatch it overrode, and `-UploadSetOnly` holds a
+re-assembly to those three pins (an override is a verdict against the
+checkout's header, so a re-assembly passes it again where needed); `-Nvme98HeaderPath`,
 the self-tests' substitute header, is refused without `-SkipBinaryGates`.
 A `0.1.x` build's interface version is always `none`, and both layouts
 must carry `readme.txt` and the 64-bit `nvme98-test.cer`. For example, the 0.1.1.0 dry cut:
@@ -3069,8 +3072,12 @@ must carry `readme.txt` and the 64-bit `nvme98-test.cer`. For example, the 0.1.1
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release ^
     -Nvme98Version 0.1.1.0 -Nvme98Dir <nvme98>\releases\0.1.1.0 ^
     -Nvme98SumsSha256 0d91c7a02100d0e82aaba19767c1b3f75cf5ff9a87f2439d268220fc84513e58 ^
-    -Nvme98InterfaceVersion none
+    -Nvme98InterfaceVersion none -Nvme98AllowInterfaceMismatch
 ```
+
+(`0.1.1.0` has no link-state receiver, so its interface version is `none`
+while `src\cm\nvme98cm.h` declares `1`: the override is required, is the
+dry cut's alone, and is logged in the generated readme.)
 
 The gates hold these files by exactly the paths the pin produces
 (`Get-Nvme98PackageFiles`, `scripts\package\package-common.ps1`) and by

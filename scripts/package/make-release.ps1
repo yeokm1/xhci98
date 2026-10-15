@@ -1081,18 +1081,16 @@ function Assert-ReportBatchContent {
 # -UploadSetOnly knows which build a published release was cut with.
 $nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Its SHA256SUMS\.txt has the SHA-256\r?\n  ([0-9A-F]{64})\.\r?\n  Interface version: (\S+?)( \(MISMATCH OVERRIDDEN, see below\))?\.'
 
-# The release notes' placeholder for the bundled version, which a cut
-# replaces: with "nvme98 `<version>`", or with a statement that the download
-# carries none.
-$nvme98NotesPlaceholder = "(version: filled in at the cut)"
 
-# The same pins as that line records, for -UploadSetOnly's comparison.
+# The content pins that line records - version, SHA256SUMS.txt hash and
+# interface version - for -UploadSetOnly's comparison. Whether the interface
+# check was overridden is not a pin: it is a verdict against the checkout's
+# header, which may have moved since the cut, so a re-assembly passes
+# -Nvme98AllowInterfaceMismatch where today's header needs it.
 function Get-Nvme98PinText {
     param($Release)
     if ($null -eq $Release) { return "" }
-    $t = "{0}|{1}|{2}" -f $Release.Version, $Release.SumsSha256, $Release.Interface
-    if ($Release.Overridden) { $t += "|overridden" }
-    return $t
+    return ("{0}|{1}|{2}" -f $Release.Version, $Release.SumsSha256, $Release.Interface)
 }
 
 # The project test certificate's public half (design record 19), published at
@@ -2852,7 +2850,6 @@ To cut one, run this script without it.
             $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $nvme98ReadmePattern)
             if ($m.Success) {
                 $pubNvme98 = "{0}|{1}|{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
-                if ($m.Groups[4].Success) { $pubNvme98 += "|overridden" }
             }
         }
         $askNvme98 = Get-Nvme98PinText -Release $nvme98
@@ -3045,21 +3042,15 @@ the result in place of the marker, then cut again. The first:
     }
     Write-Ok "no TODO(...) or TBD in the $Version history entry or the release notes"
     # The bundled nvme98 version is recorded in the release notes (nvme98's
-    # maintainers): the cut fills the placeholder there, and a release whose
-    # notes name another version, or none, is refused. A TEST cut is warned.
+    # maintainers), in one declaration line the cut fills in: the version
+    # bundled, or that there is none (Get-Nvme98NotesFault). A disagreement
+    # or the unfilled placeholder is refused; a TEST cut is warned.
     $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
-    if ($null -eq $nvme98 -and $notesText.Contains($nvme98NotesPlaceholder)) {
-        $why = "docs\using\release-notes.md still has the bundled nvme98 placeholder, and this cut bundles no nvme98: write that this download carries none in its place ('NVMe drives behind Thunderbolt or USB4')."
+    $why = Get-Nvme98NotesFault -Text $notesText -Version $(if ($null -ne $nvme98) { $nvme98.Version } else { "" })
+    if ($why -ne "") {
         if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
-    }
-    if ($null -ne $nvme98) {
-        $bt = [string][char]96
-        if ($notesText -notmatch ("nvme98 " + $bt + "?" + [regex]::Escape($nvme98.Version) + $bt + "?(?![0-9.])")) {
-            $why = "docs\using\release-notes.md does not name the bundled nvme98 ``$($nvme98.Version)``: write it in place of the placeholder in 'NVMe drives behind Thunderbolt or USB4'."
-            if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
-        } else {
-            Write-Ok ("the release notes name the bundled nvme98 {0}" -f $nvme98.Version)
-        }
+    } else {
+        Write-Ok "the release notes' nvme98 declaration matches this cut"
     }
 
 

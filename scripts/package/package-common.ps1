@@ -1102,6 +1102,35 @@ function Test-Nvme98Interface {
     return ""
 }
 
+function Get-Nvme98NotesFault {
+    # The release notes' one bundle declaration, "This download bundles
+    # nvme98 `<version>`." (a parenthesised note may follow the version, as
+    # in a dry cut's "(dry cut only)") or "This download bundles no nvme98.",
+    # against what the cut bundles ($Version, "" for none). Returns "" when
+    # they agree, else why not; the cut fills the placeholder in.
+    param([string]$Text, [string]$Version)
+    $ms = [regex]::Matches($Text, '(?m)^This download bundles (.+?)\.[ \t]*\r?$')
+    if ($ms.Count -ne 1) {
+        return "docs\using\release-notes.md has $($ms.Count) 'This download bundles ...' declarations, not one ('NVMe drives behind Thunderbolt or USB4')."
+    }
+    $said = $ms[0].Groups[1].Value.Trim()
+    if ($said.Contains("filled in at the cut")) {
+        $want = if ($Version -eq "") { "no nvme98" } else { "nvme98 ``$Version``" }
+        return "docs\using\release-notes.md still has the bundled nvme98 placeholder: write 'This download bundles $want.' in its place ('NVMe drives behind Thunderbolt or USB4')."
+    }
+    if ($Version -eq "") {
+        if ($said -ne "no nvme98") {
+            return "docs\using\release-notes.md says 'This download bundles $said.', and this cut bundles no nvme98: write 'This download bundles no nvme98.'"
+        }
+        return ""
+    }
+    $bt = [string][char]96
+    if ($said -notmatch ('^nvme98 ' + $bt + '?' + [regex]::Escape($Version) + $bt + '?( \([^)]*\))?$')) {
+        return "docs\using\release-notes.md says 'This download bundles $said.', and this cut bundles nvme98 $Version."
+    }
+    return ""
+}
+
 function Resolve-Nvme98Input {
     # The packaging scripts' one entry point: $null when no nvme98 input was
     # named (the package is built as before, with no nvme98), else the

@@ -297,8 +297,7 @@ try {
     $nvOldMissing = $nvOldFiles.Clone(); $nvOldMissing.Remove("amd64\nvme98-test.cer")
     $nvMissing = New-Nvme98Release -Name "nv-missing" -Files $nvOldMissing
     $nv010 = New-Nvme98Release -Name "nv-0.1.0.0" -Files $nvOldFiles
-    $nvNewNoCer = $nvNewFiles.Clone(); $nvNewNoCer.Remove("x64
-vme98-test.cer")
+    $nvNewNoCer = $nvNewFiles.Clone(); $nvNewNoCer.Remove("x64\nvme98-test.cer")
     $nvNoCer = New-Nvme98Release -Name "nv-nocer" -Files $nvNewNoCer
     foreach ($bad in @(
         @{ Args = (Get-NvArgs $nvNew "0.2.0.0") | ForEach-Object { if ($_ -eq $nvNew.Sha) { "0" * 64 } else { $_ } }; Says = "not the pinned" },
@@ -310,8 +309,7 @@ vme98-test.cer")
         @{ Args = (Get-NvArgs $nvNew "0.1.1.0"); Says = "old layout carries" },
         @{ Args = (Get-NvArgs $nvOld "0.2.0.0"); Says = "new layout carries" },
         @{ Args = (Get-NvArgs $nv010 "0.1.0.0"); Says = "is never bundled" },
-        @{ Args = (Get-NvArgs $nvNoCer "0.2.0.0"); Says = "x64
-vme98-test.cer" },
+        @{ Args = (Get-NvArgs $nvNoCer "0.2.0.0"); Says = "x64\nvme98-test.cer" },
         @{ Args = (Get-NvArgs $nvOld "0.1.1.0" "1" $nvHeader1); Says = "has no link-state receiver" },
         @{ Args = (Get-NvArgs $nvNew "0.2"); Says = "not a four-part version" },
         @{ Args = @("-Nvme98Version", "0.2.0.0", "-Nvme98Dir", $nvNew.Dir); Says = "go together" },
@@ -338,6 +336,27 @@ vme98-test.cer" },
     Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "self-tests only") `
         ("-Nvme98HeaderPath was accepted without -SkipBinaryGates. Output:`n" + $r.Output)
 
+    # The release notes' one declaration, against what a cut bundles.
+    $bt = [string][char]96
+    foreach ($c in @(
+        @{ Text = "x`r`nThis download bundles nvme98 ${bt}0.1.1.0${bt} (dry cut only).`r`ny"; V = "0.1.1.0"; Ok = $true },
+        @{ Text = "This download bundles nvme98 ${bt}0.2.0.0${bt}.`r`n"; V = "0.2.0.0"; Ok = $true },
+        @{ Text = "This download bundles nvme98 0.2.0.0.`r`n"; V = "0.2.0.0"; Ok = $true },
+        @{ Text = "This download bundles no nvme98.`r`n"; V = ""; Ok = $true },
+        @{ Text = "This download bundles nvme98 ${bt}(version: filled in at the cut)${bt}.`r`n"; V = "0.2.0.0"; Ok = $false },
+        @{ Text = "This download bundles nvme98 ${bt}(version: filled in at the cut)${bt}.`r`n"; V = ""; Ok = $false },
+        @{ Text = "This download bundles nvme98 ${bt}0.2.0.0${bt}.`r`n"; V = ""; Ok = $false },
+        @{ Text = "This download bundles nvme98 ${bt}0.2.0.0${bt}.`r`n"; V = "0.2.0.1"; Ok = $false },
+        @{ Text = "This download bundles no nvme98.`r`n"; V = "0.2.0.0"; Ok = $false },
+        @{ Text = "nvme98 ${bt}0.2.0.0${bt} is mentioned, but there is no declaration.`r`n"; V = "0.2.0.0"; Ok = $false },
+        @{ Text = "This download bundles no nvme98.`r`nThis download bundles nvme98 0.2.0.0.`r`n"; V = "0.2.0.0"; Ok = $false }
+    )) {
+        $why = Get-Nvme98NotesFault -Text $c.Text -Version $c.V
+        Assert-True (($why -eq "") -eq $c.Ok) ("Get-Nvme98NotesFault on '" + $c.Text.Trim() + "' for '" + $c.V + "' answered '" + $why + "'.")
+    }
+    $realNotes = [System.IO.File]::ReadAllText((Join-Path $repo "docs\using\release-notes.md"))
+    Assert-True ((Get-Nvme98NotesFault -Text $realNotes -Version "0.2.0.0") -match "placeholder") `
+        "docs\using\release-notes.md no longer carries one bundle declaration with the placeholder the cut fills in."
     # make-release.ps1: the release legs alone get the pins, the bundled
     # files are accepted beside the declared set by exactly their paths, the
     # upload set copies them from the release folder (releases\ never holds

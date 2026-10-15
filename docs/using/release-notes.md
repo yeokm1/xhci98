@@ -1285,6 +1285,10 @@ Disk, and point it at the package directory.
 
 This download bundles nvme98 `(version: filled in at the cut)`.
 
+<!-- The cut replaces the line above with "This download bundles nvme98
+`<version>`." or "This download bundles no nvme98."
+(scripts\package\make-release.ps1 holds it to what the cut bundles). -->
+
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of
 its own, which none of these systems has. A download that bundles one
 names its version in the line above, and its `release-x86\` and
