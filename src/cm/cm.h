@@ -47,6 +47,7 @@
 #include "tbt_hw.h"
 #include "tbt_u4cm.h"
 #include "cm_reenum.h"
+#include "cm_statb.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -293,6 +294,10 @@ typedef struct _CM_NHI {
     DEVICE_POWER_STATE DirectWant;
 
     CM_COUNTERS Counters;
+
+    /* The status record for the install tool's viewer (cm_statos.c,
+     * design record 24 section 3). */
+    CM_STATUS_PUB StatusPub;
 } CM_NHI, *PCM_NHI;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -427,6 +432,14 @@ NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp);
 
 /* cm_reg.c */
 VOID CmReadValues(PCM_NHI nhi);
+
+/* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
+ * first record); CmStatusPass once per thread pass; CmStatusStopped after
+ * the stop's work; CmStatusClose in the removal (idempotent). */
+VOID CmStatusOpen(PCM_NHI nhi);
+VOID CmStatusClose(PCM_NHI nhi);
+VOID CmStatusPass(PCM_NHI nhi);
+VOID CmStatusStopped(PCM_NHI nhi);
 
 /* cm_log.c */
 VOID CmLogInit(PCM_NHI nhi);

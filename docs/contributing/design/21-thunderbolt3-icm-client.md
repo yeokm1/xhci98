@@ -2132,6 +2132,25 @@ before the driver bound is offered for eject only after a re-plug; that a
 dock is listed under its switch port's name; and, on Windows 2000, whether
 an unplug without an eject still shows the Unsafe Removal dialog.
 
+**The eject on 98 SE and ME, and a viewer on every target** (owner,
+2026-10-15). Nothing on those systems offers the eject the 9x half above
+prepares, and the owner decided not to borrow NUSB's applet. In its place
+the install tool is to gain `XHCIINST /devices` and `XHCIINST /eject`
+(design record 24, `24-thunderbolt-device-tool.md`, before code): a list of
+the devices behind this driver's verified tunnel ports with what it
+publishes about each router, and the safe removal of one of them - by
+query-remove then remove on 98 SE and ME, and by the eject request Safely
+Remove Hardware makes on 2000 and later, which the tool also makes for a
+device the applet does not list. This supersedes, for 98 SE and ME, the
+fallback above ("the 9x half ships off and safe eject is NT-only"): the
+`DN_REMOVABLE` mark stays as it is, a hint the tool shows, and what ships
+on those systems is decided by record 24's legs, not by whether an applet
+offers the eject. "Offered for eject only after a re-plug" above is about
+the applets; the tool attempts a device behind a verified port whether or
+not it is marked. Record 24 also carries the status record this driver
+publishes for the viewer, and what the 9x worker must do after a removal
+it did not make.
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at
