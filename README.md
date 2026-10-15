@@ -40,6 +40,7 @@ Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driv
   - [Removing a device safely](#removing-a-device-safely)
   - [NVMe drives](#nvme-drives)
   - [Things to know](#things-to-know)
+- [The xHCI98 USB Tree](#the-xhci98-usb-tree)
 - [Installation Steps](#installation-steps)
   - [The package](#the-package)
   - [Install with INSTALL.BAT](#install-with-installbat)
@@ -127,10 +128,10 @@ Close the files open on the device first, as for any removable disk. Then:
 
 - **Windows 2000:** stop the device in "Unplug or Eject Hardware", then unplug it. Without the stop, Windows 2000 shows its "Unsafe Removal of Device" warning.
 - **Windows XP, Vista and 7:** stop the device in "Safely Remove Hardware", then unplug it.
-- **Windows 98 SE and ME:** these systems have no such dialog, so use the command-line tool below, `INSTALL /eject`. Until you unplug the device, Device Manager's Refresh can start it again.
+- **Windows 98 SE and ME:** these systems have no such dialog, so use the xHCI98 USB Tree (below), or the command-line tool, `INSTALL /eject`. Until you unplug the device, Device Manager's Refresh can start it again.
 - **A dock** is listed under a generic PCI bridge name, the dock's own switch; stopping it stops everything in the dock.
 
-On Windows 2000 to 7 the tool is needed only for a device missing from Windows' list (below).
+On Windows 2000 to 7 the two tools are needed only for a device missing from Windows' list (below).
 
 **The command-line tool**
 
@@ -170,6 +171,17 @@ The 64-bit nvme98 is test-signed by its own project, as `xhci98.sys` is by this 
 - On Windows 98 SE and ME the Thunderbolt driver stays loaded until Windows restarts, so a disable, update or removal of it takes full effect after a restart.
 - If the platform switches a USB4 controller off behind Windows' back, the driver stops using it; disable and enable the controller in Device Manager, or restart, to use it again.
 - The settings (`XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` and the rest) are in the controller's driver key, under the System class; the [release notes](docs/using/release-notes.md)' "The connection manager's registry values" lists them all, and `INSTALL.BAT` asks about the first three. It never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding` and `XhciCmPreOsCleanup`: leave them at their defaults unless a problem report calls for a change, which `INSTALL /set Name=Value` makes.
+
+## The xHCI98 USB Tree
+
+`XHCITR.EXE` (`XHCITR64.EXE` on 64-bit Windows) shows every USB controller, hub and device, and every Thunderbolt 3 and USB4 controller and device, with their details. The install puts it in `%windir%\XHCI98\` and starts it at login as an icon in the notification area. It needs no administrator rights.
+
+- **The window:** a tree on the left and the selected item's details on the right: speed, port, IDs, driver, Device Manager status and, with View > Descriptors, its descriptors decoded. The View menu's check boxes show or hide each kind of item. File > Save Report writes everything to a text file for a bug report.
+- **The icon:** a left click lists the Thunderbolt and USB4 devices you can remove safely; a double click opens the window. Balloons say when a device connects, waits for approval or disconnects (Windows 2000, ME and later; on 98 SE the icon's tooltip shows the last event).
+- **Safely Remove:** pick the device in the icon's menu or the window, confirm, and unplug it when the tool says so. It follows the same rules as `INSTALL /eject`, on every system.
+- **Plain USB devices** are shown, not stopped: on Windows 2000 to 7 use Windows' own Safely Remove; on 98 SE and ME close the files and wait for the activity to end before unplugging.
+
+`INSTALL /notray` installs without starting it at login. It is also in the package at `tools\xhcitr\`.
 
 ## Installation Steps
 

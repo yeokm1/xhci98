@@ -162,7 +162,8 @@ included.
 ## What `3.0.0.0` adds
 
 `3.0.0.0` adds a third driver, `xhcicm.sys`, for Thunderbolt and USB4
-controllers, and an install tool. `xhci98.sys` and `xhciuas.sys` carry
+controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
+`xhci98.sys` and `xhciuas.sys` carry
 `2.4.0.0`'s code under the new version number.
 
 - **Thunderbolt 3 and USB4, with `xhcicm.sys`.** A Thunderbolt or USB4
@@ -196,6 +197,13 @@ controllers, and an install tool. `xhci98.sys` and `xhciuas.sys` carry
   the Thunderbolt and USB4 devices connected now and the Windows devices
   behind each, and `INSTALL /eject` stops one, on every system (design
   record 24).
+- **The xHCI98 USB Tree** (`XHCITR.EXE`, `XHCITR64.EXE` on 64-bit
+  Windows): a window with every USB controller, hub and device and every
+  Thunderbolt and USB4 controller and device, with their details and
+  descriptors, and an icon in the notification area that starts at login
+  and removes a Thunderbolt or USB4 device safely, with no administrator
+  rights ("The xHCI98 USB Tree", below; design record 25). `xhcicm.sys`
+  gains a read-only query device for it.
 - **Device Manager names by generation**: "Thunderbolt and USB4 in Device
   Manager", below.
 - **A link-state channel for `nvme98`**: `xhcicm.sys` tells the NVMe
@@ -286,6 +294,34 @@ pre-boot support, or by a firmware connection manager - keeps its tunnel
 and works: `xhcicm.sys` never resets a tunnel it finds at its start
 (`XhciCmPreOsCleanup` below is the one exception, and only when set).
 
+### The xHCI98 USB Tree
+
+`XHCITR.EXE` (`XHCITR64.EXE` on XP x64, Vista x64 and 7 x64) is installed
+by `INSTALL.BAT` in `%windir%\XHCI98\` and started at login as an icon in
+the notification area (`INSTALL /notray` leaves the icon out). It runs as
+the logged-on user, with no administrator rights.
+
+- **The window** shows every USB host controller (this driver's and
+  Windows' own), its hubs and devices with speed, port, IDs, driver and
+  Device Manager status, and every Thunderbolt and USB4 controller with
+  its devices, link, approval, tunnels and the Windows devices behind
+  them. View > Descriptors decodes the selected device's descriptors; the
+  View menu's check boxes hide or show each kind of item; File > Save
+  Report writes it all to a text file.
+- **The icon's menu** lists the Thunderbolt and USB4 devices that can be
+  removed safely. Removing one follows the rules of `INSTALL /eject`: the
+  tool confirms, waits for a current reading from `xhcicm.sys`, asks
+  Windows to stop the device and says when to unplug it.
+- **Balloons** say when a device connects, waits for approval or
+  disconnects, on Windows 2000, ME and later; on 98 SE the icon's tooltip
+  shows the last event. A balloon never says how a device left: only a
+  removal the tool made reports its outcome.
+- The link rate and width of a USB4 device are read from its lane
+  adapter; a Thunderbolt 3 device's come from the controller's firmware.
+  For a USB device the descriptors give the SuperSpeed rates it supports;
+  the negotiated lane rate is not reported.
+- It shows plain USB devices but does not stop them.
+
 ### Removing a Thunderbolt or USB4 device safely
 
 Close the files open on the device first, as for any removable disk. On
@@ -293,8 +329,8 @@ every system `INSTALL /devices` shows what is connected and
 `INSTALL /eject` removes one device safely (`XHCIINST`, or `XHCIIN64` on
 64-bit Windows, in `tools\xhciinst\` takes the same switches).
 
-- **Windows 98 SE and ME:** run `INSTALL /eject`; these systems have no
-  other way, since the "Unplug or Eject Hardware" applet NUSB installs
+- **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
+  these systems have no other way, since the "Unplug or Eject Hardware" applet NUSB installs
   does not list a device behind a Thunderbolt port. The tool lists the
   devices, asks which one, and asks Windows to query the device's
   removal (a volume with a file open on it refuses, and the tool says so
