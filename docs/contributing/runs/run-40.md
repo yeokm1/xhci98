@@ -420,3 +420,81 @@ stays beside the new one until the uninstall (record 23 decision D7).
 - The filter install on Windows 2000 through the tool (the upstream
   port's Code 12 now answered with the restart): not re-read on the
   Thunderbolt vehicle with this tool.
+
+## 40-A.6, 40-A.8 and 40-A.9 - The driver half, read on the emulator
+
+**Verdict: the USB4 profile runs end to end on Windows 98 SE and Windows
+2000** (2026-10-15), on `usb4-generic` with `host-model=minimal` and
+`intel-adl`, a cold device, hot plug, unplug and re-plug, the pre-OS
+connection manager's tunnel preserved, a USB3 tunnel, the policy values,
+and on 2000 the safe eject tearing the tunnel down before "Safe To Remove
+Hardware". One fault was found outside this task's code: on Windows 98 SE
+the re-enumeration seam's CONFIGMG call blocks the connection-manager
+thread while an Add New Hardware wizard is open on a tunnelled device
+(below).
+
+**The vehicle.** Development host A, TCG, the `usb4-emu` fork in
+`vm\usb4\bin` (the `a50c19e` build), through task 39-0.7's launcher with
+`-RunRoot p40-drv`, `-BootStrict` and `-trace usb4_*`; QMP and VNC on
+47984 to 47989. 98 SE from overlays of `vm\t26\win98-gold.qcow2`
+(`u98-*`), 2000 from an overlay of `vm\win2k-xonly.img` (`u2k-min`), one
+vCPU each. The `qemu` flavour of `xhcicm.sys` from this branch, staged with
+`xhcicm.inf` on the transfer drive (D: on 98 SE, E: on 2000) in a copy that
+writes `XhciLogVerbosity` 2 (and, for leg U.10, the policy values); its
+port-0xE9 lines are the "log" below. The binary was the integration of this
+branch with task 39-A.5's `cm_reenum.c` (the trial merge `p40-drv-legs`,
+then this branch after it merged `3.0.0.0` at `c2c9ca3d`), except where a
+leg names the earlier stub build. Driven over QMP keys and screendumps.
+
+**Install.** 98 SE: the tunnel bridge through 98 SE's wizard
+(`MACHINE2.INF`), then the host interface: Add New Hardware, "Specify a
+location" D:\, "xHCI98 USB4 Host Interface" from `xhcicm.inf` by its class
+line `PCI\CC_0C0340`, no restart. 2000: `devq update E:\xhcicm.inf
+"PCI\VEN_1B36&DEV_00F4&CC_0C0340"` (OK, `reboot=0`; Windows 2000's
+`UpdateDriverForPlugAndPlayDevices` finds the device only by a hardware id,
+and `PCI\CC_0C0340` is a compatible one, so the class line is reached
+through the `&CC_0C0340` hardware id), then the filter `devq update
+E:\nt\xhcicmf.inf "PCI\VEN_1B36&DEV_0001&CC_0604"` (OK, `reboot=0`), and
+for the NVMe `nvme98` 0.1.1.0 (its published x86 build, read-only) by
+`devq update ... "PCI\VEN_1B36&DEV_0010&CC_010802"` after the first tunnel.
+
+**The selection** (log, every guest): `cm.select.outcome=00000004`
+(SOFTWARE), `u4.select.route=00000001` (no firmware CM by identity),
+`cm.select.caps=00000010`; on `minimal` the host router `46F4:4040` with
+two ports (lanes 1-2 and 3-4, PCIe Down 6 and 7); on `intel-adl`
+`8087:463E`, PCIe Down 8 and 9, `u4.quirk=463E0001` (the USB3 bandwidth
+row). On both models the mapping operation answered: port 1 named
+`00:05.0` (`u4.named=01002802`, KNOWN: the tunnel bridge was already the
+set's member by its SHPC source) and port 2 a location with no bridge
+(`02000004`, NO_BRIDGE; these guests carry one tunnel bridge).
+
+| Leg | Guest, setup | What was read |
+|---|---|---|
+| U.1 cold device | 98 SE, `minimal`, device at power-on, no pre-OS CM (`u98-leg`) | trace: ring 0 disabled then programmed (no Host Interface Reset), host router enumerated, mapping (`30h`), Get Capabilities (`31h`), Buffer Allocation (`33h`) on the host and the device router, DROM Read (`24h`), bonding (lane 1's hot plug event acknowledged), TMU posting, Configuration Valid, the four PCIe entries, Path Enable both ends, `PCIe tunnel up`, and a USB3 tunnel beside it; log `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, `u4.action=01010001`, `cm.reenum.9x.reenumerate=00002800` (CR_SUCCESS); Add New Hardware for "PCI Card" (the NVMe) with no refresh |
+| U.3 unplug, re-plug | the same guest | unplug: `u4.linkdown=01000109` (path proven closed), `u4.action=02010001`, the bridge re-enumerated, both host-side tunnels invalidated and the USB3 bandwidth released in the trace; re-plug: generation 2, `PCIe tunnel up`, "PCI Card" again |
+| U.2 hot plug | 2000, `minimal`, nothing at power-on, filter installed (`u2k-min`) | `device_add enc0`: the tunnels built, `u4.action=01010001`, the filter's invalidation, Found New Hardware for the NVMe at once, `nvme98` bound, the "Unplug or Eject Hardware" icon in the tray |
+| 40-A.9 safe eject | the same guest | the NVMe listed ("NVM Express Controller (nvme98) at PCI Slot 4"); Stop, OK: `cm.reenum.eject=00000028`, `u4.eject.bridge=00000028`, `u4.eject=00000100` (port 1, TBT_OK), the trace `PCIe tunnel down reason 1 (admin-down)` before "Safe To Remove Hardware"; `device_del enc0` then: no dialog and no further action (the port stays down until the re-plug); `device_add enc0`: generation 2, the tunnels rebuilt, the NVMe listed again. That build tore the port's USB3 tunnel down with the PCIe one; the driver was then changed to tear down the PCIe tunnel alone (a USB3 tunnel carries the host xHCI's devices, which the eject never asked to stop), host-tested and not read here again |
+| U.5 and U.6 | 98 SE, `intel-adl` with `preos-cm=on` and `USB3=1` (`u98-adl`, `u98-adl2`, `u98-adl3`) | `u4.preserved=00010809`: the pre-OS tunnel preserved (port UP, `hd` 8, `hu` 9), no reset, no transition and no reset of any kind in the trace after the driver's ring takeover, nothing re-enumerated; unplug (stub build): `u4.linkdown=01000109` and the host side torn down; re-plug: built here with bonding, the USB3 tunnel and its Host Controller Ack, the USB disk attached to the tunnel's `qemu-xhci` at 5000 Mb/s (`info usb`) - U.8's fabric half |
+| U.10 policy values | 98 SE, `minimal`, `USB3=1`, `XhciCmApprove` 0, `XhciCmUsb3Tunnel` 0, `XhciCmLaneBonding` 0 (`u98-pol`) | the router enumerated and Configuration Valid, the port UP with no PCIe tunnel and no USB3 tunnel (`usb3_want ... attached=0`), the host's lane 1 written with Lane Disable (LANE_ADP_CS_1 bit 14) |
+
+**The fault (task 39-A.5's code, not this task's).** On 98 SE with
+`cm_reenum.c`, while an Add New Hardware wizard is open on a tunnel port's
+child (the NVMe, no driver on this image), a CONFIGMG call the seam makes
+on the connection-manager thread blocks until the wizard closes: the
+thread stops, ring 0 is not serviced, the routers' hot plug events
+overflow the RX ring and an unplug is not seen. Cancelling the wizard
+unblocked it at once, and the queued unplug and re-plug then ran in order
+(`cm.reenum.9x.query-remove=00000000`, the removal, the re-enumeration,
+the tunnel up). The stub build in the same setup kept polling throughout.
+Reported to the orchestrator for task 39-A.5.
+
+**Not read here.** U.4 (unplug during I/O, the harness), U.7 (pre-OS
+cleaning), U.9 (disable and enable), U.11 (two tunnel bridges), U.12 (a
+daisy chain), U.13 (inert starts), the `asm4242` host model, suspend and
+resume, ME and the NT 5.1 and 6.x guests (40-V.3), and a Thunderbolt 3
+device router behind a USB4 host, for which the emulator has no preset
+(record 22 section 8; task 40-A.8 is host-tested only). The NVMe's volume
+was not mounted on 98 SE (no NVMe driver on the image). The 2000 legs'
+INF copy also carried a test-only `PCI\VEN_1B36&DEV_00F4` model line; which
+model line ranked there was not read. Evidence in
+`vm\p40-drv\<run>\` (traces, debug-console logs, screendumps).

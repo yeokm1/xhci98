@@ -1413,9 +1413,9 @@ static ULONG cmPoll(PCM_NHI nhi, const TBT_ICM_ACTION *action, ULONG want)
         if (state != XHCI_TBT_POLL_RUNNING) {
             break;
         }
-        TbtIcmService(&nhi->Icm);
-        if (want == XHCI_TBT_WANT_UP &&
-            !TbtIcmActionLive(&nhi->Icm, action)) {
+        /* Profile-neutral (cm_reenum.h, "THE USB4 PROFILE"). */
+        CmNhiWaitService(nhi);
+        if (want == XHCI_TBT_WANT_UP && !CmNhiActionLive(nhi, action)) {
             state = XhciTbtPollAbandon(&r->Poll, cmNow(nhi));
             break;
         }
@@ -1465,6 +1465,9 @@ static VOID cmDiscover(PCM_NHI nhi)
         }
         cmSleep(nhi, CM_FIND_RETRY_MS);
     }
+    /* The USB4 profile's router-named members join the set here, before
+     * Port[] is filled and the claims are published (cm_reenum.h). */
+    CmNhiNamePorts(nhi);
     CmLogNote(nhi, "cm.reenum.topo", r->Topo.Outcome);
     CmLogNote(nhi, "cm.reenum.topo.parent", r->Topo.Parent);
     CmLogNote(nhi, "cm.reenum.topo.search-bus", r->Topo.SearchBus);
@@ -1591,6 +1594,9 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
     if (r->Route == CM_ROUTE_FILTER && r->Reenum != 0) {
         cmAskBaselines(nhi);
     }
+    /* The set and its claims rebuilt: the USB4 profile's learning
+     * baseline taken again over it (cm_reenum.h). */
+    CmNhiSetChanged(nhi);
 }
 
 /*
@@ -1658,7 +1664,21 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
              * population, and no eject is handed off meanwhile. */
             f->Unsettled = 1;
             f->ChangeSeq++;
+            if (nhi->U4On) {
+                /* The USB4 profile (cm_reenum.h): a connection changed on
+                 * some port, so an orderly removal seen before it belongs
+                 * to an old connection and is forgotten, whatever the
+                 * bridge's population shows later. */
+                f->EjectSeen = 0;
+            }
         }
+        if (nhi->U4On) {
+            r->Port[i].Flags &= ~CM_PORT_EJECTED;
+        }
+    }
+    if (nhi->U4On && r->EjectPending != 0) {
+        r->EjectPending = 0;
+        r->EjectsStale++;
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -1728,6 +1748,7 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_FILTER f;
     ULONG pending;
     ULONG stale;
+    ULONG taken;
     ULONG i;
 
     r = &nhi->Reenum;
@@ -1739,6 +1760,7 @@ VOID CmReenumService(PCM_NHI nhi)
         return;
     }
     stale = 0;
+    taken = 0;
     cmCfgmgLate(nhi);
     /* Each eject is checked again at the hand-off, under the lock: the
      * same publication of the bridge, still this domain's, the same
@@ -1753,9 +1775,13 @@ VOID CmReenumService(PCM_NHI nhi)
             continue;
         }
         f = cmRegFind(r->Port[i].Bdf);
-        if (f != NULL && f->Owner == nhi && f->Unsettled) {
+        if ((f != NULL && f->Owner == nhi && f->Unsettled) ||
+            (nhi->U4On && taken)) {
             /* Deferred to a later pass: the bridge has not shown its
-             * population since the last tunnel change. */
+             * population since the last tunnel change; or, under the USB4
+             * profile, one eject has already been taken this pass - its
+             * hook tears a tunnel down and may take seconds, so every
+             * other is checked again after the next pass's actions. */
             pending &= ~(1UL << i);
             r->EjectPending |= 1UL << i;
             continue;
@@ -1766,6 +1792,8 @@ VOID CmReenumService(PCM_NHI nhi)
             f->RelGen != r->Port[i].EjectGen || !cmEjectReady(f)) {
             pending &= ~(1UL << i);
             stale |= 1UL << i;
+        } else {
+            taken = 1;
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
@@ -1870,6 +1898,13 @@ VOID CmReenumSuspend(PCM_NHI nhi)
      * policy (cm_ports.h). */
     CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
     r->HoldBoundMs = CM_PORTS_HOLD_MAX_MS;
+    if (nhi->U4On && nhi->U4ResumeBoundMs + 10000UL > r->HoldBoundMs) {
+        /* The USB4 client's bound plus record 21's 10 s (cm_reenum.h). */
+        r->HoldBoundMs = nhi->U4ResumeBoundMs + 10000UL;
+    }
+    if (nhi->U4On) {
+        CmLogNote(nhi, "cm.reenum.hold.u4-ms", nhi->U4ResumeBoundMs);
+    }
     seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);
     if (r->Route != CM_ROUTE_FILTER) {
