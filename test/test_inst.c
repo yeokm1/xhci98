@@ -1706,14 +1706,12 @@ static void test_tb_eject(void)
 }
 
 /* The USB tree tool (record 23 section 9.5, record 25 section 8): its name
- * per architecture, the Run value's data, when it is copied, what becomes
- * of the Run value, /notray, and WININIT.INI's [rename] lines. */
+ * per architecture, the Run value's data, when it is copied, the leftover
+ * .BAK, what becomes of the Run value, and /notray. */
 static void test_tray(void)
 {
     static const INST_U32 v300[4] = { 3, 0, 0, 0 };
     static const INST_U32 v301[4] = { 3, 0, 0, 1 };
-    static const INST_U32 v302[4] = { 3, 0, 0, 2 };
-    char ini[512];
     char buf[512];
     char small[8];
     INST_OPTS o;
@@ -1727,6 +1725,7 @@ static void test_tray(void)
     CHECK(inst_eq(inst_tray_file(INST_ARCH_AMD64), "XHCITR64.EXE"), "x64 name");
     CHECK(strcmp(INST_TRAY_CLASS, "Xhci98TrTray") == 0, "the window class");
     CHECK(strcmp(INST_TRAY_RUN_VALUE, "xHCI98 USB Tree") == 0, "the Run value");
+    CHECK_EQ(INST_TRAY_CLOSE_MS, 15000UL, "15 s to close");
 
     CHECK_EQ(inst_tray_run_data("C:\\WINDOWS\\XHCI98\\XHCITR.EXE", buf,
                                 sizeof(buf)), 1, "Run data");
@@ -1738,47 +1737,25 @@ static void test_tray(void)
              "a quote in the path");
     CHECK_EQ(inst_tray_run_data("", buf, sizeof(buf)), 0, "an empty path");
 
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, 0, NULL, 1, v300), 1,
-             "absent: copied");
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, 0, NULL, -1, NULL), 1,
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v300), 1, "absent: copied");
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, -1, NULL), 1,
              "absent, package unread: copied");
-    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v302, 1, v300), 1,
-             "absent beside a newer pending one: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, 1, v301), 1,
-             "older: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, 1, v300), 0,
-             "equal: left");
-    CHECK_EQ(inst_tray_copy_needed(1, v301, 0, NULL, 1, v300), 0,
-             "newer: left");
-    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 0, NULL, 1, v300), 1,
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301), 1, "older: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300), 0, "equal: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v301, 1, v300), 0, "newer: left");
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 1, v300), 1,
              "installed unreadable: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, -1, NULL), 0,
+    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL), 0,
              "package unreadable: left");
-    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 0, NULL, -1, NULL), 0,
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, -1, NULL), 0,
              "both unreadable: left");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301, 1, v301), 0,
-             "a pending one at the package's version: left");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v302, 1, v301), 0,
-             "a newer pending one: left");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301, 1, v302), 1,
-             "newer than both: copied");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL, 1, v301), 1,
-             "an unreadable pending one counts as older");
 
-    CHECK_EQ(inst_tray_drop_pending(1, 1, v300, 0, NULL, 1, v301), 0,
-             "copied, nothing pending");
-    CHECK_EQ(inst_tray_drop_pending(1, 1, v300, 1, v300, 1, v301), 1,
-             "copied: an older pending one cancelled");
-    CHECK_EQ(inst_tray_drop_pending(1, 0, NULL, 1, v302, 1, v301), 0,
-             "copied where missing: a newer pending one kept");
-    CHECK_EQ(inst_tray_drop_pending(1, 1, v300, -1, NULL, 1, v301), 1,
-             "copied: an unreadable pending one cancelled");
-    CHECK_EQ(inst_tray_drop_pending(0, 1, v300, 1, v302, 1, v301), 0,
-             "left: a newer pending one kept");
-    CHECK_EQ(inst_tray_drop_pending(0, 1, v301, 1, v300, 1, v300), 1,
-             "left: a pending one older than the installed one cancelled");
-    CHECK_EQ(inst_tray_drop_pending(0, 1, v300, -1, NULL, 1, v300), 0,
-             "left: an unreadable pending one kept");
+    CHECK_EQ(inst_tray_leftover(0, 0), INST_TRAY_BAK_NONE, "no .BAK, no tool");
+    CHECK_EQ(inst_tray_leftover(0, 1), INST_TRAY_BAK_NONE, "no .BAK");
+    CHECK_EQ(inst_tray_leftover(1, 0), INST_TRAY_BAK_RESTORE,
+             ".BAK alone is the tool: renamed back");
+    CHECK_EQ(inst_tray_leftover(1, 1), INST_TRAY_BAK_DELETE,
+             ".BAK beside the tool: deleted");
 
     CHECK_EQ(inst_tray_run_action(0, 0, 1), INST_TRAY_RUN_SET, "absent: set");
     CHECK_EQ(inst_tray_run_action(0, 2, 1), INST_TRAY_RUN_SET, "other: set");
@@ -1791,6 +1768,11 @@ static void test_tray(void)
              "/notray: deleted");
     CHECK_EQ(inst_tray_run_action(1, 2, 0), INST_TRAY_RUN_DELETE,
              "/notray, other data: deleted");
+    /* A copy left in use keeps the installed tool and its Run value. */
+    CHECK_EQ(inst_tray_run_action(0, 1, 1), INST_TRAY_RUN_KEEP,
+             "left in use: the Run value kept");
+    CHECK_EQ(inst_exit_code(0, 0, 0, 1), INST_EXIT_STEPS,
+             "left in use: steps left");
 
     CHECK_EQ(parse(3, a1, &o), 0, "/notray /yes");
     CHECK(o.NoTray && o.Yes, "/notray field");
@@ -1798,110 +1780,6 @@ static void test_tray(void)
     CHECK_EQ(parse(3, a3, &o), 1, "/notray /devices refused");
     CHECK_EQ(parse(3, a4, &o), 1, "/eject /notray refused");
     CHECK_EQ(parse(3, a5, &o), 0, "/list /notray");
-
-    /* WININIT.INI: no file, an existing section, another section, a line
-     * already there, a header with no line end, the lines kept. */
-    CHECK_EQ(inst_wininit_add("", "NUL", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
-                              buf, sizeof(buf)), 1, "add to nothing");
-    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\WINDOWS\\XHCI98\\XHCITR.EXE\r\n") == 0,
-          "made the section");
-    CHECK_EQ(inst_wininit_add("[Rename]\r\nNUL=C:\\A.TMP\r\n", "NUL", "C:\\B",
-                              buf, sizeof(buf)), 1, "add to the section");
-    CHECK(strcmp(buf, "[Rename]\r\nNUL=C:\\B\r\nNUL=C:\\A.TMP\r\n") == 0,
-          "after the header, the old line kept");
-    CHECK_EQ(inst_wininit_add("[other]\nX=Y", "C:\\T.EXE", "C:\\T.NEW", buf,
-                              sizeof(buf)), 1, "another section");
-    CHECK(strcmp(buf, "[other]\nX=Y\r\n[rename]\r\nC:\\T.EXE=C:\\T.NEW\r\n") == 0,
-          "section appended after a line end");
-    CHECK_EQ(inst_wininit_add("[rename]\r\n nul=c:\\b \r\n", "NUL", "C:\\B",
-                              buf, sizeof(buf)), 1, "already there");
-    CHECK(strcmp(buf, "[rename]\r\n nul=c:\\b \r\n") == 0, "not added twice");
-    CHECK_EQ(inst_wininit_add("[other]\r\nNUL=C:\\B\r\n", "NUL", "C:\\B", buf,
-                              sizeof(buf)), 1, "the line in another section");
-    CHECK(strcmp(buf, "[other]\r\nNUL=C:\\B\r\n[rename]\r\nNUL=C:\\B\r\n") == 0,
-          "only [rename] counts");
-    CHECK_EQ(inst_wininit_add("[rename]", "NUL", "C:\\B", buf, sizeof(buf)), 1,
-             "a header without a line end");
-    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\B\r\n") == 0, "the line end added");
-    CHECK_EQ(inst_wininit_add("[rename]\r\n", "NUL", "C:\\B", small,
-                              sizeof(small)), 0, "too small");
-
-    CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\nNUL=C:\\B\r\n"
-                               "[x]\r\nNUL=C:\\B\r\n", "NUL", "C:\\B", buf,
-                               sizeof(buf)), 1, "one line taken out");
-    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\A\r\n[x]\r\nNUL=C:\\B\r\n") == 0,
-          "only that line, only in [rename]");
-    CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\n", "NUL", "C:\\B",
-                               buf, sizeof(buf)), 0, "nothing to take out");
-    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\A\r\n") == 0, "kept whole");
-    CHECK_EQ(inst_wininit_drop("[rename]\nNUL=C:\\B", "NUL", "c:\\b", buf,
-                               sizeof(buf)), 1, "the last line, no line end");
-    CHECK(strcmp(buf, "[rename]\n") == 0, "header kept");
-    CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\n", "NUL", "C:\\B",
-                               small, sizeof(small)), -1, "too small to keep");
-
-    /* Record 25 section 8 on 98 SE and ME: an uninstall that found the tool
-     * in use leaves NUL=<tool>; a same-version reinstall before the restart
-     * takes that line (and no other) back, leaves the file, and writes the
-     * Run value again, so the restart keeps the file the value names. */
-    CHECK_EQ(inst_wininit_add("[rename]\r\nNUL=C:\\WINDOWS\\TEMP\\X.TMP\r\n",
-                              "NUL", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE", ini,
-                              sizeof(ini)), 1, "deferred uninstall");
-    CHECK_EQ(inst_wininit_drop(ini, "NUL", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
-                               buf, sizeof(buf)), 1, "reinstall: line taken back");
-    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\WINDOWS\\TEMP\\X.TMP\r\n") == 0,
-          "the other deletion kept");
-    CHECK_EQ(inst_tray_copy_needed(1, v300, 0, NULL, 1, v300), 0,
-             "reinstall: the file left");
-    CHECK_EQ(inst_tray_run_action(0, 0, 1), INST_TRAY_RUN_SET,
-             "reinstall: the Run value written again");
-    /* A deferred replacement on 98 SE and ME: <tool>=<.NEW>, cancelled by
-     * its exact line. */
-    CHECK_EQ(inst_wininit_add("", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
-                              "C:\\WINDOWS\\XHCI98\\XHCITR.NEW", ini,
-                              sizeof(ini)), 1, "deferred replacement");
-    CHECK_EQ(inst_wininit_drop(ini, "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
-                               "C:\\WINDOWS\\XHCI98\\XHCITR.NEW", buf,
-                               sizeof(buf)), 1, "replacement cancelled");
-    CHECK(strcmp(buf, "[rename]\r\n") == 0, "the section left empty");
-
-    CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98", "XHCITR.EXE", 0,
-                                    ini, sizeof(ini)), 1, "short tool path");
-    CHECK(strcmp(ini, "C:\\WINDOWS\\XHCI98\\XHCITR.EXE") == 0,
-          "short tool path text");
-    CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98\\", "XHCITR64.EXE",
-                                    1, ini, sizeof(ini)), 1, "short .NEW path");
-    CHECK(strcmp(ini, "C:\\WINDOWS\\XHCI98\\XHCITR64.NEW") == 0,
-          "short .NEW path text, one separator");
-    CHECK_EQ(inst_tray_wininit_path("C:\\W", "XHCITR.DLL", 0, ini,
-                                    sizeof(ini)), 0, "not an .EXE");
-    CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98", "XHCITR.EXE", 0,
-                                    small, sizeof(small)), 0, "too long");
-
-    /* Three runs on 98 SE and ME: an uninstall finds the tool in use and
-     * leaves NUL=<tool>; a second uninstall deletes the file but the line
-     * stays; a reinstall, with no file there, still takes the line back
-     * (the path made from the directory, not from the file), so the
-     * restart does not delete the new copy. */
-    {
-        char tool[64];
-        char text[512];
-
-        CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98", "XHCITR.EXE",
-                                        0, tool, sizeof(tool)), 1, "tool path");
-        CHECK_EQ(inst_wininit_add("[rename]\r\nNUL=C:\\OTHER.TMP\r\n", "NUL",
-                                  tool, text, sizeof(text)), 1,
-                 "first uninstall: in use");
-        CHECK_EQ(inst_wininit_add(text, "NUL", tool, buf, sizeof(buf)), 1,
-                 "second uninstall: nothing added");
-        CHECK(strcmp(buf, text) == 0, "second uninstall: the line stays once");
-        CHECK_EQ(inst_wininit_drop(buf, "NUL", tool, ini, sizeof(ini)), 1,
-                 "reinstall: the stale line taken back");
-        CHECK(strcmp(ini, "[rename]\r\nNUL=C:\\OTHER.TMP\r\n") == 0,
-              "reinstall: every other line kept");
-        CHECK_EQ(inst_tray_copy_needed(0, NULL, 0, NULL, 1, v300), 1,
-                 "reinstall: the missing tool copied");
-    }
 }
 
 int main(void)

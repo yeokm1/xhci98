@@ -672,38 +672,34 @@ int inst_tb_answer(const char *line, int defaultYes);
  * included) or XHCITR64.EXE. */
 const char *inst_tray_file(int arch);
 
-/* The 8.3 path WININIT.INI names for the tool (isNew 0) or its pending
- * replacement (isNew 1, the name with .NEW): the directory's 8.3 path and
- * the file name, which is 8.3 already, so it is right whether or not the
- * file exists. 1, or 0 when it does not fit or name is not a .EXE. */
-int inst_tray_wininit_path(const char *shortDir, const char *name, int isNew,
-                           char *out, size_t cap);
-
 /* The Run value's data, "\"<exe>\" /tray": 1, or 0 when it does not fit
  * or exe holds a quote. */
 int inst_tray_run_data(const char *exe, char *out, size_t cap);
 
 /* Whether the package's tool is copied (record 25 section 8). installed:
  * the installed copy's version as file_version answers it (1 read, 0 the
- * file absent, -1 unreadable); pending the same for a replacement waiting
- * for the restart (.NEW), which counts as installed at its own version;
- * pkg the same for the package's copy. Copied when the installed copy is
- * absent, or when the package's version is read and is newer than both the
- * installed copy's and the pending one's (an unreadable one counts as
+ * file absent, -1 unreadable); pkg the same for the package's copy. Copied
+ * when the installed copy is absent, or when the package's version is read
+ * and is newer than the installed copy's (an unreadable one counts as
  * older); otherwise left. */
-int inst_tray_copy_needed(int installed, const INST_U32 instVer[4],
-                          int pending, const INST_U32 newVer[4], int pkg,
+int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
                           const INST_U32 pkgVer[4]);
 
-/* Whether a pending replacement (.NEW) is cancelled by an install. copied:
- * the package's tool was just copied in place (a copy staged as a new .NEW
- * replaces the old one itself). After a copy, a pending one is cancelled
- * unless it is newer than the package's; without one, only a pending one
- * older than the installed copy is (it would undo it at the restart). An
- * unreadable pending one is cancelled only by a copy. */
-int inst_tray_drop_pending(int copied, int installed, const INST_U32 instVer[4],
-                           int pending, const INST_U32 newVer[4], int pkg,
-                           const INST_U32 pkgVer[4]);
+/* A .BAK left by an interrupted replacement on 98 SE or ME (record 25
+ * section 8): with no tool beside it, it is the tool and is renamed back
+ * (a failure stops the tool's part of the run before any version is
+ * compared); beside the tool it is deleted. */
+#define INST_TRAY_BAK_NONE      0
+#define INST_TRAY_BAK_RESTORE   1
+#define INST_TRAY_BAK_DELETE    2
+int inst_tray_leftover(int bakExists, int exeExists);
+
+/* What a copy over the tool came to: in place; left, because the tool was
+ * still running after it was asked to close (the run ends with steps
+ * left); or failed. */
+#define INST_TRAY_PUT_FAILED    0
+#define INST_TRAY_PUT_DONE      1
+#define INST_TRAY_PUT_IN_USE    2
 
 /* What becomes of the Run value. runState: 0 absent, 1 the wanted data, 2
  * other data; inPlace: the tool's file is at its installed path (the value
@@ -712,18 +708,5 @@ int inst_tray_drop_pending(int copied, int installed, const INST_U32 instVer[4],
 #define INST_TRAY_RUN_SET       1
 #define INST_TRAY_RUN_DELETE    2
 int inst_tray_run_action(int noTray, int runState, int inPlace);
-
-/* WININIT.INI (98 SE and ME): text with the line "dst=src" added to its
- * [rename] section, made at the end when absent; every other line is kept
- * as it is, and nothing is added when the same line is there already
- * (compared without case). 1 with out written, 0 when it does not fit. */
-int inst_wininit_add(const char *text, const char *dst, const char *src,
-                     char *out, size_t cap);
-
-/* The same text with every "dst=src" line of its [rename] section taken
- * out (compared without case) and nothing else changed. Returns the number
- * of lines taken out, or -1 when out is too small. */
-int inst_wininit_drop(const char *text, const char *dst, const char *src,
-                      char *out, size_t cap);
 
 #endif /* INST_CORE_H */
