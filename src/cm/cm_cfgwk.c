@@ -686,20 +686,26 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
      * handshake, the removal goes on. */
     entry = CM_NVLINK_NONE;
     egen = 0;
-    if (id != 0 && w->Port[i].PathRead && w->Port[i].PathCount != 0 &&
-        w->Port[i].PathCount < CM_PORTS_PATH_MAX) {
+    if (id != 0) {
         for (k = 0; k < NVME98LS_ENTRIES; k++) {
             if (!CmNvlinkWkCandidate(w->Nhi, w->Port[i].Bdf, id, k, &cbus,
                                      &cslot, &cgen)) {
                 continue;
             }
-            want[0] = ((cslot & 0x1FUL) << 3) | ((cslot >> 5) & 0x7UL);
-            for (n = 0; n < w->Port[i].PathCount; n++) {
-                want[n + 1] = w->Port[i].Path[n];
+            /* The path form needs the bridge's path; the BUS_&DEV_&FUNC_
+             * form is matched by location alone (count 0). */
+            n = 0;
+            if (w->Port[i].PathRead && w->Port[i].PathCount != 0 &&
+                w->Port[i].PathCount < CM_PORTS_PATH_MAX) {
+                want[0] = ((cslot & 0x1FUL) << 3) | ((cslot >> 5) & 0x7UL);
+                for (n = 0; n < w->Port[i].PathCount; n++) {
+                    want[n + 1] = w->Port[i].Path[n];
+                }
+                n = w->Port[i].PathCount + 1;
             }
             if (cmWkIdNames(text, XHCI_TBT_BDF(cbus, cslot & 0x1FUL,
                                                (cslot >> 5) & 0x7UL),
-                            want, w->Port[i].PathCount + 1)) {
+                            want, n)) {
                 if (entry != CM_NVLINK_NONE) {
                     entry = CM_NVLINK_NONE;
                     break;
@@ -708,6 +714,10 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
                 egen = cgen;
             }
         }
+    }
+    /* Stopped or superseded during the selection: no query begun. */
+    if (!cmWkCurrent(w, i, gen)) {
+        return FALSE;
     }
     /* A vanished child leaves the known set whatever follows: CONFIGMG
      * reuses a freed devnode's handle, so a re-plug's devnode can come
