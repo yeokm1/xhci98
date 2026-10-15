@@ -327,6 +327,11 @@ ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
  * (cm_reenum.c CmReenumAction). */
 VOID CmNvlinkLost(struct _CM_NHI *nhi);
 
+/* The host interface lost, every operating system (cm_reenum.c
+ * CmReenumLossBegin): the deferred scans of buses an exposure found silent
+ * are dropped, with no access; a later exposure arms its own. */
+VOID CmNvlinkDropLate(struct _CM_NHI *nhi);
+
 /* Obligation 2, USB4 profile, from the CM_U4_DOWN_HOOK: `member` the
  * port's index in nhi->Reenum.Topo.Set (XhciTbtPortMember) or
  * XHCI_TBT_NO_MEMBER, `pathClosed` TBT_U4_LINKDOWN.PathClosed,

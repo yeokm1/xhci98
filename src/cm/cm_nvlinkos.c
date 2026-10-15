@@ -825,6 +825,31 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
     return verdict == CM_NVLINK_SEND ? CM_NVLINK_NO_ENTRY : verdict;
 }
 
+VOID CmNvlinkDropLate(PCM_NHI nhi)
+{
+    CM_NV_U4 *u;
+    ULONG i;
+    ULONG dropped;
+
+    if (cmNvTable == NULL) {
+        return;
+    }
+    u = cmNvU4Of(nhi, FALSE);
+    if (u == NULL) {
+        return;
+    }
+    dropped = 0;
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (u->LateOn[i]) {
+            u->LateOn[i] = 0;
+            dropped++;
+        }
+    }
+    if (dropped != 0) {
+        CmLogNote(nhi, "cm.nvlink.late.dropped", dropped);
+    }
+}
+
 VOID CmNvlinkLost(PCM_NHI nhi)
 {
     PCM_REENUM r;

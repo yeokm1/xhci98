@@ -1509,7 +1509,11 @@ VOID CmReenumService(PCM_NHI nhi)
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
      * 10.3). */
-    CmNvlinkService(nhi);
+    if (CmLiveTransport(&nhi->Live)) {
+        /* Not while the host interface is lost: its scans read the
+         * bridges (record 21 section 5.5). */
+        CmNvlinkService(nhi);
+    }
     if (!r->Listed && r->RediscoverLeft != 0 && !r->LossSeen &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
         cmDiscoverAndList(nhi);
@@ -1840,6 +1844,7 @@ VOID CmReenumStop(PCM_NHI nhi)
 VOID CmReenumLossBegin(PCM_NHI nhi)
 {
     nhi->Reenum.LossDrain = 1;
+    CmNvlinkDropLate(nhi);
     if (nhi->Reenum.Wk == NULL) {
         /* No 98 worker running (not started yet, or the set still being
          * looked for): none is started, and no rediscovery is made, for
