@@ -266,6 +266,7 @@ static int flagRestart;
 static int flagSteps;
 static int flagChanged;
 static int outQuiet;        /* a reading repeated: its text to the log only */
+static int trayDeferred;    /* the USB tree tool goes at the restart        */
 
 /* The registry answers: per value, 1 when it is to be written, and what. */
 static int answerSet[16];
@@ -2136,6 +2137,625 @@ static int local_dir(char *dir, size_t cap)
     return 1;
 }
 
+/* ======================================================================== */
+/* Objects shared with XHCITR, and the tool itself (record 23 section 9.6;   */
+/* record 25 sections 6 and 8)                                               */
+/* ======================================================================== */
+
+#ifndef MUTEX_MODIFY_STATE
+#define MUTEX_MODIFY_STATE 0x0001UL
+#endif
+
+typedef BOOL (WINAPI *PFN_ALLOCSID)(PSID_IDENTIFIER_AUTHORITY, BYTE, DWORD,
+                                    DWORD, DWORD, DWORD, DWORD, DWORD, DWORD,
+                                    DWORD, PSID *);
+typedef PVOID (WINAPI *PFN_FREESID)(PSID);
+typedef BOOL (WINAPI *PFN_INITACL)(PACL, DWORD, DWORD);
+typedef BOOL (WINAPI *PFN_ADDACE)(PACL, DWORD, DWORD, PSID);
+typedef BOOL (WINAPI *PFN_INITSD)(PSECURITY_DESCRIPTOR, DWORD);
+typedef BOOL (WINAPI *PFN_SETDACL)(PSECURITY_DESCRIPTOR, BOOL, PACL, BOOL);
+typedef BOOL (WINAPI *PFN_MOVEEX)(LPCSTR, LPCSTR, DWORD);
+typedef HWND (WINAPI *PFN_FINDWINDOW)(LPCSTR, LPCSTR);
+typedef BOOL (WINAPI *PFN_POSTMESSAGE)(HWND, UINT, WPARAM, LPARAM);
+
+typedef struct _SHARED_SD {
+    SECURITY_DESCRIPTOR Sd;
+    SECURITY_ATTRIBUTES Sa;
+    DWORD Acl[64];
+} SHARED_SD;
+
+/* NT: the security of an object XHCIINST and XHCITR share. XHCITR runs as
+ * the invoker and XHCIINST as an administrator, and whichever starts first
+ * creates the object, so every user (the World SID) gets worldAccess and
+ * SYSTEM and the Administrators get fullAccess. The routines are looked up
+ * at run time, so 98 SE's and ME's advapi32 is never asked for them (NULL:
+ * the default security there). */
+static SECURITY_ATTRIBUTES *shared_sd(SHARED_SD *s, DWORD worldAccess,
+                                      DWORD fullAccess)
+{
+    static SID_IDENTIFIER_AUTHORITY world = SECURITY_WORLD_SID_AUTHORITY;
+    static SID_IDENTIFIER_AUTHORITY ntAuth = SECURITY_NT_AUTHORITY;
+    HMODULE adv;
+    PFN_ALLOCSID allocSid;
+    PFN_FREESID freeSid;
+    PFN_INITACL initAcl;
+    PFN_ADDACE addAce;
+    PFN_INITSD initSd;
+    PFN_SETDACL setDacl;
+    PSID sids[3];
+    DWORD access[3];
+    SECURITY_ATTRIBUTES *r = NULL;
+    int i;
+
+    if (!envNow.Nt) {
+        return NULL;
+    }
+    adv = GetModuleHandleA("advapi32.dll");
+    if (adv == NULL) {
+        return NULL;
+    }
+    allocSid = (PFN_ALLOCSID)GetProcAddress(adv, "AllocateAndInitializeSid");
+    freeSid = (PFN_FREESID)GetProcAddress(adv, "FreeSid");
+    initAcl = (PFN_INITACL)GetProcAddress(adv, "InitializeAcl");
+    addAce = (PFN_ADDACE)GetProcAddress(adv, "AddAccessAllowedAce");
+    initSd = (PFN_INITSD)GetProcAddress(adv, "InitializeSecurityDescriptor");
+    setDacl = (PFN_SETDACL)GetProcAddress(adv, "SetSecurityDescriptorDacl");
+    if (allocSid == NULL || freeSid == NULL || initAcl == NULL ||
+        addAce == NULL || initSd == NULL || setDacl == NULL) {
+        return NULL;
+    }
+    sids[0] = sids[1] = sids[2] = NULL;
+    access[0] = worldAccess;
+    access[1] = fullAccess;
+    access[2] = fullAccess;
+    if (!allocSid(&world, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0,
+                  &sids[0]) ||
+        !allocSid(&ntAuth, 1, SECURITY_LOCAL_SYSTEM_RID, 0, 0, 0, 0, 0, 0, 0,
+                  &sids[1]) ||
+        !allocSid(&ntAuth, 2, SECURITY_BUILTIN_DOMAIN_RID,
+                  DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &sids[2])) {
+        goto cleanup;
+    }
+    if (!initAcl((PACL)s->Acl, sizeof(s->Acl), ACL_REVISION)) {
+        goto cleanup;
+    }
+    for (i = 0; i < 3; i++) {
+        if (!addAce((PACL)s->Acl, ACL_REVISION, access[i], sids[i])) {
+            goto cleanup;
+        }
+    }
+    if (!initSd(&s->Sd, SECURITY_DESCRIPTOR_REVISION) ||
+        !setDacl(&s->Sd, TRUE, (PACL)s->Acl, FALSE)) {
+        goto cleanup;
+    }
+    s->Sa.nLength = sizeof(s->Sa);
+    s->Sa.lpSecurityDescriptor = &s->Sd;
+    s->Sa.bInheritHandle = FALSE;
+    r = &s->Sa;
+cleanup:
+    for (i = 0; i < 3; i++) {
+        if (sids[i] != NULL) {
+            freeSid(sids[i]);
+        }
+    }
+    return r;
+}
+
+/* The eject lock shared with XHCITR (record 24 section 3.3, record 25
+ * section 6): opened when it exists, else created with the shared
+ * security; a lost race to create it opens the winner's. */
+static HANDLE shared_mutex(const char *name)
+{
+    SHARED_SD s;
+    HANDLE h;
+
+    h = OpenMutexA(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, name);
+    if (h == NULL) {
+        h = CreateMutexA(shared_sd(&s, SYNCHRONIZE | MUTEX_MODIFY_STATE,
+                                   MUTEX_ALL_ACCESS), FALSE, name);
+    }
+    if (h == NULL) {
+        h = OpenMutexA(SYNCHRONIZE | MUTEX_MODIFY_STATE, FALSE, name);
+    }
+    return h;
+}
+
+/* The manual-reset event every running XHCITR waits on to quit (record 25
+ * section 7.1): every user may wait on it, only SYSTEM and the
+ * Administrators set it. */
+static HANDLE tray_quit_event(void)
+{
+    const char *name = envNow.Nt ? INST_TRAY_QUIT_NT : INST_TRAY_QUIT_9X;
+    SHARED_SD s;
+    HANDLE h;
+
+    h = OpenEventA(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name);
+    if (h == NULL) {
+        h = CreateEventA(shared_sd(&s, SYNCHRONIZE, EVENT_ALL_ACCESS), TRUE,
+                         FALSE, name);
+    }
+    if (h == NULL) {
+        h = OpenEventA(SYNCHRONIZE | EVENT_MODIFY_STATE, FALSE, name);
+    }
+    return h;
+}
+
+/* NT: MoveFileExA with MOVEFILE_DELAY_UNTIL_REBOOT (to NULL: a deletion),
+ * looked up at run time: 98 SE and ME use WININIT.INI instead. */
+static int move_at_restart(const char *from, const char *to)
+{
+    PFN_MOVEEX moveEx = (PFN_MOVEEX)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                                   "MoveFileExA");
+
+    return envNow.Nt && moveEx != NULL &&
+           moveEx(from, to, MOVEFILE_DELAY_UNTIL_REBOOT |
+                            (to != NULL ? MOVEFILE_REPLACE_EXISTING : 0));
+}
+
+/* The 8.3 path WININIT.INI needs (the file must exist). */
+static void short_path(const char *path, char *out1, DWORD cap)
+{
+    DWORD n = GetShortPathNameA(path, out1, cap);
+
+    if (n == 0 || n >= cap) {
+        inst_copy(out1, path, cap);
+    }
+}
+
+/* 98 SE and ME: "dst=src" added to (add 1) or every such line taken out of
+ * (add 0) WININIT.INI's [rename] section, every other line kept. 1 done (a
+ * line to take out that is not there is done), 0 failed; *changed 1 when
+ * the file was written. */
+static int wininit_edit(int add, const char *dst, const char *src,
+                        int *changed)
+{
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    char *text;
+    char *outText;
+    size_t cap;
+    DWORD n = 0;
+    int r;
+    FILE *f;
+
+    *changed = 0;
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(path, sizeof(path), win, "WININIT.INI");
+    text = read_file(path, &n);
+    if (text == NULL) {
+        if (file_exists(path, NULL)) {
+            return 0;
+        }
+        if (!add) {
+            return 1;
+        }
+        text = (char *)malloc(1);
+        if (text == NULL) {
+            return 0;
+        }
+        text[0] = '\0';
+    } else if (strlen(text) != n) {
+        free(text);
+        return 0;
+    }
+    cap = strlen(text) + strlen(dst) + strlen(src) + 32;
+    outText = (char *)malloc(cap);
+    if (outText == NULL) {
+        free(text);
+        return 0;
+    }
+    r = add ? inst_wininit_add(text, dst, src, outText, cap)
+            : inst_wininit_drop(text, dst, src, outText, cap);
+    if (r < 0 || (add && r == 0)) {
+        free(text);
+        free(outText);
+        return 0;
+    }
+    r = 1;
+    if (strcmp(text, outText) != 0) {
+        f = fopen(path, "wb");
+        if (f == NULL) {
+            r = 0;
+        } else {
+            if (fwrite(outText, 1, strlen(outText), f) != strlen(outText)) {
+                r = 0;
+            }
+            if (fclose(f) != 0) {
+                r = 0;
+            }
+            *changed = r;
+        }
+    }
+    free(text);
+    free(outText);
+    return r;
+}
+
+/* The installed tool's paths: the EXE, and beside it the replacement that
+ * waits for a restart (.NEW) and, on NT, a locked copy renamed for its
+ * deletion at the restart (.DEL). */
+static int tray_paths(char *dir, char *exe, char *next, char *del, size_t cap)
+{
+    const char *name = inst_tray_file(INST_MY_ARCH);
+    size_t n;
+
+    if (!local_dir(dir, cap)) {
+        return 0;
+    }
+    join(exe, cap, dir, name);
+    inst_copy(next, exe, cap);
+    inst_copy(del, exe, cap);
+    n = strlen(exe);
+    if (n < 4 || !inst_eq(exe + n - 4, ".EXE")) {
+        return 0;
+    }
+    strcpy(next + n - 4, ".NEW");
+    strcpy(del + n - 4, ".DEL");
+    return 1;
+}
+
+/* 1 when exe can be replaced now: absent, or opened for writing with no
+ * sharing (a running image cannot be). */
+static int tray_free(const char *exe)
+{
+    HANDLE h = CreateFileA(exe, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+    }
+    CloseHandle(h);
+    return 1;
+}
+
+/* Every running copy asked to quit - through the event, which reaches every
+ * session, and WM_CLOSE to the tray window in this one - and waited for
+ * until the file can be replaced, 15 s at most. A copy is never
+ * terminated. 1 when the file is free. */
+static int tray_close(const char *exe)
+{
+    HANDLE quit;
+    HMODULE user32;
+    PFN_FINDWINDOW findWindow = NULL;
+    PFN_POSTMESSAGE postMessage = NULL;
+    HWND w;
+    DWORD start;
+    int ok;
+
+    SetFileAttributesA(exe, FILE_ATTRIBUTE_NORMAL);
+    if (tray_free(exe)) {
+        return 1;
+    }
+    out("Closing the running xHCI98 USB Tree.\n");
+    quit = tray_quit_event();
+    if (quit != NULL) {
+        SetEvent(quit);
+    }
+    user32 = LoadLibraryA("user32.dll");
+    if (user32 != NULL) {
+        findWindow = (PFN_FINDWINDOW)GetProcAddress(user32, "FindWindowA");
+        postMessage = (PFN_POSTMESSAGE)GetProcAddress(user32, "PostMessageA");
+    }
+    if (findWindow != NULL && postMessage != NULL) {
+        w = findWindow(INST_TRAY_CLASS, NULL);
+        if (w != NULL) {
+            postMessage(w, WM_CLOSE, 0, 0);
+        }
+    }
+    start = GetTickCount();
+    while (!(ok = tray_free(exe)) && GetTickCount() - start < INST_TRAY_CLOSE_MS) {
+        Sleep(250);
+    }
+    if (quit != NULL) {
+        ResetEvent(quit);
+        CloseHandle(quit);
+    }
+    if (user32 != NULL) {
+        FreeLibrary(user32);
+    }
+    if (!ok) {
+        out("%s is still in use after %lu seconds.\n", exe,
+            (unsigned long)(INST_TRAY_CLOSE_MS / 1000UL));
+    }
+    return ok;
+}
+
+/* The Run value: 0 absent, 1 the data wanted, 2 other data (or unreadable). */
+static int tray_run_state(const char *data)
+{
+    char cur[INST_PATH_CHARS + 16];
+    int r = reg_text3(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY,
+                      INST_TRAY_RUN_VALUE, cur, sizeof(cur));
+
+    if (r == 1) {
+        return inst_eq(cur, data) ? 1 : 2;
+    }
+    return r == 0 ? 0 : 2;
+}
+
+static int tray_run_delete(void)
+{
+    HKEY k;
+    LONG r;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY, 0, KEY_SET_VALUE,
+                      &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegDeleteValueA(k, INST_TRAY_RUN_VALUE);
+    RegCloseKey(k);
+    if (r == ERROR_SUCCESS) {
+        flagChanged = 1;
+        out("The xHCI98 USB Tree no longer starts at login.\n");
+        return 1;
+    }
+    return 0;
+}
+
+/* Record 25 section 8: before a copy and before an uninstall, this tool's
+ * own pending operations for the tool are taken back, so that an older
+ * pending copy or deletion never lands on a newer file: a leftover .NEW
+ * goes (an NT delayed move whose source is gone does nothing at the
+ * restart), and on 98 SE and ME its own [rename] lines for the tool leave
+ * WININIT.INI, every other line kept. 1 done, 0 failed. */
+static int tray_reconcile(const char *exe, const char *next)
+{
+    char shortExe[INST_PATH_CHARS];
+    char shortNext[INST_PATH_CHARS];
+    int changed;
+    int ok = 1;
+
+    if (!envNow.Nt && file_exists(exe, NULL)) {
+        short_path(exe, shortExe, sizeof(shortExe));
+        if (!wininit_edit(0, "NUL", shortExe, &changed)) {
+            ok = 0;
+        } else if (changed) {
+            flagChanged = 1;
+            logonly("WININIT.INI: NUL=%s taken out\n", shortExe);
+        }
+        if (file_exists(next, NULL)) {
+            short_path(next, shortNext, sizeof(shortNext));
+            if (!wininit_edit(0, shortExe, shortNext, &changed)) {
+                ok = 0;
+            } else if (changed) {
+                flagChanged = 1;
+                logonly("WININIT.INI: %s=%s taken out\n", shortExe, shortNext);
+            }
+        }
+        if (!ok) {
+            out("WININIT.INI could not be read or written.\n");
+        }
+    }
+    if (file_exists(next, NULL)) {
+        SetFileAttributesA(next, FILE_ATTRIBUTE_NORMAL);
+        if (DeleteFileA(next)) {
+            flagChanged = 1;
+            logonly("%s deleted\n", next);
+        } else {
+            out("%s could not be deleted (error %lu).\n", next,
+                (unsigned long)GetLastError());
+            ok = 0;
+        }
+    }
+    return ok;
+}
+
+/* The copy over the installed tool; when it stays in use, the new copy
+ * beside it (.NEW) replaces it at the restart. */
+static void tray_put(const char *from, const char *dir, const char *exe,
+                     const char *next)
+{
+    char shortExe[INST_PATH_CHARS];
+    char shortNext[INST_PATH_CHARS];
+    int changed;
+    DWORD e;
+
+    CreateDirectoryA(dir, NULL);
+    if (tray_close(exe) && CopyFileA(from, exe, FALSE)) {
+        SetFileAttributesA(exe, FILE_ATTRIBUTE_NORMAL);
+        flagChanged = 1;
+        out("Copied the xHCI98 USB Tree to %s.\n", exe);
+        return;
+    }
+    e = GetLastError();
+    if (!file_exists(exe, NULL)) {
+        out("The xHCI98 USB Tree could not be copied to %s (error %lu).\n",
+            exe, (unsigned long)e);
+        flagFailed = 1;
+        return;
+    }
+    SetFileAttributesA(next, FILE_ATTRIBUTE_NORMAL);
+    if (!CopyFileA(from, next, FALSE)) {
+        out("The xHCI98 USB Tree could not be copied to %s (error %lu).\n",
+            next, (unsigned long)GetLastError());
+        flagFailed = 1;
+        return;
+    }
+    SetFileAttributesA(next, FILE_ATTRIBUTE_NORMAL);
+    flagChanged = 1;
+    if (envNow.Nt) {
+        if (!move_at_restart(next, exe)) {
+            out("%s could not be scheduled to replace %s (error %lu).\n", next,
+                exe, (unsigned long)GetLastError());
+            flagFailed = 1;
+            return;
+        }
+    } else {
+        short_path(exe, shortExe, sizeof(shortExe));
+        short_path(next, shortNext, sizeof(shortNext));
+        if (!wininit_edit(1, shortExe, shortNext, &changed)) {
+            out("WININIT.INI could not be updated to replace %s.\n", exe);
+            flagFailed = 1;
+            return;
+        }
+    }
+    flagRestart = 1;
+    out("%s is in use: the new copy takes effect after a restart.\n", exe);
+}
+
+/* Record 23 section 9.6: the tool for this machine's architecture into
+ * %windir%\XHCI98, and the Run value that starts it at login (none with
+ * /notray). Under /list, what would be done. */
+static void tray_install(void)
+{
+    const char *name = inst_tray_file(INST_MY_ARCH);
+    char from[INST_PATH_CHARS];
+    char dir[INST_PATH_CHARS];
+    char exe[INST_PATH_CHARS];
+    char next[INST_PATH_CHARS];
+    char del[INST_PATH_CHARS];
+    char data[INST_PATH_CHARS + 16];
+    INST_U32 pv[4];
+    INST_U32 iv[4];
+    int pkg;
+    int inst;
+    int copy;
+    int runState;
+    int action;
+    HKEY k = NULL;
+
+    join(from, sizeof(from), root, "tools\\xhcitr");
+    join(from, sizeof(from), from, name);
+    if (!file_exists(from, NULL)) {
+        out("This package has no tools\\xhcitr\\%s: the xHCI98 USB Tree is "
+            "not installed.\n", name);
+        return;
+    }
+    if (!tray_paths(dir, exe, next, del, sizeof(exe)) ||
+        !inst_tray_run_data(exe, data, sizeof(data))) {
+        out("The xHCI98 USB Tree's place could not be named.\n");
+        flagFailed = 1;
+        return;
+    }
+    if (!opts.List && !tray_reconcile(exe, next)) {
+        out("The xHCI98 USB Tree's own pending changes could not be taken "
+            "back: it is left as it is.\n");
+        flagFailed = 1;
+        return;
+    }
+    pkg = file_version(from, pv);
+    inst = file_version(exe, iv);
+    copy = inst_tray_copy_needed(inst, iv, pkg, pv);
+    runState = tray_run_state(data);
+    if (opts.List) {
+        action = inst_tray_run_action(opts.NoTray, runState,
+                                      copy || inst != 0);
+        out("The xHCI98 USB Tree: %s %s%s\n",
+            copy ? "would be copied to" : "is current at", exe,
+            action == INST_TRAY_RUN_SET ? ", and started at login." :
+            action == INST_TRAY_RUN_DELETE ? "; it would no longer start at "
+                                             "login (/notray)." : ".");
+        return;
+    }
+    if (copy) {
+        tray_put(from, dir, exe, next);
+    } else {
+        out("The xHCI98 USB Tree at %s is current.\n", exe);
+    }
+    action = inst_tray_run_action(opts.NoTray, runState,
+                                  file_exists(exe, NULL));
+    if (action == INST_TRAY_RUN_SET) {
+        if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY, 0, NULL, 0,
+                            KEY_SET_VALUE, NULL, &k, NULL) == ERROR_SUCCESS &&
+            RegSetValueExA(k, INST_TRAY_RUN_VALUE, 0, REG_SZ,
+                           (const BYTE *)data, (DWORD)strlen(data) + 1) ==
+                ERROR_SUCCESS) {
+            flagChanged = 1;
+            out("It starts at each login (INSTALL /notray: it does not).\n");
+        } else {
+            out("Its start at login could not be written.\n");
+            flagFailed = 1;
+        }
+        if (k != NULL) {
+            RegCloseKey(k);
+        }
+    } else if (action == INST_TRAY_RUN_DELETE) {
+        tray_run_delete();
+    }
+}
+
+/* Record 23 section 9.6: the uninstall's half. The tool, its .NEW and .DEL
+ * and the Run value are this tool's own, outside every XHCIINST.LST, and go
+ * before %windir%\XHCI98 itself; a locked copy is deleted at the restart
+ * (trayDeferred), and on NT the directory with it. */
+static void tray_remove(void)
+{
+    char dir[INST_PATH_CHARS];
+    char exe[INST_PATH_CHARS];
+    char next[INST_PATH_CHARS];
+    char del[INST_PATH_CHARS];
+    char shortExe[INST_PATH_CHARS];
+    char data[INST_PATH_CHARS + 16];
+    int changed;
+
+    if (!tray_paths(dir, exe, next, del, sizeof(exe)) ||
+        !inst_tray_run_data(exe, data, sizeof(data))) {
+        return;
+    }
+    if (opts.List) {
+        if (tray_run_state(data) != 0) {
+            out("(/list) the xHCI98 USB Tree's start at login would be "
+                "deleted.\n");
+        }
+        if (file_exists(exe, NULL)) {
+            out("(/list) %s would be closed and deleted.\n", exe);
+        }
+        return;
+    }
+    tray_run_delete();
+    if (!tray_reconcile(exe, next)) {
+        flagSteps = 1;
+    }
+    if (file_exists(del, NULL)) {
+        SetFileAttributesA(del, FILE_ATTRIBUTE_NORMAL);
+        if (DeleteFileA(del)) {
+            flagChanged = 1;
+        } else {
+            /* Still in use, and already waiting for an earlier restart. */
+            trayDeferred = 1;
+        }
+    }
+    if (!file_exists(exe, NULL)) {
+        return;
+    }
+    tray_close(exe);
+    if (DeleteFileA(exe)) {
+        flagChanged = 1;
+        out("%s removed.\n", exe);
+        return;
+    }
+    if (envNow.Nt) {
+        /* A running image can be renamed on its volume: the name is free at
+         * once, and the renamed file goes at the restart. */
+        if (!file_exists(del, NULL) && MoveFileA(exe, del) &&
+            move_at_restart(del, NULL)) {
+            out("%s is in use: renamed %s, which is deleted at the restart.\n",
+                exe, del);
+        } else if (file_exists(exe, NULL) && move_at_restart(exe, NULL)) {
+            out("%s is in use: it is deleted at the restart.\n", exe);
+        } else {
+            out("%s could not be removed; delete it after a restart.\n",
+                file_exists(exe, NULL) ? exe : del);
+            flagSteps = 1;
+            return;
+        }
+    } else {
+        short_path(exe, shortExe, sizeof(shortExe));
+        if (!wininit_edit(1, "NUL", shortExe, &changed)) {
+            out("%s could not be removed; delete it after a restart.\n", exe);
+            flagSteps = 1;
+            return;
+        }
+        out("%s is in use: it is deleted at the restart.\n", exe);
+    }
+    flagChanged = 1;
+    flagRestart = 1;
+    trayDeferred = 1;
+}
+
 /* Delete the files one copy's list names, the list, and the directory if
  * it is then empty. */
 static void local_remove(const char *dir)
@@ -2224,7 +2844,8 @@ static void local_remove(const char *dir)
     }
 }
 
-/* Every local copy, then the work file, then %windir%\XHCI98 if empty. */
+/* The USB tree tool, every local copy, then the work file, then
+ * %windir%\XHCI98 if empty. */
 static void local_remove_all(void)
 {
     char rootDir[INST_PATH_CHARS];
@@ -2236,6 +2857,7 @@ static void local_remove_all(void)
     if (!local_dir(rootDir, sizeof(rootDir))) {
         return;
     }
+    tray_remove();
     join(pattern, sizeof(pattern), rootDir, "*.*");
     h = FindFirstFileA(pattern, &fd);
     if (h != INVALID_HANDLE_VALUE) {
@@ -2255,6 +2877,13 @@ static void local_remove_all(void)
     if (RemoveDirectoryA(rootDir)) {
         flagChanged = 1;
         out("%s removed.\n", rootDir);
+    } else if (trayDeferred) {
+        /* The USB tree tool, still in use, is what keeps it now. */
+        if (move_at_restart(rootDir, NULL)) {
+            out("%s is removed at the restart.\n", rootDir);
+        } else {
+            out("%s can be deleted after the restart.\n", rootDir);
+        }
     }
 }
 
@@ -4337,6 +4966,7 @@ static int run_install_nt(void)
     testsigning_note();
     ask_values();
     if (opts.List) {
+        tray_install();
         out("/list: nothing was changed.\n");
         return INST_EXIT_DONE;
     }
@@ -4406,6 +5036,7 @@ static int run_install_nt(void)
         out("The /restage work file could not be updated.\n");
         flagFailed = 1;
     }
+    tray_install();
     if (flagRestart) {
         /* The second sentence only where it can apply (the 2000 leg read
          * it after a settings-only run). */
@@ -4639,6 +5270,7 @@ static int run_install_9x(void)
         "themselves.\n\n", dir);
     ask_values();
     if (opts.List) {
+        tray_install();
         out("/list: nothing was changed.\n");
         return INST_EXIT_DONE;
     }
@@ -4680,6 +5312,7 @@ static int run_install_9x(void)
         return inst_exit_code(0, 1, 0, 1);
     }
     write_values();
+    tray_install();
     steps_9x(srcDir);
     tb_later_note(srcDir);
     note_old_entries();
@@ -5321,6 +5954,7 @@ static int run_uninstall_nt(void)
     if (opts.List) {
         remove_own_infs();
         remove_services_and_files();
+        tray_remove();
         out("\n/list: nothing was changed.\n");
         return INST_EXIT_DONE;
     }
@@ -5393,6 +6027,7 @@ static int run_uninstall_9x(void)
     } else {
         out("(/list) the copies in %s and their DevicePath entry would be "
             "removed.\n", dir);
+        tray_remove();
     }
     out("\nThe INF copies Windows keeps for this package:\n");
     for (i = 0; i < 2; i++) {
@@ -6396,18 +7031,27 @@ static void tb_print(void)
     }
 }
 
-/* One device-mode run at a time on the machine: the ask in each NHI's
- * driver key is shared (record 24 section 3.3). */
+/* One device-mode run or XHCITR eject at a time on the machine: the ask in
+ * each NHI's driver key is shared (record 24 section 3.3), and XHCITR, which
+ * runs as the invoker, takes the same lock (record 25 section 6). An
+ * abandoned lock is taken over: its holder is gone. */
 static HANDLE tbMutex;
 
 static int tb_lock(void)
 {
-    tbMutex = CreateMutexA(NULL, FALSE, envNow.Nt ? "Global\\XhciinstTbAsk"
-                                                   : "XhciinstTbAsk");
-    if (tbMutex == NULL ||
-        WaitForSingleObject(tbMutex, 10000) == WAIT_TIMEOUT) {
-        out("Another XHCIINST /devices or /eject is running; try again when it "
-            "has finished.\n");
+    DWORD w;
+
+    tbMutex = shared_mutex(envNow.Nt ? "Global\\XhciinstTbAsk"
+                                     : "XhciinstTbAsk");
+    if (tbMutex == NULL) {
+        out("The lock shared with the xHCI98 USB Tree could not be opened "
+            "(error %lu).\n", (unsigned long)GetLastError());
+        return 0;
+    }
+    w = WaitForSingleObject(tbMutex, 10000);
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        out("Another XHCIINST /devices or /eject, or an eject in the xHCI98 "
+            "USB Tree, is\nrunning; try again when it has finished.\n");
         return 0;
     }
     return 1;
@@ -6922,6 +7566,7 @@ static void usage(void)
 "  /set Name=Value   set one of the driver's options (repeatable)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
 "  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
+"  /notray      do not start the xHCI98 USB Tree at login (and stop doing so)\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"

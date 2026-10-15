@@ -1719,6 +1719,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->SelfTest = 1;
         } else if (inst_switch(a, "thunderbolt")) {
             opts->Thunderbolt = 1;
+        } else if (inst_switch(a, "notray")) {
+            opts->NoTray = 1;
         } else if (inst_switch(a, "devices")) {
             opts->Devices = 1;
         } else if (inst_switch(a, "eject")) {
@@ -1857,6 +1859,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     }
     if (opts->Thunderbolt && (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, "/thunderbolt belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->NoTray && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/notray belongs to an install", NULL);
         return 1;
     }
     if (opts->Devices && opts->Eject) {
@@ -2742,4 +2748,199 @@ int inst_tb_answer(const char *line, int defaultYes)
         return 0;
     }
     return -1;
+}
+
+/* ======================================================================== */
+/* The USB tree tool (record 23 section 9.6, record 25 section 8)            */
+/* ======================================================================== */
+
+const char *inst_tray_file(int arch)
+{
+    return arch == INST_ARCH_AMD64 ? "XHCITR64.EXE" : "XHCITR.EXE";
+}
+
+int inst_tray_run_data(const char *exe, char *out, size_t cap)
+{
+    size_t n = strlen(exe);
+
+    if (strchr(exe, '"') != NULL || n == 0 || n + 9 > cap) {
+        return 0;
+    }
+    strcpy(out, "\"");
+    strcat(out, exe);
+    strcat(out, "\" /tray");
+    return 1;
+}
+
+int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
+                          const INST_U32 pkgVer[4])
+{
+    if (installed == 0) {
+        return 1;
+    }
+    if (pkg != 1) {
+        return 0;
+    }
+    if (installed != 1) {
+        return 1;
+    }
+    return inst_ver_cmp(instVer, pkgVer) < 0;
+}
+
+int inst_tray_run_action(int noTray, int runState, int inPlace)
+{
+    if (noTray) {
+        return runState != 0 ? INST_TRAY_RUN_DELETE : INST_TRAY_RUN_KEEP;
+    }
+    if (inPlace && runState != 1) {
+        return INST_TRAY_RUN_SET;
+    }
+    return INST_TRAY_RUN_KEEP;
+}
+
+/* One line of an INI text: its length without the line end, and where the
+ * next begins. */
+static const char *ini_line(const char *p, size_t *len)
+{
+    const char *e = p;
+
+    while (*e != '\0' && *e != '\r' && *e != '\n') {
+        e++;
+    }
+    *len = (size_t)(e - p);
+    if (*e == '\r') {
+        e++;
+    }
+    if (*e == '\n') {
+        e++;
+    }
+    return e;
+}
+
+/* 1 when the line, blanks trimmed at both ends, is s (without case). */
+static int ini_is(const char *p, size_t n, const char *s)
+{
+    while (n > 0 && (*p == ' ' || *p == '\t')) {
+        p++;
+        n--;
+    }
+    while (n > 0 && (p[n - 1] == ' ' || p[n - 1] == '\t')) {
+        n--;
+    }
+    return n == strlen(s) && inst_eqn(p, s, n);
+}
+
+static int ini_section(const char *p, size_t n)
+{
+    while (n > 0 && (*p == ' ' || *p == '\t')) {
+        p++;
+        n--;
+    }
+    return n > 0 && *p == '[';
+}
+
+static int ini_put(char *out, size_t cap, size_t *used, const char *s,
+                   size_t n)
+{
+    if (*used + n + 1 > cap) {
+        return 0;
+    }
+    memcpy(out + *used, s, n);
+    *used += n;
+    out[*used] = '\0';
+    return 1;
+}
+
+static int ini_want(const char *dst, const char *src, char *want, size_t cap)
+{
+    if (strlen(dst) + strlen(src) + 2 > cap) {
+        return 0;
+    }
+    strcpy(want, dst);
+    strcat(want, "=");
+    strcat(want, src);
+    return 1;
+}
+
+int inst_wininit_add(const char *text, const char *dst, const char *src,
+                     char *out, size_t cap)
+{
+    char want[INST_LINE_CHARS];
+    const char *p;
+    const char *next;
+    const char *header = NULL;
+    size_t n;
+    size_t used = 0;
+    int inRename = 0;
+
+    if (cap == 0 || !ini_want(dst, src, want, sizeof(want))) {
+        return 0;
+    }
+    out[0] = '\0';
+    for (p = text; *p != '\0'; p = next) {
+        next = ini_line(p, &n);
+        if (ini_section(p, n)) {
+            inRename = ini_is(p, n, "[rename]");
+            if (inRename && header == NULL) {
+                header = next;
+            }
+        } else if (inRename && ini_is(p, n, want)) {
+            return ini_put(out, cap, &used, text, strlen(text));
+        }
+    }
+    if (header != NULL) {
+        if (!ini_put(out, cap, &used, text, (size_t)(header - text))) {
+            return 0;
+        }
+        if (header > text && header[-1] != '\n' &&
+            !ini_put(out, cap, &used, "\r\n", 2)) {
+            return 0;
+        }
+        return ini_put(out, cap, &used, want, strlen(want)) &&
+               ini_put(out, cap, &used, "\r\n", 2) &&
+               ini_put(out, cap, &used, header, strlen(header));
+    }
+    n = strlen(text);
+    if (!ini_put(out, cap, &used, text, n)) {
+        return 0;
+    }
+    if (n > 0 && text[n - 1] != '\n' && !ini_put(out, cap, &used, "\r\n", 2)) {
+        return 0;
+    }
+    return ini_put(out, cap, &used, "[rename]\r\n", 10) &&
+           ini_put(out, cap, &used, want, strlen(want)) &&
+           ini_put(out, cap, &used, "\r\n", 2);
+}
+
+int inst_wininit_drop(const char *text, const char *dst, const char *src,
+                      char *out, size_t cap)
+{
+    char want[INST_LINE_CHARS];
+    const char *p;
+    const char *next;
+    size_t n;
+    size_t used = 0;
+    int inRename = 0;
+    int dropped = 0;
+
+    if (cap == 0) {
+        return -1;
+    }
+    out[0] = '\0';
+    if (!ini_want(dst, src, want, sizeof(want))) {
+        return ini_put(out, cap, &used, text, strlen(text)) ? 0 : -1;
+    }
+    for (p = text; *p != '\0'; p = next) {
+        next = ini_line(p, &n);
+        if (ini_section(p, n)) {
+            inRename = ini_is(p, n, "[rename]");
+        } else if (inRename && ini_is(p, n, want)) {
+            dropped++;
+            continue;
+        }
+        if (!ini_put(out, cap, &used, p, (size_t)(next - p))) {
+            return -1;
+        }
+    }
+    return dropped;
 }

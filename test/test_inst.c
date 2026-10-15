@@ -1705,6 +1705,111 @@ static void test_tb_eject(void)
              "/eject /uninstall refused");
 }
 
+/* The USB tree tool (record 23 section 9.6, record 25 section 8): its name
+ * per architecture, the Run value's data, when it is copied, what becomes
+ * of the Run value, /notray, and WININIT.INI's [rename] lines. */
+static void test_tray(void)
+{
+    static const INST_U32 v300[4] = { 3, 0, 0, 0 };
+    static const INST_U32 v301[4] = { 3, 0, 0, 1 };
+    char buf[512];
+    char small[8];
+    INST_OPTS o;
+    const char *a1[] = { "x", "/notray", "/yes" };
+    const char *a2[] = { "x", "/notray", "/uninstall" };
+    const char *a3[] = { "x", "/notray", "/devices" };
+    const char *a4[] = { "x", "/eject", "/notray" };
+    const char *a5[] = { "x", "/list", "/notray" };
+
+    CHECK(inst_eq(inst_tray_file(INST_ARCH_X86), "XHCITR.EXE"), "x86 name");
+    CHECK(inst_eq(inst_tray_file(INST_ARCH_AMD64), "XHCITR64.EXE"), "x64 name");
+    CHECK(strcmp(INST_TRAY_CLASS, "Xhci98TrTray") == 0, "the window class");
+    CHECK(strcmp(INST_TRAY_RUN_VALUE, "xHCI98 USB Tree") == 0, "the Run value");
+
+    CHECK_EQ(inst_tray_run_data("C:\\WINDOWS\\XHCI98\\XHCITR.EXE", buf,
+                                sizeof(buf)), 1, "Run data");
+    CHECK(strcmp(buf, "\"C:\\WINDOWS\\XHCI98\\XHCITR.EXE\" /tray") == 0,
+          "Run data text");
+    CHECK_EQ(inst_tray_run_data("C:\\A.EXE", small, sizeof(small)), 0,
+             "Run data too long");
+    CHECK_EQ(inst_tray_run_data("C:\\A\"B.EXE", buf, sizeof(buf)), 0,
+             "a quote in the path");
+    CHECK_EQ(inst_tray_run_data("", buf, sizeof(buf)), 0, "an empty path");
+
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, 1, v300), 1, "absent: copied");
+    CHECK_EQ(inst_tray_copy_needed(0, NULL, -1, NULL), 1,
+             "absent, package unread: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v301), 1, "older: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, 1, v300), 0, "equal: left");
+    CHECK_EQ(inst_tray_copy_needed(1, v301, 1, v300), 0, "newer: left");
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, 1, v300), 1,
+             "installed unreadable: copied");
+    CHECK_EQ(inst_tray_copy_needed(1, v300, -1, NULL), 0,
+             "package unreadable: left");
+    CHECK_EQ(inst_tray_copy_needed(-1, NULL, -1, NULL), 0,
+             "both unreadable: left");
+
+    CHECK_EQ(inst_tray_run_action(0, 0, 1), INST_TRAY_RUN_SET, "absent: set");
+    CHECK_EQ(inst_tray_run_action(0, 2, 1), INST_TRAY_RUN_SET, "other: set");
+    CHECK_EQ(inst_tray_run_action(0, 1, 1), INST_TRAY_RUN_KEEP, "same: kept");
+    CHECK_EQ(inst_tray_run_action(0, 0, 0), INST_TRAY_RUN_KEEP,
+             "no file in place: not written");
+    CHECK_EQ(inst_tray_run_action(1, 0, 1), INST_TRAY_RUN_KEEP,
+             "/notray, none: nothing");
+    CHECK_EQ(inst_tray_run_action(1, 1, 1), INST_TRAY_RUN_DELETE,
+             "/notray: deleted");
+    CHECK_EQ(inst_tray_run_action(1, 2, 0), INST_TRAY_RUN_DELETE,
+             "/notray, other data: deleted");
+
+    CHECK_EQ(parse(3, a1, &o), 0, "/notray /yes");
+    CHECK(o.NoTray && o.Yes, "/notray field");
+    CHECK_EQ(parse(3, a2, &o), 1, "/notray /uninstall refused");
+    CHECK_EQ(parse(3, a3, &o), 1, "/notray /devices refused");
+    CHECK_EQ(parse(3, a4, &o), 1, "/eject /notray refused");
+    CHECK_EQ(parse(3, a5, &o), 0, "/list /notray");
+
+    /* WININIT.INI: no file, an existing section, another section, a line
+     * already there, a header with no line end, the lines kept. */
+    CHECK_EQ(inst_wininit_add("", "NUL", "C:\\WINDOWS\\XHCI98\\XHCITR.EXE",
+                              buf, sizeof(buf)), 1, "add to nothing");
+    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\WINDOWS\\XHCI98\\XHCITR.EXE\r\n") == 0,
+          "made the section");
+    CHECK_EQ(inst_wininit_add("[Rename]\r\nNUL=C:\\A.TMP\r\n", "NUL", "C:\\B",
+                              buf, sizeof(buf)), 1, "add to the section");
+    CHECK(strcmp(buf, "[Rename]\r\nNUL=C:\\B\r\nNUL=C:\\A.TMP\r\n") == 0,
+          "after the header, the old line kept");
+    CHECK_EQ(inst_wininit_add("[other]\nX=Y", "C:\\T.EXE", "C:\\T.NEW", buf,
+                              sizeof(buf)), 1, "another section");
+    CHECK(strcmp(buf, "[other]\nX=Y\r\n[rename]\r\nC:\\T.EXE=C:\\T.NEW\r\n") == 0,
+          "section appended after a line end");
+    CHECK_EQ(inst_wininit_add("[rename]\r\n nul=c:\\b \r\n", "NUL", "C:\\B",
+                              buf, sizeof(buf)), 1, "already there");
+    CHECK(strcmp(buf, "[rename]\r\n nul=c:\\b \r\n") == 0, "not added twice");
+    CHECK_EQ(inst_wininit_add("[other]\r\nNUL=C:\\B\r\n", "NUL", "C:\\B", buf,
+                              sizeof(buf)), 1, "the line in another section");
+    CHECK(strcmp(buf, "[other]\r\nNUL=C:\\B\r\n[rename]\r\nNUL=C:\\B\r\n") == 0,
+          "only [rename] counts");
+    CHECK_EQ(inst_wininit_add("[rename]", "NUL", "C:\\B", buf, sizeof(buf)), 1,
+             "a header without a line end");
+    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\B\r\n") == 0, "the line end added");
+    CHECK_EQ(inst_wininit_add("[rename]\r\n", "NUL", "C:\\B", small,
+                              sizeof(small)), 0, "too small");
+
+    CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\nNUL=C:\\B\r\n"
+                               "[x]\r\nNUL=C:\\B\r\n", "NUL", "C:\\B", buf,
+                               sizeof(buf)), 1, "one line taken out");
+    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\A\r\n[x]\r\nNUL=C:\\B\r\n") == 0,
+          "only that line, only in [rename]");
+    CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\n", "NUL", "C:\\B",
+                               buf, sizeof(buf)), 0, "nothing to take out");
+    CHECK(strcmp(buf, "[rename]\r\nNUL=C:\\A\r\n") == 0, "kept whole");
+    CHECK_EQ(inst_wininit_drop("[rename]\nNUL=C:\\B", "NUL", "c:\\b", buf,
+                               sizeof(buf)), 1, "the last line, no line end");
+    CHECK(strcmp(buf, "[rename]\n") == 0, "header kept");
+    CHECK_EQ(inst_wininit_drop("[rename]\r\nNUL=C:\\A\r\n", "NUL", "C:\\B",
+                               small, sizeof(small)), -1, "too small to keep");
+}
+
 int main(void)
 {
     test_versions();
@@ -1727,6 +1832,7 @@ int main(void)
     test_tb_units();
     test_tb_eject();
     test_tb_question();
+    test_tray();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

@@ -338,6 +338,7 @@ typedef struct _INST_OPTS {
     int Restage;
     int Uninstall;
     int Thunderbolt;        /* /thunderbolt: the Thunderbolt support, unasked */
+    int NoTray;             /* /notray: XHCITR not started at login     */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -654,5 +655,55 @@ int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
 /* The answer to the question: 1 yes, 0 no (Enter: the default), -1 not an
  * answer (asked again). */
 int inst_tb_answer(const char *line, int defaultYes);
+
+/* ---- the USB tree tool (record 23 section 9.6, record 25 section 8) ---------- */
+
+/* The contract with XHCITR: its hidden tray window's class, the event that
+ * asks every running copy to quit (NT: in the Global namespace, so a copy
+ * in another session hears it too), and the Run value that starts it. */
+#define INST_TRAY_CLASS         "Xhci98TrTray"
+#define INST_TRAY_QUIT_NT       "Global\\Xhci98TrQuit"
+#define INST_TRAY_QUIT_9X       "Xhci98TrQuit"
+#define INST_TRAY_RUN_KEY       "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
+#define INST_TRAY_RUN_VALUE     "xHCI98 USB Tree"
+#define INST_TRAY_CLOSE_MS      15000UL
+
+/* The tool's file name for an architecture: XHCITR.EXE (x86, 98 SE and ME
+ * included) or XHCITR64.EXE. */
+const char *inst_tray_file(int arch);
+
+/* The Run value's data, "\"<exe>\" /tray": 1, or 0 when it does not fit
+ * or exe holds a quote. */
+int inst_tray_run_data(const char *exe, char *out, size_t cap);
+
+/* Whether the package's tool is copied over the installed one. installed:
+ * the installed copy's version as file_version answers it (1 read, 0 the
+ * file absent, -1 unreadable), pkg the same for the package's copy. Copied
+ * when the installed copy is absent, when its version is unreadable while
+ * the package's is read, or when it is older; an equal or newer one is
+ * left, and so is any copy when the package's version cannot be read. */
+int inst_tray_copy_needed(int installed, const INST_U32 instVer[4], int pkg,
+                          const INST_U32 pkgVer[4]);
+
+/* What becomes of the Run value. runState: 0 absent, 1 the wanted data, 2
+ * other data; inPlace: the tool's file is at its installed path (the value
+ * is written only then). */
+#define INST_TRAY_RUN_KEEP      0
+#define INST_TRAY_RUN_SET       1
+#define INST_TRAY_RUN_DELETE    2
+int inst_tray_run_action(int noTray, int runState, int inPlace);
+
+/* WININIT.INI (98 SE and ME): text with the line "dst=src" added to its
+ * [rename] section, made at the end when absent; every other line is kept
+ * as it is, and nothing is added when the same line is there already
+ * (compared without case). 1 with out written, 0 when it does not fit. */
+int inst_wininit_add(const char *text, const char *dst, const char *src,
+                     char *out, size_t cap);
+
+/* The same text with every "dst=src" line of its [rename] section taken
+ * out (compared without case) and nothing else changed. Returns the number
+ * of lines taken out, or -1 when out is too small. */
+int inst_wininit_drop(const char *text, const char *dst, const char *src,
+                      char *out, size_t cap);
 
 #endif /* INST_CORE_H */
