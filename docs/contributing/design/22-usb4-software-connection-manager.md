@@ -2349,9 +2349,10 @@ from their first form, as each row says.
   until the next boot. Which real USB4 hosts lose power or their PCI
   configuration without a PnP removal under a legacy operating system is
   unread. On Windows 98 and ME the reconciliation is the CONFIGMG
-  worker's; until that worker is in the tree the contained domain's
-  devices are not removed by it, and the operating system learns of them
-  only from their own drivers.
+  worker's (`cm_cfgwk.c`, the children retained at tunnel up removed
+  without reading a bridge header); a containment before the seam's
+  first action has opened that route requests none, and the operating
+  system then learns of the devices only from their own drivers.
 - **Daisy chains, DisplayPort, CLx, sleep per Guide chapter 8**: out of
   this cut.
 
