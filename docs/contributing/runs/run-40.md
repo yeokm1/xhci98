@@ -846,3 +846,44 @@ image) came up again after the loss. **PASS**.
 - A leg with `nvme98` bound and a copy running on the volume, and the
   98 SE reconciliation read from a log (this image writes no debug-port
   log).
+
+## 40-V.1 on 98 SE and 40-V.3 on ME - The 9x legs (2026-10-15)
+
+**Verdict: U.2 passes for the connection manager on 98 SE, with the NVMe
+left at Code 29 by the guest's interrupt routing; ME passes the install
+and one plug cycle on `usb4-generic`; the other U legs are owed**
+(2026-10-15). The vehicle is `run-39.md`'s "39-V.1 on 98 SE, 39-V.3 on ME
+and 39-V.4" (the same binary, `-Qemu vm\usb4\bin-5ba7f60`, the same NVMe
+image and overlays).
+
+**98 SE** (`g98`, an overlay of `vm\t26\win98-gold.qcow2`, QMP and VNC
+47904 and 47905, `-Usb4Profile generic -HostModel minimal -Usb3
+-DeviceAtBoot 0`). The host interface was offered as "PCI Universal Serial
+Bus" and took "xHCI98 USB4 Host Router" from `xhcicm.inf` (39-V.4's
+reading); the `qemu-xhci` of `-Usb3` took `xhci98.sys`. These legs ran the
+`qemu` flavour of `3.0.0.0` at `9ea7390f` (p39-nvlink and eject9x merged),
+`xhcicm.sys` SHA-256 `ba7b3fac...985d`, copied over the installed driver,
+then a restart.
+
+| Leg | Reading | Result |
+|---|---|---|
+| U.2 hot plug | `cm.select.outcome=4`; port 1 named `00:05.0` (`u4.named=01002802`); `device_add`: `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, `u4.action=01010001`, `cm.reenum.9x.reenumerate=00002800`, `removable=0`; `cm.nvlink.up.late-none=00000028` (`nvme98` 0.1.1.0 has no link-state receiver); "PCI Card" offered with no Refresh; after a restart the tunnel was built at start (`u4.pcie.up` again) | PASS for the connection manager |
+| The NVMe on that guest | `nvme98` installed, the device at **Code 29** ("the BIOS ... did not give it an IRQ") with `-Usb3`'s `qemu-xhci` at 00:07.0 beside the tunnel bridge, so no volume; the same device on the same bridge without `-Usb3` mounted on every earlier 98 SE leg (u4-asm, run-39's legs) | a reading of the guest's interrupt routing, not this driver's; the volume half of U.2 not read |
+| U.8, the USB3 half | the USB3 tunnel up in the trace (`usb4_usb3_apply ustor0: attached`), the disk on the tunnel's `qemu-xhci` at 5000 Mb/s (`info usb`), "USB Mass Storage Device" installed under `xhci98.sys`. Note: the emulator attached `ustor0` at power-on too, before any connection manager ran, and detached it only at the first tunnel transition, so a disk seen at boot is not evidence of a tunnel | PASS for the tunnel; `XhciCmUsb3Tunnel` 0 owed |
+
+**ME** (40-V.3's ME tier; the install is `run-39.md`'s): on
+`usb4-generic` with `host-model=intel-adl` the host took "xHCI98 USB4 Host
+Router" by automatic search from the package `INSTALL.BAT` had copied,
+the software connection manager started (`cm.select.outcome=4`), and one
+plug, unplug and re-plug brought the NVMe up with no Refresh, removed it
+and brought it back with its data (`run-39.md`'s ME table). Its suspend
+and resume readings are there too. **PASS.**
+
+**Owed.** U.4 (the harness), U.7 (`XhciCmPreOsCleanup` 2), U.9 (disable
+and enable with the tunnel preserved), U.11 and U.12 (the launcher's
+`-Port2` and `-Chain` are on branch `v-2k`), U.13 (inert starts), U.8's
+`XhciCmUsb3Tunnel` 0, the NVMe volume on a 98 SE guest with `-Usb3`
+(move the `qemu-xhci` or read without it), 98 SE suspend, and the 98 SE
+reading of the controller-unavailable route.
+
+**Evidence.** `vm\v-9x\g98\` and `vm\v-9x\me\`, `vm\v-9x\notes.txt`.
