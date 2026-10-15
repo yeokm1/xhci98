@@ -6386,6 +6386,7 @@ static int tb_after(const char *portId, const char *unitId, int nhiK,
     int portKnown = 0;
     int routers = 0;
     int tries;
+    int walked = 0;
 
     /* A stable reading after the eject: the record's generation taken as
      * the baseline, the tree walked, and the walk repeated while the
@@ -6398,8 +6399,12 @@ static int tb_after(const char *portId, const char *unitId, int nhiK,
         }
         tbh[nhiK].Confirmed = 1;
         tbh[nhiK].Gen = inst_get32(tbh[nhiK].Rec, CM_ST_O_GENERATION);
-        whole = tb_scan(0) && tbnBad == 0 && !tbChanging &&
-                tbh[nhiK].Confirmed;
+        walked = tb_scan(0);
+        whole = walked && tbnBad == 0 && !tbChanging && tbh[nhiK].Confirmed;
+    }
+    if (!walked) {
+        /* No reading after the eject: tbn is still the one before it. */
+        return INST_UNPLUG_CHECK;
     }
     for (i = 0; i < tbnCount; i++) {
         if (inst_eq(tbn[i].R.Id, portId)) {
