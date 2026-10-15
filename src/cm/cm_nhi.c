@@ -144,7 +144,7 @@ static const char *const cmNhiCounterNames[] = {
     "u4.drv.learned", "u4.drv.learn-tries", "u4.drv.linkdowns",
     "u4.drv.paths-closed", "u4.drv.statement.no-channel", "u4.drv.ejects",
     "u4.drv.ejects.unmapped", "u4.drv.ejects.failed", "u4.drv.resume.held",
-    "u4.drv.force-power.kept"
+    "u4.drv.force-power.kept", "u4.drv.contained", "u4.drv.contain-refused"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,
@@ -199,6 +199,7 @@ static VOID cmLogTable(PCM_NHI nhi)
 static VOID cmU4LogCounters(PCM_NHI nhi);
 static VOID cmU4Drain(PCM_NHI nhi);
 static VOID cmU4LearnPending(PCM_NHI nhi);
+static BOOLEAN cmU4Contained(PCM_NHI nhi);
 
 static VOID cmLogCounters(PCM_NHI nhi)
 {
@@ -273,6 +274,9 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
 VOID CmNhiPollPass(PCM_NHI nhi)
 {
     if (nhi->U4On) {
+        if (cmU4Contained(nhi)) {
+            return;
+        }
         TbtU4Poll(&nhi->U4);
         CmNhiDrainActions(nhi);
         cmU4LearnPending(nhi);
@@ -354,7 +358,8 @@ static const char *const cmU4CounterNames[] = {
     "u4.statements.withheld", "u4.unplugs", "u4.unplugs.nested",
     "u4.quick-replugs", "u4.hotplug.lane0", "u4.hotplug.other",
     "u4.hotplug.downstream", "u4.links.discovered", "u4.links.removed",
-    "u4.action-overflows", "u4.ejects"
+    "u4.action-overflows", "u4.ejects", "u4.contained.refused",
+    "u4.contained.retired"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -365,9 +370,24 @@ XHCI_C_ASSERT(cm_u4_counter_names,
  * one (cmU4ToIcm): above every TBT_ICM_WHY_*, the USB4 kind in bits 3:0. */
 #define CM_U4_WHY_BASE 0x80UL
 
+/*
+ * The USB4 profile contained (record 22 section 7.7): the core marked so,
+ * or the liveness gate closed under this profile (a loss the monitor saw,
+ * which under the USB4 profile is CONTAINED, or a surprise removal). Every
+ * lifecycle step of the profile asks this before it starts, as well as
+ * the gate refusing every register access. IRQL: PASSIVE_LEVEL.
+ */
+static BOOLEAN cmU4Contained(PCM_NHI nhi)
+{
+    return (BOOLEAN)(nhi->U4On && (nhi->U4.Contained || !CmNhiHwAccess(nhi)));
+}
+
+/* Failed after activation, or contained: what the suspend and the resume
+ * act on never includes it. */
 BOOLEAN CmNhiFailed(PCM_NHI nhi)
 {
-    return nhi->U4On ? nhi->U4.Failed : nhi->Icm.Failed;
+    return nhi->U4On ? (BOOLEAN)(nhi->U4.Failed || cmU4Contained(nhi))
+                     : nhi->Icm.Failed;
 }
 
 /* A client the idle poll serves: the ICM bound, or the USB4 profile
@@ -376,7 +396,8 @@ BOOLEAN CmNhiRunning(PCM_NHI nhi)
 {
     if (nhi->U4On) {
         return (BOOLEAN)(nhi->U4.Stage == TBT_U4_STAGE_RUNNING &&
-                         !nhi->U4.Failed && !nhi->U4.Suspended);
+                         !nhi->U4.Failed && !nhi->U4.Suspended &&
+                         !cmU4Contained(nhi));
     }
     return nhi->Icm.Bound;
 }
@@ -387,6 +408,19 @@ BOOLEAN CmNhiRunning(PCM_NHI nhi)
 VOID CmNhiUnbind(PCM_NHI nhi)
 {
     if (nhi->U4On) {
+        if (cmU4Contained(nhi)) {
+            /* Record 22 section 7.7: no fresh reading of the ports (a
+             * router request) and no ring stop (a write): the core is
+             * contained, if the gate closed without it, so its stop
+             * writes nothing; force power stays, the buffer follows
+             * DmaMayRun (cm_pool.c). */
+            nhi->U4ClearOk = 0;
+            TbtU4Contain(&nhi->U4);
+            TbtU4Stop(&nhi->U4);
+            nhi->Counters.U4ContainRefused++;
+            CmLogNote(nhi, "u4.stop.contained", nhi->Live.State);
+            return;
+        }
         /* Record 22 section 4.2's evidence, read fresh on the rings before
          * they stop: only then may force power this instance set be
          * cleared (CmNhiMayClearPower). */
@@ -426,7 +460,8 @@ BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
          * depends on its power is unknown (record 21 section 5.6). */
         return CmNhiHwAccess(nhi);
     }
-    if (!nhi->U4ClearOk || nhi->Stage != CM_STAGE_ACTIVE || nhi->Suspended ||
+    if (cmU4Contained(nhi) ||
+        !nhi->U4ClearOk || nhi->Stage != CM_STAGE_ACTIVE || nhi->Suspended ||
         nhi->U4.Failed || nhi->U4.Suspended || nhi->Power.FwReadyFailed ||
         nhi->U4.PortCount == 0 || TbtU4AnyRouterConnected(&nhi->U4)) {
         return FALSE;
@@ -472,7 +507,63 @@ VOID CmNhiRevoke(PCM_NHI nhi)
  * queued and deferred work is task u4-live's. */
 VOID CmNhiU4Contain(PCM_NHI nhi)
 {
-    CmLogNote(nhi, "u4.contained", CmLiveEpisode(&nhi->Live));
+    TBT_U4_LINKDOWN info;
+    TBT_ICM_ACTION a;
+    const TBT_U4_PORT *p;
+    ULONG i;
+
+    if (!nhi->U4On || nhi->U4.Contained) {
+        return;
+    }
+    /* 1: the core contained - requests refused, waits ended, actions and
+     * deferred tails retired, anchors invalidated - with no access. */
+    TbtU4Contain(&nhi->U4);
+    /* The gate closed for good too, whatever made the call (the monitor's
+     * sample, or a resume that found the host interface gone while the
+     * monitor was off): no access of the ordinary class from now. */
+    if (nhi->Live.State != CM_LIVE_REVOKED) {
+        nhi->Live.State = CM_LIVE_CONTAINED;
+    }
+    nhi->Counters.U4Contained++;
+    nhi->U4ClearOk = 0;
+    CmLogNote(nhi, "u4.contained", (CmLiveEpisode(&nhi->Live) << 8) |
+                                       (nhi->Live.State & 0xFFUL));
+    /* 2: a batch taken and not delivered never reaches the seam. */
+    nhi->U4BatchCount = 0;
+    /* 3: the nvme98 channel told that each connection it may hold as up
+     * lost presence, with nothing proven: PathClosed FALSE and no anchor,
+     * so no statement can follow (record 21 section 7.3); the channel's
+     * own gone deadline stands. */
+    if (nhi->U4DownHook != NULL) {
+        for (i = 1; i <= nhi->U4.PortCount; i++) {
+            p = TbtU4Port(&nhi->U4, i);
+            if (p == NULL || (!p->Pcie.Up && p->Pcie.Written == 0)) {
+                continue;
+            }
+            CmZero(&info, sizeof(info));
+            info.Port = p->Index;
+            info.Generation = p->Generation;
+            info.PcieDown = p->PcieDown;
+            info.MapValid = p->MapValid;
+            info.MapRid = p->MapRid;
+            (VOID)nhi->U4DownHook(nhi->U4HookContext, &info);
+        }
+    }
+    /* 4: one reconciliation, reason "controller unavailable": every member
+     * of the tunnel-port set as changed (CmReenumAction's RESYNC, which
+     * also voids the pending ejects), then the seam's own route for the
+     * loss (CmReenumUnavailable). XhciCmReenum 0 requests nothing. */
+    if (nhi->ReenumOn) {
+        CmZero(&a, sizeof(a));
+        a.Kind = TBT_ICM_ACT_RESYNC;
+        a.Why = TBT_ICM_WHY_UNAVAILABLE;
+        nhi->Counters.U4ActionsResync++;
+        if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
+            nhi->Counters.ReenumSkipped++;
+        }
+        CmReenumAction(nhi, &a);
+        CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
+    }
 }
 
 /* The precondition of a recovery: the function still the one the healthy
@@ -594,7 +685,7 @@ VOID CmNhiNamePorts(PCM_NHI nhi)
     ULONG i;
     ULONG rc;
 
-    if (!nhi->U4On || nhi->Reenum.Cfg.Read == NULL) {
+    if (!nhi->U4On || nhi->Reenum.Cfg.Read == NULL || cmU4Contained(nhi)) {
         return;
     }
     for (i = 1; i <= nhi->U4.PortCount; i++) {
@@ -640,7 +731,7 @@ BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         return TbtIcmActionLive(&nhi->Icm, action);
     }
     p = TbtU4Port(&nhi->U4, action->Link);
-    return (BOOLEAN)(p != NULL && !nhi->U4.Failed &&
+    return (BOOLEAN)(p != NULL && !nhi->U4.Failed && !cmU4Contained(nhi) &&
                      p->Generation == action->Serial && p->Dev.Present &&
                      (action->Kind != TBT_ICM_ACT_TUNNEL_UP || p->Pcie.Up));
 }
@@ -797,6 +888,9 @@ static VOID cmU4LearnPending(PCM_NHI nhi)
 {
     ULONG port;
 
+    if (cmU4Contained(nhi)) {
+        return;     /* nothing is attributed after the loss */
+    }
     cmU4Reconcile(nhi);
     if (nhi->ArmOwed) {
         cmU4Arm(nhi);
@@ -851,7 +945,7 @@ VOID CmNhiU4Take(PCM_NHI nhi)
     ULONG n;
     ULONG i;
 
-    if (!nhi->U4On || nhi->U4BatchCount != 0) {
+    if (!nhi->U4On || nhi->U4BatchCount != 0 || cmU4Contained(nhi)) {
         return;
     }
     n = 0;
@@ -900,6 +994,12 @@ static VOID cmU4Deliver(PCM_NHI nhi)
     ULONG i;
 
     n = nhi->U4BatchCount;
+    if (cmU4Contained(nhi)) {
+        /* Record 22 section 7.7: nothing of a batch taken before the loss
+         * reaches the seam; CmNhiU4Contain's reconciliation stands for it. */
+        nhi->U4BatchCount = 0;
+        return;
+    }
     /* Before any XhciTbtLearn of this batch: every port that may carry a
      * live unattributed path is pending (cmU4Reconcile). */
     cmU4Reconcile(nhi);
@@ -969,7 +1069,7 @@ static VOID cmU4Drain(PCM_NHI nhi)
  */
 VOID CmNhiSetChanged(PCM_NHI nhi)
 {
-    if (nhi->U4On) {
+    if (nhi->U4On && !cmU4Contained(nhi)) {
         cmU4Arm(nhi);
     }
 }
@@ -1058,6 +1158,12 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
     nhi = (PCM_NHI)context;
     nhi->Counters.U4Ejects++;
     CmLogNote(nhi, "u4.eject.bridge", bdf);
+    if (cmU4Contained(nhi)) {
+        /* Record 22 section 7.7: no request after the loss. */
+        nhi->Counters.U4ContainRefused++;
+        CmLogNote(nhi, "u4.eject.contained", nhi->Live.State);
+        return;
+    }
     if (!nhi->U4On || !CmNhiRunning(nhi) || nhi->Suspended ||
         nhi->DevicePower != PowerDeviceD0) {
         nhi->Counters.U4EjectsUnmapped++;
@@ -1193,6 +1299,9 @@ static VOID cmU4Activate(PCM_NHI nhi)
     XhciTbtBindsInit(&nhi->Binds);
     nhi->ArmOwed = 0;
     nhi->U4On = 1;
+    /* The liveness monitor's USB4 rule (record 22 section 7.7): a loss
+     * contains, never recovers. Armed by the bind. */
+    nhi->Live.Usb4 = 1;
     nhi->Inert = CM_INERT_NONE;
     nhi->Stage = CM_STAGE_ACTIVE;
     nhi->BindOwed = 1;
@@ -1215,6 +1324,7 @@ static VOID cmU4Bind(PCM_NHI nhi)
     const TBT_U4_PORT *p;
     LONG rc;
     ULONG i;
+    ULONG v;
 
     nhi->Counters.U4Starts++;
     rc = TbtU4Start(&nhi->U4, nhi->CommonVa, nhi->CommonPa.LowPart,
@@ -1243,6 +1353,11 @@ static VOID cmU4Bind(PCM_NHI nhi)
                           (p->MapValid ? 1UL : 0));
         }
     }
+    /* Monitored from here, against the size register's value now (record
+     * 21 section 5.5): sixteen entries, 256-byte buffers. */
+    v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+    (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
+    CmLogNote(nhi, "cm.live.baseline", v);
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;
     CmReenumSetEject(nhi, cmU4Eject, nhi);
@@ -1473,7 +1588,14 @@ VOID CmNhiStopWork(PCM_NHI nhi)
         nhi->ReenumOn = 0;
     }
     if (nhi->U4On) {
-        if (powered) {
+        if (powered && cmU4Contained(nhi)) {
+            /* Record 22 section 7.7: the unbind writes nothing, and neither
+             * does the rest of the stop - no Bus Master bit, no force
+             * power - for a host interface this driver can no longer read. */
+            CmNhiUnbind(nhi);
+            CmLogNote(nhi, "cm.unbind.no-access", nhi->Live.State);
+            powered = FALSE;
+        } else if (powered) {
             CmNhiUnbind(nhi);
         } else {
             /* Out of D0 the suspend stopped the rings (TbtU4Suspend). */

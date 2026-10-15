@@ -152,6 +152,8 @@ typedef struct _CM_COUNTERS {
     ULONG U4EjectsFailed;   /* TbtU4Eject not TBT_OK                       */
     ULONG U4ResumeHeld;     /* TbtU4Resume: an obligation not met          */
     ULONG U4ForcePowerKept; /* a router connected at stop: force power kept */
+    ULONG U4Contained;      /* the USB4 profile contained (record 22 7.7)  */
+    ULONG U4ContainRefused; /* a lifecycle step refused while contained    */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {

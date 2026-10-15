@@ -189,7 +189,7 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
             CmReenumStop(nhi);
             nhi->ReenumOn = 0;
         }
-        if (nhi->U4On || CmNhiHwAccess(nhi)) {
+        if (CmNhiHwAccess(nhi) && !(nhi->U4On && nhi->U4.Contained)) {
             CmNhiUnbind(nhi);
             CmNhiDrainActions(nhi);
             (VOID)CmNhiSetBusMaster(nhi, FALSE);
@@ -245,12 +245,27 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
 {
     BOOLEAN ok;
     BOOLEAN held;
+    BOOLEAN lost;
     LONG rc;
+    ULONG v;
 
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
     }
     nhi->Suspended = 0;
+    if (nhi->U4On && (nhi->U4.Contained || !CmNhiHwAccess(nhi))) {
+        /* Record 22 section 7.7: a contained instance is never restarted
+         * - no platform step, no Bus Master write, no ring; a hold the
+         * suspend published is released through the failure path
+         * (decision U15's order: release, then invalidate). */
+        TbtU4Contain(&nhi->U4);
+        nhi->Counters.U4ContainRefused++;
+        CmLogNote(nhi, "u4.resume.contained", nhi->Live.State);
+        if (nhi->ReenumOn) {
+            CmReenumResumed(nhi, FALSE);
+        }
+        return FALSE;
+    }
     if (nhi->Stage != CM_STAGE_ACTIVE || CmNhiFailed(nhi)) {
         return TRUE;
     }
@@ -261,6 +276,7 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         ok = FALSE;
     }
     held = FALSE;
+    lost = FALSE;
     if (ok && nhi->U4On) {
         rc = TbtU4Resume(&nhi->U4);
         if (rc == TBT_E_STATE && !nhi->U4.Failed) {
@@ -274,6 +290,23 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             CmLogNote(nhi, "u4.inert-reason", nhi->U4.InertReason);
             ok = FALSE;
+            /* Record 22 section 7.7: a resume that failed because the host
+             * interface is gone (the size register all ones, or not the
+             * value this driver programs) is contained, after the hold's
+             * failure path below. */
+            v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+            if (v == 0xFFFFFFFFUL ||
+                (nhi->Live.Baseline != 0 && v != nhi->Live.Baseline)) {
+                lost = TRUE;
+            }
+        }
+        if (ok) {
+            /* The rings run again: monitored, the USB4 rule kept (a loss
+             * contains). A held resume runs too and is monitored. */
+            (VOID)CmLiveArm(&nhi->Live,
+                            CmThrProbe32(nhi, TBT_RX_RING(0) +
+                                                  TBT_RING_SIZE_REG),
+                            nhi->Host.NowMs(nhi));
         }
     } else if (ok) {
         rc = TbtIcmResume(&nhi->Icm);
@@ -305,6 +338,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         CmReenumResumed(nhi, (BOOLEAN)(ok && !held));
     }
     CmNhiDrainActions(nhi);
+    if (lost) {
+        CmNhiU4Contain(nhi);
+    }
     return ok;
 }
 

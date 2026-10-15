@@ -242,6 +242,7 @@ typedef struct _TBT_U4_TUNNEL {
 #define TBT_U4_WHY_EJECTED          17UL
 #define TBT_U4_WHY_RESUME           18UL    /* HELD: a resume obligation not met */
 #define TBT_U4_WHY_LANE_STATE       19UL
+#define TBT_U4_WHY_CONTAINED        20UL    /* a sequence the containment stopped */
 
 typedef struct _TBT_U4_PORT {
     ULONG Index;            /* 1-based */
@@ -481,6 +482,8 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG LinksRemoved;
     ULONG ActionOverflows;
     ULONG Ejects;
+    ULONG ContainedRefused; /* requests and entry points refused, contained */
+    ULONG ContainedRetired; /* actions and deferred tails retired at containment */
 } TBT_U4_COUNTERS;
 
 /* The start stages (section 3.5's two inert forms). */
@@ -502,6 +505,7 @@ typedef struct _TBT_U4CM {
     BOOLEAN Failed;         /* failure after activation: inert, rings stopped */
     ULONG InertReason;      /* tbt_hw.h TBT_INERT_* */
     BOOLEAN Suspended;
+    BOOLEAN Contained;      /* the host interface lost: TbtU4Contain */
 
     TBT_U4_LINKDOWN_FN LinkDown;
     PVOID LinkDownContext;
@@ -605,6 +609,24 @@ ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs);
 /* Stop (section 11): rings stopped, nothing on the fabric changed.
  * Idempotent. */
 VOID TbtU4Stop(PTBT_U4CM cm);
+
+/*
+ * The host interface lost (record 22 section 7.7, record 21 section 5.5's
+ * monitor): the instance contained for good, with no register access of
+ * any kind - every request refused before the transport, every wait of
+ * the core's own ended, the queued actions retired, the deferred teardown
+ * tails abandoned, every anchor invalidated. Ports, tunnels, quarantine
+ * and obligations are kept as the last reading left them, never acted on
+ * again. From then on TbtU4Poll, TbtU4Eject, TbtU4EjectPcie, TbtU4Suspend
+ * and TbtU4Resume do nothing (the last two refuse), TbtU4Stop writes
+ * nothing (the rings are never proven stopped), TbtU4NextAction returns
+ * FALSE, TbtU4AllPortsDisconnected FALSE and TbtU4AnyRouterConnected TRUE.
+ * Idempotent; only a fresh TbtU4Init clears it. It may be called from
+ * inside a sequence (the host's Cancelled callback being the usual way a
+ * running sequence learns of the loss); the sequence then stops at its
+ * next request or wait.
+ */
+VOID TbtU4Contain(PTBT_U4CM cm);
 
 /* Whether a device router is connected on any port (record 22 section
  * 4.2's condition for clearing force power at stop). */
