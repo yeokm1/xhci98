@@ -27,6 +27,7 @@ typedef struct _CM_STATUS_IN {
     ULONG PortActive;       /* bit n: an active member                     */
     ULONG PathCount[CM_ST_MAX_PORTS];   /* 0 where unknown                 */
     ULONG Path[CM_ST_MAX_PORTS][CM_ST_PATH_MAX];
+    ULONG Echo;             /* the ask last read (record 24 section 3.3)   */
 } CM_STATUS_IN, *PCM_STATUS_IN;
 
 /*
@@ -59,6 +60,10 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
 /* The publication's state, one per NHI (CM_NHI.StatusPub, cm_statos.c);
  * touched by the connection-manager thread alone. */
 typedef struct _CM_STATUS_PUB {
+    PVOID DevKey;           /* the hardware key, opened in the start      */
+    PVOID DrvKey;           /* the driver key, for the ask                */
+    ULONG Echo;             /* the ask last read                          */
+    ULONG AskAtMs;          /* when it was read                           */
     ULONG Started;          /* a pass has seen the instance started       */
     ULONG Published;        /* a record was written in this load          */
     ULONG Generation;
@@ -69,6 +74,7 @@ typedef struct _CM_STATUS_PUB {
     ULONG Dirty;            /* the last write failed: try again           */
     ULONG PathBdf[CM_ST_MAX_PORTS];     /* 98: the paths computed, for   */
     ULONG PathCount[CM_ST_MAX_PORTS];   /* these members (0: unknown)    */
+    ULONG PathAtMs[CM_ST_MAX_PORTS];    /* when an unknown one was tried */
     ULONG Path[CM_ST_MAX_PORTS][CM_ST_PATH_MAX];
     UCHAR Last[CM_ST_MAX_BYTES];
     UCHAR Built[CM_ST_MAX_BYTES];

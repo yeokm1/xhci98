@@ -1404,6 +1404,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     POWER_STATE d0;
 
     CmReadValues(nhi);
+    CmStatusOpen(nhi);
     CmLogApply(nhi);
     nhi->Starts++;
     CmLogNote(nhi, "cm.start", nhi->Starts);

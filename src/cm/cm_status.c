@@ -341,6 +341,7 @@ ULONG CmStatusBuild(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
     cmStPut(buf, CM_ST_O_ROUTER_COUNT, count);
     cmStPut(buf, CM_ST_O_ENTRY_BYTES, CM_ST_ENTRY_BYTES);
     cmStPut(buf, CM_ST_O_FLAGS, flags);
+    cmStPut(buf, CM_ST_O_ECHO, in->Echo);
     return CM_ST_HDR_BYTES + count * CM_ST_ENTRY_BYTES;
 }
 

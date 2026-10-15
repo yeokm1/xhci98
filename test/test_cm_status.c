@@ -108,6 +108,12 @@ static void test_icm(void)
     CHECK_EQ(get32(rec, CM_ST_O_PORTS), 0x0208UL, "port 0");
     CHECK_EQ(get32(rec, CM_ST_O_PORTS + 8), CM_ST_UNKNOWN, "port 2 unused");
     CHECK_EQ(rec[CM_ST_O_PATHS], 0, "no path given");
+    CHECK_EQ(get32(rec, CM_ST_O_ECHO), 0, "no ask read: echo 0");
+    in.Echo = 0x5EED1234UL;
+    (void)CmStatusBuild(rec2, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec2, CM_ST_O_ECHO), 0x5EED1234UL, "the echo");
+    CHECK(CmStatusChanged(rec, n, rec2, n), "a new echo is a change");
+    in.Echo = 0;
 
     e = entry(rec, 0);
     CHECK_EQ(get32(e, CM_ST_E_KIND), CM_ST_KIND_ICM, "kind");
@@ -193,8 +199,7 @@ static void test_limit(void)
     CHECK(n <= CM_ST_MAX_BYTES, "within the maximum");
     CHECK_EQ(get32(rec, CM_ST_O_FLAGS), 0, "not truncated");
     CHECK_EQ(CM_ST_MAX_BYTES, 128 + 24 * 128, "the maximum size");
-    CHECK_EQ(CM_ST_O_SYSTIME_HI + 4, CM_ST_HDR_BYTES - 4,
-             "the header's last word is reserved");
+    CHECK_EQ(CM_ST_O_ECHO + 4, CM_ST_HDR_BYTES, "the echo ends the header");
     CHECK_EQ(CM_ST_O_PATHS + CM_ST_MAX_PORTS * CM_ST_PATH_BYTES,
              CM_ST_O_SYSTIME_LO, "the paths end where the time begins");
     CHECK(CM_ST_E_MODEL + CM_ST_NAME_BYTES == CM_ST_ENTRY_BYTES,

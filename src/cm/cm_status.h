@@ -47,6 +47,7 @@
 #define CM_ST_PATH_BYTES        8UL
 #define CM_ST_O_SYSTIME_LO      116UL   /* KeQuerySystemTime at the write, */
 #define CM_ST_O_SYSTIME_HI      120UL   /* as read: 100 ns units since 1601 */
+#define CM_ST_O_ECHO            124UL   /* the last XhciCmStatusAsk read, 0 none */
 #define CM_ST_PATH_MAX          7UL
 
 /* One router. */

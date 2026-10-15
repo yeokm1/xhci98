@@ -54,7 +54,7 @@ ntoskrnl.exe!KeReleaseSpinLock             all    required  nt52-amd64-export; K
 
 # --- The registry values: cm_reg.obj only ---
 ntoskrnl.exe!IoOpenDeviceRegistryKey       all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
-ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!RtlQueryRegistryValues        all    required  SITES=cm_reg.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!ZwClose                       all    required  SITES=cm_reg.obj,cm_thr.obj,cm_statos.obj nt52-amd64-export; twin of the x86 row
 
 # --- The log's emission, checked flavours only (decision D12): cm_log.obj ---
