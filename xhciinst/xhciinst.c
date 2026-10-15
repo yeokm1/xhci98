@@ -5484,6 +5484,7 @@ static const char *devLast; /* the device modes' last line            */
 static PFN_CM_QREMOVE tbQueryRemove;
 static PFN_CM_QREMOVE tbRemove;
 static PFN_CM_EJECT tbEject;
+static PFN_CM_EJECT tbQueryAndRemove;   /* the same shape (NT) */
 
 static void tb_routines(void)
 {
@@ -5494,6 +5495,10 @@ static void tb_routines(void)
         /* Windows 2000 exports it from setupapi.dll alone (record 24
          * section 7.2). */
         tbEject = (PFN_CM_EJECT)proc(api.SetupApi, "setupapi", "CM_Request_Device_EjectA");
+    }
+    if (envNow.Nt) {
+        tbQueryAndRemove = (PFN_CM_EJECT)proc(api.CfgMgr, "cfgmgr32",
+                                              "CM_Query_And_Remove_SubTreeA");
     }
 }
 
@@ -5511,7 +5516,11 @@ static DWORD tb_dword_prop(DWORD dn, ULONG prop, ULONG *value)
 /* A property read or absent (CR_NO_SUCH_VALUE). */
 static int tb_prop_ok(DWORD cr)
 {
-    return cr == INST_CR_SUCCESS || cr == INST_CR_NO_SUCH_VALUE;
+    if (cr != INST_CR_SUCCESS && cr != INST_CR_NO_SUCH_VALUE) {
+        logonly("a property read answered 0x%08lX\n", (unsigned long)cr);
+        return 0;
+    }
+    return 1;
 }
 
 /* One devnode read; 0 when a reading failed. */
@@ -5618,7 +5627,11 @@ static void tb_walk(DWORD dn, int parent, int depth)
         tbn[me].VNhi = -1;
         if (!tb_read(&tbn[me])) {
             logonly("devnode 0x%08lX: not read whole\n", (unsigned long)dn);
-            tbnBad++;
+            /* The tree's root (HTREE\ROOT\0 on NT) has no registry entry
+             * of its own to read, and is neither a port nor a unit. */
+            if (parent >= 0 || tbn[me].R.Id[0] == '\0') {
+                tbnBad++;
+            }
         }
         cr = api.Child(&child, dn, 0);
         if (cr == INST_CR_SUCCESS) {
@@ -6614,10 +6627,28 @@ static int run_eject(void)
         ULONG veto = 0;
         char vetoName[MAX_PATH];
         int withName;
+        int notRemovable = 0;
         vetoName[0] = '\0';
         cr = tbEject(tbn[u].Dn, &veto, vetoName, MAX_PATH, 0);
         logonly("CM_Request_Device_EjectA(%s) = 0x%08lX, veto %lu %s\n", id,
                 (unsigned long)cr, (unsigned long)veto, vetoName);
+        if (inst_eject_nt_fallback(cr, veto,
+                                   tbn[u].HasCaps &&
+                                       (tbn[u].Caps &
+                                        INST_CM_DEVCAP_REMOVABLE) != 0) &&
+            tbQueryAndRemove != NULL) {
+            /* Not removable in Windows' eyes (record 24 section 7.2): the
+             * same query-remove and remove an eject runs, by the routine
+             * that makes them for any device; a veto still stops it. */
+            veto = 0;
+            vetoName[0] = '\0';
+            cr = tbQueryAndRemove(tbn[u].Dn, &veto, vetoName, MAX_PATH,
+                                  INST_UI_NOT_OK);
+            logonly("CM_Query_And_Remove_SubTreeA(%s) = 0x%08lX, veto %lu "
+                    "%s\n", id, (unsigned long)cr, (unsigned long)veto,
+                    vetoName);
+            notRemovable = 1;
+        }
         outcome = inst_eject_nt(cr, veto, &text, &withName);
         if (outcome != INST_EJ_DONE) {
             if (withName) {
@@ -6642,6 +6673,10 @@ static int run_eject(void)
             return inst_eject_code(outcome);
         }
         out("Windows has stopped %s.\n", desc);
+        if (notRemovable) {
+            out("Until you unplug it, Windows may start it again when it next "
+                "looks for new\nhardware.\n");
+        }
         tb_watch_tunnel(nhiK, portBdf);
     } else {
         cr = tbQueryRemove(tbn[u].Dn, INST_UI_NOT_OK);

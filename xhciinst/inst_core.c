@@ -2579,6 +2579,12 @@ int inst_eject9x_remove(INST_U32 cr, const char **text)
 #define INST_VETO_LEGACY_DRIVER     11UL
 #define INST_VETO_RIGHTS            12UL
 
+int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int removable)
+{
+    return cr == INST_CR_REMOVE_VETOED &&
+           vetoType == INST_VETO_ILLEGAL_REQUEST && !removable;
+}
+
 int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
                   int *withName)
 {

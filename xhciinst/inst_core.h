@@ -595,6 +595,12 @@ int inst_eject9x_query(INST_U32 cr, const char **text);
 int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
                   int *withName);
 
+/* NT: 1 when an eject request refused as PNP_VetoIllegalDeviceRequest is
+ * for a unit whose capabilities do not say Removable, so the same
+ * query-remove and remove are asked by CM_Query_And_Remove_SubTreeA (the
+ * 2000 reading of record 24 section 7.2; a veto still stops that call). */
+int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int removable);
+
 /* 98 SE and ME: the outcome of the removal that follows an accepted
  * query, and its text (record 24 section 7.1 item 4). */
 int inst_eject9x_remove(INST_U32 cr, const char **text);
