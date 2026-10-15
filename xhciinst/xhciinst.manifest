@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  xhciinst.manifest - XHCIINST.EXE and XHCIIN64.EXE ask for elevation on
+  Windows Vista and 7 (design record 23 section 3): installing or removing
+  a driver needs an administrator. Windows 98, ME, 2000 and XP ignore the
+  request. Embedded by xhciinst.rc as resource 1 of type 24 (RT_MANIFEST).
+  ASCII only, CRLF line endings.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+</assembly>

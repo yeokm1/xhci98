@@ -11,7 +11,10 @@
 ; and ME's automatic search did not choose), and the package stages it in
 ; an nt\ subdirectory of each flavour directory, never beside xhcicm.inf
 ; where a 98 user points the wizard (CM-NO9XBRIDGE). Its one source disk
-; is that directory's parent, where xhcicm.sys is.
+; is that directory itself, which holds its own copy of xhcicm.sys (the
+; same bytes as the flavour directory's): Vista's and 7's driver store
+; refuses a source outside the INF's directory (SetupCopyOEMInf error
+; 0xA1, ERROR_BAD_PATHNAME, read 2026-10-15 on 7 SP1 x86).
 ;
 ; Decision D2, read by task 39-0.4: the device-specific route. The install
 ; sections keep pci.sys as the port's service by including and needing
@@ -144,7 +147,7 @@ DriverVer=10/14/2026,2.4.0.0
 %TunnelDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_000C&CC_0604
 
 [SourceDisksNames]
-1=%DiskName%,xhcicm.sys,,..
+1=%DiskName%,xhcicm.sys,,
 
 [SourceDisksFiles]
 xhcicm.sys=1
