@@ -100,13 +100,13 @@ typedef TR_NIDA TR_NID;
 #define TR_LIVE_ACTIVE              1UL     /* CM_LIVE_ACTIVE (cm_live.h) */
 
 #define TR_MSZ          1024
-#define TR_MAX_DEVS     1536
+#define TR_MAX_DEVS     3072
 #define TR_MAX_TNODES   4096
 #define TR_MAX_CTRL     64
 #define TR_MAX_UPORTS   1024
 #define TR_NAME_LEN     320
 #define TR_DETAIL_BYTES 65536
-#define TR_EJ_DEVS      48
+#define TR_EJ_DEVS      64
 
 #define WM_TRAYICON     (WM_APP + 1)
 #define TIMER_POLL      1
@@ -305,10 +305,11 @@ static UINT msgTaskbarCreated;
 static UINT msgShow;
 static int shellV5;
 static int iconAdded;
+static int trayV3;          /* NIM_SETVERSION 3 took: WM_CONTEXTMENU comes */
 static TR_SNAP snapOld;
 static int pollCount;
 static char lastEvent[128];
-static int trayUnits[64];
+static char trayUnitIds[64][INST_ID_CHARS];
 static int trayUnitCount;
 static int quitting;
 static int firstBuild = 1;
@@ -2215,8 +2216,11 @@ static int ej_prepare(int u, EJREQ *q)
     q->EpochLo = nhi[k].Q.EpochLo;
     q->EpochHi = nhi[k].Q.EpochHi;
     q->PortBdf = port_bdf(&gw, nhi, d->Parent);
-    for (i = u; i < gw.Count && q->DevCount < TR_EJ_DEVS; i++) {
+    for (i = u; i < gw.Count; i++) {
         if (gw.N[i].UnitOf == u) {
+            if (q->DevCount >= TR_EJ_DEVS) {
+                return 0;   /* more devices than one confirmation lists */
+            }
             tr_copy(q->Devs[q->DevCount++], gw.N[i].Id, sizeof(q->Devs[0]));
         }
     }
@@ -2229,7 +2233,7 @@ static const char *ej_why_not(int u)
     int k;
     const char *why = NULL;
 
-    if (u < 0 || gw.N[u].Parent < 0) {
+    if (u < 0 || u >= gw.Count || gw.N[u].Parent < 0) {
         return "it is not behind a Thunderbolt port";
     }
     k = gw.N[gw.N[u].Parent].PortNhi;
@@ -2397,6 +2401,7 @@ static int ej_after(const EJREQ *q, int single)
         free(b1);
         free(b2);
         b1 = b2 = NULL;
+        walked = 0;
         if (!ej_query(q, &b1, &a1) || a1.EpochLo != q->EpochLo ||
             a1.EpochHi != q->EpochHi) {
             break;
@@ -2520,7 +2525,13 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         Sleep(100);
         free(b2);
         b2 = NULL;
-        if (ej_query(q, &b2, &q2) && tr_query_new_pass(&q1, &q2)) {
+        if (ej_query(q, &b2, &q2) &&
+            (q2.EpochLo != q1.EpochLo || q2.EpochHi != q1.EpochHi)) {
+            tr_put(&t, "The Thunderbolt controller restarted; the device list "
+                       "changed. Nothing was stopped.");
+            goto out;
+        }
+        if (b2 != NULL && tr_query_new_pass(&q1, &q2)) {
             if (!tr_query_eject_ready(&q2, &why)) {
                 tr_printf(&t, "%s Nothing was stopped.", why);
                 goto out;
@@ -2543,13 +2554,21 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
     one->HaveQ = 1;
     got = 0;
     for (tries = 0; tries < 2 && !got; tries++) {
-        if (!walk(&w) || w.Bad != 0) {
+        if (!walk(&w)) {
             break;
+        }
+        if (w.Bad != 0) {
+            continue;
         }
         free(b3);
         b3 = NULL;
         if (!ej_query(q, &b3, &q3)) {
             break;
+        }
+        if (q3.EpochLo != q->EpochLo || q3.EpochHi != q->EpochHi) {
+            tr_put(&t, "The Thunderbolt controller restarted; the device list "
+                       "changed. Nothing was stopped.");
+            goto out;
         }
         if (!tr_query_eject_ready(&q3, &why)) {
             tr_printf(&t, "%s Nothing was stopped.", why);
@@ -2744,7 +2763,7 @@ static void ej_unit(HWND owner, int u, int fromTray)
                         MB_YESNO | MB_ICONWARNING) == IDYES) {
             ej_elevated(owner, q->UnitId);
         }
-    } else if (fromTray && shellV5) {
+    } else if (fromTray && shellV5 && strlen(msg) < 250) {
         tray_balloon(code == INST_EXIT_DONE ? "Device stopped" : "Device not stopped",
                      msg, code != INST_EXIT_DONE);
     } else {
@@ -3350,8 +3369,9 @@ static LRESULT CALLBACK main_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
         hTree = NULL;
         hEdit = NULL;
         hStatus = NULL;
-        if (hTray == NULL) {
-            PostQuitMessage(0);
+        if (hTray == NULL || !iconAdded) {
+            /* No icon to come back from: the program ends with its window. */
+            quit_all();
         }
         return 0;
     }
@@ -3433,7 +3453,7 @@ static void tray_add(void)
     iconAdded = Shell_NotifyIconA(NIM_ADD, (PNOTIFYICONDATAA)&n) != 0;
     if (iconAdded && shellV5) {
         TR_NID_VERSION(n) = 3;
-        Shell_NotifyIconA(NIM_SETVERSION, (PNOTIFYICONDATAA)&n);
+        trayV3 = Shell_NotifyIconA(NIM_SETVERSION, (PNOTIFYICONDATAA)&n) != 0;
     }
 }
 
@@ -3514,6 +3534,9 @@ static void poll(void)
         TR_QUERY q;
         TR_U32 g;
         if (nhi[k].QName[0] == '\0' || !query_read(nhi[k].QName, nhi[k].Id, &b, &q)) {
+            if (nhi[k].HaveQ) {
+                changed = 1;    /* it answered before: read it all again */
+            }
             continue;
         }
         g = inst_get32(q.Rec, CM_ST_O_GENERATION);
@@ -3523,7 +3546,10 @@ static void poll(void)
             changed = 1;
         }
         routers += (int)inst_get32(q.Rec, CM_ST_O_ROUTER_COUNT);
-        tr_snap_add(now, (TR_U32)k, &q);
+        /* The NHI by its instance ID, not its place in the list, which a
+         * reading of the tree may change. */
+        tr_snap_add(now, inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
+                                    strlen(nhi[k].Id)), &q);
         free(b);
     }
     count = tr_diff(&snapOld, now, ev, 8);
@@ -3572,7 +3598,8 @@ static void tray_unit_menu(void)
                 tr_sprintf(text, sizeof(text), "Safely remove %s (%s)",
                            dn_name(&gw.N[i]), why);
             }
-            trayUnits[trayUnitCount] = i;
+            tr_copy(trayUnitIds[trayUnitCount], gw.N[i].Id,
+                    sizeof(trayUnitIds[0]));
             AppendMenuA(m, MF_STRING | (why == NULL ? 0 : MF_GRAYED),
                         IDM_UNIT0 + trayUnitCount, text);
             trayUnitCount++;
@@ -3593,7 +3620,9 @@ static void tray_unit_menu(void)
     if (cmd == IDM_OPEN) {
         open_window();
     } else if (cmd >= IDM_UNIT0 && cmd < (UINT)(IDM_UNIT0 + trayUnitCount)) {
-        ej_unit(hTray, trayUnits[cmd - IDM_UNIT0], 1);
+        /* The tree may have been read again while the menu was open: the
+         * unit is found again by its instance ID. */
+        ej_unit(hTray, walk_find_id(&gw, trayUnitIds[cmd - IDM_UNIT0]), 1);
         if (hMain != NULL) {
             refresh_window();
         } else {
@@ -3677,7 +3706,15 @@ static LRESULT CALLBACK tray_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp)
             KillTimer(w, TIMER_CLICK);
             open_window();
             break;
+        case WM_USER + 1:       /* NIN_KEYSELECT: the keyboard's click */
+            tray_unit_menu();
+            break;
         case WM_RBUTTONUP:
+            if (!trayV3) {
+                tray_context_menu();
+            }
+            break;
+        case WM_CONTEXTMENU:    /* version 3: after the right button's up */
             tray_context_menu();
             break;
         }

@@ -298,7 +298,7 @@ void tr_router_name(const unsigned char *entry, char *out, size_t cap);
 /* ---- the tray's events (record 25 section 7.2) ---------------------------- */
 
 #define TR_SNAP_NHI             4
-#define TR_SNAP_ROUTERS         48
+#define TR_SNAP_ROUTERS         96      /* TR_SNAP_NHI x CM_ST_MAX_ROUTERS */
 #define TR_NAME_CHARS           72
 
 typedef struct _TR_SROUTER {
