@@ -4629,7 +4629,7 @@ has already gone wrong. It prints nothing as it runs. Section 8 describes
 both, and nothing about a copied file says which one it is - so point at a
 directory, never at a loose .sys file.{ARCHNOTE}
 
-THE EASY WAY: INSTALL.BAT (new in 3.0.0.0). Unzip the WHOLE package, then
+THE EASY WAY: INSTALL.BAT. Unzip the WHOLE package, then
 run INSTALL.BAT from its top directory: double-click it on Windows 98 SE and
 ME; run it as an administrator on Windows 2000 and XP; right-click it, Run as
 administrator, on Vista and 7. It shows what it will do, asks about a few of
@@ -4655,7 +4655,7 @@ On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
 keyboard and mouse that do not go through this driver, as below; the tool
 says so before it starts.
 
-BY HAND, the way every release before 3.0.0.0 was installed:
+BY HAND, without INSTALL.BAT:
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
 
