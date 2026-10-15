@@ -233,7 +233,9 @@ rem                  re-plugs, bonding and its fallback, the TMU, the Detect
 rem                  gate, the USB3 handshake, router operations each
 rem                  unsupported, failing or hanging, discovery, holding and
 rem                  cleaning, quarantine, the statement's gating and anchor,
-rem                  links below depth 1, eject, suspend and resume
+rem                  links below depth 1, eject, suspend and resume, and the
+rem                  ASM2464 device router's captured quirks (record 22
+rem                  section 6.11)
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code

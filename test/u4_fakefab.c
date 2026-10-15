@@ -74,6 +74,11 @@ void fabInject(FAB *f, unsigned long pdf, const unsigned long *dw, unsigned long
     fabQueue(f, pdf, dw, words, 0);
 }
 
+unsigned long fabCrcOf(const unsigned char *p, unsigned long n)
+{
+    return fabCrc(p, n);
+}
+
 void *fabMem(FAB *f)
 {
     return f->MemDw;
@@ -413,6 +418,10 @@ static void fabRouterOp(FAB *f, int ri)
     case 0x30: slot = FAB_OP_MAP; break;
     case 0x31: slot = FAB_OP_CAPS; break;
     case 0x33: slot = FAB_OP_BA; break;
+    case 0x25:
+        r->NvmOps++;
+        slot = r->Kind == FAB_DEV_ASM2464 ? FAB_OP_NVM : -1;
+        break;
     default: slot = -1; break;
     }
     mode = slot < 0 ? FAB_ROP_NS : r->RopMode[slot];
@@ -424,7 +433,8 @@ static void fabRouterOp(FAB *f, int ri)
         return;
     }
     if (mode == FAB_ROP_FAIL) {
-        r->Rcs[26] = (r->Rcs[26] & 0xFFFFUL) | (1UL << 24);
+        r->Rcs[26] = (r->Rcs[26] & 0xFFFFUL) |
+                     ((r->FailStatus != 0 ? r->FailStatus : 1UL) << 24);
         return;
     }
     switch (slot) {
@@ -473,7 +483,15 @@ static void fabEnumerated(FAB *f, int ri)
     unsigned a;
 
     if (!r->Tbt3 && !r->NoRouterReady) {
-        r->Rcs[6] |= 0x01000000UL;
+        if (r->RrDelayUs != 0) {
+            /* Router Ready later than Enumerated (the ASM2464, usb4-emu
+             * docs/captures/ORICO-ASM2464.md section 3): set by the read
+             * that finds the delay over (fabRead). */
+            r->RrPending = 1;
+            r->RrAtUs = f->NowUs + r->RrDelayUs;
+        } else {
+            r->Rcs[6] |= 0x01000000UL;
+        }
     }
     if (r->DpPlugEvents) {
         for (a = 1; a <= r->MaxAdp; a++) {
@@ -510,9 +528,9 @@ static void fabRouterWrite(FAB *f, int ri, unsigned long addr, unsigned long v)
     if (addr == 26 && (v & 0x80000000UL)) {
         fabRouterOp(f, ri);
     }
-    if (!r->Tbt3 && addr == FAB_RCAP_TMU + 25 && !r->PostStuck) {
-        r->Rcs[FAB_RCAP_TMU + 24] = 0;
-        r->Rcs[FAB_RCAP_TMU + 25] = 0;
+    if (!r->Tbt3 && r->TmuAt != 0 && addr == r->TmuAt + 25 && !r->PostStuck) {
+        r->Rcs[r->TmuAt + 24] = 0;
+        r->Rcs[r->TmuAt + 25] = 0;
     }
 }
 
@@ -584,6 +602,13 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
     }
     if (t == 1 && addr == FAB_CAP_PORT + 19) {
         ad->Cs[addr] = v;
+        if ((v & 1UL) == 0 && ad->Peer >= 0 && f->R[ad->Peer].ReconnectPending &&
+            !f->R[ad->Peer].ReconnectArmed) {
+            /* The capture's 594 ms run from the reset's release. */
+            f->R[ad->Peer].ReconnectArmed = 1;
+            f->R[ad->Peer].DprReleasedAtUs = f->NowUs;
+            f->R[ad->Peer].ReconnectAtUs = f->NowUs + f->R[ad->Peer].LinkDelayUs;
+        }
         if ((v & 1UL) && ad->Peer >= 0) {
             /* Downstream Port Reset: the router behind goes back to the
              * uninitialised state and its link retrains. */
@@ -598,6 +623,25 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
             }
             ad->Cs[4] |= 0x80000000UL;
             r->Adp[a + 1].Cs[4] |= 0x80000000UL;
+            if (f->R[d].LinkDelayUs != 0 && !f->R[d].ReconnectPending) {
+                /* A router that takes its time to come back (the ASM2464,
+                 * 594 ms after the reset's release, usb4-emu
+                 * docs/captures/ORICO-ASM2464.md section 10): the link is
+                 * down from the reset until then, with an unplug event now
+                 * and a plug event then. */
+                f->R[d].RrPending = 0;
+                for (pa = 0; pa < 2; pa++) {
+                    if (r->Adp[a + pa].Present) {
+                        setLaneState(&r->Adp[a + pa], 7);
+                        setLaneWidth(&r->Adp[a + pa], 0);
+                    }
+                }
+                f->R[d].ReconnectPending = 1;
+                f->R[d].ReconnectArmed = 0;
+                if ((ad->Cs[5] & 0x80000000UL) == 0) {
+                    fabHotPlug(f, ri, a, 1);
+                }
+            }
         }
         return;
     }
@@ -652,8 +696,12 @@ static unsigned long fabRead(FAB *f, int ri, unsigned long cs, unsigned a,
     FAB_ROUTER *r = &f->R[ri];
 
     if (cs == TBT_CS_ROUTER) {
-        if (!r->Tbt3 && addr == FAB_RCAP_TMU + 1) {
+        if (!r->Tbt3 && r->TmuAt != 0 && addr == r->TmuAt + 1) {
             r->Rcs[addr] += 0x10000UL;      /* time moves */
+        }
+        if (addr == 6 && r->RrPending && f->NowUs - r->RrAtUs < 0x80000000UL) {
+            r->RrPending = 0;
+            r->Rcs[6] |= 0x01000000UL;
         }
         return r->Rcs[addr];
     }
@@ -703,6 +751,9 @@ static void fabRequest(FAB *f, unsigned long pdf, const unsigned long *dw,
     if (r < 0) {
         fabNotify(f, errRouter, code, errAdp);
         return;
+    }
+    if (cs != TBT_CS_ROUTER && adp < FAB_MAX_ADP) {
+        f->R[r].AdpTouches[adp]++;
     }
     if (cs == TBT_CS_ROUTER) {
         limit = FAB_RTR_DW;
@@ -879,9 +930,28 @@ static void fabWrite32(PVOID ctx, ULONG off, ULONG v)
     }
 }
 
+static void fabConnect(FAB *f, int pr, unsigned pa, int dev);
+
 static void fabAdvance(FAB *f, unsigned long us)
 {
+    int i;
+    FAB_ROUTER *r;
+
     f->NowUs += us;
+    for (i = 1; i < FAB_MAX_ROUTERS; i++) {
+        r = &f->R[i];
+        if (r->Used && r->ReconnectPending && r->ReconnectArmed && r->Connected &&
+            f->NowUs - r->ReconnectAtUs < 0x80000000UL) {
+            /* The link of a Downstream Port Reset back (LinkDelayUs). */
+            r->ReconnectPending = 0;
+            r->ReconnectArmed = 0;
+            r->ReconnectedAtUs = f->NowUs;
+            fabConnect(f, r->Parent, (unsigned)r->ParentAdp, i);
+            if ((f->R[r->Parent].Adp[r->ParentAdp].Cs[5] & 0x80000000UL) == 0) {
+                fabHotPlug(f, r->Parent, (unsigned long)r->ParentAdp, 0);
+            }
+        }
+    }
     fabProcessTx(f);
     fabPump(f);
 }
@@ -1037,6 +1107,7 @@ static void fabTmuRouter(FAB_ROUTER *r)
 {
     r->Rcs[1] |= FAB_RCAP_TMU;
     r->Rcs[FAB_RCAP_TMU] = 0x03UL << 8;
+    r->TmuAt = FAB_RCAP_TMU;
 }
 
 static void fabFinish(FAB_ROUTER *r)
@@ -1201,6 +1272,89 @@ static void fabDrom(FAB_ROUTER *r, const char *vendor, const char *model)
     r->DromLen = len;
 }
 
+void fabDromMarkUnused(FAB *f, int router, unsigned adp)
+{
+    FAB_ROUTER *r = &f->R[router];
+    unsigned char *d = r->Drom;
+    unsigned len = r->DromLen;
+    unsigned long crc;
+
+    d[len] = 2;
+    d[len + 1] = (unsigned char)(0xC0U | (adp & 0x3FU));
+    len += 2;
+    d[14] = (unsigned char)((len - 13) & 0xFF);
+    d[15] = (unsigned char)(((len - 13) >> 8) & 0x0F);
+    crc = fabCrc(d + 13, len - 13);
+    d[9] = (unsigned char)crc;
+    d[10] = (unsigned char)(crc >> 8);
+    d[11] = (unsigned char)(crc >> 16);
+    d[12] = (unsigned char)(crc >> 24);
+    r->DromLen = len;
+}
+
+/*
+ * The ASMedia ASM2464PD of an ORICO AAGM2-U4 enclosure, as usb4-emu's
+ * `asm2464` device model reproduces its capture (usb4-emu
+ * docs/captures/ORICO-ASM2464.md, src/qemu/hw/usb4/usb4-asm2464-data.h,
+ * usb4-router-asm2464.c; QEMU fork 20655c3): router 174C:2463, USB4
+ * version 1.0; lanes 1 and 2 (Max HopID 27, 66 Total Buffers that
+ * bonding does not change, no CL0s, CL1 or CL2 support); PCIe Up 3, its
+ * HopID 8 entry reset to output HopID 8 with no credits; adapter 4 a USB3
+ * Up adapter that the DROM marks unused; the TMU capability at 0xC0, then
+ * vendor-specific capabilities 1, 3 and 6 (long); Router Ready 5 ms after
+ * Enumerated; Buffer Allocation PCIe 64 alone; NVM Sector Size failing
+ * with Status 2; the link back 594 ms after a Downstream Port Reset; the
+ * captured revision 1 (Thunderbolt 3 compatible) DROM, 86 bytes, and the
+ * two bytes the DROM Read operation returns past its end.
+ */
+static const unsigned char fabAsmDrom[88] = {
+    0x5e, 0x00, 0x27, 0x91, 0x70, 0x8e, 0x60, 0x4c, 0x17, 0x38, 0x4a, 0xab,
+    0xda, 0x01, 0x49, 0x00, 0xb8, 0x00, 0x63, 0x24, 0xe3, 0x02, 0x02, 0xc4,
+    0x08, 0x81, 0x80, 0x02, 0x00, 0x00, 0x00, 0x00, 0x08, 0x82, 0x90, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x0b, 0x83, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x0a, 0x01, 0x41, 0x53, 0x4d, 0x65, 0x64, 0x69, 0x61,
+    0x00, 0x07, 0x02, 0x32, 0x34, 0x36, 0x78, 0x00, 0x03, 0x08, 0x00, 0x0f,
+    0x09, 0x10, 0x04, 0x4c, 0x17, 0x63, 0x24, 0x17, 0x54, 0x66, 0x06, 0x00,
+    0xc0, 0x5a, 0x23, 0x02
+};
+
+static void fabAsm2464(FAB_ROUTER *d, int i)
+{
+    unsigned a;
+
+    fabRouterBase(d, 0x174C, 0x2463, 0x20);
+    d->Rcs[4] |= 0x0AUL;                        /* Notification Timeout 10 ms */
+    fabLane(d, 1, 1, 1);
+    fabLane(d, 2, 0, 1);
+    fabProto(d, 3, 0x100102UL);
+    fabProto(d, 4, 0x200102UL);
+    for (a = 1; a <= 2; a++) {
+        d->Adp[a].Cs[4] = 0x80000000UL | (66UL << 20);
+        d->Adp[a].Cs[5] = 27UL | (27UL << 11);
+    }
+    d->Adp[3].Path[2 * 8] = 0x00000008UL;
+    d->Adp[3].Path[2 * 8 + 1] = 0;
+    d->UpAdp = 1;
+    d->Adp[1].Cs[FAB_CAP_PORT + 18] = 0x3110UL;     /* BE, no Cable Gen 3, no CLx */
+    d->Rcs[1] |= 0xC0UL;
+    d->TmuAt = 0xC0;
+    d->Rcs[0xC0] = 0x43200328UL;                    /* TMU, next 28h */
+    d->Rcs[0x28] = 0x1E010580UL;                    /* VSEC 1, next 80h */
+    d->Rcs[0x80] = 0x320305ECUL;                    /* VSEC 3, next ECh */
+    d->Rcs[0xEC] = 0x00060500UL;                    /* VSEC 6, long */
+    d->Rcs[0xED] = 0x01140000UL;                    /* next 0, 114h dwords */
+    d->Rcs[7] = 0x174C608EUL;
+    d->Rcs[8] = 0x70912700UL + (unsigned long)i;
+    d->RopMode[FAB_OP_NVM] = FAB_ROP_FAIL;
+    d->FailStatus = 2;
+    d->BaLen = 1;
+    d->BaData[0] = 0x00400004UL;
+    memcpy(d->Drom, fabAsmDrom, sizeof(fabAsmDrom));
+    d->DromLen = 86;
+    d->RrDelayUs = 5000;
+    d->LinkDelayUs = 594000;
+}
+
 int fabDevice(FAB *f, int kind)
 {
     int i;
@@ -1237,6 +1391,8 @@ int fabDevice(FAB *f, int kind)
         d->BaData[0] = 4UL | (32UL << 16);
         d->BaData[1] = 1UL | (16UL << 16);
         fabDrom(d, "QEMU", "USB4 NVMe Enclosure");
+    } else if (kind == FAB_DEV_ASM2464) {
+        fabAsm2464(d, i);
     } else {
         d->Tbt3 = 1;
         fabRouterBase(d, 0x8086, kind == FAB_DEV_TBT3_TR ? 0x15EF : 0x15C0, 0x00);
@@ -1378,12 +1534,17 @@ static void fabResetRouter(FAB *f, int d)
     r->Rcs[5] = 0;
     r->Rcs[6] &= ~0x03000000UL;
     r->Rcs[26] = 0;
+    r->RrPending = 0;
+    r->ReconnectPending = 0;
+    r->ReconnectArmed = 0;
     if (!r->Tbt3) {
-        r->Rcs[FAB_RCAP_TMU] &= 0x0000FFFFUL;
-        r->Rcs[FAB_RCAP_TMU + 3] = 0;
-        r->Rcs[FAB_RCAP_TMU + 15] = 0;
-        for (h = 22; h <= 25; h++) {
-            r->Rcs[FAB_RCAP_TMU + h] = 0;
+        if (r->TmuAt != 0) {
+            r->Rcs[r->TmuAt] &= 0x0000FFFFUL;
+            r->Rcs[r->TmuAt + 3] = 0;
+            r->Rcs[r->TmuAt + 15] = 0;
+            for (h = 22; h <= 25; h++) {
+                r->Rcs[r->TmuAt + h] = 0;
+            }
         }
     } else {
         r->Rcs[FAB_RCAP_PLUG + 1] = 0x7CUL;
@@ -1403,12 +1564,17 @@ static void fabResetRouter(FAB *f, int d)
         if (t == 1) {
             ad->Cs[FAB_CAP_LANE + 1] = (ad->Cs[FAB_CAP_LANE + 1] & (0xFUL << 26)) |
                                        0x10UL | (0x4UL << 16);
-            ad->Cs[4] = (ad->Cs[4] & ~(0x3FFUL << 20)) | (60UL << 20);
+            ad->Cs[4] = (ad->Cs[4] & ~(0x3FFUL << 20)) |
+                        ((r->Kind == FAB_DEV_ASM2464 ? 66UL : 60UL) << 20);
             if (ad->Cs[FAB_CAP_PORT] != 0) {
                 ad->Cs[FAB_CAP_PORT + 19] = 0;
             }
             ad->Cs[FAB_CAP_TMU_ADP + 3] = 0;
             ad->Cs[FAB_CAP_TMU_ADP + 6] = 0;
+        } else if (t != 2 && r->Kind == FAB_DEV_ASM2464) {
+            ad->Path[2 * 8] = t == 0x100102UL ? 0x00000008UL : 0;
+            ad->Path[2 * 8 + 1] = 0;
+            ad->Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
         } else if (t != 2) {
             ad->Path[2 * 8] = 7UL << 17;
             ad->Path[2 * 8 + 1] = 0x01000000UL;
@@ -1582,6 +1748,7 @@ void fabPreos(FAB *f, int port, int usb3)
     unsigned long lo;
     unsigned dpu;
     unsigned du3;
+    unsigned k;
 
     f->R[0].Rcs[3] |= 0x80000000UL;
     f->R[0].Rcs[6] |= 0x01000000UL;
@@ -1601,8 +1768,17 @@ void fabPreos(FAB *f, int port, int usb3)
     setLaneWidth(&f->R[0].Adp[a + 1], 2);
     setLaneWidth(&f->R[d].Adp[f->R[d].UpAdp], 2);
     setLaneWidth(&f->R[d].Adp[f->R[d].UpAdp + 1], 2);
-    dpu = 5;
-    du3 = 6;
+    /* The device's first PCIe Up and USB3 Up adapters (5 and 6 on the
+     * generic device router, 3 and 4 on the ASM2464). */
+    dpu = 0;
+    du3 = 0;
+    for (k = f->R[d].MaxAdp; k >= 1; k--) {
+        if ((f->R[d].Adp[k].Cs[2] & 0xFFFFFFUL) == 0x100102UL) {
+            dpu = k;
+        } else if ((f->R[d].Adp[k].Cs[2] & 0xFFFFFFUL) == 0x200102UL) {
+            du3 = k;
+        }
+    }
     fabSetPath(f, 0, hp, 8, (unsigned)a, 8, 7);
     fabSetPath(f, d, f->R[d].UpAdp, 8, dpu, 8, 32);
     fabSetPath(f, d, dpu, 8, f->R[d].UpAdp, 9, 7);

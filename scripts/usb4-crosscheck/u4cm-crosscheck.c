@@ -52,7 +52,23 @@ struct USB4Device {
     unsigned ndfp;
     int tp;
     USB4Dialect dialect;
+#ifdef XC_HAVE_ASM2464
+    USB4DeviceModel model;
+    uint64_t uid;
+#endif
 };
+
+#ifdef XC_HAVE_ASM2464
+USB4DeviceModel usb4_device_model(USB4Device *d)
+{
+    return d->model;
+}
+
+uint64_t usb4_device_uid(USB4Device *d)
+{
+    return d->uid;
+}
+#endif
 
 static int fake_host;
 static int fake_tp[3];
@@ -565,6 +581,125 @@ static void test_restart(void)
     usb4_fabric_detach(fab, 1);
 }
 
+#ifdef XC_HAVE_ASM2464
+/*
+ * The ORICO AAGM2-U4 (ASMedia ASM2464PD) device router model on the
+ * intel-adl host (usb4-emu docs/captures/ORICO-ASM2464.md): an old
+ * Thunderbolt 3 style DROM that marks adapter 4 (a USB3 Up adapter)
+ * unused, no CLx, the TMU capability at 0xc0, NVM Sector Size failing
+ * with status 2, Router Ready 5 ms after Enumerated, Buffer Allocation
+ * with PCIe alone, about 590 ms to come back after a Downstream Port
+ * Reset. Record 22 section 6.11.
+ */
+static USB4Device asm1 = { .serial = "ORICO01", .model = USB4_DEVICE_MODEL_ASM2464 };
+static USB4Device asm2 = { .serial = "ORICO02", .model = USB4_DEVICE_MODEL_ASM2464,
+                           .uid = 0x174c608e70912701ULL };
+
+static void asm2464_quiet(const char *what)
+{
+    CHECK(xc_get(XC_ROP_FAILED, 0) == 0, "%s: no router operation failed (%lu)", what,
+          xc_get(XC_ROP_FAILED, 0));
+    CHECK(xc_get(XC_ROP_TIMEOUTS, 0) == 0, "%s: no router operation timed out", what);
+    CHECK(xc_get(XC_CR_TIMEOUTS, 0) == 0, "%s: no Configuration Ready timeout", what);
+    CHECK(xc_get(XC_RETRIES, 0) == 0 && xc_get(XC_TIMEOUTS, 0) == 0,
+          "%s: no control retries or timeouts (%lu, %lu)", what, xc_get(XC_RETRIES, 0),
+          xc_get(XC_TIMEOUTS, 0));
+    CHECK(xc_get(XC_USB3_BUILT, 0) == 0 && xc_get(XC_USB3_FAILED, 0) == 0 && u3_calls == 0,
+          "%s: no USB3 tunnel tried on the unused adapter (%lu built, %lu failed, %d)",
+          what, xc_get(XC_USB3_BUILT, 0), xc_get(XC_USB3_FAILED, 0), u3_calls);
+    CHECK(xc_get(XC_TMU_ENABLED, 0) == 0, "%s: no TMU without a USB3 tunnel", what);
+    CHECK(xc_get(XC_DROM_CRC, 0) == 0, "%s: DROM CRC good", what);
+}
+
+static void test_asm2464_cold_hot(void)
+{
+    long rc;
+
+    printf("== intel-adl + asm2464: cold on port 1, hot plug on port 2, unplug, re-plug\n");
+    new_fabric(USB4_HOST_MODEL_INTEL_ADL, false);
+    CHECK(usb4_fabric_attach(fab, 1, &asm1, NULL), "attach 1");
+    rc = cm_start(true);
+    CHECK(rc == 0, "start %ld (inert reason %lu)", rc, xc_get(XC_INERT, 0));
+    CHECK(ST(1) == (unsigned long)xc_state_up(), "port 1 UP (state %lu why %lu)", ST(1), WHY(1));
+    CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "the model's PCIe tunnel up");
+    CHECK(tp_calls[1] == 1, "one UP transition (%d)", tp_calls[1]);
+    CHECK(xc_get(XC_BONDED, 1), "bonded");
+    CHECK(!xc_get(XC_USB3_UP, 1), "no USB3 tunnel");
+    CHECK(xc_get(XC_DEV_ADP_PRESENT, (1UL << 8) | 3), "PCIe Up adapter 3 present");
+    CHECK(!xc_get(XC_DEV_ADP_PRESENT, (1UL << 8) | 4), "adapter 4 unused by the DROM");
+    CHECK(strcmp(xc_vendor_name(1), "ASMedia") == 0 && strcmp(xc_model_name(1), "246x") == 0,
+          "DROM names '%s' '%s'", xc_vendor_name(1), xc_model_name(1));
+    asm2464_quiet("cold");
+
+    CHECK(usb4_fabric_attach(fab, 2, &asm2, NULL), "attach 2");
+    cm_poll(4);
+    CHECK(ST(2) == (unsigned long)xc_state_up(), "hot plug: port 2 UP (state %lu why %lu)",
+          ST(2), WHY(2));
+    CHECK(usb4_fabric_tunnel_state(fab, 2) == USB4_TUNNEL_UP, "the model's port 2 up");
+    usb4_fabric_detach(fab, 2);
+    cm_poll(2);
+    CHECK(ST(2) == (unsigned long)xc_state_empty(), "unplug: port 2 EMPTY (state %lu)", ST(2));
+    CHECK(xc_get(XC_LD_CALLS, 0) == 1 && xc_get(XC_LD_CLOSED, 0),
+          "teardown read back: path closed (%lu, %lu)", xc_get(XC_LD_CALLS, 0),
+          xc_get(XC_LD_CLOSED, 0));
+    CHECK(usb4_fabric_attach(fab, 2, &asm2, NULL), "re-attach 2");
+    cm_poll(4);
+    CHECK(ST(2) == (unsigned long)xc_state_up(), "re-plug: port 2 UP (state %lu why %lu)",
+          ST(2), WHY(2));
+    CHECK(usb4_fabric_tunnel_state(fab, 2) == USB4_TUNNEL_UP, "the model's port 2 up again");
+    CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "port 1 untouched");
+    asm2464_quiet("hot");
+    printf("   %lu control requests, %lu router operations, %lu routers enumerated,"
+           " %lu hot plug events\n",
+           xc_get(XC_REQUESTS, 0), xc_get(XC_ROP_ISSUED, 0), xc_get(XC_ENUMERATED, 0),
+           xc_get(XC_HOTPLUGS, 0));
+    xc_stop();
+    usb4_fabric_detach(fab, 1);
+    usb4_fabric_detach(fab, 2);
+}
+
+/* The pre-OS connection manager's tunnel to the asm2464: preserved; then
+ * XhciCmPreOsCleanup 2: a Downstream Port Reset, the router back about
+ * 590 ms later, and the tunnel built afresh with no retry storm. */
+static void test_asm2464_preos(unsigned long clean)
+{
+    int calls;
+    unsigned long req;
+
+    printf("== intel-adl + asm2464: pre-OS tunnel, XhciCmPreOsCleanup %lu\n", clean);
+    new_fabric(USB4_HOST_MODEL_INTEL_ADL, true);
+    CHECK(usb4_fabric_attach(fab, 1, &asm1, NULL), "pre-OS attach");
+    CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "pre-OS tunnel up");
+    usb4_fabric_preos_end(fab);
+    calls = tp_calls[1];
+    memset(arena, 0, sizeof(arena));
+    CHECK(xc_start_clean(&shim_ops, arena, ARENA_PHYS, ARENA_SIZE, 1, clean) == 0, "start");
+    if (clean == 0) {
+        CHECK(ST(1) == (unsigned long)xc_state_up() && xc_get(XC_PCIE_PRESERVED, 1),
+              "preserved (state %lu why %lu)", ST(1), WHY(1));
+        CHECK(tp_calls[1] == calls, "no transition (%d -> %d)", calls, tp_calls[1]);
+        CHECK(xc_get(XC_DPR, 0) == 0, "no port reset");
+    } else {
+        CHECK(xc_get(XC_DPR, 0) == 1, "one Downstream Port Reset (%lu)", xc_get(XC_DPR, 0));
+        cm_poll(6);
+        CHECK(ST(1) == (unsigned long)xc_state_up() && !xc_get(XC_PCIE_PRESERVED, 1),
+              "built afresh after the reset (state %lu why %lu)", ST(1), WHY(1));
+        CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "the model's tunnel up");
+        CHECK(xc_get(XC_CONNECTS, 0) == 1, "one connect (%lu)", xc_get(XC_CONNECTS, 0));
+    }
+    req = xc_get(XC_REQUESTS, 0);
+    cm_poll(5);
+    CHECK(usb4_fabric_tunnel_state(fab, 1) == USB4_TUNNEL_UP, "still up across idle ticks");
+    CHECK(xc_get(XC_REQUESTS, 0) - req <= 5 * 8, "idle ticks stay quiet (%lu requests)",
+          xc_get(XC_REQUESTS, 0) - req);
+    asm2464_quiet("pre-OS");
+    usb4_fabric_detach(fab, 1);
+    cm_poll(2);
+    CHECK(ST(1) == (unsigned long)xc_state_empty(), "its unplug: EMPTY");
+    xc_stop();
+}
+#endif
+
 static void test_empty(void)
 {
     printf("== nothing attached\n");
@@ -587,6 +722,11 @@ int main(int argc, char **argv)
     test_cold_hot_unplug(USB4_HOST_MODEL_ASM4242);
     test_preos(USB4_HOST_MODEL_ASM4242);
     test_restart();
+#ifdef XC_HAVE_ASM2464
+    test_asm2464_cold_hot();
+    test_asm2464_preos(0);
+    test_asm2464_preos(2);
+#endif
     test_empty();
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

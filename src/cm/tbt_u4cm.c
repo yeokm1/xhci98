@@ -628,10 +628,20 @@ static LONG tbtU4DromChunk(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
 }
 
 /*
- * The USB4 DROM (the USB4 DROM Specification; Guide 2.5, 9.1): CRC8,
- * UID, CRC32C over bytes 13 on, Version, Data Length, entries from byte 16;
- * the ASCII vendor (generic entry type 1) and model (type 2) names kept.
- * A failure is logged and the device proceeds unnamed.
+ * The DROM (the USB4 DROM Specification; Guide 2.5, 9.1): CRC8, UID,
+ * CRC32C over bytes 13 on, Version, Data Length, then the entries - from
+ * byte 16 in the USB4 layout (revision 3), from byte 22 in the
+ * Thunderbolt 3 compatible one (revision 1, which a USB4 device router
+ * may carry: the ASMedia ASM2464PD of usb4-emu
+ * docs/captures/ORICO-ASM2464.md section 2), as Linux eeprom.c
+ * tb_drom_parse picks them (USB4_DROM_HEADER_SIZE, TB_DROM_HEADER_SIZE;
+ * any other revision read as revision 1). Kept: the ASCII vendor
+ * (generic entry 1) and model (generic entry 2) names, and every adapter
+ * entry (type bit 7) with its disabled bit (6) set, which marks that
+ * adapter unused (Linux tb_drom_parse_entry_port, port->disabled): the
+ * router's adapters are then discovered without it (record 22 section
+ * 6.11). A failure is logged and the device proceeds unnamed, every
+ * adapter used.
  */
 static VOID tbtU4ReadDrom(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
 {
@@ -641,6 +651,8 @@ static VOID tbtU4ReadDrom(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     ULONG n;
     ULONG pos;
     ULONG crc;
+    ULONG idx;
+    ULONG unused[2];
     LONG rc;
 
     cm->Counters.DromReads++;
@@ -675,19 +687,53 @@ static VOID tbtU4ReadDrom(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
         tbtU4Log(cm, "u4.drom.crc", crc);
         return;
     }
-    if (buf[13] != 3) {
-        return;     /* a Thunderbolt 3 layout: names not parsed */
-    }
-    for (pos = 16; pos + 2 <= len && buf[pos] >= 2; pos += buf[pos]) {
-        if (pos + buf[pos] > len) {
-            break;
+    rt->DromRevision = buf[13];
+    if (buf[13] == TBT_DROM_REV_USB4) {
+        pos = TBT_DROM_ENTRIES_USB4;
+    } else {
+        if (buf[13] != TBT_DROM_REV_TBT3) {
+            tbtU4Log(cm, "u4.drom.revision", buf[13]);
         }
-        if ((buf[pos + 1] & 0x80) == 0 && (buf[pos + 1] & 0x3F) == 1) {
+        pos = TBT_DROM_ENTRIES_TBT3;
+    }
+    /* Checked whole before anything is kept: a malformed list (an entry
+     * shorter than its header, or running past the data) changes nothing. */
+    unused[0] = 0;
+    unused[1] = 0;
+    for (got = pos; got < len; got += buf[got]) {
+        if (got + 2 > len || buf[got] < 2 || got + buf[got] > len) {
+            tbtU4Log(cm, "u4.drom.entries", got);
+            return;
+        }
+        idx = (ULONG)buf[got + 1] & TBT_DROM_ENTRY_INDEX;
+        if ((buf[got + 1] & TBT_DROM_ENTRY_ADAPTER) != 0 &&
+            (buf[got + 1] & TBT_DROM_ENTRY_DISABLED) != 0 && idx != 0) {
+            unused[idx / 32] |= 1UL << (idx % 32);
+        }
+    }
+    for (; pos < len; pos += buf[pos]) {
+        if ((buf[pos + 1] & TBT_DROM_ENTRY_ADAPTER) != 0) {
+            continue;
+        }
+        if ((buf[pos + 1] & TBT_DROM_ENTRY_INDEX) == TBT_DROM_GENERIC_VENDOR) {
             tbtU4NameCopy(rt->VendorName, buf + pos + 2, (ULONG)buf[pos] - 2);
-        } else if ((buf[pos + 1] & 0x80) == 0 && (buf[pos + 1] & 0x3F) == 2) {
+        } else if ((buf[pos + 1] & TBT_DROM_ENTRY_INDEX) == TBT_DROM_GENERIC_MODEL) {
             tbtU4NameCopy(rt->ModelName, buf + pos + 2, (ULONG)buf[pos] - 2);
         }
     }
+    rt->DromUnused[0] = unused[0];
+    rt->DromUnused[1] = unused[1];
+    if (unused[0] != 0 || unused[1] != 0) {
+        tbtU4Log(cm, "u4.drom.unused", unused[0]);
+    }
+}
+
+/* The DROM marks adapter `a` unused (tbtU4ReadDrom). Never the router's
+ * own upstream lanes, which carry the link the DROM was read over. */
+static BOOLEAN tbtU4DromUnused(const TBT_U4_ROUTER *rt, ULONG a)
+{
+    return (BOOLEAN)(a < 64 && a != rt->UpAdp && a != rt->UpAdp + 1 &&
+                     (rt->DromUnused[a / 32] & (1UL << (a % 32))) != 0);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -718,9 +764,13 @@ static LONG tbtU4RouterCaps(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG first)
             rt->CapTmu = ptr;
             ptr = TBT_CAP_NEXT(h[0]);
         } else if (TBT_CAP_ID(h[0]) == TBT_RCAP_VSC) {
-            if (TBT_CAP_VSEC_ID(h[0]) == TBT_VSEC_PLUG_EVENTS) {
+            /* Kept on a Thunderbolt 3 router only: a USB4 router's
+             * vendor-specific capabilities are its vendor's (the ASM2464
+             * carries IDs 1, 3 and 6 after its TMU at C0h, usb4-emu
+             * docs/captures/ORICO-ASM2464.md section 3). */
+            if (rt->Tbt3 && TBT_CAP_VSEC_ID(h[0]) == TBT_VSEC_PLUG_EVENTS) {
                 rt->CapPlugEvents = ptr;
-            } else if (TBT_CAP_VSEC_ID(h[0]) == TBT_VSEC_LINK_CONTROLLER) {
+            } else if (rt->Tbt3 && TBT_CAP_VSEC_ID(h[0]) == TBT_VSEC_LINK_CONTROLLER) {
                 rt->CapLc = ptr;
             }
             ptr = TBT_CAP_VSEC_LENGTH(h[0]) == 0 ? TBT_CAP_LONG_NEXT(h[1]) :
@@ -758,6 +808,11 @@ static LONG tbtU4DiscoverAdapters(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     }
     for (a = 1; a <= rt->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
         ad = &rt->Adp[a];
+        if (tbtU4DromUnused(rt, a)) {
+            /* Unused by the DROM: never read nor used, as Linux leaves a
+             * disabled port uninitialised (switch.c tb_switch_add). */
+            continue;
+        }
         rc = tbtU4RdN(cm, &rt->Route, TBT_CS_ADAPTER, a, 0, TBT_ADP_BASIC_DWORDS, v);
         if (rc == TBT_E_NOTIFY && (cm->Ring->LastEvent == TBT_EV_ERR_ADDR ||
                                    cm->Ring->LastEvent == TBT_EV_ERR_ADP)) {
@@ -2430,6 +2485,15 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
         return rc;
     }
     d->Present = TRUE;
+    if (!d->Tbt3) {
+        /* Before the adapters, as Linux reads it before tb_init_port
+         * (switch.c tb_switch_add): an adapter the DROM marks unused is
+         * never read (section 6.11). */
+        tbtU4ReadDrom(cm, d);
+        if (!TBT_U4_LIVE(p, gen)) {
+            return TBT_E_GONE;
+        }
+    }
     if (d->UpAdp != 0 && d->UpAdp + 1 < TBT_U4_MAX_ADP) {
         rc = tbtU4DiscoverAdapters(cm, d);
     } else {
@@ -2453,7 +2517,6 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
             return TBT_E_STATE;
         }
     } else {
-        tbtU4ReadDrom(cm, d);
         d->UuidValid = (BOOLEAN)(tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2,
                                           d->Uuid) == TBT_OK);
         tbtU4GetCapabilities(cm, d);
@@ -4277,6 +4340,10 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
     d->Present = TRUE;
     d->Preserved = TRUE;
     cm->Counters.RoutersAdopted++;
+    if (!d->Tbt3) {
+        /* As tbtU4Router: an adapter the DROM marks unused is never read. */
+        tbtU4ReadDrom(cm, d);
+    }
     if (tbtU4DiscoverAdapters(cm, d) != TBT_OK ||
         tbtU4RouterCaps(cm, d, TBT_RTR1_NEXT_CAP(v[1])) != TBT_OK ||
         d->UpAdp == 0 || d->UpAdp + 1 >= TBT_U4_MAX_ADP) {
@@ -4481,16 +4548,37 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
     TBT_ROUTE child;
     PTBT_U4_ROUTER s;
     PTBT_U4_LINK l;
+    PTBT_U4_LINK cur;
     ULONG k;
 
     s = &cm->Scratch;
     first = 0;
     parent = p->Dev.Route;
+    cur = NULL;
     for (;;) {
         tbtU4Zero(s, sizeof(*s));
         s->Route = parent;
+        if (cur == NULL) {
+            /* The port's own router: its DROM's unused adapters stay
+             * unread here too. */
+            s->DromUnused[0] = p->Dev.DromUnused[0];
+            s->DromUnused[1] = p->Dev.DromUnused[1];
+        }
         if (tbtU4RdN(cm, &s->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_0, 5, v) == TBT_OK) {
             tbtU4TakeHeader(s, v);
+            if (cur != NULL && !s->Tbt3) {
+                /* A router below depth 1: its DROM asked once, as the
+                 * port's own router's (section 6.11), and the answer kept
+                 * on its link for the next walk and for its removal. */
+                if (!cur->ChildDromRead) {
+                    tbtU4ReadDrom(cm, s);
+                    cur->ChildDromUnused[0] = s->DromUnused[0];
+                    cur->ChildDromUnused[1] = s->DromUnused[1];
+                    cur->ChildDromRead = TRUE;
+                }
+                s->DromUnused[0] = cur->ChildDromUnused[0];
+                s->DromUnused[1] = cur->ChildDromUnused[1];
+            }
             if (tbtU4DiscoverAdapters(cm, s) == TBT_OK) {
                 for (a = 1; a <= s->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
                     if (!s->Adp[a].Present || s->Adp[a].Type != TBT_ADP_TYPE_LANE ||
@@ -4541,6 +4629,9 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
                     l->RemovalPending = FALSE;
                     l->CapsState = TBT_U4_CAPS_PENDING;
                     l->CapsEnabled = 0;
+                    l->ChildDromRead = FALSE;
+                    l->ChildDromUnused[0] = 0;
+                    l->ChildDromUnused[1] = 0;
                     if (l->ChildTbt3) {
                         /* Section 8: no router operation, plain
                          * acknowledgements, the LC's fused UUID - adopted
@@ -4568,6 +4659,7 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
             return;
         }
         parent = cm->Links[i].Child;
+        cur = &cm->Links[i];
         first = i + 1;
     }
 }
@@ -4599,6 +4691,17 @@ static VOID tbtU4RemoveLink(PTBT_U4CM cm, ULONG index)
     tbtU4Zero(s, sizeof(*s));
     s->Route = l->Parent;
     p = tbtU4PortOf(cm, l->Port);
+    if (p != NULL && TbtRouteEqual(&s->Route, &p->Dev.Route)) {
+        s->DromUnused[0] = p->Dev.DromUnused[0];
+        s->DromUnused[1] = p->Dev.DromUnused[1];
+    }
+    for (k = 0; k < TBT_U4_MAX_LINKS; k++) {
+        if (cm->Links[k].Used && TbtRouteEqual(&cm->Links[k].Child, &s->Route)) {
+            /* A parent below depth 1: the mask its DROM gave (DiscoverLinks). */
+            s->DromUnused[0] = cm->Links[k].ChildDromUnused[0];
+            s->DromUnused[1] = cm->Links[k].ChildDromUnused[1];
+        }
+    }
     first = (BOOLEAN)!l->RemovalPending;
     complete = FALSE;
     if (first) {
