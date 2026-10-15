@@ -16,8 +16,9 @@
 # tbt_hw.c (test_tbt_ring, test_tbt_icm, test_tbt_hw, test_tbt_select);
 # the USB4 software connection manager, tbt_u4cm.c (test_u4cm; Phase 40,
 # design record 22); the tunnel ports, tbt_topo.c (test_tbt_topo), and the
-# re-enumeration's own pure half, cm_ports.c (test_cm_ports); and the shared
-# log ring ..\xhci_log.c (test\test_log.c), compiled in by path. All DDK-free.
+# re-enumeration's own pure half, cm_ports.c (test_cm_ports); and the
+# shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path.
+# All DDK-free.
 # cm_pool.c is the one file that allocates pool; cm_reg.c the one that
 # opens a registry key; cm_log.c the one DbgPrint site (debug and qemu
 # only). The allowlists hold each to its file with SITES=. cm_cfgmg.c is
