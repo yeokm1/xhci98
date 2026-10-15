@@ -327,6 +327,8 @@ typedef struct _TBT_U4_LINK {
     ULONG ChildUuid[4];
     ULONG CapsState;        /* TBT_U4_CAPS_* of the child (section 6.4) */
     ULONG CapsEnabled;
+    BOOLEAN ChildDromRead;  /* the child's DROM asked once (a USB4 child) */
+    ULONG ChildDromUnused[2];   /* its unused adapters (TBT_U4_ROUTER.DromUnused) */
 } TBT_U4_LINK, *PTBT_U4_LINK;
 
 /* A path entry not proven invalid and drained, or a protocol adapter

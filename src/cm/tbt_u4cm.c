@@ -4548,15 +4548,17 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
     TBT_ROUTE child;
     PTBT_U4_ROUTER s;
     PTBT_U4_LINK l;
+    PTBT_U4_LINK cur;
     ULONG k;
 
     s = &cm->Scratch;
     first = 0;
     parent = p->Dev.Route;
+    cur = NULL;
     for (;;) {
         tbtU4Zero(s, sizeof(*s));
         s->Route = parent;
-        if (TbtRouteEqual(&parent, &p->Dev.Route)) {
+        if (cur == NULL) {
             /* The port's own router: its DROM's unused adapters stay
              * unread here too. */
             s->DromUnused[0] = p->Dev.DromUnused[0];
@@ -4564,6 +4566,19 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
         if (tbtU4RdN(cm, &s->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_0, 5, v) == TBT_OK) {
             tbtU4TakeHeader(s, v);
+            if (cur != NULL && !s->Tbt3) {
+                /* A router below depth 1: its DROM asked once, as the
+                 * port's own router's (section 6.11), and the answer kept
+                 * on its link for the next walk and for its removal. */
+                if (!cur->ChildDromRead) {
+                    tbtU4ReadDrom(cm, s);
+                    cur->ChildDromUnused[0] = s->DromUnused[0];
+                    cur->ChildDromUnused[1] = s->DromUnused[1];
+                    cur->ChildDromRead = TRUE;
+                }
+                s->DromUnused[0] = cur->ChildDromUnused[0];
+                s->DromUnused[1] = cur->ChildDromUnused[1];
+            }
             if (tbtU4DiscoverAdapters(cm, s) == TBT_OK) {
                 for (a = 1; a <= s->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
                     if (!s->Adp[a].Present || s->Adp[a].Type != TBT_ADP_TYPE_LANE ||
@@ -4614,6 +4629,9 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
                     l->RemovalPending = FALSE;
                     l->CapsState = TBT_U4_CAPS_PENDING;
                     l->CapsEnabled = 0;
+                    l->ChildDromRead = FALSE;
+                    l->ChildDromUnused[0] = 0;
+                    l->ChildDromUnused[1] = 0;
                     if (l->ChildTbt3) {
                         /* Section 8: no router operation, plain
                          * acknowledgements, the LC's fused UUID - adopted
@@ -4641,6 +4659,7 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
             return;
         }
         parent = cm->Links[i].Child;
+        cur = &cm->Links[i];
         first = i + 1;
     }
 }
@@ -4675,6 +4694,13 @@ static VOID tbtU4RemoveLink(PTBT_U4CM cm, ULONG index)
     if (p != NULL && TbtRouteEqual(&s->Route, &p->Dev.Route)) {
         s->DromUnused[0] = p->Dev.DromUnused[0];
         s->DromUnused[1] = p->Dev.DromUnused[1];
+    }
+    for (k = 0; k < TBT_U4_MAX_LINKS; k++) {
+        if (cm->Links[k].Used && TbtRouteEqual(&cm->Links[k].Child, &s->Route)) {
+            /* A parent below depth 1: the mask its DROM gave (DiscoverLinks). */
+            s->DromUnused[0] = cm->Links[k].ChildDromUnused[0];
+            s->DromUnused[1] = cm->Links[k].ChildDromUnused[1];
+        }
     }
     first = (BOOLEAN)!l->RemovalPending;
     complete = FALSE;

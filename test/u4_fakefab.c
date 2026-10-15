@@ -602,6 +602,13 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
     }
     if (t == 1 && addr == FAB_CAP_PORT + 19) {
         ad->Cs[addr] = v;
+        if ((v & 1UL) == 0 && ad->Peer >= 0 && f->R[ad->Peer].ReconnectPending &&
+            !f->R[ad->Peer].ReconnectArmed) {
+            /* The capture's 594 ms run from the reset's release. */
+            f->R[ad->Peer].ReconnectArmed = 1;
+            f->R[ad->Peer].DprReleasedAtUs = f->NowUs;
+            f->R[ad->Peer].ReconnectAtUs = f->NowUs + f->R[ad->Peer].LinkDelayUs;
+        }
         if ((v & 1UL) && ad->Peer >= 0) {
             /* Downstream Port Reset: the router behind goes back to the
              * uninitialised state and its link retrains. */
@@ -618,9 +625,10 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
             r->Adp[a + 1].Cs[4] |= 0x80000000UL;
             if (f->R[d].LinkDelayUs != 0 && !f->R[d].ReconnectPending) {
                 /* A router that takes its time to come back (the ASM2464,
-                 * about 594 ms, usb4-emu docs/captures/ORICO-ASM2464.md
-                 * section 10): the link is down from the reset until then,
-                 * with an unplug event now and a plug event then. */
+                 * 594 ms after the reset's release, usb4-emu
+                 * docs/captures/ORICO-ASM2464.md section 10): the link is
+                 * down from the reset until then, with an unplug event now
+                 * and a plug event then. */
                 f->R[d].RrPending = 0;
                 for (pa = 0; pa < 2; pa++) {
                     if (r->Adp[a + pa].Present) {
@@ -629,7 +637,7 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
                     }
                 }
                 f->R[d].ReconnectPending = 1;
-                f->R[d].ReconnectAtUs = f->NowUs + f->R[d].LinkDelayUs;
+                f->R[d].ReconnectArmed = 0;
                 if ((ad->Cs[5] & 0x80000000UL) == 0) {
                     fabHotPlug(f, ri, a, 1);
                 }
@@ -932,10 +940,12 @@ static void fabAdvance(FAB *f, unsigned long us)
     f->NowUs += us;
     for (i = 1; i < FAB_MAX_ROUTERS; i++) {
         r = &f->R[i];
-        if (r->Used && r->ReconnectPending && r->Connected &&
+        if (r->Used && r->ReconnectPending && r->ReconnectArmed && r->Connected &&
             f->NowUs - r->ReconnectAtUs < 0x80000000UL) {
             /* The link of a Downstream Port Reset back (LinkDelayUs). */
             r->ReconnectPending = 0;
+            r->ReconnectArmed = 0;
+            r->ReconnectedAtUs = f->NowUs;
             fabConnect(f, r->Parent, (unsigned)r->ParentAdp, i);
             if ((f->R[r->Parent].Adp[r->ParentAdp].Cs[5] & 0x80000000UL) == 0) {
                 fabHotPlug(f, r->Parent, (unsigned long)r->ParentAdp, 0);
@@ -1526,6 +1536,7 @@ static void fabResetRouter(FAB *f, int d)
     r->Rcs[26] = 0;
     r->RrPending = 0;
     r->ReconnectPending = 0;
+    r->ReconnectArmed = 0;
     if (!r->Tbt3) {
         if (r->TmuAt != 0) {
             r->Rcs[r->TmuAt] &= 0x0000FFFFUL;

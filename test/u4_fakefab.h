@@ -122,8 +122,11 @@ typedef struct FAB_ROUTER {
     unsigned long RrAtUs;
     unsigned long LinkDelayUs;      /* a Downstream Port Reset: the link back this
                                      * long after the reset (0: at once) */
-    int ReconnectPending;
+    int ReconnectPending;           /* the link down since a reset */
+    int ReconnectArmed;             /* the reset released: ReconnectAtUs runs */
     unsigned long ReconnectAtUs;
+    unsigned long DprReleasedAtUs;  /* the last such release */
+    unsigned long ReconnectedAtUs;  /* and the link back after it */
     unsigned long NvmOps;           /* NVM Sector Size requests */
     unsigned long AdpTouches[FAB_MAX_ADP];  /* requests addressed to each adapter */
 } FAB_ROUTER;
