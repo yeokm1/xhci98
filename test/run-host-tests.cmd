@@ -190,6 +190,14 @@ rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
 rem                  table of nvme98's nvme98cm.h, its entry protocol read
 rem                  back by a modelled receiver, the two profiles'
 rem                  statement conditions, the 9x record and REMOVE_PENDING
+rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
+rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
+rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
+rem                  switch port and root port ids, checked against
+rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
+rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
+rem                  the bridge filter's snapshot, and the resume hold's
+rem                  watchdog bound
 rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
 rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
 rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
@@ -472,6 +480,11 @@ rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
 call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_cm_ports links nothing else: the re-enumeration's own pure half,
+rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
+rem Windows 98's PCI device ids, the bridge filter's snapshot and the
+rem resume hold's bound (39-A.5 driver half, 39-A.8).
+call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

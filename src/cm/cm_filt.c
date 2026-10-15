@@ -1,21 +1,32 @@
 /*
- * cm_filt.c - the tunnel bridge's upper filter (record 21 section 3.2,
- * role 2), NT targets only. It sits above the PDO pci.sys made for each
- * Thunderbolt switch port or tunnel root port that xhcicmf.inf names and
- * does nothing to what it sees: every IRP goes down unchanged (a
- * device-usage notification with the power flags mimicked, as a filter
- * must), and its own work is to attach, and to detach and delete itself
- * on removal.
+ * cm_filt.c - the filters of record 21 section 3.2, NT targets only:
  *
- * Task 39-A.5 adds what it exists for: the registration list entry
- * published after its start has completed below it, withdrawn on stop,
- * surprise removal and removal with the rundown of section 3.2, through
- * which the NHI asks it for IoInvalidateDeviceRelations on its PDO.
- * Task 39-A.8 adds the Removable answer to IRP_MN_QUERY_CAPABILITIES.
+ *   [CM_KIND_FILTER]  role 2, the tunnel bridge's upper filter. It sits
+ *       above the PDO pci.sys made for each Thunderbolt switch port or
+ *       tunnel root port that xhcicmf.inf names and does no device work.
+ *       It publishes its registration entry (cm_reenum.c) once its start
+ *       has completed below it successfully, and withdraws it, with the
+ *       rundown of section 3.2, on stop, surprise removal and removal;
+ *       through that entry the NHI's thread asks for
+ *       IoInvalidateDeviceRelations on its PDO (section 6.2). It reads
+ *       every BusRelations answer on its way back, keeps the snapshot and
+ *       the baseline, and on an active bridge with safe eject on attaches
+ *       a child filter to each new PDO (section 7.4). A device D0 request
+ *       on a bridge the NHI holds for its resume is retained (section 6.3).
+ *   [CM_KIND_CHILD]   role 3, safe eject's child filter, created by the
+ *       bridge filter directly above a new device's PDO. Its one act is
+ *       Removable in the IRP_MN_QUERY_CAPABILITIES answer, on the way up;
+ *       a removal after a query-remove (an eject, not a surprise removal)
+ *       is posted to the owning domain (record 22 section 10.4's per-port
+ *       entry).
  *
- * IRQL: PASSIVE_LEVEL (PnP and power IRPs), or the lower device's power
- * context: the filter copies DO_POWER_PAGABLE and DO_POWER_INRUSH from
- * the bridge it sits on, as a filter must.
+ * Every other IRP goes down unchanged (a device-usage notification with
+ * the power flags mimicked, as a filter must). Each filter detaches and
+ * deletes itself on removal.
+ *
+ * IRQL: PASSIVE_LEVEL (PnP IRPs), or the lower device's power context: the
+ * filter copies DO_POWER_PAGABLE and DO_POWER_INRUSH from the device it
+ * sits on, as a filter must.
  */
 
 #include "cm.h"
@@ -40,6 +51,7 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     filter->Outstanding = 1;
     KeInitializeSpinLock(&filter->Lock);
     KeInitializeEvent(&filter->Drained, NotificationEvent, FALSE);
+    CmRegFilterInit(filter);
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
         IoDeleteDevice(self);
@@ -116,13 +128,56 @@ static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
     return STATUS_SUCCESS;
 }
 
+/*
+ * The child filter's answer (record 21 section 7.4 step 2): Removable set
+ * on the way up, where pci.sys succeeded the request. SurpriseRemovalOK,
+ * EjectSupported and LockSupported are left as the bus driver set them.
+ * PASSIVE_LEVEL.
+ */
+static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    PDEVICE_CAPABILITIES caps;
+    NTSTATUS status;
+
+    status = CmForwardSync(&child->Common, irp);
+    if (NT_SUCCESS(status)) {
+        stack = IoGetCurrentIrpStackLocation(irp);
+        caps = stack->Parameters.DeviceCapabilities.Capabilities;
+        if (caps != NULL && caps->Version >= 1 &&
+            caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
+            caps->Removable = 1;
+        }
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
+/* A bridge's BusRelations, read on the way back (section 6.2) on every
+ * bridge from its start, whatever its active mark says. */
+static NTSTATUS cmBridgeRelations(PCM_FILTER filter, PIRP irp)
+{
+    NTSTATUS status;
+    ULONG seq;
+
+    seq = CmRegRelationsBegin(filter);
+    status = CmForwardSync(&filter->Common, irp);
+    if (NT_SUCCESS(status) && filter->Started) {
+        CmRegRelations(filter,
+                       (const DEVICE_RELATIONS *)irp->IoStatus.Information,
+                       seq);
+    }
+    return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+}
+
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
     PDEVICE_OBJECT self;
     NTSTATUS status;
     KIRQL irql;
+    BOOLEAN child;
 
+    child = (BOOLEAN)(filter->Common.Kind == CM_KIND_CHILD);
     stack = IoGetCurrentIrpStackLocation(irp);
     switch (stack->MinorFunction) {
     case IRP_MN_DEVICE_USAGE_NOTIFICATION:
@@ -143,22 +198,80 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
         status = CmForwardSync(&filter->Common, irp);
         if (NT_SUCCESS(status)) {
             filter->Started = 1;
+            if (!child) {
+                CmRegPublish(filter);
+            }
         }
         return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 
+    case IRP_MN_QUERY_CAPABILITIES:
+        if (child) {
+            return cmChildCapabilities(filter, irp);
+        }
+        break;
+
+    case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (!child && stack->Parameters.QueryDeviceRelations.Type ==
+                          BusRelations) {
+            return cmBridgeRelations(filter, irp);
+        }
+        break;
+
+    case IRP_MN_QUERY_REMOVE_DEVICE:
+        if (child) {
+            filter->QueryRemoved = 1;
+        }
+        break;
+
+    case IRP_MN_CANCEL_REMOVE_DEVICE:
+        if (child) {
+            filter->QueryRemoved = 0;
+        }
+        break;
+
     case IRP_MN_STOP_DEVICE:
+        filter->Started = 0;
+        if (!child) {
+            CmRegWithdraw(filter);
+        }
+        break;
+
     case IRP_MN_SURPRISE_REMOVAL:
         filter->Started = 0;
+        if (child) {
+            filter->SurpriseRemoved = 1;
+        } else {
+            CmRegWithdraw(filter);
+        }
         break;
 
     case IRP_MN_REMOVE_DEVICE:
         filter->Started = 0;
+        if (!child) {
+            CmRegWithdraw(filter);
+        }
         /* Close acquisition, forward the removal, then drop the attach's
          * reference and wait for every notification in flight to finish
          * with the filter before it is detached and deleted. */
         KeAcquireSpinLock(&filter->Lock, &irql);
         filter->Removing = 1;
         KeReleaseSpinLock(&filter->Lock, irql);
+        if (child) {
+            /* The child waits for the removal to finish below, detaches,
+             * and only then counts the port's eject (CmRegChildRemoved),
+             * so it is posted once this function's stack is gone. */
+            status = CmForwardSync(&filter->Common, irp);
+            cmFilterRelease(filter);
+            (VOID)KeWaitForSingleObject(&filter->Drained, Executive,
+                                        KernelMode, FALSE, NULL);
+            IoDetachDevice(filter->Common.Lower);
+            CmRegChildRemoved(filter,
+                              (BOOLEAN)(filter->QueryRemoved &&
+                                        !filter->SurpriseRemoved));
+            (VOID)CmCompleteIrp(irp, status, irp->IoStatus.Information);
+            IoDeleteDevice(filter->Common.Self);
+            return status;
+        }
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(filter->Common.Lower, irp);
         cmFilterRelease(filter);
@@ -175,8 +288,24 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     return IoCallDriver(filter->Common.Lower, irp);
 }
 
+/*
+ * Power: passed down as NT 5.x requires of a filter, except a device D0
+ * request on a bridge the NHI holds for its resume (record 21 section
+ * 6.3), which cm_reenum.c passes down with a completion routine that
+ * retains it.
+ */
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (filter->Common.Kind == CM_KIND_FILTER &&
+        stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == DevicePowerState &&
+        stack->Parameters.Power.State.DeviceState == PowerDeviceD0 &&
+        CmRegHoldD0(filter, irp)) {
+        return STATUS_PENDING;
+    }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);
     return PoCallDriver(filter->Common.Lower, irp);

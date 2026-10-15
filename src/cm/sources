@@ -15,18 +15,19 @@
 # the ICM client and the hardware profiles, tbt_ring.c, tbt_icm.c and
 # tbt_hw.c (test_tbt_ring, test_tbt_icm, test_tbt_hw, test_tbt_select);
 # the USB4 software connection manager, tbt_u4cm.c (test_u4cm; Phase 40,
-# design record 22); and the shared log
-# ring ..\xhci_log.c (test\test_log.c), compiled in by path. All DDK-free.
+# design record 22); the tunnel ports, tbt_topo.c (test_tbt_topo), and the
+# re-enumeration's own pure half, cm_ports.c (test_cm_ports); and the shared
+# log ring ..\xhci_log.c (test\test_log.c), compiled in by path. All DDK-free.
 # cm_pool.c is the one file that allocates pool; cm_reg.c the one that
 # opens a registry key; cm_log.c the one DbgPrint site (debug and qemu
-# only). The allowlists hold each to its file with SITES=.
+# only). The allowlists hold each to its file with SITES=. cm_cfgmg.c is
+# the one file that calls CONFIGMG (Windows 98 SE and ME, x86 only).
 #
 # ADDING A FILE. A new .c is one more line in SOURCES below (a file of
 # src\ by path, as ..\xhci_log.c is); scripts\source-stamp.ps1 reads this
-# list, so the stamp follows. Reserved for a later task of Phase 39:
-# tbt_topo.c (39-A.5); headers (tbt_regs.h, cm_cfgmg.h) need no line. A
-# pure file also gets a host suite line in test\run-host-tests.cmd, as
-# test_cm has.
+# list, so the stamp follows. Headers (tbt_regs.h, cm_cfgmg.h) need no
+# line. A pure file also gets a host suite line in test\run-host-tests.cmd,
+# as test_cm has.
 #
 
 TARGETNAME=xhcicm
@@ -40,6 +41,8 @@ SOURCES=cm_vals.c      \
         tbt_icm.c      \
         tbt_hw.c       \
         tbt_u4cm.c     \
+        tbt_topo.c     \
+        cm_ports.c     \
         ..\xhci_log.c  \
         cm_pool.c      \
         cm_reg.c       \
@@ -48,7 +51,8 @@ SOURCES=cm_vals.c      \
         cm_nhi.c       \
         cm_thr.c       \
         cm_power.c     \
-        cm_reenum_stub.c \
+        cm_reenum.c    \
+        cm_cfgmg.c     \
         cm_filt.c      \
         xhcicm.rc
 
