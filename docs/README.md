@@ -26,7 +26,7 @@ source comments, scripts, and other docs use these same locations.
   [its second file](contributing/roadmap-miniport-updates.md), and Phases 25
   onward, the successor host controller driver's, in
   [its third](contributing/roadmap-hcd.md); the USB4 and Thunderbolt 3
-  connection-manager work, planned and not yet opened, is in
+  connection-manager work, Phases 39 and 40 (`3.0.0.0`), is in
   [its fourth](contributing/roadmap-usb4.md).
 - [Source files](contributing/source-files.md) - what every file in `src/` is
   for, and which belong to the host-tested pure core.
@@ -68,9 +68,16 @@ source comments, scripts, and other docs use these same locations.
   entry as it stood while the phase was open.
 - [Phase 39 record](contributing/runs/run-39.md) - the Thunderbolt 3 and USB4
   work's virtual-machine vehicle on `usb4-emu` (task 39-0.7: the launch lines,
-  the `scripts\usb4` launcher, the device trees and ids each guest sees) and the
+  the `scripts\usb4` launcher, the device trees and ids each guest sees), the
   NT filter's install route (task 39-0.4, decision D2: the device-specific route,
-  and the reading that Windows 98 SE and ME read `$Windows NT$` INFs).
+  and the reading that Windows 98 SE and ME read `$Windows NT$` INFs), and the
+  ICM client's legs: the NHI driver, re-enumeration and safe eject on Windows 98
+  SE and 2000, the 98 SE CONFIGMG worker, and the NT tiers of 39-V.3.
+- [Phase 40 record](contributing/runs/run-40.md) - the USB4 software connection
+  manager's legs on `usb4-emu`'s `usb4-generic` host models and the ASM2464
+  enclosure model (the launcher reading of 40-0.3, the fabric cross-check of
+  40-A.5, the U legs of 40-V on Windows 98 SE, 2000 and the NT tiers), and the
+  install tool's legs (task 40.5 onward, design record 23) on every target.
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
