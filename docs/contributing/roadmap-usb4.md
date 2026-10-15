@@ -239,6 +239,8 @@ green with the gates on both architectures; 40-V.1's and 40-V.2's legs read on t
 flavour and the `release` flavour of the dry cut; the cut with the install
 leg from the asset on every target; then Phase 39's bench (39-E) after it.
 
+---
+
 ## Phase 41 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
 Goal: a graphical tool for every target that shows every USB controller,
