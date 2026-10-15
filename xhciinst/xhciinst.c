@@ -4286,17 +4286,17 @@ static int run_install_nt(void)
             }
             tbInclude = !tbInclude;
         }
+        if (!inst_eq(name, restagePkg)) {
+            out("REFUSED: an unfinished /restage of another package (%s) is "
+                "recorded. Run that\npackage's INSTALL.BAT to finish it; this "
+                "one is %s.\n", restagePkg, name);
+            return INST_EXIT_REFUSED;
+        }
         if (haveCm && !tbInclude &&
             (restagePending[INST_INF_CM] || restagePending[INST_INF_CMF])) {
             out("REFUSED: the unfinished /restage includes the Thunderbolt "
                 "driver. Answer Y to the\nThunderbolt question (or use "
                 "/thunderbolt) to finish it.\n");
-            return INST_EXIT_REFUSED;
-        }
-        if (!inst_eq(name, restagePkg)) {
-            out("REFUSED: an unfinished /restage of another package (%s) is "
-                "recorded. Run that\npackage's INSTALL.BAT to finish it; this "
-                "one is %s.\n", restagePkg, name);
             return INST_EXIT_REFUSED;
         }
     }
