@@ -403,7 +403,7 @@ whole transaction itself and exits.
   descriptor granting everyone `SYNCHRONIZE` and SYSTEM and
   Administrators full access. A local user who creates the name first
   could close other sessions' trays; that is the whole of the exposure,
-  and XHCIINST's `WM_CLOSE` and deferred replacement (section 8) still
+  and XHCIINST's `WM_CLOSE` and its "run again" answer (section 8) still
   cover a tray that misses the event.
 
 ### 7.2 Events and keys
