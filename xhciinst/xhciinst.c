@@ -2308,17 +2308,17 @@ static void maint_unlock(void)
     }
 }
 
-/* NT: MoveFileExA with MOVEFILE_DELAY_UNTIL_REBOOT (to NULL: a deletion),
- * looked up at run time; 98 SE and ME have no such call, and nothing of
- * the USB tree tool is ever left for their restart. */
-static int move_at_restart(const char *from, const char *to)
+/* NT: a file or an empty directory deleted at the next restart
+ * (MoveFileExA to NULL with MOVEFILE_DELAY_UNTIL_REBOOT, looked up at run
+ * time); 98 SE and ME have no such call, and nothing of the USB tree tool
+ * is ever left for their restart. */
+static int delete_at_restart(const char *path)
 {
     PFN_MOVEEX moveEx = (PFN_MOVEEX)GetProcAddress(GetModuleHandleA("kernel32.dll"),
                                                    "MoveFileExA");
 
     return envNow.Nt && moveEx != NULL &&
-           moveEx(from, to, MOVEFILE_DELAY_UNTIL_REBOOT |
-                            (to != NULL ? MOVEFILE_REPLACE_EXISTING : 0));
+           moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT);
 }
 
 /* The installed tool's paths: the EXE; beside it the name every new copy
@@ -2473,15 +2473,31 @@ static int tray_run_delete(void)
     return -1;
 }
 
+/* A leftover deleted: 1, or 0 said, with steps left. */
+static int tray_delete_leftover(const char *path)
+{
+    if (!delete_file(path)) {
+        out("%s could not be deleted (error %lu); delete it by hand.\n", path,
+            (unsigned long)GetLastError());
+        flagSteps = 1;
+        return 0;
+    }
+    flagChanged = 1;
+    logonly("%s deleted (a leftover)\n", path);
+    return 1;
+}
+
 /* Leftovers of an interrupted run, before any version is read (record 25
  * section 8): .TMP deleted; a .BAK with no tool beside it renamed back (it
  * is the tool, caught between two renames on 98 SE or ME), one beside the
- * tool deleted; on NT a .DEL deleted when it no longer runs. 1, or 0 when a
- * .BAK could not be renamed back (said: the tool is not touched further). */
+ * tool deleted; on NT a .DEL deleted, or, while it still runs, its
+ * deletion at the restart asked again rather than assumed. A deletion that
+ * fails is said and leaves steps. 1, or 0 when a .BAK could not be renamed
+ * back (said: the tool is not touched further). */
 static int tray_leftovers(const TRAY_PATHS *t)
 {
     if (file_exists(t->Tmp, NULL)) {
-        delete_file(t->Tmp);
+        tray_delete_leftover(t->Tmp);
     }
     switch (inst_tray_leftover(file_exists(t->Bak, NULL),
                                file_exists(t->Exe, NULL))) {
@@ -2496,13 +2512,25 @@ static int tray_leftovers(const TRAY_PATHS *t)
         logonly("%s renamed back to %s\n", t->Bak, t->Exe);
         break;
     case INST_TRAY_BAK_DELETE:
-        delete_file(t->Bak);
+        tray_delete_leftover(t->Bak);
         break;
     default:
         break;
     }
-    if (envNow.Nt && file_exists(t->Del, NULL) && delete_file(t->Del)) {
-        flagChanged = 1;
+    if (envNow.Nt && file_exists(t->Del, NULL)) {
+        if (delete_file(t->Del)) {
+            flagChanged = 1;
+            logonly("%s deleted (a leftover)\n", t->Del);
+        } else if (delete_at_restart(t->Del)) {
+            flagRestart = 1;
+            trayDeferred = 1;
+            out("%s is still in use: it is deleted at the restart.\n", t->Del);
+        } else {
+            out("%s is still in use and could not be scheduled for deletion "
+                "(error %lu);\ndelete it after a restart.\n", t->Del,
+                (unsigned long)GetLastError());
+            flagSteps = 1;
+        }
     }
     return 1;
 }
@@ -2707,10 +2735,6 @@ static void tray_remove(void)
         flagSteps = 1;
         goto done;
     }
-    if (file_exists(t.Del, NULL)) {
-        /* Still in use, and already waiting for an earlier restart. */
-        trayDeferred = 1;
-    }
     if (!file_exists(t.Exe, NULL)) {
         goto done;
     }
@@ -2737,7 +2761,7 @@ static void tray_remove(void)
     }
     flagChanged = 1;
     trayDeferred = 1;
-    if (!move_at_restart(t.Del, NULL)) {
+    if (!delete_at_restart(t.Del)) {
         out("%s could not be scheduled for deletion; run INSTALL /uninstall "
             "again after a\nrestart.\n", t.Del);
         flagSteps = 1;
@@ -2873,7 +2897,7 @@ static void local_remove_all(void)
         out("%s removed.\n", rootDir);
     } else if (trayDeferred) {
         /* The USB tree tool, still in use, is what keeps it now. */
-        if (move_at_restart(rootDir, NULL)) {
+        if (delete_at_restart(rootDir)) {
             out("%s is removed at the restart.\n", rootDir);
         } else {
             out("%s can be deleted after the restart.\n", rootDir);
@@ -5312,8 +5336,9 @@ static int run_install_9x(void)
     note_old_entries();
     /* Steps are left only where a device needs one (Update Driver, Have
      * Disk, a refused version, an entry that may be a cancelled wizard's
-     * controller): a current machine ends without them. */
-    return inst_exit_code(0, flagFailed, flagRestart, steps);
+     * controller), or the USB tree tool does (record 23 section 9.5): a
+     * current machine ends without them. */
+    return inst_exit_code(0, flagFailed, flagRestart, steps || flagSteps);
 }
 
 /* ======================================================================== */
@@ -6062,7 +6087,10 @@ static int run_uninstall_9x(void)
         "  3. Restart. If the New Hardware wizard offers the controller, "
         "Cancel it.\n"
         "  4. Delete the driver files listed above, and restart once more.\n");
-    return opts.List ? INST_EXIT_DONE : INST_EXIT_STEPS;
+    /* The steps above are always left; a failure (the USB tree tool's Run
+     * value, record 23 section 9.5) outranks them. */
+    return opts.List ? INST_EXIT_DONE
+                     : inst_exit_code(0, flagFailed, flagRestart, 1);
 }
 
 /* ======================================================================== */
