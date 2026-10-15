@@ -1827,6 +1827,9 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
+    /* The USB4 profile's presence samples for the nvme98 statement's
+     * anchor (record 22 section 10.3); nothing under the ICM. */
+    CmNvlinkService(nhi);
     if (!r->Listed && r->RediscoverLeft != 0 &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
         cmDiscoverAndList(nhi);

@@ -45,6 +45,7 @@ typedef struct _CM_NV_SHADOW {
     ULONG Bridge;       /* its tunnel port, XHCI_TBT_BDF                 */
     ULONG Waiting;      /* DOWN_QUIESCED set, acknowledgement awaited    */
     ULONG MarkedAt;     /* the owner's clock at the mark, ms             */
+    ULONG Id;           /* the function's ids when UP was published      */
 } CM_NV_SHADOW;
 
 static PNVME98LS_TABLE cmNvTable;
@@ -59,6 +60,18 @@ static ULONG cmNvRecord;        /* 9x: the record was written            */
 static ULONG cmNvRecordTried;   /* 0 not yet, 1 being written, 2 done    */
 static ULONG cmNvRecordError;
 static ULONG cmNvRemoveSeq;
+
+/* Each domain's latest connection generation per host USB4 port, from the
+ * UP hook: the presence sample is offered to the core under it. */
+#define CM_NV_DOMAINS 4UL
+
+typedef struct _CM_NV_U4 {
+    PCM_NHI Nhi;
+    ULONG Gen[TBT_U4_MAX_PORTS + 1];
+    ULONG Seen[TBT_U4_MAX_PORTS + 1];
+} CM_NV_U4;
+
+static CM_NV_U4 cmNvU4[CM_NV_DOMAINS];
 
 /* Counters, for the log at each NHI's stop. */
 static ULONG cmNvUps;
@@ -108,7 +121,7 @@ static ULONG cmNvNow(PCM_NHI nhi)
  * events (the seam's polls do the same), then a short sleep. */
 static VOID cmNvPause(PCM_NHI nhi)
 {
-    TbtIcmService(&nhi->Icm);
+    CmNhiWaitService(nhi);
     nhi->Host.Sleep(nhi->Host.Context, CM_NVLINK_POLL_MS);
 }
 
@@ -137,6 +150,8 @@ static ULONG cmNvCfgWrite(PVOID context, ULONG bdf, ULONG offset,
                ? 1UL : 0UL;
 }
 
+static BOOLEAN cmNvEmulator(ULONG bridge);
+
 /* Reads `bridge` until it reads `want` (XHCI_TBT_PORT_*) or `budgetMs`
  * pass; returns the last verdict, and in `*emulator` whether the bridge
  * read as the emulator's (an SHPC capability, no PCI Express capability). */
@@ -164,7 +179,7 @@ static ULONG cmNvRead(PCM_NHI nhi, ULONG bridge, ULONG want, ULONG budgetMs,
                                   cmNvEmulator(bridge));
             return verdict;
         }
-        TbtIcmService(&nhi->Icm);
+        CmNhiWaitService(nhi);
         nhi->Host.Sleep(nhi->Host.Context, XHCI_TBT_POLL_STEP_MS);
     }
 }
@@ -508,6 +523,7 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
                     cmNvShadow[index].Owner = nhi;
                     cmNvShadow[index].Bridge = bridge;
                     cmNvShadow[index].Waiting = 0;
+                    cmNvShadow[index].Id = id;
                     count++;
                     if (outcome != CM_NVLINK_UP_ALREADY) {
                         cmNvUps++;
@@ -587,7 +603,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
         start = cmNvNow(nhi);
         while ((r >> 16) == 0 &&
                CmNvlinkLeft(start, cmNvNow(nhi), CM_NV_ANSWER_MS) != 0) {
-            TbtIcmService(&nhi->Icm);
+            CmNhiWaitService(nhi);
             nhi->Host.Sleep(nhi->Host.Context, XHCI_TBT_POLL_STEP_MS);
             r = cmNvScan(nhi, bridge, bus, fresh);
         }
@@ -873,6 +889,11 @@ VOID CmNvlinkStop(PCM_NHI nhi)
         }
     }
     KeReleaseSpinLock(&cmNvLock, irql);
+    for (i = 0; i < CM_NV_DOMAINS; i++) {
+        if (cmNvU4[i].Nhi == nhi) {
+            cmNvU4[i].Nhi = NULL;
+        }
+    }
     CmLogNote(nhi, "cm.nvlink.ups", cmNvUps);
     CmLogNote(nhi, "cm.nvlink.full", cmNvUpsFull);
     CmLogNote(nhi, "cm.nvlink.sent", cmNvSent);
@@ -896,4 +917,131 @@ ULONG CmNvlinkIdleMs(ULONG configured)
         }
     }
     return configured;
+}
+
+/* ====================================================================== */
+/* The USB4 profile (record 22 section 10; task 40-A.7)                   */
+/* ====================================================================== */
+
+
+static CM_NV_U4 *cmNvU4Of(PCM_NHI nhi, BOOLEAN create)
+{
+    ULONG i;
+    ULONG k;
+
+    for (i = 0; i < CM_NV_DOMAINS; i++) {
+        if (cmNvU4[i].Nhi == nhi) {
+            return &cmNvU4[i];
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+    for (i = 0; i < CM_NV_DOMAINS; i++) {
+        if (cmNvU4[i].Nhi == NULL) {
+            cmNvU4[i].Nhi = nhi;
+            for (k = 0; k <= TBT_U4_MAX_PORTS; k++) {
+                cmNvU4[i].Gen[k] = 0;
+                cmNvU4[i].Seen[k] = 0;
+            }
+            return &cmNvU4[i];
+        }
+    }
+    return NULL;
+}
+
+VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
+{
+    PCM_NHI nhi;
+    CM_NV_U4 *u;
+
+    nhi = (PCM_NHI)context;
+    u = cmNvU4Of(nhi, TRUE);
+    if (u != NULL && action->Port >= 1 && action->Port <= TBT_U4_MAX_PORTS) {
+        u->Gen[action->Port] = action->Generation;
+        u->Seen[action->Port] = 1;
+    }
+    /* The UP itself is the seam's (CmNvlinkExpose, before the
+     * re-enumeration that this action is about to cause). */
+    CmLogNote(nhi, "cm.nvlink.u4-up",
+              ((action->Port & 0xFFUL) << 16) |
+                  (action->Generation & 0xFFFFUL));
+}
+
+ULONG CmNvlinkU4Down(PVOID context, const TBT_U4_LINKDOWN *info)
+{
+    PCM_NHI nhi;
+    ULONG member;
+    ULONG r;
+
+    nhi = (PCM_NHI)context;
+    member = XHCI_TBT_NO_MEMBER;
+    if (info->Port >= 1 && info->Port <= XHCI_TBT_MAX_PORTS) {
+        member = XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds,
+                                   info->Port);
+    }
+    r = CmNvlinkPortDown(nhi, member, info->PathClosed,
+                         info->AnchorValid ? info->RemainingUs / 1000UL
+                                           : 0);
+    return r == CM_NVLINK_SEND ? TBT_U4_STMT_SENT : TBT_U4_STMT_WITHHELD;
+}
+
+/* The tunnel port of USB4 port `port`'s member, or XHCI_TBT_NO_BDF. */
+static ULONG cmNvU4Bridge(PCM_NHI nhi, ULONG port)
+{
+    ULONG member;
+
+    member = XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, port);
+    if (member == XHCI_TBT_NO_MEMBER || member >= nhi->Reenum.Topo.Tunnels) {
+        return XHCI_TBT_NO_BDF;
+    }
+    return nhi->Reenum.Topo.Set[member];
+}
+
+/*
+ * Record 22 section 10.3's anchor: once per pass, for each UP entry of
+ * this domain whose port is known by correspondence, one configuration
+ * read of the function's ids, its issue time on the core's clock, offered
+ * to the core as a presence sample (matched when the ids read are the ones
+ * the UP was published for).
+ */
+VOID CmNvlinkService(PCM_NHI nhi)
+{
+    CM_NV_U4 *u;
+    ULONG port;
+    ULONG bridge;
+    ULONG i;
+    ULONG id;
+    ULONG issued;
+    BOOLEAN matched;
+
+    if (cmNvTable == NULL || !nhi->U4On) {
+        return;
+    }
+    u = cmNvU4Of(nhi, FALSE);
+    if (u == NULL) {
+        return;
+    }
+    for (port = 1; port <= TBT_U4_MAX_PORTS; port++) {
+        if (!u->Seen[port]) {
+            continue;
+        }
+        bridge = cmNvU4Bridge(nhi, port);
+        if (bridge == XHCI_TBT_NO_BDF) {
+            continue;
+        }
+        for (i = 0; i < NVME98LS_ENTRIES; i++) {
+            if (cmNvShadow[i].Owner != nhi || cmNvShadow[i].Bridge != bridge ||
+                (cmNvTable->Entry[i].Flags & NVME98LS_UP) == 0) {
+                continue;
+            }
+            issued = TbtClockUs(&nhi->Host);
+            matched = (BOOLEAN)(cmNvCfg(cmNvTable->Entry[i].BusNumber,
+                                        cmNvTable->Entry[i].SlotNumber, 0,
+                                        &id) &&
+                                id == cmNvShadow[i].Id);
+            TbtU4PresenceSample(&nhi->U4, port, u->Gen[port], issued,
+                                matched);
+        }
+    }
 }

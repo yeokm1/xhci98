@@ -256,6 +256,8 @@ VOID CmNvlinkRemoveCancel(PNVME98LS_TABLE t, ULONG index);
 #ifndef XHCI_HOST_TEST
 
 struct _CM_NHI;
+struct _TBT_U4_ACTION;
+struct _TBT_U4_LINKDOWN;
 
 /* DriverEntry: the table (CmAlloc, never freed) and, on Windows 2000 and
  * later, the callback object and its callback. Never fails the load: a
@@ -316,6 +318,23 @@ ULONG CmNvlinkOrderlyRemove(struct _CM_NHI *nhi, ULONG devnode, ULONG bdf);
  * CM_NVLINK_IDLE_MS while any entry reads UP (a tunnelled NVMe function is
  * there to be noticed leaving: record 21 section 7.2's budget). Any IRQL. */
 ULONG CmNvlinkIdleMs(ULONG configured);
+
+/*
+ * The USB4 profile (record 22 section 10), registered by the driver half
+ * with CmNhiSetU4Hooks where the selection admits that profile, with the
+ * NHI as the context. CmNvlinkU4Up (CM_U4_UP_HOOK) records the port's
+ * connection generation for the presence sample; the UP itself is the
+ * seam's CmNvlinkExpose. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
+ * its member by correspondence and calls CmNvlinkPortDown; it returns
+ * TBT_U4_STMT_SENT when a DOWN_QUIESCED was written, else
+ * TBT_U4_STMT_WITHHELD. CmNvlinkService, once per pass of the thread
+ * (CmReenumService), offers the core a presence sample per UP entry of a
+ * port known by correspondence (TbtU4PresenceSample, the anchor of
+ * section 10.3); it does nothing outside that profile.
+ */
+VOID CmNvlinkU4Up(PVOID context, const struct _TBT_U4_ACTION *action);
+ULONG CmNvlinkU4Down(PVOID context, const struct _TBT_U4_LINKDOWN *info);
+VOID CmNvlinkService(struct _CM_NHI *nhi);
 
 /* At the NHI's stop (CmReenumStop): this domain's entries are left as
  * they read (a tunnel the firmware keeps up stays UP) and disowned, so a
