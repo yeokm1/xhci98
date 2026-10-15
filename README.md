@@ -8,6 +8,7 @@ The driver replaces Windows' own USB port and hub drivers with its own, so it is
 - SuperSpeed hubs
 - USB 2.0 and 1.1 (High, Full and Low Speed) devices and hubs
 - UAS (USB Attached SCSI) storage, through a second driver, `xhciuas.sys`
+- Thunderbolt 3 and USB4 docks and enclosures, through a third driver, `xhcicm.sys` (see "Thunderbolt 3 and USB4")
 
 This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far.
 
@@ -31,6 +32,13 @@ Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driv
 
 - [Motivation](#motivation)
 - [SuperSpeed and UAS](#superspeed-and-uas)
+- [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4)
+  - [Before you start: the BIOS](#before-you-start-the-bios)
+  - [Installing for Thunderbolt and USB4](#installing-for-thunderbolt-and-usb4)
+  - [Approving devices](#approving-devices)
+  - [Removing a device safely](#removing-a-device-safely)
+  - [NVMe drives](#nvme-drives)
+  - [Things to know](#things-to-know)
 - [Installation Steps](#installation-steps)
   - [The package](#the-package)
   - [Install with INSTALL.BAT](#install-with-installbat)
@@ -39,7 +47,6 @@ Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driv
   - [Installing Windows 2000 or XP, or using the Recovery Console](#installing-windows-2000-or-xp-or-using-the-recovery-console)
   - [Upgrading the driver](#upgrading-the-driver)
   - [Updating xhciuas.sys over an older one](#updating-xhciuassys-over-an-older-one)
-  - [NVMe drives behind Thunderbolt or USB4](#nvme-drives-behind-thunderbolt-or-usb4)
 - [Tuning](#tuning)
   - [The interrupt moderation interval (`XhciImodInterval250ns`)](#the-interrupt-moderation-interval-xhciimodinterval250ns)
   - [Forcing Bulk-Only instead of UAS (`XhciForceBulkOnly`)](#forcing-bulk-only-instead-of-uas-xhciforcebulkonly)
@@ -86,6 +93,77 @@ Some things to know:
 
 - A UAS-capable drive gets UAS, and anything else gets Windows' own `usbstor.sys` (Bulk-Only), at whatever speed it connects. A drive that offers both can be forced to Bulk-Only (see "Tuning" below).
 - Device Manager and the other Windows tools on these systems may show a SuperSpeed device as High Speed at most. The interface they read predates SuperSpeed.
+
+## Thunderbolt 3 and USB4
+
+A third driver in the package, `xhcicm.sys`, brings Thunderbolt 3 and USB4 docks, enclosures and NVMe cases to these systems. Plug a device in while Windows is running and the devices inside it, such as an NVMe drive, a dock's own USB controller or its network adapter, appear in Device Manager within seconds with no Refresh, and leave when it is unplugged. A device the BIOS connected at power-on is kept as it is.
+
+- On Intel Thunderbolt 2 and 3 controllers, and on the USB4-generation Intel ones while their firmware runs its own connection manager, the driver approves each device the firmware announces.
+- On USB4 hosts whose firmware has no connection manager (AMD, ASMedia's ASM4242 on AM5 X870 boards, Intel Lunar Lake and later, Barlow Ridge), the driver is the connection manager and builds the tunnels itself.
+
+| Controller | PCI ids (`8086:` unless named) | In Device Manager |
+|---|---|---|
+| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | xHCI98 Thunderbolt 2 Controller |
+| Alpine Ridge and Titan Ridge (Thunderbolt 3) | `15BF`, `1575`, `1577`, `15D2`, `15D9`, `15E8`, `15EB` | xHCI98 Thunderbolt 3 Controller |
+| Ice Lake | `8A0D`, `8A17` | xHCI98 Thunderbolt 3 Controller |
+| Maple Ridge, Tiger Lake to Meteor Lake | `1134`, `1137`, `9A1B`, `9A1D`, `9A1F`, `9A21`, `463E`, `466D`, `A73E`, `A76D`, `7EB2`, `7EC2`, `7EC3` | xHCI98 USB4 Host Router |
+| Lunar Lake, Panther Lake, Wildcat Lake, Barlow Ridge | `A833`, `A834`, `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784` | xHCI98 USB4 Host Router |
+| AMD, ASMedia and any other USB4 host | `1022:1668`, `1022:1669`, PCI class `0C0340` | xHCI98 USB4 Host Router |
+
+**Untested hosts.** The Thunderbolt 3 support was developed from captures of the Alpine Ridge JHL6240 (`8086:15BF`) in my ThinkPad P14s Gen 1. Every other controller in the table is driven from the Linux driver's description of it and is untested, and so is every USB4 host; each one is enabled all the same. If the driver starts and does nothing on your machine, the debug build's log says why, and `XhciCmMode` `0` turns it off. Reports from any of these machines, working or not, are very welcome.
+
+Not supported: daisy chains (a device behind another device), DisplayPort over the cable, Apple machines and their controllers.
+
+### Before you start: the BIOS
+
+- Boot in legacy (CSM) mode, as for every system here.
+- Set **Thunderbolt BIOS Assist** to off. With it on, the BIOS switches the controller off whenever nothing is attached at power-on, and the driver cannot switch it back on. On the ThinkPad P14s Gen 1, Assist on with pre-boot support off hides the controller altogether, and a USB4 enclosure then cannot be used at all.
+- Set the Thunderbolt security level to **User Authorization** or **No Security**. Secure Connect, DisplayPort-only and USB-only are not supported.
+- Pre-boot support (boot from Thunderbolt) may be on or off. When it is on, a device attached at power-on is connected by the BIOS and keeps working under the driver.
+
+### Installing for Thunderbolt and USB4
+
+Run `INSTALL.BAT` (see "Install with INSTALL.BAT"). It installs `xhcicm.sys` with the other drivers. On Windows 2000 to 7 it also places the package's filter on the controller's PCI ports (`nt\xhcicmf.inf` in each driver directory), which is what lets Windows see a device plugged in later; Device Manager alone cannot place it on XP and later. Restart when it asks: on Windows 2000 the first install of the filter needs that restart before the controller is used.
+
+On Windows 98 SE and ME, `INSTALL.BAT` prints the remaining steps: update the controller's entry (an unknown PCI device) from the driver directory, as for the xHCI controller. These systems need no filter.
+
+The controller shows in Device Manager under the names in the table above. On Windows 2000 to 7 its PCI ports show as "xHCI98 Thunderbolt PCI Bridge" or "xHCI98 USB4 PCI Bridge": they are still Windows' own PCI bridges, with the filter on them.
+
+### Approving devices
+
+By default (`XhciCmApprove` `1`) every device plugged into the port is approved at once. A device with a PCI Express tunnel can read and write all of the machine's memory, and these systems cannot fence it off. Set `XhciCmApprove` to `0` on a machine where people you do not trust can reach the port: then only devices the BIOS connected at power-on work. Nothing is remembered: a re-plugged device is approved again by the same rule.
+
+### Removing a device safely
+
+Close the files open on the device first, as for any removable disk. On every system `INSTALL /devices` shows the connected Thunderbolt and USB4 devices: each one's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which one and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it. On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation. (`tools\xhciinst\XHCIINST` takes the same switches, `XHCIIN64` on 64-bit Windows.)
+
+- **Windows 98 SE and ME:** use `INSTALL /eject`; these systems have no other way. Until you unplug the device, Device Manager's Refresh can start it again.
+- **Windows 2000:** stop the device in "Unplug or Eject Hardware", then unplug it. Without the stop, Windows 2000 shows its "Unsafe Removal of Device" warning.
+- **Windows XP, Vista and 7:** stop the device in "Safely Remove Hardware", then unplug it.
+- **A device missing from those lists** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): on XP, Vista and 7 `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device: the tool says so; restart with the device connected and it is listed for removal again, or shut the computer down and unplug it then. Unplugging and plugging it in again also puts it back in the list.
+- **A dock** is listed under a generic PCI bridge name, the dock's own switch; stopping it stops everything in the dock.
+- **For scripts:** `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question.
+
+### NVMe drives
+
+An NVMe drive in an enclosure needs an NVMe driver, which these systems do not have. `nvme98`, a separate project, is that driver for Windows 98 SE to Vista, and the package carries a release of it with its own readme and licence. `xhcicm.sys` brings the drive's tunnel up and down and tells `nvme98` when the drive arrives, and `nvme98` runs the drive.
+
+The package's `release-x86\` and `release-x64\` directories carry it as one of its released builds, unchanged, under its own licence (BSD-3-Clause): its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`, and the readme is its install guide and lists its known limits. The package's `readme.txt` and the release notes name the version. `INSTALL.BAT` does not install it: when the drive's NVMe controller shows in Device Manager without a driver, Update Driver -> Have Disk, pointed at:
+
+| Bundled nvme98 | Windows 98 SE, ME | Windows 2000, XP, Vista, 7 (32-bit) | Windows XP x64, Vista x64, 7 x64 |
+|---|---|---|---|
+| `0.2.0.0` and later | `release-x86\` | `release-x86\` | `release-x64\` |
+| `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
+
+The 64-bit nvme98 is test-signed by its own project, as `xhci98.sys` is by this one, and loads on Vista x64 and 7 x64 in test-signing mode; its readme has the details.
+
+### Things to know
+
+- Before standby or hibernation, stop and unplug every Thunderbolt or USB4 device. Standby with one attached, or with an Ice Lake or later controller, is not supported.
+- On Windows 98 SE and ME, a device plugged in after the start needs the BIOS to give it an interrupt. On the ThinkPad P14s Gen 1 it does. If a device inside the enclosure stays at Code 29 on another machine, attach it at power-on with pre-boot support on.
+- On Windows 98 SE and ME the Thunderbolt driver stays loaded until Windows restarts, so a disable, update or removal of it takes full effect after a restart.
+- If the platform switches a USB4 controller off behind Windows' back, the driver stops using it; disable and enable the controller in Device Manager, or restart, to use it again.
+- The settings (`XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` and the rest) are in the controller's driver key, under the System class; the [release notes](docs/using/release-notes.md)' "The connection manager's registry values" lists them all, and `INSTALL.BAT` asks about the first three. It never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding` and `XhciCmPreOsCleanup`: leave them at their defaults unless a problem report calls for a change, which `INSTALL /set Name=Value` makes.
 
 ## Installation Steps
 
@@ -146,10 +224,11 @@ In each driver directory:
 
 - `xhci98.sys` and `xhci98.inf`: the controller driver.
 - `xhciuas.sys` and `xhciuas.inf`: the UAS storage driver.
+- `xhcicm.sys` and `xhcicm.inf`: the Thunderbolt and USB4 driver, and in `nt\` the filter for the controller's PCI ports on Windows 2000 to 7 (`xhcicmf.inf`, with its own copy of `xhcicm.sys`).
 - `xhcihlpr.sys` (32-bit only): the helper. 32-bit Windows 2000, XP, Vista and 7 use this small second driver for a finer system timer while the controller is polled (see "Polling and message-signalled interrupts"), and 32-bit Vista and 7 also to give the controller a message-signalled interrupt. The INF installs it on those four systems, as a service that starts at boot; Vista and 7 ask for a restart for it, 2000 and XP do not, and the finer timer, when `XhciPollFineTimer` is set to `1` (it is off by default), starts there at the next boot. Windows 98 SE and ME ignore it. Releases `2.3.0.0` and `2.3.1.0` carried the MSI half alone, as `xhcimsi.sys`, for Vista and 7 only.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
-- `nvme98` files (`release-x86\` and `release-x64\` only): the bundled NVMe driver, a separate project; see "NVMe drives behind Thunderbolt or USB4".
+- `nvme98` files (`release-x86\` and `release-x64\` only): the bundled NVMe driver, a separate project; see "NVMe drives".
 
 `release-x86\` or `release-x64\` is the one to install.
 
@@ -239,27 +318,6 @@ The release notes' "From 2.3.x or earlier" has the details. `tools\xhcicln\` lis
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF.
 
 Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
-
-### NVMe drives behind Thunderbolt or USB4
-
-An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of its own. A package that bundles one carries it in its `release-x86\` and `release-x64\` directories, and its `readme.txt` and the release notes name the version: nvme98, a separate project with its own licence (BSD-3-Clause), bundled as one of its released builds, unchanged. Its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`; the readme is its install guide and lists its known limits. `INSTALL.BAT` does not install it.
-
-When the drive's NVMe controller shows in Device Manager without a driver, Update Driver -> Have Disk, pointed at:
-
-| Bundled nvme98 | Windows 98 SE, ME | Windows 2000, XP, Vista, 7 (32-bit) | Windows XP x64, Vista x64, 7 x64 |
-|---|---|---|---|
-| `0.2.0.0` and later | `release-x86\` | `release-x86\` | `release-x64\` |
-| `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
-
-The 64-bit nvme98 is test-signed by its own project, as `xhci98.sys` is by this one, and loads on Vista x64 and 7 x64 in test-signing mode; its readme has the details.
-
-### Safe removal of Thunderbolt and USB4 devices
-
-`INSTALL /devices` (or `tools\xhciinst\XHCIINST /devices`, `XHCIIN64` on 64-bit Windows) shows the Thunderbolt and USB4 devices connected now: each device's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which, and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it.
-
-- **Windows 98 SE and ME:** `INSTALL /eject` is the way to remove a Thunderbolt or USB4 device safely; these systems have no other. Until you unplug it, Device Manager's Refresh can start the device again.
-- **Windows 2000, XP, Vista and 7:** Unplug or Eject Hardware (2000) and Safely Remove Hardware (XP onward) work as usual. A device that was connected before the Thunderbolt driver started, or that was disabled and enabled, may be missing from them until it is plugged in again; `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device at all: the tool says so, and after a restart with the device connected it is listed for removal again. On 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation.
-- `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question, for scripts.
 
 ## Tuning
 
@@ -642,6 +700,7 @@ These come from Windows, NUSB or the driver being unsigned, and no change to thi
 | The Intel port switchover beyond the B490 and the E7250 | Device ids `8C31`, `9C31`, `8CB1` and `8D31`, systems other than Windows 98 SE and 7 x64. |
 | Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`) and driven as xHCI 1.0 controllers but for the fields Linux writes differently on them; a resume from standby re-enumerates their devices. Built against host tests and Linux's handling of the same parts; read on no 0.96 controller, and isochronous transfers (audio, video) on them are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did. |
 | Linux's controller quirks (`XhciMsiAvoid` and the others) | Built from Linux's handling and the xHCI specification, against host tests. None has been read on a controller it lists; QEMU's controller is on no list. |
+| Thunderbolt 3 and USB4 (`xhcicm.sys`) | Built from captures of the ThinkPad P14s Gen 1's Alpine Ridge controller and of a USB4 NVMe enclosure, and from Linux's driver, and run in an emulator of them. Not yet run on a real Thunderbolt or USB4 machine; every controller but `8086:15BF` has no capture at all. |
 
 ## Toolchain and building
 
@@ -714,6 +773,8 @@ The version lives in [src/xhci_version.h](src/xhci_version.h). The `DriverVer` o
 src/            The host controller driver xhci98.sys (C), its two INFs and
                 the DDK build files
   uas/          The UAS class driver xhciuas.sys, its two INFs and build files
+  cm/           The Thunderbolt and USB4 driver xhcicm.sys, its four INFs and
+                build files
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        Setup helpers, build wrapper, the import/INF/packaging gates,
                 and vm-matrix/ - the automated device matrix
@@ -754,6 +815,7 @@ Working on the driver:
 
 - [Build and test](docs/contributing/build-and-test.md) - toolchain setup, builds, VMs, install, debugging, packaging, recovery
 - [Roadmap for 2.0.0.0 onward](docs/contributing/roadmap-hcd.md) - the host controller driver, Phases 25 onward, UAS in Phase 31; the 1.x miniport's [Phases 0-16](docs/contributing/roadmap.md) and [17-24](docs/contributing/roadmap-miniport-updates.md) are closed records
+- [Roadmap for 3.0.0.0 onward](docs/contributing/roadmap-usb4.md) - Thunderbolt 3 and USB4, Phases 39 onward; design records [21](docs/contributing/design/21-thunderbolt3-icm-client.md) (the Thunderbolt firmware connection manager's client) and [22](docs/contributing/design/22-usb4-software-connection-manager.md) (the USB4 connection manager)
 - [Design record 13](docs/contributing/design/13-superspeed-hcd.md) - the host controller driver: the bus, hubs and composite devices, the UAS id policy, the INFs and the package
 - [Design records](docs/contributing/design/README.md) - the numbered design decisions
 - [Architecture](docs/contributing/architecture.md) and [implementation invariants](docs/contributing/implementation-invariants.md)
@@ -795,6 +857,8 @@ This project's own source is licensed under the GNU General Public License, vers
 The repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes.
 
 * `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
+
+* Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and from Linux's `drivers/thunderbolt`, and keep their copyright lines and licence notices. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
 
 * `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
 

@@ -3464,6 +3464,237 @@ static void test_eject_pcie(void)
     CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "eject-pcie, resume: no PCIe tunnel up");
 }
 
+/* ------------------------------------------------------------------ */
+/* Section 7.7: the host interface lost - containment                 */
+/* ------------------------------------------------------------------ */
+
+/* The host interface goes at the first request of `g_goneRouter` in
+ * configuration space `g_goneCs` (a write when g_goneWrite), skipping
+ * g_goneSkip of them: BAR reads all ones from then on, writes dropped,
+ * nothing consumed; with g_goneCancel the driver's gate is closed too
+ * (TBT_HOST.Cancelled: a surprise removal, or the monitor's sample). */
+static int g_goneRouter;
+static unsigned long g_goneCs;
+static int g_goneWrite;
+static int g_goneCancel;
+static unsigned long g_goneSkip;
+static int g_goneFired;
+
+static int goneHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                    unsigned long adp, unsigned long addr, unsigned long n,
+                    const unsigned long *data)
+{
+    (void)adp;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (g_goneFired || router != g_goneRouter || cs != g_goneCs ||
+        (g_goneWrite && pdf != TBT_PDF_WRITE) ||
+        (!g_goneWrite && pdf != TBT_PDF_READ)) {
+        return FAB_HOOK_GO;
+    }
+    if (g_goneSkip != 0) {
+        g_goneSkip--;
+        return FAB_HOOK_GO;
+    }
+    g_goneFired = 1;
+    f->Gone = 1;
+    f->Cancel = g_goneCancel;
+    return FAB_HOOK_SWALLOW;
+}
+
+static void armGone(FAB *f, int router, unsigned long cs, int write,
+                    int cancel, unsigned long skip)
+{
+    g_goneRouter = router;
+    g_goneCs = cs;
+    g_goneWrite = write;
+    g_goneCancel = cancel;
+    g_goneSkip = skip;
+    g_goneFired = 0;
+    f->Hook = goneHook;
+}
+
+/* After TbtU4Contain: not one register access, request, action or
+ * statement from any entry point, and what the driver asks for force
+ * power and the stop answered as "unknown". */
+static void checkSilent(const char *what)
+{
+    unsigned long reads;
+    unsigned long writes;
+    unsigned long requests;
+    ULONG ld;
+    TBT_U4_ACTION a;
+    BOOLEAN dma;
+
+    dma = g_ring.DmaMayRun;
+    reads = g_fab.MmioReads;
+    writes = g_fab.MmioWrites;
+    requests = g_fab.Requests;
+    ld = g_ldCalls;
+    poll(&g_cm, &g_fab, 5);
+    CHECK_EQ(TbtU4EjectPcie(&g_cm, 1), TBT_E_STOPPED, what);
+    CHECK_EQ(TbtU4Eject(&g_cm, 1), TBT_E_STOPPED, what);
+    CHECK(!TbtU4AllPortsDisconnected(&g_cm), what);
+    CHECK(TbtU4AnyRouterConnected(&g_cm), what);
+    TbtU4PresenceSample(&g_cm, 1, TbtU4Port(&g_cm, 1)->Generation,
+                        TbtClockUs(&g_fab.Host), TRUE);
+    CHECK(!TbtU4Port(&g_cm, 1)->AnchorValid, what);
+    TbtU4Suspend(&g_cm);
+    CHECK_EQ(TbtU4Resume(&g_cm), TBT_E_STOPPED, what);
+    CHECK(!TbtU4NextAction(&g_cm, &a), what);
+    TbtU4Stop(&g_cm);
+    TbtU4Contain(&g_cm);
+    CHECK_EQ(TbtU4Start(&g_cm, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES),
+             TBT_E_STOPPED, what);
+    CHECK_EQ(g_fab.MmioReads, reads, what);
+    CHECK_EQ(g_fab.MmioWrites, writes, what);
+    CHECK_EQ(g_fab.Requests, requests, what);
+    CHECK_EQ(g_ldCalls, ld, what);
+    /* Nothing after the containment proves the rings stopped: the DMA
+     * record the driver keys the buffer on (cm_pool.c) is as it was. */
+    CHECK_EQ(g_ring.DmaMayRun, dma, what);
+}
+
+static void test_contain(void)
+{
+    const TBT_U4_PORT *p;
+    unsigned long t0;
+    unsigned long gone;
+    int dev;
+    int cancel;
+
+    /* Contained between ticks with a tunnel up, its TUNNEL_UP still
+     * queued, a deferred tail owed and a resync pending: everything
+     * queued retired, nothing touched. */
+    dev = setupMinimal(1, NULL);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "contain: UP first");
+    CHECK(g_cm.ActionCount >= 1, "contain: the cold device's TUNNEL_UP queued");
+    g_cm.DeferredTail[0] = 1;
+    g_cm.ResyncPending = TRUE;
+    g_fab.Gone = 1;
+    TbtU4Contain(&g_cm);
+    CHECK(g_cm.Contained, "contain: contained");
+    CHECK_EQ(g_cm.ActionCount, 0, "contain: actions retired");
+    CHECK(g_cm.Counters.ContainedRetired >= 2, "contain: the tail and the action counted");
+    CHECK(!g_cm.ResyncPending && g_cm.DeferredTail[0] == 0, "contain: resync and tail dropped");
+    CHECK_EQ(g_fab.GoneReads + g_fab.GoneWrites, 0, "contain: no access to contain");
+    CHECK(p->Pcie.Up && p->Dev.Present, "contain: the port's records kept as last read");
+    checkSilent("contain: silent afterwards");
+    (void)dev;
+
+    /* Loss in the middle of a tunnel's setup, with and without the gate's
+     * cancellation: the sequence ends in bounded time, nothing is built
+     * or claimed, and once contained the instance is silent. */
+    for (cancel = 0; cancel <= 1; cancel++) {
+        dev = setupMinimal(0, NULL);
+        fabPlug(&g_fab, 1, dev);
+        armGone(&g_fab, dev, TBT_CS_PATH, 1, cancel, 0);
+        t0 = g_fab.NowUs;
+        TbtU4Poll(&g_cm);
+        p = TbtU4Port(&g_cm, 1);
+        CHECK(g_goneFired, "setup loss: the host went inside the path writes");
+        CHECK(!p->Pcie.Up, "setup loss: no PCIe tunnel claimed");
+        CHECK(g_ldCalls == 0 || !g_ld.PathClosed, "setup loss: no closure claimed");
+        if (cancel) {
+            CHECK(g_fab.NowUs - t0 < 100000UL, "setup loss, cancelled: ends at once");
+            CHECK(g_fab.GoneReads + g_fab.GoneWrites < 16,
+                  "setup loss, cancelled: no request after the cancellation");
+            CHECK_EQ(p->State, TBT_U4_HELD, "setup loss, cancelled: HELD, left as it was");
+            CHECK_EQ(p->Why, TBT_U4_WHY_CONTAINED, "setup loss, cancelled: why");
+            CHECK(g_cm.Counters.ContainedRefused >= 1, "setup loss, cancelled: refusals counted");
+        } else {
+            CHECK(g_fab.NowUs - t0 < 60000000UL, "setup loss, silent: bounded");
+        }
+        CHECK(g_ring.DmaMayRun, "setup loss: the rings never proven stopped");
+        TbtU4Contain(&g_cm);
+        checkSilent(cancel ? "setup loss, cancelled: silent once contained"
+                           : "setup loss, silent: silent once contained");
+    }
+
+    /* Loss during the eject: the eject fails, no closure is claimed, its
+     * TUNNEL_DOWN is retired by the containment (the driver's
+     * reconciliation stands for it), and the next eject is refused. */
+    for (cancel = 0; cancel <= 1; cancel++) {
+        dev = setupMinimal(1, NULL);
+        (void)countActions(&g_cm, 0);
+        armGone(&g_fab, 0, TBT_CS_ADAPTER, 1, cancel, 0);
+        g_ldCalls = 0;
+        t0 = g_fab.NowUs;
+        CHECK(TbtU4EjectPcie(&g_cm, 1) != TBT_OK, "eject loss: the eject fails");
+        CHECK(g_goneFired, "eject loss: the host went inside the eject");
+        if (cancel) {
+            CHECK(g_fab.NowUs - t0 < 100000UL, "eject loss, cancelled: ends at once");
+        } else {
+            CHECK(g_fab.NowUs - t0 < 60000000UL, "eject loss, silent: bounded");
+        }
+        CHECK(g_ldCalls == 0 || !g_ld.PathClosed, "eject loss: no closure claimed");
+        CHECK(g_ring.DmaMayRun, "eject loss: the rings never proven stopped");
+        TbtU4Contain(&g_cm);
+        CHECK_EQ(g_cm.ActionCount, 0, "eject loss: its TUNNEL_DOWN retired");
+        checkSilent("eject loss: silent once contained");
+    }
+
+    /* Loss during the resume: it takes the failure path, in bounded time,
+     * and a contained instance is never resumed again. */
+    for (cancel = 0; cancel <= 1; cancel++) {
+        dev = setupMinimal(1, NULL);
+        (void)countActions(&g_cm, 0);
+        TbtU4Suspend(&g_cm);
+        g_fab.Gone = 1;
+        g_fab.Cancel = cancel;
+        t0 = g_fab.NowUs;
+        CHECK(TbtU4Resume(&g_cm) != TBT_OK, "resume loss: the failure path");
+        CHECK(g_fab.NowUs - t0 <= TbtU4ResumeBoundUs(2, 0),
+              "resume loss: within the resume bound");
+        gone = g_fab.GoneReads + g_fab.GoneWrites;
+        if (cancel) {
+            CHECK(gone < 64, "resume loss, cancelled: hardly an access");
+        }
+        CHECK(!g_ring.Running, "resume loss: the rings not running");
+        TbtU4Contain(&g_cm);
+        checkSilent("resume loss: silent once contained");
+        CHECK(!TbtU4Port(&g_cm, 1)->AnchorValid, "resume loss: no anchor");
+    }
+
+    /* Loss at stop: the stop writes nothing, keeps the buffer's DMA
+     * record, and leaves force power to the driver as "unknown"; a
+     * healthy stop, by contrast, proves the rings stopped. */
+    dev = setupMinimal(1, NULL);
+    g_fab.Gone = 1;
+    g_fab.Cancel = 1;
+    TbtU4Contain(&g_cm);
+    gone = g_fab.MmioReads + g_fab.MmioWrites;
+    CHECK(!TbtU4AllPortsDisconnected(&g_cm), "stop loss: no fresh reading");
+    TbtU4Stop(&g_cm);
+    CHECK_EQ(g_fab.MmioReads + g_fab.MmioWrites, gone, "stop loss: nothing written");
+    CHECK(g_ring.DmaMayRun, "stop loss: the buffer kept");
+    CHECK(TbtU4AnyRouterConnected(&g_cm), "stop loss: force power kept");
+    dev = setupMinimal(1, NULL);
+    TbtU4Stop(&g_cm);
+    CHECK(!g_ring.DmaMayRun, "healthy stop: the rings proven stopped");
+    (void)dev;
+
+    /* A fresh instance after containment (the PnP stop and start): the
+     * flag does not survive TbtU4Init, and the fabric is found again. */
+    dev = setupMinimal(1, NULL);
+    TbtU4Contain(&g_cm);
+    CHECK(g_cm.Contained, "restart: contained");
+    g_fab.Gone = 0;
+    g_fab.Cancel = 0;
+    {
+        unsigned long before = g_fab.MmioReads + g_fab.MmioWrites;
+
+        CHECK_EQ(TbtU4Start(&g_cm, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES),
+                 TBT_E_STOPPED, "restart: contained, the host answering: no start");
+        CHECK_EQ(g_fab.MmioReads + g_fab.MmioWrites, before, "restart: nothing touched");
+    }
+    TbtU4Init(&g_cm, &g_ring, &g_fab.Host, NULL);
+    CHECK(!g_cm.Contained, "restart: a fresh instance is not");
+    (void)dev;
+}
+
 int main(void)
 {
     test_cold_minimal();
@@ -3506,6 +3737,7 @@ int main(void)
     test_review7();
     test_asm4242();
     test_asm2464();
+    test_contain();
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;
 }

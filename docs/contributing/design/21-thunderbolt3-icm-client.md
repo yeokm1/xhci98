@@ -319,12 +319,14 @@ Linux describes firmware readiness apart from the platform's power
 management ([linux] `pci.c` `icl_nhi_force_power`). It leaves the bit set
 and logs it. A bit the BIOS had already set is left set by every
 instance. (Record 22 section 4.2's rule, which this record follows; an
-orchestrator decision of 2026-10-15, for the owner to confirm.) The pure
-core as first merged predates this rule: `tbt_hw.c`'s
-`TbtHwPlatformShutdown` still clears a bit an inert instance set after a
-failed firmware-ready poll, and `test_tbt_hw` expects it to. Both change
-to this rule with task `39-A.4`, which brings the hardware profile into
-the driver.
+orchestrator decision of 2026-10-15, for the owner to confirm.) Task
+`39-A.4` brought the pure core to this rule: `tbt_hw.c`'s
+`TbtHwPlatformShutdown` clears only a bit this instance set, and only
+when its caller says it may - an active instance, and under the USB4
+profile one with no device router connected. A force-power write the
+hardware did not take is not taken as ownership: only a bit that reads
+back set after this driver's write is recorded as set here (an
+orchestrator decision of 2026-10-15, for the owner to confirm).
 
 A Code 10 refusal is kept for the cases where starting would mislead:
 BAR0 not delivered or not mappable.
@@ -499,6 +501,25 @@ Facts the design rests on, all from `ICM-PROTOCOL`:
   else; the tunnel port's link is already down when it arrives [obs] section
   6.3. Unplug while the driver is unloaded produces no event [obs] section
   6.6, which is why every `driver ready` re-announces what is attached.
+- On the P14s (BIOS N2XET46W 1.36, User Authorization; `usb4-emu`
+  `docs/captures/P14S-ORICO-2026-10-15.md` [obs]): with Assist on and
+  pre-boot off the NHI stays hidden even with a device attached, so no
+  client binds; with Assist on and pre-boot on the firmware connects a
+  device at boot - any device attached at power-on, even one not on the
+  boot ACL - and the NHI is visible; a device plugged later is announced
+  with `boot` = 1 but not approved, so the client still approves it;
+  after the last unplug the firmware goes silent, the registers read all
+  ones after 10 to 11 s and the controller is removed at about 15 s
+  (section 5.5). Under Assist the driver-ready flags read `0x22`, and at
+  power-on the outbound mailbox reads `0x800003f0` (`0x800003f5` only
+  after the NHI's first D3); both decode to connection-manager mode, bits
+  11:8 = 3. A USB4 device router on this ICM is announced with flags
+  `0xa8`, or `0x88` single-lane with Assist and pre-boot, and its UUID
+  words in the opposite order to a Thunderbolt 3 dock's - the client keeps
+  both as given and echoes them in the approve. An unplug resets the
+  endpoint: the switch and the NVMe come back reset after a re-plug, while
+  a pre-boot tunnel reaches the OS without a reset and a driver rebind
+  leaves the tunnel alone.
 - The controller's PCIe switch: upstream port `8086:15c0` and three
   downstream ports of the same id - one to the NHI, one the tunnel (a
   hot-plug and surprise-removal capable slot), one to the integrated xHCI
@@ -962,8 +983,9 @@ read: it clears on read unless auto-clear is disabled (Spec 12.6.3.4.1).
 
 ### 4.4 The connection-manager thread
 
-One system thread per NHI, created at start and ended at stop, at
-PASSIVE_LEVEL, as `hcd_ctl.c`'s controller thread is, with the same Windows
+One system thread per NHI, created at start and ended at the first of the
+stop, the surprise removal or the removal (the start waits on it only
+until the selection is made), at PASSIVE_LEVEL, as `hcd_ctl.c`'s controller thread is, with the same Windows
 98 care around `PsCreateSystemThread`'s handle (the `IoIsWdmVersionAvailable`
 branches at `hcd_ctl.c:2514`). Every ICM command, every mailbox handshake,
 every wait and every re-enumeration call runs on it; nothing else touches
@@ -1020,7 +1042,10 @@ done.
    ready: inert (section 1.4.2 test 2) [linux].
 1. Enable Bus Master in the NHI's command register through
    `IRP_MN_WRITE_CONFIG` to its own PDO, the route `hcd_svc.c` proved on
-   Windows 98 SE and Windows 2000 (its header comment, 26-A.2).
+   Windows 98 SE and Windows 2000 (its header comment, 26-A.2). As built,
+   the write is made only once the selection has chosen the ICM client
+   (after steps 2 to 5), so an inert start leaves the command register as
+   it found it.
 2. Read host capabilities. All ones: inert (test 2). Ring count below 1, or
    an interface version the row does not accept (test 4: 0 on AR [obs];
    below `0x40` on the others, this project's policy): inert, the value in the log. A
@@ -1219,6 +1244,27 @@ success means the firmware built the PCIe tunnel while processing the
 request [obs] section 4.3, so the tunnel-up sequence of section 6.5 follows
 at once.
 
+The approve has a deadline on real hardware. On the P14s an unapproved
+USB4 device (not a Thunderbolt 3 one) falls back to USB about 9.4 s after
+its announcement: the firmware reports it disconnected and it reappears as
+a USB 3.2 disk on the controller's own xHCI [obs] (`usb4-emu`
+`docs/captures/P14S-ORICO-2026-10-15.md`); the real approve there took
+383 ms. Measured on the emulator under Windows 2000 (`runs/run-39.md`,
+39-V.2): 264 ms and 243 ms from announcement to approve on the Titan Ridge
+row, which has no get route; 4 ms, 19 ms and 86 ms on the Alpine Ridge
+row, get route included. `XhciCmApproveTimeoutMs` bounds only the wait
+for the reply to an approve already sent; the ICM commands are serialised
+on the connection-manager thread, so a second announcement can wait behind
+an earlier command (up to that command's retries) only while the firmware
+is not answering. No setting puts a user action between an announcement
+and its approve: `XhciCmApprove` 1 approves at once, and 0 never approves,
+which on the P14s leaves a USB4 device to its USB fallback. A pending
+approval belongs to its connection: an unplug, a re-plug or mailbox `0x06`
+cancels it, and the firmware then answers the stale approve with the error
+flag. That answer is the error-flag case above - one `approve-failed`
+line, no retry, the instance not failed - and the disconnect that follows
+removes the entry (host-tested in `test	est_tbt_icm.c`).
+
 What 1 means for the user is written plainly in the release notes: any
 Thunderbolt 3 device plugged into the machine gets PCIe access, which on a
 machine without an IOMMU (every target here) is access to all of memory.
@@ -1247,6 +1293,48 @@ replacing announcement at the same place (section 5.3).
 A frame longer than its buffer, a response with an unexpected code, or a
 CRC mismatch on a command the firmware reports as an error are counted, not
 acted on. Counters: section 8.
+
+**A host interface that stops answering** (reviewed and revised on
+2026-10-15, after the R32 leg of `39-V.2`). With BIOS Assist on, after the
+last unplug the firmware answers no ICM command (`ICM-PROTOCOL` R32) and
+the platform then powers the controller off: on the P14s its registers
+read all ones after 10 to 11 s and the controller is removed at about
+15 s, not to come back on a re-plug [obs]; on the emulator's i440FX tree
+the subtree's registers read all ones from the power-off and come back,
+on a re-plug, with their configuration reset and no PnP removal. Command
+silence alone is never taken as absence. The thread samples one register
+this driver programmed and reads back, RX ring 0's size register, at the
+idle cadence (`XhciCmPollIdleMs`, never on a command, ring or router
+path), against the value it read after the ring start
+(`src\cm\cm_live.c`): the first all-ones sample stops the transport
+(SUSPECT), the third in a row is ABSENT, and a readable value that differs
+is CONFIG_LOST. ABSENT and CONFIG_LOST report every device gone, once per
+episode, as `TUNNEL_DOWN` actions of why UNAVAILABLE followed by a RESYNC
+(the re-enumeration seam's request; on 98 SE and ME the CONFIGMG worker
+removes the children it retained at its last walk of the bridge before
+the loss - the tunnel-up re-enumeration's, the start's baseline or a
+marking window's - each revalidated by the instance id recorded then and
+found through the devnode tree alone, never by reading a bridge header
+the loss may have reset; a refusal is respected, and no re-enumeration
+of that bridge runs before the removal), and say nothing about the
+endpoint: presence lost, not quiescence (section 7.3). `nvme98`'s
+link-state channel gets no statement from it: on NT each entry is treated
+as for a withheld one (`cm_nvlink.h` CM_NVLINK_LOST: never DOWN_QUIESCED,
+UP cleared only where its function reads absent), on 98 SE and ME it is
+not touched (that would read the bridges); a presence-lost statement of
+its own is owed, and meanwhile `nvme98`'s own deadline path ends what is
+in flight. One probe a second follows
+outside ACTIVE. No sample is taken out of D0, while the system sleeps or
+during a power, PnP or recovery sequence, so a resume - and its own time
+budget - never trips it. Nor does a firmware that holds requests: under
+Assist with a USB4 device tunnelled pre-boot, the P14s holds config
+requests (queued, never dropped) for about 2.77 s after the first driver
+ready [obs], within the command timeout (`XhciCmCmdTimeoutMs`, 5 s a try);
+the sample is an MMIO read of the host interface, which that hold does not
+touch. Owed: the R32 re-plug on an emulator whose i440FX slot removes the
+subtree through ACPI hot-plug at the power-off (announced for after the
+`3.0.0.0` dry cut); on the current one the re-plug fails by platform
+(`runs/run-39.md`, 39-V.2).
 
 ### 5.6 Stop, remove, disable, suspend and resume
 
@@ -1293,6 +1381,40 @@ instance, in the order the capture or the client shows:
 - **Runtime suspend** (RTD3): never requested by this driver, whatever the
   driver-ready flags say, so the `0x07`-alone sequence of section 6.5 is
   never sent for it, and the ICL row's RTD3 veto needs nothing.
+- **The host interface lost** (section 5.5's SUSPECT, ABSENT and
+  CONFIG_LOST, and from the moment `IRP_MN_SURPRISE_REMOVAL` arrives): a
+  gate on the BAR accessors refuses every access the state does not admit
+  (reads all ones, writes dropped, both counted) and ends every wait of
+  the core at once; a surprise removal also refuses the configuration
+  route. The stop, the shutdown and the suspend then write nothing to the
+  host interface - no ring stop, no `0x07` - and force power is never
+  cleared from that state: what depends on it is unknown. The common
+  buffer is freed only after a stop whose read-back, after the settle,
+  shows both ring 0 controls readable and disabled; without that evidence
+  it stays allocated with its adapter until the next boot. A resume from
+  a suspend taken in that state takes the failure path (U15's order: the
+  held bridges released, then invalidated).
+- **Recovery, unlike resume.** Recovery runs only where the platform
+  restores access without a PnP removal; it never repairs a bridge's bus
+  numbers or windows, which are the bus driver's, so where the platform
+  resets the subtree (the emulator's i440FX tree) the instance stays
+  absent until a PnP restart or a reboot, and where it removes the
+  controller (the P14s) the PnP removal ends the instance. Its
+  precondition, on reads alone: the configuration space's first DW and
+  BAR0 (both DWs of a 64-bit BAR) as the healthy start read them, memory
+  decoding on and Bus Master restored, the host capabilities readable, and
+  the selection's tests of section 1.4.2 passing again with the same
+  outcome. A sample that comes back unchanged gets the light recovery on
+  the retained rings: both rings' programmed values verified, the old
+  session's completed frames drained unread, then driver ready and the
+  reconciliation. CONFIG_LOST gets the full one: the rings stopped with a
+  verified stop (else the buffer is not reused), restarted in the kept
+  buffer, mailbox `0x23` on the rows that read the mode (a power-cycled
+  ICM needs it, unlike a resume), driver ready, the host-router poll and
+  the reconciliation. ACTIVE again only for the episode that began it and
+  only if nothing revoked it meanwhile; a failure leaves the instance
+  without access until a new outage is seen. The USB4 profile is contained
+  instead and never recovers in place (record 22).
 
 ## 6. Re-enumeration: making the OS see what the tunnel changed
 
@@ -1537,6 +1659,13 @@ domain runs as with an empty set. The other outcomes beside a set are: the overr
 no candidate at all, hot-plug bridges seen but none a source names (the
 override is the way), listed root ports ambiguous between NHIs, and more
 members than the set has room for (empty, logged).
+
+Under the USB4 profile a fifth source, the bridges the host router names,
+adds members once these outcomes are known, and a learned correspondence
+binds a port to a member; design record 22 section 7.6 says when a named
+bridge may join (never after the override's own failure, an INCOMPLETE
+discovery or one with too many members, and never the NHI or its parent)
+and that a named bridge that cannot be read voids the set as INCOMPLETE.
 
 The layouts the walk and the readings decode are the public
 specifications', cited by section in `tbt_topo.h`: the PCI Local Bus
@@ -2128,9 +2257,31 @@ removes the device's subtree only, each step needing the last to succeed.
 
 Release-notes lines, drafted by `39.final` and published with the
 `3.0.0.0` cut by `40.final`: which half shipped; that a device tunnelled
-before the driver bound is offered for eject only after a re-plug; that a
-dock is listed under its switch port's name; and, on Windows 2000, whether
-an unplug without an eject still shows the Unsafe Removal dialog.
+before the driver bound is offered for eject only until it is re-plugged,
+"the same after the device was disabled and enabled, or its driver was
+installed or updated; the Thunderbolt device tool in the package can still
+eject it" (owner, 2026-10-15); that a dock is listed under its switch
+port's name; and, on Windows 2000, that an unplug without an eject still
+shows the Unsafe Removal dialog.
+
+**Read on Windows 2000 (`39-V.2`, `runs/run-39.md`).** With `Removable`
+and `SurpriseRemovalOK` both set (a variant build), 2000 no longer lists
+the NVMe in "Unplug or Eject Hardware", and a plain unplug still shows the
+Unsafe Removal dialog, naming the disk instead of the controller and the
+disk: the second bit removes the eject and does not remove the dialog, so
+2000 keeps `Removable` alone and the dialog stays a release-notes line.
+The child filter is lost whenever the device's own stack is rebuilt - a
+disable and enable of the device, or its driver installed or updated -
+because the PnP manager rebuilds the stack from the registry (service and
+registered filters) with no BusRelations query, and the child filter is
+created only when the bridge first reports the PDO; the device is offered
+again after a re-plug. **Owed:** a fix that survives a rebuild. A kernel-
+only one is not small: the child filter would have to be registered on the
+child devnode as a device-specific `LowerFilters` value, which lives in the
+Enum key the PnP manager owns and is written through SetupAPI or CfgMgr32
+from user mode (the package's Thunderbolt device tool is the natural
+place), while keeping the filter attached across a non-surprise
+`IRP_MN_REMOVE_DEVICE` is not permitted.
 
 **The eject on 98 SE and ME, and a viewer on every target** (owner,
 2026-10-15). Nothing on those systems offers the eject the 9x half above
@@ -2188,7 +2339,8 @@ frames (section 1.4.6); child filters attached, skipped and refused (section
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
 record from the thread, and the ring is emitted at stop from the thread at
-PASSIVE_LEVEL. **How it is emitted is decision D12** (taken 2026-10-15:
+PASSIVE_LEVEL, and in the checked flavours (`debug` and `qemu`) after each
+pass of the thread as well. **How it is emitted is decision D12** (taken 2026-10-15:
 the default below), because `AGENTS.md`
 ("Coding Style") admits an unguarded `DbgPrint` at exactly two sites,
 `hcd_log.c`'s `XhciLogDebugView` sink and the qemu trace, and says not to
@@ -2204,6 +2356,10 @@ amended to name it - was not taken. `XHCISNAP` does not read this driver in the 
 door is `xhci98.sys`'s, and a `\DosDevices\` link and region of this
 driver's own is a later revision if the counters are wanted off a real
 machine.
+
+The clock behind every wait and every time in the log is the tick count,
+`KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,
+unlike the system time, which a user or a time service may set.
 
 ## 9. Provenance and licence
 
@@ -2400,10 +2556,19 @@ The vehicle is `usb4-emu`'s QEMU fork and `scripts/run-win98.sh` on the
   `qom-set`) for the unplug-during-I/O legs and `39-A.7`'s ordering legs;
   its gate actions are test stimuli, never evidence the driver acts on.
 - When `usb4-emu` adds the controller models its catalogue announces, the
-  legs of this section extend to them (a Titan Ridge model would give the
-  TR row its first reading); until then only the Alpine Ridge row runs on
-  an emulator. A change the legs need in the emulator is written as a
-  request for its maintainer, never made here.
+  legs of this section extend to them. Since its `main` at `a50c19e`
+  (2026-10-15) `profile=tb3-titan-ridge` is a real Titan Ridge model,
+  written from Linux's description (route-string addressing, approval
+  keyed by UUID and route; `ports=1` gives the single-port part), so the
+  TR row is testable on an emulator; the other rows still run on none. A
+  change the legs need in the emulator is written as a request for its
+  maintainer, never made here.
+- The machines this is for: the legacy operating systems need a CSM, so
+  the realistic targets are Thunderbolt 3 laptops with a CSM (the P14s),
+  Intel desktop boards with discrete Thunderbolt and a CSM (the firmware
+  connection manager), and AM5 X870 boards with a CSM (ASMedia's ASM4242,
+  design record 22's software connection manager). The Framework laptop
+  is UEFI-only: its capture is a reference, not a run target.
 - `-trace 'usb4_*' -D <VM_DIR>\usb4-trace.log` on every leg; the trace
   decodes every ring 0 frame both ways and is the oracle for "what the
   client sent".
@@ -2573,7 +2738,8 @@ revised to it in draft 6.
 - **Every row but AR is uncaptured** (section 1.4): FR, TR, Maple Ridge and
   the ICL row are to be code written to Linux's structures [linux],
   host-tested against frames synthesised from those structures, and read
-  on no hardware and no emulator (`usb4-emu` models Alpine Ridge only). The
+  on no hardware, and on no emulator but the TR row, which `usb4-emu`'s
+  Titan Ridge model (section 10.2), itself written from Linux, runs. The
   inert start and the tolerance rules of sections 1.4.2 and 1.4.6 bound
   the damage of a wrong row to "does nothing, says why"; they do not make
   a row work.

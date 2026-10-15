@@ -169,6 +169,15 @@ typedef struct FAB {
     unsigned long RxQCount;
     unsigned long RxDropped;
     int Stopped;                    /* answer nothing */
+    /* The host interface lost (record 22 section 7.7): BAR reads all ones,
+     * writes dropped, no descriptor consumed or written; Cancel is what
+     * TBT_HOST.Cancelled answers (the driver's gate closed). */
+    int Gone;
+    int Cancel;
+    unsigned long MmioReads;
+    unsigned long MmioWrites;
+    unsigned long GoneReads;
+    unsigned long GoneWrites;
 
     /* the fabric */
     FAB_ROUTER R[FAB_MAX_ROUTERS];

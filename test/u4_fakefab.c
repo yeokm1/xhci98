@@ -884,6 +884,11 @@ static ULONG fabRead32(PVOID ctx, ULONG off)
 {
     FAB *f = (FAB *)ctx;
 
+    f->MmioReads++;
+    if (f->Gone) {
+        f->GoneReads++;
+        return 0xFFFFFFFFUL;
+    }
     fabProcessTx(f);
     switch (off) {
     case 0x39640: return f->Caps;
@@ -906,6 +911,11 @@ static void fabWrite32(PVOID ctx, ULONG off, ULONG v)
 {
     FAB *f = (FAB *)ctx;
 
+    f->MmioWrites++;
+    if (f->Gone) {
+        f->GoneWrites++;
+        return;
+    }
     switch (off) {
     case 0x00000: f->TxBaseLo = v; f->TxProd = f->TxCons = 0; return;
     case 0x00004: f->TxProd = f->TxCons = 0; return;
@@ -938,6 +948,9 @@ static void fabAdvance(FAB *f, unsigned long us)
     FAB_ROUTER *r;
 
     f->NowUs += us;
+    if (f->Gone) {
+        return;
+    }
     for (i = 1; i < FAB_MAX_ROUTERS; i++) {
         r = &f->R[i];
         if (r->Used && r->ReconnectPending && r->ReconnectArmed && r->Connected &&
@@ -954,6 +967,11 @@ static void fabAdvance(FAB *f, unsigned long us)
     }
     fabProcessTx(f);
     fabPump(f);
+}
+
+static BOOLEAN fabCancelled(PVOID ctx)
+{
+    return (BOOLEAN)(((FAB *)ctx)->Cancel != 0);
 }
 
 static void fabStall(PVOID ctx, ULONG us)
@@ -1022,6 +1040,7 @@ void fabInit(FAB *f)
     f->Host.Log = fabLog;
     f->Host.ClockUs = fabClockUs;
     f->Host.TickUs = 0;
+    f->Host.Cancelled = fabCancelled;
     f->Caps = 0x0000000CUL;
     for (i = 0; i < FAB_MAX_ROUTERS; i++) {
         f->R[i].Parent = -1;

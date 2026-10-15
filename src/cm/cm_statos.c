@@ -130,6 +130,16 @@ static VOID cmStPath(PCM_NHI nhi, ULONG i, PCM_STATUS_IN in)
     again = (BOOLEAN)(s->PathBdf[i] != bdf + 1UL ||
                       (s->PathCount[i] == 0 &&
                        nhi->ClockMs - s->PathAtMs[i] >= CM_ST_PATH_RETRY_MS));
+    if (again && !CmNhiHwAccess(nhi)) {
+        /* The host interface lost, contained or revoked (record 21
+         * section 5.5, record 22 section 7.7): no configuration reading
+         * of the domain's buses; a path cached for this location stands,
+         * any other is unknown. */
+        if (s->PathBdf[i] != bdf + 1UL) {
+            s->PathCount[i] = 0;
+        }
+        again = FALSE;
+    }
     if (again) {
         s->PathBdf[i] = bdf + 1UL;
         s->PathAtMs[i] = nhi->ClockMs;
