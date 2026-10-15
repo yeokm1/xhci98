@@ -701,7 +701,24 @@ which made no difference here. The commits after `6e8b4ac1` change the
 resume, the failed bind and the reconciliation while a PnP stop waits,
 none of which this leg exercised.
 
+**Windows 98 SE** (the same build of QEMU and the same topology; an
+overlay of the `u98-min` image of the 40-A.6 legs, `pc`, 256 MB; the
+`qemu` flavour of `xhcicm.sys` at `4219d1a2`). The New Hardware wizard
+installed the moved NHI from the staged INF but kept the older
+`xhcicm.sys` already in `System32\Drivers` (same version); it was copied
+over by hand from the transfer disk and Windows restarted. This image
+writes nothing to the debug port, so the reading is the QEMU trace: the
+new driver's monitor sampled RX ring 0's size register (`0x01000010`)
+every idle period. Before the loss, at the same point, the old driver
+kept polling through a closed-and-reopened gate (about 32,000 trace lines
+in the 30 s after reopening); with the new one, `x-gate closed` for 25 s
+and then `normal`: **no access at all in the 30 s after reopening**, the
+guest running and its Start menu answering. A New Hardware wizard for the
+tunnelled NVMe endpoint ("PCI Card": `nvme98` is not installed on this
+image) came up again after the loss. **PASS**.
+
 ### Owed
 
-- The same leg on Windows 98 SE, and with `nvme98` bound and a copy
-  running on the volume.
+- A leg with `nvme98` bound and a copy running on the volume, and the
+  98 SE reconciliation read from a log (this image writes no debug-port
+  log).
