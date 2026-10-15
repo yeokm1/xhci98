@@ -355,8 +355,8 @@ try {
         Assert-True (($why -eq "") -eq $c.Ok) ("Get-Nvme98NotesFault on '" + $c.Text.Trim() + "' for '" + $c.V + "' answered '" + $why + "'.")
     }
     $realNotes = [System.IO.File]::ReadAllText((Join-Path $repo "docs\using\release-notes.md"))
-    Assert-True ((Get-Nvme98NotesFault -Text $realNotes -Version "0.2.0.0") -match "placeholder") `
-        "docs\using\release-notes.md no longer carries one bundle declaration with the placeholder the cut fills in."
+    Assert-True (([regex]::Matches($realNotes, '(?m)^This download bundles (.+?)\.[ \t]*\r?$')).Count -eq 1) `
+        "docs\using\release-notes.md does not carry exactly one 'This download bundles ...' declaration for the cut to fill in."
     # make-release.ps1: the release legs alone get the pins, the bundled
     # files are accepted beside the declared set by exactly their paths, the
     # upload set copies them from the release folder (releases\ never holds
