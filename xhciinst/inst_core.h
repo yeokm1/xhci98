@@ -207,6 +207,19 @@ const char *inst_action_text(int action);
 
 int inst_group_verdict(int anyNewer, int anyUnknown, int binary, int force);
 
+/* 98 SE and ME: a UAS entry at Code 2 (CM_PROB_DEVLOADER_FAILED) while
+ * System32\Drivers holds no USBNTMAP.SYS, the upper filter xhciuas.inf names.
+ * minor: 10 for 98 SE, 90 for ME. INST_UASFIX_ME_STICK: ME copies the file
+ * from its own cabinets when its first ordinary stick installs, so a stick
+ * and then a replug of the disk; INST_UASFIX_NUSB: 98 SE has it only from
+ * NUSB's mass-storage component. Anything else: INST_UASFIX_NONE. */
+#define INST_UASFIX_NONE            0
+#define INST_UASFIX_ME_STICK        1
+#define INST_UASFIX_NUSB            2
+
+int inst_uas_fix_9x(int nt, INST_U32 minor, int isUas, INST_U32 problem,
+                    int ntmapPresent);
+
 /* The XHCI98_FLAVOUR_* markers in an image: their count, and the first's
  * suffix (RELEASE, DEBUG, QEMU) in out. */
 int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
