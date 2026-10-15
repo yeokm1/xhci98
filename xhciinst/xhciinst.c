@@ -190,6 +190,7 @@ typedef struct _DEVREC {
 } DEVREC;
 
 static int is_controller(const DEVREC *d);
+static const char *first_hw(const DEVREC *d);
 
 /* The service groups of record 23 section 5.4. */
 #define INST_GROUPS 3
@@ -1077,6 +1078,21 @@ static void registry_controllers_9x(void)
             d->HwBytes = (DWORD)inst_ids_split(d->Hw, sizeof(d->Hw));
             d->CompatBytes = (DWORD)inst_ids_split(d->Compat, sizeof(d->Compat));
             if (!is_controller(d) || d->Driver[0] != '\0') {
+                continue;
+            }
+            /* An old slot's entry of a controller that runs under another
+             * entry now (the 9x leg, 2026-10-15: DEV_04 after the
+             * controller moved to DEV_03) is no device to install. */
+            for (k = 0; k < devCount; k++) {
+                if (!devs[k].RegOnly && devs[k].Present &&
+                    inst_eq(first_hw(&devs[k]), first_hw(d))) {
+                    known = 1;
+                    break;
+                }
+            }
+            if (known) {
+                logonly("Enum entry %s: an old slot of a present controller\n",
+                        d->Id);
                 continue;
             }
             d->Present = 1;
@@ -3856,7 +3872,13 @@ static void steps_9x(const char *dir)
         if (!d->Present || d->Inf < 0) {
             continue;
         }
-        if (d->Inf == INST_INF_XHCI && !is_controller(d)) {
+        /* The controller and, for an update, its root hub: the release
+         * notes' update is Update Driver on both (the 9x leg, 2026-10-15:
+         * the root hub otherwise stays at the old release). Hubs and
+         * composite entries follow by themselves. */
+        if (d->Inf == INST_INF_XHCI && !is_controller(d) &&
+            !(d->Action == INST_ACT_UPDATE && inst_bus_id(d->Id) == 1 &&
+              inst_starts(d->Id, "USB\\XHCI98_ROOT_HUB"))) {
             continue;
         }
         any = 1;
@@ -3959,8 +3981,16 @@ static int run_install_9x(void)
         return INST_EXIT_DONE;
     }
     for (i = 0; i < devCount; i++) {
-        if (devs[i].Present && devs[i].Inf == INST_INF_XHCI &&
-            is_controller(&devs[i]) && devs[i].Action == INST_ACT_UPDATE) {
+        INST_U32 bv[4];
+        char bin[INST_PATH_CHARS];
+        static const INST_U32 v24[4] = { 2, 4, 0, 0 };
+        /* Only an update from 2.3.x or earlier, and only on 98 SE (the
+         * installed binary's version tells; 98 keeps no DriverVersion). */
+        group_binary(0, bin, sizeof(bin));
+        if (envNow.Minor == 10 && devs[i].Present &&
+            devs[i].Inf == INST_INF_XHCI &&
+            is_controller(&devs[i]) && devs[i].Action == INST_ACT_UPDATE &&
+            file_version(bin, bv) > 0 && inst_ver_cmp(bv, v24) < 0) {
             out("BEFORE THE UPDATE: from 2.3.x or earlier on 98 SE the USB "
                 "keyboard and mouse\nbehind this controller do not answer the "
                 "update wizard's last page or the\nwizards after the restart; "

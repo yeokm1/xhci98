@@ -798,11 +798,20 @@ For each xHCI controller (`PCI\CC_0C0330` among its ids):
   3.x eXtensible Host Controller", "Search for a better driver than the
   one your device is using now", no box ticked; restart afterwards
   although Windows does not ask (release notes, "Updating from 2.y.y.y");
-  and from `2.3.x` the keyboard-and-mouse paragraph of "From 2.3.x or
-  earlier", printed before the confirmation as on NT (section 5.8);
-- **current**: nothing; the root hub's Driver tab may show the earlier
-  date until it is updated the same way;
+  then the same route on "xHCI98 USB 3.x Root Hub", listed as a step of
+  its own (the 9x leg, 2026-10-15: without it the root hub stayed at the
+  old release); and, only when the installed `xhci98.sys` is from `2.3.x`
+  or earlier and only on 98 SE, the keyboard-and-mouse paragraph of "From
+  2.3.x or earlier", printed before the confirmation as on NT (section
+  5.8);
+- **current**: nothing;
 - **another vendor's driver**: left (decision D3).
+
+An `Enum\PCI` entry with no driver whose first hardware id is a present
+controller's is that controller's old slot (the 9x leg, 2026-10-15: the
+controller moved from `DEV_04` to `DEV_03` after the first start) and is
+not listed; an entry of a controller with no devnode at all stays listed
+(section 6.3's cancelled-wizard controller).
 
 For each UAS device and NHI present with no driver, the install route of
 the first item. For each one already bound to an older release of this
