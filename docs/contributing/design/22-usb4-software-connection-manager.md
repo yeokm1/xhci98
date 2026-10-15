@@ -1868,7 +1868,10 @@ profile exposes it as a per-port entry point on the thread, and task
 port have been removed, so the tunnel is down before the user is told the
 device may be unplugged; on Windows 98 and ME, where 39-A.8's half is best
 effort, the same call follows if that half lands. A port ejected this way
-stays down until its device is unplugged and plugged again.
+stays down until its device is unplugged and plugged again. The eject
+tears down the PCIe tunnel alone: a USB3 tunnel on the same port carries
+devices of the host's own xHCI tree, which the eject never asked to stop,
+so it stays up, as on a port FAILED for PCIe (section 7.2).
 
 ## 11. Stop, remove, disable, suspend, resume
 

@@ -3152,9 +3152,42 @@ static void test_defer_first_poll(void)
     CHECK(!TbtU4AllPortsDisconnected(&g_cm), "stopped: no reading");
 }
 
+/* TbtU4EjectPcie (task 40-A.9): the PCIe tunnel torn down, the USB3 tunnel
+ * on the same port left up. */
+static void test_eject_pcie(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    const TBT_U4_PORT *p;
+
+    cfgDefault(&c);
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->Pcie.Up && p->Usb3.Up, "eject-pcie: PCIe and USB3 up");
+    (void)countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP);
+    CHECK_EQ(TbtU4EjectPcie(&g_cm, 1), TBT_OK, "eject-pcie: TBT_OK");
+    CHECK(!p->Pcie.Up && !fabPcieUp(&g_fab, 1), "eject-pcie: the PCIe tunnel down");
+    CHECK(p->Usb3.Up, "eject-pcie: the USB3 tunnel kept");
+    CHECK(p->State == TBT_U4_FAILED && p->Ejected && p->PcieFailed,
+          "eject-pcie: FAILED for PCIe, ejected");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "eject-pcie: one tunnel down");
+    poll(&g_cm, &g_fab, 2);
+    CHECK(!p->Pcie.Up && p->Usb3.Up, "eject-pcie: PCIe stays down until a re-plug");
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "eject-pcie: the unplug EMPTY");
+    CHECK(hostClean(&g_fab, 1), "eject-pcie: the host side clean, USB3 included");
+    CHECK_EQ(TbtU4EjectPcie(&g_cm, 1), TBT_E_PARAM, "eject-pcie: nothing to eject on an empty port");
+}
+
 int main(void)
 {
     test_cold_minimal();
+    test_eject_pcie();
     test_defer_first_poll();
     test_hot_plug_unplug();
     test_unplug_everywhere();

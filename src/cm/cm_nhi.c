@@ -910,7 +910,9 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
  * forces a removal, the run brief's addendum 10, and this hook is then
  * never called). The port whose bridge corresponds to `bdf` (named or
  * learned) has its tunnels torn down in the orderly way of section 9.3
- * step 1 (TbtU4Eject), and stays down until its device is unplugged and
+ * step 1 for PCIe alone (TbtU4EjectPcie: a USB3 tunnel on the port, the
+ * host xHCI's devices, stays up), and stays down until its device is
+ * unplugged and
  * plugged again; the TUNNEL_DOWN it queues is drained at the next pass, not
  * here (the seam is the caller). A bridge no port corresponds to, or a
  * domain not running: the tunnel stays up and the user unplugs, as under
@@ -970,7 +972,9 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
                                              (p != NULL ? (p->Generation & 0xFFFFUL) : 0));
         return;
     }
-    rc = TbtU4Eject(&nhi->U4, port);
+    /* The PCIe tunnel alone: a USB3 tunnel on the same port carries the
+     * host xHCI's devices, which this eject never asked to stop. */
+    rc = TbtU4EjectPcie(&nhi->U4, port);
     CmLogNote(nhi, "u4.eject", (port << 8) | ((ULONG)(-rc) & 0xFFUL));
     if (rc != TBT_OK) {
         nhi->Counters.U4EjectsFailed++;

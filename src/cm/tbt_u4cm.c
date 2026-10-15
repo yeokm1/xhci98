@@ -5330,6 +5330,32 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
     return closed ? TBT_OK : TBT_E_STATE;
 }
 
+LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
+{
+    PTBT_U4_PORT p;
+    BOOLEAN closed;
+
+    p = tbtU4PortOf(cm, port);
+    if (p == NULL || cm->Failed || !p->Dev.Present) {
+        return TBT_E_PARAM;
+    }
+    cm->Counters.Ejects++;
+    closed = TRUE;
+    if (p->Pcie.Up || p->Pcie.Written != 0) {
+        p->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
+        closed = tbtU4TunnelDown(cm, p, &p->Pcie, FALSE);
+        cm->Counters.PcieTornDown++;
+        tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
+    }
+    /* The USB3 tunnel stays, as on a port FAILED for PCIe alone (record 22
+     * section 7.2): its devices are the host xHCI's, never asked to stop. */
+    p->Ejected = TRUE;
+    p->PcieFailed = TRUE;
+    p->State = TBT_U4_FAILED;
+    p->Why = TBT_U4_WHY_EJECTED;
+    return closed ? TBT_OK : TBT_E_STATE;
+}
+
 VOID TbtU4Suspend(PTBT_U4CM cm)
 {
     ULONG i;
