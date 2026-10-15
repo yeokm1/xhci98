@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 2, 2026-10-16, reviewed and revised once the same night;
+Status: revision 3, 2026-10-16, reviewed and revised twice the same night;
 the code is written against it. Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
@@ -180,9 +180,13 @@ branch, marked "(behind <router name>)".
   for the Thunderbolt branch only) rebuilds the tree. The selection and
   expanded nodes are kept by key (section 7.2's router keys, instance
   IDs, controller + port path).
-- A refresh sends a device no request the driver does not answer from
-  cache, except strings and the BOS when Descriptors is on and the node
-  is selected (record 13 section 8.11).
+- A refresh reads only what the connection information carries (the
+  device descriptor, speed, address, open pipes). xhci98 answers the
+  device and first configuration descriptors from its cache (record 13
+  section 8.11), but Windows' own stacks may send a configuration request
+  to the device, so on every controller the configuration, string and BOS
+  descriptors are read only for the selected node with Descriptors on,
+  and for Save Report.
 
 ## 4. The query device in `xhcicm.sys`
 
@@ -245,8 +249,13 @@ flags), then the instance ID.
 - **Publication.** After each pass the connection-manager thread builds
   the whole answer on its own thread and copies it into the query
   device's extension under a dedicated spin lock held for the copy only,
-  then counts the pass and stamps its time from a running clock. It does
-  not depend on the registry write succeeding. The IOCTL copies out under
+  then counts the pass and stamps its time from a running clock, all three
+  under the lock. It keeps the answer's own content generation
+  (`CM_Q_O_CONTENT_GEN`), bumped when anything but the pass counter, its
+  age and the record's registry-only fields (generation, uptime, time,
+  echo) changes: the record's generation is stamped only by the registry
+  write, which skips an unchanged record. It does not depend on the
+  registry write succeeding. The IOCTL copies out under
   the same lock and computes the age at answer time. Neither ever holds
   the lock across registry, hardware or a wait; the extension fields are
   read by the connection manager on its own path (the USB4 CM reads the
@@ -312,19 +321,23 @@ record.
    device", the unit and the devnodes that will stop as the tree last
    showed them, OK / Cancel (from the tray menu the selection is the
    request and the dialog follows it). Nothing below waits on the user.
-2. Take the shared eject mutex (section 6.3). Query (Q1). Refuse unless the record's stage is active, the inert and
-   stopping flags are clear and the liveness state is ACTIVE.
+2. Take the shared eject mutex (section 6.3). Query (Q1). An answer is
+   eligible when the record's stage is active, the inert and stopping
+   flags are clear and the liveness state is ACTIVE; refuse unless Q1 is.
 3. Wait, polling every 100 ms for at most 3 s, until the published-pass
-   counter moves past Q1's with the same epoch (Q2): an observation the
-   connection manager completed after the eject began. If none comes,
-   refuse ("the controller is not answering"). This replaces record 24's
-   ask and echo for this tool: like the echo, it proves a pass after the
-   request rather than a recent one.
-4. Walk the devnodes completely; query again (Q3). Q3 must have Q2's
-   epoch and record generation; otherwise walk once more, then refuse.
+   counter has moved at least two past Q1's (wrap-safe) with the same
+   epoch (Q2), and Q2 is eligible: one move could be a snapshot built
+   before Q1 and published after it, two prove one built after the eject
+   began. If none comes, refuse ("the controller is not answering"). This
+   replaces record 24's ask and echo for this tool: like the echo, it
+   proves a pass after the request rather than a recent one.
+4. Walk the devnodes completely; query again (Q3). Q3 must be eligible
+   and have Q2's epoch and content generation; otherwise walk once more,
+   then refuse.
 5. The selected unit must still be a unit, by instance ID, with the same
    devnodes under it as the user confirmed; otherwise refuse and show the
-   new state.
+   new state. Immediately before the call, one more query must be
+   eligible with Q3's epoch and content generation.
 6. The call, record 24 section 7: `CM_Request_Device_EjectA` on NT
    (setupapi on 2000), with the not-removable fallback
    `CM_Query_And_Remove_SubTreeA`; on 98 SE and ME
@@ -333,10 +346,10 @@ record.
    time.
 7. The post-eject assessment ported from XHCIINST (the restarted-unit
    check, the USB4 tunnel watch, the unplug advice of record 24 section
-   5.4 with every fact it needs), shown as a message box from the window
-   or a balloon (tooltip on 98 SE) from the tray; on a veto, the vetoing
+   5.4 with every fact it needs), captured as text; on a veto, the vetoing
    device and the reason.
-8. Release the mutex.
+8. Release the mutex, then show the result: a message box from the
+   window or a balloon (tooltip on 98 SE) from the tray.
 
 ### 6.3 The shared mutex
 
@@ -385,7 +398,13 @@ whole transaction itself and exits.
   waits on it in its message loop; when it is set, the tray finishes an
   eject transaction in progress, removes the icon and exits. A tray that
   starts while it is set waits up to 20 s for it to clear before it
-  shows the icon.
+  shows the icon. On NT whoever creates it gives it a security descriptor
+  granting everyone `SYNCHRONIZE` and SYSTEM and Administrators full
+  access. The tray opens it with `SYNCHRONIZE` alone, creating it if it
+  is absent and opening it again if that create loses a race; XHCIINST
+  opens it with `EVENT_MODIFY_STATE`. A tray that can neither open nor
+  create it runs without it, and XHCIINST's `WM_CLOSE` and deferred
+  replacement (section 8) cover that tray.
 
 ### 7.2 Events and keys
 
@@ -400,18 +419,24 @@ A new epoch is a new set of devices.
 | Event | Text |
 |---|---|
 | a router entry appears | "<vendor> <model> connected (Thunderbolt 3 / USB4)." |
-| approval becomes pending, unanswered or held | "<name> is waiting to be approved." |
-| approval becomes failed | "<name> could not be approved." |
+| an ICM device's approval becomes pending or unanswered | "<name> is waiting to be approved." |
+| an ICM device's approval becomes failed | "<name> could not be approved." |
 | a router entry leaves | "<name> was disconnected." |
-| a USB4 router leaves whose PCIe tunnel was up and whose unit was started at the last sample | "<name> was unplugged while in use. Stop it with Safely Remove first next time." |
 | the liveness state leaves ACTIVE | "The Thunderbolt/USB4 controller stopped answering." |
 
-These are descriptive: a 1 s sample cannot prove how a device left (the
-ICM keeps a tunnel up after an eject until the unplug, record 24 section
-5.2, and another program can stop a unit between samples), so only the
-USB4 case above, where the connection manager tears the PCIe tunnel down
-on every eject, says "while in use". The outcome of an eject comes from
-the transaction (section 6.2 step 7), not from this diff.
+The approval events read the ICM's approval states only: a USB4 entry's
+approval word folds held, failed and unsupported together and an eject
+sets failed (`cm_status.c`, `tbt_u4cm.c`), so USB4 entries announce
+connection and disconnection alone.
+
+These are descriptive. A 1 s sample cannot prove how a device left: the
+ICM keeps a tunnel up after an eject until the unplug (record 24 section
+5.2), the USB4 teardown is asynchronous and absent on 98 SE and ME and
+without the child filter (record 21 section 7.4, record 24 section 5.2),
+and another program can stop a unit and the user unplug it between two
+samples. So the tray says "disconnected", never "unplugged while in use"
+(decision T9). The outcome of an eject comes from the transaction
+(section 6.2 step 7), not from this diff.
 
 **Balloons.** Where `shell32.dll` is version 5.0 or later (2000, ME, XP
 and later) the tray uses the version 2 `NOTIFYICONDATAA` size with
@@ -451,8 +476,14 @@ Exit codes follow XHCIINST's (record 23 section 10).
 - **Uninstall.** Closes it as above, deletes the Run value and the file;
   a file still in use is renamed to `XHCITR.DEL` and deleted at the next
   restart on NT, or deleted by a `NUL=` line in `WININIT.INI` on 98 SE
-  and ME. An install that finds its own pending `NUL=` line for the tool
-  removes that line before copying.
+  and ME.
+- **Pending operations.** Before it copies and before it uninstalls,
+  XHCIINST reconciles its own pending operations for the tool: it deletes
+  a leftover `XHCITR.NEW` (an NT delayed move whose source is gone does
+  nothing at restart) and, on 98 SE and ME, removes its own `[rename]` and
+  `NUL=` lines for the tool from `WININIT.INI`, keeping every other line.
+  An upgrade after an upgrade, or an uninstall then a reinstall, therefore
+  never lets an older pending copy or deletion land on a newer file.
 - The packager carries both executables under `tools\xhcitr\` with
   XHCIINST's freshness and version checks; `test-package.ps1` checks the
   layout.
@@ -517,11 +548,17 @@ builder (`cm_query.c`) is host-tested in the CM suite.
 - **T5** The tool links `inst_core.c` for record 24's rules and texts, and
   shares XHCIINST's mutex, with a security descriptor both can open.
 - **T6** Plain USB devices get no eject in the tool (section 1.3).
-- **T7** An eject waits for a connection-manager pass completed after it
-  began (section 6.2), in place of record 24's ask and echo; the pass's
-  age only marks the display current or not.
+- **T7** An eject waits for a connection-manager snapshot built after it
+  began (two publications past its first query, section 6.2), in place of
+  record 24's ask and echo, and checks eligibility on every answer up to
+  the call; the pass's age only marks the display current or not.
 - **T8** The tray's balloons from polling are descriptive; only an eject
   transaction reports an eject's outcome (section 7.2).
+- **T9** No "unplugged while in use" balloon in this release, although
+  the owner asked for a notice on an unsafe unplug: polling cannot prove
+  one (section 7.2). The authoritative source is the child filter, which
+  sees a unit's surprise removal on NT; publishing a count of those in the
+  query is planned work for the owner to open.
 
 ## 13. Open
 
