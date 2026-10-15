@@ -185,6 +185,11 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm_nvlink - the nvme98 link-state channel's pure half
+rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
+rem                  table of nvme98's nvme98cm.h, its entry protocol read
+rem                  back by a modelled receiver, the two profiles'
+rem                  statement conditions, the 9x record and REMOVE_PENDING
 rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
 rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
 rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
@@ -443,6 +448,10 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_cm_nvlink links nothing else: the nvme98 link-state channel's entry
+rem protocol, statement conditions, 9x record and REMOVE_PENDING request
+rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
+call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
