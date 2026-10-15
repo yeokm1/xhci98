@@ -13,7 +13,9 @@
 #
 # THE PURE CORE: cm_vals.c (test\test_cm.c); the host interface ring 0,
 # the ICM client and the hardware profiles, tbt_ring.c, tbt_icm.c and
-# tbt_hw.c (test_tbt_ring, test_tbt_icm, test_tbt_hw); and the shared log
+# tbt_hw.c (test_tbt_ring, test_tbt_icm, test_tbt_hw, test_tbt_select);
+# the USB4 software connection manager, tbt_u4cm.c (test_u4cm; Phase 40,
+# design record 22); and the shared log
 # ring ..\xhci_log.c (test\test_log.c), compiled in by path. All DDK-free.
 # cm_pool.c is the one file that allocates pool; cm_reg.c the one that
 # opens a registry key; cm_log.c the one DbgPrint site (debug and qemu
@@ -37,6 +39,7 @@ SOURCES=cm_vals.c      \
         tbt_ring.c     \
         tbt_icm.c      \
         tbt_hw.c       \
+        tbt_u4cm.c     \
         ..\xhci_log.c  \
         cm_pool.c      \
         cm_reg.c       \

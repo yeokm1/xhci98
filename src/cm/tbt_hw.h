@@ -19,8 +19,8 @@
  *
  * Outcomes: TBT_SEL_ICM (the client of tbt_icm.h); TBT_SEL_SAFE_MODE (the
  * firmware wants an NVM update; nothing is sent); TBT_SEL_SOFTWARE, the
- * positive admission of the USB4 software connection manager (Phase 40;
- * until it exists the driver treats it as inert); and TBT_SEL_INERT with a
+ * positive admission of the USB4 software connection manager (tbt_u4cm.h,
+ * Phase 40), with the ground it was admitted on; and TBT_SEL_INERT with a
  * reason: the devnode starts, logs the reason, and the driver touches
  * nothing - no reset, no ring, no protocol session, no mailbox. A timeout,
  * a register that does not decode, a firmware mode this client does not
@@ -48,6 +48,17 @@
  * and while the ICM runs. An unreadable register or a failed platform
  * init is INERT, never a disabled ICM. Pre-OS tunnels are the software
  * CM's to discover and keep, never to reset.
+ *
+ * Design record 22 section 3 (task 40-A.2) adds test (d) for the software
+ * CM - the Host Interface Version 00h or 40h, every other value inert -
+ * and records the ground: route 1 by identity, route 2 a valid ICM_EN 0
+ * (NVM_AUTH_DONE 1 with ICM_EN 0 marked experimental, not Linux's normal
+ * rule), with XhciCmMode 3 marked forced; the router half of test (d), the
+ * host router's USB4 Version, needs the ring and is TbtHwRouterVersion's,
+ * which tbt_u4cm.c applies after activation. And per the orchestrator's
+ * settlement of 2026-10-15 (record 22 section 4.2 over record 21 section
+ * 1.4.2): an inert instance never clears force power it set, not even
+ * after its own FW_READY poll failed.
  *
  * Sources: Linux drivers/thunderbolt (mirror pinned at c6859eed), read
  * under design record 20's rule since the owner's decision of 2026-10-15 -
@@ -178,13 +189,18 @@ LONG TbtHwPlatformSuspend(const TBT_HW_PROFILE *hw,
 
 /* Stop and shutdown on a TBT_HW_ICL_POWER profile: force power off as
  * Linux pci.c icl_nhi_shutdown does - but only when `power` says this
- * driver set it and the instance was active; an inert instance (`active`
- * FALSE) never clears it, not even after its own firmware-ready timeout
- * (record 21 sections 1.4.2 and 5.6); a force power the firmware or the
- * BIOS left on stays on. TBT_E_HW when the register reads
- * all ones: nothing restored, and the record kept for another try. */
+ * driver set it and `mayClear` says this instance may: TRUE for an active
+ * ICM instance after its unbind, and for an active USB4 instance whose
+ * rings are stopped and on whose ports no device router is connected
+ * (record 22 section 4.2, as Linux pci.c icl_nhi_suspend returns early
+ * while a router is connected); FALSE for an inert instance, which never
+ * clears it (record 22 section 4.2: a readiness timeout is no evidence
+ * that nothing depends on the controller), and for a USB4 instance with a
+ * router connected. A force power the firmware or the BIOS left on stays
+ * on. TBT_E_HW when the register reads all ones: nothing restored, and the
+ * record kept for another try. */
 LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
-                           PTBT_HW_POWER power, BOOLEAN active);
+                           PTBT_HW_POWER power, BOOLEAN mayClear);
 
 /* The Apple platform policy's mark (record 21 section 1.4.2 test 1): the
  * NHI's subsystem vendor 106B. Any IRQL. */
@@ -224,6 +240,14 @@ BOOLEAN TbtHwReadHostUuid(const TBT_HW_PROFILE *hw,
 #define TBT_INERT_MODE              8UL     /* authentication, endpoint or unknown mode */
 #define TBT_INERT_FORCED_UNSUPPORTED 9UL    /* XhciCmMode 3 on a host that is not USB4 */
 #define TBT_INERT_CONFLICT          10UL    /* ICM enable read set, then clear */
+#define TBT_INERT_ROUTER_VERSION    11UL    /* after activation: host router USB4 Version refused */
+#define TBT_INERT_HOST_ROUTER       12UL    /* after activation: host router unanswered */
+#define TBT_INERT_PROTOCOL          13UL    /* after activation: a fault later in the start */
+
+/* The ground of a software admission (record 22 section 3.4). */
+#define TBT_SW_ROUTE_NONE           0UL
+#define TBT_SW_ROUTE_IDENTITY       1UL     /* no firmware CM by identity */
+#define TBT_SW_ROUTE_ICM_DISABLED   2UL     /* Tiger Lake class, Maple Ridge: a valid ICM_EN 0 */
 
 typedef struct _TBT_HW_SELECTION {
     ULONG Outcome;      /* TBT_SEL_* */
@@ -231,6 +255,9 @@ typedef struct _TBT_HW_SELECTION {
     ULONG Caps;         /* Host Interface Capabilities as read */
     ULONG FwStatus;     /* firmware status, 0 when not read */
     ULONG Mode;         /* operating mode, 0xFFFFFFFF when not read */
+    ULONG Route;        /* TBT_SW_ROUTE_*, when SOFTWARE */
+    BOOLEAN Experimental;   /* route 2 with NVM_AUTH_DONE set (record 22 section 3.3) */
+    BOOLEAN Forced;         /* XhciCmMode 3 was set when it was admitted */
 } TBT_HW_SELECTION, *PTBT_HW_SELECTION;
 
 /*
@@ -252,5 +279,18 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
                  BOOLEAN apple,
                  BOOLEAN forceSoftware,
                  PTBT_HW_SELECTION out);
+
+/* The software connection manager's interface versions (record 22 section
+ * 3.5, Spec Table 12-11): 00h USB4 1.0, 40h USB4 2.0. Any IRQL. */
+BOOLEAN TbtHwSoftwareNhiVersion(ULONG caps);
+
+/* The router half of test (d) and section 6.4 step 3: a router's USB4
+ * Version (ROUTER_CS_4 31:24) - TBT_HW_ROUTER_USB4 for 20h and 40h,
+ * TBT_HW_ROUTER_TBT3 for 00h, TBT_HW_ROUTER_RESERVED for any other value.
+ * Any IRQL. */
+#define TBT_HW_ROUTER_USB4          1UL
+#define TBT_HW_ROUTER_TBT3          2UL
+#define TBT_HW_ROUTER_RESERVED      3UL
+ULONG TbtHwRouterVersion(ULONG usb4Version);
 
 #endif /* TBT_HW_H */

@@ -211,6 +211,21 @@ rem                  (src\cm\tbt_hw.c, task 39-A.3), and its id table checked
 rem                  against cm_vals.c's for every Intel and AMD id (task
 rem                  39-A.4); every outcome and inert
 rem                  reason
+rem   test_tbt_select - the selection as design record 22 section 3 has it
+rem                  (src\cm\tbt_hw.c, task 40-A.2): every row of its table,
+rem                  every NVM_AUTH_DONE/ICM_EN combination, test (d)'s
+rem                  interface and router versions, and each negative case
+rem                  inert, never the other profile
+rem   test_u4cm    - the USB4 software connection manager (src\cm\tbt_u4cm.c,
+rem                  tasks 40-A.3 and 40-A.8, design record 22 section 14.1)
+rem                  over the fake fabric of u4_fakefab.c: both emulator host
+rem                  models, two domains, USB4 and Thunderbolt 3 device
+rem                  routers, hot plug and unplug in every wait, quick
+rem                  re-plugs, bonding and its fallback, the TMU, the Detect
+rem                  gate, the USB3 handshake, router operations each
+rem                  unsupported, failing or hanging, discovery, holding and
+rem                  cleaning, quarantine, the statement's gating and anchor,
+rem                  links below depth 1, eject, suspend and resume
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -446,6 +461,8 @@ call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
+call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
