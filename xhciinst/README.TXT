@@ -93,8 +93,9 @@ ME only, off by default: on does what tools\silent\silent-on.bat does,
 and it says first when to turn it on), and XhciCmMode, XhciCmApprove and
 XhciCmSafeEject (only with a Thunderbolt or USB4 controller). The release
 notes, "Registry settings", say what each does. An answer applies from the
-driver's next start. XhciPollFineTimer and XhciSelectiveSuspend are never
-asked; /set Name=Value still sets them.
+driver's next start. XhciPollFineTimer, XhciSelectiveSuspend,
+XhciCmReenum, XhciCmUsb3Tunnel, XhciCmLaneBonding and XhciCmPreOsCleanup
+are never asked; /set Name=Value still sets them.
 
 When Windows starts installing a device by itself while the tool runs - a
 Found New Hardware window, perhaps behind the tool's - the tool waits for
@@ -106,6 +107,34 @@ code 3) when it changed anything and finished, "Changes were made, but not
 everything is done" when it stopped with steps left for you (do those
 first; the next run asks for the restart), and "No changes were made."
 when it changed nothing.
+
+Thunderbolt and USB4 devices
+----------------------------
+
+  INSTALL /devices     shows the Thunderbolt and USB4 devices connected
+                       now, and the Windows devices behind each, with
+                       their drivers; changes nothing
+  INSTALL /eject       lists them, asks which, and removes it safely
+  INSTALL /eject 2     the same for device 2 of the list (one question)
+  INSTALL /eject id=<instance id> /yes
+                       for scripts: the device with that instance id, as
+                       /devices prints it, with no question
+
+Windows 98 SE and ME: to remove a Thunderbolt or USB4 device safely, run
+INSTALL /eject; these systems have no other way. If a program has a file
+open on the device, Windows refuses and nothing changes: close it and try
+again. When the tool says "You can now unplug the device.", unplug it.
+Until then, Device Manager's Refresh can start it again.
+
+Windows 2000 to 7: Safely Remove Hardware works as usual; INSTALL /eject
+also asks Windows to stop a device it does not list. Run it as an
+administrator on 2000 and XP.
+
+Exit codes for these: 0 listed, or ejected; 1 refused or cancelled (or
+Windows answered that the device is gone or cannot be removed), nothing
+changed; 2 Windows began to stop the device and could not finish - shut
+Windows down before unplugging it; 4 Windows refused because the device
+is in use, nothing changed.
 
 Uninstall
 ---------
