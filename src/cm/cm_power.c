@@ -189,9 +189,16 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
             CmReenumStop(nhi);
             nhi->ReenumOn = 0;
         }
-        CmNhiUnbind(nhi);
-        CmNhiDrainActions(nhi);
-        (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        if (nhi->U4On || CmNhiHwAccess(nhi)) {
+            CmNhiUnbind(nhi);
+            CmNhiDrainActions(nhi);
+            (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        } else {
+            /* The liveness gate is closed: nothing is written to a host
+             * interface that stopped answering (record 21 section 5.6). */
+            CmLogNote(nhi, "cm.shutdown.no-access", nhi->Live.State);
+            CmNhiDrainActions(nhi);
+        }
         CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
         return;
     }
@@ -210,6 +217,12 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     }
     if (nhi->ReenumOn) {
         CmReenumSuspend(nhi);
+    }
+    /* A monitored instance stops being sampled; one the gate closed stays
+     * closed, so its suspend and its resume touch nothing and the resume
+     * takes the failure path (U15's order). */
+    if (CmNhiHwAccess(nhi)) {
+        CmLiveDisarm(&nhi->Live);
     }
     if (nhi->U4On) {
         cmU4Suspend(nhi);
@@ -232,6 +245,7 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
 {
     BOOLEAN ok;
     BOOLEAN held;
+    BOOLEAN lost;
     LONG rc;
 
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
@@ -241,8 +255,17 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     if (nhi->Stage != CM_STAGE_ACTIVE || CmNhiFailed(nhi)) {
         return TRUE;
     }
+    lost = FALSE;
     nhi->Counters.Resumes++;
     CmLogNote(nhi, "cm.resume", (ULONG)nhi->SystemPower);
+    if (!nhi->U4On && !CmNhiHwAccess(nhi)) {
+        /* Suspended while the liveness gate was closed: nothing is written
+         * to it on the way back; the failure path below (U15's order). */
+        CmLogNote(nhi, "cm.resume.no-access", nhi->Live.State);
+        ok = FALSE;
+        held = FALSE;
+        goto resumed;
+    }
     ok = CmNhiPlatformInit(nhi);
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
@@ -267,8 +290,25 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         if (rc != TBT_OK) {
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             ok = FALSE;
+        } else if (!CmNhiLiveArm(nhi)) {
+            /* Resumed, then not answering: the session is ended here -
+             * rings stopped (their stop verified or the buffer kept), the
+             * resumed table's UPs discarded and every entry gone - before
+             * the holds are released and anything is drained. */
+            CmLogNote(nhi, "cm.resume-failed", 0x100UL);
+            TbtIcmUnbind(&nhi->Icm);
+            TbtIcmLost(&nhi->Icm);
+            if (nhi->ReenumOn) {
+                /* The drain below is the loss's (CmReenumLossBegin); the
+                 * CONTROLLER_UNAVAILABLE request follows it. */
+                CmReenumLossBegin(nhi);
+                lost = TRUE;
+            }
+            nhi->Icm.Failed = TRUE;
+            ok = FALSE;
         }
     }
+resumed:
     if (!ok) {
         /* The client stopped its rings (TbtIcmResume's or TbtU4Resume's
          * failure), or never restarted them (the platform or Bus Master
@@ -287,6 +327,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         CmReenumResumed(nhi, (BOOLEAN)(ok && !held));
     }
     CmNhiDrainActions(nhi);
+    if (lost && nhi->ReenumOn) {
+        CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
+    }
     return ok;
 }
 

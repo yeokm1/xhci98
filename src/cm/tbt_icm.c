@@ -1230,11 +1230,20 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
         if (rc != TBT_E_TIMEOUT) {
             break;
         }
+        /* This attempt's answer may still come, and a retry's success
+         * does not say which attempt it answered. */
+        icm->Ambiguous = TRUE;
         icm->Counters.Timeouts++;
         tbtIcmLog(icm, "tbt.icm.timeout", req[0]);
     }
     if (rc == TBT_E_TIMEOUT && icm->WaitGone) {
         rc = TBT_E_GONE;
+    }
+    if (rc != TBT_OK && rc != TBT_E_ERROR_FLAG && rc != TBT_E_PARAM) {
+        /* Sent and not answered (or abandoned): its answer may still
+         * arrive, and no word of a driver-ready answer tells it from the
+         * next one's. Only a ring restart ends that (TbtIcmRecover). */
+        icm->Ambiguous = TRUE;
     }
     icm->InWait = FALSE;
     icm->WaitSlot = TBT_ICM_NO_SLOT;
@@ -1768,8 +1777,21 @@ static VOID tbtIcmReconcile(PTBT_ICM icm)
 static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale);
 static VOID tbtIcmFinishAnnounce(PTBT_ICM icm, BOOLEAN reconcile);
 
+static LONG tbtIcmBringUpEx(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
+                            BOOLEAN allowAll, BOOLEAN reconcile);
+
 static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
                           BOOLEAN resume)
+{
+    return tbtIcmBringUpEx(icm, va, phys, bytes, (BOOLEAN)!resume, resume);
+}
+
+/* `allowAll`: mailbox 0x23 on the rows that read the mode (a bind, and a
+ * full recovery of a power-cycled ICM). `reconcile`: every entry marked
+ * first and reconciled against the announcements (a resume, and a full
+ * recovery, which keeps the table of the session it replaces). */
+static LONG tbtIcmBringUpEx(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
+                            BOOLEAN allowAll, BOOLEAN reconcile)
 {
     LONG rc;
 
@@ -1784,10 +1806,12 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
         return rc;
     }
     icm->Started = TRUE;
+    /* A restarted ring delivers nothing of an earlier command. */
+    icm->Ambiguous = FALSE;
 
     /* Linux icm.c icm_firmware_init sends allow-all only where it reads
      * the mode, and only at bind (ICM 6.5 [inf]: not on resume). */
-    if (!resume && (icm->Profile->Caps & TBT_ICM_CAP_GET_MODE) != 0) {
+    if (allowAll && (icm->Profile->Caps & TBT_ICM_CAP_GET_MODE) != 0) {
         rc = TbtIcmMailbox(icm, TBT_ICM_MBOX_ALLOW_ALL, 0);
         if (rc != TBT_OK) {
             tbtIcmFail(icm);
@@ -1796,13 +1820,13 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
     }
 
     icm->Session = TRUE;
-    rc = tbtIcmAnnounceAll(icm, resume);
+    rc = tbtIcmAnnounceAll(icm, reconcile);
     if (rc != TBT_OK) {
         tbtIcmFail(icm);
         return rc;
     }
     icm->Bound = TRUE;
-    tbtIcmFinishAnnounce(icm, resume);
+    tbtIcmFinishAnnounce(icm, reconcile);
     return TBT_OK;
 }
 
@@ -2012,6 +2036,114 @@ VOID TbtIcmSuspend(PTBT_ICM icm)
 VOID TbtIcmUnbind(PTBT_ICM icm)
 {
     tbtIcmTearDown(icm);
+}
+
+VOID TbtIcmLost(PTBT_ICM icm)
+{
+    ULONG i;
+    ULONG keep;
+    ULONG n;
+    PTBT_ICM_ACTION a;
+
+    /* A queued TUNNEL_UP of the lost session is never delivered: the
+     * DOWNs and RESYNCs already queued keep their order. */
+    n = icm->ActionCount;
+    keep = 0;
+    for (i = 0; i < n; i++) {
+        a = &icm->Actions[(icm->ActionHead + i) % TBT_ICM_ACTION_QUEUE];
+        if (a->Kind == TBT_ICM_ACT_TUNNEL_UP) {
+            continue;
+        }
+        if (keep != i) {
+            icm->Actions[(icm->ActionHead + keep) % TBT_ICM_ACTION_QUEUE] = *a;
+        }
+        keep++;
+    }
+    icm->ActionCount = keep;
+    icm->QueueCount = 0;
+    icm->RediscoverPending = FALSE;
+    icm->RediscoverRun = 0;
+    icm->InWait = FALSE;
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        if (icm->Devices[i].InUse) {
+            tbtIcmDrop(icm, i, TBT_ICM_WHY_UNAVAILABLE, FALSE);
+        }
+    }
+    icm->ResyncPending = TRUE;
+    icm->ResyncWhy = TBT_ICM_WHY_UNAVAILABLE;
+    icm->Counters.Lost++;
+    tbtIcmLog(icm, "tbt.icm.lost", icm->ActionCount);
+}
+
+LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
+{
+    LONG rc;
+    ULONG i;
+
+    if (icm->Ring->Va == NULL) {
+        return TBT_E_STOPPED;
+    }
+    icm->Counters.Recoveries++;
+    if (!full && icm->Ambiguous) {
+        /* An unanswered command's answer could still arrive and pass for
+         * driver ready's: only the restart below ends that. */
+        tbtIcmLog(icm, "tbt.icm.recover-escalated", 1);
+        full = TRUE;
+    }
+    if (full) {
+        if (icm->Started || icm->Ring->DmaMayRun) {
+            TbtRingStop(icm->Ring);
+        }
+        if (icm->Ring->DmaMayRun) {
+            /* No verified stop: the buffer is not reused (cm_live.h). */
+            tbtIcmLog(icm, "tbt.icm.recover-unverified", 1);
+            return TBT_E_STATE;
+        }
+        icm->Started = FALSE;
+        icm->Bound = FALSE;
+        icm->Session = FALSE;
+        icm->Failed = FALSE;
+        tbtIcmRetirePending(icm);
+        return tbtIcmBringUpEx(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
+                               TBT_RING_DMA_BYTES, TRUE, TRUE);
+    }
+    if (!icm->Started || !icm->Bound) {
+        return TBT_E_STOPPED;
+    }
+    /* Frames the old session left on the ring are not this recovery's
+     * answers: every completed one is taken back unread, then a quiet
+     * period must pass with nothing more arriving before driver ready goes
+     * out - a late answer to an earlier command would otherwise pass for
+     * the new one. A ring that keeps delivering refuses the light recovery
+     * (the full one restarts the rings). */
+    {
+        TBT_FRAME f;
+        ULONG n;
+
+        n = 0;
+        while (n <= icm->Ring->Entries && TbtRingReceive(icm->Ring, &f)) {
+            n++;
+        }
+        tbtIcmLog(icm, "tbt.icm.recover-drained", n);
+        if (n > icm->Ring->Entries) {
+            return TBT_E_STATE;
+        }
+        icm->Host->Sleep(icm->Host->Context, TBT_ICM_RECOVER_QUIET_MS);
+        if (TbtRingReceive(icm->Ring, &f)) {
+            tbtIcmLog(icm, "tbt.icm.recover-not-quiet", f.Pdf);
+            return TBT_E_STATE;
+        }
+        tbtIcmRetirePending(icm);
+    }
+    rc = tbtIcmAnnounceAll(icm, TRUE);
+    if (rc != TBT_OK) {
+        for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+            icm->Devices[i].Stale = FALSE;
+        }
+        return rc;
+    }
+    tbtIcmFinishAnnounce(icm, TRUE);
+    return TBT_OK;
 }
 
 /* ====================================================================== */

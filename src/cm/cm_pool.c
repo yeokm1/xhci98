@@ -90,16 +90,18 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
     return STATUS_SUCCESS;
 }
 
-/* The block given back, unless the client's ring may still be running:
- * then a bus master may hold its addresses, and it stays allocated with
- * its adapter for the life of the system (hcd_dma.c's rule). */
+/* The block given back, unless the host interface may still DMA into it:
+ * a ring enabled and no verified stop since (TBT_RING.DmaMayRun - a
+ * partial start counts, and an unanswered or refused read-back never
+ * clears it). Then a bus master may hold its addresses, and it stays
+ * allocated with its adapter until the next boot (hcd_dma.c's rule). */
 VOID CmDmaClose(PCM_NHI nhi)
 {
     if (nhi->Dma == NULL) {
         return;
     }
     if (nhi->CommonVa != NULL) {
-        if (nhi->Ring.Running) {
+        if (nhi->Ring.Running || nhi->Ring.DmaMayRun) {
             nhi->Counters.BuffersKept++;
             CmLogNote(nhi, "cm.buffer-kept", 1);
             nhi->CommonVa = NULL;

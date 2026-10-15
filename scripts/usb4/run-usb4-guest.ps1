@@ -54,6 +54,11 @@ param(
     #      bus 0, no switch.
     # none: no usb4 device at all (the baseline).
     [ValidateSet('tb3', 'generic', 'none')][string]$Usb4Profile = 'tb3',
+    # tb3 only: which Thunderbolt 3 host. alpine-ridge is the captured P14s
+    # tree; titan-ridge is usb4-emu's tb3-titan-ridge (4C, 8086:15eb NHI and
+    # 8086:15ea switch ports, usb4-tr-* types, a second tunnel bridge tb1 on
+    # tunnel-port2), as scripts/run-win98.sh PROFILE=tb3-titan-ridge builds it.
+    [ValidateSet('alpine-ridge', 'titan-ridge')][string]$Tb3Model = 'alpine-ridge',
 
     # Run directory name under vm\<RunRoot>\. Default <Guest>-<Usb4Profile>.
     [string]$Name,
@@ -74,8 +79,12 @@ param(
     # only; 0x1c reproduces Windows 98's Code 29 for a hot-added endpoint.
     [string]$RootAddr = '0x6',
 
-    # generic only.
-    [ValidateSet('minimal', 'intel-adl')][string]$HostModel = 'minimal',
+    # generic only. asm4242 builds usb4-emu's i440FX stand-in of the ASM4242
+    # switch (USB4-HOSTS.md section 5, qtest usb4-asm4242 switch-pc): a root
+    # pci-bridge at -RootAddr, the 1b21:2421 upstream port, two SHPC tunnel
+    # bridges 1b21:2423 (tb0, tb1), the switch's xHCI 1b21:2426 and the NHI
+    # 1b21:2425 behind their own ports.
+    [ValidateSet('minimal', 'intel-adl', 'asm4242')][string]$HostModel = 'minimal',
     [switch]$PreosCm,
     [switch]$ForceTunnel,
     # USB3 tunnel: a USB disk on a dedicated qemu-xhci (id u4x) that is only
@@ -85,6 +94,13 @@ param(
     # supports it only behind a PCIe tunnel port (q35); on these i440FX
     # guests it warns and tunnels the NVMe alone (run-39.md, 39-0.7).
     [switch]$Dock,
+    # A second device router enc1 on USB4 port 2 (its NVMe nvme2.qcow2): on
+    # generic a second SHPC tunnel bridge tb1 at 00:08.0 on tunnel-port2;
+    # titan-ridge and asm4242 have tb1 already. Not on alpine-ridge (1 port).
+    [switch]$Port2,
+    # A daisy chain on port 1 (run-cm-test.sh CHAIN=1): enc0 with one
+    # downstream USB4 port and enc2 (nvme3.qcow2) below it. generic only.
+    [switch]$Chain,
 
     # -boot strict=on with bootindex=0 on the IDE boot disk (one of the
     # workarounds for an NVMe present at POST on Windows 98).
@@ -95,6 +111,9 @@ param(
     # -trace <pattern> -D vm\usb4\<Name>\trace-<Tag>.log
     [switch]$Trace,
     [string[]]$TracePattern = @('usb4_*'),
+    # -msg timestamp=on: QEMU prefixes each trace line with pid@seconds,
+    # for intervals such as announce to approve.
+    [switch]$Timestamps,
 
     # Transfer disk: a host directory served as a read-only VVFAT drive
     # (default vm\usb4\<Name>\xfer, created if missing), or -XferImg, a raw
@@ -179,6 +198,10 @@ if ($Tag -notmatch '^[A-Za-z0-9._-]+$') { throw "bad -Tag '$Tag'" }
 if ($Usb4Profile -ne 'generic' -and ($PreosCm -or $ForceTunnel -or $HostModel -ne 'minimal')) {
     throw '-PreosCm, -ForceTunnel and -HostModel apply to -Usb4Profile generic only'
 }
+if ($Usb4Profile -ne 'tb3' -and $Tb3Model -ne 'alpine-ridge') { throw '-Tb3Model applies to -Usb4Profile tb3 only' }
+if ($HostModel -eq 'asm4242' -and $ForceTunnel) { throw '-ForceTunnel is not built for -HostModel asm4242' }
+if ($Port2 -and ($Usb4Profile -eq 'none' -or ($Usb4Profile -eq 'tb3' -and $Tb3Model -ne 'titan-ridge'))) { throw '-Port2 needs a two-port host (generic or -Tb3Model titan-ridge)' }
+if ($Chain -and $Usb4Profile -ne 'generic') { throw '-Chain applies to -Usb4Profile generic only' }
 if ($Usb4Profile -eq 'none' -and ($Usb3 -or $Dock)) { throw '-Usb3 and -Dock need a usb4 profile' }
 if ($XferDir -and $XferImg) { throw 'give -XferDir or -XferImg, not both' }
 
@@ -221,6 +244,8 @@ if ($BaseImage) {
 }
 $disk = Join-Path $runDir 'disk.qcow2'
 $nvme = Join-Path $runDir 'nvme.qcow2'
+$nvme2 = Join-Path $runDir 'nvme2.qcow2'
+$nvme3 = Join-Path $runDir 'nvme3.qcow2'
 if (-not (Test-Path $base)) { throw "base image missing: $base" }
 # A backing image never sits under the run root, where -XferImg (attached
 # writable) and the overlays live.
@@ -241,6 +266,8 @@ function Assert-SoleFile([string]$path, [string]$what) {
 }
 Assert-SoleFile $disk 'the overlay'
 Assert-SoleFile $nvme 'the NVMe overlay'
+Assert-SoleFile $nvme2 'the port 2 NVMe'
+Assert-SoleFile $nvme3 'the chained NVMe'
 
 # ---------------------------------------------------------------- QEMU binary
 # Default: the fork's build, copied to vm\usb4\bin under the admission lock.
@@ -312,6 +339,8 @@ if ($Xhci) {
 }
 
 $enc0 = $null
+$enc1 = $null
+$enc2 = $null
 $tunnelBridge = $null
 if ($Usb4Profile -ne 'none') {
     Add @('-global', 'PIIX4_PM.acpi-pci-hotplug-with-bridge-support=off')
@@ -336,35 +365,71 @@ if ($Usb4Profile -ne 'none') {
     if ($Usb4Profile -eq 'tb3') {
         $assist = if ($Bios.StartsWith('ON_')) { 'on' } else { 'off' }
         $preboot = if ($Bios.EndsWith('_ON')) { 'on' } else { 'off' }
+        $sw = 'usb4-tb3'; $prof = 'tb3-alpine-ridge'
+        if ($Tb3Model -eq 'titan-ridge') { $sw = 'usb4-tr'; $prof = 'tb3-titan-ridge' }
         $hostDev = 'usb4-host,id=u4,bus=tbd0,addr=0x0,tunnel-port=tb0,msi=off,msix=off'
-        $hostDev += ",profile=tb3-alpine-ridge,bios-assist=$assist,preboot=$preboot"
+        if ($sw -eq 'usb4-tr') { $hostDev += ',tunnel-port2=tb1' }
+        $hostDev += ",profile=$prof,bios-assist=$assist,preboot=$preboot"
         # enc0's UUID (serial USB4EMU01 on port 1) is in the boot ACL
         $hostDev += ',boot-acl=203de24d-7c47-f446-ffff-ffffffffffff'
         Add @('-device', "usb4-tunnel-bridge,id=tbrp,bus=pci.0,addr=$RootAddr,chassis_nr=1,msi=off")
-        Add @('-device', 'usb4-tb3-pci-bridge,id=tbusp,bus=tbrp,addr=0x1,chassis_nr=2,shpc=off,msi=off')
-        Add @('-device', 'usb4-tb3-pci-bridge,id=tbd0,bus=tbusp,addr=0x0,chassis_nr=3,shpc=off,msi=off')
-        Add @('-device', 'usb4-tb3-tunnel-bridge,id=tb0,bus=tbusp,addr=0x1,chassis_nr=4,shpc-autoenable=on,msi=off')
-        Add @('-device', 'usb4-tb3-pci-bridge,id=tbd2,bus=tbusp,addr=0x2,chassis_nr=5,shpc=off,msi=off')
+        Add @('-device', "$sw-pci-bridge,id=tbusp,bus=tbrp,addr=0x1,chassis_nr=2,shpc=off,msi=off")
+        Add @('-device', "$sw-pci-bridge,id=tbd0,bus=tbusp,addr=0x0,chassis_nr=3,shpc=off,msi=off")
+        Add @('-device', "$sw-tunnel-bridge,id=tb0,bus=tbusp,addr=0x1,chassis_nr=4,shpc-autoenable=on,msi=off")
+        Add @('-device', "$sw-pci-bridge,id=tbd2,bus=tbusp,addr=0x2,chassis_nr=5,shpc=off,msi=off")
+        if ($sw -eq 'usb4-tr') { Add @('-device', "$sw-tunnel-bridge,id=tb1,bus=tbusp,addr=0x4,chassis_nr=6,shpc-autoenable=on,msi=off") }
         Add @('-device', $hostDev)
-        if ($assist -eq 'off') { Add @('-device', 'usb4-tb3-xhci,id=tbxhci,bus=tbd2,addr=0x0,msi=off,msix=off') }
+        if ($assist -eq 'off') { Add @('-device', "$sw-xhci,id=tbxhci,bus=tbd2,addr=0x0,msi=off,msix=off") }
         $enc0 = "usb4-device,id=enc0,bus=u4.0,port=1,drive=nvme0,serial=USB4EMU01,dialect=tb3$encExtra"
+    } elseif ($HostModel -eq 'asm4242') {
+        $hostDev = 'usb4-host,id=u4,bus=asmd3,addr=0x0,tunnel-port=tb0,tunnel-port2=tb1,msi=off,msix=off'
+        $hostDev += ',profile=usb4-generic,host-model=asm4242'
+        if ($PreosCm) { $hostDev += ',preos-cm=on' }
+        Add @('-device', "pci-bridge,id=asmrp,bus=pci.0,addr=$RootAddr,chassis_nr=1,shpc=off,msi=off")
+        Add @('-device', 'usb4-asm-pci-usp,id=asmusp,bus=asmrp,addr=0x1,chassis_nr=2,shpc=off,msi=off')
+        Add @('-device', 'usb4-asm-tunnel-bridge,id=tb0,bus=asmusp,addr=0x0,chassis_nr=3,shpc-autoenable=on,msi=off')
+        Add @('-device', 'usb4-asm-tunnel-bridge,id=tb1,bus=asmusp,addr=0x1,chassis_nr=4,shpc-autoenable=on,msi=off')
+        Add @('-device', 'usb4-asm-pci-bridge,id=asmd2,bus=asmusp,addr=0x2,chassis_nr=5,shpc=off,msi=off')
+        Add @('-device', 'usb4-asm-pci-bridge,id=asmd3,bus=asmusp,addr=0x3,chassis_nr=6,shpc=off,msi=off')
+        Add @('-device', 'usb4-asm-xhci,id=asmxhci,bus=asmd2,addr=0x0,msi=off,msix=off')
+        Add @('-device', $hostDev)
+        $enc0 = "usb4-device,id=enc0,bus=u4.0,port=1,drive=nvme0,serial=USB4EMU01$encExtra"
     } else {
         $tb = 'usb4-tunnel-bridge,id=tb0,bus=pci.0,addr=0x5,chassis_nr=1,shpc-autoenable=on,msi=off'
         if ($ForceTunnel) { $tb += ',x-force-tunnel=on,nvme-drive=nvme0,nvme-serial=USB4EMU01' }
         $hostDev = 'usb4-host,id=u4,bus=pci.0,addr=0x4,tunnel-port=tb0,msi=off,msix=off,profile=usb4-generic'
+        if ($Port2) { $hostDev += ',tunnel-port2=tb1' }
         if ($HostModel -ne 'minimal') { $hostDev += ",host-model=$HostModel" }
         if ($PreosCm) { $hostDev += ',preos-cm=on' }
         Add @('-device', $tb)
+        if ($Port2) { Add @('-device', 'usb4-tunnel-bridge,id=tb1,bus=pci.0,addr=0x8,chassis_nr=2,shpc-autoenable=on,msi=off') }
         Add @('-device', $hostDev)
         $enc0 = "usb4-device,id=enc0,bus=u4.0,port=1,drive=nvme0,serial=USB4EMU01$encExtra"
     }
+    # run-cm-test.sh's CHAIN=1 (enc0 with one downstream USB4 port, enc2
+    # below it) and PORT2 (enc1 on USB4 port 2, whose tunnel bridge is tb1).
+    if ($Chain) {
+        $enc0 = $enc0 -replace ',drive=nvme0,', ',drive=nvme0,downstream-ports=1,'
+        Add @('-drive', "if=none,id=nvme3,format=qcow2,file=$nvme3")
+        $enc2 = 'usb4-device,id=enc2,bus=u4.0,parent=enc0,port=1,drive=nvme3,serial=USB4EMU03'
+    }
+    if ($Port2) {
+        Add @('-drive', "if=none,id=nvme1,format=qcow2,file=$nvme2")
+        $enc1 = 'usb4-device,id=enc1,bus=u4.0,port=2,drive=nvme1,serial=USB4EMU02'
+        if ($Usb4Profile -eq 'tb3') { $enc1 += ',dialect=tb3' }
+    }
     $tunnelBridge = 'tb0'
-    if ($DeviceAtBoot -eq 1) { Add @('-device', $enc0) }
+    if ($DeviceAtBoot -eq 1) {
+        Add @('-device', $enc0)
+        if ($enc2) { Add @('-device', $enc2) }
+        if ($enc1) { Add @('-device', $enc1) }
+    }
 }
 if ($Trace) {
     foreach ($t in (($TracePattern -join ',') -split ',')) { Add @('-trace', $t) }
     Add @('-D', $trc)
 }
+if ($Timestamps) { Add @('-msg', 'timestamp=on') }
 # -Extra is an allowlist, so it cannot take over what this script owns (the
 # monitor and display ports, the disks, the vCPU and memory counts the
 # admission check budgets): -S alone, and -device, -global, -trace and -d
@@ -504,7 +569,7 @@ try {
     # Overlays: the base images are only ever backing files.
     New-Item -ItemType Directory -Force $runDir | Out-Null
     if ($NewOverlay) {
-        foreach ($f in @($disk, $nvme)) { if (Test-Path $f) { Remove-Item $f -Force } }
+        foreach ($f in @($disk, $nvme, $nvme2, $nvme3)) { if (Test-Path $f) { Remove-Item $f -Force } }
     }
     if (-not (Test-Path $disk)) {
         Invoke-QemuImg @('create', '-q', '-f', 'qcow2', '-b', $base, '-F', 'qcow2', $disk)
@@ -519,6 +584,9 @@ try {
     }
     foreach ($f in @($ustor, $udisk)) {
         if ($f -and -not (Test-Path $f)) { Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $f, '256M') }
+    }
+    foreach ($f in @($(if ($Port2) { $nvme2 }), $(if ($Chain) { $nvme3 }))) {
+        if ($f -and -not (Test-Path $f)) { Invoke-QemuImg @('create', '-q', '-f', 'qcow2', $f, '1G') }
     }
     if (-not $XferImg) { New-Item -ItemType Directory -Force $XferDir | Out-Null }
 
@@ -559,12 +627,12 @@ try {
     Set-Content -Path $guestLock -Value "branch=$branch name=$Name guest=$Guest pid=$qpid token=$token started=$(Get-Date -Format s)" -Encoding ASCII
 
     $info = [ordered]@{
-        name = $Name; guest = $Guest; profile = $Usb4Profile; bios = $Bios; deviceAtBoot = $DeviceAtBoot
+        name = $Name; guest = $Guest; profile = $Usb4Profile; tb3Model = $Tb3Model; bios = $Bios; deviceAtBoot = $DeviceAtBoot
         hostModel = $HostModel; preosCm = [bool]$PreosCm; usb3 = [bool]$Usb3; dock = [bool]$Dock
         bootStrict = [bool]$BootStrict; dvorak = [bool]$g.Nt
         qmpPort = $QmpPort; vncPort = $VncPort; pid = $qpid; created = $created; qemu = $proc.ExecutablePath
         token = $token; branch = $branch; tag = $Tag
-        runRoot = $RunRoot; base = $base; runDir = $runDir; lock = $guestLock; enc0 = $enc0; tunnelBridge = $tunnelBridge
+        runRoot = $RunRoot; base = $base; runDir = $runDir; lock = $guestLock; enc0 = $enc0; enc1 = $enc1; enc2 = $enc2; tunnelBridge = $tunnelBridge
         debugcon = $dbg; serial = $ser; trace = $(if ($Trace) { $trc } else { $null }); out = $out
         started = (Get-Date -Format s)
     }

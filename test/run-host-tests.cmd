@@ -478,6 +478,9 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_cm_live links nothing else: the host-interface liveness monitor's
+rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
+call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
 rem test_cm_nvlink links nothing else: the nvme98 link-state channel's entry
 rem protocol, statement conditions, 9x record and REMOVE_PENDING request
 rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
