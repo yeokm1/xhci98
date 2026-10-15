@@ -119,6 +119,9 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
 static VOID cmUnload(PDRIVER_OBJECT driver)
 {
     UNREFERENCED_PARAMETER(driver);
+    /* A 98 CONFIGMG worker a stop could not wait for leaves on its own
+     * (cm_cfgwk.c): its code is this image's. */
+    CmCfgwkDrain();
 }
 
 static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)

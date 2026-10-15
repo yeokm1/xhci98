@@ -54,6 +54,7 @@ SOURCES=cm_vals.c      \
         cm_power.c     \
         cm_reenum.c    \
         cm_cfgmg.c     \
+        cm_cfgwk.c     \
         cm_filt.c      \
         cm_live.c      \
         xhcicm.rc
