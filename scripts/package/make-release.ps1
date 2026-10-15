@@ -1079,7 +1079,7 @@ function Assert-ReportBatchContent {
 # The line the generated readme carries when the download bundles nvme98
 # (package-common.ps1, "nvme98, the bundled NVMe driver"), which is how
 # -UploadSetOnly knows which build a published release was cut with.
-$nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Pinned by SHA256SUMS\.txt ([0-9A-F]{64}), interface (\S+?)(, mismatch overridden)?\.'
+$nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Its SHA256SUMS\.txt has the SHA-256\r?\n  ([0-9A-F]{64})\.\r?\n  Interface version: (\S+?)( \(MISMATCH OVERRIDDEN, see below\))?\.'
 
 # The release notes' placeholder for the bundled version, which a cut
 # replaces: with "nvme98 `<version>`", or with a statement that the download
@@ -3053,7 +3053,8 @@ the result in place of the marker, then cut again. The first:
         if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
     }
     if ($null -ne $nvme98) {
-        if (-not $notesText.Contains("nvme98 ``" + $nvme98.Version + "``")) {
+        $bt = [string][char]96
+        if ($notesText -notmatch ("nvme98 " + $bt + "?" + [regex]::Escape($nvme98.Version) + $bt + "?(?![0-9.])")) {
             $why = "docs\using\release-notes.md does not name the bundled nvme98 ``$($nvme98.Version)``: write it in place of the placeholder in 'NVMe drives behind Thunderbolt or USB4'."
             if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
         } else {
@@ -4102,8 +4103,17 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
     # line is the one -UploadSetOnly reads ($nvme98ReadmePattern).
     if ($null -ne $nvme98) {
         $contents += ("  Bundled in this download: nvme98 {0}." -f $nvme98.Version)
-        $contents += ("  Pinned by SHA256SUMS.txt {0}, interface {1}{2}." -f $nvme98.SumsSha256, $nvme98.Interface,
-                      $(if ($nvme98.Overridden) { ", mismatch overridden" } else { "" }))
+        # Each pin on a line of its own, within the readme's 78 columns.
+        $contents += "  Its SHA256SUMS.txt has the SHA-256"
+        $contents += ("  {0}." -f $nvme98.SumsSha256)
+        $contents += ("  Interface version: {0}{1}." -f $nvme98.Interface,
+                      $(if ($nvme98.Overridden) { " (MISMATCH OVERRIDDEN, see below)" } else { "" }))
+        if ($nvme98.Overridden) {
+            # The override is logged where the download's reader sees it
+            # (-Nvme98AllowInterfaceMismatch; a dry cut of a 0.1.x build).
+            $contents += @(Format-Wrapped -Text ("The interface check was overridden for this cut " +
+                "(-Nvme98AllowInterfaceMismatch): " + $nvme98.Mismatch.Replace($repo.TrimEnd('\') + '\', "")) -Width 78 -FirstPrefix "  " -RestPrefix "  ")
+        }
         $contents += ""
         if ($nvme98.Layout -eq "old") {
             $contents += "  RELEASE-X86\NVME98\ and RELEASE-X64\NVME98\ hold nvme98, an NVMe"
