@@ -309,3 +309,86 @@ is reachable at a disable; the plan, the owner's answers and what a
 reopening must answer are design record 17 section 4.13.
 
 - [ ] PCR.1 (in Phase 37 until 2026-10-12) releasing the transfers kept by a pinned containment (owner, 2026-10-11), so disabling, updating or removing a controller the driver closed off without proof that DMA stopped (record 17's containment, `XHCISNAP` "CONTAINED" and "PINNED") completes instead of waiting for ever. Since `2.2.0.0` the driver keeps every transfer the controller might still write into, by design, a hang the release notes list under "Known limitations"; Phase 36's matrix read it again on Windows 2000 (4 of 4 from fresh boots, selective suspend on and off: hidusb's interrupt-IN read kept, its REMOVE waiting) and on Windows 98 SE. At the controller's stop or remove, look for proof that it can no longer write to memory, and only then complete the kept transfers as failed: (a) the device has left the bus (its PCI configuration space, the vendor id included, reads all ones), or (b) it entered D3hot through its PCI power management capability and reads back D3hot, where it may not master (PCI Bus Power Management 1.2). Only at the stop or remove of a controller already pinned by containment, the driver asks for D3 itself, through the PCI stack (a device power IRP), never by writing the power management control register (owner, 2026-10-13, on Codex's review): a containment-release step, independent of `XhciSelectiveSuspend`, adding no idle or selective-suspend policy. It reads the state back only after the 10 ms the specification requires before the next access. Conditions from the review: the capability chain validated before it is read; a failed or short configuration read is never taken for all ones, and all-ones data counts as proof (a) only through a validated read whose platform meaning is that the device left the bus or is isolated from memory, an unreachable configuration window alone proving nothing; read completeness established per target, without assuming Windows 98 reports the byte count (`hcd_svc.c` leaves its `IoStatus.Information` unproven), and a stalled configuration or power request addressed, today's wait for it being unbounded; on 98 SE and ME the configuration reads use the route already proven there, to the original PDO; a failed or ineffective transition is no proof and releases nothing; D3hot is not a reset, a function with `No_Soft_Reset` set keeping its state, so before the kept buffers are released the design establishes that DMA stays inhibited through any later return to D0 until HCRST has completed and the old ring and context pointers are invalid, and where it cannot, the buffers stay kept and an unsafe restart is refused; and the release runs before any child's teardown waits on a kept transfer. With neither proof the transfers stay kept, and no registry value overrides that (owner, 2026-10-13). Record 17 gains the section first, a full review loop on the DMA-safety path, host vectors for each proof, and legs: the all-ones injection then a disable on 98 SE, ME, 2000, XP and 7 x64, with and without a client read pending, and the unproven case still holding
+
+## Planned - USB4 Host Recovery After Loss
+
+Goal: a USB4 host interface that stopped answering taken up again by the
+driver, with no disable and enable of the controller and no restart.
+
+Status: not opened, unnumbered and unversioned. Listed by the owner on
+2026-10-15 with decision U17 (design record 22 section 7.7): `3.0.0.0`
+contains a lost USB4 host and does not recover it; the ICM client's
+recovery (record 21 section 5.5) is not this item.
+
+- [ ] U4REC.1 recovery of a contained USB4 host (owner, 2026-10-15, decision U17). Under the USB4 profile the first SUSPECT, ABSENT or CONFIG_LOST reading, a surprise removal, or a bind or resume that reads the ring's size register wrong puts the instance in CONTAINED until a PnP stop and start or a reboot (record 22 section 7.7). Design first, in record 22: when access is proven back (the size register and the host router read as programmed, or a full re-read of the PCI side the platform may have reset), what the instance may trust of its port records, how the fabric is found again (section 9.2's discover-and-preserve, never a reset), what becomes of the common buffer kept under `DmaMayRun`, and how `nvme98` and the re-enumeration seam learn of it; then host vectors and the legs on `usb4-generic` with the emulator's root hot-plug modes (`EMU.2`) on 98 SE, 2000 and one later NT target
+
+## Planned - `nvme98` Link-Down Statements on Real Hardware
+
+Goal: the link-down statement of tasks 39-A.7 and 40-A.7 made on real
+tunnel ports, not only on the emulator's.
+
+Status: not opened, unnumbered and unversioned. Listed by the owner on
+2026-10-15: `3.0.0.0` makes the statement on the emulator's tunnel
+bridges only and withholds it on hardware (record 21 sections 7.1 and
+7.2), until `nvme98`'s own hardware qualification, its MD-2, has resolved
+the completed-reset boundary this driver cannot observe through a down
+link.
+
+- [ ] NVHW.1 enabling `nvme98` link-down statements on real hardware after `nvme98`'s MD-2 (owner, 2026-10-15): once `nvme98` reports MD-2 qualified (the P14s with an NVMe enclosure and with one that has an internal switch), the statement's hardware condition per profile - the tunnel port's Data Link Layer Link Active bit where a PCI Express capability exists, the USB4 profile's path-closed and reset anchor - written into records 21 and 22, the withholding lifted per generation that was read, and the legs on the bench; the release notes' state of the pair updated
+
+## Planned - Safe Eject Across a Stack Rebuild on NT
+
+Goal: a device behind a tunnel stays offered for safe removal after its
+driver stack is rebuilt.
+
+Status: not opened, unnumbered and unversioned. Found by the Windows 2000
+legs of 39-V.2 on 2026-10-15; `3.0.0.0` ships the release-notes line
+(re-plug it, or `INSTALL /eject`) and the owner asked for the proper fix
+later (record 21 section 7.4).
+
+- [ ] EJRB.1 the child filter after a stack rebuild (owner, 2026-10-15). A disable and enable of the device, or its driver installed or updated, rebuilds its stack from the registry with no `BusRelations` query, so the child filter that sets `Removable` (record 21 section 7.4) is not attached again and the device drops out of "Unplug or Eject Hardware" and "Safely Remove Hardware" until a re-plug. A kernel-only fix is not small: the filter would have to be registered on the child devnode as a device-specific `LowerFilters` value, in the Enum key the PnP manager owns, written through SetupAPI or CfgMgr32 from user mode (the device tool of design record 24 is the natural place), and keeping a filter attached across a non-surprise `IRP_MN_REMOVE_DEVICE` is not permitted. Design first (record 21 section 7.4 and record 24), with the removal of that value when the device leaves; legs on 2000, XP and 7
+
+## Planned - `nvme98` Interface 3 on Windows 98 SE and ME
+
+Goal: the Windows 98 SE and ME half of the `nvme98` link-state channel
+read by `nvme98`, under the interface `nvme98` adopts.
+
+Status: not opened, unnumbered and unversioned. Waits on `nvme98`'s
+adoption message for its interface 3 (relayed by the owner on
+2026-10-15): `nvme98` accepted the `HKEY_LOCAL_MACHINE` locator record and
+the `REMOVE_PENDING` layout, and is to name the boot proof's key and the
+9x deadline; nothing is built against interface 3 before that message.
+The signed `3.0.0.0` cut waits for `nvme98` `0.2.0.0` (owner, 2026-10-15),
+after which the NVMe legs are read again with it.
+
+- [ ] NV9X.1 `nvme98` interface 3 adopted on 9x: the boot-proof dynamic key (`_RegCreateDynKey`, its provider in `xhcicm.sys`, the key deleted at the driver's unload, holding the record's cookie; the key path and value name `nvme98` gives), the acknowledgement deadline on 9x (`CM_NVLINK_ACK_9X_MS`, 3000 ms provisional, set against `nvme98`'s gone deadline once it is given), `nvme98cm.h` taken again unchanged from `nvme98`, record 21 section 7.2 and record 22 section 10 updated; host vectors, and the legs on 98 SE and ME with the `nvme98` release that reads it
+
+## Planned - The Emulator Legs After `3.0.0.0`
+
+Goal: the virtual-machine legs that need `usb4-emu` builds landed after
+this project's cut froze its emulator binary (`5ba7f60`).
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-15 from
+the `usb4-emu` maintainer's notes relayed by the owner: the TB3 dock
+preset on a USB4 host and the P14s behaviour landed on its `main`
+(`c7031a5`) after the freeze, and the root hot-plug modes are its part 2.
+
+- [ ] EMU.1 Thunderbolt 3 device routers behind a USB4 host (task 40-A.8): the emulator's TB3 dock preset on `usb4-generic` (the i440FX command line of `usb4-emu`'s `XHCI98-HANDOFF.md` section 7.1) on 98 SE and 2000, the PCIe tunnel through the legacy router and the DROM by bit-bang
+- [ ] EMU.2 the R32 power-off read again with the emulator's root hot-plug modes once its part 2 lands: `acpi` on 2000 with ACPI, XP and 7, `restore` on 98 SE (its image is APM-only); the ICM client's ABSENT and recovery and the USB4 profile's containment against a PnP removal and a restored bridge
+- [ ] EMU.3 the P14s behaviour on the Alpine Ridge profile: Assist decided at power-on, pre-boot tunnelling every device, Assist with pre-boot and a USB4 device (single lane, flags `0x88`, configuration requests held about 2.77 s after the first `driver ready`), `driver ready` flags `0x22`, the power-off delays, and pending approvals cancelled by an unplug, a re-plug or mailbox `0x06` (a stale `approve` answered with the error flag, taken as benign)
+- [ ] EMU.4 the ORICO enclosure's ASM2464 on the Alpine Ridge profile: approved and tunnelled, and with `XhciCmApprove` 0 its fall back to USB after about 9.4 s, the disk then on the controller's own xHCI under `xhci98.sys`
+- [ ] EMU.5 the `39-V` Alpine Ridge legs read again on the new emulator build, whose behaviour changed under them
+
+## Planned - The x64 Legs Owed at the Cut
+
+Goal: the Vista x64 and Windows 7 x64 readings Phases 39 and 40 could not
+take for want of a test-signed package.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-15:
+39-V.3 and 40-V.3 read XP, XP x64, Vista x86 and 7 x86, and the
+installer's legs passed on every system but two, because the amd64
+package needs the project's test signature, applied only at a signed cut
+(design record 19). Struck from this list as the signed cut reads them.
+
+- [ ] X64.1 39-V.3 and 40-V.3 on Vista x64 and 7 x64 from the signed `3.0.0.0` asset: the install with the forced filter, one plug, unplug and re-plug cycle with the NVMe drive, and the safe-eject cycle
+- [ ] X64.2 the installer legs owed by task 40.5 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0`
