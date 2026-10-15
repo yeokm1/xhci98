@@ -1035,6 +1035,15 @@ restart Windows.", its code unchanged (a change under a refusal's code is
 reported as 2). The 2000 leg read the restart line on an unchanged rerun
 and beside a stop; the rule lives in the pure half (section 10).
 
+**The device modes are the one exception** (design record 24 section 8):
+`/devices` changes nothing and ends "No changes were made.", exit 0; an
+eject that Windows accepted and finished changes the device's state but
+never needs a restart, so it ends with the eject's own last line ("You
+can now unplug the device." or its qualified forms) and exit 0; a refusal
+ends "No changes were made.", exit 4; a removal that failed after an
+accepted query ends with record 24's failure text, exit 2. The pure half's
+final-line rule takes the mode.
+
 **The confirmation says what will happen**: "Install and stage the package
 now" when a device changes; "Write the changed settings now (no device
 needs a new driver)" when only option values change; otherwise that every
