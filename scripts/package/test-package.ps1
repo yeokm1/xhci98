@@ -297,6 +297,9 @@ try {
     $nvOldMissing = $nvOldFiles.Clone(); $nvOldMissing.Remove("amd64\nvme98-test.cer")
     $nvMissing = New-Nvme98Release -Name "nv-missing" -Files $nvOldMissing
     $nv010 = New-Nvme98Release -Name "nv-0.1.0.0" -Files $nvOldFiles
+    $nvNewNoCer = $nvNewFiles.Clone(); $nvNewNoCer.Remove("x64
+vme98-test.cer")
+    $nvNoCer = New-Nvme98Release -Name "nv-nocer" -Files $nvNewNoCer
     foreach ($bad in @(
         @{ Args = (Get-NvArgs $nvNew "0.2.0.0") | ForEach-Object { if ($_ -eq $nvNew.Sha) { "0" * 64 } else { $_ } }; Says = "not the pinned" },
         @{ Args = (Get-NvArgs $nvTampered "0.2.0.0"); Says = "Release folders are write-once" },
@@ -307,6 +310,9 @@ try {
         @{ Args = (Get-NvArgs $nvNew "0.1.1.0"); Says = "old layout carries" },
         @{ Args = (Get-NvArgs $nvOld "0.2.0.0"); Says = "new layout carries" },
         @{ Args = (Get-NvArgs $nv010 "0.1.0.0"); Says = "is never bundled" },
+        @{ Args = (Get-NvArgs $nvNoCer "0.2.0.0"); Says = "x64
+vme98-test.cer" },
+        @{ Args = (Get-NvArgs $nvOld "0.1.1.0" "1" $nvHeader1); Says = "has no link-state receiver" },
         @{ Args = (Get-NvArgs $nvNew "0.2"); Says = "not a four-part version" },
         @{ Args = @("-Nvme98Version", "0.2.0.0", "-Nvme98Dir", $nvNew.Dir); Says = "go together" },
         @{ Args = @("-Nvme98AllowInterfaceMismatch"); Says = "no nvme98 input" }
@@ -317,6 +323,20 @@ try {
             ("an nvme98 input was not refused with '$($bad.Says)'. Output:`n" + $r.Output)
         Assert-True (-not (Test-Path -LiteralPath $out)) "a package refused for its nvme98 input left an output directory."
     }
+
+    # Any 0.1.x.y from 0.1.1.0 takes the old layout (a 0.1.1.1 hotfix
+    # included), and the substitute header is the self-tests' alone.
+    $nvOldFiles111 = @{}
+    foreach ($k in $nvOldFiles.Keys) { $nvOldFiles111[$k] = $nvOldFiles[$k].Replace("0.1.1.0", "0.1.1.1") }
+    $nvOld111 = New-Nvme98Release -Name "nv-0.1.1.1" -Files $nvOldFiles111
+    $nvOut = Join-Path $script:work "pkg-nv-old111"
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $nvOut) + (Get-NvArgs $nvOld111 "0.1.1.1"))
+    Assert-True ($r.ExitCode -eq 0 -and (Test-Path -LiteralPath (Join-Path $nvOut "nvme98\x86\nvme98.sys"))) `
+        ("an old-layout 0.1.1.1 was not bundled under nvme98\:`n" + $r.Output)
+    $r = Invoke-Packager -WithBinaryGates -Arguments (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-nv-hdr"),
+                          "-NoTargetEvidence") + (Get-NvArgs $nvNew "0.2.0.0" "1" $nvHeader1))
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "self-tests only") `
+        ("-Nvme98HeaderPath was accepted without -SkipBinaryGates. Output:`n" + $r.Output)
 
     # make-release.ps1: the release legs alone get the pins, the bundled
     # files are accepted beside the declared set by exactly their paths, the
@@ -330,7 +350,9 @@ try {
         @{ Find = 'Copy-Item -LiteralPath (Join-Path $Nvme98.Dir $nf.Source) -Destination $nvDest'; Why = "the upload set no longer takes nvme98 from the pinned release folder" },
         @{ Find = 'Where-Object { -not $nvUploaded.ContainsKey($_.FullName.ToLowerInvariant()) }'; Why = "nvme98's INFs would fail the one-date rule" },
         @{ Find = 'if ($nvUploaded.ContainsKey($item.FullName.ToLowerInvariant())) { continue }'; Why = "nvme98's file times would be rewritten" },
-        @{ Find = '-Publishable $publishable -Staged -Nvme98 $nvme98'; Why = "the ordinary cut's upload set no longer bundles nvme98" }
+        @{ Find = '-Publishable $publishable -Staged -Nvme98 $nvme98'; Why = "the ordinary cut's upload set no longer bundles nvme98" },
+        @{ Find = '$askNvme98 = Get-Nvme98PinText -Release $nvme98'; Why = "-UploadSetOnly no longer holds a re-assembly to the recorded pins" },
+        @{ Find = '" -Nvme98SumsSha256 " + $script:nvme98.SumsSha256'; Why = "the repair command no longer carries the nvme98 pins" }
     )) {
         Assert-True ($nvRelText.Contains($anchor.Find)) ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }

@@ -1286,8 +1286,9 @@ Disk, and point it at the package directory.
 This download bundles nvme98 `(version: filled in at the cut)`.
 
 An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of
-its own, which none of these systems has. The download's `release-x86\`
-and `release-x64\` directories carry nvme98: a separate project under its
+its own, which none of these systems has. A download that bundles one
+names its version in the line above, and its `release-x86\` and
+`release-x64\` directories carry nvme98: a separate project under its
 own licence (BSD-3-Clause), bundled as one of its released builds,
 unchanged, with its `LICENSE`, `NOTICE.TXT` and `readme.txt` beside it as
 `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`. Its

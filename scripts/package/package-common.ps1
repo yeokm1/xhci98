@@ -866,14 +866,14 @@ function Get-Nvme98Layout {
 }
 
 function Read-Nvme98Sums {
-    # SHA256SUMS.txt, "<sha256>  <path>" or "<sha256> *<path>" per line, with
-    # / or \ separators. Returns an ordered map of relative path (with \) to
-    # upper-case hash; refuses anything else.
-    param([string]$Path)
+    # SHA256SUMS.txt's text, "<sha256>  <path>" or "<sha256> *<path>" per
+    # line, with / or \ separators. Returns an ordered map of relative path
+    # (with \) to upper-case hash; refuses anything else.
+    param([string]$Text)
     $map = [ordered]@{}
     $seen = @{}
     $n = 0
-    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+    foreach ($line in ($Text -split "\r?\n")) {
         $n++
         if ($line.Trim() -eq "") { continue }
         if ($line -notmatch '^([0-9A-Fa-f]{64}) [ *](.+)$') {
@@ -928,11 +928,19 @@ function Assert-Nvme98Release {
     if (-not (Test-Path -LiteralPath $sumsPath -PathType Leaf)) {
         throw "'$Dir' has no SHA256SUMS.txt, so nothing in it can be checked; it is not an nvme98 release folder."
     }
-    $sumsHash = (Get-FileHash -LiteralPath $sumsPath -Algorithm SHA256).Hash
+    # Read once: the bytes that are hashed are the bytes that are parsed, so
+    # the list cannot be swapped between the pin check and its use.
+    $sumsBytes = [System.IO.File]::ReadAllBytes($sumsPath)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $sumsHash = (($sha.ComputeHash($sumsBytes) | ForEach-Object { $_.ToString("X2") }) -join "") }
+    finally { $sha.Dispose() }
     if ($sumsHash -ne $SumsSha256.ToUpperInvariant()) {
         throw "'$sumsPath' hashes to $sumsHash, not the pinned $($SumsSha256.ToUpperInvariant()): this is not the nvme98 $Version release that was pinned. Nothing was copied."
     }
-    $sums = Read-Nvme98Sums -Path $sumsPath
+    if (@($sumsBytes | Where-Object { $_ -ge 0x80 }).Count -gt 0) {
+        throw "'$sumsPath' is not ASCII."
+    }
+    $sums = Read-Nvme98Sums -Text ([System.Text.Encoding]::ASCII.GetString($sumsBytes))
     $listed = @{}
     foreach ($rel in $sums.Keys) {
         $listed[$rel.ToLowerInvariant()] = $rel
@@ -956,11 +964,13 @@ function Assert-Nvme98Release {
     if ($layout -eq "old") {
         $archDirs = @("win9x", "x86", "amd64")
         $required = @("win9x\nvme98.inf", "win9x\nvme98.mpd", "x86\nvme98.inf", "x86\nvme98.sys",
-                      "amd64\nvme98.inf", "amd64\nvme98.sys", "amd64\nvme98-test.cer", "LICENSE", "NOTICE.TXT")
+                      "amd64\nvme98.inf", "amd64\nvme98.sys", "amd64\nvme98-test.cer", "LICENSE", "NOTICE.TXT",
+                      "readme.txt")
     } else {
         $archDirs = @("x86", "x64")
         $required = @("x86\nvme98.inf", "x86\nvme98.mpd", "x86\nvme98.sys",
-                      "x64\nvme98.inf", "x64\nvme98.sys", "LICENSE", "NOTICE.TXT")
+                      "x64\nvme98.inf", "x64\nvme98.sys", "x64\nvme98-test.cer", "LICENSE", "NOTICE.TXT",
+                      "readme.txt")
     }
     foreach ($r in $required) {
         if (-not $listed.ContainsKey($r.ToLowerInvariant())) {
@@ -1054,6 +1064,9 @@ function Test-Nvme98Interface {
     param($Release, [string]$Pinned, [string]$HeaderPath)
     if ($Pinned -notmatch '^(none|\d+)$') {
         throw "-Nvme98InterfaceVersion is the pinned build's NVME98LS_VERSION (a number), or 'none' for a build with no link-state receiver (0.1.x)."
+    }
+    if ($Release.Layout -eq "old" -and $Pinned -ne "none") {
+        throw "nvme98 $($Release.Version) is a 0.1.x build, which has no link-state receiver: its -Nvme98InterfaceVersion is 'none'."
     }
     $have = ($HeaderPath -ne "") -and (Test-Path -LiteralPath $HeaderPath -PathType Leaf)
     $ours = if ($have) { Get-Nvme98HeaderVersion -Path $HeaderPath } else { "" }

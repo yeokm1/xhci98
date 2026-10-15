@@ -3055,10 +3055,15 @@ Both layouts also carry the release's `LICENSE`, `NOTICE.TXT` and
 `nvme98-readme.txt` beside the driver files, and the amd64 package the
 build's own `nvme98-test.cer` with its test-signed `nvme98.sys`. The
 `debug-` directories carry none of it. A cut also needs the release notes
-to name the bundled version (their "NVMe drives behind Thunderbolt or
-USB4" placeholder; a `-TestLabel` cut is only warned), and the generated
-readme lists it, which is how `-UploadSetOnly` holds a re-assembly to the
-same pins. For example, the 0.1.1.0 dry cut:
+to name the bundled version in place of their "NVMe drives behind
+Thunderbolt or USB4" placeholder, and a cut without nvme98 refuses while
+that placeholder is still there (a `-TestLabel` cut is only warned of
+either). The generated readme records the version, the SHA-256 of
+`SHA256SUMS.txt` and the interface version (and an override), which is how
+`-UploadSetOnly` holds a re-assembly to the same pins; `-Nvme98HeaderPath`,
+the self-tests' substitute header, is refused without `-SkipBinaryGates`.
+A `0.1.x` build's interface version is always `none`, and both layouts
+must carry `readme.txt` and the 64-bit `nvme98-test.cer`. For example, the 0.1.1.0 dry cut:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release ^

@@ -215,7 +215,9 @@ is printed with the mismatch it overrides.
 
 .PARAMETER Nvme98HeaderPath
 The header the interface version is compared with, overriding
-src\cm\nvme98cm.h. Exists for the packager's own self-tests.
+src\cm\nvme98cm.h. Exists for the packager's own self-tests, and is refused
+without -SkipBinaryGates, so no package of real binaries is checked against
+anything else.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -628,6 +630,9 @@ kernel-mode code signing, and the published x86 bytes stay those of the build.
     # The bundled nvme98 build, verified before anything is built or staged:
     # its pins, its SHA256SUMS.txt and every file, its layout, and its
     # interface version against the header xhci98 compiles against.
+    if ($Nvme98HeaderPath -ne "" -and -not $SkipBinaryGates) {
+        throw "-Nvme98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\nvme98cm.h."
+    }
     if ($Nvme98HeaderPath -eq "") { $Nvme98HeaderPath = Join-Path $repo "src\cm\nvme98cm.h" }
     $nvme98 = Resolve-Nvme98Input -Version $Nvme98Version -Dir $Nvme98Dir -SumsSha256 $Nvme98SumsSha256 `
                                   -InterfaceVersion $Nvme98InterfaceVersion -HeaderPath $Nvme98HeaderPath `

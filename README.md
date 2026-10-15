@@ -242,7 +242,7 @@ Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a 
 
 ### NVMe drives behind Thunderbolt or USB4
 
-An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of its own. The package's `release-x86\` and `release-x64\` directories carry one: nvme98, a separate project with its own licence (BSD-3-Clause), bundled as one of its released builds, unchanged. Its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`; the readme is its install guide and lists its known limits. The release notes name the version bundled. `INSTALL.BAT` does not install it.
+An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of its own. A package that bundles one carries it in its `release-x86\` and `release-x64\` directories, and its `readme.txt` and the release notes name the version: nvme98, a separate project with its own licence (BSD-3-Clause), bundled as one of its released builds, unchanged. Its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`; the readme is its install guide and lists its known limits. The release notes name the version bundled. `INSTALL.BAT` does not install it.
 
 When the drive's NVMe controller shows in Device Manager without a driver, Update Driver -> Have Disk, pointed at:
 

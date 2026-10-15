@@ -1079,7 +1079,21 @@ function Assert-ReportBatchContent {
 # The line the generated readme carries when the download bundles nvme98
 # (package-common.ps1, "nvme98, the bundled NVMe driver"), which is how
 # -UploadSetOnly knows which build a published release was cut with.
-$nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.'
+$nvme98ReadmePattern = '(?m)^  Bundled in this download: nvme98 (\d+\.\d+\.\d+\.\d+)\.\r?\n  Pinned by SHA256SUMS\.txt ([0-9A-F]{64}), interface (\S+?)(, mismatch overridden)?\.'
+
+# The release notes' placeholder for the bundled version, which a cut
+# replaces: with "nvme98 `<version>`", or with a statement that the download
+# carries none.
+$nvme98NotesPlaceholder = "(version: filled in at the cut)"
+
+# The same pins as that line records, for -UploadSetOnly's comparison.
+function Get-Nvme98PinText {
+    param($Release)
+    if ($null -eq $Release) { return "" }
+    $t = "{0}|{1}|{2}" -f $Release.Version, $Release.SumsSha256, $Release.Interface
+    if ($Release.Overridden) { $t += "|overridden" }
+    return $t
+}
 
 # The project test certificate's public half (design record 19), published at
 # the root of every x64 directory a cut writes since 2.3.0.0, beside the
@@ -1564,6 +1578,12 @@ function Get-UploadSetRepairCommand {
     $quote = { param([string]$s) return $q + ($s -replace $q, ($q + $q)) + $q }
     if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir " + (& $quote $ReleasesDir) }
     if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
+    # A bundled release is re-assembled only with the pins it was cut with.
+    if ($null -ne $script:nvme98) {
+        $cmd += " -Nvme98Version " + $script:nvme98.Version + " -Nvme98Dir " + (& $quote $script:nvme98.Dir) +
+                " -Nvme98SumsSha256 " + $script:nvme98.SumsSha256 + " -Nvme98InterfaceVersion " + $script:nvme98.Interface
+        if ($script:nvme98.Overridden) { $cmd += " -Nvme98AllowInterfaceMismatch" }
+    }
     return $cmd
 }
 
@@ -2562,6 +2582,8 @@ $stagedUpload = $null
 $swapDone = $false
 # What the caller actually passed, for Get-UploadSetRepairCommand.
 $boundArgs = $PSBoundParameters
+# The verified nvme98 build, once resolved below; $null for none.
+$nvme98 = $null
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -2828,13 +2850,16 @@ To cut one, run this script without it.
         $pubNvme98 = ""
         if (Test-Path -LiteralPath $pubReadme) {
             $m = [regex]::Match([System.IO.File]::ReadAllText($pubReadme), $nvme98ReadmePattern)
-            if ($m.Success) { $pubNvme98 = $m.Groups[1].Value }
+            if ($m.Success) {
+                $pubNvme98 = "{0}|{1}|{2}" -f $m.Groups[1].Value, $m.Groups[2].Value, $m.Groups[3].Value
+                if ($m.Groups[4].Success) { $pubNvme98 += "|overridden" }
+            }
         }
-        $askNvme98 = if ($null -ne $nvme98) { $nvme98.Version } else { "" }
+        $askNvme98 = Get-Nvme98PinText -Release $nvme98
         if ($pubNvme98 -ne $askNvme98) {
-            $was = if ($pubNvme98 -ne "") { "nvme98 $pubNvme98" } else { "no nvme98" }
-            $now = if ($askNvme98 -ne "") { "nvme98 $askNvme98" } else { "no nvme98" }
-            throw "'$finalRoot' was cut with $was (its readme.txt says so), and this run was given $now. Re-assemble it with the pins it was cut with."
+            $was = if ($pubNvme98 -ne "") { "nvme98 pinned as $pubNvme98" } else { "no nvme98" }
+            $now = if ($askNvme98 -ne "") { "nvme98 pinned as $askNvme98" } else { "no nvme98" }
+            throw "'$finalRoot' was cut with $was (version, SHA256SUMS.txt hash, interface; its readme.txt records them), and this run was given $now. Re-assemble it with the pins it was cut with."
         }
 
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
@@ -3022,8 +3047,12 @@ the result in place of the marker, then cut again. The first:
     # The bundled nvme98 version is recorded in the release notes (nvme98's
     # maintainers): the cut fills the placeholder there, and a release whose
     # notes name another version, or none, is refused. A TEST cut is warned.
+    $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
+    if ($null -eq $nvme98 -and $notesText.Contains($nvme98NotesPlaceholder)) {
+        $why = "docs\using\release-notes.md still has the bundled nvme98 placeholder, and this cut bundles no nvme98: write that this download carries none in its place ('NVMe drives behind Thunderbolt or USB4')."
+        if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
+    }
     if ($null -ne $nvme98) {
-        $notesText = if (Test-Path -LiteralPath $notesPath) { [System.IO.File]::ReadAllText($notesPath) } else { "" }
         if (-not $notesText.Contains("nvme98 ``" + $nvme98.Version + "``")) {
             $why = "docs\using\release-notes.md does not name the bundled nvme98 ``$($nvme98.Version)``: write it in place of the placeholder in 'NVMe drives behind Thunderbolt or USB4'."
             if ($TestLabel -ne "") { Write-Warn $why } else { throw $why }
@@ -4073,6 +4102,8 @@ two must agree. Bump the version and rebuild the tool (xhciinst\build.cmd).
     # line is the one -UploadSetOnly reads ($nvme98ReadmePattern).
     if ($null -ne $nvme98) {
         $contents += ("  Bundled in this download: nvme98 {0}." -f $nvme98.Version)
+        $contents += ("  Pinned by SHA256SUMS.txt {0}, interface {1}{2}." -f $nvme98.SumsSha256, $nvme98.Interface,
+                      $(if ($nvme98.Overridden) { ", mismatch overridden" } else { "" }))
         $contents += ""
         if ($nvme98.Layout -eq "old") {
             $contents += "  RELEASE-X86\NVME98\ and RELEASE-X64\NVME98\ hold nvme98, an NVMe"
