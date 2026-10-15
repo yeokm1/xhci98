@@ -27,6 +27,7 @@ VOID CmReenumStart(PCM_NHI nhi)
     nhi->Reenum.SafeEject = nhi->Values.Value[CM_VAL_SAFE_EJECT];
     nhi->Reenum.Route = CM_ROUTE_NONE;
     CmNhiNamePorts(nhi);
+    CmNhiSetChanged(nhi);
     CmLogNote(nhi, "cm.reenum.start", nhi->Reenum.Starts);
 }
 

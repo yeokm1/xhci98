@@ -4370,6 +4370,11 @@ static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
         p->Bonded = FALSE;
         p->SingleLane = FALSE;
         cm->Counters.PortsPreserved++;
+        if (cm->Config.DeferFirstPoll && cm->Stage != TBT_U4_STAGE_RUNNING) {
+            /* Built by the caller's first poll, as found (TbtU4Poll). */
+            p->AsFoundOwed = TRUE;
+            return;
+        }
         tbtU4Connect(cm, p, TRUE);
         if (p->Dev.Present) {
             tbtU4DiscoverLinks(cm, p);
@@ -5213,6 +5218,15 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     tbtU4RetryQuarantine(cm);
     for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
+        if (p->AsFoundOwed) {
+            /* TBT_U4_CONFIG.DeferFirstPoll: the discovery's connect on the
+             * link as found, made here instead of in the start. */
+            p->AsFoundOwed = FALSE;
+            tbtU4Connect(cm, p, TRUE);
+            if (p->Dev.Present) {
+                tbtU4DiscoverLinks(cm, p);
+            }
+        }
         if (p->TmuQuarantine && p->State != TBT_U4_EMPTY && p->Dev.Present &&
             p->TmuConfigured) {
             if (tbtU4TmuDisable(cm, p) == TBT_OK) {

@@ -92,7 +92,9 @@
  *   - calls CmNhiNamePorts(nhi) after each XhciTbtTopoFind it acts on and
  *     before it fills Port[] from Topo.Set and publishes the claims: the
  *     router-named members join the set there (XhciTbtTopoAddNamed, which
- *     may void the discovery INCOMPLETE or MANY: discover again);
+ *     may void the discovery INCOMPLETE or MANY: discover again), and
+ *     CmNhiSetChanged(nhi) once the set and its claims are rebuilt, so
+ *     the learning baseline is taken again over the set as it now is;
  *   - keeps Port[i] for Topo.Set[i], i below Topo.Tunnels, its Flags'
  *     CM_PORT_ACTIVE read by the NHI's learning (XhciTbtLearn's `active`)
  *     and its eject hook's bridge-to-port lookup.

@@ -406,13 +406,31 @@ VOID CmNhiUnbind(PCM_NHI nhi)
  */
 BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
 {
+    const TBT_U4_PORT *p;
+    ULONG i;
+
     if (!nhi->U4On) {
         return TRUE;
     }
-    return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && !nhi->Suspended &&
-                     !nhi->U4.Failed && !nhi->U4.Suspended &&
-                     !nhi->Power.FwReadyFailed && nhi->U4.PortCount != 0 &&
-                     !TbtU4AnyRouterConnected(&nhi->U4));
+    if (nhi->Stage != CM_STAGE_ACTIVE || nhi->Suspended || nhi->U4.Failed ||
+        nhi->U4.Suspended || nhi->Power.FwReadyFailed ||
+        nhi->U4.PortCount == 0 || TbtU4AnyRouterConnected(&nhi->U4)) {
+        return FALSE;
+    }
+    /* Affirmative disconnect evidence on every port: the last check left
+     * it EMPTY (lane 0 in CLd, record 22 section 6.4 step 1) with nothing
+     * owed to it. A port FAILED, UNSUPPORTED, in a sequence, or with a
+     * check, an unplug or a residual sweep outstanding may have a router
+     * on its link that this instance never enumerated. */
+    for (i = 1; i <= nhi->U4.PortCount; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p == NULL || p->State != TBT_U4_EMPTY || p->Dev.Present ||
+            p->CheckPending || p->UnplugPending || p->HostResidual ||
+            p->AsFoundOwed) {
+            return FALSE;
+        }
+    }
+    return TRUE;
 }
 
 /* The tunnel-port set the re-enumeration seam discovered, readable: its
@@ -614,18 +632,27 @@ static VOID cmU4LogRouter(PCM_NHI nhi, ULONG port)
 
 /*
  * One drain of the USB4 profile's actions (record 22 section 7.6, tbt_topo.h
- * learning rules): the batch taken off the core's queue; XhciTbtLearnUp for
- * every tunnel up of it first; then each action, oldest first, to the
- * re-enumeration seam in its form (unless XhciCmReenum is 0), a tunnel up
- * then learned for its port, a tunnel down arming the baseline again.
+ * learning rules), in two halves. CmNhiU4Take: the batch taken off the
+ * core's queue; XhciTbtLearnUp for every tunnel up of it; the nvme98
+ * channel's UP published for each live one. cmU4Deliver: each action,
+ * oldest first, to the re-enumeration seam in its form (unless
+ * XhciCmReenum is 0), a tunnel up then learned for its port, a tunnel down
+ * arming the baseline again. The resume takes the batch before it
+ * releases the bridges' held D0 IRPs and delivers it after, so a rebuilt
+ * tunnel's UP is published before any child driver can resume (cm.h,
+ * CM_U4_UP_HOOK). A batch taken and not yet delivered is delivered before
+ * another is taken.
  */
-static VOID cmU4Drain(PCM_NHI nhi)
+VOID CmNhiU4Take(PCM_NHI nhi)
 {
     TBT_ICM_ACTION a;
     PTBT_U4_ACTION u;
     ULONG n;
     ULONG i;
 
+    if (!nhi->U4On || nhi->U4BatchCount != 0) {
+        return;
+    }
     n = 0;
     while (n < TBT_U4_ACTION_QUEUE &&
            TbtU4NextAction(&nhi->U4, &nhi->U4Batch[n])) {
@@ -648,6 +675,30 @@ static VOID cmU4Drain(PCM_NHI nhi)
             XhciTbtLearnUp(&nhi->Binds, u->Port);
         }
     }
+    if (nhi->U4UpHook != NULL) {
+        for (i = 0; i < n; i++) {
+            u = &nhi->U4Batch[i];
+            if (u->Kind != TBT_U4_ACT_TUNNEL_UP) {
+                continue;
+            }
+            cmU4ToIcm(u, &a);
+            if (CmNhiActionLive(nhi, &a)) {
+                /* The nvme98 channel's UP, before the endpoint is exposed;
+                 * never for a connection that has already gone. */
+                nhi->U4UpHook(nhi->U4HookContext, u);
+            }
+        }
+    }
+}
+
+static VOID cmU4Deliver(PCM_NHI nhi)
+{
+    TBT_ICM_ACTION a;
+    PTBT_U4_ACTION u;
+    ULONG n;
+    ULONG i;
+
+    n = nhi->U4BatchCount;
     for (i = 0; i < n; i++) {
         u = &nhi->U4Batch[i];
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
@@ -669,12 +720,6 @@ static VOID cmU4Drain(PCM_NHI nhi)
             cmU4LogRouter(nhi, u->Port);
         }
         cmU4ToIcm(u, &a);
-        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && nhi->U4UpHook != NULL &&
-            CmNhiActionLive(nhi, &a)) {
-            /* The nvme98 channel's UP, before the endpoint is exposed;
-             * never for a connection that has already gone. */
-            nhi->U4UpHook(nhi->U4HookContext, u);
-        }
         if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
             nhi->Counters.ReenumSkipped++;
         } else if (nhi->ReenumOn) {
@@ -687,7 +732,30 @@ static VOID cmU4Drain(PCM_NHI nhi)
             nhi->ArmOwed = 1;
         }
     }
+    nhi->U4BatchCount = 0;
     if (nhi->ArmOwed) {
+        cmU4Arm(nhi);
+    }
+}
+
+static VOID cmU4Drain(PCM_NHI nhi)
+{
+    if (nhi->U4BatchCount != 0) {
+        /* A batch the resume took (its UPs published) comes first. */
+        cmU4Deliver(nhi);
+    }
+    CmNhiU4Take(nhi);
+    cmU4Deliver(nhi);
+}
+
+/*
+ * The re-enumeration seam's discovery changed the set (cm_reenum.h): the
+ * learning baseline is taken again over the set as it now is; the
+ * correspondence and the pending marks, kept by bridge and port, stand.
+ */
+VOID CmNhiSetChanged(PCM_NHI nhi)
+{
+    if (nhi->U4On) {
         cmU4Arm(nhi);
     }
 }

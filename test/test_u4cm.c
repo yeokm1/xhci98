@@ -957,6 +957,39 @@ static void test_dp_preserved(void)
     p = TbtU4Port(&g_cm, 1);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "PTO clear beside DP: HELD");
     CHECK(!p->Pcie.Up && !fabPcieUp(&g_fab, 1), "no PCIe tunnel built");
+
+    /* DeferFirstPoll: the PCIe tunnel beside a preserved DP tunnel is not
+     * built in the start, and the first poll builds it as found. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[0].Adp[8].Path + 16, 0, 8);
+    memset(g_fab.R[0].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[dev].Adp[5].Path + 16, 0, 8);
+    g_fab.R[0].Adp[8].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.R[dev].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    fabAddDpOut(&g_fab, dev, 8);
+    g_fab.R[0].Adp[5].Path[2 * 9] = 0x80000000UL | 12UL | (1UL << 11);
+    g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 13UL | (1UL << 11);
+    g_fab.R[dev].Adp[1].Path[2 * 12] = 0x80000000UL | 9UL | (8UL << 11);
+    g_fab.R[dev].Adp[1].Path[2 * 13] = 0x80000000UL | 8UL | (8UL << 11);
+    g_fab.R[dev].Adp[8].Path[2 * 8] = 0x80000000UL | 14UL | (1UL << 11);
+    g_fab.R[0].Adp[1].Path[2 * 14] = 0x80000000UL | 8UL | (5UL << 11);
+    g_fab.R[0].Adp[1].Cs[5] |= TBT_ADP5_DHP;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    c.DeferFirstPoll = TRUE;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 1);
+    CHECK(p->DpPreserved && p->AsFoundOwed, "deferred: the DP tunnel noted, its connect owed");
+    CHECK(!p->Pcie.Up && !fabPcieUp(&g_fab, 1), "deferred: no PCIe built in the start");
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "deferred: the first poll builds it: UP");
+    CHECK(!p->AsFoundOwed, "deferred: the owed connect made");
+    CHECK(g_fab.R[0].Adp[5].Path[2 * 9] & 0x80000000UL, "deferred: the DP main path untouched");
 }
 
 /* ------------------------------------------------------------------ */

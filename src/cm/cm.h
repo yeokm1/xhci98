@@ -324,6 +324,10 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
                      PVOID context);
 /* For cm_reenum.c, profile-neutral (cm_reenum.h, "THE USB4 PROFILE"). */
 VOID CmNhiNamePorts(PCM_NHI nhi);
+VOID CmNhiSetChanged(PCM_NHI nhi);
+/* cm_power.c's resume: the USB4 batch taken and its UPs published before
+ * the held bridges are released (cm_nhi.c, cmU4Drain). */
+VOID CmNhiU4Take(PCM_NHI nhi);
 VOID CmNhiWaitService(PCM_NHI nhi);
 BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action);
 ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action);

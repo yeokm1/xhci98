@@ -274,6 +274,9 @@ typedef struct _TBT_U4_PORT {
                               * next readable check classifies it first */
     BOOLEAN LostKnown;      /* a resume found its configuration lost (TopologyID
                              * Valid clear): that alone is no new evidence */
+    BOOLEAN AsFoundOwed;    /* DeferFirstPoll: the start found only tunnels
+                             * this driver does not build (DpPreserved); the
+                             * first poll connects it on the link as found */
     TBT_U4_ROUTER Dev;
 
     /* Lane fields this driver changed (section 6.5), restored at unplug. */
