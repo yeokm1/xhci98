@@ -722,3 +722,35 @@ up reason 0`, `tp_insert`; per unplug `tunnel down reason 3`,
 `notes.txt` (the leg's narrative and the screenshot it cites), the
 screendumps `s*.png`, the serial log (`G <tag>` device dumps and the
 installer log), `trace-*.log` and `debugcon-*.log`.
+
+### The 98 SE worker, the resume deadline and the hold cap (2026-10-15)
+
+**Verdict: passes.** On Windows 98 SE a CONFIGMG call made while an Add New
+Hardware wizard is open blocks until the wizard closes; made on the
+connection-manager thread it left ring 0 unserviced (an unplug unseen until
+the wizard was cancelled, found under the USB4 profile in run 40). Every
+CONFIGMG call is now the 98 worker's (`cm_cfgwk.c`); the connection-manager
+thread only posts requests (latest per member wins). The ICM client bounds
+its own resume at 270 s, and the bridges' hold is a fixed 5-minute cap under
+either profile (record 21 section 6.3). The 98 SE listing rule of NUSB's
+"Unplug or Eject Hardware" was read (record 21 section 7.4).
+
+| Leg | Guest | Reading |
+|---|---|---|
+| Wizard open (`reenum-adl`, the `u98-adl3` setup) | 98 SE, `usb4-generic`, `intel-adl`, `preos-cm=on`; the NVMe "PCI Card" wizard left open | unplug: `u4.linkdown=01000109`, the tunnel-down action, `cm.reenum.down.poll=00000404`; re-plug: `u4.router.up`, `u4.pcie.up=00010809`, `u4.usb3.up=00010A0B`, the tunnel-up action, `cm.reenum.up.poll=00000404` - all with the wizard still open; after Cancel the worker drained: `query-remove=0` (accepted), `remove=5` (the devnode already gone), the stale removal's own `reenumerate=2800`, the up request's `reenumerate=2800`, `removable=0`, and the wizard came back for the re-plugged device |
+| tb3 cycle (`reenum-98`) | 98 SE, Alpine Ridge model, `nvme98` installed | plug: approved, `cm.reenum.up.poll=00000404`, `reenumerate=00020800`; unplug: `query-remove=0`, `remove=0`, `reenumerate=00020800`; re-plug: `reenumerate=00020800`, no wizard, no error |
+| 2000 cycle (`reenum-2k`) | 2000 SP4, Alpine Ridge model, the filter and `nvme98` installed | plug: tunnel up, the NVMe found, the "Unplug or Eject Hardware" icon in the tray; unplug without a stop: the device removed, the Unsafe Removal dialog listing "NVM Express Controller (nvme98)" and its disk (as recorded above for 2000); re-plug: tunnel up, the icon back |
+
+The first wizard-open run (before the fix to the removal step) showed the
+worker's Query_Remove_SubTree blocking behind the wizard while a re-plug
+made the request stale, after which the accepted query went without its
+Remove_SubTree; 98 has no service to cancel an accepted query, so the step
+now always completes it, and follows a stale one with its own rescan. Host
+checks: `test_tbt_icm` (the 270 s deadline: clipping, expiry mid-drain, the
+last attempt, a stopped and a partway-stopped clock, a frame flood during the
+host poll) and `test_cm_ports` (the fixed watchdog, the known-children
+pruning). The x86 `qemu` build passes every gate.
+
+98 SE's applet (NUSB's `HOTPLUG.DLL`) lists a device only when a device
+interface of NUSB's class is registered on its parent; our devices, marked
+`DN_REMOVABLE`, are not listed (record 21 section 7.4). ME was not read.

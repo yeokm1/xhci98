@@ -1613,11 +1613,15 @@ driver makes one:
   invalidation only requests later PnP processing and is not a barrier,
   so the drivers below may resume against an absent tunnel before their
   removal - the failure path limits that window and does not close it.
-- The bound is the NHI's own resume path's, the sum of its steps'
-  timeouts and tries for its row (the AR row: four 5 s `driver ready`
-  attempts and the 50-try host-router poll; the ICL row's 20 s attempts
-  are longer), plus 10 s, after which the filter releases the IRP itself
-  and takes the failure path; it never treats the expiry as success.
+- The hold ends at the earlier of the NHI's resume result and a fixed
+  5-minute cap, the same on every NT target and under either profile,
+  below the power manager's own watchdog; the client bounds its own
+  resume at 270 s (`TBT_ICM_RESUME_BUDGET_MS`: bring-up, retries,
+  reconciliation and the announcements' drain, each wait clipped to what
+  is left), so its result comes inside the cap. The client's computed
+  bound (the sum of its steps' timeouts and tries for its row, plus 10 s)
+  is logged only. At the cap the filter releases the IRP itself and takes
+  the failure path; it never treats the expiry as success.
 - An NHI that does not resume at all (removed, or refused at resume)
   takes the failure path for every held member at its removal.
 
@@ -1990,6 +1994,35 @@ and safe eject is NT-only, with the release-notes line "Safe eject is
 offered on Windows 2000 and later only; on Windows 98 SE and ME, close the
 device's files and unplug it" - the unplug itself is the existing path, the
 removal of the vanished subtree through CONFIGMG.
+
+As built (2026-10-15), every CONFIGMG call of this half is the 98 worker's
+(`cm_cfgwk.c`), never the connection-manager thread's, because a call made
+while an Add New Hardware wizard is open blocks until the wizard closes.
+The worker remembers each member's children by devnode handle (the
+"known" set, so a child is marked once), and CONFIGMG reuses a freed
+devnode's handle: the set is therefore pruned to the bridge's present
+children at every walk, and a tunnel down asks for a walk, so a child that
+left by any removal - the worker's own, the user's, or Windows' - is
+forgotten before a re-plug can reuse its handle, and the re-plugged device
+is marked as new. A query-remove the worker made and Windows accepted is
+always followed by its `Remove_SubTree`, since Windows 98 has no service
+that cancels an accepted query.
+
+Under design record 22's software connection manager on Windows 98 SE
+and ME, a removal the user makes (the Device Manager's, an eject tool's,
+or any other) does not reach the per-port teardown: there is no child
+filter on 9x to report it, so the tunnel stays up until the unplug, which
+then takes the ordinary tunnel-down path.
+
+What 98 SE's "Unplug or Eject Hardware" lists was read from the applet
+NUSB installs (`HOTPLUG.DLL`): a device is listed when a device interface
+of NUSB's class `{40EF6CF0-2DB6-11D3-9F78-00C04F6D5135}` is registered on
+its **parent** (an enumeration marker: the applet never opens the
+interface or sends it a request); `DN_REMOVABLE` and the Capabilities
+value are read but decide nothing. Only NUSB's own mappers register that
+class, so a device behind a tunnel bridge, marked `DN_REMOVABLE`, is not
+listed. Stopping a listed device query-removes it, then its parent, and
+removes the device's subtree only, each step needing the last to succeed.
 
 Release-notes lines, drafted by `39.final` and published with the
 `3.0.0.0` cut by `40.final`: which half shipped; that a device tunnelled
