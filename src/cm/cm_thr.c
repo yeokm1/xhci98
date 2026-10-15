@@ -293,6 +293,23 @@ static ULONG cmNowMs(PVOID context)
     return nhi->ClockMs;
 }
 
+/*
+ * TBT_HOST.ClockUs (record 22 section 5.3): the low 32 bits of the tick
+ * count times the tick period in microseconds, modulo 2^32. Every reader
+ * compares two readings by unsigned difference only, so the product's wrap
+ * and the tick count's are both harmless; quantised to TickUs. IRQL: any
+ * (the thread calls it).
+ */
+static ULONG cmClockUs(PVOID context)
+{
+    PCM_NHI nhi;
+    LARGE_INTEGER ticks;
+
+    nhi = (PCM_NHI)context;
+    KeQueryTickCount(&ticks);
+    return ticks.LowPart * nhi->ClockTickUs;
+}
+
 static VOID cmHostLog(PVOID context, const char *label, ULONG value)
 {
     CmLogNote((PCM_NHI)context, label, value);
@@ -320,6 +337,8 @@ VOID CmThrAccessors(PCM_NHI nhi)
     if (nhi->ClockTickUs == 0) {
         nhi->ClockTickUs = 1;
     }
+    nhi->Host.ClockUs = cmClockUs;
+    nhi->Host.TickUs = nhi->ClockTickUs;
     KeQueryTickCount(&ticks);
     nhi->ClockLast = ticks.LowPart;
     nhi->ClockRest = 0;
@@ -492,10 +511,11 @@ VOID CmPowerDrain(PCM_NHI nhi)
 /* The thread                                                             */
 /* ---------------------------------------------------------------------- */
 
-/* A client to poll: bound, in D0, not failed. */
+/* A client to poll: bound (the ICM's) or running (the USB4 profile's), in
+ * D0, not failed. */
 static BOOLEAN cmPolling(PCM_NHI nhi)
 {
-    return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && nhi->Icm.Bound &&
+    return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && CmNhiRunning(nhi) &&
                      nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended);
 }
 

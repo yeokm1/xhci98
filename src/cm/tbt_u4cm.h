@@ -124,6 +124,11 @@ typedef struct _TBT_U4_CONFIG {
     ULONG PreOsCleanup;     /* XhciCmPreOsCleanup 0, 1 or 2 (U2) */
     ULONG RingFlags;        /* tbt_hw.c TbtHwRingFlags; TAKEOVER is added */
     ULONG HostInterfaceCaps;/* as TbtHwSelect read it (Spec Table 12-11) */
+    /* TbtU4Start ends without its first TbtU4Poll, so no port found empty
+     * at start is connected (and no tunnel built) until the caller's own
+     * first TbtU4Poll: the driver takes its learning baseline of the
+     * tunnel ports between the two (record 22 section 7.6). Default FALSE. */
+    BOOLEAN DeferFirstPoll;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -269,6 +274,9 @@ typedef struct _TBT_U4_PORT {
                               * next readable check classifies it first */
     BOOLEAN LostKnown;      /* a resume found its configuration lost (TopologyID
                              * Valid clear): that alone is no new evidence */
+    BOOLEAN AsFoundOwed;    /* DeferFirstPoll: the start found only tunnels
+                             * this driver does not build (DpPreserved); the
+                             * first poll connects it on the link as found */
     TBT_U4_ROUTER Dev;
 
     /* Lane fields this driver changed (section 6.5), restored at unplug. */
@@ -572,6 +580,10 @@ VOID TbtU4PresenceSample(PTBT_U4CM cm, ULONG port, ULONG generation,
 /* Section 10.4: the orderly teardown of one port's tunnels (section 9.3
  * step 1, both ends), the port staying down until a re-plug. */
 LONG TbtU4Eject(PTBT_U4CM cm, ULONG port);
+/* The same for the PCIe tunnel alone: a USB3 tunnel on the port stays up,
+ * its devices being the host xHCI's, which the PCI-side eject never asked
+ * to stop (task 40-A.9's entry point). */
+LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port);
 
 /* Section 7.6 and 11: record every tunnel up as an obligation, then stop
  * the rings. */
@@ -597,6 +609,13 @@ VOID TbtU4Stop(PTBT_U4CM cm);
 /* Whether a device router is connected on any port (record 22 section
  * 4.2's condition for clearing force power at stop). */
 BOOLEAN TbtU4AnyRouterConnected(const TBT_U4CM *cm);
+
+/* A fresh reading, on the running rings, before TbtU4Stop: TRUE only when
+ * every host USB4 port's lane 0 reads its Adapter State as CLd (record 22
+ * section 6.4 step 1) - each read answered, none connected, transitional,
+ * disabled or reserved. FALSE when failed, suspended or not running. The
+ * evidence record 22 section 4.2 asks before force power is cleared. */
+BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm);
 
 /* A port by its 1-based index, for the log and the snapshot. */
 const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port);
