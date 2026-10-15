@@ -1471,7 +1471,10 @@ deferred on NT, and `WININIT.INI` is never edited.
   `.BAK` with no tool beside it is an interrupted replacement and is
   renamed back - if that fails, the tool's part of the run stops there
   with steps left (exit 4) - and a `.BAK` beside the tool is deleted
-  (`inst_tray_leftover`); on NT a `.DEL` that no longer runs is deleted.
+  (`inst_tray_leftover`); on NT a `.DEL` that no longer runs is deleted,
+  and one still in use has its deletion at the restart asked again (a
+  restart is then asked for; a failure is reported, with steps left). A
+  leftover that cannot be deleted is reported, with steps left.
 - **Install and update.** Every run that passes its confirmation, on both
   routes, after the drivers (NT: after the results and `/restage`'s work
   file; 98 SE and ME: after the registry values, before the printed
@@ -1515,6 +1518,10 @@ deferred on NT, and `WININIT.INI` is never edited.
   for removal too; the next install or uninstall deletes a leftover
   `.DEL`. On 98 SE and ME it is left and reported, with steps left: it no
   longer starts at login, and the next uninstall deletes it.
+- **Exit codes.** The tool's steps left and failures join the run's: on
+  98 SE and ME an install ends with steps left when a device or the tool
+  leaves one, and an uninstall, whose manual steps are always left, ends
+  with exit 4 unless something failed (exit 2), as on NT.
 - **The security of the shared objects.** `/devices` and `/eject` take
   `Global\XhciinstTbAsk` (`XhciinstTbAsk` on 98 SE and ME), which
   `XHCITR`'s eject takes too. It and the maintenance mutex are opened
