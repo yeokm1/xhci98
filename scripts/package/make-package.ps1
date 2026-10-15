@@ -178,6 +178,33 @@ packager signs; nothing is signed by hand). Without it the package is staged
 unsigned, as every package before 2.3.0.0 was: enough for a guest started
 with F8, and make-release.ps1 refuses to publish it.
 
+.PARAMETER SignOnly
+Sign the binaries a gated scripts\build-driver.cmd run recorded, without
+running that run's host test suite and import gates again (roadmap-usb4.md
+SIGN.1, owner 2026-10-16). Only with -TestSignPfx, and refused with
+-SkipBinaryGates, -SkipPackageGate and the two experiment packages.
+
+build-driver.cmd writes out\gated-<arch>-<flavour>.txt once every gate of a
+flavour has passed: each gated binary's SHA-256, the commit and whether the
+tree had uncommitted changes, whether its import gates had their target
+evidence, and the time. This mode reads the one for -Arch and -Flavor
+before anything else and refuses unless it is for this architecture and
+flavour, every binary to be staged has exactly the SHA-256 recorded for it,
+the build ran in a clean tree, the tree is now at that same commit with no
+uncommitted change, and the build's import gates had their target evidence
+(or this run passes -NoTargetEvidence too). Each binary's copy is checked
+against its hash again before it is signed.
+
+What it skips is the host test suite and the import gates (and the x86
+helper's toolchain check), which are about the bytes; what it keeps is
+everything about the package: the flavour markers, every INF gate before
+staging (the media layout one included), the staged package's gate, the
+version checks and the signature checks. The run prints which is which.
+
+.PARAMETER GatedManifestPath
+The gated build's record -SignOnly reads, overriding
+out\gated-<arch>-<flavour>.txt. Exists for the packager's own self-tests.
+
 .PARAMETER Nvme98Version
 The nvme98 build to bundle (owner, 2026-10-15): nvme98 is a separate
 BSD-3-Clause project, and the package may carry one of its released builds,
@@ -324,6 +351,8 @@ param(
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
     [string]$TestSignPfx = "",
+    [switch]$SignOnly,
+    [string]$GatedManifestPath = "",
     [string]$Nvme98Version = "",
     [string]$Nvme98Dir = "",
     [string]$Nvme98SumsSha256 = "",
@@ -342,6 +371,12 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
+#
+# The host suite and the import gates run unless the caller is a self-test
+# staging stand-ins (-SkipBinaryGates) or -SignOnly has matched every binary
+# to the gated build's record, whose run already ran them on those bytes.
+#
+$runBinaryGates = -not ($SkipBinaryGates -or $SignOnly)
 #
 # The three things -Arch moves, in one place. build-driver.cmd puts the amd64
 # output at src\obj<flavour>\amd64 beside i386 rather than in a second obj
@@ -527,7 +562,8 @@ function Invoke-TestSign {
     # never echoed: the command is not printed and SignTool's own output
     # does not repeat it.
     param([string]$Source, [string]$Dest, [string]$Pfx, [string]$Password,
-          [string]$Thumbprint, [string]$SignTool, [string]$Label)
+          [string]$Thumbprint, [string]$SignTool, [string]$Label,
+          [string]$ExpectSha256 = "")
 
     if ($null -ne (Get-EmbeddedSignature -Path $Source)) {
         throw @"
@@ -538,6 +574,11 @@ a signed input is a binary nobody can tie to a build. Rebuild it:
 "@
     }
     Copy-Item -LiteralPath $Source -Destination $Dest -Force
+    # -SignOnly: the copy about to be signed is the gated build's, checked
+    # here rather than only at the start of the run.
+    if ($ExpectSha256 -ne "" -and (Get-FileSha256 -Path $Dest) -ne $ExpectSha256) {
+        throw "the copy of $Label to be signed is not the binary the build gated (its SHA-256 is not $ExpectSha256); '$Source' changed during this run."
+    }
     $before = Get-UserKeyContainers
     $signArgs = @("sign", "/q", "/f", $Pfx)
     if ($Password -ne "") { $signArgs += @("/p", $Password) }
@@ -613,6 +654,71 @@ StartController (task 12.3), or an unpadded DriverVer date (task 12.4) - and a
 package carrying both varies two, which measures neither. Build them one at a
 time; they land in different directories on purpose.
 "@
+    }
+
+    # --- -SignOnly: the gated build's record, before anything else ----------
+    #
+    # (roadmap-usb4.md SIGN.1.) Checked first, so a refusal names the binary or
+    # the record rather than whatever later check a stale binary would trip.
+    $gated = $null
+    if ($SignOnly) {
+        Write-Step "sign-only: the gated build's record"
+        if ($TestSignPfx -eq "") {
+            throw @"
+-SignOnly was given without -TestSignPfx. It exists to sign the binaries a
+gated scripts\build-driver.cmd run recorded without running that run's gates
+again; an unsigned package has nothing to skip them for. Run this without
+-SignOnly, or name the key:
+  make-package.ps1 -Flavor $Flavor -Arch $Arch -TestSignPfx <pfx> -SignOnly
+"@
+        }
+        if ($SkipBinaryGates -or $SkipPackageGate) {
+            throw "-SignOnly replaces the host suite and the import gates with the gated build's record, and nothing else: it does not combine with -SkipBinaryGates or -SkipPackageGate."
+        }
+        if ($FailStartArtifact -or $UnpaddedDriverVerExperiment) {
+            throw "-SignOnly does not combine with -FailStartArtifact or -UnpaddedDriverVerExperiment."
+        }
+        if ($GatedManifestPath -eq "") {
+            $GatedManifestPath = Get-GatedManifestPath -Repo $repo -Arch $Arch -Flavor $Flavor
+        }
+        if (-not (Test-Path -LiteralPath $GatedManifestPath -PathType Leaf)) {
+            throw @"
+-SignOnly: no gated build record at '$GatedManifestPath'.
+scripts\build-driver.cmd writes it once every gate of the flavour has passed,
+and deletes it when that flavour's build starts. Build and gate it first:
+  scripts\build-driver.cmd $Flavor$(if ($Arch -eq "amd64") { " -amd64" })
+"@
+        }
+        try {
+            $gated = ConvertFrom-GatedManifest -Text ([System.IO.File]::ReadAllText($GatedManifestPath))
+        } catch {
+            throw "-SignOnly: '$GatedManifestPath' is not a gated build record this script can read: $($_.Exception.Message)."
+        }
+        $gatedBinaries = @{ "xhci98.sys" = $DriverPath }
+        if ($stageUas)  { $gatedBinaries["xhciuas.sys"] = $UasDriverPath }
+        if ($stageCm)   { $gatedBinaries["xhcicm.sys"] = $CmDriverPath }
+        if ($stageHlpr) { $gatedBinaries["xhcihlpr.sys"] = $HlprDriverPath }
+        $tree = Get-GitTreeState -Repo $repo
+        $why = Get-GatedManifestFault -Manifest $gated -Arch $Arch -Flavor $Flavor -Binaries $gatedBinaries `
+            -Head $tree.Head -Dirty $tree.Dirty -NoTargetEvidence ([bool]$NoTargetEvidence)
+        if ($why -ne "") {
+            throw @"
+-SignOnly refused: '$GatedManifestPath' does not admit this package: $why.
+Rebuild and gate it (scripts\build-driver.cmd $Flavor$(if ($Arch -eq "amd64") { " -amd64" })) from a clean,
+committed tree, or run this without -SignOnly to run every gate here.
+"@
+        }
+        Write-Ok ("{0} records the {1} {2} build of commit {3} at {4}, and every binary to be staged is its gated bytes:" -f `
+            $GatedManifestPath, $Flavor, $Arch, $gated.Commit, $gated.Time)
+        foreach ($name in ($gatedBinaries.Keys | Sort-Object)) {
+            Write-Host ("  {0,-13} {1}" -f $name, $gated.Sha256[$name])
+        }
+        Write-Host "  REUSED from the gated build, not run here: the host test suite; the import"
+        Write-Host ("  gates of {0}{1}." -f (($gatedBinaries.Keys | Sort-Object) -join ", "),
+            $(if ($stageHlpr) { ", and the helper's toolchain check" } else { "" }))
+        Write-Host "  RUN here: the flavour markers, the INF gates before staging (the media"
+        Write-Host "  layout one included), the staged package's gate, the version checks and"
+        Write-Host "  the test signature with its checks."
     }
 
     # The x64 test signature (design record 19) is the amd64 package's alone.
@@ -830,7 +936,7 @@ Clear XHCI_EXTRA_DEFINES and rebuild:
     # property of the package rather than of how it was built (roadmap Phase 4
     # task 1). Both are seconds; a wrong binary on a guest is a reboot cycle at
     # best and a Win2000 bugcheck-and-recover at worst.
-    if (-not $SkipBinaryGates) {
+    if ($runBinaryGates) {
         Write-Step "host test suite"
         $hostTests = Join-Path $repo "test\run-host-tests.cmd"
         # ErrorActionPreference is relaxed around every native call in this
@@ -911,7 +1017,7 @@ The package carries the UAS class driver. Build it first:
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            if (-not $SkipBinaryGates) {
+            if ($runBinaryGates) {
                 $uasGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                  (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
                                  "-Image", $UasDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
@@ -954,7 +1060,7 @@ The package carries the Thunderbolt 3 connection manager. Build it first:
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            if (-not $SkipBinaryGates) {
+            if ($runBinaryGates) {
                 $cmGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                 (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
                                 "-Image", $CmDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
@@ -999,7 +1105,7 @@ The x86 package carries the x86 helper its INF names. Build it first
         if ($hlprFlavour -ne $Flavor) {
             throw "'$HlprDriverPath' carries the flavour marker '$hlprFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
         }
-        if (-not $SkipBinaryGates) {
+        if ($runBinaryGates) {
             # The toolchain the helper was decided on (design record 18
             # section 15.10), held again here for a helper named by
             # -HlprDriverPath as for one build-driver.cmd made: its build's
@@ -1075,18 +1181,21 @@ The x86 package carries the x86 helper its INF names. Build it first
         Ensure-Directory $signDir
         $signedDriver = Join-Path $signDir "xhci98.sys"
         Invoke-TestSign -Source $DriverPath -Dest $signedDriver -Pfx $TestSignPfx -Password $testSignPassword `
-                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys"
+                        -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhci98.sys" `
+                        -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhci98.sys"] } else { "" })
         $DriverPath = $signedDriver
         if ($stageUas -and (Test-Path -LiteralPath $UasDriverPath)) {
             $signedUas = Join-Path $signDir "xhciuas.sys"
             Invoke-TestSign -Source $UasDriverPath -Dest $signedUas -Pfx $TestSignPfx -Password $testSignPassword `
-                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys"
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhciuas.sys" `
+                            -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhciuas.sys"] } else { "" })
             $UasDriverPath = $signedUas
         }
         if ($stageCm -and (Test-Path -LiteralPath $CmDriverPath)) {
             $signedCm = Join-Path $signDir "xhcicm.sys"
             Invoke-TestSign -Source $CmDriverPath -Dest $signedCm -Pfx $TestSignPfx -Password $testSignPassword `
-                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhcicm.sys"
+                            -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label "xhcicm.sys" `
+                            -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhcicm.sys"] } else { "" })
             $CmDriverPath = $signedCm
         }
         $testSignPassword = $null
@@ -1424,6 +1533,9 @@ that does not exist, or clear that one yourself.
     }
 
     Write-Step "Done"
+    if ($SignOnly) {
+        Write-Host ("Sign-only: the host test suite and the import gates were those of the gated build of commit {0} ({1}); every other check ran here." -f $gated.Commit, $gated.Time)
+    }
     if ($FailStartArtifact) {
         Write-Warn "This is the failed-start artifact. It will install and then not start."
         Write-Host "Run it from a snapshot you can revert, and read the run sheet first:"

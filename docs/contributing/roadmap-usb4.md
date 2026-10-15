@@ -461,6 +461,7 @@ runs the INF gate against the staged package, and signs. The guarantee
 that only a tested binary is signed stays; the time goes. Agreed by the
 owner on 2026-10-16, after the `3.0.0.0` cut.
 
-Status: not opened, unnumbered and unversioned.
+Status: SIGN.1 done 2026-10-16; unnumbered and unversioned. The positive
+signing run is the owner's, who holds the key.
 
-- [ ] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash
+- [x] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash (done 2026-10-16: `out\gated-<arch>-<flavour>.txt` written by `scripts\package\write-gated-manifest.ps1` once a flavour's gates pass; `-SignOnly` refuses without `-TestSignPfx`, without a record, for another architecture or flavour, for any staged binary not of its recorded SHA-256, and unless the build and the tree are both clean at one commit; it skips the host suite and the import gates and keeps the flavour markers, every INF gate, the staged package's gate, the version checks and the signature checks; `test-package.ps1` covers the parse and each refusal on fixtures; `build-and-test.md`, "Since 2.3.0.0 the x64 package is test-signed")

@@ -66,6 +66,12 @@ rem      source stamp, and its four INFs' own gate
 rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
 rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
 rem      xhcicmf-amd64.inf on every build)
+rem  15. once every gate of a flavour has passed, the gated binaries' SHA-256,
+rem      the commit and the time in out\gated-<arch>-<flavour>.txt
+rem      (scripts\package\write-gated-manifest.ps1; roadmap-usb4.md SIGN.1),
+rem      which make-package.ps1 -SignOnly reads instead of running the host
+rem      suite and the import gates again. It is deleted when the flavour's
+rem      build starts, so a flavour that fails leaves none
 rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
@@ -496,6 +502,8 @@ echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
 if /i "%ARCH%"=="amd64" (
     echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Arch amd64
+    echo and, to test-sign the gated binaries without running the gates again:
+    echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Arch amd64 -Flavor ^<flavour^> -TestSignPfx ^<pfx^> -SignOnly
 ) else (
     echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
 )
@@ -626,6 +634,12 @@ rem objchk -> buildchk, objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
 rem names build.exe writes its log and error file under, which are BUILD_ALT_DIR
 rem with "build" in front. The substitution below is the same rule spelled once.
 set "LOGBASE=%REPO%\src\build%OBJDIR:obj=%"
+rem The record of the last gated build of this flavour goes before anything is
+rem rebuilt: from here until :recordgated it describes binaries that may no
+rem longer exist, and a failed build must not leave it behind.
+set "GATEDREC=%REPO%\out\gated-%ARCH%-%FLAVOR%.txt"
+if exist "%GATEDREC%" del "%GATEDREC%"
+if exist "%GATEDREC%" goto gatedrecstale
 
 echo.
 echo === build %FLAVOR% ===
@@ -680,8 +694,31 @@ call :buildhlpr %FLAVOR%
 if errorlevel 1 goto hlprfail
 :skiphlpr
 
+rem Every gate of this flavour has passed: record what they read (roadmap-usb4.md
+rem SIGN.1), for make-package.ps1 -SignOnly.
+echo.
+echo === gated build record (%FLAVOR%, %ARCH%) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\package\write-gated-manifest.ps1" -Arch %ARCH% -Flavor %FLAVOR% %GATEOPT%
+if errorlevel 1 goto gatedrecfail
+
 endlocal
 exit /b 0
+
+:gatedrecstale
+echo.
+echo ERROR: could not delete the record of the last gated %FLAVOR% build,
+echo "%GATEDREC%". It would outlive the binaries it describes.
+endlocal
+exit /b 1
+
+:gatedrecfail
+echo.
+echo ERROR: the %FLAVOR% build passed its gates, but its record could not be
+echo written - see above. make-package.ps1 -SignOnly needs it; a package built
+echo without -SignOnly runs the gates again and does not.
+endlocal
+exit /b 1
 
 rem ------------------------------------------------------------------
 rem :buildhlpr <release|debug|qemu>

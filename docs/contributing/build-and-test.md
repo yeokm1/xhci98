@@ -131,7 +131,7 @@ Setup scripts:
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
-| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under |
+| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under. `-TestSignPfx <pfx> -SignOnly` test-signs the binaries a gated `build-driver.cmd` run recorded in `out\gated-<arch>-<flavour>.txt` without running its host suite and import gates again ("Since 2.3.0.0 the x64 package is test-signed") |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
@@ -3010,6 +3010,35 @@ binaries are never signed.
   x86` cuts the x86 half. `make-package.ps1 -Flavor qemu -Arch amd64
   -TestSignPfx ...` gives a signed `qemu` package for a guest that should
   start in test-signing mode; it is never published.
+- **Signing without running the gates twice: `-SignOnly`** (roadmap-usb4.md
+  SIGN.1, owner 2026-10-16). A gated `build-driver.cmd` run records, once
+  every gate of a flavour has passed, each gated binary's SHA-256 with the
+  commit, whether the tree had uncommitted changes, whether its import
+  gates had their target evidence, and the time, in the git-ignored
+  `out\gated-<arch>-<flavour>.txt` (`scripts\package\write-gated-manifest.ps1`;
+  the file is deleted when that flavour's build starts, so a failed build
+  leaves none). `make-package.ps1 -TestSignPfx <pfx> -SignOnly` reads the
+  record for its `-Arch` and `-Flavor` before anything else and refuses
+  unless it is for that architecture and flavour, every binary to be
+  staged has exactly its recorded SHA-256, the build ran in a clean tree,
+  the tree is still at that commit with no uncommitted change, and the
+  build's gates had target evidence (or the run passes `-NoTargetEvidence`
+  too); each copy is checked against its hash again just before it is
+  signed. It then skips the host test suite and the import gates, which
+  are about the bytes, and keeps everything about the package: the
+  flavour markers, the INF gates before staging (the media-layout one
+  included), the staged package's gate, the version checks and the
+  signature checks. It prints which checks it reused and which it ran.
+  `-SignOnly` without `-TestSignPfx` is refused, as is `-SignOnly` with
+  `-SkipBinaryGates` or `-SkipPackageGate`. The signing step for the x64
+  release package is then:
+
+  ```
+  scripts\build-driver.cmd release -amd64
+  powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release -Arch amd64 -OutDir out\x64-signed -TestSignPfx <pfx> -SignOnly
+  ```
+
+  `make-release.ps1` does not use it: a cut runs every gate.
 - **Verifying.** `tools\WinDDK71\bin\x86\SignTool.exe verify /pa /v
   <dir>\xhci98.sys` shows the SHA-1 file hash, the chain with the
   certificate's SHA-1 hash, "File is not timestamped", and then fails on
