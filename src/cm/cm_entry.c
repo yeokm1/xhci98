@@ -137,8 +137,10 @@ static NTSTATUS cmDispatchPower(PDEVICE_OBJECT device, PIRP irp)
     return CmFilterPower((PCM_FILTER)device->DeviceExtension, irp);
 }
 
-/* Every other request, on either role, goes down unchanged: the NHI has no
- * interface of its own yet, and the filter adds nothing to its bridge. */
+/* Every other request, on any role, goes down unchanged: the NHI has no
+ * interface of its own yet, and the filters add nothing to their device.
+ * The PnP and power dispatch send both filter kinds (CM_KIND_FILTER and
+ * CM_KIND_CHILD) to cm_filt.c. */
 static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
 {
     PCM_COMMON common;
@@ -158,6 +160,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     CmDriverObject = DriverObject;
+    CmRegInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = cmDispatchOther;
     }
