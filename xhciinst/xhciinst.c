@@ -5456,6 +5456,8 @@ typedef struct _TBNODE {
     int Prot;
     int UnitOf;
     int Number;             /* the /eject number, 0 for none */
+    char Shown[64];         /* the driver as shown: the service, or on 98
+                               and ME a port driver or device loader */
 } TBNODE;
 
 typedef struct _TBNHI {
@@ -5579,6 +5581,19 @@ static int tb_read(TBNODE *t)
     if (walkErrors != before) {
         walkErrors = before;
         ok = 0;
+    }
+    inst_copy(t->Shown, d->Service, sizeof(t->Shown));
+    if (!envNow.Nt && t->Shown[0] == '\0' && d->Driver[0] != '\0') {
+        /* 98 and ME: an IOS miniport (nvme98.mpd) is named by PortDriver,
+         * a disk by its DevLoader; shown only, never a classification. */
+        char path[INST_PATH_CHARS];
+        driver_key_path(d, path, sizeof(path));
+        if (reg_text3(HKEY_LOCAL_MACHINE, path, "PortDriver", t->Shown,
+                      sizeof(t->Shown)) <= 0 &&
+            reg_text3(HKEY_LOCAL_MACHINE, path, "DevLoader", t->Shown,
+                      sizeof(t->Shown)) <= 0) {
+            t->Shown[0] = '\0';
+        }
     }
     return ok;
 }
@@ -6039,7 +6054,7 @@ static void tb_print_unit(int u, int indent)
     char state[96];
 
     inst_state_text(state, sizeof(state),
-                    t->R.Service[0] ? t->R.Service : NULL, NULL,
+                    t->Shown[0] ? t->Shown : NULL, NULL,
                     tb_started(t), t->R.Problem);
     if (t->Number) {
         out("%*s[%d] %s  -  %s\n", indent, "", t->Number,
@@ -6076,7 +6091,7 @@ static void tb_print_unit(int u, int indent)
     for (i = u + 1; i < tbnCount; i++) {
         if (tbn[i].UnitOf == u && i != u) {
             inst_state_text(state, sizeof(state),
-                            tbn[i].R.Service[0] ? tbn[i].R.Service : NULL, NULL,
+                            tbn[i].Shown[0] ? tbn[i].Shown : NULL, NULL,
                             tb_started(&tbn[i]), tbn[i].R.Problem);
             out("%*s      %s  -  %s\n", indent, "",
                 tbn[i].R.Desc[0] ? tbn[i].R.Desc : first_hw(&tbn[i].R), state);

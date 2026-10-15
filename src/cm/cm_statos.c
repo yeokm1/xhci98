@@ -157,9 +157,15 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
             in->Cm = CM_ST_CM_USB4;
         } else if (nhi->Icm.Ring != NULL) {
             in->Cm = CM_ST_CM_ICM;
-            in->IcmNoUsb3 = (ULONG)(nhi->Profile == CM_PROFILE_ICM_FR ||
-                                    nhi->Profile == CM_PROFILE_ICM_AR ||
-                                    nhi->Profile == CM_PROFILE_ICM_TR);
+            /* The running row's generation (the AddDevice profile is
+             * not read on 98 SE and ME). */
+            in->IcmNoUsb3 = (ULONG)(nhi->Icm.Profile != NULL &&
+                                    (nhi->Icm.Profile->Generation ==
+                                         TBT_ICM_GEN_FALCON_RIDGE ||
+                                     nhi->Icm.Profile->Generation ==
+                                         TBT_ICM_GEN_ALPINE_RIDGE ||
+                                     nhi->Icm.Profile->Generation ==
+                                         TBT_ICM_GEN_TITAN_RIDGE));
         }
     }
     if (!nhi->ReenumOn) {
