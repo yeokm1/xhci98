@@ -659,15 +659,18 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
     }
     if (!reconcile) {
         CmLogNote(nhi, "u4.contained.no-reconcile", nhi->Live.State);
-    } else if (nhi->ReenumOn) {
-        /* On Windows 98 and ME (WDM 1.10 unavailable, whatever route the
-         * seam has opened yet: its first action opens CONFIGMG itself) the
-         * seam's action calls CONFIGMG on this thread, and a PnP stop
-         * arriving after the check above would wait for it: the reconciliation there is CmReenumUnavailable's alone,
-         * whose route is the CONFIGMG worker's (record 21 section 5.5),
-         * never a synchronous call from here. On NT the RESYNC's
-         * invalidations are asynchronous. */
-        if (IoIsWdmVersionAvailable(1, 0x10) &&
+    }
+    if (nhi->ReenumOn) {
+        /* The loss's bracket (cm_reenum.h, as CmNhiLost for the ICM
+         * client): on the CONFIGMG route an action handed over inside it
+         * only voids the pending ejects, and the worker's
+         * CONTROLLER_UNAVAILABLE request is the reconciliation. The RESYNC
+         * itself is made on NT only (WDM 1.10): on Windows 98 and ME the
+         * seam's first action would open CONFIGMG on this thread, which a
+         * PnP stop may be waiting for. On NT its invalidations are
+         * asynchronous. */
+        CmReenumLossBegin(nhi);
+        if (reconcile && IoIsWdmVersionAvailable(1, 0x10) &&
             nhi->Reenum.Route != CM_ROUTE_CONFIGMG) {
             CmZero(&a, sizeof(a));
             a.Kind = TBT_ICM_ACT_RESYNC;
@@ -678,7 +681,11 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
             }
             CmReenumAction(nhi, &a);
         }
-        CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
+        if (reconcile) {
+            CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
+        } else {
+            CmReenumLossEnd(nhi);
+        }
     }
 }
 
