@@ -472,7 +472,9 @@ called:
   Thunderbolt switch share one id, and a healthy port that already
   carries this release's filter and needs nothing does not block the call
   that gives the filter to its siblings; that call may reach it again
-  with the same driver, and it is never counted as installed by it (read
+  with the same driver; under Windows 2000's unforced call it is not
+  counted as installed by it, while a forced call reinstalls it and it is
+  checked like the other targets (read
   on the 2000 leg, 2026-10-15, where the downstream ports were otherwise
   never filtered).
 - **`hwndParent` NULL**: the signature question (XP's "has not passed

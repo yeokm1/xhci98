@@ -131,6 +131,58 @@ static void test_models_rule(void)
     CHECK(inst_eq(out, "XhciModels"), "a trailing dot is not a version");
 }
 
+static void test_reg_hex(void)
+{
+    char name[32];
+    unsigned char d[8];
+    size_t n;
+    static const char *const bad[] = {
+        "\"0\"=hex:0g,09", "\"0\"=hex:8", "\"0\"=hex:80,", "\"0\"=hex:80,,09",
+        "\"0\"=hex:", "\"0\"=dword:00000001", "0=hex:80", "\"\"=hex:80",
+        "\"0\"=hex:80 09", "\"0\"=hex:01,02,03,04,05,06,07,08,09"
+    };
+    int i;
+
+    CHECK(inst_reg_hex_line("\"0\"=hex:80,09,00,00", name, sizeof(name), d,
+                            sizeof(d), &n) &&
+          inst_eq(name, "0") && n == 4 && d[0] == 0x80 && d[1] == 0x09 &&
+          d[3] == 0, "SILENT.REG's first line");
+    CHECK(inst_reg_hex_line("\"3\"=hex:c3,08,06,50", name, sizeof(name), d,
+                            sizeof(d), &n) &&
+          n == 4 && d[0] == 0xC3 && d[3] == 0x50, "lower-case digits");
+    for (i = 0; i < (int)(sizeof(bad) / sizeof(bad[0])); i++) {
+        CHECK(!inst_reg_hex_line(bad[i], name, sizeof(name), d, sizeof(d), &n),
+              bad[i]);
+    }
+    {
+        /* The shipped list itself, every value line. */
+        char *text = load("..\\src\\silent.reg");
+        char *p;
+        char *nl;
+        int lines = 0;
+        CHECK(text != NULL, "src\\silent.reg read");
+        for (p = text; p != NULL && *p != '\0'; p = nl) {
+            nl = strchr(p, '\n');
+            if (nl != NULL) {
+                *nl++ = '\0';
+            }
+            if (strlen(p) > 0 && p[strlen(p) - 1] == '\r') {
+                p[strlen(p) - 1] = '\0';
+            }
+            if (p[0] == '"') {
+                CHECK(inst_reg_hex_line(p, name, sizeof(name), d, sizeof(d),
+                                        &n) && n == 4, p);
+                lines++;
+            }
+            if (nl == NULL) {
+                break;
+            }
+        }
+        CHECK_EQ(lines, 6, "six values in src\\silent.reg");
+        free(text);
+    }
+}
+
 static void test_decorations(void)
 {
     int a;
@@ -760,6 +812,7 @@ int main(void)
     test_versions();
     test_models_rule();
     test_decorations();
+    test_reg_hex();
     test_real_infs();
     test_cm_infs();
     test_parser();

@@ -1358,6 +1358,60 @@ const INST_VALUE instValues[] = {
 };
 const int instValueCount = (int)(sizeof(instValues) / sizeof(instValues[0]));
 
+static int inst_hexval(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F') {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+int inst_reg_hex_line(const char *line, char *name, size_t nameCap,
+                      unsigned char *data, size_t dataCap, size_t *n)
+{
+    const char *q;
+    size_t len;
+
+    *n = 0;
+    if (line[0] != '"') {
+        return 0;
+    }
+    q = strchr(line + 1, '"');
+    if (q == NULL) {
+        return 0;
+    }
+    len = (size_t)(q - line - 1);
+    if (len == 0 || len >= nameCap || strncmp(q, "\"=hex:", 6) != 0) {
+        return 0;
+    }
+    memcpy(name, line + 1, len);
+    name[len] = '\0';
+    /* Exactly two hex digits per byte, a comma between bytes, none after
+     * the last. */
+    for (q += 6;;) {
+        int hi = inst_hexval(q[0]);
+        int lo = hi < 0 ? -1 : inst_hexval(q[1]);
+        if (hi < 0 || lo < 0 || *n >= dataCap) {
+            return 0;
+        }
+        data[(*n)++] = (unsigned char)((hi << 4) | lo);
+        q += 2;
+        if (*q == '\0') {
+            return 1;
+        }
+        if (*q != ',' || q[1] == '\0') {
+            return 0;
+        }
+        q++;
+    }
+}
+
 int inst_value_find(const char *name)
 {
     int i;

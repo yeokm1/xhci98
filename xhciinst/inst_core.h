@@ -275,6 +275,12 @@ INST_U32 inst_fnv1a(INST_U32 h, const unsigned char *buf, size_t len);
 extern const INST_VALUE instValues[];
 extern const int instValueCount;
 
+/* One value line of a REGEDIT4 file, "name"=hex:aa,bb,... (the silent
+ * install's SILENT.REG): 1 with the name and the bytes, 0 for anything
+ * else (two hex digits per byte, commas between, nothing after). */
+int inst_reg_hex_line(const char *line, char *name, size_t nameCap,
+                      unsigned char *data, size_t dataCap, size_t *n);
+
 /* The index of a value by name (without case), or -1. */
 int inst_value_find(const char *name);
 

@@ -211,6 +211,7 @@ static int changedState[INST_MAX_CHANGED];
 static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
+static int copiedNow;       /* this run made a new local copy */
 static int tunnelChanged;   /* 2000: a port's first filter install succeeded */
 static int tunnelHint;      /* ... and a tunnel device then failed its check */
 static int was_changed(const char *id);
@@ -1801,10 +1802,10 @@ static int silent_list_merge(void)
     char *text;
     char *p;
     char *nl;
-    char *q;
     char name[32];
     unsigned char data[64];
     unsigned char back[64];
+    size_t dn;
     DWORD n;
     DWORD bn;
     DWORD type;
@@ -1844,38 +1845,21 @@ static int silent_list_merge(void)
         if (!in || p[0] != '"') {
             continue;
         }
-        /* "name"=hex:aa,bb,... */
-        q = strchr(p + 1, '"');
-        if (q == NULL || (size_t)(q - p - 1) >= sizeof(name) ||
-            strncmp(q, "\"=hex:", 6) != 0) {
+        /* "name"=hex:aa,bb,... (inst_core.c, host-tested) */
+        if (!inst_reg_hex_line(p, name, sizeof(name), data, sizeof(data),
+                               &dn)) {
             ok = 0;
             break;
         }
-        memcpy(name, p + 1, (size_t)(q - p - 1));
-        name[q - p - 1] = '\0';
-        n = 0;
-        for (q += 6; *q != '\0'; ) {
-            unsigned int b;
-            if (n >= sizeof(data) || sscanf(q, "%2x", &b) != 1) {
-                ok = 0;
-                break;
-            }
-            data[n++] = (unsigned char)b;
-            q += 2;
-            if (*q == ',') {
-                q++;
-            } else if (*q != '\0') {
-                ok = 0;
-                break;
-            }
-        }
-        if (!ok || n == 0) {
-            ok = 0;
-            break;
-        }
+        n = (DWORD)dn;
         bn = sizeof(back);
-        if (RegSetValueExA(k, name, 0, REG_BINARY, data, n) != ERROR_SUCCESS ||
-            RegQueryValueExA(k, name, NULL, &type, back, &bn) != ERROR_SUCCESS ||
+        if (RegSetValueExA(k, name, 0, REG_BINARY, data, n) == ERROR_SUCCESS) {
+            flagChanged = 1;    /* a write happened, whatever follows */
+        } else {
+            ok = 0;
+            break;
+        }
+        if (RegQueryValueExA(k, name, NULL, &type, back, &bn) != ERROR_SUCCESS ||
             type != REG_BINARY || bn != n || memcmp(back, data, n) != 0) {
             ok = 0;
             break;
@@ -1919,15 +1903,10 @@ static void write_values(void)
                 d->Driver[0] == '\0') {
                 continue;
             }
-            r = value_now(d, instValues[v].Name, &now);
-            if (r > 0 && now == answerValue[v]) {
-                out("%s stays %lu on %s.\n", instValues[v].Name,
-                    (unsigned long)now, d->Desc);
-                continue;
-            }
-            /* The silent install on: the list first, then the switch, as
-             * silent-on.bat; off is the switch alone, the list left, as
-             * silent-off.bat. Never on NT (/set refuses it there). */
+            /* The silent install on: the list first - merged and verified
+             * once, even where the switch already reads 1, as silent-on.bat
+             * does - then the switch; off is the switch alone, the list
+             * left, as silent-off.bat. Never on NT (/set refuses it). */
             if (inst_eq(instValues[v].Name, "XhciSilentInstall")) {
                 if (envNow.Nt) {
                     continue;
@@ -1939,6 +1918,12 @@ static void write_values(void)
                     flagFailed = 1;
                     continue;
                 }
+            }
+            r = value_now(d, instValues[v].Name, &now);
+            if (r > 0 && now == answerValue[v]) {
+                out("%s stays %lu on %s.\n", instValues[v].Name,
+                    (unsigned long)now, d->Desc);
+                continue;
             }
             driver_key_path(d, path, sizeof(path));
             val = (DWORD)answerValue[v];
@@ -2028,10 +2013,14 @@ static void local_remove(const char *dir)
             }
             join(path, sizeof(path), dir, p);
             SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
-            DeleteFileA(path);
+            if (DeleteFileA(path)) {
+                flagChanged = 1;
+            }
         }
         free(text);
-        DeleteFileA(lst);
+        if (DeleteFileA(lst)) {
+            flagChanged = 1;
+        }
         join(path, sizeof(path), dir, "nt");
         RemoveDirectoryA(path);
     }
@@ -2067,8 +2056,11 @@ static void local_remove_all(void)
         FindClose(h);
     }
     join(sub, sizeof(sub), rootDir, "RESTAGE.LST");
-    DeleteFileA(sub);
+    if (DeleteFileA(sub)) {
+        flagChanged = 1;
+    }
     if (RemoveDirectoryA(rootDir)) {
+        flagChanged = 1;
         out("%s removed.\n", rootDir);
     }
 }
@@ -2343,6 +2335,7 @@ static int make_local_copy(void)
         return 0;
     }
     flagChanged = 1;
+    copiedNow = 1;
     out("Copied %d files to %s; the install takes them from there.\n", c.Count,
         srcDir);
     return 1;
@@ -2863,8 +2856,44 @@ static int store_matches(int k, const char *oemName)
     return r < 0 ? -1 : 1;
 }
 
+/* The name of an %windir%\inf\oem*.inf byte-identical to INF k, or 0. */
+static int identical_oem(int k, char *name, size_t cap)
+{
+    char win[INST_PATH_CHARS];
+    char pattern[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+    WIN32_FIND_DATAA fd;
+    HANDLE h;
+    char *text;
+    int found = 0;
+
+    name[0] = '\0';
+    if (infText[k] == NULL || GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 0;
+    }
+    join(pattern, sizeof(pattern), win, "inf\\oem*.inf");
+    h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    do {
+        join(path, sizeof(path), win, "inf");
+        join(path, sizeof(path), path, fd.cFileName);
+        text = read_file(path, NULL);
+        if (text != NULL && strcmp(text, infText[k]) == 0) {
+            inst_copy(name, fd.cFileName, cap);
+            found = 1;
+        }
+        free(text);
+    } while (!found && FindNextFileA(h, &fd));
+    FindClose(h);
+    return found;
+}
+
 static int stage_nt(void)
 {
+    char before[INST_PATH_CHARS];
+    int had;
     int k;
     char media[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
@@ -2918,6 +2947,10 @@ static int stage_nt(void)
         if (strrchr(media, '\\') != NULL) {
             *strrchr(media, '\\') = '\0';
         }
+        /* Already staged, byte for byte, from this same local copy: the
+         * call reuses it, and that is no change (an unchanged rerun says
+         * "No changes were made."). */
+        had = identical_oem(k, before, sizeof(before));
         logonly("SetupCopyOEMInf(\"%s\", \"%s\", SPOST_PATH, 0)\n", path, media);
         if (!api.CopyOem(path, media, SPOST_PATH, 0, dest, sizeof(dest), NULL,
                          &component)) {
@@ -2927,8 +2960,13 @@ static int stage_nt(void)
                                 "same local copy." : "");
             return 0;
         }
-        out("Staged %s as %s.\n", instInfFile[k], component ? component : dest);
-        flagChanged = 1;
+        if (had && !copiedNow && inst_eq(before, component ? component : dest)) {
+            out("%s is staged already, as %s.\n", instInfFile[k], before);
+        } else {
+            out("Staged %s as %s.\n", instInfFile[k],
+                component ? component : dest);
+            flagChanged = 1;
+        }
         if (restagePending[k]) {
             const char *nm = component ? component : dest;
             if (store_matches(k, nm) != 1) {
