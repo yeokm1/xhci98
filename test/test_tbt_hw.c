@@ -125,10 +125,9 @@ static void test_platform(void)
     (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, TRUE);
     CHECK(g_fake.Cfg[0xFC / 4] & 0x2UL, "left on");
 
-    /* Never ready: 350 polls 3 ms apart, then a timeout. An inert
-     * instance never clears force power, not even then: a timeout is not
-     * evidence that nothing depends on the controller (record 21 sections
-     * 1.4.2 and 5.6). */
+    /* Never ready: 350 polls 3 ms apart, then a timeout; an inert
+     * instance leaves the force power it set, even then (record 22
+     * section 4.2, settled over record 21 section 1.4.2 on 2026-10-15). */
     fakeReset();
     memset(&pw, 0, sizeof(pw));
     CHECK_EQ(TbtHwPlatformInit(icl, &g_cfg, &g_fakeHost, &pw), TBT_E_TIMEOUT, "never ready");
@@ -137,7 +136,7 @@ static void test_platform(void)
     CHECK(pw.FwReadyFailed, "recorded");
     (void)TbtHwPlatformShutdown(icl, &g_cfg, &pw, FALSE);
     CHECK(g_fake.Cfg[0xFC / 4] & 2UL, "inert, never ready: left set");
-    CHECK(pw.ForcePowerSetHere, "and the record kept");
+    CHECK(pw.ForcePowerSetHere, "and still recorded as this driver's");
 
     /* Ready, but inert for another reason: left set. */
     fakeReset();

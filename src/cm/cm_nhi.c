@@ -114,7 +114,8 @@ static const char *const cmRingCounterNames[] = {
     "cm.ring.overflows", "cm.ring.malformed", "cm.ring.tx-full",
     "cm.ring.tx-stuck", "cm.ring.ctl.reads", "cm.ring.ctl.retries",
     "cm.ring.ctl.timeouts", "cm.ring.ctl.notify", "cm.ring.ctl.stale",
-    "cm.ring.unsolicited"
+    "cm.ring.unsolicited", "cm.ring.ctl.writes", "cm.ring.ring0-was-enabled",
+    "cm.ring.other-rings-enabled"
 };
 
 static const char *const cmNhiCounterNames[] = {

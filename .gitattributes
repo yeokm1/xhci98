@@ -68,3 +68,6 @@ LICENSE eol=crlf
 *.REG eol=crlf
 *.vbs eol=crlf
 *.VBS eol=crlf
+# The usb4-emu cross-check runs under MSYS2 bash, which does not take CRLF
+# (roadmap-usb4.md task 40-A.5).
+scripts/usb4-crosscheck/*.sh eol=lf
