@@ -1,0 +1,420 @@
+/*
+ * tr_core.h - the pure half of XHCITR.EXE and XHCITR64.EXE (design record
+ * 25 section 10; roadmap-usb4.md task 41-A.2).
+ *
+ * Everything here is a function of its arguments: no Windows header, no
+ * registry, no device, no file. The tool links tr_core.c (and
+ * xhciinst\inst_core.c, record 24's rules) and so does the host suite
+ * test\test_tr.c, under /Za, so what the suite checks is what the tool
+ * runs. C89.
+ *
+ * The answers of the hub and host controller IOCTLs and of xhcicm.sys's
+ * query are read as bytes at the documented offsets, never through a
+ * structure overlay: the MSVC 6.0 headers lack the _EX, _EX_V2 and
+ * descriptor-request layouts, and every one of them is packed.
+ */
+
+#ifndef TR_CORE_H
+#define TR_CORE_H
+
+#include <stddef.h>
+
+typedef unsigned long TR_U32;
+
+#define TR_ID_CHARS             208
+#define TR_PATH_CHARS           260
+
+/* ---- text ------------------------------------------------------------------ */
+
+/* A bounded text buffer. Every '\n' written becomes CR LF, the form the
+ * details pane's edit control and the report file both take. */
+typedef struct _TR_TEXT {
+    char *Buf;
+    size_t Cap;
+    size_t Len;
+    int Overflow;
+} TR_TEXT;
+
+void tr_text_init(TR_TEXT *t, char *buf, size_t cap);
+void tr_put(TR_TEXT *t, const char *s);
+
+/* A small printf: %s %c %d %u %x %X, each with an optional '-' or '0' flag,
+ * a width and an 'l' size; %% a percent sign. Nothing else. */
+void tr_printf(TR_TEXT *t, const char *fmt, ...);
+
+/* The same into a plain buffer, always terminated. */
+void tr_sprintf(char *out, size_t cap, const char *fmt, ...);
+
+/* Hex bytes, 16 to a line, each line indented by `indent` spaces. */
+void tr_hex(TR_TEXT *t, const unsigned char *b, size_t n, int indent);
+
+void tr_copy(char *dst, const char *src, size_t cap);
+int tr_eq(const char *a, const char *b);         /* without case */
+
+/* ---- the USB IOCTLs (usbioctl.h's numbers; FILE_ANY_ACCESS, buffered) ---- */
+
+#define TR_IOCTL_GET_HCD_DRIVERKEY_NAME             0x00220424UL
+#define TR_IOCTL_USB_GET_ROOT_HUB_NAME              0x00220408UL
+#define TR_IOCTL_USB_GET_NODE_INFORMATION           0x00220408UL
+#define TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION 0x0022040CUL
+#define TR_IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION 0x00220410UL
+#define TR_IOCTL_USB_GET_NODE_CONNECTION_NAME       0x00220414UL
+#define TR_IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME 0x00220420UL
+#define TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX 0x00220448UL
+#define TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2 0x0022045CUL
+
+/* A compile-time size check: a negative array size stops the build. */
+#define TR_SIZE_CHECK(name, cond) typedef char name[(cond) ? 1 : -1]
+
+/* The requests the tool builds, from their documented layouts, packed as
+ * usbioctl.h packs them (pshpack1.h). The answers are read as bytes at
+ * the offsets below. */
+#pragma pack(push, 1)
+typedef struct _TR_USB_CONN_EX {        /* USB_NODE_CONNECTION_INFORMATION_EX */
+    TR_U32 ConnectionIndex;
+    unsigned char DeviceDescriptor[18];
+    unsigned char CurrentConfigurationValue;
+    unsigned char Speed;
+    unsigned char DeviceIsHub;
+    unsigned short DeviceAddress;
+    TR_U32 NumberOfOpenPipes;
+    TR_U32 ConnectionStatus;
+} TR_USB_CONN_EX;
+typedef struct _TR_USB_CONN_V2 {        /* ..._EX_V2                     */
+    TR_U32 ConnectionIndex;
+    TR_U32 Length;
+    TR_U32 SupportedUsbProtocols;
+    TR_U32 Flags;
+} TR_USB_CONN_V2;
+typedef struct _TR_USB_DESC_REQ {       /* USB_DESCRIPTOR_REQUEST         */
+    TR_U32 ConnectionIndex;
+    unsigned char bmRequest;
+    unsigned char bRequest;
+    unsigned short wValue;
+    unsigned short wIndex;
+    unsigned short wLength;
+} TR_USB_DESC_REQ;
+#pragma pack(pop)
+TR_SIZE_CHECK(trCheckConnEx, sizeof(TR_USB_CONN_EX) == 35);
+TR_SIZE_CHECK(trCheckConnV2, sizeof(TR_USB_CONN_V2) == 16);
+TR_SIZE_CHECK(trCheckDescReq, sizeof(TR_USB_DESC_REQ) == 12);
+
+/* NOTIFYICONDATAA with the version 2 fields (the shell's balloons), which
+ * MSVC 6.0's shellapi.h lacks; the x64 build takes the WDK's own. Version 1
+ * is its first 88 bytes (record 25 section 7.2). */
+#ifndef _WIN64
+typedef struct _TR_NIDA {
+    TR_U32 cbSize;
+    void *hWnd;
+    unsigned int uID;
+    unsigned int uFlags;
+    unsigned int uCallbackMessage;
+    void *hIcon;
+    char szTip[128];
+    TR_U32 dwState;
+    TR_U32 dwStateMask;
+    char szInfo[256];
+    unsigned int uTimeoutOrVersion;
+    char szInfoTitle[64];
+    TR_U32 dwInfoFlags;
+} TR_NIDA;
+#define TR_NIDA_V1_BYTES        88
+#define TR_NIDA_V2_BYTES        488
+TR_SIZE_CHECK(trCheckNidV2, sizeof(TR_NIDA) == TR_NIDA_V2_BYTES);
+TR_SIZE_CHECK(trCheckNidV1, offsetof(TR_NIDA, szTip) + 64 == TR_NIDA_V1_BYTES);
+#endif
+
+/* USB_NODE_CONNECTION_INFORMATION(_EX), packed: ConnectionIndex 0, the
+ * device descriptor 4, CurrentConfigurationValue 22, Speed (the non-_EX
+ * form: LowSpeed) 23, DeviceIsHub 24, DeviceAddress 25, NumberOfOpenPipes
+ * 27, ConnectionStatus 31, then one USB_PIPE_INFO (an endpoint descriptor
+ * and a ULONG schedule offset, 11 bytes) per open pipe from 35. */
+#define TR_CI_BYTES             35
+#define TR_CI_PIPE_BYTES        11
+#define TR_MAX_PIPES            32
+
+/* USB_NODE_CONNECTION_INFORMATION_EX_V2: ConnectionIndex 0, Length 4,
+ * SupportedUsbProtocols 8 (bit 0 1.1, bit 1 2.0, bit 2 3.0), Flags 12. */
+#define TR_V2_BYTES             16
+#define TR_V2_PROTO_USB300      0x04UL
+#define TR_V2_F_SS_NOW          0x01UL  /* operating at SuperSpeed or higher */
+#define TR_V2_F_SS_CAPABLE      0x02UL
+#define TR_V2_F_SSP_NOW         0x04UL  /* operating at SuperSpeedPlus       */
+#define TR_V2_F_SSP_CAPABLE     0x08UL
+
+/* USB_DESCRIPTOR_REQUEST, packed: ConnectionIndex 0, the setup packet
+ * 4..11 (bmRequest, bRequest, wValue, wIndex, wLength), data from 12. */
+#define TR_DR_BYTES             12
+
+/* USB_NODE_INFORMATION, packed: NodeType 0 (0 a hub), the hub descriptor
+ * 4 (71 bytes), HubIsBusPowered 75. */
+#define TR_NI_BYTES             76
+
+/* The name answers (USB_ROOT_HUB_NAME, USB_HCD_DRIVERKEY_NAME:
+ * ActualLength 0, WCHAR name 4; USB_NODE_CONNECTION_NAME and
+ * _DRIVERKEY_NAME: ConnectionIndex 0, ActualLength 4, name 8). The UTF-16
+ * name copied as ASCII ('?' for anything else); 1 when it held one. */
+int tr_wide_name(const unsigned char *b, size_t n, size_t offset, char *out,
+                 size_t cap);
+
+/* USB_CONNECTION_STATUS. */
+#define TR_CS_NONE              0UL
+#define TR_CS_CONNECTED         1UL
+
+typedef struct _TR_CONN {
+    TR_U32 Port;
+    unsigned char Dev[18];
+    unsigned int Config;
+    unsigned int Speed;         /* 0 Low, 1 Full, 2 High, 3 Super          */
+    int IsHub;
+    unsigned int Address;
+    TR_U32 OpenPipes;
+    TR_U32 Status;              /* TR_CS_*                                 */
+    int PipeCount;              /* the pipes held below, at most TR_MAX_PIPES */
+    unsigned char Pipe[TR_MAX_PIPES][7];
+} TR_CONN;
+
+/* An answer of ..._INFORMATION (ex 0) or ..._INFORMATION_EX (ex 1) of n
+ * bytes. 1 when it holds the fixed part. */
+int tr_conn_parse(const unsigned char *b, size_t n, int ex, TR_CONN *c);
+
+const char *tr_conn_status_text(TR_U32 status);
+
+/* The speed as shown: the _EX code, and the _EX_V2 flags where read. */
+#define TR_SPEED_LOW            0
+#define TR_SPEED_FULL           1
+#define TR_SPEED_HIGH           2
+#define TR_SPEED_SUPER          3
+#define TR_SPEED_SUPERPLUS      4
+#define TR_SPEED_UNKNOWN        0xFFU   /* the original IOCTL: not Low Speed */
+int tr_speed(unsigned int exSpeed, int haveV2, TR_U32 v2Flags);
+const char *tr_speed_name(int speed);
+
+/* The hub node's answer: 1 for a hub with its port count and power. */
+int tr_node_parse(const unsigned char *b, size_t n, unsigned int *ports,
+                  int *busPowered);
+
+/* ---- descriptors (USB 2.0 chapter 9, USB 3.2 chapter 9) ------------------- */
+
+const char *tr_class_name(unsigned int cls);
+
+/* Each decodes field by field, then lists the bytes; anything short or
+ * malformed is said so and the bytes still listed. */
+void tr_dec_device(TR_TEXT *t, const unsigned char *d, size_t n);
+void tr_dec_config(TR_TEXT *t, const unsigned char *d, size_t n);
+void tr_dec_bos(TR_TEXT *t, const unsigned char *d, size_t n);
+void tr_dec_hub(TR_TEXT *t, const unsigned char *d, size_t n);
+
+/* A string descriptor as ASCII ('?' for anything else). 1 when valid. */
+int tr_dec_string(const unsigned char *d, size_t n, char *out, size_t cap);
+
+/* The SuperSpeedPlus capability's sublink speeds as one line ("5 Gbit/s,
+ * 10 Gbit/s per lane"): what the device supports, never what its link
+ * negotiated (decision T3). 1 when the BOS holds one. */
+int tr_bos_ssp_text(const unsigned char *d, size_t n, char *out, size_t cap);
+
+/* The configuration descriptor's bMaxPower in mA for the speed (2 mA units
+ * below SuperSpeed, 8 mA from it); 1 when read. */
+int tr_config_power(const unsigned char *d, size_t n, int speed,
+                    unsigned int *ma, int *selfPowered);
+
+/* ---- xhcicm.sys's query (src\cm\cm_query.h, record 25 section 4) ---------- */
+
+typedef struct _TR_QUERY {
+    const unsigned char *Base;
+    TR_U32 Bytes;               /* the answer's size field                  */
+    TR_U32 Pass;
+    TR_U32 AgeMs;
+    TR_U32 Live;                /* CM_LIVE_*                                */
+    TR_U32 Flags;               /* CM_Q_F_*                                 */
+    TR_U32 EpochLo;             /* this start of this NHI                   */
+    TR_U32 EpochHi;
+    TR_U32 NhiBdf;
+    TR_U32 ContentGen;          /* CM_Q_O_CONTENT_GEN, never 0             */
+    char Id[TR_ID_CHARS];       /* the NHI's instance id                    */
+    const unsigned char *Rec;   /* the status record                         */
+    TR_U32 RecBytes;
+    TR_U32 ExtOffset;
+    TR_U32 ExtCount;
+    TR_U32 ExtBytes;
+} TR_QUERY;
+
+/* An answer of n bytes (no more than the call returned). 1 a whole,
+ * consistent answer; -1 the header alone, or a header whose size field
+ * asks for more than n (q->Bytes says how much, at most CM_Q_MAX_BYTES);
+ * 0 anything else: wrong magic or version, a record that does not check,
+ * counts, offsets or sizes that disagree, an epoch of 0. */
+int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q);
+
+/* Display only: the last pass is younger than CM_Q_CURRENT_MS. */
+int tr_query_current(const TR_QUERY *q);
+
+/* The first gate of an eject (record 25 section 6): the record's stage
+ * active, neither inert nor stopping, the liveness ACTIVE. 1 when it
+ * passes; else 0 with the reason in *why. */
+int tr_query_eject_ready(const TR_QUERY *q, const char **why);
+
+/* 1 when b was published at least CM_Q_NEW_PASSES passes after a, in the
+ * same start: one move could be a snapshot built before a and published
+ * after it, two prove one built after (record 25 section 6.2). The counter
+ * wraps past 0 to 1. */
+int tr_query_new_pass(const TR_QUERY *a, const TR_QUERY *b);
+
+/* 1 when both answers are of the same start and content generation. */
+int tr_query_same_content(const TR_QUERY *a, const TR_QUERY *b);
+
+typedef struct _TR_EXT {
+    TR_U32 Rate;                /* Gbit/s per lane, 0 unknown              */
+    TR_U32 Width;               /* lanes, 0 unknown                        */
+    TR_U32 LinkState;
+    TR_U32 GenRaw;
+    TR_U32 Ids;
+    TR_U32 Flags;
+} TR_EXT;
+
+/* The index-th router extension; 1 when it exists. */
+int tr_query_ext(const TR_QUERY *q, TR_U32 index, TR_EXT *x);
+
+/* ---- the status record's texts (record 24 section 3; cm_status.h) --------- */
+
+const char *tr_tun_text(TR_U32 v);
+const char *tr_appr_text(TR_U32 v);
+const char *tr_cm_text(TR_U32 cm);
+const char *tr_stage_text(TR_U32 stage);
+const char *tr_live_text(TR_U32 live);
+
+/* "Thunderbolt 3", "USB4 v1", "generation not known". */
+void tr_gen_text(TR_U32 gen, char *out, size_t cap);
+
+/* The link as shown: "USB4 Gen 3 x2 (40 Gbit/s)", "one lane; speed not
+ * known", "not reported by the firmware" (an ICM entry), from the entry's
+ * kind and lanes and the extension (NULL when there is none). */
+void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
+                  size_t cap);
+
+/* A router entry's name: "<vendor> <model>", or "(no name given)". */
+void tr_router_name(const unsigned char *entry, char *out, size_t cap);
+
+/* ---- the tray's events (record 25 section 7.2) ---------------------------- */
+
+#define TR_SNAP_NHI             4
+#define TR_SNAP_ROUTERS         96      /* TR_SNAP_NHI x CM_ST_MAX_ROUTERS */
+#define TR_NAME_CHARS           72
+
+typedef struct _TR_SROUTER {
+    TR_U32 Nhi;                 /* the NHI's key (the caller's)             */
+    TR_U32 EpochLo;
+    TR_U32 EpochHi;
+    TR_U32 Kind;                /* CM_ST_KIND_*                             */
+    TR_U32 RouteLo;
+    TR_U32 RouteHi;
+    TR_U32 Place;
+    TR_U32 Ids;
+    TR_U32 ShortId;
+    TR_U32 Approval;
+    TR_U32 Tunnels;
+    TR_U32 Bridge;
+    TR_U32 Gen;
+    char Name[TR_NAME_CHARS];
+} TR_SROUTER;
+
+typedef struct _TR_SNAP {
+    int Valid;
+    int NhiCount;
+    TR_U32 NhiKey[TR_SNAP_NHI];
+    TR_U32 Live[TR_SNAP_NHI];
+    TR_U32 EpochLo[TR_SNAP_NHI];
+    TR_U32 EpochHi[TR_SNAP_NHI];
+    int Count;
+    int Truncated;
+    TR_SROUTER R[TR_SNAP_ROUTERS];
+} TR_SNAP;
+
+void tr_snap_init(TR_SNAP *s);
+
+/* One NHI's answer added: its liveness, epoch and router entries. 0 when
+ * the snapshot is full. */
+int tr_snap_add(TR_SNAP *s, TR_U32 nhiKey, const TR_QUERY *q);
+
+/* 1 when two entries are the same router (record 25 section 7.2): the same
+ * NHI and epoch, and for USB4 entries (kinds 2, 3) the route, for ICM
+ * entries the link and depth, ids and UUID suffix. */
+int tr_same_router(const TR_SROUTER *a, const TR_SROUTER *b);
+
+/* The events are descriptive only (decision T8): an eject's outcome is the
+ * eject transaction's message, never a diff's. */
+#define TR_EV_CONNECTED         1
+#define TR_EV_WAITING           2
+#define TR_EV_FAILED            3
+#define TR_EV_STOPPED           5
+#define TR_EV_LEFT              6   /* disconnected                          */
+
+typedef struct _TR_EVENT {
+    int Kind;
+    TR_U32 Gen;
+    char Name[TR_NAME_CHARS];   /* "a Thunderbolt device" without identity */
+} TR_EVENT;
+
+/* The events between two snapshots, at most cap; none unless both are
+ * valid. Router events only for an NHI both hold at the same epoch (a new
+ * epoch is a new set of devices). Entries sharing a key have no identity:
+ * a change in their number is one generic event. Approval events only for
+ * ICM entries (a USB4 entry's approval word folds held, failed and
+ * unsupported together); a router that leaves is "disconnected", never
+ * "unplugged while in use" (decision T9); the stop event when the
+ * liveness leaves ACTIVE. */
+int tr_diff(const TR_SNAP *old, const TR_SNAP *now, TR_EVENT *ev, int cap);
+
+/* The balloon's text and title for an event. */
+void tr_event_text(const TR_EVENT *e, char *out, size_t cap);
+const char *tr_event_title(int kind);
+
+/* ---- the tree's keys --------------------------------------------------------- */
+
+/* "<prefix>:<a>:<b>", bounded: the selection and expanded nodes are found
+ * again by these after a refresh (record 25 section 3.4). */
+void tr_key(char *out, size_t cap, const char *prefix, const char *a,
+            const char *b);
+
+/* A USB port path: parent's path, then '.', then the port ("3", "3.1"). */
+void tr_port_path(char *out, size_t cap, const char *parent, TR_U32 port);
+
+/* ---- View check boxes, persisted ----------------------------------------- */
+
+#define TR_V_TB                 0x0001UL
+#define TR_V_USB                0x0002UL
+#define TR_V_WINUSB             0x0004UL
+#define TR_V_EMPTY              0x0008UL
+#define TR_V_DESC               0x0010UL
+#define TR_V_BEHIND             0x0020UL
+#define TR_V_AUTO               0x0040UL
+#define TR_V_DEFAULT            (TR_V_TB | TR_V_USB | TR_V_WINUSB | \
+                                 TR_V_EMPTY | TR_V_BEHIND | TR_V_AUTO)
+#define TR_V_ALL                0x007FUL
+
+/* ---- the command line (record 25 section 7.3) ----------------------------- */
+
+typedef struct _TR_OPTS {
+    int Tray;
+    int Eject;
+    char EjectId[TR_ID_CHARS];
+    int Report;
+    char ReportPath[TR_PATH_CHARS];
+    int SelfTest;
+} TR_OPTS;
+
+/* XHCITR [/tray] [/eject id=<instance id>] [/report <file>] [/selftest].
+ * Switches start with '/' or '-', without case; /eject takes id=<id> as
+ * the next argument, /report its file. Returns 0 with
+ * opts filled, 1 refused with why in err. /eject, /report and /selftest
+ * stand alone. */
+int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
+
+/* ---- the report ---------------------------------------------------------- */
+
+/* One node of the report: its label at depth, then its details indented
+ * under it (the details' own lines, CR LF or LF). */
+void tr_report_node(TR_TEXT *t, int depth, const char *label,
+                    const char *details);
+
+#endif /* TR_CORE_H */

@@ -355,6 +355,23 @@
 > and the import-table check `build-driver.cmd` runs, through
 > `check-imports.ps1`, which reads the PE import directory), `INSTALL.BAT` (staged
 > at the package root) and `README.TXT` (the published `readme.txt`).
+> Tasks 41-A.2 to 41-A.5 (roadmap-usb4.md, design record 25) add the USB
+> and Thunderbolt tree tool beside it: `xhcitr\xhcitr.c` (the system half:
+> the window, the USB branch through the hub IOCTLs, the Thunderbolt branch
+> through `xhcicm.sys`'s query device, the eject transaction under the
+> mutex XHCIINST shares, the notification-area icon), `tr_core.c` /
+> `tr_core.h` (the pure half: text, the USB answers' bytes, descriptor
+> decoding, the query's parsing and eject gates, the status record's
+> texts, the tray's router keys and event diff, the command line, the
+> report; host suite `test_tr`, which also links `xhciinst\inst_core.c`
+> for record 24's unit rules and eject texts), `tr_res.h` (the resource
+> and command numbers), `xhcitr.rc` and `xhcitr.manifest` (the icon
+> `xhcitr.ico`, the version, the menus, the About dialog; as the invoker,
+> with Common Controls 6), `build.cmd` (`XHCITR.EXE` with MSVC 6.0,
+> `XHCITR64.EXE` with WDK 7.1 amd64), `selftest.cmd` (the `/selftest`, the
+> switch refusals and the import-table check `build-driver.cmd` runs,
+> through `check-imports.ps1`) and `README.TXT` (the published
+> `readme.txt`).
 > Task 38.2 (design record 13 section 6.11) adds the pure `xhci_silent.c` /
 > `xhci_silent.h` (the Windows 98 SE and ME silent install: the
 > `XhciSilentInstall` gate's rule, the `SilentClasses` table's admission,
@@ -600,6 +617,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
 | `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
+| `test_tr.c` | `xhcitr\tr_core.c`, the USB tree tool's pure half (design record 25 section 10): text, the connection answers, descriptors, the query's parsing and eject gates, the router keys and event diff, the command line, the report. |
 | `test_cm_live.c` | `cm_live.c`: sampling by elapsed time, SUSPECT on the first unanswered sample and ABSENT on the third, CONFIG_LOST on a changed register, the light and full recovery, its failure and the re-arm rule, the USB4 profile's containment, revocation and the access gate. |
 | `test_cm_status.c` | `cm_status.c`: the record from an ICM table and from a USB4 port set, what is never copied into it, the change compare, the echo, the entry limit, and the Windows 98 instance path over a fake configuration space (design record 24 section 10). |
 
