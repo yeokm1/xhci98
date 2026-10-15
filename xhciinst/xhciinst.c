@@ -2022,10 +2022,13 @@ static void local_remove(const char *dir)
             flagChanged = 1;
         }
         join(path, sizeof(path), dir, "nt");
-        RemoveDirectoryA(path);
+        if (RemoveDirectoryA(path)) {
+            flagChanged = 1;
+        }
     }
     if (RemoveDirectoryA(dir)) {
         out("%s removed.\n", dir);
+        flagChanged = 1;
     } else if (GetFileAttributesA(dir) != 0xFFFFFFFFUL) {
         out("%s kept: it holds files this tool did not put there.\n", dir);
     }
