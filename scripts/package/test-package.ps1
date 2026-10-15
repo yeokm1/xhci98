@@ -3034,6 +3034,8 @@ try {
            Why  = "a cut no longer stages both builds of the USB tree tool (task 41-A.6)" },
         @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $TrayToolDir "xhcitr.c") -Macro "XHCITR_VERSION"';
            Why  = "a cut no longer holds the USB tree tool's version to the shared macro, on which XHCIINST's replace-only-when-older rule depends (task 41-A.6)" },
+        @{ Find = 'Assert-ToolFileVersion -Path (Join-Path $TrayToolDir $name) -Version $Version';
+           Why  = "a cut no longer holds each USB tree tool EXE's numeric file version to the release's, on which XHCIINST's replace-only-when-older rule depends (task 41-A.6)" },
         @{ Find = '$trayNewer = @($traySources | Where-Object { $_.LastWriteTimeUtc -gt $trayTime })';
            Why  = "a cut no longer refuses a USB tree tool older than its sources (task 41-A.6)" },
         @{ Find = '@(Get-Item -LiteralPath (Join-Path $InstallToolDir "inst_core.c")) +';
@@ -3064,6 +3066,30 @@ try {
         Assert-True ($releaserText.Contains($anchor.Find)) `
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }
+    # The USB tree tool's file version check, EXECUTED (task 41-A.6): a
+    # system DLL's own version is accepted, any other is refused, and so is
+    # a file with no version resource at all.
+    Write-Step "a staged USB tree tool carries the release's file version"
+    $tfvAt = $releaserText.IndexOf("function Assert-ToolFileVersion")
+    Assert-True ($tfvAt -ge 0) "make-release.ps1 no longer has Assert-ToolFileVersion (task 41-A.6)."
+    if ($tfvAt -ge 0) {
+        Invoke-Expression $releaserText.Substring($tfvAt, $releaserText.IndexOf("`n}", $tfvAt) - $tfvAt + 2)
+        $tfvDll = Join-Path $env:SystemRoot "System32\kernel32.dll"
+        $tfvInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($tfvDll)
+        $tfvOwn = "{0}.{1}.{2}.{3}" -f $tfvInfo.FileMajorPart, $tfvInfo.FileMinorPart, $tfvInfo.FileBuildPart, $tfvInfo.FilePrivatePart
+        $refused = $null
+        try { Assert-ToolFileVersion -Path $tfvDll -Version $tfvOwn } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -eq $refused) "Assert-ToolFileVersion refused a file at its own version $($tfvOwn): $refused"
+        $refused = $null
+        try { Assert-ToolFileVersion -Path $tfvDll -Version "3.0.0.0" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused -and $refused -match "carries the file version") "Assert-ToolFileVersion accepted a file whose version is not the release's."
+        $tfvNone = Join-Path $script:work "tfv-none.exe"
+        [System.IO.File]::WriteAllText($tfvNone, "no version resource")
+        $refused = $null
+        try { Assert-ToolFileVersion -Path $tfvNone -Version "3.0.0.0" } catch { $refused = $_.Exception.Message }
+        Assert-True ($null -ne $refused) "Assert-ToolFileVersion accepted a file with no version resource."
+    }
+
     # And none of the scripts rides in a flavour directory or a package again.
     Assert-True (-not ($releaserText -match '\$pswPublishable\s*\+|\+\s*\$pswPublishable')) `
         "make-release.ps1 adds the port switchover's scripts to a flavour directory's or a package's file set again; since roadmap-hcd task 37.5 they are published in portsw\ alone."

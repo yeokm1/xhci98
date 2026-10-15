@@ -2759,6 +2759,27 @@ const char *inst_tray_file(int arch)
     return arch == INST_ARCH_AMD64 ? "XHCITR64.EXE" : "XHCITR.EXE";
 }
 
+int inst_tray_wininit_path(const char *shortDir, const char *name, int isNew,
+                           char *out, size_t cap)
+{
+    size_t d = strlen(shortDir);
+    size_t n = strlen(name);
+    int sep = (d > 0 && shortDir[d - 1] != '\\') ? 1 : 0;
+
+    if (n < 4 || !inst_eq(name + n - 4, ".EXE") || d + sep + n + 1 > cap) {
+        return 0;
+    }
+    strcpy(out, shortDir);
+    if (sep) {
+        strcat(out, "\\");
+    }
+    strcat(out, name);
+    if (isNew) {
+        strcpy(out + d + sep + n - 4, ".NEW");
+    }
+    return 1;
+}
+
 int inst_tray_run_data(const char *exe, char *out, size_t cap)
 {
     size_t n = strlen(exe);

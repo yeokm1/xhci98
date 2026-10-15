@@ -1453,11 +1453,22 @@ what it finds, is read on the legs. Exit 4.
 
 Design record 25 section 8 is the source; this is how the tool does it.
 The tool's file (`XHCITR.EXE` on 32-bit Windows, 98 SE and ME included;
-`XHCITR64.EXE` on x64), its `.NEW`, `.TMP` and `.DEL` forms and the Run
-value `HKLM\Software\Microsoft\Windows\CurrentVersion\Run`, `xHCI98 USB
+`XHCITR64.EXE` on x64), its `.NEW`, `.TMP`, `.OLD`, `.BAK` and `.DEL`
+forms and the Run value `HKLM\Software\Microsoft\Windows\CurrentVersion\Run`, `xHCI98 USB
 Tree` = `"<path>" /tray`, are this tool's own, outside every copy's
 `XHCIINST.LST`. The file sits in `%windir%\XHCI98\` itself, beside the
-local copies (section 4.4).
+local copies (section 4.4). `WININIT.INI` names the tool and its `.NEW`
+by 8.3 paths made from the directory's 8.3 path and the fixed 8.3 file
+names, so a line is found whether or not the file is there.
+
+`WININIT.INI` is never rewritten in place: the new text is written as
+`WININIT.XNW` and read back, the original copied to `WININIT.XBK`, and
+only then is `WININIT.INI` deleted and `WININIT.XNW` renamed to it (98 SE
+and ME have no replacing rename), the copy put back on any failure. The
+file is read again just before the replacement and the edit redone on
+what is there. That narrows, and cannot close, the window in which
+another installer edits the file too: nothing locks `WININIT.INI` across
+programs.
 
 - **One at a time.** Everything below but `/list` runs under the
   maintenance mutex `Global\XhciinstMaint` (`XhciinstMaint` on 98 SE and
@@ -1468,12 +1479,16 @@ local copies (section 4.4).
   routes, after the drivers (NT: after the results and `/restage`'s work
   file; 98 SE and ME: after the registry values, before the printed
   steps), and under `/list` as one line of what would be done.
-  1. On 98 SE and ME, a deletion of the tool an uninstall left waiting
-     for the restart (its `NUL=<8.3 path of the tool>` line in
-     `WININIT.INI`, that line alone, every other line kept) is taken back
-     first, whether the run then copies or not, so a same-version
-     reinstall keeps the file the Run value names. On NT an uninstall
-     never defers the tool's own name (below).
+  1. Leftovers of an interrupted run are tidied (`.TMP` and a spare
+     `.BAK` deleted, a `.BAK` with no tool beside it put back, an `.OLD`
+     put back as `.NEW` when that is missing). On 98 SE and ME, a deletion
+     of the tool an uninstall left waiting for the restart (its
+     `NUL=<8.3 path of the tool>` line, that line alone, every other line
+     kept) is taken back, whether the run then copies or not and whether
+     or not the file is there (an uninstall that found it in use and a
+     second one that deleted it leave the line), so a reinstall keeps the
+     file the Run value names. On NT an uninstall never defers the tool's
+     own name (below).
   2. A package without `tools\xhcitr\<name>` (an older or a development
      one) is said in one line, and nothing else of the tool is touched.
   3. A pending replacement (`.NEW`) counts as installed at its own
@@ -1490,28 +1505,37 @@ local copies (section 4.4).
      to 15 s until the file opens for writing with no sharing. The event
      is closed when the tool's part of the run ends, so it exists only
      then; `XHCITR` only opens it. No process is ever ended.
-  5. A file still in use: the new copy is written as `.TMP`, compared
-     with the package's, and only then renamed over any older `.NEW`
-     (NT: `MoveFileExA` with replace; 98 SE and ME: the old `.NEW`
-     deleted once the checked `.TMP` is there), then moved over the tool
-     at the restart (NT: `MoveFileExA`, replace, delay until reboot,
-     looked up at run time; 98 SE and ME: a `<tool>=<.NEW>` line in
-     `WININIT.INI`'s `[rename]`, 8.3 paths). The run says the new tool
-     takes effect after a restart.
+  5. The new copy is always written as `.TMP` and compared with the
+     package's first. Once the running copies are closed it replaces the
+     tool: NT with `MoveFileExA` and replace; 98 SE and ME by renaming the
+     tool `.BAK`, `.TMP` to the tool and deleting `.BAK`, the old tool put
+     back if that fails. A tool still in use: `.TMP` becomes the new
+     `.NEW`, any older `.NEW` set aside as `.OLD` until the new one is
+     scheduled to replace the tool at the restart (NT: `MoveFileExA`,
+     replace, delay until reboot, looked up at run time; 98 SE and ME: a
+     `<tool>=<.NEW>` line in `WININIT.INI`'s `[rename]`); when scheduling
+     fails, the new `.NEW` is deleted and the `.OLD` put back, so nothing
+     half-done blocks the next run. The run says the new tool takes effect
+     after a restart.
   6. After a copy in place, a pending `.NEW` the copy supersedes (not
      newer than the package's) is cancelled - on 98 SE and ME its line
      first, then the file - and when the tool is left, only a pending
      `.NEW` older than the installed file is (`inst_tray_drop_pending`).
-     A newer pending `.NEW` is always left.
+     A newer pending `.NEW` is always left, and is scheduled again (NT:
+     the delayed move asked again; 98 SE and ME: its line added when
+     missing) rather than taken as done.
   7. The Run value is written when the file is in place and the value is
      not already the one wanted; `/notray` writes none and deletes an
-     existing one (`inst_tray_run_action`).
+     existing one (`inst_tray_run_action`). A deletion that fails, as
+     against a value that is not there, is reported and fails the run
+     (exit 2), at an install and at an uninstall alike.
 - **Uninstall.** As the first step of the removal of `%windir%\XHCI98`
   (both routes, after everything else; under `/list` one line each),
-  under the maintenance mutex: the Run value is deleted, a pending `.NEW`
-  is cancelled outright (its 98 SE and ME line, then the file), a `.TMP`
-  and a `.DEL` left over are deleted, the running copies are closed as
-  above and the file is deleted. A file still in use is, on NT, renamed
+  under the maintenance mutex: the Run value is deleted, the leftovers
+  are tidied as above, a pending `.NEW` is cancelled outright (its 98 SE
+  and ME line, then the file), a `.DEL` left over is deleted, the running
+  copies are closed as above and the file is deleted, and with it any
+  stale `NUL=` line of an earlier uninstall. A file still in use is, on NT, renamed
   `.DEL` (a running image can be renamed on its volume) and that name
   deleted at the restart, the tool's own name being free at once; on 98
   SE and ME a `NUL=<tool>` line goes into `WININIT.INI`. Either is
@@ -1592,7 +1616,8 @@ built, as it runs `XHCICLN`'s.
   `tools\xhcitr\` with `XHCITR.EXE`, `XHCITR64.EXE`, `readme.txt` from
   `xhcitr\README.TXT` and a generated `NOTICE.TXT`, with the same
   freshness and version checks (`XHCITR_VERSION` expanding
-  `XHCI_VER_STR`) and a `-SkipTrayTool` switch; `$toolNames` names the
+  `XHCI_VER_STR`, and each EXE's numeric file version, which XHCIINST
+  compares, equal to the release's) and a `-SkipTrayTool` switch; `$toolNames` names the
   directory; `test-package.ps1` holds those lines and the layout.
 - **Documents**: README "Installation Steps", "The package" and "Upgrading
   the driver"; the release notes' "Installing", "Updating from 2.y.y.y",

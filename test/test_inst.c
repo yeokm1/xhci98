@@ -1864,6 +1864,44 @@ static void test_tray(void)
                                "C:\\WINDOWS\\XHCI98\\XHCITR.NEW", buf,
                                sizeof(buf)), 1, "replacement cancelled");
     CHECK(strcmp(buf, "[rename]\r\n") == 0, "the section left empty");
+
+    CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98", "XHCITR.EXE", 0,
+                                    ini, sizeof(ini)), 1, "short tool path");
+    CHECK(strcmp(ini, "C:\\WINDOWS\\XHCI98\\XHCITR.EXE") == 0,
+          "short tool path text");
+    CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98\\", "XHCITR64.EXE",
+                                    1, ini, sizeof(ini)), 1, "short .NEW path");
+    CHECK(strcmp(ini, "C:\\WINDOWS\\XHCI98\\XHCITR64.NEW") == 0,
+          "short .NEW path text, one separator");
+    CHECK_EQ(inst_tray_wininit_path("C:\\W", "XHCITR.DLL", 0, ini,
+                                    sizeof(ini)), 0, "not an .EXE");
+    CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98", "XHCITR.EXE", 0,
+                                    small, sizeof(small)), 0, "too long");
+
+    /* Three runs on 98 SE and ME: an uninstall finds the tool in use and
+     * leaves NUL=<tool>; a second uninstall deletes the file but the line
+     * stays; a reinstall, with no file there, still takes the line back
+     * (the path made from the directory, not from the file), so the
+     * restart does not delete the new copy. */
+    {
+        char tool[64];
+        char text[512];
+
+        CHECK_EQ(inst_tray_wininit_path("C:\\WINDOWS\\XHCI98", "XHCITR.EXE",
+                                        0, tool, sizeof(tool)), 1, "tool path");
+        CHECK_EQ(inst_wininit_add("[rename]\r\nNUL=C:\\OTHER.TMP\r\n", "NUL",
+                                  tool, text, sizeof(text)), 1,
+                 "first uninstall: in use");
+        CHECK_EQ(inst_wininit_add(text, "NUL", tool, buf, sizeof(buf)), 1,
+                 "second uninstall: nothing added");
+        CHECK(strcmp(buf, text) == 0, "second uninstall: the line stays once");
+        CHECK_EQ(inst_wininit_drop(buf, "NUL", tool, ini, sizeof(ini)), 1,
+                 "reinstall: the stale line taken back");
+        CHECK(strcmp(ini, "[rename]\r\nNUL=C:\\OTHER.TMP\r\n") == 0,
+              "reinstall: every other line kept");
+        CHECK_EQ(inst_tray_copy_needed(0, NULL, 0, NULL, 1, v300), 1,
+                 "reinstall: the missing tool copied");
+    }
 }
 
 int main(void)

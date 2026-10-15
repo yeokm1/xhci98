@@ -2320,7 +2320,7 @@ static int move_at_restart(const char *from, const char *to)
                             (to != NULL ? MOVEFILE_REPLACE_EXISTING : 0));
 }
 
-/* The 8.3 path WININIT.INI needs (the file must exist). */
+/* The 8.3 form of an existing path (the path itself when it has none). */
 static void short_path(const char *path, char *out1, DWORD cap)
 {
     DWORD n = GetShortPathNameA(path, out1, cap);
@@ -2330,98 +2330,217 @@ static void short_path(const char *path, char *out1, DWORD cap)
     }
 }
 
-/* 98 SE and ME: "dst=src" added to (add 1) or every such line taken out of
- * (add 0) WININIT.INI's [rename] section, every other line kept. 1 done (a
- * line to take out that is not there is done), 0 failed; *changed 1 when
- * the file was written. */
-static int wininit_edit(int add, const char *dst, const char *src,
-                        int *changed)
+/* WININIT.INI and the names its replacement goes through: the new text
+ * (.XNW) and the original's copy (.XBK), beside it. */
+static int wininit_paths(char *ini, char *xnw, char *xbk, size_t cap)
 {
     char win[INST_PATH_CHARS];
-    char path[INST_PATH_CHARS];
-    char *text;
-    char *outText;
-    size_t cap;
-    DWORD n = 0;
-    int r;
-    FILE *f;
 
-    *changed = 0;
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return 0;
     }
-    join(path, sizeof(path), win, "WININIT.INI");
-    text = read_file(path, &n);
-    if (text == NULL) {
+    join(ini, cap, win, "WININIT.INI");
+    join(xnw, cap, win, "WININIT.XNW");
+    join(xbk, cap, win, "WININIT.XBK");
+    return 1;
+}
+
+/* The file's text: 1 read (*text, to be freed), 0 absent (*text ""), -1
+ * unreadable or holding a NUL byte. */
+static int wininit_read(const char *path, char **text)
+{
+    DWORD n = 0;
+
+    *text = read_file(path, &n);
+    if (*text == NULL) {
         if (file_exists(path, NULL)) {
-            return 0;
+            return -1;
         }
-        if (!add) {
-            return 1;
+        *text = (char *)malloc(1);
+        if (*text == NULL) {
+            return -1;
         }
-        text = (char *)malloc(1);
-        if (text == NULL) {
-            return 0;
-        }
-        text[0] = '\0';
-    } else if (strlen(text) != n) {
-        free(text);
+        (*text)[0] = '\0';
         return 0;
     }
-    cap = strlen(text) + strlen(dst) + strlen(src) + 32;
-    outText = (char *)malloc(cap);
-    if (outText == NULL) {
-        free(text);
+    if (strlen(*text) != n) {
+        free(*text);
+        *text = NULL;
+        return -1;
+    }
+    return 1;
+}
+
+/* text written to path whole and read back the same: 1, else 0. */
+static int write_checked(const char *path, const char *text)
+{
+    FILE *f;
+    char *back;
+    size_t n = strlen(text);
+    int ok;
+
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    f = fopen(path, "wb");
+    if (f == NULL) {
         return 0;
     }
-    r = add ? inst_wininit_add(text, dst, src, outText, cap)
-            : inst_wininit_drop(text, dst, src, outText, cap);
-    if (r < 0 || (add && r == 0)) {
-        free(text);
+    ok = fwrite(text, 1, n, f) == n;
+    if (fclose(f) != 0) {
+        ok = 0;
+    }
+    if (ok) {
+        back = NULL;
+        ok = wininit_read(path, &back) >= 0 && strcmp(back, text) == 0;
+        free(back);
+    }
+    return ok;
+}
+
+/* 98 SE and ME: "dst=src" added to (add 1) or every such line taken out of
+ * (add 0) WININIT.INI's [rename] section, every other line kept. 1 done (a
+ * line to take out that is not there is done), 0 failed with WININIT.INI as
+ * it was; *changed 1 when the file was replaced.
+ *
+ * The file is never truncated in place: the new text is written as
+ * WININIT.XNW and read back, the original copied to WININIT.XBK, and only
+ * then is WININIT.INI deleted and XNW renamed to it (98 SE and ME have no
+ * replacing rename); a failure there puts the copy back. The file is read
+ * again just before the replacement and the edit redone on what is there,
+ * which narrows, but cannot close, the window in which another installer
+ * edits it too: nothing locks WININIT.INI across programs. */
+static int wininit_edit(int add, const char *dst, const char *src,
+                        int *changed)
+{
+    char ini[INST_PATH_CHARS];
+    char xnw[INST_PATH_CHARS];
+    char xbk[INST_PATH_CHARS];
+    char *text = NULL;
+    char *again = NULL;
+    char *outText = NULL;
+    size_t cap;
+    int had;
+    int r = 0;
+    int tries;
+
+    *changed = 0;
+    if (!wininit_paths(ini, xnw, xbk, sizeof(ini))) {
+        return 0;
+    }
+    had = wininit_read(ini, &text);
+    for (tries = 0; tries < 3; tries++) {
+        if (had < 0) {
+            goto done;
+        }
+        if (!add && had == 0) {
+            r = 1;
+            goto done;
+        }
         free(outText);
-        return 0;
-    }
-    r = 1;
-    if (strcmp(text, outText) != 0) {
-        f = fopen(path, "wb");
-        if (f == NULL) {
-            r = 0;
-        } else {
-            if (fwrite(outText, 1, strlen(outText), f) != strlen(outText)) {
-                r = 0;
-            }
-            if (fclose(f) != 0) {
-                r = 0;
-            }
-            *changed = r;
+        cap = strlen(text) + strlen(dst) + strlen(src) + 32;
+        outText = (char *)malloc(cap);
+        if (outText == NULL) {
+            goto done;
         }
+        r = add ? inst_wininit_add(text, dst, src, outText, cap)
+                : inst_wininit_drop(text, dst, src, outText, cap);
+        if (r < 0 || (add && r == 0)) {
+            r = 0;
+            goto done;
+        }
+        r = 0;
+        if (strcmp(text, outText) == 0) {
+            r = 1;
+            goto done;
+        }
+        if (!write_checked(xnw, outText)) {
+            goto done;
+        }
+        free(again);
+        again = NULL;
+        had = wininit_read(ini, &again);
+        if (had >= 0 && strcmp(again, text) == 0) {
+            break;
+        }
+        free(text);
+        text = again;
+        again = NULL;
+    }
+    if (tries == 3) {
+        goto done;
+    }
+    if (had > 0) {
+        SetFileAttributesA(xbk, FILE_ATTRIBUTE_NORMAL);
+        if (!CopyFileA(ini, xbk, FALSE)) {
+            goto done;
+        }
+        SetFileAttributesA(ini, FILE_ATTRIBUTE_NORMAL);
+        if (!DeleteFileA(ini)) {
+            goto done;
+        }
+    }
+    if (!MoveFileA(xnw, ini)) {
+        if (had > 0) {
+            CopyFileA(xbk, ini, FALSE);
+        }
+        goto done;
+    }
+    free(again);
+    again = NULL;
+    if (wininit_read(ini, &again) < 0 || strcmp(again, outText) != 0) {
+        if (had > 0) {
+            CopyFileA(xbk, ini, FALSE);
+        } else {
+            DeleteFileA(ini);
+        }
+        goto done;
+    }
+    *changed = 1;
+    r = 1;
+done:
+    DeleteFileA(xnw);
+    if (r) {
+        DeleteFileA(xbk);
     }
     free(text);
+    free(again);
     free(outText);
     return r;
 }
 
-/* The installed tool's paths: the EXE, and beside it the replacement that
- * waits for a restart (.NEW), the name a new replacement is written and
- * checked under first (.TMP), and on NT a locked copy renamed for its
- * deletion at the restart (.DEL). */
+/* The installed tool's paths: the EXE; beside it the replacement that waits
+ * for a restart (.NEW), the name every new copy is written and checked
+ * under first (.TMP), an older .NEW kept until a newer one is scheduled
+ * (.OLD), the installed copy kept while 98 SE and ME put a new one in its
+ * place (.BAK), and on NT a locked copy renamed for its deletion at the
+ * restart (.DEL); the 8.3 forms of the EXE and .NEW that WININIT.INI
+ * names, made from the directory's 8.3 path and the fixed 8.3 file names,
+ * so they are right whether or not the files exist; and the Run value's
+ * data. */
 typedef struct _TRAY_PATHS {
     char Dir[INST_PATH_CHARS];
     char Exe[INST_PATH_CHARS];
     char New[INST_PATH_CHARS];
     char Tmp[INST_PATH_CHARS];
+    char Old[INST_PATH_CHARS];
+    char Bak[INST_PATH_CHARS];
     char Del[INST_PATH_CHARS];
-    char Run[INST_PATH_CHARS + 16];     /* the Run value's data */
+    char ShortExe[INST_PATH_CHARS];
+    char ShortNew[INST_PATH_CHARS];
+    char Run[INST_PATH_CHARS + 16];
 } TRAY_PATHS;
 
 static int tray_paths(TRAY_PATHS *t)
 {
+    char win[INST_PATH_CHARS];
+    char shortDir[INST_PATH_CHARS];
+    const char *name = inst_tray_file(INST_MY_ARCH);
     size_t n;
 
-    if (!local_dir(t->Dir, sizeof(t->Dir))) {
+    if (!local_dir(t->Dir, sizeof(t->Dir)) ||
+        GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return 0;
     }
-    join(t->Exe, sizeof(t->Exe), t->Dir, inst_tray_file(INST_MY_ARCH));
+    join(t->Exe, sizeof(t->Exe), t->Dir, name);
     n = strlen(t->Exe);
     if (n < 4 || !inst_eq(t->Exe + n - 4, ".EXE") ||
         !inst_tray_run_data(t->Exe, t->Run, sizeof(t->Run))) {
@@ -2429,11 +2548,24 @@ static int tray_paths(TRAY_PATHS *t)
     }
     inst_copy(t->New, t->Exe, sizeof(t->New));
     inst_copy(t->Tmp, t->Exe, sizeof(t->Tmp));
+    inst_copy(t->Old, t->Exe, sizeof(t->Old));
+    inst_copy(t->Bak, t->Exe, sizeof(t->Bak));
     inst_copy(t->Del, t->Exe, sizeof(t->Del));
     strcpy(t->New + n - 4, ".NEW");
     strcpy(t->Tmp + n - 4, ".TMP");
+    strcpy(t->Old + n - 4, ".OLD");
+    strcpy(t->Bak + n - 4, ".BAK");
     strcpy(t->Del + n - 4, ".DEL");
-    return 1;
+    if (GetFileAttributesA(t->Dir) != 0xFFFFFFFFUL) {
+        short_path(t->Dir, shortDir, sizeof(shortDir));
+    } else {
+        short_path(win, shortDir, sizeof(shortDir));
+        join(shortDir, sizeof(shortDir), shortDir, "XHCI98");
+    }
+    return inst_tray_wininit_path(shortDir, name, 0, t->ShortExe,
+                                  sizeof(t->ShortExe)) &&
+           inst_tray_wininit_path(shortDir, name, 1, t->ShortNew,
+                                  sizeof(t->ShortNew));
 }
 
 /* 1 when exe can be replaced now: absent, or opened for writing with no
@@ -2517,47 +2649,60 @@ static int tray_run_state(const char *data)
     return r == 0 ? 0 : 2;
 }
 
+/* The Run value deleted: 1 deleted, 0 there was none, -1 failed (said). */
 static int tray_run_delete(void)
 {
     HKEY k;
     LONG r;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY, 0, KEY_SET_VALUE,
-                      &k) != ERROR_SUCCESS) {
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY, 0, KEY_SET_VALUE,
+                      &k);
+    if (r == ERROR_FILE_NOT_FOUND) {
         return 0;
     }
-    r = RegDeleteValueA(k, INST_TRAY_RUN_VALUE);
-    RegCloseKey(k);
     if (r == ERROR_SUCCESS) {
-        flagChanged = 1;
-        out("The xHCI98 USB Tree no longer starts at login.\n");
-        return 1;
+        r = RegDeleteValueA(k, INST_TRAY_RUN_VALUE);
+        RegCloseKey(k);
+        if (r == ERROR_FILE_NOT_FOUND) {
+            return 0;
+        }
+        if (r == ERROR_SUCCESS) {
+            flagChanged = 1;
+            out("The xHCI98 USB Tree no longer starts at login.\n");
+            return 1;
+        }
     }
-    return 0;
+    out("The xHCI98 USB Tree's start at login could not be deleted (error "
+        "%lu).\n", (unsigned long)r);
+    return -1;
 }
 
 /* 98 SE and ME: a deletion of the tool an uninstall left waiting for the
- * restart (its NUL= line, that line alone) is taken back. Every install
- * does this, whether it copies or not, so that a reinstall keeps the file
- * the Run value names (record 25 section 8). On NT an uninstall defers only
- * the .DEL name, never the tool's own. 1 done, 0 failed. */
-static int tray_cancel_delete(const TRAY_PATHS *t)
+ * restart (its NUL= line, that line alone) is taken back, whether or not
+ * the file is there now: an uninstall that found it in use, then a second
+ * one that deleted it, leave the line behind for a reinstall's copy.
+ * Every install does this, whether it copies or not (record 25 section 8).
+ * On NT an uninstall defers only the .DEL name, never the tool's own.
+ * 1 done, 0 failed. */
+static int tray_cancel_delete(const TRAY_PATHS *t, int quiet)
 {
-    char shortExe[INST_PATH_CHARS];
     int changed;
 
-    if (envNow.Nt || !file_exists(t->Exe, NULL)) {
+    if (envNow.Nt) {
         return 1;
     }
-    short_path(t->Exe, shortExe, sizeof(shortExe));
-    if (!wininit_edit(0, "NUL", shortExe, &changed)) {
+    if (!wininit_edit(0, "NUL", t->ShortExe, &changed)) {
         out("WININIT.INI could not be read or written.\n");
         return 0;
     }
     if (changed) {
         flagChanged = 1;
-        out("The deletion of %s waiting for the restart is cancelled.\n",
-            t->Exe);
+        if (quiet) {
+            logonly("WININIT.INI: NUL=%s taken out\n", t->ShortExe);
+        } else {
+            out("The deletion of %s waiting for the restart is cancelled.\n",
+                t->Exe);
+        }
     }
     return 1;
 }
@@ -2567,20 +2712,14 @@ static int tray_cancel_delete(const TRAY_PATHS *t)
  * nothing at the restart). 1 done, 0 failed. */
 static int tray_cancel_new(const TRAY_PATHS *t)
 {
-    char shortExe[INST_PATH_CHARS];
-    char shortNew[INST_PATH_CHARS];
     int changed;
 
+    if (!envNow.Nt && !wininit_edit(0, t->ShortExe, t->ShortNew, &changed)) {
+        out("WININIT.INI could not be read or written.\n");
+        return 0;
+    }
     if (!file_exists(t->New, NULL)) {
         return 1;
-    }
-    if (!envNow.Nt && file_exists(t->Exe, NULL)) {
-        short_path(t->Exe, shortExe, sizeof(shortExe));
-        short_path(t->New, shortNew, sizeof(shortNew));
-        if (!wininit_edit(0, shortExe, shortNew, &changed)) {
-            out("WININIT.INI could not be read or written.\n");
-            return 0;
-        }
     }
     SetFileAttributesA(t->New, FILE_ATTRIBUTE_NORMAL);
     if (!DeleteFileA(t->New)) {
@@ -2593,33 +2732,52 @@ static int tray_cancel_new(const TRAY_PATHS *t)
     return 1;
 }
 
-/* The copy over the installed tool. 1 copied in place; 2 staged as .NEW,
- * which replaces the tool at the restart because it stayed in use; 0
- * failed. The new .NEW is written and checked as .TMP and only then
- * renamed over an older .NEW, so a pending replacement is never lost to a
- * failed write. */
-static int tray_put(const char *from, const TRAY_PATHS *t)
+/* The pending .NEW scheduled to replace the tool at the restart: NT
+ * MoveFileEx again (a second entry for the same move is harmless); 98 SE
+ * and ME its [rename] line, added when missing. Also how a later run makes
+ * sure an earlier run's .NEW is still scheduled. 1 done, 0 failed. */
+static int tray_schedule_new(const TRAY_PATHS *t)
 {
-    char shortExe[INST_PATH_CHARS];
-    char shortNew[INST_PATH_CHARS];
-    PFN_MOVEEX moveEx;
     int changed;
-    int moved;
-    DWORD e;
 
-    CreateDirectoryA(t->Dir, NULL);
-    if (tray_close(t->Exe) && CopyFileA(from, t->Exe, FALSE)) {
-        SetFileAttributesA(t->Exe, FILE_ATTRIBUTE_NORMAL);
-        flagChanged = 1;
-        out("Copied the xHCI98 USB Tree to %s.\n", t->Exe);
-        return 1;
+    if (envNow.Nt) {
+        return move_at_restart(t->New, t->Exe);
     }
-    e = GetLastError();
-    if (!file_exists(t->Exe, NULL)) {
-        out("The xHCI98 USB Tree could not be copied to %s (error %lu).\n",
-            t->Exe, (unsigned long)e);
+    return wininit_edit(1, t->ShortExe, t->ShortNew, &changed);
+}
+
+/* A rename over an existing name: NT MoveFileEx with replace; 98 SE and ME
+ * a delete then a rename (they have no replacing rename). */
+static int replace_rename(const char *from, const char *to)
+{
+    PFN_MOVEEX moveEx;
+
+    SetFileAttributesA(to, FILE_ATTRIBUTE_NORMAL);
+    if (envNow.Nt) {
+        moveEx = (PFN_MOVEEX)GetProcAddress(GetModuleHandleA("kernel32.dll"),
+                                            "MoveFileExA");
+        return moveEx != NULL && moveEx(from, to, MOVEFILE_REPLACE_EXISTING);
+    }
+    if (file_exists(to, NULL) && !DeleteFileA(to)) {
         return 0;
     }
+    return MoveFileA(from, to);
+}
+
+/* The package's tool put in place. It is always written as .TMP and
+ * compared with the package's first. Then, once running copies are
+ * closed, it replaces the tool: NT with a replacing rename; 98 SE and ME
+ * by renaming the tool .BAK, .TMP to the tool, and deleting .BAK, the old
+ * tool put back if that fails. When the tool stays in use, .TMP becomes
+ * the new .NEW instead - an older .NEW kept as .OLD until the new one is
+ * scheduled, and put back if scheduling fails - and replaces the tool at
+ * the restart. 1 in place; 2 staged as .NEW; 0 failed, nothing left
+ * behind. */
+static int tray_put(const char *from, const TRAY_PATHS *t)
+{
+    int hadNew;
+
+    CreateDirectoryA(t->Dir, NULL);
     SetFileAttributesA(t->Tmp, FILE_ATTRIBUTE_NORMAL);
     if (!CopyFileA(from, t->Tmp, FALSE) || !same_file(from, t->Tmp)) {
         out("The xHCI98 USB Tree could not be copied to %s (error %lu).\n",
@@ -2628,42 +2786,89 @@ static int tray_put(const char *from, const TRAY_PATHS *t)
         return 0;
     }
     SetFileAttributesA(t->Tmp, FILE_ATTRIBUTE_NORMAL);
-    SetFileAttributesA(t->New, FILE_ATTRIBUTE_NORMAL);
-    if (envNow.Nt) {
-        moveEx = (PFN_MOVEEX)GetProcAddress(GetModuleHandleA("kernel32.dll"),
-                                            "MoveFileExA");
-        moved = moveEx != NULL &&
-                moveEx(t->Tmp, t->New, MOVEFILE_REPLACE_EXISTING);
-    } else {
-        /* 98 SE and ME have no replacing rename: the old .NEW goes only once
-         * the checked .TMP is there to take its place. */
-        moved = (!file_exists(t->New, NULL) || DeleteFileA(t->New)) &&
-                MoveFileA(t->Tmp, t->New);
+    if (tray_close(t->Exe)) {
+        if (envNow.Nt || !file_exists(t->Exe, NULL)) {
+            if (replace_rename(t->Tmp, t->Exe)) {
+                flagChanged = 1;
+                out("Copied the xHCI98 USB Tree to %s.\n", t->Exe);
+                return 1;
+            }
+        } else if (replace_rename(t->Exe, t->Bak)) {
+            if (MoveFileA(t->Tmp, t->Exe)) {
+                SetFileAttributesA(t->Bak, FILE_ATTRIBUTE_NORMAL);
+                DeleteFileA(t->Bak);
+                flagChanged = 1;
+                out("Copied the xHCI98 USB Tree to %s.\n", t->Exe);
+                return 1;
+            }
+            if (!MoveFileA(t->Bak, t->Exe)) {
+                out("%s could not be put back from %s (error %lu); rename "
+                    "it back by hand.\n", t->Exe, t->Bak,
+                    (unsigned long)GetLastError());
+                DeleteFileA(t->Tmp);
+                return 0;
+            }
+        }
+        if (!file_exists(t->Exe, NULL)) {
+            out("The xHCI98 USB Tree could not be put at %s (error %lu).\n",
+                t->Exe, (unsigned long)GetLastError());
+            DeleteFileA(t->Tmp);
+            return 0;
+        }
     }
-    if (!moved) {
-        out("%s could not be put in place (error %lu).\n", t->New,
+    hadNew = file_exists(t->New, NULL);
+    if (hadNew && !replace_rename(t->New, t->Old)) {
+        out("%s could not be set aside (error %lu).\n", t->New,
             (unsigned long)GetLastError());
         DeleteFileA(t->Tmp);
         return 0;
     }
-    flagChanged = 1;
-    if (envNow.Nt) {
-        if (!move_at_restart(t->New, t->Exe)) {
-            out("%s could not be scheduled to replace %s (error %lu).\n",
-                t->New, t->Exe, (unsigned long)GetLastError());
-            return 0;
+    if (!MoveFileA(t->Tmp, t->New) || !tray_schedule_new(t)) {
+        out("%s could not be scheduled to replace %s at the restart (error "
+            "%lu).\n", t->New, t->Exe, (unsigned long)GetLastError());
+        SetFileAttributesA(t->New, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(t->New);
+        DeleteFileA(t->Tmp);
+        if (hadNew && !MoveFileA(t->Old, t->New)) {
+            out("%s could not be put back from %s.\n", t->New, t->Old);
         }
-    } else {
-        short_path(t->Exe, shortExe, sizeof(shortExe));
-        short_path(t->New, shortNew, sizeof(shortNew));
-        if (!wininit_edit(1, shortExe, shortNew, &changed)) {
-            out("WININIT.INI could not be updated to replace %s.\n", t->Exe);
-            return 0;
-        }
+        return 0;
     }
+    if (hadNew) {
+        SetFileAttributesA(t->Old, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(t->Old);
+    }
+    flagChanged = 1;
     flagRestart = 1;
     out("%s is in use: the new copy takes effect after a restart.\n", t->Exe);
     return 2;
+}
+
+/* Leftovers of an interrupted run: .TMP and .BAK go (on 98 SE and ME a
+ * .BAK with no tool beside it is the tool, and is put back), and an .OLD
+ * goes back to .NEW when the .NEW it was set aside for is missing. */
+static void tray_leftovers(const TRAY_PATHS *t)
+{
+    if (file_exists(t->Bak, NULL)) {
+        if (!file_exists(t->Exe, NULL)) {
+            MoveFileA(t->Bak, t->Exe);
+        } else {
+            SetFileAttributesA(t->Bak, FILE_ATTRIBUTE_NORMAL);
+            DeleteFileA(t->Bak);
+        }
+    }
+    if (file_exists(t->Old, NULL)) {
+        if (!file_exists(t->New, NULL)) {
+            MoveFileA(t->Old, t->New);
+        } else {
+            SetFileAttributesA(t->Old, FILE_ATTRIBUTE_NORMAL);
+            DeleteFileA(t->Old);
+        }
+    }
+    if (file_exists(t->Tmp, NULL)) {
+        SetFileAttributesA(t->Tmp, FILE_ATTRIBUTE_NORMAL);
+        DeleteFileA(t->Tmp);
+    }
 }
 
 /* Record 23 section 9.5: the tool for this machine's architecture into
@@ -2697,7 +2902,8 @@ static void tray_install(void)
             flagFailed = 1;
             return;
         }
-        if (!tray_cancel_delete(&t)) {
+        tray_leftovers(&t);
+        if (!tray_cancel_delete(&t, 0)) {
             flagFailed = 1;
             goto done;
         }
@@ -2730,8 +2936,15 @@ static void tray_install(void)
         out("The xHCI98 USB Tree at %s is current.\n", t.Exe);
     }
     if (put != 2 && inst_tray_drop_pending(put == 1, inst, iv, pending, nv,
-                                           pkg, pv) &&
-        !tray_cancel_new(&t)) {
+                                           pkg, pv)) {
+        if (!tray_cancel_new(&t)) {
+            flagFailed = 1;
+        }
+    } else if (put != 2 && file_exists(t.New, NULL) && !tray_schedule_new(&t)) {
+        /* A pending replacement this run keeps is scheduled again: an
+         * earlier run's scheduling may not have survived. */
+        out("%s could not be scheduled to replace %s at the restart.\n",
+            t.New, t.Exe);
         flagFailed = 1;
     }
     action = inst_tray_run_action(opts.NoTray, tray_run_state(t.Run),
@@ -2751,22 +2964,21 @@ static void tray_install(void)
         if (k != NULL) {
             RegCloseKey(k);
         }
-    } else if (action == INST_TRAY_RUN_DELETE) {
-        tray_run_delete();
+    } else if (action == INST_TRAY_RUN_DELETE && tray_run_delete() < 0) {
+        flagFailed = 1;
     }
 done:
     maint_unlock();
 }
 
 /* Record 23 section 9.5: the uninstall's half, under the maintenance lock.
- * The tool, its .NEW, .TMP and .DEL and the Run value are this tool's own,
- * outside every XHCIINST.LST, and go before %windir%\XHCI98 itself; a
- * pending replacement is cancelled outright; a locked copy is deleted at
- * the restart (trayDeferred), and on NT the directory with it. */
+ * The tool, its .NEW, .TMP, .OLD, .BAK and .DEL and the Run value are this
+ * tool's own, outside every XHCIINST.LST, and go before %windir%\XHCI98
+ * itself; a pending replacement is cancelled outright; a locked copy is
+ * deleted at the restart (trayDeferred), and on NT the directory with it. */
 static void tray_remove(void)
 {
     TRAY_PATHS t;
-    char shortExe[INST_PATH_CHARS];
     int changed;
 
     if (!tray_paths(&t)) {
@@ -2783,16 +2995,15 @@ static void tray_remove(void)
         return;
     }
     if (!maint_lock()) {
-        flagSteps = 1;
+        flagFailed = 1;
         return;
     }
-    tray_run_delete();
+    if (tray_run_delete() < 0) {
+        flagFailed = 1;
+    }
+    tray_leftovers(&t);
     if (!tray_cancel_new(&t)) {
         flagSteps = 1;
-    }
-    if (file_exists(t.Tmp, NULL)) {
-        SetFileAttributesA(t.Tmp, FILE_ATTRIBUTE_NORMAL);
-        DeleteFileA(t.Tmp);
     }
     if (file_exists(t.Del, NULL)) {
         SetFileAttributesA(t.Del, FILE_ATTRIBUTE_NORMAL);
@@ -2804,12 +3015,15 @@ static void tray_remove(void)
         }
     }
     if (!file_exists(t.Exe, NULL)) {
+        /* An earlier uninstall's deletion has nothing left to delete. */
+        tray_cancel_delete(&t, 1);
         goto done;
     }
     tray_close(t.Exe);
     if (DeleteFileA(t.Exe)) {
         flagChanged = 1;
         out("%s removed.\n", t.Exe);
+        tray_cancel_delete(&t, 1);
         goto done;
     }
     if (envNow.Nt) {
@@ -2833,8 +3047,7 @@ static void tray_remove(void)
         out("%s is in use: renamed %s, which is deleted at the restart.\n",
             t.Exe, t.Del);
     } else {
-        short_path(t.Exe, shortExe, sizeof(shortExe));
-        if (!wininit_edit(1, "NUL", shortExe, &changed)) {
+        if (!wininit_edit(1, "NUL", t.ShortExe, &changed)) {
             out("%s could not be removed; delete it after a restart.\n", t.Exe);
             flagSteps = 1;
             goto done;
