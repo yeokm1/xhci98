@@ -518,3 +518,109 @@ resume, shutdown, surprise removal of the NHI itself, and the `release` and
 `15C1`, behind the switch, raised a wizard offering the base image's
 older `xhci98` INF, which was cancelled: it is `xhci98.sys`'s device, not
 this driver's.
+
+## 39-A.5 and 39-A.8 - Re-enumeration and safe eject
+
+**Verdict: re-enumeration passes on both primary guests, and safe eject on
+Windows 2000; on Windows 98 SE the removable flag is set and nothing on 98
+SE offers an eject** (2026-10-15). With `xhcicm.sys` bound to the emulator's
+Alpine Ridge NHI, a device approved by the ICM client appeared on Windows
+2000 and Windows 98 SE with no Refresh and no "Scan for hardware changes",
+and left when its device router was removed; on Windows 2000 the device was
+listed in "Unplug or Eject Hardware", stopped from there, and then unplugged
+with no Unsafe Removal dialog.
+
+**The vehicle.** Development host A, TCG, the `usb4-emu` fork through task
+39-0.7's launcher (`-Usb4Profile tb3`, `Bios OFF_OFF`, `-DeviceAtBoot 0`, the
+root bridge at slot 6, slot 4: QMP and VNC 47908/47909 and 47928/47929), the
+launcher copied read-only outside the tree. Guests: `win2k-xonly` from a copy
+of the 39-A.1 smoke's overlay (`vm\usb4\reenum-2k`, `xhcicm.inf` already
+bound to the NHI), and Windows 98 SE from an overlay of
+`vm\t26\win98-gold.qcow2` (`vm\usb4\reenum-98`, ADDENDUM 8 of the brief:
+the base `win98.img` carries the frozen miniport). The QEMU binary was the
+copy in `vm\usb4\bin`, refreshed to the fork's `a50c19e` build during the
+session; which readings ran on which build was not recorded per leg. The `qemu` flavour of
+`xhcicm.sys`, `XhciLogVerbosity` 2, its port-0xE9 lines in the debug-console
+log. Driven over QMP keys and screendumps; the 2000 guest types Dvorak.
+`nvme98` 0.1.0.0 (its published `releases\` x86 build, used read-only) was
+the NVMe driver on 2000; 98 SE ran with no NVMe driver (the device's own
+wizard was cancelled).
+
+**Install.** 2000: `xhcicm.sys` copied over the bound one and a restart; the
+filter through the 39-0.4 route (`devq force xhcicmf.inf
+PCI\VEN_8086&DEV_15C0&CC_0604`, OK, `reboot=0`, then a restart so the new
+image loaded). 98 SE: the switch's bridges through 98 SE's own wizard
+(machine.inf), the NHI through Device Manager (Remove, Refresh, then "Specify
+a location" D:\ to `xhcicm.inf`), "xHCI98 Thunderbolt 3 Host Interface",
+working, with no restart. `xhcicmf.inf` is not installed on 98 SE.
+
+**What the driver found** (both guests, `cm.reenum.*`): the NHI at 03:00.0
+(`nhi=00000300`), its parent 02:00.0, two candidates on bus 2, 02:01.0 and
+02:02.0, and one member, 02:01.0 by source 5 (SHPC: the emulator's i440FX
+tunnel bridge, record 21 section 6.3 source 4), exclusive and active
+(`member.flags=00020803`). Its port reading gives nothing to read (the SHPC
+bridge has no PCI Express capability and no qualified by-offset writer
+exists for its DWORD Select, so the SHPC slot is not read): every poll ended
+at once with `up.poll=00000404` / `down.poll=00000404` (NO_READING, NONE),
+and the re-enumeration followed.
+
+| Leg | Windows 2000 | Windows 98 SE |
+|---|---|---|
+| ICM bind, driver ready, approve | `cm.bind=0`, `tbt.icm.connected=00000811`, `tbt.icm.approved`, `cm.action.tunnel-up=00000001` | the same |
+| tunnel up (`device_add enc0`) | `IoInvalidateDeviceRelations` on 02:01.0 through its filter; the NVMe `1B36:0010` reported on bus 4 at once (Found New Hardware, then `nvme98` bound), the "Unplug or Eject Hardware" icon appeared | the bridge's devnode found by its path id; `cm.reenum.9x.reenumerate=00020800` (CR_SUCCESS); Add New Hardware for "PCI Card" at once; `cm.reenum.9x.removable=00000000` (DN_REMOVABLE added, CR_SUCCESS) |
+| tunnel down (`device_del enc0`) | `tbt.icm.device-gone`, `cm.action.tunnel-down=00000003`, the invalidation; `devq ids 1B36` no longer lists the NVMe | `cm.reenum.9x.reenumerate=00020800`; a re-plug raised Add New Hardware again (a new devnode) and added DN_REMOVABLE again |
+| safe eject | the NVMe listed in "Unplug or Eject Hardware" ("NVM Express Controller (nvme98) at PCI Slot 5"); Stop, OK: "Safe To Remove Hardware"; the driver logged `cm.reenum.eject=00000208` and `cm.reenum.eject.tunnel-left-up` (the ICM has no per-device teardown, record 21 section 7.4); then `device_del enc0`: no dialog | not offered: 98 SE has no eject applet; DN_REMOVABLE reads set (the CONFIGRET above); whether ME's applet lists it is 39-V.3's |
+| unplug without an eject (`Removable` alone) | Windows 2000's "Unsafe Removal of Device" dialog, naming the controller and its disk - the release-notes line of record 21 section 7.4 stands for 2000 | - |
+| disable and enable the NHI | disable: the stop's `cm.reenum.*` counters (`calls=1`, `child.attached=1`) and the client's (`approve.ok=1`, `mailbox.ok=2`); enable: rebind, the device announced approved (`connected=00000911`), `tunnel-up=00000002`, re-enumeration | (39-A.4's leg) |
+| `XhciCmReenum` 0 (regedit, then disable and enable) | `cm.reenum.not-done=000001FF` at the tunnel up and `000002FF` at the tunnel down: no call made | not run |
+
+**The last build, read again on 2000** (commit `4d33e5b0`'s driver, whose
+eject hand-off waits for the bridge to settle after a tunnel change):
+tunnel up, the NVMe listed in "Unplug or Eject Hardware", Stop, "Safe To
+Remove Hardware", `cm.reenum.eject=00000208` and `eject.tunnel-left-up`,
+then `device_del enc0` with no dialog. The combined legs of the table (bind,
+driver ready, approve, tunnel up and down, disable and enable,
+`XhciCmReenum` 0) ran on the merged build carrying p39-nhi's final driver
+(`ee23bc17`), and are the re-read 39-A.4's 2000 legs owed.
+
+**98 SE's instance ids** (read through the walk's own diagnostic, then
+used): a function behind a PCI-to-PCI bridge is not named
+`BUS_bb&DEV_dd&FUNC_ff` on 98 SE but by its path, two hexadecimal digits
+per element, leaf first - its devfn, each parent bridge's devfn, then the
+root bus: 01:01.0 is `083000`, 02:01.0 `08083000`, 02:02.0 `10083000`,
+02:00.0 `00083000`, the NHI at 03:00.0 `0000083000`, the xHCI at 05:00.0
+`0010083000`. The experiment's hot-added `082800` is the same form. The
+first build matched the `BUS_` form alone and found no devnode; the second
+matches both.
+
+**98 SE at boot.** With the NHI started during 98 SE's boot (after a
+restart), the first discovery found no candidate on bus 2 (siblings 0)
+where the same guest, the driver installed from the desktop, had found two;
+the rediscovery from the thread's pass, 2 s later, found the set. The cause
+(configuration space behind the bridges not yet as it reads later, or the
+HAL's view of bus 2 at that point of the boot) is not read.
+
+**Two readings from the installer's filter runs** (p40-inst, its evidence
+under `out\p40-inst\legs\w2kc\`), recorded here because they concern the
+filter: (1) after `xhcicmf.inf` was installed, `Services\xhcicm` read
+`Start=0` on 2000, XP and 7 although both INFs say `StartType=3`; the cause
+is not confirmed (the likeliest is Windows promoting the service of an upper
+filter on a PCI bridge to boot start). `DriverEntry` and the filter role use
+nothing a boot start lacks (no registry read in `DriverEntry`, non-paged
+extensions, spin locks and events); the NHI role is still started by PnP.
+(2) On the first unforced install on 2000 the switch's upstream port (also
+`8086:15C0`) was left at Code 12 with its subtree gone until a restart. The
+INF matches all four `15C0` ports by id and cannot tell the upstream port
+from the others; the restart of the upstream port's stack by the install,
+with its subtree's resources to place again, is the likelier cause than the
+filter's attach, and declining the attach in `AddDevice` would not avoid
+that restart. The install route should apply the filter to the downstream
+ports only, or the release notes say a restart follows the filter's install
+on 2000.
+
+**Not read here.** The resume hold (no guest here sleeps); a removal refused
+by a driver with open files on 98 SE (no NVMe driver on that guest; the
+refusal path is in the code, logged and counted, never forced); ME; XP and
+later; `SurpriseRemovalOK` set together with `Removable` on 2000 (a variant
+build, owed to 39-V.2); the Titan Ridge model; the `release` and `debug`
+flavours.

@@ -31,10 +31,11 @@
  *                    (TbtIcmNextAction), oldest first: the tunnel-up or
  *                    tunnel-down sequence of section 6.5 on every active
  *                    member, or a RESYNC of the whole set (both
- *                    sequences' re-enumeration, no poll). The NHI does not
- *                    call it while XhciCmReenum is 0 (section 8) and
- *                    counts the action as skipped; called anyway, it
- *                    re-enumerates nothing then either.
+ *                    sequences' re-enumeration, no poll). Called for every
+ *                    action whatever XhciCmReenum says: at 0 (section 8)
+ *                    it makes no re-enumeration call and counts the action
+ *                    as not done, but still voids the domain's pending
+ *                    ejects, since the tunnel changed.
  *   CmReenumService  once per pass of the thread (each idle poll), after
  *                    the actions are drained: the eject notifications the
  *                    child filters posted (section 7.4, record 22 section
@@ -44,8 +45,11 @@
  *   CmReenumSuspend  at the system suspend's D3, before the client sends
  *                    anything to the firmware: the held mark on every
  *                    active member (section 6.3, resume ordering), and the
- *                    filters' watchdog bound, taken from the client's own
- *                    resume bound plus 10 s.
+ *                    filters' watchdog: a fixed five minutes
+ *                    (CM_PORTS_HOLD_MAX_MS, below the power-IRP watchdog),
+ *                    past which the failure path runs; the client's own
+ *                    resume bound is computed and logged as a diagnostic
+ *                    only.
  *   CmReenumResumed  at the D0 after it, once the client's resume and
  *                    reconciliation have run (ok TRUE) or failed (ok
  *                    FALSE): release the held members' retained D0 IRPs;
@@ -197,11 +201,56 @@ typedef struct _CM_REENUM_PORT {
     ULONG LastStatus;       /* the last call's NTSTATUS or CONFIGRET      */
     ULONG Devnode;          /* 98: the bridge devnode, 0 until found      */
     ULONG Marked;           /* 98: children marked removable              */
+    ULONG AskedSerial;      /* NT: the filter publication a baseline was
+                               last asked of                              */
+    ULONG MissedAt;         /* NowMs of the last retry of Missed          */
+    ULONG Missed;           /* a tunnel change came while the member was
+                               exclusive but not active, or its call could
+                               not be made: re-enumerated once it is      */
+    ULONG EjectSerial;      /* the eject's bridge publication and          */
+    ULONG EjectGen;         /* population generation, checked at hand-off */
+    ULONG WalkLogged;       /* 98: a failed devnode walk was logged       */
+    ULONG PathRead;         /* 98: Path read (cmPciPath)                  */
+    ULONG PathCount;        /* 98: its elements, 0 for none               */
+    ULONG Path[16];         /* 98: the instance path, cm_ports.h's form   */
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
-/* Children of one tunnel port remembered on 98 as already marked, so that
+/* Children of one tunnel port remembered on 98 as already seen, so that
  * a re-enumeration marks only what is new (section 7.4). */
 #define CM_REENUM_MAX_KNOWN 16UL
+
+/* CM_CFGMG.Why: why the CONFIGMG route did not open. */
+#define CM_CFGMG_WHY_NONE       0UL
+#define CM_CFGMG_WHY_THUNK      1UL /* no non-paged block for the thunks */
+#define CM_CFGMG_WHY_VERSION    2UL /* Get_Version's high byte not 4     */
+#define CM_CFGMG_WHY_ROOT       3UL /* the root devnode did not read back */
+#define CM_CFGMG_WHY_ARCH       4UL /* a build with no thunk (amd64)     */
+
+/* The CONFIGMG route of one domain (cm_cfgmg.c), Windows 98 SE and ME. */
+typedef struct _CM_CFGMG {
+    PUCHAR Thunks;          /* non-paged; the VMM patches it in place     */
+    ULONG Open;             /* both guards passed                         */
+    ULONG Why;              /* CM_CFGMG_WHY_*                             */
+    ULONG Version;          /* Get_Version's AX                           */
+    ULONG Root;             /* the root devnode                           */
+} CM_CFGMG, *PCM_CFGMG;
+
+/* cm_cfgmg.c. Every call but Open and Close returns the service's
+ * CONFIGRET, or CR_FAILURE (13h) where the route is not open.
+ * PASSIVE_LEVEL, on the connection-manager thread, Windows 98 SE and ME
+ * only. */
+BOOLEAN CmCfgmgOpen(PCM_CFGMG cfg);
+VOID CmCfgmgClose(PCM_CFGMG cfg);
+ULONG CmCfgmgChild(PCM_CFGMG cfg, ULONG devnode, PULONG child);
+ULONG CmCfgmgSibling(PCM_CFGMG cfg, ULONG devnode, PULONG sibling);
+ULONG CmCfgmgDeviceId(PCM_CFGMG cfg, ULONG devnode, char *buffer,
+                      ULONG bytes);
+ULONG CmCfgmgQueryRemove(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgRemove(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgReenumerate(PCM_CFGMG cfg, ULONG devnode);
+ULONG CmCfgmgStatus(PCM_CFGMG cfg, ULONG devnode, PULONG status,
+                    PULONG problem);
+ULONG CmCfgmgAddRemovable(PCM_CFGMG cfg, ULONG devnode);
 
 typedef struct _CM_REENUM {
     /* The registration list's link (cm_reenum.c), and whether this domain
@@ -226,10 +275,19 @@ typedef struct _CM_REENUM {
     /* The filters' watchdog for a held D0 IRP, ms (CmReenumSuspend). */
     ULONG HoldBoundMs;
 
-    /* 98: the root devnode, and each port's children already marked. */
-    ULONG RootDevnode;
+    /* 98: the CONFIGMG route, each port's children already seen, and the
+     * window after a tunnel up in which CmReenumService looks for new
+     * children to mark (the re-enumeration is not synchronous). */
+    CM_CFGMG Cfgmg;
+    ULONG CfgmgOwed;        /* the route opens at the first Action or
+                               Service, after the NHI's start completed  */
+    ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
+    ULONG DebtPending;      /* a tunnel change came while it was empty    */
+    ULONG RediscoverAt;     /* NowMs of the last                          */
     ULONG Known[XHCI_TBT_MAX_TUNNELS][CM_REENUM_MAX_KNOWN];
     ULONG KnownCount[XHCI_TBT_MAX_TUNNELS];
+    ULONG MarkFrom;         /* NowMs when the window opened               */
+    ULONG MarkOpen;
 
     /* tbt_topo.c's discovery and port state (too large for a stack). */
     XHCI_TBT_TOPO Topo;
@@ -257,6 +315,7 @@ typedef struct _CM_REENUM {
     ULONG Marked;           /* 98: DN_REMOVABLE set                       */
     ULONG MarkFailures;
     ULONG Ejects;           /* eject notifications served                 */
+    ULONG EjectsStale;      /* dropped at hand-off: the port changed      */
 } CM_REENUM, *PCM_REENUM;
 
 VOID CmReenumStart(struct _CM_NHI *nhi);
@@ -264,8 +323,14 @@ VOID CmReenumAction(struct _CM_NHI *nhi, const TBT_ICM_ACTION *action);
 VOID CmReenumService(struct _CM_NHI *nhi);
 VOID CmReenumSuspend(struct _CM_NHI *nhi);
 VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
-VOID CmReenumStop(struct _CM_NHI *nhi);
+/* A resume the thread will not run (the D0 IRP failed below, or no
+ * thread to queue it to): every held member released by the failure path
+ * at once, so no bridge's D0 waits for the watchdog. The exception to the
+ * thread contract: any context at <= DISPATCH_LEVEL, idempotent, and
+ * harmless where nothing is held. IRQL: <= DISPATCH_LEVEL, any context
+ * (cm_power.c's D0 completion calls it). */
 VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
+VOID CmReenumStop(struct _CM_NHI *nhi);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);
@@ -277,6 +342,14 @@ ULONG CmReenumPorts(struct _CM_NHI *nhi, PULONG ports, ULONG capacity);
 
 /* Once, from DriverEntry, before any AddDevice. Any IRQL. */
 VOID CmRegInit(VOID);
+
+/* The registration fields of a new bridge or child filter's extension,
+ * from its AddDevice or creation, before it is attached. Any IRQL. */
+VOID CmRegFilterInit(struct _CM_FILTER *filter);
+
+/* The registration list's counters, for the NHI's log at stop. */
+VOID CmRegCounters(PULONG attached, PULONG skipped, PULONG refused,
+                   PULONG watchdogs);
 
 /* The bridge filter's start has completed below it successfully: publish
  * its entry under its bus, device and function (IoGetDeviceProperty). A
@@ -294,7 +367,11 @@ VOID CmRegWithdraw(struct _CM_FILTER *filter);
  * eject is on. `relations` may be NULL (no children). PASSIVE_LEVEL, in
  * the dispatch routine after the completion wait. */
 VOID CmRegRelations(struct _CM_FILTER *filter,
-                    const DEVICE_RELATIONS *relations);
+                    const DEVICE_RELATIONS *relations, ULONG seq);
+
+/* Before a BusRelations request is passed down: the bridge's tunnel-change
+ * sequence, handed to CmRegRelations with the answer. PASSIVE_LEVEL. */
+ULONG CmRegRelationsBegin(struct _CM_FILTER *filter);
 
 /* A device IRP_MN_SET_POWER to D0 on a bridge filter: TRUE when it was
  * passed down with the hold's completion routine (the caller returns
@@ -302,8 +379,11 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
  * <= DISPATCH_LEVEL. */
 BOOLEAN CmRegHoldD0(struct _CM_FILTER *filter, PIRP irp);
 
-/* A child filter's device is being removed after a query-remove (not a
- * surprise removal): post the eject to the owning domain. PASSIVE_LEVEL. */
-VOID CmRegChildEjected(struct _CM_FILTER *child);
+/* A child filter's device has been removed, its REMOVE_DEVICE passed
+ * down and finished below; `ejected` when a query-remove preceded it and
+ * no surprise removal did. Once no live child stack and no unwatched
+ * device is left on the port, an orderly removal seen there is posted to
+ * the owning domain as an eject. PASSIVE_LEVEL. */
+VOID CmRegChildRemoved(struct _CM_FILTER *child, BOOLEAN ejected);
 
 #endif /* CM_REENUM_H */
