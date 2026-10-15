@@ -1333,6 +1333,48 @@ static void plan(void)
     group_verdicts();
 }
 
+/* USBNTMAP.SYS in System32\Drivers: the upper filter xhciuas.inf names on
+ * 98 SE and ME, which only another install places (NUSB's mass-storage
+ * component on 98 SE, ME's own usbstor.inf at its first ordinary stick). */
+static int ntmap_present(void)
+{
+    char win[INST_PATH_CHARS];
+    char path[INST_PATH_CHARS];
+
+    if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
+        return 1;
+    }
+    join(path, sizeof(path), win, "System32\\Drivers");
+    join(path, sizeof(path), path, "USBNTMAP.SYS");
+    return file_exists(path, NULL);
+}
+
+/* 98 SE and ME: what a present UAS entry at Code 2 needs (INST_UASFIX_*). */
+static int uas_fix(const DEVREC *d)
+{
+    if (envNow.Nt || !d->Present || d->Inf != INST_INF_UAS ||
+        d->Problem != 2UL) {
+        return INST_UASFIX_NONE;
+    }
+    return inst_uas_fix_9x(envNow.Nt, envNow.Minor, 1, d->Problem,
+                           ntmap_present());
+}
+
+/* lead is four characters: the plan's indent, or a step's "  - ". */
+static void print_uas_fix(int fix, const char *lead)
+{
+    if (fix == INST_UASFIX_ME_STICK) {
+        out("%sCode 2: Windows ME has not yet copied its own USB storage "
+            "files\n    (USBNTMAP.SYS). Plug in any ordinary USB stick once "
+            "and let it install,\n    then unplug this disk and plug it "
+            "back in. No restart is needed.\n", lead);
+    } else if (fix == INST_UASFIX_NUSB) {
+        out("%sCode 2: USBNTMAP.SYS, from NUSB's mass-storage component, is "
+            "missing.\n    Install that component (README, \"Installation "
+            "Steps\"); the disk starts\n    at the next boot.\n", lead);
+    }
+}
+
 static void print_plan(void)
 {
     int i;
@@ -1356,6 +1398,7 @@ static void print_plan(void)
                          d->Action == INST_ACT_NEWER)) ? " - /force: reinstall" : "");
         if (d->Problem != 0) {
             out("    problem code %lu\n", (unsigned long)d->Problem);
+            print_uas_fix(uas_fix(d), "    ");
         }
         if (d->Refused) {
             out("    LEFT: %s\n",
@@ -3867,9 +3910,11 @@ static void steps_9x(const char *dir)
     out("\nWhat to do now:\n");
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
+        int fix;
         if (!d->Present || d->Inf < 0) {
             continue;
         }
+        fix = uas_fix(d);
         /* The controller and, for an update, its root hub: the release
          * notes' update is Update Driver on both (the 9x leg, 2026-10-15:
          * the root hub otherwise stays at the old release). Hubs and
@@ -3936,7 +3981,7 @@ static void steps_9x(const char *dir)
                     "the drivers in a specific location\", Have Disk, type\n"
                     "    %s. (A search keeps a driver of the same DriverVer.)\n",
                     dir);
-            } else {
+            } else if (fix == INST_UASFIX_NONE) {
                 out("  - Nothing: this release runs it.\n");
             }
             break;
@@ -3944,6 +3989,7 @@ static void steps_9x(const char *dir)
             out("  - Another driver runs it; this tool leaves it.\n");
             break;
         }
+        print_uas_fix(fix, "  - ");
     }
     if (!any) {
         out("  No device of this package is present.\n");
@@ -3953,6 +3999,12 @@ static void steps_9x(const char *dir)
         "NUSB's mass-storage component\n(README, \"Installation Steps\"). Run "
         "INSTALL.BAT again after the restart to see\nthe result and set the "
         "driver's options.\n", dir);
+    if (envNow.Minor == 90 && !ntmap_present()) {
+        out("On this Windows ME, plug in an ordinary USB stick once before the "
+            "first UAS\ndisk: ME copies its own USB storage files "
+            "(USBNTMAP.SYS) only then, and a\nUAS disk plugged in first shows "
+            "Code 2 until it is unplugged and plugged\nback in.\n");
+    }
 }
 
 static int run_install_9x(void)

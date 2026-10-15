@@ -1039,6 +1039,15 @@ int inst_group_verdict(int anyNewer, int anyUnknown, int binary, int force)
     return INST_GROUP_OK;
 }
 
+int inst_uas_fix_9x(int nt, INST_U32 minor, int isUas, INST_U32 problem,
+                    int ntmapPresent)
+{
+    if (nt || !isUas || problem != 2UL || ntmapPresent) {
+        return INST_UASFIX_NONE;
+    }
+    return minor == 90UL ? INST_UASFIX_ME_STICK : INST_UASFIX_NUSB;
+}
+
 int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
                         size_t cap)
 {

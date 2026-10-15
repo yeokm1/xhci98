@@ -825,7 +825,21 @@ disk, and for any current device when `/force` asks for a reinstall:
 the local directory. The storage prerequisite stays as the README says: on 98 SE,
 NUSB's mass-storage component for any disk, UAS included. The first UAS
 disk and the first NHI found later find `xhciuas.inf` and `xhcicm.inf` in
-the same directory. The run ends with exit 4: staged, steps left for the
+the same directory.
+
+A UAS entry at Code 2 with no `USBNTMAP.SYS` in `System32\Drivers` (the
+upper filter `xhciuas.inf` names) gets a step of its own, in the plan and
+in the steps, in place of "Nothing" when it is current: on ME, plug in any
+ordinary stick once (ME copies its own storage files from its cabinets
+when its first Bulk-Only device installs) and then unplug and replug the
+disk; on 98 SE, NUSB's mass-storage component, the disk starting at the
+next boot (release notes, "Known limitations", the ME entry, and
+"Windows 98 SE and ME: the stock install, and storage"). Code 2 with the
+file present has another cause and gets no such step. On ME with no
+`USBNTMAP.SYS` yet, the steps end with the same advice before any UAS
+disk is plugged in (the ME leg of 2026-10-15: a UAS disk as the first
+storage device installed silently from the staged INF and sat at Code 2,
+through a restart, as the release notes say). The run ends with exit 4: staged, steps left for the
 user.
 
 ### 6.5 After the restart
