@@ -1,11 +1,12 @@
 # xhci98 - Release Notes
 
-This file describes package version `2.4.0.0`, the fourteenth release and
-the seventh of the host controller driver, dated 2026-10-14 (`DriverVer`
-`10/14/2026,2.4.0.0`, in all four INFs). What it adds to `2.3.1.0` is
-"What `2.4.0.0` adds", below; what `2.3.1.0` changed from `2.3.0.0` is
-"What `2.3.1.0` changed" after it, and what `2.3.0.0` changed from
-`2.2.0.0` is "What `2.3.0.0` changed" after that; what `2.2.0.0` changed from `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and
+This file describes package version `3.0.0.0`, the fifteenth release and
+the eighth of the host controller driver, dated 2026-10-15 (`DriverVer`
+`10/15/2026,3.0.0.0`, in all eight INFs). What it adds to `2.4.0.0` is
+"What `3.0.0.0` adds", below; what `2.4.0.0` added to `2.3.1.0` is "What
+`2.4.0.0` adds" after it, what `2.3.1.0` changed from `2.3.0.0` is "What
+`2.3.1.0` changed" after that, and what `2.3.0.0` changed from `2.2.0.0` is
+"What `2.3.0.0` changed"; what `2.2.0.0` changed from `2.1.1.0`, `2.1.1.0` from `2.1.0.0`, and
 `2.1.0.0` from `2.0.0.0`, are their entries in `releases/history.md`, and
 the sections below say where each change was read. Where this file and
 `docs/contributing/roadmap-hcd.md`, `docs/contributing/build-and-test.md` or
@@ -19,6 +20,9 @@ Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
 `2.3.0.0` changed", below, lists them and says which. `2.3.1.0`'s setup
 fix was read on the same E7250 under Windows XP x64 Setup. "What
 `2.4.0.0` adds" says, item by item, what was read of `2.4.0.0`'s changes.
+`3.0.0.0`'s Thunderbolt and USB4 support was read in virtual machines, on
+an emulator of those controllers, and on no real machine yet: "Where
+`3.0.0.0` was read" lists the readings.
 
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
@@ -152,8 +156,461 @@ included.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 - It is not the miniport. `1.2.0.0` is frozen and stays available; nothing
-  of it is in this package. A `2.4.0.0` install replaces it, because both are
+  of it is in this package. An install of this package replaces it, because both are
   called `xhci98.sys` (see "Upgrading from 1.2.0.0").
+
+## What `3.0.0.0` adds
+
+`3.0.0.0` adds a third driver, `xhcicm.sys`, for Thunderbolt and USB4
+controllers, and an install tool. `xhci98.sys` and `xhciuas.sys` carry
+`2.4.0.0`'s code under the new version number.
+
+- **Thunderbolt 3 and USB4, with `xhcicm.sys`.** A Thunderbolt or USB4
+  dock, enclosure or NVMe case plugged into the machine reaches Windows:
+  its PCI Express tunnel is set up, and the devices behind it (an NVMe
+  drive, a dock's own USB controller, a network adapter) appear in Device
+  Manager and run under their own drivers. One driver, two ways of doing
+  it, chosen per controller at its start: on an Intel Thunderbolt
+  controller whose firmware runs its own connection manager (Thunderbolt
+  2 and 3, and the USB4-generation Intel controllers while their firmware
+  does), `xhcicm.sys` is that firmware's client and approves each device;
+  on a USB4 host whose firmware runs none (AMD, ASMedia, Intel Lunar Lake
+  and later, Barlow Ridge), `xhcicm.sys` is the connection manager itself
+  and builds the tunnels. "Which controllers", below, lists them; every
+  one but a single Alpine Ridge part is untested, and it says what that
+  means.
+- **No Refresh.** When a tunnel comes up or goes down, `xhcicm.sys` makes
+  Windows look at the ports behind it at once: through Windows 98 SE's and
+  ME's configuration manager, and on Windows 2000 to 7 through a small
+  filter on those PCI ports. A device plugged in appears without Scan for
+  hardware changes, and one unplugged leaves.
+- **Safe removal.** A device behind a tunnel is offered in Windows 2000's
+  "Unplug or Eject Hardware" and XP's, Vista's and 7's "Safely Remove
+  Hardware"; on every system, `INSTALL /eject` stops it too ("Removing a
+  Thunderbolt or USB4 device safely").
+- **`INSTALL.BAT`**, with `XHCIINST.EXE` and `XHCIIN64.EXE`: installs,
+  updates and uninstalls every driver of the package in one run on
+  Windows 2000 to 7, and stages it with the steps left printed on 98 SE and
+  ME ("Installing, updating and uninstalling with INSTALL.BAT").
+- **A device viewer and eject in the same tool**: `INSTALL /devices` lists
+  the Thunderbolt and USB4 devices connected now and the Windows devices
+  behind each, and `INSTALL /eject` stops one, on every system (design
+  record 24).
+- **Device Manager names by generation**: "Thunderbolt and USB4 in Device
+  Manager", below.
+- **A link-state channel for `nvme98`**: `xhcicm.sys` tells the NVMe
+  driver `nvme98` when an NVMe drive's tunnel comes up, and under the USB4
+  connection manager when its link has gone down ("NVMe drives behind a
+  tunnel").
+- **`nvme98` in the download**: the package carries a release of nvme98,
+  the NVMe driver for Windows 98 SE to Vista, as its own project released
+  it (which release: "NVMe drives behind Thunderbolt or USB4", under
+  "Installing").
+
+### Which controllers
+
+`xhcicm.sys` claims these host controllers (the NHI, "native host
+interface", function of a Thunderbolt or USB4 controller), by PCI id:
+
+| Generation | PCI ids (`8086:` unless named) | Connection manager | Device Manager |
+|---|---|---|---|
+| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | the firmware's | `xHCI98 Thunderbolt 2 Controller` |
+| Alpine Ridge (Thunderbolt 3) | `15BF` (JHL6240), `1575`, `1577`, `15D2`, `15D9` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
+| Titan Ridge (Thunderbolt 3) | `15E8`, `15EB` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
+| Ice Lake (integrated) | `8A0D`, `8A17` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
+| Maple Ridge | `1134`, `1137` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+| Tiger Lake, Alder Lake, Raptor Lake, Meteor Lake (integrated) | `9A1B`, `9A1D`, `9A1F`, `9A21`; `463E`, `466D`; `A73E`, `A76D`; `7EB2`, `7EC2`, `7EC3` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+| Lunar Lake, Panther Lake, Wildcat Lake (integrated) | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+| Barlow Ridge | `5781`, `5784` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+| AMD | `1022:1668`, `1022:1669` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+| Any other USB4 host (PCI class `0C0340`; ASMedia's ASM4242 on AM5 X870 boards among them) | by class | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
+
+Not claimed: Apple machines and Apple's controllers, the USB-only
+Thunderbolt functions (`15DC`, `15DD`, `15DE`), and the older Light Ridge,
+Cactus Ridge, Redwood Ridge and Win Ridge parts.
+Thunderbolt 3 docks and enclosures work on every host above; a USB4
+device on a Thunderbolt 3 host works as a Thunderbolt 3 device would,
+subject to the host's firmware. Daisy chains (a device behind a device),
+DisplayPort tunnels and host-to-host links are not supported in this
+release; under the USB4 connection manager a Thunderbolt 3 device behind
+a USB4 host gets its PCI Express tunnel, router by router.
+
+The machine must boot through the BIOS (CSM, legacy boot), as for every
+target here, and the BIOS must leave the controller switched on and
+visible: see "Thunderbolt and USB4: known limitations" for the BIOS
+settings.
+
+**Untested hosts.** Only the Alpine Ridge JHL6240 (`8086:15BF`) has been
+captured from a real machine, a ThinkPad P14s Gen 1, and the Thunderbolt 3
+half was built and read against an emulator of that capture. Every other
+Thunderbolt controller this driver claims - Falcon Ridge, the other
+Alpine Ridge parts, Titan Ridge, Maple Ridge, and the Ice Lake to Meteor
+Lake integrated controllers - is untested: it is driven to the Linux
+driver's description of its messages, and no capture of it exists. Every
+USB4 host is untested as well: the USB4 connection manager has run only
+on the emulator's host models (Alder Lake's, from a capture of a
+Framework laptop, a minimal one, and one of ASMedia's ASM4242). Each of
+them acts by default (owner, 2026-10-15). On such a machine the driver
+may start and do nothing; the `debug` flavour's log says why.
+`XhciCmMode` `0` turns the driver off without uninstalling it. A report
+from any of these machines, working or not, is new information.
+
+### Installing it
+
+`INSTALL.BAT` installs `xhcicm.sys` with the rest of the package, and on
+Windows 2000 to 7 it is the way to install it: besides the controller's
+own driver it puts the package's filter on the controller's PCI ports
+(`nt\xhcicmf.inf` in each flavour directory), which on XP and later
+Windows takes only when it is forced, as the tool does. On Windows 2000
+the first install of that filter takes the Thunderbolt switch's other
+devices away until the restart the tool asks for. On Windows 98 SE and
+ME the controller appears as an unknown PCI device or "Other device";
+point its Update Driver at the flavour directory, as for the xHCI
+controller. There is no filter on 98 SE and ME.
+
+### Plugging in, and the approval
+
+Plug the device in and wait a few seconds: under the firmware connection
+manager `xhcicm.sys` approves it (well inside the nine seconds or so
+after which a USB4 device on a Thunderbolt 3 host gives up its PCI
+Express tunnel and falls back to plain USB), the tunnel comes up, and the
+devices behind it are found. "Thunderbolt 3: which devices get a tunnel,
+and what that means", below, is the approval and what it lets a device
+do. Under the USB4 connection manager the same value, `XhciCmApprove`,
+decides whether a newly connected device gets its PCI Express tunnel; at
+`0` no new tunnel is built, tunnels found at the start are kept, and the
+USB3 tunnel is left alone.
+
+A device that was already tunnelled when Windows started - by the BIOS's
+pre-boot support, or by a firmware connection manager - keeps its tunnel
+and works: `xhcicm.sys` never resets a tunnel it finds at its start
+(`XhciCmPreOsCleanup` below is the one exception, and only when set).
+
+### Removing a Thunderbolt or USB4 device safely
+
+Close the files open on the device first, as for any removable disk. On
+every system `INSTALL /devices` shows what is connected and
+`INSTALL /eject` removes one device safely (`XHCIINST`, or `XHCIIN64` on
+64-bit Windows, in `tools\xhciinst\` takes the same switches).
+
+- **Windows 98 SE and ME:** run `INSTALL /eject`; these systems have no
+  other way, since the "Unplug or Eject Hardware" applet NUSB installs
+  does not list a device behind a Thunderbolt port. The tool lists the
+  devices, asks which one, and asks Windows to query the device's
+  removal (a volume with a file open on it refuses, and the tool says so
+  and changes nothing) and, once Windows has agreed, to remove it; then it
+  says whether the device can be unplugged. Until it is unplugged, Device
+  Manager's Refresh, or the Thunderbolt driver looking at the port again,
+  can start the device again.
+- **Windows 2000:** "Unplug or Eject Hardware" lists the device; stop it,
+  then unplug it. Unplugged without a stop, the device is removed all the
+  same and Windows 2000 shows its "Unsafe Removal of Device" dialog.
+- **Windows XP, Vista and 7:** "Safely Remove Hardware" lists the device;
+  stop it, then unplug it. After the stop Device Manager shows it at Code
+  47 until it is unplugged. Unplugged without a stop, it is removed with
+  no dialog.
+- **A dock** is listed under the name of its own PCI switch's upstream
+  port, a generic PCI-to-PCI bridge name; stopping it stops everything in
+  the dock.
+- **A device missing from the list**: one connected before the driver
+  started, or disabled and enabled since, or whose driver was installed
+  or updated since, is not listed until it is unplugged and plugged in
+  again. `INSTALL /eject` still asks Windows to stop it: Windows refuses
+  to eject such a device, and the tool then asks for the same
+  query-remove and remove by the routine meant for devices that are not
+  removable, a program with a file open still refusing it. Windows 2000
+  offers no such routine (read in a virtual machine on 2026-10-15): there
+  the tool says the device cannot be stopped; after a restart with it
+  connected it is listed for removal again, or it can be unplugged with
+  the computer off. XP, Vista and 7 have not been read for this case.
+
+On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
+asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
+one question, and `INSTALL /eject id=<instance id> /yes`, with the
+instance id `/devices` prints, does it with no question, for scripts;
+`tools\xhciinst\README.TXT` has the exit codes.
+
+`INSTALL /devices` shows each connected device's name, generation, link,
+approval and connections (PCIe, USB3, DisplayPort) as `xhcicm.sys` knows
+them, and the PCI functions and Windows devices behind each Thunderbolt
+port with their drivers and problem codes. The driver writes what it
+knows to the registry value `XhciCmStatus` of the Thunderbolt host
+interface's hardware key, and the tool trusts it only after the running
+driver has answered it (`XhciCmStatusAsk` in the driver key); it ejects
+only devices behind a port the driver has confirmed, and never the
+Thunderbolt controller's own functions. Unique ids are shown as their
+last four digits; no key material is ever written. Design record 24 is
+the reference.
+
+Under a firmware connection manager the stop ends the device's drivers
+and leaves its tunnel up, since the firmware has no way to drop one
+tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
+connection manager on Windows 2000 to 7 the stop also takes the PCI
+Express tunnel down (the USB3 tunnel stays).
+
+### NVMe drives behind a tunnel
+
+An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
+which none of these systems has. `nvme98`, a separate project, is that
+driver for Windows 98 SE to Vista, and the download carries a release of
+it as its project released it, with its own licence and notes (which
+release, and where it is: "NVMe drives behind Thunderbolt or USB4",
+under "Installing"); read them before installing it. `xhcicm.sys` brings the drive's tunnel up and
+down; `nvme98` runs the drive.
+
+The two talk over a link-state channel that `nvme98` defined:
+
+- When a tunnel comes up, `xhcicm.sys` tells `nvme98` which NVMe function
+  is behind it, before Windows finds the function.
+- Under the USB4 connection manager, after an unplug, once the path is
+  proven closed and the drive's reset is done, it tells `nvme98` the link
+  is down and waits for its acknowledgement (up to 5 seconds on Windows
+  2000 to 7, 3 seconds on 98 SE and ME) before Windows removes the drive,
+  so `nvme98` ends outstanding requests at once instead of at its own
+  timeout. In this release that statement is made only on the emulator's
+  tunnel ports; on real hardware it is withheld until `nvme98` has
+  qualified it, and `nvme98` ends a vanished drive's requests at its own
+  deadline instead.
+- On Windows 2000 to 7 the channel is a kernel callback object; on 98 SE
+  and ME, a record `xhcicm.sys` writes at each start under `nvme98`'s
+  service key. Whether a given `nvme98` release reads it is in that
+  release's notes.
+
+### The connection manager's registry values
+
+Each value is in the Thunderbolt or USB4 controller's driver (software)
+key, a `DWORD` unless it says otherwise:
+
+| Windows | Key |
+|---|---|
+| 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\System\NNNN` |
+| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` |
+
+`NNNN` is the subkey whose `DriverDesc` is the controller's Device
+Manager name ("Which controllers"). The install writes each value below
+but `XhciCmTunnelBridge` at its default, only where it is missing.
+Restart Windows, or disable and enable the controller, after a change.
+
+| Value | Default | What it does |
+|---|---|---|
+| `XhciCmMode` | `1` | `0` off: the driver binds the controller, logs it and touches nothing. `1` automatic: the firmware's connection manager's client where it runs, `xhcicm.sys`'s own on a USB4 host whose firmware runs none, and nothing where neither is certain. `2`: an Intel controller the table above does not list, driven as an Alpine Ridge, at your own risk, after adding its id to a copy of `xhcicm.inf`. `3`: force `xhcicm.sys`'s own USB4 connection manager, at your own risk; refused on Falcon, Alpine and Titan Ridge and Ice Lake, and wherever the firmware's runs |
+| `XhciCmApprove` | `1` | `1` approves every device (see "Thunderbolt 3: which devices get a tunnel"); `0` approves none |
+| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal; `0` does not |
+| `XhciCmReenum` | `1` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh, for a machine where that misbehaves |
+| `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
+| `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
+| `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
+| `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
+| `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
+| `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
+| `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
+| `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
+
+The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
+answers Y with a Thunderbolt or USB4 controller present and N with none
+found (a laptop may show its controller only while a device is plugged
+in); `INSTALL /thunderbolt` includes it without asking, and N leaves a
+Thunderbolt driver already installed as it is.
+
+`INSTALL.BAT` asks about `XhciCmMode`, `XhciCmApprove` and
+`XhciCmSafeEject` where a Thunderbolt or USB4 controller is present. It
+never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`
+(each `0` or `1`) and `XhciCmPreOsCleanup` (`0`, `1` or `2`).
+`INSTALL /set Name=Value` sets any of these seven.
+
+### Where `3.0.0.0` was read
+
+Every reading below was taken in QEMU virtual machines on development
+host A, on the emulator of the `usb4-emu` project: its model of the
+ThinkPad P14s Gen 1's Alpine Ridge controller (from a capture of that
+machine), its Titan Ridge model, its USB4 host models (Alder Lake's, a
+minimal one, and a stand-in for ASMedia's ASM4242), and its model of a
+real USB4 NVMe enclosure (the ORICO enclosure's ASMedia ASM2464, from a
+capture). The NVMe driver was `nvme98` `0.1.1.0` throughout. **No real
+Thunderbolt or USB4 machine has run this release**: the real-hardware
+bench, the owner's ThinkPad P14s Gen 1 with a Thunderbolt 3 dock among
+it, is not yet read. `docs/contributing/runs/run-39.md` and `run-40.md`
+have every leg.
+
+- **Windows 98 SE:** under the firmware connection manager, the install,
+  a device approved and its NVMe drive found with no Refresh and read and
+  written through `nvme98`, unplug and re-plug, a device tunnelled at
+  boot left alone, nothing attached at boot, the controller absent with
+  Thunderbolt BIOS Assist on, disable and enable, `XhciCmApprove` `0` and
+  `XhciCmMode` `0`, a plug and an unplug while an Add New Hardware wizard
+  was open, and `INSTALL /devices` and `INSTALL /eject` (an eject refused
+  while a file was open, then accepted). Under the USB4 connection
+  manager, the install, hot plug, unplug and re-plug, a cold boot with
+  the device attached, reads and writes on the ASM2464 enclosure model,
+  the USB3 tunnel, and the host interface taken away under the driver,
+  which then stopped touching it.
+- **Windows ME:** the install through `INSTALL.BAT`, and under both
+  connection managers a plug, unplug and re-plug with the NVMe drive
+  found with no Refresh and its data intact; Stand by and resume under
+  both. "Unplug or Eject Hardware" lists nothing, as on 98 SE.
+- **Windows 2000:** the firmware connection manager's legs read on 98 SE,
+  the open wizard aside, and the Titan Ridge model,
+  safe removal through "Unplug or Eject Hardware", the USB4 connection
+  manager's legs (a cold device, hot plug, unplug during I/O, pre-OS
+  tunnels kept and cleaned, the USB3 tunnel, disable and enable, the
+  policy values, two ports, a daisy chain left alone, the driver turned
+  off) on three host models, the host interface taken away, and a
+  multiprocessor guest under Driver Verifier. Two readings failed on the
+  emulated platform, not in the driver: a re-plug after Thunderbolt BIOS
+  Assist powered the controller off (the emulator resets the controller's
+  bridges without telling Windows), and a second port on the ASM4242
+  stand-in (Windows 2000 left that bridge at Code 12).
+- **Windows XP, XP x64, Vista (32-bit) and 7 (32-bit):** the install with
+  the filter through `INSTALL.BAT`, and under both connection managers a
+  plug, unplug and re-plug with the NVMe drive found with no Refresh;
+  under the firmware connection manager also safe removal through
+  "Safely Remove Hardware", with no dialog after a plain unplug. These
+  legs ran the `release` package (XP x64's unsigned, which it loads);
+  most 98 SE, ME and 2000 legs ran the `qemu` flavour of `xhcicm.sys`,
+  which logs.
+- **Not yet read: Windows Vista x64 and 7 x64** with a Thunderbolt or
+  USB4 controller. They load only a signed driver, and these legs wait
+  for the test-signed package. Suspend and resume were read on ME only.
+- **`INSTALL.BAT`:** a first install and an update from `2.4.0.0` on each
+  of Windows 98 SE, ME, 2000, XP, XP x64, and Vista and 7 in both
+  architectures (Vista x64 and 7 x64 with an unsigned package, started
+  with F8), and on several of them an uninstall and an update from
+  `2.3.1.0`.
+
+### Thunderbolt and USB4: known limitations
+
+- **The BIOS must leave the controller on.** A controller the BIOS
+  switched off is not switched on: with "Thunderbolt BIOS Assist" on and
+  nothing attached at power-on, the BIOS powers it down, and the switch
+  that powers it up again is an ACPI method this driver cannot call
+  (Windows 98 runs these machines in APM mode). Turn Assist off in the
+  BIOS. On the integrated controllers (Ice Lake and later) the driver
+  takes only the controller's own power-up step; the platform's own power
+  control stays the BIOS's. A driver that finds the controller already
+  forced on never switches it off.
+- **ThinkPad P14s Gen 1 (BIOS 1.36): "Thunderbolt BIOS Assist" on with
+  pre-boot support off hides the controller**, even with a device
+  attached, so no driver can use it; in that setting a USB4 enclosure is
+  unusable to any operating system (a Thunderbolt 3 dock still shows the
+  controller). With Assist on and pre-boot support on, after the last
+  device is unplugged the firmware stops answering and the controller is
+  removed about 15 seconds later, not to return on a re-plug. Turn Assist
+  off, or turn pre-boot support on and keep a device attached.
+- **Windows 2000: an unplug without a stop shows "Unsafe Removal of
+  Device"**, and the device is removed. Stop it in "Unplug or Eject
+  Hardware" first.
+- **A device disabled and enabled, or whose driver was installed or
+  updated, drops out of the safe-removal list** until it is unplugged and
+  plugged in again (Windows 2000 to 7): Windows rebuilds its driver stack
+  without the filter that marks it removable. Use `INSTALL /eject`, or
+  re-plug it. A later release is to keep the mark across a rebuild.
+- **A device tunnelled before the driver started** (by the BIOS's pre-boot
+  support, or connected while the driver was installed) is offered for
+  safe removal only after a re-plug, on Windows 2000 to 7.
+- **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
+  stays loaded until Windows restarts**: disabling, updating or removing
+  it takes full effect at the next start.
+- **Windows 98 SE and ME, USB4 connection manager: a removal leaves the
+  tunnel up until the unplug.** After `INSTALL /eject` or Device Manager's
+  Remove, the device is stopped but its tunnel stays, so a Refresh can
+  find it again; unplug it.
+- **A USB4 host that stops answering stays stopped until the controller is
+  disabled and enabled, or Windows restarts.** If the platform powers the
+  controller off or resets it without telling Windows, `xhcicm.sys`
+  notices within a few idle periods, reports every device behind it gone
+  and touches the controller no more; it does not take the fabric up again
+  by itself in this release. Under a firmware connection manager it
+  resumes when the controller answers again.
+- **Windows 2000: the first install of the filter takes the Thunderbolt
+  switch's other devices away until the restart**, the switch's upstream
+  port showing Code 12 meanwhile. `INSTALL.BAT` asks for that restart; do
+  it before using the controller.
+- **Nothing is remembered.** Approval is not stored: after a re-plug, or a
+  restart without pre-boot support, a device is approved again by
+  `XhciCmApprove`'s rule (see "Thunderbolt 3: which devices get a
+  tunnel").
+- **Approval is automatic by default, and a tunnelled device can reach all
+  of memory**; set `XhciCmApprove` to `0` where the port is within reach
+  of people you do not trust (same section).
+- **Standby and hibernation with a tunnelled device attached are
+  unsupported** on every system, and so is standby with an integrated
+  controller (Ice Lake and later). Stop and unplug the device first.
+- **Windows 98 SE and ME: a device plugged in after the start needs an
+  interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
+  routing table covers the Thunderbolt port (read from a capture); on
+  another machine, a function behind the tunnel that Windows 98 leaves
+  unstarted (Code 29) needs the device attached at power-on with pre-boot
+  support on.
+- **The Ice Lake to Meteor Lake controllers under their firmware's
+  connection manager have no approval message**: a device works on them
+  only if the firmware tunnelled it by itself, whatever `XhciCmApprove`
+  says.
+- **Windows ME: a UAS drive as the first USB storage device shows Code 2**
+  (unchanged; "Known limitations").
+- **`nvme98`'s own limitations** are in its notes.
+
+### Thunderbolt and USB4 in Device Manager
+
+`xhcicm.sys` names a controller by its generation, the same whichever
+connection manager runs it:
+
+| Device Manager shows | For |
+|---|---|
+| `xHCI98 Thunderbolt 2 Controller` | Intel Falcon Ridge |
+| `xHCI98 Thunderbolt 3 Controller` | Intel Alpine Ridge, Titan Ridge and Ice Lake |
+| `xHCI98 USB4 Host Router` | Intel Maple Ridge, Tiger Lake to Meteor Lake, Lunar, Panther and Wildcat Lake, Barlow Ridge; AMD's and any other USB4 host |
+
+On Windows 2000, XP, Vista and 7 the PCI bridge ports the filter attaches
+to - the controller's own switch ports or, on the integrated
+controllers, its PCI Express root ports - are shown with the xHCI98
+bridge names in place of the name Windows gave them:
+`xHCI98 Thunderbolt PCI Bridge` on a Thunderbolt 2 or 3 controller,
+`xHCI98 USB4 PCI Bridge` on a USB4 one, and `xHCI98 PCI Bridge` on the
+emulator's generic bridges. They are still ordinary PCI bridges run by
+Windows's own `pci.sys`; the name says this package's filter sits on
+them. Every port of one switch carries the same name, upstream and
+downstream alike. Windows 98 SE and ME install no filter, so their
+bridges keep their names. The driver's service is
+`xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)`.
+
+### Thunderbolt 3: which devices get a tunnel, and what that means
+
+A Thunderbolt 3 device - a dock, an enclosure, an NVMe case - reaches the
+machine through a PCI Express tunnel that the controller's firmware builds
+only when the operating system approves the device. Windows 98, ME, 2000
+and XP have no Thunderbolt control panel, and this project does not add
+one, so `xhcicm.sys` decides by one registry value, `XhciCmApprove`, in
+the Thunderbolt host interface's driver (software) key:
+
+| Value | What the driver does |
+|---|---|
+| `1` (the default) | Approves every Thunderbolt device the firmware announces and does not mark rejected, as soon as it is announced: plug it in and it gets its tunnel. |
+| `0` | Approves nothing. A device that already has its tunnel - one the BIOS tunnelled before Windows started (pre-boot support), or one approved before the driver was disabled and enabled again - keeps it and works. A newly plugged device is logged and left without a tunnel. |
+
+**Read this before you leave it at `1`.** A device with a PCI Express
+tunnel can read and write all of the machine's memory: none of these
+machines has an IOMMU that this driver or Windows uses to fence a device
+off. At `1`, anything plugged into the Thunderbolt port gets that access,
+whatever it is and whoever plugged it in. That is the state every device
+tunnelled by the BIOS's pre-boot support is already in on these systems,
+and it is what the owner chose as the default; set `XhciCmApprove` to `0`
+on a machine where the port is within reach of people you do not trust.
+
+**Nothing is remembered.** The driver keeps no list of devices, so there
+is no "approve only devices I have seen before". The firmware itself keeps
+a device's approval and its tunnel until the device is unplugged or the
+machine is powered off - across a disable and enable of the driver, and
+across standby - and the controller's own memory holds the list the BIOS
+uses for pre-boot tunnelling, which this driver never changes. After a
+re-plug, or a restart without pre-boot support, a device is announced
+unapproved again, and the value above decides again.
+
+The Ice Lake to Meteor Lake integrated controllers have no approve
+message at all: on them a device works only if the firmware tunnelled it
+by itself, whatever `XhciCmApprove` says.
+
+`XhciCmMode` `0` turns the whole driver off without uninstalling it: it
+binds the Thunderbolt host interface, logs it and touches nothing.
 
 ## What `2.4.0.0` adds
 
@@ -1283,7 +1740,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles nvme98 `(version: filled in at the cut)`.
+This download bundles nvme98 `0.1.1.0` (dry cut only).
 
 <!-- The cut replaces the line above with "This download bundles nvme98
 `<version>`." or "This download bundles no nvme98."
@@ -3187,433 +3644,11 @@ This driver's own source is under the GNU General Public License, version 2
 (`GPL-2.0-only`); see `LICENSE`. The full third-party material and provenance
 record is `docs/contributing/legal-provenance.md`.
 
-`xhci98.sys`, `xhciuas.sys` and their INFs are this project's own work. No
-Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
+`xhci98.sys`, `xhciuas.sys`, `xhcicm.sys` and their INFs are this
+project's own work. A download that bundles nvme98 carries it as its own
+project released it, with its licence and notice beside it ("NVMe drives
+behind Thunderbolt or USB4"). No Microsoft file is in the download: the `usbd.sys` and `usbui.dll` the install
 needs are Windows' own and are copied by Windows from your own installation
 source. On Windows 98 SE, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a
 filter on the UAS device; the file is named, never shipped, and NUSB's
 mass-storage install places it.
-
-## What `3.0.0.0` adds
-
-<!-- 40.final: fill in the bundled nvme98 version below; move this section
-above "What `2.4.0.0` adds" with the opening line's bump. Remove this
-comment. -->
-
-`3.0.0.0` adds a third driver, `xhcicm.sys`, for Thunderbolt and USB4
-controllers, and an install tool. `xhci98.sys` and `xhciuas.sys` carry
-`2.4.0.0`'s code under the new version number.
-
-- **Thunderbolt 3 and USB4, with `xhcicm.sys`.** A Thunderbolt or USB4
-  dock, enclosure or NVMe case plugged into the machine reaches Windows:
-  its PCI Express tunnel is set up, and the devices behind it (an NVMe
-  drive, a dock's own USB controller, a network adapter) appear in Device
-  Manager and run under their own drivers. One driver, two ways of doing
-  it, chosen per controller at its start: on an Intel Thunderbolt
-  controller whose firmware runs its own connection manager (Thunderbolt
-  2 and 3, and the USB4-generation Intel controllers while their firmware
-  does), `xhcicm.sys` is that firmware's client and approves each device;
-  on a USB4 host whose firmware runs none (AMD, ASMedia, Intel Lunar Lake
-  and later, Barlow Ridge), `xhcicm.sys` is the connection manager itself
-  and builds the tunnels. "Which controllers", below, lists them; every
-  one but a single Alpine Ridge part is untested, and it says what that
-  means.
-- **No Refresh.** When a tunnel comes up or goes down, `xhcicm.sys` makes
-  Windows look at the ports behind it at once: through Windows 98 SE's and
-  ME's configuration manager, and on Windows 2000 to 7 through a small
-  filter on those PCI ports. A device plugged in appears without Scan for
-  hardware changes, and one unplugged leaves.
-- **Safe removal.** A device behind a tunnel is offered in Windows 2000's
-  "Unplug or Eject Hardware" and XP's, Vista's and 7's "Safely Remove
-  Hardware"; on every system, `INSTALL /eject` stops it too ("Removing a
-  Thunderbolt or USB4 device safely").
-- **`INSTALL.BAT`**, with `XHCIINST.EXE` and `XHCIIN64.EXE`: installs,
-  updates and uninstalls every driver of the package in one run on
-  Windows 2000 to 7, and stages it with the steps left printed on 98 SE and
-  ME ("Installing, updating and uninstalling with INSTALL.BAT").
-- **A device viewer and eject in the same tool**: `INSTALL /devices` lists
-  the Thunderbolt and USB4 devices connected now and the Windows devices
-  behind each, and `INSTALL /eject` stops one, on every system (design
-  record 24).
-- **Device Manager names by generation**: "Thunderbolt and USB4 in Device
-  Manager", below.
-- **A link-state channel for `nvme98`**: `xhcicm.sys` tells the NVMe
-  driver `nvme98` when an NVMe drive's tunnel comes up, and under the USB4
-  connection manager when its link has gone down ("NVMe drives behind a
-  tunnel").
-- **`nvme98` in the download**: the package carries nvme98 <version>, the
-  NVMe driver for Windows 98 SE to Vista, as its own project released it
-  ("NVMe drives behind a tunnel").
-
-### Which controllers
-
-`xhcicm.sys` claims these host controllers (the NHI, "native host
-interface", function of a Thunderbolt or USB4 controller), by PCI id:
-
-| Generation | PCI ids (`8086:` unless named) | Connection manager | Device Manager |
-|---|---|---|---|
-| Falcon Ridge (Thunderbolt 2) | `156A`, `156C` | the firmware's | `xHCI98 Thunderbolt 2 Controller` |
-| Alpine Ridge (Thunderbolt 3) | `15BF` (JHL6240), `1575`, `1577`, `15D2`, `15D9` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
-| Titan Ridge (Thunderbolt 3) | `15E8`, `15EB` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
-| Ice Lake (integrated) | `8A0D`, `8A17` | the firmware's | `xHCI98 Thunderbolt 3 Controller` |
-| Maple Ridge | `1134`, `1137` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Tiger Lake, Alder Lake, Raptor Lake, Meteor Lake (integrated) | `9A1B`, `9A1D`, `9A1F`, `9A21`; `463E`, `466D`; `A73E`, `A76D`; `7EB2`, `7EC2`, `7EC3` | the firmware's while it runs, else `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Lunar Lake, Panther Lake, Wildcat Lake (integrated) | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Barlow Ridge | `5781`, `5784` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| AMD | `1022:1668`, `1022:1669` | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-| Any other USB4 host (PCI class `0C0340`; ASMedia's ASM4242 on AM5 X870 boards among them) | by class | `xhcicm.sys`'s | `xHCI98 USB4 Host Router` |
-
-Not claimed: Apple machines and Apple's controllers, the USB-only
-Thunderbolt functions (`15DC`, `15DD`, `15DE`), and the older Light Ridge,
-Cactus Ridge, Redwood Ridge and Win Ridge parts.
-Thunderbolt 3 docks and enclosures work on every host above; a USB4
-device on a Thunderbolt 3 host works as a Thunderbolt 3 device would,
-subject to the host's firmware. Daisy chains (a device behind a device),
-DisplayPort tunnels and host-to-host links are not supported in this
-release; under the USB4 connection manager a Thunderbolt 3 device behind
-a USB4 host gets its PCI Express tunnel, router by router.
-
-The machine must boot through the BIOS (CSM, legacy boot), as for every
-target here, and the BIOS must leave the controller switched on and
-visible: see "Thunderbolt and USB4: known limitations" for the BIOS
-settings.
-
-**Untested hosts.** Only the Alpine Ridge JHL6240 (`8086:15BF`) has been
-captured from a real machine, a ThinkPad P14s Gen 1, and the Thunderbolt 3
-half was built and read against an emulator of that capture. Every other
-Thunderbolt controller this driver claims - Falcon Ridge, the other
-Alpine Ridge parts, Titan Ridge, Maple Ridge, and the Ice Lake to Meteor
-Lake integrated controllers - is untested: it is driven to the Linux
-driver's description of its messages, and no capture of it exists. Every
-USB4 host is untested as well: the USB4 connection manager has run only
-on the emulator's host models (Alder Lake's, from a capture of a
-Framework laptop, a minimal one, and one of ASMedia's ASM4242). Each of
-them acts by default (owner, 2026-10-15). On such a machine the driver
-may start and do nothing; the `debug` flavour's log says why.
-`XhciCmMode` `0` turns the driver off without uninstalling it. A report
-from any of these machines, working or not, is new information.
-
-### Installing it
-
-`INSTALL.BAT` installs `xhcicm.sys` with the rest of the package, and on
-Windows 2000 to 7 it is the way to install it: besides the controller's
-own driver it puts the package's filter on the controller's PCI ports
-(`nt\xhcicmf.inf` in each flavour directory), which on XP and later
-Windows takes only when it is forced, as the tool does. On Windows 2000
-the first install of that filter takes the Thunderbolt switch's other
-devices away until the restart the tool asks for. On Windows 98 SE and
-ME the controller appears as an unknown PCI device or "Other device";
-point its Update Driver at the flavour directory, as for the xHCI
-controller. There is no filter on 98 SE and ME.
-
-### Plugging in, and the approval
-
-Plug the device in and wait a few seconds: under the firmware connection
-manager `xhcicm.sys` approves it (well inside the nine seconds or so
-after which a USB4 device on a Thunderbolt 3 host gives up its PCI
-Express tunnel and falls back to plain USB), the tunnel comes up, and the
-devices behind it are found. "Thunderbolt 3: which devices get a tunnel,
-and what that means", below, is the approval and what it lets a device
-do. Under the USB4 connection manager the same value, `XhciCmApprove`,
-decides whether a newly connected device gets its PCI Express tunnel; at
-`0` no new tunnel is built, tunnels found at the start are kept, and the
-USB3 tunnel is left alone.
-
-A device that was already tunnelled when Windows started - by the BIOS's
-pre-boot support, or by a firmware connection manager - keeps its tunnel
-and works: `xhcicm.sys` never resets a tunnel it finds at its start
-(`XhciCmPreOsCleanup` below is the one exception, and only when set).
-
-### Removing a Thunderbolt or USB4 device safely
-
-Close the files open on the device first, as for any removable disk. On
-every system `INSTALL /devices` shows what is connected and
-`INSTALL /eject` removes one device safely (`XHCIINST`, or `XHCIIN64` on
-64-bit Windows, in `tools\xhciinst\` takes the same switches).
-
-- **Windows 98 SE and ME:** run `INSTALL /eject`; these systems have no
-  other way, since the "Unplug or Eject Hardware" applet NUSB installs
-  does not list a device behind a Thunderbolt port. The tool lists the
-  devices, asks which one, and asks Windows to query the device's
-  removal (a volume with a file open on it refuses, and the tool says so
-  and changes nothing) and, once Windows has agreed, to remove it; then it
-  says whether the device can be unplugged. Until it is unplugged, Device
-  Manager's Refresh, or the Thunderbolt driver looking at the port again,
-  can start the device again.
-- **Windows 2000:** "Unplug or Eject Hardware" lists the device; stop it,
-  then unplug it. Unplugged without a stop, the device is removed all the
-  same and Windows 2000 shows its "Unsafe Removal of Device" dialog.
-- **Windows XP, Vista and 7:** "Safely Remove Hardware" lists the device;
-  stop it, then unplug it. After the stop Device Manager shows it at Code
-  47 until it is unplugged. Unplugged without a stop, it is removed with
-  no dialog.
-- **A dock** is listed under the name of its own PCI switch's upstream
-  port, a generic PCI-to-PCI bridge name; stopping it stops everything in
-  the dock.
-- **A device missing from the list**: one connected before the driver
-  started, or disabled and enabled since, or whose driver was installed
-  or updated since, is not listed until it is unplugged and plugged in
-  again. `INSTALL /eject` still asks Windows to stop it: Windows refuses
-  to eject such a device, and the tool then asks for the same
-  query-remove and remove by the routine meant for devices that are not
-  removable, a program with a file open still refusing it. Windows 2000
-  offers no such routine (read in a virtual machine on 2026-10-15): there
-  the tool says the device cannot be stopped; after a restart with it
-  connected it is listed for removal again, or it can be unplugged with
-  the computer off. XP, Vista and 7 have not been read for this case.
-
-On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
-asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
-one question, and `INSTALL /eject id=<instance id> /yes`, with the
-instance id `/devices` prints, does it with no question, for scripts;
-`tools\xhciinst\README.TXT` has the exit codes.
-
-`INSTALL /devices` shows each connected device's name, generation, link,
-approval and connections (PCIe, USB3, DisplayPort) as `xhcicm.sys` knows
-them, and the PCI functions and Windows devices behind each Thunderbolt
-port with their drivers and problem codes. The driver writes what it
-knows to the registry value `XhciCmStatus` of the Thunderbolt host
-interface's hardware key, and the tool trusts it only after the running
-driver has answered it (`XhciCmStatusAsk` in the driver key); it ejects
-only devices behind a port the driver has confirmed, and never the
-Thunderbolt controller's own functions. Unique ids are shown as their
-last four digits; no key material is ever written. Design record 24 is
-the reference.
-
-Under a firmware connection manager the stop ends the device's drivers
-and leaves its tunnel up, since the firmware has no way to drop one
-tunnel alone; the tunnel goes when the device is unplugged. Under the USB4
-connection manager on Windows 2000 to 7 the stop also takes the PCI
-Express tunnel down (the USB3 tunnel stays).
-
-### NVMe drives behind a tunnel
-
-An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver,
-which none of these systems has. `nvme98`, a separate project, is that
-driver for Windows 98 SE to Vista, and the download carries a release of
-it as its project released it, with its own licence and notes (which
-release, and where it is: "NVMe drives behind Thunderbolt or USB4",
-under "Installing"); read them before installing it. `xhcicm.sys` brings the drive's tunnel up and
-down; `nvme98` runs the drive.
-
-The two talk over a link-state channel that `nvme98` defined:
-
-- When a tunnel comes up, `xhcicm.sys` tells `nvme98` which NVMe function
-  is behind it, before Windows finds the function.
-- Under the USB4 connection manager, after an unplug, once the path is
-  proven closed and the drive's reset is done, it tells `nvme98` the link
-  is down and waits for its acknowledgement (up to 5 seconds on Windows
-  2000 to 7, 3 seconds on 98 SE and ME) before Windows removes the drive,
-  so `nvme98` ends outstanding requests at once instead of at its own
-  timeout. In this release that statement is made only on the emulator's
-  tunnel ports; on real hardware it is withheld until `nvme98` has
-  qualified it, and `nvme98` ends a vanished drive's requests at its own
-  deadline instead.
-- On Windows 2000 to 7 the channel is a kernel callback object; on 98 SE
-  and ME, a record `xhcicm.sys` writes at each start under `nvme98`'s
-  service key. Whether a given `nvme98` release reads it is in that
-  release's notes.
-
-### The connection manager's registry values
-
-Each value is in the Thunderbolt or USB4 controller's driver (software)
-key, a `DWORD` unless it says otherwise:
-
-| Windows | Key |
-|---|---|
-| 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\System\NNNN` |
-| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` |
-
-`NNNN` is the subkey whose `DriverDesc` is the controller's Device
-Manager name ("Which controllers"). The install writes each value below
-but `XhciCmTunnelBridge` at its default, only where it is missing.
-Restart Windows, or disable and enable the controller, after a change.
-
-| Value | Default | What it does |
-|---|---|---|
-| `XhciCmMode` | `1` | `0` off: the driver binds the controller, logs it and touches nothing. `1` automatic: the firmware's connection manager's client where it runs, `xhcicm.sys`'s own on a USB4 host whose firmware runs none, and nothing where neither is certain. `2`: an Intel controller the table above does not list, driven as an Alpine Ridge, at your own risk, after adding its id to a copy of `xhcicm.inf`. `3`: force `xhcicm.sys`'s own USB4 connection manager, at your own risk; refused on Falcon, Alpine and Titan Ridge and Ice Lake, and wherever the firmware's runs |
-| `XhciCmApprove` | `1` | `1` approves every device (see "Thunderbolt 3: which devices get a tunnel"); `0` approves none |
-| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal; `0` does not |
-| `XhciCmReenum` | `1` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh, for a machine where that misbehaves |
-| `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
-| `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
-| `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
-| `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
-| `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
-| `XhciCmCmdTimeoutMs` | `5000` | Firmware connection manager: the wait for a command's answer, in ms (`1000` to `60000`), three tries |
-| `XhciCmApproveTimeoutMs` | `10000` | Firmware connection manager: the wait for an approval's answer, in ms, the same bounds |
-| `XhciLogVerbosity` | `0` | The driver's log, as `xhci98.sys`'s; the `release` flavour prints nothing, the `debug` flavour to DebugView |
-
-The install tool asks "Install Thunderbolt 3 / USB4 support?": Enter
-answers Y with a Thunderbolt or USB4 controller present and N with none
-found (a laptop may show its controller only while a device is plugged
-in); `INSTALL /thunderbolt` includes it without asking, and N leaves a
-Thunderbolt driver already installed as it is.
-
-`INSTALL.BAT` asks about `XhciCmMode`, `XhciCmApprove` and
-`XhciCmSafeEject` where a Thunderbolt or USB4 controller is present. It
-never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`
-(each `0` or `1`) and `XhciCmPreOsCleanup` (`0`, `1` or `2`).
-`INSTALL /set Name=Value` sets any of these seven.
-
-### Where `3.0.0.0` was read
-
-<!-- 40.final: bring up to date with the last legs before the cut. -->
-
-Every reading below was taken in QEMU virtual machines on development
-host A, on the emulator of the `usb4-emu` project: its model of the
-ThinkPad P14s Gen 1's Alpine Ridge controller (from a capture of that
-machine), its Titan Ridge model, its USB4 host models, and its model of a
-real USB4 NVMe enclosure (the ORICO enclosure's ASMedia ASM2464, from a
-capture). No real Thunderbolt or USB4 machine has run this release yet;
-the owner's ThinkPad P14s Gen 1 with a Thunderbolt 3 dock is read after
-the cut.
-
-- Windows 98 SE and Windows 2000: the install, the device approved and its
-  NVMe drive found with no Refresh and read and written through `nvme98`,
-  unplug and re-plug, a device tunnelled at boot left alone, disable and
-  enable, `XhciCmApprove` `0` and `XhciCmMode` `0`, and safe removal; under
-  the USB4 connection manager the same on two host models and the ASM2464
-  enclosure model. On Windows 2000 also the Titan Ridge model and a
-  multiprocessor guest under Driver Verifier.
-- Windows XP, XP x64, Vista and 7 (32-bit): the install with the filter,
-  a plug, unplug and re-plug cycle with the NVMe drive found with no
-  Refresh, and safe removal with no dialog after the unplug.
-- Not read before the cut: Windows ME, Vista x64 and 7 x64.
-- `INSTALL.BAT`: on Windows 98 SE, ME, 2000, XP, XP x64, Vista and 7 in
-  both architectures (its legs are in `runs/run-40.md`).
-
-### Thunderbolt and USB4: known limitations
-
-- **The BIOS must leave the controller on.** A controller the BIOS
-  switched off is not switched on: with "Thunderbolt BIOS Assist" on and
-  nothing attached at power-on, the BIOS powers it down, and the switch
-  that powers it up again is an ACPI method this driver cannot call
-  (Windows 98 runs these machines in APM mode). Turn Assist off in the
-  BIOS. On the integrated controllers (Ice Lake and later) the driver
-  takes only the controller's own power-up step; the platform's own power
-  control stays the BIOS's. A driver that finds the controller already
-  forced on never switches it off.
-- **ThinkPad P14s Gen 1 (BIOS 1.36): "Thunderbolt BIOS Assist" on with
-  pre-boot support off hides the controller**, even with a device
-  attached, so no driver can use it; in that setting a USB4 enclosure is
-  unusable to any operating system (a Thunderbolt 3 dock still shows the
-  controller). With Assist on and pre-boot support on, after the last
-  device is unplugged the firmware stops answering and the controller is
-  removed about 15 seconds later, not to return on a re-plug. Turn Assist
-  off, or turn pre-boot support on and keep a device attached.
-- **Windows 2000: an unplug without a stop shows "Unsafe Removal of
-  Device"**, and the device is removed. Stop it in "Unplug or Eject
-  Hardware" first.
-- **A device disabled and enabled, or whose driver was installed or
-  updated, drops out of the safe-removal list** until it is unplugged and
-  plugged in again (Windows 2000 to 7): Windows rebuilds its driver stack
-  without the filter that marks it removable. Use `INSTALL /eject`, or
-  re-plug it. A later release is to keep the mark across a rebuild.
-- **A device tunnelled before the driver started** (by the BIOS's pre-boot
-  support, or connected while the driver was installed) is offered for
-  safe removal only after a re-plug, on Windows 2000 to 7.
-- **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
-  stays loaded until Windows restarts**: disabling, updating or removing
-  it takes full effect at the next start.
-- **Windows 98 SE and ME, USB4 connection manager: a removal leaves the
-  tunnel up until the unplug.** After `INSTALL /eject` or Device Manager's
-  Remove, the device is stopped but its tunnel stays, so a Refresh can
-  find it again; unplug it.
-- **A USB4 host that stops answering stays stopped until the controller is
-  disabled and enabled, or Windows restarts.** If the platform powers the
-  controller off or resets it without telling Windows, `xhcicm.sys`
-  notices within a few idle periods, reports every device behind it gone
-  and touches the controller no more; it does not take the fabric up again
-  by itself in this release. Under a firmware connection manager it
-  resumes when the controller answers again.
-- **Windows 2000: the first install of the filter takes the Thunderbolt
-  switch's other devices away until the restart**, the switch's upstream
-  port showing Code 12 meanwhile. `INSTALL.BAT` asks for that restart; do
-  it before using the controller.
-- **Nothing is remembered.** Approval is not stored: after a re-plug, or a
-  restart without pre-boot support, a device is approved again by
-  `XhciCmApprove`'s rule (see "Thunderbolt 3: which devices get a
-  tunnel").
-- **Approval is automatic by default, and a tunnelled device can reach all
-  of memory**; set `XhciCmApprove` to `0` where the port is within reach
-  of people you do not trust (same section).
-- **Standby and hibernation with a tunnelled device attached are
-  unsupported** on every system, and so is standby with an integrated
-  controller (Ice Lake and later). Stop and unplug the device first.
-- **Windows 98 SE and ME: a device plugged in after the start needs an
-  interrupt line from the BIOS.** On the ThinkPad P14s Gen 1 the BIOS's
-  routing table covers the Thunderbolt port (read from a capture); on
-  another machine, a function behind the tunnel that Windows 98 leaves
-  unstarted (Code 29) needs the device attached at power-on with pre-boot
-  support on.
-- **The Ice Lake to Meteor Lake controllers under their firmware's
-  connection manager have no approval message**: a device works on them
-  only if the firmware tunnelled it by itself, whatever `XhciCmApprove`
-  says.
-- **Windows ME: a UAS drive as the first USB storage device shows Code 2**
-  (unchanged; "Known limitations").
-- **`nvme98`'s own limitations** are in its notes.
-
-### Thunderbolt and USB4 in Device Manager
-
-`xhcicm.sys` names a controller by its generation, the same whichever
-connection manager runs it:
-
-| Device Manager shows | For |
-|---|---|
-| `xHCI98 Thunderbolt 2 Controller` | Intel Falcon Ridge |
-| `xHCI98 Thunderbolt 3 Controller` | Intel Alpine Ridge, Titan Ridge and Ice Lake |
-| `xHCI98 USB4 Host Router` | Intel Maple Ridge, Tiger Lake to Meteor Lake, Lunar, Panther and Wildcat Lake, Barlow Ridge; AMD's and any other USB4 host |
-
-On Windows 2000, XP, Vista and 7 the PCI bridge ports the filter attaches
-to - the controller's own switch ports or, on the integrated
-controllers, its PCI Express root ports - are shown with the xHCI98
-bridge names in place of the name Windows gave them:
-`xHCI98 Thunderbolt PCI Bridge` on a Thunderbolt 2 or 3 controller,
-`xHCI98 USB4 PCI Bridge` on a USB4 one, and `xHCI98 PCI Bridge` on the
-emulator's generic bridges. They are still ordinary PCI bridges run by
-Windows's own `pci.sys`; the name says this package's filter sits on
-them. Every port of one switch carries the same name, upstream and
-downstream alike. Windows 98 SE and ME install no filter, so their
-bridges keep their names. The driver's service is
-`xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)`.
-
-### Thunderbolt 3: which devices get a tunnel, and what that means
-
-A Thunderbolt 3 device - a dock, an enclosure, an NVMe case - reaches the
-machine through a PCI Express tunnel that the controller's firmware builds
-only when the operating system approves the device. Windows 98, ME, 2000
-and XP have no Thunderbolt control panel, and this project does not add
-one, so `xhcicm.sys` decides by one registry value, `XhciCmApprove`, in
-the Thunderbolt host interface's driver (software) key:
-
-| Value | What the driver does |
-|---|---|
-| `1` (the default) | Approves every Thunderbolt device the firmware announces and does not mark rejected, as soon as it is announced: plug it in and it gets its tunnel. |
-| `0` | Approves nothing. A device that already has its tunnel - one the BIOS tunnelled before Windows started (pre-boot support), or one approved before the driver was disabled and enabled again - keeps it and works. A newly plugged device is logged and left without a tunnel. |
-
-**Read this before you leave it at `1`.** A device with a PCI Express
-tunnel can read and write all of the machine's memory: none of these
-machines has an IOMMU that this driver or Windows uses to fence a device
-off. At `1`, anything plugged into the Thunderbolt port gets that access,
-whatever it is and whoever plugged it in. That is the state every device
-tunnelled by the BIOS's pre-boot support is already in on these systems,
-and it is what the owner chose as the default; set `XhciCmApprove` to `0`
-on a machine where the port is within reach of people you do not trust.
-
-**Nothing is remembered.** The driver keeps no list of devices, so there
-is no "approve only devices I have seen before". The firmware itself keeps
-a device's approval and its tunnel until the device is unplugged or the
-machine is powered off - across a disable and enable of the driver, and
-across standby - and the controller's own memory holds the list the BIOS
-uses for pre-boot tunnelling, which this driver never changes. After a
-re-plug, or a restart without pre-boot support, a device is announced
-unapproved again, and the value above decides again.
-
-The Ice Lake to Meteor Lake integrated controllers have no approve
-message at all: on them a device works only if the firmware tunnelled it
-by itself, whatever `XhciCmApprove` says.
-
-`XhciCmMode` `0` turns the whole driver off without uninstalling it: it
-binds the Thunderbolt host interface, logs it and touches nothing.
