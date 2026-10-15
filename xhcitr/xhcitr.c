@@ -3966,6 +3966,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     single = CreateMutexA(NULL, FALSE, envNt ? "Local\\Xhci98TrTray" : "Xhci98TrTray");
     if (single != NULL && GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowA("Xhci98TrTray", NULL);
+        DWORD start = GetTickCount();
+        /* The first one may still be starting (it waits for an installer
+         * for up to 20 s before its window exists). */
+        while (other == NULL && !opts.Tray && GetTickCount() - start < 25000) {
+            Sleep(250);
+            other = FindWindowA("Xhci98TrTray", NULL);
+        }
         if (other != NULL && !opts.Tray) {
             PostMessageA(other, msgShow, 0, 0);
         }
