@@ -1,6 +1,6 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 4, 2026-10-16, reviewed and revised three times the same night;
+Status: revision 5, 2026-10-16, reviewed and revised four times the same night;
 the code is written against it. Written for the owner's instructions of
 2026-10-16: the command-line `INSTALL /devices` and `INSTALL /eject` of
 design record 24 are not easy to use, so a separate graphical tool shows
@@ -491,7 +491,12 @@ Exit codes follow XHCIINST's (record 23 section 10).
   drops what it supersedes: on 98 SE and ME its own `[rename]` and `NUL=`
   lines for the tool in `WININIT.INI`, every other line kept (an NT
   delayed move whose source is gone does nothing at restart). An install
-  that leaves the tool alone leaves a newer pending `.NEW` alone. Only an
+  that leaves the tool alone leaves a newer pending `.NEW` alone. Every
+  successful install, whether it copied or not, removes a pending
+  deletion of the tool (its own `NUL=` line on 98 SE and ME; on NT an
+  uninstall deferred only `XHCITR.DEL`, never the tool's own name), so a
+  same-version reinstall after a deferred uninstall keeps the file the Run
+  value names. Only an
   uninstall cancels a pending `.NEW` outright (deletes it and its 9x
   line). An upgrade after an upgrade, an older package after a newer one,
   or an uninstall then a reinstall, therefore never lets an older copy or
