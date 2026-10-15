@@ -202,20 +202,17 @@ The [release notes](docs/using/release-notes.md) have the limits.
 The controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
 
 ### Upgrading the driver
-Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory.
+Run Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
 
-**From `2.3.x` or earlier, read the release notes' "From 2.3.x or earlier" first.** The root hub, every hub and every composite device are found again as new hardware, once, under their `2.4.0.0` names: update the controller only (the new root hub installs by itself), and on Windows XP, XP x64 and 98 SE have a keyboard and mouse that do not go through this driver (PS/2, a laptop's built-in ones, or a USB controller another driver runs), because the new-hardware questions come before the USB keyboard and mouse behind the new root hub work (on 98 SE: the update wizard's last page, and after the restart the wizard for a mouse found again). A device without a serial number (most mice and keyboards) is found again too, and loses what was kept on its old entry (a hidusbf setting, a friendly name). The download's `tools\xhcicln\` lists the old entries and, on Windows 2000 to 7, removes them; nothing needs it.
+- **Windows 98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
+- **Windows 2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
+- **XP, Vista and 7:** the new driver runs at once, after the unsigned-driver warning. 32-bit Vista and 7 ask for a restart for the helper `xhcihlpr.sys`. 64-bit Vista and 7 need test-signing mode, as for the first install.
+- **Vista and 7:** a build with the same `DriverVer` as the installed one is not taken. Use a newer build.
+- A device that Windows finds again as new hardware loses its hidusbf setting. Set it again.
 
-- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
-- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory, and pick "xHCI98 USB 3.x eXtensible Host Controller", the first of the three models listed.
-- **XP, XP x64, Vista and 7**: the update takes effect at once, after one unsigned-driver warning, although XP may offer a restart and 64-bit Vista and 7 may say the device needs one; except on 32-bit Vista and 7, where it asks for a restart, for the helper `xhcihlpr.sys`, and the earlier release runs until then; an update from `2.3.0.0` or `2.3.1.0` there also removes the old helper `xhcimsi.sys`, deleting its file at once and its service at that restart. On 32-bit 2000 and XP the update installs `xhcihlpr.sys`, which asks for no restart of its own; its finer timer, when `XhciPollFineTimer` is set to `1` (off by default), starts at the next boot. On Vista x64 and 7 x64 the new driver, like the first install, runs in test-signing mode or on a start with driver signature enforcement disabled.
-- **Vista and 7: a build with the same `DriverVer` is not taken.** If the new INF is identical to the installed one, Have Disk reuses the package already in Windows' driver store and keeps the old `xhci98.sys`. Replace the `.sys` by hand, or use a build with a newer `DriverVer`.
+**From `2.3.x` or earlier:** update the controller only. The root hub, hubs and composite devices are found again as new hardware and install by themselves. On 98 SE, XP and XP x64 keep a PS/2 or built-in keyboard and mouse at hand: the new-hardware questions come before the USB ones work.
 
-Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
-
-- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry.
-
-If Windows finds a device again as new hardware after the upgrade, apply its hidusbf setting again.
+The release notes' "From 2.3.x or earlier" has the details. `tools\xhcicln\` lists the old entries this leaves behind and, on 2000 to 7, removes them; nothing needs it.
 
 ### Updating xhciuas.sys over an older one
 
