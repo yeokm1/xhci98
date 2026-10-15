@@ -273,6 +273,11 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
     return CM_NVLINK_SEND;
 }
 
+ULONG CmNvlinkAckBoundMs(BOOLEAN nt)
+{
+    return nt ? CM_NVLINK_ACK_MS : CM_NVLINK_ACK_9X_MS;
+}
+
 ULONG CmNvlinkLeft(ULONG startMs, ULONG nowMs, ULONG budgetMs)
 {
     ULONG spent;

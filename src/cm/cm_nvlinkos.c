@@ -861,7 +861,7 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
                 cmNvShadow[i].Waiting = 0;
                 cmNvNoReceiver++;
             } else if (CmNvlinkLeft(cmNvShadow[i].MarkedAt, now,
-                                    CM_NVLINK_ACK_MS) == 0) {
+                                    CmNvlinkAckBoundMs(cmNvNt)) == 0) {
                 cmNvShadow[i].Waiting = 0;
                 cmNvAckTimeouts++;
             } else {

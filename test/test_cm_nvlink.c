@@ -267,6 +267,9 @@ static void test_verdicts(void)
                                XHCI_TBT_PORT_DOWN, 2000),
              CM_NVLINK_UNQUALIFIED, "USB4: an operating system not qualified");
 
+    CHECK_EQ(CmNvlinkAckBoundMs(TRUE), 5000, "NT: the 5 s gone deadline");
+    CHECK_EQ(CmNvlinkAckBoundMs(FALSE), 3000, "9x: the provisional 3 s");
+
     CHECK_EQ(CmNvlinkLeft(1000, 1000, 5000), 5000, "nothing spent");
     CHECK_EQ(CmNvlinkLeft(1000, 3000, 5000), 3000, "2 s spent");
     CHECK_EQ(CmNvlinkLeft(1000, 6000, 5000), 0, "spent exactly");

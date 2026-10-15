@@ -116,9 +116,14 @@
 
 #define CM_NVLINK_NONE          0xFFFFFFFFUL
 
-/* The acknowledgement wait: nvme98's gone deadline (5 s in its test build,
- * G3), measured here from the DOWN_QUIESCED write. */
+/* The acknowledgement wait, measured from the DOWN_QUIESCED write and
+ * ended at once by the acknowledgement. Windows 2000 and later: nvme98's
+ * gone deadline (5 s in its test build, G3). Windows 98 SE and ME:
+ * PROVISIONAL, awaiting nvme98's fixed 9x gone deadline - a 1 s idle poll
+ * plus ME's timer lateness (up to 1.5 s, G3) with margin, and it must stay
+ * well under that deadline once nvme98 fixes it. */
 #define CM_NVLINK_ACK_MS        5000UL
+#define CM_NVLINK_ACK_9X_MS     3000UL
 /* A statement whose delivery would start with less than this left of the
  * USB4 profile's 3 s is withheld (record 22 section 10.3). */
 #define CM_NVLINK_DELIVERY_MS   100UL
@@ -243,6 +248,10 @@ ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, BOOLEAN emulator,
 ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
                         ULONG source, BOOLEAN emulator, BOOLEAN osQualified,
                         ULONG reading, ULONG remainingMs);
+
+/* The acknowledgement wait's bound: CM_NVLINK_ACK_MS on NT, else
+ * CM_NVLINK_ACK_9X_MS. */
+ULONG CmNvlinkAckBoundMs(BOOLEAN nt);
 
 /* Milliseconds left of `budgetMs` begun at `startMs` (a free-running
  * millisecond clock, modulo 2^32), 0 when spent. */

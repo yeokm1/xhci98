@@ -1834,9 +1834,17 @@ side.
   stands; a function still answering keeps its `UP`.
 - **The acknowledgement before the removal.** Before the removal call of a
   tunnel down or a RESYNC, the thread waits until every entry this domain
-  marked reads `AckGeneration` = `LinkGeneration`, or 5 s from the mark
-  (`nvme98`'s gone deadline in its test build; the header gives no number),
-  servicing the ICM between reads. On NT it does not wait while no driver
+  marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
+  mark: 5 s on Windows 2000 and later (`nvme98`'s gone deadline in its test
+  build; the header gives no number), and 3 s on Windows 98 SE and ME,
+  provisional until `nvme98` fixes its 9x gone deadline (a 1 s idle poll
+  plus ME's timer lateness of up to 1.5 s, with margin, and well under
+  that deadline). The acknowledgement ends the wait at once; an idle
+  `nvme98` that has not answered by then is a benign timeout (G3 run C:
+  nothing was held, and its next request applied the statement), and no
+  idle indication shortens or skips the wait - the acknowledgement is the
+  only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
+  reads. On NT it does not wait while no driver
   has ever asked for the table (no `nvme98` is loaded, so none can answer);
   on 9x it does not wait where the record was not written.
 - **A removal this driver starts on 9x** (MD-5): `Query_Remove_SubTree`
