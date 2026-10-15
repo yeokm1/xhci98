@@ -1299,9 +1299,15 @@ path), against the value it read after the ring start
 is CONFIG_LOST. ABSENT and CONFIG_LOST report every device gone, once per
 episode, as `TUNNEL_DOWN` actions of why UNAVAILABLE followed by a RESYNC
 (the re-enumeration seam's request; on 98 SE and ME the CONFIGMG worker
-removes the children recorded at tunnel up without reading a bridge
-header the loss may have reset), and say nothing about the endpoint:
-presence lost, not quiescence (section 7.3). One probe a second follows
+removes the children it retained at its last walk of the bridge before
+the loss - the tunnel-up re-enumeration's, the start's baseline or a
+marking window's - each revalidated by the instance id recorded then and
+found through the devnode tree alone, never by reading a bridge header
+the loss may have reset; a refusal is respected, and no re-enumeration
+of that bridge runs before the removal), and say nothing about the
+endpoint: presence lost, not quiescence (section 7.3). `nvme98` is told
+nothing of it (its link-state channel has no presence-lost statement in
+this build; owed), so its own deadline path ends what is in flight. One probe a second follows
 outside ACTIVE. No sample is taken out of D0, while the system sleeps or
 during a power, PnP or recovery sequence, so a resume - and its own time
 budget - never trips it. Nor does a firmware that holds requests: under

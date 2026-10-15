@@ -1647,6 +1647,8 @@ VOID CmReenumStop(PCM_NHI nhi)
         r->Marked += wc.Marked;
         r->MarkFailures += wc.MarkFailures;
         r->CallFailures += wc.CallFailures;
+        r->GoneDone += wc.GoneDone;
+        r->GoneDropped += wc.GoneDropped;
         if (wc.Detached) {
             CmLogNote(nhi, "cm.reenum.9x.worker-detached", 1);
         }
@@ -1670,6 +1672,9 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.vetoed", r->Vetoed);
     CmLogNote(nhi, "cm.reenum.9x.marked", r->Marked);
     CmLogNote(nhi, "cm.reenum.9x.mark-failures", r->MarkFailures);
+    CmLogNote(nhi, "cm.reenum.9x.unavailable", r->Unavailable);
+    CmLogNote(nhi, "cm.reenum.9x.gone", r->GoneDone);
+    CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
     CmRegCounters(&attached, &skipped, &refused, &watchdogs);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
@@ -1681,11 +1686,25 @@ VOID CmReenumStop(PCM_NHI nhi)
 /*
  * The host interface lost (cm_reenum.h). On NT the client's TUNNEL_DOWN
  * and RESYNC actions handed over just before are the reconciliation (the
- * bridge filters' invalidations); this records the episode. The 98 SE and
- * ME CONFIGMG route of the CONTROLLER_UNAVAILABLE reconciliation is the
- * worker's (cm_cfgwk.c) and lands with it. IRQL: PASSIVE_LEVEL.
+ * bridge filters' invalidations); this records the episode. On 98 SE and
+ * ME the CONFIGMG worker is asked for the CONTROLLER_UNAVAILABLE
+ * reconciliation (CmCfgwkUnavailable): the children it retained at the
+ * members' last healthy walk removed without reading a bridge header,
+ * before any further re-enumeration of those members. XhciCmReenum 0
+ * asks for nothing. Nothing here states quiescence: no endpoint
+ * notification is made (presence lost only). IRQL: PASSIVE_LEVEL.
  */
 VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
 {
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
     CmLogNote(nhi, "cm.reenum.unavailable", episode);
+    if (r->Route != CM_ROUTE_CONFIGMG || r->Wk == NULL || r->Reenum == 0) {
+        return;
+    }
+    r->WkActive = cmOwnedMask(nhi);
+    CmCfgwkUnavailable(r->Wk, r->WkActive);
+    r->Unavailable++;
+    CmLogNote(nhi, "cm.reenum.9x.unavailable.members", r->WkActive);
 }
