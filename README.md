@@ -135,13 +135,14 @@ By default (`XhciCmApprove` `1`) every device plugged into the port is approved 
 
 ### Removing a device safely
 
-Close the files open on the device first, as for any removable disk. `INSTALL /devices` shows the connected Thunderbolt and USB4 devices and what is behind each; `INSTALL /eject` stops one on any system (`XHCIINST /eject` from `tools\xhciinst\`, `XHCIIN64` on 64-bit Windows).
+Close the files open on the device first, as for any removable disk. On every system `INSTALL /devices` shows the connected Thunderbolt and USB4 devices: each one's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which one and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it. On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation. (`tools\xhciinst\XHCIINST` takes the same switches, `XHCIIN64` on 64-bit Windows.)
 
-- **Windows 98 SE and ME:** use `INSTALL /eject`. It lists the devices, asks which one and asks Windows to stop it. When it says "You can now unplug the device.", unplug it. A program with a file open on the device makes Windows refuse, and nothing changes; close it and try again.
+- **Windows 98 SE and ME:** use `INSTALL /eject`; these systems have no other way. Until you unplug the device, Device Manager's Refresh can start it again.
 - **Windows 2000:** stop the device in "Unplug or Eject Hardware", then unplug it. Without the stop, Windows 2000 shows its "Unsafe Removal of Device" warning.
 - **Windows XP, Vista and 7:** stop the device in "Safely Remove Hardware", then unplug it.
-- **A device missing from those lists** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): `INSTALL /eject` still stops it on XP, Vista and 7. Unplugging and plugging it in again also puts it back in the list.
+- **A device missing from those lists** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): on XP, Vista and 7 `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device: the tool says so; restart with the device connected and it is listed for removal again, or shut the computer down and unplug it then. Unplugging and plugging it in again also puts it back in the list.
 - **A dock** is listed under a generic PCI bridge name, the dock's own switch; stopping it stops everything in the dock.
+- **For scripts:** `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question.
 
 ### NVMe drives
 
@@ -153,7 +154,7 @@ An NVMe drive in an enclosure needs an NVMe driver, which these systems do not h
 - On Windows 98 SE and ME, a device plugged in after the start needs the BIOS to give it an interrupt. On the ThinkPad P14s Gen 1 it does. If a device inside the enclosure stays at Code 29 on another machine, attach it at power-on with pre-boot support on.
 - On Windows 98 SE and ME the Thunderbolt driver stays loaded until Windows restarts, so a disable, update or removal of it takes full effect after a restart.
 - If the platform switches a USB4 controller off behind Windows' back, the driver stops using it; disable and enable the controller in Device Manager, or restart, to use it again.
-- The settings (`XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` and the rest) are in the controller's driver key, under the System class; the [release notes](docs/using/release-notes.md)' "The connection manager's registry values" lists them all, and `INSTALL.BAT` asks about the first three.
+- The settings (`XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject` and the rest) are in the controller's driver key, under the System class; the [release notes](docs/using/release-notes.md)' "The connection manager's registry values" lists them all, and `INSTALL.BAT` asks about the first three. It never asks about `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding` and `XhciCmPreOsCleanup`: leave them at their defaults unless a problem report calls for a change, which `INSTALL /set Name=Value` makes.
 
 ## Installation Steps
 
@@ -307,14 +308,6 @@ The release notes' "From 2.3.x or earlier" has the details. `tools\xhcicln\` lis
 When the package's `xhciuas.sys` carries the same `DriverVer` as the one installed, "Search for a better driver" keeps the cached INF.
 
 Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a list of all the drivers in a specific location", then Have Disk -> the package directory.
-
-### Safe removal of Thunderbolt and USB4 devices
-
-`INSTALL /devices` (or `tools\xhciinst\XHCIINST /devices`, `XHCIIN64` on 64-bit Windows) shows the Thunderbolt and USB4 devices connected now: each device's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which, and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it.
-
-- **Windows 98 SE and ME:** `INSTALL /eject` is the way to remove a Thunderbolt or USB4 device safely; these systems have no other. Until you unplug it, Device Manager's Refresh can start the device again.
-- **Windows 2000, XP, Vista and 7:** Unplug or Eject Hardware (2000) and Safely Remove Hardware (XP onward) work as usual. A device that was connected before the Thunderbolt driver started, or that was disabled and enabled, may be missing from them until it is plugged in again; `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device at all: the tool says so, and after a restart with the device connected it is listed for removal again. On 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation.
-- `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question, for scripts.
 
 ## Tuning
 

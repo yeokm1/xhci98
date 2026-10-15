@@ -389,7 +389,7 @@ transient host scheduling inside the replug's sub-second window.
 One caveat keeps this short of a full explanation: a full solo
 `-Target 2a-fresh` run also failed the row once, its audio group being the
 fifth guest boot of a near-hour run, and why a long solo run reaches the
-same state as a paired one is not established. A Codex read of the code
+same state as a paired one is not established. A review of the code
 found no driver defect and no Phase 20 change on any executable path that
 gates a root-port reset.
 
@@ -9475,7 +9475,7 @@ The first fix restored that order, the PDOs reported missing at the freeze
 Holding a request for a device that stopped answering is what the hub
 drivers this bus stands in for do.
 
-The abort then needed four Codex rounds (`6dae92b` to `53b43c0`):
+The abort then needed four more revisions (`6dae92b` to `53b43c0`):
 - An ABORT_PIPE must release what it covers, including requests the
   teardown parks after the abort, and a later submission must not revoke
   that.

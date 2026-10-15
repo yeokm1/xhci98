@@ -393,14 +393,14 @@ The check closes the wait without touching the interrupter:
   start hold (task 36.4) holds it back as it does the backstop.
 - **No register.** It writes nothing: ERDP, EHB and IE stay the drain's,
   and the ISR's IE=0 (record 05, "The DIRQL exception") is untouched. This
-  is Codex's preferred option (2026-10-11) over re-arming before the final
+  is the option a review preferred (2026-10-11) over re-arming before the final
   ERDP write, which would let the interrupter fire into a pass in progress,
   or a blind second ERDP write.
 - **Bounded, never a chain.** One peek and at most one insertion per
   interrupt-queued drain. The insertion passes `HCD_DRAIN_FROM_PEEK` as
   `SystemArgument1` (every other insertion passes NULL), and a drain that
   carries it does not peek, so a further drain waits for an interrupt,
-  which moderation paces. Codex's round 1 (2026-10-12) found the first
+  which moderation paces. Review (2026-10-12) showed that the first
   draft's re-peeking drain could chain DPCs back to back under sustained
   completions, holding a processor at DISPATCH_LEVEL and starving the
   controller thread. An event stranded in the second drain's own window
