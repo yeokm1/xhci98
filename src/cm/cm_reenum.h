@@ -318,6 +318,17 @@ typedef struct _CM_REENUM {
     ULONG Vetoed;           /* 98: Query_Remove_SubTree refused           */
     ULONG Marked;           /* 98: DN_REMOVABLE set                       */
     ULONG MarkFailures;
+    ULONG LossDrain;        /* between CmReenumLossBegin and its end: the
+                               actions drained are the loss's            */
+    ULONG LossSeen;         /* a loss came with no 98 worker running: none
+                               is started and no rediscovery made for this
+                               instance (a baseline or a discovery would
+                               be read from a lost tree)                 */
+    ULONG Unavailable;      /* 98: CONTROLLER_UNAVAILABLE requests posted */
+    ULONG GoneDone;         /* 98: ... members whose retained children
+                               were reconciled                           */
+    ULONG GoneDropped;      /* 98: retained children no longer matching
+                               their recorded identity, left alone       */
     ULONG Ejects;           /* eject notifications served                 */
     ULONG EjectsStale;      /* dropped at hand-off: the port changed      */
 } CM_REENUM, *PCM_REENUM;
@@ -335,6 +346,30 @@ VOID CmReenumResumed(struct _CM_NHI *nhi, BOOLEAN ok);
  * (cm_power.c's D0 completion calls it). */
 VOID CmReenumResumeFailed(struct _CM_NHI *nhi);
 VOID CmReenumStop(struct _CM_NHI *nhi);
+/*
+ * The host interface lost (cm_live.h, CM_LIVE_ACT_RECONCILE) in that
+ * episode: called once per episode after the client's TUNNEL_DOWN and
+ * RESYNC actions (why TBT_ICM_WHY_UNAVAILABLE) were handed over. On NT
+ * those actions' invalidations are the reconciliation and this records the
+ * episode; on 98 SE and ME it is the CONFIGMG worker's CONTROLLER_UNAVAILABLE
+ * route, which removes the children recorded at tunnel up without reading
+ * the bridge headers the loss may have reset. Writes nothing to the NHI.
+ * IRQL: PASSIVE_LEVEL, the connection-manager thread.
+ */
+VOID CmReenumUnavailable(struct _CM_NHI *nhi, ULONG episode);
+/*
+ * The bracket around a loss's drain (cm_nhi.c CmNhiLost, cm_power.c's
+ * failed resume): CmReenumLossBegin right after TbtIcmLost, before any
+ * drain; CmReenumUnavailable (or CmReenumLossEnd where no request is owed
+ * this episode) after the drain. In between, on the CONFIGMG route, every
+ * action handed over - those TbtIcmLost queued and those queued before it
+ * - is counted and voids pending ejects, and nothing more: no bridge
+ * polled, no request posted; the worker's CONTROLLER_UNAVAILABLE request
+ * is the reconciliation. On NT the actions run as always. IRQL:
+ * PASSIVE_LEVEL, the connection-manager thread.
+ */
+VOID CmReenumLossBegin(struct _CM_NHI *nhi);
+VOID CmReenumLossEnd(struct _CM_NHI *nhi);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);
@@ -365,6 +400,8 @@ typedef struct _CM_CFGWK_COUNTERS {
     ULONG Marked;           /* DN_REMOVABLE added                         */
     ULONG MarkFailures;
     ULONG Detached;         /* the stop found it inside a call            */
+    ULONG GoneDone;         /* CONTROLLER_UNAVAILABLE members reconciled  */
+    ULONG GoneDropped;      /* retained children whose identity changed   */
 } CM_CFGWK_COUNTERS, *PCM_CFGWK_COUNTERS;
 
 /* Creates the worker for `members` bridges at bdf[] (members the domain
@@ -386,6 +423,15 @@ ULONG CmCfgwkOpenState(struct _CM_CFGWK *w, PULONG why, PULONG version);
 /* A walk of every member forgetting the known children no longer present
  * (a tunnel down: a child the user removed is gone by then). */
 VOID CmCfgwkPrune(struct _CM_CFGWK *w);
+
+/* CONTROLLER_UNAVAILABLE (CmReenumUnavailable): each member in `active`
+ * owes the removal of the children retained at its last healthy walk,
+ * revalidated by their recorded instance ids and made without reading a
+ * bridge header, before any further re-enumeration of it; then a
+ * re-enumeration with vanished children (a request as CmCfgwkPost's, so
+ * an operation in progress on the member goes stale). `active` replaces
+ * the owned members. Returns at once. <= DISPATCH_LEVEL. */
+VOID CmCfgwkUnavailable(struct _CM_CFGWK *w, ULONG active);
 
 /* Ends the worker: waits for it when it is between calls (and frees it);
  * when it is inside a CONFIGMG call, which may be waiting for this very

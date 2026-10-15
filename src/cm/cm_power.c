@@ -189,9 +189,16 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
             CmReenumStop(nhi);
             nhi->ReenumOn = 0;
         }
-        CmNhiUnbind(nhi);
-        CmNhiDrainActions(nhi);
-        (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        if (CmNhiHwAccess(nhi) && !(nhi->U4On && nhi->U4.Contained)) {
+            CmNhiUnbind(nhi);
+            CmNhiDrainActions(nhi);
+            (VOID)CmNhiSetBusMaster(nhi, FALSE);
+        } else {
+            /* The liveness gate is closed: nothing is written to a host
+             * interface that stopped answering (record 21 section 5.6). */
+            CmLogNote(nhi, "cm.shutdown.no-access", nhi->Live.State);
+            CmNhiDrainActions(nhi);
+        }
         CmNhiPlatformRelease(nhi, CmNhiMayClearPower(nhi));
         return;
     }
@@ -210,6 +217,12 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     }
     if (nhi->ReenumOn) {
         CmReenumSuspend(nhi);
+    }
+    /* A monitored instance stops being sampled; one the gate closed stays
+     * closed, so its suspend and its resume touch nothing and the resume
+     * takes the failure path (U15's order). */
+    if (CmNhiHwAccess(nhi)) {
+        CmLiveDisarm(&nhi->Live);
     }
     if (nhi->U4On) {
         cmU4Suspend(nhi);
@@ -232,23 +245,53 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
 {
     BOOLEAN ok;
     BOOLEAN held;
+    BOOLEAN lost;
+    BOOLEAN ran;
     LONG rc;
+    ULONG v;
 
     if (!nhi->Suspended || nhi->DevicePower != PowerDeviceD0) {
         return TRUE;
     }
     nhi->Suspended = 0;
+    lost = FALSE;
+    ran = FALSE;
+    if (nhi->U4On && (nhi->U4.Contained || !CmNhiHwAccess(nhi))) {
+        /* Record 22 section 7.7: a contained instance is never restarted
+         * - no platform step, no Bus Master write, no ring; a hold the
+         * suspend published is released through the failure path
+         * (decision U15's order: release, then invalidate), then the
+         * driver's containment if it has not run. */
+        TbtU4Contain(&nhi->U4);
+        nhi->Counters.U4ContainRefused++;
+        CmLogNote(nhi, "u4.resume.contained", nhi->Live.State);
+        if (nhi->ReenumOn) {
+            CmReenumResumed(nhi, FALSE);
+        }
+        CmNhiU4Contain(nhi);
+        return FALSE;
+    }
     if (nhi->Stage != CM_STAGE_ACTIVE || CmNhiFailed(nhi)) {
         return TRUE;
     }
+    lost = FALSE;
     nhi->Counters.Resumes++;
     CmLogNote(nhi, "cm.resume", (ULONG)nhi->SystemPower);
+    if (!nhi->U4On && !CmNhiHwAccess(nhi)) {
+        /* Suspended while the liveness gate was closed: nothing is written
+         * to it on the way back; the failure path below (U15's order). */
+        CmLogNote(nhi, "cm.resume.no-access", nhi->Live.State);
+        ok = FALSE;
+        held = FALSE;
+        goto resumed;
+    }
     ok = CmNhiPlatformInit(nhi);
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
     }
     held = FALSE;
     if (ok && nhi->U4On) {
+        ran = TRUE;
         rc = TbtU4Resume(&nhi->U4);
         if (rc == TBT_E_STATE && !nhi->U4.Failed) {
             /* Record 22 section 7.6: the domain runs, but an obligation
@@ -262,13 +305,55 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "u4.inert-reason", nhi->U4.InertReason);
             ok = FALSE;
         }
+    }
+    if (nhi->U4On) {
+        /* Record 22 section 7.7: every USB4 resume, whatever its outcome,
+         * reads the size register once. All ones, the gate revoked
+         * meanwhile, or - once the resume itself ran, which programs the
+         * rings again (and the suspend's stop kept the size) - anything
+         * but the value this driver programs: the host interface is gone
+         * and the instance is contained, after the hold's failure path
+         * below. A success, held or not, arms the monitor only on that
+         * value. */
+        v = CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG);
+        if (!CmNhiHwAccess(nhi) || v == 0xFFFFFFFFUL ||
+            (ran && v != CM_U4_RX_SIZE_VALUE)) {
+            lost = TRUE;
+            /* The core at once, so nothing it rebuilt is published (UP)
+             * by the take below; the driver's half after the release. */
+            TbtU4Contain(&nhi->U4);
+            if (ok) {
+                CmLogNote(nhi, "cm.resume-failed", v);
+                ok = FALSE;
+                held = FALSE;
+            }
+        } else if (ok) {
+            (VOID)CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
+        }
     } else if (ok) {
         rc = TbtIcmResume(&nhi->Icm);
         if (rc != TBT_OK) {
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             ok = FALSE;
+        } else if (!CmNhiLiveArm(nhi)) {
+            /* Resumed, then not answering: the session is ended here -
+             * rings stopped (their stop verified or the buffer kept), the
+             * resumed table's UPs discarded and every entry gone - before
+             * the holds are released and anything is drained. */
+            CmLogNote(nhi, "cm.resume-failed", 0x100UL);
+            TbtIcmUnbind(&nhi->Icm);
+            TbtIcmLost(&nhi->Icm);
+            if (nhi->ReenumOn) {
+                /* The drain below is the loss's (CmReenumLossBegin); the
+                 * CONTROLLER_UNAVAILABLE request follows it. */
+                CmReenumLossBegin(nhi);
+                lost = TRUE;
+            }
+            nhi->Icm.Failed = TRUE;
+            ok = FALSE;
         }
     }
+resumed:
     if (!ok) {
         /* The client stopped its rings (TbtIcmResume's or TbtU4Resume's
          * failure), or never restarted them (the platform or Bus Master
@@ -287,6 +372,13 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         CmReenumResumed(nhi, (BOOLEAN)(ok && !held));
     }
     CmNhiDrainActions(nhi);
+    if (lost && nhi->U4On) {
+        /* Record 22 section 7.7: the USB4 profile's containment, its own
+         * loss bracket and request inside (CmNhiU4ContainEx). */
+        CmNhiU4Contain(nhi);
+    } else if (lost && nhi->ReenumOn) {
+        CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
+    }
     return ok;
 }
 

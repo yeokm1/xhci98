@@ -888,3 +888,170 @@ profile (`usb4-generic`); a dock with several units; a removal that fails
 after an accepted query; leg E5 (a unit unplugged between the confirmation
 and the call), which the host suite covers with injected answers; the
 `release` and `debug` flavours.
+
+## 39-V.2 - Windows 2000 on the Alpine Ridge tree, and the Titan Ridge leg
+
+**Verdict: the table's legs pass on Windows 2000 except the R32 re-plug,
+which fails by platform; the R32 silence, the eject and the boot question
+pass; the SMP leg under Driver Verifier found no violation in `xhcicm.sys`
+(its first run froze in `nvme98`, the re-run with the NVMe disabled
+passed)** (2026-10-15). Suspend and resume (S3, the resume
+ordering of record 21 section 6.3, the watchdog) are not read here: they
+wait for the client's resume budget and another worker reads them.
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-RunRoot v-2k`, `-BootStrict` and `-trace usb4_*` (with `-Timestamps`
+from the Titan Ridge leg on), QMP and VNC on 47926/47927 (the xHCI-only
+2000 image, one vCPU), 47928/47929 (a second one) and 47932/47933 (the SMP
+image, two vCPUs). The emulator: the copy in `vm\usb4\bin` (QEMU 11.1.2
+`v11.1.2-149-gc645f13`, SHA-256 `9A55E985...DCB3`, also pinned as
+`vm\v-2k-bin\`) for the Alpine Ridge and R32 legs, and
+`vm\usb4\bin-5ba7f60` (`v11.1.2-161-g20655c3`, `usb4-emu` main
+`5ba7f60`) for the Titan Ridge and SMP legs. The `qemu` flavour of
+`xhcicm.sys` from `3.0.0.0` at `6fa331d4` (SHA-256 `757E2A1D...0E60E`),
+packaged by `make-package.ps1 -Flavor qemu`, with `XhciLogVerbosity` 2 in a
+staged copy of `xhcicm.inf`; `nvme98` 0.1.1.0 (its published x86 build,
+read-only); an NVMe overlay of `usb4-emu`'s `vms\win98\nvme32.qcow2` (a
+FAT32 volume, `NVME32`). Installs by `devq` (`out\v-2k\devq\`, the 39-0.4
+tool with `disable`, `enable`, `cycle`, `setval` and `getval` added): the
+NHI by its hardware id `PCI\VEN_8086&DEV_15BF&CC_0880` (on 2000
+`PCI\VEN_8086&DEV_15BF` is a compatible id, which
+`UpdateDriverForPlugAndPlayDevices` does not match), the filter by
+`nt\xhcicmf.inf` and `PCI\VEN_8086&DEV_15C0&CC_0604`, unforced. Evidence:
+`vm\v-2k\<run>\` (debug-console log, trace, screenshots `s*.png`).
+
+| Leg | Run | Result |
+|---|---|---|
+| Install (OFF_OFF, device at boot) | `ar-a` | The switch's bridges silently, restart; the NHI by `devq` (`reboot=0`): bind, driver ready, the dock announced unapproved (`0x0811`), get route, approve, tunnel up. The filter through its INF: `reboot=0`; the NHI's stack restarted twice while the ports' stacks were rebuilt, the NVMe then found ("PCI Device") and `nvme98` installed; volume `D:` (`NVME32`) mounted. PASS |
+| The boot question (39-0.4) | `ar-a` | After the filter's install `Services\xhcicm` reads `Start` 0 and `Group` "Base", although both INFs say demand start; two restarts later: no `0x7B`, the filter attached at boot on every `15C0` port, the NHI bound, the device approved and re-enumerated, the eject icon in the tray. The promotion is Windows 2000's; nothing in the filter's role needs more than a boot start offers. PASS |
+| V.1.2 unplug and re-plug | `ar-a` | `device_del`: disconnect, tunnel down, devnode gone; `device_add`: announced, approved, `D:` back. PASS |
+| V.1.3 boot-tunnelled (OFF_ON) | `ar-pb` | NVMe inserted before POST (`cold=1`); the driver bound with the device announced approved with boot (`0x0D11`), `tunnel-up` why 2, no approve and no mailbox `0x06` in the trace; `D:` from boot; not offered for eject until re-plugged, then offered. PASS |
+| V.1.4 nothing at boot, controller present (OFF_OFF) | `ar-nb` | Bind with an empty table (`cm.dev.count` 0); `device_add`: approved, `D:` mounted (Explorer opened it) with no Refresh. PASS. OFF_ON with nothing attached was not run separately (pre-boot changes nothing without a device) |
+| V.1.5 Assist, no device (ON_OFF) | `ar-on0` | The controller's tree absent: the root bridge's secondary bus empty, the switch's upstream port at bus 0 with no windows, no NHI, nothing bound, nothing logged - the release notes' limitation. PASS. ON_ON with nothing attached is the same power model and was not run |
+| V.1.6 disable and enable | `ar-a` | Disable: rings disabled, then mailbox `0x07`, `D:` stays; enable: `0x23`, driver ready, the device announced approved (`0x0911`), `tunnel-up` why 2, no approve. PASS |
+| V.1.7 `XhciCmApprove` 0 | `ar-a` | Announced `0x0811`, `tbt.icm.approve-withheld`, no `0x04` in the trace, no tunnel. PASS |
+| V.1.7 `XhciCmMode` 0 | `ar-a` | `cm.inert` 1: no ring, no mailbox, nothing in the trace across an unplug and a plug. PASS |
+| V.1.8 the dock's xHCI | - | Not available on i440FX (39-0.7); bench |
+| R32: Assist on, silence after the last unplug (ON_ON, device at boot) | `ar-r32` | Bound with the boot device approved. `device_del`: disconnect, tunnel down, "ICM silent 1"; the client sent no command in the window, no retry, no hang. 35 s later "controller power 0": the root bridge's gate closed, the NHI's registers all ones; the emulator does not remove the NHI devnode. `device_add`: power 1, the ICM reset ("driver not ready"), and the controller's subtree came back with its configuration reset (the switch's upstream port at secondary bus 0, no windows), so the NHI stays unreachable. The client never noticed: re-plug not approved. A disable and enable of the NHI left it absent; a root rescan removed the switch's bridges (Unsafe Removal dialog naming the tunnel port filter) and a second did not re-add them. **Silence survived: PASS. Re-plug: FAIL by platform** - the emulator resets the subtree without a PnP removal and 2000's `pci.sys` (`acpi=off`) cannot renumber it; the P14s removes the controller instead. The driver's part - detecting the loss, retiring the devices, refusing access, recovering where the platform restores access - is the liveness monitor of record 21 sections 5.5 and 5.6, built on branch `v-2k` after this reading; its re-reading is the next row |
+| R32 re-read with the liveness monitor | `ar-r32b` | The emulator `vm\usb4\bin-5ba7f60`; `xhcicm.sys` (`qemu` flavour) from `v-2k` at `03e19f3e`, SHA-256 `CA543911...AE8E6`, copied over the installed one. Bind: `cm.live.baseline=0100000A` (RX ring 0's size register). `device_del`: "ICM silent 1", tunnel down. 35 s later the emulator gated the subtree to all ones: `cm.live.state` SUSPECT then ABSENT (`00000102`, `00000103`), `tbt.icm.lost` (no entry left), a RESYNC of why 9 (UNAVAILABLE), `cm.reenum.unavailable` 1; from then the trace shows no access reaching the host interface. `device_add`: power 1, the subtree's configuration reset: CONFIG_LOST (`00000104`), the validation's identity read through the reset bridges `FFFFFFFF` (`cm.live.ids-changed`), RECOVERY_FAILED (`00000106`) - no recovery attempted on a reset subtree, as record 21 section 5.6 says. A disable of the NHI then: `cm.unbind.no-access`, no ring stop, no mailbox `0x07`, `cm.buffer-kept` 1 (no verified stop, so the common buffer stays), `cm.live.final=00000106`; the enable left the NHI absent (as in the first reading). No hang, no bugcheck. **Detection and containment: PASS. Re-plug: FAIL by platform** (owed post-cut on an emulator whose slot removes the subtree) |
+| Plug cycle and safe eject on the monitored build | `ar-c` | OFF_OFF, device at boot, the same binary: unplug (the Unsafe Removal dialog, no eject asked), re-plug approved, tunnel up; then "Unplug or Eject Hardware", Stop: `cm.reenum.eject=00000208`, `eject.tunnel-left-up`, "Safe To Remove Hardware"; `device_del`: no dialog; `device_add`: listed again. No `cm.live.state` transition across any of it. PASS |
+| Safe eject (`Removable` alone) | `ar-a` | Listed ("NVM Express Controller (nvme98) at PCI Slot 5"); Stop: the volume and the disk listed, "Safe To Remove Hardware", `cm.reenum.eject=00000208`, `eject.tunnel-left-up`; the held devnode at problem 24; `device_del`: no dialog, devnode gone; `device_add`: listed again. A plain `device_del`: the Unsafe Removal dialog naming the controller and its disk. PASS |
+| `XhciCmSafeEject` 0 | `ar-a` | Device present (`D:`), nothing listed. PASS |
+| `Removable` + `SurpriseRemovalOK` (variant build, `xfer\sro\`, SHA-256 `AA49ABFE...5A45`, not committed) | `ar-sro` | 2000 no longer lists the NVMe in "Unplug or Eject Hardware", and a plain unplug still shows the Unsafe Removal dialog, naming only the disk. Decides 39-A.8's 2000 path: `Removable` alone; the dialog stays a release-notes line |
+| Eject listing after a stack rebuild | `tr-a` | A disable and enable of the NVMe devnode, or its driver installed by Found New Hardware, drops it from the list until a re-plug (record 21 section 7.4: the child filter is created only at the bridge's first report). Release-notes line widened, fix owed |
+| SMP under Driver Verifier: filter disable concurrent with tunnel work | `smp-a` | The SMP image, `verifier /all` (level `0x1B`, every driver, `xhcicm.sys` included), filter and NHI installed as above. `devq cycle` disabling and enabling the tunnel port 02:01.0 (its filter instance's rundown) while the host ran four unplug and plug cycles: every tunnel up and down logged in order, no Verifier stop, no bugcheck; the guest then froze with CPU 1 for minutes in `KeStallExecutionProcessor` called from `nvme98.sys` under `scsiport`, CPU 0 idle - `nvme98` polling a controller that reads all ones (reported to its owners; not this driver's). Re-run with the NVMe devnode disabled: the next row |
+| SMP under Driver Verifier, re-run | `smp-b` | A fresh overlay of the SMP image, `verifier /flags 27 /driver xhcicm.sys` (level `0x1B` read back), the emulator `vm\usb4\bin-5ba7f60`, OFF_OFF with the device at boot, the NVMe devnode disabled (`nvme98` 0.1.1.0 is not used on SMP with bridge cycling). `devq cycle` disabling and enabling the tunnel port 02:01.0 eight times, 3 s apart, while the host ran five `device_del`/`device_add` cycles: every cycle "OK", five tunnel-ups and five tunnel-downs logged in order (`cm.reenum.ups` 6 with the boot one, `downs` 5, `ejects` 3, `child.attached` 3); then a disable and enable of the NHI itself: no Verifier stop, no bugcheck, the guest responsive throughout. PASS |
+
+**The Titan Ridge leg** (`tr-a`, `-Tb3Model titan-ridge`, OFF_OFF, nothing at
+power-on, from the prepared image whose driver store already held both
+INFs). The NHI `8086:15EB` was offered "xHCI98 Thunderbolt 3 Host Interface"
+by Found New Hardware and installed by `devq` (`&CC_0880`); all five
+`8086:15EA` ports took the filter from the stored INF at their first
+discovery, with no install step (`upper: [xhcicm]`, started). Bind:
+`cm.hw.profile` 3, `cm.icm.row` 3, driver-ready flags `0xA2`, two members
+(02:01.0 and 02:04.0, the second tunnel port). Plug: announced unapproved,
+**no get route**, approve (8 words, route-addressed) 264 ms after the
+announcement (re-plug 243 ms), tunnel up, the NVMe found with no Refresh,
+`nvme98` installed, `D:` mounted. Unplug and re-plug: PASS. Safe eject:
+listed, Stop, `cm.reenum.eject=00000208`, `device_del` with no dialog.
+`XhciCmMode` 3 on the Titan Ridge NHI: refused, inert (`cm.inert` 4).
+PASS. For comparison the Alpine Ridge row on the SMP guest: 4 ms (at
+driver ready), 19 ms and 86 ms from the announcement to the approve, get
+route included.
+
+**Not read here.** S3 and the resume ordering; ON_ON and OFF_ON with
+nothing attached (same power model as their read twins); the dock's xHCI;
+the monitor's CONTROLLER_UNAVAILABLE route on 98 SE and ME (record 21
+section 5.5; built and reviewed on `v-2k`, its reading owed with the R32
+re-plug); `nvme98`'s presence-lost statement (its link-state channel has
+none in this build; owed);
+the 98 SE, ME and NT 5.1/6.x tiers (39-V.1, 39-V.3); the `release` and
+`debug` flavours.
+
+## 39-V.1 on 98 SE, 39-V.3 on ME and 39-V.4 - The 9x legs (2026-10-15)
+
+**Verdict: the 98 SE legs read here pass; ME passes the install and the
+plug cycle, and its "Unplug or Eject Hardware" lists nothing; 39-V.4 reads
+as designed for Phase 40** (2026-10-15). V.1.8 stays with the bench (no
+i440FX dock, 39-0.7).
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-RunRoot v-9x`, `-BootStrict`, `-Trace`, and `-Qemu
+vm\usb4\bin-5ba7f60\qemu-system-x86_64.exe` on every leg (the `usb4-emu`
+`main` `5ba7f60` build, QEMU fork `20655c3`). 98 SE from an overlay of
+`vm\t26\win98-gold.qcow2` (`t98`, QMP and VNC 47902 and 47903), ME from an
+overlay of `vm\t37me\winme-stock-base.qcow2` (`me`, 47910 and 47911), one
+vCPU each. The NVMe behind the tunnel: an overlay of a 128 MiB FAT16 image
+holding `TESTDATA.BIN` (u4-asm's), `nvme98` 0.1.1.0 from its `win9x`
+folder. The drivers: branch `v-9x` at `9153c87e` (the `3.0.0.0` tip of the
+run), `build-driver.cmd qemu` and `release`, every gate passing, packaged
+with `make-package.ps1` (`out\v-9x\`, hashes in `out\v-9x\pkg-sha256.txt`);
+the staged `xhcicm.inf` copies write `XhciLogVerbosity` 2. The log below is
+the `qemu` flavour's port-0xE9 output.
+
+**The install route.** `XHCIINST` refuses a `qemu` flavour binary in
+`release-x86` ("a driver of another build flavour is in the directory"),
+by design. So on 98 SE the NHI took the `qemu` package through Add New
+Hardware ("Specify a location", `D:\release-x86`), and on ME `INSTALL.BAT`
+ran on the `release` package, after which the `qemu` `xhcicm.sys` was
+copied over the installed one for the log.
+
+| Leg | Setup | Reading | Result |
+|---|---|---|---|
+| V.1.1 install | `OFF_OFF`, device at boot | the switch's bridges through 98 SE's wizard; the NHI as "xHCI98 Thunderbolt 3 Controller" from `xhcicm.inf`; `cm.select.outcome=1` (ICM), `tbt.icm.connected=00000811`, approve, `cm.action.tunnel-up=00000001`, `cm.reenum.9x.reenumerate=00020800`; "PCI Card" offered at once, no Refresh; `nvme98` from `D:\NVME`, no restart; `E:` (`ORICO`), `fc /b` of `TESTDATA.BIN` clean | PASS |
+| V.1.2 unplug, re-plug | the same boot | `device_del`: `tbt.icm.device-gone`, `tunnel-down=00000003`, `query-remove` 0, `remove` 0, `reenumerate=00020800`, `E:` "Invalid drive specification"; `device_add`: approved, tunnel up, `E:` back, the file written before the unplug compared clean | PASS |
+| V.1.3 boot-tunnelled device | `OFF_ON` and `ON_ON`, device at boot | the trace's pre-boot tunnel (`cold=1`) before POST; the desktop reached; the device announced approved (`connected=00000D11` on `OFF_ON`), `tunnel-up=00000002`, no approve command; after driver ready no tunnel transition and no reset of any kind in the trace; `E:` read clean; then V.1.2's cycle on `OFF_ON`, clean | PASS (both) |
+| V.1.4 nothing at boot | `OFF_OFF`, device not at boot | `cm.bind=0`, `cm.dev.count=0`; `device_add` through V.1.1's path, `E:` opened by AutoPlay | PASS (`OFF_ON` not run separately) |
+| V.1.5 Assist, no device | `ON_OFF`, nothing attached | the controller absent: no line of `xhcicm.sys` in the log, a clean boot | PASS (`ON_ON` without a device not run) |
+| V.1.6 disable, enable | `OFF_OFF`, device at boot | disable (Device Manager, "Disable in this hardware profile"): the counters dumped, mailbox `0x07`; the volume stayed (`fc` clean); enable: driver ready, `connected=00000911` (approved), `tunnel-up=00000002`, re-enumeration, `E:` clean | PASS |
+| V.1.7 `XhciCmApprove` 0, `XhciCmMode` 0 | values written to `Class\System\0034` with `regedit /s`, then a restart | approve 0: `connected=00000811`, `tbt.icm.approve-withheld`, no approve command in the trace; mode 0: `cm.mode=0`, `cm.inert=1`, no ring 0 or mailbox traffic in the trace after the boot | PASS |
+| V.1.8 the dock's xHCI | - | not available on i440FX (39-0.7); the bench's | not run |
+| V.1.9 safe eject, 9x half | every tunnel up | `cm.reenum.9x.removable=00000000` (`DN_REMOVABLE` added, `CR_SUCCESS`) on the NVMe's devnode, never a port's; 98 SE offers no eject for it (NUSB's applet lists by its own interface, above) | the flag set; no eject on 98 SE (the NT-only line stands) |
+
+**ME** (39-V.3's ME tier), `tb3-alpine-ridge` then `usb4-generic`:
+
+| Leg | Reading | Result |
+|---|---|---|
+| Install | the bridges' and the NHI's wizards cancelled; `INSTALL` from `D:\`: the plan listed one device, QEMU's own xHCI (`1B36:000D`), and neither the NHI nor the Alpine Ridge xHCI (a reading of the tool, not a fault: their wizards had been cancelled); `Y`: the package copied to `C:\WINDOWS\XHCI98\...`, `DevicePath` updated, exit 4 with the steps. After a shutdown and a new boot the NHI's wizard named "xHCI98 Thunderbolt 3 Controller" and its automatic search found it; driver ready in the trace | PASS |
+| Plug | `connected=00000811`, approve, `tunnel-up=00000001`, `cm.reenum.9x.version=0000045A`, `reenumerate=00020800`, `removable=00000000`; "PCI Card" at once, no Refresh; `nvme98` from `D:\NVME`, `E:` with no restart | PASS |
+| "Unplug or Eject Hardware" | empty, with and without "Display device components": the `DN_REMOVABLE` devnode is not listed on ME either, so nothing to stop | not listed |
+| Unplug, re-plug | `device-gone`, `tunnel-down=00000003`, `query-remove` 0, `remove` 0, `E:` gone; re-plug: tunnel up, the file written before the unplug compared clean | PASS |
+| `usb4-generic`, `intel-adl` | the host's wizard named "xHCI98 USB4 Host Router" (the `PCI\CC_0C0340` line) and its automatic search found it; `cm.select.outcome=4` (software CM); plug: `u4.pcie.up=00010809`, `reenumerate=00002800`, `removable=0`, the NVMe's driver found by search, `E:`; the applet empty; unplug `E:` gone, re-plug compared clean | PASS |
+
+**Suspend and resume on ME** (the 98 SE guest was not tried). ME offers
+Stand by and Hibernate.
+
+- `usb4-generic`, nothing attached, Stand by: QEMU reported "paused
+  (suspended)" (S3); `system_wakeup` about 20 s later. Log:
+  `cm.suspend=4`, `cm.reenum.hold.client-ms=000061A8`, `hold.u4-ms=0002A816`,
+  `hold.bound-ms=000493E0`, `u4.suspend.obligations=0`; at resume
+  `cm.resume=1`, the host interface read again, `cm.reenum.resumed=1`, no
+  watchdog and no resume failure; a plug afterwards built the tunnel and
+  `E:` came back. The screen stayed black until a key (the emulated VGA's
+  repaint). PASS.
+- `tb3-alpine-ridge`, the device unplugged first, Stand by, wake after
+  about 15 s: `cm.suspend=4`, `hold.client-ms=000493E0`; at resume driver
+  ready again, `cm.reenum.resumed=1`, no `resume-budget-expired`, no
+  watchdog, no resume failure; a plug afterwards approved and tunnelled.
+  PASS: the 270 s client deadline and the hold did not trip.
+- Hibernate (reached by accident through `rundll32 powrprof.dll,
+  SetSuspendState`, with the device attached on `usb4-generic`): the
+  guest powered off; the next power-on, with nothing attached, resumed
+  from the image: `cm.resume=1`, `u4.linkdown=01000209` (the device gone
+  across the power-off), the tunnel-down action, the re-enumeration,
+  `cm.reenum.resumed=1`, no hang; a plug afterwards worked.
+
+**39-V.4.** Phase 40's INF lines now claim class `0C0340`, as designed: on
+98 SE and ME the `usb4-generic` host was offered as "xHCI98 USB4 Host
+Router" from `xhcicm.inf` and bound by the software connection manager
+(`cm.select.outcome=4`); the Thunderbolt 3 lines of this phase match
+nothing on it. 2000 was read so in run 40 (40-A.6). The task's original
+reading ("left unclaimed") is superseded by that line.
+
+**Not read here.** `OFF_ON` without a device at boot and `ON_ON` without a
+device (the readings of their pairs stand for them), V.1.8, 98 SE suspend,
+the `release` flavour on 98 SE, a removal refused by an open file.
+
+**Evidence.** `vm\v-9x\t98\` and `vm\v-9x\me\` (screendumps, `debugcon-*`,
+`trace-*`), `vm\v-9x\notes.txt` (the leg list with the screendump each
+reading cites).

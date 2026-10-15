@@ -167,6 +167,9 @@
 #define CM_NVLINK_NO_CHANNEL        8UL /* no table, or no rendezvous      */
 #define CM_NVLINK_UNQUALIFIED       9UL /* the ordering is not qualified on
                                            this operating system           */
+#define CM_NVLINK_LOST              10UL /* the host interface lost (record
+                                           21 section 5.5): presence lost,
+                                           nothing proven of the endpoint  */
 
 /* The 9x REMOVE_PENDING request: a PROPOSED extension of nvme98cm.h's
  * entry, not in that header. Flags bit 3 is the request; Reserved[0] the
@@ -315,6 +318,19 @@ ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh);
  * CM_NVLINK_SEND when DOWN_QUIESCED was set on at least one entry, else
  * why not (every UP entry of the set's buses then leaves UP). */
 ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
+
+/* The host interface lost (a TUNNEL_DOWN of why TBT_ICM_WHY_UNAVAILABLE,
+ * NT): no statement - each UP entry of the set's buses is treated as for a
+ * verdict that withholds it (CM_NVLINK_LOST: UP cleared only where its
+ * function reads absent, never DOWN_QUIESCED), so nvme98's own gone
+ * deadline applies. Not called on 98 SE and ME, whose loss reads no bridge
+ * (cm_reenum.c CmReenumAction). */
+VOID CmNvlinkLost(struct _CM_NHI *nhi);
+
+/* The host interface lost, every operating system (cm_reenum.c
+ * CmReenumLossBegin): the deferred scans of buses an exposure found silent
+ * are dropped, with no access; a later exposure arms its own. */
+VOID CmNvlinkDropLate(struct _CM_NHI *nhi);
 
 /* Obligation 2, USB4 profile, from the CM_U4_DOWN_HOOK: `member` the
  * port's index in nhi->Reenum.Topo.Set (XhciTbtPortMember) or

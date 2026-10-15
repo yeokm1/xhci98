@@ -1173,6 +1173,8 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->EjectPending = 0;
     r->MarkOpen = 0;
     r->CfgmgOwed = 0;
+    r->LossDrain = 0;
+    r->LossSeen = 0;
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         r->KnownCount[i] = 0;
     }
@@ -1289,6 +1291,15 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     if (!r->CfgmgOwed) {
+        return;
+    }
+    if (r->LossSeen) {
+        /* The host interface was lost before the worker started: a
+         * baseline taken now would record a lost tree as healthy, and its
+         * paths would be read from reset bridges. The route stays none
+         * for this instance (a PnP restart starts afresh). */
+        r->CfgmgOwed = 0;
+        CmLogNote(nhi, "cm.reenum.9x.not-started.lost", 1);
         return;
     }
     r->CfgmgOwed = 0;
@@ -1413,6 +1424,19 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
          * member the rediscovery finds (cmDiscoverAndList). */
         r->DebtPending = 1;
     }
+    if ((r->LossDrain || action->Why == TBT_ICM_WHY_UNAVAILABLE) &&
+        r->Route == CM_ROUTE_CONFIGMG) {
+        /* The host interface lost (CmReenumLossBegin): counted, ejects
+         * voided above, and nothing else - no bridge polled, no request
+         * posted, whatever the action's reason (one queued before the
+         * loss included). The worker's CONTROLLER_UNAVAILABLE request is
+         * this episode's reconciliation; an ordinary scan or
+         * re-enumeration here would read the bridge headers the loss may
+         * have reset, or run ahead of its removal. */
+        CmLogNote(nhi, "cm.reenum.9x.unavailable.action",
+                  (action->Kind << 8) | action->Why);
+        return;
+    }
     if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
         r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
         /* Whatever XhciCmReenum says: the known children are pruned to
@@ -1449,7 +1473,11 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         }
         /* nvme98's statement, then its acknowledgement, before the removal
          * (cm_nvlink.h, obligations 2 and 3). */
-        if ((action->Why & CM_U4_WHY_BASE) == 0) {
+        if (action->Why == TBT_ICM_WHY_UNAVAILABLE) {
+            /* The host interface lost: presence lost, no quiescence
+             * claimed (record 21 section 7.3). */
+            CmNvlinkLost(nhi);
+        } else if ((action->Why & CM_U4_WHY_BASE) == 0) {
             (VOID)CmNvlinkIcmDown(nhi, state);
         }
         CmNvlinkAwait(nhi);
@@ -1481,8 +1509,12 @@ VOID CmReenumService(PCM_NHI nhi)
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
      * 10.3). */
-    CmNvlinkService(nhi);
-    if (!r->Listed && r->RediscoverLeft != 0 &&
+    if (CmLiveTransport(&nhi->Live)) {
+        /* Not while the host interface is lost: its scans read the
+         * bridges (record 21 section 5.5). */
+        CmNvlinkService(nhi);
+    }
+    if (!r->Listed && r->RediscoverLeft != 0 && !r->LossSeen &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
         cmDiscoverAndList(nhi);
     }
@@ -1762,6 +1794,8 @@ VOID CmReenumStop(PCM_NHI nhi)
         r->Marked += wc.Marked;
         r->MarkFailures += wc.MarkFailures;
         r->CallFailures += wc.CallFailures;
+        r->GoneDone += wc.GoneDone;
+        r->GoneDropped += wc.GoneDropped;
         if (wc.Detached) {
             CmLogNote(nhi, "cm.reenum.9x.worker-detached", 1);
         }
@@ -1785,10 +1819,57 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.vetoed", r->Vetoed);
     CmLogNote(nhi, "cm.reenum.9x.marked", r->Marked);
     CmLogNote(nhi, "cm.reenum.9x.mark-failures", r->MarkFailures);
+    CmLogNote(nhi, "cm.reenum.9x.unavailable", r->Unavailable);
+    CmLogNote(nhi, "cm.reenum.9x.gone", r->GoneDone);
+    CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
     CmRegCounters(&attached, &skipped, &refused, &watchdogs);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
     CmLogNote(nhi, "cm.reenum.child.skipped", skipped);
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.watchdogs", watchdogs);
+}
+
+/*
+ * The host interface lost (cm_reenum.h). On NT the client's TUNNEL_DOWN
+ * and RESYNC actions handed over just before are the reconciliation (the
+ * bridge filters' invalidations); this records the episode. On 98 SE and
+ * ME the CONFIGMG worker is asked for the CONTROLLER_UNAVAILABLE
+ * reconciliation (CmCfgwkUnavailable): the children it retained at the
+ * members' last healthy walk removed without reading a bridge header,
+ * before any further re-enumeration of those members. XhciCmReenum 0
+ * asks for nothing. Nothing here states quiescence: no endpoint
+ * notification is made (presence lost only). IRQL: PASSIVE_LEVEL.
+ */
+VOID CmReenumLossBegin(PCM_NHI nhi)
+{
+    nhi->Reenum.LossDrain = 1;
+    CmNvlinkDropLate(nhi);
+    if (nhi->Reenum.Wk == NULL) {
+        /* No 98 worker running (not started yet, or the set still being
+         * looked for): none is started, and no rediscovery is made, for
+         * this instance (cmCfgmgLate, CmReenumService). */
+        nhi->Reenum.LossSeen = 1;
+    }
+}
+
+VOID CmReenumLossEnd(PCM_NHI nhi)
+{
+    nhi->Reenum.LossDrain = 0;
+}
+
+VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    r->LossDrain = 0;
+    CmLogNote(nhi, "cm.reenum.unavailable", episode);
+    if (r->Route != CM_ROUTE_CONFIGMG || r->Wk == NULL || r->Reenum == 0) {
+        return;
+    }
+    r->WkActive = cmOwnedMask(nhi);
+    CmCfgwkUnavailable(r->Wk, r->WkActive);
+    r->Unavailable++;
+    CmLogNote(nhi, "cm.reenum.9x.unavailable.members", r->WkActive);
 }

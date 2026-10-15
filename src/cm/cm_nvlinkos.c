@@ -825,6 +825,46 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
     return verdict == CM_NVLINK_SEND ? CM_NVLINK_NO_ENTRY : verdict;
 }
 
+VOID CmNvlinkDropLate(PCM_NHI nhi)
+{
+    CM_NV_U4 *u;
+    ULONG i;
+    ULONG dropped;
+
+    if (cmNvTable == NULL) {
+        return;
+    }
+    u = cmNvU4Of(nhi, FALSE);
+    if (u == NULL) {
+        return;
+    }
+    dropped = 0;
+    for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
+        if (u->LateOn[i]) {
+            u->LateOn[i] = 0;
+            dropped++;
+        }
+    }
+    if (dropped != 0) {
+        CmLogNote(nhi, "cm.nvlink.late.dropped", dropped);
+    }
+}
+
+VOID CmNvlinkLost(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    ULONG i;
+
+    r = &nhi->Reenum;
+    if (cmNvTable == NULL) {
+        return;
+    }
+    CmLogNote(nhi, "cm.nvlink.lost", r->Topo.Tunnels);
+    for (i = 0; i < r->Topo.Tunnels; i++) {
+        (VOID)cmNvMark(nhi, r->Topo.Set[i], CM_NVLINK_LOST);
+    }
+}
+
 ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
                        ULONG remainingMs)
 {
