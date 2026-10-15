@@ -360,29 +360,64 @@ ULONG CmQueryIdFromLink(const USHORT *link, ULONG chars, char *id,
     return n;
 }
 
+/* a + b held to CM_Q_UNKNOWN - 1. */
+static ULONG cmQAddSat(ULONG a, ULONG b)
+{
+    if (a > CM_Q_UNKNOWN - 1UL || b > CM_Q_UNKNOWN - 1UL - a) {
+        return CM_Q_UNKNOWN - 1UL;
+    }
+    return a + b;
+}
+
 ULONG CmQueryAgeMs(ULONG ticksNow, ULONG ticksThen, ULONG incr)
 {
     ULONG delta;
+    ULONG a;
+    ULONG b;
     ULONG q;
     ULONG r;
     ULONG ms;
-    ULONG rest;
 
     delta = ticksNow - ticksThen;
-    if (incr == 0) {
+    /* A clock read before the publication it is measured against (a
+     * negative difference) is age 0, never a wrap to 49 days. */
+    if (incr == 0 || (delta & 0x80000000UL) != 0) {
         return 0;
     }
-    /* delta x incr / 10^4 in words: incr is at most 156250 (15.6 ms), so
-     * r x incr stays below 2^32. */
+    /* delta x incr / 10^4 in words, for any tick period (10 to 55 ms is
+     * 100000 to 550000 units): incr = a x 10^4 + b, and delta x b / 10^4
+     * as q x b + r x b / 10^4 with delta = q x 10^4 + r; every product
+     * below 2^32 or held. */
+    a = incr / 10000UL;
+    b = incr % 10000UL;
     q = delta / 10000UL;
     r = delta % 10000UL;
-    if (q != 0 && q > (CM_Q_UNKNOWN - 1UL) / incr) {
+    if (a != 0 && delta > (CM_Q_UNKNOWN - 1UL) / a) {
         return CM_Q_UNKNOWN - 1UL;
     }
-    ms = q * incr;
-    rest = r * incr / 10000UL;
-    if (ms > CM_Q_UNKNOWN - 1UL - rest) {
-        return CM_Q_UNKNOWN - 1UL;
+    ms = delta * a;
+    ms = cmQAddSat(ms, q * b);
+    return cmQAddSat(ms, r * b / 10000UL);
+}
+
+VOID CmQuerySetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs)
+{
+    if (info >= CM_Q_HDR_BYTES) {
+        cmQPut(out, CM_Q_O_PASS_AGE_MS, pass != 0 ? ageMs : CM_Q_UNKNOWN);
     }
-    return ms + rest;
+}
+
+ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes)
+{
+    ULONG gen;
+
+    if (bytes < CM_Q_HDR_BYTES) {
+        return 0;
+    }
+    gen = cmQGet(answer, CM_Q_O_CONTENT_GEN) + 1;
+    if (gen == 0) {
+        gen = 1;
+    }
+    cmQPut(answer, CM_Q_O_CONTENT_GEN, gen);
+    return gen;
 }

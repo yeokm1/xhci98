@@ -443,10 +443,65 @@ static void test_age(void)
     CHECK_EQ(CmQueryAgeMs(100, 100, 156250), 0, "same tick");
     CHECK_EQ(CmQueryAgeMs(164, 100, 156250), 1000, "64 ticks of 15.625 ms");
     CHECK_EQ(CmQueryAgeMs(5, 0xFFFFFFFBUL, 100000), 100, "across the wrap");
-    CHECK_EQ(CmQueryAgeMs(0xFFFFFFFFUL, 0, 156250), CM_Q_UNKNOWN - 1UL,
+    CHECK_EQ(CmQueryAgeMs(0x7FFFFFFFUL, 0, 156250), CM_Q_UNKNOWN - 1UL,
              "held below unknown");
     CHECK_EQ(CmQueryAgeMs(10, 0, 0), 0, "no period");
     CHECK_EQ(CmQueryAgeMs(3, 0, 10000), 3, "1 ms ticks");
+    /* Coarse periods (10 to 55 ms): no overflow in r x incr. */
+    CHECK_EQ(CmQueryAgeMs(9999, 0, 550000), 549945UL, "55 ms ticks, r large");
+    CHECK_EQ(CmQueryAgeMs(10000, 0, 550000), 550000UL, "55 ms, 10^4 ticks");
+    CHECK_EQ(CmQueryAgeMs(20003, 0, 100144), 200318UL,
+             "10.0144 ms ticks, rounded down");
+    CHECK_EQ(CmQueryAgeMs(78090314UL, 0, 550000), 4294967270UL,
+             "55 ms: the last value below the hold");
+    CHECK_EQ(CmQueryAgeMs(78090315UL, 0, 550000), CM_Q_UNKNOWN - 1UL,
+             "55 ms: the first one held");
+    /* The clock read before the publication it measures: 0, not 49 days. */
+    CHECK_EQ(CmQueryAgeMs(100, 101, 156250), 0, "now before then: 0");
+    CHECK_EQ(CmQueryAgeMs(0xFFFFFFF0UL, 5, 156250), 0, "before, across the wrap");
+    CHECK_EQ(CmQueryAgeMs(5, 0xFFFFFFF0UL, 100000), 210, "after, across the wrap");
+}
+
+/* The IOCTL's order: the copy under the lock with the age unknown, then
+ * the clock read and the age written; the stopping flag's generation. */
+static void test_order_and_bump(void)
+{
+    CM_STATUS_IN in;
+    CM_QUERY_IN q;
+    ULONG r;
+    ULONG b;
+    ULONG info;
+
+    memset(&u4, 0, sizeof(u4));
+    base_in(&in, CM_ST_CM_USB4);
+    r = CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    q_in(&q, r, 0);
+    b = CmQueryBuild(built, &q);
+    (void)CmQueryContentGen(built, b, NULL, 0);
+    CHECK_EQ(CmQueryAnswer(out, sizeof(out), built, b, 9, CM_Q_UNKNOWN, FALSE,
+                           &info),
+             CM_Q_ANS_WHOLE, "whole");
+    CHECK_EQ(get32(out, CM_Q_O_PASS_AGE_MS), CM_Q_UNKNOWN,
+             "no age under the lock");
+    CmQuerySetAge(out, info, 9, CmQueryAgeMs(110, 100, 100000));
+    CHECK_EQ(get32(out, CM_Q_O_PASS_AGE_MS), 100, "the age after it");
+    CmQuerySetAge(out, info, 0, 100);
+    CHECK_EQ(get32(out, CM_Q_O_PASS_AGE_MS), CM_Q_UNKNOWN, "no pass: unknown");
+    memset(out, 0xCC, 64);
+    CmQuerySetAge(out, 0, 9, 100);
+    CHECK_EQ(out[CM_Q_O_PASS_AGE_MS], 0xCC, "nothing returned: nothing written");
+
+    /* Stopping: one past the thread's sequence; a later publication of
+     * unchanged content, bumped the same way, does not go back. */
+    CHECK_EQ(get32(built, CM_Q_O_CONTENT_GEN), 1, "the thread's 1");
+    memcpy(out, built, b);
+    CHECK_EQ(CmQueryBumpGen(out, b), 2, "stopping: 2");
+    CHECK_EQ(CmQueryContentGen(built, b, built, b), 1, "the thread's next: 1");
+    memcpy(out, built, b);
+    CHECK_EQ(CmQueryBumpGen(out, b), 2, "published while stopping: still 2");
+    put32(out, CM_Q_O_CONTENT_GEN, 0xFFFFFFFFUL);
+    CHECK_EQ(CmQueryBumpGen(out, b), 1, "past 0 to 1");
+    CHECK_EQ(CmQueryBumpGen(out, 63), 0, "no header: nothing");
 }
 
 int main(void)
@@ -459,6 +514,7 @@ int main(void)
     test_content_gen();
     test_id_from_link();
     test_age();
+    test_order_and_bump();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

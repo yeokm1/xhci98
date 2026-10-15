@@ -297,6 +297,8 @@ static VOID cmQSeed(PCM_NHI nhi, PCM_QUERY_DEV q)
     qi.Record = rec;
     qi.RecordBytes = CM_ST_HDR_BYTES;
     qi.Live = nhi->Live.State;
+    /* No thread: nothing will change until a restart. With one, the wake
+     * after the device is installed publishes the real flag. */
     qi.Inert = (ULONG)!nhi->ThreadRunning;
     qi.EpochLo = nhi->QueryEpochLo;
     qi.EpochHi = nhi->QueryEpochHi;
@@ -365,6 +367,12 @@ VOID CmQueryOpen(PCM_NHI nhi)
         cmQName(&v, value, "XHCICM", n);
         CmStatusQueryName(nhi, &v);
         CmLogNote(nhi, "cm.query.device", n);
+        /* A thread that already waits with no timeout (an inert start)
+         * would not publish until something else woke it: one pass now,
+         * which publishes the real state and the real inert flag. */
+        if (nhi->ThreadRunning) {
+            (VOID)KeSetEvent(&nhi->WorkEvent, IO_NO_INCREMENT, FALSE);
+        }
         return;
     }
     CmLogNote(nhi, "cm.query.device", 0xFFFFFFFFUL);
@@ -384,7 +392,11 @@ VOID CmQueryStopping(PCM_NHI nhi)
     }
     q = (PCM_QUERY_DEV)nhi->QueryDev->DeviceExtension;
     KeAcquireSpinLock(&q->Lock, &irql);
-    q->Stopping = 1;
+    if (!q->Stopping) {
+        q->Stopping = 1;
+        /* The flag changes the answer: its content generation moves. */
+        (VOID)CmQueryBumpGen(q->Answer, q->Bytes);
+    }
     KeReleaseSpinLock(&q->Lock, irql);
     empty[0] = 0;
     v.Buffer = empty;
@@ -462,6 +474,11 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert)
         q->Answer[i] = nhi->QueryBuf[i];
     }
     q->Bytes = bytes;
+    /* Once stopping, every answer stays one generation past the thread's
+     * own sequence (CmQueryStopping's bump), so it never goes back. */
+    if (q->Stopping) {
+        (VOID)CmQueryBumpGen(q->Answer, bytes);
+    }
     KeQueryTickCount(&ticks);
     q->PassTick = ticks.LowPart;
     q->Pass++;
@@ -484,6 +501,8 @@ static NTSTATUS cmQAnswer(PCM_QUERY_DEV q, PIRP irp)
     ULONG room;
     ULONG info;
     ULONG rc;
+    ULONG pass;
+    ULONG tick;
     KIRQL irql;
     PUCHAR out;
 
@@ -493,18 +512,26 @@ static NTSTATUS cmQAnswer(PCM_QUERY_DEV q, PIRP irp)
     if (out == NULL) {
         room = 0;
     }
-    incr = KeQueryTimeIncrement();
-    KeQueryTickCount(&ticks);
     info = 0;
+    pass = 0;
+    tick = 0;
     KeAcquireSpinLock(&q->Lock, &irql);
     if (!q->Connected) {
         rc = 0xFFFFFFFFUL;
     } else {
-        rc = CmQueryAnswer(out, room, q->Answer, q->Bytes, q->Pass,
-                           CmQueryAgeMs(ticks.LowPart, q->PassTick, incr),
+        pass = q->Pass;
+        tick = q->PassTick;
+        rc = CmQueryAnswer(out, room, q->Answer, q->Bytes, pass, CM_Q_UNKNOWN,
                            (BOOLEAN)(q->Stopping != 0), &info);
     }
     KeReleaseSpinLock(&q->Lock, irql);
+    /* The clock read after the copy: never before the publication the
+     * answer holds. */
+    if (rc == CM_Q_ANS_WHOLE || rc == CM_Q_ANS_HEADER) {
+        incr = KeQueryTimeIncrement();
+        KeQueryTickCount(&ticks);
+        CmQuerySetAge(out, info, pass, CmQueryAgeMs(ticks.LowPart, tick, incr));
+    }
     if (rc == 0xFFFFFFFFUL) {
         return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
                                           : STATUS_NO_SUCH_DEVICE, 0);

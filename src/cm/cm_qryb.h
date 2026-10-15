@@ -88,8 +88,19 @@ ULONG CmQueryIdFromLink(const USHORT *link, ULONG chars, char *id,
                         ULONG room);
 
 /* Milliseconds between two tick counts' low words (modulo 2^32) at
- * `incr` 100 ns units per tick, without 64-bit arithmetic; held below
- * CM_Q_UNKNOWN. */
+ * `incr` 100 ns units per tick, any period, without 64-bit arithmetic;
+ * held below CM_Q_UNKNOWN; 0 where ticksNow is before ticksThen (the
+ * difference's top bit set). */
 ULONG CmQueryAgeMs(ULONG ticksNow, ULONG ticksThen, ULONG incr);
+
+/* The age written into an answer CmQueryAnswer returned (`info` bytes),
+ * after the lock, from a clock read after the copy: CM_Q_UNKNOWN where
+ * `pass` is 0. */
+VOID CmQuerySetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs);
+
+/* The content generation of a published answer moved one on (past 0 to
+ * 1), for a change the thread's builds do not see (the stopping flag);
+ * returns it. */
+ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes);
 
 #endif /* CM_QRYB_H */
