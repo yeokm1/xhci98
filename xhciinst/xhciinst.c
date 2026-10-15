@@ -229,6 +229,7 @@ static int idle_filtered_port(const DEVREC *d, int inf);
 static int reached(const char *id);
 
 static int testSigningConfirmed;
+static int pkgSigned = -1;  /* xhci98.sys signed: 1, unsigned: 0, unread: -1 */
 static char trapOem[INST_INF_COUNT][INST_PATH_CHARS];
 static char srcDir[INST_PATH_CHARS];
 /* Each INF relative to the flavour directory: the NT-only filter INF is in
@@ -1625,6 +1626,9 @@ static int check_package(void)
                 }
                 markers = inst_flavour_marker((const unsigned char *)buf, size,
                                               flavour, sizeof(flavour));
+                if (inst_eq(name, "xhci98.sys")) {
+                    pkgSigned = inst_pe_signed((const unsigned char *)buf, size);
+                }
                 free(buf);
                 if ((markers == 0 && (inst_eq(name, "xhci98.sys") ||
                                       inst_eq(name, "xhciuas.sys"))) ||
@@ -3783,17 +3787,31 @@ static void testsigning_note(void)
         logonly("SystemStartOptions: %s\n", opt);
         if (inst_testsigning(opt)) {
             testSigningConfirmed = 1;
-            out("Test-signing mode is on: the test-signed x64 drivers load.\n\n");
-            return;
         }
+    }
+    if (pkgSigned == 0) {
+        /* A build without the project's key (a clone): nothing signed. */
+        testSigningConfirmed = 0;
+        out("NOTE: the x64 drivers in this package carry no signature (built "
+            "without the\nproject's test-signing key). Vista x64 and 7 x64 "
+            "load them only on a start where\nF8 chose \"Disable Driver "
+            "Signature Enforcement\"; test-signing mode is not\nenough. "
+            "Otherwise the controller shows Code 52 on 7, Code 39 on Vista. If "
+            "this\nstart is such an F8 start, go on.\n\n");
+        return;
+    }
+    if (testSigningConfirmed) {
+        out("Test-signing mode is on: the test-signed x64 drivers load.\n\n");
+        return;
     }
     out("NOTE: test-signing mode could not be confirmed. The x64 drivers are "
         "test-signed:\nthey load in test-signing mode (an elevated Command "
         "Prompt:  bcdedit /set\ntestsigning on  then restart), or on a start "
         "where F8 chose \"Disable Driver\nSignature Enforcement\". Otherwise the "
         "controller shows Code 52 on 7, Code 39 on\nVista. This tool does not "
-        "change it (README: \"Windows Vista x64 and 7 x64:\ntest-signing "
-        "mode\"). If this start is an F8 start, go on.\n\n");
+        "change it (the package's readme.txt, \"WINDOWS VISTA\nX64 AND "
+        "WINDOWS 7 X64: TEST-SIGNING MODE\"). If this start is an F8 start, "
+        "go on.\n\n");
 }
 
 static int confirm(const char *what)

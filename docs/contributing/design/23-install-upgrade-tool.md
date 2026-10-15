@@ -713,10 +713,17 @@ options the loader was started with, and looks for the word
 `TESTSIGNING`. Present: "test-signing mode is on". Absent or unreadable:
 "test-signing mode could not be confirmed" - not a definite negative,
 since the value is a reading and not a documented contract, and an F8
-start does not set it - followed by the README section's instructions
-(`bcdedit /set testsigning on` and a restart, or F8 at every start), and
-the note that otherwise the controller shows Code 52 on 7 or Code 39 on
-Vista. The run goes on if the user confirms. The tool never runs
+start does not set it - followed by the instructions of the package's
+`readme.txt` section "WINDOWS VISTA X64 AND WINDOWS 7 X64: TEST-SIGNING
+MODE", which it names by that exact heading (`bcdedit /set testsigning on`
+and a restart, or F8 at every start), and the note that otherwise the
+controller shows Code 52 on 7 or Code 39 on Vista. The note calls the
+drivers test-signed only when they are: the tool reads the x64
+`xhci98.sys`'s security directory (an embedded signature has a size). A
+package built without the project's key - a clone's - carries none, and
+the note then says so and that only an F8 start loads it (test-signing
+mode is not enough); test-signing mode never counts as confirmed for it.
+The run goes on if the user confirms. The tool never runs
 `bcdedit`. What the value holds in test-signing mode and on an F8 start is
 read on the legs (section 12).
 
@@ -1275,7 +1282,8 @@ and the tool links the same file:
 - id matching against hardware and compatible id multi-strings;
 - section 5.4's action table (ownership first, unknown refused) and its
   group verdict, and section 9.2's devnode selection and order;
-- the PE machine read and the flavour marker search over a file buffer;
+- the PE machine read, the embedded-signature test (section 5.10) and the
+  flavour marker search over a file buffer;
 - the `DevicePath` append and removal (section 6.2);
 - the `UpperFilters` edit (section 9.2 step 1);
 - `SystemStartOptions`' test-signing word;

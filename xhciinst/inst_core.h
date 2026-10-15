@@ -217,6 +217,10 @@ int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
 /* The PE header's machine field from the file's first bytes. 1 on success. */
 int inst_pe_machine(const unsigned char *buf, size_t len, INST_U32 *machine);
 
+/* Whether a PE image carries an embedded (Authenticode) signature: its
+ * security directory has a size. 1 yes, 0 no, -1 not a readable image. */
+int inst_pe_signed(const unsigned char *buf, size_t len);
+
 /* list;dir appended unless dir is already an entry (without case).
  * Returns 0 present (out = list), 1 appended, -1 out too small. */
 int inst_path_append(const char *list, const char *dir, char *out,

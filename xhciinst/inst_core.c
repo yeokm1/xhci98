@@ -1136,6 +1136,53 @@ int inst_pe_machine(const unsigned char *buf, size_t len, INST_U32 *machine)
     return 1;
 }
 
+static INST_U32 inst_le32(const unsigned char *p)
+{
+    return (INST_U32)p[0] | ((INST_U32)p[1] << 8) | ((INST_U32)p[2] << 16) |
+           ((INST_U32)p[3] << 24);
+}
+
+int inst_pe_signed(const unsigned char *buf, size_t len)
+{
+    INST_U32 off;
+    INST_U32 opt;
+    INST_U32 dirs;
+    INST_U32 count;
+    unsigned magic;
+
+    if (len < 0x40 || buf[0] != 'M' || buf[1] != 'Z') {
+        return -1;
+    }
+    off = inst_le32(buf + 0x3C);
+    if (off > len || len - off < 24 || buf[off] != 'P' || buf[off + 1] != 'E' ||
+        buf[off + 2] != 0 || buf[off + 3] != 0) {
+        return -1;
+    }
+    opt = off + 24;
+    if (len - opt < 2) {
+        return -1;
+    }
+    magic = (unsigned)buf[opt] | ((unsigned)buf[opt + 1] << 8);
+    if (magic == 0x10BU) {
+        dirs = opt + 96;
+    } else if (magic == 0x20BU) {
+        dirs = opt + 112;
+    } else {
+        return -1;
+    }
+    /* NumberOfRvaAndSizes sits just before the directories. */
+    if (len < dirs || len - dirs < 5 * 8) {
+        return -1;
+    }
+    count = inst_le32(buf + dirs - 4);
+    if (count < 5) {
+        return 0;
+    }
+    /* Directory 4, IMAGE_DIRECTORY_ENTRY_SECURITY: a file offset and a
+     * size; an embedded signature has a size. */
+    return inst_le32(buf + dirs + 4 * 8 + 4) != 0 ? 1 : 0;
+}
+
 /* The next ';' entry of list from *pos, trimmed, into out. 0 at the end. */
 static int inst_path_entry(const char *list, size_t *pos, char *out,
                            size_t cap)

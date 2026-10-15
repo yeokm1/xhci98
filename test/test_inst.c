@@ -930,6 +930,39 @@ static void test_flow(void)
           "nothing");
 }
 
+/* A PE image's embedded signature: the security directory's size. */
+static void test_pe_signed(void)
+{
+    static unsigned char pe[512];
+    unsigned off = 0x80;
+    unsigned opt = off + 24;
+
+    memset(pe, 0, sizeof(pe));
+    pe[0] = 'M';
+    pe[1] = 'Z';
+    pe[0x3C] = (unsigned char)off;
+    pe[off] = 'P';
+    pe[off + 1] = 'E';
+    pe[opt] = 0x0B;
+    pe[opt + 1] = 0x02;                 /* PE32+ */
+    pe[opt + 112 - 4] = 16;             /* NumberOfRvaAndSizes */
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 0, "PE32+ unsigned");
+    pe[opt + 112 + 4 * 8 + 4] = 0x40;   /* security directory size */
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 1, "PE32+ signed");
+    pe[opt + 112 - 4] = 4;
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 0, "four directories: none");
+    memset(pe + opt, 0, sizeof(pe) - opt);
+    pe[opt] = 0x0B;
+    pe[opt + 1] = 0x01;                 /* PE32 */
+    pe[opt + 96 - 4] = 16;
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 0, "PE32 unsigned");
+    pe[opt + 96 + 4 * 8 + 4] = 0x10;
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), 1, "PE32 signed");
+    CHECK_EQ(inst_pe_signed(pe, opt + 100), -1, "cut short");
+    pe[0] = 'X';
+    CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), -1, "not MZ");
+}
+
 int main(void)
 {
     test_versions();
@@ -945,6 +978,7 @@ int main(void)
     test_values();
     test_args();
     test_flow();
+    test_pe_signed();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }
