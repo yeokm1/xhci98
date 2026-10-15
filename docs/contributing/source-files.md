@@ -561,6 +561,7 @@ The three flavours (`debug`, `release`, `qemu`) and what distinguishes their out
 | `cm_nvlinkos.c` | The channel's driver half: the never-freed table, the `\Callback\Nvme98LinkState` callback object (NT), the per-boot `HKEY_LOCAL_MACHINE` record through the VMM's registry services (98 SE and ME, x86), the scan that publishes UP before a re-enumeration, the channel's own SHPC reading, the statement, the acknowledgement wait, the 9x orderly removal, the idle poll's ceiling. |
 | `nvme98cm.h` | `nvme98`'s interface header, carried byte for byte (BSD-3-Clause, its own notice; `legal-provenance.md` section 2a): never edited here. |
 | `cm_cfgwk.c` | The Windows 98 SE and ME CONFIGMG worker: one system thread per domain that makes every CONFIGMG call of the re-enumeration and of safe eject's 9x half (the route's opening and guards, the bridge devnode walk, the vanished children's query-remove and remove, `Reenumerate_DevNode`, `DN_REMOVABLE`), so the connection-manager thread never blocks when CONFIGMG does (an Add New Hardware wizard open); requests posted and collapsed per member; a stop that finds it inside a call leaves it to free itself. |
+| `cm_statos.c` | The status record's publication (design record 24 section 3.2): the value `XhciCmStatus` (`REG_BINARY`) of the NHI's hardware key, written by the connection-manager thread only when the record `cm_status.c` built has changed, and the install tool's ask `XhciCmStatusAsk` read from the driver key and echoed; both keys opened in the start (`CmStatusOpen`), since on 98 SE and ME `IoOpenDeviceRegistryKey` is a CONFIGMG service that waits while a wizard is open. A failed write is counted and retried at the next pass. |
 
 Its gates: `scripts\inf-gate\check-cm-inf.ps1` (the four INFs, with `CM-NO9XBRIDGE`), `scripts\import-gate\xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, the flavour marker check and `scripts\source-stamp.ps1 -Driver xhcicm`.
 
@@ -577,6 +578,9 @@ The DDK-free half of `xhcicm.sys`, compiled into the driver from `src\cm\sources
 | `tbt_topo.c` / `tbt_topo.h` | A domain's tunnel-port set and its sources, the `XhciCmTunnelBridge` list, the PCI Express Link and Slot Status and SHPC readings and the port poll (task 39-A.5, record 21 sections 6.3 and 6.5), and the router-named source and learned correspondence of the USB4 profile (task 40-A.4, record 22 section 7.6), over configuration-space accessors the caller supplies; host suite `test_tbt_topo`. |
 | `tbt_u4cm.c` / `tbt_u4cm.h` | The USB4 software connection manager (tasks 40-A.3 and 40-A.8's pure part, record 22 sections 6 to 9): the host and device routers, lane bonding, the TMU, Configuration Valid, paths, the PCIe and USB3 tunnels, hot plug and teardown, the quirk table, discovery and preservation of tunnels found at start, and Thunderbolt 3 routers behind a USB4 host; host suite `test_u4cm`. Adapted from `usb4-emu`'s `u4cm.c` and Linux's `drivers/thunderbolt`, notices kept. |
 | `cm_cfgmg.h` | CONFIGMG's VxD id, service numbers, flags and result values for the Windows 98 SE and ME route (task 39-0.3, record 21 sections 6.1 and 7.4), each read from the Windows 98 SE DDK's `CONFIGMG.H` with its line; values only. |
+| `cm_live.c` / `cm_live.h` | The host interface's liveness monitor, its pure half (record 21 sections 5.5 and 5.6, record 22 section 3.5): whether the NHI's registers can still be trusted after a platform power-off or reset Windows did not report, judged from one register the driver programmed and reads back (RX ring 0's size); the states from SUSPECT to ABSENT and CONFIG_LOST, the light and full recovery and its re-arm rule, revocation, and the gate on which accesses the driver may make meanwhile; host suite `test_cm_live`. `cm_thr.c` samples and gates, `cm_nhi.c` runs the actions. |
+| `cm_status.h` | The status record's layout (design record 24 section 3): little-endian 32-bit fields and byte strings at fixed offsets, shared byte for byte by `xhcicm.sys` and `XHCIINST.EXE` (`xhciinst\inst_core.c`), so it uses no DDK or Windows type; a layout change is a new `CM_ST_VERSION`. |
+| `cm_status.c` / `cm_statb.h` | The status record's builder (record 24 section 3.1), from the connection manager's own snapshot: the ICM device table or the USB4 port set and its routers, names cut to printable ASCII, a UUID cut to its last 16 bits and no key or approval field ever copied, the change compare that ignores the stamp, the entry limit, and the Windows 98 instance path over configuration space; host suite `test_cm_status`. `cm_statos.c` publishes what it builds. |
 
 ### `src\cm\`'s host suites
 
@@ -596,6 +600,8 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
 | `u4_fakefab.c` / `u4_fakefab.h` | `test_u4cm`'s C89 fake USB4 fabric, one domain per instance, written from the specification and `usb4-emu`'s documented host models, independently of `tbt_u4cm.c` (decision U11). |
 | `test_inst.c` | `xhciinst\inst_core.c`, the install tool's pure half (design record 23). |
+| `test_cm_live.c` | `cm_live.c`: sampling by elapsed time, SUSPECT on the first unanswered sample and ABSENT on the third, CONFIG_LOST on a changed register, the light and full recovery, its failure and the re-arm rule, the USB4 profile's containment, revocation and the access gate. |
+| `test_cm_status.c` | `cm_status.c`: the record from an ICM table and from a USB4 port set, what is never copied into it, the change compare, the echo, the entry limit, and the Windows 98 instance path over a fake configuration space (design record 24 section 10). |
 
 ### Scripts for the Thunderbolt and USB4 work
 
@@ -605,3 +611,13 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `scripts\usb4\run-usb4-guest.ps1` | Boots one of this project's guests on the `usb4-emu` QEMU fork with its Thunderbolt 3 and USB4 device models, on this project's own overlays and ports 47900 to 47999 (task 39-0.7, record 21 section 10.2). |
 | `scripts\usb4\usb4-qmp.ps1` | Drives such a guest over QMP: its state, the device router's unplug and plug, the rest of its verbs in its header. |
 | `scripts\usb4-crosscheck\run-crosscheck.sh`, `u4cm-crosscheck.c`, `u4cm-glue.c`, `u4cm-glue.h` | Task 40-A.5's cross-check: `tbt_ring.c` and `tbt_u4cm.c` built strictly as C89 and run against `usb4-emu`'s fabric model, read in place and never modified (record 22 section 14.1). |
+
+### Other files in `test\`
+
+The host suites of `xhci98.sys` and `xhciuas.sys` (`test_enum.c`, `test_pipe.c`, `test_uas.c` and the rest) are named with the files they test above; these are the shared and guest-side pieces.
+
+| File | What it is |
+|---|---|
+| `test_harness.h` | The one copy of the check helpers every host suite includes (`CHECK`, `CHECK_EQ`, the counts and the failure format); header-only, with no expectations of its own (design record 03). |
+| `hub_port_vectors.h` | One downstream port of an external USB 2.0 hub as the bus's hub class tracks it, written as a vector table (roadmap-hcd tasks 27-A.1 and 27-A.4); `test_topo.c` checks it is well formed. |
+| `pmclient\pmclient.c`, `pmioctl.h`, `pmctl.c`, `xhcipm.inf`, `build.cmd`, `sources`, `makefile` | Selective suspend's test client (roadmap-hcd task 36.34, design record 14 section 10): `XHCIPM.SYS`, a WDM function driver that idles one USB device on demand, and `PMCTL.EXE`, its console tool. Test only: the packaging gate refuses a release that carries either (`build-and-test.md`, "The test client"). |
