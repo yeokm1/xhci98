@@ -1199,6 +1199,37 @@ Linux's per-router helpers ([linux] `tb.h` `tb_switch_is_alpine_ridge`,
 Titan Ridge PCIe L1 setting, neither of which this profile does; they are
 named in the table for the Thunderbolt 3 routers of section 8.
 
+### 6.11 A real device router: the ASMedia ASM2464PD
+
+The first USB4 device router captured anywhere this project can read is
+the ASMedia ASM2464PD of an ORICO AAGM2-U4 NVMe enclosure, on the
+Framework Laptop 13's Alder Lake host under Linux's software connection
+manager ([obs] `usb4-emu` `docs/captures/ORICO-ASM2464.md`, `main`
+`5ba7f60`). `usb4-emu` reproduces it as `usb4-device,device-model=asm2464`
+([model] QEMU fork `20655c3`, `hw/usb4/usb4-router-asm2464.c` and the
+generated `usb4-asm2464-data.h`; 97.1 per cent of the capture's
+device-router dwords replayed equal). Nothing in it is ASMedia-specific
+in this driver: no row of section 6.10 matches `174C:2463`, and every
+item below is met by a rule that holds for any router.
+
+| What the capture shows | What this driver does |
+|---|---|
+| A Thunderbolt 3 compatible DROM (revision 1, entries from byte 22), whose Unused Adapter Entry marks adapter 4 unused (a USB3 Up adapter by its number, [inf]: its type register was never read; the model types it USB3 Up); Linux leaves it uninitialised ("disabled by eeprom") and builds no USB3 tunnel | The DROM is read before the adapters (as [linux] `switch.c` `tb_switch_add` reads it before `tb_init_port`), its entries parsed from byte 16 in a revision 3 DROM and from byte 22 otherwise ([linux] `eeprom.c` `tb_drom_parse`, `TB_DROM_HEADER_SIZE`, `USB4_DROM_HEADER_SIZE`); an adapter entry with its disabled bit set takes that adapter out of the router: never read or written, so no UTO for it, no USB3 tunnel and no TMU (section 6.6 configures the TMU only for a USB3 tunnel). A DROM whose CRC fails, or whose entry list runs past its data, is not believed at all and every adapter is used, logged. The router's own upstream lanes are never taken out. A preserved router below depth 1 (section 7.1's links) has its DROM read once when its link is found, and the same mask holds when its parent's side is torn down at its removal. The vendor and model names come from the same entries ("ASMedia", "246x") |
+| No CL0s, CL1 or CL2 support (LANE_ADP_CS_0); PORT_CS_18 without Cable Gen 3 Support or CLx Protocol Support | Nothing: no CL state is ever enabled (sections 6.6, 6.10), and neither PORT_CS_18 field is read |
+| The router's TMU capability at `C0h`, then vendor-specific capabilities with IDs 1, 3 and 6 (the last a long one) | The chain is walked (section 6.1) and the TMU found where it is. A vendor-specific capability is taken as the Plug Events or link controller one only on a Thunderbolt 3 router: on a USB4 router those IDs are its vendor's |
+| NVM Sector Size (`25h`) completes with Status 2; Linux tries it three times | Never issued: section 6.7's four operations are all this driver sends |
+| Router Ready not yet set 0.4 ms after Enumerated (the model: 5 ms) | Section 6.4 step 4's 500 ms poll; past it, the next try re-reads the router and waits for Router Ready again without a second enumeration write |
+| Buffer Allocation answers PCIe 64 alone (Metadata 1); lanes of 66 Total Buffers that bonding leaves at 66; Max HopID 27 | PCIe lane credits 64, the preference bounded by the 66 less the control path's 2 (section 6.8); no USB3 preference is needed with no USB3 adapter |
+| The PCIe Up adapter's HopID 8 entry resets to output HopID 8 with no credits | Its credits, IFC and ISE kept as read, as for every USB4 protocol adapter ([linux] `path.c` `tb_path_activate` keeps them too) |
+| After a Downstream Port Reset the router answers again about 594 ms after the release, freshly reset | A port reset is issued only by `XhciCmPreOsCleanup` 1 and 2 (section 9.3); its 2 s wait for lane 0 back in CL0 covers the 594 ms, and the port then connects as new: one enumeration, no retry |
+| Router configuration space writes answered with Adapter Num 0 | Already met: the ring compares Adapter Num outside the router space only (`tbt_ring.c`, task 40-A.5) |
+| A PCIe switch (`1B21:2463`, an upstream and one downstream port) in front of the NVMe | Nothing in the connection manager: the tunnel port's re-enumeration and eject act on its whole subtree (section 7.6). The model builds the switch only behind a q35 tunnel port; on the i440FX tunnel bridge of the Windows 98 SE and 2000 guests the NVMe sits alone, so the switch has not run here |
+
+The host suite's fake fabric carries the same device as a preset
+(`FAB_DEV_ASM2464`, from the capture document and the model's data, not
+from this driver), the `usb4-emu` cross-check links the model itself
+(section 14.1), and run-40 records the guests.
+
 ## 7. Hot plug, unplug, and the PCI side
 
 `usb4cm` acknowledges hot plug events and does nothing more after its run
@@ -1214,9 +1245,11 @@ named in the table for the Thunderbolt 3 routers of section 8.
    ADP_CS_4 for every host port, two reads per port (Guide 3.1.1 and 3.4.1
    allow periodic scanning in place of events); for a port with a PCIe
    tunnel up, the host PCIe Down adapter's ADP_PCIE_CS_0, a third; and,
-   where the connection's `nvme98` recipient is cached (record 21 section
-   7.2), one PCI configuration read of that endpoint's vendor and device id
-   through `HalGetBusData`, the presence sample of section 10.3.
+   for each entry of `nvme98`'s link-state table that reads `UP` behind the
+   port's known member (record 21 section 7.2), one PCI configuration read
+   of that function's vendor and device id through `HalGetBusData`, the
+   presence sample of section 10.3 (`cm_nvlinkos.c`'s `CmNvlinkService`,
+   handed to the core as `TbtU4PresenceSample`).
 3. ERR_CONN or ERR_LOCK answering a request to a device router's route
    (Spec 6.4.3.2: a disconnected adapter, or a connected one that is locked
    again, meaning it was disconnected since).
@@ -1322,9 +1355,11 @@ in this one order, everything the `nvme98` statement depends on first
    holds: step 1's requests all succeeded and its read-back matched; step
    2's reading of the port's own known member came clear in time; the
    deadline of section 10.3 has not
-   passed; the recipient is cached; the statement is enabled and qualified
-   on that OS (section 10.2). Otherwise it is suppressed and the reason
-   counted.
+   passed; an entry of the link-state table reads `UP` behind that member;
+   the condition is the qualified one on that OS (section 10.2). Then the
+   entry moves to `DOWN_QUIESCED`, and step 6's removal waits for its
+   acknowledgement (record 21 section 7.2). Otherwise the statement is
+   withheld and the reason counted.
 4. **The host side of the USB3 tunnel** the same way (Guide 5.5.2, its
    first step, on the removed router, skipped): Path Enable 0 with Valid 1
    on the host's USB3 Down adapter, its two host-side entries invalidated
@@ -1396,7 +1431,8 @@ afresh.
 ### 7.5 Re-plug
 
 A re-plugged router is a new router: CONNECTING from the start, a new
-generation, a new discovery context for `nvme98` (record 21 section 7.2),
+generation, a new `UP` with a new link generation in `nvme98`'s table
+before the re-enumeration exposes the endpoint (record 21 section 7.2),
 and the Detect gate of section 6.8 before any path. Nothing is remembered
 about the previous one except what is kept per host port rather than per
 connection: the counters, section 7.3's quarantine, which the new router's
@@ -1750,6 +1786,21 @@ tunnel's PCIe path is closed and the endpoint's link-down reset has
 completed. Under the firmware connection manager neither could be done
 directly. Under this one, this driver opens and closes the paths itself.
 
+The channel is `nvme98`'s link-state table, adopted by `nvme98` on
+2026-10-15 (its MD-6) and described with both profiles in record 21
+section 7.2; this profile reaches it through the two hooks of the driver
+half (`CmNhiSetU4Hooks`, registered where the selection admits this
+profile): the UP hook records each port's connection generation for the
+presence sample, the table's `UP` itself being published by the seam
+before the re-enumeration exactly as for the ICM profile, and the DOWN
+hook, at the core's statement upcall, makes or withholds the statement
+on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
+ME a removal of a present NVMe function that this driver starts itself
+would go through record 21 section 7.2's `REMOVE_PENDING` handshake
+(on the CONFIGMG worker's removal step, `cm_cfgwk.c`); no such removal exists yet (section 10.4's 9x
+half is best effort and every 9x child removal is the seam's removal of a
+vanished function).
+
 ### 10.1 Obligation 1: a link that went down
 
 Every PCIe tunnel this driver builds passes the Detect gate of section 6.8
@@ -1822,8 +1873,8 @@ reading) passes 5 s. So the statement has a deadline of its own:
   the PCI-side reading, then the statement; USB3 cleanup, lane defaults,
   removal and re-enumeration come after.
 - **The anchor** is the time of the last sample that showed the
-  endpoint itself present: the latest configuration read of the cached
-  recipient's function (section 7.1 item 2, one `HalGetBusData` read of
+  endpoint itself present: the latest configuration read of a function
+  whose table entry reads `UP` (section 7.1 item 2, one `HalGetBusData` read of
   its vendor and device id per idle tick) that returned that function's
   ids, for the same connection generation, timestamped on section 5.3's
   clock when the read was **issued**, so the time it spent counts against
@@ -1837,26 +1888,28 @@ reading) passes 5 s. So the statement has a deadline of its own:
   device's internal switch, and an event's age at decode is unbounded (a
   router may hold an event, Spec 6.8; Guide 4.3). The sample rides the
   idle tick, so the anchor is normally no older than one idle period
-  (250 ms, the clamp of record 21 section 8 while the statement is
-  enabled) before the removal is found; a delayed sample only makes it
+  (250 ms, the ceiling of record 21 section 8 while an entry reads `UP`)
+  before the removal is found; a delayed sample only makes it
   older and the allowance below smaller. A connection with no such sample
-  (no recipient cached yet, or no sample taken since) has no anchor and
+  (no entry `UP`, or no sample taken since) has no anchor and
   gets no statement.
 - **The deadline**: the statement, delivery included, must complete
   within 3 s of the anchor, as measured on section 5.3's clock; a maximum
   measured on that clock may expire up to one tick late (55 ms at most on
   these targets), which the 2 s margin to `nvme98`'s 5 s covers. Queueing behind another port's teardown,
-  section 7.3 step 1, the PCI-side reading and the recipient lookup all
+  section 7.3 step 1 and the PCI-side reading all
   spend that one allowance; each step is given only the time left, not
   its own section 5.2 bound; a step that would overrun ends the attempt,
-  and a statement whose delivery would start with less time left than
-  `nvme98`'s stated delivery bound (the record 21 proposal asks for 100
-  ms) is suppressed and counted. Suppressed means MD-1.
+  and a statement with less than 100 ms of it left (the delivery is a
+  table write `nvme98` polls, so that margin is this driver's, kept from
+  the first draft's figure) is withheld and counted. Withheld means MD-1.
+  The acknowledgement wait (up to 5 s) follows the statement and delays
+  only the removal.
 
 | Part | Bound |
 |---|---|
 | from the anchor to the removal being found | normally one idle period; counted against the allowance either way |
-| queueing behind another teardown, section 7.3 step 1, the PCI-side reading, the recipient, delivery | together within what is left of the 3 s, or no statement |
+| queueing behind another teardown, section 7.3 step 1, the PCI-side reading, the table write | together within what is left of the 3 s, or no statement |
 
 So a statement that is delivered at all is delivered within 3 s (plus at
 most one tick of clock quantisation) of the last moment the endpoint was
@@ -2040,7 +2093,13 @@ hardware capture shows it, whether or not its code was adapted.
   anchor of section 10.3 (a delayed scan shrinking the allowance); Get
   Capabilities answered, Not Supported, failing and blocked on a preserved
   router (unknown state: no Buffer Allocation, no acknowledgements); an inert start after activation draining before
-  freeing.
+  freeing. Since 2026-10-15 also the ASM2464 preset of section 6.11 (its
+  Thunderbolt 3 compatible DROM with the unused adapter, the TMU at `C0h`
+  and the vendor capabilities after it, Router Ready 5, 450 and 700 ms
+  after Enumerated, Buffer Allocation with PCIe alone, NVM Sector Size
+  failing, the 594 ms reconnect after the cleaning's port reset), a USB4
+  DROM marking an adapter unused, and a DROM with a bad CRC or an entry
+  list past its end (nothing believed).
 - **`test_tbt_topo`** (record 21) gains the tunnel-port set: two ports with
   two tunnel bridges, the mapping operation's routing ids, a discrete
   controller's downstream ports, an integrated host's listed root ports
@@ -2050,6 +2109,10 @@ hardware capture shows it, whether or not its code was adapted.
   `tools/usb4cm/host/run-host-test.sh` links `usb4cm`'s, from a script in
   this repository that reads `usb4-emu` in place and writes only under this
   repository's `out\`. A reading recorded per run, not a gate.
+  Against a fork that has the `asm2464` model (QEMU fork `20655c3` and
+  later) it also links `usb4-router-img.c` and `usb4-router-asm2464.c`
+  and runs section 6.11's device on `intel-adl`: cold, hot plug, unplug,
+  re-plug, the pre-OS tunnel preserved and cleaned.
 
 ### 14.2 The virtual-machine legs
 
@@ -2176,6 +2239,12 @@ U1, U2, U6, U8 and U13 from their first form, as each row says.
   7.1.
 - **Daisy chains, DisplayPort, CLx, sleep per Guide chapter 8**: out of
   this cut.
+- **The ASM2464 (section 6.11) on hardware**: the capture is Linux's, on a
+  UEFI host. Whether the real router's PCIe Up adapter needs credits
+  written in its HopID 8 entry (it resets to none; this driver keeps them
+  as read, as Linux does), what its unused adapter 4 answers if read, and
+  the PCIe switch in front of the NVMe under Windows 98 SE and 2000 are
+  unread; task 40.4 waits on a USB4 host that boots them.
 
 ## 17. What this record needs record 21 to say differently
 
@@ -2224,6 +2293,11 @@ them:
   3.1 to 3.5, 4.2, 4.3, 5.1.4, 5.2, 5.3, 5.5, 6.1, 6.2.2, 7.1, 7.3, 7.5,
   7.7, 9.1), November 2025 bundle; the USB4 2.0 ECN "Configuration and
   Behavior When TMU is Disabled".
+- `usb4-emu` `main` `5ba7f60` (read 2026-10-15 for section 6.11):
+  `docs/XHCI98-HANDOFF.md`, `docs/captures/ORICO-ASM2464.md`,
+  `docs/captures/P14S-ORICO-2026-10-15.md`; its QEMU fork `20655c3`:
+  `hw/usb4/usb4-router-asm2464.c`, `usb4-asm2464-data.h`,
+  `usb4-router.c`, `usb4-fabric.c`.
 - `usb4-emu` (branch `main`, `a68bc74`, read 2026-10-15):
   `docs/XHCI98-HANDOFF.md`, `ARCHITECTURE.md`, `WINDOWS-DEBUG.md`,
   `USB4-HOSTS.md`, `PLATFORM-MATRIX.md`, `NVME-DRIVER-EVAL.md`,

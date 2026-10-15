@@ -61,6 +61,13 @@
 #include "cm.h"
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
+#include "cm_nvlink.h"
+
+/* The USB4 profile's actions reach the seam with this bit in Why (cm_nhi.c,
+ * cmU4ToIcm); its nvme98 statement is made at the core's upcall, not here. */
+#ifndef CM_U4_WHY_BASE
+#define CM_U4_WHY_BASE 0x80UL
+#endif
 
 /* HalGetBusData: as hcd_ctl.c restates it for amd64 builds whose headers
  * leave it out. */
@@ -873,6 +880,10 @@ static VOID cmWkPost(PCM_NHI nhi, ULONG reenum, ULONG vanish, BOOLEAN mark)
 {
     PCM_REENUM r;
 
+    /* Nothing posted - no removal begun - while an nvme98 statement of
+     * this domain awaits its acknowledgement (cm_nvlink.h; the wait
+     * services the ring, so it is this thread's, never the worker's). */
+    CmNvlinkAwait(nhi);
     r = &nhi->Reenum;
     r->WkActive = cmOwnedMask(nhi);
     CmCfgwkPost(r->Wk, reenum, vanish, r->WkActive, mark);
@@ -887,6 +898,11 @@ static BOOLEAN cmInvalidate(PCM_NHI nhi, ULONG i, BOOLEAN activeOnly)
     PCM_FILTER f;
     PDEVICE_OBJECT pdo;
 
+    /* No wait here: CmReenumResumeFailed reaches this at DISPATCH_LEVEL.
+     * The thread's callers wait for nvme98's acknowledgement before they
+     * get here (CmNvlinkExpose, cmAskBaselines, CmReenumResumed); the
+     * failure release runs only where the thread did not run the resume,
+     * so no statement of the resume is pending then. */
     if (!cmRegTake(nhi, i, activeOnly, &f, &pdo)) {
         return FALSE;
     }
@@ -911,6 +927,7 @@ static VOID cmAskBaselines(PCM_NHI nhi)
     ULONG i;
     ULONG serial;
 
+    CmNvlinkAwait(nhi);
     r = &nhi->Reenum;
     for (i = 0; i < r->Members; i++) {
         serial = 0;
@@ -921,6 +938,11 @@ static VOID cmAskBaselines(PCM_NHI nhi)
             serial = f->Serial;
         }
         KeReleaseSpinLock(&cmRegLock, irql);
+        if (serial != 0) {
+            /* The baseline answer may already report an endpoint: its
+             * nvme98 UP first (cm_nvlink.h, obligation 1). */
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
+        }
         if (serial != 0 && cmInvalidate(nhi, i, FALSE)) {
             /* Recorded once asked, so a failed call is asked again. */
             r->Port[i].AskedSerial = serial;
@@ -929,10 +951,82 @@ static VOID cmAskBaselines(PCM_NHI nhi)
     }
 }
 
-/* ---- both routes ------------------------------------------------------ */
+/* ---- NT: a configuration write to a member's bridge ------------------- */
 
+static NTSTATUS NTAPI cmCfgWriteDone(PDEVICE_OBJECT device, PIRP irp,
+                                     PVOID context)
+{
+    UNREFERENCED_PARAMETER(device);
+    UNREFERENCED_PARAMETER(irp);
+    (VOID)KeSetEvent((PKEVENT)context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
+                         ULONG value)
+{
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    PIO_STACK_LOCATION next;
+    KEVENT done;
+    PIRP irp;
+    UCHAR b[4];
+    ULONG i;
+    ULONG index;
+    ULONG written;
+    NTSTATUS status;
+
+    if (width != 1 && width != 2 && width != 4) {
+        return FALSE;
+    }
+    if (offset < 0x40UL) {
+        /* A bridge's header is pci.sys's; only its capabilities here. */
+        return FALSE;
+    }
+    for (index = 0; index < nhi->Reenum.Members; index++) {
+        if (nhi->Reenum.Port[index].Bdf == bdf) {
+            break;
+        }
+    }
+    if (index == nhi->Reenum.Members ||
+        !cmRegTake(nhi, index, FALSE, &f, &pdo)) {
+        return FALSE;
+    }
+    for (i = 0; i < width; i++) {
+        b[i] = (UCHAR)((value >> (8 * i)) & 0xFFUL);
+    }
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    written = 0;
+    irp = IoAllocateIrp(pdo->StackSize, FALSE);
+    if (irp != NULL) {
+        irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+        irp->IoStatus.Information = 0;
+        next = IoGetNextIrpStackLocation(irp);
+        next->MajorFunction = IRP_MJ_PNP;
+        next->MinorFunction = IRP_MN_WRITE_CONFIG;
+        next->Parameters.ReadWriteConfig.WhichSpace = PCI_WHICHSPACE_CONFIG;
+        next->Parameters.ReadWriteConfig.Buffer = b;
+        next->Parameters.ReadWriteConfig.Offset = offset;
+        next->Parameters.ReadWriteConfig.Length = width;
+        KeInitializeEvent(&done, NotificationEvent, FALSE);
+        CM_SET_COMPLETION_ALWAYS(irp, cmCfgWriteDone, &done);
+        status = IoCallDriver(pdo, irp);
+        if (status == STATUS_PENDING) {
+            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
+                                        NULL);
+        }
+        status = irp->IoStatus.Status;
+        written = (ULONG)irp->IoStatus.Information;
+        IoFreeIrp(irp);
+    }
+    cmRegRelease(f);
+    /* A short write would leave the select where it was. */
+    return (BOOLEAN)(NT_SUCCESS(status) && written == width);
+}
+
+/* ---- both routes ------------------------------------------------------ */
 /* Every active member re-enumerated by the domain's route. */
-static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
+static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
 {
     PCM_REENUM r;
     ULONG i;
@@ -950,6 +1044,9 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
             }
             continue;
         }
+        /* nvme98's UP for what the call is about to expose (cm_nvlink.h,
+         * obligation 1). */
+        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh);
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
                 /* Lost its filter or its exclusivity since it was read
@@ -1089,6 +1186,7 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->Cfg.Reads = 0;
     r->Cfg.Writes = 0;
 
+    CmNvlinkStart(nhi);
     r->Nhi = cmNhiLocation(nhi);
     CmLogNote(nhi, "cm.reenum.nhi", r->Nhi);
     if (r->Nhi == XHCI_TBT_NO_BDF) {
@@ -1364,7 +1462,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         if (state == XHCI_TBT_POLL_TIMEOUT) {
             r->PollTimeouts++;
         }
-        cmReenumAll(nhi, FALSE);
+        cmReenumAll(nhi, FALSE, TRUE);
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
         state = cmPoll(nhi, action, XHCI_TBT_WANT_DOWN);
         CmLogNote(nhi, "cm.reenum.down.poll", (state << 8) | r->Poll.Last);
@@ -1373,9 +1471,20 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
              * every port is rescanned all the same. */
             r->PollTimeouts++;
         }
-        cmReenumAll(nhi, TRUE);
+        /* nvme98's statement, then its acknowledgement, before the removal
+         * (cm_nvlink.h, obligations 2 and 3). */
+        if (action->Why == TBT_ICM_WHY_UNAVAILABLE) {
+            /* The host interface lost: presence lost, no quiescence
+             * claimed (record 21 section 7.3). */
+            CmNvlinkLost(nhi);
+        } else if ((action->Why & CM_U4_WHY_BASE) == 0) {
+            (VOID)CmNvlinkIcmDown(nhi, state);
+        }
+        CmNvlinkAwait(nhi);
+        cmReenumAll(nhi, TRUE, FALSE);
     } else {
-        cmReenumAll(nhi, TRUE);
+        CmNvlinkAwait(nhi);
+        cmReenumAll(nhi, TRUE, TRUE);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -1396,6 +1505,11 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
+    /* The nvme98 channel's per-pass work: on 98 SE and ME the rescan of a
+     * bus a fresh exposure found silent; under the USB4 profile the
+     * presence samples for the statement's anchor (record 22 section
+     * 10.3). */
+    CmNvlinkService(nhi);
     if (!r->Listed && r->RediscoverLeft != 0 && !r->LossSeen &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
         cmDiscoverAndList(nhi);
@@ -1480,6 +1594,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
             r->Port[i].MissedAt = cmNow(nhi);
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
@@ -1633,6 +1748,9 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
         nhi->Reenum.ResumeFailures++;
     }
     CmLogNote(nhi, "cm.reenum.resumed", ok ? 1UL : 0UL);
+    /* The holds' release (and on failure their invalidations) waits for
+     * any nvme98 statement the resume's own teardown made (cm_nvlink.h). */
+    CmNvlinkAwait(nhi);
     cmReleaseHeld(nhi, (BOOLEAN)!ok);
 }
 
@@ -1646,6 +1764,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     ULONG watchdogs;
 
     r = &nhi->Reenum;
+    CmNvlinkStop(nhi);
     r->RediscoverLeft = 0;
     if (!r->Listed && r->Route == CM_ROUTE_NONE) {
         r->Members = 0;

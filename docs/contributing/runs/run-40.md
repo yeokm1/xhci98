@@ -336,6 +336,32 @@ the arrival adapter in the response's Adapter Num (`usb4-fabric.c`
 space (route, address, size, space and sequence number still compared
 there).
 
+## 40-A.7 - The `nvme98` statement under the USB4 profile
+
+**Verdict: built and host-tested; no guest leg read yet** (2026-10-15).
+The channel of task 39-A.7 (run-39.md, "39-A.7"; record 21 section 7.2)
+is wired to the USB4 driver half: `cmU4Activate` registers
+`CmNvlinkU4Up` and `CmNvlinkU4Down` through `CmNhiSetU4Hooks`; the UP hook
+publishes the new establishment's `UP` before anything can expose the
+endpoint (its member by correspondence, or every exclusive member when
+the correspondence is not known); the DOWN hook makes the statement only
+with `TBT_U4_LINKDOWN.PathClosed`, the port's member known, that member
+the emulator's bridge (1B36h on the bridge itself or on the bus-0 bridge
+whose range holds it, SHPC, no PCI Express capability),
+an admitted operating system (2000 x86, XP x64), the slot read empty
+within what is left of the 3 s, and at least 100 ms left; the seam waits
+for the acknowledgement before the removal. `CmNvlinkService` gives the
+core one presence sample per port each pass (the anchor of record 22
+section 10.3). The conditions are `test_cm_nvlink`'s
+(`CmNvlinkU4Verdict`, every branch).
+
+**Owed:** a Windows 2000 guest on the `usb4-generic` profile with the
+software connection manager admitted and `nvme98`'s G3 prototype bound
+(the leg of run-39.md's 39-A.7 table, on the USB4 profile): the anchor's
+age at the statement, the statement after the cutoff, the
+acknowledgement before the invalidation, the 5 s bound with an idle
+receiver; and the 9x half once `nvme98` has one.
+
 ## 40.5 onward - The install, upgrade and uninstall tool (INSTALL.BAT, XHCIINST, XHCIIN64)
 
 **Verdict: done** (2026-10-15): the legs below pass on the tool as it
@@ -607,6 +633,104 @@ switch reads `0x0180200a`, with no such flag.
 
 **Evidence.** `vm\v-xp7\xp-gen\`, `xp64-gen\`, `vx86-gen\`, `w7-gen\`,
 as for 39-V.3.
+
+## 40-V.1 and 40-V.2 - The ASM2464 device router (the ORICO capture)
+
+**Verdict: pass on Windows 98 SE and Windows 2000** (2026-10-15), after
+one fix. The connection manager met `usb4-emu`'s model of a real USB4
+device router, the ASMedia ASM2464PD of the ORICO AAGM2-U4 NVMe enclosure
+(`device-model=asm2464`, from the capture `docs/captures/ORICO-ASM2464.md`
+of `usb4-emu` `main` `5ba7f60`), behind the `intel-adl` host. The first
+reading, on the `usb4-emu` cross-check, found the one defect: the
+connection manager built a USB3 tunnel to adapter 4, which the router's
+Thunderbolt 3 compatible DROM marks unused, and configured the TMU for
+it. Fixed on branch `u4-asm` (record 22 section 6.11); every leg below
+ran the fixed driver: the install, the first unplug and re-plug, the safe
+eject and the first cold boot on the build of `ac583c37`, then the whole
+sequence again (cold boot, a read and a write, unplug, re-plug, and on
+2000 the safe eject) on the reviewed build of `19d8ca9f` (`qemu` flavour
+`xhcicm.sys` SHA-256 `6e5d933a...`), installed over the first: copied
+over the driver file on 98 SE, `devq force` on 2000, then a cold boot of
+each.
+
+**The vehicle.** Development host A, TCG, under the brief's admission rule
+(other workers' guests left alone). The `usb4-emu` fork binary of `main`
+`5ba7f60` (QEMU fork `20655c3`, `v11.1.2-161-g20655c3`), copied to
+`vm\usb4\bin-5ba7f60\` and passed with `-Qemu`; task 39-0.7's launcher with
+`-RunRoot u4-asm`, `-Usb4Profile generic -HostModel intel-adl`,
+`-BootStrict`, `-Trace`, and `-Extra '-global','usb4-device.device-model=asm2464'`
+(the launcher builds `enc0`; the `-global` reached it at power-on and on
+every `device_add`). QMP and VNC on 47950 and 47951 (98 SE, `u4a-98`, an
+overlay of `vm\t26\win98-gold.qcow2`) and 47954 and 47955 (2000,
+`u4a-2k`, an overlay of `vm\win2k-xonly.img`), one vCPU each. The NVMe
+behind the tunnel: an overlay of a 128 MiB image with one FAT16 partition
+holding a 1 MiB file of random data, `TESTDATA.BIN` (SHA-256 `b0e3c8dc...`),
+built with mtools; the transfer drive carried the same file and a second,
+`WRITE.BIN` (`b8b9dae4...`). The `qemu` flavour of `xhcicm.sys` with
+`XhciLogVerbosity` 2 in a copy of `xhcicm.inf`; `nvme98` 0.1.1.0 from its
+published `win9x` and `x86` folders, read-only. Evidence (traces,
+debug-console logs, screendumps) in `vm\u4-asm\u4a-98\` and
+`vm\u4-asm\u4a-2k\`.
+
+**Install.** 98 SE, from a fresh overlay with the enclosure attached: the
+tunnel bridge (`MACHINE2.INF`) and the host interface ("xHCI98 USB4 Host
+Interface", `D:\`) through Add New Hardware; the tunnel came up while the
+wizard closed and Windows 98 SE offered the NVMe ("PCI Card") at once,
+with no Refresh; `nvme98` from `D:\NVME` ("NVM Express Controller
+(nvme98)"), no restart asked, and the volume was `E:` immediately. 2000:
+`devq update` of `xhcicm.inf` on `PCI\VEN_1B36&DEV_00F4&CC_0C0340`, of
+`xhcicmf.inf` on the tunnel bridge and of `nvme98.inf` on the NVMe (the
+unsigned-driver prompt accepted); the volume was `D:` with no restart.
+
+| Leg | 98 SE | 2000 |
+|---|---|---|
+| The device router enumerated | PASS: `u4.drom.unused=00000010` (adapter 4), `u4.router.up=174C2463`; three DROM Read operations (dwords 0-3, 4-19, 20-21), Get Capabilities, Buffer Allocation; Router Ready waited out after Enumerated; no other operation | PASS, the same |
+| PCIe tunnel up | PASS: `u4.pcie.up=00010809`, `u4.port.state=00000105`, `PCIe tunnel up` in the trace; ROUTER_CS_5 written PTO then PTO and CV (`01000000`, `81000000`), never UTO | PASS, the same |
+| NVMe usable, no Refresh: a read and a write | PASS: `fc /b` of `E:\TESTDATA.BIN` against the transfer drive's copy, no differences; `WRITE.BIN` copied to `E:\WRITE1.BIN` and compared clean | PASS: the same on `D:` |
+| Unplug | PASS: `device_del enc0`; `u4.linkdown=01000109` (path proven closed), `u4.action=02010001`, the bridge's child removed through CONFIGMG (`query-remove`, `remove`, `reenumerate` all 0); `E:` gone ("Invalid drive specification") | PASS: `u4.linkdown=01000109`, `D:` gone; Windows 2000's "Unsafe Removal of Device" dialog for the NVMe, as on every earlier 2000 leg with no eject first |
+| Re-plug | PASS: `device_add enc0`, generation 2, `u4.pcie.up` again, `E:` back with both files; a second write (`WRITE2.BIN`) compared clean | PASS: generation 2, `D:` back, `WRITE1.BIN` compared clean, `WRITE2.BIN` written |
+| Safe eject | not a 98 SE leg | PASS: "Unplug or Eject Hardware" listed "NVM Express Controller (nvme98) at PCI Slot 4"; Stop: `cm.reenum.eject=00000028`, `u4.eject=00000100`, the trace's `PCIe tunnel down reason 1 (admin-down)` before "Safe To Remove Hardware"; then `device_del` and `device_add`: generation 3, `D:` back, `WRITE2.BIN` compared clean |
+| Cold boot with the device attached | PASS: shut down from the Start menu, a new QEMU process with `enc0` at power-on; the tunnel built by the driver at start with no wizard, `E:` present at the desktop with the three files, `WRITE2.BIN` and `TESTDATA.BIN` compared clean, `WRITE3.BIN` written | PASS: the same, `D:` |
+| The final build, again | PASS: cold boot, `TESTDATA.BIN` and a new `WRITE4.BIN` compared clean; unplug (`u4.linkdown=01000109`, `query-remove` and `remove` 0); re-plug (generation 2), `WRITE4.BIN` compared clean, `WRITE5.BIN` written | PASS for the connection manager: cold boot, read and write compared clean; unplug (`u4.linkdown=01000109`) and re-plug (generation 2); a write, then the safe eject (`u4.eject=00000100`, "Safe To Remove Hardware"), unplug, re-plug (generation 3): the file there and compared clean. One write was lost: `WRITE4.BIN`, copied about 6 s before a surprise unplug with no eject, was absent after the re-plug (the volume's write-back cache on Windows 2000's own removal policy; the path was proven closed and the earlier files intact) |
+
+**The quirks, read in the guests' traces and logs** (both guests, every
+run): no request of any kind to the device router's adapter 4 (0 of
+about 4,900 requests to route 1 on 98 SE's first run, 0 on every other
+trace); no NVM Sector Size operation (`25h`) issued; no USB3 path and no
+TMU configuration on the device router (the model's `usb4_usb3_path`
+never past "protocol adapter HopID 8 entry not valid"); no CL state
+enabled (every LANE_ADP_CS_1 write to the device router `4814003C`,
+Target Link Width x2 with bits 12:10 clear); no control-packet
+retry or timeout, no router operation failure, timeout or block, no
+Configuration Ready timeout and no `u4.router-not-ready` in any log. The
+After the last runs the NVMe overlays were read on the host with mtools:
+every file written in either guest except that `WRITE4.BIN` on 2000 is
+there with the SHA-256 of `WRITE.BIN`. The
+Downstream Port Reset with the 594 ms reconnect is reached only through
+`XhciCmPreOsCleanup` 1 or 2, which these legs did not set; it was read on
+the cross-check below and in the host suite.
+
+**The cross-check** (`scripts\usb4-crosscheck\run-crosscheck.sh`,
+linking the core with the QEMU fork's own `usb4-router-asm2464.c` and
+`usb4-router-img.c`, which the script now adds when the fork has them):
+before the fix, 72,565 checks with 9 failures - the USB3 tunnel to
+adapter 4 (built and brought up in the model), the TMU configured for it,
+and the DROM names missing; after it, 0 failures, on `intel-adl` with the
+ASM2464 cold, hot plugged on port 2, unplugged and re-plugged, the pre-OS
+connection manager's tunnel preserved with no transition and no reset,
+and with `XhciCmPreOsCleanup` 2 one Downstream Port Reset, the router back
+after the model's 590 ms hold, one connect and the tunnel built afresh,
+with no retry. The other models' cases were unchanged. Read again on
+`19d8ca9f` against the `usb4-emu` working tree at `d13f15c` (the same
+QEMU fork, `20655c3`): 69,243 checks, 0 failures.
+
+**Not read here.** The PCIe switch in front of the NVMe: the model builds
+it only behind a q35 tunnel port, and these i440FX guests tunnel the NVMe
+alone. The pre-OS legs (U.6, U.7) with this device in a guest, U.4
+(unplug during I/O), suspend, the `minimal` host model with this device,
+ME and the NT 5.1 and 6.x guests. Hardware: task 40.4 waits on a USB4
+host that boots these systems; the capture is Linux's on a UEFI-only
+laptop.
 
 ## 40-V.2 - Windows 2000, the legs of record 22 section 14.2
 

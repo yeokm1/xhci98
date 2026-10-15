@@ -185,6 +185,11 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm_nvlink - the nvme98 link-state channel's pure half
+rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
+rem                  table of nvme98's nvme98cm.h, its entry protocol read
+rem                  back by a modelled receiver, the two profiles'
+rem                  statement conditions, the 9x record and REMOVE_PENDING
 rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
 rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
 rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
@@ -233,7 +238,9 @@ rem                  re-plugs, bonding and its fallback, the TMU, the Detect
 rem                  gate, the USB3 handshake, router operations each
 rem                  unsupported, failing or hanging, discovery, holding and
 rem                  cleaning, quarantine, the statement's gating and anchor,
-rem                  links below depth 1, eject, suspend and resume
+rem                  links below depth 1, eject, suspend and resume, and the
+rem                  ASM2464 device router's captured quirks (record 22
+rem                  section 6.11)
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -469,6 +476,10 @@ call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 rem test_cm_live links nothing else: the host-interface liveness monitor's
 rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
 call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
+rem test_cm_nvlink links nothing else: the nvme98 link-state channel's entry
+rem protocol, statement conditions, 9x record and REMOVE_PENDING request
+rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
+call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
