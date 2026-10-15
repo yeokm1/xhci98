@@ -979,16 +979,24 @@ static void test_flow(void)
     CHECK_EQ(inst_staged_again(0, 0, "", "oem0.inf"), 0, "none before");
 
     /* The confirmation says what will happen. */
-    CHECK(strcmp(inst_confirm_text(1, 0, 1), "Install and stage the package now")
-          == 0, "runs");
-    CHECK(strstr(inst_confirm_text(0, 1, 1), "settings") != NULL, "a setting");
-    CHECK(strstr(inst_confirm_text(0, 0, 1), "Every device is current") != NULL,
+    CHECK(strcmp(inst_confirm_text(1, 0, 1, 0),
+                 "Install and stage the package now") == 0, "runs");
+    CHECK(strstr(inst_confirm_text(0, 1, 1, 0), "settings") != NULL, "a setting");
+    CHECK(strstr(inst_confirm_text(0, 0, 1, 0), "Every device is current") != NULL,
           "nothing");
-    CHECK(strcmp(inst_confirm_text(1, 0, 0),
+    CHECK(strcmp(inst_confirm_text(1, 0, 0, 0),
                  "Copy the package and update DevicePath now") == 0, "9x runs");
-    CHECK(strstr(inst_confirm_text(0, 1, 0), "settings") != NULL, "9x setting");
-    CHECK(strstr(inst_confirm_text(0, 0, 0), "DevicePath now") != NULL,
+    CHECK(strstr(inst_confirm_text(0, 1, 0, 0), "settings") != NULL, "9x setting");
+    CHECK(strstr(inst_confirm_text(0, 0, 0, 0), "DevicePath now") != NULL,
           "9x nothing");
+    /* An entry that may be a cancelled wizard's controller: no claim that
+     * every device is current or needs no driver. */
+    CHECK(strstr(inst_confirm_text(0, 0, 0, 1), "current") == NULL &&
+          strstr(inst_confirm_text(0, 0, 0, 1), "listed apart") != NULL,
+          "9x unsure");
+    CHECK(strstr(inst_confirm_text(0, 1, 0, 1), "no device") == NULL &&
+          strstr(inst_confirm_text(0, 1, 0, 1), "settings") != NULL,
+          "9x unsure, a setting");
 }
 
 /* A PE image's embedded signature: the security directory, inside the

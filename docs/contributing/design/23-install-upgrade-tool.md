@@ -915,7 +915,9 @@ changes nothing where the copy and `DevicePath` are already in place and
 ends "No changes were made." with exit 0, or, where it wrote a setting,
 with the restart line and exit 3 (section 7.4). The confirmation names
 what will happen: the copy and `DevicePath`, the changed settings, or a
-check of the copy and `DevicePath`. The steps also say, for a UAS disk's
+check of the copy and `DevicePath`; with an entry of section 6.3 left as
+a step, it claims neither that every device is current nor that none
+needs a driver, and points at the entry listed apart. The steps also say, for a UAS disk's
 Have Disk, that Windows asks for the "xhci98 xHCI Host Controller Disk"
 (the same folder), and on ME, for the root hub, that a "Select Other
 Driver" list may name the driver twice (one copy under `INF\OTHER`),

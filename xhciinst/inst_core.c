@@ -2041,11 +2041,17 @@ int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
     return inst_eq(before, name);
 }
 
-const char *inst_confirm_text(int runs, int writes, int nt)
+const char *inst_confirm_text(int runs, int writes, int nt, int unsure)
 {
     if (runs) {
         return nt ? "Install and stage the package now" :
                     "Copy the package and update DevicePath now";
+    }
+    if (unsure) {
+        return writes ? "Write the changed settings and check the local copy "
+                        "and DevicePath now" :
+                        "Check the local copy and DevicePath now (see the entry "
+                        "listed apart above)";
     }
     if (writes) {
         return "Write the changed settings now (no device needs a new driver)";

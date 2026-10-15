@@ -4230,7 +4230,7 @@ static int run_install_nt(void)
         return INST_EXIT_DONE;
     }
     input_warning();
-    if (!confirm(inst_confirm_text(runs, values_to_write(), 1))) {
+    if (!confirm(inst_confirm_text(runs, values_to_write(), 1, 0))) {
         return INST_EXIT_REFUSED;
     }
     before = devs_signature();
@@ -4544,7 +4544,8 @@ static int run_install_9x(void)
             }
         }
     }
-    if (!confirm(inst_confirm_text(runs, values_to_write(), 0))) {
+    if (!confirm(inst_confirm_text(runs, values_to_write(), 0,
+                                   steps && !runs))) {
         return INST_EXIT_REFUSED;
     }
     if (!make_local_copy() || !devicepath_update(srcDir)) {
