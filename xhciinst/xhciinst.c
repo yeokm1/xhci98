@@ -1757,6 +1757,7 @@ static void ask_values(void)
                  (instValues[v].CautionMask & (1UL << answerValue[v])) != 0)) {
                 out("  NOTE: %s\n", instValues[v].Caution);
             }
+            out("\n");
             continue;
         }
         if (!inst_value_applies(v, &envNow) || targets == 0 || !haveDef) {
@@ -4296,9 +4297,13 @@ static int run_install_nt(void)
         flagFailed = 1;
     }
     if (flagRestart) {
-        out("\nRESTART Windows to finish. If the controller was updated from "
-            "2.3.x on 32-bit\nVista or 7, run INSTALL.BAT again after the "
-            "restart for the root hub and hubs.\n");
+        /* The second sentence only where it can apply (the 2000 leg read
+         * it after a settings-only run). */
+        out("\nRESTART Windows to finish.%s\n",
+            (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86) ?
+            " If the controller was updated from 2.3.x on 32-bit\nVista or "
+            "7, run INSTALL.BAT again after the restart for the root hub and "
+            "hubs." : "");
     }
     note_old_entries();
     return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
