@@ -462,28 +462,31 @@ VOID TbtIcmSetResumeBudget(PTBT_ICM icm, ULONG ms)
 }
 
 /*
- * What is left of the resume's budget, ms: by the host's millisecond clock
- * (its differences taken modulo 2^32) or, when more, by the time waited
- * under it while that clock did not move (tbtIcmCharge), so a stopped
- * clock still ends it, as every wait's own deadline is ended by the waits
- * it made (TbtDeadlinePassed). 0 once spent, the budget then marked so.
+ * What is left of the resume's budget, ms. What is spent is a sum of
+ * intervals that do not overlap: the host's millisecond clock's progress
+ * since it was last read (its differences taken modulo 2^32), plus, for
+ * each wait, what it waited beyond the clock's progress across it
+ * (tbtIcmCharge). A clock that stops, from the start or partway, or moves
+ * less than a wait waited, still ends the budget, as every wait's own
+ * deadline is ended by the waits it made (TbtDeadlinePassed); never
+ * early, since a wait counts only what it waited. 0 once spent, the
+ * budget then marked so.
  */
 static ULONG tbtIcmBudgetLeft(PTBT_ICM icm)
 {
-    ULONG elapsed;
+    ULONG now;
 
     if (icm->BudgetSpent) {
         return 0;
     }
-    elapsed = icm->Host->NowMs(icm->Host->Context) - icm->BudgetStartMs;
-    if (icm->BudgetStalledMs > elapsed) {
-        elapsed = icm->BudgetStalledMs;
-    }
-    if (elapsed >= icm->BudgetMs) {
+    now = icm->Host->NowMs(icm->Host->Context);
+    icm->BudgetUsedMs += now - icm->BudgetMarkMs;
+    icm->BudgetMarkMs = now;
+    if (icm->BudgetUsedMs >= icm->BudgetMs) {
         icm->BudgetSpent = TRUE;
         return 0;
     }
-    return icm->BudgetMs - elapsed;
+    return icm->BudgetMs - icm->BudgetUsedMs;
 }
 
 /*
@@ -502,14 +505,21 @@ static ULONG tbtIcmClip(PTBT_ICM icm, ULONG ms)
 }
 
 /*
- * After a clipped wait: what it waited is charged to the budget only when
- * the clock did not move across it (the clock counts it otherwise).
+ * After a clipped wait that began at the clock's `startMs` and waited
+ * `waitedMs`: what it waited beyond the clock's progress across it is
+ * charged to the budget (that progress is the clock's share, counted by
+ * tbtIcmBudgetLeft).
  */
 static VOID tbtIcmCharge(PTBT_ICM icm, ULONG startMs, ULONG waitedMs)
 {
-    if (icm->BudgetOn &&
-        icm->Host->NowMs(icm->Host->Context) == startMs) {
-        icm->BudgetStalledMs += waitedMs;
+    ULONG moved;
+
+    if (!icm->BudgetOn) {
+        return;
+    }
+    moved = icm->Host->NowMs(icm->Host->Context) - startMs;
+    if (waitedMs > moved) {
+        icm->BudgetUsedMs += waitedMs - moved;
     }
 }
 
@@ -1947,9 +1957,9 @@ LONG TbtIcmResume(PTBT_ICM icm)
     }
     icm->BudgetOn = TRUE;
     icm->BudgetSpent = FALSE;
-    icm->BudgetStalledMs = 0;
+    icm->BudgetUsedMs = 0;
     icm->BudgetMs = icm->ResumeBudgetMs;
-    icm->BudgetStartMs = icm->Host->NowMs(icm->Host->Context);
+    icm->BudgetMarkMs = icm->Host->NowMs(icm->Host->Context);
     rc = tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
                        TBT_RING_DMA_BYTES, TRUE);
     /* Read once more: the last wait may have used what was left with no

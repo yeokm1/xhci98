@@ -864,6 +864,20 @@ static ULONG cmOwnedMask(PCM_NHI nhi)
     return mask;
 }
 
+/*
+ * Every post to the worker, on the CM thread: the owned-member mask read
+ * once, sent, and recorded as the one the worker holds (WkActive), so the
+ * Service's comparison is always against what the worker was last given.
+ */
+static VOID cmWkPost(PCM_NHI nhi, ULONG reenum, ULONG vanish, BOOLEAN mark)
+{
+    PCM_REENUM r;
+
+    r = &nhi->Reenum;
+    r->WkActive = cmOwnedMask(nhi);
+    CmCfgwkPost(r->Wk, reenum, vanish, r->WkActive, mark);
+}
+
 /* ---- NT: the filters -------------------------------------------------- */
 
 /* IoInvalidateDeviceRelations on member i through its filter: TRUE when
@@ -945,8 +959,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
             }
         } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
             /* Posted: the worker makes the call, and retries it itself. */
-            CmCfgwkPost(r->Wk, 1UL << i, removeVanished ? 1UL << i : 0,
-                        cmOwnedMask(nhi), FALSE);
+            cmWkPost(nhi, 1UL << i, removeVanished ? 1UL << i : 0, FALSE);
             r->Calls++;
         }
     }
@@ -1316,7 +1329,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
         /* The worker's marking window (section 7.4). */
-        CmCfgwkPost(r->Wk, 0, 0, cmOwnedMask(nhi), TRUE);
+        cmWkPost(nhi, 0, 0, TRUE);
     }
 }
 
@@ -1327,6 +1340,7 @@ VOID CmReenumService(PCM_NHI nhi)
     PCM_FILTER f;
     ULONG pending;
     ULONG stale;
+    ULONG mask;
     ULONG i;
 
     r = &nhi->Reenum;
@@ -1339,11 +1353,15 @@ VOID CmReenumService(PCM_NHI nhi)
     }
     stale = 0;
     cmCfgmgLate(nhi);
-    if (r->Wk != NULL && cmOwnedMask(nhi) != r->WkActive) {
-        /* A claim won or lost with no request: the worker learns it at
-         * once, so an operation in progress on a lost member stops. */
-        r->WkActive = cmOwnedMask(nhi);
-        CmCfgwkPost(r->Wk, 0, 0, r->WkActive, FALSE);
+    if (r->Wk != NULL) {
+        mask = cmOwnedMask(nhi);
+        if (mask != r->WkActive) {
+            /* A claim won or lost with no request: the worker learns it
+             * at once, so an operation in progress on a lost member
+             * stops. */
+            r->WkActive = mask;
+            CmCfgwkPost(r->Wk, 0, 0, mask, FALSE);
+        }
     }
     /* Each eject is checked again at the hand-off, under the lock: the
      * same publication of the bridge, still this domain's, the same
@@ -1410,8 +1428,8 @@ VOID CmReenumService(PCM_NHI nhi)
             } else if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
                 /* Posted with a marking window: the re-enumeration is
                  * late, so is the marking of what it brings. */
-                CmCfgwkPost(r->Wk, 1UL << i, 1UL << i, cmOwnedMask(nhi),
-                            (BOOLEAN)(r->SafeEject != 0));
+                cmWkPost(nhi, 1UL << i, 1UL << i,
+                         (BOOLEAN)(r->SafeEject != 0));
                 r->Port[i].Missed = 0;
             }
             if (!r->Port[i].Missed) {

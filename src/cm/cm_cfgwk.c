@@ -55,6 +55,7 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 #define CM_WK_WALK_NODES    2048UL
 #define CM_WK_BUS_FUNCTIONS 64UL
 #define CM_WK_KNOWN         16UL
+#define CM_WK_NO_OP         0xFFFFFFFFUL
 
 typedef struct _CM_WK_PORT {
     ULONG Bdf;
@@ -81,6 +82,9 @@ typedef struct _CM_CFGWK {
     ULONG Gen[XHCI_TBT_MAX_TUNNELS]; /* each member's request generation:
                                bumped by every post naming it            */
     ULONG MarkWanted;       /* safe eject on: a retry's success marks too */
+    ULONG OpMember;         /* the worker's operation in progress: its
+                               member (CM_WK_NO_OP: none, the baseline)  */
+    ULONG OpGen;            /* ... and the generation it was taken at     */
     ULONG ReqReenum;        /* members to re-enumerate                    */
     ULONG ReqVanish;        /* ... removing vanished children first       */
     ULONG ReqMark;          /* a marking window to open                   */
@@ -161,23 +165,51 @@ static VOID cmWkLog(PCM_CFGWK w, const char *label, ULONG value)
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
-/* FALSE once the stop asked the worker to leave: checked before every
- * CONFIGMG call of an operation, so an operation in progress when the
- * stop came makes no further call after its current one returns. */
+/* TRUE while member i's request is still the one taken (`gen`) and the
+ * domain still owns the member: a newer post or a lost claim makes the
+ * operation in progress stale. */
+static BOOLEAN cmWkCurrent(PCM_CFGWK w, ULONG i, ULONG gen);
+
+/* The member's generation now. */
+static ULONG cmWkGenOf(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    ULONG gen;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    gen = w->Gen[i];
+    KeReleaseSpinLock(&w->Lock, irql);
+    return gen;
+}
+
+/* The operation the next CONFIGMG calls belong to (cmWkGo). */
+static VOID cmWkOp(PCM_CFGWK w, ULONG i, ULONG gen)
+{
+    w->OpMember = i;
+    w->OpGen = gen;
+}
+
+/*
+ * Checked before every CONFIGMG call and before any result is kept: FALSE
+ * once the stop asked the worker to leave or, inside a member's operation
+ * (cmWkOp), once that operation went stale (cmWkCurrent). An operation in
+ * progress when either came makes no further call after its current one
+ * returns.
+ */
 static BOOLEAN cmWkGo(PCM_CFGWK w)
 {
     KIRQL irql;
     BOOLEAN go;
 
+    if (w->OpMember != CM_WK_NO_OP) {
+        return cmWkCurrent(w, w->OpMember, w->OpGen);
+    }
     KeAcquireSpinLock(&w->Lock, &irql);
     go = (BOOLEAN)!w->Exit;
     KeReleaseSpinLock(&w->Lock, irql);
     return go;
 }
 
-/* TRUE while member i's request is still the one taken (`gen`) and the
- * domain still owns the member: a newer post or a lost claim makes the
- * operation in progress stale. */
 static BOOLEAN cmWkCurrent(PCM_CFGWK w, ULONG i, ULONG gen)
 {
     KIRQL irql;
@@ -323,6 +355,9 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
             p->PathCount = 0;
         }
     }
+    if (!cmWkGo(w)) {
+        return 0;
+    }
     if (p->Devnode != 0 &&
         CmCfgmgDeviceId(&w->Cfgmg, p->Devnode, id, sizeof(id)) ==
             CMG_CR_SUCCESS &&
@@ -346,7 +381,8 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
             p->Devnode = node;
             return node;
         }
-        if (CmCfgmgChild(&w->Cfgmg, node, &next) != CMG_CR_SUCCESS) {
+        if (!cmWkGo(w) ||
+            CmCfgmgChild(&w->Cfgmg, node, &next) != CMG_CR_SUCCESS) {
             continue;
         }
         while (next != 0) {
@@ -355,6 +391,9 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
                 break;
             }
             stack[depth++] = next;
+            if (!cmWkGo(w)) {
+                break;
+            }
             if (CmCfgmgSibling(&w->Cfgmg, next, &next) != CMG_CR_SUCCESS) {
                 break;
             }
@@ -379,7 +418,8 @@ static ULONG cmWkChildren(PCM_CFGWK w, ULONG devnode, PULONG out, ULONG room)
     ULONG node;
 
     n = 0;
-    if (CmCfgmgChild(&w->Cfgmg, devnode, &node) != CMG_CR_SUCCESS) {
+    if (!cmWkGo(w) ||
+        CmCfgmgChild(&w->Cfgmg, devnode, &node) != CMG_CR_SUCCESS) {
         return 0;
     }
     while (node != 0 && n < room) {
@@ -525,6 +565,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     p = &w->Port[i];
+    cmWkOp(w, i, gen);
     bridge = cmWkFindDevnode(w, i);
     if (!cmWkCurrent(w, i, gen)) {
         return TRUE;
@@ -539,6 +580,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
                     ? cmWkChildren(w, bridge, children, CM_WK_KNOWN)
                     : 0;
         for (c = 0; c < count; c++) {
+            if (!cmWkCurrent(w, i, gen)) {
+                return TRUE;
+            }
             if (CmCfgmgDeviceId(&w->Cfgmg, children[c], text,
                                 sizeof(text)) != CMG_CR_SUCCESS ||
                 !CmPortsIdVenDev(text, sizeof(text), &id)) {
@@ -571,7 +615,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
 }
 
 /* Safe eject's 9x half on member i: each child not seen before gets
- * DN_REMOVABLE; `mark` FALSE only records the children (the baseline). */
+ * DN_REMOVABLE; `mark` FALSE only records the children (the baseline,
+ * outside any member's operation). Inside one (cmWkOp), a stale operation
+ * makes no further call and keeps no result. */
 static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
 {
     CM_WK_PORT *p;
@@ -591,6 +637,9 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
         return;
     }
     count = cmWkChildren(w, bridge, children, CM_WK_KNOWN);
+    if (!cmWkGo(w)) {
+        return;
+    }
     for (c = 0; c < count && mark; c++) {
         if (!cmWkGo(w)) {
             return;
@@ -608,6 +657,9 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
         if (cr == CMG_CR_SUCCESS && (status & CMG_DN_REMOVABLE) != 0) {
             continue;
         }
+        if (!cmWkGo(w)) {
+            return;
+        }
         cr = CmCfgmgAddRemovable(&w->Cfgmg, children[c]);
         cmWkLog(w, "cm.reenum.9x.removable", cr);
         if (cr == CMG_CR_SUCCESS) {
@@ -615,6 +667,9 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
         } else {
             w->C.MarkFailures++;
         }
+    }
+    if (!cmWkGo(w)) {
+        return;
     }
     for (c = 0; c < count; c++) {
         p->Known[c] = children[c];
@@ -718,6 +773,7 @@ static VOID cmWkThread(PVOID context)
         w->InCall = 1;
         KeReleaseSpinLock(&w->Lock, irql);
 
+        cmWkOp(w, CM_WK_NO_OP, 0);
         if (open) {
             cmWkOpen(w);
         }
@@ -754,7 +810,8 @@ static VOID cmWkThread(PVOID context)
                 for (i = 0; i < w->Members; i++) {
                     /* Ownership read again per member: a claim lost since
                      * the request ends its marking. */
-                    if (cmWkCurrent(w, i, w->Gen[i])) {
+                    cmWkOp(w, i, cmWkGenOf(w, i));
+                    if (cmWkGo(w)) {
                         cmWkMark(w, i, TRUE);
                     }
                 }
@@ -840,6 +897,7 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
     }
     w->Active = active;
     w->OpenState = CM_CFGWK_OPEN_PENDING;
+    w->OpMember = CM_WK_NO_OP;
     /* A worker the stop cannot wait for (inside a CONFIGMG call) runs this
      * image's code after its NHI is gone, for as long as CONFIGMG blocks:
      * no timeout makes an unload safe then, so a driver that has run one

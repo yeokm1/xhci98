@@ -74,6 +74,7 @@ typedef struct FW {
     unsigned long Reads;
     unsigned long LastApprove[8];
     unsigned long LastApproveWords;
+    unsigned long StopClockAtReady; /* the clock stops at this driver ready */
 } FW;
 
 static FW g_fw;
@@ -232,6 +233,10 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
     code = dw[0] & 0xFF;
     if (code == 0x03) {
         g_fw.Ready++;
+        if (g_fw.StopClockAtReady != 0 &&
+            g_fw.Ready == g_fw.StopClockAtReady) {
+            g_fake.ClockStopped = 1;
+        }
         if (g_fw.ReadyMode == MODE_NEVER) {
             return;
         }
@@ -1711,6 +1716,21 @@ static void test_resume_budget(void)
     g_fake.ClockStopped = 0;
     CHECK_EQ(rc, TBT_E_TIMEOUT, "a stopped clock still ends the budget");
     CHECK_EQ(g_fw.Ready, 2, "after one clipped driver-ready attempt");
+
+    /* A clock that stops partway: 5 s by the clock, then 5 s and a
+     * clipped 3 s by the waits made - the two shares add up, and the
+     * fourth attempt never comes. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmSuspend(&g_icm);
+    g_fw.ReadyMode = MODE_NEVER;
+    g_fw.StopClockAtReady = 3;
+    TbtIcmSetResumeBudget(&g_icm, 13000);
+    rc = TbtIcmResume(&g_icm);
+    g_fake.ClockStopped = 0;
+    CHECK_EQ(rc, TBT_E_TIMEOUT, "the clock's share and the waits' add up");
+    CHECK_EQ(g_fw.Ready, 4, "three driver-ready attempts, the third clipped");
+    CHECK_EQ(g_icm.Counters.ResumeBudgetExpired, 1, "on the budget");
 
     /* A resume inside its budget is unchanged (the earlier legs), and an
      * idle poll after a bind is never clipped. */
