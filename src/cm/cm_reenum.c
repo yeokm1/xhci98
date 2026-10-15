@@ -547,7 +547,6 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     PDEVICE_OBJECT lower;
     PCM_FILTER child;
     NTSTATUS status;
-    KIRQL irql;
 
     if (pdo->AttachedDevice != NULL) {
         return STATUS_DEVICE_BUSY;
@@ -876,6 +875,7 @@ static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
     ULONG hdr;
     ULONG buses;
     ULONG parent;
+    ULONG incomplete;
 
     n = 0;
     cur = bdf;
@@ -888,10 +888,16 @@ static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
             return TRUE;
         }
         parent = XHCI_TBT_NO_BDF;
+        incomplete = 0;
         for (b = 0; b < bus && parent == XHCI_TBT_NO_BDF; b++) {
             for (d = 0; d < 32UL && parent == XHCI_TBT_NO_BDF; d++) {
                 for (f = 0; f < 8UL; f++) {
                     if (!cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f), 0, &id)) {
+                        /* A bus the HAL does not know is no parent's;
+                         * a bus 0 that cannot be read leaves it open. */
+                        if (b == 0) {
+                            incomplete = 1;
+                        }
                         d = 32UL;
                         break;
                     }
@@ -903,6 +909,7 @@ static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
                     }
                     if (!cmCfgRead(NULL, XHCI_TBT_BDF(b, d, f),
                                    XHCI_TBT_CFG_HEADER, &hdr)) {
+                        incomplete = 1;
                         break;
                     }
                     if (XHCI_TBT_HDR_LAYOUT(hdr >> 16) ==
@@ -920,11 +927,13 @@ static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
             }
         }
         if (parent == XHCI_TBT_NO_BDF) {
-            /* No bridge below it leads to this bus: a root bus of its
-             * own (a host with more than one), whose number ends the
-             * path as 00 ends one under bus 0. A parent missed by a read
-             * that failed gives a path that matches nothing, never a
-             * wrong devnode. */
+            /* No bridge leads to this bus: a root bus of its own (a host
+             * with more than one), whose number ends the path as 00 ends
+             * one under bus 0 - but only after a scan that read every
+             * function it met; otherwise the path is not known. */
+            if (incomplete) {
+                return FALSE;
+            }
             path[n++] = bus;
             *count = n;
             return TRUE;
@@ -1070,6 +1079,9 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
             }
         }
     }
+    /* Nothing matched: the path is read again at the next walk, in case
+     * the configuration space it came from was not yet as it is. */
+    r->Port[index].PathRead = 0;
     /* Why the walk did not find it, once per member: devnodes visited,
      * PCI locations parsed, and siblings the stack could not hold. */
     if (!r->Port[index].WalkLogged) {
