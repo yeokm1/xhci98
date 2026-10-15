@@ -1664,7 +1664,21 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
              * population, and no eject is handed off meanwhile. */
             f->Unsettled = 1;
             f->ChangeSeq++;
+            if (nhi->U4On) {
+                /* The USB4 profile (cm_reenum.h): a connection changed on
+                 * some port, so an orderly removal seen before it belongs
+                 * to an old connection and is forgotten, whatever the
+                 * bridge's population shows later. */
+                f->EjectSeen = 0;
+            }
         }
+        if (nhi->U4On) {
+            r->Port[i].Flags &= ~CM_PORT_EJECTED;
+        }
+    }
+    if (nhi->U4On && r->EjectPending != 0) {
+        r->EjectPending = 0;
+        r->EjectsStale++;
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
