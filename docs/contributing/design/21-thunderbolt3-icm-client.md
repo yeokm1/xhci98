@@ -624,7 +624,7 @@ the bridge on Windows 2000. The split:
 - `xhcicmf.inf`, the filter's, NT only: `Signature="$Windows NT$"`, with an
   undecorated `[CmFilterModels]` carrying one line per tunnel-port id of
   the lists below, each in the `&CC_0604` form, for example
-  `%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`, for Windows 2000,
+  `%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`, for Windows 2000,
   and `.NTx86.6.0` sections for Vista and 7; no undecorated install
   section. Its DDInstall adds the `UpperFilters` value and the service and
   installs no function driver. **The signature does not keep it from
@@ -799,7 +799,9 @@ section 1.4.6 and the README's hardware list.
 
 **The USB4 lines (task `40-0.2`, design record 22 section 3.7).** In
 `xhcicm.inf` and `xhcicm-amd64.inf`, under `%U4Desc%` ("xHCI98 USB4 Host
-Interface", decision U12): `PCI\VEN_8086&DEV_xxxx` for `A833`, `A834`,
+Router", decision U12 as revised; the Maple Ridge and Tiger Lake to
+Meteor Lake lines above take it too, "Class and names" below):
+`PCI\VEN_8086&DEV_xxxx` for `A833`, `A834`,
 `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784`; `PCI\VEN_1022&DEV_1668`
 and `DEV_1669`; and `PCI\CC_0C0340`, which the id lines outrank. Windows 98
 SE matches the class line: on the emulator's generic host `1B36:00F4` (class
@@ -838,10 +840,35 @@ gate's `CM-NOROUTER` list: the device routers and device-side bridges
 unclaimed generations above.
 
 Class and names: `Class=System` with its GUID on the NT paths and `Class=System`
-undecorated for 98 (which also knows that class); device descriptions
-`xHCI98 Thunderbolt 3 Host Interface` for the NHI and
-`xHCI98 Thunderbolt 3 Tunnel Port Filter` for the filter (decision D8,
-taken as recommended). `StartType=3` (demand) for the NHI service,
+undecorated for 98 (which also knows that class); device descriptions by decision D8, taken as recommended and then
+revised by the owner on 2026-10-15 to name the hardware rather than the
+driver's role. Each NHI line names its controller's generation, never the
+connection manager that runs it, so a controller keeps its name whichever
+of the ICM client and the USB4 software connection manager takes it:
+`xHCI98 Thunderbolt 2 Controller` (`Tb2Desc`) for Falcon Ridge `156A` and
+`156C`; `xHCI98 Thunderbolt 3 Controller` (`NhiDesc`) for Alpine Ridge,
+Titan Ridge and Ice Lake `8A17` and `8A0D`; `xHCI98 USB4 Host Router`
+(`U4Desc`) for Maple Ridge, Tiger Lake to Meteor Lake and every line of
+design record 22 section 3.7, the class line included. A message profile
+is not a generation: Ice Lake is Thunderbolt 3 hardware though it shares
+the ICL messages with its USB4 successors, and Maple Ridge is USB4
+hardware though it speaks the TR messages. "Host Router" is USB4's name
+for the host's own router, which the NHI belongs to. The filter INF
+becomes the port's device INF - its model line supplies the description,
+and `Include`/`Needs` reuse `machine.inf`'s install sections but not its
+name - so the filter's descriptions name the bridge, not the filter:
+`xHCI98 Thunderbolt PCI Bridge` (`TbBridgeDesc`) for the Thunderbolt 2
+and 3 generation's ports (Falcon, Alpine and Titan Ridge, Ice Lake `8A1D`
+to `8A23`), `xHCI98 USB4 PCI Bridge` (`U4BridgeDesc`) for the USB4
+generation's (Maple Ridge, Tiger Lake to Raptor Lake, Barlow Ridge, AMD,
+ASMedia) and `xHCI98 PCI Bridge` (`BridgeDesc`) for the emulator's QEMU
+bridges, every line keeping its `&CC_0604` form and the one set of
+install sections. One id names every port of a switch, upstream and
+downstream alike, and `CC_0604` does not tell them apart, so no name
+claims a port's role. The service is `xHCI98 Thunderbolt and USB4
+Connection Manager (xhcicm)` in all four INFs; no name carries "(TM)".
+The gate's `CM-DESC` holds each line to its generation's description and
+each string to its text. `StartType=3` (demand) for the NHI service,
 as for `xhci98`; the filter is the same service, demand-started with the
 devnode it filters, since it is device-specific and not a class filter.
 
@@ -2365,7 +2392,7 @@ revised to it in draft 6.
 | D5 | What to do about a controller absent at boot (Assist on, nothing attached) | **Owner, 2026-10-15, as recommended**: nothing; a known limitation; force power is an ACPI WMI method out of reach on 98 and unread on NT | 1.3, 2 |
 | D6 | The `nvme98` notification channel | **Owner, 2026-10-15, as recommended**: the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `39-A.7`; the statement withheld on any OS until gate G3's ordering is qualified there | 7.1, 7.2 |
 | D7 | The version and the cut | **Owner, 2026-10-15, changed**: `3.0.0.0` ships both this work and the USB4 software connection manager (Phase 40), not the latter as the next minor. `39.final` closes Phase 39 with its legs and a dry build and cuts nothing; `40.final` carries the `3.0.0.0` cut, the release notes for both phases and the install legs from the asset | 1.2, 10.2, 10.4, `roadmap-usb4.md` |
-| D8 | Names | **Owner, 2026-10-15, as recommended**: `xhcicm.sys`, `xhcicm.inf` and `xhcicmf.inf`, `xHCI98 Thunderbolt 3 Host Interface`, `xHCI98 Thunderbolt 3 Tunnel Port Filter`, class System | 3.3 |
+| D8 | Names | **Owner, 2026-10-15, as recommended**: `xhcicm.sys`, `xhcicm.inf` and `xhcicmf.inf`, class System. The device descriptions were revised by the owner the same day (first form: `xHCI98 Thunderbolt 3 Host Interface` and `xHCI98 Thunderbolt 3 Tunnel Port Filter`): by generation, `xHCI98 Thunderbolt 2 Controller`, `xHCI98 Thunderbolt 3 Controller` and `xHCI98 USB4 Host Router` for the NHI, `xHCI98 Thunderbolt PCI Bridge`, `xHCI98 USB4 PCI Bridge` and `xHCI98 PCI Bridge` for the ports the filter attaches to, and the service `xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)` | 3.3 |
 | D9 | Other Alpine Ridge NHI ids | **Owner, 2026-10-15, changed**, then widened the same day: every Alpine Ridge NHI id and the Titan Ridge NHI ids are claimed, ids from the public PCI id listing with the source in `legal-provenance.md`, with the matching port ids for the filter INF; Titan Ridge gets a best-effort row; every id but `15BF` is untested, the README and release notes say so plainly, and the untested ids act by default with that warning (`XhciCmMode` 1). By the owner's source rule of the same day (section 9) the profiles are read from Linux, and the coverage became every Intel firmware-connection-manager host Linux addresses - Falcon Ridge, Alpine Ridge, Titan Ridge, Maple Ridge, Ice Lake to Meteor Lake - with four-test selection, an inert start, hardware profiles apart from message profiles, per-domain tunnel-port sets and a no-reset policy (sections 1.4.2 to 1.4.6, 3.3, 6.3); the widening, the selection and the inert start are orchestrator decisions of 2026-10-15 for the owner to confirm. `XhciCmMode` 2 with a user-edited INF copy stays the route for an id the list does not carry | 1.3, 1.4, 3.3, 5.1, 5.2, 5.3, 6.3, 8, 9, 10.1 |
 | D10 | Safe eject | **Owner, 2026-10-15, changed**: in Phase 39, task `39-A.8`; on NT the filter answers `IRP_MN_QUERY_CAPABILITIES` with `Removable` (and `SurpriseRemovalOK`, so a plain unplug shows no Unsafe Removal dialog); on 98 SE and ME through CONFIGMG, best effort; NT-only with a release-notes line if the 9x half cannot be made to work; the eject stops the drivers and the user unplugs, since under the ICM there is no per-device teardown. Section 7.4 applies it with two refinements for the owner to confirm, each from a fact the decision did not have in front of it: the mark goes on the devices reported on the tunnel bridge's bus (through child filters the bridge filter attaches), not on the bridge, which never leaves the machine and would be held for eject until a restart; and `SurpriseRemovalOK` is set only where leg `39-V.2` shows Windows still lists the device with it, since Microsoft's reference says a device with both bits is not shown in "Unplug or Eject Hardware" | 1.3, 3.2, 6.2, 7.4, 8, 10.2, 12 |
 | D11 | A master switch for the whole driver | **Owner, 2026-10-15, as recommended**: `XhciCmMode`, default 1 (auto), 0 off, 2 force the ICM client at the user's own risk, 3 reserved for the software connection manager; the install is the real opt-in, so the default is on. Value 3 has since been given its meaning by the orchestrator's coverage decisions of the same day, for the owner to confirm: the software connection manager's experimental override (section 1.4.2, design record 22) | 8 |

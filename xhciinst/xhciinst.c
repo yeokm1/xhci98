@@ -5353,9 +5353,10 @@ static int run_uninstall_9x(void)
     }
     out("\nThen, by hand, in this order:\n"
         "  1. Device Manager: remove \"xHCI98 USB Attached SCSI Storage\" and "
-        "a Thunderbolt\n     entry if there is one; then \"xHCI98 USB 3.x "
-        "eXtensible Host Controller\"\n     (it removes the root hub and "
-        "everything beneath it).\n"
+        "an\n     \"xHCI98 Thunderbolt 2 Controller\", \"xHCI98 Thunderbolt 3 "
+        "Controller\" or\n     \"xHCI98 USB4 Host Router\" if there is one; "
+        "then \"xHCI98 USB 3.x\n     eXtensible Host Controller\" (it removes "
+        "the root hub and everything\n     beneath it).\n"
         "  2. Delete the INF files listed above, so the restart cannot find "
         "the driver\n     again.\n"
         "  3. Restart. If the New Hardware wizard offers the controller, "
