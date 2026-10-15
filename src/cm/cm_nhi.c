@@ -67,6 +67,7 @@
  */
 
 #include "cm.h"
+#include "cm_nvlink.h"
 
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
                         const CM_IDS *ids)
@@ -1062,6 +1063,8 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
+    /* The nvme98 channel's two moments (task 40-A.7, cm_nvlink.h). */
+    CmNhiSetU4Hooks(nhi, CmNvlinkU4Up, CmNvlinkU4Down, nhi);
     XhciTbtBindsInit(&nhi->Binds);
     nhi->ArmOwed = 0;
     nhi->U4On = 1;

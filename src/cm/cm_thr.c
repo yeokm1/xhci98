@@ -40,6 +40,7 @@
  */
 
 #include "cm.h"
+#include "cm_nvlink.h"
 
 /* PCI Command (PCI 3.0 6.2.2), the only configuration word written here. */
 #define CM_PCI_COMMAND            0x04UL
@@ -532,7 +533,7 @@ static VOID NTAPI cmThread(PVOID context)
     nhi = (PCM_NHI)context;
     for (;;) {
         if (cmPolling(nhi)) {
-            cmRelativeMs(&due, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+            cmRelativeMs(&due, CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]));
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else {
