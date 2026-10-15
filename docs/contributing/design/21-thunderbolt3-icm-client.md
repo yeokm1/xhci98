@@ -1970,6 +1970,18 @@ before the driver bound is offered for eject only after a re-plug; that a
 dock is listed under its switch port's name; and, on Windows 2000, whether
 an unplug without an eject still shows the Unsafe Removal dialog.
 
+**The eject on 98 SE and ME, and a viewer on every target** (owner,
+2026-10-15): nothing on those systems offers the eject this section's 9x
+half prepares, and the owner decided not to borrow NUSB's applet, so the
+install tool gained `XHCIINST /devices` and `XHCIINST /eject`, which list
+the devices behind the tunnel ports with what `xhcicm.sys` publishes about
+each router, and remove one safely - by query-remove and remove on 98 SE
+and ME, and by the eject request Safely Remove Hardware makes on 2000 and
+later, which also reaches a device the applet does not list. Design record
+24 (`24-thunderbolt-device-tool.md`) is the record, including the status
+record this driver publishes for it and what the 9x worker must do after a
+removal it did not make.
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at

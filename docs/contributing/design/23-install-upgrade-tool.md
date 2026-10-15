@@ -962,6 +962,8 @@ these systems.
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
 | `/nopause` | do not wait for Enter before closing |
 | `/log path` | write the log there |
+| `/devices` | the connected Thunderbolt and USB4 devices and the Windows devices behind them; reads only (design record 24) |
+| `/eject [N]` | remove one of them safely (design record 24) |
 
 An unknown switch, `/set` with an unknown name or a value outside its
 allowed set, or a contradiction (`/defaults` with `/set`, `/list` with
@@ -1073,6 +1075,10 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciCmMode` | `xhcicm.inf`, the NHI's | a present NHI `xhcicm.inf` matches | 0, 1 | 0 to 3 | the connection manager off or automatic (2 and 3 are the record 21 overrides, `/set` only) |
 | `XhciCmApprove` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | approve Thunderbolt devices automatically |
 | `XhciCmSafeEject` | `xhcicm.inf`, the NHI's | as `XhciCmMode` | 0, 1 | 0, 1 | offer Safely Remove for the dock's devices |
+| `XhciCmReenum` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | make Windows look for devices after each tunnel change |
+| `XhciCmUsb3Tunnel` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | USB4: build USB3 tunnels |
+| `XhciCmLaneBonding` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | USB4: bond the two lanes of a link |
+| `XhciCmPreOsCleanup` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1, 2 | USB4: tunnels found at start kept (0), cleaned where they do not verify (1), or all cleaned (2) |
 
 Not asked: the log values (`SNAPON.BAT` and `SNAPOFF.BAT` own them, with a
 restart the user is told about), the fourteen Linux quirk values (record
@@ -1083,14 +1089,20 @@ diagnose), `XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`,
 `XhciAccept096` and `XhciUsb2HubSpeedFallback`; and, by the owner's
 decision of 2026-10-15, `XhciPollFineTimer` and `XhciSelectiveSuspend`,
 which stay settable with `/set Name=Value` only, their INF defaults
-unchanged. Any of them stays settable by hand, as today.
+unchanged; and, by the owner's decision of the same day, `XhciCmReenum`
+(its 0 exists to diagnose a machine where the re-enumeration misbehaves),
+`XhciCmUsb3Tunnel` and `XhciCmLaneBonding` (USB4 diagnostics whose
+defaults are the point) and `XhciCmPreOsCleanup` (an override of design
+record 22 section 9's tunnel preservation), settable with `/set
+Name=Value` only. Any of them stays settable by hand, as today.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
 fails if a table row names a value an INF of `src\` does not write, or
 writes at a default the row does not offer (section 10). The `XhciCm*`
-rows follow `xhcicm.inf` as task 39-A.1 writes it, and the allowed sets
-are checked against record 21 section 8 when that section is final.
+rows follow `xhcicm.inf` as task 39-A.1 writes it; their allowed sets were
+checked on 2026-10-15 against `cm_vals.c`'s rule table, record 21 section
+8 and record 22 section 12, and match (design record 24 section 11).
 
 ### 8.2 Applicability (owner, 2026-10-15)
 
