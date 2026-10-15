@@ -1767,12 +1767,23 @@ side.
   start is pending). Nothing on `nvme98`'s side reads it yet.
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
-  `Reenumerate_DevNode` of section 6.1) after a tunnel up, a RESYNC or an
-  owed re-enumeration, the driver scans that bus and publishes `UP` for
-  each function of class 01h subclass 08h that answers: an entry already
-  `UP` keeps its generation (its link never went down), any other gets
-  `LinkGeneration` + 1. Where the SHPC slot reads a card present and
-  nothing answers yet, the scan waits up to 1 s for it.
+  `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
+  publishes `UP` for each function of class 01h subclass 08h that
+  answers, with `LinkGeneration` + 1 - except that an entry already `UP`
+  keeps its generation on a tunnel down's re-enumeration. After a tunnel
+  up, a RESYNC or an owed re-enumeration the exposure is fresh: presence
+  on the bus does not prove the link stayed up in between, so even an
+  entry that reads `UP` gets a new generation, and before such a fresh exposure every
+  entry on that bus not `UP` is retired (`IN_USE` alone, generation + 1),
+  so an `nvme98` instance that binds to a function the scan could not see
+  never records a generation carrying an old statement. An entry, once
+  given to a bus and slot, is never given to another: an `nvme98` instance
+  may still hold it. Where the SHPC slot reads a card present and nothing
+  answers yet, the scan waits up to 1 s for it. Only functions on the
+  secondary bus itself are seen: an NVMe function behind an enclosure's
+  own PCIe switch, or one that has not answered by the end of the scan,
+  gets no entry, so no statement, and the gone deadline (MD-1) stands for
+  it.
 - **The statement** is the entry's move to `DOWN_QUIESCED`, made on section
   7.1's condition alone. The seam's tunnel-down poll reads nothing on the
   emulator's SHPC bridge (no writer for its DWORD Select, run-39 39-A.5),
@@ -1782,7 +1793,15 @@ side.
   never the header). Windows 98 SE and ME have no such writer, so no SHPC
   reading and no statement there. The condition: a TUNNEL_DOWN of the ICM
   profile, the domain's set has exactly one member, it is an SHPC bridge,
-  and its slot reads empty within 2 s. Otherwise the entries on that member
+  and its slot reads empty within 2 s; the member is the emulator's bridge
+  (an SHPC capability and no PCI Express capability - a conventional PCI
+  hot-plug bridge, which no Thunderbolt or USB4 port is); and the operating
+  system is one the ordering is qualified on: Windows 2000, XP and XP x64
+  (WDM 1.10 to 1.30), where gate G3 ran and where nothing but this driver
+  removes the device; not Vista or 7, whose native hot plug races the
+  connection manager (G3 not run there), and not 98 SE or ME (no reading).
+  This qualification list is an orchestrator decision of 2026-10-15 for the
+  owner to confirm. Otherwise the entries on that member
   whose function no longer answers move to `IN_USE` alone (`UP` cleared,
   no `DOWN_QUIESCED`), which `nvme98` ignores, and its gone deadline (MD-1)
   stands; a function still answering keeps its `UP`.
@@ -1806,17 +1825,21 @@ side.
   exists (section 7.4: no per-device teardown), so nothing calls it in this
   profile.
 
-**The budget.** `nvme98` measures its gone deadline from its own presence
-loss. The parts: the event noticed by the idle poll, which is held to at
-most 250 ms while any entry reads `UP`, whatever `XhciCmPollIdleMs` says;
-a command in flight adds nothing (the event is decoded inside the wait and
-the tunnel-down action queued); the seam's tunnel-down poll (it ends at
-once on the SHPC bridge, which it does not read); the channel's own
-reading, 2 s at most and normally one read once stage 3 has run; the entry
-write, a few stores. About 2.3 s in the worst case, as an estimate; nothing
-on the path waits for `nvme98`, which polls the table itself. The
-acknowledgement wait comes after the statement and delays only the
-removal.
+**The budget, an estimate and not an enforced deadline.** `nvme98`
+measures its gone deadline from its own presence loss. The parts: the
+event noticed by the idle poll, which is held to at most 250 ms while any
+entry reads `UP`, whatever `XhciCmPollIdleMs` says; a command in flight
+when the event is decoded, whose own bound (section 5.5) the queued
+tunnel-down action waits out; any actions queued before it, each with its
+own polls; the seam's tunnel-down poll (it ends at once on the SHPC
+bridge, which it does not read); the channel's own reading, 2 s at most
+and normally one read once stage 3 has run; the entry write, a few
+stores. With nothing queued ahead and no command in flight that is about
+2.3 s; a command or earlier actions add their own bounds, and a statement
+that comes after `nvme98`'s deadline has passed changes nothing there
+(MD-1 has already run). Nothing on the path waits for `nvme98`, which
+polls the table itself. The acknowledgement wait comes after the
+statement and delays only the removal.
 
 No statement is sent for a disconnect that matches no device-table entry
 (no TUNNEL_DOWN is queued for it) or while the set has more than one

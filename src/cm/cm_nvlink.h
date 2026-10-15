@@ -36,18 +36,22 @@
  *     before the IoInvalidateDeviceRelations or Reenumerate_DevNode that
  *     exposes what is behind it. It reads the port's secondary bus and
  *     publishes UP for each NVMe function (class 01h, subclass 08h) that
- *     answers there. An entry already UP keeps its generation (the link
- *     did not go down); one that is not UP gets LinkGeneration + 1.
+ *     answers there, with a new LinkGeneration after anything that may be
+ *     a new connection (CmNvlinkExpose's `fresh`).
  *  2. DOWN_QUIESCED only after the tunnel's PCIe path is closed and the
  *     endpoint's link-down reset has completed, read on the conditions the
  *     record qualifies (record 21 section 7.1, record 22 section 10.2):
  *     ICM profile, CmNvlinkIcmDown - the domain's tunnel-port set has one
- *     member, it is the emulator's SHPC bridge (whose presence bit clearing
- *     after a disconnect is the documented later-than-stage-2 signal), and
- *     the tunnel-down poll REACHED a DOWN reading of it. USB4 profile,
- *     CmNvlinkPortDown from the CM_U4_DOWN_HOOK - TBT_U4_LINKDOWN.PathClosed
- *     (record 22 section 7.3 step 1 read back), the port's member known by
- *     correspondence, that member an SHPC bridge, its reading DOWN within
+ *     member, it is the emulator's bridge (an SHPC capability and no PCI
+ *     Express capability; its presence bit clearing after a disconnect is
+ *     the documented later-than-stage-2 signal), the operating system is
+ *     one the ordering is qualified on (Windows 2000, XP and XP x64; not
+ *     Vista or 7, whose native hot plug races the connection manager, and
+ *     not 98 SE or ME, where nothing here reads the SHPC slot), and the
+ *     channel's own reading of the slot came DOWN within 2 s. USB4
+ *     profile, CmNvlinkPortDown from the CM_U4_DOWN_HOOK - the same, plus
+ *     TBT_U4_LINKDOWN.PathClosed (record 22 section 7.3 step 1 read back),
+ *     the port's member known by correspondence, the reading DOWN within
  *     the time left of the 3 s, and at least CM_NVLINK_DELIVERY_MS left.
  *     On a hardware tunnel port (Link Active, Presence Detect) the
  *     endpoint's completed reset cannot be observed through a down link,
@@ -137,6 +141,8 @@
 #define CM_NVLINK_LATE              6UL /* USB4: too little of the 3 s left */
 #define CM_NVLINK_NO_ENTRY          7UL /* nothing UP on that bus          */
 #define CM_NVLINK_NO_CHANNEL        8UL /* no table, or no rendezvous      */
+#define CM_NVLINK_UNQUALIFIED       9UL /* the ordering is not qualified on
+                                           this operating system           */
 
 /* The 9x REMOVE_PENDING request: a PROPOSED extension of nvme98cm.h's
  * entry, not in that header. Flags bit 3 is the request; Reserved[0] the
@@ -172,14 +178,25 @@ VOID CmNvlinkTableInit(PNVME98LS_TABLE t);
 ULONG CmNvlinkFind(const NVME98LS_TABLE *t, ULONG bus, ULONG slot);
 
 /*
- * Obligation 1 on (bus, slot): its entry (or a free one: never IN_USE, else
- * the least recent that is neither UP nor awaiting an acknowledgement)
- * gets Flags = IN_USE | UP, with LinkGeneration + 1 unless it was UP
- * already. Writes `*outcome` (CM_NVLINK_UP_*); returns the entry or
- * CM_NVLINK_NONE. A reassigned entry keeps counting its generation.
+ * Obligation 1 on (bus, slot): its entry, or a never-used one (an entry is
+ * never given to another function: an nvme98 instance may hold it), gets
+ * Flags = IN_USE | UP with LinkGeneration + 1 - unless it is UP already
+ * and `fresh` is FALSE (a re-exposure of the same connection). `fresh` is
+ * TRUE for every exposure that may follow a new connection: presence on
+ * the bus does not prove the link stayed up in between. Writes `*outcome`
+ * (CM_NVLINK_UP_*); returns the entry or CM_NVLINK_NONE.
  */
 ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
-                        PULONG outcome);
+                        BOOLEAN fresh, PULONG outcome);
+
+/*
+ * Before a fresh exposure of `bus`: every entry there that is not UP (a
+ * statement made, or withheld) becomes IN_USE alone with LinkGeneration
+ * + 1, so an nvme98 instance binding to a function the scan could not
+ * publish (it did not answer yet) records a generation that carries no
+ * DOWN_QUIESCED, never an old statement. Returns how many.
+ */
+ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus);
 
 /* An UP entry leaves UP: Flags = IN_USE | DOWN_QUIESCED when `quiesced`,
  * IN_USE alone otherwise. FALSE (nothing written) for an entry not UP. */
@@ -192,16 +209,24 @@ ULONG CmNvlinkNextUp(const NVME98LS_TABLE *t, ULONG bus, ULONG from);
 BOOLEAN CmNvlinkAcked(const NVME98LS_TABLE *t, ULONG index);
 
 /* The ICM profile's condition (record 21 section 7.1): the set's member
- * count, the member's source (XHCI_TBT_SRC_*), the tunnel-down poll's end
- * (XHCI_TBT_POLL_*) and its last verdict (XHCI_TBT_PORT_*). */
-ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, ULONG pollState,
+ * count, the member's source (XHCI_TBT_SRC_*), whether the member is the
+ * emulator's bridge (an SHPC capability and no PCI Express capability: a
+ * conventional PCI hot-plug bridge, which no Thunderbolt or USB4 port is;
+ * the only bridge whose slot-empty reading is the documented
+ * later-than-stage-2 signal), whether the operating system is one the
+ * ordering is qualified on, the channel's reading's end (XHCI_TBT_POLL_*)
+ * and its last verdict (XHCI_TBT_PORT_*). */
+ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, BOOLEAN emulator,
+                         BOOLEAN osQualified, ULONG pollState,
                          ULONG lastVerdict);
 
 /* The USB4 profile's condition (record 22 section 10.2): PathClosed, the
- * port's member known by correspondence, its source, its reading
- * (XHCI_TBT_PORT_*) and the time left of the 3 s when it was read. */
+ * port's member known by correspondence, its source, emulator and
+ * qualification as above, its reading (XHCI_TBT_PORT_*) and the time left
+ * of the 3 s when it was read. */
 ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
-                        ULONG source, ULONG reading, ULONG remainingMs);
+                        ULONG source, BOOLEAN emulator, BOOLEAN osQualified,
+                        ULONG reading, ULONG remainingMs);
 
 /* Milliseconds left of `budgetMs` begun at `startMs` (a free-running
  * millisecond clock, modulo 2^32), 0 when spent. */
@@ -244,10 +269,16 @@ VOID CmNvlinkUnload(VOID);
  * state. */
 VOID CmNvlinkStart(struct _CM_NHI *nhi);
 
-/* Obligation 1 for tunnel port `bridge` (XHCI_TBT_BDF): before the
- * re-enumeration call that exposes its secondary bus after a tunnel up or
- * a RESYNC. Returns the number of entries UP for that bus. */
-ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge);
+/* Obligation 1 for tunnel port `bridge` (XHCI_TBT_BDF): before every
+ * re-enumeration call that exposes its secondary bus. `fresh` TRUE after a
+ * tunnel up, a RESYNC or an owed re-enumeration (CmNvlinkRetire first,
+ * then a new generation for every NVMe function found); FALSE on a tunnel
+ * down's (nothing retired, an entry UP left as it is). Only functions on
+ * the secondary bus itself are seen: an NVMe function behind an
+ * enclosure's own PCIe switch is not, gets no entry and so no statement
+ * (nvme98's gone deadline stands); nor does one that has not answered by
+ * the end of the scan. Returns the number of entries UP for that bus. */
+ULONG CmNvlinkExpose(struct _CM_NHI *nhi, ULONG bridge, BOOLEAN fresh);
 
 /* Obligation 2, ICM profile: a TBT_ICM_ACT_TUNNEL_DOWN after the seam's
  * tunnel-down poll (`pollState`, the poll's last verdict in

@@ -62,10 +62,6 @@ static void rxPoll(RX *rx, NVME98LS_TABLE *t)
     if (rx->Index == CM_NVLINK_NONE || !rxRead(t, rx->Index, &e)) {
         return;
     }
-    if (e.BusNumber != rx->Bus || e.SlotNumber != rx->Slot) {
-        rx->Ignored++;
-        return;
-    }
     if ((e.Flags & NVME98LS_DOWN_QUIESCED) != 0 &&
         e.LinkGeneration >= rx->Recorded) {
         if (e.AckGeneration != e.LinkGeneration) {
@@ -109,7 +105,7 @@ static void test_cycle(void)
     RX rx;
 
     CmNvlinkTableInit(&table);
-    i = CmNvlinkPublishUp(&table, 4, 0, &o);
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_NEW, "a fresh entry");
     CHECK_EQ(i, 0, "the first entry");
     CHECK_EQ(table.Entry[0].BusNumber, 4, "bus");
@@ -125,7 +121,7 @@ static void test_cycle(void)
     rxPoll(&rx, &table);
     CHECK_EQ(rx.Applied, 0, "UP is not a statement");
 
-    i = CmNvlinkPublishUp(&table, 4, 0, &o);
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_ALREADY, "UP again while up");
     CHECK_EQ(table.Entry[0].LinkGeneration, 1, "the generation unchanged");
     CHECK_EQ(table.Entry[0].Sequence, 2, "and nothing written");
@@ -144,7 +140,7 @@ static void test_cycle(void)
 
     /* A re-plug: a new generation; a receiver of the old one still
      * applies a statement of the newer generation (the header's rule). */
-    i = CmNvlinkPublishUp(&table, 4, 0, &o);
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "the same entry again");
     CHECK_EQ(table.Entry[0].LinkGeneration, 2, "generation 2");
     CHECK(!CmNvlinkAcked(&table, 0), "an UP entry is not acknowledged");
@@ -156,7 +152,7 @@ static void test_cycle(void)
     rxPoll(&rx, &table);
     CHECK_EQ(rx.Applied, 0, "DOWN without QUIESCED is not evidence");
     CHECK(!CmNvlinkAcked(&table, 0), "nothing to acknowledge");
-    i = CmNvlinkPublishUp(&table, 4, 0, &o);
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK_EQ(table.Entry[0].LinkGeneration, 3, "the next UP counts again");
 
     /* An odd sequence is read again later. */
@@ -175,30 +171,28 @@ static void test_full(void)
 
     CmNvlinkTableInit(&table);
     for (k = 0; k < NVME98LS_ENTRIES; k++) {
-        i = CmNvlinkPublishUp(&table, 4 + k, 8, &o);
+        i = CmNvlinkPublishUp(&table, 4 + k, 8, TRUE, &o);
         CHECK_EQ(i, k, "entries in order");
     }
-    i = CmNvlinkPublishUp(&table, 20, 0, &o);
+    i = CmNvlinkPublishUp(&table, 20, 0, TRUE, &o);
     CHECK_EQ(i, CM_NVLINK_NONE, "a ninth function finds no entry");
     CHECK_EQ(o, CM_NVLINK_UP_FULL, "FULL");
     CHECK_EQ(CmNvlinkNextUp(&table, 7, 0), 3, "NextUp by bus");
     CHECK_EQ(CmNvlinkNextUp(&table, 7, 4), CM_NVLINK_NONE, "from past it");
 
     CmNvlinkSetDown(&table, 2, TRUE);
-    i = CmNvlinkPublishUp(&table, 20, 0, &o);
-    CHECK_EQ(o, CM_NVLINK_UP_FULL, "an unacknowledged DOWN_QUIESCED is not reused");
     table.Entry[2].AckGeneration = table.Entry[2].LinkGeneration;
     CmNvlinkSetDown(&table, 5, FALSE);
-    i = CmNvlinkPublishUp(&table, 20, 0, &o);
-    CHECK_EQ(o, CM_NVLINK_UP_NEW, "a reusable entry taken");
-    CHECK(i == 2 || i == 5, "one of the two left UP");
-    CHECK_EQ(table.Entry[i].BusNumber, 20, "reassigned");
-    CHECK_EQ(table.Entry[i].LinkGeneration, 2, "its generation goes on counting");
-    CHECK_EQ(CmNvlinkFind(&table, 4 + i, 8), CM_NVLINK_NONE, "the old key is gone");
-
-    i = CmNvlinkPublishUp(&table, 300, 0, &o);
+    i = CmNvlinkPublishUp(&table, 20, 0, TRUE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_FULL,
+             "an entry once given to a function is never given to another");
+    CHECK_EQ(CmNvlinkFind(&table, 6, 8), 2, "the acknowledged entry keeps its key");
+    i = CmNvlinkPublishUp(&table, 6, 8, FALSE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "its own function comes back to it");
+    CHECK_EQ(table.Entry[2].LinkGeneration, 2, "with the next generation");
+    i = CmNvlinkPublishUp(&table, 300, 0, TRUE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_BAD, "a bus past 255");
-    i = CmNvlinkPublishUp(NULL, 1, 0, &o);
+    i = CmNvlinkPublishUp(NULL, 1, 0, TRUE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_BAD, "no table");
     CHECK(!CmNvlinkSetDown(&table, NVME98LS_ENTRIES, TRUE), "index past the table");
     CHECK(!CmNvlinkAcked(&table, NVME98LS_ENTRIES), "index past the table");
@@ -206,55 +200,68 @@ static void test_full(void)
 
 static void test_verdicts(void)
 {
-    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, XHCI_TBT_POLL_REACHED,
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, TRUE, TRUE, XHCI_TBT_POLL_REACHED,
                                 XHCI_TBT_PORT_DOWN),
              CM_NVLINK_SEND, "ICM: one SHPC member read DOWN");
-    CHECK_EQ(CmNvlinkIcmVerdict(0, XHCI_TBT_SRC_SHPC, XHCI_TBT_POLL_REACHED,
+    CHECK_EQ(CmNvlinkIcmVerdict(0, XHCI_TBT_SRC_SHPC, TRUE, TRUE, XHCI_TBT_POLL_REACHED,
                                 XHCI_TBT_PORT_DOWN),
              CM_NVLINK_NO_SET, "ICM: no set");
-    CHECK_EQ(CmNvlinkIcmVerdict(2, XHCI_TBT_SRC_SHPC, XHCI_TBT_POLL_REACHED,
+    CHECK_EQ(CmNvlinkIcmVerdict(2, XHCI_TBT_SRC_SHPC, TRUE, TRUE, XHCI_TBT_POLL_REACHED,
                                 XHCI_TBT_PORT_DOWN),
              CM_NVLINK_SEVERAL, "ICM: two members");
-    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SWITCH, XHCI_TBT_POLL_REACHED,
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SWITCH, TRUE, TRUE, XHCI_TBT_POLL_REACHED,
                                 XHCI_TBT_PORT_DOWN),
              CM_NVLINK_HARDWARE, "ICM: a hardware port");
-    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_OVERRIDE, XHCI_TBT_POLL_REACHED,
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_OVERRIDE, TRUE, TRUE, XHCI_TBT_POLL_REACHED,
                                 XHCI_TBT_PORT_DOWN),
              CM_NVLINK_HARDWARE, "ICM: the override is not the emulator");
-    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, XHCI_TBT_POLL_GONE,
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, TRUE, TRUE, XHCI_TBT_POLL_GONE,
                                 XHCI_TBT_PORT_GONE),
              CM_NVLINK_NOT_DOWN, "ICM: the bridge gone is not the signal");
-    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, XHCI_TBT_POLL_TIMEOUT,
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, TRUE, TRUE, XHCI_TBT_POLL_TIMEOUT,
                                 XHCI_TBT_PORT_UP),
              CM_NVLINK_NOT_DOWN, "ICM: timed out");
-    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, XHCI_TBT_POLL_REACHED,
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, TRUE, TRUE, XHCI_TBT_POLL_REACHED,
                                 XHCI_TBT_PORT_MIXED),
              CM_NVLINK_NOT_DOWN, "ICM: reached on a reading not DOWN");
 
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 2000),
              CM_NVLINK_SEND, "USB4: closed, known, DOWN, time left");
-    CHECK_EQ(CmNvlinkU4Verdict(FALSE, TRUE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(FALSE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 2000),
              CM_NVLINK_PATH_OPEN, "USB4: PathClosed not proven");
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, FALSE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, FALSE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 2000),
              CM_NVLINK_SEVERAL, "USB4: member unknown");
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_ROUTER,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_ROUTER, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 2000),
              CM_NVLINK_HARDWARE, "USB4: a router-named hardware port");
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_UP, 2000),
              CM_NVLINK_NOT_DOWN, "USB4: still present");
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 99),
              CM_NVLINK_LATE, "USB4: under the delivery bound");
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 100),
              CM_NVLINK_SEND, "USB4: exactly the bound");
-    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC,
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, TRUE,
                                XHCI_TBT_PORT_DOWN, 0),
              CM_NVLINK_LATE, "USB4: no anchor");
+
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, FALSE, TRUE,
+                                XHCI_TBT_POLL_REACHED, XHCI_TBT_PORT_DOWN),
+             CM_NVLINK_HARDWARE, "ICM: an SHPC bridge that is not the emulator's");
+    CHECK_EQ(CmNvlinkIcmVerdict(1, XHCI_TBT_SRC_SHPC, TRUE, FALSE,
+                                XHCI_TBT_POLL_REACHED, XHCI_TBT_PORT_DOWN),
+             CM_NVLINK_UNQUALIFIED, "ICM: an operating system not qualified");
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, FALSE, TRUE,
+                               XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_HARDWARE, "USB4: not the emulator's bridge");
+    CHECK_EQ(CmNvlinkU4Verdict(TRUE, TRUE, XHCI_TBT_SRC_SHPC, TRUE, FALSE,
+                               XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_UNQUALIFIED, "USB4: an operating system not qualified");
 
     CHECK_EQ(CmNvlinkLeft(1000, 1000, 5000), 5000, "nothing spent");
     CHECK_EQ(CmNvlinkLeft(1000, 3000, 5000), 3000, "2 s spent");
@@ -285,7 +292,7 @@ static void test_remove(void)
     ULONG o;
 
     CmNvlinkTableInit(&table);
-    i = CmNvlinkPublishUp(&table, 4, 0, &o);
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK(!CmNvlinkRemoveRequest(&table, i, 0), "sequence 0 refused");
     CHECK(!CmNvlinkRemoveRequest(&table, i, 0x01000000UL), "sequence past 24 bits");
     CHECK(CmNvlinkRemoveRequest(&table, i, 7), "request 7");
@@ -311,18 +318,49 @@ static void test_remove(void)
     CHECK_EQ(table.Entry[i].Flags, NVME98LS_IN_USE | NVME98LS_DOWN_QUIESCED,
              "replaces it");
     CHECK(!CmNvlinkRemoveRequest(&table, i, 9), "no request on an entry not UP");
-    i = CmNvlinkPublishUp(&table, 4, 0, &o);
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK(CmNvlinkRemoveRequest(&table, i, 10), "request 10");
-    CHECK_EQ(CmNvlinkPublishUp(&table, 5, 0, &o), 1, "another function");
+    CHECK_EQ(CmNvlinkPublishUp(&table, 5, 0, TRUE, &o), 1, "another function");
     CHECK_EQ(CmNvlinkRemoveAnswer(NULL, 0, 1), CM_NVLINK_RM_NONE, "no table");
 }
 
+static void test_fresh(void)
+{
+    ULONG i;
+    ULONG o;
+    RX rx;
+
+    CmNvlinkTableInit(&table);
+    i = CmNvlinkPublishUp(&table, 4, 0, TRUE, &o);
+    rxFind(&rx, &table, 4, 0);
+    i = CmNvlinkPublishUp(&table, 4, 0, TRUE, &o);
+    CHECK_EQ(o, CM_NVLINK_UP_AGAIN, "a fresh exposure over UP: a new connection");
+    CHECK_EQ(table.Entry[i].LinkGeneration, 2, "generation 2");
+    CmNvlinkSetDown(&table, i, TRUE);
+    rxPoll(&rx, &table);
+    CHECK_EQ(rx.Applied, 1, "the older instance still applies the newer DOWN");
+
+    /* A statement left in place, then a re-plug the scan could not see
+     * yet: the retirement keeps the binding instance off the old DOWN. */
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "one entry retired");
+    CHECK_EQ(table.Entry[i].Flags, NVME98LS_IN_USE, "IN_USE alone");
+    CHECK_EQ(table.Entry[i].LinkGeneration, 3, "a new generation with no DOWN");
+    rxFind(&rx, &table, 4, 0);
+    CHECK_EQ(rx.Recorded, 3, "the new instance records it");
+    rxPoll(&rx, &table);
+    CHECK_EQ(rx.Applied, 0, "and applies nothing");
+    CHECK_EQ(CmNvlinkRetire(&table, 5), 0, "another bus: nothing");
+    i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
+    CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an UP entry is not retired");
+    CHECK_EQ(CmNvlinkRetire(NULL, 4), 0, "no table");
+}
 int main(void)
 {
     test_layout();
     test_cycle();
     test_full();
     test_verdicts();
+    test_fresh();
     test_record();
     test_remove();
 

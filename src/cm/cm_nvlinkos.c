@@ -51,11 +51,12 @@ static PNVME98LS_TABLE cmNvTable;
 static KSPIN_LOCK cmNvLock;
 static CM_NV_SHADOW cmNvShadow[NVME98LS_ENTRIES];
 static BOOLEAN cmNvNt;
+static BOOLEAN cmNvOsQualified; /* 2000, XP, XP x64 (record 21 7.2)      */
 static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
 static LONG cmNvQueries;
 static ULONG cmNvRecord;        /* 9x: the record was written            */
-static ULONG cmNvRecordTried;
+static ULONG cmNvRecordTried;   /* 0 not yet, 1 being written, 2 done    */
 static ULONG cmNvRecordError;
 static ULONG cmNvRemoveSeq;
 
@@ -76,14 +77,14 @@ static ULONG cmNvNoReceiver;
  * a function that does not answer reads all-ones. PASSIVE_LEVEL. */
 static BOOLEAN cmNvCfg(ULONG bus, ULONG slot, ULONG offset, PULONG value)
 {
-    UCHAR buffer[64];
+    UCHAR buffer[256];
     ULONG need;
     ULONG got;
 
-    need = offset + 4UL;
-    if (need > sizeof(buffer)) {
+    if ((offset & 3UL) != 0 || offset > 252UL) {
         return FALSE;
     }
+    need = offset + 4UL;
     got = HalGetBusData(PCIConfiguration, bus, slot, buffer, need);
     if (got >= need) {
         *value = (ULONG)buffer[offset] | ((ULONG)buffer[offset + 1] << 8) |
@@ -137,8 +138,10 @@ static ULONG cmNvCfgWrite(PVOID context, ULONG bdf, ULONG offset,
 }
 
 /* Reads `bridge` until it reads `want` (XHCI_TBT_PORT_*) or `budgetMs`
- * pass; returns the last verdict. */
-static ULONG cmNvRead(PCM_NHI nhi, ULONG bridge, ULONG want, ULONG budgetMs)
+ * pass; returns the last verdict, and in `*emulator` whether the bridge
+ * read as the emulator's (an SHPC capability, no PCI Express capability). */
+static ULONG cmNvRead(PCM_NHI nhi, ULONG bridge, ULONG want, ULONG budgetMs,
+                      BOOLEAN *emulator)
 {
     XHCI_TBT_CFG io;
     XHCI_TBT_PORT port;
@@ -153,7 +156,9 @@ static ULONG cmNvRead(PCM_NHI nhi, ULONG bridge, ULONG want, ULONG budgetMs)
     start = cmNvNow(nhi);
     for (;;) {
         verdict = XhciTbtPortRead(&io, bridge, &port);
+        *emulator = (BOOLEAN)(port.ShpcCap != 0 && port.PcieCap == 0);
         if (verdict == want || verdict == XHCI_TBT_PORT_NONE ||
+            verdict == XHCI_TBT_PORT_ERROR ||
             CmNvlinkLeft(start, cmNvNow(nhi), budgetMs) <
                 XHCI_TBT_POLL_STEP_MS) {
             return verdict;
@@ -215,6 +220,8 @@ VOID CmNvlinkInit(VOID)
 
     KeInitializeSpinLock(&cmNvLock);
     cmNvNt = IoIsWdmVersionAvailable(1, 0x10);
+    /* WDM 1.10 is 2000, 1.20 XP, 1.30 XP x64 and Server 2003; 6.0 Vista. */
+    cmNvOsQualified = (BOOLEAN)(cmNvNt && !IoIsWdmVersionAvailable(6, 0));
     cmNvTable = (PNVME98LS_TABLE)CmAlloc(sizeof(NVME98LS_TABLE));
     if (cmNvTable == NULL) {
         return;
@@ -329,16 +336,36 @@ static ULONG cmNvWriteRecord(ULONG clock)
  * route's rule, cm_reenum.c). Before any UP, so before nvme98 can look. */
 static VOID cmNvEnsure(PCM_NHI nhi)
 {
-    if (cmNvNt || cmNvTable == NULL || cmNvRecordTried) {
+    KIRQL irql;
+    ULONG mine;
+    ULONG start;
+
+    if (cmNvNt || cmNvTable == NULL) {
         return;
     }
-    cmNvRecordTried = 1;
+    KeAcquireSpinLock(&cmNvLock, &irql);
+    mine = cmNvRecordTried == 0 ? 1UL : 0UL;
+    if (mine) {
+        cmNvRecordTried = 1;
+    }
+    KeReleaseSpinLock(&cmNvLock, irql);
+    if (!mine) {
+        /* Another domain's thread is writing it: no UP of this one before
+         * the record exists (or failed), within a bound. */
+        start = cmNvNow(nhi);
+        while (cmNvRecordTried != 2 &&
+               CmNvlinkLeft(start, cmNvNow(nhi), 2000UL) != 0) {
+            nhi->Host.Sleep(nhi->Host.Context, CM_NVLINK_POLL_MS);
+        }
+        return;
+    }
 #if defined(_X86_)
     cmNvRecordError = cmNvWriteRecord(cmNvNow(nhi));
 #else
     cmNvRecordError = 0xFFFFFFFEUL;
 #endif
     cmNvRecord = cmNvRecordError == 0 ? 1UL : 0UL;
+    cmNvRecordTried = 2;
     CmLogNote(nhi, "cm.nvlink.9x.record",
               (cmNvRecord << 31) | (cmNvRecordError & 0xFFFFUL));
 }
@@ -376,7 +403,7 @@ static BOOLEAN cmNvReceiver(VOID)
 
 /* Obligation 1's scan of one secondary bus: UP for each NVMe function
  * answering there. Returns (functions answering << 16) | entries UP. */
-static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus)
+static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, BOOLEAN fresh)
 {
     ULONG dev;
     ULONG fn;
@@ -407,7 +434,7 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus)
                 ((cls >> 16) & 0xFFFFUL) == CM_NVLINK_CLASS_NVM) {
                 outcome = CM_NVLINK_UP_BAD;
                 KeAcquireSpinLock(&cmNvLock, &irql);
-                index = CmNvlinkPublishUp(cmNvTable, bus, slot, &outcome);
+                index = CmNvlinkPublishUp(cmNvTable, bus, slot, fresh, &outcome);
                 if (index != CM_NVLINK_NONE) {
                     cmNvShadow[index].Owner = nhi;
                     cmNvShadow[index].Bridge = bridge;
@@ -440,11 +467,14 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus)
  * configuration cycle before the scan gives up on it. */
 #define CM_NV_ANSWER_MS 1000UL
 
-ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge)
+ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
 {
     ULONG bus;
     ULONG r;
     ULONG start;
+    ULONG retired;
+    BOOLEAN emulator;
+    KIRQL irql;
 
     if (cmNvTable == NULL) {
         return 0;
@@ -455,9 +485,18 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge)
         CmLogNote(nhi, "cm.nvlink.up.no-bus", bridge);
         return 0;
     }
-    r = cmNvScan(nhi, bridge, bus);
+    if (fresh) {
+        KeAcquireSpinLock(&cmNvLock, &irql);
+        retired = CmNvlinkRetire(cmNvTable, bus);
+        KeReleaseSpinLock(&cmNvLock, irql);
+        if (retired != 0) {
+            CmLogNote(nhi, "cm.nvlink.retired", (bus << 8) | retired);
+        }
+    }
+    r = cmNvScan(nhi, bridge, bus, fresh);
     if ((r >> 16) == 0 && cmNvSource(nhi, bridge) == XHCI_TBT_SRC_SHPC &&
-        cmNvRead(nhi, bridge, XHCI_TBT_PORT_UP, 0) == XHCI_TBT_PORT_UP) {
+        cmNvRead(nhi, bridge, XHCI_TBT_PORT_UP, 0, &emulator) ==
+            XHCI_TBT_PORT_UP) {
         /* A card is present and nothing answers yet (Configuration Request
          * Retry, or the link still training): the UP must precede the
          * enumeration, so wait for it here, briefly. */
@@ -466,7 +505,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge)
                CmNvlinkLeft(start, cmNvNow(nhi), CM_NV_ANSWER_MS) != 0) {
             TbtIcmService(&nhi->Icm);
             nhi->Host.Sleep(nhi->Host.Context, XHCI_TBT_POLL_STEP_MS);
-            r = cmNvScan(nhi, bridge, bus);
+            r = cmNvScan(nhi, bridge, bus, fresh);
         }
         CmLogNote(nhi, "cm.nvlink.up.waited",
                   ((cmNvNow(nhi) - start) << 8) | (r >> 16));
@@ -546,8 +585,10 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
     ULONG reading;
     ULONG state;
     ULONG i;
+    BOOLEAN emulator;
 
     r = &nhi->Reenum;
+    emulator = FALSE;
     if (cmNvTable == NULL) {
         return CM_NVLINK_NO_CHANNEL;
     }
@@ -558,13 +599,13 @@ ULONG CmNvlinkIcmDown(PCM_NHI nhi, ULONG pollState)
     state = XHCI_TBT_POLL_NO_READING;
     if (r->Topo.Tunnels == 1 && r->Topo.Source[0] == XHCI_TBT_SRC_SHPC) {
         reading = cmNvRead(nhi, r->Topo.Set[0], XHCI_TBT_PORT_DOWN,
-                           XHCI_TBT_POLL_BUDGET_MS);
+                           XHCI_TBT_POLL_BUDGET_MS, &emulator);
         state = reading == XHCI_TBT_PORT_DOWN ? XHCI_TBT_POLL_REACHED
                                               : XHCI_TBT_POLL_TIMEOUT;
     }
     verdict = CmNvlinkIcmVerdict(r->Topo.Tunnels,
                                  r->Topo.Tunnels != 0 ? r->Topo.Source[0] : 0,
-                                 state, reading);
+                                 emulator, cmNvOsQualified, state, reading);
     CmLogNote(nhi, "cm.nvlink.icm-down",
               (verdict << 16) | (pollState << 8) | reading);
     if (verdict == CM_NVLINK_NO_SET) {
@@ -587,13 +628,16 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
     ULONG reading;
     ULONG start;
     ULONG left;
+    BOOLEAN emulator;
 
     r = &nhi->Reenum;
+    emulator = FALSE;
     if (cmNvTable == NULL) {
         return CM_NVLINK_NO_CHANNEL;
     }
     if (member == XHCI_TBT_NO_MEMBER || member >= r->Topo.Tunnels) {
-        verdict = CmNvlinkU4Verdict(pathClosed, FALSE, 0, 0, remainingMs);
+        verdict = CmNvlinkU4Verdict(pathClosed, FALSE, 0, FALSE, FALSE, 0,
+                                    remainingMs);
         CmLogNote(nhi, "cm.nvlink.u4-down", verdict << 16);
         cmNvWithheld++;
         return verdict;
@@ -606,11 +650,11 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
         /* Within what is left of the 3 s, the delivery bound kept back. */
         start = cmNvNow(nhi);
         reading = cmNvRead(nhi, bridge, XHCI_TBT_PORT_DOWN,
-                           remainingMs - CM_NVLINK_DELIVERY_MS);
+                           remainingMs - CM_NVLINK_DELIVERY_MS, &emulator);
         left = CmNvlinkLeft(start, cmNvNow(nhi), remainingMs);
     }
     verdict = CmNvlinkU4Verdict(pathClosed, TRUE, r->Topo.Source[member],
-                                reading, left);
+                                emulator, cmNvOsQualified, reading, left);
     CmLogNote(nhi, "cm.nvlink.u4-down", (verdict << 16) | (left << 4) |
                                             (reading & 0xFUL));
     if (cmNvMark(nhi, bridge, verdict) != 0) {
@@ -642,6 +686,10 @@ VOID CmNvlinkAwait(PCM_NHI nhi)
             if (CmNvlinkAcked(cmNvTable, i)) {
                 cmNvShadow[i].Waiting = 0;
                 cmNvAcked++;
+            } else if ((cmNvTable->Entry[i].Flags &
+                        NVME98LS_DOWN_QUIESCED) == 0) {
+                /* Superseded by a later UP or retirement. */
+                cmNvShadow[i].Waiting = 0;
             } else if (!cmNvReceiver()) {
                 /* No nvme98 has the table: no acknowledgement can come. */
                 cmNvShadow[i].Waiting = 0;

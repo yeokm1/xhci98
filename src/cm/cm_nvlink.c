@@ -78,29 +78,43 @@ ULONG CmNvlinkFind(const NVME98LS_TABLE *t, ULONG bus, ULONG slot)
     return CM_NVLINK_NONE;
 }
 
-/* An entry that may be given to another function: never used, or neither
- * UP nor holding a DOWN_QUIESCED nvme98 has not acknowledged (an instance
- * of nvme98 may still be about to read it). */
+/* An entry that may be given to a function: one never used. An entry once
+ * given to (bus, slot) keeps it for the life of the table: an instance of
+ * nvme98 may hold its address and apply any newer generation's
+ * DOWN_QUIESCED written there, whatever function it then named, and
+ * nothing tells this side when that instance is gone. */
 static BOOLEAN cmNvFree(const NVME98LS_ENTRY *e)
 {
-    if ((e->Flags & NVME98LS_IN_USE) == 0) {
-        return TRUE;
+    return (BOOLEAN)((e->Flags & NVME98LS_IN_USE) == 0 && e->Sequence == 0);
+}
+
+ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus)
+{
+    ULONG i;
+    ULONG n;
+    PNVME98LS_ENTRY e;
+
+    n = 0;
+    if (t == NULL) {
+        return 0;
     }
-    if ((e->Flags & NVME98LS_UP) != 0) {
-        return FALSE;
+    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+        e = &t->Entry[i];
+        if ((e->Flags & NVME98LS_IN_USE) == 0 || e->BusNumber != bus ||
+            (e->Flags & NVME98LS_UP) != 0) {
+            continue;
+        }
+        cmNvBegin(e);
+        e->LinkGeneration = e->LinkGeneration + 1;
+        e->Flags = NVME98LS_IN_USE;
+        cmNvEnd(e);
+        n++;
     }
-    if ((e->Flags & NVME98LS_DOWN_QUIESCED) != 0 &&
-        e->AckGeneration != e->LinkGeneration) {
-        return FALSE;
-    }
-    if ((e->Flags & CM_NVLINK_REMOVE_PENDING) != 0) {
-        return FALSE;
-    }
-    return TRUE;
+    return n;
 }
 
 ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
-                        PULONG outcome)
+                        BOOLEAN fresh, PULONG outcome)
 {
     ULONG i;
     ULONG pick;
@@ -113,7 +127,7 @@ ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
     i = CmNvlinkFind(t, bus, slot);
     if (i != CM_NVLINK_NONE) {
         e = &t->Entry[i];
-        if ((e->Flags & NVME98LS_UP) != 0) {
+        if ((e->Flags & NVME98LS_UP) != 0 && !fresh) {
             *outcome = CM_NVLINK_UP_ALREADY;
             return i;
         }
@@ -124,19 +138,11 @@ ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
         *outcome = CM_NVLINK_UP_AGAIN;
         return i;
     }
-    /* A never-used entry first; else the reusable one with the lowest
-     * sequence (the least written, a rough "least recent"). */
     pick = CM_NVLINK_NONE;
     for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        e = &t->Entry[i];
-        if ((e->Flags & NVME98LS_IN_USE) == 0 && e->Sequence == 0) {
+        if (cmNvFree(&t->Entry[i])) {
             pick = i;
             break;
-        }
-        if (cmNvFree(e) &&
-            (pick == CM_NVLINK_NONE ||
-             e->Sequence < t->Entry[pick].Sequence)) {
-            pick = i;
         }
     }
     if (pick == CM_NVLINK_NONE) {
@@ -148,8 +154,6 @@ ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
     cmNvPut(&e->BusNumber, bus);
     cmNvPut(&e->SlotNumber, slot);
     cmNvPut(&e->Reserved[0], 0);
-    /* The generation keeps counting on a reassigned entry, so no reader of
-     * the entry ever sees it go backwards. */
     e->LinkGeneration = e->LinkGeneration + 1;
     e->Flags = NVME98LS_IN_USE | NVME98LS_UP;
     cmNvEnd(e);
@@ -204,7 +208,8 @@ BOOLEAN CmNvlinkAcked(const NVME98LS_TABLE *t, ULONG index)
                      e->AckGeneration == e->LinkGeneration);
 }
 
-ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, ULONG pollState,
+ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, BOOLEAN emulator,
+                         BOOLEAN osQualified, ULONG pollState,
                          ULONG lastVerdict)
 {
     if (members == 0) {
@@ -215,8 +220,11 @@ ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, ULONG pollState,
          * 21 section 6.3): no member's reading speaks for it alone. */
         return CM_NVLINK_SEVERAL;
     }
-    if (source != XHCI_TBT_SRC_SHPC) {
+    if (source != XHCI_TBT_SRC_SHPC || !emulator) {
         return CM_NVLINK_HARDWARE;
+    }
+    if (!osQualified) {
+        return CM_NVLINK_UNQUALIFIED;
     }
     /* REACHED on DOWN only: GONE is the bridge itself reading all-ones, a
      * presence signal, not the stage-3 presence change. */
@@ -228,7 +236,8 @@ ULONG CmNvlinkIcmVerdict(ULONG members, ULONG source, ULONG pollState,
 }
 
 ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
-                        ULONG source, ULONG reading, ULONG remainingMs)
+                        ULONG source, BOOLEAN emulator, BOOLEAN osQualified,
+                        ULONG reading, ULONG remainingMs)
 {
     if (!pathClosed) {
         return CM_NVLINK_PATH_OPEN;
@@ -236,8 +245,11 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
     if (!memberKnown) {
         return CM_NVLINK_SEVERAL;
     }
-    if (source != XHCI_TBT_SRC_SHPC) {
+    if (source != XHCI_TBT_SRC_SHPC || !emulator) {
         return CM_NVLINK_HARDWARE;
+    }
+    if (!osQualified) {
+        return CM_NVLINK_UNQUALIFIED;
     }
     if (reading != XHCI_TBT_PORT_DOWN) {
         return CM_NVLINK_NOT_DOWN;

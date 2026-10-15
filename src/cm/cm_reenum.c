@@ -1383,6 +1383,7 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
     UCHAR b[4];
     ULONG i;
     ULONG index;
+    ULONG written;
     NTSTATUS status;
 
     if (width != 1 && width != 2 && width != 4) {
@@ -1405,6 +1406,7 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
         b[i] = (UCHAR)((value >> (8 * i)) & 0xFFUL);
     }
     status = STATUS_INSUFFICIENT_RESOURCES;
+    written = 0;
     irp = IoAllocateIrp(pdo->StackSize, FALSE);
     if (irp != NULL) {
         irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
@@ -1424,15 +1426,17 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
                                         NULL);
         }
         status = irp->IoStatus.Status;
+        written = (ULONG)irp->IoStatus.Information;
         IoFreeIrp(irp);
     }
     cmRegRelease(f);
-    return (BOOLEAN)NT_SUCCESS(status);
+    /* A short write would leave the select where it was. */
+    return (BOOLEAN)(NT_SUCCESS(status) && written == width);
 }
 
 /* ---- both routes ------------------------------------------------------ */
 /* Every active member re-enumerated by the domain's route. */
-static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
+static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh)
 {
     PCM_REENUM r;
     ULONG i;
@@ -1452,7 +1456,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished)
         }
         /* nvme98's UP for what the call is about to expose (cm_nvlink.h,
          * obligation 1). */
-        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf);
+        (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, fresh);
         if (r->Route == CM_ROUTE_FILTER) {
             if (!cmInvalidate(nhi, i, TRUE)) {
                 /* Lost its filter or its exclusivity since it was read
@@ -1780,7 +1784,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         if (state == XHCI_TBT_POLL_TIMEOUT) {
             r->PollTimeouts++;
         }
-        cmReenumAll(nhi, FALSE);
+        cmReenumAll(nhi, FALSE, TRUE);
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
         state = cmPoll(nhi, action, XHCI_TBT_WANT_DOWN);
         CmLogNote(nhi, "cm.reenum.down.poll", (state << 8) | r->Poll.Last);
@@ -1795,10 +1799,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             (VOID)CmNvlinkIcmDown(nhi, state);
         }
         CmNvlinkAwait(nhi);
-        cmReenumAll(nhi, TRUE);
+        cmReenumAll(nhi, TRUE, FALSE);
     } else {
         CmNvlinkAwait(nhi);
-        cmReenumAll(nhi, TRUE);
+        cmReenumAll(nhi, TRUE, TRUE);
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->SafeEject != 0 &&
         action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -1884,7 +1888,7 @@ VOID CmReenumService(PCM_NHI nhi)
         if (r->Port[i].Missed && (cmFlags(nhi, i) & CM_PORT_ACTIVE) &&
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS) {
             r->Port[i].MissedAt = cmNow(nhi);
-            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf);
+            (VOID)CmNvlinkExpose(nhi, r->Port[i].Bdf, TRUE);
             if (r->Route == CM_ROUTE_FILTER) {
                 if (cmInvalidate(nhi, i, TRUE)) {
                     r->Port[i].Missed = 0;
