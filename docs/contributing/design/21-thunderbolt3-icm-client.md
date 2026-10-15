@@ -1767,12 +1767,15 @@ side.
   is. `HKEY_DYN_DATA`, which lives in memory and would not outlive the
   boot, was the first choice; its root refuses a static key (the VMM
   answered error 5 on 98 SE), and a dynamic key would need a ring-0
-  provider in this image. So the record persists, and the reader must
-  never trust it across boots: it checks that the table's pages are
-  present (`_PageCheckLinRange`) before it reads them, then the signature,
-  the version and the cookie the table repeats; a record left by an
-  earlier boot whose connection manager did not run this time fails one of
-  those. Nothing on `nvme98`'s side reads the record yet.
+  provider in this image. So the record persists, and it is a locator,
+  not proof that the table belongs to this boot: a reader that checks the
+  pages are present (`_PageCheckLinRange`) and the signature, version and
+  cookie reads safely and rules out most stale records, but retained
+  memory at a mapped address could still hold an old table with its old
+  cookie. A current-boot proof - a dynamic key this driver hosts
+  (`_RegCreateDynKey`, its provider in this image and the key deleted at
+  unload) or an independent boot-identity token - is open, for `nvme98`
+  and the owner. Nothing on `nvme98`'s side reads the record yet.
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and

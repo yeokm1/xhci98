@@ -598,12 +598,16 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
         return 0;
     }
     r = cmNvScan(nhi, bridge, bus, fresh);
-    if ((r >> 16) == 0 && cmNvSource(nhi, bridge) == XHCI_TBT_SRC_SHPC &&
-        cmNvRead(nhi, bridge, XHCI_TBT_PORT_UP, 0, &emulator) ==
-            XHCI_TBT_PORT_UP) {
+    if ((r >> 16) == 0 && fresh &&
+        (!cmNvNt ||
+         (cmNvSource(nhi, bridge) == XHCI_TBT_SRC_SHPC &&
+          cmNvRead(nhi, bridge, XHCI_TBT_PORT_UP, 0, &emulator) ==
+              XHCI_TBT_PORT_UP))) {
         /* A card is present and nothing answers yet (Configuration Request
          * Retry, or the link still training): the UP must precede the
-         * enumeration, so wait for it here, briefly. */
+         * enumeration, so wait for it here, briefly. On NT the SHPC slot
+         * says whether a card is there; on 98 SE and ME nothing reads it,
+         * so a fresh exposure of a silent bus always waits the bound. */
         start = cmNvNow(nhi);
         while ((r >> 16) == 0 &&
                CmNvlinkLeft(start, cmNvNow(nhi), CM_NV_ANSWER_MS) != 0) {
@@ -972,6 +976,7 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
     PCM_NHI nhi;
     CM_NV_U4 *u;
     ULONG bridge;
+    ULONG i;
 
     nhi = (PCM_NHI)context;
     u = cmNvU4Of(nhi, TRUE);
@@ -982,18 +987,23 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
     CmLogNote(nhi, "cm.nvlink.u4-up",
               ((action->Port & 0xFFUL) << 16) |
                   (action->Generation & 0xFFFFUL));
-    /* The new establishment's UP now, where the port's member is known:
-     * this hook runs before anything can expose the endpoint, also on the
-     * resume path, before held D0 requests are released. Where it is not
-     * known the seam's exposure publishes it before its re-enumeration.
-     * The seam's later fresh exposure of the same bridge counts the
+    /* The new establishment's UP now: this hook runs before anything can
+     * expose the endpoint, also on the resume path, before held D0
+     * requests are released. The seam's later fresh exposure counts the
      * generation once more; a newer generation with no link-down between
      * is harmless to the reader rule (a DOWN_QUIESCED of a generation at
      * or above the one an instance recorded is still about its link). */
+    bridge = XHCI_TBT_NO_BDF;
     if (action->Port >= 1 && action->Port <= XHCI_TBT_MAX_PORTS) {
         bridge = cmNvU4Bridge(nhi, action->Port);
-        if (bridge != XHCI_TBT_NO_BDF) {
-            (VOID)CmNvlinkExpose(nhi, bridge, TRUE);
+    }
+    if (bridge != XHCI_TBT_NO_BDF) {
+        (VOID)CmNvlinkExpose(nhi, bridge, TRUE);
+    } else {
+        /* The port's bridge is not known: every member of the set, as the
+         * seam's own exposure of this change will do. */
+        for (i = 0; i < nhi->Reenum.Topo.Tunnels; i++) {
+            (VOID)CmNvlinkExpose(nhi, nhi->Reenum.Topo.Set[i], TRUE);
         }
     }
 }
@@ -1029,11 +1039,11 @@ static ULONG cmNvU4Bridge(PCM_NHI nhi, ULONG port)
 }
 
 /*
- * Record 22 section 10.3's anchor: once per pass, for each UP entry of
- * this domain whose port is known by correspondence, one configuration
- * read of the function's ids, its issue time on the core's clock, offered
- * to the core as a presence sample (matched when the ids read are the ones
- * the UP was published for).
+ * Record 22 section 10.3's anchor: once per pass, for each port known by
+ * correspondence with UP entries of this domain behind it, one sample
+ * timestamped on the core's clock before its first read, matched only
+ * when every such entry's function answered with the ids its UP was
+ * published for.
  */
 VOID CmNvlinkService(PCM_NHI nhi)
 {

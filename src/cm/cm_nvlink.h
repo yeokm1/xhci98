@@ -24,11 +24,15 @@
  * REG_BINARY value CM_NVLINK_REC_VALUE, CM_NVLINK_RECORD_BYTES long, laid
  * out as CmNvlinkRecordEncode writes it. HKEY_DYN_DATA, which would not
  * outlive the boot, refuses a static key (the VMM answered error 5 on 98
- * SE, run-39.md), so the record persists, and a reader must never trust
- * it across boots (MD-5): it checks the pages are present
- * (_PageCheckLinRange) before it reads the table, then the signature,
- * version and the cookie the table's Reserved field repeats; a record of
- * an earlier boot whose CM did not run this boot fails one of those.
+ * SE, run-39.md), so the record persists: it is a LOCATOR, not proof that
+ * the table belongs to this boot. Checking that the pages are present
+ * (_PageCheckLinRange) and that signature, version and cookie match makes
+ * the read safe and rules out most stale records, but cannot prove the
+ * current boot: retained memory at a mapped address could still hold an
+ * old table and its old cookie. A current-boot proof - a CM-hosted dynamic
+ * key (_RegCreateDynKey, its provider in this image and deleted at
+ * unload) or an independent boot-identity token - is open, for nvme98 and
+ * the owner (MD-5 says never trust a pointer across boots).
  * nvme98cm.h defines the NT rendezvous
  * only; the 9x record and the REMOVE_PENDING request below are this
  * driver's PROPOSAL for nvme98 to adopt into nvme98cm.h, and nothing on
@@ -313,7 +317,10 @@ ULONG CmNvlinkIcmDown(struct _CM_NHI *nhi, ULONG pollState);
 ULONG CmNvlinkPortDown(struct _CM_NHI *nhi, ULONG member,
                        BOOLEAN pathClosed, ULONG remainingMs);
 
-/* Obligation 3: before the removal call of a tunnel down or a RESYNC. */
+/* Obligation 3: before every call that can start a removal - the seam's
+ * invalidations and Reenumerate_DevNode / Remove_SubTree, every exposure,
+ * and the release of held D0 requests at a resume. Returns at once when
+ * nothing of this domain's is awaited. */
 VOID CmNvlinkAwait(struct _CM_NHI *nhi);
 
 /* Windows 98 SE and ME: the CM-controlled orderly removal of the present
@@ -330,14 +337,18 @@ ULONG CmNvlinkIdleMs(ULONG configured);
  * The USB4 profile (record 22 section 10), registered by the driver half
  * with CmNhiSetU4Hooks where the selection admits that profile, with the
  * NHI as the context. CmNvlinkU4Up (CM_U4_UP_HOOK) records the port's
- * connection generation for the presence sample; the UP itself is the
- * seam's CmNvlinkExpose. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
+ * connection generation for the presence sample and publishes the UP
+ * itself (CmNvlinkExpose of the port's bridge, or of every member when
+ * the correspondence is not known), before anything - the seam's
+ * re-enumeration, or the release of held D0 requests at a resume - can
+ * expose the endpoint. CmNvlinkU4Down (CM_U4_DOWN_HOOK) maps the port to
  * its member by correspondence and calls CmNvlinkPortDown; it returns
  * TBT_U4_STMT_SENT when a DOWN_QUIESCED was written, else
  * TBT_U4_STMT_WITHHELD. CmNvlinkService, once per pass of the thread
- * (CmReenumService), offers the core a presence sample per UP entry of a
- * port known by correspondence (TbtU4PresenceSample, the anchor of
- * section 10.3); it does nothing outside that profile.
+ * (CmReenumService), offers the core one presence sample per port known
+ * by correspondence that has UP entries (TbtU4PresenceSample, the anchor
+ * of section 10.3), timestamped at its first read and matched only when
+ * every entry answered with its own ids; nothing outside that profile.
  */
 VOID CmNvlinkU4Up(PVOID context, const struct _TBT_U4_ACTION *action);
 ULONG CmNvlinkU4Down(PVOID context, const struct _TBT_U4_LINKDOWN *info);

@@ -1195,6 +1195,8 @@ static BOOLEAN cmCfgmgMember(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished)
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     r = &nhi->Reenum;
+    /* No removal while an nvme98 statement awaits its acknowledgement. */
+    CmNvlinkAwait(nhi);
     bridge = cmFindDevnode(nhi, i);
     if (bridge == 0) {
         /* Owed (Missed) and retried by CmReenumService no faster than
@@ -1319,6 +1321,9 @@ static BOOLEAN cmInvalidate(PCM_NHI nhi, ULONG i, BOOLEAN activeOnly)
     PCM_FILTER f;
     PDEVICE_OBJECT pdo;
 
+    /* No invalidation while an nvme98 statement of this domain awaits its
+     * acknowledgement (cm_nvlink.h, obligation 3). */
+    CmNvlinkAwait(nhi);
     if (!cmRegTake(nhi, i, activeOnly, &f, &pdo)) {
         return FALSE;
     }
@@ -2059,6 +2064,9 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
         nhi->Reenum.ResumeFailures++;
     }
     CmLogNote(nhi, "cm.reenum.resumed", ok ? 1UL : 0UL);
+    /* The holds' release (and on failure their invalidations) waits for
+     * any nvme98 statement the resume's own teardown made (cm_nvlink.h). */
+    CmNvlinkAwait(nhi);
     cmReleaseHeld(nhi, (BOOLEAN)!ok);
 }
 
