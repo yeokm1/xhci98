@@ -255,13 +255,13 @@ it ships in `3.0.0.0` with Phases 39 and 40, and `40.final`'s cut comes
 after `41.final`. Its design record is design record 25.
 
 - [x] 41-0.1 the design record (design record 25), reviewed until it converges; the icon `xhcitr\xhcitr.ico` (done 2026-10-16: revision 5, reviewed and revised four times, converged; the icon drawn in the 16 VGA colours)
-- [ ] 41-A.1 `xhcicm.sys`: the query device `\\.\XHCICM<n>` and `IOCTL_XHCICM_QUERY` (record 25 section 4), the router extension cache (link rate and width, link state), the pure builder `cm_query.c` with host tests in `test_cm`
-- [ ] 41-A.2 `tr_core.c`, pure: query and record parsing, descriptor decoding, speed names, the tray event diff, tree keys, the report text; host suite `test_tr`
-- [ ] 41-A.3 the window: tree, details pane, View check boxes, refresh on device change, Save Report, Copy, Properties (record 25 section 3), and the USB branch (section 5)
-- [ ] 41-A.4 the eject from the window: record 24's units fed from the query, the confirmation, the call per system, the answers (record 25 section 6)
-- [ ] 41-A.5 the tray icon: menus, single instance, events and balloons, the tooltip on 98 SE and ME (record 25 section 7)
-- [ ] 41-A.6 install, upgrade and uninstall in XHCIINST (the copy, the Run value, closing a running copy, `/notray`), the packager's `tools\xhcitr\`, the import allowlist, `test-package.ps1` (record 25 sections 8 and 9)
-- [ ] 41-V.1 legs T.1 to T.6 of record 25 section 11 on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x86 (Vista x64 and 7 x64 with the test-signed package)
+- [x] 41-A.1 `xhcicm.sys`: the query device `\\.\XHCICM<n>` and `IOCTL_XHCICM_QUERY` (record 25 section 4), the router extension cache (link rate and width, link state), the pure builder `cm_query.c` with host tests in `test_cm` (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
+- [x] 41-A.2 `tr_core.c`, pure: query and record parsing, descriptor decoding, speed names, the tray event diff, tree keys, the report text; host suite `test_tr` (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
+- [x] 41-A.3 the window: tree, details pane, View check boxes, refresh on device change, Save Report, Copy, Properties (record 25 section 3), and the USB branch (section 5) (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
+- [x] 41-A.4 the eject from the window: record 24's units fed from the query, the confirmation, the call per system, the answers (record 25 section 6) (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
+- [x] 41-A.5 the tray icon: menus, single instance, events and balloons, the tooltip on 98 SE and ME (record 25 section 7) (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
+- [x] 41-A.6 install, upgrade and uninstall in XHCIINST (the copy, the Run value, closing a running copy, `/notray`), the packager's `tools\xhcitr\`, the import allowlist, `test-package.ps1` (record 25 sections 8 and 9) (done 2026-10-16, merged into `p41-xhcitr`; reviewed until converged; `runs/run-41.md`)
+- [ ] 41-V.1 legs T.1 to T.6 of record 25 section 11 on 98 SE, ME, 2000, XP, XP x64, Vista x86 and 7 x86 (Vista x64 and 7 x64 with the test-signed package) (read 2026-10-16, `runs/run-41.md`: 2000, XP, XP x64, Vista x86 and 7 x86 pass; Vista x64 and 7 x64 the tool on the earlier signed drivers (fallback) pass; 98 SE and ME: install, login start, uninstall, the USB tree and the Thunderbolt display pass, but the query device did not answer the tool there, so its eject and balloons are not available on 98 SE and ME (open); the new x64 drivers wait for the re-signed package; the upgrade of a tool in use unread)
 - [ ] 41.final `README.md`, the release notes, `source-files.md`, `docs/README.md`; merged into `3.0.0.0` before `40.final`
 
 Checkpoint: design record 25 converged before 41-A's code; the host

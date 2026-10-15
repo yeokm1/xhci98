@@ -1,0 +1,185 @@
+# Run 41 - XHCITR, the USB and Thunderbolt Tree
+
+Phase 41 of `roadmap-usb4.md`, design record 25. Readings of 2026-10-16 on
+development host A, in QEMU guests, with the emulator binaries pinned for
+the pre-cut legs (`vm\usb4\bin-5ba7f60`): `usb4-generic` (`intel-adl`) with
+the NVMe enclosure, and `tb3-alpine-ridge` (the ICM), each beside a
+`qemu-xhci` carrying plain USB devices (a tablet, a storage stick, a hub
+with a second device behind it). Every guest was a copy-on-write overlay;
+every tool run below that says "standard user" ran under an account in the
+Users group only.
+
+## The build read
+
+- Branch `p41-xhcitr` at `2a19ac33`: `build-driver.cmd all` and
+  `all -amd64` passed every gate; the tools built; the dry cut (x86, TEST
+  label, nvme98 `0.1.1.0`) passed, with `tools\xhcitr\XHCITR.EXE` and
+  `XHCITR64.EXE` in the package.
+- The x86 drivers ran unsigned on 98 SE to 7 x86 and XP x64 (release
+  flavour). On Vista x64 and 7 x64 only the tool was new: the drivers
+  were the test-signed package of 2026-10-16 01:18, whose `xhcicm.sys`
+  has no query device, so those legs read the tool's fallback.
+- The tool's later fixes from these legs (sections below) are in
+  `dedef2ce` and after; they change only `xhcitr\xhcitr.c`.
+
+## The query device before the tool (Windows 2000)
+
+On `usb4-generic` with the NVMe enclosure, the qemu flavour of the query
+device's first complete version: `\\.\XHCICM0` opened with no access
+rights, by a standard user too; the IOCTL answered 411 bytes (pass 168,
+age 30 ms, live ACTIVE, one router, the extension 20 Gbit/s per lane x2,
+link state CL0, read from the lane adapter). A 32-byte buffer failed with
+error 122; 64 bytes returned the header with the size needed; another
+IOCTL failed with error 1; `\\.\XHCICM0\x` failed with error 87. Disabling
+the NHI with a handle open turned every later query into error 1617
+(device removed), with no crash or hang; enabling it again brought
+`XHCICM0` back with a new epoch.
+
+## Legs
+
+| Leg | 98 SE | ME | 2000 | XP | XP x64 | Vista x86 | 7 x86 | Vista x64 | 7 x64 |
+|---|---|---|---|---|---|---|---|---|---|
+| T.1 window, USB tree, descriptors, `/report`, standard user | pass | pass (no USB device) | pass | pass | pass | pass | pass | pass | pass |
+| T.2 Thunderbolt branch | shown, not confirmed (ICM) | shown, not confirmed (ICM, USB4) | pass (USB4) | pass (ICM) | - | pass (ICM) | pass (USB4) | fallback pass | fallback pass |
+| T.3 Safely Remove, window and tray | FAIL: no query answer | - | pass | pass | - | - | pass | eject refused, as designed | eject refused, as designed |
+| T.4 balloons | tooltip not read | none: no query answer | pass | pass | - | - | pass | - | - |
+| T.5 install, login start, uninstall | pass | - | install, login start | install, login start | install | install | pass (in-use upgrade not read) | - | - |
+| T.6 `INSTALL /devices`, `/eject` | pass | - | pass | pass | - | - | pass | - | - |
+
+### Windows 2000 and XP
+
+- Installed with `INSTALL /defaults /yes /nopause` as an administrator
+  (the first run ended "steps left" while Windows' own new-hardware
+  wizards were open, and said so; the second ended "restart"). The tray
+  started at the standard user's login on both.
+- T.1: no prompt; HCD0 (2000), HCD0 and HCD1 (XP); the tablet and stick
+  at High Speed, the hub and the stick behind it at Full Speed; the
+  Thunderbolt branch read "Query device: XHCICM0"; descriptors decoded
+  with their bytes; `/report` exit 0 as the standard user.
+- T.2, 2000 (USB4): the host router active, liveness answering, the last
+  pass 80 ms old; the enclosure USB4 v2.0, approved, "USB4 Gen 3 x2 (40
+  Gbit/s) (read from the lane adapter)", PCIe and USB3 up, the NVMe unit
+  under the PCIe tunnel. XP (ICM): security level 1, firmware 0x60, "20
+  Gbit/s per lane, x2 (reported by the firmware)", PCIe up, USB3 none.
+- T.3 as the standard user, from the window and from the tray: the
+  confirmation listed the NVMe controller and its disk. 2000: "Windows
+  has stopped ... The PCIe tunnel was closed.", the unit left, the router
+  read "PCIe tunnel: closed after an eject". XP: "... You can now unplug
+  the device.", the devnode Code 47, the unplug with no dialog. From the
+  tray the outcome came as a balloon. A re-plug brought the NVMe back
+  started on both.
+- T.4: balloons on plug, disconnection and the eject's outcome on both;
+  the approval balloon was not read (the ICM approved at once).
+- T.6: `INSTALL /devices` and `INSTALL /eject 1` passed on both with the
+  new `xhcicm.sys`.
+
+### XP x64, Vista x86 and 7 x86
+
+- Installed as an administrator (XP x64's first run ended "steps left"
+  with Windows' hub wizard open, the known XP x64 behaviour; the second
+  ended "restart"); the tool and the Run value in place on all three.
+- T.1 on all three as the standard user, medium integrity: no UAC prompt;
+  the USB tree with speeds, Windows' own UHCI labelled "(Windows)";
+  descriptors decoded; `/report` exit 0 (`XHCITR64` on XP x64).
+- T.2: 7 (USB4) as on 2000, "Windows lists it in Safely Remove Hardware
+  too"; Vista (ICM) as on XP.
+- T.3, T.4 and T.6 on 7: as on 2000 (the confirmation listing two
+  devices, "The PCIe tunnel was closed.", the unit gone, balloons on plug,
+  disconnection and the outcome, `INSTALL /eject 1` exit 0).
+- T.5 on 7: the Run value `"C:\Windows\XHCI98\XHCITR.EXE" /tray`; the
+  tray started for the administrator and the standard user; INSTALL again
+  with the same package left the running tool alone ("is current", exit
+  0); uninstall with the tray running closed it, removed the file, the
+  Run value and `%windir%\XHCI98`. The upgrade of a tool in use was not
+  read (no older build to upgrade from).
+
+### Vista x64 and 7 x64 (the tool on the earlier signed drivers)
+
+- T.1 as the standard user: no UAC prompt; the USB tree with speeds,
+  every descriptor decoded; Properties opened Device Manager's dialog; a
+  second start handed over; the tray's Exit ended it.
+- The Thunderbolt branch with no query device: "(not confirmed: eject
+  unavailable)" on the controller, "Source: the registry record (shown
+  only)"; the enclosure, its tunnels and the NVMe unit shown; Safely
+  Remove greyed; `/eject id=` refused with exit 1 and nothing stopped; no
+  crash over plug, unplug and two fast cycles; no balloons (they come
+  from the query only, record 25 section 7.2).
+
+### Windows 98 SE and ME
+
+**The query device did not answer the tool on either system.** Every
+reading shows the controller's state from the registry record, "not
+confirmed: eject unavailable (its query device did not answer for it)",
+although ME's NHI hardware key names `XHCICM0`; it held after a restart
+on 98 SE. So the tool's Safely Remove and its balloons, which come from
+the query device, are not available on 98 SE and ME in this build, and
+record 25 section 13's open question is answered "not as built". XHCIINST
+on the same machine read a confirmed record and stopped the unit.
+
+- T.5 on 98 SE: `INSTALL /defaults /yes /nopause` copied the tool to
+  `C:\WINDOWS\XHCI98\XHCITR.EXE` and wrote the Run value; the tray was
+  there at the next login; `/uninstall` closed the window and the tray
+  and removed the Run value and `C:\WINDOWS\XHCI98`; a re-install brought
+  the tray back at the next login. (98 SE's Device Manager steps were
+  needed as `INSTALL` prints them.)
+- T.1: on 98 SE the USB branch shows both controllers, their root hubs and
+  a tablet at High Speed, with its descriptors decoded (the guest's older
+  `xhci98.sys` had to be updated first; with it the branch was empty); on
+  ME the Thunderbolt controller's xHCI with its root hub, no USB device.
+- T.2: on 98 SE (ICM) and ME (ICM and USB4) the tree shows the NHI, the
+  port and bridge, the enclosure approved, the PCIe tunnel up and the NVMe
+  unit, from the registry record.
+- T.3 on 98 SE: Safely Remove greyed, the tray's menu "No Thunderbolt or
+  USB4 device to stop" (the build before the fallback fix), as follows
+  from the missing query answer.
+- T.6 on 98 SE: `INSTALL /devices` "information from the driver: confirmed
+  now"; `INSTALL /eject 1` "Windows has stopped NVM Express Controller
+  (nvme98). ... You can now unplug the device.", exit 0.
+- On ME `INSTALL /yes` did not see the NHI on the first run and answered
+  No to the Thunderbolt question (as `v-9x` read before); `/thunderbolt`
+  installed it.
+
+## Defects found and fixed in these legs
+
+- The tree pane collapsed to 60 pixels after a minimise and restore, and
+  that width was saved (every system): the layout now skips a minimised
+  window and only a drag changes the stored width.
+- With no query device the tray said there was no device to stop: the
+  unit is now listed greyed with its reason, and `/eject` refuses with it.
+- A double click on the icon also left the left-click menu open.
+- Under the ICM a unit already stopped (Code 47 until the unplug) was
+  still offered for removal: it is now shown stopped, "unplug it".
+- Messages from XHCIINST's texts kept console line breaks in balloons and
+  message boxes; counts said "1 ... devices"; a router's details had two
+  "Link:" lines; string descriptors were not shown in hex.
+
+### The final tool, read again
+
+With the tool of `63086eb1` (every fix above), as the standard user:
+
+- XP with the ICM: after Safely Remove ("Windows has stopped ... You can
+  now unplug the device.") the unit reads "[stopped - unplug it]", its
+  details "Stopped: you can unplug it.", Action and Delete are disabled,
+  the tray item is greyed "(stopped - unplug it)", and `/eject id=`
+  refuses with "cannot be stopped here: stopped - unplug it." (exit 1);
+  on a running unit `/eject id=` stops it (exit 0). Unplug: "was
+  disconnected." balloon, no dialog; re-plug: "[can be stopped]" again.
+  The status bar reads "4 USB devices, 1 Thunderbolt/USB4 device"; the
+  router's rows read "Position: link 1, depth 1" and "Link: 20 Gbit/s per
+  lane, x2 (reported by the firmware)".
+- 2000 with USB4: Safely Remove from the window and from the tray; the
+  answer "Windows has stopped NVM Express Controller (nvme98). The PCIe
+  tunnel was closed." and its second paragraph read with no break inside
+  a sentence, in the message box and the balloon; the router "PCIe
+  tunnel: closed after an eject"; unplug and re-plug as before.
+
+## Noted, not changed
+
+- `INSTALL /devices` says "speed not known" where XHCITR shows the link
+  rate: XHCIINST reads the registry record, which has no rate (record 24
+  section 3.1); XHCITR reads the query device.
+- An install whose only change was the tool says "Please restart
+  Windows" (exit 3).
+- On Vista the tray was once "Not Responding" in tasklist at the first
+  login while devices were still installing, and "Running" at the next
+  sample.
