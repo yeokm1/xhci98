@@ -1245,9 +1245,11 @@ from this driver), the `usb4-emu` cross-check links the model itself
    ADP_CS_4 for every host port, two reads per port (Guide 3.1.1 and 3.4.1
    allow periodic scanning in place of events); for a port with a PCIe
    tunnel up, the host PCIe Down adapter's ADP_PCIE_CS_0, a third; and,
-   where the connection's `nvme98` recipient is cached (record 21 section
-   7.2), one PCI configuration read of that endpoint's vendor and device id
-   through `HalGetBusData`, the presence sample of section 10.3.
+   for each entry of `nvme98`'s link-state table that reads `UP` behind the
+   port's known member (record 21 section 7.2), one PCI configuration read
+   of that function's vendor and device id through `HalGetBusData`, the
+   presence sample of section 10.3 (`cm_nvlinkos.c`'s `CmNvlinkService`,
+   handed to the core as `TbtU4PresenceSample`).
 3. ERR_CONN or ERR_LOCK answering a request to a device router's route
    (Spec 6.4.3.2: a disconnected adapter, or a connected one that is locked
    again, meaning it was disconnected since).
@@ -1353,9 +1355,11 @@ in this one order, everything the `nvme98` statement depends on first
    holds: step 1's requests all succeeded and its read-back matched; step
    2's reading of the port's own known member came clear in time; the
    deadline of section 10.3 has not
-   passed; the recipient is cached; the statement is enabled and qualified
-   on that OS (section 10.2). Otherwise it is suppressed and the reason
-   counted.
+   passed; an entry of the link-state table reads `UP` behind that member;
+   the condition is the qualified one on that OS (section 10.2). Then the
+   entry moves to `DOWN_QUIESCED`, and step 6's removal waits for its
+   acknowledgement (record 21 section 7.2). Otherwise the statement is
+   withheld and the reason counted.
 4. **The host side of the USB3 tunnel** the same way (Guide 5.5.2, its
    first step, on the removed router, skipped): Path Enable 0 with Valid 1
    on the host's USB3 Down adapter, its two host-side entries invalidated
@@ -1427,7 +1431,8 @@ afresh.
 ### 7.5 Re-plug
 
 A re-plugged router is a new router: CONNECTING from the start, a new
-generation, a new discovery context for `nvme98` (record 21 section 7.2),
+generation, a new `UP` with a new link generation in `nvme98`'s table
+before the re-enumeration exposes the endpoint (record 21 section 7.2),
 and the Detect gate of section 6.8 before any path. Nothing is remembered
 about the previous one except what is kept per host port rather than per
 connection: the counters, section 7.3's quarantine, which the new router's
@@ -1781,6 +1786,21 @@ tunnel's PCIe path is closed and the endpoint's link-down reset has
 completed. Under the firmware connection manager neither could be done
 directly. Under this one, this driver opens and closes the paths itself.
 
+The channel is `nvme98`'s link-state table, adopted by `nvme98` on
+2026-10-15 (its MD-6) and described with both profiles in record 21
+section 7.2; this profile reaches it through the two hooks of the driver
+half (`CmNhiSetU4Hooks`, registered where the selection admits this
+profile): the UP hook records each port's connection generation for the
+presence sample, the table's `UP` itself being published by the seam
+before the re-enumeration exactly as for the ICM profile, and the DOWN
+hook, at the core's statement upcall, makes or withholds the statement
+on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
+ME a removal of a present NVMe function that this driver starts itself
+would go through record 21 section 7.2's `REMOVE_PENDING` handshake
+(on the CONFIGMG worker's removal step, `cm_cfgwk.c`); no such removal exists yet (section 10.4's 9x
+half is best effort and every 9x child removal is the seam's removal of a
+vanished function).
+
 ### 10.1 Obligation 1: a link that went down
 
 Every PCIe tunnel this driver builds passes the Detect gate of section 6.8
@@ -1853,8 +1873,8 @@ reading) passes 5 s. So the statement has a deadline of its own:
   the PCI-side reading, then the statement; USB3 cleanup, lane defaults,
   removal and re-enumeration come after.
 - **The anchor** is the time of the last sample that showed the
-  endpoint itself present: the latest configuration read of the cached
-  recipient's function (section 7.1 item 2, one `HalGetBusData` read of
+  endpoint itself present: the latest configuration read of a function
+  whose table entry reads `UP` (section 7.1 item 2, one `HalGetBusData` read of
   its vendor and device id per idle tick) that returned that function's
   ids, for the same connection generation, timestamped on section 5.3's
   clock when the read was **issued**, so the time it spent counts against
@@ -1868,26 +1888,28 @@ reading) passes 5 s. So the statement has a deadline of its own:
   device's internal switch, and an event's age at decode is unbounded (a
   router may hold an event, Spec 6.8; Guide 4.3). The sample rides the
   idle tick, so the anchor is normally no older than one idle period
-  (250 ms, the clamp of record 21 section 8 while the statement is
-  enabled) before the removal is found; a delayed sample only makes it
+  (250 ms, the ceiling of record 21 section 8 while an entry reads `UP`)
+  before the removal is found; a delayed sample only makes it
   older and the allowance below smaller. A connection with no such sample
-  (no recipient cached yet, or no sample taken since) has no anchor and
+  (no entry `UP`, or no sample taken since) has no anchor and
   gets no statement.
 - **The deadline**: the statement, delivery included, must complete
   within 3 s of the anchor, as measured on section 5.3's clock; a maximum
   measured on that clock may expire up to one tick late (55 ms at most on
   these targets), which the 2 s margin to `nvme98`'s 5 s covers. Queueing behind another port's teardown,
-  section 7.3 step 1, the PCI-side reading and the recipient lookup all
+  section 7.3 step 1 and the PCI-side reading all
   spend that one allowance; each step is given only the time left, not
   its own section 5.2 bound; a step that would overrun ends the attempt,
-  and a statement whose delivery would start with less time left than
-  `nvme98`'s stated delivery bound (the record 21 proposal asks for 100
-  ms) is suppressed and counted. Suppressed means MD-1.
+  and a statement with less than 100 ms of it left (the delivery is a
+  table write `nvme98` polls, so that margin is this driver's, kept from
+  the first draft's figure) is withheld and counted. Withheld means MD-1.
+  The acknowledgement wait (up to 5 s) follows the statement and delays
+  only the removal.
 
 | Part | Bound |
 |---|---|
 | from the anchor to the removal being found | normally one idle period; counted against the allowance either way |
-| queueing behind another teardown, section 7.3 step 1, the PCI-side reading, the recipient, delivery | together within what is left of the 3 s, or no statement |
+| queueing behind another teardown, section 7.3 step 1, the PCI-side reading, the table write | together within what is left of the 3 s, or no statement |
 
 So a statement that is delivered at all is delivered within 3 s (plus at
 most one tick of clock quantisation) of the last moment the endpoint was

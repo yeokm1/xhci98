@@ -44,6 +44,7 @@
 #include "cm.h"
 #include "cm_cfgmg.h"
 #include "cm_ports.h"
+#include "cm_nvlink.h"
 
 #if defined(_WIN64) && defined(NO_LEGACY_DRIVERS)
 NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
@@ -648,7 +649,73 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
                                ULONG bridge, ULONG devnode)
 {
     ULONG cr;
+    ULONG id;
+    ULONG entry;
+    ULONG seq;
+    ULONG answer;
+    ULONG start;
+    ULONG k;
+    ULONG n;
+    ULONG cbus;
+    ULONG cslot;
+    ULONG cgen;
+    ULONG egen;
+    ULONG want[CM_PORTS_PATH_MAX];
+    LARGE_INTEGER pause;
+    char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
+    if (!cmWkCurrent(w, i, gen)) {
+        return FALSE;
+    }
+    /* The child's ids, for the nvme98 handshake below (a function still
+     * present with an UP entry published for them). */
+    id = 0;
+    if (CmCfgmgDeviceId(&w->Cfgmg, devnode, text, sizeof(text)) !=
+            CMG_CR_SUCCESS ||
+        !CmPortsIdVenDev(text, sizeof(text), &id)) {
+        id = 0;
+    }
+    if (!cmWkCurrent(w, i, gen)) {
+        return FALSE;
+    }
+    /* The nvme98 entry this very devnode names, established before the
+     * query: an entry of this domain behind this bridge, published for the
+     * devnode's ids, whose function's path - its devfn, then the bridge's
+     * path - is the one the devnode's instance id spells. Not established
+     * (no such entry, two candidates, the bridge's path unread): no
+     * handshake, the removal goes on. */
+    entry = CM_NVLINK_NONE;
+    egen = 0;
+    if (id != 0) {
+        for (k = 0; k < NVME98LS_ENTRIES; k++) {
+            if (!CmNvlinkWkCandidate(w->Nhi, w->Port[i].Bdf, id, k, &cbus,
+                                     &cslot, &cgen)) {
+                continue;
+            }
+            /* The path form needs the bridge's path; the BUS_&DEV_&FUNC_
+             * form is matched by location alone (count 0). */
+            n = 0;
+            if (w->Port[i].PathRead && w->Port[i].PathCount != 0 &&
+                w->Port[i].PathCount < CM_PORTS_PATH_MAX) {
+                want[0] = ((cslot & 0x1FUL) << 3) | ((cslot >> 5) & 0x7UL);
+                for (n = 0; n < w->Port[i].PathCount; n++) {
+                    want[n + 1] = w->Port[i].Path[n];
+                }
+                n = w->Port[i].PathCount + 1;
+            }
+            if (cmWkIdNames(text, XHCI_TBT_BDF(cbus, cslot & 0x1FUL,
+                                               (cslot >> 5) & 0x7UL),
+                            want, n)) {
+                if (entry != CM_NVLINK_NONE) {
+                    entry = CM_NVLINK_NONE;
+                    break;
+                }
+                entry = k;
+                egen = cgen;
+            }
+        }
+    }
+    /* Stopped or superseded during the selection: no query begun. */
     if (!cmWkCurrent(w, i, gen)) {
         return FALSE;
     }
@@ -664,6 +731,39 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
          * again. */
         w->C.Vetoed++;
         return TRUE;
+    }
+    /* nvme98's orderly-removal handshake (MD-5; cm_nvlink.h), for a
+     * function still present: REMOVE_PENDING, then its answer, waited for
+     * here on the worker (no ring is serviced) and ended early when the
+     * request goes stale. The removal below follows whatever the answer:
+     * Windows 98 cannot cancel the query just accepted. */
+    seq = 0;
+    if (entry != CM_NVLINK_NONE && cmWkCurrent(w, i, gen)) {
+        /* Only for a request still current, and only for the identity
+         * established before the query, unchanged since; a stale one
+         * completes the accepted query's removal without asking nvme98
+         * anything. */
+        entry = CmNvlinkWkRequest(w->Nhi, entry, egen, id, &seq);
+    } else {
+        entry = CM_NVLINK_NONE;
+    }
+    if (entry != CM_NVLINK_NONE) {
+        start = cmWkNowTicks();
+        answer = CM_NVLINK_RM_NONE;
+        for (;;) {
+            answer = CmNvlinkWkAnswer(entry, seq);
+            if (answer != CM_NVLINK_RM_NONE || !cmWkCurrent(w, i, gen) ||
+                cmWkSince(start) >= CM_NVLINK_REMOVE_MS) {
+                break;
+            }
+            /* -CM_NVLINK_POLL_MS ms, relative, in 100 ns units, without
+             * 64-bit arithmetic. */
+            pause.LowPart = (ULONG)(0UL - CM_NVLINK_POLL_MS * 10000UL);
+            pause.HighPart = -1;
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+        }
+        CmNvlinkWkWithdraw(entry, seq);
+        cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
     }
     cr = CmCfgmgRemove(&w->Cfgmg, devnode);
     cmWkLog(w, "cm.reenum.9x.remove", cr);
