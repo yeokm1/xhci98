@@ -640,15 +640,28 @@ static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
     /* Not published (failed, or revoked meanwhile): whatever the recovery
      * rebuilt is speculative - its queued UPs are dropped and every entry
      * leaves as UNAVAILABLE, unconditionally; the seam's unavailable
-     * notice stays once per episode. */
-    TbtIcmLost(&nhi->Icm);
-    CmNhiDrainActions(nhi);
-    if (!nhi->Live.Revoked &&
-        (CmLiveReconcileOwed(&nhi->Live) & CM_LIVE_ACT_RECONCILE) != 0 &&
-        nhi->ReenumOn) {
-        CmReenumUnavailable(nhi, episode);
-    }
+     * request stays once per episode. */
+    CmNhiLost(nhi, episode,
+              (BOOLEAN)(!nhi->Live.Revoked &&
+                        (CmLiveReconcileOwed(&nhi->Live) &
+                         CM_LIVE_ACT_RECONCILE) != 0));
     CmLogNote(nhi, "cm.live.state", (episode << 8) | nhi->Live.State);
+}
+
+VOID CmNhiLost(PCM_NHI nhi, ULONG episode, BOOLEAN request)
+{
+    TbtIcmLost(&nhi->Icm);
+    if (nhi->ReenumOn) {
+        CmReenumLossBegin(nhi);
+    }
+    CmNhiDrainActions(nhi);
+    if (nhi->ReenumOn) {
+        if (request) {
+            CmReenumUnavailable(nhi, episode);
+        } else {
+            CmReenumLossEnd(nhi);
+        }
+    }
 }
 
 VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions)
@@ -667,11 +680,7 @@ VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions)
         /* Presence lost, nothing about the endpoint proven: every entry
          * goes as UNAVAILABLE and the seam is told (record 21 section
          * 7.3); no register is touched. */
-        TbtIcmLost(&nhi->Icm);
-        CmNhiDrainActions(nhi);
-        if (nhi->ReenumOn) {
-            CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
-        }
+        CmNhiLost(nhi, CmLiveEpisode(&nhi->Live), TRUE);
     }
     if (actions & CM_LIVE_ACT_VALIDATE) {
         more = CmLiveValidated(&nhi->Live, cmLiveValidate(nhi));
@@ -1553,8 +1562,8 @@ VOID CmNhiBind(PCM_NHI nhi)
         /* Bound, then not answering (cm_live.h): the failure after
          * activation; the rings stop with whatever verification they get. */
         TbtIcmUnbind(&nhi->Icm);
-        TbtIcmLost(&nhi->Icm);
         nhi->Icm.Failed = TRUE;
+        CmNhiLost(nhi, CmLiveEpisode(&nhi->Live), TRUE);
         rc = TBT_E_HW;
     }
     if (rc == TBT_OK) {

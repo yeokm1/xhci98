@@ -1315,14 +1315,15 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
          * member the rediscovery finds (cmDiscoverAndList). */
         r->DebtPending = 1;
     }
-    if (action->Why == TBT_ICM_WHY_UNAVAILABLE &&
+    if ((r->LossDrain || action->Why == TBT_ICM_WHY_UNAVAILABLE) &&
         r->Route == CM_ROUTE_CONFIGMG) {
-        /* The host interface lost (CmReenumUnavailable): counted, ejects
+        /* The host interface lost (CmReenumLossBegin): counted, ejects
          * voided above, and nothing else - no bridge polled, no request
-         * posted. The worker's CONTROLLER_UNAVAILABLE request is this
-         * episode's reconciliation; an ordinary scan or re-enumeration
-         * here would read the bridge headers the loss may have reset, or
-         * run ahead of its removal. */
+         * posted, whatever the action's reason (one queued before the
+         * loss included). The worker's CONTROLLER_UNAVAILABLE request is
+         * this episode's reconciliation; an ordinary scan or
+         * re-enumeration here would read the bridge headers the loss may
+         * have reset, or run ahead of its removal. */
         CmLogNote(nhi, "cm.reenum.9x.unavailable.action",
                   (action->Kind << 8) | action->Why);
         return;
@@ -1706,11 +1707,22 @@ VOID CmReenumStop(PCM_NHI nhi)
  * asks for nothing. Nothing here states quiescence: no endpoint
  * notification is made (presence lost only). IRQL: PASSIVE_LEVEL.
  */
+VOID CmReenumLossBegin(PCM_NHI nhi)
+{
+    nhi->Reenum.LossDrain = 1;
+}
+
+VOID CmReenumLossEnd(PCM_NHI nhi)
+{
+    nhi->Reenum.LossDrain = 0;
+}
+
 VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
 {
     PCM_REENUM r;
 
     r = &nhi->Reenum;
+    r->LossDrain = 0;
     CmLogNote(nhi, "cm.reenum.unavailable", episode);
     if (r->Route != CM_ROUTE_CONFIGMG || r->Wk == NULL || r->Reenum == 0) {
         return;

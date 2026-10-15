@@ -392,6 +392,11 @@ VOID CmNhiBind(PCM_NHI nhi);
 VOID CmNhiStopWork(PCM_NHI nhi);
 VOID CmNhiPollPass(PCM_NHI nhi);
 VOID CmNhiDrainActions(PCM_NHI nhi);
+/* The ICM client's loss (TbtIcmLost), its actions drained inside the
+ * re-enumeration seam's loss bracket (CmReenumLossBegin), then the seam's
+ * CONTROLLER_UNAVAILABLE request when `request` (once per episode), else
+ * the bracket closed. PASSIVE_LEVEL, the connection-manager thread. */
+VOID CmNhiLost(PCM_NHI nhi, ULONG episode, BOOLEAN request);
 BOOLEAN CmNhiSetBusMaster(PCM_NHI nhi, BOOLEAN on);
 VOID CmNhiQuiesce(PCM_NHI nhi);
 VOID CmNhiPlatformRelease(PCM_NHI nhi, BOOLEAN mayClear);
