@@ -1251,7 +1251,12 @@ on the connection-manager thread, so a second announcement can wait behind
 an earlier command (up to that command's retries) only while the firmware
 is not answering. No setting puts a user action between an announcement
 and its approve: `XhciCmApprove` 1 approves at once, and 0 never approves,
-which on the P14s leaves a USB4 device to its USB fallback.
+which on the P14s leaves a USB4 device to its USB fallback. A pending
+approval belongs to its connection: an unplug, a re-plug or mailbox `0x06`
+cancels it, and the firmware then answers the stale approve with the error
+flag. That answer is the error-flag case above - one `approve-failed`
+line, no retry, the instance not failed - and the disconnect that follows
+removes the entry (host-tested in `test	est_tbt_icm.c`).
 
 What 1 means for the user is written plainly in the release notes: any
 Thunderbolt 3 device plugged into the machine gets PCIe access, which on a
