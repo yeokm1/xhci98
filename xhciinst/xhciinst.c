@@ -1766,7 +1766,10 @@ static void ask_values(void)
             (instValues[v].CautionMask == 0 || (instValues[v].CautionMask & m) != 0)) {
             out("  NOTE: %s\n", instValues[v].Caution);
         }
-        if (instValues[v].Inf == INST_INF_CM) {
+        /* Record 23 section 8.4 (decision D12): the two values whose
+         * default approves devices until the restart; not XhciCmSafeEject. */
+        if (inst_eq(instValues[v].Name, "XhciCmMode") ||
+            inst_eq(instValues[v].Name, "XhciCmApprove")) {
             for (i = 0; i < devCount; i++) {
                 if (value_target(&devs[i], v) &&
                     devs[i].Action == INST_ACT_INSTALL) {
