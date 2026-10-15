@@ -212,6 +212,7 @@ static int changedReboot[INST_MAX_CHANGED];
 static int changedCount;
 static int walkErrors;      /* 98/ME: entries the scan could not read */
 static int tunnelChanged;   /* 2000: a port's first filter install succeeded */
+static int tunnelHint;      /* ... and a tunnel device then failed its check */
 static int was_changed(const char *id);
 static int was_installed(const char *id);
 static int result_ok(const DEVREC *d, int inf);
@@ -2995,8 +2996,10 @@ static int install_inf(int inf, int controllers)
                 (inst_msz_has(devs[j].Hw, devs[j].HwBytes, hwid) ||
                  inst_msz_has(devs[j].Compat, devs[j].CompatBytes, hwid))) {
                 int c;
-                if (idle_filtered_port(&devs[j], inf)) {
-                    /* Reached but not a target: no evidence of an install. */
+                if (flags == 0 && idle_filtered_port(&devs[j], inf)) {
+                    /* An unforced call may leave it as it is: reached, but
+                     * no evidence of an install. A forced call reinstalls
+                     * it, so it stays a target and is checked. */
                     devs[j].Done = 1;
                     note_changed(&devs[j], 0);
                     continue;
@@ -3220,8 +3223,9 @@ static void check_results(void)
         if (!d->Present || d->Inf < 0) {
             continue;
         }
-        out("  %s: %s %s%s", d->Desc[0] ? d->Desc : d->Id,
-            d->Service[0] ? d->Service : "no driver", d->VersionText,
+        out("  %s: %s%s%s%s", d->Desc[0] ? d->Desc : d->Id,
+            d->Service[0] ? d->Service : "no driver",
+            d->VersionText[0] ? " " : "", d->VersionText,
             (d->Status & INST_DN_STARTED) ? ", started" : "");
         if (d->Problem != 0) {
             out(", problem code %lu", (unsigned long)d->Problem);
@@ -3242,20 +3246,10 @@ static void check_results(void)
             }
         }
         if (d == NULL || !d->Present) {
-            if (tunnelChanged &&
-                (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF)) {
-                /* On Windows 2000 a tunnel port's first filter install took
-                 * the switch's subtree away until the restart (read on the
-                 * 2000 leg, 2026-10-15); it may come back then. */
-                out("  %s is not present after a tunnel port's filter "
-                    "install; it may come\n  back after a restart: restart, "
-                    "then run INSTALL.BAT again.\n", changedId[c]);
-                flagRestart = 1;
-                flagSteps = 1;
-            } else {
-                out("  %s: gone after its install.\n", changedId[c]);
-                flagFailed = 1;
-            }
+            out("  %s: gone after its install.\n", changedId[c]);
+            flagFailed = 1;
+            tunnelHint |= tunnelChanged &&
+                (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF);
             continue;
         }
         ctrl = changedInf[c] == INST_INF_XHCI && is_controller(d);
@@ -3278,18 +3272,6 @@ static void check_results(void)
         }
         if (d->Problem == INST_PROB_NEED_RESTART) {
             flagRestart = 1;
-        } else if (tunnelChanged && changedInf[c] == INST_INF_CMF &&
-                   d->Problem == 12UL && inst_eq(d->Service, "pci") &&
-                   inst_msz_has(d->Upper, d->UpperBytes, "xhcicm") &&
-                   d->VersionState == INST_VS_HAVE &&
-                   inst_ver_cmp(d->Version, pkgVersion) == 0) {
-            /* The filter is in place; on the 2000 leg (2026-10-15) the port
-             * started after the restart. It may, not must. */
-            out("  %s has the filter but reports problem 12 (resources); "
-                "it may start after\n  a restart: restart, then run "
-                "INSTALL.BAT again.\n", d->Desc);
-            flagRestart = 1;
-            flagSteps = 1;
         } else if (envNow.Major == 6 && INST_MY_ARCH == INST_ARCH_X86 && ctrl &&
                    (d->Problem == 28UL || d->Problem == 1UL || d->Problem == 0) &&
                    changedReboot[c]) {
@@ -3307,7 +3289,20 @@ static void check_results(void)
             out("  %s did not end as installed (problem %lu, %s).\n",
                 d->Desc, (unsigned long)d->Problem, d->VersionText);
             flagFailed = 1;
+            tunnelHint |= tunnelChanged &&
+                (changedInf[c] == INST_INF_CM || changedInf[c] == INST_INF_CMF);
         }
+    }
+    if (tunnelHint) {
+        /* Read on the 2000 leg (2026-10-15): after a port's first filter
+         * install the upstream port showed Code 12 and the switch's other
+         * devices were gone until the restart, all started after it. A
+         * hint, not a verdict: the failure stands. */
+        out("  On Windows 2000 a tunnel port's first filter install can take "
+            "the Thunderbolt\n  switch's devices away until a restart. "
+            "Restart, then run INSTALL.BAT again;\n  it reads them "
+            "again.\n");
+        flagRestart = 1;
     }
     /* The devices this run did not change are read too: a current device
      * already in trouble is not a success to report. */

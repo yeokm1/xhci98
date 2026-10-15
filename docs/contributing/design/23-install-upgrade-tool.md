@@ -641,15 +641,15 @@ read too: one of this package's devices with a problem code is reported -
 "disabled in Device Manager" for Code 22, which is no failure, and
 otherwise "already had problem code N" with the steps flag set, so a
 current controller already at Code 10 is never reported as a success.
-On Windows 2000 only, once a port's first filter install (the unforced
-call) succeeded in the run - the case read on the 2000 leg, 2026-10-15,
-where the upstream port showed Code 12 and its children were gone until
-the restart, all started after it - an NHI or port of this package gone
-after its install, or a port that carries the filter at the package
-version with Code 12, sets the restart and steps flags ("it may come back
-after a restart: restart, then run INSTALL.BAT again") instead of a
-failure; the next run reads whether it did. Everywhere else such a device
-is a failure.
+A device gone after its install, or left with a problem code, is a
+failure everywhere. One reading adds a hint, not an excuse: on Windows
+2000 a port's first filter install (the unforced call) took the
+Thunderbolt switch's other devices away and left the upstream port at
+Code 12 until the restart, all started after it (the 2000 leg,
+2026-10-15). So when such a call succeeded in the run and an NHI or port
+of this package then fails its check, the tool adds, once, that the
+switch's devices can come back after a restart, and asks for the restart
+and a second run, which reads them as any run does; the exit stays 2.
 Anything else is reported per device:
 
 | After | Meaning | Exit |
