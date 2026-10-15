@@ -1232,7 +1232,8 @@ host-tested case by case):
 
 The text says, in plain terms, that a device plugged into that port is then
 approved automatically and can reach the computer's memory, names
-`XhciCmApprove`, and points to README "Thunderbolt and USB4 support";
+`XhciCmApprove`, and points to `tools\xhciinst\readme.txt`, which is in the
+package and says what the approval means and how to turn it off;
 where a Thunderbolt driver is already installed it adds that N keeps it as
 it is.
 
@@ -1250,7 +1251,16 @@ it is.
   staged in the driver store, not copied into the local copy (so no wizard
   and no store offers them), and no `XhciCm*` question asked. A
   Thunderbolt driver already installed is neither removed nor updated:
-  its devices are simply not part of the run.
+  its devices are simply not part of the run, and its group gets no
+  verdict (a newer or unreadable xhcicm makes no step of a run that did
+  not include it). The 98 and ME steps then name only the UAS disk as
+  finding its driver in the copy.
+- The local copy's name follows its content, so the two answers make two
+  copies; an unfinished `/restage` recorded under either is the same
+  package's, and one that still owes the Thunderbolt INFs is refused
+  under N with "answer Y (or use /thunderbolt) to finish it". "The
+  Thunderbolt driver is staged" is printed only when this run staged
+  `xhcicm.inf`.
 
 
 ### 9.1 The warning
