@@ -3140,6 +3140,7 @@ static void test_asm2464(void)
     TBT_U4_CONFIG c;
     int dev;
     int dev2;
+    int dev3;
     int lane;
     const TBT_U4_PORT *p;
     unsigned long before;
@@ -3248,11 +3249,12 @@ static void test_asm2464(void)
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     p = TbtU4Port(&g_cm, 1);
     CHECK_EQ(g_cm.Counters.DownstreamPortResets, 1, "asm2464 cleaning: one port reset");
-    CHECK(g_fab.R[dev].DprReleasedAtUs > before &&
+    /* Read before any poll: the start's own wait for CL0 covered it. */
+    CHECK(!g_fab.R[dev].ReconnectPending && g_fab.R[dev].ReconnectedAtUs != 0 &&
+          g_fab.R[dev].DprReleasedAtUs > before &&
+          g_fab.R[dev].ReconnectedAtUs > g_fab.R[dev].DprReleasedAtUs &&
           g_fab.R[dev].ReconnectedAtUs - g_fab.R[dev].DprReleasedAtUs >= 594000UL,
-          "asm2464 cleaning: the link back 594 ms after the release");
-    CHECK(g_fab.NowUs >= g_fab.R[dev].ReconnectedAtUs,
-          "asm2464 cleaning: the wait for CL0 outlasted it within the start");
+          "asm2464 cleaning: the link back 594 ms after the release, inside the start");
     poll(&g_cm, &g_fab, 3);
     CHECK(state(&g_cm, 1) == TBT_U4_UP && !p->Pcie.Preserved && fabPcieUp(&g_fab, 1),
           "asm2464 cleaning: built afresh");
@@ -3285,6 +3287,33 @@ static void test_asm2464(void)
     poll(&g_cm, &g_fab, 3);
     CHECK(!g_cm.Links[0].Used, "asm2464 at depth 2: its removal noticed");
     CHECK_EQ(g_fab.R[dev2].AdpTouches[4], 0, "asm2464 at depth 2: nor at its removal");
+
+    /* The mask of a parent below depth 1 at a removal (tbtU4RemoveLink):
+     * a generic router at depth 2 whose DROM marks its USB3 Up adapter 6
+     * unused, a router at depth 3 behind it removed - the parent's side
+     * torn down without touching adapter 6. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    dev2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    dev3 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabDromMarkUnused(&g_fab, dev2, 6);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, dev, dev2, 1);
+    fabPlugChild(&g_fab, dev2, dev3, 1);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(g_cm.Links[0].Used && g_cm.Links[1].Used && g_cm.Links[0].ChildDromRead &&
+          g_cm.Links[0].ChildDromUnused[0] == (1UL << 6),
+          "depth 3: two links, the depth-2 router's unused adapter kept");
+    CHECK_EQ(g_fab.R[dev2].AdpTouches[6], 0, "depth 3: adapter 6 never addressed at discovery");
+    before = g_cm.Counters.LinksRemoved;
+    fabUnplugChild(&g_fab, dev2);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(g_cm.Counters.LinksRemoved == before + 1 && g_cm.Links[0].Used && !g_cm.Links[1].Used,
+          "depth 3: its removal noticed, the depth-2 link kept");
+    CHECK_EQ(g_fab.R[dev2].AdpTouches[6], 0, "depth 3: nor at the removal, on the parent");
 
     /* The rule is the DROM's, not the device's: a USB4 (revision 3) DROM
      * marking the generic device router's USB3 Up adapter 6 unused stops
