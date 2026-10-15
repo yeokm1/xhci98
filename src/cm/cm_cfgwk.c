@@ -553,26 +553,75 @@ static VOID cmWkKeepPresent(PCM_CFGWK w, ULONG i, const ULONG *children,
 
 /*
  * A prune walk of member i alone (CmCfgwkPrune), outside any request's
- * operation (it only observes, so only a stop ends it): TRUE when the
- * walk was complete and the set pruned.
+ * operation (it only observes, so only a stop ends it). The whole sibling
+ * chain is walked (up to CM_WK_WALK_NODES), noting which known handles
+ * are present, so a bridge with more children than the known set holds
+ * still completes. TRUE when the chain ended normally and the set was
+ * pruned.
  */
 static BOOLEAN cmWkPrune(PCM_CFGWK w, ULONG i)
 {
+    CM_WK_PORT *p;
     ULONG bridge;
-    ULONG children[CM_WK_KNOWN];
+    ULONG present[CM_WK_KNOWN];
     ULONG count;
-    BOOLEAN complete;
+    ULONG node;
+    ULONG nodes;
+    ULONG cr;
+    ULONG k;
 
+    p = &w->Port[i];
     bridge = cmWkFindDevnode(w, i);
     if (bridge == 0 || !cmWkGo(w)) {
         return FALSE;
     }
-    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
-    if (!complete || !cmWkGo(w)) {
+    count = 0;
+    nodes = 0;
+    cr = CmCfgmgChild(&w->Cfgmg, bridge, &node);
+    if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+        node = 0;
+    } else if (cr != CMG_CR_SUCCESS) {
         return FALSE;
     }
-    cmWkKeepPresent(w, i, children, count);
+    while (node != 0) {
+        if (++nodes > CM_WK_WALK_NODES) {
+            return FALSE;
+        }
+        for (k = 0; k < p->KnownCount; k++) {
+            if (p->Known[k] == node && count < CM_WK_KNOWN) {
+                present[count++] = node;
+                break;
+            }
+        }
+        if (!cmWkGo(w)) {
+            return FALSE;
+        }
+        cr = CmCfgmgSibling(&w->Cfgmg, node, &node);
+        if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            break;
+        }
+        if (cr != CMG_CR_SUCCESS) {
+            return FALSE;
+        }
+    }
+    if (!cmWkGo(w)) {
+        return FALSE;
+    }
+    cmWkKeepPresent(w, i, present, count);
     return TRUE;
+}
+
+/* TRUE while member i owes no prune walk (read now, under the lock): no
+ * re-enumeration of the member is made before its debt is paid. */
+static BOOLEAN cmWkPruneClear(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN clear;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    clear = (BOOLEAN)((w->PruneOwed & (1UL << i)) == 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return clear;
 }
 
 /*
@@ -708,6 +757,11 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     }
     if (!cmWkCurrent(w, i, gen)) {
         return TRUE;
+    }
+    if (!cmWkPruneClear(w, i)) {
+        /* A prune posted during the operation: paid first (failed,
+         * retried). */
+        return FALSE;
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
     w->C.Calls++;
@@ -852,8 +906,6 @@ static VOID cmWkThread(PVOID context)
     ULONG retried;
     ULONG done;
     ULONG prune;
-    ULONG owed;
-    ULONG pruned;
     ULONG pruneSeq;
     ULONG i;
     BOOLEAN open;
@@ -891,7 +943,6 @@ static VOID cmWkThread(PVOID context)
             w->MarkFrom = cmWkNowTicks();
         }
         prune = w->PruneOwed;
-        owed = prune;
         pruneSeq = w->PruneSeq;
         if (prune != 0 && pruneSeq == w->PruneTried &&
             cmWkSince(w->PruneAt) < CM_WK_RETRY_MS) {
@@ -914,12 +965,11 @@ static VOID cmWkThread(PVOID context)
         failedVanish = 0;
         done = 0;
         go = TRUE;
-        pruned = 0;
         if (w->OpenState == CM_CFGWK_OPEN_OK && prune != 0) {
             /* The prune debt is paid first, before any re-enumeration of
              * this pass can bring a child back under a freed handle; it
-             * is cleared only by a complete walk (below, under the lock,
-             * and only if no newer prune came meanwhile). */
+             * is cleared only by a complete walk, and only if no newer
+             * prune came meanwhile. */
             for (i = 0; i < w->Members && go; i++) {
                 if ((prune & (1UL << i)) == 0) {
                     continue;
@@ -927,7 +977,12 @@ static VOID cmWkThread(PVOID context)
                 cmWkLeave(w);
                 go = cmWkEnter(w);
                 if (go && cmWkPrune(w, i)) {
-                    pruned |= 1UL << i;
+                    /* Paid, unless a newer prune came during the walk. */
+                    KeAcquireSpinLock(&w->Lock, &irql);
+                    if (w->PruneSeq == pruneSeq) {
+                        w->PruneOwed &= ~(1UL << i);
+                    }
+                    KeReleaseSpinLock(&w->Lock, irql);
                 }
             }
         }
@@ -937,9 +992,10 @@ static VOID cmWkThread(PVOID context)
                     !cmWkCurrent(w, i, gen[i])) {
                     continue;
                 }
-                if ((owed & ~pruned & (1UL << i)) != 0) {
-                    /* Its prune walk is still owed: no re-enumeration
-                     * before it, tried again later. */
+                if (!cmWkPruneClear(w, i)) {
+                    /* Its prune walk is still owed (read now, a newer
+                     * prune included): no re-enumeration before it,
+                     * tried again later. */
                     failed |= 1UL << i;
                     failedVanish |= vanish & (1UL << i);
                     continue;
@@ -980,9 +1036,6 @@ static VOID cmWkThread(PVOID context)
 
         KeAcquireSpinLock(&w->Lock, &irql);
         w->InCall = 0;
-        if (w->PruneSeq == pruneSeq) {
-            w->PruneOwed &= ~pruned;
-        }
         for (i = 0; i < w->Members; i++) {
             /* A failure is owed only while its request is still the
              * member's latest: a newer post redoes it anyway. */
