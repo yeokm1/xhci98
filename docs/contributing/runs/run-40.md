@@ -346,7 +346,8 @@ publishes the new establishment's `UP` before anything can expose the
 endpoint (its member by correspondence, or every exclusive member when
 the correspondence is not known); the DOWN hook makes the statement only
 with `TBT_U4_LINKDOWN.PathClosed`, the port's member known, that member
-the emulator's bridge (1B36h above it, SHPC, no PCI Express capability),
+the emulator's bridge (1B36h on the bridge itself or on the bus-0 bridge
+whose range holds it, SHPC, no PCI Express capability),
 an admitted operating system (2000 x86, XP x64), the slot read empty
 within what is left of the 3 s, and at least 100 ms left; the seam waits
 for the acknowledgement before the removal. `CmNvlinkService` gives the

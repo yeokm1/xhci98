@@ -668,7 +668,7 @@ below are the host trace's, from T0 = the tunnel gate closing.
 callback-object imports loaded and bound (`cm.bind=0`,
 `cm.nvlink.9x=00000000`), which is the import gate's authoritative check
 for `ExCreateCallback`, `ExRegisterCallback` and `ExUnregisterCallback`
-on 98 SE (their only Windows 98 evidence is the name in `ntkern.vxd`).
+on 98 SE (their previous Windows 98 evidence was static: the name in `ntkern.vxd`).
 The first record build put the record under `HKEY_DYN_DATA`; the VMM's
 `_RegCreateKey` answered error 5 there (`cm.nvlink.9x.record=00000005`),
 so the record moved to `HKLM\System\CurrentControlSet\Services\nvme98`,
