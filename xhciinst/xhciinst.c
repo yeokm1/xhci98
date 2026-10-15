@@ -3734,6 +3734,7 @@ static void check_results(void)
     int c;
     int i;
     char state[160];
+    int win2000 = envNow.Nt && envNow.Major == 5 && envNow.Minor == 0;
 
     out("\nAfterwards:\n");
     for (i = 0; i < devCount; i++) {
@@ -3759,6 +3760,12 @@ static void check_results(void)
             }
         }
         if (d == NULL || !d->Present) {
+            if (inst_tunnel_restart(win2000, tunnelChanged, changedInf[c], 1,
+                                    0)) {
+                out("  %s: gone until the restart.\n", changedId[c]);
+                tunnelHint = 1;
+                continue;
+            }
             out("  %s: gone after its install.\n", changedId[c]);
             flagFailed = 1;
             tunnelHint |= tunnelChanged &&
@@ -3798,6 +3805,11 @@ static void check_results(void)
             flagSteps = 1;
         } else if (changedReboot[c] && d->Problem == 0) {
             /* The old release runs until the restart its install asked for. */
+        } else if (inst_tunnel_restart(win2000, tunnelChanged, changedInf[c],
+                                       0, d->Problem)) {
+            out("  %s: Code 12 until the restart.\n", d->Desc[0] ? d->Desc :
+                d->Id);
+            tunnelHint = 1;
         } else {
             inst_state_text(state, sizeof(state), d->Service, d->VersionText,
                             (d->Status & INST_DN_STARTED) != 0, d->Problem);
@@ -3811,12 +3823,14 @@ static void check_results(void)
     if (tunnelHint) {
         /* Read on the 2000 leg (2026-10-15): after a port's first filter
          * install the upstream port showed Code 12 and the switch's other
-         * devices were gone until the restart, all started after it. A
-         * hint, not a verdict: the failure stands. */
-        out("  On Windows 2000 a tunnel port's first filter install can take "
-            "the Thunderbolt\n  switch's devices away until a restart. "
-            "Restart, then run INSTALL.BAT again;\n  it reads them "
-            "again.\n");
+         * devices were gone until the restart, all started after it. The
+         * owner (2026-10-15): the filter goes on both ports and the run asks
+         * for that restart; Code 12 or a device gone there is the restart's
+         * to clear, any other problem stays a failure. */
+        out("  On Windows 2000 a tunnel port's first filter install shows Code "
+            "12 on the\n  upstream port, and takes the Thunderbolt switch's "
+            "devices away, until a\n  restart. Restart Windows; INSTALL.BAT run "
+            "again afterwards reads them.\n");
         flagRestart = 1;
     }
     /* The devices this run did not change are read too: a current device
@@ -3829,6 +3843,16 @@ static void check_results(void)
         }
         if (d->Problem == 22UL) {
             out("  %s is disabled in Device Manager.\n", d->Desc);
+        } else if (inst_tunnel_restart(win2000, tunnelChanged, d->Inf, 0,
+                                       d->Problem)) {
+            out("  %s: Code 12 until the restart.\n", d->Desc);
+            if (!tunnelHint) {
+                out("  On Windows 2000 a tunnel port's first filter install "
+                    "shows Code 12 on the\n  upstream port until a restart. "
+                    "Restart Windows.\n");
+                tunnelHint = 1;
+            }
+            flagRestart = 1;
         } else {
             out("  %s already had problem code %lu, and still has.\n",
                 d->Desc, (unsigned long)d->Problem);

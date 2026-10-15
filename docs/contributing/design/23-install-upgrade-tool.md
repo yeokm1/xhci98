@@ -696,14 +696,19 @@ read too: one of this package's devices with a problem code is reported -
 otherwise "already had problem code N" with the steps flag set, so a
 current controller already at Code 10 is never reported as a success.
 A device gone after its install, or left with a problem code, is a
-failure everywhere. One reading adds a hint, not an excuse: on Windows
-2000 a port's first filter install (the unforced call) took the
-Thunderbolt switch's other devices away and left the upstream port at
-Code 12 until the restart, all started after it (the 2000 leg,
-2026-10-15). So when such a call succeeded in the run and an NHI or port
-of this package then fails its check, the tool adds, once, that the
-switch's devices can come back after a restart, and asks for the restart
-and a second run, which reads them as any run does; the exit stays 2.
+failure everywhere but in one case: on Windows 2000 a port's first filter
+install (the unforced call) took the Thunderbolt switch's other devices
+away and left the upstream port at Code 12 until the restart, all started
+after it (the 2000 leg, 2026-10-15). The owner's decision (2026-10-15):
+the filter goes on both the upstream and the downstream ports, and the
+run asks for that restart. So when such a call succeeded in the run, a
+device of the connection manager's INFs that is gone, or at Code 12, is
+reported as waiting for the restart - not a failure - and the tool says
+once that the restart brings them back and a run after it reads them
+again: the restart flag is set and the run ends with the restart line
+(exit 3, section 7.4). Any other problem code on such a device stays a
+failure (exit 2), with the same restart advice. The release notes carry
+the same reading for a filter installed by hand from `nt\`.
 Anything else is reported per device:
 
 | After | Meaning | Exit |

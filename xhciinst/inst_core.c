@@ -1964,6 +1964,16 @@ int inst_busy_spent(const int *tries, int n)
     return 0;
 }
 
+int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,
+                        INST_U32 problem)
+{
+    if (!win2000 || !filterInstalled ||
+        (inf != INST_INF_CM && inf != INST_INF_CMF)) {
+        return 0;
+    }
+    return gone || problem == 12UL;
+}
+
 static void inst_cat(char *out, size_t cap, const char *s)
 {
     size_t n = strlen(out);

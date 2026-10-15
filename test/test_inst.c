@@ -940,6 +940,22 @@ static void test_flow(void)
         CHECK_EQ(inst_busy_spent(tries, 0), 0, "nobody");
     }
 
+    /* Windows 2000 after a first filter install (owner, 2026-10-15): the
+     * NHI's or a port's Code 12, or a device gone, waits for the restart;
+     * nothing else does. */
+    CHECK_EQ(inst_tunnel_restart(1, 1, INST_INF_CMF, 0, 12UL), 1,
+             "upstream port at Code 12: the restart");
+    CHECK_EQ(inst_tunnel_restart(1, 1, INST_INF_CM, 1, 0UL), 1,
+             "a switch device gone: the restart");
+    CHECK_EQ(inst_tunnel_restart(1, 1, INST_INF_CMF, 0, 10UL), 0,
+             "Code 10 stays a failure");
+    CHECK_EQ(inst_tunnel_restart(1, 0, INST_INF_CMF, 0, 12UL), 0,
+             "no filter installed: a failure");
+    CHECK_EQ(inst_tunnel_restart(0, 1, INST_INF_CMF, 0, 12UL), 0,
+             "not Windows 2000: a failure");
+    CHECK_EQ(inst_tunnel_restart(1, 1, INST_INF_XHCI, 0, 12UL), 0,
+             "not a tunnel device: a failure");
+
     /* The results' state text: never "started" with a problem code, never
      * an empty field. */
     inst_state_text(t, sizeof(t), "", "", 1, 28UL);

@@ -451,6 +451,14 @@ int inst_busy_retry(INST_U32 error, int tries);
  * group, a member that joined later included). */
 int inst_busy_spent(const int *tries, int n);
 
+/* Windows 2000 after a tunnel port's first filter install succeeded in
+ * this run (owner, 2026-10-15): a device of the connection manager's INFs
+ * (inf INST_INF_CM or INST_INF_CMF) that is gone, or at Code 12, is waiting
+ * for the restart - read on the 2000 leg, all started after it - not a
+ * failure. 1 when it is so. */
+int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,
+                        INST_U32 problem);
+
 /* A device's state as the results print it: "xhci98 3.0.0.0, started",
  * "no driver, problem code 28", "xhci98 2.3.1.0, not started". A device
  * with a problem code is never called started. */
