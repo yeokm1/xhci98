@@ -157,11 +157,14 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
 static NTSTATUS cmBridgeRelations(PCM_FILTER filter, PIRP irp)
 {
     NTSTATUS status;
+    ULONG seq;
 
+    seq = CmRegRelationsBegin(filter);
     status = CmForwardSync(&filter->Common, irp);
     if (NT_SUCCESS(status) && filter->Started) {
         CmRegRelations(filter,
-                       (const DEVICE_RELATIONS *)irp->IoStatus.Information);
+                       (const DEVICE_RELATIONS *)irp->IoStatus.Information,
+                       seq);
     }
     return CmCompleteIrp(irp, status, irp->IoStatus.Information);
 }

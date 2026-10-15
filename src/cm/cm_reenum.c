@@ -438,7 +438,19 @@ VOID CmRegWithdraw(PCM_FILTER filter)
 
 /* ---- the snapshot and the child filters ------------------------------- */
 
-VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
+ULONG CmRegRelationsBegin(PCM_FILTER filter)
+{
+    KIRQL irql;
+    ULONG seq;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    seq = filter->ChangeSeq;
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return seq;
+}
+
+VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
+                    ULONG seq)
 {
     PVOID now[CM_SNAP_MAX];
     ULONG isNew[CM_SNAP_MAX];
@@ -468,17 +480,10 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
                            (PVOID const *)now, count, isNew);
 
     /* Whether this answer is one an active bridge with safe eject sees:
-     * read before the baseline below can make the bridge active. A changed
-     * population starts a new generation (RelGen), the connection the new
-     * children belong to, and invalidates an eject of the old one; the
-     * answer settles the bridge after a tunnel change (Unsettled). */
+     * read before the baseline below can make the bridge active. */
     KeAcquireSpinLock(&cmRegLock, &irql);
     attach = filter->Published && !filter->Gone && filter->Active &&
              filter->SafeEject != 0;
-    if (fresh != 0 || count != filter->SnapCount) {
-        filter->RelGen++;
-    }
-    filter->Unsettled = 0;
     KeReleaseSpinLock(&cmRegLock, irql);
 
     for (i = 0; i < count; i++) {
@@ -498,8 +503,25 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations)
     }
 
     /* The snapshot is replaced under the lock, since the eject's
-     * eligibility (cmEjectReady) reads it from the child's removal. */
+     * eligibility (cmEjectReady) reads it from the child's removal. A
+     * changed population starts a new generation (RelGen), which an eject
+     * posted against the old one fails at its hand-off; a new function
+     * forgets an orderly removal seen before it arrived (EjectSeen), so a
+     * replacement is never torn down for its predecessor's eject. The
+     * answer settles the bridge after a tunnel change only if the query
+     * began after that change (`seq`, CmRegRelationsBegin); an answer that
+     * overlapped one leaves it unsettled for the next query, which the
+     * change's own invalidation brings. */
     KeAcquireSpinLock(&cmRegLock, &irql);
+    if (fresh != 0 || count != filter->SnapCount) {
+        filter->RelGen++;
+    }
+    if (fresh != 0) {
+        filter->EjectSeen = 0;
+    }
+    if (seq == filter->ChangeSeq) {
+        filter->Unsettled = 0;
+    }
     for (i = 0; i < count; i++) {
         filter->Snap[i] = now[i];
     }
@@ -542,12 +564,7 @@ static NTSTATUS cmChildCreate(PCM_FILTER bridge, PDEVICE_OBJECT pdo)
     child->Common.Pdo = pdo;
     child->Outstanding = 1;
     child->Bridge = bridge;
-    /* The connection this child belongs to: its bridge's population
-     * generation, which only a change of that bridge's own population
-     * advances (CmRegRelations). */
-    KeAcquireSpinLock(&cmRegLock, &irql);
-    child->QueryEpoch = bridge->RelGen;
-    KeReleaseSpinLock(&cmRegLock, irql);
+
     KeInitializeSpinLock(&child->Lock);
     KeInitializeEvent(&child->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(child);
@@ -603,16 +620,22 @@ VOID CmRegChildRemoved(PCM_FILTER child, BOOLEAN ejected)
     KIRQL irql;
     PCM_FILTER bridge;
     PCM_NHI d;
+    ULONG i;
 
     bridge = child->Bridge;
     if (bridge == NULL) {
         return;
     }
     KeAcquireSpinLock(&cmRegLock, &irql);
-    /* A child of an earlier population of its bridge belongs to an old
-     * connection: its removal is never an eject of the current one. */
-    if (ejected && child->QueryEpoch == bridge->RelGen) {
-        bridge->EjectSeen = 1;
+    /* An orderly removal counts only for a function its bridge still
+     * reports: one already reported missing belongs to an old connection.
+     * A function that arrives later forgets it (CmRegRelations). */
+    if (ejected) {
+        for (i = 0; i < bridge->SnapCount; i++) {
+            if (bridge->Snap[i] == (PVOID)child->Common.Pdo) {
+                bridge->EjectSeen = 1;
+            }
+        }
     }
     d = bridge->Owner;
     if (bridge->EjectSeen && cmEjectReady(bridge) && d != NULL &&
@@ -837,8 +860,9 @@ static ULONG cmNhiLocation(PCM_NHI nhi)
  * The 98 path of the function at `bdf` (cm_ports.h CmPortsIdPath): its
  * devfn, then each parent bridge's up to the root bus, then the root bus
  * number. A parent is the type 1 function whose secondary bus is the
- * child's bus, found by reading every bus's functions. FALSE where a
- * parent cannot be found within the path's room. PASSIVE_LEVEL.
+ * child's bus, found by reading every lower bus's functions; a bus with no
+ * such parent is a root bus. FALSE where the path outgrows its room.
+ * PASSIVE_LEVEL.
  */
 static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
 {
@@ -896,7 +920,14 @@ static BOOLEAN cmPciPath(ULONG bdf, PULONG path, PULONG count)
             }
         }
         if (parent == XHCI_TBT_NO_BDF) {
-            return FALSE;
+            /* No bridge below it leads to this bus: a root bus of its
+             * own (a host with more than one), whose number ends the
+             * path as 00 ends one under bus 0. A parent missed by a read
+             * that failed gives a path that matches nothing, never a
+             * wrong devnode. */
+            path[n++] = bus;
+            *count = n;
+            return TRUE;
         }
         cur = parent;
     }
@@ -988,9 +1019,12 @@ static ULONG cmFindDevnode(PCM_NHI nhi, ULONG index)
     r = &nhi->Reenum;
     /* The member's expected path, read once (its parents do not move). */
     if (!r->Port[index].PathRead) {
-        r->Port[index].PathRead = 1;
-        if (!cmPciPath(r->Port[index].Bdf, r->Port[index].Path,
-                       &r->Port[index].PathCount)) {
+        /* Cached once read; a failed read is tried again at the next walk
+         * (the callers' retries are themselves bounded). */
+        if (cmPciPath(r->Port[index].Bdf, r->Port[index].Path,
+                      &r->Port[index].PathCount)) {
+            r->Port[index].PathRead = 1;
+        } else {
             r->Port[index].PathCount = 0;
         }
     }
@@ -1611,6 +1645,7 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
              * unsettled until its next BusRelations answer shows its
              * population, and no eject is handed off meanwhile. */
             f->Unsettled = 1;
+            f->ChangeSeq++;
         }
     }
     KeReleaseSpinLock(&cmRegLock, irql);

@@ -321,7 +321,11 @@ VOID CmRegWithdraw(struct _CM_FILTER *filter);
  * eject is on. `relations` may be NULL (no children). PASSIVE_LEVEL, in
  * the dispatch routine after the completion wait. */
 VOID CmRegRelations(struct _CM_FILTER *filter,
-                    const DEVICE_RELATIONS *relations);
+                    const DEVICE_RELATIONS *relations, ULONG seq);
+
+/* Before a BusRelations request is passed down: the bridge's tunnel-change
+ * sequence, handed to CmRegRelations with the answer. PASSIVE_LEVEL. */
+ULONG CmRegRelationsBegin(struct _CM_FILTER *filter);
 
 /* A device IRP_MN_SET_POWER to D0 on a bridge filter: TRUE when it was
  * passed down with the hold's completion routine (the caller returns
