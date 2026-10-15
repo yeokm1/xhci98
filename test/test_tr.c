@@ -1498,6 +1498,29 @@ int main(void)
         strcpy(s, "a\n   b\r\n");
         tr_join_lines(s);
         CHECK(strcmp(s, "a b ") == 0, "join: indentation after a break dropped");
+        {
+            /* Exact-sized buffers: the join never writes past the input. */
+            char e1[6];
+            char e2[3];
+            char e3[5];
+            char e4[8];
+            char e5[6];
+            memcpy(e1, "a\n\nbc", 6);
+            tr_join_lines(e1);
+            CHECK(strcmp(e1, "a\n\nbc") == 0, "join: LF-only paragraph kept, bc kept");
+            memcpy(e2, "\n\n", 3);
+            tr_join_lines(e2);
+            CHECK(strcmp(e2, "\n\n") == 0, "join: a bare paragraph break");
+            memcpy(e3, "a\n\nb", 5);
+            tr_join_lines(e3);
+            CHECK(strcmp(e3, "a\n\nb") == 0, "join: a\\n\\nb terminated");
+            memcpy(e4, "a\r\n\nb\nc", 8);
+            tr_join_lines(e4);
+            CHECK(strcmp(e4, "a\n\nb c") == 0, "join: mixed endings");
+            memcpy(e5, "ab\r\n\n", 6);
+            tr_join_lines(e5);
+            CHECK(strcmp(e5, "ab\n\n") == 0, "join: a trailing paragraph break");
+        }
     }
     printf("test_tr: %d checks, %d failures\n", checks, failures);
     return failures;
