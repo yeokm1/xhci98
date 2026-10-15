@@ -89,15 +89,6 @@ static BOOLEAN cmConfig(PCM_NHI nhi, BOOLEAN read, PVOID buffer,
         for (i = 0; i < length; i++) {
             p[i] = 0;
         }
-    } else if (nhi->AccessClass == CM_ACCESS_PROBE ||
-               !CmLiveAdmits(&nhi->Live, nhi->AccessClass)) {
-        /* The BAR gate's rule for the NHI's configuration writes too
-         * (record 22 section 7.7): none to a function revoked, lost or
-         * contained; refused like any other failed write, so the platform
-         * steps' accounting (CfgWriteFailures) sees it. */
-        nhi->Live.Counters.RefusedWrites++;
-        nhi->Counters.ConfigFailures++;
-        return FALSE;
     }
     /* After a surprise removal no configuration access either, and no
      * configuration write the liveness gate does not admit for the current

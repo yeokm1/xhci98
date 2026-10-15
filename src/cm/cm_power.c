@@ -254,6 +254,8 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         return TRUE;
     }
     nhi->Suspended = 0;
+    lost = FALSE;
+    ran = FALSE;
     if (nhi->U4On && (nhi->U4.Contained || !CmNhiHwAccess(nhi))) {
         /* Record 22 section 7.7: a contained instance is never restarted
          * - no platform step, no Bus Master write, no ring; a hold the
@@ -287,8 +289,6 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         ok = FALSE;
     }
     held = FALSE;
-    lost = FALSE;
-    ran = FALSE;
     if (ok && nhi->U4On) {
         ran = TRUE;
         rc = TbtU4Resume(&nhi->U4);

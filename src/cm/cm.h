@@ -263,6 +263,11 @@ typedef struct _CM_NHI {
      * not yet told down (bit n-1 of U4UpValid for port n), kept apart from
      * the core's tunnel records, which a failed teardown clears. */
     ULONG U4ContainDone;
+    /* A PnP stop, surprise removal or removal waits for the thread: set by
+     * the PnP path before its work is queued, cleared once that work ran.
+     * The containment's reconciliation is never requested meanwhile (the
+     * 9x seam calls CONFIGMG synchronously; record 22 section 7.7). */
+    volatile ULONG PnpStopPending;
     ULONG U4UpGen[TBT_U4_MAX_PORTS];
     ULONG U4UpValid;
     /* The nvme98 channel's two moments (CmNhiSetU4Hooks), NULL until task

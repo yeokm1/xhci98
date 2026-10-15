@@ -1575,8 +1575,9 @@ to the NHI:
    pending ejects are voided by it (section 7.6). This step is not taken
    while a PnP request waits for the thread - on the stop's path (a
    surprise removal, or a loss found at the stop), after a surprise
-   removal revoked the gate, or with a stop queued behind the work running
-   (a resume, a bind): the seam's Windows 98 and ME route calls CONFIGMG
+   removal revoked the gate, or with a stop or removal waiting for the
+   thread behind the work running (a resume, a bind), from before it is
+   queued until its work has run: the seam's Windows 98 and ME route calls CONFIGMG
    synchronously, and the removal under way and the next start's
    discovery stand for it; steps 1 to 3 and 5 still run, before the seam
    is closed.
@@ -1636,9 +1637,11 @@ which never resets it.
   released through the failure path, then the driver's containment. A
   resume that fails with the host interface still answering is the
   failure after activation of section 3.5, as before.
-- *Between the ring start and the bind's arming*: the size register read
-  then is the check; all ones or another value contains the instance
-  before anything is announced.
+- *Between the ring start and the bind's arming*, or in a bind that
+  fails after activation: the size register read then is the check; all
+  ones, another value or the gate revoked contains the instance before
+  anything is announced, and a bind that fails with the host interface
+  still answering is the failure after activation of section 3.5.
 - *At stop*: the stop's own fresh reading of the ports (section 4.2) is
   a router request and is not made, so force power stays; the rings'
   stop is a write and is not made, so the buffer is kept unless

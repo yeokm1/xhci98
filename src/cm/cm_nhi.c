@@ -611,6 +611,7 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
     if (reconcile) {
         KeAcquireSpinLock(&nhi->WorkLock, &irql);
         if (nhi->Live.Revoked || nhi->Live.State == CM_LIVE_REVOKED ||
+            nhi->PnpStopPending ||
             (nhi->WorkBits & (CM_WORK_STOP | CM_WORK_EXIT)) != 0) {
             reconcile = FALSE;
         }
@@ -1451,11 +1452,19 @@ static VOID cmU4Bind(PCM_NHI nhi)
                     nhi->DmaBytes);
     CmLogNote(nhi, "u4.start", (ULONG)(-rc));
     if (rc != TBT_OK) {
-        if (nhi->U4.Failed || nhi->Ring.Running) {
+        if (nhi->U4.Failed || nhi->Ring.Running || nhi->Ring.DmaMayRun) {
             /* Failure after activation (record 22 section 3.5): the core
-             * stopped its rings; tunnels are left as found. */
+             * stopped its rings; tunnels are left as found. Unless the
+             * host interface itself is gone (section 7.7): all ones, the
+             * gate revoked, or a size other than the one programmed -
+             * then contained, nothing announced yet. */
             nhi->Stage = CM_STAGE_FAILED;
             CmLogNote(nhi, "u4.failed", nhi->U4.InertReason);
+            if (!CmNhiHwAccess(nhi) ||
+                CmThrProbe32(nhi, TBT_RX_RING(0) + TBT_RING_SIZE_REG) !=
+                    CM_U4_RX_SIZE_VALUE) {
+                CmNhiU4Contain(nhi);
+            }
             return;
         }
         cmInert(nhi, CM_INERT_RING_REFUSED);
@@ -1886,8 +1895,10 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     }
     CmThrRunPnp(nhi, CM_WORK_START);
     if (!NT_SUCCESS(nhi->StartStatus)) {
+        nhi->PnpStopPending = 1;
         CmThrRunPnp(nhi, CM_WORK_STOP);
         CmThrStop(nhi);
+        nhi->PnpStopPending = 0;
         nhi->Started = 0;
         return nhi->StartStatus;
     }
@@ -1900,8 +1911,12 @@ static VOID cmNhiStop(PCM_NHI nhi, ULONG reason)
         return;
     }
     if (nhi->ThreadRunning) {
+        /* Before the work is queued, so work the thread already took
+         * (a resume, a bind) sees the stop waiting (CmNhiU4ContainEx). */
+        nhi->PnpStopPending = 1;
         CmThrRunPnp(nhi, CM_WORK_STOP);
         CmThrStop(nhi);
+        nhi->PnpStopPending = 0;
     }
     nhi->Stage = CM_STAGE_STOPPED;
     nhi->Started = 0;
