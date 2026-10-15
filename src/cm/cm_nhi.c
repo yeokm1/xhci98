@@ -620,14 +620,22 @@ VOID CmNhiU4ContainEx(PCM_NHI nhi, BOOLEAN reconcile)
     if (!reconcile) {
         CmLogNote(nhi, "u4.contained.no-reconcile", nhi->Live.State);
     } else if (nhi->ReenumOn) {
-        CmZero(&a, sizeof(a));
-        a.Kind = TBT_ICM_ACT_RESYNC;
-        a.Why = TBT_ICM_WHY_UNAVAILABLE;
-        nhi->Counters.U4ActionsResync++;
-        if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
-            nhi->Counters.ReenumSkipped++;
+        /* On Windows 98 and ME the seam's action calls CONFIGMG on this
+         * thread, and a PnP stop arriving after the check above would wait
+         * for it: the reconciliation there is CmReenumUnavailable's alone,
+         * whose route is the CONFIGMG worker's (record 21 section 5.5),
+         * never a synchronous call from here. On NT the RESYNC's
+         * invalidations are asynchronous. */
+        if (nhi->Reenum.Route != CM_ROUTE_CONFIGMG) {
+            CmZero(&a, sizeof(a));
+            a.Kind = TBT_ICM_ACT_RESYNC;
+            a.Why = TBT_ICM_WHY_UNAVAILABLE;
+            nhi->Counters.U4ActionsResync++;
+            if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
+                nhi->Counters.ReenumSkipped++;
+            }
+            CmReenumAction(nhi, &a);
         }
-        CmReenumAction(nhi, &a);
         CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
     }
 }

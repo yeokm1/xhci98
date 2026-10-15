@@ -1569,9 +1569,10 @@ to the NHI:
    reason "controller unavailable" (record 21 section 5.5): every member
    of the domain's tunnel-port set as changed, so the operating system
    removes what it can no longer reach - on NT through the bridge
-   filters' invalidation, on Windows 98 and ME through the CONFIGMG
-   route record 21 gives that reason - with a removal a driver refused
-   never forced, and with `XhciCmReenum` 0 nothing requested. The seam's
+   filters' invalidation (asynchronous), on Windows 98 and ME through
+   the CONFIGMG worker record 21 gives that reason, never by a
+   synchronous CONFIGMG call from the thread a PnP stop may be waiting
+   for - with a removal a driver refused never forced, and with `XhciCmReenum` 0 nothing requested. The seam's
    pending ejects are voided by it (section 7.6). This step is not taken
    while a PnP request waits for the thread - on the stop's path (a
    surprise removal, or a loss found at the stop), after a surprise
@@ -2345,7 +2346,10 @@ from their first form, as each row says.
   stop and start or a reboot, and its unproven DMA buffer stays allocated
   until the next boot. Which real USB4 hosts lose power or their PCI
   configuration without a PnP removal under a legacy operating system is
-  unread.
+  unread. On Windows 98 and ME the reconciliation is the CONFIGMG
+  worker's; until that worker is in the tree the contained domain's
+  devices are not removed by it, and the operating system learns of them
+  only from their own drivers.
 - **Daisy chains, DisplayPort, CLx, sleep per Guide chapter 8**: out of
   this cut.
 
