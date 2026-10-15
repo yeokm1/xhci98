@@ -335,17 +335,28 @@ Each value is a `DWORD` in the controller's driver (software) key:
 
 The settings most often changed:
 
-| Value | What it does | Installed as |
-|---|---|---|
-| `XhciForceBulkOnly` | `1` gives a drive that offers both UAS and Bulk-Only the Bulk-Only one | `0` |
-| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling, `3` a message-signalled interrupt only | `0` |
-| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `portsw.vbs` sets it | `0` |
-| `XhciSilentInstall` | Windows 98 SE and ME: `1` installs devices of the listed classes with no wizard (`tools\silent\`) | `0` |
-| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` (the [release notes](docs/using/release-notes.md), "The log, and how to send one") | `0` |
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `XhciForceBulkOnly` | Bulk-Only instead of UAS (see [Forcing Bulk-Only instead of UAS](docs/using/tuning.md#forcing-bulk-only-instead-of-uas-xhciforcebulkonly)) | `0` | `1` | `1` | `0` |
+| `XhciInterruptMode` | How the controller's events arrive: `0` automatic, `1` the interrupt line only, `2` polling, `3` a message-signalled interrupt only (see [Polling and message-signalled interrupts](docs/using/tuning.md#polling-and-message-signalled-interrupts-xhciinterruptmode-xhcipollidlems-xhcipollactivems-xhcipollfinetimer)) | `0` | `3` | `0` | `0` |
+| `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`; see [The Intel 7/8/9-series port switchover](docs/using/tuning.md#the-intel-789-series-port-switchover-xhciintelportswitch)) | `0` | `2` | `0` | `0` |
+| `XhciSilentInstall` | Windows 98 SE and ME: `1` installs a device whose class is in the `SilentClasses` list with no wizard (`silent-on.bat` and `silent-off.bat` in `tools\silent\`; see [The silent install](docs/using/tuning.md#the-silent-install-xhcisilentinstall)) | `0` | `1` | `0` | `0` |
+| `XhciLogVerbosity` | The driver's log, read by `XHCISNAP` (the [release notes](docs/using/release-notes.md), "The log, and how to send one") | `0` | `4` | `0` | `0` |
 
 Restart Windows after changing a value. The install puts every value in the key, and an update keeps a value you changed.
 
-All the settings, with their ranges, defaults and details, are in [Tuning](docs/using/tuning.md).
+[Tuning](docs/using/tuning.md) explains each of these in full, and has every other setting:
+
+- the interrupt moderation interval (`XhciImodInterval250ns`)
+- a Low- or Full-Speed mouse polled above 1000 Hz (`XhciFastPollFsLs`)
+- how long the first report waits for a hub (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)
+- the polling periods and a finer system clock (`XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer`)
+- the largest UAS command and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)
+- selective suspend (`XhciSelectiveSuspend`)
+- the handling of controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)
+- the fixes for particular controllers: the Intel 7/8/9-series interrupt routing, the VIA built-in hub, controllers below xHCI 1.0 (`XhciIntelIrqRoute`, `XhciUsb2HubSpeedFallback`, `XhciAccept096`)
+- the fourteen controller quirks taken from Linux (`XhciMsiAvoid` and the rest)
+- the log sent to DebugView (`XhciLogDebugView`)
 
 ## What is tested, and what is not
 
