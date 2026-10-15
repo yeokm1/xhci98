@@ -288,8 +288,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         if (rc != TBT_OK) {
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             ok = FALSE;
-        } else {
-            CmNhiLiveArm(nhi);
+        } else if (!CmNhiLiveArm(nhi)) {
+            CmLogNote(nhi, "cm.resume-failed", 0x100UL);
+            ok = FALSE;
         }
     }
 resumed:

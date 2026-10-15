@@ -443,6 +443,8 @@ typedef struct _TBT_ICM_COUNTERS {
 typedef struct _TBT_ICM {
     const TBT_ICM_PROFILE *Profile;
     ULONG RingFlags;            /* tbt_hw.c TbtHwRingFlags */
+    BOOLEAN Ambiguous;          /* a command sent and never answered since
+                                   the rings last started */
     PTBT_RING Ring;
     const TBT_HOST *Host;
 

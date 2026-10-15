@@ -233,6 +233,7 @@ typedef struct _TBT_RING {
      * readable and disabled: until then the host interface may still DMA
      * into the common buffer, which is therefore never freed (cm_pool.c). */
     BOOLEAN DmaMayRun;
+    ULONG RxPdfMask;        /* the RX PDF mask the last start programmed */
 
     /* The error notification that ended the last request with
      * TBT_E_NOTIFY (Spec 6.4.3): its event code, Event Info and the route

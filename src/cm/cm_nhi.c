@@ -240,6 +240,12 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
         return;
     }
     while (TbtIcmNextAction(&nhi->Icm, &a)) {
+        if (nhi->Live.Revoked && a.Kind == TBT_ICM_ACT_TUNNEL_UP) {
+            /* Surprise-removed: no tunnel is published as up any more,
+             * whichever session queued it (cm_live.h). */
+            nhi->Counters.ActionsNotLive++;
+            continue;
+        }
         if (a.Kind == TBT_ICM_ACT_TUNNEL_UP) {
             nhi->Counters.ActionsUp++;
             CmLogNote(nhi, "cm.action.tunnel-up", a.Why);
@@ -471,7 +477,7 @@ VOID CmNhiRevoke(PCM_NHI nhi)
     CmLogNote(nhi, "cm.live.revoked", nhi->Live.State);
 }
 
-VOID CmNhiLiveArm(PCM_NHI nhi)
+BOOLEAN CmNhiLiveArm(PCM_NHI nhi)
 {
     ULONG v;
     ULONG want;
@@ -480,10 +486,19 @@ VOID CmNhiLiveArm(PCM_NHI nhi)
     want = nhi->Ring.Entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT);
     CmLogNote(nhi, "cm.live.baseline", v);
     if (v == 0xFFFFFFFFUL) {
-        CmLogNote(nhi, "cm.live.unarmed", v);
-        return;
+        /* Not answering right after its rings started: a failure, never
+         * an unmonitored success. */
+        return FALSE;
     }
-    (VOID)CmLiveArm(&nhi->Live, v == want ? v : 0, nhi->Host.NowMs(nhi));
+    if (v != want) {
+        /* Readable but not as written: a register that does not read back
+         * (not seen on the emulator; unread on hardware) cannot detect a
+         * lost configuration, and arming against the programmed value
+         * would report one at once. All-ones detection stays; logged. */
+        CmLogNote(nhi, "cm.live.no-readback", v);
+        v = 0;
+    }
+    return CmLiveArm(&nhi->Live, v, nhi->Host.NowMs(nhi));
 }
 
 /* The USB4 profile's containment (record 22 section 3.5): transport,
@@ -597,12 +612,18 @@ static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
         CmNhiDrainActions(nhi);
         return;
     }
-    if (nhi->Live.Revoked) {
-        /* Revoked meanwhile: what the recovery queued belongs to nothing. */
-        TbtIcmLost(&nhi->Icm);
-        return;
+    /* Not published (failed, or revoked meanwhile): whatever the recovery
+     * rebuilt is speculative - its queued UPs are dropped and every entry
+     * leaves as UNAVAILABLE, unconditionally; the seam's unavailable
+     * notice stays once per episode. */
+    TbtIcmLost(&nhi->Icm);
+    CmNhiDrainActions(nhi);
+    if (!nhi->Live.Revoked &&
+        (CmLiveReconcileOwed(&nhi->Live) & CM_LIVE_ACT_RECONCILE) != 0 &&
+        nhi->ReenumOn) {
+        CmReenumUnavailable(nhi, episode);
     }
-    CmNhiLiveActions(nhi, CmLiveReconcileOwed(&nhi->Live) | CM_LIVE_ACT_LOG);
+    CmLogNote(nhi, "cm.live.state", (episode << 8) | nhi->Live.State);
 }
 
 VOID CmNhiLiveActions(PCM_NHI nhi, ULONG actions)
@@ -1503,9 +1524,14 @@ VOID CmNhiBind(PCM_NHI nhi)
     rc = TbtIcmStart(&nhi->Icm, nhi->CommonVa, nhi->CommonPa.LowPart,
                      TBT_RING_DMA_BYTES);
     CmLogNote(nhi, "cm.bind", (ULONG)(-rc));
+    if (rc == TBT_OK && !CmNhiLiveArm(nhi)) {
+        /* Bound, then not answering (cm_live.h): the failure after
+         * activation; the rings stop with whatever verification they get. */
+        TbtIcmUnbind(&nhi->Icm);
+        nhi->Icm.Failed = TRUE;
+        rc = TBT_E_HW;
+    }
     if (rc == TBT_OK) {
-        /* Monitored from here (cm_live.h). */
-        CmNhiLiveArm(nhi);
         CmLogNote(nhi, "cm.driver-ready", nhi->Icm.Ready.Flags);
         CmLogNote(nhi, "cm.dev.count", TbtIcmDeviceCount(&nhi->Icm));
         CmNhiDrainActions(nhi);

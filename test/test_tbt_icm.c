@@ -1696,6 +1696,14 @@ static void test_lost_and_recover(void)
     CHECK(!TbtRingIntact(&g_ring), "a TX high base is noticed");
     g_fake.TxBaseHi = 0;
     CHECK(TbtRingIntact(&g_ring), "intact again");
+    g_fake.TxCtrl |= 0x00000002UL;
+    CHECK(!TbtRingIntact(&g_ring), "a control bit the start never set is noticed");
+    g_fake.TxCtrl &= ~0x00000002UL;
+    before = g_fake.RxPdf;
+    g_fake.RxPdf = 0;
+    CHECK(!TbtRingIntact(&g_ring), "a changed RX PDF mask is noticed");
+    g_fake.RxPdf = before;
+    CHECK(TbtRingIntact(&g_ring), "intact once more");
     fakeQueue(TBT_PDF_ICM_RESP, stale, 2, 300000UL, 0);
     CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_E_STATE,
              "a frame arriving in the quiet period refuses the light recovery");
@@ -1719,6 +1727,31 @@ static void test_lost_and_recover(void)
     CHECK_EQ(g_fake.TxBaseLo, FAKE_PHYS, "TX base programmed again");
     CHECK(g_icm.Bound, "bound");
     CHECK_EQ(g_icm.Counters.Recoveries, 3, "three recoveries, one refused");
+
+    /* An unanswered command makes the next light recovery a full one. */
+    before = g_fake.MboxCount;
+    g_icm.Ambiguous = TRUE;
+    CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_OK, "escalated recovery");
+    CHECK_EQ(g_fake.MboxCount, before + 1, "the ring restart sent 0x23");
+    CHECK(!g_icm.Ambiguous, "a restarted ring clears the ambiguity");
+
+    /* Lost drops a queued TUNNEL_UP (the recovery's, undelivered) and
+     * keeps the DOWNs in order. */
+    actions(act, 8);
+    g_fw.Present = 0;
+    arDisconnected(1, 1, 0);
+    idle(200);
+    actions(act, 8);
+    g_fw.Present = 1;
+    arConnected(7, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK(g_icm.ActionCount >= 1, "an approve queued an UP");
+    TbtIcmLost(&g_icm);
+    n = actions(act, 8);
+    CHECK(n >= 1 && act[n - 1].Kind == TBT_ICM_ACT_RESYNC, "resync last");
+    for (before = 0; before < n; before++) {
+        CHECK(act[before].Kind != TBT_ICM_ACT_TUNNEL_UP, "no UP after a loss");
+    }
 
     /* A verified stop clears DmaMayRun; an unverified one keeps it, and a
      * full recovery then refuses to reuse the buffer. */

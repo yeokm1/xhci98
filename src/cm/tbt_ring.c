@@ -541,6 +541,7 @@ LONG TbtRingStartEx(PTBT_RING ring,
     TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_SIZE_REG,
            entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT));
     TBT_WR(ring, TBT_RX_PDF(0), rxPdfMask);
+    ring->RxPdfMask = rxPdfMask;
     TBT_WR(ring, TBT_RX_CTRL(0), TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW);
     TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, entries - 1);
 
@@ -569,20 +570,24 @@ LONG TbtRingStartEx(PTBT_RING ring,
 
 BOOLEAN TbtRingIntact(PTBT_RING ring)
 {
-    ULONG valid;
+    ULONG ctrl;
 
-    valid = TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW;
+    /* Every value as the start wrote it, the controls whole (only Valid
+     * and Raw Mode were set: an unreadable all-ones control, or a bit the
+     * start never set, is a change). */
+    ctrl = TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW;
     return (BOOLEAN)(
         TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_BASE_LO) == ring->Phys &&
         TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_BASE_HI) == 0 &&
         TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_SIZE_REG) == ring->Entries &&
-        (TBT_RD(ring, TBT_TX_CTRL(0)) & valid) == valid &&
+        TBT_RD(ring, TBT_TX_CTRL(0)) == ctrl &&
         TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_BASE_LO) ==
             ring->Phys + tbtRxDescOff(ring) &&
         TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_BASE_HI) == 0 &&
         TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_SIZE_REG) ==
             (ring->Entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT)) &&
-        (TBT_RD(ring, TBT_RX_CTRL(0)) & valid) == valid);
+        TBT_RD(ring, TBT_RX_PDF(0)) == ring->RxPdfMask &&
+        TBT_RD(ring, TBT_RX_CTRL(0)) == ctrl);
 }
 
 VOID TbtRingStop(PTBT_RING ring)

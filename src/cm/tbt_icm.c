@@ -1156,6 +1156,12 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
     if (rc == TBT_E_TIMEOUT && icm->WaitGone) {
         rc = TBT_E_GONE;
     }
+    if (rc != TBT_OK && rc != TBT_E_ERROR_FLAG && rc != TBT_E_PARAM) {
+        /* Sent and not answered (or abandoned): its answer may still
+         * arrive, and no word of a driver-ready answer tells it from the
+         * next one's. Only a ring restart ends that (TbtIcmRecover). */
+        icm->Ambiguous = TRUE;
+    }
     icm->InWait = FALSE;
     icm->WaitSlot = TBT_ICM_NO_SLOT;
     icm->WaitSerial = 0;
@@ -1696,6 +1702,8 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
         return rc;
     }
     icm->Started = TRUE;
+    /* A restarted ring delivers nothing of an earlier command. */
+    icm->Ambiguous = FALSE;
 
     /* Linux icm.c icm_firmware_init sends allow-all only where it reads
      * the mode, and only at bind (ICM 6.5 [inf]: not on resume). */
@@ -1892,7 +1900,25 @@ VOID TbtIcmUnbind(PTBT_ICM icm)
 VOID TbtIcmLost(PTBT_ICM icm)
 {
     ULONG i;
+    ULONG keep;
+    ULONG n;
+    PTBT_ICM_ACTION a;
 
+    /* A queued TUNNEL_UP of the lost session is never delivered: the
+     * DOWNs and RESYNCs already queued keep their order. */
+    n = icm->ActionCount;
+    keep = 0;
+    for (i = 0; i < n; i++) {
+        a = &icm->Actions[(icm->ActionHead + i) % TBT_ICM_ACTION_QUEUE];
+        if (a->Kind == TBT_ICM_ACT_TUNNEL_UP) {
+            continue;
+        }
+        if (keep != i) {
+            icm->Actions[(icm->ActionHead + keep) % TBT_ICM_ACTION_QUEUE] = *a;
+        }
+        keep++;
+    }
+    icm->ActionCount = keep;
     icm->QueueCount = 0;
     icm->RediscoverPending = FALSE;
     icm->RediscoverRun = 0;
@@ -1917,6 +1943,12 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
         return TBT_E_STOPPED;
     }
     icm->Counters.Recoveries++;
+    if (!full && icm->Ambiguous) {
+        /* An unanswered command's answer could still arrive and pass for
+         * driver ready's: only the restart below ends that. */
+        tbtIcmLog(icm, "tbt.icm.recover-escalated", 1);
+        full = TRUE;
+    }
     if (full) {
         if (icm->Started || icm->Ring->DmaMayRun) {
             TbtRingStop(icm->Ring);

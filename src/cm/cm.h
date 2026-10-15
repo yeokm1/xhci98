@@ -426,9 +426,10 @@ VOID CmNhiRevoke(PCM_NHI nhi);
 BOOLEAN CmNhiHwAccess(PCM_NHI nhi);
 /* The ICM client's arming after a bind or a resume: ACTIVE against RX ring
  * 0's size register read now when it holds what the start programmed;
- * against 0 (all-ones detection only) when it reads otherwise; not armed
- * when it reads all ones. */
-VOID CmNhiLiveArm(PCM_NHI nhi);
+ * against 0 (all-ones detection only) when it reads otherwise; FALSE (the
+ * caller's failure after activation) when it reads all ones or the monitor
+ * refuses. */
+BOOLEAN CmNhiLiveArm(PCM_NHI nhi);
 
 /* cm_thr.c */
 VOID CmThrInit(PCM_NHI nhi);
