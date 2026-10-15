@@ -70,7 +70,11 @@
                                            port words */
 #define CM_Q_O_ID_OFFSET        52UL    /* the NHI's device instance id, */
 #define CM_Q_O_ID_BYTES         56UL    /* ASCII, no NUL, at most 200 */
-/* 60..63 reserved, 0 */
+#define CM_Q_O_CONTENT_GEN      60UL    /* bumped when anything in the answer
+                                           but the pass counter, its age and
+                                           the record's own generation,
+                                           uptime, time and echo changes;
+                                           never 0; per start *\/
 
 #define CM_Q_F_INERT            0x01UL  /* the thread waits with no timeout */
 #define CM_Q_F_TRUNCATED        0x02UL  /* more routers than the record holds */
@@ -78,7 +82,9 @@
 
 /* Display only: an answer older than this is shown as "not current".
    An eject never relies on age (design record 25 section 6.2): it waits
-   for CM_Q_O_PASS to move past the value it read when it began. */
+   for CM_Q_O_PASS to move at least CM_Q_NEW_PASSES past the value it
+   read when it began (wrap-safe), so the snapshot was built after. */
+#define CM_Q_NEW_PASSES         2UL
 #define CM_Q_CURRENT_MS         3000UL
 #define CM_Q_NEW_PASS_WAIT_MS   3000UL
 
