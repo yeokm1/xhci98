@@ -38,6 +38,12 @@ The release notes say what was read on which system.
   Remove Hardware"; on every system `INSTALL /devices` lists the connected
   Thunderbolt and USB4 devices and `INSTALL /eject` stops one before it is
   unplugged.
+- The xHCI98 USB Tree (`XHCITR.EXE`, `XHCITR64.EXE` on 64-bit Windows): a
+  window that shows every USB controller, hub and device and every
+  Thunderbolt and USB4 device with their details, and an icon in the
+  notification area, started at login, that removes a Thunderbolt or USB4
+  device safely without administrator rights. `INSTALL /notray` leaves
+  the icon out.
 - `INSTALL.BAT`: one command installs, updates or uninstalls the driver
   on every system, asks only the questions that apply to the machine, and
   ends by saying whether Windows must be restarted. It asks whether to
