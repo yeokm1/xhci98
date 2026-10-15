@@ -138,8 +138,6 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | `tools\xhcicln\` | Windows | `XHCICLN.EXE` (32-bit) and `XHCICL64.EXE` (64-bit), an optional tool that lists the old `XHCI98\` entries an update from `2.3.x` or earlier leaves behind and, on Windows 2000 to 7, removes them; nothing needs it |
 | `readme.txt` | | the release notes in plain text |
 
-Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`. So are `tools\silent\` and `tools\xhcicln\`.
-
 In each driver directory:
 
 - `xhci98.sys` and `xhci98.inf`: the controller driver.
@@ -192,7 +190,7 @@ The same floppy serves the Recovery Console of Windows 2000 and XP. Press F6 as 
 Things to know:
 
 - Pressing F6 needs the BIOS's own USB keyboard support.
-- A disk that offers only UAS is not usable until GUI-mode Setup; a plain USB flash stick is, and so, since `2.3.1.0`, is a UAS disk that also offers Bulk-Only, as most do.
+- A disk that offers only UAS is not usable until GUI-mode Setup; a plain USB flash stick is, and so is a UAS disk that also offers Bulk-Only, as most do.
 - A USB drive present at the partition screen takes `C:`. Unplug the USB drives you do not need, or Windows installs to the next letter.
 - On Windows 2000, plug the USB keyboard and stick in before Setup starts.
 - To install Windows XP and XP x64, have a PS/2 keyboard or a laptop's built-in keyboard at hand. Later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver (see "Known limitations/issues"). The Recovery Console runs in text mode throughout and is not affected.
