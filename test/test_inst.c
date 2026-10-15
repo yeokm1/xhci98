@@ -605,6 +605,12 @@ static void test_helpers(void)
     pe[0x81] = 'E';
     pe[0x84] = 0x64;
     pe[0x85] = 0x86;
+    CHECK(inst_bundled_file("nvme98.inf") && inst_bundled_file("NVME98.SYS") &&
+          inst_bundled_file("nvme98-LICENSE.txt") && inst_bundled_file("nvme98.mpd"),
+          "nvme98's files are the bundled driver's");
+    CHECK(!inst_bundled_file("xhci98.inf") && !inst_bundled_file("xhcicm.sys") &&
+          !inst_bundled_file("nvme9.inf") && !inst_bundled_file("txtsetup.oem"),
+          "this package's own files are not the bundled driver's");
     CHECK(inst_pe_machine(pe, sizeof(pe), &m) && m == INST_PE_AMD64, "amd64 PE");
     pe[0x84] = 0x4C;
     pe[0x85] = 0x01;

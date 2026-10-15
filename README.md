@@ -148,6 +148,15 @@ Close the files open on the device first, as for any removable disk. On every sy
 
 An NVMe drive in an enclosure needs an NVMe driver, which these systems do not have. `nvme98`, a separate project, is that driver for Windows 98 SE to Vista, and the package carries a release of it with its own readme and licence. `xhcicm.sys` brings the drive's tunnel up and down and tells `nvme98` when the drive arrives, and `nvme98` runs the drive.
 
+The package's `release-x86\` and `release-x64\` directories carry it as one of its released builds, unchanged, under its own licence (BSD-3-Clause): its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`, and the readme is its install guide and lists its known limits. The package's `readme.txt` and the release notes name the version. `INSTALL.BAT` does not install it: when the drive's NVMe controller shows in Device Manager without a driver, Update Driver -> Have Disk, pointed at:
+
+| Bundled nvme98 | Windows 98 SE, ME | Windows 2000, XP, Vista, 7 (32-bit) | Windows XP x64, Vista x64, 7 x64 |
+|---|---|---|---|
+| `0.2.0.0` and later | `release-x86\` | `release-x86\` | `release-x64\` |
+| `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
+
+The 64-bit nvme98 is test-signed by its own project, as `xhci98.sys` is by this one, and loads on Vista x64 and 7 x64 in test-signing mode; its readme has the details.
+
 ### Things to know
 
 - Before standby or hibernation, stop and unplug every Thunderbolt or USB4 device. Standby with one attached, or with an Ice Lake or later controller, is not supported.
@@ -219,6 +228,7 @@ In each driver directory:
 - `xhcihlpr.sys` (32-bit only): the helper. 32-bit Windows 2000, XP, Vista and 7 use this small second driver for a finer system timer while the controller is polled (see "Polling and message-signalled interrupts"), and 32-bit Vista and 7 also to give the controller a message-signalled interrupt. The INF installs it on those four systems, as a service that starts at boot; Vista and 7 ask for a restart for it, 2000 and XP do not, and the finer timer, when `XhciPollFineTimer` is set to `1` (it is off by default), starts there at the next boot. Windows 98 SE and ME ignore it. Releases `2.3.0.0` and `2.3.1.0` carried the MSI half alone, as `xhcimsi.sys`, for Vista and 7 only.
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup.
 - `xhci98-test.cer` (64-bit only): the public half of the test certificate the x64 drivers are signed with. You do not need to import it.
+- `nvme98` files (`release-x86\` and `release-x64\` only): the bundled NVMe driver, a separate project; see "NVMe drives".
 
 `release-x86\` or `release-x64\` is the one to install.
 
@@ -860,6 +870,8 @@ The repository tracks no third-party binary on its own, although the tool execut
 * `XHCIINST.EXE` embeds the MSVC 6.0 runtime, and `XHCIIN64.EXE` the WDK 7.1 one. Neither contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
+
+The release download's `release-x86\` and `release-x64\` carry nvme98, a released build of a separate BSD-3-Clause project, unchanged; its `LICENSE` and `NOTICE.TXT` ship beside it as `nvme98-LICENSE.txt` and `nvme98-NOTICE.txt`. The repository tracks none of its files.
 
 The release download carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. On Windows 98, `xhciuas.inf` names NUSB's `USBNTMAP.SYS` as a filter on the UAS device; the file is named, never shipped, and NUSB's mass-storage install places it.
 

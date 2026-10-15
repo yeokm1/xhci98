@@ -114,6 +114,7 @@ identification.
 | The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
+| nvme98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned nvme98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled nvme98 build" below |
 | The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
 | Source files from `usb4-emu`'s `tools/usb4cm` (MIT) | Yes, from the change that lifts the first of them (roadmap-usb4 task 39-A.2) | `src/cm/` | Not only this project's code: which files, their notices and the rule a lifted file follows are in section 2a, "Source files lifted from `usb4cm`" |
 
@@ -415,6 +416,42 @@ DDK's flags for every x86 flavour, under the host suites' `/Za /W3 /WX`,
 and WDK 7.1's amd64 compiler - so no wrapper is needed. Nothing from this
 repository moves the other way: `nvme98` is BSD-3-Clause, and this
 project's code stays out of it.
+
+### The bundled nvme98 build
+
+From `3.0.0.0` the release download may carry nvme98, an NVMe storage
+driver that is a separate project (owner, 2026-10-15, relaying the nvme98
+maintainers' instructions). What is recorded here:
+
+- **What is shipped.** One released nvme98 build, named by version at the
+  cut (`-Nvme98Version`), copied byte for byte from that build's release
+  folder: for a `0.1.x` build, `win9x/nvme98.inf`, `win9x/nvme98.mpd`,
+  `x86/nvme98.inf` and `x86/nvme98.sys` under `release-x86/nvme98/`, and
+  `amd64/nvme98.inf`, `amd64/nvme98.sys` and `amd64/nvme98-test.cer` under
+  `release-x64/nvme98/`; from `0.2.0.0`, the release's `x86/` files at the
+  root of `release-x86/` and its `x64/` files at the root of
+  `release-x64/`. Binaries only: none of nvme98's source is bundled.
+- **The licence files.** nvme98's `LICENSE` (BSD-3-Clause, naming three
+  copyright holders) and `NOTICE.TXT` (where each part of nvme98 came
+  from) ship beside those files in each of the two directories as
+  `nvme98-LICENSE.txt` and `nvme98-NOTICE.txt`, with its `readme.txt` as
+  `nvme98-readme.txt`. Their bytes are the release's.
+- **Where it comes from.** The release folder is pinned by the SHA-256 of
+  its `SHA256SUMS.txt`, and every file is checked against that list before
+  it is copied and again after (`scripts/package/package-common.ps1`,
+  "nvme98, the bundled NVMe driver"). `0.1.0.0` is never bundled.
+- **Signing.** The amd64 `nvme98.sys` carries an embedded test signature by
+  nvme98's own test certificate (SHA-1, no timestamp), whose public half is
+  `nvme98-test.cer`. It is not this project's certificate (section 2's
+  test-signature row) and not a Microsoft signature.
+- **What is tracked.** None of these files: they are not in `releases/`
+  and not in any commit, and the packaging scripts copy them from the
+  release folder at each cut. The generated `readme.txt` and
+  `docs/using/release-notes.md` name the bundled version.
+- **The other direction.** No code of this project, and none of
+  `usb4-emu`'s, is copied into nvme98 (AGENTS.md, "Reference
+  Implementations").
+
 ### The third-party PDFs
 
 Both PDFs were tracked in this repository for a time. The xHCI specification

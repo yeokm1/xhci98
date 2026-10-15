@@ -500,6 +500,12 @@ const char *inst_confirm_text(int runs, int writes, int nt, int unsure);
 /* 1 when the service is one of this package's (xhci98, xhciuas, xhcicm). */
 int inst_own_service(const char *service);
 
+/* 1 when a file of the flavour directory is the bundled nvme98 driver's
+ * (a separate project: every name of its files there starts with "nvme98",
+ * package-common.ps1). The tool installs none of them and copies none into
+ * its local copy, which is on the hardware wizard's search path. */
+int inst_bundled_file(const char *name);
+
 /* The removal rank: lower goes first. -1 when the devnode is not removed. */
 int inst_remove_rank(const char *instanceId, const char *service,
                      int filterPresent);

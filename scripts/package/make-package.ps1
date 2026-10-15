@@ -178,6 +178,47 @@ packager signs; nothing is signed by hand). Without it the package is staged
 unsigned, as every package before 2.3.0.0 was: enough for a guest started
 with F8, and make-release.ps1 refuses to publish it.
 
+.PARAMETER Nvme98Version
+The nvme98 build to bundle (owner, 2026-10-15): nvme98 is a separate
+BSD-3-Clause project, and the package may carry one of its released builds,
+copied unchanged from its release folder, never its source. The four
+-Nvme98* pins go together; with none of them the package is built as before,
+with no nvme98. The version selects the layout (package-common.ps1, "nvme98,
+the bundled NVMe driver"): 0.1.x, from 0.1.1.0, is bundled unchanged under
+nvme98\ (nvme98\win9x\ and nvme98\x86\ in the x86 package, nvme98\amd64\ in
+the amd64 one); 0.2.0.0 and later put x86\ or x64\ at the package root. Both
+carry nvme98's LICENSE, NOTICE.TXT and readme.txt as nvme98-LICENSE.txt,
+nvme98-NOTICE.txt and nvme98-readme.txt beside the driver files. 0.1.0.0 is
+refused.
+
+.PARAMETER Nvme98Dir
+The pinned build's release folder, for example the nvme98 repository's
+releases\0.1.1.0. Read only.
+
+.PARAMETER Nvme98SumsSha256
+The SHA-256 of that folder's SHA256SUMS.txt. It is checked first, then every
+file against SHA256SUMS.txt, then every copy in the package against it again;
+any mismatch, an unlisted file or a file the layout does not know is a
+refusal, before the package is staged.
+
+.PARAMETER Nvme98InterfaceVersion
+The pinned build's connection-manager link-state interface version, its
+nvme98cm.h's NVME98LS_VERSION, or "none" for a build with no link-state
+receiver (0.1.x). Compared with src\cm\nvme98cm.h, the header xhci98 compiles
+against ("none" matches only where there is no such header), and, where the
+release folder carries include\nvme98cm.h, that file byte for byte with it.
+A mismatch is a refusal unless -Nvme98AllowInterfaceMismatch.
+
+.PARAMETER Nvme98AllowInterfaceMismatch
+Bundle the build although its interface version does not match. The override
+is printed with the mismatch it overrides.
+
+.PARAMETER Nvme98HeaderPath
+The header the interface version is compared with, overriding
+src\cm\nvme98cm.h. Exists for the packager's own self-tests, and is refused
+without -SkipBinaryGates, so no package of real binaries is checked against
+anything else.
+
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
 before staging either way, because that run is also where the media layout
@@ -283,6 +324,12 @@ param(
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
     [string]$TestSignPfx = "",
+    [string]$Nvme98Version = "",
+    [string]$Nvme98Dir = "",
+    [string]$Nvme98SumsSha256 = "",
+    [string]$Nvme98InterfaceVersion = "",
+    [switch]$Nvme98AllowInterfaceMismatch,
+    [string]$Nvme98HeaderPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -578,6 +625,28 @@ kernel-mode code signing, and the published x86 bytes stay those of the build.
     }
     if ($TestSignPfx -ne "" -and -not (Test-Path -LiteralPath $TestSignPfx -PathType Leaf)) {
         throw "no test-signing key at '$TestSignPfx' (-TestSignPfx). Design record 19 says how the project's is made and where it is held."
+    }
+
+    # The bundled nvme98 build, verified before anything is built or staged:
+    # its pins, its SHA256SUMS.txt and every file, its layout, and its
+    # interface version against the header xhci98 compiles against.
+    if ($Nvme98HeaderPath -ne "" -and -not $SkipBinaryGates) {
+        throw "-Nvme98HeaderPath replaces the header the interface check reads, so it is for the packager's self-tests only (with -SkipBinaryGates); a package of real binaries is checked against src\cm\nvme98cm.h."
+    }
+    if ($Nvme98HeaderPath -eq "") { $Nvme98HeaderPath = Join-Path $repo "src\cm\nvme98cm.h" }
+    $nvme98 = Resolve-Nvme98Input -Version $Nvme98Version -Dir $Nvme98Dir -SumsSha256 $Nvme98SumsSha256 `
+                                  -InterfaceVersion $Nvme98InterfaceVersion -HeaderPath $Nvme98HeaderPath `
+                                  -Allow:$Nvme98AllowInterfaceMismatch
+    $nvme98Files = @()
+    if ($null -ne $nvme98) {
+        Write-Step ("nvme98 {0} ({1} layout) from {2}" -f $nvme98.Version, $nvme98.Layout, $nvme98.Dir)
+        Write-Ok ("SHA256SUMS.txt is the pinned {0}, and every file matches it" -f $nvme98.SumsSha256)
+        if ($nvme98.Overridden) {
+            Write-Warn ("nvme98 INTERFACE MISMATCH OVERRIDDEN (-Nvme98AllowInterfaceMismatch): {0}" -f $nvme98.Mismatch)
+        } else {
+            Write-Ok ("interface version '{0}' matches {1}" -f $nvme98.Interface, $Nvme98HeaderPath)
+        }
+        $nvme98Files = @(Get-Nvme98PackageFiles -Release $nvme98 -Arch $Arch)
     }
 
     if (-not (Test-Path -LiteralPath $InfPath)) {
@@ -1118,6 +1187,20 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
     if (-not (Test-Path -LiteralPath $rootInf)) {
         Copy-Item -LiteralPath $InfPath -Destination $rootInf -Force
     }
+    # The bundled nvme98 build, last, so a name it shares with anything this
+    # project staged is a refusal rather than an overwrite; and each copy is
+    # held to SHA256SUMS.txt again, so what was verified is what is staged.
+    foreach ($nf in $nvme98Files) {
+        $dest = Join-Path $stageDir $nf.Dest
+        if (Test-Path -LiteralPath $dest) {
+            throw "nvme98's '$($nf.Source)' would land at '$($nf.Dest)', where this package already has a file. Bundled files never replace this project's own."
+        }
+        Ensure-Directory (Split-Path -Parent $dest)
+        Copy-Item -LiteralPath (Join-Path $nvme98.Dir $nf.Source) -Destination $dest
+        if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -ne $nf.Sha256) {
+            throw "the staged copy of nvme98's '$($nf.Source)' does not match SHA256SUMS.txt; the release folder changed while it was being copied."
+        }
+    }
 
     Write-Host ""
     foreach ($item in (Get-ChildItem -LiteralPath $stageDir -File -Recurse | Sort-Object FullName)) {
@@ -1402,6 +1485,17 @@ that does not exist, or clear that one yourself.
     } else {
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+    }
+    if ($null -ne $nvme98) {
+        # Where the hardware wizard is pointed for an NVMe controller; nothing
+        # here installs nvme98 (it is a separate project).
+        $nvWhere = if ($nvme98.Layout -eq "new") { "this directory's nvme98.inf" }
+                   elseif ($Arch -eq "amd64") { "nvme98\amd64\" }
+                   else { "nvme98\win9x\ (98 SE, ME) or nvme98\x86\ (2000 to 7)" }
+        Write-Host ("  NVMe     nvme98 {0} (bundled, unchanged): Have Disk -> {1}" -f $nvme98.Version, $nvWhere)
+        if ($nvme98.Overridden) {
+            Write-Warn ("nvme98 bundled with its interface mismatch overridden: {0}" -f $nvme98.Mismatch)
+        }
     }
 } catch {
     Write-Err $_.Exception.Message
