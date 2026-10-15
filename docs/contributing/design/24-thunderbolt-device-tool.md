@@ -366,8 +366,13 @@ re-enumeration worker (`cm_cfgwk.c` on branch `p39-reenum`, read
   marking walk a new devnode that CONFIGMG gave the freed handle is taken
   as known and not marked `DN_REMOVABLE`. The fix belongs in the vanish
   pass of `cmWkMember`, which does walk the port's children: keep only the
-  known entries still among them. The tool offers the unit marked or not
-  (section 4.3), so the eject is not lost; the mark is. Leg E3 reads it.
+  known entries still among them. The worker's later revision on the same
+  branch does this (the known set pruned at every complete walk, and a
+  prune owed at every tunnel down, `CmCfgwkPrune`, read 2026-10-15). The
+  tool offers the unit marked or not (section 4.3), so the eject is not
+  lost either way. On the driver of this release's branch (the re-
+  enumeration of `cm_reenum.c`, before the worker), leg E3 read the
+  re-plugged unit marked removable.
 - Under the USB4 software connection manager, a removal the tool makes on
   98 or ME does not reach the per-port tunnel teardown of record 22
   section 10.4 (the 9x half has no child filter to see it): the PCIe
@@ -560,11 +565,28 @@ removable device as ejected until it is unplugged (Code 47 on XP and
 later, "held for eject"); what it does with a device that is not
 removable is leg E4's reading, and no rescan advice is printed on NT.
 
-Whether the call accepts a unit whose capabilities do not say `Removable`
-(the case of section 1.1) is not documented and is read by leg E4 on each
-NT family the legs reach; until then the README and release notes say only
-that the tool asks Windows to stop such a device and reports what Windows
-answers. No fallback forces a removal.
+**A unit Windows does not see as removable** (the case of section 1.1).
+Read on Windows 2000 (leg E4, 2026-10-15): after the NVMe controller was
+disabled and enabled in Device Manager its capabilities said `Removable`
+no, and `CM_Request_Device_EjectA` answered `CR_REMOVE_VETOED` with
+`PNP_VetoIllegalDeviceRequest` (8), the device still started. For exactly
+that answer on a unit whose capabilities do not say `Removable`, the tool
+asks `CM_Query_And_Remove_SubTreeA(unit, &veto, name, MAX_PATH,
+CM_REMOVE_UI_NOT_OK)` (`cfgmgr32.dll` on every NT target, read in 2000's
+export table): the same query-remove - which every driver of the subtree,
+the volume's included, may veto as for an eject - and then the remove. Its
+answers go through the table of item 2 and 3; nothing overrides a veto.
+Afterwards Windows does not hold the device as ejected: it may start it
+again the next time it looks for new hardware while the device is
+connected, and the tool says so ("Until you unplug it, Windows may start
+it again when it next looks for new hardware."). On Windows 2000 that
+routine answers `CR_CALL_NOT_IMPLEMENTED` from both `cfgmgr32.dll` and
+`setupapi.dll` (the leg, 2026-10-15), so 2000 has no documented way to
+stop such a unit: the tool says so, and that a restart with the device
+connected lists it for removal again (read on the leg: after a restart the
+unit's capabilities said `Removable` again), or to unplug it with the
+computer off - exit 4, nothing changed. XP and later are not read here;
+the same answers get the same route there.
 
 ### 7.3 Choosing the unit
 
@@ -586,7 +608,9 @@ answers. No fallback forces a removal.
   chosen under; otherwise "The device list changed; nothing was ejected."
   (exit 1).
 - One unit per run; never a forced removal: no `CM_Remove_SubTree` without
-  an accepted query, no `CM_Query_And_Remove_SubTree`, no `DIF_REMOVE`.
+  an accepted query, no veto overridden (`CM_Query_And_Remove_SubTreeA`
+  only as section 7.2 says, and never with a flag that skips the query), no
+  `DIF_REMOVE`.
 
 ## 8. The command line and exit codes
 
@@ -752,8 +776,9 @@ and have no live vehicle here; they are owed to the bench.
 - **E5** On 98 SE and ME a unit not marked `DN_REMOVABLE` is still offered,
   with a note (section 4.3).
 - **E6** On NT the eject is `CM_Request_Device_EjectA`, the applet's own
-  route, for every unit; acceptance of a unit without `Removable` is a
-  reading, not a promise (section 7.2).
+  route, for every unit; where Windows refuses it as an illegal request for
+  a unit that is not removable (read on 2000), `CM_Query_And_Remove_SubTreeA`
+  makes the same query-remove and remove, vetoes honoured (section 7.2).
 - **E7** One unit per run; `/eject N` always confirms; `/yes` only with
   `id=`; never forced (section 7.3).
 - **E8** The worker change of section 5.1 is reported to the
@@ -774,8 +799,9 @@ and have no live vehicle here; they are owed to the bench.
 
 - Whether `CM_Query_Remove_SubTree` and `CM_Remove_SubTree` from a Win32
   program work on 98 SE and on ME with `nvme98` below (legs E1, E2, E7).
-- Whether `CM_Request_Device_EjectA` accepts a unit without `Removable`,
-  and what Windows then does with it until the unplug (leg E4).
+- The query-and-remove route for a unit without `Removable` on XP, Vista
+  and 7 (read on 2000 only), and how soon Windows starts such a unit again
+  while it stays connected.
 - The link speed is kept by neither connection manager.
 - The `nvme98` removal handshake (its MD-5): when it exists, the 9x eject
   should be asked of the connection manager, which can run it, rather than

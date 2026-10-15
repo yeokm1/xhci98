@@ -2585,6 +2585,15 @@ int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int removable)
            vetoType == INST_VETO_ILLEGAL_REQUEST && !removable;
 }
 
+const char *inst_not_removable_text(void)
+{
+    return "Windows will not stop this device: it does not see it as "
+           "removable now, and this\nWindows has no other way to stop it. "
+           "Restart Windows with the device connected:\nit is then listed "
+           "for removal again. Or close every program using it, shut "
+           "down\nWindows and unplug it while the computer is off.";
+}
+
 int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
                   int *withName)
 {

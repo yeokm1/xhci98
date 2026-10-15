@@ -601,6 +601,10 @@ int inst_eject_nt(INST_U32 cr, INST_U32 vetoType, const char **text,
  * 2000 reading of record 24 section 7.2; a veto still stops that call). */
 int inst_eject_nt_fallback(INST_U32 cr, INST_U32 vetoType, int removable);
 
+/* The step when that routine is not implemented either (Windows 2000, read
+ * on the leg): exit 4, nothing changed. */
+const char *inst_not_removable_text(void);
+
 /* 98 SE and ME: the outcome of the removal that follows an accepted
  * query, and its text (record 24 section 7.1 item 4). */
 int inst_eject9x_remove(INST_U32 cr, const char **text);

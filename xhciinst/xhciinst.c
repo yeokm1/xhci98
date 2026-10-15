@@ -5497,8 +5497,14 @@ static void tb_routines(void)
         tbEject = (PFN_CM_EJECT)proc(api.SetupApi, "setupapi", "CM_Request_Device_EjectA");
     }
     if (envNow.Nt) {
-        tbQueryAndRemove = (PFN_CM_EJECT)proc(api.CfgMgr, "cfgmgr32",
+        /* setupapi.dll's first: Windows 2000's cfgmgr32.dll exports the
+         * routine but answers CR_CALL_NOT_IMPLEMENTED (the 2000 leg). */
+        tbQueryAndRemove = (PFN_CM_EJECT)proc(api.SetupApi, "setupapi",
                                               "CM_Query_And_Remove_SubTreeA");
+        if (tbQueryAndRemove == NULL) {
+            tbQueryAndRemove = (PFN_CM_EJECT)proc(
+                api.CfgMgr, "cfgmgr32", "CM_Query_And_Remove_SubTreeA");
+        }
     }
 }
 
@@ -6650,6 +6656,13 @@ static int run_eject(void)
             notRemovable = 1;
         }
         outcome = inst_eject_nt(cr, veto, &text, &withName);
+        if (notRemovable && cr == INST_CR_CALL_NOT_IMPLEMENTED) {
+            /* Windows 2000 (the leg): no routine stops a device it does
+             * not see as removable. A step for the user, nothing changed. */
+            text = inst_not_removable_text();
+            withName = 0;
+            outcome = INST_EJ_VETO;
+        }
         if (outcome != INST_EJ_DONE) {
             if (withName) {
                 char name[MAX_PATH + 16];
