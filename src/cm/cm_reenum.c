@@ -1076,6 +1076,8 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->EjectPending = 0;
     r->MarkOpen = 0;
     r->CfgmgOwed = 0;
+    r->LossDrain = 0;
+    r->LossSeen = 0;
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         r->KnownCount[i] = 0;
     }
@@ -1191,6 +1193,15 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     if (!r->CfgmgOwed) {
+        return;
+    }
+    if (r->LossSeen) {
+        /* The host interface was lost before the worker started: a
+         * baseline taken now would record a lost tree as healthy, and its
+         * paths would be read from reset bridges. The route stays none
+         * for this instance (a PnP restart starts afresh). */
+        r->CfgmgOwed = 0;
+        CmLogNote(nhi, "cm.reenum.9x.not-started.lost", 1);
         return;
     }
     r->CfgmgOwed = 0;
@@ -1315,6 +1326,19 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
          * member the rediscovery finds (cmDiscoverAndList). */
         r->DebtPending = 1;
     }
+    if ((r->LossDrain || action->Why == TBT_ICM_WHY_UNAVAILABLE) &&
+        r->Route == CM_ROUTE_CONFIGMG) {
+        /* The host interface lost (CmReenumLossBegin): counted, ejects
+         * voided above, and nothing else - no bridge polled, no request
+         * posted, whatever the action's reason (one queued before the
+         * loss included). The worker's CONTROLLER_UNAVAILABLE request is
+         * this episode's reconciliation; an ordinary scan or
+         * re-enumeration here would read the bridge headers the loss may
+         * have reset, or run ahead of its removal. */
+        CmLogNote(nhi, "cm.reenum.9x.unavailable.action",
+                  (action->Kind << 8) | action->Why);
+        return;
+    }
     if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
         r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
         /* Whatever XhciCmReenum says: the known children are pruned to
@@ -1372,7 +1396,7 @@ VOID CmReenumService(PCM_NHI nhi)
     ULONG i;
 
     r = &nhi->Reenum;
-    if (!r->Listed && r->RediscoverLeft != 0 &&
+    if (!r->Listed && r->RediscoverLeft != 0 && !r->LossSeen &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
         cmDiscoverAndList(nhi);
     }
@@ -1694,11 +1718,28 @@ VOID CmReenumStop(PCM_NHI nhi)
  * asks for nothing. Nothing here states quiescence: no endpoint
  * notification is made (presence lost only). IRQL: PASSIVE_LEVEL.
  */
+VOID CmReenumLossBegin(PCM_NHI nhi)
+{
+    nhi->Reenum.LossDrain = 1;
+    if (nhi->Reenum.Wk == NULL) {
+        /* No 98 worker running (not started yet, or the set still being
+         * looked for): none is started, and no rediscovery is made, for
+         * this instance (cmCfgmgLate, CmReenumService). */
+        nhi->Reenum.LossSeen = 1;
+    }
+}
+
+VOID CmReenumLossEnd(PCM_NHI nhi)
+{
+    nhi->Reenum.LossDrain = 0;
+}
+
 VOID CmReenumUnavailable(PCM_NHI nhi, ULONG episode)
 {
     PCM_REENUM r;
 
     r = &nhi->Reenum;
+    r->LossDrain = 0;
     CmLogNote(nhi, "cm.reenum.unavailable", episode);
     if (r->Route != CM_ROUTE_CONFIGMG || r->Wk == NULL || r->Reenum == 0) {
         return;

@@ -608,6 +608,51 @@ switch reads `0x0180200a`, with no such flag.
 **Evidence.** `vm\v-xp7\xp-gen\`, `xp64-gen\`, `vx86-gen\`, `w7-gen\`,
 as for 39-V.3.
 
+## 40-V.2 - Windows 2000, the legs of record 22 section 14.2
+
+**Verdict: every leg read passes on Windows 2000 except U.11 on the
+`asm4242` stand-in, blocked by the platform (Code 12 on the second tunnel
+bridge), and passed on `minimal`** (2026-10-15). Not read: suspend and
+resume (another worker reads them after the client's resume budget lands),
+and a Thunderbolt 3 device router behind a USB4 host (no `usb4-emu`
+preset; task 40-A.8 stays host-tested only).
+
+**The vehicle.** As this record's 39-V.2 section in `runs/run-39.md`:
+development host A, TCG, the launcher with `-RunRoot v-2k`, `-BootStrict`,
+`-trace usb4_*` and, from the `intel-adl` legs on, `-Timestamps`; the
+`win2k-xonly` image, one vCPU; QMP and VNC 47926 to 47929. The emulator copy
+in `vm\usb4\bin` (`v11.1.2-149-gc645f13`) for `gen-a`, and
+`vm\usb4\bin-5ba7f60` (`usb4-emu` main `5ba7f60`) for the others. The
+`qemu` flavour of `xhcicm.sys` from `3.0.0.0` at `6fa331d4`; the host
+interface installed by `devq update e:\xhcicm.inf
+"PCI\VEN_1B36&DEV_00F4&CC_0C0340"` (the class line reached through that
+hardware id), **the filter on `1B36:0001`** by `nt\xhcicmf.inf` and
+`"PCI\VEN_1B36&DEV_0001&CC_0604"` (unforced, `reboot=0`, and taken
+automatically by every later `1B36:0001` from the stored INF), `nvme98`
+0.1.1.0. Evidence: `vm\v-2k\gen-*\`.
+
+| Leg | Run | Result |
+|---|---|---|
+| U.1 cold device (`minimal`) | `gen-a` | Software CM selected (`cm.select.outcome` 4, route 1); host router `46F4:4040`, two ports; the mapping operation names port 1 `00:05.0`; bonded x2, PCIe up (`00010809`) and USB3 up; the filter's invalidation; the NVMe found and `D:` mounted. PASS |
+| U.2 hot plug | `gen-a`, `gen-asm` | `device_add`: tunnels built, the bridge re-enumerated, the NVMe up with no Refresh. PASS |
+| U.3 unplug and re-plug, idle | `gen-a` | `u4.linkdown=01000109` (path proven closed), `u4.action` down, the Unsafe Removal dialog (no eject asked); re-plug: generation 2, both tunnels, `D:` back, listed for eject. PASS |
+| U.4 unplug during I/O | `gen-a` | A 52 MB copy finished into the cache before the unplug (plain case: no hang, the delayed write lost); with the harness holding a write's completion (`x-faults "at=complete op=write act=hold tag=u4"`, held 1) then `device_del`: `u4.linkdown=01000309`, the endpoint reset at the cutoff, the copy ended by `nvme98` ("Delayed Write Failed", data lost - an unplug under I/O), no hang of this driver, the devnode removed. The statement is withheld (no qualified channel in this build): `nvme98`'s own deadline ended it. PASS |
+| U.5 `intel-adl` | `gen-adl` | `8087:463E`, PCIe Down 8 and 9, `u4.quirk=463E0001` (the USB3 bandwidth row); `ERR_ADDR` on adapters 10 and 11; the DP IN adapters' plug events (5, 6) acknowledged and ignored; the mapping operation answered on this emulator build (`not-supported 0`; the record expected Not Supported on `a50c19e`), port 1 named `00:05.0`. Unplug and re-plug: both tunnels rebuilt. PASS |
+| U.6 pre-OS, preserve (`intel-adl`, `preos-cm=on`) | `gen-adl` | `u4.preserved=00010809`, no transition and no reset after the takeover, `D:` present from boot and still mounted. PASS (`minimal` with `preos-cm` is 40-0.3's reading plus `gen-a`'s U.9) |
+| U.7 pre-OS, clean (`XhciCmPreOsCleanup` 2, restart) | `gen-adl` | `u4.clean=1`: the pre-OS tunnel taken down (`admin-down`), the host router reset, the tunnels rebuilt, the volume removed and back, now listed for eject. PASS |
+| U.8 USB3 | `gen-adl` | The `qemu-xhci` `1B36:000D` under the package's `xhci98.sys`; the USB3 tunnel up with its Host Controller Ack; the USB disk attached at 5000 Mb/s (`info usb`) and enumerated by `xhci98.sys` at SuperSpeed and configured (its log). PASS. `XhciCmUsb3Tunnel` 0 is 40-A.6's 98 SE reading, not repeated |
+| U.9 disable and enable | `gen-a` | `u4.preserved=00010809` at the rebind, no transition, `D:` stays. PASS |
+| U.10 policy values (`XhciCmApprove` 0, `XhciCmLaneBonding` 0) | `gen-a` | From a cold start: the router enumerated, lane 1 of the host disabled (`LANE_ADP_CS_1` Lane Disable), Configuration Valid, the USB3 tunnel up, no PCIe tunnel. PASS. Set mid-session after a bonded link instead: `u4.bond.not-default` on the host's lane adapter (the previous bond's `TLW`/`LB` still set) and the port FAILED - record 22 section 6.5's "else FAILED", a reading. `XhciCmMode` 3 on a Thunderbolt 3 NHI: refused, inert (39-V.2's Titan Ridge leg) |
+| U.11 two ports | `gen-p2` (`minimal`, `-Port2`), `gen-asm` | `minimal`: the mapping operation names port 2 `00:08.0` (`u4.named=02004002`), the device on port 2 gets its PCIe tunnel and its own bridge re-enumerated (`u4.action.map=80000040`), the second NVMe found. PASS. `asm4242`: port 2's tunnel built and the bridge 02:01.0 re-enumerated, but 2000's `pci.sys` left that bridge at Code 12 (no resources), so the NVMe behind it never appeared: FAIL by platform, not this driver |
+| U.12 a daisy chain (`-Chain`) | `gen-ch` | The depth-2 router's plug events acknowledged (`HP_ACK matched 1`), left uninitialised, no tunnel to it. PASS |
+| U.13 inert | `gen-a`, `tr-a` | `usb4-generic` with `XhciCmMode` 0: `cm.inert` 1, no ring 0 traffic in the trace. A Thunderbolt 3 NHI forced toward the software CM (`XhciCmMode` 3 on Titan Ridge): inert. PASS (the INF-copy variant of the record was not built) |
+| `asm4242` U.1 to U.3 | `gen-asm` | The stand-in switch (`1B21:2421`, two `2423` tunnel bridges, the xHCI `2426`, the NHI `2425`) on i440FX; `xhcicm.inf` by its class line; host router `174C:2428`, PCIe Down 8 and 9; the mapping operation's answers name no bridge here (`NO_BRIDGE`), so the members come from the SHPC source and an action re-enumerates every verified port (`map 80000000`); bonded, PCIe and USB3 up, `D:` mounted; unplug and re-plug. PASS |
+| Safe eject (40-A.9 re-read, PCIe only) | `gen-a` | Listed after a re-plug ("not listed" before it: the device was present before the filter's baseline); Stop: `cm.reenum.eject=00000028`, `u4.eject=00000100`, the trace `PCIe tunnel down reason 1 (admin-down)` and **no USB3 transition** before "Safe To Remove Hardware"; `device_del`: no dialog, the USB3 tunnel down only then; `device_add`: both tunnels back. PASS |
+
+**Not read here.** Suspend and resume; the TB3-behind-USB4 preset; the
+98 SE, ME and NT 5.1/6.x tiers (40-V.1, 40-V.3); the `release` and `debug`
+flavours.
+
 ## Containment of the USB4 software connection manager - the host interface taken away (record 22 section 7.7)
 
 **The change** (branch `u4-live`, on the liveness monitor and gate of

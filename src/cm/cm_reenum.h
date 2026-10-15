@@ -318,6 +318,12 @@ typedef struct _CM_REENUM {
     ULONG Vetoed;           /* 98: Query_Remove_SubTree refused           */
     ULONG Marked;           /* 98: DN_REMOVABLE set                       */
     ULONG MarkFailures;
+    ULONG LossDrain;        /* between CmReenumLossBegin and its end: the
+                               actions drained are the loss's            */
+    ULONG LossSeen;         /* a loss came with no 98 worker running: none
+                               is started and no rediscovery made for this
+                               instance (a baseline or a discovery would
+                               be read from a lost tree)                 */
     ULONG Unavailable;      /* 98: CONTROLLER_UNAVAILABLE requests posted */
     ULONG GoneDone;         /* 98: ... members whose retained children
                                were reconciled                           */
@@ -351,6 +357,19 @@ VOID CmReenumStop(struct _CM_NHI *nhi);
  * IRQL: PASSIVE_LEVEL, the connection-manager thread.
  */
 VOID CmReenumUnavailable(struct _CM_NHI *nhi, ULONG episode);
+/*
+ * The bracket around a loss's drain (cm_nhi.c CmNhiLost, cm_power.c's
+ * failed resume): CmReenumLossBegin right after TbtIcmLost, before any
+ * drain; CmReenumUnavailable (or CmReenumLossEnd where no request is owed
+ * this episode) after the drain. In between, on the CONFIGMG route, every
+ * action handed over - those TbtIcmLost queued and those queued before it
+ * - is counted and voids pending ejects, and nothing more: no bridge
+ * polled, no request posted; the worker's CONTROLLER_UNAVAILABLE request
+ * is the reconciliation. On NT the actions run as always. IRQL:
+ * PASSIVE_LEVEL, the connection-manager thread.
+ */
+VOID CmReenumLossBegin(struct _CM_NHI *nhi);
+VOID CmReenumLossEnd(struct _CM_NHI *nhi);
 
 VOID CmReenumSetEject(struct _CM_NHI *nhi, CM_REENUM_EJECT hook,
                       PVOID context);

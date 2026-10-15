@@ -274,6 +274,7 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     if (nhi->Stage != CM_STAGE_ACTIVE || CmNhiFailed(nhi)) {
         return TRUE;
     }
+    lost = FALSE;
     nhi->Counters.Resumes++;
     CmLogNote(nhi, "cm.resume", (ULONG)nhi->SystemPower);
     if (!nhi->U4On && !CmNhiHwAccess(nhi)) {
@@ -342,6 +343,12 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "cm.resume-failed", 0x100UL);
             TbtIcmUnbind(&nhi->Icm);
             TbtIcmLost(&nhi->Icm);
+            if (nhi->ReenumOn) {
+                /* The drain below is the loss's (CmReenumLossBegin); the
+                 * CONTROLLER_UNAVAILABLE request follows it. */
+                CmReenumLossBegin(nhi);
+                lost = TRUE;
+            }
             nhi->Icm.Failed = TRUE;
             ok = FALSE;
         }
@@ -365,8 +372,12 @@ resumed:
         CmReenumResumed(nhi, (BOOLEAN)(ok && !held));
     }
     CmNhiDrainActions(nhi);
-    if (lost) {
+    if (lost && nhi->U4On) {
+        /* Record 22 section 7.7: the USB4 profile's containment, its own
+         * loss bracket and request inside (CmNhiU4ContainEx). */
         CmNhiU4Contain(nhi);
+    } else if (lost && nhi->ReenumOn) {
+        CmReenumUnavailable(nhi, CmLiveEpisode(&nhi->Live));
     }
     return ok;
 }

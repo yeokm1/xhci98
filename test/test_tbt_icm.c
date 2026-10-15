@@ -798,6 +798,25 @@ static void test_timeouts_and_errors(void)
     CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "failed");
     CHECK_EQ(actions(act, 4), 0, "no tunnel");
 
+    /* A stale approve: the firmware cancelled the connection's pending
+     * approval (an unplug, a re-plug or mailbox 0x06) and answers the
+     * approve with the error flag, then reports the disconnect. Benign:
+     * one approve, no retry, logged once, the instance not failed, the
+     * entry gone with the disconnect and nothing sent after it. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(600);
+    arDisconnected(1, 1, 0);
+    idle(600);
+    CHECK_EQ(g_fw.Approves, 1, "stale approve: one approve, no retry");
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "stale approve: counted once");
+    CHECK(!g_icm.Failed, "stale approve: the instance not failed");
+    CHECK(TbtIcmDevice(&g_icm, 0) == NULL, "stale approve: entry gone");
+    CHECK_EQ(actions(act, 4), 1, "stale approve: the tunnel down only");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "stale approve: down");
+
     /* Get route never answered: the entry stays, unrouted and unapproved
      * (record 21 section 5.5); the next announcement retries the route and
      * then the approval. */
