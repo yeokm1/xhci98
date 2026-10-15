@@ -70,6 +70,8 @@ typedef struct _CM_STATUS_PUB {
     ULONG Published;        /* a record was written in this load          */
     ULONG Generation;
     ULONG LastBytes;        /* 0: nothing written since the start         */
+    ULONG BuiltBytes;       /* Built's length, 0 before the first build:
+                               the query device's record (cm_qryos.c)     */
     ULONG Writes;
     ULONG Failures;
     ULONG LastError;        /* the last failed write's NTSTATUS           */

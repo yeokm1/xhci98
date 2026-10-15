@@ -126,8 +126,13 @@ static VOID cmUnload(PDRIVER_OBJECT driver)
     CmNvlinkUnload();
 }
 
+/* Every dispatch routine tells the query device (CM_KIND_QUERY,
+ * cm_qryos.c) from the PnP roles first: it has no lower object. */
 static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
 {
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_QUERY) {
+        return CmQueryDispatch(device, irp);
+    }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NHI) {
         return CmNhiPnp((PCM_NHI)device->DeviceExtension, irp);
     }
@@ -136,14 +141,18 @@ static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
 
 static NTSTATUS cmDispatchPower(PDEVICE_OBJECT device, PIRP irp)
 {
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_QUERY) {
+        return CmQueryDispatch(device, irp);
+    }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NHI) {
         return CmNhiPower((PCM_NHI)device->DeviceExtension, irp);
     }
     return CmFilterPower((PCM_FILTER)device->DeviceExtension, irp);
 }
 
-/* Every other request, on any role, goes down unchanged: the NHI has no
- * interface of its own yet, and the filters add nothing to their device.
+/* Every other request, on any PnP role, goes down unchanged: the NHI's
+ * interface is the query device's, and the filters add nothing to their
+ * device.
  * The PnP and power dispatch send both filter kinds (CM_KIND_FILTER and
  * CM_KIND_CHILD) to cm_filt.c. */
 static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
@@ -151,6 +160,9 @@ static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
     PCM_COMMON common;
 
     common = (PCM_COMMON)device->DeviceExtension;
+    if (common->Kind == CM_KIND_QUERY) {
+        return CmQueryDispatch(device, irp);
+    }
     IoSkipCurrentIrpStackLocation(irp);
     return IoCallDriver(common->Lower, irp);
 }
@@ -167,6 +179,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     CmDriverObject = DriverObject;
     CmRegInit();
     CmNvlinkInit();
+    CmQueryInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = cmDispatchOther;
     }

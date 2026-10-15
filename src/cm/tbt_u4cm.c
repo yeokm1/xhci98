@@ -1875,14 +1875,32 @@ static LONG tbtU4Tbt3Setup(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
 /* Lanes and bonding (record 22 section 6.5)                              */
 /* ---------------------------------------------------------------------- */
 
+/* A host lane 0 read is kept for the query device (TBT_U4_PORT.LinkSeen):
+ * the reads the sequences make anyway, no read of its own. */
 static LONG tbtU4LaneRd(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp,
                         PULONG v)
 {
+    LONG rc;
+    ULONG i;
+    PTBT_U4_PORT p;
+
     if (adp == 0 || adp >= TBT_U4_MAX_ADP || rt->Adp[adp].CapLane == 0) {
         return TBT_E_STATE;
     }
-    return tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
-                   rt->Adp[adp].CapLane + TBT_LANE_CS_1, v);
+    rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                 rt->Adp[adp].CapLane + TBT_LANE_CS_1, v);
+    if (rc == TBT_OK && rt == &cm->HostRouter) {
+        for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
+            p = &cm->Ports[i];
+            if (p->Lane0 == adp) {
+                p->LinkSeen = TRUE;
+                p->LinkLane1 = *v;
+                p->LinkGeneration = p->Generation;
+                break;
+            }
+        }
+    }
+    return rc;
 }
 
 static LONG tbtU4LaneRmw(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp,

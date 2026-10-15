@@ -311,6 +311,14 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN AnchorValid;
     ULONG AnchorUs;
     ULONG AnchorGeneration;
+
+    /* Host lane 0's LANE_ADP_CS_1 as this driver last read it on its own
+     * path (tbtU4LaneRd), for xhcicm.sys's query device (design record 25
+     * section 4.3), which reads no register of its own: valid while
+     * LinkGeneration is the port's Generation. */
+    BOOLEAN LinkSeen;
+    ULONG LinkLane1;
+    ULONG LinkGeneration;
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */

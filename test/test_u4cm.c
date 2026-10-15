@@ -463,6 +463,11 @@ static void test_bonding(void)
     lane = fabPortLane0(&g_fab, 1);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "bonding impossible: UP single");
     CHECK(!p->Bonded && p->SingleLane && p->Lane1Disabled, "lane 1 disabled");
+    CHECK(p->LinkSeen && p->LinkGeneration == p->Generation,
+          "host lane 0's reading kept for the query device");
+    CHECK_EQ(TBT_LANE1_STATE(p->LinkLane1), TBT_LANE_STATE_CL0,
+             "as read: CL0");
+    CHECK_EQ(TBT_LANE1_NLW(p->LinkLane1), TBT_LANE_WIDTH_X1, "as read: x1");
     CHECK(fabAdp(&g_fab, 0, lane + 1, FAB_CAP_LANE + 1) & 0x4000UL, "Lane Disable set");
     CHECK_EQ((fabPath0(&g_fab, 0, lane, 9) >> 17) & 0x7F, 32,
              "host BA's 32 credits even single (within what the lane has)");
