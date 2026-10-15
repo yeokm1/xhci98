@@ -1613,6 +1613,13 @@ static void refresh_model(int withUsb)
     if (!walk(&gw)) {
         gw.Count = 0;
     }
+    /* A new model: the poll compares against it again, not against an
+     * answer the model may not hold. */
+    for (root = 0; root < TR_SNAP_NHI; root++) {
+        free(pollBuf[root]);
+        pollBuf[root] = NULL;
+        pollId[root][0] = '\0';
+    }
     nhi_find(&gw);
     derive(&gw, nhi, nhiCount);
     for (root = 0; root < nhiCount; root++) {
@@ -3604,7 +3611,8 @@ static void poll(void)
             continue;
         }
         g = inst_get32(q.Rec, CM_ST_O_GENERATION);
-        if (base == NULL || g != inst_get32(base->Rec, CM_ST_O_GENERATION) ||
+        if (base == NULL || !nhi[k].HaveQ ||
+            g != inst_get32(base->Rec, CM_ST_O_GENERATION) ||
             q.ContentGen != base->ContentGen || q.Flags != base->Flags ||
             q.Live != base->Live || q.EpochLo != base->EpochLo ||
             q.EpochHi != base->EpochHi ||
