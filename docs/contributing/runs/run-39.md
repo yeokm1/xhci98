@@ -684,11 +684,29 @@ made in any case (nothing reads the SHPC slot there, record 21 section
 prototyped), so the 9x half's runtime behaviour beyond the record is not
 readable yet.
 
+**Re-read after the CONFIGMG worker** (2026-10-15 evening; the `qemu`
+build of `5a7b3387`, gated, SHA-256 prefix `CEE627E4`; QEMU pinned to
+`vm\usb4\bin-5ba7f60\qemu-system-x86_64.exe`; both guests from the same
+overlays). Windows 2000: `cm.nvlink.up=01000401` before `nvme98`'s attach
+(`0x95 arg=01030000`); under `gio`, the stage-2 cutoff at T0+0.7 ms,
+`nvme98`'s `0x96` at T0+270 ms, `cm.nvlink.await=0000005A` (90 ms), then
+the retirement and the invalidation. Windows 98 SE: the record written
+(`80000000`); the fresh exposure found the bus silent for its 1 s
+(`up.waited=0003F800`), `Reenumerate_DevNode` (CR_SUCCESS), then the
+rescan published the entry (`cm.nvlink.up=01000401`) 206 ms after the
+exposure (`cm.nvlink.up.late=0000CE00`; 1016 ms in an earlier run of
+`da0d1f0f`); at the unplug the statement withheld as designed
+(`icm-down` verdict 9, an OS not admitted; the entry left `IN_USE`). The
+worker's handshake (`REMOVE_PENDING`) was not exercised: the children the
+worker removes at an unplug have vanished, and `nvme98` has no 9x
+receiver yet.
+
 **Not read here.** XP x64 (the amd64 build; the other admitted pair), XP
 x86, Vista and 7 (not admitted: the statement is withheld there by
 design); the `REMOVE_PENDING` handshake (no receiver, and no caller in
 the ICM profile); a hardware tunnel port (no statement by design); the
 `release` and `debug` flavours in a guest.
+
 ## 39-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
 
 **Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64

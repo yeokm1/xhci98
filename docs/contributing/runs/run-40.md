@@ -361,6 +361,7 @@ software connection manager admitted and `nvme98`'s G3 prototype bound
 age at the statement, the statement after the cutoff, the
 acknowledgement before the invalidation, the 5 s bound with an idle
 receiver; and the 9x half once `nvme98` has one.
+
 ## 40.5 onward - The install, upgrade and uninstall tool (INSTALL.BAT, XHCIINST, XHCIIN64)
 
 **Verdict: done** (2026-10-15): the legs below pass on the tool as it
