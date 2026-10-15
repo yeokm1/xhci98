@@ -723,8 +723,32 @@ static void test_query(void)
     put32(qa, CM_Q_O_ID_BYTES, (TR_U32)strlen(QB_ID) + 1UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "id past the end");
     put32(qa, CM_Q_O_ID_BYTES, 0UL);
-    CHECK(tr_query_parse(qa, n, &q) == 0, "empty id");
+    CHECK(tr_query_parse(qa, n, &q) == 1 && q.Id[0] == '\0',
+          "empty id (98 SE and ME) parsed, matched later by name and ids");
+    {
+        int byName = 7;
+        CHECK(tr_query_matches(&q, QB_ID, 1, &byName) == 1 && byName == 1,
+              "match: empty id, VEN/DEV equal, name unique");
+        CHECK(tr_query_matches(&q, QB_ID, 0, &byName) == 0,
+              "match: empty id, the name not unique");
+        CHECK(tr_query_matches(&q, "PCI\\VEN_8086&DEV_15BF&SUBSYS_22B017AA&REV_01\\0000083000",
+                               1, &byName) == 0,
+              "match: empty id, another device id");
+        CHECK(tr_query_matches(&q, "PCI\\VEN_8087&DEV_15EB\\0", 1, &byName) == 0,
+              "match: empty id, another vendor");
+        CHECK(tr_query_matches(&q, "ROOT\\XHCICM\\0000", 1, &byName) == 0,
+              "match: empty id, a devnode with no PCI ids");
+    }
     put32(qa, CM_Q_O_ID_BYTES, (TR_U32)strlen(QB_ID));
+    CHECK(tr_query_parse(qa, n, &q) == 1, "id back");
+    {
+        int byName = 7;
+        CHECK(tr_query_matches(&q, QB_ID, 0, &byName) == 1 && byName == 0,
+              "match: the instance id itself");
+        CHECK(tr_query_matches(&q, "PCI\\VEN_8086&DEV_15EB&SUBSYS_00000000&REV_06\\OTHER",
+                               1, &byName) == 0,
+              "match: an id given and different, never by name");
+    }
     put32(qa, CM_Q_O_ID_OFFSET, idOff - 1UL);
     CHECK(tr_query_parse(qa, n, &q) == 0, "id inside the extensions");
     put32(qa, CM_Q_O_ID_OFFSET, idOff);

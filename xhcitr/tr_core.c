@@ -896,7 +896,9 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
         (q->Bytes - q->ExtOffset) / q->ExtBytes < q->ExtCount) {
         return 0;
     }
-    if (idLen == 0 || idLen > TR_ID_CHARS - 8 ||
+    /* An empty instance ID is an answer too: Windows 98 SE and ME give the
+     * driver none (tr_query_matches then matches by name and ids). */
+    if (idLen > TR_ID_CHARS - 8 ||
         idOff < q->ExtOffset + q->ExtCount * q->ExtBytes ||
         idOff > q->Bytes || q->Bytes - idOff < idLen) {
         return 0;
@@ -909,6 +911,30 @@ int tr_query_parse(const unsigned char *b, size_t n, TR_QUERY *q)
         q->Id[i] = (char)c;
     }
     q->Id[idLen] = '\0';
+    return 1;
+}
+
+int tr_query_matches(const TR_QUERY *q, const char *devId, int nameUnique,
+                     int *byName)
+{
+    INST_U32 vd;
+
+    if (byName != NULL) {
+        *byName = 0;
+    }
+    if (q->Rec == NULL || devId == NULL) {
+        return 0;
+    }
+    if (q->Id[0] != '\0') {
+        return tr_eq(q->Id, devId);
+    }
+    if (!nameUnique || !inst_pci_vendev(devId, &vd) ||
+        tr_d32(q->Rec + CM_ST_O_NHI_ID) != (TR_U32)vd) {
+        return 0;
+    }
+    if (byName != NULL) {
+        *byName = 1;
+    }
     return 1;
 }
 
