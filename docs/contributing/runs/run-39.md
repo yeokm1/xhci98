@@ -888,3 +888,91 @@ profile (`usb4-generic`); a dock with several units; a removal that fails
 after an accepted query; leg E5 (a unit unplugged between the confirmation
 and the call), which the host suite covers with injected answers; the
 `release` and `debug` flavours.
+
+## 39-V.1 on 98 SE, 39-V.3 on ME and 39-V.4 - The 9x legs (2026-10-15)
+
+**Verdict: the 98 SE legs read here pass; ME passes the install and the
+plug cycle, and its "Unplug or Eject Hardware" lists nothing; 39-V.4 reads
+as designed for Phase 40** (2026-10-15). V.1.8 stays with the bench (no
+i440FX dock, 39-0.7).
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-RunRoot v-9x`, `-BootStrict`, `-Trace`, and `-Qemu
+vm\usb4\bin-5ba7f60\qemu-system-x86_64.exe` on every leg (the `usb4-emu`
+`main` `5ba7f60` build, QEMU fork `20655c3`). 98 SE from an overlay of
+`vm\t26\win98-gold.qcow2` (`t98`, QMP and VNC 47902 and 47903), ME from an
+overlay of `vm\t37me\winme-stock-base.qcow2` (`me`, 47910 and 47911), one
+vCPU each. The NVMe behind the tunnel: an overlay of a 128 MiB FAT16 image
+holding `TESTDATA.BIN` (u4-asm's), `nvme98` 0.1.1.0 from its `win9x`
+folder. The drivers: branch `v-9x` at `9153c87e` (the `3.0.0.0` tip of the
+run), `build-driver.cmd qemu` and `release`, every gate passing, packaged
+with `make-package.ps1` (`out\v-9x\`, hashes in `out\v-9x\pkg-sha256.txt`);
+the staged `xhcicm.inf` copies write `XhciLogVerbosity` 2. The log below is
+the `qemu` flavour's port-0xE9 output.
+
+**The install route.** `XHCIINST` refuses a `qemu` flavour binary in
+`release-x86` ("a driver of another build flavour is in the directory"),
+by design. So on 98 SE the NHI took the `qemu` package through Add New
+Hardware ("Specify a location", `D:\release-x86`), and on ME `INSTALL.BAT`
+ran on the `release` package, after which the `qemu` `xhcicm.sys` was
+copied over the installed one for the log.
+
+| Leg | Setup | Reading | Result |
+|---|---|---|---|
+| V.1.1 install | `OFF_OFF`, device at boot | the switch's bridges through 98 SE's wizard; the NHI as "xHCI98 Thunderbolt 3 Controller" from `xhcicm.inf`; `cm.select.outcome=1` (ICM), `tbt.icm.connected=00000811`, approve, `cm.action.tunnel-up=00000001`, `cm.reenum.9x.reenumerate=00020800`; "PCI Card" offered at once, no Refresh; `nvme98` from `D:\NVME`, no restart; `E:` (`ORICO`), `fc /b` of `TESTDATA.BIN` clean | PASS |
+| V.1.2 unplug, re-plug | the same boot | `device_del`: `tbt.icm.device-gone`, `tunnel-down=00000003`, `query-remove` 0, `remove` 0, `reenumerate=00020800`, `E:` "Invalid drive specification"; `device_add`: approved, tunnel up, `E:` back, the file written before the unplug compared clean | PASS |
+| V.1.3 boot-tunnelled device | `OFF_ON` and `ON_ON`, device at boot | the trace's pre-boot tunnel (`cold=1`) before POST; the desktop reached; the device announced approved (`connected=00000D11` on `OFF_ON`), `tunnel-up=00000002`, no approve command; after driver ready no tunnel transition and no reset of any kind in the trace; `E:` read clean; then V.1.2's cycle on `OFF_ON`, clean | PASS (both) |
+| V.1.4 nothing at boot | `OFF_OFF`, device not at boot | `cm.bind=0`, `cm.dev.count=0`; `device_add` through V.1.1's path, `E:` opened by AutoPlay | PASS (`OFF_ON` not run separately) |
+| V.1.5 Assist, no device | `ON_OFF`, nothing attached | the controller absent: no line of `xhcicm.sys` in the log, a clean boot | PASS (`ON_ON` without a device not run) |
+| V.1.6 disable, enable | `OFF_OFF`, device at boot | disable (Device Manager, "Disable in this hardware profile"): the counters dumped, mailbox `0x07`; the volume stayed (`fc` clean); enable: driver ready, `connected=00000911` (approved), `tunnel-up=00000002`, re-enumeration, `E:` clean | PASS |
+| V.1.7 `XhciCmApprove` 0, `XhciCmMode` 0 | values written to `Class\System\0034` with `regedit /s`, then a restart | approve 0: `connected=00000811`, `tbt.icm.approve-withheld`, no approve command in the trace; mode 0: `cm.mode=0`, `cm.inert=1`, no ring 0 or mailbox traffic in the trace after the boot | PASS |
+| V.1.8 the dock's xHCI | - | not available on i440FX (39-0.7); the bench's | not run |
+| V.1.9 safe eject, 9x half | every tunnel up | `cm.reenum.9x.removable=00000000` (`DN_REMOVABLE` added, `CR_SUCCESS`) on the NVMe's devnode, never a port's; 98 SE offers no eject for it (NUSB's applet lists by its own interface, above) | the flag set; no eject on 98 SE (the NT-only line stands) |
+
+**ME** (39-V.3's ME tier), `tb3-alpine-ridge` then `usb4-generic`:
+
+| Leg | Reading | Result |
+|---|---|---|
+| Install | the bridges' and the NHI's wizards cancelled; `INSTALL` from `D:\`: the plan listed one device, QEMU's own xHCI (`1B36:000D`), and neither the NHI nor the Alpine Ridge xHCI (a reading of the tool, not a fault: their wizards had been cancelled); `Y`: the package copied to `C:\WINDOWS\XHCI98\...`, `DevicePath` updated, exit 4 with the steps. After a shutdown and a new boot the NHI's wizard named "xHCI98 Thunderbolt 3 Controller" and its automatic search found it; driver ready in the trace | PASS |
+| Plug | `connected=00000811`, approve, `tunnel-up=00000001`, `cm.reenum.9x.version=0000045A`, `reenumerate=00020800`, `removable=00000000`; "PCI Card" at once, no Refresh; `nvme98` from `D:\NVME`, `E:` with no restart | PASS |
+| "Unplug or Eject Hardware" | empty, with and without "Display device components": the `DN_REMOVABLE` devnode is not listed on ME either, so nothing to stop | not listed |
+| Unplug, re-plug | `device-gone`, `tunnel-down=00000003`, `query-remove` 0, `remove` 0, `E:` gone; re-plug: tunnel up, the file written before the unplug compared clean | PASS |
+| `usb4-generic`, `intel-adl` | the host's wizard named "xHCI98 USB4 Host Router" (the `PCI\CC_0C0340` line) and its automatic search found it; `cm.select.outcome=4` (software CM); plug: `u4.pcie.up=00010809`, `reenumerate=00002800`, `removable=0`, the NVMe's driver found by search, `E:`; the applet empty; unplug `E:` gone, re-plug compared clean | PASS |
+
+**Suspend and resume on ME** (the 98 SE guest was not tried). ME offers
+Stand by and Hibernate.
+
+- `usb4-generic`, nothing attached, Stand by: QEMU reported "paused
+  (suspended)" (S3); `system_wakeup` about 20 s later. Log:
+  `cm.suspend=4`, `cm.reenum.hold.client-ms=000061A8`, `hold.u4-ms=0002A816`,
+  `hold.bound-ms=000493E0`, `u4.suspend.obligations=0`; at resume
+  `cm.resume=1`, the host interface read again, `cm.reenum.resumed=1`, no
+  watchdog and no resume failure; a plug afterwards built the tunnel and
+  `E:` came back. The screen stayed black until a key (the emulated VGA's
+  repaint). PASS.
+- `tb3-alpine-ridge`, the device unplugged first, Stand by, wake after
+  about 15 s: `cm.suspend=4`, `hold.client-ms=000493E0`; at resume driver
+  ready again, `cm.reenum.resumed=1`, no `resume-budget-expired`, no
+  watchdog, no resume failure; a plug afterwards approved and tunnelled.
+  PASS: the 270 s client deadline and the hold did not trip.
+- Hibernate (reached by accident through `rundll32 powrprof.dll,
+  SetSuspendState`, with the device attached on `usb4-generic`): the
+  guest powered off; the next power-on, with nothing attached, resumed
+  from the image: `cm.resume=1`, `u4.linkdown=01000209` (the device gone
+  across the power-off), the tunnel-down action, the re-enumeration,
+  `cm.reenum.resumed=1`, no hang; a plug afterwards worked.
+
+**39-V.4.** Phase 40's INF lines now claim class `0C0340`, as designed: on
+98 SE and ME the `usb4-generic` host was offered as "xHCI98 USB4 Host
+Router" from `xhcicm.inf` and bound by the software connection manager
+(`cm.select.outcome=4`); the Thunderbolt 3 lines of this phase match
+nothing on it. 2000 was read so in run 40 (40-A.6). The task's original
+reading ("left unclaimed") is superseded by that line.
+
+**Not read here.** `OFF_ON` without a device at boot and `ON_ON` without a
+device (the readings of their pairs stand for them), V.1.8, 98 SE suspend,
+the `release` flavour on 98 SE, a removal refused by an open file.
+
+**Evidence.** `vm\v-9x\t98\` and `vm\v-9x\me\` (screendumps, `debugcon-*`,
+`trace-*`), `vm\v-9x\notes.txt` (the leg list with the screendump each
+reading cites).
