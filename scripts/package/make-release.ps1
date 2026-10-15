@@ -232,7 +232,7 @@ record 23).
 .PARAMETER SkipInstallTool
 Do not stage the install tool or INSTALL.BAT. For a host that cannot build it
 (the 64-bit half needs `tools\WinDDK71`); the release is then installed by
-hand, as every release before 3.0.0.0 was, and says so on the console.
+hand only, the readme's BY HAND steps, and says so on the console.
 
 .PARAMETER SkipCleanTool
 Do not stage the cleanup tool. For a host that cannot build it (the 64-bit
@@ -324,7 +324,7 @@ The nvme98 build the download bundles (owner, 2026-10-15), with
 -Nvme98Dir, -Nvme98SumsSha256 and -Nvme98InterfaceVersion: the four pins go
 together and mean what make-package.ps1's parameters of the same names mean,
 and -Nvme98AllowInterfaceMismatch is passed through to it. Without them the
-cut bundles no nvme98, as every cut before 3.0.0.0 did. With them each
+cut bundles no nvme98, and its release notes must say so. With them each
 release-x86 and release-x64 package is built with the build's files (the
 debug directories carry none), and the upload set's release-x86\ and
 release-x64\ carry them; releases\<version>\ does not, since nvme98 is a
@@ -7022,12 +7022,19 @@ after checkout. Restore it with:  git checkout -- LICENSE
 
     Write-Step "Done"
     Write-Host "Tracked:    $destRoot"
-    Write-Host "            Two files per published directory - this project's own. Commit this."
+    Write-Host "            Each published directory holds this project's own files only: its"
+    Write-Host "            drivers, their INFs, txtsetup.oem, nt\ beside them, and in an x64"
+    Write-Host "            directory the test certificate; tools\ and INSTALL.BAT at the root."
+    Write-Host "            No nvme98 file and no Microsoft file. Commit this."
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
-        Write-Host "            The same tree, zipped: this project's two files per flavour,"
-        Write-Host "            the tools and the readmes, and no Microsoft file. This is the"
+        if ($null -ne $nvme98) {
+            Write-Host ("            The same tree, zipped, with nvme98 {0}'s own files added to each" -f $nvme98.Version)
+            Write-Host "            release- directory; no Microsoft file. This is the"
+        } else {
+            Write-Host "            The same tree, zipped, with no nvme98 and no Microsoft file. This is the"
+        }
         Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"
         Write-Host "            section 5."
@@ -7036,7 +7043,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
     } else {
         Write-Warn "-SkipUploadSet: no release asset was assembled, so there is nothing to upload."
         Write-Host "            Install from out\pkg-<flavor>\ or from the tracked directory;"
-        Write-Host "            both hold the same two files."
+        Write-Host "            the driver files in both are the same bytes."
     }
 } catch {
     Write-Err $_.Exception.Message
