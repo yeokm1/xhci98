@@ -66,11 +66,13 @@ NTHALAPI ULONG HalGetBusData(BUS_DATA_TYPE BusDataType, ULONG BusNumber,
 #define CM_WK_GONE_TRIES    6UL     /* unresolved CONTROLLER_UNAVAILABLE
                                        attempts, CM_WK_RETRY_MS apart     */
 
-/* Children of a member by devnode handle and instance id (cmWkIdHash). */
+/* Children of a member by devnode handle, instance id (cmWkIdHash) and the
+ * member's publication generation when they were recorded (PubGen). */
 typedef struct _CM_WK_IDS {
     ULONG Count;
     ULONG Node[CM_WK_KNOWN];
     ULONG Hash[CM_WK_KNOWN];
+    ULONG Gen[CM_WK_KNOWN];
 } CM_WK_IDS;
 
 typedef struct _CM_WK_PORT {
@@ -87,6 +89,15 @@ typedef struct _CM_WK_PORT {
     CM_WK_IDS Gone;         /* CONTROLLER_UNAVAILABLE's: Ret as it stood
                                when the worker took the request          */
     ULONG GoneTries;        /* unresolved attempts of the current one     */
+    ULONG TakenSeq;         /* the CONTROLLER_UNAVAILABLE sequence taken  */
+    ULONG PubGen;           /* bumped by every re-enumeration this worker
+                               makes of the bridge: a devnode recorded
+                               before one may have been replaced since   */
+    ULONG HaveSaved;        /* the last path read while healthy, kept for
+                               the lookups that read no configuration
+                               space (cmWkNoCfg)                         */
+    ULONG SavedCount;
+    ULONG Saved[CM_PORTS_PATH_MAX];
 } CM_WK_PORT;
 
 typedef struct _CM_CFGWK {
@@ -117,7 +128,9 @@ typedef struct _CM_CFGWK {
     ULONG ReqGone;          /* members owing CONTROLLER_UNAVAILABLE's
                                removal (bit per index), cleared only when
                                it was resolved                           */
-    ULONG GoneTaken;        /* ... whose Gone set the worker has taken     */
+    ULONG GoneSeq[XHCI_TBT_MAX_TUNNELS]; /* each member's
+                               CONTROLLER_UNAVAILABLE sequence: bumped by
+                               every CmCfgwkUnavailable naming it        */
     ULONG GoneAt;           /* tick count of the last unresolved attempt  */
     ULONG NoScan;           /* members whose next re-enumeration reads no
                                configuration space (no vanished-child
@@ -368,8 +381,24 @@ static BOOLEAN cmWkIdNames(const char *id, ULONG bdf, const ULONG *want,
     return TRUE;
 }
 
+/* TRUE while member i's lookups read no configuration space: its
+ * CONTROLLER_UNAVAILABLE removal is owed, or the re-enumeration after it
+ * is (read now, under the lock). */
+static BOOLEAN cmWkNoCfg(PCM_CFGWK w, ULONG i)
+{
+    KIRQL irql;
+    BOOLEAN no;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    no = (BOOLEAN)(((w->ReqGone | w->NoScan) & (1UL << i)) != 0);
+    KeReleaseSpinLock(&w->Lock, irql);
+    return no;
+}
+
 /* The devnode of member i's bridge: the cached one while its id still
- * names that location, else a walk of the tree from the root. 0 for none. */
+ * names that location, else a walk of the tree from the root. 0 for none.
+ * In the no-configuration mode (cmWkNoCfg) the path is the one last read
+ * while healthy, never read again. */
 static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
 {
     CM_WK_PORT *p;
@@ -384,8 +413,22 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
 
     p = &w->Port[i];
     if (!p->PathRead) {
-        if (cmWkPciPath(p->Bdf, p->Path, &p->PathCount)) {
+        if (cmWkNoCfg(w, i)) {
+            if (!p->HaveSaved) {
+                return 0;
+            }
+            for (depth = 0; depth < p->SavedCount; depth++) {
+                p->Path[depth] = p->Saved[depth];
+            }
+            p->PathCount = p->SavedCount;
             p->PathRead = 1;
+        } else if (cmWkPciPath(p->Bdf, p->Path, &p->PathCount)) {
+            p->PathRead = 1;
+            for (depth = 0; depth < p->PathCount; depth++) {
+                p->Saved[depth] = p->Path[depth];
+            }
+            p->SavedCount = p->PathCount;
+            p->HaveSaved = 1;
         } else {
             p->PathCount = 0;
         }
@@ -566,19 +609,42 @@ static VOID cmWkIdsDrop(CM_WK_IDS *s, ULONG k)
     s->Count--;
     s->Node[k] = s->Node[s->Count];
     s->Hash[k] = s->Hash[s->Count];
+    s->Gen[k] = s->Gen[s->Count];
 }
 
-/* Forgets `devnode` in a set. */
-static VOID cmWkIdsForget(CM_WK_IDS *s, ULONG devnode)
+/* Adds an entry unless the handle is there already or the set is full. */
+static VOID cmWkIdsAdd(CM_WK_IDS *s, ULONG node, ULONG hash, ULONG gen)
+{
+    ULONG k;
+
+    for (k = 0; k < s->Count; k++) {
+        if (s->Node[k] == node) {
+            return;
+        }
+    }
+    if (s->Count < CM_WK_KNOWN) {
+        s->Node[s->Count] = node;
+        s->Hash[s->Count] = hash;
+        s->Gen[s->Count] = gen;
+        s->Count++;
+    }
+}
+
+/* Forgets `devnode` in a set: TRUE, with its entry, when it was there. */
+static BOOLEAN cmWkIdsForget(CM_WK_IDS *s, ULONG devnode, PULONG hash,
+                             PULONG gen)
 {
     ULONG k;
 
     for (k = 0; k < s->Count; k++) {
         if (s->Node[k] == devnode) {
+            *hash = s->Hash[k];
+            *gen = s->Gen[k];
             cmWkIdsDrop(s, k);
-            return;
+            return TRUE;
         }
     }
+    return FALSE;
 }
 
 /* Keeps in a set only the entries whose bit is set in `present`. */
@@ -614,16 +680,38 @@ static ULONG cmWkIdsPresent(const CM_WK_IDS *s, const ULONG *children,
     return mask;
 }
 
+/* A child's entries in the retained and CONTROLLER_UNAVAILABLE sets,
+ * taken out by cmWkRetire and put back by cmWkRestore. */
+typedef struct _CM_WK_RETIRED {
+    BOOLEAN InRet;
+    BOOLEAN InGone;
+    ULONG RetHash;
+    ULONG RetGen;
+    ULONG GoneHash;
+    ULONG GoneGen;
+} CM_WK_RETIRED;
+
 /*
- * A child of member i about to be removed by any other route (the ordinary
- * vanished-child removal), or proven gone: retired from the retained and
- * the CONTROLLER_UNAVAILABLE sets, so its handle, reused by a later
- * devnode, is never taken for it.
+ * A child of member i about to be removed by another route (the ordinary
+ * vanished-child removal): retired from the retained and the
+ * CONTROLLER_UNAVAILABLE sets, so its handle, reused by a later devnode,
+ * is never taken for it; put back (cmWkRestore) when the removal did not
+ * happen.
  */
-static VOID cmWkRetire(CM_WK_PORT *p, ULONG devnode)
+static VOID cmWkRetire(CM_WK_PORT *p, ULONG devnode, CM_WK_RETIRED *r)
 {
-    cmWkIdsForget(&p->Ret, devnode);
-    cmWkIdsForget(&p->Gone, devnode);
+    r->InRet = cmWkIdsForget(&p->Ret, devnode, &r->RetHash, &r->RetGen);
+    r->InGone = cmWkIdsForget(&p->Gone, devnode, &r->GoneHash, &r->GoneGen);
+}
+
+static VOID cmWkRestore(CM_WK_PORT *p, ULONG devnode, const CM_WK_RETIRED *r)
+{
+    if (r->InRet) {
+        cmWkIdsAdd(&p->Ret, devnode, r->RetHash, r->RetGen);
+    }
+    if (r->InGone) {
+        cmWkIdsAdd(&p->Gone, devnode, r->GoneHash, r->GoneGen);
+    }
 }
 
 /*
@@ -801,6 +889,7 @@ static VOID cmWkRetain(PCM_CFGWK w, ULONG i, ULONG bridge)
     for (c = 0; c < count; c++) {
         p->Ret.Node[c] = children[c];
         p->Ret.Hash[c] = hash[c];
+        p->Ret.Gen[c] = p->PubGen;
     }
     p->Ret.Count = count;
 }
@@ -809,32 +898,25 @@ static VOID cmWkRetain(PCM_CFGWK w, ULONG i, ULONG bridge)
  * The worker takes a CONTROLLER_UNAVAILABLE request for member i: the
  * retained set moves into the Gone set (merged with what an earlier one
  * left). From here the obligation is to those devnodes, as they were
- * recorded; cmWkRetire takes one off when another route removes it or a
- * complete walk proves it gone, so a later devnode reusing its handle is
- * never taken for it. The one route around this, a re-enumeration made
- * outside this driver (the user's Refresh) while the request is owed, can
- * only find what answers behind a host interface already reading all
- * ones; the removal then hits what the re-enumeration that follows it
- * brings back.
+ * recorded; cmWkRetire takes one off when another route removes it, a
+ * complete walk proves it gone, and an entry recorded before a
+ * re-enumeration this worker has made since (PubGen) is not acted on, so a
+ * later devnode reusing its handle is never taken for it. CONFIGMG gives a
+ * devnode no identity beyond its handle and instance id, so one route
+ * remains: a re-enumeration made outside this driver (the user's Refresh in
+ * Device Manager) that, while the request is owed, recreates a child the
+ * user removed meanwhile under the same handle at the same location. The
+ * removal then asks Query_Remove_SubTree of that devnode - refused if it
+ * is in use - and the re-enumeration this request makes right after it
+ * brings the device back: a remove and re-add of an idle device, never a
+ * forced removal.
  */
 static VOID cmWkGoneTake(CM_WK_PORT *p)
 {
     ULONG k;
-    ULONG g;
-    BOOLEAN have;
 
     for (k = 0; k < p->Ret.Count; k++) {
-        have = FALSE;
-        for (g = 0; g < p->Gone.Count; g++) {
-            if (p->Gone.Node[g] == p->Ret.Node[k]) {
-                have = TRUE;
-            }
-        }
-        if (!have && p->Gone.Count < CM_WK_KNOWN) {
-            p->Gone.Node[p->Gone.Count] = p->Ret.Node[k];
-            p->Gone.Hash[p->Gone.Count] = p->Ret.Hash[k];
-            p->Gone.Count++;
-        }
+        cmWkIdsAdd(&p->Gone, p->Ret.Node[k], p->Ret.Hash[k], p->Ret.Gen[k]);
     }
     p->Ret.Count = 0;
     p->GoneTries = 0;
@@ -867,6 +949,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
     ULONG hash;
     ULONG vetoed;
     ULONG removed;
+    ULONG egen;
     ULONG k;
     ULONG c;
     BOOLEAN complete;
@@ -879,11 +962,7 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
     if (p->Gone.Count == 0) {
         return CM_WK_GONE_DONE;
     }
-    if (!p->PathRead) {
-        /* The path is not known without reading the bridges. */
-        cmWkLog(w, "cm.reenum.9x.gone.no-path", p->Bdf);
-        return CM_WK_GONE_UNRESOLVED;
-    }
+    /* The path last read while healthy (cmWkNoCfg): no bridge is read. */
     bridge = cmWkFindDevnode(w, i);
     if (!cmWkCurrent(w, i, gen)) {
         return CM_WK_GONE_STALE;
@@ -910,6 +989,15 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
         k--;
         node = p->Gone.Node[k];
         hash = p->Gone.Hash[k];
+        egen = p->Gone.Gen[k];
+        if (egen != p->PubGen) {
+            /* Recorded before a re-enumeration made since: the devnode
+             * under that handle may be another. Not acted on. */
+            cmWkIdsDrop(&p->Gone, k);
+            w->C.GoneDropped++;
+            cmWkLog(w, "cm.reenum.9x.gone.superseded", node);
+            continue;
+        }
         present = 0;
         for (c = 0; c < count; c++) {
             if (children[c] == node) {
@@ -940,14 +1028,14 @@ static ULONG cmWkGone(PCM_CFGWK w, ULONG i, ULONG gen)
         current = cmWkRemoveChild(w, i, gen, bridge, node);
         if (w->C.Removed != removed) {
             cmWkIdsDrop(&p->Gone, k);
+            if (!current) {
+                /* Stale after the removal: the helper rescanned. */
+                p->PubGen++;
+            }
         } else if (w->C.Vetoed != vetoed) {
             /* Refused: settled for this request, kept retained. */
             cmWkIdsDrop(&p->Gone, k);
-            if (p->Ret.Count < CM_WK_KNOWN) {
-                p->Ret.Node[p->Ret.Count] = node;
-                p->Ret.Hash[p->Ret.Count] = hash;
-                p->Ret.Count++;
-            }
+            cmWkIdsAdd(&p->Ret, node, hash, egen);
         } else if (current) {
             /* Accepted, but Remove_SubTree failed: undecided. */
             unresolved = TRUE;
@@ -1044,7 +1132,10 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     ULONG id;
     ULONG answers;
     ULONG cr;
+    ULONG removed;
     BOOLEAN complete;
+    BOOLEAN current;
+    CM_WK_RETIRED retired;
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     p = &w->Port[i];
@@ -1088,9 +1179,18 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
             if (answers) {
                 continue;
             }
-            /* Removed by this route, not CONTROLLER_UNAVAILABLE's. */
-            cmWkRetire(p, children[c]);
-            if (!cmWkRemoveChild(w, i, gen, bridge, children[c])) {
+            /* Removed by this route, not CONTROLLER_UNAVAILABLE's: its
+             * entries back only if the removal did not happen. */
+            cmWkRetire(p, children[c], &retired);
+            removed = w->C.Removed;
+            current = cmWkRemoveChild(w, i, gen, bridge, children[c]);
+            if (w->C.Removed == removed) {
+                cmWkRestore(p, children[c], &retired);
+            } else if (!current) {
+                /* Stale after the removal: the helper rescanned. */
+                p->PubGen++;
+            }
+            if (!current) {
                 return TRUE;
             }
         }
@@ -1104,6 +1204,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         return FALSE;
     }
     cr = CmCfgmgReenumerate(&w->Cfgmg, bridge);
+    p->PubGen++;
     w->C.Calls++;
     if (cr != CMG_CR_SUCCESS) {
         w->C.CallFailures++;
@@ -1257,6 +1358,7 @@ static VOID cmWkThread(PVOID context)
     ULONG take;
     ULONG noScan;
     ULONG goneRc;
+    ULONG seq[XHCI_TBT_MAX_TUNNELS];
     ULONG i;
     BOOLEAN open;
     BOOLEAN go;
@@ -1292,11 +1394,18 @@ static VOID cmWkThread(PVOID context)
             w->MarkOpen = 1;
             w->MarkFrom = cmWkNowTicks();
         }
-        /* Members no longer owned owe no removal. */
+        /* Members no longer owned owe no removal. A request newer than
+         * the one the worker took (its sequence) is taken again: the
+         * retained set merged into the owed one. */
         w->ReqGone &= w->Active;
-        w->GoneTaken &= w->ReqGone;
-        take = w->ReqGone & ~w->GoneTaken;
-        w->GoneTaken |= take;
+        take = 0;
+        for (i = 0; i < w->Members; i++) {
+            seq[i] = w->GoneSeq[i];
+            if ((w->ReqGone & (1UL << i)) != 0 &&
+                w->Port[i].TakenSeq != seq[i]) {
+                take |= 1UL << i;
+            }
+        }
         gone = w->ReqGone;
         if ((gone & ~take) != 0 && cmWkSince(w->GoneAt) < CM_WK_RETRY_MS) {
             /* An unresolved removal is tried again at the retry
@@ -1353,6 +1462,7 @@ static VOID cmWkThread(PVOID context)
             if (take & (1UL << i)) {
                 /* The retained set as it stands now is the request's. */
                 cmWkGoneTake(&w->Port[i]);
+                w->Port[i].TakenSeq = seq[i];
             }
         }
         if (go && w->OpenState == CM_CFGWK_OPEN_OK && gone != 0) {
@@ -1394,8 +1504,11 @@ static VOID cmWkThread(PVOID context)
                 }
                 w->Port[i].Gone.Count = 0;
                 KeAcquireSpinLock(&w->Lock, &irql);
-                w->ReqGone &= ~(1UL << i);
-                w->GoneTaken &= ~(1UL << i);
+                if (w->GoneSeq[i] == seq[i]) {
+                    /* Only the request this attempt took; a newer one is
+                     * taken at the next pass. */
+                    w->ReqGone &= ~(1UL << i);
+                }
                 KeReleaseSpinLock(&w->Lock, irql);
             }
             cmWkOp(w, CM_WK_NO_OP, 0);
@@ -1595,6 +1708,11 @@ VOID CmCfgwkUnavailable(PCM_CFGWK w, ULONG active)
     KeAcquireSpinLock(&w->Lock, &irql);
     w->Active = active;
     w->ReqGone |= active;
+    for (i = 0; i < w->Members; i++) {
+        if (active & (1UL << i)) {
+            w->GoneSeq[i]++;
+        }
+    }
     /* The re-enumeration after the removal reads no configuration space:
      * no vanished-child scan, here or in a coalesced earlier request. */
     w->ReqReenum |= active;
