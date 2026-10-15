@@ -98,6 +98,12 @@
  *   - keeps Port[i] for Topo.Set[i], i below Topo.Tunnels, its Flags'
  *     CM_PORT_ACTIVE read by the NHI's learning (XhciTbtLearn's `active`)
  *     and its eject hook's bridge-to-port lookup.
+ * Under the USB4 profile the NHI hands every action to CmReenumAction
+ * whatever XhciCmReenum says (at 0 the seam re-enumerates nothing), and the
+ * seam voids every eject notification pending on the domain at any action
+ * (the port's connection changed: its successor's children were never
+ * removed in order); the NHI's eject hook also refuses a port whose
+ * connection generation is no longer the one last handed to the seam.
  * The NHI keeps the correspondence (CM_NHI.Binds) and drives the learning
  * itself. At a suspend under U4On, CM_NHI.U4ResumeBoundMs holds the USB4
  * client's resume bound (TbtU4ResumeBoundUs for the most obligations a

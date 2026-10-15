@@ -55,6 +55,7 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         nhi->Reenum.Resyncs++;
     }
     nhi->Reenum.NotDone++;
+    nhi->Reenum.EjectPending = 0;
     CmLogNote(nhi, "cm.reenum.not-done", (action->Kind << 8) | action->Why);
 }
 

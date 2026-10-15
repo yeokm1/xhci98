@@ -236,6 +236,11 @@ typedef struct _CM_NHI {
      * port n): a TUNNEL_UP of that generation still queued is stale. */
     ULONG U4ClosedGen[TBT_U4_MAX_PORTS];
     ULONG U4ClosedValid;
+    /* Per USB4 port, the connection generation of the last action handed
+     * to the re-enumeration seam (or of the tunnel found up at start): an
+     * eject is honoured only while the port still carries it. */
+    ULONG U4SeamGen[TBT_U4_MAX_PORTS];
+    ULONG U4SeamValid;
     /* The USB4 profile's resume bound in ms for the most obligations a
      * domain can hold (TbtU4ResumeBoundUs, rounded up), set before
      * CmReenumSuspend: the hold's watchdog must be at least this plus

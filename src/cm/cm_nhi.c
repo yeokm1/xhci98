@@ -729,10 +729,20 @@ static VOID cmU4Deliver(PCM_NHI nhi)
             cmU4LogRouter(nhi, u->Port);
         }
         cmU4ToIcm(u, &a);
+        /* Every action reaches the seam, XhciCmReenum 0 included (it then
+         * re-enumerates nothing but still voids the pending ejects: the
+         * port's connection changed). */
         if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
             nhi->Counters.ReenumSkipped++;
-        } else if (nhi->ReenumOn) {
+        }
+        if (nhi->ReenumOn) {
             CmReenumAction(nhi, &a);
+        }
+        if (u->Port >= 1 && u->Port <= TBT_U4_MAX_PORTS) {
+            /* The connection the seam last heard of on this port: an
+             * eject is honoured only for it (cmU4Eject). */
+            nhi->U4SeamGen[u->Port - 1] = u->Generation;
+            nhi->U4SeamValid |= 1UL << (u->Port - 1);
         }
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP && CmNhiActionLive(nhi, &a)) {
             cmU4Learn(nhi, u->Port);
@@ -841,6 +851,7 @@ VOID CmNhiSetU4Hooks(PCM_NHI nhi, CM_U4_UP_HOOK up, CM_U4_DOWN_HOOK down,
  */
 static VOID cmU4Eject(PVOID context, ULONG bdf)
 {
+    const TBT_U4_PORT *p;
     PCM_NHI nhi;
     ULONG member;
     ULONG port;
@@ -878,6 +889,18 @@ static VOID cmU4Eject(PVOID context, ULONG bdf)
     if (port == 0) {
         nhi->Counters.U4EjectsUnmapped++;
         CmLogNote(nhi, "u4.eject.unmapped", bdf);
+        return;
+    }
+    p = TbtU4Port(&nhi->U4, port);
+    if (p == NULL || !p->Dev.Present || !p->Pcie.Up ||
+        (nhi->U4SeamValid & (1UL << (port - 1))) == 0 ||
+        nhi->U4SeamGen[port - 1] != p->Generation) {
+        /* The connection whose children were removed is not the one on
+         * the port now (an unplug and re-plug, or a change not yet
+         * delivered to the seam): its successor is never torn down. */
+        nhi->Counters.U4EjectsUnmapped++;
+        CmLogNote(nhi, "u4.eject.stale", (port << 16) |
+                                             (p != NULL ? (p->Generation & 0xFFFFUL) : 0));
         return;
     }
     rc = TbtU4Eject(&nhi->U4, port);
@@ -1025,6 +1048,19 @@ static VOID cmU4Bind(PCM_NHI nhi)
     nhi->ReenumOn = 1;
     CmReenumSetEject(nhi, cmU4Eject, nhi);
     cmU4Arm(nhi);
+    /* A tunnel found up at start (preserved) queues no TUNNEL_UP, and its
+     * endpoint may start answering only after the baseline: unless its
+     * bridge is already known, it is pending from here, so its gain is
+     * never attributed to another port, until its path is proven closed
+     * (record 22 section 7.6; tbt_topo.h). */
+    for (i = 1; i <= nhi->U4.PortCount && i <= XHCI_TBT_MAX_PORTS; i++) {
+        p = TbtU4Port(&nhi->U4, i);
+        if (p != NULL && p->Pcie.Up) {
+            XhciTbtLearnUp(&nhi->Binds, i);
+            nhi->U4SeamGen[i - 1] = p->Generation;
+            nhi->U4SeamValid |= 1UL << (i - 1);
+        }
+    }
     CmNhiPollPass(nhi);
 }
 
@@ -1324,6 +1360,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     nhi->U4On = 0;
     nhi->ArmOwed = 0;
     nhi->U4ClosedValid = 0;
+    nhi->U4SeamValid = 0;
     nhi->U4ResumeBoundMs = 0;
     nhi->U4ClearOk = 0;
     nhi->U4BatchCount = 0;
