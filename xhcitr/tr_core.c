@@ -465,7 +465,7 @@ static void tr_bcd(TR_TEXT *t, const char *what, unsigned int v)
 void tr_dec_device(TR_TEXT *t, const unsigned char *d, size_t n)
 {
     tr_put(t, "Device descriptor\n");
-    if (n < 18 || d[0] < 18 || d[1] != 0x01) {
+    if (n < 18 || d[0] < 18 || d[0] > n || d[1] != 0x01) {
         tr_put(t, "  (short or not a device descriptor)\n");
         tr_hex(t, d, n, 2);
         return;
@@ -788,7 +788,7 @@ int tr_bos_ssp_text(const unsigned char *d, size_t n, char *out, size_t cap)
 int tr_config_power(const unsigned char *d, size_t n, int speed,
                     unsigned int *ma, int *selfPowered)
 {
-    if (n < 9 || d[1] != 0x02) {
+    if (n < 9 || d[1] != 0x02 || d[0] < 9 || d[0] > n) {
         return 0;
     }
     *ma = (unsigned int)d[8] * (speed >= TR_SPEED_SUPER ? 8U : 2U);

@@ -1450,6 +1450,22 @@ static void test_desc_lengths(void)
     tr_text_init(&t, buf, sizeof(buf));
     tr_dec_config(&t, cfg, sizeof(cfg));
     CHECK(has(buf, "short or malformed"), "config bLength 200 of 9 bytes refused");
+    {
+        static const unsigned char cfg2[9] = { 2, 2, 9, 0, 1, 1, 0, 0x80, 50 };
+        static const unsigned char dev255[18] = {
+            255, 1, 0, 2, 0, 0, 0, 64, 0x81, 0x07, 0x81, 0x55, 0, 1, 1, 2, 3, 1
+        };
+        unsigned int ma = 0;
+        int self = 0;
+        CHECK(!tr_config_power(cfg, sizeof(cfg), TR_SPEED_HIGH, &ma, &self),
+              "power: bLength 200 of 9 bytes refused");
+        CHECK(!tr_config_power(cfg2, sizeof(cfg2), TR_SPEED_HIGH, &ma, &self),
+              "power: bLength 2 refused");
+        tr_text_init(&t, buf, sizeof(buf));
+        tr_dec_device(&t, dev255, sizeof(dev255));
+        CHECK(has(buf, "short or not a device descriptor"),
+              "device bLength 255 of 18 bytes refused");
+    }
     tr_text_init(&t, buf, sizeof(buf));
     tr_dec_hub(&t, hub, sizeof(hub));
     CHECK(has(buf, "short or not reported"), "hub bLength 71 of 7 bytes refused");
