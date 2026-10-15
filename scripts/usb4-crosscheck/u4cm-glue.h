@@ -34,9 +34,28 @@ typedef struct XC_OPS {
 #define XC_HOTPLUGS         16
 #define XC_ACKS             17
 #define XC_HOST_ADP_PRESENT 18
+#define XC_DEV_ADP_PRESENT  19      /* `port` is (port << 8) | adapter */
+#define XC_ROP_ISSUED       20
+#define XC_ROP_FAILED       21
+#define XC_ROP_TIMEOUTS     22
+#define XC_DPR              23
+#define XC_CR_TIMEOUTS      24
+#define XC_USB3_BUILT       25
+#define XC_USB3_FAILED      26
+#define XC_PCIE_BUILT       27
+#define XC_CONNECTS         28
+#define XC_DROM_CRC         29
+#define XC_TMU_ENABLED      30
+#define XC_ENUMERATED       31
 
 long xc_start(const XC_OPS *ops, void *arena, unsigned long phys,
               unsigned long bytes, int usb3);
+/* As xc_start, with XhciCmPreOsCleanup's value. */
+long xc_start_clean(const XC_OPS *ops, void *arena, unsigned long phys,
+                    unsigned long bytes, int usb3, unsigned long preOsCleanup);
+/* The device router's DROM vendor and model names on `port` ("" none). */
+const char *xc_vendor_name(unsigned long port);
+const char *xc_model_name(unsigned long port);
 void xc_poll(void);
 void xc_stop(void);
 unsigned long xc_get(int what, unsigned long port);

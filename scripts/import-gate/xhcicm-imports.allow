@@ -16,7 +16,8 @@
 # record 13 section 7.5, as uas_mem.obj holds xhciuas.sys's), and is
 # OPTIONAL while nothing allocates pool (the NHI's state is its device
 # extension; task 39-A.4): nothing calls either, and the
-# linker drops both. The registry pairs are held to cm_reg.obj. DbgPrint is
+# linker drops both. The registry pairs are held to cm_reg.obj, and to cm_statos.obj for the
+# install tool's status record (design record 24). DbgPrint is
 # held to cm_log.obj and to the debug and qemu flavours (decision D12: the
 # release flavour prints nothing, as xhciuas.sys prints nothing), which keeps
 # AGENTS.md's two-site rule for an unguarded DbgPrint as it is: this one is
@@ -70,9 +71,9 @@ HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-pr
 HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
 
 # --- The registry values of record 21 section 8: cm_reg.obj only ---
-ntoskrnl.exe!IoOpenDeviceRegistryKey         all  required  SITES=cm_reg.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoOpenDeviceRegistryKey, hint 53) (+18 other 98 SE); ntkern-name
-ntoskrnl.exe!RtlQueryRegistryValues          all  required  SITES=cm_reg.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!RtlQueryRegistryValues, hint DA) (+8 other 98 SE); ntkern-name
-ntoskrnl.exe!ZwClose                         all  required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
+ntoskrnl.exe!IoOpenDeviceRegistryKey         all  required  SITES=cm_reg.obj,cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoOpenDeviceRegistryKey, hint 53) (+18 other 98 SE); ntkern-name
+ntoskrnl.exe!RtlQueryRegistryValues          all  required  SITES=cm_reg.obj,cm_statos.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!RtlQueryRegistryValues, hint DA) (+8 other 98 SE); ntkern-name
+ntoskrnl.exe!ZwClose                         all  required  SITES=cm_reg.obj,cm_thr.obj,cm_cfgwk.obj,cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
 
 # --- The log's emission, checked flavours only (decision D12): cm_log.obj ---
 ntoskrnl.exe!DbgPrint                        debug  required  SITES=cm_log.obj the #if DBG emit at stop; w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name (design record 13 section 7.4)
@@ -110,6 +111,23 @@ ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-pr
 ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
 ntoskrnl.exe!ObReferenceObjectByHandle      all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
 ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above
+# The nvme98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7;
+# nvme98's nvme98cm.h, its decision MD-6): the callback object
+# \Callback\Nvme98LinkState and its one callback, created at DriverEntry
+# and unregistered at unload. Called on NT only (IoIsWdmVersionAvailable(1,
+# 0x10)); Windows 98 SE and ME take the registry record instead, but the
+# image still has to load there, and no stock 98 SE driver imports the
+# three: their Windows 98 evidence is the name in ntkern.vxd alone, and
+# the load of this image on 98 SE is the authoritative check.
+ntoskrnl.exe!ExCreateCallback                all  required  SITES=cm_nvlinkos.obj w2k-export; ntkern-name (ntkern.vxd 4.10.2222's export-name strings; no 98 SE precedent). NT only at run time
+ntoskrnl.exe!ExRegisterCallback              all  required  SITES=cm_nvlinkos.obj w2k-export; ntkern-name (no 98 SE precedent). NT only at run time
+ntoskrnl.exe!ExUnregisterCallback            all  required  SITES=cm_nvlinkos.obj w2k-export; ntkern-name (no 98 SE precedent). NT only at run time
+
+# --- the status record for the install tool's viewer (cm_statos.c, design
+# record 24 section 3.2): pairs xhci98.sys imports, its evidence verbatim ---
+ntoskrnl.exe!ZwSetValueKey                   all  required  SITES=cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwSetValueKey, hint FF) (+12 other 98 SE); ntkern-name (design record 13 Appendix A row 159)
+ntoskrnl.exe!RtlInitUnicodeString            all  required  SITES=cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
+ntoskrnl.exe!KeQuerySystemTime               all  required  SITES=cm_statos.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeQuerySystemTime, hint 80) (+9 other 98 SE) (design record 13 section 7.4; Appendix A row 97). The record's stamp: the two words as returned, no arithmetic
 
 [deny]
 

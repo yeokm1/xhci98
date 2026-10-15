@@ -625,6 +625,88 @@ later; `SurpriseRemovalOK` set together with `Removable` on 2000 (a variant
 build, owed to 39-V.2); the Titan Ridge model; the `release` and `debug`
 flavours.
 
+## 39-A.7 - The `nvme98` link-state channel (ICM profile)
+
+**Verdict: on Windows 2000 the channel meets its three obligations on the
+emulator, against `nvme98`'s own receiver; on Windows 98 SE the image
+loads and the record is written, and no statement is possible there**
+(2026-10-15). With `xhcicm.sys` bound to the emulator's Alpine Ridge NHI
+and `nvme98`'s gate-G3 prototype bound to the tunnelled NVMe controller,
+the table entry was published `UP` before `nvme98`'s `HwFindAdapter` read
+it, the slot-empty reading after a surprise unplug produced
+`DOWN_QUIESCED`, `nvme98` applied it and acknowledged, and the removal
+started only after the acknowledgement - or after 5 s when none came.
+
+**The vehicle.** Development host A, TCG, `usb4-emu`'s fork through task
+39-0.7's launcher (`-Usb4Profile tb3`, `Bios OFF_OFF`, `-DeviceAtBoot 0`,
+slot 1: QMP 47922, VNC 47923), `-Trace` with `usb4_tp_*`, `usb4_dbg_*` and
+`usb4_h_*`, and `usb4-debug-port` for `nvme98`'s stage markers.
+`win2k-xonly` from a copy of the 39-A.5 overlay (`vm\usb4\nvlink-2k`,
+`xhcicm.inf` and the filter already installed); the `qemu` flavour of
+`xhcicm.sys` copied over the bound one and a restart. The receiver:
+`nvme98`'s prototype of its decision MD-6, branch `phase0-g3g6` at
+`f348a2d`, the `free-dbgport` x86 build from that worktree's `out\`
+(read-only use, copied over `nvme98` 0.1.0.0's image; SHA-256
+`9805cb87...85bf8`). Its stage codes: `0x95` attach (bit 16 table found,
+bit 17 entry found, bits 31:24 the generation recorded), `0x96` the
+statement seen, `0x92` the result. Load: `nvme98`'s G3 workload `gio`
+(its `tests\gio`, built here with MSVC 6.0), unbuffered reads, queue depth
+8, 64 KiB, on `\.\PhysicalDrive2` (drive 1 is the transfer disk). Times
+below are the host trace's, from T0 = the tunnel gate closing.
+
+| Leg | Driver build | What the trace and the log show |
+|---|---|---|
+| tunnel up | `f1c11201` (and `0c107673`) | `cm.nvlink.nt=80000000` (callback registered, no query yet); `cm.action.tunnel-up`, then `cm.nvlink.up=01000401` (new entry, bus 4, slot 1, generation 1) before the invalidation; `nvme98` `0x95 arg=01030000`: table found, entry found, generation 1 recorded at `HwFindAdapter` |
+| unplug under load (`device_del enc0`) | `f1c11201` | `cm.nvlink.icm-down=00000402` (verdict SEND; the seam's poll read nothing, the channel's own SHPC reading DOWN), `cm.nvlink.down=00000001`, `cm.nvlink.await=00000064` (acknowledged after 100 ms), then `cm.nvlink.retired` and the invalidation. Trace: stage-2 cutoff T0+0.5 ms, `nvme98` gone T0+1.9 ms, `0x96` (generation 1 for recorded 1) T0+129 ms, `0x92` accepted; the statement's receipt follows the cutoff |
+| the same, earlier build | `0c107673` | ack after 60 ms; `0x96` at T0+72.5 ms with 1 held request completed (`0x84`), memory released (`0x93`), `BusChangeDetected` (`0x8A`) |
+| re-plug | `f1c11201` | the old entry retired (`cm.nvlink.retired`), `cm.nvlink.up=02000401` (same entry, generation 3); `nvme98` `0x95 arg=03030000` |
+| idle unplug (no I/O) | `f1c11201` | statement made, no `0x96` (an idle `nvme98` reads the table only at its next request, G3 run C); `cm.nvlink.await=0000138F`: the wait ran to its 5 s bound, then the removal |
+| `nvme98` absent (image renamed, restart, plug, unplug) | `0c107673` | `cm.nvlink.await=00000000`: no driver ever asked for the table, so no wait |
+
+**Windows 98 SE** (`vm\usb4\nvlink-98`, a copy of the 39-A.4 overlay,
+`XhciCmApprove` set to 1 in its driver key): the image with the three
+callback-object imports loaded and bound (`cm.bind=0`,
+`cm.nvlink.9x=00000000`), which is the import gate's authoritative check
+for `ExCreateCallback`, `ExRegisterCallback` and `ExUnregisterCallback`
+on 98 SE (their previous Windows 98 evidence was static: the name in `ntkern.vxd`).
+The first record build put the record under `HKEY_DYN_DATA`; the VMM's
+`_RegCreateKey` answered error 5 there (`cm.nvlink.9x.record=00000005`),
+so the record moved to `HKLM\System\CurrentControlSet\Services\nvme98`,
+value `LinkState`: `cm.nvlink.9x.record=80000000`, and `regedit /e` read
+it back as `4e,39,38,4c, 01,00,00,00, a0,48,46,c1, 10,01,00,00, ee,3e,80,ce`
+(signature, version 1, the table at C14648A0h, 110h bytes, the cookie).
+At the tunnel up the scan of the tunnel's secondary bus found no function
+answering through `HalGetBusData` within its 1 s (`cm.nvlink.up.waited=
+00041400`), so no `UP` was published on 98 SE; why the endpoint does not
+answer there before `Reenumerate_DevNode` is not read. No 9x statement is
+made in any case (nothing reads the SHPC slot there, record 21 section
+7.2), and `nvme98`'s 9x receiver does not exist (its MD-5: designed, not
+prototyped), so the 9x half's runtime behaviour beyond the record is not
+readable yet.
+
+**Re-read after the CONFIGMG worker** (2026-10-15 evening; the `qemu`
+build of `5a7b3387`, gated, SHA-256 prefix `CEE627E4`; QEMU pinned to
+`vm\usb4\bin-5ba7f60\qemu-system-x86_64.exe`; both guests from the same
+overlays). Windows 2000: `cm.nvlink.up=01000401` before `nvme98`'s attach
+(`0x95 arg=01030000`); under `gio`, the stage-2 cutoff at T0+0.7 ms,
+`nvme98`'s `0x96` at T0+270 ms, `cm.nvlink.await=0000005A` (90 ms), then
+the retirement and the invalidation. Windows 98 SE: the record written
+(`80000000`); the fresh exposure found the bus silent for its 1 s
+(`up.waited=0003F800`), `Reenumerate_DevNode` (CR_SUCCESS), then the
+rescan published the entry (`cm.nvlink.up=01000401`) 206 ms after the
+exposure (`cm.nvlink.up.late=0000CE00`; 1016 ms in an earlier run of
+`da0d1f0f`); at the unplug the statement withheld as designed
+(`icm-down` verdict 9, an OS not admitted; the entry left `IN_USE`). The
+worker's handshake (`REMOVE_PENDING`) was not exercised: the children the
+worker removes at an unplug have vanished, and `nvme98` has no 9x
+receiver yet.
+
+**Not read here.** XP x64 (the amd64 build; the other admitted pair), XP
+x86, Vista and 7 (not admitted: the statement is withheld there by
+design); the `REMOVE_PENDING` handshake (no receiver, and no caller in
+the ICM profile); a hardware tunnel port (no statement by design); the
+`release` and `debug` flavours in a guest.
+
 ## 39-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
 
 **Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
@@ -754,3 +836,55 @@ pruning). The x86 `qemu` build passes every gate.
 98 SE's applet (NUSB's `HOTPLUG.DLL`) lists a device only when a device
 interface of NUSB's class is registered on its parent; our devices, marked
 `DN_REMOVABLE`, are not listed (record 21 section 7.4). ME was not read.
+
+## 39-A.8 follow-up - The device viewer and eject (`XHCIINST /devices`, `/eject`)
+
+**Verdict: passes on Windows 98 SE and Windows 2000** (2026-10-15), design
+record 24. On 98 SE the tool listed the tunnelled NVMe enclosure from the
+driver's confirmed status record, ejected it while idle, refused while a
+file was held open on its volume and left the volume working, ejected it
+once the file was closed, and the device came back at the re-plug with its
+data intact. On 2000 the same, through `CM_Request_Device_EjectA`, with no
+Unsafe Removal dialog at the unplug; a device Windows does not see as
+removable cannot be stopped there at all, and the tool says so.
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-Usb4Profile tb3 -Bios OFF_OFF`, run root `vm\eject9x\`, QMP and VNC
+47970/47971 (98 SE) and 47972/47973 (2000). The emulator binary was
+`vm\usb4\bin-5ba7f60\qemu-system-x86_64.exe` (`v11.1.2-161-g20655c3`)
+for every leg, passed with `-Qemu`. The NVMe behind the tunnel was an
+overlay of `usb4-emu`'s `vms\win98\nvme32.qcow2` (FAT32), opened read-only
+as a backing file. Guests: 98 SE from a copy of the `vm\usb4\reenum-98`
+overlay (`vm\t26\win98-gold.qcow2` below it; `xhcicm.sys` bound to the
+NHI, `nvme98` on the NVMe), `xhcicm.sys` replaced by this branch's `qemu`
+flavour; 2000 from a copy of `vm\usb4\reenum-2k` (`xhcicm.sys` and the
+tunnel-port filter, `nvme98` 0.1.0.0), the same replacement. The tool was
+this branch's `XHCIINST.EXE`, run from the transfer disk with its output
+redirected to a file; on 98 SE the confirmation answered through
+`echo Y|`.
+
+| Leg | Windows 98 SE | Windows 2000 |
+|---|---|---|
+| D, viewer, nothing plugged | the controller, "firmware connection manager, security level 1", "confirmed now", "Nothing is connected", the verified port 02:01.0 found by its 98 path `08083000`, "(nothing behind it now)" | - |
+| D, viewer, plugged | the router "QEMU USB4 NVMe Enclosure", Thunderbolt 3, link 1, depth 1, approved, Thunderbolt ids `46F4:0004`, PCIe up; unit [1] "NVM Express Controller (nvme98)" with its disk entry, "marked removable by the Thunderbolt driver", its instance id `...\0808083000` | the same router; the port by bus and address; unit [1] with "removable: yes; surprise removal OK: no (listed in Safely Remove Hardware)" |
+| E1, eject idle | `CM_Query_Remove_SubTree` then `CM_Remove_SubTree` accepted, "Windows has stopped NVM Express Controller (nvme98).", exit 0; the unplug: `tbt.icm.device-gone`, `cm.action.tunnel-down`, the worker's re-enumeration, no fault | `CM_Request_Device_EjectA` (from `setupapi.dll`: `cfgmgr32.dll` does not export it, the log's routine lines) accepted, "You can now unplug the device.", exit 0; `xhcicm.sys` logged `cm.reenum.eject` and `cm.reenum.eject.tunnel-left-up` (the child filter's hand-off, as after the applet); the unplug: no Unsafe Removal dialog |
+| E2, a file held open (`type con`/`copy con` to the NVMe volume) | "Windows refused: the device is in use (...)", exit 4; the held file closed, read back, a test file written, then the eject accepted | `CR_REMOVE_VETOED` with the volume named ("Windows refused: STORAGE\Volume\... did not allow it."), exit 4; the file closed, then the eject accepted |
+| E3, re-plug after the eject and unplug | the device back at the plug, `nvme98` started, marked removable; `fc` of the test file against the original: no differences | (the same plug brought the device back, listed again) |
+| E4, disabled and enabled in Device Manager | - | the unit's capabilities read `Removable` no; `CM_Request_Device_EjectA` answered `CR_REMOVE_VETOED`, veto 8 (`PNP_VetoIllegalDeviceRequest`); `CM_Query_And_Remove_SubTreeA` answered `CR_CALL_NOT_IMPLEMENTED` from `cfgmgr32.dll` and from `setupapi.dll`; the tool's step text, exit 4, the device still started. After a restart with the device connected its capabilities read `Removable` again |
+
+**Readings taken by the legs, and changed in the code the same day:** the
+viewer showed "no driver" for an IOS miniport on 98 SE (it now shows the
+driver key's `PortDriver`, or `DevLoader` for a disk); the record said
+"USB3 not known" for Alpine Ridge on 98 SE, because the AddDevice profile
+it was taken from is not read on 98 (it now takes the running ICM row's
+generation: the 2000 leg read "USB3 none"); the 2000 tree's root devnode
+answers no property of its own and was counted as an unread entry (it no
+longer is); on 2000 the query-and-remove routine is not implemented, so
+the not-removable case gets a step rather than an error.
+
+**Not read here.** ME (no ME image with `xhcicm.sys` installed on this
+host); XP, Vista and 7, and so the not-removable case there; the USB4
+profile (`usb4-generic`); a dock with several units; a removal that fails
+after an accepted query; leg E5 (a unit unplugged between the confirmation
+and the call), which the host suite covers with injected answers; the
+`release` and `debug` flavours.

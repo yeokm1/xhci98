@@ -242,7 +242,7 @@ Instead, Update Driver on "xHCI98 USB Attached SCSI Storage", choose "Display a 
 
 ### NVMe drives behind Thunderbolt or USB4
 
-An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of its own. A package that bundles one carries it in its `release-x86\` and `release-x64\` directories, and its `readme.txt` and the release notes name the version: nvme98, a separate project with its own licence (BSD-3-Clause), bundled as one of its released builds, unchanged. Its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`; the readme is its install guide and lists its known limits. The release notes name the version bundled. `INSTALL.BAT` does not install it.
+An NVMe drive in a Thunderbolt or USB4 enclosure needs an NVMe driver of its own. A package that bundles one carries it in its `release-x86\` and `release-x64\` directories, and its `readme.txt` and the release notes name the version: nvme98, a separate project with its own licence (BSD-3-Clause), bundled as one of its released builds, unchanged. Its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`; the readme is its install guide and lists its known limits. `INSTALL.BAT` does not install it.
 
 When the drive's NVMe controller shows in Device Manager without a driver, Update Driver -> Have Disk, pointed at:
 
@@ -252,6 +252,14 @@ When the drive's NVMe controller shows in Device Manager without a driver, Updat
 | `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
 
 The 64-bit nvme98 is test-signed by its own project, as `xhci98.sys` is by this one, and loads on Vista x64 and 7 x64 in test-signing mode; its readme has the details.
+
+### Safe removal of Thunderbolt and USB4 devices
+
+`INSTALL /devices` (or `tools\xhciinst\XHCIINST /devices`, `XHCIIN64` on 64-bit Windows) shows the Thunderbolt and USB4 devices connected now: each device's name, generation, approval and connections, and the Windows devices behind it with their drivers. `INSTALL /eject` removes one of them safely: it lists them, asks which, and asks Windows to stop it. If a program has a file open on it, Windows refuses and nothing changes; close the program and try again. When it says "You can now unplug the device.", unplug it.
+
+- **Windows 98 SE and ME:** `INSTALL /eject` is the way to remove a Thunderbolt or USB4 device safely; these systems have no other. Until you unplug it, Device Manager's Refresh can start the device again.
+- **Windows 2000, XP, Vista and 7:** Unplug or Eject Hardware (2000) and Safely Remove Hardware (XP onward) work as usual. A device that was connected before the Thunderbolt driver started, or that was disabled and enabled, may be missing from them until it is plugged in again; `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device at all: the tool says so, and after a restart with the device connected it is listed for removal again. On 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation.
+- `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question, for scripts.
 
 ## Tuning
 

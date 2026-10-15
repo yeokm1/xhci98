@@ -400,6 +400,7 @@ SuperSpeed and USB 3 hub material, checked against xHCI 1.2c and USB 3.2
 ### Language and arithmetic
 
 - C89/C90 only. No `//` comments, no mid-block declarations, no `stdint.h`. Use `ULONG`/`USHORT`/`UCHAR` from `ntddk.h`.
+  The one exception is a third-party interface header carried byte for byte, `src/cm/nvme98cm.h` (`nvme98`'s, with `//` comments; `legal-provenance.md` section 2a): never edited here, and every compiler of the tree accepts it as it is.
 - No 64-bit DMA. Win98 is 32-bit; the upper 32 bits of all hardware addresses are always 0.
 - No 64-bit arithmetic (the `_alldiv`-style compiler helpers may not exist on Win98's kernel). Keep 64-bit hardware fields as Lo/Hi ULONG pairs, Hi always 0.
 - No floating point in kernel mode.

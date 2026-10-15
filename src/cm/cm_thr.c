@@ -40,6 +40,7 @@
  */
 
 #include "cm.h"
+#include "cm_nvlink.h"
 
 /* PCI Command (PCI 3.0 6.2.2), the only configuration word written here. */
 #define CM_PCI_COMMAND            0x04UL
@@ -532,7 +533,7 @@ static VOID NTAPI cmThread(PVOID context)
     nhi = (PCM_NHI)context;
     for (;;) {
         if (cmPolling(nhi)) {
-            cmRelativeMs(&due, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+            cmRelativeMs(&due, CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]));
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
         } else {
@@ -577,6 +578,7 @@ static VOID NTAPI cmThread(PVOID context)
         }
         if (bits & CM_WORK_STOP) {
             CmNhiStopWork(nhi);
+            CmStatusStopped(nhi);
             (VOID)KeSetEvent(&nhi->PnpDone, IO_NO_INCREMENT, FALSE);
         }
         if (bits & CM_WORK_EXIT) {
@@ -591,6 +593,7 @@ static VOID NTAPI cmThread(PVOID context)
         if (nhi->ReenumOn) {
             CmReenumService(nhi);
         }
+        CmStatusPass(nhi);
         /* The checked flavours' emission (decision D12), from here at
          * PASSIVE_LEVEL after each pass that recorded something; the
          * release flavour's CmLogEmit does nothing. */

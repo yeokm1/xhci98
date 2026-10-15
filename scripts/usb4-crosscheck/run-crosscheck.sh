@@ -47,7 +47,17 @@ if [ ! -f "$qemu/hw/usb4/usb4-router-asm.c" ]; then
     echo "usb4-emu checkout too old: no hw/usb4/usb4-router-asm.c (asm4242)" >&2
     exit 1
 fi
+# The asm2464 device model (the ORICO AAGM2-U4 capture, usb4-emu QEMU fork
+# 20655c3 and later) and the image layer it shares with intel-adl: when
+# the checkout has them, usb4-router.c needs them and the asm2464 cases run.
+extra=""
+asm2464=""
+if [ -f "$qemu/hw/usb4/usb4-router-asm2464.c" ]; then
+    extra="$qemu/hw/usb4/usb4-router-img.c $qemu/hw/usb4/usb4-router-asm2464.c"
+    asm2464="-DXC_HAVE_ASM2464"
+fi
 gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
+    -Wno-sign-compare -Wno-missing-field-initializers $asm2464 \
     -Wno-sign-compare -Wno-missing-field-initializers \
     -I"$here" \
     -I"$qemu/tests/usb4/stub" -I"$out" -I"$qemu/include" -I"$qemu" \
@@ -61,6 +71,6 @@ gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
     "$qemu/hw/usb4/usb4-router-adl.c" "$qemu/hw/usb4/usb4-preos.c" \
     "$qemu/hw/usb4/usb4-drom.c" \
     "$qemu/hw/usb4/usb4-tunnel.c" "$qemu/hw/usb4/usb4-fabric-usb3.c" \
-    "$qemu/hw/usb4/usb4-router-asm.c" \
+    "$qemu/hw/usb4/usb4-router-asm.c" $extra \
     $(pkg-config --libs glib-2.0) -o "$out/u4cm-crosscheck"
 "$out/u4cm-crosscheck"

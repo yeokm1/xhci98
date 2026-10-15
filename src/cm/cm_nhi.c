@@ -67,6 +67,7 @@
  */
 
 #include "cm.h"
+#include "cm_nvlink.h"
 
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
                         const CM_IDS *ids)
@@ -1062,6 +1063,8 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
+    /* The nvme98 channel's two moments (task 40-A.7, cm_nvlink.h). */
+    CmNhiSetU4Hooks(nhi, CmNvlinkU4Up, CmNvlinkU4Down, nhi);
     XhciTbtBindsInit(&nhi->Binds);
     nhi->ArmOwed = 0;
     nhi->U4On = 1;
@@ -1404,6 +1407,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     POWER_STATE d0;
 
     CmReadValues(nhi);
+    CmStatusOpen(nhi);
     CmLogApply(nhi);
     nhi->Starts++;
     CmLogNote(nhi, "cm.start", nhi->Starts);
@@ -1528,6 +1532,7 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
 
     case IRP_MN_REMOVE_DEVICE:
         cmNhiStop(nhi, stack->MinorFunction);
+        CmStatusClose(nhi);
         /* Power admission closed, and every power IRP this driver still
          * holds finished (without the thread, cm_power.c): none may outlive
          * the device object. */

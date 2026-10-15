@@ -185,6 +185,11 @@ rem                  XhciCmTunnelBridge list), the Link Status, Slot Status
 rem                  and SHPC
 rem                  readings, a port without the capability bits, and the
 rem                  bounded poll
+rem   test_cm_nvlink - the nvme98 link-state channel's pure half
+rem                  (src\cm\cm_nvlink.c, tasks 39-A.7 and 40-A.7): the
+rem                  table of nvme98's nvme98cm.h, its entry protocol read
+rem                  back by a modelled receiver, the two profiles'
+rem                  statement conditions, the 9x record and REMOVE_PENDING
 rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
 rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
 rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
@@ -193,6 +198,11 @@ rem                  xhcicm.inf and xhcicmf.inf, Windows 98's PCI device ids
 rem                  (the BUS_&DEV_&FUNC_ instance, the vendor and device),
 rem                  the bridge filter's snapshot, and the resume hold's
 rem                  watchdog bound
+rem   test_cm_status - the status record xhcicm.sys publishes for the install
+rem                  tool's viewer (src\cm\cm_status.c, design record 24
+rem                  section 3): the record from an ICM table and a USB4
+rem                  port set, nothing secret copied, the change compare,
+rem                  and the Windows 98 instance path
 rem   test_cm      - the pure half of xhcicm.sys, the Thunderbolt 3
 rem                  connection manager (src\cm\cm_vals.c, task 39-A.1): the
 rem                  role a PDO's hardware ids name (NHI or tunnel-bridge
@@ -233,7 +243,9 @@ rem                  re-plugs, bonding and its fallback, the TMU, the Detect
 rem                  gate, the USB3 handshake, router operations each
 rem                  unsupported, failing or hanging, discovery, holding and
 rem                  cleaning, quarantine, the statement's gating and anchor,
-rem                  links below depth 1, eject, suspend and resume
+rem                  links below depth 1, eject, suspend and resume, and the
+rem                  ASM2464 device router's captured quirks (record 22
+rem                  section 6.11)
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -466,6 +478,10 @@ rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
 call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
+rem test_cm_nvlink links nothing else: the nvme98 link-state channel's entry
+rem protocol, statement conditions, 9x record and REMOVE_PENDING request
+rem are pure, read back by a modelled receiver (39-A.7, 40-A.7).
+call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
@@ -476,6 +492,9 @@ rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
 rem resume hold's bound (39-A.5 driver half, 39-A.8).
 call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
+rem test_cm_status links the status record's builder alone (design record
+rem 24 section 3), over its own fake configuration space.
+call :run test_cm_status "test_cm_status.c ..\src\cm\cm_status.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

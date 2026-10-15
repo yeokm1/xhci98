@@ -3253,3 +3253,44 @@ by itself, whatever `XhciCmApprove` says.
 
 `XhciCmMode` `0` turns the whole driver off without uninstalling it: it
 binds the Thunderbolt host interface, logs it and touches nothing.
+
+### Seeing and safely removing Thunderbolt and USB4 devices
+
+Windows 98 SE and ME: to remove a Thunderbolt or USB4 device safely, run
+`XHCIINST /eject` (`INSTALL /eject` from the package's top directory).
+These systems have no other way: the "Unplug or Eject Hardware" applet
+NUSB installs does not list devices behind a Thunderbolt port. The tool
+asks Windows to query the device's removal - a volume with a file open on
+it refuses, and the tool says so and changes nothing - and, once Windows
+has agreed, to remove it; then it says whether the device can be
+unplugged. Until it is unplugged, Device Manager's Refresh, or the
+Thunderbolt driver looking at the port again, can start the device again.
+
+Windows 2000, XP, Vista and 7: Unplug or Eject Hardware and Safely Remove
+Hardware work as before. `XHCIINST /eject` makes the same request they
+make, and also for a device they do not list (connected before the
+Thunderbolt driver started, or disabled and enabled since): Windows
+refuses to eject such a device, and the tool then asks for the same
+query-remove and remove by the routine meant for devices that are not
+removable, a program with a file open still refusing it. Windows 2000
+offers no such routine (read in a virtual machine on 2026-10-15): there
+the tool says the device cannot be stopped, and after a restart with it
+connected it is listed for removal again. XP, Vista and 7 have not been
+read for this case. It needs an administrator on 2000 and XP.
+
+`XHCIINST /devices`, on every system, shows each connected device's name,
+generation, link, approval and connections (PCIe, USB3, DisplayPort) as
+`xhcicm.sys` knows them, and the PCI functions and Windows devices behind
+each Thunderbolt port with their drivers and problem codes. The driver
+writes what it knows to the registry value `XhciCmStatus` of the
+Thunderbolt host interface's hardware key, and the tool trusts it only
+after the running driver has answered it (`XhciCmStatusAsk` in the driver
+key); it ejects only devices behind a port the driver has confirmed, and
+never the Thunderbolt controller's own functions. Unique ids are shown as
+their last four digits; no key material is ever written. Design record 24
+is the reference.
+
+Four connection-manager values are never asked by the install tool and
+can be set with `INSTALL /set Name=Value`: `XhciCmReenum` (0 or 1),
+`XhciCmUsb3Tunnel` (0 or 1), `XhciCmLaneBonding` (0 or 1) and
+`XhciCmPreOsCleanup` (0, 1 or 2).
