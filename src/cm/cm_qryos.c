@@ -55,6 +55,13 @@ static ULONG CmQueryLastHi;
 
 #define CM_Q_NAME_CHARS 24
 
+/* The device interface class whose link name carries the NHI's instance
+ * id (cmQInstance): this driver's own, registered and never enabled.
+ * {E3E4EF80-9744-4323-A489-066E78AD2FA9} */
+static const GUID cmQueryClass = {
+    0xE3E4EF80, 0x9744, 0x4323, {0xA4, 0x89, 0x06, 0x6E, 0x78, 0xAD, 0x2F, 0xA9}
+};
+
 VOID CmQueryInit(VOID)
 {
     KeInitializeSpinLock(&CmQueryGlobalLock);
@@ -195,17 +202,41 @@ static ULONG cmQId(PCM_NHI nhi, BUS_QUERY_ID_TYPE type, char *id, ULONG at)
     return at;
 }
 
-/* The NHI's device instance id: the device id, a backslash, the instance
- * id - or the instance id alone where it already holds the whole path.
- * Empty where the PDO answers neither. */
+/*
+ * The NHI's device instance id. The PnP manager's own spelling is read out
+ * of a device interface's symbolic link name: registering one on the PDO
+ * (this driver's own class, never enabled) returns it, and on 2000 the
+ * bus's BusQueryInstanceID is only the last element ("20"), which the PnP
+ * manager prefixes with its parent's unique id. Where that fails, the
+ * PDO's QUERY_ID answers: the device id, a backslash, the instance id - or
+ * the instance id alone where it already holds the whole path. Empty where
+ * neither answers.
+ */
 static VOID cmQInstance(PCM_NHI nhi)
 {
     char inst[CM_Q_ID_MAX];
+    UNICODE_STRING link;
     ULONG n;
     ULONG k;
     ULONG i;
 
     nhi->QueryIdBytes = 0;
+    link.Buffer = NULL;
+    link.Length = 0;
+    link.MaximumLength = 0;
+    if (NT_SUCCESS(IoRegisterDeviceInterface(nhi->Common.Pdo, &cmQueryClass,
+                                             NULL, &link)) &&
+        link.Buffer != NULL) {
+        nhi->QueryIdBytes = CmQueryIdFromLink((const USHORT *)link.Buffer,
+                                              link.Length / sizeof(WCHAR),
+                                              nhi->QueryId, CM_Q_ID_MAX);
+        /* Allocated by IoRegisterDeviceInterface: cm_pool.c's ExFreePool,
+         * as hcd_door.c frees the HCD's. */
+        CmFree(link.Buffer);
+        if (nhi->QueryIdBytes != 0) {
+            return;
+        }
+    }
     k = cmQId(nhi, BusQueryInstanceID, inst, 0);
     if (k == 0) {
         return;

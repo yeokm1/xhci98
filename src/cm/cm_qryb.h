@@ -78,6 +78,15 @@ ULONG CmQueryContentGen(UCHAR *next, ULONG nextBytes, const UCHAR *prev,
 ULONG CmQueryAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
                     ULONG pass, ULONG ageMs, BOOLEAN stopping, PULONG info);
 
+/* The device instance id inside a device interface's symbolic link name
+ * (IoRegisterDeviceInterface: "\??\PCI#VEN_..&DEV_..#3&..&0&20#{guid}"):
+ * the text between the prefix's last backslash and the last '#', each '#'
+ * read as a backslash, into id (room bytes, no NUL). Returns its length, 0
+ * where the name has no such part or holds a character outside printable
+ * ASCII. */
+ULONG CmQueryIdFromLink(const USHORT *link, ULONG chars, char *id,
+                        ULONG room);
+
 /* Milliseconds between two tick counts' low words (modulo 2^32) at
  * `incr` 100 ns units per tick, without 64-bit arithmetic; held below
  * CM_Q_UNKNOWN. */

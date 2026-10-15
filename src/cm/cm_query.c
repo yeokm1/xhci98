@@ -331,6 +331,35 @@ ULONG CmQueryAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
     return rc;
 }
 
+ULONG CmQueryIdFromLink(const USHORT *link, ULONG chars, char *id,
+                        ULONG room)
+{
+    ULONG first;
+    ULONG last;
+    ULONG start;
+    ULONG i;
+    ULONG n;
+
+    for (first = 0; first < chars && link[first] != '#'; first++) {
+    }
+    for (last = chars; last > first && link[last - 1] != '#'; last--) {
+    }
+    if (first >= chars || last == 0 || last - 1 <= first) {
+        return 0;
+    }
+    last--;
+    for (start = first; start > 0 && link[start - 1] != '\\'; start--) {
+    }
+    n = 0;
+    for (i = start; i < last; i++) {
+        if (n >= room || link[i] < 0x20 || link[i] > 0x7E) {
+            return 0;
+        }
+        id[n++] = link[i] == '#' ? '\\' : (char)link[i];
+    }
+    return n;
+}
+
 ULONG CmQueryAgeMs(ULONG ticksNow, ULONG ticksThen, ULONG incr)
 {
     ULONG delta;

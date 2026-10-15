@@ -399,6 +399,45 @@ static void test_content_gen(void)
     CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 1, "past 0 to 1");
 }
 
+static ULONG wide(USHORT *w, const char *a)
+{
+    ULONG i;
+
+    for (i = 0; a[i] != 0; i++) {
+        w[i] = (USHORT)(unsigned char)a[i];
+    }
+    return i;
+}
+
+static void test_id_from_link(void)
+{
+    USHORT w[160];
+    char got[CM_Q_ID_MAX];
+    ULONG n;
+    const char *want =
+        "PCI\\VEN_1B36&DEV_00F4&SUBSYS_11001AF4&REV_01\\3&13C0B0C5&0&20";
+    const char *want98 = "PCI\\VEN_8086&DEV_15D2\\BUS_05&DEV_00&FUNC_00";
+
+    n = CmQueryIdFromLink(w, wide(w, "\\?\?\\PCI#VEN_1B36&DEV_00F4&SUBSYS_11001AF4&REV_01#3&13C0B0C5&0&20#{e3e4ef80-9744-4323-a489-066e78ad2fa9}"),
+                          got, sizeof(got));
+    CHECK_EQ(n, strlen(want), "the instance id's length");
+    CHECK(memcmp(got, want, n) == 0, "the instance id, # read as \\");
+    n = CmQueryIdFromLink(w, wide(w, "\\\\?\\PCI#VEN_8086&DEV_15D2#BUS_05&DEV_00&FUNC_00#{x}"),
+                          got, sizeof(got));
+    CHECK(n == strlen(want98) && memcmp(got, want98, n) == 0,
+          "another prefix");
+    CHECK_EQ(CmQueryIdFromLink(w, wide(w, "\\?\?\\PCI"), got, sizeof(got)), 0,
+             "no #: none");
+    CHECK_EQ(CmQueryIdFromLink(w, wide(w, "\\?\?\\PCI#{x}"), got, sizeof(got)),
+             0, "one #: none");
+    CHECK_EQ(CmQueryIdFromLink(w, wide(w, "\\?\?\\PCI#VEN#1#{x}"), got, 5), 0,
+             "longer than room: none");
+    n = wide(w, "\\?\?\\PCI#VEN#1#{x}");
+    w[9] = 0xE9;
+    CHECK_EQ(CmQueryIdFromLink(w, n, got, sizeof(got)), 0,
+             "a character outside ASCII: none");
+}
+
 static void test_age(void)
 {
     CHECK_EQ(CmQueryAgeMs(100, 100, 156250), 0, "same tick");
@@ -418,6 +457,7 @@ int main(void)
     test_answer();
     test_edges();
     test_content_gen();
+    test_id_from_link();
     test_age();
 
     printf("\n%d checks, %d failures\n", checks, failures);
