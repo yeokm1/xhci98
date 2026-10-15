@@ -123,9 +123,20 @@ By default (`XhciCmApprove` `1`) every device plugged into the port is approved 
 
 ### Removing a device safely
 
-Close the files open on the device first, as for any removable disk.
+Close the files open on the device first, as for any removable disk. Then:
 
-`INSTALL /devices` shows the connected Thunderbolt and USB4 devices, on every system:
+- **Windows 2000:** stop the device in "Unplug or Eject Hardware", then unplug it. Without the stop, Windows 2000 shows its "Unsafe Removal of Device" warning.
+- **Windows XP, Vista and 7:** stop the device in "Safely Remove Hardware", then unplug it.
+- **Windows 98 SE and ME:** these systems have no such dialog, so use the command-line tool below, `INSTALL /eject`. Until you unplug the device, Device Manager's Refresh can start it again.
+- **A dock** is listed under a generic PCI bridge name, the dock's own switch; stopping it stops everything in the dock.
+
+On Windows 2000 to 7 the tool is needed only for a device missing from Windows' list (below).
+
+**The command-line tool**
+
+Run it in a Command Prompt (an MS-DOS Prompt on 98 SE and ME). On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation. `tools\xhciinst\XHCIINST` takes the same switches (`XHCIIN64` on 64-bit Windows).
+
+`INSTALL /devices` shows the connected Thunderbolt and USB4 devices:
 
 - each one's name, generation, approval and connections
 - the Windows devices behind it, with their drivers
@@ -136,13 +147,7 @@ Close the files open on the device first, as for any removable disk.
 2. It asks Windows to stop it. If a program has a file open on the device, Windows refuses and nothing changes: close the program and try again.
 3. When it says "You can now unplug the device.", unplug it.
 
-On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for elevation. `tools\xhciinst\XHCIINST` takes the same switches (`XHCIIN64` on 64-bit Windows).
-
-- **Windows 98 SE and ME:** use `INSTALL /eject`; these systems have no other way. Until you unplug the device, Device Manager's Refresh can start it again.
-- **Windows 2000:** stop the device in "Unplug or Eject Hardware", then unplug it. Without the stop, Windows 2000 shows its "Unsafe Removal of Device" warning.
-- **Windows XP, Vista and 7:** stop the device in "Safely Remove Hardware", then unplug it.
-- **A device missing from those lists** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): on XP, Vista and 7 `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device: the tool says so; restart with the device connected and it is listed for removal again, or shut the computer down and unplug it then. Unplugging and plugging it in again also puts it back in the list.
-- **A dock** is listed under a generic PCI bridge name, the dock's own switch; stopping it stops everything in the dock.
+- **A device missing from Windows' list** (one connected before the driver started, or disabled and enabled since, or whose driver was updated): on XP, Vista and 7 `INSTALL /eject` still asks Windows to stop it. Windows 2000 cannot stop such a device: the tool says so; restart with the device connected and it is listed for removal again, or shut the computer down and unplug it then. Unplugging and plugging it in again also puts it back in the list.
 - **For scripts:** `INSTALL /eject 2` ejects device 2 of the list after one question; `INSTALL /eject id=<instance id> /yes`, with the instance id `/devices` prints, does it with no question.
 
 ### NVMe drives
