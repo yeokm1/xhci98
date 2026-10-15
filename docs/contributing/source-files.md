@@ -590,6 +590,7 @@ In `test\`, each run by `test\run-host-tests.cmd`, which `build-driver.cmd` runs
 | `test_tbt_icm.c` | `tbt_icm.c` over the ring: every frame `ICM-PROTOCOL.md` quotes, the other generations' frames synthesised from Linux's structures, and a disconnect during an approve. |
 | `test_tbt_hw.c`, `test_tbt_select.c` | `tbt_hw.c`: the hardware profiles and their id table against `cm_vals.c`'s, and the selection, every `NVM_AUTH_DONE` and `ICM_EN` combination among its cases. |
 | `test_tbt_topo.c` | `tbt_topo.c` on the P14s and emulator layouts, a generic layout, two-port switches, listed and unlisted root ports, two domains and the override list. |
+| `test_cm_nvlink.c` | `cm_nvlink.c`: the `nvme98` link-state channel's entry protocol, both profiles' statement conditions and the 9x record's bytes (tasks 39-A.7 and 40-A.7). |
 | `test_u4cm.c` | `tbt_u4cm.c` over the fake fabric, with the `minimal`, `intel-adl` and `asm4242` presets and two domains. |
 | `tbt_fake.h` | The modelled host interface `test_tbt_ring`, `test_tbt_icm` and `test_tbt_hw` drive, from the USB4 Specification 2.0 and `ICM-PROTOCOL.md`. |
 | `tbt_topo_p14s.h` | The ThinkPad P14s Gen 1's PCI configuration space as captured under DOS in `usb4-emu`, for `test_tbt_topo`. |
