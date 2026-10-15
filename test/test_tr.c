@@ -927,6 +927,32 @@ static void test_texts(void)
           "link: ICM, an empty extension");
     tr_link_text(CM_ST_KIND_USB4_PORT, CM_ST_LANES_SINGLE, NULL, out, sizeof(out));
     CHECK(strcmp(out, "one lane; speed not known") == 0, "link: lanes only");
+    memset(&x, 0, sizeof(x));
+    x.Rate = 20;
+    x.Width = 2;
+    x.LinkState = CM_Q_UNKNOWN;
+    x.GenRaw = CM_Q_UNKNOWN;
+    tr_link_text(CM_ST_KIND_ICM, CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "20 Gbit/s per lane, x2 (reported by the firmware)") == 0,
+          "link: ICM rate and width from the firmware's event");
+    x.Flags = CM_Q_XF_RATE_READ;
+    tr_link_text(CM_ST_KIND_ICM, CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "20 Gbit/s per lane, x2 (read from the lane adapter)") == 0,
+          "link: ICM rate read from the lane adapter");
+    x.Flags = 0;
+    x.Width = 0;
+    tr_link_text(CM_ST_KIND_ICM, CM_ST_LANES_UNKNOWN, &x, out, sizeof(out));
+    CHECK(strcmp(out, "20 Gbit/s per lane, lanes not known (reported by the firmware)") == 0,
+          "link: ICM rate without width");
+    x.Rate = 0;
+    x.Width = 2;
+    tr_link_text(CM_ST_KIND_ICM, CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(has(out, "not reported by the firmware"), "link: ICM rate 0");
+    x.Rate = 20;
+    x.Flags = CM_Q_XF_RATE_READ;
+    tr_link_text(CM_ST_KIND_USB4_PORT, CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "USB4 Gen 3 x2 (40 Gbit/s) (read from the lane adapter)") == 0,
+          "link: USB4 rate read from the lane adapter");
     tr_link_text(CM_ST_KIND_USB4_PORT, CM_ST_LANES_BONDED, NULL, out, sizeof(out));
     CHECK(strcmp(out, "two lanes; speed not known") == 0, "link: two lanes only");
 
@@ -1405,6 +1431,30 @@ static void test_sizes(void)
 #endif
 }
 
+/* A descriptor whose own length claims more than the bytes read (review
+ * of 2026-10-16): refused, never dumped past the buffer. */
+static void test_desc_lengths(void)
+{
+    static const unsigned char bos[5] = { 255, 15, 5, 0, 0 };
+    static const unsigned char cfg[9] = { 200, 2, 9, 0, 1, 1, 0, 0x80, 50 };
+    static const unsigned char hub[7] = { 71, 0x29, 4, 0, 0, 50, 0 };
+    char buf[2048];
+    char ssp[64];
+    TR_TEXT t;
+
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_dec_bos(&t, bos, sizeof(bos));
+    CHECK(has(buf, "short or malformed"), "BOS bLength 255 of 5 bytes refused");
+    CHECK(!tr_bos_ssp_text(bos, sizeof(bos), ssp, sizeof(ssp)),
+          "BOS bLength 255: no sublink text");
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_dec_config(&t, cfg, sizeof(cfg));
+    CHECK(has(buf, "short or malformed"), "config bLength 200 of 9 bytes refused");
+    tr_text_init(&t, buf, sizeof(buf));
+    tr_dec_hub(&t, hub, sizeof(hub));
+    CHECK(has(buf, "short or not reported"), "hub bLength 71 of 7 bytes refused");
+}
+
 int main(void)
 {
     test_printf();
@@ -1417,6 +1467,7 @@ int main(void)
     test_events();
     test_keys_args_report();
     test_sizes();
+    test_desc_lengths();
     printf("test_tr: %d checks, %d failures\n", checks, failures);
     return failures;
 }

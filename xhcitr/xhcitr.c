@@ -1103,6 +1103,7 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
 {
     HANDLE h;
     unsigned char ni[TR_NI_BYTES];
+    DWORD got = 0;
     unsigned int ports = 0;
     int bus;
     unsigned int i;
@@ -1115,8 +1116,8 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
     }
     memset(ni, 0, sizeof(ni));
     if (!usb_ioctl(h, TR_IOCTL_USB_GET_NODE_INFORMATION, ni, sizeof(ni), ni,
-                   sizeof(ni), NULL) ||
-        !tr_node_parse(ni, sizeof(ni), &ports, &bus)) {
+                   sizeof(ni), &got) ||
+        !tr_node_parse(ni, got, &ports, &bus)) {
         CloseHandle(h);
         add_tnode(parentT, K_NOTE, 0, 0, 0, -1, "(the hub did not report its ports)",
                   "N:hub");
@@ -1147,15 +1148,17 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
         memset(buf, 0, sizeof(buf));
         buf[0] = (unsigned char)i;
         if (usb_ioctl(h, TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX, buf,
-                      sizeof(buf), buf, sizeof(buf), NULL)) {
+                      sizeof(buf), buf, sizeof(buf), &got) &&
+            tr_conn_parse(buf, got, 1, &p->Conn)) {
             p->Ex = 1;
-            p->HaveConn = tr_conn_parse(buf, sizeof(buf), 1, &p->Conn);
+            p->HaveConn = 1;
         } else {
+            /* Refused, or a short answer: the original request. */
             memset(buf, 0, sizeof(buf));
             buf[0] = (unsigned char)i;
             if (usb_ioctl(h, TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION, buf,
-                          sizeof(buf), buf, sizeof(buf), NULL)) {
-                p->HaveConn = tr_conn_parse(buf, sizeof(buf), 0, &p->Conn);
+                          sizeof(buf), buf, sizeof(buf), &got)) {
+                p->HaveConn = tr_conn_parse(buf, got, 0, &p->Conn);
             }
         }
         p->Conn.Port = i;
@@ -1164,7 +1167,8 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
         v2.Length = sizeof(v2);
         v2.SupportedUsbProtocols = 0x07UL;
         if (p->Ex && usb_ioctl(h, TR_IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2,
-                               &v2, sizeof(v2), &v2, sizeof(v2), NULL)) {
+                               &v2, sizeof(v2), &v2, sizeof(v2), &got) &&
+            got >= TR_V2_BYTES) {
             p->HaveV2 = 1;
             p->V2Proto = v2.SupportedUsbProtocols;
             p->V2Flags = v2.Flags;
@@ -1208,7 +1212,8 @@ static void usb_hub(int parentT, int ctrl, const char *hubName,
                 memset(p->HubNode, 0, sizeof(p->HubNode));
                 p->HaveHubNode = usb_ioctl(hh, TR_IOCTL_USB_GET_NODE_INFORMATION,
                                            p->HubNode, sizeof(p->HubNode),
-                                           p->HubNode, sizeof(p->HubNode), NULL);
+                                           p->HubNode, sizeof(p->HubNode), &got) &&
+                                 got >= TR_NI_BYTES;
                 CloseHandle(hh);
             }
             if (t >= 0) {
@@ -2442,9 +2447,21 @@ static int ej_after(const EJREQ *q, int single)
     }
     if (whole) {
         TR_U32 n = inst_get32(a2.Rec, CM_ST_O_ROUTER_COUNT);
+        TR_U32 ports = inst_get32(a2.Rec, CM_ST_O_PORT_COUNT);
+        TR_U32 active = inst_get32(a2.Rec, CM_ST_O_PORT_ACTIVE);
         TR_U32 r;
+        TR_U32 j;
         int routers = 0;
-        for (r = 0; r < n; r++) {
+        int portKnown = 0;
+        /* The port must still be an active member of the set, as
+         * xhciinst.c's tb_after requires (record 24 section 5.4). */
+        for (j = 0; j < ports && j < CM_ST_MAX_PORTS; j++) {
+            if ((active & (1UL << j)) != 0 &&
+                inst_get32(a2.Rec, CM_ST_O_PORTS + 4 * j) == q->PortBdf) {
+                portKnown = 1;
+            }
+        }
+        for (r = 0; portKnown && r < n; r++) {
             const unsigned char *e = a2.Rec + CM_ST_HDR_BYTES + r * CM_ST_ENTRY_BYTES;
             if (inst_get32(e, CM_ST_E_BRIDGE) == q->PortBdf) {
                 routers++;
@@ -3541,8 +3558,10 @@ static void poll(void)
         }
         g = inst_get32(q.Rec, CM_ST_O_GENERATION);
         if (!nhi[k].HaveQ || g != inst_get32(nhi[k].Q.Rec, CM_ST_O_GENERATION) ||
+            q.ContentGen != nhi[k].Q.ContentGen || q.Flags != nhi[k].Q.Flags ||
             q.Live != nhi[k].Q.Live || q.EpochLo != nhi[k].Q.EpochLo ||
-            q.EpochHi != nhi[k].Q.EpochHi) {
+            q.EpochHi != nhi[k].Q.EpochHi ||
+            tr_query_current(&q) != tr_query_current(&nhi[k].Q)) {
             changed = 1;
         }
         routers += (int)inst_get32(q.Rec, CM_ST_O_ROUTER_COUNT);
@@ -3550,7 +3569,16 @@ static void poll(void)
          * reading of the tree may change. */
         tr_snap_add(now, inst_fnv1a(INST_FNV_START, (const unsigned char *)nhi[k].Id,
                                     strlen(nhi[k].Id)), &q);
-        free(b);
+        if (nhi[k].HaveQ) {
+            /* The cached answer follows the poll: the details pane and the
+             * next comparison read this one. */
+            free(nhi[k].QBuf);
+            nhi[k].QBuf = b;
+            nhi[k].Q = q;
+            nhi[k].R = q.Rec;
+        } else {
+            free(b);
+        }
     }
     count = tr_diff(&snapOld, now, ev, 8);
     for (i = 0; i < count; i++) {
@@ -3818,6 +3846,13 @@ static int run_eject(void)
         free(q);
         return INST_EXIT_REFUSED;
     }
+    /* This run's request is confirmed as it stands now: a device that
+     * appeared under the unit while the elevation was asked is listed, and
+     * the transaction holds to exactly this list. */
+    if (!ej_confirm(NULL, q)) {
+        free(q);
+        return INST_EXIT_REFUSED;
+    }
     code = ej_run(q, msg, sizeof(msg), &rights);
     say(msg, code != INST_EXIT_DONE);
     free(q);
@@ -3964,7 +3999,18 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     msgShow = RegisterWindowMessageA("Xhci98TrShow");
     SetLastError(0);
     single = CreateMutexA(NULL, FALSE, envNt ? "Local\\Xhci98TrTray" : "Xhci98TrTray");
-    if (single != NULL && GetLastError() == ERROR_ALREADY_EXISTS) {
+    if (single == NULL) {
+        /* Not created: one may exist that this user cannot take over. */
+        single = OpenMutexA(SYNCHRONIZE, FALSE,
+                            envNt ? "Local\\Xhci98TrTray" : "Xhci98TrTray");
+        if (single == NULL) {
+            say("The xHCI98 USB Tree cannot tell whether it is already running, "
+                "so it does not start a second one.", 1);
+            return INST_EXIT_REFUSED;
+        }
+        SetLastError(ERROR_ALREADY_EXISTS);
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
         HWND other = FindWindowA("Xhci98TrTray", NULL);
         DWORD start = GetTickCount();
         /* The first one may still be starting (it waits for an installer
