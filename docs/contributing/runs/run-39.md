@@ -624,3 +624,101 @@ refusal path is in the code, logged and counted, never forced); ME; XP and
 later; `SurpriseRemovalOK` set together with `Removable` on 2000 (a variant
 build, owed to 39-V.2); the Titan Ridge model; the `release` and `debug`
 flavours.
+
+## 39-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
+
+**Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
+not run** (2026-10-15). On each of the four, the package installed through
+`INSTALL.BAT`, the tunnel-port filter from `nt\` included; a device router
+plugged on `tb3-alpine-ridge` was approved and its NVMe appeared with no
+Refresh and no "Scan for hardware changes", left on unplug and came back on
+a re-plug; and the NVMe was listed in "Safely Remove Hardware", stopped
+there, unplugged with no dialog, listed again after a re-plug, and a plain
+unplug showed no dialog either. ME is not in this section (another run).
+
+**Not run: Vista x64 and 7 x64.** Both load only a signed driver (or one
+started from an F8 boot with enforcement off), and the x64 package is
+test-signed only by the packager with the project key, whose password was
+not available to this run; nothing was signed by hand. They stay owed,
+with 7 x64's reading of whether `pci.sys`'s own hot-plug acts before the
+filter. XP x64 does not check kernel-mode signatures, so its legs ran on
+the unsigned `release-x64` package.
+
+**The vehicle.** Development host A, TCG, task 39-0.7's launcher with
+`-RunRoot v-xp7` (`-Usb4Profile tb3 -Bios OFF_OFF -DeviceAtBoot 0`, the
+root bridge at slot 6, `-Trace`), each guest from a fresh overlay of its
+`vm\<guest>.img`, two vCPUs, QMP and VNC on 47946/47947 (XP and XP x64:
+47956/47957), 47966/47967 (Vista) and 47986/47987 (7). The NVMe behind the
+tunnel was an overlay of `usb4-emu`'s `vms\win98\nvme32.qcow2` (one FAT32
+volume, `NVME32`), read-only. The QEMU binary: XP and 7 x86 ran on the copy
+in `vm\usb4\bin` (the `a50c19e` build); Vista x86 and XP x64 on the
+`usb4-emu` `main` `5ba7f60` build (QEMU fork `20655c3`) staged in
+`vm\usb4\bin-5ba7f60`. Driven over QMP keys and screendumps; device state
+read with a throwaway SetupAPI tool (`devq`, task 39-0.4's, rebuilt 64-bit
+for XP x64) whose output went to the guest's COM1, that is the serial log.
+
+**The package.** Built on branch `v-xp7` at `6fa331d4` (the `3.0.0.0` tip
+of the run): `build-driver.cmd all` and `all -amd64`, every gate passing;
+`make-package.ps1 -Flavor release` for x86 and amd64 (amd64 unsigned), and
+`XHCIINST.EXE` and `XHCIIN64.EXE` from `xhciinst\build.cmd` of the same
+tree, staged with `INSTALL.BAT` in the release layout
+(`out\v-xp7\xfer-x86\PKG`, `out\v-xp7\xfer-x64\PKG`; hashes in
+`out\v-xp7\pkg-*-sha256.txt`). The binaries are not restamped, so Windows
+shows them as 2.4.0.0. That build predates the new Device Manager names:
+the NHI showed as "xHCI98 Thunderbolt 3 Host Interface" and the ports as
+"xHCI98 Thunderbolt 3 Tunnel Port Filter"; the names of the later build
+were not read here. The NVMe driver was `nvme98` 0.1.1.0 (its published x86
+and amd64 builds, read-only), installed after the first plug with
+`UpdateDriverForPlugAndPlayDevices` and `INSTALLFLAG_FORCE`.
+
+**Install.** `INSTALL /defaults /yes /nopause` from the transfer drive (an
+elevated prompt on Vista and 7). On every guest the tool staged
+`xhci98.inf`, `xhciuas.inf`, `xhcicm.inf` and `nt\xhcicmf.inf`, installed
+the Alpine Ridge xHCI `15C1` and its root hub, `xhcicm.sys` on the NHI
+`15BF`, and the filter on the four `15C0` ports and the emulator's root
+bridge `1B36:0001`, after Windows' unsigned-driver questions; the
+`nt\` copy of `xhcicm.sys` installed on Vista and 7 with no `0xA1`. On XP
+x64 the root hub's Found New Hardware wizard stopped the first run with
+exit 4 as designed; answered, a second run finished. Every run ended
+"Changes were made. Please restart Windows now.", exit 3. After the
+restart every port read `Service` `pci`, `UpperFilters` `xhcicm`, started,
+and the NHI `xhcicm`, started, problem 0.
+
+| Leg | XP SP3 | XP x64 SP2 | Vista SP2 x86 | 7 SP1 x86 |
+|---|---|---|---|---|
+| Install, filter from `nt\` | pass | pass (two runs) | pass | pass |
+| Plug: approved, NVMe with no Refresh | pass | pass | pass | pass |
+| Volume `NVME32` mounted (`nvme98`) | pass | pass | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass | pass | pass |
+| Re-plug: back, no wizard | pass | pass | pass | pass |
+| Listed in "Safely Remove Hardware" | yes | yes | yes | yes |
+| Stop: "Safe To Remove Hardware", device at Code 47 | pass | pass | pass (see below) | pass |
+| Unplug after the stop: dialog | none | none | none | none |
+| Re-plug after the eject: listed again | yes | yes | yes | yes |
+| Plain unplug, no eject: dialog | none | none | none | none |
+| Result | **PASS** | **PASS** | **PASS** | **PASS** |
+
+What the emulator saw (`trace-*.log`), the same on each: per plug the ICM
+event `device connected ... approved 0`, the approve command, `PCIe tunnel
+up reason 0`, `tp_insert`; per unplug `tunnel down reason 3`,
+`device disconnected`, `tp_removed` - three cycles on each guest.
+
+**Readings.**
+
+- **The dialog.** No Unsafe Removal dialog on XP, XP x64, Vista or 7 after
+  a plain unplug of a device marked `Removable` alone: the dialog is a
+  Windows 2000 matter (39-V.2), and the release-notes line of record 21
+  section 7.4 stays 2000's.
+- **Vista's veto.** The first Stop on Vista was refused - "Windows can't
+  stop your 'Generic volume' device because it is in use" - while an
+  Explorer window that AutoPlay had opened on F: was open; with it closed
+  the Stop went through. The ordinary veto of section 7.4 step 3, nothing
+  forced.
+- **Code 47.** After the Stop the NVMe stayed reported (status
+  `0x01806400`, problem 47) with the tunnel up until the unplug, as
+  section 7.4 says for XP and later.
+
+**Evidence.** `vm\v-xp7\xp-tb3\`, `xp64-tb3\`, `vx86-tb3\`, `w7-tb3\`:
+`notes.txt` (the leg's narrative and the screenshot it cites), the
+screendumps `s*.png`, the serial log (`G <tag>` device dumps and the
+installer log), `trace-*.log` and `debugcon-*.log`.

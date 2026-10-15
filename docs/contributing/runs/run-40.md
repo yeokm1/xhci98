@@ -498,3 +498,48 @@ was not mounted on 98 SE (no NVMe driver on the image). The 2000 legs'
 INF copy also carried a test-only `PCI\VEN_1B36&DEV_00F4` model line; which
 model line ranked there was not read. Evidence in
 `vm\p40-drv\<run>\` (traces, debug-console logs, screendumps).
+
+## 40-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
+
+**Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
+not run** (2026-10-15). On `usb4-generic` with `host-model=intel-adl`, each
+guest from a fresh overlay installed the package through `INSTALL.BAT` -
+`xhcicm.sys` on the USB4 host interface `1B36:00F4` by its class line
+`PCI\CC_0C0340`, the filter from `nt\` on the tunnel bridge `1B36:0001` -
+and one plug cycle (plug, unplug, re-plug) brought the NVMe up with no
+Refresh, removed it and brought it back. ME is not in this section.
+
+**Not run: Vista x64 and 7 x64**, for the reason `run-39.md`'s 39-V.3
+section gives (no test-signed amd64 package on this run). XP x64 ran the
+unsigned package.
+
+**The vehicle and the package** are 39-V.3's (`run-39.md`): the same
+builds, staging, NVMe image, tools and ports; `-Usb4Profile generic
+-HostModel intel-adl -DeviceAtBoot 0`. XP ran on `vm\usb4\bin` (the
+`a50c19e` build); 7 x86, Vista x86 and XP x64 on the `5ba7f60` build in
+`vm\usb4\bin-5ba7f60`.
+
+| Leg | XP SP3 | XP x64 SP2 | Vista SP2 x86 | 7 SP1 x86 |
+|---|---|---|---|---|
+| Install: host `xhcicm` started, bridge `UpperFilters` `xhcicm` | pass | pass | pass | pass |
+| Plug: tunnel up, NVMe with no Refresh, `NVME32` mounted | pass | pass | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass | pass | pass |
+| Re-plug: back | pass | pass | pass | pass |
+| Result | **PASS** | **PASS** | **PASS** | **PASS** |
+
+The trace on each: the hot plug events of the router's lanes, `PCIe tunnel
+up reason 0` and `tp_insert` per plug, `tunnel down reason 3` per unplug.
+The host interface showed as "xHCI98 USB4 Host Interface" (the build
+before the new Device Manager names).
+
+**A reading, not this driver's.** On XP and 7 "Safely Remove Hardware"
+also lists the host interface itself, beside the NVMe. Its devnode reads
+`DN_REMOVABLE` (status `0x01806400`) before any driver of this project was
+installed (XP's dump before the install), so the flag is the platform's
+for that function on bus 0 of this emulator, not the child filters'
+mark (which only ever goes on devices reported on a tunnel bridge). Why
+the platform reports it so was not read. The Alpine Ridge NHI behind the
+switch reads `0x0180200a`, with no such flag.
+
+**Evidence.** `vm\v-xp7\xp-gen\`, `xp64-gen\`, `vx86-gen\`, `w7-gen\`,
+as for 39-V.3.
