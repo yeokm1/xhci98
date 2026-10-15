@@ -198,7 +198,7 @@ Controller qualified verdict.
 
 XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
-To submit logs with a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose), from `2.4.0.0` run `QUALREP.BAT` from real DOS in the `TOOLS\XHCIQUAL\` folder and attach the `.LOG` file it names. It runs `XHCIQUAL --probe-only --no-page --log-stamp`, which is read-only: it takes ownership of nothing and writes no PCI configuration register. The log is written in the current directory under a name made from the DOS date and time (`mDDhhmmS.LOG`), so a second run never overwrites the first.
+To submit logs with a [bug report](https://github.com/yeokm1/xhci98/issues/new/choose), run `QUALREP.BAT` from real DOS in the `TOOLS\XHCIQUAL\` folder and attach the `.LOG` file it names. It runs `XHCIQUAL --probe-only --no-page --log-stamp`, which is read-only: it takes ownership of nothing and writes no PCI configuration register. The log is written in the current directory under a name made from the DOS date and time (`mDDhhmmS.LOG`), so a second run never overwrites the first.
 
 If a maintainer asks for the full run as well, continue with `XHCIQUAL --no-page --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
 
@@ -477,8 +477,6 @@ Setting `1` or `0` needs an administrator; on Vista and 7 the script asks Window
 
 `portsw-on.bat` and `portsw-off.bat`, beside it, do the same in one double-click: each shows the value, sets `1` or `0` and says to restart. On 2000 and XP, run them as an administrator; on Vista and 7, right-click one and choose Run as administrator. At a prompt on 98 SE and ME, change to `tools\portsw\` first. Then restart Windows.
 
-The `2.3.0.0` download has these three files in each driver directory instead; they work the same from there.
-
 ### The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)
 
 Two chipset registers decide which interrupt line the xHCI controller's interrupt reaches. Some firmware points them at a different line from the one it tells Windows: the Dell Latitude E7250 sends it to IRQ 16 while Windows listens on IRQ 21, so every USB device on it is slow or stops.
@@ -755,7 +753,7 @@ The drivers are C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64
 4. Build the two tools that ship beside the drivers:
    - `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier. It needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points), the only tool installed normally on the host; the drivers never use it.
    - `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
-   - `xhcicln\build.cmd` produces `XHCICLN.EXE` with the in-repo MSVC 6.0 and `XHCICL64.EXE` with the in-repo WDK 7.1 (`build.cmd x86` for the first alone), the cleanup tool of `2.4.0.0`.
+   - `xhcicln\build.cmd` produces `XHCICLN.EXE` with the in-repo MSVC 6.0 and `XHCICL64.EXE` with the in-repo WDK 7.1 (`build.cmd x86` for the first alone), the cleanup tool.
    - `xhciinst\build.cmd` produces `XHCIINST.EXE` and `XHCIIN64.EXE` the same way, the install tool `INSTALL.BAT` runs.
 
 5. Make install media. A `.sys` on its own is not install media; each INF travels with its driver, and nothing else does, because the controller's INF has Windows supply its own `usbd.sys` and `usbui.dll`.
@@ -783,8 +781,7 @@ scripts/        Setup helpers, build wrapper, the import/INF/packaging gates,
 xhciqual/       The DOS hardware-qualification tool (Open Watcom) and its
                 bare-metal run logs under results/
 xhcisnap/       The snapshot reader for the driver's log channel
-xhcicln/        The optional cleanup tool for the devnodes a driver before
-                2.4.0.0 left under XHCI98\
+xhcicln/        The optional cleanup tool for the old devnodes under XHCI98\
 xhciinst/       The install, update and uninstall tool and INSTALL.BAT
 docs/           Documentation, indexed by docs/README.md
   using/        The user-facing release notes and acceptance test
@@ -866,7 +863,7 @@ The repository tracks no third-party binary on its own, although the tool execut
 
 * `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
 
-* `XHCICLN.EXE` embeds the MSVC 6.0 runtime, and `XHCICL64.EXE` the WDK 7.1 one (from `2.4.0.0`).
+* `XHCICLN.EXE` embeds the MSVC 6.0 runtime, and `XHCICL64.EXE` the WDK 7.1 one.
 * `XHCIINST.EXE` embeds the MSVC 6.0 runtime, and `XHCIIN64.EXE` the WDK 7.1 one. Neither contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
