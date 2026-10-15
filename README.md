@@ -147,9 +147,11 @@ On Windows 2000 and XP run it as an administrator; on Vista and 7 it asks for el
 
 ### NVMe drives
 
-An NVMe drive in an enclosure needs an NVMe driver, which these systems do not have. `nvme98`, a separate project, is that driver for Windows 98 SE to Vista, and the package carries a release of it with its own readme and licence. `xhcicm.sys` brings the drive's tunnel up and down and tells `nvme98` when the drive arrives, and `nvme98` runs the drive.
+An NVMe drive in an enclosure needs an NVMe driver, which these systems do not have. `nvme98`, a separate project, is that driver for Windows 98 SE to Vista. `xhcicm.sys` brings the drive's tunnel up and down and tells `nvme98` when the drive arrives, and `nvme98` runs the drive.
 
-The package's `release-x86\` and `release-x64\` directories carry it as one of its released builds, unchanged, under its own licence (BSD-3-Clause): its `LICENSE`, `NOTICE.TXT` and `readme.txt` are beside it as `nvme98-LICENSE.txt`, `nvme98-NOTICE.txt` and `nvme98-readme.txt`, and the readme is its install guide and lists its known limits. The package's `readme.txt` and the release notes name the version. `INSTALL.BAT` does not install it. When the drive's NVMe controller shows in Device Manager without a driver, use Update Driver -> Have Disk, pointed at:
+The package carries an unchanged nvme98 release in `release-x86\` and `release-x64\`. Its readme, beside it as `nvme98-readme.txt`, is its install guide and lists its known limits. The package's `readme.txt` and the release notes name the version.
+
+`INSTALL.BAT` does not install it. When the drive's NVMe controller shows in Device Manager without a driver, use Update Driver -> Have Disk, pointed at:
 
 - `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
 - `release-x64\` on Windows XP x64, Vista x64 and 7 x64
