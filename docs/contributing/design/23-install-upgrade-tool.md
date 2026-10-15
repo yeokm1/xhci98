@@ -274,7 +274,11 @@ cannot replace the files a newer installed package's INF still names, and
 a run that changes only a registry value replaces nothing. The copies are
 kept while anything may name them, and only the uninstall removes them:
 the files each list names, then each directory and `%windir%\XHCI98` only
-if empty.
+if empty. With each listed INF goes its `.PNF`, which the device installer
+of 98 SE writes beside an INF it reads in place (the 98 SE uninstall leg,
+2026-10-15: without it the directory could not be removed, and the
+reinstall refused); a copy whose list is already gone loses only the
+`.PNF`s of this package's INFs, never another file.
 
 ## 5. The NT route: Windows 2000, XP, XP x64, Vista and 7
 

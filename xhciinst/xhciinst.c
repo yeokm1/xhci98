@@ -1995,9 +1995,34 @@ static void local_remove(const char *dir)
     char *text;
     char *p;
     char *nl;
+    size_t n;
+    int k;
 
     join(lst, sizeof(lst), dir, "XHCIINST.LST");
     text = read_file(lst, NULL);
+    if (text == NULL) {
+        /* A copy whose list is gone (an earlier run removed the files):
+         * the device installer's precompiled copies of this package's
+         * INFs may be all that is left. */
+        for (k = 0; k < INST_INF_COUNT; k++) {
+            char pnf[64];
+            inst_copy(pnf, k == INST_INF_CMF ? "nt\\" : "", sizeof(pnf));
+            strncat(pnf, instInfFile[k], sizeof(pnf) - strlen(pnf) - 1);
+            n = strlen(pnf);
+            if (n > 4) {
+                strcpy(pnf + n - 4, ".PNF");
+            }
+            join(path, sizeof(path), dir, pnf);
+            SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+            if (DeleteFileA(path)) {
+                flagChanged = 1;
+            }
+        }
+        join(path, sizeof(path), dir, "nt");
+        if (RemoveDirectoryA(path)) {
+            flagChanged = 1;
+        }
+    }
     if (text != NULL) {
         for (p = text; *p != '\0'; p = nl) {
             nl = strchr(p, '\n');
@@ -2019,6 +2044,17 @@ static void local_remove(const char *dir)
             SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
             if (DeleteFileA(path)) {
                 flagChanged = 1;
+            }
+            /* The device installer writes <name>.PNF beside an INF it
+             * reads in place (the 98 SE uninstall leg, 2026-10-15): the
+             * listed INF's own precompiled copy goes with it. */
+            n = strlen(path);
+            if (n > 4 && inst_eq(path + n - 4, ".inf")) {
+                strcpy(path + n - 4, ".PNF");
+                SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+                if (DeleteFileA(path)) {
+                    flagChanged = 1;
+                }
             }
         }
         free(text);
