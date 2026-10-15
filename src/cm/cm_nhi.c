@@ -121,7 +121,8 @@ static const char *const cmIcmCounterNames[] = {
     "cm.icm.reconciled", "cm.icm.mailbox.sent", "cm.icm.mailbox.ok",
     "cm.icm.mailbox.errors", "cm.icm.mailbox.timeouts",
     "cm.icm.hostpoll.tries", "cm.icm.hostpoll.answered", "cm.icm.idle-polls",
-    "cm.icm.rediscoveries", "cm.icm.lost", "cm.icm.recoveries"
+    "cm.icm.rediscoveries", "cm.icm.resume-budget-expired", "cm.icm.lost",
+    "cm.icm.recoveries"
 };
 
 static const char *const cmRingCounterNames[] = {

@@ -498,3 +498,112 @@ was not mounted on 98 SE (no NVMe driver on the image). The 2000 legs'
 INF copy also carried a test-only `PCI\VEN_1B36&DEV_00F4` model line; which
 model line ranked there was not read. Evidence in
 `vm\p40-drv\<run>\` (traces, debug-console logs, screendumps).
+
+## 40.6 - Windows ME: a UAS disk as the first storage device after `INSTALL.BAT`
+
+**Verdict: not a regression; the tool now names the step** (2026-10-15).
+The installer's first-install leg on Windows ME read a UAS disk that
+installed silently from the staged `xhciuas.inf` and stayed at Code 2, with
+a yellow mark, through a restart. That is the limitation the release notes
+carry since `2.0.0.0` ("Known limitations", "Windows ME: a UAS drive as the
+first USB storage device shows Code 2"; the owner's ruling of 2026-10-04,
+`roadmap-hcd.md` decisions table, and `runs/run-31.md`, "Windows ME: a UAS
+drive first"), and the same leg read it with the published `2.4.0.0`
+drivers: the leg's first device reading, before any `3.0.0.0` file was
+staged, listed the UAS entry as `xhciuas 2.4.0.0; current (this release)`
+at problem code 2. `2.4.0.0` behaves the same.
+
+**The cause, read on the leg's own overlay** (a fresh overlay over
+`vm\p40-inst-c\ovl\mtx-me-f3.qcow2`, nothing written to it; the mouse and
+the UAS disk plugged in after the desktop, on the leg's ports; readings in
+`vm\me-uas\legs\serial-r2.log`). The UAS devnode
+(`Enum\USB\VID_46F4&PID_0003\27842-0000:00:03.0-3`) holds
+`upperfilters = "USBNTMAP.SYS"`; its driver key (`Class\USB\0002`) holds
+`DevLoader = *NTKERN`, `NTMPDriver = xhciuas.sys`, `InfSection = Uas.Dev`,
+`MatchingDeviceId = USB\Class_08&SubClass_06&Prot_62` and an `InfPath` that
+is the package's own `xhciuas.inf` as ME's `INF\OTHER` copy of it: the
+silent install took the expected INF, with the expected entries.
+`System32\Drivers` held `XHCIUAS.SYS` and no `USBNTMAP.SYS` or
+`USBSTOR.SYS`, and `System\IOSUBSYS` no `USBMPHLP.PDR`. ME ships the three
+in its cabinets (`BASE2.CAB` and the cabinets after it, the ME CD read with
+7-Zip, nothing executed) and its `usbstor.inf` copies `USBSTOR.SYS` and
+`USBNTMAP.SYS` only when a Bulk-Only device installs; with the named upper
+filter missing, NTKERN cannot load the devnode's drivers, which Device
+Manager shows as Code 2. A Bulk-Only stick plugged into the same guest
+installed silently, with no CD and no restart, and placed all three files;
+the UAS disk, unplugged and plugged back in, then worked.
+
+**The change** (branch `me-uas`, `1c481f33` and `97d0eff0`; reviewed and
+revised). `INSTALL.BAT` said nothing about it, and for a current UAS entry
+at Code 2 printed "Nothing: this release runs it". On 98 SE and ME, a
+present UAS entry at Code 2 while `System32\Drivers` holds no
+`USBNTMAP.SYS` now gets the release notes' recovery in the plan and in the
+steps: on ME, plug in any ordinary stick once, then unplug and replug the
+disk; on 98 SE, NUSB's mass-storage component, the disk starting at the
+next boot. Code 2 with the file present gets no such step. On ME with no
+`USBNTMAP.SYS` the steps end with the same advice before any UAS disk is
+plugged in. The decision is the pure `inst_uas_fix_9x` (`inst_core.c`,
+host suite `test_inst`). No driver or INF changed: the copy of the two
+files through `xhciuas.inf` stays parked by the owner's 2026-10-04 ruling,
+since the 98 SE CD's `layout.inf` names neither file and 98 SE prompted for
+both.
+
+**The legs** (development host A, QEMU 11.1.0, TCG, `pc`, `pentium3`, one
+processor, 256 MB, `qemu-xhci,p2=4,p3=4`; the `release-x86` package staged
+from the branch, with its `INSTALL.BAT` and tool; devices hot-plugged after
+the desktop, the UAS disk as `usb-uas` plus `scsi-hd` on a VVFAT directory,
+attached explicitly; readings and shots in `vm\me-uas\legs\` and
+`vm\me-uas\shots\`):
+
+| Leg | Result |
+| --- | --- |
+| ME, first install, a fresh overlay of the stock ME base (`vm\t37me\winme-stock-base.qcow2`) | The New Hardware wizard for "PCI Universal Serial Bus" cancelled; `INSTALL`, Y: the package copied, DevicePath set, the steps ending with the ME advice to plug a stick before the first UAS disk; after the restart ME installed the controller with no wizard and asked for a restart. The UAS disk plugged in first installed silently and showed Code 2 (yellow mark); `/list` and `INSTALL` gave the ME step for it, `INSTALL` with it in place of "Nothing". The step followed: a Bulk-Only stick installed silently and placed `USBNTMAP.SYS`, `USBSTOR.SYS` and `USBMPHLP.PDR`; the UAS disk unplugged and plugged back in on the same port worked with no restart: no yellow mark, `/list` with no problem code, its file read, a 1 MiB file written and compared with `fc /b`, no differences. **PASS** |
+| 98 SE (NUSB), first install, a fresh overlay of `vm\t26\win98-clean.qcow2` | `USBNTMAP.SYS` present from NUSB; `INSTALL`, Y: no ME line in the steps; the controller from the wizard by search, the "xhci98 xHCI Host Controller Disk" and the 98 SE CD prompts, restart; the UAS disk through the wizard by search from the staged copy, F: at once; its file read, the 1 MiB write compared clean; `/list` with no problem code and no Code 2 step. **PASS**, unchanged |
+
+Both legs ran the tool unstamped, so it and the drivers read `2.4.0.0`, the
+version the branch carried; the change touches the tool alone.
+
+## 40-V.3 - The NT tiers: XP, XP x64, Vista x86, 7 x86
+
+**Verdict: pass on XP, XP x64, Vista x86 and 7 x86; Vista x64 and 7 x64
+not run** (2026-10-15). On `usb4-generic` with `host-model=intel-adl`, each
+guest from a fresh overlay installed the package through `INSTALL.BAT` -
+`xhcicm.sys` on the USB4 host interface `1B36:00F4` by its class line
+`PCI\CC_0C0340`, the filter from `nt\` on the tunnel bridge `1B36:0001` -
+and one plug cycle (plug, unplug, re-plug) brought the NVMe up with no
+Refresh, removed it and brought it back. ME is not in this section.
+
+**Not run: Vista x64 and 7 x64**, for the reason `run-39.md`'s 39-V.3
+section gives (no test-signed amd64 package on this run). XP x64 ran the
+unsigned package.
+
+**The vehicle and the package** are 39-V.3's (`run-39.md`): the same
+builds, staging, NVMe image, tools and ports; `-Usb4Profile generic
+-HostModel intel-adl -DeviceAtBoot 0`. XP ran on `vm\usb4\bin` (the
+`a50c19e` build); 7 x86, Vista x86 and XP x64 on the `5ba7f60` build in
+`vm\usb4\bin-5ba7f60`.
+
+| Leg | XP SP3 | XP x64 SP2 | Vista SP2 x86 | 7 SP1 x86 |
+|---|---|---|---|---|
+| Install: host `xhcicm` started, bridge `UpperFilters` `xhcicm` | pass | pass | pass | pass |
+| Plug: tunnel up, NVMe with no Refresh, `NVME32` mounted | pass | pass | pass | pass |
+| Unplug: devnode and volume gone, no dialog | pass | pass | pass | pass |
+| Re-plug: back | pass | pass | pass | pass |
+| Result | **PASS** | **PASS** | **PASS** | **PASS** |
+
+The trace on each: the hot plug events of the router's lanes, `PCIe tunnel
+up reason 0` and `tp_insert` per plug, `tunnel down reason 3` per unplug.
+The host interface showed as "xHCI98 USB4 Host Interface" (the build
+before the new Device Manager names).
+
+**A reading, not this driver's.** On XP and 7 "Safely Remove Hardware"
+also lists the host interface itself, beside the NVMe. Its devnode reads
+`DN_REMOVABLE` (status `0x01806400`) before any driver of this project was
+installed (XP's dump before the install), so the flag is the platform's
+for that function on bus 0 of this emulator, not the child filters'
+mark (which only ever goes on devices reported on a tunnel bridge). Why
+the platform reports it so was not read. The Alpine Ridge NHI behind the
+switch reads `0x0180200a`, with no such flag.
+
+**Evidence.** `vm\v-xp7\xp-gen\`, `xp64-gen\`, `vx86-gen\`, `w7-gen\`,
+as for 39-V.3.

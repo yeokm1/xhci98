@@ -530,6 +530,20 @@ static void test_actions(void)
              "/force never lifts unknown");
     CHECK_EQ(inst_group_verdict(0, 0, 2, 1), INST_GROUP_REFUSED_UNKNOWN,
              "unreadable binary: unknown");
+    CHECK_EQ(inst_uas_fix_9x(0, 90, 1, 2, 0), INST_UASFIX_ME_STICK,
+             "ME, UAS at Code 2, no USBNTMAP.SYS: a stick, then a replug");
+    CHECK_EQ(inst_uas_fix_9x(0, 10, 1, 2, 0), INST_UASFIX_NUSB,
+             "98 SE, UAS at Code 2, no USBNTMAP.SYS: NUSB's storage half");
+    CHECK_EQ(inst_uas_fix_9x(0, 90, 1, 2, 1), INST_UASFIX_NONE,
+             "Code 2 with the filter present: another cause, no advice");
+    CHECK_EQ(inst_uas_fix_9x(0, 90, 1, 0, 0), INST_UASFIX_NONE,
+             "working UAS entry: nothing");
+    CHECK_EQ(inst_uas_fix_9x(0, 90, 1, 28, 0), INST_UASFIX_NONE,
+             "Code 28 is not the filter");
+    CHECK_EQ(inst_uas_fix_9x(0, 90, 0, 2, 0), INST_UASFIX_NONE,
+             "not the UAS INF: nothing");
+    CHECK_EQ(inst_uas_fix_9x(1, 0, 1, 2, 0), INST_UASFIX_NONE,
+             "NT: no filter, nothing");
     memset(&d, 0, sizeof(d));
     d.FilterInf = 1;
     d.HasService = 1;
