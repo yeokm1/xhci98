@@ -846,53 +846,84 @@ static void test_flow(void)
 
     /* Settle: quiet for 3 s, nothing expected. */
     inst_settle_init(&s, 60000UL, 20000UL, 20000UL);
-    CHECK_EQ(inst_settle_step(&s, 0, 0, 7, 0), INST_SETTLE_WAIT, "quiet 0");
-    CHECK_EQ(inst_settle_step(&s, 2500, 0, 7, 0), INST_SETTLE_WAIT, "quiet 2.5");
-    CHECK_EQ(inst_settle_step(&s, 3000, 0, 7, 0), INST_SETTLE_DONE, "quiet 3");
+    CHECK_EQ(inst_settle_step(&s, 0, 0, 7, 1, 0), INST_SETTLE_WAIT, "quiet 0");
+    CHECK_EQ(inst_settle_step(&s, 2500, 0, 7, 1, 0), INST_SETTLE_WAIT, "quiet 2.5");
+    CHECK_EQ(inst_settle_step(&s, 3000, 0, 7, 1, 0), INST_SETTLE_DONE, "quiet 3");
     /* The tree moves: the quiet stretch starts again. */
     inst_settle_init(&s, 60000UL, 20000UL, 20000UL);
-    inst_settle_step(&s, 0, 0, 7, 0);
-    CHECK_EQ(inst_settle_step(&s, 2500, 0, 8, 0), INST_SETTLE_WAIT, "moved");
-    CHECK_EQ(inst_settle_step(&s, 5000, 0, 8, 0), INST_SETTLE_WAIT, "moved 2.5");
-    CHECK_EQ(inst_settle_step(&s, 5500, 0, 8, 0), INST_SETTLE_DONE, "moved 3");
+    inst_settle_step(&s, 0, 0, 7, 1, 0);
+    CHECK_EQ(inst_settle_step(&s, 2500, 0, 8, 1, 0), INST_SETTLE_WAIT, "moved");
+    CHECK_EQ(inst_settle_step(&s, 5000, 0, 8, 1, 0), INST_SETTLE_WAIT, "moved 2.5");
+    CHECK_EQ(inst_settle_step(&s, 5500, 0, 8, 1, 0), INST_SETTLE_DONE, "moved 3");
     /* The 2000 race: the controller updated, no root hub yet (expected),
      * Windows picks it up (pending), its wizard waits, then ends. */
     inst_settle_init(&s, 600000UL, 20000UL, 20000UL);
-    CHECK_EQ(inst_settle_step(&s, 0, 0, 1, 1), INST_SETTLE_WAIT, "no hub yet");
-    CHECK_EQ(inst_settle_step(&s, 3500, 0, 1, 1), INST_SETTLE_WAIT,
+    CHECK_EQ(inst_settle_step(&s, 0, 0, 1, 1, 1), INST_SETTLE_WAIT, "no hub yet");
+    CHECK_EQ(inst_settle_step(&s, 3500, 0, 1, 1, 1), INST_SETTLE_WAIT,
              "quiet but a hub expected");
-    CHECK_EQ(inst_settle_step(&s, 4000, 0, 2, 0), INST_SETTLE_WAIT, "hub seen");
-    CHECK_EQ(inst_settle_step(&s, 4500, 1, 2, 0), INST_SETTLE_WAIT,
+    CHECK_EQ(inst_settle_step(&s, 4000, 0, 2, 1, 0), INST_SETTLE_WAIT, "hub seen");
+    CHECK_EQ(inst_settle_step(&s, 4500, 1, 2, 1, 0), INST_SETTLE_WAIT,
              "Windows installs it");
-    CHECK_EQ(inst_settle_step(&s, 24000, 1, 2, 0), INST_SETTLE_WAIT,
+    CHECK_EQ(inst_settle_step(&s, 24000, 1, 2, 1, 0), INST_SETTLE_WAIT,
              "pending 19.5 s");
-    CHECK_EQ(inst_settle_step(&s, 24500, 1, 2, 0), INST_SETTLE_TELL,
+    CHECK_EQ(inst_settle_step(&s, 24500, 1, 2, 1, 0), INST_SETTLE_TELL,
              "pending 20 s: the wizard is named");
-    CHECK_EQ(inst_settle_step(&s, 25000, 1, 2, 0), INST_SETTLE_WAIT,
+    CHECK_EQ(inst_settle_step(&s, 25000, 1, 2, 1, 0), INST_SETTLE_WAIT,
              "told once");
-    CHECK_EQ(inst_settle_step(&s, 90000, 0, 3, 0), INST_SETTLE_WAIT,
+    CHECK_EQ(inst_settle_step(&s, 90000, 0, 3, 1, 0), INST_SETTLE_WAIT,
              "wizard finished");
-    CHECK_EQ(inst_settle_step(&s, 93000, 0, 3, 0), INST_SETTLE_DONE,
+    CHECK_EQ(inst_settle_step(&s, 93000, 0, 3, 1, 0), INST_SETTLE_DONE,
              "settled after it");
     /* An expected device that never comes: bounded by ExpectMs. */
     inst_settle_init(&s, 600000UL, 20000UL, 20000UL);
-    inst_settle_step(&s, 0, 0, 1, 1);
-    CHECK_EQ(inst_settle_step(&s, 19500, 0, 1, 1), INST_SETTLE_WAIT,
+    inst_settle_step(&s, 0, 0, 1, 1, 1);
+    CHECK_EQ(inst_settle_step(&s, 19500, 0, 1, 1, 1), INST_SETTLE_WAIT,
              "expected 19.5 s");
-    CHECK_EQ(inst_settle_step(&s, 20000, 0, 1, 1), INST_SETTLE_DONE,
+    CHECK_EQ(inst_settle_step(&s, 20000, 0, 1, 1, 1), INST_SETTLE_DONE,
              "expected: bound");
     /* Pending at the limit: timeout; not pending at the limit: done. */
     inst_settle_init(&s, 60000UL, 5000UL, 0UL);
-    CHECK_EQ(inst_settle_step(&s, 0, 1, 1, 0), INST_SETTLE_WAIT, "pending 0");
-    CHECK_EQ(inst_settle_step(&s, 5000, 1, 1, 0), INST_SETTLE_TELL, "tell 5");
-    CHECK_EQ(inst_settle_step(&s, 60000, 1, 1, 0), INST_SETTLE_TIMEOUT,
+    CHECK_EQ(inst_settle_step(&s, 0, 1, 1, 1, 0), INST_SETTLE_WAIT, "pending 0");
+    CHECK_EQ(inst_settle_step(&s, 5000, 1, 1, 1, 0), INST_SETTLE_TELL, "tell 5");
+    CHECK_EQ(inst_settle_step(&s, 60000, 1, 1, 1, 0), INST_SETTLE_TIMEOUT,
              "pending at the limit");
     inst_settle_init(&s, 60000UL, 5000UL, 0UL);
-    inst_settle_step(&s, 59000, 0, 1, 0);
-    CHECK_EQ(inst_settle_step(&s, 60000, 0, 2, 0), INST_SETTLE_DONE,
-             "moving, not pending, at the limit");
-    CHECK_EQ(inst_settle_step(&s, 60500, -1, 2, 0), INST_SETTLE_FAILED,
+    inst_settle_step(&s, 59000, 0, 1, 1, 0);
+    CHECK_EQ(inst_settle_step(&s, 60000, 0, 2, 1, 0), INST_SETTLE_UNSTEADY,
+             "moving, not pending, at the limit: never settled unquiet");
+    CHECK_EQ(inst_settle_step(&s, 60500, -1, 2, 1, 0), INST_SETTLE_FAILED,
              "question failed");
+
+    /* A wizard that ends just before the deadline: no settle without the
+     * quiet stretch. */
+    inst_settle_init(&s, 600000UL, 20000UL, 0UL);
+    inst_settle_step(&s, 0, 1, 1, 1, 0);
+    CHECK_EQ(inst_settle_step(&s, 599500, 0, 2, 1, 0), INST_SETTLE_WAIT,
+             "cleared 0.5 s before the deadline");
+    CHECK_EQ(inst_settle_step(&s, 600000, 0, 2, 1, 0), INST_SETTLE_UNSTEADY,
+             "deadline without the quiet stretch");
+    CHECK(s.Moved, "pending seen: moved");
+    /* A reading that failed restarts the quiet stretch. */
+    inst_settle_init(&s, 60000UL, 20000UL, 0UL);
+    inst_settle_step(&s, 0, 0, 5, 1, 0);
+    CHECK(!s.Moved, "first reading: nothing moved");
+    CHECK_EQ(inst_settle_step(&s, 2500, 0, 5, 0, 0), INST_SETTLE_WAIT,
+             "incomplete");
+    CHECK_EQ(inst_settle_step(&s, 3000, 0, 5, 1, 0), INST_SETTLE_WAIT,
+             "whole again: the stretch starts now");
+    CHECK_EQ(inst_settle_step(&s, 6000, 0, 5, 1, 0), INST_SETTLE_DONE,
+             "3 s whole and quiet");
+    CHECK(s.Moved, "an incomplete reading counts as moved");
+    inst_settle_init(&s, 60000UL, 20000UL, 0UL);
+    inst_settle_step(&s, 0, 0, 5, 1, 0);
+    CHECK_EQ(inst_settle_step(&s, 3000, 0, 5, 1, 0), INST_SETTLE_DONE,
+             "quiet from the start");
+    CHECK(!s.Moved, "quiet from the start: not moved");
+    inst_settle_init(&s, 4000UL, 20000UL, 0UL);
+    CHECK_EQ(inst_settle_step(&s, 0, 0, 5, 0, 0), INST_SETTLE_WAIT,
+             "never whole");
+    CHECK_EQ(inst_settle_step(&s, 4000, 0, 5, 0, 0), INST_SETTLE_UNSTEADY,
+             "never whole: unsteady at the limit");
 
     /* The busy answer: tried again twice, then a failure. */
     CHECK_EQ(inst_busy_retry(0x20UL, 1), 1, "busy once: again");
@@ -963,6 +994,157 @@ static void test_pe_signed(void)
     CHECK_EQ(inst_pe_signed(pe, sizeof(pe)), -1, "not MZ");
 }
 
+/* A mock device tree for inst_tree_sig, with faults to inject. Node 0 is
+ * the controller; 1 the root hub (USB\XHCI98_ROOT_HUB); 2 and 3 its
+ * children. */
+typedef struct _MOCK_TREE {
+    int ChildOf[4];         /* first child, -1 none                     */
+    int Next[4];            /* next sibling, -1 none                    */
+    const char *Id[4];
+    INST_U32 Status[4];
+    INST_U32 Problem[4];    /* left as is when no problem: garbage      */
+    int FailChild;          /* node whose child read fails, -1 none     */
+    int FailSibling;
+    int FailId;
+} MOCK_TREE;
+
+static int mock_child(void *ctx, INST_U32 dn, INST_U32 *child)
+{
+    MOCK_TREE *t = (MOCK_TREE *)ctx;
+
+    if ((int)dn == t->FailChild) {
+        return INST_TREE_ERROR;
+    }
+    if (t->ChildOf[dn] < 0) {
+        return INST_TREE_NONE;
+    }
+    *child = (INST_U32)t->ChildOf[dn];
+    return INST_TREE_OK;
+}
+
+static int mock_sibling(void *ctx, INST_U32 dn, INST_U32 *sibling)
+{
+    MOCK_TREE *t = (MOCK_TREE *)ctx;
+
+    if ((int)dn == t->FailSibling) {
+        return INST_TREE_ERROR;
+    }
+    if (t->Next[dn] < 0) {
+        return INST_TREE_NONE;
+    }
+    *sibling = (INST_U32)t->Next[dn];
+    return INST_TREE_OK;
+}
+
+static int mock_id(void *ctx, INST_U32 dn, char *id, size_t cap)
+{
+    MOCK_TREE *t = (MOCK_TREE *)ctx;
+
+    if ((int)dn == t->FailId) {
+        return INST_TREE_ERROR;
+    }
+    inst_copy(id, t->Id[dn], cap);
+    return INST_TREE_OK;
+}
+
+static int mock_status(void *ctx, INST_U32 dn, INST_U32 *status,
+                       INST_U32 *problem)
+{
+    MOCK_TREE *t = (MOCK_TREE *)ctx;
+
+    *status = t->Status[dn];
+    *problem = t->Problem[dn];
+    return INST_TREE_OK;
+}
+
+static void mock_init(MOCK_TREE *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->ChildOf[0] = 1;  t->Next[0] = -1;
+    t->ChildOf[1] = 2;  t->Next[1] = -1;
+    t->ChildOf[2] = -1; t->Next[2] = 3;
+    t->ChildOf[3] = -1; t->Next[3] = -1;
+    t->Id[0] = "PCI\\VEN_1B36&DEV_000D\\3&1";
+    t->Id[1] = "USB\\XHCI98_ROOT_HUB\\4&1&0";
+    t->Id[2] = "USB\\VID_0627&PID_0001\\1";
+    t->Id[3] = "USB\\XHCI98_HUB&VID_0409&PID_55AA\\5&2";
+    t->Status[1] = INST_DN_STARTED;
+    t->Status[2] = INST_DN_STARTED;
+    t->Status[3] = INST_DN_STARTED;
+    t->Problem[1] = 28;     /* garbage: no DN_HAS_PROBLEM */
+    t->Problem[2] = 1;
+    t->Problem[3] = 18;
+    t->FailChild = -1;
+    t->FailSibling = -1;
+    t->FailId = -1;
+}
+
+static void test_tree_sig(void)
+{
+    MOCK_TREE t;
+    INST_TREE_OPS ops;
+    INST_U32 h0;
+    INST_U32 h;
+    int expect;
+    int nodes;
+
+    ops.Ctx = &t;
+    ops.Child = mock_child;
+    ops.Sibling = mock_sibling;
+    ops.Id = mock_id;
+    ops.Status = mock_status;
+
+    CHECK_EQ(inst_dn_problem(INST_DN_STARTED, 28), 0, "problem masked");
+    CHECK_EQ(inst_dn_problem(INST_DN_HAS_PROBLEM, 28), 28, "problem kept");
+
+    /* Healthy, with garbage problem numbers: read whole, nothing expected,
+     * and the garbage does not reach the signature. */
+    mock_init(&t);
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 1, "whole");
+    CHECK_EQ(expect, 0, "healthy: nothing expected");
+    CHECK_EQ(nodes, 3, "three below the controller");
+    h0 = h;
+    t.Problem[1] = 99;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes);
+    CHECK(h == h0, "masked problem: same signature");
+
+    /* A hub of the bus not configured yet: expected. A foreign device at
+     * Code 1 is not. */
+    t.Status[3] = INST_DN_HAS_PROBLEM;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes);
+    CHECK_EQ(expect, 1, "bus hub at Code 18: expected");
+    CHECK(h != h0, "the problem moves the signature");
+    t.Status[3] = INST_DN_STARTED;
+    t.Status[2] = INST_DN_HAS_PROBLEM;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes);
+    CHECK_EQ(expect, 0, "foreign device at Code 1: not ours to expect");
+
+    /* Faults: a failed child, sibling or id read is never a whole tree. */
+    mock_init(&t);
+    t.FailChild = 1;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 0, "child fails");
+    mock_init(&t);
+    t.FailSibling = 2;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 0, "sibling fails");
+    mock_init(&t);
+    t.FailId = 3;
+    t.Status[3] = INST_DN_HAS_PROBLEM;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 0, "id fails");
+    CHECK_EQ(expect, 0, "an unread id is never inspected");
+    /* No children at all: whole. */
+    mock_init(&t);
+    t.ChildOf[0] = -1;
+    h = INST_FNV_START; expect = 0; nodes = 0;
+    CHECK_EQ(inst_tree_sig(&ops, 0, 0, &h, &expect, &nodes), 1, "leaf");
+}
+
 int main(void)
 {
     test_versions();
@@ -979,6 +1161,7 @@ int main(void)
     test_args();
     test_flow();
     test_pe_signed();
+    test_tree_sig();
     printf("test_inst: %d checks, %d failures\n", checks, failures);
     return failures;
 }

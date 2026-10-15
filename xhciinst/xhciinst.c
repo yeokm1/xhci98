@@ -78,8 +78,6 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 #define INST_SUOI_FORCEDELETE       0x00000001UL
 #define INST_CR_SUCCESS             0x00000000UL
 #define INST_CR_NO_SUCH_DEVINST     0x0000000DUL
-#define INST_DN_HAS_PROBLEM         0x00000400UL
-#define INST_DN_STARTED             0x00000008UL
 #define INST_PROB_NEED_RESTART      14UL
 #define INST_CM_DRP_DEVICEDESC      0x00000001UL
 #define INST_CM_DRP_HARDWAREID      0x00000002UL
@@ -87,8 +85,6 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 #define INST_CM_DRP_DRIVER          0x0000000AUL
 #define INST_INSTALL_WAIT_MS        600000UL   /* the barrier: a wizard answered */
 #define INST_FIRST_WAIT_MS          60000UL    /* before the first change      */
-#define INST_PROB_NOT_CONFIGURED    1UL
-#define INST_PROB_REINSTALL         18UL
 
 #ifndef ERROR_IN_WOW64
 #define ERROR_IN_WOW64 0xE0000235UL
@@ -3308,10 +3304,13 @@ static int install_inf(int inf, int controllers)
          * ran): the call is made again after the next barrier's settle, if
          * the device still needs it then - never over Windows' install. */
         again = 0;
-        if (err == ERROR_SHARING_VIOLATION) {
+        if (err == ERROR_SHARING_VIOLATION && n > 0) {
+            /* One call reaches the whole id group: it is made again only
+             * while every device it reaches has tries left. */
+            again = 1;
             for (j = 0; j < n; j++) {
-                if (inst_busy_retry(err, ++changedBusy[callIdx[j]])) {
-                    again = 1;
+                if (!inst_busy_retry(err, ++changedBusy[callIdx[j]])) {
+                    again = 0;
                 }
             }
         }
@@ -3367,56 +3366,77 @@ static INST_U32 sig_number(INST_U32 h, INST_U32 v)
     return inst_fnv1a(h, b, sizeof(b));
 }
 
-/* The devnodes below dn: each one's id, started and problem state into the
- * signature; a device of the bus (USB\XHCI98_...) that Windows has not
- * configured yet (Code 1 or 18) is expected to be installed by Windows. */
-static void settle_walk(DWORD dn, int depth, INST_U32 *h, int *expect,
-                        int *nodes)
+/* The configuration manager's tree routines for inst_tree_sig. */
+static int tree_answer(DWORD cr)
 {
-    DWORD child;
-    ULONG status;
-    ULONG problem;
-    char id[INST_ID_CHARS];
-
-    if (depth > 8 || api.Child(&child, dn, 0) != INST_CR_SUCCESS) {
-        return;
-    }
-    for (;;) {
-        if (++*nodes > 512) {
-            return;
-        }
-        if (api.DeviceId(child, id, sizeof(id), 0) == INST_CR_SUCCESS) {
-            *h = sig_text(*h, id);
-        }
-        if (api.Status(&status, &problem, child, 0) == INST_CR_SUCCESS) {
-            *h = sig_number(*h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
-            *h = sig_number(*h, problem);
-            if (inst_bus_id(id) == 1 && (status & INST_DN_HAS_PROBLEM) &&
-                (problem == INST_PROB_NOT_CONFIGURED ||
-                 problem == INST_PROB_REINSTALL)) {
-                *expect = 1;
-            }
-        }
-        settle_walk(child, depth + 1, h, expect, nodes);
-        if (api.Sibling(&child, child, 0) != INST_CR_SUCCESS) {
-            return;
-        }
-    }
+    return cr == INST_CR_SUCCESS ? INST_TREE_OK :
+           (cr == INST_CR_NO_SUCH_DEVINST ? INST_TREE_NONE : INST_TREE_ERROR);
 }
 
-/* The signature of the trees below this package's controllers, and whether
- * a device is expected: a controller this run updated is started but shows
- * no root hub yet, or a device of the bus waits for its install. */
-static void settle_signature(INST_U32 *sig, int *expect)
+static int tree_child(void *ctx, INST_U32 dn, INST_U32 *child)
 {
+    DWORD c;
+    int r = tree_answer(api.Child(&c, (DWORD)dn, 0));
+
+    (void)ctx;
+    *child = (INST_U32)c;
+    return r;
+}
+
+static int tree_sibling(void *ctx, INST_U32 dn, INST_U32 *sibling)
+{
+    DWORD c;
+    int r = tree_answer(api.Sibling(&c, (DWORD)dn, 0));
+
+    (void)ctx;
+    *sibling = (INST_U32)c;
+    return r;
+}
+
+static int tree_id(void *ctx, INST_U32 dn, char *id, size_t cap)
+{
+    (void)ctx;
+    return api.DeviceId((DWORD)dn, id, (ULONG)cap, 0) == INST_CR_SUCCESS ?
+           INST_TREE_OK : INST_TREE_ERROR;
+}
+
+static int tree_status(void *ctx, INST_U32 dn, INST_U32 *status,
+                       INST_U32 *problem)
+{
+    ULONG s = 0;
+    ULONG p = 0;
+
+    (void)ctx;
+    if (api.Status(&s, &p, (DWORD)dn, 0) != INST_CR_SUCCESS) {
+        return INST_TREE_ERROR;
+    }
+    *status = (INST_U32)s;
+    *problem = (INST_U32)p;
+    return INST_TREE_OK;
+}
+
+/* The signature of the trees below this package's controllers, whether it
+ * was read whole, and whether a device is expected: a controller this run
+ * updated is started but shows no root hub yet, or a device of the bus
+ * waits for its install (inst_tree_sig). */
+static int settle_signature(INST_U32 *sig, int *expect)
+{
+    INST_TREE_OPS ops;
     INST_U32 h = INST_FNV_START;
     DWORD dn;
     ULONG status;
     ULONG problem;
     char id[INST_ID_CHARS];
     int nodes = 0;
+    int whole = 1;
+    int below;
     int i;
 
+    ops.Ctx = NULL;
+    ops.Child = tree_child;
+    ops.Sibling = tree_sibling;
+    ops.Id = tree_id;
+    ops.Status = tree_status;
     *expect = 0;
     for (i = 0; i < devCount; i++) {
         const DEVREC *d = &devs[i];
@@ -3425,27 +3445,40 @@ static void settle_signature(INST_U32 *sig, int *expect)
         }
         inst_copy(id, d->Id, sizeof(id));
         h = sig_text(h, id);
-        if (api.Locate(&dn, id, 0) != INST_CR_SUCCESS ||
-            api.Status(&status, &problem, dn, 0) != INST_CR_SUCCESS) {
+        if (api.Locate(&dn, id, 0) != INST_CR_SUCCESS) {
+            /* Gone for the moment (restarting): a reading of its own. */
             h = sig_text(h, "gone");
             continue;
         }
+        if (api.Status(&status, &problem, dn, 0) != INST_CR_SUCCESS) {
+            whole = 0;
+            continue;
+        }
+        problem = (ULONG)inst_dn_problem((INST_U32)status, (INST_U32)problem);
         h = sig_number(h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
         h = sig_number(h, problem);
-        if (was_installed(d->Id) && (status & INST_DN_STARTED) &&
-            problem == 0 && root_hub_below(d->Id) == 0) {
-            *expect = 1;
+        if (was_installed(d->Id) && (status & INST_DN_STARTED) && problem == 0) {
+            below = root_hub_below(d->Id);
+            if (below < 0) {
+                whole = 0;
+            } else if (below == 0) {
+                *expect = 1;
+            }
         }
-        settle_walk(dn, 0, &h, expect, &nodes);
+        if (!inst_tree_sig(&ops, (INST_U32)dn, 0, &h, expect, &nodes)) {
+            whole = 0;
+        }
     }
     *sig = h;
+    return whole;
 }
 
 /* Wait until Windows' own installer has nothing pending and the devices
- * below the controllers stand still (record 23 section 5.8). 1 settled; 0
- * still pending at the limit; -1 the question failed. Without the
- * routines it answers 1: a run without CMP_WaitNoPendingInstallEvents is
- * refused earlier (nothing_pending). */
+ * below the controllers stand still (record 23 section 5.8). 2 settled
+ * after something happened (pending seen, devices moved), 1 settled with
+ * nothing happening; 0 still pending at the limit; -1 the question failed;
+ * -2 not pending, but the devices never stood still (or could not be read
+ * whole) up to the limit. */
 static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
                   int first)
 {
@@ -3453,34 +3486,47 @@ static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
     DWORD t0;
     DWORD w;
     INST_U32 sig;
+    int whole;
     int expect;
     int r;
     int told = 0;
 
-    if (api.WaitInstall == NULL || api.Locate == NULL || api.Child == NULL ||
-        api.Sibling == NULL || api.DeviceId == NULL || api.Status == NULL) {
-        return api.WaitInstall == NULL ? 1 :
-               (api.WaitInstall(limitMs) == WAIT_OBJECT_0 ? 1 : 0);
+    if (api.WaitInstall == NULL) {
+        return 1;
+    }
+    if (api.Locate == NULL || api.Child == NULL || api.Sibling == NULL ||
+        api.DeviceId == NULL || api.Status == NULL) {
+        /* No tree to read: the pending question alone, as before. */
+        w = api.WaitInstall(limitMs);
+        return w == WAIT_OBJECT_0 ? 1 : (w == WAIT_TIMEOUT ? 0 : -1);
     }
     inst_settle_init(&s, limitMs, tellMs, expectMs);
     t0 = GetTickCount();
     for (;;) {
         w = api.WaitInstall(0);
-        settle_signature(&sig, &expect);
+        whole = settle_signature(&sig, &expect);
+        /* GetTickCount wraps after 49.7 days; the unsigned difference
+         * stays right across one wrap, and a settle lasts minutes. */
         r = inst_settle_step(&s, (INST_U32)(GetTickCount() - t0),
                              w == WAIT_OBJECT_0 ? 0 :
-                             (w == WAIT_TIMEOUT ? 1 : -1), sig, expect);
+                             (w == WAIT_TIMEOUT ? 1 : -1), sig, whole, expect);
         if (r == INST_SETTLE_DONE) {
             if (told) {
                 out("Windows has finished; going on.\n");
             }
-            return 1;
+            logonly("[settled after %lu ms%s]\n",
+                    (unsigned long)(GetTickCount() - t0),
+                    s.Moved ? ", devices moved" : "");
+            return s.Moved ? 2 : 1;
         }
         if (r == INST_SETTLE_TIMEOUT) {
             return 0;
         }
         if (r == INST_SETTLE_FAILED) {
             return -1;
+        }
+        if (r == INST_SETTLE_UNSTEADY) {
+            return -2;
         }
         if (r == INST_SETTLE_TELL) {
             told = 1;
@@ -3500,6 +3546,27 @@ static int settle(INST_U32 limitMs, INST_U32 tellMs, INST_U32 expectMs,
     }
 }
 
+/* What a settle that did not end settled says. */
+static void settle_failed(int r, const char *bound)
+{
+    if (r == -2) {
+        out("the devices kept changing, or could not be read whole, for %s.\n",
+            bound);
+        out("\nRestart Windows, then run INSTALL.BAT again: it goes on from "
+            "what it finds.\n");
+        flagSteps = 1;
+        return;
+    }
+    out(r == 0 ? "still busy after %s.\n" : "the wait failed.\n", bound);
+    out("\nWindows is still installing something - usually a Found New "
+        "Hardware window\nwaiting for an answer. Finish or cancel those "
+        "windows, then run INSTALL.BAT\nagain: it goes on from here. (The "
+        "tool does not install under a wizard.) If no such\nwindow is open "
+        "(Windows 2000 keeps a cancelled one pending until the next\nstart), "
+        "restart Windows first.\n");
+    flagSteps = 1;
+}
+
 /* The barrier's wait: 1 settled; 0 stops the run (exit 4). */
 static int wait_installs(void)
 {
@@ -3511,14 +3578,7 @@ static int wait_installs(void)
         out("done.\n");
         return 1;
     }
-    out(r == 0 ? "still busy after 10 minutes.\n" : "the wait failed.\n");
-    out("\nWindows is still installing something - usually a Found New "
-        "Hardware window\nwaiting for an answer. Finish or cancel those "
-        "windows, then run INSTALL.BAT\nagain: it goes on from here. (The "
-        "tool does not install under a wizard.) If no such\nwindow is open "
-        "(Windows 2000 keeps a cancelled one pending until the next\nstart), "
-        "restart Windows first.\n");
-    flagSteps = 1;
+    settle_failed(r, "10 minutes");
     return 0;
 }
 
@@ -3836,7 +3896,9 @@ static int confirm(const char *what)
 }
 
 /* Record 23 section 5.1: no installation in progress before the first
- * change. 1 clear; 0 stop (pending, or the answer unknown). */
+ * change. 1 clear and nothing happened while waiting; 2 clear after
+ * Windows did something (the devices are to be read again); 0 stop
+ * (pending, unsteady, or the answer unknown). */
 static int nothing_pending(void)
 {
     int r;
@@ -3850,7 +3912,14 @@ static int nothing_pending(void)
     /* Windows' own installs are let finish first, for a minute at most. */
     r = settle(INST_FIRST_WAIT_MS, 5000UL, 0UL, 1);
     if (r > 0) {
-        return 1;
+        return r;
+    }
+    if (r == -2) {
+        out("The devices kept changing, or could not be read whole, for a "
+            "minute. Restart\nWindows, then run INSTALL.BAT again. Nothing was "
+            "changed.\n");
+        flagSteps = 1;
+        return 0;
     }
     out("Windows is %s - usually a Found New Hardware window\nwaiting for an "
         "answer. Finish or cancel it, then run INSTALL.BAT again.\nIf no such "
@@ -3919,6 +3988,51 @@ static int barrier(void)
     return 1;
 }
 
+/* The devices of this package as read and planned (plan() first): what
+ * the plan rests on (record 23 section 5.1). */
+static INST_U32 devs_signature(void)
+{
+    INST_U32 h = INST_FNV_START;
+    int i;
+
+    for (i = 0; i < devCount; i++) {
+        const DEVREC *d = &devs[i];
+        if (!d->Present || d->Inf < 0) {
+            continue;
+        }
+        h = sig_text(h, d->Id);
+        h = sig_text(h, d->Service);
+        h = sig_text(h, d->VersionText);
+        h = sig_number(h, (INST_U32)d->Problem);
+        h = inst_fnv1a(h, (const unsigned char *)d->Upper, d->UpperBytes);
+    }
+    return h;
+}
+
+/* After the first wait: when Windows did something meanwhile, the devices
+ * are read again, and a plan they no longer match is not carried out. 1
+ * go on; 0 stop, nothing changed. */
+static int plan_still_holds(int waited, INST_U32 before)
+{
+    if (waited != 2) {
+        return 1;
+    }
+    if (!scan()) {
+        out("The devices could not be read again: nothing was changed.\n");
+        flagFailed = 1;
+        return 0;
+    }
+    plan();
+    if (devs_signature() != before) {
+        out("Windows changed the devices while the tool waited, so the plan "
+            "shown is out of\ndate. Nothing was changed: run INSTALL.BAT again "
+            "to see the new plan.\n");
+        flagSteps = 1;
+        return 0;
+    }
+    return 1;
+}
+
 static int any_runs(int inf, int controllers)
 {
     int i;
@@ -3939,6 +4053,8 @@ static int run_install_nt(void)
     int runs = 0;
     int i;
     int pass;
+    int waited;
+    INST_U32 before;
     INST_U32 tag;
     char name[INST_PATH_CHARS];
 
@@ -3986,7 +4102,9 @@ static int run_install_nt(void)
     if (!confirm(inst_confirm_text(runs, values_to_write()))) {
         return INST_EXIT_REFUSED;
     }
-    if (!nothing_pending()) {
+    before = devs_signature();
+    waited = nothing_pending();
+    if (!waited || !plan_still_holds(waited, before)) {
         return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
     }
     if (!make_local_copy() || !stage_nt()) {
@@ -4858,11 +4976,13 @@ static int run_uninstall_nt(void)
     if (!warn_uninstall()) {
         return INST_EXIT_REFUSED;
     }
-    if (!scan()) {
-        return INST_EXIT_REFUSED;
-    }
+    /* Windows' own installs end before the devices are read, so the
+     * removal works from a reading taken after them. */
     if (!opts.List && !nothing_pending()) {
         return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
+    }
+    if (!scan()) {
+        return INST_EXIT_REFUSED;
     }
     if (api.SetCiParams == NULL || api.CallCi == NULL || api.GetDiParams == NULL ||
         api.SetRegProp == NULL) {

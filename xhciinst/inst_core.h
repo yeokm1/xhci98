@@ -360,11 +360,12 @@ const char *inst_final_text(int line);
 /* The settle: CMP_WaitNoPendingInstallEvents asked with no wait every
  * INST_SETTLE_POLL_MS, and a signature of the devices below this package's
  * controllers read each time. Settled once nothing has been pending and the
- * signature has not moved for INST_SETTLE_QUIET_MS - and, while a device is
- * expected (a controller this run updated shows no root hub yet, a device
- * of the bus not configured yet), not before ExpectMs. Pending at LimitMs
- * is a timeout; not pending at LimitMs is settled (the next reading of the
- * devices decides). */
+ * signature has been read whole and has not moved for INST_SETTLE_QUIET_MS
+ * - and, while a device is expected (a controller this run updated shows
+ * no root hub yet, a device of the bus not configured yet), not before
+ * ExpectMs. At LimitMs: pending is a timeout; not pending but not settled
+ * (moving, or not readable whole) is unsteady. Never settled without the
+ * quiet stretch. */
 #define INST_SETTLE_POLL_MS     500UL
 #define INST_SETTLE_QUIET_MS    3000UL
 
@@ -373,6 +374,7 @@ const char *inst_final_text(int line);
 #define INST_SETTLE_TELL        2   /* poll again; say why the wait, once    */
 #define INST_SETTLE_TIMEOUT     3   /* still pending at the limit            */
 #define INST_SETTLE_FAILED      4   /* the question failed                   */
+#define INST_SETTLE_UNSTEADY    5   /* not pending, never quiet, at the limit */
 
 typedef struct _INST_SETTLE {
     INST_U32 LimitMs;       /* overall bound                              */
@@ -384,15 +386,51 @@ typedef struct _INST_SETTLE {
     int Quiet;              /* in a quiet stretch                         */
     int Pending;            /* in a pending stretch                       */
     int Told;
+    int Polls;
+    int Moved;              /* pending seen, or the signature moved, or a
+                               reading incomplete: something happened     */
 } INST_SETTLE;
 
 void inst_settle_init(INST_SETTLE *s, INST_U32 limitMs, INST_U32 tellMs,
                       INST_U32 expectMs);
 
 /* One poll: nowMs since the settle began, pending 1 / 0 / -1 (the question
- * failed), sig the signature now, expect 1 while a device is expected. */
+ * failed), sig the signature now and complete 1 when it was read whole,
+ * expect 1 while a device is expected. */
 int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
-                     INST_U32 sig, int expect);
+                     INST_U32 sig, int complete, int expect);
+
+/* The device tree as the settle reads it, through the configuration
+ * manager's routines (or a test's): each returns INST_TREE_OK,
+ * INST_TREE_NONE (CR_NO_SUCH_DEVINST: no child, no further sibling) or
+ * INST_TREE_ERROR (anything else). Status's problem is only meaningful
+ * with INST_DN_HAS_PROBLEM set, so the walk masks it. */
+#define INST_TREE_OK            0
+#define INST_TREE_NONE          1
+#define INST_TREE_ERROR         2
+
+#define INST_DN_STARTED         0x00000008UL
+#define INST_DN_HAS_PROBLEM     0x00000400UL
+#define INST_PROB_NOT_CONFIGURED 1UL
+#define INST_PROB_REINSTALL     18UL
+
+typedef struct _INST_TREE_OPS {
+    void *Ctx;
+    int (*Child)(void *ctx, INST_U32 dn, INST_U32 *child);
+    int (*Sibling)(void *ctx, INST_U32 dn, INST_U32 *sibling);
+    int (*Id)(void *ctx, INST_U32 dn, char *id, size_t cap);
+    int (*Status)(void *ctx, INST_U32 dn, INST_U32 *status, INST_U32 *problem);
+} INST_TREE_OPS;
+
+/* The problem number as reported: 0 unless the status has a problem. */
+INST_U32 inst_dn_problem(INST_U32 status, INST_U32 problem);
+
+/* The devnodes below dn into the signature *h (ids, started, problem), at
+ * most depth 8 and *nodes 512 in all; *expect set for a device of the bus
+ * (USB\XHCI98_...) not configured yet (Code 1 or 18). 1 when read whole,
+ * 0 when a reading failed (the signature is then not to be trusted). */
+int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
+                  INST_U32 *h, int *expect, int *nodes);
 
 /* An install call that failed because Windows was installing the same
  * device at that moment (ERROR_SHARING_VIOLATION, 0x20, read on the 2000

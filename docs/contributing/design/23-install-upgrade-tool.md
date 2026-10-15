@@ -301,8 +301,13 @@ reinstall refused); a copy whose list is already gone loses only the
 5. Ask Windows whether an installation is in progress
    (`CMP_WaitNoPendingInstallEvents` with no wait, Microsoft's "Checking
    for In-Progress Installations") and let one finish: the settle of
-   section 5.8, bounded at a minute; still "pending" then, or a failed
-   question, stops the run with nothing changed (exit 4). The
+   section 5.8, bounded at a minute; still "pending" then, devices that
+   never stand still, or a failed question, stop the run with nothing
+   changed (exit 4). When Windows did something meanwhile the devices are
+   read and planned again, and if they no longer match the plan the user
+   confirmed the run stops, nothing changed, with "run INSTALL.BAT again to
+   see the new plan" (exit 4). The uninstall waits before it reads the
+   devices at all. The
    message also says to restart first when no wizard is open: on Windows
    2000 a cancelled Found New Hardware wizard stays pending until the next
    start (read on the 2000 leg, 2026-10-15: a windowless `rundll32.exe`,
@@ -627,8 +632,13 @@ with `0x20` (`ERROR_SHARING_VIOLATION`), Windows' install ended at Code 28
 and the keyboard behind it stopped; a second run installed it). The tool
 asks `CMP_WaitNoPendingInstallEvents` with no wait every half second and
 reads a signature of the devnodes below this package's controllers (ids,
-started, problem code). It goes on only after three seconds with nothing
-pending and the signature unchanged, and not while a device is expected:
+started, problem code - the problem number taken only when the status
+reports one, as `CM_Get_DevNode_Status` specifies). A reading that fails
+anywhere (an id, a child or a sibling other than "none") is not a reading:
+it restarts the quiet stretch. It goes on only after three seconds with
+nothing pending and the signature read whole and unchanged - at the bound
+too: devices still moving there are "unsteady", which stops the run like
+a timeout - and not while a device is expected:
 a controller this run updated is started but shows no root hub of this
 driver yet, or a device of the bus (`USB\XHCI98_...`) has Code 1 or 18
 (not configured yet) - each waited for at most 20 seconds. While Windows
@@ -640,7 +650,9 @@ current at the next reading and not touched again. An install call that
 still meets Windows' own install (`0x20`) is no failure the first two
 times: the device stays eligible, and after the next barrier's settle the
 call is made again if the device still needs it, controllers included;
-the third such answer is a failure. The pure half holds the settle's
+the third such answer is a failure. One call reaches every device of its
+id, so it is made again only while every device it reaches has tries
+left. The pure half holds the settle's
 state machine and the retry rule (section 10). Completion is only declared after a last
 barrier and a fresh plan: a device the plan would still install - one the
 last allowed pass exposed - is listed as "not finished", the steps flag is

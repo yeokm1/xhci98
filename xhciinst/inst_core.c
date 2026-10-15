@@ -1823,12 +1823,15 @@ void inst_settle_init(INST_SETTLE *s, INST_U32 limitMs, INST_U32 tellMs,
 }
 
 int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
-                     INST_U32 sig, int expect)
+                     INST_U32 sig, int complete, int expect)
 {
+    int first = s->Polls++ == 0;
+
     if (pending < 0) {
         return INST_SETTLE_FAILED;
     }
     if (pending) {
+        s->Moved = 1;
         s->Quiet = 0;
         if (!s->Pending) {
             s->Pending = 1;
@@ -1844,19 +1847,91 @@ int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
         return INST_SETTLE_WAIT;
     }
     s->Pending = 0;
-    if (!s->Quiet || sig != s->Sig) {
+    if (!complete) {
+        /* A reading that failed proves nothing: no quiet stretch. */
+        s->Moved = 1;
+        s->Quiet = 0;
+    } else if (!s->Quiet || sig != s->Sig) {
+        if (!first && (!s->Quiet || sig != s->Sig)) {
+            s->Moved = 1;
+        }
         s->Quiet = 1;
         s->QuietFrom = nowMs;
         s->Sig = sig;
     }
-    if (nowMs >= s->LimitMs) {
-        return INST_SETTLE_DONE;
-    }
-    if (nowMs - s->QuietFrom >= INST_SETTLE_QUIET_MS &&
+    if (s->Quiet && nowMs - s->QuietFrom >= INST_SETTLE_QUIET_MS &&
         (!expect || nowMs >= s->ExpectMs)) {
         return INST_SETTLE_DONE;
     }
+    if (nowMs >= s->LimitMs) {
+        return INST_SETTLE_UNSTEADY;
+    }
     return INST_SETTLE_WAIT;
+}
+
+INST_U32 inst_dn_problem(INST_U32 status, INST_U32 problem)
+{
+    return (status & INST_DN_HAS_PROBLEM) ? problem : 0;
+}
+
+static INST_U32 inst_sig_bytes(INST_U32 h, INST_U32 v)
+{
+    unsigned char b[4];
+
+    b[0] = (unsigned char)(v & 0xFFUL);
+    b[1] = (unsigned char)((v >> 8) & 0xFFUL);
+    b[2] = (unsigned char)((v >> 16) & 0xFFUL);
+    b[3] = (unsigned char)((v >> 24) & 0xFFUL);
+    return inst_fnv1a(h, b, sizeof(b));
+}
+
+int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
+                  INST_U32 *h, int *expect, int *nodes)
+{
+    INST_U32 child;
+    INST_U32 status;
+    INST_U32 problem;
+    char id[INST_ID_CHARS];
+    int r;
+
+    if (depth > 8) {
+        return 1;
+    }
+    r = ops->Child(ops->Ctx, dn, &child);
+    if (r == INST_TREE_NONE) {
+        return 1;
+    }
+    if (r != INST_TREE_OK) {
+        return 0;
+    }
+    for (;;) {
+        if (++*nodes > 512) {
+            return 1;
+        }
+        if (ops->Id(ops->Ctx, child, id, sizeof(id)) != INST_TREE_OK ||
+            ops->Status(ops->Ctx, child, &status, &problem) != INST_TREE_OK) {
+            return 0;
+        }
+        id[sizeof(id) - 1] = '\0';
+        problem = inst_dn_problem(status, problem);
+        *h = inst_fnv1a(*h, (const unsigned char *)id, strlen(id) + 1);
+        *h = inst_sig_bytes(*h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
+        *h = inst_sig_bytes(*h, problem);
+        if (inst_bus_id(id) == 1 && (problem == INST_PROB_NOT_CONFIGURED ||
+                                     problem == INST_PROB_REINSTALL)) {
+            *expect = 1;
+        }
+        if (!inst_tree_sig(ops, child, depth + 1, h, expect, nodes)) {
+            return 0;
+        }
+        r = ops->Sibling(ops->Ctx, child, &child);
+        if (r == INST_TREE_NONE) {
+            return 1;
+        }
+        if (r != INST_TREE_OK) {
+            return 0;
+        }
+    }
 }
 
 int inst_busy_retry(INST_U32 error, int tries)
