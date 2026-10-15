@@ -164,6 +164,12 @@ rem                  40.6, design record 23): the INF reader over src\'s INFs,
 rem                  the models section per system, versions, ids, the action
 rem                  per device, the uninstall order, the registry value
 rem                  table and its applicability, the switches, exit codes
+rem   test_tr      - the device viewer and tray's pure half (xhcitr\tr_core.c,
+rem                  task 41-A.2, design record 25 section 10): the bounded
+rem                  printf, the USB IOCTL answers, the descriptor decoders
+rem                  over whole, truncated and malformed input, xhcicm.sys's
+rem                  query answer and its refusals, the status texts, the
+rem                  tray's event diff, the switches and the report layout
 rem   test_xpipe   - stage 2's TD planner (src\xhci_xpipe.c, task 36.24):
 rem                  TDs of at most 31 elements cut from one wide
 rem                  mapping of a URB, packet-aligned but the last
@@ -488,6 +494,9 @@ call :run test_cm_nvlink "test_cm_nvlink.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
 call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
+rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
+rem record 25 section 10) and the install tool's, for the record's check.
+call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c"
 call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_cm_ports links nothing else: the re-enumeration's own pure half,

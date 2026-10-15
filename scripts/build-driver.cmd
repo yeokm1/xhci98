@@ -467,6 +467,17 @@ if exist "%REPO%\xhciinst\XHCIINST.EXE" (
     if errorlevel 1 goto insttestfail
 )
 
+rem The USB tree tool (Phase 41, design record 25), when its EXE has been
+rem built: its /selftest, its switch refusals and its import table, which
+rem must name KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and
+rem COMDLG32 alone (xhcitr\selftest.cmd).
+if exist "%REPO%\xhcitr\XHCITR.EXE" (
+    echo.
+    echo === xhcitr self-test ===
+    call "%REPO%\xhcitr\selftest.cmd"
+    if errorlevel 1 goto trtestfail
+)
+
 echo.
 echo === host tests ===
 call "%REPO%\test\run-host-tests.cmd"
@@ -1055,6 +1066,13 @@ exit /b 1
 echo.
 echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
 echo 1998-era toolchain cannot read one. See the check's output above.
+endlocal
+exit /b 1
+
+:trtestfail
+echo.
+echo ERROR: xhcitr's self-test failed: its switches, its pure half or its
+echo import table cannot be trusted (xhcitr\selftest.cmd).
 endlocal
 exit /b 1
 
