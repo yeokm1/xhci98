@@ -2522,6 +2522,7 @@ static int tray_leftovers(const TRAY_PATHS *t)
             flagChanged = 1;
             logonly("%s deleted (a leftover)\n", t->Del);
         } else if (delete_at_restart(t->Del)) {
+            flagChanged = 1;
             flagRestart = 1;
             trayDeferred = 1;
             out("%s is still in use: it is deleted at the restart.\n", t->Del);
@@ -2591,10 +2592,9 @@ static int tray_put(const char *from, const TRAY_PATHS *t)
             delete_file(t->Tmp);
             return INST_TRAY_PUT_FAILED;
         }
-        if (!delete_file(t->Bak)) {
-            logonly("%s not deleted (error %lu); the next run deletes it\n",
-                    t->Bak, (unsigned long)GetLastError());
-        }
+        /* The replacement stands; a .BAK that stays is said, with steps
+         * left, and the next run deletes it. */
+        tray_delete_leftover(t->Bak);
     }
     SetFileAttributesA(t->Exe, FILE_ATTRIBUTE_NORMAL);
     flagChanged = 1;
@@ -2639,6 +2639,12 @@ static void tray_install(void)
         flagFailed = 1;
         return;
     }
+    /* A package without the tool leaves everything of it as it is. */
+    if (!file_exists(from, NULL)) {
+        out("This package has no tools\\xhcitr\\%s: the xHCI98 USB Tree is "
+            "not installed.\n", name);
+        return;
+    }
     if (!opts.List) {
         if (!maint_lock()) {
             flagFailed = 1;
@@ -2648,11 +2654,6 @@ static void tray_install(void)
             flagSteps = 1;
             goto done;
         }
-    }
-    if (!file_exists(from, NULL)) {
-        out("This package has no tools\\xhcitr\\%s: the xHCI98 USB Tree is "
-            "not installed.\n", name);
-        goto done;
     }
     pkg = file_version(from, pv);
     inst = file_version(t.Exe, iv);
