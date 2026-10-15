@@ -2966,7 +2966,10 @@ or says it was found by reading the code.
   On a fresh Windows ME, ME has not yet copied its own `USBNTMAP.SYS` and
   `USBMPHLP.PDR`, which it installs when its first ordinary USB stick is
   plugged in. Plug in any ordinary USB stick once, then unplug the UAS drive
-  and plug it back in; no Remove and no restart are needed.
+  and plug it back in; no Remove and no restart are needed. From `3.0.0.0`
+  `INSTALL.BAT` gives this step for a UAS drive it finds at Code 2, and on a
+  Windows ME that has not yet copied the file it says so before the first
+  UAS drive is plugged in.
 - **Windows Vista and 7: the controller's Advanced tab shows no bandwidth.**
   The figure comes from a query the driver does not answer, and stays at
   zero. See "The controller's Advanced tab and the root hub's Power tab".
@@ -3159,6 +3162,30 @@ mass-storage install places it.
 
 *This section is a draft for the `3.0.0.0` cut; it is completed before
 the cut.*
+
+### Thunderbolt and USB4 in Device Manager
+
+`xhcicm.sys` names a controller by its generation, the same whichever
+connection manager runs it:
+
+| Device Manager shows | For |
+|---|---|
+| `xHCI98 Thunderbolt 2 Controller` | Intel Falcon Ridge |
+| `xHCI98 Thunderbolt 3 Controller` | Intel Alpine Ridge, Titan Ridge and Ice Lake |
+| `xHCI98 USB4 Host Router` | Intel Maple Ridge, Tiger Lake to Meteor Lake, Lunar, Panther and Wildcat Lake, Barlow Ridge; AMD's and any other USB4 host |
+
+On Windows 2000, XP, Vista and 7 the PCI bridge ports the filter attaches
+to - the controller's own switch ports or, on the integrated
+controllers, its PCI Express root ports - are shown with the xHCI98
+bridge names in place of the name Windows gave them:
+`xHCI98 Thunderbolt PCI Bridge` on a Thunderbolt 2 or 3 controller,
+`xHCI98 USB4 PCI Bridge` on a USB4 one, and `xHCI98 PCI Bridge` on the
+emulator's generic bridges. They are still ordinary PCI bridges run by
+Windows's own `pci.sys`; the name says this package's filter sits on
+them. Every port of one switch carries the same name, upstream and
+downstream alike. Windows 98 SE and ME install no filter, so their
+bridges keep their names. The driver's service is
+`xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)`.
 
 ### Thunderbolt 3: which devices get a tunnel, and what that means
 

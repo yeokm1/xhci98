@@ -77,7 +77,7 @@ recommendation; the owner's answers are recorded here as
 | The absent controller (D5) | Owner, 2026-10-15, as recommended: nothing; a known limitation, its power-on being an ACPI method out of reach on 98 |
 | The `nvme98` channel (D6) | Owner, 2026-10-15, as recommended: record 21 section 7.2's proposal, shipped as `39-A.7` once `nvme98` has chosen, the statement withheld until qualified |
 | Version and cut (D7) | Owner, 2026-10-15, changed: `3.0.0.0` ships both phases; `39.final` closes Phase 39 without a cut and `40.final` cuts `3.0.0.0` |
-| Names (D8) | Owner, 2026-10-15, as recommended: `xhcicm.sys`, `xhcicm.inf`, `xhcicmf.inf`, `xHCI98 Thunderbolt 3 Host Interface`, `xHCI98 Thunderbolt 3 Tunnel Port Filter`, class System |
+| Names (D8) | Owner, 2026-10-15, as recommended: `xhcicm.sys`, `xhcicm.inf`, `xhcicmf.inf`, class System; the device descriptions revised by the owner the same day to name each controller's generation: `xHCI98 Thunderbolt 2 Controller`, `xHCI98 Thunderbolt 3 Controller`, `xHCI98 USB4 Host Router`, and for the ports the filter attaches to `xHCI98 Thunderbolt PCI Bridge`, `xHCI98 USB4 PCI Bridge`, `xHCI98 PCI Bridge` (record 21 section 3.3) |
 | The NHI ids (D9) | Owner, 2026-10-15, changed: every Alpine Ridge and Titan Ridge NHI claimed from a public id listing, never untested without a plain warning; widened the same day, with the source rule, to every Intel firmware-connection-manager host Linux addresses (Falcon Ridge, Alpine Ridge, Titan Ridge, Maple Ridge, Ice Lake to Meteor Lake), only `15BF` captured, the untested ids acting by default with the warning in the README and release notes (owner); the widening's shape - four-test selection with an inert start, hardware profiles apart from message profiles, per-domain tunnel-port sets, no reset or takeover by the ICM client - is the orchestrator's decision of 2026-10-15 after review, for the owner to confirm (record 21 sections 1.4, 3.3, 6.3) |
 | Safe eject (D10) | Owner, 2026-10-15, changed: in Phase 39 as `39-A.8`; NT through the filter's answer to `IRP_MN_QUERY_CAPABILITIES`, 98 SE and ME through CONFIGMG best effort, NT-only with a release-notes line if the 9x half fails; the eject stops the drivers and the user unplugs. Two refinements, the orchestrator's for the owner to confirm: the mark goes on the children of verified tunnel ports, never on a port itself, and `SurpriseRemovalOK` is set only where `39-V.2` shows Windows still lists the device with it (record 21 section 7.4) |
 | A master switch (D11) | Owner, 2026-10-15, as recommended: `XhciCmMode`, default 1 (auto), 0 off (the inert start), 2 the ICM client on an Intel id the profile table does not list, at the user's own risk and with that id added to a copy of the INF by the user, 3 the software connection manager's experimental override (design record 22); the install itself is the opt-in, so the default is on (record 21 section 8) |
@@ -237,3 +237,75 @@ Checkpoint: design record 22 converged before 40-A's code; the host suites
 green with the gates on both architectures; 40-V.1's and 40-V.2's legs read on the `qemu`
 flavour and the `release` flavour of the dry cut; the cut with the install
 leg from the asset on every target; then Phase 39's bench (39-E) after it.
+
+# Planned work
+
+Not phases yet: each takes the next free phase number when the owner opens
+it, and its placeholder ids take that number then (owner, 2026-10-06; the
+decisions table).
+
+## Planned - Slipstreaming xhci98 Into a Windows 2000 CD
+
+Goal: Windows 2000 Setup from a CD whose `TXTSETUP.SIF` carries xhci98,
+with no F6 floppy.
+
+Status: not opened, unnumbered and unversioned. Deferred by the owner on
+2026-10-14, when Phase 38's Windows 2000 F6 entry was merged; the one
+attempt is `docs/issues/16-w2k-f6-first-gui-boot-usbd.md` section 3 and
+`lessons.md`.
+
+- [ ] SLIP.1 xhci98 slipstreamed into a copy of a Windows 2000 CD (owner, 2026-10-14). One attempt during 38.final, an `[InputDevicesSupport]` entry for `xhci98` in the copy's `TXTSETUP.SIF` with its own file section listing `usbd.sys`, `hidclass.sys` and `hidparse.sys` and the driver in its `I386`, did not load the driver in text mode (no slot addressed, an empty port-0xE9 log from the `qemu` flavour; issue 16, runs 71 and 72); an `$OEM$\TEXTMODE` preinstall was not tried. Read first why text mode did not load it, then decide whether the documents describe a route
+
+## Planned - The Idle Poll Period, 50 Against 500 ms
+
+Goal: `XhciPollIdleMs`'s default decided on a full reading.
+
+Status: not opened, unnumbered and unversioned. Deferred by the owner on
+2026-10-14 from task 38.3's legs (T8); the default stays 50. The partial
+table is `runs/run-38.md`, "38.3".
+
+- [ ] IDLE.1 `XhciPollIdleMs` 50 against 500 on every target (owner, 2026-10-14): under mode 2, the idle processor load over a minute, plug-to-working at a root port and behind a hub, USB 2.0 remote wake, the timer's holds and releases per minute. The partial reading on 2026-10-14 (XP, XP x64, 2000 and 2000 SMP, Vista x86 and x64) showed plug-to-working 0.3 to 0.7 s at both values, remote wake working at both on the x86 guests (the test client is x86; not applicable on XP x64 and Vista x64), Vista x86's idle host load halved at 500 (12.7 to 5.4 %) and Vista x64's about 30 % lower, and no difference beyond noise elsewhere; 98 SE, ME and 7 x86 and x64 not taken. The default is decided on the full reading
+
+## Planned - Bench Follow-Up After `2.4.0.0`
+
+Goal: on real hardware, what Phase 38 could read only in virtual
+machines.
+
+Status: not opened, unnumbered and unversioned. Listed by the owner on
+2026-10-14 from what Phase 38's tasks owe after the cut (`runs/run-38.md`,
+each task's "Owed after the cut"); the release notes' "Untested ground"
+names B24.1 to B24.5 meanwhile. A sixth item, `XHCICLN`'s veto on XP x64,
+was read before the cut (task 38.8) and left the list.
+
+- [ ] B24.1 Linux's controller quirks (task 38.10, design record 20) on the controllers they name, each value read on a controller it lists
+- [ ] B24.2 a real xHCI 0.96 controller (task 38.11, design record 17 section 4.14): its start at `XhciAccept096` 1 and its refusal at 0, a device of each speed, and audit items A14 and A21
+- [ ] B24.3 hidusbf on a composite HID device (task 38.12, design record 13 section 10.14.8): on the composite devnode and on a function's, on 98 SE, 2000, XP and 7 x86
+- [ ] B24.4 a High Speed and a USB 3 hub under the `2.4.0.0` ids, `USB\XHCI98_HUB` and `USB\XHCI98_HUB30` (task 38.8, design record 13 section 10.13, D13 and D14), by passthrough or on the bench
+- [ ] B24.5 the finer timer while polling, `XhciPollFineTimer` 1, on real hardware (task 38.3, design record 15 section 7.2.4's amendment); its default reconsidered on the reading
+
+## Planned - A Refused Interface's Device Id
+
+Goal: the read-first task deferred from Phase 38 (owner, 2026-10-13).
+
+Status: not opened, unnumbered and unversioned. Opened as 38.12 on
+2026-10-13 and deferred to after `2.4.0.0` the same day (owner); the plan,
+with the owner's answers to its decisions, is design record 13 section
+10.7.1, and Phase 38 corrects the record's and `src\xhci_xport.h`'s claim
+to what was read.
+
+- [ ] NOX.1 a refused storage interface's device id on Windows 98 SE and ME (from the 38.2 legs, 2026-10-13; owner, the same day: read first, a task of its own). Record 13 and `src\xhci_xport.h` say a REFUSED interface (no transport it can run, task 29-A) "shows no VID/PID-derived hardware id at all", its one hardware id `USB\XHCI98_NOXPORT&VID_v&PID_p&REV_r[&MI_nn]`, so neither `usbstor.inf` nor a vendor INF can bind it. On 98 SE the refused `usb-uas` devnode's registry `HardwareID` read `"USB\\XHCI98_NOXPORT&VID_46F4&PID_0003&REV_0000,USB\\VID_46F4&PID_0003"` (runtime, `Enum\USB\VID_46F4&PID_0003\P382R2`, `out\p38-2\legs\`): the second entry is the bus's device id (`BusQueryDeviceID`), which the PDO still reports in VID/PID form. Read first, on 98 SE and ME (with NUSB 3.3's stack too, whose `usbstor.inf` names 135 VID/PID lines): whether an INF whose only line is that VID/PID binds a refused device. If it does, the refused PDO's device id takes the `XHCI98_NOXPORT` form as well (its instance path moves, so the design says what becomes of a devnode an earlier version made), checked against 38.9's move of the bus's own ids to `USB\XHCI98_...`; if it does not, record 13 and `xhci_xport.h` say why the device id is harmless there. Either way the claim is corrected to what was read, NT's matching (hardware and compatible ids only) stated as read or as not read. Host tests of the id, both builds, legs on 98 SE, ME and one NT target with a UAS-only device at SuperSpeed on a controller that does not stream
+
+## Planned - Releasing the Transfers Kept by a Pinned Containment
+
+Goal: the task deferred from Phase 38 (owner, 2026-10-13), the known
+limitation "After the driver closes off a controller it could not prove
+stopped, disabling the controller hangs" in the release notes.
+
+Status: not opened, unnumbered and unversioned. Planned as PCR.1, opened
+as 38.3 on 2026-10-13 and deferred the same day (owner), after its design
+was trimmed to the departure proof and a review showed that configuration
+space reading all ones proves no isolation from memory, so no safe proof
+is reachable at a disable; the plan, the owner's answers and what a
+reopening must answer are design record 17 section 4.13.
+
+- [ ] PCR.1 (in Phase 37 until 2026-10-12) releasing the transfers kept by a pinned containment (owner, 2026-10-11), so disabling, updating or removing a controller the driver closed off without proof that DMA stopped (record 17's containment, `XHCISNAP` "CONTAINED" and "PINNED") completes instead of waiting for ever. Since `2.2.0.0` the driver keeps every transfer the controller might still write into, by design, a hang the release notes list under "Known limitations"; Phase 36's matrix read it again on Windows 2000 (4 of 4 from fresh boots, selective suspend on and off: hidusb's interrupt-IN read kept, its REMOVE waiting) and on Windows 98 SE. At the controller's stop or remove, look for proof that it can no longer write to memory, and only then complete the kept transfers as failed: (a) the device has left the bus (its PCI configuration space, the vendor id included, reads all ones), or (b) it entered D3hot through its PCI power management capability and reads back D3hot, where it may not master (PCI Bus Power Management 1.2). Only at the stop or remove of a controller already pinned by containment, the driver asks for D3 itself, through the PCI stack (a device power IRP), never by writing the power management control register (owner, 2026-10-13, on Codex's review): a containment-release step, independent of `XhciSelectiveSuspend`, adding no idle or selective-suspend policy. It reads the state back only after the 10 ms the specification requires before the next access. Conditions from the review: the capability chain validated before it is read; a failed or short configuration read is never taken for all ones, and all-ones data counts as proof (a) only through a validated read whose platform meaning is that the device left the bus or is isolated from memory, an unreachable configuration window alone proving nothing; read completeness established per target, without assuming Windows 98 reports the byte count (`hcd_svc.c` leaves its `IoStatus.Information` unproven), and a stalled configuration or power request addressed, today's wait for it being unbounded; on 98 SE and ME the configuration reads use the route already proven there, to the original PDO; a failed or ineffective transition is no proof and releases nothing; D3hot is not a reset, a function with `No_Soft_Reset` set keeping its state, so before the kept buffers are released the design establishes that DMA stays inhibited through any later return to D0 until HCRST has completed and the old ring and context pointers are invalid, and where it cannot, the buffers stay kept and an unsafe restart is refused; and the release runs before any child's teardown waits on a kept transfer. With neither proof the transfers stay kept, and no registry value overrides that (owner, 2026-10-13). Record 17 gains the section first, a full review loop on the DMA-safety path, host vectors for each proof, and legs: the all-ones injection then a disable on 98 SE, ME, 2000, XP and 7 x64, with and without a client read pending, and the unproven case still holding

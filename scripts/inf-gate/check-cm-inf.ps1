@@ -80,6 +80,14 @@ rule named as the other gates name their families.
            models section for Windows 2000 (x86), or the NTamd64 pair with
            none (amd64, PATH-MFGDEC and PATH-NO9X).  CM-LAYOUT No LayoutFile: the driver needs no OS-supplied file.
   CM-MSFILE No file of Microsoft's is copied or listed.
+  CM-DESC  Every model line's description names its controller's generation
+           and every description string reads as decided (record 21 section
+           3.3, record 22 section 3.7): NHI lines Tb2Desc (Falcon Ridge),
+           NhiDesc (Alpine Ridge, Titan Ridge, Ice Lake) or U4Desc (every
+           other id and the class line); filter lines TbBridgeDesc (the
+           Thunderbolt 2 and 3 generation's ports), BridgeDesc (QEMU's
+           1B36 bridges) or U4BridgeDesc (every other); CmSvcDesc the same
+           in all four INFs.
   CM-TWIN  The x86 and amd64 INF of each kind bind the same ids and, for the
            NHI, write the same values (run beside every non-self-test gate).
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
@@ -142,6 +150,23 @@ $excludedIds = @("8086:15EF", "8086:0B26", "8086:5786", "8086:57A4",
                  "8086:1513", "8086:151A", "8086:151B", "8086:1547", "8086:1548", "8086:1549",
                  "8086:1566", "8086:1567", "8086:1568", "8086:1569", "8086:157D", "8086:157E",
                  "1022:151C", "1022:151D", "1B21:2463")
+# CM-DESC: the Device Manager names. The description follows the hardware
+# generation, never the connection manager that runs it: Falcon Ridge is
+# Thunderbolt 2; Alpine Ridge, Titan Ridge and Ice Lake are Thunderbolt 3;
+# Maple Ridge, Tiger Lake onward and every software-CM host are USB4 (record
+# 21 section 3.3's tables, Linux nhi.h and pci.ids 2026.10.14). An NHI id in
+# neither Thunderbolt list, and the class line, take U4Desc; a filter id of
+# QEMU's vendor takes BridgeDesc, one in neither list U4BridgeDesc.
+$descTb2Nhi = @("8086:156A", "8086:156C")
+$descTb3Nhi = @("8086:1575", "8086:1577", "8086:15BF", "8086:15D2", "8086:15D9", "8086:15E8", "8086:15EB", "8086:8A17", "8086:8A0D")
+$descTbBridge = @("8086:156B", "8086:156D", "8086:1576", "8086:1578", "8086:15C0", "8086:15D3", "8086:15DA", "8086:15E7", "8086:15EA",
+                  "8086:8A1D", "8086:8A1F", "8086:8A21", "8086:8A23")
+$descStrings = @{
+    "nhi"    = [ordered]@{ "Tb2Desc" = "xHCI98 Thunderbolt 2 Controller"; "NhiDesc" = "xHCI98 Thunderbolt 3 Controller";
+                           "U4Desc" = "xHCI98 USB4 Host Router"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
+    "filter" = [ordered]@{ "TbBridgeDesc" = "xHCI98 Thunderbolt PCI Bridge"; "U4BridgeDesc" = "xHCI98 USB4 PCI Bridge";
+                           "BridgeDesc" = "xHCI98 PCI Bridge"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
+}
 $knownBridgeDevs = @("156B", "156D", "157E", "1576", "1578", "15C0", "15D3", "15DA", "15E7", "15EA", "15EF", "1133", "1136", "5786", "57A4")
 
 function Read-InfText {
@@ -248,6 +273,13 @@ function Test-CmInfText {
     foreach ($m in [regex]::Matches($text, '%([A-Za-z_][A-Za-z0-9_]*)%')) {
         if (-not $defined.ContainsKey($m.Groups[1].Value.ToLowerInvariant())) {
             & $add "BOTH-STRINGS" "%$($m.Groups[1].Value)% is used and not defined."
+        }
+    }
+    if ($null -ne $strings) {
+        foreach ($sn in $descStrings[$Kind].Keys) {
+            $sv = @($strings.Lines | Where-Object { $_.Key -ieq $sn } | ForEach-Object { $_.Value })
+            $want = '"' + $descStrings[$Kind][$sn] + '"'
+            if ($sv.Count -ne 1 -or $sv[0] -cne $want) { & $add "CM-DESC" "[Strings] must define $sn once as $want (record 21 section 3.3)." }
         }
     }
 
@@ -419,6 +451,13 @@ function Test-CmInfText {
                 if ($m4.Success -and $excludedIds -contains ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant()) {
                     & $add "CM-NOROUTER" "model binds '$id', a device router's or an unclaimed controller's id (design record 22 section 3.1)."
                 }
+                $vd = if ($m4.Success) { ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant() } else { "" }
+                if ($Kind -eq "filter") {
+                    $wantDesc = if ($vd.StartsWith("1B36:")) { "BridgeDesc" } elseif ($descTbBridge -contains $vd) { "TbBridgeDesc" } else { "U4BridgeDesc" }
+                } else {
+                    $wantDesc = if ($descTb2Nhi -contains $vd) { "Tb2Desc" } elseif ($descTb3Nhi -contains $vd) { "NhiDesc" } else { "U4Desc" }
+                }
+                if ($l.Key -ine "%$wantDesc%") { & $add "CM-DESC" "model '$($l.Raw)' names '$id' under $($l.Key); its generation's description is %$wantDesc% (record 21 section 3.3)." }
                 if ($isChicago) {
                     $isBridge = ($id -match '(?i)CC_06') -or ($FilterIds -contains $id.ToUpperInvariant())
                     foreach ($dev in $knownBridgeDevs) { if ($id -match "(?i)DEV_$dev(&|$)") { $isBridge = $true } }
@@ -699,7 +738,7 @@ if ($SelfTest) {
                     @{ Rule = "VAL-FLAG";       Text = $t.Replace("XhciCmApprove,0x00010003,1", "XhciCmApprove,0x00010001,1") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciLogVerbosity,0x00010003,0", "HKR,,XhciLogVerbosity,0x00010003,0`r`nHKR,,XhciCmTunnelBridge,0x00000002,`"`"") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmSafeEject,0x00010003,1`r`n", "") },
-                    @{ Rule = "CM-IDLIST";      Text = $t.Replace("%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3`r`n", "").Replace("%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3`r`n", "") },
+                    @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3`r`n", "").Replace("%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3`r`n", "") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n", "%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1234`r`n").Replace("%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n", "%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1234`r`n") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4Desc%=Cm.Dev,PCI\VEN_1022&DEV_1669`r`n", "").Replace("%U4Desc%=Cm.Dev6,PCI\VEN_1022&DEV_1669`r`n", "") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_E434`r`n", "").Replace("%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_E434`r`n", "") },
@@ -718,7 +757,13 @@ if ($SelfTest) {
                     @{ Rule = "W98-DIRID12";    Text = $t.Replace("Cm.CopyFiles=10,System32\Drivers", "Cm.CopyFiles=12") },
                     @{ Rule = "W98-SECTLEN";    Text = $t.Replace("[Cm.AddService]", "[Cm.AddService.Very.Long.Section.Name]").Replace(",Cm.AddService", ",Cm.AddService.Very.Long.Section.Name") },
                     @{ Rule = "BOTH-STRINGS";   Text = $t.Replace('NhiDesc="', 'NhiDescription="') },
-                    @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.inf=1", "xhcicmf.inf=1") }
+                    @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.inf=1", "xhcicmf.inf=1") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%Tb2Desc%=Cm.Dev,PCI\VEN_8086&DEV_156A", "%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_156A") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%NhiDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15E8", "%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_15E8") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4Desc%=Cm.Dev,PCI\VEN_8086&DEV_1134", "%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_1134") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4Desc%=Cm.Dev6,PCI\CC_0C0340", "%NhiDesc%=Cm.Dev6,PCI\CC_0C0340") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('U4Desc="xHCI98 USB4 Host Router"', 'U4Desc="xHCI98 USB4 Host Interface"') },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4', 'CmSvcDesc="xHCI98 Thunderbolt 3 and USB4') }
                 )
             }
             "nhi-amd64" {
@@ -731,6 +776,8 @@ if ($SelfTest) {
                     @{ Rule = "PATH-NT6";       Text = $t.Replace("[Cm.Dev6.NTamd64.Services]", "[Cm.Dev6.NTamd64.Svc]") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmApproveTimeoutMs,0x00010003,10000", "XhciCmApproveTimeoutMs,0x00010003,1000") },
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmModels.NTamd64]`r`n", "[CmModels.NTamd64]`r`n%NhiDesc%=Cm.Dev,PCI\VEN_8086&DEV_15D3`r`n") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%Tb2Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C", "%U4Desc%=Cm.Dev6,PCI\VEN_8086&DEV_156C") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('Tb2Desc="xHCI98 Thunderbolt 2 Controller"', 'Tb2Desc="xHCI98 Thunderbolt Controller"') },
                     @{ Rule = "BOTH-VERSION";   Text = ($t -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') }
                 )
             }
@@ -761,15 +808,22 @@ if ($SelfTest) {
                     @{ Rule = "PATH-MFGDEC";    Text = $t.Replace("%Mfg%=CmFilterModels,NTx86.6.0", "%Mfg%=CmFilterModels") },
                     @{ Rule = "PATH-NT6";       Text = $t.Replace("[CmF.Dev6.NTx86.Services]", "[CmF.Dev6.NTx86.Svc]") },
                     @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcicm.sys=1", "xhcicm.sys=1`r`nxhcicm.inf=1") },
-                    @{ Rule = "BOTH-CLASS";     Text = $t.Replace("ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}", "ClassGUID={36FC9E60-C465-11CF-8056-444553540000}") }
+                    @{ Rule = "BOTH-CLASS";     Text = $t.Replace("ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}", "ClassGUID={36FC9E60-C465-11CF-8056-444553540000}") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0", "%U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133", "%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1133") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001", "%TbBridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423", "%BridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('BridgeDesc="xHCI98 PCI Bridge"', 'BridgeDesc="xHCI98 Thunderbolt 3 Tunnel Port Filter"') }
                 )
             }
             "filter-amd64" {
                 $cases = @(
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"') },
-                    @{ Rule = "PATH-NO9X";      Text = $t.Replace("[CmFilterModels.NTamd64]", "[CmFilterModels]`r`n%TunnelDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`r`n`r`n[CmFilterModels.NTamd64]") },
+                    @{ Rule = "PATH-NO9X";      Text = $t.Replace("[CmFilterModels.NTamd64]", "[CmFilterModels]`r`n%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`r`n`r`n[CmFilterModels.NTamd64]") },
                     @{ Rule = "PATH-MFGDEC";    Text = $t.Replace("%Mfg%=CmFilterModels,NTamd64,NTamd64.6.0", "%Mfg%=CmFilterModels,NTamd64") },
-                    @{ Rule = "CM-FILTER";      Text = $t.Replace('UpperFilters,0x00010008,"xhcicm"', 'UpperFilters,0x00010008,"other"') }
+                    @{ Rule = "CM-FILTER";      Text = $t.Replace('UpperFilters,0x00010008,"xhcicm"', 'UpperFilters,0x00010008,"other"') },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23", "%U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_8A23") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"', 'CmSvcDesc="xHCI98 Thunderbolt 3 Connection Manager (xhcicm)"') }
                 )
             }
         }
