@@ -1443,8 +1443,10 @@ itself removable.
 filter is shared: at its own system suspend the NHI marks every active
 member held; a D0 IRP reaching a held member's filter is passed down and
 retained in its completion routine; the NHI releases it when its resume
-has **succeeded** or **failed**; the filter's watchdog is the NHI's resume
-bound plus 10 s and its expiry is the failure path, never success; an NHI
+has **succeeded** or **failed**; the filter's watchdog is record 21's
+fixed 5-minute cap, never longer (the NHI's resume bound plus 10 s is
+logged, and logged as over the cap when it would pass it), and its expiry
+is the failure path, never success; an NHI
 that does not resume takes the failure path at its removal. Under this
 profile:
 

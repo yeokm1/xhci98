@@ -112,9 +112,10 @@
  * itself. At a suspend under U4On, CM_NHI.U4ResumeBoundMs holds the USB4
  * client's resume bound (TbtU4ResumeBoundUs for the most obligations a
  * domain holds, rounded up) before CmReenumSuspend is called; the hold's
- * watchdog must be at least that plus record 21's 10 s (a fixed watchdog
- * longer than both, below the power manager's own limit, satisfies it),
- * and CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
+ * watchdog stays the fixed five-minute outer cap on every NT target
+ * (CmPortsHoldWatchdog): that bound plus record 21's 10 s is logged when it
+ * would pass the cap, and a client still working when the cap ends takes
+ * the failure path. CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
  * USB4 client's bound. CmReenumResumed's `ok` is FALSE whenever an
  * obligation was not met, though the domain keeps running.
  *

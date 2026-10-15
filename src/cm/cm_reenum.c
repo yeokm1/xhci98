@@ -1477,6 +1477,7 @@ VOID CmReenumSuspend(PCM_NHI nhi)
     PCM_FILTER f;
     ULONG seconds;
     ULONG i;
+    BOOLEAN over;
 
     r = &nhi->Reenum;
     r->Suspends++;
@@ -1507,13 +1508,17 @@ VOID CmReenumSuspend(PCM_NHI nhi)
      * many announcements), and past the limit the failure path is the
      * policy (cm_ports.h). */
     CmLogNote(nhi, "cm.reenum.hold.client-ms", CmPortsHoldBound(&resume));
-    r->HoldBoundMs = CM_PORTS_HOLD_MAX_MS;
-    if (nhi->U4On && nhi->U4ResumeBoundMs + 10000UL > r->HoldBoundMs) {
-        /* The USB4 client's bound plus record 21's 10 s (cm_reenum.h). */
-        r->HoldBoundMs = nhi->U4ResumeBoundMs + 10000UL;
-    }
+    /* The fixed five-minute outer cap, under either profile; under USB4
+     * the client's bound is logged, and a bound that with record 21's
+     * 10 s would pass the cap is logged as such (cm_reenum.h). */
+    r->HoldBoundMs = CmPortsHoldWatchdog(nhi->U4On ? nhi->U4ResumeBoundMs
+                                                   : 0, &over);
     if (nhi->U4On) {
         CmLogNote(nhi, "cm.reenum.hold.u4-ms", nhi->U4ResumeBoundMs);
+        if (over) {
+            CmLogNote(nhi, "cm.reenum.hold.u4-over-cap",
+                      nhi->U4ResumeBoundMs);
+        }
     }
     seconds = (r->HoldBoundMs + 999UL) / 1000UL;
     CmLogNote(nhi, "cm.reenum.hold.bound-ms", r->HoldBoundMs);

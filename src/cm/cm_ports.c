@@ -418,6 +418,13 @@ static ULONG cmAttempts(ULONG retries)
     return retries >= 1000UL ? 1000UL : retries + 1;
 }
 
+ULONG CmPortsHoldWatchdog(ULONG clientMs, BOOLEAN *over)
+{
+    *over = (BOOLEAN)(clientMs >= CM_PORTS_HOLD_MAX_MS ||
+                      CM_PORTS_HOLD_MAX_MS - clientMs < CM_PORTS_HOLD_EXTRA_MS);
+    return CM_PORTS_HOLD_MAX_MS;
+}
+
 ULONG CmPortsHoldBound(const CM_PORTS_RESUME *resume)
 {
     ULONG bound;

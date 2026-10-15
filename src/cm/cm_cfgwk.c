@@ -29,7 +29,9 @@
  * block; when it is inside a CONFIGMG call - which, during the NHI's own
  * removal, may not return until that removal has finished - the stop does
  * not wait (waiting there would deadlock): the worker frees its block and
- * closes its thunks itself when the call returns, making no further call.
+ * closes its thunks itself when the call returns, making no further call
+ * (but the removal that completes a query already accepted,
+ * cmWkRemoveChild).
  * Because such a worker may outlive its NHI for as long as CONFIGMG
  * blocks, a driver that has started one has no unload routine (the image
  * stays resident until the restart); CmCfgwkDrain remains for the unload
@@ -194,7 +196,8 @@ static VOID cmWkOp(PCM_CFGWK w, ULONG i, ULONG gen)
  * once the stop asked the worker to leave or, inside a member's operation
  * (cmWkOp), once that operation went stale (cmWkCurrent). An operation in
  * progress when either came makes no further call after its current one
- * returns.
+ * returns - but the Remove_SubTree that completes an accepted query
+ * (cmWkRemoveChild).
  */
 static BOOLEAN cmWkGo(PCM_CFGWK w)
 {
@@ -502,10 +505,14 @@ static VOID cmWkForget(CM_WK_PORT *p, ULONG devnode)
  * The single removal step of a vanished child of member i, on the worker:
  * Query_Remove_SubTree, and Remove_SubTree only when that was accepted (a
  * refusal - a driver with open files - is respected: nothing forced,
- * logged and counted). The request is checked to be current before each
- * call. FALSE when it went stale (the caller stops), TRUE otherwise,
- * whatever the outcome. Any orderly-remove handshake with the child's
- * driver wraps this function.
+ * logged and counted). The request is checked to be current before the
+ * query only: a query once accepted is always followed by its removal,
+ * stale or not, because Windows 98 has no service that cancels an
+ * accepted query and a driver left query-removed stays quiesced (a
+ * re-plugged device removed this way comes back at the re-enumeration
+ * that follows). FALSE when the request had gone stale before the query
+ * (the caller stops), TRUE otherwise, whatever the outcome. Any
+ * orderly-remove handshake with the child's driver wraps this function.
  */
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
                                ULONG devnode)
@@ -528,15 +535,12 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
         w->C.Vetoed++;
         return TRUE;
     }
-    if (!cmWkCurrent(w, i, gen)) {
-        return FALSE;
-    }
     cr = CmCfgmgRemove(&w->Cfgmg, devnode);
     cmWkLog(w, "cm.reenum.9x.remove", cr);
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
     }
-    return TRUE;
+    return cmWkCurrent(w, i, gen);
 }
 
 /*
@@ -706,8 +710,9 @@ static VOID cmWkLeave(PCM_CFGWK w)
 /*
  * The opening: CmCfgmgOpen's read-only services (Get_Version, the root's
  * Locate_DevNode, its Get_Device_ID) run as one unit, with no check
- * between them - the one exception to "no further call after a stop":
- * they change nothing, and the image stays resident (CmCfgwkStart). The
+ * between them - an exception to "no further call after a stop", with the
+ * removal completing an accepted query (cmWkRemoveChild): they change
+ * nothing, and the image stays resident (CmCfgwkStart). The
  * baseline after them is checked before each call as every operation is.
  */
 static VOID cmWkOpen(PCM_CFGWK w)

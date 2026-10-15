@@ -406,6 +406,25 @@ static void test_bound(void)
     CHECK_EQ(CmPortsHoldBound(&r), CM_PORTS_HOLD_MAX_MS, "every term at its maximum is the cap");
 }
 
+static void test_watchdog(void)
+{
+    BOOLEAN over;
+
+    over = TRUE;
+    CHECK_EQ(CmPortsHoldWatchdog(0, &over), CM_PORTS_HOLD_MAX_MS, "no client bound: the cap");
+    CHECK(!over, "and not over");
+    CHECK_EQ(CmPortsHoldWatchdog(60000UL, &over), CM_PORTS_HOLD_MAX_MS,
+             "a short USB4 bound: still the fixed cap, never shorter");
+    CHECK(!over, "60 s + 10 s inside the cap");
+    CHECK_EQ(CmPortsHoldWatchdog(290000UL, &over), CM_PORTS_HOLD_MAX_MS, "290 s: the cap");
+    CHECK(!over, "290 s + 10 s is the cap exactly");
+    CHECK_EQ(CmPortsHoldWatchdog(290001UL, &over), CM_PORTS_HOLD_MAX_MS,
+             "past it: the cap, never more (the owner's outer limit)");
+    CHECK(over, "and reported over");
+    CHECK_EQ(CmPortsHoldWatchdog(0xFFFFFFFFUL, &over), CM_PORTS_HOLD_MAX_MS, "no wrap");
+    CHECK(over, "over");
+}
+
 int main(void)
 {
     test_families();
@@ -413,6 +432,7 @@ int main(void)
     test_ids();
     test_snapshot();
     test_bound();
+    test_watchdog();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
