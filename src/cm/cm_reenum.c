@@ -1076,6 +1076,8 @@ VOID CmReenumStart(PCM_NHI nhi)
     r->EjectPending = 0;
     r->MarkOpen = 0;
     r->CfgmgOwed = 0;
+    r->LossDrain = 0;
+    r->LossSeen = 0;
     for (i = 0; i < XHCI_TBT_MAX_TUNNELS; i++) {
         r->KnownCount[i] = 0;
     }
@@ -1191,6 +1193,15 @@ static VOID cmCfgmgLate(PCM_NHI nhi)
 
     r = &nhi->Reenum;
     if (!r->CfgmgOwed) {
+        return;
+    }
+    if (r->LossSeen) {
+        /* The host interface was lost before the worker started: a
+         * baseline taken now would record a lost tree as healthy, and its
+         * paths would be read from reset bridges. The route stays none
+         * for this instance (a PnP restart starts afresh). */
+        r->CfgmgOwed = 0;
+        CmLogNote(nhi, "cm.reenum.9x.not-started.lost", 1);
         return;
     }
     r->CfgmgOwed = 0;
@@ -1710,6 +1721,10 @@ VOID CmReenumStop(PCM_NHI nhi)
 VOID CmReenumLossBegin(PCM_NHI nhi)
 {
     nhi->Reenum.LossDrain = 1;
+    if (nhi->Reenum.CfgmgOwed) {
+        /* The 98 worker not started yet (cmCfgmgLate): it never is. */
+        nhi->Reenum.LossSeen = 1;
+    }
 }
 
 VOID CmReenumLossEnd(PCM_NHI nhi)

@@ -320,6 +320,9 @@ typedef struct _CM_REENUM {
     ULONG MarkFailures;
     ULONG LossDrain;        /* between CmReenumLossBegin and its end: the
                                actions drained are the loss's            */
+    ULONG LossSeen;         /* a loss came before the 98 worker started:
+                               it is never started for this instance (its
+                               baseline would be read from a lost tree)  */
     ULONG Unavailable;      /* 98: CONTROLLER_UNAVAILABLE requests posted */
     ULONG GoneDone;         /* 98: ... members whose retained children
                                were reconciled                           */
