@@ -106,6 +106,7 @@ identification.
 | Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
+| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`; `releases/<version>/INSTALL.BAT` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
 | ReactOS / Linux / FreeBSD / Haiku source mirrors | No | `external/` (git-ignored) | Fetch procedure and pinned commits in `external/README.md` |
 | `usbport.sys`, `usbhub20.sys`, NUSB 3.3, MSVC 6.0, the Win2000 DDK | No | `tools/` (git-ignored) | Supplied by the user's own install media or download |
@@ -139,13 +140,15 @@ with none of the inputs can still check the claim.
 
 ### 2a. The tracked binaries that are not only ours
 
-There are two, and from `2.4.0.0` four. All are tools rather than the
+There are two, from `2.4.0.0` four, and from `3.0.0.0` six. All are tools rather than the
 driver, and all are the exception to the row above saying this project tracks
 only its own code: `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
 `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (at the version root,
 without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9), and
 from `2.4.0.0` `releases/<version>/tools/xhcicln/XHCICLN.EXE` and
-`XHCICL64.EXE` (roadmap-hcd task 38.8). They are not the same case: the
+`XHCICL64.EXE` (roadmap-hcd task 38.8), and from `3.0.0.0`
+`releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`
+(roadmap-usb4 task 40.6). They are not the same case: the
 qualifier carries an embedded DOS extender and an Open Watcom runtime, the
 reader and the cleanup tool statically linked Microsoft C runtimes.
 
@@ -259,6 +262,31 @@ are not linked, shipped or tracked. Nothing of either runtime's terms is
 quoted here. `scripts/package/make-release.ps1` generates one `NOTICE.TXT`
 beside the two recording both linkages, for the same reason as the two
 above.
+
+#### XHCIINST.EXE and XHCIIN64.EXE
+
+`releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE` are the
+install, update and uninstall tool of `3.0.0.0` (design record 23), built by
+`xhciinst/build.cmd` from `xhciinst/xhciinst.c`, `xhciinst/inst_core.c` and
+`src/xhci_psw.c` (the driver's own port-switchover gate), with
+`xhciinst/xhciinst.rc` embedding `xhciinst/xhciinst.manifest` - all this
+project's own text. Each is not only that, in exactly `XHCICLN`'s way:
+
+- `XHCIINST.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
+  (`cl /nologo /W3 /WX /O2`, no `/MD`). Re-derivable: `link -dump -imports
+  XHCIINST.EXE` names `KERNEL32.dll` and `ADVAPI32.dll` and no C runtime
+  DLL, which `xhciinst/selftest.cmd` checks at every build.
+- `XHCIIN64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`),
+  statically linked (`/MT`); its import table, read the same way with WDK
+  7.1's `link`, names the same two DLLs.
+
+Every SetupAPI, `newdev.dll`, configuration-manager and `version.dll`
+routine either calls is looked up at run time from the system's own DLLs,
+which are not linked, shipped or tracked; neither executable contains or
+runs `devcon` or any other Microsoft setup program. `INSTALL.BAT`, staged
+at the version root, is this project's own text. `make-release.ps1`
+generates one `NOTICE.TXT` beside the two executables recording both
+linkages, as for `XHCICLN`.
 
 Stated plainly: `XHCISNAP.EXE` is a single executable combining this project's
 GPL-2.0-only code with Microsoft's Visual C++ 6.0 static C runtime, two

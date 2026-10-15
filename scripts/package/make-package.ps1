@@ -23,8 +23,13 @@ is this project's two files and nothing else:
                    or xhcicmf-amd64.inf under this name for amd64), in a
                    subdirectory of its own because Windows 98 SE and ME read
                    a $Windows NT$ INF beside the one they are pointed at
-                   (runs/run-39.md, 39-0.4); its source disk is the
-                   directory above, where xhcicm.sys is
+                   (runs/run-39.md, 39-0.4); its source disk is nt\
+                   itself
+    nt\xhcicm.sys  the filter INF's own copy of xhcicm.sys, the same bytes
+                   as the root's (copied after test-signing): Vista's and
+                   7's driver store refuses a source outside the INF's
+                   directory (SetupCopyOEMInf error 0xA1); check-cm-inf.ps1
+                   (CM-NO9XBRIDGE) compares the two
     xhcicm.sys     the connection manager, the same flavour
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
@@ -1082,13 +1087,17 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
         Copy-Item -LiteralPath $UasInfPath -Destination (Join-Path $stageDir "xhciuas.inf") -Force
         Copy-Item -LiteralPath $UasDriverPath -Destination (Join-Path $stageDir "xhciuas.sys") -Force
     }
-    # The connection manager's three files at the root too, where both its
-    # INFs' one SourceDisksNames entry looks for them.
+    # The connection manager's NHI INF and binary at the root, where its
+    # SourceDisksNames entry looks; the filter INF in nt\ with its own copy
+    # of the binary, where the filter INF's entry looks.
     if ($stageCm) {
         Copy-Item -LiteralPath $CmInfPath -Destination (Join-Path $stageDir "xhcicm.inf") -Force
         Ensure-Directory (Join-Path $stageDir "nt")
         Copy-Item -LiteralPath $CmFilterInfPath -Destination (Join-Path $stageDir "nt\xhcicmf.inf") -Force
         Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "xhcicm.sys") -Force
+        # The filter INF's own source, beside it: the same (already signed)
+        # bytes, which CM-NO9XBRIDGE compares.
+        Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.

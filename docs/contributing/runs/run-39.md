@@ -356,6 +356,20 @@ sections, and the amd64 twin on the same pattern. Read, not yet tested: the
 append flag `0x00010008` (the readings used `0x00010000`, on ports that had
 no `UpperFilters`), the `.NTx86.6.0` Models section, and the 64-bit guests.
 
+**The source disk, read again 2026-10-15 (task 40.6's legs).** The package
+first staged the filter INF in `nt\` with its one source disk at `..`, the
+flavour directory where `xhcicm.sys` is. On Windows 7 SP1 x86 the install
+tool's `SetupCopyOEMInf` of that `nt\xhcicmf.inf` failed with `0x000000A1`
+(`ERROR_BAD_PATHNAME`): Vista's and 7's driver store takes no source file
+outside the INF's own directory tree, so no route - the tool, Have Disk or
+`UpdateDriverForPlugAndPlayDevices` - could install the filter there. So
+`nt\` now carries its own copy of `xhcicm.sys`, the same bytes as the
+flavour directory's (copied after test-signing), and both filter INFs name
+a source disk with no path; `CM-NO9XBRIDGE` admits exactly those two files
+in `nt\` and refuses two copies that differ, and the release assembly
+refuses them too. Windows 98 SE and ME never receive `nt\`, so nothing
+changes for them (an orchestrator decision, for the owner to confirm).
+
 ### A side reading for the 98 legs: the 0028:C0031B0A fault is NUSB's usbport, not the driver
 
 On 98 SE, removing the root bridge in Device Manager while `xhci98.sys` was

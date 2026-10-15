@@ -1492,13 +1492,13 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the UAS pair was removed:`n" + $r.Output)
 
-        # --- the connection manager's three files (roadmap-usb4.md 39-A.1) --
+        # --- the connection manager's four files (roadmap-usb4.md 39-A.1) ---
         #
         # Gated in place by check-cm-inf.ps1 where present, carried into the
-        # asset, and all three or none: a directory missing any one of them
+        # asset, and all four or none: a directory missing any one of them
         # is refused. Not required in this mode (no version before 3.0.0.0
         # has them).
-        Write-Step "the upload set gates the connection manager's three files, all or none"
+        Write-Step "the upload set gates the connection manager's four files, all or none"
         $cmFiles = @{
             "xhcicm.inf"  = (Join-Path $repo "src\cm\xhcicm.inf")
             "nt\xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
@@ -1508,6 +1508,9 @@ try {
                 Ensure-Directory (Join-Path $pubRoot "$fl\nt")
                 foreach ($n in $cmFiles.Keys) { Copy-Item -LiteralPath $cmFiles[$n] -Destination (Join-Path $pubRoot "$fl\$n") -Force }
                 [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhcicm.sys"),
+                    [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $fl flavour"))
+                # The filter INF's own copy beside it, the same bytes.
+                [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\nt\xhcicm.sys"),
                     [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $fl flavour"))
             }
         }
@@ -1520,12 +1523,12 @@ try {
         Assert-True ($r.Output -match "carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected the connection manager's INFs to be gated by their own gate. Output:`n" + $r.Output)
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
+            foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf", "nt\xhcicm.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
             }
         }
-        foreach ($drop in @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")) {
+        foreach ($drop in @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "release\$drop") -Force
             if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
             if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
@@ -1535,6 +1538,17 @@ try {
             Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around an incomplete connection manager ($drop missing)."
             & $putCm
         }
+        # The filter INF's copy of the binary differing from the root's is
+        # refused: Vista and 7 would install the nt\ bytes from the store.
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\nt\xhcicm.sys"),
+            [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, another build"))
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published nt\xhcicm.sys differing from xhcicm.sys was assembled into the asset."
+        Assert-True (-not (Test-Path -LiteralPath $uploadZip)) "an upload archive was written around two different xhcicm.sys copies."
+        & $putCm
         $cmBad = [System.IO.File]::ReadAllText($cmFiles["nt\xhcicmf.inf"]).Replace('Signature="$Windows NT$"', 'Signature="$CHICAGO$"')
         [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\nt\xhcicmf.inf"), [System.Text.Encoding]::ASCII.GetBytes($cmBad))
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
@@ -2712,9 +2726,9 @@ try {
         @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
            Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
         @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $cmPublishable + $oemPublishable';
-           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's three files and txtsetup.oem" },
-        @{ Find = '$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys")';
-           Why  = "the connection manager's NHI INF, filter INF and binary (roadmap-usb4.md task 39-A.1) are no longer what a flavour directory publishes for it" },
+           Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's four files and txtsetup.oem" },
+        @{ Find = '$cmPublishable = @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")';
+           Why  = "the connection manager's NHI INF, filter INF, binary and the filter INF's own copy of it in nt\ (roadmap-usb4.md task 39-A.1; Vista's and 7's driver store refuses a source outside the INF's directory) are no longer what a flavour directory publishes for it" },
         @{ Find = 'Assert-CmPublished -Sys $cmSys -Leg $leg -Flavor $f -Version $Version';
            Why  = "the published xhcicm.sys is no longer held to the refusals xhciuas.sys is" },
         @{ Find = 'if ($legSigned) { $legCopy += $certPublishable }';
@@ -2739,8 +2753,8 @@ try {
            Why  = "a cut no longer stages XHCISNAP into tools\xhcisnap\ (task 38.9)" },
         @{ Find = '$toolsLayoutVersion = [version]"2.4.0.0"';
            Why  = "the first version published with tools\ is no longer 2.4.0.0, so a published release could be read at the wrong layout (task 38.9)" },
-        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln")';
-           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install and the cleanup tool (tasks 38.9, 38.2 and 38.8)" },
+        @{ Find = '$toolNames = @("xhciqual", "xhcisnap", "portsw", "silent", "xhcicln", "xhciinst")';
+           Why  = "tools\ no longer holds exactly the qualifier, XHCISNAP, the port switchover, the silent install, the cleanup tool and the install tool (tasks 38.9, 38.2, 38.8 and 40.6)" },
         @{ Find = '$cleanDir = Join-Path $destRoot (Get-ToolDirName -Name "xhcicln")';
            Why  = "a cut no longer stages XHCICLN.EXE and XHCICL64.EXE into tools\xhcicln\ (task 38.8)" },
         @{ Find = '$cleanExes = @("XHCICLN.EXE", "XHCICL64.EXE")';
@@ -2750,7 +2764,21 @@ try {
         @{ Find = '$cleanNewer = @($cleanSources | Where-Object { $_.LastWriteTimeUtc -gt $cleanTime })';
            Why  = "a cut no longer refuses a cleanup tool older than its sources (task 38.8)" },
         @{ Find = 'Write-GeneratedText -Path (Join-Path $cleantoolStaged "NOTICE.TXT")';
-           Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },
+           Why  = "a cut no longer writes the NOTICE.TXT recording the cleanup tool's statically linked runtimes (legal-provenance.md section 2a)" },        # The install tool (roadmap-usb4.md task 40.6, design record 23).
+        @{ Find = '$instDir = Join-Path $destRoot (Get-ToolDirName -Name "xhciinst")';
+           Why  = "a cut no longer stages XHCIINST.EXE and XHCIIN64.EXE into tools\xhciinst\ (task 40.6)" },
+        @{ Find = '$instExes = @("XHCIINST.EXE", "XHCIIN64.EXE")';
+           Why  = "a cut no longer stages both builds of the install tool, the 64-bit one a native build by design (task 40.6)" },
+        @{ Find = 'Copy-Item -LiteralPath (Join-Path $InstallToolDir "INSTALL.BAT") -Destination (Join-Path $destRoot "INSTALL.BAT") -Force';
+           Why  = "a cut no longer puts INSTALL.BAT at the version root (task 40.6, design record 23 section 2)" },
+        @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "xhciinst.c") -Macro "XHCIINST_VERSION"';
+           Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
+        @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
+           Why  = "a cut no longer refuses an install tool older than its sources (task 40.6)" },
+        @{ Find = 'throw "xhciinst\INSTALL.BAT has an LF line ending without CR: MS-DOS 7.1 loses goto labels in such a file."';
+           Why  = "a cut no longer refuses an INSTALL.BAT with LF endings (task 40.6)" },
+        @{ Find = 'Write-GeneratedText -Path (Join-Path $insttoolStaged "NOTICE.TXT")';
+           Why  = "a cut no longer writes the NOTICE.TXT recording the install tool's statically linked runtimes (legal-provenance.md section 2a)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';

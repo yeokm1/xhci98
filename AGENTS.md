@@ -229,6 +229,9 @@ xhciqual/       Phase 0 DOS hardware-qualification tool (Open Watcom).
                 runs there, and never force-add them.
 xhcisnap/       The host-side reader for the driver's log channel
                 (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
+xhciinst/       The install, update and uninstall tool (`XHCIINST.EXE`,
+                `XHCIIN64.EXE`) and the package's `INSTALL.BAT`, from
+                `3.0.0.0` (design record 23). Tracked.
 images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
@@ -686,9 +689,9 @@ rules that bind day-to-day work, and none of them is optional.
   on all four paths by it, to dirid 11 rather than 10. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
-  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, and from
-  `2.4.0.0` `XHCICLN` and `XHCICL64`) carry statically linked runtimes
-  (section 2a).
+  anywhere: the tool executables (`XHCIQUAL`, `XHCISNAP`, from
+  `2.4.0.0` `XHCICLN` and `XHCICL64`, and from `3.0.0.0` `XHCIINST` and
+  `XHCIIN64`) carry statically linked runtimes (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

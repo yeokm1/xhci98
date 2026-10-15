@@ -9,7 +9,9 @@
 ; would fall back to. The model lines and the install sections are
 ; xhcicmf.inf's (see that file's header for task 39-0.4's readings; the
 ; 64-bit guests are not read yet). make-package.ps1 stages this file as
-; nt\xhcicmf.inf, its source disk being the flavour directory above it.
+; nt\xhcicmf.inf beside its own copy of xhcicm.sys, its source disk being
+; nt\ itself (the driver store refuses a source outside the INF's
+; directory; see xhcicmf.inf's header).
 ;
 ; scripts\inf-gate\check-cm-inf.ps1 -Filter -Arch amd64 gates this file on
 ; every build.
@@ -130,7 +132,7 @@ DriverVer=10/14/2026,2.4.0.0
 %TunnelDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_000C&CC_0604
 
 [SourceDisksNames]
-1=%DiskName%,xhcicm.sys,,..
+1=%DiskName%,xhcicm.sys,,
 
 [SourceDisksFiles]
 xhcicm.sys=1
