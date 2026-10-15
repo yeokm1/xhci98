@@ -681,6 +681,10 @@ static VOID NTAPI cmThread(PVOID context)
             CmReenumService(nhi);
         }
         CmStatusPass(nhi);
+        /* The query device's snapshot, inert when the wait at the top of
+         * the loop will have no timeout. */
+        CmQueryPublish(nhi, (BOOLEAN)(!cmPolling(nhi) &&
+                                      CmLiveWaitMs(&nhi->Live) == 0));
         /* The checked flavours' emission (decision D12), from here at
          * PASSIVE_LEVEL after each pass that recorded something; the
          * release flavour's CmLogEmit does nothing. */

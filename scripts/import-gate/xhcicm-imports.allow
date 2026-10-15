@@ -15,8 +15,8 @@
 # SITES. The pool pair is held to cm_pool.obj (the HCD's rule of design
 # record 13 section 7.5, as uas_mem.obj holds xhciuas.sys's), and is
 # OPTIONAL while nothing allocates pool (the NHI's state is its device
-# extension; task 39-A.4): nothing calls either, and the
-# linker drops both. The registry pairs are held to cm_reg.obj, and to cm_statos.obj for the
+# extension; task 39-A.4): nothing allocates, and ExFreePool is called
+# only for the bus driver's IRP_MN_QUERY_ID answer (cm_qryos.c). The registry pairs are held to cm_reg.obj, and to cm_statos.obj for the
 # install tool's status record (design record 24). DbgPrint is
 # held to cm_log.obj and to the debug and qemu flavours (decision D12: the
 # release flavour prints nothing, as xhciuas.sys prints nothing), which keeps
@@ -127,7 +127,14 @@ ntoskrnl.exe!ExUnregisterCallback            all  required  SITES=cm_nvlinkos.ob
 # record 24 section 3.2): pairs xhci98.sys imports, its evidence verbatim ---
 ntoskrnl.exe!ZwSetValueKey                   all  required  SITES=cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwSetValueKey, hint FF) (+12 other 98 SE); ntkern-name (design record 13 Appendix A row 159)
 ntoskrnl.exe!RtlInitUnicodeString            all  required  SITES=cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
-ntoskrnl.exe!KeQuerySystemTime               all  required  SITES=cm_statos.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeQuerySystemTime, hint 80) (+9 other 98 SE) (design record 13 section 7.4; Appendix A row 97). The record's stamp: the two words as returned, no arithmetic
+ntoskrnl.exe!KeQuerySystemTime               all  required  SITES=cm_statos.obj,cm_qryos.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeQuerySystemTime, hint 80) (+9 other 98 SE) (design record 13 section 7.4; Appendix A row 97). The record's stamp: the two words as returned, no arithmetic; and the query device's epoch (cm_qryos.c), compared word by word
+
+# --- the query device (cm_qryos.c, design record 25 section 4.2): its
+# \DosDevices\XHCICM<n> link. xhci98.sys's own pair for its HCD<n> names,
+# its evidence verbatim. The instance id's IRP_MN_QUERY_ID answer is freed
+# through cm_pool.c's CmFree (ExFreePool, SITES=cm_pool.obj above). ---
+ntoskrnl.exe!IoCreateSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateSymbolicLink, hint 3B) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 15)
+ntoskrnl.exe!IoDeleteSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteSymbolicLink, hint 3E) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 16)
 
 [deny]
 

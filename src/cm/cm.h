@@ -34,8 +34,13 @@
  * and the pure core tbt_ring.c, tbt_icm.c, tbt_hw.c, tbt_u4cm.c and
  * tbt_topo.c.
  *
- * IRQL: as each file's header says; every object this driver creates is
- * DO_POWER_PAGABLE (the filter copies its lower device's power flags).
+ * Beside the roles, a fourth kind of device object, no PnP role: the
+ * query device of a started NHI (CM_KIND_QUERY; cm_qryos.c, design record
+ * 25 section 4), a named control device the dispatch routines tell apart
+ * by its Kind before anything else; its answer is built by cm_query.c.
+ *
+ * IRQL: as each file's header says; every PnP object this driver creates
+ * is DO_POWER_PAGABLE (the filter copies its lower device's power flags).
  */
 
 #ifndef CM_H
@@ -49,6 +54,7 @@
 #include "cm_reenum.h"
 #include "cm_statb.h"
 #include "cm_live.h"
+#include "cm_qryb.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -66,6 +72,7 @@
 #define CM_KIND_NHI    0x4E4D4358UL  /* 'XCMN' */
 #define CM_KIND_FILTER 0x464D4358UL  /* 'XCMF' */
 #define CM_KIND_CHILD  0x434D4358UL  /* 'XCMC' (record 21 section 3.2 role 3) */
+#define CM_KIND_QUERY  0x514D4358UL  /* 'XCMQ': the query device, cm_qryos.c */
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
@@ -332,7 +339,39 @@ typedef struct _CM_NHI {
     /* The status record for the install tool's viewer (cm_statos.c,
      * design record 24 section 3). */
     CM_STATUS_PUB StatusPub;
+
+    /* The query device (cm_qryos.c, design record 25 section 4): set and
+     * cleared by the PnP path alone, cleared only once the thread has
+     * ended; the epoch, location and instance id taken at its creation;
+     * QueryBuf and QueryExt the thread's own, the answer it builds before
+     * publishing it into the device's extension. */
+    PDEVICE_OBJECT QueryDev;
+    ULONG QueryIndex;
+    ULONG QueryUnlinked;
+    ULONG QueryEpochLo;
+    ULONG QueryEpochHi;
+    ULONG QueryBdf;
+    ULONG QueryIdBytes;
+    char QueryId[CM_Q_ID_MAX];
+    UCHAR QueryExt[CM_ST_MAX_ROUTERS * CM_Q_EXT_BYTES];
+    UCHAR QueryBuf[CM_Q_BUILD_MAX];
+    ULONG QueryLastBytes;   /* the answer last published, for its content */
+    UCHAR QueryLast[CM_Q_BUILD_MAX];    /* generation                    */
 } CM_NHI, *PCM_NHI;
+
+/* The query device's extension (CM_KIND_QUERY): no lower object, no
+ * pointer to its NHI. Lock guards every field after it. */
+typedef struct _CM_QUERY_DEV {
+    CM_COMMON Common;
+    KSPIN_LOCK Lock;
+    ULONG Index;
+    ULONG Connected;        /* 0 once its NHI stopped or left            */
+    ULONG Stopping;         /* a stop or removal began                   */
+    ULONG Pass;             /* publishes since this start, past 0 to 1   */
+    ULONG PassTick;         /* the tick count's low word at the last     */
+    ULONG Bytes;
+    UCHAR Answer[CM_Q_BUILD_MAX];
+} CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
 #define CM_SNAP_MAX 32
@@ -513,6 +552,22 @@ VOID CmStatusOpen(PCM_NHI nhi);
 VOID CmStatusClose(PCM_NHI nhi);
 VOID CmStatusPass(PCM_NHI nhi);
 VOID CmStatusStopped(PCM_NHI nhi);
+/* XhciCmQueryName (REG_SZ) in the hardware key, empty to withdraw it;
+ * PnP path, the key open. */
+VOID CmStatusQueryName(PCM_NHI nhi, PCUNICODE_STRING name);
+
+/* cm_qryos.c (design record 25 section 4): CmQueryInit in DriverEntry;
+ * CmQueryOpen after a start that succeeded; CmQueryStopping as a stop,
+ * surprise removal or removal begins; CmQueryClose once the thread has
+ * ended (idempotent); CmQueryPublish after each thread pass, `inert` when
+ * the thread will next wait with no timeout; CmQueryDispatch for every
+ * request to a CM_KIND_QUERY object. */
+VOID CmQueryInit(VOID);
+VOID CmQueryOpen(PCM_NHI nhi);
+VOID CmQueryStopping(PCM_NHI nhi);
+VOID CmQueryClose(PCM_NHI nhi);
+VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert);
+NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp);
 
 /* cm_log.c */
 VOID CmLogInit(PCM_NHI nhi);

@@ -33,7 +33,8 @@
  * IRQL: PASSIVE_LEVEL. CmStatusOpen in the PnP start's dispatch, before the
  * thread's start work; CmStatusClose in the removal's dispatch, after the
  * stop (a start that failed before the thread ran leaves its handles to
- * it, or to the next CmStatusOpen); the rest on the NHI's
+ * it, or to the next CmStatusOpen); CmStatusQueryName in the PnP path
+ * while the key is open (cm_qryos.c); the rest on the NHI's
  * connection-manager thread only, no lock held.
  */
 
@@ -294,6 +295,7 @@ VOID CmStatusOpen(PCM_NHI nhi)
                ((nhi->Ids.Device & 0xFFFFUL) << 16);
     in.Stage = CM_ST_STAGE_STOPPED;
     bytes = CmStatusBuild(s->Built, &in, NULL, NULL, NULL);
+    s->BuiltBytes = bytes;
     cmStPublish(nhi, bytes, TRUE);
 }
 
@@ -309,17 +311,41 @@ VOID CmStatusPass(PCM_NHI nhi)
     ULONG bytes;
 
     s = &nhi->StatusPub;
-    if (s->DevKey == NULL || nhi->Stage == CM_STAGE_STOPPED) {
+    if (nhi->Stage == CM_STAGE_STOPPED) {
         return;
     }
-    if (!s->Started) {
-        s->Started = 1;
-        s->LastBytes = 0;
+    if (s->DevKey != NULL) {
+        if (!s->Started) {
+            s->Started = 1;
+            s->LastBytes = 0;
+        }
+        cmStReadAsk(nhi);
     }
-    cmStReadAsk(nhi);
+    /* Built whether or not the key opened: the query device frames it
+     * (cm_qryos.c, design record 25 section 4). */
     cmStInput(nhi, &in);
     bytes = CmStatusBuild(s->Built, &in, &nhi->Icm, &nhi->U4, &nhi->Binds);
+    s->BuiltBytes = bytes;
+    if (s->DevKey == NULL) {
+        return;
+    }
     cmStPublish(nhi, bytes, FALSE);
+}
+
+/* XhciCmQueryName: the query device's name, or empty once it is gone
+ * (cm_qryos.c: ZwDeleteValueKey has no Windows 98 evidence). Best
+ * effort, as the record. */
+VOID CmStatusQueryName(PCM_NHI nhi, PCUNICODE_STRING name)
+{
+    UNICODE_STRING value;
+
+    if (nhi->StatusPub.DevKey == NULL) {
+        return;
+    }
+    RtlInitUnicodeString(&value, L"XhciCmQueryName");
+    (VOID)ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &value, 0, REG_SZ,
+                        (PVOID)name->Buffer,
+                        (ULONG)name->Length + sizeof(WCHAR));
 }
 
 VOID CmStatusStopped(PCM_NHI nhi)
@@ -338,6 +364,7 @@ VOID CmStatusStopped(PCM_NHI nhi)
         in.Profile = nhi->Profile;
         in.Inert = nhi->Inert;
         bytes = CmStatusBuild(s->Built, &in, NULL, NULL, NULL);
+        s->BuiltBytes = bytes;
         s->Dirty = 1;
         cmStPublish(nhi, bytes, FALSE);
     }

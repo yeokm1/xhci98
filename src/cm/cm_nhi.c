@@ -1945,6 +1945,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     if (!NT_SUCCESS(status)) {
         /* No thread, no client: started and inert. */
         cmInert(nhi, CM_INERT_RESOURCES);
+        CmQueryOpen(nhi);
         return STATUS_SUCCESS;
     }
     CmThrRunPnp(nhi, CM_WORK_START);
@@ -1956,12 +1957,17 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
         nhi->Started = 0;
         return nhi->StartStatus;
     }
+    CmQueryOpen(nhi);
     return STATUS_SUCCESS;
 }
 
+/* The query device (cm_qryos.c) is told first and deleted once the
+ * thread has ended: its answers say "stopping" meanwhile. */
 static VOID cmNhiStop(PCM_NHI nhi, ULONG reason)
 {
+    CmQueryStopping(nhi);
     if (!nhi->Started) {
+        CmQueryClose(nhi);
         return;
     }
     if (nhi->ThreadRunning) {
@@ -1972,6 +1978,7 @@ static VOID cmNhiStop(PCM_NHI nhi, ULONG reason)
         CmThrStop(nhi);
         nhi->PnpStopPending = 0;
     }
+    CmQueryClose(nhi);
     nhi->Stage = CM_STAGE_STOPPED;
     nhi->Started = 0;
     nhi->Stops++;

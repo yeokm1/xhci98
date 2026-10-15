@@ -94,6 +94,10 @@ ntoskrnl.exe!ExUnregisterCallback          all    required  SITES=cm_nvlinkos.ob
 ntoskrnl.exe!ZwSetValueKey                 all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!RtlInitUnicodeString          all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
 
+# --- the query device (cm_qryos.c, design record 25 section 4.2) ---
+ntoskrnl.exe!IoCreateSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!IoDeleteSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag.

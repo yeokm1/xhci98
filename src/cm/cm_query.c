@@ -250,6 +250,58 @@ ULONG CmQueryBuild(UCHAR *buf, const CM_QUERY_IN *in)
     return at + id;
 }
 
+/* A byte the content generation does not follow. */
+static BOOLEAN cmQMasked(const UCHAR *a, ULONG i)
+{
+    ULONG rec;
+    ULONG r;
+
+    if ((i >= CM_Q_O_PASS && i < CM_Q_O_PASS_AGE_MS + 4) ||
+        (i >= CM_Q_O_CONTENT_GEN && i < CM_Q_O_CONTENT_GEN + 4)) {
+        return TRUE;
+    }
+    rec = cmQGet(a, CM_Q_O_REC_OFFSET);
+    if (rec == 0 || i < rec || i >= rec + CM_ST_HDR_BYTES) {
+        return FALSE;
+    }
+    r = i - rec;
+    return (BOOLEAN)((r >= CM_ST_O_GENERATION && r < CM_ST_O_UPTIME_S + 4) ||
+                     (r >= CM_ST_O_SYSTIME_LO && r < CM_ST_O_ECHO + 4));
+}
+
+ULONG CmQueryContentGen(UCHAR *next, ULONG nextBytes, const UCHAR *prev,
+                        ULONG prevBytes)
+{
+    ULONG gen;
+    ULONG i;
+    BOOLEAN changed;
+
+    if (prev == NULL || prevBytes < CM_Q_HDR_BYTES ||
+        cmQGet(prev, CM_Q_O_CONTENT_GEN) == 0) {
+        gen = 1;
+    } else {
+        gen = cmQGet(prev, CM_Q_O_CONTENT_GEN);
+        changed = (BOOLEAN)(prevBytes != nextBytes ||
+                            cmQGet(prev, CM_Q_O_REC_OFFSET) !=
+                                cmQGet(next, CM_Q_O_REC_OFFSET));
+        for (i = 0; i < nextBytes && !changed; i++) {
+            if (prev[i] != next[i] && !cmQMasked(next, i)) {
+                changed = TRUE;
+            }
+        }
+        if (changed) {
+            gen++;
+            if (gen == 0) {
+                gen = 1;
+            }
+        }
+    }
+    if (nextBytes >= CM_Q_HDR_BYTES) {
+        cmQPut(next, CM_Q_O_CONTENT_GEN, gen);
+    }
+    return gen;
+}
+
 ULONG CmQueryAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
                     ULONG pass, ULONG ageMs, BOOLEAN stopping, PULONG info)
 {

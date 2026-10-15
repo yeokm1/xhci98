@@ -66,7 +66,7 @@ static void test_layout(void)
     CHECK_EQ(CM_Q_IOCTL, (0x22UL << 16) | (0xA40UL << 2), "the control code");
     CHECK_EQ(CM_Q_MAGIC, 'X' | ('C' << 8) | ('M' << 16) | ((ULONG)'Q' << 24),
              "'XCMQ' in byte order");
-    CHECK_EQ(CM_Q_O_ID_BYTES + 4 + 4, CM_Q_HDR_BYTES, "4 bytes reserved");
+    CHECK_EQ(CM_Q_O_CONTENT_GEN + 4, CM_Q_HDR_BYTES, "the generation ends the header");
     CHECK_EQ(CM_Q_X_FLAGS + 4 + 8, CM_Q_EXT_BYTES, "8 bytes reserved");
     CHECK(CM_Q_BUILD_MAX <= CM_Q_ASK_BYTES, "one ask holds the largest");
     CHECK_EQ(CM_Q_BUILD_MAX, 64 + 3200 + 768 + 200, "the largest answer");
@@ -159,7 +159,7 @@ static void test_u4(void)
     CHECK_EQ(get32(built, CM_Q_O_NHI_BDF), 0x0500UL, "05:00.0");
     CHECK_EQ(get32(built, CM_Q_O_ID_OFFSET), 64 + r + 96, "id last");
     CHECK_EQ(get32(built, CM_Q_O_ID_BYTES), strlen(id), "id length");
-    CHECK_EQ(get32(built, 60), 0, "reserved 0");
+    CHECK_EQ(get32(built, CM_Q_O_CONTENT_GEN), 0, "no content generation yet");
     CHECK(memcmp(built + 64, rec, r) == 0, "the record byte for byte");
     CHECK(memcmp(built + 64 + r, ext, 96) == 0, "the extensions");
     CHECK(memcmp(built + 64 + r + 96, id, strlen(id)) == 0, "the id, no NUL");
@@ -231,7 +231,7 @@ static void test_answer(void)
         192, 0, 0, 0, 0, 0, 0, 0,           /* ext at 64 + 128; 0 x 32 */
         0xEF, 0xCD, 0xAB, 0x89, 0x34, 0x12, 0xDC, 0x01,
         0x00, 0x05, 0, 0, 192, 0, 0, 0,     /* 05:00.0; id at 192 */
-        0, 0, 0, 0, 0, 0, 0, 0              /* id bytes patched; reserved */
+        0, 0, 0, 0, 0, 0, 0, 0              /* id bytes patched; content gen */
     };
     UCHAR want[64];
 
@@ -337,6 +337,68 @@ static void test_edges(void)
     CHECK_EQ(get32(built, CM_Q_O_REC_OFFSET), 0, "no record offset");
 }
 
+/* The content generation: the first is 1; the registry-only fields of
+ * the record, the pass and its age move nothing; a router change, the
+ * live state or a flag does. */
+static UCHAR prevAns[CM_Q_BUILD_MAX];
+
+static void test_content_gen(void)
+{
+    CM_STATUS_IN in;
+    CM_QUERY_IN q;
+    ULONG r;
+    ULONG b;
+    ULONG pb;
+
+    memset(&u4, 0, sizeof(u4));
+    u4.PortCount = 1;
+    u4.Ports[0].Index = 1;
+    u4.Ports[0].State = TBT_U4_UP;
+    u4.Ports[0].Dev.Present = TRUE;
+    base_in(&in, CM_ST_CM_USB4);
+    r = CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    q_in(&q, r, 0);
+    pb = CmQueryBuild(prevAns, &q);
+    CHECK_EQ(get32(prevAns, CM_Q_O_CONTENT_GEN), 0, "the build leaves it 0");
+    CHECK_EQ(CmQueryContentGen(prevAns, pb, NULL, 0), 1, "the first is 1");
+    CHECK_EQ(get32(prevAns, CM_Q_O_CONTENT_GEN), 1, "written");
+
+    CmStatusStamp(rec, 9, 1234, 0x11111111UL, 0x01DC0000UL);
+    put32(rec, CM_ST_O_ECHO, 0x5EED);
+    b = CmQueryBuild(built, &q);
+    put32(built, CM_Q_O_PASS, 5);
+    put32(built, CM_Q_O_PASS_AGE_MS, 77);
+    CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 1,
+             "stamp, echo, pass and age: no change");
+
+    q.Live = CM_LIVE_SUSPECT;
+    b = CmQueryBuild(built, &q);
+    CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 2, "the live state");
+    memcpy(prevAns, built, b);
+    pb = b;
+    q.Inert = 1;
+    b = CmQueryBuild(built, &q);
+    CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 3, "a flag");
+    memcpy(prevAns, built, b);
+    pb = b;
+    u4.Ports[0].State = TBT_U4_HELD;
+    r = CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    q_in(&q, r, 0);
+    q.Live = CM_LIVE_SUSPECT;
+    q.Inert = 1;
+    b = CmQueryBuild(built, &q);
+    CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 4, "a router entry");
+    memcpy(prevAns, built, b);
+    pb = b;
+    u4.PortCount = 0;
+    r = CmStatusBuild(rec, &in, NULL, &u4, NULL);
+    q_in(&q, r, 0);
+    b = CmQueryBuild(built, &q);
+    CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 5, "a router left");
+    put32(prevAns, CM_Q_O_CONTENT_GEN, 0xFFFFFFFFUL);
+    CHECK_EQ(CmQueryContentGen(built, b, prevAns, pb), 1, "past 0 to 1");
+}
+
 static void test_age(void)
 {
     CHECK_EQ(CmQueryAgeMs(100, 100, 156250), 0, "same tick");
@@ -355,6 +417,7 @@ int main(void)
     test_icm();
     test_answer();
     test_edges();
+    test_content_gen();
     test_age();
 
     printf("\n%d checks, %d failures\n", checks, failures);

@@ -56,10 +56,19 @@ ULONG CmQueryExt(UCHAR *ext, ULONG room, const UCHAR *record,
                  ULONG recordBytes, const TBT_ICM *icm, const TBT_U4CM *u4);
 
 /* The answer into buf (at least CM_Q_BUILD_MAX), PASS 0, the age unknown,
- * no stopping flag; returns its length. A record shorter than its header
+ * no stopping flag, content generation 0; returns its length. A record shorter than its header
  * or longer than CM_ST_MAX_BYTES, or whose own size disagrees with its
  * router count, is cut to its header and router count 0's length. */
 ULONG CmQueryBuild(UCHAR *buf, const CM_QUERY_IN *in);
+
+/* The content generation (CM_Q_O_CONTENT_GEN) of a built answer `next`,
+ * written into it and returned: 1 where there is no previous one (`prev`
+ * NULL or prevBytes 0, the start's first); the previous one's where the
+ * two are equal but for the pass counter, its age, the generation itself
+ * and the record's registry-only fields (its generation, uptime, system
+ * time and echo); else the previous one's plus one, past 0 to 1. */
+ULONG CmQueryContentGen(UCHAR *next, ULONG nextBytes, const UCHAR *prev,
+                        ULONG prevBytes);
 
 /* The IOCTL's answer from a built answer of `bytes`, into out (room
  * bytes). Returns CM_Q_ANS_*; *info the bytes written. */
