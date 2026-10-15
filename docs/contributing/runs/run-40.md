@@ -335,3 +335,28 @@ the arrival adapter in the response's Adapter Num (`usb4-fabric.c`
 `tbt_ring.c` therefore compares the Adapter Num only outside the router
 space (route, address, size, space and sequence number still compared
 there).
+
+## 40-A.7 - The `nvme98` statement under the USB4 profile
+
+**Verdict: built and host-tested; no guest leg read yet** (2026-10-15).
+The channel of task 39-A.7 (run-39.md, "39-A.7"; record 21 section 7.2)
+is wired to the USB4 driver half: `cmU4Activate` registers
+`CmNvlinkU4Up` and `CmNvlinkU4Down` through `CmNhiSetU4Hooks`; the UP hook
+publishes the new establishment's `UP` before anything can expose the
+endpoint (its member by correspondence, or every exclusive member when
+the correspondence is not known); the DOWN hook makes the statement only
+with `TBT_U4_LINKDOWN.PathClosed`, the port's member known, that member
+the emulator's bridge (1B36h above it, SHPC, no PCI Express capability),
+an admitted operating system (2000 x86, XP x64), the slot read empty
+within what is left of the 3 s, and at least 100 ms left; the seam waits
+for the acknowledgement before the removal. `CmNvlinkService` gives the
+core one presence sample per port each pass (the anchor of record 22
+section 10.3). The conditions are `test_cm_nvlink`'s
+(`CmNvlinkU4Verdict`, every branch).
+
+**Owed:** a Windows 2000 guest on the `usb4-generic` profile with the
+software connection manager admitted and `nvme98`'s G3 prototype bound
+(the leg of run-39.md's 39-A.7 table, on the USB4 profile): the anchor's
+age at the statement, the statement after the cutoff, the
+acknowledgement before the invalidation, the 5 s bound with an idle
+receiver; and the 9x half once `nvme98` has one.

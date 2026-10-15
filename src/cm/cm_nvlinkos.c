@@ -245,7 +245,7 @@ static BOOLEAN cmNvEmulator(ULONG bridge)
  * bridge is exclusive before its filter's first BusRelations answer (the
  * baseline) makes it active, and that answer may already report the
  * endpoint, so its UP must not wait for it. */
-static BOOLEAN cmNvActive(PCM_NHI nhi, ULONG bridge)
+static BOOLEAN cmNvExclusive(PCM_NHI nhi, ULONG bridge)
 {
     ULONG i;
 
@@ -596,7 +596,7 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh)
     }
     /* Only a bridge this domain owns exclusively: one another domain also
      * claims is ambiguous for both, and its entries are not ours. */
-    if (!cmNvActive(nhi, bridge)) {
+    if (!cmNvExclusive(nhi, bridge)) {
         CmLogNote(nhi, "cm.nvlink.up.not-member", bridge);
         return 0;
     }
@@ -679,7 +679,7 @@ static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
     ULONG now;
     KIRQL irql;
 
-    if (!cmNvActive(nhi, bridge)) {
+    if (!cmNvExclusive(nhi, bridge)) {
         return 0;
     }
     now = cmNvNow(nhi);

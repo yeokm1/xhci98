@@ -624,3 +624,68 @@ refusal path is in the code, logged and counted, never forced); ME; XP and
 later; `SurpriseRemovalOK` set together with `Removable` on 2000 (a variant
 build, owed to 39-V.2); the Titan Ridge model; the `release` and `debug`
 flavours.
+
+## 39-A.7 - The `nvme98` link-state channel (ICM profile)
+
+**Verdict: on Windows 2000 the channel meets its three obligations on the
+emulator, against `nvme98`'s own receiver; on Windows 98 SE the image
+loads and the record is written, and no statement is possible there**
+(2026-10-15). With `xhcicm.sys` bound to the emulator's Alpine Ridge NHI
+and `nvme98`'s gate-G3 prototype bound to the tunnelled NVMe controller,
+the table entry was published `UP` before `nvme98`'s `HwFindAdapter` read
+it, the slot-empty reading after a surprise unplug produced
+`DOWN_QUIESCED`, `nvme98` applied it and acknowledged, and the removal
+started only after the acknowledgement - or after 5 s when none came.
+
+**The vehicle.** Development host A, TCG, `usb4-emu`'s fork through task
+39-0.7's launcher (`-Usb4Profile tb3`, `Bios OFF_OFF`, `-DeviceAtBoot 0`,
+slot 1: QMP 47922, VNC 47923), `-Trace` with `usb4_tp_*`, `usb4_dbg_*` and
+`usb4_h_*`, and `usb4-debug-port` for `nvme98`'s stage markers.
+`win2k-xonly` from a copy of the 39-A.5 overlay (`vm\usb4\nvlink-2k`,
+`xhcicm.inf` and the filter already installed); the `qemu` flavour of
+`xhcicm.sys` copied over the bound one and a restart. The receiver:
+`nvme98`'s prototype of its decision MD-6, branch `phase0-g3g6` at
+`f348a2d`, the `free-dbgport` x86 build from that worktree's `out\`
+(read-only use, copied over `nvme98` 0.1.0.0's image; SHA-256
+`9805cb87...85bf8`). Its stage codes: `0x95` attach (bit 16 table found,
+bit 17 entry found, bits 31:24 the generation recorded), `0x96` the
+statement seen, `0x92` the result. Load: `nvme98`'s G3 workload `gio`
+(its `tests\gio`, built here with MSVC 6.0), unbuffered reads, queue depth
+8, 64 KiB, on `\.\PhysicalDrive2` (drive 1 is the transfer disk). Times
+below are the host trace's, from T0 = the tunnel gate closing.
+
+| Leg | Driver build | What the trace and the log show |
+|---|---|---|
+| tunnel up | `f1c11201` (and `0c107673`) | `cm.nvlink.nt=80000000` (callback registered, no query yet); `cm.action.tunnel-up`, then `cm.nvlink.up=01000401` (new entry, bus 4, slot 1, generation 1) before the invalidation; `nvme98` `0x95 arg=01030000`: table found, entry found, generation 1 recorded at `HwFindAdapter` |
+| unplug under load (`device_del enc0`) | `f1c11201` | `cm.nvlink.icm-down=00000402` (verdict SEND; the seam's poll read nothing, the channel's own SHPC reading DOWN), `cm.nvlink.down=00000001`, `cm.nvlink.await=00000064` (acknowledged after 100 ms), then `cm.nvlink.retired` and the invalidation. Trace: stage-2 cutoff T0+0.5 ms, `nvme98` gone T0+1.9 ms, `0x96` (generation 1 for recorded 1) T0+129 ms, `0x92` accepted; the statement's receipt follows the cutoff |
+| the same, earlier build | `0c107673` | ack after 60 ms; `0x96` at T0+72.5 ms with 1 held request completed (`0x84`), memory released (`0x93`), `BusChangeDetected` (`0x8A`) |
+| re-plug | `f1c11201` | the old entry retired (`cm.nvlink.retired`), `cm.nvlink.up=02000401` (same entry, generation 3); `nvme98` `0x95 arg=03030000` |
+| idle unplug (no I/O) | `f1c11201` | statement made, no `0x96` (an idle `nvme98` reads the table only at its next request, G3 run C); `cm.nvlink.await=0000138F`: the wait ran to its 5 s bound, then the removal |
+| `nvme98` absent (image renamed, restart, plug, unplug) | `0c107673` | `cm.nvlink.await=00000000`: no driver ever asked for the table, so no wait |
+
+**Windows 98 SE** (`vm\usb4\nvlink-98`, a copy of the 39-A.4 overlay,
+`XhciCmApprove` set to 1 in its driver key): the image with the three
+callback-object imports loaded and bound (`cm.bind=0`,
+`cm.nvlink.9x=00000000`), which is the import gate's authoritative check
+for `ExCreateCallback`, `ExRegisterCallback` and `ExUnregisterCallback`
+on 98 SE (their only Windows 98 evidence is the name in `ntkern.vxd`).
+The first record build put the record under `HKEY_DYN_DATA`; the VMM's
+`_RegCreateKey` answered error 5 there (`cm.nvlink.9x.record=00000005`),
+so the record moved to `HKLM\System\CurrentControlSet\Services\nvme98`,
+value `LinkState`: `cm.nvlink.9x.record=80000000`, and `regedit /e` read
+it back as `4e,39,38,4c, 01,00,00,00, a0,48,46,c1, 10,01,00,00, ee,3e,80,ce`
+(signature, version 1, the table at C14648A0h, 110h bytes, the cookie).
+At the tunnel up the scan of the tunnel's secondary bus found no function
+answering through `HalGetBusData` within its 1 s (`cm.nvlink.up.waited=
+00041400`), so no `UP` was published on 98 SE; why the endpoint does not
+answer there before `Reenumerate_DevNode` is not read. No 9x statement is
+made in any case (nothing reads the SHPC slot there, record 21 section
+7.2), and `nvme98`'s 9x receiver does not exist (its MD-5: designed, not
+prototyped), so the 9x half's runtime behaviour beyond the record is not
+readable yet.
+
+**Not read here.** XP x64 (the amd64 build; the other admitted pair), XP
+x86, Vista and 7 (not admitted: the statement is withheld there by
+design); the `REMOVE_PENDING` handshake (no receiver, and no caller in
+the ICM profile); a hardware tunnel port (no statement by design); the
+`release` and `debug` flavours in a guest.
