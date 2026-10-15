@@ -90,7 +90,11 @@ typedef struct _CM_CFGWK {
     ULONG ReqReenum;        /* members to re-enumerate                    */
     ULONG ReqVanish;        /* ... removing vanished children first       */
     ULONG ReqMark;          /* a marking window to open                   */
-    ULONG ReqPrune;         /* a walk forgetting the children gone        */
+    ULONG PruneOwed;        /* members owing a complete walk forgetting
+                               the children gone (bit per index)          */
+    ULONG PruneSeq;         /* bumped by every CmCfgwkPrune               */
+    ULONG PruneTried;       /* the worker's: PruneSeq at its last try     */
+    ULONG PruneAt;          /* ... and the tick count then                */
     ULONG Retry;            /* member calls owed after a failure          */
     ULONG RetryVanish;
     ULONG RetryAt;          /* ms clock of the last failure               */
@@ -415,27 +419,54 @@ static ULONG cmWkFindDevnode(PCM_CFGWK w, ULONG i)
     return 0;
 }
 
-/* The children of `devnode`, up to `room`. */
-static ULONG cmWkChildren(PCM_CFGWK w, ULONG devnode, PULONG out, ULONG room)
+/*
+ * The children of `devnode`, up to `room`. *complete is TRUE only when the
+ * list ended normally (no child, or no further sibling: CR_NO_SUCH_DEVNODE
+ * or a zero handle) - never after an error, a stop, a stale operation or
+ * a list cut at its room; only a complete list may stand for the set of
+ * present children.
+ */
+static ULONG cmWkChildren(PCM_CFGWK w, ULONG devnode, PULONG out, ULONG room,
+                          BOOLEAN *complete)
 {
     ULONG n;
     ULONG node;
+    ULONG cr;
 
     n = 0;
-    if (!cmWkGo(w) ||
-        CmCfgmgChild(&w->Cfgmg, devnode, &node) != CMG_CR_SUCCESS) {
+    *complete = FALSE;
+    if (!cmWkGo(w)) {
         return 0;
     }
-    while (node != 0 && n < room) {
+    cr = CmCfgmgChild(&w->Cfgmg, devnode, &node);
+    if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+        *complete = TRUE;
+        return 0;
+    }
+    if (cr != CMG_CR_SUCCESS) {
+        return 0;
+    }
+    for (;;) {
+        if (node == 0) {
+            *complete = TRUE;
+            return n;
+        }
+        if (n == room) {
+            return n;
+        }
         out[n++] = node;
         if (!cmWkGo(w)) {
-            break;
+            return n;
         }
-        if (CmCfgmgSibling(&w->Cfgmg, node, &node) != CMG_CR_SUCCESS) {
-            break;
+        cr = CmCfgmgSibling(&w->Cfgmg, node, &node);
+        if (cr == CMG_CR_NO_SUCH_DEVNODE) {
+            *complete = TRUE;
+            return n;
+        }
+        if (cr != CMG_CR_SUCCESS) {
+            return n;
         }
     }
-    return n;
 }
 
 /* The ids answering on the bridge's secondary bus; room + 1 when the bus
@@ -520,23 +551,28 @@ static VOID cmWkKeepPresent(PCM_CFGWK w, ULONG i, const ULONG *children,
     }
 }
 
-/* A prune walk of member i alone (CmCfgwkPrune). */
-static VOID cmWkPrune(PCM_CFGWK w, ULONG i)
+/*
+ * A prune walk of member i alone (CmCfgwkPrune), outside any request's
+ * operation (it only observes, so only a stop ends it): TRUE when the
+ * walk was complete and the set pruned.
+ */
+static BOOLEAN cmWkPrune(PCM_CFGWK w, ULONG i)
 {
     ULONG bridge;
     ULONG children[CM_WK_KNOWN];
     ULONG count;
+    BOOLEAN complete;
 
     bridge = cmWkFindDevnode(w, i);
     if (bridge == 0 || !cmWkGo(w)) {
-        return;
+        return FALSE;
     }
-    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN);
-    if (count < CM_WK_KNOWN) {
-        /* Complete only: a list cut at its room is not taken as the
-         * present set. */
-        cmWkKeepPresent(w, i, children, count);
+    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
+    if (!complete || !cmWkGo(w)) {
+        return FALSE;
     }
+    cmWkKeepPresent(w, i, children, count);
+    return TRUE;
 }
 
 /*
@@ -552,9 +588,11 @@ static VOID cmWkPrune(PCM_CFGWK w, ULONG i)
  * already have rescanned the bridge) is followed here by its own
  * Reenumerate_DevNode of `bridge`, so a device re-plugged meanwhile and
  * removed with the old child comes back whoever else has rescanned.
- * Returns TRUE while the request is current (the caller goes on); FALSE
- * when it went stale, before the query (nothing done) or after a
- * completed removal and its rescan: the caller abandons the rest. Any
+ * Returns TRUE while the request is current (the caller goes on), and
+ * after a refused query whatever the request's state (nothing was changed;
+ * the caller's own next check decides); FALSE when it went stale, before
+ * the query (nothing done) or after a completed removal and its rescan:
+ * the caller abandons the rest. Any
  * orderly-remove handshake with the child's driver wraps this function.
  */
 static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
@@ -622,6 +660,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     ULONG id;
     ULONG answers;
     ULONG cr;
+    BOOLEAN complete;
     char text[CMG_MAX_DEVICE_ID_LEN + 1];
 
     p = &w->Port[i];
@@ -636,10 +675,12 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
     }
     if (removeVanished) {
         idCount = cmWkBusIds(p->Bdf, ids, CM_WK_BUS_FUNCTIONS);
+        complete = FALSE;
         count = idCount <= CM_WK_BUS_FUNCTIONS
-                    ? cmWkChildren(w, bridge, children, CM_WK_KNOWN)
+                    ? cmWkChildren(w, bridge, children, CM_WK_KNOWN,
+                                   &complete)
                     : 0;
-        if (idCount <= CM_WK_BUS_FUNCTIONS && count < CM_WK_KNOWN) {
+        if (complete) {
             cmWkKeepPresent(w, i, children, count);
         }
         for (c = 0; c < count; c++) {
@@ -693,13 +734,14 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
     ULONG status;
     ULONG problem;
     ULONG cr;
+    BOOLEAN complete;
 
     p = &w->Port[i];
     bridge = cmWkFindDevnode(w, i);
     if (bridge == 0) {
         return;
     }
-    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN);
+    count = cmWkChildren(w, bridge, children, CM_WK_KNOWN, &complete);
     if (!cmWkGo(w)) {
         return;
     }
@@ -731,7 +773,10 @@ static VOID cmWkMark(PCM_CFGWK w, ULONG i, BOOLEAN mark)
             w->C.MarkFailures++;
         }
     }
-    if (!cmWkGo(w)) {
+    if (!complete || !cmWkGo(w)) {
+        /* Only a complete list replaces the set: a partial one would
+         * forget children still present (each marked one reads removable
+         * at the next walk all the same). */
         return;
     }
     for (c = 0; c < count; c++) {
@@ -807,6 +852,9 @@ static VOID cmWkThread(PVOID context)
     ULONG retried;
     ULONG done;
     ULONG prune;
+    ULONG owed;
+    ULONG pruned;
+    ULONG pruneSeq;
     ULONG i;
     BOOLEAN open;
     BOOLEAN go;
@@ -842,8 +890,19 @@ static VOID cmWkThread(PVOID context)
             w->MarkOpen = 1;
             w->MarkFrom = cmWkNowTicks();
         }
-        prune = w->ReqPrune;
-        w->ReqPrune = 0;
+        prune = w->PruneOwed;
+        owed = prune;
+        pruneSeq = w->PruneSeq;
+        if (prune != 0 && pruneSeq == w->PruneTried &&
+            cmWkSince(w->PruneAt) < CM_WK_RETRY_MS) {
+            /* A walk that failed is tried again at the retry interval,
+             * or at once for a newer prune. */
+            prune = 0;
+        }
+        if (prune != 0) {
+            w->PruneTried = pruneSeq;
+            w->PruneAt = cmWkNowTicks();
+        }
         w->InCall = 1;
         KeReleaseSpinLock(&w->Lock, irql);
 
@@ -855,21 +914,34 @@ static VOID cmWkThread(PVOID context)
         failedVanish = 0;
         done = 0;
         go = TRUE;
-        if (w->OpenState == CM_CFGWK_OPEN_OK && prune) {
+        pruned = 0;
+        if (w->OpenState == CM_CFGWK_OPEN_OK && prune != 0) {
+            /* The prune debt is paid first, before any re-enumeration of
+             * this pass can bring a child back under a freed handle; it
+             * is cleared only by a complete walk (below, under the lock,
+             * and only if no newer prune came meanwhile). */
             for (i = 0; i < w->Members && go; i++) {
-                cmWkOp(w, i, cmWkGenOf(w, i));
+                if ((prune & (1UL << i)) == 0) {
+                    continue;
+                }
                 cmWkLeave(w);
                 go = cmWkEnter(w);
-                if (go && cmWkGo(w)) {
-                    cmWkPrune(w, i);
+                if (go && cmWkPrune(w, i)) {
+                    pruned |= 1UL << i;
                 }
             }
-            cmWkOp(w, CM_WK_NO_OP, 0);
         }
         if (go && w->OpenState == CM_CFGWK_OPEN_OK) {
             for (i = 0; i < w->Members; i++) {
                 if ((reenum & (1UL << i)) == 0 ||
                     !cmWkCurrent(w, i, gen[i])) {
+                    continue;
+                }
+                if ((owed & ~pruned & (1UL << i)) != 0) {
+                    /* Its prune walk is still owed: no re-enumeration
+                     * before it, tried again later. */
+                    failed |= 1UL << i;
+                    failedVanish |= vanish & (1UL << i);
                     continue;
                 }
                 /* Between members the stop may take its turn. */
@@ -908,6 +980,9 @@ static VOID cmWkThread(PVOID context)
 
         KeAcquireSpinLock(&w->Lock, &irql);
         w->InCall = 0;
+        if (w->PruneSeq == pruneSeq) {
+            w->PruneOwed &= ~pruned;
+        }
         for (i = 0; i < w->Members; i++) {
             /* A failure is owed only while its request is still the
              * member's latest: a newer post redoes it anyway. */
@@ -923,7 +998,7 @@ static VOID cmWkThread(PVOID context)
             w->MarkOpen = 1;
             w->MarkFrom = cmWkNowTicks();
         }
-        timed = (BOOLEAN)(w->Retry != 0 || w->MarkOpen);
+        timed = (BOOLEAN)(w->Retry != 0 || w->MarkOpen || w->PruneOwed != 0);
         if (w->Exit) {
             KeReleaseSpinLock(&w->Lock, irql);
             break;
@@ -1033,7 +1108,9 @@ VOID CmCfgwkPrune(PCM_CFGWK w)
     KIRQL irql;
 
     KeAcquireSpinLock(&w->Lock, &irql);
-    w->ReqPrune = 1;
+    w->PruneOwed = (w->Members >= 32) ? 0xFFFFFFFFUL
+                                      : (1UL << w->Members) - 1;
+    w->PruneSeq++;
     KeSetEvent(&w->Wake, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&w->Lock, irql);
 }

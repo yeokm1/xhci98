@@ -1315,6 +1315,13 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
          * member the rediscovery finds (cmDiscoverAndList). */
         r->DebtPending = 1;
     }
+    if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
+        r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
+        /* Whatever XhciCmReenum says: the known children are pruned to
+         * those present, so a child the user removed is forgotten before
+         * a re-plug reuses its handle (section 7.4). */
+        CmCfgwkPrune(r->Wk);
+    }
     if (r->Route == CM_ROUTE_NONE || r->Reenum == 0) {
         r->NotDone++;
         CmLogNote(nhi, "cm.reenum.not-done",
@@ -1343,12 +1350,6 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             r->PollTimeouts++;
         }
         cmReenumAll(nhi, TRUE);
-        if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL) {
-            /* Whatever XhciCmReenum says: the known children are pruned
-             * to those present, so a child the user removed is forgotten
-             * before a re-plug reuses its handle (section 7.4). */
-            CmCfgwkPrune(r->Wk);
-        }
     } else {
         cmReenumAll(nhi, TRUE);
     }
