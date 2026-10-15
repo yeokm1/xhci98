@@ -425,3 +425,27 @@ package needs the project's test signature, applied only at a signed cut
 
 - [ ] X64.1 39-V.3 and 40-V.3 on Vista x64 and 7 x64 from the signed `3.0.0.0` asset: the install with the forced filter, one plug, unplug and re-plug cycle with the NVMe drive, and the safe-eject cycle (read 2026-10-16 on the owner's pre-cut test-signed package, pass on both, run-39.md and run-40.md; the recipe stands, the reading on the cut's signed asset is still owed)
 - [ ] X64.2 the installer legs owed by task 40.5 onward: Vista x64's update read after its restart, and 7 x64's uninstall over `3.0.0.0` (both pass 2026-10-16 on the pre-cut test-signed package, run-40.md; again on the cut's signed asset if its drivers differ)
+
+## Planned - An Unsafe-Unplug Notice From the Child Filter
+
+Goal: the owner asked for a notice when a Thunderbolt or USB4 device is
+unplugged without being stopped. The tray of design record 25 cannot
+prove it by polling (record 25 section 7.2, decision T9). On NT the child
+filter sees a unit's surprise removal; publishing a count of those, with
+the router's key, in the query of record 25 section 4 would let the tray
+say so with authority. 98 SE and ME need their own source.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] UNPL.1 the child filter's surprise-removal count and last router key in the query answer (a new `CM_Q_VERSION`), and the tray's notice
+
+## Planned - The Query's First Answer After an Inert Start
+
+Goal: record 25 section 14: after a start with the connection manager
+off, the query's first answer can lack the inert flag until the thread's
+first pass. Harmless for an eject (the stage refuses it); the answer
+should still be right from the first byte.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] QINR.1 seed the query device from the thread's actual wait state, or expose it only after the first publication

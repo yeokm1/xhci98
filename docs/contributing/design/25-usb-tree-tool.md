@@ -580,3 +580,43 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   returns to `DeviceIoControl` for the removed-device answer.
 - Whether the ICM's firmware messages carry a link rate the client could
   keep; until read, "not reported by the firmware".
+
+## 14. As built
+
+Where the code of `3.0.0.0` differs from the sections above, or settles
+what they left open:
+
+- **The ICM's link rate.** The ICM's device-connected event carries the
+  link's speed and width (`tbt_icm.h`), so a Thunderbolt 3 router's
+  extension has a rate and width with `CM_Q_XF_RATE_READ` clear, shown
+  "reported by the firmware"; section 13's question is answered.
+- **The name value at stop** is written empty, not deleted: there is no
+  evidence that `ZwDeleteValueKey` works on Windows 98 (record 13
+  Appendix A). The tool reads an empty `XhciCmQueryName` as no device.
+- **The NHI's instance ID** comes from the link name of a private device
+  interface registered on the NHI's PDO (never enabled), because
+  Windows 2000's PCI bus answers `BusQueryInstanceID` with the last
+  element only; `IRP_MN_QUERY_ID` is the fallback.
+- **An empty file name on create** is required on NT only; what NTKERN
+  leaves in the file name for a `\\.\` open is unread.
+- **An inert start's first answer** can lack `CM_Q_F_INERT` for the moment
+  between the device's creation and the thread's first pass. An eject
+  refuses it anyway (the record's stage is inert); planned work.
+- **The confirmation** is a message box listing the unit and every
+  devnode that will stop (at most 64; a larger unit is refused), not a
+  dialog of its own.
+- **Auto Refresh** rebuilds the whole tree when the 1 s poll sees a
+  change. Without it, the window keeps the model its tree was built from
+  and the status bar says the state changed; the details and an eject
+  request use only that model.
+- **Opening on 98 SE and ME.** A device whose open with no access rights
+  is refused is opened for read and write, as XHCISNAP does; the IOCTLs
+  stay any-access.
+- **An eject's outcome on 98 SE** goes to a message box from the tray,
+  there being no balloon; elsewhere an outcome longer than a balloon
+  holds also goes to a message box.
+- **`/selftest`** exists for `selftest.cmd`; with output redirected the
+  one-shot modes write to it instead of a message box.
+- **Install files.** XHCIINST stages through `.TMP` and, on 98 SE and ME,
+  replaces through `.BAK`; on x64 the forms are named after
+  `XHCITR64.EXE`. Record 23 section 9.5 has the details.
