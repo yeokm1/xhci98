@@ -1760,10 +1760,8 @@ does not install it.
 When the drive's NVMe controller shows in Device Manager without a driver,
 Update Driver, Have Disk, and point it at:
 
-| Bundled nvme98 | Windows 98 SE, ME | Windows 2000, XP, Vista, 7 (32-bit) | Windows XP x64, Vista x64, 7 x64 |
-|---|---|---|---|
-| `0.2.0.0` and later | `release-x86\` | `release-x86\` | `release-x64\` |
-| `0.1.x` | `release-x86\nvme98\win9x\` | `release-x86\nvme98\x86\` | `release-x64\nvme98\amd64\` |
+- `release-x86\` on Windows 98 SE, ME and 32-bit 2000, XP, Vista and 7
+- `release-x64\` on Windows XP x64, Vista x64 and 7 x64
 
 The 64-bit nvme98 is test-signed by its own project (SHA-1, no
 timestamp), and `nvme98-test.cer` beside it is the public half of that
