@@ -1136,6 +1136,68 @@ int inst_pe_machine(const unsigned char *buf, size_t len, INST_U32 *machine)
     return 1;
 }
 
+static INST_U32 inst_le32(const unsigned char *p)
+{
+    return (INST_U32)p[0] | ((INST_U32)p[1] << 8) | ((INST_U32)p[2] << 16) |
+           ((INST_U32)p[3] << 24);
+}
+
+int inst_pe_signed(const unsigned char *buf, size_t len)
+{
+    INST_U32 off;
+    INST_U32 opt;
+    INST_U32 dirs;
+    INST_U32 count;
+    INST_U32 optSize;
+    INST_U32 certOff;
+    INST_U32 certSize;
+    unsigned magic;
+
+    if (len < 0x40 || buf[0] != 'M' || buf[1] != 'Z') {
+        return -1;
+    }
+    off = inst_le32(buf + 0x3C);
+    if (off > len || len - off < 24 || buf[off] != 'P' || buf[off + 1] != 'E' ||
+        buf[off + 2] != 0 || buf[off + 3] != 0) {
+        return -1;
+    }
+    optSize = (INST_U32)buf[off + 20] | ((INST_U32)buf[off + 21] << 8);
+    opt = off + 24;
+    if (len - opt < 2) {
+        return -1;
+    }
+    magic = (unsigned)buf[opt] | ((unsigned)buf[opt + 1] << 8);
+    if (magic == 0x10BU) {
+        dirs = 96;
+    } else if (magic == 0x20BU) {
+        dirs = 112;
+    } else {
+        return -1;
+    }
+    /* NumberOfRvaAndSizes sits just before the directories; directory 4
+     * must lie inside both the optional header and the buffer. */
+    if (optSize < dirs + 5 * 8 || len - opt < optSize) {
+        return -1;
+    }
+    dirs += opt;
+    count = inst_le32(buf + dirs - 4);
+    if (count < 5) {
+        return 0;
+    }
+    /* Directory 4, IMAGE_DIRECTORY_ENTRY_SECURITY: a FILE offset and a
+     * size. An embedded signature has a size, and its table lies inside
+     * the file; one that points past the end is no signature to rely on. */
+    certOff = inst_le32(buf + dirs + 4 * 8);
+    certSize = inst_le32(buf + dirs + 4 * 8 + 4);
+    if (certSize == 0) {
+        return 0;
+    }
+    if (certOff == 0 || certOff > len || certSize > len - certOff) {
+        return -1;
+    }
+    return 1;
+}
+
 /* The next ';' entry of list from *pos, trimmed, into out. 0 at the end. */
 static int inst_path_entry(const char *list, size_t *pos, char *out,
                            size_t cap)
@@ -1313,10 +1375,10 @@ const INST_VALUE instValues[] = {
     { "XhciIntelPortSwitch", INST_INF_XHCI, INST_APPLY_PSW, 0x3UL, 0x7UL,
       "route the shared connectors from the EHCI controller to this driver "
       "(0 off, 1 on)",
-      "2 is at your own risk: on an Intel controller without the switch "
-      "registers it\n  writes registers of unknown meaning at every start, "
-      "resume, stop and shutdown,\n  and the result is unknown (release "
-      "notes, \"Value 2\").", 0x4UL },
+      "2 forces the switch writes on an Intel controller that does not "
+      "have the switch\n  registers, at every start, resume, stop and "
+      "shutdown; use it only if the\n  release notes' \"Value 2\" section "
+      "applies to your machine.", 0x4UL },
     { "XhciInterruptMode", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0xFUL, 0xFUL,
       "how the controller's events arrive (0 automatic, 1 interrupt line "
       "only, 2 polling always, 3 message-signalled only)",
@@ -1328,8 +1390,8 @@ const INST_VALUE instValues[] = {
       NULL, 0 },
     { "XhciSelectiveSuspend", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
       0x3UL, "put idle USB devices to sleep (0 off, 1 on)",
-      "no real machine has been read with it on: leave it off unless you are "
-      "testing it.", 0x2UL },
+      "leave it off unless a device needs it; if a device stops responding "
+      "after idling,\n  set it back to 0.", 0x2UL },
     /* Owner, 2026-10-15: asked on 98 SE and ME only, default off; on is
      * tools\silent\silent-on.bat's effect (the SILENT.REG list, then the
      * switch), off silent-off.bat's (the switch, the list left). */
@@ -1348,8 +1410,8 @@ const INST_VALUE instValues[] = {
       "UAS.", 0 },
     { "XhciCmMode", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0xFUL,
       "the Thunderbolt and USB4 connection manager (0 off, 1 automatic)",
-      "2 and 3 are the overrides of design record 21 section 8, for testing "
-      "only.", 0xCUL },
+      "2 and 3 force one connection manager whatever the controller "
+      "reports; use them\n  only on the release notes' advice.", 0xCUL },
     { "XhciCmApprove", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
       "approve Thunderbolt devices automatically (0 no, 1 yes)", NULL, 0 },
     { "XhciCmSafeEject", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0x3UL,
@@ -1733,6 +1795,271 @@ int inst_exit_code(int refused, int failed, int restart, int steps)
         return INST_EXIT_RESTART;
     }
     return INST_EXIT_DONE;
+}
+
+int inst_final(int changed, int list, int code, int *line)
+{
+    if (list || !changed) {
+        *line = INST_FINAL_NO_CHANGES;
+        return code;
+    }
+    if (code == INST_EXIT_DONE || code == INST_EXIT_RESTART) {
+        *line = INST_FINAL_RESTART;
+        return INST_EXIT_RESTART;
+    }
+    *line = INST_FINAL_UNFINISHED;
+    return code == INST_EXIT_REFUSED ? INST_EXIT_FAILED : code;
+}
+
+const char *inst_final_text(int line)
+{
+    switch (line) {
+    case INST_FINAL_RESTART:
+        return "Changes were made. Please restart Windows now.";
+    case INST_FINAL_UNFINISHED:
+        return "Changes were made, but not everything is done: do what is "
+               "said above first,\nthen restart Windows.";
+    default:
+        return "No changes were made.";
+    }
+}
+
+/* ======================================================================== */
+/* Installing beside Windows' own installer                                  */
+/* ======================================================================== */
+
+void inst_settle_init(INST_SETTLE *s, INST_U32 limitMs, INST_U32 tellMs,
+                      INST_U32 expectMs)
+{
+    memset(s, 0, sizeof(*s));
+    s->LimitMs = limitMs;
+    s->TellMs = tellMs;
+    s->ExpectMs = expectMs;
+}
+
+int inst_settle_step(INST_SETTLE *s, INST_U32 nowMs, int pending,
+                     INST_U32 sig, int complete, int expect)
+{
+    int first = s->Polls++ == 0;
+
+    if (pending < 0) {
+        return INST_SETTLE_FAILED;
+    }
+    if (pending) {
+        s->Moved = 1;
+        s->Quiet = 0;
+        if (!s->Pending) {
+            s->Pending = 1;
+            s->PendingFrom = nowMs;
+        }
+        if (nowMs >= s->LimitMs) {
+            return INST_SETTLE_TIMEOUT;
+        }
+        if (!s->Told && nowMs - s->PendingFrom >= s->TellMs) {
+            s->Told = 1;
+            return INST_SETTLE_TELL;
+        }
+        return INST_SETTLE_WAIT;
+    }
+    s->Pending = 0;
+    if (!complete) {
+        /* A reading that failed proves nothing: no quiet stretch. */
+        s->Moved = 1;
+        s->Quiet = 0;
+    } else if (!s->Quiet || sig != s->Sig) {
+        if (!first && (!s->Quiet || sig != s->Sig)) {
+            s->Moved = 1;
+        }
+        s->Quiet = 1;
+        s->QuietFrom = nowMs;
+        s->Sig = sig;
+    }
+    if (s->Quiet && nowMs - s->QuietFrom >= INST_SETTLE_QUIET_MS &&
+        (!expect || nowMs >= s->ExpectMs)) {
+        return INST_SETTLE_DONE;
+    }
+    if (nowMs >= s->LimitMs) {
+        return INST_SETTLE_UNSTEADY;
+    }
+    return INST_SETTLE_WAIT;
+}
+
+INST_U32 inst_dn_problem(INST_U32 status, INST_U32 problem)
+{
+    return (status & INST_DN_HAS_PROBLEM) ? problem : 0;
+}
+
+static INST_U32 inst_sig_bytes(INST_U32 h, INST_U32 v)
+{
+    unsigned char b[4];
+
+    b[0] = (unsigned char)(v & 0xFFUL);
+    b[1] = (unsigned char)((v >> 8) & 0xFFUL);
+    b[2] = (unsigned char)((v >> 16) & 0xFFUL);
+    b[3] = (unsigned char)((v >> 24) & 0xFFUL);
+    return inst_fnv1a(h, b, sizeof(b));
+}
+
+int inst_tree_sig(const INST_TREE_OPS *ops, INST_U32 dn, int depth,
+                  INST_U32 *h, int *expect, int *nodes)
+{
+    INST_U32 child;
+    INST_U32 status;
+    INST_U32 problem;
+    char id[INST_ID_CHARS];
+    int r;
+
+    r = ops->Child(ops->Ctx, dn, &child);
+    if (r == INST_TREE_NONE) {
+        return 1;
+    }
+    if (r != INST_TREE_OK || depth >= INST_TREE_DEPTH) {
+        /* Below the depth bound a subtree is there but unread: not whole. */
+        return 0;
+    }
+    for (;;) {
+        if (++*nodes > INST_TREE_NODES) {
+            return 0;
+        }
+        if (ops->Id(ops->Ctx, child, id, sizeof(id)) != INST_TREE_OK ||
+            ops->Status(ops->Ctx, child, &status, &problem) != INST_TREE_OK) {
+            return 0;
+        }
+        id[sizeof(id) - 1] = '\0';
+        problem = inst_dn_problem(status, problem);
+        *h = inst_fnv1a(*h, (const unsigned char *)id, strlen(id) + 1);
+        *h = inst_sig_bytes(*h, status & (INST_DN_STARTED | INST_DN_HAS_PROBLEM));
+        *h = inst_sig_bytes(*h, problem);
+        if (inst_bus_id(id) == 1 && (problem == INST_PROB_NOT_CONFIGURED ||
+                                     problem == INST_PROB_REINSTALL)) {
+            *expect = 1;
+        }
+        if (!inst_tree_sig(ops, child, depth + 1, h, expect, nodes)) {
+            return 0;
+        }
+        r = ops->Sibling(ops->Ctx, child, &child);
+        if (r == INST_TREE_NONE) {
+            return 1;
+        }
+        if (r != INST_TREE_OK) {
+            return 0;
+        }
+    }
+}
+
+int inst_busy_retry(INST_U32 error, int tries)
+{
+    return error == 0x20UL && tries >= 1 && tries < INST_BUSY_TRIES;
+}
+
+int inst_busy_spent(const int *tries, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (tries[i] >= INST_BUSY_TRIES) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int inst_tunnel_restart(int win2000, int filterInstalled, int inf, int gone,
+                        INST_U32 problem)
+{
+    if (!win2000 || !filterInstalled ||
+        (inf != INST_INF_CM && inf != INST_INF_CMF)) {
+        return 0;
+    }
+    return gone || problem == 12UL;
+}
+
+static void inst_cat(char *out, size_t cap, const char *s)
+{
+    size_t n = strlen(out);
+
+    while (*s != '\0' && n + 1 < cap) {
+        out[n++] = *s++;
+    }
+    out[n] = '\0';
+}
+
+static void inst_cat_number(char *out, size_t cap, INST_U32 v)
+{
+    char digits[12];
+    int n = 0;
+    char one[2];
+
+    do {
+        digits[n++] = (char)('0' + (int)(v % 10UL));
+        v /= 10UL;
+    } while (v != 0 && n < (int)sizeof(digits));
+    one[1] = '\0';
+    while (n > 0) {
+        one[0] = digits[--n];
+        inst_cat(out, cap, one);
+    }
+}
+
+void inst_state_text(char *out, size_t cap, const char *service,
+                     const char *version, int started, INST_U32 problem)
+{
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    inst_cat(out, cap, (service != NULL && service[0] != '\0') ?
+                       service : "no driver");
+    if (version != NULL && version[0] != '\0') {
+        inst_cat(out, cap, " ");
+        inst_cat(out, cap, version);
+    }
+    if (problem != 0) {
+        inst_cat(out, cap, ", problem code ");
+        inst_cat_number(out, cap, problem);
+    } else {
+        inst_cat(out, cap, started ? ", started" : ", not started");
+    }
+}
+
+int inst_staged_again(int hadIdentical, int copiedNow, const char *before,
+                      const char *answer)
+{
+    const char *name;
+    const char *p;
+
+    if (!hadIdentical || copiedNow || before == NULL || answer == NULL ||
+        before[0] == '\0') {
+        return 0;
+    }
+    name = answer;
+    for (p = answer; *p != '\0'; p++) {
+        if (*p == '\\' || *p == '/' || *p == ':') {
+            name = p + 1;
+        }
+    }
+    return inst_eq(before, name);
+}
+
+const char *inst_confirm_text(int runs, int writes, int nt, int unsure)
+{
+    if (runs) {
+        return nt ? "Install and stage the package now" :
+                    "Copy the package and update DevicePath now";
+    }
+    if (unsure) {
+        return writes ? "Write the changed settings and check the local copy "
+                        "and DevicePath now" :
+                        "Check the local copy and DevicePath now (see the entry "
+                        "listed apart above)";
+    }
+    if (writes) {
+        return "Write the changed settings now (no device needs a new driver)";
+    }
+    return nt ? "Every device is current and no setting changes. Check the "
+                "staged INFs (and\nstage any missing) now" :
+                "Every device is current and no setting changes. Check the "
+                "local copy and\nDevicePath now";
 }
 
 /* ======================================================================== */
