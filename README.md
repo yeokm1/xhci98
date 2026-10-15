@@ -27,6 +27,44 @@ My personal demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
 
 Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
 
+## Contents
+
+- [Motivation](#motivation)
+- [SuperSpeed and UAS](#superspeed-and-uas)
+- [Installation Steps](#installation-steps)
+  - [The package](#the-package)
+  - [Install with INSTALL.BAT](#install-with-installbat)
+  - [Install](#install)
+  - [Windows Vista x64 and 7 x64: test-signing mode](#windows-vista-x64-and-7-x64-test-signing-mode)
+  - [Installing Windows 2000 or XP, or using the Recovery Console](#installing-windows-2000-or-xp-or-using-the-recovery-console)
+  - [Upgrading the driver](#upgrading-the-driver)
+  - [Updating xhciuas.sys over an older one](#updating-xhciuassys-over-an-older-one)
+- [Tuning](#tuning)
+  - [The interrupt moderation interval (`XhciImodInterval250ns`)](#the-interrupt-moderation-interval-xhciimodinterval250ns)
+  - [Forcing Bulk-Only instead of UAS (`XhciForceBulkOnly`)](#forcing-bulk-only-instead-of-uas-xhciforcebulkonly)
+  - [Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)](#polling-a-low--or-full-speed-mouse-above-1000-hz-xhcifastpollfsls)
+  - [The first report's wait (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)](#the-first-reports-wait-xhcifirstenumwaitms-xhcifirstenumportms)
+  - [The Intel 7/8/9-series port switchover (`XhciIntelPortSwitch`)](#the-intel-789-series-port-switchover-xhciintelportswitch)
+  - [The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)](#the-intel-789-series-interrupt-routing-repair-xhciintelirqroute)
+  - [Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer`)](#polling-and-message-signalled-interrupts-xhciinterruptmode-xhcipollidlems-xhcipollactivems-xhcipollfinetimer)
+  - [UAS command size and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)](#uas-command-size-and-two-transfer-pieces-at-once-xhcimaxtransferkb-xhciwidemap)
+  - [Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)](#low--and-full-speed-devices-behind-a-built-in-hub-xhciusb2hubspeedfallback)
+  - [Selective suspend (`XhciSelectiveSuspend`)](#selective-suspend-xhciselectivesuspend)
+  - [The silent install (`XhciSilentInstall`)](#the-silent-install-xhcisilentinstall)
+  - [Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)](#controller-faults-xhcitolerance-xhciintervalcap-xhciavgtrbesit)
+  - [Linux's controller quirks (`XhciMsiAvoid` and thirteen more)](#linuxs-controller-quirks-xhcimsiavoid-and-thirteen-more)
+- [What is tested, and what is not](#what-is-tested-and-what-is-not)
+- [Known limitations/issues](#known-limitationsissues)
+  - [Outside this driver's control](#outside-this-drivers-control)
+  - [Not planned, though a later release might address them](#not-planned-though-a-later-release-might-address-them)
+  - [Untested ground](#untested-ground)
+- [Toolchain and building](#toolchain-and-building)
+- [Repository Layout](#repository-layout)
+- [Documentation](#documentation)
+- [AI usage](#ai-usage)
+- [References](#references)
+- [Licensing and provenance](#licensing-and-provenance)
+
 ## Motivation
 
 Modern PCs from the mid-2010s onwards use xHCI-only USB chipsets. Windows 98 shipped with UHCI/OHCI drivers (USB 1.1) and gained EHCI (USB 2.0) through the back-ported stack in NUSB. Windows 2000 gained EHCI natively in SP4.
@@ -99,11 +137,9 @@ If the machine runs Windows with the driver, the bug report asks for the driver'
 | `tools\portsw\` | Windows | `portsw.vbs`, `portsw-on.bat` and `portsw-off.bat`, the switch for the Intel port switchover |
 | `tools\silent\` | Windows 98 SE and ME | `SILENT.REG`, `SILENT.VBS`, `silent-on.bat` and `silent-off.bat`, the silent install's list and its switch (see "Tuning") |
 | `tools\xhcicln\` | Windows | `XHCICLN.EXE` (32-bit) and `XHCICL64.EXE` (64-bit), an optional tool that lists the old `XHCI98\` entries an update from `2.3.x` or earlier leaves behind and, on Windows 2000 to 7, removes them; nothing needs it |
-| `INSTALL.BAT` | Windows | installs, updates or uninstalls the drivers; see "Install" below |
+| `INSTALL.BAT` | Windows | installs, updates or uninstalls the drivers; see "Install with INSTALL.BAT" |
 | `tools\xhciinst\` | Windows | `XHCIINST.EXE` (32-bit) and `XHCIIN64.EXE` (64-bit), the program `INSTALL.BAT` runs |
 | `readme.txt` | | the release notes in plain text |
-
-Releases before `2.4.0.0` have `xhciqual\` and `xhcisnap\` at the top level instead of under `tools\`; `2.3.1.0` has `portsw\` there too, `2.3.0.0` has the port switchover's scripts in each driver directory, and earlier releases have none. The report batch files (`QUALREP.BAT`, `SNAPON.BAT`, `SNAPGET.BAT`, `SNAPOFF.BAT`) are new in `2.4.0.0`. So are `tools\silent\` and `tools\xhcicln\`. `INSTALL.BAT` and `tools\xhciinst\` are new in `3.0.0.0`.
 
 In each driver directory:
 
@@ -115,16 +151,20 @@ In each driver directory:
 
 `release-x86\` or `release-x64\` is the one to install.
 
+### Install with INSTALL.BAT
+
+Unzip the whole package and run `INSTALL.BAT` from its top directory: double-click it on 98 SE and ME, run it as an administrator on 2000 and XP, and with Run as administrator on Vista and 7. It shows its plan, asks about a few options (Enter keeps a value), then asks once before it changes anything.
+
+- **Windows 2000 to 7:** it installs or updates every driver on the devices present, controller first, and stages the package for devices plugged in later. It handles Have Disk on 2000, the root hub's update and Vista and 7's same `DriverVer`. Answer Windows' unsigned-driver questions.
+- **Windows 98 SE and ME:** it copies the package under `XHCI98` in the Windows directory, adds that folder to the wizards' search path and prints the Device Manager steps left. Run it again after the restart; it then also offers the silent install (off by default; see "Tuning").
+
+When a run changed anything it ends with "Changes were made. Please restart Windows now." It never runs `XHCICLN`.
+
+`INSTALL /list` shows the plan and changes nothing. `INSTALL /uninstall` removes the drivers after a warning and the word REMOVE. Each run but `/list` writes `XHCIINST.LOG` at the root of the system drive; attach it to a bug report. `tools\xhciinst\readme.txt` lists the switches and exit codes.
+
 ### Install
 
-**The easy way, from `3.0.0.0`: `INSTALL.BAT`.** Unzip the whole package, then run `INSTALL.BAT` from its top directory: double-click it on Windows 98 SE and ME, run it as an administrator on 2000 and XP, right-click it and choose Run as administrator on Vista and 7. It shows what it will do, asks about a few of the driver's options where the hardware they affect is present (Enter keeps the value), asks once, and then:
-
-- **Windows 2000, XP, XP x64, Vista and 7**: installs or updates every driver of the package on the devices present - the controller, its root hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages the package so a device plugged in later finds its driver (not a driver whose newer release is installed: it leaves that alone). It takes care of the update traps below (Windows 2000's Have Disk, the root hub's update, Vista and 7's same `DriverVer`). Whenever a run changed anything it ends with "Changes were made. Please restart Windows now."; it never runs `XHCICLN` itself. Windows' own unsigned-driver questions still appear; answer them.
-- **Windows 98 SE and ME**: the tool stages the files and you finish the installation in Device Manager. It copies the package to a folder under `XHCI98` in your Windows directory, adds that folder to the places the hardware wizards search, and prints the Device Manager clicks that remain, with the folder to type into "Specify a location" if the wizard does not find the driver by itself. Run it again after the restart to see the result and set the options; there it also offers to turn on the silent install (off by default; see "Tuning").
-
-`INSTALL /list` shows what it would do and changes nothing; `INSTALL /uninstall` removes the drivers again (it warns first that on an xHCI-only machine the USB keyboard and mouse stop working, and wants the word REMOVE). Every run but `/list` adds to `XHCIINST.LOG` at the root of the system drive: attach it to a bug report about an install. `tools\xhciinst\readme.txt` has the switches and the exit codes. From `2.3.x` or earlier on Windows XP, XP x64 and 98 SE the keyboard-and-mouse advice of "Upgrading the driver" below applies to it too.
-
-**By hand**, the way every release before `3.0.0.0` was installed:
+To install by hand:
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder.
 2. Install the prerequisites above. On Windows 98 SE the order for a fresh install is NUSB, then xhci98, then the UAS disk.
@@ -166,7 +206,7 @@ The same floppy serves the Recovery Console of Windows 2000 and XP. Press F6 as 
 Things to know:
 
 - Pressing F6 needs the BIOS's own USB keyboard support.
-- A disk that offers only UAS is not usable until GUI-mode Setup; a plain USB flash stick is, and so, since `2.3.1.0`, is a UAS disk that also offers Bulk-Only, as most do.
+- A disk that offers only UAS is not usable until GUI-mode Setup; a plain USB flash stick is, and so is a UAS disk that also offers Bulk-Only, as most do.
 - A USB drive present at the partition screen takes `C:`. Unplug the USB drives you do not need, or Windows installs to the next letter.
 - On Windows 2000, plug the USB keyboard and stick in before Setup starts.
 - To install Windows XP and XP x64, have a PS/2 keyboard or a laptop's built-in keyboard at hand. Later in Setup the USB keyboard does not work until a step that first asks about this unsigned driver (see "Known limitations/issues"). The Recovery Console runs in text mode throughout and is not affected.
@@ -178,22 +218,19 @@ The [release notes](docs/using/release-notes.md) have the limits.
 The controller in Device Manager on the P14s Gen 1 under Windows 98 SE.
 
 ### Upgrading the driver
-From `3.0.0.0`, `INSTALL.BAT` (see "Install") does the update below for you on Windows 2000 to 7, and stages it on 98 SE and ME. By hand:
+Run `INSTALL.BAT` to install, update or uninstall (see "Install with INSTALL.BAT"). By hand:
 
-Install the new version over the old one with Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", both pointed at the `release-x86\` or `release-x64\` directory.
+Run Update Driver on "xHCI98 USB 3.x eXtensible Host Controller", then on "xHCI98 USB 3.x Root Hub", pointed at `release-x86\` or `release-x64\`.
 
-**From `2.3.x` or earlier, read the release notes' "From 2.3.x or earlier" first.** The root hub, every hub and every composite device are found again as new hardware, once, under their `2.4.0.0` names: update the controller only (the new root hub installs by itself), and on Windows XP, XP x64 and 98 SE have a keyboard and mouse that do not go through this driver (PS/2, a laptop's built-in ones, or a USB controller another driver runs), because the new-hardware questions come before the USB keyboard and mouse behind the new root hub work (on 98 SE: the update wizard's last page, and after the restart the wizard for a mouse found again). A device without a serial number (most mice and keyboards) is found again too, and loses what was kept on its old entry (a hidusbf setting, a friendly name). The download's `tools\xhcicln\` lists the old entries and, on Windows 2000 to 7, removes them; nothing needs it.
+- **Windows 98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
+- **Windows 2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
+- **XP, Vista and 7:** the new driver runs at once, after the unsigned-driver warning. 32-bit Vista and 7 ask for a restart for the helper `xhcihlpr.sys`. 64-bit Vista and 7 need test-signing mode, as for the first install.
+- **Vista and 7:** a build with the same `DriverVer` as the installed one is not taken. Use a newer build.
+- A device that Windows finds again as new hardware loses its hidusbf setting. Set it again.
 
-- **Windows 98 SE and ME: restart afterwards, although Windows does not ask.** The new file waits to replace the old one at the next start, and until then the old driver keeps running. Under SweetLow's stack the controller may show a problem for a minute or two after Finish. On ME it shows one until the restart, while the devices keep working.
-- **Windows 2000: use Have Disk.** Letting Windows search answers that a suitable driver is already installed and keeps the old one. Use Driver -> Update Driver -> "Display a list of the known drivers" -> Have Disk -> the `release-x86\` directory, and pick "xHCI98 USB 3.x eXtensible Host Controller", the first of the three models listed.
-- **XP, XP x64, Vista and 7**: the update takes effect at once, after one unsigned-driver warning, although XP may offer a restart and 64-bit Vista and 7 may say the device needs one; except on 32-bit Vista and 7, where it asks for a restart, for the helper `xhcihlpr.sys`, and the earlier release runs until then; an update from `2.3.0.0` or `2.3.1.0` there also removes the old helper `xhcimsi.sys`, deleting its file at once and its service at that restart. On 32-bit 2000 and XP the update installs `xhcihlpr.sys`, which asks for no restart of its own; its finer timer, when `XhciPollFineTimer` is set to `1` (off by default), starts at the next boot. On Vista x64 and 7 x64 the new driver, like the first install, runs in test-signing mode or on a start with driver signature enforcement disabled.
-- **Vista and 7: a build with the same `DriverVer` is not taken.** If the new INF is identical to the installed one, Have Disk reuses the package already in Windows' driver store and keeps the old `xhci98.sys`. Replace the `.sys` by hand, or use a build with a newer `DriverVer`.
+**From `2.3.x` or earlier:** update the controller only. The root hub, hubs and composite devices are found again as new hardware and install by themselves. On 98 SE, XP and XP x64 keep a PS/2 or built-in keyboard and mouse at hand: the new-hardware questions come before the USB ones work.
 
-Afterwards the root hub's Driver tab still shows the old version (on 98 SE and ME, its date), although it runs the new file. To change it, run Update Driver on "xHCI98 USB 3.x Root Hub" too:
-
-- On Vista and 7, "Let me pick from a list of device drivers on my computer" and the new version's entry.
-
-If Windows finds a device again as new hardware after the upgrade, apply its hidusbf setting again.
+The release notes' "From 2.3.x or earlier" has the details. `tools\xhcicln\` lists the old entries this leaves behind and, on 2000 to 7, removes them; nothing needs it.
 
 ### Updating xhciuas.sys over an older one
 
@@ -393,7 +430,13 @@ Two more values set the polling periods, in ms:
 - `XhciPollIdleMs` (default `50`): with nothing outstanding.
 - `XhciPollActiveMs` (default `1`): with transfers outstanding. Windows runs the timer no faster than its clock allows: on the E7250 under XP x64, every 15 to 62 ms.
 
-New in `2.4.0.0`, `XhciPollFineTimer` (default `0`, off; set it to `1` to try it) asks Windows 2000, XP, Vista and 7 to run their clock at `XhciPollActiveMs` while the driver polls at that period, and gives the request back when it stops polling that fast (one idle period, `XhciPollIdleMs`, after the last transfer), and when the controller sleeps or stops. It applies only while the controller is polled, and it is read at each start (disable and enable the controller, or restart). On 32-bit Windows it comes through `xhcihlpr.sys`, so on 2000 and XP it starts at the first boot after the install. Windows 98 SE and ME have no such call and keep their clock. It ships off because in virtual machines (QEMU without hardware acceleration, polling, on Windows 7 and Vista) the guest's clock ran at a tenth to seven tenths of real time while it was held, and USB keyboard input was lost; with it off the clock kept time. Not yet tried on any real machine.
+`XhciPollFineTimer` (default `0`, off; set it to `1` to try it) asks Windows 2000, XP, Vista and 7 to run their clock at `XhciPollActiveMs` while the driver polls at that period.
+
+It gives the request back when it stops polling that fast (one idle period, `XhciPollIdleMs`, after the last transfer), and when the controller sleeps or stops. It applies only while the controller is polled, and it is read at each start (disable and enable the controller, or restart).
+
+On 32-bit Windows it comes through `xhcihlpr.sys`, so on 2000 and XP it starts at the first boot after the install. Windows 98 SE and ME have no such call and keep their clock.
+
+It ships off because, while the finer clock is held, the system clock can fall behind real time and USB keyboard input can be lost. With it off the clock keeps time.
 
 The release notes' "Windows Vista and 7: message-signalled interrupts", "XhciInterruptMode, XhciPollIdleMs and XhciPollActiveMs" and "XhciPollFineTimer" have the details.
 
@@ -439,7 +482,7 @@ On Windows 98 SE, a device Windows already has drivers for still brings the Add 
 
 Run `silent-on.bat` only once each listed class's drivers have been installed at least once, by plugging such a device and finishing its wizard. With no wizard, 98 SE asks for a missing driver file from its CD.
 
-Read in virtual machines: on 98 SE a keyboard, mouse, stick and hub, each a device of its own, install with no wizard once it is on. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks have not been read on either.
+With it on, Windows 98 SE installs a keyboard, mouse, stick and hub, each a device of its own, with no wizard. Windows ME installs those with no wizard even without it. Composite keyboards, mice and sticks may still bring up the wizard.
 
 SweetLow provided the information on how Windows decides a silent install, and the list.
 
@@ -629,7 +672,7 @@ The drivers are C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64
    - `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier. It needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points), the only tool installed normally on the host; the drivers never use it.
    - `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
    - `xhcicln\build.cmd` produces `XHCICLN.EXE` with the in-repo MSVC 6.0 and `XHCICL64.EXE` with the in-repo WDK 7.1 (`build.cmd x86` for the first alone), the cleanup tool of `2.4.0.0`.
-   - `xhciinst\build.cmd` produces `XHCIINST.EXE` and `XHCIIN64.EXE` the same way, the install tool `INSTALL.BAT` runs (`3.0.0.0`).
+   - `xhciinst\build.cmd` produces `XHCIINST.EXE` and `XHCIIN64.EXE` the same way, the install tool `INSTALL.BAT` runs.
 
 5. Make install media. A `.sys` on its own is not install media; each INF travels with its driver, and nothing else does, because the controller's INF has Windows supply its own `usbd.sys` and `usbui.dll`.
 
@@ -735,7 +778,7 @@ The repository tracks no third-party binary on its own, although the tool execut
 * `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
 
 * `XHCICLN.EXE` embeds the MSVC 6.0 runtime, and `XHCICL64.EXE` the WDK 7.1 one (from `2.4.0.0`).
-* `XHCIINST.EXE` embeds the MSVC 6.0 runtime, and `XHCIIN64.EXE` the WDK 7.1 one (from `3.0.0.0`). Neither contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
+* `XHCIINST.EXE` embeds the MSVC 6.0 runtime, and `XHCIIN64.EXE` the WDK 7.1 one. Neither contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
