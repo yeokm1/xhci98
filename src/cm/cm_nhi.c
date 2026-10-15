@@ -605,6 +605,63 @@ static VOID cmU4Learn(PCM_NHI nhi, ULONG port)
     }
 }
 
+/* Whether the core holds a quarantined entry or blocked enable of `port`
+ * (record 22 section 7.3): a path not proven invalid and drained. */
+static BOOLEAN cmU4Quarantined(PCM_NHI nhi, ULONG port)
+{
+    ULONG k;
+
+    for (k = 0; k < TBT_U4_QUARANTINE; k++) {
+        if (nhi->U4.Quarantine[k].Used && nhi->U4.Quarantine[k].Port == port) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*
+ * The learning marks reconciled with the core's port state before any
+ * attribution of a pass (tbt_topo.h's rule: a gain is attributed only
+ * while one port is pending). A port that may carry a live PCIe path not
+ * yet attributed - a tunnel up or found, any entry or enable written and
+ * not proven closed, an incomplete inventory, a residual, a quarantined
+ * entry, a HELD port - is pending, whatever events were or were not seen
+ * for it (a tunnel whose activation and rollback both failed queues no
+ * UP). A pending port whose state proves no path at all - EMPTY, no
+ * router, nothing written, nothing incomplete, residual or quarantined -
+ * is released (XhciTbtLearnDown) and the baseline taken again: that state
+ * is the core's own read-back evidence that nothing of the port can reach
+ * a bridge, never a TUNNEL_DOWN alone.
+ */
+static VOID cmU4Reconcile(PCM_NHI nhi)
+{
+    const TBT_U4_PORT *p;
+    ULONG port;
+    ULONG bit;
+    BOOLEAN uncertain;
+
+    for (port = 1; port <= nhi->U4.PortCount && port <= XHCI_TBT_MAX_PORTS;
+         port++) {
+        p = TbtU4Port(&nhi->U4, port);
+        if (p == NULL) {
+            continue;
+        }
+        bit = 1UL << (port - 1);
+        uncertain = (BOOLEAN)(p->Pcie.Up || p->Pcie.Written != 0 ||
+                              p->Pcie.Incomplete || p->HostResidual ||
+                              p->State == TBT_U4_HELD || p->AsFoundOwed ||
+                              cmU4Quarantined(nhi, port));
+        if (uncertain) {
+            XhciTbtLearnUp(&nhi->Binds, port);
+        } else if ((nhi->Binds.Pending & bit) != 0 &&
+                   p->State == TBT_U4_EMPTY && !p->Dev.Present) {
+            XhciTbtLearnDown(&nhi->Binds, port);
+            nhi->ArmOwed = 1;
+            CmLogNote(nhi, "u4.learn.released", port);
+        }
+    }
+}
+
 /* Every port whose tunnel came up and is not attributed yet, tried again
  * at each idle tick: its device may answer Configuration Request Retry for
  * a while (tbt_topo.h, XhciTbtLearn). */
@@ -612,6 +669,10 @@ static VOID cmU4LearnPending(PCM_NHI nhi)
 {
     ULONG port;
 
+    cmU4Reconcile(nhi);
+    if (nhi->ArmOwed) {
+        cmU4Arm(nhi);
+    }
     if (nhi->Binds.Pending == 0) {
         return;
     }
@@ -711,6 +772,9 @@ static VOID cmU4Deliver(PCM_NHI nhi)
     ULONG i;
 
     n = nhi->U4BatchCount;
+    /* Before any XhciTbtLearn of this batch: every port that may carry a
+     * live unattributed path is pending (cmU4Reconcile). */
+    cmU4Reconcile(nhi);
     for (i = 0; i < n; i++) {
         u = &nhi->U4Batch[i];
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
