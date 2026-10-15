@@ -284,6 +284,8 @@ static int upCount;
 static TNODE *tn;
 static int tnCount;
 static int usbDevices;
+static DWORD hcdOpenError;      /* why \\.\HCD0 did not open, 0 when it did */
+static int hcdNameRefused;      /* controllers that did not name their key */
 static int tbDevices;
 static DWORD viewFlags = TR_V_DEFAULT;
 static char detail[TR_DETAIL_BYTES];
@@ -672,9 +674,11 @@ static HANDLE open_device(const char *name)
     h = CreateFileA(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                     OPEN_EXISTING, 0, NULL);
     if (h == INVALID_HANDLE_VALUE && !envNt) {
-        /* 98 SE and ME: a WDM device name may want an access mask. */
-        h = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        NULL, OPEN_EXISTING, 0, NULL);
+        /* 98 SE and ME: a WDM device name may want an access mask; the
+         * IOCTLs stay FILE_ANY_ACCESS and nothing is written. */
+        h = CreateFileA(path, GENERIC_READ | GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_EXISTING, 0, NULL);
     }
     return h;
 }
@@ -1226,10 +1230,14 @@ static int ctrl_add(const char *path, const char *hcd)
     }
     h = open_device(path);
     if (h == INVALID_HANDLE_VALUE) {
+        if (hcd != NULL && strcmp(hcd, "HCD0") == 0) {
+            hcdOpenError = GetLastError();
+        }
         return -1;
     }
     if (!usb_name(h, TR_IOCTL_GET_HCD_DRIVERKEY_NAME, 0, key, sizeof(key))) {
         key[0] = '\0';
+        hcdNameRefused++;
     }
     for (i = 0; i < ucCount; i++) {
         if (key[0] != '\0' && tr_eq(uc[i].DrvKey, key)) {
@@ -1259,6 +1267,8 @@ static void usb_controllers(void)
     int n;
     char name[16];
 
+    hcdOpenError = 0;
+    hcdNameRefused = 0;
     for (n = 0; n < 64; n++) {
         tr_sprintf(name, sizeof(name), "HCD%d", n);
         ctrl_add(name, name);
@@ -1944,6 +1954,14 @@ static void details_of(TR_TEXT *t, int i, int fetch)
     case K_USBROOT:
         tr_printf(t, "%d USB host controllers, %d USB devices.\n", ucCount,
                   usbDevices);
+        if (hcdOpenError != 0) {
+            tr_printf(t, "\\\\.\\HCD0 did not open (error %lu).\n",
+                      (unsigned long)hcdOpenError);
+        }
+        if (hcdNameRefused != 0) {
+            tr_printf(t, "%d controllers did not report their driver key.\n",
+                      hcdNameRefused);
+        }
         break;
     case K_CTRL: {
         const UCTRL *c = &uc[n->A];
@@ -3357,6 +3375,16 @@ static void open_window(void)
         y = winRect.top;
         cx = winRect.right - winRect.left;
         cy = winRect.bottom - winRect.top;
+    } else {
+        RECT wa;
+        if (SystemParametersInfoA(SPI_GETWORKAREA, 0, &wa, 0)) {
+            if (cx > wa.right - wa.left) {
+                cx = wa.right - wa.left;
+            }
+            if (cy > wa.bottom - wa.top) {
+                cy = wa.bottom - wa.top;
+            }
+        }
     }
     hMain = CreateWindowExA(0, "Xhci98TrMain", "xHCI98 USB Tree",
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, cx, cy,
