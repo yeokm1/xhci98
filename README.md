@@ -27,6 +27,43 @@ My personal demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
 
 Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
 
+## Contents
+
+- [Motivation](#motivation)
+- [SuperSpeed and UAS](#superspeed-and-uas)
+- [Installation Steps](#installation-steps)
+  - [The package](#the-package)
+  - [Install](#install)
+  - [Windows Vista x64 and 7 x64: test-signing mode](#windows-vista-x64-and-7-x64-test-signing-mode)
+  - [Installing Windows 2000 or XP, or using the Recovery Console](#installing-windows-2000-or-xp-or-using-the-recovery-console)
+  - [Upgrading the driver](#upgrading-the-driver)
+  - [Updating xhciuas.sys over an older one](#updating-xhciuassys-over-an-older-one)
+- [Tuning](#tuning)
+  - [The interrupt moderation interval (`XhciImodInterval250ns`)](#the-interrupt-moderation-interval-xhciimodinterval250ns)
+  - [Forcing Bulk-Only instead of UAS (`XhciForceBulkOnly`)](#forcing-bulk-only-instead-of-uas-xhciforcebulkonly)
+  - [Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)](#polling-a-low--or-full-speed-mouse-above-1000-hz-xhcifastpollfsls)
+  - [The first report's wait (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)](#the-first-reports-wait-xhcifirstenumwaitms-xhcifirstenumportms)
+  - [The Intel 7/8/9-series port switchover (`XhciIntelPortSwitch`)](#the-intel-789-series-port-switchover-xhciintelportswitch)
+  - [The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)](#the-intel-789-series-interrupt-routing-repair-xhciintelirqroute)
+  - [Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer`)](#polling-and-message-signalled-interrupts-xhciinterruptmode-xhcipollidlems-xhcipollactivems-xhcipollfinetimer)
+  - [UAS command size and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)](#uas-command-size-and-two-transfer-pieces-at-once-xhcimaxtransferkb-xhciwidemap)
+  - [Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)](#low--and-full-speed-devices-behind-a-built-in-hub-xhciusb2hubspeedfallback)
+  - [Selective suspend (`XhciSelectiveSuspend`)](#selective-suspend-xhciselectivesuspend)
+  - [The silent install (`XhciSilentInstall`)](#the-silent-install-xhcisilentinstall)
+  - [Controller faults (`XhciTolerance`, `XhciIntervalCap`, `XhciAvgTrbEsit`)](#controller-faults-xhcitolerance-xhciintervalcap-xhciavgtrbesit)
+  - [Linux's controller quirks (`XhciMsiAvoid` and thirteen more)](#linuxs-controller-quirks-xhcimsiavoid-and-thirteen-more)
+- [What is tested, and what is not](#what-is-tested-and-what-is-not)
+- [Known limitations/issues](#known-limitationsissues)
+  - [Outside this driver's control](#outside-this-drivers-control)
+  - [Not planned, though a later release might address them](#not-planned-though-a-later-release-might-address-them)
+  - [Untested ground](#untested-ground)
+- [Toolchain and building](#toolchain-and-building)
+- [Repository Layout](#repository-layout)
+- [Documentation](#documentation)
+- [AI usage](#ai-usage)
+- [References](#references)
+- [Licensing and provenance](#licensing-and-provenance)
+
 ## Motivation
 
 Modern PCs from the mid-2010s onwards use xHCI-only USB chipsets. Windows 98 shipped with UHCI/OHCI drivers (USB 1.1) and gained EHCI (USB 2.0) through the back-ported stack in NUSB. Windows 2000 gained EHCI natively in SP4.
