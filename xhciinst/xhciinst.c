@@ -253,6 +253,13 @@ static int infTrap[INST_INF_COUNT];
 static int trapUnknown[INST_INF_COUNT];  /* the store could not be inspected */
 static INST_U32 pkgVersion[4];
 static int haveCm;
+static int tbInclude = 1;   /* the Thunderbolt question's answer (section 8.5) */
+static int tbNhiPresent;
+static int tbStaged;        /* NT: xhcicm.inf was staged by this run       */
+static int tbTagAll;        /* package_files lists every file, whatever the
+                               answer: the package's identity             */
+static void tb_question(void);
+static void tb_later_note(const char *dir);
 
 static int flagFailed;
 static int flagRestart;
@@ -1238,6 +1245,12 @@ static void group_verdicts(void)
         repair = 0;
         newer = 0;
         unknown = 0;
+        if (g == 2 && haveCm && !tbInclude) {
+            /* A No to the Thunderbolt question: the installed xhcicm is
+             * not part of the run, so no verdict on it (section 8.5). */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         for (i = 0; i < devCount; i++) {
             const DEVREC *d = &devs[i];
             if (group_of(d) != g) {
@@ -2295,6 +2308,14 @@ static int package_files(PKG_EACH each, void *ctx)
             if (inst_bundled_file(fd.cFileName)) {
                 continue;
             }
+            /* A No to the Thunderbolt question: none of its files in the
+             * copy, so no wizard and no store offers them (section 8.5). */
+            if (!tbInclude && !tbTagAll &&
+                (inst_eq(fd.cFileName, "xhcicm.inf") ||
+                               inst_eq(fd.cFileName, "xhcicmf.inf") ||
+                               inst_eq(fd.cFileName, "xhcicm.sys"))) {
+                continue;
+            }
             inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));
             strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
             if (!each(rel, ctx)) {
@@ -3144,6 +3165,9 @@ static int stage_nt(void)
                 trapOem[k][0] ? " Run INSTALL.BAT again: it stages from the "
                                 "same local copy." : "");
             return 0;
+        }
+        if (k == INST_INF_CM) {
+            tbStaged = 1;
         }
         if (inst_staged_again(had, copiedNow, before,
                               component ? component : dest)) {
@@ -4257,6 +4281,7 @@ static int run_install_nt(void)
     if (!scan()) {
         return INST_EXIT_REFUSED;
     }
+    tb_question();
     if (!restage_read()) {
         out("REFUSED: the /restage work file is unreadable; nothing is "
             "changed.\n");
@@ -4268,9 +4293,30 @@ static int run_install_nt(void)
         }
         local_copy_name(tag, name, sizeof(name));
         if (!inst_eq(name, restagePkg)) {
+            /* The same package copied with the other Thunderbolt answer
+             * (section 8.5) is the same package. */
+            tbTagAll = 1;
+            if (package_tag(&tag)) {
+                local_copy_name(tag, name, sizeof(name));
+            }
+            tbTagAll = 0;
+            tbInclude = !tbInclude;
+            if (!inst_eq(name, restagePkg) && package_tag(&tag)) {
+                local_copy_name(tag, name, sizeof(name));
+            }
+            tbInclude = !tbInclude;
+        }
+        if (!inst_eq(name, restagePkg)) {
             out("REFUSED: an unfinished /restage of another package (%s) is "
                 "recorded. Run that\npackage's INSTALL.BAT to finish it; this "
                 "one is %s.\n", restagePkg, name);
+            return INST_EXIT_REFUSED;
+        }
+        if (haveCm && !tbInclude &&
+            (restagePending[INST_INF_CM] || restagePending[INST_INF_CMF])) {
+            out("REFUSED: the unfinished /restage includes the Thunderbolt "
+                "driver. Answer Y to the\nThunderbolt question (or use "
+                "/thunderbolt) to finish it.\n");
             return INST_EXIT_REFUSED;
         }
     }
@@ -4369,6 +4415,7 @@ static int run_install_nt(void)
             "7, run INSTALL.BAT again after the restart for the root hub and "
             "hubs." : "");
     }
+    tb_later_note(srcDir);
     note_old_entries();
     return inst_exit_code(0, flagFailed, flagRestart, flagSteps);
 
@@ -4555,11 +4602,12 @@ static void steps_9x(const char *dir)
     if (!any) {
         out("  No device of this package is present.\n");
     }
-    out("\nA UAS disk or a Thunderbolt controller found later finds its "
-        "driver in %s too.\nOn Windows 98 SE any disk, UAS included, needs "
-        "NUSB's mass-storage component\n(README, \"Installation Steps\"). Run "
-        "INSTALL.BAT again after the restart to see\nthe result and set the "
-        "driver's options.\n", dir);
+    /* The Thunderbolt half only when this run copied its INF (section 8.5). */
+    out("\nA UAS disk%s found later finds its driver in %s too.\nOn Windows "
+        "98 SE any disk, UAS included, needs NUSB's mass-storage component\n"
+        "(README, \"Installation Steps\"). Run INSTALL.BAT again after the "
+        "restart to see\nthe result and set the driver's options.\n",
+        (haveCm && tbInclude) ? " or a Thunderbolt controller" : "", dir);
     if (envNow.Minor == 90 && !ntmap_present()) {
         out("On this Windows ME, plug in an ordinary USB stick once before the "
             "first UAS\ndisk: ME copies its own USB storage files "
@@ -4579,6 +4627,7 @@ static int run_install_9x(void)
         out("The device tree could not be read whole: nothing is changed.\n");
         return INST_EXIT_REFUSED;
     }
+    tb_question();
     plan();
     print_plan();
     if (!local_dir(dir, sizeof(dir))) {
@@ -4632,6 +4681,7 @@ static int run_install_9x(void)
     }
     write_values();
     steps_9x(srcDir);
+    tb_later_note(srcDir);
     note_old_entries();
     /* Steps are left only where a device needs one (Update Driver, Have
      * Disk, a refused version, an entry that may be a cancelled wizard's
@@ -6749,6 +6799,114 @@ static int run_eject(void)
 }
 
 /* ======================================================================== */
+/* The Thunderbolt 3 / USB4 question (record 23 section 8.5)                 */
+/* ======================================================================== */
+
+/* Asked after the first scan, before the plan is shown. A No takes the
+ * Thunderbolt INFs out of this run: their devices are not planned, not
+ * staged, not copied and not asked about; a Thunderbolt driver already
+ * installed is left exactly as it is. */
+static void tb_question(void)
+{
+    int ask;
+    int def;
+    int r;
+    int k;
+    int i;
+    int installed = 0;
+    char line[16];
+
+    plan();
+    tbNhiPresent = envNow.CmNhi;
+    tbInclude = inst_tb_decide(haveCm, tbNhiPresent, opts.Yes,
+                               opts.Thunderbolt, opts.List, &ask, &def);
+    if (!haveCm) {
+        tbInclude = 0;
+        return;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (inst_eq(devs[i].Service, "xhcicm") ||
+            inst_msz_has(devs[i].Upper, devs[i].UpperBytes, "xhcicm")) {
+            installed = 1;
+        }
+    }
+    out("Thunderbolt 3 / USB4 support\n");
+    if (tbNhiPresent) {
+        out("  A Thunderbolt or USB4 controller is present.\n");
+    } else {
+        out("  No Thunderbolt or USB4 controller was found. Some computers show "
+            "theirs only\n  while a device is plugged in, or only with a BIOS "
+            "setting: answer Y if this\n  computer has a Thunderbolt or USB4 "
+            "port.\n");
+    }
+    out("  With it, a device plugged into that port is approved automatically "
+        "and can\n  reach the computer's memory (the setting XhciCmApprove; "
+        "see tools\\xhciinst\\readme.txt).\n");
+    if (installed) {
+        out("  Answering N keeps the Thunderbolt driver already installed as it "
+            "is.\n");
+    }
+    if (ask) {
+        for (;;) {
+            out("Install Thunderbolt 3 / USB4 support? [%s]: ",
+                def ? "Y/n" : "y/N");
+            if (!read_line(line, sizeof(line))) {
+                r = def;
+                out("\n");
+                break;
+            }
+            r = inst_tb_answer(line, def);
+            if (r >= 0) {
+                break;
+            }
+            out("  Type Y or N, or Enter for %s.\n", def ? "Y" : "N");
+        }
+        tbInclude = r;
+    } else if (opts.Thunderbolt) {
+        out("  /thunderbolt: installed without asking.\n");
+    } else if (opts.List) {
+        out("  /list: it would be asked; Enter would answer %s.\n",
+            def ? "Y" : "N");
+    } else {
+        out("  /yes: %s.\n", tbInclude ? "Y, a controller is present"
+                                       : "N, none was found (/thunderbolt "
+                                         "installs it anyway)");
+    }
+    out("\n");
+    logonly("thunderbolt: present %d, installed %d, asked %d, default %d, "
+            "include %d\n", tbNhiPresent, installed, ask, def, tbInclude);
+    if (!tbInclude) {
+        for (k = INST_INF_CM; k <= INST_INF_CMF; k++) {
+            free(infText[k]);
+            infText[k] = NULL;
+        }
+        plan();
+    }
+}
+
+/* After a Yes with no controller present (section 8.5). */
+static void tb_later_note(const char *dir)
+{
+    if (!haveCm || !tbInclude || tbNhiPresent || opts.List) {
+        return;
+    }
+    if (envNow.Nt && !tbStaged) {
+        out("\nThe Thunderbolt driver was not staged (see above): run "
+            "INSTALL.BAT again once the\ncontroller appears.\n");
+    } else if (envNow.Nt) {
+        out("\nThe Thunderbolt driver is staged: when the controller appears, "
+            "Windows installs\nit by itself. Run INSTALL.BAT again then, so "
+            "the Thunderbolt ports get their\nfilter too.\n");
+    } else {
+        out("\nThe Thunderbolt driver is in %s: when the controller appears, the "
+            "hardware\nwizard finds xhcicm.inf there by itself (\"Search for "
+            "the best driver\", no box\nticked). When Windows then asks for "
+            "the \"xhci98 xHCI Host Controller Disk\", type\n%s under "
+            "\"Copy files from\" and OK.\n", dir, dir);
+    }
+}
+
+/* ======================================================================== */
 /* main                                                                      */
 /* ======================================================================== */
 
@@ -6763,6 +6921,7 @@ static void usage(void)
 "  /defaults     ask no option question; keep every value\n"
 "  /set Name=Value   set one of the driver's options (repeatable)\n"
 "  /force        reinstall this release, or install it over a newer one\n"
+"  /thunderbolt  install the Thunderbolt 3 / USB4 support without asking\n"
 "  /restage      Vista and 7: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
 "  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"

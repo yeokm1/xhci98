@@ -1717,6 +1717,8 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             /* INSTALL.BAT chose the directory; nothing more to do here. */
         } else if (inst_switch(a, "selftest")) {
             opts->SelfTest = 1;
+        } else if (inst_switch(a, "thunderbolt")) {
+            opts->Thunderbolt = 1;
         } else if (inst_switch(a, "devices")) {
             opts->Devices = 1;
         } else if (inst_switch(a, "eject")) {
@@ -1851,6 +1853,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
          opts->Force || opts->Restage || opts->Uninstall)) {
         inst_err(err, errCap, "/devices and /eject take only /yes, /nopause, "
                  "/log and /dir", NULL);
+        return 1;
+    }
+    if (opts->Thunderbolt && (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, "/thunderbolt belongs to an install", NULL);
         return 1;
     }
     if (opts->Devices && opts->Eject) {
@@ -2694,4 +2700,46 @@ const char *inst_unplug_text(int kind)
                "(USB ports, card\nreaders, network) is in use; stop them in "
                "Windows first.";
     }
+}
+
+/* ======================================================================== */
+/* The Thunderbolt 3 / USB4 question (record 23 section 8.5)                 */
+/* ======================================================================== */
+
+int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
+                   int optList, int *ask, int *defaultYes)
+{
+    *ask = 0;
+    *defaultYes = nhiPresent ? 1 : 0;
+    if (!haveCm) {
+        *defaultYes = 0;
+        return 0;
+    }
+    if (optThunderbolt) {
+        return 1;
+    }
+    if (optYes || optList) {
+        return *defaultYes;
+    }
+    *ask = 1;
+    return 0;
+}
+
+int inst_tb_answer(const char *line, int defaultYes)
+{
+    while (*line == ' ' || *line == '\t') {
+        line++;
+    }
+    if (*line == '\0') {
+        return defaultYes ? 1 : 0;
+    }
+    if ((line[0] == 'y' || line[0] == 'Y') &&
+        (line[1] == '\0' || inst_eq(line, "yes"))) {
+        return 1;
+    }
+    if ((line[0] == 'n' || line[0] == 'N') &&
+        (line[1] == '\0' || inst_eq(line, "no"))) {
+        return 0;
+    }
+    return -1;
 }

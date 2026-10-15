@@ -972,6 +972,7 @@ these systems.
 | `/defaults` | ask no registry question, keep every current value (the INF's default on a new install) |
 | `/set Name=Value` | answer one registry question, repeatable; validated against the value table and the system (section 8.1); applies even where the question would not be asked |
 | `/force` | reinstall a current device, and install over a newer group (section 5.4) |
+| `/thunderbolt` | include the Thunderbolt 3 / USB4 support without asking (section 8.5) |
 | `/restage` | Vista and 7: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
 | `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
@@ -1228,7 +1229,61 @@ explicit 0 when the switch is on) writes the switch at 0 and leaves the
 list, as `silent-off.bat` does. Enter keeps the state; the default answer
 is off.
 
-## 9. Uninstall (owner, 2026-10-15)
+### 8.5 The Thunderbolt 3 / USB4 question (owner, 2026-10-15)
+
+Before the plan is shown, after the first reading of the devices, the tool
+asks "Install Thunderbolt 3 / USB4 support?", on every system, whenever the
+package carries the Thunderbolt driver (`xhcicm.inf`, `nt\xhcicmf.inf`,
+`xhcicm.sys`). The decision is a pure function (`inst_tb_decide`,
+host-tested case by case):
+
+| Situation | Asked | Enter, and `/yes` |
+|---|---|---|
+| a device `xhcicm.inf` matches is present (section 8.2's detection) | yes | Y |
+| none is present | yes - some laptops show their controller only while a device is plugged in, or only with a BIOS setting (the P14s with Assist on and pre-boot support off) | N |
+| `/thunderbolt` | no | Y, present or not |
+| `/list` | no; the question and its default are shown | the default |
+| the package carries no Thunderbolt driver | no | - |
+
+The text says, in plain terms, that a device plugged into that port is then
+approved automatically and can reach the computer's memory, names
+`XhciCmApprove`, and points to `tools\xhciinst\readme.txt`, which is in the
+package and says what the approval means and how to turn it off;
+where a Thunderbolt driver is already installed it adds that N keeps it as
+it is.
+
+- **Y** with a controller present: the run as before - its devices planned
+  and installed (the NHI, and the tunnel-port filter on NT), the INFs
+  staged, the `XhciCm*` questions asked.
+- **Y** with none present: on 2000 to 7 `xhcicm.inf` and `nt\xhcicmf.inf`
+  are staged with the rest (section 5.6), so Windows installs the NHI by
+  itself when the controller appears; the filter, which the tunnel ports
+  take only by an install the tool forces on XP and 7 (record 21 section
+  3.3), comes from running `INSTALL.BAT` again then, which the run says.
+  On 98 SE and ME `xhcicm.inf` stays in the local copy `DevicePath` names
+  (section 6.2), where the hardware wizard finds it; as for the
+  controller, the files then come from the copy's directory typed under
+  "Copy files from", and the run's closing note names that directory.
+  **Read on 98 SE** (2026-10-15): a Y with no controller, then the
+  controller at the next start - the wizard offered `XHCICM.INF` from the
+  copy with no box ticked, asked for the "xhci98 xHCI Host Controller
+  Disk" at `D:\WIN98`, and installed the host interface once the copy's
+  directory was typed.
+- **N**: the three files are left out of this run - not planned, not
+  staged in the driver store, not copied into the local copy (so no wizard
+  and no store offers them), and no `XhciCm*` question asked. A
+  Thunderbolt driver already installed is neither removed nor updated:
+  its devices are simply not part of the run, and its group gets no
+  verdict (a newer or unreadable xhcicm makes no step of a run that did
+  not include it). The 98 and ME steps then name only the UAS disk as
+  finding its driver in the copy.
+- The local copy's name follows its content, so the two answers make two
+  copies; an unfinished `/restage` recorded under either is the same
+  package's, and one that still owes the Thunderbolt INFs is refused
+  under N with "answer Y (or use /thunderbolt) to finish it". "The
+  Thunderbolt driver is staged" is printed only when this run staged
+  `xhcicm.inf`.
+
 
 ### 9.1 The warning
 
