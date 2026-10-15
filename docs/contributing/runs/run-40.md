@@ -562,3 +562,56 @@ attached explicitly; readings and shots in `vm\me-uas\legs\` and
 
 Both legs ran the tool unstamped, so it and the drivers read `2.4.0.0`, the
 version the branch carried; the change touches the tool alone.
+
+## Containment of the USB4 software connection manager - the host interface taken away (record 22 section 7.7)
+
+**The change** (branch `u4-live`, on the liveness monitor and gate of
+branch `v-2k`; reviewed and revised). Under the USB4 profile a lost host
+interface - the monitor's first all-ones or changed sample, a surprise
+removal, or a bind or resume that reads back the wrong ring size - puts
+the instance in the terminal CONTAINED state of record 22 section 7.7
+(decision U17, the owner's of 2026-10-15): no register, ring or router
+access, no eject, no deferred teardown, no UP action, no restart at
+resume, until a PnP stop and start or a reboot; force power and an
+unproven DMA buffer kept; the devices reported gone through one
+reconciliation. Host suite `test_u4cm` carries the loss inside a tunnel's
+setup, an eject, a resume and the stop.
+
+**The leg** (development host A; `usb4-emu`'s QEMU of `main` `5ba7f60`,
+`vm\usb4\bin-5ba7f60`, TCG, `pc` with `acpi=off`, `pentium3,-apic`, one
+processor, 256 MB; Windows 2000 SP4, an overlay of the `u2k-min` image of
+the 40-A.6 legs; profile `usb4-generic`, host model `minimal`, the device
+router `enc0` with its NVMe attached at power-on; the `qemu` flavour of
+`xhcicm.sys` at `6e8b4ac1`). The emulator models a platform power-off
+only for the Thunderbolt 3 profile, so the NHI (`1B36:00F4`) was placed
+behind a gated `usb4-tunnel-bridge` of its own (`nhirp`, `00:06.0`,
+`x-force-tunnel=on`, its gate open from power-on) and taken away with the
+harness override `qom-set nhirp x-gate closed` (`usb4-emu`
+`docs/HARNESS.md`): BAR0 and configuration space read all ones and the
+NHI's DMA is closed, with no PnP request to the guest. A probe before the
+leg read the NHI's capability register `0x00000010` through `xp` with the
+gate open and `0xFFFFFFFF` with it closed. Readings in
+`vm\u4-live\u2k\` (`debugcon-r2.log`, `trace-r2.log`, the shots).
+
+| Step | Result |
+| --- | --- |
+| The NHI at its new place | Found New Hardware, installed from the staged copy; the start bound, port 1's PCIe tunnel found preserved, the monitor armed (`cm.live.baseline=01000010`) |
+| `x-gate closed`, the guest idle at the desktop | within one idle period `cm.live.state=00000107` (CONTAINED, episode 1), `u4.contained`, `cm.reenum.unavailable=00000001`; the QEMU trace has no `usb4_*` register or ring line after the gate's own; the guest kept running, a command prompt answering. **PASS** |
+| `x-gate normal` 20 s later | 30 s with no access in the trace: the instance stayed contained, nothing reactivated it. **PASS** |
+| Restart of Windows with the instance contained | shut down and restarted with no bugcheck and no hang; the new instance enumerated the host router afresh and armed. **PASS** |
+| A second loss on that instance, then Device Manager's Disable | contained again; the stop wrote nothing (`u4.stop.contained`, `cm.unbind.no-access`, `cm.live.refused=00000000`: nothing even attempted) and kept the common buffer (`cm.buffer-kept=00000001`, the rings never proven stopped); the Disable completed. **PASS** |
+| The gate opened, then Enable | a new instance started, found port 1's PCIe tunnel preserved (`u4.preserved=00010809`): the contained instance had left the fabric as it was. **PASS** |
+
+Not exercised by this leg: I/O on an NVMe volume through the tunnel
+(`nvme98` is not bound on this overlay, so there was no volume); the
+`nvme98` channel's notification; a surprise removal; a loss inside a
+resume; Windows 98 SE. The emulator's own bridge `nhirp` (`1B36:0001`)
+matches the tunnel-port filter's INF like the real tunnel bridge `tb0`,
+which made no difference here. The commits after `6e8b4ac1` change the
+resume, the failed bind and the reconciliation while a PnP stop waits,
+none of which this leg exercised.
+
+### Owed
+
+- The same leg on Windows 98 SE, and with `nvme98` bound and a copy
+  running on the volume.
