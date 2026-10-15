@@ -231,6 +231,16 @@ typedef struct _CM_NHI {
     ULONG ArmOwed;
     ULONG U4BatchCount;
     TBT_U4_ACTION U4Batch[TBT_U4_ACTION_QUEUE];
+    /* Per USB4 port, the connection generation whose PCIe path the
+     * statement upcall saw proven closed (bit n-1 of U4ClosedValid for
+     * port n): a TUNNEL_UP of that generation still queued is stale. */
+    ULONG U4ClosedGen[TBT_U4_MAX_PORTS];
+    ULONG U4ClosedValid;
+    /* The USB4 profile's resume bound in ms for the most obligations a
+     * domain can hold (TbtU4ResumeBoundUs, rounded up), set before
+     * CmReenumSuspend: the hold's watchdog must be at least this plus
+     * record 21's 10 s (cm_reenum.h). */
+    ULONG U4ResumeBoundMs;
     /* The nvme98 channel's two moments (CmNhiSetU4Hooks), NULL until task
      * 40-A.7's cm_nvlink.c registers them. */
     CM_U4_UP_HOOK U4UpHook;

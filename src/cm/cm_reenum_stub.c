@@ -65,6 +65,10 @@ VOID CmReenumService(PCM_NHI nhi)
 VOID CmReenumSuspend(PCM_NHI nhi)
 {
     nhi->Reenum.Suspends++;
+    /* The contract's bound (cm_reenum.h): the client's resume bound plus
+     * record 21's 10 s; no filter holds anything here. */
+    nhi->Reenum.HoldBoundMs =
+        (nhi->U4On ? nhi->U4ResumeBoundMs : 0) + 10000UL;
     CmLogNote(nhi, "cm.reenum.suspend", nhi->Reenum.Suspends);
 }
 

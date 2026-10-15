@@ -5183,7 +5183,9 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     }
     tbtU4HotPlugEnable(cm);
     cm->Stage = TBT_U4_STAGE_RUNNING;
-    TbtU4Poll(cm);
+    if (!cm->Config.DeferFirstPoll) {
+        TbtU4Poll(cm);
+    }
     return TBT_OK;
 }
 

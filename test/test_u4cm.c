@@ -3031,9 +3031,46 @@ static void test_asm4242(void)
     CHECK(hostClean(&g_fab, 1), "its host side clean, USB3 included");
 }
 
+/* TBT_U4_CONFIG.DeferFirstPoll (task 40-A.6): the start connects nothing
+ * found empty; the caller's first poll does, and a preserved tunnel is
+ * preserved either way. */
+static void test_defer_first_poll(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    TBT_U4_ACTION a;
+
+    cfgDefault(&c);
+    c.DeferFirstPoll = TRUE;
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    CHECK_EQ(start(&g_fab, &g_ring, &g_cm, &c), TBT_OK, "deferred: start");
+    CHECK_EQ(g_cm.Stage, TBT_U4_STAGE_RUNNING, "deferred: running");
+    CHECK(g_cm.Ports[0].MapValid, "deferred: the mapping known at start");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "deferred: the cold device not yet connected");
+    CHECK(!TbtU4Port(&g_cm, 1)->Pcie.Up, "deferred: no tunnel built in the start");
+    CHECK(!TbtU4NextAction(&g_cm, &a), "deferred: no action queued by the start");
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "deferred: the first poll connects it");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 1, "deferred: one tunnel up");
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 1);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Pcie.Preserved,
+          "deferred: a pre-OS tunnel preserved by the start itself");
+}
+
 int main(void)
 {
     test_cold_minimal();
+    test_defer_first_poll();
     test_hot_plug_unplug();
     test_unplug_everywhere();
     test_unplug_nested();

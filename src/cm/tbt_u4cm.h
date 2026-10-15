@@ -124,6 +124,11 @@ typedef struct _TBT_U4_CONFIG {
     ULONG PreOsCleanup;     /* XhciCmPreOsCleanup 0, 1 or 2 (U2) */
     ULONG RingFlags;        /* tbt_hw.c TbtHwRingFlags; TAKEOVER is added */
     ULONG HostInterfaceCaps;/* as TbtHwSelect read it (Spec Table 12-11) */
+    /* TbtU4Start ends without its first TbtU4Poll, so no port found empty
+     * at start is connected (and no tunnel built) until the caller's own
+     * first TbtU4Poll: the driver takes its learning baseline of the
+     * tunnel ports between the two (record 22 section 7.6). Default FALSE. */
+    BOOLEAN DeferFirstPoll;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);

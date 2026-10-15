@@ -396,16 +396,22 @@ VOID CmNhiUnbind(PCM_NHI nhi)
  * unbind (record 22 section 4.2): the ICM's always (Linux pci.c
  * icl_nhi_shutdown after the unbind); the USB4 profile's only when it knew
  * its ports and found no device router connected on any of them (Linux
- * pci.c icl_nhi_suspend returns early while one is). A USB4 instance that
- * failed before or after learning its ports keeps the bit: what is behind
- * them is unknown, and an unknown is not "nothing connected".
+ * pci.c icl_nhi_suspend returns early while one is), and only while that
+ * knowledge is current: the instance still ACTIVE (never one whose start
+ * or resume failed - its platform readiness or its rings did not come
+ * back, and the port table is the one from before), not suspended, the
+ * last firmware-ready poll passed, and the ports' table read on the running
+ * rings. Any other case keeps the bit: what is behind the ports is
+ * unknown, and an unknown is not "nothing connected".
  */
 BOOLEAN CmNhiMayClearPower(PCM_NHI nhi)
 {
     if (!nhi->U4On) {
         return TRUE;
     }
-    return (BOOLEAN)(!nhi->U4.Failed && nhi->U4.PortCount != 0 &&
+    return (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE && !nhi->Suspended &&
+                     !nhi->U4.Failed && !nhi->U4.Suspended &&
+                     !nhi->Power.FwReadyFailed && nhi->U4.PortCount != 0 &&
                      !TbtU4AnyRouterConnected(&nhi->U4));
 }
 
@@ -516,6 +522,15 @@ static VOID cmU4ToIcm(const TBT_U4_ACTION *u, PTBT_ICM_ACTION a)
     a->WasApproved = TRUE;
 }
 
+/* Whether `port`'s PCIe path was proven closed for connection
+ * `generation` (cmU4LinkDown's record). */
+static BOOLEAN cmU4ClosedFor(PCM_NHI nhi, ULONG port, ULONG generation)
+{
+    return (BOOLEAN)(port >= 1 && port <= TBT_U4_MAX_PORTS &&
+                     (nhi->U4ClosedValid & (1UL << (port - 1))) != 0 &&
+                     nhi->U4ClosedGen[port - 1] == generation);
+}
+
 /* The learning baseline taken again (tbt_topo.h, XhciTbtLearnArm): after a
  * discovery, and after a tunnel down this driver handled. */
 static VOID cmU4Arm(PCM_NHI nhi)
@@ -617,13 +632,20 @@ static VOID cmU4Drain(PCM_NHI nhi)
         n++;
     }
     nhi->U4BatchCount = n;
-    if (cmTopoUsable(nhi)) {
-        for (i = 0; i < n; i++) {
-            if (nhi->U4Batch[i].Kind == TBT_U4_ACT_TUNNEL_UP &&
-                nhi->U4Batch[i].Port >= 1 &&
-                nhi->U4Batch[i].Port <= XHCI_TBT_MAX_PORTS) {
-                XhciTbtLearnUp(&nhi->Binds, nhi->U4Batch[i].Port);
-            }
+    /* Every tunnel up of the batch marked pending first, whether or not
+     * the set can be read now (XhciTbtLearnUp reads nothing): a device
+     * whose tunnel came up while the discovery was empty must still block
+     * attributing a later gain to another port. Not one whose path this
+     * driver already proved closed for that same generation (the
+     * statement upcall ran during the tick that queued both): that
+     * closure was the port's LearnDown, and the stale UP must not undo
+     * it. A TUNNEL_DOWN alone is never closure. */
+    for (i = 0; i < n; i++) {
+        u = &nhi->U4Batch[i];
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Port >= 1 &&
+            u->Port <= XHCI_TBT_MAX_PORTS &&
+            !cmU4ClosedFor(nhi, u->Port, u->Generation)) {
+            XhciTbtLearnUp(&nhi->Binds, u->Port);
         }
     }
     for (i = 0; i < n; i++) {
@@ -646,11 +668,13 @@ static VOID cmU4Drain(PCM_NHI nhi)
         if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
             cmU4LogRouter(nhi, u->Port);
         }
-        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && nhi->U4UpHook != NULL) {
-            /* The nvme98 channel's UP, before the endpoint is exposed. */
+        cmU4ToIcm(u, &a);
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && nhi->U4UpHook != NULL &&
+            CmNhiActionLive(nhi, &a)) {
+            /* The nvme98 channel's UP, before the endpoint is exposed;
+             * never for a connection that has already gone. */
             nhi->U4UpHook(nhi->U4HookContext, u);
         }
-        cmU4ToIcm(u, &a);
         if (nhi->Values.Value[CM_VAL_REENUM] == 0) {
             nhi->Counters.ReenumSkipped++;
         } else if (nhi->ReenumOn) {
@@ -698,6 +722,12 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
         if (info->Port >= 1 && info->Port <= XHCI_TBT_MAX_PORTS) {
             XhciTbtLearnDown(&nhi->Binds, info->Port);
             nhi->ArmOwed = 1;
+        }
+        if (info->Port >= 1 && info->Port <= TBT_U4_MAX_PORTS) {
+            /* Kept for the drain: a TUNNEL_UP of this generation still
+             * queued is stale (cmU4Drain). */
+            nhi->U4ClosedGen[info->Port - 1] = info->Generation;
+            nhi->U4ClosedValid |= 1UL << (info->Port - 1);
         }
     }
     if (nhi->U4DownHook != NULL) {
@@ -856,6 +886,9 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
+    /* The bind takes the tunnel ports' learning baseline between the
+     * start and the first tick, before any cold device is connected. */
+    nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
     TbtU4SetLinkDown(&nhi->U4, cmU4LinkDown, nhi);
     XhciTbtBindsInit(&nhi->Binds);
@@ -871,10 +904,12 @@ static VOID cmU4Activate(PCM_NHI nhi)
  * (record 22 section 4.4 steps 2 to 6): TbtU4Start - ring 0 taken over,
  * never reset; test (d)'s router half; the host router; the discovery and
  * preservation of section 9.2 (or the user's cleaning of 9.3); hot plug
- * enabled; cold devices connected. Then the re-enumeration seam started,
- * now that the router has named what it names (CmNhiNamePorts runs inside
- * its discovery), the eject entry registered, the learning baseline taken,
- * and the actions the start queued drained.
+ * enabled - but no port found empty connected yet (DeferFirstPoll). Then
+ * the re-enumeration seam started, now that the router has named what it
+ * names (CmNhiNamePorts runs inside its discovery), the eject entry
+ * registered, the learning baseline taken while no tunnel this instance
+ * builds is up, and only then the first tick, which connects the cold
+ * devices, and the drain of what it queued.
  */
 static VOID cmU4Bind(PCM_NHI nhi)
 {
@@ -913,7 +948,7 @@ static VOID cmU4Bind(PCM_NHI nhi)
     nhi->ReenumOn = 1;
     CmReenumSetEject(nhi, cmU4Eject, nhi);
     cmU4Arm(nhi);
-    CmNhiDrainActions(nhi);
+    CmNhiPollPass(nhi);
 }
 
 /* The USB4 profile's counters and port snapshot, at stop. */
@@ -1211,6 +1246,8 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     CmZero(&nhi->Binds, sizeof(nhi->Binds));
     nhi->U4On = 0;
     nhi->ArmOwed = 0;
+    nhi->U4ClosedValid = 0;
+    nhi->U4ResumeBoundMs = 0;
     nhi->U4BatchCount = 0;
     nhi->DmaBytes = 0;
     nhi->Hw = NULL;

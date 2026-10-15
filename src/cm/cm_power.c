@@ -200,6 +200,14 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     }
     nhi->Counters.Suspends++;
     CmLogNote(nhi, "cm.suspend", (ULONG)nhi->SystemPower);
+    if (nhi->U4On) {
+        /* The bound the hold's watchdog must cover, for the most
+         * obligations a domain can hold, before the hold is published
+         * (cm_reenum.h, CmReenumSuspend). */
+        nhi->U4ResumeBoundMs =
+            (TbtU4ResumeBoundUs(TBT_U4_OBLIGATIONS, nhi->ClockTickUs) +
+             999UL) / 1000UL;
+    }
     if (nhi->ReenumOn) {
         CmReenumSuspend(nhi);
     }

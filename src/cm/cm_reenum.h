@@ -85,10 +85,10 @@
  *   - calls CmNhiWaitService(nhi) and CmNhiActionLive(nhi, action) where
  *     this contract says TbtIcmService and TbtIcmActionLive (they forward
  *     to those under the ICM client);
- *   - acts on the one member CmNhiActionMember(nhi, action) returns, the
- *     index in Topo.Set of the port's own bridge (record 22 section 7.6,
- *     router-named or learned), and on the whole set when it returns
- *     XHCI_TBT_NO_MEMBER (always, under the ICM client);
+ *   - may act on the one member CmNhiActionMember(nhi, action) returns,
+ *     the index in Topo.Set of the port's own bridge (record 22 section
+ *     7.6, router-named or learned); the whole set is always correct, and
+ *     is what XHCI_TBT_NO_MEMBER (always, under the ICM client) asks for;
  *   - calls CmNhiNamePorts(nhi) after each XhciTbtTopoFind it acts on and
  *     before it fills Port[] from Topo.Set and publishes the claims: the
  *     router-named members join the set there (XhciTbtTopoAddNamed, which
@@ -97,9 +97,20 @@
  *     CM_PORT_ACTIVE read by the NHI's learning (XhciTbtLearn's `active`)
  *     and its eject hook's bridge-to-port lookup.
  * The NHI keeps the correspondence (CM_NHI.Binds) and drives the learning
- * itself; CmReenumSuspend's bound is the ICM's only (the USB4 profile logs
- * TbtU4ResumeBoundUs itself) and must not read CM_NHI.Icm's profile while
- * U4On.
+ * itself. At a suspend under U4On, CM_NHI.U4ResumeBoundMs holds the USB4
+ * client's resume bound (TbtU4ResumeBoundUs for the most obligations a
+ * domain holds, rounded up) before CmReenumSuspend is called; the hold's
+ * watchdog must be at least that plus record 21's 10 s (a fixed watchdog
+ * longer than both, below the power manager's own limit, satisfies it),
+ * and CM_NHI.Icm is zeroed then, so nothing of it may be taken as the
+ * USB4 client's bound. CmReenumResumed's `ok` is FALSE whenever an
+ * obligation was not met, though the domain keeps running.
+ *
+ * Removal on Windows 98 and ME: every Query_Remove_SubTree and
+ * Remove_SubTree of a tunnel port's child is this seam's own (cm_reenum.c),
+ * for both profiles; the NHI never calls CONFIGMG, and its eject hook runs
+ * only after a removal the seam made in order (a refused query-remove is
+ * respected and the hook is not called).
  *
  * CONTRACT. Every call above runs on the NHI's connection-manager thread
  * at PASSIVE_LEVEL with no lock held, serialised with the ICM traffic
