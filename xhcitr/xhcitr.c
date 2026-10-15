@@ -329,6 +329,8 @@ static int reportMode;     /* a report decodes every descriptor */
 /* Small helpers                                                             */
 /* ======================================================================== */
 
+static const char *ej_why_not(int u);
+
 static FARPROC proc(HMODULE module, const char *name)
 {
     return module != NULL ? GetProcAddress(module, name) : NULL;
@@ -1436,7 +1438,9 @@ static void add_devs_below(int parentT, int dn, int depth)
             char key[280];
             int t;
             tr_sprintf(label, sizeof(label), "%s%s", dn_name(&gw.N[i]),
-                       gw.N[i].Ejectable ? "  [can be stopped]" : "");
+                       gw.N[i].UnitOf != i ? ""
+                       : !dn_started(&gw.N[i]) ? "  [stopped - unplug it]"
+                       : ej_why_not(i) == NULL ? "  [can be stopped]" : "");
             tr_key(key, sizeof(key), "D", gw.N[i].Id, NULL);
             t = add_tnode(parentT, K_DEV, 0, 0, 0, i, label, key);
             if (t >= 0 && depth < 12) {
@@ -1693,8 +1697,6 @@ static void details_devnode(TR_TEXT *t, int dn)
     }
 }
 
-static const char *ej_why_not(int u);
-
 static void details_unit(TR_TEXT *t, int dn)
 {
     const DNODE *d = &gw.N[dn];
@@ -1707,6 +1709,8 @@ static void details_unit(TR_TEXT *t, int dn)
     tr_printf(t, "\nUnit behind a Thunderbolt port: %s\n", dn_name(&gw.N[u]));
     if (ej_why_not(u) == NULL) {
         tr_put(t, "  It can be stopped here (Action > Safely Remove).\n");
+    } else if (!dn_started(&gw.N[u])) {
+        tr_put(t, "  Stopped: you can unplug it.\n");
     } else {
         tr_printf(t, "  It cannot be stopped here now: %s.\n", ej_why_not(u));
     }
@@ -1983,15 +1987,16 @@ static void details_of(TR_TEXT *t, int i, int fetch)
 
     switch (n->Kind) {
     case K_ROOT:
-        tr_printf(t, "xHCI98 USB Tree %s\n\n%d USB devices, %d Thunderbolt/USB4 "
-                     "devices.\n", XHCITR_VERSION, usbDevices, tbDevices);
+        tr_printf(t, "xHCI98 USB Tree %s\n\n%d USB device%s, %d Thunderbolt/USB4 "
+                     "device%s.\n", XHCITR_VERSION, usbDevices,
+                  tr_plural(usbDevices), tbDevices, tr_plural(tbDevices));
         if (gw.Bad) {
             tr_printf(t, "%d device entries could not be read whole.\n", gw.Bad);
         }
         break;
     case K_TBROOT:
-        tr_printf(t, "%d Thunderbolt or USB4 host interfaces driven by xhcicm.\n",
-                  nhiCount);
+        tr_printf(t, "%d Thunderbolt or USB4 host interface%s driven by xhcicm.\n",
+                  nhiCount, tr_plural(nhiCount));
         for (k = 0; k < nhiCount; k++) {
             tr_printf(t, "  %s\n", dn_name(&gw.N[nhi[k].Node]));
         }
@@ -2019,7 +2024,7 @@ static void details_of(TR_TEXT *t, int i, int fetch)
         break;
     case K_USBROOT:
         tr_printf(t, "%d USB host controller%s, %d USB device%s.\n", ucCount,
-                  ucCount == 1 ? "" : "s", usbDevices, usbDevices == 1 ? "" : "s");
+                  tr_plural(ucCount), usbDevices, tr_plural(usbDevices));
         if (hcdOpenError != 0) {
             tr_printf(t, "\\\\.\\HCD0 did not open (error %lu).\n",
                       (unsigned long)hcdOpenError);
@@ -2095,12 +2100,12 @@ static int write_report(const char *path)
     GetLocalTime(&st);
     tr_text_init(&t, text, sizeof(text));
     tr_printf(&t, "xHCI98 USB Tree %s - report\nWindows %lu.%lu%s, %04u-%02u-%02u "
-                  "%02u:%02u\n%d USB devices, %d Thunderbolt/USB4 devices\n\n",
+                  "%02u:%02u\n%d USB device%s, %d Thunderbolt/USB4 device%s\n\n",
               XHCITR_VERSION, (unsigned long)envMajor, (unsigned long)envMinor,
               envNt ? "" : " (98/ME)", (unsigned int)st.wYear,
               (unsigned int)st.wMonth, (unsigned int)st.wDay,
               (unsigned int)st.wHour, (unsigned int)st.wMinute, usbDevices,
-              tbDevices);
+              tr_plural(usbDevices), tbDevices, tr_plural(tbDevices));
     ok = WriteFile(f, text, (DWORD)t.Len, &w, NULL) && w == t.Len;
     for (i = 0; i < tnCount && ok; i++) {
         tr_text_init(&d, detail, sizeof(detail));
@@ -2304,6 +2309,11 @@ static const char *ej_why_not(int u)
     k = gw.N[gw.N[u].Parent].PortNhi;
     if (k < 0) {
         return "it is not behind a Thunderbolt port";
+    }
+    if (!dn_started(&gw.N[u])) {
+        /* Held for the eject (Code 47) or otherwise stopped: the ICM keeps
+         * the tunnel until the unplug, so it is still listed. */
+        return "stopped - unplug it";
     }
     if (!nhi[k].HaveQ) {
         return "not confirmed: eject unavailable";
@@ -2678,6 +2688,10 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
                    "stopped. Look at the tree again.");
         goto out;
     }
+    if (!dn_started(&w.N[u])) {
+        tr_printf(&t, "%s is stopped already: you can unplug it.", q->Desc);
+        goto out;
+    }
     single = ej_single(&w, u);
     /* Immediately before the call: still eligible, nothing changed. */
     {
@@ -2837,6 +2851,7 @@ static void ej_unit(HWND owner, int u, int fromTray)
     }
     old = SetCursor(LoadCursor(NULL, IDC_WAIT));
     code = ej_run(q, msg, sizeof(msg), &rights);
+    tr_join_lines(msg);
     SetCursor(old);
     if (rights && envMajor >= 6) {
         char ask[2300];
@@ -2999,8 +3014,8 @@ static void update_status(void)
 {
     char text[128];
 
-    tr_sprintf(text, sizeof(text), "%d USB devices, %d Thunderbolt/USB4 devices%s",
-               usbDevices, tbDevices,
+    tr_sprintf(text, sizeof(text), "%d USB device%s, %d Thunderbolt/USB4 device%s%s",
+               usbDevices, tr_plural(usbDevices), tbDevices, tr_plural(tbDevices),
                viewStale ? " - changed, press F5" : "");
     SendMessageA(hStatus, SB_SETTEXTA, 0, (LPARAM)text);
 }
@@ -3535,8 +3550,8 @@ static void tray_tip(TR_NID *n)
         tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d TB/USB4 - %s",
                    tbDevices, lastEvent);
     } else {
-        tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d Thunderbolt/USB4 devices",
-                   tbDevices);
+        tr_sprintf(tip, sizeof(tip), "xHCI98 USB Tree: %d Thunderbolt/USB4 device%s",
+                   tbDevices, tr_plural(tbDevices));
     }
     tr_copy(n->szTip, tip, shellV5 ? sizeof(n->szTip) : 64);
 }
@@ -3953,6 +3968,7 @@ static int run_eject(void)
         return INST_EXIT_REFUSED;
     }
     code = ej_run(q, msg, sizeof(msg), &rights);
+    tr_join_lines(msg);
     say(msg, code != INST_EXIT_DONE);
     free(q);
     return code;

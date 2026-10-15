@@ -410,6 +410,16 @@ typedef struct _TR_OPTS {
  * stand alone. */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
+/* ---- small text helpers ---------------------------------------------- */
+
+/* "" for one, "s" for any other count. */
+const char *tr_plural(long n);
+
+/* Text wrapped for a console made one paragraph per line for a balloon or
+ * a message box: a single line break (LF or CR LF) becomes a space, an
+ * empty line between paragraphs is kept; in place. */
+void tr_join_lines(char *s);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented
