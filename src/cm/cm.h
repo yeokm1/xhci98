@@ -295,6 +295,11 @@ typedef struct _CM_NHI {
     ULONG LiveBar0Hi;
     ULONG CfgStrict;        /* cm_thr.c's cmConfig checks the length read */
     ULONG LiveNeedBm;       /* the validation found Bus Master clear      */
+    /* A TUNNEL_UP being handed to the re-enumeration seam (under
+     * WorkLock); CmNhiRevoke waits on DeliverIdle until none is, so no UP
+     * reaches the seam after a revocation returned. */
+    ULONG Delivering;
+    KEVENT DeliverIdle;
 
     /* Power (cm_power.c). */
     DEVICE_POWER_STATE DevicePower;

@@ -231,6 +231,8 @@ static VOID cmLogCounters(PCM_NHI nhi)
 VOID CmNhiDrainActions(PCM_NHI nhi)
 {
     TBT_ICM_ACTION a;
+    BOOLEAN up;
+    KIRQL irql;
 
     if (nhi->U4On) {
         cmU4Drain(nhi);
@@ -240,11 +242,21 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
         return;
     }
     while (TbtIcmNextAction(&nhi->Icm, &a)) {
-        if (nhi->Live.Revoked && a.Kind == TBT_ICM_ACT_TUNNEL_UP) {
-            /* Surprise-removed: no tunnel is published as up any more,
-             * whichever session queued it (cm_live.h). */
-            nhi->Counters.ActionsNotLive++;
-            continue;
+        up = (BOOLEAN)(a.Kind == TBT_ICM_ACT_TUNNEL_UP);
+        if (up) {
+            /* Admitted under WorkLock against CmNhiRevoke, which waits
+             * for the hand-over below to end: surprise-removed, no tunnel
+             * is published as up any more (cm_live.h). */
+            KeAcquireSpinLock(&nhi->WorkLock, &irql);
+            if (nhi->Live.Revoked) {
+                KeReleaseSpinLock(&nhi->WorkLock, irql);
+                nhi->Counters.ActionsNotLive++;
+                continue;
+            }
+            if (nhi->Delivering++ == 0) {
+                KeClearEvent(&nhi->DeliverIdle);
+            }
+            KeReleaseSpinLock(&nhi->WorkLock, irql);
         }
         if (a.Kind == TBT_ICM_ACT_TUNNEL_UP) {
             nhi->Counters.ActionsUp++;
@@ -273,6 +285,13 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
             nhi->Counters.ReenumSkipped++;
         }
         CmReenumAction(nhi, &a);
+        if (up) {
+            KeAcquireSpinLock(&nhi->WorkLock, &irql);
+            if (--nhi->Delivering == 0) {
+                (VOID)KeSetEvent(&nhi->DeliverIdle, IO_NO_INCREMENT, FALSE);
+            }
+            KeReleaseSpinLock(&nhi->WorkLock, irql);
+        }
     }
 }
 
@@ -474,6 +493,11 @@ VOID CmNhiRevoke(PCM_NHI nhi)
     KeAcquireSpinLock(&nhi->WorkLock, &irql);
     CmLiveRevoke(&nhi->Live);
     KeReleaseSpinLock(&nhi->WorkLock, irql);
+    /* An UP admitted before the revocation finishes its hand-over first;
+     * none is admitted after it. The seam's call does not wait for this
+     * PnP dispatch, so the wait ends. */
+    (VOID)KeWaitForSingleObject(&nhi->DeliverIdle, Executive, KernelMode,
+                                FALSE, NULL);
     CmLogNote(nhi, "cm.live.revoked", nhi->Live.State);
 }
 
@@ -1528,6 +1552,7 @@ VOID CmNhiBind(PCM_NHI nhi)
         /* Bound, then not answering (cm_live.h): the failure after
          * activation; the rings stop with whatever verification they get. */
         TbtIcmUnbind(&nhi->Icm);
+        TbtIcmLost(&nhi->Icm);
         nhi->Icm.Failed = TRUE;
         rc = TBT_E_HW;
     }

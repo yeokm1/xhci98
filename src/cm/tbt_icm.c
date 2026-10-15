@@ -1150,6 +1150,9 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
         if (rc != TBT_E_TIMEOUT) {
             break;
         }
+        /* This attempt's answer may still come, and a retry's success
+         * does not say which attempt it answered. */
+        icm->Ambiguous = TRUE;
         icm->Counters.Timeouts++;
         tbtIcmLog(icm, "tbt.icm.timeout", req[0]);
     }
@@ -1686,8 +1689,21 @@ static VOID tbtIcmReconcile(PTBT_ICM icm)
 static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale);
 static VOID tbtIcmFinishAnnounce(PTBT_ICM icm, BOOLEAN reconcile);
 
+static LONG tbtIcmBringUpEx(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
+                            BOOLEAN allowAll, BOOLEAN reconcile);
+
 static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
                           BOOLEAN resume)
+{
+    return tbtIcmBringUpEx(icm, va, phys, bytes, (BOOLEAN)!resume, resume);
+}
+
+/* `allowAll`: mailbox 0x23 on the rows that read the mode (a bind, and a
+ * full recovery of a power-cycled ICM). `reconcile`: every entry marked
+ * first and reconciled against the announcements (a resume, and a full
+ * recovery, which keeps the table of the session it replaces). */
+static LONG tbtIcmBringUpEx(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
+                            BOOLEAN allowAll, BOOLEAN reconcile)
 {
     LONG rc;
 
@@ -1707,7 +1723,7 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
 
     /* Linux icm.c icm_firmware_init sends allow-all only where it reads
      * the mode, and only at bind (ICM 6.5 [inf]: not on resume). */
-    if (!resume && (icm->Profile->Caps & TBT_ICM_CAP_GET_MODE) != 0) {
+    if (allowAll && (icm->Profile->Caps & TBT_ICM_CAP_GET_MODE) != 0) {
         rc = TbtIcmMailbox(icm, TBT_ICM_MBOX_ALLOW_ALL, 0);
         if (rc != TBT_OK) {
             tbtIcmFail(icm);
@@ -1716,13 +1732,13 @@ static LONG tbtIcmBringUp(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
     }
 
     icm->Session = TRUE;
-    rc = tbtIcmAnnounceAll(icm, resume);
+    rc = tbtIcmAnnounceAll(icm, reconcile);
     if (rc != TBT_OK) {
         tbtIcmFail(icm);
         return rc;
     }
     icm->Bound = TRUE;
-    tbtIcmFinishAnnounce(icm, resume);
+    tbtIcmFinishAnnounce(icm, reconcile);
     return TBT_OK;
 }
 
@@ -1963,8 +1979,8 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
         icm->Session = FALSE;
         icm->Failed = FALSE;
         tbtIcmRetirePending(icm);
-        return tbtIcmBringUp(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
-                             TBT_RING_DMA_BYTES, FALSE);
+        return tbtIcmBringUpEx(icm, (PVOID)icm->Ring->Va, icm->Ring->Phys,
+                               TBT_RING_DMA_BYTES, TRUE, TRUE);
     }
     if (!icm->Started || !icm->Bound) {
         return TBT_E_STOPPED;

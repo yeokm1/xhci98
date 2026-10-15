@@ -407,6 +407,8 @@ VOID CmThrInit(PCM_NHI nhi)
     KeInitializeEvent(&nhi->PnpDone, SynchronizationEvent, FALSE);
     KeInitializeEvent(&nhi->ThreadExited, NotificationEvent, FALSE);
     KeInitializeEvent(&nhi->PowerIdle, NotificationEvent, TRUE);
+    KeInitializeEvent(&nhi->DeliverIdle, NotificationEvent, TRUE);
+    nhi->Delivering = 0;
     nhi->Accepting = 0;
     nhi->PowerOutstanding = 0;
 }

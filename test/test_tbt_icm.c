@@ -1770,6 +1770,32 @@ static void test_lost_and_recover(void)
     CHECK(TbtIcmResume(&g_icm) != TBT_OK, "nor a resume on the same buffer");
     CHECK_EQ(g_fake.TxBaseLo, 0x1234UL, "still nothing reprogrammed");
 
+    /* A retry that succeeds still leaves the first attempt's answer
+     * possible: ambiguous. */
+    setupLive(0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK(!g_icm.Ambiguous, "a fresh session is not ambiguous");
+    g_fw.ApproveDelayUs = 10500000UL;
+    g_fw.Present = 1;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    idle(25000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "approved on the retry");
+    CHECK(g_icm.Ambiguous, "the timed-out attempt left it ambiguous");
+
+    /* An escalated recovery reconciles: a device gone in the outage, with
+     * no event, leaves the table. */
+    setupLive(1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "one device");
+    g_fw.Present = 0;
+    g_icm.Ambiguous = TRUE;
+    CHECK_EQ(TbtIcmRecover(&g_icm, FALSE), TBT_OK, "escalated to full");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "the vanished device reconciled");
+    n = actions(act, 8);
+    CHECK(n >= 1 && act[0].Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
+          act[0].Why == TBT_ICM_WHY_RECONCILED, "its tunnel-down");
+
     /* Cancelled: a mailbox wait ends at once, the receive takes nothing. */
     setupLive(0, 0);
     CHECK_EQ(start(), TBT_OK, "bind");

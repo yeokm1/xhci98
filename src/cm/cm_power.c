@@ -289,7 +289,14 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
             CmLogNote(nhi, "cm.resume-failed", (ULONG)(-rc));
             ok = FALSE;
         } else if (!CmNhiLiveArm(nhi)) {
+            /* Resumed, then not answering: the session is ended here -
+             * rings stopped (their stop verified or the buffer kept), the
+             * resumed table's UPs discarded and every entry gone - before
+             * the holds are released and anything is drained. */
             CmLogNote(nhi, "cm.resume-failed", 0x100UL);
+            TbtIcmUnbind(&nhi->Icm);
+            TbtIcmLost(&nhi->Icm);
+            nhi->Icm.Failed = TRUE;
             ok = FALSE;
         }
     }
