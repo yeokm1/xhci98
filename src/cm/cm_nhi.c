@@ -1053,10 +1053,21 @@ static VOID cmU4Bind(PCM_NHI nhi)
      * bridge is already known, it is pending from here, so its gain is
      * never attributed to another port, until its path is proven closed
      * (record 22 section 7.6; tbt_topo.h). */
+    /* The same for any port whose PCIe paths may be live without being
+     * verified: HELD (a discovery that could not read or did not verify
+     * everything), FAILED, a residual or an incomplete inventory - every
+     * port the start did not leave EMPTY. With DeferFirstPoll, a port found
+     * empty is still EMPTY here; only those carry no uncertainty. */
     for (i = 1; i <= nhi->U4.PortCount && i <= XHCI_TBT_MAX_PORTS; i++) {
         p = TbtU4Port(&nhi->U4, i);
-        if (p != NULL && p->Pcie.Up) {
+        if (p == NULL) {
+            continue;
+        }
+        if (p->State != TBT_U4_EMPTY || p->Pcie.Up || p->Pcie.Written != 0 ||
+            p->Pcie.Incomplete || p->HostResidual || p->AsFoundOwed) {
             XhciTbtLearnUp(&nhi->Binds, i);
+        }
+        if (p->Pcie.Up) {
             nhi->U4SeamGen[i - 1] = p->Generation;
             nhi->U4SeamValid |= 1UL << (i - 1);
         }
