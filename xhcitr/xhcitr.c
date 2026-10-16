@@ -1526,15 +1526,17 @@ static void usb_add_ports(int parentT, int ctrl, int parentUp)
         tr_key(key, sizeof(key), "U", uc[ctrl].DrvKey, p->Path);
         if (!p->HaveConn || p->Conn.Status == TR_CS_NONE) {
             if (viewFlags & TR_V_EMPTY) {
-                tr_sprintf(label, sizeof(label), "[Port %lu] (empty)",
-                           (unsigned long)p->Conn.Port);
+                tr_sprintf(label, sizeof(label), "[Port %lu%s] (empty)",
+                           (unsigned long)p->Conn.Port,
+                           tr_port_tag(p->HaveV2, p->V2Proto));
                 add_tnode(parentT, K_UPORT, k, 0, 0, -1, label, key);
             }
             continue;
         }
         if (p->Conn.Status != TR_CS_CONNECTED) {
-            tr_sprintf(label, sizeof(label), "[Port %lu] %s",
+            tr_sprintf(label, sizeof(label), "[Port %lu%s] %s",
                        (unsigned long)p->Conn.Port,
+                       tr_port_tag(p->HaveV2, p->V2Proto),
                        tr_conn_status_text(p->Conn.Status));
         } else {
             char name[160];
@@ -1544,8 +1546,9 @@ static void usb_add_ports(int parentT, int ctrl, int parentUp)
             if (dn >= 0) {
                 usb_label(dn, name, sizeof(name));
             }
-            tr_sprintf(label, sizeof(label), "[Port %lu] %s  %s%s",
-                       (unsigned long)p->Conn.Port, name,
+            tr_sprintf(label, sizeof(label), "[Port %lu%s] %s  %s%s",
+                       (unsigned long)p->Conn.Port,
+                       tr_port_tag(p->HaveV2, p->V2Proto), name,
                        speed_short(uport_speed(p)), usb_suffix(dn));
         }
         t = add_tnode(parentT, K_UPORT, k, 0, 0, dn, label, key);
@@ -1660,6 +1663,78 @@ static void usb_scan_all(void)
     }
 }
 
+/* 1 when devnode i is a PCI-to-PCI bridge (class 0604). */
+static int dn_is_bridge(int i)
+{
+    return i >= 0 && (inst_msz_has_class(gw.N[i].Hw, gw.N[i].HwBytes, "0604") ||
+                      inst_msz_has_class(gw.N[i].Compat, gw.N[i].CompatBytes, "0604"));
+}
+
+/* The bus and device of devnode i: CM_DRP_BUSNUMBER and _ADDRESS on NT, the
+ * instance id on 98 SE and ME (root-bus functions only). */
+static int dn_busdev(int i, unsigned int *bus, unsigned int *dev)
+{
+    if (envNt) {
+        if (!gw.N[i].HasLoc) {
+            return 0;
+        }
+        *bus = (unsigned int)gw.N[i].Bus;
+        *dev = (unsigned int)(gw.N[i].Addr >> 16);
+        return 1;
+    }
+    return tr_pci_loc9x(gw.N[i].Id, bus, dev);
+}
+
+/* Whether USB controller devnode dn is a Thunderbolt chip's own xHCI: a
+ * function on the same bus and device as an NHI (an integrated
+ * controller), or a function behind a bridge of the switch an NHI is
+ * behind (a discrete one, as Alpine Ridge's xHCI on the downstream port
+ * beside the NHI's). Never by a guess: an NHI must be in the walk. The
+ * generation is the NHI's published connection manager. */
+static int ctrl_tb_kind(int dn)
+{
+    int i;
+    int k;
+    unsigned int bus;
+    unsigned int dev;
+    int haveLoc;
+
+    if (dn < 0) {
+        return TR_TB_NOT;
+    }
+    haveLoc = dn_busdev(dn, &bus, &dev);
+    for (i = 0; i < gw.Count; i++) {
+        int match = 0;
+        unsigned int b2;
+        unsigned int d2;
+        if (!gw.N[i].IsNhi || i == dn) {
+            continue;
+        }
+        if (haveLoc && dn_busdev(i, &b2, &d2) && b2 == bus && d2 == dev &&
+            gw.N[i].Parent == gw.N[dn].Parent) {
+            match = 1;
+        } else if (gw.N[dn].Parent >= 0 && gw.N[i].Parent >= 0 &&
+                   dn_is_bridge(gw.N[dn].Parent) && dn_is_bridge(gw.N[i].Parent) &&
+                   gw.N[gw.N[dn].Parent].Parent >= 0 &&
+                   gw.N[gw.N[dn].Parent].Parent == gw.N[gw.N[i].Parent].Parent &&
+                   dn_is_bridge(gw.N[gw.N[dn].Parent].Parent)) {
+            match = 1;
+        }
+        if (!match) {
+            continue;
+        }
+        for (k = 0; k < nhiCount; k++) {
+            if (nhi[k].Node == i && nhi[k].R != NULL) {
+                TR_U32 cm = inst_get32(nhi[k].R, CM_ST_O_CM);
+                return cm == CM_ST_CM_ICM ? TR_TB_TB3
+                       : cm == CM_ST_CM_USB4 ? TR_TB_USB4 : TR_TB_UNKNOWN;
+            }
+        }
+        return TR_TB_UNKNOWN;
+    }
+    return TR_TB_NOT;
+}
+
 /* The router name of a tunnel port that is an ancestor of devnode dn. */
 static void behind_name(int dn, char *out, size_t cap)
 {
@@ -1700,6 +1775,13 @@ static void build_usb(int root)
         UCTRL *c = &uc[i];
         char label[200];
         char key[280];
+        char suffix[96];
+        char rhLabel[80];
+        unsigned int ports = 0;
+        unsigned int n2 = 0;
+        unsigned int n3 = 0;
+        int known = 1;
+        int k;
         int t;
         int rh;
         if (!c->Ours && !(viewFlags & TR_V_WINUSB)) {
@@ -1708,17 +1790,37 @@ static void build_usb(int root)
         if (c->Dn >= 0) {
             behind_name(c->Dn, c->Behind, sizeof(c->Behind));
         }
-        tr_sprintf(label, sizeof(label), "%s  (%s)%s%s%s",
+        {
+            unsigned int ven = 0;
+            unsigned int dev = 0;
+            int ids = c->Dn >= 0 && tr_pci_ids(gw.N[c->Dn].Id, &ven, &dev);
+            tr_ctrl_suffix(suffix, sizeof(suffix), ids, ven, dev,
+                           ctrl_tb_kind(c->Dn));
+        }
+        tr_sprintf(label, sizeof(label), "%s  (%s)%s%s%s%s",
                    c->Dn >= 0 ? dn_name(&gw.N[c->Dn]) : "USB host controller",
-                   c->Ours ? "xhci98" : "Windows", c->Behind[0] ? " (" : "",
+                   c->Ours ? "xhci98" : "Windows", suffix, c->Behind[0] ? " (" : "",
                    c->Behind, c->Behind[0] ? ")" : "");
         tr_key(key, sizeof(key), "C", c->DrvKey, c->Path);
         t = add_tnode(u, K_CTRL, i, 0, 0, c->Dn, label, key);
         if (t < 0) {
             return;
         }
+        for (k = 0; k < upCount; k++) {
+            if (up[k].Ctrl == i && up[k].ParentUp == -1) {
+                ports++;
+                if (!up[k].HaveV2 || (up[k].V2Proto & 0x07UL) == 0) {
+                    known = 0;
+                } else if (up[k].V2Proto & 0x04UL) {
+                    n3++;
+                } else {
+                    n2++;
+                }
+            }
+        }
+        tr_roothub_label(rhLabel, sizeof(rhLabel), ports, known, n2, n3);
         tr_key(key, sizeof(key), "H", c->DrvKey, "root");
-        rh = add_tnode(t, K_ROOTHUB, i, 0, 0, -1, "Root hub", key);
+        rh = add_tnode(t, K_ROOTHUB, i, 0, 0, -1, rhLabel, key);
         if (rh >= 0 && c->RootErr == 1) {
             add_tnode(rh, K_NOTE, 0, 0, 0, -1, "(the hub could not be opened)",
                       "N:hub");

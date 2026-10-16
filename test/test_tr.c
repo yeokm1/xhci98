@@ -1817,6 +1817,58 @@ static void test_login(void)
     CHECK(tr_tray_login_start(0, 1, 0) == 1, "login: a plain start always opens");
 }
 
+static void test_labels(void)
+{
+    unsigned int ven;
+    unsigned int dev;
+    char out[160];
+
+    CHECK(tr_pci_ids("PCI\\VEN_8086&DEV_02ED&SUBSYS_22B017AA&REV_00\\3&11583659&0&A0",
+                     &ven, &dev) && ven == 0x8086U && dev == 0x02EDU, "pci ids: NT instance id");
+    CHECK(tr_pci_ids("pci\\ven_1b36&dev_000d&subsys_11001af4\\BUS_00&DEV_04&FUNC_00",
+                     &ven, &dev) && ven == 0x1B36U && dev == 0x000DU, "pci ids: 98, lower case");
+    CHECK(!tr_pci_ids("USB\\VID_0781&PID_5581\\1", &ven, &dev) && ven == 0,
+          "pci ids: not PCI");
+    CHECK(!tr_pci_ids("PCI\\VEN_80", &ven, &dev), "pci ids: cut short");
+    CHECK(!tr_pci_ids(NULL, &ven, &dev), "pci ids: none");
+    CHECK(tr_pci_loc9x("PCI\\VEN_8086&DEV_8A13&SUBSYS_0\\BUS_00&DEV_0D&FUNC_02", &ven,
+                       &dev) && ven == 0 && dev == 0x0D, "98 location: root bus");
+    CHECK(!tr_pci_loc9x("PCI\\VEN_8086&DEV_15C1\\0000083000", &ven, &dev),
+          "98 location: a path form is not one");
+
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x02EDU, TR_TB_NOT);
+    CHECK(strcmp(out, " - Intel 8086:02ED") == 0, "controller: Intel PCH xHCI");
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x15C1U, TR_TB_TB3);
+    CHECK(strcmp(out, " - Thunderbolt 3 controller's USB (8086:15C1)") == 0,
+          "controller: Alpine Ridge's own xHCI");
+    tr_ctrl_suffix(out, sizeof(out), 1, 0x8086U, 0x8A13U, TR_TB_USB4);
+    CHECK(strcmp(out, " - USB4 controller's USB (8086:8A13)") == 0, "controller: USB4");
+    tr_ctrl_suffix(out, sizeof(out), 0, 0, 0, TR_TB_UNKNOWN);
+    CHECK(strcmp(out, " - Thunderbolt controller's USB") == 0,
+          "controller: an NHI's, no ids, no generation");
+    tr_ctrl_suffix(out, sizeof(out), 1, 0xABCDU, 0x0001U, TR_TB_NOT);
+    CHECK(strcmp(out, " - vendor ABCD ABCD:0001") == 0, "controller: unknown vendor");
+    tr_ctrl_suffix(out, sizeof(out), 0, 0, 0, TR_TB_NOT);
+    CHECK(out[0] == '\0', "controller: nothing read, nothing added");
+
+    tr_roothub_label(out, sizeof(out), 18, 1, 14, 4);
+    CHECK(strcmp(out, "Root hub - 18 ports (14 USB 2.0, 4 USB 3.x)") == 0, "root hub: split");
+    tr_roothub_label(out, sizeof(out), 1, 1, 1, 0);
+    CHECK(strcmp(out, "Root hub - 1 port (1 USB 2.0, 0 USB 3.x)") == 0, "root hub: one port");
+    tr_roothub_label(out, sizeof(out), 2, 0, 0, 0);
+    CHECK(strcmp(out, "Root hub - 2 ports") == 0, "root hub: protocols unknown");
+    tr_roothub_label(out, sizeof(out), 0, 1, 0, 0);
+    CHECK(strcmp(out, "Root hub") == 0, "root hub: no ports read");
+    tr_roothub_label(out, 12, 18, 1, 14, 4);
+    CHECK(strlen(out) == 11, "root hub: a small buffer");
+
+    CHECK(strcmp(tr_port_tag(1, 0x07UL), ", USB 3") == 0, "port tag: USB 3");
+    CHECK(strcmp(tr_port_tag(1, 0x03UL), ", USB 2") == 0, "port tag: USB 2");
+    CHECK(strcmp(tr_port_tag(1, 0x01UL), ", USB 1.1") == 0, "port tag: USB 1.1");
+    CHECK(strcmp(tr_port_tag(1, 0UL), "") == 0, "port tag: none reported");
+    CHECK(strcmp(tr_port_tag(0, 0x07UL), "") == 0, "port tag: no _EX_V2");
+}
+
 int main(void)
 {
     test_printf();
@@ -1832,6 +1884,7 @@ int main(void)
     test_desc_lengths();
     test_usb_eject();
     test_login();
+    test_labels();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

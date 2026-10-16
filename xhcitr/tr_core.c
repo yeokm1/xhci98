@@ -2225,3 +2225,169 @@ int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
 {
     return !(trayMode && haveValue && value == 0);
 }
+
+static int tr_hex4(const char *s, unsigned int *v)
+{
+    int i;
+
+    *v = 0;
+    for (i = 0; i < 4; i++) {
+        int c = tr_up((unsigned char)s[i]);
+        *v <<= 4;
+        if (c >= '0' && c <= '9') {
+            *v |= (unsigned int)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            *v |= (unsigned int)(c - 'A' + 10);
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int tr_pci_ids(const char *id, unsigned int *ven, unsigned int *dev)
+{
+    const char *p;
+
+    *ven = 0;
+    *dev = 0;
+    if (id == NULL || !tr_starts_ci(id, "PCI\\VEN_")) {
+        return 0;
+    }
+    p = id + 8;
+    if (!tr_hex4(p, ven) || !tr_starts_ci(p + 4, "&DEV_") || !tr_hex4(p + 9, dev)) {
+        *ven = 0;
+        *dev = 0;
+        return 0;
+    }
+    return 1;
+}
+
+const char *tr_pci_vendor(unsigned int ven)
+{
+    static const struct {
+        unsigned int Ven;
+        const char *Name;
+    } names[] = {
+        { 0x8086U, "Intel" },     { 0x1022U, "AMD" },
+        { 0x1B21U, "ASMedia" },   { 0x1106U, "VIA" },
+        { 0x1912U, "Renesas" },   { 0x1033U, "NEC" },
+        { 0x104CU, "TI" },        { 0x1B73U, "Fresco Logic" },
+        { 0x1B36U, "Red Hat" },   { 0x10DEU, "NVIDIA" },
+        { 0x1D6AU, "Aquantia" },  { 0x1E49U, "Yangtze" },
+        { 0x1D17U, "Zhaoxin" }
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (names[i].Ven == ven) {
+            return names[i].Name;
+        }
+    }
+    return NULL;
+}
+
+void tr_ctrl_suffix(char *out, size_t cap, int haveIds, unsigned int ven,
+                    unsigned int dev, int tbKind)
+{
+    const char *tb = tbKind == TR_TB_TB3 ? "Thunderbolt 3"
+                     : tbKind == TR_TB_USB4 ? "USB4"
+                     : tbKind == TR_TB_UNKNOWN ? "Thunderbolt" : NULL;
+    const char *name;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (tb != NULL) {
+        if (haveIds) {
+            tr_sprintf(out, cap, " - %s controller's USB (%04X:%04X)", tb, ven, dev);
+        } else {
+            tr_sprintf(out, cap, " - %s controller's USB", tb);
+        }
+        return;
+    }
+    if (!haveIds) {
+        return;
+    }
+    name = tr_pci_vendor(ven);
+    if (name != NULL) {
+        tr_sprintf(out, cap, " - %s %04X:%04X", name, ven, dev);
+    } else {
+        tr_sprintf(out, cap, " - vendor %04X %04X:%04X", ven, ven, dev);
+    }
+}
+
+void tr_roothub_label(char *out, size_t cap, unsigned int ports, int known,
+                      unsigned int usb2, unsigned int usb3)
+{
+    if (ports == 0) {
+        tr_copy(out, "Root hub", cap);
+    } else if (!known) {
+        tr_sprintf(out, cap, "Root hub - %u port%s", ports, tr_plural((long)ports));
+    } else {
+        tr_sprintf(out, cap, "Root hub - %u port%s (%u USB 2.0, %u USB 3.x)", ports,
+                   tr_plural((long)ports), usb2, usb3);
+    }
+}
+
+const char *tr_port_tag(int haveV2, TR_U32 proto)
+{
+    if (!haveV2) {
+        return "";
+    }
+    if (proto & 0x04UL) {
+        return ", USB 3";
+    }
+    if (proto & 0x02UL) {
+        return ", USB 2";
+    }
+    if (proto & 0x01UL) {
+        return ", USB 1.1";
+    }
+    return "";
+}
+
+static int tr_hex2(const char *s, unsigned int *v)
+{
+    int i;
+
+    *v = 0;
+    for (i = 0; i < 2; i++) {
+        int c = tr_up((unsigned char)s[i]);
+        *v <<= 4;
+        if (c >= '0' && c <= '9') {
+            *v |= (unsigned int)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            *v |= (unsigned int)(c - 'A' + 10);
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int tr_pci_loc9x(const char *id, unsigned int *bus, unsigned int *dev)
+{
+    const char *last = NULL;
+    const char *p;
+
+    *bus = 0;
+    *dev = 0;
+    if (id == NULL) {
+        return 0;
+    }
+    for (p = id; *p != '\0'; p++) {
+        if (*p == '\\') {
+            last = p + 1;
+        }
+    }
+    if (last == NULL || !tr_starts_ci(last, "BUS_") || !tr_hex2(last + 4, bus) ||
+        !tr_starts_ci(last + 6, "&DEV_") || !tr_hex2(last + 11, dev) ||
+        !tr_starts_ci(last + 13, "&FUNC_")) {
+        *bus = 0;
+        *dev = 0;
+        return 0;
+    }
+    return 1;
+}
