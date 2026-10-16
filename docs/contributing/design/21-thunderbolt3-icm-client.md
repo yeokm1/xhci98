@@ -1552,7 +1552,9 @@ is never renumbered under it.
    (present at power-on, numbered by the BIOS, or numbered by an earlier
    pass), nothing is done either. A function answering Configuration
    Request Retry Status (vendor id `0001h`) is not ready: the whole
-   attempt is undone and made again 200 ms later, up to five times.
+   attempt is undone and made again 100 ms later; so is an empty
+   secondary bus while the port reads link-up (the switch behind it
+   still training); twenty attempts at most, two seconds.
 3. **Bus numbers.** Depth first from the secondary bus, each type 1
    function in reset state is given primary = its bus, secondary = the
    next free bus from the member's secondary + 1, and subordinate = the
@@ -1562,25 +1564,62 @@ is never renumbered under it.
 4. **Windows.** Each memory BAR behind the chain is sized (all-ones
    written, read back, the value read first written back; only on a
    function whose Memory Space Enable is clear, else nothing more is
-   done), each bridge's window is the memory its subtree needs rounded up
-   to 1 MiB (closed where nothing behind it decodes memory), and the
-   windows are placed from the top of the member's own memory window
-   downward, each subtree inside its bridge's window from that window's
-   top, so the bottom of the member's window stays free for any endpoint
-   beside the chain. Each bridge's I/O and prefetchable windows are
-   closed, and its Memory Space and Bus Master Enable set. A member with
-   no memory window, or one too small for the chain and the BARs beside
-   it, gets the bus numbers alone.
-5. Every write is preceded by a read that the function is still the one
+   done; a BAR over 1 GiB, or a 64-bit one of 4 GiB or more, refuses the
+   windows), each bridge's window is the memory its subtree needs rounded
+   up to the subtree's largest alignment and at least 1 MiB, with one
+   more alignment unit where that is above 1 MiB (closed where nothing
+   behind it decodes memory), and the windows are placed from the top of
+   the member's own memory window downward, the largest alignment first
+   so they pack with no gap, each subtree inside its bridge's window from
+   that window's top, so the bottom of the member's window stays free for
+   any endpoint beside the chain. Each bridge's I/O and prefetchable
+   windows are closed, and its Memory Space and Bus Master Enable set. A
+   member with no memory window, or one too small for the chain and the
+   BARs beside it, gets the bus numbers alone.
+5. **Interrupt lines**, once the windows are in place. A function's
+   interrupt is provably routed only where it travels a wire whose IRQ is
+   already known. The tunnel port's own Interrupt Line is known (the
+   BIOS wrote it and PCI.VXD holds it), and a function below the port
+   whose Interrupt Pin, swizzled up through the bridges, reaches the port
+   on the port's own pin - (pin - 1 + its device + the device numbers of
+   the bridges between) mod 4 equal to the port's pin - shares the port's
+   wire at the port's primary side. Such a function, where its line reads
+   0 or `FFh`, gets the port's line; its pin, and a bridge's Bridge
+   Control, are written back as read. Any other function gets nothing,
+   and keeps whatever PCI.VXD makes of it (Code 29 for want of an IRQ on
+   the P14s). Considered and not used: the IRQ Windows recorded at boot
+   for the same position (`HKLM\Enum`'s LogConfig is rewritten at every
+   enumeration, as it was in the P14s captures, and `HKEY_DYN_DATA`
+   does not survive a restart, so neither is a store a later hot plug
+   can trust), and the BIOS's `$PIR` table (it would be a parser of a
+   BIOS structure for a case the port's own line already decides: on the
+   P14s the table is the standard swizzle, link 61, IRQ 10, the same
+   answer). Bridge Control and the Command register need nothing for
+   INTx: a PCI-to-PCI bridge forwards it whatever Bridge Control says,
+   and Interrupt Disable (Command bit 10) resets to 0.
+6. Every write is preceded by a read that the function is still the one
    journalled (its identity, a type 1 header), journalled before it is
    issued, and read back after. Bounds: six levels of bridges, sixteen
    bridges, buses inside the member's range only. A refusal after the
    first write (no room, too deep, too many, a numbered bridge below one
    in reset state, a failed or unheld write, the request gone stale)
    writes everything journalled back as it was read, deepest first, each
-   only to a bridge that still reads as the one journalled; a window
-   refusal puts back the windows and keeps the bus numbers. The
-   re-enumeration goes ahead in every case.
+   only to a bridge that still reads as the one journalled, and each
+   written back value read back; a window refusal puts back the windows
+   and keeps the bus numbers, but a stale one puts back the bus numbers
+   too, so the newer request finds the chain in reset state. The
+   re-enumeration goes ahead in every case but a stale one, which the
+   newer request makes.
+
+**What the owner's ThinkPad read** (2026-10-16, a hot plug after a start
+without the enclosure, each prototype a replaced `xhcicm.sys`): with the
+bus numbers alone, PCI.VXD re-read both ASMedia bridges (their LogConfig
+was rewritten) but left the first at Code 29 with its windows closed and
+no IRQ; with the windows as well, both bridges started with
+`E0000000h`-`E00FFFFFh`, inside the port's `D4100000h`-`E00FFFFFh`, and
+the NVMe appeared, at Code 29 for want of an IRQ; the interrupt lines
+are the third step. `XhciCmBridgeDiag` (section 8) recorded each
+attempt.
 
 Why the windows too: in the emulator, with the bus numbers alone, PCI.VXD
 found the second bridge and the NVMe behind it (it never did before), but
@@ -1615,6 +1654,14 @@ it came up (on the P14s, Code 29 until a restart). Windows 98 SE and ME
 only: the NT route never reads it, since `pci.sys` owns a bridge's bus
 numbers and windows there. No INF writes it and the installer neither
 asks for it nor writes it.
+
+**The diagnostic.** The 9x worker copies its last attempt to the NHI,
+and the thread writes it as `XhciCmBridgeDiag` (`REG_BINARY`, twenty
+dwords, `cm_statb.h`) in the NHI's hardware key beside `XhciCmStatus`, so
+a release build's outcome can be read from a registry export without a
+debugger: the outcome, what was seen, the port's bus range and window,
+the first two bridges' registers as left, the interrupt lines' outcome
+and counts, and why nothing was done where nothing was.
 
 **Not done.** I/O and prefetchable windows, a CardBus bridge, a bridge
 the BIOS left half-numbered, BARs above 1 GiB, a concurrent Device
@@ -2463,7 +2510,8 @@ events by code; approvals sent, succeeded, failed; tunnel ups and downs;
 re-enumerations run, skipped (and why), and their `CONFIGRET` or status;
 mailbox commands and their outcomes; idle polls; malformed and unmatched
 frames (section 1.4.6); child filters attached, skipped and refused (section
-7.4).
+7.4). On 98 SE and ME the bus numbering's last attempt is also written to
+the registry as `XhciCmBridgeDiag` (section 6.1.1), in every flavour.
 
 The log is the pure ring of `xhci_log.c`, compiled in by path: producers
 record from the thread, and the ring is emitted at stop from the thread at

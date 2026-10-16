@@ -554,14 +554,18 @@ static ULONG brWinWrite(BRNUM_CTX *c, ULONG k, ULONG offset, ULONG value,
     return ((back & compare) == (value & compare)) ? 1UL : 0UL;
 }
 
-/*
- * The journalled bridges of `bus` given their windows, from `top` (one
- * past the highest address) downward but never below `floor`, each
- * aligned to its Align[], and each subtree inside its bridge's window
- * from that window's top. 0, or a refusal.
- */
 static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
-                     ULONG depth)
+                     ULONG depth);
+
+/*
+ * The journalled bridges of `bus` whose alignment is `only` (0: those with
+ * nothing to decode, closed) given their windows, from *top (one past the
+ * highest address) downward but never below `floor`, each aligned to its
+ * Align[], and each subtree inside its bridge's window from that window's
+ * top. *top is left below the last window placed. 0, or a refusal.
+ */
+static ULONG brPlaceAt(BRNUM_CTX *c, ULONG bus, PULONG ptop, ULONG floor,
+                       ULONG depth, ULONG only)
 {
     PXHCI_TBT_BRNUM r;
     ULONG dev;
@@ -576,8 +580,10 @@ static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
     ULONG base;
     ULONG mem;
     ULONG rc;
+    ULONG top;
 
     r = c->R;
+    top = *ptop;
     if (depth > XHCI_TBT_BRNUM_MAX_DEPTH) {
         return XHCI_TBT_BRWIN_ACCESS;
     }
@@ -607,6 +613,12 @@ static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
                     r->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_ACCESS;
                 }
+                if ((r->Need[k] == 0 ? 0UL : r->Align[k]) != only) {
+                    if (fn == 0 && !first) {
+                        break;
+                    }
+                    continue;
+                }
                 if (!brGo(c)) {
                     r->WinWhere = bdf;
                     return XHCI_TBT_BRWIN_STALE;
@@ -629,6 +641,7 @@ static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
                            << 16) |
                           ((base >> 16) & 0xFFF0UL);
                     top = base;
+                    *ptop = top;
                 }
                 r->WinDone[k] = 1;
                 if (!brWinWrite(c, k, XHCI_TBT_CFG_IOWIN, BRWIN_IO_CLOSED, 0) ||
@@ -664,6 +677,36 @@ static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
         }
     }
     return 0;
+}
+
+/*
+ * The journalled bridges of `bus` given their windows from `top` downward
+ * but never below `floor`: the largest alignment first, so that windows
+ * whose sizes are multiples of their alignments pack with no gap, then
+ * the closed ones. 0, or a refusal.
+ */
+static ULONG brPlace(BRNUM_CTX *c, ULONG bus, ULONG top, ULONG floor,
+                     ULONG depth)
+{
+    ULONG k;
+    ULONG most;
+    ULONG a;
+    ULONG rc;
+
+    most = 0;
+    for (k = 0; k < c->Count; k++) {
+        if ((c->R->Now[k] & 0xFFUL) == bus && c->R->Need[k] != 0 &&
+            c->R->Align[k] > most) {
+            most = c->R->Align[k];
+        }
+    }
+    for (a = most; a >= BRWIN_GRAIN; a >>= 1) {
+        rc = brPlaceAt(c, bus, &top, floor, depth, a);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    return brPlaceAt(c, bus, &top, floor, depth, 0);
 }
 
 /* One register written back, read back under `compare` (0: not read). */
@@ -708,8 +751,10 @@ static VOID brWinUndo(BRNUM_CTX *c)
                    r->WasCmd[k - 1] & 0xFFFFUL, BRWIN_CMD_MEM | BRWIN_CMD_BM);
         ok &= brPut(c, bdf, XHCI_TBT_CFG_MEMWIN, r->WasMem[k - 1],
                     BRWIN_MEM_MASK);
-        ok &= brPut(c, bdf, XHCI_TBT_CFG_PFWIN, r->WasPf[k - 1], 0);
-        ok &= brPut(c, bdf, XHCI_TBT_CFG_IOWIN, r->WasIo[k - 1] & 0xFFFFUL, 0);
+        ok &= brPut(c, bdf, XHCI_TBT_CFG_PFWIN, r->WasPf[k - 1],
+                    BRWIN_MEM_MASK);
+        ok &= brPut(c, bdf, XHCI_TBT_CFG_IOWIN, r->WasIo[k - 1] & 0xFFFFUL,
+                    0x0000F0F0UL);
         if (!ok) {
             r->UndoFailed++;
             continue;
@@ -1016,6 +1061,15 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         r->Outcome = XHCI_TBT_BRNUM_DONE;
         if ((flags & XHCI_TBT_BRNUM_F_WINDOWS) != 0 && c.Count != 0) {
             brWindows(&c, port, secondary);
+            if (r->WinOutcome == XHCI_TBT_BRWIN_STALE) {
+                /* Superseded: the bus numbers go too, so the newer request
+                 * finds the chain in reset state and sets it all up. */
+                brUndo(&c);
+                r->Numbered = 0;
+                r->Last = 0;
+                r->Outcome = XHCI_TBT_BRNUM_STALE;
+                return r->Outcome;
+            }
         }
         if ((flags & XHCI_TBT_BRNUM_F_IRQ) != 0 && c.Count != 0 &&
             ((flags & XHCI_TBT_BRNUM_F_WINDOWS) == 0 ||

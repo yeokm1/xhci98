@@ -335,15 +335,17 @@ Windows 98 SE and ME only.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
-| `XhciCmBridgeNumbering` | Bus numbers for the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
+| `XhciCmBridgeNumbering` | The set-up (bus numbers, memory windows, interrupt lines) of the PCI bridges a device brings up behind a Thunderbolt tunnel after Windows has started (98 SE and ME; ignored on 2000 to 7) | `0` | `1` | `1` | not written |
 
 A device whose PCI Express side has a bridge of its own, such as a USB4
 NVMe enclosure built on the ASMedia ASM2464, needs the bridge given bus
-numbers before anything behind it can be found. The BIOS does it when the
+numbers and a memory window before anything behind it can be found. The BIOS does it when the
 device is present at power-on; Windows 98 does not do it for a device
 plugged in later, and Device Manager shows the bridge with Code 29 until a
-restart. With `1` the driver numbers such bridges itself, inside the range
-the BIOS left for the Thunderbolt port, before it asks Windows to look.
+restart. With `1` the driver sets such bridges up itself, inside the bus
+range and memory window the BIOS left for the Thunderbolt port, and gives
+a device behind them the port's own interrupt line where its interrupt
+provably arrives on that line, before it asks Windows to look.
 `0` leaves them as they come up, which was the behaviour before it. Any
 other value is refused and `1` stands. The install does not write it and
 does not ask for it (`INSTALL /set` does not take it either): set it

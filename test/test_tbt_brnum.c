@@ -1069,6 +1069,90 @@ static VOID test_irq(VOID)
     CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
 }
 
+/* A window's base and limit from its 20h dword. */
+static ULONG wbase(ULONG v)
+{
+    return (v & 0xFFF0UL) << 16;
+}
+
+static ULONG wlimit(ULONG v)
+{
+    return (((v >> 16) & 0xFFF0UL) << 16) | 0x000FFFFFUL;
+}
+
+static VOID test_windows_order_and_stale(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, nvme, k, j;
+    ULONG d[8];
+    ULONG e[8];
+
+    /* Eight downstream ports alternating a 1 MiB BAR (a 1 MiB window) and
+     * a 2 MiB BAR (a 4 MiB window aligned to 2 MiB): placed largest
+     * alignment first they pack inside the upstream port's window. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    usp = madd(port, 0, 0, 0x15D38086UL, 1, 0);
+    for (k = 0; k < 8; k++) {
+        d[k] = madd(usp, k, 0, 0x15D38086UL, 1, 0);
+        e[k] = madd(d[k], 0, 0, ID_NVME, 0, 0);
+        m.N[e[k]].BarSize[0] = (k & 1) ? 0x200000UL : 0x100000UL;
+    }
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "mixed alignments placed");
+    for (k = 0; k < 8; k++) {
+        CHECK_EQ(wbase(m.N[d[k]].Mem) >= wbase(m.N[usp].Mem) &&
+                 wlimit(m.N[d[k]].Mem) <= wlimit(m.N[usp].Mem), 1,
+                 "each downstream window inside the upstream port's");
+        if (k & 1) {
+            CHECK_EQ(wbase(m.N[d[k]].Mem) & 0x1FFFFFUL, 0, "a 2 MiB one aligned");
+        }
+        for (j = 0; j < k; j++) {
+            CHECK_EQ(wlimit(m.N[d[k]].Mem) < wbase(m.N[d[j]].Mem) ||
+                     wlimit(m.N[d[j]].Mem) < wbase(m.N[d[k]].Mem), 1,
+                     "no two windows overlap");
+        }
+    }
+
+    /* Superseded during the window stage: the bus numbers go too, and a
+     * later request sets everything up. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    masm(port, &usp, &d[0], &nvme);
+    mnvmebars(nvme);
+    goCalls = 0;
+    goRefuseAt = 5;
+    goReplace = ROOT;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_STALE, "superseded in the window stage");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_STALE, "the windows stale");
+    CHECK_EQ(m.N[usp].Buses, 0, "the bus numbers undone too");
+    CHECK_EQ(m.N[d[0]].Buses, 0, "both");
+    goRefuseAt = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "the newer request numbers it");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "and windows it");
+
+    /* An I/O window write back that does not hold is counted. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xE000D410UL;
+    masm(port, &usp, &d[0], &nvme);
+    mnvmebars(nvme);
+    m.N[usp].Io = 0x0101UL;
+    m.FailWriteBdf = XHCI_TBT_BDF(0x07, 0, 0);
+    m.FailWriteOff = XHCI_TBT_CFG_MEMWIN;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(m.N[usp].Io, 0x0101UL, "the I/O window put back as read");
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -1085,6 +1169,7 @@ int main(void)
     test_windows();
     test_windows_more();
     test_irq();
+    test_windows_order_and_stale();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }
