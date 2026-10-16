@@ -6,8 +6,9 @@
  * (generation recorded at "HwFindAdapter", DOWN_QUIESCED applied for that
  * generation or a newer one, DOWN without QUIESCED and older generations
  * ignored, an odd or changed Sequence read again); the two profiles'
- * statement conditions; where the channel is offered and the wait with
- * no receiver; interface 3's locator bytes; the REMOVE_PENDING request.
+ * statement conditions; interface 3's locator bytes and proof query
+ * handler; the REMOVE_PENDING request (R9); interface 3's publication
+ * order (R3, R4) and the two waits' deadline-first steps (R11, R12 S4).
  */
 
 #include <stdio.h>
@@ -96,7 +97,7 @@ static void test_layout(void)
     CHECK_EQ(STOR98CM_VERSION, 4, "IOCTL message version 4");
     CHECK(memcmp(STOR98CM_SIGNATURE, "STOR98CM", 8) == 0, "IOCTL signature");
     CHECK_EQ(table.Count, STOR98LS_ENTRIES, "count");
-    CHECK_EQ(table.Cookie, 0, "cookie zero");
+    CHECK_EQ(table.Cookie, 0, "cookie zero until the 9x publication");
     for (i = 0; i < STOR98LS_ENTRIES; i++) {
         CHECK_EQ(table.Entry[i].Flags, 0, "every entry unused");
         CHECK_EQ(table.Entry[i].Sequence, 0, "every sequence zero");
@@ -273,19 +274,6 @@ static void test_verdicts(void)
 
     CHECK_EQ(CmNvlinkAckBoundMs(TRUE), 5000, "NT: the 5 s gone deadline");
     CHECK_EQ(CmNvlinkAckBoundMs(FALSE), 3000, "9x: 3 s");
-    CHECK(CmNvlinkAckBoundMs(FALSE) >= STOR98LS9X_CM_LINK_WAIT_MS &&
-          CmNvlinkAckBoundMs(FALSE) <= STOR98LS9X_GONE_MS,
-          "9x: within interface 3's R12 S4 bounds");
-
-    /* Where the channel is offered, and the wait for an acknowledgement. */
-    CHECK(CmNvlinkOffered(TRUE), "NT: offered (interface 2)");
-    CHECK(!CmNvlinkOffered(FALSE), "9x: not offered by this build");
-    CHECK_EQ(CmNvlinkAwaitBoundMs(FALSE, CmNvlinkOffered(FALSE)), 0,
-             "9x: a link-down with no channel waits for nothing");
-    CHECK_EQ(CmNvlinkAwaitBoundMs(TRUE, TRUE), 5000,
-             "NT with a receiver: the 5 s bound");
-    CHECK_EQ(CmNvlinkAwaitBoundMs(TRUE, FALSE), 0,
-             "NT with no stor98 loaded: no wait");
 
     CHECK_EQ(CmNvlinkLeft(1000, 1000, 5000), 5000, "nothing spent");
     CHECK_EQ(CmNvlinkLeft(1000, 3000, 5000), 3000, "2 s spent");
@@ -309,13 +297,73 @@ static void test_record(void)
     CHECK(memcmp(r, want, sizeof(want)) == 0, "the record's bytes");
     CHECK(memcmp(r, "S98L", 4) == 0, "starts with the ASCII signature");
     CHECK_EQ(CM_NVLINK_RECORD_BYTES, 20, "the locator is 20 bytes");
+    CHECK_EQ(CM_NVLINK_PROOF_BYTES, 12, "the proof table is 12 bytes");
+    CHECK(strcmp(CM_NVLINK_REC_KEY,
+                 "System\\CurrentControlSet\\Services\\stor98") == 0,
+          "the locator key");
     CHECK(strcmp(CM_NVLINK_REC_VALUE, "LinkState") == 0, "the locator value");
+    CHECK(strcmp(STOR98LS9X_PROOF_KEY, "Stor98LinkState") == 0,
+          "the proof key");
+    CHECK_EQ(CM_NVLINK_REMOVE_MS, 14000, "T_ack is 14 s (R11 O4)");
+    CHECK(CM_NVLINK_ACK_9X_MS >= STOR98LS9X_CM_LINK_WAIT_MS &&
+          CM_NVLINK_ACK_9X_MS <= STOR98LS9X_GONE_MS,
+          "the 9x link-down wait within R12 S4's bounds");
+}
+
+static void test_proof(void)
+{
+    ULONG cookie;
+    ULONG other;
+    STOR98LS9X_PROOF_TABLE proof;
+    CM_NV_VALCTX vc[3];
+    UCHAR out[32];
+    ULONG cb;
+
+    cookie = 0x12345678UL;
+    other = 0;
+    proof.TableLinear = 0xC1341200UL;
+    proof.TableSize = sizeof(STOR98LS_TABLE);
+    proof.Cookie = cookie;
+    memset(vc, 0, sizeof(vc));
+    vc[0].value_context = &cookie;
+    vc[1].value_context = &proof;
+    vc[2].value_context = &other;
+    cb = 0;
+    CHECK_EQ(CmNvlinkProofQuery(vc, 2, NULL, &cb, &cookie, &proof), 0,
+             "a length query");
+    CHECK_EQ(cb, 16, "4 + 12 bytes");
+    CHECK_EQ(vc[0].valuelen, 4, "BootCookie's length");
+    CHECK_EQ(vc[1].valuelen, 12, "TableLinear's length");
+    cb = 15;
+    CHECK_EQ(CmNvlinkProofQuery(vc, 2, out, &cb, &cookie, &proof),
+             CM_NV_ERROR_MORE_DATA, "a short buffer");
+    CHECK_EQ(cb, 16, "the length it needs");
+    memset(out, 0xEE, sizeof(out));
+    cb = sizeof(out);
+    CHECK_EQ(CmNvlinkProofQuery(vc, 2, out, &cb, &cookie, &proof), 0,
+             "both values");
+    CHECK_EQ(cb, 16, "16 bytes written");
+    CHECK(vc[0].val_buff_ptr == (PVOID)out &&
+          vc[1].val_buff_ptr == (PVOID)(out + 4), "each value's place");
+    CHECK(memcmp(out, &cookie, 4) == 0, "the cookie");
+    CHECK(memcmp(out + 4, &proof, 12) == 0, "the proof table");
+    CHECK_EQ(out[16], 0xEE, "nothing past them");
+    cb = sizeof(out);
+    CHECK_EQ(CmNvlinkProofQuery(vc + 1, 1, out, &cb, &cookie, &proof), 0,
+             "one value");
+    CHECK_EQ(cb, 12, "TableLinear alone");
+    cb = sizeof(out);
+    CHECK_EQ(CmNvlinkProofQuery(vc + 2, 1, out, &cb, &cookie, &proof), 0,
+             "an unknown value");
+    CHECK_EQ(cb, 0, "no bytes");
+    CHECK_EQ(vc[2].valuelen, 0, "length 0");
 }
 
 static void test_remove(void)
 {
     ULONG i;
     ULONG o;
+    ULONG g;
 
     CmNvlinkTableInit(&table);
     i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
@@ -326,17 +374,24 @@ static void test_remove(void)
              STOR98LS_IN_USE | STOR98LS_UP | CM_NVLINK_REMOVE_PENDING,
              "UP kept, REMOVE_PENDING set");
     CHECK_EQ(table.Entry[i].RemoveSequence, 7, "the sequence");
-    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_NONE, "not answered");
+    g = table.Entry[i].LinkGeneration;
+    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7, g), CM_NVLINK_RM_NONE, "not answered");
     table.Entry[i].RemoveAck = (6UL << 8) | CM_NVLINK_RM_CLEAN;
-    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_NONE,
+    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7, g), CM_NVLINK_RM_NONE,
              "an answer to an older request");
     table.Entry[i].RemoveAck = (7UL << 8) | CM_NVLINK_RM_ISOLATED;
-    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_ISOLATED, "isolated");
+    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7, g), CM_NVLINK_RM_ISOLATED, "isolated");
+    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7, g + 1), CM_NVLINK_RM_NONE,
+             "not on another generation (R9c)");
     table.Entry[i].RemoveAck = (7UL << 8) | 9UL;
-    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_FAILED,
+    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7, g), CM_NVLINK_RM_FAILED,
              "an unknown outcome is not clean");
     table.Entry[i].RemoveAck = (7UL << 8) | CM_NVLINK_RM_CLEAN;
-    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_CLEAN, "clean");
+    CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7, g), CM_NVLINK_RM_CLEAN, "clean");
+    CHECK_EQ(CM_NVLINK_RM_CLEAN, 1, "CLEAN is 1");
+    CHECK_EQ(CM_NVLINK_RM_ISOLATED, 2, "ISOLATED_NOT_CLEAN is 2");
+    CHECK_EQ(CM_NVLINK_RM_FAILED, 3, "FAILED is 3");
+    CHECK_EQ(CM_NVLINK_REMOVE_PENDING, 8, "REMOVE_PENDING is Flags bit 3");
     CmNvlinkRemoveCancel(&table, i);
     CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE | STOR98LS_UP, "cancelled");
     CHECK(CmNvlinkRemoveRequest(&table, i, 8), "request 8");
@@ -347,7 +402,7 @@ static void test_remove(void)
     i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK(CmNvlinkRemoveRequest(&table, i, 10), "request 10");
     CHECK_EQ(CmNvlinkPublishUp(&table, 5, 0, TRUE, &o), 1, "another function");
-    CHECK_EQ(CmNvlinkRemoveAnswer(NULL, 0, 1), CM_NVLINK_RM_NONE, "no table");
+    CHECK_EQ(CmNvlinkRemoveAnswer(NULL, 0, 1, 1), CM_NVLINK_RM_NONE, "no table");
 }
 
 static void test_fresh(void)
@@ -389,6 +444,156 @@ static void test_fresh(void)
     CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an UP entry is not retired");
     CHECK_EQ(CmNvlinkRetire(NULL, 4), 0, "no table");
 }
+/* A fake publisher for CmNvlinkPublish9x: each step appends its letter. */
+typedef struct _PUB {
+    char Order[8];
+    ULONG N;
+    BOOLEAN Resident;
+    ULONG Open;         /* 0: the proof key exists */
+    ULONG Create;
+    ULONG Locator;
+} PUB;
+
+static void pubMark(PUB *p, char c)
+{
+    if (p->N < sizeof(p->Order) - 1) {
+        p->Order[p->N++] = c;
+        p->Order[p->N] = '\0';
+    }
+}
+
+static BOOLEAN pubResident(PVOID c)
+{
+    pubMark((PUB *)c, 'R');
+    return ((PUB *)c)->Resident;
+}
+
+static ULONG pubOpen(PVOID c)
+{
+    pubMark((PUB *)c, 'O');
+    return ((PUB *)c)->Open;
+}
+
+static ULONG pubCreate(PVOID c)
+{
+    pubMark((PUB *)c, 'P');
+    return ((PUB *)c)->Create;
+}
+
+static ULONG pubLocator(PVOID c)
+{
+    pubMark((PUB *)c, 'L');
+    return ((PUB *)c)->Locator;
+}
+
+static ULONG pubRun(PUB *p, BOOLEAN resident, ULONG open, ULONG create,
+                    ULONG locator, PULONG error)
+{
+    CM_NV_PUB9X ops;
+
+    memset(p, 0, sizeof(*p));
+    p->Resident = resident;
+    p->Open = open;
+    p->Create = create;
+    p->Locator = locator;
+    ops.Resident = pubResident;
+    ops.OpenProof = pubOpen;
+    ops.CreateProof = pubCreate;
+    ops.WriteLocator = pubLocator;
+    ops.Context = p;
+    return CmNvlinkPublish9x(&ops, error);
+}
+
+static void test_publish9x(void)
+{
+    PUB p;
+    ULONG e;
+
+    /* The open of a key that is not there fails (2, file not found). */
+    CHECK_EQ(pubRun(&p, TRUE, 2, 0, 0, &e), CM_NVLINK_PUB_OK, "published");
+    CHECK(strcmp(p.Order, "ROPL") == 0,
+          "residency, open first, proof, then the locator (R3, R4)");
+    CHECK_EQ(e, 0, "no error");
+
+    CHECK_EQ(pubRun(&p, TRUE, 0, 0, 0, &e), CM_NVLINK_PUB_PUBLISHER,
+             "an existing proof key is another publisher's (R3a)");
+    CHECK(strcmp(p.Order, "RO") == 0, "nothing created, no locator");
+
+    CHECK_EQ(pubRun(&p, FALSE, 2, 0, 0, &e), CM_NVLINK_PUB_RESIDENCY,
+             "not resident: nothing published (R4)");
+    CHECK(strcmp(p.Order, "R") == 0, "not even the open");
+
+    CHECK_EQ(pubRun(&p, TRUE, 2, 5, 0, &e), CM_NVLINK_PUB_PROOF,
+             "the dynamic key refused");
+    CHECK(strcmp(p.Order, "ROP") == 0, "no locator without the proof");
+    CHECK_EQ(e, 5, "the VMM's code");
+
+    CHECK_EQ(pubRun(&p, TRUE, 2, 0, 1013, &e), CM_NVLINK_PUB_LOCATOR,
+             "the locator refused");
+    CHECK(strcmp(p.Order, "ROPL") == 0, "after the proof");
+    CHECK_EQ(e, 1013, "its code");
+}
+
+static void test_waits(void)
+{
+    ULONG i;
+    ULONG o;
+    ULONG g;
+
+    /* The link-down acknowledgement wait: the deadline before the read. */
+    CmNvlinkTableInit(&table);
+    i = CmNvlinkPublishUp(&table, 4, 0, TRUE, &o);
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 1000, 1200, 3000),
+             CM_NVLINK_AW_SUPERSEDED, "an UP entry is not waited for");
+    CmNvlinkSetDown(&table, i, TRUE);
+    CHECK_EQ(CmNvlinkAckStep(&table, i, FALSE, 1000, 1200, 3000),
+             CM_NVLINK_AW_NO_RECEIVER, "no receiver: no wait (no proof read)");
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 1000, 1200, 3000),
+             CM_NVLINK_AW_PENDING, "waiting");
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 1000, 4000, 3000),
+             CM_NVLINK_AW_TIMEOUT, "the 3 s spent");
+    table.Entry[i].AckGeneration = table.Entry[i].LinkGeneration;
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 1000, 3999, 3000),
+             CM_NVLINK_AW_ACKED, "acknowledged inside the bound");
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 1000, 4000, 3000),
+             CM_NVLINK_AW_LATE,
+             "first seen at the deadline: late, never taken (R11, R12 S4)");
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 0xFFFFFF00UL, 0x100UL, 3000),
+             CM_NVLINK_AW_ACKED, "across the clock's wrap");
+    table.Entry[i].AckGeneration = table.Entry[i].LinkGeneration - 1;
+    CHECK_EQ(CmNvlinkAckStep(&table, i, TRUE, 1000, 1200, 3000),
+             CM_NVLINK_AW_PENDING, "an older generation's acknowledgement");
+    CHECK_EQ(CmNvlinkAckStep(NULL, 0, TRUE, 0, 0, 3000),
+             CM_NVLINK_AW_SUPERSEDED, "no table");
+
+    /* The removal wait: T_ack read before the answer. */
+    CmNvlinkTableInit(&table);
+    i = CmNvlinkPublishUp(&table, 4, 0, TRUE, &o);
+    g = table.Entry[i].LinkGeneration;
+    CHECK(CmNvlinkRemoveRequest(&table, i, 3), "request 3");
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 3, g, 0), CM_NVLINK_RM_NONE,
+             "no answer yet");
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 3, g, CM_NVLINK_REMOVE_MS),
+             CM_NVLINK_RM_TIMEOUT, "T_ack spent");
+    table.Entry[i].RemoveAck = (3UL << 8) | CM_NVLINK_RM_CLEAN;
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 3, g, 220), CM_NVLINK_RM_CLEAN,
+             "clean at 220 ms");
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 3, g, CM_NVLINK_REMOVE_MS - 1),
+             CM_NVLINK_RM_CLEAN, "clean just inside T_ack");
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 3, g, CM_NVLINK_REMOVE_MS),
+             CM_NVLINK_RM_LATE, "first seen at T_ack: late, not clean (R11)");
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 3, g + 1, 220), CM_NVLINK_RM_NONE,
+             "another generation's: no answer (R9c)");
+    CHECK_EQ(CmNvlinkRemoveStep(&table, i, 4, g, 220), CM_NVLINK_RM_NONE,
+             "another request's: no answer (R9c)");
+    CHECK(CM_NVLINK_RM_TIMEOUT != CM_NVLINK_RM_CLEAN &&
+          CM_NVLINK_RM_LATE != CM_NVLINK_RM_CLEAN &&
+          CM_NVLINK_RM_LATE <= 0xFF, "the wait's own ends fit the log byte");
+    CHECK(CM_NVLINK_RETRY_MS == 2000 && CM_NVLINK_RETRY_FOR_MS == 30000,
+          "Remove_SubTree retried every 2 s for 30 s (R11 O6)");
+    CHECK(CM_NVLINK_POLL_MS <= 50, "read at least every 50 ms (R10)");
+}
+
 int main(void)
 {
     test_layout();
@@ -397,7 +602,10 @@ int main(void)
     test_verdicts();
     test_fresh();
     test_record();
+    test_proof();
     test_remove();
+    test_publish9x();
+    test_waits();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

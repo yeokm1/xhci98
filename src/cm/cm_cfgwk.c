@@ -1173,13 +1173,15 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
     } else {
         entry = CM_NVLINK_NONE;
     }
+    answer = CM_NVLINK_RM_NONE;
     if (entry != CM_NVLINK_NONE) {
         start = cmWkNowTicks();
-        answer = CM_NVLINK_RM_NONE;
-        for (;;) {
-            answer = CmNvlinkWkAnswer(entry, seq);
-            if (answer != CM_NVLINK_RM_NONE || !cmWkCurrent(w, i, gen) ||
-                cmWkSince(start) >= CM_NVLINK_REMOVE_MS) {
+        /* The deadline before each read: an answer first seen after it is
+         * late, logged and not taken (interface 3, R11; CmNvlinkRemoveStep
+         * answers CM_NVLINK_RM_TIMEOUT or CM_NVLINK_RM_LATE then). */
+        while (cmWkCurrent(w, i, gen)) {
+            answer = CmNvlinkWkAnswer(entry, seq, egen, cmWkSince(start));
+            if (answer != CM_NVLINK_RM_NONE) {
                 break;
             }
             /* -CM_NVLINK_POLL_MS ms, relative, in 100 ns units, without
@@ -1188,13 +1190,29 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
             pause.HighPart = -1;
             (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
         }
-        CmNvlinkWkWithdraw(entry, seq);
         cmWkLog(w, "cm.nvlink.9x.remove-answer", (seq << 8) | answer);
     }
-    cr = CmCfgmgRemove(&w->Cfgmg, devnode);
-    cmWkLog(w, "cm.reenum.9x.remove", cr);
+    /* Remove_SubTree; after a stor98 request, retried while it fails for
+     * CM_NVLINK_RETRY_FOR_MS from the first attempt (R11 O6's bound; a
+     * veto is never forced). */
+    start = cmWkNowTicks();
+    for (;;) {
+        cr = CmCfgmgRemove(&w->Cfgmg, devnode);
+        cmWkLog(w, "cm.reenum.9x.remove", cr);
+        if (cr == CMG_CR_SUCCESS || entry == CM_NVLINK_NONE ||
+            cmWkSince(start) + CM_NVLINK_RETRY_MS >= CM_NVLINK_RETRY_FOR_MS) {
+            break;
+        }
+        pause.LowPart = (ULONG)(0UL - CM_NVLINK_RETRY_MS * 10000UL);
+        pause.HighPart = -1;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &pause);
+    }
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
+    }
+    /* R11 O5: REMOVE_PENDING cleared after the removal. */
+    if (entry != CM_NVLINK_NONE) {
+        CmNvlinkWkWithdraw(entry, seq);
     }
     if (cmWkCurrent(w, i, gen)) {
         return TRUE;

@@ -1911,9 +1911,8 @@ slot, so under a saturated queue it arrived after the driver's gone deadline,
 and once the disk is gone it fails. The discovery worker, the recipient
 cache and the per-connection discovery context this section proposed go
 with it; nothing in this driver looks for Stor98. `src/cm/cm_nvlink.c`
-(the pure entry protocol, host-tested) and `cm_nvlinkos.c` implement
-this side: interface 2 on NT; on Windows 98 SE and ME, in `3.0.0.0`,
-nothing (the next bullet but one).
+(the pure entry protocol, the locator's bytes and the proof's query
+handler, host-tested) and `cm_nvlinkos.c` implement this side.
 
 - **The table.** One `STOR98LS_TABLE` (signature `S98L`, 4C383953h,
   version 4) in non-paged pool, allocated at
@@ -1936,28 +1935,66 @@ nothing (the next bullet but one).
   `OBJ_PERMANENT`) with one callback that answers `STOR98LS_QUERY` with the
   table's address; Stor98 opens it in `HwFindAdapter`, once. The unload
   unregisters the callback and keeps the table.
-- **Windows 98 SE and ME: no channel in `3.0.0.0`.** Interface 3 (R3
-  to R5; `nvme98`'s MD-5: never a pointer trusted across boots) finds the
-  table through a locator, `REG_BINARY` value `LinkState` of
-  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98` (20
-  bytes: `S98L`, version 4, the table's linear address, its size and a
-  cookie), which Stor98 accepts only beside a current-boot proof: the
-  dynamic key `HKEY_DYN_DATA\Stor98LinkState`, one per boot, created by
-  the connection manager with `_RegCreateDynKey` and answered by its own
-  resident provider (`BootCookie` and `TableLinear`), deleted only at its
-  unload. This build publishes neither (`CmNvlinkOffered`, owner,
-  2026-10-16; roadmap-usb4.md NV9X.1): a locator without the proof gives
-  Stor98 no channel anyway, and an `UP` it can never acknowledge would
-  only make each link-down and eject wait for nothing. So on 98 SE and ME
-  the table is allocated and stays empty: no `UP` is published, no
-  statement is made (none was made there before either: "The statement"
-  below), no acknowledgement is waited for, and the worker makes no
-  `REMOVE_PENDING` request. Stor98 finds no locator, which is R5's "CM
-  channel unavailable": it runs the disk with no link-state channel, on
-  its own gone deadline (MD-1) and its own pool budget, with no
-  clean-eject handshake; an eject or unplug of the drive takes the
-  removal path every other device takes. The former 9x record
-  (`Services\nvme98`, version 1) is no longer written.
+- **Windows 98 SE and ME rendezvous** (interface 3, R3; `nvme98`'s MD-5:
+  never a pointer trusted across boots). At the first tunnel action of the
+  load (no registry service runs while the NHI's own start is pending), and
+  before any `UP` is published on 9x, the driver fills the table's
+  `Cookie` (nonzero, per boot) and then, in this order
+  (`CmNvlinkPublish9x`, host-tested):
+  1. **residency** (R4): it clears its `DriverUnload`, so the image that
+     answers the proof and writes the table stays loaded for the rest of
+     the boot whatever its PnP devices do - as the start of a CONFIGMG
+     worker (section 6.1) already makes it;
+  2. **the current-boot proof** (R3a): it opens
+     `HKEY_DYN_DATA\Stor98LinkState`, and if the key exists another
+     publisher owns it and nothing is published; otherwise it creates that
+     key with `_RegCreateDynKey`, this image as its provider, with two
+     values answered from this driver's own memory by one query handler in
+     all four of the provider's slots (`PROVIDER_KEEPS_VALUE_LENGTH`, so
+     the handler sets each value's length): `BootCookie` (`REG_DWORD`, the
+     cookie) and `TableLinear` (`REG_BINARY`, 12 bytes: the table's linear
+     address, its size 272 and the cookie;
+  3. **the locator** (R3b), only after the proof: `REG_BINARY` value
+     `LinkState` of
+     `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98`, 20
+     bytes of little-endian `ULONG`s - `S98L`, version 4, the table's
+     linear address, its size and the cookie.
+
+  The services are the VMM's `_RegOpenKey`, `_RegCloseKey`, `_RegCreateKey`,
+  `_RegDeleteKey`, `_RegSetValueEx` and `_RegCreateDynKey` (148h, 149h,
+  14Ah, 14Bh, 152h and 176h, their places in the Windows 98 DDK's `VMM.H`
+  table, checked against `VMM.INC`; the provider and value structures are
+  `VMMREG.H`'s), reached by the INT 20h dynalink of section 6.1. The
+  locator persists across boots and is only a locator; the proof exists
+  only while this image is loaded in this boot, so Stor98 accepts the
+  table only when the proof's cookie and address equal the locator's and
+  the table's cookie matches (R5). The key is deleted only at the unload,
+  before the image that answers it goes (R4); after step 1 no unload
+  comes, so in practice the proof lasts until the restart, and a restart
+  starts with no `HKEY_DYN_DATA` key at all, so the next boot publishes a
+  new table with a new cookie and the old locator names nothing Stor98
+  accepts. Any step that fails leaves that load with no channel: the
+  table stays empty, no `UP` is published there, nothing is awaited and
+  no `REMOVE_PENDING` request is made - which is the whole of 9x's
+  behaviour before this channel existed. The outcome is logged
+  (`cm.nvlink.9x.record`: bit 31 published, else the step in bits 18:16
+  and its code in 15:0). The VMM refuses a static key under
+  `HKEY_DYN_DATA` (Stor98's gate Q-9x), which is why the proof is a
+  dynamic key. Each read of the proof is counted, as NT counts its
+  callback's queries: Stor98 reads it once per load, in `HwFindAdapter`,
+  so until it has been read no instance holds the table, and neither the
+  acknowledgement wait nor the removal request below waits for one.
+
+  What this gives Stor98 `0.3.0.1` on 98 SE and ME is the table and its
+  `UP` entries (it binds to the entry naming its function and records the
+  generation, R8d). It does not give it a statement or a removal request
+  in `3.0.0.0`: no link-down statement is made there ("The statement"
+  below: no reading on 98 SE and ME), and an eject made with the install
+  or tray tool goes to Windows directly (record 24 section 7.1), so the
+  worker's handshake below is not reached by it. Stor98 relies on its own
+  gone deadline (about 5 s) and on Windows' removal, as before;
+  roadmap-usb4.md NV9X.3 is the work that makes both.
+
 - **UP before the enumeration.** For each active member, before the call
   that exposes its secondary bus (the invalidation of section 6.2,
   `Reenumerate_DevNode` of section 6.1), the driver scans that bus and
@@ -2023,38 +2060,69 @@ nothing (the next bullet but one).
   marked reads `AckGeneration` = `LinkGeneration`, or the bound from the
   mark: 5 s on Windows 2000 and later (the gone deadline in `nvme98`'s
   test build; the header gives no number), and 3 s on Windows 98 SE and
-  ME, inside interface 3's R12 S4 bounds (at most Stor98's 9x gone
-  deadline, `STOR98LS9X_GONE_MS`, 5 s, and not below
-  `STOR98LS9X_CM_LINK_WAIT_MS`, 2 s) - unused in `3.0.0.0`, where nothing
-  on 9x is awaited (`CmNvlinkAwaitBoundMs`). The acknowledgement ends the
-  wait at once; an idle
+  ME, inside interface 3's R12 S4 bounds: at most Stor98's 9x gone
+  deadline (`STOR98LS9X_GONE_MS`, 5 s) and not below
+  `STOR98LS9X_CM_LINK_WAIT_MS` (2 s, two of its 250 ms polls and 1.5 s of
+  timer lateness). The acknowledgement ends the wait at once; an idle
   Stor98 that has not answered by then is a benign timeout (G3 run C:
   nothing was held, and its next request applied the statement), and no
   idle indication shortens or skips the wait - the acknowledgement is the
   only signal. Orchestrator decision of 2026-10-15, owner to confirm. The thread services the ICM between
   reads. On NT it does not wait while no driver
   has ever asked for the table (no Stor98 is loaded, so none can answer);
-  on 9x it never waits in `3.0.0.0`.
-- **A removal on 9x** (MD-5; unreached in `3.0.0.0`, which offers no
-  9x channel, and kept for NV9X.1): every CONFIGMG call is the domain's
+  on 9x it does not wait where the proof and locator were not published,
+  nor while no Stor98 has read the proof. Each read checks the bound
+  first and the acknowledgement after it, so one first seen after the
+  bound is late: logged (`cm.nvlink.await.end`, `cm.nvlink.ack-late`)
+  and never taken as an acknowledgement (interface 3's R11 rule, which
+  R12 S4 extends to this wait; applied on NT too). An acknowledgement is
+  taken only when a second read finds it unchanged (R6d). On 98 SE and ME
+  this wait follows a statement, so `3.0.0.0` never reaches it there.
+- **A removal on 9x** (MD-5): every CONFIGMG call is the domain's
   worker's (section 6.1, `cm_cfgwk.c`), and its removal step wraps the
   handshake around a removal of a function still present:
   `Query_Remove_SubTree` first (the file system's quiescence and the veto -
   a refusal is final, nothing is forced); accepted, a `REMOVE_PENDING`
-  request on the entry with a fresh 24-bit sequence, and up to 5 s on the
-  worker for Stor98's answer to that sequence, ended early when the
-  worker's request goes stale; then `Remove_SubTree` always, whatever the
+  request on the entry with a fresh 24-bit sequence (R9a), and up to 14 s
+  on the worker for Stor98's answer to that sequence (R11 O4's T_ack:
+  its 12 s acknowledgement bound, two of its polls and its lateness),
+  ended early when the worker's request goes stale; the deadline is read
+  before each read of the answer, so an answer first seen after it is late
+  and changes nothing (R11: the log carries `FFh` for it, `FEh` for no
+  answer at all, `CmNvlinkRemoveStep`), and an answer is taken only for
+  the request's
+  sequence on the request's generation (R9c) and when a second read finds
+  it unchanged (R6d). Then `Remove_SubTree` always, whatever the
   answer, because Windows 98 has no service that cancels an accepted query
-  and a driver left query-removed stays quiesced. The answer is logged, and
-  only a clean one is a clean removal. The request is the table's `Flags`
-  bit 3, the sequence in `RemoveSequence` and the answer in `RemoveAck`
-  (sequence in bits 31:8, outcome in 7:0: clean 1, isolated not clean 2,
-  failed 3), interface 3's R9, the layout this driver proposed and
-  `nvme98` adopted. Interface 3 asks more of it than this code does - a
-  14 s answer wait (R11 O4), the deadline read before the answer and the
-  answer taken only on the request's generation (R9c, R6d), the endpoint
-  isolated before a removal that is not clean (O5) and `Remove_SubTree`
-  retried for 30 s (O6) - and NV9X.1 brings those with the proof key.
+  and a driver left query-removed stays quiesced; after a request it is
+  retried every 2 s while it fails, until 30 s after the first attempt
+  (R11 O6's bound), and the request is cleared after it (R11 O5). The
+  answer is logged, and
+  only a clean one is a clean removal; MD-5's "a timeout aborts the orderly
+  eject" cannot hold once the query is accepted on 9x. Interface 3 asks
+  two things more that this driver does not do in `3.0.0.0`: after an
+  answer that is not clean, or none, to isolate the endpoint (path
+  teardown, reset, `DOWN_QUIESCED` and its acknowledgement) before
+  `Remove_SubTree` (R11 O5); and after O6's 30 s, to keep the devnode,
+  tear the tunnel down, keep retrying and publish no `UP` on that port
+  until the removal succeeds. Both belong with the per-port, non-blocking
+  waits of roadmap-usb4.md NV9X.2 (R6e). R4's rule for a connection
+  manager loaded again in the same boot (retire every endpoint devnode
+  under its bridges before its first `UP`) does not arise: a load that
+  published is resident and never unloads, and one that did not publish
+  wrote no `UP` anyone bound to. The
+  acknowledgement wait for a statement, which services the ICM, stays on
+  the connection-manager thread before anything is posted to the worker.
+  The request is the table's `Flags` bit 3, the sequence in
+  `RemoveSequence` and the answer in `RemoveAck` (sequence in bits 31:8,
+  outcome in 7:0: clean 1, isolated not clean 2, failed 3), interface 3's
+  R9 - the layout this driver proposed and `nvme98` adopted. The worker
+  runs the whole removal step itself, request, wait and CONFIGMG calls
+  together, so no result is handed between threads and R6f's handoff word
+  has nothing to carry here. The children the worker removes for a tunnel
+  down are
+  functions that vanished, which get no request; under the ICM nothing
+  removes a present one (section 7.4: no per-device teardown).
   `REMOVE_PENDING` asks Stor98 for an orderly stop (its flushes and
   shutdown), never makes a reset claim, and is made only after an accepted
   query, only while the request is current, and only to the function the
@@ -2062,7 +2130,13 @@ nothing (the next bullet but one).
   matching its function's path against the devnode's instance id, still
   `UP` at the same generation and still answering with the same ids; where
   that identity cannot be established, no request is made and the removal
-  goes on.
+  goes on. So it is safe on any removal path of the worker's, a lost
+  controller's included. No request is made before a Stor98 has read the
+  proof. In `3.0.0.0` the worker removes the functions that vanished,
+  which get no request, and after a lost host interface the children it
+  retained, which get one only while the function still answers; the
+  tools' 9x eject does not come through the worker at all, so no eject
+  reaches the handshake - roadmap-usb4.md NV9X.3 routes it there.
 
 **The budget, an estimate and not an enforced deadline.** Stor98
 measures its gone deadline from its own presence loss. The parts: the

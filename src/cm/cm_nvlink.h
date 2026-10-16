@@ -19,17 +19,30 @@
  * \Callback\Stor98LinkState (ExCreateCallback, OBJ_PERMANENT) with one
  * callback that answers STOR98LS_QUERY with the table's address; stor98
  * opens it once in HwFindAdapter (stor98cm.h's interface 2). Windows 98 SE
- * and ME: stor98cm.h's interface 3 finds the table through a locator,
- * REG_BINARY CM_NVLINK_REC_VALUE of HKEY_LOCAL_MACHINE\CM_NVLINK_REC_KEY
- * (laid out as CmNvlinkRecordEncode writes it), accepted only beside a
- * current-boot proof: a dynamic key under HKEY_DYN_DATA that the connection
- * manager creates with _RegCreateDynKey and answers itself (R3 to R5).
- * This build publishes neither on Windows 98 SE and ME (CmNvlinkOffered):
- * no locator, no proof, so no UP, no statement, no acknowledgement wait
- * and no REMOVE_PENDING request there. stor98 then finds no channel (R5)
- * and runs on its own gone deadline (MD-1), with no clean-eject handshake;
- * roadmap-usb4.md NV9X.1 publishes both. The REMOVE_PENDING code below is
- * kept for it and is unreached on 9x until then.
+ * and ME: stor98cm.h's interface 3 (its rules R1 to R12), written once per
+ * load at the first tunnel action, before the first UP, through the VMM
+ * registry services. First the current-boot proof (R3a): the dynamic key
+ * HKEY_DYN_DATA\STOR98LS9X_PROOF_KEY, created by _RegCreateDynKey with this
+ * image as its provider, answering STOR98LS9X_PROOF_VALUE (REG_DWORD, the
+ * table's Cookie) and STOR98LS9X_PROOF_TABLE_VALUE (REG_BINARY, a
+ * STOR98LS9X_PROOF_TABLE) from this driver's own memory; an existing key
+ * is another publisher's, and then nothing is published. Then the
+ * locator (R3b): REG_BINARY STOR98LS9X_LOCATOR_VALUE of
+ * HKEY_LOCAL_MACHINE\STOR98LS9X_LOCATOR_KEY, a STOR98LS9X_LOCATOR laid out
+ * as CmNvlinkRecordEncode writes it. The locator persists across boots
+ * and is only a locator; the proof exists only while this image is loaded
+ * in this boot, so stor98 accepts the table only when the proof's cookie
+ * and address equal the locator's and the table's (R5). Before the proof
+ * the image is made resident for the boot (no DriverUnload, R4), so the
+ * provider never goes; an unload before that deletes a proof it made. The
+ * order (residency, proof opened first, proof, locator) is
+ * CmNvlinkPublish9x's. Every read of the proof is counted, as NT counts
+ * its callback's queries: until stor98 has read it, no receiver exists
+ * and nothing waits for one. The REMOVE_PENDING request below is
+ * interface 3's removal transaction (R9, R11); the 9x link-down statement
+ * is not made (THE OBLIGATIONS, 2: no reading on 98 SE and ME), and an
+ * eject the install or tray tool makes goes to Windows directly, without
+ * the request (record 24 section 7.1).
  *
  * THE OBLIGATIONS, and where each is met:
  *  1. UP with a new link generation BEFORE the operating system can
@@ -67,35 +80,45 @@
  *     invalidation that reports the endpoint missing on NT,
  *     Query_Remove_SubTree and Remove_SubTree on 9x). It waits until every
  *     entry this domain marked DOWN_QUIESCED reads AckGeneration ==
- *     LinkGeneration, or CmNvlinkAckBoundMs since its mark (5 s on NT),
- *     servicing the
+ *     LinkGeneration, or CmNvlinkAckBoundMs since its mark (5 s on NT,
+ *     3 s on 9x: interface 3's R12 S4), servicing the
  *     connection manager between reads. On NT it does not wait while no
  *     receiver has ever asked for the table (no stor98 is loaded, so none
- *     can acknowledge); on 9x it never waits, the channel not being offered
- *     there (CmNvlinkAwaitBoundMs).
+ *     can acknowledge); on 9x it does not wait where the proof and locator
+ *     were never published, nor while no stor98 has read the proof. On
+ *     98 SE and ME it is reached only by a statement, which obligation 2
+ *     makes there never; the bound is interface 3's all the same.
  *  4. A tunnel re-established only to an endpoint reset since the last one
  *     (MD-2 obligation 1): by construction under the ICM (record 21 section
  *     7.1) and by the Detect gate under the USB4 profile (record 22 section
  *     10.1); nothing here.
  *
- * 9x ORDERLY REMOVAL (MD-5; unreached while the channel is not offered on
- * 9x, see RENDEZVOUS). On Windows 98 SE and ME every CONFIGMG call
+ * 9x ORDERLY REMOVAL (MD-5). On Windows 98 SE and ME every CONFIGMG call
  * is the domain's worker's (cm_cfgwk.c), never the connection-manager
  * thread's, and the worker's removal step (cmWkRemoveChild) wraps the
  * handshake around a removal of a function still present: Query_Remove_
  * SubTree first (the file system's quiescence and the configuration
  * manager's veto: a refusal is final, nothing is forced); then, accepted,
- * CmNvlinkWkRequest sets REMOVE_PENDING with a fresh request sequence and
- * the worker waits, without servicing any ring, up to CM_NVLINK_REMOVE_MS
- * for stor98's answer (CmNvlinkWkAnswer), ending early when its request
- * goes stale; then Remove_SubTree ALWAYS follows, clean answer or not,
- * because Windows 98 cannot cancel an accepted query (a device left
- * query-removed stays quiesced) - the outcome is logged, and only a clean
- * answer is a clean removal; CmNvlinkWkWithdraw clears the request. MD-5's
- * "a timeout aborts the orderly eject" therefore cannot hold after an
- * accepted query on 9x; the handshake comes as early as that rule allows.
- * The children the worker removes today are functions that vanished,
- * which get no request (nothing to flush); a present one does.
+ * CmNvlinkWkRequest sets REMOVE_PENDING with a fresh request sequence (R9a)
+ * and the worker waits, without servicing any ring, up to
+ * CM_NVLINK_REMOVE_MS (R11 O4's T_ack) for stor98's answer
+ * (CmNvlinkWkAnswer), ending early when its request goes stale. The
+ * deadline is checked before each read, so an answer first seen after it
+ * is late and changes nothing (R11), and an answer is taken only when a
+ * second read finds it unchanged (R6d). Then Remove_SubTree ALWAYS follows,
+ * clean answer or not, because Windows 98 cannot cancel an accepted query
+ * (a device left query-removed stays quiesced), retried every
+ * CM_NVLINK_RETRY_MS until CM_NVLINK_RETRY_FOR_MS after the first attempt
+ * while it fails (R11 O6's bound) - the outcome is logged, and only a clean
+ * answer is a clean removal; CmNvlinkWkWithdraw then clears the request.
+ * MD-5's "a timeout aborts the orderly eject" therefore cannot hold after
+ * an accepted query on 9x; the handshake comes as early as that rule
+ * allows. Interface 3 asks more after an answer that is not CLEAN (R11 O5:
+ * isolate the endpoint before Remove_SubTree) and after O6's 30 s (keep
+ * retrying, no UP on that port until the removal succeeds); neither is
+ * done here (roadmap-usb4.md NV9X.2, design record 21 section 7.2). The
+ * children the worker removes for a tunnel down are functions that
+ * vanished, which get no request (nothing to flush); a present one does.
  *
  * DDK-FREE PART. The functions under "pure" below use nothing but the
  * table and their arguments; test\test_cm_nvlink.c runs them on the host
@@ -118,17 +141,21 @@
 
 /* The acknowledgement wait, measured from the DOWN_QUIESCED write and
  * ended at once by the acknowledgement. Windows 2000 and later: stor98's
- * gone deadline (5 s in its test build, G3). Windows 98 SE and ME: inside
- * interface 3's R12 S4 bounds (at least STOR98LS9X_CM_LINK_WAIT_MS, 2 s, at
- * most STOR98LS9X_GONE_MS, 5 s); unused while the channel is not offered
- * there. */
+ * gone deadline (5 s in its test build, G3). Windows 98 SE and ME
+ * (interface 3, R12 S4): at most stor98's gone deadline
+ * (STOR98LS9X_GONE_MS, 5 s) and not below STOR98LS9X_CM_LINK_WAIT_MS
+ * (2 s: two of its polls and its timer lateness). */
 #define CM_NVLINK_ACK_MS        5000UL
 #define CM_NVLINK_ACK_9X_MS     3000UL
 /* A statement whose delivery would start with less than this left of the
  * USB4 profile's 3 s is withheld (record 22 section 10.3). */
 #define CM_NVLINK_DELIVERY_MS   100UL
-/* The 9x orderly removal's wait for stor98's answer (MD-5). */
-#define CM_NVLINK_REMOVE_MS     5000UL
+/* The 9x orderly removal's wait for stor98's answer (interface 3, R11 O4:
+ * its 12 s acknowledgement bound, two of its polls and its lateness). */
+#define CM_NVLINK_REMOVE_MS     ((ULONG)STOR98LS9X_CM_ACK_WAIT_MS)
+/* Remove_SubTree after an accepted query, while it fails (R11 O6). */
+#define CM_NVLINK_RETRY_MS      2000UL
+#define CM_NVLINK_RETRY_FOR_MS  30000UL
 /* The idle poll's ceiling while an entry is UP (record 21 section 8). */
 #define CM_NVLINK_IDLE_MS       250UL
 /* Between reads of an acknowledgement. */
@@ -165,20 +192,69 @@
                                            nothing proven of the endpoint  */
 
 /* The 9x REMOVE_PENDING request (interface 3, R9): Flags bit 3 is the
- * request, RemoveSequence the connection manager's request sequence (never
- * 0), RemoveAck stor98's answer, the sequence it answers in bits 31:8 and
- * the outcome in 7:0. */
+ * request, RemoveSequence the connection manager's request sequence
+ * (1..STOR98LS9X_SEQ_MASK), RemoveAck stor98's answer, the sequence it
+ * answers in bits 31:8 and the outcome in 7:0. */
 #define CM_NVLINK_REMOVE_PENDING    ((ULONG)STOR98LS_REMOVE_PENDING)
 #define CM_NVLINK_RM_NONE           0UL /* not answered (yet)             */
 #define CM_NVLINK_RM_CLEAN          ((ULONG)STOR98RM_CLEAN)
 #define CM_NVLINK_RM_ISOLATED       ((ULONG)STOR98RM_ISOLATED_NOT_CLEAN)
 #define CM_NVLINK_RM_FAILED         ((ULONG)STOR98RM_FAILED)
+/* The removal wait's own ends (CmNvlinkRemoveStep), not stor98's: T_ack
+ * spent with no answer, or an answer first seen after it (R11: logged,
+ * never taken). Neither is clean. */
+#define CM_NVLINK_RM_TIMEOUT        0xFEUL
+#define CM_NVLINK_RM_LATE           0xFFUL
 
-/* The 9x locator (interface 3, R3b; not published by this build). */
+/* The link-down acknowledgement wait's step (CmNvlinkAckStep). */
+#define CM_NVLINK_AW_PENDING        0UL /* still waiting                  */
+#define CM_NVLINK_AW_ACKED          1UL /* acknowledged within the bound  */
+#define CM_NVLINK_AW_SUPERSEDED     2UL /* no longer DOWN_QUIESCED        */
+#define CM_NVLINK_AW_NO_RECEIVER    3UL /* no stor98 can answer           */
+#define CM_NVLINK_AW_TIMEOUT        4UL /* the bound spent, no answer     */
+#define CM_NVLINK_AW_LATE           5UL /* the bound spent, then an answer
+                                           first seen (logged, not taken) */
+
+/* CmNvlinkPublish9x's outcome: the step that stopped it, or OK. */
+#define CM_NVLINK_PUB_OK            0UL
+#define CM_NVLINK_PUB_RESIDENCY     1UL /* the image could not be kept    */
+#define CM_NVLINK_PUB_PUBLISHER     2UL /* the proof key exists: another
+                                           publisher's (R3a)              */
+#define CM_NVLINK_PUB_PROOF         3UL /* _RegCreateDynKey failed        */
+#define CM_NVLINK_PUB_LOCATOR       4UL /* the locator was not written    */
+
+/* The 9x locator (R3b) and current-boot proof (R3a). */
 #define CM_NVLINK_REC_KEY       STOR98LS9X_LOCATOR_KEY
 #define CM_NVLINK_REC_VALUE     STOR98LS9X_LOCATOR_VALUE
 #define CM_NVLINK_RECORD_BYTES  ((ULONG)sizeof(STOR98LS9X_LOCATOR))
 #define CM_NVLINK_RECORD_VER    ((ULONG)STOR98LS9X_LOCATOR_VERSION)
+#define CM_NVLINK_PROOF_BYTES   ((ULONG)sizeof(STOR98LS9X_PROOF_TABLE))
+
+/* VMMREG.H's struct val_context (the Windows 98 DDK): what the VMM hands a
+ * dynamic key's query handler per value asked for. */
+typedef struct _CM_NV_VALCTX {
+    int valuelen;
+    PVOID value_context;
+    PVOID val_buff_ptr;
+} CM_NV_VALCTX;
+
+#define CM_NV_ERROR_MORE_DATA   234UL
+
+/*
+ * Interface 3's publication steps (R3, R4), the driver's (cm_nvlinkos.c),
+ * each 0 on success but Resident: Resident makes the image stay loaded for
+ * the boot whatever its PnP devices do (TRUE when it does); OpenProof opens
+ * HKEY_DYN_DATA\STOR98LS9X_PROOF_KEY and closes it again (0: it exists);
+ * CreateProof creates it with this image as its provider; WriteLocator
+ * writes the locator.
+ */
+typedef struct _CM_NV_PUB9X {
+    BOOLEAN (*Resident)(PVOID context);
+    ULONG (*OpenProof)(PVOID context);
+    ULONG (*CreateProof)(PVOID context);
+    ULONG (*WriteLocator)(PVOID context);
+    PVOID Context;
+} CM_NV_PUB9X;
 
 /* ---- pure ------------------------------------------------------------- */
 
@@ -247,34 +323,65 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
  * CM_NVLINK_ACK_9X_MS. */
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt);
 
-/* Whether this build offers the channel on the operating system: NT
- * (interface 2) yes; Windows 98 SE and ME no - interface 3's current-boot
- * proof is not published, so neither is its locator (roadmap-usb4.md
- * NV9X.1). */
-BOOLEAN CmNvlinkOffered(BOOLEAN nt);
-
-/* How long a statement's acknowledgement is waited for: 0 where no receiver
- * can exist (no stor98 has asked for the table on NT; the channel not
- * offered on 9x), else CmNvlinkAckBoundMs. */
-ULONG CmNvlinkAwaitBoundMs(BOOLEAN nt, BOOLEAN receiver);
-
 /* Milliseconds left of `budgetMs` begun at `startMs` (a free-running
  * millisecond clock, modulo 2^32), 0 when spent. */
 ULONG CmNvlinkLeft(ULONG startMs, ULONG nowMs, ULONG budgetMs);
 
 /* The 9x locator (STOR98LS9X_LOCATOR), little-endian ULONGs: signature
  * STOR98LS_SIGNATURE, CM_NVLINK_RECORD_VER, the table's linear address,
- * its size in bytes, and `cookie` (also the table's Cookie). Not written by
- * this build (CmNvlinkOffered). */
+ * its size in bytes, and `cookie` (also the table's Cookie and the proof's
+ * BootCookie, so the reader can match the three). */
 VOID CmNvlinkRecordEncode(PUCHAR out, ULONG address, ULONG bytes,
                           ULONG cookie);
 
+/*
+ * The proof key's query handler (R3a), for every one of the VMM's four
+ * handler slots: each of the `n` values asked for in `vc` is the one whose
+ * value_context is `cookie` (REG_DWORD, 4 bytes) or `proof` (the
+ * STOR98LS9X_PROOF_TABLE, 12 bytes), any other 0 bytes; the provider keeps
+ * the lengths (PROVIDER_KEEPS_VALUE_LENGTH), so each valuelen is set here.
+ * `data` NULL: the total length into *cb, 0 returned. `data` too short:
+ * the total into *cb, CM_NV_ERROR_MORE_DATA. Otherwise the values copied
+ * one after another, each val_buff_ptr set to its copy, the total into
+ * *cb, 0 returned.
+ */
+ULONG CmNvlinkProofQuery(CM_NV_VALCTX *vc, ULONG n, PUCHAR data, PULONG cb,
+                         const ULONG *cookie,
+                         const STOR98LS9X_PROOF_TABLE *proof);
+
 /* The 9x REMOVE_PENDING request on an UP entry (FALSE otherwise), its
- * answer for `sequence` (CM_NVLINK_RM_*), and its withdrawal. */
+ * answer for `sequence` on generation `gen` (CM_NVLINK_RM_*; R9c, read
+ * twice, R6d), and its withdrawal. */
 BOOLEAN CmNvlinkRemoveRequest(PSTOR98LS_TABLE t, ULONG index,
                               ULONG sequence);
 ULONG CmNvlinkRemoveAnswer(const STOR98LS_TABLE *t, ULONG index,
-                           ULONG sequence);
+                           ULONG sequence, ULONG gen);
+
+/* One read of the removal wait, `elapsedMs` after the request: the
+ * deadline first (R11), so CM_NVLINK_RM_TIMEOUT once CM_NVLINK_REMOVE_MS
+ * has passed with no answer and CM_NVLINK_RM_LATE for one first seen then;
+ * before it, CmNvlinkRemoveAnswer's answer (CM_NVLINK_RM_NONE: wait on). */
+ULONG CmNvlinkRemoveStep(const STOR98LS_TABLE *t, ULONG index,
+                         ULONG sequence, ULONG gen, ULONG elapsedMs);
+
+/* One read of the link-down acknowledgement wait for an entry marked
+ * DOWN_QUIESCED at `markedAt` (ms): CM_NVLINK_AW_*. Superseded (the entry
+ * left DOWN_QUIESCED) and no receiver are decided first, then the
+ * deadline (`boundMs` from the mark) before the acknowledgement is read,
+ * so one first seen after it is LATE and never ACKED (R11, R12 S4); the
+ * acknowledgement is read twice, unchanged (R6d). */
+ULONG CmNvlinkAckStep(const STOR98LS_TABLE *t, ULONG index,
+                      BOOLEAN receiver, ULONG markedAt, ULONG nowMs,
+                      ULONG boundMs);
+
+/* Interface 3's publication in R3's and R4's order: the image made
+ * resident, the proof key opened first (an existing one is another
+ * publisher's: nothing is published), the proof created, then the locator.
+ * The table and its Cookie are the caller's, filled before. Returns
+ * CM_NVLINK_PUB_*, and the failed step's own code in *error (0 for OK,
+ * RESIDENCY and PUBLISHER). A proof made with no locator after it leaves
+ * no channel (stor98 needs both) and stays until the unload. */
+ULONG CmNvlinkPublish9x(const CM_NV_PUB9X *ops, PULONG error);
 VOID CmNvlinkRemoveCancel(PSTOR98LS_TABLE t, ULONG index);
 
 /* ---- the driver (cm_nvlinkos.c) --------------------------------------- */
@@ -295,8 +402,10 @@ VOID CmNvlinkInit(VOID);
  * dereferenced; the table stays. PASSIVE_LEVEL. */
 VOID CmNvlinkUnload(VOID);
 
-/* Each NHI start, on its thread, before the first tunnel action: every
- * target logs the channel's state (on Windows 98 SE and ME, not offered). */
+/* Each NHI start, on its thread, before the first tunnel action: Windows 98
+ * SE and ME write the record once per boot (the VMM registry services, a
+ * passive thread of the system VM); every target logs the channel's
+ * state. */
 VOID CmNvlinkStart(struct _CM_NHI *nhi);
 
 /* Obligation 1 for tunnel port `bridge` (XHCI_TBT_BDF): before every
@@ -305,8 +414,8 @@ VOID CmNvlinkStart(struct _CM_NHI *nhi);
  * published or marked for `bridge`, should the bus not read). `fresh` TRUE
  * after a tunnel up, a RESYNC or an owed re-enumeration: a new generation
  * for every NVMe function found; FALSE on a tunnel down's: an entry UP is
- * left as it is. Windows 98 SE and ME: no UP (the channel is not offered
- * there, CmNvlinkOffered). Only functions on
+ * left as it is. Windows 98 SE and ME: no UP while the record is not
+ * written (the channel is unavailable to that exposure). Only functions on
  * the secondary bus itself are seen: an NVMe function behind an
  * enclosure's own PCIe switch is not, gets no entry and so no statement
  * (stor98's gone deadline stands); nor does one that has not answered by
@@ -360,7 +469,8 @@ VOID CmNvlinkAwait(struct _CM_NHI *nhi);
  * function still answers with `id` and owner, UP, generation `gen` and the
  * absence of another request are unchanged; returns the entry, or
  * CM_NVLINK_NONE.
- * CmNvlinkWkAnswer: the answer to that sequence (CM_NVLINK_RM_*).
+ * CmNvlinkWkAnswer: CmNvlinkRemoveStep for that sequence on generation
+ * `gen`, `elapsedMs` after the request (CM_NVLINK_RM_*).
  * CmNvlinkWkWithdraw: that request cleared, and only that one. Any thread
  * at <= DISPATCH_LEVEL but CmNvlinkWkRequest
  * (PASSIVE_LEVEL: a configuration read); no ring is serviced and nothing
@@ -370,7 +480,8 @@ BOOLEAN CmNvlinkWkCandidate(struct _CM_NHI *owner, ULONG bridge, ULONG id,
                             PULONG gen);
 ULONG CmNvlinkWkRequest(struct _CM_NHI *owner, ULONG index, ULONG gen,
                         ULONG id, PULONG sequence);
-ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence);
+ULONG CmNvlinkWkAnswer(ULONG index, ULONG sequence, ULONG gen,
+                       ULONG elapsedMs);
 VOID CmNvlinkWkWithdraw(ULONG index, ULONG sequence);
 
 /* The idle poll period: XhciCmPollIdleMs as read, held to at most
