@@ -414,6 +414,20 @@ does not attach when added to a running machine). ME's controller in the
 guest had no driver yet, and `INSTALL` left it to Device Manager, as it
 says.
 
+Note (2026-10-17, from the release matrix, M1 item F4): on 2000,
+`XHCITR /eject id=` of a Bulk-Only stick stopped it - the stick came back
+as `F:` with its files on the re-plug - but said "Its state could not be
+read again: check that it is not running before you unplug it." 2000 has
+no Code 47, so a stopped device left in the tree always fell to that last
+case. Which code the stick read is not known: it was not read. The one
+2000 reading of a device stopped while still attached is the bridge in
+"The fallback for a unit not marked removable" below, at Code 24 after
+`CM_Query_And_Remove_SubTreeW`; the stick was stopped through
+`CM_Request_Device_EjectA`, so Code 24 for it is inferred. Branch
+`tr-w2kmsg` reads Code 24 on 2000 alone as stopped (record 25, section
+6.5's addendum); XP and 7 are unchanged. Host-tested only, and not yet
+read on the stick.
+
 ### The installer's screens and its install directory
 
 The owner's requests of 2026-10-16, after running the installer on a real

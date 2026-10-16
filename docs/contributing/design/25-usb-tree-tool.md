@@ -968,6 +968,14 @@ Never forced: no `CM_Remove_SubTree` without an accepted query, no veto
 overridden, no `CM_Query_And_Remove_SubTreeA`, no `DIF_REMOVE`, one device
 at a time.
 
+Addendum (2026-10-17, branch `tr-w2kmsg`): Windows 2000 has no Code 47
+(its DDK's `cfg.h` ends at `NUM_CM_PROB` 0x25), so a stopped USB device
+left in its tree read "could not be read again" (the release matrix's 2000
+stick). Step 5 now reads Code 24 on 2000, and on 2000 alone, as stopped:
+"You can now unplug the device." (`tr_usb_after_kind`). Code 24 is run 41's
+2000 bridge after `CM_Query_And_Remove_SubTreeW`; for a USB device after
+`CM_Request_Device_EjectA` it is inferred. Host-tested only.
+
 **Rights.** On NT a removable device needs no administrator (Windows'
 own applet runs as the user); a rights refusal is offered elevated on
 Vista and 7 as section 6.4 says, with `/eject id=<instance id>`.

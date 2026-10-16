@@ -2307,6 +2307,27 @@ int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
     return 0;
 }
 
+int tr_usb_after_kind(int walked, int found, int walkBad, int started,
+                      TR_U32 problem, int w2k)
+{
+    if (!walked) {
+        return TR_UA_UNKNOWN;
+    }
+    if (found && started) {
+        return TR_UA_STARTED;
+    }
+    if (!found) {
+        return walkBad == 0 ? TR_UA_UNPLUG : TR_UA_UNKNOWN;
+    }
+    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        return TR_UA_UNPLUG;
+    }
+    if (w2k && problem == TR_CM_PROB_DEVICE_NOT_THERE) {
+        return TR_UA_UNPLUG;
+    }
+    return TR_UA_UNKNOWN;
+}
+
 /* ---- the elevated stop of a unit not marked removable (section 6.6) ------ */
 
 int tr_elev_needed(int nt, int notMarked, int isAdmin)

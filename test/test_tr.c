@@ -1700,6 +1700,35 @@ static void test_usb_eject(void)
               "stopped: not started, no problem code");
     }
 
+    /* what a walk right after an accepted stop reads (section 6.5 step 5) */
+    CHECK(tr_usb_after_kind(0, 0, 0, 0, 0, 0) == TR_UA_UNKNOWN &&
+          tr_usb_after_kind(0, 0, 0, 0, 0, 1) == TR_UA_UNKNOWN,
+          "after: no walk is not known");
+    CHECK(tr_usb_after_kind(1, 0, 0, 0, 0, 0) == TR_UA_UNPLUG &&
+          tr_usb_after_kind(1, 0, 0, 0, 0, 1) == TR_UA_UNPLUG,
+          "after: gone from a whole walk");
+    CHECK(tr_usb_after_kind(1, 0, 2, 0, 0, 0) == TR_UA_UNKNOWN &&
+          tr_usb_after_kind(1, 0, 2, 0, 0, 1) == TR_UA_UNKNOWN,
+          "after: gone from a walk read in part is not known");
+    CHECK(tr_usb_after_kind(1, 1, 0, 1, 0, 0) == TR_UA_STARTED &&
+          tr_usb_after_kind(1, 1, 0, 1, 0, 1) == TR_UA_STARTED &&
+          tr_usb_after_kind(1, 1, 3, 1, 0, 1) == TR_UA_STARTED,
+          "after: started again");
+    CHECK(tr_usb_after_kind(1, 1, 0, 0, 47, 0) == TR_UA_UNPLUG &&
+          tr_usb_after_kind(1, 1, 0, 0, 47, 1) == TR_UA_UNPLUG,
+          "after: Code 47, held for eject");
+    CHECK(tr_usb_after_kind(1, 1, 0, 0, 24, 1) == TR_UA_UNPLUG &&
+          tr_usb_after_kind(1, 1, 1, 0, 24, 1) == TR_UA_UNPLUG,
+          "after: Code 24 on 2000, removed and still attached");
+    CHECK(tr_usb_after_kind(1, 1, 0, 0, 24, 0) == TR_UA_UNKNOWN,
+          "after: Code 24 on any other system is not known");
+    CHECK(tr_usb_after_kind(1, 1, 0, 0, 0, 1) == TR_UA_UNKNOWN &&
+          tr_usb_after_kind(1, 1, 0, 0, 29, 1) == TR_UA_UNKNOWN &&
+          tr_usb_after_kind(1, 1, 0, 0, 21, 1) == TR_UA_UNKNOWN &&
+          tr_usb_after_kind(1, 1, 0, 0, 0, 0) == TR_UA_UNKNOWN &&
+          tr_usb_after_kind(1, 1, 0, 0, 29, 0) == TR_UA_UNKNOWN,
+          "after: not started with no code or another code is not known");
+
     /* the check before the call */
     {
         const char *then[3];
