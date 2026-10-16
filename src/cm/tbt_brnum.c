@@ -428,6 +428,14 @@ static ULONG brBars(BRNUM_CTX *c, ULONG bdf, ULONG last, PULONG need,
             }
             if (((was >> 1) & 3UL) == 2UL) {
                 off += 4;
+                if (off > last || !brRead(c->Io, bdf, off, &was)) {
+                    c->R->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_ACCESS;
+                }
+                if (was != 0) {
+                    c->R->WinWhere = bdf;
+                    return XHCI_TBT_BRWIN_ACTIVE;
+                }
             }
             continue;
         }
@@ -1052,7 +1060,7 @@ static VOID brIrq(BRNUM_CTX *c, ULONG port, ULONG secondary)
  * window is open. 0, or a refusal (nothing written either way).
  */
 static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
-                       ULONG depth, PULONG open)
+                       ULONG depth, PULONG open, PULONG found)
 {
     PXHCI_TBT_BRNUM r;
     ULONG dev;
@@ -1069,8 +1077,10 @@ static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
     ULONG subordinate;
     ULONG slot;
     ULONG rc;
+    ULONG below;
 
     r = c->R;
+    *found = 0;
     for (dev = 0; dev < 32UL; dev++) {
         first = 0;
         for (fn = 0; fn < 8UL; fn++) {
@@ -1089,6 +1099,7 @@ static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
                 }
                 continue;
             }
+            (*found)++;
             if (fn == 0) {
                 first = multi;
             }
@@ -1109,12 +1120,15 @@ static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
                 }
                 secondary = (buses >> 8) & 0xFFUL;
                 subordinate = (buses >> 16) & 0xFFUL;
+                /* `low` moves past each sibling's range, so two bridges of
+                 * one bus never claim overlapping buses. */
                 if ((buses & 0xFFUL) != bus || secondary <= bus ||
                     secondary < low || subordinate < secondary ||
                     subordinate > high) {
                     r->Where = bdf;
                     return XHCI_TBT_BRNUM_INCONSISTENT;
                 }
+                low = subordinate + 1UL;
                 if (((mem & 0xFFF0UL) << 16) <=
                     ((((mem >> 16) & 0xFFF0UL) << 16) | 0x000FFFFFUL)) {
                     (*open)++;
@@ -1126,9 +1140,14 @@ static ULONG brJournal(BRNUM_CTX *c, ULONG bus, ULONG low, ULONG high,
                 r->Now[slot] = buses;
                 c->Count++;
                 rc = brJournal(c, secondary, secondary + 1UL, subordinate,
-                               depth + 1, open);
+                               depth + 1, open, &below);
                 if (rc != 0) {
                     return rc;
+                }
+                if (below == 0 &&
+                    (c->Flags & XHCI_TBT_BRNUM_F_WAIT_EMPTY) != 0) {
+                    r->Where = bdf;
+                    return XHCI_TBT_BRNUM_NOT_READY;
                 }
             }
             if (fn == 0 && !first) {
@@ -1260,7 +1279,13 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         c.Flags = flags;
         k = 0;
         r->Bridges = 0;
-        rc = brJournal(&c, secondary, secondary + 1UL, subordinate, 0, &k);
+        rc = brJournal(&c, secondary, secondary + 1UL, subordinate, 0, &k,
+                       &own);
+        if (rc == XHCI_TBT_BRNUM_NOT_READY) {
+            /* Read again by the caller: nothing written. */
+            r->Outcome = rc;
+            return r->Outcome;
+        }
         if (rc != 0 || k != 0 || c.Count == 0) {
             /* Nothing written: as found. */
             for (k = 0; k < XHCI_TBT_BRNUM_MAX_BRIDGES; k++) {

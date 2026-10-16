@@ -1413,6 +1413,57 @@ static VOID test_reopen(VOID)
     CHECK_EQ(m.N[usp].Mem, 0x0000FFF0UL, "the window put back closed");
     CHECK_EQ(m.N[usp].Buses, 0x00080706UL, "the bus numbers as they were");
     goRefuseAt = 0;
+
+    /* The NVMe not answering yet behind the stopped chain: with
+     * WAIT_EMPTY not ready, nothing written; and answering Retry Status
+     * the same. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[nvme].Id = 0xFFFFFFFFUL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags | XHCI_TBT_BRNUM_F_WAIT_EMPTY,
+                                  NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NOT_READY, "an empty bus behind a stopped bridge: not ready");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[nvme].Id = 0xFFFF0001UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NOT_READY, "Retry Status behind a stopped chain: not ready");
+    CHECK_EQ(m.Writes, 0, "nothing written");
+
+    /* Two bridges of one bus claiming overlapping buses: left alone. */
+    {
+        ULONG b1, b2;
+
+        mreset();
+        ioreset(TRUE);
+        port = mport(0x06, 0x2A);
+        m.N[port].Mem = 0xE000D410UL;
+        b1 = madd(port, 0, 0, ID_ASM, 1, 0);
+        b2 = madd(port, 1, 0, ID_ASM, 1, 0);
+        m.N[b1].Buses = 0x00080706UL;
+        m.N[b2].Buses = 0x00090806UL;
+        m.N[b1].Mem = 0x0000FFF0UL;
+        m.N[b2].Mem = 0x0000FFF0UL;
+        m.Writes = 0;
+        CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+                 XHCI_TBT_BRNUM_NUMBERED, "overlapping sibling ranges: left alone");
+        CHECK_EQ(m.Writes, 0, "nothing written");
+    }
+
+    /* A stopped bridge, Memory Space on, a 64-bit BAR whose upper half
+     * holds an address: in use, refused, nothing written. */
+    mstopped(&port, &usp, &dsp, &nvme);
+    m.N[usp].Cmd = 0x0006UL;
+    m.N[usp].BarSize[0] = 0x100UL;
+    m.N[usp].BarType[0] = 0x4UL;
+    m.N[usp].Bar[0] = 0x4UL;
+    m.N[usp].Bar[1] = 0x1UL;
+    m.Writes = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, flags, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_REOPENED, "journalled");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_ACTIVE, "a 64-bit BAR above 4 GiB in use refuses");
+    CHECK_EQ(m.Writes, 0, "nothing written");
 }
 
 int main(void)
