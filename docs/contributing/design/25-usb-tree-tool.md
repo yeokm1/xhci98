@@ -758,7 +758,7 @@ builder (`cm_query.c`) is host-tested in the CM suite.
   `nvme98` disk is below its controller; whether a query-remove of the USB
   device is refused while a file is open on its disk; and what each NT
   target leaves of a USB device after its eject (Code 47, or gone). T.7
-  reads them.
+  read them (section 14).
 - Whether every target lets an unelevated user open `\\.\HCD<n>` and
   `\\.\XHCICM<n>` with no access rights (record 13 section 8.10 left this
   open for the hub names); T.1 reads it.
@@ -807,3 +807,38 @@ what they left open:
 - **Install files.** XHCIINST stages through `.TMP` and, on 98 SE and ME,
   replaces through `.BAK`; on x64 the forms are named after
   `XHCITR64.EXE`. Record 23 section 9.5 has the details.
+
+Revision 7, from leg T.7 (`runs/run-41.md`, "Plain USB devices"):
+
+- **The disks on 98 SE and ME** are below the USB device, two devnodes
+  down ("USB Mass Storage Device", "USB Disk", the disk), for NUSB's
+  `usbstor.sys`, for `xhciuas.sys` and for ME's own `USBSTOR`; the removal
+  of the subtree removes them, and Device Manager no longer lists the
+  device.
+- **The refusal on 98 SE** comes for a file held open on the drive. An
+  MS-DOS Prompt whose current directory is the drive does not refuse, so
+  the 9x text names an open file first.
+- **Windows XP answers a vetoed eject with success.**
+  `CM_Request_Device_EjectA` returned `CR_SUCCESS` with the veto type set;
+  `tr_eject_cr` turns a success with a veto type into `CR_REMOVE_VETOED`,
+  on the USB path and the Thunderbolt unit path alike. The veto came from
+  the stick's own volume (`PNP_VetoDevice`, a `STORAGE\RemovableMedia`
+  devnode); a device or driver veto from a devnode of the device's own set
+  reads "F: is in use (a program has a file or folder open on it)".
+- **Code 47 after an eject** (XP and 7): the disks go with the eject, so a
+  device held for eject is listed, "[stopped - unplug it]", before the
+  disk rule is applied. Any other problem code reads "not started -
+  problem code N", never "unplug it", for a unit too.
+- **Windows 7** answers `CR_NO_SUCH_VALUE` for a devnode with no relations
+  of the kind; that is none. A set that cannot be read says which relation
+  failed, in the details and `/report`.
+- **Property reads.** Every configuration-manager property is read into a
+  scratch buffer larger than any field and copied when it fits; the
+  registry-only drive-letter value is no longer asked of the configuration
+  manager. A page fault on ME, after the setup class moved from the stack
+  into the node, led to both.
+- **The walk's completeness** is kept per node: a node whose children could
+  not all be read makes any set holding it unread, and a failed setup-class
+  read is a node not read.
+- **The UAS disk's re-plug** was not read: the emulated UAS device does not
+  attach when added to a running machine.
