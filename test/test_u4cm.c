@@ -1322,10 +1322,17 @@ static void test_tbt3(void)
     fabHostMinimal(&g_fab);
     dev = fabDevice(&g_fab, FAB_DEV_TBT3_AR);
     g_fab.R[dev].Rcs[4] = 0x0200000AUL;
+    /* And, as the TS3 Plus at power-on, Upstream Adapter 0 in ROUTER_CS_1
+     * (0x0602C005): the CM takes it from the read's arrival adapter. */
+    g_fab.R[dev].Rcs[1] &= ~(0x3FUL << 8);
+    g_fab.R[dev].UpWritable = 1;
     fabPlug(&g_fab, 1, dev);
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     p = TbtU4Port(&g_cm, 1);
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "USB4 Version 02h: UP");
+    CHECK_EQ(p->Dev.UpAdp, 1UL, "upstream adapter from the arrival adapter");
+    CHECK_EQ((fabRtr(&g_fab, dev, 1) >> 8) & 0x3FUL, 1UL,
+             "the enumeration write set Upstream Adapter 1");
     CHECK(p->Dev.Tbt3, "02h is a Thunderbolt 3 router");
     CHECK_EQ(p->Dev.Usb4Version, 0x02UL, "the byte kept as read");
     CHECK(p->Pcie.Up && !p->Usb3.Up, "02h: PCIe, no USB3");

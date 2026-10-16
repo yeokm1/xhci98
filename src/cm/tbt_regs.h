@@ -429,6 +429,8 @@
 /* ROUTER_CS_1 (Linux struct tb_regs_switch_header DWORD 1, same fields). */
 #define TBT_RTR1_NEXT_CAP(v)        ((ULONG)(v) & 0xFFUL)           /* 7:0 */
 #define TBT_RTR1_UP_ADP(v)          (((ULONG)(v) >> 8) & 0x3FUL)    /* 13:8 Upstream Adapter */
+#define TBT_RTR1_UP_ADP_SHIFT       8
+#define TBT_RTR1_UP_ADP_MASK        0x00003F00UL
 #define TBT_RTR1_MAX_ADP(v)         (((ULONG)(v) >> 14) & 0x3FUL)   /* 19:14 Max Adapter */
 #define TBT_RTR1_DEPTH_SHIFT        20                              /* 22:20 Depth, R/W */
 #define TBT_RTR1_DEPTH_MASK         0x00700000UL

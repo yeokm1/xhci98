@@ -512,6 +512,9 @@ static void fabRouterWrite(FAB *f, int ri, unsigned long addr, unsigned long v)
     }
     if (addr == 1) {
         r->Rcs[1] = (old & ~(7UL << 20)) | (v & (7UL << 20));
+        if (r->UpWritable) {
+            r->Rcs[1] = (r->Rcs[1] & ~(0x3FUL << 8)) | (v & (0x3FUL << 8));
+        }
         return;
     }
     if (addr == 4) {

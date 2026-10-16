@@ -89,6 +89,7 @@ typedef struct FAB_ROUTER {
     int Used;
     int Kind;                       /* 0 host, FAB_DEV_* */
     int Tbt3;
+    int UpWritable;                 /* CS_1 Upstream Adapter written by the CM (a TB3 router at power-on) */
     int Connected;                  /* attached to its parent's lanes */
     int Parent;                     /* router index, -1 for the host */
     int ParentAdp;                  /* the parent's lane 0 adapter */

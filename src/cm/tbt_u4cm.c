@@ -2485,6 +2485,18 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
                 return TBT_E_STATE;
             }
             d->Depth = 1;
+            if (d->Tbt3 && (v[3] & TBT_RTR3_V) == 0 &&
+                cm->Ring->LastReadAdapter != 0) {
+                /* A Thunderbolt 3 router before enumeration may read
+                 * Upstream Adapter 0 (the TS3 Plus does); its upstream
+                 * adapter is the one the read arrived at, which the
+                 * enumeration write then sets (Linux ctl.c
+                 * tb_cfg_get_upstream_port, switch.c tb_switch_alloc and
+                 * tb_switch_configure). */
+                d->UpAdp = cm->Ring->LastReadAdapter;
+                v[1] = (v[1] & ~TBT_RTR1_UP_ADP_MASK) |
+                       ((d->UpAdp << TBT_RTR1_UP_ADP_SHIFT) & TBT_RTR1_UP_ADP_MASK);
+            }
             if ((v[3] & TBT_RTR3_V) != 0) {
                 if (!tbtU4Enumerated(d, v)) {
                     /* Valid with another depth or TopologyID: someone
