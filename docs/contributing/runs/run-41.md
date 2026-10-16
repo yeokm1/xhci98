@@ -920,6 +920,115 @@ step), `w98\`, `me\`, `me2\`, `w2k\` (`events.txt`, `debugcon-*.log`,
 `serial-*.log`, `trace-*.log`, `qemu-*.cmdline`), `pids.txt` (every QEMU
 started and how it ended); the cut's log `E:\xhci98-wt\stor1-legs\out\cut-x86.txt`.
 
+## Bridges behind the tunnel port on 98 SE and ME (record 21 section 6.1.1)
+
+The question: why an ORICO ASM2464 USB4 enclosure plugged into the
+owner's ThinkPad P14s Gen 1 after Windows 98 SE had started showed its
+switch's upstream port, `PCI\VEN_1B21&DEV_2463`, with Code 29 and nothing
+behind it, when the same enclosure present at power-on worked; and what
+the driver does about it. Readings of 2026-10-16.
+
+### The finding on the owner's ThinkPad P14s Gen 1
+
+- **Setting.** 98 SE in APM mode, Alpine Ridge LP (NHI `8086:15BF`,
+  tunnel port `04:01.0`), ICM, security level 1, firmware `0x60`; BIOS
+  Thunderbolt BIOS Assist Mode off, Support in Pre Boot Environment on;
+  `XhciCmApprove` 1; the `3.0.0.0` test build.
+- **A (present at power-on).** Both ASMedia bridges started with
+  `D4100000-D41FFFFF` and IRQ 10, Stor98 on IRQ 10 with its BARs at
+  `D4100000-D4105FFF`, D: present.
+- **B (Safely Remove in XHCITR, unplug, re-plug)**, and the first report
+  (a hot plug after a start without the enclosure): the upstream port at
+  Code 29 (`CM_PROB_HARDWARE_DISABLED`), status `0x180066A4`, an empty
+  `Allocation` in `HKEY_DYN_DATA\Config Manager\Enum`, nothing behind it.
+  The tunnel port's own allocation was the same in A and B: memory
+  `D4100000-E00FFFFF`, prefetchable `A0000000-BBFFFFFF`, and its bus-number
+  resource (type `0043h`, `ResType_PCI_Bus_Number`). Its BIOS-programmed
+  range is secondary `06`, subordinate `2A` (usb4-emu's DOS captures).
+- **Refresh and Remove.** A Device Manager Refresh changed nothing; a
+  Remove of the devnode and a Refresh gave a fresh devnode, a wizard, a
+  restart request, and Code 29 again.
+- **Assist on.** No NHI in Device Manager at all, with or without the
+  enclosure, and a plug brings up nothing; Assist is no way round on 98.
+
+### Why, read in the emulator
+
+Emulator `vm\usb4\bin-2a893ea` (SHA-256 checked), 98 SE (overlays of
+`vm\t26\win98-gold.qcow2`, which runs 98 in ACPI mode) and ME (overlay of
+`vm\t37me\winme-stock-base.qcow2`). The tunnel port is the SHPC
+`usb4-tunnel-bridge` on bus 0 with `bus-reserve=8,mem-reserve=32M`
+(buses 1-9, memory `FCA00000-FE9FFFFF`), the host `tb3-alpine-ridge`
+with the ORICO model (`device-model=asm2464`), which on i440FX puts its
+NVMe directly on the tunnel bus: the earlier NVMe legs had no bridge in
+between. A two-level bridge chain with an NVMe behind it was added behind
+the tunnel bridge's gate (hot-added `pci-bridge`s, then the BAR-less
+`usb4-asm-pci-usp` and `pci-bridge-seat` of the NT legs at slot 4), so it
+came up in reset state at the plug. The ACPI-mode guest is not the
+P14s's APM mode; the mechanism read is the same.
+
+- **No driver change, a Refresh, read before any restart.** The first
+  bridge got bus 1 -> 2/2 (no room below) and only its own BAR, and a
+  wizard asked for a restart; a second pass numbered the second bridge
+  and gave the first a window at `10100000-101FFFFF`, outside the tunnel
+  bridge's, and asked for a restart again. The NVMe got nothing.
+- **`HalGetBusData`** on 98 SE did not answer for a function PCI.VXD did
+  not know yet: the first prototype's survey through it found an empty bus.
+  The numbering reads and writes through PCI.VXD's own services.
+
+### The prototypes on the P14s
+
+Each was a replaced `xhcicm.sys`, the enclosure plugged in after a start
+without it, 30 s, then the exports.
+
+| Series | Build | Result |
+|---|---|---|
+| c | bus numbers only (`cd56e90f`) | upstream port still Code 29; both ASMedia keys' LogConfig rewritten with the memory window closed and no IRQ, so PCI.VXD had reached the downstream port; no `XhciCmBridgeDiag` in this build |
+| d | bus numbers and windows (`0c50f11b`) | both bridges started at `E0000000-E00FFFFF`; Stor98 Code 29, no IRQ; `XhciCmBridgeDiag` (18 dwords): outcome numbered, port `0408` buses `002A0604`, window `E000D410`, bridges `00080706` and `00080807`, windows `E000E000` |
+| e | and interrupt lines (`bde7f10f`) | D: present, every problem code 0; Stor98 on IRQ 10, BARs `E0000000-E0005FFF`; diag word 18 `00010A01`, word 19 `00000303` |
+| f | the merged tree, reviewed (`b9c18c41`) | as e, every problem code 0, D: present, the same resources and diag |
+| g | the same build: Safely Remove in XHCITR, unplug, re-plug | as f: D: back, no device in error, the same resources and diag |
+
+The windows are the driver's own placement, at the top of the port's
+window; with the enclosure present at power-on the BIOS had put them at
+its bottom (`D4100000-D41FFFFF`).
+
+### The final build in the emulator
+
+The qemu flavour of `b9c18c41` on 98 SE, the BAR-less chain at slot 4
+(its NVMe's INTA reaches the tunnel port as INTA), Stor98 0.3.0.1
+(`releases\0.3.0.1`, `SHA256SUMS.txt` `aee07c9c...cb9`) installed through
+the wizard:
+
+| Leg | Result |
+|---|---|
+| First plug, devnodes new | bus numbers 1/2/3 and 2/3/3, both windows `FE900000-FE9FFFFF` inside the tunnel bridge's, line 10 on the NVMe (`irq-counts` 1 of 2, the ORICO's own NVMe at device 1 arriving on INTB left alone); a wizard and a restart request for each new bridge location, declined; then Stor98: the NVMe started with BAR `FE900000` and IRQ 10, E: mounted |
+| Hot plug after a reset with the unit out (devnodes known, the chain in reset state: the P14s case) | the same writes; no wizard, no restart request; E: within 30 s |
+| Unplug and re-plug in one session | the tunnel down removed the children; the emulator gives the chain back configured, so the survey read it numbered and wrote nothing; the NVMe started again |
+| Present at power-on | the driver found the port's devnode already holding the chain (`cm.brnum.9x.held`) and wrote nothing; the BIOS's configuration stood and the chain started |
+| `XhciCmBridgeNumbering` 0 (read as `0x100`: found, 0) | no numbering activity in the log; the chain kept closed windows, the NVMe got no BAR and no IRQ, no E: |
+
+ME, the qemu flavour of `fb98ed81` (the same set-up logic before the last
+review fixes), hot-added `pci-bridge` chain at slot 3: bus numbers
+1/2/3 and 2/3/3, both windows inside the tunnel bridge's
+(`FE800000-FE9FFFFF`), PCI.VXD then found the NVMe behind both bridges
+(a "PCI Card" wizard; no NVMe driver on that guest), and an interrupt
+line on 1 of the 4 functions with a pin: the other three reach the port
+on other pins and were left alone, as the rule says.
+
+The final build, the qemu flavour of `49809c08` (the windows' sizing
+with an aligned region for the BARs at each level, the readiness wait
+behind a new bridge, a stale attempt's undo), on 98 SE after a restart
+with the unit out: the same bus numbers, windows and line as above,
+`win-need` now `00200000` (the ORICO's own NVMe beside the chain takes
+an aligned 1 MiB region), no wizard, E: within 30 s. For the P14s chain
+the writes are the same as `b9c18c41`'s: nothing sits beside the
+upstream port and the NVMe answers behind the downstream port, so its
+windows come out at `E0000000-E00FFFFF` as before.
+
+Not read: the USB4 profile with a bridge chain (the same worker and the
+same member set, so covered by the shared path, not tested under USB4);
+ME with Stor98 and known devnodes.
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link
