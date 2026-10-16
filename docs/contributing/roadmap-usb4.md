@@ -511,3 +511,17 @@ Status: not opened, unnumbered and unversioned.
 
 - [ ] DI9X.1 a design record: which `SETUPX` functions, as the DDKs document them; the 16-bit toolchain; the helper's interface to `XHCIINST`; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the uninstall
 - [ ] DI9X.2 the helper and `XHCIINST`'s use of it, with the legs on 98 SE and ME (a fresh install, an update from `2.4.0.0` and `2.3.x`, the uninstall)
+
+## Planned - A Thunderbolt 3 Dock's Name After a Resume
+
+Goal: a Thunderbolt 3 device router behind a USB4 host keeps its name
+when the connection manager adopts it at its start or rebuilds it on a
+resume, as it has after a plug.
+
+Status: not opened, unnumbered and unversioned. Listed on 2026-10-16 with
+task 40-A.8 (record 22 section 8): the router's DROM is read by EEPROM
+bit-bang only on a plug; under a resume budget the read is skipped, and a
+router found tunnelled at the start is adopted without it, so the tool
+shows the dock unnamed until a re-plug. The dock works either way.
+
+- [ ] TB3NAME.1 the DROM read for an adopted or resumed Thunderbolt 3 router, outside the resume budget (deferred to the connection-manager thread once the resume is done); host cases on the fake fabric; legs on 98 SE and 7 x86 with the dock attached across a suspend and at power-on
