@@ -4037,6 +4037,86 @@ static void settings_load(void)
     RegCloseKey(k);
 }
 
+/* Start at login, per user (record 25 section 7.4): the DWORD under the
+ * settings key; 1 when it reads as a DWORD, with *value. */
+static int login_read(DWORD *value)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = sizeof(*value);
+    int ok;
+
+    *value = 1;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    ok = RegQueryValueExA(k, TR_LOGIN_VALUE, NULL, &t, (LPBYTE)value, &n) ==
+             ERROR_SUCCESS && t == REG_DWORD && n == sizeof(*value);
+    RegCloseKey(k);
+    if (!ok) {
+        *value = 1;
+    }
+    return ok;
+}
+
+static int login_on(void)
+{
+    DWORD v;
+    int have = login_read(&v);
+
+    return tr_tray_login_start(1, have, v);
+}
+
+static void login_set(int on)
+{
+    HKEY k;
+    DWORD disp;
+    DWORD v = on ? 1UL : 0UL;
+
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, TR_SETTINGS_KEY, 0, NULL, 0,
+                        KEY_WRITE, NULL, &k, &disp) != ERROR_SUCCESS) {
+        return;
+    }
+    RegSetValueExA(k, TR_LOGIN_VALUE, 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
+    RegCloseKey(k);
+}
+
+/* The machine's Run value (INSTALL writes it; INSTALL /notray deletes it):
+ * without it nothing starts at login, whatever the user chooses here. */
+static int login_machine(void)
+{
+    HKEY k;
+    DWORD t;
+    DWORD n = 0;
+    LONG r;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_TRAY_RUN_KEY, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegQueryValueExA(k, INST_TRAY_RUN_VALUE, NULL, &t, NULL, &n);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS;
+}
+
+/* The item in a menu: checked as the user chose, grey with the reason when
+ * the machine starts nothing at login. */
+static void login_item(HMENU m, int append)
+{
+    int machine = login_machine();
+    UINT flags = MF_STRING | (login_on() ? MF_CHECKED : MF_UNCHECKED) |
+                 (machine ? 0 : MF_GRAYED);
+    const char *text = machine ? "Start at &login"
+                               : "Start at login (off for this computer)";
+
+    if (append) {
+        AppendMenuA(m, flags, IDM_LOGIN, text);
+    } else {
+        ModifyMenuA(m, IDM_LOGIN, MF_BYCOMMAND | flags, IDM_LOGIN, text);
+    }
+}
+
 static void settings_save(void)
 {
     HKEY k;
@@ -4442,6 +4522,9 @@ static void init_menu(HMENU m)
                                      (u >= 0 && (usb_listed(u) ? usb_why(u) == NULL
                                                                : ej_why_not(u) == NULL)
                                           ? MF_ENABLED : MF_GRAYED));
+    if (GetMenuState(m, IDM_LOGIN, MF_BYCOMMAND) != (UINT)-1) {
+        login_item(m, 0);
+    }
     EnableMenuItem(m, IDM_PROPS, MF_BYCOMMAND |
                                      (envNt && sel >= 0 && tn[sel].Dn >= 0
                                           ? MF_ENABLED : MF_GRAYED));
@@ -4469,6 +4552,9 @@ static int command(HWND w, UINT id)
     switch (id) {
     case IDM_REFRESH:
         refresh_window();
+        return 1;
+    case IDM_LOGIN:
+        login_set(!login_on());
         return 1;
     case IDM_SAVE:
         save_report_dialog();
@@ -4934,6 +5020,7 @@ static void tray_context_menu(void)
     AppendMenuA(m, MF_STRING, IDM_OPEN, "&Open");
     AppendMenuA(m, MF_STRING, IDM_REFRESH, "&Refresh");
     AppendMenuA(m, MF_STRING, IDM_ABOUT, "&About");
+    login_item(m, 1);
     AppendMenuA(m, MF_SEPARATOR, 0, NULL);
     AppendMenuA(m, MF_STRING, IDM_EXIT, "E&xit");
     SetMenuDefaultItem(m, IDM_OPEN, FALSE);
@@ -4953,6 +5040,9 @@ static void tray_context_menu(void)
         break;
     case IDM_ABOUT:
         about(NULL);
+        break;
+    case IDM_LOGIN:
+        login_set(!login_on());
         break;
     case IDM_EXIT:
         quit_all();
@@ -5254,6 +5344,15 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     if (opts.SelfTest) {
         return run_selftest();
+    }
+    if (opts.Tray) {
+        /* The start at login: the user's choice first, before any window,
+         * icon or thread (record 25 section 7.4). */
+        DWORD v;
+        int have = login_read(&v);
+        if (!tr_tray_login_start(1, have, v)) {
+            return INST_EXIT_DONE;
+        }
     }
     InitCommonControls();
     load_routines();

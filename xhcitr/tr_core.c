@@ -2220,3 +2220,8 @@ int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
     tr_copy(sentence, "Windows has not started this device.", sentenceCap);
     return 0;
 }
+
+int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value)
+{
+    return !(trayMode && haveValue && value == 0);
+}

@@ -1808,6 +1808,15 @@ static void test_usb_eject(void)
     CHECK(wide[0] == '\0', "wrap: nothing");
 }
 
+static void test_login(void)
+{
+    CHECK(tr_tray_login_start(1, 1, 0) == 0, "login: /tray with 0 stops silently");
+    CHECK(tr_tray_login_start(1, 1, 1) == 1, "login: /tray with 1 starts");
+    CHECK(tr_tray_login_start(1, 1, 7) == 1, "login: any other number starts");
+    CHECK(tr_tray_login_start(1, 0, 0) == 1, "login: no value (or not a DWORD) starts");
+    CHECK(tr_tray_login_start(0, 1, 0) == 1, "login: a plain start always opens");
+}
+
 int main(void)
 {
     test_printf();
@@ -1822,6 +1831,7 @@ int main(void)
     test_sizes();
     test_desc_lengths();
     test_usb_eject();
+    test_login();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {

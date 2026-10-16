@@ -562,6 +562,17 @@ int tr_usb_answer9x(TR_U32 cr, const char *what, char *out, size_t cap);
  * CR LF out. out always terminated. */
 void tr_wrap(const char *in, char *out, size_t cap, int width);
 
+/* ---- start at login (record 25 section 7.4, revision 8) ------------------ */
+
+/* The per-user value under HKCU\Software\xHCI98\XHCITR. */
+#define TR_LOGIN_VALUE          "TrayAtLogin"
+
+/* Whether a start goes on. Only a /tray start (the one the Run value makes
+ * at login) reads the value, and only a DWORD 0 stops it; absent, another
+ * type or any other number starts as before. haveValue: the value was
+ * read as a DWORD. */
+int tr_tray_login_start(int trayMode, int haveValue, TR_U32 value);
+
 /* ---- the report ---------------------------------------------------------- */
 
 /* One node of the report: its label at depth, then its details indented
