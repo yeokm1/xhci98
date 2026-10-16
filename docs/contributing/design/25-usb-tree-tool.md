@@ -1,6 +1,9 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 8, 2026-10-16. Revision 7 adds Safely Remove for plain USB
+Status: revision 11, 2026-10-16 (revision 11, the not-removable unit's
+stop, below). Revision 10 adds a per-user "Start at login" choice
+(section 7.4, the owner's request of 2026-10-16), with an addendum on the
+tree's labels (end of section 7.4). Revision 7 adds Safely Remove for plain USB
 devices (section 6.5), by the owner's decision of 2026-10-16 that reverses
 decision T6; sections 1.3, 3.1, 7.1, 7.3, 11, 12 and 14 change with it.
 Revision 6 was reviewed and revised five times the night before; the code
@@ -703,6 +706,46 @@ Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 11 `/eject` also takes `/result <name>` and `/confirmed <digest>`, which
 the tool passes to its own elevated run (section 6.6) and which nothing
 else needs.
+
+### 7.4 Start at login, per user (revision 10)
+
+- The machine's start is the Run value of section 8, written by XHCIINST
+  and removed by `INSTALL /notray`; that is machine-wide and needs an
+  administrator, as before.
+- Each user can turn it off without one: "Start at login", a checkable
+  item in the View menu and in the icon's right-click menu, writes the
+  DWORD `TrayAtLogin` under `HKCU\Software\xHCI98\XHCITR` - 0 off, 1 on.
+  The item shows the user's choice.
+- `XHCITR /tray`, the start the Run value makes, reads it first: a DWORD 0
+  ends the run at once, with exit 0, before any window, icon or thread.
+  An absent value, another type or any other number starts as before; a
+  plain start (no `/tray`) always opens. The decision is
+  `tr_tray_login_start`, host-tested.
+- Without the machine's Run value nothing starts at login whatever the
+  user chooses, so the item is grey and reads "Start at login (off for
+  this computer)".
+- 98 SE and ME read the same key, from the user's profile or the default
+  user's.
+
+Addendum to revision 10, the tree's labels (the owner, 2026-10-16, after
+two controllers of one name each showed a "Root hub" on the ThinkPad P14s
+Gen 1):
+
+- A controller's label ends with its vendor and PCI id from its instance
+  ID ("- Intel 8086:02ED"; "- vendor XXXX" for a vendor outside the
+  tool's short table). A Thunderbolt chip's own xHCI reads "- Thunderbolt
+  3 controller's USB (8086:15C1)" ("USB4" or "Thunderbolt" by its NHI's
+  published connection manager): an NHI in the walk on the same bus and
+  device (an integrated controller), or behind a bridge beside the
+  controller's under one switch (a discrete one); never a guess, so a
+  PCH xHCI on the root bus is not one.
+- The root hub reads "Root hub - N ports (a USB 2.0, b USB 3.x)" from
+  each port's `_EX_V2` protocols, without the split when a port did not
+  report them; each port label carries its protocol ("[Port 15, USB 3]").
+  No pairing of a connector's USB 2 and USB 3 ports is shown: the tool
+  reads none.
+- The same labels are in `/report` and Save Report, a file whose tree
+  lines can be wider than 79 columns at depth, as before.
 
 ## 8. Install, upgrade and uninstall
 

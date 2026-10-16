@@ -188,7 +188,7 @@ On Vista x64 and 7 x64:
 - **Safely Remove:** pick the device in the icon's menu or the window, confirm, and unplug it when the tool says so. It follows the same rules as `INSTALL /eject`, on every system.
 - **USB sticks and disks** can be stopped the same way, on every system, 98 SE and ME included. The tool names one by its drive letter. Only a device with a disk on it is offered; a keyboard, mouse, hub, camera or other device is shown, not stopped.
 
-`INSTALL /notray` installs without starting it at login. It is also in the package at `tools\xhcitr\`.
+To stop it starting at login for yourself, untick "Start at login" in its View menu or the icon's right-click menu (no administrator needed). `INSTALL /notray` stops it for every user of the machine. It is also in the package at `tools\xhcitr\`.
 
 ## Installation Steps
 

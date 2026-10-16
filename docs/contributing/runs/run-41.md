@@ -740,6 +740,43 @@ tools, the window's and the tray's own route to the same dialog (the
 one-shot `/eject id=` takes the same functions), and whether a rescan
 restarts a unit after this stop.
 
+### Start at login, per user (record 25 revision 10)
+
+Read on the tool of `33f66b09`, on 98 SE and on 7 x86 as the standard
+user, the tool in place of the installed one:
+
+- The icon's right-click menu and the View menu showed "Start at login"
+  ticked. Unticked from the icon, the View menu showed it unticked; after
+  a restart no icon came (on 7 the hidden-icons area held none).
+- Ticked again from the View menu: after a restart the icon was back, on
+  both systems.
+- 7: with the machine's Run value deleted by an administrator, the item
+  read "Start at login (off for this computer)", grey; the value was put
+  back afterwards.
+- On the development host, `XHCITR64 /tray` with `TrayAtLogin` 0 ended in
+  about a second with exit 0 and no icon.
+
+`INSTALL /notray` already removed the machine's Run value on an existing
+install, and an install without it writes the value again; XHCIINST is
+unchanged.
+
+### The tree's labels (record 25 revision 10, addendum)
+
+Read on the tool of `d144edef` (the root hub's total was then taken from
+its hub descriptor, `779b676a`), as the standard user:
+
+- 98 SE and 7 x86: "xHCI98 USB 3.x eXtensible Host Controller (xhci98) -
+  Red Hat 1B36:000D", "Root hub - 8 ports (4 USB 2.0, 4 USB 3.x)", "[Port
+  3, USB 3] QEMU QEMU HARDDISK (G:) SuperSpeed" on 98 SE ("... USB Device
+  (F:)" on 7), the ports of the full-speed hub behind it "USB 1.1".
+- Development host A (Windows 11, `/report` as the user): a Thunderbolt
+  chip's own xHCI read "USB xHCI Compliant Host Controller (Windows) -
+  Thunderbolt controller's USB (8086:5782)", its NHI in the walk but not
+  driven by `xhcicm.sys`, so with no generation; the AMD controller "-
+  AMD 1022:1587"; "Root hub - 4 ports (2 USB 2.0, 2 USB 3.x)".
+- Not read: the label of an emulated Thunderbolt chip's xHCI under
+  `xhcicm.sys` ("Thunderbolt 3 controller's USB").
+
 ## Stor98 behind the Thunderbolt 3 controller (STOR.2)
 
 Readings of 2026-10-16 on development host A, `vm\usb4\bin-2a893ea` (its

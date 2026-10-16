@@ -35,6 +35,13 @@ connections (tunnels) to each device, and the Windows devices behind
 them. Under "USB" are the USB controllers, each with its root hub, ports,
 hubs and devices, their speed and their Device Manager entry.
 
+Each controller is named with its maker and PCI ID, for example
+"... - Intel 8086:02ED"; the USB controller inside a Thunderbolt chip
+reads "... - Thunderbolt 3 controller's USB (8086:15C1)". A root hub
+shows its ports and how many are USB 2.0 and USB 3.x, for example "Root
+hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
+"[Port 15, USB 3]". A USB 3 connector has one port of each kind.
+
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail to a
                            text file, for a problem report
@@ -102,7 +109,17 @@ The notification-area icon
   Click            a list of the devices you can stop: USB devices,
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
-  Right-click      Open, Refresh, About and Exit
+  Right-click      Open, Refresh, About, Start at login and Exit
+
+Start at login
+--------------
+
+To stop the icon starting when you log on, untick "Start at login" in
+the View menu or the icon's right-click menu; tick it again to bring it
+back. It is your own setting and needs no administrator rights. If the
+item is grey ("off for this computer"), the program was installed with
+INSTALL /notray, so it starts for nobody; run INSTALL again without
+/notray to turn it back on.
 
 The icon says when a Thunderbolt or USB4 device is connected, is waiting
 to be approved, could not be approved or was disconnected, and when the
