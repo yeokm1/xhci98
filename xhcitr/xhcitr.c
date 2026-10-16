@@ -2012,8 +2012,15 @@ static void details_nhi(TR_TEXT *t, int k)
         tr_printf(t, "  Firmware version:    0x%08lX\n",
                   (unsigned long)inst_get32(R, CM_ST_O_FW_VERSION));
     }
-    tr_printf(t, "  Record generation:   %lu\n",
-              (unsigned long)inst_get32(R, CM_ST_O_GENERATION));
+    if (h->HaveQ) {
+        /* The embedded record's own generation is stamped only by the
+         * registry write; the query carries its own (cm_query.h). */
+        tr_printf(t, "  Content generation:  %lu (pass %lu)\n",
+                  (unsigned long)h->Q.ContentGen, (unsigned long)h->Q.Pass);
+    } else {
+        tr_printf(t, "  Record generation:   %lu\n",
+                  (unsigned long)inst_get32(R, CM_ST_O_GENERATION));
+    }
     ports = inst_get32(R, CM_ST_O_PORT_COUNT);
     for (j = 0; j < ports && j < CM_ST_MAX_PORTS; j++) {
         TR_U32 bdf = inst_get32(R, CM_ST_O_PORTS + 4 * j);
