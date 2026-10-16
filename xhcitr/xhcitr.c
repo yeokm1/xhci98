@@ -5486,6 +5486,21 @@ static int run_eject(void)
         tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
         goto answer;
     }
+    /* Not the elevated run itself: a unit not marked removable is offered
+     * with administrator rights here too (section 6.6). */
+    if (!opts.Result &&
+        tr_elev_needed(envNt, inst_unit_not_marked(gw.N[u].HasCaps,
+                                                   gw.N[u].Caps),
+                       ej_is_admin())) {
+        if (!ej_elev_ask(NULL, q)) {
+            code = INST_EXIT_REFUSED;
+            tr_copy(msg, "Cancelled; nothing was stopped.", sizeof(msg));
+            goto answer;
+        }
+        code = ej_elev_run(NULL, q, msg, sizeof(msg));
+        tr_join_lines(msg);
+        goto answer;
+    }
     code = ej_run(q, msg, sizeof(msg), &rights);
     tr_join_lines(msg);
 answer:
