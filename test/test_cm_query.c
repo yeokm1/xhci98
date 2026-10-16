@@ -504,9 +504,277 @@ static void test_order_and_bump(void)
     CHECK_EQ(CmQueryBumpGen(out, 63), 0, "no header: nothing");
 }
 
+/* ---- The log answer (record 25 section 4.5) ---------------------------- */
+
+static UCHAR ring[CM_QL_LOG_MAX];
+static UCHAR logOut[CM_QL_MAX_BYTES + 16];
+static UCHAR ctrText[CM_QL_CTR_MAX];
+
+/* Appends text to the modelled ring as XhciLogAppend's byte put does. */
+static void ring_put(ULONG *head, ULONG *used, ULONG *dropped,
+                     const char *text)
+{
+    while (*text != 0) {
+        ring[*head] = (UCHAR)*text++;
+        *head = (*head + 1) & (CM_QL_LOG_MAX - 1);
+        if (*used < CM_QL_LOG_MAX) {
+            (*used)++;
+        } else {
+            (*dropped)++;
+        }
+    }
+}
+
+static void log_in(CM_QLOG_IN *in, ULONG head, ULONG used, ULONG dropped)
+{
+    memset(in, 0, sizeof(*in));
+    in->Flags = CM_QL_F_RECORDING;
+    in->Verbosity = 2;
+    in->VerbosityRead = 2;
+    in->EpochLo = 0x89ABCDEFUL;
+    in->EpochHi = 0x01DC1234UL;
+    in->Ctr = ctrText;
+    in->Ring = ring;
+    in->RingBytes = CM_QL_LOG_MAX;
+    in->Head = head;
+    in->Used = used;
+    in->Dropped = dropped;
+    in->Appends = 7;
+    in->Pass = 5;
+}
+
+static void test_log_layout(void)
+{
+    CHECK_EQ(CM_QL_IOCTL, (0x22UL << 16) | (0xA41UL << 2), "the log code");
+    CHECK_EQ(CM_QL_MAGIC, 'X' | ('C' << 8) | ('M' << 16) | ((ULONG)'L' << 24),
+             "'XCML' in byte order");
+    CHECK_EQ(CM_QL_O_PASS_AGE_MS + 4, CM_QL_HDR_BYTES, "the age ends it");
+    CHECK_EQ(CM_QL_MAX_BYTES, 64 + 8192 + 16384, "the largest log answer");
+    CHECK(CM_QL_MAX_BYTES <= CM_QL_ASK_BYTES, "one ask holds the largest");
+    CHECK(CM_QL_ASK_BYTES <= CM_Q_MAX_BYTES, "within the reader's bound");
+}
+
+static void test_log_lines(void)
+{
+    static const char *const names[] = { "cm.passes", "cm.polls", "x y" };
+    static const ULONG values[] = { 0x1FUL, 0xDEADBEEFUL, 1 };
+    UCHAR buf[64];
+    ULONG at = 0;
+    ULONG cut = 0;
+
+    memset(buf, 0xEE, sizeof(buf));
+    CHECK_EQ(CmQueryLines(buf, sizeof(buf), &at, names, values, 3, &cut), 3,
+             "three lines");
+    CHECK_EQ(cut, 0, "not cut");
+    CHECK(memcmp(buf, "cm.passes=0000001F\r\ncm.polls=DEADBEEF\r\nx.y=00000001\r\n",
+                 at) == 0, "the format; a space written '.'");
+    CHECK_EQ(at, 20 + 19 + 14, "the length");
+    /* Room for one line and part of the next: the next is not written. */
+    at = 0;
+    CHECK_EQ(CmQueryLines(buf, 25, &at, names, values, 3, &cut), 1,
+             "one fits");
+    CHECK_EQ(cut, 1, "cut");
+    CHECK_EQ(at, 20, "nothing of the second");
+    /* Once cut, a shorter name after it is not written either. */
+    CHECK_EQ(CmQueryLines(buf, 64, &at, names + 2, values + 2, 1, &cut), 0,
+             "nothing after a cut");
+    CHECK_EQ(at, 20, "still");
+    at = 30;
+    cut = 0;
+    CHECK_EQ(CmQueryLines(buf, 20, &at, names, values, 1, &cut), 0,
+             "at past room");
+    CHECK_EQ(cut, 1, "cut");
+}
+
+static void test_log_answer(void)
+{
+    CM_QLOG_IN in;
+    ULONG head = 0;
+    ULONG used = 0;
+    ULONG dropped = 0;
+    ULONG info;
+    ULONG whole;
+    const char *recs = "cm.start=00000001\r\ncm.stage=00000003\r\n";
+
+    memcpy(ctrText, "cm.passes=00000005\r\n", 20);
+    ring_put(&head, &used, &dropped, recs);
+    log_in(&in, head, used, dropped);
+    in.CtrBytes = 20;
+    whole = 64 + 20 + 38;
+    CHECK_EQ(CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info),
+             CM_Q_ANS_WHOLE, "whole");
+    CHECK_EQ(info, whole, "its length");
+    CHECK_EQ(get32(logOut, CM_QL_O_MAGIC), CM_QL_MAGIC, "magic");
+    CHECK_EQ(get32(logOut, CM_QL_O_VERSION), 1, "version");
+    CHECK_EQ(get32(logOut, CM_QL_O_BYTES), whole, "size");
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS), CM_QL_F_RECORDING, "flags");
+    CHECK_EQ(get32(logOut, CM_QL_O_VERBOSITY), 2, "verbosity");
+    CHECK_EQ(get32(logOut, CM_QL_O_EPOCH_LO), 0x89ABCDEFUL, "epoch lo");
+    CHECK_EQ(get32(logOut, CM_QL_O_EPOCH_HI), 0x01DC1234UL, "epoch hi");
+    CHECK_EQ(get32(logOut, CM_QL_O_CTR_OFFSET), 64, "counters at 64");
+    CHECK_EQ(get32(logOut, CM_QL_O_CTR_BYTES), 20, "counters' length");
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_OFFSET), 84, "the log after them");
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 38, "the log's length");
+    CHECK_EQ(get32(logOut, CM_QL_O_APPENDS), 7, "appends");
+    CHECK_EQ(get32(logOut, CM_QL_O_PASS), 5, "pass");
+    CHECK_EQ(get32(logOut, CM_QL_O_PASS_AGE_MS), CM_Q_UNKNOWN, "age unset");
+    CHECK(memcmp(logOut + 64, ctrText, 20) == 0, "the counters");
+    CHECK(memcmp(logOut + 84, recs, 38) == 0, "the log, oldest first");
+    CmQueryLogSetAge(logOut, info, 5, 1234);
+    CHECK_EQ(get32(logOut, CM_QL_O_PASS_AGE_MS), 1234, "age");
+    CmQueryLogSetAge(logOut, info, 0, 1234);
+    CHECK_EQ(get32(logOut, CM_QL_O_PASS_AGE_MS), CM_Q_UNKNOWN, "no pass");
+
+    /* Sizing. */
+    CHECK_EQ(CmQueryLogAnswer(logOut, 63, &in, &info), CM_Q_ANS_TOO_SMALL,
+             "under the header");
+    CHECK_EQ(info, 0, "nothing");
+    memset(logOut, 0xEE, sizeof(logOut));
+    CHECK_EQ(CmQueryLogAnswer(logOut, whole - 1, &in, &info),
+             CM_Q_ANS_HEADER, "one short: the header");
+    CHECK_EQ(info, 64, "the header alone");
+    CHECK_EQ(get32(logOut, CM_QL_O_BYTES), whole, "the size to ask");
+    CHECK_EQ(logOut[64], 0xEE, "nothing past it");
+
+    /* The ring is left as it was: a second answer is the same. */
+    CHECK_EQ(CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info),
+             CM_Q_ANS_WHOLE, "again");
+    CHECK(memcmp(logOut + 84, recs, 38) == 0, "the same log");
+
+    /* Flags passed through; the builder's own not taken from the input. */
+    in.Flags = CM_QL_F_RECORDING | CM_QL_F_REFUSED | CM_QL_F_STOPPING |
+               CM_QL_F_INERT | CM_QL_F_WITHHELD | CM_QL_F_LOG_CUT;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS), CM_QL_F_RECORDING |
+             CM_QL_F_REFUSED | CM_QL_F_STOPPING | CM_QL_F_INERT,
+             "input flags; withheld and cut are the builder's");
+    in.CtrCut = 1;
+    in.Flags = 0;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS), CM_QL_F_CTR_CUT, "counters cut");
+    in.CtrBytes = CM_QL_CTR_MAX + 1;
+    in.CtrCut = 0;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_CTR_BYTES), 0, "too long: none");
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS), CM_QL_F_CTR_CUT, "and cut");
+
+    /* A ring of an unknown shape is an empty log. */
+    log_in(&in, head, used, dropped);
+    in.RingBytes = 1000;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 0, "not a power of two");
+    in.RingBytes = CM_QL_LOG_MAX * 2;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 0, "too large");
+    log_in(&in, head, CM_QL_LOG_MAX + 1, dropped);
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 0, "used past the size");
+    log_in(&in, head, used, dropped);
+    in.Ring = NULL;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 0, "no ring");
+    CHECK_EQ(info, 64, "the header alone, whole");
+}
+
+static void test_log_text(void)
+{
+    CM_QLOG_IN in;
+    ULONG head = 0;
+    ULONG used = 0;
+    ULONG dropped = 0;
+    ULONG info;
+    ULONG n;
+    ULONG i;
+    const UCHAR *t;
+    char line[32];
+
+    /* Bytes outside printable ASCII, CR and LF are written '.'. */
+    ring_put(&head, &used, &dropped, "a\tb\x01\x7F\x80=00000001\r\n");
+    log_in(&in, head, used, dropped);
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(memcmp(logOut + 64, "a.b...=00000001\r\n", 17) == 0,
+          "control and high bytes replaced");
+
+    /* An address record's value withheld, its neighbours not; a label
+     * that only begins with one is not withheld. */
+    head = used = dropped = 0;
+    ring_put(&head, &used, &dropped,
+             "cm.live.state=00000101\r\ncm.live.bar-changed=E0000004\r\n"
+             "cm.reenum.9x.gone.superseded=C1234560\r\n"
+             "cm.reenum.9x.gone.id-changed=C1234570\r\n"
+             "cm.live.bar-changed.x=00000002\r\n");
+    log_in(&in, head, used, dropped);
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    t = logOut + 64;
+    CHECK(memcmp(t, "cm.live.state=00000101\r\ncm.live.bar-changed=--------\r\n"
+                    "cm.reenum.9x.gone.superseded=--------\r\n"
+                    "cm.reenum.9x.gone.id-changed=--------\r\n"
+                    "cm.live.bar-changed.x=00000002\r\n", used) == 0,
+          "the three address records withheld");
+    CHECK(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_WITHHELD, "withheld flag");
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), used, "same length");
+    CHECK(CmQueryLogAddress((const UCHAR *)"cm.live.bar-changed", 19),
+          "the label");
+    CHECK(!CmQueryLogAddress((const UCHAR *)"cm.live.bar-change", 18),
+          "a prefix of it");
+    CHECK(!CmQueryLogAddress((const UCHAR *)"cm.live.bar-changedX", 20),
+          "longer");
+
+    /* Wrapped: the ring full, bytes dropped; the oldest bytes are a tail
+     * ("...ar-changed=E0000004") whose label was overwritten - cut. */
+    head = used = dropped = 0;
+    for (i = 0; used < CM_QL_LOG_MAX || dropped < 40; i++) {
+        sprintf(line, "cm.live.bar-changed=%08lX\r\n", (unsigned long)i);
+        ring_put(&head, &used, &dropped, line);
+    }
+    log_in(&in, head, used, dropped);
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    n = get32(logOut, CM_QL_O_LOG_BYTES);
+    t = logOut + 64;
+    CHECK(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_LOG_CUT, "cut flag");
+    CHECK(n < CM_QL_LOG_MAX && n > CM_QL_LOG_MAX - 32, "one partial dropped");
+    CHECK(memcmp(t, "cm.live.bar-changed=--------\r\n", 30) == 0,
+          "starts at a whole record, withheld");
+    for (i = 0; i < n; i++) {
+        if (t[i] >= '0' && t[i] <= '9') {
+            break;
+        }
+    }
+    CHECK_EQ(i, n, "no digit of any address left");
+    CHECK_EQ(t[n - 1], '\n', "ends with a whole record");
+
+    /* A checked flavour's drain: a chunk may end inside a record, so the
+     * first line is dropped though nothing was overwritten. */
+    head = used = dropped = 0;
+    ring_put(&head, &used, &dropped, "nged=E0000004\r\ncm.stop=00000000\r\n");
+    log_in(&in, head, used, dropped);
+    in.Flags |= CM_QL_F_EMITTED;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 18, "the tail dropped");
+    CHECK(memcmp(logOut + 64, "cm.stop=00000000\r\n", 18) == 0, "the rest");
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS),
+             CM_QL_F_RECORDING | CM_QL_F_EMITTED | CM_QL_F_LOG_CUT, "flags");
+    /* No LF at all: nothing shown. */
+    head = used = dropped = 0;
+    ring_put(&head, &used, &dropped, "nged=E0000004");
+    log_in(&in, head, used, dropped);
+    in.Flags |= CM_QL_F_EMITTED;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 0, "a lone tail: none");
+    /* An empty ring. */
+    log_in(&in, 0, 0, 0);
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK_EQ(get32(logOut, CM_QL_O_LOG_BYTES), 0, "empty");
+    CHECK_EQ(info, 64, "the header");
+}
+
 int main(void)
 {
     test_layout();
+    test_log_layout();
+    test_log_lines();
+    test_log_answer();
+    test_log_text();
     test_u4();
     test_icm();
     test_answer();

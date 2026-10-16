@@ -421,3 +421,202 @@ ULONG CmQueryBumpGen(UCHAR *answer, ULONG bytes)
     cmQPut(answer, CM_Q_O_CONTENT_GEN, gen);
     return gen;
 }
+
+/* ---------------------------------------------------------------------- */
+/* The log answer (design record 25 section 4.5)                          */
+/* ---------------------------------------------------------------------- */
+
+static const char cmQHex[] = "0123456789ABCDEF";
+
+/* The labels whose value is an address: withheld. */
+static const char *const cmQAddressLabels[] = {
+    "cm.live.bar-changed",              /* the BAR as read (cm_nhi.c)   */
+    "cm.reenum.9x.gone.superseded",     /* a CONFIGMG devnode handle,   */
+    "cm.reenum.9x.gone.id-changed"      /* a pointer (cm_cfgwk.c)       */
+};
+
+ULONG CmQueryLogAddress(const UCHAR *label, ULONG n)
+{
+    ULONG k;
+    ULONG i;
+    const char *s;
+
+    for (k = 0; k < sizeof(cmQAddressLabels) / sizeof(cmQAddressLabels[0]);
+         k++) {
+        s = cmQAddressLabels[k];
+        for (i = 0; i < n && s[i] != 0 && (UCHAR)s[i] == label[i]; i++) {
+        }
+        if (i == n && s[i] == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+ULONG CmQueryLines(UCHAR *out, ULONG room, PULONG at,
+                   const char *const *names, const ULONG *values,
+                   ULONG count, PULONG cut)
+{
+    ULONG i;
+    ULONG len;
+    ULONG k;
+    ULONG p;
+    UCHAR c;
+
+    if (*cut) {
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        for (len = 0; names[i][len] != 0; len++) {
+        }
+        /* the name, '=', eight digits, CR LF */
+        if (*at > room || len > room - *at || 11 > room - *at - len) {
+            *cut = 1;
+            return i;
+        }
+        p = *at;
+        for (k = 0; k < len; k++) {
+            c = (UCHAR)names[i][k];
+            out[p++] = (c > 0x20 && c < 0x7F) ? c : (UCHAR)'.';
+        }
+        out[p++] = '=';
+        for (k = 0; k < 8; k++) {
+            out[p++] = (UCHAR)cmQHex[(values[i] >> (28 - 4 * k)) & 0xFUL];
+        }
+        out[p++] = '\r';
+        out[p++] = '\n';
+        *at = p;
+    }
+    return count;
+}
+
+/* The values of address records in text[0..n) written "--------"; 1 when
+ * any was. */
+static ULONG cmQWithhold(UCHAR *text, ULONG n)
+{
+    ULONG line;
+    ULONG eq;
+    ULONG k;
+    ULONG any;
+
+    any = 0;
+    line = 0;
+    while (line < n) {
+        for (eq = line; eq < n && text[eq] != '=' && text[eq] != '\n';
+             eq++) {
+        }
+        if (eq < n && text[eq] == '=' &&
+            CmQueryLogAddress(text + line, eq - line)) {
+            for (k = eq + 1; k < n && k <= eq + 8 && text[k] != '\r' &&
+                             text[k] != '\n';
+                 k++) {
+                text[k] = '-';
+                any = 1;
+            }
+        }
+        while (line < n && text[line] != '\n') {
+            line++;
+        }
+        line++;
+    }
+    return any;
+}
+
+ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
+                       PULONG info)
+{
+    ULONG flags;
+    ULONG used;
+    ULONG mask;
+    ULONG start;
+    ULONG skip;
+    ULONG ctr;
+    ULONG logBytes;
+    ULONG whole;
+    ULONG i;
+    UCHAR c;
+
+    *info = 0;
+    if (room < CM_QL_HDR_BYTES) {
+        return CM_Q_ANS_TOO_SMALL;
+    }
+    flags = in->Flags & (CM_QL_F_RECORDING | CM_QL_F_REFUSED |
+                         CM_QL_F_STOPPING | CM_QL_F_EMITTED | CM_QL_F_INERT);
+    ctr = in->CtrBytes;
+    if (in->Ctr == NULL || ctr > CM_QL_CTR_MAX) {
+        ctr = 0;
+        flags |= CM_QL_F_CTR_CUT;
+    }
+    if (in->CtrCut) {
+        flags |= CM_QL_F_CTR_CUT;
+    }
+    used = in->Used;
+    mask = 0;
+    if (in->Ring == NULL || in->RingBytes == 0 ||
+        in->RingBytes > CM_QL_LOG_MAX ||
+        (in->RingBytes & (in->RingBytes - 1)) != 0 || used > in->RingBytes) {
+        used = 0;
+    } else {
+        mask = in->RingBytes - 1;
+    }
+    start = (in->Head - used) & mask;
+    skip = 0;
+    if (used != 0 && (in->Dropped != 0 || (in->Flags & CM_QL_F_EMITTED))) {
+        /* The oldest bytes may be the tail of a record: the wrap overwrote
+         * its head, or a drain's chunk took it (cm_log.c drains in chunks
+         * that need not end at a record). From the next record, so no
+         * value is shown without its label. */
+        while (skip < used && in->Ring[(start + skip) & mask] != '\n') {
+            skip++;
+        }
+        if (skip < used) {
+            skip++;
+        }
+        flags |= CM_QL_F_LOG_CUT;
+    }
+    logBytes = used - skip;
+    whole = CM_QL_HDR_BYTES + ctr + logBytes;
+
+    cmQZero(out, CM_QL_HDR_BYTES);
+    cmQPut(out, CM_QL_O_MAGIC, CM_QL_MAGIC);
+    cmQPut(out, CM_QL_O_VERSION, CM_QL_VERSION);
+    cmQPut(out, CM_QL_O_BYTES, whole);
+    cmQPut(out, CM_QL_O_VERBOSITY, in->Verbosity);
+    cmQPut(out, CM_QL_O_VERBOSITY_READ, in->VerbosityRead);
+    cmQPut(out, CM_QL_O_EPOCH_LO, in->EpochLo);
+    cmQPut(out, CM_QL_O_EPOCH_HI, in->EpochHi);
+    cmQPut(out, CM_QL_O_CTR_OFFSET, CM_QL_HDR_BYTES);
+    cmQPut(out, CM_QL_O_CTR_BYTES, ctr);
+    cmQPut(out, CM_QL_O_LOG_OFFSET, CM_QL_HDR_BYTES + ctr);
+    cmQPut(out, CM_QL_O_LOG_BYTES, logBytes);
+    cmQPut(out, CM_QL_O_APPENDS, in->Appends);
+    cmQPut(out, CM_QL_O_DROPPED, in->Dropped);
+    cmQPut(out, CM_QL_O_PASS, in->Pass);
+    cmQPut(out, CM_QL_O_PASS_AGE_MS, CM_Q_UNKNOWN);
+    if (room < whole) {
+        cmQPut(out, CM_QL_O_FLAGS, flags);
+        *info = CM_QL_HDR_BYTES;
+        return CM_Q_ANS_HEADER;
+    }
+    cmQCopy(out + CM_QL_HDR_BYTES, in->Ctr, ctr);
+    for (i = 0; i < logBytes; i++) {
+        c = in->Ring[(start + skip + i) & mask];
+        if ((c < 0x20 || c > 0x7E) && c != '\r' && c != '\n') {
+            c = '.';
+        }
+        out[CM_QL_HDR_BYTES + ctr + i] = c;
+    }
+    if (cmQWithhold(out + CM_QL_HDR_BYTES + ctr, logBytes)) {
+        flags |= CM_QL_F_WITHHELD;
+    }
+    cmQPut(out, CM_QL_O_FLAGS, flags);
+    *info = whole;
+    return CM_Q_ANS_WHOLE;
+}
+
+VOID CmQueryLogSetAge(UCHAR *out, ULONG info, ULONG pass, ULONG ageMs)
+{
+    if (info >= CM_QL_HDR_BYTES) {
+        cmQPut(out, CM_QL_O_PASS_AGE_MS, pass != 0 ? ageMs : CM_Q_UNKNOWN);
+    }
+}

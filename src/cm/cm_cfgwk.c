@@ -1890,6 +1890,15 @@ VOID CmCfgwkStop(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
     CmFree(w);
 }
 
+VOID CmCfgwkCounters(PCM_CFGWK w, PCM_CFGWK_COUNTERS counters)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    *counters = w->C;
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
 VOID CmCfgwkDrain(VOID)
 {
     LARGE_INTEGER step;

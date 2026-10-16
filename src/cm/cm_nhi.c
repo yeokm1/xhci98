@@ -1580,6 +1580,31 @@ static VOID cmU4LogCounters(PCM_NHI nhi)
     cmU4LogPorts(nhi);
 }
 
+/* The blocks cmLogCounters writes at stop, as the query device's log
+ * answer carries them after each pass (design record 25 section 4.5). */
+VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
+                       PULONG cut)
+{
+    (VOID)CmQueryLines(out, room, at, cmNhiCounterNames,
+                       (const ULONG *)&nhi->Counters,
+                       sizeof(CM_COUNTERS) / sizeof(ULONG), cut);
+    if (!nhi->U4On && nhi->Icm.Ring == NULL) {
+        return;
+    }
+    (VOID)CmQueryLines(out, room, at, cmRingCounterNames,
+                       (const ULONG *)&nhi->Ring.Counters,
+                       sizeof(TBT_RING_COUNTERS) / sizeof(ULONG), cut);
+    if (nhi->U4On) {
+        (VOID)CmQueryLines(out, room, at, cmU4CounterNames,
+                           (const ULONG *)&nhi->U4.Counters,
+                           sizeof(TBT_U4_COUNTERS) / sizeof(ULONG), cut);
+    } else {
+        (VOID)CmQueryLines(out, room, at, cmIcmCounterNames,
+                           (const ULONG *)&nhi->Icm.Counters,
+                           sizeof(TBT_ICM_COUNTERS) / sizeof(ULONG), cut);
+    }
+}
+
 /* The selection, on the thread. Sets StartStatus (a Code 10 refusal only
  * for BAR0 that cannot be mapped) and BindOwed. */
 VOID CmNhiStartWork(PCM_NHI nhi)
