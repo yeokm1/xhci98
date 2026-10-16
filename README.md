@@ -59,7 +59,7 @@ The P14s Gen 1 under Windows 98 SE with NUSB: the MSSU10-128GSR flash drive at S
 | Lunar Lake, Panther Lake, Wildcat Lake, Barlow Ridge | `A833`, `A834`, `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784` | xHCI98 USB4 Host Router |
 | AMD, ASMedia and any other USB4 host | `1022:1668`, `1022:1669`, PCI class `0C0340` | xHCI98 USB4 Host Router |
 
-- **Untested hosts.** The Thunderbolt 3 support has been read on one real machine, the Alpine Ridge JHL6240 (`8086:15BF`) in my P14s Gen 1, under Windows 98 SE: hot plug, Safely Remove and re-plug of an NVMe enclosure ([issue 18](docs/issues/18-p14s-gen1-tb3-nvme-hot-plug-98se.md)). Every other Thunderbolt controller above is untested: it is driven to the Linux driver's description of it. Every USB4 host is untested as well: the USB4 connection manager has run only on an emulator, since no USB4 host at hand boots these systems. Each is enabled all the same. If the driver starts and does nothing, the debug build's log says why, and `XhciCmMode` `0` turns it off. Reports from any of these machines, working or not, are very welcome.
+- **If the driver starts and does nothing** on your machine, the debug build's log says why, and `XhciCmMode` `0` turns it off. Reports from any Thunderbolt or USB4 machine, working or not, are very welcome. The release notes' [Untested hosts](docs/using/release-notes.md#which-controllers) has the detail.
 - **Not supported:** daisy chains (a device behind another device), DisplayPort over the cable, Apple machines and their controllers.
 
 ### Before you start: the BIOS
@@ -280,7 +280,6 @@ Each value is a `DWORD` in a driver (software) key; restart Windows after a chan
 - Windows 98 SE and Windows 2000 SP4 are the primary targets.
 - Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
 - Every other target, Windows 2000 included, has run in QEMU virtual machines only.
-- Thunderbolt 3: read on the P14s Gen 1 (Alpine Ridge) under Windows 98 SE only; every other Thunderbolt controller is untested. USB4: emulator only, since no USB4 host at hand boots these systems (see [Untested hosts](#thunderbolt-3-and-usb4)).
 - Per-system detail: the release notes' [Targets and their standing](docs/using/release-notes.md#targets-and-their-standing). The test devices: [test-equipment.md](docs/contributing/test-equipment.md).
 
 | Machine | Controller | Tested by |
