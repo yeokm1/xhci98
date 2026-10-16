@@ -3129,7 +3129,7 @@ example, the `3.0.0.0` cut with Stor98 `0.4.0.0`:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1 -TestSignPfx <pfx> ^
-    -Stor98Version 0.3.0.1 -Stor98Dir <stor98>\releases\0.3.0.1 ^
+    -Stor98Version 0.4.0.0 -Stor98Dir <stor98>\releases\0.4.0.0 ^
     -Stor98SumsSha256 ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7 ^
     -Stor98InterfaceVersion 4
 ```
