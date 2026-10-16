@@ -861,6 +861,9 @@ static void test_log_emit(void)
     CHECK_EQ(emittedBytes, 0, "no byte of it");
     CHECK_EQ(emit_run("cm.a=00000001\r\ncm.b=00000002", 0, 2), 2,
              "the unterminated end is a line");
+    CHECK_EQ(emittedBytes, 28, "every byte of both");
+    CHECK(memcmp(emitted, "cm.a=00000001\r\ncm.b=00000002", 28) == 0,
+          "as they were");
     /* A line past the print buffer goes in pieces, in order. */
     for (i = 0; i < 299; i++) {
         big[i] = (UCHAR)('A' + i % 26);
