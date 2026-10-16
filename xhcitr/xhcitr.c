@@ -641,6 +641,15 @@ static int lv_set(const int *level, char *msg, size_t cap)
             if (r == ERROR_SUCCESS) {
                 r = RegSetValueExA(k, name, 0, REG_DWORD, (const BYTE *)&v,
                                    sizeof(v));
+                /* A key that still holds xhcicm's old name gets the same
+                 * level under it, so a driver that reads either name
+                 * follows the setting. */
+                if (r == ERROR_SUCCESS && d == TR_LV_XHCICM &&
+                    RegQueryValueExA(k, TR_LV_NAME_XHCICM_OLD, NULL, NULL, NULL,
+                                     NULL) == ERROR_SUCCESS) {
+                    r = RegSetValueExA(k, TR_LV_NAME_XHCICM_OLD, 0, REG_DWORD,
+                                       (const BYTE *)&v, sizeof(v));
+                }
                 RegCloseKey(k);
             }
             lv_read(lvDev[d][i].Dn, d, &lvDev[d][i].L);
@@ -3808,6 +3817,7 @@ static void lv_apply(HWND dlg)
     int d;
     int any = 0;
     int code;
+    int confirmed = 1;      /* the outcome is the writer's own answer */
 
     if (ejElevBusy) {
         MessageBoxA(dlg, "Another change with administrator rights is "
@@ -3856,13 +3866,17 @@ static void lv_apply(HWND dlg)
         code = tr_level_elev_result(r.Launched, r.Err, r.Finished, r.ExitCode,
                                     r.HaveAnswer, r.AnswerCode, r.Msg, msg,
                                     sizeof(msg));
+        confirmed = r.Finished && r.HaveAnswer &&
+                    (DWORD)r.AnswerCode == r.ExitCode;
     } else {
         HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
         code = lv_set(want, msg, sizeof(msg));
         SetCursor(old);
     }
     lv_fill(dlg);
-    if (code == INST_EXIT_DONE || code == INST_EXIT_FAILED) {
+    /* lv_set answers 2 only when it wrote something and failed elsewhere;
+     * an elevated run that did not answer is not known to have written. */
+    if (confirmed && (code == INST_EXIT_DONE || code == INST_EXIT_FAILED)) {
         /* Something was written: the drivers take it at their next
          * start. */
         char ask[TR_RES_BYTES + 512];
@@ -3951,7 +3965,7 @@ static int run_setlevel(void)
         gw.Count = 0;
         tr_copy(msg, "The device tree could not be read; nothing was changed.",
                 sizeof(msg));
-        code = INST_EXIT_FAILED;
+        code = INST_EXIT_REFUSED;
     } else {
         code = lv_set(opts.Level, msg, sizeof(msg));
     }

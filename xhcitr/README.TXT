@@ -11,8 +11,9 @@ also stops a USB stick or disk, or a device connected through a
 Thunderbolt or USB4 port, safely, so that you can unplug it, and it sits
 in the notification area (the system tray) beside the clock.
 
-It changes no setting, approves no Thunderbolt device and updates no
-firmware. It needs no administrator rights to start.
+The one setting it changes is the drivers' logging level (below). It
+approves no Thunderbolt device and updates no firmware. It needs no
+administrator rights to start.
 
 Which file
 ----------
@@ -49,6 +50,7 @@ hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
   View                     shows or hides each part of the tree; with
                            Descriptors on, the selected USB device's
                            descriptors are read and shown in full
+  View > Logging level...  the drivers' logging levels (below)
   Action > Safely Remove   stops the selected USB stick or disk, or
                            Thunderbolt or USB4 device
   Action > Properties      opens the device in Device Manager
@@ -103,6 +105,38 @@ administrator rights: when it runs without them it says so and offers
 Vista and 7, the Run As dialog on 2000 and XP) for that one stop. If you
 cancel, nothing is stopped.
 
+Logging level
+-------------
+
+View > Logging level... (or a right click on a USB controller driven by
+xhci98, or on a Thunderbolt or USB4 controller) shows how much each of
+the two drivers records in its log, side by side, and sets it:
+
+  0  off
+  1  counters only
+  2  the log (default)
+  3  adds port status
+  4  adds memory addresses (for developers)
+
+xhci98's level is the XhciLogVerbosity value in each of its USB
+controllers' driver keys; the Thunderbolt driver's is XhciCmLogVerbosity
+in its controller's driver key (for this release it also reads an older
+XhciLogVerbosity there when XhciCmLogVerbosity is missing, and the list
+says which name it found; Set writes the level under both names where
+the older one is there). The list at the top shows each value as it
+is: no value reads as 2, the default, and a value outside 0 to 4 is
+shown as out of range. Choose a level for either driver and click Set;
+a value out of range is never written. Each driver reads its level only
+when it starts, so the tool then offers to restart Windows.
+
+On Windows 98 SE and ME, and for an administrator, Set writes the values
+at once. On Windows 2000 to 7 without administrator rights the button
+reads "Set as administrator..." and asks for them (User Account Control
+on Vista and 7, the Run As dialog on 2000 and XP) for that one change.
+If you cancel, nothing is changed.
+
+The levels are also in Save Report and XHCITR /report.
+
 The notification-area icon
 --------------------------
 
@@ -135,6 +169,10 @@ From a command line
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
                                ID and exits
+  XHCITR /setlevel xhci98=<n> xhcicm=<n>
+                               sets either driver's logging level (0 to
+                               4; one or both) and exits; needs
+                               administrator rights on 2000 to 7
 
 Exit codes: 0 done, 1 refused (nothing changed), 2 failed, 4 Windows
 refused or a step remains for you.

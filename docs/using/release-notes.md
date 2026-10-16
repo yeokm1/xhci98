@@ -341,6 +341,25 @@ the logged-on user, with no administrator rights.
 - On 98 SE and ME the stop removes the device from Device Manager; until
   it is unplugged, Device Manager's Refresh can start it again. On XP and
   later Windows holds it stopped (Code 47) until it is unplugged.
+- **Logging level** (View > Logging level..., or a right click on an
+  `xhci98.sys` controller or a Thunderbolt or USB4 controller) shows and
+  sets both drivers' log levels side by side: `xhci98.sys`'s
+  `XhciLogVerbosity` in each of its controllers' driver keys and
+  `xhcicm.sys`'s `XhciCmLogVerbosity` in its controller's (for this
+  release `xhcicm.sys` also reads an older `XhciLogVerbosity` there when
+  the new name is missing; the tool says which name it found, and writes
+  the level under both names where the older one is there). Each
+  is `0` off, `1` counters only, `2` the log (the default; no value reads
+  as `2`), `3` adds port status, `4` adds memory addresses (for
+  developers). A value outside `0` to `4` is shown as it is and never
+  written. On 98 SE and ME, and for an administrator, the tool writes the
+  value at once; on 2000 to 7 without administrator rights it offers "Set
+  as administrator...", which asks for them for that one change. Each
+  driver reads its level only when it starts, so the tool then offers to
+  restart Windows. The levels are also in Save Report and `XHCITR
+  /report`, and `XHCITR /setlevel xhci98=<n> xhcicm=<n>` sets them from
+  a command line. It replaces `XHCISNAP -verbosity` and `SNAPON.BAT`,
+  which this release still carries.
 
 ### Removing a Thunderbolt or USB4 device safely
 
