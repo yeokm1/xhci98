@@ -1,13 +1,13 @@
 /*
- * test_cm_nvlink.c - the pure half of the nvme98 link-state channel
+ * test_cm_nvlink.c - the pure half of the stor98 link-state channel
  * (src/cm/cm_nvlink.c; roadmap-usb4.md tasks 39-A.7 and 40-A.7): the
- * table nvme98cm.h defines, written by the entry protocol and read back
+ * table stor98cm.h defines, written by the entry protocol and read back
  * by a modelled receiver that follows the header's reading rules
  * (generation recorded at "HwFindAdapter", DOWN_QUIESCED applied for that
  * generation or a newer one, DOWN without QUIESCED and older generations
  * ignored, an odd or changed Sequence read again); the two profiles'
- * statement conditions; the 9x record's bytes; the proposed
- * REMOVE_PENDING request.
+ * statement conditions; where the channel is offered and the wait with
+ * no receiver; interface 3's locator bytes; the REMOVE_PENDING request.
  */
 
 #include <stdio.h>
@@ -16,7 +16,7 @@
 #include "../src/cm/cm_nvlink.h"
 #include "test_harness.h"
 
-/* A modelled nvme98 instance bound to (bus, slot). */
+/* A modelled stor98 instance bound to (bus, slot). */
 typedef struct _RX {
     ULONG Bus;
     ULONG Slot;
@@ -29,7 +29,7 @@ typedef struct _RX {
 } RX;
 
 /* The header's seqlock read: TRUE with a consistent copy. */
-static BOOLEAN rxRead(const NVME98LS_TABLE *t, ULONG i, NVME98LS_ENTRY *copy)
+static BOOLEAN rxRead(const STOR98LS_TABLE *t, ULONG i, STOR98LS_ENTRY *copy)
 {
     ULONG s;
 
@@ -41,9 +41,9 @@ static BOOLEAN rxRead(const NVME98LS_TABLE *t, ULONG i, NVME98LS_ENTRY *copy)
     return (BOOLEAN)(t->Entry[i].Sequence == s);
 }
 
-static void rxFind(RX *rx, const NVME98LS_TABLE *t, ULONG bus, ULONG slot)
+static void rxFind(RX *rx, const STOR98LS_TABLE *t, ULONG bus, ULONG slot)
 {
-    NVME98LS_ENTRY e;
+    STOR98LS_ENTRY e;
 
     rx->Bus = bus;
     rx->Slot = slot;
@@ -58,14 +58,14 @@ static void rxFind(RX *rx, const NVME98LS_TABLE *t, ULONG bus, ULONG slot)
 }
 
 /* One poll: applies and acknowledges a statement for its generation. */
-static void rxPoll(RX *rx, NVME98LS_TABLE *t)
+static void rxPoll(RX *rx, STOR98LS_TABLE *t)
 {
-    NVME98LS_ENTRY e;
+    STOR98LS_ENTRY e;
 
     if (rx->Index == CM_NVLINK_NONE || !rxRead(t, rx->Index, &e)) {
         return;
     }
-    if ((e.Flags & NVME98LS_DOWN_QUIESCED) != 0 &&
+    if ((e.Flags & STOR98LS_DOWN_QUIESCED) != 0 &&
         e.LinkGeneration >= rx->Recorded) {
         if (!rx->Done) {
             rx->Applied++;
@@ -74,26 +74,30 @@ static void rxPoll(RX *rx, NVME98LS_TABLE *t)
         }
         return;
     }
-    if ((e.Flags & NVME98LS_UP) == 0) {
+    if ((e.Flags & STOR98LS_UP) == 0) {
         rx->Ignored++;
     }
 }
 
-static NVME98LS_TABLE table;
+static STOR98LS_TABLE table;
 
 static void test_layout(void)
 {
     ULONG i;
 
-    CHECK_EQ(sizeof(NVME98LS_ENTRY), 32, "an entry is eight ULONGs");
-    CHECK_EQ(sizeof(NVME98LS_TABLE), 16 + 8 * 32, "the table is 272 bytes");
+    CHECK_EQ(sizeof(STOR98LS_ENTRY), 32, "an entry is eight ULONGs");
+    CHECK_EQ(sizeof(STOR98LS_TABLE), 16 + 8 * 32, "the table is 272 bytes");
     memset(&table, 0xA5, sizeof(table));
     CmNvlinkTableInit(&table);
-    CHECK_EQ(table.Signature, 0x4C38394EUL, "signature 'N98L'");
-    CHECK_EQ(table.Version, 1, "version 1");
-    CHECK_EQ(table.Count, NVME98LS_ENTRIES, "count");
-    CHECK_EQ(table.Reserved, 0, "reserved zero");
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+    CHECK_EQ(table.Signature, 0x4C383953UL, "signature 'S98L'");
+    CHECK(memcmp(&table.Signature, "S98L", 4) == 0, "'S98L' in memory");
+    CHECK_EQ(table.Version, 4, "version 4");
+    CHECK_EQ(STOR98LS9X_LOCATOR_VERSION, 4, "locator version 4");
+    CHECK_EQ(STOR98CM_VERSION, 4, "IOCTL message version 4");
+    CHECK(memcmp(STOR98CM_SIGNATURE, "STOR98CM", 8) == 0, "IOCTL signature");
+    CHECK_EQ(table.Count, STOR98LS_ENTRIES, "count");
+    CHECK_EQ(table.Cookie, 0, "cookie zero");
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
         CHECK_EQ(table.Entry[i].Flags, 0, "every entry unused");
         CHECK_EQ(table.Entry[i].Sequence, 0, "every sequence zero");
     }
@@ -115,10 +119,10 @@ static void test_cycle(void)
     CHECK_EQ(table.Entry[0].BusNumber, 4, "bus");
     CHECK_EQ(table.Entry[0].SlotNumber, 0, "slot");
     CHECK_EQ(table.Entry[0].LinkGeneration, 1, "generation 1");
-    CHECK_EQ(table.Entry[0].Flags, NVME98LS_IN_USE | NVME98LS_UP, "IN_USE | UP");
+    CHECK_EQ(table.Entry[0].Flags, STOR98LS_IN_USE | STOR98LS_UP, "IN_USE | UP");
     CHECK_EQ(table.Entry[0].Sequence, 2, "one write: odd then even");
 
-    /* nvme98 binds after the UP (the obligation's order). */
+    /* stor98 binds after the UP (the obligation's order). */
     rxFind(&rx, &table, 4, 0);
     CHECK_EQ(rx.Index, 0, "the receiver finds its entry");
     CHECK_EQ(rx.Recorded, 1, "and records generation 1");
@@ -132,7 +136,7 @@ static void test_cycle(void)
 
     seq = table.Entry[0].Sequence;
     CHECK(CmNvlinkSetDown(&table, 0, TRUE), "DOWN_QUIESCED written");
-    CHECK_EQ(table.Entry[0].Flags, NVME98LS_IN_USE | NVME98LS_DOWN_QUIESCED, "flags");
+    CHECK_EQ(table.Entry[0].Flags, STOR98LS_IN_USE | STOR98LS_DOWN_QUIESCED, "flags");
     CHECK_EQ(table.Entry[0].Sequence, seq + 2, "bracketed");
     CHECK(!CmNvlinkAcked(&table, 0), "not yet acknowledged");
     rxPoll(&rx, &table);
@@ -152,7 +156,7 @@ static void test_cycle(void)
     /* Withheld: UP leaves, no QUIESCED; the receiver ignores it. */
     rxFind(&rx, &table, 4, 0);
     CHECK(CmNvlinkSetDown(&table, 0, FALSE), "withheld DOWN written");
-    CHECK_EQ(table.Entry[0].Flags, NVME98LS_IN_USE, "IN_USE alone");
+    CHECK_EQ(table.Entry[0].Flags, STOR98LS_IN_USE, "IN_USE alone");
     rxPoll(&rx, &table);
     CHECK_EQ(rx.Applied, 0, "DOWN without QUIESCED is not evidence");
     CHECK(!CmNvlinkAcked(&table, 0), "nothing to acknowledge");
@@ -174,7 +178,7 @@ static void test_full(void)
     ULONG k;
 
     CmNvlinkTableInit(&table);
-    for (k = 0; k < NVME98LS_ENTRIES; k++) {
+    for (k = 0; k < STOR98LS_ENTRIES; k++) {
         i = CmNvlinkPublishUp(&table, 4 + k, 8, TRUE, &o);
         CHECK_EQ(i, k, "entries in order");
     }
@@ -198,8 +202,8 @@ static void test_full(void)
     CHECK_EQ(o, CM_NVLINK_UP_BAD, "a bus past 255");
     i = CmNvlinkPublishUp(NULL, 1, 0, TRUE, &o);
     CHECK_EQ(o, CM_NVLINK_UP_BAD, "no table");
-    CHECK(!CmNvlinkSetDown(&table, NVME98LS_ENTRIES, TRUE), "index past the table");
-    CHECK(!CmNvlinkAcked(&table, NVME98LS_ENTRIES), "index past the table");
+    CHECK(!CmNvlinkSetDown(&table, STOR98LS_ENTRIES, TRUE), "index past the table");
+    CHECK(!CmNvlinkAcked(&table, STOR98LS_ENTRIES), "index past the table");
 }
 
 static void test_verdicts(void)
@@ -268,7 +272,20 @@ static void test_verdicts(void)
              CM_NVLINK_UNQUALIFIED, "USB4: an operating system not qualified");
 
     CHECK_EQ(CmNvlinkAckBoundMs(TRUE), 5000, "NT: the 5 s gone deadline");
-    CHECK_EQ(CmNvlinkAckBoundMs(FALSE), 3000, "9x: the provisional 3 s");
+    CHECK_EQ(CmNvlinkAckBoundMs(FALSE), 3000, "9x: 3 s");
+    CHECK(CmNvlinkAckBoundMs(FALSE) >= STOR98LS9X_CM_LINK_WAIT_MS &&
+          CmNvlinkAckBoundMs(FALSE) <= STOR98LS9X_GONE_MS,
+          "9x: within interface 3's R12 S4 bounds");
+
+    /* Where the channel is offered, and the wait for an acknowledgement. */
+    CHECK(CmNvlinkOffered(TRUE), "NT: offered (interface 2)");
+    CHECK(!CmNvlinkOffered(FALSE), "9x: not offered by this build");
+    CHECK_EQ(CmNvlinkAwaitBoundMs(FALSE, CmNvlinkOffered(FALSE)), 0,
+             "9x: a link-down with no channel waits for nothing");
+    CHECK_EQ(CmNvlinkAwaitBoundMs(TRUE, TRUE), 5000,
+             "NT with a receiver: the 5 s bound");
+    CHECK_EQ(CmNvlinkAwaitBoundMs(TRUE, FALSE), 0,
+             "NT with no stor98 loaded: no wait");
 
     CHECK_EQ(CmNvlinkLeft(1000, 1000, 5000), 5000, "nothing spent");
     CHECK_EQ(CmNvlinkLeft(1000, 3000, 5000), 3000, "2 s spent");
@@ -282,15 +299,17 @@ static void test_record(void)
 {
     UCHAR r[CM_NVLINK_RECORD_BYTES];
     static const UCHAR want[CM_NVLINK_RECORD_BYTES] = {
-        0x4E, 0x39, 0x38, 0x4C, 0x01, 0x00, 0x00, 0x00,
+        0x53, 0x39, 0x38, 0x4C, 0x04, 0x00, 0x00, 0x00,
         0x00, 0x12, 0x34, 0xC1, 0x10, 0x01, 0x00, 0x00,
         0xEF, 0xBE, 0xAD, 0xDE
     };
 
-    CmNvlinkRecordEncode(r, 0xC1341200UL, sizeof(NVME98LS_TABLE),
+    CmNvlinkRecordEncode(r, 0xC1341200UL, sizeof(STOR98LS_TABLE),
                          0xDEADBEEFUL);
     CHECK(memcmp(r, want, sizeof(want)) == 0, "the record's bytes");
-    CHECK(memcmp(r, "N98L", 4) == 0, "starts with the ASCII signature");
+    CHECK(memcmp(r, "S98L", 4) == 0, "starts with the ASCII signature");
+    CHECK_EQ(CM_NVLINK_RECORD_BYTES, 20, "the locator is 20 bytes");
+    CHECK(strcmp(CM_NVLINK_REC_VALUE, "LinkState") == 0, "the locator value");
 }
 
 static void test_remove(void)
@@ -304,25 +323,25 @@ static void test_remove(void)
     CHECK(!CmNvlinkRemoveRequest(&table, i, 0x01000000UL), "sequence past 24 bits");
     CHECK(CmNvlinkRemoveRequest(&table, i, 7), "request 7");
     CHECK_EQ(table.Entry[i].Flags,
-             NVME98LS_IN_USE | NVME98LS_UP | CM_NVLINK_REMOVE_PENDING,
+             STOR98LS_IN_USE | STOR98LS_UP | CM_NVLINK_REMOVE_PENDING,
              "UP kept, REMOVE_PENDING set");
-    CHECK_EQ(table.Entry[i].Reserved[0], 7, "the sequence");
+    CHECK_EQ(table.Entry[i].RemoveSequence, 7, "the sequence");
     CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_NONE, "not answered");
-    table.Entry[i].Reserved[1] = (6UL << 8) | CM_NVLINK_RM_CLEAN;
+    table.Entry[i].RemoveAck = (6UL << 8) | CM_NVLINK_RM_CLEAN;
     CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_NONE,
              "an answer to an older request");
-    table.Entry[i].Reserved[1] = (7UL << 8) | CM_NVLINK_RM_ISOLATED;
+    table.Entry[i].RemoveAck = (7UL << 8) | CM_NVLINK_RM_ISOLATED;
     CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_ISOLATED, "isolated");
-    table.Entry[i].Reserved[1] = (7UL << 8) | 9UL;
+    table.Entry[i].RemoveAck = (7UL << 8) | 9UL;
     CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_FAILED,
              "an unknown outcome is not clean");
-    table.Entry[i].Reserved[1] = (7UL << 8) | CM_NVLINK_RM_CLEAN;
+    table.Entry[i].RemoveAck = (7UL << 8) | CM_NVLINK_RM_CLEAN;
     CHECK_EQ(CmNvlinkRemoveAnswer(&table, i, 7), CM_NVLINK_RM_CLEAN, "clean");
     CmNvlinkRemoveCancel(&table, i);
-    CHECK_EQ(table.Entry[i].Flags, NVME98LS_IN_USE | NVME98LS_UP, "cancelled");
+    CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE | STOR98LS_UP, "cancelled");
     CHECK(CmNvlinkRemoveRequest(&table, i, 8), "request 8");
     CHECK(CmNvlinkSetDown(&table, i, TRUE), "a tunnel down over a pending request");
-    CHECK_EQ(table.Entry[i].Flags, NVME98LS_IN_USE | NVME98LS_DOWN_QUIESCED,
+    CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE | STOR98LS_DOWN_QUIESCED,
              "replaces it");
     CHECK(!CmNvlinkRemoveRequest(&table, i, 9), "no request on an entry not UP");
     i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
@@ -356,7 +375,7 @@ static void test_fresh(void)
 
     /* Retired before the exposure: the binding instance stays off it. */
     CHECK_EQ(CmNvlinkRetire(&table, 4), 1, "one entry retired");
-    CHECK_EQ(table.Entry[i].Flags, NVME98LS_IN_USE, "IN_USE alone");
+    CHECK_EQ(table.Entry[i].Flags, STOR98LS_IN_USE, "IN_USE alone");
     CHECK_EQ(table.Entry[i].LinkGeneration, 3, "a new generation with no DOWN");
     rxFind(&rx, &table, 4, 0);
     CHECK_EQ(rx.Recorded, 3, "the new instance records it");
@@ -365,7 +384,7 @@ static void test_fresh(void)
     CHECK_EQ(CmNvlinkRetire(&table, 5), 0, "another bus: nothing");
     CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an entry already retired: nothing");
     CHECK(!CmNvlinkRetireEntry(&table, i), "nor by index");
-    CHECK(!CmNvlinkRetireEntry(&table, NVME98LS_ENTRIES), "an index past the table");
+    CHECK(!CmNvlinkRetireEntry(&table, STOR98LS_ENTRIES), "an index past the table");
     i = CmNvlinkPublishUp(&table, 4, 0, FALSE, &o);
     CHECK_EQ(CmNvlinkRetire(&table, 4), 0, "an UP entry is not retired");
     CHECK_EQ(CmNvlinkRetire(NULL, 4), 0, "no table");

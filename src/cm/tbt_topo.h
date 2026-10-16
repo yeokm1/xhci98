@@ -599,7 +599,7 @@ ULONG XhciTbtLearn(PXHCI_TBT_CFG io, const XHCI_TBT_TOPO *topo,
 /*
  * The index in topo->Set of USB4 port `port`'s bridge, named or learned,
  * or XHCI_TBT_NO_MEMBER when it is not known or not a member of the set
- * now (the tunnel change then acts on the whole set, and no nvme98
+ * now (the tunnel change then acts on the whole set, and no stor98
  * statement names one member of a set of more than one: record 22
  * sections 7.6 and 10.2).
  */

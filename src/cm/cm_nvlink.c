@@ -1,11 +1,11 @@
 /*
- * cm_nvlink.c - the pure half of the nvme98 link-state channel
+ * cm_nvlink.c - the pure half of the stor98 link-state channel
  * (cm_nvlink.h; roadmap-usb4.md tasks 39-A.7 and 40-A.7): the entry
- * protocol of nvme98cm.h over an NVME98LS_TABLE, the two profiles'
- * statement conditions, the 9x record's encoding and the proposed
- * REMOVE_PENDING request. test\test_cm_nvlink.c runs it on the host.
+ * protocol of stor98cm.h over a STOR98LS_TABLE, the two profiles'
+ * statement conditions, which systems the channel is offered on, interface
+ * 3's locator encoding and its REMOVE_PENDING request. test\test_cm_nvlink.c runs it on the host.
  *
- * WRITE ORDER. nvme98 reads an entry concurrently, from its own timer and
+ * WRITE ORDER. stor98 reads an entry concurrently, from its own timer and
  * HwStartIo, as a seqlock: Sequence odd while the connection manager
  * writes, and a read whose Sequence was odd or changed is retried. Every
  * write here is therefore Sequence + 1 (odd), the fields, Sequence + 1
@@ -13,7 +13,7 @@
  * order; on x86 and x64 stores are not reordered with other stores, so
  * the processor keeps it too. BusNumber and SlotNumber are not volatile in
  * the header and are written through volatile pointers here for the same
- * reason. AckGeneration is nvme98's and is only read.
+ * reason. AckGeneration is stor98's and is only read.
  *
  * DDK-free: part of the pure core. C89, no 64-bit arithmetic. IRQL: any.
  */
@@ -22,7 +22,7 @@
 #include "tbt_topo.h"
 #include "cm_nvlink.h"
 
-static VOID cmNvBegin(PNVME98LS_ENTRY e)
+static VOID cmNvBegin(PSTOR98LS_ENTRY e)
 {
     e->Sequence = e->Sequence + 1;
     if ((e->Sequence & 1UL) == 0) {
@@ -32,44 +32,44 @@ static VOID cmNvBegin(PNVME98LS_ENTRY e)
     }
 }
 
-static VOID cmNvEnd(PNVME98LS_ENTRY e)
+static VOID cmNvEnd(PSTOR98LS_ENTRY e)
 {
     e->Sequence = e->Sequence + 1;
 }
 
-static VOID cmNvPut(ULONG *field, ULONG value)
+static VOID cmNvPut(volatile ULONG *field, ULONG value)
 {
-    *(volatile ULONG *)field = value;
+    *field = value;
 }
 
-VOID CmNvlinkTableInit(PNVME98LS_TABLE t)
+VOID CmNvlinkTableInit(PSTOR98LS_TABLE t)
 {
     ULONG i;
     ULONG k;
     PUCHAR p;
 
     p = (PUCHAR)t;
-    for (k = 0; k < sizeof(NVME98LS_TABLE); k++) {
+    for (k = 0; k < sizeof(STOR98LS_TABLE); k++) {
         p[k] = 0;
     }
-    t->Version = NVME98LS_VERSION;
-    t->Count = NVME98LS_ENTRIES;
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+    t->Version = STOR98LS_VERSION;
+    t->Count = STOR98LS_ENTRIES;
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
         t->Entry[i].Sequence = 0;
     }
     /* The signature last: a reader that sees it sees the rest. */
-    *(volatile ULONG *)&t->Signature = NVME98LS_SIGNATURE;
+    *(volatile ULONG *)&t->Signature = STOR98LS_SIGNATURE;
 }
 
-ULONG CmNvlinkFind(const NVME98LS_TABLE *t, ULONG bus, ULONG slot)
+ULONG CmNvlinkFind(const STOR98LS_TABLE *t, ULONG bus, ULONG slot)
 {
     ULONG i;
 
     if (t == NULL) {
         return CM_NVLINK_NONE;
     }
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        if ((t->Entry[i].Flags & NVME98LS_IN_USE) != 0 &&
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if ((t->Entry[i].Flags & STOR98LS_IN_USE) != 0 &&
             t->Entry[i].BusNumber == bus &&
             t->Entry[i].SlotNumber == slot) {
             return i;
@@ -80,35 +80,35 @@ ULONG CmNvlinkFind(const NVME98LS_TABLE *t, ULONG bus, ULONG slot)
 
 /* An entry that may be given to a function: one never used. An entry once
  * given to (bus, slot) keeps it for the life of the table: an instance of
- * nvme98 may hold its address and apply any newer generation's
+ * stor98 may hold its address and apply any newer generation's
  * DOWN_QUIESCED written there, whatever function it then named, and
  * nothing tells this side when that instance is gone. */
-static BOOLEAN cmNvFree(const NVME98LS_ENTRY *e)
+static BOOLEAN cmNvFree(const STOR98LS_ENTRY *e)
 {
-    return (BOOLEAN)((e->Flags & NVME98LS_IN_USE) == 0 && e->Sequence == 0);
+    return (BOOLEAN)((e->Flags & STOR98LS_IN_USE) == 0 && e->Sequence == 0);
 }
 
-BOOLEAN CmNvlinkRetireEntry(PNVME98LS_TABLE t, ULONG index)
+BOOLEAN CmNvlinkRetireEntry(PSTOR98LS_TABLE t, ULONG index)
 {
-    PNVME98LS_ENTRY e;
+    PSTOR98LS_ENTRY e;
 
-    if (t == NULL || index >= NVME98LS_ENTRIES) {
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
         return FALSE;
     }
     e = &t->Entry[index];
-    if ((e->Flags & NVME98LS_IN_USE) == 0 || (e->Flags & NVME98LS_UP) != 0 ||
-        e->Flags == NVME98LS_IN_USE) {
+    if ((e->Flags & STOR98LS_IN_USE) == 0 || (e->Flags & STOR98LS_UP) != 0 ||
+        e->Flags == STOR98LS_IN_USE) {
         /* Unused, UP, or already retired (nothing a reader could apply). */
         return FALSE;
     }
     cmNvBegin(e);
     e->LinkGeneration = e->LinkGeneration + 1;
-    e->Flags = NVME98LS_IN_USE;
+    e->Flags = STOR98LS_IN_USE;
     cmNvEnd(e);
     return TRUE;
 }
 
-ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus)
+ULONG CmNvlinkRetire(PSTOR98LS_TABLE t, ULONG bus)
 {
     ULONG i;
     ULONG n;
@@ -117,8 +117,8 @@ ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus)
     if (t == NULL) {
         return 0;
     }
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
-        if ((t->Entry[i].Flags & NVME98LS_IN_USE) != 0 &&
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
+        if ((t->Entry[i].Flags & STOR98LS_IN_USE) != 0 &&
             t->Entry[i].BusNumber == bus && CmNvlinkRetireEntry(t, i)) {
             n++;
         }
@@ -126,12 +126,12 @@ ULONG CmNvlinkRetire(PNVME98LS_TABLE t, ULONG bus)
     return n;
 }
 
-ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
+ULONG CmNvlinkPublishUp(PSTOR98LS_TABLE t, ULONG bus, ULONG slot,
                         BOOLEAN fresh, PULONG outcome)
 {
     ULONG i;
     ULONG pick;
-    PNVME98LS_ENTRY e;
+    PSTOR98LS_ENTRY e;
 
     *outcome = CM_NVLINK_UP_BAD;
     if (t == NULL || bus > 0xFFUL || slot > 0xFFUL) {
@@ -140,19 +140,19 @@ ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
     i = CmNvlinkFind(t, bus, slot);
     if (i != CM_NVLINK_NONE) {
         e = &t->Entry[i];
-        if ((e->Flags & NVME98LS_UP) != 0 && !fresh) {
+        if ((e->Flags & STOR98LS_UP) != 0 && !fresh) {
             *outcome = CM_NVLINK_UP_ALREADY;
             return i;
         }
         cmNvBegin(e);
         e->LinkGeneration = e->LinkGeneration + 1;
-        e->Flags = NVME98LS_IN_USE | NVME98LS_UP;
+        e->Flags = STOR98LS_IN_USE | STOR98LS_UP;
         cmNvEnd(e);
         *outcome = CM_NVLINK_UP_AGAIN;
         return i;
     }
     pick = CM_NVLINK_NONE;
-    for (i = 0; i < NVME98LS_ENTRIES; i++) {
+    for (i = 0; i < STOR98LS_ENTRIES; i++) {
         if (cmNvFree(&t->Entry[i])) {
             pick = i;
             break;
@@ -166,42 +166,42 @@ ULONG CmNvlinkPublishUp(PNVME98LS_TABLE t, ULONG bus, ULONG slot,
     cmNvBegin(e);
     cmNvPut(&e->BusNumber, bus);
     cmNvPut(&e->SlotNumber, slot);
-    cmNvPut(&e->Reserved[0], 0);
+    cmNvPut(&e->RemoveSequence, 0);
     e->LinkGeneration = e->LinkGeneration + 1;
-    e->Flags = NVME98LS_IN_USE | NVME98LS_UP;
+    e->Flags = STOR98LS_IN_USE | STOR98LS_UP;
     cmNvEnd(e);
     *outcome = CM_NVLINK_UP_NEW;
     return pick;
 }
 
-BOOLEAN CmNvlinkSetDown(PNVME98LS_TABLE t, ULONG index, BOOLEAN quiesced)
+BOOLEAN CmNvlinkSetDown(PSTOR98LS_TABLE t, ULONG index, BOOLEAN quiesced)
 {
-    PNVME98LS_ENTRY e;
+    PSTOR98LS_ENTRY e;
 
-    if (t == NULL || index >= NVME98LS_ENTRIES) {
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
         return FALSE;
     }
     e = &t->Entry[index];
-    if ((e->Flags & NVME98LS_UP) == 0) {
+    if ((e->Flags & STOR98LS_UP) == 0) {
         return FALSE;
     }
     cmNvBegin(e);
-    e->Flags = quiesced ? (NVME98LS_IN_USE | NVME98LS_DOWN_QUIESCED)
-                        : NVME98LS_IN_USE;
+    e->Flags = quiesced ? (STOR98LS_IN_USE | STOR98LS_DOWN_QUIESCED)
+                        : STOR98LS_IN_USE;
     cmNvEnd(e);
     return TRUE;
 }
 
-ULONG CmNvlinkNextUp(const NVME98LS_TABLE *t, ULONG bus, ULONG from)
+ULONG CmNvlinkNextUp(const STOR98LS_TABLE *t, ULONG bus, ULONG from)
 {
     ULONG i;
 
     if (t == NULL) {
         return CM_NVLINK_NONE;
     }
-    for (i = from; i < NVME98LS_ENTRIES; i++) {
-        if ((t->Entry[i].Flags & (NVME98LS_IN_USE | NVME98LS_UP)) ==
-                (NVME98LS_IN_USE | NVME98LS_UP) &&
+    for (i = from; i < STOR98LS_ENTRIES; i++) {
+        if ((t->Entry[i].Flags & (STOR98LS_IN_USE | STOR98LS_UP)) ==
+                (STOR98LS_IN_USE | STOR98LS_UP) &&
             t->Entry[i].BusNumber == bus) {
             return i;
         }
@@ -209,15 +209,15 @@ ULONG CmNvlinkNextUp(const NVME98LS_TABLE *t, ULONG bus, ULONG from)
     return CM_NVLINK_NONE;
 }
 
-BOOLEAN CmNvlinkAcked(const NVME98LS_TABLE *t, ULONG index)
+BOOLEAN CmNvlinkAcked(const STOR98LS_TABLE *t, ULONG index)
 {
-    const NVME98LS_ENTRY *e;
+    const STOR98LS_ENTRY *e;
 
-    if (t == NULL || index >= NVME98LS_ENTRIES) {
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
         return FALSE;
     }
     e = &t->Entry[index];
-    return (BOOLEAN)((e->Flags & NVME98LS_DOWN_QUIESCED) != 0 &&
+    return (BOOLEAN)((e->Flags & STOR98LS_DOWN_QUIESCED) != 0 &&
                      e->AckGeneration == e->LinkGeneration);
 }
 
@@ -278,6 +278,16 @@ ULONG CmNvlinkAckBoundMs(BOOLEAN nt)
     return nt ? CM_NVLINK_ACK_MS : CM_NVLINK_ACK_9X_MS;
 }
 
+BOOLEAN CmNvlinkOffered(BOOLEAN nt)
+{
+    return nt;
+}
+
+ULONG CmNvlinkAwaitBoundMs(BOOLEAN nt, BOOLEAN receiver)
+{
+    return receiver ? CmNvlinkAckBoundMs(nt) : 0;
+}
+
 ULONG CmNvlinkLeft(ULONG startMs, ULONG nowMs, ULONG budgetMs)
 {
     ULONG spent;
@@ -297,43 +307,43 @@ static VOID cmNvLe(PUCHAR out, ULONG v)
 VOID CmNvlinkRecordEncode(PUCHAR out, ULONG address, ULONG bytes,
                           ULONG cookie)
 {
-    cmNvLe(out, NVME98LS_SIGNATURE);
+    cmNvLe(out, STOR98LS_SIGNATURE);
     cmNvLe(out + 4, CM_NVLINK_RECORD_VER);
     cmNvLe(out + 8, address);
     cmNvLe(out + 12, bytes);
     cmNvLe(out + 16, cookie);
 }
 
-BOOLEAN CmNvlinkRemoveRequest(PNVME98LS_TABLE t, ULONG index,
+BOOLEAN CmNvlinkRemoveRequest(PSTOR98LS_TABLE t, ULONG index,
                               ULONG sequence)
 {
-    PNVME98LS_ENTRY e;
+    PSTOR98LS_ENTRY e;
 
-    if (t == NULL || index >= NVME98LS_ENTRIES || sequence == 0 ||
+    if (t == NULL || index >= STOR98LS_ENTRIES || sequence == 0 ||
         sequence > 0x00FFFFFFUL) {
         return FALSE;
     }
     e = &t->Entry[index];
-    if ((e->Flags & NVME98LS_UP) == 0) {
+    if ((e->Flags & STOR98LS_UP) == 0) {
         return FALSE;
     }
     cmNvBegin(e);
-    cmNvPut(&e->Reserved[0], sequence);
-    e->Flags = NVME98LS_IN_USE | NVME98LS_UP | CM_NVLINK_REMOVE_PENDING;
+    cmNvPut(&e->RemoveSequence, sequence);
+    e->Flags = STOR98LS_IN_USE | STOR98LS_UP | CM_NVLINK_REMOVE_PENDING;
     cmNvEnd(e);
     return TRUE;
 }
 
-ULONG CmNvlinkRemoveAnswer(const NVME98LS_TABLE *t, ULONG index,
+ULONG CmNvlinkRemoveAnswer(const STOR98LS_TABLE *t, ULONG index,
                            ULONG sequence)
 {
     ULONG answer;
     ULONG outcome;
 
-    if (t == NULL || index >= NVME98LS_ENTRIES) {
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
         return CM_NVLINK_RM_NONE;
     }
-    answer = *(const volatile ULONG *)&t->Entry[index].Reserved[1];
+    answer = t->Entry[index].RemoveAck;
     if (((answer >> 8) & 0x00FFFFFFUL) != sequence) {
         return CM_NVLINK_RM_NONE;
     }
@@ -346,11 +356,11 @@ ULONG CmNvlinkRemoveAnswer(const NVME98LS_TABLE *t, ULONG index,
     return CM_NVLINK_RM_FAILED;
 }
 
-VOID CmNvlinkRemoveCancel(PNVME98LS_TABLE t, ULONG index)
+VOID CmNvlinkRemoveCancel(PSTOR98LS_TABLE t, ULONG index)
 {
-    PNVME98LS_ENTRY e;
+    PSTOR98LS_ENTRY e;
 
-    if (t == NULL || index >= NVME98LS_ENTRIES) {
+    if (t == NULL || index >= STOR98LS_ENTRIES) {
         return;
     }
     e = &t->Entry[index];

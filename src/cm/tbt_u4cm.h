@@ -19,7 +19,7 @@
  * state machine; Thunderbolt 3 device routers at depth 1, PCIe first;
  * resume obligations; the per-port eject. What is not: the registry, PnP,
  * power, the thread, the common buffer, the PCI side (tunnel-port sets,
- * re-enumeration, the PCI-side reading, the nvme98 delivery) - the driver
+ * re-enumeration, the PCI-side reading, the stor98 delivery) - the driver
  * (task 40-A.6) does those and reaches this file through the TBT_HOST
  * accessor, an action queue it drains, and two upcalls.
  *
@@ -380,7 +380,7 @@ typedef struct _TBT_U4_ACTION {
  * PCIe teardown (a tunnel this driver built or preserved), with whether
  * its read-back proved the path closed, and the anchor and the time left
  * of section 10.3's 3 s. The driver reads the port's member of the
- * tunnel-port set within the time left and sends the nvme98 statement
+ * tunnel-port set within the time left and sends the stor98 statement
  * only when every condition of section 7.3 step 3 holds. Returns one of
  * TBT_U4_STMT_*, for the counters. May be NULL: no statement.
  */

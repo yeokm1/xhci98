@@ -2004,27 +2004,33 @@ ms, the host router enumerated afresh). Step 1 of section 9.3 is also the
 teardown of section 6.8 step 5 and of section 10.4's eject, with the
 device present.
 
-## 10. The contract with `nvme98`
+## 10. The contract with Stor98 (formerly `nvme98`)
 
-`nvme98` (its `docs/PLAN.md` section 0.10, gate G3, decisions MD-1 and
-MD-2) places two obligations on a connection manager (record 21 section 7):
+`nvme98`, released as Stor98 (record 21 section 7; its `docs/PLAN.md`
+section 0.10, gate G3, decisions MD-1 and MD-2) places two obligations on a connection manager (record 21 section 7):
 a tunnel is re-established only to an endpoint whose link went down since
 the last tunnel; and the link-down statement is sent only after the
 tunnel's PCIe path is closed and the endpoint's link-down reset has
 completed. Under the firmware connection manager neither could be done
 directly. Under this one, this driver opens and closes the paths itself.
 
-The channel is `nvme98`'s link-state table, adopted by `nvme98` on
-2026-10-15 (its MD-6) and described with both profiles in record 21
-section 7.2; this profile reaches it through the two hooks of the driver
+The channel is Stor98's link-state table, adopted by `nvme98` on
+2026-10-15 (its MD-6), renamed with Stor98 `0.3.0.0` (`stor98cm.h`,
+interface version 4: the callback object `\Callback\Stor98LinkState` on
+NT; on 9x, interface 3's proof key and locator, which `3.0.0.0` does not
+publish, so there is no 9x channel) and described with both profiles in
+record 21 section 7.2; this profile reaches it through the two hooks of the driver
 half (`CmNhiSetU4Hooks`, registered where the selection admits this
 profile): the UP hook records each port's connection generation for the
 presence sample, the table's `UP` itself being published by the seam
 before the re-enumeration exactly as for the ICM profile, and the DOWN
 hook, at the core's statement upcall, makes or withholds the statement
 on section 10.2's condition (`CmNvlinkPortDown`). On Windows 98 SE and
-ME a removal of a present NVMe function that this driver starts itself
+ME no `UP` is published and nothing is awaited in `3.0.0.0` (record 21
+section 7.2); once NV9X.1 offers the channel there, a removal of a present
+NVMe function that this driver starts itself
 would go through record 21 section 7.2's `REMOVE_PENDING` handshake
+(interface 3's R9 and R11)
 (on the CONFIGMG worker's removal step, `cm_cfgwk.c`); no such removal exists yet (section 10.4's 9x
 half is best effort and every 9x child removal is the seam's removal of a
 vanished function).
@@ -2069,7 +2075,7 @@ link that went down is the tunnel's; the endpoint sits below the device
 router's PCIe Up adapter and, in an enclosure with an internal switch,
 below that switch, and nothing below a down link can be read. Record 21
 section 7.1's conclusion stands: on hardware the boundary waits for
-`nvme98`'s MD-2 verification and the owner, and no hardware statement is
+Stor98's MD-2 verification and the owner, and no hardware statement is
 sent until it is settled. On the emulator, gate G3's ordering check (the
 statement's marker later than the stage-2 reset and quiesce event in the
 host trace) is the qualification per OS; on i440FX the SHPC slot's presence
@@ -2086,11 +2092,11 @@ set), then on the
 emulator the per-OS G3 qualification and on hardware the unresolved
 boundary. A failure in one of the statement's prerequisites (section
 7.3 steps 1 and 2, as step 3 lists them) withholds the statement for that
-unplug; a failure in a later step does not reach back to it; `nvme98`'s gone deadline (MD-1) is the fallback, as everywhere.
+unplug; a failure in a later step does not reach back to it; Stor98's gone deadline (MD-1) is the fallback, as everywhere.
 
 ### 10.3 The latency budget
 
-Against `nvme98`'s gone deadline (5 s in its test build, from its own
+Against Stor98's gone deadline (5 s in its test build, from its own
 presence loss), as record 21 section 7.2 requires, under saturation too.
 The per-step bounds of section 5.2 are bounds, not a budget: summed, the
 worst case of the steps before the statement (several requests at
@@ -2107,7 +2113,7 @@ reading) passes 5 s. So the statement has a deadline of its own:
   ids, for the same connection generation, timestamped on section 5.3's
   clock when the read was **issued**, so the time it spent counts against
   the allowance. The endpoint answered its own configuration cycle then,
-  so `nvme98`'s presence loss, which is its own registers reading
+  so Stor98's presence loss, which is its own registers reading
   all-ones, is no earlier than the anchor; and the emulator closes
   configuration access with MMIO at stage 1 of every down transition
   (`ARCHITECTURE` section 4.4), so its samples go all-ones with the gate.
@@ -2124,12 +2130,12 @@ reading) passes 5 s. So the statement has a deadline of its own:
 - **The deadline**: the statement, delivery included, must complete
   within 3 s of the anchor, as measured on section 5.3's clock; a maximum
   measured on that clock may expire up to one tick late (55 ms at most on
-  these targets), which the 2 s margin to `nvme98`'s 5 s covers. Queueing behind another port's teardown,
+  these targets), which the 2 s margin to Stor98's 5 s covers. Queueing behind another port's teardown,
   section 7.3 step 1 and the PCI-side reading all
   spend that one allowance; each step is given only the time left, not
   its own section 5.2 bound; a step that would overrun ends the attempt,
   and a statement with less than 100 ms of it left (the delivery is a
-  table write `nvme98` polls, so that margin is this driver's, kept from
+  table write Stor98 polls, so that margin is this driver's, kept from
   the first draft's figure) is withheld and counted. Withheld means MD-1.
   The acknowledgement wait (up to 5 s) follows the statement and delays
   only the removal.
@@ -2141,7 +2147,7 @@ reading) passes 5 s. So the statement has a deadline of its own:
 
 So a statement that is delivered at all is delivered within 3 s (plus at
 most one tick of clock quantisation) of the last moment the endpoint was
-seen present, so within that of its presence loss, inside `nvme98`'s 5 s; task 39-A.7's qualification measures
+seen present, so within that of its presence loss, inside Stor98's 5 s; task 39-A.7's qualification measures
 it per OS, saturated, with the disconnect injected at every point section
 7.4 names.
 

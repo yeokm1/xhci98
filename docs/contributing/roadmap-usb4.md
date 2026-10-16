@@ -461,9 +461,10 @@ runs the INF gate against the staged package, and signs. The guarantee
 that only a tested binary is signed stays; the time goes. Agreed by the
 owner on 2026-10-16, after the `3.0.0.0` cut.
 
-Status: not opened, unnumbered and unversioned.
+Status: SIGN.1 done 2026-10-16; unnumbered and unversioned. The positive
+signing run is the owner's, who holds the key.
 
-- [ ] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash
+- [x] SIGN.1 `build-driver.cmd` records the gated binaries' hashes; `make-package.ps1 -SignOnly` checks them, runs the staged INF gate and signs; `test-package.ps1` covers a mismatched hash (done 2026-10-16: `out\gated-<arch>-<flavour>.txt` written by `scripts\package\write-gated-manifest.ps1` under a per-architecture lock held for the whole `build-driver.cmd` run, from each binary's hash taken right before and right after its own import gate (the two must agree) and re-checked once the flavour's last gate has passed, clean only if the tree is still as it was when the run started; `-SignOnly` reads each binary once and signs and stages that copy; it refuses without `-TestSignPfx`, without a record, for another architecture or flavour, for any staged binary not of its recorded SHA-256, and unless the build and the tree are both clean at one commit; it skips the host suite and the import gates and keeps the flavour markers, every INF gate, the staged package's gate, the version checks and the signature checks; `test-package.ps1` covers the parse and each refusal on fixtures, and after a gated x86 `build-driver.cmd release` the record admitted the built binaries and refused one with a byte appended; `build-and-test.md`, "Since 2.3.0.0 the x64 package is test-signed")
 
 ## Planned - Stor98, the Renamed NVMe Driver
 
@@ -479,5 +480,26 @@ Stor98's receiver, a re-signed x64 package and a release that bundles it.
 
 Status: not opened, unnumbered and unversioned.
 
-- [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted
+- [ ] STOR.1 the rename in `xhcicm.sys`, the scripts, the installer and the docs, from the change list; interface 3 as adopted (the channel and the installer, 2026-10-16: `src/cm/stor98cm.h` in place of `nvme98cm.h`, unchanged from Stor98 `0.3.0.0`; interface version 4, `S98L` and `STOR98CM`, `\Callback\Stor98LinkState` on NT; on 98 SE and ME no channel is offered (interface 3's proof key is NV9X.1, and without it the locator is not written either, so nothing is published or awaited there and Stor98 runs on its gone deadline); records 21 section 7.2 and 22 section 10; `XHCIINST` skips `stor98*` files and never takes an INF that installs the `stor98` service or names `stor98.mpd` as its own, whatever its Provider; host suites pass)
 - [ ] STOR.2 bundle Stor98 `0.3.0.0`; NVMe legs (link up and down, the 9x clean-eject handshake, ME write-through); the release
+
+## Planned - Installing the Driver on Windows 98 SE and ME
+
+Goal: `INSTALL.BAT` on 98 SE and ME puts the driver on the controller and
+its root hub itself, as it does on 2000 and later, in place of the
+Update Driver steps the user follows by hand (design record 23 section
+6.1: no routine of these systems installs a driver on a device, and the
+16-bit `SETUPX` engine is not driven through anything undocumented).
+The Windows 95 and 98 DDKs document `SETUPX`'s device installer functions
+for class installers (`DiCreateDeviceInfo`, `DiInstallDevice` and the
+rest), so a small 16-bit helper may do what Update Driver does. Asked for
+by the owner on 2026-10-16, after an update from `2.4.0.0` on 98 SE left
+the driver as it was until the hand steps were done. Not taken (owner,
+the same day): overwriting the installed binaries in `system32\drivers`
+in place, as NUSB does with Windows' own USB files; the device keeps the
+wizard's record of the old INF, and an INF change never reaches it.
+
+Status: not opened, unnumbered and unversioned.
+
+- [ ] DI9X.1 a design record: which `SETUPX` functions, as the DDKs document them; the 16-bit toolchain; the helper's interface to `XHCIINST`; the controller, its root hub and the Thunderbolt controller; a USB keyboard and mouse behind the controller being updated; what the wizards' own bookkeeping then holds; the uninstall
+- [ ] DI9X.2 the helper and `XHCIINST`'s use of it, with the legs on 98 SE and ME (a fresh install, an update from `2.4.0.0` and `2.3.x`, the uninstall)

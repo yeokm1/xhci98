@@ -255,6 +255,28 @@ cut, as the standard user:
   both and removed the tool, its folder and the Run value. The approval
   balloon was not read (the emulator's device is approved at once).
 
+### The emulator moved to `2a893ea`
+
+`usb4-emu` landed its TCG SMM boot-logo fix and the TS3 Plus dock's Host
+Interface adapter (`main` `b8b8818`, QEMU fork `2a893ea`), staged in
+`vm\usb4\bin-2a893ea` with its SHA-256 checked before use. On 98 SE with
+the `3.0.0.0` drivers and the tool, every window shown, as the standard
+user:
+
+- `tb3-alpine-ridge` (the ICM): the enclosure and the unit "QEMU NVM e
+  Ctrl (E:)"; Safely Remove from a right click, the unplug, then a hot
+  plug brought the enclosure, the PCIe tunnel and E: back. Pass.
+- The boot logo with a disk the BIOS sees at power-on (`Bios OFF_ON`, the
+  NVMe tunnelled before POST): past the logo to the desktop. Pass.
+- The TS3 Plus dock (`dialect=tb3`) behind `usb4-generic` on i440FX: the
+  connection manager read the dock's ROUTER_CS_0 to 6 once and went no
+  further; the tool showed the port held with no tunnel. ROUTER_CS_4's
+  USB4 Version read `02h`, which the decode took as reserved (only `00h`
+  was a Thunderbolt 3 router). The `5ba7f60` build reads the same, so the
+  move is not the cause. The decode is corrected on its own (EMU.1).
+
+The legs after these use `vm\usb4\bin-2a893ea`.
+
 ### A Thunderbolt 3 dock behind a USB4 host (task 40-A.8)
 
 The first guest runs of record 22 section 8: the emulator's TS3 Plus

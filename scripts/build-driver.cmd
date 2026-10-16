@@ -66,6 +66,18 @@ rem      source stamp, and its four INFs' own gate
 rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
 rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
 rem      xhcicmf-amd64.inf on every build)
+rem  15. the gated build's record, out\gated-<arch>-<flavour>.txt
+rem      (scripts\package\write-gated-manifest.ps1; roadmap-usb4.md SIGN.1),
+rem      which make-package.ps1 -SignOnly reads instead of running the host
+rem      suite and the import gates again. The run holds out\gated-<arch>.lock
+rem      throughout and refuses to start while another holds it, and notes
+rem      the commit and the tree's state when it takes it, before any
+rem      self-test. When a flavour's build starts its old record is deleted;
+rem      each binary is hashed before its own import gate and again after it,
+rem      and the two must agree; once the flavour's last gate has passed each
+rem      file must still have that hash, and the record is written from it,
+rem      clean only if the tree is still clean at the commit noted at the
+rem      start. A run that fails leaves no record for the flavour that failed
 rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
@@ -187,6 +199,58 @@ set "FLAVOR="
 for %%F in (%FLAVORS%) do call :validateflavor %%F
 if defined FLAVOR goto badflavor
 if defined BADOPT goto badgateopt
+
+rem The gated build's lock (roadmap-usb4.md SIGN.1): one run per architecture
+rem in this tree at a time, held for the whole run, so no second build can
+rem change a binary between its gate and its record. mkdir is the atomic step:
+rem it fails when the directory exists. The body runs as :mainbody so that
+rem every exit, whichever refusal it comes from, comes back here to drop the
+rem lock and any half-made record.
+rem :mainbody opens a scope of its own, so whatever its exits do with endlocal,
+rem GATEDLOCK, REPO, ARCH and FLAVORS are this scope's and the cleanup below
+rem reads them. The run's token lives in the lock's run.txt, and :gated hands it
+rem to the writer for the one call and clears it again.
+if not exist "%REPO%\out" mkdir "%REPO%\out"
+set "GATEDLOCK=%REPO%\out\gated-%ARCH%.lock"
+mkdir "%GATEDLOCK%" 2>nul
+if errorlevel 1 goto gatedlocked
+set "GATEDTOK=%RANDOM%%RANDOM%%RANDOM%%RANDOM%%RANDOM%"
+> "%GATEDLOCK%\run.txt" echo %GATEDTOK%
+set "GATEDTOK="
+rem The commit and the tree's state, once, before any self-test: each
+rem flavour's record is clean only if the tree still matches this at its end.
+call :gated -RunStart
+if errorlevel 1 goto gatedrunstartfail
+call :mainbody
+set "MAINRC=%errorlevel%"
+call :gatedcleanup
+endlocal & exit /b %MAINRC%
+
+:gatedrunstartfail
+call :gatedcleanup
+echo ERROR: could not note the commit and the tree's state for the gated
+echo build's record - see above.
+endlocal
+exit /b 1
+
+rem ------------------------------------------------------------------
+rem :gatedcleanup - drop the lock and any half-made record, on every exit.
+rem ------------------------------------------------------------------
+:gatedcleanup
+for %%F in (%FLAVORS%) do if exist "%REPO%\out\gated-%ARCH%-%%F.pending" del "%REPO%\out\gated-%ARCH%-%%F.pending"
+if exist "%GATEDLOCK%" rmdir /s /q "%GATEDLOCK%"
+exit /b 0
+
+:gatedlocked
+echo ERROR: "%GATEDLOCK%" exists: another build-driver.cmd run for %ARCH% holds
+echo this tree. Wait for it to finish. If none is running - a run that was
+echo interrupted with Ctrl+C leaves the lock behind - delete the directory:
+echo   rmdir /s /q "%GATEDLOCK%"
+endlocal
+exit /b 1
+
+:mainbody
+setlocal
 rem The DDK output directory for the target architecture - build.exe's own
 rem <arch> component, and the one place this script turns ARCH into a path.
 set "ARCHDIR=i386"
@@ -496,6 +560,8 @@ echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
 if /i "%ARCH%"=="amd64" (
     echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Arch amd64
+    echo and, to test-sign the gated binaries without running the gates again:
+    echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Arch amd64 -Flavor ^<flavour^> -TestSignPfx ^<pfx^> -SignOnly
 ) else (
     echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
 )
@@ -626,6 +692,11 @@ rem objchk -> buildchk, objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
 rem names build.exe writes its log and error file under, which are BUILD_ALT_DIR
 rem with "build" in front. The substitution below is the same rule spelled once.
 set "LOGBASE=%REPO%\src\build%OBJDIR:obj=%"
+rem The record of the last gated build of this flavour goes before anything is
+rem rebuilt, and the commit and the tree's state are noted (roadmap-usb4.md
+rem SIGN.1; scripts\package\write-gated-manifest.ps1 -Begin).
+call :gated -Begin
+if errorlevel 1 goto gatedrecfail
 
 echo.
 echo === build %FLAVOR% ===
@@ -653,9 +724,16 @@ if not exist "%OUTSYS%" goto nooutput
 
 echo.
 echo === import gate (%FLAVOR%) ===
+rem The bytes the gate is about to read, hashed again after it (:gated).
+call :gated -Hash -Name xhci98.sys -Image "%OUTSYS%"
+if errorlevel 1 goto gatedrecfail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%
 if errorlevel 1 goto gatefail
+rem The bytes the gate just read, for the gated build's record: the same hash
+rem as before the gate, or the flavour fails.
+call :gated -Capture -Name xhci98.sys -Image "%OUTSYS%"
+if errorlevel 1 goto gatedrecfail
 
 rem The image has to say which of the three it is, from an ASCII scan and with
 rem no PE knowledge - that is what a user sending a capture quotes and what
@@ -680,8 +758,43 @@ call :buildhlpr %FLAVOR%
 if errorlevel 1 goto hlprfail
 :skiphlpr
 
+rem Every gate of this flavour has passed: record what they read (roadmap-usb4.md
+rem SIGN.1), for make-package.ps1 -SignOnly - from the hashes captured after
+rem each import gate, and only if every file still has its captured hash.
+echo.
+echo === gated build record (%FLAVOR%, %ARCH%) ===
+call :gated -Finish %GATEOPT%
+if errorlevel 1 goto gatedrecfail
+
 endlocal
 exit /b 0
+
+rem ------------------------------------------------------------------
+rem :gated <-RunStart | -Begin | -Hash or -Capture -Name <file> -Image <path>
+rem         | -Finish [...]>
+rem
+rem One step of the gated build's record for the current ARCH and, but for
+rem -RunStart, FLAVOR (scripts\package\write-gated-manifest.ps1, which refuses
+rem unless this run holds the lock taken above). The run's token is read from
+rem the lock into XHCI98_GATED_RUN for this one call and cleared after it.
+rem ------------------------------------------------------------------
+:gated
+set /p XHCI98_GATED_RUN=<"%GATEDLOCK%\run.txt"
+set "GATEDFLV="
+if defined FLAVOR set "GATEDFLV=-Flavor %FLAVOR%"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\package\write-gated-manifest.ps1" -Arch %ARCH% %GATEDFLV% %*
+set "GATEDRC=%errorlevel%"
+set "XHCI98_GATED_RUN="
+exit /b %GATEDRC%
+
+:gatedrecfail
+echo.
+echo ERROR: the gated build's record of the %FLAVOR% build could not be begun,
+echo captured or written - see above. make-package.ps1 -SignOnly needs it; a
+echo package built without -SignOnly runs the gates again and does not.
+endlocal
+exit /b 1
 
 rem ------------------------------------------------------------------
 rem :buildhlpr <release|debug|qemu>
@@ -729,8 +842,12 @@ if errorlevel 1 goto hlprgatefail
 
 echo.
 echo === import gate (%FLAVOR% xhcihlpr.sys, hlprx86) ===
+call :gated -Hash -Name xhcihlpr.sys -Image "%HLPRSYS%"
+if errorlevel 1 goto hlprgatefail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%HLPRSYS%" -Flavor %FLAVOR% -Arch x86 -GateProfile hlprx86 -AllowPath "%HLPRALLOW%" %GATEOPT%
+if errorlevel 1 goto hlprgatefail
+call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"
 if errorlevel 1 goto hlprgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
@@ -796,8 +913,12 @@ if not exist "%UASSYS%" goto uasbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhciuas.sys) ===
+call :gated -Hash -Name xhciuas.sys -Image "%UASSYS%"
+if errorlevel 1 goto uasgatefail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%UASSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%UASALLOW%" %GATEOPT%
+if errorlevel 1 goto uasgatefail
+call :gated -Capture -Name xhciuas.sys -Image "%UASSYS%"
 if errorlevel 1 goto uasgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
@@ -820,7 +941,8 @@ exit /b 1
 :uasgatefail
 echo.
 echo ERROR: the %FLAVOR% xhciuas.sys failed the import gate, carries the
-echo wrong flavour marker, or could not be stamped - see above. Do not deploy it.
+echo wrong flavour marker, could not be stamped, or could not be recorded - see
+echo above. Do not deploy it.
 endlocal
 exit /b 1
 
@@ -854,8 +976,12 @@ if not exist "%CMSYS%" goto cmbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhcicm.sys) ===
+call :gated -Hash -Name xhcicm.sys -Image "%CMSYS%"
+if errorlevel 1 goto cmgatefail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%CMSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%CMALLOW%" %GATEOPT%
+if errorlevel 1 goto cmgatefail
+call :gated -Capture -Name xhcicm.sys -Image "%CMSYS%"
 if errorlevel 1 goto cmgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^

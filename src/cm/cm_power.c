@@ -364,7 +364,7 @@ resumed:
         nhi->Counters.ResumeFailures++;
         nhi->Stage = CM_STAGE_FAILED;
     }
-    /* A rebuilt tunnel's UP published to the nvme98 channel before any
+    /* A rebuilt tunnel's UP published to the stor98 channel before any
      * held bridge is released (CmNhiU4Take; the batch is delivered to the
      * re-enumeration seam by the drain below). */
     CmNhiU4Take(nhi);
