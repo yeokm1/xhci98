@@ -649,6 +649,26 @@ Exit codes follow XHCIINST's (record 23 section 10). Since revision 7
 - 98 SE and ME read the same key, from the user's profile or the default
   user's.
 
+Addendum to revision 10, the tree's labels (the owner, 2026-10-16, after
+two controllers of one name each showed a "Root hub" on the ThinkPad P14s
+Gen 1):
+
+- A controller's label ends with its vendor and PCI id from its instance
+  ID ("- Intel 8086:02ED"; "- vendor XXXX" for a vendor outside the
+  tool's short table). A Thunderbolt chip's own xHCI reads "- Thunderbolt
+  3 controller's USB (8086:15C1)" ("USB4" or "Thunderbolt" by its NHI's
+  published connection manager): an NHI in the walk on the same bus and
+  device (an integrated controller), or behind a bridge beside the
+  controller's under one switch (a discrete one); never a guess, so a
+  PCH xHCI on the root bus is not one.
+- The root hub reads "Root hub - N ports (a USB 2.0, b USB 3.x)" from
+  each port's `_EX_V2` protocols, without the split when a port did not
+  report them; each port label carries its protocol ("[Port 15, USB 3]").
+  No pairing of a connector's USB 2 and USB 3 ports is shown: the tool
+  reads none.
+- The same labels are in `/report` and Save Report, a file whose tree
+  lines can be wider than 79 columns at depth, as before.
+
 ## 8. Install, upgrade and uninstall
 
 - XHCIINST owns the tool's file (and its `.TMP`, `.BAK` and `.DEL`

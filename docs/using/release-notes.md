@@ -327,6 +327,9 @@ the logged-on user, with no administrator rights.
   adapter; a Thunderbolt 3 device's come from the controller's firmware.
   For a USB device the descriptors give the SuperSpeed rates it supports;
   the negotiated lane rate is not reported.
+- Each controller is named with its maker and PCI ID, and the USB
+  controller inside a Thunderbolt chip says so; a root hub shows how many
+  of its ports are USB 2.0 and USB 3.x, and each port its kind.
 - **USB sticks and disks** are stopped from the window or the icon on
   every system, 98 SE and ME included, by their drive letter: "USB Flash
   Disk (F:)". The tool confirms what will stop, asks Windows to stop the

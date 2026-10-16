@@ -496,6 +496,23 @@ user, the tool in place of the installed one:
 install, and an install without it writes the value again; XHCIINST is
 unchanged.
 
+### The tree's labels (record 25 revision 10, addendum)
+
+Read on the tool of `d144edef` (the root hub's total was then taken from
+its hub descriptor, `779b676a`), as the standard user:
+
+- 98 SE and 7 x86: "xHCI98 USB 3.x eXtensible Host Controller (xhci98) -
+  Red Hat 1B36:000D", "Root hub - 8 ports (4 USB 2.0, 4 USB 3.x)", "[Port
+  3, USB 3] QEMU QEMU HARDDISK (G:) SuperSpeed" on 98 SE ("... USB Device
+  (F:)" on 7), the ports of the full-speed hub behind it "USB 1.1".
+- Development host A (Windows 11, `/report` as the user): a Thunderbolt
+  chip's own xHCI read "USB xHCI Compliant Host Controller (Windows) -
+  Thunderbolt controller's USB (8086:5782)", its NHI in the walk but not
+  driven by `xhcicm.sys`, so with no generation; the AMD controller "-
+  AMD 1022:1587"; "Root hub - 4 ports (2 USB 2.0, 2 USB 3.x)".
+- Not read: the label of an emulated Thunderbolt chip's xHCI under
+  `xhcicm.sys` ("Thunderbolt 3 controller's USB").
+
 ## Noted, not changed
 
 - `INSTALL /devices` says "speed not known" where XHCITR shows the link

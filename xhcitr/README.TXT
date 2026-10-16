@@ -35,6 +35,13 @@ connections (tunnels) to each device, and the Windows devices behind
 them. Under "USB" are the USB controllers, each with its root hub, ports,
 hubs and devices, their speed and their Device Manager entry.
 
+Each controller is named with its maker and PCI ID, for example
+"... - Intel 8086:02ED"; the USB controller inside a Thunderbolt chip
+reads "... - Thunderbolt 3 controller's USB (8086:15C1)". A root hub
+shows its ports and how many are USB 2.0 and USB 3.x, for example "Root
+hub - 18 ports (14 USB 2.0, 4 USB 3.x)", and each port its kind:
+"[Port 15, USB 3]". A USB 3 connector has one port of each kind.
+
   File > Refresh (F5)      reads everything again
   File > Save Report...    writes the whole tree with every detail to a
                            text file, for a problem report
