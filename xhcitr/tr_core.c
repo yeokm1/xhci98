@@ -1938,7 +1938,7 @@ int tr_usb_rule(const TR_USBF *f, const char **why)
         return TR_UE_LISTED;
     }
     if (f->Problem != 0) {
-        *why = "Windows reports a problem with it";
+        *why = "Windows could not start it";
         return TR_UE_LISTED;
     }
     if (!f->Started) {
@@ -2177,4 +2177,24 @@ void tr_wrap(const char *in, char *out, size_t cap, int width)
             p++;
         }
     }
+}
+
+int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
+                    size_t sentenceCap)
+{
+    if (problem == TR_CM_PROB_HELD_FOR_EJECT) {
+        tr_copy(tag, "stopped - unplug it", tagCap);
+        tr_copy(sentence, "Stopped: you can unplug it.", sentenceCap);
+        return 1;
+    }
+    if (problem != 0) {
+        tr_sprintf(tag, tagCap, "not started - problem code %lu",
+                   (unsigned long)problem);
+        tr_sprintf(sentence, sentenceCap, "Windows could not start this device "
+                   "(problem code %lu).", (unsigned long)problem);
+        return 0;
+    }
+    tr_copy(tag, "not started", tagCap);
+    tr_copy(sentence, "Windows has not started this device.", sentenceCap);
+    return 0;
 }

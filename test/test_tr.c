@@ -1608,7 +1608,7 @@ static void test_usb_eject(void)
           strcmp(why, "stopped - unplug it") == 0, "rule: Code 47");
     f.Problem = 28;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED &&
-          strcmp(why, "Windows reports a problem with it") == 0,
+          strcmp(why, "Windows could not start it") == 0,
           "rule: another problem code");
     f.Problem = 0;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: not started");
@@ -1625,6 +1625,25 @@ static void test_usb_eject(void)
     f.ReadWhole = 1;
     f.CallAvailable = 0;
     CHECK(tr_usb_rule(&f, &why) == TR_UE_LISTED, "rule: no routine");
+
+    /* the words for a devnode that is not running: only Code 47 says unplug */
+    {
+        char tag[64];
+        char sen[96];
+        CHECK(tr_stopped_text(47, tag, sizeof(tag), sen, sizeof(sen)) == 1 &&
+              strcmp(tag, "stopped - unplug it") == 0 &&
+              strcmp(sen, "Stopped: you can unplug it.") == 0, "stopped: Code 47");
+        CHECK(tr_stopped_text(29, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              strcmp(tag, "not started - problem code 29") == 0 &&
+              strcmp(sen, "Windows could not start this device (problem code 29).") == 0 &&
+              !has(tag, "unplug") && !has(sen, "unplug"),
+              "stopped: Code 29 is a failed start, never 'unplug it'");
+        CHECK(tr_stopped_text(28, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              has(tag, "code 28"), "stopped: Code 28, no driver");
+        CHECK(tr_stopped_text(0, tag, sizeof(tag), sen, sizeof(sen)) == 0 &&
+              strcmp(tag, "not started") == 0 && !has(sen, "unplug"),
+              "stopped: not started, no problem code");
+    }
 
     /* the check before the call */
     {

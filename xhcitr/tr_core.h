@@ -515,6 +515,15 @@ typedef struct _TR_USBF {
 #define TR_UE_LISTED    1       /* listed with the reason, not offered     */
 #define TR_UE_OFFER     2       /* Safely Remove offered                   */
 
+/* The words for a devnode that is not running (record 25 section 14): the
+ * tag ("stopped - unplug it" for Code 47, held for eject; "not started -
+ * problem code N" for any other problem; "not started") and the sentence
+ * ("Stopped: you can unplug it.", "Windows could not start this device
+ * (problem code N).", ...). 1 only for Code 47, the one state in which the
+ * device may be unplugged. */
+int tr_stopped_text(TR_U32 problem, char *tag, size_t tagCap, char *sentence,
+                    size_t sentenceCap);
+
 /* The rule of section 6.5. *why is the reason for anything but
  * TR_UE_OFFER ("a hub", "an input device", "stopped - unplug it", ...),
  * NULL for it. */
