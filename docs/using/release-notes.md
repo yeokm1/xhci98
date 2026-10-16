@@ -215,6 +215,10 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   the NVMe driver for Windows 98 SE to 7, as its own project released
   it (which release: "NVMe drives behind Thunderbolt or USB4", under
   "Installing").
+- **`XHCISNAP` to be deprecated.** The xHCI98 USB Tree now shows both
+  drivers' logs and sets their logging level. `XHCISNAP.EXE` and its
+  `SNAPON.BAT`, `SNAPGET.BAT` and `SNAPOFF.BAT` still ship in this release
+  and work as before; they will be deprecated in a subsequent release.
 
 ### Which controllers
 
